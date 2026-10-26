@@ -1108,6 +1108,11 @@ desktop so the IME candidate window remains visible in the evidence.
 
 ### UI fixtures
 
+Run `gh workflow run windows-readiness.yml -f source_ref=<commit-sha>` for native
+x64 WARP fixtures on a hosted Windows VM and the Linux development-profile test.
+The manual workflow checks functional behavior; it does not qualify hardware
+rendering or performance targets.
+
 The menu automation helper matches current UIA properties after walking the
 owned window; WinUI can omit visible controls from property-filtered queries.
 Each polling attempt shares one tree snapshot across the visible and compact
@@ -1222,6 +1227,8 @@ Run `exercise-toolbar-components.ps1` in both themes for compact numeric faces:
 release pen and touch scrubs, then activate with mouse, keyboard and accessibility.
 The journey also hides and restores inline tracks with Show Sliders and verifies
 native pointer input after restoring them.
+Toolbar choice faces use the shared `control_fill` RGBA overlay, refreshed with
+the palette. Horizontal dropdowns fit their widest localized item, icon and arrow.
 Use `-Journey numeric` and `-Journey numeric-light` for these track checks in both
 themes without the gradient, Zoom and compact-face journeys.
 Tool Options retain the complete numeric track and input host when changing slider
@@ -1580,9 +1587,11 @@ Use `tab-drag:preview-dark` and `tab-drag:preview-light` for the focused selecti
 preview pixels and cancellation checks.
 
 `exercise-illustration-filters.ps1 -Executable <path> -Theme dark` checks
-Brightness to Opacity and Threshold through the native Filters and Properties
-panels. It compares composed pixels, changes color and transparency choices,
-checks one-step history and saves and reopens the hidden alpha threshold. Repeat
+Brightness to Opacity, Threshold, Dither Spread, Scatter and Crystallize through
+the native Filters and Properties panels. It compares composed pixels, changes
+color and transparency choices, checks one-step history and saves and reopens the
+hidden alpha threshold and Artistic parameters. Artistic controls and loaded
+previews follow the shared schema; Crystallize exposes only Cell size and Stretch. Repeat
 with `-Theme light`; the VM runner names are `illustration-filters` and
 `illustration-filters:light`.
 

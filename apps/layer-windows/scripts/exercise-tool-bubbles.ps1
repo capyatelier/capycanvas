@@ -401,10 +401,10 @@ function Assert-BlenderCellSettings($Settings,[string]$CellId,[string[]]$Primary
     if([array]::IndexOf(@($all.id),$cell.id) -ne [array]::IndexOf(@($all.id),$spread.id)+1 -or $cell.group_id -or $spread.group_id -or !$cell.label -or !$spread.label){throw 'Blender setting labels, order or ungrouped primary placement differ from the shared contract'}
     $primarySettings=@($all|Where-Object {!$_.group_id -and $_.id -notin @('size','flow','strength','smoothing_strength')})
     if(($primarySettings.id -join ',') -cne ($Primary -join ',') -or @($primarySettings|Where-Object {!$_.label}).Count){throw 'Blender primary setting order or labels differ from its profile'}
-    if($n.kind -ne 'slider' -or $n.mapping -ne 'log' -or $n.min -ne 1 -or $n.max -ne 50 -or $n.resolution -ne 1 -or $n.step -ne 1 -or $n.digits -ne 0 -or $n.unit -ne 'px' -or $spread.numeric.mapping -ne 'log'){throw 'Blender Cell Size or Spread lost its whole-pixel logarithmic schema'}
+    if($n.kind -ne 'slider' -or $n.mapping.type -ne 'log' -or $n.min -ne 1 -or $n.max -ne 50 -or $n.resolution -ne 1 -or $n.step -ne 1 -or $n.digits -ne 0 -or $n.unit -ne 'px' -or $spread.numeric.mapping.type -ne 'log'){throw 'Blender Cell Size or Spread lost its whole-pixel logarithmic schema'}
     if($Primary -contains 'grit'){
         $grit=@($primarySettings|Where-Object id -eq 'grit')[0].numeric
-        if($grit.kind -ne 'slider' -or $grit.mapping -ne 'linear' -or $grit.min -ne 0 -or $grit.max -ne 1 -or $grit.unit -ne '%'){throw 'Scatter Grit lost its native percentage slider schema'}
+        if($grit.kind -ne 'slider' -or $grit.mapping.type -ne 'linear' -or $grit.min -ne 0 -or $grit.max -ne 1 -or $grit.unit -ne '%'){throw 'Scatter Grit lost its native percentage slider schema'}
     }
     foreach($value in @($n.log_offset,$spread.numeric.log_offset)){if($null -eq $value -or [double]::IsNaN($value) -or [double]::IsInfinity($value)){throw 'Blender logarithmic metadata is not finite'}}
 }
@@ -478,7 +478,7 @@ function Invoke-BlenderCellChecks([int]$Preset,[string]$CellId,[double]$DefaultC
     $cancelled=@((Model).state.tool_settings|Where-Object {$_.id -in $Primary}|Select-Object id,value)|ConvertTo-Json -Compress
     if($cancelled -cne $overrides){throw 'Cancelled native ring changed another primary override'}
     Blender-Select 51
-    if(@((Model).state.tool_settings|Where-Object id -eq $CellId).Count -or @((Model).state.tool_settings|Where-Object id -eq 'spread')[0].numeric.mapping -ne 'linear'){throw 'Blender-only Cell Size or logarithmic Spread leaked into Crystal'}
+    if(@((Model).state.tool_settings|Where-Object id -eq $CellId).Count -or @((Model).state.tool_settings|Where-Object id -eq 'spread')[0].numeric.mapping.type -ne 'linear'){throw 'Blender-only Cell Size or logarithmic Spread leaked into Crystal'}
     Blender-Select $Preset
     $retained=@((Model).state.tool_settings|Where-Object {$_.id -in $Primary}|Select-Object id,value)|ConvertTo-Json -Compress
     if($retained -cne $overrides){throw 'Native preset reselection lost Blender primary overrides'}

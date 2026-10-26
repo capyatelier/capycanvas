@@ -345,9 +345,12 @@ try{
  Notice-Fits 'German maximized'
  Capture "edges-german-$Theme" -WithModel -Composed
  $pattern=$root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern)
+ $maximum=$root.Current.BoundingRectangle;$windowScale=[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.
+ $narrowWidth=[Math]::Min(1100*$windowScale,$maximum.Width*.9);$narrowHeight=[Math]::Min(1000*$windowScale,$maximum.Height*.9)
  $pattern.SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Normal)
- $root.GetCurrentPattern([System.Windows.Automation.TransformPattern]::Pattern).Resize(1100,1000)
- Wait-Until {$root.Current.BoundingRectangle.Width -lt 1200} 'The window did not narrow'
+ $transform=$root.GetCurrentPattern([System.Windows.Automation.TransformPattern]::Pattern)
+ $transform.Resize($narrowWidth,$narrowHeight);$transform.Move(($maximum.X+($maximum.Width-$narrowWidth)/2),($maximum.Y+($maximum.Height-$narrowHeight)/2))
+ Wait-Until {$c=(Model).state.camera;$canvas=(Control 'drawing-canvas' -Arranged).Current.BoundingRectangle;$root.Current.BoundingRectangle.Width -lt 1200*$windowScale -and $c.work_area[2] -gt 0 -and $c.work_area[3] -gt 0 -and [Math]::Abs($c.viewport[0]-$canvas.Width) -lt 2} 'The narrow window did not acknowledge its usable canvas'
  Start-Sleep -Milliseconds 800
  Fit-Canvas;Park;$script:projection=$null;Take-Projection
  Footer-Fits 'German narrow'

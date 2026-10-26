@@ -678,7 +678,7 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
             return result;
         }
         if(segmented){
-            Grid row;row.Background(data->brush(L"input"));
+            Grid row;
             AutomationProperties::SetName(row,str(choice,L"label"));AutomationProperties::SetAutomationId(row,L"toolbar-choice-"+id);
             std::vector<Button> buttons;std::vector<hstring> glyphs;
             for(uint32_t i=0;i<items.Size();++i){
@@ -710,7 +710,7 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
                 for(uint32_t i=0;i<std::min<uint32_t>(current.Size(),uint32_t(buttons.size()));++i){
 
                     auto item=current.GetObjectAt(i);bool chosen=flag(item,L"selected");auto title=str(item,L"label"),reason=str(item,L"disabled_reason");
-                    buttons[i].Background(chosen?selected(data):clear());AutomationProperties::SetName(buttons[i],title);tooltip(buttons[i],reason.empty()?title:reason);AutomationProperties::SetHelpText(buttons[i],reason);AutomationProperties::SetItemStatus(buttons[i],chosen?data->caption(L"search",L"selected"):L"");
+                    buttons[i].Background(chosen?selected(data):data->brush(L"control_fill"));AutomationProperties::SetName(buttons[i],title);tooltip(buttons[i],reason.empty()?title:reason);AutomationProperties::SetHelpText(buttons[i],reason);AutomationProperties::SetItemStatus(buttons[i],chosen?data->caption(L"search",L"selected"):L"");
                 }
             };
             result.orient=[weak,row,buttons,glyphs,labeled,choiceSize,choiceStyle]{
@@ -733,9 +733,9 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
             return result;
         }
         auto pick=button(data,str(choice,L"label"),[]{});
-        pick.Background(data->brush(L"input"));pick.HorizontalContentAlignment(HorizontalAlignment::Stretch);
+        pick.Background(data->brush(L"control_fill"));pick.HorizontalContentAlignment(HorizontalAlignment::Stretch);
         pick.Padding({6,0,6,0});AutomationProperties::SetAutomationId(pick,L"toolbar-choice-"+id);
-        auto labelText=std::make_shared<J>(choice);auto shown=std::make_shared<hstring>();
+        auto labelText=std::make_shared<J>(choice);auto shown=std::make_shared<hstring>();auto widthKey=std::make_shared<hstring>();
         Grid content;content.ColumnSpacing(6);
         for(auto columnWidth:{GridLength{1,GridUnitType::Auto},GridLength{1,GridUnitType::Star},GridLength{1,GridUnitType::Auto}}){
             ColumnDefinition column;column.Width(columnWidth);content.ColumnDefinitions().Append(column);
@@ -759,9 +759,11 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
             menu.ShowAt(sender.as<FrameworkElement>());
         });
         result.row=pick;result.worded=true;
-        result.update=[weak,pick,labelText,shown,glyph,name](J const& option){
+        result.update=[weak,pick,labelText,shown,glyph,name,widthKey](J const& option){
             auto self=weak.lock();if(!self)return;
             *labelText=object(option,L"Choice");auto current=array(*labelText,L"items");
+            auto nextWidth=current.Stringify()+to_hstring(self->data->textSize())+self->data->language();
+            if(nextWidth!=*widthKey){*widthKey=nextWidth;self->measured=false;}
             J chosen=current.Size()?current.GetObjectAt(0):J{};
             for(auto value:current)if(flag(value.GetObject(),L"selected"))chosen=value.GetObject();
             auto title=str(*labelText,L"label"),reason=str(chosen,L"disabled_reason");AutomationProperties::SetName(pick,title);tooltip(pick,reason.empty()?title:reason);AutomationProperties::SetHelpText(pick,reason);
@@ -775,10 +777,13 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
             bool compact=self->vertical&&!flag(self->style,L"labeled");
             content.Children().GetAt(1).as<FrameworkElement>().Visibility(compact?Visibility::Collapsed:Visibility::Visible);
             content.Children().GetAt(2).as<FrameworkElement>().Visibility(self->vertical?Visibility::Collapsed:Visibility::Visible);
-            pick.Background(self->vertical?clear():self->data->brush(L"input"));
+            pick.Background(self->vertical?clear():self->data->brush(L"control_fill"));
             pick.HorizontalContentAlignment(compact?HorizontalAlignment::Center:HorizontalAlignment::Stretch);
         };
-        result.natural=[data=data]{return winrt::Windows::Foundation::Size{168,float(data->controlHeight())};};
+        result.natural=[data=data,labelText]{
+            double width=0;for(auto value:array(*labelText,L"items"))width=std::max(width,textWidth(data,str(value.GetObject(),L"label")));
+            return winrt::Windows::Foundation::Size{float(width+16+12+2*6+2*6),float(data->controlHeight())};
+        };
         return result;
     }
     Field actionField(J const& action){

@@ -50,10 +50,11 @@ function Number([string]$Key,[string]$Value){
 function Select-Filter([string]$Id,[string]$Label){
     Panel 'adjustments'
     if($null -ne (Model).state.filter_picker.search){Invoke 'filter-search-toggle'}
-    Choose 'filter-category' 'All filters';Invoke 'filter-search-toggle'
+    Choose 'filter-category' $(if($Id -in @('dither_spread','scatter','crystallize')){'Artistic'}else{'All filters'});Invoke 'filter-search-toggle'
     (Control 'filter-search').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($Label)
     Wait-Until {(Model).state.filter_picker.search -eq $Label -and (Find ('filter-'+$Id))} "$Label did not appear in Filters"
     Wait-Until {(Find ('filter-preview-'+$Id)).Current.ItemStatus -eq 'Ready'} "$Label preview did not load" 90
+    if($Id -in @('dither_spread','scatter','crystallize')){$null=Control ('filter-preview-'+$Id) -Arranged;Capture ("preview-$Id-$Theme") -WithModel -Composed}
     Invoke ('filter-'+$Id)
     Wait-Until {(Model).state.layer_properties.description -eq $Label} "$Label did not become active"
     Panel 'properties';Fit-Canvas
@@ -71,6 +72,15 @@ function Near($A,$B,[int]$Tolerance=4){
     $true
 }
 function Pair([double]$X){Pixel $X;Pixel ($X+8)}
+function Artistic-Pixels{(@(foreach($x in 1..19){Pixel ($x*16)}) -join ',')}
+function Save-Reopen([string]$Path){
+    Save-ProjectAs $Path
+    $epoch=(Model).state.document_file.epoch
+    & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'File';Invoke-Id 'close_document'
+    Wait-Until {(Model).state.document_file.epoch -ne $epoch} 'The saved drawing did not close'
+    Open-Project $Path
+    Wait-Until {(Model).state.document_file.location.uri -eq $Path -and !(Model).state.document_file.busy -and (Model).brush_ready} 'The saved drawing did not reopen' 90
+}
 function Transparent([int]$X){Near (Pair $X) $background[$X]}
 function Park{
     $bounds=(Control 'settings-button' -Arranged).Current.BoundingRectangle
@@ -138,12 +148,7 @@ try{
     Choice 'colors' 2;Park
     Wait-Until {Transparent 40} 'White output did not make the dark patch transparent'
     Capture "threshold-white-$Theme" -WithModel -Composed
-    Save-ProjectAs $project
-    $epoch=(Model).state.document_file.epoch
-    & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'File';Invoke-Id 'close_document'
-    Wait-Until {(Model).state.document_file.epoch -ne $epoch} 'The saved drawing did not close'
-    Open-Project $project
-    Wait-Until {(Model).state.document_file.location.uri -eq $project -and !(Model).state.document_file.busy -and (Model).brush_ready} 'The saved drawing did not reopen' 90
+    Save-Reopen $project
     $filter=@((Model).state.layers|Where-Object label -eq 'Threshold')[0]
     Invoke ('layer-'+$filter.id+'-name');Panel 'properties';Fit-Canvas;Park
     Wait-Until {(Property 'colors').value.value -eq 2 -and (Property 'transparency').value.value -eq 0 -and [Math]::Abs((Property 'threshold').value.value-.378) -lt .000001} 'Reopen lost Threshold choices'
@@ -151,10 +156,57 @@ try{
     Choice 'transparency' 1
     Wait-Until {(Property 'alpha_threshold').value.value -eq 37} 'Save/reopen lost the hidden alpha threshold'
     Capture "threshold-reopened-$Theme" -WithModel -Composed
+    $gradient=Join-Path $run 'Artistic gradient.png';$image=[Drawing.Bitmap]::new(320,192)
+    try{for($y=0;$y -lt 192;$y++){for($x=0;$x -lt 320;$x++){$r=[int]($x*255/319);$g=[int]($y*255/191);$image.SetPixel($x,$y,[Drawing.Color]::FromArgb(255,$r,$g,(255-$r)))}};$image.Save($gradient,[Drawing.Imaging.ImageFormat]::Png)}finally{$image.Dispose()}
+    Open-Project $gradient
+    Wait-Until {(Model).state.document_file.location.uri -eq $gradient -and !(Model).state.document_file.busy -and (Model).brush_ready} 'Artistic gradient did not open' 90
+    Fit-Canvas;Park
+    $artistic=@(
+        @{id='dither_spread';label='Dither Spread';edits=[ordered]@{spread=64;cell_size=12;density=65}},
+        @{id='scatter';label='Scatter';edits=[ordered]@{spread=64;cell_size=12;density=65;seed=7}},
+        @{id='crystallize';label='Crystallize';edits=[ordered]@{cell_size=48;stretch=60}})
+    $catalog=Get-Content -LiteralPath (Join-Path $repo 'assets/filters/manifest.json') -Raw -Encoding UTF8|ConvertFrom-Json
+    foreach($case in $artistic){
+        Select-Filter $case.id $case.label;Park
+        $controls=@((Model).state.layer_properties.controls)
+        $parameters=@(($catalog.filters|Where-Object {$_.program.id -eq $case.id}).program.parameters)
+        if(($controls.key -join ',') -cne ($case.edits.Keys -join ',') -or ($controls.key -join ',') -cne ($parameters.key -join ',')){throw "$($case.label) has missing, reordered or obsolete controls"}
+        foreach($parameter in $parameters){
+            $control=Property $parameter.key;$n=$control.kind.numeric;$kind=$parameter.kind
+            $mapping=if($parameter.mapping){$parameter.mapping.type}else{'linear'}
+            if($control.kind.kind -ne 'number' -or $n.min -ne $kind.min -or $n.max -ne $kind.max -or $n.step -ne $kind.step -or $n.digits -ne $kind.decimals -or $n.unit -cne $kind.unit -or $n.default_value -ne $parameter.default.value -or $control.value.value -ne $parameter.default.value -or $n.mapping.type -ne $mapping -or ($mapping -eq 'power' -and $n.mapping.exponent -ne $parameter.mapping.exponent)){throw "$($case.label) $($parameter.key) differs from its shared numeric schema"}
+            $native=Control ('property-'+$parameter.key) -Type ([System.Windows.Automation.ControlType]::Edit)
+            if(!$native.Current.IsEnabled -or !$native.Current.Name.Contains($control.label)){throw "$($case.label) native field differs from its shared control"}
+        }
+        $before=Wait-StablePixels {Artistic-Pixels};$last=@($case.edits.Keys)[-1]
+        foreach($key in $case.edits.Keys){
+            if($key -eq $last){Park;$beforeLast=Wait-StablePixels {Artistic-Pixels};$oldValue=(Property $key).value.value}
+            Number $key ([string]$case.edits[$key])
+        }
+        Park;Wait-Until {(Artistic-Pixels) -cne $before} "$($case.label) edits did not change the presented gradient"
+        $edited=Wait-StablePixels {Artistic-Pixels}
+        Invoke-History;Wait-Until {(Property $last).value.value -eq $oldValue} "$($case.label) last edit was not one Undo"
+        Park;Wait-Until {(Artistic-Pixels) -ceq $beforeLast} "$($case.label) Undo did not restore composed pixels"
+        Invoke-History $true;Wait-Until {(Property $last).value.value -eq $case.edits[$last]} "$($case.label) last edit did not redo"
+        Park;Wait-Until {(Artistic-Pixels) -ceq $edited} "$($case.label) Redo did not restore composed pixels"
+        Capture ("artistic-$($case.id)-$Theme") -WithModel -Composed
+    }
+    $artisticPixels=Wait-StablePixels {Artistic-Pixels}
+    Save-Reopen (Join-Path $run 'Artistic filters.capy');Fit-Canvas;Park
+    Wait-Until {(Artistic-Pixels) -ceq $artisticPixels} 'Artistic save/reopen changed composed pixels'
+    foreach($case in $artistic){
+        $layers=@((Model).state.layers|Where-Object label -eq $case.label)
+        if($layers.Count -ne 1){throw "$($case.label) was not retained exactly once"}
+        Invoke ('layer-'+$layers[0].id+'-name');Panel 'properties'
+        Wait-Until {(Model).state.layer_properties.description -eq $case.label} "$($case.label) did not select after reopen"
+        if((@((Model).state.layer_properties.controls.key) -join ',') -cne ($case.edits.Keys -join ',')){throw "$($case.label) reopened with a different schema"}
+        foreach($key in $case.edits.Keys){if((Property $key).value.value -ne $case.edits[$key]){throw "$($case.label) lost $key on save/reopen"}}
+    }
+    Capture "artistic-reopened-$Theme" -WithModel -Composed
     if((Model).state.host_error){throw "The filter journey reported $((Model).state.host_error)"}
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close
     if((Get-Item -LiteralPath $stderr).Length){throw 'Native stderr requires inspection'}
-    [pscustomobject]@{theme=$Theme;brightness_to_opacity='passed';threshold_outputs='passed';alpha_and_hidden_values='passed';undo_redo='passed';save_reopen='passed';evidence=$run}|ConvertTo-Json
+    [pscustomobject]@{theme=$Theme;brightness_to_opacity='passed';threshold_outputs='passed';alpha_and_hidden_values='passed';artistic_filters=@($artistic.id);undo_redo='passed';save_reopen='passed';evidence=$run}|ConvertTo-Json
 }catch{
     if($review -and !$review.HasExited){try{Capture 'failure' -WithModel -Composed}catch{}}
     [IO.File]::WriteAllText((Join-Path $run 'failure.txt'),($_|Out-String)+$_.ScriptStackTrace);throw

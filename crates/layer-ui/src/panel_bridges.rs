@@ -69,7 +69,7 @@ impl ResolvedLayout {
         }
         self.groups.retain_mut(|group| {
             let Some((_,bounds))=measure.groups.iter().find(|(id,_)|*id==group.id) else {return false;};
-            group.bounds=*bounds;bounds.width>0. && bounds.height>0.
+            group.bounds = *bounds;bounds.width>0. && bounds.height>0.
         });
         self.collapsed.retain_mut(|column| {
             let Some(allocated)=measure.columns.iter().find(|c|c.column==column.id) else {return false;};

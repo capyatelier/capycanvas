@@ -274,6 +274,10 @@ struct WorkspaceData : std::enable_shared_from_this<WorkspaceData> {
         auto channel=[&](uint32_t i){return uint8_t(std::lround(std::clamp(value.GetNumberAt(i),0.,1.)*255));};
         return Windows::UI::Color{channel(3),channel(0),channel(1),channel(2)};
     }
+    Windows::UI::Color paletteColor(wchar_t const* role)const{
+        auto palette=object(state,L"palette");auto value=array(palette,role);
+        return value.Size()==4?unitColor(value):color(str(palette,role,L"#414141"));
+    }
     Windows::UI::Color glassColor(wchar_t const* role)const{
         auto value=array(object(object(state,L"palette"),L"glass"),role);
         if(value.Size()!=4)return color(str(object(state,L"palette"),role,L"#414141"));
@@ -286,7 +290,7 @@ struct WorkspaceData : std::enable_shared_from_this<WorkspaceData> {
     }
     void refreshPalette(){
         auto palette=object(state,L"palette");
-        for(auto const& [role,brush]:paletteBrushes)brush.Color(color(str(palette,role.c_str(),L"#414141")));
+        for(auto const& [role,brush]:paletteBrushes)brush.Color(paletteColor(role.c_str()));
         for(auto const& [role,brush]:glassBrushes)brush.Color(glassColor(role.c_str()));
         for(auto const& [key,brush]:lineBrushes)brush.Color(lineColor(key.first,key.second));
         for(auto const& [key,brush]:tintBrushes){auto value=color(str(palette,key.first.c_str(),L"#414141"));value.A=key.second;brush.Color(value);}
@@ -329,7 +333,7 @@ struct WorkspaceData : std::enable_shared_from_this<WorkspaceData> {
     hstring theme()const{return str(state,L"theme",L"dark");}
     SolidColorBrush brush(wchar_t const* role)const{
         auto found=paletteBrushes.find(role);if(found!=paletteBrushes.end())return found->second;
-        return paletteBrushes.emplace(role,fill(color(str(object(state,L"palette"),role,L"#414141")))).first->second;
+        return paletteBrushes.emplace(role,fill(paletteColor(role))).first->second;
     }
     SolidColorBrush glass(wchar_t const* role)const{
         auto found=glassBrushes.find(role);if(found!=glassBrushes.end())return found->second;
@@ -511,7 +515,7 @@ struct ChoiceGrid {
         auto items=array(spec,L"items");
         for(uint32_t i=0;i<std::min<uint32_t>(items.Size(),uint32_t(cells.size()));++i){
             auto item=items.GetObjectAt(i);bool chosen=flag(item,L"selected");
-            cells[i].Background(chosen?selected(data):clear());cells[i].Content().as<UIElement>().Opacity(chosen?1.:.45);
+            cells[i].Background(chosen?selected(data):data->brush(L"control_fill"));cells[i].Content().as<UIElement>().Opacity(chosen?1.:.45);
             AutomationProperties::SetName(cells[i],str(item,L"label"));tooltip(cells[i],str(item,L"label"));
             AutomationProperties::SetItemStatus(cells[i],chosen?data->caption(L"search",L"selected"):L"");
         }

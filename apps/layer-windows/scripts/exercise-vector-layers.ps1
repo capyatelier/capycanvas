@@ -81,6 +81,8 @@ function Sketch-VectorRoutes([long]$Layer){
  Wait-Until {(Selected 'move') -and (Selected 'scale_rotate')} 'Sketch Scale/rotate did not enter Move before selecting paths'
  $select=@((Model).header.items|Where-Object {$_.resolved_control.command-eq'select'})[0]
  Click (Control ('header-item-'+$select.id) -Arranged)
+ Wait-Until {Selected 'select'} 'Sketch Select did not activate its selection tool'
+ Click (Control ('header-item-'+$select.id) -Arranged)
  Wait-Until {(Model).state.customization.drawer -and (Find 'tool-drawer' -Visible)} 'Sketch Select did not open its native choices'
  $paths=@((Model).state.tool_panels.tools.subtools)
  if($paths.Count-lt2 -or $paths[0].action.command-ne'move' -or $paths[1].action.command-ne'edit_points'){throw 'Sketch Select did not lead with Select paths and Edit points'}
