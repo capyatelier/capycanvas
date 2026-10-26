@@ -14,7 +14,7 @@ extension XCTestCase {
     @MainActor func checkCanvasActionBar(in app: XCUIApplication, theme: String = "light") {
         app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"\#(theme)"},{"type":"set_color","rgba":[0.2,0.45,0.8,1]}]"#
         app.launch(); capturePaintEditor(in: app, theme: theme)
-        editorMenu(in: app, menu: "File", id: "new_document", label: "New drawing")
+        editorMenu(in: app, menu: "File", id: "new_document", label: "New…")
         XCTAssertTrue(app.buttons["new-drawing-create"].waitForExistence(timeout: 60))
         workspaceActivate(app.buttons["new-drawing-texture"])
         let usePaper = app.buttons["new-drawing-paper-use"]

@@ -207,7 +207,7 @@ extension XCTestCase {
         expectation(for: NSPredicate(format: "selected == NO"), evaluatedWith: eraser)
         waitForExpectations(timeout: 5)
         if case .textEntry = journey {
-            editorMenu(in: app, menu: "File", id: "new_document", label: "New drawing")
+            editorMenu(in: app, menu: "File", id: "new_document", label: "New…")
             let name = app.textFields["new-drawing-name"]
             replaceEditorText(name, with: "Hdr", in: app)
             app.typeKey("e", modifierFlags: [])

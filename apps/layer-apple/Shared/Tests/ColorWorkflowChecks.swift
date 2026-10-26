@@ -181,7 +181,7 @@ extension XCTestCase {
         #if os(macOS)
         app.typeKey("n", modifierFlags: .command)
         #else
-        editorMenu(in: app, menu: "File", id: "new_document", label: "New drawing")
+        editorMenu(in: app, menu: "File", id: "new_document", label: "New…")
         #endif
         XCTAssertTrue(create.waitForExistence(timeout: 10))
         XCTAssertEqual(newDrawingNumber("width", in: app).value as? String, "79")
