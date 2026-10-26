@@ -551,6 +551,26 @@ mod selection_tools_checks {
     }
 
     #[test]
+    fn selection_modifier_publication_survives_shortcut_capture() {
+        for platform in Platform::ALL {
+            let mut s = session(platform);
+            invoke(&mut s, CommandId::RectangleSelect);
+            invoke(&mut s, CommandId::KeyboardShortcuts);
+            preference(&mut s, PreferenceAction::AddModifierKey);
+            let document = s.engine.document().clone();
+            let reply = s.input(UiInput::Key { key: "Shift".into(), pressed: true, repeat: false,
+                modifiers: Modifiers { shift: true, ..Default::default() }, editing: false, divider: None }).unwrap();
+            assert!(reply.handled);
+            assert!(s.preferences().unwrap().capture.unwrap().chord.is_some());
+            assert_ne!(reply.change.regions & regions::SETTINGS, 0);
+            assert!(s.command(CommandId::SelectionAdd).selected);
+            assert!(s.state.commands.iter().find(|command| command.id == CommandId::SelectionAdd).unwrap().selected);
+            assert_ne!(reply.change.regions & regions::COMMANDS, 0, "{platform:?}: recording a modifier preserves command publication");
+            assert_eq!(s.engine.document(), &document);
+        }
+    }
+
+    #[test]
     fn held_selection_modifiers_latch_per_contact_and_preserve_configured_mode() {
         for (shift, alt, expected) in [(true,false,SelectionMode::Add),(false,true,SelectionMode::Subtract),(true,true,SelectionMode::Intersect)] {
             for tool in [CommandId::RectangleSelect, CommandId::EllipseSelect, CommandId::Lasso] {

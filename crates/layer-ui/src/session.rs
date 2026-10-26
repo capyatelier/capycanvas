@@ -1435,9 +1435,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                         self.state.preferences.capture.is_some() || self.state.preferences.editing_shortcut.is_some())
                 {
                     let query = format!("{}{key}", self.state.preferences.query);
-                    reply.change = self.dispatch(UiAction::Preferences {
+                    reply.change = merge_change(reply.change, self.dispatch(UiAction::Preferences {
                         action: PreferenceAction::Search { query },
-                    })?;
+                    })?);
                     self.state.preferences.search_focus += 1;
                     reply.handled = true;
                     return Ok(reply);
@@ -1464,7 +1464,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     || self.vector_nudge(&key, pressed, hold_allowed && self.state.preferences.capture.is_none(), modifiers)?
                     || self.transform_nudge(&key, pressed, hold_allowed && self.state.preferences.capture.is_none(), modifiers)? {
                     self.refresh_commands();
-                    reply.change = self.changed(regions::BRUSH | regions::DOCUMENT | regions::COMMANDS, true);
+                    reply.change = merge_change(reply.change, self.changed(regions::BRUSH | regions::DOCUMENT | regions::COMMANDS, true));
                     reply.handled = true;
                     return Ok(reply);
                 }
@@ -1476,13 +1476,13 @@ impl<R: CanvasRenderer> UiSession<R> {
                     return Ok(reply);
                 }
                 if pressed && !editing && key == "escape" && self.cancel_warp_split() {
-                    reply.change = self.changed(regions::BRUSH | regions::DOCUMENT | regions::COMMANDS, true);
+                    reply.change = merge_change(reply.change, self.changed(regions::BRUSH | regions::DOCUMENT | regions::COMMANDS, true));
                     reply.handled = true;
                     return Ok(reply);
                 }
                 if pressed && !editing && self.state.preferences.capture.is_none() && (self.selection_key(&key)? || self.vector_path_key(&key)?) {
                     self.refresh_commands();
-                    reply.change = self.changed(regions::BRUSH | regions::DOCUMENT | regions::COMMANDS, true);
+                    reply.change = merge_change(reply.change, self.changed(regions::BRUSH | regions::DOCUMENT | regions::COMMANDS, true));
                     reply.handled = true;
                     return Ok(reply);
                 }
@@ -1496,19 +1496,19 @@ impl<R: CanvasRenderer> UiSession<R> {
                                 &self.state.localization,
                             );
                         }
-                        reply.change = self.changed(regions::SETTINGS, false);
+                        reply.change = merge_change(reply.change, self.changed(regions::SETTINGS, false));
                         reply.handled = true;
                         return Ok(reply);
                     }
                     if key == "escape" && !editing && self.canvas_idle() && !self.interaction.facts.popup_open && self.state.tilt_calibration.is_some() {
                         let epoch=self.state.tilt_calibration.as_ref().unwrap().panel.editor.controls.epoch;
                         self.tilt_curve_action(CurveEditorAction::Key{epoch,key_event:"Escape".into(),pressed:true,repeat:false,modifiers});
-                        reply.change=self.changed(regions::TILT_CALIBRATION,false);reply.handled=true;return Ok(reply);
+                        reply.change=merge_change(reply.change,self.changed(regions::TILT_CALIBRATION,false));reply.handled=true;return Ok(reply);
                     }
                     if key == "escape" && !editing && self.canvas_idle() && !self.interaction.facts.popup_open && self.state.pressure_calibration.is_some() {
                         let epoch=self.state.pressure_calibration.as_ref().unwrap().editor.controls.epoch;
                         self.pressure_curve_action(CurveEditorAction::Key {epoch,key_event:"Escape".into(),pressed:true,repeat:false,modifiers});
-                        reply.change = self.changed(regions::PRESSURE_CALIBRATION, false);
+                        reply.change = merge_change(reply.change, self.changed(regions::PRESSURE_CALIBRATION, false));
                         reply.handled = true; return Ok(reply);
                     }
                     if key == "escape" && !editing {
@@ -1522,14 +1522,14 @@ impl<R: CanvasRenderer> UiSession<R> {
                             if cancelled {
                                 self.interaction.pointer = None;
                                 reply.cancel_paint = true;
-                                reply.change = self.changed(regions::DOCUMENT, true);
+                                reply.change = merge_change(reply.change, self.changed(regions::DOCUMENT, true));
                             }
                             reply.handled = true;
                             return Ok(reply);
                         }
                         reply.dismiss_popups = true;
                         if let Some(change) = self.escape_one(modifiers)? {
-                            reply.change = change;
+                            reply.change = merge_change(reply.change, change);
                             reply.handled = true;
                             return Ok(reply);
                         }
@@ -1543,7 +1543,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     {
                         if !repeat {
                             self.set_command_focus(CommandFocus::Text);
-                            reply.change = self.dispatch(UiAction::Invoke { command: CommandId::SearchCommands })?;
+                            reply.change = merge_change(reply.change, self.dispatch(UiAction::Invoke { command: CommandId::SearchCommands })?);
                         }
                         reply.handled = true;
                         return Ok(reply);
@@ -1559,11 +1559,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                                 .logical_viewport
                                 .or(self.interaction.viewport)
                                 .ok_or("Workspace has no viewport")?;
-                            reply.change = self.dispatch(UiAction::NudgeDivider {
+                            reply.change = merge_change(reply.change, self.dispatch(UiAction::NudgeDivider {
                                 id,
                                 forward: matches!(key.as_str(), "arrowright" | "arrowdown"),
                                 viewport,
-                            })?;
+                            })?);
                             reply.handled = true;
                         } else if hold_allowed && {
                             let (change, _) = self.sync_modifier_keys(true)?;
@@ -1580,14 +1580,14 @@ impl<R: CanvasRenderer> UiSession<R> {
                                 && divider.is_none() && self.canvas_idle()
                                 && self.state.workspace.zen_mode && self.command_flags(CommandId::ZenMode).0
                             {
-                                reply.change = self.dispatch(UiAction::Invoke { command: CommandId::ZenMode })?;
+                                reply.change = merge_change(reply.change, self.dispatch(UiAction::Invoke { command: CommandId::ZenMode })?);
                                 reply.handled = true;
                             }
                             reply.handled |= matched;
                             if let Some(ShortcutDefinition { action: ShortcutAction::Action { action }, repeat: repeats, .. }) = binding
                                 && (!repeat || repeats)
                             {
-                                reply.change = self.dispatch_spring(name.clone(), *action, repeat)?;
+                                reply.change = merge_change(reply.change, self.dispatch_spring(name.clone(), *action, repeat)?);
                             }
                         }
                     }

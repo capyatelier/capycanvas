@@ -454,6 +454,8 @@ editing/modal/popup guards, temporary navigation ownership, competing pointer ex
 and cancellation. Modified keys never silently become unmodified shortcuts.
 Selection modifier presses, releases and focus loss publish tool controls and
 command selections together, including the configured mode restored on release.
+Input replies retain these changes when the same key also records a shortcut,
+updates navigation or dispatches an action.
 Releasing the bound pan key or changing input focus clears the held-key state;
 releasing it during a pan does not change that contact into paint.
 

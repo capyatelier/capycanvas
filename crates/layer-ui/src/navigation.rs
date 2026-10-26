@@ -142,7 +142,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         if let Some(pointer) = self.interaction.pointer
             && pointer.navigation.is_some_and(|c| c.zoom.drag == ZoomDrag::Area && matches!(c.mode, NavigationMode::Zoom | NavigationMode::ZoomOut)) {
                 if key == "escape" {
-                    if pressed { self.interaction.pointer = None; reply.change = self.changed(regions::CAMERA, true); }
+                    if pressed { self.interaction.pointer = None; reply.change = merge_change(reply.change, self.changed(regions::CAMERA, true)); }
                     reply.handled = true;
                     return Ok(true);
                 }
@@ -162,7 +162,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             let center = camera.work_area_center();
             let amount = if key.starts_with("page") { camera.work_area[3] * 0.9 } else { 40. *
                 self.logical_viewport.map_or(1., |v| camera.viewport[0] as f32 / v[0]) };
-            reply.change = self.gesture(center, [center[0] + direction[0] * amount, center[1] + direction[1] * amount], 1., 0.)?;
+            reply.change = merge_change(reply.change, self.gesture(center, [center[0] + direction[0] * amount, center[1] + direction[1] * amount], 1., 0.)?);
         }
         reply.handled = true;
         reply.pan_cursor = true;
