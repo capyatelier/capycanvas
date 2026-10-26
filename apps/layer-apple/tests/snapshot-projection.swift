@@ -219,6 +219,7 @@ private final class Changes: @unchecked Sendable {
                     "work_area": bounds, "status": bounds, "groups": [["id": 7, "bounds": bounds]], "collapsed": [], "dividers": []],
                 "workspace_layout": ["bands": [["id": 1, "extent": width]], "floating": [], "collapsed": [], "fit_tab_groups": [7], "fit_height_groups": [],
                     "column_stacks": [["column": 7, "members": [7], "drawers": false, "auto_hide": false]]],
+                "header_presentation": ["height": 44, "items": [["id": 7, "bounds": bounds]]],
                 "camera": ["zoom": 2, "revision": 1], "panel_measurements": [["panel": "brushes", "tab_width": 90, "content_height": 300]]])
         }
         func full(_ revision: Int, width: Int) -> JSON {
@@ -228,7 +229,8 @@ private final class Changes: @unchecked Sendable {
                 "workspace": ["layout": dimensions.raw, "zen_mode": false],
                 "commands": [["id": "undo", "enabled": true]]],
                 "panels": [["id": "brushes", "title": "Brushes"]], "application_menus": [["id": "edit", "enabled": true]],
-                "layout": reflow["layout"].raw, "panel_measurements": [], "workspace_update": reflow["workspace_update"].raw])
+                "layout": reflow["layout"].raw, "header_presentation": reflow["header_presentation"].raw,
+                "panel_measurements": [], "workspace_update": reflow["workspace_update"].raw])
         }
         precondition(editor.receive(packet()) == .ignored)
         precondition(editor.receive(full(10, width: 200)) == .full)
@@ -244,6 +246,8 @@ private final class Changes: @unchecked Sendable {
                     && editor.state["revision"].uint == 10 && editor.state["camera"]["zoom"].uint == 2
                     && editor.state["workspace"]["layout"]["bands"][0]["extent"].uint == 350
                     && editor.state["workspace"]["layout"]["column_stacks"][0]["members"][0].uint == 7
+                    && editor.state["workspace"]["layout"]["header_presentation"].isNull
+                    && editor.snapshot["header_presentation"]["items"][0]["bounds"]["width"].uint == 350
                     && editor.snapshot["panel_measurements"][0]["content_height"].uint == 300 { coherent.record() }
             }
         })
@@ -255,6 +259,7 @@ private final class Changes: @unchecked Sendable {
         let malformed = [packet(12, model: 12, content: 9), packet(12, model: 9), packet(9, model: 9),
             packet(12, model: 12).replacing("camera", with: JSON()),
             packet(12, model: 12).replacing("panel_measurements", with: JSON()),
+            packet(12, model: 12).replacing("header_presentation", with: JSON()),
             packet(12, model: 12).replacing("layout", with: JSON(["groups": []])),
             packet(12, model: 12).replacing("workspace_layout", with: JSON(["bands": []]))]
         for value in malformed { precondition(editor.receive(value) == .ignored && editor.snapshot.json.stableKey == accepted) }
@@ -265,6 +270,7 @@ private final class Changes: @unchecked Sendable {
         precondition(editor.state["revision"].uint == 13 && editor.workspace.contentRevision == 13 && content.value == 1)
         precondition(editor.state["workspace"]["layout"]["bands"][0]["extent"].uint == 200)
         precondition(editor.state["workspace"]["layout"]["column_stacks"][0]["column"].uint == 7)
+        precondition(editor.snapshot["header_presentation"]["items"][0]["bounds"]["width"].uint == 200)
         print("Workspace reflow checks passed: retained content, atomic geometry/camera, incomplete/stale packet rejection and full completion")
     }
 }

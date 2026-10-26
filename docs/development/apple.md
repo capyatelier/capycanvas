@@ -338,6 +338,8 @@ mutation or release.
 - **Independent publications.** Handle small `layer-host` packets such as
   `{command_search, revision}` in `EditorSnapshotState.receive` without promoting
   the content revision or refreshing retained panels and thumbnails.
+  Stage `header_presentation` from geometry packets beside the resolved layout;
+  keep it outside the authored workspace layout and publish them atomically.
 - **Retained panels.** Resolve each workspace container by stable ID and read its
   indexed panel values together before constructing lazy content. Observe
   expansion separately for placement and input admission. Removed containers

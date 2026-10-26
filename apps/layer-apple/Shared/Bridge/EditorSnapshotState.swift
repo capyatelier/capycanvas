@@ -41,6 +41,7 @@ import Foundation
                 // live workspace dimensions and camera become visible together.
                 changes = stateFields.stagePatch(["workspace": updatedWorkspace, "camera": next["camera"]])
                 changes += snapshotFields.stagePatch(["state": stateFields.unobserved, "layout": next["layout"],
+                    "header_presentation": next["header_presentation"],
                     "panel_measurements": next["panel_measurements"], "workspace_update": motion])
                 changes += workspace.stage(motion)
                 kind = .reflow
@@ -77,6 +78,7 @@ import Foundation
         let current = stateFields.unobserved["workspace"], layout = next["layout"]
         guard current["layout"].raw is NSDictionary, layout.raw is NSDictionary,
             next["camera"].raw is NSDictionary, next["panel_measurements"].raw is NSArray,
+            next["header_presentation"].raw is NSDictionary,
             ["groups", "dividers", "collapsed", "viewport"].allSatisfy({ layout[$0].raw is NSArray }),
             layout["work_area"].raw is NSDictionary, layout["status"].raw is NSDictionary,
             layout["tab_bar_height"].raw is NSNumber else { return nil }
