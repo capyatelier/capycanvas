@@ -97,6 +97,7 @@ function Sketch-VectorRoutes([long]$Layer){
  $checks.sketch_paths_and_header_reason='passed'
 }
 function Vector-Availability([long]$Layer,[long]$Pen){
+ $null=Select-Brush 'G-Pen'
  $paint=@(Rows|Where-Object {!(Vector $_) -and !$_.paper})[0].id
  $revision=Revision;$points=@(@(650,320),@(650,520));$pixels=Tool-Samples $points
  $choice=Tool-Item 'subtools' {param($item) $item.enabled -and $item.disabled_reason -and $item.action.type-eq'select_brush'} 'a dimmed selectable pen'
@@ -104,11 +105,13 @@ function Vector-Availability([long]$Layer,[long]$Pen){
  $null=Choose-Tool-Item $choice -Acknowledged
  Wait-Until {(Model).state.brush.preset-eq$choice.action.id -and (Model).state.notice -and (Notice-Parts).Contains('canvas-notice')} 'Choosing the dimmed row did not explain before a stroke'
  $dim=Tool-TextPixels $choice "tool-reason-dim-$Theme"
+ if((Revision)-ne$revision){throw 'Choosing an unavailable pen changed document history'}
  Invoke "layer-$paint-name"
  Wait-Until {(Active).id-eq$paint -and (Model).state.brush.preset-eq$choice.action.id -and !(Model).state.tool_set.subtools[$choice.index].disabled_reason} 'The chosen pen or its cleared availability did not survive leaving vector'
  $clear=Tool-TextPixels $choice "tool-reason-clear-$Theme"
  if($dim.identity-cne$clear.identity -or ($dim.bounds-join',')-cne($clear.bounds-join',') -or $dim.background-ne$clear.background -or $dim.contrast-ge$clear.contrast -or $clear.reason){throw 'The native tool content did not dim independently of its retained selected background, then clear'}
  Invoke "layer-$Layer-name";Wait-Until {(Active).id-eq$Layer} 'The vector layer did not return after availability'
+ $revision=Revision
  $null=Select-Brush 'G-Pen'
  $null=Search (Label 'sculpt') {param($result) $result.id-like'*sculpt*' -and $result.label-eq(Label 'sculpt')} 'Sculpt'
  Wait-Until {(Selected 'sculpt') -and (Model).state.notice -and (Notice-Parts).Contains('canvas-notice')} 'Sculpt did not explain its vector refusal before a stroke'
