@@ -635,8 +635,9 @@ project, image and handle-geometry sources, native bounds/DPI and camera readout
 then validates the actual selected image against the preflight pixels. Every
 path point must lie inside the arranged canvas, outside visible sibling-control
 bounds, and within its actual owned native window subtree. The guard records
-those bounds and the native ancestor; it does not require the hit provider to
-expose a canvas descendant. The existing injector executes one priming
+those bounds and checks the drawing HWND with `WindowFromPoint` and `IsChild`;
+UI Automation fragment parents need not expose the native hosting bridge.
+The existing injector executes one priming
 contact followed by three six-second contacts, with a bounded arc whose endpoint
 differs from its start. Its ordinary full-circle path, pacing and input counts
 are unchanged. Only native pen delivery is covered; no mouse/touch throughput or

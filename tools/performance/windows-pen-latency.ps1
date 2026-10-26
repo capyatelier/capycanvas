@@ -261,15 +261,13 @@ if($NavigationMode -or $ObjectMotionMode -or $brushSeries){
     [pscustomobject]@{id=$item.Current.AutomationId;name=$item.Current.Name;bounds=$rect}
    }
   })
-  [pscustomobject]@{bounds=$bounds;bridge_hwnd=$bridge.Current.NativeWindowHandle;obstacles=$obstacles}
+  [pscustomobject]@{bounds=$bounds;bridge_hwnd=$bridge.Current.NativeWindowHandle;window_hwnd=$root.Current.NativeWindowHandle;obstacles=$obstacles}
  }
  function Motion-Point($Region,[Windows.Point]$Point) {
   if(!$Region.bounds.Contains($Point)){throw "Motion point $Point is outside the arranged canvas"}
   foreach($item in $Region.obstacles){if($item.bounds.Contains($Point)){throw "Motion point $Point is covered by '$($item.id)' ('$($item.name)')"}}
-  $hit=[System.Windows.Automation.AutomationElement]::FromPoint($Point);$node=$hit
-  while($node -and $node.Current.NativeWindowHandle -ne $Region.bridge_hwnd){$node=[System.Windows.Automation.TreeWalker]::RawViewWalker.GetParent($node)}
-  if(!$node -or $node.Current.ProcessId -ne $review.Id){throw "Motion point $Point is outside the owned canvas native subtree"}
-  $hit
+  [WindowsPenMotion]::VerifyPoint([uint32]$review.Id,[IntPtr]$Region.window_hwnd,[int]$Point.X,[int]$Point.Y)
+  [System.Windows.Automation.AutomationElement]::FromPoint($Point)
  }
  function Motion-Path($Region,[int]$Cx,[int]$Cy,[int]$Rx,[int]$Ry,[int]$Seconds){
   if($Seconds -lt 1 -or $Seconds -gt 30){throw 'Motion duration exceeds the producer bounds'}

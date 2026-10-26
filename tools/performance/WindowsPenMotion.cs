@@ -26,6 +26,12 @@ public static class WindowsPenMotion {
  [DllImport("user32.dll")]static extern IntPtr GetForegroundWindow();
  [DllImport("user32.dll")]static extern uint GetWindowThreadProcessId(IntPtr window,out uint process);
  [DllImport("user32.dll")]static extern IntPtr WindowFromPoint(Point point);
+ [DllImport("user32.dll")]static extern bool IsChild(IntPtr parent,IntPtr child);
+ public static void VerifyPoint(uint owner,IntPtr window,int x,int y) {
+  var target=WindowFromPoint(new Point{x=x,y=y});uint process;
+  GetWindowThreadProcessId(target,out process);
+  if(process!=owner||(target!=window&&!IsChild(window,target)))throw new Exception("Motion point is outside the owned drawing window");
+ }
  [DllImport("user32.dll")]public static extern bool SetForegroundWindow(IntPtr window);
  [DllImport("user32.dll")]public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
  [DllImport("user32.dll")]static extern IntPtr GetDC(IntPtr window);
