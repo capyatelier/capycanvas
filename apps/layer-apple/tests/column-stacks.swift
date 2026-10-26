@@ -39,7 +39,11 @@ import SwiftUI
         func member(_ id: UInt64) -> JSON { store.snapshot["layout"]["collapsed"].array.first { $0["id"].uint == id } ?? JSON() }
         func grip(_ id: UInt64) -> JSON { JSON(["kind":"column", "column":id]) }
         func source(_ item: JSON, surface: ReorderSurface = .handle) -> WorkspaceSource? {
-            workspace.sourceInstances.values.first { $0.item == item.stableKey && $0.surface == surface }
+            workspace.sourceInstances.values.filter { $0.item == item.stableKey && $0.surface == surface }.max {
+                if $0.layer != $1.layer { return $0.layer < $1.layer }
+                if $0.priority != $1.priority { return $0.priority < $1.priority }
+                return $0.bounds.width * $0.bounds.height > $1.bounds.width * $1.bounds.height
+            }
         }
         func center(_ value: WorkspaceSource) -> CGPoint { CGPoint(x: value.bounds.midX, y: value.bounds.midY) }
         func layout() -> String { store.state["workspace"]["layout"].stableKey }
@@ -81,14 +85,32 @@ import SwiftUI
             try require(member(4)["open"]["connections"].array.count == member(4)["groups"].array.count, "Every visible active group has its connector")
             try await click("layers")
             try await wait("Member switch") { member(4)["open"].isNull && !member(12)["open"].isNull }
-            let opened = member(12)["open"]["bounds"].rect
-            let divider = store.snapshot["layout"]["dividers"].array.first {
-                !$0["fixed"].bool && $0["bounds"].rect.height > $0["bounds"].rect.width
-                    && abs($0["bounds"].rect.minX - opened.maxX - 6) < 0.5
-            }!
+            let open = member(12)["open"], opened = open["bounds"].rect
+            let outward: CGFloat = open["direction"].string == "right" ? 1 : -1
+            guard let divider = store.snapshot["layout"]["dividers"].array.first(where: {
+                let bounds = $0["bounds"].rect
+                return !$0["fixed"].bool && bounds.height > bounds.width
+                    && bounds.minY < opened.maxY && bounds.maxY > opened.minY
+                    && abs(outward > 0 ? bounds.minX - opened.maxX : opened.minX - bounds.maxX) < 0.5
+            }) else { throw HostFailure(message: "The open member must expose its resize divider") }
             let resize = JSON(["type":"drag_divider", "id":divider["id"].raw])
             try await wait("Open member resize handle") { source(resize) != nil }
-            let resizeStart = center(source(resize)!), resizeEnd = CGPoint(x: resizeStart.x + 40, y: resizeStart.y)
+            let resizeStart = center(source(resize)!), resizeEnd = CGPoint(x: resizeStart.x + 40 * outward, y: resizeStart.y)
+            for theme in ["light", "dark"] {
+                try await action(["type":"set_theme", "theme":theme])
+                let reachStart = CGPoint(x: outward > 0 ? opened.maxX - 20 : opened.minX + 20, y: resizeStart.y)
+                try require(abs(reachStart.x - resizeStart.x) > 6, "Edge reach begins inside the column, beyond its handle")
+                let beforeReach = layout(), widthBeforeReach = member(12)["open"]["bounds"].rect.width
+                try await send(.leftMouseDown, reachStart, pen: pen)
+                let reachEnd = CGPoint(x: reachStart.x + 64 * outward, y: reachStart.y)
+                try await send(.leftMouseDragged, reachEnd, pen: pen)
+                try await send(.leftMouseUp, reachEnd, pen: pen)
+                try await wait("Free-margin edge reach grew the open column") {
+                    member(12)["open"]["bounds"].rect.width > widthBeforeReach + 1
+                }
+                try await action(["type":"invoke", "command":"undo_workspace"])
+                try require(layout() == beforeReach, "Edge reach has one workspace undo step")
+            }
             let beforeResize = layout()
             try await send(.leftMouseDown, resizeStart, pen: pen)
             try await send(.leftMouseDragged, resizeEnd, pen: pen)
@@ -101,7 +123,7 @@ import SwiftUI
             try require(layout() == resized, "Redo restores the member width")
             let cancelStart = center(source(resize)!)
             try await send(.leftMouseDown, cancelStart, pen: pen)
-            try await send(.leftMouseDragged, CGPoint(x: cancelStart.x + 30, y: cancelStart.y), pen: pen)
+            try await send(.leftMouseDragged, CGPoint(x: cancelStart.x + 30 * outward, y: cancelStart.y), pen: pen)
             window.orderOut(nil)
             try await wait("Focus-loss resize cancellation") { input.contact.target == nil && layout() == resized }
             window.makeKeyAndOrderFront(nil); try await drain()
