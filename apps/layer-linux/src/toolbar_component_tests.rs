@@ -546,7 +546,6 @@ fn native_paint_toolbar_dividers_input() {
                     assert_eq!(hint.target, DockTarget::TileGroup { panel: Panel::Toolbar, divider: tile.id });
                     assert_eq!(if horizontal { hint.bounds.height } else { hint.bounds.width }, 3.);
                     assert_eq!(if horizontal { hint.bounds.width } else { hint.bounds.height }, slot_cross);
-                    eprintln!("{theme:?}/{edge:?}/{stage}: band{extent}, slot{slot_cross}, allocatedline{length}, paintedline{}", painted_divider_length(&line, horizontal));
                 }
                 for (id, widget) in &dividers { assert_eq!(d.named(&format!("tile-{id}")), *widget); }
                 let before = (state(&d.w).layer_tools.tool, state(&d.w).brush.preset);
@@ -602,20 +601,8 @@ fn assert_blend_category_cells(d: &mut Driver, buttons: &[gtk::Button], wide: bo
                     }
                     assert!(point[0] >= exposed.x() && point[0] < exposed.x() + exposed.width()
                         && point[1] >= exposed.y() && point[1] < exposed.y() + exposed.height());
-                    eprintln!("category native scrollbar {context}/index{index}: blocker={blocker:?}, exposedpoint={point:?}");
                     hit = d.w.window.pick(point[0] as f64, point[1] as f64, gtk::PickFlags::DEFAULT).unwrap();
                 }
-            }
-            if hit != *button && !hit.is_ancestor(button) {
-                let mut ancestry = Vec::new();
-                let mut current = Some(hit.clone());
-                while let Some(widget) = current {
-                    ancestry.push(format!("{}:{}:{:?}:{:?}", widget.type_().name(), widget.widget_name(), widget.css_classes(), widget.compute_bounds(&d.w.window)));
-                    current = widget.parent();
-                }
-                eprintln!("category hit failure {context}/index{index}: button={:?}, cell={:?}, flow={:?}, point={point:?}, picked={ancestry:?}",
-                    button.compute_bounds(&d.w.window), cell.compute_bounds(&d.w.window), flow.compute_bounds(&d.w.window));
-                d.capture_canvas(&format!("category-hit-failure-{index}.png"));
             }
             assert!(hit == *button || hit.is_ancestor(button), "the whole category cell targets its button: {context}/index{index}");
         }
@@ -918,7 +905,6 @@ fn native_tool_caption_hover_input() {
                             times.windows(2).map(|pair| (pair[1] - pair[0]) as f64 / 1000.).collect::<Vec<_>>()
                         }).collect::<Vec<_>>();
                         let moving = seen.len();
-                        eprintln!("caption-hover {theme:?}/{level:?}/selected{selected}/{height}/custom{custom}: rgb_error={case_rgb}, pixel_error={case_pixels}, role_error={case_role}, frames={}, moving={moving}", frames.len());
                         reports.push(serde_json::json!({"theme":format!("{theme:?}"),"transparency":format!("{level:?}"),
                             "selected":selected,"height":row.height(),"custom_accent":custom,"max_rgb_error":case_rgb,
                             "pixel_error":case_pixels,"alpha_error":case_alpha,"role_error":case_role,"idle_pixels":idle_pixels,"hover_pixels":hover_pixels,
@@ -983,8 +969,6 @@ fn native_panel_preview_input() {
                 let image = preview.compute_bounds(&body).unwrap();
                 let text = caption.compute_bounds(&body).unwrap();
                 assert!(text.y() >= 0. && text.y() + text.height() <= body.height() as f32 + 1.);
-                eprintln!("{panel:?}/{theme:?}/{height}: outer {}, preview {}, caption {} at{}",
-                    button.compute_bounds(&button.parent().unwrap()).unwrap().height(), image.height(), text.height(), text.y());
                 if panel == Panel::Brushes {
                     assert_eq!(preview.height(), 40, "Compression preserves the brush preview");
                     assert_eq!(button.measure(gtk::Orientation::Vertical, button.width()).0, 54);
@@ -1054,10 +1038,8 @@ fn sketch_group_variations(d: &mut Driver, theme: Theme) {
         let tools = d.named("drawer-panel-Tools");
         let settings = d.named("drawer-panel-ToolSettings");
         assert!(sets.is_mapped() && tools.is_mapped() && settings.is_mapped());
-        d.capture_canvas(&format!("sketch-drawer-widths-{command:?}-{theme:?}.png"));
-        assert!(sets.width() < tools.width() && tools.width() < settings.width(),
-            "{command:?}/{theme:?} drawer widths: sets {}, tools {}, settings {}",
-            sets.width(), tools.width(), settings.width());
+        assert!(sets.width() < tools.width());
+        assert_eq!(tools.width(), settings.width());
         let preset = state(&d.w).tool_panels.tools.subtools.last().unwrap().preview.unwrap();
         d.click(&find_named(&tools, &format!("brush-{preset}")).unwrap());
         assert_eq!(state(&d.w).brush.preset, preset);

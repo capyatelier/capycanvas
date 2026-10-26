@@ -38,7 +38,7 @@ export async function checkBrushDrawers({call, evaluate, settle}) {
     assert.deepEqual((await drawer()).columns,[[first],['tools'],['tool_settings']]);
     assert.equal(await evaluate('document.querySelectorAll(".content-drawer > .drawer-column").length'),3);
     const widths = await evaluate('[...document.querySelectorAll(".content-drawer > .drawer-column")].map(n=>n.getBoundingClientRect().width)');
-    assert.ok(widths[0]<widths[1] && widths[1]<widths[2],`Narrow sets, normal tools, wider settings: ${widths}`);
+    assert.ok(widths[0]<widths[1] && widths[1]===widths[2],`Narrow sets, equal tools and settings: ${widths}`);
     assert.equal(await evaluate('document.querySelectorAll(".content-drawer .tools-control .tool-groups").length'),0);
     assert.ok(await evaluate('document.querySelectorAll(".content-drawer [data-tool-setting]").length')>0);
   };

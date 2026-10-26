@@ -21,9 +21,7 @@ function WindowCommand([string]$Id){
 }
 function Toolbar([string]$Id){(Model).panels|Where-Object id -eq $Id}
 function WorkspaceJson {
-    $value=(Model).state.workspace
-    $value.layout.PSObject.Properties.Remove('header_presentation')
-    $value|ConvertTo-Json -Depth 90 -Compress
+    (Model).state.workspace|ConvertTo-Json -Depth 90 -Compress
 }
 function ToolbarContext([string]$Id){
     Wait-Until {$root.FindAll([System.Windows.Automation.TreeScope]::Descendants,

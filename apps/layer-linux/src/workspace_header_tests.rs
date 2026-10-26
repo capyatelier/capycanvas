@@ -2441,7 +2441,7 @@ fn native_header_cancel_caption_input() {
 #[ignore = "isolated native-input.js --native-test=native_brush_drawer_input"]
 fn native_brush_drawer_input() {
     let mut d = Driver::new("art.capycanvas.BrushDrawer");
-    let brush_icon = d.header_icon(CommandId::DrawingBrush, "pen");
+    let brush_icon = d.header_icon(CommandId::DrawingBrush, "pencil");
     let brush = ToolbarControl::Command { command: CommandId::DrawingBrush };
     let opener = d.header_tool(brush);
     d.click_name(&opener);
@@ -2450,7 +2450,7 @@ fn native_brush_drawer_input() {
     let tools = find_named(&drawer, "drawer-panel-Tools").unwrap();
     let settings = find_named(&drawer, "drawer-panel-ToolSettings").unwrap();
     assert!(sets.width() < tools.width());
-    assert!(tools.width() < settings.width());
+    assert_eq!(tools.width(), settings.width());
     assert!(find_css(&tools, "tool-groups").is_some_and(|w| !w.is_visible()));
     for (touch, icon, group) in [
         (false, "pencil", layer_ui::ToolGroup::Pencil),

@@ -1149,7 +1149,9 @@ try{
     [CapyWindowApi]::ShowWindow($drawingWindow,3)|Out-Null
     Wait-Until {(Model).layout.viewport[0] -gt 1000} 'Owned fixture did not maximize'
     if((Model).windows_workspace.id -ne 'builtin:workspace:painter'){
-        $choice=Find 'workspace-switch-builtin:workspace:painter' -Visible
+        $found=@{choice=$null}
+        Wait-Until {$found.choice=Find 'workspace-switch-builtin:workspace:painter' -Visible;$found.choice -or (Find 'header-workspace-menu' -Visible)} 'No Sketch workspace switch' 15
+        $choice=$found.choice
         if(!$choice){Invoke 'header-workspace-menu';$choice=Control 'Sketch' -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)}
         $choice.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
         Wait-Until {(Model).windows_workspace.id -eq 'builtin:workspace:painter' -and (Model).windows_workspace.ready -and !(Model).windows_workspace.busy} 'Fixture Sketch workspace did not open'

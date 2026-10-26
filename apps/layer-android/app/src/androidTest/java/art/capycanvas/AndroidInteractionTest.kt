@@ -684,7 +684,6 @@ class AndroidInteractionTest {
         }
     }
 
-    private fun savedWorkspace() = JSONObject(workspace()).apply { getJSONObject("layout").remove("header_presentation") }.toString()
     private fun emptyPoint(area: Rect, occupied: List<Rect>, near: Offset? = null): Offset {
         var closest: Offset? = null
         val candidates = listOf(area.center.y) + (1..20).map { area.top + area.height * it / 21 }
@@ -868,7 +867,7 @@ class AndroidInteractionTest {
                     .mapNotNull { val tag = "tile-toolbar-${it.getInt("id")}"; if (exists(tag)) bounds(tag) else null } + bounds("ribbon-grip-toolbar")
                 emptyPoint(bounds("panel-body-toolbar"), occupied)
             }
-            val before = savedWorkspace()
+            val before = workspace()
             event(MotionEvent.ACTION_DOWN, press)
             if (held) { SystemClock.sleep(700); waitFor("First contact opens menu") { popupCount() == 1 } }
             val pair = listOf(press, press + Offset(20 * density, 0f))
@@ -877,7 +876,7 @@ class AndroidInteractionTest {
             assertEquals("$theme/header=$header/held=$held second contact retires the menu", 0, popupCount())
             send(MotionEvent.ACTION_POINTER_UP or (1 shl MotionEvent.ACTION_POINTER_INDEX_SHIFT), pair)
             event(MotionEvent.ACTION_UP, press); settle()
-            assertEquals(before, savedWorkspace())
+            assertEquals(before, workspace())
         }
     }
 
@@ -899,25 +898,25 @@ class AndroidInteractionTest {
                     val tag = "header-item-${it.getInt("id")}"; if (exists(tag)) bounds(tag) else null
                 } + listOfNotNull(if (exists("zen-button")) bounds("zen-button") else null))
             for ((name, press) in listOf("toolbar" to toolbarPoint, "panel" to panelPoint, "header" to headerPoint)) {
-                val before = savedWorkspace()
+                val before = workspace()
                 event(MotionEvent.ACTION_DOWN, press)
                 SystemClock.sleep(700)
                 assertEquals("$theme/$pointer/$name hold", holdMenuCount, popupCount())
                 if (name == "toolbar" && holdMenuCount > 0) assertNotNull("Empty space opens the toolbar menu", menuText("Add Tools…"))
                 event(MotionEvent.ACTION_CANCEL); settle()
                 assertEquals("$theme/$pointer/$name cancellation closes the menu", 0, popupCount())
-                assertEquals(before, savedWorkspace())
+                assertEquals(before, workspace())
                 event(MotionEvent.ACTION_DOWN, press)
                 event(MotionEvent.ACTION_MOVE, press + Offset(24 * density, 0f))
                 SystemClock.sleep(700)
                 assertEquals("$name moving before the hold opens no menu", 0, popupCount())
                 event(MotionEvent.ACTION_CANCEL); settle()
-                assertEquals(before, savedWorkspace())
+                assertEquals(before, workspace())
                 event(MotionEvent.ACTION_DOWN, press)
                 SystemClock.sleep(700)
                 event(MotionEvent.ACTION_UP); settle()
                 assertEquals("$name release retains the menu", holdMenuCount, popupCount())
-                assertEquals(before, savedWorkspace())
+                assertEquals(before, workspace())
                 if (holdMenuCount > 0) back()
                 mouseButton = MotionEvent.BUTTON_SECONDARY
                 if (pointer == MotionEvent.TOOL_TYPE_MOUSE) {
@@ -941,27 +940,27 @@ class AndroidInteractionTest {
             action(obj("type" to "set_theme", "theme" to theme))
             action(obj("type" to "select_panel_tab", "group" to 41, "panel" to "sizes"))
             val preset = host.catalog.array("brush_sizes").objects().first().getString("label")
-            val before = savedWorkspace()
+            val before = workspace()
             val size = state().getJSONObject("brush").number("diameter")
             event(MotionEvent.ACTION_DOWN, bounds("size-preset-$preset").center)
             SystemClock.sleep(700)
             assertEquals("$theme/$pointer native button keeps its hold", 0, popupCount())
             event(MotionEvent.ACTION_CANCEL); settle()
             assertEquals(size, state().getJSONObject("brush").number("diameter"))
-            assertEquals(before, savedWorkspace())
+            assertEquals(before, workspace())
             customize(obj("type" to "set_column_collapsed", "group" to 41, "collapsed" to true))
             val column = snapshot().getJSONObject("layout").array("collapsed").objects().first { it.getInt("id") == 41 }
             val occupied = column.array("groups").objects().flatMap { it.array("icons").objects() }
                 .map { bounds("column-icon-${it.getString("panel")}") } + bounds("column-grip-41")
             val press = emptyPoint(bounds("collapsed-column-41"), occupied)
-            val collapsed = savedWorkspace()
+            val collapsed = workspace()
             event(MotionEvent.ACTION_DOWN, press); SystemClock.sleep(700)
             assertEquals("$theme/$pointer column background hold", holdMenuCount, popupCount())
             event(MotionEvent.ACTION_CANCEL); settle()
-            assertEquals(0, popupCount()); assertEquals(collapsed, savedWorkspace())
+            assertEquals(0, popupCount()); assertEquals(collapsed, workspace())
             event(MotionEvent.ACTION_DOWN, press); SystemClock.sleep(700)
             event(MotionEvent.ACTION_UP); settle()
-            assertEquals(holdMenuCount, popupCount()); assertEquals(collapsed, savedWorkspace())
+            assertEquals(holdMenuCount, popupCount()); assertEquals(collapsed, workspace())
             if (holdMenuCount > 0) back()
             doubleTap(press)
             waitFor("Column background double tap expands the column") { !exists("collapsed-column-41") }
@@ -996,7 +995,7 @@ class AndroidInteractionTest {
                 val press = bounds(tag).center
                 event(MotionEvent.ACTION_DOWN, press)
                 host.drain()
-                val before = savedWorkspace()
+                val before = workspace()
                 SystemClock.sleep(700)
                 assertEquals("$pointer/$kind only touch/pen holds open menus", holdMenuCount, popupCount())
                 if (holdMenuCount > 0) assertMenuAtContact("$pointer/$kind", press)
@@ -1018,7 +1017,7 @@ class AndroidInteractionTest {
                 waitFor("$pointer/$kind continues original drag") { surface.pointerIcon == PointerIcon.getSystemIcon(surface.context, PointerIcon.TYPE_GRABBING) }
                 waitFor("$pointer/$kind drag closes menu") { popupCount() == 0 }
                 event(MotionEvent.ACTION_CANCEL)
-                waitFor("$pointer/$kind cancel") { savedWorkspace() == before && surface.pointerIcon != PointerIcon.getSystemIcon(surface.context, PointerIcon.TYPE_GRABBING) }
+                waitFor("$pointer/$kind cancel") { workspace() == before && surface.pointerIcon != PointerIcon.getSystemIcon(surface.context, PointerIcon.TYPE_GRABBING) }
             }
         }
     }
@@ -1843,7 +1842,7 @@ class AndroidInteractionTest {
         }
         fun check(i: Int) {
             waitFor("drawer moves to ${ids[i]}") { drawer()?.getJSONObject("anchor")?.optInt("tile") == ids[i] }
-            assertEquals(if (i == 2) 1 else 2, drawer()!!.array("columns").length())
+            assertEquals(if (i == 0) 2 else 1, drawer()!!.array("columns").length())
             if (i != 2) {
                 val command = if (i == 0) "brush" else "eraser"
                 assertEquals(command, state().getJSONObject("brush").getString("tool"))
