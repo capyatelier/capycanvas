@@ -76,19 +76,12 @@ import SwiftUI
                 let brushes = store.workspace.sources[JSON(["kind": "panel", "panel": "brushes"]).stableKey]?.bounds else { return false }
             return tools.midX < brushes.midX
         }
-        // Coalesced close/reopen can preserve the exact SwiftUI rectangles while
-        // invalidating Rust's transient drawer bounds. Starting a new drag must
-        // republish those bounds before its down event.
-        store.customize(["type": "toggle_column_drawer", "group": 6, "panel": "toolbar"])
-        store.customize(["type": "toggle_column_drawer", "group": 6, "panel": "toolbar"])
-        let _: JSON = await withCheckedContinuation { c in store.query(["type": "catalog"]) { c.resume(returning: $0) } }
-        // Make the transient invalidation deterministic even if SwiftUI already
-        // delivered another preference pass during the owner barrier.
         store.dispatch(["type": "measure_column_drawers", "measurements": []])
         let reordered = store.workspace.sources[item.stableKey]!.bounds
         let restart = CGPoint(x: reordered.midX, y: reordered.midY)
         store.workspace.start(item, point: restart)
-        let append = CGPoint(x: drawerBounds.maxX - 10, y: reordered.midY)
+        let last = store.workspace.tabs.first { $0["group"].uint == 6 && $0["index"].uint == 1 }!["bounds"].rect
+        let append = CGPoint(x: last.maxX - 4, y: last.midY)
         let hint: JSON = await withCheckedContinuation { c in
             store.query(["type": "drop", "item": item.raw, "position": [append.x, append.y],
                 "tabs": store.workspace.tabs.map(\.raw)]) { c.resume(returning: $0) }
