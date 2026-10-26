@@ -612,6 +612,12 @@ separate, overlapping, cancelled and initially blocked groups with two-way view
 recall and unchanged artwork history. Supplied recognizer events do not establish
 physical trackpad or Pencil sensor behavior.
 
+Layer-list trackpad contacts opt the hosting `NSView` into indirect touches.
+A window-scoped monitor forwards raw gesture-event phases and leaves the
+original events available to AppKit. Registrations share the view's touch mask
+and restore it when the last owner detaches. Trackpad device extents already use
+points; apply the window's backing scale once when forwarding coordinates.
+
 ### Swift fixtures
 
 The fixtures in `apps/layer-apple/tests` run the production Swift sources on the

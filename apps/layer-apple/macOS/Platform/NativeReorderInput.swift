@@ -1,6 +1,5 @@
 import SwiftUI
 import AppKit
-import AppKit.NSGestureRecognizerSubclass
 
 struct NativeReorderInput: NSViewRepresentable {
     let model: any NativeReorderModel
@@ -20,7 +19,7 @@ final class ReorderInputView: NSView, NSGestureRecognizerDelegate {
     private var pan: NSPanGestureRecognizer!
     private var press: NSPressGestureRecognizer!
     private var secondary: NSClickGestureRecognizer!
-    private var layerTouches: LayerTouchRecognizer?
+    private var layerTouches: LayerTouchInput?
     private var timer: Timer?
     private var lastTrack: TimeInterval?
     private var observers: [NSObjectProtocol] = []
@@ -56,9 +55,8 @@ final class ReorderInputView: NSView, NSGestureRecognizerDelegate {
         let next = window?.contentView
         guard next !== attached else { return }
         detach(); attached = next
-        if let layer = model?.layerTouchModel {
-            let recognizer = LayerTouchRecognizer(marker: self, model: layer)
-            layerTouches = recognizer; attached?.addGestureRecognizer(recognizer)
+        if let layer = model?.layerTouchModel, let attached {
+            layerTouches = LayerTouchInput(marker: self, model: layer, view: attached)
         }
         for gesture in [pan!, press!, secondary!] { attached?.addGestureRecognizer(gesture) }
         bubbles.attach()
@@ -68,21 +66,21 @@ final class ReorderInputView: NSView, NSGestureRecognizerDelegate {
     func detach() {
         guard attached != nil else { return }
         bubbles.detach(); cancel(detaching: true); for gesture in [pan!, press!, secondary!] { attached?.removeGestureRecognizer(gesture) }
-        if let layerTouches { layerTouches.isEnabled = false; attached?.removeGestureRecognizer(layerTouches); self.layerTouches = nil }
+        layerTouches?.stop(); layerTouches = nil
         attached = nil
     }
     func validate() {
         attach(); updateViewport()
-        if layerTouches == nil, let layer = model?.layerTouchModel, attached != nil {
-            let recognizer = LayerTouchRecognizer(marker: self, model: layer)
-            layerTouches = recognizer; attached?.addGestureRecognizer(recognizer)
+        if layerTouches?.follows(model?.layerTouchModel) == false { layerTouches?.stop(); layerTouches = nil }
+        if layerTouches == nil, let layer = model?.layerTouchModel, let attached {
+            layerTouches = LayerTouchInput(marker: self, model: layer, view: attached)
         }
         bubbles.attach()
     }
     private func cancel(detaching: Bool = false, all: Bool = true) {
         guard !cancelling else { return }; cancelling = true
         defer { cancelling = false }
-        if all, let layerTouches { layerTouches.isEnabled = false; layerTouches.isEnabled = true }
+        if all { layerTouches?.cancel() }
         if detaching { model?.nativeInputDetached() } else if all { model?.cancel() } else { model?.cancelReorder() }
         timer?.invalidate(); timer = nil; downEvent = nil
         pan.isEnabled = false; press.isEnabled = false; pan.isEnabled = true; press.isEnabled = true
@@ -92,15 +90,16 @@ final class ReorderInputView: NSView, NSGestureRecognizerDelegate {
         return attached.hitTest(convert(point, to: attached.superview))?.enclosingScrollView
     }
     fileprivate func layerTouchPoint(_ touch: NSTouch, event: NSEvent, origin: CGPoint?, anchor: CGPoint?) -> (CGPoint, UInt64)? {
-        guard let model = model?.layerTouchModel else { return nil }
+        guard let model = model?.layerTouchModel, model.enabled else { return nil }
         updateViewport()
         let cursor = convert(event.locationInWindow, from: nil)
         let point = CGPoint(x: touch.normalizedPosition.x * touch.deviceSize.width,
             y: (1 - touch.normalizedPosition.y) * touch.deviceSize.height)
-        guard let origin, let anchor else { return model.touchRow(at: cursor).map { (cursor, $0) } }
-        let pointsPerMillimeter: CGFloat = 72 / 25.4
-        let position = CGPoint(x: anchor.x + (point.x - origin.x) * pointsPerMillimeter,
-            y: anchor.y + (point.y - origin.y) * pointsPerMillimeter)
+        guard let origin, let anchor else {
+            if let scroll = enclosingScrollView, scrollAt(cursor) !== scroll { return nil }
+            return model.touchRow(at: cursor).map { (cursor, $0) }
+        }
+        let position = CGPoint(x: anchor.x + point.x - origin.x, y: anchor.y + point.y - origin.y)
         return (position, model.touchRow(at: position) ?? 0)
     }
     @discardableResult private func move(_ point: CGPoint, force: Bool = false) -> Bool {
@@ -213,7 +212,29 @@ final class ReorderInputView: NSView, NSGestureRecognizerDelegate {
     }
 }
 
-private final class LayerTouchRecognizer: NSGestureRecognizer, NSGestureRecognizerDelegate {
+@MainActor private final class IndirectTouchLease {
+    private static let views = NSMapTable<NSView, IndirectTouchLease>.weakToStrongObjects()
+    private weak var view: NSView?
+    private let original: NSTouch.TouchTypeMask
+    private var owners = 0
+    private init(_ view: NSView) {
+        self.view = view; original = view.allowedTouchTypes
+        view.allowedTouchTypes = original.union(.indirect)
+    }
+    static func acquire(_ view: NSView) -> IndirectTouchLease {
+        let lease = views.object(forKey: view) ?? IndirectTouchLease(view)
+        views.setObject(lease, forKey: view); lease.owners += 1
+        return lease
+    }
+    func release() {
+        owners -= 1
+        guard owners == 0, let view else { return }
+        if view.allowedTouchTypes == original.union(.indirect) { view.allowedTouchTypes = original }
+        Self.views.removeObject(forKey: view)
+    }
+}
+
+@MainActor final class LayerTouchInput {
     private weak var marker: ReorderInputView?
     private weak var model: (any NativeLayerTouchModel)?
     private struct Contact { let identity: NSCopying & NSObjectProtocol; let id: UInt64; let row: UInt64; var point: CGPoint }
@@ -221,18 +242,51 @@ private final class LayerTouchRecognizer: NSGestureRecognizer, NSGestureRecogniz
     private var nextID: UInt64 = 0
     private var origin: CGPoint?
     private var anchor: CGPoint?
-    init(marker: ReorderInputView, model: any NativeLayerTouchModel) {
-        self.marker = marker; self.model = model
-        super.init(target: nil, action: nil)
-        allowedTouchTypes = .indirect; delegate = self
+    private var claimed = false
+    private var monitor: Any?
+    private var lease: IndirectTouchLease?
+    init(marker: ReorderInputView, model: any NativeLayerTouchModel, view: NSView) {
+        self.marker = marker; self.model = model; lease = IndirectTouchLease.acquire(view)
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .gesture) { [weak self] event in
+            self?.handle(event); return event
+        }
+    }
+    deinit {
+        if let monitor { NSEvent.removeMonitor(monitor) }
+        let lease = lease
+        MainActor.assumeIsolated { lease?.release() }
+    }
+    func stop() {
+        cancel()
+        if let monitor { NSEvent.removeMonitor(monitor); self.monitor = nil }
+        lease?.release(); lease = nil
+    }
+    func follows(_ candidate: (any NativeLayerTouchModel)?) -> Bool {
+        guard let model, let candidate else { return false }
+        return model === candidate
+    }
+    func handle(_ event: NSEvent) {
+        guard lease != nil, event.type == .gesture, let marker, let window = marker.window,
+            event.window === window else { return }
+        guard model?.enabled == true else { cancel(at: event.timestamp); return }
+        if event.touches(matching: .cancelled, in: nil).contains(where: { touch in
+            touch.type == .indirect && contacts.contains { $0.identity.isEqual(touch.identity) }
+        }) { cancel(at: event.timestamp); return }
+        route(event, matching: .began, name: "down")
+        route(event, matching: .moved, name: "move")
+        route(event, matching: .ended, name: "up")
+        if contacts.count >= 2 && !claimed { claimed = true; model?.cancel() }
+        if contacts.isEmpty { origin = nil; anchor = nil; claimed = false }
     }
     private func send(_ contact: Contact, phase: String, timestamp: TimeInterval) {
         model?.layerTouch(contact.id, phase: phase, point: contact.point, row: contact.row,
             timestamp: timestamp, scale: marker?.window?.backingScaleFactor ?? 1)
     }
     private func route(_ event: NSEvent, matching phase: NSTouch.Phase, name: String) {
-        for touch in event.touches(matching: phase, in: view) where touch.type == .indirect {
-            if phase == .began, let (point, row) = marker?.layerTouchPoint(touch, event: event, origin: origin, anchor: anchor), row != 0 {
+        for touch in event.touches(matching: phase, in: nil) where touch.type == .indirect {
+            if phase == .began {
+                guard !contacts.contains(where: { $0.identity.isEqual(touch.identity) }),
+                    let (point, row) = marker?.layerTouchPoint(touch, event: event, origin: origin, anchor: anchor), row != 0 else { continue }
                 if origin == nil {
                     origin = CGPoint(x: touch.normalizedPosition.x * touch.deviceSize.width,
                         y: (1 - touch.normalizedPosition.y) * touch.deviceSize.height)
@@ -243,24 +297,11 @@ private final class LayerTouchRecognizer: NSGestureRecognizer, NSGestureRecogniz
             guard let index = contacts.firstIndex(where: { $0.identity.isEqual(touch.identity) }) else { continue }
             if let (point, _) = marker?.layerTouchPoint(touch, event: event, origin: origin, anchor: anchor) { contacts[index].point = point }
             send(contacts[index], phase: name, timestamp: event.timestamp)
-            if phase == .ended || phase == .cancelled { contacts.remove(at: index) }
+            if phase == .ended { contacts.remove(at: index) }
         }
-        if contacts.count >= 2 && state == .possible { model?.cancel(); state = .began }
-        else if contacts.isEmpty { state = state == .began || state == .changed ? .ended : .failed }
-        else if state == .began { state = .changed }
     }
-    override func touchesBegan(with event: NSEvent) { route(event, matching: .began, name: "down") }
-    override func touchesMoved(with event: NSEvent) { route(event, matching: .moved, name: "move") }
-    override func touchesEnded(with event: NSEvent) { route(event, matching: .ended, name: "up") }
-    override func touchesCancelled(with event: NSEvent) {
-        for contact in contacts { send(contact, phase: "cancel", timestamp: event.timestamp) }
-        contacts.removeAll(); state = .cancelled
-    }
-    override func reset() {
-        for contact in contacts { send(contact, phase: "cancel", timestamp: ProcessInfo.processInfo.systemUptime) }
-        contacts.removeAll(); origin = nil; anchor = nil; super.reset()
-    }
-    func gestureRecognizer(_ recognizer: NSGestureRecognizer, shouldRecognizeSimultaneouslyWith other: NSGestureRecognizer) -> Bool {
-        !(other is NSClickGestureRecognizer) && !(other is NSPressGestureRecognizer)
+    func cancel(at timestamp: TimeInterval = ProcessInfo.processInfo.systemUptime) {
+        for contact in contacts { send(contact, phase: "cancel", timestamp: timestamp) }
+        contacts.removeAll(); origin = nil; anchor = nil; claimed = false
     }
 }

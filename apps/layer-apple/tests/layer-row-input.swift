@@ -3,7 +3,190 @@
 import AppKit
 import SwiftUI
 
+private final class LayerTouchEvent: NSEvent {
+    var targetWindow: NSWindow?
+    var point = CGPoint.zero
+    var values: Set<NSTouch> = []
+    var eventType: NSEvent.EventType = .gesture
+    var time: TimeInterval = 1
+    override var window: NSWindow? { targetWindow }
+    override var locationInWindow: CGPoint { point }
+    override var type: NSEvent.EventType { eventType }
+    override var timestamp: TimeInterval { time }
+    override func touches(matching phase: NSTouch.Phase, in view: NSView?) -> Set<NSTouch> {
+        Set(values.filter { !$0.phase.intersection(phase).isEmpty })
+    }
+}
+
+private final class LayerTouchValue: NSTouch, @unchecked Sendable {
+    let key: NSString
+    let state: NSTouch.Phase
+    let position: CGPoint
+    let kind: NSTouch.TouchType
+    init(_ key: String, phase: NSTouch.Phase, position: CGPoint, type: NSTouch.TouchType = .indirect) {
+        self.key = key as NSString; state = phase; self.position = position; kind = type
+        super.init()
+    }
+    override var identity: NSCopying & NSObjectProtocol { key }
+    override var phase: NSTouch.Phase { state }
+    override var normalizedPosition: CGPoint { position }
+    override var deviceSize: CGSize { CGSize(width: 200, height: 100) }
+    override var type: NSTouch.TouchType { kind }
+}
+
+@MainActor private final class LayerTouchRecorder: NativeLayerTouchModel {
+    struct Record {
+        let id: UInt64
+        let phase: String
+        let point: CGPoint
+        let row: UInt64
+        let timestamp: TimeInterval
+        let scale: CGFloat
+    }
+    let contact = ReorderContact()
+    var viewport = CGRect.zero
+    var enabled = true
+    var row: UInt64? = 7
+    var records: [Record] = []
+    var cancellations = 0
+    var layerTouchModel: (any NativeLayerTouchModel)? { self }
+    func source(at point: CGPoint) -> ReorderTarget? { nil }
+    func acceptsContext(at point: CGPoint) -> Bool { false }
+    func context(at point: CGPoint) {}
+    func cancel() { cancellations += 1; contact.cancel() }
+    func touchRow(at point: CGPoint) -> UInt64? { viewport.contains(point) ? row : nil }
+    func layerTouch(_ id: UInt64, phase: String, point: CGPoint, row: UInt64, timestamp: TimeInterval, scale: CGFloat) {
+        records.append(Record(id: id, phase: phase, point: point, row: row, timestamp: timestamp, scale: scale))
+    }
+}
+
+private final class LayerTouchDocument: NSView {
+    var mouseEvents: [Int] = []
+    override var isFlipped: Bool { true }
+    override func mouseDown(with event: NSEvent) { mouseEvents.append(event.eventNumber) }
+    override func mouseUp(with event: NSEvent) { mouseEvents.append(event.eventNumber) }
+}
+
 @main final class LayerRowInputChecks: NativeWorkspaceInputFixture {
+    @MainActor static func rawTouches() async throws {
+        let window = NSWindow(contentRect: CGRect(x: 160, y: 160, width: 360, height: 240),
+            styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false; window.animationBehavior = .none
+        let root = NSView(frame: CGRect(x: 0, y: 0, width: 360, height: 240))
+        root.allowedTouchTypes = .direct
+        let scroll = NSScrollView(frame: CGRect(x: 24, y: 32, width: 160, height: 100))
+        let document = LayerTouchDocument(frame: CGRect(x: 0, y: 0, width: 160, height: 100))
+        let marker = ReorderInputView(frame: document.bounds)
+        document.addSubview(marker); scroll.documentView = document; root.addSubview(scroll)
+        window.contentView = root; window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
+        defer { marker.detach(); marker.model = nil; window.contentView = nil; window.close() }
+        try await drain(0.3)
+        try require(marker.window === window && root.allowedTouchTypes == .direct,
+            "A mounted reorder marker starts without invalid indirect gesture-recognizer types or a touch lease")
+        let model = LayerTouchRecorder()
+        marker.model = model
+        let input = LayerTouchInput(marker: marker, model: model, view: root)
+        let second = LayerTouchInput(marker: marker, model: model, view: root)
+        defer { input.stop(); second.stop() }
+        try require(root.allowedTouchTypes == [.direct, .indirect], "Both raw owners share one indirect NSView lease")
+        second.stop()
+        try require(root.allowedTouchTypes == [.direct, .indirect], "One stopped owner cannot revoke another owner's indirect touches")
+        try self.event(.leftMouseDown, at: CGPoint(x: 40, y: 30), marker: marker, number: 9001)
+        try self.event(.leftMouseUp, at: CGPoint(x: 40, y: 30), marker: marker, number: 9002)
+        try await drain()
+        try require(document.mouseEvents == [9001, 9002], "The active raw collector preserves ordinary native mouse event delivery")
+        let event = LayerTouchEvent()
+        event.targetWindow = window; event.point = marker.convert(CGPoint(x: 40, y: 30), to: nil)
+        func send(_ phase: NSTouch.Phase, key: String = "primary", at point: CGPoint = CGPoint(x: 0.25, y: 0.75),
+            type: NSTouch.TouchType = .indirect) {
+            event.time += 1; event.values = [LayerTouchValue(key, phase: phase, position: point, type: type)]
+            input.handle(event)
+        }
+        model.enabled = false; send(.began); model.enabled = true
+        model.row = nil; send(.began); model.row = 0; send(.began); model.row = 7
+        let cover = NSView(frame: root.convert(scroll.bounds, from: scroll))
+        root.addSubview(cover); send(.began); cover.removeFromSuperview()
+        event.point = marker.convert(CGPoint(x: 180, y: 30), to: nil); send(.began)
+        try require(model.records.isEmpty, "Disabled, missing, zero, covered and outside rows cannot admit the first indirect Down")
+        event.point = marker.convert(CGPoint(x: 40, y: 30), to: nil)
+        send(.began, type: .direct)
+        try require(model.records.isEmpty, "Direct touches never enter the trackpad collector")
+        send(.began)
+        try require(model.records.count == 1 && model.records[0].phase == "down"
+            && model.records[0].point == CGPoint(x: 40, y: 30) && model.records[0].row == 7,
+            "The first indirect Down anchors at the measured cursor and row")
+        let contact = model.records[0].id
+        send(.began)
+        try require(model.records.count == 1, "Duplicate began phases cannot restart or duplicate a captured Down")
+        send(.cancelled, type: .direct); send(.cancelled, key: "unrelated")
+        try require(model.records.count == 1, "Unrelated or direct cancellations cannot cancel the captured indirect contact")
+        let foreign = NSWindow(contentRect: .zero, styleMask: [], backing: .buffered, defer: true)
+        foreign.isReleasedWhenClosed = false
+        event.targetWindow = foreign; send(.moved); foreign.close()
+        event.targetWindow = nil; send(.moved); event.targetWindow = window
+        try require(model.records.count == 1, "Foreign and nil-window events cannot route or retire the owned contact")
+        event.point = marker.convert(CGPoint(x: 140, y: 80), to: nil)
+        send(.moved, at: CGPoint(x: 0.5, y: 0.5))
+        try require(model.records.last?.point == CGPoint(x: 90, y: 55)
+            && model.records.last?.id == contact && model.records.last?.row == 7
+            && model.records.last?.scale == window.backingScaleFactor && model.records.last?.timestamp == event.time,
+            "Device points and inverted normalized Y retain the first cursor anchor and forward backing scale once")
+        send(.moved, at: CGPoint(x: 1, y: 0))
+        try require(model.records.last?.point == CGPoint(x: 190, y: 105) && model.records.last?.row == 7,
+            "An admitted contact stays captured beyond its row and viewport")
+        let count = model.records.count
+        for type: NSEvent.EventType in [.leftMouseDown, .scrollWheel] {
+            event.eventType = type; send(.cancelled)
+        }
+        event.eventType = .gesture
+        try require(model.records.count == count, "Ordinary mouse and wheel events do not route or cancel raw touches")
+        send(.ended, at: CGPoint(x: 1, y: 0))
+        try require(model.records.last?.phase == "up" && model.records.last?.id == contact,
+            "An outside release ends the original contact exactly once")
+        send(.ended)
+        try require(model.records.count == count + 1, "A duplicate Up cannot reach the model")
+        event.point = marker.convert(CGPoint(x: 40, y: 30), to: nil)
+        send(.began); send(.cancelled)
+        try require(model.records.suffix(2).map(\.phase) == ["down", "cancel"], "Captured indirect cancellation emits one terminal Cancel")
+        send(.began); model.enabled = false; send(.moved); model.enabled = true
+        try require(model.records.suffix(2).map(\.phase) == ["down", "cancel"], "Disable retires the captured contact")
+        let cancellations = model.cancellations
+        send(.began); send(.began, key: "second")
+        try require(model.records.suffix(2).map(\.phase) == ["down", "down"] && model.cancellations == cancellations + 1,
+            "Two admitted raw contacts retire competing mouse recognition once")
+        send(.moved, key: "second")
+        try require(model.cancellations == cancellations + 1, "Captured motion cannot repeat the two-contact claim")
+        input.cancel()
+        try require(model.records.suffix(2).map(\.phase) == ["cancel", "cancel"], "Cancelling the raw owner retires both identities")
+        send(.began); input.stop()
+        try require(model.records.suffix(2).map(\.phase) == ["down", "cancel"] && root.allowedTouchTypes == .direct,
+            "Stop cancels the contact and restores the last shared NSView lease")
+        let stopped = model.records.count
+        send(.began); input.stop()
+        try require(model.records.count == stopped && root.allowedTouchTypes == .direct, "Stopped collectors and repeated stop stay inert")
+        let unmounted = ReorderInputView(frame: marker.bounds)
+        unmounted.model = model
+        let unmountedInput = LayerTouchInput(marker: unmounted, model: model, view: root)
+        event.targetWindow = nil; unmountedInput.handle(event)
+        try require(model.records.count == stopped, "Nil event and marker windows cannot admit an unmounted contact")
+        unmountedInput.stop(); event.targetWindow = window
+        var temporary: LayerTouchInput? = LayerTouchInput(marker: marker, model: model, view: root)
+        weak var released = temporary
+        temporary = nil
+        try require(released == nil && root.allowedTouchTypes == .direct, "Collector deinit releases its monitor and final touch lease")
+        marker.validate()
+        try require(root.allowedTouchTypes == [.direct, .indirect], "The mounted marker acquires its model's raw collector")
+        marker.model = nil; marker.validate()
+        try require(root.allowedTouchTypes == .direct, "Removing the model stops its automatic collector")
+        let replacement = LayerTouchRecorder()
+        marker.model = replacement; marker.validate()
+        try require(root.allowedTouchTypes == [.direct, .indirect] && !input.follows(replacement),
+            "A replacement model owns a fresh collector rather than following the retired model")
+        marker.detach()
+        try require(root.allowedTouchTypes == .direct, "Detaching the mounted marker releases its replacement collector")
+        marker.model = nil
+        note("PASS raw layer collector: mounted startup, shared leases, native phases/identity, points/Y/anchor/scale, row admission, outside capture, cancellation/window filtering and stop/model replacement")
+    }
     @MainActor static func order(_ store: EditorStore) -> [UInt64] { store.state["layers"].array.map { $0["id"].uint } }
     @MainActor static func run(_ platform: UInt32, theme: ColorScheme) async throws {
         let store = EditorStore(platform: platform, persistence: EditorPersistence(root: nil))
@@ -188,6 +371,7 @@ import SwiftUI
                 try require(target.surface != .handle && !target.canDrag, "A displaced grip cannot admit reorder")
             }
             let target = CGPoint(x: row.maxX - extent + (CGFloat(index) + 0.5) * extent / CGFloat(actions.count), y: row.midY)
+            try await drain(0.2)
             try event(.leftMouseDown, at: target, marker: marker, number: 1013)
             try event(.leftMouseUp, at: target, marker: marker, number: 1014)
             try await wait("Revealed \(action["label"].string) must invoke its shared action") {
@@ -304,6 +488,16 @@ import SwiftUI
         try require(store.failure == nil && store.state["layer_tools"]["rename_layer"].isNull,
             "Leaving Quick Mask focus and opening a menu cannot rename layer zero")
         model.closeMenu()
+        try require(!store.state["layer_tools"]["quick_mask"].bool && !order(store).contains(0),
+            "A normal layer context menu returns from Quick Mask to its artwork target")
+        try await store.apply(["type": "invoke", "command": "quick_mask"])
+        try await wait("Re-entered Quick Mask row geometry") {
+            guard let frame = model.frames[0] else { return false }
+            return store.state["layer_tools"]["quick_mask"].bool && order(store).contains(0)
+                && [frame.row, frame.name].allSatisfy {
+                    $0.width > 0 && $0.height > 0 && [$0.minX, $0.minY, $0.width, $0.height].allSatisfy(\.isFinite)
+                }
+        }
         let maskPoint = body(0)
         guard let maskTarget = model.source(at: maskPoint) else { throw HostFailure(message: "Quick Mask row missing") }
         model.contact.prepare(maskTarget, device: .pen, origin: maskPoint)
@@ -335,7 +529,7 @@ import SwiftUI
     @MainActor static func main() {
         _ = NSApplication.shared; NSApp.setActivationPolicy(.accessory)
         Task { @MainActor in
-            do { for platform: UInt32 in [0, 1] { for theme: ColorScheme in [.light, .dark] { try await run(platform, theme: theme) } }; exit(0) }
+            do { try await rawTouches(); for platform: UInt32 in [0, 1] { for theme: ColorScheme in [.light, .dark] { try await run(platform, theme: theme) } }; exit(0) }
             catch { note("FAIL: " + error.localizedDescription); exit(1) }
         }
         NSApp.run()
