@@ -286,8 +286,7 @@ impl WgpuRasterizer {
                 data
             } else if let Some(root)=explicit {
                 match root.try_data() {Some(Ok(data))=>data,Some(Err(_))=>return true,None=>return false,}
-            } else if reset {
-                let Some(current)=current else {continue;};current.data.clone()
+            } else if reset && let Some(current)=current {current.data.clone()
             } else if !required.is_empty() {current.map_or_else(||Arc::new(RasterData::default()),|current|current.data.clone())}else {continue;};
             let replace=if let Some(current)=current {reset || explicit.is_some() || resolved && current.revision!=*root}else {!data.tiles.is_empty()};
             if !replace && required.is_empty() {continue;}
