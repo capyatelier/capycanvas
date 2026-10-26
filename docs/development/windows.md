@@ -302,13 +302,18 @@ proof and export captions preserve raw names, selections and prepared candidates
 `NewDrawingDialog.cpp` presents the shared [New drawing](../ui/new-drawing.md)
 view: it relabels from the view's copy, keeps a numeric draft that is still being
 typed, and embeds Edit Color's form and the Choose Texture grid in its drawers.
+The paper-color editor stays attached for the New drawing dialog's lifetime.
+Reopening resets its draft from shared state; closing the dialog releases it.
+Use `-Journey paper-color` for repeated transparent/color apply, Cancel and
+reopen checks in both themes, including retained native control identities.
 Fixtures create drawings with `New-DrawingPixels` from `CapyUia.ps1`.
 Run `exercise-documents.ps1 -Executable <path> -Journey new-drawing` through
 `test-desktop.ps1` for the existing dark and light New drawing journeys: presets,
 paper and color drawers, typed Texture visibility with Use Texture and Cancel, narrow
 footer layout and sheet creation. The default `full` journey also exercises the
-document import, export, save, reopen and close workflows; GPU recovery switches
-require that full journey.
+document import, export, save, reopen and close workflows. Use
+`-Journey gpu-recovery` for the focused reconstruction journey, or `-RecoverGpu`
+with the full document journey.
 Preferences reserves the measured titlebar height when fitting its centered
 dialog; its narrow-window check dismisses it with an actual pointer click.
 

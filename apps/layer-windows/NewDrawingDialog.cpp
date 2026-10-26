@@ -201,8 +201,7 @@ struct NewDrawingDialog::Impl:std::enable_shared_from_this<Impl>{
         waiting=false;seen=false;
         if(pending&&!stopping)document(to_string((creating?O({{L"operation",S(L"create")},{L"id",N(request)},{L"epoch",N(epoch)},{L"revision",N(revision)}})
             :O({{L"operation",S(L"cancel")},{L"id",N(request)}})).Stringify()));
-        closeForm();
-        if(showing){programmatic=true;dialog.Hide();}else changed();
+        if(showing){programmatic=true;dialog.Hide();}else{closeForm();changed();}
     }
     fire_and_forget present(){
         auto lifetime=shared_from_this();
@@ -212,8 +211,9 @@ struct NewDrawingDialog::Impl:std::enable_shared_from_this<Impl>{
         data->popup(true);
         try{co_await dialog.ShowAsync();}catch(hresult_error const&){}
         data->popup(false);
-        showing=false;programmatic=false;closeForm();
+        showing=false;programmatic=false;
         for(auto panel:{&presetsDrawer,&paperDrawer,&colorDrawer}){if(panel->motion)panel->motion.Stop();panel->motion=nullptr;panel->open=false;panel->root.Visibility(Visibility::Collapsed);}
+        closeForm();
         drawerKind=L"";
         if(waiting&&!stopping){waiting=false;document(to_string(O({{L"operation",S(L"cancel")},{L"id",N(request)}}).Stringify()));}
         changed();
@@ -221,8 +221,7 @@ struct NewDrawingDialog::Impl:std::enable_shared_from_this<Impl>{
     void hide(){
         stopping=true;waiting=false;
         if(picker)picker.Cancel();
-        closeForm();
-        if(showing){programmatic=true;dialog.Hide();}
+        if(showing){programmatic=true;dialog.Hide();}else closeForm();
     }
 
     ImageBrush checks(){
@@ -786,7 +785,6 @@ struct NewDrawingDialog::Impl:std::enable_shared_from_this<Impl>{
         target.shift.Y(target.open?0:root.ActualHeight());
         if(target.open)return;
         target.root.Visibility(Visibility::Collapsed);
-        if(&target==&colorDrawer)closeForm();
     }
     void slide(Drawer& target,bool visible){
         if(target.open==visible)return;target.open=visible;
@@ -916,8 +914,7 @@ struct NewDrawingDialog::Impl:std::enable_shared_from_this<Impl>{
     }
     void renderColors(J const& view,bool opening){
         auto weak=weak_from_this();
-        if(opening||!form){
-            closeForm();
+        if(!form){
             form=EmbedColor(data,object(view,L"color"),
                 [weak](J const& value){if(auto self=weak.lock())self->send(O({{L"op",S(L"paper_color_value")},{L"color",value}}));},
                 [weak](bool blocked){if(auto self=weak.lock())self->colorUse.IsEnabled(!blocked);});
@@ -928,6 +925,9 @@ struct NewDrawingDialog::Impl:std::enable_shared_from_this<Impl>{
             for(auto const& part:{paletteTitle,paletteCount}){detach(part);heading.Children().Append(part);}
             detach(swatches);form->below.Spacing(6);form->below.Children().Append(heading);form->below.Children().Append(swatches);
             colorDrawer.body.Children().Append(form->body);
+        }else if(opening){
+            form->escape();
+            form->choose(object(view,L"color"));
         }
         markTransparency();
         paletteCount.Text(str(view,L"count"));

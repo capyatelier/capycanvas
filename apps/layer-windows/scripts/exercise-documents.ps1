@@ -1,4 +1,4 @@
-﻿param([Parameter(Mandatory)][string]$Executable,[string]$DebuggerPath,[switch]$RecoverGpu,[switch]$FailGpu,[ValidateSet('full','new-drawing','gpu-recovery','color-workflows','color-workflows-light','native-writeback','native-writeback-light')][string]$Journey='full')
+﻿param([Parameter(Mandatory)][string]$Executable,[string]$DebuggerPath,[switch]$RecoverGpu,[switch]$FailGpu,[ValidateSet('full','new-drawing','paper-color','gpu-recovery','color-workflows','color-workflows-light','native-writeback','native-writeback-light')][string]$Journey='full')
 $gpuRecovery=$Journey -eq 'gpu-recovery'
 if($gpuRecovery){$RecoverGpu=$true}
 if($RecoverGpu -and $FailGpu){throw "Choose successful recovery or exhausted recovery, not both"}
@@ -146,8 +146,8 @@ function File-Command([string]$Id,[scriptblock]$Options) {
     $script:scope=$root
     Wait-Until {((Model).state.commands|Where-Object id -eq $Id).enabled} "Document command stayed disabled: $Id" 45
     & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'File'
-    Wait-Until {$item=Find-Id $Id;$item -and $item.Current.IsEnabled} "Enabled file command not found: $Id"
-    (Find-Id $Id).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+    Wait-Until {$item=Find-Id $Id;$item -and $item.Current.IsEnabled -and !$item.Current.IsOffscreen -and $item.Current.BoundingRectangle.Width -gt 0 -and $item.Current.BoundingRectangle.Height -gt 0} "Enabled file command not found: $Id"
+    Click-Center $Id
     if($Id -eq 'export_document') {
         Wait-Until {(Model).windows_document.stage -eq 'options'} 'Export options did not open' 45
         if($Options){& $Options}
@@ -340,6 +340,7 @@ function New-Journey([string]$Theme,[switch]$Full) {
         Press 'new-drawing-paper-use' {!(Drawer) -and (Drawing).setup.paper.texture -eq $imported -and (Drawing).page.texture -eq 'Fixture paper'} 'The imported paper was not used'
     }
     Open-Drawer 'new-drawing-paper-color' 'paper_color'
+    $colorEditorIdentity=(Owned 'edit-color-hex').GetRuntimeId() -join ':'
     New-Capture 'paper-color'
     if($Full){
         Press 'new-drawing-paper-color-5'
@@ -355,11 +356,19 @@ function New-Journey([string]$Theme,[switch]$Full) {
     Press 'new-drawing-color-mode-transparent'
     Wait-Until {(Drawer).transparent} 'Transparent did not apply'
     New-Capture 'transparent'
-    if(!$Full){Press 'new-drawing-color-cancel';Wait-Until {!(Drawer)} 'Cancel did not close the paper color';Close-NewDrawing 'new-drawing-cancel';return}
+    if(!$Full){
+        Press 'new-drawing-color-cancel';Wait-Until {!(Drawer)} 'Cancel did not close the paper color'
+        Open-Drawer 'new-drawing-paper-color' 'paper_color'
+        if(((Owned 'edit-color-hex').GetRuntimeId() -join ':') -ne $colorEditorIdentity){throw 'Reopening paper color replaced the native editor'}
+        Wait-Until {!(Drawer).transparent} 'Cancel did not restore the authored paper mode'
+        Press 'new-drawing-color-cancel';Wait-Until {!(Drawer)} 'Reopened paper color did not cancel'
+        Close-NewDrawing 'new-drawing-cancel';return
+    }
     Press 'new-drawing-color-use'
     Wait-Until {$view=Drawing;!$view.drawer -and $view.setup.paper.transparent -and !$view.sheet.shown -and $view.page.paper_color -eq $view.copy.transparent} 'Use Color did not choose a transparent sheet'
     New-Capture 'main-transparent'
     Open-Drawer 'new-drawing-paper-color' 'paper_color'
+    if(((Owned 'edit-color-hex').GetRuntimeId() -join ':') -ne $colorEditorIdentity){throw 'Reopening paper color replaced the native editor'}
     Press 'new-drawing-color-mode-color';Press 'new-drawing-paper-color-0'
     Wait-Until {$colors=Drawer;!$colors.transparent -and $colors.palette[0].selected} 'The sheet did not return to a color'
     Press 'new-drawing-color-use'
@@ -699,6 +708,29 @@ function Test-GpuRecovery {
     }
     & (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $review.Id -Output (Join-Path $run 'gpu-recovered.png') -ClientOnly *> (Join-Path $run 'gpu-capture.json')
 }
+function Test-PaperColorReopen {
+    Open-NewDrawing
+    $identity=$null
+    foreach($transparent in @($true,$false,$true,$false)){
+        Open-Drawer 'new-drawing-paper-color' 'paper_color'
+        $current=(Owned 'edit-color-hex').GetRuntimeId() -join ':'
+        if($identity -and $current -ne $identity){throw 'Reopening paper color replaced the native editor'}
+        $identity=$current
+        Press $(if($transparent){'new-drawing-color-mode-transparent'}else{'new-drawing-color-mode-color'})
+        Wait-Until {(Drawer).transparent -eq $transparent} 'Paper mode did not update'
+        if(!$transparent){Press 'new-drawing-paper-color-0';Wait-Until {(Drawer).palette[0].selected} 'Paper palette color did not select'}
+        Press 'new-drawing-color-use'
+        Wait-Until {!(Drawer) -and [bool](Drawing).setup.paper.transparent -eq $transparent} 'Paper mode did not apply'
+    }
+    Open-Drawer 'new-drawing-paper-color' 'paper_color'
+    Press 'new-drawing-color-mode-transparent';Wait-Until {(Drawer).transparent} 'Transparent draft did not apply'
+    Press 'new-drawing-color-cancel';Wait-Until {!(Drawer)} 'Paper color draft did not cancel'
+    Open-Drawer 'new-drawing-paper-color' 'paper_color'
+    Wait-Until {!(Drawer).transparent} 'Reopening paper color kept the cancelled draft'
+    if(((Owned 'edit-color-hex').GetRuntimeId() -join ':') -ne $identity){throw 'Cancelling paper color replaced the native editor'}
+    Press 'new-drawing-color-cancel';Wait-Until {!(Drawer)} 'Paper color did not close'
+    Close-NewDrawing 'new-drawing-cancel'
+}
 function Test-LightNewDrawing {
     $env:CAPY_STORAGE_DIR=Join-Path $run 'light-profile'
     [IO.File]::WriteAllText((Settings-File),(@{language=@{Explicit='en'};theme='light'}|ConvertTo-Json -Depth 4))
@@ -709,7 +741,7 @@ function Test-LightNewDrawing {
     Write-Output "Light New drawing review process $($review.Id)"
     Bind-ReviewWindow 'No light review window'
     Wait-Until {$model=Model;$model.brush_ready -and $model.state.theme -eq 'light'} 'Light review did not start' 45
-    New-Journey 'light'
+    if($Journey -eq 'paper-color'){Test-PaperColorReopen}else{New-Journey 'light'}
     if($Journey -eq 'full'){Color-Workflows}
     Request-Close;Wait-Closed 'Light review close did not finish'
     if((Get-Item -LiteralPath $stderr).Length){throw 'Light native review reported stderr'}
@@ -717,7 +749,8 @@ function Test-LightNewDrawing {
 Bind-ReviewWindow 'No review window'
 Wait-Until {(Model).brush_ready} 'Canvas startup did not finish' 45
 if(!(Model).windows_isolated_settings){throw 'Review must use an isolated profile'}
-if($focusedColor -or $gpuRecovery){
+if($Journey -eq 'paper-color'){Test-PaperColorReopen}
+elseif($focusedColor -or $gpuRecovery){
     Open-NewDrawing
     Pick-Choice 'new-drawing-unit' (Value-Index (Drawing).units 'px')
     if((Drawing).linked){Press 'new-drawing-link';Wait-Until {!(Drawing).linked} 'Focused drawing did not unlink its dimensions'}
@@ -727,11 +760,11 @@ if($focusedColor -or $gpuRecovery){
     $count=@((Model).windows_tabs.tabs).Count;Press 'new-drawing-create'
     Wait-Until {$model=Model;!$model.state.new_drawing -and @($model.windows_tabs.tabs).Count -eq $count+1 -and !$model.state.document_file.busy} 'Focused drawing did not open' 60
 }elseif(!$nativeWriteback){New-Journey 'dark' -Full}
-if($Journey -eq 'new-drawing'){
+if($Journey -in @('new-drawing','paper-color')){
     Request-Close;Wait-Closed 'New drawing review close did not finish'
     if((Get-Item -LiteralPath $stderr).Length){throw 'New drawing native review reported stderr'}
     Test-LightNewDrawing
-    @{journey=$Journey;new_drawing_captures='dark and light';evidence=$run;scope='New drawing presets, paper and color drawers, texture visibility, sheet creation and owned close'}|ConvertTo-Json
+    @{journey=$Journey;themes=@('dark','light');evidence=$run;scope=$(if($Journey -eq 'paper-color'){'Retained native paper color controls, transparent/color apply, cancelled draft and owned close'}else{'New drawing presets, paper and color drawers, texture visibility, sheet creation and owned close'})}|ConvertTo-Json
     return
 }
 function Combo-Value($Combo){$selection=$Combo.GetCurrentPattern([System.Windows.Automation.SelectionPattern]::Pattern).Current.GetSelection();if($selection.Count){$selection[0].Current.Name}}
