@@ -2014,7 +2014,8 @@ Then:
 
 - `./apps/layer-windows/scripts/inspect-window.ps1 -ProcessId $review.Id` saves a
   window capture and lists UI Automation names; `-ClientOnly` captures the client
-  area. `probe-displays.ps1` reports each display's active mode.
+  area. It resolves the drawing window for PID-only calls; pass `-WindowHandle`
+  when the process has multiple drawing windows. `probe-displays.ps1` reports each display's active mode.
 - Read stderr and the `CAPY_TRACE_UI` files. Per-window JSON files are replaced
   atomically; a leftover `.pending` file means a failed replacement even when the
   app advanced. The `Drawing workspace` element's UIA HelpText records the pointer

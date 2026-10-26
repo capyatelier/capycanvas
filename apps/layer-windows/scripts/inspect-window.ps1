@@ -1,5 +1,6 @@
 param([int]$ProcessId, [string]$Output = 'artifacts/windows/window.png', [switch]$ClientOnly, [switch]$Composed, [long]$WindowHandle=0, [switch]$CaptureOnly)
 $ErrorActionPreference='Stop'
+. (Join-Path $PSScriptRoot 'CapyUia.ps1')
 Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes,System.Drawing
 Add-Type -TypeDefinition @'
 using System;
@@ -18,9 +19,12 @@ $captureDpi=[CapyWindowCapture]::SetThreadDpiAwarenessContext([IntPtr](-4))
 try {
 $p=Get-Process -Id $ProcessId
 $p.Refresh()
-$handle=if($WindowHandle){[IntPtr]$WindowHandle}else{$p.MainWindowHandle}
-if($handle -eq 0){throw 'The process has no main window yet.'}
-$root=[System.Windows.Automation.AutomationElement]::FromHandle($handle)
+$owned=@(if($WindowHandle){[pscustomobject]@{Handle=[IntPtr]$WindowHandle;Root=[System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]$WindowHandle)}}else{
+    $drawing=Owned-DrawingWindow $p
+    if($drawing){$drawing}else{Owned-ProcessWindows $p|Where-Object {!$_.Root.Current.IsOffscreen -and !$_.Root.Current.BoundingRectangle.IsEmpty}}
+})
+if($owned.Count -ne 1){throw 'Specify one owned visible window to capture.'}
+$handle=$owned[0].Handle;$root=$owned[0].Root
 if(!$CaptureOnly){
 for($attempt=1;;$attempt++){
     try{
@@ -37,7 +41,8 @@ $details=[ordered]@{title=$root.Current.Name;responding=$p.Responding}
 if(!$CaptureOnly){$details.elements=@($names)}
 [pscustomobject]$details | ConvertTo-Json -Depth 4
 $rect=New-Object CapyWindowCapture+Rect
-if($ClientOnly){[CapyWindowCapture]::GetClientRect($handle,[ref]$rect)|Out-Null}else{[CapyWindowCapture]::GetWindowRect($handle,[ref]$rect)|Out-Null}
+if($ClientOnly){$measured=[CapyWindowCapture]::GetClientRect($handle,[ref]$rect)}else{$measured=[CapyWindowCapture]::GetWindowRect($handle,[ref]$rect)}
+if(!$measured -or $rect.right -le $rect.left -or $rect.bottom -le $rect.top){throw 'The owned window has no capture surface.'}
 $bitmap=New-Object System.Drawing.Bitmap(($rect.right-$rect.left),($rect.bottom-$rect.top))
 $graphics=[System.Drawing.Graphics]::FromImage($bitmap)
 try {
