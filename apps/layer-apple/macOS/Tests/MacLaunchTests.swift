@@ -12,6 +12,9 @@ extension EditorLaunchTests {
     @MainActor func testNativePhotoCorrections() throws {
         try checkNativePhotoCorrections(in: editorCaptureApplication())
     }
+    @MainActor func testNativePhotoCorrectionsDark() throws {
+        try checkNativePhotoCorrections(in: editorCaptureApplication(), theme: "dark")
+    }
 
     @MainActor func testNativeSourceEditing() throws {
         try checkNativeSourceEditing(in: editorCaptureApplication())

@@ -485,7 +485,8 @@ fn apple_current_main_drawers_paper_and_zen_use_shared_actions() {
         open(brush);
         assert_eq!(app.state()["customization"]["drawer"]["columns"], json!([["brush_sets"],["tools"],["tool_settings"]]));
         let sets = app.state()["tool_panels"]["brush_sets"]["groups"].as_array().unwrap().clone();
-        assert_eq!(sets.len(), 10);
+        assert_eq!(sets.iter().map(|set| set["action"]["group"].as_str().unwrap()).collect::<Vec<_>>(),
+            ["pen", "pencil", "pastel", "paint", "watercolor", "oil", "airbrush"]);
         for set in sets { app.action(set["action"].clone()); }
         app.action(json!({"type":"set_brush_size","value":77}));
         let remembered = app.state()["brush"].clone();

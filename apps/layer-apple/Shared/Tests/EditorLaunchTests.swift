@@ -58,8 +58,10 @@ final class EditorLaunchTests: XCTestCase {
     @MainActor func testSettingsDropdowns() { checkSettingsControls(in: editorCaptureApplication()) }
 
     @MainActor func testBlendAndLiquify() { checkBlendAndLiquify(in: editorCaptureApplication()) }
+    @MainActor func testBlendAndLiquifyDark() { checkBlendAndLiquify(in: editorCaptureApplication(), theme: "dark") }
 
     @MainActor func testPaintingBrushes() { checkPaintingBrushes(in: editorCaptureApplication()) }
+    @MainActor func testPaintingBrushesDark() { checkPaintingBrushes(in: editorCaptureApplication(), theme: "dark") }
     @MainActor func testDryMediaBrushes() { checkPaintingBrushes(in: editorCaptureApplication(), dryOnly: true) }
     @MainActor func testDryMediaBrushesDark() { checkPaintingBrushes(in: editorCaptureApplication(), theme: "dark", dryOnly: true) }
     @MainActor func testPenBrushOrder() { checkPenBrushOrder(in: editorCaptureApplication(), theme: "light") }
@@ -177,6 +179,7 @@ final class EditorLaunchTests: XCTestCase {
     @MainActor func testToolBubbles() { checkToolBubbles(in: editorCaptureApplication(), theme: "light") }
     @MainActor func testToolBubblesDark() { checkToolBubbles(in: editorCaptureApplication(), theme: "dark") }
     @MainActor func testEncloseFillTool() { checkEncloseFillTool(in: editorCaptureApplication()) }
+    @MainActor func testEncloseFillToolDark() { checkEncloseFillTool(in: editorCaptureApplication(), theme: "dark") }
     @MainActor func testLayerColorModes() { checkLayerColorModesAndFilters(in: editorCaptureApplication(), theme: "light") }
     @MainActor func testLayerColorModesDark() { checkLayerColorModesAndFilters(in: editorCaptureApplication(), theme: "dark") }
     @MainActor func testAlphaConversionFilters() { checkAlphaConversionFilters(in: editorCaptureApplication(), theme: "light") }

@@ -948,3 +948,15 @@ fn ipad_touch_timing_and_pencil_actions_reach_the_session() {
     assert_eq!(reply["handled"], true);
     assert!(app.borrow().host.session.command(layer_ui::CommandId::Eraser).selected);
 }
+
+#[test]
+fn control_activation_uses_keyboard_arrival() {
+    for (key, keyboard_focus, expected) in [("Space", false, false), ("Space", true, true), ("Enter", false, true)] {
+        let key = std::ffi::CString::new(key).unwrap();
+        unsafe {
+            assert_eq!(capy_apple_control_takes_key(key.as_ptr(), false, false, keyboard_focus), expected);
+            assert!(!capy_apple_control_takes_key(key.as_ptr(), true, false, keyboard_focus));
+            assert!(!capy_apple_control_takes_key(key.as_ptr(), false, true, keyboard_focus));
+        }
+    }
+}

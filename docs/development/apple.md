@@ -828,6 +828,8 @@ contact geometry checks the band because side poses can exceed the writing Size.
 
 ### UI tests
 
+Painting journeys use the current Tool Set categories and omit redundant single-category buttons. Filter journeys return to Layers before inspecting or deleting rows. Supplied ordinary pinch contacts last longer than the quick-pinch interval; quick fit has its own checks.
+
 `testPreservedPackageCopyOriginal` and its dark variant open the preserved-package
 sheet, use the native Save panel and compare every copied and retained input byte.
 They also check the original drawing, layer list, title and exact Undo/Redo pixels.

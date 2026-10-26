@@ -124,6 +124,7 @@ extension XCTestCase {
             waitForExpectations(timeout: 10)
         }
         func expectLayers(_ count: Int) {
+            workspaceActivate(app.buttons["panel-tab-layers"])
             expectation(for: NSPredicate(format: "count == %d", count), evaluatedWith: layers)
             waitForExpectations(timeout: 10)
         }
@@ -168,6 +169,7 @@ extension XCTestCase {
         waitForExpectations(timeout: 15)
         let blue = pixels()
         func removeFilter(_ filtered: Data) {
+            workspaceActivate(app.buttons["panel-tab-layers"])
             workspaceActivate(app.buttons["layer-Delete selected layers"]); expectPixels(blue, in: app)
             history(before: filtered, after: blue)
             expectLayers(2)
@@ -358,6 +360,8 @@ extension XCTestCase {
         search("Gaussian Blur")
         let blur = app.buttons["adjustment-gaussian_blur"]
         XCTAssertTrue(blur.waitForExistence(timeout: 10)); expect(blur, "Preview ready")
+        XCTAssertTrue(blur.isHittable)
+        attachEditor(in: app, name: "filter-thumbnail-\(theme)-gaussian_blur")
         workspaceActivate(blur)
         workspaceActivate(app.buttons["number-value-property-sigma"])
         let sigma = app.textFields["number-entry-property-sigma"]
@@ -367,7 +371,11 @@ extension XCTestCase {
         workspaceActivate(app.buttons["panel-tab-adjustments"])
         // Close search to clear its shared query, then open a fresh search.
         workspaceActivate(app.buttons["filter-search-toggle"]); search("Curves")
-        workspaceActivate(app.buttons["adjustment-curves"])
+        let curves = app.buttons["adjustment-curves"]
+        XCTAssertTrue(curves.waitForExistence(timeout: 10)); expect(curves, "Preview ready")
+        XCTAssertTrue(curves.isHittable)
+        attachEditor(in: app, name: "filter-thumbnail-\(theme)-curves")
+        workspaceActivate(curves)
         let curve = app.descendants(matching: .any)["effect-curve"].firstMatch
         XCTAssertTrue(curve.waitForExistence(timeout: 10)); expectGraphic(curve, 2)
         let point = curve.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.25))
@@ -387,7 +395,11 @@ extension XCTestCase {
 
         workspaceActivate(app.buttons["panel-tab-adjustments"])
         workspaceActivate(app.buttons["filter-search-toggle"]); search("Gradient Map")
-        workspaceActivate(app.buttons["adjustment-gradient_map"])
+        let gradientMap = app.buttons["adjustment-gradient_map"]
+        XCTAssertTrue(gradientMap.waitForExistence(timeout: 10)); expect(gradientMap, "Preview ready")
+        XCTAssertTrue(gradientMap.isHittable)
+        attachEditor(in: app, name: "filter-thumbnail-\(theme)-gradient_map")
+        workspaceActivate(gradientMap)
         let gradient = app.descendants(matching: .any)["gradient-strip"].firstMatch
         let markers = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "gradient-marker-"))
         func expectStops(_ count: Int) {
@@ -416,7 +428,7 @@ extension XCTestCase {
         #endif
         let shot = XCTAttachment(screenshot: screenshot)
         shot.name = "apple-filter-properties"; shot.lifetime = .keepAlways; add(shot)
-        let metadata: [String: Any] = ["scenario": "filter-properties", "theme": "light", "viewport": [viewport.width, viewport.height]]
+        let metadata: [String: Any] = ["scenario": "filter-properties", "theme": theme, "viewport": [viewport.width, viewport.height]]
         let geometry = XCTAttachment(data: try! JSONSerialization.data(withJSONObject: metadata, options: [.sortedKeys]), uniformTypeIdentifier: "public.json")
         geometry.name = "apple-filter-properties-geometry"; geometry.lifetime = .keepAlways; add(geometry)
     }

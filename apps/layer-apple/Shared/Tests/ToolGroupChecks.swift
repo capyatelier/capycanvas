@@ -43,11 +43,11 @@ extension XCTestCase {
         attachEditor(in: app, name: "tool-groups-chosen-\(theme)")
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)
     }
-    @MainActor func checkEncloseFillTool(in app: XCUIApplication) {
-        app.launch(); capturePaintEditor(in: app)
+    @MainActor func checkEncloseFillTool(in app: XCUIApplication, theme: String = "light") {
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"\#(theme)"}]"#
+        app.launch(); capturePaintEditor(in: app, theme: theme)
         editorTool("Fill", in: app)
-        editorChoice("Lasso fill", group: true, in: app)
-        editorChoice("Enclose and Fill", in: app)
+        editorChoice("Enclose and Fill", group: true, in: app)
         let tile = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "toolbar-tile-", "Enclose and Fill")).firstMatch
         XCTAssertTrue(tile.waitForExistence(timeout: 10), "The Fill tile follows Enclose and Fill")
         for id in ["tolerance", "smoothing"] {

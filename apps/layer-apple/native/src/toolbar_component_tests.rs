@@ -1,13 +1,17 @@
 use super::*;
 
 #[test]
-fn apple_enclose_fill_category_subtool_and_source_use_native_transport() {
+fn apple_enclose_fill_flat_choices_and_source_use_native_transport() {
     for platform in [0, 1] {
         for theme in ["light", "dark"] {
             let app = App::new(platform);
             app.action(json!({"type":"set_theme","theme":theme}));
             let label = |command: &str| app.state()["commands"].as_array().unwrap().iter()
                 .find(|item| item["id"] == command).unwrap()["label"].clone();
+            let policy = app.borrow().host.session.state().platform;
+            app.action(json!({"type":"restore_workspace","workspace":layer_ui::WorkspaceState {
+                layout: layer_ui::WorkspacePreset::Illustrator.layout(policy), ..Default::default()
+            }}));
             let fill = label("fill");
             let lasso = label("lasso_fill");
             let enclose = label("enclose_fill");
@@ -17,12 +21,15 @@ fn apple_enclose_fill_category_subtool_and_source_use_native_transport() {
                 .find(|item| item["id"] == command).unwrap()["selected"] == true;
             app.invoke("fill");
             choose("groups", &lasso);
-            choose("subtools", &enclose);
+            choose("groups", &enclose);
             choose("groups", &fill);
+            assert!(selected("fill"));
             choose("groups", &lasso);
+            assert!(selected("lasso_fill"));
+            choose("groups", &enclose);
             let state = app.full_snapshot()["state"].clone();
-            assert_eq!(state["tool_set"]["groups"].as_array().unwrap().iter().map(|item| item["label"].clone()).collect::<Vec<_>>(), [fill, lasso.clone()]);
-            assert_eq!(state["tool_set"]["subtools"].as_array().unwrap().iter().map(|item| item["label"].clone()).collect::<Vec<_>>(), [lasso.clone(), enclose.clone()]);
+            assert_eq!(state["tool_set"]["groups"].as_array().unwrap().iter().map(|item| item["label"].clone()).collect::<Vec<_>>(), [fill, lasso.clone(), enclose.clone()]);
+            assert!(state["tool_set"]["subtools"].as_array().unwrap().is_empty());
             assert!(selected("enclose_fill"));
             for source in ["selection_visible", "selection_editing", "selection_reference"] {
                 let command = app.state()["tool_actions"].as_array().unwrap().iter()
@@ -31,7 +38,7 @@ fn apple_enclose_fill_category_subtool_and_source_use_native_transport() {
                 assert!(selected(source));
                 assert!(selected("enclose_fill"));
             }
-            choose("subtools", &lasso);
+            choose("groups", &lasso);
             assert!(selected("lasso_fill"));
             assert!(!app.state()["tool_actions"].as_array().unwrap().iter()
                 .any(|action| ["selection_visible", "selection_editing", "selection_reference"].iter().any(|source| action["command"] == *source)));

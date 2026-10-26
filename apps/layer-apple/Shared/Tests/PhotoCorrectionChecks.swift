@@ -4,7 +4,7 @@ import UniformTypeIdentifiers
 
 #if os(macOS)
 extension XCTestCase {
-    @MainActor func checkNativePhotoCorrections(in app: XCUIApplication) throws {
+    @MainActor func checkNativePhotoCorrections(in app: XCUIApplication, theme: String = "light") throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("Capy Corrections " + UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -18,8 +18,8 @@ extension XCTestCase {
         CGImageDestinationAddImage(output, try XCTUnwrap(context.makeImage()), nil)
         XCTAssertTrue(CGImageDestinationFinalize(output))
         let original = try Data(contentsOf: photo)
-        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"}]"#
-        app.launch(); capturePaintEditor(in: app)
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"\#(theme)"}]"#
+        app.launch(); capturePaintEditor(in: app, theme: theme)
         // Keep the isolated test window clear of the unrelated iCloud prompt.
         let window = app.windows.firstMatch
         let corner = window.coordinate(withNormalizedOffset: CGVector(dx: 1, dy: 1)).withOffset(CGVector(dx: -2, dy: -2))
@@ -77,6 +77,7 @@ extension XCTestCase {
             let filter = app.buttons["adjustment-" + filterID]
             expectation(for: NSPredicate(format: "value == %@", "Preview ready"), evaluatedWith: filter)
             waitForExpectations(timeout: 20); workspaceActivate(filter)
+            workspaceActivate(app.buttons["panel-tab-layers"])
             expectation(for: NSPredicate(format: "count == %d", initialCount + index + 1), evaluatedWith: rows)
             waitForExpectations(timeout: 10)
             let row = rows.element(boundBy: 0)

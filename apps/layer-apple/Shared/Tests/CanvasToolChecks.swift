@@ -9,38 +9,148 @@ extension XCTestCase {
 
     @MainActor func revealEditorControl(_ element: XCUIElement, in scroll: XCUIElement) {
         XCTAssertTrue(element.waitForExistence(timeout: 5))
+        guard let requested = try? element.snapshot(), let original = try? scroll.snapshot() else {
+            return XCTFail("The scroll must expose its requested control before native input")
+        }
+        let identifier = requested.identifier, type = requested.elementType
+        func identity(_ node: XCUIElementSnapshot) -> String {
+            if !identifier.isEmpty { return node.identifier }
+            return node.label.isEmpty ? node.value as? String ?? "" : node.label
+        }
+        func descendants(_ node: XCUIElementSnapshot) -> [XCUIElementSnapshot] {
+            node.children.flatMap { [$0] + descendants($0) }
+        }
+        let key = identity(requested)
+        let order = descendants(original).filter { $0.elementType == type }.map(identity).filter { !$0.isEmpty }
+        guard !key.isEmpty, Set(order).count == order.count, let index = order.firstIndex(of: key) else {
+            return XCTFail("The scroll must retain unique identities for its requested control and siblings: \(identifier)")
+        }
         for _ in 0..<30 {
-            let viewport = scroll.frame, frame = element.frame
-            if frame.width > 0 && frame.height > 0 && viewport.contains(frame) { return }
+            guard let current = try? scroll.snapshot() else { return XCTFail("The native scroll viewport must remain available") }
+            let nodes = descendants(current), viewport = current.frame
+            let siblings = nodes.filter { $0.elementType == type }
+            let frame = siblings.first { identity($0) == key }?.frame ?? .zero
+            if frame.width > 0 && frame.height > 0 && viewport.contains(frame) {
+                guard element.exists else { return XCTFail("The fully visible requested control must resolve: \(identifier)") }
+                return
+            }
             let upward: Bool
             if frame.width > 0 && frame.height > 0 { upward = frame.maxY > viewport.maxY }
             else {
-                let identifier = element.identifier, text = identifier.isEmpty ? editorText(element) : ""
-                let siblings = scroll.descendants(matching: element.elementType).allElementsBoundByIndex
-                guard let index = siblings.firstIndex(where: {
-                    identifier.isEmpty ? editorText($0) == text : $0.identifier == identifier
-                }) else { return XCTFail("The scroll must retain its requested control: \(identifier)") }
-                let visible = siblings.map {
+                let visible = siblings.filter {
                     let bounds = $0.frame
-                    return bounds.width > 0 && bounds.height > 0 && viewport.contains(bounds)
+                    return !identity($0).isEmpty && bounds.width > 0 && bounds.height > 0 && viewport.contains(bounds)
+                }.map(identity)
+                guard visible.allSatisfy({ order.contains($0) }) else {
+                    return XCTFail("Visible controls must retain their original sibling order: \(identifier)")
                 }
-                let before = visible[..<index].contains(true)
-                let after = visible[(index + 1)...].contains(true)
+                let ranks = visible.compactMap { order.firstIndex(of: $0) }
+                let before = ranks.contains { $0 < index }, after = ranks.contains { $0 > index }
                 guard before != after else {
                     return XCTFail("The hidden control must lie outside its visible siblings: \(identifier)")
                 }
                 upward = before
             }
             #if os(macOS)
-            scroll.scroll(byDeltaX: 0, deltaY: upward ? -80 : 80)
+            let window = XCUIApplication().windows.firstMatch, windowBounds = window.frame
+            guard let target = nodes.first(where: {
+                let bounds = $0.frame
+                return $0.elementType == .button && !$0.identifier.isEmpty && bounds.width > 0 && bounds.height > 0
+                    && bounds.midX.isFinite && bounds.midY.isFinite
+                    && viewport.contains(bounds) && windowBounds.contains(bounds)
+            }) else {
+                return XCTFail("The scroll viewport must contain a visible wheel target inside its editor window: \(scroll.identifier)")
+            }
+            let bounds = target.frame, targetID = target.identifier
+            window.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(
+                dx: viewport.minX + 2 - windowBounds.minX, dy: viewport.midY - windowBounds.minY))
+                .scroll(byDeltaX: 0, deltaY: upward ? -80 : 80)
+            expectation(for: NSPredicate { _, _ in
+                guard let next = try? scroll.snapshot() else { return false }
+                let nextNodes = descendants(next)
+                let movedRequest = nextNodes.first { $0.elementType == type && identity($0) == key }?.frame
+                let movedTarget = nextNodes.first { $0.elementType == .button && $0.identifier == targetID }?.frame
+                return movedRequest.map { $0.width > 0 && $0.height > 0 && $0 != frame } == true
+                    || movedTarget.map { $0.width > 0 && $0.height > 0 && $0 != bounds } == true
+            }, evaluatedWith: scroll)
+            waitForExpectations(timeout: 10)
             #else
             let start = scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.05, dy: upward ? 0.8 : 0.2))
             let end = scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.05, dy: upward ? 0.2 : 0.8))
             start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.2)
             #endif
         }
-        XCTFail("Editor control did not become fully visible: \(element.identifier)")
+        XCTFail("Editor control did not become fully visible: \(identifier)")
     }
+    #if os(iOS)
+    @MainActor func revealEditorControl(_ element: XCUIElement, identifier: String, type: XCUIElement.ElementType, in scroll: XCUIElement) {
+        guard !identifier.isEmpty, scroll.waitForExistence(timeout: 5) else {
+            return XCTFail("A lazy control needs its stable identifier and native scroll")
+        }
+        func descendants(_ node: XCUIElementSnapshot) -> [XCUIElementSnapshot] {
+            node.children.flatMap { [$0] + descendants($0) }
+        }
+        func key(_ node: XCUIElementSnapshot) -> String { "\(node.elementType.rawValue):\(node.identifier)" }
+        func positive(_ frame: CGRect) -> Bool {
+            frame.minX.isFinite && frame.minY.isFinite && frame.width.isFinite && frame.height.isFinite
+                && frame.width > 0 && frame.height > 0
+        }
+        func attach(_ text: String) {
+            let proof = XCTAttachment(string: text)
+            proof.name = "native-lazy-reveal-" + identifier
+            proof.lifetime = .keepAlways
+            add(proof)
+        }
+        let window = XCUIApplication().windows.firstMatch, windowBounds = window.frame
+        var towardEnd = true, reversed = false
+        for step in 0..<24 {
+            guard let current = try? scroll.snapshot() else { return XCTFail("The native scroll must remain mounted") }
+            let viewport = current.frame.intersection(windowBounds), nodes = descendants(current)
+            guard positive(viewport) else { return XCTFail("The native scroll needs a finite viewport inside its window") }
+            let matches = nodes.filter { $0.identifier == identifier && $0.elementType == type }
+            guard matches.count <= 1 else { return XCTFail("The lazy control must have one semantic identity: \(identifier)") }
+            if let target = matches.first, positive(target.frame) {
+                guard target.frame.width <= viewport.width && target.frame.height <= viewport.height else {
+                    return XCTFail("The requested control must fit its native viewport: \(identifier)")
+                }
+                if viewport.contains(target.frame) {
+                    guard element.exists else { return XCTFail("The fully contained lazy control must resolve: \(identifier)") }
+                    attach("Step \(step): fully contained \(identifier), type \(type.rawValue), frame \(target.frame), viewport \(viewport), window \(windowBounds)")
+                    return
+                }
+                towardEnd = target.frame.maxY > viewport.maxY
+            }
+            let visible = nodes.filter { !$0.identifier.isEmpty && positive($0.frame) && viewport.contains($0.frame) }
+            let groups = Dictionary(grouping: visible, by: key)
+            let anchors = groups.filter { $0.value.count == 1 }.mapValues { $0[0].frame }
+            guard !anchors.isEmpty else { return XCTFail("Native lazy scrolling needs visible identified controls to measure progress") }
+            let x = viewport.minX - windowBounds.minX + viewport.width * 0.05
+            let start = window.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: x,
+                dy: viewport.minY - windowBounds.minY + viewport.height * (towardEnd ? 0.8 : 0.2)))
+            let end = window.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: x,
+                dy: viewport.minY - windowBounds.minY + viewport.height * (towardEnd ? 0.2 : 0.8)))
+            start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.2)
+            var moved: [String] = []
+            let progress = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                guard let next = try? scroll.snapshot() else { return false }
+                let nextGroups = Dictionary(grouping: descendants(next), by: key)
+                moved = nextGroups.values.compactMap { group in
+                    guard group.count == 1, let node = group.first else { return nil }
+                    guard let before = anchors[key(node)], positive(node.frame), abs(node.frame.minY - before.minY) > 1 else { return nil }
+                    return "\(key(node)): \(before) → \(node.frame)"
+                }
+                return !moved.isEmpty
+            }, object: scroll)
+            let changed = XCTWaiter.wait(for: [progress], timeout: 2) == .completed
+            attach("Step \(step): toward end \(towardEnd), viewport \(viewport), measured progress \(changed)\n" + moved.joined(separator: "\n"))
+            if !changed {
+                guard !reversed else { return XCTFail("The lazy control was not found across both measured scroll boundaries: \(identifier)") }
+                towardEnd.toggle(); reversed = true
+            }
+        }
+        XCTFail("The lazy control did not become fully contained within the bounded native search: \(identifier)")
+    }
+    #endif
     @MainActor func editorTool(_ label: String, in app: XCUIApplication) {
         workspaceActivate(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@",
             "toolbar-tile-toolbar-", label)).firstMatch)
@@ -164,18 +274,32 @@ extension XCTestCase {
         capture.name = name; capture.lifetime = .keepAlways; add(capture)
     }
 
-    @MainActor func selectPaintPreset(_ tool: String, group: String, preset: String, in app: XCUIApplication) {
-        for (prefix, label) in [("toolbar-tile-toolbar-", tool), ("tool-group-", group), ("brush-", preset)] {
-            let button = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", prefix, label)).firstMatch
-            XCTAssertTrue(button.waitForExistence(timeout: 5))
-            if !button.isSelected {
-                let scroll = app.scrollViews.containing(.button, identifier: button.identifier).firstMatch
-                if scroll.exists { revealEditorControl(button, in: scroll) }
-                workspaceActivate(button)
-                expectation(for: NSPredicate(format: "selected == YES"), evaluatedWith: button)
-                waitForExpectations(timeout: 5)
-            }
+    @MainActor private func selectPaintChoice(_ prefix: String, _ label: String, in app: XCUIApplication) {
+        let button = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", prefix, label)).firstMatch
+        XCTAssertTrue(button.waitForExistence(timeout: 5), "The current tool controls must offer \(label)")
+        if !button.isSelected {
+            let scroll = app.scrollViews.containing(.button, identifier: button.identifier).firstMatch
+            if scroll.exists { revealEditorControl(button, in: scroll) }
+            workspaceActivate(button)
+            expectation(for: NSPredicate(format: "selected == YES"), evaluatedWith: button)
+            waitForExpectations(timeout: 5)
         }
+    }
+    @MainActor func selectPaintGroup(_ tool: String, group: String, in app: XCUIApplication) {
+        selectPaintChoice("toolbar-tile-toolbar-", tool, in: app)
+        let category = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "tool-subtool-", group)).firstMatch
+        let parent = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "tool-group-", group)).firstMatch
+        if parent.waitForExistence(timeout: 1) {
+            selectPaintChoice("tool-group-", group, in: app)
+        } else if category.exists {
+            selectPaintChoice("tool-subtool-", group, in: app)
+        } else {
+            XCTAssertEqual(group, tool, "A tool with one category omits its redundant category button")
+        }
+    }
+    @MainActor func selectPaintPreset(_ tool: String, group: String, preset: String, in app: XCUIApplication) {
+        selectPaintGroup(tool, group: group, in: app)
+        selectPaintChoice("brush-", preset, in: app)
     }
 
     @MainActor private func editPaintSetting(_ id: String, text: String, in app: XCUIApplication) -> XCUIElement {
@@ -246,7 +370,7 @@ extension XCTestCase {
     #if os(macOS)
     @MainActor func checkDemandShaderFirstUse(in app: XCUIApplication, theme: String) {
         app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"\#(theme)"},{"type":"set_color","rgba":[0.9,0.25,0.2,1]},{"type":"color","action":{"op":"swap"}},{"type":"set_color","rgba":[0.2,0.45,0.8,1]}]"#
-        app.launch(); capturePaintEditor(in: app)
+        app.launch(); capturePaintEditor(in: app, theme: theme)
         let viewport = workspaceViewport(in: app)
         editorMenu(in: app, menu: "Select", id: "select_all", label: "Select all pixels")
         editorMenu(in: app, menu: "Edit", id: "fill_selection", label: "Fill selection")
@@ -269,7 +393,7 @@ extension XCTestCase {
         }
         let baseline = pixels()
         for (tool, group, preset) in [("Pen", "Pen", "G-Pen"), ("Paint Brush", "Paint", "Dry Scumble"),
-            ("Paint Brush", "Watercolor", "Watercolor Wash"), ("Blend", "Blend", "Natural Blender"),
+            ("Paint Brush", "Watercolor", "Watercolor Wash"), ("Blend", "Paint mixing", "Natural Blender"),
             ("Liquify", "Liquify", "Liquify Push")] {
             selectPaintPreset(tool, group: group, preset: preset, in: app)
             for replay in 0...1 {
@@ -295,15 +419,13 @@ extension XCTestCase {
         app.launch(); capturePaintEditor(in: app, theme: theme)
         let viewport = workspaceViewport(in: app), originalFrame = viewport.frame
         let families: [(String, String, [String])] = [
-            ("Pen", "Pen", ["G-Pen", "Monoline", "Rough G-Pen", "Blotty Ink", "Calligraphy Pen", "Antique Pen", "Realistic Pen", "Wet Ink", "Realistic Brushed Ink"]),
-            ("Pen", "Marker", ["Marker"]),
+            ("Pen", "Pen", ["G-Pen", "Monoline", "Rough G-Pen", "Blotty Ink", "Calligraphy Pen", "Antique Pen", "Realistic Pen", "Wet Ink", "Realistic Brushed Ink", "Marker"]),
             ("Pencil", "Pencil", ["Pencil", "Pointy Pencil", "Shading Pencil"]),
             ("Pencil", "Pastel", ["Chalk", "Pastel Block", "Charcoal", "Crayon"]),
-            ("Paint Brush", "Paint", ["Paintbrush", "Bristle Paintbrush", "Textured Flat", "Dry Scumble", "Transparent Glaze", "Opaque Gouache", "Multiply Glaze"]),
+            ("Paint Brush", "Paint", ["Paintbrush", "Bristle Paintbrush", "Textured Flat", "Dry Scumble", "Transparent Glaze", "Opaque Gouache", "Multiply Glaze", "Dual Texture"]),
             ("Paint Brush", "Watercolor", ["Watercolor Wash", "Wet Watercolor"]),
-            ("Paint Brush", "Oil paint", ["Loaded Oil", "Palette Knife", "Wet Round"]),
-            ("Airbrush", "Airbrush", ["Airbrush"]), ("Airbrush", "Spray", ["Spray"]),
-            ("Decoration", "Texture", ["Dual Texture"]), ("Eraser", "Eraser", ["Eraser"]),
+            ("Paint Brush", "Oil paint", ["Loaded Oil", "Palette Knife", "Wet Round", "Mixing Brush"]),
+            ("Airbrush", "Airbrush", ["Airbrush", "Spray"]), ("Eraser", "Eraser", ["Eraser"]),
         ]
         #if os(macOS)
         func pixels() -> Data { editorPixels(in: app, at: CGPoint(x: 0.5, y: 0.52), size: 96) }
@@ -396,9 +518,9 @@ extension XCTestCase {
         }
     }
 
-    @MainActor func checkBlendAndLiquify(in app: XCUIApplication) {
-        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"set_color","rgba":[0.9,0.25,0.2,1]},{"type":"color","action":{"op":"swap"}},{"type":"set_color","rgba":[0.2,0.45,0.8,1]}]"#
-        app.launch(); capturePaintEditor(in: app)
+    @MainActor func checkBlendAndLiquify(in app: XCUIApplication, theme: String = "light") {
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"\#(theme)"},{"type":"set_color","rgba":[0.9,0.25,0.2,1]},{"type":"color","action":{"op":"swap"}},{"type":"set_color","rgba":[0.2,0.45,0.8,1]}]"#
+        app.launch(); capturePaintEditor(in: app, theme: theme)
         let viewport = workspaceViewport(in: app), originalFrame = viewport.frame
         #if os(macOS)
         editorMenu(in: app, menu: "Select", id: "select_all", label: "Select all pixels")
@@ -414,7 +536,7 @@ extension XCTestCase {
             return Int(samples[0][0]) > Int(samples[0][2]) + 80 && Int(samples[1][2]) > Int(samples[1][0]) + 50
         }, evaluatedWith: app)
         waitForExpectations(timeout: 10)
-        attachEditor(in: app, name: "blend-two-color-fixture")
+        attachEditor(in: app, name: "blend-two-color-fixture-" + theme)
         func pixels() -> Data { editorPixels(in: app, at: CGPoint(x: 0.5, y: 0.5), size: 128) }
         let baseline = pixels()
         let outside = [CGPoint(x: 0.4, y: 0.45), CGPoint(x: 0.65, y: 0.68)]
@@ -424,9 +546,10 @@ extension XCTestCase {
             waitForExpectations(timeout: 10)
         }
         #endif
-        for (tool, presets, offered) in [("Blend", ["Natural Blender", "Smudge"], 2), ("Liquify", ["Liquify Push", "Liquify Twirl Counterclockwise"], 6)] {
+        for (tool, group, presets, offered) in [("Blend", "Paint mixing", ["Natural Blender"], 5),
+            ("Blend", "Blend", ["Smudge"], 8), ("Liquify", "Liquify", ["Liquify Push", "Liquify Twirl Counterclockwise"], 8)] {
             for preset in presets {
-                selectPaintPreset(tool, group: tool, preset: preset, in: app)
+                selectPaintPreset(tool, group: group, preset: preset, in: app)
                 XCTAssertEqual(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "brush-")).count, offered)
                 editPaintSize("360", in: app)
                 XCTAssertEqual(app.buttons["number-value-tool-flow"].exists, tool == "Blend")
@@ -441,12 +564,12 @@ extension XCTestCase {
                 let changed = pixels()
                 XCTAssertEqual(editorPixelSamples(in: app, at: outside, size: 8), untouched,
                     "A local stroke must preserve artwork outside its footprint")
-                attachEditor(in: app, name: "paint-" + preset)
+                attachEditor(in: app, name: "paint-\(preset)-\(theme)")
                 for (command, expected) in [("Undo", baseline), ("Redo", changed), ("Undo", baseline)] {
                     editorHistory(command, in: app); expectPixels(expected)
                 }
                 #else
-                attachEditor(in: app, name: "paint-controls-" + preset)
+                attachEditor(in: app, name: "paint-controls-\(preset)-\(theme)")
                 #endif
                 XCTAssertEqual(viewport.frame, originalFrame)
                 XCTAssertFalse(app.staticTexts["Canvas error"].exists)
@@ -630,7 +753,7 @@ extension XCTestCase {
         XCTAssertFalse(undo.isEnabled); XCTAssertFalse(redo.isEnabled)
         for (tool, group, preset, id) in [("Pencil", "Pencil", "Pencil", "flow"),
             ("Paint Brush", "Paint", "Paintbrush", "flow"), ("Liquify", "Liquify", "Liquify Push", "strength"),
-            ("Decoration", "Texture", "Dual Texture", "flow")] {
+            ("Paint Brush", "Paint", "Dual Texture", "flow")] {
             selectPaintPreset(tool, group: group, preset: preset, in: app)
             XCTAssertEqual(value(id).label, "Strength")
             XCTAssertEqual(value("opacity").exists, id == "flow")

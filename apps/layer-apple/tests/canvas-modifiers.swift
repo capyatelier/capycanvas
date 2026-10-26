@@ -448,9 +448,9 @@ private final class NativeRotation: UIRotationGestureRecognizer {
                 left.time += 0.1; right.time = left.time
                 canvas.touchesBegan([left, right], with: touchEvent); try await flush()
                 left.point.x = 600 - 160 * ratio; right.point.x = 600 + 160 * ratio
-                left.time += 0.1; right.time = left.time
+                left.time += 0.2; right.time = left.time
                 canvas.touchesMoved([left, right], with: touchEvent); try await flush()
-                left.time += 0.1; right.time = left.time
+                left.time += 0.2; right.time = left.time
                 canvas.touchesEnded([left, right], with: touchEvent); try await flush()
                 try require(near(store.state["camera"]["zoom"].number, before["zoom"].number * ratio)
                     && canvas.contacts.isEmpty && canvas.ignoredContacts.isEmpty,
