@@ -43,7 +43,7 @@ import SwiftUI
         }
         send(["type": "start", "directory": directory.path, "scene": UUID(uuidString: scene)?.uuidString ?? "default"])
         Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] timer in
-            MainActor.assumeIsolated {
+            Task { @MainActor [weak self] in
                 guard let self, !self.view["closed"].bool else { timer.invalidate(); return }
                 self.tick()
             }
