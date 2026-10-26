@@ -310,7 +310,7 @@ controls or modes that are not required for GA. Feasibility is still unproven.
 | Hatching, engraving and stippling | Basic Crosshatch | Later |
 | Pencil, Charcoal, Watercolor and Oil Paint looks | Basic Pencil and Painterly | Later |
 | Pattern fills/overlays and procedural textures | Solid Color and Gradient Fill only | Later |
-| Stable random variations | Scatter and Crystallize save Variation; Film Grain has no authored seed | Alongside stochastic filters |
+| Stable random variations | Scatter saves Variation; Crystallize uses a fixed pattern | Alongside stochastic filters |
 | Pixel Mosaic | Cell-center sampling | Later |
 | Crystallize, Zoom/Spin Blur and Lens Blur | Native-pixel Crystallize exists; blurs missing | Later |
 | Image-driven Displacement and Color Transfer | Missing | Later |
@@ -919,8 +919,8 @@ References: [Affinity Bevel/Emboss](https://affinity.help/photo2/en-US.lproj/pag
 
 ### Crystallize
 
-**Current:** Crystallize provides bounded jittered cells, Stretch and saved
-Variation with native-pixel site coloring. Dither Spread and Scatter also select
+**Current:** Crystallize provides fixed bounded jittered cells and Stretch with
+native-pixel site coloring. Dither Spread and Scatter also select
 native source colors. Their shared [runtime contract](../reference/runtime-filters.md#dither-spread-scatter-and-crystallize)
 defines the implemented controls, sampling and bounds. The cell-average proposal
 below remains a later comparison rather than the current rendering contract.

@@ -36,7 +36,7 @@ export async function checkArtisticFilters({call, evaluate, settle}) {
   await wait(`layerApp.state().commands.find(c=>c.id==='apply_transform').enabled&&!layerApp.documents.busy()`);
   await evaluate(`window.showOpenFilePicker=artisticPicker;delete window.artisticPicker`);await send({type:'invoke',command:'apply_transform'});
   await wait(`layerApp.state().layer_tools.editing_layer.object&&!layerApp.documents.busy()`);
-  const filters=[['dither_spread','Dither Spread',[['spread',64],['cell_size',12],['density',65]]],['scatter','Scatter',[['spread',64],['cell_size',12],['density',65],['seed',7]]],['crystallize','Crystallize',[['cell_size',48],['stretch',60],['seed',7]]]];
+  const filters=[['dither_spread','Dither Spread',[['spread',64],['cell_size',12],['density',65]]],['scatter','Scatter',[['spread',64],['cell_size',12],['density',65],['seed',7]]],['crystallize','Crystallize',[['cell_size',48],['stretch',60]]]];
   for(const theme of ['light','dark']) {
     await send({type:'set_theme',theme});
     for(const [id,label,edits] of filters) {

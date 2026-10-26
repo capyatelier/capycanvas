@@ -35,7 +35,7 @@ fn palette(input: &[[f32;4]], output: &[[f32;4]], context: &str) {
     }
 }
 fn maximum(name: &str) -> EffectInstance {
-    if name=="crystallize" {effect(name,&[("cell_size",128.),("stretch",100.),("seed",65535.)])}
+    if name=="crystallize" {effect(name,&[("cell_size",128.),("stretch",100.)])}
     else {
         let mut parameters=vec![("spread",256.),("cell_size",50.),("density",100.)];
         if name=="scatter" {parameters.push(("seed",65535.));}
@@ -88,7 +88,7 @@ fn artistic_cells_are_repeatable_across_independent_capture_windows_and_seeds() 
             let expected:Vec<_>=(region[1]..region[1]+region[3]).flat_map(|y|(region[0]..region[0]+region[2]).map(move|x|(y*521+x) as usize)).map(|i|full[i]).collect();
             close(&actual,&expected,&format!("{name} region{region:?}"));
         }
-        if name!="dither_spread" {
+        if name=="scatter" {
             let mut operation=maximum(name);operation.set("seed",EffectValue::Number(17.)).unwrap();
             let different=read(&gpu,&filtered(original.clone(),operation,None));
             assert_ne!(full,different,"{name}: authored seed must change native donor choices");
@@ -151,12 +151,12 @@ fn artistic_cells_crystallize_matches_independent_seven_by_seven_native_donor_or
     let r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();let gpu=r.snapshot_gpu();let input=read(&gpu,&document);
     for stretch in [-100f32,0.,100.] {
         let sides=[7.*(1.+f64::from(stretch.max(0.))/100.),7.*(1.+f64::from((-stretch).max(0.))/100.)];
-        let output=read(&gpu,&filtered(document.clone(),effect("crystallize",&[("cell_size",7.),("stretch",stretch),("seed",65535.)]),None));
+        let output=read(&gpu,&filtered(document.clone(),effect("crystallize",&[("cell_size",7.),("stretch",stretch)]),None));
         for y in (40..230).step_by(11) {for x in (40..230).step_by(13) {
             let query=[(x as f64+0.5)/sides[0],(y as f64+0.5)/sides[1]];
             let base=query.map(|v|v.floor() as i32);let mut nearest=f64::INFINITY;let mut donor=[0.;2];
             for sy in base[1]-3..=base[1]+3 {for sx in base[0]-3..=base[0]+3 {
-                let site=pair(sx,sy,65535);let position=[f64::from(sx)+0.25+site[0]*0.5,f64::from(sy)+0.25+site[1]*0.5];
+                let site=pair(sx,sy,0);let position=[f64::from(sx)+0.25+site[0]*0.5,f64::from(sy)+0.25+site[1]*0.5];
                 let distance=(position[0]-query[0]).powi(2)+(position[1]-query[1]).powi(2);
                 if distance<nearest {nearest=distance;donor=[position[0]*sides[0],position[1]*sides[1]];}
             }}

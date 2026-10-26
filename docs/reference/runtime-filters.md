@@ -679,7 +679,8 @@ two. Sites remain within the central half of their grid cells. In normalized
 coordinates, the current cell's site is at most `sqrt(2) × .75` away, whereas
 any site outside the surrounding 3 × 3 grid is at least 1.25 away. Nine fixed
 candidates therefore find the true nearest site; ties use row-major order.
-Scatter and Crystallize save Variation with every other parameter.
+Crystallize uses a fixed pattern; its only controls are Cell size and Stretch.
+Scatter saves Variation with every other parameter.
 
 `fx_sample_nearest(p)` maps a reference position into the current input grid
 and loads its containing native pixel. It clamps to the true finite source

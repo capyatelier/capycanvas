@@ -78,7 +78,6 @@
   }},
   "crystallize": {"version":1,"kind":"adjustment","alpha":"filter","space":"blending","time":false,"constraints":[],"parameters": {
     "cell_size":{"dimension":"composition_pixels","kind":{"kind":"number","max":65536.0,"min":0.0},"opaque":false},
-    "seed":{"dimension":"scalar","kind":{"kind":"number","max":65535.0,"min":0.0},"opaque":false},
     "stretch":{"dimension":"scalar","kind":{"kind":"number","max":100.0,"min":-100.0},"opaque":false}
   }},
   "curves": {"version":1,"kind":"adjustment","alpha":"preserve","space":"linear","time":false,"constraints":[],"parameters": {

@@ -3039,6 +3039,7 @@ class AndroidRasterTest {
             compose.waitUntil(60_000) { drawingSettled() }; refresh()
             val layer = native { state(it).getJSONObject("layer_properties").getLong("layer") }
             fun controls() = native { state(it).getJSONObject("layer_properties").array("controls").objects() }
+            if (id == "crystallize") assertEquals(listOf("cell_size", "stretch"), controls().map { it.getString("key") })
             val cell = controls().first { it.getString("key") == "cell_size" }
             val numeric = cell.getJSONObject("kind").getJSONObject("numeric")
             assertEquals(1.0, numeric.getDouble("step"), 0.0)

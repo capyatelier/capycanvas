@@ -576,7 +576,7 @@ fn native_artistic_cell_filters() {
         for (id, query, edits) in [
             ("dither_spread", "Dither Spread", &[("spread", "64"), ("cell_size", "12"), ("density", "65")][..]),
             ("scatter", "Scatter", &[("spread", "64"), ("cell_size", "12"), ("density", "65"), ("seed", "7")][..]),
-            ("crystallize", "Crystallize", &[("cell_size", "48"), ("stretch", "60"), ("seed", "7")][..]),
+            ("crystallize", "Crystallize", &[("cell_size", "48"), ("stretch", "60")][..]),
         ] {
             w.customize(CustomizationAction::SetPanelVisible { panel: Panel::Adjustments, visible: true });
             w.customize(CustomizationAction::CloseExpanded);

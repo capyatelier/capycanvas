@@ -63,12 +63,11 @@ fn capy_scatter(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32> {
 }
 fn capy_crystallize(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32> {
     let size=max(round(fx_parameter(b,0u).x),1.);let stretch=clamp(fx_parameter(b,1u).x*.01,-1.,1.);
-    let seed=u32(fx_parameter(b,2u).x);
     let sides=size*vec2(1.+max(stretch,0.),1.+max(-stretch,0.));
     let query=p/sides;let cell=ac_cell(query);let local=fract(query);
     var best=4.;var winner=vec2(.5);
     for(var y=-1;y<=1;y+=1) {for(var x=-1;x<=1;x+=1) {
-        let offset=vec2(x,y);let site=.25+ac_pair(ac_key(cell+offset,seed))*.5;
+        let offset=vec2(x,y);let site=.25+ac_pair(ac_key(cell+offset,0u))*.5;
         let delta=vec2<f32>(offset)+site-local;let distance=dot(delta,delta);
         if distance<best {best=distance;winner=vec2<f32>(offset)+site;}
     }}
