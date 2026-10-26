@@ -1,4 +1,4 @@
-use crate::{WgpuRasterizer, PixelRect, scene, tests::fixture, test_support::{packet, floats, document_texture}, layer_tests::publish};
+use crate::{WgpuRasterizer, PixelRect, scene, tests::fixture, test_support::{packet, floats, document_texture, submit_published as publish}};
 use layer_core::{EffectInstance, EffectKind, EffectValue, Document, OccurrenceHandle, Lut3d, Point};
 use layer_core::color::{DocumentColor, RgbSpace, SampleDepth, rgb};
 use layer_render::{CanvasRenderer, FramePacket};

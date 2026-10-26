@@ -48,16 +48,7 @@ mod root_fragment;
 #[path = "moved_paint_tests.rs"]
 mod moved_paint;
 
-pub(super) fn submit_published(r: &mut WgpuRasterizer, frame: FramePacket<'_>) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    let idle = FramePacket { composite_all: false, reset_layers: false, dabs: &[], dab_batches: &[], restore_rasters: &[], ..frame };
-    crate::test_support::submit_ready(r, frame).unwrap();
-    while r.object_deferred {
-        assert!(std::time::Instant::now() < deadline, "deferred composition must publish");
-        r.wait_idle().unwrap();
-        crate::test_support::submit_ready(r, idle).unwrap();
-    }
-}
+pub(super) use crate::test_support::submit_published;
 
 fn assert_settled(mut r: &mut WgpuRasterizer, frame: FramePacket<'_>, reference: &[[f32; 4]]) {
     let revision = r.artwork_revision;

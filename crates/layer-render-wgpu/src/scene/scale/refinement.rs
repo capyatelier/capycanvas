@@ -12,12 +12,12 @@ impl Cache {
         let Encoding { encoder, commands } = encoding;
         if missing.is_empty() {
             self.present_half(r, packet, encoder)?;
-            return Ok(PixelRect::EMPTY);
+            return Ok(std::mem::take(&mut self.deferred_changed));
         }
         self.admit_hierarchy(r, packet, encoder, commands)?;
         let reverse = scene.native_reverse;
-        scene.native_reverse = !reverse;
         let changed = missing.iter().fold(PixelRect::EMPTY, |a, c| a.union(page_rect(*c))).intersect(PixelRect::full(packet.document_extent));
+        self.deferred_changed = self.deferred_changed.union(changed);
         let budget = r.native_edit.as_ref().map_or(windows::DEFAULT_IMAGE_PIXEL_BYTES, |n| n.image_pixel_budget(self.resident_bytes()));
         let plan = windows::Plan::new_cached(packet.scene, packet.document_extent, budget, r.device.limits().max_texture_dimension_2d,Some(&scene.object_spatial))?;
         let mut regions: Vec<_> = plan.map_or_else(|| vec![(changed, scene.cached_capture_window(packet.scene, changed))], |p| p.regions_cached(packet.scene, changed,Some(&scene.object_spatial))
@@ -25,7 +25,7 @@ impl Cache {
         if reverse { regions.reverse(); }
         let mut image = self.exact_tile.get_or_insert_with(|| Image::new(r,
             display_mips::Plan::at(exact_strip(packet.document_extent), 0), "exact composition working strip")).clone();
-        let batch_size = if packet.scene.order().iter().any(|owner| packet.scene.object_layer(*owner).is_some()) { 1 } else { SOURCE_SLOTS };
+        let batch_size = if packet.scene.order().iter().any(|owner| packet.scene.object_layer(*owner).is_some()) { 1 } else { self.native_batch };
         let mut batch = Vec::with_capacity(batch_size);
         if plan.is_some() {
             Scene::submit_chunk(r, encoder, "before native filter windows")?;
@@ -49,7 +49,10 @@ impl Cache {
                     coordinates.next();bounds = combined;batch.push(region);
                 }
                 if batch.is_empty() {break;}
-                self.capture_exact(scene, r, packet, &mut image, &batch, encoder, commands)?;
+                r.source_tiles.borrow_mut().begin_unit();
+                let captured = self.capture_exact(scene, r, packet, &mut image, &batch, encoder, commands);
+                if r.source_tiles.borrow_mut().end_unit() && captured.is_err() { self.native_batch = (batch.len() / 2).max(1); }
+                captured?;
             }
             if let Some(hierarchy) = &mut self.hierarchy { hierarchy.flush(encoder); }
             if plan.is_some() {
@@ -59,8 +62,9 @@ impl Cache {
                 scene.image_window = None; scene.image_output = None;
             }
         }
+        scene.native_reverse = !reverse;
         self.present_half(r, packet, encoder)?;
-        Ok(changed)
+        Ok(std::mem::take(&mut self.deferred_changed))
     }
 
     fn invalidate_native(

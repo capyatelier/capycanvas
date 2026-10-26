@@ -169,6 +169,18 @@ pub(crate) fn submit_ready(r: &mut WgpuRasterizer, frame: FramePacket<'_>) -> Re
     }
 }
 
+/// Submit `frame`, then idle frames as the engine does, until it publishes.
+pub(crate) fn submit_published(r: &mut WgpuRasterizer, frame: FramePacket<'_>) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let idle = FramePacket { composite_all: false, reset_layers: false, dabs: &[], dab_batches: &[], restore_rasters: &[], ..frame };
+    submit_ready(r, frame).unwrap();
+    while r.object_deferred {
+        assert!(std::time::Instant::now() < deadline, "deferred composition must publish");
+        r.wait_idle().unwrap();
+        submit_ready(r, idle).unwrap();
+    }
+}
+
 pub(crate) fn submit_settled(r: &mut WgpuRasterizer, frame: FramePacket<'_>) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     let idle = FramePacket { dabs: &[], dab_batches: &[], restore_rasters: &[],
@@ -184,6 +196,19 @@ pub(crate) fn submit_settled(r: &mut WgpuRasterizer, frame: FramePacket<'_>) {
         r.wait_idle().unwrap();
         if !first && !r.has_pending_work() && r.raster_ready() && !r.has_pending_submission() { return; }
         assert!(std::time::Instant::now() < deadline, "renderer work must settle");
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+}
+
+/// Upload every requested worker decode into the decoded-tile cache.
+pub(crate) fn settle_decodes(r: &mut WgpuRasterizer) {
+    let deadline = std::time::Instant::now() + READBACK_TIMEOUT;
+    while r.moving_decode.as_ref().is_some_and(|(_, queue)| queue.pending()) {
+        assert!(std::time::Instant::now() < deadline, "requested decodes must arrive");
+        let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+        r.drain_image_decodes(&mut encoder).unwrap();
+        r.uploads.finish(&encoder);
+        encoder.submit(&r.queue);
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
 }

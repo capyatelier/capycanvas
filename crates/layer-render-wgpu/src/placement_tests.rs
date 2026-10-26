@@ -115,7 +115,7 @@ fn offset_photo_incremental_composition_matches_rebuild_with_alpha_edges() {
         let mut images = Vec::new();
         for (r, full) in [(&mut r, false), (&mut rebuilt, true)] {
             if full { r.scale_display = None; }
-            crate::layer_tests::publish(r, FramePacket {
+            crate::test_support::submit_published(r, FramePacket {
                 view: ViewState { width_px: canvas[0], height_px: canvas[1], ..view() },
                 reset_layers: step == 0,
                 ..packet(photo.scene(), canvas)

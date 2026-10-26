@@ -177,6 +177,7 @@ pub(super) struct Scene {
     jobs: Vec<Job>,
     source_jobs: Vec<std::ops::Range<usize>>,
     ordered:bool,
+    decode_wait: bool,
     // Retain table capacity across tile batches, but release resource handles
     // after encoding so these tables cannot pin evicted paint/source pages.
     source_bindings: RecentBindings<(bool,[wgpu::TextureView; 3])>,
@@ -434,7 +435,7 @@ impl Scene {
             pool: Vec::new(),
             used: Vec::new(),
             jobs: Vec::new(),
-            source_jobs: Vec::new(),ordered:false,
+            source_jobs: Vec::new(),ordered:false,decode_wait:false,
             source_bindings: Default::default(),
             compute_bindings: Default::default(),
             output_bindings: Default::default(),
@@ -2004,7 +2005,7 @@ impl Scene {
             for job in &self.jobs {
                 if let Job::DecodedTile(source)=job && source.prepared().is_none() {source.prepare(r)?;pending=true;}
             }
-            if pending {return Err(GpuRasterError::DeferredObjectWork);}
+            if pending {self.decode_wait=true;return Err(GpuRasterError::DeferredObjectWork);}
         }
         let source_jobs = self.source_jobs.clone();
         let job_grid = |i| grid.filter(|_| !source_jobs.iter().any(|range| range.contains(&i)));

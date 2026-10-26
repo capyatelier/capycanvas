@@ -203,6 +203,8 @@ pub(crate) struct DecodedTiles {
     mip_reservation: u64,
     retired_bytes: Arc<AtomicU64>,
     retired_slots: std::cell::RefCell<Vec<RetiredSlot>>,
+    unit: Option<u64>,
+    overflowed: bool,
 }
 impl DecodedTiles {
     pub fn new(destination: RgbSpace) -> Self {
@@ -261,6 +263,8 @@ impl DecodedTiles {
         self.transfer.prepare(device, space).cloned()
     }
     pub(crate) fn invalidate(&mut self) {for slot in &self.slots {slot.valid.store(false,Ordering::Release);}}
+    pub(crate) fn begin_unit(&mut self) { self.unit = Some(self.clock); self.overflowed = false; }
+    pub(crate) fn end_unit(&mut self) -> bool { self.unit = None; std::mem::take(&mut self.overflowed) }
     pub fn prepared_view(
         &self,
         source: &Arc<SourceImage>,
@@ -420,13 +424,14 @@ impl DecodedTiles {
             });
             id
         } else {
-            self.slots
+            let (index, slot) = self.slots
                 .iter()
                 .enumerate()
                 .filter(|(_, s)| Arc::strong_count(&s.lease) == 1)
                 .min_by_key(|(_, s)| s.used)
-                .ok_or(GpuRasterError::SourceWorkingSetExceeded)?
-                .0
+                .ok_or(GpuRasterError::SourceWorkingSetExceeded)?;
+            self.overflowed |= self.unit.is_some_and(|start| slot.used > start);
+            index
         };
         let slot = &mut self.slots[index];
         if slot.valid.load(Ordering::Acquire) { self.evictions += 1; }

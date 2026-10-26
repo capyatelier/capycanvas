@@ -387,7 +387,14 @@ uniform-record binding; changing page bindings contain only texture views. Sourc
 filter windows await prepared image tiles. The viewport uses those retained
 inputs until a complete composition publishes; its evaluated object revision advances with that publication. Completed
 internal regions remain valid through submitted retries and release copied
-private results. Discarded submissions still invalidate their cache writes. Jobs
+private results. A retry with unchanged artwork composes only the display
+regions the deferred frame left unfinished, and the publishing frame repaints
+every region the deferred frames composed. A region waiting for decodes splits
+into document pages: resident pages compose, and the rest request their tiles
+while the decode queue has room. Work that evicts a tile it already read
+needs more tiles than the decoded cache holds, so it splits for good: display
+regions into document pages, exact native batches in half. Exact native
+traversal keeps its direction until a traversal completes. Discarded submissions still invalidate their cache writes. Jobs
 that defer release their abandoned native scratch slots and material-page
 bindings before the next attempt. Completed GPU commands retain their resources;
 the reusable scratch pool does not grow with the number of cold retries.

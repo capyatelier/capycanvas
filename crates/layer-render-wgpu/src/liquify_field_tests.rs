@@ -604,7 +604,7 @@ fn fit_view_liquify_preview_matches_committed_display_and_cancel_restores_it() {
     fit.view.height_px=128;
     fit.view.document_to_surface=[0.125,0.,0.,0.125,0.,0.];
     for r in [&mut preview,&mut committed] {
-        crate::layer_tests::publish(r,FramePacket{reset_layers:true,..fit});
+        crate::test_support::submit_published(r,FramePacket{reset_layers:true,..fit});
     }
     let before=crate::scene::scale::tests::display_pixels(&preview);
     let mut contact=dab([0.;4]);
@@ -1063,7 +1063,7 @@ fn fit_amount_preview_keeps_authored_color_and_matches_full_resolution_commit() 
     placement::set_source(&mut doc,source.clone());
     let view=layer_render::ViewState{width_px:64,height_px:32,
         document_to_surface:[0.125,0.,0.,0.125,0.,0.]};
-    crate::layer_tests::publish(&mut fit,FramePacket{view,reset_layers:true,..crate::test_support::packet(doc.scene(),extent)});
+    crate::test_support::submit_published(&mut fit,FramePacket{view,reset_layers:true,..crate::test_support::packet(doc.scene(),extent)});
     let before=crate::scene::scale::tests::display_pixels(&fit);
     let target=placement::target(&doc);
     let colors=|r:&WgpuRasterizer|r.paint_layers.iter().find(|layer|layer.id==target).unwrap().pages.iter()

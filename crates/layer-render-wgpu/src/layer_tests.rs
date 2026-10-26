@@ -84,16 +84,6 @@ fn submit(
     crate::test_support::submit_ready(r, FramePacket { dabs, dab_batches: batches, reset_layers: reset, ..packet(scene, [128, 128]) })
     .unwrap();
 }
-pub(super) fn publish(r: &mut WgpuRasterizer, frame: FramePacket<'_>) {
-    crate::test_support::submit_ready(r, frame).unwrap();
-    for _ in 0..2000 {
-        if !r.object_deferred { return; }
-        r.wait_idle().unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(1));
-        crate::test_support::submit_ready(r, frame).unwrap();
-    }
-    assert!(!r.object_deferred, "deferred composition must publish");
-}
 fn pixel(r: &mut WgpuRasterizer, x: usize, y: usize) -> [u8; 4] {
     r.readback_srgb_rgba8().unwrap()[(y * 128 + x) * 4..][..4]
         .try_into()

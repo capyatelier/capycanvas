@@ -113,31 +113,38 @@ fn assert_threshold_pixels(r: &WgpuRasterizer, threshold: f32, offset: u8) {
     }
 }
 
+fn threshold_document(source: Arc<SourceImage>) -> (layer_core::Document, layer_core::authored::PaintHandle, layer_core::authored::EffectHandle, usize) {
+    use layer_core::{Document, DocumentNames, EffectInstance};
+    use layer_core::authored::*;
+    let extent = source.extent;
+    let mut doc = Document::new(PortableId::random(), extent[0], extent[1], DocumentNames { paint: "Ink".into(), paper: "Paper".into() });
+    let SourceTarget::Paint(paint) = doc.working.target.unwrap() else { unreachable!() };
+    doc.artwork.paint.get_mut(paint).unwrap().base = Some(PaintBase::new(source.into()));
+    let program = crate::tests::fixture("threshold").program();
+    let parameter = program.parameters.iter().position(|parameter| parameter.key.as_ref() == "threshold").unwrap();
+    let size = doc.composition().size;
+    let effect = doc.artwork.effects.insert(PortableId::random(), EffectApplication::new(program.clone(), EffectInstance::new(program).values, size)).unwrap();
+    let handle = doc.artwork.occurrences.insert(PortableId::random(), Occurrence::new(OccurrenceContent::Effect(effect), "Threshold")).unwrap();
+    let stack = doc.composition().result;
+    doc.artwork.stacks.get_mut(stack).unwrap().entries.insert(0, handle);
+    (Document::from_artwork(doc.artwork).unwrap(), paint, effect, parameter)
+}
+
+fn threshold_source(tiles: usize, offset: u8) -> Arc<SourceImage> {
+    layer_core::color::source::rgba8_source([tiles as u32 * PAGE_SIZE, PAGE_SIZE], |x, y| {
+        if x < 4 && y < 4 { let value = if (x + y) & 1 == 0 { 0 } else { 255 }; return [value, value, value, 255]; }
+        let id = (x / PAGE_SIZE) as u8 + offset;
+        [id.wrapping_mul(17), id.wrapping_mul(43).wrapping_add(61), id.wrapping_mul(97).wrapping_add(11), 255]
+    })
+}
+
 #[test]
 fn repeated_native_threshold_updates_reuse_an_oversized_decoded_working_set() {
-    use layer_core::{Document, DocumentNames, EffectInstance, EffectValue};
-    use layer_core::authored::*;
-    let threshold_source = |tiles: usize, offset: u8| {
-        layer_core::color::source::rgba8_source([tiles as u32 * PAGE_SIZE, PAGE_SIZE], |x, y| {
-            if x < 4 && y < 4 { let value = if (x + y) & 1 == 0 { 0 } else { 255 }; return [value, value, value, 255]; }
-            let id = (x / PAGE_SIZE) as u8 + offset;
-            [id.wrapping_mul(17), id.wrapping_mul(43).wrapping_add(61), id.wrapping_mul(97).wrapping_add(11), 255]
-        })
-    };
+    use layer_core::EffectValue;
     for capacity in [8, 16] {
         for tiles in [capacity + 1, capacity * 13 / 10 + 1] {
             let extent = [tiles as u32 * PAGE_SIZE, PAGE_SIZE];
-            let mut doc = Document::new(PortableId::random(), extent[0], extent[1], DocumentNames { paint: "Ink".into(), paper: "Paper".into() });
-            let SourceTarget::Paint(paint) = doc.working.target.unwrap() else { unreachable!() };
-            doc.artwork.paint.get_mut(paint).unwrap().base = Some(layer_core::authored::PaintBase::new((threshold_source(tiles, 0)).into()));
-            let program = crate::tests::fixture("threshold").program();
-            let parameter = program.parameters.iter().position(|parameter| parameter.key.as_ref() == "threshold").unwrap();
-            let size=doc.composition().size;
-            let effect=doc.artwork.effects.insert(PortableId::random(),EffectApplication::new(program.clone(),EffectInstance::new(program).values,size)).unwrap();
-            let handle = doc.artwork.occurrences.insert(PortableId::random(), Occurrence::new(OccurrenceContent::Effect(effect), "Threshold")).unwrap();
-            let stack = doc.composition().result;
-            doc.artwork.stacks.get_mut(stack).unwrap().entries.insert(0, handle);
-            let mut doc = Document::from_artwork(doc.artwork).unwrap();
+            let (mut doc, paint, effect, parameter) = threshold_document(threshold_source(tiles, 0));
             let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
             r.source_tiles.get_mut().limits.slots = capacity;
             let mut allocated = None;
@@ -147,7 +154,7 @@ fn repeated_native_threshold_updates_reuse_an_oversized_decoded_working_set() {
                 frame.view.width_px = extent[0] / 4; frame.view.height_px = extent[1] / 4;
                 frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
                 let before = r.source_cache_work();
-                crate::layer_tests::publish(&mut r, frame);
+                crate::test_support::submit_published(&mut r, frame);
                 let after = r.source_cache_work();
                 let work = [after[0] - before[0], after[1] - before[1]];
                 eprintln!("native source scan tiles={tiles} round={round} work={work:?}");
@@ -168,12 +175,12 @@ fn repeated_native_threshold_updates_reuse_an_oversized_decoded_working_set() {
             let composition = doc.artwork.root;
             doc.artwork.compositions.get_mut(composition).unwrap().size[0] = capacity as u32 * PAGE_SIZE;
             let frame = crate::test_support::packet(doc.scene(), doc.composition().size);
-            crate::layer_tests::publish(&mut r, frame);
+            crate::test_support::submit_published(&mut r, frame);
             assert_threshold_pixels(&r, 0.45, 64);
             doc.artwork.effects.get_mut(effect).unwrap().values[parameter] = EffectValue::Number(0.6);
             let frame = crate::test_support::packet(doc.scene(), doc.composition().size);
             let before = r.source_cache_work();
-            crate::layer_tests::publish(&mut r, frame);
+            crate::test_support::submit_published(&mut r, frame);
             let after = r.source_cache_work();
             assert_eq!(after[1], before[1], "a replacement set within capacity must be warm on its next update");
             assert_eq!(r.source_tiles.borrow().gpu_bytes(), allocated.unwrap());
@@ -486,4 +493,75 @@ fn a_later_display_allowance_admits_matching_source_residency() {
         assert!(r.source_tiles.get_mut().reserve_mips(budget, &encoder).unwrap());
     }
     assert_eq!(r.source_tiles.borrow().slot_limit(), MIN_DECODED_SLOTS);
+}
+
+#[test]
+fn exact_native_batches_reading_more_tiles_than_are_free_shrink_until_they_fit() {
+    let capacity = 8;
+    let tiles = 2 * capacity + 3;
+    let (doc, ..) = threshold_document(threshold_source(tiles, 0));
+    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    r.test.reference = true;
+    r.source_tiles.get_mut().limits.slots = capacity;
+    crate::test_support::submit_published(&mut r, crate::test_support::packet(doc.scene(), doc.composition().size));
+    assert!(r.scale_display.as_ref().unwrap().evaluation == crate::scene::scale::Evaluation::Native);
+    assert_eq!(r.source_tiles.borrow().slots.len(), capacity);
+    assert_threshold_pixels(&r, 0.5, 0);
+}
+
+#[test]
+fn native_threshold_larger_than_the_decoded_floor_publishes_every_page_once() {
+    let extent = [2560, 1792];
+    let (doc, ..) = threshold_document(layer_core::color::source::rgba8_source(extent, |x, y|
+        [(x / 7) as u8, (y / 5) as u8, ((x + y) / 3) as u8, 255]));
+    let render = |allowance| {
+        let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+        r.source_tiles.get_mut().admit(allowance);
+        let mut frame = crate::test_support::packet(doc.scene(), extent);
+        frame.view.width_px = extent[0] / 4; frame.view.height_px = extent[1] / 4;
+        frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
+        crate::test_support::submit_published(&mut r, frame);
+        r
+    };
+    let floor = render(0);
+    let reference = render(1 << 32);
+    let pages = page_coordinates(PixelRect::full(extent)).count() as u64;
+    assert!(floor.source_tiles.borrow().admitted_bytes()[0] < pages * FLOAT_TILE_BYTES);
+    assert!(reference.source_tiles.borrow().admitted_bytes()[0] > pages * FLOAT_TILE_BYTES);
+    let [floor_cache, reference_cache] = [&floor, &reference].map(|r| r.scale_display.as_ref().unwrap());
+    assert_eq!((floor_cache.plan.level, floor_cache.plan.bounds), (2, PixelRect::full(extent)));
+    let texels = floor_cache.plan.size.into_iter().map(u64::from).product::<u64>();
+    assert_eq!(floor.metrics.composited_pixels, texels, "resumed composition draws each output texel once");
+    assert_eq!(crate::test_support::float_pixels(&floor, floor_cache.texture()),
+        crate::test_support::float_pixels(&reference, reference_cache.texture()));
+}
+
+#[test]
+fn cold_native_threshold_frames_replan_only_unfinished_pages() {
+    let extent = [2560, 2048];
+    let (doc, ..) = threshold_document(layer_core::color::source::rgba8_source(extent, |x, y|
+        [(x / 7) as u8, (y / 5) as u8, ((x + y) / 3) as u8, 255]));
+    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    r.source_tiles.get_mut().admit(1 << 32);
+    let pages = page_coordinates(PixelRect::full(extent)).count() as u64;
+    let frame = crate::test_support::packet(doc.scene(), extent);
+    let idle = FramePacket { composite_all: false, ..frame };
+    let mut next = frame;
+    let mut deferred = 0;
+    loop {
+        let before = r.source_cache_work();
+        crate::test_support::submit_ready(&mut r, next).unwrap();
+        let after = r.source_cache_work();
+        if !r.object_deferred { break; }
+        let lookups = after[0] + after[1] - before[0] - before[1];
+        assert!(2 * lookups < pages, "deferred frame {deferred} looked up {lookups} of {pages} pages");
+        deferred += 1;
+        assert!(deferred < pages, "each deferred frame must finish the pages whose decodes arrived");
+        r.wait_idle().unwrap();
+        crate::test_support::settle_decodes(&mut r);
+        next = idle;
+    }
+    let plan = r.scale_display.as_ref().unwrap().plan;
+    assert_eq!((plan.level, plan.bounds), (0, PixelRect::full(extent)));
+    assert_eq!(r.metrics.composited_pixels, u64::from(extent[0]) * u64::from(extent[1]), "resumed composition draws each pixel once");
 }

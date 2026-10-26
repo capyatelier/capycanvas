@@ -404,6 +404,10 @@ pub(crate) struct Cache {
     streamed_sources: bool,
     hierarchy: Option<hierarchy::Hierarchy>,
     residency_checked: bool,
+    resume: Option<Vec<PixelRect>>,
+    split: bool,
+    native_batch: usize,
+    deferred_changed: PixelRect,
 }
 
 pub(crate) struct DisplayBackup {
@@ -789,6 +793,10 @@ impl Cache {
         };
         let unchanged = unchanged && old.transform == r.transform_preview;
         let reuse = unchanged && (old.reuse_output || !r.object_deferred);
+        if !unchanged || !r.object_deferred {
+            old.resume = None;
+            if let Some(overview) = &mut old.overview { overview.resume = None; }
+        }
         old.transform = r.transform_preview.clone();
         let hierarchy = old.hierarchy.take().filter(|c| old.plan.extent == plan.extent
             && (unchanged || !old.residency_checked || c.fits(r)));
@@ -871,6 +879,7 @@ impl Cache {
             reuse_output: false,
             overview, shifted: None, valid: BTreeSet::new(), refined: BTreeSet::new(), approximate: BTreeSet::new(), preparing: false, zoomed: false, exact_tile: None,
             unchanged: false, graph: Default::default(), transform: r.transform_preview.clone(),
+            resume: None, split: false, native_batch: SOURCE_SLOTS, deferred_changed: PixelRect::EMPTY,
         }
     }
     fn geometry(r: &WgpuRasterizer, plan: display_mips::Plan, coarse: u32) -> wgpu::Buffer {
@@ -1158,7 +1167,10 @@ impl Cache {
             r.telemetry.phase_end(10, encoding.encoder);
             crate::performance_trace::counter(c"Capy overview composition records", u64::from(encoding.commands.cursor - records));
             self.overview = Some(overview);
-            changed = changed.union(result?);
+            changed = match result {
+                Err(error) => { self.deferred_changed = changed; return Err(error); }
+                Ok(overview) => changed.union(overview),
+            };
         }
         self.present_half(r, packet, encoding.encoder)?;
         Ok(changed)
@@ -1184,15 +1196,25 @@ impl Cache {
         let root = self.graph.root.clone().expect("prepared composition graph");
         let reduced = root.source_domains(packet.scene)[0].clone();
         let input = input_plan(self.plan, packet.scene,Some(self.graph.objects()));
-        let invalid = tiles.map_or_else(|| Damage::from(dirty), |_| Damage::from_regions(r.document_damage.iter().copied()
-            .chain(r.transform_damage.iter().map(|&(target, region)|
-                brush_tiles::document_damage(packet.scene, target, region, packet.document_extent)))))
+        let resume = self.resume.take().filter(|_| self.unchanged && r.object_deferred);
+        let invalid = if resume.is_some() { Damage::EMPTY } else {
+            tiles.map_or_else(|| Damage::from(dirty), |_| Damage::from_regions(r.document_damage.iter().copied()
+                .chain(r.transform_damage.iter().map(|&(target, region)|
+                    brush_tiles::document_damage(packet.scene, target, region, packet.document_extent)))))
+        }
             .union(root.damage(&scene.scale_sources, self.plan))
             .union(match (&destination, r.vector_motion_region(packet.document_extent)) { (Destination::View, Some(region)) => self.motion_missing(region), _ => Damage::EMPTY })
             .union(match destination { Destination::View => Damage::from_regions(scene.scale_sources.exclusion_damage.iter().map(|bounds| bounds.in_frame(packet.document_extent))), _ => Damage::EMPTY });
         if objects || packet.scene.order().iter().any(|&owner| packet.scene.vector_layer(owner).is_some()) { self.valid.retain(|c| !invalid.intersects(page_rect(*c))); }
         self.refined.retain(|c| !invalid.intersects(page_rect(*c)));
-        let regions = invalid.update_regions(self.plan, &self.valid);
+        let regions = match resume {
+            Some(remaining) => {
+                let mut initialized = self.valid.clone();
+                initialized.extend(remaining.iter().flat_map(|region| page_coordinates(*region)));
+                remaining.into_iter().chain(invalid.update_regions(self.plan, &initialized)).collect()
+            }
+            None => invalid.update_regions(self.plan, &self.valid),
+        };
         let changed = regions.iter().fold(PixelRect::EMPTY, |a, b| a.union(*b));
         let prepared = self.prepared_regions(scene, packet, &destination);
         let required = if scene.scale_sources.reset { input.bounds.into() } else {
@@ -1256,50 +1278,93 @@ impl Cache {
         let (regions, prepared) = (pages(regions), pages(prepared));
         self.prepare_native_branches(scene, r, packet, &regions, input, &mut Encoding { encoder, commands })?;
         let mut root_compositions = Vec::new();
-        for region in regions {
+        let resumable = !matches!(destination, Destination::Navigator);
+        let split = |region: PixelRect| page_coordinates(region).map(move |page| page_rect(page).intersect(region));
+        let mut pending: std::collections::VecDeque<_> = if self.split { regions.into_iter().flat_map(split).collect() } else { regions.into() };
+        let mut deferred = Vec::new();
+        while let Some(region) = pending.pop_front() {
             let [x, y, width, height] = paint_transform::texel_rect(region.window_local(output_bounds), side);
             self.used.fill(false);
-            let mut compositor = Evaluator { cache: self, commands, scene, packet, r, encoder, region: region.into(), input, tiled, source_plans: &mut source_plans, root_compositions: &mut root_compositions, defer_root: root.required(region.into(), input).bounds() == region };
-            let root = compositor.cache.graph.root.clone().expect("prepared composition graph");
-            let output = compositor.evaluate_root(&root, matches!(destination, Destination::View))?;
-            let presentation = match &output {
-                Value::Placed(value) if finer.is_none() => {
-                    let coarse_level = source_coarse_level(value.plan);
-                    for level in [value.plan.level + 1, coarse_level] {
-                        compositor.scene.scale_sources.ensure_level(compositor.commands, compositor.r, compositor.encoder, value.id,
-                            display_mips::Plan::window(value.plan.extent, level, value.plan.bounds))?;
+            let queued = (commands.jobs.len(), root_compositions.len());
+            scene.decode_wait = false;
+            r.source_tiles.borrow_mut().begin_unit();
+            let placed = (|| -> Result<bool, GpuRasterError> {
+                let mut compositor = Evaluator { cache: &mut *self, commands: &mut *commands, scene: &mut *scene, packet, r: &mut *r, encoder: &mut *encoder, region: region.into(), input, tiled, source_plans: &mut source_plans, root_compositions: &mut root_compositions, defer_root: root.required(region.into(), input).bounds() == region };
+                let root = compositor.cache.graph.root.clone().expect("prepared composition graph");
+                let output = compositor.evaluate_root(&root, matches!(destination, Destination::View))?;
+                let presentation = match &output {
+                    Value::Placed(value) if finer.is_none() => {
+                        let coarse_level = source_coarse_level(value.plan);
+                        for level in [value.plan.level + 1, coarse_level] {
+                            compositor.scene.scale_sources.ensure_level(compositor.commands, compositor.r, compositor.encoder, value.id,
+                                display_mips::Plan::window(value.plan.extent, level, value.plan.bounds))?;
+                        }
+                        let next = compositor.scene.scale_sources.image(value.id, value.plan.level + 1).image.view.clone();
+                        let coarse = compositor.scene.scale_sources.image(value.id, coarse_level).image.view.clone();
+                        Some(Presentation::Placed(Placement { value: value.clone(), next, coarse, coarse_level }))
                     }
-                    let next = compositor.scene.scale_sources.image(value.id, value.plan.level + 1).image.view.clone();
-                    let coarse = compositor.scene.scale_sources.image(value.id, coarse_level).image.view.clone();
-                    Some(Presentation::Placed(Placement { value: value.clone(), next, coarse, coarse_level }))
+                    Value::Transform(source) if finer.is_none() => Some(Presentation::Mapped(compositor.r.transforms.as_ref().unwrap()
+                        .presentation(source.id, source.placement, compositor.r.target_extent(source.id), source.opacity, source.backdrop, source.encode)?)),
+                    _ => None,
+                };
+                compositor.cache.placed = presentation;
+                if compositor.cache.placed.is_some() { return Ok(true); }
+                let output = compositor.materialize(output, None)?;
+                assert!(matches!(output.slot(), Some(Slot::Root)));
+                if compositor.scene.object_results.needs_retirement() {
+                    compositor.commands.flush(compositor.r, compositor.encoder)?;
+                    compositor.scene.object_results.flush_retired(compositor.encoder);
                 }
-                Value::Transform(source) if finer.is_none() => Some(Presentation::Mapped(compositor.r.transforms.as_ref().unwrap()
-                    .presentation(source.id, source.placement, compositor.r.target_extent(source.id), source.opacity, source.backdrop, source.encode)?)),
-                _ => None,
-            };
-            compositor.cache.placed = presentation;
-            if compositor.cache.placed.is_some() {
-                self.output.clear(); self.used.clear(); self.refined.clear();
-                let changed = if matches!(self.placed, Some(Presentation::Mapped(_))) {
-                    self.valid.extend(page_coordinates(self.plan.bounds));
-                    changed
-                } else { self.valid.clear(); self.plan.bounds };
-                if matches!(self.pixels, hierarchy::Pixels::Window { .. }) { self.pixels = Default::default(); }
-                self.ready = true;
-                return Ok(changed);
+                Ok(false)
+            })();
+            let overflowed = r.source_tiles.borrow_mut().end_unit();
+            match placed {
+                Ok(false) => {}
+                Err(GpuRasterError::DeferredObjectWork) if resumable => {
+                    commands.jobs.truncate(queued.0);
+                    root_compositions.truncate(queued.1);
+                    if overflowed && !self.split {
+                        self.split = true;
+                        let rest: Vec<_> = pending.drain(..).collect();
+                        pending.extend(rest.into_iter().flat_map(split));
+                    }
+                    if scene.decode_wait && split(region).nth(1).is_some() {
+                        for piece in split(region).collect::<Vec<_>>().into_iter().rev() { pending.push_front(piece); }
+                    } else { deferred.push(region); }
+                    if !(scene.decode_wait && r.decode_queue_has_room()) { deferred.extend(pending.drain(..)); }
+                    continue;
+                }
+                Err(error) => return Err(error),
+                Ok(true) => {
+                    self.output.clear(); self.used.clear(); self.refined.clear();
+                    let changed = if matches!(self.placed, Some(Presentation::Mapped(_))) {
+                        self.valid.extend(page_coordinates(self.plan.bounds));
+                        changed
+                    } else { self.valid.clear(); self.plan.bounds };
+                    if matches!(self.pixels, hierarchy::Pixels::Window { .. }) { self.pixels = Default::default(); }
+                    self.ready = true;
+                    return Ok(changed);
+                }
             }
-            let output = compositor.materialize(output, None)?;
-            assert!(matches!(output.slot(), Some(Slot::Root)));
-            if compositor.scene.object_results.needs_retirement() {
-                compositor.commands.flush(compositor.r, compositor.encoder)?;
-                compositor.scene.object_results.flush_retired(compositor.encoder);
-            }
-            compositor.cache.valid.extend(page_coordinates(region));
+            self.valid.extend(page_coordinates(region));
             written = written.union(PixelRect::new(x, y, x + width, y + height));
             written_pixels += u64::from(width) * u64::from(height);
             written_regions += 1;
             r.metrics.composited_pixels += u64::from(width) * u64::from(height);
             r.metrics.frame_composited_pages.extend(page_coordinates(region).map(|coordinate| (self.plan.level, coordinate)));
+        }
+        let bounds = self.plan.bounds;
+        let document = |written: PixelRect| if written.is_empty() { written } else { PixelRect::new(
+            output_bounds.min_x() + written.min_x() * side, output_bounds.min_y() + written.min_y() * side,
+            output_bounds.min_x() + written.max_x() * side, output_bounds.min_y() + written.max_y() * side,
+        ).intersect(bounds) };
+        if !deferred.is_empty() {
+            commands.flush_root(scene, r, encoder, &mut root_compositions)?;
+            commands.flush(r, encoder)?;
+            self.reduce_output(r, encoder, written, commands)?;
+            self.deferred_changed = self.deferred_changed.union(document(written));
+            self.resume = Some(deferred);
+            return Err(GpuRasterError::DeferredObjectWork);
         }
         if let Some(halves) = self.graph.prepared.clone() {
             let halves: Vec<_> = halves.into_iter().filter(|half| self.graph.caches(half)).collect();
@@ -1351,10 +1416,8 @@ impl Cache {
             self.reduce_output(r, encoder, written, commands)?;
             r.telemetry.phase_end(phase, encoder);
         }
-        Ok(if written.is_empty() { written } else { PixelRect::new(
-            output_bounds.min_x() + written.min_x() * side, output_bounds.min_y() + written.min_y() * side,
-            output_bounds.min_x() + written.max_x() * side, output_bounds.min_y() + written.max_y() * side,
-        ).intersect(self.plan.bounds) })
+        self.resume = Some(Vec::new());
+        Ok(document(written).union(std::mem::take(&mut self.deferred_changed)))
     }
 
     fn copy_shifted(&mut self, r: &WgpuRasterizer, encoder: &mut crate::submission::CommandEncoder) -> PixelRect {

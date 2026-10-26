@@ -276,16 +276,14 @@ fn attached_pointwise_alpha_filters_update_only_changed_contact_regions() {
             frame.composite_all = false;
             frame.view.document_to_surface = [scale, 0., 0., scale, 0., 0.];
             let deadline = std::time::Instant::now() + READBACK_TIMEOUT;
-            let mut work = 0;
             crate::test_support::submit_ready(&mut r, frame).unwrap();
             while r.object_deferred {
                 assert!(std::time::Instant::now() < deadline, "cold composition must publish");
-                work = r.metrics.composited_pixels;
                 r.wait_idle().unwrap();
                 crate::test_support::submit_ready(&mut r, frame).unwrap();
             }
             let plan = r.scale_display.as_ref().unwrap().plan;
-            assert_eq!(r.metrics.composited_pixels - work, plan.size.into_iter().map(u64::from).product::<u64>(), "cold output must initialize every pixel");
+            assert_eq!(r.metrics.composited_pixels, plan.size.into_iter().map(u64::from).product::<u64>(), "cold output must initialize every pixel once");
             assert_eq!(r.scale_display.as_ref().unwrap().preview_level(&r, frame, paint,false), 0);
             if level > 0 { assert!(r.scene.as_ref().unwrap().scale_sources.entries[&paint].levels.is_empty()); }
             let work = r.metrics.composited_pixels;

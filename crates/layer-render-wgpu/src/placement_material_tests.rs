@@ -219,7 +219,7 @@ fn perceptual_low_zoom_sparse_material_keeps_dry_photo_pixels_across_halo_page_e
         frame.view.width_px = 512;
         frame.view.height_px = 512;
         frame.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
-        crate::layer_tests::publish(r, frame);
+        crate::test_support::submit_published(r, frame);
     }
     let a = actual.scale_display.as_ref().unwrap();
     let b = expected.scale_display.as_ref().unwrap();
@@ -542,7 +542,7 @@ fn moving_watercolor_crosses_identity_without_rebuilding_the_photo_source() {
                 document_to_surface: [0.125, 0., 0., 0.125, 64., 48.] },
             ..packet(scene, extent)
         };
-        crate::layer_tests::publish(&mut moving, frame(original.scene()));
+        crate::test_support::submit_published(&mut moving, frame(original.scene()));
         let (texture, updates, level) = moving.scene.as_ref().unwrap().placement_cache(target(&original)).unwrap();
         if let Some((first_texture, previous_updates, first_level)) = &mut prepared {
             assert_eq!(&texture, first_texture, "crossing identity keeps the raw photo LOD allocation");
@@ -554,7 +554,7 @@ fn moving_watercolor_crosses_identity_without_rebuilding_the_photo_source() {
             assert!(updates >= 64, "the fixture must prepare a complete 64-page photo source");
             prepared = Some((texture, updates, level));
         }
-        crate::layer_tests::publish(&mut oracle, FramePacket { reset_layers: true, ..frame(expected.scene()) });
+        crate::test_support::submit_published(&mut oracle, FramePacket { reset_layers: true, ..frame(expected.scene()) });
         let actual = crate::scene::scale::tests::display_pixels(&moving);
         let expected = crate::scene::scale::tests::display_pixels(&oracle);
         assert_eq!(actual.len(), expected.len());
@@ -569,8 +569,8 @@ fn moving_watercolor_crosses_identity_without_rebuilding_the_photo_source() {
     let mut frame = packet(original.scene(), extent);
     frame.blend_space = layer_core::BlendSpace::Perceptual;
     frame.view.document_to_surface = [0.125, 0., 0., 0.125, 64., 48.];
-    crate::layer_tests::publish(&mut moving, frame);
-    crate::layer_tests::publish(&mut oracle, FramePacket { reset_layers: true, ..frame });
+    crate::test_support::submit_published(&mut moving, frame);
+    crate::test_support::submit_published(&mut oracle, FramePacket { reset_layers: true, ..frame });
     assert_eq!(crate::scene::scale::tests::display_pixels(&moving),
         crate::scene::scale::tests::display_pixels(&oracle), "Cancel restores the ordinary identity rendering");
 }
@@ -588,7 +588,7 @@ fn accepted_photo_keeps_raw_lod_for_sparse_watercolor_and_transform_reopen() {
         frame.view.width_px = 640;
         frame.view.height_px = 480;
         frame.view.document_to_surface = [0.125, 0., 0., 0.125, 64., 48.];
-        crate::layer_tests::publish(r, frame);
+        crate::test_support::submit_published(r, frame);
     };
     let parity = |r: &WgpuRasterizer, layer: &Document, moving: bool| {
         let mut fresh = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
@@ -667,12 +667,12 @@ fn accepted_photo_keeps_raw_lod_for_sparse_watercolor_and_transform_reopen() {
     let mut frame = packet(photo.scene(), extent);
     frame.blend_space = layer_core::BlendSpace::Linear;
     frame.view.document_to_surface = [0.125, 0., 0., 0.125, 64., 48.];
-    crate::layer_tests::publish(&mut appearance, frame);
+    crate::test_support::submit_published(&mut appearance, frame);
     let (_, _, appearance_level) = appearance.scene.as_ref().unwrap().placement_cache(target(&photo)).unwrap();
     assert!(appearance.scene.as_ref().unwrap().reduced_layer(&appearance, photo.scene(), target(&photo), extent, appearance_level).is_none(),
         "linear watercolor appearance must never become the transform's original raw pigment");
     appearance.prepare_moving_layer(Some(occurrence_id(&photo)));
-    crate::layer_tests::publish(&mut appearance, frame);
+    crate::test_support::submit_published(&mut appearance, frame);
     let (_, _, pigment_level) = appearance.scene.as_ref().unwrap().placement_cache(target(&photo)).unwrap();
     assert!(appearance.scene.as_ref().unwrap().reduced_layer(&appearance, photo.scene(), target(&photo), extent, pigment_level).is_some(),
         "a complete raw pigment LOD remains eligible for reduced transforms");
