@@ -159,7 +159,7 @@ private struct PropertyField: View {
                 Text(label).lineLimit(1)
                 EditorChoice(label: label, options: control["kind"]["options"].array.map(\.string),
                     selected: Int(value.uint), identifier: "property-" + key,
-                    background: EditorPalette(source: store.state["palette"])["input"], height: store.panelMetrics.height) { change($0, revision: revision) }
+                    background: EditorPalette(source: store.state["palette"]).controlFill, height: store.panelMetrics.height) { change($0, revision: revision) }
             }
         case "color":
             HStack(spacing: store.panelMetrics.spacing) {

@@ -47,7 +47,7 @@ in the table is transformed per channel using the same rule as a grey.
 | Main text and monochrome icons | `#fafafb` | `#2e2e32` | Fixed per mode |
 | Secondary text, headings, shortcut hints | Main text at 55–65% opacity | Same | Keep opacity; effective pixel color changes with the surface |
 | Android settings secondary text | `#bcbcbc` | `#666666` | Fixed per mode |
-| Unselected radio, segment and dropdown faces (`control_fill`) | Text at 6% over the local surface | Text at 16% over the local surface | Shared RGBA overlay; Apple and Web bind the palette role |
+| Unselected radio, segment and dropdown faces (`control_fill`) | Text at 6% over the local surface | Text at 16% over the local surface | Shared RGBA overlay; Apple panel choices, toolbar choices and Web bind the palette role |
 | Plain button fill | White at 13/255 alpha | Black at 13/255 alpha | Keep overlay |
 | Hover / pressed controls | Text at 8% / 16% over local surface | Same | Keep overlay, recomposite |
 | Search field, text fields on a dialog surface, selected preferences category, dialog close background | Text at 10% | Same | Keep overlay; fields inside cards and on panels use the input background |

@@ -59,7 +59,7 @@ struct GradientEditor: View {
                 let modes = gradient["interpolations"].array
                 EditorChoice(label: gradient["interpolation_label"].string, options: modes.map { $0[1].string },
                     selected: modes.firstIndex { $0[0].string == control["value"]["value"]["interpolation"].string } ?? 0,
-                    identifier: identifier + "-interpolation", background: palette["input"], height: store.panelMetrics.height) {
+                    identifier: identifier + "-interpolation", background: palette.controlFill, height: store.panelMetrics.height) {
                     edit(["kind": "interpolation", "value": modes[$0][0].raw])
                 }.frame(maxWidth: .infinity)
                 action("flip-horizontal", gradient["reverse_label"].string, "reverse") {

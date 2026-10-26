@@ -119,7 +119,7 @@ struct LayerPanel: View {
             HStack(spacing: store.panelMetrics.spacing) {
                 let blends = store.catalog["layer_blends"].array.map(\.string)
                 EditorChoice(label: store.catalog["native_copy"]["layers"]["blend"].string, options: blends,
-                    selected: blends.firstIndex(of: current["blend_label"].string) ?? -1, identifier: "layer-blend", background: palette["input"], presentation: .layerMenu, height: store.panelMetrics.height,
+                    selected: blends.firstIndex(of: current["blend_label"].string) ?? -1, identifier: "layer-blend", background: palette.controlFill, presentation: .layerMenu, height: store.panelMetrics.height,
                     menu: { [store, id = current["id"].raw] show in
                         store.query(["type": "layer_blend_menu", "id": id]) { menu in
                             if !menu.isNull { show(AppleContextMenu(menu) { store.dispatch($0) }) }

@@ -315,13 +315,13 @@ private struct PickerSettingsRows: View {
         VStack(alignment:.leading,spacing:store.panelMetrics.spacing) {
             PropertyChoiceRow(labelWidth:store.panelLabelWidth(labels)) {
                 Text(labels[0]).lineLimit(1)
-                EditorChoice(label:labels[0],options:source,selected:picker["layer"].bool ? 1 : 0,identifier:"picker-setting-source",background:EditorPalette(source:store.state["palette"])["input"],height:store.panelMetrics.height) {
+                EditorChoice(label:labels[0],options:source,selected:picker["layer"].bool ? 1 : 0,identifier:"picker-setting-source",background:EditorPalette(source:store.state["palette"]).controlFill,height:store.panelMetrics.height) {
                     store.dispatch(["type":"color_picker","action":["kind":"source","layer":$0==1]])
                 }
             }
             PropertyChoiceRow(labelWidth:store.panelLabelWidth(labels)) {
                 Text(labels[1]).lineLimit(1)
-                EditorChoice(label:labels[1],options:sizes.map { width in copy["sizes"].array.first { $0[0].uint==width }?[1].string ?? "" },selected:sizes.firstIndex(of:picker["sample_width"].uint) ?? 0,identifier:"picker-setting-size",background:EditorPalette(source:store.state["palette"])["input"],height:store.panelMetrics.height) {
+                EditorChoice(label:labels[1],options:sizes.map { width in copy["sizes"].array.first { $0[0].uint==width }?[1].string ?? "" },selected:sizes.firstIndex(of:picker["sample_width"].uint) ?? 0,identifier:"picker-setting-size",background:EditorPalette(source:store.state["palette"]).controlFill,height:store.panelMetrics.height) {
                     store.dispatch(["type":"set_color_sample_size","width":sizes[$0]])
                 }
             }
