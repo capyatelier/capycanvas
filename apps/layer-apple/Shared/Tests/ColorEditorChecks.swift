@@ -44,9 +44,19 @@ extension XCTestCase {
         return (Int(data[0]), Int(data[1]), Int(data[2]))
     }
     @MainActor func colorValueText(_ name: String, in app: XCUIApplication) -> String {
+        let entry = app.textFields["color-entry-" + name]
         let value = app.descendants(matching: .any)["color-value-" + name].firstMatch
-        guard value.waitForExistence(timeout: 10) else { XCTFail("The color value must remain available"); return "" }
-        return value.value as? String ?? ""
+        var text: String?
+        let available = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            if entry.exists { text = entry.value as? String }
+            else if value.exists { text = value.value as? String }
+            else { text = nil }
+            return text != nil
+        }, object: app)
+        guard XCTWaiter.wait(for: [available], timeout: 10) == .completed else {
+            XCTFail("The color value must remain available"); return ""
+        }
+        return text ?? ""
     }
     @MainActor func checkEditColor(in app: XCUIApplication, theme: String) {
         app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"\#(theme)"},{"type":"set_color","rgba":[0.2,0.45,0.8,1]},{"type":"invoke","command":"select_all"},{"type":"invoke","command":"fill_selection"},{"type":"invoke","command":"deselect"},{"type":"set_color","rgba":[0.9,0.1,0.1,1]}]"#

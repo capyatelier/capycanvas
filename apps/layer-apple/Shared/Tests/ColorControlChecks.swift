@@ -104,7 +104,7 @@ extension XCTestCase {
     }
 
     @MainActor func checkPaintColorMenu(in app: XCUIApplication, theme: String) {
-        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"\#(theme)"},{"type":"customize","action":{"type":"set_panel_visible","panel":"color","visible":true}},{"type":"color","action":{"op":"select","slot":"background"}},{"type":"set_color","rgba":[0,0,1,1]},{"type":"color","action":{"op":"select","slot":"foreground"}},{"type":"set_color","rgba":[1,0,0,1]}]"#
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"\#(theme)"},{"type":"customize","action":{"type":"set_panel_visible","panel":"color","visible":true}},{"type":"customize","action":{"type":"set_panel_visible","panel":"palettes","visible":false}},{"type":"color","action":{"op":"select","slot":"background"}},{"type":"set_color","rgba":[0,0,1,1]},{"type":"color","action":{"op":"select","slot":"foreground"}},{"type":"set_color","rgba":[1,0,0,1]}]"#
         app.launchEnvironment["CAPY_COLOR_PROBE"] = "1"
         app.launch()
         let wheel = app.descendants(matching: .any)["color-wheel"].firstMatch
@@ -119,42 +119,55 @@ extension XCTestCase {
             let result = XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: predicate, object: wheel)], timeout: 10)
             XCTAssertEqual(result, .completed, "\(message); accepted state: \(String(describing: wheel.value))")
         }
-        func choose(_ swatch: XCUIElement, _ identifier: String, _ label: String, capture: String? = nil) {
+        func choose(_ swatch: XCUIElement, _ label: String, capture: String? = nil) {
             #if os(macOS)
             colorControlPoint(swatch, in: app).rightClick()
             let item = app.menuItems[label]
             #else
             colorControlPoint(swatch, in: app).press(forDuration: 0.8)
-            let item = app.buttons[identifier]
+            let item = app.buttons["menu-action-" + label]
             #endif
             XCTAssertTrue(item.waitForExistence(timeout: 5), "The paint color menu offers \(label)")
             if let capture { attachEditor(in: app, name: capture) }
             item.clickOrTap()
         }
-        func cancelEditor(_ message: String) {
+        func expectEditor(_ hex: String, _ message: String) {
             XCTAssertTrue(use.waitForExistence(timeout: 10), message)
+            XCTAssertEqual(colorValueText("hex", in: app).uppercased(), hex, "The editor opens the requested paint color")
+        }
+        func cancelEditor(_ hex: String, _ message: String) {
+            expectEditor(hex, message)
             workspaceActivate(app.buttons["color-cancel"])
             XCTAssertTrue(use.waitForNonExistence(timeout: 10))
         }
         XCTAssertTrue(wheel.waitForExistence(timeout: 30))
         expect([1, 0, 0, 1], selected: foreground, "The foreground paint starts selected")
-        choose(foreground, "color-swap-menu", "Swap foreground and background", capture: "paint-color-menu-\(theme)")
+        choose(foreground, "Swap foreground and background", capture: "paint-color-menu-\(theme)")
         expect([0, 0, 1, 1], selected: foreground, "Swap exchanges the paint colors and keeps the selection")
-        choose(background, "color-edit-menu", "Edit Color…")
-        cancelEditor("Edit Color… opens the color editor")
-        expect([1, 0, 0, 1], selected: background, "Edit Color… selects the color it edits")
+        choose(background, "Edit Color…")
+        cancelEditor("#FF0000", "Edit Color… opens the requested background color")
+        expect([0, 0, 1, 1], selected: foreground, "Opening and cancelling background Edit Color… preserves foreground paint")
         #if os(macOS)
         colorControlPoint(foreground, in: app).doubleClick()
         #else
         colorControlPoint(foreground, in: app).doubleTap()
         #endif
-        cancelEditor("Double-clicking a paint color opens the color editor")
-        expect([0, 0, 1, 1], selected: foreground, "Double-clicking selects the color it edits")
+        cancelEditor("#0000FF", "Double-clicking the selected foreground opens its color editor")
+        expect([0, 0, 1, 1], selected: foreground, "Cancelling the selected foreground's double-click editor preserves paint")
+        colorControlPoint(background, in: app).clickOrTap()
+        expect([1, 0, 0, 1], selected: background, "The background paint is selected before editing foreground")
+        choose(foreground, "Edit Color…")
+        expectEditor("#0000FF", "Foreground Edit Color… opens while background paint is selected")
+        workspaceActivate(use)
+        XCTAssertTrue(use.waitForNonExistence(timeout: 10))
+        expect([0, 0, 1, 1], selected: foreground, "Applying foreground Edit Color… activates the edited slot")
         let palettes = app.buttons["panel-tab-palettes"]
-        XCTAssertFalse(palettes.isSelected)
-        choose(background, "color-library-menu", "Palettes…")
+        XCTAssertFalse(palettes.exists)
+        choose(background, "Palettes…")
         expectation(for: NSPredicate(format: "selected == YES"), evaluatedWith: palettes)
         waitForExpectations(timeout: 10)
+        workspaceActivate(app.buttons["panel-tab-color"])
+        expect([1, 0, 0, 1], selected: background, "Palettes… selects the requested background paint without changing its color")
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)
     }
 
