@@ -748,8 +748,12 @@ function Test-PaperColorReopen {
 function New-FocusedDrawing {
     Open-NewDrawing
     Pick-Choice 'new-drawing-unit' (Value-Index (Drawing).units 'px')
+    Wait-Until {$view=Drawing;$view.setup.unit -eq 'px' -and (Field-Value 'document-width') -eq $view.values[0]} 'Focused drawing did not apply pixels'
     if((Drawing).linked){Press 'new-drawing-link';Wait-Until {!(Drawing).linked} 'Focused drawing did not unlink its dimensions'}
-    Type-Text 'document-width' '128' -Commit;Type-Text 'document-height' '96' -Commit
+    Type-Text 'document-width' '128' -Commit
+    Wait-Until {(Drawing).values[0] -eq 128 -and (Field-Value 'document-width') -eq 128} 'Focused drawing did not apply its width'
+    Type-Text 'document-height' '96' -Commit
+    Wait-Until {(Drawing).values[1] -eq 96 -and (Field-Value 'document-height') -eq 96} 'Focused drawing did not apply its height'
     Type-Text 'new-drawing-name' 'Workflow study'
     Wait-Until {(Drawing).name -eq 'Workflow study' -and (Drawing).values[0] -eq 128 -and (Drawing).values[1] -eq 96} 'Focused drawing setup did not acknowledge its values'
     $count=@((Model).windows_tabs.tabs).Count;Press 'new-drawing-create'

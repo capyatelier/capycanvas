@@ -1,5 +1,5 @@
-param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme='dark',[ValidateSet('all','diagnostics-fps','diagnostics-fps-light')][string]$Journey='all')
-if($Journey -eq 'diagnostics-fps-light'){$Journey='diagnostics-fps';$Theme='light'}
+param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme='dark',[ValidateSet('all','diagnostics-fps','diagnostics-fps-light','panels','panels-light')][string]$Journey='all')
+if($Journey.EndsWith('-light')){$Journey=$Journey.Substring(0,$Journey.Length-6);$Theme='light'}
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
@@ -165,6 +165,14 @@ try{
     [CapyRowPointer]::Initialize([uint32]$review.Id)
     $ids=@('file','edit','image','layer','select','filter','view','window')
     $scale=[CapyWorkspaceHeader]::GetDpiForWindow($drawing.Handle)/96.
+    if($Journey -eq 'panels'){
+        Check-PresetGroups
+        Assert-RendererHealthy $review.Id $drawing
+        & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close -DiscardUnsaved
+        if((Get-Item -LiteralPath $stderr).Length){throw 'Native stderr requires inspection'}
+        [pscustomobject]@{theme=$Theme;journey=$Journey;preset_grouping_native_bounds_tabs_and_reload='passed';document_and_history='unchanged';zero_exit='passed';run=$run}|ConvertTo-Json
+        return
+    }
     if($Journey -eq 'all'){
     Check-PresetGroups
     foreach($size in @(@{width=744;compact=$true},@{width=1200;compact=$false},@{width=744;compact=$true})){
