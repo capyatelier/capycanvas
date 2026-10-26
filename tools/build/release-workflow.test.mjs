@@ -56,11 +56,11 @@ test("logging cannot hide a failed validation command", () => {
   assert.match(job(checks, "windows"), /    defaults:\n      run:\n        shell: pwsh/);
 });
 
-test("dry-run success permits only the intentionally skipped store jobs", () => {
+test("release success permits only the jobs skipped by the selected mode", () => {
   const gate = job(release, "summary").split("      - name: Require successful checks and packages")[1]
     .match(/python3 - <<'PYCODE'\n([\s\S]*?)\n          PYCODE/)[1].replace(/^          /gm, "");
   const results = Object.fromEntries(["version", "checks", ...platforms, "android-publish", "ipad-publish"].map(name => [name, { result: "success" }]));
-  const run = signed => spawnSync(process.env.PYTHON ?? "python3", ["-c", gate], { env: { ...process.env, SIGNED: String(signed), RESULTS: JSON.stringify(results) }, encoding: "utf8" });
+  const run = (signed, windowsOnly = false) => spawnSync(process.env.PYTHON ?? "python3", ["-c", gate], { env: { ...process.env, SIGNED: String(signed), WINDOWS_PACKAGES_ONLY: String(windowsOnly), RESULTS: JSON.stringify(results) }, encoding: "utf8" });
   assert.equal(run(true).status, 0);
   results["android-publish"].result = results["ipad-publish"].result = "skipped";
   assert.equal(run(false).status, 0);
@@ -69,4 +69,13 @@ test("dry-run success permits only the intentionally skipped store jobs", () => 
     results.checks.result = result;
     assert.equal(run(false).status, 1, result);
   }
+  for (const name of ["checks", ...platforms.filter(name => name !== "windows")]) results[name].result = "skipped";
+  assert.equal(run(false, true).status, 0);
+  assert.equal(run(false).status, 1);
+  for (const name of ["version", "windows"])
+    for (const result of ["failure", "cancelled", "skipped"]) {
+      results[name].result = result;
+      assert.equal(run(false, true).status, 1, `${name}: ${result}`);
+      results[name].result = "success";
+    }
 });

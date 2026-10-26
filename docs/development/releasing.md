@@ -95,6 +95,12 @@ GitHub Release. No release-environment approval is needed for a dry run.
 Use a revision containing this dry-run workflow: older tags execute their
 historical workflow, whose manual tag dispatch could publish.
 
+For Windows package checks, use `gh workflow run release.yml -f windows-packages-only=true -f source_ref=<full-commit-sha>`.
+That mode builds the existing x64 and ARM64 portable ZIP, installer and MSIX
+packages. It records the selected source revision separately from the workflow
+revision. Run the Windows release checks and native journeys separately; the
+package-only summary requires the version and Windows package jobs to pass.
+
 Require the **Release dry run** to succeed and inspect its job summary. Download
 `release-report` for the commit, job outcomes and `SHA256SUMS`; package artifacts
 end in `-package`, and `ipad-archive` contains the unsigned device archive. Test
