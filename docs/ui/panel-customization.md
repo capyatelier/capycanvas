@@ -556,15 +556,19 @@ selects its tab on release. Hold-to-drag tiles yield before their hold arms.
 Double-clicking or double-tapping in a column edge's reach resets its owner to
 its preferred width, except on buttons, rows and swipe controls.
 
-Rust owns ownership (`DockLayout::divider_column`, published as
-`Divider::owner_side`), reach (`ResolvedLayout::edge_grab_at`, `edge_reset_at`),
-recognition (`EdgeGrab::track`) and catch-up (`EdgeGrab::position`). Hosts
-classify the control under the contact as free, a pickup that keeps sideways
-swipes, or a swipe control (`EdgeContact`), capture it once Rust claims it,
-dispatch the claimed `EdgeTarget` as its ordinary divider or floating resize
-drag and advance the catch-up on their frame clock. GTK implements this; Web,
-Android, Apple and Windows still use only the thin handles, but share the
-ownership, collapse and stack rules.
+Rust owns the whole gesture. `DockLayout::divider_column` decides ownership,
+published as `Divider::owner_side`, and one owner model in the session turns
+each pointer position into the owner's width and its open or closed state.
+Hosts forward each contact that starts on chrome or, for touch, the canvas as
+`UiInput::EdgeContact` with the control's class: free, a pickup that keeps
+sideways swipes, or a swipe control (`EdgeContact`). The reply asks them to
+withhold motion from the controls beneath (`edge_hold`), to select a pressed
+tab on release (`edge_select_on_release`), or to capture the contact and show a
+resize pointer (`edge_cursor`); the session then drives the handle's drag and
+advances the catch-up in `frame`. A native double press in the reach sends
+`UiInput::EdgeDoublePress`. GTK implements this; Web, Android, Apple and Windows
+still use only the thin handles, but share the ownership, collapse and stack
+rules.
 
 [Stacked columns](stacked-columns.md) replace the former Group panel mode. Each
 stack contains complete collapsed columns and owns “Open individual panels” and

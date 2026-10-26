@@ -40,6 +40,47 @@ pub struct CollapsedColumnPlacement {
     pub groups: Vec<CollapsedGroup>,
     pub open: Option<OpenColumn>,
 }
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum EdgeOwner {
+    Column(u32),
+    Member(u32),
+    Stack(u32),
+}
+impl EdgeOwner {
+    pub fn root(self) -> u32 {
+        match self {
+            Self::Column(id) | Self::Member(id) | Self::Stack(id) => id,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct OwnerResize {
+    pub owner: EdgeOwner,
+    sign: f32,
+    closed_edge: f32,
+    outer: f32,
+    close_at: f32,
+    pub hold: f32,
+    pub caught: bool,
+    pub reopen_width: f32,
+    pub cross: f32,
+}
+impl OwnerResize {
+    fn width(self, x: f32) -> f32 {
+        (x - self.outer) * self.sign - WORKSPACE_SPACING * 0.5
+    }
+    pub fn closes(self, x: f32) -> bool {
+        if self.caught { self.width(x) <= self.close_at } else { (x - self.closed_edge) * self.sign < TILE_SIZE }
+    }
+    pub fn catches(self, x: f32) -> bool {
+        self.width(x) >= self.hold
+    }
+    pub fn opened_from(self, source: Self) -> Self {
+        Self { caught: source.caught, closed_edge: source.closed_edge, cross: source.cross, hold: source.hold, reopen_width: source.reopen_width, ..self }
+    }
+}
+
 impl CollapsedColumnPlacement {
     pub(crate) fn prepend_group_drop_hint(&self, point: [f32; 2]) -> Option<DropHint> {
         let first = self.groups.first()?;
@@ -908,53 +949,55 @@ impl DockLayout {
         self.node(column).map_or(128., |node| expanded_node_width(node, self, DockLayout::group_preferred_width).clamp(128., 800.))
     }
 
-    pub(crate) fn close_at_open_divider(&self, geometry: &ResolvedLayout, id: u32, position: [f32; 2], viewport_width: f32) -> Option<ResizeCollapse> {
-        let column = geometry.open_column_at_divider(id)?;
-        let open = geometry.collapsed.iter().find_map(|c| c.open.as_ref().filter(|o| o.column == column))?;
-        let reversed = open.direction == Edge::Left;
-        let collapse = ResizeCollapse {
-            root: column,
-            expanded_width: self.expanded_column_width(column, viewport_width),
-            origin: if reversed {
-                open.bounds.x + open.bounds.width - WORKSPACE_SPACING * 0.5
-            } else {
-                open.bounds.x + WORKSPACE_SPACING * 0.5
-            },
-            reversed,
-            minimum: self.open_column_minimum(column),
-            member: true,
-        };
-        collapse.contains(position[0]).then_some(collapse)
-    }
-
-    pub(crate) fn collapse_at_divider(
-        &self,
-        id: u32,
-        position: [f32; 2],
-        viewport: [f32; 2],
-    ) -> Option<ResizeCollapse> {
-        let geometry = self.resolved(viewport);
-        let divider = geometry.dividers.iter().find(|d| d.id == id)?;
-        let (column, edge) = self.divider_column(divider)?;
-        let node = self.node(column)?;
-        if self.is_collapsed(column) || !node.has_content() {
+    pub(crate) fn owner_resize(&self, divider: &Divider, geometry: &ResolvedLayout, cross: f32) -> Option<OwnerResize> {
+        if divider.axis != Axis::Horizontal {
             return None;
         }
-        let bounds = subtree_bounds(node, &geometry)?;
-        let reversed = edge == Edge::Right;
-        let collapse = ResizeCollapse {
-            root: column,
-            expanded_width: bounds.width,
-            origin: if reversed {
-                bounds.x + bounds.width - WORKSPACE_SPACING * 0.5
+        if let Some(member) = geometry.open_column_at_divider(divider.id) {
+            let open = geometry.collapsed.iter().find_map(|c| c.open.as_ref().filter(|o| o.column == member))?;
+            let sign = if open.direction == Edge::Left { -1. } else { 1. };
+            let outer = if sign > 0. { open.bounds.x } else { open.bounds.x + open.bounds.width };
+            return Some(OwnerResize {
+                owner: EdgeOwner::Member(member),
+                sign,
+                closed_edge: outer - sign * WORKSPACE_SPACING * 0.5,
+                outer,
+                close_at: (self.open_column_minimum(member) - COLUMN_COLLAPSE_DISTANCE).max(TILE_SIZE),
+                hold: 0.,
+                caught: true,
+                reopen_width: open.bounds.width,
+                cross,
+            });
+        }
+        let (column, edge) = self.divider_column(divider)?;
+        let node = self.node(column)?;
+        let bounds = subtree_bounds(node, geometry)?;
+        let sign = if edge == Edge::Left { 1. } else { -1. };
+        let collapsed = self.is_collapsed(column);
+        Some(OwnerResize {
+            owner: if collapsed && self.column_stack(column).members.len() > 1 { EdgeOwner::Stack(column) } else { EdgeOwner::Column(column) },
+            sign,
+            closed_edge: divider.bounds.x + divider.bounds.width * 0.5,
+            outer: if sign > 0. { bounds.x } else { bounds.x + bounds.width },
+            close_at: if node.has_content() {
+                (tab_preferred_width(node, self).max(ribbon_preferred_width(node, Axis::Vertical, divider.parent.height, self))
+                    - COLUMN_COLLAPSE_DISTANCE).max(TILE_SIZE)
             } else {
-                bounds.x + WORKSPACE_SPACING * 0.5
+                f32::NEG_INFINITY
             },
-            reversed,
-            minimum: tab_preferred_width(node, self).max(ribbon_preferred_width(node, Axis::Vertical, divider.parent.height, self)),
-            member: false,
-        };
-        collapse.contains(position[0]).then_some(collapse)
+            hold: 0.,
+            caught: !collapsed,
+            reopen_width: bounds.width,
+            cross,
+        })
+    }
+
+    pub(crate) fn owner_open(&self, owner: EdgeOwner) -> bool {
+        match owner {
+            EdgeOwner::Column(column) => !self.is_collapsed(column),
+            EdgeOwner::Member(member) => self.open_stack_column(self.column_stack(member).column) == Some(member),
+            EdgeOwner::Stack(_) => false,
+        }
     }
 
     pub(super) fn validate_columns(&self) -> Result<(), String> {
@@ -1376,6 +1419,12 @@ mod tests {
         layout.validate().unwrap();
     }
 
+    fn closes_column(layout: &DockLayout, id: u32, point: [f32; 2]) -> Option<u32> {
+        let geometry = layout.resolved(VIEW);
+        let divider = geometry.dividers.iter().find(|d| d.id == id)?;
+        layout.owner_resize(divider, &geometry, point[1]).filter(|o| o.caught && o.closes(point[0])).map(|o| o.owner.root())
+    }
+
     fn assert_collapse_threshold(
         layout: &DockLayout,
         divider: u32,
@@ -1398,9 +1447,7 @@ mod tests {
                 d.parent.x + width + WORKSPACE_SPACING * 0.5
             };
             assert_eq!(
-                layout
-                    .collapse_at_divider(divider, [x, d.bounds.y + 20.], VIEW)
-                    .map(|c| c.root),
+                closes_column(layout, divider, [x, d.bounds.y + 20.]),
                 expected,
                 "divider {divider}, root {root}, requested width {width}"
             );
@@ -1453,11 +1500,11 @@ mod tests {
         let edge = r.dividers.iter().find(|d| d.id == 3).unwrap();
         let inner = r.groups.iter().find(|g| g.id == 6).unwrap().bounds;
         let at = |width: f32| [inner.x + width + WORKSPACE_SPACING * 0.5, edge.bounds.y + 20.];
-        assert_eq!(layout.collapse_at_divider(3, at(TILE_SIZE), VIEW).map(|c| c.root), Some(6), "the band edge collapses the column touching it");
-        assert_eq!(layout.collapse_at_divider(3, at(TILE_SIZE + 0.5), VIEW), None);
+        assert_eq!(closes_column(&layout, 3, at(TILE_SIZE)), Some(6), "the band edge collapses the column touching it");
+        assert_eq!(closes_column(&layout, 3, at(TILE_SIZE + 0.5)), None);
         let gap = r.dividers.iter().find(|d| d.id == 4).unwrap();
         assert_eq!(
-            layout.collapse_at_divider(4, [gap.parent.x + gap.parent.width - 1., gap.bounds.y + 20.], VIEW),
+            closes_column(&layout, 4, [gap.parent.x + gap.parent.width - 1., gap.bounds.y + 20.]),
             None,
             "the gap between columns belongs to the outer column and never collapses the inner one"
         );
@@ -1474,7 +1521,7 @@ mod tests {
             scroll: None,
         });
         assert_collapse_threshold(&layout, 3, 4, false, 320. - 108., true);
-        assert_eq!(layout.collapse_at_divider(4, [0., 0.], VIEW), None);
+        assert_eq!(closes_column(&layout, 4, [0., 0.]), None);
 
         // Standalone tool ribbons retain their existing resize behavior.
         layout.bands[2].edge = Edge::Left;
@@ -1484,7 +1531,7 @@ mod tests {
             .find(|d| d.id == 1)
             .unwrap();
         assert_eq!(
-            layout.collapse_at_divider(1, [d.parent.x, d.bounds.y + 20.], VIEW),
+            closes_column(&layout, 1, [d.parent.x, d.bounds.y + 20.]),
             None
         );
     }

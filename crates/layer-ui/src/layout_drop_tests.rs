@@ -305,11 +305,8 @@ fn nested_columns_reject_collapse() {
         .filter(|d| !d.band && d.axis == Axis::Horizontal)
     {
         assert!(
-            s.state
-                .workspace
-                .layout
-                .collapse_at_divider(d.id, [d.parent.x + 1., d.bounds.y], VIEW)
-                .is_none()
+            s.state.workspace.layout.owner_resize(d, &r, d.bounds.y)
+                .is_none_or(|o| !o.caught || !o.closes(d.parent.x + 1.))
         );
     }
     for action in [

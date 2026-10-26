@@ -45,6 +45,10 @@ fn kind(device: &str) -> PointerKind {
     }
 }
 
+fn candidate(w: &Workspace, device: &str, point: [f32; 2]) -> Option<EdgeGrab> {
+    w.edge_contact_at(point).and_then(|(contact, _)| w.resolved().edge_grab_at(point, kind(device), contact))
+}
+
 fn middle(b: Bounds) -> [f32; 2] {
     [b.x + b.width * 0.5, b.y + b.height * 0.5]
 }
@@ -100,7 +104,7 @@ fn undo(w: &Rc<Workspace>) {
 
 fn eligible(w: &Workspace, device: &str, xs: impl Iterator<Item = f32> + Clone, ys: impl Iterator<Item = f32>) -> [f32; 2] {
     ys.flat_map(|y| xs.clone().map(move |x| [x, y]))
-        .find(|p| w.edge_grab_candidate(kind(device), *p, None).is_some())
+        .find(|p| candidate(w, device, *p).is_some())
         .unwrap_or_else(|| panic!("no {device} grab point in the edge reach"))
 }
 
@@ -192,7 +196,7 @@ fn open_stack(w: &Rc<Workspace>, input: &mut RemoteInput, device: &str) {
     let navigator = r.groups.iter().find(|g| g.active == Panel::Navigator && open.bounds.contains(middle(g.bounds)[0], middle(g.bounds)[1]));
     if let Some(navigator) = navigator {
         let on_view = [line + inward * 20., middle(navigator.body())[1]];
-        assert!(w.edge_grab_candidate(kind(device), on_view, None).is_none(), "{device}: the Navigator keeps its drag");
+        assert!(candidate(w, device, on_view).is_none(), "{device}: the Navigator keeps its drag");
     }
     let start = eligible(w, device, (16..=32).step_by(4).map(|d| line + inward * d as f32),
         (0..(open.bounds.height / 8.) as usize).map(|i| open.bounds.y + 60. + i as f32 * 8.));
@@ -201,7 +205,7 @@ fn open_stack(w: &Rc<Workspace>, input: &mut RemoteInput, device: &str) {
     let settle = std::mem::replace(&mut input.settle_ms, 0);
     let claim = [start[0] + inward * 16., start[1]];
     input.perform(path(w, device, &[start, claim], true, false));
-    assert!(w.workspace_drag.borrow().as_ref().is_some_and(|d| d.started && d.grab.is_some() && d.target == DragTarget::Divider(divider.id)),
+    assert!(w.workspace_drag.borrow().as_ref().is_some_and(|d| d.started && matches!(d.target, DragTarget::Edge(_, "col-resize"))),
         "{device}: travel along the axis grabs the open edge");
     pump(300);
     let edge = |w: &Workspace| w.resolved().dividers.iter().find(|d| d.id == divider.id).map(|d| middle(d.bounds)[0] + inward * d.bounds.width * 0.5);
@@ -245,7 +249,7 @@ fn group_gap(w: &Rc<Workspace>, input: &mut RemoteInput, device: &str) {
         .and_downcast::<gtk::ScrolledWindow>().unwrap();
     let reach = if tool_set.scrolls { 24. } else { TILE_SIZE };
     let row = [middle(gap.bounds)[0], top - reach + 4.];
-    assert!(w.edge_grab_candidate(kind(device), row, None).is_some(), "{device}: the foot of Tool Set starts a gap swipe");
+    assert!(candidate(w, device, row).is_some(), "{device}: the foot of Tool Set starts a gap swipe");
     let before = durable(w);
     let scrolled = scroller.vadjustment().value();
     swipe(w, input, device, &[row, [row[0], row[1] + 60.]]);
@@ -266,7 +270,7 @@ fn group_gap(w: &Rc<Workspace>, input: &mut RemoteInput, device: &str) {
     swipe(w, input, device, &[sliver]);
     assert_eq!(active(w), below.panels[tab.index], "{device}: a tap on the top of a tab still selects it");
     let grip = [below.bounds.x + below.bounds.width - TILE_SIZE * 0.5, bottom + 3.];
-    assert!(w.edge_grab_candidate(kind(device), grip, None).is_none(), "{device}: the group grip keeps its drag");
+    assert!(candidate(w, device, grip).is_none(), "{device}: the group grip keeps its drag");
 }
 
 fn drag_cursor(w: &Workspace) -> Option<String> {
@@ -329,7 +333,7 @@ fn floating_panel(w: &Rc<Workspace>, input: &mut RemoteInput, device: &str) {
     let b = bounds(w);
     let before = durable(w);
     let tabs = [b.x + 10., b.y + layer_ui::TAB_BAR_HEIGHT * 0.5];
-    assert!(w.edge_grab_candidate(kind(device), tabs, None).is_none(), "{device}: the tab strip moves the panel");
+    assert!(candidate(w, device, tabs).is_none(), "{device}: the tab strip moves the panel");
     let left = eligible(w, device, (6..=30).step_by(4).map(|d| b.x + d as f32),
         (0..((b.height - layer_ui::TAB_BAR_HEIGHT - 60.) / 8.) as usize).map(|i| b.y + layer_ui::TAB_BAR_HEIGHT + 20. + i as f32 * 8.));
     swipe(w, input, device, &[left, [left[0] - 40., left[1]]]);
@@ -362,7 +366,7 @@ fn column_reset(w: &Rc<Workspace>, input: &mut RemoteInput, device: &str) {
     let r = w.resolved();
     let divider = r.dividers.iter().find(|d| d.id == divider.id).unwrap().clone();
     let point = (6..=32).step_by(2).flat_map(|d| (0..60).map(move |i| [divider.bounds.x - d as f32, 120. + i as f32 * 12.]))
-        .find(|p| w.edge_reset_divider(*p, kind(device)) == Some(divider.id))
+        .find(|p| w.edge_reset_contact(*p) == Some(EdgeContact::Free) && w.resolved().edge_reset_at(*p, kind(device)) == Some(divider.id))
         .unwrap_or_else(|| panic!("{device}: no double-press point in the column edge reach"));
     let tap = |device: &str| vec![contact(device, "down", screen(w, point)), contact(device, "up", screen(w, point))];
     let mut events = if device == "mouse" { vec![contact(device, "move", screen(w, point))] } else { Vec::new() };

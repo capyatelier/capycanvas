@@ -749,6 +749,7 @@ enum DragTarget {
     Divider(u32),
     Resize(u32, ResizeEdge),
     Tear(BubbleGrab),
+    Edge(u64, &'static str),
 }
 impl DragTarget {
     fn action(
@@ -759,7 +760,7 @@ impl DragTarget {
         tabs: Vec<TabHit>,
     ) -> Option<UiAction> {
         Some(match self {
-            Self::Header(_) | Self::Tear(_) => return None,
+            Self::Header(_) | Self::Tear(_) | Self::Edge(..) => return None,
             Self::Dock(item) => UiAction::DragWorkspace {
                 item,
                 phase,
@@ -803,7 +804,6 @@ struct NativeWorkspaceDrag {
     cursor: Option<(gtk::Widget, Option<gdk::Cursor>)>,
     tab: Option<NativeTabSlide>,
     tab_grab: Option<NativeTabSlide>,
-    grab: Option<edge_grab::NativeEdgeGrab>,
 }
 
 struct GroupView {
@@ -1601,7 +1601,7 @@ impl Workspace {
         press.set_propagation_phase(gtk::PropagationPhase::Capture);
         let deferred = Rc::new(Cell::new(false));
         press.connect_pressed(glib::clone!(#[weak(rename_to = w)] self, #[strong] action, #[strong] deferred, move |_, _, _, _| {
-            deferred.set(w.edge_gap_pending());
+            deferred.set(w.edge_select_on_release());
             if !deferred.get() {
                 w.dispatch(action.clone());
             }
@@ -3826,8 +3826,12 @@ impl Workspace {
     fn dispatch_drag(self: &Rc<Self>, target: DragTarget, phase: ContactPhase, position: [f32; 2]) {
         #[cfg(test)]
         let start = std::time::Instant::now();
-        if matches!(target, DragTarget::Divider(_) | DragTarget::Resize(_, _)) {
+        if matches!(target, DragTarget::Divider(_) | DragTarget::Resize(_, _) | DragTarget::Edge(..)) {
             self.color_panel.set_resizing(matches!(phase, ContactPhase::Down | ContactPhase::Move));
+        }
+        if let DragTarget::Edge(id, _) = target {
+            self.edge_input(id, phase, PointerKind::Mouse, EdgeContact::Free, position);
+            return;
         }
         let tabs = if matches!(target, DragTarget::Dock(_)) {
             if phase != ContactPhase::Move || self.publication.hits.borrow().is_none() {
@@ -3987,7 +3991,6 @@ impl Workspace {
                     cursor: None,
                     tab: None,
                     tab_grab: None,
-                    grab: None,
                 };
                 *self.workspace_drag.borrow_mut() = Some(drag);
             }
@@ -4134,13 +4137,9 @@ impl Workspace {
             drag.target,
             DragTarget::Dock(DockItem::Tile { .. }) | DragTarget::Header(_)
         ) {
-            let position = drag.grab.as_mut().map_or(point, |grab| grab.position(point));
-            if let Some(current) = self.workspace_drag.borrow_mut().as_mut() {
-                current.grab = drag.grab;
-            }
-            self.dispatch_drag(drag.target, ContactPhase::Move, position);
-            if let Some(grab) = drag.grab {
-                self.set_drag_cursor(&mut drag, grab.cursor);
+            self.dispatch_drag(drag.target, ContactPhase::Move, point);
+            if let DragTarget::Edge(_, cursor) = drag.target {
+                self.set_drag_cursor(&mut drag, cursor);
             }
         }
         if let DragTarget::Dock(item) = drag.target {
@@ -4157,7 +4156,7 @@ impl Workspace {
         true
     }
 
-    fn handle_double_press_action(&self, point: [f32; 2], kind: PointerKind) -> Option<UiAction> {
+    fn handle_double_press_action(&self, point: [f32; 2]) -> Option<UiAction> {
         let viewport = [self.surface.width() as f32, self.surface.height() as f32];
         if let Some(column) = self.columns.background_at(self, point) {
             return self
@@ -4167,7 +4166,7 @@ impl Workspace {
                 .find(|c| c.id == column)
                 .map(|c| c.expand_action());
         }
-        match self.drag_target_at(point).or_else(|| self.edge_reset_divider(point, kind).map(DragTarget::Divider)) {
+        match self.drag_target_at(point) {
             Some(DragTarget::Divider(id))
                 if self
                     .resolved()
@@ -4202,7 +4201,8 @@ impl Workspace {
                 let point = [x as f32, y as f32];
                 let Some(event) = gesture.current_event() else { return };
                 let kind = crate::input::pointer_kind(&event);
-                let target = w.drag_target_at(point).or_else(|| w.edge_reset_divider(point, kind).map(DragTarget::Divider));
+                let target = w.drag_target_at(point)
+                    .or_else(|| (w.edge_reset_contact(point) == Some(EdgeContact::Free)).then_some(DragTarget::Edge(0, "")));
                 let collapsed_column = w.columns.background_at(&w, point);
                 let source = event.device().map(|device| device.source());
                 let handle = collapsed_column
@@ -4221,7 +4221,15 @@ impl Workspace {
                 }));
                 if !double { return; }
                 column_click.set(None);
-                let Some(action) = w.handle_double_press_action(point, kind) else { return };
+                if handle == Some(DragTarget::Edge(0, "")) {
+                    let viewport = [w.surface.width() as f32, w.surface.height() as f32];
+                    if w.interact(UiInput::EdgeDoublePress { kind, contact: EdgeContact::Free, position: point, viewport }).handled {
+                        gesture.set_state(gtk::EventSequenceState::Claimed);
+                        w.workspace_drag_input(ContactPhase::Cancel, point, None);
+                    }
+                    return;
+                }
+                let Some(action) = w.handle_double_press_action(point) else { return };
                 gesture.set_state(gtk::EventSequenceState::Claimed);
                 // The captured double-click consumes release; retire any
                 // pending press so later motion cannot start a stale drag.
@@ -4310,7 +4318,7 @@ impl Workspace {
                 }
                 match (phase, point) {
                     (ContactPhase::Down, Some(point)) => w.edge_grab_press(event, point, sequence, starting),
-                    (ContactPhase::Up | ContactPhase::Cancel, _) => w.edge_grab_release(&sequence),
+                    (ContactPhase::Up | ContactPhase::Cancel, Some(point)) => w.edge_grab_release(phase, point, &sequence),
                     _ => {}
                 }
                 if handled {

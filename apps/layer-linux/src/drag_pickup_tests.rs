@@ -166,7 +166,7 @@ fn native_drag_pickup_input() {
                     input.perform(serde_json::json!([contact(device, "move", point)]));
                     let expected = held || !source.ends_with("tile") && source != "column";
                     let started = |edge: bool| w.workspace_drag.borrow().as_ref()
-                        .is_some_and(|d| d.started && matches!(d.target, DragTarget::Divider(_)) == edge);
+                        .is_some_and(|d| d.started && matches!(d.target, DragTarget::Edge(..)) == edge);
                     assert_eq!(started(false), expected, "touch={touch} {source} held={held}: pickup");
                     let edge = !held && source == "column";
                     assert_eq!(started(true), edge, "touch={touch} {source} held={held}: an unheld swipe from a collapsed icon grabs its column edge");

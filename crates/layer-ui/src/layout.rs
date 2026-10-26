@@ -19,6 +19,7 @@ mod notice_placement;
 pub use notice_placement::NoticePlacement;
 pub use column_stacks::{ColumnStack, OpenColumn};
 pub use columns::{CollapsedColumn, CollapsedColumnPlacement, CollapsedGroup, ColumnIcon};
+pub(crate) use columns::{EdgeOwner, OwnerResize};
 #[cfg(test)]
 #[path = "layout_tile_group_tests.rs"]
 mod tile_group_tests;
@@ -599,56 +600,14 @@ pub fn tile_layout(
 }
 
 #[derive(Clone, Copy, Debug, Default)]
-pub(crate) enum ResizeDragPhase {
-    #[default]
-    Resizing,
-    /// Retain the original threshold so the same drag can reverse a collapse.
-    Collapsed(ResizeCollapse),
-    /// A collapsed edge stays fixed while the pointer crosses the opening distance.
-    Expand {
-        columns: [Option<u32>; 2],
-        edge: f32,
-        cross: f32,
-    },
-    /// Use the original opening threshold until the pointer reaches the expanded edge.
-    CatchUp {
-        columns: [Option<u32>; 2],
-        collapsed_edge: f32,
-        edge: f32,
-        reversed: bool,
-        cross: f32,
-    },
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct ResizeCollapse {
-    pub root: u32,
-    pub expanded_width: f32,
-    origin: f32,
-    reversed: bool,
-    minimum: f32,
-    pub member: bool,
-}
-impl ResizeCollapse {
-    pub fn contains(self, x: f32) -> bool {
-        let width = if self.reversed {
-            self.origin - x
-        } else {
-            x - self.origin
-        };
-        width <= self.minimum - COLUMN_COLLAPSE_DISTANCE || width <= TILE_SIZE
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct ResizeDrag {
     offset: [f32; 2],
-    pub phase: ResizeDragPhase,
+    pub owner: Option<OwnerResize>,
 }
 impl ResizeDrag {
     pub fn new(pointer: [f32; 2], divider: Bounds) -> Self {
         Self {
-            phase: ResizeDragPhase::Resizing,
+            owner: None,
             offset: [
                 pointer[0] - divider.x - divider.width * 0.5,
                 pointer[1] - divider.y - divider.height * 0.5,

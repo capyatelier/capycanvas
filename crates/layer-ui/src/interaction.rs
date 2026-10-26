@@ -346,6 +346,21 @@ pub enum UiInput {
         position: [f32; 2],
         time_ns: u64,
     },
+    EdgeContact {
+        id: u64,
+        phase: ContactPhase,
+        kind: PointerKind,
+        contact: crate::EdgeContact,
+        position: [f32; 2],
+        viewport: [f32; 2],
+        time_ns: u64,
+    },
+    EdgeDoublePress {
+        kind: PointerKind,
+        contact: crate::EdgeContact,
+        position: [f32; 2],
+        viewport: [f32; 2],
+    },
     PenButton {
         button: PenButton,
         pressed: bool,
@@ -376,6 +391,9 @@ pub struct InputReply {
     pub keep_zen_button: bool,
     pub pan_cursor: bool,
     pub navigation_cursor: Option<NavigationMode>,
+    pub edge_hold: bool,
+    pub edge_cursor: Option<&'static str>,
+    pub edge_select_on_release: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

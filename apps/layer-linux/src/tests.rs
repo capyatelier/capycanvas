@@ -4895,7 +4895,7 @@ fn command(w: &Workspace, id: CommandId) -> gtk::Button {
     panic!("No native control for {id:?}");
 }
 fn double_press_handle(w: &Rc<Workspace>, point: [f32; 2]) -> bool {
-    let Some(action) = w.handle_double_press_action(point, PointerKind::Mouse) else {
+    let Some(action) = w.handle_double_press_action(point) else {
         return false;
     };
     w.workspace_drag_input(ContactPhase::Cancel, point, None);

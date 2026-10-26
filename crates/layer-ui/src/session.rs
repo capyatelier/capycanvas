@@ -1,5 +1,5 @@
 use crate::interaction::{Interaction, PointerContact};
-use crate::layout::{ResizeDrag, ResizeDragPhase};
+use crate::layout::{EdgeOwner, OwnerResize, ResizeDrag};
 use crate::*;
 use layer_core::{DefaultBrushPreset, Document, LayerKind, StrokeTool};
 #[cfg(test)]
@@ -45,6 +45,8 @@ use held_actions::{ERASER_END, merge_change};
 mod session_bubbles;
 #[path = "zen_peek.rs"]
 mod zen_peek;
+#[path = "edge_contacts.rs"]
+mod edge_contacts;
 #[path = "tool_slots.rs"]
 mod tool_slots;
 pub use tool_slots::{ToolSlotId, ToolVariant, ToolSlotMemory};
@@ -319,6 +321,7 @@ pub struct UiSession<R: CanvasRenderer> {
     initial_fit: bool,
     automatic_camera_revision: u64,
     divider_drag: Option<(u32, ResizeDrag)>,
+    edge_contacts: edge_contacts::EdgeContacts,
     floating_resize: Option<FloatingResize>,
     workspace_drag: Option<WorkspaceDrag>,
     bubble_state: session_bubbles::Bubbles,
@@ -551,6 +554,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             initial_fit: true,
             automatic_camera_revision: 0,
             divider_drag: None,
+            edge_contacts: Default::default(),
             floating_resize: None,
             workspace_drag: None,
             bubble_state: Default::default(),
@@ -1152,9 +1156,13 @@ impl<R: CanvasRenderer> UiSession<R> {
         if matches!(input, UiInput::ColorTouch { .. }) {
             return self.color_touch_input(input);
         }
+        if matches!(input, UiInput::EdgeContact { .. } | UiInput::EdgeDoublePress { .. }) {
+            return self.edge_contact_input(input);
+        }
         if matches!(input, UiInput::Blur) {
             self.layer_interaction.touches = Default::default();
             self.forget_color_touches();
+            self.cancel_edge_contact()?;
         }
         if let UiInput::Pointer {id,kind,phase,position,..}=&mut input
             && !position.iter().all(|v|v.is_finite()) {
@@ -1224,7 +1232,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 reply.change = self.changed(if preview { regions::COLOR_PREVIEW } else { 0 }, true);
             }
             UiInput::ColorPickerHold { .. } => (),
-            UiInput::LayerTouch { .. } | UiInput::ColorTouch { .. } => unreachable!(),
+            UiInput::LayerTouch { .. } | UiInput::ColorTouch { .. } | UiInput::EdgeContact { .. } | UiInput::EdgeDoublePress { .. } => unreachable!(),
             UiInput::Chrome {
                 event,
                 facts,
@@ -3921,20 +3929,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     if phase == ContactPhase::Down {
                         let divider = self.divider(id, viewport)?;
                         let mut drag = ResizeDrag::new(position, divider.bounds);
-                        if self.layout(viewport).open_column_at_divider(id).is_none() {
-                            let columns = self
-                                .state
-                                .workspace
-                                .layout
-                                .collapsed_divider_columns(&divider);
-                            if columns.iter().any(Option::is_some) {
-                                drag.phase = ResizeDragPhase::Expand {
-                                    columns,
-                                    edge: divider.bounds.x + divider.bounds.width * 0.5,
-                                    cross: position[1],
-                                };
-                            }
-                        }
+                        drag.owner = self.state.workspace.layout.owner_resize(&divider, &self.layout(viewport), position[1]);
                         self.workspace_history.begin(&self.state.workspace);
                         self.divider_drag = Some((id, drag));
                         (0, false)
@@ -4614,182 +4609,108 @@ impl<R: CanvasRenderer> UiSession<R> {
         drag: &mut ResizeDrag,
     ) -> Result<(), String> {
         let point = drag.position(position);
-        let mut resolved = self.layout(viewport);
-        if resolved.dividers.iter().find(|d| d.id == id).is_some_and(|d| d.fixed) {
+        if self.layout(viewport).dividers.iter().find(|d| d.id == id).is_some_and(|d| d.fixed) {
             return Ok(());
         }
-        let initial = drag.phase;
-        loop {
-            match drag.phase {
-                ResizeDragPhase::Resizing => {
-                    if !matches!(initial, ResizeDragPhase::Resizing) {
-                        resolved = self.layout(viewport);
-                    }
+        let Some(mut owner) = drag.owner else {
+            return self.state.workspace.layout.resize_workspace(id, point, viewport);
+        };
+        for _ in 0..2 {
+            if !self.state.workspace.layout.owner_open(owner.owner) {
+                if owner.closes(point[0]) {
                     break;
                 }
-                ResizeDragPhase::Collapsed(collapse) => {
-                    if collapse.contains(point[0]) {
-                        return Ok(());
-                    }
-                    // Recreate the geometry just before collapse, then apply the current
-                    // pointer normally. This clamps reopening to the minimum and keeps
-                    // nested dividers' threshold anchored to the same parent edge.
-                    let layout = &mut self.state.workspace.layout;
-                    if let Some(column) = layout
-                        .collapsed
-                        .iter_mut()
-                        .find(|c| c.root == collapse.root)
-                    {
-                        column.expanded_width = collapse.expanded_width;
-                    }
-                    if collapse.member {
-                        layout.column_stack_mut(collapse.root).open_column = Some(collapse.root);
-                    } else {
-                        layout.set_column_collapsed(collapse.root, false, viewport)?;
-                    }
-                    drag.phase = ResizeDragPhase::Resizing;
-                }
-                ResizeDragPhase::Expand { columns, edge, cross } => {
-                    let delta = point[0] - edge;
-                    // Opening uses a fixed 36 logical pixels of outward movement,
-                    // independent of the column's saved or minimum width.
-                    if delta.abs() < TILE_SIZE {
-                        return Ok(());
-                    }
-                    let reversed = delta < 0.;
-                    let Some(root) = columns[usize::from(reversed)] else {
-                        return Ok(());
-                    };
-                    let stack = self.state.workspace.layout.column_stack(root);
-                    if stack.members.len() > 1 {
-                        let reach = |c: &CollapsedColumnPlacement| c.bounds.distance_to([c.bounds.x, cross]);
-                        let member = self.layout(viewport).collapsed.iter()
-                            .filter(|c| c.stack == stack.column)
-                            .min_by(|a, b| reach(a).total_cmp(&reach(b)))
-                            .map(|c| c.id)
-                            .ok_or("The stack has no visible member")?;
-                        self.state.workspace.layout.column_stack_mut(root).open_column = Some(member);
-                    } else {
-                        self.state
-                            .workspace
-                            .layout
-                            .expand_column_for_resize(root, viewport)?;
-                    }
-                    let divider = self.divider(id, viewport)?;
-                    drag.phase = ResizeDragPhase::CatchUp {
-                        columns,
-                        collapsed_edge: edge,
-                        edge: divider.bounds.x + divider.bounds.width * 0.5,
-                        reversed,
-                        cross,
-                    };
-                }
-                ResizeDragPhase::CatchUp {
-                    columns,
-                    collapsed_edge,
-                    edge,
-                    reversed,
-                    cross,
-                } => {
-                    if if reversed {
-                        point[0] <= edge
-                    } else {
-                        point[0] >= edge
-                    } {
-                        drag.phase = ResizeDragPhase::Resizing;
-                    } else {
-                        let outward = (point[0] - collapsed_edge) * if reversed { -1. } else { 1. };
-                        if outward >= TILE_SIZE {
-                            return Ok(());
-                        }
-                        // Before reaching the edge, undo opening exactly. Preserve
-                        // saved widths and split fractions across repeated attempts,
-                        // and leave no history entry if the user releases collapsed.
-                        let mut restored = self
-                            .workspace_history
-                            .gesture_start()
-                            .ok_or("Divider drag is not active")?
-                            .layout
-                            .clone();
-                        // Keep host measurements and strip scrolling, as workspace undo does.
-                        restored.adopt_runtime(&self.state.workspace.layout);
-                        restored
-                            .column_scroll
-                            .clone_from(&self.state.workspace.layout.column_scroll);
-                        self.state.workspace.layout = restored;
-                        drag.phase = ResizeDragPhase::Expand {
-                            columns,
-                            edge: collapsed_edge,
-                            cross,
-                        };
-                        // The same event can already be past the opposite opening
-                        // threshold when both neighbors started collapsed.
-                    }
+                owner = self.open_owner(owner, id, viewport)?;
+                continue;
+            }
+            if owner.closes(point[0]) {
+                owner = self.close_owner(owner, viewport)?;
+            } else {
+                owner.caught |= owner.catches(point[0]);
+                if owner.caught {
+                    self.state.workspace.layout.resize_workspace(id, point, viewport)?;
                 }
             }
+            break;
         }
-        if let Some(mut close) = self.state.workspace.layout.close_at_open_divider(&resolved, id, point, viewport[0]) {
-            let original = self.workspace_history.gesture_start()
-                .and_then(|s| s.layout.collapsed.iter().find(|c| c.root == close.root).map(|c| c.expanded_width));
-            let layout = &mut self.state.workspace.layout;
-            if let Some(width) = original {
-                close.expanded_width = width;
-                if let Some(column) = layout.collapsed.iter_mut().find(|c| c.root == close.root) {
-                    column.expanded_width = width;
-                }
-            }
-            layout.column_stack_mut(close.root).open_column = None;
-            drag.phase = ResizeDragPhase::Collapsed(close);
-            return Ok(());
-        }
-        let projected = resolved.open_column_at_divider(id).is_some()
-            || resolved.collapsed.iter().filter_map(|c| c.open.as_ref()).any(|o| {
-                self.state.workspace.layout.column_contains(o.column, id)
-            });
-        if projected { return self.state.workspace.layout.resize_workspace(id, point, viewport); }
-        let collapse = self.state.workspace.layout.collapse_at_divider(id, point, viewport);
-        if let Some(collapse) = collapse {
-            let root = collapse.root;
-            let original_width = self.workspace_history.gesture_start().and_then(|s| {
-                // A gesture that began collapsed must remember the expanded
-                // width, not overwrite it with the strip width when closing again.
-                s.layout
-                    .collapsed
-                    .iter()
-                    .find(|c| c.root == root)
-                    .map(|c| c.expanded_width)
-                    .or_else(|| s.layout.column_width_before_resize(root, viewport))
-            });
-            self.state
-                .workspace
-                .layout
-                .set_column_collapsed(root, true, viewport)?;
-            if let Some(width) = original_width
-                && let Some(c) = self
-                    .state
-                    .workspace
-                    .layout
-                    .collapsed
-                    .iter_mut()
-                    .find(|c| c.root == root)
-            {
-                c.expanded_width = width;
-            }
-            drag.phase = ResizeDragPhase::Collapsed(collapse);
-        } else {
-            self.state
-                .workspace
-                .layout
-                .resize_workspace(id, point, viewport)?;
-        }
+        drag.owner = Some(owner);
         Ok(())
+    }
+
+    fn owner_width(&self, owner: EdgeOwner, viewport: [f32; 2]) -> Option<f32> {
+        let resolved = self.layout(viewport);
+        match owner {
+            EdgeOwner::Member(member) => resolved.collapsed.iter().find_map(|c| c.open.as_ref().filter(|o| o.column == member)).map(|o| o.bounds.width),
+            EdgeOwner::Column(column) | EdgeOwner::Stack(column) => self.state.workspace.layout.column_width_before_resize(column, viewport),
+        }
+    }
+
+    fn open_owner(&mut self, mut owner: OwnerResize, id: u32, viewport: [f32; 2]) -> Result<OwnerResize, String> {
+        let layout = &mut self.state.workspace.layout;
+        match owner.owner {
+            EdgeOwner::Column(column) if owner.caught => {
+                if let Some(c) = layout.collapsed.iter_mut().find(|c| c.root == column) {
+                    c.expanded_width = owner.reopen_width;
+                }
+                layout.set_column_collapsed(column, false, viewport)?;
+            }
+            EdgeOwner::Column(column) => layout.expand_column_for_resize(column, viewport)?,
+            EdgeOwner::Member(member) => {
+                if owner.caught && let Some(c) = layout.collapsed.iter_mut().find(|c| c.root == member) {
+                    c.expanded_width = owner.reopen_width;
+                }
+                layout.column_stack_mut(member).open_column = Some(member);
+            }
+            EdgeOwner::Stack(stack) => {
+                let reach = |c: &CollapsedColumnPlacement| c.bounds.distance_to([c.bounds.x, owner.cross]);
+                let member = self.layout(viewport).collapsed.iter()
+                    .filter(|c| c.stack == stack)
+                    .min_by(|a, b| reach(a).total_cmp(&reach(b)))
+                    .map(|c| c.id)
+                    .ok_or("The stack has no visible member")?;
+                self.state.workspace.layout.column_stack_mut(stack).open_column = Some(member);
+            }
+        }
+        let divider = self.divider(id, viewport)?;
+        owner = self.state.workspace.layout.owner_resize(&divider, &self.layout(viewport), owner.cross)
+            .ok_or("The opened column has no edge")?
+            .opened_from(owner);
+        if !owner.caught {
+            owner.hold = self.owner_width(owner.owner, viewport).ok_or("The opened column is not visible")?;
+        }
+        Ok(owner)
+    }
+
+    fn close_owner(&mut self, mut owner: OwnerResize, viewport: [f32; 2]) -> Result<OwnerResize, String> {
+        if !owner.caught {
+            let mut restored = self.workspace_history.gesture_start().ok_or("Divider drag is not active")?.layout.clone();
+            restored.adopt_runtime(&self.state.workspace.layout);
+            restored.column_scroll.clone_from(&self.state.workspace.layout.column_scroll);
+            self.state.workspace.layout = restored;
+            return Ok(owner);
+        }
+        let root = owner.owner.root();
+        owner.reopen_width = self.owner_width(owner.owner, viewport).unwrap_or(owner.reopen_width);
+        let original = self.workspace_history.gesture_start().and_then(|s| {
+            s.layout.collapsed.iter().find(|c| c.root == root).map(|c| c.expanded_width)
+                .or_else(|| s.layout.column_width_before_resize(root, viewport))
+        });
+        let layout = &mut self.state.workspace.layout;
+        match owner.owner {
+            EdgeOwner::Member(member) => layout.column_stack_mut(member).open_column = None,
+            EdgeOwner::Column(column) | EdgeOwner::Stack(column) => layout.set_column_collapsed(column, true, viewport)?,
+        }
+        if let Some(width) = original && let Some(c) = layout.collapsed.iter_mut().find(|c| c.root == root) {
+            c.expanded_width = width;
+        }
+        Ok(owner)
     }
 
     pub fn input_ui_pending(&self)->bool {self.pressure_meter_changed || self.tilt_meter_changed}
 
     /// Includes shared background work as well as the drawing engine's needs.
     pub fn wants_continuous_frames(&self) -> bool {
-        self.input_ui_pending() || self.effect_analyses.busy() || (self.histogram.demand && !self.histogram.settled) || (self.tonal_histogram.demand && !self.tonal_histogram.settled)
+        self.input_ui_pending() || self.edge_catching_up() || self.effect_analyses.busy() || (self.histogram.demand && !self.histogram.settled) || (self.tonal_histogram.demand && !self.tonal_histogram.settled)
             || self.interaction.axes.active()
             || self.touch_repeat_pending()
             || self.layer_interaction.touches.pending()
@@ -4815,7 +4736,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         let pending_edits = self.engine.has_pending_document_edits();
         let command_activity = (self.canvas_idle(), self.engine.can_undo(), self.engine.can_redo());
         self.update_shader_idle();
-        let mut changed = self.poll_filter_installation() | self.poll_deferred_edits() | self.apply_loaded_paper() | self.take_bubble_changes();
+        let mut changed = self.poll_filter_installation() | self.poll_deferred_edits() | self.apply_loaded_paper() | self.take_bubble_changes()
+            | self.advance_edge_contact(now_ns)?.regions;
         if std::mem::take(&mut self.pressure_meter_changed) { changed |= regions::PRESSURE_CALIBRATION; }
         if std::mem::take(&mut self.tilt_meter_changed) { changed |= regions::TILT_CALIBRATION; }
         let revision = self.engine.document().revision;
