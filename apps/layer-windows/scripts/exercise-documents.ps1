@@ -1,8 +1,11 @@
-﻿param([Parameter(Mandatory)][string]$Executable,[string]$DebuggerPath,[switch]$RecoverGpu,[switch]$FailGpu,[ValidateSet('full','new-drawing','paper-color','gpu-recovery','color-workflows','color-workflows-light','native-writeback','native-writeback-light')][string]$Journey='full')
+﻿param([Parameter(Mandatory)][string]$Executable,[string]$DebuggerPath,[switch]$RecoverGpu,[switch]$FailGpu,[ValidateSet('full','new-drawing','paper-color','gpu-recovery','gpu-unavailable','color-workflows','color-workflows-light','native-writeback','native-writeback-light')][string]$Journey='full')
 $gpuRecovery=$Journey -eq 'gpu-recovery'
+$gpuUnavailable=$Journey -eq 'gpu-unavailable'
+$focusedGpu=$gpuRecovery -or $gpuUnavailable
 if($gpuRecovery){$RecoverGpu=$true}
+if($gpuUnavailable){$FailGpu=$true}
 if($RecoverGpu -and $FailGpu){throw "Choose successful recovery or exhausted recovery, not both"}
-if($Journey -notin @('full','gpu-recovery') -and ($RecoverGpu -or $FailGpu)){throw 'GPU recovery requires the full or GPU recovery journey'}
+if($Journey -notin @('full','gpu-recovery','gpu-unavailable') -and ($RecoverGpu -or $FailGpu)){throw 'GPU injection requires full, gpu-recovery or gpu-unavailable'}
 $ErrorActionPreference='Stop'
 $focusedColor=$Journey.StartsWith('color-workflows')
 $nativeWriteback=$Journey.StartsWith('native-writeback')
@@ -71,7 +74,7 @@ $env:CAPY_SMOKE_TEST='1'
 $env:CAPY_TEST_DISPLAY='1'
 $env:CAPY_TEST_PRIMARY='1'
 $stderr=Join-Path $run 'stderr.log'
-if($focusedColor -or $nativeWriteback -or $gpuRecovery){[IO.File]::WriteAllText((Settings-File),(@{language=@{Explicit='en'};theme=$(if($Journey.EndsWith('-light')){'light'}else{'dark'})}|ConvertTo-Json -Depth 4))}
+if($focusedColor -or $nativeWriteback -or $focusedGpu){[IO.File]::WriteAllText((Settings-File),(@{language=@{Explicit='en'};theme=$(if($Journey.EndsWith('-light')){'light'}else{'dark'})}|ConvertTo-Json -Depth 4))}
 $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError $stderr
 $null=$review.Handle
 [IO.File]::WriteAllText((Join-Path $repo 'artifacts/windows/document-ui-review.pid'),[string]$review.Id)
@@ -742,6 +745,64 @@ function Test-PaperColorReopen {
     Press 'new-drawing-color-cancel';Wait-Until {!(Drawer)} 'Paper color did not close'
     Close-NewDrawing 'new-drawing-cancel'
 }
+function New-FocusedDrawing {
+    Open-NewDrawing
+    Pick-Choice 'new-drawing-unit' (Value-Index (Drawing).units 'px')
+    if((Drawing).linked){Press 'new-drawing-link';Wait-Until {!(Drawing).linked} 'Focused drawing did not unlink its dimensions'}
+    Type-Text 'document-width' '128' -Commit;Type-Text 'document-height' '96' -Commit
+    Type-Text 'new-drawing-name' 'Workflow study'
+    Wait-Until {(Drawing).name -eq 'Workflow study' -and (Drawing).values[0] -eq 128 -and (Drawing).values[1] -eq 96} 'Focused drawing setup did not acknowledge its values'
+    $count=@((Model).windows_tabs.tabs).Count;Press 'new-drawing-create'
+    Wait-Until {$model=Model;!$model.state.new_drawing -and @($model.windows_tabs.tabs).Count -eq $count+1 -and !$model.state.document_file.busy} 'Focused drawing did not open' 60
+}
+function Test-UntitledClose([switch]$CloseWindow) {
+    Draw
+    Fail-Gpu
+    File-Command 'close_document';Confirm-Dialog;Invoke-Control 'Save';Picker 'Save As';Picker-Button '2';Idle
+    if(!(Model).state.document_file.modified -or (Model).state.document_file.location -or (Model).state.document_file.close_ready){
+        throw 'Cancelling the close-time picker lost the untitled drawing'
+    }
+    File-Command 'close_document';Confirm-Dialog;Invoke-Control 'Cancel';Idle
+    if($CloseWindow){$closedEpoch=(Model).state.document_file.epoch}
+    File-Command 'close_document';Confirm-Dialog;Invoke-Control 'Discard Changes'
+    if($CloseWindow){
+        Wait-Until {(Model).state.document_file.epoch -ne $closedEpoch -and !(Model).windows_document} 'Unavailable drawing did not close'
+        Request-Close
+    }
+    Wait-Closed 'Discarded close did not finish'
+    if((Get-Item -LiteralPath $stderr).Length){throw 'Untitled native review reported stderr'}
+}
+function Test-GpuUnavailableSave([switch]$CurrentReview) {
+    if(!$CurrentReview){Start-RecoveryReview 'save-as';Draw}
+    $before=Join-Path $run 'Before GPU failure.png'
+    File-Command 'export_document';Picker 'Save As';Choose-Path $before;Idle
+    Wait-Until {Test-Path -LiteralPath $before} 'Baseline export did not finish'
+    $script:scope=$root
+    $revision=(Model).state.document_file.revision
+    (Find-Id 'zen-capy').GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+    Wait-Until {(Model).state.workspace.zen_mode -and (Model).chrome_hidden} 'Zen did not hide the editor before GPU failure'
+    Fail-Gpu @('Test pen','Test pen begin')
+    if((Model).state.document_file.revision -ne $revision){throw 'Failed reconstruction changed the completed raster boundary'}
+    if(!(Model).state.workspace.zen_mode){throw 'GPU failure rewrote the saved Zen preference'}
+    $recovered=Join-Path $run 'Saved after GPU failure.capy'
+    File-Command 'save_document_as';Picker 'Save As';Choose-Path $recovered;Idle
+    Wait-Until {(Test-Path -LiteralPath $recovered) -and !(Model).state.document_file.modified} 'Save As after GPU failure did not complete durably'
+    File-Command 'save_document';Idle
+    Request-Close
+    Wait-Closed 'GPU save-as close did not finish'
+    if((Get-Item -LiteralPath $stderr).Length){throw 'GPU save-as reported stderr'}
+    Remove-Item Env:CAPY_TEST_GPU_UNAVAILABLE
+    Start-RecoveryReview 'reopen'
+    File-Command 'open_document';Picker 'Open';Choose-Path $recovered;Idle
+    Wait-Until {(Model).state.document_file.location.uri -eq $recovered} 'Saved recovery project did not reopen'
+    $after=Join-Path $run 'After GPU failure.png'
+    File-Command 'export_document';Picker 'Save As';Choose-Path $after;Idle
+    Wait-Until {Test-Path -LiteralPath $after} 'Reopened project did not export'
+    if((Get-FileHash -LiteralPath $before).Hash -ne (Get-FileHash -LiteralPath $after).Hash){throw 'Saved recovery project changed exported pixels'}
+    Request-Close
+    Wait-Closed 'Reopened recovery project close did not finish'
+    if((Get-Item -LiteralPath $stderr).Length){throw 'Reopened recovery project reported stderr'}
+}
 function Test-LightNewDrawing {
     $env:CAPY_STORAGE_DIR=Join-Path $run 'light-profile'
     [IO.File]::WriteAllText((Settings-File),(@{language=@{Explicit='en'};theme='light'}|ConvertTo-Json -Depth 4))
@@ -760,21 +821,12 @@ function Test-LightNewDrawing {
 Bind-ReviewWindow 'No review window'
 Wait-Until {(Model).brush_ready} 'Canvas startup did not finish' 45
 if(!(Model).windows_isolated_settings){throw 'Review must use an isolated profile'}
-if($gpuRecovery -or $nativeWriteback){
+if($focusedGpu -or $nativeWriteback){
     $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)
     Wait-Until {$bounds=(Control 'drawing-canvas' -Arranged).Current.BoundingRectangle;$camera=(Model).state.camera;[Math]::Abs($bounds.Width-$camera.viewport[0]) -lt 2 -and [Math]::Abs($bounds.Height-$camera.viewport[1]) -lt 2 -and !(Model).windows_workspace.busy} 'Focused native workspace did not finish maximizing'
 }
 if($Journey -eq 'paper-color'){Test-PaperColorReopen}
-elseif($focusedColor -or $gpuRecovery){
-    Open-NewDrawing
-    Pick-Choice 'new-drawing-unit' (Value-Index (Drawing).units 'px')
-    if((Drawing).linked){Press 'new-drawing-link';Wait-Until {!(Drawing).linked} 'Focused drawing did not unlink its dimensions'}
-    Type-Text 'document-width' '128' -Commit;Type-Text 'document-height' '96' -Commit
-    Type-Text 'new-drawing-name' 'Workflow study'
-    Wait-Until {(Drawing).name -eq 'Workflow study' -and (Drawing).values[0] -eq 128 -and (Drawing).values[1] -eq 96} 'Focused drawing setup did not acknowledge its values'
-    $count=@((Model).windows_tabs.tabs).Count;Press 'new-drawing-create'
-    Wait-Until {$model=Model;!$model.state.new_drawing -and @($model.windows_tabs.tabs).Count -eq $count+1 -and !$model.state.document_file.busy} 'Focused drawing did not open' 60
-}elseif(!$nativeWriteback){New-Journey 'dark' -Full}
+elseif($focusedColor -or $focusedGpu){New-FocusedDrawing}elseif(!$nativeWriteback){New-Journey 'dark' -Full}
 if($Journey -in @('new-drawing','paper-color')){
     Request-Close;Wait-Closed 'New drawing review close did not finish'
     if((Get-Item -LiteralPath $stderr).Length){throw 'New drawing native review reported stderr'}
@@ -1004,7 +1056,7 @@ if($nativeWriteback){
     try{Native-Writeback}finally{[CapyDocumentControls]::SetThreadDpiAwarenessContext($context)|Out-Null}
     return
 }
-if(!$FailGpu -and !$gpuRecovery){Color-Workflows}
+if(!$FailGpu -and !$focusedGpu){Color-Workflows}
 if($focusedColor){
     $moveTile=@((Model).panels|Where-Object id -eq 'toolbar')[0].tiles|Where-Object {$_.resolved_control.command -eq 'move'}|Select-Object -First 1
     if(!$moveTile){throw 'The shared toolbar has no Move command tile'}
@@ -1031,7 +1083,7 @@ function Import-Idle {
     Wait-Until {$current=Model;$current -and !$current.state.document_file.busy} 'Image import did not finish' 30
     $script:scope=$root
 }
-if($gpuRecovery){
+if($focusedGpu){
     Import-Start;Choose-Path $imageSource;Import-Idle
     Wait-Until {@((Model).state.layers).Count -eq 3 -and (Model).state.layer_tools.editing_layer.object} 'Image layer was not selected'
     $imported=(Model).state.layer_tools.editing_layer.id
@@ -1041,6 +1093,17 @@ if($gpuRecovery){
     File-Command 'save_document';Picker 'Save As';Choose-Path $first;Idle
     Wait-Until {(Test-Path -LiteralPath $first) -and (Model).state.document_file.location.uri -eq $first -and !(Model).state.document_file.modified} 'GPU recovery seed did not save cleanly'
     Draw
+    if($gpuUnavailable){
+        Test-GpuUnavailableSave -CurrentReview
+        $env:CAPY_STORAGE_DIR=Join-Path $run 'gpu-cancel-profile'
+        $env:CAPY_TEST_GPU_UNAVAILABLE='1'
+        [IO.File]::WriteAllText((Settings-File),(@{language=@{Explicit='en'};theme='dark'}|ConvertTo-Json -Depth 4))
+        Start-RecoveryReview 'cancel-discard'
+        New-FocusedDrawing
+        Test-UntitledClose -CloseWindow
+        @{journey=$Journey;gpu_failure_save='Save/Save As, committed raster preservation and queued contact cancellation, Cancel, Discard, durable reopen and identical exported pixels passed';evidence=$run}|ConvertTo-Json
+        return
+    }
     Test-GpuRecovery
     $closedEpoch=(Model).state.document_file.epoch
     File-Command 'close_document';Confirm-Dialog;Invoke-Control 'Discard Changes'
@@ -1254,53 +1317,11 @@ $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -Window
 Write-Output "Untitled close review process $($review.Id)"
 Bind-ReviewWindow 'No untitled review window'
 Wait-Until {(Model).brush_ready} 'Untitled canvas did not finish starting' 45
-Draw
-Fail-Gpu
-File-Command 'close_document';Confirm-Dialog;Invoke-Control 'Save';Picker 'Save As';Picker-Button '2';Idle
-if(!(Model).state.document_file.modified -or (Model).state.document_file.location -or (Model).state.document_file.close_ready){
-    throw 'Cancelling the close-time picker lost the untitled drawing'
-}
-File-Command 'close_document';Confirm-Dialog;Invoke-Control 'Cancel';Idle
-File-Command 'close_document';Confirm-Dialog;Invoke-Control 'Discard Changes'
-Wait-Closed 'Discarded close did not finish'
-if((Get-Item -LiteralPath $stderr).Length){throw 'Untitled native review reported stderr'}
+Test-UntitledClose
 if(!$RecoverGpu -and !$FailGpu){
     Test-LightNewDrawing
 }
-if($FailGpu){
-    Start-RecoveryReview 'save-as'
-    Draw
-    $before=Join-Path $run 'Before GPU failure.png'
-    File-Command 'export_document';Picker 'Save As';Choose-Path $before;Idle
-    Wait-Until {Test-Path -LiteralPath $before} 'Baseline export did not finish'
-    $script:scope=$root
-    $revision=(Model).state.document_file.revision
-    (Find-Id 'zen-capy').GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
-    Wait-Until {(Model).state.workspace.zen_mode -and (Model).chrome_hidden} 'Zen did not hide the editor before GPU failure'
-    # Completed raster pixels remain saveable. Contacts admitted during failed
-    # reconstruction must be canceled without preventing the save workflow.
-    Fail-Gpu @('Test pen','Test pen begin')
-    if((Model).state.document_file.revision -ne $revision){throw 'Failed reconstruction changed the completed raster boundary'}
-    if(!(Model).state.workspace.zen_mode){throw 'GPU failure rewrote the saved Zen preference'}
-    $recovered=Join-Path $run 'Saved after GPU failure.capy'
-    File-Command 'save_document_as';Picker 'Save As';Choose-Path $recovered;Idle
-    Wait-Until {(Test-Path -LiteralPath $recovered) -and !(Model).state.document_file.modified} 'Save As after GPU failure did not complete durably'
-    File-Command 'save_document';Idle
-    Request-Close
-    Wait-Closed 'GPU save-as close did not finish'
-    if((Get-Item -LiteralPath $stderr).Length){throw 'GPU save-as reported stderr'}
-    Remove-Item Env:CAPY_TEST_GPU_UNAVAILABLE
-    Start-RecoveryReview 'reopen'
-    File-Command 'open_document';Picker 'Open';Choose-Path $recovered;Idle
-    Wait-Until {(Model).state.document_file.location.uri -eq $recovered} 'Saved recovery project did not reopen'
-    $after=Join-Path $run 'After GPU failure.png'
-    File-Command 'export_document';Picker 'Save As';Choose-Path $after;Idle
-    Wait-Until {Test-Path -LiteralPath $after} 'Reopened project did not export'
-    if((Get-FileHash -LiteralPath $before).Hash -ne (Get-FileHash -LiteralPath $after).Hash){throw 'Saved recovery project changed exported pixels'}
-    Request-Close
-    Wait-Closed 'Reopened recovery project close did not finish'
-    if((Get-Item -LiteralPath $stderr).Length){throw 'Reopened recovery project reported stderr'}
-}
+if($FailGpu){Test-GpuUnavailableSave}
 [PSCustomObject]@{
     gpu_failure_save=if($FailGpu){'Save/Save As, committed raster preservation and queued contact cancellation, Cancel, Discard, durable reopen and identical exported pixels passed'}else{'not requested'}
     new_drawing_presets_paper_color_size_name_and_cancel='passed'

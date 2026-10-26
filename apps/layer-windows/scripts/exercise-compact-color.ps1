@@ -134,7 +134,9 @@ function Assert-Rim([string]$Id,[string]$Name){
                 $sector+=@{point=$at;rgb=$pixel;difference=$difference}
             }
             if(!$sector.Count){continue}
-            $best=$sector|Sort-Object {$_.difference}|Select-Object -First 1;$samples+=,@{angle=$angle;pixels=$sector}
+            $best=$sector[0]
+            foreach($candidate in $sector){if([double]$candidate.difference -lt [double]$best.difference){$best=$candidate}}
+            $samples+=,@{angle=$angle;pixels=$sector}
             if($best.difference -gt 40){throw "$Name has no visible outline in rim sector ${i}: $($best.rgb -join ',')"}
         }
         if($samples.Count -lt 6){throw "$Name has too few visible rim samples"}

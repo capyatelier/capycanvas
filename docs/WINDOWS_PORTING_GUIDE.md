@@ -125,6 +125,13 @@ including older gaps; a port does not require an unrestricted historical audit.
   row identity, GPU recovery, resize and visibility/Undo assertions. The default
   `all` journey still runs the complete workspace suite; repeat either scope in
   light and dark themes.
+- Run `exercise-manager.ps1 -PinsOnly` and `-Theme pins-light` for native pin
+  toggles, rapid consecutive activations, unchanged workspace/layout and restart
+  persistence. The result records the actual activation interval; it does not
+  qualify a hardware performance target.
+- Run `exercise-documents.ps1 -Journey gpu-unavailable` with a 900-second
+  private-desktop deadline for saving after exhausted GPU recovery, queued
+  contact cancellation, durable reopen, exact exported pixels and Cancel/Discard.
 - Run `exercise-photo-memory.ps1` through `test-desktop.ps1` with a 600-second
   deadline to generate and open a streamed 12000 by 8000 PNG in a private profile.
   It checks the four colored quadrants and observes only the owned app and its

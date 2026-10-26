@@ -361,21 +361,26 @@ function Scroll-Pattern($Control,[switch]$Focus){
     }
     $pattern
 }
-function Reveal([string]$Id){
+function Reveal([string]$Id,[switch]$Focus){
  $item=Control $Id
- $walker=[System.Windows.Automation.TreeWalker]::ControlViewWalker;$node=$walker.GetParent($item);$scroll=$null;$viewport=$null
- while($node -and !$scroll){
+ if($Focus){$item.SetFocus();Wait-Until {$item.Current.HasKeyboardFocus} "$Id did not receive focus"}
+ $walker=[System.Windows.Automation.TreeWalker]::ControlViewWalker;$node=$walker.GetParent($item);$scroll=$null;$viewport=$null;$viewportId=$null
+ while($node){
   $pattern=$null
-  if($node.TryGetCurrentPattern([System.Windows.Automation.ScrollPattern]::Pattern,[ref]$pattern) -and $pattern.Current.VerticallyScrollable){$scroll=$pattern;$viewport=$node}
+  if(!$scroll -and $node.TryGetCurrentPattern([System.Windows.Automation.ScrollPattern]::Pattern,[ref]$pattern) -and $pattern.Current.VerticallyScrollable){$scroll=$pattern;$viewport=$node}
+  if($node.Current.AutomationId -match '^panel-body-scroll-\d+$'){$viewportId=$node.Current.AutomationId;break}
+  if($node.Current.AutomationId -match '^workspace-group-(\d+)$'){if($scroll){$viewportId='panel-body-scroll-'+$Matches[1]};break}
+  if($node.Equals($root)){break}
   $node=$walker.GetParent($node)
  }
  for($step=0;$step -lt 40;$step++){
   $item=Control $Id;$bounds=$item.Current.BoundingRectangle
-  $clip=if($viewport){$viewport.Current.BoundingRectangle}else{$root.Current.BoundingRectangle};$clip.Inflate(1,1)
+  $clip=if($viewportId){Native-Bounds $viewportId ([CapyRowPointer]::GetDpiForWindow([IntPtr]$root.Current.NativeWindowHandle)/96.)}elseif($viewport){$viewport.Current.BoundingRectangle}else{$root.Current.BoundingRectangle}
+  $clip.Intersect($root.Current.BoundingRectangle);$clip.Inflate(1,1)
   if(!$item.Current.IsOffscreen -and !$bounds.IsEmpty -and $clip.Contains($bounds)){return (Control $Id -Arranged)}
   if(!$scroll){throw "$Id is clipped outside any scroll container"}
   $before=$scroll.Current.VerticalScrollPercent
-  $amount=if(!$bounds.IsEmpty -and $bounds.Bottom -le $clip.Top){[System.Windows.Automation.ScrollAmount]::SmallDecrement}else{[System.Windows.Automation.ScrollAmount]::SmallIncrement}
+  $amount=if(!$bounds.IsEmpty -and $bounds.Top -lt $clip.Top){[System.Windows.Automation.ScrollAmount]::SmallDecrement}else{[System.Windows.Automation.ScrollAmount]::SmallIncrement}
   $scroll.Scroll([System.Windows.Automation.ScrollAmount]::NoAmount,$amount)
   Wait-Until {[Math]::Abs($scroll.Current.VerticalScrollPercent-$before) -gt .01} "$Id did not scroll into view"
  }

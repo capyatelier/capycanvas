@@ -1,7 +1,9 @@
-﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light','both','workflow-light')][string]$Theme='dark',[switch]$WorkflowOnly)
+﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light','both','workflow-light','pins-light')][string]$Theme='dark',[switch]$WorkflowOnly,[switch]$PinsOnly)
 $ErrorActionPreference='Stop'
 if($Theme -eq 'workflow-light'){$Theme='light';$WorkflowOnly=$true}
-if($Theme -eq 'both'){foreach($choice in @('dark','light')){& $PSCommandPath -Executable $Executable -Theme $choice -WorkflowOnly:$WorkflowOnly};return}
+if($Theme -eq 'pins-light'){$Theme='light';$PinsOnly=$true}
+if($WorkflowOnly -and $PinsOnly){throw 'Choose workspace workflows or pins'}
+if($Theme -eq 'both'){foreach($choice in @('dark','light')){& $PSCommandPath -Executable $Executable -Theme $choice -WorkflowOnly:$WorkflowOnly -PinsOnly:$PinsOnly};return}
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 $CapyCacheModel=$true
 if(!('CapyRowPointer' -as [type])){Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')}
@@ -61,6 +63,41 @@ function Close {
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close
     if((Get-Item -LiteralPath $stderr).Length){throw 'Native stderr requires inspection'}
 }
+function Check-Pins([string]$WorkspaceId,[string]$WorkspaceName){
+    Menu 'Manage Workspaces…'
+    Capture 'workspaces'
+    $pinId='workspace-manager-pin-'+$WorkspaceId
+    $pinBefore=[bool](@((Manager).rows|Where-Object id -eq $WorkspaceId)[0].pin.selected)
+    $pinLayout=Layout;$pinWorkspace=(Model).windows_workspace.id
+    foreach($expected in @((-not $pinBefore),$pinBefore)){
+        (Control $pinId -Arranged).GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
+        Wait-Until {$row=@((Manager).rows|Where-Object id -eq $WorkspaceId)[0];$row.pin.selected -eq $expected -and !(Manager).switcher_busy -and ((Control $pinId).GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Current.ToggleState -eq $(if($expected){[System.Windows.Automation.ToggleState]::On}else{[System.Windows.Automation.ToggleState]::Off}))} 'Workspace pin did not acknowledge its shared visibility state'
+    }
+    $pinPattern=(Control $pinId -Arranged).GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)
+    $script:pinRapid=[ordered]@{before_shared=$pinBefore;before_native=[string]$pinPattern.Current.ToggleState;revision_before=(Manager).switcher_revision;frequency=[Diagnostics.Stopwatch]::Frequency;started_ticks=$null;first_returned_ticks=$null;first_native=$null;second_started_ticks=$null;second_returned_ticks=$null;second_native=$null;milliseconds=$null;revision_after=$null;persisted_after_restart=$null}
+    try{
+        $pinRapid.started_ticks=[Diagnostics.Stopwatch]::GetTimestamp()
+        $pinPattern.Toggle();$pinRapid.first_returned_ticks=[Diagnostics.Stopwatch]::GetTimestamp();$pinRapid.first_native=[string]$pinPattern.Current.ToggleState
+        $pinRapid.second_started_ticks=[Diagnostics.Stopwatch]::GetTimestamp()
+        $pinPattern.Toggle();$pinRapid.second_returned_ticks=[Diagnostics.Stopwatch]::GetTimestamp();$pinRapid.second_native=[string]$pinPattern.Current.ToggleState
+        $pinRapid.milliseconds=1000.*($pinRapid.second_returned_ticks-$pinRapid.started_ticks)/$pinRapid.frequency
+        if($pinRapid.milliseconds -ge 150){throw 'Native pin activations exceeded 150 ms; rapid coverage is unverified'}
+        if($pinRapid.first_native -ne $(if($pinBefore){'Off'}else{'On'}) -or $pinRapid.second_native -ne $pinRapid.before_native){throw 'Rapid native pin activations did not toggle and restore the checked state'}
+        Wait-Until {$state=Manager;$row=@($state.rows|Where-Object id -eq $WorkspaceId)[0];$pinRapid.revision_after=$state.switcher_revision;$row.pin.selected -eq $pinBefore -and !$state.switcher_busy -and [string](Control $pinId).GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Current.ToggleState -eq $pinRapid.before_native} 'Rapid pin activations did not settle at the original shared and native state'
+    }finally{$pinRapid|ConvertTo-Json -Depth 4|Set-Content -LiteralPath (Join-Path $run 'pin-rapid.json')}
+    if((Layout) -ne $pinLayout -or (Model).windows_workspace.id -ne $pinWorkspace){throw 'Pinning changed workspace selection or layout'}
+    if(Find ('workspace-manager-options-'+$WorkspaceId) -Visible){throw 'Included workspace still has a row options button'}
+    Invoke ('workspace-manager-grip-'+$WorkspaceId)
+    $null=Control 'workspace-manager-move-up'
+    foreach($id in @('workspace-manager-rename','workspace-manager-delete')){
+        $action=Find $id
+        if($action -and !$action.Current.IsOffscreen){throw 'Included workspace exposes a protected rename/delete action'}
+    }
+    [CapyRowPointer]::Key([uint32]$review.Id,27)
+    Wait-Until {$anchor=Find 'workspace-manager-move-up';!$anchor -or $anchor.Current.IsOffscreen} 'Included workspace menu did not close'
+    Choose 'Cancel';Closed
+    if((HeaderChoice $WorkspaceId).Current.Name -ne $WorkspaceName){throw 'Included workspace name changed'}
+}
 try {
     Enter-CapyEnvironment
     $env:CAPY_STORAGE_DIR=Join-Path $run 'profile'
@@ -71,6 +108,18 @@ try {
     $originalName=(Model).windows_workspace.name
     if($original -ne 'builtin:workspace:illustrator'){throw 'Fresh installations must open Paint'}
     $saved=Layout;$size=(Model).state.brush.diameter;$painter='builtin:workspace:painter'
+    if($PinsOnly){
+        Check-Pins $original $originalName
+        Close
+        Launch 'pins-restart'
+        if((Model).windows_workspace.id -ne $original -or (Layout) -cne $saved){throw 'Restart after rapid pinning changed the workspace or layout'}
+        Menu 'Manage Workspaces…'
+        Wait-Until {$row=@((Manager).rows|Where-Object id -eq $original)[0];$row.pin.selected -eq $pinRapid.before_shared -and !(Manager).switcher_busy -and [string](Control ('workspace-manager-pin-'+$original)).GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Current.ToggleState -eq $pinRapid.before_native} 'Restart did not retain the rapid pin result'
+        $pinRapid.persisted_after_restart='passed';$pinRapid|ConvertTo-Json -Depth 4|Set-Content -LiteralPath (Join-Path $run 'pin-rapid.json')
+        Choose 'Cancel';Closed;Close
+        [pscustomobject]@{theme=$Theme;pins_only=$true;native_pin_toggle='passed';native_pin_rapid='passed';rapid_milliseconds=$pinRapid.milliseconds;rapid_restart='passed';workspace_selection_and_layout='unchanged';protected_included_actions='passed';zero_exit='passed';evidence=$run}|ConvertTo-Json|Tee-Object -FilePath (Join-Path $run 'results.json')
+        return
+    }
     if(!$WorkflowOnly){
     Capture 'illustrator'
     Invoke 'panel-tab-stats'
@@ -139,27 +188,7 @@ try {
         Invoke $step.id
         Wait-Until {(Layout) -eq $step.layout} 'Starting-layout restore was not one history step'
     }
-    Menu 'Manage Workspaces…'
-    Capture 'workspaces'
-    $pinId='workspace-manager-pin-'+$original
-    $pinBefore=[bool](@((Manager).rows|Where-Object id -eq $original)[0].pin.selected)
-    $pinLayout=Layout;$pinWorkspace=(Model).windows_workspace.id
-    foreach($expected in @((-not $pinBefore),$pinBefore)){
-        (Control $pinId -Arranged).GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
-        Wait-Until {$row=@((Manager).rows|Where-Object id -eq $original)[0];$row.pin.selected -eq $expected -and !(Manager).switcher_busy -and ((Control $pinId).GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Current.ToggleState -eq $(if($expected){[System.Windows.Automation.ToggleState]::On}else{[System.Windows.Automation.ToggleState]::Off}))} 'Workspace pin did not acknowledge its shared visibility state'
-    }
-    if((Layout) -ne $pinLayout -or (Model).windows_workspace.id -ne $pinWorkspace){throw 'Pinning changed workspace selection or layout'}
-    if(Find ('workspace-manager-options-'+$original) -Visible){throw 'Included workspace still has a row options button'}
-    Invoke ('workspace-manager-grip-'+$original)
-    $null=Control 'workspace-manager-move-up'
-    foreach($id in @('workspace-manager-rename','workspace-manager-delete')){
-        $action=Find $id
-        if($action -and !$action.Current.IsOffscreen){throw 'Included workspace exposes a protected rename/delete action'}
-    }
-    [CapyRowPointer]::Key([uint32]$review.Id,27)
-    Wait-Until {$anchor=Find 'workspace-manager-move-up';!$anchor -or $anchor.Current.IsOffscreen} 'Included workspace menu did not close'
-    Choose 'Cancel';Closed
-    if((HeaderChoice $original).Current.Name -ne $originalName){throw 'Included workspace name changed'}
+    Check-Pins $original $originalName
     }
     Menu 'Manage Workspaces…'
     Invoke 'workspace-manager-create'

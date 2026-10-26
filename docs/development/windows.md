@@ -2144,8 +2144,10 @@ Scrollable native panels publish changed geometry through their existing layout
 callback, including compositor-only scrolling that does not raise LayoutUpdated.
 Tool fixtures focus the requested control before revealing its complete row.
 Native focus can bring the control into view; the full-row geometry checks remain.
-For docked Tool controls, intersect the scroll provider bounds with the allocated
-native Tool group bounds before testing visibility or choosing scroll direction.
+For workspace panel controls, reveal rows within the published native
+`panel-body-scroll-N` bounds, converted to screen coordinates. A scroll provider's
+UIA bounds can include its full content extent. Keep its ScrollPattern for input;
+use the allocated body viewport for visibility and scroll direction.
 Top captures reuse each row's validated expected height when revealing it again.
 Docked Tool fixtures dismiss any tool drawer with canvas focus and Escape after
 selection, then wait for shared closure and native drawer removal before finding

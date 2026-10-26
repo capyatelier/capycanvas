@@ -47,15 +47,21 @@ function Tap([string]$Id,[string]$Device){
 }
 function Pick-ToolAction([string]$Group,[string]$Command,[string]$Device){
  $id="tool-action-group-$Group"
- Reveal $id
+ $null=Reveal $id -Focus
  $box=Control $id -Arranged
- $bounds=Native-Bounds $id ([CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.)
- $point=[System.Windows.Point]::new(0.,0.)
+ $scale=[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.
+ $bounds=Native-Bounds $id $scale
  $trace=[ordered]@{device=$Device;id=$id;native_bounds=$bounds;control=@(Control-Trace $box)}
- if(!$box.TryGetClickablePoint([ref]$point)){$trace|ConvertTo-Json -Depth 12|Set-Content (Join-Path $run ($id+'-'+$Device+'-input.json'));throw "Tool action group $Group has no native clickable point"}
- $x=[int]$point.X;$y=[int]$point.Y
+ $ancestors=@($trace.control|Where-Object {$_.process -eq $review.Id -and $_.id -match '^workspace-group-\d+$'})
+ if($ancestors.Count -ne 1){$trace|ConvertTo-Json -Depth 12|Set-Content (Join-Path $run ($id+'-'+$Device+'-input.json'));throw "Tool action group $Group has no unique owned panel ancestor"}
+ $viewport=Native-Bounds ($ancestors[0].id -replace '^workspace-group-','panel-body-scroll-') $scale
+ $trace.panel_viewport=$viewport;$trace.owned_root=$root.Current.BoundingRectangle
+ if(!$viewport.Contains($bounds) -or !$trace.owned_root.Contains($bounds) -or $box.Current.IsOffscreen -or !$box.Current.IsEnabled -or $box.Current.ProcessId -ne $review.Id){$trace|ConvertTo-Json -Depth 12|Set-Content (Join-Path $run ($id+'-'+$Device+'-input.json'));throw "Tool action group $Group is outside its owned panel viewport"}
+ $trace.point_source='native_bounds_center'
+ $x=[int]($bounds.X+$bounds.Width/2);$y=[int]($bounds.Y+$bounds.Height/2)
+ $point=[System.Windows.Point]::new($x,$y)
  $trace.before=Input-Trace $x $y;$trace.expand_before=$box.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Current.ExpandCollapseState.ToString()
- if(!$box.Current.BoundingRectangle.Contains($point) -or $trace.before.foreground -ne $trace.before.owned_window -or !@($trace.before.hit|Where-Object {$_.process -eq $review.Id}).Count){$trace|ConvertTo-Json -Depth 12|Set-Content (Join-Path $run ($id+'-'+$Device+'-input.json'));throw "Native clickable point is outside the owned Tool action group $Group"}
+ if(!$bounds.Contains($point) -or $trace.before.foreground -ne $trace.before.owned_window -or !@($trace.before.hit|Where-Object {$_.process -eq $review.Id}).Count){$trace|ConvertTo-Json -Depth 12|Set-Content (Join-Path $run ($id+'-'+$Device+'-input.json'));throw "Input candidate is outside the owned Tool action group $Group"}
  [CapyRowPointer]::Down($Device,$x,$y);Start-Sleep -Milliseconds 40;[CapyRowPointer]::Up()
  try{Wait-Until {$box.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Current.ExpandCollapseState -eq [System.Windows.Automation.ExpandCollapseState]::Expanded} "Tool action group $Group did not expand from $Device input"}finally{
   $trace.after=Input-Trace $x $y;$trace.expand_after=$box.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Current.ExpandCollapseState.ToString()
@@ -66,28 +72,6 @@ function Pick-ToolAction([string]$Group,[string]$Command,[string]$Device){
  $at=Center $option
  [CapyRowPointer]::Down($Device,$at[0],$at[1]);Start-Sleep -Milliseconds 40;[CapyRowPointer]::Up()
  Wait-Until {(Command $Command).selected} "Tool Settings did not select $Command"
-}
-function Reveal([string]$Id){
- $target=Control $Id
- $target.SetFocus()
- Wait-Until {$target.Current.HasKeyboardFocus} "$Id did not receive focus"
- $walker=[System.Windows.Automation.TreeWalker]::ControlViewWalker
- $node=$walker.GetParent((Control $Id));$scroll=$null;$viewport=$null
- while($node -and !$scroll){
-  $pattern=$null
-  if($node.TryGetCurrentPattern([System.Windows.Automation.ScrollPattern]::Pattern,[ref]$pattern) -and $pattern.Current.VerticallyScrollable){$scroll=$pattern;$viewport=$node}
-  $node=$walker.GetParent($node)
- }
- if(!$scroll){return}
- Wait-Until {
-  $item=Find $Id
-  if($item -and !$item.Current.IsOffscreen){
-   $bounds=$item.Current.BoundingRectangle
-   $clip=$viewport.Current.BoundingRectangle;$clip.Inflate(1,1)
-   if($clip.Contains($bounds)){return $true}
-  }
-  $scroll.Scroll([System.Windows.Automation.ScrollAmount]::NoAmount,[System.Windows.Automation.ScrollAmount]::LargeIncrement);Start-Sleep -Milliseconds 200;$false
- } "$Id did not scroll into view" 10
 }
 function Touch([string]$Device,[int[]]$At){[CapyRowPointer]::Down($Device,$At[0],$At[1]);Start-Sleep -Milliseconds 40;[CapyRowPointer]::Up();Start-Sleep -Milliseconds 150}
 function Drag([string]$Device,[int[]]$From,[int[]]$To,[scriptblock]$BeforeLast){
@@ -118,7 +102,7 @@ function Width{[int]@((Model).state.tabs)[0].width}
 function Check-Mixing{
  Run 'Smudge'
  Wait-Until {(Command 'color_mix_linear').enabled} 'The Smudge brush did not offer color mixing'
- Reveal 'tool-action-group-color-mixing'
+ $null=Reveal 'tool-action-group-color-mixing' -Focus
  Compact-Choice 'tool-action-group-color-mixing' ([CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.)|Out-Null
  Pick-ToolAction 'color-mixing' 'color_mix_linear' 'pen'
  Wait-Until {(Command 'color_mix_linear').selected -and !(Command 'color_mix_oklab').selected} 'Linear mixing did not take effect from Tool Settings'
@@ -218,7 +202,7 @@ function Check-TransformFootprint{
   if($applied.authored -ceq $original.authored -or $appliedPixels -ceq $originalPixels){throw 'Applying the backed-out Distort did not change artwork and canvas pixels'}
   Footprint-History 0x5A $original $originalPixels ($filter+'-undo')
   Footprint-History 0x59 $applied $appliedPixels ($filter+'-redo')
-  Run 'Pencil';Reveal 'tool-setting-size';(Control 'tool-setting-size').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('24');(Control 'drawing-canvas').SetFocus()
+  Run 'Pencil';$null=Reveal 'tool-setting-size' -Focus;(Control 'tool-setting-size').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('24');(Control 'drawing-canvas').SetFocus()
   Wait-Until {(Value 'size') -eq 24} 'The follow-up Pencil size did not commit'
   Drag 'pen' (Screen-Point @(1500,1200)) (Screen-Point @(1580,1260));Idle
   $painted=Footprint-Checkpoint ($filter+'-painted');$paintedPixels=Wait-StablePixels {Footprint-Pixels}
