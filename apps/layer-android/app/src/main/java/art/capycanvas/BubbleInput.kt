@@ -56,13 +56,16 @@ internal class BubbleInteraction(val host: CanvasHost, val dock: DockInteraction
         var grab: JSONObject? = null
         val fingers = linkedMapOf(id to start)
         var paired = false
+        var pairLifted = false
         var pairEnded = false
+        var pairOrigin = start
         var spread = 1f
         var scale = 1f
         var midpoint = start
     }
     private var candidate: Candidate? = null
     private var contact: Contact? = null
+    private val colorTouches = mutableMapOf<PointerId, Pair<Long, Offset>>()
     fun send(action: JSONObject) { host.bubble(action); wake() }
     private fun drag(grab: JSONObject, phase: String, point: Offset) {
         send(obj("type" to "drag", "grab" to grab, "phase" to phase, "position" to point.headerPoint(), "viewport" to dock.viewport))
@@ -221,7 +224,7 @@ internal class BubbleInteraction(val host: CanvasHost, val dock: DockInteraction
                 current.hold?.cancel(); lastRing = null; restore(current); dismiss()
                 current.paired = true; current.mode = "pair"; current.grab = obj("kind" to "bubble", "id" to current.record.id)
                 val pair = current.fingers.values.toList(); current.midpoint = (pair[0] + pair[1]) / 2f; current.spread = (pair[0] - pair[1]).getDistance().coerceAtLeast(1f)
-                drag(current.grab!!, "down", current.midpoint)
+                current.pairOrigin = current.midpoint
             }
             return true
         }
@@ -270,6 +273,10 @@ internal class BubbleInteraction(val host: CanvasHost, val dock: DockInteraction
         if (c.paired) {
             if (!c.pairEnded) {
                 val pair = c.fingers.values.toList(); c.midpoint = (pair[0] + pair[1]) / 2f
+                if (!c.pairLifted) {
+                    if ((c.midpoint - c.pairOrigin).getDistance() <= 8f && abs((pair[0] - pair[1]).getDistance() - c.spread) <= 8f) return true
+                    c.pairLifted = true; drag(c.grab!!, "down", c.pairOrigin)
+                }
                 if (c.record.view.getString("kind") == "color") {
                     val size = c.record.view.number("diameter")
                     c.scale = (bubbleUi(obj("type" to "pinched_size", "size" to size, "scale" to (pair[0] - pair[1]).getDistance() / c.spread)) as Number).toFloat() / size
@@ -327,10 +334,11 @@ internal class BubbleInteraction(val host: CanvasHost, val dock: DockInteraction
         if (cancelled) lastRing = null
         if (c.mode == "native") { contact = null; return captured }
         if (c.paired) {
-            if (!c.pairEnded) {
-                c.pairEnded = true; c.record.pinch = 1f; drag(c.grab!!, if (cancelled) "cancel" else "up", c.midpoint)
+            if (!c.pairEnded && c.pairLifted) {
+                drag(c.grab!!, if (cancelled) "cancel" else "up", c.midpoint)
                 if (!cancelled && c.record.view.getString("kind") == "color" && abs(c.scale - 1f) > .01f) send(obj("type" to "resize", "id" to c.record.id, "scale" to c.scale))
             }
+            c.pairEnded = true; c.record.pinch = 1f
         } else if (cancelled) { restore(c); if (c.held) dismiss() }
         else if (!c.held) {
             if (c.mode == "moving") drag(c.grab!!, "up", c.last)
@@ -343,11 +351,30 @@ internal class BubbleInteraction(val host: CanvasHost, val dock: DockInteraction
         wake()
         return true
     }
+    fun colorTouch(change: PointerInputChange) {
+        if (change.type != PointerType.Touch) return
+        val phase = when {
+            change.changedToDownIgnoreConsumed() -> "down"
+            change.id !in colorTouches -> return
+            change.pressed -> "move"
+            change.isConsumed -> "cancel"
+            else -> "up"
+        }
+        val surface = if (phase == "down") target(change.position / dock.density)?.takeIf { it.view.getString("kind") == "color" }?.colorSurface ?: return
+            else colorTouches.getValue(change.id).first
+        host.colorTouch(surface, change.id, phase, change.position, change.uptimeMillis)
+        if (change.pressed) colorTouches[change.id] = surface to change.position else colorTouches.remove(change.id)
+    }
+    private fun cancelColorTouches() {
+        val now = android.os.SystemClock.uptimeMillis()
+        colorTouches.forEach { (id, touch) -> host.colorTouch(touch.first, id, "cancel", touch.second, now) }
+        colorTouches.clear()
+    }
     private fun abandon() {
         contact?.let { it.hold?.cancel(); it.record.pinch = 1f }
         contact = null; candidate = null; dock.bubbleCaptured = false; dismiss()
     }
-    fun cancel() { refresh(); up(null, true) }
+    fun cancel() { refresh(); up(null, true); cancelColorTouches() }
     fun key(event: KeyEvent): Boolean {
         if (event.keyCode != KeyEvent.KEYCODE_ESCAPE || contact == null && candidate?.moving != true) return false
         if (event.action == KeyEvent.ACTION_DOWN) cancel()
@@ -397,6 +424,7 @@ internal class BubbleInteraction(val host: CanvasHost, val dock: DockInteraction
                     input.refresh()
                     if (input.records.isNotEmpty() && event.changes.any { it.pressed || it.previousPressed }) input.wake()
                     event.changes.forEach { change ->
+                        input.colorTouch(change)
                         val captured = when {
                             change.changedToDownIgnoreConsumed() -> input.down(change, event.buttons.isSecondaryPressed)
                             change.changedToUpIgnoreConsumed() -> input.up(change, change.isConsumed)

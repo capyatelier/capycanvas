@@ -883,6 +883,78 @@ class AndroidColorPanelTest {
             color(obj("op" to "select", "slot" to "foreground"))
         }
     }
+    private fun fingerTap(points: List<Offset>) {
+        val start = SystemClock.uptimeMillis()
+        fun send(action: Int, count: Int) {
+            val properties = (0 until count).map { MotionEvent.PointerProperties().apply { id = 20 + it; toolType = MotionEvent.TOOL_TYPE_FINGER } }.toTypedArray()
+            val coords = (0 until count).map { MotionEvent.PointerCoords().apply { x = points[it].x; y = points[it].y; pressure = .7f } }.toTypedArray()
+            deliver(MotionEvent.obtain(start, SystemClock.uptimeMillis(), action, count, properties, coords, 0, 0, 1f, 1f, 0, 0, InputDevice.SOURCE_TOUCHSCREEN, 0))
+        }
+        send(MotionEvent.ACTION_DOWN, 1)
+        for (i in 1 until points.size) send(MotionEvent.ACTION_POINTER_DOWN or (i shl MotionEvent.ACTION_POINTER_INDEX_SHIFT), i + 1)
+        for (i in points.size - 1 downTo 1) send(MotionEvent.ACTION_POINTER_UP or (i shl MotionEvent.ACTION_POINTER_INDEX_SHIFT), i + 1)
+        send(MotionEvent.ACTION_UP, 1)
+        host.drain(); settle()
+    }
+    @Test fun wheelAndArcTapsAndMenuUndoColorChanges() {
+        host.createDrawing(640, 480, depth = "F16")
+        waitFor("HDR drawing ready") { host.snapshot?.objectOrNull("color_panel")?.optBoolean("hdr") == true && host.snapshot?.optBoolean("brush_ready") == true }
+        val answered = CountDownLatch(1)
+        var menu: JSONObject? = null
+        instrumentation.runOnMainSync { host.query(obj("type" to "context", "target" to obj("kind" to "color_wheel"))) { menu = it as? JSONObject; answered.countDown() } }
+        assertTrue("Color wheel menu query completes", answered.await(15, TimeUnit.SECONDS))
+        val undo = menu!!.array("sections").getJSONArray(0).getJSONObject(0).getString("label")
+        fun foreground() = colors().getJSONObject("foreground").getJSONArray("rgba").toString()
+        fun intensity() = view().getDouble("intensity")
+        for (theme in listOf("light", "dark")) {
+            action(obj("type" to "set_theme", "theme" to theme)); resize(280)
+            color(obj("op" to "select", "slot" to "foreground")); color(obj("op" to "hdr_intensity", "stops" to 0))
+            val wheel = bounds("color-wheel")
+            val c = wheel.center
+            val ring = c + Offset(view().getJSONObject("geometry").number("outer") * wheel.width - 4 * density, 0f)
+            val start = foreground()
+            tool = MotionEvent.TOOL_TYPE_MOUSE
+            event(MotionEvent.ACTION_DOWN, c + Offset(wheel.width * .1f, -wheel.width * .1f))
+            event(MotionEvent.ACTION_MOVE, c + Offset(wheel.width * .15f, 0f))
+            event(MotionEvent.ACTION_MOVE, c + Offset(wheel.width * .05f, wheel.width * .12f))
+            event(MotionEvent.ACTION_UP); host.drain(); settle()
+            val dragged = foreground()
+            assertNotEquals("$theme: dragging on the wheel picks", start, dragged)
+            fingerTap(listOf(c - Offset(20 * density, 0f), c + Offset(20 * density, 0f)))
+            assertEquals("$theme: a two-finger tap on the wheel undoes the whole drag", start, foreground())
+            fingerTap(listOf(c - Offset(20 * density, 0f), c + Offset(20 * density, 0f), ring))
+            assertEquals("$theme: a three-finger tap on the wheel redoes", dragged, foreground())
+            fingerTap(listOf(c + Offset(-wheel.width * .2f, wheel.width * .2f), ring))
+            assertEquals("$theme: the second finger retires the first finger's pick and the tap undoes", start, foreground())
+            fun arc(fraction: Float): Offset {
+                val panel = bounds("color-panel")
+                val point = JSONObject(Native.colorUi(obj("type" to "arc", "size" to panel.width / density, "fraction" to fraction).toString(), host.languageTag)).array("point")
+                return panel.topLeft + Offset(point.getDouble(0).toFloat(), point.getDouble(1).toFloat()) * density
+            }
+            val stops = intensity()
+            event(MotionEvent.ACTION_DOWN, arc(.4f)); event(MotionEvent.ACTION_MOVE, arc(.6f)); event(MotionEvent.ACTION_MOVE, arc(.8f))
+            event(MotionEvent.ACTION_UP); host.drain(); settle()
+            assertTrue("$theme: the arc raises the intensity", intensity() > stops + 1)
+            fingerTap(listOf(arc(.3f), arc(.7f)))
+            assertEquals("$theme: a two-finger tap on the arc undoes the whole arc drag", stops, intensity(), .001)
+            event(MotionEvent.ACTION_DOWN, c + Offset(wheel.width * .1f, -wheel.width * .1f)); event(MotionEvent.ACTION_UP); host.drain(); settle()
+            assertNotEquals(start, foreground())
+            button = MotionEvent.BUTTON_SECONDARY
+            tap(ring)
+            button = MotionEvent.BUTTON_PRIMARY
+            var item: Pair<ViewRootForTest, SemanticsNode>? = null
+            waitFor("$theme: right-clicking the hue ring opens color undo") {
+                fun text(n: SemanticsNode): Boolean = n.config.getOrNull(SemanticsProperties.Text)?.any { it.text == undo } == true || n.children.any(::text)
+                item = findNode({ it.config.getOrNull(SemanticsActions.OnClick) != null && text(it) })
+                item != null
+            }
+            fullCapture("color-undo-$theme-menu")
+            instrumentation.runOnMainSync { assertTrue(item!!.second.config[SemanticsActions.OnClick].action!!.invoke()) }
+            host.drain(); settle()
+            assertEquals("$theme: the wheel menu undoes", start, foreground())
+            waitFor("$theme: the menu closes") { findTag("workspace-menu") == null }
+        }
+    }
     private fun menuOpen(): Boolean {
         var present = false
         instrumentation.runOnMainSync { present = findTag("color-swap-menu") != null }
@@ -1095,6 +1167,11 @@ class AndroidColorPanelTest {
                 for (nonPrimary in listOf(MotionEvent.BUTTON_SECONDARY, MotionEvent.BUTTON_TERTIARY)) {
                     button = nonPrimary; tap(wheel.center)
                     assertEquals("Non-primary mouse buttons do not pick", before, colors().toString())
+                    if (nonPrimary == MotionEvent.BUTTON_SECONDARY) {
+                        waitFor("Secondary click opens the color wheel menu") { findTag("workspace-menu") != null }
+                        instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
+                        waitFor("Back dismisses the color wheel menu") { findTag("workspace-menu") == null }
+                    }
                 }
                 button = MotionEvent.BUTTON_PRIMARY
             }

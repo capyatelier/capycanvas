@@ -100,6 +100,7 @@ internal class BubblePart(val key: String, data: JSONObject, val fromScale: Floa
 internal class BubbleRecord(packet: JSONObject) {
     var packet by mutableStateOf(packet)
     val id = packet.getJSONObject("view").getInt("id")
+    val colorSurface = colorTouchSurfaces.incrementAndGet()
     val view get() = packet.getJSONObject("view")
     var order by mutableIntStateOf(0)
     var center by mutableStateOf(Offset.Zero)

@@ -666,6 +666,52 @@ class AndroidToolBubblesTest {
             shot("review")
         }
     }
+    @Test fun colorRingTapsAndMenuUndoColor() {
+        fun foreground() = state().getJSONObject("colors").getJSONObject("foreground").getJSONArray("rgba").toString()
+        fun dispatch(event: MotionEvent) {
+            try { instrumentation.runOnMainSync { checkNotNull(root).view.dispatchTouchEvent(event) } } finally { event.recycle() }
+        }
+        fun fingerTap(points: List<Offset>) {
+            val start = SystemClock.uptimeMillis()
+            instrumentation.runOnMainSync { root = checkNotNull(findTag("workspace")).first }
+            fun send(action: Int, count: Int) = dispatch(MotionEvent.obtain(start, SystemClock.uptimeMillis(), action, count,
+                (0 until count).map { MotionEvent.PointerProperties().apply { id = it; toolType = MotionEvent.TOOL_TYPE_FINGER } }.toTypedArray(),
+                (0 until count).map { MotionEvent.PointerCoords().apply { x = points[it].x; y = points[it].y; pressure = .7f } }.toTypedArray(),
+                0, 0, 1f, 1f, 0, 0, android.view.InputDevice.SOURCE_TOUCHSCREEN, 0))
+            send(MotionEvent.ACTION_DOWN, 1)
+            for (i in 1 until points.size) send(MotionEvent.ACTION_POINTER_DOWN or (i shl MotionEvent.ACTION_POINTER_INDEX_SHIFT), i + 1)
+            for (i in points.size - 1 downTo 1) send(MotionEvent.ACTION_POINTER_UP or (i shl MotionEvent.ACTION_POINTER_INDEX_SHIFT), i + 1)
+            send(MotionEvent.ACTION_UP, 1)
+            root = null; host.drain()
+        }
+        for (theme in listOf("light", "dark")) {
+            case = "undo-$theme"; tool = MotionEvent.TOOL_TYPE_FINGER
+            action(obj("type" to "restore_workspace", "workspace" to JSONObject(fixture.toString())))
+            action(obj("type" to "set_theme", "theme" to theme))
+            val id = take(3, workspace().center)
+            val c = stable(id)
+            val before = foreground()
+            stroke(c + Offset(12 * density, -8 * density), c + Offset(-12 * density, 8 * density))
+            val picked = foreground()
+            assertNotEquals("$theme: the ring picks", before, picked)
+            val pair = listOf(c - Offset(25 * density, 0f), c + Offset(25 * density, 0f))
+            fingerTap(pair)
+            waitFor("$theme: a two-finger tap on the ring undoes") { foreground() == before }
+            assertTrue("$theme: and leaves the ring where it is", (stable(id) - c).getDistance() < 1f)
+            fingerTap(pair + (c + Offset(0f, 30 * density)))
+            waitFor("$theme: a three-finger tap on the ring redoes") { foreground() == picked }
+            val undo = menuItems(id).first { it.optJSONObject("action")?.optJSONObject("action")?.optString("op") == "undo" }.getString("label")
+            instrumentation.runOnMainSync { root = checkNotNull(findTag("workspace")).first }
+            val down = SystemClock.uptimeMillis()
+            for (step in listOf(MotionEvent.ACTION_DOWN, MotionEvent.ACTION_UP)) dispatch(motion(MotionEvent.TOOL_TYPE_MOUSE, step, c, down, MotionEvent.BUTTON_SECONDARY))
+            root = null
+            waitFor("$theme: right-clicking the ring opens its menu") { findTag("workspace-menu") != null }
+            shot("menu")
+            tapMenu(undo)
+            waitFor("$theme: the ring's menu undoes") { foreground() == before }
+            putBack(id)
+        }
+    }
     @Test fun nativeBubblePickupClosesOpenDrawers() {
         for (theme in listOf("light", "dark")) for (input in listOf(MotionEvent.TOOL_TYPE_MOUSE, MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_STYLUS)) {
             tool = input; root = null; case = "drawer-$theme-$input"

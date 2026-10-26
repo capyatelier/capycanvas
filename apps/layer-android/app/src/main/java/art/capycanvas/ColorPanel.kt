@@ -112,13 +112,15 @@ private fun Modifier.place(rect: JSONArray) = offset(rect.getDouble(0).toFloat()
         }
         val density = LocalDensity.current.density
         SideEffect {onHeight((naturalHeight*density).roundToInt()/density,(layout.number("height")*density).roundToInt()/density)}
+        val claim = remember { ColorTouchClaim() }
         CompositionLocalProvider(LocalViewConfiguration provides compactConfig) {
             Box(Modifier.width(side).height(layout.number("height").dp).testTag("color-panel")
+                .colorHistoryInput(host, claim) { ownsColorPoint(host, it / density, layout, view, if (hdr) side.value else null) }
                 .then(if(hdr) Modifier.hdrIntensityInput(view, ::color) else Modifier)) {
                 if(hdr)ColorIntensityArc(view,layout,Modifier.matchParentSize(),::color)
                 val preview = host.colorPreview
                 ColorWheel(host, view, if (view.optBoolean("hdr")) (preview?.objectOrNull("colors") ?: host.snapshot!!.getJSONObject("state").displayColors()).toString() else "",
-                    preview?.objectOrNull("picker")?.objectOrNull("preview") != null, Modifier.place(layout.array("wheel")), color = ::color)
+                    preview?.objectOrNull("picker")?.objectOrNull("preview") != null, Modifier.place(layout.array("wheel")), claim = claim, color = ::color)
                 for (slot in listOf("background", "foreground", "transparent")) {
                     val swatch = view.array("swatches").objects().first { it.getString("slot") == slot }
                     ColorSwatch(host, swatch, Modifier.place(layout.array(slot)).zIndex(if (slot == view.getString("front_swatch")) 1f else 0f), ::color)
@@ -147,6 +149,15 @@ private fun Modifier.place(rect: JSONArray) = offset(rect.getDouble(0).toFloat()
         }
     }
     }
+}
+
+private fun ownsColorPoint(host: CanvasHost, point: Offset, layout: JSONObject, view: JSONObject, arc: Float?): Boolean {
+    val wheel = layout.array("wheel")
+    val geometry = view.getJSONObject("geometry")
+    val extent = wheel.getDouble(2).toFloat()
+    val center = Offset(wheel.getDouble(0).toFloat(), wheel.getDouble(1).toFloat()) + geometry.array("center").point(extent)
+    return (point - center).getDistance() <= geometry.number("outer") * extent || arc != null && JSONObject(Native.colorUi(obj("type" to "arc",
+        "size" to arc, "point" to JSONArray(listOf(point.x, point.y))).toString(), host.languageTag)).getBoolean("hit")
 }
 
 internal fun editSlot(host: CanvasHost, slot: String, windowed: Boolean) {
@@ -280,7 +291,8 @@ private data class ColorFieldRequest(val shape:String,val hue:Float,val pixels:I
         hdr==other.hdr && rendition==other.rendition && preview==other.preview && (preview || this==other)
 }
 
-@Composable internal fun ColorWheel(host:CanvasHost,view: JSONObject, fieldColors: String, previewing: Boolean, modifier: Modifier, interactive: Boolean = true, color: (JSONObject) -> Unit) {
+@Composable internal fun ColorWheel(host:CanvasHost,view: JSONObject, fieldColors: String, previewing: Boolean, modifier: Modifier, interactive: Boolean = true,
+    claim: ColorTouchClaim = ColorTouchClaim(), color: (JSONObject) -> Unit) {
     val shape = view.getString("shape")
     val rgbSpace = view.getString("rgb_space")
     val hue = view.array("wheel_components").getDouble(0).toFloat()
@@ -330,7 +342,7 @@ private data class ColorFieldRequest(val shape:String,val hue:Float,val pixels:I
                         do {
                             val event = awaitPointerEvent(PointerEventPass.Initial)
                             val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                            if (!change.pressed && change.isConsumed) break // ACTION_CANCEL is a consumed release.
+                            if (!change.pressed && change.isConsumed || claim.claimed) break // ACTION_CANCEL is a consumed release.
                             change.consume()
                             if (change.pressed && change.position != change.previousPosition) update(change.position)
                         } while (change.pressed)
