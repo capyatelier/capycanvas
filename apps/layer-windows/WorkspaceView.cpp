@@ -446,7 +446,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             // Geometry-only changes retain controls, focus, capture and scroll.
             if(full||added||!group.body){
             auto structure=J::Parse(geometry.Stringify());
-            for(auto field:{L"bounds",L"resize_handles",L"tiles",L"footer_grip",L"min_body_height",L"zen_kept"})if(structure.HasKey(field))structure.Remove(field);
+            for(auto field:{L"bounds",L"resize_handles",L"tiles",L"footer_grip",L"min_body_height",L"zen_kept",L"scrolls"})if(structure.HasKey(field))structure.Remove(field);
             if(auto tiles=object(geometry,L"tiles");tiles.Size())structure.Insert(L"tile_style",S(str(tiles,L"tile_style")));
             structure.Insert(L"footer",B(object(geometry,L"footer_grip").Size()!=0));
             J signature=O({{L"geometry",structure},{L"panel",panelStructure(panel)}});
