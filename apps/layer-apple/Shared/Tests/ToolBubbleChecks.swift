@@ -60,6 +60,7 @@ extension XCTestCase {
         waitForExpectations(timeout: 10)
         take(brushSource, 0.32, 0.42)
         XCTAssertTrue(brush.waitForExistence(timeout: 10))
+        let retainedBrushID = brush.identifier
         let colorSource = app.buttons.matching(NSPredicate(format: "label == %@", "Brush color")).firstMatch
         take(colorSource, 0.68, 0.42)
         let wheel = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "bubble-wheel-")).firstMatch
@@ -121,9 +122,37 @@ extension XCTestCase {
         attachEditor(in: app, name: "bubble-layers-card-\(theme)")
         destination(0.48, 0.7).tap()
         XCTAssertTrue(card.waitForNonExistence(timeout: 10), "An outside contact folds the card")
-        let zen = app.buttons.matching(NSPredicate(format: "label == %@", "Zen mode")).firstMatch
-        workspaceActivate(zen)
-        XCTAssertTrue(brushSource.waitForNonExistence(timeout: 10), "Zen hides the header source")
+        let brushFace = app.descendants(matching: .any)[retainedBrushID].firstMatch
+        let bubble = app.descendants(matching: .any)["tool-bubble-" + String(retainedBrushID.dropFirst("bubble-face-".count))].firstMatch
+        let ringLabels = ["Brush size", "Strength", "Texture strength", "Material hardness", "Tip angle", "Opacity"]
+        func haloLabels() -> [String] {
+            bubble.descendants(matching: .any).matching(NSPredicate(format: "label IN %@", ringLabels))
+                .allElementsBoundByIndex.map(\.label).sorted()
+        }
+        func expect(_ condition: @escaping () -> Bool) {
+            expectation(for: NSPredicate { _, _ in condition() }, evaluatedWith: app)
+            waitForExpectations(timeout: 10)
+        }
+        XCTAssertTrue(brushFace.isSelected)
+        let enabledHalos = haloLabels()
+        XCTAssertFalse(enabledHalos.isEmpty, "The selected brush shows its slider halo")
+        let popup = app.descendants(matching: .any)["bubble-context-menu"].firstMatch
+        let showSliders = app.buttons["menu-action-Show Sliders"]
+        func toggleSliders(from selected: Bool) {
+            menu(brushFace)
+            XCTAssertTrue(showSliders.waitForExistence(timeout: 5))
+            XCTAssertEqual(showSliders.isSelected, selected)
+            workspaceActivate(showSliders)
+            expect { popup.exists && showSliders.exists && showSliders.isSelected == !selected }
+            destination(0.95, 0.9).clickOrTap()
+            XCTAssertTrue(popup.waitForNonExistence(timeout: 10))
+        }
+        toggleSliders(from: true)
+        expect { brushFace.exists && brushFace.isSelected && haloLabels().isEmpty }
+        toggleSliders(from: false)
+        expect { brushFace.exists && brushFace.isSelected && haloLabels() == enabledHalos }
+        workspaceActivate(app.descendants(matching: .any)["zen-button"].firstMatch)
+        expect { !brushSource.exists || !brushSource.isEnabled }
         XCTAssertGreaterThan(faces().count, 0, "Bubbles remain accessible in Zen")
         attachEditor(in: app, name: "bubble-zen-\(theme)")
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)
@@ -207,7 +236,7 @@ extension XCTestCase {
         expectation(for: NSPredicate(format: "selected == NO"), evaluatedWith: eraser)
         waitForExpectations(timeout: 5)
         if case .textEntry = journey {
-            editorMenu(in: app, menu: "File", id: "new_document", label: "New…")
+            editorMenu(in: app, menu: "File", id: "new_document", label: "New drawing")
             let name = app.textFields["new-drawing-name"]
             replaceEditorText(name, with: "Hdr", in: app)
             app.typeKey("e", modifierFlags: [])
