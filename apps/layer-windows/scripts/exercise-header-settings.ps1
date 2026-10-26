@@ -64,46 +64,31 @@ function Swatch-Button([string]$Id,[int]$Index) {
     Wait-Until {$found.element=$script:settingsScope.FindFirst([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,"setting-$Id-swatch-$Index"));$found.element} "Missing native swatch $Id/$Index"
     $found.element
 }
-function Swatch-Frames([string]$Id,$Row) {
-    function Node-Receipt($Element) {
-        $current=$Element.Current
-        @{id=$current.AutomationId;name=$current.Name;class=$current.ClassName;type=$current.ControlType.ProgrammaticName;process=$current.ProcessId;runtime_id=($Element.GetRuntimeId()-join ':');offscreen=$current.IsOffscreen;bounds=(Swatch-Bounds $Element)}
-    }
-    $walker=[System.Windows.Automation.TreeWalker]::RawViewWalker;$strip=$null;$scope=$script:settingsScope.GetRuntimeId()-join ':'
-    $receipt=[ordered]@{id=$Id;title=$Row.title;expected_swatches=$Row.kind.swatches.Count;scope=(Node-Receipt $script:settingsScope);ancestors=[Collections.Generic.List[object]]::new();selected=$null}
-    try{
-        for($node=$walker.GetParent((Swatch-Button $Id 0));$node -and ($node.GetRuntimeId()-join ':') -ne $scope;$node=$walker.GetParent($node)){
-            $children=@($node.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition))
-            $swatches=@($children|Where-Object {$_.Current.AutomationId -like 'setting-*-swatch-*'})
-            $foreign=@($swatches|Where-Object {$_.Current.AutomationId -notlike "setting-$Id-swatch-*"})
-            $heading=@($children|Where-Object {$_.Current.ControlType -eq [System.Windows.Automation.ControlType]::Text -and $_.Current.Name -eq $Row.title})
-            $receipt.ancestors.Add(@{node=(Node-Receipt $node);descendants=$children.Count;swatches=@($swatches|ForEach-Object {Node-Receipt $_});swatch_count=$swatches.Count;foreign_swatch_count=$foreign.Count;heading_count=$heading.Count;caption_matches=@($children|Where-Object {$_.Current.Name -eq $Row.title}|ForEach-Object {Node-Receipt $_});text_names=@($children|Where-Object {$_.Current.ControlType -eq [System.Windows.Automation.ControlType]::Text}|ForEach-Object {$_.Current.Name})})
-            if($swatches.Count -ne $Row.kind.swatches.Count -or $foreign.Count){continue}
-            if($heading.Count){
-                if(!$strip){throw "Native swatch strip allocation is unavailable for $Id"}
-                $receipt.selected=@{row=(Node-Receipt $node);strip=(Node-Receipt $strip)}
-                return @{row=$node;strip=$strip}
-            }
-            if(!$strip){$strip=$node}
-        }
-        throw "Native enclosing swatch allocation is unavailable for $Id"
-    }finally{
-        [IO.File]::WriteAllText((Join-Path $EvidenceDirectory ("swatch-frames-$Id.json")),($receipt|ConvertTo-Json -Depth 15),[Text.UTF8Encoding]::new($false))
-    }
+function Swatch-Bounds($Bounds,$Origin,[double]$Scale) {
+    @{x=$Origin.x+$Bounds.x*$Scale;top=$Origin.y+$Bounds.y*$Scale;bottom=$Origin.y+($Bounds.y+$Bounds.height)*$Scale;width=$Bounds.width*$Scale;height=$Bounds.height*$Scale}
 }
-function Swatch-Bounds($Element) {
-    $b=$Element.Current.BoundingRectangle
-    @{x=$b.X;top=$b.Top;bottom=$b.Bottom;width=$b.Width;height=$b.Height}
+function Swatch-Allocation([string]$Id,[double]$Scale) {
+    $title=$script:settingsScope.FindFirst([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,'settings-title'))
+    if(!$title -or $title.Current.IsOffscreen -or !$title.Current.ItemStatus){return}
+    if($title.Current.ProcessId -ne $ProcessId){throw 'Native Preferences allocation belongs to another process'}
+    $trace=$title.Current.ItemStatus|ConvertFrom-Json
+    $parts=@($trace.rows|Where-Object id -eq $Id)
+    if($parts.Count -ne 1 -or $trace.title.width -le 0 -or $trace.title.height -le 0){return}
+    $anchor=$title.Current.BoundingRectangle
+    if($anchor.IsEmpty){return}
+    $origin=@{x=$anchor.X-$trace.title.x*$Scale;y=$anchor.Y-$trace.title.y*$Scale}
+    @{row=(Swatch-Bounds $parts[0].row $origin $Scale);strip=(Swatch-Bounds $parts[0].strip $origin $Scale);entry=$(if($parts[0].entry_visible){Swatch-Bounds $parts[0].entry $origin $Scale});entry_in_strip=[bool]$parts[0].entry_in_strip;native=$parts[0];anchor_runtime_id=($title.GetRuntimeId()-join ':')}
 }
-function Wait-SwatchAllocation([string]$Id,$Row,$Frames,[bool]$Open) {
+function Wait-SwatchAllocation([string]$Id,$Row,[double]$Scale,[bool]$Open) {
     $stable=@{key='';value=$null;watch=[Diagnostics.Stopwatch]::StartNew()}
     Wait-Until {
+        $value=Swatch-Allocation $Id $Scale
+        if(!$value){return $false}
         $entry=Find-Control $Row.title ([System.Windows.Automation.ControlType]::Edit)
         $visible=$entry -and !$entry.Current.IsOffscreen -and $entry.Current.BoundingRectangle.Height -gt 0
-        if([bool]$visible -ne $Open){return $false}
-        $value=@{row=(Swatch-Bounds $Frames.row);strip=(Swatch-Bounds $Frames.strip);entry=$null;entry_in_strip=$false}
-        if($Open){$value.entry=Swatch-Bounds $entry;$value.entry_in_strip=$null -ne $Frames.strip.FindFirst([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,"setting-text-$Id"))}
-        if($value.row.height -le 0 -or $value.strip.height -le 0 -or $Frames.strip.Current.IsOffscreen){return $false}
+        if([bool]$visible -ne $Open -or [bool]$value.entry -ne $Open){return $false}
+        if($Open -and ($entry.Current.ProcessId -ne $ProcessId -or $entry.Current.AutomationId -ne "setting-text-$Id" -or $value.entry.height -le 0)){return $false}
+        if($value.row.height -le 0 -or $value.strip.height -le 0){return $false}
         $key=$value|ConvertTo-Json -Depth 5 -Compress
         if($key -ne $stable.key){$stable.key=$key;$stable.watch.Restart()};$stable.value=$value
         $stable.watch.ElapsedMilliseconds -ge 250
@@ -126,13 +111,13 @@ function Check-SwatchAllocation([string]$Id) {
     try{
         $preset=Swatch-Button $Id 0;$scroll=$null;if($preset.TryGetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern,[ref]$scroll)){$scroll.ScrollIntoView()}
         $preset.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
-        $frames=Swatch-Frames $Id $row;$record.row_runtime_id=$frames.row.GetRuntimeId()-join ':';$record.strip_runtime_id=$frames.strip.GetRuntimeId()-join ':'
-        $record.closed=Wait-SwatchAllocation $Id $row $frames $false
+        $record.source='settings-title native allocations'
+        $record.closed=Wait-SwatchAllocation $Id $row $record.scale $false
         (Swatch-Button $Id $custom).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
-        $record.open=Wait-SwatchAllocation $Id $row $frames $true
+        $record.open=Wait-SwatchAllocation $Id $row $record.scale $true
         if(!(Control $row.title ([System.Windows.Automation.ControlType]::Edit)).Current.HasKeyboardFocus){throw 'Opening Custom did not focus the retained native field'}
         (Swatch-Button $Id 0).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
-        $record.closed_again=Wait-SwatchAllocation $Id $row $frames $false
+        $record.closed_again=Wait-SwatchAllocation $Id $row $record.scale $false
         $gap=if($row.kind.inline){8.}else{12.};$record.metrics=Assert-SwatchAllocation $record.closed $record.open $record.closed_again $gap $record.scale
     }finally{
         try{

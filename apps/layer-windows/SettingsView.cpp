@@ -60,6 +60,9 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
     std::map<std::wstring,StackPanel> pageNodes;
     std::map<std::wstring,Button> tabs;
     std::map<std::wstring,FrameworkElement> rows;
+    std::map<std::wstring,std::array<FrameworkElement,3>> swatchAllocations;
+    bool trace=GetEnvironmentVariableW(L"CAPY_TRACE_UI",nullptr,0)!=0;
+    hstring allocationTrace;
     std::unique_ptr<ShortcutPage> shortcutPage;
     Key key;
     Dispatch report;
@@ -70,6 +73,20 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
     bool showing=false,closing=false,built=false,stopping=false,showFailed=false,dismissing=false;
     enum class ProfileReturn{None,Requested,Managing} profileReturn=ProfileReturn::None;
     uint64_t escapes=0,escaped=0;
+    void publishAllocations(){
+        if(!trace||!title.IsLoaded()||!frame.IsLoaded())return;
+        A allocations;
+        for(auto const& [id,parts]:swatchAllocations){
+            auto visible=visibleBounds(parts[0],frame);if(visible.Width<=0||visible.Height<=0)continue;
+            bool inside=false;for(auto node=VisualTreeHelper::GetParent(parts[2]);node&&node!=frame;node=VisualTreeHelper::GetParent(node))inside=inside||node==parts[1];
+            auto entry=visibleBounds(parts[2],frame);
+            allocations.Append(O({{L"id",S(hstring(id))},{L"row",rectangle(allocatedBounds(parts[0],frame))},
+                {L"strip",rectangle(allocatedBounds(parts[1],frame))},{L"entry",rectangle(allocatedBounds(parts[2],frame))},
+                {L"entry_visible",B(entry.Width>0&&entry.Height>0)},{L"entry_in_strip",B(inside)}}));
+        }
+        auto value=O({{L"title",rectangle(allocatedBounds(title,frame))},{L"rows",allocations}}).Stringify();
+        if(value!=allocationTrace){allocationTrace=value;AutomationProperties::SetItemStatus(title,value);}
+    }
     void init(){
         dialog.XamlRoot(xamlRoot);inheritLanguage(dialog,data);
         for(auto [resource,value]:{std::pair{L"ContentDialogMaxWidth",DialogWidth},std::pair{L"ContentDialogMinWidth",0.},
@@ -116,7 +133,7 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
         return bar;
     }
     void build(J const& model){
-        bindings.clear();commits.clear();themeBindings.clear();pageNodes.clear();tabs.clear();rows.clear();resultsKey=L"";
+        bindings.clear();commits.clear();themeBindings.clear();pageNodes.clear();tabs.clear();rows.clear();swatchAllocations.clear();allocationTrace=L"";resultsKey=L"";
         frame=Grid();overlay=Grid();body=Grid();
         ColumnDefinition navigation;navigation.Width({210,GridUnitType::Pixel});
         ColumnDefinition main;main.Width({1,GridUnitType::Star});body.ColumnDefinitions().Append(navigation);body.ColumnDefinitions().Append(main);
@@ -216,6 +233,7 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
         }
         frame.Children().Append(body);frame.Children().Append(overlay);
         dialog.Content(frame);built=true;
+        if(trace)frame.LayoutUpdated([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->publishAllocations();});
     }
     FrameworkElement field(J const& row){
         auto id=str(row,L"id"),titleText=str(row,L"title");auto kind=object(row,L"kind");auto type=str(kind,L"type");
@@ -391,6 +409,7 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
             };
             bindings.emplace_back([refresh]{(*refresh)();});(*refresh)();
             StackPanel host;host.Children().Append(circles);host.Children().Append(entryPages->root);
+            if(trace)swatchAllocations.insert_or_assign(id.c_str(),std::array<FrameworkElement,3>{line,circles,entry});
             if(inlineRow){text.Spacing(10);text.Children().Append(host);Grid::SetColumnSpan(text,2);}
             else{host.HorizontalAlignment(HorizontalAlignment::Center);text.Spacing(10);text.Children().Append(host);Grid::SetColumnSpan(text,2);}
         }else if(type==L"link"){

@@ -1689,6 +1689,10 @@ visibility journey on the VM.
 Use `header:catalog-only` and `header:catalog-only-light` for categories, Pen
 order, shortcut tooltips and the header catalog. The legacy `header:Catalog`
 switch still runs the full header journey.
+With `CAPY_TRACE_UI`, the `settings-title` peer publishes actual Preferences row,
+swatch-strip and custom-field allocations in one native coordinate space.
+`exercise-header-settings.ps1` uses these measurements for closed, open and
+closed-again spacing checks; passive layout containers need no automation peers.
 
 `exercise-canvas-touch.ps1 -ScrubOnly -Theme dark` checks three-finger clearing
 at horizontal, diagonal and vertical angles, cancellation and locked-layer refusal.
