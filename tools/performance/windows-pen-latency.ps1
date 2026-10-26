@@ -9,7 +9,8 @@ param(
  [switch]$SkipPresentMon,
  [ValidateSet('hand','zoom','rotate_view')][string]$NavigationMode,
  [ValidateSet('move','scale','rotate','placement')][string]$ObjectMotionMode,
- [string]$ObjectPreflight
+ [string]$ObjectPreflight,
+ [string]$ColdPaperPreflight
 )
 $ErrorActionPreference='Stop'
 $brushSeries=$PSBoundParameters.ContainsKey('BrushPreset')
@@ -17,6 +18,7 @@ if($brushSeries -and ($NavigationMode -or $ObjectMotionMode -or !$SkipPresentMon
 if($NavigationMode -and $ObjectMotionMode){throw 'Choose one motion workload'}
 if($ObjectMotionMode -and (!$ObjectPreflight -or !$SkipPresentMon)){throw 'Object motion requires its preflight and -SkipPresentMon'}
 if($NavigationMode -and !$SkipPresentMon){throw 'Navigation capture uses bounded host traces; specify -SkipPresentMon'}
+if($ColdPaperPreflight -and ($NavigationMode -or $ObjectMotionMode -or $brushSeries -or !$SkipPresentMon -or $Seconds -lt 5 -or $Seconds -gt 10)){throw 'Cold paper requires one five-to-ten-second contact, -SkipPresentMon and no other workload'}
 . (Join-Path $PSScriptRoot '../../apps/layer-windows/scripts/CapyUia.ps1')
 $CapyWaitSeconds=45
 $repo=(Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
@@ -42,6 +44,136 @@ if($ObjectMotionMode){
 $OutputDirectory=[IO.Path]::GetFullPath($OutputDirectory)
 if(Test-Path $OutputDirectory){throw 'Use a fresh result directory'}
 New-Item -ItemType Directory $OutputDirectory|Out-Null
+if($ColdPaperPreflight){
+ $ColdPaperPreflight=(Resolve-Path -LiteralPath $ColdPaperPreflight).Path
+ $plan=Get-Content -LiteralPath $ColdPaperPreflight -Raw|ConvertFrom-Json
+ if($plan.schema -ne 1 -or $plan.project_sha256 -ne (Get-FileHash -LiteralPath $Project).Hash -or $plan.qualification.relief -le 0 -or $plan.qualification.empty_editable_paint -ne $true -or $plan.qualification.brush -ne 'G-Pen' -or $plan.qualification.diameter -ne $Diameter -or @($plan.offstroke_points).Count -lt 4 -or @($plan.stroke_points).Count -lt 4){throw 'Cold paper requires a qualified saved relief seed and separated reference samples'}
+ foreach($field in 'qualification_path','source_manifest_path'){
+  if((Get-FileHash -LiteralPath $plan.$field).Hash -ne $plan.($field.Replace('_path','_sha256'))){throw "Cold seed provenance changed: $field"}
+ }
+ if($plan.offstroke_unlit.Count -ne $plan.offstroke_points.Count -or $plan.offstroke_lit.Count -ne $plan.offstroke_points.Count -or $plan.stroke_lit.Count -ne $plan.stroke_points.Count){throw 'Cold seed sample references are incomplete'}
+ if(@(0..($plan.offstroke_points.Count-1)|Where-Object {$plan.offstroke_lit[$_] -ne $plan.offstroke_unlit[$_]}).Count -lt 4){throw 'Four off-stroke points must distinguish real lighting'}
+ Add-Type -Path (Join-Path $PSScriptRoot 'WindowsPenMotion.cs')
+ Add-Type -Path (Join-Path $repo 'apps/layer-windows/scripts/RowPointerDriver.cs')
+ Add-Type -AssemblyName WindowsBase
+ $motionTokens=$null;$motionErrors=$null;$motionAst=[Management.Automation.Language.Parser]::ParseFile($PSCommandPath,[ref]$motionTokens,[ref]$motionErrors)
+ if(@($motionErrors).Count){throw 'The existing motion guards did not parse'}
+ foreach($name in 'Motion-Canvas','Motion-Point','Motion-Path'){
+  $definition=@($motionAst.FindAll({param($node)$node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name},$true))
+  if($definition.Count -ne 1){throw "The existing $name guard is ambiguous"}
+  . ([scriptblock]::Create($definition[0].Extent.Text))
+ }
+ function Cold-Samples([int[]]$Coordinates){
+  for($i=0;$i -lt $Coordinates.Length;$i+=2){$null=Motion-Point $script:paperRegion ([Windows.Point]::new($Coordinates[$i],$Coordinates[$i+1]))}
+  [WindowsPenMotion]::Sample([uint32]$review.Id,$Coordinates)
+ }
+ function Complete-ColdPaper([int]$WaitMilliseconds=30000){
+  $failures=[Collections.Generic.List[string]]::new()
+  try{
+   try{if($producer){if(!$producer.Wait($WaitMilliseconds)){throw 'Producer wait timed out'};$producer.GetAwaiter().GetResult()}}catch{$failures.Add('producer: '+$_.Exception.ToString())}
+  }finally{
+   try{try{if($script:paperReader){$script:paperReader.Dispose()}}catch{$failures.Add('reader: '+$_.Exception.ToString())}}finally{
+    try{
+     try{if($review -and !$review.HasExited){& (Join-Path $repo 'apps/layer-windows/scripts/exercise-window.ps1') -ProcessId $review.Id -Action Close -DiscardUnsaved;if(!$review.WaitForExit(90000) -or !$review.HasExited){throw 'Owned cold-paper app did not close'}}}catch{
+      $failures.Add('close: '+$_.Exception.ToString())
+      try{if($review -and !$review.HasExited){Stop-Process -Id $review.Id -Force -ErrorAction Stop;if(!$review.WaitForExit(5000) -or !$review.HasExited){throw 'Owned app remained active after cleanup'}}}catch{$failures.Add('owned-process cleanup: '+$_.Exception.ToString())}
+     }
+    }finally{
+     try{if($review -and $meta){Get-ChildItem -LiteralPath $directory -Filter ('latency-'+$review.Id+'-'+$meta.window_id+'-*')|Copy-Item -Destination $OutputDirectory}}catch{$failures.Add('evidence: '+$_.Exception.ToString())}
+     try{if($producer -and !$producer.IsCompleted){if(!$producer.Wait([Math]::Min(5000,$WaitMilliseconds))){throw 'Producer remained unfinished after owned-app cleanup'}}}catch{$failures.Add('producer completion: '+$_.Exception.ToString())}
+     $primary=Join-Path $OutputDirectory 'failure.txt'
+     @{failures=$failures.ToArray();producer_completed=(!$producer -or $producer.IsCompleted);primary_failure=$(if(Test-Path -LiteralPath $primary){[IO.File]::ReadAllText($primary)}else{$null})}|ConvertTo-Json -Depth 6|Set-Content -LiteralPath (Join-Path $OutputDirectory 'cleanup.json')
+    }
+   }
+  }
+  if($failures.Count){throw ($failures -join "`n")}
+ }
+ function Cold-Jobs {
+  $script:paperTail+=$script:paperReader.ReadToEnd()
+  $last=$script:paperTail.LastIndexOf("`n")
+  if($last -ge 0){
+   foreach($rawLine in $script:paperTail.Substring(0,$last+1).Split("`n")){
+    $line=$rawLine.TrimEnd("`r")
+    if($line -eq 'pipeline begin label=Some("viewport presentation with paper lighting")'){$script:paperBegins++}
+    if($line -match '^pipeline end label=Some\("viewport presentation with paper lighting"\) elapsed_ms='){$script:paperEnds++}
+   }
+   $script:paperTail=$script:paperTail.Substring($last+1)
+  }
+  if($script:paperEnds -gt $script:paperBegins -or $script:paperReader.BaseStream.Position -gt 2MB){throw 'Cold paper shader log is invalid or exceeds its bound'}
+  @($script:paperBegins,$script:paperEnds)
+ }
+ $script:paperBegins=0;$script:paperEnds=0;$script:paperTail='';$script:paperReader=$null;$producer=$null;$review=$null
+ $observations=[Collections.Generic.List[object]]::new();$stderr=Join-Path $OutputDirectory 'stderr.log'
+ try{
+  try{
+   Enter-CapyEnvironment @('CAPY_LATENCY_TRACE','CAPY_TRACE_SHADER_JOBS')
+   $env:CAPY_STORAGE_DIR=Join-Path $OutputDirectory 'profile';$env:CAPY_LATENCY_TRACE='1';$env:CAPY_TRACE_SHADER_JOBS='1';$env:CAPY_TEST_DISPLAY='1';$env:CAPY_TEST_PRIMARY='1'
+   $plan.settings|ConvertTo-Json -Depth 30|Set-Content (Settings-File)
+   if($Project.Contains('"')){throw 'Project path contains a quote'}
+   $launch=[Diagnostics.Stopwatch]::GetTimestamp()
+   $review=Start-Process -FilePath $Executable -ArgumentList @('"'+$Project+'"') -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError $stderr
+   $launchReturned=[Diagnostics.Stopwatch]::GetTimestamp();$null=$review.Handle
+  }finally{Exit-CapyEnvironment}
+  $review.Id|Set-Content (Join-Path $OutputDirectory 'process-id.txt')
+  $script:paperReader=[IO.StreamReader]::new([IO.File]::Open($stderr,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::ReadWrite))
+  Wait-Until {$script:drawing=Owned-DrawingWindow $review;$drawing} 'The cold-paper owned window did not open' 60
+  [CapyWindowApi]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
+  $root=$drawing.Root;$window=$drawing.Handle
+  Wait-Until {$script:probe=Trace-File 'presentation-probe';$probe} 'The native joint-ready stage was not recorded' 90
+  $meta=Read-Snapshot $probe;$canvas=Control 'drawing-canvas' -Arranged;$bounds=$canvas.Current.BoundingRectangle
+  $title=[IO.Path]::GetFileName($Project)+' '+[char]0x00b7+' Capy Canvas';$modified=[char]0x2022+' '+$title
+  if($root.Current.Name -ne $title -or !$canvas.Current.IsEnabled -or (Find 'canvas-status' -Visible) -or (Control 'canvas-camera').Current.Name -ne $plan.camera_readout -or ((@($bounds.X,$bounds.Y,$bounds.Width,$bounds.Height) -join ',') -ne ($plan.canvas_bounds -join ',')) -or [CapyRowPointer]::GetDpiForWindow($window) -ne $plan.dpi -or (Control 'tool-setting-size').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value -ne "$Diameter px"){throw 'Cold seed viewport, clean title, readiness, camera, DPI or brush size differs from preflight'}
+  $selected=@($root.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,'G-Pen'))|Where-Object {$_.Current.AutomationId -like 'tool-subtool-*' -and $_.Current.ItemStatus -eq 'Selected' -and $_.Current.IsEnabled})
+  if($selected.Count -ne 1){throw 'Cold-paper seed did not select the native G-Pen preset'}
+  if(Trace-File 'ui-state'){throw 'Cold paper measurement forbids per-frame UI tracing'}
+  $cx=[int]$plan.path.cx;$cy=[int]$plan.path.cy;$rx=[int]$plan.path.rx;$ry=[int]$plan.path.ry
+  $pad=$Diameter*[double]$plan.camera_zoom/2+4
+  if($rx -le 0 -or $ry -le 0 -or $cx-$rx-$pad -le $bounds.Left -or $cx+$rx+$pad -ge $bounds.Right -or $cy-$ry-$pad -le $bounds.Top -or $cy+$ry+$pad -ge $bounds.Bottom){throw 'Cold-paper contact exceeds the qualified canvas'}
+  $points=[int[]]@($plan.offstroke_points|ForEach-Object {$_[0];$_[1]});$strokePoints=[int[]]@($plan.stroke_points|ForEach-Object {$_[0];$_[1]})
+  foreach($point in @($plan.offstroke_points)+@($plan.stroke_points)){
+   if(!$bounds.Contains([Windows.Point]::new($point[0],$point[1]))){throw 'Cold-paper sample exceeds the qualified canvas'}
+  }
+  foreach($point in $plan.offstroke_points){if([Math]::Abs($point[0]-$cx) -le $rx+$pad -and [Math]::Abs($point[1]-$cy) -le $ry+$pad){throw 'Lighting sample overlaps the complete brush-expanded path'} }
+  $script:paperRegion=Motion-Canvas;$coldPath=Motion-Path $script:paperRegion $cx $cy $rx $ry $Seconds
+  foreach($point in @($plan.offstroke_points)+@($plan.stroke_points)){$null=Motion-Point $script:paperRegion ([Windows.Point]::new($point[0],$point[1]))}
+  $script:paperRegion|ConvertTo-Json -Depth 8|Set-Content -LiteralPath (Join-Path $OutputDirectory 'cold-canvas-region.json')
+  $compiler=@($review.Modules|Where-Object ModuleName -eq 'dxcompiler.dll')
+  if($compiler.Count -ne 1 -or $compiler[0].FileName -ne (Join-Path $directory 'dxcompiler.dll') -or (Get-FileHash -LiteralPath $compiler[0].FileName).Hash -ne $plan.dxcompiler_sha256 -or $meta.scope -ne 'steady_canvas_presentation_probe' -or $meta.swap_chain_addresses.Count -ne 2 -or $meta.process_id -ne $review.Id){throw 'Cold-paper DX12 surface or loaded compiler is unqualified'}
+  [CapyWindowApi]::SetForegroundWindow($window)|Out-Null;$canvas.SetFocus()
+  $before=[Diagnostics.Stopwatch]::GetTimestamp();$jobs=Cold-Jobs;$pixels=Cold-Samples $points;$after=[Diagnostics.Stopwatch]::GetTimestamp()
+  $armed=@{qpc_before=$before;qpc_after=$after;begins=$jobs[0];ends=$jobs[1];pixels=$pixels}
+  $capture=[ordered]@{process_id=$review.Id;diameter=$Diameter;project_sha256=(Get-FileHash -LiteralPath $Project).Hash;exe_sha256=(Get-FileHash -LiteralPath $Executable).Hash;dll_sha256=(Get-FileHash -LiteralPath (Join-Path $directory 'layer_windows.dll')).Hash;surface=$meta;seconds=$Seconds;rate_hz=240;center=@($cx,$cy);radii=@($rx,$ry);qpc_frequency=[Diagnostics.Stopwatch]::Frequency;cold_paper=@{path_qualification=$coldPath;preflight_sha256=(Get-FileHash -LiteralPath $ColdPaperPreflight).Hash;launch_qpc=$launch;launch_returned_qpc=$launchReturned;joint_ready_ns=[double]$meta.ready_qpc_ns;armed=$armed;offstroke_unlit=$plan.offstroke_unlit;offstroke_lit=$plan.offstroke_lit;contacts=@();observations=@();ui_trace_enabled=$false;adapter_observation='DX12/DXGI native probe; named adapter is qualified separately, not exposed by this probe';loaded_compiler=@{path=$compiler[0].FileName;sha256=$plan.dxcompiler_sha256;version=$compiler[0].FileVersionInfo.FileVersion};true_presented_fps=$null;target_met=$null}}
+  if($jobs[0] -le $jobs[1]){
+   @{status='unmeasured';reason='No actual viewport-paper job remained pending at the owned joint-ready contact gate';capture=$capture}|ConvertTo-Json -Depth 30|Set-Content (Join-Path $OutputDirectory 'cold-paper-result.json')
+   return
+  }
+  $producer=[WindowsPenMotion]::RunAsync([uint32]$review.Id,$cx,$cy,$rx,$ry,$Seconds,240,(Join-Path $OutputDirectory 'injected.csv'))
+  $deadline=[DateTime]::UtcNow.AddSeconds($Seconds+30)
+  do{
+   $before=[Diagnostics.Stopwatch]::GetTimestamp();$jobs=Cold-Jobs;$pixels=Cold-Samples $points;$after=[Diagnostics.Stopwatch]::GetTimestamp()
+   $observations.Add(@{qpc_before=$before;qpc_after=$after;begins=$jobs[0];ends=$jobs[1];pixels=$pixels})
+   $lit=($pixels -join ',') -eq ($plan.offstroke_lit -join ',')
+   if([DateTime]::UtcNow -gt $deadline){throw 'Cold paper observations exceeded the bounded contact window'}
+   if(!$producer.IsCompleted -or $jobs[0] -gt $jobs[1] -or !$lit){Start-Sleep -Milliseconds 20}
+  }while(!$producer.IsCompleted -or $jobs[0] -gt $jobs[1] -or !$lit)
+  $producer.GetAwaiter().GetResult()
+  Wait-Until {$root.Current.Name -eq $modified -and !(Find 'canvas-status' -Visible)} 'Cold-paper contact did not commit paint'
+  $painted=Cold-Samples $strokePoints
+  if(($painted -join ',') -eq ($plan.stroke_lit -join ',')){throw 'The actual cold contact changed no stroke sample'}
+  [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),0x5a)
+  Wait-Until {$root.Current.Name -eq $title -and ((Cold-Samples $strokePoints) -join ',') -eq ($plan.stroke_lit -join ',')} 'One Undo did not restore the exact lit seed samples'
+  [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),0x59)
+  Wait-Until {$root.Current.Name -eq $modified -and ((Cold-Samples $strokePoints) -join ',') -eq ($painted -join ',')} 'One Redo did not restore the exact contact samples'
+  [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),0x5a)
+  Wait-Until {$root.Current.Name -eq $title} 'Final Undo did not restore the clean seed'
+  if((Control 'canvas-camera').Current.Name -ne $plan.camera_readout -or (Control 'drawing-canvas' -Arranged).Current.BoundingRectangle -ne $bounds -or (Get-FileHash -LiteralPath $Project).Hash -ne $capture.project_sha256 -or (Trace-File 'ui-state')){throw 'Cold contact changed its camera, source drawing or trace mode'}
+  $capture.cold_paper.contacts=@(@{first_index=0;count=$Seconds*240+1;seconds=$Seconds;measured=$true;artwork_changed=$true;restored=$true});$capture.cold_paper.observations=$observations.ToArray()
+  $capture|ConvertTo-Json -Depth 30|Set-Content (Join-Path $OutputDirectory 'capture.json')
+ }catch{[IO.File]::WriteAllText((Join-Path $OutputDirectory 'failure.txt'),($_|Out-String)+$_.ScriptStackTrace);throw}finally{
+  Complete-ColdPaper
+ }
+ return
+}
 try{
  Enter-CapyEnvironment @('CAPY_LATENCY_TRACE')
  $env:CAPY_STORAGE_DIR=Join-Path $OutputDirectory 'profile'
@@ -97,10 +229,8 @@ if($NavigationMode -or $ObjectMotionMode -or $brushSeries){
   [pscustomobject]$state
  }
 
-if($NavigationMode -or $ObjectMotionMode){
+if($NavigationMode -or $ObjectMotionMode -or $brushSeries){
  Add-Type -AssemblyName WindowsBase
- $run=$OutputDirectory;$CapyPopups=$true
- $navigationLabel=@{hand='Hand';zoom='Zoom';rotate_view='Rotate view'}[$NavigationMode]
  function Motion-Canvas {
   $canvas=Control 'drawing-canvas' -Arranged
   $excluded=[Collections.Generic.HashSet[string]]::new()
@@ -141,6 +271,23 @@ if($NavigationMode -or $ObjectMotionMode){
   if(!$node -or $node.Current.ProcessId -ne $review.Id){throw "Motion point $Point is outside the owned canvas native subtree"}
   $hit
  }
+ function Motion-Path($Region,[int]$Cx,[int]$Cy,[int]$Rx,[int]$Ry,[int]$Seconds){
+  if($Seconds -lt 1 -or $Seconds -gt 30){throw 'Motion duration exceeds the producer bounds'}
+  $seen=[Collections.Generic.HashSet[string]]::new();$points=[Collections.Generic.List[object]]::new();$hits=@{};$last=$null
+  for($step=0;$step -lt $Seconds*240;$step++){
+   $angle=2*[Math]::PI*$step/240;$x=$Cx+[int][Math]::Truncate($Rx*[Math]::Cos($angle));$y=$Cy+[int][Math]::Truncate($Ry*[Math]::Sin($angle));$last=@($x,$y)
+   if($seen.Add("$x,$y")){
+    $hit=Motion-Point $Region ([Windows.Point]::new($x,$y));$points.Add($last)
+    $key=$hit.Current.AutomationId;if(!$key){$key='runtime:'+($hit.GetRuntimeId() -join ':')}
+    $hits[$key]=$hit.Current.Name
+   }
+  }
+  [pscustomobject]@{process_id=$review.Id;root_id=($root.GetRuntimeId() -join ':');region=$Region;center=@($Cx,$Cy);radii=@($Rx,$Ry);seconds=$Seconds;rate_hz=240;distinct_points=$points.ToArray();final_up_point=$last;hits=$hits}
+ }
+}
+if($NavigationMode -or $ObjectMotionMode){
+ $run=$OutputDirectory;$CapyPopups=$true
+ $navigationLabel=@{hand='Hand';zoom='Zoom';rotate_view='Rotate view'}[$NavigationMode]
  if($NavigationMode){
   Navigation-Command $navigationLabel
   Navigation-Command 'Reset view'
@@ -247,14 +394,11 @@ Start-Sleep -Seconds 1
 if($pm.HasExited -and $pm.ExitCode -ne 0){throw 'PresentMon capture could not start; inspect its log'}
 }
 if($NavigationMode){
- $pathHits=@{};$navigationRegion=Motion-Canvas
+ $navigationRegion=Motion-Canvas
  $navigationRegion|ConvertTo-Json -Depth 8|Set-Content (Join-Path $OutputDirectory 'navigation-path-region.json')
- foreach($step in 0..239){
-  $angle=2*[Math]::PI*$step/240;$point=[Windows.Point]::new($cx+[int][Math]::Truncate(200*[Math]::Cos($angle)),$cy+[int][Math]::Truncate(120*[Math]::Sin($angle)))
-  $hit=Motion-Point $navigationRegion $point
-  $pathHits[$hit.Current.AutomationId]=$hit.Current.Name
- }
- $capture.navigation.path_hits=$pathHits
+ $navigationPath=Motion-Path $navigationRegion $cx $cy 200 120 6
+ $capture.navigation.path_hits=$navigationPath.hits
+ $capture.navigation.path_qualification=$navigationPath
  $capture.seconds=19;$capture.diameter=$null
  $combined=[Collections.Generic.List[string]]::new();$combined.Add('index,qpc_before,qpc_after,x,y');$offset=0
  foreach($contact in 0..3){
@@ -333,6 +477,9 @@ if($NavigationMode){
   if((Control 'drawing-canvas' -Arranged).Current.BoundingRectangle -ne $bounds -or (Control 'canvas-camera').Current.Name -ne $brushCamera){throw 'The measured brush camera or arranged canvas changed'}
   Navigation-Focus
   $duration=if($contact -eq 0){1}else{$Seconds};$file="injected-$contact.csv"
+  $pathQualification=Motion-Path (Motion-Canvas) $cx $cy 200 120 $duration
+  $qualificationFile="brush-$contact-path.json"
+  [IO.File]::WriteAllText((Join-Path $OutputDirectory $qualificationFile),($pathQualification|ConvertTo-Json -Depth 12),[Text.UTF8Encoding]::new($false))
   [WindowsPenMotion]::Run([uint32]$review.Id,$cx,$cy,200,120,$duration,240,(Join-Path $OutputDirectory $file))
   Wait-Until {$root.Current.Name -eq $modifiedProjectTitle -and !(Find 'canvas-status' -Visible)} 'The brush contact did not change the drawing'
   $painted=Navigation-State $true $false $true
@@ -343,7 +490,7 @@ if($NavigationMode){
   $rows=@(Import-Csv (Join-Path $OutputDirectory $file))
   if($rows.Count -ne $duration*240+1){throw 'Brush injection did not complete its contact'}
   foreach($row in $rows){$combined.Add("$offset,$($row.qpc_before),$($row.qpc_after),$($row.x),$($row.y)");$offset++}
-  $capture.brush_motion.contacts+=@{first_index=$offset-$rows.Count;count=$rows.Count;seconds=$duration;measured=$contact -gt 0;file=$file;artwork_changed=$true;restored=$true}
+  $capture.brush_motion.contacts+=@{first_index=$offset-$rows.Count;count=$rows.Count;seconds=$duration;measured=$contact -gt 0;file=$file;path_qualification=$qualificationFile;artwork_changed=$true;restored=$true}
   $capture.brush_motion.observations+=@{contact=$contact;before=$before;painted=$painted;restored=$restored}
   $capture|ConvertTo-Json -Depth 12|Set-Content (Join-Path $OutputDirectory 'capture.json')
  }

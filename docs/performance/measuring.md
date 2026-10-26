@@ -559,9 +559,26 @@ with Undo restoring the clean drawing between contacts. UI tracing stays disable
 Brush series maximize the window before opening the drawing so high-DPI panels
 leave room for the pen path; record the actual viewport and review the composed
 canvas before accepting a measurement.
+Before each brush contact, the harness checks every distinct producer coordinate
+against the current owned canvas and native controls that overlap it. These
+checks and their evidence writes finish before input timing begins.
 The report retains all raw inputs and measured Down/Move/Up tails, excludes priming
 from measured latency, and never joins frame intervals across contacts. Omitting
 `-BrushPreset` keeps the original single-contact G-Pen workload.
+
+For a fresh-process paper-preparation comparison, add
+`-ColdPaperPreflight <json> -Seconds 6 -SkipPresentMon` and omit `-BrushPreset`.
+The preflight must identify a saved drawing with relief, an empty editable paint
+layer, the settled G-Pen size, the exact build and source inputs, and separate
+stroke and off-stroke reference samples. The runner checks the owned canvas,
+viewport, DPI and loaded compiler before one asynchronous native pen contact.
+It records paper-job begin/end observations, input consumption and off-stroke
+lighting against the same QPC clock. Accept a pair only when real pending paper
+work overlaps consumed contact input and the expected lighting appears. A warm
+job, missing observation or absent overlap is unmeasured. Use comparable Release
+builds differing only in the paper admission change, keep other compilers and
+GPU work idle, and retain raw observations and cleanup results. This comparison
+does not establish presented FPS or a reference-tier target.
 
 The opt-in native latency trace also writes `-presentations.csv`, including idle
 canvas presentations. It buffers at most 65,536 records and writes only after

@@ -15,16 +15,18 @@ function csv(file) {
   return rows.filter(Boolean).map(line => Object.fromEntries(line.split(',').map((v, i) => [keys[i], Number(v)])));
 }
 function motionFrames(meta, inputs, consumed, frames, injected) {
-  if ([meta.navigation, meta.object_motion, meta.brush_motion].filter(Boolean).length > 1) throw Error('Ambiguous motion workload');
-  const workload = meta.brush_motion ?? meta.object_motion ?? meta.navigation;
+  if ([meta.navigation, meta.object_motion, meta.brush_motion, meta.cold_paper].filter(Boolean).length > 1) throw Error('Ambiguous motion workload');
+  const workload = meta.cold_paper ?? meta.brush_motion ?? meta.object_motion ?? meta.navigation;
   if (!workload) return null;
   if (meta.object_motion && (!['move', 'scale', 'rotate', 'placement'].includes(workload.mode) || !/^[A-Fa-f0-9]{64}$/.test(workload.preflight_sha256 ?? ''))) throw Error('Missing Object motion qualification');
   if (meta.brush_motion && (!['G-Pen', 'Pencil'].includes(workload.preset) || workload.contacts?.some(c => c.artwork_changed !== true || c.restored !== true))) throw Error('Missing brush selection, artwork or restoration evidence');
   if (workload.ui_trace_enabled !== false) throw Error('Navigation requires explicit disabled UI trace metadata');
   const series = workload.contacts;
-  if (!Array.isArray(series) || series.length !== 4 || series[0].measured !== false || !Number.isFinite(series[0].seconds) || series[0].seconds < 1
+  if (meta.cold_paper) {
+    if (!Array.isArray(series) || series.length !== 1 || series[0].measured !== true || !Number.isFinite(series[0].seconds) || series[0].seconds < 5 || series[0].seconds > 10 || series[0].artwork_changed !== true || series[0].restored !== true) throw Error('Incomplete cold-paper contact');
+  } else if (!Array.isArray(series) || series.length !== 4 || series[0].measured !== false || !Number.isFinite(series[0].seconds) || series[0].seconds < 1
       || series.slice(1).some(c => c.measured !== true || !Number.isFinite(c.seconds) || c.seconds < 5)) throw Error('Incomplete navigation series: priming and three measured contacts of at least five seconds are required');
-  if (!injected || (!meta.object_motion && !meta.brush_motion && !['hand', 'zoom', 'rotate_view'].includes(workload.mode))) throw Error('Missing navigation injection metadata');
+  if (!injected || (!meta.cold_paper && !meta.object_motion && !meta.brush_motion && !['hand', 'zoom', 'rotate_view'].includes(workload.mode))) throw Error('Missing navigation injection metadata');
   if (consumed.some((p, i) => p.sequence !== inputs[i].sequence)) throw Error('Navigation consumption order mismatch');
   if (meta.object_motion && series.some(c => c.artwork_changed !== true || c.package_validated !== true || c.restored !== true)) throw Error('Object motion contact lacks artwork, package or restoration evidence');
   const source = new Map(), contacts = [], groups = new Map(), byFrame = new Map(frames.map(f => [f.frame, f]));
@@ -72,6 +74,40 @@ function motionFrames(meta, inputs, consumed, frames, injected) {
       renderer_frames_per_second: intervals.length ? 1000 / distribution(intervals).mean_ms : null});
   }
   return {source, submitted, contacts, intervals: periods};
+}
+function coldPaper(meta, frames, injected, motion) {
+  const c = meta.cold_paper, hz = meta.qpc_frequency, ns = qpc => qpc * 1e9 / hz;
+  if (!/^[A-Fa-f0-9]{64}$/.test(c.preflight_sha256 ?? '') || !Number.isFinite(c.launch_qpc) || !Number.isFinite(c.launch_returned_qpc) || c.launch_returned_qpc < c.launch_qpc
+      || !Number.isFinite(c.joint_ready_ns) || c.joint_ready_ns < ns(c.launch_qpc)) throw Error('Invalid cold-paper launch and joint-ready provenance');
+  const match = (pixels, reference) => Array.isArray(pixels) && pixels.length === reference.length && pixels.every((v, i) => v === reference[i]);
+  if (!Array.isArray(c.offstroke_unlit) || c.offstroke_unlit.length < 4 || !Array.isArray(c.offstroke_lit) || c.offstroke_lit.length !== c.offstroke_unlit.length
+      || c.offstroke_lit.filter((v, i) => v !== c.offstroke_unlit[i]).length < 4) throw Error('Cold-paper lighting lacks four separated pixel references');
+  const samples = [c.armed, ...c.observations];
+  for (let i = 0; i < samples.length; i++) {
+    const s = samples[i], p = samples[i - 1];
+    if (!s || !Number.isFinite(s.qpc_before) || !Number.isFinite(s.qpc_after) || s.qpc_after < s.qpc_before || ns(s.qpc_before) < c.joint_ready_ns
+        || (p && (s.qpc_before < p.qpc_after || s.begins < p.begins || s.ends < p.ends)) || !Number.isInteger(s.begins) || !Number.isInteger(s.ends) || s.ends < 0 || s.begins < s.ends
+        || !Array.isArray(s.pixels) || s.pixels.length !== c.offstroke_lit.length || s.pixels.some(v => !Number.isInteger(v) || v < 0 || v > 0xffffff)) throw Error('Invalid cold-paper observation chronology');
+  }
+  const first = injected[0], last = injected.at(-1), armed = c.armed;
+  if (armed.qpc_after > first.qpc_before) throw Error('Cold-paper arming follows the injected contact');
+  const ownedFrames = frames.filter(f => motion.submitted.has(f.frame));
+  const overlap = samples.find(s => s !== armed && s.qpc_before >= first.qpc_after && s.qpc_after <= last.qpc_before && s.begins > s.ends && s.ends === armed.ends
+    && ownedFrames.some(f => f.render_end_ns > ns(first.qpc_before) && f.render_end_ns <= ns(s.qpc_before)));
+  const litIndex = samples.findIndex(s => match(s.pixels, c.offstroke_lit));
+  const lit = litIndex < 0 ? null : samples[litIndex], previous = litIndex > 0 ? samples[litIndex - 1] : null;
+  const reasons = [];
+  if (armed.begins <= armed.ends || !match(armed.pixels, c.offstroke_unlit)) reasons.push('The armed contact did not observe an unlit canvas with real paper compilation pending');
+  if (!overlap) reasons.push('No consumed moving frame was bracketed by begun/unended paper work during the actual contact');
+  if (!lit) reasons.push('The eventual off-stroke lit pixels were not observed');
+  return {status: reasons.length ? 'unmeasured' : 'measured', pair_eligible: reasons.length === 0, reasons,
+    scope: 'Fresh-process recipe admission and software-visible lighting; uncontrolled driver caches, not a reference-tier FPS or photon measurement',
+    launch_to_joint_ready_ms: (c.joint_ready_ns - ns(c.launch_qpc)) / 1e6,
+    launch_to_first_moving_frame_ms: ownedFrames.length ? (Math.min(...ownedFrames.map(f => f.render_end_ns)) - ns(c.launch_qpc)) / 1e6 : null,
+    launch_to_first_lit_observed_ms: lit ? (ns(lit.qpc_after) - ns(c.launch_qpc)) / 1e6 : null,
+    first_lit_observation_interval_ms: lit ? [previous ? (ns(previous.qpc_before) - ns(c.launch_qpc)) / 1e6 : null, (ns(lit.qpc_after) - ns(c.launch_qpc)) / 1e6] : null,
+    pending_contact_observation: overlap ?? null, contacts: motion.contacts, renderer_frame_intervals_ms: distribution(motion.intervals),
+    true_presented_fps: null, target_met: null};
 }
 export function analyze(directory) {
   const meta = JSON.parse(fs.readFileSync(path.join(directory, 'capture.json'), 'utf8').replace(/^\uFEFF/, ''));
@@ -126,7 +162,7 @@ export function analyze(directory) {
     }
   }
   const motion = motionFrames(meta, inputs, consumed, frames, injected);
-  const navigation = meta.brush_motion ? null : motion;
+  const navigation = meta.brush_motion || meta.cold_paper ? null : motion;
   const noPresent = {down: 0, move: 0, up: 0};
   const delivery = [], queue = [], submit = [], display = [], observation = [], latest = new Map();
   let unmatched = 0;
@@ -167,7 +203,8 @@ export function analyze(directory) {
     return t === undefined ? [] : [t - latest.get(f.frame).sample_ns / 1e6];
   }));
   return {
-    scope: meta.object_motion ? 'OS-injected Object motion and renderer submissions; inferred motion, excluding per-frame affine truth, physical input and actual presentation rate' : navigation ? 'OS-injected navigation input and renderer submissions; inferred motion, excluding physical input and actual presentation rate' : 'OS-injected pen to DXGI-reported presentation, excluding physical digitizer, scanout position and panel response',
+    scope: meta.cold_paper ? 'Fresh-process paper admission with OS-injected pen and software-visible off-stroke lighting; no reference-tier FPS claim' : meta.object_motion ? 'OS-injected Object motion and renderer submissions; inferred motion, excluding per-frame affine truth, physical input and actual presentation rate' : navigation ? 'OS-injected navigation input and renderer submissions; inferred motion, excluding physical input and actual presentation rate' : 'OS-injected pen to DXGI-reported presentation, excluding physical digitizer, scanout position and panel response',
+    ...(meta.cold_paper ? {cold_paper: coldPaper(meta, frames, injected, motion)} : {}),
     ...(meta.brush_motion ? {brush_motion: {preset: meta.brush_motion.preset, contacts: motion.contacts,
       renderer_frame_intervals_ms: distribution(motion.intervals), true_presented_fps: null, target_met: null, ui_trace_enabled: false}} : {}),
     ...(navigation ? {[meta.object_motion ? 'object_motion' : 'navigation']: {mode: (meta.object_motion ?? meta.navigation).mode, contacts: navigation.contacts,

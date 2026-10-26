@@ -272,3 +272,37 @@ test('brush series keeps a long final pen-up latency in measured contact and agg
  assert.equal(r.brush_motion.contacts[3].input_to_frame_return_ms.max_ms,128);
  assert.equal(r.input_to_frame_return_ms.max_ms,128);
 });
+
+function coldPaperFixture(t) {
+ const f=navigationFixture(t,{secondsByContact:[6]}),file=path.join(f.dir,'capture.json'),meta=JSON.parse(fs.readFileSync(file,'utf8'));
+ const contacts=meta.navigation.contacts.map(c=>({...c,measured:true,artwork_changed:true,restored:true}));delete meta.navigation;
+ meta.cold_paper={preflight_sha256:'A'.repeat(64),ui_trace_enabled:false,contacts,launch_qpc:85,launch_returned_qpc:86,joint_ready_ns:90e6,
+  offstroke_unlit:[1,2,3,4],offstroke_lit:[11,12,13,14],armed:{qpc_before:91,qpc_after:92,begins:1,ends:0,pixels:[1,2,3,4]},
+  observations:[{qpc_before:1096,qpc_after:1097,begins:1,ends:0,pixels:[1,2,3,4]},{qpc_before:2000,qpc_after:2001,begins:1,ends:1,pixels:[11,12,13,14]}]};
+ fs.writeFileSync(file,JSON.stringify(meta));
+ const frameFile=f.prefix+'-frames.csv',lines=fs.readFileSync(frameFile,'utf8').trim().split('\n');
+ fs.writeFileSync(frameFile,lines.map((line,i)=>{if(!i)return line;const fields=line.split(',');fields[5]=fields[0];return fields.join(',');}).join('\n')+'\n');
+ return {...f,file,meta};
+}
+test('cold-paper measurement needs real contact, consumed moving frames and eventual off-stroke lighting',t=>{
+ const {dir}=coldPaperFixture(t),r=analyze(dir),c=r.cold_paper;
+ assert.equal(c.status,'measured');assert.equal(c.pair_eligible,true);assert.equal(c.launch_to_joint_ready_ms,5);
+ assert.equal(c.pending_contact_observation.ends,0);assert.equal(c.contacts.length,1);assert.equal(c.contacts[0].actual_seconds,6);
+ assert.equal(r.inputs,13);assert.equal(r.consumed,13);assert.equal(c.true_presented_fps,null);assert.equal(c.target_met,null);
+ assert.deepEqual(c.first_lit_observation_interval_ms,[1011,1916]);assert.equal(r.navigation,undefined);
+});
+test('cold-paper warm, nonoverlapping and missing-lit observations remain unmeasured',t=>{
+ const {dir,file,meta}=coldPaperFixture(t);
+ for(const change of [m=>m.cold_paper.armed.pixels=[11,12,13,14],m=>m.cold_paper.observations[0].ends=1,m=>m.cold_paper.observations[1].pixels=[1,2,3,4]]){
+  const copy=structuredClone(meta);change(copy);fs.writeFileSync(file,JSON.stringify(copy));
+  const c=analyze(dir).cold_paper;assert.equal(c.status,'unmeasured');assert.equal(c.pair_eligible,false);assert.ok(c.reasons.length);
+ }
+});
+test('cold-paper cannot bypass strict injection, history, timestamps or normal priming guards',t=>{
+ const {dir,file,meta,prefix}=coldPaperFixture(t);
+ for(const change of [m=>m.cold_paper.contacts[0].seconds=4,m=>m.cold_paper.contacts[0].restored=false,m=>m.cold_paper.observations[1].qpc_before=100,m=>m.cold_paper.preflight_sha256='missing',m=>m.brush_motion={...m.cold_paper,preset:'G-Pen'}]){
+  const copy=structuredClone(meta);change(copy);fs.writeFileSync(file,JSON.stringify(copy));assert.throws(()=>analyze(dir),/contact|chronology|provenance|Ambiguous/);
+ }
+ fs.writeFileSync(file,JSON.stringify(meta));const consumed=prefix+'-consumed.csv';fs.writeFileSync(consumed,fs.readFileSync(consumed,'utf8').replace('2,2\n',''));
+ assert.throws(()=>analyze(dir),/Incomplete pen consumption/);
+});

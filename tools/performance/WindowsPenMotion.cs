@@ -7,6 +7,7 @@ using System.ComponentModel;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Threading;
+using System.Threading.Tasks;
 public static class WindowsPenMotion {
  [StructLayout(LayoutKind.Sequential)] public struct Point {public int x,y;}
  [StructLayout(LayoutKind.Sequential)] public struct PointerInfo {
@@ -27,6 +28,28 @@ public static class WindowsPenMotion {
  [DllImport("user32.dll")]static extern IntPtr WindowFromPoint(Point point);
  [DllImport("user32.dll")]public static extern bool SetForegroundWindow(IntPtr window);
  [DllImport("user32.dll")]public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
+ [DllImport("user32.dll")]static extern IntPtr GetDC(IntPtr window);
+ [DllImport("user32.dll")]static extern int ReleaseDC(IntPtr window,IntPtr dc);
+ [DllImport("gdi32.dll")]static extern uint GetPixel(IntPtr dc,int x,int y);
+ public static int[] Sample(uint owner,int[] points) {
+  if(points.Length<8||points.Length%2!=0)throw new ArgumentException("Four or more sample points are required");
+  var dc=GetDC(IntPtr.Zero);if(dc==IntPtr.Zero)throw new Win32Exception(Marshal.GetLastWin32Error());
+  try {
+   var result=new int[points.Length/2];
+   for(int i=0;i<result.Length;i++) {
+    uint process;GetWindowThreadProcessId(WindowFromPoint(new Point{x=points[i*2],y=points[i*2+1]}),out process);
+    if(process!=owner)throw new Exception("Pixel sample is outside the owned window");
+    uint color=GetPixel(dc,points[i*2],points[i*2+1]);if(color==0xffffffff)throw new Exception("Pixel sample is unavailable");result[i]=(int)color;
+   }
+   return result;
+  } finally {ReleaseDC(IntPtr.Zero,dc);}
+ }
+ public static Task RunAsync(uint owner,int cx,int cy,int rx,int ry,int seconds,int hz,string output) {
+  return Task.Run(delegate {
+   var previous=SetThreadDpiAwarenessContext(new IntPtr(-4));
+   try {Run(owner,cx,cy,rx,ry,seconds,hz,output);} finally {SetThreadDpiAwarenessContext(previous);}
+  });
+ }
  public static void Run(uint owner,int cx,int cy,int rx,int ry,int seconds,int hz,string output) {
   Run(owner,cx,cy,rx,ry,seconds,hz,output,double.NaN,0);
  }
