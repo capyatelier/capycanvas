@@ -39,7 +39,7 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
         }else if(str(panel,L"id")==L"palettes"){
             root=PalettesPanel(data,bindings,&contentHeight,&scrollMetrics);
         }else if(tileGeometry.Size()){
-            Canvas tiles;auto views=array(panel,L"tiles");auto rects=array(tileGeometry,L"tiles");
+            Canvas tiles;tiles.Background(clear());auto views=array(panel,L"tiles");auto rects=array(tileGeometry,L"tiles");
             bool vertical=str(geometry,L"axis",L"vertical")==L"vertical";
             for(uint32_t i=0;i<std::min(views.Size(),rects.Size());i++){
                 auto tile=views.GetObjectAt(i);double id=num(tile,L"id");auto panelId=str(panel,L"id");
@@ -151,7 +151,7 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
             }
             root=tiles;
         }else{
-            StackPanel content;content.Spacing(data->panelMetric(L"group_spacing"));auto panelId=str(panel,L"id");
+            StackPanel content;content.Background(clear());content.Spacing(data->panelMetric(L"group_spacing"));auto panelId=str(panel,L"id");
             bool scope=panelId==L"histogram"||panelId==L"waveform";
             double inset=data->panelMetric(L"inset");
             contentHeight=[content]{content.Measure({float(content.ActualWidth()),INFINITY});return content.DesiredSize().Height;};
@@ -215,6 +215,7 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
                 root=scroll;
             }
         }
+    if(gestures)gestures->Source(root,{},O({{L"kind",S(tileGeometry.Size()?L"ribbon":L"panel")},{L"panel",S(str(panel,L"id"))}}));
     if(navigator)scrollMetrics=[this]{return O({{L"fixed_height",N(navigator->FixedHeight())},{L"unit_height",N(0)}});};
     if(!scrollMetrics&&contentHeight&&str(panel,L"id")!=L"color"&&str(panel,L"id")!=L"proof"
         &&str(panel,L"id")!=L"histogram"&&str(panel,L"id")!=L"waveform")

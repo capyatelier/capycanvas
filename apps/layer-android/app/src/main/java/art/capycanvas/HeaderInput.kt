@@ -124,7 +124,7 @@ internal class HeaderInteraction(val host: CanvasHost, val dock: DockInteraction
     }
 }
 
-private suspend fun AwaitPointerEventScope.holdMenu(input: HeaderInteraction, down: PointerInputChange, id: Int, source: HeaderInteraction.Source) {
+private suspend fun AwaitPointerEventScope.holdMenu(input: HeaderInteraction, down: PointerInputChange, id: Int?, source: HeaderInteraction.Source) {
     val early = withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) {
         while (true) {
             val change = awaitPointerEvent(PointerEventPass.Initial).changes.firstOrNull { it.id == down.id }
@@ -164,10 +164,13 @@ private suspend fun AwaitPointerEventScope.holdMenu(input: HeaderInteraction, do
                 return@awaitEachGesture
             }
             if (!input.editing) {
-                if (id != null && source.hold && down.type != PointerType.Mouse) holdMenu(input, down, id, source)
+                if (source.hold && down.type != PointerType.Mouse) holdMenu(input, down, id, source)
                 return@awaitEachGesture
             }
-            if (source.source.optString("kind") == "background") return@awaitEachGesture
+            if (source.source.optString("kind") == "background") {
+                if (down.type != PointerType.Mouse) holdMenu(input, down, id, source)
+                return@awaitEachGesture
+            }
             down.consume()
             input.selected = id; input.contact = true
             var started = false

@@ -64,7 +64,7 @@ private data class PanelMeasurement(val tabWidth: Float = 0f, val content: Panel
  * docking, sizing, undo transactions and Zen visibility on every platform. */
 internal class DockInteraction(val host: CanvasHost) {
     data class DrawerSource(val direction: String, val bounds: Rect, val anchor: JSONObject? = null)
-    data class Region(val token: Any, val action: JSONObject, val bounds: Rect, val z: Int, val priority: Int,
+    data class Region(val token: Any, val action: JSONObject?, val bounds: Rect, val z: Int, val priority: Int,
         val context: JSONObject?, val cursor: Int, val holdToDrag: Boolean)
     val regions = mutableMapOf<Any, Region>()
     var bubbles: BubbleInteraction? = null
@@ -283,7 +283,7 @@ internal class DockInteraction(val host: CanvasHost) {
     }
 }
 
-@Composable internal fun Modifier.workspaceSource(dock: DockInteraction, action: JSONObject,
+@Composable internal fun Modifier.workspaceSource(dock: DockInteraction, action: JSONObject?,
     priority: Int = 0, anchor: JSONObject? = null, cursor: Int = AndroidPointerIcon.TYPE_GRAB,
     holdToDrag: Boolean = false): Modifier {
     if(!LocalWorkspaceVisible.current) return this
@@ -302,7 +302,7 @@ internal class DockInteraction(val host: CanvasHost) {
         }
     }
     SideEffect { dock.regions[token]?.let {
-        if (dock.contactSource == token && it.action.toString() != action.toString()) dock.pickupCursor(false)
+        if (dock.contactSource == token && it.action?.toString() != action?.toString()) dock.pickupCursor(false)
         dock.regions[token] = it.copy(action = action, z = z, priority = priority, context = anchor, cursor = cursor, holdToDrag = holdToDrag)
     } }
     // Held tiles use the normal mouse pointer until pickup is armed. Keep
@@ -315,6 +315,12 @@ internal class DockInteraction(val host: CanvasHost) {
         if (key != null) dock.anchors[key] = bounds
     }
 }
+
+@Composable internal fun Modifier.contextSource(dock: DockInteraction, target: JSONObject): Modifier =
+    workspaceSource(dock, null, anchor = target, cursor = AndroidPointerIcon.TYPE_ARROW)
+
+@Composable internal fun Modifier.controlSource(dock: DockInteraction? = LocalDock.current): Modifier =
+    if (dock == null) this else workspaceSource(dock, null, priority = 1, cursor = AndroidPointerIcon.TYPE_ARROW)
 
 @Composable internal fun Modifier.dragSource(dock: DockInteraction, item: JSONObject, context: JSONObject = item,
     holdToDrag: Boolean = false, cursor: Int = AndroidPointerIcon.TYPE_GRAB): Modifier {
@@ -353,10 +359,10 @@ private fun Modifier.workspaceGestureCapture(dock: DockInteraction, focused: Boo
                 dock.host.chrome(obj("kind" to "contact", "canvas" to false,
                     "position" to JSONArray(listOf(down.position.x / dock.density, down.position.y / dock.density))), dock.facts().put("contact_tab", tab?.optString("panel")))
             }
-            if (source != null) {
+            if (source != null && (source.action != null || source.context != null)) {
                 // Invisible resize strips have no child button to consume their
                 // press. Do not let the underlying SurfaceView begin a stroke/pan.
-                if (source.action.getString("type") !in listOf("drag_workspace", "tile_drag")) down.consume()
+                if (source.action?.getString("type") !in listOf("drag_workspace", "tile_drag")) down.consume()
                 if (currentEvent.buttons.isSecondaryPressed) {
                     source.context?.let(dock::context)
                     down.consume()
@@ -369,19 +375,20 @@ private fun Modifier.workspaceGestureCapture(dock: DockInteraction, focused: Boo
                 var retired = false
                 var remaining = viewConfiguration.longPressTimeoutMillis
                 var eventTime = down.uptimeMillis
-                val divider = source.action.takeIf { it.optString("type") == "drag_divider" }?.getInt("id")
-                val group = source.action.takeIf { it.optString("type") == "drag_workspace" }?.objectOrNull("item")
+                val divider = source.action?.takeIf { it.optString("type") == "drag_divider" }?.getInt("id")
+                val group = source.action?.takeIf { it.optString("type") == "drag_workspace" }?.objectOrNull("item")
                     ?.takeIf { it.optString("kind") == "group" }
+                val column = source.context?.takeIf { source.action == null && it.optString("kind") == "column" }?.getInt("column")
                 val band = divider != null && dock.host.snapshot?.getJSONObject("layout")?.array("dividers")?.objects()
                     ?.any { it.getInt("id") == divider && it.optBoolean("band") && it.optString("axis") == "horizontal" } == true
                 // The registered source distinguishes empty header/grip contacts
                 // from tabs, even inside a scrollable tab strip.
-                val tapTarget = if (band) "divider:$divider" else group?.let { "group:${it.getInt("group")}" }
+                val tapTarget = if (band) "divider:$divider" else group?.let { "group:${it.getInt("group")}" } ?: column?.let { "column:$it" }
                 dock.contactHeld = true
                 dock.contactSource = source.token
                 dock.retiredContext = null
                 if (tab != null) dock.host.dispatch(obj("type" to "select_panel_tab", "group" to tab.getInt("group"), "panel" to tab.getString("panel")))
-                fun sourceExists() = dock.regions[source.token]?.action?.toString() == source.action.toString()
+                fun sourceExists() = dock.regions[source.token]?.let { it.action?.toString() == source.action?.toString() } == true
                 fun retire() {
                     retired = true
                     dock.pickupCursor(false)
@@ -394,7 +401,10 @@ private fun Modifier.workspaceGestureCapture(dock: DockInteraction, focused: Boo
                             withTimeoutOrNull(remaining) { awaitPointerEvent(PointerEventPass.Initial) }
                         } else { awaitPointerEvent(PointerEventPass.Initial) }
                         if (event == null) {
-                            if (!sourceExists() || dock.popupOpen || !dock.enabled) { retire(); continue }
+                            if (!sourceExists() || dock.popupOpen || !dock.enabled) {
+                                retire()
+                                continue
+                            }
                             held = true
                             if (source.holdToDrag && down.type == PointerType.Mouse) dock.pickupCursor(true)
                             source.context?.let(dock::holdContext)
@@ -412,8 +422,8 @@ private fun Modifier.workspaceGestureCapture(dock: DockInteraction, focused: Boo
                         val moved = (change.position - down.position).getDistance() > viewConfiguration.touchSlop
                         // A tile hold must be stationary. Retiring it leaves motion
                         // unconsumed for its scroll container, even after a pause.
-                        if (!started && !retired && source.holdToDrag && !held && moved) retire()
-                        if (!started && !retired && change.pressed && moved && (!source.holdToDrag || held)) {
+                        if (!started && !retired && (source.holdToDrag || source.action == null) && !held && moved) retire()
+                        if (source.action != null && !started && !retired && change.pressed && moved && (!source.holdToDrag || held)) {
                             dock.start(source.action, down.position / dock.density, source.cursor); started = true
                         }
                         if (started) {
@@ -430,6 +440,7 @@ private fun Modifier.workspaceGestureCapture(dock: DockInteraction, focused: Boo
                                     (down.position - previousTap.position).getDistance() <= viewConfiguration.touchSlop * 2) {
                                     change.consume()
                                     if (band) dock.host.dispatch(obj("type" to "reset_column_width", "id" to divider, "viewport" to dock.viewport))
+                                    else if (column != null) dock.host.customize(obj("type" to "set_column_collapsed", "group" to column, "collapsed" to false))
                                     else group?.let(dock::doubleClickHandle)
                                 } else chromeTap = Tap(tapTarget, change.uptimeMillis, change.position, down.type)
                             }

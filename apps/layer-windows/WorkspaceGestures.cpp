@@ -107,9 +107,15 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
     }
     J target(Windows::Foundation::IInspectable const& original)const{
         auto node=original.try_as<DependencyObject>();
+        bool control=false;
         while(node&&node!=root){
-            if(auto element=node.try_as<FrameworkElement>())
-                if(auto tag=element.Tag().try_as<J>();tag&&tag.HasKey(L"workspace_action"))return tag;
+            if(auto element=node.try_as<FrameworkElement>()){
+                if(auto tag=element.Tag().try_as<J>();tag&&tag.HasKey(L"workspace_action"))
+                    return control&&!object(tag,L"workspace_action").Size()?J{}:tag;
+                if(auto input=element.try_as<Control>();input&&!element.try_as<ScrollViewer>()&&!element.try_as<ScrollView>())
+                    control|=input.IsTabStop();
+                if(auto text=element.try_as<TextBlock>())control|=text.IsTextSelectionEnabled();
+            }
             node=VisualTreeHelper::GetParent(node);
         }
         return {};
@@ -255,6 +261,7 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
         chrome(O({{L"kind",S(L"contact")},{L"position",point(p.Position())},{L"canvas",B(false)}}));
         if(!tag.Size())return;
         action=object(tag,L"workspace_action");
+        if(!action.Size()&&e.Handled())return;
         // Empty column space offers a menu and double-click, without becoming
         // another drag source. Pen/touch holds retain native scroll arbitration.
         if(!action.Size()&&(p.PointerDeviceType()==NativeInput::PointerDeviceType::Mouse||!object(tag,L"workspace_context").Size()))return;
@@ -486,8 +493,10 @@ void WorkspaceGestures::Source(FrameworkElement const& element,J const& action,J
     if(!previous||!previous.HasKey(L"workspace_action")){
         PointerGesture::OwnHolding(element);
     }
-    element.Tag(O({{L"workspace_action",action},{L"workspace_context",context},{L"workspace_double",B(doubleClick)},
-        {L"workspace_tab",tab},{L"workspace_hold",B(pickup==Pickup::Hold)},{L"workspace_control",B(pickup==Pickup::Control)}}));
+    auto tag=previous?J::Parse(previous.Stringify()):J{};
+    tag.Insert(L"workspace_action",action);tag.Insert(L"workspace_context",context);tag.Insert(L"workspace_double",B(doubleClick));
+    tag.Insert(L"workspace_tab",tab);tag.Insert(L"workspace_hold",B(pickup==Pickup::Hold));tag.Insert(L"workspace_control",B(pickup==Pickup::Control));
+    element.Tag(tag);
     if(tab.Size())impl->tabs.emplace_back(make_weak(element));
 }
 void WorkspaceGestures::Refresh(){impl->refresh();}

@@ -30,7 +30,7 @@ import kotlin.math.roundToInt
 
 @Composable internal fun ToolRibbon(host: CanvasHost, panel: JSONObject, geometry: JSONObject, dock: DockInteraction, modifier: Modifier, vertical: Boolean = false) {
     val density = LocalDensity.current.density
-    Box(modifier.chromeRegion(dock)) {
+    Box(modifier.chromeRegion(dock).contextSource(dock, obj("kind" to "ribbon", "panel" to panel.getString("id")))) {
         val labelLines = geometry.getInt("tile_label_lines")
         val tiles = panel.array("tiles").objects()
         geometry.array("tiles").objects().forEachIndexed { index, bounds ->
@@ -41,7 +41,7 @@ import kotlin.math.roundToInt
                     ?: when (kind) { "color" -> "colors"; "opacity" -> "opacity"; "size" -> "size"; else -> "brush" }
                 val placement = Modifier.placed(bounds, density).drawerTile(dock, panel.getString("id"), tile.getInt("id")).testTag("tile-${panel.getString("id")}-${tile.getInt("id")}")
                 if (tile.has("component")) {
-                    ToolbarComponent(host, panel, tile, bounds, geometry, dock, vertical, placement)
+                    ToolbarComponent(host, panel, tile, bounds, geometry, dock, vertical, placement.controlSource(dock))
                     return@forEachIndexed
                 }
                 val modifier = placement.dragSource(dock,
@@ -118,25 +118,25 @@ internal val DividerLength = 18.dp
 
 @Composable private fun PanelControlsBody(host: CanvasHost, state: JSONObject, panel: JSONObject, modifier: Modifier, scrollable: Boolean, splitFilters: Boolean, toolSet: JSONObject?, onContent: (PanelContentSize) -> Unit, onHeight: (Float) -> Unit) {
     if(panel.getString("id")=="proof") {
-        ProofPanel(host,modifier,scrollable){height->onContent(PanelContentSize(height,fixedHeight=0f));onHeight(height)}
+        ProofPanel(host,modifier.controlSource(),scrollable){height->onContent(PanelContentSize(height,fixedHeight=0f));onHeight(height)}
         return
     }
     val layers = panel.getString("id") == "layers"
     val density = LocalDensity.current.density
     if (layers) {
-        LayerPanel(host, state, modifier) { onContent(it); onHeight(it.height) }
+        LayerPanel(host, state, modifier.controlSource()) { onContent(it); onHeight(it.height) }
         return
     }
     if (panel.getString("id") == "palettes") {
-        PalettePanel(host, modifier) { onContent(it); onHeight(it.height) }
+        PalettePanel(host, modifier.controlSource()) { onContent(it); onHeight(it.height) }
         return
     }
     if (panel.getString("id") == "filter_types") {
-        FilterTypesPanel(host, state, modifier)
+        FilterTypesPanel(host, state, modifier.controlSource())
         return
     }
     if (panel.getString("id") == "adjustments") {
-        AdjustmentPanel(host, state, modifier, splitFilters) { onContent(it); onHeight(it.height) }
+        AdjustmentPanel(host, state, modifier.controlSource(), splitFilters) { onContent(it); onHeight(it.height) }
         return
     }
     BoxWithConstraints(modifier) {
@@ -163,6 +163,7 @@ internal val DividerLength = 18.dp
         }.padding(panelMetrics().inset),
             verticalArrangement = Arrangement.spacedBy(panelMetrics().group)) {
             controls.forEach { item ->
+                Box(Modifier.fillMaxWidth().controlSource()) {
                 when (item.getString("control")) {
                     "brushes", "brush_sets", "sculpt_sets", "tools" -> ToolSetControls(host, state, item.getString("control"), toolSet)
                     "tool_settings" -> ToolSettingsControls(host, state)
@@ -198,6 +199,7 @@ internal val DividerLength = 18.dp
                             host.dispatch(obj("type" to "set_layer_opacity", "opacity" to it))
                         }
                     }
+                }
                 }
             }
         }

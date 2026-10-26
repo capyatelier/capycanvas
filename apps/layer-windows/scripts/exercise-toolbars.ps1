@@ -1,6 +1,7 @@
 ﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme)
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
+$CapyPopups=$true
 if(!('CapyRowPointer' -as [type])){Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')}
 $repo=(Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
 $Executable=(Resolve-Path -LiteralPath $Executable).Path
@@ -19,12 +20,54 @@ function WindowCommand([string]$Id){
     Invoke $Id
 }
 function Toolbar([string]$Id){(Model).panels|Where-Object id -eq $Id}
+function WorkspaceJson {
+    $value=(Model).state.workspace
+    $value.layout.PSObject.Properties.Remove('header_presentation')
+    $value|ConvertTo-Json -Depth 90 -Compress
+}
 function ToolbarContext([string]$Id){
     Wait-Until {$root.FindAll([System.Windows.Automation.TreeScope]::Descendants,
         [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,
         [System.Windows.Automation.ControlType]::MenuItem)).Count -eq 0} 'Previous native menu remained visible'
     Start-Sleep -Milliseconds 250
     (Control $Id).SetFocus();[CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x10),0x79)
+}
+function BackgroundContext([string]$Id){
+    $window=[IntPtr]$root.Current.NativeWindowHandle
+    $null=[CapyRowPointer]::SetForegroundWindow($window)
+    Wait-Until {[CapyRowPointer]::GetForegroundWindow() -eq $window} 'Toolbar review did not regain foreground'
+    $grip=(Control ('ribbon-grip-'+$Id) -Arranged).Current.BoundingRectangle
+    $geometry=@((Model).layout.groups|Where-Object {$_.panels -contains $Id})[0].tiles.grip
+    if(!$geometry -or $geometry.width -le 0){throw 'Empty toolbar has no shared grip geometry'}
+    $scale=$grip.Width/$geometry.width
+    $body=[Windows.Rect]::new($grip.X-$geometry.x*$scale,$grip.Y-$geometry.y*$scale,
+        ($geometry.x+$geometry.width)*$scale,($geometry.y+$geometry.height)*$scale)
+    $at=$null
+    foreach($y in 0.25,0.5,0.75){foreach($x in 0.25,0.5,0.75){
+        $px=$body.X+$body.Width*$x;$py=$body.Y+$body.Height*$y
+        if(!$grip.Contains($px,$py)){$at=@{x=[int]$px;y=[int]$py};break}
+    };if($at){break}}
+    if(!$at){throw 'Empty toolbar has no background outside its grip'}
+    $before=WorkspaceJson
+    foreach($device in 'mouse','touch','pen'){
+        foreach($cancel in $true,$false){
+            [CapyRowPointer]::Down($device,$at.x,$at.y)
+            Start-Sleep -Milliseconds 900
+            if($device -ne 'mouse'){Wait-Until {$null -ne (Find 'Add Tools…' -Name)} "$device background hold did not open the toolbar menu"}
+            elseif(Find 'Add Tools…' -Name){throw 'Mouse background hold opened a menu'}
+            if($cancel){[CapyRowPointer]::Cancel()}else{[CapyRowPointer]::Up()}
+            if($cancel -or $device -eq 'mouse'){Wait-Until {!(Find 'Add Tools…' -Name)} 'Cancelled background hold left a menu'}
+            else{
+                if(!(Find 'Add Tools…' -Name)){throw 'Background release lost the toolbar menu'}
+                [CapyRowPointer]::Key([uint32]$review.Id,0x1b)
+                Wait-Until {!(Find 'Add Tools…' -Name)} 'Background menu did not dismiss'
+            }
+            if((WorkspaceJson) -ne $before){throw 'Background hold changed the workspace'}
+        }
+    }
+    [CapyRowPointer]::Down('mouse',$at.x,$at.y,'right');[CapyRowPointer]::Up()
+    Wait-Until {$null -ne (Find 'Add Tools…' -Name)} 'Background secondary click did not open the toolbar menu'
+    Capture 'empty-toolbar-background-menu' -WithModel -Composed
 }
 function Edit([string]$Id,[string]$Value){(Control $Id).GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($Value)}
 function DialogButton([string]$Id,[string]$Name){
@@ -49,14 +92,14 @@ try{
     Wait-Until {$review.Refresh();$review.MainWindowHandle -ne [IntPtr]::Zero -and (Model).brush_ready -and (Model).windows_workspace.ready} 'Review did not start' 45
     if($PSBoundParameters.ContainsKey('Theme') -and (Model).state.theme -ne $Theme){throw 'Toolbar fixture did not adopt its explicit isolated theme'}
     $root=[System.Windows.Automation.AutomationElement]::FromHandle($review.MainWindowHandle)
+    [CapyRowPointer]::Initialize([uint32]$review.Id)
     $initial=@((Model).state.workspace.layout.panels).Count
     WindowCommand 'new_toolbar'
     $null=Control 'workspace-manager'
     Wait-Until {$null -ne (Model).windows_workspace.prompt -and !(Model).windows_workspace.loading} 'New Toolbar form did not open'
     Wait-Until {!(Control 'drawing-canvas').Current.IsEnabled} 'Toolbar form did not block painting'
     Edit 'workspace-manager-name' ' '
-    InvokeDialog 'workspace-manager' 'Add to Workspace'
-    Wait-Until {(Model).windows_workspace.error} 'Invalid toolbar name was not rejected'
+    Wait-Until {!(DialogButton 'workspace-manager' 'Add to Workspace').Current.IsEnabled} 'Invalid toolbar name enabled Add to Workspace'
     $nameValue=(Control 'workspace-manager-name').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
     foreach($draft in @('W','Windows','Windows tools','Windows tools review')){$nameValue.SetValue($draft)}
     if($nameValue.Current.Value -ne 'Windows tools review'){throw 'A delayed snapshot overwrote the name draft'}
@@ -66,7 +109,7 @@ try{
     if(!$created -or $created.id -notlike 'toolbar:*' -or @($created.tiles).Count -ne 0){throw 'Empty toolbar did not have an independent identity'}
     $toolbarId=$created.id
     $gripId="ribbon-grip-$toolbarId"
-    ToolbarContext $gripId;Invoke 'Add Tools…' -Name
+    BackgroundContext $toolbarId;Invoke 'Add Tools…' -Name
     $picker=Control 'tool-picker'
     Wait-Until {$null -ne (Model).picker} 'Shared tool picker did not open'
     if((DialogButton 'tool-picker' ((Model).picker.confirm_label)).Current.IsEnabled){throw 'Empty selection enabled Add Tools'}
@@ -171,5 +214,6 @@ try{
     if($review -and !$review.HasExited){try{Capture 'failure'}catch{}}
     [IO.File]::WriteAllText((Join-Path $run 'failure.txt'),($_|Out-String)+$_.ScriptStackTrace);throw
 }finally{
+    [CapyRowPointer]::Dispose()
     Exit-CapyEnvironment
 }

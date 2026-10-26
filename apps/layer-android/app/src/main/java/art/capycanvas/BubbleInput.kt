@@ -241,7 +241,7 @@ internal class BubbleInteraction(val host: CanvasHost, val dock: DockInteraction
         val choiceEntry = choices.entries.lastOrNull { it.value.bounds.contains(change.position) }
         val choice = choiceEntry?.value
         val headerSource = header.sources.values.filter { it.bounds.contains(point) && it.source.optString("kind") == "item" }.maxByOrNull { it.priority }
-        val tile = dock.regions.values.filter { it.bounds.contains(change.position) && it.action.objectOrNull("item")?.optString("kind") == "tile" }.maxByOrNull { it.z * 10 + it.priority }
+        val tile = dock.regions.values.filter { it.bounds.contains(change.position) && it.action?.objectOrNull("item")?.optString("kind") == "tile" }.maxByOrNull { it.z * 10 + it.priority }
         val grab = choice?.grab ?: headerSource?.let { obj("kind" to "header", "id" to it.source.getInt("value")) } ?: tile?.action?.getJSONObject("item") ?: return false
         if (choice == null && sourceView(grab)?.optBoolean("tears_bubble") != true) return false
         val sourceBounds = dock.drawerSources.values.lastOrNull { it.bounds.contains(point) }?.bounds

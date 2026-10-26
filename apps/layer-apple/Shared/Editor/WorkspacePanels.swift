@@ -262,7 +262,9 @@ struct WorkspaceToolbar: View {
                     doubleClick: { store.doubleClickHandle(JSON(["kind": "panel", "panel": panel["id"].raw])) }))
                 .placed(geometry["grip"])
             }
-        }.onChange(of: [self.panel["title"].string, store.interfaceLanguage], initial: true) { _, key in
+        }.modifier(WorkspaceDrag(workspace: store.workspace, item: JSON(["kind": "panel", "panel": panel["id"].raw]),
+            surface: .tile, context: JSON(["kind": "ribbon", "panel": panel["id"].raw]), canDrag: false, priority: -1))
+        .onChange(of: [self.panel["title"].string, store.interfaceLanguage], initial: true) { _, key in
             gripCaption = NativeTextContext.caption(["type": "options_for", "title": key[0]], language: key[1])
         }
     }

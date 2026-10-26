@@ -192,6 +192,12 @@ picker's availability rules.
   management lives under Workspace. Its confirmation explains Workspace Undo
   with the current shortcut. A tabbed
   toolbar keeps the group grip; its configuration column contains these options.
+- Empty toolbar space, panel-body gaps, collapsed-column space and unused title-bar
+  editing space accept touch/pen holds and secondary clicks on every host. Background
+  menu targets never create a drag transaction. Native editors, sliders, buttons
+  and list gestures retain their own input; registered child menu targets take
+  precedence over their surrounding background. Moving before the hold cancels
+  it, cancellation closes its menu, and release after a hold keeps the menu open.
 - Drag pickup, including inside drawers and on collapsed-column icons, follows
   the [drag and reorder convention](drag-and-reorder.md). Secondary click and
   touch/pen holds open the same menu, and the deepest applicable target wins.

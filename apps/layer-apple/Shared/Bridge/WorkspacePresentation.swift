@@ -123,6 +123,7 @@ import SwiftUI
         return sourceInstances.filter { $0.value.layer >= max(drawerLayer, columnLayer) && $0.value.bounds.contains(point) }
             .max {
                 if $0.value.layer != $1.value.layer { return $0.value.layer < $1.value.layer }
+                if $0.value.priority != $1.value.priority { return $0.value.priority < $1.value.priority }
                 return $0.value.bounds.width * $0.value.bounds.height > $1.value.bounds.width * $1.value.bounds.height
             }
             .map { ($0.key, $0.value) }
@@ -263,6 +264,7 @@ struct WorkspaceDrag: ViewModifier {
     var surface = ReorderSurface.handle
     var context: JSON? = nil
     var canDrag = true
+    var priority = 0
     var openOnTap = false
     var doubleClick: (() -> Void)? = nil
     @State private var sourceID = UUID().uuidString
@@ -273,7 +275,7 @@ struct WorkspaceDrag: ViewModifier {
         content.background(GeometryReader { allocation in
             Color.clear.preference(key: WorkspaceSources.self,
                 value: enabled ? [sourceID: WorkspaceSource(bounds: allocation.frame(in: .named("editor-workspace")).intersection(clip),
-                    layer: layer, item: item.stableKey, surface: surface, context: context?.stableKey, canDrag: canDrag)] : [:])
+                    layer: layer, item: item.stableKey, surface: surface, context: context?.stableKey, canDrag: canDrag, priority: priority)] : [:])
         })
         .simultaneousGesture(TapGesture(count: 2).exclusively(before: TapGesture()).onEnded { value in
             guard !workspace.input.contact.consumeClick() else { return }
@@ -315,6 +317,7 @@ struct WorkspaceSource: Equatable {
     let surface: ReorderSurface
     let context: String?
     var canDrag = true
+    var priority = 0
 }
 struct WorkspaceControlSurface: ViewModifier {
     let workspace: WorkspacePresentation

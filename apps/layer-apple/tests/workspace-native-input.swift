@@ -55,6 +55,34 @@ import SwiftUI
             try await store.apply(value)
             try await drain()
         }
+        for theme in ["light", "dark"] {
+            try await action(["type": "set_theme", "theme": theme])
+            var background = CGPoint.zero
+            try await wait("Empty toolbar background") {
+                guard let source = workspace.sourceInstances.values.first(where: {
+                    $0.priority < 0 && (try? JSON.decode($0.context ?? ""))?["kind"].string == "ribbon"
+                }) else { return false }
+                for row in 1..<20 { for column in 1..<100 {
+                    let point = CGPoint(x: source.bounds.minX + source.bounds.width * CGFloat(column) / 100,
+                        y: source.bounds.minY + source.bounds.height * CGFloat(row) / 20)
+                    if workspace.hitSource(at: point)?.1 == source { background = point; return true }
+                } }
+                return false
+            }
+            let before = store.state["workspace"].stableKey
+            for pen in [false, true] {
+                try await send(.leftMouseDown, background, pen: pen)
+                try await drain(hold)
+                try require(!input.contact.dragging && input.menu.isNull != pen, "Only pen holds open the toolbar background menu")
+                try await send(.leftMouseUp, background, pen: pen)
+                try require(input.menu.isNull != pen, "Background release retains the pen menu")
+                if pen { try key("\u{1b}", code: 53, window: window); try await drain() }
+                try require(store.state["workspace"].stableKey == before, "A background hold must not change the workspace")
+            }
+            try await send(.rightMouseDown, background); try await send(.rightMouseUp, background)
+            try await wait("Toolbar background secondary menu") { !input.menu.isNull }
+            try key("\u{1b}", code: 53, window: window); try await drain()
+        }
         var start = try await center(item)
         try await send(.leftMouseDown, start); try await send(.leftMouseUp, start)
         try await wait("Ordinary tile action") { store.panel("toolbar")["tiles"].array.first { $0["id"].uint == tile["id"].uint }?["selected"].bool == true }

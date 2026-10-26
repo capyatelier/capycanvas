@@ -633,7 +633,8 @@ private fun expandedShape(expansion: JSONObject, density: Float) = GenericShape 
                 val constrainedBody = group.objectOrNull("tiles") == null && maxHeight < minimumBody.dp
                 Box(Modifier.fillMaxSize().then(if (constrainedBody) Modifier.panelScroll(bodyScroll) else Modifier)) {
                     if (group.objectOrNull("tiles") != null) ToolRibbon(host, panel, group.getJSONObject("tiles"), dock, Modifier.fillMaxSize(), group.optString("axis") == "vertical")
-                    else PanelControls(host, state, panel, Modifier.fillMaxWidth().then(if (constrainedBody) Modifier.height(minimumBody.dp) else Modifier.fillMaxHeight()), onContent = { dock.measure(active, content = it) })
+                    else PanelControls(host, state, panel, Modifier.fillMaxWidth().then(if (constrainedBody) Modifier.height(minimumBody.dp) else Modifier.fillMaxHeight())
+                        .contextSource(dock, obj("kind" to "panel", "panel" to active)), onContent = { dock.measure(active, content = it) })
                 }
                 if (active != "palettes" && group.array("panels").values().contains("palettes"))
                     PaletteMeasurement(host) { dock.measure("palettes", content = it) }

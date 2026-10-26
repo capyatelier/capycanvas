@@ -93,6 +93,8 @@ private struct WorkspaceCollapsedColumnContent: View {
                     context: JSON(["kind": "column", "column": column["id"].raw]), openOnTap: true))
                 .placed(column["grip"].relative(to: base)).accessibilityIdentifier("column-grip-\(column["id"].uint)")
         }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .modifier(WorkspaceDrag(workspace: store.workspace, item: JSON(["kind": "column", "column": column["id"].raw]),
+                surface: .tile, context: JSON(["kind": "column", "column": column["id"].raw]), canDrag: false, priority: -1))
             .environment(\.editorPalette, palette.glassy)
             .modifier(DrawerContainerSurface(drawers: store.contentDrawers, bounds: column["bounds"].rect,
                 cuts: column["open"]["connections"].array.map { $0[1]["bounds"].rect }, fill: palette.glassPanel,

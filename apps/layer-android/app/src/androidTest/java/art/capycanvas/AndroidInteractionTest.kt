@@ -679,6 +679,103 @@ class AndroidInteractionTest {
         }
     }
 
+    private fun savedWorkspace() = JSONObject(workspace()).apply { getJSONObject("layout").remove("header_presentation") }.toString()
+    private fun emptyPoint(area: Rect, occupied: List<Rect>): Offset {
+        val candidates = listOf(area.center.y) + (1..20).map { area.top + area.height * it / 21 }
+        for (y in candidates) for (step in 1..200) {
+            val point = Offset(area.left + area.width * step / 201, y)
+            if (occupied.none { it.inflate(density).contains(point) }) return point
+        }
+        error("No empty background in $area outside $occupied")
+    }
+
+    @Test fun emptyWorkspaceBackgroundsOpenMenusWithoutDragging() {
+        for (theme in listOf("light", "dark")) for (pointer in pointerTools) {
+            tool = pointer
+            restore()
+            action(obj("type" to "set_theme", "theme" to theme))
+            val toolbar = snapshot().array("panels").objects().first { it.getString("id") == "toolbar" }
+            val area = bounds("panel-body-toolbar")
+            val occupied = toolbar.array("tiles").objects().mapNotNull {
+                val tag = "tile-toolbar-${it.getInt("id")}"; if (exists(tag)) bounds(tag) else null
+            } + listOfNotNull(if (exists("ribbon-grip-toolbar")) bounds("ribbon-grip-toolbar") else null)
+            val toolbarPoint = emptyPoint(area, occupied)
+            action(obj("type" to "select_panel_tab", "group" to 41, "panel" to "sizes"))
+            val panelPoint = bounds("panel-body-sizes").let { Offset(it.center.x, it.bottom - 12 * density) }
+            val headerPoint = emptyPoint(bounds("title-bar"), snapshot().getJSONObject("header").getJSONObject("model")
+                .array("zones").values().flatMap { (it as JSONArray).objects() }.mapNotNull {
+                    val tag = "header-item-${it.getInt("id")}"; if (exists(tag)) bounds(tag) else null
+                } + listOfNotNull(if (exists("zen-button")) bounds("zen-button") else null))
+            for ((name, press) in listOf("toolbar" to toolbarPoint, "panel" to panelPoint, "header" to headerPoint)) {
+                val before = savedWorkspace()
+                event(MotionEvent.ACTION_DOWN, press)
+                SystemClock.sleep(700)
+                assertEquals("$theme/$pointer/$name hold", holdMenuCount, popupCount())
+                if (name == "toolbar" && holdMenuCount > 0) assertNotNull("Empty space opens the toolbar menu", menuText("Add Tools…"))
+                event(MotionEvent.ACTION_CANCEL); settle()
+                assertEquals("$theme/$pointer/$name cancellation closes the menu", 0, popupCount())
+                assertEquals(before, savedWorkspace())
+                event(MotionEvent.ACTION_DOWN, press)
+                event(MotionEvent.ACTION_MOVE, press + Offset(24 * density, 0f))
+                SystemClock.sleep(700)
+                assertEquals("$name moving before the hold opens no menu", 0, popupCount())
+                event(MotionEvent.ACTION_CANCEL); settle()
+                assertEquals(before, savedWorkspace())
+                event(MotionEvent.ACTION_DOWN, press)
+                SystemClock.sleep(700)
+                event(MotionEvent.ACTION_UP); settle()
+                assertEquals("$name release retains the menu", holdMenuCount, popupCount())
+                assertEquals(before, savedWorkspace())
+                if (holdMenuCount > 0) back()
+                mouseButton = MotionEvent.BUTTON_SECONDARY
+                if (pointer == MotionEvent.TOOL_TYPE_MOUSE) {
+                    event(MotionEvent.ACTION_DOWN, press); event(MotionEvent.ACTION_UP); settle()
+                    assertEquals("$name secondary click", 1, popupCount()); back()
+                }
+                mouseButton = MotionEvent.BUTTON_PRIMARY
+            }
+            val tile = toolbar.array("tiles").objects().first { it.getBoolean("enabled") && !it.has("component") }
+            event(MotionEvent.ACTION_DOWN, bounds("tile-toolbar-${tile.getInt("id")}").center)
+            SystemClock.sleep(700)
+            assertEquals("A tile keeps its own menu", holdMenuCount, popupCount())
+            event(MotionEvent.ACTION_CANCEL); settle()
+        }
+    }
+
+    @Test fun workspaceBackgroundMenusPreserveControlsAndColumnDoubleTap() {
+        for (theme in listOf("light", "dark")) for (pointer in pointerTools) {
+            tool = pointer
+            restore()
+            action(obj("type" to "set_theme", "theme" to theme))
+            action(obj("type" to "select_panel_tab", "group" to 41, "panel" to "sizes"))
+            val preset = host.catalog.array("brush_sizes").objects().first().getString("label")
+            val before = savedWorkspace()
+            val size = state().getJSONObject("brush").number("diameter")
+            event(MotionEvent.ACTION_DOWN, bounds("size-preset-$preset").center)
+            SystemClock.sleep(700)
+            assertEquals("$theme/$pointer native button keeps its hold", 0, popupCount())
+            event(MotionEvent.ACTION_CANCEL); settle()
+            assertEquals(size, state().getJSONObject("brush").number("diameter"))
+            assertEquals(before, savedWorkspace())
+            customize(obj("type" to "set_column_collapsed", "group" to 41, "collapsed" to true))
+            val column = snapshot().getJSONObject("layout").array("collapsed").objects().first { it.getInt("id") == 41 }
+            val occupied = column.array("groups").objects().flatMap { it.array("icons").objects() }
+                .map { bounds("column-icon-${it.getString("panel")}") } + bounds("column-grip-41")
+            val press = emptyPoint(bounds("collapsed-column-41"), occupied)
+            val collapsed = savedWorkspace()
+            event(MotionEvent.ACTION_DOWN, press); SystemClock.sleep(700)
+            assertEquals("$theme/$pointer column background hold", holdMenuCount, popupCount())
+            event(MotionEvent.ACTION_CANCEL); settle()
+            assertEquals(0, popupCount()); assertEquals(collapsed, savedWorkspace())
+            event(MotionEvent.ACTION_DOWN, press); SystemClock.sleep(700)
+            event(MotionEvent.ACTION_UP); settle()
+            assertEquals(holdMenuCount, popupCount()); assertEquals(collapsed, savedWorkspace())
+            if (holdMenuCount > 0) back()
+            doubleTap(press)
+            waitFor("Column background double tap expands the column") { !exists("collapsed-column-41") }
+        }
+    }
+
     @Test fun longPressRetainsEveryWorkspaceDragSource() {
         for (pointer in pointerTools) {
             tool = pointer

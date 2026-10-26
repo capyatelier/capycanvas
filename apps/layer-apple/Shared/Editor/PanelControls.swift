@@ -32,24 +32,26 @@ struct PanelControls: View {
     private var padding: CGFloat { store.panelMetrics.inset }
     var body: some View {
         contents.environment(\.measuresWorkspacePanel, measureForWorkspace).environment(\.compactPanelControls, true)
+            .modifier(WorkspaceDrag(workspace: store.workspace, item: JSON(["kind": "panel", "panel": panel["id"].raw]),
+                surface: .tile, context: JSON(["kind": "panel", "panel": panel["id"].raw]), canDrag: false, priority: -1))
             .background {
                 Color.clear.preference(key: PanelSizeFacts.self, value: measureForWorkspace
                     ? [PanelSizeKey(panel: panel["id"].string, part: "present"): 0] : [:])
             }
     }
     @ViewBuilder private var contents: some View {
-        if panel["id"].string == "proof" { ProofPanel(store: store, controller: store.proof) }
-        else if panel["id"].string == "layers" { LayerPanel(store: store, panel: panel) }
-        else if panel["id"].string == "palettes" { PalettePanel(store: store, controller: store.palettes, docked: scrollable) }
-        else if panel["id"].string == "filter_types" { FilterTypesPanel(store: store) }
+        if panel["id"].string == "proof" { ProofPanel(store: store, controller: store.proof).modifier(WorkspaceControlSurface(workspace: store.workspace)) }
+        else if panel["id"].string == "layers" { LayerPanel(store: store, panel: panel).modifier(WorkspaceControlSurface(workspace: store.workspace)) }
+        else if panel["id"].string == "palettes" { PalettePanel(store: store, controller: store.palettes, docked: scrollable).modifier(WorkspaceControlSurface(workspace: store.workspace)) }
+        else if panel["id"].string == "filter_types" { FilterTypesPanel(store: store).modifier(WorkspaceControlSurface(workspace: store.workspace)) }
         else if panel["id"].string == "adjustments" {
             if panel["controls"].array.contains(where: { $0["control"].string == "adjustments" && $0["visible_in_panel"].bool }) {
-                AdjustmentPanel(store: store, splitPicker: splitFilters)
+                AdjustmentPanel(store: store, splitPicker: splitFilters).modifier(WorkspaceControlSurface(workspace: store.workspace))
             }
         }
         else if panel["id"].string == "navigator" {
             if panel["controls"].array.contains(where: { $0["control"].string == "navigator" && $0["visible_in_panel"].bool }) {
-                NavigatorPanel(store: store)
+                NavigatorPanel(store: store).modifier(WorkspaceControlSurface(workspace: store.workspace))
             }
         }
         else { controls }
@@ -78,7 +80,7 @@ struct PanelControls: View {
         VStack(alignment: .leading, spacing: store.panelMetrics.group) {
                 ForEach(panel["controls"].array.indices, id: \.self) { index in
                     let item = panel["controls"][index]
-                    if item["visible_in_panel"].bool { control(item, maximumHeight: maximumHeight) }
+                    if item["visible_in_panel"].bool { control(item, maximumHeight: maximumHeight).modifier(WorkspaceControlSurface(workspace: store.workspace)) }
                 }
         }.padding(padding)
             .frame(maxWidth: .infinity, alignment: .topLeading)

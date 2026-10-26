@@ -1,4 +1,4 @@
-param([Parameter(Mandatory)][string]$Executable,[ValidateSet('mouse','pen','touch')][string]$Device='mouse',[ValidateSet('paint','sketch','photo')][string]$Workspace='paint',[switch]$Catalog,[ValidateSet('dark','light')][string]$Theme='dark',[ValidateSet('full','options','options-light','options-pen','options-touch','menus','menus-light','zen','zen-workspace')][string]$Journey='full')
+﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('mouse','pen','touch')][string]$Device='mouse',[ValidateSet('paint','sketch','photo')][string]$Workspace='paint',[switch]$Catalog,[ValidateSet('dark','light')][string]$Theme='dark',[ValidateSet('full','options','options-light','options-pen','options-touch','menus','menus-light','zen','zen-workspace')][string]$Journey='full')
 $ErrorActionPreference='Stop'
 if($Journey -eq 'options-light'){$Theme='light'}
 if($Journey -eq 'menus-light'){$Theme='light'}
@@ -21,6 +21,36 @@ function At([string]$Id) {
     $box=(Control $Id).Current.BoundingRectangle
     if($box.IsEmpty -or $box.Width -le 0 -or $box.Height -le 0){throw "Unarranged control: $Id"}
     @{x=[int]($box.X+$box.Width/2);y=[int]($box.Y+$box.Height/2)}
+}
+function Check-BackgroundContext {
+    Edit-Header
+    $box=(Control 'title-bar').Current.BoundingRectangle
+    $height=(Presentation).height*[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.
+    $occupied=@(Entries|ForEach-Object {if($item=Find ('header-item-'+$_.id)){$item.Current.BoundingRectangle}})
+    if($capy=Find 'zen-capy'){$occupied+=,$capy.Current.BoundingRectangle}
+    $at=$null
+    foreach($step in 1..100){
+        $x=$box.X+$box.Width*$step/101;$y=$box.Y+$height/2
+        if(!@($occupied|Where-Object {$_.Contains($x,$y)}).Count){$at=@{x=[int]$x;y=[int]$y};break}
+    }
+    if(!$at){throw 'Title bar has no unused background'}
+    $before=HeaderJson
+    foreach($pointer in 'mouse','touch','pen'){
+        [CapyRowPointer]::Down($pointer,$at.x,$at.y)
+        Start-Sleep -Milliseconds 900
+        if($pointer -eq 'mouse'){
+            if((Gesture).menu_open){throw 'Mouse title background hold opened a menu'}
+        }else{Wait-Until {(Gesture).menu_open} "$pointer title background hold did not open its context menu"}
+        [CapyRowPointer]::Up()
+        if($pointer -ne 'mouse'){
+            if(!(Gesture).menu_open){throw 'Title background release lost the menu'}
+            [CapyRowPointer]::Key([uint32]$review.Id,0x1b)
+            Wait-Until {!(Gesture).menu_open} 'Title background menu did not dismiss'
+        }
+        if((HeaderJson) -ne $before -or !(Model).header.editing){throw 'Holding the title background changed its layout'}
+    }
+    Invoke 'header-edit-cancel'
+    Wait-Until {!(Model).header.editing} 'Title background check did not close the editor'
 }
 function Screen($Box) {
     $point=[CapyRowPointer+Point]::new()
@@ -673,6 +703,7 @@ try {
     $env:CAPY_STORAGE_DIR=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1'
     [IO.File]::WriteAllText((Settings-File),(@{theme=$Theme}|ConvertTo-Json))
     Start-Review 'initial';Capture 'normal'
+    Check-BackgroundContext
     if($Journey -in @('zen','zen-workspace')){
         if($Journey -eq 'zen'){Check-ZenMatrix}
         else{foreach($theme in @('Dark','Light')){Set-ZenTheme $theme;foreach($workspaceKind in @('painter','photographer','illustrator')){Use-ZenWorkspace $workspaceKind};Check-ZenToolbar $theme}}
