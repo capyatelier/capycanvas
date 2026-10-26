@@ -83,23 +83,32 @@ $typed=[pscustomobject]@{AutomationId='same';Name='text';ControlType='Button';Is
 if((Snapshot-Control @($typed,$visible) 'same' -Type 'Edit').Name -cne 'visible'){throw 'Type filtering changed'}
 $start=($idle.Find({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Start-Review'},$true)).Body.EndBlock.Statements
 $reset=@($start|Where-Object {$_ -is [Management.Automation.Language.AssignmentStatementAst] -and $_.Left.Extent.Text -eq '$script:idleCanvas' -and $_.Right.Extent.Text -eq '$null'})
-$acquire=@($start|Where-Object {$_ -is [Management.Automation.Language.AssignmentStatementAst] -and $_.Left.Extent.Text -eq '$script:idleCanvas' -and $_.Right.Extent.Text.Contains("Control 'drawing-canvas'")})
 $launch=$idle.Find({param($n)$n -is [Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq 'Start-Process'},$true)
-if($reset.Count -ne 1 -or $acquire.Count -ne 1 -or $reset[0].Extent.StartOffset -ge $launch.Extent.StartOffset -or !$acquire[0].Extent.Text.Contains('-Arranged -NoPopups')){throw 'Canvas lifetime/reset/owned acquisition changed'}
+if($reset.Count -ne 1 -or $reset[0].Extent.StartOffset -ge $launch.Extent.StartOffset){throw 'Canvas lifetime/reset changed'}
 $script:discoveries=0;$script:nextCanvas=[CapyProjectionTest.Canvas]::new()
 function Control([string]$Id,[switch]$Arranged,[switch]$NoPopups){if($Id -cne 'drawing-canvas' -or !$Arranged -or !$NoPopups){throw 'Unexpected cached canvas acquisition'};$script:discoveries++;$script:nextCanvas}
+. ([scriptblock]::Create((Function-Text $idle 'Canvas-Peer')))
+$drawingWindow=[IntPtr]22
+$ownerModel=[pscustomobject]@{state=[pscustomobject]@{document_file=[pscustomobject]@{epoch=0}};windows_workspace=[pscustomobject]@{id='paint'}}
 $script:idleCanvas=[CapyProjectionTest.Canvas]::new()
 . ([scriptblock]::Create($reset[0].Extent.Text));if($null -ne $idleCanvas){throw 'Old review canvas survived reset'}
-. ([scriptblock]::Create($acquire[0].Extent.Text));$first=$idleCanvas;$script:nextCanvas=[CapyProjectionTest.Canvas]::new()
-. ([scriptblock]::Create($reset[0].Extent.Text));. ([scriptblock]::Create($acquire[0].Extent.Text))
-if($idleCanvas -eq $first -or $discoveries -ne 2){throw 'New review did not acquire its own canvas once'}
-$ownerGuard=@($start|Where-Object {$_ -is [Management.Automation.Language.IfStatementAst] -and $_.Extent.Text.Contains('The canvas peer does not belong')})
-if($ownerGuard.Count -ne 1){throw 'Owned cached-canvas acquisition guard missing'}
-$idleCanvas.Value.ProcessId=99;$rejected=$false;try{. ([scriptblock]::Create($ownerGuard[0].Extent.Text))}catch{if($_.Exception.Message -cne 'The canvas peer does not belong to the owned review'){throw};$rejected=$true}
-if(!$rejected){throw 'Foreign cached canvas was accepted'};$idleCanvas.Value.ProcessId=33
+$first=Canvas-Peer $ownerModel;$script:nextCanvas=[CapyProjectionTest.Canvas]::new()
+if((Canvas-Peer $ownerModel) -ne $first -or $discoveries -ne 1){throw 'Stable drawing rediscovered its canvas'}
+foreach($change in @({$ownerModel.state.document_file.epoch++},{$ownerModel.windows_workspace.id='sketch'},{$drawingWindow=[IntPtr]23})){
+ . $change
+ $next=Canvas-Peer $ownerModel
+ if($next -eq $first){throw 'Changed drawing context retained an old canvas'}
+ $first=$next;$script:nextCanvas=[CapyProjectionTest.Canvas]::new()
+}
+if($discoveries -ne 4){throw 'Drawing context changes did not refresh the canvas once each'}
+$ownerModel.state.document_file.epoch++;$script:nextCanvas.Value.ProcessId=99
+$rejected=$false;try{$null=Canvas-Peer $ownerModel}catch{if($_.Exception.Message -cne 'The canvas peer does not belong to the owned review'){throw};$rejected=$true}
+if(!$rejected){throw 'Foreign cached canvas was accepted'};$script:nextCanvas.Value.ProcessId=33
+$null=Canvas-Peer $ownerModel
 foreach($name in @('Camera-Key','Document-Hash')){. ([scriptblock]::Create((Function-Text $idle $name)))}
 $script:model=[pscustomobject]@{state=[pscustomobject]@{camera=[pscustomobject]@{viewport=@(96,96);translation=@(0,0);zoom=1;rotation=0;flipped=@($false,$false);work_area=@(0,0,96,96)};layer_tools=[pscustomobject]@{has_selection=$false;quick_mask=$false};settings_open=$false;requests=@();customization=[pscustomobject]@{drawer=$null;control=$null};command_search=$null}}
 $projection=@{bounds=$idleCanvas.Current.BoundingRectangle;camera=(Camera-Key $script:model.state.camera);work_area='0,0,96,96';document_crop=[Drawing.Rectangle]::new(0,0,96,96)};$drawingWindow=[IntPtr]22
+$null=Canvas-Peer $script:model
 $samplePoints=@(foreach($y in 0..23){foreach($x in 0..31){,@((101+2*$x),(201+2*$y))}})
 $expected=@(foreach($i in 0..767){[Drawing.Color]::FromArgb(255,($i%256),[int][Math]::Floor($i/256),(($i*17)%256)).ToArgb()}) -join ','
 $script:pixelMutation=$false

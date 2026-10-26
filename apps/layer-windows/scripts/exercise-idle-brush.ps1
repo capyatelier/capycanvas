@@ -14,7 +14,17 @@ $run=Join-Path $repo ('artifacts/windows/idle-brush/'+$Theme+'-'+[Guid]::NewGuid
 $clock=[Diagnostics.Stopwatch]::StartNew()
 $milestones=[Collections.Generic.List[object]]::new()
 $checks=[ordered]@{theme=$Theme;executable_sha256=(Get-FileHash -LiteralPath $Executable).Hash}
-$review=$null;$projection=$null;$idleCanvas=$null
+$review=$null;$projection=$null;$idleCanvas=$null;$idleCanvasOwner=$null
+function Canvas-Peer($View){
+ if(!$View){$View=Model}
+ $owner="$($review.Id)/$drawingWindow/$($View.state.document_file.epoch)/$($View.windows_workspace.id)"
+ if(!$script:idleCanvas -or $script:idleCanvasOwner -cne $owner){
+  $script:idleCanvas=Control 'drawing-canvas' -Arranged -NoPopups
+  if($idleCanvas.Current.ProcessId -ne $review.Id){throw 'The canvas peer does not belong to the owned review'}
+  $script:idleCanvasOwner=$owner
+ }
+ $script:idleCanvas
+}
 function Shader-Lines{
  if(!(Test-Path -LiteralPath $stderr)){return @()}
  $stream=[IO.File]::Open($stderr,[IO.FileMode]::Open,[IO.FileAccess]::Read,([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
@@ -28,7 +38,7 @@ function Observe([string]$Stage,$Model){
  $value
 }
 function Start-Review([string]$Name){
- $script:idleCanvas=$null
+ $script:idleCanvas=$null;$script:idleCanvasOwner=$null
  $script:launch=Join-Path $run $Name;[IO.Directory]::CreateDirectory($launch)|Out-Null
  $env:CAPY_STORAGE_DIR=Join-Path $launch 'profile'
  [IO.File]::WriteAllText((Settings-File),(@{language=@{Explicit='en'};theme=$Theme}|ConvertTo-Json -Depth 4))
@@ -48,8 +58,6 @@ function Start-Review([string]$Name){
  $script:firstReady=$start.first
  [CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
  if(![CapyRowPointer]::SetForegroundWindow($drawingWindow)){throw 'The owned drawing did not accept foreground input'}
- $script:idleCanvas=Control 'drawing-canvas' -Arranged -NoPopups
- if($idleCanvas.Current.ProcessId -ne $review.Id){throw 'The canvas peer does not belong to the owned review'}
  if((Model).windows_workspace.id -ne 'builtin:workspace:illustrator'){
   $switch=Find 'workspace-switch-builtin:workspace:illustrator'
   if(!$switch){Invoke 'header-workspace-menu';$switch=Control 'Paint' -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)}
@@ -57,6 +65,7 @@ function Start-Review([string]$Name){
   Wait-Until {(Model).windows_workspace.id -eq 'builtin:workspace:illustrator' -and !(Model).windows_workspace.busy} 'Paint workspace did not open' 20
  }
  [CapyRowPointer]::Initialize([uint32]$review.Id)
+ $null=Canvas-Peer
 }
 function Close-Review([switch]$Discard){
  [CapyRowPointer]::Dispose()
@@ -76,7 +85,7 @@ function Park{
  [CapyRowPointer]::Hover([int]($b.X+$b.Width/2),[int]($b.Y+$b.Height/2))
 }
 function Stroke([int[]]$From,[int[]]$To){
- $idleCanvas.SetFocus()
+ (Canvas-Peer).SetFocus()
  [CapyRowPointer]::Down('mouse',$From[0],$From[1])
  try{for($i=1;$i -le 12;$i++){
   [CapyRowPointer]::Move([int]($From[0]+($To[0]-$From[0])*$i/12),[int]($From[1]+($To[1]-$From[1])*$i/12))
@@ -138,7 +147,7 @@ function Save-Pixels([string]$Name,[string]$Expected){
 }
 function Pixels([string]$EvidenceName,[string]$Expected){
  if([CapyRowPointer]::GetForegroundWindow() -ne $drawingWindow){throw 'The owned drawing must be foreground for composed samples'}
- $current=$idleCanvas.Current;$bounds=$current.BoundingRectangle;$model=Model
+ $model=Model;$current=(Canvas-Peer $model).Current;$bounds=$current.BoundingRectangle
  if(!$current.IsEnabled -or $current.IsOffscreen){throw 'The owned canvas must accept unobstructed input for composed samples'}
  if($bounds -ne $projection.bounds -or (Camera-Key $model.state.camera) -ne $projection.camera -or ($model.state.camera.work_area -join ',') -cne $projection.work_area){throw 'The canvas or camera moved during composed history comparisons'}
  if($model.state.layer_tools.has_selection -or $model.state.layer_tools.quick_mask -or $model.state.settings_open -or @($model.state.requests).Count -or $model.state.customization.drawer -or $model.state.customization.control -or $model.state.command_search){throw 'A document overlay or pending native UI can obscure composed samples'}
@@ -162,7 +171,7 @@ function Pixels([string]$EvidenceName,[string]$Expected){
 }
 function Revision{@((Model).state.layers|ForEach-Object {"$($_.id):$($_.paint_revision)"}) -join ','}
 function Shortcut([uint16[]]$Modifiers,[uint16]$Key){
- $idleCanvas.SetFocus();[CapyRowPointer]::Chord([uint32]$review.Id,$Modifiers,$Key)
+ (Canvas-Peer).SetFocus();[CapyRowPointer]::Chord([uint32]$review.Id,$Modifiers,$Key)
 }
 function Select-Preset([string]$Label,[int]$Id){
  Shortcut @(0x11) 0x4b
@@ -187,7 +196,7 @@ function Select-Preset([string]$Label,[int]$Id){
  $size=Control 'tool-setting-size';$size.SetFocus()
  $size.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('64')
  [CapyRowPointer]::Key([uint32]$review.Id,0x0d)
- $idleCanvas.SetFocus()
+ (Canvas-Peer).SetFocus()
  Wait-Until {(Model).state.brush.diameter -eq 64} 'The brush diameter did not commit'
  if((Model).state.customization.drawer){
   [CapyRowPointer]::Key([uint32]$review.Id,0x1b)
@@ -271,7 +280,7 @@ try{
  $env:CAPY_TRACE_UI='1';$env:CAPY_TRACE_SHADER_JOBS='1'
  Start-Review 'functional'
  $checks.first_ready=$firstReady
- $canvas=$idleCanvas
+ $canvas=Canvas-Peer
  Wait-Until {$canvas.Current.IsEnabled} 'The selected-brush canvas stayed disabled'
  $tab=@((Model).state.tabs|Where-Object active)[0]
  $from=Point ($tab.width*.45) ($tab.height*.45);$to=Point ($tab.width*.55) ($tab.height*.55)

@@ -1119,7 +1119,11 @@ desktop so the IME candidate window remains visible in the evidence.
 ### UI fixtures
 
 Run `gh workflow run windows-readiness.yml -f source_ref=<commit-sha>` for native
-x64 WARP fixtures on a hosted Windows VM and the Linux development-profile test.
+x64 WARP fixtures on hosted Windows VMs.
+One build supplies the runtime to up to eight parallel fixture jobs. The
+`fixtures` input accepts a JSON array of registered cases, for example
+`["canvas-bar:default","canvas-bar:light"]`; the default covers the
+priority vector, brush, touch, bubble and Zen journeys.
 The manual workflow checks functional behavior; it does not qualify hardware
 rendering or performance targets. Idle-brush journeys retain their default
 readiness deadlines; other VM fixtures use the runner's normal wait scale.
