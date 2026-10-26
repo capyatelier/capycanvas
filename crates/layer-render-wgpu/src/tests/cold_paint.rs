@@ -449,6 +449,51 @@ fn cold_native_neighborhood_brushes_keep_prediction_and_terminal_backing() {
 }
 
 #[test]
+fn native_cache_keeps_prepared_brush_pages() {
+    for execution in [BrushExecution::Dry, BrushExecution::Wet] {
+        let mut a = document(DocumentColor { space: RgbSpace::ProPhoto, depth: SampleDepth::U16 });
+        let mut b = a.clone();
+        let id = target(&a);
+        let mut resident = renderer(&a, 256 * 1024 * 1024);
+        let mut bounded = renderer(&b, 256 * 1024 * 1024);
+        let data = paint(&b).raster.wait_data().unwrap();
+        paint_mut(&mut a).raster = RasterRevision::pending();
+        paint_mut(&mut b).raster = RasterRevision::pending();
+        let style = if execution == BrushExecution::Dry {
+            DabStyle::for_brush(&layer_core::default_brush(layer_core::DefaultBrushPreset::GPen), layer_core::StrokeTool::Brush)
+        } else { test_style(execution) };
+        let mut dab = test_dab([257., 255.], [0.1, 0.2, 0.8, 0.7], 0.6);
+        dab.radii = [14., 10.];
+        dab.motion = [13.25, -24.5];
+        let batch = crate::test_support::dab_batch(id, style, dab.bounds());
+        let frame = FramePacket { dabs: &[dab], dab_batches: std::slice::from_ref(&batch), ..packet(&b, false) };
+        assert!(bounded.raster_dependencies_ready(frame, None));
+        let required = bounded.restore_preflight.as_ref().unwrap().dependencies().to_vec();
+        assert!(!required.is_empty());
+        bounded.native_edit.as_mut().unwrap().color_cache_bytes = 0;
+        let tiles = brush_tiles::plan_packet(frame, |target| b.scene().target_extent(target)).unwrap();
+        bounded.trim_native_color_cache(frame.dab_batches, &tiles);
+        for (target, coordinates) in &required {
+            let layer = bounded.paint_layers.iter().find(|layer| layer.id == *target).unwrap();
+            for coordinate in coordinates {
+                if data.tiles.contains_key(&TileKey {plane: RasterPlane::Color, coordinate: *coordinate}) {
+                    assert!(layer.pages.iter().any(|page| page.coordinate == *coordinate), "{execution:?}: required {coordinate:?}");
+                }
+            }
+        }
+        assert!(bounded.paint_layers[0].pages.len() < resident.paint_layers[0].pages.len());
+        crate::test_support::submit_ready(&mut bounded, frame).unwrap();
+        crate::test_support::submit_ready(&mut resident, FramePacket {scene: a.scene(), ..frame}).unwrap();
+        complete(&bounded);
+        complete(&resident);
+        close(&image(&bounded), &image(&resident));
+        bounded.retire_stroke_sources();
+        bounded.trim_native_color_cache(&[], &[]);
+        assert!(bounded.paint_layers[0].pages.is_empty());
+    }
+}
+
+#[test]
 fn native_cache_keeps_dither_originals_after_publication_and_revisits() {
     let mut a = document(DocumentColor { space: RgbSpace::ProPhoto, depth: SampleDepth::U16 });
     let mut b = a.clone();

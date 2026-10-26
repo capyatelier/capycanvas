@@ -33,7 +33,8 @@ Native raster restoration stages color, mask and watercolor wetness pages in
 separate typed vectors. [The restore path](../../crates/layer-render-wgpu/src/raster.rs)
 publishes them only after every tile upload and the final cached batch succeed.
 A failed decode or upload leaves every live page intact; decoding holds one CPU
-tile at a time.
+tile at a time. Cache trimming preserves the prepared frame’s required source and
+destination pages until that frame consumes them.
 
 ### Layer extents and the canvas window
 

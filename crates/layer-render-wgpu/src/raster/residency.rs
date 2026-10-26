@@ -181,6 +181,7 @@ impl WgpuRasterizer {
                     }
                 }
             }
+            let required = self.restore_preflight.as_ref().map_or(&[][..], |restore| restore.dependencies());
             for layer in &mut self.paint_layers {
                 let Some(data) = native.backing.get(&layer.id) else {
                     continue;
@@ -194,6 +195,8 @@ impl WgpuRasterizer {
                     if bytes <= native.color_cache_bytes
                         || changed.is_some_and(|c| c.contains(&page.coordinate))
                         || page.stroke_start.is_some()
+                        || required.iter().any(|(target, coordinates)| *target == layer.id
+                            && coordinates.binary_search(&page.coordinate).is_ok())
                     {
                         return true;
                     }

@@ -128,6 +128,12 @@ pub(crate) struct RestorePreflight {
     consumed:bool,
 }
 impl RestorePreflight {
+    pub(crate) fn dependencies(&self)->&[(SourceTarget,Vec<[u32;2]>)] {
+        match &self.key {
+            Key::Frame {required,..} if !self.consumed=>required,
+            _=>&[],
+        }
+    }
     fn new(r:&WgpuRasterizer,key:Key,requests:Vec<Request>)->Self {
         let mut targets=Vec::new();let mut failure=None;
         for request in requests {
