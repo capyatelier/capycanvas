@@ -607,13 +607,16 @@ fn toolbar_choices_keep_independent_selections_and_disable_unavailable_sliders()
         .filter(|item| matches!(item.action, UiAction::SelectBrush { .. }))
         .take(2).map(|item| item.action.clone()).collect();
     assert_eq!(presets.len(), 2);
+    let groups: Vec<_> = s.state().tool_set.groups.iter().filter(|item| item.selected)
+        .map(|item| (item.label.clone(), item.icon)).collect();
+    assert_eq!(groups.len(), usize::from(!s.state().tool_set.groups.is_empty()));
     for preset in presets {
         s.dispatch(UiAction::ToolbarEdit {
             context: s.state().toolbar_context(), action: Box::new(preset.clone()),
         }).unwrap();
         let state = s.state();
-        assert!(state.tool_set.subtools.iter().any(|item|
-            item.selected && matches!(item.action, UiAction::SelectToolGroup { .. })));
+        assert_eq!(state.tool_set.groups.iter().filter(|item| item.selected)
+            .map(|item| (item.label.clone(), item.icon)).collect::<Vec<_>>(), groups);
         assert!(state.tool_set.subtools.iter().any(|item| item.selected && item.action == preset));
         let ToolOption::Choice { items, .. } = state.tool_options().into_iter()
             .find(|option| matches!(option, ToolOption::Choice { id: "variant", .. })).unwrap()

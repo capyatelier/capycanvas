@@ -379,7 +379,6 @@ mod tests {
     #[test]
     fn all_definitions_load_from_disk_and_share_module_storage() {
         let catalog = disk_catalog();
-        assert_eq!(catalog.filters().len(), 54);
         assert_eq!(catalog.filters(), bundled_effect_catalog().filters());
         let mut shared = std::collections::HashMap::<&str,crate::authored::Resource<str>>::new();
         for filter in catalog.filters() {
@@ -420,7 +419,7 @@ mod tests {
             .stage(custom.clone(), EffectInstallMode::Add)
             .unwrap();
         assert!(original.get("user:custom").is_none());
-        assert_eq!(added.filters().len(), 55);
+        assert_eq!(added.filters().len(), original.filters().len() + 1);
         Arc::make_mut(&mut custom.filters[0].program).label = "Updated kernel".into();
         let replaced = added
             .stage(custom.clone(), EffectInstallMode::Replace)
@@ -440,16 +439,17 @@ mod tests {
     #[test]
     fn resource_catalog_merge_updates_and_adds_without_changing_the_fallback() {
         let original = disk_catalog();
+        let fallback = original.filters().to_vec();
         let mut resources = original.clone();
         let mut added = resources.get("gaussian_blur").unwrap().clone();
         added.program=custom_program("gaussian_blur");
         Arc::make_mut(&mut added.program).id = "user:new_kernel".into();
         resources.filters.push(added);
         let merged = original.stage(resources, EffectInstallMode::Merge).unwrap();
-        assert_eq!(merged.filters().len(), 55);
+        assert_eq!(merged.filters().len(), fallback.len() + 1);
         assert!(merged.get("user:new_kernel").is_some());
         assert_eq!(merged.filters()[0],original.filters()[0]);
-        assert_eq!(original.filters().len(), 54);
+        assert_eq!(original.filters(), fallback.as_slice());
         assert_ne!(original.filters()[0].label(), &ResourceLabel::from("Updated filter"));
     }
     #[test]
