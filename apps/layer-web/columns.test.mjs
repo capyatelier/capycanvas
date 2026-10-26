@@ -46,16 +46,20 @@ export async function checkColumnSizing({ call, evaluate, settle }) {
         const point = center(divider.bounds);
         await doubleClick(point);
         const after = await snapshot();
-        const contains = (node, panel) => node.kind === "tabs" ? node.panels.includes(panel) : contains(node.first, panel) || contains(node.second, panel);
-        const width = mode === "nested" ? 502 : edge === "left" ? (contains(band.root, "palettes") ? 280 : 242) : (contains(band.root, "proof") ? 300 : 254);
+        const width = mode === "nested" ? 490 : 242;
         const resized = after.layout.bands.find(b => b.id === band.id);
-        assert.equal(resized.extent, width + 6, `${edge} ${mode}: normal starting width`);
+        assert.equal(resized.extent, 0, `${edge} ${mode}: restore automatic width`);
+        const geometry=await resolved(),ids=[];
+        const collect=node=>node.kind==='tabs'?ids.push(node.id):(collect(node.first),collect(node.second));collect(resized.root);
+        const visible=geometry.groups.filter(g=>ids.includes(g.id));
+        const actualWidth=Math.max(...visible.map(g=>g.bounds.x+g.bounds.width))-Math.min(...visible.map(g=>g.bounds.x));
+        assert.ok(Math.abs(actualWidth-width)<.01, `${edge} ${mode}: automatic width ${actualWidth} versus ${width}`);
         assert.equal(after.layout.collapsed.some(c => c.root === band.root.id), false);
         if (mode === "nested") {
           assert.equal(resized.root.fraction, before.layout.bands[0].root.fraction);
-          assert.ok(Math.abs(resized.root.second.fraction - 242 / 496) < 1e-6);
+          assert.ok(Math.abs(resized.root.second.fraction - .5) < 1e-6);
           const groups = (await resolved()).groups;
-          for (const [id, expected] of [[42, 502], [44, 242], [46, 254], [47, 254]])
+          for (const [id, expected] of [[42, 490], [44, 242], [46, 242], [47, 242]])
             assert.ok(Math.abs(groups.find(g => g.id === id).bounds.width - expected) < .01);
         }
         // Release after the double-click must leave no pending resize.

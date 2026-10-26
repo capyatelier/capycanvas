@@ -44,9 +44,8 @@ is drawn above the first group; separators only appear between groups within
 a member. The first tile starts at the member's top edge. Dropping a panel or
 group in the workspace gap immediately above it prepends a group within that
 member while its first group remains unscrolled. Whole-column drags retain the
-gap's stack insertion target. GTK, Android, Windows and Apple present this placement and
-the joins below. Web still needs its native alignment and
-bridge-rendering adapters updated to consume the shared geometry.
+gap's stack insertion target. All five clients present this placement and
+consume shared bridge geometry through their native rendering adapters.
 
 An open member uses the full available workspace height, aligned with the
 stack’s top and bottom. It keeps the normal outer workspace inset, without
@@ -173,6 +172,14 @@ Every facing panel remains in its column's native surface while the column is
 open. A panel without an eligible anchor contributes only its original outline.
 Corner entry and exit therefore change the fill without replacing the panel's
 native parent or remembered controls.
+
+Web uses the same projection on a dedicated, prewarmed Wasm worker. The worker
+formats SVG cubic paths and transfers backdrop triangles. The browser publishes
+panel bounds and the matching paths together, with one combined fill and shadow
+per open column. Original panel outlines clip the native controls; cached native
+tab contours cut selected faces out of the strip fill. A pending projection
+retains only the newest layout, and closing or changing content retires stale
+results. SVG and native controls share the browser's normal painting pipeline.
 
 The existing GPU backdrop renderer consumes the projection's patch triangles.
 Only exterior edges receive antialiasing; shared edges stay fully covered.

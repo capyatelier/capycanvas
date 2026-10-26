@@ -24,6 +24,7 @@ import { screenInfo } from "./new-drawing.js";
 import { createEditorPanels } from "./editor-panels.js";
 import { createWorkspaceChrome, tabHover, releaseTabSurfaces, prepareTabPreview } from "./workspace-chrome.js";
 import { createGlass } from "./glass.js";
+import { createPanelVectors } from "./panel-vectors.js";
 import { createBubbles } from "./bubbles.js";
 import { createDocuments } from "./documents.js";
 import { createSystemStatus } from "./system-status.js";
@@ -76,7 +77,7 @@ let app,
   statusTimer,
   statusError = null,
   shownHostError = null;
-let penResponse, refreshPreferences, customization, layerPanel, effectPanels, palettes, editor, selectionUi, frequencySeparationUi, canvasSizeUi, imageSizeUi, workspaceChrome, glass, documents, systemStatus, header, canvasBar, notice, zoomReadout, screenStatus;
+let penResponse, refreshPreferences, customization, layerPanel, effectPanels, palettes, editor, selectionUi, frequencySeparationUi, canvasSizeUi, imageSizeUi, workspaceChrome, panelVectors, glass, documents, systemStatus, header, canvasBar, notice, zoomReadout, screenStatus;
 let commandBar, paintPairView;
 let bubbles;
 const compilerContacts = new Set();
@@ -371,6 +372,7 @@ function cursorInput(e) {
   if (!gpuReady) return;
   const onCanvas =
     e &&
+    !workspaceGesture?.started &&
     e.pointerType !== "touch" &&
     ((e.target === canvas && lastPenEvent?.pointerId === e.pointerId) ||
       document.elementFromPoint(e.clientX, e.clientY) === canvas);
@@ -520,12 +522,12 @@ function scheduleCompiler() {
   }, 0);
 }
 function place(node, rect) {
-  Object.assign(node.style, {
+  for (const [property,value] of Object.entries({
     left: `${rect.x}px`,
     top: `${rect.y}px`,
     width: `${rect.width}px`,
     height: `${rect.height}px`,
-  });
+  })) if (node.style[property] !== value) node.style[property] = value;
   glass?.queue();
 }
 function tabLabel(tab, view, automatic = false) {
@@ -557,98 +559,111 @@ function fitTabs() {
   for (const [tabs, names] of fits) tabs.forEach((tab, i) => { tab.classList.toggle("icon-only-tab", !names[i]); tab.lastElementChild.hidden = !names[i]; });
 }
 function arrange(nextLayout, layoutOnly = false) {
-  if (!app) return;
+  if (!app || !panelVectors) return;
+  const resolved=layoutOnly?nextLayout:app.layout(...workspaceViewport);
+  panelVectors.schedule(resolved,layoutOnly,(resolved,result,only)=>{
+    presentWorkspaceLayout(resolved,only);
+    panelVectors.apply(resolved,result);
+    if(workspaceLatestPresentation?.model_revision===workspaceModelRevision) {
+      workspacePresentation=workspaceLatestPresentation;flushWorkspacePresentation();
+    }
+  });
+}
+function presentWorkspaceLayout(resolved,layoutOnly) {
   clearWorkspacePlacement();
   if (workspaceGesture) workspaceGesture.hits = null;
-  layout = layoutOnly ? nextLayout : app.layout(...workspaceViewport);
-  workspace.style.setProperty("--tab-bar-height", `${layout.tab_bar_height}px`);
+  layout=resolved;
+  const tabBarHeight=`${layout.tab_bar_height}px`;
+  if(workspace.style.getPropertyValue("--tab-bar-height")!==tabBarHeight)
+    workspace.style.setProperty("--tab-bar-height",tabBarHeight);
   const live = new Set();
   for (const group of layout.groups) {
     live.add(group.id);
     let node = groups.get(group.id);
-    if (!node) {
-      node = element("section", "dock-group");
-      const clip = element("div", "panel-columns");
-      clip.append(element("div", "panel-preview")); node.append(clip);
-      groups.set(group.id, node);
-      workspace.append(node);
-    }
-    node.classList.toggle("zen-kept", group.zen_kept);
-    const tabStyle = app.group_tab_style(group.id);
-    const key = JSON.stringify([group.panels.map((id) => {
-      const view = customization.view(id); return [id, view.icon];
-    }), group.tabs_visible, !!group.footer_grip, tabStyle]);
-    if (node.dataset.key !== key) {
-      node.dataset.key = key;
-      node.dataset.panel = group.active;
-      node.dataset.group = group.id;
-      node.classList.toggle("toolbar", !!group.tiles);
-      const preview = node.querySelector(".panel-preview");
-      releaseTabs(preview);
-      const tabs = element("nav", "dock-tabs");
-      draggable(tabs, { kind: "group", group: group.id });
-      customization.target(tabs, { kind: "group", group: group.id });
-      tabs.setAttribute("aria-label", delivery.panel_tabs);
-      if (group.tabs_visible) {
-        const labels = element("div", "tab-list");
-        group.panels.forEach((panel, index) => {
-          const tab = button(
-            "",
-            () =>
-              dispatch({ type: "select_panel_tab", group: group.id, panel }),
-            "dock-tab",
-          );
-          tab.dataset.index = index;
-          tab.dataset.panel = panel;
-          tab.dataset.group = group.id;
-          const view = customization.view(panel);
-          tab.title = view.title; tab.setAttribute("aria-label", view.title);
-          customization.target(tab, { kind: "panel", panel });
-          tab.setAttribute("aria-selected", String(panel === group.active));
-          labels.append(draggable(tab, { kind: "panel", panel }));
-        });
-        if (tabStyle === "automatic") automaticTabs(labels);
-        tabs.append(labels, grip({ kind: "group", group: group.id }));
-        preview.replaceChildren(tabs, panels.get(group.active).parentElement);
-      } else {
-        preview.replaceChildren(panels.get(group.active).parentElement);
-        if (group.footer_grip) {
-          const footer = element("div", "panel-footer");
-          footer.style.height = `${group.footer_grip.height}px`;
-          draggable(footer, { kind: "group", group: group.id });
-          customization.target(footer, { kind: "group", group: group.id });
-          footer.append(grip({ kind: "group", group: group.id })); preview.append(footer);
+    const body = panels.get(group.active).parentElement;
+    if (!layoutOnly || !node) {
+      if (!node) {
+        node = element("section", "dock-group");
+        const clip = element("div", "panel-columns");
+        clip.append(element("div", "panel-preview")); node.append(clip);
+        groups.set(group.id, node);
+        workspace.append(node);
+      }
+      node.classList.toggle("zen-kept", group.zen_kept);
+      const tabStyle = app.group_tab_style(group.id);
+      const key = JSON.stringify([group.panels.map((id) => {
+        const view = customization.view(id); return [id, view.icon];
+      }), group.tabs_visible, !!group.footer_grip, tabStyle]);
+      if (node.dataset.key !== key) {
+        node.dataset.key = key;
+        node.dataset.panel = group.active;
+        node.dataset.group = group.id;
+        node.classList.toggle("toolbar", !!group.tiles);
+        const preview = node.querySelector(".panel-preview");
+        releaseTabs(preview);
+        const tabs = element("nav", "dock-tabs");
+        draggable(tabs, { kind: "group", group: group.id });
+        customization.target(tabs, { kind: "group", group: group.id });
+        tabs.setAttribute("aria-label", delivery.panel_tabs);
+        if (group.tabs_visible) {
+          const labels = element("div", "tab-list");
+          group.panels.forEach((panel, index) => {
+            const tab = button(
+              "",
+              () =>
+                dispatch({ type: "select_panel_tab", group: group.id, panel }),
+              "dock-tab",
+            );
+            tab.dataset.index = index;
+            tab.dataset.panel = panel;
+            tab.dataset.group = group.id;
+            const view = customization.view(panel);
+            tab.title = view.title; tab.setAttribute("aria-label", view.title);
+            customization.target(tab, { kind: "panel", panel });
+            tab.setAttribute("aria-selected", String(panel === group.active));
+            labels.append(draggable(tab, { kind: "panel", panel }));
+          });
+          if (tabStyle === "automatic") automaticTabs(labels);
+          tabs.append(labels, grip({ kind: "group", group: group.id }));
+          preview.replaceChildren(tabs, panels.get(group.active).parentElement);
+        } else {
+          preview.replaceChildren(panels.get(group.active).parentElement);
+          if (group.footer_grip) {
+            const footer = element("div", "panel-footer");
+            footer.style.height = `${group.footer_grip.height}px`;
+            draggable(footer, { kind: "group", group: group.id });
+            customization.target(footer, { kind: "group", group: group.id });
+            footer.append(grip({ kind: "group", group: group.id })); preview.append(footer);
+          }
         }
       }
+      const preview = node.querySelector(".panel-preview");
+      const previous = preview.querySelector(":scope > .panel-frame");
+      if (previous !== body) previous ? previous.replaceWith(body) : preview.append(body);
+      node.dataset.panel = group.active;
+      node.classList.toggle("toolbar", !!group.tiles);
+      node.setAttribute("aria-label", customization.view(group.active).title);
+      for(const tab of node.querySelectorAll('.dock-tab')) {
+        const view=customization.view(tab.dataset.panel),title=view.title;
+        tab.setAttribute('aria-selected',String(tab.dataset.panel===group.active));
+        tabHover(tab,view.tab);
+        const labelKey=JSON.stringify([view.title,view.icon,tabStyle==='automatic'?null:[view.tab.show_icon,view.tab.show_name]]);
+        if(tab.dataset.labelKey===labelKey)continue;
+        tab.dataset.labelKey=labelKey;tab.replaceChildren();tabLabel(tab,view,tabStyle==='automatic');
+        tab.title=title;tab.setAttribute('aria-label',title);
+        const label=tab.querySelector('span');if(label)label.textContent=title;
+        const list=tab.parentElement;
+        if(list.dataset.automatic)automaticTabs(list);
+      }
+      node.classList.toggle("floating-panel", group.floating);
+      node.classList.toggle("tool-strip", !!group.tiles && !group.tabs_visible);
+      node.dataset.zIndex = group.floating ? String(100 + layout.groups.indexOf(group) * 2) : "1";
+      if (!node.classList.contains("expanded-panel")) node.style.zIndex = node.dataset.zIndex;
     }
-    const preview = node.querySelector(".panel-preview");
-    const body = panels.get(group.active).parentElement;
-    const previous = preview.querySelector(":scope > .panel-frame");
-    if (previous !== body) previous ? previous.replaceWith(body) : preview.append(body);
-    node.dataset.panel = group.active;
-    node.classList.toggle("toolbar", !!group.tiles);
-    node.setAttribute("aria-label", customization.view(group.active).title);
-    for(const tab of node.querySelectorAll('.dock-tab')) {
-      const view=customization.view(tab.dataset.panel),title=view.title;
-      tab.setAttribute('aria-selected',String(tab.dataset.panel===group.active));
-      tabHover(tab,view.tab);
-      const labelKey=JSON.stringify([view.title,view.icon,tabStyle==='automatic'?null:[view.tab.show_icon,view.tab.show_name]]);
-      if(tab.dataset.labelKey===labelKey)continue;
-      tab.dataset.labelKey=labelKey;tab.replaceChildren();tabLabel(tab,view,tabStyle==='automatic');
-      tab.title=title;tab.setAttribute('aria-label',title);
-      const label=tab.querySelector('span');if(label)label.textContent=title;
-      const list=tab.parentElement;
-      if(list.dataset.automatic)automaticTabs(list);
-    }
-    node.classList.toggle("floating-panel", group.floating);
-    node.classList.toggle("tool-strip", !!group.tiles && !group.tabs_visible);
-    if (group.tiles) node.style.setProperty("--tile-radius", `${group.tiles.tile_corner_radius}px`);
-    node.dataset.zIndex = group.floating ? String(100 + layout.groups.indexOf(group) * 2) : "1";
-    if (!node.classList.contains("expanded-panel")) node.style.zIndex = node.dataset.zIndex;
     place(node, group.bounds);
+    if (group.tiles) node.style.setProperty("--tile-radius", `${group.tiles.tile_corner_radius}px`);
     const bodyHeight = Math.max(0, group.bounds.height - (group.tabs_visible ? layout.tab_bar_height : 0) - (group.footer_grip?.height || 0));
     body.classList.toggle("body-scroll", !group.tiles && group.min_body_height > bodyHeight + .01);
-    node.style.setProperty("--panel-body-height", `${bodyHeight}px`);
     const minimumBody = `${group.min_body_height || 0}px`;
     if (node.style.getPropertyValue("--panel-min-body-height") !== minimumBody)
       node.style.setProperty("--panel-min-body-height", minimumBody);
@@ -1090,7 +1105,7 @@ function workspaceCursor(cursor) {
 // retains models at model_revision, without layout or measurement work.
 // Dispatch every input to Rust; replace only pending absolute presentation and
 // apply it on the display clock. No scaled textures or per-motion DOM rebuilds.
-let workspaceModelRevision, workspaceContentRevision, workspacePresentation, workspacePresentationFrame = 0;
+let workspaceModelRevision, workspaceContentRevision, workspaceLatestPresentation, workspacePresentation, workspacePresentationFrame = 0;
 let workspaceLayoutPending, workspaceLayoutFrame = 0;
 function queueWorkspaceLayout(presentation) {
   workspaceLayoutPending = presentation;
@@ -1120,11 +1135,11 @@ function clearWorkspacePlacement() {
     node.style.removeProperty("transform");
     node.style.width = original.width;
     node.style.height = original.height;
-    node.style.setProperty("--panel-body-height", original.bodyHeight);
   }
   workspacePlacements.clear();
 }
 function queueWorkspacePresentation(presentation) {
+  workspaceLatestPresentation=presentation;
   workspacePresentation = presentation;
   if (!presentation.drag) {
     flushWorkspacePresentation();
@@ -1148,7 +1163,6 @@ function flushWorkspacePresentation() {
       for (const node of nodes.filter(Boolean)) {
         if (!workspacePlacements.has(node)) workspacePlacements.set(node, {
           width: node.style.width, height: node.style.height,
-          bodyHeight: node.style.getPropertyValue("--panel-body-height"),
         });
         const original = workspacePlacements.get(node), edge = node.dataset.edge;
         const x = deviceAligned(moving.bounds.x) - base.x + (edge?.includes("right") ? dw : 0);
@@ -1160,10 +1174,6 @@ function flushWorkspacePresentation() {
         const height = `${parseFloat(original.height) + (!edge || edge === "left" || edge === "right" ? dh : 0)}px`;
         if (node.style.width !== width) { node.style.width = width; glass?.queue(); }
         if (node.style.height !== height) { node.style.height = height; glass?.queue(); }
-        if (!edge) {
-          const bodyHeight = `${moving.bounds.height - (group.tabs_visible ? layout.tab_bar_height : 0)}px`;
-          if (node.style.getPropertyValue("--panel-body-height") !== bodyHeight) node.style.setProperty("--panel-body-height", bodyHeight);
-        }
       }
     }
   } else clearWorkspacePlacement();
@@ -1455,6 +1465,10 @@ window.addEventListener(
     if (e.target.closest?.("dialog[open]")) return;
     if(e.target.closest?.('.utility-panel')){cursorInput(e);return;}
     if (!e.buttons) heldPointers.delete(e.pointerId);
+    if (workspaceGesture?.started && workspaceGesture.id === e.pointerId) {
+      cursorInput(null);
+      return;
+    }
     // A captured paint contact cannot reveal chrome. The canvas listener owns
     // its samples/cursor; querying popups and hit-testing here duplicates work
     // and can force layout between input and the next drawing submission.
@@ -1933,7 +1947,10 @@ try {
     dispatch, draggable, grip, place, updateZen, editor });
   workspaceChrome = createWorkspaceChrome({app,state:()=>state,workspace,element,button,icon,place,dispatch,customization,editor,panelFrame,panels,draggable,grip,contentPanel,tabLabel,automaticTabs,releaseTabs});
   bubbles = createBubbles({app,workspace,element,button,icon,state:()=>state,dispatch,applyChange,wake,glassChanged:()=>glass?.queueBubbles(),customization,contentPanel,rasterWorker,asset,cancelWorkspace:()=>endWorkspaceGesture(null,true),viewport:()=>workspaceViewport,leaveCanvas:()=>cursorInput(null)});
-  glass = createGlass({app,canvas,workspace,connections:()=>workspaceChrome.connections(),bubbles:()=>bubbles.glass(),enabled:()=>state.palette?.glass.transparency!=="off",wake});
+  panelVectors=createPanelVectors({workspace,groups,place,
+    project:metadata=>rasterWorker({operation:'panel-vectors',metadata,buffers:[]}),
+    changed:()=>glass?.queue(),failed:error=>message(error.message)});
+  glass = createGlass({app,canvas,workspace,connections:()=>workspaceChrome.connections(),vectors:()=>panelVectors.glass(),bubbles:()=>bubbles.glass(),enabled:()=>state.palette?.glass.transparency!=="off",wake});
   documents = createDocuments({app,bootstrap,delivery,state:()=>state,canvas,canvasReady:()=>gpuReady,dispatch,applyChange,wake,element,button,icon,numberField,message,gpuOperation,rasterWorker,resumeCanvas:resumeDocumentCanvas,contentChanged:panelContentChanged,refreshInputContext:()=>chromeInput({kind:"refresh"})});
   documents.mountProof(panels.get("proof"));
   const capy = button("",()=>dispatch({type:"invoke",command:"zen_mode"}),"tile-button");

@@ -11,16 +11,27 @@ const hoverFeet = [
   `path("M 6 0 L 6 6 L 0 6 ${squircleCorner([0,0],[0,6],[6,0])} Z")`,
   `path("M 0 0 L 0 6 L 6 6 ${squircleCorner([6,0],[0,6],[-6,0])} Z")`,
 ];
-const tabSizes=new WeakMap();let tabSurfaceId=0;
+const tabSizes=new WeakMap(),tabGeometry=new WeakMap();let tabSurfaceId=0;
+export function selectedTabSurface(group) {
+  const tab=group?.querySelector('.tab-list > .dock-tab[aria-selected="true"]');
+  return tab&&!tab.classList.contains('dragged-tab-source')?tabGeometry.get(tab):null;
+}
 function drawTabSurface(tab,size){
   const surface=tab.querySelector(':scope > .tab-surface');if(!surface||size.width<=0||size.height<=0)return;
   const style=getComputedStyle(tab),w=size.width,h=size.height,r=Math.min(parseFloat(style.borderTopLeftRadius),w/2,h/2),foot=6;
   const squircle=['squircle','superellipse(2)'].includes(style.cornerTopLeftShape||style.cornerShape);
   const corner=(center,start,end,sweep)=>squircle?squircleCorner(center,start,end):`A ${Math.abs(start[0]||start[1])} ${Math.abs(start[0]||start[1])} 0 0 ${sweep} ${center[0]+end[0]} ${center[1]+end[1]}`;
   const face=`M ${r} 0 H ${w-r} ${corner([w-r,r],[0,-r],[r,0],1)} V ${h-foot} ${corner([w+foot,h-foot],[-foot,0],[0,foot],0)} H ${-foot} ${corner([-foot,h-foot],[0,foot],[foot,0],0)} V ${r} ${corner([r,r],[-r,0],[0,-r],1)} Z`;
-  const filter=surface.querySelector('filter'),extent=tab.parentElement.clientWidth;
+  const list=tab.parentElement,group=tab.closest('.dock-group');
+  const filter=surface.querySelector('filter'),extent=list.clientWidth;
+  if(group&&list.matches('.tab-list')) {
+    const origin=group.getBoundingClientRect(),bounds=tab.getBoundingClientRect(),clip=list.getBoundingClientRect();
+    tabGeometry.set(tab,{d:face,x:bounds.x-origin.x,y:bounds.y-origin.y,clipX:clip.x-origin.x,
+      clipY:clip.y-origin.y,width:clip.width,height:clip.height,scroll:list.scrollLeft});
+  }
   for(const [name,value]of Object.entries({x:-extent,y:0,width:2*extent+w,height:h}))filter.setAttribute(name,value);
   surface.setAttribute('viewBox',`0 0 ${w} ${h}`);surface.lastElementChild.setAttribute('d',face);
+  tab.dispatchEvent(new Event('panel-tab-surface',{bubbles:true}));
 }
 const tabSurfaces=new ResizeObserver(entries=>{
   for(const entry of entries){
@@ -29,6 +40,15 @@ const tabSurfaces=new ResizeObserver(entries=>{
     if(entry.target.parentElement?.matches('.tab-list,.drawer-tab-strip'))tabSurfaces.observe(entry.target.parentElement);
   }
 });
+document.addEventListener('scroll',event=>{
+  const list=event.target;if(!list.matches?.('.tab-list'))return;
+  const scroll=list.scrollLeft;
+  for(const tab of list.children) {
+    const geometry=tabGeometry.get(tab);if(!geometry)continue;
+    geometry.x+=geometry.scroll-scroll;geometry.scroll=scroll;
+  }
+  list.dispatchEvent(new Event('panel-tab-surface',{bubbles:true}));
+},true);
 export function releaseTabSurfaces(root){for(const node of root.querySelectorAll('.dock-tab,.tab-list,.drawer-tab-strip'))tabSurfaces.unobserve(node);}
 export function prepareTabPreview(tab){const surface=tab.querySelector(':scope > .tab-surface');if(surface){const id=`tab-surface-${++tabSurfaceId}`;surface.querySelector('filter').id=id;surface.lastElementChild.setAttribute('filter',`url(#${id})`);const box=surface.viewBox.baseVal;if(box.width>0)tabSizes.set(tab,{width:box.width,height:box.height});}}
 export function tabHover(tab, presentation) {
@@ -50,7 +70,7 @@ export function tabHover(tab, presentation) {
   tab.style.setProperty('--hover-right-foot',hoverFeet[1]);
 }
 export function createWorkspaceChrome({app,state,workspace,element,button,icon,place,dispatch,customization,editor,panelFrame,draggable,grip,contentPanel,tabLabel,automaticTabs,releaseTabs}) {
-  const columns=new Map(),drawers=new Map(),connections=new Map(),catalog=liveCopy(app,"catalog");
+  const columns=new Map(),drawers=new Map(),catalog=liveCopy(app,"catalog");
   let resolved,animating=false;
   const send=action=>dispatch({type:"customize",action});
   const local=(b,origin)=>({...b,x:b.x-origin.x,y:b.y-origin.y});
@@ -136,12 +156,13 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
           const b=content.querySelector(`.column-tab[data-panel="${item.panel}"]`);
           b.setAttribute("aria-selected",String(column.open?group.active===item.panel:state().customization.column_drawers.some(d=>d.anchor.column===column.id&&d.anchor.origin===item.panel)));
           place(b,local(item.bounds,column.content));
+          b.style.borderRadius=item.corner_radii.map(r=>`calc(${r}px * var(--corner-fit))`).join(' ');
         }
       }
       place(root.querySelector(':scope > .panel-grip'),local(column.grip,column.bounds));
     }
     for(const[id,node]of columns)if(!live.has(id)){node.remove();columns.delete(id);}
-    if(layoutOnly)openConnections();else refresh();
+    if(!layoutOnly)refresh();
   }
   function markSource(source,direction) {
     if(!source)return;
@@ -162,15 +183,6 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
     path.setAttribute("d",`M 0 0 L ${l} 0 L ${l} ${d-b} ${squircleCorner([l+b,d-b],[-b,0],[0,b])} L ${-a} ${d} ${squircleCorner([-a,d-a],[0,a],[a,0])} Z`);
     path.setAttribute("transform",`matrix(${c.transform.join(" ")})`);if(!path.parentNode)node.append(path);
     return node;
-  }
-  function openConnections() {
-    const live=new Set();
-    for(const column of resolved.collapsed)if(column.open)for(const[panel,c]of column.open.connections) {
-      const id=`${column.id}:${panel}`;live.add(id);
-      const node=bridge(connections.get(id),c);node.classList.add('column-connection');connections.set(id,node);
-      markSource(columns.get(column.id)?.querySelector(`.column-tab[data-panel="${panel}"]`),column.open.direction);
-    }
-    for(const[id,node]of connections)if(!live.has(id)){node.remove();connections.delete(id);}
   }
   function dispose(record) {releaseTabs(record.root);customization.discardFields(record.root);for(const body of record.bodies)for(const child of body.children)child.disposePanel?.();record.bridge?.remove();record.shadow.remove();record.root.remove();}
   function refresh() {
@@ -299,7 +311,6 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
       }
       more ||= progress<1||!!page?.running;
     }
-    openConnections();
     // Geometry is transient and Rust suppresses identical measurement updates.
     dispatch({type:"measure_drawer_tiles",measurements});
     measureColumnDrawers();
@@ -307,6 +318,6 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
     if(more&&!animating){animating=true;requestAnimationFrame(animate);}
   }
   workspace.addEventListener("scroll",()=>{if(drawers.size&&!animating){animating=true;requestAnimationFrame(animate);}},true);
-  function connectionList(){return[...[...drawers.values()].map(r=>r.connection).filter(Boolean),...(resolved?.collapsed??[]).flatMap(c=>c.open?.connections.map(([,connection])=>connection)??[])];}
+  function connectionList(){return [...drawers.values()].map(r=>r.connection).filter(Boolean);}
   return {arrange,refresh,tabHits,measureColumnDrawers,connections:connectionList,facts(){const r=drawers.get("tool");return{content_drawer:r?.placement?.bounds??null,drawer_connection:r?.connection?.bounds??null};}};
 }

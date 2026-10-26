@@ -1,3 +1,8 @@
+import {benchPanelBridges} from './panel-bridge-bench.test.mjs';
+import {checkPanelBridges} from './panel-bridge.test.mjs';
+import {checkColumnStacks} from './column-stacks.test.mjs';
+import {checkColumnDrops} from './column-drops.test.mjs';
+import {checkColumnSizing} from './columns.test.mjs';
 import {checkToolBubbles,installBubbleInputTrace} from "./tool-bubbles.test.mjs";
 import {checkEraserBubbles} from './eraser-bubbles.test.mjs';
 import {checkCurves} from "./effects.test.mjs";
@@ -82,7 +87,7 @@ const canvasPixels=async()=>{
 };
 const workspaceIdle=()=>evaluate(`new Promise((resolve,reject)=>{const deadline=performance.now()+30000;function check(){const v=JSON.parse(layerApp.app.workspace_view());if(v?.ready&&!v.busy&&!v.dirty)resolve(v);else if(performance.now()>deadline)reject(Error(JSON.stringify(v)));else setTimeout(check,100);}check();})`);
 const workspaceInput=value=>evaluate(`layerApp.app.workspace_input(${JSON.stringify(JSON.stringify(value))});null`);
-let workspaceIsolation;
+let workspaceIsolation,runFailure;
 try {
   for(const domain of ["Page","Runtime","Log"])await call(`${domain}.enable`);
   await call("Page.bringToFront");
@@ -94,6 +99,7 @@ try {
   await call("Runtime.evaluate",{expression:"void 0",userGesture:true});
   if(process.argv.includes('--tool-bubbles')&&process.env.LAYER_BUBBLE_INPUT_TRACE==='1')await call('Page.addScriptToEvaluateOnNewDocument',{source:`(${installBubbleInputTrace})()`});
   await reload();
+  if(process.argv.some(flag=>['--panel-bridge-bench','--panel-bridges','--column-stacks','--column-drops','--columns'].includes(flag)))await evaluate(`(()=>{const keep=()=>{const label=window.layerApp?.app.bootstrap_view().recovery.later;if(label)[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent===label)?.click();};window.deviceRecoveryWatcher=new MutationObserver(keep);window.deviceRecoveryWatcher.observe(document.body,{childList:true,subtree:true,attributes:true,attributeFilter:['open']});keep();})()`);
   await evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function check(){if(window.layerApp?.startupTimes.complete!=null)resolve(true);else if(performance.now()-start>${process.argv.some(x=>['--drawing-tabs','--drawing-tabs-recovery','--workspace-options','--compact-workspaces'].includes(x))?240000:55000})reject(Error(document.querySelector("#gpu-notice").textContent));else setTimeout(check,100);}check();})`);
   await workspaceIdle();
   if (process.argv.some(flag=>['--selection-tools','--tonal-selection','--color-panel','--color-picker','--paint-columns','--palettes','--zen','--proof-performance','--proof-memory','--crop','--image-commands','--clone','--heal','--retouch-layers'].includes(flag))) {
@@ -103,19 +109,27 @@ try {
   }
   if (process.argv.includes('--editor'))
     assert.equal(await evaluate("document.querySelectorAll('dialog[open]').length"),0,'Start with a clean fixture without recovery or other dialogs');
-  if (['--workspace-constraints','--workspace-resize','--drawer-switch','--drawer-style','--drawer-drag','--long-press-drag','--layer-hold','--layer-swipes','--medium-tiles','--color-panel'].some(flag=>process.argv.includes(flag))) {
+  if (['--panel-bridge-bench','--columns','--column-stacks','--column-drops','--panel-bridges','--workspace-constraints','--workspace-resize','--drawer-switch','--drawer-style','--drawer-drag','--long-press-drag','--layer-hold','--layer-swipes','--medium-tiles','--color-panel'].some(flag=>process.argv.includes(flag))) {
     const original=(await workspaceIdle()).id;
     const capture=await evaluate('layerApp.app.workspace_capture()');
     const theme=await evaluate('layerApp.state().theme');
     if(process.argv.includes('--color-panel')){await workspaceInput({type:'switch',id:'builtin:workspace:photographer'});await workspaceIdle();}
     await workspaceInput({type:'form',action:{type:'new'}});
     await workspaceInput({type:'submit',name:`Tablet regression ${Date.now()}`});
-    const created=(await workspaceIdle()).id; assert.notEqual(created,original);
+    const created=await evaluate(`new Promise((resolve,reject)=>{const end=performance.now()+30000;function check(){const v=JSON.parse(layerApp.app.workspace_view());if(v.id!==${JSON.stringify(original)}&&v.ready&&!v.busy&&!v.dirty)resolve(v.id);else if(performance.now()>end)reject(Error('Private workspace creation: '+JSON.stringify(v)));else setTimeout(check,50);}check();})`);
+    assert.notEqual(created,original);
     workspaceIsolation={original,created,capture,theme};
   }
+  const hardware=await evaluate('(async()=>{const a=await navigator.gpu.requestAdapter();return a?{fallback:a.isFallbackAdapter??a.info.isFallbackAdapter??false,description:a.info.description}:null})()');
+  assert.ok(hardware,'Tablet has a WebGPU adapter');assert.equal(hardware.fallback,false,'Tablet journeys require hardware WebGPU');assert.doesNotMatch(hardware.description,/swiftshader|llvmpipe|software/i);
   console.log("Tablet",await evaluate('(async()=>{const adapter=await navigator.gpu.requestAdapter();return{agent:navigator.userAgent,viewport:[innerWidth,innerHeight],gpu:{vendor:adapter.info.vendor,architecture:adapter.info.architecture,device:adapter.info.device,description:adapter.info.description,features:[...adapter.features]},platform:await navigator.userAgentData?.getHighEntropyValues(["platform","model","architecture"])}})()'));
   const checkErrors = () => assert.deepEqual(errors, []);
   if (!await runJourney([
+    [process.argv.includes('--panel-bridge-bench'),()=>benchPanelBridges({call,evaluate,settle,once:cdp.once}),checkErrors],
+    [process.argv.includes('--panel-bridges'),()=>checkPanelBridges({call,evaluate,settle}),checkErrors],
+    [process.argv.includes('--column-stacks'),()=>checkColumnStacks({call,evaluate,settle}),checkErrors],
+    [process.argv.includes('--column-drops'),()=>checkColumnDrops({call,evaluate,settle}),checkErrors],
+    [process.argv.includes('--columns'),()=>checkColumnSizing({call,evaluate,settle}),checkErrors],
     [process.argv.includes("--compact-workspaces"), () => checkCompactWorkspaces({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--workspace-options"), () => checkWorkspaceOptions({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--binary-transfer"), () => checkBinaryTransfer({evaluate},process.env.LAYER_BINARY_FIXTURE_URL), checkErrors],
@@ -241,14 +255,14 @@ try {
   await mkdir(directory,{recursive:true});await writeFile(`${directory}/tablet-startup.json`,JSON.stringify(timings,null,2));
   console.log("Tablet touch zoom/rotate and startup passed",timings);
   }
-} finally {
+} catch(error) { runFailure=error;throw error; } finally {
   try { if(workspaceIsolation) {
     await workspaceInput({type:'cancel'}); await workspaceInput({type:'cancel'});
     await evaluate(`layerApp.dispatch({type:'set_theme',theme:${JSON.stringify(workspaceIsolation.theme)}})`);
     await workspaceInput({type:'switch',id:workspaceIsolation.original}); await workspaceIdle();
     await workspaceInput({type:'form',action:{type:'delete',value:workspaceIsolation.created}});
-    await workspaceInput({type:'submit',name:''}); await workspaceIdle();
+    await workspaceInput({type:'confirm'}); await workspaceIdle();
     const normalize=text=>JSON.stringify(JSON.parse(text),(key,value)=>key==='timestamp_ms'?'date':value);
     assert.equal(normalize(await evaluate('layerApp.app.workspace_capture()')),normalize(workspaceIsolation.capture),'The original workspace and its history remain intact');
-  } } finally { await evaluate("window.deviceRecoveryWatcher?.disconnect();delete window.deviceRecoveryWatcher").catch(()=>{});await cdp.close(); }
+  } } catch(error) { if(!runFailure)throw error;console.error('Tablet workspace cleanup failed:',error); } finally { await evaluate("window.deviceRecoveryWatcher?.disconnect();delete window.deviceRecoveryWatcher").catch(()=>{});await cdp.close(); }
 }

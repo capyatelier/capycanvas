@@ -1,7 +1,8 @@
 import init, * as wasm from "./pkg/layer_web.js";
 import {createRestartStore,verifyRestartCheckpoint} from "./restart-store.js";
+import {panelVectorPaths} from './panel-vector-paths.js';
 const restart=createRestartStore();
-let ready,module;
+let ready,module,panelVectors;
 let pending = Promise.resolve();
 self.onmessage = ({data}) => { if(data.module)module=data.module;pending = pending.then(() => execute(data)); };
 async function execute({id,request}) {
@@ -27,6 +28,11 @@ async function execute({id,request}) {
       }));
     let result;
     switch(request.operation) {
+      case 'panel-vectors': {
+        panelVectors??=new wasm.WebPanelVectors();
+        result=request.metadata?panelVectorPaths(request.metadata,panelVectors.resolve(request.metadata)):null;
+        break;
+      }
       case "fingerprint": {
         const fingerprint=new wasm.WebFileFingerprint(),reader=request.file.stream().getReader();
         try {for(;;){const {done,value}=await reader.read();if(done)break;fingerprint.update(value);}result=fingerprint.finish();}

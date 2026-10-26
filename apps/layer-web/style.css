@@ -920,7 +920,7 @@ body[data-theme="dark"] .toolbar-manager .destructive-action { color: #ff7b63; }
 [data-drawer-source-corners~="1"] { border-top-right-radius:0 !important; }
 [data-drawer-source-corners~="2"] { border-bottom-right-radius:0 !important; }
 [data-drawer-source-corners~="3"] { border-bottom-left-radius:0 !important; }
-.zen-hidden > .collapsed-column, .zen-hidden > .column-connection { opacity:0; pointer-events:none; }
+.zen-hidden > .collapsed-column { opacity:0; pointer-events:none; }
 .content-drawer { position:absolute; background:var(--glass-panel); border-radius:var(--surface-radius); overflow:hidden; }
 /* Keep the shadow below the source chrome, including toolbar tiles inside a drawer. */
 .drawer-shadow { position:absolute; pointer-events:none; box-shadow:0 5px 14px #0005; }
@@ -961,7 +961,6 @@ body[data-theme="dark"] .toolbar-manager .destructive-action { color: #ff7b63; }
   #document-title { display:none; }
 }
 .drawer-bridge { position:absolute; fill:var(--glass-panel); pointer-events:auto; }
-.column-connection { z-index:2; pointer-events:none; }
 .drawer-column .tool-tile > button { display:grid; place-items:center; padding:0; width:100%; height:100%; min-height:0; }
 .toolbar-controls .tool-tile > button > svg { width:var(--tile-icon-size,16px); height:var(--tile-icon-size,16px); }
 .toolbar-controls[data-labeled="true"] .tool-tile > button { display:flex; justify-content:flex-start; gap:0; text-align:left; }
@@ -1745,3 +1744,12 @@ button.new-drawing-preset.disabled { opacity:.4; }
 
 .workspace-name-entry { box-sizing:border-box; width:100%; min-width:0; min-height:var(--panel-control-height, 26px); padding:0 var(--panel-field-padding, 6px); margin:0; border:0; background:var(--input); border-radius:var(--control-radius); box-shadow:none; line-height:normal; color:inherit; }
 .workspace-name-entry[aria-invalid="true"] { outline:1px solid #c44; }
+.column-surface { position:absolute; z-index:0; overflow:visible; pointer-events:none; transition:opacity 180ms ease-out; }
+#workspace:not(.zen-hidden) > .vector-panel:not(.expanded-panel) { overflow:visible; box-shadow:none; }
+#workspace:not(.zen-hidden) > .vector-panel:not(.expanded-panel) .panel-preview { border-radius:0; background:transparent; }
+#workspace:not(.zen-hidden) > .vector-panel:not(.expanded-panel) :is(.panel-preview > .panel-frame,.dock-tabs) { background:transparent; }
+#workspace:not(.zen-hidden) > .vector-panel:not(.expanded-panel) .tab-list > .dock-tab > .tab-surface { display:none; }
+#workspace:not(.zen-hidden) > .vector-source { background:transparent; }
+.zen-hidden > .column-surface { opacity:0; }
+#workspace:not(.zen-hidden) > .vector-panel:not(.expanded-panel) .panel-columns { border-radius:0; }
+#workspace:not(.zen-hidden) > .vector-source { border-radius:0; }

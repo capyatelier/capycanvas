@@ -224,3 +224,14 @@ test('Color capture refuses wrong bytes without replacing the production result 
     await assert.rejects(waitForColorCapture([capture],pending,failures,events),/Color capture not ready/);
   }finally{observer.close();globalThis.requestAnimationFrame=raf;}
 }));
+
+test('panel projections retain their warm worker independently of file and analysis jobs',()=>withFixture(async f=>{
+  const first=f.run(request('panel-vectors')),vector=f.workers[0];vector.reply('first');assert.equal(await first,'first');
+  await f.advance(10000);assert.equal(vector.terminated,false);
+  const file=f.run(request('fingerprint')),analysis=f.run(request());assert.equal(f.workers.length,3);
+  const second=f.run(request('panel-vectors'));assert.equal(f.workers.length,3);assert.equal(vector.messages.length,2);
+  f.workers[1].reply('file',{retire:true});f.workers[2].reply('analysis');vector.reply('second');
+  assert.equal(await file,'file');assert.equal(await analysis,'analysis');assert.equal(await second,'second');
+  await f.advance(5000);assert.equal(f.workers[1].terminated,true);assert.equal(f.workers[2].terminated,true);assert.equal(vector.terminated,false);
+  const third=f.run(request('panel-vectors'));vector.reply('third');assert.equal(await third,'third');assert.equal(f.workers.length,3);
+}));

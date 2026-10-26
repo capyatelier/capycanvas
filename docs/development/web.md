@@ -77,13 +77,28 @@ They retain held contacts but call compiler timing methods only after the app is
 published. The frame suite checks the actual hooks before and after publication,
 including input before GPU attachment and the retained resume timer.
 
+Ordinary open columns use shared Rust bridge geometry. A dedicated
+`raster-worker.js` owner prepares cubic SVG outlines and backdrop triangles;
+`panel-vectors.js` publishes each projection with its matching DOM bounds.
+The worker is prewarmed at startup and retains its bounded shared geometry cache.
+`panel-vector-queue.js` coalesces motion without dropping every completed result,
+and invalidates projections across content changes and column closure.
+New poses prepare on the worker, and full content updates retain their
+requirement until a matching layout publishes.
+The combined SVG fill avoids antialiasing seams between source tiles and panels.
+Native widgets and their original rounded clips remain separate from the fill.
 Glass tints use representable premultiplied RGBA8 values at CSS serialization,
-so SVG filters and native backgrounds agree on solid coverage at every display
-scale.
-
+so SVG filters and native backgrounds agree on solid coverage.
+Geometry-only publications retain tab labels and content; placement, scrolling
+limits and tile geometry still follow the current layout.
 One ResizeObserver batches Navigator extents after browser layout and updates
 their GPU surfaces before painting. Resize publication does not force a native
 control bounds measurement or restore an older cached extent.
+The shared presenter checks the retained Navigator image, placement and viewing
+options before the browser acquires another surface texture. Surface
+reconfiguration invalidates that history.
+Captured workspace motion reaches its gesture owner without repeated hover
+chrome queries or canvas cursor hit tests. Release restores ordinary hover.
 
 The session runs on the browser event loop without shared memory. File decoding,
 encoding and color work run in `raster-worker.js` through the shared
@@ -239,7 +254,7 @@ Pure unit tests need no browser or GPU:
 
 ```bash
 node --test apps/layer-web/{run,package,frame,bubbles,glass,pointer,color-touch,workspace-client,canvas-bar,notice,zoom-readout,export-controls,size-dialog,text-input,localization}.test.mjs
-node --test apps/layer-web/{numeric,histogram,gpu-diagnostics,raster-worker-client,pipeline-wait,workspace-manager-copy,toolbar-components-copy,color-controls-copy,document-color-copy}.test.mjs
+node --test apps/layer-web/{numeric,histogram,gpu-diagnostics,raster-worker-client,pipeline-wait,panel-vector-paths,panel-vector-queue,editor-panels,workspace-manager-copy,toolbar-components-copy,color-controls-copy,document-color-copy}.test.mjs
 ```
 
 The pointer harness runs the app's contact and release registrations in order,
@@ -397,7 +412,7 @@ reloading its corrupted workspace and preference fixtures.
 | Blender control profiles | `--blender-controls` |
 | Bubble menus, thumbnails and Zen keep/peek | `--bubble-release`, `--bubble-release-cold` |
 | Retained configuration and translated dialog layout | `--bubble-release-localization` |
-| Docking and drags | `--drag-pickup`, `--layout-drops`, `--column-stacks`, `--column-drops`, `--columns`, `--workspace-rendering`, `--workspace-constraints`, `--drawer-drag`, `--drawer-style` |
+| Docking and drags | `--drag-pickup`, `--layout-drops`, `--column-stacks`, `--column-drops`, `--panel-bridges`, `--columns`, `--workspace-rendering`, `--workspace-constraints`, `--drawer-drag`, `--drawer-style` |
 | Workspaces | `--workspace-manager`, `--workspace-manager-visual`, `--toolbar-manager`, `--workspace-grips`, `--workspace-held-name`, `--workspace-switcher`, `--workspace-options`, `--workspace-options-refresh`, `--workspace-focus`, `--workspace-windows`, `--workspace-store` |
 | Settings and retained copy | `--preferences`, `--settings-audit`, `--pressure-calibration`, `--tilt-calibration`, `--language-switching`, `--live-language-color`, `--live-language-proof`, `--live-language-delivery`, `--live-language-surfaces`, `--live-language-toolbar`, `--live-language-effects` |
 | Stroke recording | `--stroke-recording` |
@@ -416,6 +431,12 @@ preserves the camera and layer underneath, and checks exact presented pixels
 through Undo/Redo. Run the desktop journey with
 `bash tools/performance/workspace-motion.sh web --touch-scrub`.
 
+`--panel-bridges` captures source, corner-entry and split-gap keyframes through
+real divider motion on both sides, in both themes with opaque and translucent
+fills. It checks the rendered source color and every fully covered physical bridge-face row,
+then closes and reopens the column to check retirement. The ordinary column
+journeys also cover the first prepend strip above the first tile.
+
 `--workspace-constraints` also runs in `device.test.mjs`. It starts each Sketch,
 Paint and Photo theme journey from its starting layout, resizes through seven
 CSS viewports from 640 × 360 to 1440 × 1000, and uses Navigator, Histogram,
@@ -427,8 +448,11 @@ orientation or browser zoom coverage. The journey uses a temporary workspace and
 leaves the original workspace and built-in histories intact.
 `LAYER_CONSTRAINT_AXES=1` selects a focused 1257 × 691 journey with German labels,
 DPR 1, 1.25 and 1.5, inactive tab returns and keyboard drawer opening and closing,
-in both themes. This does not qualify browser zoom or OS text scaling; the
-registered catalogs contain no RTL locale.
+in both themes. It checks Navigator pixels and image geometry against settled
+control bounds, pans and zooms with browser input, and uses Histogram controls.
+Input targets must settle before pickup, including animated drawers. This does
+not qualify browser zoom or OS text scaling; the registered catalogs contain no
+RTL locale.
 
 `--header-controls` checks menu focus through compact and overflow layouts.
 Notice actions use the shared accent flag. Operational header buttons show the
@@ -615,6 +639,8 @@ Setup that some journeys need:
   previews over a contrasting backdrop.
 - `--workspace-rendering` checks Navigator GPU pixels at 1x and 2x, including
   live pen strokes, brush-up convergence and artwork undo/redo in both themes.
+  It compares paper with the displayed document, changes artwork while Navigator
+  is inactive, reopens it, and checks the image again after GPU recovery.
   It compares active tabs with their panel bodies at every transparency level.
   Its screenshots include the painted document and Navigator.
 - `--workspace-store` checks IndexedDB against the native SQLite contract. Write

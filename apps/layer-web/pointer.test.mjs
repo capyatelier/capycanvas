@@ -73,7 +73,7 @@ test("canvas wheel owns browser zoom even when a scroll sequence targets an ance
 test("cursor hover preserves mouse, pen, and eraser device kinds", () => {
   const canvas = {}, samples = [], inputs = [], changes = [];
   const context = {
-    gpuReady: true, canvas, lastPenEvent: null,
+    gpuReady: true, canvas, lastPenEvent: null, workspaceGesture: null,
     document: { elementFromPoint: () => canvas },
     position: () => [20, 30], wake() {},
     applyChange: change => changes.push(change),
@@ -93,6 +93,32 @@ test("cursor hover preserves mouse, pen, and eraser device kinds", () => {
   assert.equal(samples.length, 3);
   assert.deepEqual(inputs, ["cursor_leave"]);
   assert.deepEqual(changes, ["cursor-left"]);
+});
+
+test("workspace dragging clears the canvas cursor without hit-testing moving panels", () => {
+  const canvas = {}, samples = [], inputs = [];
+  let hits = 0;
+  const context = {
+    gpuReady: true, canvas, lastPenEvent: null, workspaceGesture: null,
+    document: { elementFromPoint() { hits++; return canvas; } },
+    position: () => [20, 30], wake() {}, applyChange() {},
+    app: {
+      cursor_input: sample => samples.push(Array.from(sample)),
+      input: event => (inputs.push(event.type), {change: {}}),
+    },
+  };
+  runInNewContext(source.slice(source.indexOf("let canvasCursorActive"), source.indexOf("function wake()")), context);
+  const event = {pointerType: "mouse", pointerId: 1, target: {}, clientX: 20, clientY: 30};
+  context.cursorInput(event);
+  context.workspaceGesture = {started: true};
+  for (let i = 0; i < 60; i++) context.cursorInput(event);
+  assert.equal(hits, 1);
+  assert.equal(samples.length, 1);
+  assert.deepEqual(inputs, ["cursor_leave"]);
+  context.workspaceGesture = null;
+  context.cursorInput(event);
+  assert.equal(hits, 2);
+  assert.equal(samples.length, 2);
 });
 function harness({ raw = false, prediction = false, paint: allowPaint = true } = {}) {
   const listeners = new Map(), windowListeners = new Map(), records = [], phases = [], buttons = [], cursors = [], captures = [], timers = [], attributes = new Set();
@@ -126,7 +152,7 @@ function harness({ raw = false, prediction = false, paint: allowPaint = true } =
       return { paint, handled };
     },
     cursorInput(event) { cursors.push(event?.type ?? null); }, wake() {},
-    heldPointers: new Map(),
+    heldPointers: new Map(), workspaceGesture: null,
     workspace: {setPointerCapture: id => captures.push(id),classList:{contains:()=>false}},
     document: {documentElement: {hasAttribute: name => attributes.has(name), toggleAttribute: (name, value) => value ? attributes.add(name) : attributes.delete(name)}, addEventListener() {}},
     chromeEvents:[],chromeInput: event => (context.chromeEvents.push(event),{handled: event.kind === 'contact' && !!context.consumeChrome}),
@@ -244,6 +270,20 @@ test('floating pen utilities receive contacts above expanded workspace chrome',(
     assert.deepEqual(h.captures,[]);assert.equal(h.context.heldPointers.size,0);
     assert.equal(h.context.zenUpdates,0);
   }
+});
+
+test('captured workspace motion reaches its owner without refreshing hover chrome',()=>{
+  const h=harness();
+  h.context.workspaceGesture={id:1,started:true};
+  for(let i=0;i<60;i++)assert.equal(h.chrome('pointermove'),false);
+  assert.deepEqual(h.context.chromeEvents,[]);
+  assert.equal(h.cursors.length,60);
+  assert.ok(h.cursors.every(event=>event===null));
+  h.chrome('pointermove',{pointerId:2});
+  assert.equal(h.context.chromeEvents.length,1,'A foreign pointer retains its own hover routing');
+  h.context.workspaceGesture=null;
+  h.chrome('pointermove');
+  assert.equal(h.context.chromeEvents.length,2,'Ordinary hover resumes after release');
 });
 
 test("zero pressure with tip or eraser contact is not a lift", () => {

@@ -54,8 +54,10 @@ export async function checkColumnStacks({call,evaluate,settle}) {
       await send({type:'invoke',command:'undo_workspace'});assert.deepEqual(await snapshot(),before);
       await send({type:'invoke',command:'redo_workspace'});assert.deepEqual(await snapshot(),collapsed);
     }
-    device='mouse';await reset();
-    let layout=await resolved();
+    let layout;
+    for(const theme of ['light','dark']) for(device of ['mouse','touch','pen']) {
+    await send({type:'set_theme',theme});await reset();
+    layout=await resolved();
     assert.equal(layout.collapsed.length,2);
     assert.equal(layout.collapsed[1].bounds.y-layout.collapsed[0].bounds.y-layout.collapsed[0].bounds.height,6);
     assert.equal(await evaluate('document.querySelector(".collapsed-content").firstElementChild.classList.contains("column-tab")'),true);
@@ -66,6 +68,9 @@ export async function checkColumnStacks({call,evaluate,settle}) {
     assert.ok((await resolved()).collapsed.find(c=>c.id===member.id).open,'Dragging a closed stack edge opens the member beside the contact');
     assert.deepEqual(await snapshot(),closedStack,'Opening a member is transient');
     await escape();layout=await resolved();
+    const fittedCorner=await evaluate(`(() => {const icon=document.querySelector(${JSON.stringify(tile('brushes'))});icon.style.setProperty('--corner-fit','.54');const value=parseFloat(getComputedStyle(icon).borderTopLeftRadius);icon.style.removeProperty('--corner-fit');return value;})()`);
+    const authoredCorner=layout.collapsed[0].groups[0].icons[0].corner_radii[0];
+    assert.ok(Math.abs(fittedCorner-authoredCorner*.54)<.001,'Column icon corners preserve the native fallback fit');
     await evaluate(`window.__stackTile=document.querySelector(${JSON.stringify(tile('brushes'))})`);
     await click(tile('brushes'));layout=await resolved();
     const opened=layout.collapsed[0].open;
@@ -74,14 +79,70 @@ export async function checkColumnStacks({call,evaluate,settle}) {
     assert.equal(opened.bounds.y+opened.bounds.height,layout.collapsed[1].bounds.y+layout.collapsed[1].bounds.height);
     assert.equal(await evaluate('window.__stackTile===document.querySelector(".column-tab[data-panel=brushes]")'),true,'Open retains sidebar tile');
     assert.equal(await evaluate('document.querySelectorAll(".column-tab[aria-selected=true]").length'),2);
-    assert.equal(await evaluate('document.querySelectorAll(".column-connection").length'),2);
+    const surface=async()=>{
+      for(let attempt=0;attempt<100;attempt++) {
+        const ready=await evaluate(`(() => {
+          const node=document.querySelector('.column-surface');
+          return node?.querySelector('defs > path')?.getAttribute('d')?.includes('C')&&document.querySelectorAll('.vector-panel').length===2;
+        })()`);
+        if(ready)return;
+        await wait(20);await settle();
+      }
+      assert.fail('Prepared combined SVG reaches both ordinary receivers');
+    };
+    await surface();
+    assert.equal(await evaluate('document.querySelectorAll(".column-surface").length'),1,'One combined SVG owns the opened column');
+    assert.equal(await evaluate('document.querySelectorAll(".column-connection").length'),0,'Ordinary receivers use the combined surface');
+    const originalOutline=await evaluate('document.querySelector(".column-surface defs>path").getAttribute("d")');
+    await edit({type:'show_all_controls',panel:'brushes'});
+    assert.equal(await evaluate('document.querySelectorAll(".expanded-panel").length'),1);
+    assert.equal(await evaluate('document.querySelectorAll(".column-surface").length'),0,'Configuration retires the ordinary combined surface');
+    await evaluate('layerApp.dispatch({type:"customize",action:{type:"close_expanded"}})');
+    await wait(500);
+    const restored=await evaluate(`(() => {
+      const surface=document.querySelector('.column-surface');
+      return {expanded:document.querySelectorAll('.expanded-panel').length,count:document.querySelectorAll('.column-surface').length,
+        outline:surface?.querySelector('defs>path')?.getAttribute('d'),receivers:[...document.querySelectorAll('.vector-panel')].map(n=>({id:Number(n.dataset.group),bounds:n.getBoundingClientRect().toJSON(),clip:n.querySelector('.panel-preview').style.clipPath}))};
+    })()`);
+    assert.equal(restored.expanded,0,'Configuration close animation finished');
+    assert.equal(restored.count,0,'Configured receivers leave the source column');
+    assert.equal(restored.receivers.length,0,'Configuration close leaves no vector receiver ghosts');
+    const restoredLayout=await resolved();
+    assert.ok(restoredLayout.collapsed.every(c=>!c.open),'Configuration reveals an ordinary expanded column');
+    const ordinary=await rect('.dock-group[data-group="43"]'),ordinaryBounds=restoredLayout.groups.find(g=>g.id===43).bounds;
+    for(const key of ['x','y','width','height'])assert.ok(Math.abs(ordinary[key]-ordinaryBounds[key])<1,`Ordinary receiver ${key} matches shared bounds after configuration`);
+    assert.equal(await evaluate(`document.querySelector('.dock-group[data-group="43"] .panel-preview').style.clipPath`),'','Configured receiver releases its vector clip');
+    await reset();await click(tile('brushes'));await surface();layout=await resolved();
+    assert.equal(await evaluate('document.querySelector(".column-surface defs>path").getAttribute("d")'),originalOutline,'Reopening restores the matching ordinary contour');
+    await edit({type:'show_all_controls',panel:'brushes'});
+    const immediate=await evaluate(`(()=>{layerApp.dispatch({type:'customize',action:{type:'close_expanded'}});layerApp.dispatch({type:'restore_workspace',workspace:${JSON.stringify(fixture)}});layerApp.dispatch({type:'customize',action:{type:'toggle_column_drawer',group:43,panel:'brushes'}});return document.querySelectorAll('.expanded-panel').length;})()`);
+    await wait(500);
+    const rapidLayout=await resolved(),rapid=await evaluate(`(()=>({expanded:document.querySelectorAll('.expanded-panel').length,surfaces:document.querySelectorAll('.column-surface').length,receivers:[...document.querySelectorAll('.vector-panel')].map(n=>({id:Number(n.dataset.group),bounds:n.getBoundingClientRect().toJSON(),clip:n.querySelector('.panel-preview').style.clipPath}))}))()`);
+    const dir=process.env.LAYER_TEST_ARTIFACTS||'artifacts/column-stacks/web';await mkdir(dir,{recursive:true});
+    await writeFile(`${dir}/rapid-configuration-${theme}-${device}.json`,JSON.stringify({immediate,rapid,layout:rapidLayout},null,2));
+    assert.equal(rapid.expanded,0,'Rapid restore finishes the configuration close animation');
+    assert.equal(rapid.surfaces,1,'Rapid reopen restores the combined surface without further input');
+    assert.equal(rapid.receivers.length,2);
+    for(const receiver of rapid.receivers) {
+      const b=rapidLayout.groups.find(g=>g.id===receiver.id).bounds;
+      assert.ok(receiver.clip.startsWith('url('),'Rapid reopen reattaches receiver clips');
+      for(const key of ['x','y','width','height'])assert.ok(Math.abs(receiver.bounds[key]-b[key])<1,`Rapid restored receiver ${receiver.id} ${key} matches the latest shared bounds`);
+    }
+    layout=rapidLayout;
+    await evaluate(`window.__stackTile=document.querySelector(${JSON.stringify(tile('brushes'))})`);
     const beforeResize=await snapshot(),edge=center(layout.dividers.find(d=>d.id===40).bounds);
     await input('down',edge);await input('move',{x:edge.x+80,y:edge.y});await wait(100);
     const wider=(await resolved()).collapsed[0].open;
+    if(wider.bounds.width<=opened.bounds.width+60) {
+      const dir=process.env.LAYER_TEST_ARTIFACTS||'artifacts/column-stacks/web';await mkdir(dir,{recursive:true});
+      await writeFile(`${dir}/resize-failure.json`,JSON.stringify({theme,device,opened,wider,edge,layout:await resolved(),viewport:await evaluate('({width:innerWidth,height:innerHeight,dpr:devicePixelRatio})')},null,2));
+    }
     assert.ok(wider.bounds.width>opened.bounds.width+60,'Open member width resizes');
     assert.equal(await evaluate('window.__stackTile===document.querySelector(".column-tab[data-panel=brushes]")'),true);
-    const connection=wider.connections[0][1].bounds,domConnection=await rect('.column-connection');
-    assert.ok(Math.abs(domConnection.x-connection.x)<1&&Math.abs(domConnection.width-connection.width)<1,'Connector follows resize before release');
+    await surface();
+    const domSurface=await rect('.column-surface');
+    assert.ok(Math.abs(domSurface.x-layout.collapsed[0].bounds.x)<1,'Combined surface begins at the source column');
+    assert.ok(Math.abs(domSurface.x+domSurface.width-wider.bounds.x-wider.bounds.width)<1,'Combined surface follows resize before release');
     await input('up');await wait(180);
     await send({type:'invoke',command:'undo_workspace'});assert.deepEqual(await snapshot(),beforeResize);
     await click(tile('brushes'));
@@ -96,6 +157,9 @@ export async function checkColumnStacks({call,evaluate,settle}) {
     await input('down',center((await resolved()).work_area));await input('up');await wait(180);
     assert.ok((await resolved()).collapsed.every(c=>!c.open),'Auto-hide closes on outside contact');
 
+    assert.equal(await evaluate('document.querySelectorAll(".column-surface,.vector-panel,.vector-source").length'),0,'Closing retires combined geometry and source clips');
+    }
+
     // Each real source and pointer type reaches both sides of the footer boundary.
     const sources=[
       ['panel','.dock-group[data-group="48"] .dock-tab[data-panel="layers"]',['layers'],false],
@@ -103,13 +167,19 @@ export async function checkColumnStacks({call,evaluate,settle}) {
       ['toolbar','.dock-group[data-group="49"] .panel-grip',['toolbar'],false],
       ['tile',tile('color'),['color'],true],
     ];
-    for(device of ['mouse','touch','pen'])for(const[name,selector,panels,hold]of sources)for(const mode of ['append','member','cancel']) {
+    for(device of ['mouse','touch','pen'])for(const[name,selector,panels,hold]of sources)for(const mode of ['prepend','append','member','cancel']) {
       await reset();const before=await snapshot();
-      const column=(await resolved()).collapsed.find(c=>c.id===42),last=column.groups.at(-1);
-      const destination=mode==='append'?{x:column.bounds.x+18,y:last.bounds.y+last.bounds.height+3}:center(column.grip);
+      const column=(await resolved()).collapsed.find(c=>c.id===42),first=column.groups[0],last=column.groups.at(-1),splitDrop=['prepend','append'].includes(mode);
+      assert.equal(first.bounds.y,column.bounds.y,'First group begins at the column top without padding');
+      const destination=mode==='prepend'?{x:column.bounds.x+18,y:first.bounds.y-3}:mode==='append'?{x:column.bounds.x+18,y:last.bounds.y+last.bounds.height+3}:center(column.grip);
       await input('down',center(await rect(selector)));if(hold)await wait(650);
       await input('move',{x:720,y:550});await input('move',destination);await wait(100);
       assert.equal(await evaluate('document.querySelector(".drop-indicator").hidden'),false,`${device} ${name} ${mode}: drop preview`);
+      if(mode==='prepend') {
+        const dir=process.env.LAYER_TEST_ARTIFACTS||'artifacts/column-stacks/web';await mkdir(dir,{recursive:true});
+        await writeFile(`${dir}/prepend-${device}-${name}.json`,JSON.stringify({first,column,destination,hint:await rect('.drop-indicator')},null,2));
+      }
+      if(mode==='prepend')assert.ok(Math.abs((await rect('.drop-indicator')).y-first.bounds.y)<1,'First drop preview begins at the first tile boundary');
       if(mode==='append')assert.ok(Math.abs(center(await rect('.drop-indicator')).y-last.bounds.y-last.bounds.height)<1,'Append preview at last tile boundary');
       if(mode==='cancel')await escape();
       await input('up');await wait(220);
@@ -121,7 +191,7 @@ export async function checkColumnStacks({call,evaluate,settle}) {
       assert.deepEqual(moved.icons.map(i=>i.panel),panels,`${device} ${name} ${mode}: preserves dropped content`);
       const stack=after.layout.column_stacks.find(s=>s.members.includes(member.id));
       assert.equal(stack.members.length,(hold?1:2)+(mode==='member'?1:0),`${device} ${name} ${mode}: member count`);
-      assert.equal(member.groups.length,mode==='append'?3:1);
+      assert.equal(member.groups.length,splitDrop?3:1);
       assert.equal(stack.drawers,false);assert.equal(stack.auto_hide,false);
       await click(tile(panels[0]));assert.ok((await resolved()).collapsed.find(c=>c.id===member.id).open);
       if(device==='mouse'&&name==='group'&&mode==='append') {

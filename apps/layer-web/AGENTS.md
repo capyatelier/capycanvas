@@ -6,8 +6,8 @@ Start with the [Web guide](../../docs/development/web.md).
   `notice`, `zoom-readout`, `export-controls`, `size-dialog`, `text-input`,
   `localization`, `numeric`, `histogram`, `workspace-manager-copy`,
   `toolbar-components-copy`, `color-controls-copy`, `document-color-copy` and
-  `color-button-lifecycle`, `gpu-diagnostics`, `raster-worker-client`, `pipeline-wait`, `editor-panels`
-  `.test.mjs` files run under
+  `color-button-lifecycle`, `gpu-diagnostics`, `raster-worker-client`,
+  `pipeline-wait`, `panel-vector-paths`, `panel-vector-queue`, `editor-panels` `.test.mjs` files run under
   `node --test`. The other `.test.mjs` files are browser journeys that
   `test.mjs` and `device.test.mjs` import.
 - `icons/`, `brush-previews/` and `filter-previews/` are shared by every client.

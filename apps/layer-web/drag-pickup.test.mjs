@@ -20,6 +20,8 @@ export async function checkDragPickup({call,evaluate,settle}) {
     const actual=await evaluate(`(()=>{const n=document.querySelector(${JSON.stringify(selector)});return [...new Set([n,...n.querySelectorAll('*')].map(n=>getComputedStyle(n).cursor))]})()`);
     assert.deepEqual(actual,[expected],`${label}: cursor on tile and children`);
   };
+  const rememberMutation=selector=>evaluate(`(()=>{const node=document.querySelector(${JSON.stringify(selector)});window.__pickupMutation={node,parent:node.parentNode,next:node.nextSibling};})()`);
+  const restoreMutation=()=>evaluate("(()=>{const saved=window.__pickupMutation;if(!saved)return;saved.parent.insertBefore(saved.node,saved.next);delete window.__pickupMutation;})()");
   const center=r=>({x:r.x+r.width/2,y:r.y+r.height/2});
   let device="mouse",point,down=false;
   const input=async(type,p=point)=>{
@@ -45,9 +47,16 @@ export async function checkDragPickup({call,evaluate,settle}) {
       await input("move",{x:target.x+target.width/2,y:target.y+target.height-3});await settle();
       const direct=grip||device==="mouse";
       assert.equal(await evaluate("document.querySelectorAll('.layer-drag-preview').length"),Number(direct),`${device} ${grip?'grip':'row'}: pickup`);
-      if(direct)assert.equal(await evaluate("document.querySelectorAll('.layer-drop-after').length"),1,`${device} ${grip?'grip':'row'}: drop hint`);
+      const remaining=before.filter(id=>id!==ids[0]),targetIndex=remaining.indexOf(ids[1]);
+      const expected=[...remaining.slice(0,targetIndex+1),ids[0],...remaining.slice(targetIndex+1)];
+      if(direct) {
+        const hints=await evaluate("[...document.querySelectorAll('#layer-rows .layer-drop-before,#layer-rows .layer-drop-after,#layer-rows .layer-drop-into,#layer-rows .layer-drop-attach')].map(n=>({id:n.dataset.layer,before:n.classList.contains('layer-drop-before'),after:n.classList.contains('layer-drop-after')}))");
+        assert.equal(hints.length,1,`${device} ${grip?'grip':'row'}: one drop hint`);
+        const hint=hints[0],next=remaining[targetIndex+1];
+        assert.ok(hint.id===ids[1]&&hint.after||next!==undefined&&hint.id===next&&hint.before,`${device} ${grip?'grip':'row'}: hint marks the gap after the target`);
+      }
       await input("up");await wait(350);
-      if(direct){assert.notDeepEqual(await order(),before,`${device} ${grip?'grip':'row'}: drop`);await send({type:"invoke",command:"undo"});}
+      if(direct){assert.deepEqual(await order(),expected,`${device} ${grip?'grip':'row'}: drop inserts source after target`);await send({type:"invoke",command:"undo"});}
       assert.deepEqual(await order(),before);await clean();
     }
     for(device of ["mouse","touch","pen"]) {
@@ -61,6 +70,7 @@ export async function checkDragPickup({call,evaluate,settle}) {
             await send({type:"customize",action:{type:"toggle_column_drawer",group:43,panel:"toolbar"}});
           }
           const selector=source==="drawer-tile"?'.content-drawer .toolbar-controls [data-drag-pickup=hold]':source==="tile"?'.toolbar-controls [data-drag-pickup=hold]':'.column-tab[data-panel=properties]';
+          if(["removed","held-removed","held-reparented"].includes(mode))await rememberMutation(selector);
           const start=center(await rect(selector));
           const target=source.endsWith("tile")?await evaluate(`(()=>{const n=document.querySelector(${JSON.stringify(selector)});const r=n.parentElement.children[2].getBoundingClientRect();return{x:r.x+r.width*.8,y:r.y+r.height*.8}})()`):await evaluate("({x:innerWidth*.5,y:innerHeight*.55})");
           const before=await snapshot(),label=`${device} ${source} ${mode}`;
@@ -97,7 +107,6 @@ export async function checkDragPickup({call,evaluate,settle}) {
               }
               await settle();await clean(label);
               assert.equal(await menu(),false,`${label}: cancelling a hold dismisses its menu`);
-              if(mode==="held-reparented")await evaluate("document.querySelector('#workspace > [data-drag-pickup=hold]').remove()");
             } else if(mode!=="release") {
               await input("move",target);await settle();
               assert.equal(await menu(),false,`${label}: same contact closes menu`);
@@ -119,6 +128,7 @@ export async function checkDragPickup({call,evaluate,settle}) {
             assert.deepEqual(await snapshot(),before,`${label}: no move/activation`);
             assert.equal(await menu(),mode==="release"&&device!=="mouse",`${label}: menu lifetime`);
           }
+          await restoreMutation();
           await evaluate("document.querySelector('.panel-context-menu').hidePopover()");
         }
       }
@@ -147,6 +157,7 @@ export async function checkDragPickup({call,evaluate,settle}) {
     console.log("PASS: mouse/touch/pen tile and collapsed-icon hold gates, default/grab/grabbing cursors, held/dragged cancellation, source removal/reparenting, menus, immediate tabs/grips/rows, undo/redo");
   } finally {
     if(down)await input("up");
+    await restoreMutation();
     await evaluate("document.removeEventListener('pointerdown',window.__pickupPointer,true);delete window.__pickupPointer;delete window.__pickupPointerId");
     await evaluate("document.querySelector('.panel-context-menu').hidePopover()");
     await send({type:"restore_workspace",workspace:saved});

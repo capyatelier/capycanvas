@@ -59,6 +59,8 @@ import {checkSmoothing} from "./smoothing.test.mjs";
 import {checkTooltips} from "./tooltips.test.mjs";
 import {checkColumnStacks} from "./column-stacks.test.mjs";
 import {checkEdgeReach} from "./edge-reach.test.mjs";
+import {checkPanelBridges} from "./panel-bridge.test.mjs";
+import {benchPanelBridges} from "./panel-bridge-bench.test.mjs";
 import {checkLayoutDrops} from "./layout-drops.test.mjs";
 import {checkColumnDrops} from "./column-drops.test.mjs";
 import {checkWorkspaceFocus,checkWorkspaceSwitcher,checkWorkspaceOptions,checkWorkspaceMenuRefresh} from "./workspace-switcher.test.mjs";
@@ -339,6 +341,8 @@ try {
     [process.argv.includes("--icons"), () => checkIcons({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--header-controls"), () => checkHeaderControls({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--layout-drops"), () => checkLayoutDrops({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--panel-bridge-bench"), () => benchPanelBridges({call,evaluate,settle,once:cdp.once}), checkErrors],
+    [process.argv.includes("--panel-bridges"), () => checkPanelBridges({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--column-stacks"), () => checkColumnStacks({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--edge-reach"), () => checkEdgeReach({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--column-drops"), () => checkColumnDrops({call,evaluate,settle}), checkErrors],

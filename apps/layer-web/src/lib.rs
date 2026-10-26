@@ -23,6 +23,7 @@ mod raster_worker;
 mod scopes;
 mod workspaces;
 mod gpu_diagnostics;
+mod panel_vectors;
 
 use layer_core::Point;
 use layer_engine::{PenEvent, PenPhase, SampleFlags, ToolKind};
@@ -765,7 +766,9 @@ impl WebApp {
     }
     /// Shared live reflow packet; panel content stays at content_revision.
     pub fn layout_update(&self, width: f32, height: f32) -> Result<JsValue, JsValue> {
-        serialize(&self.session.workspace_layout_update([width, height]))
+        let mut packet=self.session.workspace_layout_update([width,height]);
+        packet.layout=packet.layout.with_panel_bridges();
+        serialize(&packet)
     }
     pub fn panel_measurements(&self) -> Result<JsValue, JsValue> {
         serialize(&self.session.state().workspace.layout.measurements)
@@ -961,7 +964,7 @@ impl WebApp {
         serialize(&self.session.input(input).map_err(js)?)
     }
     pub fn layout(&self, width: f32, height: f32) -> Result<JsValue, JsValue> {
-        serialize(&self.session.layout([width, height]))
+        serialize(&self.session.layout([width, height]).with_panel_bridges())
     }
     pub fn begin_tab_drag(&mut self, tabs: JsValue, clip: JsValue) -> Result<(), JsValue> {
         let tabs: Vec<layer_ui::TabHit> = serde_wasm_bindgen::from_value(tabs).map_err(js)?;

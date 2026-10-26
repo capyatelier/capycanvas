@@ -92,6 +92,6 @@ export function createRasterWorker(module,reportGpu=()=>{}) {
         return result;
       } catch(error){state.fail(error);throw error;}
     }
-    return send(owner(op==='color-field'?'color-preview':op==='encode'?'codec':(op==='image-decode'||op==='nearest-coordinates'||op==='alpha-image')?'image-preparation':'files'),request,cancelled);
+    return send(owner(op==='panel-vectors'?'panel-vectors':op==='color-field'?'color-preview':op==='encode'?'codec':(op==='image-decode'||op==='nearest-coordinates'||op==='alpha-image')?'image-preparation':'files'),request,cancelled);
   };
 }

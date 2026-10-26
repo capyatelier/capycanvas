@@ -22,6 +22,7 @@ export async function checkWorkspaceConstraints({call,evaluate,settle,reload}) {
   };
   const target=async(selector,partial=false)=>{
     await evaluate(`(()=>{const n=[...document.querySelectorAll(${JSON.stringify(selector)})].find(n=>{const r=n.getBoundingClientRect();return r.width>0&&r.height>0&&!n.disabled});if(!n)throw Error('Missing visible enabled '+${JSON.stringify(selector)});window.workspaceConstraintTarget=n;n.scrollIntoView({block:'center',inline:'nearest',behavior:'instant'});})()`);await settle();
+    await evaluate(`new Promise((resolve,reject)=>{const end=performance.now()+5000;let previous,stable=0;function frame(){const node=window.workspaceConstraintTarget;if(!node?.isConnected){reject(Error('Target retired before input'));return;}const b=node.getBoundingClientRect(),current=[b.x,b.y,b.width,b.height];stable=b.width>0&&b.height>0&&previous?.every((v,i)=>Math.abs(v-current[i])<.01)?stable+1:0;previous=current;if(stable>=3)resolve(true);else if(performance.now()>end)reject(Error('Target did not settle before input'));else requestAnimationFrame(frame);}requestAnimationFrame(frame);})`);
     const p=await read(`(()=>{const n=window.workspaceConstraintTarget,r=n.getBoundingClientRect(),g=n.closest('.dock-group,.content-drawer')?.getBoundingClientRect();let top=Math.max(0,r.top),bottom=Math.min(innerHeight,r.bottom);for(let a=n.parentElement;a;a=a.parentElement)if(/auto|scroll|hidden|clip/.test(getComputedStyle(a).overflowY)){const b=a.getBoundingClientRect();top=Math.max(top,b.top);bottom=Math.min(bottom,b.bottom);}const x=r.x+r.width/2,y=${partial}?(top+bottom)/2:r.y+r.height/2,hit=document.elementFromPoint(x,y);return{x,y,width:r.width,height:r.height,visibleHeight:Math.max(0,bottom-top),hit:n.contains(hit),contained:r.left>=Math.max(0,g?.left??0)-1&&r.right<=Math.min(innerWidth,g?.right??innerWidth)+1&&(${partial}||bottom-top>=r.height-1),disabled:n.disabled,obscuredBy:n.contains(hit)?null:hit?.outerHTML.slice(0,500),dialogs:[...document.querySelectorAll('dialog[open]')].map(n=>n.textContent.slice(0,500)),viewport:{inner:[innerWidth,innerHeight],visual:[visualViewport.offsetLeft,visualViewport.offsetTop,visualViewport.width,visualViewport.height,visualViewport.scale],screen:[screen.width,screen.height],dpr:devicePixelRatio}}})()`);
     assert.ok(p.width>0&&p.height>0&&p.hit&&p.contained&&!p.disabled,`${selector} has a reachable complete target: ${JSON.stringify(p)}`);
     if(partial)assert.ok(p.visibleHeight>=35.5,`${selector} has a useful visible graph viewport: ${JSON.stringify(p)}`);
@@ -44,6 +45,14 @@ export async function checkWorkspaceConstraints({call,evaluate,settle,reload}) {
     await send({type:'invoke',command:'fit_canvas'});
     const p=await target(selector),r=await read(`document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect().toJSON()`);
     assert.ok(r.width>=35.5&&r.height>=35.5,`${label}: usable Navigator preview ${r.width} × ${r.height}`);
+    const native=await read(`(()=>{const overview=document.querySelector(${JSON.stringify(selector)}),surface=overview.querySelector('.navigator-surface'),hole=overview.querySelector('.overview-hole'),b=surface.getBoundingClientRect(),expected=layerApp.app.navigator_geometry(${r.width},${r.height});return {pixels:[surface.width,surface.height],css:[b.width,b.height],dpr:devicePixelRatio,expected:expected?.image,hole:hole.hidden?null:Object.fromEntries(['left','top','width','height'].map(k=>[k,parseFloat(hole.style[k])]))};})()`);
+    for(const axis of [0,1]) {
+      assert.ok(Math.abs(native.pixels[axis]-native.css[axis]*native.dpr)<=1,`${label}: native Navigator pixels match its physical canvas`);
+      assert.ok(native.pixels[axis]+1>=[r.width,r.height][axis]*native.dpr,`${label}: native Navigator canvas covers the current observed extent`);
+    }
+    assert.ok(native.expected&&native.hole,`${label}: current Navigator image geometry exists`);
+    for(const [style,field] of [['left','x'],['top','y'],['width','width'],['height','height']])
+      assert.ok(Math.abs(native.hole[style]-native.expected[field])<=.01,`${label}: cached Navigator ${field} matches the settled observed extent`);
     const camera=await read('layerApp.state().camera.translation');await pointer(p,{x:p.x+Math.min(20,r.width/4),y:p.y+Math.min(10,r.height/4)});
     assert.notDeepEqual(await read('layerApp.state().camera.translation'),camera,`${label}: Navigator pans the camera`);
     assert.doesNotMatch(await evaluate("document.querySelector('#status').textContent"),/Invalid Navigator size/);
@@ -105,13 +114,20 @@ export async function checkWorkspaceConstraints({call,evaluate,settle,reload}) {
         await target(button);await evaluate(`document.querySelector(${JSON.stringify(button)}).focus()`);await key('Enter');
         await poll('!!document.querySelector(".content-drawer .navigator-overview")');
         const before=await evaluate('layerApp.state().camera.zoom');await click('.content-drawer [data-navigator-command="zoom_in"]');
-        assert.ok(await evaluate('layerApp.state().camera.zoom')>before,'Keyboard-opened drawer forwards Navigator controls');
+        assert.ok(await evaluate('layerApp.state().camera.zoom')>before,`Keyboard-opened drawer forwards Navigator controls at ${theme}/DPR${scale}`);
         await evaluate(`document.querySelector(${JSON.stringify(button)}).focus()`);await key('Enter');await poll('!document.querySelector(".content-drawer .navigator-overview")');
         await send({type:'restore_workspace',workspace:presets.illustrator});assert.deepEqual(await snapshot(),durable,'Closing and restoring the drawer preserves the saved layout');
-        const label=`de-${theme}-dpr${scale}`;await capture(label);
+        const label=`de-${theme}-dpr${scale}`;
+        await send({type:'customize',action:{type:'set_panel_visible',panel:'histogram',visible:true}});
+        await send({type:'move_panel',panel:'histogram',target:{kind:'tab',group:(await group('color')).id,index:null},viewport:[1257,691]});
+        await send({type:'select_panel_tab',group:(await group('histogram')).id,panel:'histogram'});
+        assert.ok(await evaluate(`!!document.querySelector('[data-scope="histogram"] [data-scope-control="chart"]')`),`${label}: Histogram controls are presented`);
+        await histogram(label);
+        await send({type:'restore_workspace',workspace:presets.illustrator});assert.deepEqual(await snapshot(),durable,'Histogram controls preserve the restored saved layout');
+        await capture(label);
         const shot=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});await writeFile(`${directory}/${label}.png`,Buffer.from(shot.data,'base64'));
       }
-      console.log('PASS: German long labels, DPR1/1.25/1.5, both themes, inactive tabs, palette end control and keyboard drawer open/close');
+      console.log('PASS: German long labels, DPR1/1.25/1.5, both themes, native Navigator pixels/input, Histogram controls, inactive tabs, palette end control and keyboard drawer open/close');
       return;
     }
     for(const theme of ['light','dark'])for(const [preset,workspace]of Object.entries(presets)) {
