@@ -173,8 +173,9 @@ its bubble, with Cell size on the right. Spread follows Smoothing's logarithmic
 curve over its percentage range.
 
 Scatter uses square cells from 1 to 50 document pixels per side, starting at
-4 px. Each stroke offsets its rows independently: squares tile the canvas
-without gaps or overlaps, while their columns do not form a continuous grid.
+3 px, with Spread starting at 20%. Each stroke offsets its rows independently:
+squares tile the canvas without gaps or overlaps, while their columns do not
+form a continuous grid.
 The row offsets, random pickup and replacement thresholds stay fixed for that
 stroke. Crossing a rendering page or splitting contacts between frames keeps
 the same result.

@@ -2177,7 +2177,7 @@ fn native_source_pickup_flags_match_the_original_header_and_tile_controls() {
 
 #[test]
 fn dither_and_scatter_cell_size_is_a_localized_whole_pixel_log_slider() {
-    for (preset, cell_id) in [(DefaultBrushPreset::DitherBlender, "dither_cell_size"), (DefaultBrushPreset::ScatterBlender, "scatter_cell_size")] {
+    for (preset, cell_id, default_spread, default_cell) in [(DefaultBrushPreset::DitherBlender, "dither_cell_size", 0.08, 4.), (DefaultBrushPreset::ScatterBlender, "scatter_cell_size", 0.2, 3.)] {
         let brush = layer_core::default_brush(preset);
         let english = Localizer::shared(UiLanguage::English);
         let controls = tool_settings::controls(&brush, &english);
@@ -2196,7 +2196,8 @@ fn dither_and_scatter_cell_size_is_a_localized_whole_pixel_log_slider() {
             let resolved = spread.numeric.resolve(0., NumericOperation::Position { position }).unwrap().value;
             assert!((resolved - expected).abs() < 0.011);
         }
-        assert_eq!(cell.value, 4.);
+        assert_eq!(spread.value, default_spread);
+        assert_eq!(cell.value, default_cell);
         assert_eq!(cell.numeric.kind, NumericKind::Slider);
         assert_eq!(cell.numeric.mapping, NumericMapping::Log);
         assert_eq!((cell.numeric.min, cell.numeric.max), (1., 50.));
@@ -2239,13 +2240,14 @@ fn dither_and_scatter_cell_size_is_a_localized_whole_pixel_log_slider() {
 
 #[test]
 fn dither_and_scatter_bubbles_expose_cell_size_and_preserve_edits_on_every_platform() {
-    for (preset, cell_id) in [(DefaultBrushPreset::DitherBlender, "dither_cell_size"), (DefaultBrushPreset::ScatterBlender, "scatter_cell_size")] {
+    for (preset, cell_id, default_spread, default_cell) in [(DefaultBrushPreset::DitherBlender, "dither_cell_size", 0.08, 4.), (DefaultBrushPreset::ScatterBlender, "scatter_cell_size", 0.2, 3.)] {
         for platform in Platform::ALL {
             let mut s = session(platform);
             s.set_viewport(VIEW, [1200, 900]).unwrap();
             let id = take(&mut s, brush(preset), FAR);
             let bubble = view(&s, id);
             assert!(bubble.open);
+            assert_eq!(s.engine.configured_brush().blender.reach, default_spread);
             assert_eq!(bubble.rings.iter().map(|r| r.setting).collect::<Vec<_>>(), ["spread", cell_id]);
             let spread = bubble.rings.iter().find(|r| r.setting == "spread").unwrap();
             assert!(spread.arc.point(0.5)[0] < 0.);
@@ -2258,7 +2260,7 @@ fn dither_and_scatter_bubbles_expose_cell_size_and_preserve_edits_on_every_platf
                 assert!((s.engine.configured_brush().blender.reach - expected).abs() < 0.011);
             }
             let value = |s: &UiSession<Recorder>| s.engine.configured_brush().blender.cell_size;
-            assert_eq!(value(&s), 4.);
+            assert_eq!(value(&s), default_cell);
             for (fraction, expected) in [(1., 50.), (0., 1.)] {
                 let position = ring.arc.point(fraction);
                 act(&mut s, BubbleAction::Ring { id, phase: ContactPhase::Down, position }).unwrap();
@@ -2283,7 +2285,15 @@ fn dither_and_scatter_bubbles_expose_cell_size_and_preserve_edits_on_every_platf
             assert_eq!(value(&restored), 12., "{platform:?}: saved editing state retains the cell size");
             if view(&s, id).rings.is_empty() { tap(&mut s, id); }
             act(&mut s, BubbleAction::ResetRing { id, position: ring.arc.point(0.5) }).unwrap();
-            assert_eq!(value(&s), 4.);
+            assert_eq!(value(&s), default_cell);
+            act(&mut s, BubbleAction::ResetRing { id, position: spread.arc.point(0.5) }).unwrap();
+            assert_eq!(s.engine.configured_brush().blender.reach, default_spread);
+            s.dispatch(UiAction::SetToolSetting { id: "spread".into(), value: 0.7 }).unwrap();
+            s.dispatch(UiAction::SetToolSetting { id: cell_id.into(), value: 8. }).unwrap();
+            s.dispatch(UiAction::ResetToolSetting { id: "spread".into() }).unwrap();
+            s.dispatch(UiAction::ResetToolSetting { id: cell_id.into() }).unwrap();
+            assert_eq!(s.engine.configured_brush().blender.reach, default_spread);
+            assert_eq!(value(&s), default_cell);
         }
     }
 }

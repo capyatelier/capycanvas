@@ -1309,6 +1309,7 @@ fn native_scatter_cell_size_bubble() {
 }
 
 fn cell_size_bubble(preset: layer_core::DefaultBrushPreset, cell_id: &str, name: &str, application_id: &str) {
+    let (default_spread, default_cell) = if preset == layer_core::DefaultBrushPreset::ScatterBlender { (0.2, 3.) } else { (0.08, 4.) };
     let mut d = Driver::new(application_id);
     for theme in [Theme::Light, Theme::Dark] {
         for device in ["mouse", "touch"] {
@@ -1318,11 +1319,14 @@ fn cell_size_bubble(preset: layer_core::DefaultBrushPreset, cell_id: &str, name:
             d.w.dispatch(UiAction::SetTheme { theme: Some(theme) });
             d.w.dispatch(UiAction::SelectBrush { id: preset as u32 });
             d.w.dispatch(UiAction::ResetToolSetting { id: cell_id.into() });
+            d.w.dispatch(UiAction::ResetToolSetting { id: "spread".into() });
             pump(300);
             let spot = canvas_spot(&d, 0.45, 0.5);
             let id = take(&mut d, BubbleGrab::Variant { variant: ToolVariant::BrushPreset { id: preset as u32 } }, spot);
             let bubble = find_id(&d, id).unwrap();
             assert!(bubble.selected && bubble.open);
+            assert_eq!(ui_session(&d.w).engine().configured_brush().blender.reach, default_spread);
+            assert_eq!(ui_session(&d.w).engine().configured_brush().blender.cell_size, default_cell);
             assert_eq!(bubble.rings.iter().map(|ring| ring.setting).collect::<Vec<_>>(), ["spread", cell_id]);
             let ring = bubble.rings.iter().find(|ring| ring.setting == cell_id).unwrap();
             let spread = bubble.rings.iter().find(|ring| ring.setting == "spread").unwrap();
@@ -1337,7 +1341,7 @@ fn cell_size_bubble(preset: layer_core::DefaultBrushPreset, cell_id: &str, name:
             capture(&mut d, &format!("{name}-spread-{theme:?}-{device}").to_lowercase());
             let arc = |fraction| { let point = ring.arc.point(fraction); [at[0] + point[0], at[1] + point[1]] };
             let value = |d: &Driver| ui_session(&d.w).engine().configured_brush().blender.cell_size;
-            assert_eq!(value(&d), 4.);
+            assert_eq!(value(&d), default_cell);
             stroke(&mut d, device, &[arc(0.1), arc(0.5)]);
             let midpoint = value(&d);
             assert_eq!(midpoint.fract(), 0.);

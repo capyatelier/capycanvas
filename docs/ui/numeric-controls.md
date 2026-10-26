@@ -100,8 +100,9 @@ otherwise a slider; definitions can explicitly override the kind. Prediction
 time (0–64 ms) uses a slider, with the unit beside the value. Brush size is a
 logarithmic slider over 0.5–2048 px. Opacity is displayed as a percentage;
 the pressure slider uses a linear range.
-Dither and Scatter's Cell size is a whole-pixel slider from 1 to 50, starting at 4 px, with
-Smoothing's normalized logarithmic curve. Small sizes occupy more of its travel.
+Dither and Scatter's Cell size is a whole-pixel slider from 1 to 50, starting
+at 4 px for Dither and 3 px for Scatter, with Smoothing's normalized logarithmic
+curve. Small sizes occupy more of its travel. Scatter's Spread starts at 20%.
 Their Spread uses the same curve over its percentage range. Tool Settings
 places Cell size immediately below Spread.
 Control schema comparisons include the logarithmic offset as part of the slider curve.

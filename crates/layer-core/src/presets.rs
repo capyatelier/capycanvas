@@ -278,7 +278,7 @@ pub fn default_brush(preset: DefaultBrushPreset) -> BrushSnapshot {
             ..blender(BlenderKind::Soft, BlenderSpec { reach: 0.06, rate: 14.0, pull: 0.35, hardness: 0.7, paper: Some(1.0), tip: Tip::STUMP, ..BlenderSpec::BASE }) },
         DefaultBrushPreset::Tissue => BrushSnapshot { diameter: 120.0,
             ..blender(BlenderKind::Soft, BlenderSpec { reach: 0.3, rate: 3.0, pull: 0.5, hardness: 0.2, paper: Some(1.0), tip: Tip::TISSUE, lift: 0.15, ..BlenderSpec::BASE }) },
-        DefaultBrushPreset::ScatterBlender => blender(BlenderKind::Scatter, BlenderSpec { reach: 0.12, rate: 3.0, pull: 0.2, character: 1.0, ..BlenderSpec::BASE }),
+        DefaultBrushPreset::ScatterBlender => blender(BlenderKind::Scatter, BlenderSpec { reach: 0.2, rate: 3.0, pull: 0.2, character: 1.0, ..BlenderSpec::BASE }),
         DefaultBrushPreset::PainterlyBlender => blender(BlenderKind::Painterly, BlenderSpec { reach: 0.25, rate: 8.0, pull: 0.6, character: 2.0, ..BlenderSpec::BASE }),
         DefaultBrushPreset::CrystalBlender => blender(BlenderKind::Crystal, BlenderSpec { reach: 0.06, rate: 4.0, scale: 0.18, ..BlenderSpec::BASE }),
         DefaultBrushPreset::Marbling => blender(BlenderKind::Marbling, BlenderSpec { rate: 30.0, pull: 0.4, character: 1.0, scale: 0.45, ..BlenderSpec::BASE }),
@@ -548,7 +548,7 @@ fn blender(kind: BlenderKind, spec: BlenderSpec) -> BrushSnapshot {
         },
         grain: spec.paper.map(paper_grain),
         blender: BrushBlender { kind, reach: spec.reach, rate: spec.rate, character: spec.character, scale: spec.scale,
-            cell_size: if matches!(kind, BlenderKind::Dither | BlenderKind::Scatter) { 4.0 } else { 1.0 },
+            cell_size: match kind { BlenderKind::Dither => 4.0, BlenderKind::Scatter => 3.0, _ => 1.0 },
             pressure_gain: spec.tip.pressure_gain, engagement: spec.tip.engagement, recess: spec.tip.recess, lift: spec.lift },
         mappings: Arc::from([pressure_flow(0.15, 0.85)]),
         ..BrushSnapshot::default()
