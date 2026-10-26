@@ -61,17 +61,7 @@ extension EditorLaunchTests {
         let point = CGPoint(x: 0.5, y: 0.55)
         func pixels() -> Data { editorPixels(in: app, at: point, size: 512) }
         func select(_ tool: String, _ group: String, _ preset: String) {
-            for (prefix, label) in [("toolbar-tile-toolbar-", tool), ("tool-group-", group), ("brush-", preset)] {
-                let button = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", prefix, label)).firstMatch
-                XCTAssertTrue(button.waitForExistence(timeout: 10))
-                if !button.isSelected {
-                    let scroll = app.scrollViews.containing(.button, identifier: button.identifier).firstMatch
-                    if scroll.exists { revealEditorControl(button, in: scroll) }
-                    workspaceActivate(button)
-                }
-                expectation(for: NSPredicate(format: "selected == YES"), evaluatedWith: button)
-                waitForExpectations(timeout: 10)
-            }
+            selectPaintPreset(tool, group: group, preset: preset, in: app)
             editPaintSize("24", in: app)
             expectation(for: NSPredicate(format: "label == %@ OR value == %@", "Renderer ready", "Renderer ready"), evaluatedWith: status)
             waitForExpectations(timeout: 30)
@@ -86,7 +76,7 @@ extension EditorLaunchTests {
             XCTAssertFalse(app.staticTexts["Canvas error"].exists)
         }
         for (tool, group, preset) in [("Pen", "Pen", "G-Pen"), ("Paint Brush", "Paint", "Dry Scumble"),
-            ("Paint Brush", "Watercolor", "Watercolor Wash"), ("Blend", "Blend", "Natural Blender"),
+            ("Paint Brush", "Watercolor", "Watercolor Wash"), ("Blend", "Paint mixing", "Natural Blender"),
             ("Liquify", "Liquify", "Liquify Push")] {
             select(tool, group, preset); rendered(preset)
         }

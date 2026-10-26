@@ -286,9 +286,9 @@ extension XCTestCase {
         }
     }
     @MainActor func selectPaintGroup(_ tool: String, group: String, in app: XCUIApplication) {
-        selectPaintChoice("toolbar-tile-toolbar-", tool, in: app)
         let category = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "tool-subtool-", group)).firstMatch
         let parent = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "tool-group-", group)).firstMatch
+        if !parent.exists && !category.exists { selectPaintChoice("toolbar-tile-toolbar-", tool, in: app) }
         if parent.waitForExistence(timeout: 1) {
             selectPaintChoice("tool-group-", group, in: app)
         } else if category.exists {
@@ -308,7 +308,9 @@ extension XCTestCase {
         revealEditorControl(value, in: app.scrollViews.containing(.button, identifier: value.identifier).firstMatch)
         workspaceActivate(value)
         let entry = app.textFields["number-entry-tool-" + id]
-        XCTAssertTrue(entry.waitForExistence(timeout: 5)); entry.typeText(text + "\n")
+        XCTAssertTrue(entry.waitForExistence(timeout: 5))
+        replaceEditorText(entry, with: text, in: app)
+        entry.typeText("\n")
         return value
     }
 
