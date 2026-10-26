@@ -8,7 +8,7 @@ struct Key {
 struct Input {key:Key,snapshot:Arc<layer_core::SceneSnapshot>}
 pub(crate) struct BakePreflight {
     color:layer_core::color::DocumentColor,owner:u64,revision:u64,inputs:Vec<Input>,next:usize,
-    renderer:Option<Box<WgpuRasterizer>>,pipelines:Option<startup::Requirements>,scene:Option<Box<Scene>>,source:Option<Arc<layer_core::SceneSnapshot>>,initialized:bool,
+    renderer:Option<Box<WgpuRasterizer>>,pipelines:Option<startup::Requirements>,scene:Option<Box<Scene>>,source:Option<Arc<layer_core::SceneSnapshot>>,initialized:bool,windowed:bool,
     coordinate:usize,output:Option<Image>,output_recorded:bool,planning:bool,
     pages:Vec<(usize,[u32;2],Image)>,failure:Option<GpuRasterError>,projected_bytes:u64,
 }
@@ -49,7 +49,7 @@ impl BakePreflight {
             let retained=self.projected_bytes.checked_add(parent.projected_restore_bytes()).and_then(|bytes|bytes.checked_add(parent.scale_display.as_ref().map_or(0,|cache|cache.resident_bytes())))
                 .ok_or(GpuRasterError::SourceWorkingSetExceeded)?;
             let budget=parent.native_edit.as_ref().map_or(windows::DEFAULT_IMAGE_PIXEL_BYTES,|native|native.image_pixel_budget(retained)).min(windows::DEFAULT_IMAGE_PIXEL_BYTES);
-            windows::Plan::new(scene,input.key.extent,budget,parent.device.limits().max_texture_dimension_2d)?;
+            self.windowed=windows::Plan::new(scene,input.key.extent,budget,parent.device.limits().max_texture_dimension_2d)?.is_some();
             let mut renderer=parent.native_preparation()?;
             renderer.effect_analyses=parent.bake_analysis_entries(&input.snapshot,&input.key.scope,input.key.offset,input.key.extent)?.unwrap_or_default();
             renderer.ensure_document_metadata(input.key.extent,scene)?;
@@ -77,6 +77,7 @@ impl BakePreflight {
         };
         let compositor=self.scene.as_mut().unwrap();
         let mut encoder=submission::CommandEncoder::new(&r.device,&Default::default());
+        let completed=self.pages.len();
         let result=(|| {
             r.drain_image_decodes(&mut encoder)?;
             if !compositor.jobs.is_empty() {
@@ -110,6 +111,10 @@ impl BakePreflight {
             })();
             match prepared {Err(GpuRasterError::DeferredObjectWork)=>Ok(()),result=>result,}
         })();
+        if self.windowed && self.pages.len()>completed {
+            parent.metrics.image_window_peak_bytes=parent.metrics.image_window_peak_bytes.max(compositor.images.storage_bytes());
+            parent.metrics.image_window_submissions+=1;
+        }
         if encoder.has_work() {r.uploads.finish(&encoder);r.last_submission=Some(encoder.submit(&r.queue));}
         result
     }
@@ -136,7 +141,7 @@ impl WgpuRasterizer {
                 .and_then(|added|bytes.checked_add(added)).ok_or(GpuRasterError::SourceWorkingSetExceeded)
         }).and_then(|bytes|self.admit_preparation_bytes(self.projected_restore_bytes(),bytes).map(|()|bytes));
         let mut state=self.bake_preflight.take().filter(|old|old.color==self.document_color() && old.inputs.iter().map(|input|&input.key).eq(inputs.iter().map(|input|&input.key)))
-            .unwrap_or(BakePreflight {color:self.document_color(),owner:packet.scene.owner(),revision:packet.scene.revision(),inputs,next:0,renderer:None,pipelines:None,scene:None,source:None,initialized:false,coordinate:0,
+            .unwrap_or(BakePreflight {color:self.document_color(),owner:packet.scene.owner(),revision:packet.scene.revision(),inputs,next:0,renderer:None,pipelines:None,scene:None,source:None,initialized:false,windowed:false,coordinate:0,
                 output:None,output_recorded:false,planning:false,pages:Vec::new(),failure:None,projected_bytes:0});
         match projected {Ok(bytes)=>state.projected_bytes=bytes,Err(error)=>state.failure=Some(error)}
         if let Err(error)=state.advance(self,packet) {state.failure=Some(error);}
