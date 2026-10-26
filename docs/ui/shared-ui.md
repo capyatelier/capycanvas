@@ -452,6 +452,8 @@ is handled, whether to enqueue paint, cursor/visibility state and popup/cancel
 requests. Rust owns modifier interpretation, repeat suppression for toggles,
 editing/modal/popup guards, temporary navigation ownership, competing pointer exclusion,
 and cancellation. Modified keys never silently become unmodified shortcuts.
+Selection modifier presses, releases and focus loss publish tool controls and
+command selections together, including the configured mode restored on release.
 Releasing the bound pan key or changing input focus clears the held-key state;
 releasing it during a pan does not change that contact into paint.
 

@@ -1418,19 +1418,14 @@ impl<R: CanvasRenderer> UiSession<R> {
                 {
                     self.interaction.modifiers.command = pressed;
                 }
-                if previous_modifiers != self.interaction.modifiers && self.layer_interaction.tool.selection_tool().is_some() {
-                    if !self.interaction.modifiers.shift { self.selection_tools.start_modifiers.shift = false; }
-                    if !self.interaction.modifiers.alt { self.selection_tools.start_modifiers.alt = false; }
-                    self.refresh_tools();
-                    reply.change = self.changed(regions::BRUSH | regions::DOCUMENT, true);
-                }
+                reply.change = self.refresh_selection_modifiers(previous_modifiers);
                 if (matches!(self.layer_interaction.tool, LayerCanvasTool::Figure { .. } | LayerCanvasTool::Selection { .. })
                     && !self.layer_interaction.path.is_empty())
                     || self.update_ruler_preview()
                     || self.update_transform_drag()?
                     || self.update_crop_drag()
                 {
-                    reply.change = self.changed(regions::DOCUMENT | regions::BRUSH, true);
+                    reply.change = merge_change(reply.change, self.changed(regions::DOCUMENT | regions::BRUSH, true));
                 }
                 // Native editors/IMEs own their text. Elsewhere in settings,
                 // printable keys start search with the original case intact.
@@ -1688,6 +1683,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
             }
             UiInput::Blur => {
+                let previous_modifiers = self.interaction.modifiers;
                 self.pen_input.clear();
                 if self.finish_transform_nudge(true)? {
                     reply.change = self.changed(regions::BRUSH | regions::DOCUMENT | regions::COMMANDS, true);
@@ -1735,6 +1731,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     reply.change = self.changed(regions::LAYOUT | regions::COMMANDS, false);
                 }
                 self.touch.clear();
+                reply.change = merge_change(reply.change, self.refresh_selection_modifiers(previous_modifiers));
             }
         }
         if let Some(gesture) = gesture {

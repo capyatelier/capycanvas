@@ -506,6 +506,51 @@ mod selection_tools_checks {
         assert!(s.engine.document().working.selection.is_none());
     }
     #[test]
+    fn selection_modifier_input_publishes_commands_after_saved_mask_reselect() {
+        for platform in Platform::ALL {
+            let mut s = session(platform);
+            invoke(&mut s, CommandId::SelectAll);
+            invoke(&mut s, CommandId::SaveSelectionLayer);
+            let id = s.engine.document().scene().order().iter().copied().find(|id|
+                matches!(s.engine.document().scene().source_target(*id), Some(layer_core::authored::SourceTarget::Selection(_)))).unwrap();
+            invoke(&mut s, CommandId::ClearSelectionMask);
+            invoke(&mut s, CommandId::ReturnToArtwork);
+            s.dispatch(UiAction::Selection { action: SelectionAction::LoadLayer {
+                id: occurrence_token(id), mode: SelectionMode::New, inverted: false,
+            } }).unwrap();
+            for command in [CommandId::Deselect, CommandId::Reselect, CommandId::Deselect,
+                CommandId::RectangleSelect, CommandId::SelectionNew] { invoke(&mut s, command); }
+            let document = s.engine.document().clone();
+            for (name, shift, alt, expected) in [
+                ("Shift", true, false, CommandId::SelectionAdd),
+                ("Alt", false, true, CommandId::SelectionSubtract),
+                ("Shift", true, true, CommandId::SelectionIntersect),
+            ] {
+                for blur in [false, true] {
+                    let pressed = s.input(UiInput::Key { key: name.into(), pressed: true, repeat: false,
+                        modifiers: Modifiers { shift, alt, ..Default::default() }, editing: false, divider: None }).unwrap();
+                    assert!(s.command(expected).selected, "{platform:?}/{name}/{alt}");
+                    let selected: Vec<_> = s.state.commands.iter().filter(|command| command.selected && matches!(command.id,
+                        CommandId::SelectionNew | CommandId::SelectionAdd | CommandId::SelectionSubtract | CommandId::SelectionIntersect))
+                        .map(|command| command.id).collect();
+                    assert_eq!(selected, [expected], "{platform:?}/{name}/{alt}: key down publishes selection mode");
+                    assert_ne!(pressed.change.regions & regions::COMMANDS, 0);
+                    let released = s.input(if blur { UiInput::Blur } else { UiInput::Key {
+                        key: name.into(), pressed: false, repeat: false, modifiers: Modifiers::default(), editing: false, divider: None,
+                    } }).unwrap();
+                    assert!(s.command(CommandId::SelectionNew).selected);
+                    let selected: Vec<_> = s.state.commands.iter().filter(|command| command.selected && matches!(command.id,
+                        CommandId::SelectionNew | CommandId::SelectionAdd | CommandId::SelectionSubtract | CommandId::SelectionIntersect))
+                        .map(|command| command.id).collect();
+                    assert_eq!(selected, [CommandId::SelectionNew], "{platform:?}/{name}/{alt}/{blur}: release publishes configured mode");
+                    assert_ne!(released.change.regions & regions::COMMANDS, 0);
+                    assert_eq!(s.engine.document(), &document);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn held_selection_modifiers_latch_per_contact_and_preserve_configured_mode() {
         for (shift, alt, expected) in [(true,false,SelectionMode::Add),(false,true,SelectionMode::Subtract),(true,true,SelectionMode::Intersect)] {
             for tool in [CommandId::RectangleSelect, CommandId::EllipseSelect, CommandId::Lasso] {

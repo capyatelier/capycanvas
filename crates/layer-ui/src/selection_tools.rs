@@ -251,6 +251,17 @@ impl SelectionTools {
 
 
 impl<R: CanvasRenderer> UiSession<R> {
+    pub(super) fn refresh_selection_modifiers(&mut self, previous: Modifiers) -> UiChange {
+        if previous == self.interaction.modifiers || self.layer_interaction.tool.selection_tool().is_none() {
+            return UiChange::default();
+        }
+        if !self.interaction.modifiers.shift { self.selection_tools.start_modifiers.shift = false; }
+        if !self.interaction.modifiers.alt { self.selection_tools.start_modifiers.alt = false; }
+        self.refresh_tools();
+        self.refresh_commands();
+        self.changed(regions::BRUSH | regions::DOCUMENT | regions::COMMANDS, true)
+    }
+
     pub(super) fn effective_selection_mode(&self) -> SelectionMode {
         if let Some(mode) = self.selection_tools.gesture_mode {
             return mode;
