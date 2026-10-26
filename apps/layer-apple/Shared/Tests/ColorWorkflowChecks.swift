@@ -96,6 +96,10 @@ extension XCTestCase {
             XCTAssertEqual(XCTWaiter.wait(for: [hidden], timeout: 5), .completed, "Hide keyboard uncovers the editor")
         }
     }
+    @MainActor func editorTextMatches(_ field: XCUIElement, _ expected: String) -> Bool {
+        guard let actual = field.value as? String else { return false }
+        return actual == expected || (expected.isEmpty && actual == field.placeholderValue)
+    }
     #endif
     @MainActor func replaceEditorText(_ field: XCUIElement, with value: String, in app: XCUIApplication) {
         #if os(macOS)
@@ -117,7 +121,11 @@ extension XCTestCase {
         let count = current == field.placeholderValue ? 0 : current.count
         field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: count) + value)
         #endif
+        #if os(macOS)
         XCTAssertEqual(field.value as? String, value)
+        #else
+        XCTAssertTrue(editorTextMatches(field, value), "Expected '\(value)', got \(String(describing: field.value))")
+        #endif
     }
     @MainActor func checkNativeSDRCreationAndColorEditing(in app: XCUIApplication) {
         // Initial actions run only after native GPU startup completes.
