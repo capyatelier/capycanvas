@@ -9,7 +9,7 @@ keep the immediate fix focused and defer the full cross-platform UI refactor.
 
 ## Starting point
 
-Fetch current `origin/main` in the assigned checkout. It must contain both fixes:
+Fetch current `origin/main` in the assigned checkout. It must contain the resize milestones:
 
 ```powershell
 git fetch origin main
@@ -18,6 +18,10 @@ git merge-base --is-ancestor d66f45ed9 HEAD
 if ($LASTEXITCODE -ne 0) { throw 'Missing render-owner resize fix' }
 git merge-base --is-ancestor fca8ddc06 HEAD
 if ($LASTEXITCODE -ne 0) { throw 'Missing retained glass publication fix' }
+git merge-base --is-ancestor 80973432e HEAD
+if ($LASTEXITCODE -ne 0) { throw 'Missing frame-based workspace observation' }
+git merge-base --is-ancestor 846aabea3 HEAD
+if ($LASTEXITCODE -ne 0) { throw 'Missing background snapshot decoding' }
 ```
 
 `d66f45ed9` retains shared layout content, moves swap-chain configuration and
@@ -56,6 +60,14 @@ Queries retain snapshot-before-reply ordering while parsing moves off the UI
 thread. Black regions remain. The title-bar-disabled scratch experiment retains
 `CTitleBar` stacks and `WS_CAPTION`, so its inconsistent result does not establish
 the effect of removing native title-bar work. It is not a shipped chrome change.
+
+Matching-background experiments also fail to recolor the exposed bands. A solid
+magenta compositor backdrop, a custom `Window.SystemBackdrop`, and a native
+window-class brush all leave black right/bottom strips in the minimal window.
+The proper backdrop connection and persistent native brush are verified; the
+setters succeeding does not establish coverage. No color mitigation is shipped.
+Repeat only a materially different approach, and require a composed capture of
+the newly exposed area before describing recoloring as working.
 
 Previous `artifacts/windows/resize-investigation/` files, binaries and temporary
 UI timing probes are local and are **not delivered by Git**. Build on the new

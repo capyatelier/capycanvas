@@ -5397,3 +5397,29 @@ UI CPU is 90.3/93.2%, versus 87.2/91.4%. Both windows retain `WS_CAPTION` and
 so it neither demonstrates a speedup nor rules out its cost. The scratch change
 is not shipped. Raw evidence and exclusive attribution stay in
 `artifacts/windows/resize-followup/`, including `titlebar-pair-report.md`.
+
+### Exposed-area color probes
+
+On the same 2.5.1 runtime and minimal blue-Grid window, an opaque magenta
+`ICompositionSupportsSystemBackdrop` brush attaches successfully but does not
+recolor the resize bands. A composable `SystemBackdrop` assigned through
+`Window.SystemBackdrop` also runs its connection/disconnection callbacks and
+assigns the brush, with the same result: 9/184 composed captures contain black
+interior and none contain magenta on the inset sample grid. The blue Grid and
+bottom-right marker end at an older extent inside the current window border.
+
+A separate native-class brush probe removes both backdrop variants, assigns
+magenta through `SetClassLongPtr(GCLP_HBRBACKGROUND)`, and verifies that the
+brush remains assigned before and after resizing. It still produces 8/189
+black-positive captures and no magenta. The window class and module belong to
+the owned private process. No manual GDI painting, style changes or private APIs
+are used. These observations do not identify a supported background setting
+that controls the exposed strip; no cosmetic change is shipped.
+
+The actual growth/reversal phases span 1100 × 750 to 2099 × 1349. Shrink-only
+contacts miss their corner and are excluded; all sampled post-release frames
+are clear. Initial compositor-startup attempts fail before resize because of
+eager construction without the system dispatcher; corrected variants initialize
+it first and reach the verified setters. Sources, runtime/PDB snapshots, stage
+logs, brush-handle checks and captures remain under
+`artifacts/windows/resize-followup/minimal-winui/`.
