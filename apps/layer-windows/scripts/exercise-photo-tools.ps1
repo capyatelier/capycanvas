@@ -169,7 +169,9 @@ function Footprint-Endpoint{
  $requested=@(1022.9555,1022.9555);$center=Screen-Point $requested;$candidates=@()
  foreach($dx in -1..1){foreach($dy in -1..1){
   $screen=@(($center[0]+$dx),($center[1]+$dy))
-  $source=@((($screen[0]-$bounds.X)*$camera.viewport[0]/$bounds.Width-$camera.translation[0])/$camera.zoom,(($screen[1]-$bounds.Y)*$camera.viewport[1]/$bounds.Height-$camera.translation[1])/$camera.zoom)
+  $sourceX=(($screen[0]-$bounds.X)*$camera.viewport[0]/$bounds.Width-$camera.translation[0])/$camera.zoom
+  $sourceY=(($screen[1]-$bounds.Y)*$camera.viewport[1]/$bounds.Height-$camera.translation[1])/$camera.zoom
+  $source=@($sourceX,$sourceY)
   $sum=$source[0]+$source[1]
   if($sum -gt 2043.1 -and $sum -lt 2047.9 -and [Math]::Abs($source[0]-$requested[0]) -lt 3 -and [Math]::Abs($source[1]-$requested[1]) -lt 3 -and $bounds.Contains([Windows.Point]::new($screen[0],$screen[1]))){
    $candidates+=@{screen=$screen;source=$source;distance=([Math]::Pow($source[0]-$requested[0],2)+[Math]::Pow($source[1]-$requested[1],2))}

@@ -2,6 +2,7 @@ param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][st
 if($Journey.EndsWith('-light')){$Journey=$Journey.Substring(0,$Journey.Length-6);$Theme='light'}
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
+$CapyPopups=$true
 Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
 [CapyRowPointer]::VerifyPrivateDesktop($env:CAPY_PRIVATE_DESKTOP)
 Add-Type -TypeDefinition @'
@@ -73,7 +74,25 @@ function Diagnostics-Language([string]$Tag){
 function Preset-Workspace([string]$Name,[string]$Id){
     if((Model).windows_workspace.id -ne $Id){
         $entry=Find ('workspace-switch-'+$Id) -Visible
-        if(!$entry){Invoke 'header-workspace-menu';$entry=Control $Name -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)}
+        if(!$entry){
+            $model=Model
+            $choice=@($model.windows_workspace.switcher_menu.sections|ForEach-Object {$_}|Where-Object {$_.action.type -eq 'workspace_manager' -and $_.action.command.type -eq 'switch' -and $_.action.command.id -eq $Id})
+            if($choice.Count -ne 1 -or !$choice[0].enabled){throw "Shared workspace switch is unavailable: $Id"}
+            $sources=@($model.header.model.zones|ForEach-Object {$_}|Where-Object {$_.item.kind -eq 'workspaces'})
+            $presentation=(Control 'title-bar').Current.ItemStatus|ConvertFrom-Json
+            $zones=@(foreach($zone in 0..2){if($sources.Count -eq 1 -and $sources[0].id -in $presentation.geometry.hidden[$zone]){$zone}})
+            @{workspace=$Id;source=$sources;header=$presentation;hidden_zones=$zones}|ConvertTo-Json -Depth 16|Set-Content (Join-Path $run ('preset-workspace-route-'+[guid]::NewGuid().ToString('N')+'.json'))
+            if($zones.Count -eq 1){
+                Invoke ('header-overflow-'+$zones[0]);Invoke ('header-overflow-item-'+$sources[0].id)
+            }else{
+                $window=$model.application_menus|Where-Object id -eq 'window'
+                $menus=@($window.model.sections|ForEach-Object {$_}|Where-Object {@($_.sections|ForEach-Object {$_}|Where-Object {$_.action.type -eq 'workspace_manager' -and $_.action.command.type -eq 'switch' -and $_.action.command.id -eq $Id}).Count -eq 1})
+                if($menus.Count -ne 1){throw "Shared Window menu has no unique workspace route: $Id"}
+                & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'window'
+                (Control $menus[0].label -Name -Type ([System.Windows.Automation.ControlType]::MenuItem) -Arranged).GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
+            }
+            $entry=Control $choice[0].label -Name -Type ([System.Windows.Automation.ControlType]::MenuItem) -Arranged
+        }
         $entry.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
     }
     Wait-Until {(Model).windows_workspace.id -eq $Id -and (Model).windows_workspace.ready -and !(Model).windows_workspace.busy -and !(Model).windows_workspace.saving -and (Model).brush_ready -and (Model).canvas_ready} "$Name workspace did not settle"

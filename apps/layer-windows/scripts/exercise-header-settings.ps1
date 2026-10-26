@@ -1,4 +1,4 @@
-param([Parameter(Mandatory)][int]$ProcessId,[Parameter(Mandatory)][string]$StateFile)
+﻿param([Parameter(Mandatory)][int]$ProcessId,[Parameter(Mandatory)][string]$StateFile)
 $ErrorActionPreference='Stop'
 Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
 if(!('CapyRowPointer' -as [type])){Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')}
@@ -162,12 +162,12 @@ $themeIdentity=(Control 'Color theme' ([System.Windows.Automation.ControlType]::
 foreach($choice in @('Light','Dark',$restoreTheme)){
     [CapyRowPointer]::SetForegroundWindow($app.MainWindowHandle)|Out-Null
     Focus-Control (Control 'Color theme' ([System.Windows.Automation.ControlType]::ComboBox))
-    [CapyRowPointer]::Key([uint32]$ProcessId,[ushort]0x73) # F4 opens the native selector.
+    [CapyRowPointer]::Key([uint32]$ProcessId,[uint16]0x73) # F4 opens the native selector.
     Wait-Until {Find-Control $choice ([System.Windows.Automation.ControlType]::ListItem)} 'Theme choices did not open'
-    [CapyRowPointer]::Key([uint32]$ProcessId,[ushort]0x24) # Home: System.
+    [CapyRowPointer]::Key([uint32]$ProcessId,[uint16]0x24) # Home: System.
     $index=@('System','Light','Dark').IndexOf($choice)
-    for($i=0;$i -lt $index;$i++){[CapyRowPointer]::Key([uint32]$ProcessId,[ushort]0x28)}
-    [CapyRowPointer]::Key([uint32]$ProcessId,[ushort]0x0D)
+    for($i=0;$i -lt $index;$i++){[CapyRowPointer]::Key([uint32]$ProcessId,[uint16]0x28)}
+    [CapyRowPointer]::Key([uint32]$ProcessId,[uint16]0x0D)
     Wait-Until {(Read-Model).state.settings.theme -eq $(if($choice -eq 'System'){$null}else{$choice.ToLowerInvariant()})} 'Color theme preference did not update'
     $script:settingsScope=$root
     $script:settingsScope=Control 'Preferences' ([System.Windows.Automation.ControlType]::Window)
@@ -235,7 +235,7 @@ Wait-Until {(Read-Model).preferences.shortcut_editor} 'Shortcut editor did not o
 Invoke-Control 'Add Shortcut'
 Wait-Until {(Read-Model).preferences.capture} 'Shortcut capture did not open'
 foreach($chord in @(@(0x20,'Space'),@(0x0D,'Enter'))){
-    [CapyRowPointer]::Key([uint32]$ProcessId,[ushort]$chord[0])
+    [CapyRowPointer]::Key([uint32]$ProcessId,[uint16]$chord[0])
     Wait-Until {$capture=(Read-Model).preferences.capture;$capture -and $capture.shortcut -eq $chord[1]} "Shortcut capture did not record $($chord[1])"
 }
 Invoke-Control 'Cancel'

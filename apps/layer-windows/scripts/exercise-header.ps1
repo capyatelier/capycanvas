@@ -483,17 +483,21 @@ function Check-Drawer($Tools) {
 
 
 function Select-HeaderItem([int]$Id) {
-    $entry=Find ('header-select-'+$Id)
-    if($entry -and !$entry.Current.IsOffscreen){Invoke ('header-select-'+$Id);return}
-    $p=Presentation
-    foreach($zone in 0..2){
-        if($Id -in $p.geometry.hidden[$zone]){
-            Invoke ('header-overflow-'+$zone);Invoke ('header-overflow-item-'+$Id)
-            Wait-Until {!(Find ('header-overflow-item-'+$Id))} 'Hidden item selection left its menu open'
-            return
+    $route=@{zone=-1;direct=$false}
+    Wait-Until {
+        $entry=Find ('header-select-'+$Id) -Visible
+        if($entry -and $entry.Current.IsEnabled -and !$entry.Current.BoundingRectangle.IsEmpty -and $entry.Current.BoundingRectangle.Width -gt 0 -and $entry.Current.BoundingRectangle.Height -gt 0){$route.direct=$true;return $true}
+        $p=Presentation
+        foreach($zone in 0..2){
+            if($Id -notin $p.geometry.hidden[$zone]){continue}
+            $overflow=Find ('header-overflow-'+$zone) -Visible
+            if($overflow -and $overflow.Current.IsEnabled -and !$overflow.Current.BoundingRectangle.IsEmpty -and $overflow.Current.BoundingRectangle.Width -gt 0 -and $overflow.Current.BoundingRectangle.Height -gt 0){$route.zone=$zone;return $true}
         }
-    }
-    throw "Header item $Id has no visible selection route"
+        $false
+    } "Header item $Id has no visible selection route"
+    if($route.direct){Invoke ('header-select-'+$Id);return}
+    Invoke ('header-overflow-'+$route.zone);Invoke ('header-overflow-item-'+$Id)
+    Wait-Until {!(Find ('header-overflow-item-'+$Id))} 'Hidden item selection left its menu open'
 }
 function Remove-HeaderItem([int]$Id) {
     Select-HeaderItem $Id
