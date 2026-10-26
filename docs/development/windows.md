@@ -1636,6 +1636,8 @@ fast tear-off, canvas gaps, cancellation, persistent options, wheel drag-out,
 two-finger movement and pinch, Layers pages, dab previews and exact artwork
 Undo/Redo. The retained presenter shares the ordinary wheel, swatches, brush
 previews, thumbnail cache, numeric controls and Layers inspector.
+A second finger cancels an active native control edit before moving the card;
+contacts starting on layer rows retain their native layer gestures.
 HDR color bubbles use the shared plate contour and glass mask while retaining
 the wheel's size and center. The native intensity arc presents the shared ramp,
 marker and dynamic range, including temporary eyedropper previews. Its accessible
