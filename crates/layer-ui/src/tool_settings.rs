@@ -6,6 +6,8 @@ use std::sync::Arc;
 use layer_core::{BlenderKind, BrushExecution, BrushSnapshot, BrushTip, ColorMixSpace, LiquifyMode};
 use serde::Serialize;
 
+pub(crate) mod profiles;
+
 /// Reusable tool settings actions. Labels, enabled/checked state and shortcuts
 /// come from the same command model as menus and toolbar tiles.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -179,6 +181,16 @@ struct Definition {
 }
 
 impl Definition {
+    fn applicable(&self, brush: &BrushSnapshot) -> bool {
+        match self.id {
+            "paint" | "dilution" => brush.execution_class() != BrushExecution::Smudge,
+            "pull" => brush.execution_class() != BrushExecution::Smudge || !matches!(brush.blender.kind,
+                BlenderKind::Blur | BlenderKind::Sharpen | BlenderKind::Crystal | BlenderKind::Comb | BlenderKind::Dither),
+            "persistence" => brush.wet_mix.average > 0.,
+            _ => true,
+        }
+    }
+
     fn numeric(&self, brush: &BrushSnapshot) -> NumericControl {
         let mut numeric = (self.numeric)();
         if self.id == "grain_depth" && brush.contact.is_some_and(|c| c.dry.is_some()) {
@@ -193,12 +205,8 @@ impl Definition {
     }
 }
 
-fn primary(brush: &BrushSnapshot) -> &'static [&'static str] {
-    if brush.execution == BrushExecution::Smudge && brush.blender.kind == BlenderKind::Dither {
-        &["spread", "dither_cell_size"]
-    } else if brush.execution == BrushExecution::Smudge && brush.blender.kind == BlenderKind::Scatter {
-        &["spread", "scatter_cell_size"]
-    } else if brush.contact.is_some_and(|c| c.dry.is_some()) {
+fn default_primary(brush: &BrushSnapshot) -> &'static [&'static str] {
+    if brush.contact.is_some_and(|c| c.dry.is_some()) {
         &["grain_depth", "material_hardness"]
     } else if brush.contact.is_some_and(|c| c.bristles.is_some()) {
         &["bristle_load", "bristle_scale"]
@@ -212,11 +220,6 @@ fn primary(brush: &BrushSnapshot) -> &'static [&'static str] {
         }
     }
 }
-
-const BLENDER_RING: &[&str] = &[
-    "streaks", "spread", "sharpness", "texture_kept", "blend_lightness", "grit", "stretch", "cell_size",
-    "swirl", "edge_keeping", "persistence", "pull", "momentum", "distortion",
-];
 
 const SMOOTHING_LOG_OFFSET: f64 = 0.00886269125382811;
 
@@ -234,22 +237,24 @@ pub(crate) fn defined(id: &str) -> bool {
     DEFINITIONS.iter().any(|d| d.id == id)
 }
 
-pub(crate) fn ring_defaults(brush: &BrushSnapshot, controls: &[ToolSetting]) -> Vec<&'static str> {
+pub(crate) fn ring_defaults(preset: u32, brush: &BrushSnapshot, controls: &[ToolSetting]) -> Vec<&'static str> {
     let shown = |id: &&str| controls.iter().any(|c| c.id == *id);
-    match brush.execution {
-        BrushExecution::Smudge if matches!(brush.blender.kind, BlenderKind::Dither | BlenderKind::Scatter) => primary(brush).iter().copied().filter(shown).collect(),
-        BrushExecution::Smudge | BrushExecution::Liquify => BLENDER_RING.iter().copied().find(|id| shown(id)).into_iter().collect(),
-        _ => primary(brush).iter().copied().filter(shown).collect(),
+    if let Some(profile) = crate::tools::control_profile(preset) {
+        profile.primary().filter(shown).collect()
+    } else if brush.execution == BrushExecution::Liquify {
+        ["momentum", "distortion"].into_iter().find(shown).into_iter().collect()
+    } else {
+        default_primary(brush).iter().copied().filter(shown).collect()
     }
 }
 
 const GROUP_ORDER: &[MessageId] = &[
+    MessageId::TOOL_SETTING_GROUP_BLENDER,
     MessageId::TOOL_SETTING_GROUP_TIP,
     MessageId::TOOL_SETTING_GROUP_MATERIAL,
     MessageId::TOOL_SETTING_GROUP_TEXTURE,
     MessageId::TOOL_SETTING_GROUP_BRISTLES,
     MessageId::TOOL_SETTING_GROUP_MIXING,
-    MessageId::TOOL_SETTING_GROUP_BLENDER,
     MessageId::TOOL_SETTING_GROUP_WATERCOLOR,
     MessageId::TOOL_SETTING_GROUP_BLEED,
     MessageId::TOOL_SETTING_GROUP_LIQUIFY,
@@ -267,6 +272,10 @@ pub(crate) fn mixes_color(b: &BrushSnapshot) -> bool {
         b.execution_class(),
         BrushExecution::Wet | BrushExecution::Smudge | BrushExecution::Watercolor
     )
+}
+
+pub(crate) fn color_mixing_visible(brush: &BrushSnapshot) -> bool {
+    mixes_color(brush) && !(brush.execution_class() == BrushExecution::Smudge && brush.blender.kind == BlenderKind::Dither)
 }
 
 /// The brush's Color mixing choice, kept with the numeric overrides as its
@@ -445,7 +454,7 @@ const DEFINITIONS: &[Definition] = &[
         label: MessageId::TOOL_SETTING_PERSISTENCE,
         group: Some(MessageId::TOOL_SETTING_GROUP_MIXING),
         numeric: four_times,
-        field: |b| (b.execution_class() == BrushExecution::Wet && b.wet_mix.average > 0.).then_some(&mut b.wet_mix.stretch),
+        field: |b| (b.execution_class() == BrushExecution::Wet).then_some(&mut b.wet_mix.stretch),
     },
     Definition {
         id: "pressure_refill",
@@ -637,20 +646,28 @@ pub fn shapes_dab(id: &str) -> bool {
     matches!(id, "size" | "flow" | "strength" | "opacity" | "hardness" | "angle" | "grain_depth" | "material_hardness" | "bristle_scale" | "bristle_load")
 }
 
-pub(crate) fn controls(brush: &BrushSnapshot, localizer: &Localizer) -> Vec<ToolSetting> {
-    let primary = primary(brush);
+pub(crate) fn controls(preset: u32, brush: &BrushSnapshot, localizer: &Localizer) -> Vec<ToolSetting> {
+    let profile = crate::tools::control_profile(preset);
+    let primary = default_primary(brush);
     let mut brush = brush.clone();
     let mut controls = DEFINITIONS
         .iter()
         .enumerate()
         .filter_map(|(index, d)| {
+            if !d.applicable(&brush) { return None; }
+            let placement = profile.and_then(|profile| profile.placement(d.id));
             let rank = match d.id {
                 "size" => Some(0),
                 "flow" | "strength" => Some(1),
-                id => primary.iter().position(|&p| p == id).map(|i| i + 2),
+                id => if profile.is_some() {
+                    placement.and_then(|(i, place)| matches!(place, profiles::Placement::Primary).then_some(i + 2))
+                } else { primary.iter().position(|&p| p == id).map(|i| i + 2) },
             };
-            let group = if rank.is_some() { None } else { d.group };
-            let order = rank.map_or((1, group_order(group.map_or("", MessageId::key)), index),
+            let group = if rank.is_some() { None } else { match placement {
+                Some((_, profiles::Placement::Section(group))) => Some(group),
+                _ => d.group,
+            } };
+            let order = rank.map_or((1, group_order(group.map_or("", MessageId::key)), placement.map_or(index, |(i, _)| i)),
                 |rank| (0, rank, 0));
             Some((order, ToolSetting { preview: false,
                 id: d.id,
@@ -756,7 +773,7 @@ mod tests {
     fn every_visible_control_accepts_its_default_and_endpoints() {
         for choice in crate::brush_catalog() {
             let brush = default_brush(crate::preset(choice.id).unwrap());
-            for control in controls(&brush, &Localizer::shared(UiLanguage::English)) {
+            for control in controls(choice.id, &brush, &Localizer::shared(UiLanguage::English)) {
                 assert_eq!(
                     edit(&brush, control.id, control.value, &Localizer::shared(UiLanguage::English)).unwrap(),
                     brush,
@@ -773,7 +790,7 @@ mod tests {
 
     #[test]
     fn liquify_shows_distortion_and_momentum_for_deformation() {
-        let ids = |preset| -> Vec<_> { controls(&default_brush(preset), &Localizer::shared(UiLanguage::English)).iter().map(|c| c.id).collect() };
+        let ids = |preset| -> Vec<_> { controls(preset as u32, &default_brush(preset), &Localizer::shared(UiLanguage::English)).iter().map(|c| c.id).collect() };
         for (preset, distortion, momentum) in [
             (DefaultBrushPreset::LiquifyPush, true, true),
             (DefaultBrushPreset::LiquifyTwirl, true, true),
@@ -794,7 +811,7 @@ mod tests {
     #[test]
     fn blenders_show_the_controls_their_kind_uses() {
         let english = Localizer::shared(UiLanguage::English);
-        let ids = |preset| -> Vec<_> { controls(&default_brush(preset), &english).iter().map(|c| c.id).collect() };
+        let ids = |preset| -> Vec<_> { controls(preset as u32, &default_brush(preset), &english).iter().map(|c| c.id).collect() };
         for (preset, expected, absent) in [
             (DefaultBrushPreset::Smudge, &["pull", "spread", "streaks"][..], &["swirl", "average_pickup"][..]),
             (DefaultBrushPreset::CrystalBlender, &["spread", "stretch", "cell_size"], &["streaks", "swirl_size"]),
@@ -814,6 +831,23 @@ mod tests {
         assert!(edit(&crystal, "swirl", 1., &english).is_err());
         let wet = edit(&default_brush(DefaultBrushPreset::WetBlender), "average_pickup", 0.5, &english).unwrap();
         assert_eq!(edit(&wet, "persistence", 2., &english).unwrap().wet_mix.stretch, 2.);
+    }
+
+    #[test]
+    fn blender_profiles_reference_unique_bound_settings() {
+        for choice in crate::brush_catalog() {
+            let profile = crate::tools::control_profile(choice.id);
+            assert_eq!(profile.is_some(), crate::tools::tool(choice.id) == crate::Tool::Blend, "{}", choice.label);
+            if let Some(profile) = profile {
+                let brush = default_brush(crate::preset(choice.id).unwrap());
+                let mut ids = std::collections::HashSet::new();
+                for control in profile.0 {
+                    assert!(ids.insert(control.setting), "{} repeats {}", choice.label, control.setting);
+                    assert!(value(&brush, control.setting).is_some(), "{} has no {} binding", choice.label, control.setting);
+                }
+                assert!(profile.primary().count() <= crate::MAX_RING_SETTINGS);
+            }
+        }
     }
 
     #[test]
@@ -854,7 +888,7 @@ mod tests {
             DefaultBrushPreset::BristlePaintbrush as u32
         );
         assert!(
-            controls(&default_brush(DefaultBrushPreset::Paintbrush), &Localizer::shared(UiLanguage::English))
+            controls(DefaultBrushPreset::Paintbrush as u32, &default_brush(DefaultBrushPreset::Paintbrush), &Localizer::shared(UiLanguage::English))
                 .iter()
                 .all(|c| c.id != "bristle_scale")
         );

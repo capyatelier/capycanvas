@@ -111,9 +111,9 @@ gray; in a Linear light document they build up in linear light. Brush blend
 modes use the layer formulas in the same space, and erasing is the same in both.
 See [rendering](rendering.md#brushes-and-healing).
 
-Brushes that mix paint (Smudge, the blenders, and the wet oil, gouache and
-watercolor brushes) show a **Color mixing** choice in Tool Options, from shared
-Rust on every host:
+Brushes that mix paint (Smudge, the blenders except Dither, and the wet oil,
+gouache and watercolor brushes) show a **Color mixing** choice in Tool Options,
+from shared Rust on every host:
 
 - **Oklab mixing**, the default of every built-in mixing brush, blends evenly as
   the eye sees color.
@@ -189,8 +189,8 @@ Transparent pickup leaves paint alone; destination opacity can increase but
 cannot decrease. Alpha lock preserves each destination pixel's opacity.
 Selections clip squares and exclude pickup outside the selection. Whole-cell
 contact admission matches Dither, including its untouched rim for large cells.
-Scatter shows Spread then Cell size in Tool Settings and on the left and right
-of its bubble, with the same logarithmic slider curves as Dither.
+Scatter shows Spread, Cell size and Grit below Strength in Tool Settings and
+on its bubble. Spread and Cell size use the same logarithmic curves as Dither.
 
 Each set lists its blenders from the most to the least broadly useful, and
 Smudge is the Blend tool's default. Sets are tool groups of the Blend tool.
@@ -208,12 +208,42 @@ paper in its own way, with constants in the preset rather than in Tool Options;
 the [decision record](../history/brushes/paper-aware-blenders.md) gives them.
 The effect blenders and the wet blenders ignore the paper.
 
-Tool Options shows a **Blender** group with Spread and the one setting each
-kind uses: Streaks, Sharpness, Texture kept, Blend lightness, Grit, Stretch,
-Swirl, Edge keeping, Detail size, Cell size or Swirl size. Wet brushes add
-Average pickup, Persistence and Pressure refill to the Mixing group. The Mixing
-Brush in Paint › Oil lays its color under firm pressure and only blends under a
-light touch.
+### Blender controls
+
+Every Blend preset places its primary controls immediately below Strength and
+uses the same ordered controls for its default bubble. Smoothing follows these
+controls, then the secondary Blender section, then Tip and other sections.
+Color pickup controls the pulling of paint along the stroke.
+
+| Preset | Primary controls | Secondary Blender controls |
+| --- | --- | --- |
+| Smudge, Soft Blender, Natural Blender, Blending Stump, Tissue | Color pickup, Spread | Streaks, Texture strength |
+| Blur | Spread | — |
+| Grainy Blender | Spread, Texture strength | Color pickup |
+| Bristle Blender | Color pickup, Streaks, Spread | Texture strength |
+| Blending Knife | Color pickup, Streaks | Texture strength |
+| Texture-Keeping Blender | Texture kept, Detail size, Spread | Color pickup |
+| Hue Blender | Blend lightness, Spread | Color pickup |
+| Wet Blender | Color pickup, Dilution, Average pickup | Paint load, Pressure refill, Persistence |
+| Color Mixer | Color pickup, Average pickup, Persistence | Paint load, Dilution, Pressure refill |
+| Painterly Blender | Spread, Stretch | Color pickup |
+| Comb | Edge keeping, Spread | — |
+| Scatter | Spread, Cell size, Grit | Color pickup |
+| Sharpen | Sharpness, Spread | — |
+| Marbling | Swirl, Swirl size | Color pickup |
+| Crystal | Cell size, Stretch, Spread | — |
+| Dither | Spread, Cell size | — |
+
+Persistence is visible only with nonzero Average pickup. Smudge-based blenders
+hide Paint load and Dilution, which their algorithms do not use. Blur, Sharpen,
+Crystal, Comb and Dither also hide Color pickup. Hidden settings retain their
+saved values and customized bubble selections. Dither hides Color mixing because
+its whole-color sampling does not use that choice.
+
+Painting brushes retain their own profiles. Mixing Brush in Paint › Oil keeps
+Paint load and Color pickup as primary controls; it lays its color under firm
+pressure and only blends under a light touch. Wet painting brushes keep the
+remaining pickup controls in Mixing.
 
 Watercolor uses its own pigment and wetness behavior. It is not a general physical
 fluid simulation, and not every brush uses the same state or passes. The

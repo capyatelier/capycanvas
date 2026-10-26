@@ -448,8 +448,8 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     fn ring_ids(&self, brush: u32, snapshot: &BrushSnapshot, controls: &[ToolSetting]) -> Vec<&'static str> {
         match self.state.workspace.layout.bubbles.ring(brush) {
-            Some(saved) => controls.iter().filter(|c| saved.iter().any(|s| s == c.id)).map(|c| c.id).collect(),
-            None => tool_settings::ring_defaults(snapshot, controls),
+            Some(saved) => saved.iter().filter_map(|id| controls.iter().find(|c| c.id == id)).map(|c| c.id).collect(),
+            None => tool_settings::ring_defaults(brush, snapshot, controls),
         }
     }
 
@@ -794,20 +794,21 @@ impl<R: CanvasRenderer> UiSession<R> {
             BubbleAction::ToggleRingSetting { brush, setting } => {
                 let preset = tools::preset(brush)?;
                 let snapshot = self.tools.brush(preset);
-                let controls = tool_settings::controls(&snapshot, self.localization());
-                let mut shown = self.ring_ids(brush, &snapshot, &controls);
+                let controls = tool_settings::controls(brush, &snapshot, self.localization());
+                let mut shown = self.state.workspace.layout.bubbles.ring(brush).map_or_else(
+                    || self.ring_ids(brush, &snapshot, &controls).into_iter().map(str::to_owned).collect(),
+                    <[String]>::to_vec);
                 let setting = controls.iter().find(|c| c.id == setting).ok_or("This setting is not used by the brush")?.id;
                 if let Some(index) = shown.iter().position(|id| *id == setting) {
                     shown.remove(index);
                 } else if shown.len() < MAX_RING_SETTINGS {
-                    shown.push(setting);
+                    shown.push(setting.into());
                 } else {
                     return Err(self.localization().text(MessageId::WORKSPACE_BUBBLE_RING_FULL).to_string());
                 }
-                let ordered = controls.iter().filter(|c| shown.contains(&c.id)).map(|c| c.id.to_string()).collect();
                 let source = BubbleSource::Control { control: ToolbarControl::Brush { id: brush } };
                 self.edit_bubbles(LayoutChange::Bubble { action: LayoutPanelAction::Customized, source }, |layout| {
-                    layout.bubbles.set_ring(brush, ordered);
+                    layout.bubbles.set_ring(brush, shown);
                     Ok(())
                 })
             }
@@ -1392,8 +1393,9 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     fn ring_menu(&self, brush: u32) -> Option<Vec<ContextMenuItem>> {
         let snapshot = self.tools.brush(tools::preset(brush).ok()?);
-        let controls = tool_settings::controls(&snapshot, self.localization());
+        let controls = tool_settings::controls(brush, &snapshot, self.localization());
         let shown = self.ring_ids(brush, &snapshot, &controls);
+        let count = self.state.workspace.layout.bubbles.ring(brush).map_or(shown.len(), <[String]>::len);
         let rows = controls
             .iter()
             .map(|c| {
@@ -1404,7 +1406,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 );
                 item.icon = Some(tool_setting_icon(c.id).into());
                 item.selected = Some(on);
-                item.enabled = on || shown.len() < MAX_RING_SETTINGS;
+                item.enabled = on || count < MAX_RING_SETTINGS;
                 item
             })
             .collect();

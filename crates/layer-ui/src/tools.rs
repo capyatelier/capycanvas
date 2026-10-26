@@ -305,6 +305,30 @@ const PRESETS: &[(DefaultBrushPreset, MessageId, ToolGroup)] = &[
     (DefaultBrushPreset::SpotHealingBrush, MessageId::BRUSH_PRESET_SPOT_HEALING_BRUSH, ToolGroup::Retouch),
 ];
 
+pub(crate) fn control_profile(id: u32) -> Option<&'static crate::tool_settings::profiles::ControlProfile> {
+    use crate::tool_settings::profiles::*;
+    use DefaultBrushPreset::*;
+    Some(match preset(id).ok()? {
+        Smudge | SoftBlender | NaturalBlender | BlendingStump | Tissue => &SOFT,
+        Blur => &BLUR,
+        GrainyBlender => &GRAINY,
+        BristleBlender => &BRISTLE,
+        BlendingKnife => &KNIFE,
+        TextureBlender => &TEXTURE,
+        HueBlender => &HUE,
+        WetBlender => &WET,
+        ColorMixer => &COLOR_MIXER,
+        PainterlyBlender => &PAINTERLY,
+        CombBlender => &COMB,
+        ScatterBlender => &SCATTER,
+        Sharpen => &SHARPEN,
+        Marbling => &MARBLING,
+        CrystalBlender => &CRYSTAL,
+        DitherBlender => &DITHER,
+        _ => return None,
+    })
+}
+
 /// The retouching tools share the Retouch set; each of its presets keeps its
 /// own tool.
 const RETOUCHING: [(DefaultBrushPreset, Tool); 3] = [

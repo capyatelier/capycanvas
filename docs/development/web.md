@@ -376,6 +376,7 @@ reloading its corrupted workspace and preference fixtures.
 | Photo files, packages and export | `--portable-photo`, `--package-view`, `--image-object-fixture`, `--export-metadata`, `--document-errors` |
 | Title bar | `--title-bar`, `--title-bar-state`, `--title-bar-feedback`, `--title-bar-overflow`, `--menu-labels`, `--compact-workspaces`, `--header-controls` |
 | Tool bubbles | `--tool-bubbles` |
+| Blender control profiles | `--blender-controls` |
 | Bubble menus, thumbnails and Zen keep/peek | `--bubble-release`, `--bubble-release-cold` |
 | Retained configuration and translated dialog layout | `--bubble-release-localization` |
 | Docking and drags | `--drag-pickup`, `--layout-drops`, `--column-stacks`, `--column-drops`, `--columns`, `--workspace-rendering`, `--workspace-constraints`, `--drawer-drag`, `--drawer-style` |

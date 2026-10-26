@@ -52,3 +52,18 @@ fn color_mixing_is_a_tool_option_of_mixing_brushes_kept_per_brush() {
     reopened.select_brush(blender).unwrap();
     assert_eq!(mixing_space(&reopened), ColorMixSpace::Oklab);
 }
+
+#[test]
+fn dither_hides_color_mixing_without_discarding_saved_choice() {
+    for platform in Platform::ALL {
+        let mut s = session(platform);
+        let preset = DefaultBrushPreset::DitherBlender as u32;
+        let mut editing = s.editing_state();
+        editing.tools.overrides.entry(preset).or_default().insert("color_mixing".into(), layer_core::ColorMixSpace::Classic as u8 as f32);
+        s.restore_editing(editing).unwrap();
+        s.select_brush(preset).unwrap();
+        assert!(!s.state.tool_actions.iter().any(|a| a.group() == Some(ToolActionGroup::ColorMixing)));
+        assert_eq!(s.engine.configured_brush().wet_mix.mix_space, layer_core::ColorMixSpace::Classic);
+        assert!(s.editing_state().tools.overrides[&preset].contains_key("color_mixing"));
+    }
+}

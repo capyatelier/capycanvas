@@ -693,7 +693,7 @@ fn brush_bubbles_come_out_selected_with_their_halo_and_taps_select_and_toggle_it
     tap(&mut s, id);
     assert_eq!(s.state.brush.preset, pencil);
     let open = view(&s, id);
-    let defaults = tool_settings::ring_defaults(s.engine.configured_brush(), &s.state.tool_settings);
+    let defaults = tool_settings::ring_defaults(s.state.brush.preset, s.engine.configured_brush(), &s.state.tool_settings);
     assert!(open.open && !defaults.is_empty());
     assert_eq!(open.halo, Some(halo_disc(defaults.len())));
     assert_eq!(open.rings.iter().map(|r| r.setting).collect::<Vec<_>>(), defaults);
@@ -753,7 +753,7 @@ fn clicking_a_tool_bubble_selects_and_opens_its_sliders_on_every_platform() {
             assert!(!view(&s, id).selected);
             let change = act(&mut s, BubbleAction::Tap { id, position: [0.; 2] }).unwrap();
             let selected = view(&s, id);
-            let defaults = tool_settings::ring_defaults(s.engine.configured_brush(), &s.state.tool_settings);
+            let defaults = tool_settings::ring_defaults(s.state.brush.preset, s.engine.configured_brush(), &s.state.tool_settings);
             assert!(selected.selected && selected.chooser.is_empty());
             assert!(!defaults.is_empty());
             assert_eq!(selected.rings.iter().map(|ring| ring.setting).collect::<Vec<_>>(), defaults, "{platform:?}/{source:?}");
@@ -919,7 +919,7 @@ fn chooser_picks_open_the_selected_tool_halo_on_every_platform() {
                 choose(&mut s, id, ContactPhase::Down, pick.center);
                 let change = act(&mut s, BubbleAction::Choose { id, phase: ContactPhase::Up, position: pick.center }).unwrap();
                 let selected = view(&s, id);
-                let defaults = tool_settings::ring_defaults(s.engine.configured_brush(), &s.state.tool_settings);
+                let defaults = tool_settings::ring_defaults(s.state.brush.preset, s.engine.configured_brush(), &s.state.tool_settings);
                 if let Some(brush) = pick.preview {
                     assert_eq!(s.state.brush.preset, brush);
                 } else {
@@ -2167,7 +2167,7 @@ fn dither_and_scatter_cell_size_is_a_localized_whole_pixel_log_slider() {
     for (preset, cell_id, default_spread, default_cell) in [(DefaultBrushPreset::DitherBlender, "dither_cell_size", 0.08, 4.), (DefaultBrushPreset::ScatterBlender, "scatter_cell_size", 0.2, 3.)] {
         let brush = layer_core::default_brush(preset);
         let english = Localizer::shared(UiLanguage::English);
-        let controls = tool_settings::controls(&brush, &english);
+        let controls = tool_settings::controls(preset as u32, &brush, &english);
         let cell = controls.iter().find(|c| c.id == cell_id).unwrap();
         let smooth = controls.iter().find(|c| c.id == "smoothing_strength").unwrap();
         let spread_index = controls.iter().position(|c| c.id == "spread").unwrap();
@@ -2177,7 +2177,7 @@ fn dither_and_scatter_cell_size_is_a_localized_whole_pixel_log_slider() {
         assert_eq!(cell.group_id, spread.group_id);
         assert_eq!(spread.numeric.mapping, NumericMapping::Log);
         assert_eq!(spread.numeric.log_offset, smooth.numeric.log_offset);
-        let other = tool_settings::controls(&layer_core::default_brush(DefaultBrushPreset::CrystalBlender), &english);
+        let other = tool_settings::controls(DefaultBrushPreset::CrystalBlender as u32, &layer_core::default_brush(DefaultBrushPreset::CrystalBlender), &english);
         assert_eq!(other.iter().find(|c| c.id == "spread").unwrap().numeric.mapping, NumericMapping::Linear);
         for (position, expected) in [(0., 0.), (0.5, 0.09), (1., 1.)] {
             let resolved = spread.numeric.resolve(0., NumericOperation::Position { position }).unwrap().value;
@@ -2216,7 +2216,7 @@ fn dither_and_scatter_cell_size_is_a_localized_whole_pixel_log_slider() {
         assert!(tool_settings::edit(&crystal, cell.id, 2., &english).is_err());
         assert_eq!(tool_settings::edit(&crystal, "cell_size", 0.3, &english).unwrap().blender.scale, 0.3);
         for language in UiLanguage::ALL {
-            let localized = tool_settings::controls(&brush, &Localizer::shared(language));
+            let localized = tool_settings::controls(preset as u32, &brush, &Localizer::shared(language));
             let localized = localized.iter().find(|c| c.id == cell.id).unwrap();
             assert_eq!(localized.numeric, cell.numeric);
             assert_eq!(localized.value, cell.value);
@@ -2235,11 +2235,11 @@ fn dither_and_scatter_bubbles_expose_cell_size_and_preserve_edits_on_every_platf
             let bubble = view(&s, id);
             assert!(bubble.open);
             assert_eq!(s.engine.configured_brush().blender.reach, default_spread);
-            assert_eq!(bubble.rings.iter().map(|r| r.setting).collect::<Vec<_>>(), ["spread", cell_id]);
+            assert_eq!(bubble.rings.iter().map(|r| r.setting).collect::<Vec<_>>(), if preset == DefaultBrushPreset::ScatterBlender { vec!["spread", cell_id, "grit"] } else { vec!["spread", cell_id] });
             let spread = bubble.rings.iter().find(|r| r.setting == "spread").unwrap();
-            assert!(spread.arc.point(0.5)[0] < 0.);
+            if preset == DefaultBrushPreset::DitherBlender { assert!(spread.arc.point(0.5)[0] < 0.); }
             let ring = bubble.rings.iter().find(|r| r.setting == cell_id).unwrap().clone();
-            assert!(ring.arc.point(0.5)[0] > 0.);
+            if preset == DefaultBrushPreset::DitherBlender { assert!(ring.arc.point(0.5)[0] > 0.); }
             for (fraction, expected) in [(0., 0.), (0.5, 0.09), (1., 1.)] {
                 let position = spread.arc.point(fraction);
                 act(&mut s, BubbleAction::Ring { id, phase: ContactPhase::Down, position }).unwrap();
@@ -2282,5 +2282,100 @@ fn dither_and_scatter_bubbles_expose_cell_size_and_preserve_edits_on_every_platf
             assert_eq!(s.engine.configured_brush().blender.reach, default_spread);
             assert_eq!(value(&s), default_cell);
         }
+    }
+}
+
+fn blender_profiles() -> Vec<(DefaultBrushPreset, &'static [&'static str])> {
+    use DefaultBrushPreset::*;
+    vec![
+        (Smudge, &["pull", "spread"]), (NaturalBlender, &["pull", "spread"]),
+        (SoftBlender, &["pull", "spread"]), (BlendingStump, &["pull", "spread"]), (Tissue, &["pull", "spread"]),
+        (Blur, &["spread"]), (GrainyBlender, &["spread", "grain_depth"]),
+        (BristleBlender, &["pull", "streaks", "spread"]), (BlendingKnife, &["pull", "streaks"]),
+        (TextureBlender, &["texture_kept", "detail_size", "spread"]), (HueBlender, &["blend_lightness", "spread"]),
+        (WetBlender, &["pull", "dilution", "average_pickup"]), (ColorMixer, &["pull", "average_pickup", "persistence"]),
+        (PainterlyBlender, &["spread", "stretch"]), (CombBlender, &["edge_keeping", "spread"]),
+        (ScatterBlender, &["spread", "scatter_cell_size", "grit"]), (Sharpen, &["sharpness", "spread"]),
+        (Marbling, &["swirl", "swirl_size"]), (CrystalBlender, &["cell_size", "stretch", "spread"]),
+        (DitherBlender, &["spread", "dither_cell_size"]),
+    ]
+}
+
+#[test]
+fn blender_profiles_match_primary_controls_and_default_bubbles_on_every_platform() {
+    for platform in Platform::ALL {
+        for (preset, expected) in blender_profiles() {
+            let mut s = session(platform);
+            s.set_viewport(VIEW, [1200, 900]).unwrap();
+            let id = take(&mut s, brush(preset), FAR);
+            let primary: Vec<_> = s.state.tool_settings.iter().filter(|c| c.group_id.is_empty() && !matches!(c.id, "size" | "flow" | "strength" | "smoothing_strength")).map(|c| c.id).collect();
+            assert_eq!(primary, expected, "{platform:?}/{preset:?}");
+            assert_eq!(view(&s, id).rings.iter().map(|r| r.setting).collect::<Vec<_>>(), expected, "{platform:?}/{preset:?}");
+            let grouped: Vec<_> = s.state.tool_settings.iter().filter(|c| !c.group_id.is_empty()).map(|c| c.group_id).collect();
+            if let (Some(blender), Some(tip)) = (grouped.iter().position(|id| *id == "tool-setting-group-blender"), grouped.iter().position(|id| *id == "tool-setting-group-tip")) {
+                assert!(blender < tip, "{platform:?}/{preset:?}");
+            }
+            if s.engine.configured_brush().execution == layer_core::BrushExecution::Smudge { assert!(!s.state.tool_settings.iter().any(|c| c.id == "paint")); }
+            for setting in expected {
+                act(&mut s, BubbleAction::ToggleRingSetting { brush: preset as u32, setting: (*setting).into() }).unwrap();
+            }
+            assert!(view(&s, id).rings.is_empty(), "explicit empty membership is retained");
+            let workspace = s.state.workspace.clone();
+            let mut restored = session(platform);
+            restored.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(workspace) }).unwrap();
+            restored.dispatch(UiAction::SelectBrush { id: preset as u32 }).unwrap();
+            if !view(&restored, id).open { tap(&mut restored, id); }
+            assert!(view(&restored, id).rings.is_empty(), "{platform:?}/{preset:?}");
+            act(&mut s, BubbleAction::ToggleRingSetting { brush: preset as u32, setting: "size".into() }).unwrap();
+            restored.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(s.state.workspace.clone()) }).unwrap();
+            restored.dispatch(UiAction::SelectBrush { id: preset as u32 }).unwrap();
+            if !view(&restored, id).open { tap(&mut restored, id); }
+            assert_eq!(view(&restored, id).rings.iter().map(|r| r.setting).collect::<Vec<_>>(), ["size"], "{platform:?}/{preset:?}: custom membership is retained");
+        }
+    }
+}
+
+#[test]
+fn blender_hidden_pickup_and_persistence_values_survive_profile_projection_and_restore() {
+    for platform in Platform::ALL {
+        let mut s = session(platform);
+        s.dispatch(UiAction::SelectBrush { id: DefaultBrushPreset::WetBlender as u32 }).unwrap();
+        for (id, value) in [("average_pickup", 0.5), ("persistence", 2.), ("average_pickup", 0.)] {
+            s.dispatch(UiAction::SetToolSetting { id: id.into(), value }).unwrap();
+        }
+        assert!(!s.state.tool_settings.iter().any(|c| c.id == "persistence"));
+        assert_eq!(s.engine.configured_brush().wet_mix.stretch, 2.);
+        let saved = serde_json::to_string(&s.editing_state()).unwrap();
+        let mut restored = session(platform);
+        restored.restore_editing(serde_json::from_str(&saved).unwrap()).unwrap();
+        restored.dispatch(UiAction::SelectBrush { id: DefaultBrushPreset::WetBlender as u32 }).unwrap();
+        assert_eq!(restored.engine.configured_brush().wet_mix.stretch, 2.);
+        restored.dispatch(UiAction::SetToolSetting { id: "average_pickup".into(), value: 0.5 }).unwrap();
+        assert_eq!(restored.state.tool_settings.iter().find(|c| c.id == "persistence").unwrap().value, 2.);
+        restored.set_viewport(VIEW, [1200, 900]).unwrap();
+        let id = take(&mut restored, brush(DefaultBrushPreset::WetBlender), FAR);
+        for setting in ["persistence", "size", "hardness"] {
+            act(&mut restored, BubbleAction::ToggleRingSetting { brush: DefaultBrushPreset::WetBlender as u32, setting: setting.into() }).unwrap();
+        }
+        restored.dispatch(UiAction::SetToolSetting { id: "average_pickup".into(), value: 0. }).unwrap();
+        assert!(act(&mut restored, BubbleAction::ToggleRingSetting { brush: DefaultBrushPreset::WetBlender as u32, setting: "angle".into() }).is_err(), "hidden stored memberships count toward six arcs");
+        act(&mut restored, BubbleAction::ToggleRingSetting { brush: DefaultBrushPreset::WetBlender as u32, setting: "hardness".into() }).unwrap();
+        restored.dispatch(UiAction::SetToolSetting { id: "average_pickup".into(), value: 0.5 }).unwrap();
+        if view(&restored, id).rings.is_empty() { tap(&mut restored, id); }
+        assert_eq!(view(&restored, id).rings.iter().map(|r| r.setting).collect::<Vec<_>>(), ["pull", "dilution", "average_pickup", "persistence", "size"], "hidden membership survives editing another arc in its original order");
+        assert_eq!(restored.engine.configured_brush().wet_mix.stretch, 2.);
+        restored.dispatch(UiAction::ResetToolSetting { id: "persistence".into() }).unwrap();
+        assert_eq!(restored.engine.configured_brush().wet_mix.stretch, layer_core::default_brush(DefaultBrushPreset::WetBlender).wet_mix.stretch);
+        let mut hidden = restored.editing_state();
+        hidden.tools.overrides.insert(DefaultBrushPreset::Blur as u32, [("pull".into(), 0.37), ("paint".into(), 0.23), ("dilution".into(), 0.41)].into());
+        restored.restore_editing(hidden).unwrap();
+        restored.dispatch(UiAction::SelectBrush { id: DefaultBrushPreset::Blur as u32 }).unwrap();
+        assert!(!restored.state.tool_settings.iter().any(|c| matches!(c.id, "pull" | "paint" | "dilution")));
+        assert_eq!(restored.engine.configured_brush().wet_mix.pull, 0.37);
+        assert_eq!(restored.engine.configured_brush().wet_mix.amount_of_paint, 0.23);
+        assert_eq!(restored.engine.configured_brush().wet_mix.dilution, 0.41);
+        restored.dispatch(UiAction::SelectBrush { id: DefaultBrushPreset::MixingBrush as u32 }).unwrap();
+        let primary: Vec<_> = restored.state.tool_settings.iter().filter(|c| c.group_id.is_empty() && !matches!(c.id, "size" | "flow" | "strength" | "smoothing_strength")).map(|c| c.id).collect();
+        assert_eq!(primary, ["paint", "pull"]);
     }
 }

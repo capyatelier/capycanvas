@@ -977,7 +977,7 @@ fn toolbar_field_icons_cover_published_settings_and_exist_in_the_bank() {
     let localizer = Localizer::shared(UiLanguage::English);
     let mut fields = Vec::new();
     for brush in brush_catalog() {
-        fields.extend(tool_settings::controls(&layer_core::default_brush(
+        fields.extend(tool_settings::controls(brush.id, &layer_core::default_brush(
             tools::preset(brush.id).unwrap(),
         ), &localizer));
     }

@@ -56,7 +56,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let blocker = match *action {
             UiAction::SelectBrush { id } => tools::preset(id).ok().and_then(|preset| {
                 let setting = self.tools.path_blocker(preset)?;
-                crate::tool_settings::controls(&self.tools.brush(preset), l).into_iter().find(|control| control.id == setting).map(|control| control.label)
+                crate::tool_settings::controls(preset as u32, &self.tools.brush(preset), l).into_iter().find(|control| control.id == setting).map(|control| control.label)
             }),
             _ => None,
         };

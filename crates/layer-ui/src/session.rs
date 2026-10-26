@@ -2739,7 +2739,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             CommandId::ZoomIn => self.navigation_idle() && self.state.camera.zoom < MAX_ZOOM,
             CommandId::ZoomOut => self.navigation_idle() && self.state.camera.zoom > MIN_ZOOM,
             CommandId::ColorMixOklab | CommandId::ColorMixLinear | CommandId::ColorMixClassic => {
-                tool_settings::mixes_color(self.engine.configured_brush())
+                tool_settings::color_mixing_visible(self.engine.configured_brush())
             }
             CommandId::EraseTouchedPart | CommandId::EraseWholePaths | CommandId::EraseToIntersection => self.vector_erasing_layer(false).is_some(),
             CommandId::ScaleOutlineWidths => self.selected_vector_items().is_some(),
@@ -2769,7 +2769,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             || (id == CommandId::MoveLeaveCopy && self.operation.leave_copy)
             || tool_settings::color_mixing(id).is_some_and(|space| {
                 let brush = self.engine.configured_brush();
-                tool_settings::mixes_color(brush) && brush.wet_mix.mix_space == space
+                tool_settings::color_mixing_visible(brush) && brush.wet_mix.mix_space == space
             })
             || blending::blend_space(id).is_some_and(|space| document.composition().blend == space)
             || matches!((id, self.layer_interaction.tool.region()),
@@ -3717,7 +3717,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                 } else if self.layer_interaction.tool.region().is_some() && id != "opacity" {
                     region_tools::RegionTools::default().controls(&self.state.localization)
                 } else {
-                    tool_settings::controls(&layer_core::default_brush(tools::preset(self.state.brush.preset)?), &self.state.localization)
+                    let brush = layer_core::default_brush(tools::preset(self.state.brush.preset)?);
+                    let value = tool_settings::value(&brush, &id).ok_or("This setting has no default")?;
+                    return self.dispatch(UiAction::SetToolSetting { id, value });
                 };
                 let value = defaults.iter().find(|f| f.id == id)
                     .ok_or("This setting has no default")?.value;
@@ -5845,7 +5847,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             let tool = self.layer_interaction.tool;
             let moving = tool == LayerCanvasTool::Move;
             let guides = matches!(tool, LayerCanvasTool::Ruler { .. }) || (moving && self.selected_ruler().is_some());
-            let mixing = tool == LayerCanvasTool::Paint && tool_settings::mixes_color(self.engine.configured_brush());
+            let mixing = tool == LayerCanvasTool::Paint && tool_settings::color_mixing_visible(self.engine.configured_brush());
             let editing_points = tool == LayerCanvasTool::EditPoints && self.selected_vector_items().is_some();
             let arranging = moving && self.selected_vector_items().is_some();
             let turning = arranging.then_some([CommandId::TransformFlipHorizontal, CommandId::TransformFlipVertical, CommandId::TransformRotateLeft, CommandId::TransformRotateRight]);
@@ -5904,10 +5906,10 @@ impl<R: CanvasRenderer> UiSession<R> {
         } else if self.operation.active() {
             self.transform_controls()
         } else if self.layer_interaction.tool == LayerCanvasTool::Paint {
-            tool_settings::controls(self.engine.configured_brush(), &self.state.localization)
+            tool_settings::controls(self.state.brush.preset, self.engine.configured_brush(), &self.state.localization)
                 .into_iter().filter(|control| (control.id != "smoothing_strength" || self.smoothing_available()) && self.applies_to_paths(control.id)).collect()
         } else if let LayerCanvasTool::Figure { shape, paint } = self.layer_interaction.tool {
-            tool_settings::controls(self.engine.configured_brush(), &self.state.localization)
+            tool_settings::controls(self.state.brush.preset, self.engine.configured_brush(), &self.state.localization)
                 .into_iter()
                 .filter(|c| c.id == "opacity" || (c.id == "size" && paint != FigurePaint::Fill))
                 .map(|mut c| {
@@ -5929,7 +5931,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             if !fill && !self.selection_tools.options.antialias { controls.retain(|c| c.id != "smoothing"); }
             if fill {
                 controls.extend(
-                    tool_settings::controls(self.engine.configured_brush(), &self.state.localization)
+                    tool_settings::controls(self.state.brush.preset, self.engine.configured_brush(), &self.state.localization)
                         .into_iter()
                         .filter(|c| c.id == "opacity")
                         .map(ToolSetting::ungrouped),
@@ -5940,7 +5942,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.layer_interaction.tool,
             LayerCanvasTool::Gradient { .. } | LayerCanvasTool::LassoFill
         ) {
-            tool_settings::controls(self.engine.configured_brush(), &self.state.localization)
+            tool_settings::controls(self.state.brush.preset, self.engine.configured_brush(), &self.state.localization)
                 .into_iter()
                 .filter(|c| c.id == "opacity")
                 .map(ToolSetting::ungrouped)

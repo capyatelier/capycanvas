@@ -248,6 +248,7 @@ try {
     [process.argv.includes('--bubble-release-cold'), () => checkBubbleReleaseColdStartup({call,evaluate,settle}), checkErrors],
     [process.argv.includes('--bubble-release-localization'), async () => (await import('./bubble-release-localization-journey.test.mjs')).checkBubbleReleaseLocalization({call,evaluate,settle}), checkErrors],
     [process.argv.includes('--panel-controls'), () => checkPanelControls({call,evaluate,settle}), checkErrors],
+    [process.argv.includes('--blender-controls'), async () => (await import('./blender-controls.test.mjs')).checkBlenderControls({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--zoom-tool-settings"), () => checkZoomToolSettings({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--wheel-navigation"), () => checkWheelNavigation({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--filter-investigation"), async () => {

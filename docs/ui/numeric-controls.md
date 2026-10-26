@@ -107,6 +107,18 @@ Their Spread uses the same curve over its percentage range. Tool Settings
 places Cell size immediately below Spread.
 Control schema comparisons include the logarithmic offset as part of the slider curve.
 
+Preset control profiles in `layer-ui::tool_settings::profiles` assign ordered
+stable setting IDs to primary positions or named sections. The shared preset
+catalog selects the profile independently of edited numeric values. Primary
+positions follow Size and Strength and supply the default bubble arcs. Secondary
+Blender controls precede Tip; Smoothing follows the primary controls.
+Common control definitions retain their field bindings, labels and numeric
+constraints. Applicability filters the presented controls independently of
+stored-value access, validation and reset defaults. For example, Persistence
+appears only when Average pickup is nonzero, while its stored value survives
+being hidden. Profiles are built-in UI metadata; saved numeric overrides and
+customized bubble selections retain their existing stable IDs.
+
 `NumericOperation` handles formatting, stepping, value scrubbing with its
 `fine` flag, native values, normalized slider positions, dial points and typed
 expressions. Sliders

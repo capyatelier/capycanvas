@@ -624,6 +624,10 @@ Preserve user names and document contents across language changes. Follow the
 
 ## UI and input
 
+- **Blender controls.** Shared `blender_profiles_` and `blender_hidden_pickup_`
+  tests cover every Blend preset on every platform, primary/default-arc agreement, secondary section order,
+  conditional settings and retained overrides. GTK `native_blender_control_profiles`
+  and Web `--blender-controls` exercise every preset in light and dark themes.
 - **Tool bubbles.** GTK `native_tool_bubbles`, Web `--tool-bubbles`, Android
   `AndroidToolBubblesTest#nativeBubblesAcrossThemesAndDevices` and Windows
   `tool-bubbles` fixtures exercise native

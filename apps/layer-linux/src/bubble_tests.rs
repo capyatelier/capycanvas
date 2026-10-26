@@ -1327,10 +1327,10 @@ fn cell_size_bubble(preset: layer_core::DefaultBrushPreset, cell_id: &str, name:
             assert!(bubble.selected && bubble.open);
             assert_eq!(ui_session(&d.w).engine().configured_brush().blender.reach, default_spread);
             assert_eq!(ui_session(&d.w).engine().configured_brush().blender.cell_size, default_cell);
-            assert_eq!(bubble.rings.iter().map(|ring| ring.setting).collect::<Vec<_>>(), ["spread", cell_id]);
+            assert_eq!(bubble.rings.iter().map(|ring| ring.setting).collect::<Vec<_>>(), if preset == layer_core::DefaultBrushPreset::ScatterBlender { vec!["spread", cell_id, "grit"] } else { vec!["spread", cell_id] });
             let ring = bubble.rings.iter().find(|ring| ring.setting == cell_id).unwrap();
             let spread = bubble.rings.iter().find(|ring| ring.setting == "spread").unwrap();
-            assert!(spread.arc.point(0.5)[0] < 0. && ring.arc.point(0.5)[0] > 0.);
+            if preset == layer_core::DefaultBrushPreset::DitherBlender { assert!(spread.arc.point(0.5)[0] < 0. && ring.arc.point(0.5)[0] > 0.); }
             let at = center(&d, id);
             let spread_arc = |fraction| { let point = spread.arc.point(fraction); [at[0] + point[0], at[1] + point[1]] };
             for (fraction, expected) in [(0.5, 0.09), (1., 1.), (0., 0.)] {
@@ -1352,6 +1352,63 @@ fn cell_size_bubble(preset: layer_core::DefaultBrushPreset, cell_id: &str, name:
             stroke(&mut d, device, &[arc(0.8), arc(0.)]);
             assert_eq!(value(&d), 1., "{theme:?}/{device}: minimum cell size");
             capture(&mut d, &format!("{name}-cell-size-{theme:?}-{device}-1").to_lowercase());
+        }
+    }
+    assert!(state(&d.w).host_error.is_none());
+    d.finish();
+}
+
+fn native_blender_profiles() -> Vec<(layer_core::DefaultBrushPreset, &'static [&'static str])> {
+    use layer_core::DefaultBrushPreset::*;
+    vec![
+        (Smudge, &["pull", "spread"]), (NaturalBlender, &["pull", "spread"]),
+        (SoftBlender, &["pull", "spread"]), (BlendingStump, &["pull", "spread"]), (Tissue, &["pull", "spread"]),
+        (Blur, &["spread"]), (GrainyBlender, &["spread", "grain_depth"]),
+        (BristleBlender, &["pull", "streaks", "spread"]), (BlendingKnife, &["pull", "streaks"]),
+        (TextureBlender, &["texture_kept", "detail_size", "spread"]), (HueBlender, &["blend_lightness", "spread"]),
+        (WetBlender, &["pull", "dilution", "average_pickup"]), (ColorMixer, &["pull", "average_pickup", "persistence"]),
+        (PainterlyBlender, &["spread", "stretch"]), (CombBlender, &["edge_keeping", "spread"]),
+        (ScatterBlender, &["spread", "scatter_cell_size", "grit"]), (Sharpen, &["sharpness", "spread"]),
+        (Marbling, &["swirl", "swirl_size"]), (CrystalBlender, &["cell_size", "stretch", "spread"]),
+        (DitherBlender, &["spread", "dither_cell_size"]),
+    ]
+}
+
+
+#[test]
+#[ignore = "private display: workspace-motion.sh gtk --native-test=native_blender_control_profiles"]
+fn native_blender_control_profiles() {
+    let mut d = Driver::new("art.capycanvas.BlenderControlProfiles");
+    for theme in [Theme::Light, Theme::Dark] {
+        for (preset, expected) in native_blender_profiles() {
+            let mut workspace = WorkspaceState { layout: WorkspacePreset::Painter.layout(Platform::Gtk), ..WorkspaceState::default() };
+            workspace.layout.set_panel_visible(Panel::ToolSettings, true).unwrap();
+            workspace.layout.move_panel([1600., 1000.], Panel::ToolSettings, DockTarget::Edge { edge: Edge::Right, outer: false }).unwrap();
+            d.w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(workspace) });
+            d.w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+            d.w.dispatch(UiAction::SelectBrush { id: preset as u32 });
+            pump(150);
+            let settings = state(&d.w).tool_settings;
+            let primary: Vec<_> = settings.iter().filter(|c| c.group_id.is_empty() && !matches!(c.id, "size" | "flow" | "strength" | "smoothing_strength")).map(|c| c.id).collect();
+            assert_eq!(primary, expected, "{theme:?}/{preset:?}");
+            let panel = d.w.panel_widget(Panel::ToolSettings);
+            let rendered: Vec<_> = widgets(&panel).filter(|widget| widget.widget_name().starts_with("tool-setting-") && widget.is::<crate::number_control::NumberControl>()).map(|widget| widget.widget_name().trim_start_matches("tool-setting-").to_owned()).collect();
+            assert_eq!(rendered, settings.iter().map(|c| c.id).collect::<Vec<_>>(), "{theme:?}/{preset:?}: native panel order");
+            let spot = canvas_spot(&d, 0.4, 0.5);
+            let id = take(&mut d, BubbleGrab::Variant { variant: ToolVariant::BrushPreset { id: preset as u32 } }, spot);
+            let bubble = find_id(&d, id).unwrap();
+            assert_eq!(bubble.rings.iter().map(|r| r.setting).collect::<Vec<_>>(), expected, "{theme:?}/{preset:?}: default bubble");
+            if matches!(preset, layer_core::DefaultBrushPreset::BristleBlender | layer_core::DefaultBrushPreset::GrainyBlender) {
+                capture(&mut d, &format!("blender-profile-initial-{preset:?}-{theme:?}").to_lowercase());
+            }
+            let ring = &bubble.rings[0];
+            let at = center(&d, id);
+            let arc = |fraction| { let point = ring.arc.point(fraction); [at[0] + point[0], at[1] + point[1]] };
+            stroke(&mut d, "mouse", &[arc(0.2), arc(0.6)]);
+            let actual = state(&d.w).tool_settings.into_iter().find(|c| c.id == ring.setting).unwrap();
+            let target = actual.numeric.resolve(0., NumericOperation::Position { position: 0.6 }).unwrap().value as f32;
+            assert!((actual.value - target).abs() < 0.011, "{theme:?}/{preset:?}: native halo adjustment");
+            capture(&mut d, &format!("blender-profile-{preset:?}-{theme:?}").to_lowercase());
         }
     }
     assert!(state(&d.w).host_error.is_none());

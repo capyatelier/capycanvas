@@ -132,9 +132,17 @@ everything rests.
 - **Which settings:** each brush starts with its primary settings. Its hold menu
   lists every Tool Settings row as a check item, at most six checked. The choice
   belongs to the brush and is part of the workspace.
-  Dither and Scatter start with Spread on the left and Cell size on the right. Cell size
-  uses whole pixels from 1 to 50 and starts at 4 px. Both sliders follow
-  Smoothing's normalized logarithmic curve.
+  Blend presets share one control profile with Tool Settings: the controls
+  immediately below Strength are also their default arcs, in the same order.
+  See the [blender control table](../internals/brushes.md#blender-controls).
+  Dither starts with Spread and Cell size; Scatter adds Grit as a third arc.
+  Their Cell size uses whole pixels from 1 to 50 and starts at 4 px for Dither
+  and 3 px for Scatter. Spread and Cell size follow Smoothing's normalized
+  logarithmic curve.
+  Customized arc selections keep their saved order. A hidden conditional
+  setting keeps its saved selection and value and returns when applicable;
+  it still occupies one of the six saved slots. An explicitly empty selection
+  stays empty rather than returning to the defaults.
 - **Chooser:** a dial rings its media (or, for tools like Select, its tools) in
   44 px circles 84 px out, from the top clockwise. The current medium is
   highlighted with its name, set radially outward beside its icon (as wide as
