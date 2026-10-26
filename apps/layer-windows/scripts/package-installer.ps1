@@ -49,8 +49,9 @@ Write-PackagedPayload $portable.source $payload $manifest $packaging {
 $label='capycanvas-'+$manifest.version+'-windows-'+$manifest.architecture+$(if($TestIdentity){'-installer-test'}else{'-setup'})
 if($manifest.development){$label+='-development'}
 $installer=Join-Path $run ($label+'.exe');$repeat=Join-Path $run 'repeat.exe'
+$identityDefines=@(if($TestIdentity){'-DTEST_IDENTITY'})
 function Build-Installer([string]$Path,[string[]]$Defines){
-    & $makensis -V2 -NOCD "-DARCHITECTURE=$($manifest.architecture)" "-DPAYLOAD=$payload" "-DOUTFILE=$Path" "-DVERSION=$Version" "-DNAME=$($identity.name)" "-DKEY=$($identity.key)" "-DPROGID=$($identity.progid)" @Defines (Join-Path $PSScriptRoot 'installer.nsi') *> (Join-Path $run ([IO.Path]::GetFileName($Path)+'.log'))
+    & $makensis -V2 -NOCD "-DARCHITECTURE=$($manifest.architecture)" "-DPAYLOAD=$payload" "-DOUTFILE=$Path" "-DVERSION=$Version" "-DNAME=$($identity.name)" "-DKEY=$($identity.key)" "-DPROGID=$($identity.progid)" @identityDefines @Defines (Join-Path $PSScriptRoot 'installer.nsi') *> (Join-Path $run ([IO.Path]::GetFileName($Path)+'.log'))
     if($LASTEXITCODE -ne 0){throw "NSIS failed; inspect $run"}
 }
 foreach($path in @($installer,$repeat)){Build-Installer $path @()}

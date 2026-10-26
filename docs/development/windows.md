@@ -605,12 +605,12 @@ and [Visual C++ redistribution guidance](https://learn.microsoft.com/en-us/cpp/w
 ### Installer
 
 Convert a portable build into a per-user setup program for direct downloads,
-then install it, check that a `.capy` drawing starts the installed app, and
-uninstall it on an unlocked desktop:
+then install it, start the installed app with a `.capy` drawing, and uninstall it
+on a private desktop:
 
 ```powershell
 ./apps/layer-windows/scripts/package-installer.ps1 -PortableResultFile <portable-result.json> -TestIdentity
-./apps/layer-windows/scripts/test-installer.ps1 -ResultFile <installer-result.json>
+./apps/layer-windows/scripts/test-desktop.ps1 -Script ./apps/layer-windows/scripts/test-installer.ps1 -Parameters @{ResultFile='<installer-result.json>'}
 ```
 
 [`installer.nsi`](../../apps/layer-windows/scripts/installer.nsi) installs into
@@ -625,10 +625,12 @@ LZMA module, which is under the Common Public License. It builds the setup
 program twice and requires identical bytes, and versions it like the MSIX.
 `-TestIdentity` gives the program, uninstall entry and file type a separate name
 so a test never replaces an installed app; `test-installer.ps1` refuses any
-other installer. It checks the installed files against the manifest, the Apps
-entry, shortcut and `.capy` association, that setup refuses to replace a running
-app and upgrades a closed one in place, and that uninstalling leaves nothing
-behind. Opening the drawing itself needs a hardware GPU;
+other installer. The test identity preserves the default app for `.capy` files.
+The check verifies the installed files, Apps entry, shortcut and registered file
+type command, starts the test app directly, checks that setup refuses to replace
+a running app and reinstalls a closed one, then uninstalls it. This same-version
+replacement does not verify updating from the preceding release.
+Opening the drawing itself needs a hardware GPU;
 `exercise-file-activation.ps1` covers it. After the repeat-build check,
 `-SignArguments` builds the setup program once more with NSIS signing its
 uninstaller, then signs the setup program, with the same `signtool` values as the
@@ -774,7 +776,8 @@ drag. Thin ink can leave no unambiguous body target at Fit.
 `exercise-header.ps1 -Journey zen` checks retained Capy button and glyph bounds
 across workspaces and sizes in both themes. It also checks the docked toolbar's
 Show in Zen mode toggle, retained native controls, edge touch swipe peek and
-outside-touch dismissal.
+outside-touch dismissal. It changes themes while in Zen, checks that Escape
+closes command search while keeping Zen, then that the next Escape leaves Zen.
 Use `-Journey zen-workspace` for only the toolbar and edge touch checks in both
 themes, including switches through Sketch, Photo and Paint with arranged native
 Histogram controls in Photo.
@@ -923,6 +926,10 @@ before launching the app or sending input. Repeat with `-Theme light`. Its
 180-second wait checks completion of requested shader preparation, not preparation
 of every brush. Later selections exercise first-use preparation and exact history;
 these checks do not replace startup deadlines or performance measurements.
+Use `-PresetIds <ids>` for selected preset journeys with the same pixel and
+history assertions. That selection omits the separate Liquify Adjust/Reset tail;
+the results list the presets actually checked. Allocate the outer desktop-runner
+timeout for the selected cases without changing their functional deadlines.
 
 `exercise-canvas-editing.ps1 -Executable <path> -Theme dark` checks raster selection
 and transform previews with mouse and pen. Selecting Pen accepts the nonzero

@@ -506,7 +506,8 @@ function Check-Narrow {
 }
 
 function Set-ZenTheme([string]$Theme) {
-    & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'edit';Invoke 'settings'
+    (Control 'drawing-canvas').SetFocus()
+    [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),[uint16]0xBC)
     $dialog=Control 'Preferences' -Name -Type ([System.Windows.Automation.ControlType]::Window)
     (Control 'Color theme' -Name -Type ([System.Windows.Automation.ControlType]::ComboBox)).GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
     (Control $Theme -Name -Type ([System.Windows.Automation.ControlType]::ListItem)).GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
@@ -548,6 +549,11 @@ function Check-ZenToolbar([string]$Theme) {
     Wait-Until {(Model).chrome_hidden -and (Model).state.workspace.zen_mode -and (Find 'ribbon-grip-toolbar' -Visible)} 'Show in Zen mode hid the native toolbar'
     if([string]::Join(',', (Control 'ribbon-grip-toolbar').GetRuntimeId()) -ne $identity){throw 'Show in Zen mode replaced the retained native toolbar'}
     Capture ('zen-toolbar-kept-'+$Theme) -WithModel
+    $otherTheme=if($Theme -eq 'Dark'){'Light'}else{'Dark'}
+    foreach($choice in @($otherTheme,$Theme)){
+        Set-ZenTheme $choice
+        Wait-Until {(Model).chrome_hidden -and (Model).state.workspace.zen_mode -and (Find 'ribbon-grip-toolbar' -Visible)} 'Changing theme revealed chrome or hid the kept Zen toolbar'
+    }
     Toggle-ZenToolbar
     Wait-Until {(Model).chrome_hidden -and !(ToolbarGroup).zen_kept -and !(Find 'ribbon-grip-toolbar' -Visible)} 'Unchecking Show in Zen mode kept the native toolbar visible'
     $y=$group.bounds.y+$group.bounds.height/2
@@ -560,10 +566,15 @@ function Check-ZenToolbar([string]$Theme) {
     $x=[int]($canvas.Left+$canvas.Width*.6);$y=[int]($canvas.Top+$canvas.Height*.6)
     [CapyRowPointer]::Down('touch',$x,$y);[CapyRowPointer]::Up()
     Wait-Until {(Model).chrome_hidden -and !(ToolbarGroup).zen_kept -and !(Find 'ribbon-grip-toolbar' -Visible)} 'Outside touch did not hide the peeked toolbar'
-    (Control 'drawing-canvas').SetFocus();[CapyRowPointer]::Key([uint32]$review.Id,0x09)
-    Wait-Until {!(Model).state.workspace.zen_mode -and (Find 'ribbon-grip-toolbar' -Visible)} 'Zen toolbar journey did not restore ordinary chrome'
+    (Control 'drawing-canvas').SetFocus()
+    [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),[uint16]0x4B)
+    Wait-Until {(Find 'command-search' -Visible) -and (Control 'command-search-query').Current.HasKeyboardFocus -and (Model).state.workspace.zen_mode} 'Command search did not open in Zen'
+    [CapyRowPointer]::Key([uint32]$review.Id,0x1B)
+    Wait-Until {!(Find 'command-search' -Visible) -and !(Search-State) -and (Model).chrome_hidden -and (Model).state.workspace.zen_mode} 'One Escape did not close only command search in Zen'
+    (Control 'drawing-canvas').SetFocus();[CapyRowPointer]::Key([uint32]$review.Id,0x1B)
+    Wait-Until {!(Model).chrome_hidden -and !(Model).state.workspace.zen_mode -and (Find 'ribbon-grip-toolbar' -Visible)} 'Escape did not leave Zen and restore ordinary chrome'
     if((Model).state.document_file.modified){throw 'Zen toolbar and edge swipe edited the drawing'}
-    Write-Output "PASS $Theme Show in Zen mode toggle, retained toolbar, native edge touch peek and outside dismissal"
+    Write-Output "PASS $Theme Show in Zen mode toggle, retained toolbar, theme changes, native edge touch peek, outside dismissal and single-action Escape"
 }
 
 function Check-ZenMatrix {
@@ -667,7 +678,7 @@ try {
         else{foreach($theme in @('Dark','Light')){Set-ZenTheme $theme;foreach($workspaceKind in @('painter','photographer','illustrator')){Use-ZenWorkspace $workspaceKind};Check-ZenToolbar $theme}}
         & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Close -DiscardUnsaved
         if((Get-Item -LiteralPath $stderr).Length){throw 'Native stderr requires inspection'}
-        @{journey=$Journey;zen_native_button_and_glyph_bounds=if($Journey -eq 'zen'){'passed'}else{'outside scoped journey'};cases=if($Journey -eq 'zen'){22}else{0};zen_toolbar_visibility_and_retention='passed';zen_edge_touch_peek_and_outside_dismissal='passed';toolbar_themes=@('dark','light')}|ConvertTo-Json
+        @{journey=$Journey;zen_native_button_and_glyph_bounds=if($Journey -eq 'zen'){'passed'}else{'outside scoped journey'};cases=if($Journey -eq 'zen'){22}else{0};zen_toolbar_visibility_and_retention='passed';zen_edge_touch_peek_and_outside_dismissal='passed';zen_retheme='passed';escape_search_then_zen='passed';toolbar_themes=@('dark','light')}|ConvertTo-Json
         return
     }
     if($Journey -in @('menus','menus-light')){

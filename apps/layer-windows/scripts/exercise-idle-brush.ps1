@@ -1,4 +1,4 @@
-param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme='dark')
+param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme='dark',[int[]]$PresetIds=@())
 $ErrorActionPreference='Stop'
 $repo=(Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
 $scripts=$PSScriptRoot
@@ -199,16 +199,16 @@ function Blender-Presets{
  Select-Preset 'Smudge' 10
  $null=Check-BrushProjection ([pscustomobject]@{label='Smudge';id=10;group='blend'})
  $expected=[ordered]@{blend=@(10,45,46,65,66,48,61,62);wet_paint=@(24,57,58,56,47);effects=@(50,53,49,60,52,51,55)}
- $groups=@((Model).state.tool_set.subtools|Where-Object {$_.action.type -eq 'select_tool_group'})
- if(($groups.action.group -join ',') -ne ($expected.Keys -join ',')){throw 'Blend did not expose its three shared sets'}
+ $groups=@((Model).state.tool_set.groups|Where-Object {$_.action.type -eq 'choose_tool_variant' -and $_.action.variant.type -eq 'brush_group'})
+ if(($groups.action.variant.group -join ',') -ne ($expected.Keys -join ',')){throw 'Blend did not expose its three shared sets'}
  foreach($group in $expected.Keys){
-  $items=@((Model).state.tool_set.subtools)
-  $index=0;while($index -lt $items.Count -and !($items[$index].action.type -eq 'select_tool_group' -and $items[$index].action.group -eq $group)){$index++}
+  $items=@((Model).state.tool_set.groups)
+  $index=0;while($index -lt $items.Count -and !($items[$index].action.type -eq 'choose_tool_variant' -and $items[$index].action.variant.type -eq 'brush_group' -and $items[$index].action.variant.group -eq $group)){$index++}
   if($index -eq $items.Count){throw "The shared $group set is missing"}
-  $native=Control ('tool-subtool-'+$index)
+  $native=Control ('tool-group-'+$index)
   if($native.Current.Name -ne $items[$index].label -or !$native.Current.IsEnabled){throw "The native $group set differs from its shared choice"}
   $native.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
-  Wait-Until {$m=Model;$m.brush_ready -and @($m.state.tool_set.subtools|Where-Object {$_.selected -and $_.action.type -eq 'select_tool_group' -and $_.action.group -eq $group}).Count -eq 1} "The native $group set did not activate"
+  Wait-Until {$m=Model;$m.brush_ready -and @($m.state.tool_set.groups|Where-Object {$_.selected -and $_.action.type -eq 'choose_tool_variant' -and $_.action.variant.type -eq 'brush_group' -and $_.action.variant.group -eq $group}).Count -eq 1} "The native $group set did not activate"
   $choices=@((Model).state.tool_set.subtools|Where-Object {$_.action.type -eq 'select_brush'})
   if(($choices.action.id -join ',') -ne ($expected[$group] -join ',')){throw "The $group set has missing or obsolete Blender presets"}
   foreach($choice in $choices){
@@ -315,7 +315,12 @@ try{
  $seedBaseline=Wait-StablePixels {Pixels};Save-Pixels 'seed-baseline' $seedBaseline
  $cases=[Collections.Generic.List[object]]::new()
  $presets=@(@('Wet Round',11),@('Smudge',10),@('Liquify Push',12),@('G-Pen',1),@('Pencil',2),@('Charcoal',27),@('Pastel Block',17),@('Mixing Brush',59))|ForEach-Object {[pscustomobject]@{label=$_[0];id=$_[1];group=$(if($_[1] -eq 10){'blend'}elseif($_[1] -eq 59){'oil'}else{$null})}}
- foreach($preset in @($presets)+@($blenders|Where-Object id -ne 10)){
+ $requested=@($presets)+@($blenders|Where-Object id -ne 10)
+ if($PresetIds.Count){
+  foreach($id in $PresetIds){if($id -notin $requested.id){throw "Unknown brush preset: $id"}}
+  $requested=@($requested|Where-Object id -in $PresetIds)
+ }
+ foreach($preset in $requested){
   $traceBefore=@(Shader-Lines|Where-Object {$_ -match '^pipeline begin '}).Count
   Select-Preset $preset.label $preset.id
   $controls=Check-BrushProjection $preset
@@ -338,6 +343,7 @@ try{
   $cases.Add($case)
   $cases|ConvertTo-Json -Depth 8|Set-Content -LiteralPath (Join-Path $run 'brush-cases.json')
  }
+ if(!$PresetIds.Count){
  $seedPixels=Wait-StablePixels {Pixels}
  Select-Preset 'Liquify Push' 12
  $from=Point 110 110;$to=Point 215 140
@@ -400,7 +406,8 @@ try{
    Wait-Until {(Pixels) -ne $seedPixels} 'Push did not prepare artwork for Reconstruct'
   }
  }
- $checks.brush_cases='passed';Close-Review -Discard
+ }
+ $checks.brush_cases='passed';$checks.preset_ids=@($cases.preset);$checks.liquify_adjust_scope=if($PresetIds.Count){'outside selected preset run'}else{'passed'};Close-Review -Discard
  Start-Review 'close-pending'
  $pending=Observe 'before-close' $null
  $checks.close_pending_observation=!$pending.shaders_ready

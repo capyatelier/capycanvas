@@ -347,10 +347,10 @@ function Restart-BubbleReview([string]$LogName='restart-stderr.log'){
     Wait-Until {(Model).layout.viewport[0] -gt 1000} 'Restarted slider fixture did not maximize'
 }
 function Invoke-SliderChecks{
-    if((Model).state.workspace.layout.bubbles.show_sliders -ne $true){throw 'Fresh workspace slider preference did not default to true'}
     Invoke-ShortFanChecks
     $area=(Model).layout.work_area
     $medium=Slider-Medium 'pastel' ($area.x+$area.width*.25) ($area.y+$area.height*.7)
+    if((Model).state.workspace.layout.bubbles.show_sliders -ne $true){throw 'Fresh workspace slider preference did not default to true'}
     $area=(Model).layout.work_area
     $brush=Take 'brush' '25' ($area.x+$area.width*.25) ($area.y+$area.height*.3)
     $group=Take 'tool_slot' 'drawing' ($area.x+$area.width*.7) ($area.y+$area.height*.3)

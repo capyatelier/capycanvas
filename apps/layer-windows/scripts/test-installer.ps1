@@ -13,7 +13,7 @@ if((Test-Path -LiteralPath $target) -or (Test-Path -LiteralPath $uninstall)){thr
 $run=Join-Path $repo ('artifacts/windows/installer-review/'+[Guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($run)|Out-Null
 $review=$null
-function Default([string]$Key){(Get-Item -LiteralPath $Key).GetValue('')}
+function Default([string]$Key){if(Test-Path -LiteralPath $Key){(Get-Item -LiteralPath $Key).GetValue('')}}
 function Install{(Start-Process -FilePath $result.installer -ArgumentList '/S' -Wait -PassThru).ExitCode}
 function Assert-Installed{
     $manifest=Get-Content -LiteralPath (Join-Path $target 'package-manifest.json') -Raw|ConvertFrom-Json
@@ -22,20 +22,21 @@ function Assert-Installed{
         if((Get-Item -LiteralPath $path).Length -ne $file.bytes -or (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ne $file.sha256){throw "Installed file does not match its hash: $($file.path)"}
     }
 }
+$associationBefore=Default 'HKCU:\Software\Classes\.capy'
 try {
     if((Install) -ne 0){throw 'The installer failed.'}
     Assert-Installed
     if($result.signed -and (Get-AuthenticodeSignature -LiteralPath (Join-Path $target 'Uninstall.exe')).Status -ne 'Valid'){throw 'The installed uninstaller is not signed.'}
     $entry=Get-ItemProperty -LiteralPath $uninstall
     if($entry.DisplayName -ne $result.name -or $entry.DisplayVersion -ne $result.version -or $entry.InstallLocation -ne $target){throw 'The uninstall entry does not describe the installed app.'}
-    if((Default 'HKCU:\Software\Classes\.capy') -ne $result.progid){throw '.capy drawings do not open with the installed app.'}
+    if((Default 'HKCU:\Software\Classes\.capy') -cne $associationBefore){throw 'The test installer changed the default app for .capy drawings.'}
     if((Default ($progid+'\shell\open\command')) -ne ('"'+$target+'\CapyCanvas.exe" "%1"')){throw 'The .capy open command does not start the installed app.'}
     if(!(Test-Path -LiteralPath $shortcut)){throw 'The Start menu shortcut is missing.'}
     $drawing=Join-Path $run 'Installed drawing.capy'
     Copy-Item -LiteralPath (Join-Path $repo 'crates/layer-core/src/package/codec/fixtures/authored-filters.capy') -Destination $drawing
     Enter-CapyEnvironment
     $env:CAPY_STORAGE_DIR=Join-Path $run 'profile'
-    $review=Start-Process -FilePath $drawing -WorkingDirectory $run -PassThru
+    $review=Start-Process -FilePath (Join-Path $target 'CapyCanvas.exe') -ArgumentList ('"'+$drawing+'"') -WorkingDirectory $run -WindowStyle Hidden -PassThru
     $null=$review.Handle
     Write-Output "Owned installer review $($review.Id): $run"
     Wait-Until {(Get-CimInstance Win32_Process -Filter "ProcessId=$($review.Id)").CommandLine} 'The drawing did not start the installed app'
@@ -49,12 +50,12 @@ try {
     if($remove.ExitCode -ne 0){throw "The uninstaller failed: $($remove.ExitCode)"}
     if(Test-Path -LiteralPath $uninstall){throw 'The uninstall entry remains.'}
     if(Test-Path -LiteralPath $progid){throw 'The .capy file type remains.'}
-    if((Test-Path -LiteralPath 'HKCU:\Software\Classes\.capy') -and (Default 'HKCU:\Software\Classes\.capy') -eq $result.progid){throw '.capy still opens with the removed app.'}
+    if((Default 'HKCU:\Software\Classes\.capy') -cne $associationBefore){throw 'The test uninstaller changed the default app for .capy drawings.'}
     if(Test-Path -LiteralPath $shortcut){throw 'The Start menu shortcut remains.'}
     $left=@(Get-ChildItem -LiteralPath $target -Recurse -Force|ForEach-Object Name)
     if($left.Count -ne 1 -or $left[0] -ne 'Uninstall.exe'){throw "The uninstaller left app files: $($left -join ', ')"}
     Remove-Item -LiteralPath $target -Recurse -Force
-    [ordered]@{installer_sha256=(Get-FileHash -LiteralPath $result.installer -Algorithm SHA256).Hash.ToLowerInvariant();source_commit=$result.source_commit;development=$result.development;install='passed';files='passed';association='passed';running_app_kept='passed';upgrade='passed';uninstall='passed';scope='opening the drawing needs a hardware GPU and is covered by exercise-file-activation.ps1'}|ConvertTo-Json|Tee-Object -FilePath (Join-Path $run 'result.json')
+    [ordered]@{installer_sha256=(Get-FileHash -LiteralPath $result.installer -Algorithm SHA256).Hash.ToLowerInvariant();source_commit=$result.source_commit;development=$result.development;install='passed';files='passed';registered_file_type='passed';default_association='preserved';running_app_kept='passed';reinstall='passed';uninstall='passed';scope='same-version replacement; opening the drawing needs a hardware GPU and is covered by exercise-file-activation.ps1'}|ConvertTo-Json|Tee-Object -FilePath (Join-Path $run 'result.json')
 }catch{
     $_.ToString()|Set-Content (Join-Path $run 'failure.txt')
     if($review -and !$review.HasExited){Stop-Process -Id $review.Id -Force;$review.WaitForExit()}

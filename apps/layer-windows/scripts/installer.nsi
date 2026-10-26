@@ -61,7 +61,9 @@ Section
     File /r "${PAYLOAD}\*"
     WriteUninstaller "$INSTDIR\Uninstall.exe"
     CreateShortcut "$SMPROGRAMS\${NAME}.lnk" "$INSTDIR\CapyCanvas.exe" "" "$INSTDIR\CapyCanvas.ico"
+!ifndef TEST_IDENTITY
     WriteRegStr HKCU "Software\Classes\.capy" "" "${PROGID}"
+!endif
     WriteRegStr HKCU "Software\Classes\.capy\OpenWithProgids" "${PROGID}" ""
     WriteRegStr HKCU "Software\Classes\${PROGID}" "" "Capy Canvas drawing"
     WriteRegStr HKCU "Software\Classes\${PROGID}\DefaultIcon" "" "$INSTDIR\CapyCanvas.ico"
