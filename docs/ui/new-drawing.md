@@ -105,6 +105,9 @@ iPadOS report pixels without a known PPI. The shared constructor applies the
    drawer. `Cancel`, or `Back` on the main page, closes the dialog; the host completes
    the New request as cancelled.
 
+Android forwards both Escape and the native dialog's Back callback to the shared
+`Back` action.
+
 GTK is the reference presentation: [`new_drawing.rs`](../../apps/layer-linux/src/new_drawing.rs)
 and its `.new-drawing-*` styles. Drawers slide up over the page; inputs are
 34 px high with 6 px between controls, 10 px between rows and 14 px between

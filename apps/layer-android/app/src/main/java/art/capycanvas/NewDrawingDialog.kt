@@ -151,7 +151,6 @@ private class DrawerMemory { var shown: JSONObject? = null; var open = false; va
 
 @Composable private fun NewDrawingDialog(host: CanvasHost, view: JSONObject, actions: NewDrawingActions) {
     val copy = view.getJSONObject("copy")
-    val focus = LocalFocusManager.current
     val drawer = view.objectOrNull("drawer")
     val memory = remember { DrawerMemory() }
     if (drawer != null) { if (!memory.open) memory.opening++; memory.shown = drawer }
@@ -176,7 +175,7 @@ private class DrawerMemory { var shown: JSONObject? = null; var open = false; va
             else -> false
         }
     }
-    PickerDialog(host, false, "new-drawing-dialog", keys, ::back, page = {
+    PickerDialog(host, false, "new-drawing-dialog", keys, { actions.send("back") }, page = {
         Box(if (drawer == null) Modifier else Modifier.clearAndSetSemantics {}) { MainPage(host, view, actions, wide) }
     }, sheet = {
         AnimatedVisibility(drawer != null, Modifier.matchParentSize(), enter = slideInVertically(tween(250, easing = EaseOutCubic)) { it },
