@@ -185,7 +185,9 @@ fn separated_paper_and_the_paper_preview_light_the_artwork_in_its_own_encoding()
         let mut presenter = crate::ViewportPresenter::for_surface(&r, wgpu::TextureFormat::Rgba8UnormSrgb, crate::SdrSurfaceColor::Srgb).unwrap();
         let mut first = true;
         let mut present = |r: &mut WgpuRasterizer, document: &Document| {
-            r.submit(FramePacket { composite_all: std::mem::take(&mut first), blend_space: blend, ..packet(document.scene(), [128, 128]) }).unwrap();
+            crate::test_support::submit_settled(r, FramePacket {
+                composite_all: std::mem::take(&mut first), blend_space: blend, ..packet(document.scene(), [128, 128])
+            });
             presenter.present(r, &texture.create_view(&Default::default()), view(), [0.2, 0.3, 0.4, 1.]).unwrap();
             page_bytes(r, &texture)
         };

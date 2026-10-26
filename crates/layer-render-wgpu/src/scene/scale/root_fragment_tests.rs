@@ -5,7 +5,7 @@ fn inputs(r:&mut WgpuRasterizer,doc:&Document,blend:layer_core::BlendSpace)->(Bo
     let mut frame=packet(doc.scene(),doc.composition().size);
     frame.view.document_to_surface=[0.25,0.,0.,0.25,0.,0.];
     frame.blend_space=blend;
-    r.submit(frame).unwrap();r.wait_idle().unwrap();
+    crate::test_support::submit_settled(r, frame);
     let scene=r.scene.take().unwrap();let cache=r.scale_display.take().unwrap();
     let images=doc.scene().order().iter().map(|h|scene.scale_sources.image(doc.scene().source_target(*h).unwrap(),cache.plan.level).image.clone()).collect();
     (scene,cache,images)
@@ -92,13 +92,13 @@ fn root_deferred_native_alpha_over_photo_matches_full_composition() {
             if state==1 {doc.artwork.occurrences.get_mut(owner).unwrap().opacity=0.61;}
             if state==2 {doc.artwork.occurrences.get_mut(owner).unwrap().opacity=1.;coverage_mask(&mut doc,filter,Default::default(),Some(layer_core::Selection::polygon(vec![layer_core::Point{x:11.,y:7.},layer_core::Point{x:501.,y:17.},layer_core::Point{x:127.,y:243.}]).unwrap()));}
             let mut frame=packet(doc.scene(),extent);frame.blend_space=blend;frame.composite_all=false;frame.view.document_to_surface=[0.25,0.,0.,0.25,0.,0.];
-            r.submit(frame).unwrap();
+            submit_published(&mut r, frame);
             for position in [[123.5,125.5],[389.5,247.5]] {
                 let mut dab=crate::tests::test_dab(position,[0.2,0.1,0.3,0.37],0.9);dab.radii=[11.75,9.25];
                 let mut batch=dab_batch(target,crate::layer_tests::preset_style(DefaultBrushPreset::GPen),dab.bounds());batch.style.blend_space=blend;
-                r.submit(FramePacket {dabs:std::slice::from_ref(&dab),dab_batches:std::slice::from_ref(&batch),..frame}).unwrap();
+                crate::test_support::submit_ready(&mut r, FramePacket {dabs:std::slice::from_ref(&dab),dab_batches:std::slice::from_ref(&batch),..frame}).unwrap();
                 let incremental=display_pixels(&r);
-                r.scale_display=None;r.submit(FramePacket {composite_all:true,..frame}).unwrap();
+                r.scale_display=None;submit_published(&mut r, FramePacket {composite_all:true,..frame});
                 let expected=display_pixels(&r);
                 for (pixel,(actual,expected)) in incremental.iter().zip(&expected).enumerate() {assert_eq!(actual.map(f32::to_bits),expected.map(f32::to_bits),"{name} {blend:?} state{state} {position:?} pixel{pixel}");}
             }

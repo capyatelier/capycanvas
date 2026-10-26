@@ -1,5 +1,5 @@
 use super::*;
-use crate::test_support::{complete, packet};
+use crate::test_support::{complete, packet, submit_settled};
 use layer_core::color::{DocumentColor, SampleDepth, RgbSpace};
 use layer_core::raster::{RasterData, RasterPlane, RasterRevision, RasterTile, TileBlob, TileKey};
 use layer_core::{Document, CoverageSnapshot, Point, authored::{PortableId,SourceTarget}};
@@ -87,7 +87,7 @@ fn composite_queries_ignore_inspection_and_need_no_display_texture() {
         doc.artwork.occurrences.get_mut(owner).unwrap().opacity = 0.7;
         let mut r = WgpuRasterizer::new_native_headless(color).unwrap();
         r.native_edit.as_mut().unwrap().color_cache_bytes = 0;
-        r.submit(frame(&doc)).unwrap();
+        submit_settled(&mut r, frame(&doc));
         let visible = r.scale_display.as_ref().unwrap().texture().clone();
         let before = crate::layer_tests::page_bytes(&r, &visible);
         r.scale_display = None;
@@ -163,7 +163,7 @@ fn filtered_query_crops_match_full_resolution_and_reject_excessive_dependencies(
     });
     for _ in 0..2 { crate::tests::image_windows::insert_effect(&mut doc, crate::tests::image_windows::program(false, false)); }
     let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
-    r.submit(frame(&doc)).unwrap();
+    submit_settled(&mut r, frame(&doc));
     let visible = crate::test_support::document_texture(&r).clone();
     let full = crate::layer_tests::page_bytes(&r, &visible);
     let mut encoder = submission::CommandEncoder::new(&r.device, &Default::default());

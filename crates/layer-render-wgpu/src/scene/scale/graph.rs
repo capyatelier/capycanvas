@@ -518,7 +518,7 @@ mod reuse_tests {
     use super::super::tests::{paint_mut, paint_occurrence, insert_occurrence, effect_occurrence};
     use layer_core::{color::source::rgba8_source, authored::Attachment};
     use crate::test_support::{packet, float_pixels as pixels};
-    use super::super::tests::{document_at, add_fill, coverage_mask, set_effect_value, display_pixels};
+    use super::super::tests::{document_at, add_fill, coverage_mask, set_effect_value, display_pixels, submit_published};
     use layer_core::{EffectValue, Point, Selection};
     use layer_core::color::RgbColor;
 
@@ -543,7 +543,7 @@ mod reuse_tests {
             set_effect_value(&mut doc, fill, "color", EffectValue::Color(value));
             let mut frame = crate::test_support::packet(doc.scene(), extent);
             frame.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
-            renderer.submit(frame).unwrap();
+            submit_published(&mut renderer, frame);
             let cache = renderer.scale_display.as_ref().unwrap();
             let textures: Vec<_> = cache.graph.branches.values().filter_map(|branch|
                 branch.image.as_ref().map(|image| image.texture.clone())).collect();
@@ -555,7 +555,7 @@ mod reuse_tests {
             }
             let actual = display_pixels(&renderer);
             let mut fresh = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
-            fresh.submit(frame).unwrap();
+            submit_published(&mut fresh, frame);
             let expected = display_pixels(&fresh);
             assert!(crate::test_support::max_error(&actual, &expected) < 2e-5,
                 "recycled validity must not expose old masked/translucent Fill pixels");
@@ -577,7 +577,7 @@ fn native_level_retained_branches_batch_live_graph_pages_and_keep_islands_separa
         let photo = paint_occurrence(&mut doc, "photo", Some(rgba8_source(extent, |x, y| [(x * 29) as u8, (y * 31) as u8, 173, 255])));
         insert_occurrence(&mut doc, photo, 2);
         let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
-        let frame = packet(doc.scene(), extent); r.submit(frame).unwrap(); r.wait_idle().unwrap();
+        let frame = packet(doc.scene(), extent); submit_published(&mut r, frame); r.wait_idle().unwrap();
         let reference = display_pixels(&r);
         let mut scene = r.scene.take().unwrap(); let mut cache = r.scale_display.take().unwrap();
         r.document_damage.clear(); r.transform_damage.clear();

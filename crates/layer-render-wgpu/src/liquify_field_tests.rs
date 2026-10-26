@@ -18,13 +18,13 @@ fn crystals_third_published_shift_copies_black_across_integer_map_slope() {
         let mut contact=dab([0.;4]); contact.material[3]=1.; contact.contact[3]=seed as f32;
         let mut batch=crate::test_support::dab_batch(placement::target(doc),style,layer_core::Rect::from_extent([128;2]));
         batch.stroke_id=StrokeId(id);
-        r.submit(FramePacket{dabs:&[contact],dab_batches:&[batch],..crate::test_support::packet(doc.scene(),[128;2])}).unwrap();
+        crate::test_support::submit_ready(r, FramePacket{dabs:&[contact],dab_batches:&[batch],..crate::test_support::packet(doc.scene(),[128;2])}).unwrap();
         assert!(placement::paint(doc).raster.liquify().is_some());
     }
     let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let mut doc=placement::paint_document([128;2],"crystals slope regression");
     placement::set_source(&mut doc,layer_core::color::source::rgba8_source([128;2],|x,_| if x%2==0 { [0,0,0,255] } else { [255;4] }));
-    r.submit(FramePacket{reset_layers:true,..crate::test_support::packet(doc.scene(),[128;2])}).unwrap();
+    crate::test_support::submit_ready(&mut r, FramePacket{reset_layers:true,..crate::test_support::packet(doc.scene(),[128;2])}).unwrap();
     stroke(&mut r,&mut doc,0,1);
     stroke(&mut r,&mut doc,1,2);
     let state=placement::paint(&doc).raster.liquify().unwrap();
@@ -70,7 +70,7 @@ fn render_seeded(r:&mut WgpuRasterizer,doc:&mut Document,context:layer_core::liq
     let mut contact=dab([0.;4]);contact.material[3]=0.;
     let mut batch=crate::test_support::dab_batch(placement::target(doc),style,layer_core::Rect::from_extent([256;2]));
     batch.stroke_id=StrokeId(id); if amount.is_some(){batch.dab_count=0;}
-    r.submit(FramePacket{dabs:&[contact],dab_batches:&[batch],..crate::test_support::packet(doc.scene(),extent)}).unwrap();
+    crate::test_support::submit_ready(r, FramePacket{dabs:&[contact],dab_batches:&[batch],..crate::test_support::packet(doc.scene(),extent)}).unwrap();
     r.readback_srgb_rgba8().unwrap()
 }
 
@@ -82,7 +82,7 @@ fn liquify_indexed_originals_cross_array_layers_and_sparse_tile_borders() {
     placement::set_source(&mut doc,layer_core::color::source::rgba8_source(extent,|x,_| {
         if x/256==7 {[0;4]} else {let c=(x/256*13) as u8;[c,c,c,255]}
     }));
-    r.submit(FramePacket{reset_layers:true,..crate::test_support::packet(doc.scene(),extent)}).unwrap();
+    crate::test_support::submit_ready(&mut r, FramePacket{reset_layers:true,..crate::test_support::packet(doc.scene(),extent)}).unwrap();
     let context=seeded_context(&r,&doc,|x,_|{
         let source=if x<18 {x as f32*256.+128.5} else if x==20 {1792.} else if x==21 {4608.5} else if x==22 {-0.5} else {255.5};
         ([source-(x as f32+0.5),0.],[1.,0.,0.,1.])
@@ -109,7 +109,7 @@ fn liquify_sparse_original_atlas_chunks_match_unfragmented_source() {
         let mut doc = placement::paint_document(extent, "liquify fragmented original atlases");
         placement::set_source(&mut doc, layer_core::color::source::rgba8_source(extent,
             |x, _| if x < 256 { [255, 0, 0, 255] } else { [0, 0, 255, 255] }));
-        r.submit(FramePacket { reset_layers: true,
+        crate::test_support::submit_ready(&mut r, FramePacket { reset_layers: true,
             ..crate::test_support::packet(doc.scene(), extent) }).unwrap();
         let mut style = preset_style(DefaultBrushPreset::LiquifyPush);
         style.liquify = Some(Arc::new(seeded_context(&r, &doc, |x, _| {
@@ -121,7 +121,7 @@ fn liquify_sparse_original_atlas_chunks_match_unfragmented_source() {
         let mut batch = crate::test_support::dab_batch(placement::target(&doc), style,
             layer_core::Rect::from_extent([256; 2]));
         batch.stroke_id = StrokeId(290);
-        r.submit(FramePacket { dabs: &[contact], dab_batches: &[batch],
+        crate::test_support::submit_ready(&mut r, FramePacket { dabs: &[contact], dab_batches: &[batch],
             ..crate::test_support::packet(doc.scene(), extent) }).unwrap();
         let state = placement::paint(&doc).raster.liquify().unwrap();
         let field = state.field.as_any().downcast_ref::<Field>().unwrap();
@@ -503,7 +503,7 @@ fn untouched_own_map_survives_when_it_is_in_a_later_source_chunk() {
     let bounds=crate::material_sources::sample_rect(&batch,&dabs,[13,0]);
     assert!(bounds.min.x<256. && bounds.max.x>13.*256.,"{preset:?}: the trace must bind fourteen source maps");
     placement::paint_mut(&mut doc).raster=RasterRevision::pending();
-    r.submit(FramePacket{dabs:&dabs,dab_batches:&[batch],
+    crate::test_support::submit_ready(&mut r, FramePacket{dabs:&dabs,dab_batches:&[batch],
         ..crate::test_support::packet(doc.scene(),extent)}).unwrap();
     let current=placement::paint(&doc).raster.liquify().unwrap();
     let field=current.field.as_any().downcast_ref::<Field>().unwrap();
@@ -604,7 +604,7 @@ fn fit_view_liquify_preview_matches_committed_display_and_cancel_restores_it() {
     fit.view.height_px=128;
     fit.view.document_to_surface=[0.125,0.,0.,0.125,0.,0.];
     for r in [&mut preview,&mut committed] {
-        r.submit(FramePacket{reset_layers:true,..fit}).unwrap();
+        crate::layer_tests::publish(r,FramePacket{reset_layers:true,..fit});
     }
     let before=crate::scene::scale::tests::display_pixels(&preview);
     let mut contact=dab([0.;4]);
@@ -745,7 +745,7 @@ fn strong_pinch_keeps_opaque_source_when_footprint_exceeds_trace_tile() {
             }
             let mut dabs = [contact; 4];
             if chunk == 5 { dabs[3].material[3] = 0.2; }
-            r.submit(FramePacket { dabs: &dabs, dab_batches: &[batch],
+            crate::test_support::submit_ready(&mut r, FramePacket { dabs: &dabs, dab_batches: &[batch],
                 ..crate::test_support::packet(doc.scene(), extent) }).unwrap();
         }
         let state = placement::paint(&doc).raster.liquify().unwrap();
@@ -782,7 +782,7 @@ fn pinch_minification_keeps_transparency_at_physical_canvas_edge() {
     let mut doc = placement::paint_document(extent, "Pinch transparent canvas edge");
     placement::set_source(&mut doc, layer_core::color::source::rgba8_source(extent,
         |_, _| [83, 149, 211, 255]));
-    r.submit(FramePacket { reset_layers: true,
+    crate::test_support::submit_ready(&mut r, FramePacket { reset_layers: true,
         ..crate::test_support::packet(doc.scene(), extent) }).unwrap();
     let target = placement::target(&doc);
     let mut contact = dab([0.; 4]);
@@ -801,7 +801,7 @@ fn pinch_minification_keeps_transparency_at_physical_canvas_edge() {
         batch.dab_count = 4;
         if batch.stroke_end { placement::paint_mut(&mut doc).raster = RasterRevision::pending(); }
         let dabs = [contact; 4];
-        r.submit(FramePacket { dabs: &dabs, dab_batches: &[batch],
+        crate::test_support::submit_ready(&mut r, FramePacket { dabs: &dabs, dab_batches: &[batch],
             ..crate::test_support::packet(doc.scene(), extent) }).unwrap();
     }
     let field = placement::paint(&doc).raster.liquify().unwrap().field.clone();
@@ -841,7 +841,7 @@ fn fit_preview_defers_persistent_color_until_zero_dab_end_across_tiles() {
         let view=if fit {layer_render::ViewState{width_px:64,height_px:32,
             document_to_surface:[0.125,0.,0.,0.125,0.,0.]}}
             else {crate::test_support::view(extent)};
-        r.submit(FramePacket{view,reset_layers:true,..crate::test_support::packet(doc.scene(),extent)}).unwrap();
+        crate::test_support::submit_settled(&mut r, FramePacket{view,reset_layers:true,..crate::test_support::packet(doc.scene(),extent)});
         let target=placement::target(&doc);
         let colors=|r:&WgpuRasterizer|r.paint_layers.iter().find(|layer|layer.id==target).unwrap().pages.iter()
             .map(|page|(page.coordinate,crate::layer_tests::page_bytes(r,&page.active().texture)))
@@ -849,7 +849,7 @@ fn fit_preview_defers_persistent_color_until_zero_dab_end_across_tiles() {
         let original_colors=colors(&r);
         let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
         let source_tiles=[0,1].map(|x| {
-            let tile=r.raw_layer_tile(target,[x,0],&mut encoder).unwrap().unwrap();
+            let tile=crate::test_support::query_ready(&mut r,&mut encoder,|r,encoder|r.raw_layer_tile(target,[x,0],encoder)).unwrap();
             ([x,0],tile.texture)
         });
         r.uploads.finish(&encoder);
@@ -970,7 +970,7 @@ fn fit_preview_defers_persistent_color_until_zero_dab_end_across_tiles() {
             }
         }
         if cancel {
-            r.submit(FramePacket{view,reset_layers:true,..crate::test_support::packet(doc.scene(),extent)}).unwrap();
+            crate::test_support::submit_settled(&mut r, FramePacket{view,reset_layers:true,..crate::test_support::packet(doc.scene(),extent)});
             let cancelled=crate::scene::scale::tests::display_pixels(&r);
             let mismatches=cancelled.iter().zip(&original_display).filter(|(a,b)|a!=b).count();
             assert_eq!(mismatches,0,"cancel must restore the old raster display after deferred persistent frames");
@@ -1063,7 +1063,7 @@ fn fit_amount_preview_keeps_authored_color_and_matches_full_resolution_commit() 
     placement::set_source(&mut doc,source.clone());
     let view=layer_render::ViewState{width_px:64,height_px:32,
         document_to_surface:[0.125,0.,0.,0.125,0.,0.]};
-    fit.submit(FramePacket{view,reset_layers:true,..crate::test_support::packet(doc.scene(),extent)}).unwrap();
+    crate::layer_tests::publish(&mut fit,FramePacket{view,reset_layers:true,..crate::test_support::packet(doc.scene(),extent)});
     let before=crate::scene::scale::tests::display_pixels(&fit);
     let target=placement::target(&doc);
     let colors=|r:&WgpuRasterizer|r.paint_layers.iter().find(|layer|layer.id==target).unwrap().pages.iter()
@@ -1104,7 +1104,7 @@ fn fit_amount_preview_keeps_authored_color_and_matches_full_resolution_commit() 
     commit.stroke_id=StrokeId(264);
     commit.dab_count=0;
     placement::paint_mut(&mut doc).raster=RasterRevision::pending();
-    fit.submit(FramePacket{view,dab_batches:&[commit],
+    crate::test_support::submit_ready(&mut fit,FramePacket{view,dab_batches:&[commit],
         ..crate::test_support::packet(doc.scene(),extent)}).unwrap();
     let fit_colors=colors(&fit);
     assert!(fit_colors!=authored,"committing Amount must publish full-resolution authored color");
@@ -1112,7 +1112,7 @@ fn fit_amount_preview_keeps_authored_color_and_matches_full_resolution_commit() 
     let mut exact=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let mut reference=placement::paint_document(extent,"liquify Amount full resolution reference");
     placement::set_source(&mut reference,source);
-    exact.submit(FramePacket{reset_layers:true,..crate::test_support::packet(reference.scene(),extent)}).unwrap();
+    crate::test_support::submit_settled(&mut exact,FramePacket{reset_layers:true,..crate::test_support::packet(reference.scene(),extent)});
     let mut context=seeded_context(&exact,&reference,|_,_|([16.,0.],[1.,0.,0.,1.]));
     context.amount=Some(0.5);
     let mut style=preset_style(DefaultBrushPreset::LiquifyPush);
@@ -1122,7 +1122,7 @@ fn fit_amount_preview_keeps_authored_color_and_matches_full_resolution_commit() 
     commit.stroke_id=StrokeId(264);
     commit.dab_count=0;
     placement::paint_mut(&mut reference).raster=RasterRevision::pending();
-    exact.submit(FramePacket{dab_batches:&[commit],
+    crate::test_support::submit_ready(&mut exact,FramePacket{dab_batches:&[commit],
         ..crate::test_support::packet(reference.scene(),extent)}).unwrap();
     assert!(fit_colors==colors(&exact),"Fit Amount commit must match native full-resolution color exactly");
 }

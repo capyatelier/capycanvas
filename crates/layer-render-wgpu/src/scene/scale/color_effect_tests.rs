@@ -44,7 +44,7 @@ fn p21_hue_nondefault_ranges_and_colorize_meet_existing_reduced_graph_quality_or
             let mut frame = packet(doc.scene(), extent);
             frame.view.width_px = 43; frame.view.height_px = 25;
             frame.view.document_to_surface = [scale, 0., 0., scale, -610. * scale, -270. * scale];
-            crate::test_support::submit_ready(&mut window, frame).unwrap(); crate::test_support::submit_ready(&mut exact, frame).unwrap();
+            submit_published(&mut window, frame); submit_published(&mut exact, frame);
             let cache = window.scale_display.as_ref().unwrap();
             assert_eq!(cache.plan.level, level);
             assert!(cache.plan.bounds.min_x() > 0 || cache.plan.bounds.min_y() > 0);
@@ -53,7 +53,7 @@ fn p21_hue_nondefault_ranges_and_colorize_meet_existing_reduced_graph_quality_or
             assert!(error[0] < 0.002 && error[1] < 0.015, "state={state} level={level} {resolution:?} error={error:?}");
             crate::test_support::assert_same_canonical(&mut window, &mut exact);
             let updates = window.scene.as_ref().unwrap().scale_sources.entries[&paint].updates;
-            window.submit(FramePacket { composite_all: false, reset_layers: false, ..frame }).unwrap();
+            crate::test_support::submit_ready(&mut window, FramePacket { composite_all: false, reset_layers: false, ..frame }).unwrap();
             assert_eq!(updates, window.scene.as_ref().unwrap().scale_sources.entries[&paint].updates);
             assert_presentation_mip(&window);
         }
@@ -140,7 +140,7 @@ fn candidate_errors(name: &str) -> [f32; 2] {
                     let mut frame = packet(doc.scene(), extent);
                     frame.view.width_px = 43; frame.view.height_px = 25;
                     frame.view.document_to_surface = [scale, 0., 0., scale, -610. * scale, -270. * scale];
-                    crate::test_support::submit_ready(&mut window, frame).unwrap(); crate::test_support::submit_ready(&mut exact, frame).unwrap();
+                    submit_published(&mut window, frame); submit_published(&mut exact, frame);
                     let cache = window.scale_display.as_ref().unwrap();
                     assert_eq!(cache.plan.level, level); assert!(cache.evaluation == Evaluation::Display);
                     let error = quality(&display_pixels(&window), &pixels(&exact, crate::test_support::document_texture(&exact)), cache.plan);
@@ -255,11 +255,11 @@ fn native_pointwise_batches(preload: bool, admitted: bool) {
     if preload {
         let mut loaded = packet(doc.scene(), extent);
         loaded.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
-        cached.submit(loaded).unwrap();
+        submit_published(&mut cached, loaded);
         for _ in 0..32 {
             if !cached.has_pending_work() { break; }
             cached.wait_idle().unwrap();
-            cached.submit(FramePacket { composite_all: false, reset_layers: false, ..loaded }).unwrap();
+            crate::test_support::submit_ready(&mut cached, FramePacket { composite_all: false, reset_layers: false, ..loaded }).unwrap();
         }
         assert!(cached.scale_display.as_ref().unwrap().hierarchy.is_some(), "the loaded source must earn resident hierarchy admission");
     }
@@ -283,9 +283,9 @@ fn native_pointwise_batches(preload: bool, admitted: bool) {
             frame.view.document_to_surface = [0.25, 0., 0., 0.25, -(extent[0] as f32-305.) * 0.25, -410. * 0.25];
         }
         let command_passes = cached.metrics.command_passes;
-        cached.submit(frame).unwrap();
+        submit_published(&mut cached, frame);
         let command_passes = cached.metrics.command_passes - command_passes;
-        exact.submit(packet(doc.scene(), extent)).unwrap();
+        submit_published(&mut exact, packet(doc.scene(), extent));
         let cache = cached.scale_display.as_ref().unwrap();
         assert_eq!(cache.hierarchy.is_some(), admitted);
         assert_eq!(matches!(cache.pixels, hierarchy::Pixels::Resident { .. }), admitted);
@@ -335,7 +335,7 @@ fn native_pointwise_batches(preload: bool, admitted: bool) {
     if !admitted {
         let mut frame=packet(doc.scene(),extent);frame.composite_all=false;
         frame.view.document_to_surface=[0.25,0.,0.,0.25,0.,0.];
-        cached.submit(frame).unwrap();exact.submit(frame).unwrap();
+        submit_published(&mut cached, frame);submit_published(&mut exact, frame);
         let strip=cached.scale_display.as_ref().unwrap().exact_tile.as_ref().unwrap().texture.clone();
         for positions in [[[73.,67.],[4117.,613.]],[[4117.,613.],[73.,67.]]] {
             let dabs=positions.map(|point|crate::tests::test_dab(point,[0.91,0.12,0.67,1.],0.8));
@@ -344,7 +344,7 @@ fn native_pointwise_batches(preload: bool, admitted: bool) {
             let stroke=FramePacket{dabs:&dabs,dab_batches:std::slice::from_ref(&batch),..frame};
             let work=cached.metrics.composited_pixels;
             let reverse=cached.scene.as_ref().unwrap().native_reverse;
-            cached.submit(stroke).unwrap();exact.submit(stroke).unwrap();
+            crate::test_support::submit_ready(&mut cached, stroke).unwrap();crate::test_support::submit_ready(&mut exact, stroke).unwrap();
             assert_ne!(cached.scene.as_ref().unwrap().native_reverse,reverse);
             let cache=cached.scale_display.as_ref().unwrap();
             assert!(cache.hierarchy.is_none());assert!(!cache.has_pending_work(&cached));

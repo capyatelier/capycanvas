@@ -13,7 +13,7 @@ fn finish(engine:&mut CanvasEngine<WgpuRasterizer>)->Result<(),String> {
     let deadline=std::time::Instant::now()+std::time::Duration::from_secs(15);
     loop {
         engine.render_frame_at(0).map_err(|error|error.to_string())?;
-        if !engine.has_pending_document_edits()&&!engine.has_pending_input(){return Ok(());}
+        if !engine.has_pending_document_edits()&&!engine.has_pending_input()&&!engine.backend().has_pending_work(){return Ok(());}
         assert!(std::time::Instant::now()<deadline,"cold local-analysis raster operation remained pending");
         std::thread::yield_now();
     }

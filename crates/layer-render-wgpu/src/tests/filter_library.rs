@@ -95,7 +95,7 @@ fn submit(
         ..test_view()
     };
     let context=layer_core::EvaluationContext {elapsed:time,phases:Vec::new().into()};
-    r.submit(FramePacket {
+    crate::test_support::submit_ready(r, FramePacket {
         view,
         time_seconds: time,
         dabs: &dabs,

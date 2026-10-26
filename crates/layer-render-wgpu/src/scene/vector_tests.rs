@@ -30,11 +30,11 @@ fn records() -> Vec<Record> {
     list
 }
 fn submit_ready(r: &mut WgpuRasterizer, frame: FramePacket<'_>) {
-    r.submit(frame).unwrap();
+    crate::test_support::submit_ready(r, frame).unwrap();
     for _ in 0..200 {
         r.wait_idle().unwrap();
         if !r.has_pending_work() { return; }
-        r.submit(FramePacket { composite_all: false, reset_layers: false, ..frame }).unwrap();
+        crate::test_support::submit_ready(r, FramePacket { composite_all: false, reset_layers: false, ..frame }).unwrap();
     }
     panic!("vector display must settle");
 }

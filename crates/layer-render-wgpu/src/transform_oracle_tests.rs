@@ -264,12 +264,11 @@ impl Oracle {
 }
 
 fn frame(r: &mut WgpuRasterizer, layer: &Document, reset: bool) {
-    crate::test_support::submit_ready(r, FramePacket {
+    crate::test_support::submit_settled(r, FramePacket {
         reset_layers: reset,
         composite_all: reset,
         ..packet(layer.scene(), EXTENT)
-    })
-    .unwrap();
+    });
 }
 
 /// Every Float32 texel of the layer's pages, by layer pixel.
@@ -864,13 +863,12 @@ fn a_zone_plate_reduced_to_an_eighth_matches_an_area_reduction() {
     let mut layer = paint_document(EXTENT, "zone plate");
     set_source(&mut layer, zone_plate());
     let submit = |r: &mut WgpuRasterizer, layer: &Document, batches: &[DabBatch], reset: bool| {
-        r.submit(FramePacket {
+        crate::test_support::submit_settled(r, FramePacket {
             dab_batches: batches,
             reset_layers: reset,
             composite_all: reset,
             ..packet(layer.scene(), extent)
-        })
-        .unwrap();
+        });
     };
     submit(&mut r, &layer, &[], true);
     let transform = ImageTransform { placement: layer_core::LayerPlacement { interpolation: Interpolation::Bicubic, ..LayerPlacement::from_affine(EIGHTH) },

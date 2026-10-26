@@ -184,7 +184,7 @@ fn semitransparent_material_over_nontransparent_backdrop_matches_premultiplied_o
     }
     paint_mut(&mut background).raster = RasterRevision::backed(data);
     let mut pixels = |doc: &Document| {
-        renderer.submit(FramePacket { reset_layers: true, ..packet(doc.scene(), EXTENT) }).unwrap();
+        crate::test_support::submit_ready(&mut renderer, FramePacket { reset_layers: true, ..packet(doc.scene(), EXTENT) }).unwrap();
         crate::scene::scale::tests::display_pixels(&renderer)
     };
     let source = pixels(&front);
@@ -222,7 +222,7 @@ fn perceptual_low_zoom_sparse_material_keeps_dry_photo_pixels_across_halo_page_e
         frame.view.width_px = 512;
         frame.view.height_px = 512;
         frame.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
-        r.submit(frame).unwrap();
+        crate::layer_tests::publish(r, frame);
     }
     let a = actual.scale_display.as_ref().unwrap();
     let b = expected.scale_display.as_ref().unwrap();
@@ -545,7 +545,7 @@ fn moving_watercolor_crosses_identity_without_rebuilding_the_photo_source() {
                 document_to_surface: [0.125, 0., 0., 0.125, 64., 48.] },
             ..packet(scene, extent)
         };
-        moving.submit(frame(original.scene())).unwrap();
+        crate::layer_tests::publish(&mut moving, frame(original.scene()));
         let (texture, updates, level) = moving.scene.as_ref().unwrap().placement_cache(target(&original)).unwrap();
         if let Some((first_texture, previous_updates, first_level)) = &mut prepared {
             assert_eq!(&texture, first_texture, "crossing identity keeps the raw photo LOD allocation");
@@ -557,7 +557,7 @@ fn moving_watercolor_crosses_identity_without_rebuilding_the_photo_source() {
             assert!(updates >= 64, "the fixture must prepare a complete 64-page photo source");
             prepared = Some((texture, updates, level));
         }
-        oracle.submit(FramePacket { reset_layers: true, ..frame(expected.scene()) }).unwrap();
+        crate::layer_tests::publish(&mut oracle, FramePacket { reset_layers: true, ..frame(expected.scene()) });
         let actual = crate::scene::scale::tests::display_pixels(&moving);
         let expected = crate::scene::scale::tests::display_pixels(&oracle);
         assert_eq!(actual.len(), expected.len());
@@ -572,8 +572,8 @@ fn moving_watercolor_crosses_identity_without_rebuilding_the_photo_source() {
     let mut frame = packet(original.scene(), extent);
     frame.blend_space = layer_core::BlendSpace::Perceptual;
     frame.view.document_to_surface = [0.125, 0., 0., 0.125, 64., 48.];
-    moving.submit(frame).unwrap();
-    oracle.submit(FramePacket { reset_layers: true, ..frame }).unwrap();
+    crate::layer_tests::publish(&mut moving, frame);
+    crate::layer_tests::publish(&mut oracle, FramePacket { reset_layers: true, ..frame });
     assert_eq!(crate::scene::scale::tests::display_pixels(&moving),
         crate::scene::scale::tests::display_pixels(&oracle), "Cancel restores the ordinary identity rendering");
 }
@@ -591,7 +591,7 @@ fn accepted_photo_keeps_raw_lod_for_sparse_watercolor_and_transform_reopen() {
         frame.view.width_px = 640;
         frame.view.height_px = 480;
         frame.view.document_to_surface = [0.125, 0., 0., 0.125, 64., 48.];
-        r.submit(frame).unwrap();
+        crate::layer_tests::publish(r, frame);
     };
     let parity = |r: &WgpuRasterizer, layer: &Document, moving: bool| {
         let mut fresh = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
@@ -670,12 +670,12 @@ fn accepted_photo_keeps_raw_lod_for_sparse_watercolor_and_transform_reopen() {
     let mut frame = packet(photo.scene(), extent);
     frame.blend_space = layer_core::BlendSpace::Linear;
     frame.view.document_to_surface = [0.125, 0., 0., 0.125, 64., 48.];
-    appearance.submit(frame).unwrap();
+    crate::layer_tests::publish(&mut appearance, frame);
     let (_, _, appearance_level) = appearance.scene.as_ref().unwrap().placement_cache(target(&photo)).unwrap();
     assert!(appearance.scene.as_ref().unwrap().reduced_layer(&appearance, photo.scene(), target(&photo), extent, appearance_level).is_none(),
         "linear watercolor appearance must never become the transform's original raw pigment");
     appearance.prepare_moving_layer(Some(occurrence_id(&photo)));
-    appearance.submit(frame).unwrap();
+    crate::layer_tests::publish(&mut appearance, frame);
     let (_, _, pigment_level) = appearance.scene.as_ref().unwrap().placement_cache(target(&photo)).unwrap();
     assert!(appearance.scene.as_ref().unwrap().reduced_layer(&appearance, photo.scene(), target(&photo), extent, pigment_level).is_some(),
         "a complete raw pigment LOD remains eligible for reduced transforms");
@@ -1064,7 +1064,7 @@ fn selection_copy_bake_applies_soft_coverage_after_the_source_mask() {
     mask.source.default_coverage=0.63;
     crate::test_support::materialize_mask(&mut mask.source, layer_core::Selection::polygon(vec![Point {x:160.,y:80.},Point {x:290.,y:80.},
         Point {x:280.,y:180.},Point {x:170.,y:180.}]).unwrap(), Default::default());set_mask(&mut owner, mask);
-    render(&mut r,&owner,&[],true);
+    crate::test_support::submit_settled(&mut r, FramePacket {reset_layers:true,..packet(owner.scene(),EXTENT)});
     let original=crate::test_support::float_pixels(&r,crate::test_support::document_texture(&r));
     let occupied:Vec<_>=original.iter().enumerate().filter(|(_,p)|p[3]>0.).map(|(i,_)|[i%512,i/512]).collect();
     let bounds=[occupied.iter().map(|p|p[0]).min().unwrap(),occupied.iter().map(|p|p[1]).min().unwrap(),
@@ -1085,12 +1085,7 @@ fn selection_copy_bake_applies_soft_coverage_after_the_source_mask() {
         ..crate::test_support::dab_batch(copied,crate::tests::test_style(BrushExecution::Dry),damage)};
     occurrence_mut(&mut owner).visible =false;
     let packet=FramePacket {dab_batches:std::slice::from_ref(&batch),..packet(owner.scene(),EXTENT)};
-    let deadline=std::time::Instant::now()+READBACK_TIMEOUT;
-    while !r.raster_dependencies_ready(packet, None) {
-        assert!(std::time::Instant::now()<deadline,"selection bake dependencies did not settle");
-        std::thread::yield_now();
-    }
-    r.submit(packet).unwrap();
+    crate::test_support::submit_ready(&mut r, packet).unwrap();
     let actual=crate::test_support::float_pixels(&r,crate::test_support::document_texture(&r));
     let mut occupied=0;
     for (i,(actual,source)) in actual.iter().zip(&original).enumerate() {

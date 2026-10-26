@@ -16,7 +16,7 @@ fn attach_filter(doc: &mut Document, name: &str) -> OccurrenceHandle {
 fn native_pixels(doc: &Document, view: layer_render::ViewState) -> Vec<[f32; 4]> {
     let mut exact = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     exact.test.reference = true;
-    exact.submit(FramePacket { view, blend_space: doc.composition().blend, ..packet(doc.scene(), doc.composition().size) }).unwrap();
+    submit_published(&mut exact, FramePacket { view, blend_space: doc.composition().blend, ..packet(doc.scene(), doc.composition().size) });
     pixels(&exact, crate::test_support::document_texture(&exact))
 }
 
@@ -45,22 +45,22 @@ fn native_alpha_reuse_preserves_noops_and_forced_authored_changes() {
         let mut cached = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
         let mut rebuilt = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
         let frame = FramePacket { view, composite_all: false, ..packet(doc.scene(), extent) };
-        for r in [&mut cached, &mut rebuilt] { r.submit(frame).unwrap(); }
+        for r in [&mut cached, &mut rebuilt] { submit_published(r, frame); }
         let initial = display_pixels(&cached);
         for (step, color) in [[0., 0., 0., 1.], [1., 1., 1., 0.], [1., 1., 1., 1.]].into_iter().enumerate() {
             let mut dab = crate::tests::test_dab([255.5, 127.5], color, 0.8);
             dab.radii = [13.25, 11.75];
             let batch = dab_batch(target, crate::layer_tests::preset_style(DefaultBrushPreset::GPen), dab.bounds());
             let contact = FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&batch), ..frame };
-            cached.submit(contact).unwrap();
-            rebuilt.submit(FramePacket { composite_all: true, ..contact }).unwrap();
+            crate::test_support::submit_ready(&mut cached, contact).unwrap();
+            crate::test_support::submit_ready(&mut rebuilt, FramePacket { composite_all: true, ..contact }).unwrap();
             let actual = display_pixels(&cached);
             assert!(actual == display_pixels(&rebuilt), "{name} level {level} contact {step}");
             if step < 2 { assert!(actual == initial, "{name} must preserve an unchanged native store"); }
             else { assert!(actual != initial, "{name} must publish changed native pixels"); }
         }
         cached = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
-        cached.submit(frame).unwrap(); cached.wait_idle().unwrap(); cached.submit(frame).unwrap();
+        submit_published(&mut cached, frame); cached.wait_idle().unwrap(); crate::test_support::submit_ready(&mut cached, frame).unwrap();
         for state in 0..5 {
             match state {
                 0 => paint_mut(&mut doc, 1).base = (Some(rgba8_source(extent, |x, y| {
@@ -77,7 +77,7 @@ fn native_alpha_reuse_preserves_noops_and_forced_authored_changes() {
                 _ => unreachable!(),
             }
             let changed = FramePacket { view, composite_all: false, blend_space: doc.composition().blend, ..packet(doc.scene(), extent) };
-            cached.submit(changed).unwrap();
+            submit_published(&mut cached, changed);
             assert_settled(&mut cached, changed, &native_pixels(&doc, view));
         }
     }}
@@ -98,7 +98,7 @@ fn compact_contribution_omits_unused_paint_and_matches_bound_source() {
         let scale=if preset==DefaultBrushPreset::GPen {0.25}else{1.};
         frame.view.document_to_surface=[scale,0.,0.,scale,0.,0.];
         let mut r=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
-        r.submit(frame).unwrap();
+        crate::test_support::submit_ready(&mut r, frame).unwrap();
         let mut dab=crate::tests::test_dab([125.5,126.5],[0.031,0.13,0.29,0.63],0.8);
         dab.radii=[13.25,11.75];
         let style=crate::layer_tests::preset_style(preset);
@@ -111,10 +111,10 @@ fn compact_contribution_omits_unused_paint_and_matches_bound_source() {
         }
         let mut persistent=dab_batch(target,style,dab.bounds());
         persistent.style.blend_space=blend;persistent.stroke_end=false;
-        r.submit(FramePacket {dabs:std::slice::from_ref(&dab),dab_batches:std::slice::from_ref(&persistent),..frame}).unwrap();
+        crate::test_support::submit_ready(&mut r, FramePacket {dabs:std::slice::from_ref(&dab),dab_batches:std::slice::from_ref(&persistent),..frame}).unwrap();
         dab.center=layer_core::Point {x:129.5,y:127.5};
         let mut preview=persistent.clone();preview.kind=DabBatchKind::Preview;preview.stroke_start=false;preview.damage=dab.bounds();
-        r.submit(FramePacket {dabs:std::slice::from_ref(&dab),dab_batches:std::slice::from_ref(&preview),..frame}).unwrap();
+        crate::test_support::submit_ready(&mut r, FramePacket {dabs:std::slice::from_ref(&dab),dab_batches:std::slice::from_ref(&preview),..frame}).unwrap();
         r.wait_idle().unwrap();
         assert!(r.compact_preview_contribution(&preview),"{name} {blend:?} must exercise actual contribution execution");
         if preset!=DefaultBrushPreset::GPen {assert_eq!(r.preview_level,0);assert!(!r.preview_requires_base);}
@@ -166,12 +166,12 @@ fn native_alpha_reuse_admits_warm_pages_beside_cold_output_pages() {
         frame.composite_all=false;
         frame.view.document_to_surface=[0.25,0.,0.,0.25,0.,0.];
         let mut r=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
-        r.submit(frame).unwrap();
+        crate::test_support::submit_ready(&mut r, frame).unwrap();
         let mut dab=crate::tests::test_dab([258.5,129.5],[0.,0.,0.,0.],1.);
         dab.radii=[260.,131.];
         let batch=dab_batch(target,crate::layer_tests::preset_style(DefaultBrushPreset::GPen),dab.bounds());
         for _ in 0..2 {
-            r.submit(FramePacket {dabs:std::slice::from_ref(&dab),dab_batches:std::slice::from_ref(&batch),..frame}).unwrap();
+            crate::test_support::submit_ready(&mut r, FramePacket {dabs:std::slice::from_ref(&dab),dab_batches:std::slice::from_ref(&batch),..frame}).unwrap();
             r.wait_idle().unwrap();
         }
         let flags=r.changed_cells.as_ref().unwrap().reusable(target,[0,0]).unwrap();
@@ -306,12 +306,12 @@ fn native_alpha_reuse_auxiliaries_retire_with_predictions_sources_and_scale() {
         let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
         let disabled = r.changed_cells.as_ref().unwrap().storage_bytes();
         let frame = FramePacket { view, composite_all: false, ..packet(doc.scene(), extent) };
-        for _ in 0..2 { r.submit(frame).unwrap(); r.wait_idle().unwrap(); }
+        for _ in 0..2 { crate::test_support::submit_ready(&mut r, frame).unwrap(); r.wait_idle().unwrap(); }
         let mut seed = crate::tests::test_dab([125.5, 126.5], [0.1, 0.1, 0.1, 0.6], 0.8);
         seed.radii = [13.25, 11.75];
         let batch = dab_batch(target, crate::layer_tests::preset_style(DefaultBrushPreset::GPen), seed.bounds());
-        r.submit(FramePacket { dabs: std::slice::from_ref(&seed), dab_batches: std::slice::from_ref(&batch), ..frame }).unwrap();
-        for _ in 0..2 { r.submit(frame).unwrap(); r.wait_idle().unwrap(); }
+        crate::test_support::submit_ready(&mut r, FramePacket { dabs: std::slice::from_ref(&seed), dab_batches: std::slice::from_ref(&batch), ..frame }).unwrap();
+        for _ in 0..2 { crate::test_support::submit_ready(&mut r, frame).unwrap(); r.wait_idle().unwrap(); }
         let warm = r.changed_cells.as_ref().unwrap().storage_bytes();
         assert!(warm > disabled, "{name} must exercise admitted reuse auxiliaries");
         for contact in 0..8 {
@@ -320,28 +320,28 @@ fn native_alpha_reuse_auxiliaries_retire_with_predictions_sources_and_scale() {
             dab.radii = [13.25, 11.75];
             let mut batch = dab_batch(target, crate::layer_tests::preset_style(DefaultBrushPreset::GPen), dab.bounds());
             batch.kind = DabBatchKind::Preview; batch.stroke_end = false;
-            r.submit(FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&batch), ..frame }).unwrap();
+            crate::test_support::submit_ready(&mut r, FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&batch), ..frame }).unwrap();
             let auxiliary = r.changed_cells.as_ref().unwrap().storage_bytes();
             assert!(auxiliary <= 32 * 1024 * 1024 + disabled, "{name} auxiliary admission: {auxiliary}");
             let total = resident_bytes_with_pool(r.scale_display.as_ref().unwrap(), r.scene.as_ref().unwrap()) + auxiliary;
             assert!(total <= CACHE_BYTES, "{name} admitted resident cache including auxiliaries: {total}");
         }
-        for _ in 0..2 { r.submit(frame).unwrap(); r.wait_idle().unwrap(); }
+        for _ in 0..2 { crate::test_support::submit_ready(&mut r, frame).unwrap(); r.wait_idle().unwrap(); }
         assert_eq!(r.changed_cells.as_ref().unwrap().storage_bytes(), warm, "{name} retired prediction-only flags must release their bytes");
         doc.artwork.occurrences.get_mut(filter).unwrap().attachment = Attachment::None;
         set_root_entries(&mut doc, vec![replacement]);
-        for _ in 0..2 { r.submit(FramePacket { view, composite_all: false, ..packet(doc.scene(), extent) }).unwrap(); r.wait_idle().unwrap(); }
+        for _ in 0..2 { crate::test_support::submit_ready(&mut r, FramePacket { view, composite_all: false, ..packet(doc.scene(), extent) }).unwrap(); r.wait_idle().unwrap(); }
         assert_eq!(r.changed_cells.as_ref().unwrap().storage_bytes(), disabled, "{name} unused source auxiliaries must retire");
         set_root_entries(&mut doc, vec![filter, owner]);
         doc.artwork.occurrences.get_mut(filter).unwrap().attachment = Attachment::Effect;
         reindex(&mut doc);
         let frame = FramePacket { view, composite_all: false, ..packet(doc.scene(), extent) };
-        for _ in 0..2 { r.submit(frame).unwrap(); r.wait_idle().unwrap(); }
-        r.submit(FramePacket { dabs: std::slice::from_ref(&seed), dab_batches: std::slice::from_ref(&batch), ..frame }).unwrap();
-        r.submit(frame).unwrap(); r.wait_idle().unwrap();
+        for _ in 0..2 { crate::test_support::submit_ready(&mut r, frame).unwrap(); r.wait_idle().unwrap(); }
+        crate::test_support::submit_ready(&mut r, FramePacket { dabs: std::slice::from_ref(&seed), dab_batches: std::slice::from_ref(&batch), ..frame }).unwrap();
+        crate::test_support::submit_ready(&mut r, frame).unwrap(); r.wait_idle().unwrap();
         assert!(r.changed_cells.as_ref().unwrap().storage_bytes() > disabled);
         view.document_to_surface = [1., 0., 0., 1., 0., 0.];
-        r.submit(FramePacket { view, composite_all: false, ..packet(doc.scene(), extent) }).unwrap();
+        crate::test_support::submit_ready(&mut r, FramePacket { view, composite_all: false, ..packet(doc.scene(), extent) }).unwrap();
         assert_eq!(r.scale_display.as_ref().unwrap().plan.level, 0);
         assert_eq!(r.changed_cells.as_ref().unwrap().storage_bytes(), disabled, "{name} native presentation must release reduced-cell auxiliaries");
     }}
@@ -454,13 +454,13 @@ fn native_alpha_reuse_raw_mask_paint_forces_unchanged_paint_cells() {
         frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
         let mut cached = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
         let mut rebuilt = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
-        for r in [&mut cached, &mut rebuilt] { r.submit(frame).unwrap(); }
+        for mut r in [&mut cached, &mut rebuilt] { crate::test_support::submit_ready(&mut r, frame).unwrap(); }
         let mut dab = crate::tests::test_dab([125.5, 126.5], [0.1, 0.1, 0.1, 0.6], 0.8);
         dab.radii = [13.25, 11.75];
         let paint_batch = dab_batch(paint, crate::layer_tests::preset_style(DefaultBrushPreset::GPen), dab.bounds());
-        for r in [&mut cached, &mut rebuilt] {
-            r.submit(FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&paint_batch), ..frame }).unwrap();
-            for _ in 0..2 { r.submit(frame).unwrap(); r.wait_idle().unwrap(); }
+        for mut r in [&mut cached, &mut rebuilt] {
+            crate::test_support::submit_ready(&mut r, FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&paint_batch), ..frame }).unwrap();
+            for _ in 0..2 { crate::test_support::submit_ready(&mut r, frame).unwrap(); r.wait_idle().unwrap(); }
         }
         assert!(cached.changed_cells.as_ref().unwrap().buffer(paint, [0, 0]).is_some(), "{name} retained paint flags must be admitted before the mask write");
         let before = display_pixels(&cached);
@@ -469,8 +469,8 @@ fn native_alpha_reuse_raw_mask_paint_forces_unchanged_paint_cells() {
         dab.color_rgba_linear = [1.; 4];
         let mask_batch = dab_batch(SourceTarget::Coverage(mask), crate::layer_tests::preset_style(DefaultBrushPreset::GPen), dab.bounds());
         let changed = FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&mask_batch), ..frame };
-        cached.submit(changed).unwrap();
-        rebuilt.submit(FramePacket { composite_all: true, ..changed }).unwrap();
+        crate::test_support::submit_ready(&mut cached, changed).unwrap();
+        crate::test_support::submit_ready(&mut rebuilt, FramePacket { composite_all: true, ..changed }).unwrap();
         let actual = display_pixels(&cached); let expected = display_pixels(&rebuilt);
         let error = crate::test_support::max_error(&actual, &expected);
         assert!(error < 2e-5, "{name} {blend:?} raw mask painting must match full recomposition: error={error}");
@@ -506,10 +506,10 @@ fn native_alpha_reuse_captured_phase_change_forces_same_elapsed_recomposition() 
     let mut dab = crate::tests::test_dab([125.5, 126.5], [0.1, 0.1, 0.1, 0.6], 0.8);
     dab.radii = [13.25, 11.75];
     let batch = dab_batch(paint, crate::layer_tests::preset_style(DefaultBrushPreset::GPen), dab.bounds());
-    for r in [&mut cached, &mut exact] {
-        r.submit(frame).unwrap();
-        r.submit(FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&batch), ..frame }).unwrap();
-        for _ in 0..2 { r.submit(frame).unwrap(); r.wait_idle().unwrap(); }
+    for mut r in [&mut cached, &mut exact] {
+        crate::test_support::submit_ready(&mut r, frame).unwrap();
+        crate::test_support::submit_ready(&mut r, FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&batch), ..frame }).unwrap();
+        for _ in 0..2 { crate::test_support::submit_ready(&mut r, frame).unwrap(); r.wait_idle().unwrap(); }
     }
     assert!(scene::same_metadata(&cached, frame));
     assert!(cached.changed_cells.as_ref().unwrap().reusable(paint, [0, 0]).is_some());
@@ -517,8 +517,8 @@ fn native_alpha_reuse_captured_phase_change_forces_same_elapsed_recomposition() 
     let candidates = cached.metrics.native_effect_reuse_candidate_cells;
     let changed = FramePacket { scene: doc.scene().with_context(&changed), ..frame };
     assert!(!scene::same_metadata(&cached, changed), "a captured phase change at the same elapsed time changes effect inputs");
-    cached.submit(changed).unwrap();
-    exact.submit(FramePacket { composite_all: true, ..changed }).unwrap();
+    crate::test_support::submit_ready(&mut cached, changed).unwrap();
+    crate::test_support::submit_ready(&mut exact, FramePacket { composite_all: true, ..changed }).unwrap();
     let native = pixels(&exact, crate::test_support::document_texture(&exact));
     let error = quality(&display_pixels(&cached), &native, cached.scale_display.as_ref().unwrap().plan);
     assert!(error[2] < 2e-5, "changed captured phase must match native recomposition: {error:?}");
@@ -568,12 +568,12 @@ fn native_alpha_reuse_idle_preparation_preserves_flags_until_the_next_contact() 
         frame.composite_all = false;
         frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
         let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
-        r.submit(frame).unwrap();
+        submit_published(&mut r, frame);
         let mut dab = crate::tests::test_dab([125.5, 126.5], [0.1, 0.1, 0.1, 0.6], 0.8);
         dab.radii = [13.25, 11.75];
         let batch = dab_batch(target, crate::layer_tests::preset_style(DefaultBrushPreset::GPen), dab.bounds());
-        r.submit(FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&batch), ..frame }).unwrap();
-        for _ in 0..2 { r.submit(frame).unwrap(); r.wait_idle().unwrap(); }
+        crate::test_support::submit_ready(&mut r, FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&batch), ..frame }).unwrap();
+        for _ in 0..2 { crate::test_support::submit_ready(&mut r, frame).unwrap(); r.wait_idle().unwrap(); }
         let before = display_pixels(&r);
         let flags = r.changed_cells.as_ref().unwrap().buffer(target, [0, 0]).unwrap().clone();
         let read = |r: &WgpuRasterizer| pollster::block_on(crate::local_tone::read_buffer_async(&r.device, &r.queue, &flags)).unwrap();
@@ -595,13 +595,13 @@ fn native_alpha_reuse_idle_preparation_preserves_flags_until_the_next_contact() 
         r.changed_cells = Some(cells);
         let candidates = r.metrics.native_effect_reuse_candidate_cells;
         dab.color_rgba_linear = [0.; 4];
-        r.submit(FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&batch), ..frame }).unwrap();
+        crate::test_support::submit_ready(&mut r, FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&batch), ..frame }).unwrap();
         assert!(r.metrics.native_effect_reuse_candidate_cells > candidates, "{name} next contact must restore eligible reuse");
         assert!(r.changed_cells.as_ref().unwrap().reusable(target, [0, 0]).is_some());
         assert!(read(&r)[16..].as_chunks::<4>().0.iter().all(|cell| u32::from_le_bytes(*cell) == 0), "{name} next unchanged contact must clear prior flags before stores");
         assert_pixels_equal(&display_pixels(&r), &before, r.scale_display.as_ref().unwrap().plan.size[0], name);
         let plan = r.scale_display.as_ref().unwrap().plan;
-        r.submit(FramePacket { view: crate::test_support::view(extent), composite_all: true, ..frame }).unwrap();
+        crate::test_support::submit_ready(&mut r, FramePacket { view: crate::test_support::view(extent), composite_all: true, ..frame }).unwrap();
         let native = pixels(&r, crate::test_support::document_texture(&r));
         let error = quality(&before, &native, plan);
         assert!(error[2] < 2e-5, "{name} preserved idle flags must retain native paint output: {error:?}");
@@ -628,10 +628,10 @@ fn native_alpha_reuse_direct_edged_flow_contacts_force_native_alpha_recompositio
         let mut seed_style = crate::layer_tests::preset_style(DefaultBrushPreset::GPen);
         seed_style.blend_space = frame.blend_space;
         let seed = dab_batch(target, seed_style, dab.bounds());
-        for r in [&mut cached, &mut native] {
-            r.submit(frame).unwrap();
-            r.submit(FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&seed), ..frame }).unwrap();
-            for _ in 0..2 { r.submit(frame).unwrap(); r.wait_idle().unwrap(); }
+        for mut r in [&mut cached, &mut native] {
+            crate::test_support::submit_ready(&mut r, frame).unwrap();
+            crate::test_support::submit_ready(&mut r, FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&seed), ..frame }).unwrap();
+            for _ in 0..2 { crate::test_support::submit_ready(&mut r, frame).unwrap(); r.wait_idle().unwrap(); }
         }
         assert!(cached.changed_cells.as_ref().unwrap().buffer(target, [0, 0]).is_some());
         let before = display_pixels(&cached);
@@ -647,7 +647,7 @@ fn native_alpha_reuse_direct_edged_flow_contacts_force_native_alpha_recompositio
         let batch = dab_batch(target, style, dab.bounds());
         assert!(BrushPassPlan::for_device(&batch.style, &cached.device).direct.is_some());
         let contact = FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&batch), ..frame };
-        cached.submit(contact).unwrap(); native.submit(contact).unwrap();
+        crate::test_support::submit_ready(&mut cached, contact).unwrap(); crate::test_support::submit_ready(&mut native, contact).unwrap();
         let actual = display_pixels(&cached);
         assert!(actual != before, "{name} burnt={burnt} direct paint must visibly change native alpha output");
         let expected = pixels(&native, crate::test_support::document_texture(&native));
@@ -676,7 +676,7 @@ fn native_alpha_reuse_zero_dab_terminal_edges_force_every_earlier_stroke_page() 
         let mut cached = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
         let mut native = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
         native.test.reference = true;
-        for r in [&mut cached, &mut native] { r.submit(frame).unwrap(); }
+        for mut r in [&mut cached, &mut native] { crate::test_support::submit_ready(&mut r, frame).unwrap(); }
         let mut style = crate::layer_tests::preset_style(DefaultBrushPreset::GPen);
         style.blend_space = frame.blend_space;
         let mut dab = crate::tests::test_dab([125.5, 126.5], [0.1, 0.2, 0.8, 0.7], 0.6);
@@ -684,11 +684,11 @@ fn native_alpha_reuse_zero_dab_terminal_edges_force_every_earlier_stroke_page() 
         for position in [[125.5, 126.5], [901.5, 387.5]] {
             dab.center = layer_core::Point { x: position[0], y: position[1] };
             let batch = dab_batch(target, style.clone(), dab.bounds());
-            for r in [&mut cached, &mut native] {
-                r.submit(FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&batch), ..frame }).unwrap();
+            for mut r in [&mut cached, &mut native] {
+                crate::test_support::submit_ready(&mut r, FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&batch), ..frame }).unwrap();
             }
         }
-        for r in [&mut cached, &mut native] { for _ in 0..2 { r.submit(frame).unwrap(); r.wait_idle().unwrap(); } }
+        for mut r in [&mut cached, &mut native] { for _ in 0..2 { crate::test_support::submit_ready(&mut r, frame).unwrap(); r.wait_idle().unwrap(); } }
         for coordinate in [[0, 0], [3, 1]] { assert!(cached.changed_cells.as_ref().unwrap().buffer(target, coordinate).is_some()); }
         style.rendering.edge_after_stroke = true;
         style.rendering.wet_edge = 0.8; style.rendering.burnt_edge = 0.4; style.rendering.edge_width = 4.;
@@ -697,8 +697,8 @@ fn native_alpha_reuse_zero_dab_terminal_edges_force_every_earlier_stroke_page() 
         for (step, position) in [[125.5, 126.5], [901.5, 387.5]].into_iter().enumerate() {
             dab.center = layer_core::Point { x: position[0], y: position[1] };
             batch.damage = dab.bounds(); batch.stroke_start = step == 0; batch.material_update = step as u32;
-            for r in [&mut cached, &mut native] {
-                r.submit(FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&batch), ..frame }).unwrap();
+            for mut r in [&mut cached, &mut native] {
+                crate::test_support::submit_ready(&mut r, FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&batch), ..frame }).unwrap();
             }
         }
         let before = display_pixels(&cached);
@@ -711,7 +711,7 @@ fn native_alpha_reuse_zero_dab_terminal_edges_force_every_earlier_stroke_page() 
         batch.stroke_start = false; batch.stroke_end = true; batch.dab_count = 0; batch.material_update += 1;
         batch.damage = Default::default();
         let terminal = FramePacket { dab_batches: std::slice::from_ref(&batch), ..frame };
-        cached.submit(terminal).unwrap(); native.submit(terminal).unwrap();
+        crate::test_support::submit_ready(&mut cached, terminal).unwrap(); crate::test_support::submit_ready(&mut native, terminal).unwrap();
         let actual = display_pixels(&cached);
         let plan = cached.scale_display.as_ref().unwrap().plan;
         let first_page_changed = actual.iter().zip(&before).enumerate().any(|(i, (a, b))| {
@@ -739,7 +739,7 @@ fn fused_prediction_tracks_actual_warm_primary_and_forces_relocated_pages() {
         let frame=FramePacket {view,blend_space:blend,composite_all:false,..packet(doc.scene(),extent)};
         let mut r=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
         let mut reference=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
-        for backend in [&mut r,&mut reference] {backend.submit(frame).unwrap();}
+        for backend in [&mut r,&mut reference] {crate::test_support::submit_ready(backend, frame).unwrap();}
         let mut dab=crate::tests::test_dab([125.5,127.5],[0.,0.,0.,1.],0.8);dab.radii=[24.,21.];
         let mut style=crate::layer_tests::preset_style(preset);style.blend_space=blend;
         if let Some(dry)=style.contact.and_then(|c|c.dry) {
@@ -748,7 +748,7 @@ fn fused_prediction_tracks_actual_warm_primary_and_forces_relocated_pages() {
             dab.contact=[0.7,relief[0],relief[1],relief[2]];dab.previous_contact=dab.contact;
         }
         let mut batch=dab_batch(target,style,dab.bounds());
-        for backend in [&mut r,&mut reference] {backend.submit(FramePacket {dabs:std::slice::from_ref(&dab),dab_batches:std::slice::from_ref(&batch),..frame}).unwrap();}
+        for backend in [&mut r,&mut reference] {crate::test_support::submit_ready(backend, FramePacket {dabs:std::slice::from_ref(&dab),dab_batches:std::slice::from_ref(&batch),..frame}).unwrap();}
         batch.kind=DabBatchKind::Preview;batch.stroke_start=false;
         let mut previous=None;
         for (step,position) in [[133.5,127.5],[133.5,127.5],[143.5,133.5],[143.5,133.5],[1023.5,513.5],[143.5,133.5]].into_iter().enumerate() {
@@ -758,13 +758,13 @@ fn fused_prediction_tracks_actual_warm_primary_and_forces_relocated_pages() {
             if step==1 {
                 let old=r.preview_page([0,0]).unwrap().primary.view.clone();
                 let stamp=r.preview_page([0,0]).unwrap().primary.preview.get();let contacts=r.preview_contact_tiles.clone();
-                r.submit(FramePacket {commit_rasters:false,..frame}).unwrap();
+                crate::test_support::submit_ready(&mut r, FramePacket {commit_rasters:false,..frame}).unwrap();
                 assert_eq!(r.preview_page([0,0]).unwrap().primary.view,old);
                 assert_eq!(r.preview_page([0,0]).unwrap().primary.preview.get(),stamp);
                 assert_eq!(r.preview_contact_tiles,contacts);assert_eq!(r.preview_layer_id,Some(target));assert!(r.preview_contribution);
             }
             let current=FramePacket {dabs:std::slice::from_ref(&dab),dab_batches:std::slice::from_ref(&batch),..frame};
-            r.submit(current).unwrap();reference.submit(FramePacket {composite_all:true,..current}).unwrap();r.wait_idle().unwrap();reference.wait_idle().unwrap();
+            crate::test_support::submit_ready(&mut r, current).unwrap();crate::test_support::submit_ready(&mut reference, FramePacket {composite_all:true,..current}).unwrap();r.wait_idle().unwrap();reference.wait_idle().unwrap();
             assert!(r.compact_preview_contribution(&batch));
             let coordinate=[position[0] as u32/PAGE_SIZE,position[1] as u32/PAGE_SIZE];
             let page=r.preview_page(coordinate).unwrap();assert!(!page.active_secondary);
@@ -785,7 +785,7 @@ fn fused_prediction_tracks_actual_warm_primary_and_forces_relocated_pages() {
             assert_pixels_equal(&display_pixels(&r),&display_pixels(&reference),r.scale_display.as_ref().unwrap().plan.size[0],(name,blend,level,step));
             previous=Some(page.primary.view.clone());
         }
-        r.submit(frame).unwrap();reference.submit(FramePacket {composite_all:true,..frame}).unwrap();
+        crate::test_support::submit_ready(&mut r, frame).unwrap();crate::test_support::submit_ready(&mut reference, FramePacket {composite_all:true,..frame}).unwrap();
         assert!(r.preview_pages.is_empty());
         assert_pixels_equal(&display_pixels(&r),&display_pixels(&reference),r.scale_display.as_ref().unwrap().plan.size[0],(name,blend,level,"removed"));
     }}}}
@@ -839,14 +839,14 @@ fn source_only_dry_updates_reach_the_next_prediction_and_display() {
         let mut r=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
         let mut reference=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
         if readonly {crate::test_support::write_only_dry_material(&mut r);crate::test_support::write_only_dry_material(&mut reference);}
-        for backend in [&mut r,&mut reference] {backend.submit(frame).unwrap();}
+        for backend in [&mut r,&mut reference] {crate::test_support::submit_ready(backend, frame).unwrap();}
         let mut style=crate::layer_tests::preset_style(preset);style.mode=mode;style.blend_space=frame.blend_space;style.opacity=opacity;
         let dry=style.contact.unwrap().dry.unwrap();let relief=dry.pose(0.85).relief;
         let mut dab=crate::tests::test_dab([125.5,127.5],[0.031,0.13,0.29,0.63],0.8);
         dab.radii=[32.,21.];dab.previous=[32.,21.,1.,0.];dab.motion=[4.,1.];
         dab.contact=[0.7,relief[0],relief[1],relief[2]];dab.previous_contact=dab.contact;
         let mut batch=dab_batch(target,style,dab.bounds());batch.stroke_end=false;
-        for backend in [&mut r,&mut reference] {backend.submit(FramePacket {dabs:std::slice::from_ref(&dab),dab_batches:std::slice::from_ref(&batch),..frame}).unwrap();}
+        for backend in [&mut r,&mut reference] {crate::test_support::submit_ready(backend, FramePacket {dabs:std::slice::from_ref(&dab),dab_batches:std::slice::from_ref(&batch),..frame}).unwrap();}
         batch.kind=DabBatchKind::Preview;batch.stroke_start=false;
         for (step,position) in [[133.5,127.5],[133.5,127.5],[143.5,133.5],[143.5,133.5],[256.5,131.5],[143.5,133.5]].into_iter().enumerate() {
             dab.center=layer_core::Point {x:position[0],y:position[1]};
@@ -856,18 +856,18 @@ fn source_only_dry_updates_reach_the_next_prediction_and_display() {
             if step==2 {
                 let mut committed=dab;committed.center=layer_core::Point {x:210.5,y:60.5};
                 let mut persistent=batch.clone();persistent.kind=DabBatchKind::Persistent;persistent.damage=committed.bounds();
-                for backend in [&mut r,&mut reference] {backend.submit(FramePacket {dabs:std::slice::from_ref(&committed),dab_batches:std::slice::from_ref(&persistent),commit_rasters:false,..frame}).unwrap();}
+                for backend in [&mut r,&mut reference] {crate::test_support::submit_ready(backend, FramePacket {dabs:std::slice::from_ref(&committed),dab_batches:std::slice::from_ref(&persistent),commit_rasters:false,..frame}).unwrap();}
             }
             if step==3 {
                 let mut committed=dab;committed.center=layer_core::Point {x:211.5,y:61.5};
                 let mut persistent=batch.clone();persistent.kind=DabBatchKind::Persistent;persistent.first_dab=0;persistent.damage=committed.bounds();
                 let mut prediction=batch.clone();prediction.first_dab=1;
                 for (backend,cold) in [(&mut r,false),(&mut reference,true)] {
-                    backend.submit(FramePacket {dabs:&[committed,dab],dab_batches:&[persistent.clone(),prediction.clone()],composite_all:cold,..frame}).unwrap();
+                    crate::test_support::submit_ready(backend, FramePacket {dabs:&[committed,dab],dab_batches:&[persistent.clone(),prediction.clone()],composite_all:cold,..frame}).unwrap();
                 }
             } else {
                 let current=FramePacket {dabs:std::slice::from_ref(&dab),dab_batches:std::slice::from_ref(&batch),..frame};
-                r.submit(current).unwrap();reference.submit(FramePacket {composite_all:true,..current}).unwrap();
+                crate::test_support::submit_ready(&mut r, current).unwrap();crate::test_support::submit_ready(&mut reference, FramePacket {composite_all:true,..current}).unwrap();
             }
             r.wait_idle().unwrap();reference.wait_idle().unwrap();
             assert_eq!(r.preview_level==0,opacity<1.,"only partial opacity keeps a full-native prediction");assert!(!r.preview_contribution);

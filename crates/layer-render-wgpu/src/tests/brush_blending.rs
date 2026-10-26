@@ -63,13 +63,13 @@ impl Canvas {
             let batch=DabBatch {stroke_id:StrokeId(id),dab_count:contacts.len() as u32,
                 stroke_start:i==0,stroke_end:(i+1)*chunk>=dabs.len(),
                 ..crate::test_support::dab_batch(self.base,style.clone(),damage)};
-            self.r.submit(FramePacket {dabs:contacts,dab_batches:std::slice::from_ref(&batch),
+            crate::test_support::submit_ready(&mut self.r, FramePacket {dabs:contacts,dab_batches:std::slice::from_ref(&batch),
                 blend_space:self.space,..packet(self.document.scene(),self.extent)}).unwrap();
         }
     }
 
     fn reset(&mut self) {
-        self.r.submit(FramePacket { reset_layers: true, blend_space: self.space, ..packet(self.document.scene(), self.extent) }).unwrap();
+        crate::test_support::submit_ready(&mut self.r, FramePacket { reset_layers: true, blend_space: self.space, ..packet(self.document.scene(), self.extent) }).unwrap();
     }
 
     /// One frame of a stroke whose contacts arrive in batches of `chunk`, and

@@ -52,14 +52,13 @@ fn view(matrix: [f32; 6]) -> ViewState {
     }
 }
 
-fn submit(r: &mut WgpuRasterizer, doc: &layer_core::Document, view: ViewState, all: bool) {
+fn submit(mut r: &mut WgpuRasterizer, doc: &layer_core::Document, view: ViewState, all: bool) {
     let deadline = std::time::Instant::now() + READBACK_TIMEOUT;
-    r.submit(FramePacket { view, inspect_mask: doc.working.inspect_mask, composite_all: all, ..packet(doc.scene(), doc.composition().size) })
-    .unwrap();
+    crate::test_support::submit_ready(r, FramePacket { view, inspect_mask: doc.working.inspect_mask, composite_all: all, ..packet(doc.scene(), doc.composition().size) }).unwrap();
     while r.has_pending_work() {
         assert!(std::time::Instant::now() < deadline, "display did not settle");
         r.wait_idle().unwrap();
-        r.submit(FramePacket { view, inspect_mask: doc.working.inspect_mask, composite_all: false, ..packet(doc.scene(), doc.composition().size) }).unwrap();
+        crate::test_support::submit_ready(&mut r, FramePacket { view, inspect_mask: doc.working.inspect_mask, composite_all: false, ..packet(doc.scene(), doc.composition().size) }).unwrap();
     }
 }
 
@@ -123,7 +122,7 @@ fn rejected_views_and_abandoned_composition_preserve_artwork() {
     let occurrence=abandoned.artwork.occurrences.get_mut(overlay).unwrap();occurrence.opacity=0.7;occurrence.blend=layer_core::LayerBlend::Multiply;
     insert_occurrence(&mut abandoned,overlay,0);
     let frame = FramePacket { view: v, ..packet(abandoned.scene(), doc.composition().size) };
-    r.submit(frame).unwrap();
+    crate::test_support::submit_ready(&mut r, frame).unwrap();
     assert!(r.has_pending_work());
     let mut scene = r.scene.take().unwrap();
     let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
@@ -547,7 +546,7 @@ fn pass_through_edits_and_mode_changes_match_full_recomposition() {
         }).collect();
         reference.scene = None;
         for (r, all) in [(&mut incremental, step == 0 || edited), (&mut reference, true)] {
-            r.submit(FramePacket {
+            crate::test_support::submit_ready(r, FramePacket {
                 view: v,
                 dabs: &dabs,
                 dab_batches: &batches,
@@ -567,7 +566,8 @@ fn pass_through_edits_and_mode_changes_match_full_recomposition() {
             reference.scene = None;
             for (r, all) in [(&mut incremental, false), (&mut reference, true)] {
                 r.set_transform_preview(Some(&transform)).unwrap();
-                submit(r, &doc, v, all);
+                r.submit(FramePacket { view: v, composite_all: all, ..packet(doc.scene(), doc.composition().size) }).unwrap();
+                submit(r, &doc, v, false);
             }
             assert!(!incremental.has_pending_work());
             assert!(!reference.has_pending_work());
@@ -648,7 +648,7 @@ fn fit_presentation_frames() {
             for frame in 0..160 {
                 let view = fit_view(extent, viewport, zoom, (frame % 40) as f32 * 3.);
                 let started = std::time::Instant::now();
-                r.submit(FramePacket { view, composite_all: false, ..packet(doc.scene(), extent) }).unwrap();
+                crate::test_support::submit_ready(&mut r, FramePacket { view, composite_all: false, ..packet(doc.scene(), extent) }).unwrap();
                 presenter.present(&r, &target, view, [0.2, 0.2, 0.2, 1.]).unwrap();
                 r.wait_idle().unwrap();
                 if frame >= 10 { walls.push(started.elapsed().as_secs_f64() * 1e3); }
@@ -811,8 +811,8 @@ fn painting_at_fit_updates_the_half_float_level_it_presents() {
             let batch = dab_batch(source_at(&doc, 0), crate::layer_tests::preset_style(layer_core::DefaultBrushPreset::GPen), dab.bounds());
             for kind in [DabBatchKind::Preview, DabBatchKind::Persistent] {
                 let batch = DabBatch { kind, ..batch.clone() };
-                for (r, view) in [(&mut painted, fit), (&mut fresh, native)] {
-                    r.submit(FramePacket { view, dabs: &[dab], dab_batches: std::slice::from_ref(&batch), composite_all: false, ..packet(doc.scene(), extent) }).unwrap();
+                for (mut r, view) in [(&mut painted, fit), (&mut fresh, native)] {
+                    crate::test_support::submit_ready(&mut r, FramePacket { view, dabs: &[dab], dab_batches: std::slice::from_ref(&batch), composite_all: false, ..packet(doc.scene(), extent) }).unwrap();
                 }
                 present(&painted, &mut presenter, fit);
             }

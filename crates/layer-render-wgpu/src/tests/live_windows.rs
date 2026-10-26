@@ -85,12 +85,12 @@ fn native_live_windows_match_full_filters_masks_clips_and_reconfiguration() {
                         document.working.inspect_mask = Some(first);
                     }
                     r.native_edit.as_mut().unwrap().image_pixel_bytes = Some(u64::MAX);
-                    r.submit(packet(&document, extent)).unwrap();
+                    crate::test_support::submit_ready(&mut r, packet(&document, extent)).unwrap();
                     let expected = pixels(&r);
                     let full_cache = r.scene.as_ref().unwrap().image_cache_bytes();
                     let before = r.metrics().image_window_submissions;
                     r.native_edit.as_mut().unwrap().image_pixel_bytes = Some(CAP);
-                    r.submit(packet(&document, extent)).unwrap();
+                    crate::test_support::submit_ready(&mut r, packet(&document, extent)).unwrap();
                     close(&pixels(&r), &expected);
                     assert!(r.metrics().image_window_submissions > before + 1);
                     assert!(r.metrics().image_window_peak_bytes <= CAP + 96 * document.scene().order().len() as u64);
@@ -110,7 +110,7 @@ fn native_live_windows_match_full_filters_masks_clips_and_reconfiguration() {
                     close(&pixels(&r), &expected);
                     // Returning to the ordinary cache must repopulate all of it.
                     r.native_edit.as_mut().unwrap().image_pixel_bytes = Some(u64::MAX);
-                    r.submit(packet(&document, extent)).unwrap();
+                    crate::test_support::submit_ready(&mut r, packet(&document, extent)).unwrap();
                     close(&pixels(&r), &expected);
                 }
             }
@@ -185,7 +185,7 @@ fn native_live_window_halos_follow_paint_undo_redo_and_recreated_renderer() {
         test_style(BrushExecution::Dry),
         Rect { min: Point { x: 235., y: 236. }, max: Point { x: 275., y: 276. } },
     )];
-    r.submit(FramePacket {
+    crate::test_support::submit_ready(&mut r, FramePacket {
         dabs: &dabs,
         dab_batches: &batches,
         composite_all: false,
@@ -198,18 +198,18 @@ fn native_live_window_halos_follow_paint_undo_redo_and_recreated_renderer() {
     let incremental = pixels(&r);
     assert_ne!(incremental, before);
     r.native_edit.as_mut().unwrap().image_pixel_bytes = Some(u64::MAX);
-    r.submit(packet(&document, extent)).unwrap();
+    crate::test_support::submit_ready(&mut r, packet(&document, extent)).unwrap();
     close(&incremental, &pixels(&r));
     r.native_edit.as_mut().unwrap().image_pixel_bytes = Some(CAP);
     document.artwork.paint.get_mut(paint).unwrap().raster = original;
-    r.submit(FramePacket {
+    crate::test_support::submit_ready(&mut r, FramePacket {
         composite_all: false,
         ..packet(&document, extent)
     })
     .unwrap();
     assert_eq!(pixels(&r), before, "undo restores the exact empty artwork");
     document.artwork.paint.get_mut(paint).unwrap().raster = edited;
-    r.submit(FramePacket {
+    crate::test_support::submit_ready(&mut r, FramePacket {
         composite_all: false,
         ..packet(&document, extent)
     })
@@ -221,7 +221,7 @@ fn native_live_window_halos_follow_paint_undo_redo_and_recreated_renderer() {
     ));
     let mut replacement = WgpuRasterizer::new_native_headless(color).unwrap();
     replacement.native_edit.as_mut().unwrap().image_pixel_bytes = Some(CAP);
-    replacement.submit(packet(&document, extent)).unwrap();
+    crate::test_support::submit_ready(&mut replacement, packet(&document, extent)).unwrap();
     close(&pixels(&replacement), &incremental);
     assert!(Arc::ptr_eq(
         &document.artwork.paint.get(paint).unwrap().raster.wait_data().unwrap(),

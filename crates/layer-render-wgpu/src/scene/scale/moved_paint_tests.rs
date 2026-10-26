@@ -78,15 +78,15 @@ fn a_moved_layer_previews_a_large_brush_at_the_reduced_level_close_to_exact() {
     exact.test.reference = true;
     let mut p = packet(doc.scene(), extent);
     p.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
-    r.submit(p).unwrap();
-    exact.submit(p).unwrap();
+    crate::test_support::submit_ready(&mut r, p).unwrap();
+    crate::test_support::submit_ready(&mut exact, p).unwrap();
     let mut dab = crate::tests::test_dab([218., 108.], [0.9, 0.02, 0.1, 0.7], 1.);
     dab.radii = [45.; 2];
     let batch = DabBatch { kind: DabBatchKind::Preview,
         ..dab_batch(source_at(&doc, 0), crate::layer_tests::preset_style(DefaultBrushPreset::GPen), dab.bounds()) };
     let stroke = FramePacket { dabs: &[dab], dab_batches: &[batch], composite_all: false, ..p };
-    r.submit(stroke).unwrap();
-    exact.submit(stroke).unwrap();
+    crate::test_support::submit_ready(&mut r, stroke).unwrap();
+    crate::test_support::submit_ready(&mut exact, stroke).unwrap();
     assert_eq!(r.preview_level, 2);
     let coarse = r.scale_display.as_ref().unwrap();
     let error = quality(&pixels(&r, coarse.texture()), &pixels(&exact, crate::test_support::document_texture(&exact)), coarse.plan);
@@ -108,13 +108,13 @@ fn painting_a_moved_layer_updates_only_the_painted_part_of_its_reduced_levels() 
     let mut frame = packet(doc.scene(), extent);
     frame.composite_all = false;
     frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
-    for renderer in [&mut r, &mut exact] { renderer.submit(frame).unwrap(); }
+    for renderer in [&mut r, &mut exact] { submit_published(renderer, frame); }
     for (index, at) in [[300., 200.], [330., 260.], [700., 520.]].into_iter().enumerate() {
         let mut dab = crate::tests::test_dab(at, [0.9, 0.2, 0.1, 0.8], 1.);
         dab.radii = [70.; 2];
         let batch = dab_batch(target, crate::layer_tests::preset_style(DefaultBrushPreset::GPen), dab.bounds());
         let stroke = FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&batch), ..frame };
-        for renderer in [&mut r, &mut exact] { renderer.submit(stroke).unwrap(); }
+        for renderer in [&mut r, &mut exact] { crate::test_support::submit_ready(renderer, stroke).unwrap(); }
         let cache = r.scale_display.as_ref().unwrap();
         assert!(cache.plan.level > 0);
         let error = quality(&display_pixels(&r), &pixels(&exact, crate::test_support::document_texture(&exact)), cache.plan);
@@ -137,7 +137,7 @@ fn a_moved_layer_settles_its_reduced_predictions_to_exact_reduction() {
     let mut frame = packet(doc.scene(), extent);
     frame.composite_all = false;
     frame.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
-    for renderer in [&mut r, &mut exact] { renderer.submit(frame).unwrap(); }
+    for renderer in [&mut r, &mut exact] { crate::test_support::submit_ready(renderer, frame).unwrap(); }
     let dabs = [[300., 200.], [520., 330.]].map(|at| {
         let mut dab = crate::tests::test_dab(at, [0.9, 0.2, 0.1, 0.8], 1.);
         dab.radii = [70.; 2];
@@ -146,11 +146,11 @@ fn a_moved_layer_settles_its_reduced_predictions_to_exact_reduction() {
     let style = crate::layer_tests::preset_style(DefaultBrushPreset::GPen);
     let predicted = DabBatch { kind: DabBatchKind::Preview, dab_count: 2, ..dab_batch(target, style.clone(), dabs[0].bounds().union(dabs[1].bounds())) };
     let preview = FramePacket { dabs: &dabs, dab_batches: std::slice::from_ref(&predicted), ..frame };
-    for renderer in [&mut r, &mut exact] { renderer.submit(preview).unwrap(); }
+    for renderer in [&mut r, &mut exact] { crate::test_support::submit_ready(renderer, preview).unwrap(); }
     assert!(r.preview_level > 0);
     let committed = dab_batch(target, style, dabs[0].bounds());
     let stroke = FramePacket { dabs: &dabs[..1], dab_batches: std::slice::from_ref(&committed), ..frame };
-    for renderer in [&mut r, &mut exact] { renderer.submit(stroke).unwrap(); }
+    for renderer in [&mut r, &mut exact] { crate::test_support::submit_ready(renderer, stroke).unwrap(); }
     let cache = r.scale_display.as_ref().unwrap();
     let error = quality(&display_pixels(&r), &pixels(&exact, crate::test_support::document_texture(&exact)), cache.plan);
     assert!(error[2] < 1e-3, "{error:?}");

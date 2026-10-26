@@ -57,7 +57,7 @@ fn native_pixel_backdrop_fusion_removes_intermediate_and_preserves_float_pixels(
         for opacity in [0.,0.61,1.] {
             doc.artwork.occurrences.get_mut(owner).unwrap().opacity=opacity;
             let mut frame=packet(doc.scene(),doc.composition().size);frame.blend_space=blend;
-            r.submit(frame).unwrap();
+            submit_published(&mut r, frame);
             for tile in [[0,0],[2,1]] {
                 let (fused,work)=capture(&mut r,frame,[owner,filter,photo],tile,true,None);
                 let (unfused,reference_work)=capture(&mut r,frame,[owner,filter,photo],tile,false,None);
@@ -80,7 +80,7 @@ fn native_pixel_backdrop_fusion_keeps_masks_and_compact_contributions_separate()
         ]).unwrap()));
         let mut r=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
         let mut frame=packet(doc.scene(),doc.composition().size);frame.blend_space=blend;
-        r.submit(frame).unwrap();
+        submit_published(&mut r, frame);
         let (actual,work)=capture(&mut r,frame,[owner,filter,photo],[0,0],true,None);
         let (reference,reference_work)=capture(&mut r,frame,[owner,filter,photo],[0,0],false,None);
         assert_eq!(work,reference_work);assert_eq!(work[0],1);assert_eq!(actual,reference);
@@ -91,8 +91,8 @@ fn native_pixel_backdrop_fusion_keeps_masks_and_compact_contributions_separate()
         preview.kind=DabBatchKind::Preview;preview.stroke_end=false;preview.style.blend_space=blend;
         let mut frame=packet(doc.scene(),doc.composition().size);frame.blend_space=blend;
         frame.view.document_to_surface=[0.25,0.,0.,0.25,0.,0.];
-        r.submit(frame).unwrap();
-        r.submit(FramePacket {dabs:std::slice::from_ref(&dab),dab_batches:std::slice::from_ref(&preview),..frame}).unwrap();
+        submit_published(&mut r, frame);
+        crate::test_support::submit_ready(&mut r, FramePacket {dabs:std::slice::from_ref(&dab),dab_batches:std::slice::from_ref(&preview),..frame}).unwrap();
         assert!(r.preview_contribution && r.preview_level>0);
         let (actual,work)=capture(&mut r,frame,[owner,filter,photo],[0,0],true,None);
         let (reference,reference_work)=capture(&mut r,frame,[owner,filter,photo],[0,0],false,None);

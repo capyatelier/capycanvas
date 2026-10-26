@@ -9,8 +9,8 @@ fn display_level_updates_and_dirty_regions_batch_compute_passes() {
     r.set_complete_display_allowance(1024 << 20);
     let mut frame = packet(doc.scene(), doc.composition().size);
     frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
-    r.submit(frame).unwrap();
-    r.submit(FramePacket { composite_all: false, ..frame }).unwrap();
+    submit_published(&mut r, frame);
+    crate::test_support::submit_ready(&mut r, FramePacket { composite_all: false, ..frame }).unwrap();
     let mut cache = r.scale_display.take().unwrap();
     assert!(matches!(&cache.pixels, hierarchy::Pixels::Resident { levels, level } if levels.len() - *level as usize > 2));
     let mut commands = Commands::new(&r);
@@ -89,7 +89,7 @@ fn first_watercolor_contact_on_empty_layer_batches_source_reduction() {
         settle(&mut engine);
         let mut exact = WgpuRasterizer::new_native_headless(engine.document().composition().color).unwrap();
         exact.test.reference = true;
-        exact.submit(packet(engine.document().scene(), [2048; 2])).unwrap();
+        submit_published(&mut exact, packet(engine.document().scene(), [2048; 2]));
         let expected = pixels(&exact, crate::test_support::document_texture(&exact));
         let error = quality(&display_pixels(engine.backend()), &expected, engine.backend().scale_display.as_ref().unwrap().plan);
         assert!(error[2] < 2e-5, "committed watercolor: {error:?}");
@@ -157,7 +157,7 @@ fn strokes_and_replays_repair_only_touched_pages() {
             let mut exact = WgpuRasterizer::new_native_headless(engine.document().composition().color).unwrap();
             exact.test.reference = true;
             let frame = FramePacket { view: v, blend_space: engine.document().composition().blend, ..packet(engine.document().scene(), [1537, 1025]) };
-            exact.submit(frame).unwrap();
+            submit_published(&mut exact, frame);
             let expected = pixels(&exact, crate::test_support::document_texture(&exact));
             let error = quality(&display_pixels(engine.backend()), &expected, engine.backend().scale_display.as_ref().unwrap().plan);
             assert!(error[2] < 2e-5, "canonical stroke: {error:?}");
@@ -177,15 +177,15 @@ fn idle_refinement_presents_completion_and_never_holds_new_input() {
         let mut frame = packet(doc.scene(), extent);
         frame.composite_all = false;
         frame.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
-        r.submit(frame).unwrap();
-        r.submit(frame).unwrap();
+        submit_published(&mut r, frame);
+        crate::test_support::submit_ready(&mut r, frame).unwrap();
         let mut presenter = ViewportPresenter::for_surface(&r, wgpu::TextureFormat::Rgba32Float,
             SdrSurfaceColor::ExtendedLinearSrgb).unwrap();
         let (_, target) = create_target(&r.device, [frame.view.width_px, frame.view.height_px],
             wgpu::TextureFormat::Rgba32Float, "refinement presentation");
         presenter.set_target_retention(true);
         presenter.present(&r, &target, frame.view, [0.; 4]).unwrap();
-        r.submit(frame).unwrap();
+        crate::test_support::submit_ready(&mut r, frame).unwrap();
         assert!(r.has_pending_work());
         assert!(!presenter.needs_present(&r, frame.view, [0.; 4]));
         let mut moved = frame.view;
@@ -198,17 +198,17 @@ fn idle_refinement_presents_completion_and_never_holds_new_input() {
         presenter.present(&r, &target, frame.view, [0.; 4]).unwrap();
         let dab = crate::tests::test_dab([90., 80.], [0.9, 0.1, 0.3, 1.], 0.8);
         let batch = dab_batch(source_at(&doc, 0), crate::layer_tests::preset_style(DefaultBrushPreset::GPen), dab.bounds());
-        r.submit(FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&batch), ..frame }).unwrap();
+        crate::test_support::submit_ready(&mut r, FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&batch), ..frame }).unwrap();
         assert!(presenter.needs_present(&r, frame.view, [0.; 4]));
         presenter.present(&r, &target, frame.view, [0.; 4]).unwrap();
-        r.submit(frame).unwrap();
+        crate::test_support::submit_ready(&mut r, frame).unwrap();
         if presenter.needs_present(&r, frame.view, [0.; 4]) {
             presenter.present(&r, &target, frame.view, [0.; 4]).unwrap();
         }
         for _ in 0..64 {
             if !r.has_pending_work() { break; }
             r.wait_idle().unwrap();
-            r.submit(frame).unwrap();
+            crate::test_support::submit_ready(&mut r, frame).unwrap();
             assert_eq!(presenter.needs_present(&r, frame.view, [0.; 4]), !r.has_pending_work());
         }
         assert!(!r.has_pending_work());
@@ -239,10 +239,10 @@ fn idle_refinement_batches_pages_and_yields_to_new_artwork() {
             let mut frame = packet(doc.scene(), extent);
             frame.composite_all = false;
             frame.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
-            for renderer in [&mut r, &mut exact] { renderer.submit(frame).unwrap(); }
+            for renderer in [&mut r, &mut exact] { submit_published(renderer, frame); }
             let work = r.metrics.composited_pixels;
             let passes = r.metrics.command_passes;
-            r.submit(frame).unwrap();
+            crate::test_support::submit_ready(&mut r, frame).unwrap();
             let refined = r.metrics.composited_pixels - work;
             assert!(r.metrics.command_passes - passes <= 5, "resident pages share one composition pass");
             assert_eq!(r.metrics.frame_composited_pages.len(), expected_pages, "idle work fills one bounded strip");
@@ -261,12 +261,12 @@ fn idle_refinement_batches_pages_and_yields_to_new_artwork() {
             r.background_refinement = true;
             assert!(r.can_submit(), "fresh artwork can queue behind unfinished refinement");
             let submissions = r.metrics.submissions;
-            r.submit(frame).unwrap();
+            crate::test_support::submit_ready(&mut r, frame).unwrap();
             assert_eq!(r.metrics.submissions, submissions, "unfinished refinement cannot queue another idle batch: fill visible={visible}, opacity={opacity}");
             let dab = crate::tests::test_dab([90., 80.], [0.9, 0.1, 0.3, 1.], 0.8);
             let batch = dab_batch(source_at(&doc, 0), crate::layer_tests::preset_style(DefaultBrushPreset::GPen), dab.bounds());
             let stroke = FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&batch), ..frame };
-            for renderer in [&mut r, &mut exact] { renderer.submit(stroke).unwrap(); }
+            for renderer in [&mut r, &mut exact] { crate::test_support::submit_ready(renderer, stroke).unwrap(); }
             assert!(r.metrics.submissions>submissions,"fresh artwork still submits: fill visible={visible}, opacity={opacity}");
             r.background_ready.store(true, std::sync::atomic::Ordering::Release);
             assert_settled(&mut r, frame, &pixels(&exact, crate::test_support::document_texture(&exact)));
@@ -275,7 +275,7 @@ fn idle_refinement_batches_pages_and_yields_to_new_artwork() {
             r.background_ready=Arc::new(std::sync::atomic::AtomicBool::new(false));
             r.background_refinement=true;
             let submissions=r.metrics.submissions;
-            r.submit(FramePacket {scene:changed.scene(),..frame}).unwrap();
+            crate::test_support::submit_ready(&mut r, FramePacket {scene:changed.scene(),..frame}).unwrap();
             assert!(r.metrics.submissions>submissions,"fill visibility edits bypass unfinished idle backpressure");
         }
     }
@@ -292,7 +292,7 @@ fn sparse_contacts_preserve_exact_pages_between_their_footprints() {
     let mut frame = packet(doc.scene(), extent);
     frame.composite_all = false;
     frame.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
-    for renderer in [&mut r, &mut exact] { renderer.submit(frame).unwrap(); }
+    for renderer in [&mut r, &mut exact] { submit_published(renderer, frame); }
     assert_settled(&mut r, frame, &pixels(&exact, crate::test_support::document_texture(&exact)));
     let dabs = [[90., 80.], [620., 390.]].map(|position| crate::tests::test_dab(position, [0.9, 0.1, 0.3, 1.], 0.8));
     let mut batch = dab_batch(source_at(&doc, 0), crate::layer_tests::preset_style(DefaultBrushPreset::GPen), dabs[0].bounds().union(dabs[1].bounds()));
@@ -301,7 +301,7 @@ fn sparse_contacts_preserve_exact_pages_between_their_footprints() {
     let source = &r.scene.as_ref().unwrap().scale_sources.entries[&source_at(&doc, 0)];
     let updates = source.updates;
     let levels = source.levels.len() as u64;
-    for renderer in [&mut r, &mut exact] { renderer.submit(stroke).unwrap(); }
+    for renderer in [&mut r, &mut exact] { crate::test_support::submit_ready(renderer, stroke).unwrap(); }
     assert!(r.scene.as_ref().unwrap().scale_sources.entries[&source_at(&doc, 0)].updates - updates <= 2 * levels,
         "only touched source pages need reduction at each retained level");
     let work = r.metrics.composited_pixels;
@@ -335,14 +335,14 @@ fn idle_spatial_refinement_bounds_pass_work_and_yields_between_distant_contacts(
     let mut frame = packet(doc.scene(),extent);
     frame.composite_all = false;
     frame.view.document_to_surface = [0.25,0.,0.,0.25,0.,0.];
-    for renderer in [&mut r,&mut exact] {renderer.submit(frame).unwrap();}
+    for renderer in [&mut r,&mut exact] {submit_published(renderer, frame);}
     assert_settled(&mut r,frame,&pixels(&exact,crate::test_support::document_texture(&exact)));
     let mut dabs = [[128.,128.],[1664.,1664.]].map(|position|crate::tests::test_dab(position,[0.9,0.1,0.3,1.],0.8));
     for dab in &mut dabs {dab.radii=[8.;2];}
     let mut batch = dab_batch(paint,crate::layer_tests::preset_style(DefaultBrushPreset::GPen),dabs[0].bounds().union(dabs[1].bounds()));
     batch.dab_count = 2;
     let stroke = FramePacket {dabs:&dabs,dab_batches:std::slice::from_ref(&batch),..frame};
-    for renderer in [&mut r,&mut exact] {renderer.submit(stroke).unwrap();}
+    for renderer in [&mut r,&mut exact] {crate::test_support::submit_ready(renderer, stroke).unwrap();}
     crate::test_support::complete(&r);
     r.metrics.frame_composited_pages.clear();
     let mut scene=r.scene.take().unwrap();
@@ -363,7 +363,7 @@ fn idle_spatial_refinement_bounds_pass_work_and_yields_between_distant_contacts(
     let dab=crate::tests::test_dab([640.,640.],[0.1,0.7,0.3,1.],0.8);
     let batch=dab_batch(paint,crate::layer_tests::preset_style(DefaultBrushPreset::GPen),dab.bounds());
     let stroke=FramePacket {dabs:std::slice::from_ref(&dab),dab_batches:std::slice::from_ref(&batch),..frame};
-    for renderer in [&mut r,&mut exact] {renderer.submit(stroke).unwrap();}
+    for renderer in [&mut r,&mut exact] {crate::test_support::submit_ready(renderer, stroke).unwrap();}
     assert!(r.metrics.submissions>submissions,"fresh paint interrupts unfinished spatial refinement");
     r.background_ready.store(true,std::sync::atomic::Ordering::Release);
     assert_settled(&mut r,frame,&pixels(&exact,crate::test_support::document_texture(&exact)));
@@ -380,7 +380,7 @@ fn settled_composition_reuses_every_zoom_and_refines_only_changed_pages() {
     let mut frame = packet(doc.scene(), extent);
     frame.composite_all = false;
     frame.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
-    r.submit(frame).unwrap(); exact.submit(frame).unwrap();
+    submit_published(&mut r, frame); submit_published(&mut exact, frame);
     let drawing_target = r.scale_display.as_ref().unwrap().texture().clone();
     assert_settled(&mut r, frame, &pixels(&exact, crate::test_support::document_texture(&exact)));
     assert_eq!(r.scale_display.as_ref().unwrap().texture(), &drawing_target, "settling repairs the drawing texture in place");
@@ -392,7 +392,7 @@ fn settled_composition_reuses_every_zoom_and_refines_only_changed_pages() {
     let work = r.metrics.composited_pixels;
     for zoom in [0.5, 1., 2., 0.25, 0.125] {
         frame.view.document_to_surface = [zoom, 0., 0., zoom, -40., -20.];
-        r.submit(frame).unwrap();
+        crate::test_support::submit_ready(&mut r, frame).unwrap();
         assert!(matches!(r.scale_display.as_ref().unwrap().pixels, hierarchy::Pixels::Resident { .. }));
         assert_eq!(r.metrics.composited_pixels, work, "camera motion only samples settled pixels");
         assert_settled(&mut r, frame, &pixels(&exact, crate::test_support::document_texture(&exact)));
@@ -402,7 +402,7 @@ fn settled_composition_reuses_every_zoom_and_refines_only_changed_pages() {
     let dab = crate::tests::test_dab([90., 80.], [0.9, 0.1, 0.3, 1.], 0.8);
     let batch = dab_batch(source_at(&doc, 0), crate::layer_tests::preset_style(DefaultBrushPreset::GPen), dab.bounds());
     let stroke = FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&batch), ..frame };
-    r.submit(stroke).unwrap(); exact.submit(stroke).unwrap();
+    crate::test_support::submit_ready(&mut r, stroke).unwrap(); crate::test_support::submit_ready(&mut exact, stroke).unwrap();
     assert_eq!(r.scale_display.as_ref().unwrap().texture(), &drawing_target, "drawing updates the resident level");
     let retained = r.scale_display.as_ref().unwrap().hierarchy.as_ref().unwrap();
     assert_eq!(retained.missing(), Some([0, 0]));
@@ -411,25 +411,25 @@ fn settled_composition_reuses_every_zoom_and_refines_only_changed_pages() {
     assert_eq!(r.metrics.composited_pixels - work, u64::from(PAGE_SIZE).pow(2));
     assert_eq!(r.scale_display.as_ref().unwrap().texture(), &drawing_target, "dirty repair preserves the presentation binding");
     frame.view.document_to_surface = [1., 0., 0., 1., 0., 0.];
-    r.submit(frame).unwrap();
+    crate::test_support::submit_ready(&mut r, frame).unwrap();
     assert_settled(&mut r, frame, &pixels(&exact, crate::test_support::document_texture(&exact)));
     let mut preview = layer_render::TransformPreview { transaction: 1, target: source_at(&doc, 0),
         moving: true, selection: None, transform: layer_core::ImageTransform::affine(Affine::translation(Point { x: 23., y: 17. })) };
     frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
     for moving in [true, false] {
         preview.moving = moving;
-        for renderer in [&mut r, &mut exact] { renderer.set_transform_preview(Some(&preview)).unwrap(); renderer.submit(frame).unwrap(); }
+        for renderer in [&mut r, &mut exact] { renderer.set_transform_preview(Some(&preview)).unwrap(); crate::test_support::submit_ready(renderer, frame).unwrap(); }
         if !moving { assert_settled(&mut r, frame, &pixels(&exact, crate::test_support::document_texture(&exact))); }
         crate::test_support::assert_same_canonical(&mut r, &mut exact);
     }
-    for renderer in [&mut r, &mut exact] { renderer.set_transform_preview(None).unwrap(); renderer.submit(frame).unwrap(); }
+    for renderer in [&mut r, &mut exact] { renderer.set_transform_preview(None).unwrap(); crate::test_support::submit_ready(renderer, frame).unwrap(); }
     assert_settled(&mut r, frame, &pixels(&exact, crate::test_support::document_texture(&exact)));
     frame.view.width_px = 128;
     frame.view.height_px = 96;
     frame.view.document_to_surface = [1., 0., 0., 1., -40., -20.];
-    for renderer in [&mut r, &mut exact] { renderer.submit(frame).unwrap(); }
+    for renderer in [&mut r, &mut exact] { crate::test_support::submit_ready(renderer, frame).unwrap(); }
     let stroke = FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&batch), ..frame };
-    for renderer in [&mut r, &mut exact] { renderer.submit(stroke).unwrap(); }
+    for renderer in [&mut r, &mut exact] { crate::test_support::submit_ready(renderer, stroke).unwrap(); }
     assert_settled(&mut r, frame, &pixels(&exact, crate::test_support::document_texture(&exact)));
     let mut program = (*crate::tests::fixture("gaussian_blur").program()).clone();
     program.resolution = layer_core::EffectResolution::Native;
@@ -437,7 +437,7 @@ fn settled_composition_reuses_every_zoom_and_refines_only_changed_pages() {
     insert_occurrence(&mut doc,effect,0);
     frame = packet(doc.scene(), extent);
     frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
-    r.submit(frame).unwrap(); exact.submit(frame).unwrap();
+    crate::test_support::submit_ready(&mut r, frame).unwrap(); crate::test_support::submit_ready(&mut exact, frame).unwrap();
     assert!(!r.scale_display.as_ref().unwrap().has_pending_work(&r));
     assert_settled(&mut r, frame, &pixels(&exact, crate::test_support::document_texture(&exact)));
 }
@@ -455,11 +455,11 @@ fn global_filters_evict_optional_levels_before_rejecting_the_document() {
     let mut frame = packet(doc.scene(), extent);
     frame.composite_all = false;
     frame.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
-    r.submit(frame).unwrap();
+    submit_published(&mut r, frame);
     for _ in 0..=page_coordinates(PixelRect::full(extent)).count() {
         if !r.has_pending_work() { break; }
         r.wait_idle().unwrap();
-        r.submit(frame).unwrap();
+        crate::test_support::submit_ready(&mut r, frame).unwrap();
     }
     assert!(!r.has_pending_work());
     let resident = r.scale_display.as_ref().unwrap().resident_bytes();
@@ -474,12 +474,12 @@ fn global_filters_evict_optional_levels_before_rejecting_the_document() {
     assert!(windows::Plan::new(doc.scene(), extent, budget.image_pixel_budget(0), r.device.limits().max_texture_dimension_2d).is_ok());
     frame = packet(doc.scene(), extent);
     frame.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
-    r.submit(frame).unwrap();
+    crate::test_support::submit_ready(&mut r, frame).unwrap();
     assert_eq!(r.scale_display.as_ref().unwrap().resident_bytes(), 0);
     assert!(!r.scale_display.as_ref().unwrap().has_pending_work(&r));
     let mut exact = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     exact.test.reference = true;
-    exact.submit(frame).unwrap();
+    submit_published(&mut exact, frame);
     assert_settled(&mut r, frame, &pixels(&exact, crate::test_support::document_texture(&exact)));
 }
 
@@ -505,7 +505,7 @@ fn native_filter_windows_share_display_storage_and_preserve_halos_during_navigat
             frame.view.width_px = 96;
             frame.view.height_px = 64;
             frame.view.document_to_surface = [zoom, 0., 0., zoom, x, -32.];
-            r.submit(frame).unwrap(); exact.submit(frame).unwrap();
+            submit_published(&mut r, frame); submit_published(&mut exact, frame);
             assert!(r.scale_display.as_ref().unwrap().evaluation == Evaluation::Native);
             assert!(!r.scale_display.as_ref().unwrap().has_pending_work(&r), "native filters publish complete exact output");
             assert!(r.metrics.image_window_submissions > 0);
@@ -527,7 +527,7 @@ fn watercolor_uses_the_display_graph_across_preview_commit_and_zoom() {
         frame.blend_space = space;
         frame.composite_all = false;
         frame.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
-        for renderer in [&mut r, &mut exact] { renderer.submit(frame).unwrap(); }
+        for renderer in [&mut r, &mut exact] { crate::test_support::submit_ready(renderer, frame).unwrap(); }
         for (step, kind) in [DabBatchKind::Persistent, DabBatchKind::Preview, DabBatchKind::Persistent].into_iter().enumerate() {
             let mut dab = crate::tests::test_dab([252. + step as f32 * 20., 128.], [0.2, 0.3, 0.8, 0.8], 0.8);
             dab.radii = [90.; 2];
@@ -537,19 +537,19 @@ fn watercolor_uses_the_display_graph_across_preview_commit_and_zoom() {
             batch.stroke_start = step == 0;
             batch.stroke_end = step == 2;
             let stroke = FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&batch), ..frame };
-            for renderer in [&mut r, &mut exact] { renderer.submit(stroke).unwrap(); }
+            for renderer in [&mut r, &mut exact] { crate::test_support::submit_ready(renderer, stroke).unwrap(); }
             assert!(r.paint_layers[0].watercolor.is_some());
             assert!(r.scale_display.is_some(), "watercolor stays in the common display cache");
             let error = quality(&display_pixels(&r), &pixels(&exact, crate::test_support::document_texture(&exact)), r.scale_display.as_ref().unwrap().plan);
             assert!(error[0] < 0.002 && error[1] < 0.015, "watercolor {space:?} {kind:?}: {error:?}");
             if kind == DabBatchKind::Preview {
-                for renderer in [&mut r, &mut exact] { renderer.submit(frame).unwrap(); }
+                for renderer in [&mut r, &mut exact] { crate::test_support::submit_ready(renderer, frame).unwrap(); }
             }
             assert_settled(&mut r, frame, &pixels(&exact, crate::test_support::document_texture(&exact)));
         }
         for zoom in [1., 0.5, 0.125] {
             frame.view.document_to_surface = [zoom, 0., 0., zoom, 0., 0.];
-            for renderer in [&mut r, &mut exact] { renderer.submit(frame).unwrap(); }
+            for renderer in [&mut r, &mut exact] { crate::test_support::submit_ready(renderer, frame).unwrap(); }
             assert_settled(&mut r, frame, &pixels(&exact, crate::test_support::document_texture(&exact)));
         }
     }
@@ -570,11 +570,11 @@ fn idle_display_refines_an_overview_created_during_transform_motion() {
     frame.view.width_px = 96;
     frame.view.height_px = 64;
     frame.view.document_to_surface = [0.25, 0., 0., 0.25, -96., -32.];
-    r.set_transform_preview(Some(&preview)).unwrap(); r.submit(frame).unwrap();
+    r.set_transform_preview(Some(&preview)).unwrap(); submit_published(&mut r, frame);
     assert!(!r.has_pending_work());
     preview.moving = false;
     for renderer in [&mut r, &mut exact] {
-        renderer.set_transform_preview(Some(&preview)).unwrap(); renderer.submit(frame).unwrap();
+        renderer.set_transform_preview(Some(&preview)).unwrap(); submit_published(renderer, frame);
     }
     assert_settled(&mut r, frame, &pixels(&exact, crate::test_support::document_texture(&exact)));
 }
@@ -594,11 +594,11 @@ fn animated_display_invalidates_retained_pixels_when_time_changes() {
     exact.test.reference = true;
     let mut frame = packet(doc.scene(), extent);
     frame.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
-    r.submit(frame).unwrap(); exact.submit(frame).unwrap();
+    submit_published(&mut r, frame); submit_published(&mut exact, frame);
     let original = display_pixels(&r);
     frame.composite_all = false;
     frame.time_seconds = 2.;
-    r.submit(frame).unwrap(); exact.submit(frame).unwrap();
+    crate::test_support::submit_ready(&mut r, frame).unwrap(); crate::test_support::submit_ready(&mut exact, frame).unwrap();
     let animated = display_pixels(&r);
     assert!(original != animated, "animation changes retained display output");
     let error = quality(&animated, &pixels(&exact, crate::test_support::document_texture(&exact)), r.scale_display.as_ref().unwrap().plan);
@@ -607,7 +607,7 @@ fn animated_display_invalidates_retained_pixels_when_time_changes() {
     let batch = dab_batch(source_at(&doc, 1), crate::layer_tests::preset_style(DefaultBrushPreset::GPen), dab.bounds());
     frame.time_seconds = 3.;
     let painting = FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&batch), ..frame };
-    r.submit(painting).unwrap(); exact.submit(painting).unwrap();
+    crate::test_support::submit_ready(&mut r, painting).unwrap(); crate::test_support::submit_ready(&mut exact, painting).unwrap();
     let error = quality(&display_pixels(&r), &pixels(&exact, crate::test_support::document_texture(&exact)), r.scale_display.as_ref().unwrap().plan);
     assert!(error[2] < 0.002, "animation advances outside the simultaneous paint contact {error:?}");
 }
@@ -631,13 +631,13 @@ fn idle_display_refines_paused_transform_windows_and_reuses_exact_overlap() {
         frame.view.height_px = 64;
         for (x, y) in [(0., 0.), (-180., -60.), (-290., -120.), (0., 0.)] {
             frame.view.document_to_surface = [0.25, 0., 0., 0.25, x, y];
-            r.submit(frame).unwrap(); exact.submit(FramePacket { composite_all: true, ..frame }).unwrap();
+            submit_published(&mut r, frame); submit_published(&mut exact, FramePacket { composite_all: true, ..frame });
             assert!(r.scale_display.as_ref().unwrap().overview.is_some());
             assert_settled(&mut r, frame, &pixels(&exact, crate::test_support::document_texture(&exact)));
         }
         frame.view.width_px = extent[0];
         frame.view.height_px = extent[1];
-        r.submit(frame).unwrap();
+        crate::test_support::submit_ready(&mut r, frame).unwrap();
         assert!(r.scale_display.as_ref().unwrap().placed.is_some());
         assert_settled(&mut r, frame, &pixels(&exact, crate::test_support::document_texture(&exact)));
     }
@@ -662,14 +662,14 @@ fn idle_display_reuses_global_effect_dependencies_until_the_next_edit() {
         occurrence_mut(&mut doc,1).opacity = opacity;
         let mut frame = packet(doc.scene(), extent);
         frame.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
-        r.submit(frame).unwrap(); exact.submit(frame).unwrap();
-        r.submit(FramePacket { composite_all: false, ..frame }).unwrap();
+        submit_published(&mut r, frame); submit_published(&mut exact, frame);
+        crate::test_support::submit_ready(&mut r, FramePacket { composite_all: false, ..frame }).unwrap();
         let work = r.scene.as_ref().unwrap().image_pass_pixels();
         assert!(work > 0);
         assert_settled(&mut r, frame, &pixels(&exact, crate::test_support::document_texture(&exact)));
         assert_eq!(r.scene.as_ref().unwrap().image_pass_pixels(), u64::from(extent[0]) * u64::from(extent[1]), "unchanged global dependencies execute once across all requested pages");
         let work = r.scene.as_ref().unwrap().image_pass_pixels();
-        r.submit(FramePacket { composite_all: false, ..frame }).unwrap();
+        crate::test_support::submit_ready(&mut r, FramePacket { composite_all: false, ..frame }).unwrap();
         assert_eq!(r.scene.as_ref().unwrap().image_pass_pixels(), work, "unchanged global dependencies execute once");
     }
 }
@@ -691,12 +691,12 @@ fn idle_display_refines_spatial_effects_and_invalidates_committed_paint() {
         let mut frame = packet(doc.scene(), extent);
         frame.blend_space = space;
         frame.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
-        r.submit(frame).unwrap(); exact.submit(frame).unwrap();
+        submit_published(&mut r, frame); submit_published(&mut exact, frame);
         assert_settled(&mut r, frame, &pixels(&exact, crate::test_support::document_texture(&exact)));
         let dab = crate::tests::test_dab([254., 128.], [0.9, 0.1, 0.3, 1.], 0.8);
         let batch = dab_batch(paint, crate::layer_tests::preset_style(DefaultBrushPreset::GPen), dab.bounds());
         let stroke = FramePacket { composite_all: false, dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&batch), ..frame };
-        r.submit(stroke).unwrap(); exact.submit(stroke).unwrap();
+        crate::test_support::submit_ready(&mut r, stroke).unwrap(); crate::test_support::submit_ready(&mut exact, stroke).unwrap();
         assert_settled(&mut r, frame, &pixels(&exact, crate::test_support::document_texture(&exact)));
     }
 }
@@ -710,12 +710,12 @@ fn published_clipped_paint_preserves_exact_pages_during_the_next_contact() {
         frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
         frame
     }
-    fn settle(r: &mut WgpuRasterizer, doc: &Document) {
+    fn settle(mut r: &mut WgpuRasterizer, doc: &Document) {
         for step in 0..=65 {
             if !r.has_pending_work() { break; }
             assert!(step < 65);
             r.wait_idle().unwrap();
-            r.submit(frame(doc)).unwrap();
+            crate::test_support::submit_ready(&mut r, frame(doc)).unwrap();
         }
         r.wait_idle().unwrap();
     }
@@ -723,7 +723,7 @@ fn published_clipped_paint_preserves_exact_pages_during_the_next_contact() {
         for tile in doc.scene().raster(source_at(doc, 0)).unwrap().wait_data().unwrap().tiles.values() { tile.wait_backing().unwrap(); }
         let mut exact = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
         exact.test.reference = true;
-        exact.submit(frame(doc)).unwrap();
+        submit_published(&mut exact, frame(doc));
         assert_settled(r, frame(doc), &pixels(&exact, crate::test_support::document_texture(&exact)));
     }
     let mut doc = document_at([2048; 2]);
@@ -734,7 +734,7 @@ fn published_clipped_paint_preserves_exact_pages_during_the_next_contact() {
     let target = source_at(&doc, 0);
     let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     r.set_complete_display_allowance(1024 << 20);
-    r.submit(frame(&doc)).unwrap();
+    submit_published(&mut r, frame(&doc));
     settle(&mut r, &doc);
     let mut checkpoint = None;
     for (contact, position) in [[128., 128.], [1664., 1664.]].into_iter().enumerate() {
@@ -744,7 +744,7 @@ fn published_clipped_paint_preserves_exact_pages_during_the_next_contact() {
         let mut batch = dab_batch(target, crate::layer_tests::preset_style(DefaultBrushPreset::GPen), dab.bounds());
         batch.stroke_id = layer_core::StrokeId(contact as u64 + 1);
         r.metrics.frame_composited_pages.clear();
-        r.submit(FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&batch), ..frame(&doc) }).unwrap();
+        crate::test_support::submit_ready(&mut r, FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&batch), ..frame(&doc) }).unwrap();
         assert_eq!(r.metrics.frame_composited_pages, vec![(2, [contact as u32 * 6; 2])]);
         assert_eq!(doc.scene().raster(target).unwrap().wait_data().unwrap().tiles.len(), contact + 1);
         if contact == 0 { checkpoint = Some(doc.scene().raster(target).unwrap().clone()); }
@@ -754,7 +754,7 @@ fn published_clipped_paint_preserves_exact_pages_during_the_next_contact() {
     let checkpoint = checkpoint.unwrap();
     doc.apply(layer_core::Edit::SetRaster { target, revision: checkpoint.clone() }).unwrap();
     r.metrics.frame_composited_pages.clear();
-    r.submit(FramePacket { restore_rasters: &[(target, checkpoint)], ..frame(&doc) }).unwrap();
+    crate::test_support::submit_ready(&mut r, FramePacket { restore_rasters: &[(target, checkpoint)], ..frame(&doc) }).unwrap();
     assert!(r.metrics.frame_composited_pages.contains(&(2, [6, 6])), "restoration repairs the removed page");
     verify(&mut r, &doc);
 }

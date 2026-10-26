@@ -92,9 +92,9 @@ fn capture(
         &r.device,
         &wgpu::CommandEncoderDescriptor::default(),
     );
-    scene
-        .capture_region(r, packet, &target, crop, scene::Output::Artwork(None), &mut encoder)
-        .unwrap();
+    crate::test_support::query_ready(r, &mut encoder, |r, encoder| {
+        scene.capture_region(r, packet, &target, crop, scene::Output::Artwork(None), encoder)
+    });
     let planned=scene::Scene::capture_image_bound(packet.scene,crop);
     assert!(scene.image_cache_bytes()<=planned,"crop={crop:?} actual={} planned={planned}",scene.image_cache_bytes());
     r.uploads.finish(&encoder);
@@ -133,7 +133,7 @@ fn image_windows_match_full_composition_with_halos_masks_and_clipping() {
             let group = document.artwork.occurrences.insert(PortableId::random(), group).unwrap();
             set_entries(&mut document, vec![group, outside]);
             let packet = crate::test_support::packet(document.scene(), extent);
-            r.submit(packet).unwrap(); // Initializes real mask pages and renderer metadata.
+            crate::test_support::submit_ready(&mut r, packet).unwrap(); // Initializes real mask pages and renderer metadata.
             let mut scene = scene::Scene::new(&r).unwrap();
             let full = capture(&mut r, &mut scene, packet, PixelRect::full(extent));
             let full_cache = scene.image_cache_bytes();
@@ -187,7 +187,7 @@ fn image_windows_keep_document_sampler_dependencies_complete() {
     let entries = vec![effect(&mut document, false, true), effect(&mut document, false, false), effect(&mut document, true, false)];
     set_entries(&mut document, entries);
     let packet = FramePacket { view: test_view(), ..crate::test_support::packet(document.scene(), extent) };
-    r.submit(packet).unwrap();
+    crate::test_support::submit_ready(&mut r, packet).unwrap();
     let mut scene = scene::Scene::new(&r).unwrap();
     let full = capture(&mut r, &mut scene, packet, PixelRect::full(extent));
     let cache = scene.image_cache_bytes();

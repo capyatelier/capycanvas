@@ -68,7 +68,7 @@ fn reduced_photo_larger_than_decoded_cache_publishes_only_after_prefixes_finish(
         assert!(std::time::Instant::now() < deadline, "photo progress timed out at {prefix}/80 pages");
         r.poll_pending(view).unwrap();
         let frame = FramePacket { view, composite_all: step == 0, blend_space: layer_core::BlendSpace::Linear, ..packet(doc.scene().with_owner(doc.owner, 1), EXTENT) };
-        if r.can_submit() && r.raster_dependencies_ready(frame, None) { r.submit(frame).unwrap(); }
+        if r.can_submit() && r.raster_dependencies_ready(frame, None) { crate::test_support::submit_ready(&mut r, frame).unwrap(); }
         r.wait_idle().unwrap();
         if let Some(source) = r.scene.as_ref().and_then(|scene| scene.scale_sources.entries.get(&target)) {
             let completed = source.levels.values().map(|level| level.valid.len()).max().unwrap_or(0);

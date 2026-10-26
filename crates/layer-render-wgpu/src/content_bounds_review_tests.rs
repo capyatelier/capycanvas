@@ -331,7 +331,7 @@ fn identity_warp_preserves_linked_companion_pixels_outside_primary_tight_bounds(
         let prepared = primary_bounds.union(companion_bounds.translated(layer_core::offsets::point([from[0] - into[0], from[1] - into[1]])));
         assert_eq!(prepared, rect(20., 20., 100., 100.));
         let frame = |renderer: &mut WgpuRasterizer, reset| {
-            renderer.submit(layer_render::FramePacket {
+            crate::test_support::submit_ready(renderer, layer_render::FramePacket {
                 reset_layers: reset,
                 composite_all: true,
                 ..crate::test_support::packet(document.scene(), [128; 2])

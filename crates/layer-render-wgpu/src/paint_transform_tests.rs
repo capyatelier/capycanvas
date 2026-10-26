@@ -169,10 +169,9 @@ fn bicubic_and_lanczos_transforms_clamp_overshoot_at_every_sample_depth() {
         layer.artwork.compositions.get_mut(layer.artwork.root).unwrap().color = DocumentColor { space: RgbSpace::Srgb, depth };
         let mut r = WgpuRasterizer::new_native_headless(DocumentColor { space: RgbSpace::Srgb, depth }).unwrap();
         let frame = |r: &mut WgpuRasterizer| {
-            r.submit(FramePacket {
+            crate::test_support::submit_settled(r, FramePacket {
                 ..packet(layer.scene(), extent)
-            })
-            .unwrap();
+            });
         };
         frame(&mut r);
         r.set_transform_preview(Some(&layer_render::TransformPreview {
@@ -257,13 +256,12 @@ fn moving_bicubic_previews_draw_bilinearly_and_only_still_previews_commit_in_pla
             !moving,
             "only a still preview is kept as the commit"
         );
-        r.submit(FramePacket {
+        crate::test_support::submit_ready(&mut r, FramePacket {
             dabs: &[d],
             dab_batches: &[batch(target(&layer))],
             reset_layers: true,
             ..packet(layer.scene(), extent)
-        })
-        .unwrap();
+        }).unwrap();
     }
 }
 

@@ -17,8 +17,9 @@ fn retained_paint_base_without_live_pages_matches_identity_and_translated_querie
         let (texture, _) = create_color_target(&r.device, extent, "retained paint query");
         let mut scene = Scene::new(&r).unwrap();
         let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-        scene.capture_region(&mut r, crate::test_support::packet(snapshot.view().with_offset64(offset.map(f64::from)), extent),
-            &texture, PixelRect::full(extent), Output::Artwork(None), &mut encoder).unwrap();
+        crate::test_support::query_ready(&mut r, &mut encoder, |r, encoder| scene.capture_region(r,
+            crate::test_support::packet(snapshot.view().with_offset64(offset.map(f64::from)), extent),
+            &texture, PixelRect::full(extent), Output::Artwork(None), encoder));
         r.uploads.finish(&encoder); encoder.submit(&r.queue);
         let expected: Vec<_> = (0..extent[1]).flat_map(|y| (0..extent[0]).map(move |x|
             pixel((x as i32 - offset[0]) as u32, (y as i32 - offset[1]) as u32))).collect();
@@ -60,7 +61,7 @@ fn coarse_graph_retains_negative_effect_inputs_and_matches_larger_reference() {
             let mut r = WgpuRasterizer::new_native_headless(color).unwrap();
             let mut packet = crate::test_support::packet(doc.scene(), doc.composition().size);
             packet.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
-            r.submit(packet).unwrap();
+            tests::submit_published(&mut r, packet);
             let cache = r.scale_display.as_ref().unwrap();
             assert!(cache.evaluation == Evaluation::Display);
             assert_eq!(cache.plan.level, 2);

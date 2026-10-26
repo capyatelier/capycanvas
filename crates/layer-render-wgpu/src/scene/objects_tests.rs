@@ -45,12 +45,12 @@ fn native(r: &mut WgpuRasterizer, doc: &layer_core::Document, output: Output) ->
 }
 
 fn submit_ready(r: &mut WgpuRasterizer, frame: FramePacket<'_>) {
-    r.submit(frame).unwrap();
+    crate::test_support::submit_ready(r, frame).unwrap();
     for _ in 0..2000 {
         r.wait_idle().unwrap();
         if !r.has_pending_work() { return; }
         std::thread::sleep(std::time::Duration::from_millis(1));
-        r.submit(FramePacket { composite_all: false, reset_layers: false, ..frame }).unwrap();
+        crate::test_support::submit_ready(r, FramePacket { composite_all: false, reset_layers: false, ..frame }).unwrap();
     }
     panic!("object display preparation must settle");
 }
@@ -794,11 +794,11 @@ fn settle_frames(r: &mut WgpuRasterizer, frame: FramePacket<'_>, limit: usize) -
 }
 
 fn settle_live_frames(r: &mut WgpuRasterizer, frame: FramePacket<'_>, limit: usize) -> usize {
-    r.submit(frame).unwrap();
+    crate::test_support::submit_ready(r, frame).unwrap();
     for submitted in 1..=limit {
         r.wait_idle().unwrap();
         if !r.has_pending_work() { return submitted; }
-        r.submit(FramePacket { composite_all: false, ..frame }).unwrap();
+        crate::test_support::submit_ready(r, FramePacket { composite_all: false, ..frame }).unwrap();
     }
     panic!("object scene must settle within {limit} submissions: deferred={}, image_waiting={}, moving={}, analysis={}, results_pending={}, results_bytes={}, completed_images={}, passes={}",
         r.object_deferred,r.image_decode_waiting(),r.moving_images_pending(),r.analysis_dirty,

@@ -147,7 +147,7 @@ fn repeated_native_threshold_updates_reuse_an_oversized_decoded_working_set() {
                 frame.view.width_px = extent[0] / 4; frame.view.height_px = extent[1] / 4;
                 frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
                 let before = r.source_cache_work();
-                r.submit(frame).unwrap();
+                crate::layer_tests::publish(&mut r, frame);
                 let after = r.source_cache_work();
                 let work = [after[0] - before[0], after[1] - before[1]];
                 eprintln!("native source scan tiles={tiles} round={round} work={work:?}");
@@ -168,12 +168,12 @@ fn repeated_native_threshold_updates_reuse_an_oversized_decoded_working_set() {
             let composition = doc.artwork.root;
             doc.artwork.compositions.get_mut(composition).unwrap().size[0] = capacity as u32 * PAGE_SIZE;
             let frame = crate::test_support::packet(doc.scene(), doc.composition().size);
-            r.submit(frame).unwrap();
+            crate::layer_tests::publish(&mut r, frame);
             assert_threshold_pixels(&r, 0.45, 64);
             doc.artwork.effects.get_mut(effect).unwrap().values[parameter] = EffectValue::Number(0.6);
             let frame = crate::test_support::packet(doc.scene(), doc.composition().size);
             let before = r.source_cache_work();
-            r.submit(frame).unwrap();
+            crate::layer_tests::publish(&mut r, frame);
             let after = r.source_cache_work();
             assert_eq!(after[1], before[1], "a replacement set within capacity must be warm on its next update");
             assert_eq!(r.source_tiles.borrow().gpu_bytes(), allocated.unwrap());
@@ -309,7 +309,9 @@ fn source_residency_and_upload_window_follow_admitted_headroom() {
 
 #[test]
 fn decoded_sources_preserve_srgb_codes_and_padding() {
-    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let gpu = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let mut r = WgpuRasterizer::native_capture_on_gpu(gpu.adapter.clone(), gpu.device.clone(), gpu.queue.clone(), Default::default()).unwrap();
+    drop(gpu);
     let mut scene = Scene::new(&r).unwrap();
     let mut exact = DecodedTiles::new(RgbSpace::Srgb);
     exact.admit(2 * 1024 * 1024 * 1024);
@@ -322,9 +324,8 @@ fn decoded_sources_preserve_srgb_codes_and_padding() {
         builder.push_row(&row).unwrap();
     }
     let source = Arc::new(builder.finish().unwrap());
-    let (_, pending) = exact.plan(&r, &source, [0, 0]).unwrap();
-    let pending = pending.unwrap();
-    let source_view = pending.view.clone();
+    let (source_tile, _) = exact.plan(&r, &source, [0, 0]).unwrap();
+    let source_view = source_tile.view.clone();
     let (output, view) = create_target(&r.device, [PAGE_SIZE; 2], wgpu::TextureFormat::Rgba32Float, "sampled display codes");
     let shader = r.device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("display source sampling oracle"),
@@ -340,12 +341,15 @@ fn decoded_sources_preserve_srgb_codes_and_padding() {
     });
     let binding = r.device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: None, layout: &pipeline.get_bind_group_layout(0), entries: &[
-            wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&pending.view) },
+            wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&source_view) },
             wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&view) },
         ],
     });
     let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-    scene.encode_decode(&mut r, Some(pending), &mut encoder).unwrap();
+    crate::test_support::query_ready(&mut r, &mut encoder, |r, encoder| {
+        let (_, pending) = exact.plan(r, &source, [0, 0])?;
+        scene.encode_decode(r, pending, encoder)
+    });
     {
         let mut pass = encoder.begin_compute_pass(&Default::default());
         pass.set_pipeline(&pipeline); pass.set_bind_group(0, &binding, &[]);

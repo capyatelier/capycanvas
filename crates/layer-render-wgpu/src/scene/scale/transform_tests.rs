@@ -8,7 +8,7 @@ fn navigator_visibility_preserves_direct_transform_presentation() {
     let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     let mut frame = packet(doc.scene(), extent);
     frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
-    r.submit(frame).unwrap();
+    crate::test_support::submit_ready(&mut r, frame).unwrap();
     frame.composite_all = false;
     let mut presenter = Some(crate::ViewportPresenter::for_renderer(&r, wgpu::TextureFormat::Rgba8Unorm));
     let mut standalone = crate::ViewportPresenter::for_overview_surface(&r, wgpu::TextureFormat::Rgba8Unorm,
@@ -27,7 +27,7 @@ fn navigator_visibility_preserves_direct_transform_presentation() {
             transaction: 1, target: source_at(&doc,0), moving: true, selection: None,
             transform: ImageTransform::affine(Affine::translation(Point { x, y: 0. })),
         })).unwrap();
-        r.submit(frame).unwrap();
+        crate::test_support::submit_ready(&mut r, frame).unwrap();
         let cache = r.scale_display.as_ref().unwrap();
         assert!(matches!(cache.placed, Some(Presentation::Mapped(_))));
         assert!(cache.pixels.root().is_none());
@@ -77,7 +77,7 @@ fn deferred_transforms_present_rotated_views_and_navigators_without_intermediate
         frame.blend_space = space;
         frame.view.width_px = 160; frame.view.height_px = 100;
         frame.view.document_to_surface = [0.19, 0., 0., 0.19, 8.25, 7.5];
-        r.submit(frame).unwrap(); exact.submit(frame).unwrap();
+        submit_published(&mut r, frame); submit_published(&mut exact, frame);
         frame.composite_all = false;
         for map in [LayerPlacement::from_affine(Affine([0.8, 0.12, -0.1, 0.9, 40., 0.])), LayerPlacement::from_projective(projective)] {
             let preview = layer_render::TransformPreview { transaction: 1, target: source_at(&doc,0), moving: true,
@@ -85,7 +85,7 @@ fn deferred_transforms_present_rotated_views_and_navigators_without_intermediate
             frame.time_seconds += 0.1;
             let work = r.metrics.composited_pixels;
             for renderer in [&mut r, &mut exact] {
-                renderer.set_transform_preview(Some(&preview)).unwrap(); renderer.submit(frame).unwrap();
+                renderer.set_transform_preview(Some(&preview)).unwrap(); crate::test_support::submit_ready(renderer, frame).unwrap();
             }
             let cache = r.scale_display.as_ref().unwrap();
             assert!(matches!(cache.placed, Some(Presentation::Mapped(_))));
@@ -164,14 +164,14 @@ fn pass_through_children_above_a_transform_keep_shared_display_composition() {
         occurrence_mut(&mut doc,1).blend = blend;
         let mut frame = packet(doc.scene(), extent);
         frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
-        r.submit(frame).unwrap(); exact.submit(frame).unwrap();
+        submit_published(&mut r, frame); submit_published(&mut exact, frame);
         frame.composite_all = false;
         let original = display_pixels(&r);
         for step in 1..4 {
             let transform = layer_render::TransformPreview { transaction: 1, target: moving, moving: step < 3, selection: None,
                 transform: ImageTransform::affine(Affine::translation(Point { x: 8. * step as f32, y: -4. })) };
             for renderer in [&mut r, &mut exact] {
-                renderer.set_transform_preview(Some(&transform)).unwrap(); renderer.submit(frame).unwrap();
+                renderer.set_transform_preview(Some(&transform)).unwrap(); crate::test_support::submit_ready(renderer, frame).unwrap();
             }
 
             if transform.moving { assert!(!r.scale_display.as_ref().unwrap().has_pending_work(&r)); }
@@ -180,7 +180,7 @@ fn pass_through_children_above_a_transform_keep_shared_display_composition() {
             assert!(error[0] < 0.004 && error[1] < 0.06, "{blend:?} step={step} error={error:?}");
         }
         for renderer in [&mut r, &mut exact] {
-            renderer.set_transform_preview(None).unwrap(); renderer.submit(frame).unwrap();
+            renderer.set_transform_preview(None).unwrap(); crate::test_support::submit_ready(renderer, frame).unwrap();
         }
         assert_eq!(original, display_pixels(&r));
     }
@@ -227,13 +227,13 @@ fn transform_sources_compose_with_the_stack_without_native_preview_during_motion
         frame.blend_space = space;
             frame.composite_all = false;
             frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
-            r.submit(frame).unwrap(); exact.submit(frame).unwrap();
+            submit_published(&mut r, frame); submit_published(&mut exact, frame);
             let original = display_pixels(&r);
             for (step, map) in maps.iter().enumerate() {
                 let preview = layer_render::TransformPreview { transaction: 1, target: id, moving: true,
                     selection: selection.clone(), transform: ImageTransform { placement: layer_core::LayerPlacement { interpolation: Interpolation::Bicubic, ..map.clone() }, ..Default::default() } };
                 for renderer in [&mut r, &mut exact] {
-                    renderer.set_transform_preview(Some(&preview)).unwrap(); renderer.submit(frame).unwrap();
+                    renderer.set_transform_preview(Some(&preview)).unwrap(); crate::test_support::submit_ready(renderer, frame).unwrap();
                 }
                 assert!(r.scale_display.is_some());
                 assert!(r.paint_layers.iter().all(|l| l.pages.is_empty()), "display motion does not allocate native preview pages");
@@ -249,13 +249,13 @@ fn transform_sources_compose_with_the_stack_without_native_preview_during_motion
                 let b = exact.readback_srgb_rgba8().unwrap();
                 assert_eq!(a, b, "exact queries evaluate native transform pixels");
                 assert_eq!(displayed, display_pixels(&r), "an exact query preserves the displayed approximation");
-                r.submit(frame).unwrap();
+                crate::test_support::submit_ready(&mut r, frame).unwrap();
                 assert_eq!(displayed, display_pixels(&r));
                 assert!(r.paint_layers.iter().map(|l| l.pages.len()).sum::<usize>() <= 9,
                     "an exact query retains only its final native dependency window");
             }
             for renderer in [&mut r, &mut exact] {
-                renderer.set_transform_preview(None).unwrap(); renderer.submit(frame).unwrap();
+                renderer.set_transform_preview(None).unwrap(); crate::test_support::submit_ready(renderer, frame).unwrap();
             }
             assert_eq!(original, display_pixels(&r), "cancelling restores the original composition");
         }
@@ -273,14 +273,14 @@ fn transform_queries_keep_only_the_native_tiles_the_requested_window_reads() {
     let mut frame = packet(doc.scene(), extent);
     frame.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
     frame.composite_all = false;
-    r.submit(frame).unwrap();
+    crate::test_support::submit_ready(&mut r, frame).unwrap();
     r.set_transform_preview(Some(&layer_render::TransformPreview {
         transaction: 1, target: source_at(&doc,0), moving: false, selection: None,
         transform: ImageTransform::affine(Affine::translation(Point { x: 13.5, y: -5.25 })),
     })).unwrap();
-    r.submit(frame).unwrap();
+    crate::test_support::submit_ready(&mut r, frame).unwrap();
     let mut capture = artwork::Capture::default();
-    while r.has_pending_work() { r.wait_idle().unwrap(); r.submit(frame).unwrap(); }
+    while r.has_pending_work() { r.wait_idle().unwrap(); crate::test_support::submit_ready(&mut r, frame).unwrap(); }
     r.wait_idle().unwrap();
     for origin in [[256,256], [1024,768], [1536,1024], [0,0]].into_iter().cycle().take(16) {
         let region = PixelRect::new(origin[0], origin[1], origin[0] + 32, origin[1] + 32);
@@ -295,7 +295,7 @@ fn transform_queries_keep_only_the_native_tiles_the_requested_window_reads() {
             assert!(tiles <= 64, "decoded source cache retained {tiles} tiles");
         }
     }
-    r.set_transform_preview(None).unwrap(); r.submit(frame).unwrap();
+    r.set_transform_preview(None).unwrap(); crate::test_support::submit_ready(&mut r, frame).unwrap();
     assert!(r.paint_layers.iter().all(|l| l.pages.is_empty()));
 }
 
@@ -314,12 +314,12 @@ fn transform_zoom_release_and_commit_preserve_native_pixels() {
     exact.test.reference = true;
     let mut frame = packet(doc.scene(), extent);
     frame.composite_all = false;
-    r.submit(frame).unwrap(); exact.submit(frame).unwrap();
+    crate::test_support::submit_ready(&mut r, frame).unwrap(); crate::test_support::submit_ready(&mut exact, frame).unwrap();
     for (scale, moving) in [(0.125,true),(0.5,true),(1.,true),(0.25,true),(0.25,false)] {
         preview.moving = moving;
         frame.view.document_to_surface = [scale,0.,0.,scale,0.,0.];
         for renderer in [&mut r, &mut exact] {
-            renderer.set_transform_preview(Some(&preview)).unwrap(); renderer.submit(frame).unwrap();
+            renderer.set_transform_preview(Some(&preview)).unwrap(); crate::test_support::submit_ready(renderer, frame).unwrap();
         }
         assert!(r.scale_display.is_some());
         if moving { assert!(!r.scale_display.as_ref().unwrap().has_pending_work(&r)); }
@@ -340,7 +340,7 @@ fn transform_zoom_release_and_commit_preserve_native_pixels() {
     let mut frame = packet(doc.scene(), extent);
     frame.composite_all = false; frame.view.document_to_surface = [0.25,0.,0.,0.25,0.,0.];
     frame.dab_batches = std::slice::from_ref(&batch);
-    r.set_transform_preview(None).unwrap(); r.submit(frame).unwrap();
+    r.set_transform_preview(None).unwrap(); crate::test_support::submit_ready(&mut r, frame).unwrap();
     assert_eq!(r.readback_srgb_rgba8().unwrap(), expected);
     assert!(!r.transforms.as_ref().unwrap().has_preview());
 }
@@ -362,20 +362,20 @@ fn transformed_group_children_keep_clipping_and_linked_mask_semantics() {
         exact.test.reference = true;
         let mut frame = packet(doc.scene(), extent);
         frame.composite_all = false; frame.view.document_to_surface = [0.25,0.,0.,0.25,0.,0.];
-        r.submit(frame).unwrap(); exact.submit(frame).unwrap();
+        submit_published(&mut r, frame); submit_published(&mut exact, frame);
         let original = display_pixels(&r);
         for offset in [9.,-13.] {
             let preview = layer_render::TransformPreview { transaction: 1, target: id, moving: true, selection: None,
                 transform: ImageTransform::affine(Affine::translation(Point { x: offset, y: 5. })) };
             for renderer in [&mut r, &mut exact] {
-                renderer.set_transform_preview(Some(&preview)).unwrap(); renderer.submit(frame).unwrap();
+                renderer.set_transform_preview(Some(&preview)).unwrap(); crate::test_support::submit_ready(renderer, frame).unwrap();
             }
             assert!(r.scale_display.is_some());
             let error = quality(&display_pixels(&r), &pixels(&exact, crate::test_support::document_texture(&exact)), r.scale_display.as_ref().unwrap().plan);
             assert!(error[0] < 0.004 && error[1] < 0.06, "mask={mask_target} linked={linked} {error:?}");
             crate::test_support::assert_same_canonical(&mut r, &mut exact);
         }
-        r.set_transform_preview(None).unwrap(); r.submit(frame).unwrap();
+        r.set_transform_preview(None).unwrap(); crate::test_support::submit_ready(&mut r, frame).unwrap();
         assert_eq!(original, display_pixels(&r));
     }
 }
@@ -388,14 +388,14 @@ fn retained_transform_detail_still_filters_the_current_output_footprint() {
     let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     let mut frame = packet(doc.scene(), extent);
     frame.composite_all = false; frame.view.document_to_surface = [0.25,0.,0.,0.25,0.,0.];
-    r.submit(frame).unwrap();
+    submit_published(&mut r, frame);
     let original = display_pixels(&r);
     let mut work = 0;
     for (step, scale) in [4.,1.,4.,1.].into_iter().enumerate() {
         r.set_transform_preview(Some(&layer_render::TransformPreview { transaction: 1, target: source_at(&doc,0),
             moving: true, selection: None, transform: ImageTransform::affine(
                 Affine::around(Point { x: 32., y: 16. }, [scale;2], 0., Point::default())) })).unwrap();
-        r.submit(frame).unwrap();
+        crate::test_support::submit_ready(&mut r, frame).unwrap();
         if step == 0 { work = r.test.reduced_pages.get(); }
         else { assert_eq!(r.test.reduced_pages.get(), work, "the immutable source is not recaptured on scale oscillations"); }
         if scale == 1. {
@@ -450,7 +450,7 @@ fn moved_copies_reconstruct_original_coverage_for_every_map() {
         exact.test.reference = true;
         let mut frame = packet(doc.scene(), extent);
         frame.composite_all = false; frame.view.document_to_surface = [0.25,0.,0.,0.25,0.,0.];
-        r.submit(frame).unwrap(); exact.submit(frame).unwrap();
+        submit_published(&mut r, frame); submit_published(&mut exact, frame);
         let original = r.readback_srgb_rgba8().unwrap();
         let original_display = display_pixels(&r);
         let maps = [LayerPlacement::default(), LayerPlacement::from_affine(Affine::translation(Point {x:48.,y:12.})),
@@ -460,7 +460,7 @@ fn moved_copies_reconstruct_original_coverage_for_every_map() {
                 let preview = layer_render::TransformPreview { transaction: 1, target: id, moving: true,
                     selection: selection.clone(), transform: ImageTransform { placement: layer_core::LayerPlacement { interpolation: Interpolation::Bicubic, ..map.clone() }, keep_source, source_from_owner:None, source_base:None } };
                 for renderer in [&mut r,&mut exact] {
-                    renderer.set_transform_preview(Some(&preview)).unwrap(); renderer.submit(frame).unwrap();
+                    renderer.set_transform_preview(Some(&preview)).unwrap(); crate::test_support::submit_ready(renderer, frame).unwrap();
                 }
                 if preview.transform.is_identity() {
                     let actual=display_pixels(&r);
@@ -474,7 +474,7 @@ fn moved_copies_reconstruct_original_coverage_for_every_map() {
                 assert_eq!(r.test.source_captures.get(),1);
             }
         }
-        r.prepare_moving_pixels(None); r.set_transform_preview(None).unwrap(); r.submit(frame).unwrap();
+        r.prepare_moving_pixels(None); r.set_transform_preview(None).unwrap(); crate::test_support::submit_ready(&mut r, frame).unwrap();
         assert_eq!(r.readback_srgb_rgba8().unwrap(),original);
     }
 }
@@ -490,7 +490,7 @@ fn move_transactions_adopt_prepared_inputs_and_invalidate_them_on_restore() {
     exact.test.reference = true;
     let mut frame = packet(doc.scene(),extent);
     frame.composite_all=false; frame.view.document_to_surface=[0.25,0.,0.,0.25,0.,0.];
-    r.submit(frame).unwrap(); exact.submit(frame).unwrap();
+    submit_published(&mut r, frame); submit_published(&mut exact, frame);
     let original = r.readback_srgb_rgba8().unwrap();
     r.background_ready = Arc::new(std::sync::atomic::AtomicBool::new(false));
     r.prepare_moving_pixels(Some((id,part.clone())));
@@ -498,28 +498,28 @@ fn move_transactions_adopt_prepared_inputs_and_invalidate_them_on_restore() {
     r.background_ready.store(true, std::sync::atomic::Ordering::Release);
     let captures=r.test.source_captures.get(); let reduced=r.test.reduced_pages.get();
     assert_eq!(captures,1); assert!(reduced>0);
-    for _ in 0..2 {r.submit(frame).unwrap();}
+    for _ in 0..2 {crate::test_support::submit_ready(&mut r, frame).unwrap();}
     assert_eq!(r.test.reduced_pages.get(),reduced);
     for offset in [0.,64.,-32.] {
         let preview=layer_render::TransformPreview {transaction:7,target: id,moving:true,selection:Some(part.clone()),
             transform:ImageTransform { placement: layer_core::LayerPlacement { interpolation: Interpolation::Nearest, ..LayerPlacement::from_affine(Affine::translation(Point {x:offset,y:0.})) },keep_source:true,source_from_owner:None,source_base:None}};
-        for renderer in [&mut r,&mut exact] {renderer.set_transform_preview(Some(&preview)).unwrap();renderer.submit(frame).unwrap();}
+        for renderer in [&mut r,&mut exact] {renderer.set_transform_preview(Some(&preview)).unwrap();crate::test_support::submit_ready(renderer, frame).unwrap();}
         assert_eq!(r.test.source_captures.get(),captures);
         assert_eq!(r.test.reduced_pages.get(),reduced);
         assert!(r.paint_layers.iter().all(|l|l.pages.is_empty()));
         assert_eq!(r.readback_srgb_rgba8().unwrap(),exact.readback_srgb_rgba8().unwrap());
     }
-    r.prepare_moving_pixels(None);r.set_transform_preview(None).unwrap();r.submit(frame).unwrap();
+    r.prepare_moving_pixels(None);r.set_transform_preview(None).unwrap();crate::test_support::submit_ready(&mut r, frame).unwrap();
     assert_eq!(r.readback_srgb_rgba8().unwrap(),original);
     paint_mut(&mut doc,0).raster =layer_core::raster::RasterRevision::pending();
     frame=packet(doc.scene(),extent);frame.composite_all=false;frame.view.document_to_surface=[0.25,0.,0.,0.25,0.,0.];
-    r.prepare_moving_pixels(Some((id,part.clone())));r.submit(frame).unwrap();
+    r.prepare_moving_pixels(Some((id,part.clone())));crate::test_support::submit_ready(&mut r, frame).unwrap();
     let captures=r.test.source_captures.get();let reduced=r.test.reduced_pages.get();
     assert!(captures>1);
     let restored=[(id,paint_at(&doc,0).raster.clone())];
-    r.submit(FramePacket {restore_rasters:&restored,..frame}).unwrap();
+    crate::test_support::submit_ready(&mut r, FramePacket {restore_rasters:&restored,..frame}).unwrap();
     assert_eq!(r.test.source_captures.get(),captures);
-    r.submit(frame).unwrap();
+    crate::test_support::submit_ready(&mut r, frame).unwrap();
     assert_eq!(r.test.source_captures.get(),captures+1);
     assert!(r.test.reduced_pages.get()>reduced);
 }
@@ -538,14 +538,14 @@ fn moving_pixels_invalidate_the_cut_only_when_its_coverage_changes() {
         let mut frame = packet(doc.scene(),extent);
         frame.composite_all = false;
         frame.view.document_to_surface = [scale,0.,0.,scale,0.,0.];
-        r.submit(frame).unwrap(); exact.submit(frame).unwrap();
+        submit_published(&mut r, frame); submit_published(&mut exact, frame);
         for (step,(offset,keep_source)) in [(384.,false),(416.,false),(416.,true),
             (448.,true),(448.,false),(0.,false)].into_iter().enumerate() {
             let preview = layer_render::TransformPreview {transaction:1,target: source_at(&doc,0),
                 moving:true,selection:Some(selection.clone()),transform:ImageTransform { placement: LayerPlacement::from_affine(Affine::translation(Point {x:offset,y:0.})),
                     keep_source,..Default::default()}};
             for renderer in [&mut r,&mut exact] {
-                renderer.set_transform_preview(Some(&preview)).unwrap();renderer.submit(frame).unwrap();
+                renderer.set_transform_preview(Some(&preview)).unwrap();crate::test_support::submit_ready(renderer, frame).unwrap();
             }
             if step == 1 || step == 3 {
                 assert!(r.composite_damage.intersect(cut).is_empty(),
@@ -566,13 +566,13 @@ fn mapped_display_backup_shares_one_immutable_copy() {
     let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     let mut frame = packet(doc.scene(), doc.composition().size);
     frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
-    r.submit(frame).unwrap();
+    crate::test_support::submit_ready(&mut r, frame).unwrap();
     frame.composite_all = false;
     r.set_transform_preview(Some(&layer_render::TransformPreview {
         transaction: 1, target: source_at(&doc,0), moving: true, selection: None,
         transform: ImageTransform::affine(Affine::translation(Point { x: 10., y: 0. })),
     })).unwrap();
-    r.submit(frame).unwrap();
+    crate::test_support::submit_ready(&mut r, frame).unwrap();
     let cache = r.scale_display.as_ref().unwrap();
     assert!(matches!(cache.placed, Some(Presentation::Mapped(_))));
     let source = cache.view().texture().clone();

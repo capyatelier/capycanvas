@@ -54,7 +54,7 @@ fn batch(target: SourceTarget) -> DabBatch {
     crate::test_support::dab_batch(target, crate::tests::test_style(BrushExecution::Dry), Rect::from_extent([128; 2]))
 }
 fn submit(r: &mut WgpuRasterizer, doc: &Document, dabs: &[Dab], batches: &[DabBatch], reset: bool) {
-    r.submit(FramePacket { dabs, dab_batches: batches, reset_layers: reset, ..packet(doc.scene(), [128; 2]) }).unwrap();
+    crate::test_support::submit_ready(r, FramePacket { dabs, dab_batches: batches, reset_layers: reset, ..packet(doc.scene(), [128; 2]) }).unwrap();
 }
 
 
@@ -81,7 +81,7 @@ fn raster_gradients_preserve_authored_stops_and_opacity() {
     for blend in layer_core::BlendSpace::ALL {
         paint_mut(&mut doc).raster=layer_core::raster::RasterRevision::pending();
         let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-        r.submit(FramePacket {dab_batches:std::slice::from_ref(&command),reset_layers:true,blend_space:blend,..packet(doc.scene(),extent)}).unwrap();
+        crate::test_support::submit_ready(&mut r, FramePacket {dab_batches:std::slice::from_ref(&command),reset_layers:true,blend_space:blend,..packet(doc.scene(),extent)}).unwrap();
         paint(&doc).raster.wait_data().unwrap();
         let pixels=r.readback_srgb_rgba8().unwrap();
         for x in [4usize,32,64,96,124] {
@@ -115,11 +115,11 @@ fn offset_photo_incremental_composition_matches_rebuild_with_alpha_edges() {
         let mut images = Vec::new();
         for (r, full) in [(&mut r, false), (&mut rebuilt, true)] {
             if full { r.scale_display = None; }
-            r.submit(FramePacket {
+            crate::layer_tests::publish(r, FramePacket {
                 view: ViewState { width_px: canvas[0], height_px: canvas[1], ..view() },
                 reset_layers: step == 0,
                 ..packet(photo.scene(), canvas)
-            }).unwrap();
+            });
             images.push(page_bytes(r, crate::test_support::document_texture(r)));
         }
         let misses = r.metrics().source_tile_misses;
@@ -155,7 +155,7 @@ fn offset_photo_incremental_composition_matches_rebuild_with_alpha_edges() {
             for (r, full) in [(&mut r, false), (&mut rebuilt, true)] {
                 if full { r.scale_display = None; }
                 let before = r.metrics.composited_pixels;
-                r.submit(FramePacket {
+                crate::test_support::submit_ready(r, FramePacket {
                     view: ViewState { width_px: canvas[0], height_px: canvas[1], ..view() },
                     dabs: if prediction { std::slice::from_ref(&ink) } else { &[] },
                     dab_batches: if prediction { std::slice::from_ref(&stroke) } else { &[] },
@@ -183,7 +183,7 @@ fn offset_photo_incremental_composition_matches_rebuild_with_alpha_edges() {
             let mut images = Vec::new();
             for (r, full) in [(&mut r, false), (&mut rebuilt, true)] {
                 if full { r.scale_display = None; }
-                r.submit(FramePacket {
+                crate::test_support::submit_ready(r, FramePacket {
                     view: ViewState { width_px: canvas[0], height_px: canvas[1], ..view() },
                     dabs: std::slice::from_ref(&ink),
                     dab_batches: std::slice::from_ref(&stroke),
@@ -540,7 +540,8 @@ fn layer_tiles_beside_the_largest_offset_keep_their_exact_pixels() {
         let first = u32::try_from(offset.div_euclid(i64::from(PAGE_SIZE))).unwrap();
         (first..first + 3).map(|x| {
             let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-            let tile = scene.layer_tile_for_query(&mut r, layer.scene(), target(&layer), [x, 0], &mut encoder).unwrap();
+            let tile = crate::test_support::query_ready(&mut r, &mut encoder, |r, encoder|
+                scene.layer_tile_for_query(r, layer.scene(), target(&layer), [x, 0], encoder));
             r.uploads.finish(&encoder);
             encoder.submit(&r.queue);
             crate::layer_tests::page_bytes(&r, &tile.texture)
@@ -564,7 +565,7 @@ fn watercolor_multitile_prediction_commit_and_restore(restored_empty: bool) {
     let mut layer = paint_document([512; 2], "multitile transport");
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let send = |r: &mut WgpuRasterizer, layer: &Document, dabs: &[Dab], batches: &[DabBatch], reset| {
-        r.submit(FramePacket { dabs, dab_batches: batches, reset_layers: reset,
+        crate::test_support::submit_ready(r, FramePacket { dabs, dab_batches: batches, reset_layers: reset,
             ..crate::test_support::packet(layer.scene(), [512; 2]) }).unwrap();
         r.readback_srgb_rgba8().unwrap()
     };

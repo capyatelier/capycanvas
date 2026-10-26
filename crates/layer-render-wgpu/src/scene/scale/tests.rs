@@ -48,7 +48,18 @@ mod root_fragment;
 #[path = "moved_paint_tests.rs"]
 mod moved_paint;
 
-fn assert_settled(r: &mut WgpuRasterizer, frame: FramePacket<'_>, reference: &[[f32; 4]]) {
+pub(super) fn submit_published(r: &mut WgpuRasterizer, frame: FramePacket<'_>) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let idle = FramePacket { composite_all: false, reset_layers: false, dabs: &[], dab_batches: &[], restore_rasters: &[], ..frame };
+    crate::test_support::submit_ready(r, frame).unwrap();
+    while r.object_deferred {
+        assert!(std::time::Instant::now() < deadline, "deferred composition must publish");
+        r.wait_idle().unwrap();
+        crate::test_support::submit_ready(r, idle).unwrap();
+    }
+}
+
+fn assert_settled(mut r: &mut WgpuRasterizer, frame: FramePacket<'_>, reference: &[[f32; 4]]) {
     let revision = r.artwork_revision;
     let pages = page_coordinates(PixelRect::full(frame.document_extent)).count();
     let idle = FramePacket { composite_all: false, reset_layers: false, dabs: &[], dab_batches: &[], restore_rasters: &[], ..frame };
@@ -57,7 +68,7 @@ fn assert_settled(r: &mut WgpuRasterizer, frame: FramePacket<'_>, reference: &[[
         assert!(step < pages + 1, "refinement must finish within one visit per native page");
         r.wait_idle().unwrap();
         let work = r.metrics.composited_pixels;
-        r.submit(idle).unwrap();
+        crate::test_support::submit_ready(&mut r, idle).unwrap();
         let bounded = frame.scene.order().iter().any(|h|frame.scene.visible(*h)
             && frame.scene.effect(*h).is_some_and(|effect|effect.program.image_boundary()));
         let limit = if bounded {4 * u64::from(PAGE_SIZE).pow(2)} else {
@@ -79,7 +90,7 @@ fn assert_settled(r: &mut WgpuRasterizer, frame: FramePacket<'_>, reference: &[[
     assert_presentation_mip(r);
 
     let work = r.metrics.composited_pixels;
-    r.submit(idle).unwrap();
+    crate::test_support::submit_ready(&mut r, idle).unwrap();
     assert_eq!(r.metrics.composited_pixels, work, "completed refinement has no further work");
 }
 
@@ -232,13 +243,13 @@ fn idle_display_converges_to_exact_composition_after_edits() {
             let mut frame = packet(doc.scene(), extent);
             frame.blend_space = space;
             frame.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
-            r.submit(frame).unwrap();
-            exact.submit(frame).unwrap();
+            submit_published(&mut r, frame);
+            submit_published(&mut exact, frame);
             let reference = pixels(&exact, crate::test_support::document_texture(&exact));
             let before = quality(&display_pixels(&r), &reference, r.scale_display.as_ref().unwrap().plan);
             assert!(before[2] > 1e-4, "fixture must need refinement: {before:?}");
             if step == 0 {
-                r.submit(FramePacket { composite_all: false, ..frame }).unwrap();
+                crate::test_support::submit_ready(&mut r, FramePacket { composite_all: false, ..frame }).unwrap();
                 assert!(r.has_pending_work(), "the next edit interrupts partial refinement");
                 continue;
             }
@@ -276,9 +287,9 @@ fn blend_space_changes_refresh_branches_and_source_representations() {
         frame.composite_all = matches!(step, 3 | 4);
         let scale = 1. / (1 << level) as f32;
         frame.view.document_to_surface = [scale, 0., 0., scale, 0., 0.];
-        r.submit(frame).unwrap();
-        fresh.submit(FramePacket { reset_layers: true, ..frame }).unwrap();
-        exact.submit(FramePacket { composite_all: true, ..frame }).unwrap();
+        submit_published(&mut r, frame);
+        submit_published(&mut fresh, FramePacket { reset_layers: true, ..frame });
+        submit_published(&mut exact, FramePacket { composite_all: true, ..frame });
         let actual = display_pixels(&r);
         let expected = display_pixels(&fresh);
         let error = crate::test_support::max_error(&actual, &expected);
@@ -307,13 +318,13 @@ fn clipped_contacts_do_not_require_unmaterialized_source_levels() {
     let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     let mut frame = packet(doc.scene(), doc.composition().size);
     frame.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
-    r.submit(frame).unwrap();
+    crate::test_support::submit_ready(&mut r, frame).unwrap();
     let expected = display_pixels(&r);
     let dab = crate::tests::test_dab([10000., 10000.], [0.8, 0.2, 0.1, 1.], 1.);
     let batch = dab_batch(source_at(&doc,0), crate::layer_tests::preset_style(DefaultBrushPreset::GPen), dab.bounds());
     for kind in [DabBatchKind::Persistent, DabBatchKind::Preview] {
         let batch = DabBatch { kind, ..batch.clone() };
-        r.submit(FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&batch), ..frame }).unwrap();
+        crate::test_support::submit_ready(&mut r, FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&batch), ..frame }).unwrap();
         assert_eq!(display_pixels(&r), expected);
         assert!(r.paint_layers.iter().all(|layer| layer.pages.is_empty()));
         assert!(r.preview_pages.is_empty());
@@ -337,7 +348,7 @@ fn native_graph_admits_a_full_4k_view_with_bounded_scratch() {
         frame.view.width_px = doc.composition().size[0];
         frame.view.height_px = doc.composition().size[1];
         assert_eq!(request(&r, frame).ok().map(|q| q.plan.level), Some(0));
-        r.submit(frame).unwrap();
+        crate::test_support::submit_ready(&mut r, frame).unwrap();
         let cache = r.scale_display.as_ref().unwrap();
         let scene = r.scene.as_ref().unwrap();
         assert_eq!(cache.plan.level, 0);
@@ -358,7 +369,7 @@ fn reduced_photo_stacks_use_bounded_working_tiles() {
     frame.view.height_px = 1000;
     frame.view.document_to_surface = [0.1578, 0., 0., 0.1578, 0., 0.];
     assert_eq!(request(&r, frame).ok().map(|q| q.plan.level), Some(2));
-    r.submit(frame).unwrap();
+    submit_published(&mut r, frame);
     let cache = r.scale_display.as_ref().unwrap();
     let scene = r.scene.as_ref().unwrap();
     assert!(cache.output.is_empty() && cache.pixels.root().is_some(), "working images stay tile-sized");
@@ -399,7 +410,7 @@ fn rotated_reduced_stacks_admit_bounded_source_working_storage() {
         800. - scale * (c * doc.composition().size[0] as f32 - s * doc.composition().size[1] as f32) * 0.5,
         500. - scale * (s * doc.composition().size[0] as f32 + c * doc.composition().size[1] as f32) * 0.5];
     assert_eq!(request(&r, frame).ok().map(|q| q.plan.level), Some(1));
-    r.submit(frame).unwrap();
+    crate::test_support::submit_ready(&mut r, frame).unwrap();
     let cache = r.scale_display.as_ref().unwrap();
     let scene = r.scene.as_ref().unwrap();
     let bytes = resident_bytes_with_pool(cache, scene);
@@ -439,7 +450,7 @@ fn streamed_sources_match_cached_pixels_through_masks_paint_and_admission_change
             frame.dabs = std::slice::from_ref(&dab);
             frame.dab_batches = std::slice::from_ref(&batch);
         }
-        streamed.submit(frame).unwrap();
+        submit_published(&mut streamed, frame);
         let full = streamed.scale_display.as_ref().unwrap();
         assert_eq!(full.streamed_sources, state != 3, "state {state}");
         let full_plan = full.plan;
@@ -447,7 +458,7 @@ fn streamed_sources_match_cached_pixels_through_masks_paint_and_admission_change
         frame.view.width_px = 192; frame.view.height_px = 128;
         let [x, y] = if state == 2 { [-910., -660.] } else { [-160., -110.] };
         frame.view.document_to_surface = [0.5, 0., 0., 0.5, x, y];
-        cached.submit(frame).unwrap();
+        submit_published(&mut cached, frame);
         let window = cached.scale_display.as_ref().unwrap();
         assert!(!window.streamed_sources, "cached oracle state {state}");
         let actual = display_pixels(&cached);
@@ -474,7 +485,7 @@ fn streamed_sources_reuse_valid_finer_pages_without_native_decoding() {
     let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     let mut frame = packet(doc.scene(), doc.composition().size);
     frame.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
-    r.submit(frame).unwrap();
+    submit_published(&mut r, frame);
     let expected = display_pixels(&r);
     let mut cache = r.scale_display.take().unwrap();
     let mut scene = r.scene.take().unwrap();
@@ -522,7 +533,7 @@ fn source_window_growth_remains_admitted_during_rotated_pans() {
         frame.view.document_to_surface = [0.5 * c, 0.5 * s, -0.5 * s, 0.5 * c,
             800. - 0.5 * (c * x - s * y), 500. - 0.5 * (s * x + c * y)];
         assert_eq!(request(&r, frame).ok().map(|q| q.plan.level), Some(1), "step {step}");
-        r.submit(frame).unwrap();
+        crate::test_support::submit_ready(&mut r, frame).unwrap();
         assert!(r.scale_display.is_some());
         let cache = r.scale_display.as_ref().unwrap();
         let scene = r.scene.as_ref().unwrap();
@@ -575,7 +586,7 @@ fn view_windows_reuse_overlap_and_preserve_global_sampling() {
 
         exact.set_complete_display_allowance(256 << 20);
         let mut frame = packet(doc.scene(), extent);
-        exact.submit(frame).unwrap();
+        submit_published(&mut exact, frame);
         let oracle = pixels(&exact, crate::test_support::document_texture(&exact));
         frame.composite_all = false;
         frame.view.width_px = 192;
@@ -600,7 +611,7 @@ fn view_windows_reuse_overlap_and_preserve_global_sampling() {
         for (i, transform) in views.into_iter().enumerate() {
             let transform = transform.map(|n| n / (1 << detail) as f32);
             frame.view.document_to_surface = transform;
-            r.submit(frame).unwrap();
+            submit_published(&mut r, frame);
             let current = r.canvas_preview_revision();
             assert!(revision.is_none_or(|previous| previous == current), "camera motion preserves artwork revision");
             revision = Some(current);
@@ -621,7 +632,7 @@ fn view_windows_reuse_overlap_and_preserve_global_sampling() {
             full.view.width_px = extent[0];
             full.view.height_px = extent[1];
             full.view.document_to_surface = [scale, 0., 0., scale, 0., 0.];
-            whole.submit(full).unwrap();
+            submit_published(&mut whole, full);
             let complete = whole.scale_display.as_ref().unwrap();
             assert_eq!(complete.plan.bounds, PixelRect::full(extent));
             assert_eq!(complete.plan.level, cache.plan.level);
@@ -634,9 +645,9 @@ fn view_windows_reuse_overlap_and_preserve_global_sampling() {
         let batch = dab_batch(source_at(&doc,0), crate::layer_tests::preset_style(DefaultBrushPreset::GPen), dab.bounds());
         frame.dabs = std::slice::from_ref(&dab);
         frame.dab_batches = std::slice::from_ref(&batch);
-        r.submit(frame).unwrap();
+        submit_published(&mut r, frame);
         assert!(r.canvas_preview_revision() > revision.unwrap(), "painting advances artwork revision");
-        exact.submit(frame).unwrap();
+        submit_published(&mut exact, frame);
         let cache = r.scale_display.as_ref().unwrap();
         let oracle = pixels(&exact, crate::test_support::document_texture(&exact));
         assert!(quality(&display_pixels(&r), &oracle, cache.plan)[2] < 2e-5);
@@ -656,7 +667,7 @@ fn small_offset_source_remains_visible_beyond_its_local_extent() {
     let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     let mut frame = packet(doc.scene(), extent);
     frame.view.document_to_surface = [0.385, 0., 0., 0.385, 0., 0.];
-    r.submit(frame).unwrap();
+    submit_published(&mut r, frame);
     let display = display_pixels(&r);
     assert!(display.iter().any(|p| p[3] > 0.99 && p[2] > 0.05), "offset source contributes to presentation");
     let exact = r.readback_srgb_rgba8().unwrap();
@@ -690,8 +701,8 @@ fn offset_sources_and_masks_compose_in_document_scale_and_keep_exact_queries() {
                 let scale = 1. / (1 << level) as f32;
                 let mut frame = packet(doc.scene(), extent);
                 frame.view.document_to_surface = [scale, 0., 0., scale, 0., 0.];
-                r.submit(frame).unwrap();
-                exact.submit(frame).unwrap();
+                submit_published(&mut r, frame);
+                submit_published(&mut exact, frame);
                 let cache = r.scale_display.as_ref().unwrap();
                 assert_eq!(cache.plan.level, level);
 
@@ -722,7 +733,13 @@ fn source_windows_keep_overlap_and_sample_global_coordinates() {
         occurrence_mut(&mut doc,0).offset = offset;
         let mut frame = packet(doc.scene(), extent);
         frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
-        r.submit(frame).unwrap(); exact.submit(frame).unwrap();
+        submit_published(&mut r, frame); submit_published(&mut exact, frame);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while r.moving_decode.as_ref().is_some_and(|(_, queue)| queue.pending()) {
+            assert!(std::time::Instant::now() < deadline, "moving source tiles must decode");
+            r.wait_idle().unwrap();
+            crate::test_support::submit_ready(&mut r, frame).unwrap();
+        }
         let cache = r.scale_display.as_ref().unwrap();
 
         let sources = &r.scene.as_ref().unwrap().scale_sources;
@@ -742,7 +759,7 @@ fn source_windows_keep_overlap_and_sample_global_coordinates() {
     r.prepare_moving_layer(None);
     occurrence_mut(&mut doc,0).offset = [-100, -100];
     let frame = packet(doc.scene(), extent);
-    r.submit(frame).unwrap(); exact.submit(frame).unwrap();
+    submit_published(&mut r, frame); submit_published(&mut exact, frame);
     let error = quality(&display_pixels(&r), &pixels(&exact, crate::test_support::document_texture(&exact)), r.scale_display.as_ref().unwrap().plan);
     assert!(error[0] < 0.004 && error[1] < 0.04, "native offset after a partial source: {error:?}");
 }
@@ -754,14 +771,14 @@ fn cold_identity_sources_prepare_adjacent_detail_without_redecoding() {
     let mut frame = packet(doc.scene(), doc.composition().size);
     frame.view.width_px = 512; frame.view.height_px = 512;
     frame.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
-    r.submit(frame).unwrap();
+    submit_published(&mut r, frame);
     let source = &r.scene.as_ref().unwrap().scale_sources.entries[&source_at(&doc,0)];
     let updates = source.updates;
     assert_eq!(updates, 20);
     assert!(source.levels.contains_key(&2) && source.levels.contains_key(&3));
     let finer = source.levels[&2].image.texture.clone();
     frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
-    r.submit(frame).unwrap();
+    submit_published(&mut r, frame);
     let source = &r.scene.as_ref().unwrap().scale_sources.entries[&source_at(&doc,0)];
     assert_eq!(source.updates, updates);
     assert_eq!(source.levels[&2].image.texture, finer);
@@ -796,7 +813,7 @@ fn source_retention_reserves_images_that_composition_allocates_later() {
         let mut frame = packet(doc.scene(), doc.composition().size);
         frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
         if material {
-            r.submit(frame).unwrap();
+            submit_published(&mut r, frame);
             r.wait_idle().unwrap();
             r.scale_display = None;
             r.scene = None;
@@ -806,7 +823,7 @@ fn source_retention_reserves_images_that_composition_allocates_later() {
         assert!(cache.output.is_empty() && cache.pixels.next().is_none());
         let source_budget = cache.source_budget(&r, frame, &Commands::new(&r), None);
         r.scale_display = Some(cache);
-        r.submit(frame).unwrap();
+        submit_published(&mut r, frame);
         let cache = r.scale_display.as_ref().unwrap();
         assert!(cache.pixels.root().is_some() && cache.pixels.next().is_some());
         let commands = r.scene.as_ref().unwrap().scale_commands.as_ref().unwrap();
@@ -825,10 +842,10 @@ fn source_windows_derive_across_origins_and_fill_only_missing_pages() {
     let id = source_at(&doc,0);
     let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     let mut frame = packet(doc.scene(), extent);
-    r.submit(frame).unwrap();
+    submit_published(&mut r, frame);
     let reference = pixels(&r, r.scale_display.as_ref().unwrap().texture());
     frame.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
-    r.submit(frame).unwrap();
+    submit_published(&mut r, frame);
     let mut scene = r.scene.take().unwrap();
     let full = PixelRect::full(extent);
     let window = PixelRect::new(256, 256, extent[0], extent[1]);
@@ -871,7 +888,7 @@ fn moving_layer_crossing_identity_keeps_the_prepared_source() {
         frame.blend_space = layer_core::BlendSpace::Perceptual;
         frame.time_seconds = step as f32 * 0.1;
         frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
-        r.submit(frame).unwrap();
+        submit_published(&mut r, frame);
         let source = &r.scene.as_ref().unwrap().scale_sources.entries[&id];
         let level = *prepared_level.get_or_insert_with(|| source_level(r.scale_display.as_ref().unwrap().plan.level,
             source_frame(Some(&r.scene.as_ref().unwrap().scale_sources), doc.scene(), id)));
@@ -881,7 +898,7 @@ fn moving_layer_crossing_identity_keeps_the_prepared_source() {
         assert!(!r.has_pending_work(), "an unfinished move must not schedule exact refinement");
         let work = r.metrics.composited_pixels;
         frame.composite_all = false;
-        r.submit(frame).unwrap();
+        crate::test_support::submit_ready(&mut r, frame).unwrap();
         assert_eq!(r.metrics.composited_pixels, work, "an unchanged position must not refine");
     }
     r.prepare_moving_layer(None);
@@ -890,10 +907,10 @@ fn moving_layer_crossing_identity_keeps_the_prepared_source() {
     frame.blend_space = layer_core::BlendSpace::Perceptual;
     frame.composite_all = false;
     frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
-    r.submit(frame).unwrap();
+    crate::test_support::submit_ready(&mut r, frame).unwrap();
     assert!(r.has_pending_work(), "finishing a move must allow exact refinement");
     let mut fresh = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
-    fresh.submit(frame).unwrap();
+    submit_published(&mut fresh, frame);
     let actual = display_pixels(&r);
     let expected = display_pixels(&fresh);
     let describe = |r: &WgpuRasterizer| r.scene.as_ref().unwrap().scale_sources.entries[&id].levels.iter()
@@ -936,8 +953,8 @@ fn deferred_transform_preview_samples_the_final_surface_without_a_canvas_image()
                 let p = inverse.map(layer_core::Point { x, y });
                 p.x >= 0. && p.y >= 0. && p.x < extent[0] as f32 && p.y < extent[1] as f32
             };
-            r.submit(frame).unwrap();
-            exact.submit(frame).unwrap();
+            crate::test_support::submit_ready(&mut r, frame).unwrap();
+            crate::test_support::submit_ready(&mut exact, frame).unwrap();
             assert!(r.scale_display.as_ref().unwrap().output.is_empty());
             assert!(r.scale_display.as_ref().unwrap().pixels.next().is_none());
             let actual = render(&r, &mut presenter, frame.view);
@@ -1024,7 +1041,7 @@ fn deriving_partial_sources_preserves_completed_texels_between_refreshed_regions
     let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     let mut frame = packet(doc.scene(), extent);
     frame.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
-    r.submit(frame).unwrap();
+    submit_published(&mut r, frame);
     let mut scene = r.scene.take().unwrap();
     let id = source_at(&doc,0);
     let expected = pixels(&r, &scene.scale_sources.image(id, 3).image.texture);
@@ -1082,8 +1099,8 @@ fn groups_clipping_and_all_blends_share_exact_stack_semantics() {
             frame.inspect_mask=(state==1).then_some(clipped);
             frame.composite_all = false;
             frame.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
-            reduced.submit(frame).unwrap();
-            exact.submit(frame).unwrap();
+            submit_published(&mut reduced, frame);
+            submit_published(&mut exact, frame);
             let cache = reduced.scale_display.as_ref().unwrap();
             let error = quality(&display_pixels(&reduced), &pixels(&exact, crate::test_support::document_texture(&exact)), cache.plan);
             assert!(error[2] < 2e-5, "{mode:?} state={state}: {error:?}");
@@ -1112,8 +1129,8 @@ fn cached_branches_recompose_logarithmic_work_and_preserve_untouched_regions() {
         p.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
         p
     }
-    r.submit(frame(doc.scene(), extent)).unwrap();
-    exact.submit(frame(doc.scene(), extent)).unwrap();
+    crate::test_support::submit_ready(&mut r, frame(doc.scene(), extent)).unwrap();
+    crate::test_support::submit_ready(&mut exact, frame(doc.scene(), extent)).unwrap();
     assert!(!r.scene.as_ref().unwrap().scale_sources.entries.contains_key(&source_at(&doc,15)));
     let record_bound = page_coordinates(PixelRect::full(extent)).count() as u32
         + doc.scene().order().len().next_power_of_two().ilog2() + 1;
@@ -1124,8 +1141,8 @@ fn cached_branches_recompose_logarithmic_work_and_preserve_untouched_regions() {
         for kind in [DabBatchKind::Preview, DabBatchKind::Persistent] {
             let batch = DabBatch { kind, ..batch.clone() };
             let p = FramePacket { dabs: &[dab], dab_batches: &[batch], ..frame(doc.scene(), extent) };
-            r.submit(p).unwrap();
-            exact.submit(p).unwrap();
+            crate::test_support::submit_ready(&mut r, p).unwrap();
+            crate::test_support::submit_ready(&mut exact, p).unwrap();
             let scene = r.scene.as_ref().unwrap();
             let records = scene.scale_commands.as_ref().unwrap().cursor;
             assert!(records <= record_bound, "32 photos, first paint on an empty layer and end edits must reuse the other branches: step={step} {kind:?}, {records} > {record_bound}");
@@ -1143,8 +1160,8 @@ fn cached_branches_recompose_logarithmic_work_and_preserve_untouched_regions() {
             2 => swap_entries(&mut doc,15,31),
             _ => paint_mut(&mut doc,15).base = Some(layer_core::authored::PaintBase::new((Arc::new((*photo_source).clone())).into())),
         }
-        r.submit(frame(doc.scene(), extent)).unwrap();
-        exact.submit(frame(doc.scene(), extent)).unwrap();
+        crate::test_support::submit_ready(&mut r, frame(doc.scene(), extent)).unwrap();
+        crate::test_support::submit_ready(&mut exact, frame(doc.scene(), extent)).unwrap();
         let cache = r.scale_display.as_ref().unwrap();
         let error = quality(&display_pixels(&r), &pixels(&exact, crate::test_support::document_texture(&exact)), cache.plan);
         assert!(error[0] < 0.003 && error[1] < 0.025, "metadata step={step}: {error:?}");
@@ -1183,15 +1200,15 @@ fn layer_edits_reuse_balanced_branches_across_the_stack() {
             frame.composite_all = false;
             frame.reset_layers = true;
             frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
-            r.submit(frame).unwrap();
-            exact.submit(frame).unwrap();
+            crate::test_support::submit_ready(&mut r, frame).unwrap();
+            crate::test_support::submit_ready(&mut exact, frame).unwrap();
             frame.reset_layers = false;
             let bound = (count as u32 + 1 + u32::from(paper > 0.)).next_power_of_two().ilog2();
             for index in [0, count / 2, count] {
                 let batch = dab_batch(source_at(&doc,index), crate::layer_tests::preset_style(DefaultBrushPreset::GPen), dab.bounds());
                 let stroke = FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&batch), ..frame };
-                r.submit(stroke).unwrap();
-                exact.submit(stroke).unwrap();
+                crate::test_support::submit_ready(&mut r, stroke).unwrap();
+                crate::test_support::submit_ready(&mut exact, stroke).unwrap();
                 let cache = r.scale_display.as_ref().unwrap();
                 for index in 0..=count {
                     let target=source_at(&doc,index);
@@ -1242,16 +1259,16 @@ fn identity_edits_recompose_only_damaged_regions() {
         frame.view.height_px = doc.composition().size[1];
         let scale = 1. / (1 << level) as f32;
         frame.view.document_to_surface = [scale, 0., 0., scale, 0., 0.];
-        r.submit(frame).unwrap();
+        submit_published(&mut r, frame);
         frame.dabs = &dabs;
         frame.dab_batches = std::slice::from_ref(&batch);
         let work = r.metrics.composited_pixels;
-        r.submit(frame).unwrap();
+        crate::test_support::submit_ready(&mut r, frame).unwrap();
         let work = r.metrics.composited_pixels - work;
         assert!(work > 0 && work < 4 * u64::from(PAGE_SIZE >> level).pow(2) / 4, "warm identity contacts must leave the rest of each page unchanged: {work}");
         let incremental = display_pixels(&r);
         r.scale_display = None;
-        r.submit(FramePacket { dabs: &[], dab_batches: &[], composite_all: true, ..frame }).unwrap();
+        submit_published(&mut r, FramePacket { dabs: &[], dab_batches: &[], composite_all: true, ..frame });
         assert_eq!(display_pixels(&r), incremental);
     }
 }
@@ -1272,8 +1289,8 @@ fn offset_page_edge_edits_match_rebuilding_the_entire_display() {
     let mut frame = packet(doc.scene(), extent);
     frame.composite_all = false;
     frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
-    incremental.submit(frame).unwrap();
-    rebuilt.submit(frame).unwrap();
+    submit_published(&mut incremental, frame);
+    submit_published(&mut rebuilt, frame);
     let original = display_pixels(&incremental);
     let mut dab = crate::tests::test_dab([254.5, 0.5], [1., 0., 0., 1.], 1.);
     dab.radii = [0.45; 2];
@@ -1281,8 +1298,8 @@ fn offset_page_edge_edits_match_rebuilding_the_entire_display() {
     frame.dabs = std::slice::from_ref(&dab);
     frame.dab_batches = std::slice::from_ref(&batch);
     rebuilt.scale_display = None;
-    incremental.submit(frame).unwrap();
-    rebuilt.submit(frame).unwrap();
+    crate::test_support::submit_ready(&mut incremental, frame).unwrap();
+    submit_published(&mut rebuilt, frame);
     let expected = display_pixels(&rebuilt);
     let actual = display_pixels(&incremental);
     assert_ne!(actual, original);
@@ -1318,8 +1335,8 @@ fn masks_refresh_coverage_properties_and_paint_without_exact_display() {
             frame.dabs = std::slice::from_ref(&dab);
             frame.dab_batches = std::slice::from_ref(&batch);
         }
-        reduced.submit(frame).unwrap();
-        exact.submit(FramePacket { composite_all: true, ..frame }).unwrap();
+        submit_published(&mut reduced, frame);
+        submit_published(&mut exact, FramePacket { composite_all: true, ..frame });
         let cache = reduced.scale_display.as_ref().unwrap();
         let error = quality(&display_pixels(&reduced), &pixels(&exact, crate::test_support::document_texture(&exact)), cache.plan);
         assert!(error[0] < 0.001 && error[1] < 0.015, "moving mask state={state}: {error:?}");
@@ -1479,8 +1496,8 @@ fn scaled_composition_preserves_exact_paint_and_replaces_full_display() {
     exact.test.reference = true;
     let mut p = packet(doc.scene(), extent);
     p.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
-    r.submit(p).unwrap();
-    exact.submit(p).unwrap();
+    submit_published(&mut r, p);
+    submit_published(&mut exact, p);
 
     assert!(!r.scene.as_ref().unwrap().scale_sources.entries.contains_key(&source_at(&doc,0)));
     assert!(r.scale_display.as_ref().unwrap().storage_bytes() < 1 << 20);
@@ -1508,8 +1525,8 @@ fn scaled_composition_preserves_exact_paint_and_replaces_full_display() {
             composite_all: false,
             ..p
         };
-        r.submit(stroke).unwrap();
-        exact.submit(stroke).unwrap();
+        crate::test_support::submit_ready(&mut r, stroke).unwrap();
+        crate::test_support::submit_ready(&mut exact, stroke).unwrap();
         assert_presentation_mip(&r);
         if kind == DabBatchKind::Preview {
             assert_eq!(r.preview_level, 2);
@@ -1537,16 +1554,15 @@ fn scaled_composition_preserves_exact_paint_and_replaces_full_display() {
             assert_eq!(actual, expected, "{kind:?} native output pixel {:?}", [index % extent[0] as usize, index / extent[0] as usize]);
         }
     }
-    r.submit(FramePacket {
+    crate::test_support::submit_ready(&mut r, FramePacket {
         composite_all: false,
         ..p
-    })
-    .unwrap();
+    }).unwrap();
     let final_pixels = display_pixels(&r);
     assert_ne!(original, final_pixels);
     assert_settled(&mut r, p, &pixels(&exact, crate::test_support::document_texture(&exact)));
     p.view.document_to_surface = [1., 0., 0., 1., 0., 0.];
-    r.submit(p).unwrap();
+    crate::test_support::submit_ready(&mut r, p).unwrap();
     assert_eq!(r.scale_display.as_ref().unwrap().plan.level, 0);
 
     assert!(quality(&display_pixels(&r), &pixels(&exact, crate::test_support::document_texture(&exact)), r.scale_display.as_ref().unwrap().plan)[2] < 1e-6);
@@ -1572,8 +1588,8 @@ fn native_predictions_match_exact_composition_before_layer_opacity_and_blending(
             let mut frame = packet(doc.scene(), extent);
             frame.view.width_px = extent[0];
             frame.view.height_px = extent[1];
-            r.submit(frame).unwrap();
-            exact.submit(frame).unwrap();
+            submit_published(&mut r, frame);
+            submit_published(&mut exact, frame);
             let original = display_pixels(&r);
             let mut dab = crate::tests::test_dab([253., 254.], [0.9, 0.02, 0.1, 0.7], 1.);
             dab.radii = [35.; 2];
@@ -1597,8 +1613,8 @@ fn native_predictions_match_exact_composition_before_layer_opacity_and_blending(
                     dab_batches: if prediction { std::slice::from_ref(&batch) } else { &[] },
                     composite_all: false, ..frame
                 };
-                r.submit(stroke).unwrap();
-                exact.submit(FramePacket { dab_batches: if prediction { std::slice::from_ref(&oracle_batch) } else { &[] }, ..stroke }).unwrap();
+                crate::test_support::submit_ready(&mut r, stroke).unwrap();
+                crate::test_support::submit_ready(&mut exact, FramePacket { dab_batches: if prediction { std::slice::from_ref(&oracle_batch) } else { &[] }, ..stroke }).unwrap();
                 let actual = display_pixels(&r);
                 let expected = pixels(&exact, crate::test_support::document_texture(&exact));
                 let error = quality(&actual, &expected, r.scale_display.as_ref().unwrap().plan);
@@ -1623,7 +1639,7 @@ fn compact_preview_weights_partial_edge_texels_and_retires_corrections() {
     let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     let mut p = packet(doc.scene(), extent);
     p.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
-    r.submit(p).unwrap();
+    submit_published(&mut r, p);
     let original = display_pixels(&r);
     for position in [[516., 258.], [100., 100.], [514., 256.]] {
         let mut dab = crate::tests::test_dab(position, [0.9, 0.02, 0.1, 0.7], 1.);
@@ -1636,13 +1652,12 @@ fn compact_preview_weights_partial_edge_texels_and_retires_corrections() {
                 dab.bounds(),
             )
         };
-        r.submit(FramePacket {
+        crate::test_support::submit_ready(&mut r, FramePacket {
             dabs: &[dab],
             dab_batches: &[batch],
             composite_all: false,
             ..p
-        })
-        .unwrap();
+        }).unwrap();
         if let Some(page) = r.preview_page([2, 1]) {
             let compact = pixels(&r, &page.active().texture);
             let cache = r.scale_display.as_ref().unwrap();
@@ -1655,11 +1670,10 @@ fn compact_preview_weights_partial_edge_texels_and_retires_corrections() {
             }
         }
     }
-    r.submit(FramePacket {
+    crate::test_support::submit_ready(&mut r, FramePacket {
         composite_all: false,
         ..p
-    })
-    .unwrap();
+    }).unwrap();
     assert_eq!(
         display_pixels(&r),
         original,
@@ -1690,8 +1704,8 @@ fn scaled_layer_cache_tracks_stack_changes_and_odd_edges_at_each_level() {
             }
             let mut p = packet(doc.scene(), extent);
             p.view.document_to_surface = [scale, 0., 0., scale, 0., 0.];
-            r.submit(p).unwrap();
-            exact.submit(p).unwrap();
+            submit_published(&mut r, p);
+            submit_published(&mut exact, p);
             let cache = r.scale_display.as_ref().unwrap();
             let error = quality(
                 &pixels(&r, cache.texture()),
@@ -1722,8 +1736,8 @@ fn display_and_native_evaluation_share_the_display_cache() {
         set_root_entries(&mut doc,entries);
         let mut p = packet(doc.scene(), extent);
         p.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
-        r.submit(p).unwrap();
-        exact.submit(p).unwrap();
+        submit_published(&mut r, p);
+        submit_published(&mut exact, p);
         assert!(r.scale_display.is_some());
 
         assert_eq!(r.scale_display.as_ref().unwrap().evaluation == Evaluation::Native, filtered);
@@ -1772,17 +1786,14 @@ fn photographic_preview_and_committed_display_quality() {
     for space in layer_core::BlendSpace::ALL {
       p.blend_space = space;
       for diameter in [50., 460., 1000., 2000.] {
-        r.submit(FramePacket {
+        crate::test_support::submit_ready(&mut r, FramePacket {
             reset_layers: true,
             ..p
-        })
-        .unwrap();
-        exact
-            .submit(FramePacket {
+        }).unwrap();
+        crate::test_support::submit_ready(&mut exact, FramePacket {
                 reset_layers: true,
                 ..p
-            })
-            .unwrap();
+            }).unwrap();
         let mut dab = crate::tests::test_dab([1055., 780.], [0.01, 0.02, 0.03, 0.7], 1.);
         dab.radii = [diameter / 2.; 2];
         let batch = dab_batch(
@@ -1801,8 +1812,8 @@ fn photographic_preview_and_committed_display_quality() {
                 composite_all: false,
                 ..p
             };
-            r.submit(stroke).unwrap();
-            exact.submit(stroke).unwrap();
+            crate::test_support::submit_ready(&mut r, stroke).unwrap();
+            crate::test_support::submit_ready(&mut exact, stroke).unwrap();
             let cache = r.scale_display.as_ref().unwrap();
             let errors = quality_linear(
                 &display_pixels(&r),
@@ -1840,8 +1851,8 @@ fn unchanged_navigation_derives_and_reuses_a_bounded_neighbor_level() {
         let mut p = packet(doc.scene(), extent);
         p.composite_all = index == 0;
         p.view.document_to_surface = [scale, 0., 0., scale, 0., 0.];
-        r.submit(p).unwrap();
-        exact.submit(p).unwrap();
+        submit_published(&mut r, p);
+        submit_published(&mut exact, p);
         let work = r.source_cache_work()[1];
         assert_eq!(
             *misses.get_or_insert(work),
@@ -1876,8 +1887,8 @@ fn unchanged_navigation_derives_and_reuses_a_bounded_neighbor_level() {
         let mut p = packet(doc.scene(), extent);
         p.composite_all = index == 0;
         p.view.document_to_surface = [scale, 0., 0., scale, 0., 0.];
-        r.submit(p).unwrap();
-        exact.submit(p).unwrap();
+        submit_published(&mut r, p);
+        submit_published(&mut exact, p);
         if scale == 0.25 {
             assert!(r.scale_display.as_ref().unwrap().spare.is_none());
         }
@@ -1900,8 +1911,8 @@ fn unchanged_navigation_derives_and_reuses_a_bounded_neighbor_level() {
         let mut p = packet(doc.scene(), extent);
         p.composite_all = index == 0 || index == 4;
         p.view.document_to_surface = [scale, 0., 0., scale, 0., 0.];
-        r.submit(p).unwrap();
-        exact.submit(p).unwrap();
+        submit_published(&mut r, p);
+        submit_published(&mut exact, p);
         let cache = r.scale_display.as_ref().unwrap();
         let error = quality(
             &display_pixels(&r),
@@ -2065,11 +2076,11 @@ fn fitted_projective_preview_reuses_coarse_pixels_and_bounds_fine_source_ownersh
     let mut frame=packet(doc.scene(),extent);
     frame.view.width_px=1920;frame.view.height_px=1080;
     frame.view.document_to_surface=[0.27,0.,0.,0.27,0.,0.];
-    r.submit(frame).unwrap();r.wait_idle().unwrap();
+    crate::test_support::submit_ready(&mut r, frame).unwrap();r.wait_idle().unwrap();
     frame.composite_all=false;
     let mut preview=layer_render::TransformPreview {transaction:1,moving:true,target:id,selection:None,
         transform:layer_core::ImageTransform::affine(layer_core::Affine([0.9,0.,0.,0.9,0.,0.]))};
-    r.set_transform_preview(Some(&preview)).unwrap();frame.time_seconds+=1./60.;r.submit(frame).unwrap();r.wait_idle().unwrap();
+    r.set_transform_preview(Some(&preview)).unwrap();frame.time_seconds+=1./60.;crate::test_support::submit_ready(&mut r, frame).unwrap();r.wait_idle().unwrap();
     preview.transform.placement=layer_core::LayerPlacement::from_projective(layer_core::Projective::rect_to_quad(
         layer_core::Rect {min:Default::default(),max:layer_core::Point {x:6000.,y:4000.}},
         [[900.,150.],[5140.,100.],[5900.,3920.],[150.,3940.]].map(|[x,y]|layer_core::Point {x,y})).unwrap());
@@ -2081,7 +2092,7 @@ fn fitted_projective_preview_reuses_coarse_pixels_and_bounds_fine_source_ownersh
     };
     let mut preparation_trace=Vec::new();
     for _ in 0..65 {
-        r.set_transform_preview(Some(&preview)).unwrap();frame.time_seconds+=1./60.;r.submit(frame).unwrap();
+        r.set_transform_preview(Some(&preview)).unwrap();frame.time_seconds+=1./60.;crate::test_support::submit_ready(&mut r, frame).unwrap();
         assert!(bounded_owned(&r)<=CACHE_BYTES,"pending composition/fine owners stay within608MiB: {}",bounded_owned(&r));
         r.wait_idle().unwrap();
         preparation_trace.push((r.scale_display.as_ref().and_then(|cache|cache.evaluation.fine_capacity()),r.object_deferred,
@@ -2092,7 +2103,7 @@ fn fitted_projective_preview_reuses_coarse_pixels_and_bounds_fine_source_ownersh
     for _ in 0..20 {
         preview.transform.placement=preview.transform.placement.post(layer_core::Projective::from_affine(layer_core::Affine([1.,0.,0.,1.,1.25,0.5]))).unwrap();
         let previous=r.composite_revision;
-        r.set_transform_preview(Some(&preview)).unwrap();frame.time_seconds+=1./60.;r.submit(frame).unwrap();
+        r.set_transform_preview(Some(&preview)).unwrap();frame.time_seconds+=1./60.;crate::test_support::submit_ready(&mut r, frame).unwrap();
         assert!(bounded_owned(&r)<=CACHE_BYTES,"pending composition/fine owners stay within608MiB: {}",bounded_owned(&r));
         r.wait_idle().unwrap();
         assert!(!r.object_deferred && r.composite_revision!=previous,"each moving pose must publish fresh pixels instead of submitting its old display backup");
@@ -2109,17 +2120,17 @@ fn fitted_projective_preview_reuses_coarse_pixels_and_bounds_fine_source_ownersh
     preview.transform.placement=layer_core::LayerPlacement::from_projective(layer_core::Projective::rect_to_quad(
         layer_core::Rect {min:Default::default(),max:layer_core::Point {x:6000.,y:4000.}},
         [[2900.,100.],[3100.,100.],[5990.,3990.],[10.,3990.]].map(|[x,y]|layer_core::Point {x,y})).unwrap());
-    r.set_transform_preview(Some(&preview)).unwrap();frame.time_seconds+=1./60.;r.submit(frame).unwrap();
+    r.set_transform_preview(Some(&preview)).unwrap();frame.time_seconds+=1./60.;crate::test_support::submit_ready(&mut r, frame).unwrap();
     assert!(r.object_deferred && r.transforms.as_ref().unwrap().fine_progress_bytes()>0,"deep projective planning retains a partial private output");
     assert_eq!(r.composite_revision,accepted,"partial output must not replace the accepted display");
     assert!(bounded_owned(&r)<=CACHE_BYTES);
-    r.set_transform_preview(None).unwrap();frame.time_seconds+=1./60.;r.submit(frame).unwrap();r.wait_idle().unwrap();
+    r.set_transform_preview(None).unwrap();frame.time_seconds+=1./60.;crate::test_support::submit_ready(&mut r, frame).unwrap();r.wait_idle().unwrap();
     assert!(!r.transforms.as_ref().unwrap().has_preview());
     assert_eq!(r.transforms.as_ref().unwrap().fine_progress_bytes(),0);
     assert_eq!(r.retired_display_bytes.load(std::sync::atomic::Ordering::Acquire),0);
     preview.transaction+=1;
     for _ in 0..65 {
-        r.set_transform_preview(Some(&preview)).unwrap();frame.time_seconds+=1./60.;r.submit(frame).unwrap();
+        r.set_transform_preview(Some(&preview)).unwrap();frame.time_seconds+=1./60.;crate::test_support::submit_ready(&mut r, frame).unwrap();
         assert!(bounded_owned(&r)<=CACHE_BYTES);r.wait_idle().unwrap();
         if !r.has_pending_work() {break;}
     }

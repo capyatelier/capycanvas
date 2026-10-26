@@ -99,10 +99,10 @@ fn tonal_cache_preserves_alpha_and_tracks_artwork_not_selection_or_navigation() 
             let record = RecordChange::insert(&document.artwork.selections,SavedSelection {selection,});
             document.apply(layer_core::Edit::SavedSelection(record)).unwrap();
         }
-        r.submit(FramePacket {
+        crate::test_support::submit_settled(r, FramePacket {
             view: ViewState { document_to_surface: [2., 0., 0., 2., 15., 15.], ..view() },
             ..packet(document.scene(), [3, 1])
-        }).unwrap();
+        });
     };
     submit(&mut r, &layer, None);
     let first = receive(

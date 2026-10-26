@@ -119,49 +119,49 @@ mod tests {
         let mut frame = packet(doc.scene(), doc.composition().size);
         frame.composite_all = false;
         frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
-        r.submit(frame).unwrap();
+        super::super::tests::submit_published(&mut r, frame);
         let original = pixels(&r);
         let revision = r.navigator.revision;
         for step in 1..=4 {
             pose(&mut r, &doc, step as f32 * 20.);
             frame.time_seconds = step as f32 * 0.01;
-            r.submit(frame).unwrap();
+            crate::test_support::submit_ready(&mut r, frame).unwrap();
             assert_eq!(r.navigator.revision, revision);
             assert!(r.navigator.pending() && r.has_pending_work());
         }
         assert_eq!(pixels(&r), original);
         frame.time_seconds = 0.06;
         pose(&mut r, &doc, 100.);
-        r.submit(frame).unwrap();
+        crate::test_support::submit_ready(&mut r, frame).unwrap();
         assert_eq!(r.navigator.revision, revision + 1);
         assert_ne!(pixels(&r), original);
         assert!(!r.navigator.pending());
         frame.time_seconds = 0.07;
         pose(&mut r, &doc, 120.);
-        r.submit(frame).unwrap();
+        crate::test_support::submit_ready(&mut r, frame).unwrap();
         assert!(r.has_pending_work());
         frame.time_seconds = 0.071;
-        r.submit(frame).unwrap();
+        crate::test_support::submit_ready(&mut r, frame).unwrap();
         assert_eq!(r.navigator.revision, revision + 2);
         assert!(!r.navigator.pending());
         let settled = pixels(&r);
         for step in 1..=3 {
             frame.time_seconds += 0.1;
             frame.view.document_to_surface[4] = step as f32 * -80.;
-            r.submit(frame).unwrap();
+            crate::test_support::submit_ready(&mut r, frame).unwrap();
             assert_eq!(r.navigator.revision, revision + 2);
             assert_eq!(pixels(&r), settled);
         }
         for step in 1..=20 {
             frame.time_seconds += 0.06;
             pose(&mut r, &doc, 120. + step as f32);
-            r.submit(frame).unwrap();
+            crate::test_support::submit_ready(&mut r, frame).unwrap();
             assert_eq!(r.navigator.revision, revision + 2 + step);
         }
         r.prepare_moving_pixels(None);
         r.set_transform_preview(None).unwrap();
-        r.submit(frame).unwrap();
-        r.submit(frame).unwrap();
+        crate::test_support::submit_ready(&mut r, frame).unwrap();
+        crate::test_support::submit_ready(&mut r, frame).unwrap();
         assert_eq!(pixels(&r), original);
     }
 
@@ -172,7 +172,7 @@ mod tests {
         let mut frame = packet(doc.scene(), doc.composition().size);
         frame.composite_all = false;
         frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
-        r.submit(frame).unwrap();
+        super::super::tests::submit_published(&mut r, frame);
         let original = pixels(&r);
         let mut edited = doc.clone();
         edited.artwork.occurrences.get_mut(doc.working.occurrence.unwrap()).unwrap().opacity = 0.3;
@@ -202,7 +202,7 @@ mod tests {
         let mut frame = packet(doc.scene(), doc.composition().size);
         frame.composite_all = false;
         frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
-        r.submit(frame).unwrap();
+        super::super::tests::submit_published(&mut r, frame);
         let original = pixels(&r);
         let mut dab = crate::tests::test_dab([100., 100.], [0.9, 0.02, 0.1, 1.], 1.);
         dab.radii = [45.; 2];
@@ -211,13 +211,13 @@ mod tests {
             let batch = DabBatch { kind: DabBatchKind::Preview, ..crate::test_support::dab_batch(
                 doc.working.target.unwrap(), crate::layer_tests::preset_style(layer_core::DefaultBrushPreset::GPen), dab.bounds()) };
             frame.time_seconds = time;
-            r.submit(FramePacket { dabs: &[dab], dab_batches: &[batch], ..frame }).unwrap();
+            crate::test_support::submit_ready(&mut r, FramePacket { dabs: &[dab], dab_batches: &[batch], ..frame }).unwrap();
         }
         assert_ne!(pixels(&r), original);
         frame.time_seconds = 0.07;
-        r.submit(frame).unwrap();
+        crate::test_support::submit_ready(&mut r, frame).unwrap();
         assert!(r.navigator.pending());
-        r.submit(frame).unwrap();
+        crate::test_support::submit_ready(&mut r, frame).unwrap();
         assert!(!r.navigator.pending());
         assert_eq!(pixels(&r), original);
     }
@@ -229,7 +229,7 @@ mod tests {
         let mut frame = packet(doc.scene(), doc.composition().size);
         frame.composite_all = false;
         frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
-        r.submit(frame).unwrap();
+        super::super::tests::submit_published(&mut r, frame);
         let original = pixels(&r);
         let mut navigator = std::mem::take(&mut r.navigator);
         {
@@ -239,18 +239,18 @@ mod tests {
         assert!(navigator.pending());
         assert!(navigator.view().is_none());
         r.navigator = navigator;
-        r.submit(frame).unwrap();
+        crate::test_support::submit_ready(&mut r, frame).unwrap();
         assert!(!r.navigator.pending());
         assert_eq!(pixels(&r), original);
         let mut replacement_doc = doc.clone();
         let SourceTarget::Paint(paint) = replacement_doc.working.target.unwrap() else { unreachable!() };
         replacement_doc.artwork.paint.get_mut(paint).unwrap().base = Some(layer_core::authored::PaintBase::new((layer_core::color::source::rgba8_source([1025, 513], |_, _| [0, 0, 255, 255])).into()));
         let replacement = FramePacket { reset_layers: true, scene: replacement_doc.scene(), ..frame };
-        r.submit(replacement).unwrap();
+        crate::test_support::submit_settled(&mut r, replacement);
         let changed = pixels(&r);
         assert!(changed.iter().all(|c| c[0] == 0. && c[1] == 0. && c[2] > 0.99 && c[3] == 1.));
         let mut recovered = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
-        recovered.submit(replacement).unwrap();
+        crate::test_support::submit_settled(&mut recovered, replacement);
         assert_eq!(pixels(&recovered), changed);
     }
 }

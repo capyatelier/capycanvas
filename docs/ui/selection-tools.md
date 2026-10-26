@@ -92,6 +92,8 @@ creating new closed regions. Source pixels are never changed by discovery.
 component pipeline. Classification covers the source before the enclosure is
 applied; an extra pass marks exterior components. The shared asynchronous region
 queue owns source snapshots, cancellation, stale-result rejection and publication.
+Region polling drains completed raster decodes before retrying classification,
+so a cold backed paint source progresses without another frame or a prior readback.
 No canvas pixels are read back to classify regions. A scene source, such as the
 paths of Fill outside the paths, is captured 16 pages at a time into separate
 tiles that one dispatch classifies, and a single page of vector paths draws
@@ -111,7 +113,8 @@ before anything is allocated (`CanvasRenderer::region_fits`).
 - Enclosure tests: shared `enclose_fill_checks` covers source defaults, geometry,
   selection clipping, cancellation and history. GPU `layer_tests::enclose_fill`
   compares complete masks with an independent component oracle, including partial
-  enclosures, canvas edges, alpha thresholds, gap closing and expansion; on a
+  enclosures, canvas edges, alpha thresholds, gap closing and expansion. With a
+  cold backed paint source, the request must finish by polling alone. On a
   device with 4 MiB storage bindings it checks seed, enclosed and global regions
   labeled across windows, and that a region too large for the device is refused
   while the renderer keeps working.

@@ -366,12 +366,11 @@ mod tests {
         frame.composite_all = false;
         frame.view = crate::test_support::view([256; 2]);
         frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
-        r.submit(frame).unwrap();
+        crate::test_support::submit_settled(&mut r, frame);
         let mut dab = crate::tests::test_dab([128., 128.], [0.8, 0.1, 0.2, 1.], 1.);
         dab.radii = [32.; 2];
         let batch = dab_batch(target, crate::layer_tests::preset_style(layer_core::DefaultBrushPreset::GPen), dab.bounds());
-        r.submit(FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&batch), ..frame }).unwrap();
-        for _ in 0..4 { r.submit(frame).unwrap(); r.wait_idle().unwrap(); }
+        crate::test_support::submit_settled(&mut r, FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&batch), ..frame });
         let flags = r.changed_cells.as_ref().unwrap().buffer(target, [0, 0]).expect("paint flags must be resident").clone();
         let sentinel = vec![0x55; flags.size() as usize - 16];
         r.queue.write_buffer(&flags, 16, &sentinel);

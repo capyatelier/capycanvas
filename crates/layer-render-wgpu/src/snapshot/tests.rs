@@ -523,11 +523,10 @@ fn raw_rows(source: &layer_core::color::source::SourceImage) -> Vec<u8> {
 fn frame(document: &Document) -> (WgpuRasterizer, Vec<[f32; 4]>) {
     let mut r = WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
     let extent = document.composition().size;
-    crate::test_support::submit_ready(&mut r, FramePacket {
+    crate::test_support::submit_settled(&mut r, FramePacket {
         reset_layers: true,
         ..packet(document.scene(), extent)
-    })
-    .unwrap();
+    });
     let bytes = crate::layer_tests::page_bytes(&r, crate::test_support::document_texture(&r));
     let pixels = bytes
         .as_chunks::<16>().0.iter()
@@ -801,7 +800,7 @@ fn shared_capture_keeps_private_pixels_during_live_frames_and_after_canvas_close
         let group=changed.scene().children(None)[0];
         for i in 0..16 {
             changed.artwork.occurrences.get_mut(group).unwrap().opacity=if i%2==0 {0.2}else{0.9};
-            live.submit(FramePacket {
+            crate::test_support::submit_ready(&mut live, FramePacket {
                 ..packet(changed.scene(),[width,height])
             })
             .unwrap();
@@ -967,7 +966,7 @@ fn gaussian_snapshots_preserve_paired_tap_phase_across_grid_origins() {
     assert_eq!(before,after,"Gaussian package roundtrip translation={translation:?}");
     let mut native=WgpuRasterizer::new_native_headless(reopened.composition().color).unwrap();
     native.test.reference=true;
-    native.submit(FramePacket {reset_layers:true,..packet(reopened.scene(),reopened.composition().size)}).unwrap();
+    crate::test_support::submit_settled(&mut native, FramePacket {reset_layers:true,..packet(reopened.scene(),reopened.composition().size)});
     let native=crate::layer_tests::page_bytes(&native,crate::test_support::document_texture(&native));
     let native:Vec<[f32;4]>=native.as_chunks::<16>().0.iter().map(|p|std::array::from_fn(|c|f32::from_le_bytes(p[c*4..c*4+4].try_into().unwrap()))).collect();
     let delta=native.iter().zip(&after).enumerate().flat_map(|(i,(a,b))|(0..4).map(move|c|((a[c]-b[c]).abs(),i,c,a[c],b[c])))
@@ -1578,7 +1577,7 @@ fn presented_green(document: &Document) -> Vec<i32> {
     let [width, height] = document.composition().size;
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let view = layer_render::ViewState { width_px: width, height_px: height, document_to_surface: [1., 0., 0., 1., 0., 0.] };
-    r.submit(layer_render::FramePacket { view, blend_space: document.composition().blend, ..packet(document.scene(), [width, height]) }).unwrap();
+    crate::test_support::submit_settled(&mut r, layer_render::FramePacket { view, blend_space: document.composition().blend, ..packet(document.scene(), [width, height]) });
     let (texture, surface) = crate::create_target(&r.device, [width, height], wgpu::TextureFormat::Rgba8UnormSrgb, "relief canvas");
     let mut presenter = crate::ViewportPresenter::for_surface(&r, wgpu::TextureFormat::Rgba8UnormSrgb, crate::SdrSurfaceColor::Srgb).unwrap();
     presenter.present(&r, &surface, view, [0., 0., 0., 1.]).unwrap();

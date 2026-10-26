@@ -56,7 +56,7 @@ fn color_picker_circular_oklab_averaging_keeps_points_alpha_and_extended_values(
         let SourceTarget::Paint(handle) = target else { unreachable!() };
         doc.artwork.paint.get_mut(handle).unwrap().raster = RasterRevision::backed(data);
         let mut r = WgpuRasterizer::new_native_headless(color).unwrap();
-        r.submit(FramePacket {
+        crate::test_support::submit_ready(&mut r, FramePacket {
             ..packet(doc.scene(), [128, 128])
         })
         .unwrap();

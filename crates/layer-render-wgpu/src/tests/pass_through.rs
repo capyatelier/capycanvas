@@ -131,13 +131,7 @@ fn render(r: &mut WgpuRasterizer, document: &Document) -> Vec<[f32; 4]> {
     let document = Document::from_artwork(document.artwork.clone()).unwrap();
     let view = crate::test_support::view(EXTENT);
     let frame = FramePacket { view, blend_space: document.composition().blend, ..packet(document.scene(), EXTENT) };
-    r.submit(FramePacket { reset_layers: true, ..frame }).unwrap();
-    for _ in 0..16 {
-        if !layer_render::CanvasRenderer::has_pending_work(r) {
-            break;
-        }
-        r.submit(FramePacket { composite_all: false, ..frame }).unwrap();
-    }
+    crate::test_support::submit_settled(r, FramePacket { reset_layers: true, ..frame });
     assert!(!layer_render::CanvasRenderer::has_pending_work(r), "the composite settles");
     crate::layer_tests::page_bytes(r, crate::test_support::document_texture(r))
         .as_chunks::<16>().0.iter()
@@ -242,7 +236,7 @@ fn coverage(r: &mut WgpuRasterizer, mask: &CoverageSnapshot) -> Vec<f32> {
     let paper = *b.0.scene().order().last().unwrap();
     b.layer(paper).visible = false;
     let view = crate::test_support::view(EXTENT);
-    r.submit(FramePacket { view, reset_layers: true, ..packet(b.0.scene(), EXTENT) }).unwrap();
+    crate::test_support::submit_settled(r, FramePacket { view, reset_layers: true, ..packet(b.0.scene(), EXTENT) });
     crate::layer_tests::page_bytes(r, crate::test_support::document_texture(r))
         .as_chunks::<16>().0.iter()
         .map(|p| f32::from_le_bytes(p[12..16].try_into().unwrap()))

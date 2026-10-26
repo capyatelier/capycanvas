@@ -224,7 +224,13 @@ fn partial_bakes_back_tiles_without_publishing_the_layer() {
     let plan = engine.document().separation_plan(photo, &filters, ["Frequency Separation", "Low", "High"].map(std::sync::Arc::from)).unwrap();
     let low = plan.operations[0].0;
     engine.insert_with_operations(plan.edits, plan.operations, None).unwrap();
-    engine.render_frame().unwrap();
+    let deadline = std::time::Instant::now() + READBACK_TIMEOUT;
+    loop {
+        engine.render_frame().unwrap();
+        if engine.backend().native_edit.as_ref().unwrap().backing.contains_key(&low) { break; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::yield_now();
+    }
     let root = engine.document().target_raster(low).unwrap().clone();
     assert!(root.try_data().is_none());
     let r = engine.backend();

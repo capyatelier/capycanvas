@@ -301,12 +301,11 @@ fn live_at(r: &mut WgpuRasterizer, scene: SceneView<'_>, level: u32, blend_space
         document_to_surface: [scale, 0., 0., scale, 0., 0.],
         ..crate::test_support::view(EXTENT)
     };
-    r.submit(FramePacket { view, reset_layers: true, blend_space, ..packet(scene, EXTENT) }).unwrap();
-    for _ in 0..16 {
-        if !settled || !layer_render::CanvasRenderer::has_pending_work(r) {
-            break;
-        }
-        r.submit(FramePacket { view, blend_space, composite_all: false, ..packet(scene, EXTENT) }).unwrap();
+    let frame = FramePacket { view, reset_layers: true, blend_space, ..packet(scene, EXTENT) };
+    if settled {
+        crate::test_support::submit_settled(r, frame);
+    } else {
+        crate::test_support::submit_ready(r, frame).unwrap();
     }
     assert!(!settled || !layer_render::CanvasRenderer::has_pending_work(r), "the composite settles");
     let texture = if level == 0 {
@@ -506,7 +505,7 @@ fn brush_blend_modes_use_the_layer_formulas() {
                 let mut batch = crate::layer_tests::batch(target);
                 batch.style.rendering.blend_mode = blend;
                 let dabs = [crate::layer_tests::dab(color)];
-                r.submit(FramePacket { dabs: &dabs, dab_batches: &[batch], reset_layers: reset, ..packet(document.scene(), extent) })
+                crate::test_support::submit_ready(r, FramePacket { dabs: &dabs, dab_batches: &[batch], reset_layers: reset, ..packet(document.scene(), extent) })
                     .unwrap();
             };
             frame(&mut r, backdrop, layer_core::BrushBlendMode::Normal, true);

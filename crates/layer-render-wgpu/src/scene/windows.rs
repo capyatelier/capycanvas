@@ -299,11 +299,11 @@ mod tests {
             let mut packet=crate::test_support::packet(document.scene(),extent);
             packet.view.width_px=32;packet.view.height_px=24;
             packet.view.document_to_surface=[1.,0.,0.,1.,-(output.min_x() as f32),-80.];
-            r.submit(packet).unwrap();
+            crate::test_support::submit_ready(&mut r, packet).unwrap();
             let mut scene=Scene::new(&r).unwrap();
             let (texture,_)=create_color_target(&r.device,[32,24],"clamped sparse image oracle");
             let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-            scene.capture_region(&mut r,packet,&texture,output,Output::Artwork(None),&mut encoder).unwrap();
+            crate::test_support::query_ready(&mut r,&mut encoder,|r,encoder|scene.capture_region(r,packet,&texture,output,Output::Artwork(None),encoder));
             let planned=Scene::capture_image_bound(packet.scene,output);
             let actual=scene.image_cache_bytes();
             assert!(actual<=planned,"{extent:?} corner={corner} style={style} actual={actual} planned={planned}");

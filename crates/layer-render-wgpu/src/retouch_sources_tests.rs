@@ -361,13 +361,7 @@ fn current_and_below_in(space: layer_core::BlendSpace) {
 fn settle(r: &mut WgpuRasterizer, doc: &Document) {
     let mut frame = crate::test_support::packet(doc.scene(), [2560, 2560]);
     frame.composite_all = false;
-    for _ in 0..200 {
-        r.submit(frame).unwrap();
-        if !r.has_pending_work() {
-            return;
-        }
-    }
-    panic!("prefetch never settled");
+    crate::test_support::submit_settled(r, frame);
 }
 
 #[test]
@@ -480,6 +474,8 @@ fn contacts_neither_upload_nor_wait_and_a_miss_replays_after_pen_up() {
         let pages = target_pages(engine.backend());
         if miss {
             assert_eq!(copies, 2 * live_copies, "the replay copied the restored pages again");
+            sample(engine.backend_mut(), [0, 0], [1000., 200.]);
+            flush(&mut engine);
             let (source, complete) = sample(engine.backend_mut(), [0, 0], [1000., 200.]);
             assert!(complete, "after contact the source can wait");
             assert!(close(source[10 * 256 + 10], over(premultiplied(FILL), reference(1010, 210))));
@@ -526,7 +522,7 @@ fn retouch_reference_reads_arbitrary_base_offset_and_transparent_tile_override()
     paint.raster=RasterRevision::backed(RasterData {tiles:[(TileKey {plane:RasterPlane::Color,coordinate:[1,1]},RasterTile::backed(TileBlob::encode(layer_core::color::DocumentColor::default().paint_descriptor(),&vec![0;256*256*4]).unwrap()))].into(),..Default::default()});
     let mut r=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     r.prepare_retouch(Some(&RetouchPreparation {execution:layer_core::BrushExecution::Clone,target:TARGET,retouch:Retouch {source:RetouchSource::References,references:Arc::new([PHOTO_USE].into()),..Default::default()},points:vec![Point {x:250.,y:250.}]}));
-    for _ in 0..100 {r.submit(crate::test_support::packet(doc.scene(),extent)).unwrap();if !r.has_pending_work(){break;}}
+    crate::test_support::submit_settled(&mut r, crate::test_support::packet(doc.scene(),extent));
     let (pixels,complete)=sample(&mut r,[0,0],[0.;2]);assert!(complete);
     for (x,y) in [(0,0),(17,31),(250,250),(255,255)] {
         let expected=if x>=17&&y>=31 {reference(x-17,y-31)}else{[0.;4]};

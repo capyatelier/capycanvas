@@ -1632,7 +1632,7 @@ mod tests {
         crate::layer_tests::placement::paint_mut(&mut document).base = Some(layer_core::authored::PaintBase::new((layer_core::color::source::rgba8_source([128; 2], |_, _| [255; 4])).into()));
         let mut renderer = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
         let packet = crate::test_support::packet(document.scene(), [128; 2]);
-        renderer.submit(packet).unwrap();
+        crate::test_support::submit_settled(&mut renderer, packet);
         let overlay = SelectionOverlay { active: true, editing: None, color: [1., 0., 0., 0.5], protected: false, saved_protected: false };
         renderer.set_selection_overlay(Some(overlay));
         renderer.set_selection_outline(Some(&std::sync::Arc::new(layer_core::Selection::full()))).unwrap();
@@ -1677,7 +1677,7 @@ mod tests {
             crate::layer_tests::placement::paint_mut(&mut document).base = Some(layer_core::authored::PaintBase::new((layer_core::color::source::rgba8_source(extent, |_, _| [255; 4])).into()));
             renderer.set_selection_outline(Some(&selection)).unwrap();
             let packet = crate::test_support::packet(document.scene(), extent);
-            renderer.submit(packet).unwrap();
+            crate::test_support::submit_settled(&mut renderer, packet);
             let (texture, target) = crate::create_target(renderer.device(), extent, wgpu::TextureFormat::Rgba8UnormSrgb, "resized selection overlay");
             let mut presenter = ViewportPresenter::for_surface(&renderer, wgpu::TextureFormat::Rgba8UnormSrgb, SdrSurfaceColor::Srgb).unwrap();
             presenter.present(&renderer, &target, packet.view, [1.; 4]).unwrap();

@@ -50,7 +50,7 @@ fn all_effects_incremental_masks_groups_and_clipping_match_full_recomposition() 
         Rect { min: Point { x: 209., y: 104. }, max: Point { x: 301., y: 196. } },
     );
     let render = |r: &mut WgpuRasterizer, all, dabs: &[Dab], batches: &[DabBatch]| {
-        r.submit(FramePacket {
+        crate::test_support::submit_ready(r, FramePacket {
             view,
             dabs,
             dab_batches: batches,
@@ -98,7 +98,7 @@ fn clipping_filter_drops_render_in_owner_order_through_undo_and_reopen() {
     refresh(&mut doc);
     let mut r=WgpuRasterizer::new_native_headless(color).unwrap();
     let render=|r:&mut WgpuRasterizer,doc:&Document,reset| {
-        r.submit(FramePacket{reset_layers:reset,composite_all:false,..packet(doc.scene(),extent)}).unwrap();
+        crate::test_support::submit_settled(r, FramePacket{reset_layers:reset,composite_all:false,..packet(doc.scene(),extent)});
         let bytes=crate::layer_tests::page_bytes(r,crate::test_support::document_texture(r));
         std::array::from_fn::<_,4,_>(|c|f32::from_le_bytes(bytes[c*4..c*4+4].try_into().unwrap()))
     };
@@ -141,7 +141,7 @@ fn attached_spatial_effects_expand_owner_alpha_before_common_base_clipping() {
     refresh(&mut document);
     let mut r=WgpuRasterizer::new_native_headless(color).unwrap();
     let mut frame=packet(document.scene(),extent);frame.composite_all=false;
-    r.submit(frame).unwrap();
+    crate::test_support::submit_settled(&mut r, frame);
     let pixels=crate::layer_tests::page_bytes(&r,crate::test_support::document_texture(&r));
     let pixel=|bytes:&[u8],x:usize|std::array::from_fn::<_,4,_>(|c|f32::from_le_bytes(bytes[(64*128+x)*16+c*4..][..4].try_into().unwrap()));
     assert_eq!(pixel(&pixels,64),[0.,0.,0.5,0.5]);
@@ -177,7 +177,7 @@ fn attached_spatial_effects_expand_owner_alpha_before_common_base_clipping() {
     member.artwork.occurrences.get_mut(shadows).unwrap().attachment=Attachment::Clip;
     member.artwork.occurrences.get_mut(blur).unwrap().attachment=Attachment::Effect;
     refresh(&mut member);
-    r.submit(FramePacket {reset_layers:true,..packet(member.scene(),extent)}).unwrap();
+    crate::test_support::submit_settled(&mut r, FramePacket {reset_layers:true,..packet(member.scene(),extent)});
     let result=crate::layer_tests::page_bytes(&r,crate::test_support::document_texture(&r));
     assert_eq!(pixel(&result,64),[0.125,0.,0.125,0.25],"member effects process only the member before outer clipping");
     let work=r.scene.as_ref().unwrap().image_work()[1];
@@ -229,7 +229,7 @@ fn independent_owner_counts_and_local_chain_lengths_bound_resident_work() {
         let mut r=WgpuRasterizer::new_native_headless(color).unwrap();
         let mut full=WgpuRasterizer::new_native_headless(color).unwrap();
         fn frame(document:&layer_core::Document)->FramePacket<'_> {FramePacket {blend_space:layer_core::BlendSpace::Linear,composite_all:false,..packet(document.scene(),document.composition().size)}}
-        for renderer in [&mut r,&mut full] {renderer.submit(frame(&document)).unwrap();}
+        for renderer in [&mut r,&mut full] {crate::test_support::submit_settled(renderer,frame(&document));}
         let work=r.scene.as_ref().unwrap().image_work();let composed=r.metrics.composited_pixels;
         r.submit(frame(&document)).unwrap();
         document.working.occurrence=Some(*groups.last().unwrap());document.working.target=None;

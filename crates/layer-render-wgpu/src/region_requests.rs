@@ -253,6 +253,7 @@ impl RegionRequests {
                 bounds_offset: 0,
             }
         } else {
+            r.drain_image_decodes(&mut encoder)?;
             let classified = match self.raw.encode(r, &request, &mut encoder) {
                 Err(GpuRasterError::DeferredObjectWork) => {
                     r.uploads.finish(&encoder);

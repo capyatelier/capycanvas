@@ -1,5 +1,5 @@
 use super::*;
-use crate::test_support::{depth_source, receive_request};
+use crate::test_support::{depth_source, receive_request, submit_ready};
 use layer_core::{Affine, SelectionMode, SelectionPixels, color::{RgbSpace, SampleDepth}};
 use layer_render::{RegionRefinement, RegionRequest, RegionResult, RegionSource, SelectionRefinement};
 use std::{collections::VecDeque, sync::Arc};
@@ -36,7 +36,7 @@ fn document(extent: [u32; 2], alpha: &[f32]) -> Document {
     document
 }
 fn frame(r: &mut WgpuRasterizer, document: &Document, extent: [u32; 2]) {
-    r.submit(FramePacket { reset_layers: true, ..packet(document.scene(), extent) }).unwrap();
+    submit_ready(r, FramePacket { reset_layers: true, ..packet(document.scene(), extent) }).unwrap();
 }
 fn request(source: RegionSource, enclosure: Selection, refinement: RegionRefinement, tolerance: f32) -> RegionRequest {
     RegionRequest {
@@ -350,7 +350,7 @@ fn enclose_fill_workstation_completion_timings() {
                 let alpha = if boxes.iter().any(|bounds| barrier(*bounds, x, y)) { 1. } else { 0. };
                 [0.2, 0.3, 0.4, alpha]
             }));
-        r.submit(FramePacket { reset_layers: true, view: view(), ..packet(document.scene(), extent) }).unwrap();
+        submit_ready(&mut r, FramePacket { reset_layers: true, view: view(), ..packet(document.scene(), extent) }).unwrap();
         let baseline = r.telemetry().resident_bytes;
         for (enclosed, refinement) in [false, true].into_iter().flat_map(|enclosed| [RegionRefinement::default(),
             RegionRefinement { gap_closing: 2, expansion: 2, smoothing: 1. }].map(|refinement| (enclosed, refinement))) {

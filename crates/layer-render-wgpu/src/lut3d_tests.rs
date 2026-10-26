@@ -1,4 +1,4 @@
-use crate::{WgpuRasterizer, PixelRect, scene, tests::fixture, test_support::{packet, floats, document_texture}};
+use crate::{WgpuRasterizer, PixelRect, scene, tests::fixture, test_support::{packet, floats, document_texture}, layer_tests::publish};
 use layer_core::{EffectInstance, EffectKind, EffectValue, Document, OccurrenceHandle, Lut3d, Point};
 use layer_core::color::{DocumentColor, RgbSpace, SampleDepth, rgb};
 use layer_render::{CanvasRenderer, FramePacket};
@@ -17,7 +17,7 @@ fn pattern(colors:&[[f32;4]])->EffectInstance {
     EffectInstance::new(Arc::new(program))
 }
 fn render_document(r:&mut WgpuRasterizer,document:&Document)->Vec<[f32;4]> {
-    r.submit(packet(document.scene().with_owner(0,0),document.composition().size)).unwrap();floats(&crate::layer_tests::page_bytes(r,document_texture(r)))
+    crate::test_support::submit_settled(r,packet(document.scene().with_owner(0,0),document.composition().size));floats(&crate::layer_tests::page_bytes(r,document_texture(r)))
 }
 fn render(r:&mut WgpuRasterizer,effects:&[EffectInstance])->Vec<[f32;4]> {
     let document=effect_document(effects,[256;2],r.document_color);render_document(r,&document)
@@ -284,7 +284,7 @@ fn discontinuous_n65_vertices_require_native_graph_evaluation() {
                 let scale=1./(1<<level) as f32;let mut frame=packet(document.scene().with_owner(0,0),extent);
                 frame.view.width_px=43;frame.view.height_px=25;
                 frame.view.document_to_surface=[scale,0.,0.,scale,-610.*scale,-270.*scale];
-                window.submit(frame).unwrap();exact.submit(frame).unwrap();
+                publish(&mut window,frame);publish(&mut exact,frame);
                 let cache=window.scale_display.as_ref().unwrap();assert_eq!(cache.plan.level,level);assert!(cache.evaluation==Evaluation::Display);
                 let error=quality(&display_pixels(&window),&crate::test_support::float_pixels(&exact,document_texture(&exact)),cache.plan);
                 assert!(error.iter().all(|v|v.is_finite()));for i in 0..3{worst[i]=worst[i].max(error[i]);}
@@ -294,7 +294,7 @@ fn discontinuous_n65_vertices_require_native_graph_evaluation() {
             program_mut(&mut document,target).resolution=EffectResolution::Native;
             let scale=0.25;let mut frame=packet(document.scene().with_owner(0,0),extent);frame.view.width_px=43;frame.view.height_px=25;
             frame.view.document_to_surface=[scale,0.,0.,scale,-610.*scale,-270.*scale];
-            window.submit(frame).unwrap();exact.submit(frame).unwrap();
+            publish(&mut window,frame);publish(&mut exact,frame);
             let cache=window.scale_display.as_ref().unwrap();assert!(cache.evaluation==Evaluation::Native);
             let error=quality(&display_pixels(&window),&crate::test_support::float_pixels(&exact,document_texture(&exact)),cache.plan);
             assert!(error[2]<2e-5,"Native LUT preserves exact reduced artwork: {working:?} hdr={hdr} {error:?}");
@@ -365,7 +365,7 @@ fn resident_lookup_tiles_batch_with_immutable_auxiliary_and_bounded_sources() {
     for (state,intensity) in [35.,70.,100.].into_iter().enumerate() {
         set_effect(&mut document,target,"intensity",EffectValue::Number(intensity));
         let coverage=if state==2 {mask(&mut document,target,0.25);let occurrence=document.artwork.occurrences.get_mut(target).unwrap();occurrence.opacity=0.6;occurrence.attachment = layer_core::Attachment::Effect;0.15}else{1.};
-        let mut frame=packet(document.scene().with_owner(0,0),extent);frame.view.document_to_surface=[0.25,0.,0.,0.25,0.,0.];r.submit(frame).unwrap();
+        let mut frame=packet(document.scene().with_owner(0,0),extent);frame.view.document_to_surface=[0.25,0.,0.,0.25,0.,0.];publish(&mut r,frame);
         let cache=r.scale_display.as_ref().unwrap();assert!(cache.resident_bytes()>0);assert!(!cache.has_pending_work(&r));
         let passes=r.scene.as_ref().unwrap().effect_passes;assert!(passes<=2,"32 cold/warm pointwise LUT tiles must share at most two effect passes: state={state} passes={passes}");
         let expected=(0..32).map(|id|{

@@ -1,5 +1,5 @@
 use layer_render::CanvasRenderer;
-use crate::{WgpuRasterizer, snapshot::{CaptureControl, SnapshotGpu}};
+use crate::{WgpuRasterizer, snapshot::{CaptureControl, SnapshotGpu}, test_support::submit_ready};
 use layer_core::{ArtworkSample, ArtworkSampleRequest, ArtworkSource, Document, DocumentNames};
 use layer_core::color::{DocumentColor, SampleDepth};
 use layer_core::authored::*;
@@ -244,16 +244,16 @@ fn phase_document(speed: f32) -> (Document, OccurrenceHandle, EffectHandle, Effe
 fn artwork_sample_uses_captured_animation_clock_and_explicit_batch_phase() {
     let (mut doc, occurrence, handle, fill) = phase_document(1.);
     let mut live=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
-    live.submit(layer_render::FramePacket {time_seconds:2.,reset_layers:true,..crate::test_support::packet(doc.scene(),[16,16])}).unwrap();
+    submit_ready(&mut live, layer_render::FramePacket {time_seconds:2.,reset_layers:true,..crate::test_support::packet(doc.scene(),[16,16])}).unwrap();
     let frozen_gpu=live.snapshot_gpu();let mut request=ArtworkSampleRequest::new(&doc,ArtworkSource::Visible,[8.;2],1);
     request.set_context(live.evaluation_context());
     let mut draft=effect_draft(&doc,occurrence);draft.set("speed",layer_core::EffectValue::Number(2.)).unwrap();set_effect(&mut doc,occurrence,draft);
-    for elapsed in [2.,3.] {live.submit(layer_render::FramePacket {time_seconds:elapsed,..crate::test_support::packet(doc.scene(),[16,16])}).unwrap();}
+    for elapsed in [2.,3.] {submit_ready(&mut live, layer_render::FramePacket {time_seconds:elapsed,..crate::test_support::packet(doc.scene(),[16,16])}).unwrap();}
     assert_eq!(live.evaluation_context().phases.as_slice(),&[(handle,4.),(fill,0.)]);
     let mut replacement=crate::test_support::staged_renderer(&live,doc.composition().color);
     replacement.seed_evaluation_context(live.evaluation_context());
     for (elapsed,phase) in [(3.,4.),(4.,6.)] {
-        replacement.submit(layer_render::FramePacket {time_seconds:elapsed,..crate::test_support::packet(doc.scene(),[16,16])}).unwrap();
+        submit_ready(&mut replacement, layer_render::FramePacket {time_seconds:elapsed,..crate::test_support::packet(doc.scene(),[16,16])}).unwrap();
         assert_eq!(replacement.evaluation_context().phases.as_slice(),&[(handle,phase),(fill,0.)]);
     }
     close(pollster::block_on(frozen_gpu.artwork_sample(request.clone(),CaptureControl::default())).unwrap(),[2.,0.25,0.5,1.]);
@@ -268,7 +268,7 @@ fn live_scenes_forwarded_as_snapshots_keep_animating() {
     let mut reds = Vec::new();
     for (elapsed, phase) in [(2., 0.5), (3., 0.75), (4., 1.)] {
         let forwarded = doc.scene().snapshot();
-        live.submit(layer_render::FramePacket { time_seconds:elapsed, reset_layers:reds.is_empty(),
+        submit_ready(&mut live, layer_render::FramePacket { time_seconds:elapsed, reset_layers:reds.is_empty(),
             ..crate::test_support::packet(forwarded.view(), [16; 2]) }).unwrap();
         assert_eq!(live.evaluation_context().phases.as_slice(), &[(handle, phase), (fill, 0.)]);
         reds.push(live.readback_srgb_rgba8().unwrap()[0]);
@@ -280,7 +280,7 @@ fn live_scenes_forwarded_as_snapshots_keep_animating() {
 fn failed_frame_keeps_clock_rate_and_frozen_phase_ownership() {
     let (mut doc, occurrence, handle, fill) = phase_document(1.);
     let mut live = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
-    live.submit(layer_render::FramePacket { time_seconds:2., reset_layers:true,
+    submit_ready(&mut live, layer_render::FramePacket { time_seconds:2., reset_layers:true,
         ..crate::test_support::packet(doc.scene(), [16; 2]) }).unwrap();
     let previous = live.evaluation_context();
     assert_eq!(previous.phases.as_slice(), &[(handle, 2.), (fill, 0.)]);
@@ -298,21 +298,21 @@ fn failed_frame_keeps_clock_rate_and_frozen_phase_ownership() {
     assert_eq!(live.evaluation_context(), previous);
     assert!(Arc::ptr_eq(&live.evaluation_context().phases, &previous.phases));
     set_effect(&mut doc, occurrence, original);
-    live.submit(layer_render::FramePacket { time_seconds:4., composite_all:true,
+    submit_ready(&mut live, layer_render::FramePacket { time_seconds:4., composite_all:true,
         ..crate::test_support::packet(doc.scene(), [16; 2]) }).unwrap();
     assert_eq!(live.evaluation_context().phases.as_slice(), &[(handle, 4.), (fill, 0.)]);
     assert_eq!(frozen.context.phases.as_slice(), &[(handle, 2.), (fill, 0.)]);
     let stable = live.evaluation_context();
-    live.submit(layer_render::FramePacket { time_seconds:4., composite_all:true,
+    submit_ready(&mut live, layer_render::FramePacket { time_seconds:4., composite_all:true,
         ..crate::test_support::packet(doc.scene(), [16; 2]) }).unwrap();
     assert!(Arc::ptr_eq(&stable.phases, &live.evaluation_context().phases));
     let mut changed = effect_draft(&doc, occurrence);
     changed.set("speed", layer_core::EffectValue::Number(4.)).unwrap();
     set_effect(&mut doc, occurrence, changed);
-    live.submit(layer_render::FramePacket { time_seconds:10., composite_all:true,
+    submit_ready(&mut live, layer_render::FramePacket { time_seconds:10., composite_all:true,
         ..crate::test_support::packet(doc.scene(), [16; 2]) }).unwrap();
     assert_eq!(live.evaluation_context().phases.as_slice(), &[(handle, 10.), (fill, 0.)]);
-    live.submit(layer_render::FramePacket { time_seconds:20., composite_all:true,
+    submit_ready(&mut live, layer_render::FramePacket { time_seconds:20., composite_all:true,
         ..crate::test_support::packet(frozen.view(), [16; 2]) }).unwrap();
     assert_eq!(live.evaluation_context().phases.as_slice(), &[(handle, 2.), (fill, 0.)]);
     assert_eq!(frozen.context, previous);

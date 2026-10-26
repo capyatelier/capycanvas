@@ -287,7 +287,7 @@ fn liquify_undo_then_new_stroke_uses_the_restored_field_and_pixels() {
             published_liquify(&mut r,&mut document,style.clone(),&[contact],41);
             assert_ne!(r.readback_srgb_rgba8().unwrap(),restored_pixels,"the undone stroke must change pixels");
             paint_mut(&mut document).raster=restored_revision.clone();
-            r.submit(FramePacket{restore_rasters:&[(target(&document),restored_revision)],
+            crate::test_support::submit_ready(&mut r, FramePacket{restore_rasters:&[(target(&document),restored_revision)],
                 ..packet(document.scene(),[128;2])}).unwrap();
             assert_eq!(r.readback_srgb_rgba8().unwrap(),restored_pixels,"Undo restores the prior pixels");
         }

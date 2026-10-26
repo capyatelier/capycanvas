@@ -26,15 +26,17 @@ fn native_alpha_signed_capture_matches_native_reference_without_reducing_input()
         let mut plan = display_mips::Plan::at(size, 2); plan.extent = extent; plan.doc_bounds = bounds;
         let destination = Image::new(&r, plan, "signed native alpha reduction");
         let mut encoder = submission::CommandEncoder::new(&r.device, &Default::default());
-        super::super::effects::capture_native_effect(&mut scene, &mut r, packet(doc.scene(), extent), handle,
-            &Target { view: destination.view.clone(), slot: None, plan }, &[bounds], None, &mut encoder).unwrap();
+        crate::test_support::query_ready(&mut r, &mut encoder, |r, encoder|
+            super::super::effects::capture_native_effect(&mut scene, r, packet(doc.scene(), extent), handle,
+                &Target { view: destination.view.clone(), slot: None, plan }, &[bounds], None, encoder));
         r.uploads.finish(&encoder); encoder.submit(&r.queue);
         let actual = pixels(&r, &destination.texture);
         let (native, _) = create_color_target(&r.device, size, "signed native alpha reference");
         let mut reference_scene = Scene::new(&r).unwrap();
         let mut encoder = submission::CommandEncoder::new(&r.device, &Default::default());
         let frame = packet(doc.scene().with_offset64(bounds.min.map(|v| -(v as f64))), size);
-        reference_scene.capture_region(&mut r, frame, &native, PixelRect::full(size), scene::Output::EffectComposite(handle), &mut encoder).unwrap();
+        crate::test_support::query_ready(&mut r, &mut encoder, |r, encoder|
+            reference_scene.capture_region(r, frame, &native, PixelRect::full(size), scene::Output::EffectComposite(handle), encoder));
         r.uploads.finish(&encoder); encoder.submit(&r.queue);
         let native = pixels(&r, &native);
         for y in 0..plan.size[1] { for x in 0..plan.size[0] {
@@ -80,7 +82,7 @@ fn native_alpha_on_both_sides_of_spatial_effect_preserves_cross_canvas_support()
         let evaluate = |doc: &Document| {
             let mut r = WgpuRasterizer::new_native_headless(color).unwrap();
             let mut frame = packet(doc.scene(), doc.composition().size); frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
-            r.submit(frame).unwrap();
+            submit_published(&mut r, frame);
             assert_eq!(r.scale_display.as_ref().unwrap().plan.level, 2);
             (r.scale_display.as_ref().unwrap().plan.size, display_pixels(&r))
         };
@@ -110,8 +112,9 @@ fn native_alpha_capture_skips_pages_outside_its_destination_window() {
             let mut scene = Scene::new(&r).unwrap();
             let destination = Image::new(&r, plan, "windowed native alpha reduction");
             let mut encoder = submission::CommandEncoder::new(&r.device, &Default::default());
-            super::super::effects::capture_native_effect(&mut scene, &mut r, packet(doc.scene(), extent), handle,
-                &Target { view: destination.view.clone(), slot: None, plan }, regions, None, &mut encoder).unwrap();
+            crate::test_support::query_ready(&mut r, &mut encoder, |r, encoder|
+                super::super::effects::capture_native_effect(&mut scene, r, packet(doc.scene(), extent), handle,
+                    &Target { view: destination.view.clone(), slot: None, plan }, regions, None, encoder));
             r.uploads.finish(&encoder); encoder.submit(&r.queue);
             pixels(&r, &destination.texture)
         };
