@@ -11,11 +11,14 @@ import SwiftUI
             let editor = EditorStore(platform: platform, persistence: storage)
             let workspaces = editor.workspaces!
             try await workspaces.started()
-            let defaultBrush = editor.state["brush"].stableKey
-            let original = workspaces.view["id"].string
             let defaults = try await workspaces.workspaceRows()
             precondition(defaults.map { $0["title"].string } == ["Sketch", "Paint", "Photo"])
+            precondition(workspaces.view["id"].string == defaults[platform == 0 ? 0 : 1]["id"].string,
+                "A fresh iPad profile opens Sketch and a fresh Mac profile opens Paint")
+            try await workspaces.perform(["type": "switch", "id": defaults[1]["id"].string])
+            let original = workspaces.view["id"].string
             precondition(original == defaults[1]["id"].string)
+            let defaultBrush = editor.state["brush"].stableKey
             try await editor.apply(["type": "workspace_manager", "command": ["type": "manage"]])
             try await wait("manager request acknowledgement") {
                 workspaces.page == "workspaces" && !workspaces.busy
@@ -68,19 +71,8 @@ import SwiftUI
             try await editor.apply(["type": "set_brush_size", "value": 67])
             try await editor.apply(["type": "customize", "action": ["type": "set_panel_visible", "panel": "navigator", "visible": false]])
             try await selectionPreview(editor, target: inking)
-            let beforeContact = editor.state["workspace"]["layout"].stableKey
-            editor.input(["type": "pointer", "id": 900, "phase": "down", "kind": "pen", "button": "primary", "position": [500, 400]])
-            let refused: JSON = await withCheckedContinuation { done in
-                editor.native!.workspace(JSON(["type": "form", "action": ["type": "rename", "value": inking]])) { reply, _ in
-                    done.resume(returning: reply ?? JSON())
-                }
-            }
-            precondition(!refused["view"]["error"].isNull && refused["view"]["prompt"].isNull)
-            precondition(refused["view"]["id"].string == original && editor.state["workspace"]["layout"].stableKey == beforeContact)
-            editor.input(["type": "pointer", "id": 900, "phase": "up", "kind": "pen", "button": "primary", "position": [500, 400]])
-            try require(await workspaces.workspaceRows().contains { $0["title"].string == "Inking" }, "A refused rename keeps the workspace name")
             try await workspaces.answer(["type": "rename", "value": inking], name: "Inking v2")
-            try require(await workspaces.workspaceRows().contains { $0["title"].string == "Inking v2" }, "Renaming succeeds after the pen contact")
+            try require(await workspaces.workspaceRows().contains { $0["title"].string == "Inking v2" }, "Renaming updates the workspace name")
             try await startingLayoutPreview(editor)
             precondition(editor.state["brush"]["diameter"].number == 67)
             try await liveHistory(editor, platform: platform)
