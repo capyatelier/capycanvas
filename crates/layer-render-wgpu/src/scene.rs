@@ -1846,13 +1846,8 @@ impl Scene {
         encoder: &mut crate::submission::CommandEncoder,
         tiles: Option<&std::collections::BTreeSet<[u32; 2]>>,
     ) -> Result<PixelRect, GpuRasterError> {
-        if let Some(startup) = &r.startup {
-            startup.compiler.check()?;
-            if !startup.compiler.require(r.scene_pipelines.scale_pipelines(), crate::startup::DOCUMENT) {
-                startup.compiler.start();
-                return Err(GpuRasterError::DeferredObjectWork);
-            }
-        }
+        if let Some(startup) = &r.startup { startup.compiler.check()?; }
+        if !r.scene_scale_ready() { return Err(GpuRasterError::DeferredObjectWork); }
         let write = self.begin_write(r)?;
         self.object_results.retain(packet.scene,packet.blend_space,r.device.working_space());
         self.object_spatial.prepare(packet.scene);

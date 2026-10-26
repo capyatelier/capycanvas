@@ -3659,7 +3659,7 @@ impl CanvasRenderer for WgpuRasterizer {
             startup.compiler.start();
             ready
         });
-        transforms_ready && self.startup.as_ref().is_none_or(|s| s.document.ready() && s.current.ready())
+        transforms_ready && self.scene_scale_ready() && self.startup.as_ref().is_none_or(|s| s.document.ready() && s.current.ready())
             && self.brush_batches_ready(packet)
             && self.prepare_raster_restores(packet) && self.bake_analyses_ready(packet) && self.retouch_analyses_ready(packet)
             && self.bake_vectors_ready(packet) && self.prepare_bakes(packet) && self.prepare_transform_preview(packet,preview)

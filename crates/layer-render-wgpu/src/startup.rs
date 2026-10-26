@@ -316,6 +316,13 @@ impl Startup {
     }
 }
 impl WgpuRasterizer {
+    pub(super) fn scene_scale_ready(&self) -> bool {
+        self.startup.as_ref().is_none_or(|startup| {
+            let ready = startup.compiler.require(self.scene_pipelines.scale_pipelines(), DOCUMENT);
+            if !ready { startup.compiler.start(); }
+            ready
+        })
+    }
     pub fn shader_input(&self) {
         if let Some(startup) = &self.startup { startup.compiler.input(); }
     }
@@ -649,6 +656,8 @@ mod tests {
         assert!(renderer.scene_pipelines.scale_pipelines().iter().all(|pipeline| !pipeline.ready()));
         let packet = FramePacket { reset_layers: true, ..crate::test_support::packet(snapshot.view(), [64; 2]) };
         let submitted = renderer.submitted_updates();
+        assert!(!renderer.raster_dependencies_ready(packet, None), "the first backdrop waits for its display recipes before submission");
+        assert_eq!(renderer.submitted_updates(), submitted);
         renderer.submit(packet).unwrap();
         assert_eq!(renderer.submitted_updates(), submitted + 1);
         assert!(renderer.object_deferred);

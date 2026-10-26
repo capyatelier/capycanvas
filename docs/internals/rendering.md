@@ -1404,6 +1404,9 @@ eraser; unused brushes and filters compile on first use
 dependencies are ready before drawing uses them, so pipeline creation never lands
 in a small stroke update. A contact that begins before its brush is ready follows
 the shared input admission policy.
+Frame admission includes the display-scale recipes used by the first backdrop.
+They prepare before its submission, allowing hosts to present that backdrop
+before starting document and brush preparation.
 Preparation follows the resolved drawing target, including its paper binding,
 mask, alpha lock and blend space when a fill remains selected. A paper texture
 change holds early contacts until the new texture is ready, then replays each

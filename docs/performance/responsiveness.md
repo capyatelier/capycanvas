@@ -30,6 +30,16 @@ reference-tier startup and first-use rows remain unqualified for this policy.
 The historical measurements below predate removal of the app's opaque driver
 pipeline-cache persistence. Cold and repeated-process startup need fresh
 reference-tier measurements; driver-owned caches remain outside app control.
+On 2026-10-25, GTK at `0e35d2beb` stalled before canvas readiness when a cold
+backdrop deferred its display recipes. Admitting those recipes before submission
+restores startup: on an RTX PRO 6000 Blackwell, first canvas feedback is
+647.433–667.577 ms and selected-brush readiness is 662.806–684.153 ms across
+one Light and one Dark launch. These optimized private-GTK runs use a
+1600 × 1000, 120 Hz private display and existing driver caches. The longest
+event-loop slices are 94.505–101.411 ms. Both runs commit two early strokes;
+close/restart and compositor pixels pass separately. Logs and source/binary
+hashes are in `artifacts/close-checkpoint-error/`. This desktop diagnostic does
+not qualify the reference tiers or sustained motion.
 An Apple preparation probe uses fresh renderer recipes without an application
 pipeline cache, on an M2 Pro with existing OS driver caches. It measures shader
 readiness, not presented motion or physical input latency. Retouch source capture
