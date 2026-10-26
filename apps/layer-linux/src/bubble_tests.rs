@@ -1023,7 +1023,7 @@ fn native_hdr_color_bubble() {
         let p = find_id(&d, id).unwrap().color.unwrap().intensity.unwrap().point(0.75);
         let at = [c[0] + p[0], c[1] + p[1]];
         d.input.perform(serde_json::json!([{"touch":"down","slot":0,"point":at}, {"touch":"down","slot":1,"point":[c[0],c[1]-100.]},
-            {"touch":"up","slot":0}, {"touch":"up","slot":1}]));
+            {"wait_ms":700}, {"touch":"up","slot":0}, {"touch":"up","slot":1}]));
         assert_eq!(state(&d.w).colors.definition(), original.definition(), "second finger cancels the intensity edit");
         assert_eq!(state(&d.w).colors.hdr_intensity(), -1.);
         pinch(&mut d, &format!("hdr-bubble-{name}"));
@@ -1035,6 +1035,133 @@ fn native_hdr_color_bubble() {
         pump(250);
         assert!(find_id(&d, id).unwrap().color.unwrap().intensity.is_some());
         capture(&mut d, &format!("hdr-bubble-{name}-review"));
+    }
+    d.finish();
+}
+
+fn wheel_point(d: &Driver, wheel: &crate::tool_panels::ColorWheel, offset: [f32; 2]) -> [f32; 2] {
+    let (size, [left, top]) = wheel.drawing_bounds();
+    let p = wheel.compute_point(&d.w.window, &gtk::graphene::Point::new(left + size * (0.5 + offset[0]), top + size * (0.5 + offset[1]))).unwrap();
+    [p.x(), p.y()]
+}
+
+fn finger_tap(d: &mut Driver, points: &[[f32; 2]]) {
+    let mut events: Vec<_> = points.iter().enumerate().map(|(slot, p)| serde_json::json!({ "touch": "down", "slot": slot, "point": p })).collect();
+    events.push(serde_json::json!({ "wait_ms": 60 }));
+    events.extend((0..points.len()).map(|slot| serde_json::json!({ "touch": "up", "slot": slot })));
+    d.input.perform(serde_json::Value::Array(events));
+    pump(300);
+}
+
+fn right_click(d: &mut Driver, at: [f32; 2]) {
+    d.input.perform(serde_json::json!([{ "point": at, "button": 273, "down": true }, { "button": 273, "down": false }]));
+    pump(300);
+}
+
+fn menu_item(d: &Driver, text: &str) -> Option<gtk::Widget> {
+    menu_open(d).then(|| mapped_label(d.w.window.upcast_ref(), text)).flatten()
+}
+
+#[test]
+#[ignore = "private display: workspace-motion.sh gtk --native-test=native_color_undo"]
+fn native_color_undo() {
+    let app = native_test_app("art.capycanvas.ColorUndo");
+    let w = Workspace::with_project(&app, Some((new_drawing_at(640, 480, layer_core::color::SampleDepth::F16), None)));
+    w.window.maximize();
+    w.window.present();
+    super::new_photo::ready(&w);
+    let mut d = Driver::start(w, app);
+    let undo = ui_session(&d.w).localization().text(MessageId::WORKSPACE_COLOR_UNDO).to_string();
+    let foreground = |d: &Driver| state(&d.w).colors.foreground;
+    for theme in [Theme::Light, Theme::Dark] {
+        let name = format!("{theme:?}").to_lowercase();
+        d.w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        let mut workspace = WorkspaceState { layout: WorkspacePreset::Painter.layout(Platform::Gtk), ..Default::default() };
+        workspace.layout.set_panel_visible(Panel::Color, true).unwrap();
+        workspace.layout.move_panel([1600., 1000.], Panel::Color, DockTarget::Float { position: [220., 150.] }).unwrap();
+        d.w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(workspace) });
+        d.w.dispatch(UiAction::Color { action: ColorAction::Select { slot: ColorSlot::Foreground } });
+        d.w.dispatch(UiAction::SetColor { rgba: [0.2, 0.7, 0.45, 1.] });
+        pump(500);
+        let wheel = d.named("color-wheel").downcast::<crate::tool_panels::ColorWheel>().unwrap();
+        let start = foreground(&d);
+        let drag = [wheel_point(&d, &wheel, [0.1, -0.1]), wheel_point(&d, &wheel, [0.15, 0.]), wheel_point(&d, &wheel, [0.05, 0.12])];
+        stroke(&mut d, "mouse", &drag);
+        let dragged = foreground(&d);
+        assert_ne!(dragged, start, "{name}: dragging on the panel wheel picks");
+        let ring = wheel_point(&d, &wheel, [0.47, 0.]);
+        right_click(&mut d, ring);
+        let item = menu_item(&d, &undo).unwrap_or_else(|| panic!("{name}: right-clicking the hue ring offers {undo}"));
+        capture(&mut d, &format!("color-undo-{name}-panel-menu"));
+        let at = d.point(&item);
+        d.input.click(at);
+        pump(300);
+        assert_eq!(foreground(&d), start, "{name}: one undo restores the color from before the whole drag");
+
+        let (width, height) = (wheel.width() as f32, wheel.height() as f32);
+        let outside = (1..20).flat_map(|i| (1..20).map(move |j| [width * i as f32 / 20., height * j as f32 / 20.]))
+            .find(|&[x, y]| !wheel.contains(x as f64, y as f64) && wheel.pick(x as f64, y as f64, gtk::PickFlags::DEFAULT).is_none())
+            .expect("the wheel leaves room outside its ring");
+        let outside = wheel.compute_point(&d.w.window, &gtk::graphene::Point::new(outside[0], outside[1])).unwrap();
+        right_click(&mut d, [outside.x(), outside.y()]);
+        assert!(menu_open(&d) && menu_item(&d, &undo).is_none(), "{name}: outside the ring the panel keeps its own menu");
+        d.input.key(0xff1b);
+        pump(200);
+
+        let fingers = [wheel_point(&d, &wheel, [-0.12, 0.]), wheel_point(&d, &wheel, [0.12, 0.]), wheel_point(&d, &wheel, [0., 0.47])];
+        finger_tap(&mut d, &fingers);
+        assert_eq!(foreground(&d), dragged, "{name}: a three-finger tap on the panel wheel redoes");
+        finger_tap(&mut d, &fingers[..2]);
+        assert_eq!(foreground(&d), start, "{name}: a two-finger tap on the panel wheel undoes");
+        stroke(&mut d, "mouse", &drag);
+        let field = wheel_point(&d, &wheel, [-0.2, 0.2]);
+        finger_tap(&mut d, &[field, ring]);
+        assert_eq!(foreground(&d), start, "{name}: the second finger retires the first finger's pick and the tap undoes");
+
+        let scale = wheel.intensity().unwrap();
+        assert!(scale.is_visible(), "{name}: HDR drawings show the intensity arc");
+        let arc = [0.3, 0.4, 0.5, 0.6, 0.7, 0.8].map(|t| {
+            let p = scale.geometry().unwrap().point(t);
+            let p = scale.compute_point(&d.w.window, &gtk::graphene::Point::new(p[0], p[1])).unwrap();
+            [p.x(), p.y()]
+        });
+        let stops = state(&d.w).colors.hdr_intensity();
+        stroke(&mut d, "mouse", &arc[1..]);
+        assert!(state(&d.w).colors.hdr_intensity() > stops + 1., "{name}: the arc raises the intensity");
+        finger_tap(&mut d, &[arc[0], arc[4]]);
+        assert_eq!(state(&d.w).colors.hdr_intensity(), stops, "{name}: a two-finger tap on the arc undoes the whole arc drag");
+        right_click(&mut d, arc[2]);
+        assert!(menu_item(&d, &undo).is_some(), "{name}: the arc offers color undo too");
+        d.input.key(0xff1b);
+        pump(200);
+
+        let source = BubbleSource::Control { control: ToolbarControl::Color };
+        let widget = header_of(&d, ToolbarControl::Color);
+        let spot = canvas_spot(&d, 0.65, 0.48);
+        tear(&mut d, "mouse", &widget, spot);
+        let id = find(&d, source).unwrap().id;
+        pump(500);
+        let c = center(&d, id);
+        let before = foreground(&d);
+        stroke(&mut d, "touch", &[[c[0] + 20., c[1] - 10.], [c[0] - 15., c[1] + 10.]]);
+        let picked = foreground(&d);
+        assert_ne!(picked, before, "{name}: the ring picks");
+        finger_tap(&mut d, &[[c[0] - 25., c[1]], [c[0] + 25., c[1]]]);
+        assert_eq!(foreground(&d), before, "{name}: a two-finger tap on the ring undoes");
+        assert_eq!(center(&d, id), c, "{name}: and leaves the ring where it is");
+        finger_tap(&mut d, &[[c[0] - 25., c[1]], [c[0] + 25., c[1]], [c[0], c[1] + 30.]]);
+        assert_eq!(foreground(&d), picked, "{name}: a three-finger tap on the ring redoes");
+        touches(&mut d, c, [c[0] + 70., c[1]], [60., 20.], 0.);
+        assert!((center(&d, id)[0] - c[0]).abs() > 30., "{name}: two moving fingers still move the ring");
+        assert_eq!(foreground(&d), picked, "{name}: without undoing");
+        let moved = center(&d, id);
+        right_click(&mut d, moved);
+        let item = menu_item(&d, &undo).unwrap_or_else(|| panic!("{name}: the ring's menu offers {undo}"));
+        capture(&mut d, &format!("color-undo-{name}-bubble-menu"));
+        let at = d.point(&item);
+        d.input.click(at);
+        pump(300);
+        assert_eq!(foreground(&d), before, "{name}: the ring's menu undoes");
     }
     d.finish();
 }

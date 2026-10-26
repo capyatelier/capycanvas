@@ -183,7 +183,7 @@ impl<R:CanvasRenderer> UiSession<R> {
             working_generation:self.engine.document().working.generation,checkpoint:self.engine.checkpoint(),state:self.session_document_state()}
     }
     pub fn capture_session(&self)->Result<SessionCapture,String> {
-        let Self {bubble_state:_,zen_peek:_,pressure_calibration:_,pressure_meter_changed:_,engine,state,files:_,screen_headroom:_,histogram_captions:_,histogram:_,effect_analyses:_,
+        let Self {bubble_state:_,color_history:_,zen_peek:_,pressure_calibration:_,pressure_meter_changed:_,engine,state,files:_,screen_headroom:_,histogram_captions:_,histogram:_,effect_analyses:_,
             tonal_histogram:_,auto_levels:_,targeted_curve:_,localization_generation:_,renderer_generation:_,preferences_revision:_,
             panel_copy:_,customization_copy:_,command_search:_,last_toolbar_context:_,frame_commands_pending:_,brush_stamps:_,canvas_bar:_,notices:_,
             pen:_,pen_input:_,input_pending:_,host_requests_changed:_,pen_contact:_,discarded_contacts:_,rendering_suspended:_,touch:_,navigation:_,navigator_drag:_,

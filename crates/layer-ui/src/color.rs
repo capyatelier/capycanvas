@@ -10,6 +10,8 @@ mod okhsv;
 mod editor;
 mod text;
 mod hdr_picker;
+mod history;
+pub(crate) use history::{ColorHistory, PaintPair};
 #[cfg(test)]
 mod quick_color_tests;
 mod paint_pair;
@@ -131,6 +133,8 @@ pub enum ColorAction {
     EditorMemory {
         memory: ColorEditorMemory,
     },
+    Undo,
+    Redo,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -679,6 +683,9 @@ impl ColorState {
             }
             ColorAction::Library { .. } => {
                 return Err("Palette actions require an editing session".into());
+            }
+            ColorAction::Undo | ColorAction::Redo => {
+                return Err("Color history requires an editing session".into());
             }
             ColorAction::Definition { color } => self.set_color(color)?,
             ColorAction::ToggleReadout => self.readout = self.readout.next(),

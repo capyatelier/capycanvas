@@ -254,6 +254,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.state.colors = state.colors;
         self.state.color_library = state.color_library;
         self.selection_masks.colors = state.mask_colors;
+        self.forget_paint_history();
         self.layer_interaction.tool = if state.canvas_tool.picks_color() { LayerCanvasTool::Paint } else { state.canvas_tool };
         self.state.layer_tools.tool = self.layer_interaction.tool;
         self.layer_interaction.gradient = state.gradient;

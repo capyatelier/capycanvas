@@ -522,6 +522,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.selection_masks
                 .colors
                 .set_document_depth(layer_core::color::SampleDepth::U8)?;
+            self.forget_mask_paint_history();
         }
         let previous = self.selection_masks.editing.take();
         let artwork = previous

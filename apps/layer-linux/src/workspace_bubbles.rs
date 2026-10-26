@@ -81,7 +81,9 @@ impl ColorPlate {
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Pair {
     start: f32,
+    origin: [f32; 2],
     mid: [f32; 2],
+    lifted: bool,
     ended: bool,
 }
 
@@ -212,6 +214,7 @@ mod imp {
         pub(super) tween: RefCell<Option<super::Tween>>,
         pub(super) ticking: Cell<bool>,
         pub(super) fingers: RefCell<Vec<(usize, [f32; 2])>>,
+        pub(super) color_touches: crate::color_touch::ColorTouches,
         pub(super) pair: Cell<Option<super::Pair>>,
         pub(super) press: RefCell<Option<super::Press>>,
     }
@@ -1487,7 +1490,13 @@ impl Bubble {
                     bubble.set_cursor_from_name(hide.then_some("none"));
                 }
             }
-            let Some(at) = w.event_point(controller) else { return glib::Propagation::Proceed };
+            let point = w.event_point(controller);
+            let color = bubble.imp().view.borrow().as_ref().filter(|v| v.kind == BubbleKind::Color)
+                .map(|v| point.is_some_and(|at| v.hit(bubble.local(at)).is_some()));
+            if let Some(inside) = color {
+                bubble.imp().color_touches.forward(&w, bubble.upcast_ref(), event, point, inside);
+            }
+            let Some(at) = point else { return glib::Propagation::Proceed };
             bubble.mark_parts(event, at);
             let sequence = || event.event_sequence().as_ptr() as usize;
             let stop = match event.event_type() {
@@ -1836,16 +1845,25 @@ impl Bubble {
             }
         }
         imp.hot.set(None);
-        let lifted = w.bubbles.drag(w, BubbleGrab::Bubble { id }, ContactPhase::Down, mid);
-        if !lifted {
-            imp.contact.set(None);
-        }
-        imp.pair.set(Some(Pair { start: distance.max(1.), mid, ended: !lifted }));
+        imp.pair.set(Some(Pair { start: distance.max(1.), origin: mid, mid, lifted: false, ended: false }));
     }
 
     fn update_pair(&self, w: &Rc<Workspace>, id: u32) {
         let imp = self.imp();
-        let (Some((mid, distance)), Some(pair)) = (self.pair_points(), imp.pair.get()) else { return };
+        let (Some((mid, distance)), Some(mut pair)) = (self.pair_points(), imp.pair.get()) else { return };
+        if !pair.lifted {
+            let moved = w.surface.drag_check_threshold(0, 0, (mid[0] - pair.origin[0]) as i32, (mid[1] - pair.origin[1]) as i32)
+                || w.surface.drag_check_threshold(0, 0, (distance - pair.start) as i32, 0);
+            if !moved {
+                return;
+            }
+            pair.lifted = w.bubbles.drag(w, BubbleGrab::Bubble { id }, ContactPhase::Down, pair.origin);
+            if !pair.lifted {
+                imp.contact.set(None);
+                imp.pair.set(Some(Pair { ended: true, ..pair }));
+                return;
+            }
+        }
         imp.pair.set(Some(Pair { mid, ..pair }));
         let color = imp.view.borrow().as_ref().filter(|v| v.kind == BubbleKind::Color).map(|v| v.diameter);
         if let Some(size) = color {
@@ -1860,6 +1878,9 @@ impl Bubble {
         let Some(pair) = imp.pair.get() else { return };
         imp.pair.set(Some(Pair { ended: true, ..pair }));
         imp.contact.set(None);
+        if !pair.lifted {
+            return;
+        }
         w.bubbles.drag(w, BubbleGrab::Bubble { id }, if cancel { ContactPhase::Cancel } else { ContactPhase::Up }, pair.mid);
         if let Some(pinch) = imp.pinch.take() {
             self.queue_draw();

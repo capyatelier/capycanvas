@@ -111,6 +111,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             return Err("Wait for drawing capture before switching drawings".into());
         }
         self.input(UiInput::Blur)?;
+        self.end_color_contact();
         self.return_to_artwork()?;
         self.release_idle_document_buffers();
         self.cancel_auto_levels();self.cancel_histogram();self.cancel_effect_analyses();

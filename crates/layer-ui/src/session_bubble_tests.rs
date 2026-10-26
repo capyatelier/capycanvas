@@ -1402,8 +1402,9 @@ fn the_layers_card_unfolds_flips_to_properties_and_folds() {
     assert!(view(&s, layers).card.is_none());
     let menu = s.context_menu(ContextTarget::Bubble { id: color }).unwrap();
     assert!(menu.sections[0][0].is_heading());
-    assert_eq!(menu.sections[0][1..].iter().map(|i| i.selected).collect::<Vec<_>>(), [Some(false); 3], "a new ring is the circle alone");
-    s.dispatch(menu.sections[1][2].action.clone().unwrap()).unwrap();
+    assert_eq!(menu.sections[0][1..].iter().map(|i| i.enabled).collect::<Vec<_>>(), [false; 2], "nothing to undo or redo yet");
+    assert_eq!(menu.sections[1].iter().map(|i| i.selected).collect::<Vec<_>>(), [Some(false); 3], "a new ring is the circle alone");
+    s.dispatch(menu.sections[2][2].action.clone().unwrap()).unwrap();
     assert_eq!(view(&s, color).diameter, COLOR_RING_SIZES[2]);
     invoke(&mut s, CommandId::UndoWorkspace);
     assert_eq!(view(&s, color).diameter, COLOR_RING_SIZES[1]);

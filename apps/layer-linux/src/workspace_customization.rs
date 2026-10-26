@@ -1532,7 +1532,7 @@ impl Workspace {
         }
     }
 
-    pub(super) fn install_menu(
+    pub(crate) fn install_menu(
         self: &Rc<Self>,
         widget: &impl IsA<gtk::Widget>,
         target: ContextTarget,
@@ -1944,12 +1944,14 @@ impl Workspace {
 // Capture-phase recognition must yield to a more specific target or native
 // text editor. This also prevents the enclosing panel from stealing a tile hold.
 pub(super) fn owns_context(widget: &gtk::Widget, x: f64, y: f64) -> bool {
+    let inside = |target: &gtk::Widget| widget.compute_point(target, &gtk::graphene::Point::new(x as f32, y as f32))
+        .is_some_and(|p| target.contains(p.x() as f64, p.y() as f64));
     let mut child = widget.pick(x, y, gtk::PickFlags::DEFAULT);
     while let Some(current) = child {
         if &current == widget {
-            return true;
+            return inside(widget);
         }
-        if current.has_css_class("customizable-target")
+        if current.has_css_class("customizable-target") && inside(&current)
             || current.is::<gtk::Editable>()
             || current.is::<gtk::TextView>()
         {

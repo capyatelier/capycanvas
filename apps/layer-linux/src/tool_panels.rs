@@ -863,9 +863,6 @@ mod wheel {
     }
     impl WidgetImpl for Wheel {
         fn contains(&self, x: f64, y: f64) -> bool {
-            if !self.bare.get() {
-                return self.parent_contains(x, y);
-            }
             let (size, [left, top]) = self.obj().drawing_bounds();
             let radius = size * 0.5;
             (x as f32 - left - radius).hypot(y as f32 - top - radius) <= radius
@@ -1013,6 +1010,14 @@ glib::wrapper! {
         @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
 }
 const BARE_WHEEL: (i32, i32) = (160, 232);
+fn reset_gestures(widget: &gtk::Widget) {
+    let controllers = widget.observe_controllers();
+    for i in 0..controllers.n_items() {
+        if let Some(gesture) = controllers.item(i).and_downcast::<gtk::Gesture>() { gesture.reset(); }
+    }
+    let mut child = widget.first_child();
+    while let Some(widget) = child { child = widget.next_sibling(); reset_gestures(&widget); }
+}
 fn bare_stage(wheel: f32, hdr: bool) -> Option<(f32, f32, f32)> {
     let stage = ColorPanelLayout::stage_for_wheel(wheel)?;
     let layout = ColorPanelLayout::new(stage)?;
@@ -1129,6 +1134,66 @@ impl ColorWheel {
         });
         drag.connect_cancel(move |_, _| part.set(None));
         self.add_controller(drag);
+    }
+    fn connect_history(&self, workspace: &Rc<Workspace>) {
+        let touches = Rc::new(crate::color_touch::ColorTouches::default());
+        let pressed = Rc::new(RefCell::new(None::<Option<gtk::gdk::EventSequence>>));
+        let owner = Rc::downgrade(workspace);
+        let contact = |owner: &std::rc::Weak<Workspace>, phase| {
+            if let Some(w) = owner.upgrade() { w.dispatch(UiAction::ColorContact { phase }); }
+        };
+        let input = gtk::EventControllerLegacy::new();
+        input.set_propagation_phase(gtk::PropagationPhase::Capture);
+        input.connect_event(glib::clone!(#[weak(rename_to = wheel)] self, #[strong] touches, #[strong] pressed, #[strong] owner,
+            #[upgrade_or] glib::Propagation::Proceed,
+            move |_, event| {
+                use gtk::gdk::EventType;
+                let Some(w) = owner.upgrade() else { return glib::Propagation::Proceed };
+                let at = event.position().and_then(|(x, y)| crate::input::widget_point(&wheel, x, y)).map(|p| [p.x(), p.y()]);
+                let inside = at.is_some_and(|[x, y]| wheel.owns_point(x as f64, y as f64));
+                let primary = event.downcast_ref::<gtk::gdk::ButtonEvent>().is_some_and(|b| b.button() == gtk::gdk::BUTTON_PRIMARY);
+                let touch = crate::color_touch::ColorTouches::phase(event).map(|phase| (phase, event.event_sequence()));
+                let opened = pressed.borrow().clone();
+                let finger_down = touch.as_ref().is_some_and(|(phase, _)| *phase == layer_ui::ContactPhase::Down);
+                match (event.event_type(), touch, opened) {
+                    (EventType::ButtonPress, _, None) if primary && inside => {
+                        *pressed.borrow_mut() = Some(None);
+                        contact(&owner, layer_ui::ContactPhase::Down);
+                    }
+                    (_, Some((layer_ui::ContactPhase::Down, sequence)), None) if inside => {
+                        *pressed.borrow_mut() = Some(Some(sequence));
+                        contact(&owner, layer_ui::ContactPhase::Down);
+                    }
+                    (EventType::ButtonRelease, _, Some(None)) if primary => {
+                        pressed.borrow_mut().take();
+                        contact(&owner, layer_ui::ContactPhase::Up);
+                    }
+                    (_, Some((phase @ (layer_ui::ContactPhase::Up | layer_ui::ContactPhase::Cancel), sequence)), Some(Some(opened)))
+                        if sequence == opened =>
+                    {
+                        pressed.borrow_mut().take();
+                        contact(&owner, phase);
+                    }
+                    _ => {}
+                }
+                if !touches.forward(&w, wheel.upcast_ref(), event, at, inside) {
+                    return glib::Propagation::Proceed;
+                }
+                if finger_down {
+                    reset_gestures(wheel.upcast_ref());
+                }
+                glib::Propagation::Stop
+            }));
+        self.add_controller(input);
+        self.connect_unmap(move |wheel| {
+            if let Some(w) = owner.upgrade() { touches.cancel(&w, wheel.upcast_ref()); }
+            if pressed.borrow_mut().take().is_some() { contact(&owner, layer_ui::ContactPhase::Up); }
+        });
+    }
+    fn owns_point(&self, x: f64, y: f64) -> bool {
+        self.contains(x, y) && self.pick(x, y, gtk::PickFlags::DEFAULT).is_some_and(|picked| {
+            picked == *self.upcast_ref::<gtk::Widget>() || self.intensity().is_some_and(|i| picked == *i.upcast_ref::<gtk::Widget>())
+        })
     }
     fn stage_bounds(&self) -> (f32, [f32; 2]) {
         if let Some(layout) = self.imp().bubble_layout.get() { return (layout.stage, [0.; 2]); }
@@ -1343,6 +1408,8 @@ impl ColorPanel {
             let swap = swap.clone();
             move |_| swap()
         });
+        workspace.install_menu(&self.wheel, layer_ui::ContextTarget::ColorWheel);
+        self.wheel.connect_history(workspace);
         let workspace = Rc::downgrade(workspace);
         self.wheel.connect_pick(move |action| {
             if let Some(workspace) = workspace.upgrade() { workspace.dispatch(UiAction::Color { action }); }

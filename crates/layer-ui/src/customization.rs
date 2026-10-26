@@ -532,6 +532,7 @@ pub enum ContextTarget {
     Bubble { id: u32 },
     BubblePalettes { id: u32 },
     ColorSlot { slot: crate::ColorSlot },
+    ColorWheel,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -770,7 +771,7 @@ impl DockLayout {
     pub(crate) fn context_menu_localized_on(&self, target: ContextTarget, platform: Platform, localization: &Localizer) -> Result<ContextMenu, String> {
         let entry = ContextMenuItem::edit;
         let (title, sections) = match target {
-            ContextTarget::ToolVariants { .. } | ContextTarget::Bubble { .. } | ContextTarget::BubblePalettes { .. } | ContextTarget::ColorSlot { .. } => {
+            ContextTarget::ToolVariants { .. } | ContextTarget::Bubble { .. } | ContextTarget::BubblePalettes { .. } | ContextTarget::ColorSlot { .. } | ContextTarget::ColorWheel => {
                 return Err("Tool variations require session state".into());
             }
             ContextTarget::Header { id } => {

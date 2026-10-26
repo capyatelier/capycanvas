@@ -19,6 +19,7 @@ mod glass;
 mod histogram;
 mod color_editor;
 mod color_picker;
+mod color_touch;
 mod color_preview_raster;
 mod color_readout;
 mod new_drawing;

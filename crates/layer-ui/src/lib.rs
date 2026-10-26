@@ -1657,6 +1657,9 @@ pub enum UiAction {
         context: ColorEditContext,
         action: ColorAction,
     },
+    ColorContact {
+        phase: ContactPhase,
+    },
     SetToolSetting {
         id: String,
         value: f32,

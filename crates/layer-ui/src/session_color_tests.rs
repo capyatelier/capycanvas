@@ -1106,3 +1106,145 @@ fn color_slot_context_keeps_slot_identity_and_opens_shared_palettes() {
         }
     }
 }
+
+fn wheel_drag(s: &mut UiSession<Recorder>, points: &[[f32; 2]]) {
+    s.dispatch(UiAction::ColorContact { phase: ContactPhase::Down }).unwrap();
+    for &point in points {
+        s.dispatch(UiAction::Color { action: ColorAction::PickWheel { part: ColorWheelPart::Field, point, size: 200. } }).unwrap();
+    }
+    s.dispatch(UiAction::ColorContact { phase: ContactPhase::Up }).unwrap();
+}
+
+fn color_touch(s: &mut UiSession<Recorder>, id: u64, phase: ContactPhase, position: [f32; 2], ms: u64) -> InputReply {
+    s.input(UiInput::ColorTouch { surface: 7, id, phase, position, time_ns: ms * 1_000_000 }).unwrap()
+}
+
+fn color_tap(s: &mut UiSession<Recorder>, fingers: u64, travel: f32) -> bool {
+    let handled = (0..fingers).map(|id| color_touch(s, id, ContactPhase::Down, [40. * id as f32, 0.], 1 + id).handled).last().unwrap();
+    for id in 0..fingers {
+        color_touch(s, id, ContactPhase::Up, [40. * id as f32 + travel, 0.], 60 + id);
+    }
+    handled
+}
+
+#[test]
+fn each_paint_undoes_whole_wheel_contacts_and_swaps_carry_their_history() {
+    let mut s = session(Platform::Gtk);
+    let original = s.state.colors.clone();
+    wheel_drag(&mut s, &[[140., 70.], [150., 80.], [160., 90.]]);
+    let dragged = s.state.colors.foreground;
+    s.dispatch(UiAction::Color { action: ColorAction::Select { slot: ColorSlot::Background } }).unwrap();
+    wheel_drag(&mut s, &[[60., 120.]]);
+    let secondary = s.state.colors.background;
+    s.dispatch(UiAction::Color { action: ColorAction::Swap }).unwrap();
+    assert_eq!((s.state.colors.foreground, s.state.colors.background), (secondary, dragged));
+
+    s.dispatch(UiAction::Color { action: ColorAction::Undo }).unwrap();
+    assert_eq!((s.state.colors.foreground, s.state.colors.background), (secondary, original.foreground));
+    assert_eq!(s.state.brush.color, s.state.colors.preview(original.foreground));
+    s.dispatch(UiAction::Color { action: ColorAction::Undo }).unwrap();
+    assert_eq!(s.state.colors.background, original.foreground);
+
+    s.dispatch(UiAction::Color { action: ColorAction::Select { slot: ColorSlot::Foreground } }).unwrap();
+    s.dispatch(UiAction::Color { action: ColorAction::Undo }).unwrap();
+    assert_eq!(s.state.colors.foreground, original.background);
+    s.dispatch(UiAction::Color { action: ColorAction::Redo }).unwrap();
+    assert_eq!(s.state.colors.foreground, secondary);
+    assert_eq!(s.state.colors.background, original.foreground);
+}
+
+#[test]
+fn cancelled_wheel_contacts_restore_the_paint_without_a_step() {
+    let mut s = session(Platform::Gtk);
+    s.dispatch(UiAction::Color { action: ColorAction::Select { slot: ColorSlot::Transparent } }).unwrap();
+    let original = s.state.colors.clone();
+    s.dispatch(UiAction::ColorContact { phase: ContactPhase::Down }).unwrap();
+    s.dispatch(UiAction::Color { action: ColorAction::PickWheel { part: ColorWheelPart::Field, point: [140., 70.], size: 200. } }).unwrap();
+    assert_ne!(s.state.colors, original);
+    s.dispatch(UiAction::ColorContact { phase: ContactPhase::Cancel }).unwrap();
+    assert_eq!(s.state.colors, original);
+    assert_eq!(s.state.brush.color, s.state.colors.preview(original.definition()));
+    s.dispatch(UiAction::Color { action: ColorAction::Undo }).unwrap();
+    assert_eq!(s.state.colors, original);
+    let menu = s.context_menu(ContextTarget::ColorWheel).unwrap();
+    assert!(menu.sections.iter().flatten().all(|item| !item.enabled));
+}
+
+#[test]
+fn two_and_three_finger_taps_on_a_wheel_follow_the_canvas_undo_bindings() {
+    let mut s = session(Platform::Gtk);
+    let original = s.state.colors.foreground;
+    wheel_drag(&mut s, &[[140., 70.]]);
+    let picked = s.state.colors.foreground;
+    assert!(color_tap(&mut s, 2, 0.));
+    assert_eq!(s.state.colors.foreground, original);
+    assert!(color_tap(&mut s, 3, 0.));
+    assert_eq!(s.state.colors.foreground, picked);
+    assert!(!color_tap(&mut s, 1, 0.));
+    color_tap(&mut s, 2, 40.);
+    assert_eq!(s.state.colors.foreground, picked, "moving fingers are not a tap");
+
+    s.dispatch(UiAction::ColorContact { phase: ContactPhase::Down }).unwrap();
+    s.dispatch(UiAction::Color { action: ColorAction::PickWheel { part: ColorWheelPart::Field, point: [60., 120.], size: 200. } }).unwrap();
+    assert!(!color_touch(&mut s, 0, ContactPhase::Down, [0., 0.], 1).handled);
+    assert!(color_touch(&mut s, 1, ContactPhase::Down, [40., 0.], 2).handled);
+    assert_eq!(s.state.colors.foreground, picked, "a second finger retires the pick");
+    s.dispatch(UiAction::ColorContact { phase: ContactPhase::Up }).unwrap();
+    color_touch(&mut s, 0, ContactPhase::Up, [0., 0.], 50);
+    color_touch(&mut s, 1, ContactPhase::Up, [40., 0.], 51);
+    assert_eq!(s.state.colors.foreground, original);
+
+    s.state.settings.gestures.insert("touch.tap.2".into(), "command.ZenMode".into());
+    color_tap(&mut s, 2, 0.);
+    assert_eq!(s.state.colors.foreground, original);
+    assert!(!s.state.workspace.zen_mode);
+}
+
+#[test]
+fn mask_paints_keep_a_separate_history_that_restarts_with_each_mask_edit() {
+    let mut s = session(Platform::Gtk);
+    let gray = s.state.colors.foreground;
+    wheel_drag(&mut s, &[[140., 70.]]);
+    let artwork = s.state.colors.clone();
+    invoke(&mut s, CommandId::QuickMask);
+    let mask = s.selection_masks.colors.clone();
+    let menu = |s: &UiSession<Recorder>| s.context_menu(ContextTarget::ColorWheel).unwrap().sections.concat();
+    assert!(menu(&s).iter().all(|item| !item.enabled));
+    invoke(&mut s, CommandId::ResetMaskColors);
+    assert!(menu(&s)[0].enabled);
+    let undo = menu(&s)[0].action.clone().unwrap();
+    s.dispatch(undo.clone()).unwrap();
+    assert_eq!(s.selection_masks.colors.foreground, mask.foreground);
+    assert_eq!(s.state.colors, artwork);
+    s.dispatch(UiAction::Color { action: ColorAction::Redo }).unwrap();
+    invoke(&mut s, CommandId::SwapMaskColors);
+    s.dispatch(UiAction::Color { action: ColorAction::Select { slot: ColorSlot::Background } }).unwrap();
+    let swapped = s.selection_masks.colors.clone();
+    assert_eq!(s.dispatch(undo).unwrap().regions, 0, "a menu built for another paint does nothing");
+    assert_eq!(s.selection_masks.colors, swapped);
+    s.dispatch(UiAction::Color { action: ColorAction::Undo }).unwrap();
+    assert_eq!(s.selection_masks.colors.background, mask.foreground);
+    invoke(&mut s, CommandId::QuickMask);
+    assert!(s.selection_masks.target().is_none());
+    s.dispatch(UiAction::Color { action: ColorAction::Undo }).unwrap();
+    assert_eq!(s.state.colors.foreground, gray);
+    invoke(&mut s, CommandId::QuickMask);
+    assert!(menu(&s).iter().all(|item| !item.enabled));
+}
+
+#[test]
+fn a_swap_during_a_wheel_contact_keeps_each_step_with_its_paint() {
+    let mut s = session(Platform::Gtk);
+    let original = s.state.colors.clone();
+    s.dispatch(UiAction::ColorContact { phase: ContactPhase::Down }).unwrap();
+    s.dispatch(UiAction::Color { action: ColorAction::PickWheel { part: ColorWheelPart::Field, point: [140., 70.], size: 200. } }).unwrap();
+    let picked = s.state.colors.foreground;
+    s.dispatch(UiAction::Color { action: ColorAction::Swap }).unwrap();
+    s.dispatch(UiAction::ColorContact { phase: ContactPhase::Up }).unwrap();
+    assert_eq!((s.state.colors.foreground, s.state.colors.background), (original.background, picked));
+    s.dispatch(UiAction::Color { action: ColorAction::Undo }).unwrap();
+    assert_eq!(s.state.colors.foreground, original.background, "the white paint never changed");
+    s.dispatch(UiAction::Color { action: ColorAction::Select { slot: ColorSlot::Background } }).unwrap();
+    s.dispatch(UiAction::Color { action: ColorAction::Undo }).unwrap();
+    assert_eq!(s.state.colors.background, original.foreground);
+}

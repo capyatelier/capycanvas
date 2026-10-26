@@ -31,6 +31,29 @@ Color, Palettes and Swap. A secondary press, touch/pen hold or keyboard menu
 activation targets that slot. The enclosing panel's customization menu keeps
 its separate target.
 
+### Color undo
+
+Primary and secondary each keep their own undo history of up to 50 steps, which
+lasts until the drawing closes and is not saved. Undo and redo act on the paint
+in front, also while transparency is selected. A swap carries each history with
+its color. Every change counts once: a wheel or intensity contact from press to
+release, a swatch, palette or recent color, Edit Color's Use Color, a sample or
+a shortcut. A cancelled contact restores the paints it started with and adds
+nothing. Mask editing keeps a separate history that starts again with each mask
+edit.
+
+Two- and three-finger taps on the wheel, out to the hue ring's outer edge, or on
+the intensity arc follow the canvas tap bindings: by default two fingers undo
+and three redo. Hosts forward these touches through `UiInput::ColorTouch`;
+shared Rust recognizes the tap with the canvas tap rules, and its second finger
+cancels a pick the first finger started. Hosts bracket each press with
+`UiAction::ColorContact`. A secondary press or the keyboard menu key in the same
+area opens **Undo color change** and **Redo color change**
+(`ContextTarget::ColorWheel`); outside it, the panel keeps its customization
+menu. Shared code lives in [`color/history.rs`](../../crates/layer-ui/src/color/history.rs)
+and [`color_history_session.rs`](../../crates/layer-ui/src/color_history_session.rs).
+Only GTK presents it so far.
+
 GTK prepares the field and managed hue ring on one worker with one replaceable
 pending request. Panel resizing scales only the retained hue ring and field;
 markers, readout text and buttons follow the current layout on every frame.

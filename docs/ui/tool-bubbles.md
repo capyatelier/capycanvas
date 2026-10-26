@@ -74,8 +74,9 @@ Bubbles move without a hold: drag the face of a tool bubble or Brush controls,
 the undo and redo capsule, the folded Layers squircle, an open card anywhere but
 its layer rows and controls that drag (sliders, number fields, curves), or the
 color plate's rim. Two fingers move any
-bubble from anywhere on it, the wheel included; while one finger is on a bubble,
-the second may land up to 90 px outside it. Pinching the color ring sets its
+bubble from anywhere on it, the wheel included, once they travel past the drag
+threshold; while one finger is on a bubble, the second may land up to 90 px
+outside it. Pinching the color ring sets its
 size between 128 and 352 px in one undo step. A finger on the hue ring or disc
 picks a color at once; once it moves more than a radius outside the wheel, the
 ring lets go of the pick, restores the color and follows the finger by the
@@ -211,6 +212,11 @@ apart:
   below; the arrows switch palettes and the name lists them with **Edit
   palettes…**. Picking a color or a contact elsewhere closes it. No bead
   overlaps another at any size or turn.
+
+Two- and three-finger taps on the ring undo and redo the paint in front, as on
+the Color panel ([color undo](color-picker.md#color-undo)); every finger must
+land on the bubble. The hold menu starts with **Undo color change** and **Redo
+color change**.
 
 A new ring is the Medium circle alone. The hold menu turns **Recent colors**,
 **Palette** and **Primary and secondary** on or off and chooses Small (136 px),

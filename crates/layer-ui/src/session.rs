@@ -38,6 +38,8 @@ mod targeted_curve;
 mod navigation;
 #[path = "held_actions.rs"]
 mod held_actions;
+#[path = "color_history_session.rs"]
+mod color_history_session;
 use held_actions::{ERASER_END, merge_change};
 #[path = "session_bubbles.rs"]
 mod session_bubbles;
@@ -320,6 +322,7 @@ pub struct UiSession<R: CanvasRenderer> {
     floating_resize: Option<FloatingResize>,
     workspace_drag: Option<WorkspaceDrag>,
     bubble_state: session_bubbles::Bubbles,
+    color_history: color_history_session::ColorHistories,
     zen_peek: zen_peek::ZenPeek,
     workspace_tab_drag: Option<crate::tab_drag::TabDrag>,
     workspace_drag_tabs: Vec<TabHit>,
@@ -551,6 +554,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             floating_resize: None,
             workspace_drag: None,
             bubble_state: Default::default(),
+            color_history: Default::default(),
             zen_peek: Default::default(),
             workspace_tab_drag: None,
             workspace_drag_tabs: Vec::new(),
@@ -750,6 +754,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let mut menu = match target {
             ContextTarget::ToolVariants { anchor } => self.tool_variants_menu(anchor),
             ContextTarget::ColorSlot { slot } => self.color_slot_menu(slot),
+            ContextTarget::ColorWheel => self.color_wheel_menu(),
             ContextTarget::Bubble { id } => self.bubble_menu(id),
             ContextTarget::BubblePalettes { id } => self.bubble_palette_menu(id),
             ContextTarget::ZenMode => self.state.workspace.layout.header.capy_context_menu(self.state.workspace.zen_mode, self.localization()),
@@ -1144,7 +1149,13 @@ impl<R: CanvasRenderer> UiSession<R> {
         if matches!(input, UiInput::LayerTouch { .. }) {
             return self.layer_touch_input(input);
         }
-        if matches!(input, UiInput::Blur) { self.layer_interaction.touches = Default::default(); }
+        if matches!(input, UiInput::ColorTouch { .. }) {
+            return self.color_touch_input(input);
+        }
+        if matches!(input, UiInput::Blur) {
+            self.layer_interaction.touches = Default::default();
+            self.forget_color_touches();
+        }
         if let UiInput::Pointer {id,kind,phase,position,..}=&mut input
             && !position.iter().all(|v|v.is_finite()) {
             let previous=self.interaction.pointer.filter(|p|p.id==*id && p.kind==*kind).map(|p|p.position)
@@ -1213,7 +1224,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 reply.change = self.changed(if preview { regions::COLOR_PREVIEW } else { 0 }, true);
             }
             UiInput::ColorPickerHold { .. } => (),
-            UiInput::LayerTouch { .. } => unreachable!(),
+            UiInput::LayerTouch { .. } | UiInput::ColorTouch { .. } => unreachable!(),
             UiInput::Chrome {
                 event,
                 facts,
@@ -2831,6 +2842,15 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub fn dispatch(&mut self, action: UiAction) -> Result<UiChange, String> {
+        let Some(swap) = color_history_session::paint_edit(&action).filter(|_| !self.defers(&action)) else {
+            return self.dispatch_action(action);
+        };
+        let before = self.paint_before();
+        let result = self.dispatch_action(action);
+        self.record_paint(before, swap && result.is_ok());
+        result
+    }
+    fn dispatch_action(&mut self, action: UiAction) -> Result<UiChange, String> {
         if let UiAction::PenInput{device,sample}=action {
             if device.key.is_empty() || sample.is_some_and(|v|v.iter().any(|n|!n.is_finite()) || v[..7].iter().any(|n|!(*n as f32).is_finite()) || v[7]<0. || v[7]>=u64::MAX as f64 || v[8]<0. || v[8]>4. || v[8].fract()!=0.) {return Err("Invalid pen input".into());}
             self.register_pen_device(&device);
@@ -2895,6 +2915,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             | BubbleAction::Intensity { phase: ContactPhase::Move | ContactPhase::Up | ContactPhase::Cancel, .. }
         ) } = action {
             return self.bubble_action(contact);
+        }
+        if let UiAction::ColorContact { phase: phase @ (ContactPhase::Move | ContactPhase::Up | ContactPhase::Cancel) } = action {
+            let (regions, wake) = self.color_contact(phase)?;
+            return Ok(self.changed(regions, wake));
         }
         if self.rendering_suspended && !continuing_effect_gesture && !Self::action_without_renderer(&action) {
             return Err(renderer_lifecycle::PAINTING_UNAVAILABLE.into());
@@ -3623,6 +3647,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
                 (affected, false)
             }
+            UiAction::Color { action: ColorAction::Undo } => self.step_paint(false)?,
+            UiAction::Color { action: ColorAction::Redo } => self.step_paint(true)?,
+            UiAction::ColorContact { phase } => self.color_contact(phase)?,
             UiAction::Color { action: ColorAction::EditorMemory { memory } } => {
                 self.state.colors.apply(ColorAction::EditorMemory { memory: memory.clone() })
                     .and_then(|()| self.selection_masks.colors.apply(ColorAction::EditorMemory { memory }))
@@ -4813,7 +4840,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.state.color_picker.preview = Some(color);
                 changed |= regions::COLOR_PREVIEW;
             } else if !self.eyedropper.preview_only {
+                let before = self.paint_before();
                 self.state.colors.set_color(color)?;
+                self.record_paint(before, false);
                 self.state.brush.color = self.state.colors.preview(self.state.colors.definition());
                 self.apply_brush()?;
                 changed |= regions::BRUSH;
@@ -4830,6 +4859,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         if self.eyedropper.calibration.is_none() && self.eyedropper.picking.finishing && !self.eyedropper.busy() {
             if let Some(color) = self.eyedropper.sample {
+                let before = self.paint_before();
                 if self.eyedropper.editor {
                     self.state.color_picker.picked = Some(color);
                 } else if self.selection_masks.target().is_some() {
@@ -4839,6 +4869,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     self.state.brush.color = self.state.colors.preview(self.state.colors.definition());
                     self.apply_brush()?;
                 }
+                self.record_paint(before, false);
             }
             self.cancel_picker();
             changed |= regions::BRUSH | regions::COMMANDS | regions::CUSTOMIZATION | regions::COLOR_PREVIEW;

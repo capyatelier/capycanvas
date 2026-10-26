@@ -78,7 +78,6 @@ struct RingContact {
 struct WheelContact {
     id: u32,
     context: ColorEditContext,
-    before: layer_core::color::RgbColor,
     part: Option<ColorWheelPart>,
     intensity: Option<f32>,
 }
@@ -276,7 +275,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         if state.chooser.is_some_and(|c| layout.get(c.id).is_none()) {
             state.chooser = None;
         }
-        if state.wheel.is_some_and(|c| layout.get(c.id).is_none()) {
+        let dropped_wheel = state.wheel.is_some_and(|c| layout.get(c.id).is_none());
+        if dropped_wheel {
             state.wheel = None;
         }
         state.scroll.retain(|(id, _)| layout.get(*id).is_some());
@@ -286,6 +286,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         let grown = self.bubble_growth();
         self.bubble_state.desk.grow(grown);
+        if dropped_wheel {
+            self.end_color_contact();
+        }
     }
 
     fn bubble_growth(&self) -> Vec<(u32, Vec<Shape>)> {
@@ -962,22 +965,20 @@ impl<R: CanvasRenderer> UiSession<R> {
             if self.bubble(id)?.source.kind() != BubbleKind::Color { return Err("This bubble has no color wheel".into()); }
             let colors = if self.selection_masks.target().is_some() { &self.selection_masks.colors } else { &self.state.colors };
             if part.is_none() && (self.color_bubble(self.bubble(id)?).intensity.is_none() || colors.slot == ColorSlot::Transparent) { return Ok(UiChange::default()); }
-            self.bubble_state.wheel = Some(WheelContact { id, context: self.color_wheel_context(), before: colors.definition(),
-                intensity: colors.hdr_depth().is_float().then(|| colors.hdr_intensity()), part });
+            let wheel = WheelContact { id, context: self.color_wheel_context(),
+                intensity: colors.hdr_depth().is_float().then(|| colors.hdr_intensity()), part };
+            self.dispatch(UiAction::ColorContact { phase })?;
+            self.bubble_state.wheel = Some(wheel);
         }
         let Some(wheel) = self.bubble_state.wheel.filter(|wheel| wheel.id == id) else { return Ok(UiChange::default()); };
-        if wheel.context != self.color_wheel_context() {
+        let phase = if wheel.context == self.color_wheel_context() { phase } else { ContactPhase::Up };
+        if matches!(phase, ContactPhase::Cancel | ContactPhase::Up) {
             self.bubble_state.wheel = None;
-            return Ok(self.changed(regions::BUBBLES, false));
+            let mut change = self.dispatch(UiAction::ColorContact { phase })?;
+            change.regions |= regions::BUBBLES;
+            return Ok(change);
         }
-        if matches!(phase, ContactPhase::Cancel | ContactPhase::Up) { self.bubble_state.wheel = None; }
-        if phase == ContactPhase::Up { return Ok(self.changed(regions::BUBBLES, false)); }
-        let action = if phase == ContactPhase::Cancel {
-            match wheel.intensity {
-                Some(stops) => ColorAction::SetSlotIntensity { slot: wheel.context.paint_slot, color: wheel.before, stops },
-                None => ColorAction::Definition { color: wheel.before },
-            }
-        } else if let Some(part) = wheel.part {
+        let action = if let Some(part) = wheel.part {
             let size = self.color_bubble(self.bubble(id)?).wheel_size();
             ColorAction::PickWheel { part, point: position.map(|v| v + size / 2.), size }
         } else {
@@ -1337,6 +1338,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         match bubble.source {
             BubbleSource::Control { control: ToolbarControl::Brush { id: brush } } => sections.extend(self.ring_menu(brush)),
             BubbleSource::Control { control: ToolbarControl::Color } => {
+                sections.push(self.paint_history_items());
                 sections.push(vec![
                     options(MessageId::WORKSPACE_BUBBLE_RECENT_COLORS, o.recent, BubbleOption::Recent),
                     options(MessageId::WORKSPACE_BUBBLE_PALETTE, o.palette, BubbleOption::Palette),

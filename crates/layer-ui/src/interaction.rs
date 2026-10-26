@@ -339,6 +339,13 @@ pub enum UiInput {
         row: Option<u64>,
         time_ns: u64,
     },
+    ColorTouch {
+        surface: u64,
+        id: u64,
+        phase: ContactPhase,
+        position: [f32; 2],
+        time_ns: u64,
+    },
     PenButton {
         button: PenButton,
         pressed: bool,
