@@ -54,6 +54,21 @@ jobs:
             'tool-bubbles:default', 'tool-bubbles:light-mouse', 'tool-bubbles:SlidersOnly', 'header:zen'
           )
           foreach ($name in $names) {
+            if ($name -like 'idle-brush:*') {
+              $scale = $env:CAPY_WAIT_SCALE
+              try {
+                $env:CAPY_WAIT_SCALE = $null
+                $idle = (Resolve-Path apps/layer-windows/scripts/exercise-idle-brush.ps1).Path
+                $theme = if ($name -eq 'idle-brush:light') { 'light' } else { 'dark' }
+                & $desktop -Script $idle -Parameters @{Executable=$executable; Theme=$theme} -TimeoutSeconds 1320
+              } catch {
+                $failed.Add($name)
+                Write-Warning "$name`: $_"
+              } finally {
+                $env:CAPY_WAIT_SCALE = $scale
+              }
+              continue
+            }
             $output = Join-Path $env:GITHUB_WORKSPACE ('artifacts/windows/readiness/' + $name.Replace(':', '-'))
             try {
               & $desktop -Script $runner -Parameters @{Executable=$executable; Output=$output; Name=$name} -TimeoutSeconds 1320

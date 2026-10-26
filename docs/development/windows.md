@@ -1111,7 +1111,10 @@ desktop so the IME candidate window remains visible in the evidence.
 Run `gh workflow run windows-readiness.yml -f source_ref=<commit-sha>` for native
 x64 WARP fixtures on a hosted Windows VM and the Linux development-profile test.
 The manual workflow checks functional behavior; it does not qualify hardware
-rendering or performance targets.
+rendering or performance targets. Idle-brush journeys retain their default
+readiness deadlines; other VM fixtures use the runner's normal wait scale.
+Run `gh workflow run release-checks.yml -f windows-only=true -f source_ref=<commit-sha>`
+to run the existing x64 and ARM64 release build, test and Clippy jobs directly.
 
 The menu automation helper matches current UIA properties after walking the
 owned window; WinUI can omit visible controls from property-filtered queries.

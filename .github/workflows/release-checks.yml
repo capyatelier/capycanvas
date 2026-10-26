@@ -5,6 +5,26 @@ on:
       rust-version:
         required: true
         type: string
+      windows-only:
+        default: false
+        type: boolean
+      source_ref:
+        default: ''
+        type: string
+  workflow_dispatch:
+    inputs:
+      rust-version:
+        default: '1.99.0'
+        required: true
+        type: string
+      windows-only:
+        description: Run only the existing x64 and ARM64 Windows release checks
+        default: true
+        type: boolean
+      source_ref:
+        description: Full source commit SHA (defaults to this workflow commit)
+        required: false
+        type: string
 permissions:
   contents: read
 defaults:
@@ -15,11 +35,13 @@ env:
   RUST_VERSION: ${{ inputs.rust-version }}
 jobs:
   ci:
+    if: ${{ !inputs.windows-only }}
     uses: ./.github/workflows/ci.yml
     with:
       rust-version: ${{ inputs.rust-version }}
 
   scripts:
+    if: ${{ !inputs.windows-only }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -51,6 +73,7 @@ jobs:
           if-no-files-found: error
 
   renderer:
+    if: ${{ !inputs.windows-only }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
@@ -150,6 +173,7 @@ jobs:
           if-no-files-found: error
 
   prediction:
+    if: ${{ !inputs.windows-only }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -169,6 +193,7 @@ jobs:
           if-no-files-found: warn
 
   arch:
+    if: ${{ !inputs.windows-only }}
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     container: archlinux:base-devel
@@ -260,6 +285,9 @@ jobs:
       RUST_BACKTRACE: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.source_ref || github.sha }}
+      - run: git rev-parse HEAD
       - run: |
           rustup toolchain install $env:RUST_VERSION --profile minimal --component clippy --target ${{ matrix.target }}
           rustup default $env:RUST_VERSION
@@ -310,6 +338,7 @@ jobs:
           if-no-files-found: warn
 
   apple:
+    if: ${{ !inputs.windows-only }}
     runs-on: macos-26
     timeout-minutes: 120
     steps:
