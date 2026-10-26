@@ -219,8 +219,21 @@ function Settled-Capture([string]$Name){Start-Sleep -Milliseconds 450;Capture $N
 function Menu-Item([string]$Name){Control $Name -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)}
 function Hold-Bubble([long]$Id){$p=Center $Id;[CapyRowPointer]::Down($Device,$p.x,$p.y);Wait-Until {$null -ne (Find 'Put back' -Name -Type ([System.Windows.Automation.ControlType]::MenuItem))} 'Hold did not open bubble options';[CapyRowPointer]::Up()}
 function Header-Entries {@((Model).header.model.zones|ForEach-Object {$_})}
-function Header-Source([string]$Kind,[string]$Value){
-    @(Header-Entries|Where-Object {$_.item.kind -eq 'tool' -and $_.item.control.kind -eq $Kind -and (!$Value -or $_.item.control.command -eq $Value -or $_.item.control.panel -eq $Value -or $_.item.control.slot -eq $Value -or [string]$_.item.control.id -eq $Value)}|Where-Object {Find ('header-item-'+$_.id) -Visible})[0]
+function Header-Source([string]$Kind,[string]$Value,[switch]$IncludeHidden){
+    @(Header-Entries|Where-Object {$_.item.kind -eq 'tool' -and $_.item.control.kind -eq $Kind -and (!$Value -or $_.item.control.command -eq $Value -or $_.item.control.panel -eq $Value -or $_.item.control.slot -eq $Value -or [string]$_.item.control.id -eq $Value)}|Where-Object {$IncludeHidden -or (Find ('header-item-'+$_.id) -Visible)})[0]
+}
+function Activate-HeaderSource([string]$Kind,[string]$Value){
+    $source=Header-Source $Kind $Value -IncludeHidden
+    if(!$source){throw "Missing authored source $Kind/$Value"}
+    if(Find ('header-item-'+$source.id) -Visible){Tap (At ('header-item-'+$source.id));return}
+    $presentation=(Control 'title-bar').Current.ItemStatus|ConvertFrom-Json
+    foreach($zone in 0..2){
+        if($source.id -notin $presentation.geometry.hidden[$zone]){continue}
+        Invoke ('header-overflow-'+$zone);Invoke ('header-overflow-item-'+$source.id)
+        Wait-Until {!(Find ('header-overflow-item-'+$source.id) -Visible)} 'Header source activation left its overflow menu open'
+        return
+    }
+    throw "Authored source $Kind/$Value has no native activation route"
 }
 function Ensure-Sources{
     & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Window'
@@ -276,6 +289,17 @@ function Slider-Toggle([long]$Id,[bool]$Expected){
     if(($row.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Current.ToggleState -eq [System.Windows.Automation.ToggleState]::On) -ne $Expected -or !(Find 'Put back' -Name -Visible)){throw 'Global slider toggle did not keep and refresh its native menu'}
     Escape;Wait-Until {!(Find 'menu-show-sliders' -Visible)} 'Retained slider menu did not dismiss'
 }
+function Write-MediumDragReceipt([string]$Group,[string]$Stage,$From,$To){
+    $receipt=@{group=$Group;stage=$Stage;utc=[DateTime]::UtcNow.ToString('o');from=$From;to=$To}
+    try{
+        $m=Model;$tile=Find ('brush-set-'+$Group);$current=$tile.Current;$bounds=$current.BoundingRectangle
+        $receipt.tile=@{id=$current.AutomationId;name=$current.Name;bounds=@($bounds.X,$bounds.Y,$bounds.Width,$bounds.Height);runtime_id=$tile.GetRuntimeId();offscreen=$current.IsOffscreen}
+        $receipt.preset=$m.state.brush.preset;$receipt.workspace=$m.windows_workspace.id;$receipt.camera=$m.state.camera
+        $receipt.chrome=(Find 'title-bar').Current.HelpText;$receipt.bubbles=@($m.bubbles|ForEach-Object {$_.view.id})
+        $receipt.source=Input-Trace $From.x $From.y;$receipt.drop=Input-Trace $To.x $To.y
+    }catch{$receipt.diagnostic_error=$_.Exception.Message}
+    $receipt|ConvertTo-Json -Depth 12 -Compress|Add-Content -LiteralPath (Join-Path $run ('medium-drag-'+$Group+'.jsonl')) -Encoding UTF8
+}
 function Slider-Medium([string]$Group,[double]$X,[double]$Y){
     $window=@((Model).application_menus|Where-Object id -eq 'window')[0].model
     $choice=@($window.sections|ForEach-Object {$_}|Where-Object {$_.action.type -eq 'customize' -and $_.action.action.type -eq 'set_panel_visible' -and $_.action.action.panel -eq 'brush_sets'})
@@ -287,8 +311,12 @@ function Slider-Medium([string]$Group,[double]$X,[double]$Y){
         Wait-Until {!(Find $choice[0].label -Name -Type ([System.Windows.Automation.ControlType]::MenuItem) -Visible) -and @((Model).layout.groups|Where-Object active -eq 'brush_sets').Count -eq 1} 'Brush sets panel did not appear and dismiss its menu'
     }
     $tileId='brush-set-'+$Group;$tile=Reveal $tileId
-    $ids=@(Packets|ForEach-Object {$_.view.id});$from=At $tileId;Drag $from (Screen $X $Y)
-    Wait-Until {@(Packets|Where-Object {$_.view.id -notin $ids}).Count -eq 1} "Native $Group source did not tear out"
+    $ids=@(Packets|ForEach-Object {$_.view.id});$from=At $tileId;$to=Screen $X $Y
+    Write-MediumDragReceipt $Group 'before' $from $to
+    try{
+        Drag $from $to
+        Wait-Until {@(Packets|Where-Object {$_.view.id -notin $ids}).Count -eq 1} "Native $Group source did not tear out"
+    }finally{Write-MediumDragReceipt $Group 'after' $from $to}
     $id=@(Packets|Where-Object {$_.view.id -notin $ids})[0].view.id
     Wait-Until {$null -ne (Find "tool-bubble-$id" -Visible)} "$Group bubble has no arranged native face"
     if((View $id).source.kind -ne 'medium' -or (View $id).source.group -ne $Group){throw "Native $Group tear-out used a different source"}
@@ -370,7 +398,7 @@ function Invoke-SliderChecks{
     $point=Center $added;[CapyRowPointer]::RightClick($point.x,$point.y);(Menu-Item 'Put back').GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
     Wait-Until {$null -eq (Packet $added)} 'New slider fixture bubble did not put back'
     foreach($swap in 1..2){$null=Slider-Menu $controls $false;(Menu-Item 'Swap sliders').GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle();Wait-Until {(View $controls).options.swap -eq ($swap -eq 1)} 'Independent native swap option did not publish';if((Model).state.workspace.layout.bubbles.show_sliders -ne $false){throw 'Per-source swap reset the global slider preference'};Escape}
-    $source=Header-Source 'command' 'lasso';Tap (At ('header-item-'+$source.id));Wait-Until {(Model).state.layer_tools.tool -eq 'lasso'} 'Native Lasso header source did not activate'
+    Activate-HeaderSource 'command' 'lasso';Wait-Until {(Model).state.layer_tools.tool -eq 'lasso'} 'Native Lasso header source did not activate'
     Tap (Center $brush);Wait-Until {(View $brush).selected} 'Hidden-slider contact did not select its brush'
     if(@((View $brush).rings).Count -or (View $medium).selected){throw 'Hidden-slider selection reopened sliders or selected the other menu source'}
     $disabled=Slider-Layout;Slider-Toggle $medium $true;Slider-Menus $ids $true
@@ -413,8 +441,7 @@ function Assert-BlenderCellSettings($Settings,[string]$CellId,[string[]]$Primary
     foreach($value in @($n.log_offset,$spread.numeric.log_offset)){if($null -eq $value -or [double]::IsNaN($value) -or [double]::IsInfinity($value)){throw 'Blender logarithmic metadata is not finite'}}
 }
 function Blender-Select([int]$Preset){
-    $source=Header-Source 'brush' ([string]$Preset);if(!$source){throw 'Blender fixture lost its authored native brush source'}
-    Tap (At ('header-item-'+$source.id))
+    Activate-HeaderSource 'brush' ([string]$Preset)
     Wait-Until {(Model).state.brush.preset -eq $Preset -and (Model).brush_ready} 'Native brush source did not prepare its requested preset'
 }
 function Blender-Field([string]$Id){

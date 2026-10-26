@@ -1,5 +1,6 @@
-param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light','mix-dark','mix-light')][string]$Theme='dark')
+param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light','mix-dark','mix-light','transform-dark','transform-light')][string]$Theme='dark')
 $ErrorActionPreference='Stop'
+$transformOnly=$Theme.StartsWith('transform-');if($transformOnly){$Theme=$Theme.Substring(10)}
 $mixOnly=$Theme.StartsWith('mix-');if($mixOnly){$Theme=$Theme.Substring(4)}
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 $CapyWaitSeconds=45
@@ -9,7 +10,7 @@ $Executable=(Resolve-Path -LiteralPath $Executable).Path
 $run=Join-Path $repo ('artifacts/windows/photo-tools/'+[Guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($run)|Out-Null
 $CapyTraceDirectory=$run
-$checks=[ordered]@{}
+$checks=[ordered]@{scope=$(if($transformOnly){'transform tail'}elseif($mixOnly){'Mixing only'}else{'all photo tools'})}
 $CapyPopups=$true
 function Visible([string]$Id){$item=Find $Id;if($item -and !$item.Current.IsOffscreen){$item}}
 function Bar {Visible 'canvas-action-bar'}
@@ -220,6 +221,61 @@ function Check-TransformFootprint{
  $checks.distort_near_line_last_valid_backout_apply_paint_history_reopen='passed'
 }
 
+function Check-PhotoTransforms{
+ $null=Tool 'brush'
+ Shortcut @(0x11) 0x54
+ Wait-Until {(Model).state.layer_tools.tool -eq 'transform' -and (Bar)} 'Ctrl+T did not start a transform' 10
+ $modeId=@((Model).state.canvas_bar.items|Where-Object {$_.option.Choice.segmented})[0].option.Choice.id
+ $warp=[array]::IndexOf(@((Choice $modeId).items|ForEach-Object label),'Warp')
+ Tap ("canvas-bar-choice-$modeId-$warp") 'touch'
+ Wait-Until {@((Choice $modeId).items)[$warp].selected -and (Visible 'canvas-bar-menu-warp_grid')} 'Warp did not offer its Grid menu' 10
+ $grid=Find 'canvas-bar-menu-warp_grid'
+ $text=$grid.FindFirst([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::Text))
+ if(!$text -or !$text.Current.Name){throw 'The Warp Grid menu does not show its grid'}
+ Tap 'canvas-bar-menu-warp_grid' 'mouse'
+ Wait-Until {MenuOpen} 'The Warp Grid menu did not open' 5
+ Pick (Command 'warp_split_vertical').label
+ Wait-Until {(Command 'warp_split_vertical').selected} 'Split Vertically did not arm'
+ Capture 'warp-split'
+ (Control 'drawing-canvas').SetFocus();[CapyRowPointer]::Key([uint32]$review.Id,0x1B)
+ Wait-Until {!(Command 'warp_split_vertical').selected -and (Model).state.layer_tools.tool -eq 'transform'} 'Escape did not disarm the split and keep the Warp' 5
+ Tap 'canvas-bar-cancel_transform' 'touch'
+ Wait-Until {(Model).state.layer_tools.tool -ne 'transform'} 'Cancel did not end the Warp transform' 5
+ $checks.warp_split_choice='passed'
+
+ $count=@(Layers).Count
+ Invoke-Id 'layer-new'
+ Wait-Until {@(Layers).Count -eq $count+1} 'A new layer was not added'
+ (Find 'Test stroke' -Name).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+ Idle
+ $stacked=@(Layers).Count;$order=(@(Layers)|ForEach-Object id) -join ','
+ Wait-Until {(Command 'merge_down').enabled} 'Merge Down was not enabled'
+ Shortcut @(0x11) 0x45
+ Wait-Until {@(Layers).Count -eq $stacked-1} 'Ctrl+E did not merge down'
+ Idle
+ Undo
+ Wait-Until {((@(Layers)|ForEach-Object id) -join ',') -eq $order} 'One Undo did not restore the merged layers'
+ Run 'Stamp Visible'
+ Wait-Until {@(Layers).Count -eq $stacked+1} 'Stamp Visible did not add a layer'
+ Idle
+ Undo
+ Wait-Until {((@(Layers)|ForEach-Object id) -join ',') -eq $order} 'One Undo did not remove the stamped layer'
+ $hidden=@(Layers)[0].id
+ Invoke-Id "layer-$hidden-visibility"
+ Wait-Until {!(@(Layers)|Where-Object id -eq $hidden).visible} 'The top layer did not hide'
+ Run 'Flatten Image'
+ Wait-Until {(Visible 'canvas-notice') -and (Visible 'canvas-notice-action-flatten')} 'Flatten did not ask before discarding the hidden layer'
+ if(@(Layers).Count -ne $stacked){throw 'Flatten changed layers before it was confirmed'}
+ Tap 'canvas-notice-action-flatten' 'touch'
+ Wait-Until {@(Layers).Count -lt $stacked} 'Confirming Flatten did not flatten'
+ Idle
+ Undo
+ Wait-Until {((@(Layers)|ForEach-Object id) -join ',') -eq $order} 'One Undo did not restore the flattened layers'
+ $checks.merge_down_stamp_visible_and_flatten_notice='passed'
+
+ Check-TransformFootprint
+}
+
 try {
  Enter-CapyEnvironment
  $env:CAPY_STORAGE_DIR=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1';$env:CAPY_SMOKE_TEST='1'
@@ -248,6 +304,7 @@ try {
  Idle
  $width=Width;$height=[int]@((Model).state.tabs)[0].height
 
+ if(!$transformOnly){
  Run 'Crop'
  Wait-Until {(Kind) -eq 'crop' -and (Bar) -and (Find 'canvas-bar-apply_transform')} 'Crop did not show its bar'
  if((Value 'crop_width') -ne $width -or (Value 'crop_height') -ne $height){throw 'Crop did not start at the canvas bounds'}
@@ -345,58 +402,8 @@ try {
 
  Check-Mixing
 
- $null=Tool 'brush'
- Shortcut @(0x11) 0x54
- Wait-Until {(Model).state.layer_tools.tool -eq 'transform' -and (Bar)} 'Ctrl+T did not start a transform' 10
- $modeId=@((Model).state.canvas_bar.items|Where-Object {$_.option.Choice.segmented})[0].option.Choice.id
- $warp=[array]::IndexOf(@((Choice $modeId).items|ForEach-Object label),'Warp')
- Tap ("canvas-bar-choice-$modeId-$warp") 'touch'
- Wait-Until {@((Choice $modeId).items)[$warp].selected -and (Visible 'canvas-bar-menu-warp_grid')} 'Warp did not offer its Grid menu' 10
- $grid=Find 'canvas-bar-menu-warp_grid'
- $text=$grid.FindFirst([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::Text))
- if(!$text -or !$text.Current.Name){throw 'The Warp Grid menu does not show its grid'}
- Tap 'canvas-bar-menu-warp_grid' 'mouse'
- Wait-Until {MenuOpen} 'The Warp Grid menu did not open' 5
- Pick (Command 'warp_split_vertical').label
- Wait-Until {(Command 'warp_split_vertical').selected} 'Split Vertically did not arm'
- Capture 'warp-split'
- (Control 'drawing-canvas').SetFocus();[CapyRowPointer]::Key([uint32]$review.Id,0x1B)
- Wait-Until {!(Command 'warp_split_vertical').selected -and (Model).state.layer_tools.tool -eq 'transform'} 'Escape did not disarm the split and keep the Warp' 5
- Tap 'canvas-bar-cancel_transform' 'touch'
- Wait-Until {(Model).state.layer_tools.tool -ne 'transform'} 'Cancel did not end the Warp transform' 5
- $checks.warp_split_choice='passed'
-
- $count=@(Layers).Count
- Invoke-Id 'layer-new'
- Wait-Until {@(Layers).Count -eq $count+1} 'A new layer was not added'
- (Find 'Test stroke' -Name).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
- Idle
- $stacked=@(Layers).Count;$order=(@(Layers)|ForEach-Object id) -join ','
- Wait-Until {(Command 'merge_down').enabled} 'Merge Down was not enabled'
- Shortcut @(0x11) 0x45
- Wait-Until {@(Layers).Count -eq $stacked-1} 'Ctrl+E did not merge down'
- Idle
- Undo
- Wait-Until {((@(Layers)|ForEach-Object id) -join ',') -eq $order} 'One Undo did not restore the merged layers'
- Run 'Stamp Visible'
- Wait-Until {@(Layers).Count -eq $stacked+1} 'Stamp Visible did not add a layer'
- Idle
- Undo
- Wait-Until {((@(Layers)|ForEach-Object id) -join ',') -eq $order} 'One Undo did not remove the stamped layer'
- $hidden=@(Layers)[0].id
- Invoke-Id "layer-$hidden-visibility"
- Wait-Until {!(@(Layers)|Where-Object id -eq $hidden).visible} 'The top layer did not hide'
- Run 'Flatten Image'
- Wait-Until {(Visible 'canvas-notice') -and (Visible 'canvas-notice-action-flatten')} 'Flatten did not ask before discarding the hidden layer'
- if(@(Layers).Count -ne $stacked){throw 'Flatten changed layers before it was confirmed'}
- Tap 'canvas-notice-action-flatten' 'touch'
- Wait-Until {@(Layers).Count -lt $stacked} 'Confirming Flatten did not flatten'
- Idle
- Undo
- Wait-Until {((@(Layers)|ForEach-Object id) -join ',') -eq $order} 'One Undo did not restore the flattened layers'
- $checks.merge_down_stamp_visible_and_flatten_notice='passed'
-
- Check-TransformFootprint
+ }
+ Check-PhotoTransforms
 
  [CapyRowPointer]::Dispose()
  & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Close -DiscardUnsaved -StateDirectory $run

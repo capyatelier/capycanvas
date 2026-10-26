@@ -828,6 +828,11 @@ The fixture prepares two-dimensional ink and checks that its transform-body
 target clears the shared handle and pivot hit regions before injecting a finger
 drag. Thin ink can leave no unambiguous body target at Fit.
 
+Use `exercise-photo-tools.ps1 -Theme transform-dark` and `transform-light` for
+the remaining transform and layer operations: Warp Grid and Escape, Merge Down,
+Stamp Visible, Flatten confirmation, and the Distort footprint and saved-pixel
+checks. These scopes start with fresh ink and reuse the full journey's assertions.
+
 | Where | Checks |
 | --- | --- |
 | Linux or Windows | `cargo test --locked -p layer-host -p layer-ui -p layer-workspace -p layer-windows --lib` and `cargo clippy --locked -p layer-windows --all-targets -- -D warnings` |
