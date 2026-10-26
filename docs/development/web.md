@@ -261,6 +261,11 @@ canvas device and checks expanded details, copying and restarting in both themes
 A late event from the retired device must leave the replacement canvas usable.
 This checks error handling; it does not reproduce memory exhaustion.
 
+`test.mjs --fps` checks submitted-frame accounting in both themes. Its idle
+interval starts after the last completed main-canvas frame and keeps the
+1.3/1.4-second quiet periods within a 30-second setup bound. Callback, canvas
+acquisition, retained-row and GPU restart assertions remain separate checks.
+
 `test.mjs --wheel-navigation` checks wheel navigation with held middle/right
 mouse buttons, Ctrl/Shift precedence, cursor anchoring, release, view lock,
 active-paint exclusion and browser zoom ownership in both themes. The pointer
@@ -382,6 +387,15 @@ reloading its corrupted workspace and preference fixtures.
 | Docking and drags | `--drag-pickup`, `--layout-drops`, `--column-stacks`, `--column-drops`, `--columns`, `--workspace-rendering`, `--workspace-constraints`, `--drawer-drag`, `--drawer-style` |
 | Workspaces | `--workspace-manager`, `--workspace-manager-visual`, `--toolbar-manager`, `--workspace-grips`, `--workspace-held-name`, `--workspace-switcher`, `--workspace-options`, `--workspace-options-refresh`, `--workspace-focus`, `--workspace-windows`, `--workspace-store` |
 | Settings and retained copy | `--preferences`, `--settings-audit`, `--pressure-calibration`, `--tilt-calibration`, `--language-switching`, `--live-language-color`, `--live-language-proof`, `--live-language-delivery`, `--live-language-surfaces`, `--live-language-toolbar`, `--live-language-effects` |
+| Stroke recording | `--stroke-recording` |
+
+`--preferences` measures zero-width collapsed base color editors and zero-height
+collapsed accent editors, including the accent field's coupled 12 px gap, in both
+themes. `custom-editor-geometry.json` retains the measured allocations.
+`--stroke-recording` keeps its pen capture, cancellation and export checks and
+measures the shared compact control in Start, Stop and Save states across docked,
+floating and drawer presentations in both themes. `control-geometry.json` retains
+those measurements; a geometry failure also saves its presentation before cleanup.
 
 `--touch-scrub` runs in both browser runners. It clears the active painted layer
 with horizontal, vertical and diagonal three-finger scrubs in both themes,
@@ -404,6 +418,10 @@ in both themes. This does not qualify browser zoom or OS text scaling; the
 registered catalogs contain no RTL locale.
 
 `--header-controls` checks menu focus through compact and overflow layouts.
+Notice actions use the shared accent flag. Operational header buttons show the
+shared disabled reason; layout editing keeps the command hint. The pure notice
+and frame suites cover this projection, with `--notices` and header journeys
+checking the presented controls in both themes.
 Expansion restores the first visible, enabled control in the same zone, skipping
 passive items.
 Battery indicators retain their authored width inside padded status tiles;
@@ -424,6 +442,9 @@ Zen, return home, layout history and viewport walls. Each case starts with an
 empty bubble desk and restores the saved workspace afterward. Touch emulation
 is configured for each input type and the original touch capability is restored
 afterward.
+The global slider check compares the recovery session's artwork ID, epoch,
+document revision and checkpoint before and after workspace actions. The
+`state().revision` sequence advances when UI changes are published.
 `LAYER_BUBBLE_THEMES` and `LAYER_BUBBLE_DEVICES` accept comma-separated focused
 cases; `LAYER_BUBBLE_INPUT_TRACE=1` records native event cancellation on failure.
 

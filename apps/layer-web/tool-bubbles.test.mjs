@@ -92,6 +92,46 @@ export async function checkToolBubbles({call,evaluate,settle}) {
   fixture.layout.header={size:'medium',zones:[[{id:1,item:{kind:'capy'}}],controls.map((control,i)=>({id:i+2,item:{kind:'tool',control}})),[]],next_id:7};
   const take=async(index,spot)=>{const from=await rect(`[data-header-item="${index+2}"] .header-tool`);const before=(await packets()).map(p=>p.view.id);await stroke([from,[from[0],from[1]+8],[from[0],from[1]+75],[spot[0],spot[1]-30],spot]);await wait(`layerApp.app.bubbles().some(p=>!${JSON.stringify(before)}.includes(p.view.id))`);const p=(await packets()).find(p=>!before.includes(p.view.id));await stable(p.view.id);return p.view.id;};
   const putBack=async id=>{const v=await view(id),c=await stable(id),from=v.kind==='color'?[c[0]-v.diameter/2+4,c[1]]:c;await stroke([from,[from[0],from[1]-25],[from[0],12]]);await wait(`!layerApp.app.bubbles().some(p=>p.view.id===${id})`);};
+  const sliderThemes=new Set();
+  const globalSliders=async theme=>{
+    const workspace=structuredClone(fixture),area=await evaluate('layerApp.app.layout(innerWidth,innerHeight).work_area');
+    const sources=[{kind:'control',control:{kind:'brush',id:25}},{kind:'control',control:{kind:'tool_slot',slot:'drawing'}},{kind:'medium',group:'pastel'},{kind:'control',control:{kind:'color_picker'}}];
+    const ids=sources.map(()=>workspace.layout.next_id++),[brush,group,medium,controls]=ids;
+    workspace.layout.bubbles={bubbles:sources.map((source,i)=>({id:ids[i],source,corner:'top_left',offset:[area.x+area.width*(i+1)/5,area.y+area.height*.5]})),rings:[],kept:[]};
+    const persisted=()=>evaluate('layerApp.app.workspace_persistence()');
+    const option=async id=>(await evaluate(`layerApp.app.context_menu({kind:'bubble',id:${id}})`)).sections.flat().find(row=>row.action?.action?.type==='toggle_sliders');
+    const open=async id=>{
+      await pointer('down',await stable(id));await pause(1100);await pointer('up');await wait(`!!document.querySelector('.panel-context-menu:popover-open')`);
+      const row=await option(id);assert.ok(row,'every tool source exposes Show Sliders');assert.equal(row.keep_open,true,'shared slider toggle keeps its menu open');assert.deepEqual(row.action,{type:'bubble',action:{type:'toggle_sliders',id}},'menu dispatches the shared global action');
+      await evaluate(`(()=>{const n=[...document.querySelectorAll('.panel-context-menu button')].find(n=>n.querySelector('.menu-label')?.textContent===${JSON.stringify(row.label)});if(!n)throw Error('Missing Show Sliders menu row');n.dataset.bubbleSliders='true'})()`);
+      assert.equal(await evaluate(`document.querySelector('[data-bubble-sliders]').getAttribute('aria-checked')`),String(row.selected),'visible menu check follows shared state');return row;
+    };
+    const menus=async expected=>{for(const id of ids){assert.equal((await open(id)).selected,expected,'all source menus share the workspace preference');await escape();}};
+    const toggle=async(id,expected)=>{
+      await open(id);await tap(await rect('[data-bubble-sliders]'));await wait(`layerApp.app.workspace_persistence().layout.bubbles.show_sliders===${expected}`);
+      assert.ok(await evaluate(`!!document.querySelector('.panel-context-menu:popover-open')`),'global toggle retains its menu');assert.equal(await evaluate(`document.querySelector('[data-bubble-sliders]').getAttribute('aria-checked')`),String(expected),'retained check refreshes after dispatch');await escape();
+    };
+    const swap=async()=>{
+      await open(controls);const row=(await evaluate(`layerApp.app.context_menu({kind:'bubble',id:${controls}})`)).sections.flat().find(row=>row.action?.action?.option?.kind==='swap');assert.ok(row,'controls expose the independent swap option');
+      await evaluate(`(()=>{const n=[...document.querySelectorAll('.panel-context-menu button')].find(n=>n.querySelector('.menu-label')?.textContent===${JSON.stringify(row.label)});if(!n)throw Error('Missing swap menu row');n.dataset.bubbleSwap='true'})()`);await tap(await rect('[data-bubble-swap]'));assert.equal((await persisted()).layout.bubbles.show_sliders,false,'per-source options cannot reset the global preference');await escape();
+    };
+    const artwork=()=>evaluate(`(()=>{const {artwork,epoch,revision,checkpoint}=layerApp.app.recovery_document_for(layerApp.app.document_tabs(0).selected).session;return JSON.parse(JSON.stringify({artwork,epoch,revision,checkpoint},(_,value)=>typeof value==='bigint'?String(value):value))})()`);
+    const uiRevisionBefore=await evaluate('String(layerApp.state().revision)'),artworkBefore=await artwork();
+    await send({type:'restore_workspace',workspace});assert.equal((await persisted()).layout.bubbles.show_sliders,true,'omitted preference defaults to checked');
+    await tap(await stable(brush));await menus(true);await toggle(group,false);await menus(false);
+    for(const id of ids){const v=await view(id);assert.equal(v.rings.length,0,'global off hides every existing halo');assert.ok(v.stamp==null,'disabled sliders publish no dab geometry');await primitives(id,`${theme}-sliders-off`);}
+    assert.equal((await view(controls)).diameter,56,'hidden controls use the ordinary tool face extent');
+    const added=await take(0,[area.x+area.width*.5,area.y+area.height*.78]);assert.equal((await view(added)).rings.length,0,'new real tear-out inherits the global off value');await putBack(added);
+    await swap();await swap();await send({type:'invoke',command:'lasso'});await tap(await stable(brush));assert.ok((await view(brush)).selected,'hidden-slider contact still selects its brush');assert.equal((await view(brush)).rings.length,0,'selection does not reopen hidden sliders');
+    assert.equal((await view(medium)).selected,false,'enable menu belongs to another tool');
+    const disabled=(await persisted()).layout.bubbles;await toggle(medium,true);await menus(true);assert.ok((await view(brush)).rings.length,'enabling from another menu reopens the selected tool');assert.equal((await view(controls)).rings.length,2,'global enable restores controls');assert.equal((await view(controls)).diameter,134,'global enable restores controls extent');await primitives(brush,`${theme}-sliders-on`);await primitives(controls,`${theme}-sliders-on`);
+    const enabled=(await persisted()).layout.bubbles;await send({type:'invoke',command:'undo_workspace'});assert.deepEqual((await persisted()).layout.bubbles,disabled,'workspace Undo restores the exact disabled layout');assert.equal((await view(controls)).rings.length,0,'Undo updates live controls');
+    await send({type:'invoke',command:'redo_workspace'});assert.deepEqual((await persisted()).layout.bubbles,enabled,'workspace Redo restores the exact enabled layout');assert.equal((await view(controls)).rings.length,2,'Redo updates live controls');
+    await toggle(controls,false);await send({type:'bubble',action:{type:'put_back_all'}});const empty=JSON.parse(JSON.stringify(await persisted()));assert.deepEqual(empty.layout.bubbles,{show_sliders:false,bubbles:[],rings:[],kept:[]},'an empty workspace retains only its nondefault global preference');
+    await send({type:'restore_workspace',workspace:empty});const restored=await take(0,[area.x+area.width*.5,area.y+area.height*.5]);assert.equal((await persisted()).layout.bubbles.show_sliders,false,'serialized empty workspace restores the preference');assert.equal((await view(restored)).rings.length,0,'restored workspace keeps newly taken sliders hidden');assert.equal((await open(restored)).selected,false,'restored native menu is unchecked');await escape();await primitives(restored,`${theme}-sliders-restored`);await shot(`${theme}-global-sliders-restored`);
+    const artworkAfter=await artwork(),uiRevisionAfter=await evaluate('String(layerApp.state().revision)');await writeFile(`${directory}/${theme}-global-sliders.json`,JSON.stringify({artworkBefore,artworkAfter,uiRevisionBefore,uiRevisionAfter,sources,disabled,enabled,empty,restored:(await persisted()).layout.bubbles},null,2));assert.deepEqual(artworkAfter,artworkBefore,'bubble preference and workspace history do not change artwork');await send({type:'restore_workspace',workspace:fixture});
+  };
+
   const sourceJourney=async theme=>{
     const original=await evaluate('({width:innerWidth,height:innerHeight,deviceScaleFactor:devicePixelRatio,mobile:navigator.userAgentData?.mobile??false})');
     const resize=async(width,height)=>{await call('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:original.deviceScaleFactor,mobile:false});await settle();await pause(500);};
@@ -124,6 +164,7 @@ export async function checkToolBubbles({call,evaluate,settle}) {
     for(const theme of (process.env.LAYER_BUBBLE_THEMES?.split(',')||['light','dark']))for(device of (process.env.LAYER_BUBBLE_DEVICES?.split(',')||['mouse','touch','pen'])) {
       console.log(`Tool bubbles: ${theme}/${device}`);await call('Emulation.setTouchEmulationEnabled',{enabled:device==='touch',maxTouchPoints:5});
       await send({type:'restore_workspace',workspace:fixture});await send({type:'set_theme',theme});await pause(250);
+      if(!sliderThemes.has(theme)){await globalSliders(theme);sliderThemes.add(theme);}
       const bounds=await evaluate('(()=>{const r=document.querySelector("#workspace").getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height}})()');
       const spot=[bounds.x+bounds.width*.4,bounds.y+bounds.height*.5];
       const id=await take(0,spot);let c=await stable(id),v=await view(id);

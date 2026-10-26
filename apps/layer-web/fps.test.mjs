@@ -1,5 +1,25 @@
 import assert from 'node:assert/strict';
 
+async function waitMainQuiet(milliseconds) {
+  let since=performance.now();const end=since+30000;
+  for(;;){
+    const now=performance.now();since=Math.max(since,fpsTest.lastMainFrame??since);
+    if(now>end)throw Error('Main canvas did not stay quiet within 30000 ms');
+    if(now-since>=milliseconds)return layerApp.app.renderer_stats().rows.find(row=>row.label.includes('FPS'));
+    if(now>=end)throw Error('Main canvas did not stay quiet within 30000 ms');
+    await new Promise(resolve=>setTimeout(resolve,Math.min(30,milliseconds-(now-since),end-now)));
+  }
+}
+
+function watchMainFrame() {
+  const app=layerApp.app,original=app.frame;Object.assign(fpsTest,{app,originalFrame:original});
+  app.frame=function(...args){
+    const before=fpsTest.acquisitions,result=original.apply(this,args);
+    if(fpsTest.acquisitions>before)fpsTest.lastMainFrame=performance.now();
+    return result;
+  };
+}
+
 export async function checkFrameRate({evaluate,settle}) {
   const inPage=(fn,...args)=>evaluate(`(${fn})(...${JSON.stringify(args)})`);
   const wait=condition=>evaluate(`new Promise((resolve,reject)=>{const end=performance.now()+30000;(function check(){if(${condition})resolve();else if(performance.now()>end)reject(Error(${JSON.stringify(condition)}));else setTimeout(check,30)})()})`);
@@ -9,18 +29,18 @@ export async function checkFrameRate({evaluate,settle}) {
     const group=layerApp.app.layout(innerWidth,innerHeight).groups.find(g=>g.panels.includes('stats'));
     if(group&&group.active!=='stats')layerApp.dispatch({type:'select_panel_tab',group:group.id,panel:'stats'});
     const context=layerApp.canvas.getContext('webgpu'),original=context.getCurrentTexture;
-    window.fpsTest={context,original,acquisitions:0};
+    window.fpsTest={context,original,acquisitions:0,lastMainFrame:null};
     context.getCurrentTexture=function(...args){fpsTest.acquisitions++;return original.apply(this,args)};
   });
   await settle();
   await wait(`!![...document.querySelectorAll('.renderer-stats')].find(node=>node.getClientRects().length)`);
   const row=()=>inPage(()=>layerApp.app.renderer_stats().rows.find(row=>row.label.includes('FPS')));
   try {
+    await inPage(watchMainFrame);
     for(const theme of ['light','dark']){
       await inPage(theme=>layerApp.dispatch({type:'set_theme',theme}),theme);
       await settle();
-      await inPage(()=>new Promise(resolve=>setTimeout(resolve,1300)));
-      const idle=await row();
+      const idle=await inPage(waitMainQuiet,1300);
       assert.equal(idle.label,'Submitted FPS');
       assert.match(idle.description,/submi/i);
       assert.match(idle.description,/presentation|display/i);
@@ -55,8 +75,7 @@ export async function checkFrameRate({evaluate,settle}) {
       assert(moving.acquisitions>10,'Cached pan and zoom publish the main canvas');
       assert.equal(moving.row.label,'Submitted FPS');
       assert(Number(moving.row.value)>0,'Cached navigation has a positive submitted FPS');
-      await inPage(()=>new Promise(resolve=>setTimeout(resolve,1400)));
-      assert.equal((await row()).value,'0',`${theme}: the rolling rate retains the idle gap`);
+      assert.equal((await inPage(waitMainQuiet,1400)).value,'0',`${theme}: the rolling rate retains the idle gap`);
       await inPage(()=>{fpsTest.retiredRow=fpsTest.row;layerApp.app.suspend_gpu()});
       assert.equal(await inPage(()=>layerApp.app.gpu_ready()),false);
       assert.equal((await row()).value,'—','A retired surface does not retain its FPS observation');
@@ -67,17 +86,18 @@ export async function checkFrameRate({evaluate,settle}) {
       assert.equal(await inPage(()=>fpsTest.row.title),retired.description,'The DOM description follows the current FPS source');
       console.log('Submitted FPS:',JSON.stringify({theme,idle,callbacks,moving}));
       if(theme==='light'){
-        await inPage(()=>{fpsTest.context.getCurrentTexture=fpsTest.original});
+        await inPage(()=>{fpsTest.context.getCurrentTexture=fpsTest.original;fpsTest.app.frame=fpsTest.originalFrame});
         await inPage(()=>layerApp.restartGpu());
         await wait('layerApp.app.startup_progress().every(Boolean)&&!layerApp.app.canvas_work_pending()');
         await inPage(()=>{
           const context=layerApp.canvas.getContext('webgpu'),original=context.getCurrentTexture;
-          Object.assign(fpsTest,{context,original,acquisitions:0});
+          Object.assign(fpsTest,{context,original,acquisitions:0,lastMainFrame:null});
           context.getCurrentTexture=function(...args){fpsTest.acquisitions++;return original.apply(this,args)};
         });
+        await inPage(watchMainFrame);
       }
     }
   } finally {
-    await inPage(()=>{fpsTest.observer?.disconnect();fpsTest.context.getCurrentTexture=fpsTest.original;delete window.fpsTest});
+    await inPage(()=>{fpsTest.observer?.disconnect();fpsTest.context.getCurrentTexture=fpsTest.original;fpsTest.app.frame=fpsTest.originalFrame;delete window.fpsTest});
   }
 }

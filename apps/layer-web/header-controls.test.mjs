@@ -59,5 +59,40 @@ export async function checkHeaderControls({call,evaluate,settle}) {
     for(const tag of tags){await restore(tag);const state=await evaluate(`({same:headerLocaleChips.every((chip,index)=>chip===document.querySelectorAll('.header-component')[index])&&headerLocaleSize===document.querySelector('.header-size-choices')&&headerLocaleFooter===document.querySelector('#header-canvas-info'),focused:document.activeElement===headerLocaleFooter,size:headerLocaleSize.ariaLabel,tools:document.querySelector('#header-component-tools').ariaLabel,chips:headerLocaleChips.map(chip=>({label:chip.ariaLabel,title:chip.title})),status:[...document.querySelectorAll('.header-status-placeholder')].map(node=>node.textContent)})`);assert.ok(state.same&&state.focused,`${tag} retained header bank/native controls`);assert.equal(state.size,expected[tag].size);assert.equal(state.tools,expected[tag].tools);for(const chip of state.chips)assert.equal(chip.title,expected[tag].drag.replace('{ $item }',chip.label),`${tag} typed header drag caption`);assert.ok(state.status.includes(expected[tag].clock)&&state.status.includes(expected[tag].battery),`${tag} localized native-status placeholders`);await evaluate('document.fonts.ready.then(()=>new Promise(resolve=>setTimeout(resolve,150)))');const shot=await call('Page.captureScreenshot',{format:'png'});await writeFile(`${dir}/header-bank-${theme}-${tag}.png`,Buffer.from(shot.data,'base64'));}
     await evaluate(`document.querySelector('#header-edit-cancel').click()`);await settle();}
   await restore('en');
+  const savedWorkspace=await evaluate('layerApp.app.workspace_persistence()');
+  let vectorId=null;
+  try {
+    await evaluate(`(()=>{const workspace=layerApp.app.workspace_persistence(),header=workspace.layout.header,id=header.next_id++;header.zones=[[{id,item:{kind:'tool',control:{kind:'command',command:'scale_rotate'}}}],[],[]];layerApp.dispatch({type:'restore_workspace',workspace});layerApp.dispatch({type:'layer',action:{op:'new_vector'}});})()`);await settle();
+    vectorId=await evaluate('String(layerApp.state().layer_tools.editing_layer.id)');
+    const lock=async value=>{await evaluate(`layerApp.dispatch({type:'layer',action:{op:'lock',id:BigInt(${JSON.stringify(vectorId)}),value:${value}}})`);await settle();};
+    const editing=async value=>{await evaluate(`layerApp.dispatch({type:'customize',action:{type:'header',action:{type:'edit',editing:${value}}}})`);await settle();};
+    const snapshot=()=>evaluate(`(()=>{const spec=layerApp.app.header_view().items.find(item=>item.resolved_control?.kind==='command'&&item.resolved_control.command==='scale_rotate');if(!spec)throw Error('Missing shared ScaleRotate header item');const node=document.querySelector('[data-header-item="'+spec.id+'"] button.header-tool');if(!node)throw Error('Missing ScaleRotate header button');const bounds=node.getBoundingClientRect();return{tooltip:layerApp.state().commands.find(command=>command.id===node.dataset.command)?.tooltip??null,spec:{enabled:spec.enabled,reason:spec.disabled_reason??null,label:spec.label},title:node.title,disabled:node.disabled,visible:!node.closest('[hidden]')&&bounds.width>0&&bounds.height>0};})()`);
+    for(const theme of ['light','dark']) {
+      await evaluate(`layerApp.dispatch({type:'set_theme',theme:${JSON.stringify(theme)}})`);await settle();
+      await lock(true);
+      const locked=await snapshot();
+      assert.ok(locked.visible,`${theme}: the real vector header control is visible`);
+      assert.equal(locked.spec.enabled,false);assert.ok(locked.spec.reason,`${theme}: the shared locked item supplies a reason`);
+      assert.equal(locked.disabled,true);assert.equal(locked.title,locked.spec.reason,`${theme}: the operational header presents the shared refusal`);
+      await editing(true);
+      const edit=await snapshot();
+      assert.equal(edit.spec.enabled,false);assert.equal(edit.spec.reason,locked.spec.reason);
+      assert.equal(edit.disabled,false);assert.equal(edit.title,edit.tooltip||edit.spec.label,`${theme}: layout editing retains its ordinary item hint`);
+      await editing(false);
+      const restored=await snapshot();
+      assert.equal(restored.disabled,true);assert.equal(restored.title,locked.spec.reason,`${theme}: leaving layout editing restores the refusal`);
+      await lock(false);
+      const unlocked=await snapshot();
+      assert.equal(unlocked.spec.enabled,true);assert.equal(unlocked.spec.reason,null);
+      assert.equal(unlocked.disabled,false);assert.equal(unlocked.title,unlocked.tooltip||unlocked.spec.label,`${theme}: unlocking restores the ordinary hint`);
+      await writeFile(`${dir}/header-shared-reason-${theme}.json`,JSON.stringify({locked,editing:edit,restored,unlocked},null,2));
+      const shot=await call('Page.captureScreenshot',{format:'png'});await writeFile(`${dir}/header-shared-reason-${theme}.png`,Buffer.from(shot.data,'base64'));
+    }
+  } finally {
+    await evaluate(`layerApp.dispatch({type:'customize',action:{type:'header',action:{type:'edit',editing:false}}})`);await settle();
+    if(vectorId!==null){await evaluate(`layerApp.dispatch({type:'layer',action:{op:'delete',id:BigInt(${JSON.stringify(vectorId)})}})`);await settle();}
+    await evaluate(`layerApp.dispatch({type:'restore_workspace',workspace:${JSON.stringify(savedWorkspace)}})`);await settle();
+  }
+
   console.log('PASS: all eight full/compact/overflow menus, real Zoom In, resize closure and focus restoration');
 }

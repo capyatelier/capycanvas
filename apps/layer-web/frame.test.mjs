@@ -2,10 +2,19 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import test from "node:test";
-import {presentCapy} from './header.js';
+import {headerButtonHint, presentCapy} from './header.js';
 import {colorDialogDom} from './color-dialog-fixture.mjs';
 
 const source = readFileSync(new URL("app.js", import.meta.url), "utf8");
+test('header buttons present shared refusal hints without replacing layout-editing hints', () => {
+  const spec={label:'Shared label',enabled:false,disabled_reason:'Shared refusal'},command={tooltip:'Command hint'};
+  assert.equal(headerButtonHint(spec,command,false),'Shared refusal');
+  assert.equal(headerButtonHint(spec,command,true),'Command hint');
+  assert.equal(headerButtonHint({...spec,enabled:true},command,false),'Shared refusal');
+  assert.equal(headerButtonHint({...spec,disabled_reason:null},command,false),'Command hint');
+  assert.equal(headerButtonHint({...spec,disabled_reason:null},undefined,false),'Shared label');
+});
+
 test('compiler input hooks wait for app publication and retain contact and resume timing', () => {
   const listeners=new Map(),timers=[];
   let inputs=0,wait=3.2,wakes=0;

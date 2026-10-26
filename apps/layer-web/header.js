@@ -3,6 +3,10 @@ import {liveCopy,bindCopy} from './localization.js';
 // allocation, overflow, drag slots, validation and publication stay in Rust.
 import { pickerButtonAction, updatePaintPairIcon } from './color-controls.js';
 
+export function headerButtonHint(spec, command, editing) {
+  return !editing && spec.disabled_reason || command?.tooltip || spec.label;
+}
+
 export function presentCapy(node, geometry, hidden, keep, editing) {
   const visible=keep||(!hidden&&!editing&&geometry?.capy_item!=null);
   if(node.hidden===visible)node.hidden=!visible;
@@ -250,7 +254,7 @@ export function createHeader({app, state, paintPair, workspace, element, button,
         const kind=r.entry.item.kind, command=state().commands.find(c=>c.id===r.button.dataset.command);
         const glyph=command?.icon||spec.icon;
         if(glyph && (r.button.firstChild?.dataset.asset!==glyph || r.button.firstChild?.hasAttribute('data-paint-pair')!==(glyph==='colors')))r.button.replaceChildren(icon(glyph,true),...(r.variants?[r.variants]:[]));
-        r.button.title=spec.disabled_reason||command?.tooltip||spec.label; r.button.setAttribute('aria-label',command?.label||spec.label);
+        r.button.title=headerButtonHint(spec,command,editing); r.button.setAttribute('aria-label',command?.label||spec.label);
         r.button.disabled=!editing&&(!spec.enabled||(kind==='fullscreen'&&!document.fullscreenEnabled));
         r.button.setAttribute('aria-pressed',String(spec.selected));
         r.button.classList.toggle('brush-color',(spec.resolved_control??r.entry.item.control)?.kind==='color');

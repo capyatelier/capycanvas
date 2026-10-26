@@ -36,6 +36,27 @@ export async function checkPreferences({ call, evaluate, settle, errors }) {
     const shot = await call("Page.captureScreenshot", { format: "png" });
     await writeFile(`${dir}/web-${name}.png`, Buffer.from(shot.data, "base64"));
   };
+  const customEditorMeasurements=[];
+  const customEditorGeometry = async (selector, open) => {
+    const measured=await evaluate(`(async()=>{
+      const input=document.querySelector(${JSON.stringify(selector)}),reveal=input.closest('.swatch-entry-reveal'),widget=reveal.closest('.preference-swatches');
+      await Promise.all(reveal.getAnimations({subtree:true}).map(animation=>animation.finished.catch(()=>{})));
+      const field=input.getBoundingClientRect(),clip=reveal.getBoundingClientRect(),circles=widget.querySelector('.swatch-circles').getBoundingClientRect(),row=widget.getBoundingClientRect();
+      return {theme:layerApp.state().settings.theme,inline:widget.classList.contains('inline'),field:field.toJSON(),clip:clip.toJSON(),circles:circles.toJSON(),row:row.toJSON()};
+    })()`);
+    customEditorMeasurements.push({selector,open,...measured});
+    await writeFile(`${dir}/custom-editor-geometry.json`,JSON.stringify(customEditorMeasurements,null,2));
+    if(open){
+      assert.ok(measured.field.width>0&&measured.field.height>0,'Custom editor has a visible allocation');
+      if(!measured.inline){
+        assert.ok(Math.abs(measured.field.top-measured.circles.bottom-12)<.5,'The accent editor opens with its 12px gap');
+      }
+    }else if(measured.inline)assert.ok(measured.clip.width<.5,'Collapsed base editor occupies no width');
+    else{
+      assert.ok(measured.clip.height<.5,'Collapsed accent editor occupies no height');
+      assert.ok(Math.abs(measured.row.height-measured.circles.height)<.5,'Collapsed accent editor leaves no gap');
+    }
+  };
   await call("Emulation.setDeviceMetricsOverride", { width: 1200, height: 900, deviceScaleFactor: 1, mobile: false });
   await action({ type: "restore_workspace", workspace: await evaluate(`(() => {
     const workspace = structuredClone(layerApp.state().workspace), tabs = (id, panels) => ({ kind: "tabs", id, panels, active: panels[0], tab_style: "icon" });
@@ -224,10 +245,12 @@ export async function checkPreferences({ call, evaluate, settle, errors }) {
     const selector = `#setting-${theme}-base`;
     const custom = `[data-preference=${theme}_base] .swatch[data-swatch="4"]`;
     assert.equal(await evaluate(`document.querySelector('${selector}').inert`), true, 'the hex entry waits for Custom');
+    await customEditorGeometry(selector,false);
     assert.ok(await evaluate(`(() => { const row=document.querySelector('[data-preference=${theme}_base]'), circle=document.querySelector('${custom}'); return circle.getBoundingClientRect().height < row.getBoundingClientRect().height; })()`), 'base circles share the title row');
     await click(custom);
     assert.ok(await evaluate(`(()=>{const n=document.querySelector('${selector}'),reveal=n.closest('.swatch-entry-reveal');return !n.inert && getComputedStyle(n).visibility==='visible' && (matchMedia('(prefers-reduced-motion:reduce)').matches || reveal.getAnimations().length>0);})()`),'Custom reveals an interactive entry through the authored slide');
     assert.equal(await evaluate(`document.activeElement===document.querySelector('${selector}')`), true);
+    await customEditorGeometry(selector,true);
     assert.equal(await evaluate(`document.querySelector('${selector}').value`), theme === 'dark' ? '#333333' : '#b8b8b8');
     await evaluate(`document.querySelector('${selector}').value='invalid'`); await key('Enter');
     assert.ok(await evaluate('layerApp.app.preferences().error'));
@@ -267,6 +290,7 @@ export async function checkPreferences({ call, evaluate, settle, errors }) {
     await key('Escape');
     assert.equal(await evaluate("document.querySelector('#settings').open"), true, 'Escape only closes the context menu');
     assert.equal(await evaluate(`document.querySelector('${selector}').inert`), true, 'a preset hides the entry');
+    await customEditorGeometry(selector,false);
     await click(custom); await evaluate(`document.querySelector('${selector}').value='${color}'`); await key('Enter');
     await evaluate(`document.querySelector('${selector}').value=''`);
     assert.equal(await evaluate(`layerApp.state().settings.${theme}_base`), color.toLowerCase());
@@ -287,6 +311,7 @@ export async function checkPreferences({ call, evaluate, settle, errors }) {
       ['dark_base', 'light_base', 'accent']);
     assert.equal(await evaluate(`document.querySelector('${swatch(0)}').getAttribute('aria-label')`), 'Blue', 'the web has no system accent');
     assert.equal(await evaluate(`document.querySelector('${swatch(0)}').getAttribute('aria-checked')`), 'true');
+    await customEditorGeometry('#setting-accent',false);
     assert.ok(await evaluate(`(() => { const row=document.querySelector('[data-preference=accent]').getBoundingClientRect(), a=document.querySelector('${swatch(0)}').getBoundingClientRect(), b=document.querySelector('${swatch(9)}').getBoundingClientRect(); return Math.abs((a.left-row.left)-(row.right-b.right))<=2; })()`), 'accent circles are centered');
     await click(swatch(5));
     assert.equal(await evaluate('layerApp.state().settings.accent'), '#e62d42');
@@ -295,6 +320,7 @@ export async function checkPreferences({ call, evaluate, settle, errors }) {
         && getComputedStyle(document.querySelector('${swatch(5)}')).backgroundColor===rgb('#e62d42'); })()`));
     await click(swatch(9));
     assert.equal(await evaluate('document.activeElement.id'), 'setting-accent');
+    await customEditorGeometry('#setting-accent',true);
     await evaluate("document.querySelector('#setting-accent').value='#12ab56'"); await key('Enter');
     assert.equal(await evaluate('layerApp.state().palette.accent'), '#12ab56');
     assert.equal(await evaluate(`document.querySelector('${swatch(9)}').getAttribute('aria-checked')`), 'true');
@@ -302,6 +328,7 @@ export async function checkPreferences({ call, evaluate, settle, errors }) {
     await click(swatch(0));
     assert.equal(await evaluate('layerApp.state().settings.accent ?? null'), null, 'Blue is the web default');
     assert.equal(await evaluate("document.querySelector('#setting-accent').inert"), true);
+    await customEditorGeometry('#setting-accent',false);
     await action({ type: 'close_settings' });
     assert.ok(await evaluate(`(() => { const c=layerApp.state().palette.glass.switcher_selection, pressed=document.querySelector('#header .workspace-switcher button[aria-pressed="true"]'), probe=document.body.appendChild(document.createElement('i'));
       probe.style.background='rgb('+c.slice(0,3).map(v=>v*255).join(' ')+' / '+c[3]+')'; const expected=getComputedStyle(probe).backgroundColor; probe.remove();

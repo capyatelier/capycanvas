@@ -136,6 +136,39 @@ export async function checkNotices({call,evaluate,settle,device=false}) {
     await send({type:'layer',action:{op:'lock',id:active.id,value:false}});
     await canvasTap('mouse');
     await wait(`!${shown}&&layerApp.state().notice==null`);
+    const previousBrush=(await state()).brush.preset;
+    let vectorId=null;
+    try {
+      await send({type:'set_theme',theme});
+      await send({type:'layer',action:{op:'new_vector'}});
+      vectorId=(await state()).layer_tools.editing_layer.id;
+      await send({type:'select_brush',id:1});
+      const dimmed=(await state()).tool_set.subtools.find(item=>item.enabled&&item.disabled_reason&&item.action?.type==='select_brush');
+      assert.ok(dimmed,'The real vector tool list offers a dimmed but choosable pen');
+      await send(dimmed.action);
+      await wait(`${shown}&&layerApp.state().notice?.actions.some(a=>a.accent)`);
+      const offered=await current(),accent=offered.actions.find(a=>a.accent&&a.enabled);
+      assert.equal(accent?.id,'use_vector_pen','The shared object refusal offers its supported vector pen');
+      const controls=await evaluate(`(()=>{const color=value=>{const style=document.createElement('span').style;style.color=value;return style.color;};return [...document.querySelectorAll('${action}')].map(node=>{const style=getComputedStyle(node);return{label:node.textContent,enabled:!node.disabled,reason:node.title||null,accent:node.classList.contains('suggested-action'),background:color(style.backgroundColor),foreground:color(style.color),accentBackground:color(style.getPropertyValue('--accent')),accentForeground:color(style.getPropertyValue('--accent-foreground'))};})})()`);
+      assert.deepEqual(controls.map(({label,enabled,reason,accent})=>({label,enabled,reason,accent})),offered.actions.map(({label,enabled,reason,accent})=>({label,enabled,reason:reason??null,accent})), 'Visible object actions present their actual shared labels, availability, reasons and accent');
+      for(const control of controls.filter(a=>a.accent)) {
+        assert.equal(control.background,control.accentBackground,'The notice uses its accent background');
+        assert.equal(control.foreground,control.accentForeground,'The notice uses its accent foreground');
+      }
+      const objectTheme=await evaluate('document.body.dataset.theme');
+      await writeFile(`${directory}/object-actions-${objectTheme}.json`,JSON.stringify({offered,controls},null,2));
+      await screenshot(`object-actions-${objectTheme}`);
+      const revision=(await state()).document_file.revision;
+      await tap(await middle(`${action}.suggested-action`),'mouse');
+      await wait(`!${shown}&&layerApp.state().notice==null`);
+      assert.equal((await state()).layer_tools.editing_layer.id,vectorId,'The notice keeps the vector layer active');
+      assert.equal((await state()).document_file.revision,revision,'Choosing the supported pen does not edit the artwork');
+      await healthy('After the shared accented object action');
+    } finally {
+      if(vectorId!==null)await send({type:'layer',action:{op:'delete',id:vectorId}});
+      await send({type:'select_brush',id:previousBrush});
+    }
+
     console.log(`PASS canvas notice (${device?'tablet':'desktop'}): Wand without a reference offers "${offer}" and marks it in one step with pen, touch and mouse; stale ids, contact dismissal, the 4 s timeout, Move on a locked layer and disabled bar reasons; screenshots in ${directory}`);
   } catch(error) {
     await writeFile(`${directory}/failure.png`,Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));
