@@ -160,7 +160,7 @@ impl PaintTransforms {
         for (state,next) in self.0.iter_mut().zip(previews) {
             let Some(next)=next else {state.preparing=None;continue;};
             if next.target.is_coverage() {state.preparing=None;continue;}
-            let same=state.preview.as_ref().is_some_and(|old|old.transaction==next.transaction && old.target==next.target && old.selection==next.selection);
+            let same=state.holds_source(&next,Some(scene));
             let extent=scene.target_extent(next.target);
             let source=if same {state.preparing=None;&mut *state}else {
                 let prepared=state.preparing.as_ref().is_some_and(|state|state.prepared_preview.as_ref().is_some_and(|(old,owner,revision)|*owner==scene.owner() && *revision==scene.revision()
@@ -1476,13 +1476,9 @@ impl ImageTransformState {
         if self.preview.as_ref() == Some(next) && self.native_preview == native {
             return Ok(PreviewUpdate { damage: Vec::new(), draw: None });
         }
-        let same_source = self.preview.as_ref().is_some_and(|p| {
-            p.transaction == next.transaction
-                && p.target == next.target
-                && p.selection == next.selection
-        }) || self.prepared_preview.as_ref().is_some_and(|(p,owner,revision)|layer.is_some_and(|(scene,_)|scene.owner()==*owner && scene.revision()==*revision)
-            && p.transaction==next.transaction && p.target==next.target && p.selection==next.selection) || (self.preview.is_none() && layer.zip(next.selection.as_ref())
-            .is_some_and(|((scene, id), selection)| self.standby.as_ref() == Some(&Standby::of(scene, id, selection))));
+        let same_source = self.holds_source(next, layer.map(|(scene, _)| scene))
+            || self.prepared_preview.as_ref().is_some_and(|(p,owner,revision)|layer.is_some_and(|(scene,_)|scene.owner()==*owner && scene.revision()==*revision)
+            && p.transaction==next.transaction && p.target==next.target && p.selection==next.selection);
         self.standby = None;
         let mut damage = Vec::with_capacity(2);
         if !same_source {
@@ -1546,6 +1542,15 @@ impl ImageTransformState {
         lease.retire();
         let completion=lease.clone();encoder.on_submitted_work_done(move||drop(completion));
         self.retired_native.push((pages,lease));
+    }
+    /// Whether this state already holds `next`'s originals: those of its
+    /// active transaction, or the moving pixels prepared for its selection.
+    fn holds_source(&self, next: &layer_render::TransformPreview, scene: Option<SceneView<'_>>) -> bool {
+        match &self.preview {
+            Some(p) => p.transaction == next.transaction && p.target == next.target && p.selection == next.selection,
+            None => scene.zip(next.selection.as_ref())
+                .is_some_and(|(scene, selection)| self.standby.as_ref() == Some(&Standby::of(scene, next.target, selection))),
+        }
     }
     /// Whether this transaction's captured originals can draw `next` into a
     /// display level.

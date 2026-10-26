@@ -59,7 +59,7 @@ pub(super) fn submit_published(r: &mut WgpuRasterizer, frame: FramePacket<'_>) {
     }
 }
 
-fn assert_settled(mut r: &mut WgpuRasterizer, frame: FramePacket<'_>, reference: &[[f32; 4]]) {
+fn assert_settled(r: &mut WgpuRasterizer, frame: FramePacket<'_>, reference: &[[f32; 4]]) {
     let revision = r.artwork_revision;
     let pages = page_coordinates(PixelRect::full(frame.document_extent)).count();
     let idle = FramePacket { composite_all: false, reset_layers: false, dabs: &[], dab_batches: &[], restore_rasters: &[], ..frame };
