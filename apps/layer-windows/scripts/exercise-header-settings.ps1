@@ -1,12 +1,13 @@
-﻿param([Parameter(Mandatory)][int]$ProcessId,[Parameter(Mandatory)][string]$StateFile,[string]$EvidenceDirectory=(Split-Path -Parent $StateFile))
+﻿param([Parameter(Mandatory)][int]$ProcessId,[Parameter(Mandatory)][long]$WindowHandle,[Parameter(Mandatory)][string]$StateFile,[string]$EvidenceDirectory=(Split-Path -Parent $StateFile))
 $ErrorActionPreference='Stop'
 Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
 if(!('CapyRowPointer' -as [type])){Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')}
 $app=Get-Process -Id $ProcessId
 if($app.ProcessName -ne 'CapyCanvas'){throw 'Expected a controlled CapyCanvas review process.'}
-$watch=[Diagnostics.Stopwatch]::StartNew()
-do {$app.Refresh();if($app.HasExited){throw 'Review app exited'};if($app.MainWindowHandle -ne [IntPtr]::Zero){break};Start-Sleep -Milliseconds 100} while($watch.Elapsed.TotalSeconds -lt 30)
-$root=[System.Windows.Automation.AutomationElement]::FromHandle($app.MainWindowHandle)
+$app.Refresh()
+if($app.HasExited -or !$WindowHandle){throw 'The controlled drawing window is unavailable'}
+$root=[System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]$WindowHandle)
+if(!$root -or $root.Current.ProcessId -ne $ProcessId){throw 'The drawing window does not belong to this review'}
 $script:settingsScope=$root
 $script:swatchAllocations=[Collections.Generic.List[object]]::new()
 function Read-Model {
@@ -56,7 +57,7 @@ function Custom-Swatch([string]$Theme) {
     Wait-Until {$script:swatch=@($script:settingsScope.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,'Custom'))|Where-Object {$_.Current.AutomationId -like "setting-$($Theme)_base-swatch-*"})[0];$script:swatch} "Missing custom $Theme base color"
     $script:swatch
 }
-function Swatch-Row([string]$Id) {
+function Preference-Row([string]$Id) {
     @((Read-Model).preferences.pages|ForEach-Object groups|ForEach-Object rows|Where-Object id -eq $Id)[0]
 }
 function Swatch-Button([string]$Id,[int]$Index) {
@@ -80,19 +81,34 @@ function Swatch-Allocation([string]$Id,[double]$Scale) {
     @{row=(Swatch-Bounds $parts[0].row $origin $Scale);strip=(Swatch-Bounds $parts[0].strip $origin $Scale);entry=$(if($parts[0].entry_visible){Swatch-Bounds $parts[0].entry $origin $Scale});entry_in_strip=[bool]$parts[0].entry_in_strip;native=$parts[0];anchor_runtime_id=($title.GetRuntimeId()-join ':')}
 }
 function Wait-SwatchAllocation([string]$Id,$Row,[double]$Scale,[bool]$Open) {
-    $stable=@{key='';value=$null;watch=[Diagnostics.Stopwatch]::StartNew()}
-    Wait-Until {
-        $value=Swatch-Allocation $Id $Scale
-        if(!$value){return $false}
-        $entry=Find-Control $Row.title ([System.Windows.Automation.ControlType]::Edit)
-        $visible=$entry -and !$entry.Current.IsOffscreen -and $entry.Current.BoundingRectangle.Height -gt 0
-        if([bool]$visible -ne $Open -or [bool]$value.entry -ne $Open){return $false}
-        if($Open -and ($entry.Current.ProcessId -ne $ProcessId -or $entry.Current.AutomationId -ne "setting-text-$Id" -or $value.entry.height -le 0)){return $false}
-        if($value.row.height -le 0 -or $value.strip.height -le 0){return $false}
-        $key=$value|ConvertTo-Json -Depth 5 -Compress
-        if($key -ne $stable.key){$stable.key=$key;$stable.watch.Restart()};$stable.value=$value
-        $stable.watch.ElapsedMilliseconds -ge 250
-    } "Native $Id allocation did not settle with its editor open=$Open"
+    $stable=@{key='';value=$null;watch=[Diagnostics.Stopwatch]::StartNew();attempts=0;key_changes=0;last=$null}
+    try{
+        Wait-Until {
+            $stable.attempts++
+            $value=Swatch-Allocation $Id $Scale
+            $sample=@{gate='native_allocation';allocation_found=($null -ne $value);allocation=$value;native_entry_visible=$false;native_entry_present=$false;uia=$null;stable_elapsed_ms=0}
+            $stable.last=$sample
+            if(!$value){return $false}
+            $sample.native_entry_visible=[bool]$value.native.entry_visible;$sample.native_entry_present=[bool]$value.entry;$sample.gate='uia_entry'
+            $entry=Find-Control $Row.title ([System.Windows.Automation.ControlType]::Edit)
+            $visible=$entry -and !$entry.Current.IsOffscreen -and $entry.Current.BoundingRectangle.Height -gt 0
+            $sample.uia=if($entry){$current=$entry.Current;@{found=$true;id=$current.AutomationId;process=$current.ProcessId;offscreen=$current.IsOffscreen;bounds=$current.BoundingRectangle;visible=[bool]$visible;runtime_id=($entry.GetRuntimeId()-join ':')}}else{@{found=$false;visible=$false}}
+            $sample.gate='visible_state'
+            if([bool]$visible -ne $Open -or [bool]$value.entry -ne $Open){return $false}
+            $sample.gate='entry_identity_and_height'
+            if($Open -and ($entry.Current.ProcessId -ne $ProcessId -or $entry.Current.AutomationId -ne "setting-text-$Id" -or $value.entry.height -le 0)){return $false}
+            $sample.gate='row_and_strip_height'
+            if($value.row.height -le 0 -or $value.strip.height -le 0){return $false}
+            $key=$value|ConvertTo-Json -Depth 5 -Compress
+            if($key -ne $stable.key){$stable.key=$key;$stable.watch.Restart();$stable.key_changes++};$stable.value=$value
+            $sample.gate='stability';$sample.stable_elapsed_ms=$stable.watch.ElapsedMilliseconds
+            $stable.watch.ElapsedMilliseconds -ge 250
+        } "Native $Id allocation did not settle with its editor open=$Open"
+    }catch{
+        $receipt=@{id=$Id;title=$Row.title;expected_process=$ProcessId;requested_open=[bool]$Open;scale=$Scale;attempts=$stable.attempts;key_changes=$stable.key_changes;last=$stable.last;failure=($_|Out-String)}
+        [IO.File]::WriteAllText((Join-Path $EvidenceDirectory ("swatch-allocation-$Id-$Open-failure.json")),($receipt|ConvertTo-Json -Depth 15),[Text.UTF8Encoding]::new($false))
+        throw
+    }
     $stable.value
 }
 function Assert-SwatchAllocation($Closed,$Open,$ClosedAgain,[double]$Gap,[double]$Scale) {
@@ -103,10 +119,10 @@ function Assert-SwatchAllocation($Closed,$Open,$ClosedAgain,[double]$Gap,[double
     $metrics
 }
 function Check-SwatchAllocation([string]$Id) {
-    $row=Swatch-Row $Id;if(!$row -or $row.kind.type -ne 'swatches'){throw "Shared swatch row is missing for $Id"}
+    $row=Preference-Row $Id;if(!$row -or $row.kind.type -ne 'swatches'){throw "Shared swatch row is missing for $Id"}
     $saved=$row.kind.value;$selected=[int]$row.kind.selected;$custom=$row.kind.swatches.Count-1
     if(!$row.kind.swatches[$custom].custom){throw 'Shared custom swatch is not the final native choice'}
-    $record=[ordered]@{theme=(Read-Model).state.theme;id=$Id;scale=([CapyRowPointer]::GetDpiForWindow($app.MainWindowHandle)/96.);closed=$null;open=$null;closed_again=$null;metrics=$null}
+    $record=[ordered]@{theme=(Read-Model).state.theme;id=$Id;scale=([CapyRowPointer]::GetDpiForWindow(([IntPtr]$WindowHandle))/96.);closed=$null;open=$null;closed_again=$null;metrics=$null}
     $script:swatchAllocations.Add($record)
     try{
         $preset=Swatch-Button $Id 0;$scroll=$null;if($preset.TryGetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern,[ref]$scroll)){$scroll.ScrollIntoView()}
@@ -123,7 +139,7 @@ function Check-SwatchAllocation([string]$Id) {
         try{
             (Swatch-Button $Id $selected).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
             if($row.kind.swatches[$selected].custom){Edit-Text $row.title $saved;Focus-Control (Control 'Color theme' ([System.Windows.Automation.ControlType]::ComboBox))}
-            Wait-Until {(Swatch-Row $Id).kind.value -eq $saved} "Native $Id swatch did not restore its original shared value"
+            Wait-Until {(Preference-Row $Id).kind.value -eq $saved} "Native $Id swatch did not restore its original shared value"
         }finally{[IO.File]::WriteAllText((Join-Path $EvidenceDirectory 'header-settings-custom-colors.json'),(@($script:swatchAllocations.ToArray())|ConvertTo-Json -Depth 12),[Text.UTF8Encoding]::new($false))}
     }
 }
@@ -153,14 +169,19 @@ Wait-Until {Read-Model} 'Launch this review instance with CAPY_TRACE_UI=1 and pa
 Wait-Until {(Read-Model).brush_ready} 'Shared brush startup did not finish before interaction checks' 45
 if(!(Read-Model).windows_isolated_settings){throw 'Launch this fixture with CAPY_STORAGE_DIR pointing to a disposable profile.'}
 if(Find-Control 'Preferences' ([System.Windows.Automation.ControlType]::Window)){throw 'Close Preferences before running this fixture.'}
-& (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'View'
+try{& (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'View'}catch{
+    $current=$root.Current
+    $nodes=@($root.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition)|Where-Object {$_.Current.AutomationId -match '^(application-menu|header-recovery-menu)'}|ForEach-Object {$item=$_.Current;@{id=$item.AutomationId;name=$item.Name;process=$item.ProcessId;offscreen=$item.IsOffscreen;enabled=$item.IsEnabled}})
+    [IO.File]::WriteAllText((Join-Path $EvidenceDirectory 'settings-menu-root-failure.json'),(@{provided_hwnd=$WindowHandle;root_hwnd=$current.NativeWindowHandle;root_name=$current.Name;root_process=$current.ProcessId;menu_nodes=$nodes}|ConvertTo-Json -Depth 5),[Text.UTF8Encoding]::new($false))
+    throw
+}
 if(Find-Control 'Dark Mode' ([System.Windows.Automation.ControlType]::MenuItem)){throw 'View must not include Dark Mode'}
 Open-Preferences
 $originalTheme=(Read-Model).state.settings.theme
 $restoreTheme=if($originalTheme -eq 'dark'){'Dark'}elseif($originalTheme -eq 'light'){'Light'}else{'System'}
 $themeIdentity=(Control 'Color theme' ([System.Windows.Automation.ControlType]::ComboBox)).GetRuntimeId() -join ':'
 foreach($choice in @('Light','Dark',$restoreTheme)){
-    [CapyRowPointer]::SetForegroundWindow($app.MainWindowHandle)|Out-Null
+    [CapyRowPointer]::SetForegroundWindow(([IntPtr]$WindowHandle))|Out-Null
     Focus-Control (Control 'Color theme' ([System.Windows.Automation.ControlType]::ComboBox))
     [CapyRowPointer]::Key([uint32]$ProcessId,[uint16]0x73) # F4 opens the native selector.
     Wait-Until {Find-Control $choice ([System.Windows.Automation.ControlType]::ListItem)} 'Theme choices did not open'
@@ -213,13 +234,15 @@ Wait-Until {(Read-Model).state.settings.zen_icon -eq $originalIcon} 'Icon restor
 
 Invoke-Control 'Search preferences'
 Edit-Text 'Search preferences' 'prediction'
-Wait-Until {Find-Control 'Prediction amount' ([System.Windows.Automation.ControlType]::Button)} 'Shared search results missing'
-Invoke-Control 'Prediction amount'
-Wait-Until {Find-Control 'Prediction amount slider' ([System.Windows.Automation.ControlType]::Slider)} 'Search result did not reveal the prediction slider'
+$prediction=Preference-Row 'prediction_horizon'
+if(!$prediction -or $prediction.kind.type -ne 'number' -or $prediction.kind.control.kind -ne 'slider'){throw 'The shared prediction amount row is not a slider'}
+Wait-Until {Find-Control $prediction.title ([System.Windows.Automation.ControlType]::Button)} 'Shared search results missing'
+Invoke-Control $prediction.title
+Wait-Until {Find-Control (Preference-Row 'prediction_horizon').title ([System.Windows.Automation.ControlType]::Slider)} 'Search result did not reveal the prediction slider'
 $feedback=(Read-Model).state.settings.feedback
 Toggle-Control 'Enable stroke prediction'
 Wait-Until {(Read-Model).state.settings.feedback -ne $feedback} 'Preview toggle did not reach shared settings'
-Wait-Until {(Control 'Prediction amount slider' ([System.Windows.Automation.ControlType]::Slider)).Current.IsEnabled -eq !$feedback} 'Prediction slider has the wrong enabled state'
+Wait-Until {$prediction=Preference-Row 'prediction_horizon';(Control $prediction.title ([System.Windows.Automation.ControlType]::Slider)).Current.IsEnabled -eq $prediction.enabled} 'Prediction slider has the wrong enabled state'
 Toggle-Control 'Enable stroke prediction'
 Wait-Until {(Read-Model).state.settings.feedback -eq $feedback} 'Preview restoration failed'
 Close-Preferences
@@ -240,8 +263,10 @@ foreach($chord in @(@(0x20,'Space'),@(0x0D,'Enter'))){
 }
 Invoke-Control 'Cancel'
 Wait-Until {!(Read-Model).preferences.capture -and (Read-Model).preferences.shortcut_editor} 'Cancel did not return to the shortcut editor'
-Invoke-Control 'Close'
-Wait-Until {!(Read-Model).preferences.shortcut_editor} 'Close did not dismiss the nested shortcut editor'
+$editorClose=@{element=$null}
+Wait-Until {$editorClose.element=$script:settingsScope.FindFirst([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,'shortcut-editor-close'));$editorClose.element -and $editorClose.element.Current.IsEnabled -and !$editorClose.element.Current.IsOffscreen} 'Nested shortcut Close button is missing'
+$editorClose.element.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+Wait-Until {$preferences=(Read-Model).preferences;$preferences -and !$preferences.shortcut_editor} 'Close did not dismiss only the nested shortcut editor'
 Close-Preferences
 
 # Fullscreen and status-item visibility are exercised by exercise-header.ps1.

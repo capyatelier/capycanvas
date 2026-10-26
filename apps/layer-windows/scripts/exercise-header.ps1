@@ -184,11 +184,27 @@ function Check-PenOrder {
             $row=Control ('brush-set-'+$first.icon) -Within $group -Arranged
             if($group.Current.ProcessId -ne $review.Id -or $row.Current.ProcessId -ne $review.Id){throw 'The arranged Brushes panel belongs to another review'}
             $scale=[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.
-            Wait-Until {
-                $viewport=Native-Bounds ('panel-body-scroll-'+$active.group.id) $scale
-                $row=Find ('brush-set-'+$first.icon) -Within $group -Visible
-                $row -and $row.Current.ProcessId -eq $review.Id -and [CapyRowPointer]::GetForegroundWindow() -eq $drawingWindow -and !$row.Current.BoundingRectangle.IsEmpty -and $viewport.Contains($row.Current.BoundingRectangle)
-            } 'The first Brushes category did not arrange inside its owned native viewport'
+            $readiness=@{drawing_hwnd=$drawingWindow.ToInt64();process=$review.Id;group_id=$active.group.id;group_runtime_id=($group.GetRuntimeId()-join ':');first_category_id=('brush-set-'+$first.icon);attempts=0;last=$null}
+            try{
+                Wait-Until {
+                    $readiness.attempts++
+                    $viewport=Native-Bounds ('panel-body-scroll-'+$active.group.id) $scale
+                    $row=Find ('brush-set-'+$first.icon) -Within $group -Visible
+                    $foreground=[CapyRowPointer]::GetForegroundWindow();$foregroundOwner=[uint32]0
+                    [CapyWindowApi]::GetWindowThreadProcessId($foreground,[ref]$foregroundOwner)|Out-Null
+                    $sample=@{foreground_hwnd=$foreground.ToInt64();foreground_process=$foregroundOwner;foreground_matches=($foreground -eq $drawingWindow);row_found=($null -ne $row);row_process=$null;row_owner_matches=$false;row_runtime_id=$null;row_offscreen=$null;row_bounds=$null;row_empty=$true;viewport=$viewport;viewport_contains=$false}
+                    if($row){
+                        $current=$row.Current;$bounds=$current.BoundingRectangle
+                        $sample.row_process=$current.ProcessId;$sample.row_owner_matches=$current.ProcessId -eq $review.Id;$sample.row_runtime_id=$row.GetRuntimeId()-join ':';$sample.row_offscreen=$current.IsOffscreen;$sample.row_bounds=$bounds;$sample.row_empty=$bounds.IsEmpty;$sample.viewport_contains=$viewport.Contains($bounds)
+                    }
+                    $readiness.last=$sample
+                    $sample.row_found -and $sample.row_owner_matches -and $sample.foreground_matches -and !$sample.row_empty -and $sample.viewport_contains
+                } 'The first Brushes category did not arrange inside its owned native viewport'
+            }catch{
+                $readiness.failure=$_|Out-String
+                [IO.File]::WriteAllText((Join-Path $run 'brushes-readiness-failure.json'),($readiness|ConvertTo-Json -Depth 15),[Text.UTF8Encoding]::new($false))
+                throw
+            }
         }
     }
     $before=(Model).state;$groups=@($before.tool_panels.brush_sets.groups)
@@ -559,7 +575,7 @@ function Check-Catalog {
     WindowCommand 'undo_workspace'
     Wait-Until {(HeaderJson) -eq $initial} 'Recovery menu could not undo the empty titlebar'
     Check-Geometry
-    & (Join-Path $PSScriptRoot 'exercise-header-settings.ps1') -ProcessId $review.Id -StateFile (State-File) -EvidenceDirectory $run
+    & (Join-Path $PSScriptRoot 'exercise-header-settings.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -StateFile (State-File) -EvidenceDirectory $run
     Check-Geometry
 }
 
@@ -788,6 +804,7 @@ try {
     [IO.File]::WriteAllText((Settings-File),(@{theme=$Theme}|ConvertTo-Json))
     Start-Review 'initial';Capture 'normal'
     if($catalogJourney){
+        Maximize-DrawingWindow
         Check-CompactWorkspace;Check-PenOrder;Check-Catalog
         & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Close -DiscardUnsaved
         if((Get-Item -LiteralPath $stderr).Length){throw 'Native stderr requires inspection'}

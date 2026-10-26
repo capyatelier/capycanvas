@@ -1487,6 +1487,7 @@ the focused header journeys also check placement cancellation and keyboard input
   waiting for brush readiness. Set `CapyTraceDirectory` when traces live outside the
   executable directory, and pass that directory as `-StateDirectory` to
   `exercise-window.ps1` for sizing and closing.
+  Nested Preferences checks receive the same HWND through `-WindowHandle`.
   Pass `-StateDirectory` for every action when the app's working directory differs
   from its executable directory, so every action records the same owner.
   Keep the launched process's `Handle` before waiting for exit so its exit code
@@ -2206,6 +2207,8 @@ For workspace panel controls, reveal rows within the published native
 `panel-body-scroll-N` bounds, converted to screen coordinates. A scroll provider's
 UIA bounds can include its full content extent. Keep its ScrollPattern for input;
 use the allocated body viewport for visibility and scroll direction.
+If an offscreen control has empty bounds, `Reveal` starts one bounded search from
+the provider's top, then retains the same viewport containment checks.
 Groups also have a horizontal tab-strip scroller. Panel allocation fixtures select
 the unique owned body provider by the published body viewport before checking its
 scroll extent; counting every provider below the whole group includes the tabs.

@@ -405,6 +405,7 @@ function Reveal([string]$Id,[switch]$Focus){
   if($node.Equals($root)){break}
   $node=$walker.GetParent($node)
  }
+ $scanFromTop=$false
  for($step=0;$step -lt 40;$step++){
   $item=Control $Id;$bounds=$item.Current.BoundingRectangle
   $clip=if($viewportId){Native-Bounds $viewportId ([CapyRowPointer]::GetDpiForWindow([IntPtr]$root.Current.NativeWindowHandle)/96.)}elseif($viewport){$viewport.Current.BoundingRectangle}else{$root.Current.BoundingRectangle}
@@ -412,6 +413,14 @@ function Reveal([string]$Id,[switch]$Focus){
   if(!$item.Current.IsOffscreen -and !$bounds.IsEmpty -and $clip.Contains($bounds)){return (Control $Id -Arranged)}
   if(!$scroll){throw "$Id is clipped outside any scroll container"}
   $before=$scroll.Current.VerticalScrollPercent
+  if($bounds.IsEmpty -and !$scanFromTop){
+   $scanFromTop=$true
+   if($before -gt 0){
+    $scroll.SetScrollPercent([System.Windows.Automation.ScrollPattern]::NoScroll,0)
+    Wait-Until {[Math]::Abs($scroll.Current.VerticalScrollPercent-$before) -gt .01} "$Id did not scroll into view"
+    continue
+   }
+  }
   $amount=if(!$bounds.IsEmpty -and $bounds.Top -lt $clip.Top){[System.Windows.Automation.ScrollAmount]::SmallDecrement}else{[System.Windows.Automation.ScrollAmount]::SmallIncrement}
   $scroll.Scroll([System.Windows.Automation.ScrollAmount]::NoAmount,$amount)
   Wait-Until {[Math]::Abs($scroll.Current.VerticalScrollPercent-$before) -gt .01} "$Id did not scroll into view"
