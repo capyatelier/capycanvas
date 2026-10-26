@@ -214,7 +214,7 @@ private struct PrintProofControls: View {
             }
             PropertyChoiceRow(labelWidth:labelWidth) {
                 let label=controller.form["print_controls"].array.first { $0["id"].string=="simulation" }?["label"].string ?? ""
-                Text(label).lineLimit(1)
+                Text(label).lineLimit(2)
                 EditorChoice(label:label,options:simulations.map { $0["label"].string },selected:simulations.firstIndex { $0["value"].string==simulation } ?? 0,
                     identifier:"proof-simulation",background:EditorPalette(source:store.state["palette"]).controlFill,ellipsis:true,height:store.panelMetrics.height) { index in
                     let value=simulations[index]["value"].string
@@ -223,7 +223,7 @@ private struct PrintProofControls: View {
             }
             PropertyChoiceRow(labelWidth:labelWidth) {
                 let label=controller.form["print_controls"].array.first { $0["id"].string=="intent" }?["label"].string ?? ""
-                Text(label).lineLimit(1)
+                Text(label).lineLimit(2)
                 EditorChoice(label:label,options:intents.map { $0["label"].string },selected:intents.firstIndex { $0["value"].string==recipe["conversion"]["intent"].string } ?? 0,
                     identifier:"proof-intent",background:EditorPalette(source:store.state["palette"]).controlFill,ellipsis:true,height:store.panelMetrics.height) { index in
                     change(recipe.replacing("conversion", with: recipe["conversion"].replacing("intent", with: intents[index]["value"])))
@@ -263,7 +263,7 @@ private struct PrintProfileMenu: View {
     var body: some View {
         let saved = entryCopy.rows(metadata, language: language)
         PropertyChoiceRow(labelWidth:labelWidth) {
-            Text(controller.form["copy"]["profile"].string).lineLimit(1)
+            Text(controller.form["copy"]["profile"].string).lineLimit(2)
             Menu {
                 if !controller.form["document_profile"].isNull {
                     Section(copy["document"].string) { Button(controller.form["document_profile"]["name"].string) { choose(controller.form["document_profile"]) } }

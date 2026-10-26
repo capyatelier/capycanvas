@@ -16,7 +16,7 @@ struct LayerPropertiesPanel: View {
             if !view["layer_type"].string.isEmpty || !view["add_filter"].isNull {
                 HStack(spacing: store.panelMetrics.spacing) {
                     Text(view["layer_type"].string).font(.system(size: store.catalog["text_size_pt"].number * 4 / 3 * 0.9)).foregroundStyle(palette["text"].opacity(0.55))
-                        .lineLimit(1).frame(maxWidth: .infinity, alignment: .leading).help(view["layer_type"].string)
+                        .lineLimit(2).frame(maxWidth: .infinity, alignment: .leading).help(view["layer_type"].string)
                         .accessibilityIdentifier("properties-layer-type")
                     if !view["add_filter"].isNull {
                         EditorMenuButton(menu: { AppleContextMenu(view["add_filter"]) { store.dispatch($0) } }, identifier: "properties-filter-menu") {
@@ -26,7 +26,8 @@ struct LayerPropertiesPanel: View {
                                 SharedIcon(name: "chevron-down")
                             }.padding(.horizontal, 6).frame(height: store.panelMetrics.height)
                         }.fixedSize(horizontal: true, vertical: false)
-                            .buttonStyle(EditorControlButtonStyle()).accessibilityIdentifier("properties-add-filter")
+                            .buttonStyle(EditorControlButtonStyle(background: palette.controlFill))
+                            .accessibilityIdentifier("properties-add-filter")
                     }
                 }
             }
@@ -151,12 +152,12 @@ private struct PropertyField: View {
                 .toggleStyle(PanelCheckStyle(minHeight: store.panelMetrics.height)).accessibilityIdentifier("property-" + key)
         case "choice" where !control["paper"].isNull:
             PropertyChoiceRow(labelWidth: labelWidth) {
-                Text(label).lineLimit(1)
+                Text(label).lineLimit(2)
                 PaperTextureButton(store: store, layer: layer, control: control)
             }
         case "choice":
             PropertyChoiceRow(labelWidth: labelWidth) {
-                Text(label).lineLimit(1)
+                Text(label).lineLimit(2)
                 EditorChoice(label: label, options: control["kind"]["options"].array.map(\.string),
                     selected: Int(value.uint), identifier: "property-" + key,
                     background: EditorPalette(source: store.state["palette"]).controlFill, height: store.panelMetrics.height) { change($0, revision: revision) }

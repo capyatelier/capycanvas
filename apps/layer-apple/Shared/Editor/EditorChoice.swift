@@ -38,12 +38,13 @@ struct EditorChoice: View {
     @State private var choosing = false
     @State private var model: AppleContextMenu?
     @Environment(\.isEnabled) private var enabled
+    @Environment(\.compactPanelControls) private var compact
     var body: some View {
         Button { if let menu { menu { model = $0; choosing = true } } else { choosing = true } } label: {
             ChoiceLabelLayout(ellipsis: ellipsis || presentation == .layerMenu, presentation: presentation) {
                 ForEach(options.indices, id: \.self) { Text(options[$0]).hidden().accessibilityHidden(true) }
                 Text(options.indices.contains(selected) ? options[selected] : label).lineLimit(1)
-            }.fontWeight(bold || presentation == .layerMenu ? .bold : .regular).clipped()
+            }.fontWeight(bold || compact || presentation == .layerMenu ? .bold : .regular).clipped()
                 .modifier(ChoiceMeasurement(id: identifier + ":text"))
                 .padding(.leading, presentation == .select ? 10 : 6).padding(.trailing, presentation == .select ? 18 : 22)
                 .frame(height: height)

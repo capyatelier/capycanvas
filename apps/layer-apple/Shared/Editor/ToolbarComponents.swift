@@ -574,7 +574,7 @@ struct ToolbarDivider: View {
         "compact": true, "units": true], language: language)["samples"].array
     let valueWidth = (samples.map { toolbarTextWidth($0.string.map { $0.isNumber ? "8" : String($0) }.joined(), size: textSize) }.max() ?? 0) + 14
     let labelWidth = preferences["text"].bool ? toolbarTextWidth(field["label"].string, size: textSize) : 16
-    return boxed(labelWidth + 4 + valueWidth + (preferences["sliders"].bool ? 60 : 0), height: bar.control)
+    return boxed(labelWidth + 4 + valueWidth + (preferences["sliders"].bool ? 62 : 0), height: bar.control)
 }
 
 struct ToolOptionField: View {
@@ -926,7 +926,10 @@ private struct ToolbarNumberField: View {
         } else {
             HStack(spacing: 4) {
                 Group {
-                    if preferences["text"].bool { Text(field["label"].string).lineLimit(1) }
+                    if preferences["text"].bool {
+                        Text(field["label"].string).lineLimit(1)
+                            .frame(width: toolbarTextWidth(field["label"].string, size: store.catalog["text_size_pt"].number * 4 / 3), alignment: .leading)
+                    }
                     else { SharedIcon(name: icon) }
                 }.accessibilityLabel(field["label"].string)
                     .onTapGesture(count: 2) { edit(["type": "reset_tool_setting", "id": id], { _ in }) }

@@ -94,7 +94,7 @@ struct ConfigurationFlow: Layout {
         var x: CGFloat = 0, y: CGFloat = 0, rowHeight: CGFloat = 0
         var points: [CGPoint] = []
         for (index, view) in subviews.enumerated() {
-            let size = view.sizeThatFits(.unspecified)
+            let size = view.sizeThatFits(ProposedViewSize(width: min(width, view.sizeThatFits(.unspecified).width), height: nil))
             if x > 0 && x + size.width > width {
                 x = 0; y += rowHeight + spacing; rowHeight = 0
             }
@@ -113,7 +113,7 @@ struct ConfigurationFlow: Layout {
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
         for (index, point) in positions(subviews, width: bounds.width).1.enumerated() {
             subviews[index].place(at: CGPoint(x: bounds.minX + point.x, y: bounds.minY + point.y),
-                anchor: .topLeading, proposal: .unspecified)
+                anchor: .topLeading, proposal: ProposedViewSize(width: min(bounds.width, subviews[index].sizeThatFits(.unspecified).width), height: nil))
         }
     }
 }

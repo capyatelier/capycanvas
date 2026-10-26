@@ -56,9 +56,9 @@ struct ToolSetControls: View {
                             HStack(spacing: 6) {
                                 SharedIcon(name: item["icon"].string)
                                 Text(item["label"].string).fontWeight(.bold)
-                                    .lineLimit(1).truncationMode(.tail)
+                                    .lineLimit(2).truncationMode(.tail)
                                     .frame(maxWidth: .infinity, minHeight: item["preview"].isNull ? store.catalog["text_size_pt"].number * 4 / 3 * 1.66 : 18,
-                                        alignment: item["preview"].isNull ? .leading : .trailing)
+                                        alignment: item["action"]["type"].string == "color_picker" ? .leading : .trailing)
                             }
                         }
                     }
@@ -183,9 +183,9 @@ struct ToolSettingsControls: View {
                         VStack(spacing: 2) {
                             ForEach(group, id: \.settingID) { item in
                                 HStack(spacing: store.panelMetrics.spacing) {
-                                    Text(item["label"].string).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
+                                    Text(item["label"].string).lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
                                     setting(item, editingContext: editingContext, valueOnly: true)
-                                }.frame(height: store.panelMetrics.height)
+                                }.frame(minHeight: store.panelMetrics.height)
                             }
                         }
                     }
@@ -226,7 +226,7 @@ private extension ToolSettingsControls {
             store.catalog["tool_action_groups"].array.first { $0["id"].string == group.id }?["label"].string ?? ""
         }
         return PropertyChoiceRow(labelWidth: store.panelLabelWidth(labels)) {
-            Text(label).lineLimit(1)
+            Text(label).lineLimit(2)
             EditorChoice(label: label, options: commands.map { $0["label"].string }, selected: commands.firstIndex { $0["selected"].bool } ?? 0,
                 identifier: "tool-action-group-" + group.id, background: palette.controlFill, height: store.panelMetrics.height, menu: { open in
                     open(AppleContextMenu(JSON(["sections": [commands.map { command in
@@ -294,12 +294,12 @@ private struct TonalSettingsControls: View {
             }
             ForEach(settings.filter { !["tonal_lower", "tonal_upper"].contains($0["id"].string) }, id: \.settingID) { item in
                 HStack(spacing: store.panelMetrics.spacing) {
-                    Text(item["label"].string).lineLimit(1).frame(width: 62, alignment: .leading)
+                    Text(item["label"].string).lineLimit(2).frame(width: 62, alignment: .leading)
                     NumberControl(store: store, label: item["label"].string, value: item["value"].number,
                         control: item["numeric"], identifier: "tool-" + item.settingID, inline: true) { value, completion in
                         store.edit(["type": "set_tool_setting", "id": item.settingID, "value": value], completion: completion)
                     }
-                }.frame(height: store.panelMetrics.height).accessibilityElement(children: .contain).accessibilityIdentifier("tool-setting-" + item.settingID)
+                }.frame(minHeight: store.panelMetrics.height).accessibilityElement(children: .contain).accessibilityIdentifier("tool-setting-" + item.settingID)
             }
         }
     }
@@ -314,13 +314,13 @@ private struct PickerSettingsRows: View {
         let sizes=picker["sample_sizes"].array.map(\.uint)
         VStack(alignment:.leading,spacing:store.panelMetrics.spacing) {
             PropertyChoiceRow(labelWidth:store.panelLabelWidth(labels)) {
-                Text(labels[0]).lineLimit(1)
+                Text(labels[0]).lineLimit(2)
                 EditorChoice(label:labels[0],options:source,selected:picker["layer"].bool ? 1 : 0,identifier:"picker-setting-source",background:EditorPalette(source:store.state["palette"]).controlFill,height:store.panelMetrics.height) {
                     store.dispatch(["type":"color_picker","action":["kind":"source","layer":$0==1]])
                 }
             }
             PropertyChoiceRow(labelWidth:store.panelLabelWidth(labels)) {
-                Text(labels[1]).lineLimit(1)
+                Text(labels[1]).lineLimit(2)
                 EditorChoice(label:labels[1],options:sizes.map { width in copy["sizes"].array.first { $0[0].uint==width }?[1].string ?? "" },selected:sizes.firstIndex(of:picker["sample_width"].uint) ?? 0,identifier:"picker-setting-size",background:EditorPalette(source:store.state["palette"]).controlFill,height:store.panelMetrics.height) {
                     store.dispatch(["type":"set_color_sample_size","width":sizes[$0]])
                 }
