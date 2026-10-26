@@ -66,6 +66,7 @@ impl BakePreflight {
             if !r.prepare_raster_restores(source) {return Ok(());}
             r.reconcile_rasters(source,true,&[])?;
             let mut encoder=submission::CommandEncoder::new(&r.device,&Default::default());
+            r.prepare_uploads(source,&mut [],&mut encoder)?;
             r.layer_masks.prepare(&r.device,&mut encoder,(scene,&[]),input.key.extent,false,&mut r.selection_clip)?;
             if encoder.has_work() {r.uploads.finish(&encoder);encoder.submit(&r.queue);}
             self.scene=Some(Scene::new(r)?);self.scene.as_mut().unwrap().ordered=true;self.initialized=true;
