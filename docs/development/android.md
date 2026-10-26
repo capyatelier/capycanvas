@@ -41,6 +41,9 @@ a real Japanese, Chinese or Korean input method.
 JNI result handling lives in `native/src/android.rs`: `or_throw` reports
 `IllegalStateException` and keeps the return sentinel; `argb_array` packs RGBA
 pixels for Kotlin.
+Proof copy observes the shared workspace content revision, so geometry-only
+publications retain subscribed controls without restarting their queries.
+
 JNI `Long` handles are typed generational tokens in `layer_host::handles`.
 Lookup validates the token before accessing an App or task. Apps remain in the
 creating render thread's local table; another thread cannot borrow or destroy

@@ -724,6 +724,47 @@ mod tests {
     }
 
     #[test]
+    fn proof_subscribers_follow_content_revision_and_retain_identity_during_workspace_geometry() {
+        use layer_ui::ContactPhase::*;
+        let mut host=host(Platform::Android);
+        workspace_fixture(&mut host);
+        let mut workspace=serde_json::to_value(host.session.state().workspace.clone()).unwrap();
+        workspace["layout"]["bands"][0]["root"]=json!({
+            "kind":"split","id":45,"axis":"vertical","fraction":0.5,
+            "first":{"kind":"tabs","id":41,"panels":["brushes"],"active":"brushes","tab_style":"icon"},
+            "second":{"kind":"tabs","id":44,"panels":["sizes"],"active":"sizes","tab_style":"icon"}
+        });
+        host.dispatch(UiAction::RestoreWorkspace {workspace:Box::new(serde_json::from_value(workspace).unwrap())}).unwrap();
+        let initial=layout_update(&mut host);
+        let copy=host.query(json!({"type":"proof_copy"})).unwrap();
+        host.query(json!({"type":"proof_panel","action":{"type":"mode","mode":"print"}})).unwrap();
+        let changed=layout_update(&mut host);
+        assert_ne!(changed["workspace_update"]["content_revision"],initial["workspace_update"]["content_revision"]);
+        let proof_copy=host.query(json!({"type":"proof_copy"})).unwrap();
+        let proof_status=host.query(json!({"type":"proof_status"})).unwrap();
+        let proof_panel=host.snapshot()["proof_panel"].clone();
+        assert_ne!(proof_copy,copy,"Proof edits must refresh subscribed controls");
+        for id in [45,40] {
+            let content_revision=json!(host.session.workspace_content_revision());
+            let divider=host.session.layout(host.logical).dividers.into_iter().find(|d|d.id==id).unwrap();
+            let start=[divider.bounds.x+divider.bounds.width*0.5,divider.bounds.y+divider.bounds.height*0.5];
+            for (phase,delta) in [(Down,0.),(Move,24.),(Move,48.)] {
+                let mut position=start;position[usize::from(divider.axis==layer_ui::Axis::Vertical)]+=delta;
+                host.dispatch(UiAction::DragDivider {id,phase,position,viewport:host.logical}).unwrap();
+                let packet=decoded(host.take_layout_update_bytes().unwrap());
+                if phase==Down {continue;}
+                let packet=packet.expect("moving workspace geometry publishes its layout");
+                assert_eq!(packet["workspace_update"]["content_revision"],content_revision,"divider {id}, phase {phase:?}");
+                assert_eq!(host.query(json!({"type":"proof_copy"})).unwrap(),proof_copy);
+                assert_eq!(host.query(json!({"type":"proof_status"})).unwrap(),proof_status);
+                assert_eq!(host.snapshot()["proof_panel"],proof_panel);
+            }
+            host.dispatch(UiAction::DragDivider {id,phase:Cancel,position:start,viewport:host.logical}).unwrap();
+            host.take_layout_update_bytes().unwrap();
+        }
+    }
+
+    #[test]
     fn resize_content_changes_collapse_and_legacy_consumers_require_full_models() {
         use layer_ui::ContactPhase::*;
         let mut host = host(Platform::Android);

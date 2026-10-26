@@ -181,7 +181,8 @@ internal class ProofController(private val host: CanvasHost) {
 }
 
 @Composable internal fun ProofRequests(host:CanvasHost,state:JSONObject) {
-    LaunchedEffect(state.optLong("revision"),host.languageTag){host.proof.refreshCopy()}
+    val revision=host.snapshot?.objectOrNull("workspace_update")?.optLong("content_revision") ?: state.optLong("revision")
+    LaunchedEffect(revision,host.languageTag){host.proof.refreshCopy()}
     val request=state.array("requests").objects().firstOrNull{it.getJSONObject("kind").getString("type")in listOf("soft_proof_setup","sdr_rendition")}
     if(request!=null)LaunchedEffect(request.getInt("id")) {
         try {
