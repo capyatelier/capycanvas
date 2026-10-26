@@ -1399,3 +1399,20 @@ fn a_new_stroke_prepares_the_displaced_footprint_of_its_saved_field() {
     assert!(required[&batch.target].contains(&[5,5]));
     assert!(required[&batch.target].contains(&[0,0]));
 }
+
+#[test]
+fn liquify_shaders_store_footprints_without_hlsl_matrix_member_setters() {
+    let r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let shaders=(0..8).flat_map(|mode|[false,true].map(|analytic|super::map_shader(mode,analytic))).chain([super::color_shader(&r.device)]);
+    for source in shaders {
+        let module=naga::front::wgsl::parse_str(&source).unwrap();
+        let info=naga::valid::Validator::new(naga::valid::ValidationFlags::all(),naga::valid::Capabilities::all()).validate(&module).unwrap();
+        let (module,info)=naga::back::pipeline_constants::process_overrides(&module,&info,None,&Default::default()).unwrap();
+        let options=naga::back::hlsl::Options {shader_model:naga::back::hlsl::ShaderModel::V6_0,..Default::default()};
+        let pipeline=Default::default();
+        let mut hlsl=String::new();
+        naga::back::hlsl::Writer::new(&mut hlsl,&options,&pipeline).write(&module,&info,None).unwrap();
+        let calls:Vec<_>=hlsl.lines().filter(|line|line.contains("SetMat")&&!line.trim_start().starts_with("void ")).collect();
+        assert!(calls.is_empty(),"naga's HLSL matrix member setters copy their struct, so Direct3D drops the stored footprint: {calls:?}");
+    }
+}

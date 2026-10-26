@@ -36,8 +36,7 @@ fn map_bilinear(at: vec2<f32>) -> MapSample {
             let weight = select(1. - t.x, t.x, x == 1) * select(1. - t.y, t.y, y == 1);
             if weight == 0. { continue; }
             let value = map_correction(p + vec2(x, y));
-            result.displacement += value.displacement * weight;
-            result.footprint += value.footprint * weight;
+            result = MapSample(result.displacement + value.displacement * weight, result.footprint + value.footprint * weight);
         }
     }
     return result;
@@ -70,12 +69,10 @@ fn update_map(@builtin(global_invocation_id) invocation: vec3<u32>) {
     var value = map_bilinear(trace.position);
     if sources.header.y != 0u {
         let previous = unpack_map(textureLoad(previous_map, pixel, 0));
-        value.displacement += previous.displacement;
-        value.footprint += previous.footprint;
+        value = MapSample(value.displacement + previous.displacement, value.footprint + previous.footprint);
     }
     if sources.header.z != 0u {
-        value.footprint += IDENTITY;
-        value = compose_liquify(initial, trace, value);
+        value = compose_liquify(initial, trace, MapSample(value.displacement, value.footprint + IDENTITY));
     }
     textureStore(output_map, pixel, pack_map(value));
 }

@@ -134,7 +134,7 @@ fn trace_liquify(initial: vec2<f32>) -> Trace {
                 result.gradient = (1. - s) * result.gradient - result.restore * gradient;
                 result.restore *= 1. - s;
             }
-            result.footprint = jacobian * result.footprint;
+            result = Trace(result.position, jacobian * result.footprint, result.restore, result.gradient);
         }
     }
     return result;
