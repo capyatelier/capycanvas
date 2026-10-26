@@ -511,6 +511,34 @@ private final class NativeRotation: UIRotationGestureRecognizer {
                     && canvas.contacts.isEmpty && canvas.ignoredContacts.isEmpty,
                     "Each fresh direct-touch pair must pinch and release both reused identities in \(theme): ratio=\(ratio), zoom=\(before["zoom"].number)->\(store.state["camera"]["zoom"].number), viewport=\(store.state["camera"]["viewport"]), work_area=\(store.state["camera"]["work_area"]), contacts=\(canvas.contacts.count), ignored=\(canvas.ignoredContacts.count)")
             }
+            func quickPinch(outward: Bool) async throws {
+                let fingers = [Contact(), Contact()], event = ContactEvent()
+                for finger in fingers { finger.device = .direct }
+                let from: [CGFloat] = outward ? [550, 650] : [500, 700]
+                let to: [CGFloat] = outward ? [500, 700] : [550, 650]
+                for index in 0..<2 { fingers[index].point = CGPoint(x: from[index], y: 400) }
+                canvas.touchesBegan(Set(fingers.map { $0 as UITouch }), with: event)
+                for index in 0..<2 {
+                    fingers[index].point.x = to[index]
+                    fingers[index].time += 0.08
+                }
+                canvas.touchesMoved(Set(fingers.map { $0 as UITouch }), with: event)
+                for finger in fingers { finger.time += 0.03 }
+                canvas.touchesEnded(Set(fingers.map { $0 as UITouch }), with: event)
+                try await flush()
+                try require(canvas.contacts.isEmpty && canvas.ignoredContacts.isEmpty,
+                    "Quick pinch must retire both native finger contacts in \(theme)")
+            }
+            try await invoke("reset_view")
+            let fitted = store.state["camera"]
+            try await invoke("zoom_out")
+            try await invoke("rotate_right")
+            let priorView = store.state["camera"]
+            try require(!recalledCamera(fitted), "Quick pinch needs a distinct prior view in \(theme)")
+            try await quickPinch(outward: false)
+            try require(recalledCamera(fitted), "Quick inward pinch must fit the canvas in \(theme)")
+            try await quickPinch(outward: true)
+            try require(recalledCamera(priorView), "Reverse quick pinch must restore the prior view in \(theme)")
             try await invoke("fit_canvas")
             try require(try await pixels() == gesturePainted, "Consecutive direct-touch pinches preserve every authored pixel")
             for mode in ["pinch", "rotation", "combined"] {
@@ -598,6 +626,66 @@ private final class NativeRotation: UIRotationGestureRecognizer {
         try await recall("after captured-contact cancellation", resumed, completed: store.state["camera"])
         try require(try await pixels() == gesturePainted, "Captured-contact exclusion and resumed recall must preserve every pixel")
         try await history(paper, gesturePainted)
+        for theme in ["light", "dark"] {
+            try await action(["type": "set_theme", "theme": theme])
+            try await newDocument()
+            try await action(["type": "select_brush", "id": 1])
+            try await wait("Prepare gesture brush") { store.snapshot["brush_ready"].bool }
+            let blank = try await pixels()
+            try await path([CGPoint(x: 24, y: 64), CGPoint(x: 104, y: 64)], device: .pencil)
+            let painted = try await pixels()
+            try require(painted != blank, "Scrub fixture must contain authored paint in \(theme)")
+            let scrub = [Contact(), Contact(), Contact()], scrubEvent = ContactEvent()
+            for (index, finger) in scrub.enumerated() {
+                finger.device = .direct
+                finger.point = CGPoint(x: 450 + CGFloat(index * 100), y: 400)
+            }
+            canvas.touchesBegan(Set(scrub.map { $0 as UITouch }), with: scrubEvent)
+            for offset: CGFloat in [40, -40, 40] {
+                for (index, finger) in scrub.enumerated() {
+                    finger.point.x = 450 + CGFloat(index * 100) + offset
+                    finger.time += 0.05
+                }
+                canvas.touchesMoved(Set(scrub.map { $0 as UITouch }), with: scrubEvent)
+            }
+            for finger in scrub { finger.time += 0.01 }
+            canvas.touchesEnded(Set(scrub.map { $0 as UITouch }), with: scrubEvent)
+            try await flush()
+            try require(canvas.contacts.isEmpty, "Three-finger scrub must retire all native contacts")
+            let cleared = try await pixels()
+            try require(cleared == blank, "Three-finger scrub must clear the active layer exactly in \(theme)")
+            try await invoke("undo")
+            try require(try await pixels() == painted, "One Undo restores scrubbed artwork exactly in \(theme)")
+            try await history(blank, painted)
+            for _ in 0..<2 { try await invoke("add_layer") }
+            let layerCount = store.state["layers"].array.count
+            func heldHistory(fingers count: Int, first: Int, repeated: Int) async throws {
+                let fingers = (0..<count).map { index -> Contact in
+                    let finger = Contact(); finger.device = .direct
+                    finger.point = CGPoint(x: 400 + CGFloat(index * 90), y: 400)
+                    return finger
+                }
+                let event = ContactEvent()
+                canvas.touchesBegan(Set(fingers.map { $0 as UITouch }), with: event)
+                try await flush()
+                try await Task.sleep(for: .milliseconds(550))
+                try await flush()
+                try require(store.state["layers"].array.count == first,
+                    "Held \(count)-finger history must advance after its long press in \(theme)")
+                try await Task.sleep(for: .milliseconds(100))
+                try await flush()
+                try require(store.state["layers"].array.count == repeated,
+                    "Held \(count)-finger history must repeat while fingers stay down in \(theme)")
+                for finger in fingers { finger.time = max(finger.time.nextUp, ProcessInfo.processInfo.systemUptime) }
+                canvas.touchesEnded(Set(fingers.map { $0 as UITouch }), with: event)
+                try await flush()
+                try require(canvas.contacts.isEmpty && store.state["layers"].array.count == repeated,
+                    "Releasing a history hold must not also perform a tap in \(theme)")
+            }
+            try await heldHistory(fingers: 2, first: layerCount - 1, repeated: layerCount - 2)
+            try await heldHistory(fingers: 3, first: layerCount - 1, repeated: layerCount)
+            passed("PASS: UIKit \(theme) direct quick pinch, three-finger scrub, and repeated held Undo/Redo")
+        }
         try await newDocument()
         passed("PASS: UIKit middle-button scrolling, indirect gesture grouping/recall, interruption, primary contact exclusion and exact artwork history")
         for device: UITouch.TouchType in [.indirectPointer, .pencil] {

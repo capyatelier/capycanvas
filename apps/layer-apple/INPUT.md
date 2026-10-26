@@ -97,8 +97,9 @@ AppKit forwards indirect trackpad contacts with stable IDs, native timestamps
 and positions in the touch device's point coordinates. Shared Rust recognizes
 the [three-finger scrub](../../docs/ui/settings.md#touch-gestures-and-pen-buttons)
 and quick inward-pinch fit and reverse-pinch restore on both Apple hosts.
-Trackpad contacts do not generate Undo/Redo tap or hold shortcuts, or duplicate
-native two-finger pan, pinch and rotation. Native navigation pauses while three
+Trackpad contacts support held Undo/Redo but leave taps with the operating
+system. They do not duplicate native two-finger pan, pinch and rotation.
+Native navigation pauses while three
 or more fingers are down and until a recognized scrub's last finger lifts.
 System-reserved trackpad gestures must reach the app for recognition to work.
 
@@ -131,6 +132,12 @@ iPad callbacks. The AppKit input fixture and UIKit modifier fixture check wheel
 navigation while mouse buttons are held, continued contact after scrolling,
 cancellation, and exclusion during painting. None of these replace a physical
 Pencil or tablet check.
+
+The existing `canvas-modifiers.swift` path checks direct finger quick pinch fit
+and restore, three-finger scrub with exact artwork Undo, and repeated held
+two-finger Undo and three-finger Redo in both themes. `--pen-response` and
+`pencil-estimates.swift` retain their separate pen response and delayed estimate
+coverage.
 
 `CAPY_VECTOR_INPUT_ONLY=1` runs the UIKit modifier fixture's vector journeys in
 both themes: ink, Move, Properties, Arrange, Path, Edit Points, masks,
