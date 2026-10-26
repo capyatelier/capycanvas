@@ -304,6 +304,10 @@ visibility changes do not move artwork under the pen.
 Every host draws the same SVGs from `apps/layer-web/icons`; Rust supplies the
 icon identity for each command, preset, panel and tool setting.
 
+Tool Set uses a brush cup. Tool Settings and Tool Options use a brush with
+sliders. Operation's Move uses a pointer beside an object outline; the group
+shows the selected member's icon.
+
 Filters panels and generic effects use **fx**. Actions that add a filter use
 **fx+**, including Properties, Layers, layer context menus and the selection bar.
 Individual filters retain their own symbols, including in nested menus. Categories use

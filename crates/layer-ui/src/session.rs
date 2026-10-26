@@ -15894,6 +15894,13 @@ mod tests {
                 let icon = ToolVariant::Figure { shape }.icon();
                 assert_eq!(s.canvas_cursor().unwrap().segments[0].marker, layer_render::tool_cursor_marker(icon).unwrap());
             }
+            for command in [CommandId::Move, CommandId::Fill, CommandId::LassoFill, CommandId::Gradient] {
+                invoke(&mut s, command);
+                let cursor = s.canvas_cursor().unwrap_or_else(|| panic!("{command:?} needs a tool cursor"));
+                assert_eq!(cursor.segments.len(), 1, "{command:?}");
+                let marker = layer_render::tool_cursor_marker(command.icon().unwrap()).unwrap();
+                assert_eq!(cursor.segments[0].marker, marker, "{command:?}");
+            }
             invoke(&mut s, CommandId::Pen);
             let restored_icon = s.canvas_cursor().unwrap().segments[0].marker;
             s.cursor_input(Some(PenEvent { tool: ToolKind::Eraser, ..event(&s, 2, PenPhase::Hover, 0.) }));

@@ -480,7 +480,7 @@ impl ToolbarControl {
             Self::Size { .. } | Self::BrushSizeSlider => "size",
             Self::Color => "colors", Self::ColorPicker => "color-picker",
             Self::BrushStrengthSlider => "paint-flow",
-            Self::ToolOptions { .. } => "settings", Self::Panel { panel } => panel.icon(), Self::Divider => "minus",
+            Self::ToolOptions { .. } => Panel::ToolSettings.icon(), Self::Panel { panel } => panel.icon(), Self::Divider => "minus",
         }
     }
     pub fn action(self) -> Option<UiAction> {

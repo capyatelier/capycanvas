@@ -24,6 +24,7 @@ HOTSPOTS = {
     "oil-paint": (5.53, 11.69), "eraser": (5, 14), "airbrush": (10, 8),
     "spray": (8, 8), "blend": (2.6, 11.7), "clone": (8, 14.25),
     "heal": (2.34, 13.66), "spot-heal": (4, 12), "eyedropper": (2, 14),
+    "move": (6, 5.5),
     "selection-brush": (5.3, 13.7), "auto-select": (2, 14), "color-select": (2, 13),
     "lasso": (3, 13), "lasso-fill": (3, 13), "line": (2, 14), "path": (2.5, 13), "edit-points": (8, 5), "ruler": (2, 14),
 }
