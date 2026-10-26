@@ -684,10 +684,10 @@ void CanvasWindow::StartInput() {
             if(auto self=weak.lock()){self->Pointer(e,4);self->PickerHold(e,4);}
         });
         inputSource.PointerRoutedAway([weak=weak_from_this()](auto&&,PointerEventArgs const& e){
-            if(auto self=weak.lock()){self->Pointer(e,4);self->PickerHold(e,4);}
+            if(auto self=weak.lock()){self->Pointer(e,4);self->PickerHold(e,4);self->SendIndependent(CanvasCommand{CanvasCommandKind::Input,R"({"type":"cursor_leave"})"});}
         });
         inputSource.PointerRoutedReleased([weak=weak_from_this()](auto&&,PointerEventArgs const& e){
-            if(auto self=weak.lock()){self->Pointer(e,4);self->PickerHold(e,4);}
+            if(auto self=weak.lock()){self->Pointer(e,4);self->PickerHold(e,4);self->SendIndependent(CanvasCommand{CanvasCommandKind::Input,R"({"type":"cursor_leave"})"});}
         });
         inputSource.PointerWheelChanged([weak=weak_from_this()](auto&&,PointerEventArgs const& e){
             if(auto self=weak.lock())self->Wheel(e);

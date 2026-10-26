@@ -59,6 +59,8 @@ whole client area, including behind the custom title bar.
   `PointerPredictor` predictions on its own thread, so a presentation wait never
   stops input. The render thread exclusively owns the Rust host: commands, GPU
   work and presentation. UI code never waits for a frame.
+- **Canvas departure.** Input routed away to native controls cancels its contact
+  and forwards `cursor_leave`, clearing brush outlines and picker previews.
 - **Bounded queues.** Input and commands travel in one ordered, bounded queue; a
   full queue reports an error and cancels active input instead of dropping
   records. Optional queries have their own queue. Published models go through a
