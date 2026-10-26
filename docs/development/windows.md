@@ -361,6 +361,9 @@ enabled state and expansion checks remain.
 `exercise-header.ps1` compares the Clock caption before and after moving it from
 the component bank into the title bar, including its visible width.
 Use `-Journey background` for only mouse, touch and pen background-hold menus.
+The editable title background captures its contact immediately, so touch and pen
+holds keep their context menu through release. Outside customization, native
+window dragging keeps its normal input path.
 In Paint, it also checks the full workspace group, caption padding and options
 containment at 1200 DIP, then the compact selector at 960 DIP. The switcher journey
 adopts Paint and removes its center drawing title through customization before

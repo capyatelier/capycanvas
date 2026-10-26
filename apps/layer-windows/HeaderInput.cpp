@@ -238,7 +238,7 @@ struct HeaderInput::Impl:std::enable_shared_from_this<Impl>{
         beginRequest.Insert(L"source",source);beginRequest.Insert(L"press",point(origin));
         beginRequest.Insert(L"grab",rectangle(visibleBounds(element,root)));
         recognizing=true;recognizer.Begin(element,p,(isItem||kind==L"capy"||kind==L"background")&&device!=NativeInput::PointerDeviceType::Mouse?NativeInput::GestureSettings::Hold:NativeInput::GestureSettings::None);
-        if(editable()&&kind!=L"background"){claim();e.Handled(true);}
+        if(editable()){claim();e.Handled(true);}
         timer.Start();notify();
     }
     void move(PointerRoutedEventArgs const& e){
