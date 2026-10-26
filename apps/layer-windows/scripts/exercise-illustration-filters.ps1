@@ -59,20 +59,25 @@ function Select-Filter([string]$Id,[string]$Label){
     Wait-Until {(Model).state.layer_properties.description -eq $Label} "$Label did not become active"
     Panel 'properties';Fit-Canvas
 }
-function Pixel([double]$X){
+function Pixels([double[]]$Positions){
     $camera=(Model).state.camera;$bounds=(Control 'drawing-canvas' -Arranged).Current.BoundingRectangle
-    $x=[int]($bounds.X+($X*$camera.zoom+$camera.translation[0])*$bounds.Width/$camera.viewport[0])
+    $xs=@(foreach($position in $Positions){[int]($bounds.X+($position*$camera.zoom+$camera.translation[0])*$bounds.Width/$camera.viewport[0])})
+    $extent=$xs|Measure-Object -Minimum -Maximum;$left=[int]$extent.Minimum
     $y=[int]($bounds.Y+(96*$camera.zoom+$camera.translation[1])*$bounds.Height/$camera.viewport[1])
-    $sample=[Drawing.Bitmap]::new(1,1);$graphics=[Drawing.Graphics]::FromImage($sample)
-    try{$graphics.CopyFromScreen($x,$y,0,0,[Drawing.Size]::new(1,1));$c=$sample.GetPixel(0,0);@([int]$c.R,[int]$c.G,[int]$c.B)}finally{$graphics.Dispose();$sample.Dispose()}
+    $sample=[Drawing.Bitmap]::new([int]($extent.Maximum-$left+1),1);$graphics=[Drawing.Graphics]::FromImage($sample)
+    try{
+        $graphics.CopyFromScreen($left,$y,0,0,$sample.Size)
+        foreach($x in $xs){$c=$sample.GetPixel($x-$left,0);[int]$c.R;[int]$c.G;[int]$c.B}
+    }finally{$graphics.Dispose();$sample.Dispose()}
 }
+function Pixel([double]$X){Pixels -Positions @($X)}
 function Near($A,$B,[int]$Tolerance=4){
     if($A.Count -ne $B.Count){return $false}
     for($i=0;$i -lt $A.Count;$i++){if([Math]::Abs($A[$i]-$B[$i]) -gt $Tolerance){return $false}}
     $true
 }
-function Pair([double]$X){Pixel $X;Pixel ($X+8)}
-function Artistic-Pixels{(@(foreach($x in 1..19){Pixel ($x*16)}) -join ',')}
+function Pair([double]$X){Pixels -Positions @($X,($X+8))}
+function Artistic-Pixels{(Pixels -Positions @(foreach($x in 1..19){$x*16})) -join ','}
 function Save-Reopen([string]$Path){
     Save-ProjectAs $Path
     $epoch=(Model).state.document_file.epoch

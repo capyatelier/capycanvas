@@ -112,6 +112,7 @@ if($LASTEXITCODE -ne 0){throw 'Canvas queue test failed.'}
 & (Join-Path $PSScriptRoot '../tests/application-menu-invoke.ps1')
 
 & (Join-Path $PSScriptRoot '../tests/paper-relief.ps1')
+& (Join-Path $PSScriptRoot '../tests/stable-pixels.ps1')
 
 & {
  $tokens=$null;$errors=$null

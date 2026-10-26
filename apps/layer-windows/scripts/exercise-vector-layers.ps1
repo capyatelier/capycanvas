@@ -185,7 +185,18 @@ function Vector-Editing{
  Shortcut-Command 'copy';Park;Editing-Settled
  if((Drawing-Checkpoint) -cne $clipboardCheckpoint){throw 'Copy changed authored history'}
  Editing-History 'paste-in-place' $points {Editing-Command 'paste_in_place'} {Expect 'Paste in Place preserves visible location' @(550,510) 'ink';if((Active).id -ne $layer){throw 'Paste in Place left the vector layer'}}
- Editing-History 'cut' $points {Shortcut-Command 'cut'} {Expect 'Cut leaves the original path' @(550,510) 'ink'}
+ Editing-History 'paste-move' $points {Stroke (Line @(550,480) @(900,480))} {
+  Expect 'Moving the pasted path retains the original' @(550,510) 'ink'
+  Expect 'Moving the pasted path reveals the clipboard copy' @(900,510) 'ink'
+  if((Active).id -ne $layer){throw 'Moving the pasted path left its vector layer'}
+ }
+ Stroke (Line @(900,510) @(900,510) 1)
+ Wait-Until {(Selected 'move') -and @((Model).state.layer_properties.controls|Where-Object key -eq 'path_fill').Count -eq 1} 'The pasted path did not regain its selection after history'
+ Editing-History 'cut' $points {Shortcut-Command 'cut'} {
+  Expect 'Cut leaves the original path' @(550,510) 'ink'
+  Expect 'Cut removes the selected clipboard copy' @(900,510) 'ink' $false
+  if((Active).id -ne $layer -or !(Vector (Active))){throw 'Cut removed the vector layer instead of its selected path'}
+ }
  Set-Color '#26B340';Select-Tool 'figure'
  Stroke (Line @(500,450) @(800,670))
  Expect 'Second rectangle covers the first' @(600,510) 'green'

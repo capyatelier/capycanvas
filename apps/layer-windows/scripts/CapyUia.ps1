@@ -233,6 +233,7 @@ function Assert-RendererHealthy([int]$ProcessId,$Drawing){
     }
 }
 function Screen-Pixels([int]$X,[int]$Y,[string]$Path='',[switch]$Cursor) {
+    Add-Type -AssemblyName System.Drawing
     $bitmap=[Drawing.Bitmap]::new(96,96)
     $graphics=[Drawing.Graphics]::FromImage($bitmap)
     try {
@@ -251,10 +252,10 @@ function Screen-Pixels([int]$X,[int]$Y,[string]$Path='',[switch]$Cursor) {
         try{[BitConverter]::ToString($hash.ComputeHash($bytes)).Replace('-','')}finally{$hash.Dispose()}
     }finally{$graphics.Dispose();$bitmap.Dispose()}
 }
-function Wait-StablePixels([scriptblock]$Sample){
-    $watch=[Diagnostics.Stopwatch]::StartNew();$last=& $Sample;$stable=0;$comparisons=0
+function Wait-StablePixels([scriptblock]$CapturePixels){
+    $watch=[Diagnostics.Stopwatch]::StartNew();$last=& $CapturePixels;$stable=0;$comparisons=0
     do{
-        Start-Sleep -Milliseconds 100;$next=& $Sample;$comparisons++
+        Start-Sleep -Milliseconds 100;$next=& $CapturePixels;$comparisons++
         if($next -eq $last){$stable++}else{$stable=0};$last=$next
         if($stable -ge 3){return $last}
     }while($watch.Elapsed.TotalSeconds -lt 5)

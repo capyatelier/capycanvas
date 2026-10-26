@@ -277,13 +277,15 @@ function Slider-Toggle([long]$Id,[bool]$Expected){
     Escape;Wait-Until {!(Find 'menu-show-sliders' -Visible)} 'Retained slider menu did not dismiss'
 }
 function Slider-Medium([string]$Group,[double]$X,[double]$Y){
-    & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Window'
     $window=@((Model).application_menus|Where-Object id -eq 'window')[0].model
     $choice=@($window.sections|ForEach-Object {$_}|Where-Object {$_.action.type -eq 'customize' -and $_.action.action.type -eq 'set_panel_visible' -and $_.action.action.panel -eq 'brush_sets'})
     if($choice.Count -ne 1){throw 'The shared Window menu did not offer the brush sets panel'}
-    $item=Control $choice[0].label -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)
-    $toggle=$item.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)
-    if($toggle.Current.ToggleState -eq [System.Windows.Automation.ToggleState]::Off){$toggle.Toggle()}else{Escape}
+    if(!$choice[0].selected){
+        & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Window'
+        $item=Control $choice[0].label -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)
+        $item.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
+        Wait-Until {!(Find $choice[0].label -Name -Type ([System.Windows.Automation.ControlType]::MenuItem) -Visible) -and @((Model).layout.groups|Where-Object active -eq 'brush_sets').Count -eq 1} 'Brush sets panel did not appear and dismiss its menu'
+    }
     $tileId='brush-set-'+$Group;$tile=Reveal $tileId
     $ids=@(Packets|ForEach-Object {$_.view.id});$from=At $tileId;Drag $from (Screen $X $Y)
     Wait-Until {@(Packets|Where-Object {$_.view.id -notin $ids}).Count -eq 1} "Native $Group source did not tear out"
@@ -506,13 +508,17 @@ function Invoke-BlenderCellChecks([int]$Preset,[string]$CellId,[double]$DefaultC
     $blankCheckpoint=Drawing-Checkpoint
     [CapyRowPointer]::Down('pen',$sample.x,($sample.y-16));[CapyRowPointer]::Move($sample.x,($sample.y+16));[CapyRowPointer]::Up()
     Wait-Until {(Revision) -gt $before} 'Blender seed stroke did not commit'
-    [CapyRowPointer]::Hover($w.X+4,$w.Y+4);$seed=Wait-StablePixels {Screen-Pixels $sample.x $sample.y}
+    [CapyRowPointer]::Hover($w.X+4,$w.Y+4)
+    Wait-Until {(Screen-Pixels $sample.x $sample.y) -cne $blank} 'Blender fixture seed did not create effective artwork'
+    $seed=Wait-StablePixels {Screen-Pixels $sample.x $sample.y}
     $seedCheckpoint=Drawing-Checkpoint
     if($seed -ceq $blank){throw 'Blender fixture seed did not create effective artwork'}
     Blender-Select $Preset;Blender-Value 'size' '64';$seedRevision=Revision
     [CapyRowPointer]::Down('pen',$clear[0],$clear[1]);for($step=1;$step -le 16;$step++){[CapyRowPointer]::Move(($clear[0]+8*$step),$clear[1]);Start-Sleep -Milliseconds 15};[CapyRowPointer]::Up()
     Wait-Until {(Revision) -gt $seedRevision} 'Blender stroke did not commit'
-    [CapyRowPointer]::Hover($w.X+4,$w.Y+4);$painted=Wait-StablePixels {Screen-Pixels $sample.x $sample.y}
+    [CapyRowPointer]::Hover($w.X+4,$w.Y+4)
+    Wait-Until {(Screen-Pixels $sample.x $sample.y) -cne $seed} 'Blender stroke did not change its seeded artwork'
+    $painted=Wait-StablePixels {Screen-Pixels $sample.x $sample.y}
     $paintedCheckpoint=Drawing-Checkpoint
     if($painted -ceq $seed){throw 'Blender stroke did not change its seeded artwork'}
     Blender-Value $CellId '12'

@@ -109,8 +109,8 @@ function Search([string]$Query,[scriptblock]$Pick,[string]$Wanted){
   @{expected=$Query;before=$admission;native_value=$entry.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value;native_focus=$entry.Current.HasKeyboardFocus;shared_query=(Search-State).query}|ConvertTo-Json|Set-Content (Join-Path $run 'command-search-failure.json')
   throw
  }
+ Wait-Until {(Control ('command-result-'+$hit.index) -Arranged).Current.Name -eq $hit.result.label} "Native command search did not present '$($hit.result.label)'"
  $row=Control ('command-result-'+$hit.index) -Arranged
- if($row.Current.Name -ne $hit.result.label){throw "Command search shows '$($row.Current.Name)' where Rust offers '$($hit.result.label)'"}
  $row.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
  Wait-Until {!(Find 'command-search' -Visible) -and !(Search-State)} 'Command search did not close'
  $hit.result
