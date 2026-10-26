@@ -12,6 +12,9 @@ if($LASTEXITCODE -ne 0){throw 'Renderer health regression failed.'}
 & (Join-Path $PSScriptRoot '../tests/capture-dpi.ps1')
 & (Join-Path $PSScriptRoot '../tests/uia-owned-search.ps1')
 & (Join-Path $PSScriptRoot '../tests/uia-projection-snapshot.ps1')
+& (Join-Path $PSScriptRoot '../tests/canvas-editing-pixels.ps1')
+& (Join-Path $PSScriptRoot '../tests/layers-menu-targeting.ps1')
+& (Join-Path $PSScriptRoot '../tests/presented-frame-wait.ps1')
 & (Join-Path $PSScriptRoot '../tests/software-test-runtime.ps1')
 & (Join-Path $PSScriptRoot 'build.ps1') -Configuration $Configuration -Architecture $build.architecture
 & (Join-Path $PSScriptRoot 'test-input.ps1') -Configuration $Configuration -OutputDirectory (Join-Path $repo "artifacts/windows/tests/$($build.architecture)")

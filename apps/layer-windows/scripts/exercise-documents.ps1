@@ -652,16 +652,23 @@ function Set-InkColor([string[]]$Channels) {
 }
 function Draw-Below {
     $script:scope=$root
-    $camera=(Model).state.camera;$bounds=(Find-Id 'drawing-canvas').Current.BoundingRectangle
-    $revision=(Model).state.document_file.revision
     $context=[CapyDocumentControls]::SetThreadDpiAwarenessContext([IntPtr](-4))
     try{
-        [CapyRowPointer]::SetForegroundWindow($drawing.Handle)|Out-Null
+        $canvas=Control 'drawing-canvas' -Within $root -Arranged -NoPopups
+        Wait-Until {$canvas.Current.ProcessId -eq $review.Id -and $canvas.Current.IsEnabled -and [CapyDocumentControls]::IsWindowEnabled($drawing.Handle)} 'Native document dialog did not finish closing'
+        Foreground
+        $model=Model;$camera=$model.state.camera;$bounds=$canvas.Current.BoundingRectangle;$revision=$model.state.document_file.revision
+        $points=@(for($i=0;$i -le 16;$i++){
+            @{x=[int]($bounds.X+$camera.translation[0]+$camera.zoom*(20+5*$i));y=[int]($bounds.Y+$camera.translation[1]+$camera.zoom*(78+[Math]::Sin($i/3)))}
+        })
+        @{process_id=$review.Id;window_handle=$drawing.Handle.ToInt64();camera=$camera;bounds=$bounds;revision=$revision;points=$points;
+            canvas_enabled=$canvas.Current.IsEnabled;canvas_process_id=$canvas.Current.ProcessId;window_enabled=[CapyDocumentControls]::IsWindowEnabled($drawing.Handle);
+            input=(Input-Trace $points[0].x $points[0].y)}|ConvertTo-Json -Depth 20|Set-Content -LiteralPath (Join-Path $run 'draw-below-input.json')
         [CapyRowPointer]::Initialize([uint32]$review.Id)
         try{
             for($i=0;$i -le 16;$i++){
-                $x=[int]($bounds.X+$camera.translation[0]+$camera.zoom*(20+5*$i));$y=[int]($bounds.Y+$camera.translation[1]+$camera.zoom*(78+[Math]::Sin($i/3)))
-                if($i -eq 0){[CapyRowPointer]::Down('mouse',$x,$y)}else{[CapyRowPointer]::Move($x,$y)}
+                $point=$points[$i]
+                if($i -eq 0){[CapyRowPointer]::Down('mouse',$point.x,$point.y)}else{[CapyRowPointer]::Move($point.x,$point.y)}
                 Start-Sleep -Milliseconds 12
             }
             [CapyRowPointer]::Up()

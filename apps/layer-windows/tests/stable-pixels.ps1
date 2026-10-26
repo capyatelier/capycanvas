@@ -2,9 +2,11 @@ $ErrorActionPreference='Stop'
 $tokens=$null;$errors=$null
 $ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../scripts/CapyUia.ps1'),[ref]$tokens,[ref]$errors)
 if($errors.Count){throw 'UI Automation helpers do not parse'}
-$helper=$ast.Find({param($node)$node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Wait-StablePixels'},$true)
-if(!$helper){throw 'Pixel stability helper is missing'}
-. ([scriptblock]::Create($helper.Extent.Text))
+foreach($name in 'Wait-PresentedFrame','Wait-StablePixels'){
+    $helper=$ast.Find({param($node)$node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name},$true)
+    if(!$helper){throw "Pixel stability helper is missing: $name"}
+    . ([scriptblock]::Create($helper.Extent.Text))
+}
 function Capture-CallerPixels{
     $sample=[pscustomobject]@{kind='column';x=1640;y=116;pixels='owned-pixels'}
     Wait-StablePixels {"$($sample.kind):$($sample.x),$($sample.y):$($sample.pixels)"}

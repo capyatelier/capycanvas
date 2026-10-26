@@ -48,6 +48,9 @@ public:
     ~CanvasWindow();
 private:
     CanvasLatencyTrace latencyTrace{GetEnvironmentVariableW(L"CAPY_LATENCY_TRACE",nullptr,0)!=0};
+    struct PresentationTrace {bool const enabled;uint64_t presented=0,required=0;std::string displayed="null",published;};
+    PresentationTrace presentationTrace{GetEnvironmentVariableW(L"CAPY_TRACE_UI",nullptr,0)!=0};
+    void TracePresentation(bool frame,bool dirty);
     std::vector<std::wstring> launchFiles;
     void SendLaunchFiles(winrt::Windows::Data::Json::JsonObject const& model);
     struct Size { uint32_t width=1, height=1; float scale=1; };

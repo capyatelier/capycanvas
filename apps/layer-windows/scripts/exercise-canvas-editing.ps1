@@ -59,9 +59,20 @@ function Pixels {
  }finally{$bitmap.Dispose()}
 }
 function Stable-Pixels {
+ Wait-PresentedFrame
  $watch=[Diagnostics.Stopwatch]::StartNew();$last=Pixels;$stable=0
  do{Start-Sleep -Milliseconds 100;$next=Pixels;if($next -eq $last){$stable++}else{$stable=0};$last=$next;if($stable -ge 3){return $last}}while($watch.Elapsed.TotalSeconds -lt 6)
  throw 'Artwork samples did not settle'
+}
+function Assert-TranslatedSamples([string]$Blank,[string]$Before,[string]$After) {
+ foreach($signature in @($Blank,$Before,$After)){
+  if([string]::IsNullOrWhiteSpace($signature)){throw 'Translation requires three nonempty artwork samples'}
+  $samples=$signature.Split(':')
+  if($samples.Count -ne 3 -or @($samples|Where-Object {[string]::IsNullOrWhiteSpace($_)}).Count){throw 'Translation requires three nonempty artwork samples'}
+ }
+ $emptySamples=$Blank.Split(':');$sourceSamples=$Before.Split(':');$movedSamples=$After.Split(':')
+ if($sourceSamples[0] -eq $emptySamples[0] -or $sourceSamples[1] -ne $emptySamples[1] -or $sourceSamples[2] -eq $emptySamples[2]){throw 'Translation samples require selected ink, an empty destination and unselected ink'}
+ if($movedSamples[0] -ne $emptySamples[0] -or $movedSamples[1] -eq $emptySamples[1] -or $movedSamples[2] -ne $sourceSamples[2]){throw 'Apply did not clear the source, fill the destination and preserve the unselected artwork'}
 }
 function Export-Png([string]$Name) {
  if($Name -notmatch '^[a-z0-9-]+$'){throw 'Invalid owned export name'}
@@ -116,7 +127,7 @@ function Cancel-Preview([string]$Name){
  Invoke 'canvas-bar-cancel_transform';Wait-Until {(Model).state.layer_tools.tool -ne 'transform'} 'Transform cancel did not finish'
  if((Signature) -ne $selected -or (Stable-Pixels) -ne $baseline){throw "Cancel did not restore selection artwork: $Name"};Pass $Name
 }
-function Apply-Preview([string]$Name,[switch]$AcceptWithBrush) {
+function Apply-Preview([string]$Name,[switch]$AcceptWithBrush,[switch]$Translated) {
  if((Signature) -ne $selected){throw "$Name preview committed early"}
  $revision=(Model).state.document_file.revision
  $acceptance=if($AcceptWithBrush){Invoke (Tool-Tile 'pen');'Pen selection'}else{Invoke 'canvas-bar-apply_transform';'Apply'}
@@ -125,6 +136,7 @@ function Apply-Preview([string]$Name,[switch]$AcceptWithBrush) {
   $m.state.layer_tools.tool -ne 'transform' -and $m.state.document_file.revision -gt $revision -and
    (!$AcceptWithBrush -or ($m.canvas_ready -and $m.brush_ready -and ($m.state.commands|Where-Object id -eq 'pen').selected))
  } "$Name $acceptance did not commit"
+ if($Translated){$appliedPixels=Stable-Pixels;Assert-TranslatedSamples $empty $baseline $appliedPixels}
  $applied=Export-Png ($device+'-'+$Name+'-applied-raster')
  if($applied -eq $baselinePng){throw "$Name $acceptance left the drawing unchanged"}
  Capture ($device+'-'+$Name+'-applied')
@@ -135,6 +147,10 @@ function Apply-Preview([string]$Name,[switch]$AcceptWithBrush) {
  )){
   $revision=(Model).state.document_file.revision;Invoke $step.command -Name
   Wait-Until {(Model).state.document_file.revision -ne $revision} "$Name $($step.command) did not finish"
+  if($Translated){
+   $expectedPixels=if($step.name -eq 'redo'){$appliedPixels}else{$baseline}
+   Wait-Until {(Pixels) -eq $expectedPixels} "$Name $($step.command) did not restore the artwork samples"
+  }
   if($step.name -eq 'undo'){
    Select-Tool 'lasso';$checkpoint=(Model).state.document_file|ConvertTo-Json -Compress
    [CapyRowPointer]::Down($device,$sx,$cy);[CapyRowPointer]::Up();Start-Sleep -Milliseconds 180
@@ -218,14 +234,7 @@ try{
   }
   Select-Tool 'scale_rotate';Origin;$from=Body-Point;Drag $device @($from,@(($from[0]+300),$from[1]))
   Wait-Until {[Math]::Abs((Value 'transform_x')-$x0-300/$camera.zoom) -lt 2} 'Final move preview did not settle'
-  $revision=(Model).state.document_file.revision;Invoke 'canvas-bar-apply_transform'
-  Wait-Until {(Model).state.layer_tools.tool -ne 'transform' -and (Model).state.document_file.revision -gt $revision} 'Transform Apply did not commit'
-  $moved=Stable-Pixels;$sourcePixels=$baseline.Split(':');$movedPixels=$moved.Split(':');$blankPixels=$empty.Split(':')
-  if($movedPixels[0] -ne $blankPixels[0] -or $movedPixels[1] -ne $sourcePixels[0] -or $movedPixels[2] -ne $sourcePixels[2]){throw 'Apply did not move only the selected pixels and preserve the unselected artwork'}
-  Capture ($device+'-applied')
-  Invoke 'Undo' -Name;Wait-Until {(Pixels) -eq $baseline} 'One Undo did not restore selected pixels'
-  Invoke 'Redo' -Name;Wait-Until {(Pixels) -eq $moved} 'One Redo did not restore transformed pixels'
-  Invoke 'Undo' -Name;Wait-Until {(Pixels) -eq $baseline} 'Final transform Undo did not restore pixels';Pass 'Apply and one-step raster Undo/Redo'
+  Apply-Preview 'move' -Translated
   Invoke 'Undo' -Name;Wait-Until {!(Model).state.layer_tools.has_selection} 'Selection Undo did not clear the lasso'
   Invoke 'Undo' -Name;Wait-Until {!(Model).state.document_file.modified -and (Pixels) -eq $empty} 'Figure Undo did not return to a clean drawing';Pass 'selection and seed Undo return clean'
  }
@@ -286,7 +295,7 @@ try{
  [CapyRowPointer]::Dispose();$root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).Close()
  if(!$review.WaitForExit(5000) -or $review.ExitCode -ne 0){throw 'Editing review did not close within five seconds'}
  if((Get-Item -LiteralPath (Join-Path $run 'stderr.log')).Length){throw 'Native editing stderr needs inspection'}
- @{theme=$Theme;checks=$checks;exports=$exports;close='zero exit within five seconds';pixel_scope='scale/rotation: exact full exported PNG history; translation: three 16x16 artwork interiors; full captures retained';scope='guarded OS mouse and synthetic pen; physical devices and complete visual/performance acceptance remain separate'}|ConvertTo-Json -Depth 10|Set-Content -LiteralPath (Join-Path $run 'result.json')
+ @{theme=$Theme;checks=$checks;exports=$exports;close='zero exit within five seconds';pixel_scope='selection move/scale/rotation: exact full exported PNG Undo/Redo/restore; selection translation: same-position 16x16 source, destination and unselected samples; full captures retained';scope='guarded OS mouse and synthetic pen; physical devices and complete visual/performance acceptance remain separate'}|ConvertTo-Json -Depth 10|Set-Content -LiteralPath (Join-Path $run 'result.json')
  Write-Output "Canvas editing acceptance passed: $run"
 }catch{
  if($review -and !$review.HasExited -and $root){try{Capture 'failure';@{model=Model;checks=$checks}|ConvertTo-Json -Depth 80|Set-Content -LiteralPath (Join-Path $run 'failure-state.json')}catch{}}

@@ -252,7 +252,23 @@ function Screen-Pixels([int]$X,[int]$Y,[string]$Path='',[switch]$Cursor) {
         try{[BitConverter]::ToString($hash.ComputeHash($bytes)).Replace('-','')}finally{$hash.Dispose()}
     }finally{$graphics.Dispose();$bitmap.Dispose()}
 }
+function Wait-PresentedFrame{
+    if(!$review){return}
+    $path=State-File;if(!$path){return}
+    $folder=Split-Path -Parent $path;$leaf=Split-Path -Leaf $path
+    $frame=(@(foreach($kind in @('ui-state','camera-state')){
+        $file=Join-Path $folder ($leaf -replace '^ui-state-',"$kind-")
+        if([IO.File]::Exists($file)){$state=Read-Snapshot $file;if($state.process_id -eq $review.Id){$state.presented}}
+    })|Measure-Object -Maximum).Maximum
+    if($null -eq $frame){return}
+    $presentation=Join-Path $folder ($leaf -replace '^ui-state-','presentation-state-')
+    Wait-Until {
+        $display=if([IO.File]::Exists($presentation)){Read-Snapshot $presentation}
+        $display.process_id -eq $review.Id -and ($null -eq $display.displayed -or $display.displayed -ge $frame)
+    } 'The display did not show the latest canvas frame'
+}
 function Wait-StablePixels([scriptblock]$CapturePixels){
+    Wait-PresentedFrame
     $watch=[Diagnostics.Stopwatch]::StartNew();$last=& $CapturePixels;$stable=0;$comparisons=0
     do{
         Start-Sleep -Milliseconds 100;$next=& $CapturePixels;$comparisons++

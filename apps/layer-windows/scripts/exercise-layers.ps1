@@ -24,11 +24,14 @@ $directory=Split-Path -Parent $Executable
 $run=Join-Path $repo ('artifacts/windows/layers/'+[Guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($run)|Out-Null
 
-function Invoke([string]$Value,[switch]$Name){
+function Invoke([string]$Value,[switch]$Name,$Type){
     $hit=@{item=$null}
     Wait-Until {
-        $hit.item=Find $Value -Name:$Name -Type ([System.Windows.Automation.ControlType]::Button)
-        if(!$hit.item){$hit.item=Find $Value -Name:$Name -Type ([System.Windows.Automation.ControlType]::MenuItem)}
+        if($Type){$hit.item=Find $Value -Name:$Name -Type $Type -Visible}
+        else{
+            $hit.item=Find $Value -Name:$Name -Type ([System.Windows.Automation.ControlType]::Button)
+            if(!$hit.item){$hit.item=Find $Value -Name:$Name -Type ([System.Windows.Automation.ControlType]::MenuItem)}
+        }
         $null -ne $hit.item
     } "Missing action: $Value"
     $hit.item.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
@@ -84,7 +87,7 @@ function Test-LayerModes {
             }
         }
         (Control 'Tone' -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)).GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
-        Invoke $filter -Name
+        Invoke $filter -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)
         $added++
         Wait-Until {(Model).state.layer_tools.editing_layer.adjustment_effect -and (Model).state.layers.Count -eq $count+$added} 'Layer filter did not become selected'
         $selected=(Model).state.layer_tools.editing_layer.id
@@ -96,10 +99,11 @@ function Test-LayerModes {
     if(!@((Model).layout.groups|Where-Object {$_.active -eq 'layers'}).Count){Invoke 'Layers' -Name}
     Capture ('layer-modes-and-filters-'+(Model).state.theme) -WithModel
 }
-function Read-Preview([string]$Id,[scriptblock]$Read){
-    $image=Control $Id
-    if($image.Current.ItemStatus -ne 'Ready'){return ''}
-    $r=$image.Current.BoundingRectangle
+function Read-Preview([string]$Id,[scriptblock]$Read,$Image){
+    if(!$Image){$Image=Control $Id -Arranged}
+    if($Image.Current.ItemStatus -ne 'Ready'){return ''}
+    $r=$Image.Current.BoundingRectangle
+    if($Image.Current.IsOffscreen -or $r.IsEmpty -or $r.Width -le 0 -or $r.Height -le 0){throw 'Thumbnail is not arranged'}
     $window=[CapyLayersCapture+Rect]::new()
     if(![CapyLayersCapture]::GetWindowRect($drawingWindow,[ref]$window)){throw 'Window bounds unavailable'}
     $bitmap=[Drawing.Bitmap]::new($window.right-$window.left,$window.bottom-$window.top)
@@ -110,7 +114,7 @@ function Read-Preview([string]$Id,[scriptblock]$Read){
         & $Read $bitmap $r $window
     }finally{$bitmap.Dispose()}
 }
-function Preview-Samples([string]$Id,[string]$Save=''){
+function Preview-Samples([string]$Id,[string]$Save='',$Image){
     Read-Preview $Id {param($bitmap,$r,$window)
         $samples=[Collections.Generic.List[int]]::new()
         foreach($j in 8..23){foreach($i in 8..23){
@@ -119,22 +123,34 @@ function Preview-Samples([string]$Id,[string]$Save=''){
         if($Save){$bitmap.Save((Join-Path $run ($Save+'-window.png')));@{preview=$r;window=$window;samples=$samples}|ConvertTo-Json -Depth 3|Set-Content (Join-Path $run ($Save+'-bounds.json'))}
         $samples -join ','
 
-    }
+    } $Image
 }
-function Thumbnail-Pixels([string]$Id){
+function Stable-PreviewSamples([string]$Id,[string]$Save){
+    $image=Control $Id -Arranged
+    $stable=Wait-StablePixels {Preview-Samples $Id -Image $image}
+    if((Preview-Samples $Id -Save $Save -Image $image) -ne $stable){throw 'Saved thumbnail pixels changed after settling'}
+    $stable
+}
+function Thumbnail-Pixels([string]$Id,[string]$Save='',$Image){
     Read-Preview $Id {param($bitmap,$r,$window)
-        $name="$Id-$((Model).state.theme)-$((Model).state.layer_tools.editing_layer.mask_selected)"
-        $bitmap.Save((Join-Path $run ($name+'.png')))
-        @{preview=$r;window=$window}|ConvertTo-Json|Set-Content (Join-Path $run ($name+'-bounds.json'))
-        foreach($point in @(@(14,-1),@(0,0),@(0,-5),@(3,3),@(14,2),@(2,14),@(25,14),@(14,25))){
+        if($Save){
+            $bitmap.Save((Join-Path $run ($Save+'.png')))
+            @{preview=$r;window=$window}|ConvertTo-Json|Set-Content (Join-Path $run ($Save+'-bounds.json'))
+        }
+        foreach($point in @(@(14,0),@(0,0),@(0,-5),@(3,3),@(14,2),@(2,14),@(25,14),@(14,25))){
             $x=[int][Math]::Floor($r.X-$window.left+$point[0]*$r.Width/28)
             $y=[int][Math]::Floor($r.Y-$window.top+$point[1]*$r.Height/28)
             $bitmap.GetPixel($x,$y).ToArgb() -band 0xffffff
         }
-    }
+    } $Image
 }
 function Stable-ThumbnailPixels([string]$Id){
-    (Wait-StablePixels {(Thumbnail-Pixels $Id) -join ','}) -split ','|ForEach-Object {[int]$_}
+    $image=Control $Id -Arranged
+    $stable=Wait-StablePixels {(Thumbnail-Pixels $Id -Image $image) -join ','}
+    $model=Model
+    $name="$Id-$($model.state.theme)-$($model.state.layer_tools.editing_layer.mask_selected)"
+    if(((Thumbnail-Pixels $Id -Save $name -Image $image) -join ',') -ne $stable){throw 'Saved thumbnail pixels changed after settling'}
+    $stable -split ','|ForEach-Object {[int]$_}
 }
 function Test-ThumbnailSquircles([long]$Id){
     Wait-Until {(Find "layer-$Id-mask-thumbnail").Current.ItemStatus -eq 'Ready' -and (Find "layer-$Id-thumbnail").Current.ItemStatus -eq 'Ready'} 'Thumbnail pixels did not become ready' 20
@@ -195,7 +211,7 @@ try {
     $paint=(Model).state.layer_tools.editing_layer.id
     Test-LayerModes
     Wait-Until {(Find ("layer-$paint-thumbnail")).Current.ItemStatus -eq 'Ready'} 'Paint thumbnail not ready' 20
-    $original=Wait-StablePixels {Preview-Samples "layer-$paint-thumbnail" 'original'};if(!$original){throw 'No initial thumbnail pixels'}
+    $original=Stable-PreviewSamples "layer-$paint-thumbnail" 'original';if(!$original){throw 'No initial thumbnail pixels'}
     $identity=(Control "layer-$paint-name").GetRuntimeId() -join ':'
     Capture 'initial'
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action 'Test stroke'
@@ -203,7 +219,8 @@ try {
     Wait-Until {$samples=Preview-Samples "layer-$paint-thumbnail";$samples -and $samples -ne $original} 'Thumbnail did not reflect paint' 15
     Invoke 'Undo' -Name
     Wait-Until {!(Model).state.document_file.modified} 'Undo did not restore checkpoint'
-    Wait-Until {(Preview-Samples "layer-$paint-thumbnail" 'undo') -eq $original} 'Thumbnail pixels did not restore after Undo' 15
+    Wait-Until {(Preview-Samples "layer-$paint-thumbnail") -eq $original} 'Thumbnail pixels did not restore after Undo' 15
+    if((Preview-Samples "layer-$paint-thumbnail" 'undo') -ne $original){throw 'Saved thumbnail pixels did not restore after Undo'}
     if(((Control "layer-$paint-name").GetRuntimeId() -join ':') -ne $identity){throw 'Painting replaced the layer row'}
     $opacitySlider=Control 'layer-opacity-slider'
     $opacitySlider.GetCurrentPattern([System.Windows.Automation.RangeValuePattern]::Pattern).SetValue(.72)

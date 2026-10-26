@@ -298,7 +298,9 @@ matching. UI replies retain their requesting prompt or dialog identity.
 
 Empty localization metadata preserves the current context; a pending envelope
 stays queued until a full snapshot carries it. Properties, tool controls, filter
-results and options use semantic identities for their structural keys. Tool settings
+results and options use semantic identities for their structural keys. Workspace
+groups rebuild a panel body only for structural changes; bounds, resize handles,
+footer grips and the `scrolls` overflow flag retain its controls, focus and drafts. Tool settings
 use `group_id` for section identity and localized `group` only for heading copy;
 toolbar schemas retain action group IDs when stripping translated text. Current
 captions update retained controls, accessibility names and tooltips. Numeric
@@ -1440,6 +1442,9 @@ deliver canvas contacts through XAML. Both paths copy native samples and capture
 their physical coordinates with the matching view revision before queueing;
 the input thread assigns sequence numbers and tracks contacts. Wheel and held
 picker positions likewise retain the scale from collection across a resize.
+`CanvasContactGate` discards a contact that a modal dialog or chrome dismissal
+claims until its release; hover never claims a pointer, and each later press
+starts a fresh contact.
 Escape and Control shortcuts
 pressed during a canvas contact are counted from raw keyboard input on a
 key-reader thread; the input thread holds later canvas samples until the UI
@@ -1551,7 +1556,11 @@ the focused header journeys also check placement cancellation and keyboard input
 - **Capture composed pixels.** GPU pixel assertions use the owned window's
   screen rectangle on the private desktop. `PrintWindow` can return an earlier
   SwapChainPanel image. Wait for the expected visible change before comparing
-  pixels. For restoration, compare with the original pixels; a fixed dark-panel
+  pixels. Traced snapshots name the swap-chain present that shows their state
+  (`presented`), and `presentation-state` records the latest present that DXGI
+  reports as displayed; `Wait-StablePixels` waits for that frame before sampling,
+  because the desktop compositor can show canvas frames more than a second late.
+  For restoration, compare with the original pixels; a fixed dark-panel
   threshold cannot verify the same journey in the light theme. Keep the sample
   grid, camera and canvas bounds from one checked projection. Move the owned
   pointer away from the capture area and dismiss tooltips before a baseline.

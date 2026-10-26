@@ -128,7 +128,10 @@ the Windows D3D12 document suite against an actual hardware D3D12 adapter. It
 rejects empty test selections. `fixtures --hardware-gpu` runs the normal app with
 software adapters disabled and requires actual hardware-adapter evidence in each
 selected rendered journey. Use explicit render fixtures; intentional GPU-startup
-failure journeys belong in the ordinary fixture matrix. Both commands accept
+failure journeys belong in the ordinary fixture matrix. The guest desktop stays
+on the emulated display adapter, so the compositor copies each canvas frame from
+the passed-through card and can display it more than a second after the app
+presents it; pixel checks wait for the displayed frame. Both commands accept
 `--no-build` only when synced build inputs and executable/DLL hashes match. These
 checks do not qualify physical pens, HDR output, display combinations or frame
 rate targets.

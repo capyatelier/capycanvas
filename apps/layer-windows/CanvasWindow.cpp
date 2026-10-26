@@ -133,6 +133,18 @@ static winrt::fire_and_forget PublishPanelMetrics(std::filesystem::path name,std
 void CanvasWindow::TraceState(char const* kind,std::string const& value)const {
     WriteTraceFile(std::string(kind)+"-"+std::to_string(GetCurrentProcessId())+"-"+std::to_string(windowId)+".json",value);
 }
+void CanvasWindow::TracePresentation(bool frame,bool dirty) {
+    auto& trace=presentationTrace;
+    if(!trace.enabled)return;
+    uint64_t stats[6]{};
+    if(capy_presentation_stats(host,stats)==0)trace.displayed=std::to_string(stats[1]);
+    bool presented=stats[0]!=trace.presented;
+    trace.presented=stats[0];
+    trace.required=stats[0]+(dirty&&!(frame&&presented)?1:0);
+    if(frame||trace.published==trace.displayed)return;
+    trace.published=trace.displayed;
+    TraceState("presentation-state","{\"process_id\":"+std::to_string(GetCurrentProcessId())+",\"window_id\":"+std::to_string(windowId)+",\"displayed\":"+trace.displayed+"}");
+}
 std::string CanvasWindow::SystemTheme(){
     using winrt::Windows::UI::ViewManagement::UIColorType;
     auto ink=uiSettings.GetColorValue(UIColorType::Foreground),accent=uiSettings.GetColorValue(UIColorType::Accent);
@@ -1075,6 +1087,7 @@ void CanvasWindow::Run() {
                 if(serviceResult<0){if(capy_device_lost(host))continue;Fail(NativeString(capy_error()).get());break;}
                 nextServices=std::chrono::steady_clock::now()+std::chrono::milliseconds(250);
                 dirty|=serviceResult!=0;
+                TracePresentation(false,dirty);
                 CapySnapshotInfo routing{};
                 if(auto snapshot=capy_snapshot(host,&routing)){
                     NativeString owned(snapshot,capy_string_free);
@@ -1137,6 +1150,7 @@ void CanvasWindow::Run() {
             }
             if(result<0){if(capy_device_lost(host))continue;Fail(NativeString(capy_error()).get());break;}
             dirty=result!=0;
+            TracePresentation(true,dirty);
             if(!inputStarted){
                 inputStarted=true;inputDispatcher.TryEnqueue([weak=weak_from_this(),zoomIn,zoomOut]{
                     if(auto self=weak.lock()){self->zoomInCursor=zoomIn;self->zoomOutCursor=zoomOut;self->StartInput();}
@@ -1428,7 +1442,7 @@ void CanvasWindow::Publish(std::string snapshot,CapySnapshotInfo const& info) {
     if(GetEnvironmentVariableW(L"CAPY_TRACE_UI",nullptr,0)){
         auto model=Windows::Data::Json::JsonObject::Parse(to_hstring(snapshot));
         auto identity="{\"process_id\":"+std::to_string(GetCurrentProcessId())+
-            ",\"window_id\":"+std::to_string(windowId);
+            ",\"window_id\":"+std::to_string(windowId)+",\"presented\":"+std::to_string(presentationTrace.required);
         if(full)tracedModel=model;
         else if(info.layout&&tracedModel.HasKey(L"state"))WorkspaceView::MergeLayout(tracedModel,model);
         bool glassChanged=info.glass.length&&CapyUi::object(tracedModel,L"windows_glass").Stringify()!=CapyUi::object(model,L"windows_glass").Stringify();
