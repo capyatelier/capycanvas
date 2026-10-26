@@ -677,7 +677,8 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         std::set<std::wstring> keep;
         for(auto const& [id,group]:groups){
             if(group.hidden||group.presented.Size())continue;
-            double width=num(object(group.geometry,L"bounds"),L"width");auto active=str(group.geometry,L"active");
+            double width=group.body->Root().ActualWidth();auto active=str(group.geometry,L"active");
+            if(!(width>0))continue;
             for(auto value:array(group.geometry,L"panels")){
                 auto panelId=value.GetString();if(panelId==active)continue;
                 auto panel=find(array(data->model,L"panels"),L"id",panelId);if(!panel.Size()||array(panel,L"tiles").Size())continue;
