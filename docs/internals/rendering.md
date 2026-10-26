@@ -892,7 +892,10 @@ where the mesh folds. Reconstruction remains approximate while a transform is
 active. Native views evaluate native preview pixels;
 exact queries materialize the source tiles their dependency window reads and
 retire previous query tiles. Apply evaluates the authoritative transform, and
-Cancel restores only native pixels that a preview or query changed. There is
+Cancel restores only native pixels that a preview or query changed. Each of
+these decodes every original page its jobs read before it changes a page. While
+a native preview waits for those pages, the canvas keeps the last drawn pose, and
+the frame that draws the preview recomposes every page it changes. There is
 no separate placement-drag composite or post-release settling queue.
 
 A transform job binds at most `TRANSFORM_SOURCE_PAGES` source pages.

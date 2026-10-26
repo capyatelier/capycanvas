@@ -573,9 +573,8 @@ fn idle_display_refines_an_overview_created_during_transform_motion() {
     r.set_transform_preview(Some(&preview)).unwrap(); submit_published(&mut r, frame);
     assert!(!r.has_pending_work());
     preview.moving = false;
-    for renderer in [&mut r, &mut exact] {
-        renderer.set_transform_preview(Some(&preview)).unwrap(); submit_published(renderer, frame);
-    }
+    r.set_transform_preview(Some(&preview)).unwrap(); submit_published(&mut r, frame);
+    exact.set_transform_preview(Some(&preview)).unwrap(); crate::test_support::submit_settled(&mut exact, frame);
     assert_settled(&mut r, frame, &pixels(&exact, crate::test_support::document_texture(&exact)));
 }
 
@@ -631,7 +630,7 @@ fn idle_display_refines_paused_transform_windows_and_reuses_exact_overlap() {
         frame.view.height_px = 64;
         for (x, y) in [(0., 0.), (-180., -60.), (-290., -120.), (0., 0.)] {
             frame.view.document_to_surface = [0.25, 0., 0., 0.25, x, y];
-            submit_published(&mut r, frame); submit_published(&mut exact, FramePacket { composite_all: true, ..frame });
+            submit_published(&mut r, frame); crate::test_support::submit_settled(&mut exact, FramePacket { composite_all: true, ..frame });
             assert!(r.scale_display.as_ref().unwrap().overview.is_some());
             assert_settled(&mut r, frame, &pixels(&exact, crate::test_support::document_texture(&exact)));
         }

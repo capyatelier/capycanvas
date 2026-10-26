@@ -59,7 +59,7 @@ pub(super) fn submit_published(r: &mut WgpuRasterizer, frame: FramePacket<'_>) {
     }
 }
 
-fn assert_settled(r: &mut WgpuRasterizer, frame: FramePacket<'_>, reference: &[[f32; 4]]) {
+fn assert_settled(mut r: &mut WgpuRasterizer, frame: FramePacket<'_>, reference: &[[f32; 4]]) {
     let revision = r.artwork_revision;
     let pages = page_coordinates(PixelRect::full(frame.document_extent)).count();
     let idle = FramePacket { composite_all: false, reset_layers: false, dabs: &[], dab_batches: &[], restore_rasters: &[], ..frame };
@@ -954,7 +954,7 @@ fn deferred_transform_preview_samples_the_final_surface_without_a_canvas_image()
                 p.x >= 0. && p.y >= 0. && p.x < extent[0] as f32 && p.y < extent[1] as f32
             };
             crate::test_support::submit_ready(&mut r, frame).unwrap();
-            crate::test_support::submit_ready(&mut exact, frame).unwrap();
+            crate::test_support::submit_settled(&mut exact, frame);
             assert!(r.scale_display.as_ref().unwrap().output.is_empty());
             assert!(r.scale_display.as_ref().unwrap().pixels.next().is_none());
             let actual = render(&r, &mut presenter, frame.view);
@@ -1012,7 +1012,7 @@ fn deferred_transform_preview_navigator_preserves_coarse_artwork() {
         let mut frame = packet(doc.scene(), doc.composition().size);
         frame.time_seconds = step as f32 * 0.1;
         frame.view.document_to_surface = [0.25, 0., 0., 0.25, 8.25, 7.5];
-        r.submit(frame).unwrap(); exact.submit(frame).unwrap();
+        crate::test_support::submit_ready(&mut r, frame).unwrap(); crate::test_support::submit_settled(&mut exact, frame);
         assert!(r.scale_display.as_ref().unwrap().placed.is_some());
         for size in [[128, 77], [64, 39], [32, 19], [16, 10], [7, 4]] {
             let actual = overview(&r, size);

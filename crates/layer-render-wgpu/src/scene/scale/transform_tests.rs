@@ -525,6 +525,30 @@ fn move_transactions_adopt_prepared_inputs_and_invalidate_them_on_restore() {
 }
 
 #[test]
+fn native_previews_waiting_for_photo_tiles_draw_and_recompose_once_they_decode() {
+    let doc = document_at([769,513]);
+    let extent = doc.composition().size;
+    let mut frame = packet(doc.scene(),extent);
+    let preview = layer_render::TransformPreview {transaction:1,target:source_at(&doc,0),moving:false,selection:None,
+        transform:ImageTransform::affine(Affine::around(Point {x:384.,y:256.},[0.8,0.9],0.15,Point::default()))};
+    let [mut waiting,mut decoded] = [(),()].map(|_| {
+        let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+        r.test.reference = true;
+        crate::test_support::submit_settled(&mut r,frame);
+        r
+    });
+    waiting.source_tiles.get_mut().invalidate();
+    frame.composite_all = false;
+    for renderer in [&mut waiting,&mut decoded] {
+        renderer.set_transform_preview(Some(&preview)).unwrap();
+        crate::test_support::submit_settled(renderer,frame);
+    }
+    let [actual,expected] = [&waiting,&decoded].map(|r| pixels(r,crate::test_support::document_texture(r)));
+    let differing = actual.iter().zip(&expected).filter(|(a,b)| a != b).count();
+    assert_eq!(differing,0,"composite pixels differ from a preview whose tiles were decoded");
+}
+
+#[test]
 fn moving_pixels_invalidate_the_cut_only_when_its_coverage_changes() {
     let doc = document_at([769,257]);
     let extent = doc.composition().size;
