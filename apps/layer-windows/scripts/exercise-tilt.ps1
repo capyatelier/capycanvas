@@ -215,23 +215,23 @@ function Preview([string]$Stage,[string]$ExpectedCurve=''){
     $pixels=Wait-StablePixels {Screen-Pixels $paperPoint[0] $paperPoint[1]}
     $circle=Center 'pen-tilt-direction'
     [CapyRowPointer]::PenTilt(40,0);[CapyRowPointer]::PenHover($circle[0],$circle[1])
-    Wait-Until {(Tilt).ready -and (Tilt).input_direction -and [Math]::Abs((Tilt).input_direction[0]-40./90.) -lt .015} "$Stage circle hover did not sense native tilt"
+    Wait-Until {$tilt=Tilt;$tilt.ready -and $tilt.input_direction -and [Math]::Abs($tilt.input_direction[0]-40./90.) -lt .015} "$Stage circle hover did not sense native tilt"
     if((Curve) -ne $draft){throw "$Stage first hover did not preserve or load the expected device response"}
     [CapyRowPointer]::PenTilt(0,60);[CapyRowPointer]::Down('pen',$circle[0],$circle[1])
     try{
         [CapyRowPointer]::Move($circle[0]+4,$circle[1]+4)
-        Wait-Until {(Tilt).input_direction -and [Math]::Abs((Tilt).input_direction[1]-2./3.) -lt .015 -and (Tilt).editor.marker} "$Stage circle contact did not update the live tilt marker"
+        Wait-Until {$tilt=Tilt;$tilt.input_direction -and [Math]::Abs($tilt.input_direction[1]-2./3.) -lt .015 -and $tilt.editor.marker} "$Stage circle contact did not update the live tilt marker"
         Capture "$Stage-circle-contact" -WithModel
     }finally{[CapyRowPointer]::Up();[CapyRowPointer]::PenLeave()}
     $frame=(Control 'pen-tilt-dialog' -Arranged).Current.BoundingRectangle
     [CapyRowPointer]::PenTilt(-30,0);[CapyRowPointer]::PenHover([int]($frame.Left+90*$scale),[int]($frame.Top+24*$scale))
-    Wait-Until {(Tilt).input_direction -and [Math]::Abs((Tilt).input_direction[0]+1./3.) -lt .015} "$Stage dialog header hover did not sense tilt"
+    Wait-Until {$tilt=Tilt;$tilt.input_direction -and [Math]::Abs($tilt.input_direction[0]+1./3.) -lt .015} "$Stage dialog header hover did not sense tilt"
     [CapyRowPointer]::PenLeave()
     $preview=(Reveal-Tilt 'pen-tilt-direction').Current.BoundingRectangle
     $gap=@([int]($frame.Left+8*$scale),[int]($preview.Top+$preview.Height/2))
     [CapyRowPointer]::PenTilt(0,-40);[CapyRowPointer]::PenHover($gap[0],$gap[1]);[CapyRowPointer]::Down('pen',$gap[0],$gap[1])
     try{
-        Wait-Until {(Tilt).input_direction -and [Math]::Abs((Tilt).input_direction[1]+40./90.) -lt .015} "$Stage opaque body gutter did not sense native contact"
+        Wait-Until {$tilt=Tilt;$tilt.input_direction -and [Math]::Abs($tilt.input_direction[1]+40./90.) -lt .015} "$Stage opaque body gutter did not sense native contact"
         Capture "$Stage-body-contact" -WithModel
     }finally{[CapyRowPointer]::Up();[CapyRowPointer]::PenLeave()}
     if((Wait-StablePixels {Screen-Pixels $paperPoint[0] $paperPoint[1]}) -ne $pixels){throw "$Stage sensor-only input changed the exact canvas sample"}

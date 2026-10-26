@@ -158,8 +158,12 @@ try{
     Capture "threshold-reopened-$Theme" -WithModel -Composed
     $gradient=Join-Path $run 'Artistic gradient.png';$image=[Drawing.Bitmap]::new(320,192)
     try{for($y=0;$y -lt 192;$y++){for($x=0;$x -lt 320;$x++){$r=[int]($x*255/319);$g=[int]($y*255/191);$image.SetPixel($x,$y,[Drawing.Color]::FromArgb(255,$r,$g,(255-$r)))}};$image.Save($gradient,[Drawing.Imaging.ImageFormat]::Png)}finally{$image.Dispose()}
+    $gradientEpoch=(Model).state.document_file.epoch
     Open-Project $gradient
-    Wait-Until {(Model).state.document_file.location.uri -eq $gradient -and !(Model).state.document_file.busy -and (Model).brush_ready} 'Artistic gradient did not open' 90
+    Wait-Until {
+        $view=Model;$tab=@($view.state.tabs|Where-Object active)[0];$file=$view.state.document_file
+        $file.epoch -ne $gradientEpoch -and $file.unpublished -and !$file.location -and $tab.title -eq 'Artistic gradient' -and $tab.width -eq 320 -and $tab.height -eq 192 -and !$file.busy -and $view.brush_ready
+    } 'Artistic gradient did not open' 90
     Fit-Canvas;Park
     $artistic=@(
         @{id='dither_spread';label='Dither Spread';edits=[ordered]@{spread=64;cell_size=12;density=65}},

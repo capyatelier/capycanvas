@@ -50,6 +50,7 @@ $helper=Join-Path $directory 'capy-photo-reader.exe'
 if(!(Test-Path -LiteralPath $helper)){throw 'Staged photo reader is missing'}
 $run=Join-Path $repo ('artifacts/windows/photo-memory/'+[guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($run)|Out-Null
+$CapyTraceDirectory=$run
 $photo=Join-Path $run 'Large quadrants.png'
 $monitor=$null;$review=$null;$control=[hashtable]::Synchronized(@{stop=$false})
 try{
@@ -125,7 +126,7 @@ try{
         $child|Add-Member -NotePropertyName codec_budget_bytes -NotePropertyValue $codec
         $child|Add-Member -NotePropertyName sampled_private_over_source_and_codec -NotePropertyValue ($child.sampled_private/[double]($source+$codec))
     }
-    & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawing.Handle.ToInt64() -Action Close -DiscardUnsaved
+    & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawing.Handle.ToInt64() -Action Close -DiscardUnsaved -StateDirectory $run
     $review.Refresh();if(!$review.HasExited -or $review.ExitCode -ne 0){throw 'Photo review did not close with exit zero'}
     if((Get-Item -LiteralPath $stderr).Length){throw 'Photo review stderr requires inspection'}
     @{theme=$Theme;extent=@($Width,$Height);encoded_bytes=(Get-Item $photo).Length;app_baseline_private=$baseline;quadrants=$samples;memory=$memory;scope='Observed child OS peaks can miss exit-time growth; combined private usage is sampled. Photo budgets bound codec admission and compressed source ownership, not total editor memory.';run=$run}|ConvertTo-Json -Depth 8|Tee-Object -FilePath (Join-Path $run 'results.json')

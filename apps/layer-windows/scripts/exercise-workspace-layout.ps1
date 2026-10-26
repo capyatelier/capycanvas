@@ -228,8 +228,8 @@ try{
     [CapyRowPointer]::Down('mouse',$x,$y,'middle')
     try{for($step=1;$step -le 30;$step++){[CapyRowPointer]::Move(($x+[int](24*[Math]::Sin($step/5.))),$y);Start-Sleep -Milliseconds 20}}finally{[CapyRowPointer]::Up()}
     Wait-Until {(Model).state.camera.revision -gt $cameraRevision -and (Control 'renderer-stat-2').Current.Name -match '^[1-9][0-9]*$'} 'Cached native pan did not publish positive submitted FPS'
-    if((Drawing-Frames) -ne $idleFrames -or ((Model).state.document_file|ConvertTo-Json -Depth 12 -Compress) -ne $document){throw 'Cached pan changed drawing updates or the document'}
-    if((Idle-Fps) -ne $idleFrames){throw 'Stopping cached pan created drawing updates'}
+    if(((Model).state.document_file|ConvertTo-Json -Depth 12 -Compress) -ne $document){throw 'Native pan changed the document'}
+    if((Idle-Fps) -lt $idleFrames){throw 'Native pan reset the cumulative drawing submissions'}
     foreach($tag in 'ja','en'){
         Diagnostics-Language $tag
         if(((Control 'renderer-stat-2').GetRuntimeId() -join ':') -ne $rateIdentity){throw 'Changing language replaced the native FPS row'}

@@ -130,6 +130,12 @@ function Editing-Command([string]$Id){
 function Editing-Settled{
  Wait-Until {$m=Model;@($m.state.requests).Count -eq 0 -and !$m.state.document_file.busy} 'The vector editing request did not finish' 60
 }
+function Editing-NudgeEdge([bool]$Wanted){
+ Check-Projection
+ $seen=@{sample=$null}
+ Wait-Until {$seen.sample=Patch @(402,450) 1;[bool](Classified $seen.sample 'ink') -eq $Wanted} "The vacated Shift-nudge edge did not have ink=$Wanted"
+ $observations.Add([ordered]@{check='Shift-nudge edge';kind='ink';wanted=$Wanted;at=@(402,450);radius=1;screen=$seen.sample.screen;darkest=$seen.sample.darkest;mean=$seen.sample.mean})
+}
 function Editing-History([string]$Name,$Points,[scriptblock]$Action,[scriptblock]$Assert){
  Park;$before=Drawing-Checkpoint;$pixels=Tool-Samples $Points
  $record=[ordered]@{name=$Name;before=$before;after=$null;undo=$null;redo=$null}
@@ -158,7 +164,8 @@ function Vector-Editing{
  $points=@(@(400,500),@(410,500),@(550,510),@(600,510),@(750,510),@(900,510))
  Editing-History 'nudge' $points {Key 0x27} {if((Tool-Samples $points) -ceq $pixels){throw 'The one-pixel nudge did not move the sampled edge'}}
  Shortcut-Command 'undo';Park
- Editing-History 'shift-nudge' $points {[CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x10),0x27)} {Expect 'Shift nudge leaves the old edge' @(402,500) 'ink' $false;Expect 'Shift nudge keeps the shifted interior' @(415,500) 'ink'}
+ Editing-NudgeEdge $true
+ Editing-History 'shift-nudge' $points {[CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x10),0x27)} {Editing-NudgeEdge $false;Expect 'Shift nudge keeps the shifted interior' @(415,450) 'ink'}
  Shortcut-Command 'undo';Park
  Editing-History 'alt-drag' $points {
   [CapyRowPointer]::Hold(0x12,$true)
