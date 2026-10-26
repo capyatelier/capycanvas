@@ -4,8 +4,9 @@ using System;using System.Runtime.InteropServices;using System.Text;using System
 public static class CapyWindowApi {
  delegate bool EnumWindow(IntPtr window,IntPtr parameter);
  [DllImport("user32.dll",SetLastError=true)]static extern bool EnumWindows(EnumWindow callback,IntPtr parameter);
+ [DllImport("kernel32.dll")]static extern void SetLastError(uint error);
  [DllImport("user32.dll")]public static extern uint GetWindowThreadProcessId(IntPtr h,out uint owner);
- public static IntPtr[] Windows(uint process){var windows=new List<IntPtr>();if(!EnumWindows((window,parameter)=>{uint owner;GetWindowThreadProcessId(window,out owner);if(owner==process)windows.Add(window);return true;},IntPtr.Zero))throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());return windows.ToArray();}
+ public static IntPtr[] Windows(uint process){var windows=new List<IntPtr>();SetLastError(0);if(!EnumWindows((window,parameter)=>{uint owner;GetWindowThreadProcessId(window,out owner);if(owner==process)windows.Add(window);return true;},IntPtr.Zero)){var error=Marshal.GetLastWin32Error();if(error!=0)throw new System.ComponentModel.Win32Exception(error);}return windows.ToArray();}
  [DllImport("user32.dll")]public static extern bool PostMessage(IntPtr h,uint m,UIntPtr w,IntPtr l);
  [DllImport("user32.dll")]public static extern bool SetForegroundWindow(IntPtr h);
  [DllImport("user32.dll")]public static extern bool ShowWindow(IntPtr h,int n);

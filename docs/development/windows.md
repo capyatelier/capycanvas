@@ -1397,8 +1397,10 @@ the focused header journeys also check placement cancellation and keyboard input
   desktop and foreground input. Run them sequentially.
 - **Resolve the drawing window.** Use `Owned-DrawingWindow` from `CapyUia.ps1` at
   startup and after reopening. It creates UI Automation roots from native window
-  handles owned by the process and requires the drawing-canvas peer. Keep its root
-  and HWND for input, sizing, captures and window close;
+  handles owned by the process and requires the drawing-canvas peer.
+  An empty enumeration waits for window creation; only a reported native error
+  aborts discovery. Clear Win32's last-error value before enumerating.
+  Keep its root and HWND for input, sizing, captures and window close;
   `Process.MainWindowHandle` can select an input-indicator overlay in the same
   process. Startup-close checks resolve this window without
   waiting for brush readiness. Set `CapyTraceDirectory` when traces live outside the
