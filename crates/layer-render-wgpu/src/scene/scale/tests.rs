@@ -726,8 +726,8 @@ fn source_windows_keep_overlap_and_sample_global_coordinates() {
         frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
         submit_published(&mut r, frame); submit_published(&mut exact, frame);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-        while r.moving_decode.as_ref().is_some_and(|(_, queue)| queue.pending()) {
-            assert!(std::time::Instant::now() < deadline, "moving source tiles must decode");
+        while r.object_deferred || r.moving_decode.as_ref().is_some_and(|(_, queue)| queue.pending()) {
+            assert!(std::time::Instant::now() < deadline, "moving source tiles must decode and publish");
             r.wait_idle().unwrap();
             crate::test_support::submit_ready(&mut r, frame).unwrap();
         }
