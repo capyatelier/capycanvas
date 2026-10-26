@@ -68,6 +68,13 @@ function Swatch-Button([string]$Id,[int]$Index) {
 function Swatch-Bounds($Bounds,$Origin,[double]$Scale) {
     @{x=$Origin.x+$Bounds.x*$Scale;top=$Origin.y+$Bounds.y*$Scale;bottom=$Origin.y+($Bounds.y+$Bounds.height)*$Scale;width=$Bounds.width*$Scale;height=$Bounds.height*$Scale}
 }
+function Swatch-Choice([string]$Id,[int]$Index) {
+    $button=$script:settingsScope.FindFirst([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,"setting-$Id-swatch-$Index"))
+    if($button){$current=$button.Current;@{id=$current.AutomationId;name=$current.Name;status=$current.ItemStatus;process=$current.ProcessId;offscreen=$current.IsOffscreen;enabled=$current.IsEnabled;runtime_id=($button.GetRuntimeId()-join ':')}}
+}
+function Preset-Acknowledged($Row,[int]$Index,[string]$Value,$Choice) {
+    $Row -and $Choice -and $Row.kind.value -eq $Value -and $Row.kind.selected -eq $Index -and $Choice.process -eq $ProcessId -and $Choice.id -ceq "setting-$($Row.id)-swatch-$Index" -and $Choice.name -ceq $Row.kind.swatches[$Index].label -and $Choice.status -ceq 'Selected'
+}
 function Swatch-Allocation([string]$Id,[double]$Scale) {
     $title=$script:settingsScope.FindFirst([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,'settings-title'))
     if(!$title -or $title.Current.IsOffscreen -or !$title.Current.ItemStatus){return}
@@ -80,14 +87,17 @@ function Swatch-Allocation([string]$Id,[double]$Scale) {
     $origin=@{x=$anchor.X-$trace.title.x*$Scale;y=$anchor.Y-$trace.title.y*$Scale}
     @{row=(Swatch-Bounds $parts[0].row $origin $Scale);strip=(Swatch-Bounds $parts[0].strip $origin $Scale);entry=$(if($parts[0].entry_visible){Swatch-Bounds $parts[0].entry $origin $Scale});entry_in_strip=[bool]$parts[0].entry_in_strip;native=$parts[0];anchor_runtime_id=($title.GetRuntimeId()-join ':')}
 }
-function Wait-SwatchAllocation([string]$Id,$Row,[double]$Scale,[bool]$Open) {
+function Wait-SwatchAllocation([string]$Id,$Row,[double]$Scale,[bool]$Open,[int]$PresetIndex=-1,[string]$PresetValue) {
     $stable=@{key='';value=$null;watch=[Diagnostics.Stopwatch]::StartNew();attempts=0;key_changes=0;last=$null}
     try{
         Wait-Until {
             $stable.attempts++
-            $value=Swatch-Allocation $Id $Scale
-            $sample=@{gate='native_allocation';allocation_found=($null -ne $value);allocation=$value;native_entry_visible=$false;native_entry_present=$false;uia=$null;stable_elapsed_ms=0}
+            $currentRow=Preference-Row $Id
+            $choiceIndex=if($Open){$currentRow.kind.swatches.Count-1}elseif($PresetIndex -ge 0){$PresetIndex}else{[int]$currentRow.kind.selected}
+            $sample=@{gate='preset_acknowledgement';shared_row=$currentRow;native_button=(Swatch-Choice $Id $choiceIndex);expected_preset=$PresetIndex;expected_value=$PresetValue;allocation_found=$false;allocation=$null;native_entry_visible=$false;native_entry_present=$false;uia=$null;stable_elapsed_ms=0}
             $stable.last=$sample
+            if($PresetIndex -ge 0 -and !(Preset-Acknowledged $currentRow $PresetIndex $PresetValue $sample.native_button)){return $false}
+            $sample.gate='native_allocation';$value=Swatch-Allocation $Id $Scale;$sample.allocation_found=$null -ne $value;$sample.allocation=$value
             if(!$value){return $false}
             $sample.native_entry_visible=[bool]$value.native.entry_visible;$sample.native_entry_present=[bool]$value.entry;$sample.gate='uia_entry'
             $entry=Find-Control $Row.title ([System.Windows.Automation.ControlType]::Edit)
@@ -128,18 +138,20 @@ function Check-SwatchAllocation([string]$Id) {
         $preset=Swatch-Button $Id 0;$scroll=$null;if($preset.TryGetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern,[ref]$scroll)){$scroll.ScrollIntoView()}
         $preset.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
         $record.source='settings-title native allocations'
-        $record.closed=Wait-SwatchAllocation $Id $row $record.scale $false
+        $record.closed=Wait-SwatchAllocation $Id $row $record.scale $false 0 $row.kind.swatches[0].value
         (Swatch-Button $Id $custom).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
         $record.open=Wait-SwatchAllocation $Id $row $record.scale $true
         if(!(Control $row.title ([System.Windows.Automation.ControlType]::Edit)).Current.HasKeyboardFocus){throw 'Opening Custom did not focus the retained native field'}
         (Swatch-Button $Id 0).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
-        $record.closed_again=Wait-SwatchAllocation $Id $row $record.scale $false
+        $record.closed_again=Wait-SwatchAllocation $Id $row $record.scale $false 0 $row.kind.swatches[0].value
         $gap=if($row.kind.inline){8.}else{12.};$record.metrics=Assert-SwatchAllocation $record.closed $record.open $record.closed_again $gap $record.scale
     }finally{
         try{
             (Swatch-Button $Id $selected).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
             if($row.kind.swatches[$selected].custom){Edit-Text $row.title $saved;Focus-Control (Control 'Color theme' ([System.Windows.Automation.ControlType]::ComboBox))}
-            Wait-Until {(Preference-Row $Id).kind.value -eq $saved} "Native $Id swatch did not restore its original shared value"
+            $restoration=@{shared_row=$null;native_button=$null;expected_index=$selected;expected_value=$saved}
+            try{Wait-Until {$restoration.shared_row=Preference-Row $Id;$restoration.native_button=Swatch-Choice $Id $selected;Preset-Acknowledged $restoration.shared_row $selected $saved $restoration.native_button} "Native $Id swatch did not restore its original shared value"}
+            catch{[IO.File]::WriteAllText((Join-Path $EvidenceDirectory ("swatch-restoration-$Id-failure.json")),($restoration|ConvertTo-Json -Depth 12),[Text.UTF8Encoding]::new($false));throw}
         }finally{[IO.File]::WriteAllText((Join-Path $EvidenceDirectory 'header-settings-custom-colors.json'),(@($script:swatchAllocations.ToArray())|ConvertTo-Json -Depth 12),[Text.UTF8Encoding]::new($false))}
     }
 }
