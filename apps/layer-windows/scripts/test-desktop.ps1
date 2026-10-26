@@ -1,7 +1,8 @@
 param(
     [Parameter(Mandatory)][string]$Script,
     [hashtable]$Parameters=@{},
-    [ValidateRange(1,3600)][int]$TimeoutSeconds=600
+    [ValidateRange(1,3600)][int]$TimeoutSeconds=600,
+    [switch]$ConfigureVmDisplay
 )
 $ErrorActionPreference='Stop'
 $Script=(Resolve-Path -LiteralPath $Script).Path
@@ -9,7 +10,9 @@ $repo=(Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
 $run=Join-Path $repo ('artifacts/windows/test-desktop/'+[Guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($run)|Out-Null
 $desktop='Capy-Test-'+[Guid]::NewGuid().ToString('N')
-@{script=$Script;parameters=$Parameters;desktop=$desktop}|Export-Clixml -LiteralPath (Join-Path $run 'invocation.clixml')
+$invocation=@{script=$Script;parameters=$Parameters;desktop=$desktop}
+if($ConfigureVmDisplay){$invocation.vm_display=(Resolve-Path -LiteralPath (Join-Path $repo 'tools/windows-vm/set-display.ps1')).Path}
+$invocation|Export-Clixml -LiteralPath (Join-Path $run 'invocation.clixml')
 @'
 $ErrorActionPreference='Stop'
 $invocation=Import-Clixml -LiteralPath (Join-Path $PSScriptRoot 'invocation.clixml')
@@ -17,6 +20,7 @@ $env:CAPY_PRIVATE_DESKTOP=$invocation.desktop
 $env:CAPY_FIXTURE_CONTEXT=Join-Path $PSScriptRoot 'fixture.json'
 Start-Transcript -LiteralPath (Join-Path $PSScriptRoot 'transcript.log')|Out-Null
 try {
+    if($invocation.vm_display){& $invocation.vm_display}
     $arguments=$invocation.parameters
     & $invocation.script @arguments
     if(!$?){exit 1}

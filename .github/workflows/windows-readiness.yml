@@ -70,57 +70,6 @@ jobs:
         with:
           ref: ${{ inputs.source_ref || github.sha }}
       - run: git rev-parse HEAD
-      - name: Set the private VM display size
-        run: |
-          Add-Type -TypeDefinition @'
-          using System;
-          using System.ComponentModel;
-          using System.Runtime.InteropServices;
-          public static class CapyVmDisplay {
-            const uint UseBitsPerPixel=0x40000, UseWidth=0x80000, UseHeight=0x100000, TestMode=2, Fullscreen=4;
-            [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
-            public struct Mode {
-              [MarshalAs(UnmanagedType.ByValTStr, SizeConst=32)] public string DeviceName;
-              public ushort SpecVersion, DriverVersion, Size, DriverExtra;
-              public uint Fields;
-              public int PositionX, PositionY;
-              public uint Orientation, FixedOutput;
-              public short Color, Duplex, YResolution, TTOption, Collate;
-              [MarshalAs(UnmanagedType.ByValTStr, SizeConst=32)] public string FormName;
-              public ushort LogPixels;
-              public uint BitsPerPixel, Width, Height, DisplayFlags, Frequency;
-              public uint IcmMethod, IcmIntent, MediaType, DitherType, Reserved1, Reserved2, PanningWidth, PanningHeight;
-            }
-            [DllImport("user32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
-            static extern bool EnumDisplaySettings(string device, int index, ref Mode mode);
-            [DllImport("user32.dll", CharSet=CharSet.Unicode)]
-            static extern int ChangeDisplaySettingsEx(string device, ref Mode mode, IntPtr window, uint flags, IntPtr parameter);
-            static Mode Current() {
-              var mode = new Mode { Size=(ushort)Marshal.SizeOf(typeof(Mode)) };
-              if (!EnumDisplaySettings(null, -1, ref mode)) throw new Win32Exception(Marshal.GetLastWin32Error());
-              return mode;
-            }
-            public static void SetSize(uint width, uint height) {
-              var best=new Mode();string available="";
-              for(int index=0;;index++) {
-                var candidate=new Mode { Size=(ushort)Marshal.SizeOf(typeof(Mode)) };
-                if(!EnumDisplaySettings(null,index,ref candidate))break;
-                available+=candidate.Width+"x"+candidate.Height+"@"+candidate.BitsPerPixel+" ";
-                if(candidate.BitsPerPixel!=32||candidate.Width<1920||candidate.Height<1080||candidate.Width>width||candidate.Height>height)continue;
-                candidate.Fields=UseBitsPerPixel|UseWidth|UseHeight;
-                if(ChangeDisplaySettingsEx(null,ref candidate,IntPtr.Zero,TestMode,IntPtr.Zero)!=0)continue;
-                if((ulong)candidate.Width*candidate.Height>(ulong)best.Width*best.Height)best=candidate;
-              }
-              if(best.Width==0)throw new InvalidOperationException("VM has no supported GUI fixture display of at least 1920x1080. Available: "+available);
-              int result=ChangeDisplaySettingsEx(null,ref best,IntPtr.Zero,Fullscreen,IntPtr.Zero);
-              if(result!=0)throw new InvalidOperationException("VM display mode rejected: "+result);
-              var mode=Current();
-              if(mode.Width!=best.Width||mode.Height!=best.Height)throw new InvalidOperationException("VM display size did not change");
-              Console.WriteLine("VM display: "+mode.Width+"x"+mode.Height+", "+mode.BitsPerPixel+" bpp");
-            }
-          }
-          '@
-          [CapyVmDisplay]::SetSize(2560,1600)
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: windows-x64-readiness-runtime
@@ -145,7 +94,7 @@ jobs:
                 $env:CAPY_WAIT_SCALE = $null
                 $idle = (Resolve-Path apps/layer-windows/scripts/exercise-idle-brush.ps1).Path
                 $theme = if ($name -eq 'idle-brush:light') { 'light' } else { 'dark' }
-                & $desktop -Script $idle -Parameters @{Executable=$executable; Theme=$theme; PresetIds=@(10,45,46,65,66,48,61,62,24,57,58,56,47,50,53,49,60,52,51,55)} -TimeoutSeconds 1800
+                & $desktop -ConfigureVmDisplay -Script $idle -Parameters @{Executable=$executable; Theme=$theme; PresetIds=@(10,45,46,65,66,48,61,62,24,57,58,56,47,50,53,49,60,52,51,55)} -TimeoutSeconds 1800
               } catch {
                 $failed.Add($name)
                 Write-Warning "$name`: $_"
@@ -156,7 +105,7 @@ jobs:
             }
             $output = Join-Path $env:GITHUB_WORKSPACE ('artifacts/windows/readiness/' + $name.Replace(':', '-'))
             try {
-              & $desktop -Script $runner -Parameters @{Executable=$executable; Output=$output; Name=$name} -TimeoutSeconds 1320
+              & $desktop -ConfigureVmDisplay -Script $runner -Parameters @{Executable=$executable; Output=$output; Name=$name} -TimeoutSeconds 1320
               $plan = Get-Content (Join-Path $output 'plan.json') -Raw | ConvertFrom-Json
               $results = @(Get-Content (Join-Path $output 'results.jsonl') | ConvertFrom-Json)
               Write-Output "Expected: $($plan.runs -join ', ')"
@@ -180,7 +129,7 @@ jobs:
               try {
                 Write-Output "Expected: $lightName"
                 $lightScript = (Resolve-Path ("apps/layer-windows/scripts/exercise-" + ($name -split ':')[0] + '.ps1')).Path
-                & $desktop -Script $lightScript -Parameters $lightParameters -TimeoutSeconds 1320
+                & $desktop -ConfigureVmDisplay -Script $lightScript -Parameters $lightParameters -TimeoutSeconds 1320
               } catch {
                 $failed.Add($lightName)
                 Write-Warning "$lightName`: $_"
