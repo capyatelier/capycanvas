@@ -568,6 +568,51 @@ fn shipped_tool_slot_presets_keep_compact_counts_and_separate_pen_and_pencil() {
 }
 
 #[test]
+fn shipped_paint_order_keeps_remembered_groups_in_their_slots() {
+    use CommandId as C;
+    use ToolSlotId as S;
+    use ToolbarControl::{Command, ToolSlot, Divider, Color};
+    let expected = [
+        Command { command: C::Zoom }, Command { command: C::Hand }, ToolSlot { slot: S::Operation },
+        ToolSlot { slot: S::ManualSelection }, ToolSlot { slot: S::AutomaticSelection }, Command { command: C::Eyedropper }, Divider,
+        Command { command: C::Pen }, Command { command: C::Pencil }, Command { command: C::Brush }, Command { command: C::Airbrush },
+        Command { command: C::Eraser }, ToolSlot { slot: S::Blend }, Command { command: C::Liquify }, ToolSlot { slot: S::Retouch }, Divider,
+        ToolSlot { slot: S::Fill }, ToolSlot { slot: S::Gradient }, ToolSlot { slot: S::Figure }, ToolSlot { slot: S::Ruler }, Color,
+    ];
+    for platform in Platform::ALL {
+        let layout = WorkspacePreset::Illustrator.layout(platform);
+        let tiles = layout.panel(Panel::Toolbar).unwrap().tiles().to_vec();
+        assert_eq!(tiles.iter().map(|tile| tile.control).collect::<Vec<_>>(), expected, "{platform:?}");
+        let mut s = session(platform);
+        s.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(WorkspaceState { layout, ..WorkspaceState::default() }) }).unwrap();
+        let remembered = [
+            (S::AutomaticSelection, ToolVariant::Command { command: C::TonalSelect }),
+            (S::Blend, ToolVariant::BrushGroup { group: ToolGroup::Effects }),
+            (S::Retouch, ToolVariant::BrushPreset { id: DefaultBrushPreset::SpotHealingBrush as u32 }),
+        ];
+        for (slot, variant) in remembered {
+            let tile = tiles.iter().find(|tile| tile.control == ToolSlot { slot }).unwrap().id;
+            let anchor = DrawerAnchor::Tile { panel: Panel::Toolbar, tile };
+            s.dispatch(slot_choice(&s, anchor, variant)).unwrap();
+        }
+        invoke(&mut s, C::Hand);
+        let mut restored = session(platform);
+        restored.restore_editing(s.editing_state()).unwrap();
+        restored.adopt_workspace(PreparedWorkspace::new(s.capture_workspace().unwrap()).unwrap()).unwrap();
+        for (slot, variant) in remembered {
+            let tile = tiles.iter().find(|tile| tile.control == ToolSlot { slot }).unwrap().id;
+            let anchor = DrawerAnchor::Tile { panel: Panel::Toolbar, tile };
+            assert_eq!(selected_slot_variant(&restored, anchor), variant, "{platform:?} {slot:?}");
+            activate_slot(&mut restored, anchor);
+            assert_eq!(selected_slot_variant(&restored, anchor), variant);
+            assert!(restored.command(variant.command()).selected);
+            invoke(&mut restored, C::Hand);
+        }
+        assert_eq!(restored.state().workspace.layout.panel(Panel::Toolbar).unwrap().tiles(), tiles);
+    }
+}
+
+#[test]
 fn slot_menus_publish_only_member_choices_and_activate_their_leaf_tools() {
     let slots = [ToolSlotId::Drawing, ToolSlotId::Marquee, ToolSlotId::Lasso,
         ToolSlotId::AutomaticSelection, ToolSlotId::ManualSelection, ToolSlotId::Healing,

@@ -67,7 +67,7 @@ use std::{cell::RefCell, rc::Rc};
 
 fn stylesheet() -> String {
     format!(
-        "window {{ --ui-text-size: {}pt; --command-inset: {}px; --command-gap: {}px; --command-radius: {}px; --panel-inset: {}px; --panel-control-spacing: {}px; --panel-group-spacing: {}px; --panel-compound-spacing: {}px; --panel-control-height: {}px; --panel-field-padding: {}px; --panel-control-radius: {}px; --layer-edge-inset: {}px; }}\n{}",
+        "window {{ --ui-text-size: {}pt; --command-inset: {}px; --command-gap: {}px; --command-radius: {}px; --panel-inset: {}px; --panel-control-spacing: {}px; --panel-group-spacing: {}px; --panel-compound-spacing: {}px; --panel-control-height: {}px; --panel-field-padding: {}px; --panel-control-radius: {}px; --tool-caption-opacity: {}; --layer-edge-inset: {}px; }}\n{}",
         layer_ui::UI_TEXT_PT,
         layer_ui::COMMAND_SEARCH_STYLE.inset,
         layer_ui::COMMAND_SEARCH_STYLE.gap,
@@ -79,6 +79,7 @@ fn stylesheet() -> String {
         layer_ui::PANEL_CONTROL_METRICS.control_height,
         layer_ui::PANEL_CONTROL_METRICS.field_padding,
         layer_ui::PANEL_CONTROL_METRICS.control_radius,
+        layer_ui::TOOL_PREVIEW_METRICS.caption_opacity,
         layer_ui::LAYER_EDGE_INSET,
         include_str!("style.css")
     )

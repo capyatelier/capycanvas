@@ -85,31 +85,29 @@ impl WorkspacePreset {
     fn group_tools(self, layout: &mut DockLayout) {
         use crate::{CommandId as C, ToolSlotId as S};
         use ToolbarControl::{Command, ToolSlot, Divider, Color};
-        if self == Self::Photographer {
-            let controls = [
+        let controls: &[ToolbarControl] = match self {
+            Self::Photographer => &[
                 ToolSlot {slot:S::Operation}, Command {command:C::Crop}, Divider,
                 ToolSlot {slot:S::Marquee}, ToolSlot {slot:S::Lasso}, ToolSlot {slot:S::AutomaticSelection}, Command {command:C::SelectionBrush}, Divider,
                 ToolSlot {slot:S::Drawing}, Command {command:C::Eraser}, Command {command:C::Clone}, ToolSlot {slot:S::Healing},
                 Command {command:C::Blend}, Command {command:C::Liquify}, ToolSlot {slot:S::PhotoFill}, Divider,
                 Command {command:C::Hand}, Command {command:C::Zoom}, Command {command:C::Eyedropper}, Color,
-            ];
-            let tiles=controls.into_iter().map(|control| {
-                let id=layout.next_tile_id;
-                layout.next_tile_id+=1;
-                ToolbarTile {id,control}
-            }).collect();
-            *layout.panel_mut(Panel::Toolbar).unwrap().tiles_mut().unwrap()=tiles;
-        } else if self == Self::Illustrator {
-            for tile in layout.panel_mut(Panel::Toolbar).unwrap().tiles_mut().unwrap() {
-                let Command {command}=tile.control else {continue;};
-                let slot=match command {
-                    C::Blend=>S::Blend, C::Lasso=>S::ManualSelection, C::AutoSelect=>S::AutomaticSelection,
-                    C::Fill=>S::Fill, C::Gradient=>S::Gradient, C::Move|C::EditPoints=>S::Operation, C::Figure=>S::Figure, C::Ruler=>S::Ruler,
-                    _=>continue,
-                };
-                tile.control=ToolSlot {slot};
-            }
-        }
+            ],
+            Self::Illustrator => &[
+                Command {command:C::Zoom}, Command {command:C::Hand}, ToolSlot {slot:S::Operation},
+                ToolSlot {slot:S::ManualSelection}, ToolSlot {slot:S::AutomaticSelection}, Command {command:C::Eyedropper}, Divider,
+                Command {command:C::Pen}, Command {command:C::Pencil}, Command {command:C::Brush}, Command {command:C::Airbrush},
+                Command {command:C::Eraser}, ToolSlot {slot:S::Blend}, Command {command:C::Liquify}, ToolSlot {slot:S::Retouch}, Divider,
+                ToolSlot {slot:S::Fill}, ToolSlot {slot:S::Gradient}, ToolSlot {slot:S::Figure}, ToolSlot {slot:S::Ruler}, Color,
+            ],
+            Self::Painter => return,
+        };
+        let tiles=controls.iter().map(|&control| {
+            let id=layout.next_tile_id;
+            layout.next_tile_id+=1;
+            ToolbarTile {id,control}
+        }).collect();
+        *layout.panel_mut(Panel::Toolbar).unwrap().tiles_mut().unwrap()=tiles;
     }
 
     fn painter_layout(platform: crate::Platform) -> DockLayout {

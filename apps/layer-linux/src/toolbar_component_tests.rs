@@ -252,8 +252,16 @@ fn paint_blend_variations(d: &mut Driver, theme: Theme) {
     restore(d, WorkspacePreset::Illustrator);
     let controls = state(&d.w).workspace.layout.panel(Panel::Toolbar).unwrap().tiles()
         .iter().map(|tile| tile.control).collect::<Vec<_>>();
-    assert_eq!(controls.iter().filter(|control|
-        !matches!(control, ToolbarControl::Color | ToolbarControl::Divider)).count(), 18);
+    let positions = controls.iter().copied().filter(|control|
+        !matches!(control, ToolbarControl::Color | ToolbarControl::Divider)).collect::<Vec<_>>();
+    let command = |command| ToolbarControl::Command { command };
+    let slot = |slot| ToolbarControl::ToolSlot { slot };
+    assert_eq!(positions, [command(CommandId::Zoom), command(CommandId::Hand), slot(ToolSlotId::Operation),
+        slot(ToolSlotId::ManualSelection), slot(ToolSlotId::AutomaticSelection), command(CommandId::Eyedropper),
+        command(CommandId::Pen), command(CommandId::Pencil), command(CommandId::Brush), command(CommandId::Airbrush),
+        command(CommandId::Eraser), slot(ToolSlotId::Blend), command(CommandId::Liquify), slot(ToolSlotId::Retouch),
+        slot(ToolSlotId::Fill), slot(ToolSlotId::Gradient), slot(ToolSlotId::Figure), slot(ToolSlotId::Ruler)]);
+    assert_eq!(controls.last(), Some(&ToolbarControl::Color));
     let anchor = slot_anchor(d, ToolSlotId::Blend);
     let opener = anchor_widget(d, anchor);
     let groups = [layer_ui::ToolGroup::Blend, layer_ui::ToolGroup::WetPaint,
@@ -455,12 +463,13 @@ fn native_tool_set_category_input() {
         }
         for theme in [Theme::Light, Theme::Dark] {
             d.w.dispatch(UiAction::SetTheme { theme: Some(theme) });
-            for command in [CommandId::Brush, CommandId::Fill, CommandId::Hand] {
+            for command in [CommandId::Brush, CommandId::Fill, CommandId::Blend] {
                 d.w.dispatch(UiAction::Invoke { command });
                 pump(250);
                 let buttons = d.w.tool_set.group_buttons.borrow().clone();
                 assert!(!buttons.is_empty());
                 for button in buttons {
+                    assert_eq!(button.height(), 26, "{command:?}/{theme:?}/{floating}: category height");
                     let cell = button.parent().unwrap();
                     let bounds = button.compute_bounds(&cell).unwrap();
                     assert!(bounds.x().abs() < 1. && (bounds.width() - cell.width() as f32).abs() < 1.,
@@ -478,7 +487,47 @@ fn native_tool_set_category_input() {
             }
         }
     }
+    for theme in [Theme::Light, Theme::Dark] {
+        restore(&d, WorkspacePreset::Illustrator);
+        d.w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        d.w.dispatch(UiAction::Invoke { command: CommandId::Hand }); pump(150);
+        let buttons = d.w.tool_set.buttons.borrow().clone();
+        assert!(!buttons.is_empty());
+        for (item, button, preview) in buttons {
+            assert!(preview.is_none());
+            assert_eq!(button.measure(gtk::Orientation::Vertical, button.width()).0, 44, "plain tool rows retain their outer minimum");
+            assert_eq!(button.compute_bounds(&button.parent().unwrap()).unwrap().height(), 44.);
+            d.click(button.upcast_ref());
+            assert!(state(&d.w).tool_set.subtools.iter().any(|choice| choice.action == item.action && choice.selected));
+        }
+        restore(&d, WorkspacePreset::Painter);
+        d.w.dispatch(UiAction::Invoke { command: CommandId::Lasso }); pump(100);
+        let opener = d.named(&d.header_tool(ToolbarControl::Command { command: CommandId::DrawingBrush }));
+        d.click(&opener); d.click(&opener);
+        let sets = d.named("drawer-panel-BrushSets");
+        let buttons = descendants::<gtk::Button>(&sets).into_iter().filter(|button| button.has_css_class("tool-group")).collect::<Vec<_>>();
+        assert!(!buttons.is_empty());
+        for button in buttons {
+            assert_eq!(button.height(), 44, "media category lists retain their height");
+        }
+        d.capture_canvas(&format!("media-category-{theme:?}.png"));
+        d.click(&opener);
+    }
     d.finish();
+}
+
+fn assert_preview_caption_paint(widget: &gtk::Widget) {
+    let parent = widget.parent().unwrap();
+    let bounds = widget.compute_bounds(&parent).unwrap();
+    let snapshot = gtk::Snapshot::new();
+    parent.snapshot_child(widget, &snapshot);
+    let texture = widget.native().unwrap().renderer().unwrap()
+        .render_texture(snapshot.to_node().unwrap(), Some(&bounds));
+    let mut pixels = vec![0; texture.width() as usize * texture.height() as usize * 4];
+    texture.download(&mut pixels, texture.width() as usize * 4);
+    let alpha = pixels.as_chunks::<4>().0.iter().map(|pixel| pixel[3]).collect::<Vec<_>>();
+    assert!(alpha.iter().any(|value| (228..=232).contains(value)), "caption background uses90%opacity");
+    assert!(alpha.iter().any(|value| *value == 255), "caption glyphs retain opaque paint");
 }
 
 #[test]
@@ -503,7 +552,6 @@ fn native_panel_preview_input() {
             let body = button.child().unwrap();
             let preview = body.first_child().unwrap();
             let caption = body.last_child().unwrap();
-            let mut full_height = 0;
             for height in [700., 360., 700.] {
                 let layout = state(&d.w).workspace.layout;
                 let group = layout.panel_group(panel).unwrap();
@@ -516,17 +564,44 @@ fn native_panel_preview_input() {
                 pump(250);
                 let image = preview.compute_bounds(&body).unwrap();
                 let text = caption.compute_bounds(&body).unwrap();
-                assert!((40..=41).contains(&preview.height()), "Compression preserves the preview");
                 assert!(text.y() >= 0. && text.y() + text.height() <= body.height() as f32 + 1.);
-                if height == 360. {
-                    eprintln!("{panel:?} {theme:?} row height: {full_height} -> {}", button.height());
-                    assert!(button.height() as f32 <= full_height as f32 * 0.8,
-                        "Preview rows compact by about a quarter: {full_height} -> {}", button.height());
-                    assert!(text.y() < image.y() + image.height(), "Compact captions share preview space");
-                } else {
-                    if full_height == 0 { full_height = button.height(); }
-                    assert_eq!(button.height(), full_height, "Rows regain their original full height");
-                    assert!(text.y() >= image.y() + image.height() - 1., "Full captions sit below the preview");
+                eprintln!("{panel:?}/{theme:?}/{height}: outer {}, preview {}, caption {} at{}",
+                    button.compute_bounds(&button.parent().unwrap()).unwrap().height(), image.height(), text.height(), text.y());
+                if panel == Panel::Brushes {
+                    assert_eq!(preview.height(), 40, "Compression preserves the brush preview");
+                    assert_eq!(button.measure(gtk::Orientation::Vertical, button.width()).0, 54);
+                    assert_eq!(button.measure(gtk::Orientation::Vertical, button.width()).1, 66);
+                    assert_eq!(button.height(), if height == 360. { 54 } else { 66 });
+                    assert_eq!(caption.height(), 26);
+                    let icon = caption.first_child().unwrap();
+                    let name = caption.last_child().unwrap();
+                    assert_eq!((icon.width(), icon.height()), (26, 26));
+                    assert_eq!(name.height(), 26);
+                    assert_eq!(caption.opacity(), 1.);
+                    assert_eq!(icon.opacity(), 1.);
+                    assert_eq!(name.opacity(), 1.);
+                    assert_preview_caption_paint(&icon);
+                    assert_preview_caption_paint(&name);
+                    if height == 360. {
+                        assert!((image.y() + image.height() - text.y() - 12.).abs() <= 1.,
+                            "compact caption overlaps the intact preview by12px");
+                    } else {
+                        assert!((text.y() - image.y() - image.height()).abs() <= 1.);
+                    }
+                    let other = state(&d.w).tool_set.subtools.iter().filter_map(|item| item.preview)
+                        .find(|id| *id != preset).unwrap();
+                    for target in [&preview, &icon, &name, button.upcast_ref()] {
+                        d.w.dispatch(UiAction::SelectBrush { id: other }); pump(80);
+                        let point = screen_point(target, &d.w.window, if target == &preview { [0.5, 0.2] } else { [0.5, 0.5] });
+                        d.input.click(point);
+                        assert_eq!(state(&d.w).brush.preset, preset, "every preview row surface selects its preset");
+                    }
+                }
+                if panel == Panel::Adjustments {
+                    assert!(body.is::<gtk::Box>(), "filter previews keep their independent box layout");
+                    assert_eq!(preview.downcast_ref::<gtk::Picture>().unwrap().content_fit(), gtk::ContentFit::Contain);
+                    assert!((text.y() - image.y() - image.height() - 4.).abs() <= 1.,
+                        "filter captions stay4pxbelowpreview");
                 }
                 assert_eq!(button.upcast_ref::<gtk::Widget>(), &d.named(&name), "Resizing retains the button");
                 d.capture_canvas(&format!("preview-{panel:?}-{theme:?}-{height}.png"));

@@ -301,6 +301,14 @@ button.flat.unavailable-tool > * { filter: opacity(30%); }
 .dock-panel .gradient-editor > box > button { min-width: var(--panel-control-height); padding: 0; }
 .dock-panel dropdown > button, .dock-panel menubutton > button { min-height: var(--panel-control-height); padding: 0 6px; border-radius: var(--control-radius); }
 .dock-panel .brush-choice { padding: 3px 6px; }
+.dock-panel .tool-preview-choice { padding: 0 6px; --tool-caption-bg: var(--panel-bg); background: var(--tool-caption-bg); }
+.tool-preview-choice.selected-tool { --tool-caption-bg: var(--selection-bg); }
+.tool-preview-choice:hover { --tool-caption-bg: mix(var(--panel-bg), var(--window-fg-color), .08); }
+.tool-preview-choice.selected-tool:hover { --tool-caption-bg: mix(var(--selection-bg), var(--window-fg-color), .08); }
+.tool-preview-choice:active { --tool-caption-bg: mix(var(--panel-bg), var(--window-fg-color), .16); }
+.tool-preview-choice.selected-tool:active { --tool-caption-bg: mix(var(--selection-bg), var(--window-fg-color), .16); }
+.tool-caption-surface { min-height: var(--panel-control-height); border-radius: var(--control-radius); background: alpha(var(--tool-caption-bg), var(--tool-caption-opacity)); }
+.tool-caption-name { padding: 0 var(--panel-field-padding); }
 .brush-choice label, .filter-row label { font-size: 1em; }
 .tool-groups flowboxchild { padding: 0; margin: 0; }
 .dock-panel .tool-group { padding: 0 6px; }

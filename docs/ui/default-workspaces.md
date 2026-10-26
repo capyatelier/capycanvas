@@ -76,10 +76,10 @@ fit content measured at the allocated width, including inactive tabs.
 | Paint | Tools toolbar on the left edge and Commands toolbar on top. An expanded left column holds Tool Set/Diagnostics, Tool/Brush size and Color/Palettes. The right column is a collapsed stack of Navigator/Proof, Properties and Layers/Filters, opened on load. |
 | Photo | Commands toolbar outermost at the top, with Tool Options appended and without Clear, Fill Selection and Flip. Tools toolbar with Small tiles and grouped selection and retouching tools. A permanently expanded far-right column of Histogram/Waveform, Properties and Layers/Filters, and a collapsed strip beside it with Tool Set/Diagnostics, Tool/Brush size and Navigator/Proof, closed on load. |
 
-Paint keeps 18 tool positions: Pen, Pencil, Brush,
-Eraser, Airbrush, Retouch, Blend, Liquify; Selection, Auto select, Fill,
-Gradient; Operation, Figure, Ruler, Hand, Zoom and Eyedropper. The color selector is
-separate. Selection contains Lasso, Rectangle, Ellipse, Polygon and Paint
+Paint keeps 18 tool positions in a classic CSP-style order: Zoom, Hand,
+Operation, Selection, Auto select, Eyedropper; Pen, Pencil, Brush, Airbrush,
+Eraser, Blend, Liquify, Retouch; Fill, Gradient, Figure and Ruler. The color
+selector follows the tools. Selection contains Lasso, Rectangle, Ellipse, Polygon and Paint
 Selection; Auto select includes Select by Color and Tonal range. Fill offers
 Fill, Lasso Fill and Enclose and Fill as siblings. Blend exposes Blend,
 Paint mixing and Effects; Retouch offers Clone Stamp, Healing Brush and

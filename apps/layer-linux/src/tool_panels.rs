@@ -92,10 +92,13 @@ impl ToolSet {
                 if media { button.set_widget_name(&format!("{}-{}", if self.panel == layer_ui::Panel::SculptSets { "sculpt-set" } else { "brush-set" }, item.icon)); }
                 button.set_size_request(
                     ((if media { layer_ui::BRUSH_SETS_MIN_WIDTH } else { layer_ui::TOOL_PANEL_MIN_WIDTH }) - 2.0 * layer_ui::PANEL_CONTENT_INSET) as i32,
-                    if media { TOOL_ROW_HEIGHT } else { layer_ui::TILE_SIZE as i32 },
+                    if media { TOOL_ROW_HEIGHT } else { layer_ui::PANEL_CONTROL_METRICS.control_height as i32 },
                 );
                 let content = aligned_icon_label(&item.label, item.icon, if media { 0.0 } else { 1.0 });
-                if let Some(label) = content.last_child().and_downcast::<gtk::Label>() { crate::panel_controls::two_lines(&label); }
+                if let Some(label) = content.last_child().and_downcast::<gtk::Label>() {
+                    if media { crate::panel_controls::two_lines(&label); }
+                    else { label.set_max_width_chars(-1); }
+                }
                 button.set_child(Some(&content));
                 if let Some(grab) = layer_ui::BubbleGrab::for_choice(&item.action) {
                     workspace.register_tear(&button, grab);
@@ -121,14 +124,15 @@ impl ToolSet {
                 button.add_css_class("brush-choice");
                 let preview = item.preview.map(|id| {
                     button.set_widget_name(&format!("brush-{id}"));
+                    button.add_css_class("tool-preview-choice");
                     let preview = gtk::Picture::builder()
                         .can_shrink(true)
                         .content_fit(gtk::ContentFit::Fill)
-                        .height_request(40)
+                        .height_request(layer_ui::TOOL_PREVIEW_METRICS.preview_height as i32)
                         .build();
                     let content: PreviewRow = glib::Object::new();
                     preview.set_parent(&content);
-                    tool_label(item).set_parent(&content);
+                    preview_caption(item).set_parent(&content);
                     button.set_child(Some(&content));
                     preview
                 });
@@ -174,6 +178,29 @@ fn tool_label(item: &ToolSetItem) -> gtk::Box {
     if let Some(label) = row.last_child().and_downcast::<gtk::Label>() { crate::panel_controls::two_lines(&label); }
     row
 }
+fn preview_caption(item: &ToolSetItem) -> gtk::Box {
+    let height = layer_ui::PANEL_CONTROL_METRICS.control_height as i32;
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    row.set_can_target(false);
+    let icon = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    icon.add_css_class("tool-caption-surface");
+    icon.set_size_request(height, height);
+    icon.set_halign(gtk::Align::Start);
+    icon.set_valign(gtk::Align::Center);
+    icon.set_homogeneous(true);
+    icon.append(&crate::icons::image(&format!("layer-{}-symbolic", item.icon)));
+    row.append(&icon);
+    let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    spacer.set_hexpand(true);
+    row.append(&spacer);
+    let name = gtk::Label::new(Some(&item.label));
+    name.add_css_class("tool-caption-surface");
+    name.add_css_class("tool-caption-name");
+    name.set_valign(gtk::Align::Center);
+    name.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    row.append(&name);
+    row
+}
 
 pub fn icon_label(text: &str, icon: &str) -> gtk::Box {
     aligned_icon_label(text, icon, 0.0)
@@ -212,21 +239,20 @@ mod preview_row {
             let (minimum, natural, _, _) = obj.last_child().unwrap().measure(axis, size);
             if axis == gtk::Orientation::Horizontal { (minimum, natural, -1, -1) }
             else {
-                let full = obj.first_child().unwrap().height_request() + natural;
-                (minimum.max(full * 3 / 4), full, -1, -1)
+                let [minimum, natural] = layer_ui::TOOL_PREVIEW_METRICS.heights(natural as f32);
+                (minimum.ceil() as i32, natural.ceil() as i32, -1, -1)
             }
         }
         fn size_allocate(&self, width: i32, height: i32, _: i32) {
             let obj = self.obj();
             let caption = obj.last_child().unwrap();
-            let h = caption.measure(gtk::Orientation::Vertical, width).1.min(height);
-            caption.allocate(width, h, -1, Some(gtk::gsk::Transform::new()
-                .translate(&gtk::graphene::Point::new(0., (height - h) as f32))));
             let preview = obj.first_child().unwrap();
-            let above = height - h;
-            let p = preview.height_request().min(above);
-            preview.allocate(width, p, -1, Some(gtk::gsk::Transform::new()
-                .translate(&gtk::graphene::Point::new(0., ((above - p) / 2) as f32))));
+            let bounds = layer_ui::TOOL_PREVIEW_METRICS.layout(width as f32, height as f32,
+                caption.measure(gtk::Orientation::Vertical, width).1 as f32);
+            for (widget, bounds) in [(preview, bounds[0]), (caption, bounds[1])] {
+                widget.allocate(width, bounds.height as i32, -1, Some(gtk::gsk::Transform::new()
+                    .translate(&gtk::graphene::Point::new(bounds.x, bounds.y.floor()))));
+            }
         }
         fn snapshot(&self, snapshot: &gtk::Snapshot) {
             let obj = self.obj();

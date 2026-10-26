@@ -99,7 +99,7 @@ pub use color::{
 };
 pub use tool_settings::{ToolActionGroup, ToolActionGroupView, ToolActionRow, ToolActionRowView, ToolSetting, ToolSettingAction};
 pub use tools::{
-    Tool, ToolFamily, ToolGroup, ToolPanels, ToolSetItem, ToolSetView, ToolMemory, brush_catalog,
+    Tool, ToolFamily, ToolGroup, ToolPanels, ToolSetItem, ToolSetView, ToolMemory, ToolPreviewMetrics, TOOL_PREVIEW_METRICS, brush_catalog,
     brush_categories, brush_categories_localized, brush_catalog_localized, brush_ids, preset,
 };
 mod cursor;
@@ -358,6 +358,7 @@ pub struct BrushCategory {
 pub struct UiCatalog {
     pub native_copy: NativeCopy,
     pub panel_metrics: PanelControlMetrics,
+    pub tool_preview_metrics: ToolPreviewMetrics,
     pub tool_action_groups: Vec<ToolActionGroupView>,
     pub tool_action_rows: Vec<ToolActionRowView>,
     pub profile_copy: color_feature_copy::ProfileCopy,
@@ -395,6 +396,7 @@ pub fn ui_catalog_localized(localization: &Localizer) -> UiCatalog {
     UiCatalog {
         native_copy: NativeCopy::new(localization),
         panel_metrics: PANEL_CONTROL_METRICS,
+        tool_preview_metrics: TOOL_PREVIEW_METRICS,
         tool_action_groups: ToolActionGroupView::catalog(localization),
         tool_action_rows: ToolActionRowView::catalog(),
         profile_copy: color_feature_copy::ProfileCopy::new(localization),

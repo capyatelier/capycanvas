@@ -395,6 +395,33 @@ pub(crate) fn icon(id: u32) -> &'static str {
     if is_sculpt(tool) { tool.command().icon().expect("sculpting tools have icons") } else { group(id).icon() }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct ToolPreviewMetrics {
+    pub minimum_height: f32,
+    pub preview_height: f32,
+    pub caption_opacity: f32,
+}
+pub const TOOL_PREVIEW_METRICS: ToolPreviewMetrics = ToolPreviewMetrics {
+    minimum_height: 54.,
+    preview_height: 40.,
+    caption_opacity: 0.9,
+};
+impl ToolPreviewMetrics {
+    pub fn heights(self, caption_height: f32) -> [f32; 2] {
+        let caption = caption_height.max(PANEL_CONTROL_METRICS.control_height);
+        let minimum = self.minimum_height.max(caption);
+        [minimum, minimum.max(self.preview_height + caption)]
+    }
+    pub fn layout(self, width: f32, height: f32, caption_height: f32) -> [Bounds; 2] {
+        let caption = caption_height.max(PANEL_CONTROL_METRICS.control_height).min(height);
+        let preview = self.preview_height.min(height);
+        [
+            Bounds { x: 0., y: ((height - caption - preview) / 2.).max(0.), width, height: preview },
+            Bounds { x: 0., y: height - caption, width, height: caption },
+        ]
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct ToolSetItem {
     pub enabled: bool,
@@ -663,6 +690,24 @@ impl ToolMemory {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn compact_tool_rows_overlap_captions_without_shrinking_previews() {
+        let metrics = TOOL_PREVIEW_METRICS;
+        for caption in [26., 42.] {
+            let [minimum, natural] = metrics.heights(caption);
+            assert_eq!(minimum, 54.);
+            assert_eq!(natural, 40. + caption);
+            for height in [minimum, natural, natural + 20.] {
+                let [preview, label] = metrics.layout(240., height, caption);
+                assert_eq!(preview.height, 40.);
+                assert_eq!(label.height, caption);
+                assert_eq!(label.y + label.height, height);
+                assert!(preview.y >= 0. && preview.y + preview.height <= height);
+                if height == minimum { assert!(label.y < preview.y + preview.height); }
+                else { assert!(label.y >= preview.y + preview.height); }
+            }
+        }
+    }
     #[test]
     fn localized_catalog_membership_uses_medium_identity() {
         let canonical: Vec<_> = brush_catalog().map(|choice| (choice.id, choice.group, choice.icon)).collect();

@@ -65,15 +65,20 @@ in its menu, drawer and Tool Set. Single-preset tools open settings directly;
 the vector Eraser also retains its erase-mode choices.
 
 Tool Set category buttons fill their grid cells, so hover, selection and input
-cover the whole category. Tool rows keep the icon at the leading edge and
+cover the whole category. GTK categories use the same 26-pixel height and squircle
+corners as panel buttons and dropdowns. Tool rows keep the icon at the leading edge and
 right-align the name, as brush rows do; only the Color Picker and Eyedropper
 styles keep the name beside the icon. A thin horizontal divider separates
 categories from tools when both are shown, using the toolbar's inset separator
 style.
-GTK tool and filter rows keep their full preview and caption height when the
-panel has room. Shorter panels bring the caption into the preview area before
-scrolling, reducing row height by about a quarter. Every part of a tool row
-shows the same action tooltip.
+GTK tool preview rows have a 54-pixel minimum and a 66-pixel natural height at
+the default text size. Their 40-pixel stroke previews retain their height as the
+panel shrinks. The icon and name occupy separate 26-pixel squircle surfaces,
+using the row's background color at 90% opacity with opaque text and icons.
+Below 66 pixels these surfaces overlap the preview before the list scrolls.
+Larger text can increase the caption height. Filter rows preserve the image's
+aspect ratio and keep their captions below it. Every part of a tool row shows
+the same action tooltip.
 
 `EditingState.tool_slots` remembers one choice per tool slot across layouts,
 outside document and layout history. Brush groups use `ToolMemory` for presets
