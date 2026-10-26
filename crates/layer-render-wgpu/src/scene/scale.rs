@@ -788,6 +788,7 @@ impl Cache {
             return (cache, true);
         };
         let unchanged = unchanged && old.transform == r.transform_preview;
+        let reuse = unchanged && (old.reuse_output || !r.object_deferred);
         old.transform = r.transform_preview.clone();
         let hierarchy = old.hierarchy.take().filter(|c| old.plan.extent == plan.extent
             && (unchanged || !old.residency_checked || c.fits(r)));
@@ -805,10 +806,10 @@ impl Cache {
             old.hierarchy = hierarchy;
             old.admit_source_overlap(r, packet);
             old.unchanged = unchanged;
-            old.reuse_output = unchanged && old.output_complete();
+            old.reuse_output = reuse && old.output_complete();
             if let Some(overview) = &mut old.overview {
                 overview.unchanged = unchanged;
-                overview.reuse_output = unchanged && overview.output_complete();
+                overview.reuse_output = reuse && overview.output_complete();
             }
             return (old, false);
         }
@@ -816,11 +817,11 @@ impl Cache {
         let mut next = reusable.map(|cache| *cache)
             .unwrap_or_else(|| Self::new(r, request, packet.scene.order().len()));
         next.unchanged = unchanged;
-        next.reuse_output = unchanged && next.output_complete();
+        next.reuse_output = reuse && next.output_complete();
         if old.evaluation == evaluation && next.overview.as_ref().map(|c| c.plan) == old.overview.as_ref().map(|c| c.plan)
             && let Some(mut overview) = old.overview.take() {
                 overview.unchanged = unchanged;
-                overview.reuse_output = unchanged && overview.output_complete();
+                overview.reuse_output = reuse && overview.output_complete();
                 next.overview = Some(overview);
         }
         next.admit_source_overlap(r, packet);

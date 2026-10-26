@@ -219,7 +219,8 @@ Retained windows are admitted again when their source requirements change.
 Presentation regeneration advances display damage independently of the artwork
 revision used by document previews; camera motion does not publish an artwork edit.
 An unchanged output is reusable only when all requested pages are valid or its
-direct placement is complete. Allocated pixels survive deferred evaluation, but
+direct placement is complete. An output that a deferred composition could not
+reuse stays unreusable until a later composition publishes. Allocated pixels survive deferred evaluation, but
 partial page coverage cannot replace the accepted display.
 
 One display hierarchy owns the visible window, overview and adjacent levels.
