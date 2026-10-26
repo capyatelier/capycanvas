@@ -79,6 +79,7 @@ function Invoke-BubbleHdrChecks {
     $hdrEvidence.Add(@{stage='accessible-range';name=$element.Current.Name;minimum=$range.Current.Minimum;maximum=$range.Current.Maximum;value=$range.Current.Value;small_change=$range.Current.SmallChange;shared=$shared;depth=$HdrDepth;display=(Model).windows_display})
     if($element.Current.Name -ne $shared.label -or !$element.Current.IsEnabled -or $range.Current.IsReadOnly -or $range.Current.Minimum -ne $shared.range[0] -or $range.Current.Maximum -ne $shared.range[1] -or [Math]::Abs($range.Current.SmallChange-.1) -gt .0001){throw 'Native HDR accessibility differs from the shared intensity contract'}
     if($HdrRetirementOnly){Invoke-BubbleHdrRetirement $id;return}
+    if($HdrPreviewOnly){Set-BubbleHdrPaint 12 -Base;Assert-BubbleHdrPickerPreview $id;return}
     foreach($pointer in @('mouse','pen','touch')){
         Set-BubbleHdrPaint -1 -Base
         foreach($ending in @('commit','cancel','hold')){
@@ -269,6 +270,22 @@ function Assert-BubbleHdrWheelShapes([long]$Id){
     }finally{& $shapeControl $original;Set-BubbleHdrValue $Id 0}
     $checks.Add('hdr-native-circle-triangle-square-hue-and-field-preserve-intensity')
 }
+function Write-BubbleHdrPickerReceipt([long]$Id,[string]$Stage,$Paper){
+    $receipt=@{stage=$Stage;requested_screen=$Paper;utc=[DateTime]::UtcNow.ToString('o')}
+    try{
+        $m=Model;$native=(Workspace-Root).Current.ItemStatus|ConvertFrom-Json
+        $receipt.document=$m.windows_tabs.selected;$receipt.depth=$m.color_panel.document_depth;$receipt.tool=$m.state.layer_tools.tool
+        $receipt.camera=$m.state.camera;$receipt.shared_picker=$m.color_preview.picker
+        $receipt.native_preview=$native.color_preview;$receipt.native_revision=$native.revision;$receipt.native_model_revision=$native.model_revision
+        $cursor=[CapyRowPointer]::Cursor();$receipt.actual_screen=@{x=$cursor.position.x;y=$cursor.position.y};$receipt.foreground=[CapyRowPointer]::GetForegroundWindow().ToInt64()
+        $bounds=(Find 'drawing-canvas').Current.BoundingRectangle
+        $receipt.canvas_bounds=@($bounds.X,$bounds.Y,$bounds.Width,$bounds.Height)
+        $receipt.requested_surface=@((($Paper.x-$bounds.X)*$m.state.camera.viewport[0]/$bounds.Width),(($Paper.y-$bounds.Y)*$m.state.camera.viewport[1]/$bounds.Height))
+        $range=(Find "bubble-intensity-$Id").GetCurrentPattern([System.Windows.Automation.RangeValuePattern]::Pattern).Current
+        $receipt.intensity=@{value=$range.Value;range=@($range.Minimum,$range.Maximum)}
+    }catch{$receipt.diagnostic_error=$_.Exception.Message}
+    $hdrEvidence.Add($receipt);$receipt|ConvertTo-Json -Depth 12|Set-Content (Join-Path $run ($Stage+'.json'))
+}
 function Assert-BubbleHdrPickerPreview([long]$Id){
     $original=Bubble-HdrState;$paper=Document-Point .18 .18;$source=Header-Source 'color_picker' ''
     if(!$source){throw 'HDR preview fixture lacks its native picker source'}
@@ -277,8 +294,10 @@ function Assert-BubbleHdrPickerPreview([long]$Id){
     & $start
     try{
         Wait-Until {$preview.value=(Workspace-Root).Current.ItemStatus|ConvertFrom-Json;$null -ne $preview.value.color_preview} 'Native HDR picker did not publish its paper preview'
+        Write-BubbleHdrPickerReceipt $Id 'hdr-picker-reference-receipt' $paper
         [CapyRowPointer]::Down('mouse',$paper.x,$paper.y);[CapyRowPointer]::Up()
         Wait-Until {(Model).state.layer_tools.tool -eq 'paint'} 'Native picker did not commit its paper sample'
+    }catch{Write-BubbleHdrPickerReceipt $Id 'hdr-picker-reference-failure' $paper;throw
     }finally{if([CapyRowPointer]::Active){[CapyRowPointer]::Cancel()};if((Model).state.layer_tools.tool -in @('pick_visible','pick_layer')){Escape}}
     Assert-BubbleHdrState 'hdr-picker-reference-sample' $original
     $expected=(Packet $Id).color.intensity;Assert-BubbleHdrRamp $Id 'hdr-picker-reference'
@@ -288,12 +307,14 @@ function Assert-BubbleHdrPickerPreview([long]$Id){
     & $start
     try{
         Wait-Until {$preview.value=(Workspace-Root).Current.ItemStatus|ConvertFrom-Json;$preview.value.color_preview -and [Math]::Abs($range.Current.Value-$expected.stops) -lt .005} 'HDR preview did not update the live native intensity value'
+        Write-BubbleHdrPickerReceipt $Id 'hdr-picker-preview-receipt' $paper
         if([Math]::Abs($range.Current.Minimum-$expected.range[0]) -gt .005 -or [Math]::Abs($range.Current.Maximum-$expected.range[1]) -gt .005){throw 'HDR preview retained the committed intensity range'}
         Assert-BubbleHdrRamp $Id 'hdr-picker-preview' -Spec $expected -KeepPointer
         $current=Patch-Pixels $points[0]
         if($current -eq $baseline[0]){throw 'HDR picker preview changed accessibility without updating actual ramp pixels'}
         $hdrEvidence.Add(@{stage='hdr-picker-preview';sample=$preview.value.color_preview;expected=$expected;range=@($range.Current.Minimum,$range.Current.Maximum);value=$range.Current.Value;ramp_changed=$true})
         Settled-Capture 'hdr-picker-preview';Escape
+    }catch{Write-BubbleHdrPickerReceipt $Id 'hdr-picker-preview-failure' $paper;throw
     }finally{if((Model).state.layer_tools.tool -in @('pick_visible','pick_layer')){Escape}}
     [CapyRowPointer]::Hover($w.X+20,$w.Y+20)
     Wait-Until {(Model).state.layer_tools.tool -eq 'paint' -and (Bubble-HdrState).paint -eq $before.paint -and [Math]::Abs((Bubble-HdrRange $Id).Current.Value-12) -lt .005} 'Cancelled HDR preview did not restore committed paint and intensity'

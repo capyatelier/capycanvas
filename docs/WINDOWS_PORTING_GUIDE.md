@@ -134,6 +134,10 @@ including older gaps; a port does not require an unrestricted historical audit.
   qualify a hardware target or impose a whole-editor cap. Shared photo budgets
   bound codec admission and compressed source ownership. The generated PNG is
   removed after the run; smaller `-Width` and `-Height` values support smoke checks.
+- Use `exercise-tool-bubbles.ps1 -Variant hdr-f16-dark` and `hdr-f16-light`
+  for the focused HDR paper picker preview, live intensity and ramp pixels,
+  and exact cancellation. Failure receipts retain the live picker state before
+  Escape closes it; the full HDR journey remains available with `-HdrOnly`.
 
 ## 5. Close and commit
 
