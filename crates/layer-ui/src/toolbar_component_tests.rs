@@ -461,7 +461,7 @@ fn toolbar_components_have_atomic_bounds_and_fill_remaining_width() {
     ]
     .into_iter()
     .enumerate()
-    .map(|(i, control)| ToolbarTile {
+    .map(|(i, control)| ToolbarTile { slider_style: Default::default(),
         id: i as u32 + 1,
         control,
     })
@@ -508,11 +508,11 @@ fn toolbar_components_have_atomic_bounds_and_fill_remaining_width() {
         tool_options_layout(36., 36., Axis::Vertical, &[[100., 30.]], [32., 32.], 6.);
     assert!(fields[0].is_none() && more.height > 0.);
     let duplicates = vec![
-        ToolbarTile {
+        ToolbarTile { slider_style: Default::default(),
             id: 1,
             control: ToolbarControl::TOOL_OPTIONS,
         },
-        ToolbarTile {
+        ToolbarTile { slider_style: Default::default(),
             id: 2,
             control: ToolbarControl::TOOL_OPTIONS,
         },
@@ -675,7 +675,7 @@ fn toolbar_drawer_measurement_contains_all_components_across_styles_and_widths()
         for count in 1..=5 {
             for shift in 0..controls.len() {
                 let tiles: Vec<_> = (0..count)
-                    .map(|i| ToolbarTile {
+                    .map(|i| ToolbarTile { slider_style: Default::default(),
                         id: i as u32 + 1,
                         control: controls[(i + shift) % controls.len()],
                     })
@@ -781,13 +781,125 @@ fn options_preferences_round_trip_and_undo_without_losing_controls() {
 }
 
 #[test]
+fn slider_styles_are_independent_saved_and_undoable() {
+    for platform in Platform::ALL {
+    let mut s = session(platform);
+    let mut layout = WorkspacePreset::Painter.layout(platform);
+    let panel = layout.add_toolbar(None, "Sliders", &[
+        ToolbarControl::BrushSizeSlider, ToolbarControl::BrushStrengthSlider, ToolbarControl::Color,
+    ]).unwrap();
+    let ids: Vec<_> = layout.panel(panel).unwrap().tiles().iter().map(|tile| tile.id).collect();
+    s.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(WorkspaceState {
+        layout, ..WorkspaceState::default()
+    }) }).unwrap();
+    let before = s.state().workspace.layout.clone();
+    let artwork = s.engine().document().revision;
+    for (index, tile) in ids[..2].iter().copied().enumerate() {
+        let target = ContextTarget::Tile { panel, tile };
+        let menu = s.context_menu(target).unwrap();
+        assert_eq!(menu.sections[0].iter().map(|item| (item.label.as_str(), item.selected)).collect::<Vec<_>>(),
+            [("Show value", Some(false)), ("Expand to fit", Some(false))]);
+        for option in 0..2 {
+            let action = s.context_menu(target).unwrap().sections[0][option].action.clone().unwrap();
+            s.dispatch(action).unwrap();
+        }
+        let view = s.panel_view(panel).unwrap();
+        assert_eq!(view.tiles[index].slider_style, ToolbarSliderStyle { show_value: true, expand: true });
+        assert_eq!(view.tiles[2].slider_style, ToolbarSliderStyle::default());
+    }
+    let after = s.state().workspace.layout.clone();
+    let saved = serde_json::to_vec(&s.state().workspace).unwrap();
+    assert_eq!(serde_json::from_slice::<WorkspaceState>(&saved).unwrap(), s.state().workspace);
+    assert_eq!(s.engine().document().revision, artwork);
+    for _ in 0..4 { invoke(&mut s, CommandId::UndoWorkspace); }
+    assert_eq!(s.state().workspace.layout, before);
+    for _ in 0..4 { invoke(&mut s, CommandId::RedoWorkspace); }
+    assert_eq!(s.state().workspace.layout, after);
+    let mut copy = after.clone();
+    let duplicate = copy.duplicate_toolbar(panel, "Copied Sliders").unwrap();
+    for (source, tile) in after.panel(panel).unwrap().tiles().iter().zip(copy.panel(duplicate).unwrap().tiles()) {
+        assert_eq!(source.slider_style, tile.slider_style);
+        assert_ne!(source.id, tile.id);
+    }
+    assert!(s.dispatch(UiAction::Customize { action: CustomizationAction::SetSliderStyle {
+        panel, tile: ids[2], style: ToolbarSliderStyle { show_value: true, expand: true },
+    } }).is_err());
+    assert_eq!(s.state().workspace.layout, after);
+}
+}
+
+#[test]
+fn slider_expansion_fills_rows_without_stretching_neighbors() {
+    for style in [TileStyle::Small, TileStyle::Medium, TileStyle::Large, TileStyle::MediumLabeled, TileStyle::Labeled] {
+        let [w, h] = style.size();
+        let gap = style.gap();
+        let mut tiles = vec![
+            ToolbarTile { id: 1, control: ToolbarControl::BrushSizeSlider,
+                slider_style: ToolbarSliderStyle { show_value: true, expand: true } },
+            ToolbarTile { id: 2, control: ToolbarControl::BrushStrengthSlider,
+                slider_style: ToolbarSliderStyle { show_value: true, expand: true } },
+            ToolbarTile { id: 3, control: ToolbarControl::Color, slider_style: Default::default() },
+        ];
+        let width = w * 2. + gap;
+        let height = 800.;
+        let layout = toolbar_tile_layout(width, height, Axis::Vertical, &tiles, true, style);
+        let a = layout.tiles[0];
+        let b = layout.tiles[1];
+        assert_eq!(a.y, b.y);
+        assert_eq!(a.height, b.height);
+        assert!(a.height > 600.);
+        assert!(a.x + a.width <= b.x);
+        assert_eq!(layout.tiles[2].height, h);
+        assert_eq!(layout.tiles[2].y + h, height - 20. - gap);
+        tiles[1].slider_style.expand = false;
+        let mixed = toolbar_tile_layout(width, height, Axis::Vertical, &tiles, true, style);
+        assert!(mixed.tiles[0].height > mixed.tiles[1].height);
+        let compact = toolbar_tile_layout(width, 100., Axis::Vertical, &tiles, true, style);
+        assert!(compact.tiles.iter().all(|b| b.y + b.height <= 100.));
+        let stacked = toolbar_tile_layout(w, height, Axis::Vertical, &tiles[..2], true, style);
+        assert!(stacked.tiles[0].y + stacked.tiles[0].height <= stacked.tiles[1].y);
+        for axis in [Axis::Horizontal, Axis::Vertical] {
+            let parts = toolbar_slider_styled_layout(a.width, a.height, axis, style, tiles[0].slider_style);
+            assert!(parts.iter().all(|b| b.width >= 0. && b.height >= 0.));
+            assert!(parts[0].intersection(parts[1]).is_none());
+        }
+    }
+}
+
+#[test]
+fn slider_readouts_have_numeric_values_units_and_localized_labels() {
+    let s = session(Platform::Gtk);
+    for control in [ToolbarControl::BrushSizeSlider, ToolbarControl::BrushStrengthSlider] {
+        let view = s.state().toolbar_component(control).unwrap();
+        assert!(!view.value_label.is_empty());
+        let field = view.numeric.unwrap();
+        assert_eq!(field.numeric.unit, if control == ToolbarControl::BrushSizeSlider { "px" } else { "%" });
+        for value in [field.numeric.min, field.value as f64, field.numeric.max] {
+            let text = field.numeric.compact_value(value);
+            assert!(!text.contains("px") && !text.contains('%'));
+        }
+    }
+    for axis in [Axis::Horizontal, Axis::Vertical] {
+        for style in [TileStyle::Small, TileStyle::Medium, TileStyle::Large, TileStyle::MediumLabeled, TileStyle::Labeled] {
+            for (value, long) in [("0.5", false), ("24", false), ("99", false), ("100", true), ("430", true), ("999", true), ("1000", true), ("2048", true)] {
+                let metrics = toolbar_slider_readout_metrics(style, axis, value);
+                assert_eq!(metrics.units_below, axis == Axis::Vertical
+                    && (style == TileStyle::Small || (style == TileStyle::Medium && long)), "{axis:?}/{style:?}/{value}");
+                assert_eq!(metrics.inset, PANEL_CONTROL_METRICS.field_padding);
+                assert!(metrics.extent >= PANEL_CONTROL_METRICS.control_height * 2.);
+            }
+        }
+    }
+}
+
+#[test]
 fn vertical_options_shrink_before_reflowing_and_keep_more_accessible() {
     let tiles = vec![
-        ToolbarTile {
+        ToolbarTile { slider_style: Default::default(),
             id: 1,
             control: ToolbarControl::Color,
         },
-        ToolbarTile {
+        ToolbarTile { slider_style: Default::default(),
             id: 2,
             control: ToolbarControl::TOOL_OPTIONS,
         },
@@ -877,7 +989,7 @@ fn toolbar_toolboxes_pack_rows_and_span_dividers_and_options() {
     let tiles: Vec<_> = controls
         .into_iter()
         .enumerate()
-        .map(|(i, control)| ToolbarTile {
+        .map(|(i, control)| ToolbarTile { slider_style: Default::default(),
             id: i as u32,
             control,
         })

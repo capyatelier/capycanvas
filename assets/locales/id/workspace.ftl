@@ -1208,3 +1208,6 @@ diagnostics-fps = FPS
 diagnostics-fps-description = Tampilan kanvas dalam satu detik terakhir, termasuk geser dan zoom dari cache. Bukan latensi input.
 diagnostics-submitted-fps = FPS dikirim
 diagnostics-submitted-fps-description = Bingkai kanvas yang dikirim dalam satu detik terakhir. Waktu penayangan di layar tidak tersedia.
+
+workspace-slider-show-value = Tampilkan nilai
+workspace-slider-expand = Perluas untuk mengisi

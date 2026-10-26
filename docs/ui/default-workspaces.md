@@ -76,6 +76,13 @@ fit content measured at the allocated width, including inactive tabs.
 | Paint | Tools toolbar on the left edge and Commands toolbar on top. An expanded left column holds Tool Set/Diagnostics, Tool/Brush size and Color/Palettes. The right column is a collapsed stack of Navigator/Proof, Properties and Layers/Filters, opened on load. |
 | Photo | Commands toolbar outermost at the top, with Tool Options appended and without Clear, Fill Selection and Flip. Tools toolbar with Small tiles and grouped selection and retouching tools. A permanently expanded far-right column of Histogram/Waveform, Properties and Layers/Filters, and a collapsed strip beside it with Tool Set/Diagnostics, Tool/Brush size and Navigator/Proof, closed on load. |
 
+On Android, iPadOS and mobile browsers, Paint's left tool grid has two Small
+columns. It keeps the height needed for its tool rows; a separate Brush controls
+toolbar beneath it gives Size and Strength the remaining height, side by side,
+with Show value and Expand to fit enabled. Desktop Paint registers the same
+toolbar but leaves it hidden. Restoring a built-in workspace uses the current
+host's device profile; saved custom layouts retain their authored arrangement.
+
 Paint keeps 18 tool positions in CSP order: Pen, Pencil, Brush, Eraser,
 Airbrush, Blend, Liquify, Retouch; Selection, Auto select, Fill, Gradient;
 Operation, Figure, Ruler, Hand, Zoom and Eyedropper. The color

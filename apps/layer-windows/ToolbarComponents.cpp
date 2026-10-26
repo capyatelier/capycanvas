@@ -39,7 +39,7 @@ bool insideTrack(double along,double across,double length,double narrow){
     if(along>length-3){double a=(along-(length-3))/3,b=across/8;return a*a+b*b<=1;}
     return std::abs(across)<=narrow+(8-narrow)*along/std::max(1.,length-3);
 }
-Imaging::WriteableBitmap trackRaster(double width,double height,double scale,bool vertical,bool opacity,winrt::Windows::UI::Color ink,winrt::Windows::UI::Color light,winrt::Windows::UI::Color dark){
+Imaging::WriteableBitmap trackRaster(double width,double height,double scale,bool vertical,bool opacity,winrt::Windows::UI::Color ink){
     int pw=std::max(1,int(std::ceil(width*scale))),ph=std::max(1,int(std::ceil(height*scale)));
     Imaging::WriteableBitmap result(pw,ph);uint8_t* bytes=nullptr;
     check_hresult(result.PixelBuffer().as<::Windows::Storage::Streams::IBufferByteAccess>()->Buffer(&bytes));
@@ -51,10 +51,8 @@ Imaging::WriteableBitmap trackRaster(double width,double height,double scale,boo
             double along=vertical?length+6-py:px-6,across=vertical?px-14:py-14;
             if(!insideTrack(along,across,length,narrow))continue;
             if(opacity){
-                bool cell=((int(std::floor(along/4))+int(std::floor(across/4)))%2+2)%2==0;
-                double t=std::clamp(along/std::max(1.,length),0.,1.)*.65;
-                auto base=cell?dark:light;
-                sum[0]+=base.B*(1-t)+ink.B*t;sum[1]+=base.G*(1-t)+ink.G*t;sum[2]+=base.R*(1-t)+ink.R*t;sum[3]+=255;
+                double t=.06+std::clamp(along/std::max(1.,length),0.,1.)*.22;
+                sum[0]+=ink.B*t;sum[1]+=ink.G*t;sum[2]+=ink.R*t;sum[3]+=255*t;
             }else{sum[0]+=ink.B*.22;sum[1]+=ink.G*.22;sum[2]+=ink.R*.22;sum[3]+=255*.22;}
         }
         auto p=bytes+(size_t(y)*pw+x)*4;
@@ -77,7 +75,7 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
     std::shared_ptr<WorkspaceData> data;
     std::weak_ptr<WorkspaceGestures> gestures;
     hstring panelId,tileStyle,tileLabel;double tileId=0,iconSize=16,tileRadius=SurfaceRadius;
-    J control,style,item,model;
+    J control,style,item,model,sliderStyle;
     Canvas root;Border blank;Button more{nullptr};
     std::wstring schema,boundsKey;
     std::vector<Field> fields;
@@ -87,6 +85,7 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
 
     Canvas sliderRow{nullptr},track{nullptr},marks{nullptr};
     Button cap{nullptr};Border thumb{nullptr};Image trackImage{nullptr};Slider access{nullptr};
+    StackPanel readout{nullptr},readoutRow{nullptr};TextBlock readoutValue{nullptr},readoutUnit{nullptr},readoutTitle{nullptr};
     J field,spec;double current=0,level=0;bool enabled=false,opacity=false,settingAccess=false;
     std::optional<Contact> contact;
     std::wstring trackKey;hstring marksKey;
@@ -164,6 +163,7 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
     }
     std::wstring schemaKey(J const& component)const{
         auto key=copy(component);
+        if(key.HasKey(L"value_label"))key.Remove(L"value_label");
         if(auto value=object(key,L"numeric");value.Size())value.SetNamedValue(L"value",N(0));
         if(key.HasKey(L"bookmarks"))key.Remove(L"bookmarks");
         for(auto option:array(key,L"options")){
@@ -191,7 +191,8 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
     }
     void Update(J const& tile){
         auto value=object(tile,L"component");if(!value.Size())return;
-        auto nextSchema=schemaKey(value);model=value;
+        sliderStyle=object(tile,L"slider_style");
+        auto nextSchema=schemaKey(value)+std::wstring(sliderStyle.Stringify());model=value;
         tileLabel=str(tile,L"label");AutomationProperties::SetName(root,tileLabel);
         if(nextSchema!=schema){
             closePopup();
@@ -282,9 +283,23 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
             self->show();
         });
         cap.Background(clear());cap.Content(nullptr);tooltip(cap,str(field,L"label"));
+        cap.Padding({0,0,0,0});cap.BorderThickness({0,0,0,0});
+        readout=nullptr;readoutRow=nullptr;readoutValue=nullptr;readoutUnit=nullptr;readoutTitle=nullptr;
+        if(flag(sliderStyle,L"show_value")){
+            readout=StackPanel();readout.HorizontalAlignment(HorizontalAlignment::Center);readout.VerticalAlignment(VerticalAlignment::Center);
+            readoutTitle=label(data,L"");readoutTitle.TextAlignment(TextAlignment::Center);twoLines(readoutTitle);readoutTitle.Opacity(.65);
+            readoutValue=label(data,L"");readoutUnit=label(data,L"");readoutUnit.Opacity(.65);
+            for(auto text:{readoutValue,readoutUnit}){text.HorizontalAlignment(HorizontalAlignment::Center);text.VerticalAlignment(VerticalAlignment::Center);text.FontWeight(winrt::Windows::UI::Text::FontWeights::Normal());}
+            AutomationProperties::SetAutomationId(readoutValue,L"slider-value-"+to_hstring(uint32_t(tileId)));
+            AutomationProperties::SetAutomationId(readoutUnit,L"slider-unit-"+to_hstring(uint32_t(tileId)));
+            readoutRow=StackPanel();readoutRow.HorizontalAlignment(HorizontalAlignment::Center);
+            readoutRow.Children().Append(readoutValue);readoutRow.Children().Append(readoutUnit);
+            readout.Children().Append(readoutTitle);readout.Children().Append(readoutRow);cap.Content(readout);
+        }
         AutomationProperties::SetAutomationId(cap,L"slider-cap-"+to_hstring(uint32_t(tileId)));
         if(auto source=gestures.lock())source->Source(cap,drag(),item,false,{},WorkspaceGestures::Pickup::Hold);
         track=Canvas();track.Background(clear());track.ManipulationMode(ManipulationModes::None);
+        if(auto source=gestures.lock())source->Source(track,J{},item,false,{},WorkspaceGestures::Pickup::Control);
         trackImage=Image();trackImage.IsHitTestVisible(false);trackImage.Stretch(Stretch::Fill);track.Children().Append(trackImage);
         marks=Canvas();marks.IsHitTestVisible(false);track.Children().Append(marks);
         thumb=Border();thumb.CornerRadius({3.24,3.24,3.24,3.24});thumb.BorderThickness({1,1,1,1});
@@ -354,11 +369,31 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
         settingAccess=true;access.Value(level);settingAccess=false;
         access.IsEnabled(enabled);AutomationProperties::SetItemStatus(access,str(shown,L"text"));
         sliderRow.Opacity(enabled?1:.4);
-        paintSlider();paintPreview();
+        updateReadout();paintSlider();paintPreview();
+    }
+    void updateReadout(){
+        if(!readout||!(cap.Width()>0)||!(cap.Height()>0))return;
+        auto presentation=toolbarUi(data->localization.get(),O({{L"type",S(L"slider_readout")},{L"style",S(tileStyle)},
+            {L"axis",S(vertical?L"vertical":L"horizontal")},{L"control",spec},{L"value",N(current)}})).GetObject();
+        auto metrics=object(presentation,L"metrics");double gap=num(metrics,L"gap"),inset=num(metrics,L"inset");bool stacked=flag(metrics,L"units_below");
+        readoutValue.Text(enabled?str(presentation,L"value"):L"");readoutUnit.Text(enabled?str(presentation,L"unit"):L"");
+        readoutRow.Orientation(stacked?Orientation::Vertical:Orientation::Horizontal);readoutRow.Spacing(gap);readout.Spacing(gap);
+        double availableWidth=std::max(1.,cap.Width()-2*inset),availableHeight=std::max(1.,cap.Height()-2*inset);
+        readoutTitle.Text(str(model,L"value_label"));readoutTitle.FontSize(data->textSize()*.75);readoutTitle.LineHeight(0);
+        readoutTitle.MaxWidth(availableWidth);readoutTitle.Visibility(flag(style,L"labeled")?Visibility::Visible:Visibility::Collapsed);
+        if(flag(style,L"labeled")){readoutTitle.Measure({float(availableWidth),std::numeric_limits<float>::infinity()});availableHeight=std::max(1.,availableHeight-readoutTitle.DesiredSize().Height-gap);}
+        double scale=1.;
+        for(int pass=0;pass<5;++pass){
+            for(auto text:{readoutValue,readoutUnit}){text.FontSize(data->textSize()*scale);text.LineHeight(0);text.Measure({std::numeric_limits<float>::infinity(),std::numeric_limits<float>::infinity()});}
+            auto a=readoutValue.DesiredSize(),b=readoutUnit.DesiredSize();
+            double w=stacked?std::max(a.Width,b.Width):a.Width+b.Width+gap,h=stacked?a.Height+b.Height+gap:std::max(a.Height,b.Height);
+            double fit=std::min({1.,availableWidth/std::max(1.,w),availableHeight/std::max(1.,h)});
+            if(fit>=1.)break;scale*=fit;
+        }
     }
     void layoutSlider(){
         auto geometry=toolbarUi(data->localization.get(),O({{L"type",S(L"slider_layout")},{L"width",N(width)},{L"height",N(height)},
-            {L"axis",S(vertical?L"vertical":L"horizontal")}})).GetArray();
+            {L"axis",S(vertical?L"vertical":L"horizontal")},{L"style",S(tileStyle)},{L"slider_style",sliderStyle}})).GetArray();
         sliderRow.Width(width);sliderRow.Height(height);
         place(cap,geometry.GetObjectAt(0));auto bounds=geometry.GetObjectAt(1);
         double x=num(bounds,L"x"),y=num(bounds,L"y"),w=num(bounds,L"width"),h=num(bounds,L"height");
@@ -366,7 +401,7 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
         else{Canvas::SetLeft(track,x+2);Canvas::SetTop(track,(height-28)/2);track.Width(std::max(0.,w-4));track.Height(28);}
         access.Width(track.Width());access.Height(track.Height());
         access.Orientation(vertical?Orientation::Vertical:Orientation::Horizontal);
-        paintTrack();paintSlider();
+        updateReadout();paintTrack();paintSlider();
     }
     void paintTrack(){
         double w=track.Width(),h=track.Height();
@@ -374,7 +409,7 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
         double scale=root.XamlRoot()?root.XamlRoot().RasterizationScale():1.;
         auto palette=object(data->state,L"palette");auto ink=color(str(palette,L"text"));
         auto key=std::to_wstring(w)+L"x"+std::to_wstring(h)+L"@"+std::to_wstring(scale)+(vertical?L"v":L"h")+std::to_wstring(ink.R)+L"."+std::to_wstring(ink.G)+L"."+std::to_wstring(ink.B);
-        if(key!=trackKey){trackKey=key;trackImage.Source(trackRaster(w,h,scale,vertical,opacity,ink,color(str(palette,L"checker_light")),color(str(palette,L"checker_dark"))));}
+        if(key!=trackKey){trackKey=key;trackImage.Source(trackRaster(w,h,scale,vertical,opacity,ink));}
         trackImage.Width(w);trackImage.Height(h);
     }
     void paintSlider(){

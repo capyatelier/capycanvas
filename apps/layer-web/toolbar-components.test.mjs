@@ -46,6 +46,7 @@ export async function checkToolbarComponents({ call, evaluate, settle }) {
   }
   const capture = async name => { const shot = await call('Page.captureScreenshot', { format: 'png' }); await writeFile(`${dir}/${name}.png`, Buffer.from(shot.data, 'base64')); };
   await workspace('painter'); await invoke('brush');
+  await checkToolbarSliderDisplay({call, evaluate, settle});
   const slider = '[data-toolbar-component=brush_size_slider] input.number-slider';
   await wait(`!!document.querySelector(${JSON.stringify(slider)})`);
   for (const device of ['mouse', 'touch', 'pen']) {
@@ -240,6 +241,56 @@ export async function checkToolbarComponents({ call, evaluate, settle }) {
   await send({ type: 'customize', action: { type: 'close_expanded' } });
 
   console.log('Toolbar sliders/options: fixed values, segmented choices, contexts and compact placements passed');
+}
+
+async function checkToolbarSliderDisplay({call, evaluate, settle}) {
+  const dir = process.env.LAYER_TEST_ARTIFACTS || '/tmp/capy-toolbar-web';
+  await evaluate('window.sliderDisplayWorkspace=structuredClone(layerApp.state().workspace)');
+  for (const theme of ['light', 'dark']) {
+    await evaluate(`layerApp.dispatch({type:'set_theme',theme:${JSON.stringify(theme)}})`);
+    for (const axis of ['vertical', 'horizontal']) for (const style of ['small', 'medium', 'large', 'medium_labeled', 'labeled']) {
+      await evaluate(`(()=>{
+        const workspace=structuredClone(sliderDisplayWorkspace),layout=workspace.layout;
+        const panel=layout.panels.find(p=>p.content.kind==='toolbar'&&p.content.tiles.some(t=>t.control.kind==='brush_size_slider'));
+        panel.tile_style=${JSON.stringify(style)}; panel.content.tiles=panel.content.tiles.filter(t=>['brush_size_slider','brush_strength_slider'].includes(t.control.kind));
+        for(const tile of panel.content.tiles)tile.slider_style={show_value:true,expand:true};
+        const metrics=layerApp.app.toolbar_ui({type:'style',style:panel.tile_style});
+        layout.bands=[];layout.collapsed=[];layout.column_stacks=[];layout.column_scroll=[];layout.fit_height_groups=[];layout.fit_tab_groups=[];
+        layout.floating=[{root:{kind:'tabs',id:2,panels:[panel.id],active:panel.id,tab_style:'automatic'},position:[30,90],
+          width:${axis === 'vertical' ? 'metrics.size[0]*2+metrics.gap' : '1160'},height:${axis === 'vertical' ? '550' : 'metrics.size[1]'},default_width:null,
+          toolbar_layout:${JSON.stringify(axis === 'vertical' ? 'compact' : 'horizontal')}}];
+        layerApp.dispatch({type:'restore_workspace',workspace});
+      })()`);
+      await settle();
+      for (const [size, strength] of [[24,.4],[99,.99],[100,1],[430,.95],[2048,1]]) {
+        await evaluate(`layerApp.dispatch({type:'set_brush_size',value:${size}});layerApp.dispatch({type:'set_brush_strength',value:${strength}})`);
+        await settle();
+        const values = await evaluate(`Array.from(document.querySelectorAll('.toolbar-slider')).filter(row=>row.checkVisibility()).map(row=>{
+          const cap=row.querySelector('.toolbar-slider-cap'),number=row.querySelector('.toolbar-slider-value'),unit=row.querySelector('.toolbar-slider-unit'),group=row.querySelector('.toolbar-slider-value-row');
+          return {cap:cap.getBoundingClientRect().toJSON(),host:row.closest('.toolbar-controls').getBoundingClientRect().toJSON(),number:number.getBoundingClientRect().toJSON(),unit:unit.getBoundingClientRect().toJSON(),
+            text:number.textContent,units:unit.textContent,flow:getComputedStyle(group).flexDirection,font:parseFloat(getComputedStyle(group).fontSize),standard:parseFloat(getComputedStyle(row).fontSize)};
+        })`);
+        assert.equal(values.length, 2, `${axis}/${style}: paired sliders`);
+        for (const value of values) {
+          const stacked = axis === 'vertical' && (style === 'small' || style === 'medium' && value.text.replace(/\D/g,'').length >= 3);
+          assert.equal(value.flow, stacked ? 'column' : 'row', `${axis}/${style}/${value.text}: unit placement`);
+          assert.ok(['px','%'].includes(value.units));
+          assert.ok(value.cap.x >= value.host.x-.5 && value.cap.y >= value.host.y-.5
+            && value.cap.right <= value.host.right+.5 && value.cap.bottom <= value.host.bottom+.5, `${axis}/${style}: both caps fit the toolbar`);
+          for (const text of [value.number,value.unit]) {
+            assert.ok(text.x >= value.cap.x+5.5 && text.y >= value.cap.y+5.5
+              && text.right <= value.cap.right-5.5 && text.bottom <= value.cap.bottom-5.5, `${axis}/${style}/${value.text}: margins ${JSON.stringify(value)}`);
+          }
+          if (axis === 'horizontal' || style === 'large' || style.includes('labeled') || style === 'medium' && stacked)
+            assert.ok(Math.abs(value.font-value.standard)<.05, `${axis}/${style}/${value.text}: standard font`);
+        }
+      }
+      const shot = await call('Page.captureScreenshot',{format:'png'});
+      await writeFile(`${dir}/slider-display-${theme}-${axis}-${style}.png`,Buffer.from(shot.data,'base64'));
+    }
+  }
+  await evaluate('layerApp.dispatch({type:"restore_workspace",workspace:sliderDisplayWorkspace});delete window.sliderDisplayWorkspace');
+  await settle();
 }
 
 async function checkSliderBookmarks({ call, evaluate, settle, click, gesture, rect, capture, send, slider }) {

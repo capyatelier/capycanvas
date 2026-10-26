@@ -455,10 +455,11 @@ impl Entity {
     pub(crate) fn included_workspace(
         id: &str,
         platform: layer_ui::Platform,
+        tablet: bool,
         now: u64,
     ) -> Option<Self> {
         let (_, preset) = DEFAULT_WORKSPACES.iter().find(|(key, _)| *key == id)?;
-        let layout = preset.layout(platform);
+        let layout = preset.layout_for_device(platform, tablet);
         let mut entity = Self::workspace(
             preset.name(),
             WorkspaceCapture {
@@ -506,14 +507,14 @@ impl Entity {
     }
     /// Built-in workspaces restore the current shipped preset for this host.
     /// Copies and custom workspaces retain their original saved baseline.
-    pub fn starting_layout(&self, platform: layer_ui::Platform) -> Result<DockLayout, StoreError> {
+    pub fn starting_layout(&self, platform: layer_ui::Platform, tablet: bool) -> Result<DockLayout, StoreError> {
         let ItemContent::Workspace { baseline, .. } = &self.content else {
             return Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::ChooseAWorkspace));
         };
         if self.metadata.builtin
             && let Some((_, preset)) = DEFAULT_WORKSPACES.iter().find(|(id, _)| *id == self.id)
         {
-            return Ok(preset.layout(platform));
+            return Ok(preset.layout_for_device(platform, tablet));
         }
         Ok(baseline.as_ref().clone())
     }
@@ -647,7 +648,7 @@ mod localization_tests {
 
     #[test]
     fn builtin_identity_projection_preserves_literal_metadata_and_package_semantics() {
-        let mut entity = Entity::included_workspace(DEFAULT_WORKSPACES[0].0, layer_ui::Platform::Gtk, 10).unwrap();
+        let mut entity = Entity::included_workspace(DEFAULT_WORKSPACES[0].0, layer_ui::Platform::Gtk, false, 10).unwrap();
         entity.metadata.name = "stored suffix 2".into();
         let before = serde_json::to_vec(&entity).unwrap();
         for language in layer_ui::UiLanguage::ALL {

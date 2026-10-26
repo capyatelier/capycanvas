@@ -28,6 +28,10 @@ impl WorkspacePreset {
     }
 
     pub fn layout(self, platform: crate::Platform) -> DockLayout {
+        self.layout_for_device(platform, matches!(platform, crate::Platform::Android | crate::Platform::Ios))
+    }
+
+    pub fn layout_for_device(self, platform: crate::Platform, tablet: bool) -> DockLayout {
         let mut layout = match self {
             Self::Painter => return Self::painter_layout(platform),
             Self::Illustrator => {
@@ -71,6 +75,7 @@ impl WorkspacePreset {
             }
         }
         self.group_tools(&mut layout);
+        if self == Self::Illustrator { Self::paint_sliders(&mut layout, tablet); }
         let group = layout.panel_group(Panel::Color).unwrap();
         if self == Self::Photographer {
             if let Some(DockNode::Tabs {panels,active,..})=layout.node_mut(group) {
@@ -80,6 +85,25 @@ impl WorkspacePreset {
             fit_right_column(&mut layout);
         }
         layout
+    }
+
+    fn paint_sliders(layout: &mut DockLayout, tablet: bool) {
+        let sliders = layout.add_toolbar(None, "Brush controls", &[
+            ToolbarControl::BrushSizeSlider, ToolbarControl::BrushStrengthSlider,
+        ]).expect("Paint brush controls");
+        for tile in layout.panel_mut(sliders).unwrap().tiles_mut().unwrap() {
+            tile.slider_style = crate::ToolbarSliderStyle { show_value: true, expand: true };
+        }
+        if !tablet {
+            layout.set_panel_visible(sliders, false).unwrap();
+            return;
+        }
+        let tools = layout.panel_group(Panel::Toolbar).unwrap();
+        layout.move_panel([1600., 1000.], sliders, DockTarget::Split { group: tools, edge: Edge::Bottom })
+            .expect("stacked Paint toolbars");
+        layout.bands.iter_mut().find(|band| band.root.group_for(Panel::Toolbar).is_some()).unwrap().extent
+            = 2. * TILE_SIZE + TileStyle::Small.gap() + WORKSPACE_SPACING;
+        layout.fit_height_groups.push(tools);
     }
 
     fn group_tools(self, layout: &mut DockLayout) {
@@ -105,7 +129,7 @@ impl WorkspacePreset {
         let tiles=controls.iter().map(|&control| {
             let id=layout.next_tile_id;
             layout.next_tile_id+=1;
-            ToolbarTile {id,control}
+            ToolbarTile { slider_style: Default::default(),id,control}
         }).collect();
         *layout.panel_mut(Panel::Toolbar).unwrap().tiles_mut().unwrap()=tiles;
     }
@@ -155,7 +179,7 @@ impl WorkspacePreset {
                 .map(|&control| {
                     let id = layout.next_tile_id;
                     layout.next_tile_id += 1;
-                    ToolbarTile { id, control }
+                    ToolbarTile { slider_style: Default::default(), id, control }
                 })
                 .collect();
             let config = layout.panels.iter_mut().find(|p| p.id == panel).unwrap();
@@ -320,7 +344,8 @@ impl DockLayout {
     /// Ordinary open/close remains transient; Photo uses a fixed outer column.
     pub(crate) fn open_default_columns(&mut self, platform: crate::Platform) {
         if self.collapsed.len() == 1
-            && crate::durable_layout(self) == WorkspacePreset::Illustrator.layout(platform)
+            && [false, true].into_iter().any(|tablet| crate::durable_layout(self)
+                == WorkspacePreset::Illustrator.layout_for_device(platform, tablet))
         {
             for stack in &mut self.column_stacks {
                 if self.collapsed.iter().any(|c| c.root == stack.column) {
@@ -357,6 +382,39 @@ fn fit_right_column(layout: &mut DockLayout) {
 mod tests {
     use super::*;
     use crate::{HeaderItem, HeaderZone, Platform};
+
+    #[test]
+    fn tablet_paint_stacks_two_small_columns_above_expanded_sliders() {
+        for platform in Platform::ALL {
+            for tablet in [false, true] {
+                let layout = WorkspacePreset::Illustrator.layout_for_device(platform, tablet);
+                layout.validate().unwrap();
+                let sliders = layout.panels.iter().find(|panel| panel.tiles().iter()
+                    .any(|tile| tile.control == ToolbarControl::BrushSizeSlider)).unwrap();
+                assert_eq!(sliders.tiles().len(), 2);
+                assert!(sliders.tiles().iter().all(|tile| tile.slider_style.show_value && tile.slider_style.expand));
+                if !tablet { assert!(layout.panel_group(sliders.id).is_none()); continue; }
+                for [width, height] in [[900., 700.], [1400., 1000.], [900., 1300.]] {
+                    let resolved = layout.resolve(width, height);
+                    let tools = resolved.groups.iter().find(|group| group.active == Panel::Toolbar).unwrap();
+                    let controls = resolved.groups.iter().find(|group| group.active == sliders.id).unwrap();
+                    assert_eq!(tools.bounds.width, TILE_SIZE * 2. + TileStyle::Small.gap());
+                    assert_eq!(tools.bounds.height, TILE_SIZE * 10. + TOOLBAR_DIVIDER_SIZE * 2.
+                        + TileStyle::Small.gap() * 12. + TOOLBAR_GRIP_SIZE);
+                    assert_eq!(tools.bounds.x, controls.bounds.x);
+                    assert_eq!(tools.bounds.y + tools.bounds.height + WORKSPACE_SPACING, controls.bounds.y);
+                    let pair = &controls.tiles.as_ref().unwrap().tiles;
+                    assert_eq!(pair.len(), 2);
+                    assert_eq!(pair[0].y, pair[1].y);
+                    assert_eq!(pair[0].height, pair[1].height);
+                    assert_eq!(pair[0].width, TILE_SIZE);
+                    assert_eq!(pair[0].height + TOOLBAR_GRIP_SIZE + TileStyle::Small.gap(), controls.bounds.height);
+                    assert!(pair[0].x + pair[0].width <= pair[1].x);
+                    assert!(pair[0].height > 150.);
+                }
+            }
+        }
+    }
 
     #[test]
     fn tool_class_panels_are_independent_and_available_on_supported_hosts() {

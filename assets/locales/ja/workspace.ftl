@@ -657,3 +657,6 @@ diagnostics-fps = FPS
 diagnostics-fps-description = 直近1秒間に表示されたキャンバスのフレーム数です。キャッシュを使った移動とズームを含みます。入力の遅延ではありません。
 diagnostics-submitted-fps = 送信 FPS
 diagnostics-submitted-fps-description = 直近1秒間に送信されたキャンバスのフレーム数です。画面に表示された時刻は取得できません。
+
+workspace-slider-show-value = 値を表示
+workspace-slider-expand = 空き領域に合わせて拡大

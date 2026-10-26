@@ -337,7 +337,7 @@ button.flat.unavailable-tool > * { filter: opacity(30%); }
 .toolbar-component .option-segments.vertical > button:first-child { border-top-left-radius: calc(var(--tile-radius) * var(--corner-fit)); border-top-right-radius: calc(var(--tile-radius) * var(--corner-fit)); }
 .toolbar-component .option-segments.vertical > button:last-child { border-bottom-left-radius: calc(var(--tile-radius) * var(--corner-fit)); border-bottom-right-radius: calc(var(--tile-radius) * var(--corner-fit)); }
 .toolbar-component.vertical-component .option-labeled-segments > .option-segments > button { min-width: 36px; min-height: 36px; }
-.canvas-action-bar .selection-modes, .toolbar-component:not(.vertical-component) > box:not(.option-action) { margin: 0 5px; }
+.canvas-action-bar .selection-modes, .toolbar-component:not(.brush-slider):not(.vertical-component) > box:not(.option-action) { margin: 0 5px; }
 .canvas-action-bar .selection-modes > button, .toolbar-component:not(.vertical-component) .option-segments > button { min-height: var(--panel-control-height); padding: 0 8px; border-radius: 0; }
 .canvas-action-bar .selection-modes > button:first-child, .toolbar-component:not(.vertical-component) .option-segments > button:first-child { border-top-left-radius: var(--control-radius); border-bottom-left-radius: var(--control-radius); }
 .canvas-action-bar .selection-modes > button:last-child, .toolbar-component:not(.vertical-component) .option-segments > button:last-child { border-top-right-radius: var(--control-radius); border-bottom-right-radius: var(--control-radius); }
@@ -353,6 +353,9 @@ button.flat.unavailable-tool > * { filter: opacity(30%); }
 .toolbar-component.vertical-component.large-component .number-compact .number-value { padding: 4px 6px; }
 .brush-track { min-width: 0; min-height: 0; padding: 0; margin: 0 2px; }
 .toolbar-component button.slider-cap { min-width: 0; min-height: 0; padding: 0; }
+.toolbar-component .slider-value { font-feature-settings: "tnum"; font-weight: 400; }
+.toolbar-component .slider-unit { font-weight: 400; opacity: .65; }
+.toolbar-component .slider-value-title { font-size: calc(var(--ui-text-size) * .75); opacity: .65; }
 .vertical-component .brush-track { margin: 2px 0; }
 .brush-track trough, .brush-track highlight { min-height: 16px; min-width: 16px; border: none; background: transparent; box-shadow: none; }
 .brush-track slider { min-width: 10px; min-height: 26px; margin: -5px 0; border-radius: 4px; background: var(--capy-thumb); border: 1px solid alpha(currentColor, .6); box-shadow: none; }

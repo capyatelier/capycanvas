@@ -628,3 +628,6 @@ diagnostics-fps = FPS
 diagnostics-fps-description = Số khung hình vùng vẽ được hiển thị trong giây vừa qua, gồm cả di chuyển và thu phóng từ bộ nhớ đệm. Không phải độ trễ đầu vào.
 diagnostics-submitted-fps = FPS đã gửi
 diagnostics-submitted-fps-description = Số khung hình vùng vẽ được gửi trong giây vừa qua. Không có thông tin thời điểm hiển thị trên màn hình.
+
+workspace-slider-show-value = Hiện giá trị
+workspace-slider-expand = Mở rộng cho vừa

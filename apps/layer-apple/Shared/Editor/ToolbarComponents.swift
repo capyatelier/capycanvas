@@ -64,14 +64,23 @@ private struct BrushSliderComponent: View {
     var body: some View {
         let item = toolbarItem(panel, tile)
         let layout = ToolbarUI.cached(["type": "slider_layout", "width": size.width, "height": size.height,
-            "axis": vertical ? "vertical" : "horizontal"], language: store.interfaceLanguage)
+            "axis": vertical ? "vertical" : "horizontal", "style": panel["tile_style"].raw,
+            "slider_style": tile["slider_style"].raw], language: store.interfaceLanguage)
         let shown = ToolbarUI.formatted(spec, value: value, language: store.interfaceLanguage)
         let marks = model["bookmarks"].array
         ZStack(alignment: .topLeading) {
             Button {
                 guard !store.workspace.input.contact.consumeClick() else { return }
                 openPreview()
-            } label: { Color.clear.contentShape(Rectangle()) }
+            } label: {
+                if tile["slider_style"]["show_value"].bool {
+                    SliderValueReadout(readout: ToolbarUI.resolve(["type": "slider_readout", "style": panel["tile_style"].raw,
+                        "axis": vertical ? "vertical" : "horizontal", "control": spec.raw, "value": value], language: store.interfaceLanguage),
+                        title: ToolbarUI.cached(["type": "style", "style": panel["tile_style"].raw], language: store.interfaceLanguage)["labeled"].bool ? model["value_label"].string : nil,
+                        enabled: !field.isNull, textSize: store.catalog["text_size_pt"].number * 4 / 3,
+                        identity: tile["id"].uint)
+                } else { Color.clear.contentShape(Rectangle()) }
+            }
                 .buttonStyle(.plain).disabled(field.isNull)
                 .accessibilityLabel(label).help(label)
                 .accessibilityIdentifier("slider-cap-\(tile["id"].uint)")
@@ -84,7 +93,7 @@ private struct BrushSliderComponent: View {
                 contact: { down, moved in
                     if down { openPreview() } else if moved { session.close(store.workspace.sliderPreview) }
                 }, change: pick, step: step)
-                .modifier(WorkspaceControlSurface(workspace: store.workspace))
+                .modifier(WorkspaceDrag(workspace: store.workspace, item: item, surface: .control, context: item, canDrag: false))
                 .accessibilityIdentifier("component-slider-\(tile["id"].uint)")
                 .placed(layout[1])
         }
@@ -150,6 +159,58 @@ private struct BrushSliderComponent: View {
             selected: model["bookmarks"].array.contains { $0["selected"].bool },
             bookmark: { store.toolbarEdit(model, ["type": "toggle_slider_bookmark", "control": control]) },
             dismissed: { [weak session] in session?.open = false }))
+    }
+}
+
+private struct SliderValueReadout: View {
+    let readout: JSON
+    let title: String?
+    let enabled: Bool
+    let textSize: CGFloat
+    let identity: UInt64
+    private func measureText(_ text: String, fontSize: CGFloat) -> CGSize {
+        #if canImport(AppKit)
+        let font = NSFont.monospacedDigitSystemFont(ofSize: fontSize, weight: .regular)
+        let height = ceil(font.ascender - font.descender + font.leading)
+        #else
+        let font = UIFont.monospacedDigitSystemFont(ofSize: fontSize, weight: .regular)
+        let height = ceil(font.lineHeight)
+        #endif
+        return CGSize(width: ceil((text as NSString).size(withAttributes: [.font: font]).width), height: height)
+    }
+    private func fittedSize(_ number: String, _ unit: String, width: CGFloat, height: CGFloat, stacked: Bool, gap: CGFloat) -> CGFloat {
+        var size = textSize
+        for _ in 0..<5 {
+            let labels = [measureText(number, fontSize: size), measureText(unit, fontSize: size)]
+            let across = stacked ? labels.map(\.width).max()! : labels.map(\.width).reduce(gap, +)
+            let along = stacked ? labels.map(\.height).reduce(gap, +) : labels.map(\.height).max()!
+            let scale = min(1, width / max(1, across), height / max(1, along))
+            if scale >= 1 { break }
+            size *= scale
+        }
+        return size
+    }
+    var body: some View {
+        GeometryReader { geometry in
+            let metrics = readout["metrics"]
+            let gap = CGFloat(metrics["gap"].number), inset = CGFloat(metrics["inset"].number)
+            let stacked = metrics["units_below"].bool
+            let number = enabled ? readout["value"].string : "", unit = enabled ? readout["unit"].string : ""
+            let width = max(1, geometry.size.width - 2 * inset)
+            let titleHeight = title.map { measureText($0, fontSize: textSize * 0.75).height
+                * min(2, max(1, ceil(toolbarTextWidth($0, size: textSize * 0.75) / width))) + gap } ?? 0
+            let height = max(1, geometry.size.height - 2 * inset - titleHeight)
+            let fontSize = fittedSize(number, unit, width: width, height: height, stacked: stacked, gap: gap)
+            let flow = stacked ? AnyLayout(VStackLayout(spacing: gap)) : AnyLayout(HStackLayout(spacing: gap))
+            VStack(spacing: gap) {
+                if let title { Text(title).font(.system(size: textSize * 0.75)).opacity(0.65).lineLimit(2).multilineTextAlignment(.center) }
+                flow {
+                    Text(number).accessibilityIdentifier("slider-value-\(identity)")
+                    Text(unit).opacity(0.65).accessibilityIdentifier("slider-unit-\(identity)")
+                }.font(.system(size: fontSize)).monospacedDigit().fixedSize()
+            }.frame(width: width, height: max(1, geometry.size.height - 2 * inset))
+                .position(x: geometry.size.width / 2, y: geometry.size.height / 2)
+        }.contentShape(Rectangle())
     }
 }
 
@@ -259,15 +320,7 @@ private struct ToolbarSliderTrack: View {
             track.clip(to: path)
             let bounds = CGRect(x: -3, y: -wide, width: length + 4, height: wide * 2)
             if opacity {
-                track.fill(Path(bounds), with: .color(palette["checker_light"]))
-                let cell: CGFloat = 4
-                for column in -1...(Int(length / cell) + 1) {
-                    for row in -2...1 where (column + row) % 2 == 0 {
-                        track.fill(Path(CGRect(x: CGFloat(column) * cell, y: CGFloat(row) * cell, width: cell, height: cell)),
-                            with: .color(palette["checker_dark"]))
-                    }
-                }
-                track.fill(Path(bounds), with: .linearGradient(Gradient(colors: [text.opacity(0), text.opacity(0.65)]),
+                track.fill(Path(bounds), with: .linearGradient(Gradient(colors: [text.opacity(0.06), text.opacity(0.28)]),
                     startPoint: .zero, endPoint: CGPoint(x: length, y: 0)))
             } else {
                 track.fill(Path(bounds), with: .color(text.opacity(0.22)))

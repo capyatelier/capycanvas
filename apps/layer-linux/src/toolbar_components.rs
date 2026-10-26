@@ -21,7 +21,7 @@ impl TileWidget {
         choice: &ToolChoice,
     ) -> Self {
         if tile.control.is_component() {
-            return Self::Component(Component::new(w, config.id, tile, choice));
+            return Self::Component(Component::new(w, config.id, tile, style, choice));
         }
         let button = customization::tile_button(w, config, tile, style, choice);
         if tile.control.has_variants() {
@@ -127,6 +127,12 @@ mod imp {
         pub bookmark_selected: Cell<[u8; 3]>,
         pub style: Cell<TileStyle>,
         pub options: Cell<ToolOptionsStyle>,
+        pub slider_style: Cell<ToolbarSliderStyle>,
+        pub readout_label: RefCell<Option<gtk::Label>>,
+        pub readout_title: RefCell<Option<gtk::Label>>,
+        pub readout_unit: RefCell<Option<gtk::Label>>,
+        pub readout_row: RefCell<Option<gtk::Box>>,
+        pub readout_scale: Cell<f64>,
     }
     #[glib::object_subclass]
     impl ObjectSubclass for ComponentBody {
@@ -175,10 +181,25 @@ mod imp {
                 }
             };
             if self.slider.get() {
-                for (child, b) in
-                    children
-                        .iter()
-                        .zip(toolbar_slider_layout(width as f32, height as f32, axis))
+                let bounds = toolbar_slider_styled_layout(width as f32, height as f32, axis,
+                    self.style.get(), self.slider_style.get());
+                if let (Some(label), Some(unit)) = (self.readout_label.borrow().as_ref(), self.readout_unit.borrow().as_ref()) {
+                    let metrics = toolbar_slider_readout_metrics(self.style.get(), axis, &label.text());
+                    if let Some(row) = self.readout_row.borrow().as_ref() {
+                        row.set_orientation(if metrics.units_below { gtk::Orientation::Vertical } else { gtk::Orientation::Horizontal });
+                    }
+                    let native_inset = children[0].first_child().and_then(|frame| frame.first_child().map(|content| {
+                        [gtk::Orientation::Horizontal, gtk::Orientation::Vertical].map(|axis|
+                            (frame.measure(axis, -1).0 - content.measure(axis, -1).0).max(0))
+                    })).unwrap_or([0; 2]);
+                    let available_width = (bounds[0].width as i32 - native_inset[0] - 2 * metrics.inset as i32).max(1);
+                    let title_height = self.readout_title.borrow().as_ref().filter(|title| title.is_visible())
+                        .map_or(0, |title| title.measure(gtk::Orientation::Vertical, available_width).1 + metrics.gap as i32);
+                    self.readout_scale.set(crate::number_control::fit_readout([label, unit],
+                        [available_width, (bounds[0].height as i32 - native_inset[1] - 2 * metrics.inset as i32 - title_height).max(1)],
+                        metrics.gap as i32, metrics.units_below, self.readout_scale.get()));
+                }
+                for (child, b) in children.iter().zip(bounds)
                 {
                     allocate(child, b);
                 }
@@ -408,6 +429,12 @@ struct BrushPreview {
     poll: RefCell<Option<glib::SourceId>>,
 }
 
+struct SliderReadout {
+    value: gtk::Label,
+    unit: gtk::Label,
+    title: gtk::Label,
+}
+
 pub(crate) enum Field {
     Gradient(crate::effects::GradientButton),
     Numeric(NumberControl),
@@ -584,17 +611,19 @@ pub(super) struct Component {
     updating: Cell<bool>,
     slider: Option<gtk::Scale>,
     preview: RefCell<Option<Rc<BrushPreview>>>,
+    readout: Option<SliderReadout>,
     outside: RefCell<Option<(gtk::Window, gtk::EventControllerLegacy)>>,
     value: Cell<f32>,
     fields: RefCell<Vec<OptionField>>,
 }
 impl Component {
-    pub fn new(w: &Rc<Workspace>, panel: Panel, tile: &ToolbarTile, choice: &ToolChoice) -> Rc<Self> {
+    pub fn new(w: &Rc<Workspace>, panel: Panel, tile: &ToolbarTile, style: TileStyle, choice: &ToolChoice) -> Rc<Self> {
         let root: ComponentBody = glib::Object::new();
         root.set_overflow(gtk::Overflow::Hidden);
         root.add_css_class("toolbar-component");
         root.add_css_class("small-component");
         root.add_css_class("customizable-target");
+        root.imp().slider_style.set(tile.slider_style);
         root.update_property(&[gtk::accessible::Property::Label(
             &choice.label,
         )]);
@@ -620,6 +649,42 @@ impl Component {
         );
         w.install_context(&cap, target);
         root.append(&cap);
+        let readout = (binding.is_some() && tile.slider_style.show_value).then(|| {
+            let label = gtk::Label::new(None);
+            label.set_widget_name(&format!("slider-value-{}", tile.id));
+            label.add_css_class("slider-value");
+            label.set_halign(gtk::Align::Center);
+            label.set_valign(gtk::Align::Center);
+            let unit = gtk::Label::new(None);
+            unit.set_widget_name(&format!("slider-unit-{}", tile.id));
+            unit.add_css_class("number-unit");
+            unit.add_css_class("slider-unit");
+            unit.set_halign(gtk::Align::Center);
+            let metrics = toolbar_slider_readout_metrics(style, Axis::Horizontal, "");
+            let row = gtk::Box::new(gtk::Orientation::Horizontal, metrics.gap as i32);
+            row.set_halign(gtk::Align::Center);
+            row.append(&label);
+            row.append(&unit);
+            let title = gtk::Label::new(None);
+            title.add_css_class("slider-value-title");
+            title.set_wrap(true);
+            title.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+            title.set_lines(2);
+            title.set_ellipsize(gtk::pango::EllipsizeMode::End);
+            title.set_justify(gtk::Justification::Center);
+            title.set_visible(matches!(style, TileStyle::MediumLabeled | TileStyle::Labeled));
+            let caption = gtk::Box::new(gtk::Orientation::Vertical, 2);
+            caption.set_valign(gtk::Align::Center);
+            caption.set_halign(gtk::Align::Center);
+            caption.append(&title);
+            caption.append(&row);
+            button.set_child(Some(&caption));
+            root.imp().readout_label.replace(Some(label.clone()));
+            root.imp().readout_title.replace(Some(title.clone()));
+            root.imp().readout_unit.replace(Some(unit.clone()));
+            root.imp().readout_row.replace(Some(row));
+            SliderReadout { value: label, unit, title }
+        });
         let slider = if let Some(ref binding) = binding {
             button.add_css_class("slider-cap");
             let scale = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0., 1., 0.001);
@@ -630,6 +695,7 @@ impl Component {
                 &choice.label,
             )]);
             root.append(&scale);
+            w.install_menu(&scale, target);
             root.imp().slider.set(true);
             root.imp()
                 .opacity
@@ -656,10 +722,12 @@ impl Component {
             updating: Cell::new(false),
             slider,
             preview: RefCell::default(),
+            readout,
             outside: RefCell::default(),
             value: Cell::new(0.),
             fields: RefCell::default(),
         });
+        component.root.set_presentation(Axis::Horizontal, style);
         let id = tile.id;
         if component.slider.is_none() {
             component.button.connect_clicked(glib::clone!(
@@ -732,10 +800,19 @@ impl Component {
                 self.close_preview();
             }
             let Some(field) = &state.numeric else {
+                if let Some(readout) = &self.readout {
+                    readout.value.set_text("");
+                    readout.unit.set_text("");
+                }
                 self.updating.set(false);
                 return;
             };
             self.value.set(field.value);
+            if let Some(readout) = &self.readout {
+                readout.value.set_text(&field.numeric.compact_value(field.value as f64));
+                readout.unit.set_text(&field.numeric.unit);
+                readout.title.set_text(&state.value_label);
+            }
             self.root.imp().bookmarks.replace(state.bookmarks.clone());
             if let Some(gpu) = w.gpu.borrow().as_ref() {
                 self.root
@@ -1472,33 +1549,10 @@ fn paint_track(
     let ink = root.color();
     let alpha = if scale.is_sensitive() { 1. } else { 0.35 };
     if opacity {
-        let [light, dark] = layer_ui::TRANSPARENCY_CHECKER.map(|color| f64::from(color.0[0]) / 255.);
-        cr.set_source_rgb(light, light, light);
-        let _ = cr.paint();
-        cr.set_source_rgb(dark, dark, dark);
-        for col in -1..(length / 4.) as i32 + 2 {
-            for row in -2..2 {
-                if (col + row) % 2 == 0 {
-                    cr.rectangle(col as f64 * 4., row as f64 * 4., 4., 4.);
-                }
-            }
-        }
-        let _ = cr.fill();
+        let (r, g, b) = (ink.red() as f64, ink.green() as f64, ink.blue() as f64);
         let gradient = gtk::cairo::LinearGradient::new(0., 0., length, 0.);
-        gradient.add_color_stop_rgba(
-            0.,
-            ink.red() as f64,
-            ink.green() as f64,
-            ink.blue() as f64,
-            0.,
-        );
-        gradient.add_color_stop_rgba(
-            1.,
-            ink.red() as f64,
-            ink.green() as f64,
-            ink.blue() as f64,
-            0.65 * alpha,
-        );
+        gradient.add_color_stop_rgba(0., r, g, b, 0.06 * alpha);
+        gradient.add_color_stop_rgba(1., r, g, b, 0.28 * alpha);
         let _ = cr.set_source(&gradient);
     } else {
         cr.set_source_rgba(

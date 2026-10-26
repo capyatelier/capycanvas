@@ -117,6 +117,30 @@ try {
     if(((Model).state.workspace.layout|ConvertTo-Json -Depth 40 -Compress) -ne $layout){throw 'A quick cap drag moved the toolbar component'}
     Write-Output 'PASS: A quick cap drag without a hold does not reorder the component'
 
+    foreach($kind in @('brush_size_slider','brush_strength_slider')){
+        $tile=Tile $kind
+        foreach($option in @('Show value','Expand to fit')){
+            (Control "slider-cap-$($tile.id)").SetFocus()
+            [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x10),0x79)
+            Invoke $option -Name
+            Wait-Until {!(Find $option -Name -Visible)} "$option menu did not close"
+        }
+        Wait-Until {(Tile $kind).slider_style.show_value -and (Tile $kind).slider_style.expand} 'Slider display options did not persist'
+        (Control "component-slider-$($tile.id)").GetCurrentPattern([System.Windows.Automation.RangeValuePattern]::Pattern).SetValue(1)
+        $expected=if($kind -eq 'brush_size_slider'){'2048'}else{'100'}
+        $expectedUnit=if($kind -eq 'brush_size_slider'){'px'}else{'%'}
+        Wait-Until {(Control "slider-value-$($tile.id)").Current.Name -eq $expected} 'Slider value did not update'
+        if((Control "slider-unit-$($tile.id)").Current.Name -ne $expectedUnit){throw 'Slider unit differs from the shared numeric unit'}
+        $cap=Box "slider-cap-$($tile.id)";$number=Box "slider-value-$($tile.id)";$unit=Box "slider-unit-$($tile.id)"
+        if($unit.Top -lt $number.Bottom){throw 'A long Medium vertical value did not stack its unit'}
+        $scale=[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.
+        foreach($text in @($number,$unit)){
+            if($text.Left -lt $cap.Left+5.5*$scale -or $text.Top -lt $cap.Top+5.5*$scale -or $text.Right -gt $cap.Right-5.5*$scale -or $text.Bottom -gt $cap.Bottom-5.5*$scale){throw 'Slider value/unit touches its cap edge'}
+        }
+    }
+    Capture "slider-values-$Theme" -WithModel -Composed
+    Write-Output 'PASS: Slider display menus, persisted choices, live numbers, stacked units and clear margins'
+
     Switch-Workspace 'Photo' 'builtin:workspace:photographer'
     $options=Tile 'tool_options'
     if(!$options -or !$options.component){throw 'Photo lacks Tool Options'}

@@ -637,3 +637,6 @@ diagnostics-fps = FPS
 diagnostics-fps-description = Кадры холста за последнюю секунду, включая панорамирование и масштабирование из кэша. Не задержка ввода.
 diagnostics-submitted-fps = Отправлено FPS
 diagnostics-submitted-fps-description = Кадры холста, отправленные за последнюю секунду. Время их показа на экране недоступно.
+
+workspace-slider-show-value = Показывать значение
+workspace-slider-expand = Заполнить доступное место

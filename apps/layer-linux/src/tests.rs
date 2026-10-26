@@ -7940,7 +7940,7 @@ fn native_ribbon_allocation() {
     let strip = TileStrip::new();
     strip.add_css_class("toolbar-controls");
     let controls: Vec<_> = (1..=6)
-        .map(|id| layer_ui::ToolbarTile {
+        .map(|id| layer_ui::ToolbarTile { slider_style: Default::default(),
             id,
             control: ToolbarControl::Command {
                 command: CommandId::Undo,

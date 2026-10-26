@@ -249,6 +249,7 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
         ignoreClick=false;rejectedPointer.reset();
         auto p=e.GetCurrentPoint(root);if(!PointerGesture::PrimaryContact(p))return;
         auto tag=target(e.OriginalSource());
+        if(flag(tag,L"workspace_control"))return;
         auto tab=object(tag,L"workspace_tab");
         if(tab.Size())data->chrome.Insert(L"contact_tab",S(str(tab,L"panel")));
         chrome(O({{L"kind",S(L"contact")},{L"position",point(p.Position())},{L"canvas",B(false)}}));
@@ -486,7 +487,7 @@ void WorkspaceGestures::Source(FrameworkElement const& element,J const& action,J
         PointerGesture::OwnHolding(element);
     }
     element.Tag(O({{L"workspace_action",action},{L"workspace_context",context},{L"workspace_double",B(doubleClick)},
-        {L"workspace_tab",tab},{L"workspace_hold",B(pickup==Pickup::Hold)}}));
+        {L"workspace_tab",tab},{L"workspace_hold",B(pickup==Pickup::Hold)},{L"workspace_control",B(pickup==Pickup::Control)}}));
     if(tab.Size())impl->tabs.emplace_back(make_weak(element));
 }
 void WorkspaceGestures::Refresh(){impl->refresh();}

@@ -634,3 +634,6 @@ diagnostics-fps = FPS
 diagnostics-fps-description = Présentations de la toile pendant la dernière seconde, y compris le déplacement et le zoom en cache. Ne mesure pas la latence de saisie.
 diagnostics-submitted-fps = FPS soumis
 diagnostics-submitted-fps-description = Images de la toile soumises pendant la dernière seconde. Le moment de leur affichage n’est pas disponible.
+
+workspace-slider-show-value = Afficher la valeur
+workspace-slider-expand = Agrandir pour remplir

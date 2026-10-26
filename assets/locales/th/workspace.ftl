@@ -619,3 +619,6 @@ diagnostics-fps = FPS
 diagnostics-fps-description = จำนวนเฟรมผืนผ้าใบที่แสดงในวินาทีที่ผ่านมา รวมการเลื่อนและซูมจากแคช ไม่ใช่ค่าความหน่วงของอินพุต
 diagnostics-submitted-fps = FPS ที่ส่ง
 diagnostics-submitted-fps-description = เฟรมผืนผ้าใบที่ส่งในวินาทีที่ผ่านมา ไม่สามารถทราบเวลาที่แสดงบนหน้าจอได้
+
+workspace-slider-show-value = แสดงค่า
+workspace-slider-expand = ขยายให้เต็มพื้นที่

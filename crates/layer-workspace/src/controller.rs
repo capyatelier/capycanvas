@@ -407,6 +407,8 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
     }
     pub fn with_mobile_browser(self, mobile: bool) -> Self {
         self.manager.initial_workspace.set(layer_ui::WorkspacePreset::initial(self.manager.platform, mobile));
+        self.manager.tablet.set(matches!(self.manager.platform, Platform::Android | Platform::Ios)
+            || (self.manager.platform == Platform::Web && mobile));
         self
     }
     /// Storage replies call `wake` from any thread; the host then schedules
@@ -1117,7 +1119,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
             merge(
                 &mut change,
                 session
-                    .preview_workspace_layout(&entity.starting_layout(self.manager.platform)?)
+                    .preview_workspace_layout(&entity.starting_layout(self.manager.platform, self.manager.tablet.get())?)
                     .map_err(StoreError::invalid)?,
             );
         }

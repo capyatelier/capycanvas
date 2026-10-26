@@ -308,7 +308,7 @@ fn native_starting_layout_preview() {
     let baseline = manager
         .current()
         .unwrap()
-        .starting_layout(layer_ui::Platform::Gtk)
+        .starting_layout(layer_ui::Platform::Gtk, false)
         .unwrap();
     w.dispatch(UiAction::MovePanel {
         panel: Panel::Layers,

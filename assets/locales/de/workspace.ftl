@@ -634,3 +634,6 @@ diagnostics-fps = FPS
 diagnostics-fps-description = Leinwanddarstellungen in der letzten Sekunde, einschließlich zwischengespeichertem Verschieben und Zoomen. Keine Eingabelatenz.
 diagnostics-submitted-fps = Gesendete FPS
 diagnostics-submitted-fps-description = In der letzten Sekunde gesendete Leinwandbilder. Der Zeitpunkt der Bildschirmanzeige ist nicht verfügbar.
+
+workspace-slider-show-value = Wert anzeigen
+workspace-slider-expand = Verfügbaren Platz ausfüllen

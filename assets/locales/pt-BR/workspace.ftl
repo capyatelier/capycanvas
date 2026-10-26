@@ -637,3 +637,6 @@ diagnostics-fps = FPS
 diagnostics-fps-description = Apresentações da tela no último segundo, incluindo deslocamento e zoom em cache. Não mede a latência de entrada.
 diagnostics-submitted-fps = FPS enviados
 diagnostics-submitted-fps-description = Quadros da tela enviados no último segundo. O tempo de apresentação na tela não está disponível.
+
+workspace-slider-show-value = Mostrar valor
+workspace-slider-expand = Expandir para preencher

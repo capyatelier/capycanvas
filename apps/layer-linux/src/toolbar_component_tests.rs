@@ -3259,3 +3259,296 @@ fn slider_stamp_pixels(area:&gtk::Widget)->Vec<u8> {
     let texture=area.native().unwrap().renderer().unwrap().render_texture(node,Some(&gtk::graphene::Rect::new(0.,0.,width as f32,height as f32)));
     let mut bytes=vec![0;width*height*4];texture.download(&mut bytes,width*4);bytes.as_chunks::<4>().0.iter().map(|p|p[3]).collect()
 }
+
+fn slider_display_journey(d: &mut Driver, devices: &[&str], menus: bool) {
+    for theme in [Theme::Light, Theme::Dark] {
+        d.w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        restore(d, WorkspacePreset::Painter);
+        d.w.dispatch(UiAction::SelectBrush { id: 2 });
+        let panel = brush_panel(d);
+        let size = component_id(d, ToolbarControl::BrushSizeSlider);
+        let strength = component_id(d, ToolbarControl::BrushStrengthSlider);
+        for tile in [size, strength] {
+            if menus {
+                for (option, label) in [(0, "Show value"), (1, "Expand to fit")] {
+                    if tile == size {
+                        secondary_group_click(d, &d.named(&format!("component-slider-{tile}")));
+                    } else {
+                        let cap = d.named(&format!("tile-{tile}"));
+                        let point = d.point(&cap);
+                        d.input.perform(serde_json::json!([
+                            contact("touch", "down", point), {"wait_ms":800}, contact("touch", "up", point)
+                        ]));
+                    }
+                    let menu = d.w.popovers.borrow().iter().filter_map(|p| p.upgrade())
+                        .find(|p| p.has_css_class("panel-context-menu") && p.is_visible())
+                        .expect("slider display menu opens from track or cap");
+                    let item = find_menu_item(menu.upcast_ref(), label).unwrap();
+                    assert!(item.is_mapped());
+                    capture_popover(&menu, d.input.dir.join(format!("slider-display-menu-{theme:?}-{tile}-{option}.png")).to_str().unwrap());
+                    d.click(&item);
+                }
+            } else {
+                d.w.dispatch(UiAction::Customize { action: CustomizationAction::SetSliderStyle {
+                    panel, tile, style: ToolbarSliderStyle { show_value: true, expand: true },
+                } });
+            }
+        }
+        d.w.dispatch(UiAction::MovePanel { panel, target: DockTarget::Float { position: [260., 400.] },
+            viewport: [1600., 1000.] });
+        pump(150);
+        let mut workspace = state(&d.w).workspace;
+        let extras: Vec<_> = workspace.layout.panel(panel).unwrap().tiles().iter()
+            .filter(|tile| tile.control.slider().is_none()).map(|tile| tile.id).collect();
+        for tile in extras { workspace.layout.remove_tool(panel, tile).unwrap(); }
+        let group = workspace.layout.panel_group(panel).unwrap();
+        let config = workspace.layout.panel(panel).unwrap();
+        let [width, _] = config.tile_style.size();
+        let gap = config.tile_style.gap();
+        let floating = workspace.layout.floating.iter_mut().find(|f| f.root.id() == group).unwrap();
+        floating.toolbar_layout = FloatingToolbarLayout::Compact;
+        floating.width = width * 2. + gap;
+        floating.height = Some(420.);
+        d.w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(workspace) });
+        d.w.dispatch(UiAction::SetBrushSize { value: 24. });
+        d.w.dispatch(UiAction::SetBrushStrength { value: 1. });
+        pump(250);
+        let scale = d.named(&format!("component-slider-{size}"));
+        let strength_scale = d.named(&format!("component-slider-{strength}"));
+        let a = scale.compute_bounds(&d.w.window).unwrap();
+        let b = strength_scale.compute_bounds(&d.w.window).unwrap();
+        d.capture_canvas(&format!("slider-display-layout-{theme:?}.png"));
+        assert!(a.x() + a.width() <= b.x(), "Size {a:?}, Strength {b:?}, group {:?}, strip {}x{}, configured {:?}",
+            d.w.resolved().groups.iter().find(|g| g.id == group),
+            scale.parent().unwrap().parent().unwrap().width(), scale.parent().unwrap().parent().unwrap().height(),
+            state(&d.w).workspace.layout.panel(panel).unwrap());
+        assert!((a.y() - b.y()).abs() <= 1. && (a.height() - b.height()).abs() <= 1.);
+        assert!(a.height() > 300. && b.height() > 300.);
+        let label = d.named(&format!("slider-value-{strength}"));
+        assert_eq!(label.downcast_ref::<gtk::Label>().unwrap().text(), "100");
+        d.w.dispatch(UiAction::SetBrushStrength { value: 0.1 });
+        assert_eq!(label, d.named(&format!("slider-value-{strength}")));
+        assert_eq!(label.downcast_ref::<gtk::Label>().unwrap().text(), "10");
+        d.capture_canvas(&format!("slider-display-{theme:?}.png"));
+        for &device in devices {
+            for id in [size, strength] {
+                let track = d.named(&format!("component-slider-{id}"));
+                let value = |d: &Driver| state(&d.w).toolbar_component(if id == size {
+                    ToolbarControl::BrushSizeSlider
+                } else { ToolbarControl::BrushStrengthSlider }).unwrap().numeric.unwrap().value;
+                let from = screen_point(&track, &d.w.window, [0.5, 0.8]);
+                let to = screen_point(&track, &d.w.window, [0.5, 0.2]);
+                drag(d, device, from, from, false);
+                let low = value(d);
+                drag(d, device, from, to, false);
+                assert!(value(d) > low, "{device}: expanded slider increases upward");
+                assert!(d.w.workspace_drag.borrow().is_none());
+            }
+        }
+        if std::env::var_os("LAYER_SLIDER_DISPLAY_MOTION").is_some() {
+            slider_display_motion(d, size, strength, theme);
+        }
+        d.w.dispatch(UiAction::Invoke { command: CommandId::Eyedropper });
+        pump(150);
+        assert!(!scale.is_sensitive() && !strength_scale.is_sensitive());
+        assert_eq!(label.downcast_ref::<gtk::Label>().unwrap().text(), "");
+    }
+}
+
+fn slider_display_motion(d: &mut Driver, size: u32, strength: u32, theme: Theme) {
+    let clock = d.w.surface.frame_clock().unwrap();
+    let mut reports = Vec::new();
+    d.input.settle_ms = 0;
+    d.input.timeout = Duration::from_secs(30);
+    for id in [size, strength] {
+        let track = d.named(&format!("component-slider-{id}"));
+        let window = d.w.window.clone();
+        let point = |position| screen_point(&track, &window, [0.5, position]);
+        drag(d, "mouse", point(0.2), point(0.8), false);
+        for run in 0..3 {
+            d.input.perform(serde_json::json!([contact("mouse", "down", point(0.2))]));
+            pump(100);
+            let timings = Rc::new(RefCell::new(Vec::new()));
+            let value = Rc::new(Cell::new(track.clone().downcast::<gtk::Scale>().unwrap().value()));
+            let handler = clock.connect_after_paint(glib::clone!(#[strong] timings, #[strong] value, #[weak] track,
+                move |clock| {
+                    let current = track.downcast_ref::<gtk::Scale>().unwrap().value();
+                    if value.replace(current) != current && let Some(timing) = clock.current_timings() {
+                        timings.borrow_mut().push(timing);
+                    }
+                }));
+            let events: Vec<_> = (0..1500).map(|step| {
+                let phase = (step as f32 / 1500. * 16.) % 2.;
+                contact("mouse", "move", point(if phase < 1. { 0.2 + 0.6 * phase } else { 0.8 - 0.6 * (phase - 1.) }))
+            }).collect();
+            d.input.perform(serde_json::Value::Array(events));
+            clock.disconnect(handler);
+            d.input.perform(serde_json::json!([contact("mouse", "up", point(0.2))]));
+            pump(100);
+            let mut presented: Vec<_> = timings.borrow().iter().filter(|t| t.is_complete() && t.presentation_time() > 0)
+                .map(|t| t.presentation_time()).collect();
+            presented.sort_unstable(); presented.dedup();
+            assert!(presented.len() > 2);
+            let seconds = (presented.last().unwrap() - presented[0]) as f64 / 1_000_000.;
+            assert!(seconds >= 5.);
+            let mut gaps: Vec<_> = presented.windows(2).map(|p| (p[1] - p[0]) as f64 / 1000.).collect();
+            gaps.sort_by(f64::total_cmp);
+            reports.push(serde_json::json!({"slider":if id == size { "size" } else { "strength" }, "run":run,
+                "theme":format!("{theme:?}"), "seconds":seconds, "presentation_hz":(presented.len()-1) as f64 / seconds,
+                "gap_p99_ms":gaps[gaps.len()*99/100]}));
+        }
+    }
+    std::fs::write(d.input.dir.join(format!("slider-display-motion-{theme:?}.json")),
+        serde_json::to_vec_pretty(&reports).unwrap()).unwrap();
+    d.input.settle_ms = 180;
+}
+
+#[test]
+#[ignore = "private Mutter: --native-test=native_toolbar_slider_display_input"]
+fn native_toolbar_slider_display_input() {
+    let mut d = Driver::new("art.capycanvas.ToolbarSliderDisplay");
+    slider_display_journey(&mut d, &["mouse", "touch"], true);
+    d.finish();
+}
+
+#[test]
+#[ignore = "private Mutter: --native-test=native_toolbar_slider_display_pen_input --tablet"]
+fn native_toolbar_slider_display_pen_input() {
+    let mut d = Driver::new("art.capycanvas.ToolbarSliderDisplayPen");
+    slider_display_journey(&mut d, &["pen"], false);
+    d.finish();
+}
+
+#[test]
+#[ignore = "private Mutter: --native-test=native_toolbar_slider_design_gallery"]
+fn native_toolbar_slider_design_gallery() {
+    let d = Driver::new("art.capycanvas.ToolbarSliderDesign");
+    let css = gtk::CssProvider::new();
+    css.load_from_path(concat!(env!("CARGO_MANIFEST_DIR"), "/src/style.css"));
+    gtk::style_context_add_provider_for_display(&gdk::Display::default().unwrap(), &css, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 1);
+    let styles = [TileStyle::Small, TileStyle::Medium, TileStyle::Large, TileStyle::MediumLabeled, TileStyle::Labeled];
+    let mut layout = DockLayout::default();
+    layout.bands.clear();
+    layout.canvas_info.visible = false;
+    layout.canvas_bar = false;
+    let mut records = Vec::new();
+    let (mut x, mut y) = (40., 500.);
+    for axis in [Axis::Vertical, Axis::Horizontal] {
+        for style in styles {
+            let panel = layout.add_toolbar(None, &format!("{axis:?} {style:?}"), &[
+                ToolbarControl::BrushSizeSlider, ToolbarControl::BrushStrengthSlider,
+            ]).unwrap();
+            let config = layout.panels.iter_mut().find(|p| p.id == panel).unwrap();
+            config.tile_style = style;
+            let PanelContent::Toolbar { tiles, .. } = &mut config.content else { unreachable!() };
+            for tile in tiles.iter_mut() { tile.slider_style = ToolbarSliderStyle { show_value: true, expand: true }; }
+            let ids = tiles.iter().map(|t| t.id).collect::<Vec<_>>();
+            let [w, h] = style.size();
+            let gap = style.gap();
+            layout.move_panel([1600., 1000.], panel, DockTarget::Float { position: [40., 70.] }).unwrap();
+            let group = layout.panel_group(panel).unwrap();
+            let floating = layout.floating.iter_mut().find(|f| f.root.id() == group).unwrap();
+            floating.toolbar_layout = if axis == Axis::Vertical { FloatingToolbarLayout::Compact } else { FloatingToolbarLayout::Horizontal };
+            floating.width = if axis == Axis::Vertical { w * 2. + gap } else { 1160. };
+            floating.height = Some(if axis == Axis::Vertical { 360. } else { h });
+            floating.position = if axis == Axis::Vertical { let p = [x, 70.]; x += w * 2. + gap + 24.; p }
+                else { let p = [40., y]; y += h + 16.; p };
+            records.push((axis, style, ids));
+        }
+    }
+    layout.validate().unwrap();
+    d.w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(WorkspaceState { layout, ..WorkspaceState::default() }) });
+    d.w.dispatch(UiAction::SelectBrush { id: 2 });
+    let output = std::env::var_os("LAYER_TEST_ARTIFACTS").map(std::path::PathBuf::from).unwrap_or_else(|| d.input.dir.clone());
+    std::fs::create_dir_all(&output).unwrap();
+    for theme in [Theme::Light, Theme::Dark] {
+        d.w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        for (name, color, size, strength) in [
+            ("red", [0.62, 0.22, 0.16, 1.], 430., 0.95),
+            ("blue", [0.16, 0.48, 0.82, 1.], 24., 0.4),
+            ("white", [1., 1., 1., 1.], 2048., 1.),
+            ("black", [0., 0., 0., 1.], 0.5, 0.1),
+        ] {
+            d.w.dispatch(UiAction::SetColor { rgba: color });
+            d.w.dispatch(UiAction::SetBrushSize { value: size });
+            d.w.dispatch(UiAction::SetBrushStrength { value: strength });
+            pump(400);
+            for (axis, style, ids) in &records {
+                for &id in ids {
+                    let label = d.named(&format!("slider-value-{id}")).downcast::<gtk::Label>().unwrap();
+                    let unit = d.named(&format!("slider-unit-{id}")).downcast::<gtk::Label>().unwrap();
+                    assert!(label.is_mapped(), "{axis:?}/{style:?}: visible value");
+                    assert!(unit.is_mapped(), "{axis:?}/{style:?}: visible unit");
+                    assert_eq!(unit.text(), if id == ids[0] { "px" } else { "%" });
+                    let metrics = toolbar_slider_readout_metrics(*style, *axis, &label.text());
+                    assert_eq!(label.parent().unwrap().downcast::<gtk::Box>().unwrap().orientation(),
+                        if metrics.units_below { gtk::Orientation::Vertical } else { gtk::Orientation::Horizontal });
+                    if *axis == Axis::Horizontal || matches!(style, TileStyle::Large | TileStyle::MediumLabeled | TileStyle::Labeled)
+                        || (*style == TileStyle::Medium && metrics.units_below) {
+                        for text in [&label, &unit] {
+                            assert_eq!(text.layout().pixel_size().1, text.create_pango_layout(Some(&text.text())).pixel_size().1,
+                                "{axis:?}/{style:?}: keep standard font size when it fits");
+                        }
+                    }
+                    assert!(!label.text().contains("px") && !label.text().contains('%'));
+                    assert!(find_named(d.w.window.upcast_ref(), &format!("slider-value-preview-{id}")).is_none(), "plain readout has no tip preview");
+                    assert!(label.layout().pixel_size().0 <= label.width(), "{axis:?}/{style:?}: shaped number fits its readout");
+                    let bounds = label.compute_bounds(&label.parent().unwrap()).unwrap();
+                    assert!(bounds.x() >= -0.1 && bounds.x() + bounds.width() <= label.parent().unwrap().width() as f32 + 0.1,
+                        "{axis:?}/{style:?}: value fits caption: {bounds:?}");
+                    let cap = d.named(&format!("tile-{id}"));
+                    let ink_bounds = |label: &gtk::Label| {
+                        let bounds = label.compute_bounds(&cap).unwrap();
+                        let (x, y) = label.layout_offsets();
+                        let ink = label.layout().pixel_extents().0;
+                        Bounds { x: bounds.x() + (x + ink.x()) as f32, y: bounds.y() + (y + ink.y()) as f32,
+                            width: ink.width() as f32, height: ink.height() as f32 }
+                    };
+                    let number_ink = ink_bounds(&label);
+                    let unit_ink = ink_bounds(&unit);
+                    for ink in [number_ink, unit_ink] {
+                        assert!(ink.x >= metrics.inset - 0.5 && ink.y >= metrics.inset - 0.5
+                            && ink.x + ink.width <= cap.width() as f32 - metrics.inset + 0.5
+                            && ink.y + ink.height <= cap.height() as f32 - metrics.inset + 0.5,
+                            "{axis:?}/{style:?}: {ink:?} needs {}px margins inside {}x{}", metrics.inset, cap.width(), cap.height());
+                    }
+                    if metrics.units_below {
+                        assert!(unit_ink.y >= number_ink.y + number_ink.height + 1.);
+                    } else {
+                        assert!(unit_ink.x >= number_ink.x + number_ink.width + 1.);
+                    }
+                }
+            }
+            let image = crate::snapshot(&d.w);
+            image.save_to_png(output.join(format!("gallery-{theme:?}-{name}.png"))).unwrap();
+            if name == "red" {
+                for (axis, style, ids) in &records {
+                    let root = d.named(&format!("component-slider-{}", ids[0])).parent().unwrap().parent().unwrap();
+                    let parent = root.parent().unwrap();
+                    let bounds = root.compute_bounds(&parent).unwrap();
+                    let snapshot = gtk::Snapshot::new();
+                    parent.snapshot_child(&root, &snapshot);
+                    let texture = root.native().unwrap().renderer().unwrap().render_texture(snapshot.to_node().unwrap(), Some(&bounds));
+                    texture.save_to_png(output.join(format!("detail-{theme:?}-{axis:?}-{style:?}.png"))).unwrap();
+                }
+            }
+        }
+    }
+    for theme in [Theme::Light, Theme::Dark] {
+        d.w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        d.w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(WorkspaceState {
+            layout: WorkspacePreset::Illustrator.layout_for_device(Platform::Gtk, true), ..WorkspaceState::default()
+        }) });
+        d.w.dispatch(UiAction::SetBrushSize { value: 430. });
+        pump(350);
+        let resolved = d.w.resolved();
+        let tools = resolved.groups.iter().find(|group| group.active == Panel::Toolbar).unwrap();
+        assert_eq!(tools.bounds.width, 74.);
+        assert_eq!(tools.bounds.height, 420.);
+        let size = d.named(&format!("component-slider-{}", component_id(&d, ToolbarControl::BrushSizeSlider)));
+        assert!(size.is_mapped());
+        assert!(size.compute_bounds(&d.w.window).unwrap().y() > tools.bounds.y + tools.bounds.height);
+        crate::snapshot(&d.w).save_to_png(output.join(format!("paint-tablet-{theme:?}.png"))).unwrap();
+    }
+    d.finish();
+}

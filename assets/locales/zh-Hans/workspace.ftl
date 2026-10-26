@@ -657,3 +657,6 @@ diagnostics-fps = FPS
 diagnostics-fps-description = 最近一秒显示的画布帧数，包括使用缓存的平移和缩放。并非输入延迟。
 diagnostics-submitted-fps = 提交 FPS
 diagnostics-submitted-fps-description = 最近一秒提交的画布帧数。无法获取实际显示时间。
+
+workspace-slider-show-value = 显示数值
+workspace-slider-expand = 扩展以填满

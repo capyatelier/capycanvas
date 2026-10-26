@@ -32,6 +32,7 @@ pub struct WorkspaceManager<S: WorkspaceStore> {
     pub owner: Owner,
     pub platform: Platform,
     pub(crate) initial_workspace: Cell<layer_ui::WorkspacePreset>,
+    pub(crate) tablet: Cell<bool>,
     state: RefCell<State>,
     saving: Cell<bool>,
     /// Replaces `store` for the rest of this manager's life once set.
@@ -55,6 +56,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             owner: Owner::fresh(),
             platform,
             initial_workspace: Cell::new(layer_ui::WorkspacePreset::initial(platform, false)),
+            tablet: Cell::new(matches!(platform, Platform::Android | Platform::Ios)),
             state: RefCell::new(State::default()),
             saving: Cell::new(false),
             memory: RefCell::new(None),
@@ -122,7 +124,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
     }
     pub fn binding(&self) -> Option<layer_ui::ManagedWorkspace> {
         let current = self.current()?;
-        let baseline = current.starting_layout(self.platform).ok()?;
+        let baseline = current.starting_layout(self.platform, self.tablet.get()).ok()?;
         let mut items = self.items();
         items.retain(|i| i.metadata.kind == ItemKind::Workspace);
         items.sort_by_key(|i| std::cmp::Reverse(i.metadata.last_used_ms));
@@ -487,7 +489,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
     async fn ensure_defaults(&self, now: u64) -> Result<()> {
         for (workspace_id, _) in DEFAULT_WORKSPACES {
             self.ensure_default(
-                Entity::included_workspace(workspace_id, self.platform, now).unwrap(),
+                Entity::included_workspace(workspace_id, self.platform, self.tablet.get(), now).unwrap(),
             )
             .await?;
         }

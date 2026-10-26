@@ -173,7 +173,7 @@ mod localization_tests {
     #[test]
     fn interrupted_labels_reproject_names_without_changing_recovery_identity() {
         let english = layer_ui::Localizer::shared(layer_ui::UiLanguage::English);
-        let source = Entity::included_workspace(DEFAULT_WORKSPACES[0].0, Platform::Web, 1000).unwrap();
+        let source = Entity::included_workspace(DEFAULT_WORKSPACES[0].0, Platform::Web, false, 1000).unwrap();
         let change = InterruptedChange {
             id: "operation-id".into(),
             names: vec![Some((source.id.clone(), source.metadata.clone())), None],

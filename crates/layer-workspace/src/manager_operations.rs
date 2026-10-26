@@ -215,7 +215,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                     .layout
                     .clone()
             } else {
-                stored.entity.starting_layout(self.platform)?
+                stored.entity.starting_layout(self.platform, self.tablet.get())?
             };
             self.publish_layout(
                 &stored,

@@ -906,7 +906,7 @@ fn starting_layout_dialog_previews_without_saving_and_restore_is_undoable() {
                 "An unchanged old baseline must still offer the latest default");
             preset.layout(Platform::Web)
         } else {
-            f.controller.manager.current().unwrap().starting_layout(Platform::Web).unwrap()
+            f.controller.manager.current().unwrap().starting_layout(Platform::Web, false).unwrap()
         };
         f.action(serde_json::json!({"type":"move_panel","panel":"toolbar","viewport":[1200,900],"target":{"kind":"float","position":[480,220]}}));
         f.action(serde_json::json!({"type":"set_brush_size","value":73}));
@@ -1986,6 +1986,10 @@ fn mobile_browsers_start_in_sketch_and_desktop_browsers_start_in_paint() {
         for _ in 0..20 { controller.tick(&mut host.session, 1000); }
         assert!(host.session.state().workspace_ready);
         assert_eq!(controller.view.name, expected);
+        controller.input(&mut host.session, WorkspaceInput::Switch { id: DEFAULT_WORKSPACES[1].0.into() }, 1100).unwrap();
+        for _ in 0..20 { controller.tick(&mut host.session, 1100); }
+        assert_eq!(layer_ui::durable_layout(&host.session.state().workspace.layout),
+            layer_ui::WorkspacePreset::Illustrator.layout_for_device(Platform::Web, mobile));
     }
 }
 

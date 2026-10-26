@@ -2127,6 +2127,60 @@ class AndroidInteractionTest {
             File(directory, "$name.png").outputStream().use { image.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }; image.recycle()
         }
     }
+    @Test fun toolbarSliderReadoutsAndTabletPaint() {
+        switchToolbarWorkspace("illustrator")
+        action(obj("type" to "invoke", "command" to "brush"))
+        val initial = workspace()
+        val size = toolbarComponent("brush_size_slider")
+        val strength = toolbarComponent("brush_strength_slider")
+        val tools = group("toolbar").getJSONObject("bounds")
+        val sliders = group(size.first).getJSONObject("bounds")
+        assertEquals(74f, tools.number("width"), .1f)
+        assertEquals(420f, tools.number("height"), .1f)
+        assertEquals(tools.number("x"), sliders.number("x"), .1f)
+        assertTrue(tools.number("y") + tools.number("height") < sliders.number("y"))
+        for (theme in listOf("light", "dark")) {
+            action(obj("type" to "set_theme", "theme" to theme))
+            action(obj("type" to "restore_workspace", "workspace" to JSONObject(initial)))
+            captureToolbar("paint-tablet-$theme")
+            for (vertical in listOf(true, false)) for (style in listOf("small", "medium", "large", "medium_labeled", "labeled")) {
+                val workspace = JSONObject(initial)
+                val layout = workspace.getJSONObject("layout")
+                val panel = layout.array("panels").objects().first { it.getString("id") == size.first }
+                panel.put("tile_style", style)
+                val metrics = toolbarUi(host.languageTag, obj("type" to "style", "style" to style))
+                for (key in listOf("bands", "collapsed", "column_stacks", "column_scroll", "fit_height_groups", "fit_tab_groups")) layout.put(key, JSONArray())
+                layout.put("floating", JSONArray(listOf(obj("root" to obj("kind" to "tabs", "id" to 2, "panels" to JSONArray(listOf(size.first)),
+                    "active" to size.first, "tab_style" to "automatic"), "position" to JSONArray(listOf(30, 90)),
+                    "width" to if (vertical) metrics.array("size").getDouble(0) * 2 + metrics.number("gap") else 1160,
+                    "height" to if (vertical) 550 else metrics.array("size").getDouble(1), "default_width" to JSONObject.NULL,
+                    "toolbar_layout" to if (vertical) "compact" else "horizontal"))))
+                action(obj("type" to "restore_workspace", "workspace" to workspace))
+                for (value in listOf(24, 99, 100, 430, 2048)) {
+                    action(obj("type" to "set_brush_size", "value" to value))
+                    action(obj("type" to "set_brush_strength", "value" to if (value == 430) .95 else 1))
+                    for (id in listOf(size.second, strength.second)) {
+                        waitFor("arranged readout $style/$id") {
+                            listOf("slider-cap-$id", "slider-value-$id", "slider-unit-$id").all { tag ->
+                                tagged(tag)?.second?.let { it.layoutInfo.isPlaced && it.boundsInRoot.width > 0f && it.boundsInRoot.height > 0f } == true
+                            }
+                        }
+                        val cap = bounds("slider-cap-$id"); val number = bounds("slider-value-$id"); val unit = bounds("slider-unit-$id")
+                        val digits = if (id == size.second) value.toString().length else if (value == 430) 2 else 3
+                        val stacked = vertical && (style == "small" || style == "medium" && digits >= 3)
+                        if (stacked) assertTrue("stacked unit $style/$value", unit.top >= number.bottom)
+                        else assertTrue("inline unit $style/$value", unit.left >= number.right)
+                        for (text in listOf(number, unit)) {
+                            assertTrue("readout margins $style/$value: $text inside $cap", text.left >= cap.left + 5.5f*density
+                                && text.top >= cap.top + 5.5f*density && text.right <= cap.right - 5.5f*density && text.bottom <= cap.bottom - 5.5f*density)
+                        }
+                    }
+                }
+                captureToolbar("slider-display-$theme-$vertical-$style")
+            }
+        }
+        action(obj("type" to "restore_workspace", "workspace" to JSONObject(initial)))
+    }
     @Test fun toolbarComponentsAcrossDevicesAndLayouts() {
         fun invoke(command: String) = action(obj("type" to "invoke", "command" to command))
         switchToolbarWorkspace("photographer"); invoke("brush")

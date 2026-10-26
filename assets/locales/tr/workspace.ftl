@@ -631,3 +631,6 @@ diagnostics-fps = FPS
 diagnostics-fps-description = Önbellekten kaydırma ve yakınlaştırma dahil, son saniyede gösterilen tuval kareleri. Girdi gecikmesi değildir.
 diagnostics-submitted-fps = Gönderilen FPS
 diagnostics-submitted-fps-description = Son saniyede gönderilen tuval kareleri. Ekranda gösterim zamanlaması kullanılamıyor.
+
+workspace-slider-show-value = Değeri göster
+workspace-slider-expand = Boşluğu doldur

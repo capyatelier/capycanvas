@@ -256,7 +256,7 @@ private struct DrawerPanelBody: View {
     let splitFilters: Bool
     let toolSet: JSON
     @State private var tiles = JSON()
-    private var tileKey: String { JSON([panel["id"].raw, panel["tiles"].array.map { [$0["id"].raw, $0["control"].raw] }, panel["tile_style"].raw, width]).stableKey }
+    private var tileKey: String { JSON([panel["id"].raw, panel["tiles"].array.map { [$0["id"].raw, $0["control"].raw, $0["slider_style"].raw] }, panel["tile_style"].raw, width]).stableKey }
     var body: some View {
         Group {
             if !panel["tiles"].array.isEmpty {

@@ -101,14 +101,18 @@ fn toolbar_item_span(
     let tiles = |count: f32| count * (along + gap) - gap;
     let length = match tile.control {
         ToolbarControl::Divider => TOOLBAR_DIVIDER_SIZE,
-        ToolbarControl::BrushSizeSlider | ToolbarControl::BrushStrengthSlider => tiles(4.0),
+        ToolbarControl::BrushSizeSlider | ToolbarControl::BrushStrengthSlider =>
+            tiles(4.0) + if tile.slider_style.show_value {
+                crate::toolbar_slider_readout_extent(along, axis) - 8.
+            } else { 0. },
         ToolbarControl::ToolOptions { .. } => tiles(if axis == Axis::Vertical { 8.0 } else { 16.0 }),
         _ => along,
     }
     .min(capacity);
-    let fill = tile.control.options_style().is_some();
+    let fill = tile.control.options_style().is_some()
+        || (tile.control.slider().is_some() && tile.slider_style.expand && axis == Axis::Horizontal);
     ItemSpan {
-        min: if fill { along.min(capacity) } else { length },
+        min: if tile.control.options_style().is_some() { along.min(capacity) } else { length },
         preferred: length,
         fill,
     }
@@ -146,6 +150,7 @@ struct ToolbarRow {
     min_height: f32,
     preferred_height: f32,
     full_width: bool,
+    fill: bool,
 }
 fn toolbar_rows(width: f32, tiles: &[ToolbarTile], style: TileStyle) -> Vec<ToolbarRow> {
     let [w, h] = style.size();
@@ -165,9 +170,11 @@ fn toolbar_rows(width: f32, tiles: &[ToolbarTile], style: TileStyle) -> Vec<Tool
                 min_height: 0.,
                 preferred_height: 0.,
                 full_width,
+                fill: false,
             });
         }
         let row = rows.last_mut().unwrap();
+        row.fill |= tile.control.slider().is_some() && tile.slider_style.expand;
         let span = toolbar_item_span(tile, h, gap, Axis::Vertical, f32::INFINITY);
         let preferred = if tile.control.options_style().is_some() {
             8usize.div_ceil(columns) as f32 * (h + gap) - gap
@@ -206,6 +213,9 @@ fn toolbar_grid_layout(
     let content_height =
         (height - pad * 2. - if standalone { TOOLBAR_GRIP_SIZE + gap } else { 0. }).max(0.);
     let rows = toolbar_rows(content_width, tiles, style);
+    let fills = rows.iter().filter(|r| r.fill).count();
+    let expansion = (content_height - toolbar_rows_height(&rows, true, gap)).max(0.)
+        / fills.max(1) as f32;
     let mut spare = (content_height - toolbar_rows_height(&rows, false, gap)).max(0.);
     let columns = ((content_width + gap) / (style.size()[0] + gap))
         .floor()
@@ -217,12 +227,15 @@ fn toolbar_grid_layout(
     let mut insertion = Vec::with_capacity(tiles.len() + 1);
     let mut y = pad;
     for row in rows {
-        let growth = (row.preferred_height - row.min_height).min(spare);
+        let growth = (row.preferred_height - row.min_height
+            + if row.fill { expansion } else { 0. }).min(spare);
         let row_height = row.min_height + growth;
         spare -= growth;
         let mut x = pad + if row.full_width { 0. } else { inset };
         for (i, w, h) in row.items {
-            let h = if row.full_width { row_height } else { h };
+            let h = if row.full_width || (tiles[i].control.slider().is_some() && tiles[i].slider_style.expand) {
+                row_height
+            } else { h };
             let b = Bounds {
                 x,
                 y: y.min(pad + content_height),
@@ -1449,7 +1462,7 @@ impl DockLayout {
                 .map(|&control| {
                     let id = layout.next_tile_id;
                     layout.next_tile_id += 1;
-                    ToolbarTile { id, control }
+                    ToolbarTile { slider_style: Default::default(), id, control }
                 })
                 .collect();
             let config = PanelConfig {
@@ -2141,6 +2154,9 @@ impl DockLayout {
         )?;
         let config = self.panel_mut(id)?;
         config.tile_style = original.tile_style;
+        for (copy, source) in config.tiles_mut()?.iter_mut().zip(original.tiles()) {
+            copy.slider_style = source.slider_style;
+        }
         Ok(id)
     }
 
@@ -2181,7 +2197,7 @@ impl DockLayout {
         let added = controls
             .iter()
             .zip(self.next_tile_id..end)
-            .map(|(&control, id)| ToolbarTile { id, control })
+            .map(|(&control, id)| ToolbarTile { slider_style: Default::default(), id, control })
             .collect::<Vec<_>>();
         let tiles = self.panel_mut(panel)?.tiles_mut()?;
         tiles.splice(index..index, added);
@@ -2302,7 +2318,7 @@ impl DockLayout {
         if needs_separator {
             tiles.insert(
                 index + 1,
-                ToolbarTile {
+                ToolbarTile { slider_style: Default::default(),
                     id: separator_id,
                     control: ToolbarControl::Divider,
                 },
@@ -2430,16 +2446,18 @@ impl DockLayout {
             f.height = None;
         }
     }
-    fn fitted_height(&self, node: &DockNode) -> Option<f32> {
+    fn fitted_height(&self, node: &DockNode, width: f32) -> Option<f32> {
         if let DockNode::Split {
             axis,
+            fraction,
             first,
             second,
             ..
         } = node
         {
-            let first = self.fitted_height(first)?;
-            let second = self.fitted_height(second)?;
+            let child_width = if *axis == Axis::Horizontal { (width - WORKSPACE_SPACING).max(0.) } else { width };
+            let first = self.fitted_height(first, child_width * if *axis == Axis::Horizontal { *fraction } else { 1. })?;
+            let second = self.fitted_height(second, child_width * if *axis == Axis::Horizontal { 1. - fraction } else { 1. })?;
             return Some(if *axis == Axis::Vertical {
                 first + second + WORKSPACE_SPACING
             } else {
@@ -2454,6 +2472,12 @@ impl DockLayout {
         };
         if !self.fit_height_groups.contains(id) {
             return None;
+        }
+        if panels.len() == 1 && active.kind() == PanelKind::Tiles {
+            let config = self.panel(*active).ok()?;
+            let gap = config.tile_style.gap();
+            return Some(toolbar_rows_height(&toolbar_rows(width, config.tiles(), config.tile_style), true, gap)
+                + TOOLBAR_GRIP_SIZE + gap);
         }
         // Fitting belongs to the group, not the selected page. Reserve enough
         // room for its pages so switching tabs never moves adjacent dividers.
@@ -2486,10 +2510,10 @@ impl DockLayout {
             .map(|m| if m.scroll.is_some() { m.minimum_content_height() } else { m.content_height.min(TILE_SIZE) })
             .reduce(f32::max).unwrap_or(TILE_SIZE)
     }
-    fn fitted_split(&self, first: &DockNode, second: &DockNode, usable: f32) -> Option<f32> {
-        let (height, sibling, leading) = match self.fitted_height(first) {
+    fn fitted_split(&self, first: &DockNode, second: &DockNode, usable: f32, width: f32) -> Option<f32> {
+        let (height, sibling, leading) = match self.fitted_height(first, width) {
             Some(height) => (height, second, true),
-            None => (self.fitted_height(second)?, first, false),
+            None => (self.fitted_height(second, width)?, first, false),
         };
         let own = if leading { first } else { second };
         let [floor, minimum, _] = stacked_heights(own, self);
@@ -4334,11 +4358,11 @@ fn ribbon_cross_width(node: &DockNode, ribbon_axis: Axis, length: f32, layout: &
 fn expanded_ribbon_cross_width(node: &DockNode, ribbon_axis: Axis, length: f32, layout: &DockLayout, open_columns: bool, preferred: bool) -> f32 {
     let group_width: fn(&DockLayout, u32) -> f32 = if preferred { DockLayout::group_preferred_width } else { DockLayout::group_min_width };
     let minimum = match node {
-        DockNode::Tabs { panels, active, .. }
+        DockNode::Tabs { id, panels, active, .. }
             if panels.len() == 1 && active.kind() == PanelKind::Tiles =>
         {
             let config = layout.panel(*active).unwrap();
-            if ribbon_axis == Axis::Vertical && !preferred {
+            if ribbon_axis == Axis::Vertical && (!preferred || layout.fit_height_groups.contains(id)) {
                 config.tile_style.size()[0]
             } else {
                 toolbar_cross_extent(length, config.tiles(), config.tile_style, ribbon_axis)
@@ -4644,7 +4668,7 @@ fn resolve_node(
                     }
                 }
                 split_size(usable, *fraction, a, b)
-            } else if let Some(size) = layout.fitted_split(first, second, usable) {
+            } else if let Some(size) = layout.fitted_split(first, second, usable, bounds.width) {
                 size
             } else {
                 let a = stacked_heights(first, layout);
@@ -4932,7 +4956,7 @@ mod tests {
     #[test]
     fn compact_dividers_share_wrap_geometry_and_stable_drop_slots() {
         let tiles: Vec<_> = (0..9)
-            .map(|id| ToolbarTile {
+            .map(|id| ToolbarTile { slider_style: Default::default(),
                 id,
                 control: if id % 3 == 2 {
                     ToolbarControl::Divider

@@ -3,6 +3,13 @@
 use crate::*;
 use serde::{Deserialize, Serialize};
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ToolbarSliderStyle {
+    pub show_value: bool,
+    pub expand: bool,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ToolOptionsStyle {
@@ -67,6 +74,7 @@ pub struct ToolbarContext {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct ToolbarComponentView {
     pub context: ToolbarContext,
+    pub value_label: std::sync::Arc<str>,
     pub numeric: Option<ToolSetting>,
     pub options: Vec<ToolOption>,
     pub bookmarks: Vec<SliderBookmark>,
@@ -226,6 +234,8 @@ impl UiState {
     pub fn toolbar_component(&self, control: ToolbarControl) -> Option<ToolbarComponentView> {
         control.is_component().then(|| ToolbarComponentView {
             context: self.toolbar_context(),
+            value_label: control.slider().map_or_else(|| "".into(), |binding| self.localization.text(
+                if binding == ToolbarNumericBinding::BrushSize { MessageId::TOOL_CONTROL_GROUP_SIZE } else { binding.label() })),
             numeric: control.slider().and_then(|binding| binding.field(self)),
             bookmarks: control.slider().map_or_else(Vec::new, |binding| {
                 let current = binding.field(self).map(|f| f.value);
@@ -494,37 +504,69 @@ fn finite_size(v: f32) -> f32 {
     if v.is_finite() { v.max(0.0) } else { 0.0 }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct ToolbarSliderReadoutMetrics {
+    pub units_below: bool,
+    pub inset: f32,
+    pub gap: f32,
+    pub extent: f32,
+}
+
+pub fn toolbar_slider_readout_metrics(style: TileStyle, axis: Axis, value: &str) -> ToolbarSliderReadoutMetrics {
+    let units_below = axis == Axis::Vertical && (style == TileStyle::Small
+        || (style == TileStyle::Medium && value.bytes().filter(u8::is_ascii_digit).count() >= 3));
+    ToolbarSliderReadoutMetrics {
+        units_below,
+        inset: PANEL_CONTROL_METRICS.field_padding,
+        gap: PANEL_COMPOUND_SPACING,
+        extent: toolbar_slider_readout_extent(style.size()[usize::from(axis == Axis::Vertical)], axis),
+    }
+}
+
+pub fn toolbar_slider_readout_extent(along: f32, axis: Axis) -> f32 {
+    along.max(if axis == Axis::Horizontal { TILE_SIZE * 2. }
+        else { PANEL_CONTROL_METRICS.control_height * 2. + PANEL_COMPOUND_SPACING })
+}
+
 /// Equal end insets around the editable track. The empty leading inset remains
 /// a hold-to-reorder target without reserving space for a numeric readout.
 pub fn toolbar_slider_layout(width: f32, height: f32, axis: Axis) -> [Bounds; 2] {
+    toolbar_slider_styled_layout(width, height, axis, TileStyle::Small, ToolbarSliderStyle::default())
+}
+
+pub fn toolbar_slider_styled_layout(width: f32, height: f32, axis: Axis, tile: TileStyle, style: ToolbarSliderStyle) -> [Bounds; 2] {
     let width = finite_size(width);
     let height = finite_size(height);
     let vertical = axis == Axis::Vertical;
     let cap = 8_f32.min(if vertical { height } else { width } / 2.);
+    let header = if style.show_value {
+        toolbar_slider_readout_extent(tile.size()[usize::from(vertical)], axis).min(
+            (if vertical { height } else { width }) - cap)
+    } else { cap }.max(0.);
     if vertical {
         [
             Bounds {
                 width,
-                height: cap,
+                height: header,
                 ..Bounds::default()
             },
             Bounds {
-                y: cap,
+                y: header,
                 width,
-                height: height - 2. * cap,
+                height: height - header - cap,
                 ..Bounds::default()
             },
         ]
     } else {
         [
             Bounds {
-                width: cap,
+                width: header,
                 height,
                 ..Bounds::default()
             },
             Bounds {
-                x: cap,
-                width: width - 2. * cap,
+                x: header,
+                width: width - header - cap,
                 height,
                 ..Bounds::default()
             },

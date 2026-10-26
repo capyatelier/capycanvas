@@ -6638,9 +6638,9 @@ mod tests {
         s.state.workspace.layout.panel_mut(Panel::Toolbar).unwrap().content = customization::PanelContent::Toolbar {
             name: None,
             tiles: vec![
-                customization::ToolbarTile { id: 901, control: ToolbarControl::Brush { id: brush } },
-                customization::ToolbarTile { id: 902, control: ToolbarControl::Size { tenths: 80 } },
-                customization::ToolbarTile { id: 903, control: ToolbarControl::Panel { panel: Panel::Brushes } },
+                customization::ToolbarTile { slider_style: Default::default(), id: 901, control: ToolbarControl::Brush { id: brush } },
+                customization::ToolbarTile { slider_style: Default::default(), id: 902, control: ToolbarControl::Size { tenths: 80 } },
+                customization::ToolbarTile { slider_style: Default::default(), id: 903, control: ToolbarControl::Panel { panel: Panel::Brushes } },
             ],
         };
         s.refresh_panel_copy(false);
@@ -9810,7 +9810,7 @@ mod tests {
         .into_iter()
         .enumerate()
         {
-            tiles.push(ToolbarTile {
+            tiles.push(ToolbarTile { slider_style: Default::default(),
                 id: i as u32 + 1,
                 control: ToolbarControl::Command { command },
             });

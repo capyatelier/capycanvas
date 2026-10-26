@@ -302,6 +302,8 @@ impl PanelControl {
 pub struct ToolbarTile {
     pub id: u32,
     pub control: ToolbarControl,
+    #[serde(default)]
+    pub slider_style: crate::ToolbarSliderStyle,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -401,7 +403,7 @@ impl PanelConfig {
                         tiles: TOOLBAR_CONTROLS
                             .iter()
                             .enumerate()
-                            .map(|(index, &control)| ToolbarTile {
+                            .map(|(index, &control)| ToolbarTile { slider_style: Default::default(),
                                 id: index as u32 + 1,
                                 control,
                             })
@@ -555,6 +557,7 @@ pub enum CustomizationAction {
         group: Option<u32>,
     },
     SetToolOptionsStyle { panel: Panel, tile: u32, style: crate::ToolOptionsStyle },
+    SetSliderStyle { panel: Panel, tile: u32, style: crate::ToolbarSliderStyle },
     SetTileStyle {
         panel: Panel,
         style: TileStyle,
@@ -831,6 +834,20 @@ impl DockLayout {
                     entry(localization.text(MessageId::WORKSPACE_REMOVE_TOOL_MENU).to_string(), CustomizationAction::RemoveTool { panel, tile }),
                     entry(localization.text(MessageId::WORKSPACE_INSERT_TOOLS_MENU).to_string(), CustomizationAction::InsertTools { panel, before: Some(tile) }),
                 ]];
+                if t.control.slider().is_some() {
+                    let style = t.slider_style;
+                    sections.insert(0, [
+                        (MessageId::WORKSPACE_SLIDER_SHOW_VALUE, style.show_value,
+                            crate::ToolbarSliderStyle { show_value: !style.show_value, ..style }),
+                        (MessageId::WORKSPACE_SLIDER_EXPAND, style.expand,
+                            crate::ToolbarSliderStyle { expand: !style.expand, ..style }),
+                    ].into_iter().map(|(label, selected, style)| {
+                        let mut item = entry(localization.text(label).to_string(),
+                            CustomizationAction::SetSliderStyle { panel, tile, style });
+                        item.selected = Some(selected);
+                        item
+                    }).collect());
+                }
                 if let Some(style) = t.control.options_style() {
                     let mut choices = Vec::new();
                     for (label, text) in [(localization.text(MessageId::WORKSPACE_TOOL_OPTIONS_TEXT).to_string(), true), (localization.text(MessageId::WORKSPACE_TOOL_OPTIONS_ICONS).to_string(), false)] {
@@ -1551,6 +1568,7 @@ pub struct PanelControlView {
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct TileView {
+    pub slider_style: crate::ToolbarSliderStyle,
     pub double_click: bool,
     pub has_variants: bool,
     pub tears_bubble: bool,
@@ -1667,6 +1685,7 @@ pub(crate) fn panel_view(state: &UiState, panel: Panel, copy: &PanelCopy) -> Res
                 (choice,enabled,tooltip,tile.control)
             };
             Ok(TileView {
+                slider_style: tile.slider_style,
                 double_click: resolved_control.double_click_command().is_some(),
                 tears_bubble: crate::BubbleSource::tears_without_hold(tile.control),
                 has_variants: tile.control.has_variants(),
@@ -2134,6 +2153,14 @@ impl CustomizationState {
                 let tile = config.tiles_mut()?.iter_mut()
                     .find(|t| t.id == tile && t.control.options_style().is_some()).ok_or_else(|| localization.text(MessageId::WORKSPACE_REFUSAL_CUSTOMIZATION_CHOOSE_TOOL_OPTIONS).to_string())?;
                 tile.control = ToolbarControl::ToolOptions { style };
+                changed |= regions::LAYOUT;
+            }
+            SetSliderStyle { panel, tile, style } => {
+                let config = layout.panel_mut(panel)?;
+                let tile = config.tiles_mut()?.iter_mut()
+                    .find(|t| t.id == tile && t.control.slider().is_some())
+                    .ok_or_else(|| localization.text(MessageId::WORKSPACE_REFUSAL_CUSTOMIZATION_THE_TARGET_TOOL_NO_LONGER_EXISTS).to_string())?;
+                tile.slider_style = style;
                 changed |= regions::LAYOUT;
             }
             SetTileStyle { panel, style } => {
@@ -2782,7 +2809,7 @@ mod tests {
 
     #[test]
     fn toolbar_admission_preserves_numeric_size_reason_and_cold_diagnostic() {
-        let panel = PanelConfig { id: Panel::Toolbar, hide_tab: false, tile_style: Default::default(), zen: false, content: PanelContent::Toolbar { name: Some("literal {name} 🖌".into()), tiles: vec![ToolbarTile { id: 1, control: ToolbarControl::Size { tenths: 0 } }] } };
+        let panel = PanelConfig { id: Panel::Toolbar, hide_tab: false, tile_style: Default::default(), zen: false, content: PanelContent::Toolbar { name: Some("literal {name} 🖌".into()), tiles: vec![ToolbarTile { slider_style: Default::default(), id: 1, control: ToolbarControl::Size { tenths: 0 } }] } };
         let expected = crate::NumericError::Range { label: MessageId::TOOL_SETTING_SIZE.into(), min: 0.5, max: 2048.0 };
         assert_eq!(panel.validate_admission(), Err(crate::WorkspaceValidationError::Numeric(expected.clone())));
         assert_eq!(panel.validate().unwrap_err(), expected.code());

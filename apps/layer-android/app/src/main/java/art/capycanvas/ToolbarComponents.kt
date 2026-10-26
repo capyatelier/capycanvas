@@ -36,6 +36,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.*
 import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.*
 import androidx.compose.ui.window.Popup
@@ -141,15 +142,27 @@ private fun formatted(language: String, control: JSONObject, value: Float, units
             val setting = field?.getString("id") ?: if (opacity) "strength" else "size"
             val shown = formatted(host.languageTag, spec, value)
             val marks = model.array("bookmarks").objects()
-            val geometry = remember(width, height, vertical) { JSONArray(Native.toolbarUi(obj("type" to "slider_layout", "width" to width,
-                "height" to height, "axis" to if (vertical) "vertical" else "horizontal").toString(), host.languageTag)) }
+            val sliderStyle = tile.getJSONObject("slider_style")
+            val geometry = remember(width, height, vertical, style, sliderStyle.toString()) { JSONArray(Native.toolbarUi(obj("type" to "slider_layout", "width" to width,
+                "height" to height, "axis" to if (vertical) "vertical" else "horizontal", "style" to style, "slider_style" to sliderStyle).toString(), host.languageTag)) }
             var preview by remember { mutableStateOf(false) }
             val sample = rememberToolbarStamp(host, obj("type" to "toolbar_stamp", "context" to context), preview)
             val stamp = sample?.first
             val stampImage = sample?.second
-            Box(modifier) {
-                Box(Modifier.placed(geometry.getJSONObject(0), density).dragSource(dock, item, holdToDrag = true)
-                    .clickable(enabled = field != null) { preview = true }.testTag("slider-cap-$id"))
+            Box(modifier.pointerInput(item.toString()) {
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                    if (currentEvent.buttons.isSecondaryPressed) { down.consume(); dock.context(item) }
+                }
+            }) {
+                Box(Modifier.placed(geometry.getJSONObject(0), density).contextAnchor(dock, item).dragSource(dock, item, holdToDrag = true)
+                    .clickable(enabled = field != null) { preview = true }.testTag("slider-cap-$id"), contentAlignment = Alignment.Center) {
+                    if (sliderStyle.getBoolean("show_value")) {
+                        val readout = toolbarUi(host.languageTag, obj("type" to "slider_readout", "style" to style,
+                            "axis" to if (vertical) "vertical" else "horizontal", "control" to spec, "value" to value))
+                        SliderReadout(readout, if (dimensions.getBoolean("labeled")) model.getString("value_label") else null, field != null, id)
+                    }
+                }
                 ToolbarSlider(shown.number("fill"), marks, opacity, vertical, field != null, label,
                     Modifier.placed(geometry.getJSONObject(1), density).testTag("component-slider-$id"),
                     contact = { down, moved -> preview = down || !moved }) { fill, snap, travel ->
@@ -516,6 +529,48 @@ internal fun menuButtonWidth(caption: String, textWidth: (String) -> Float, dens
     }
 }
 
+@Composable private fun SliderReadout(readout: JSONObject, title: String?, enabled: Boolean, id: Int) {
+    val metrics = readout.getJSONObject("metrics")
+    val gap = metrics.number("gap").dp
+    val stacked = metrics.getBoolean("units_below")
+    val number = if (enabled) readout.getString("value") else ""
+    val unit = if (enabled) readout.getString("unit") else ""
+    val base = LocalTextStyle.current.copy(fontWeight = FontWeight.Normal, fontFeatureSettings = "tnum")
+    val titleStyle = base.copy(fontSize = base.fontSize * .75f, lineHeight = base.lineHeight * .75f)
+    val measurer = rememberTextMeasurer()
+    val density = LocalDensity.current
+    BoxWithConstraints(Modifier.fillMaxSize().padding(metrics.number("inset").dp).alpha(if (enabled) 1f else .4f), contentAlignment = Alignment.Center) {
+        val availableWidth = with(density) { maxWidth.toPx() }
+        val titleHeight = title?.let { measurer.measure(it, titleStyle).size.height + with(density) { gap.toPx() } } ?: 0f
+        val availableHeight = with(density) { maxHeight.toPx() } - titleHeight
+        val space = with(density) { gap.toPx() }
+        fun measure(scale: Float): Size {
+            val font = base.copy(fontSize = base.fontSize * scale, lineHeight = base.lineHeight * scale)
+            val sizes = listOf(number, unit).map { measurer.measure(it, font, softWrap = false, maxLines = 1).size }
+            return if (stacked) Size(sizes.maxOf { it.width }.toFloat(), sizes.sumOf { it.height }.toFloat() + space)
+                else Size(sizes.sumOf { it.width }.toFloat() + space, sizes.maxOf { it.height }.toFloat())
+        }
+        val normal = measure(1f)
+        var scale = minOf(1f, availableWidth.coerceAtLeast(1f) / normal.width.coerceAtLeast(1f), availableHeight.coerceAtLeast(1f) / normal.height.coerceAtLeast(1f))
+        for (pass in 0..3) {
+            val size = measure(scale)
+            val fit = minOf(1f, availableWidth.coerceAtLeast(1f) / size.width.coerceAtLeast(1f), availableHeight.coerceAtLeast(1f) / size.height.coerceAtLeast(1f))
+            if (fit >= 1f) break
+            scale *= fit
+        }
+        val font = base.copy(fontSize = base.fontSize * scale, lineHeight = base.lineHeight * scale)
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(gap)) {
+            if (title != null) Text(title, style = titleStyle, color = LocalPalette.current.text.copy(alpha = .65f), maxLines = 2, overflow = TextOverflow.Ellipsis)
+            @Composable fun Values() {
+                Text(number, Modifier.testTag("slider-value-$id"), style = font, maxLines = 1, softWrap = false)
+                Text(unit, Modifier.testTag("slider-unit-$id"), style = font, color = LocalPalette.current.text.copy(alpha = .65f), maxLines = 1, softWrap = false)
+            }
+            if (stacked) Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(gap)) { Values() }
+            else Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(gap)) { Values() }
+        }
+    }
+}
+
 @Composable private fun ToolbarSlider(fill: Float, marks: List<JSONObject>, opacity: Boolean, vertical: Boolean, enabled: Boolean,
     label: String, modifier: Modifier, contact: (Boolean, Boolean) -> Unit, change: (Float, Boolean, Float) -> Unit) {
     val onChange by rememberUpdatedState(change)
@@ -562,11 +617,7 @@ internal fun menuButtonWidth(caption: String, textWidth: (String) -> Float, dens
             clipPath(track) {
                 val bounds = Rect(-3 * unit, -wide, length + unit, wide)
                 if (opacity) {
-                    drawRect(colors.checkerLight, bounds.topLeft, bounds.size)
-                    val cell = 4 * unit
-                    for (col in -1..(length / cell).toInt() + 1) for (row in -2..1) if ((col + row) % 2 == 0)
-                        drawRect(colors.checkerDark, Offset(col * cell, row * cell), Size(cell, cell))
-                    drawRect(Brush.horizontalGradient(listOf(colors.text.copy(alpha = 0f), colors.text.copy(alpha = .65f)), 0f, length),
+                    drawRect(Brush.horizontalGradient(listOf(colors.text.copy(alpha = .06f), colors.text.copy(alpha = .28f)), 0f, length),
                         bounds.topLeft, bounds.size)
                 } else drawRect(colors.text.copy(alpha = .22f), bounds.topLeft, bounds.size)
             }

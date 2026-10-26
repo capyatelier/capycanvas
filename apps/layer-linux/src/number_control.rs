@@ -449,33 +449,7 @@ impl NumberControl {
         if show_unit {
             available -= unit_width;
         }
-        // Use the label's shaped text (including tabular digits), and verify
-        // the scaled glyphs: font hinting rounds individual glyph advances.
-        let layout = label.layout().copy();
-        layout.set_width(-1);
-        let base = layout
-            .attributes()
-            .and_then(|a| a.copy())
-            .unwrap_or_default();
-        base.change(gtk::pango::AttrFloat::new_scale(1.));
-        layout.set_attributes(Some(&base));
-        let text_width = layout.pixel_size().0.max(1);
-        let mut scale = (available as f64 / text_width as f64).min(1.);
-        loop {
-            let attrs = base.copy().unwrap();
-            attrs.change(gtk::pango::AttrFloat::new_scale(scale));
-            layout.set_attributes(Some(&attrs));
-            let overflow = layout.pixel_size().0 - available;
-            if overflow <= 0 || scale <= 0.01 {
-                break;
-            }
-            scale = (scale - (overflow as f64 / text_width as f64).max(0.01)).max(0.01);
-        }
-        if (imp.readout_scale.replace(scale) - scale).abs() > 0.001 {
-            let attrs = gtk::pango::AttrList::new();
-            attrs.insert(gtk::pango::AttrFloat::new_scale(scale));
-            label.set_attributes(Some(&attrs));
-        }
+        imp.readout_scale.set(fit_readout([label], [available, i32::MAX], 0, false, imp.readout_scale.get()));
     }
     pub fn set_slider_visible(&self, visible: bool) {
         if let Some(slider) = self.imp().slider.get() {
@@ -1454,4 +1428,48 @@ impl NumberControl {
             true
         } else { false }
     }
+}
+
+pub(crate) fn fit_readout<const N: usize>(labels: [&gtk::Label; N], available: [i32; 2], gap: i32, stacked: bool, previous: f64) -> f64 {
+    let layouts = labels.map(|label| {
+        let layout = label.layout().copy();
+        layout.set_width(-1);
+        let attributes = layout.attributes().and_then(|a| a.copy()).unwrap_or_default();
+        attributes.change(gtk::pango::AttrFloat::new_scale(1.));
+        layout.set_attributes(Some(&attributes));
+        (layout, attributes)
+    });
+    let fixed = [if stacked { 0 } else { gap * N.saturating_sub(1) as i32 },
+        if stacked { gap * N.saturating_sub(1) as i32 } else { 0 }];
+    let measure = || {
+        let sizes = layouts.each_ref().map(|(layout, _)| layout.pixel_size());
+        std::array::from_fn::<_, 2, _>(|axis| {
+            let spans = sizes.map(|(width, height)| if axis == 0 { width } else { height });
+            if stacked == (axis == 0) { spans.into_iter().max().unwrap_or(0) }
+            else { spans.into_iter().sum::<i32>() + fixed[axis] }
+        })
+    };
+    let standard = measure();
+    let mut scale = (0..2).map(|axis| ((available[axis] - fixed[axis]).max(1) as f64
+        / (standard[axis] - fixed[axis]).max(1) as f64).min(1.)).fold(1., f64::min);
+    loop {
+        for (layout, attributes) in &layouts {
+            let scaled = attributes.copy().unwrap();
+            scaled.change(gtk::pango::AttrFloat::new_scale(scale));
+            layout.set_attributes(Some(&scaled));
+        }
+        let measured = measure();
+        let overflow = (0..2).map(|axis| (measured[axis] - available[axis]).max(0) as f64
+            / (standard[axis] - fixed[axis]).max(1) as f64).fold(0., f64::max);
+        if overflow <= 0. || scale <= 0.01 { break; }
+        scale = (scale - overflow.max(0.01)).max(0.01);
+    }
+    if (previous - scale).abs() > 0.001 {
+        for label in labels {
+            let attributes = gtk::pango::AttrList::new();
+            attributes.insert(gtk::pango::AttrFloat::new_scale(scale));
+            label.set_attributes(Some(&attributes));
+        }
+    }
+    scale
 }

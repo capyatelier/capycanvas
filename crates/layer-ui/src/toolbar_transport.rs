@@ -32,6 +32,14 @@ pub enum ToolbarUiRequest {
         width: f32,
         height: f32,
         axis: Axis,
+        style: TileStyle,
+        slider_style: ToolbarSliderStyle,
+    },
+    SliderReadout {
+        style: TileStyle,
+        axis: Axis,
+        control: NumericControl,
+        value: f64,
     },
     SliderSpec {
         control: ToolbarControl,
@@ -121,8 +129,14 @@ pub fn toolbar_ui(request: ToolbarUiRequest, localizer: &Localizer) -> Result<se
             width,
             height,
             axis,
+            style,
+            slider_style,
         } => {
-            json!(toolbar_slider_layout(width, height, axis))
+            json!(toolbar_slider_styled_layout(width, height, axis, style, slider_style))
+        }
+        ToolbarUiRequest::SliderReadout { style, axis, control, value } => {
+            let text = control.compact_value(value);
+            json!({"value":text, "unit":control.unit, "metrics":toolbar_slider_readout_metrics(style, axis, &text)})
         }
         ToolbarUiRequest::SliderSpec { control } => {
             json!(control.slider().ok_or("Not a slider")?.numeric())
@@ -158,6 +172,26 @@ pub fn toolbar_ui(request: ToolbarUiRequest, localizer: &Localizer) -> Result<se
             DrawerPlacement { bounds: anchor, anchor, direction, columns: Vec::new() }.source_corners(container)
         ),
     })
+}
+
+#[test]
+fn slider_queries_publish_styled_geometry_and_unit_placement() {
+    let localizer = Localizer::shared(UiLanguage::English);
+    let control = ToolbarNumericBinding::BrushSize.numeric();
+    for style in [TileStyle::Small, TileStyle::Medium, TileStyle::Large, TileStyle::MediumLabeled, TileStyle::Labeled] {
+        for axis in [Axis::Horizontal, Axis::Vertical] {
+            for value in [24., 99., 100., 430., 2048.] {
+                let readout = toolbar_ui(ToolbarUiRequest::SliderReadout { style, axis, control: control.clone(), value }, &localizer).unwrap();
+                assert_eq!(readout["value"], control.compact_value(value));
+                assert_eq!(readout["unit"], "px");
+                assert_eq!(readout["metrics"]["units_below"], axis == Axis::Vertical
+                    && (style == TileStyle::Small || (style == TileStyle::Medium && value >= 100.)));
+            }
+            let slider_style = ToolbarSliderStyle { show_value: true, expand: true };
+            let bounds = toolbar_ui(ToolbarUiRequest::SliderLayout { width: 400., height: 400., axis, style, slider_style }, &localizer).unwrap();
+            assert_eq!(bounds, serde_json::to_value(toolbar_slider_styled_layout(400., 400., axis, style, slider_style)).unwrap());
+        }
+    }
 }
 
 #[test]

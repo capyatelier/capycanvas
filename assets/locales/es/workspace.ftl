@@ -634,3 +634,6 @@ diagnostics-fps = FPS
 diagnostics-fps-description = Presentaciones del lienzo en el último segundo, incluidos el desplazamiento y el zoom en caché. No mide la latencia de entrada.
 diagnostics-submitted-fps = FPS enviados
 diagnostics-submitted-fps-description = Fotogramas del lienzo enviados en el último segundo. No se dispone del tiempo de presentación en pantalla.
+
+workspace-slider-show-value = Mostrar valor
+workspace-slider-expand = Expandir al espacio disponible

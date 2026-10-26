@@ -1505,9 +1505,13 @@ button.new-drawing-preset.disabled { opacity:.4; }
 /* Standalone brush tracks keep their value in the transient stamp preview. */
 .toolbar-slider { width: 100%; height: 100%; position: relative; }
 .toolbar-slider .toolbar-slider-cap { position: absolute; min-width: 0; min-height: 0; padding: 0; background: transparent; }
+.toolbar-slider-readout { display: flex; flex-direction: column; align-items: center; justify-content: center; font-weight: 400; }
+.toolbar-slider-value-row { display: flex; align-items: center; width: max-content; line-height: 1.2; font-variant-numeric: tabular-nums; }
+.toolbar-slider-unit, .toolbar-slider-title { opacity: .65; }
+.toolbar-slider-title { font-size: calc(var(--ui-text-size) * .75); line-height: 1.2; }
 .toolbar-slider .number-track { position: absolute; min-width: 0; min-height: 0; margin: 0; }
 .toolbar-slider .number-track::before { content: ''; position: absolute; inset: 0; clip-path: var(--track-shape); background: color-mix(in srgb, var(--text) 22%, transparent); pointer-events: none; }
-.toolbar-slider.opacity-track .number-track::before { background: linear-gradient(to right, transparent, color-mix(in srgb, var(--text) 65%, transparent)), repeating-conic-gradient(var(--checker-dark) 0 25%,var(--checker-light) 0 50%) 2px 6px / 8px 8px; }
+.toolbar-slider.opacity-track .number-track::before { background: linear-gradient(to right, color-mix(in srgb, var(--text) 6%, transparent), color-mix(in srgb, var(--text) 28%, transparent)); }
 .toolbar-slider input.number-slider { appearance: none; border: 0; padding: 0; background: transparent; position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; touch-action: none; }
 .toolbar-slider input.number-slider::-webkit-slider-runnable-track { height: 28px; background: transparent; }
 .toolbar-slider input.number-slider::-webkit-slider-thumb { width: 12px; height: 28px; margin: 0; background: transparent; border: none; box-shadow: none; }
@@ -1516,7 +1520,7 @@ button.new-drawing-preset.disabled { opacity:.4; }
 .toolbar-slider-thumb { position: absolute; left: calc((100% - 12px) * var(--position)); top: 0; width: 12px; height: 28px; border: 1px solid color-mix(in srgb, var(--text) 60%, transparent); border-radius: calc(6px * var(--corner-fit)); background: var(--thumb); pointer-events: none; }
 .toolbar-slider-marks { position: absolute; inset: 0; pointer-events: none; }
 .toolbar-slider-mark { position: absolute; left: calc(6px + (100% - 12px) * var(--position)); top: 7px; height: 14px; width: 2px; transform: translateX(-50%); background: var(--text); border-radius: 1px; }
-.vertical-component .toolbar-slider.opacity-track .number-track::before { background: linear-gradient(to top, transparent, color-mix(in srgb, var(--text) 65%, transparent)), repeating-conic-gradient(var(--checker-dark) 0 25%,var(--checker-light) 0 50%) 6px 2px / 8px 8px; }
+.vertical-component .toolbar-slider.opacity-track .number-track::before { background: linear-gradient(to top, color-mix(in srgb, var(--text) 6%, transparent), color-mix(in srgb, var(--text) 28%, transparent)); }
 .vertical-component .toolbar-slider input.number-slider::-webkit-slider-runnable-track { width: 28px; height: 100%; }
 .vertical-component .toolbar-slider input.number-slider::-webkit-slider-thumb { width: 28px; height: 12px; }
 .vertical-component .toolbar-slider input.number-slider::-moz-range-thumb { width: 28px; height: 12px; }

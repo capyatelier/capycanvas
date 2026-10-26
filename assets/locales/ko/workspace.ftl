@@ -657,3 +657,6 @@ diagnostics-fps = FPS
 diagnostics-fps-description = 최근 1초 동안 표시된 캔버스 프레임 수입니다. 캐시를 사용한 이동과 확대/축소를 포함합니다. 입력 지연이 아닙니다.
 diagnostics-submitted-fps = 제출 FPS
 diagnostics-submitted-fps-description = 최근 1초 동안 제출된 캔버스 프레임 수입니다. 화면에 표시된 시각은 확인할 수 없습니다.
+
+workspace-slider-show-value = 값 표시
+workspace-slider-expand = 공간에 맞게 확장

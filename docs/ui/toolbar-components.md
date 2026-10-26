@@ -13,7 +13,9 @@ They are not title-bar items.
 
 Sketch centers Size and Strength in a compact toolbar on the left edge. Photo appends
 Tool Options to its top commands toolbar, where it takes the remaining lane width.
-Paint uses neither. See [default workspaces](default-workspaces.md#arrangements).
+Paint registers a separate Brush controls toolbar. Tablets show it below their
+two-column tool grid, with values visible and both sliders expanded; desktop
+Paint keeps it hidden. See [default workspaces](default-workspaces.md#arrangements).
 
 ## Numeric controls
 
@@ -21,12 +23,31 @@ Sliders occupy one lane and prefer four tiles of length, including tile gaps.
 They work horizontally or vertically; vertical values increase upward. They
 follow the active tool’s Size or Strength setting and disable when unavailable.
 Multiple instances and existing panels share the same state and preset memory.
-Size tracks widen toward larger values; percentage tracks use a gradient over
-a checkerboard. Both orientations use equal end padding. Every host draws
-GTK's track: 6px end insets, rounded tapered ends, the theme text color at 22%
-for size, and a 0–65% text-color gradient over the shared white/gray transparency
-checkerboard for percentage controls. A 12×28px squircle thumb uses a 60% text border. The tracks have no
-persistent numeric readout. Dragging opens a rounded floating stamp preview
+Size tracks widen toward larger values. Both orientations use equal end padding:
+6px end insets and rounded ends, with the theme text color at 22% for size.
+Strength tracks use a quiet gradient of the theme text color.
+A 12×28px squircle thumb uses a 60% text border. The tracks have no
+persistent numeric readout by default. Each slider's context menu offers
+**Show value** and **Expand to fit**, independently for each copy. Show value adds
+a number and its unit above a vertical track, or before a horizontal track.
+Small vertical sliders put `px` or `%` below the number. Medium vertical sliders
+also stack the unit when the value has three or more digits; shorter values and
+other presentations keep them together on one line. The standard font size is
+retained whenever it fits.
+Numbers and units shrink together only as needed, using native glyph measurements,
+with a 6-pixel content inset and the shared compound gap between them. Small and
+Medium vertical headers reserve two control rows; horizontal headers reserve enough
+width for the value and unit. Both sliders present the value directly, without a tip preview, extra
+graphic, color or text shadow. The headers use the toolbar's existing surface
+and normal typography, without inset cards, borders or value badges.
+Labeled styles put the short setting name above the value.
+Expand to fit gives the slider the available space in its toolbar row or lane.
+Two vertical sliders in the same row stretch together when both use it. Place
+them in a floating toolbar two tiles wide, resize its height, and enable both
+options to make a pair of tall Size and Strength controls. The defaults keep
+their compact length. Secondary-click the track or cap to open the menu;
+touch and pen hold the cap. Holding the track keeps editing its value.
+Dragging opens a rounded floating stamp preview
 beside the slider, updates it continuously, and
 closes it on release or cancellation. A tap keeps the preview open until an
 outside tap or context change. The preview has the toolbar's tile radius and
@@ -54,6 +75,7 @@ buffer directly; Web receives an ImageBitmap from its image-preparation worker.
 Windows workers fill an unpublished bitmap buffer; the UI publishes the completed
 image.
 Idle metadata polling neither redraws the popup nor submits more GPU work.
+Unavailable tools clear their persistent numeric readouts.
 
 The preview's plus button bookmarks the value for that brush preset; the minus
 button removes an existing mark. Marks are short lines perpendicular to the
@@ -212,6 +234,12 @@ The bar stacks on narrow side toolbars and moves into overflow as a whole.
   toolbars and retained drawers. `toolbar_transport.rs` exposes stateless fitting,
   numeric metadata and formatting queries to Wasm, JNI and `capy_apple_toolbar_ui`;
   pointer timing/capture and font measurement stay native.
+  `slider_layout` receives the tile and slider styles; `slider_readout` publishes
+  the formatted value, unit, spacing and unit placement. Every host measures its
+  native font, keeps the standard size when it fits, and shrinks the value and
+  unit together inside the shared content insets. Windows uses the same queries
+  through `ToolbarComponents.cpp`. Toolbar structure caches include each copy's
+  display preferences.
   The `choice_style` query resolves labeled choices to the shared Small tile
   metrics, independently of the surrounding toolbar style. GTK calls the same
   `tool_choice_style` helper directly. Captions and checkbox text retain native
@@ -223,7 +251,7 @@ The bar stacks on narrow side toolbars and moves into overflow as a whole.
   retain the resulting image until a newer request completes.
 - Numeric values, native measurements and overflow visibility are not saved in
   toolbar configuration. Typed component kinds, horizontal text/icon mode, slider visibility, and ordinary
-  tile IDs persist. Preferences participate in workspace undo/redo.
+tile IDs and per-slider display choices persist. Preferences participate in workspace undo/redo.
 
 Slider tracks and option controls respond immediately to mouse, touch and pen.
 Press, hold, then drag the slider’s empty leading cap or the options More button to
@@ -256,13 +284,26 @@ private Mutter display with `--native-test=` and one of these tests from
 - `native_toolbar_components_drawer_input`, `native_toolbar_options_presentation_input`,
   `native_toolbar_visual_audit_input`, `native_toolbar_value_controls_input`,
   `native_toolbar_rows_input`.
+- `native_toolbar_slider_display_input`: secondary track menus, held cap menus,
+  saved display choices, equal-height side-by-side sliders, live numeric readouts,
+  mouse/touch input and unavailable tools in both themes. The
+  `native_toolbar_slider_display_pen_input` variant uses `--tablet`. Set
+  `LAYER_SLIDER_DISPLAY_MOTION=1 LAYER_NATIVE_EVENT_MS=4` on the mouse/touch journey for three sustained
+  presentation measurements per slider and theme. Reference-tier measurements
+  remain required before claiming the frame-rate targets.
+- `native_toolbar_slider_design_gallery`: both orientations in Small, Medium,
+  Large and both labeled styles, light/dark themes, red/blue/white/black paint,
+  and minimum/maximum sizes. It captures the whole workspace and individual
+  toolbar details; `LAYER_TEST_ARTIFACTS` selects the output directory.
 
 Set `LAYER_NATIVE_TEST_EXECUTABLE` to the release test binary when iterating.
 Web runs `tools/performance/workspace-motion.sh web --toolbar-components`, including
-inline transform completion in both themes, or
+the slider display matrix and inline transform completion in both themes, or
 `apps/layer-web/device.test.mjs --toolbar-components` on a tablet. Android runs
 `AndroidInteractionTest#toolbarComponentsAcrossDevicesAndLayouts` and
-`#toolbarEditorsAndOverflow`. Apple runs the `toolbar_component` tests in
+`#toolbarEditorsAndOverflow` and `#toolbarSliderReadoutsAndTabletPaint`. The latter
+checks the default tablet Paint stack and value/unit margins at all five tile
+styles, both orientations and both themes. Apple runs the `toolbar_component` tests in
 `cargo test --locked -p layer-apple --target aarch64-apple-darwin --lib` and the
 `testToolbarComponents` journey on macOS and iPad.
 

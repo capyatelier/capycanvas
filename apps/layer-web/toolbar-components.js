@@ -102,6 +102,7 @@ export function createToolbarComponent({ app, tile, view, element, button, icon,
   const clear = (app.toolbar_ui({ type: 'style', style: 'small' }).size[1] - controlHeight) / 2;
   root.style.setProperty('--field-clear', `${clear}px`);
   const preferences = tile.control.style || { text: true, sliders: true };
+  let sliderPreferences = tile.slider_style;
   const standalone = tile.control.kind !== 'tool_options';
   const copy = liveCopy(app, 'catalog').native_copy.tool_controls;
   let copyKey = copy.more_options, copyChanged = false;
@@ -124,6 +125,9 @@ export function createToolbarComponent({ app, tile, view, element, button, icon,
     const row = element('div', `toolbar-slider ${field.id !== 'size' ? 'opacity-track' : 'size-track'}`);
     const cap = button('', show, 'toolbar-slider-cap'); cap.title = field.label; cap.setAttribute('aria-label', field.label);
     target(cap, item); draggable(cap, item);
+    const readout = element('span', 'toolbar-slider-readout'), title = element('span', 'toolbar-slider-title');
+    const valueRow = element('span', 'toolbar-slider-value-row'), valueLabel = element('span', 'toolbar-slider-value'), unit = element('span', 'toolbar-slider-unit');
+    valueRow.append(valueLabel, unit); readout.append(title, valueRow); cap.append(readout);
     const track = element('div', 'number-track'), slider = element('input', 'number-slider');
     slider.type = 'range'; slider.min = 0; slider.max = 1; slider.step = 'any'; slider.setAttribute('aria-label', field.label);
     const marks = element('div', 'toolbar-slider-marks'), thumb = element('div', 'toolbar-slider-thumb');
@@ -219,7 +223,7 @@ export function createToolbarComponent({ app, tile, view, element, button, icon,
         const line = element('span', 'toolbar-slider-mark'); line.classList.toggle('selected', mark.selected);
         line.style.setProperty('--position', mark.selected ? fill : mark.fill); return line;
       }));
-      track.style.setProperty('--position', fill); paintPreview(); refreshPreview();
+      track.style.setProperty('--position', fill); updateReadout(); paintPreview(); refreshPreview();
     }
     slider.addEventListener('pointerdown', e => {
       if (e.button || slider.disabled || contact) return;
@@ -245,12 +249,36 @@ export function createToolbarComponent({ app, tile, view, element, button, icon,
     function orient() {
       slider.style.writingMode = vertical ? 'vertical-lr' : ''; slider.style.direction = vertical ? 'rtl' : '';
       slider.setAttribute('aria-orientation', vertical ? 'vertical' : 'horizontal');
-      const [capBounds, trackBounds] = app.toolbar_ui({ type: 'slider_layout', width: extent[0], height: extent[1], axis: vertical ? 'vertical' : 'horizontal' });
+      const [capBounds, trackBounds] = app.toolbar_ui({ type: 'slider_layout', width: extent[0], height: extent[1], axis: vertical ? 'vertical' : 'horizontal', style: tileStyle, slider_style: sliderPreferences });
       place(cap, capBounds);
       const along = Math.max(0, (vertical ? trackBounds.height : trackBounds.width) - 4);
       place(track, vertical ? { ...trackBounds, x: (extent[0] - 28) / 2, y: trackBounds.y + 2, width: 28, height: along }
         : { ...trackBounds, x: trackBounds.x + 2, y: (extent[1] - 28) / 2, width: along, height: 28 });
       track.style.setProperty('--track-shape', trackShape(along - 12, field.id !== 'size' ? 8 : 2.5));
+      updateReadout();
+    }
+    function updateReadout() {
+      readout.hidden = !sliderPreferences.show_value;
+      if (readout.hidden) return;
+      const presentation = app.toolbar_ui({type:'slider_readout', style:tileStyle, axis:vertical?'vertical':'horizontal', control:field.numeric, value:current});
+      const {inset, gap, units_below} = presentation.metrics;
+      title.hidden = !style.labeled; title.textContent = model.value_label;
+      valueLabel.textContent = model.numeric ? presentation.value : ''; unit.textContent = model.numeric ? presentation.unit : '';
+      readout.style.gap = valueRow.style.gap = `${gap}px`;
+      valueRow.style.flexDirection = units_below ? 'column' : 'row';
+      if (!extent[0] || !extent[1]) return;
+      const standard = parseFloat(getComputedStyle(root).fontSize);
+      valueRow.style.fontSize = `${standard}px`;
+      const available = [Math.max(1, cap.clientWidth - 2*inset), Math.max(1, cap.clientHeight - 2*inset - (title.hidden ? 0 : title.getBoundingClientRect().height + gap))];
+      const natural = valueRow.getBoundingClientRect();
+      let scale = Math.min(1, available[0]/Math.max(1,natural.width), available[1]/Math.max(1,natural.height));
+      for (let pass=0; pass<4; pass++) {
+        valueRow.style.fontSize = `${standard*scale}px`;
+        const measured = valueRow.getBoundingClientRect();
+        const fit = Math.min(1, available[0]/Math.max(1,measured.width), available[1]/Math.max(1,measured.height));
+        if (fit >= 1) break;
+        scale *= fit;
+      }
     }
     function trackShape(length, narrow) {
       if (length < 4) return 'none';
@@ -376,8 +404,9 @@ export function createToolbarComponent({ app, tile, view, element, button, icon,
   }
   root.updateComponent = next => {
     const value = next.component;
+    sliderPreferences = next.slider_style;
     copyChanged = copyKey !== copy.more_options; copyKey = copy.more_options;
-    const nextSchema = key([value.context, value.numeric && { ...fieldSemantic(value.numeric), value: 0 }, value.options.map(o => o.Gradient ? {Gradient:o.Gradient.gradient.destination} : o.Range ? {Range:{...semantic(o.Range),bounds:o.Range.bounds.map(f=>({...fieldSemantic(f),value:0}))}} : o.Numeric ? { Numeric: { ...fieldSemantic(o.Numeric), value: 0 } } : o.Choice ? { Choice: { ...semantic(o.Choice), items: o.Choice.items.map(i => ({ ...semantic(i), selected: false })) } } : { Action: { ...o.Action, state: { ...semantic(o.Action.state), selected: false, enabled: true } } })]);
+    const nextSchema = key([sliderPreferences, value.context, value.numeric && { ...fieldSemantic(value.numeric), value: 0 }, value.options.map(o => o.Gradient ? {Gradient:o.Gradient.gradient.destination} : o.Range ? {Range:{...semantic(o.Range),bounds:o.Range.bounds.map(f=>({...fieldSemantic(f),value:0}))}} : o.Numeric ? { Numeric: { ...fieldSemantic(o.Numeric), value: 0 } } : o.Choice ? { Choice: { ...semantic(o.Choice), items: o.Choice.items.map(i => ({ ...semantic(i), selected: false })) } } : { Action: { ...o.Action, state: { ...semantic(o.Action.state), selected: false, enabled: true } } })]);
     const sliderField = () => value.numeric || { id: tile.control.kind === 'brush_size_slider' ? 'size' : 'strength', label: next.label, numeric: app.toolbar_ui({ type: 'slider_spec', control: tile.control }), value: 0.5 };
     model = value;
     if (nextSchema !== schema) {

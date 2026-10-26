@@ -634,3 +634,6 @@ diagnostics-fps = FPS
 diagnostics-fps-description = Canvas presentations in the last second, including cached pan and zoom. Not input latency.
 diagnostics-submitted-fps = Submitted FPS
 diagnostics-submitted-fps-description = Canvas frames submitted in the last second. Display presentation timing is unavailable.
+
+workspace-slider-show-value = Show value
+workspace-slider-expand = Expand to fit
