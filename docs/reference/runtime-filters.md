@@ -647,9 +647,9 @@ apply to final output, not independently to every intermediate pass.
 - The native packager ships editable resources in
   `dist/capycanvas-linux/share/capycanvas/filters`; custom packages can be added without rebuilding.
   Shipped built-in resources must match the executable.
-- Web and Android use the shared embedded catalog, without duplicate filter
-  manifests or shaders in the Web asset tree; runtime packages load on GTK
-  and Windows (`CAPY_FILTERS_DIR`) and from the Apple bundle.
+- Web, Android and Apple use the shared embedded catalog, without duplicate
+  filter manifests or shaders in their host asset trees. Runtime packages load
+  on GTK and Windows (`CAPY_FILTERS_DIR`).
 
 See [the Tent Blur package](../../examples/filters/tent-blur/README.md) and
 [web packaging](../development/web-packaging.md). All shaders added here are original code;
