@@ -162,8 +162,8 @@ try{
  Wait-Until {$c=Camera;$b=(Control 'drawing-canvas').Current.BoundingRectangle;[Math]::Abs($c.viewport[0]-$b.Width) -lt .1 -and $b.Width -gt 1600} 'Maximized canvas did not settle'
  Use-PaintWorkspace
  if(@((Model).layout.groups|Where-Object active -eq 'layers').Count){Invoke 'column-icon-layers';Wait-Until {@((Model).layout.groups|Where-Object active -eq 'layers').Count -eq 0} 'Column did not close for gesture space'}
- Fit-Canvas;Select-Tool 'pen';Start-Sleep -Milliseconds 200
- Wait-Until {(Model).canvas_ready -and !(Model).state.document_file.busy} 'Canvas did not settle before input'
+ Fit-Canvas;Select-Tool 'pen'
+ Wait-Until {(Model).canvas_ready -and (Model).brush_ready -and !(Model).state.document_file.busy} 'Canvas and selected pen did not settle before input'
  $area=(Camera).work_area
  $bounds=(Control 'drawing-canvas').Current.BoundingRectangle
  $cx=[int]($bounds.X+$area[0]+$area[2]/2);$cy=[int]($bounds.Y+$area[1]+$area[3]/2)

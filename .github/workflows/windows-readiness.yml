@@ -77,7 +77,7 @@ jobs:
           using System.ComponentModel;
           using System.Runtime.InteropServices;
           public static class CapyVmDisplay {
-            const uint UseBitsPerPixel=0x40000, UseWidth=0x80000, UseHeight=0x100000, Fullscreen=4;
+            const uint UseBitsPerPixel=0x40000, UseWidth=0x80000, UseHeight=0x100000, TestMode=2, Fullscreen=4;
             [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
             public struct Mode {
               [MarshalAs(UnmanagedType.ByValTStr, SizeConst=32)] public string DeviceName;
@@ -101,12 +101,21 @@ jobs:
               return mode;
             }
             public static void SetSize(uint width, uint height) {
-              var mode=Current();mode.Fields=UseBitsPerPixel|UseWidth|UseHeight;
-              mode.BitsPerPixel=32;mode.Width=width;mode.Height=height;
-              int result=ChangeDisplaySettingsEx(null,ref mode,IntPtr.Zero,Fullscreen,IntPtr.Zero);
+              var best=new Mode();string available="";
+              for(int index=0;;index++) {
+                var candidate=new Mode { Size=(ushort)Marshal.SizeOf(typeof(Mode)) };
+                if(!EnumDisplaySettings(null,index,ref candidate))break;
+                available+=candidate.Width+"x"+candidate.Height+"@"+candidate.BitsPerPixel+" ";
+                if(candidate.BitsPerPixel!=32||candidate.Width<1920||candidate.Height<1080||candidate.Width>width||candidate.Height>height)continue;
+                candidate.Fields=UseBitsPerPixel|UseWidth|UseHeight;
+                if(ChangeDisplaySettingsEx(null,ref candidate,IntPtr.Zero,TestMode,IntPtr.Zero)!=0)continue;
+                if((ulong)candidate.Width*candidate.Height>(ulong)best.Width*best.Height)best=candidate;
+              }
+              if(best.Width==0)throw new InvalidOperationException("VM has no supported GUI fixture display of at least 1920x1080. Available: "+available);
+              int result=ChangeDisplaySettingsEx(null,ref best,IntPtr.Zero,Fullscreen,IntPtr.Zero);
               if(result!=0)throw new InvalidOperationException("VM display mode rejected: "+result);
-              mode=Current();
-              if(mode.Width!=width||mode.Height!=height)throw new InvalidOperationException("VM display size did not change");
+              var mode=Current();
+              if(mode.Width!=best.Width||mode.Height!=best.Height)throw new InvalidOperationException("VM display size did not change");
               Console.WriteLine("VM display: "+mode.Width+"x"+mode.Height+", "+mode.BitsPerPixel+" bpp");
             }
           }
