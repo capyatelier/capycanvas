@@ -3427,6 +3427,7 @@ measurements remain required.
 | --- | --- | --- | --- |
 | M2 Pro Mac mini, 90 Hz: drawing profiles | Not measured | Not measured | Unqualified; current optimized comparison required |
 | M4 iPad Pro, 120 Hz: drawing profiles | Not measured | Not measured | Unqualified; current optimized comparison required |
+| M4 iPad Pro, 120 Hz: reference-photo G-Pen, 2048 px, light / dark | 109.576 / 109.743 completed and fresh updates/s lower bounds | 16.667 / 16.667 ms completion gaps | **Not met:** below 120 completed and fresh updates/s |
 | Mac: Palette resize, light and dark | Not measured | Not measured | Unqualified; current optimized measurement required |
 | Mac and iPad: layer scrolling and drawer transitions, light and dark | Not measured | Not measured | Unqualified; current motion measurements required |
 | M2 Pro Mac: brush-size stamp preview, light | Longest unchanged or unsampled interval: 92.44 ms; prior 1,244.49 ms | Not measured | Four original six-second continuity checks pass; presentation rate unqualified |
@@ -3438,6 +3439,17 @@ coverage and collector limitations with each result. Use the
 frames and renderer submissions; a shared geometry poll is not a native frame.
 Synthetic documents and renderer-only rates do not qualify the reference tier
 or physical input latency.
+
+The 2026-10-25 M4 run uses the normal Release build with the residency fix
+`20dfdae69` and Apple UI work around `6c9cb48ca`. The 9504 × 6336 reference photo
+is at Fit with an empty active paint layer, hidden Paper, and G-Pen at 2048 px.
+Each theme runs three six-second contacts at pressure 1 and 240 samples/s; all
+4320 samples were accepted and thermal state stayed at 0. GPU queue-span p95 is
+7.758 ms in light and 7.601 ms in dark, with 13 and 11 missing GPU samples.
+Raw traces and reports are in
+`artifacts/apple/port-current/finish-20261025/m4-gpen-after/`.
+The earlier run was 109.020 updates/s in both themes; the current source changes
+do not isolate the effect of the residency fix. The 120 updates/s target is missed.
 
 The 2026-10-24 Apple bubble diagnostic uses a Release build on the non-reference
 M2 Pro Mac at 90 Hz, the prescribed 9504 × 6336 photo at Fit, an empty selected
