@@ -1,6 +1,7 @@
 import Foundation
 
 enum ToolbarUI {
+    static let metrics = resolve(["type": "metrics"])
     static func resolve(_ request: [String: Any], language: String = "en") -> JSON {
         do {
             let text = try JSON(["language": language, "request": request]).encoded()

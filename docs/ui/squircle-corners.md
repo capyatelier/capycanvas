@@ -11,6 +11,10 @@ the former 8–10px circular corners.
 
 ## Radii
 
+Apple reads the shared surface and control radii through the stateless toolbar
+metrics query. The same query supplies layer edge insets and divider geometry;
+divider lines grow across their allocated slot with the shared end insets.
+
 - **Tiles** use half their shorter side: square tiles become full squircles and
   labeled tiles become squircle capsules. Title-bar tools, readouts and
   document tabs follow the same rule with the header tile; menu labels, the

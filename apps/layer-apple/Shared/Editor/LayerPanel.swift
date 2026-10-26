@@ -352,7 +352,7 @@ private struct LayerButton: View {
     }
 }
 
-let layerEdgeInset: CGFloat = 6
+let layerEdgeInset = CGFloat(ToolbarUI.metrics["layer_edge_inset"].number)
 
 private struct LayerRow: View {
     @State private var rowCaption = ""

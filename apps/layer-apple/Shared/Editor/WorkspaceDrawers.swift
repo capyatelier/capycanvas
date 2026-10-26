@@ -61,7 +61,7 @@ private struct WorkspaceCollapsedColumnContent: View {
                         let group = column["groups"][index], panels = self.panels[index]
 
                         if index > 0 {
-                            ToolbarDivider(vertical: true, length: store.barMetrics.dividerLength, color: palette["text"].opacity(0.3))
+                            ToolbarDivider(vertical: true, color: palette["text"].opacity(0.3))
                                 .placed(JSON(group["divider"].rect.offsetBy(dx: -clip.rect.minX, dy: -clip.rect.minY + offset)))
                                 .allowsHitTesting(false).accessibilityHidden(true)
                         }

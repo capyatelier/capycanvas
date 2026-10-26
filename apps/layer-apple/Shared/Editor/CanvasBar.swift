@@ -120,7 +120,7 @@ private struct PlacedCanvasBar: View {
             ControlInput(contact: { _ in }).frame(width: width, height: metrics.tile)
                 .overlay(alignment: .leading) {
                     if let dividerInset {
-                        ToolbarDivider(vertical: false, length: metrics.dividerLength, color: palette["text"].opacity(0.3))
+                        ToolbarDivider(vertical: false, color: palette["text"].opacity(0.3))
                             .frame(width: BarMetrics.dividerSlot, height: metrics.tile)
                             .offset(x: dividerInset).allowsHitTesting(false)
                     }

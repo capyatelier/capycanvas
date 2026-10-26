@@ -444,13 +444,13 @@ typealias ToolOptionEdit = (Any, @escaping @MainActor (String?) -> Void) -> Void
 private let captionPadding: CGFloat = 10, captionGap: CGFloat = 6, choicePadding: CGFloat = 8, chevronSize: CGFloat = 12, gridCell: CGFloat = 18
 
 struct BarMetrics {
-    static let dividerSlot: CGFloat = 8, captionLeading: CGFloat = 12, captionTrailing: CGFloat = 8, textPadding: CGFloat = 10
+    static let dividerSlot = CGFloat(ToolbarUI.metrics["divider"]["size"].number)
+    static let captionLeading: CGFloat = 12, captionTrailing: CGFloat = 8, textPadding: CGFloat = 10
     let tile: CGFloat
     let gap: CGFloat
     let icon: CGFloat
     let control: CGFloat
     var clear: CGFloat { (tile - control) / 2 }
-    var dividerLength: CGFloat { tile / 2 }
 }
 
 extension EditorStore {
@@ -463,11 +463,11 @@ extension EditorStore {
 
 struct ToolbarDivider: View {
     let vertical: Bool
-    let length: CGFloat
     let color: Color
     var body: some View {
         Rectangle().fill(color)
-            .frame(width: vertical ? length : 1, height: vertical ? 1 : length)
+            .frame(width: vertical ? nil : 1, height: vertical ? 1 : nil)
+            .padding(vertical ? .horizontal : .vertical, CGFloat(ToolbarUI.metrics["divider"]["inset"].number))
             .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }

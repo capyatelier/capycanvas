@@ -6,6 +6,7 @@ use serde::Deserialize;
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ToolbarUiRequest {
+    Metrics,
     SliderPreview {
         control: ToolbarControl,
         style: TileStyle,
@@ -77,6 +78,12 @@ pub fn toolbar_number(request: NumericRequest, compact: bool, units: bool) -> Re
 pub fn toolbar_ui(request: ToolbarUiRequest, localizer: &Localizer) -> Result<serde_json::Value, String> {
     use serde_json::json;
     Ok(match request {
+        ToolbarUiRequest::Metrics => json!({
+            "surface_radius": SURFACE_RADIUS,
+            "panel": PANEL_CONTROL_METRICS,
+            "layer_edge_inset": LAYER_EDGE_INSET,
+            "divider": {"size": TOOLBAR_DIVIDER_SIZE, "length": DIVIDER_LENGTH, "inset": TOOLBAR_DIVIDER_INSET},
+        }),
         ToolbarUiRequest::SliderPreview {
             control,
             style,
@@ -204,4 +211,16 @@ fn labeled_choices_keep_compact_icons_and_unlabeled_choices_keep_the_workspace_s
         let request = serde_json::from_value(serde_json::json!({"type":"choice_style","labeled":labeled})).unwrap();
         assert_eq!(toolbar_ui(request, &localizer).unwrap(), compact);
     }
+}
+
+#[test]
+fn native_metrics_expose_the_shared_layout_roles() {
+    let metrics = toolbar_ui(serde_json::from_value(serde_json::json!({"type":"metrics"})).unwrap(),
+        &Localizer::shared(UiLanguage::English)).unwrap();
+    assert_eq!(metrics["surface_radius"], serde_json::json!(SURFACE_RADIUS));
+    assert_eq!(metrics["panel"], serde_json::json!(PANEL_CONTROL_METRICS));
+    assert_eq!(metrics["layer_edge_inset"], serde_json::json!(LAYER_EDGE_INSET));
+    assert_eq!(metrics["divider"], serde_json::json!({
+        "size": TOOLBAR_DIVIDER_SIZE, "length": DIVIDER_LENGTH, "inset": TOOLBAR_DIVIDER_INSET,
+    }));
 }

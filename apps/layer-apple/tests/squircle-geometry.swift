@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 @main struct SquircleGeometryChecks {
@@ -13,7 +14,27 @@ import SwiftUI
         }
         return points
     }
-    static func main() {
+    @MainActor static func main() {
+        precondition(SquircleShape.surfaceRadius == CGFloat(ToolbarUI.metrics["surface_radius"].number))
+        precondition(SquircleShape.controlRadius == CGFloat(ToolbarUI.metrics["panel"]["control_radius"].number))
+        precondition(layerEdgeInset == CGFloat(ToolbarUI.metrics["layer_edge_inset"].number))
+        precondition(SquircleShape.surfaceRadius > SquircleShape.controlRadius && layerEdgeInset > 0)
+        let divider = ToolbarUI.metrics["divider"], slot = CGFloat(divider["size"].number)
+        for vertical in [false, true] {
+            for extent: CGFloat in [36, 54, 72, 144] {
+                let renderer = ImageRenderer(content: ToolbarDivider(vertical: vertical, color: .red)
+                    .frame(width: vertical ? extent : slot, height: vertical ? slot : extent))
+                renderer.scale = 2
+                guard let image = renderer.cgImage else { preconditionFailure("Divider must render") }
+                let bitmap = NSBitmapImageRep(cgImage: image)
+                let painted = (0..<Int(extent)).filter { position in
+                    let color = bitmap.colorAt(x: vertical ? position * 2 + 1 : Int(slot), y: vertical ? Int(slot) : position * 2 + 1)
+                    return (color?.alphaComponent ?? 0) > 0.5
+                }
+                precondition(painted.count == Int(extent - 2 * CGFloat(divider["inset"].number)),
+                    "Divider grows across its slot while retaining the shared end insets")
+            }
+        }
         let r: CGFloat = 18
         let corner = Path.squircleCorner(center: CGPoint(x: r, y: r), start: CGVector(dx: -r, dy: 0), end: CGVector(dx: 0, dy: -r))
         precondition(corner.count == 24 && close(corner.last!.x, r) && close(corner.last!.y, 0))
