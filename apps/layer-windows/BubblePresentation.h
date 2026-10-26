@@ -8,6 +8,7 @@
 #include "StampPreview.h"
 #include "WorkspaceShadow.h"
 #include "PointerGesture.h"
+#include "ColorTouch.h"
 #include <chrono>
 #include <set>
 #include <winrt/Windows.UI.ViewManagement.h>
@@ -116,11 +117,11 @@ struct Contact {
     Input::Pointer pointer{nullptr};
     Microsoft::UI::Input::PointerDeviceType device=Microsoft::UI::Input::PointerDeviceType::Mouse;
     hstring mode=L"pending";
-    Point start{},last{},midpoint{};
+    Point start{},last{},midpoint{},pairOrigin{};
     J grab;
     uint32_t wheel=0;
     double started=0,spread=1,scale=1;
-    bool held=false,paired=false,pairEnded=false,colorStarted=false,moved=false;
+    bool held=false,paired=false,lifted=false,pairEnded=false,colorStarted=false,moved=false;
     bool recognizing=false;
     bool nativeDrags=false,nativePairs=false;
     double holdAt=-1;
@@ -168,6 +169,7 @@ struct WorkspaceBubbles::Impl:std::enable_shared_from_this<WorkspaceBubbles::Imp
     bool pointerPen=false,pointerHidden=false;
     double restoreAt=-1;
     std::optional<std::tuple<uint32_t,double,CapyUi::Point>> lastRing;
+    CapyUi::ColorTouches colorTouches;
     ~Impl();
     void init();
     void attach(CapyUi::UIElement const&,std::function<void()>);
@@ -190,6 +192,7 @@ struct WorkspaceBubbles::Impl:std::enable_shared_from_this<WorkspaceBubbles::Imp
     std::shared_ptr<CapyBubbles::Record> target(CapyUi::Point)const;
     void down(winrt::Microsoft::UI::Xaml::Input::PointerRoutedEventArgs const&);
     bool join(winrt::Microsoft::UI::Xaml::Input::PointerRoutedEventArgs const&);
+    void colorTouch(winrt::Microsoft::UI::Xaml::Input::PointerRoutedEventArgs const&,winrt::hstring const&,std::shared_ptr<CapyBubbles::Record> const&);
     void move(winrt::Microsoft::UI::Xaml::Input::PointerRoutedEventArgs const&);
     void up(winrt::Microsoft::UI::Xaml::Input::PointerRoutedEventArgs const&,bool);
     bool cancel(bool abandon=false);

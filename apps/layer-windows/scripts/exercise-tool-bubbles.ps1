@@ -1,5 +1,5 @@
 param([Parameter(Mandatory)][string]$Executable,
-    [ValidateSet('dark-mouse','dark-touch','dark-pen','light-mouse','light-touch','light-pen','blenders-dark','blenders-light','sliders-dark','sliders-light','blender-controls-dark','blender-controls-light','hdr-f16-dark','hdr-f16-light','slider-preference-dark','slider-preference-light')][string]$Variant='dark-mouse',[switch]$RapidOnly,[switch]$SlidersOnly,[switch]$BlendersOnly,[switch]$EraserOnly,[switch]$EraserLightOnly,[switch]$HistoryOnly,[switch]$HistoryLightOnly,[switch]$NativeControlsOnly,[switch]$ScrollEpochOnly,[switch]$NumericOnly,[switch]$CurveOnly,[switch]$MenuOnly,[switch]$ObserverOnly,[switch]$VisualOnly,[switch]$BeadTransitionsOnly,[switch]$HdrOnly,[switch]$HdrRetirementOnly,[switch]$HdrPreviewOnly,[ValidateSet('F16','F32')][string]$HdrDepth='F16')
+    [ValidateSet('dark-mouse','dark-touch','dark-pen','light-mouse','light-touch','light-pen','blenders-dark','blenders-light','sliders-dark','sliders-light','blender-controls-dark','blender-controls-light','hdr-f16-dark','hdr-f16-light','slider-preference-dark','slider-preference-light')][string]$Variant='dark-mouse',[switch]$RapidOnly,[switch]$SlidersOnly,[switch]$BlendersOnly,[switch]$EraserOnly,[switch]$EraserLightOnly,[switch]$HistoryOnly,[switch]$HistoryLightOnly,[switch]$NativeControlsOnly,[switch]$ScrollEpochOnly,[switch]$NumericOnly,[switch]$CurveOnly,[switch]$MenuOnly,[switch]$ObserverOnly,[switch]$VisualOnly,[switch]$BeadTransitionsOnly,[switch]$HdrOnly,[switch]$HdrRetirementOnly,[switch]$HdrPreviewOnly,[switch]$ColorUndoOnly,[ValidateSet('F16','F32')][string]$HdrDepth='F16')
 $ErrorActionPreference='Stop'
 if($Variant -match '^hdr-f16-(dark|light)$'){$HdrOnly=$true;$HdrPreviewOnly=$true;$HdrDepth='F16';$Variant=$Matches[1]+'-mouse'}
 $sliderPreferenceOnly=$Variant.StartsWith('slider-preference-')
@@ -13,6 +13,10 @@ if($HdrPreviewOnly -and $HdrRetirementOnly){throw 'HDR preview and retirement sc
 if($BlendersOnly){$SlidersOnly=$true}
 if($NumericOnly -and !$PSBoundParameters.ContainsKey('Variant')){
     foreach($variant in @('dark-touch','light-touch')){& $PSCommandPath -Executable $Executable -Variant $variant -NumericOnly}
+    return
+}
+if($ColorUndoOnly -and !$PSBoundParameters.ContainsKey('Variant')){
+    foreach($variant in @('dark-mouse','light-mouse')){& $PSCommandPath -Executable $Executable -Variant $variant -ColorUndoOnly}
     return
 }
 if($HdrOnly -and !$PSBoundParameters.ContainsKey('Variant')){
@@ -1256,9 +1260,9 @@ try{
         $choice.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
         Wait-Until {(Model).windows_workspace.id -eq 'builtin:workspace:painter' -and (Model).windows_workspace.ready -and !(Model).windows_workspace.busy} 'Fixture Sketch workspace did not open'
     }
-    if($HdrOnly){New-BubbleHdrDrawing $HdrDepth}
+    if($HdrOnly -or $ColorUndoOnly){New-BubbleHdrDrawing $HdrDepth}
     if(!$EraserOnly){Ensure-Sources}
-    if($HdrOnly){Show-BubbleHdrColor}
+    if($HdrOnly -or $ColorUndoOnly){Show-BubbleHdrColor}
     & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'View'
     Invoke 'fit_canvas'
     Wait-Until {
@@ -1278,6 +1282,12 @@ try{
         if((Get-Item -LiteralPath $stderr).Length){throw 'HDR bubble native stderr requires inspection'}
         $scope=if($HdrPreviewOnly){'HDR picker paper preview, native intensity range and exact ramp/marker pixel cancellation'}elseif($HdrRetirementOnly){'HDR color context retirement, clear native status and painting with exact Undo after drawing activation'}else{'HDR color bubble native input, accessibility, geometry and composed pixels'}
         @{variant=$Variant;depth=$HdrDepth;checks=@($checks);scope=($scope+'; physical digitizers and HDR display luminance unverified')}|ConvertTo-Json -Depth 12|Set-Content (Join-Path $run 'results.json')
+        return
+    }
+    if($ColorUndoOnly){
+        Invoke-ColorUndoChecks
+        & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Close -DiscardUnsaved|Out-Null
+        @{variant=$Variant;checks=@($checks);scope='Color undo on the Color panel wheel and intensity arc and on the color ring, with mouse and injected touch; physical digitizers unverified'}|ConvertTo-Json -Depth 12|Set-Content (Join-Path $run 'results.json')
         return
     }
     if($EraserOnly){

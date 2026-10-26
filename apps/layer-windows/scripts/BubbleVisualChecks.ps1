@@ -135,7 +135,7 @@ function Invoke-BubbleHdrChecks {
     Set-BubbleHdrValue $id 0;$before=Bubble-HdrState
     $element=Control "bubble-intensity-$id";Focus-Keyboard $element
     [CapyRowPointer]::Key([uint32]$review.Id,0x27);Wait-Until {[Math]::Abs((Packet $id).color.intensity.stops-.1) -lt .005} 'HDR keyboard increment was not0.1EV'
-    Settled-Capture 'hdr-keyboard-focus';Assert-BubbleHdrNoTooltip;[CapyRowPointer]::Key([uint32]$review.Id,0x24)
+    Settled-Capture 'hdr-keyboard-focus';Assert-BubbleHdrNoTooltip $id;[CapyRowPointer]::Key([uint32]$review.Id,0x24)
     Wait-Until {$s=(Packet $id).color.intensity;[Math]::Abs($s.stops-$s.range[0]) -lt .005} 'HDR Home did not reach the shared minimum'
     [CapyRowPointer]::Key([uint32]$review.Id,0x23)
     Wait-Until {$s=(Packet $id).color.intensity;[Math]::Abs($s.stops-$s.range[1]) -lt .005} 'HDR End did not reach the shared maximum'
@@ -440,21 +440,22 @@ function Assert-BubbleHdrRamp([long]$Id,[string]$Stage,$Spec=$null,[switch]$Keep
     $hdrEvidence.Add(@{stage=$Stage;ramp_pixels=@($samples.ToArray());marker=@{point=$at;actual=$actual;expected=$spec.marker;maximum_error=$markerError}})
     if(@($samples|Where-Object maximum_error -gt 4).Count -or $markerError -gt 2){throw 'Native HDR ramp, round caps or marker differs from shared display colors'}
 }
-function Assert-BubbleHdrNoTooltip([string]$Stage='hdr-keyboard-no-tooltip'){
+function Assert-BubbleHdrNoTooltip([long]$Id,[string]$Stage='hdr-keyboard-no-tooltip'){
     $condition=[System.Windows.Automation.AndCondition]::new(
         [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::ToolTip),
         [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ProcessIdProperty,$review.Id))
     $found=@([System.Windows.Automation.AutomationElement]::RootElement.FindAll([System.Windows.Automation.TreeScope]::Descendants,$condition))
     if(!$found.Count){$found=@($root.FindAll([System.Windows.Automation.TreeScope]::Descendants,$condition))}
-    $visible=@(foreach($item in $found){$current=$item.Current;$bounds=$current.BoundingRectangle;if(!$current.IsOffscreen -and $bounds.Width -gt 0 -and $bounds.Height -gt 0){@{name=$current.Name;class=$current.ClassName;runtime_id=($item.GetRuntimeId() -join ':');bounds=@($bounds.X,$bounds.Y,$bounds.Width,$bounds.Height)}}})
-    $hdrEvidence.Add(@{stage=$Stage;visible=$visible})
-    if($visible.Count){throw 'Focused HDR intensity displayed a native tooltip over its presentation'}
+    $c=Center $Id;$b=(Packet $Id).color.bounds;$face=[System.Windows.Rect]::new($c.x+$b.x*$scale,$c.y+$b.y*$scale,$b.width*$scale,$b.height*$scale)
+    $visible=@(foreach($item in $found){$current=$item.Current;$bounds=$current.BoundingRectangle;if(!$current.IsOffscreen -and $bounds.Width -gt 0 -and $bounds.Height -gt 0){@{name=$current.Name;class=$current.ClassName;runtime_id=($item.GetRuntimeId() -join ':');bounds=@($bounds.X,$bounds.Y,$bounds.Width,$bounds.Height);over=$bounds.IntersectsWith($face)}}})
+    $hdrEvidence.Add(@{stage=$Stage;visible=$visible;face=@($face.X,$face.Y,$face.Width,$face.Height)})
+    if(@($visible|Where-Object over).Count){throw 'Focused HDR intensity displayed a native tooltip over its presentation'}
 }
 function Assert-BubbleHdrFocus([long]$Id){
     (Control 'drawing-canvas').SetFocus();$spec=(Packet $Id).color.intensity
     $at=Relative $Id @(($spec.point[0]+$spec.geometry.marker_radius+4),$spec.point[1]);$before=Bubble-HdrPixel $at 'hdr-focus-before'
     $element=Control "bubble-intensity-$Id";Focus-Keyboard $element
-    Assert-BubbleHdrNoTooltip 'hdr-focus-ring-no-tooltip'
+    Assert-BubbleHdrNoTooltip $Id 'hdr-focus-ring-no-tooltip'
     Start-Sleep -Milliseconds 150;$after=Bubble-HdrPixel $at 'hdr-focus-after';$ink=[Drawing.ColorTranslator]::FromHtml((Model).state.palette.text);$error=0.
     foreach($channel in @('r','g','b')){$expected=.1*$before[$channel]+.9*$ink.($channel.ToUpperInvariant());$error=[Math]::Max($error,[Math]::Abs($after[$channel]-$expected))}
     $hdrEvidence.Add(@{stage='hdr-focus-ring';point=$at;before=$before;after=$after;maximum_error=$error})
@@ -923,4 +924,84 @@ function Assert-BubbleVisualEdges([long]$Dial,[long]$Color){
     if($after.state.document_file.revision -ne $revision -or ($after.state.colors|ConvertTo-Json -Depth 30 -Compress) -ne $colors){throw 'Native bubble edge matrix changed artwork or selected colors'}
     $checks.Add('wheel-minimum-medium-maximum-four-corners-and-crowded-chooser')
     $checks.Add('all-transparency-levels-with-live-chooser')
+}
+function Color-Query($Request){[CapyBubbleFixtureNative]::ColorQuery((Join-Path $directory 'layer_windows.dll'),($Request|ConvertTo-Json -Depth 20 -Compress))|ConvertFrom-Json}
+function Panel-Point([double]$X,[double]$Y){$b=(Control 'color-panel' -Arranged).Current.BoundingRectangle;@{x=[int][Math]::Round($b.X+$X*$scale);y=[int][Math]::Round($b.Y+$Y*$scale)}}
+function Panel-Wheel{
+    $size=(Control 'color-panel' -Arranged).Current.BoundingRectangle.Width/$scale;$layout=Color-Query @{type='layout';size=$size;hdr=$true};$box=$layout.wheel
+    @{size=$size;cx=$box[0]+$box[2]/2;cy=$box[1]+$box[3]/2;r=$box[2]/2;caption=$layout.intensity_caption}
+}
+function Panel-WheelPoint($Wheel,[double]$X,[double]$Y){Panel-Point ($Wheel.cx+$X*$Wheel.r) ($Wheel.cy+$Y*$Wheel.r)}
+function Panel-ArcPoint($Wheel,[double]$Fraction){$p=(Color-Query @{type='arc';size=$Wheel.size;fraction=$Fraction}).point;Panel-Point $p[0] $p[1]}
+function Foreground{(Model).state.colors.foreground|ConvertTo-Json -Depth 8 -Compress}
+function Settled-Foreground{
+    $value=Foreground;$stable=0
+    for($i=0;$stable -lt 8;$i++){if($i -ge 60){throw 'The paint did not settle'};Start-Sleep -Milliseconds 200;$next=Foreground;if($next -eq $value){$stable++}else{$value=$next;$stable=0}}
+    $value
+}
+function Right-Click($Point){[CapyRowPointer]::Down('mouse',$Point.x,$Point.y,'right');Start-Sleep -Milliseconds 35;[CapyRowPointer]::Up()}
+function Finger-Tap($Points){
+    $before=Foreground
+    [CapyCanvasTouch]::Initialize([uint32]$review.Id)
+    try{[CapyCanvasTouch]::Tap([int[]]@($Points|ForEach-Object {$_.x}),[int[]]@($Points|ForEach-Object {$_.y}),16,60)}
+    finally{[CapyCanvasTouch]::Dispose()}
+    Start-Sleep -Milliseconds 300
+    @{points=$Points;before=$before;after=(Foreground);intensity=(Model).color_panel.intensity}|ConvertTo-Json -Depth 8 -Compress|Add-Content (Join-Path $run 'color-undo-taps.jsonl')
+}
+function Menu-Names{
+    $items=[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::MenuItem)
+    @($root.FindAll([System.Windows.Automation.TreeScope]::Descendants,$items)|Where-Object {!$_.Current.IsOffscreen}|ForEach-Object {$_.Current.Name})
+}
+function Color-UndoItem{Find 'Undo color change' -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)}
+function Invoke-ColorUndoItem([string]$Message){
+    Wait-Until {$item=Color-UndoItem;$item -and $item.Current.IsEnabled} $Message
+    (Color-UndoItem).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+}
+function Invoke-ColorUndoChecks{
+    $wheel=Panel-Wheel;$start=Foreground
+    $from=Panel-WheelPoint $wheel .2 -.15;$to=Panel-WheelPoint $wheel -.15 .2
+    Drag $from $to -PointerDevice 'mouse';Wait-Until {(Foreground) -ne $start} 'Panel wheel drag did not pick'
+    $dragged=Settled-Foreground;$ring=Panel-WheelPoint $wheel .94 0
+    Right-Click $ring;Settled-Capture 'color-undo-panel-menu'
+    Invoke-ColorUndoItem 'Right-clicking the panel hue ring did not offer color undo'
+    Wait-Until {(Foreground) -eq $start} 'Panel menu undo did not restore the color from before the whole drag'
+    $checks.Add('panel-drag-is-one-step-and-ring-menu-undoes')
+    Right-Click (Panel-Point $wheel.caption[0] ($wheel.caption[1]-$wheel.caption[2]*.5))
+    Wait-Until {@(Menu-Names|Where-Object {$_ -like 'Hide*Color*'}).Count} 'Right-clicking outside the ring did not open the panel menu'
+    if(Color-UndoItem){throw 'Outside the ring the panel menu offered color undo'}
+    Escape;Wait-Until {!@(Menu-Names|Where-Object {$_ -like 'Hide*Color*'}).Count} 'Escape did not dismiss the panel menu'
+    $checks.Add('panel-keeps-its-menu-outside-the-ring')
+    $fingers=@((Panel-WheelPoint $wheel -.3 0),(Panel-WheelPoint $wheel .3 0),(Panel-WheelPoint $wheel 0 .3))
+    Finger-Tap $fingers;Wait-Until {(Foreground) -eq $dragged} 'Three-finger tap on the panel wheel did not redo'
+    Finger-Tap $fingers[0..1];Wait-Until {(Foreground) -eq $start} 'Two-finger tap on the panel wheel did not undo'
+    Drag $from $to -PointerDevice 'mouse';Wait-Until {(Foreground) -ne $start} 'Panel wheel drag did not pick again'
+    Finger-Tap @((Panel-WheelPoint $wheel -.25 .25),$ring);Wait-Until {(Foreground) -eq $start} 'The second finger did not retire the pick before the tap undid'
+    $checks.Add('panel-two-and-three-finger-taps')
+    $stops=(Model).color_panel.intensity
+    Drag (Panel-ArcPoint $wheel .4) (Panel-ArcPoint $wheel .8) -PointerDevice 'mouse'
+    Wait-Until {[Math]::Abs((Model).color_panel.intensity-$stops) -gt .5} 'Panel arc drag did not change the intensity'
+    Finger-Tap @((Panel-ArcPoint $wheel .3),(Panel-ArcPoint $wheel .7))
+    Wait-Until {[Math]::Abs((Model).color_panel.intensity-$stops) -lt .005} 'Two-finger tap on the panel arc did not undo the whole arc drag'
+    Right-Click (Panel-ArcPoint $wheel .5);Wait-Until {Color-UndoItem} 'Right-clicking the panel arc did not offer color undo';Escape
+    $checks.Add('panel-arc-tap-and-menu')
+    $area=(Model).layout.work_area
+    $id=Take 'color' '' ($area.x+$area.width*.6) ($area.y+$area.height*.5)
+    Wait-Until {(Packet $id).color} 'Color ring did not tear out'
+    $before=Foreground;$local=Wheel-FieldPoint $id
+    $center=Center $id;[CapyRowPointer]::Hover($center.x,$center.y);Start-Sleep -Milliseconds 1500
+    Assert-BubbleHdrNoTooltip $id 'color-ring-hover-no-tooltip'
+    Drag (Relative $id $local) (Relative $id @((-$local[0]),$local[1])) -PointerDevice 'touch'
+    Wait-Until {(Foreground) -ne $before} 'The color ring did not pick'
+    $picked=Settled-Foreground;Start-Sleep -Milliseconds 500
+    if((Foreground) -ne $picked){throw 'The finger-picked color did not stay after lift'}
+    $center=Center $id
+    Finger-Tap @((Relative $id @(-25,0)),(Relative $id @(25,0)))
+    Wait-Until {(Foreground) -eq $before} 'Two-finger tap on the color ring did not undo'
+    $after=Center $id;if([Math]::Abs($after.x-$center.x) -gt 2 -or [Math]::Abs($after.y-$center.y) -gt 2){throw 'A two-finger tap moved the color ring'}
+    Finger-Tap @((Relative $id @(-25,0)),(Relative $id @(25,0)),(Relative $id @(0,30)))
+    Wait-Until {(Foreground) -eq $picked} 'Three-finger tap on the color ring did not redo'
+    Right-Click (Center $id);Settled-Capture 'color-undo-bubble-menu'
+    Invoke-ColorUndoItem 'The color ring menu did not offer color undo'
+    Wait-Until {(Foreground) -eq $before} 'The color ring menu did not undo'
+    $checks.Add('color-ring-taps-and-menu')
 }

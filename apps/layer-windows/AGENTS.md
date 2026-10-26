@@ -32,6 +32,10 @@ Start with the [Windows guide](../../docs/development/windows.md) and the
 - Native drag previews may complete after newer motion arrives. Publish replies
   for the active gesture while requesting the latest position, and require a
   current result for the final drop.
+- Keep tooltips off bubble hit surfaces and other areas that start a drag.
+  WinUI opens a tooltip in its own popup window; a press under that window
+  belongs to it, and when the tooltip closes the rest of the contact, including
+  its release, never reaches the app.
 - Map `PointerPointProperties.IsCanceled` to cancellation before forwarding
   samples or feeding the hold recognizer. A canceled release must not complete
   a stroke or trigger a two-finger Undo tap.

@@ -7,6 +7,7 @@
 #include "WorkspaceQuery.h"
 #include "Checker.h"
 #include "ColorWheel.h"
+#include "ColorTouch.h"
 #include <dwrite_2.h>
 #include <winrt/Microsoft.UI.Xaml.Shapes.h>
 #include <winrt/Microsoft.UI.Input.h>
@@ -146,7 +147,8 @@ struct View:std::enable_shared_from_this<View>{
     Button edit;Shapes::Ellipse editFill;bool editHovered=false;
     Canvas arc;Shapes::Path arcTrack;std::vector<Shapes::Line> ramp;Shapes::Ellipse markerShadow,marker;TextBlock caption;
     Slider intensity;bool syncingIntensity=false;
-    std::optional<uint32_t> arcPointer;double arcOriginal=0;hstring arcKey,arcContext;
+    std::optional<uint32_t> arcPointer;hstring arcKey,arcContext;
+    ColorTouches touches;
     bool layoutHdr=false;double frameWidth=0,frameHeight=0;
     uint64_t listener=0;
     std::array<Button,2> shapes;
@@ -171,7 +173,7 @@ struct View:std::enable_shared_from_this<View>{
     uint32_t part=0;
     double side=0,panelSize=0,layoutScale=0;
     J layout;
-    MenuFlyout slotMenu{nullptr};OwnedPopup slotMenuOwner;
+    MenuFlyout menu{nullptr};OwnedPopup menuOwner;
     XamlRoot::Changed_revoker scaleChanged;
     CompositionTarget::SurfaceContentsLost_revoker contentsLost;
     explicit View(std::shared_ptr<WorkspaceData> source,bool fit):data(std::move(source)),fitHeight(fit){}
@@ -202,24 +204,51 @@ struct View:std::enable_shared_from_this<View>{
     bool transparentSlot()const{return str(displayColors(data->state),L"slot")==L"transparent";}
     void endArc(bool restore){
         if(!arcPointer)return;arcPointer.reset();arcTrack.ReleasePointerCaptures();
-        if(restore&&arcContext==intensityContext())setIntensity(arcOriginal);
+        contact(restore?L"cancel":L"up");
     }
+    void contact(hstring const& phase){data->dispatch(O({{L"type",S(L"color_contact")},{L"phase",S(phase)}}));}
     hstring editingContext()const{return object(data->model,L"color_wheel_context").Stringify();}
     hstring intensityContext()const{return object(data->model,L"color_edit_context").Stringify();}
     void sendEdit(J const& action,hstring const& expected){data->dispatch(O({{L"type",S(L"color_edit")},{L"context",J::Parse(expected)},{L"action",action}}));}
     void send(J const& action){data->dispatch(O({{L"type",S(L"color")},{L"action",action}}));}
-    void showSlotMenu(Button const& anchor,hstring const& slot,Point at){
+    void showMenu(FrameworkElement const& anchor,J const& target,Point at){
         if(data->externalPopup||data->popupCount)return;
-        slotMenu=MenuFlyout();auto ticket=slotMenuOwner.Begin(data,anchor,slotMenu);
-        if(!QueryWorkspace(data->query,O({{L"type",S(L"context")},{L"target",O({{L"kind",S(L"color_slot")},{L"slot",S(slot)}})}}),
+        menu=MenuFlyout();auto ticket=menuOwner.Begin(data,anchor,menu);
+        if(!QueryWorkspace(data->query,O({{L"type",S(L"context")},{L"target",target}}),
             [weak=weak_from_this(),ticket,anchor=make_weak(anchor),at](J reply){if(auto self=weak.lock()){
                 auto source=anchor.get();auto sections=array(object(reply,L"result"),L"sections");
                 if(!source||!ticket.Current()||!sections.Size()){ticket.Cancel();return;}
-                NativeMenuItems(self->slotMenu.Items(),sections,self->data,[weak](J action){if(auto self=weak.lock())self->data->dispatch(action);});
+                NativeMenuItems(self->menu.Items(),sections,self->data,[weak](J action){if(auto self=weak.lock())self->data->dispatch(action);});
                 Primitives::FlyoutShowOptions options;options.Position(at);ticket.Show(source,options);
             }}))ticket.Cancel();
     }
-    void cancel(){pointer.reset();part=0;root.ReleasePointerCaptures();AutomationProperties::SetItemStatus(root,data->caption(L"header",L"ready"));}
+    void finishPick(hstring const& phase){
+        if(pointer)contact(phase);
+        pointer.reset();part=0;AutomationProperties::SetItemStatus(root,data->caption(L"header",L"ready"));
+    }
+    void cancel(){finishPick(L"up");root.ReleasePointerCaptures();}
+    bool joinsTouches(Microsoft::UI::Input::PointerPoint const& p)const{
+        return p.PointerDeviceType()==Microsoft::UI::Input::PointerDeviceType::Touch&&!touches.contacts.empty();
+    }
+    bool historyArea(Point at)const{
+        if(side<1)return false;
+        auto box=array(layout,L"wheel");double radius=side/2;
+        if(std::hypot(at.X-box.GetNumberAt(0)-radius,at.Y-box.GetNumberAt(1)-radius)<=radius)return true;
+        if(arc.Visibility()!=Visibility::Visible||transparentSlot())return false;
+        A point;point.Append(N(at.X));point.Append(N(at.Y));
+        return flag(colorUi(data->localization.get(),O({{L"type",S(L"arc")},{L"size",N(panelSize)},{L"point",point}})).GetObject(),L"hit");
+    }
+    void touch(PointerRoutedEventArgs const& e,hstring phase){
+        auto p=e.GetCurrentPoint(stage);auto id=p.PointerId();
+        bool held=PointerGesture::Captured(root,id)||PointerGesture::Captured(arcTrack,id);
+        if(phase==L"capture_lost"){if(!p.IsInContact()||held)return;phase=L"cancel";}
+        bool claimed=touches.claimed();
+        if(touches.forward(*data,stage,p,phase,phase==L"down"&&historyArea(p.Position()))){
+            if(!claimed){finishPick(L"cancel");if(std::exchange(arcPointer,std::nullopt))contact(L"cancel");}
+            e.Handled(true);
+        }
+        if(phase==L"down"&&touches.contacts.contains(id)&&!held)root.CapturePointer(e.Pointer());
+    }
     void pick(Point position){
         if(!pointer||context!=editingContext()||side<1)return;
         A location;location.Append(N(position.X));location.Append(N(position.Y));
@@ -256,10 +285,10 @@ struct View:std::enable_shared_from_this<View>{
         // Native buttons consume their own presses before this bubbles here.
         root.PointerPressed([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock()){
             auto p=e.GetCurrentPoint(self->wheel);
-            if(self->pointer||!PointerGesture::PrimaryContact(p))return;
+            if(self->pointer||!PointerGesture::PrimaryContact(p)||self->joinsTouches(p))return;
             auto at=p.Position();auto shape=str(self->model(),L"shape");
             auto part=capy_color_hit(at.X,at.Y,float(self->side),shape==L"circle"?2:shape==L"triangle"?1:0);
-            if(part&&self->root.CapturePointer(e.Pointer())){self->pointer=p.PointerId();self->part=part;AutomationProperties::SetItemStatus(self->root,self->data->caption(L"color",L"picking"));self->pick(at);e.Handled(true);}
+            if(part&&self->root.CapturePointer(e.Pointer())){self->pointer=p.PointerId();self->part=part;AutomationProperties::SetItemStatus(self->root,self->data->caption(L"color",L"picking"));self->contact(L"down");self->pick(at);e.Handled(true);}
         }});
         root.PointerMoved([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock()){
             if(self->pointer==e.Pointer().PointerId()){self->pick(e.GetCurrentPoint(self->wheel).Position());e.Handled(true);}
@@ -267,13 +296,28 @@ struct View:std::enable_shared_from_this<View>{
         root.PointerReleased([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock()){
             if(self->pointer==e.Pointer().PointerId()){self->cancel();e.Handled(true);}
         }});
-        root.PointerCanceled([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock())if(self->pointer==e.Pointer().PointerId())self->cancel();});
-        root.PointerCaptureLost([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock())if(self->pointer==e.Pointer().PointerId()){self->pointer.reset();self->part=0;AutomationProperties::SetItemStatus(self->root,self->data->caption(L"header",L"ready"));}});
+        root.PointerCanceled([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock())if(self->pointer==e.Pointer().PointerId()){self->finishPick(L"cancel");self->root.ReleasePointerCaptures();}});
+        root.PointerCaptureLost([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock())if(self->pointer==e.Pointer().PointerId())self->finishPick(L"up");});
+        for(auto const& entry:{std::pair{UIElement::PointerPressedEvent(),L"down"},{UIElement::PointerMovedEvent(),L"move"},{UIElement::PointerReleasedEvent(),L"up"},
+            {UIElement::PointerCanceledEvent(),L"cancel"},{UIElement::PointerCaptureLostEvent(),L"capture_lost"}}){
+            auto phase=entry.second;
+            root.AddHandler(entry.first,box_value(PointerEventHandler([weak,phase](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock())self->touch(e,phase);})),true);
+        }
+        root.ContextRequested([weak](auto&&,ContextRequestedEventArgs const& e){if(auto self=weak.lock()){
+            Point at{};
+            if(!e.TryGetPosition(self->stage,at)){
+                if(e.OriginalSource()!=self->intensity)return;
+                auto middle=array(self->arcAt(.5),L"point");at={float(middle.GetNumberAt(0)),float(middle.GetNumberAt(1))};
+            }else if(!self->historyArea(at))return;
+            e.Handled(true);
+            if(!self->pointer&&!self->arcPointer&&self->touches.contacts.empty())self->showMenu(self->stage,O({{L"kind",S(L"color_wheel")}}),at);
+        }});
+        root.ContextCanceled([weak](auto&&,auto&&){if(auto self=weak.lock())self->menuOwner.Cancel();});
         root.Loaded([weak](auto&&,auto&&){if(auto self=weak.lock()){
             self->scaleChanged=self->root.XamlRoot().Changed(auto_revoke,[weak](auto&&,auto&&){if(auto self=weak.lock())self->refresh();});
             self->refresh();
         }});
-        root.Unloaded([weak](auto&&,auto&&){if(auto self=weak.lock()){self->cancel();self->scaleChanged.revoke();}});
+        root.Unloaded([weak](auto&&,auto&&){if(auto self=weak.lock()){self->cancel();self->touches.cancel(*self->data,self->stage);self->scaleChanged.revoke();}});
         contentsLost=CompositionTarget::SurfaceContentsLost(auto_revoke,[weak](auto&&,auto&&){if(auto self=weak.lock()){self->key=L"";self->drawing.surface=nullptr;self->refresh();}});
         listener=data->colorView([weak]{if(auto self=weak.lock())self->refresh();});
         drawing.start([weak]{if(auto self=weak.lock()){self->key=L"";self->data->queueColors();}});
@@ -320,16 +364,16 @@ struct View:std::enable_shared_from_this<View>{
                 slotHolds[i].recognizer.Holding([weak,slot,i](auto&&,Microsoft::UI::Input::HoldingEventArgs const& e){
                     if(auto self=weak.lock();self&&self->slotHolds[i].pointer&&e.HoldingState()==Microsoft::UI::Input::HoldingState::Started){
                         self->slotClicks[i]->Suppress(*self->slotHolds[i].pointer);
-                        self->showSlotMenu(self->swatches[i],slot,e.Position());
+                        self->showMenu(self->swatches[i],O({{L"kind",S(L"color_slot")},{L"slot",S(slot)}}),e.Position());
                     }
                 });
                 pick.ContextRequested([weak,slot](auto&& sender,ContextRequestedEventArgs const& e){
                     e.Handled(true);if(auto self=weak.lock()){
                         auto source=sender.template as<Button>();Point at{};if(!e.TryGetPosition(source,at))at={0,float(source.ActualHeight())};
-                        self->showSlotMenu(source,slot,at);
+                        self->showMenu(source,O({{L"kind",S(L"color_slot")},{L"slot",S(slot)}}),at);
                     }
                 });
-                pick.ContextCanceled([weak](auto&&,auto&&){if(auto self=weak.lock())self->slotMenuOwner.Cancel();});
+                pick.ContextCanceled([weak](auto&&,auto&&){if(auto self=weak.lock())self->menuOwner.Cancel();});
             }
             AutomationProperties::SetAutomationId(pick,L"color-"+slot);
             pick.PointerEntered([weak,i](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock()){
@@ -360,9 +404,9 @@ struct View:std::enable_shared_from_this<View>{
         caption.IsHitTestVisible(false);caption.FontFamily(FontFamily(L"Segoe UI"));
         arcTrack.PointerPressed([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock()){
             auto p=e.GetCurrentPoint(self->stage);
-            if(self->arcPointer||self->transparentSlot()||!PointerGesture::PrimaryContact(p))return;
+            if(self->arcPointer||self->transparentSlot()||!PointerGesture::PrimaryContact(p)||self->joinsTouches(p))return;
             if(!self->arcTrack.CapturePointer(e.Pointer()))return;
-            self->arcPointer=p.PointerId();self->arcContext=self->intensityContext();self->arcOriginal=num(self->model(),L"intensity");self->pickIntensity(p.Position());e.Handled(true);
+            self->arcPointer=p.PointerId();self->arcContext=self->intensityContext();self->contact(L"down");self->pickIntensity(p.Position());e.Handled(true);
         }});
         arcTrack.PointerMoved([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock();self&&self->arcPointer==e.Pointer().PointerId()){
             self->pickIntensity(e.GetCurrentPoint(self->stage).Position());e.Handled(true);

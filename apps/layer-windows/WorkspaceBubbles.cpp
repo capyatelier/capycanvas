@@ -377,7 +377,7 @@ void WorkspaceBubbles::Impl::content(std::shared_ptr<Record> const& r,std::share
             auto action=O({{L"type",S(type)},{L"id",N(r->id)},{L"position",point(p->center)}});if(std::wstring_view(type)!=L"tap"){action.Insert(L"phase",S(L"down"));self->send(action);action.Insert(L"phase",S(L"up"));}self->send(action);
         });
     }
-    if(p->accessible){if(p->key==L"face")AutomationProperties::SetAutomationId(p->accessible,(history?L"bubble-hit-":L"tool-bubble-")+to_hstring(r->id));p->accessible.IsTabStop(!history);AutomationProperties::SetAccessibilityView(p->accessible,history?Automation::Peers::AccessibilityView::Raw:Automation::Peers::AccessibilityView::Content);p->accessible.Width(size.Width);p->accessible.Height(size.Height);p->accessible.Content().as<Shapes::Path>().Data(surface(*r,*p,true));auto name=p->key==L"face"?str(v,L"label"):str(p->data,L"label");AutomationProperties::SetName(p->accessible,name);tooltip(p->accessible,name);}
+    if(p->accessible){if(p->key==L"face")AutomationProperties::SetAutomationId(p->accessible,(history?L"bubble-hit-":L"tool-bubble-")+to_hstring(r->id));p->accessible.IsTabStop(!history);AutomationProperties::SetAccessibilityView(p->accessible,history?Automation::Peers::AccessibilityView::Raw:Automation::Peers::AccessibilityView::Content);p->accessible.Width(size.Width);p->accessible.Height(size.Height);p->accessible.Content().as<Shapes::Path>().Data(surface(*r,*p,true));auto name=p->key==L"face"?str(v,L"label"):str(p->data,L"label");AutomationProperties::SetName(p->accessible,name);}
 }
 void WorkspaceBubbles::Impl::intensity(std::shared_ptr<Record> const& r,std::shared_ptr<Part> const& p){
     auto color=object(r->packet,L"color");

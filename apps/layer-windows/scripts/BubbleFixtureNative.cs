@@ -7,6 +7,7 @@ public static class CapyBubbleFixtureNative {
  [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true)] static extern IntPtr LoadLibrary(string path);
  [DllImport("layer_windows.dll",CallingConvention=CallingConvention.Cdecl)] static extern ulong capy_localization_for_tag([MarshalAs(UnmanagedType.LPUTF8Str)]string tag);
  [DllImport("layer_windows.dll",CallingConvention=CallingConvention.Cdecl)] static extern ulong capy_bubble_ui(ulong context,[MarshalAs(UnmanagedType.LPUTF8Str)]string json);
+ [DllImport("layer_windows.dll",CallingConvention=CallingConvention.Cdecl)] static extern ulong capy_color_ui(ulong context,[MarshalAs(UnmanagedType.LPUTF8Str)]string json);
  [DllImport("layer_windows.dll",CallingConvention=CallingConvention.Cdecl)] static extern void capy_localization_free(ulong context);
  [DllImport("layer_windows.dll",CallingConvention=CallingConvention.Cdecl)] static extern UIntPtr capy_string_length(ulong value);
  [DllImport("layer_windows.dll",CallingConvention=CallingConvention.Cdecl)] [return:MarshalAs(UnmanagedType.U1)] static extern bool capy_string_copy(ulong value,UIntPtr offset,byte[] output,UIntPtr length);
@@ -24,12 +25,14 @@ public static class CapyBubbleFixtureNative {
  public static uint ColorHit(string path,float x,float y,float size,uint shape) {
   EnsureLibrary(path);return capy_color_hit(x,y,size,shape);
  }
- public static string Query(string path,string json) {
+ public static string Query(string path,string json) {return Query(path,json,false);}
+ public static string ColorQuery(string path,string json) {return Query(path,json,true);}
+ static string Query(string path,string json,bool color) {
   EnsureLibrary(path);
   ulong context=capy_localization_for_tag("en"),result=0;
   try{
    if(context==0)throw new InvalidOperationException("Fixture localization unavailable.");
-   result=capy_bubble_ui(context,json);
+   result=color?capy_color_ui(context,json):capy_bubble_ui(context,json);
    if(result==0)throw new InvalidOperationException("Shared bubble geometry query failed.");
    byte[] bytes=new byte[checked((int)capy_string_length(result).ToUInt64())];
    if(!capy_string_copy(result,UIntPtr.Zero,bytes,new UIntPtr((uint)bytes.Length)))throw new InvalidOperationException("Shared bubble geometry text expired.");

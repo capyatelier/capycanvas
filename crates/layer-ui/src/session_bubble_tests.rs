@@ -2465,3 +2465,28 @@ fn blender_hidden_pickup_and_persistence_values_survive_profile_projection_and_r
         assert_eq!(primary, ["paint", "pull"]);
     }
 }
+
+#[test]
+fn a_color_ring_pick_is_one_step_that_ring_taps_undo_and_redo() {
+    for depth in [layer_core::color::SampleDepth::U8, layer_core::color::SampleDepth::F16] {
+        let mut s = hdr_desk(depth, Platform::Windows);
+        let id = take_ring(&mut s, FAR);
+        s.frame(0, 0).unwrap();
+        let before = s.state.colors.foreground;
+        for (phase, position) in [(ContactPhase::Down, [20., -10.]), (ContactPhase::Move, [-15., 10.]), (ContactPhase::Up, [-15., 10.])] {
+            wheel_contact(&mut s, id, phase, ColorWheelPart::Field, position).unwrap();
+        }
+        let picked = s.state.colors.foreground;
+        assert_ne!(picked, before, "{depth:?}");
+        let touch = |s: &mut UiSession<Recorder>, id: u64, phase: ContactPhase, ms: u64| {
+            s.input(UiInput::ColorTouch { surface: 9, id, phase, position: [40. * id as f32, 0.], time_ns: ms * 1_000_000 }).unwrap();
+        };
+        for (fingers, expected) in [(2, before), (3, picked)] {
+            wheel_contact(&mut s, id, ContactPhase::Down, ColorWheelPart::Field, [-30., 5.]).unwrap();
+            for finger in 0..fingers { touch(&mut s, finger, ContactPhase::Down, 1 + finger); }
+            wheel_contact(&mut s, id, ContactPhase::Cancel, ColorWheelPart::Field, [0.; 2]).unwrap();
+            for finger in 0..fingers { touch(&mut s, finger, ContactPhase::Up, 60 + finger); }
+            assert_eq!(s.state.colors.foreground, expected, "{depth:?} {fingers} fingers");
+        }
+    }
+}

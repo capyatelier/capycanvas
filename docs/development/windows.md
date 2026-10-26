@@ -1810,6 +1810,13 @@ Use `-HdrRetirementOnly` with either depth and theme for the focused slot, mask
 and drawing-switch checks. Drawing activation must clear the native status;
 both the SDR destination and returning HDR drawing must paint and undo to their
 exact previous pixels and published checkpoint.
+`exercise-tool-bubbles.ps1 -ColorUndoOnly` runs dark and light: a mouse drag on
+the Color panel wheel is one step that its right-click menu undoes, outside the
+ring the panel keeps its own menu, injected two- and three-finger taps on the
+wheel, the intensity arc and the color ring undo and redo, a second finger
+retires the first finger's pick, and a tap leaves the ring in place. Hovering the
+ring opens no tooltip, and a finger pick on it keeps its color after lift as one
+step that a two-finger tap undoes.
 The fixture checks selected-face hover and pressed pixels against the theme's
 text-color overlays and requires the ordinary face to keep its size. Moving past
 the drag threshold and returning must retain hover shading; pressing starts a
