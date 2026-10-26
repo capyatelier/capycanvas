@@ -39,7 +39,7 @@ class NativeWorkspaceInputFixture {
                 timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
                 context: nil, characters: characters, charactersIgnoringModifiers: characters,
                 isARepeat: repeatKey, keyCode: code) else { throw HostFailure(message: "No native fixture key") }
-            NSApp.postEvent(event, atStart: false)
+            NSApp.sendEvent(event)
         }
     }
     @MainActor static func event(_ type: NSEvent.EventType, at point: CGPoint, marker: NSView, number: Int, tablet: Bool = false) throws {
