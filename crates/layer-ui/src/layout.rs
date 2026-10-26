@@ -69,6 +69,7 @@ const TOOLBAR_GRIP_SIZE: f32 = 20.0;
 pub const TOOLBAR_DIVIDER_SIZE: f32 = 8.0;
 /// A divider's line, centred across its strip, for toolbars, column groups and the canvas bar.
 pub const DIVIDER_LENGTH: f32 = TILE_SIZE / 2.0;
+pub const TOOLBAR_DIVIDER_INSET: f32 = (TILE_SIZE - DIVIDER_LENGTH) / 2.0;
 /// Shared gesture distances in logical UI pixels, not preferences.
 pub const WORKSPACE_PROXIMITY: f32 = 80.0;
 const PANEL_SNAP_DISTANCE: f32 = WORKSPACE_PROXIMITY * 0.5;

@@ -143,8 +143,11 @@ row and packs its compact controls in the same order. Drawer height measurement
 uses these same rows. Short allocations clip trailing content and keep
 visible insertion targets attached to their original tile IDs.
 
-A divider is an 8-pixel slot (`TOOLBAR_DIVIDER_SIZE`) holding a line half a Small
-tile long (`DIVIDER_LENGTH`), centred across the strip, in every tile size. Column
+A divider is an 8-pixel slot (`TOOLBAR_DIVIDER_SIZE`). On GTK the line fills the
+slot across the strip with a 9-pixel inset at each end (`TOOLBAR_DIVIDER_INSET`),
+so it grows with wider toolbars and returns to 18 pixels in a Small single-column
+toolbar. Horizontal toolbars apply the same inset vertically. Other hosts use a
+centred line half a Small tile long (`DIVIDER_LENGTH`) in every tile size. Column
 groups and the canvas action bar use the same divider; GTK builds all three with
 `tiles::divider_slot` and `divider_line`, Apple and Android with `ToolbarDivider`, Web
 draws `.tile-divider` from `divider_metrics`, and Windows uses `dividerLine` in
@@ -238,6 +241,9 @@ GTK native input runs through `tools/performance/workspace-motion.sh gtk` on a
 private Mutter display with `--native-test=` and one of these tests from
 `apps/layer-linux/src/toolbar_component_tests.rs`:
 
+- `native_paint_toolbar_dividers_input`: Paint tool order, growing and shrinking
+  divider paint, orientation changes, retained widgets, input and drop bounds
+  in both themes.
 - `native_toolbar_components_input`: editing, hold-to-reorder caps, stamp
   previews and bookmarks, inline transform completion, context changes,
   placement and both themes. The

@@ -229,7 +229,7 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 | Android palette pill opening at the work-area edge | 120 | **FPS unqualified.** Instant clamp; two actual presents per opening, all neighbors stationary in the diagnostic | [Native palette opening](#native-palette-opening), 2026-10-23 |
 | Android tool bubble drag through four neighbours | 120 | **Unqualified after the bubble release fixes.** Previous parity build: 115.00–116.55 actual app-window presents/s; p99 ≤16.667447 ms, default glass, 61 MP photo at Fit | [Native tool bubbles](#native-tool-bubbles), 2026-10-24 |
 | Web tool bubble drag through four neighbours | 120 | Unmeasured after the bubble release fixes; desktop browser journeys do not qualify the reference tablet | [Web checks](../development/web.md#tests), 2026-10-24 |
-| Panel or column resize | 120 | Compact GTK Tool Set desktop diagnostic: **50.27/s**, p99 41.548 ms; misses the 114 Hz floor. **Desktop diagnostic misses.** GTK GPU joins: 81.59–112.27 changing-geometry presents/s at 1×; 38.96–92.31 at 2×, worst p99 74.986 ms. Reference-tier qualification remains unset. Web Navigator: 30.00–30.64 Chrome surface presents/s; p99 50.00–58.34 ms | [Web Navigator layout](#web-navigator-layout), 2026-10-19; [GTK Color resize](#gtk-color-panel-resize), 2026-10-10; [GTK column bridge diagnostic](#gtk-column-bridge-diagnostic), 2026-10-25; [GTK Tool Set density](#gtk-tool-set-density), 2026-10-26 |
+| Panel or column resize | 120 | Expanding GTK divider desktop diagnostic: **54.49/s**, p99 41.689 ms; misses the 114 Hz floor. **Desktop diagnostic misses.** GTK GPU joins: 81.59–112.27 changing-geometry presents/s at 1×; 38.96–92.31 at 2×, worst p99 74.986 ms. Reference-tier qualification remains unset. Web Navigator: 30.00–30.64 Chrome surface presents/s; p99 50.00–58.34 ms | [Web Navigator layout](#web-navigator-layout), 2026-10-19; [GTK Color resize](#gtk-color-panel-resize), 2026-10-10; [GTK column bridge diagnostic](#gtk-column-bridge-diagnostic), 2026-10-25; [GTK Tool Set density](#gtk-tool-set-density), 2026-10-26; [GTK toolbar dividers](#gtk-toolbar-divider-resize), 2026-10-26 |
 | Pen pressure utility and curve drag | 120 | **Unqualified.** Current GTK desktop panel 119.20–119.40 presents/s, p99 up to 9.207 ms; curve 120.00, p99 up to 8.470 ms; reference tablet unmeasured | [GTK pen pressure utility](#gtk-pen-pressure-utility), 2026-10-10 UTC |
 | Windows tool bubble drag through four neighbours | 120 | Unmeasured on reference hardware; Surface Pro / Adreno X1-85 functional checks do not qualify timing (PresentMon ETW access denied) | [Windows tool bubbles](../development/windows.md#tool-bubbles) |
 | Windows HDR color bubble drag and intensity scrub | 120 | Unmeasured on reference hardware; native input and pixel checks do not qualify presentation timing (PresentMon ETW access denied) | [Windows tool bubbles](../development/windows.md#tool-bubbles) |
@@ -4378,6 +4378,27 @@ the frozen baseline. A Mac test-bundle compile overlapped the 17.5 run; the
 reference iPad ran only the workload. Evidence and stage/pen-up attribution are
 in `artifacts/ipados17/comparison/codegen-control/`.
 
+
+## GTK toolbar divider resize
+
+The 2026-10-26 UTC release candidate includes the corrected Paint tool order and
+expanding GTK dividers on `724860421`. The private 1600 × 1000 compositor runs
+at 120 Hz and scale 1 on NVIDIA RTX PRO 6000 Blackwell Max-Q, Vulkan 615.71.09.
+The standard resize fixture uses its startup drawing. This short desktop run
+does not establish a before/after comparison or reference-tier qualification.
+
+The first mouse resize of the left column produced 276 changing-geometry
+presentations at **54.49/s**, with a 41.689 ms presentation-gap p99 and 15.825 ms
+paint p95. Its 288 inputs had 0.304 ms dispatch p95 and zero model refreshes.
+The 114 Hz floor failed; subsequent scenarios were not run. Native input checks
+pass in both themes: widening the toolbar from 36 to 112 pixels expands each
+retained divider's painted line from 18 to 94 pixels, then restores 18 pixels
+when narrowed. Input slots and drop targets keep their dimensions.
+
+[Raw metrics](../../artifacts/paint-toolbar-csp-order/resize/gtk.partial.json),
+[run log](../../artifacts/paint-toolbar-csp-order/workspace-resize.log) and
+[source and executable provenance](../../artifacts/paint-toolbar-csp-order/resize-provenance.json)
+identify the measured build and invocation.
 
 ## GTK Tool Set density
 

@@ -248,20 +248,25 @@ fn paint_slot_variations(d: &mut Driver, theme: Theme) {
     }
 }
 
-fn paint_blend_variations(d: &mut Driver, theme: Theme) {
-    restore(d, WorkspacePreset::Illustrator);
+fn assert_paint_toolbar_order(d: &Driver) {
+    use ToolbarControl::{Command, ToolSlot, Divider, Color};
+    use ToolSlotId as S;
+    use CommandId as C;
     let controls = state(&d.w).workspace.layout.panel(Panel::Toolbar).unwrap().tiles()
         .iter().map(|tile| tile.control).collect::<Vec<_>>();
-    let positions = controls.iter().copied().filter(|control|
-        !matches!(control, ToolbarControl::Color | ToolbarControl::Divider)).collect::<Vec<_>>();
-    let command = |command| ToolbarControl::Command { command };
-    let slot = |slot| ToolbarControl::ToolSlot { slot };
-    assert_eq!(positions, [command(CommandId::Zoom), command(CommandId::Hand), slot(ToolSlotId::Operation),
-        slot(ToolSlotId::ManualSelection), slot(ToolSlotId::AutomaticSelection), command(CommandId::Eyedropper),
-        command(CommandId::Pen), command(CommandId::Pencil), command(CommandId::Brush), command(CommandId::Airbrush),
-        command(CommandId::Eraser), slot(ToolSlotId::Blend), command(CommandId::Liquify), slot(ToolSlotId::Retouch),
-        slot(ToolSlotId::Fill), slot(ToolSlotId::Gradient), slot(ToolSlotId::Figure), slot(ToolSlotId::Ruler)]);
-    assert_eq!(controls.last(), Some(&ToolbarControl::Color));
+    assert_eq!(controls, [Command { command: C::Pen }, Command { command: C::Pencil },
+        Command { command: C::Brush }, Command { command: C::Eraser }, Command { command: C::Airbrush },
+        ToolSlot { slot: S::Blend }, Command { command: C::Liquify }, ToolSlot { slot: S::Retouch }, Divider,
+        ToolSlot { slot: S::ManualSelection }, ToolSlot { slot: S::AutomaticSelection }, ToolSlot { slot: S::Fill },
+        ToolSlot { slot: S::Gradient }, Divider, ToolSlot { slot: S::Operation }, ToolSlot { slot: S::Figure },
+        ToolSlot { slot: S::Ruler }, Command { command: C::Hand }, Command { command: C::Zoom },
+        Command { command: C::Eyedropper }, Color]);
+    assert_eq!(controls.iter().filter(|control| !matches!(control, Color | Divider)).count(), 18);
+}
+
+fn paint_blend_variations(d: &mut Driver, theme: Theme) {
+    restore(d, WorkspacePreset::Illustrator);
+    assert_paint_toolbar_order(d);
     let anchor = slot_anchor(d, ToolSlotId::Blend);
     let opener = anchor_widget(d, anchor);
     let groups = [layer_ui::ToolGroup::Blend, layer_ui::ToolGroup::WetPaint,
@@ -446,6 +451,112 @@ fn paint_leaf_tools(d: &mut Driver, theme: Theme) {
     d.capture_canvas(&format!("vector-eraser-{theme:?}.png"));
     d.click(&opener);
     d.w.dispatch(UiAction::Invoke { command: CommandId::Undo }); pump(100);
+}
+
+fn painted_divider_length(line: &gtk::Separator, horizontal: bool) -> i32 {
+    let parent = line.parent().unwrap();
+    let bounds = line.compute_bounds(&parent).unwrap();
+    let snapshot = gtk::Snapshot::new();
+    parent.snapshot_child(line, &snapshot);
+    let texture = line.native().unwrap().renderer().unwrap()
+        .render_texture(snapshot.to_node().unwrap(), Some(&bounds));
+    let width = texture.width() as usize;
+    let mut pixels = vec![0; width * texture.height() as usize * 4];
+    texture.download(&mut pixels, width * 4);
+    let painted = pixels.as_chunks::<4>().0.iter().enumerate().filter(|(_, pixel)| pixel[3] > 8)
+        .map(|(i, _)| if horizontal { i % width } else { i / width }).collect::<Vec<_>>();
+    assert!(!painted.is_empty(), "divider paints a visible line");
+    (painted.iter().max().unwrap() - painted.iter().min().unwrap() + 1) as i32
+}
+
+#[test]
+#[ignore = "private Mutter: --native-test=native_paint_toolbar_dividers_input"]
+fn native_paint_toolbar_dividers_input() {
+    let mut d = Driver::new("art.capycanvas.PaintToolbarDividers");
+    for theme in [Theme::Light, Theme::Dark] {
+        d.w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        for edge in [Edge::Left, Edge::Top] {
+            restore(&d, WorkspacePreset::Illustrator);
+            let viewport = [d.w.surface.width() as f32, d.w.surface.height() as f32];
+            d.w.dispatch(UiAction::MovePanel { panel: Panel::Toolbar,
+                target: DockTarget::Edge { edge, outer: true }, viewport });
+            pump(250);
+            assert_paint_toolbar_order(&d);
+            let layout = state(&d.w).workspace.layout;
+            let band = layout.bands.iter().find(|band| matches!(&band.root,
+                DockNode::Tabs { panels, .. } if panels.contains(&Panel::Toolbar))).unwrap().id;
+            let tiles = layout.panel(Panel::Toolbar).unwrap().tiles().to_vec();
+            let dividers = tiles.iter().filter(|tile| tile.control == ToolbarControl::Divider)
+                .map(|tile| (tile.id, d.named(&format!("tile-{}", tile.id)))).collect::<Vec<_>>();
+            assert_eq!(dividers.len(), 2);
+            let lines = dividers.iter().map(|(_, widget)| descendant::<gtk::Separator>(widget).unwrap()).collect::<Vec<_>>();
+            let horizontal = edge == Edge::Left;
+            for (stage, extent) in [("narrow", 36.), ("wide", 112.), ("restored", 36.)] {
+                if stage != "narrow" {
+                    let resolved = d.w.resolved();
+                    let bounds = resolved.dividers.iter().find(|divider| divider.band && divider.id == band).unwrap().bounds;
+                    let start = [bounds.x + bounds.width * 0.5, bounds.y + bounds.height * 0.5];
+                    let delta = if stage == "wide" { 76. } else { -76. };
+                    let end = if horizontal { [start[0] + delta, start[1]] } else { [start[0], start[1] + delta] };
+                    drag(&mut d, "mouse", start, end, false);
+                    pump(250);
+                }
+                assert_paint_toolbar_order(&d);
+                assert_eq!(state(&d.w).workspace.layout.panel(Panel::Toolbar).unwrap().tiles(), tiles);
+                let resolved = d.w.resolved();
+                let group = resolved.groups.iter().find(|group| group.active == Panel::Toolbar).unwrap();
+                let placements = &group.tiles.as_ref().unwrap().tiles;
+                let mut previous = f32::NEG_INFINITY;
+                for (tile, bounds) in tiles.iter().zip(placements) {
+                    let widget = d.named(&format!("tile-{}", tile.id));
+                    assert!(widget.is_mapped());
+                    if stage != "wide" {
+                        let native = widget.compute_bounds(&d.w.window).unwrap();
+                        let position = if horizontal { native.y() } else { native.x() };
+                        assert!(position > previous, "native Paint order follows its shared toolbar");
+                        previous = position;
+                    }
+                    if tile.control != ToolbarControl::Divider { continue; }
+                    let button = descendant::<gtk::Button>(&widget).unwrap();
+                    let line = descendant::<gtk::Separator>(&button).unwrap();
+                    let outer = button.compute_bounds(&button.parent().unwrap()).unwrap();
+                    let native = line.compute_bounds(&button).unwrap();
+                    let slot_cross = if horizontal { bounds.width } else { bounds.height };
+                    assert_eq!(slot_cross, if horizontal { extent } else { 36. }, "top ribbons retain their shared one-row tile cross extent");
+                    assert_eq!(if horizontal { outer.width() } else { outer.height() }, slot_cross);
+                    assert_eq!(if horizontal { outer.height() } else { outer.width() }, 8., "divider input slot remains8px");
+                    assert_eq!(line, lines[dividers.iter().position(|(id, _)| *id == tile.id).unwrap()], "resize retains the actual separator");
+                    assert_eq!(line.orientation(), if horizontal { gtk::Orientation::Horizontal } else { gtk::Orientation::Vertical });
+                    assert_eq!((line.margin_start(), line.margin_end()), if horizontal { (9, 9) } else { (0, 0) });
+                    assert_eq!((line.margin_top(), line.margin_bottom()), if horizontal { (0, 0) } else { (9, 9) });
+                    assert_eq!((line.width_request(), line.height_request()), (-1, -1));
+                    let length = if horizontal { native.width() } else { native.height() };
+                    let inset = if horizontal { native.x() } else { native.y() };
+                    assert_eq!(length, slot_cross - 18.);
+                    assert!((inset - 9.).abs() <= 1.);
+                    assert_eq!(painted_divider_length(&line, horizontal), (slot_cross - 18.) as i32);
+                    for at in if horizontal { [[0.05, 0.5], [0.95, 0.5]] } else { [[0.5, 0.05], [0.5, 0.95]] } {
+                        let point = screen_point(button.upcast_ref(), &d.w.window, at);
+                        let hit = d.w.window.pick(point[0] as f64, point[1] as f64, gtk::PickFlags::DEFAULT).unwrap();
+                        assert!(hit == button || hit.is_ancestor(&button), "divider margins remain part of the button input area");
+                    }
+                    let body = group.body();
+                    let hint = resolved.tile_group_drop_hint([body.x + bounds.x + bounds.width * 0.5,
+                        body.y + bounds.y + bounds.height * 0.5], &state(&d.w).workspace.layout).unwrap();
+                    assert_eq!(hint.target, DockTarget::TileGroup { panel: Panel::Toolbar, divider: tile.id });
+                    assert_eq!(if horizontal { hint.bounds.height } else { hint.bounds.width }, 3.);
+                    assert_eq!(if horizontal { hint.bounds.width } else { hint.bounds.height }, slot_cross);
+                    eprintln!("{theme:?}/{edge:?}/{stage}: band{extent}, slot{slot_cross}, allocatedline{length}, paintedline{}", painted_divider_length(&line, horizontal));
+                }
+                for (id, widget) in &dividers { assert_eq!(d.named(&format!("tile-{id}")), *widget); }
+                let before = (state(&d.w).layer_tools.tool, state(&d.w).brush.preset);
+                d.click(&dividers[0].1);
+                assert_eq!((state(&d.w).layer_tools.tool, state(&d.w).brush.preset), before);
+                d.capture_canvas(&format!("paint-divider-{theme:?}-{edge:?}-{stage}.png"));
+            }
+        }
+    }
+    d.finish();
 }
 
 #[test]

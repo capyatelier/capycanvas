@@ -573,11 +573,11 @@ fn shipped_paint_order_keeps_remembered_groups_in_their_slots() {
     use ToolSlotId as S;
     use ToolbarControl::{Command, ToolSlot, Divider, Color};
     let expected = [
-        Command { command: C::Zoom }, Command { command: C::Hand }, ToolSlot { slot: S::Operation },
-        ToolSlot { slot: S::ManualSelection }, ToolSlot { slot: S::AutomaticSelection }, Command { command: C::Eyedropper }, Divider,
-        Command { command: C::Pen }, Command { command: C::Pencil }, Command { command: C::Brush }, Command { command: C::Airbrush },
-        Command { command: C::Eraser }, ToolSlot { slot: S::Blend }, Command { command: C::Liquify }, ToolSlot { slot: S::Retouch }, Divider,
-        ToolSlot { slot: S::Fill }, ToolSlot { slot: S::Gradient }, ToolSlot { slot: S::Figure }, ToolSlot { slot: S::Ruler }, Color,
+        Command { command: C::Pen }, Command { command: C::Pencil }, Command { command: C::Brush }, Command { command: C::Eraser },
+        Command { command: C::Airbrush }, ToolSlot { slot: S::Blend }, Command { command: C::Liquify }, ToolSlot { slot: S::Retouch }, Divider,
+        ToolSlot { slot: S::ManualSelection }, ToolSlot { slot: S::AutomaticSelection }, ToolSlot { slot: S::Fill }, ToolSlot { slot: S::Gradient }, Divider,
+        ToolSlot { slot: S::Operation }, ToolSlot { slot: S::Figure }, ToolSlot { slot: S::Ruler },
+        Command { command: C::Hand }, Command { command: C::Zoom }, Command { command: C::Eyedropper }, Color,
     ];
     for platform in Platform::ALL {
         let layout = WorkspacePreset::Illustrator.layout(platform);

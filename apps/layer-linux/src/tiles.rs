@@ -133,19 +133,21 @@ pub fn set_size_class(widget: &impl IsA<gtk::Widget>, style: TileStyle, kind: &s
 /// A divider line centred in its slot, running along `orientation`.
 pub(crate) fn divider_line(orientation: gtk::Orientation) -> gtk::Separator {
     let line = gtk::Separator::new(orientation);
-    line.set_halign(gtk::Align::Center);
-    line.set_valign(gtk::Align::Center);
     orient_divider(&line, orientation);
     line
 }
 
 pub(crate) fn orient_divider(line: &gtk::Separator, orientation: gtk::Orientation) {
     line.set_orientation(orientation);
-    let length = layer_ui::DIVIDER_LENGTH as i32;
-    match orientation {
-        gtk::Orientation::Horizontal => line.set_size_request(length, -1),
-        _ => line.set_size_request(-1, length),
-    }
+    line.set_size_request(-1, -1);
+    let horizontal = orientation == gtk::Orientation::Horizontal;
+    let inset = layer_ui::TOOLBAR_DIVIDER_INSET as i32;
+    line.set_halign(if horizontal { gtk::Align::Fill } else { gtk::Align::Center });
+    line.set_valign(if horizontal { gtk::Align::Center } else { gtk::Align::Fill });
+    line.set_margin_start(if horizontal { inset } else { 0 });
+    line.set_margin_end(if horizontal { inset } else { 0 });
+    line.set_margin_top(if horizontal { 0 } else { inset });
+    line.set_margin_bottom(if horizontal { 0 } else { inset });
 }
 
 /// A divider slot between tiles of a strip running along `strip`.
