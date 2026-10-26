@@ -58,6 +58,47 @@ fn quick_pinch_fits_upright_and_reverse_restores_the_view_on_every_host() {
 }
 
 #[test]
+fn quick_pinch_preferences_leave_disabled_directions_as_navigation_on_every_host() {
+    for platform in Platform::ALL {
+        for fit in [false, true] {
+            for restore in [false, true] {
+                let mut s = painted_session();
+                s.state.platform = platform;
+                for (id, enabled) in [(PreferenceId::QuickPinchFit, fit), (PreferenceId::QuickPinchRestore, restore)] {
+                    preference(&mut s, PreferenceAction::Edit { id, value: PreferenceValue::Bool(enabled) });
+                }
+                s.gesture([400., 300.], [350., 280.], 2., 0.7).unwrap();
+                let previous = s.state.camera.view();
+                let zoom = s.state.camera.zoom;
+                let checkpoint = s.engine.checkpoint();
+                quick_pinch(&mut s, false, 0, 80);
+                if fit {
+                    assert_eq!(s.state.camera.rotation, 0.);
+                    assert!(s.navigation.quick_fit.is_some());
+                    preference(&mut s, PreferenceAction::Edit { id: PreferenceId::QuickPinchFit, value: PreferenceValue::Bool(false) });
+                } else {
+                    assert!((s.state.camera.rotation - 0.7).abs() < 0.001);
+                    assert!((s.state.camera.zoom / zoom - 0.5).abs() < 0.001);
+                    assert!(s.navigation.quick_fit.is_none());
+                }
+                let outward_zoom = s.state.camera.zoom;
+                let outward_rotation = s.state.camera.rotation;
+                quick_pinch(&mut s, true, 500, 80);
+                if fit && restore {
+                    for (actual, expected) in s.state.camera.view().document_to_surface.into_iter().zip(previous.document_to_surface) {
+                        assert!((actual - expected).abs() < 0.001, "{platform:?}: restore works independently of fit");
+                    }
+                } else {
+                    assert!((s.state.camera.zoom / outward_zoom - 2.).abs() < 0.001, "{platform:?}: disabled direction keeps zoom");
+                    assert!((s.state.camera.rotation - outward_rotation).abs() < 0.001);
+                }
+                assert_eq!(s.engine.checkpoint(), checkpoint);
+            }
+        }
+    }
+}
+
+#[test]
 fn slow_pinches_and_outward_pinches_without_a_fitted_view_keep_navigation() {
     for (outward, duration) in [(false, 500), (true, 80)] {
         let mut s = painted_session();

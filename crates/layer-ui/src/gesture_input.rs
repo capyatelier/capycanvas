@@ -52,6 +52,10 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub(super) fn perform_touch_gesture(&mut self, gesture: TouchGesture, reply: &mut InputReply) -> Result<(), String> {
+        if let TouchGesture::QuickPinch { outward } = gesture {
+            let enabled = if outward { self.state.settings.quick_pinch_restore } else { self.state.settings.quick_pinch_fit };
+            if !enabled { return Ok(()); }
+        }
         if matches!(gesture, TouchGesture::QuickPinch { outward: true })
             && !self.navigation.quick_fit.as_ref().is_some_and(|(_, fit)| self.interaction.gestures.camera.as_ref().is_some_and(|camera| camera.view() == *fit)) {
             return Ok(());

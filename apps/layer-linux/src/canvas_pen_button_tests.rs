@@ -240,9 +240,47 @@ fn native_canvas_quick_pinch_and_held_history() {
             {"touch":"up","slot":0}, {"touch":"up","slot":1}
         ]));
     };
+    let preferences = |d: &mut Driver, fit: bool, restore: bool| {
+        d.w.dispatch(UiAction::OpenSettings { page: SettingsPage::Canvas });
+        until(|| d.w.preferences.dialog.is_mapped(), "Canvas preferences open");
+        pump(200);
+        for (name, expected) in [("setting-quick-pinch-fit", fit), ("setting-quick-pinch-restore", restore)] {
+            let row = named::<adw::SwitchRow>(d.w.preferences.dialog.upcast_ref(), name);
+            if row.is_active() != expected {
+                assert!(row.grab_focus());
+                d.input.key(0x20);
+                assert_eq!(row.is_active(), expected, "native switch {name}");
+            }
+        }
+        until(|| crate::preferences::load().unwrap().is_some_and(|saved| saved.quick_pinch_fit == fit && saved.quick_pinch_restore == restore), "quick pinch preferences persist");
+        assert_eq!(state(&d.w).settings.quick_pinch_fit, fit);
+        assert_eq!(state(&d.w).settings.quick_pinch_restore, restore);
+        d.w.preferences.dialog.close();
+        until(|| !d.w.preferences.dialog.is_mapped() && !state(&d.w).settings_open && d.w.window.is_active()
+            && d.w.window.pick(center[0] as f64, center[1] as f64, gtk::PickFlags::DEFAULT).is_some_and(|hit| hit == d.w.area || hit.is_ancestor(&d.w.area)),
+            "Canvas preferences close and return the native canvas hit target before touch navigation");
+    };
     let count = |d: &Driver| state(&d.w).layers.len();
     for theme in [Theme::Light, Theme::Dark] {
         d.w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        preferences(&mut d, false, true);
+        d.w.dispatch(UiAction::SetZoom { zoom: 2. });
+        d.w.dispatch(UiAction::SetRotation { rotation: 0.7 });
+        pump(150);
+        pinch(&mut d, false);
+        assert!((state(&d.w).camera.zoom - 1.).abs() < 0.001, "{theme:?}: disabled quick fit preserves pinch zoom");
+        assert!((state(&d.w).camera.rotation - 0.7).abs() < 0.001);
+        preferences(&mut d, true, false);
+        d.w.dispatch(UiAction::SetZoom { zoom: 2. });
+        d.w.dispatch(UiAction::SetRotation { rotation: 0.7 });
+        pump(150);
+        pinch(&mut d, false);
+        assert_eq!(state(&d.w).camera.rotation, 0., "{theme:?}: reenabling quick fit straightens; camera={:?}, settings=({}, {})", state(&d.w).camera, state(&d.w).settings.quick_pinch_fit, state(&d.w).settings.quick_pinch_restore);
+        let fitted_zoom = state(&d.w).camera.zoom;
+        pinch(&mut d, true);
+        assert!((state(&d.w).camera.zoom / fitted_zoom - 2.).abs() < 0.001, "{theme:?}: disabled restore preserves pinch zoom");
+        assert_eq!(state(&d.w).camera.rotation, 0.);
+        preferences(&mut d, true, true);
         d.w.dispatch(UiAction::SetZoom { zoom: 2. });
         d.w.dispatch(UiAction::SetRotation { rotation: 0.7 });
         pump(150);
@@ -250,7 +288,7 @@ fn native_canvas_quick_pinch_and_held_history() {
         let revision = ui_session(&d.w).engine().document().revision;
         pinch(&mut d, false);
         let mut fitted = state(&d.w).camera;
-        assert_eq!(fitted.rotation, 0., "{theme:?}: quick pinch straightens");
+        assert_eq!(fitted.rotation, 0., "{theme:?}: quick pinch straightens; camera={fitted:?}, settings=({}, {})", state(&d.w).settings.quick_pinch_fit, state(&d.w).settings.quick_pinch_restore);
         fitted.fit(ui_session(&d.w).engine().document().composition().size);
         assert_eq!(state(&d.w).camera.view(), fitted.view(), "{theme:?}: quick pinch fits");
         pinch(&mut d, true);

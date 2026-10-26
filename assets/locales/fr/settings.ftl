@@ -179,3 +179,5 @@ settings-mouse-wheel = Molette de la souris
 settings-wheel-pan = Déplacer
 settings-wheel-zoom = Zoom
 settings-rotate-with-two-fingers = Tourner avec deux doigts
+settings-quick-pinch-fit = Pincer rapidement pour ajuster
+settings-quick-pinch-restore = Écarter les doigts pour rétablir la vue

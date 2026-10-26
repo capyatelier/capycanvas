@@ -179,3 +179,5 @@ settings-mouse-wheel = Rueda del ratón
 settings-wheel-pan = Desplazar
 settings-wheel-zoom = Zoom
 settings-rotate-with-two-fingers = Girar con dos dedos
+settings-quick-pinch-fit = Pellizcar rápido para encajar
+settings-quick-pinch-restore = Pellizcar hacia fuera para restaurar la vista

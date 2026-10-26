@@ -179,3 +179,5 @@ settings-mouse-wheel = 마우스 휠
 settings-wheel-pan = 이동
 settings-wheel-zoom = 확대/축소
 settings-rotate-with-two-fingers = 두 손가락으로 회전
+settings-quick-pinch-fit = 빠르게 오므려 화면에 맞추기
+settings-quick-pinch-restore = 벌려서 이전 보기로 복원

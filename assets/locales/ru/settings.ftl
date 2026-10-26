@@ -187,3 +187,5 @@ settings-mouse-wheel = Колесо мыши
 settings-wheel-pan = Перемещение
 settings-wheel-zoom = Масштаб
 settings-rotate-with-two-fingers = Вращать двумя пальцами
+settings-quick-pinch-fit = Быстро свести пальцы, чтобы вписать холст
+settings-quick-pinch-restore = Развести пальцы, чтобы вернуть вид

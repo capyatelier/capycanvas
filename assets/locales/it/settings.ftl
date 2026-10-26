@@ -175,3 +175,5 @@ settings-mouse-wheel = Rotella del mouse
 settings-wheel-pan = Sposta
 settings-wheel-zoom = Zoom
 settings-rotate-with-two-fingers = Ruota con due dita
+settings-quick-pinch-fit = Pizzica rapidamente per adattare
+settings-quick-pinch-restore = Allarga le dita per ripristinare la vista

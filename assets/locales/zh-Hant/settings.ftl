@@ -179,3 +179,5 @@ settings-mouse-wheel = 滑鼠滾輪
 settings-wheel-pan = 平移
 settings-wheel-zoom = 縮放
 settings-rotate-with-two-fingers = 雙指旋轉
+settings-quick-pinch-fit = 快速捏合以符合視窗
+settings-quick-pinch-restore = 反向捏合以還原檢視

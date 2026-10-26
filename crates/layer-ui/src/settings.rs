@@ -90,6 +90,8 @@ pub struct Settings {
     pub zoom_tool: ZoomToolSettings,
     pub wheel_zoom: bool,
     pub rotate_with_two_fingers: bool,
+    pub quick_pinch_fit: bool,
+    pub quick_pinch_restore: bool,
     pub snap_rotation: bool,
     /// New groups blend Pass Through instead of Normal.
     pub pass_through_groups: bool,
@@ -159,6 +161,8 @@ impl Default for Settings {
             zoom_tool: ZoomToolSettings::default(),
             wheel_zoom: false,
             rotate_with_two_fingers: true,
+            quick_pinch_fit: true,
+            quick_pinch_restore: true,
             snap_rotation: true,
             pass_through_groups: false,
             feedback: true,
@@ -389,6 +393,8 @@ pub enum PreferenceId {
     ZoomSpeed,
     WheelBehavior,
     RotateWithTwoFingers,
+    QuickPinchFit,
+    QuickPinchRestore,
     PassThroughGroups,
     PenPressure,
     PenTilt,
@@ -423,6 +429,8 @@ impl PreferenceId {
             Self::ZoomSpeed => "zoom-speed",
             Self::WheelBehavior => "wheel-behavior",
             Self::RotateWithTwoFingers => "rotate-with-two-fingers",
+            Self::QuickPinchFit => "quick-pinch-fit",
+            Self::QuickPinchRestore => "quick-pinch-restore",
             Self::PassThroughGroups => "pass-through-groups",
             Self::PenPressure => "pen-pressure",
             Self::PenTilt => "pen-tilt",
@@ -1148,6 +1156,8 @@ impl Settings {
                             selected: u32::from(self.wheel_zoom), icons: Vec::new(), presentation: ChoicePresentation::Dropdown,
                         }),
                         row(RotateWithTwoFingers, &localizer.text(MessageId::SETTINGS_ROTATE_WITH_TWO_FINGERS), "", PreferenceKind::Switch { active: self.rotate_with_two_fingers }),
+                        row(QuickPinchFit, &localizer.text(MessageId::SETTINGS_QUICK_PINCH_FIT), "", PreferenceKind::Switch { active: self.quick_pinch_fit }),
+                        row(QuickPinchRestore, &localizer.text(MessageId::SETTINGS_QUICK_PINCH_RESTORE), "", PreferenceKind::Switch { active: self.quick_pinch_restore }),
                         number(
                             PanSpeed,
                             &localizer.text(MessageId::SETTINGS_SCROLL_PAN_SPEED),
@@ -1484,6 +1494,8 @@ impl Settings {
             ZoomSpeed => self.zoom_speed = n,
             WheelBehavior => self.wheel_zoom = value.choice().unwrap() == 1,
             RotateWithTwoFingers => self.rotate_with_two_fingers = matches!(value, PreferenceValue::Bool(true)),
+            QuickPinchFit => self.quick_pinch_fit = matches!(value, PreferenceValue::Bool(true)),
+            QuickPinchRestore => self.quick_pinch_restore = matches!(value, PreferenceValue::Bool(true)),
             PassThroughGroups => {
                 self.pass_through_groups = matches!(value, PreferenceValue::Bool(true))
             }
@@ -2390,6 +2402,32 @@ mod copy_tests {
                 assert_eq!(settings.cursor, CursorMode::BrushSize);
             }
         }
+    }
+
+    #[test]
+    fn quick_pinch_preferences_are_independent_persisted_and_resettable() {
+        for platform in Platform::ALL {
+            let mut settings = Settings::default();
+            let ids = [PreferenceId::QuickPinchFit, PreferenceId::QuickPinchRestore];
+            for id in ids {
+                let page = settings.pages(platform).into_iter().find(|page| page.groups.iter().any(|group| group.rows.iter().any(|row| row.id == id))).unwrap();
+                assert_eq!(page.id, SettingsPage::Canvas);
+                assert!(matches!(settings.field(id, platform).unwrap().kind, PreferenceKind::Switch { active: true }));
+                assert!(settings.edit(id, PreferenceValue::Number(0.), platform).is_err());
+                settings.edit(id, PreferenceValue::Bool(false), platform).unwrap();
+                assert!(settings.field(id, platform).unwrap().reset.unwrap().enabled);
+            }
+            let restored = Settings::restore(&serde_json::to_string(&settings).unwrap());
+            assert_eq!(restored, settings);
+            settings.edit(ids[0], settings.default_value(ids[0], platform).unwrap(), platform).unwrap();
+            assert!(settings.quick_pinch_fit);
+            assert!(!settings.quick_pinch_restore);
+            settings.edit(ids[1], settings.default_value(ids[1], platform).unwrap(), platform).unwrap();
+            assert_eq!(settings, Settings::default());
+        }
+        let settings = Settings::restore(r#"{"quick_pinch_fit":"invalid","quick_pinch_restore":false}"#);
+        assert!(settings.quick_pinch_fit);
+        assert!(!settings.quick_pinch_restore);
     }
 
     #[test]

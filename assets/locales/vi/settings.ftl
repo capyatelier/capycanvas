@@ -175,3 +175,5 @@ settings-mouse-wheel = Con lăn chuột
 settings-wheel-pan = Di chuyển
 settings-wheel-zoom = Thu phóng
 settings-rotate-with-two-fingers = Xoay bằng hai ngón tay
+settings-quick-pinch-fit = Chụm nhanh để vừa khung
+settings-quick-pinch-restore = Mở hai ngón tay để khôi phục góc nhìn

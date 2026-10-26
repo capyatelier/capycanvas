@@ -327,3 +327,5 @@ settings-mouse-wheel = Roda mouse
 settings-wheel-pan = Geser
 settings-wheel-zoom = Zoom
 settings-rotate-with-two-fingers = Putar dengan dua jari
+settings-quick-pinch-fit = Cubit cepat untuk menyesuaikan
+settings-quick-pinch-restore = Renggangkan untuk memulihkan tampilan

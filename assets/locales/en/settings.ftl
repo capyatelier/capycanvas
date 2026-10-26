@@ -179,3 +179,5 @@ settings-mouse-wheel = Mouse wheel
 settings-wheel-pan = Pan
 settings-wheel-zoom = Zoom
 settings-rotate-with-two-fingers = Rotate with two fingers
+settings-quick-pinch-fit = Quick pinch to fit
+settings-quick-pinch-restore = Reverse pinch to restore view

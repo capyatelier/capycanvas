@@ -296,6 +296,11 @@ as ordinary zoom. Both fingers must move, finish the pinch within 300 ms and
 lift within 100 ms of each other; pans, cancellation and extra contacts cannot
 reset the view. Slow pinches retain ordinary navigation.
 
+Canvas → Navigation includes separate **Quick pinch to fit** and
+**Reverse pinch to restore view** switches. Both start on and are saved with the
+application's input preferences. Turning either off leaves that pinch direction
+as ordinary zoom. The same switches apply to touchscreen and trackpad contacts.
+
 Three fingers scrub to clear the active layer with one Undo step. Move all three
 fingers together in any direction, reverse, then reverse again without lifting.
 Each leg travels at least twice the host's touch slop; the gesture finishes within
