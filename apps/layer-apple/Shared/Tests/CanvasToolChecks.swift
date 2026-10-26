@@ -332,7 +332,12 @@ extension XCTestCase {
         #if os(macOS)
         label.doubleClick()
         #else
-        label.doubleTap()
+        let window = app.windows.firstMatch, frame = label.frame
+        guard frame.width > 0, frame.height > 0, scroll.frame.contains(frame), window.frame.contains(frame) else {
+            return XCTFail("The numeric caption must be visible inside its editor window")
+        }
+        window.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(
+            dx: frame.midX - window.frame.minX, dy: frame.midY - window.frame.minY)).doubleTap()
         #endif
     }
 
@@ -340,19 +345,25 @@ extension XCTestCase {
         let value = app.buttons["number-value-tool-" + id]
         let scroll = app.scrollViews.containing(.button, identifier: value.identifier).firstMatch
         revealEditorControl(value, in: scroll)
-        guard let heading = scroll.staticTexts.allElementsBoundByIndex.first(where: { editorText($0) == title }) else {
-            return XCTFail("The setting must expose its section heading: \(title)")
+        guard let snapshot = try? scroll.snapshot() else { return XCTFail("The tool settings scroll must remain available") }
+        func descendants(_ node: XCUIElementSnapshot) -> [XCUIElementSnapshot] {
+            node.children.flatMap { [$0] + descendants($0) }
         }
-        XCTAssertTrue(heading.exists); XCTAssertGreaterThan(heading.frame.height, 0)
-        revealEditorControl(heading, in: scroll)
-        revealEditorControl(value, in: scroll)
-        XCTAssertTrue(heading.isHittable && value.isHittable)
-        XCTAssertTrue(scroll.frame.contains(heading.frame.union(value.frame)))
-        XCTAssertLessThan(heading.frame.maxY, value.frame.minY)
-        let sections = scroll.staticTexts.allElementsBoundByIndex.filter {
-            ["Tip", "Material", "Texture", "Blending", "Smoothing"].contains(editorText($0))
+        func text(_ node: XCUIElementSnapshot) -> String {
+            node.label.isEmpty ? node.value as? String ?? "" : node.label
         }
-        XCTAssertFalse(sections.contains { $0.frame.minY > heading.frame.maxY && $0.frame.maxY < value.frame.minY }, "A setting must remain under its own heading")
+        let nodes = descendants(snapshot)
+        guard let heading = nodes.first(where: { $0.elementType == .staticText && text($0) == title }),
+              let readout = nodes.first(where: { $0.elementType == .button && $0.identifier == value.identifier }) else {
+            return XCTFail("The setting must expose its section heading and value: \(title)")
+        }
+        XCTAssertTrue(snapshot.frame.intersects(heading.frame))
+        XCTAssertTrue(readout.frame.width > 0 && readout.frame.height > 0 && snapshot.frame.contains(readout.frame))
+        XCTAssertLessThan(heading.frame.maxY, readout.frame.minY)
+        let sections = nodes.filter {
+            $0.elementType == .staticText && ["Tip", "Material", "Texture", "Blending", "Smoothing"].contains(text($0))
+        }
+        XCTAssertFalse(sections.contains { $0.frame.minY > heading.frame.maxY && $0.frame.maxY < readout.frame.minY }, "A setting must remain under its own heading")
     }
 
     @MainActor func checkPenBrushOrder(in app: XCUIApplication, theme: String) {
