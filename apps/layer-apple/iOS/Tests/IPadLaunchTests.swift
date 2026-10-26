@@ -371,7 +371,8 @@ extension EditorLaunchTests {
     @MainActor func testLayerListScrolling() throws {
         let app = editorTestApplication()
         app.launchEnvironment["CAPY_LAYER_INPUT_PROBE"] = "1"
-        let actions = (0..<22).map { _ in ["type": "layer", "action": ["op": "new", "group": false, "clipped": false]] as [String: Any] }
+        let actions = [["type": "customize", "action": ["type": "set_panel_visible", "panel": "layers", "visible": true]] as [String: Any]]
+            + (0..<22).map { _ in ["type": "layer", "action": ["op": "new", "group": false, "clipped": false]] as [String: Any] }
         app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = String(data: try JSONSerialization.data(withJSONObject: actions), encoding: .utf8)
         app.launch()
         let list = app.descendants(matching: .any)["layer-rows"].firstMatch
@@ -390,7 +391,23 @@ extension EditorLaunchTests {
         list.coordinate(withNormalizedOffset: CGVector(dx: 0.6, dy: 0.15)).press(forDuration: 0.01,
             thenDragTo: list.coordinate(withNormalizedOffset: CGVector(dx: 0.6, dy: 0.9)))
         XCTAssertTrue(first.waitForExistence(timeout: 5))
-        XCTAssertTrue(first.isHittable, "The source grip must be back inside the viewport")
+        let window = app.windows.firstMatch
+        var returnedFrames = "Native source, scroll or window snapshot unavailable"
+        let returned = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            guard first.exists, list.exists, window.exists,
+                  let grip = try? first.snapshot(), let scroll = try? list.snapshot(),
+                  let owned = try? window.snapshot(), scroll.elementType == .scrollView else { return false }
+            let viewport = scroll.frame.intersection(owned.frame)
+            returnedFrames = "Source \(grip.frame), scroll \(scroll.frame), viewport \(viewport), window \(owned.frame)"
+            return [grip.frame, scroll.frame, viewport, owned.frame].allSatisfy {
+                $0.minX.isFinite && $0.minY.isFinite && $0.width.isFinite && $0.height.isFinite
+                    && $0.width > 0 && $0.height > 0
+            } && viewport.contains(grip.frame)
+        }, object: first)
+        XCTAssertEqual(XCTWaiter.wait(for: [returned], timeout: 5), .completed,
+            "The source grip must be back inside the viewport: \(returnedFrames)")
+        let geometry = XCTAttachment(string: returnedFrames)
+        geometry.name = "layer-source-return-geometry"; geometry.lifetime = .keepAlways; add(geometry)
         let edge = list.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 1)).withOffset(CGVector(dx: 0, dy: -10))
         first.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(forDuration: 0.01,
             thenDragTo: edge, withVelocity: .slow, thenHoldForDuration: 1.2)
@@ -400,14 +417,10 @@ extension EditorLaunchTests {
         XCTAssertEqual(moved.filter { $0 != movedID }, initial.filter { $0 != movedID })
         XCTAssertGreaterThan(moved.firstIndex(of: movedID) ?? -1, Int(list.frame.height / 40),
             "Holding at the edge must move the source beyond the initial visible rows")
-        func command(_ label: String) {
-            app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@",
-                "toolbar-tile-commands-", label)).firstMatch.tap()
-        }
-        command("Undo")
+        editorHistory("Undo", in: app)
         expectation(for: NSPredicate { _, _ in order() == initial }, evaluatedWith: app)
         waitForExpectations(timeout: 5)
-        command("Redo")
+        editorHistory("Redo", in: app)
         expectation(for: NSPredicate { _, _ in order() == moved }, evaluatedWith: app)
         waitForExpectations(timeout: 5)
     }
