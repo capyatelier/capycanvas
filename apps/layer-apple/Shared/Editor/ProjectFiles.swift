@@ -841,7 +841,7 @@ import UIKit
     private func present(_ panel: NSSavePanel, completion: @escaping (NSApplication.ModalResponse) -> Void) {
         guard let presentationWindow else {
             completion(.cancel)
-            error = "The drawing window is unavailable."
+            error = store?.bootstrap["recovery"]["drawing_window_unavailable"].string
             return
         }
         var presenter = presentationWindow

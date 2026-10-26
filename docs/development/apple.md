@@ -717,6 +717,8 @@ another submission. Run it with
 Native document titles, suggested save filenames and pending close prompts come
 from shared document state and requests. Document alerts and export warnings use
 shared localized copy; native I/O errors retain their original details.
+Missing workspace owners and drawing-window presenters use the active bootstrap
+recovery copy, so these native failures follow interface language changes.
 `tests/project-files.swift` checks imported photo names, localized save suggestions
 and language changes while a close prompt remains pending on both Apple policies.
 It also delivers files before initial state publication and before Metal attachment,

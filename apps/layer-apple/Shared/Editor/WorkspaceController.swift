@@ -189,7 +189,7 @@ import SwiftUI
         if let window = EditorStore.workspaceOwner(target["owner"].string), let focus = window.focusWindow { focus() }
         else {
             send(["type": "focus_failed",
-                "error": "This workspace is open in another application window. Use that window or try again after it closes."])
+                "error": store?.bootstrap["recovery"]["workspace_missing"].string ?? ""])
         }
     }
 }
