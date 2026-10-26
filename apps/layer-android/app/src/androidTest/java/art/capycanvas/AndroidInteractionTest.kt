@@ -1497,6 +1497,41 @@ class AndroidInteractionTest {
             columnFor(panel).objectOrNull("open") != null && group(panel).getString("active") == panel
         }; settle()
     }
+    @Test fun configuringAnotherColumnRetainsNavigatorIdentity() {
+        fixture.getJSONObject("layout").put("collapsed", JSONArray(listOf(41,43).map {
+            obj("root" to it,"expanded_width" to 246)
+        }))
+        restore()
+        openTile("brushes"); openTile("navigator")
+        fun overviewKeys(): Set<Any> {
+            lateinit var keys: Set<Any>
+            onMain {
+                val field=CanvasHost::class.java.getDeclaredField("overviewSlots").apply { isAccessible=true }
+                keys=(field.get(host) as Map<*,*>).keys.filterNotNull().toSet()
+            }
+            return keys
+        }
+        fun navigatorConnected()=snapshot().getJSONObject("layout").array("vector_surfaces").objects()
+            .any { it.getInt("group")==group("navigator").getInt("id") }
+        waitFor("Both native columns and Navigator placement") {
+            columnFor("brushes").objectOrNull("open")!=null && navigatorConnected() && overviewKeys().size==1
+        }
+        val retained=overviewKeys()
+        customize(obj("type" to "show_all_controls","panel" to "brushes"))
+        val title=snapshot().array("panels").objects().first { it.getString("id")=="brushes" }.getString("configuration_title")
+        waitFor("Brushes configuration is shown") {
+            state().getJSONObject("customization").optString("expanded")=="brushes" && owner.find(hasLabel(title))!=null
+        }
+        SystemClock.sleep(500); settle()
+        assertTrue("Unrelated Navigator retains its shared vector receiver",navigatorConnected())
+        assertEquals("Configuration retains the unrelated Navigator composition",retained,overviewKeys())
+        customize(obj("type" to "close_expanded"))
+        waitFor("Brushes configuration closes") { state().getJSONObject("customization").isNull("expanded") }
+        SystemClock.sleep(500); settle()
+        assertTrue(navigatorConnected())
+        assertEquals("Closing configuration retains the unrelated Navigator composition",retained,overviewKeys())
+    }
+
     @Test fun stackedColumnsOpenAndResizeOrdinaryGroups() {
         stackFixture()
         fun assertConnection(panel: String, image: File) {

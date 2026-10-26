@@ -494,6 +494,8 @@ manual save checkpoints and undo/redo after an actual process death.
   pinned preset leaves, selection family scope and Sketch drawer columns in both
   themes. Native drag capture respects panel stacking: a drawer blocks covered
   resize handles while its own controls remain interactive.
+  `#configuringAnotherColumnRetainsNavigatorIdentity` checks remembered Navigator
+  ownership while another column opens and closes configuration in both themes.
   `#layerPropertiesDrawerUsesNativeSizingAndActions` checks the combined
   Layers/Properties drawer from the header and a custom toolbar, immediate growth,
   compact Properties, footer alignment, rows and icons 6 dp from both edges and

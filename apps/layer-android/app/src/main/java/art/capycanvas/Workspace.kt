@@ -435,11 +435,11 @@ private val HiddenChromeShape=object:Shape {
         val connected=layout.array("vector_surfaces").objects().map { it.getInt("group") }.toSet()
         layout.array("groups").objects().filter { it.getInt("id") !in connected || (hidden && it.optBoolean("zen_kept")) }.map { it.getInt("id") }.toSet()
     } }
-    for (column in columns) {
+    for (column in columns) key(column) {
         ConnectedPanelColumn(host,column,layout,groups,panels,dock,state,hidden)
     }
-    groups.filter { it in detached }.forEachIndexed { index,id -> key(id) {
-        PanelWindowModel(host,layout,id,index,panels,dock,state,hidden)
+    groups.forEachIndexed { index,id -> key(id) {
+        if (id in detached) PanelWindowModel(host,layout,id,index,panels,dock,state,hidden)
     } }
 }
 
@@ -452,8 +452,8 @@ private val HiddenChromeShape=object:Shape {
     ZenChrome(!hidden,Modifier.placed(origin,LocalDensity.current.density).zIndex(99f)) {
         Box(Modifier.fillMaxSize()) {
             PanelColumnSurface(host,id,Modifier.matchParentSize())
-            groups.filter { it in members }.forEachIndexed { index,group -> key(group) {
-                PanelWindowModel(host,layout,group,index,panels,dock,state,hidden,origin)
+            groups.forEachIndexed { index,group -> key(group) {
+                if (group in members) PanelWindowModel(host,layout,group,index,panels,dock,state,hidden,origin)
             } }
         }
     }
