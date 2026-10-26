@@ -309,15 +309,19 @@ struct ToolActionControl: View {
 
 struct PanelCheckStyle: ToggleStyle {
     let minHeight: CGFloat
+    var lineLimit: Int? = 1
     @Environment(\.bubbleEdits) private var edits
+    @Environment(\.editorPalette) private var palette
     func makeBody(configuration: Configuration) -> some View {
         Button { if edits?.consumeClick() != true { configuration.isOn.toggle() } } label: {
             HStack(spacing: 4) {
                 ZStack {
-                    SquircleShape(4).stroke(.primary.opacity(0.35), lineWidth: 2)
-                    if configuration.isOn { SharedIcon(name: "check", size: 16) }
+                    if configuration.isOn {
+                        SquircleShape(4).fill(palette.accent)
+                        SharedIcon(name: "check", size: 16).foregroundStyle(palette.accentForeground)
+                    } else { SquircleShape(4).stroke(palette.panelBorder, lineWidth: 2) }
                 }.frame(width: 16, height: 16).frame(width: 18)
-                configuration.label.lineLimit(1)
+                configuration.label.lineLimit(lineLimit)
             }.frame(minHeight: minHeight).frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
         }.buttonStyle(.plain).accessibilityAddTraits(configuration.isOn ? .isSelected : [])
             .modifier(BubbleNativeControl(drags: false))

@@ -328,6 +328,8 @@ mutation or release.
   On iPad, present document pickers from a controller attached to their editor
   window after its current transition completes. Retain the native picker until
   its delegate completes selection or cancellation.
+- **Panel checkboxes.** Use the shared accent and accent foreground when checked,
+  and the panel border line when unchecked. Let captions request wrapping.
 - **Independent publications.** Handle small `layer-host` packets such as
   `{command_search, revision}` in `EditorSnapshotState.receive` without promoting
   the content revision or refreshing retained panels and thumbnails.
