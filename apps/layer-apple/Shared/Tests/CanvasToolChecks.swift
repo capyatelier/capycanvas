@@ -456,8 +456,10 @@ extension XCTestCase {
         #endif
         for (tool, group, presets) in families where !dryOnly || tool == "Pencil" {
             for preset in presets {
-                selectPaintPreset(tool, group: group, preset: preset, in: app)
-                XCTAssertEqual(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "brush-")).count, presets.count)
+                if presets.count == 1 { selectPaintGroup(tool, group: group, in: app) }
+                else { selectPaintPreset(tool, group: group, preset: preset, in: app) }
+                XCTAssertEqual(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "brush-")).count,
+                    presets.count == 1 ? 0 : presets.count)
                 editPaintSize("120", in: app)
                 XCTAssertTrue(app.buttons["number-value-tool-opacity"].exists)
                 if tool == "Pencil" {
