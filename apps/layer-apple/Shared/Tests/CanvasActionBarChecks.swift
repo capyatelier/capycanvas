@@ -11,9 +11,31 @@ extension XCTestCase {
         revealEditorControl(item, in: menu); workspaceActivate(item)
         XCTAssertTrue(menu.waitForNonExistence(timeout: 10))
     }
-    @MainActor func checkCanvasActionBar(in app: XCUIApplication) {
-        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"set_color","rgba":[0.2,0.45,0.8,1]}]"#
-        app.launch(); capturePaintEditor(in: app)
+    @MainActor func checkCanvasActionBar(in app: XCUIApplication, theme: String = "light") {
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"\#(theme)"},{"type":"set_color","rgba":[0.2,0.45,0.8,1]}]"#
+        app.launch(); capturePaintEditor(in: app, theme: theme)
+        editorMenu(in: app, menu: "File", id: "new_document", label: "New drawing")
+        XCTAssertTrue(app.buttons["new-drawing-create"].waitForExistence(timeout: 60))
+        workspaceActivate(app.buttons["new-drawing-texture"])
+        let usePaper = app.buttons["new-drawing-paper-use"]
+        XCTAssertTrue(usePaper.waitForExistence(timeout: 10))
+        enterNewDrawingNumber("paper-relief", "0", in: app)
+        workspaceActivate(usePaper)
+        XCTAssertTrue(usePaper.waitForNonExistence(timeout: 10))
+        workspaceActivate(app.buttons["new-drawing-paper-color"])
+        let useColor = app.buttons["new-drawing-color-use"]
+        XCTAssertTrue(useColor.waitForExistence(timeout: 10))
+        let white = app.buttons["new-drawing-paper-color-0"]
+        XCTAssertEqual(white.label, "White")
+        workspaceActivate(white)
+        workspaceActivate(useColor)
+        XCTAssertTrue(useColor.waitForNonExistence(timeout: 10))
+        createNewDrawing(width: "1440", height: "1080", depth: 0, in: app)
+        expectation(for: NSPredicate { _, _ in
+            self.editorPixels(in: app).enumerated().allSatisfy { $0.offset % 4 == 3 || $0.element > 250 }
+        }, evaluatedWith: app)
+        waitForExpectations(timeout: 15)
+
         let window = workspaceViewport(in: app)
         let bar = app.descendants(matching: .any)["canvas-action-bar"].firstMatch
         let more = app.buttons["canvas-bar-more"]
@@ -23,7 +45,7 @@ extension XCTestCase {
         func expect(_ element: XCUIElement, _ format: String, _ message: String = "") {
             let match = XCTNSPredicateExpectation(predicate: NSPredicate(format: format), object: element)
             if XCTWaiter.wait(for: [match], timeout: 10) != .completed {
-                attachEditor(in: app, name: "canvas-bar-unexpected")
+                attachEditor(in: app, name: "canvas-bar-unexpected-\(theme)")
                 XCTFail("\(element) \(format) \(message)")
             }
         }
@@ -60,19 +82,21 @@ extension XCTestCase {
         func closeMore() {
             press(CGPoint(x: moreFrame.midX, y: moreFrame.midY)); expect(menu, "exists == NO", "More toggles closed")
         }
-        func activate(_ item: XCUIElement) {
-            revealEditorControl(item, in: menu); workspaceActivate(item)
+        func activate(_ item: XCUIElement, label: String? = nil) {
+            revealEditorControl(item, in: menu)
+            if let label { XCTAssertEqual(item.label, label) }
+            workspaceActivate(item)
         }
-        func perform(_ id: String, _ label: String) {
+        func perform(_ id: String, _ label: String, menuItem: String) {
             if action(id).waitForExistence(timeout: 2) { workspaceActivate(action(id)); return }
-            openMore(); activate(menu.buttons["menu-action-" + label]); expect(menu, "exists == NO")
+            openMore(); activate(menu.buttons[menuItem], label: label); expect(menu, "exists == NO")
         }
         func offered(_ id: String, _ label: String) -> Bool {
             if action(id).exists { return true }
             openMore(); defer { closeMore() }
             return menu.buttons["menu-action-" + label].waitForExistence(timeout: 3)
         }
-        func choose(_ group: String, _ title: String, index: Int, _ label: String) {
+        func choose(_ group: String, _ title: String, index: Int, _ label: String, menuItem: String) {
             let segment = app.buttons["canvas-bar-segment-\(group)-\(index)"], dropdown = app.buttons["canvas-bar-choice-" + group]
             if segment.exists {
                 workspaceActivate(segment); expect(segment, "selected == YES")
@@ -87,10 +111,10 @@ extension XCTestCase {
             }
             openMore()
             activate(menu.buttons["menu-action-" + title])
-            activate(menu.buttons["menu-action-" + label])
+            activate(menu.buttons[menuItem], label: label)
             expect(menu, "exists == NO")
             openMore(); activate(menu.buttons["menu-action-" + title])
-            expect(menu.buttons["menu-action-" + label], "selected == YES", "\(title) shows \(label)")
+            expect(menu.buttons[menuItem], "selected == YES", "\(title) shows \(label)")
             closeMore()
         }
         func chooseFromMenu(_ id: String, _ title: String, _ label: String) {
@@ -134,14 +158,24 @@ extension XCTestCase {
         XCTAssertTrue(window.frame.contains(bar.frame), "\(bar.frame) inside \(window.frame)")
         XCTAssertEqual(bar.frame.height, 36, accuracy: 1, "The bar is one strip of Small tiles")
         XCTAssertEqual(action("deselect").frame.width, 36, accuracy: 1, "Icon items are square tiles")
-        attachEditor(in: app, name: "canvas-bar-selection")
-        perform("fill_selection", "Fill selection")
+        attachEditor(in: app, name: "canvas-bar-selection-\(theme)")
+        editorMenu(in: app, menu: "View", id: "fit_canvas", label: "Fit canvas")
+        expect(action("deselect"), "exists == YES AND enabled == YES")
+        let unfilledPixels = editorPixels(in: app)
+        perform("fill_selection", "Fill selection", menuItem: "menu-action-Fill selection")
         expectation(for: NSPredicate { _, _ in
             let pixel = self.editorPixels(in: app); return Int(pixel[2]) > Int(pixel[0]) + 50
         }, evaluatedWith: app)
         waitForExpectations(timeout: 15)
+        expect(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "toolbar-tile-", "Undo")).firstMatch, "enabled == YES")
         let filledPixels = editorPixels(in: app), filledCamera = app.buttons["camera-status"].label
         let filledHistory = historyState()
+        func checkFillHistory() {
+            editorHistory("Undo", in: app); expectPixels(unfilledPixels, in: app)
+            editorHistory("Redo", in: app); expectPixels(filledPixels, in: app)
+            XCTAssertEqual(historyState(), filledHistory)
+            expect(action("deselect"), "exists == YES AND enabled == YES")
+        }
         press(CGPoint(x: action("deselect").frame.minX - 6, y: bar.frame.midY))
         expect(action("deselect"), "exists == YES", "A tap on the divider before Deselect keeps the selection")
         let divider = window.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(
@@ -157,6 +191,9 @@ extension XCTestCase {
         XCTAssertEqual(editorPixels(in: app), filledPixels)
         XCTAssertEqual(historyState(), filledHistory)
         #if os(macOS)
+        checkFillHistory()
+        #endif
+        #if os(macOS)
         let selectionActions = ["scale_rotate", "fill_selection", "clear_selected", "invert_selection", "deselect"]
         func onBar() -> Int { selectionActions.filter { action($0).exists }.count }
         let windowed = onBar()
@@ -166,6 +203,29 @@ extension XCTestCase {
         waitForExpectations(timeout: 10)
         #endif
         editorMenu(in: app, menu: "View", id: "fit_canvas", label: "Fit canvas")
+        #if os(iOS)
+        let camera = app.buttons["camera-status"], canvas = app.descendants(matching: .any)["canvas"].firstMatch
+        let beforePinch = camera.label
+        editorTool("Lasso selection", in: app); editorChoice("Lasso selection", in: app)
+        expect(camera, "label == '\(beforePinch)'", "The navigation fixture preserves the fitted camera")
+        expect(bar, "exists == YES")
+        withHiddenChrome(in: app) {
+            expect(action("deselect"), "exists == YES AND enabled == YES")
+            let geometry = XCTAttachment(string: "window=\(window.frame) canvas=\(canvas.frame) bar=\(bar.frame) capy=\(capy.frame)\n\(app.debugDescription)")
+            geometry.name = "canvas-bar-before-pinch-\(theme)"; geometry.lifetime = .keepAlways; add(geometry)
+            attachEditor(in: app, name: "canvas-bar-pinch-mounted-\(theme)")
+            canvas.pinch(withScale: 3, velocity: 10)
+        }
+        expect(camera, "label != '\(beforePinch)'", "The native pinch changes the camera")
+        editorTool("Operation", in: app); editorChoice("Operation", group: true, in: app)
+        expect(action("deselect"), "exists == YES AND enabled == YES")
+        editorMenu(in: app, menu: "View", id: "reset_rotation", label: "Reset rotation")
+        editorMenu(in: app, menu: "View", id: "fit_canvas", label: "Fit canvas")
+        expect(camera, "label == '\(beforePinch)'", "Fit restores the camera before the original bar journey")
+        expectPixels(filledPixels, in: app)
+        XCTAssertEqual(historyState(), filledHistory)
+        checkFillHistory()
+        #endif
         for id in ["copy", "adjust", "mask", "refine"] {
             let button = app.buttons["canvas-bar-menu-" + id], items = app.descendants(matching: .any)["canvas-bar-menu-items-" + id]
             if button.exists {
@@ -192,7 +252,7 @@ extension XCTestCase {
             expect(panel, "exists == YES", "Feather opens the Refine panel")
             workspaceActivate(app.buttons["number-value-selection-refine-value"])
             app.textFields["number-entry-selection-refine-value"].typeText("2\n")
-            attachEditor(in: app, name: "canvas-bar-refine")
+            attachEditor(in: app, name: "canvas-bar-refine-\(theme)")
             workspaceActivate(app.buttons["selection-refine-apply"])
             expect(panel, "exists == NO", "Apply closes the Refine panel")
             choose("Transform Outline")
@@ -202,8 +262,9 @@ extension XCTestCase {
         }
 
         let paper = bluePaperBounds(in: app)
-        let sides = [CGPoint(x: paper.minX + paper.width * 0.05, y: paper.midY), CGPoint(x: paper.midX, y: paper.midY),
-            CGPoint(x: paper.maxX - paper.width * 0.05, y: paper.midY)]
+        let sampleY = paper.midY + paper.height * 0.1
+        let sides = [CGPoint(x: paper.minX + paper.width * 0.05, y: sampleY), CGPoint(x: paper.midX, y: sampleY),
+            CGPoint(x: paper.maxX - paper.width * 0.05, y: sampleY)]
         let filled = [true, true, true], turned = [false, true, false]
         for apply in [false, true] {
             var hull = CGRect.zero
@@ -211,19 +272,19 @@ extension XCTestCase {
                 for _ in 0..<2 { editorMenu(in: app, menu: "View", id: "zoom_out", label: "Zoom out") }
                 hull = bluePaperBounds(in: app)
             }
-            perform("scale_rotate", "Transform")
+            perform("scale_rotate", "Transform", menuItem: "menu-action-Transform")
             expect(action("apply_transform"), "exists == YES", "Transform replaces the selection bar")
             XCTAssertFalse(action("deselect").exists)
             if !apply {
-                choose("transform-mode", "Mode", index: 1, "Distort")
+                choose("transform-mode", "Mode", index: 1, "Distort", menuItem: "menu-action-Distort")
                 XCTAssertTrue(offered("transform_perspective", "Perspective"), "Distort offers Perspective")
                 XCTAssertFalse(offered("transform_uniform", "Keep proportions"), "Keep proportions belongs to Scale")
-                choose("transform-mode", "Mode", index: 0, "Scale")
+                choose("transform-mode", "Mode", index: 0, "Scale", menuItem: "menu-action-Scale")
                 XCTAssertFalse(offered("transform_perspective", "Perspective"))
                 XCTAssertTrue(offered("transform_uniform", "Keep proportions"), "Scale offers Keep proportions")
-                choose("transform-interpolation", "Interpolation", index: 0, "Nearest neighbor")
-                attachEditor(in: app, name: "canvas-bar-transform")
-                choose("transform-mode", "Mode", index: 2, "Warp")
+                choose("transform-interpolation", "Interpolation", index: 0, "Nearest neighbor", menuItem: "command-transform_nearest")
+                attachEditor(in: app, name: "canvas-bar-transform-\(theme)")
+                choose("transform-mode", "Mode", index: 2, "Warp", menuItem: "menu-action-Warp")
                 chooseFromMenu("warp_grid", "Grid", "3 × 3 warp grid")
                 let node = CGPoint(x: hull.minX + hull.width / 3, y: hull.minY)
                 let probes = [CGPoint(x: node.x + hull.width * 0.08, y: hull.minY + hull.height * 0.06),
@@ -231,14 +292,14 @@ extension XCTestCase {
                 expectBluePaper([true, true], at: probes, in: app)
                 drag(node, CGPoint(x: node.x, y: hull.minY + hull.height * 0.3))
                 expectBluePaper([false, true], at: probes, in: app)
-                attachEditor(in: app, name: "canvas-bar-warp")
+                attachEditor(in: app, name: "canvas-bar-warp-\(theme)")
                 resetTransform()
                 expectBluePaper([true, true], at: probes, in: app)
                 XCTAssertFalse(app.buttons["recovery-retry"].exists, "A long transform defers session checkpoints")
                 editorMenu(in: app, menu: "View", id: "fit_canvas", label: "Fit canvas")
                 expectBluePaper(filled, at: sides, in: app)
             }
-            perform("transform_rotate_right", "Rotate 90° right")
+            perform("transform_rotate_right", "Rotate 90° right", menuItem: "command-transform_rotate_right")
             expectBluePaper(turned, at: sides, in: app)
             workspaceActivate(action(apply ? "apply_transform" : "cancel_transform"))
             expect(action("apply_transform"), "exists == NO")
@@ -248,7 +309,7 @@ extension XCTestCase {
         editorHistory("Undo", in: app); expectBluePaper(filled, at: sides, in: app)
         editorHistory("Redo", in: app); expectBluePaper(turned, at: sides, in: app)
 
-        perform("scale_rotate", "Transform")
+        perform("scale_rotate", "Transform", menuItem: "menu-action-Transform")
         expect(action("apply_transform"), "exists == YES")
         openMore()
         expect(menu.buttons["command-show_canvas_action_bar"], "selected == YES", "More ends with the bar toggle")
@@ -258,7 +319,7 @@ extension XCTestCase {
         activate(menu.buttons["command-show_canvas_action_bar"])
         expect(action("transform_flip_horizontal"), "exists == NO", "Hiding the bar leaves Cancel and Apply")
         expect(action("apply_transform"), "exists == YES")
-        attachEditor(in: app, name: "canvas-bar-completion-only")
+        attachEditor(in: app, name: "canvas-bar-completion-only-\(theme)")
         workspaceActivate(action("cancel_transform"))
         expect(bar, "exists == NO", "No selection bar while the toggle is off")
         editorMenu(in: app, menu: "View", id: "show_canvas_action_bar", label: "Show canvas action bar")
@@ -266,11 +327,15 @@ extension XCTestCase {
 
         let undo = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@",
             "toolbar-tile-commands-", "Undo")).firstMatch
-        workspaceActivate(capy)
-        expect(undo, "exists == NO", "Zen hides the docked chrome")
-        XCTAssertTrue(action("deselect").exists, "Zen keeps the bar")
-        workspaceActivate(capy)
+        expect(undo, "exists == YES", "The docked Undo is visible before Zen")
+        let undoEnabled = undo.isEnabled
+        withHiddenChrome(in: app) {
+            expectation(for: NSPredicate { _, _ in !undo.exists || !undo.isEnabled }, evaluatedWith: undo)
+            waitForExpectations(timeout: 10)
+            XCTAssertTrue(action("deselect").exists, "Zen keeps the bar")
+        }
         expect(undo, "exists == YES")
+        if undoEnabled { expect(undo, "enabled == YES") }
         workspaceActivate(action("deselect"))
         expect(bar, "exists == NO", "Deselect removes the bar")
 
@@ -290,14 +355,14 @@ extension XCTestCase {
         XCTAssertLessThan(bar.frame.minY - selection.maxY, 60)
         XCTAssertTrue(bar.frame.minX <= selection.midX && selection.midX <= bar.frame.maxX,
             "The bar centres on the selection as far as the work area allows")
-        attachEditor(in: app, name: "canvas-bar-beside-selection")
+        attachEditor(in: app, name: "canvas-bar-beside-selection-\(theme)")
         let placed = bar.frame
         editorMenu(in: app, menu: "View", id: "zoom_out", label: "Zoom out")
         expectation(for: NSPredicate { _, _ in
             bar.exists && max(abs(bar.frame.minY - placed.minY), abs(bar.frame.midX - placed.midX)) > 5
         }, evaluatedWith: app)
         waitForExpectations(timeout: 10)
-        attachEditor(in: app, name: "canvas-bar-after-zoom")
+        attachEditor(in: app, name: "canvas-bar-after-zoom-\(theme)")
         #endif
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)
     }

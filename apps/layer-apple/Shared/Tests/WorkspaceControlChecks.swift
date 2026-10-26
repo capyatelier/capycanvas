@@ -9,6 +9,27 @@ extension XCUICoordinate { @MainActor func clickOrTap() { tap() } }
 #endif
 
 extension XCTestCase {
+    @MainActor func withHiddenChrome(in app: XCUIApplication, _ action: () -> Void) {
+        let capy = app.descendants(matching: .any)["zen-button"].firstMatch
+        let status = app.buttons["camera-status"]
+        let enabledStatus = app.buttons.matching(identifier: "camera-status").matching(NSPredicate(format: "enabled == YES")).firstMatch
+        XCTAssertTrue(enabledStatus.waitForExistence(timeout: 5))
+        workspaceActivate(capy)
+        let hidden = enabledStatus.waitForNonExistence(timeout: 5)
+        if !hidden {
+            attachEditor(in: app, name: "chrome-hide-failure")
+            let tree = XCTAttachment(string: "state=\(app.state), camera enabled=\(status.isEnabled), hittable=\(status.isHittable)\n\(app.debugDescription)")
+            tree.name = "chrome-hide-failure-hierarchy"; tree.lifetime = .keepAlways; add(tree)
+        }
+        XCTAssertTrue(hidden)
+        action()
+        workspaceActivate(capy)
+        XCTAssertTrue(status.waitForExistence(timeout: 5))
+        XCTAssertTrue(enabledStatus.waitForExistence(timeout: 5))
+    }
+}
+
+extension XCTestCase {
     @MainActor func workspaceViewport(in app: XCUIApplication) -> XCUIElement {
         // Child frames use screen coordinates in windowed iPad scenes, while
         // the application frame can retain a zero origin. Use the editor window.
@@ -32,7 +53,7 @@ extension XCTestCase {
             let frame = element.frame
             guard frame.width > 0, frame.height > 0,
                 frame.midX.isFinite, frame.midY.isFinite, window.frame.contains(frame) else {
-                XCTFail("The workspace control must have finite bounds inside its editor window")
+                XCTFail("The workspace control must have finite bounds inside its editor window: control \(frame), window \(window.frame)")
                 return
             }
             window.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(

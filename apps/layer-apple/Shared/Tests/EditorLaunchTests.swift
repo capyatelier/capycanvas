@@ -159,6 +159,7 @@ final class EditorLaunchTests: XCTestCase {
     @MainActor func testLiveInterfaceLanguage() { checkLiveInterfaceLanguage(in: editorCaptureApplication(), theme: "light") }
     @MainActor func testLiveInterfaceLanguageDark() { checkLiveInterfaceLanguage(in: editorCaptureApplication(), theme: "dark") }
     @MainActor func testCanvasActionBar() { checkCanvasActionBar(in: ignoringSavedWindows(editorCaptureApplication())) }
+    @MainActor func testCanvasActionBarDark() { checkCanvasActionBar(in: ignoringSavedWindows(editorCaptureApplication()), theme: "dark") }
     @MainActor func testCanvasNotice() throws {
         #if os(iOS)
         throw XCTSkip("A finger tap does not run the Wand on iPadOS, and XCTest cannot synthesize Pencil")

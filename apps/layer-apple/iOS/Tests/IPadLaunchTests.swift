@@ -770,15 +770,3 @@ extension EditorLaunchTests {
         }
     }
 }
-
-extension XCTestCase {
-    @MainActor func withHiddenChrome(in app: XCUIApplication, _ action: () -> Void) {
-        let capy = app.descendants(matching: .any)["zen-button"].firstMatch
-        let status = app.buttons["camera-status"]
-        workspaceActivate(capy)
-        XCTAssertTrue(status.waitForNonExistence(timeout: 5))
-        action()
-        workspaceActivate(capy)
-        XCTAssertTrue(status.waitForExistence(timeout: 5))
-    }
-}
