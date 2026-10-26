@@ -20,6 +20,7 @@ extension XCTestCase {
         #if os(macOS)
         field.typeKey(XCUIKeyboardKey.tab.rawValue, modifierFlags: [])
         #else
+        field.typeText("\n")
         dismissEditorKeyboard(in: app)
         #endif
     }
@@ -95,9 +96,29 @@ extension XCTestCase {
         workspaceActivate(app.buttons["new-drawing-presets-button"])
         let search = app.textFields["new-drawing-search"]
         XCTAssertTrue(search.waitForExistence(timeout: 10))
+        #if os(iOS)
+        expectation(for: NSPredicate { _, _ in (!create.exists || !create.isEnabled) && search.isHittable }, evaluatedWith: app)
+        waitForExpectations(timeout: 5)
+        #else
         XCTAssertTrue(create.waitForNonExistence(timeout: 5), "The presets cover the page")
+        #endif
         attachEditor(in: app, name: "new-drawing-presets-" + theme)
-        replaceEditorText(search, with: "chalk", in: app)
+        app.typeText("chalk")
+        expectation(for: NSPredicate(format: "value == %@", "chalk"), evaluatedWith: search)
+        waitForExpectations(timeout: 10)
+        #if os(macOS)
+        app.typeKey(XCUIKeyboardKey.escape.rawValue, modifierFlags: [])
+        expectation(for: NSPredicate(format: "value == %@", ""), evaluatedWith: search)
+        waitForExpectations(timeout: 10)
+        XCTAssertTrue(search.exists, "Escape clears search before closing Presets")
+        app.typeKey(XCUIKeyboardKey.escape.rawValue, modifierFlags: [])
+        XCTAssertTrue(search.waitForNonExistence(timeout: 10))
+        expectation(for: NSPredicate(format: "hasKeyboardFocus == YES"), evaluatedWith: app.buttons["new-drawing-presets-button"])
+        waitForExpectations(timeout: 10)
+        workspaceActivate(app.buttons["new-drawing-presets-button"])
+        XCTAssertTrue(search.waitForExistence(timeout: 10))
+        app.typeText("chalk")
+        #endif
         let chalkboard = app.buttons["new-drawing-preset-0"]
         expectation(for: NSPredicate(format: "label == %@", "Chalkboard"), evaluatedWith: chalkboard)
         waitForExpectations(timeout: 15)
@@ -110,6 +131,18 @@ extension XCTestCase {
         workspaceActivate(app.buttons["new-drawing-save-as"])
         let saveName = app.textFields["new-drawing-save-name"]
         XCTAssertTrue(saveName.waitForExistence(timeout: 10))
+        #if os(macOS)
+        app.typeText("Draft")
+        expectation(for: NSPredicate(format: "value CONTAINS %@", "Draft"), evaluatedWith: saveName)
+        waitForExpectations(timeout: 10)
+        app.typeKey(XCUIKeyboardKey.escape.rawValue, modifierFlags: [])
+        XCTAssertTrue(saveName.waitForNonExistence(timeout: 10))
+        XCTAssertEqual(search.value as? String, "chalk", "Leaving naming keeps search")
+        expectation(for: NSPredicate(format: "hasKeyboardFocus == YES"), evaluatedWith: search)
+        waitForExpectations(timeout: 10)
+        workspaceActivate(app.buttons["new-drawing-save-as"])
+        XCTAssertTrue(saveName.waitForExistence(timeout: 10))
+        #endif
         replaceEditorText(saveName, with: "Studio wall", in: app)
         #if os(iOS)
         dismissEditorKeyboard(in: app)
@@ -120,6 +153,10 @@ extension XCTestCase {
         expectNewDrawingText("new-drawing-summary-name", in: app) { $0 == "Studio wall" }
         workspaceActivate(app.buttons["new-drawing-select"])
         XCTAssertTrue(search.waitForNonExistence(timeout: 10))
+        #if os(macOS)
+        expectation(for: NSPredicate(format: "hasKeyboardFocus == YES"), evaluatedWith: app.buttons["new-drawing-presets-button"])
+        waitForExpectations(timeout: 10)
+        #endif
         expectNewDrawingText("new-drawing-caption", in: app) { $0.hasPrefix("Studio wall") }
         XCTAssertEqual(resolution.value as? String, "150", "Selecting a preset restores its resolution")
 
@@ -143,6 +180,7 @@ extension XCTestCase {
         workspaceActivate(kraft)
         expectation(for: NSPredicate(format: "selected == YES"), evaluatedWith: kraft)
         waitForExpectations(timeout: 10)
+        checkNewDrawingPaperColorDraft(in: app)
         attachEditor(in: app, name: "new-drawing-paper-color-" + theme)
         workspaceActivate(useColor)
         XCTAssertTrue(useColor.waitForNonExistence(timeout: 10))
@@ -166,10 +204,15 @@ extension XCTestCase {
         #endif
         workspaceActivate(create)
         XCTAssertTrue(create.waitForNonExistence(timeout: 60))
+        #if os(macOS)
         let title = editorDocumentTitle(in: app)
         expectation(for: NSPredicate(format: "label BEGINSWITH %@ OR value BEGINSWITH %@", "Harbor study", "Harbor study"), evaluatedWith: title)
         waitForExpectations(timeout: 30)
         let created = editorText(title)
+        #else
+        let created = selectedNewDrawingDocument(in: app)
+        XCTAssertTrue(created.label.hasPrefix("Harbor study") || created.value?.hasPrefix("Harbor study") == true)
+        #endif
         attachEditor(in: app, name: "new-drawing-created-" + theme)
 
         #if os(macOS)
@@ -179,16 +222,101 @@ extension XCTestCase {
         #endif
         XCTAssertTrue(create.waitForExistence(timeout: 15))
         XCTAssertEqual(newDrawingNumber("width", in: app).value as? String, "640", "New reopens with the last drawing")
+        checkNewDrawingDraftTransitions(in: app)
         workspaceActivate(app.buttons["new-drawing-cancel"])
         XCTAssertTrue(create.waitForNonExistence(timeout: 15))
+        #if os(macOS)
         XCTAssertEqual(editorText(title), created, "Cancel keeps the current drawing")
+        #else
+        let retained = selectedNewDrawingDocument(in: app)
+        XCTAssertEqual(retained.id, created.id, "Cancel keeps the current drawing")
+        XCTAssertEqual(retained.label, created.label)
+        XCTAssertEqual(retained.value, created.value)
+        #endif
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)
+    }
+
+    @MainActor func checkNewDrawingDraftTransitions(in app: XCUIApplication) {
+        let width = newDrawingNumber("width", in: app), height = newDrawingNumber("height", in: app)
+        let unit = app.buttons["new-drawing-unit"], presets = app.buttons["new-drawing-presets-button"]
+        let search = app.textFields["new-drawing-search"]
+        replaceEditorText(width, with: "800 + 40", in: app)
+        chooseNewDrawingOption("new-drawing-unit", 0, in: app)
+        expectNewDrawingValue("new-drawing-unit", "mm", in: app)
+        chooseNewDrawingOption("new-drawing-unit", 3, in: app)
+        expectation(for: NSPredicate(format: "value == %@", "840"), evaluatedWith: width)
+        waitForExpectations(timeout: 10)
+
+        replaceEditorText(width, with: "1 / 0", in: app)
+        chooseNewDrawingOption("new-drawing-unit", 0, in: app)
+        XCTAssertEqual(unit.value as? String, "px", "An invalid draft cannot switch its unit and replace the field")
+        XCTAssertEqual(width.value as? String, "1 / 0", "A refused unit change preserves the text for correction")
+        workspaceActivate(presets)
+        XCTAssertFalse(search.waitForExistence(timeout: 2), "An invalid size keeps Presets from covering its error")
+        XCTAssertTrue(app.buttons["new-drawing-create"].exists)
+        workspaceActivate(app.buttons["new-drawing-portrait"])
+        XCTAssertEqual(width.value as? String, "1 / 0", "Turning the sheet cannot discard an invalid size")
+        XCTAssertEqual(height.value as? String, "480", "A refused orientation change preserves the accepted sheet")
+
+        replaceEditorText(width, with: "960", in: app)
+        workspaceActivate(app.buttons["new-drawing-portrait"])
+        expectation(for: NSPredicate(format: "value == %@", "480"), evaluatedWith: width)
+        expectation(for: NSPredicate(format: "value == %@", "960"), evaluatedWith: height)
+        waitForExpectations(timeout: 10)
+        replaceEditorText(width, with: "500 + 12", in: app)
+        workspaceActivate(presets)
+        XCTAssertTrue(search.waitForExistence(timeout: 10))
+        #if os(iOS)
+        dismissEditorKeyboard(in: app)
+        #endif
+        workspaceActivate(app.buttons["new-drawing-browser-cancel"])
+        XCTAssertTrue(search.waitForNonExistence(timeout: 10))
+        XCTAssertEqual(width.value as? String, "512", "Opening Presets admits the valid size before covering the page")
+        XCTAssertEqual(height.value as? String, "960")
+    }
+
+    @MainActor func checkNewDrawingPaperColorDraft(in app: XCUIApplication) {
+        let scroll = newDrawingElement("new-drawing-color-drawer", in: app).scrollViews.firstMatch
+        func reveal(_ id: String) -> XCUIElement {
+            let element = newDrawingElement(id, in: app)
+            #if os(iOS)
+            revealEditorControl(element, in: scroll)
+            #endif
+            return element
+        }
+        let tiles = app.buttons.matching(NSPredicate(format: "identifier MATCHES %@", "new-drawing-paper-color-[0-9]+"))
+        let before = tiles.count
+        let entry = app.textFields["color-entry-hex"]
+        func revealHex() { _ = reveal(entry.exists ? "color-entry-hex" : "color-value-hex") }
+        revealHex()
+        editColorValue("hex", "#E07080", in: app)
+        let add = app.buttons["new-drawing-add-paper-color"]
+        expectation(for: NSPredicate(format: "enabled == YES"), evaluatedWith: add)
+        waitForExpectations(timeout: 10)
+        revealHex()
+        if !entry.exists { workspaceActivate(reveal("color-value-hex")) }
+        XCTAssertTrue(entry.waitForExistence(timeout: 5))
+        replaceEditorText(entry, with: "#4A7CBD", in: app)
+        workspaceActivate(reveal("new-drawing-add-paper-color"))
+        let stored = reveal("new-drawing-paper-color-\(before)")
+        XCTAssertTrue(stored.waitForExistence(timeout: 10))
+        XCTAssertEqual(tiles.count, before + 1)
+        expectation(for: NSPredicate(format: "selected == YES"), evaluatedWith: stored)
+        waitForExpectations(timeout: 10)
+        workspaceActivate(reveal("new-drawing-paper-color-5"))
+        workspaceActivate(reveal("new-drawing-paper-color-\(before)"))
+        revealHex()
+        expectation(for: NSPredicate { _, _ in self.colorValueText("hex", in: app).uppercased() == "#4A7CBD" }, evaluatedWith: app)
+        waitForExpectations(timeout: 10)
+        workspaceActivate(reveal("new-drawing-paper-color-5"))
+        expectation(for: NSPredicate(format: "selected == YES"), evaluatedWith: app.buttons["new-drawing-paper-color-5"])
+        waitForExpectations(timeout: 10)
     }
 
     @MainActor func checkNewDrawingPaper(in app: XCUIApplication, theme: String) {
         let textureTile = app.buttons["new-drawing-texture"], useTexture = app.buttons["new-drawing-paper-use"]
         let relief = newDrawingNumber("paper-relief", in: app)
-        expectNewDrawingValue("new-drawing-texture", "Sanded, 50 %", in: app)
+        expectNewDrawingValue("new-drawing-texture", "Chalkboard, 50 %", in: app)
         workspaceActivate(textureTile)
         XCTAssertTrue(useTexture.waitForExistence(timeout: 10))
         XCTAssertEqual(relief.value as? String, "50", "Texture visibility opens with the sheet's value")

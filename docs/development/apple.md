@@ -372,6 +372,12 @@ mutation or release.
   closes, through release or cancellation. A popup cancels the current edit
   before retiring its contact. Shared cancellation restores displaced bubbles
   and the preceding workspace. Canonical native Escape dismisses stamp previews.
+- **New drawing.** Admit pending numeric edits before changing choices or
+  opening a drawer. An invalid expression keeps its field and the accepted
+  setup. Restore focus to the control that opened each drawer; focus search
+  and preset naming when their native fields mount. Forward unconsumed Escape
+  to shared Back, preserving native text and composition handling. Add and Use
+  Color commit the focused color draft before forwarding their shared action.
 - **UIKit fields.** iPadOS consumes Escape before SwiftUI handlers. Use UIKit text
   fields with priority key commands, explicit height, and fonts/placeholders assigned
   only when changed, to avoid repeated size invalidation.

@@ -34,6 +34,7 @@ private struct NewDrawingDialog: View {
     @State private var resolutions = false
     @State private var importing = false
     @State private var paperColor: ColorEditorSession?
+    @State private var drawerSource: String?
     private static let reliefField = "new-drawing-paper-relief"
     private var view: JSON { store.state["new_drawing"] }
     private var copy: JSON { view["copy"] }
@@ -55,20 +56,28 @@ private struct NewDrawingDialog: View {
             .onAppear { name = view["name"].string }
             .onChange(of: name) { _, text in if text != view["name"].string { send(["op": "name", "text": text]) } }
             .onChange(of: drawer["kind"].string, initial: true) { _, kind in follow(kind) }
-            .onChange(of: drawer["save"].isNull, initial: true) { _, closed in if !closed { presetName = drawer["save"]["name"].string } }
+            .onChange(of: drawer["save"].isNull, initial: true) { _, closed in
+                if !closed { presetName = drawer["save"]["name"].string }
+                if closed && drawer["kind"].string == "presets" { focused = "search" }
+            }
             .onChange(of: drawer["query"].string) { _, shared in if shared.isEmpty { query = "" } }
+            .onKeyPress(.escape) {
+                guard !NativeTextContext.composing else { return .ignored }
+                send(["op": "back"]); return .handled
+            }
             .onDisappear { closePaperColor() }
     }
 
     private func send(_ action: [String: Any]) {
         store.projectFiles.newDrawing(action) { error = $0 }
     }
-    @State private var previousDrawer = ""
+    private func change(_ action: [String: Any]) { admit { send(action) } }
+    private func open(_ op: String, source: String) {
+        admit { drawerSource = source; send(["op": op]) }
+    }
     private func follow(_ kind: String) {
-        let previous = previousDrawer
-        previousDrawer = kind
-        if kind == "presets" { query = drawer["query"].string; focused = "search" }
-        else if kind.isEmpty { focused = previous }
+        if kind == "presets" { query = drawer["query"].string }
+        if kind.isEmpty, let drawerSource { focused = drawerSource }
         if kind == "paper_color" {
             if paperColor == nil {
                 paperColor = ColorEditorSession(controller: nil, store: store, colors: store.displayColors, value: drawer["color"], opaque: true) { _, _ in }
@@ -115,9 +124,9 @@ private struct NewDrawingDialog: View {
             }
             EditorDialogFooter(label: copy["create"].string, identifiers: (cancel: "new-drawing-cancel", apply: "new-drawing-create"),
                 blocked: !view["can_create"].bool, cancel: { send(["op": "cancel"]) }, apply: create) {
-                Button { send(["op": "presets"]) } label: {
+                Button { open("presets", source: "presets") } label: {
                     HStack(spacing: 6) { Text(copy["presets"].string); SharedIcon(name: "chevron-down", size: 12).rotationEffect(.degrees(180)) }
-                }.buttonStyle(.bordered).accessibilityIdentifier("new-drawing-presets-button").focused($focused, equals: "presets")
+                }.buttonStyle(.bordered).focusable().focused($focused, equals: "presets").accessibilityIdentifier("new-drawing-presets-button")
                 Spacer(minLength: 8)
             }
         }
@@ -126,12 +135,12 @@ private struct NewDrawingDialog: View {
     private var preview: some View {
         let bounds = narrow ? CGSize(width: min(348, max(120, width - 40)), height: 140) : CGSize(width: 232, height: 250)
         return VStack(spacing: 8) {
-            Button { send(["op": "presets"]) } label: {
+            Button { open("presets", source: "preview") } label: {
                 NewDrawingSheet(previews: store.papers.previews, sheet: view["sheet"],
                     fit: CGSize(width: bounds.width - 36, height: bounds.height - 36), grain: 40)
                     .frame(width: bounds.width, height: bounds.height)
                     .background(palette["text"].opacity(0.06), in: SquircleShape.surface).contentShape(Rectangle())
-            }.buttonStyle(.plain).help(copy["presets"].string).accessibilityLabel(copy["presets"].string)
+            }.buttonStyle(.plain).focusable().focused($focused, equals: "preview").help(copy["presets"].string).accessibilityLabel(copy["presets"].string)
                 .accessibilityIdentifier("new-drawing-preview")
             VStack(spacing: 2) {
                 HStack(spacing: 4) {
@@ -224,7 +233,7 @@ private struct NewDrawingDialog: View {
         return EditorChoice(label: label, options: choices.map { $0["label"].string },
             selected: choices.firstIndex { $0["value"].stableKey == key } ?? -1, identifier: identifier,
             background: palette.newDrawingField, height: 34) { index in
-            if choices.indices.contains(index) { send(action(choices[index]["value"])) }
+            if choices.indices.contains(index) { change(action(choices[index]["value"])) }
         }
     }
 
@@ -239,7 +248,7 @@ private struct NewDrawingDialog: View {
 
     private var link: some View {
         let linked = view["linked"].bool
-        return Button { send(["op": "linked", "linked": !linked]) } label: {
+        return Button { change(["op": "linked", "linked": !linked]) } label: {
             SharedIcon(name: linked ? "link" : "unlink").frame(width: 28, height: 34).contentShape(Rectangle())
         }.buttonStyle(EditorControlButtonStyle(active: linked)).help(copy["link"].string).accessibilityLabel(copy["link"].string)
             .accessibilityAddTraits(linked ? .isSelected : []).accessibilityIdentifier("new-drawing-link")
@@ -249,7 +258,7 @@ private struct NewDrawingDialog: View {
         HStack(spacing: 2) {
             ForEach(["portrait", "landscape"], id: \.self) { side in
                 IconTile(icon: side, label: copy[side].string, selected: page["orientation"].string == side) {
-                    send(["op": "orientation", "orientation": side])
+                    change(["op": "orientation", "orientation": side])
                 }.frame(width: 30, height: 30).accessibilityIdentifier("new-drawing-" + side)
             }
         }.padding(2).background(palette.newDrawingField, in: SquircleShape.control).fixedSize()
@@ -270,7 +279,7 @@ private struct NewDrawingDialog: View {
         }.frame(height: 34).background(palette.newDrawingField, in: SquircleShape.control)
             .editorPopover(isPresented: $resolutions) {
                 EditorActionMenu(model: AppleContextMenu(JSON(["sections": [resolutionItems]])) {
-                    send(["op": "resolution", "value": $0["value"].number])
+                    change(["op": "resolution", "value": $0["value"].number])
                 }, width: 240, identifier: "new-drawing-resolution-menu") { resolutions = false }
             }
     }
@@ -286,7 +295,7 @@ private struct NewDrawingDialog: View {
 
     private func paperTile<Thumbnail: View>(_ identifier: String, label: String, detail: String? = nil, help: String, enabled: Bool, op: String,
         @ViewBuilder thumbnail: () -> Thumbnail) -> some View {
-        Button { send(["op": op]) } label: {
+        Button { open(op, source: identifier) } label: {
             HStack(spacing: 10) {
                 thumbnail()
                 VStack(alignment: .leading, spacing: 1) {
@@ -296,9 +305,8 @@ private struct NewDrawingDialog: View {
                 Spacer(minLength: 0)
             }.padding(4).padding(.trailing, 6).frame(maxWidth: .infinity, minHeight: 44)
                 .background(palette.newDrawingField, in: SquircleShape.control).contentShape(Rectangle())
-        }.buttonStyle(.plain).disabled(!enabled).opacity(enabled ? 1 : 0.4)
+        }.buttonStyle(.plain).focusable().focused($focused, equals: identifier).disabled(!enabled).opacity(enabled ? 1 : 0.4)
             .help(help).accessibilityLabel(help).accessibilityValue([label, detail].compactMap { $0 }.joined(separator: ", "))
-            .focused($focused, equals: identifier == "new-drawing-texture" ? "paper" : "paper_color")
             .accessibilityIdentifier(identifier)
     }
 
@@ -320,8 +328,10 @@ private struct NewDrawingDialog: View {
             HStack(spacing: 8) {
                 SharedIcon(name: "search").opacity(0.6)
                 TextField(copy["search"].string, text: $query).textFieldStyle(.plain).autocorrectionDisabled()
+                    .focused($focused, equals: "search")
+                    .onAppear { focused = "search" }
                     .onChange(of: query) { _, text in if text != drawer["query"].string { send(["op": "search", "query": text]) } }
-                    .accessibilityLabel(copy["search"].string).accessibilityIdentifier("new-drawing-search").focused($focused, equals: "search")
+                    .accessibilityLabel(copy["search"].string).accessibilityIdentifier("new-drawing-search")
             }.padding(.horizontal, 10).frame(height: 34).background(palette.newDrawingField, in: SquircleShape.control)
                 .padding(.horizontal, 20).padding(.top, 20).padding(.bottom, 10)
             EditorScrollView {
@@ -349,11 +359,6 @@ private struct NewDrawingDialog: View {
                 }.animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: drawer["save"].isNull)
             }.padding(.horizontal, 20).padding(.vertical, 12)
         }.accessibilityElement(children: .contain).accessibilityIdentifier("new-drawing-browser")
-            .onKeyPress(.escape) {
-                guard !NativeTextContext.composing else { return .ignored }
-                send(["op": "back"])
-                return .handled
-            }
     }
 
     private func pill(_ tab: JSON, index: Int) -> some View {
@@ -426,17 +431,18 @@ private struct NewDrawingDialog: View {
     private func saveRow(_ save: JSON) -> some View {
         HStack(spacing: 6) {
             TextField(copy["preset_name"].string, text: $presetName).textFieldStyle(.plain).autocorrectionDisabled()
+                .focused($focused, equals: "preset-name")
+                .onAppear { focused = "preset-name" }
                 .padding(.horizontal, 8).frame(width: 150, height: 34).background(palette.newDrawingField, in: SquircleShape.control)
                 .overlay { if !save["can_save"].bool { SquircleShape.control.stroke(Color.red, lineWidth: 1) } }
                 .onChange(of: presetName) { _, text in if text != drawer["save"]["name"].string { send(["op": "preset_name", "text": text]) } }
                 .onSubmit { send(["op": "save_preset"]) }
-                .accessibilityLabel(copy["preset_name"].string).accessibilityIdentifier("new-drawing-save-name").focused($focused, equals: "save")
-                .onAppear { focused = "save" }
+                .accessibilityLabel(copy["preset_name"].string).accessibilityIdentifier("new-drawing-save-name")
             choice(copy["preset_category"].string, save["groups"].array, value: save["group"], identifier: "new-drawing-save-group") {
                 ["op": "preset_group", "group": $0.raw]
             }.fixedSize().help(copy["preset_category"].string)
             Button(copy["cancel"].string) { send(["op": "cancel_save"]) }.buttonStyle(.bordered)
-                .keyboardShortcut(.cancelAction).accessibilityIdentifier("new-drawing-save-cancel")
+                .accessibilityIdentifier("new-drawing-save-cancel")
             Button(save["confirm"].string) { send(["op": "save_preset"]) }.buttonStyle(.borderedProminent).tint(palette.accent)
                 .disabled(!save["can_save"].bool).keyboardShortcut(.defaultAction).accessibilityIdentifier("new-drawing-save-confirm")
         }.fixedSize()
@@ -529,12 +535,13 @@ private struct NewDrawingPaperColor: View {
         sent = value.stableKey
         send(["op": "paper_color_value", "color": value.raw])
     }
-    private func use() {
+    private func commit() -> Bool {
         if let focused { ColorEditorForm.commit(focused, drafts: $drafts, session: session) }
-        guard !session.blocked else { return }
+        guard !session.blocked else { return false }
         report()
-        send(["op": "use_paper_color"])
+        return true
     }
+    private func use() { if commit() { send(["op": "use_paper_color"]) } }
     private var mode: some View {
         HStack(spacing: 2) {
             modeButton("solid", label: copy["color"].string, selected: !transparent, identifier: "new-drawing-color-mode-color") {
@@ -564,7 +571,7 @@ private struct NewDrawingPaperColor: View {
             }
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 44, maximum: 44), spacing: 10)], alignment: .leading, spacing: 10) {
                 ForEach(choices.indices, id: \.self) { index in swatch(choices[index], rgba: previews[index]["rgba"], index: index) }
-                Button { send(["op": "add_paper_color"]) } label: {
+                Button { if commit() { send(["op": "add_paper_color"]) } } label: {
                     SharedIcon(name: "plus").frame(width: 44, height: 44).contentShape(Rectangle())
                 }.buttonStyle(EditorControlButtonStyle()).disabled(!drawer["can_add"].bool).opacity(drawer["can_add"].bool ? 1 : 0.36)
                     .help(copy["add_paper_color"].string).accessibilityLabel(copy["add_paper_color"].string)
