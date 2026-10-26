@@ -100,7 +100,10 @@ function Preset-Geometry([string]$Top){
         foreach($pair in @(@($box.X,($origin[0]+$shared.x*$scale)),@($box.Y,($origin[1]+$shared.y*$scale)),@($box.Width,($shared.width*$scale)),@($box.Height,($shared.height*$scale)))){
             if([Math]::Abs($pair[0]-$pair[1]) -gt 1){throw 'Native preset allocation differs from the current shared group bounds'}
         }
-        $bodyNode=Control ('panel-body-scroll-'+$group.id) -Within $node -Arranged;$body=$bodyNode.Current.BoundingRectangle
+        try{$bodyNode=Control ('panel-body-scroll-'+$group.id) -Within $node -Arranged}
+        catch{try{Capture 'preset-scroll-failure' -WithModel -Composed}catch{};throw}
+        @(Control-Trace $bodyNode)|ConvertTo-Json -Depth 12|Set-Content (Join-Path $run ('preset-scroll-'+$group.id+'.json'))
+        $body=$bodyNode.Current.BoundingRectangle
         $view=(Scroll-Pattern $bodyNode).Current.VerticalViewSize
         if($view -le 0 -or $view -gt 100 -or [double]::IsNaN($view) -or $body.Height*100/$view+1 -lt $group.min_body_height*$scale){throw 'Preset lost its finite scroll viewport or published minimum body extent'}
         $records+=@{id=$group.id;panels=$group.panels;shared=$shared;native=@($box.X,$box.Y,$box.Width,$box.Height);minimum_body=$group.min_body_height;native_body_height=$body.Height;native_vertical_view_size=$view}

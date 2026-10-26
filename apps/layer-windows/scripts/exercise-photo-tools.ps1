@@ -51,9 +51,10 @@ function Pick-ToolAction([string]$Group,[string]$Command,[string]$Device){
  $box=Control $id -Arranged
  $bounds=Native-Bounds $id ([CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.)
  $point=[System.Windows.Point]::new(0.,0.)
- if(!$box.TryGetClickablePoint([ref]$point)){throw "Tool action group $Group has no native clickable point"}
+ $trace=[ordered]@{device=$Device;id=$id;native_bounds=$bounds;control=@(Control-Trace $box)}
+ if(!$box.TryGetClickablePoint([ref]$point)){$trace|ConvertTo-Json -Depth 12|Set-Content (Join-Path $run ($id+'-'+$Device+'-input.json'));throw "Tool action group $Group has no native clickable point"}
  $x=[int]$point.X;$y=[int]$point.Y
- $trace=[ordered]@{device=$Device;id=$id;native_bounds=$bounds;control=@(Control-Trace $box);before=Input-Trace $x $y;expand_before=$box.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Current.ExpandCollapseState.ToString()}
+ $trace.before=Input-Trace $x $y;$trace.expand_before=$box.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Current.ExpandCollapseState.ToString()
  if(!$box.Current.BoundingRectangle.Contains($point) -or $trace.before.foreground -ne $trace.before.owned_window -or !@($trace.before.hit|Where-Object {$_.process -eq $review.Id}).Count){$trace|ConvertTo-Json -Depth 12|Set-Content (Join-Path $run ($id+'-'+$Device+'-input.json'));throw "Native clickable point is outside the owned Tool action group $Group"}
  [CapyRowPointer]::Down($Device,$x,$y);Start-Sleep -Milliseconds 40;[CapyRowPointer]::Up()
  try{Wait-Until {$box.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Current.ExpandCollapseState -eq [System.Windows.Automation.ExpandCollapseState]::Expanded} "Tool action group $Group did not expand from $Device input"}finally{

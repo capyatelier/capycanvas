@@ -284,12 +284,16 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         if(object(geometry,L"tiles").Size()){
             Grid::SetRow(body,1);frame.Children().Append(body);
         }else{
-            group.bodyViewport=Grid();group.bodyViewport.Children().Append(body);
-            group.bodyScroll=ScrollView();group.bodyScroll.Content(group.bodyViewport);group.bodyScroll.HorizontalScrollMode(ScrollingScrollMode::Disabled);
-            group.bodyScroll.HorizontalScrollBarVisibility(ScrollingScrollBarVisibility::Hidden);
-            group.bodyScroll.VerticalScrollBarVisibility(ScrollingScrollBarVisibility::Auto);mouseScrollbars(group.bodyScroll);
-            group.bodyScroll.ViewChanged([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->measured();});
+            group.bodyScroll=body.try_as<ScrollView>();
+            if(!group.bodyScroll){
+                group.bodyViewport=Grid();group.bodyViewport.Children().Append(body);
+                group.bodyScroll=ScrollView();group.bodyScroll.Content(group.bodyViewport);group.bodyScroll.HorizontalScrollMode(ScrollingScrollMode::Disabled);
+                group.bodyScroll.HorizontalScrollBarVisibility(ScrollingScrollBarVisibility::Hidden);
+                group.bodyScroll.VerticalScrollBarVisibility(ScrollingScrollBarVisibility::Auto);mouseScrollbars(group.bodyScroll);
+                group.bodyScroll.ViewChanged([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->measured();});
+            }
             AutomationProperties::SetAutomationId(group.bodyScroll,L"panel-body-scroll-"+to_hstring(uint32_t(num(geometry,L"id"))));
+            AutomationProperties::SetAccessibilityView(group.bodyScroll,Automation::Peers::AccessibilityView::Control);
             Grid::SetRow(group.bodyScroll,1);frame.Children().Append(group.bodyScroll);
         }
         auto grip=object(geometry,L"footer_grip");
@@ -556,7 +560,13 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             auto bounds=group.frame.TransformToVisual(root).TransformBounds(
                 {0,0,float(group.frame.ActualWidth()),float(group.frame.ActualHeight())});
             A radii;for(auto radius:group.corners)radii.Append(N(radius));
-            positions.Append(O({{L"id",N(id)},{L"bounds",rectangle(bounds)},{L"radii",radii},{L"gpu_background",B(group.gpu)}}));
+            J body;
+            if(group.bodyScroll){
+                body=O({{L"bounds",rectangle(allocatedBounds(group.bodyScroll,root))},
+                    {L"viewport_height",N(group.bodyScroll.ViewportHeight())},{L"extent_height",N(group.bodyScroll.ExtentHeight())},
+                    {L"vertical_offset",N(group.bodyScroll.VerticalOffset())}});
+            }
+            positions.Append(O({{L"id",N(id)},{L"bounds",rectangle(bounds)},{L"radii",radii},{L"gpu_background",B(group.gpu)},{L"body_scroll",body}}));
         }
         // Automation bounds can include invisible template focus decorations or
         // omit a container's padding. Trace the actual arranged rectangles too;
@@ -571,7 +581,8 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
                     ||key.starts_with(L"tool-")||key.starts_with(L"number-")||key.starts_with(L"property-")||key.starts_with(L"properties-")
                     ||key.starts_with(L"toolbar-")||key.starts_with(L"component-slider-")||key.starts_with(L"slider-")
                     ||key.starts_with(L"filter-")||key.starts_with(L"histogram-")||key.starts_with(L"waveform-")||key.starts_with(L"navigator-")
-                    ||key.starts_with(L"palette-")||key.starts_with(L"palettes-")||key.starts_with(L"proof-panel-"))
+                    ||key.starts_with(L"palette-")||key.starts_with(L"palettes-")||key.starts_with(L"proof-panel-")
+                    ||key.starts_with(L"panel-body-scroll-")||key.starts_with(L"panel-scroll-"))
                     &&item.IsLoaded()&&item.ActualWidth()>0&&item.ActualHeight()>0){
                     auto transform=item.TransformToVisual(root);auto size=item.RenderSize();
                     auto bounds=transform.TransformBounds({0,0,size.Width,size.Height});
@@ -752,6 +763,10 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
                 -num(object(geometry,L"footer_grip"),L"height"));
             double minimum=object(geometry,L"tiles").Size()?0.:num(geometry,L"min_body_height");
             if(group.bodyViewport)group.bodyViewport.Height(std::max(bodyHeight,minimum));
+            if(group.bodyScroll){
+                group.bodyScroll.Height(bodyHeight);
+                if(auto content=group.bodyScroll.Content().try_as<FrameworkElement>())content.MinHeight(minimum);
+            }
             group.body->Layout(geometry);
             if(group.footer){
                 auto grip=rectangle(object(group.geometry,L"footer_grip"));
