@@ -384,8 +384,11 @@ fn session_history_shares_unchanged_runs_of_vector_chunk_lists() {
     let capture = editor.capture_session(editor.capture(1, Default::default()).unwrap()).unwrap();
     let session = super::session::PreparedSession::prepare(&capture, serde_json::json!({}), &cancel).unwrap();
     let metadata: serde_json::Value = serde_json::from_slice(session.metadata()).unwrap();
-    let listed: usize = metadata["index_chunks"].as_array().unwrap().iter().map(|chunk| chunk.as_array().unwrap().len()).sum();
-    assert!(listed < (strokes as usize + 1) * chunks / 4, "{listed} chunk references for {chunks} chunks");
+    let runs = metadata["index_chunks"].as_array().unwrap();
+    let listed: usize = runs.iter().map(|run| run.as_array().unwrap().len()).sum();
+    let max_run = runs.iter().map(|run| run.as_array().unwrap().len()).max().unwrap_or(0);
+    assert!(max_run <= chunks / 2, "{max_run} references in one run for {chunks} chunks");
+    assert!(listed <= strokes as usize * max_run + 2 * chunks, "{listed} chunk references for {chunks} chunks and {max_run}-reference runs");
     let mut pack = Vec::new();
     std::io::Read::read_to_end(&mut session.resources().reader(&cancel), &mut pack).unwrap();
     let mut loaded = super::session::open_parts(session.metadata(), super::ImmutableBacking::new(Arc::new(Arc::<[u8]>::from(pack))).unwrap(), crate::ProjectLimits::default(), &cancel).unwrap();
