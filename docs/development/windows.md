@@ -1124,7 +1124,8 @@ One build supplies the runtime to up to eight parallel fixture jobs. The
 `fixtures` input accepts a JSON array of registered cases, for example
 `["canvas-bar:default","canvas-bar:light"]`; the default covers the
 priority vector, brush, touch, bubble and Zen journeys.
-The VM workflow sets a temporary 2560 by 1600 display. Its `runtime_run_id`
+The VM workflow selects a supported temporary display up to 2560 by 1600,
+with at least 1920 by 1080. Its `runtime_run_id`
 input can reuse a completed run's runtime when `source_ref` matches that build.
 The manual workflow checks functional behavior; it does not qualify hardware
 rendering or performance targets. Idle-brush journeys retain their default
