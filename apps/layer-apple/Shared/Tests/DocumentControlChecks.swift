@@ -658,11 +658,8 @@ extension XCTestCase {
         size.name = "created-drawing-resolution"; size.lifetime = .keepAlways; add(size)
         activate(app.buttons["image-size-cancel"])
         XCTAssertTrue(sizeApply.waitForNonExistence(timeout: 10))
-        #if os(macOS)
-        // Exercise the editor action through its shortcut, never system-menu coordinates.
-        app.typeKey("e", modifierFlags: [.command, .shift])
-        #else
         editorMenu(in: app, menu: "File", id: "export_document", label: "Export…")
+        #if os(iOS)
         let preview = app.buttons["export-preview"]
         XCTAssertTrue(preview.waitForExistence(timeout: 15))
         XCTAssertEqual(preview.label, "Preview Output")
