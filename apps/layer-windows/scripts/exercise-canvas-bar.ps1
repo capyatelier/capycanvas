@@ -1,17 +1,78 @@
-param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme='dark')
+param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light','invert-dark','invert-light')][string]$Theme='dark')
 $ErrorActionPreference='Stop'
+$Theme=$Theme.ToLowerInvariant();$invertOnly=$Theme.StartsWith('invert-');if($invertOnly){$Theme=$Theme.Substring(7)}
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 $CapyWaitSeconds=45
 Add-Type -AssemblyName System.Drawing
 Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
+if(!('CapyBarInvokeTrace' -as [type])){Add-Type -ReferencedAssemblies @([System.Windows.Automation.AutomationElement].Assembly.Location;[System.Windows.Automation.AutomationEvent].Assembly.Location;'WindowsBase';if($PSVersionTable.PSEdition -eq 'Core'){'System.Collections.dll';'System.Threading.dll'}) -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Windows.Automation;
+public sealed class CapyBarInvokeReceipt {
+ public long Sequence {get;set;}
+ public long TimeTicks {get;set;}
+ public string Id {get;set;}
+ public int[] RuntimeId {get;set;}
+ public int Process {get;set;}
+}
+public sealed class CapyBarInvokeTrace {
+ readonly object gate=new object();
+ readonly List<CapyBarInvokeReceipt> events=new List<CapyBarInvokeReceipt>();
+ AutomationElement root;
+ AutomationEventHandler handler;
+ int process;
+ long sequence;
+ public string Registration {get;private set;}
+ public string Error {get;private set;}
+ public void Start(AutomationElement ownedRoot,int owner) {
+  root=ownedRoot;process=owner;handler=OnInvoke;
+  try{Automation.AddAutomationEventHandler(InvokePattern.InvokedEvent,root,TreeScope.Subtree,handler);Registration="registered";}
+  catch(Exception error){Registration="unsupported";Error=error.ToString();handler=null;}
+ }
+ void OnInvoke(object sender,AutomationEventArgs args) {
+  try{
+   var element=sender as AutomationElement;if(element==null)return;
+   var current=element.Current;if(current.ProcessId!=process||current.AutomationId!="canvas-bar-invert_selection")return;
+   var receipt=new CapyBarInvokeReceipt{TimeTicks=Stopwatch.GetTimestamp(),Id=current.AutomationId,RuntimeId=element.GetRuntimeId(),Process=current.ProcessId};
+   lock(gate){receipt.Sequence=++sequence;events.Add(receipt);if(events.Count>128)events.RemoveAt(0);}
+  }catch(Exception error){lock(gate){Error=error.ToString();}}
+ }
+ public CapyBarInvokeReceipt[] Snapshot(){lock(gate){return events.ToArray();}}
+ public void Stop(){if(handler==null)return;try{Automation.RemoveAutomationEventHandler(InvokePattern.InvokedEvent,root,handler);}catch(Exception error){Error=error.ToString();}handler=null;}
+}
+'@}
 $repo=(Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
 $Executable=(Resolve-Path -LiteralPath $Executable).Path
 $run=Join-Path $repo ('artifacts/windows/canvas-bar/'+[Guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($run)|Out-Null
 $CapyTraceDirectory=$run
-$checks=[ordered]@{}
+$checks=[ordered]@{scope=$(if($invertOnly){'Invert input diagnostic'}else{'all canvas bar journeys'})}
 $barTaps=[Collections.Generic.List[object]]::new()
 $toolChoices=[Collections.Generic.List[object]]::new()
+$invokeTrace=[CapyBarInvokeTrace]::new()
+function Native-ContactReceipt{
+ $items=@(foreach($element in @((Workspace-Root),(Find 'drawing-canvas'))){if($element){$current=$element.Current;[ordered]@{id=$current.AutomationId;help=$current.HelpText;status=$current.ItemStatus}}})
+ $m=Model
+ [ordered]@{time_ticks=[Diagnostics.Stopwatch]::GetTimestamp();revision=$m.state.document_file.revision;bar=$m.state.canvas_bar|Select-Object context,anchor,placement;surfaces=$items}
+}
+function Save-InvokeDiagnostic{
+ $events=@($invokeTrace.Snapshot())
+ $first=@($barTaps|Where-Object {$_.id -eq 'canvas-bar-invert_selection' -and $_.acknowledged_ticks})[0]
+ $firstSeen=$first -and @($events|Where-Object {$_.Id -eq $first.id -and $_.TimeTicks -ge $first.down_ticks -and $_.TimeTicks -le $first.acknowledged_ticks}).Count -gt 0
+ $usable=$invokeTrace.Registration -eq 'registered' -and $firstSeen
+ [ordered]@{registration=$invokeTrace.Registration;usable=[bool]$usable;reason=$(if($usable){'observed the first acknowledged Invert'}else{'unusable unless the first acknowledged Invert raises an observed Invoke event'});error=$invokeTrace.Error;stopwatch_frequency=[Diagnostics.Stopwatch]::Frequency;events=$events}|ConvertTo-Json -Depth 8|Set-Content -LiteralPath (Join-Path $run 'native-invoke-events.json')
+ $barTaps|ConvertTo-Json -Depth 16|Set-Content -LiteralPath (Join-Path $run 'native-taps.json')
+}
+function Close-CanvasReview{
+ $invokeTrace.Stop()
+ [CapyRowPointer]::Dispose()
+ & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Close -DiscardUnsaved -StateDirectory $run
+ if((Get-Item (Join-Path $run 'stderr.log')).Length){throw 'Native stderr requires review'}
+ $checks.evidence=$run
+ [pscustomobject]$checks|ConvertTo-Json|Tee-Object -FilePath (Join-Path $run 'results.json')
+}
 function Owned([string]$Id,[switch]$Name,$Type){
  $property=if($Name){[System.Windows.Automation.AutomationElement]::NameProperty}else{[System.Windows.Automation.AutomationElement]::AutomationIdProperty}
  $condition=[System.Windows.Automation.AndCondition]::new([System.Windows.Automation.PropertyCondition]::new($property,$Id),
@@ -56,7 +117,7 @@ function AnchorQuadrant{$m=Model;$a=$m.state.canvas_bar.anchor;$c=$m.state.camer
 function Center($Element){$r=$Element.Current.BoundingRectangle;@([int]($r.X+$r.Width/2),[int]($r.Y+$r.Height/2))}
 function Tap([string]$Id,[string]$Device){
  $target=@{point=$null}
- $record=[ordered]@{id=$Id;device=$Device;parent=$null;bounds=$null;before=$null;after=$null;context=(Model).state.canvas_bar.context}
+ $record=[ordered]@{id=$Id;device=$Device;parent=$null;bounds=$null;before=$null;after=$null;context=(Model).state.canvas_bar.context;down_ticks=$null;up_ticks=$null;acknowledged_ticks=$null;contact=$null;released=$null}
  $barTaps.Add($record)
  try{
   Wait-Until {
@@ -70,9 +131,12 @@ function Tap([string]$Id,[string]$Device){
    $target.point=Center $item;$record.before=Input-Trace $target.point[0] $target.point[1]
    $record.before.foreground -eq $drawingWindow.ToInt64() -and @($record.before.hit|Where-Object {$_.process -eq $review.Id}).Count -gt 0
   } "Native pointer target $Id did not arrange inside its current foreground owner" 10
-  [CapyRowPointer]::Down($Device,$target.point[0],$target.point[1]);Start-Sleep -Milliseconds 40;[CapyRowPointer]::Up()
+  $record.down_ticks=[Diagnostics.Stopwatch]::GetTimestamp()
+  [CapyRowPointer]::Down($Device,$target.point[0],$target.point[1]);Start-Sleep -Milliseconds 40
+  [CapyRowPointer]::Up();$record.up_ticks=[Diagnostics.Stopwatch]::GetTimestamp()
   $record.after=Input-Trace $target.point[0] $target.point[1]
- }finally{$barTaps|ConvertTo-Json -Depth 12|Set-Content -LiteralPath (Join-Path $run 'native-taps.json')}
+  $record.released=Native-ContactReceipt
+ }finally{Save-InvokeDiagnostic}
 }
 function Subtool([string]$Command){
  $choice=Tool-Choice $Command
@@ -154,6 +218,7 @@ try {
  $native=@{window=$null}
  Wait-Until {$native.window=Owned-DrawingWindow $review;$null -ne $native.window} 'Review did not start' 45
  $root=$native.window.Root;$drawingWindow=$native.window.Handle
+ $invokeTrace.Start($root,[int]$review.Id)
  Use-PaintWorkspace
  Wait-Until {(Model).brush_ready -and (Model).windows_workspace.ready -and !(Model).windows_workspace.busy -and (Model).state.theme -eq $Theme} 'Canvas bar review did not start in the requested theme'
  $checks.initial_theme=$Theme
@@ -204,8 +269,10 @@ try {
   $invertRevision=(Model).state.document_file.revision
   Tap 'canvas-bar-invert_selection' $device
   Wait-Until {$m=Model;$b=Bar;$m.state.document_file.revision -eq $invertRevision+1 -and $m.state.canvas_bar.placement -eq 'bottom_edge' -and $b -and $b.Current.BoundingRectangle.Top -gt $invertBounds.Bottom} "$device Invert did not arrange the bar at the bottom edge" 5
+  $barTaps[$barTaps.Count-1].acknowledged_ticks=[Diagnostics.Stopwatch]::GetTimestamp()
   Tap 'canvas-bar-invert_selection' $device
   Wait-Until {$m=Model;$m.state.document_file.revision -eq $invertRevision+2 -and $m.state.layer_tools.has_selection -and $m.state.canvas_bar.placement -eq 'near_object' -and ($m.state.canvas_bar.anchor -join ',') -ceq $invertAnchor} "$device second Invert did not restore the exact selection anchor" 5
+  $barTaps[$barTaps.Count-1].acknowledged_ticks=[Diagnostics.Stopwatch]::GetTimestamp()
   (Find 'drawing-canvas').SetFocus()
   [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),[uint16]0x5A)
   Wait-Until {$m=Model;$m.state.canvas_bar.placement -eq 'bottom_edge' -and $null -eq $m.state.canvas_bar.anchor -and @($m.state.commands|Where-Object id -eq 'redo')[0].enabled} "$device Invert Undo did not restore the inverted selection" 5
@@ -215,6 +282,7 @@ try {
  }
  if((Paint) -ne $paint){throw 'Bar taps painted on the canvas'}
  $checks.mouse_touch_pen_taps_do_not_paint='passed'
+ if($invertOnly){Close-CanvasReview;return}
 
  foreach($device in @('mouse','touch','pen')){
   Tap 'canvas-bar-menu-refine' $device
@@ -351,7 +419,9 @@ try {
  $narrow=Assert-ModeProjection (Model) $false 0
  Tap ("canvas-bar-choice-"+$narrow.id) 'mouse'
  Wait-Until {$null -ne (Owned $narrow.items[1].label -Name -Type ([System.Windows.Automation.ControlType]::MenuItem))} 'The narrow mode menu has no Distort' 5
- (Owned $narrow.items[1].label -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+ $nativeMode=Owned $narrow.items[1].label -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)
+ $modeMenu=[System.Windows.Automation.TreeWalker]::RawViewWalker.GetParent($nativeMode)
+ Invoke $narrow.items[1].label -Name -Within $modeMenu
  Wait-Until {@((Choice $mode.id).items)[1].selected -and !(MenuOpen)} 'The narrow menu did not select Distort' 5
  $null=Assert-ModeProjection (Model) $false 1
  Capture ('transform-narrow-'+$Theme) -WithModel -Composed
@@ -490,15 +560,13 @@ try {
  Capture 'selection-light'
  $checks.light_theme='passed'
 
- [CapyRowPointer]::Dispose()
- & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Close -DiscardUnsaved -StateDirectory $run
- if((Get-Item (Join-Path $run 'stderr.log')).Length){throw 'Native stderr requires review'}
- $checks.evidence=$run
- [pscustomobject]$checks|ConvertTo-Json|Tee-Object -FilePath (Join-Path $run 'results.json')
+ Close-CanvasReview
 } catch {
  if($review -and !$review.HasExited){try{Capture 'failure'}catch{}}
  [IO.File]::WriteAllText((Join-Path $run 'failure.txt'),($_|Out-String)+$_.ScriptStackTrace);throw
 } finally {
+ $invokeTrace.Stop()
+ Save-InvokeDiagnostic
  [CapyRowPointer]::Dispose()
  if($review -and !$review.HasExited){Stop-Process -Id $review.Id -Force}
  Exit-CapyEnvironment

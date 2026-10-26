@@ -1651,12 +1651,19 @@ for the native bubble layout to settle after preset reselection before reset.
 The VM cases `tool-bubbles:blender-controls-dark` and `blender-controls-light`
 stop after those controls; `blenders-dark/light` retain painting and persistence,
 and `sliders-dark/light` also run the global slider preference and fan checks.
+Blender session checks validate the saved document center before resizing the
+restored window. Maximizing can change toolbar width and the visible work area;
+check the shared resize behavior and project the same document sample into its
+new native position before comparing exact pixels and history.
 Use `slider-preference-dark/light` to check the global preference, workspace
 history and SQLite restart without repeating the independent fan and Blender
 checks. `exercise-idle-brush.ps1 -WetRoundOnly` retains the single Wet Round
 stroke, pixel, history and close checks with the normal functional deadlines.
 Use `effects:visibility-dark` and `visibility-light` for the focused Properties
 visibility journey on the VM.
+Use `header:catalog-only` and `header:catalog-only-light` for categories, Pen
+order, shortcut tooltips and the header catalog. The legacy `header:Catalog`
+switch still runs the full header journey.
 
 `exercise-canvas-touch.ps1 -ScrubOnly -Theme dark` checks three-finger clearing
 at horizontal, diagonal and vertical angles, cancellation and locked-layer refusal.

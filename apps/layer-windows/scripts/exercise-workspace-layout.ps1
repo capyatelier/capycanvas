@@ -99,8 +99,11 @@ function Preset-Workspace([string]$Name,[string]$Id){
     if(Find 'workspace-manager' -Visible){(Control 'workspace-manager').SetFocus();[CapyRowPointer]::Key([uint32]$review.Id,27)}
     Wait-Until {!(Find 'workspace-manager' -Visible) -and (Control 'drawing-canvas').Current.IsEnabled} 'Workspace selector did not release the drawing'
 }
-function Preset-Groups([string]$Top){
-    $groups=@((Model).layout.groups)
+function Preset-Groups([string]$Top,[switch]$IncludeCollapsed,$Layout=(Model).layout){
+    $groups=@($Layout.groups)
+    if($IncludeCollapsed){foreach($column in $Layout.collapsed){foreach($group in $column.groups){
+        if($group.group -notin $groups.id){$groups+=[pscustomobject]@{id=$group.group;active=$group.active;panels=@($group.icons.panel);collapsed_column=$column.id}}
+    }}}
     $layers=@($groups|Where-Object {$_.panels -contains 'layers'})
     $properties=@($groups|Where-Object {$_.panels -contains 'properties'})
     $upper=@($groups|Where-Object {$_.panels -contains $Top})
@@ -174,9 +177,29 @@ function Check-PresetGroups{
         $other=if($preset.name -eq 'Paint'){@('Photo','builtin:workspace:photographer')}else{@('Paint','builtin:workspace:illustrator')}
         Preset-Workspace $other[0] $other[1];Preset-Workspace $preset.name $preset.id
         if(((Model).state.workspace.layout|ConvertTo-Json -Depth 80 -Compress) -cne $saved){throw 'Workspace reload lost its exact saved Filters tab and group layout'}
-        $null=Preset-Geometry $preset.top
-        Invoke ('panel-tab-'+$active)
-        Wait-Until {@((Model).layout.groups|Where-Object id -eq $layerGroup.id)[0].active -eq $active -and !(Model).windows_workspace.dirty -and !(Model).windows_workspace.saving} 'Reloaded preset did not restore and save its original active tab'
+        $restored=Model
+        if($restored.windows_workspace.id -ne $preset.id -or !$restored.windows_workspace.ready){throw 'Reloaded preset lost its selected workspace'}
+        $restoredGroups=@(Preset-Groups $preset.top -IncludeCollapsed -Layout $restored.layout)
+        if(@($restoredGroups|Where-Object collapsed_column).Count){
+            $columns=@(foreach($group in $restoredGroups){
+                if(!$group.collapsed_column){throw 'Reloaded preset split its primary groups between docked and collapsed presentations'}
+                $icon=Control ('column-icon-'+$group.active) -Arranged
+                $bounds=Native-Bounds ('column-icon-'+$group.active) $scale
+                if($icon.Current.ProcessId -ne $review.Id -or !$root.Current.BoundingRectangle.Contains($bounds)){throw 'Reloaded preset column icon left its owned visible window'}
+                @{id=$group.id;panels=$group.panels;active=$group.active;column=$group.collapsed_column;native_icon=$bounds;control=@(Control-Trace $icon)}
+            })
+            @{workspace=$preset.id;groups=$columns}|ConvertTo-Json -Depth 16|Set-Content (Join-Path $run ('preset-reloaded-'+$preset.name+'.json'))
+        }else{$null=Preset-Geometry $preset.top}
+        $restoreControl=if(Find ('panel-tab-'+$active) -Visible){'panel-tab-'+$active}else{'column-icon-'+$active}
+        Invoke $restoreControl
+        Wait-Until {
+            $snapshot=Model
+            $selected=@(Preset-Groups $preset.top -IncludeCollapsed -Layout $snapshot.layout|Where-Object id -eq $layerGroup.id)[0]
+            $native=Find $restoreControl -Visible
+            $selected.active -eq $active -and $native -and $native.Current.ProcessId -eq $review.Id -and
+                (!$restoreControl.StartsWith('column-icon-') -or $native.Current.ItemStatus.Length -gt 0) -and
+                !$snapshot.windows_workspace.dirty -and !$snapshot.windows_workspace.saving
+        } 'Reloaded preset did not restore and save its original active tab'
     }
     $names=@{'builtin:workspace:illustrator'='Paint';'builtin:workspace:photographer'='Photo';'builtin:workspace:painter'='Sketch'}
     if(!$names.ContainsKey($initial)){throw 'Preset fixture cannot restore an unknown initial workspace'}

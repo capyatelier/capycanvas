@@ -1,7 +1,7 @@
-﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('mouse','pen','touch')][string]$Device='mouse',[ValidateSet('paint','sketch','photo')][string]$Workspace='paint',[switch]$Catalog,[ValidateSet('dark','light')][string]$Theme='dark',[ValidateSet('full','catalog','catalog-light','background','options','options-light','options-pen','options-touch','menus','menus-light','zen','zen-workspace')][string]$Journey='full')
+﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('mouse','pen','touch')][string]$Device='mouse',[ValidateSet('paint','sketch','photo')][string]$Workspace='paint',[switch]$Catalog,[ValidateSet('dark','light')][string]$Theme='dark',[ValidateSet('full','catalog-only','catalog-only-light','background','options','options-light','options-pen','options-touch','menus','menus-light','zen','zen-workspace')][string]$Journey='full')
 $ErrorActionPreference='Stop'
-$catalogJourney=$Journey -in @('catalog','catalog-light')
-if($Journey -eq 'catalog-light'){$Theme='light'}
+$catalogJourney=$Journey -in @('catalog-only','catalog-only-light')
+if($Journey -eq 'catalog-only-light'){$Theme='light'}
 if($Journey -eq 'options-light'){$Theme='light'}
 if($Journey -eq 'menus-light'){$Theme='light'}
 if($Journey -eq 'options-pen'){$Device='pen'}
@@ -171,10 +171,25 @@ function Check-PenOrder {
     }
     function Show-BrushSets([bool]$Visible) {
         $choice=BrushSetsMenu
-        if([bool]$choice.selected -eq $Visible){return}
-        & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Window'
-        (Control $choice.label -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)).GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
-        Wait-Until {[bool](BrushSetsMenu).selected -eq $Visible -and !(Find $choice.label -Name -Type ([System.Windows.Automation.ControlType]::MenuItem) -Visible)} 'The Brushes panel did not acknowledge its visibility'
+        if([bool]$choice.selected -ne $Visible){
+            & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Window'
+            (Control $choice.label -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)).GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
+            Wait-Until {[bool](BrushSetsMenu).selected -eq $Visible -and !(Find $choice.label -Name -Type ([System.Windows.Automation.ControlType]::MenuItem) -Visible)} 'The Brushes panel did not acknowledge its visibility'
+        }
+        if($Visible){
+            $active=@{group=$null}
+            Wait-Until {$groups=@((Model).layout.groups|Where-Object active -eq 'brush_sets');if($groups.Count -ne 1 -or (Model).windows_workspace.busy){return $false};$active.group=$groups[0];$true} 'The Brushes panel did not become the active native group'
+            $group=Control ('workspace-group-'+$active.group.id) -Arranged
+            $first=@((Model).state.tool_panels.brush_sets.groups)[0]
+            $row=Control ('brush-set-'+$first.icon) -Within $group -Arranged
+            if($group.Current.ProcessId -ne $review.Id -or $row.Current.ProcessId -ne $review.Id){throw 'The arranged Brushes panel belongs to another review'}
+            $scale=[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.
+            Wait-Until {
+                $viewport=Native-Bounds ('panel-body-scroll-'+$active.group.id) $scale
+                $row=Find ('brush-set-'+$first.icon) -Within $group -Visible
+                $row -and $row.Current.ProcessId -eq $review.Id -and [CapyRowPointer]::GetForegroundWindow() -eq $drawingWindow -and !$row.Current.BoundingRectangle.IsEmpty -and $viewport.Contains($row.Current.BoundingRectangle)
+            } 'The first Brushes category did not arrange inside its owned native viewport'
+        }
     }
     $before=(Model).state;$groups=@($before.tool_panels.brush_sets.groups)
     $prior=@($groups|Where-Object selected);$pen=@($groups|Where-Object {$_.action.type -eq 'select_brush_set' -and $_.action.group -eq 'pen'})
@@ -192,6 +207,17 @@ function Check-PenOrder {
         Wait-Until {$m=Model;$m.state.brush.tool -eq 'pen' -and @($m.state.tool_panels.brush_sets.groups|Where-Object {$_.action.group -eq 'pen' -and $_.selected}).Count -eq 1 -and (Control ('brush-set-'+$pen[0].icon)).Current.ItemStatus -eq 'Selected'} 'The Pen category did not activate'
         @{categories=$categories;selected_icon=$pen[0].icon;visual_review='required: shared medium icons, category captions and selected styling'}|ConvertTo-Json -Depth 10|Set-Content (Join-Path $run 'paint-categories-layout.json')
         Capture 'paint-categories' -WithModel -Composed
+    }catch{
+        $failure=$_
+        try{
+            $model=Model;$active=@($model.layout.groups|Where-Object active -eq 'brush_sets')
+            $row=Find ('brush-set-'+$pen[0].icon)
+            $group=if($active.Count -eq 1){Find ('workspace-group-'+$active[0].id)}
+            $viewport=if($active.Count -eq 1){Native-Bounds ('panel-body-scroll-'+$active[0].id) ([CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.)}
+            @{failure=($failure|Out-String);groups=$active;categories=$model.state.tool_panels.brush_sets.groups;row=@(if($row){Control-Trace $row});viewport=$viewport;native_group=@(if($group){Control-Trace $group})}|ConvertTo-Json -Depth 20|Set-Content (Join-Path $run 'paint-category-failure-receipt.json')
+            Capture 'paint-category-failure' -WithModel -Composed
+        }catch{[IO.File]::WriteAllText((Join-Path $run 'paint-category-diagnostic-error.txt'),($_|Out-String))}
+        throw $failure
     }finally{Show-BrushSets $visible}
     try{
     $hint=@((Model).state.commands|Where-Object id -eq 'pen')[0]

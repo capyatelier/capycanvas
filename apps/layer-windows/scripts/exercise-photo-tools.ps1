@@ -210,7 +210,22 @@ function Check-TransformFootprint{
   $expected=@(@(0,0),@(2048,0),@(2048,2048),@(0,2048))
   foreach($corner in 0..3){foreach($axis in 0..1){if($initial[$corner][$axis] -ne $expected[$corner][$axis]){throw 'The dense source did not start at all four exact corners'}}}
   $endpoint=Footprint-Endpoint;$last=@{corners=$null}
-  Drag 'pen' (Screen-Point @(0,0)) $endpoint.screen {$last.corners=Footprint-Corners}
+  Invoke-Id 'tool-choice-transform-reference-0'
+  Wait-Until {@((Model).state.tool_extra|Where-Object {$_.Choice.id -eq 'transform-reference'})[0].Choice.items[0].selected} 'The live Distort corner reference did not select'
+  $dragStart=Screen-Point @(0,0)
+  $beforeLast=@([int]($dragStart[0]+($endpoint.screen[0]-$dragStart[0])*11/12),[int]($dragStart[1]+($endpoint.screen[1]-$dragStart[1])*11/12))
+  Drag 'pen' $dragStart $endpoint.screen {
+   $live=@{corner=$null}
+   Wait-Until {
+    $m=Model;$settings=$m.state.tool_settings
+    $live.corner=@([double]@($settings|Where-Object id -eq 'transform_x')[0].value,[double]@($settings|Where-Object id -eq 'transform_y')[0].value)
+    $x=[int]($endpoint.canvas[0]+($live.corner[0]*$endpoint.camera.zoom+$endpoint.camera.translation[0])*$endpoint.canvas[2]/$endpoint.camera.viewport[0])
+    $y=[int]($endpoint.canvas[1]+($live.corner[1]*$endpoint.camera.zoom+$endpoint.camera.translation[1])*$endpoint.canvas[3]/$endpoint.camera.viewport[1])
+    $x -eq $beforeLast[0] -and $y -eq $beforeLast[1]
+   } 'The native pen did not present its last valid corner at the exact requested screen pixel'
+   $last.corners=@($live.corner,$initial[1],$initial[2],$initial[3])
+  }
+  Wait-Until {(Model).state.notice.text -ceq "The pixels can't be squeezed this far"} 'The near-line drag did not publish the shared squeeze refusal'
   $notice=(Model).state.notice;$accepted=Footprint-Corners
   $report=[ordered]@{filter=$filter;endpoint=$endpoint;initial=$initial;last_valid=$last.corners;accepted=$accepted;notice=$notice;completed=$false};$reports+=$report
   if((Model).state.host_error -or (Kind) -ne 'transform' -or !(Control 'drawing-canvas').Current.IsEnabled){throw 'The near-line drag stopped the native canvas'}

@@ -368,7 +368,7 @@ function Invoke-ShortFanChecks{
     [IO.File]::WriteAllText((Join-Path $run 'short-fans.json'),($evidence.ToArray()|ConvertTo-Json -Depth 80),[Text.UTF8Encoding]::new($false))
     $checks.Add('Watercolor-two-and-Pencil-three-native-preset-hit-face-dismissal-and-immediate-halo')
 }
-function Restart-BubbleReview([string]$LogName='restart-stderr.log'){
+function Restart-BubbleReview([string]$LogName='restart-stderr.log',$SavedState=$null){
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Close -DiscardUnsaved|Out-Null
     if((Get-Item -LiteralPath $stderr).Length){throw 'Initial slider fixture stderr requires inspection'}
     [CapyRowPointer]::Dispose();$script:stderr=Join-Path $run $LogName
@@ -377,8 +377,21 @@ function Restart-BubbleReview([string]$LogName='restart-stderr.log'){
     Wait-Until {$owned.window=Owned-DrawingWindow $review;$owned.window -and (Model).brush_ready -and (Model).canvas_ready -and (Model).windows_workspace.ready -and !(Model).windows_workspace.busy} 'Owned slider persistence restart did not become ready' 60
     $script:root=$owned.window.Root;$script:drawingWindow=$owned.window.Handle
     [CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null;[CapyRowPointer]::SetForegroundWindow($drawingWindow)|Out-Null;[CapyRowPointer]::Initialize([uint32]$review.Id)
+    if($SavedState){
+        Wait-Until {$m=Model;$m.state.document_file.location.uri -eq $SavedState.location -and !$m.windows_recovery.busy -and !$m.windows_recovery.restoring} 'Native Blender session did not reopen its saved drawing'
+        $initial=Blender-SavedState|ConvertFrom-Json
+        @{saved=$SavedState;initial=$initial}|ConvertTo-Json -Depth 30|Set-Content -LiteralPath (Join-Path $run ($LogName+'.projection.json'))
+        Assert-BlenderCamera $SavedState.camera $initial.camera
+    }
     [CapyWindowApi]::ShowWindow($drawingWindow,3)|Out-Null
-    Wait-Until {(Model).layout.viewport[0] -gt 1000} 'Restarted slider fixture did not maximize'
+    Wait-Until {$c=(Model).state.camera;$b=(Control 'drawing-canvas' -Arranged).Current.BoundingRectangle;(Model).layout.viewport[0] -gt 1000 -and $c.viewport[0] -eq [int][Math]::Round($b.Width) -and $c.viewport[1] -eq [int][Math]::Round($b.Height)} 'Restarted slider fixture did not maximize'
+    if($SavedState){
+        Wait-BubbleVisualLayout
+        $maximized=Blender-SavedState|ConvertFrom-Json
+        @{saved=$SavedState;initial=$initial;maximized=$maximized}|ConvertTo-Json -Depth 30|Set-Content -LiteralPath (Join-Path $run ($LogName+'.projection.json'))
+        Assert-BlenderCamera $initial.camera $maximized.camera -Resize
+        return @{initial=$initial;maximized=$maximized}
+    }
 }
 function Invoke-SliderChecks{
     if(!$sliderPreferenceOnly){Invoke-ShortFanChecks}
@@ -466,7 +479,28 @@ function Blender-SavedState{
         layers=@($m.state.layers.id);
         settings=@(foreach($setting in $m.state.tool_settings){[ordered]@{id=$setting.id;value=$setting.value}});
         history=@(foreach($command in $m.state.commands){if($command.id -in @('undo','redo')){[ordered]@{id=$command.id;enabled=$command.enabled}}});
-        camera=[ordered]@{viewport=$c.viewport;work_area=$c.work_area;translation=$c.translation;zoom=$c.zoom;rotation=$c.rotation;flipped=$c.flipped};native_canvas=@($box.X,$box.Y,$box.Width,$box.Height)}|ConvertTo-Json -Depth 30 -Compress
+        camera=[ordered]@{viewport=$c.viewport;work_area=$c.work_area;translation=$c.translation;zoom=$c.zoom;rotation=$c.rotation;flipped=$c.flipped;zoom_locked=$c.zoom_locked;rotation_locked=$c.rotation_locked};native_canvas=@($box.X,$box.Y,$box.Width,$box.Height)}|ConvertTo-Json -Depth 30 -Compress
+}
+function Blender-DocumentPosition($Camera,[double[]]$Surface){
+    $x=$Surface[0]-$Camera.translation[0];$y=$Surface[1]-$Camera.translation[1];$cos=[Math]::Cos($Camera.rotation);$sin=[Math]::Sin($Camera.rotation)
+    @((($cos*$x+$sin*$y)/$Camera.zoom*$(if($Camera.flipped[0]){-1}else{1})),((-$sin*$x+$cos*$y)/$Camera.zoom*$(if($Camera.flipped[1]){-1}else{1})))
+}
+function Blender-SurfacePosition($Camera,[double[]]$Document){
+    $x=$Document[0]*$Camera.zoom*$(if($Camera.flipped[0]){-1}else{1});$y=$Document[1]*$Camera.zoom*$(if($Camera.flipped[1]){-1}else{1});$cos=[Math]::Cos($Camera.rotation);$sin=[Math]::Sin($Camera.rotation)
+    @(($cos*$x-$sin*$y+$Camera.translation[0]),($sin*$x+$cos*$y+$Camera.translation[1]))
+}
+function Blender-CameraCenter($Camera){
+    Blender-DocumentPosition $Camera @(($Camera.work_area[0]+$Camera.work_area[2]/2),($Camera.work_area[1]+$Camera.work_area[3]/2))
+}
+function Assert-BlenderCamera($Expected,$Actual,[switch]$Resize){
+    foreach($key in @('zoom','rotation')){if([single]$Expected.$key -ne [single]$Actual.$key){throw "Native Blender session changed camera $key"}}
+    foreach($key in @('flipped','zoom_locked','rotation_locked')){if(($Expected.$key|ConvertTo-Json -Compress) -cne ($Actual.$key|ConvertTo-Json -Compress)){throw "Native Blender session changed camera $key"}}
+    $before=if($Resize){@($Expected.translation)}else{@(Blender-CameraCenter $Expected)}
+    $after=if($Resize){@($Actual.translation)}else{@(Blender-CameraCenter $Actual)}
+    foreach($axis in 0..1){
+        $wanted=$before[$axis]+$(if($Resize){($Actual.viewport[$axis]-$Expected.viewport[$axis])/2}else{0})
+        if([Math]::Abs($after[$axis]-$wanted) -gt .001){throw $(if($Resize){'Explicit native maximize did not follow shared viewport-centered camera resizing'}else{'Native session restart lost the saved document center before maximize'})}
+    }
 }
 function Invoke-BlenderCellChecks([int]$Preset,[string]$CellId,[double]$DefaultCell,[double]$DefaultSpread,[string[]]$Primary,[string]$Tag){
     $before=Revision;$area=(Model).layout.work_area
@@ -558,14 +592,24 @@ function Invoke-BlenderCellChecks([int]$Preset,[string]$CellId,[double]$DefaultC
     $file=Join-Path $run ($Tag+' editing-state.capy');Save-ProjectAs $file
     Wait-Until {!(Model).windows_workspace.dirty -and !(Model).windows_workspace.saving -and !(Model).state.document_file.busy} 'Blender editing state did not finish its native autosave'
     $savedState=Blender-SavedState;$savedFile=(Get-FileHash -LiteralPath $file).Hash
+    $saved=$savedState|ConvertFrom-Json
+    $documentSample=Blender-DocumentPosition $saved.camera @((($sample.x-$saved.native_canvas[0])*$saved.camera.viewport[0]/$saved.native_canvas[2]),(($sample.y-$saved.native_canvas[1])*$saved.camera.viewport[1]/$saved.native_canvas[3]))
     if((Wait-StablePixels {Screen-Pixels $sample.x $sample.y}) -cne $painted){throw 'Saving Blender editing state changed authored pixels'}
     Capture ($Tag+'-session-before-restart') -WithModel -Composed
-    Restart-BubbleReview ($Tag+'-restart-stderr.log')
+    $projection=Restart-BubbleReview ($Tag+'-restart-stderr.log') $saved
     Wait-Until {(Model).state.document_file.location.uri -eq $file -and !(Model).windows_recovery.busy -and !(Model).windows_recovery.restoring} 'Native Blender session did not reopen its saved drawing'
     $script:w=(Control 'drawing-canvas' -Arranged).Current.BoundingRectangle
     $restoredState=Blender-SavedState
-    @{before=($savedState|ConvertFrom-Json);after=($restoredState|ConvertFrom-Json)}|ConvertTo-Json -Depth 30|Set-Content -LiteralPath (Join-Path $run ($Tag+'-session-projection.json'))
-    if($restoredState -cne $savedState -or @((Model).state.tool_settings|Where-Object id -eq $CellId)[0].value -ne 12){throw 'Native session restart lost Blender12, its source, document checkpoint, history or pixel projection'}
+    $restored=$restoredState|ConvertFrom-Json
+    $surface=Blender-SurfacePosition $restored.camera $documentSample
+    $sample=@{x=[int][Math]::Round($restored.native_canvas[0]+$surface[0]*$restored.native_canvas[2]/$restored.camera.viewport[0]);y=[int][Math]::Round($restored.native_canvas[1]+$surface[1]*$restored.native_canvas[3]/$restored.camera.viewport[1])}
+    @{before=$saved;initial=$projection.initial;after=$restored;document_sample=$documentSample;restored_screen_sample=$sample}|ConvertTo-Json -Depth 30|Set-Content -LiteralPath (Join-Path $run ($Tag+'-session-projection.json'))
+    $savedEditing=$saved|Select-Object * -ExcludeProperty camera,native_canvas|ConvertTo-Json -Depth 30 -Compress
+    $restoredEditing=$restored|Select-Object * -ExcludeProperty camera,native_canvas|ConvertTo-Json -Depth 30 -Compress
+    if($savedEditing -cne $restoredEditing -or @((Model).state.tool_settings|Where-Object id -eq $CellId)[0].value -ne 12){throw 'Native session restart lost Blender12, its source, document checkpoint, history or editing settings'}
+    $work=$restored.camera.work_area;$box=$restored.native_canvas
+    $nativeWork=[Windows.Rect]::new(($box[0]+$work[0]*$box[2]/$restored.camera.viewport[0]),($box[1]+$work[1]*$box[3]/$restored.camera.viewport[1]),($work[2]*$box[2]/$restored.camera.viewport[0]),($work[3]*$box[3]/$restored.camera.viewport[1]))
+    if(!$nativeWork.Contains([Windows.Rect]::new(($sample.x-48),($sample.y-48),96,96))){throw 'Restored document sample does not fit the native canvas work area'}
     $nativeCell=(Blender-Field $CellId).GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value
     if((View $id).source.control.id -ne $Preset -or !(View $id).selected -or [double]$nativeCell -ne 12){throw 'Restored Blender source and native Cell Size did not show the saved12'}
     [CapyRowPointer]::Hover($w.X+4,$w.Y+4)
