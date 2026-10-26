@@ -9,7 +9,7 @@ struct Input {key:Key,snapshot:Arc<layer_core::SceneSnapshot>}
 pub(crate) struct BakePreflight {
     color:layer_core::color::DocumentColor,owner:u64,revision:u64,inputs:Vec<Input>,next:usize,
     renderer:Option<Box<WgpuRasterizer>>,pipelines:Option<startup::Requirements>,scene:Option<Box<Scene>>,source:Option<Arc<layer_core::SceneSnapshot>>,initialized:bool,windowed:bool,
-    coordinate:usize,output:Option<Image>,output_recorded:bool,planning:bool,
+    steps:Vec<([u32;2],PixelRect,DocRect)>,retiring:Option<Arc<std::sync::atomic::AtomicBool>>,coordinate:usize,output:Option<Image>,output_recorded:bool,planning:bool,
     pages:Vec<(usize,[u32;2],Image)>,failure:Option<GpuRasterError>,projected_bytes:u64,
 }
 impl BakePreflight {
@@ -49,7 +49,14 @@ impl BakePreflight {
             let retained=self.projected_bytes.checked_add(parent.projected_restore_bytes()).and_then(|bytes|bytes.checked_add(parent.scale_display.as_ref().map_or(0,|cache|cache.resident_bytes())))
                 .ok_or(GpuRasterError::SourceWorkingSetExceeded)?;
             let budget=parent.native_edit.as_ref().map_or(windows::DEFAULT_IMAGE_PIXEL_BYTES,|native|native.image_pixel_budget(retained)).min(windows::DEFAULT_IMAGE_PIXEL_BYTES);
-            self.windowed=windows::Plan::new(scene,input.key.extent,budget,parent.device.limits().max_texture_dimension_2d)?.is_some();
+            let plan=windows::Plan::new(scene,input.key.extent,budget,parent.device.limits().max_texture_dimension_2d)?;
+            let damage=input.key.damage;
+            let outputs:Vec<_>=plan.map_or_else(||vec![damage],|plan|plan.outputs(DocRect::from(damage).aligned(PAGE_SIZE).in_frame(input.key.extent)).map(|output|output.intersect(damage)).collect());
+            self.windowed=plan.is_some();
+            self.steps=outputs.into_iter().flat_map(|output| {
+                let window=Scene::capture_window(scene,output,input.key.extent);
+                page_coordinates(output).map(move |coordinate|(coordinate,output,window))
+            }).collect();
             let mut renderer=parent.native_preparation()?;
             renderer.effect_analyses=parent.bake_analysis_entries(&input.snapshot,&input.key.scope,input.key.offset,input.key.extent)?.unwrap_or_default();
             renderer.ensure_document_metadata(input.key.extent,scene)?;
@@ -71,10 +78,14 @@ impl BakePreflight {
             if encoder.has_work() {r.uploads.finish(&encoder);encoder.submit(&r.queue);}
             self.scene=Some(Scene::new(r)?);self.scene.as_mut().unwrap().ordered=true;self.initialized=true;
         }
-        let coordinates:Vec<_>=page_coordinates(input.key.damage).collect();
-        let Some(coordinate)=coordinates.get(self.coordinate).copied() else {
+        let Some(&(coordinate,output,window))=self.steps.get(self.coordinate) else {
             self.next+=1;self.renderer=None;self.scene=None;self.source=None;self.initialized=false;self.coordinate=0;self.planning=false;return Ok(());
         };
+        if self.retiring.as_ref().is_some_and(|retired|!retired.load(std::sync::atomic::Ordering::Acquire)) {
+            #[cfg(not(target_arch="wasm32"))]
+            let _=r.device.poll(wgpu::PollType::Poll);
+            return Ok(());
+        }
         let compositor=self.scene.as_mut().unwrap();
         let mut encoder=submission::CommandEncoder::new(&r.device,&Default::default());
         let completed=self.pages.len();
@@ -91,13 +102,11 @@ impl BakePreflight {
             let advanced=objects.advance(r,compositor,&mut encoder,false);
             compositor.exact_object_results=objects;advanced?;
             compositor.object_display=false;compositor.object_query=false;compositor.object_live=false;
-            let region=page_rect(coordinate).intersect(input.key.damage);
-            let window=Scene::capture_window(scene,region,input.key.extent);
             if !compositor.prepare_object_pages(r,source,None,page_coordinates(window.in_frame(input.key.extent)))? {return Ok(());}
             if !self.planning {r.source_tiles.borrow_mut().invalidate();compositor.begin_frame();self.planning=true;}
             let prepared=(|| {
-                compositor.image_window=Some(window);compositor.image_output=Some(region);
-                compositor.update_images(r,source,region,&mut encoder)?;
+                compositor.image_window=Some(window);compositor.image_output=Some(output);
+                compositor.update_images(r,source,output,&mut encoder)?;
                 compositor.jobs.clear();compositor.source_jobs.clear();compositor.used.fill(false);
                 let tile=compositor.group(r,source,None,coordinate)?;
                 let (texture,view)=create_color_target(&r.device,[PAGE_SIZE;2],"prepared bake page");
@@ -111,11 +120,17 @@ impl BakePreflight {
             })();
             match prepared {Err(GpuRasterError::DeferredObjectWork)=>Ok(()),result=>result,}
         })();
-        if self.windowed && self.pages.len()>completed {
+        let finished=self.windowed && self.pages.len()>completed && self.steps.get(self.coordinate).is_none_or(|next|next.1!=output);
+        if finished {
             parent.metrics.image_window_peak_bytes=parent.metrics.image_window_peak_bytes.max(compositor.images.storage_bytes());
             parent.metrics.image_window_submissions+=1;
         }
         if encoder.has_work() {r.uploads.finish(&encoder);r.last_submission=Some(encoder.submit(&r.queue));}
+        if finished {
+            let complete=Arc::new(std::sync::atomic::AtomicBool::new(false));let signal=complete.clone();
+            r.queue.on_submitted_work_done(move||signal.store(true,std::sync::atomic::Ordering::Release));
+            self.retiring=Some(complete);
+        }
         result
     }
 }
@@ -141,7 +156,7 @@ impl WgpuRasterizer {
                 .and_then(|added|bytes.checked_add(added)).ok_or(GpuRasterError::SourceWorkingSetExceeded)
         }).and_then(|bytes|self.admit_preparation_bytes(self.projected_restore_bytes(),bytes).map(|()|bytes));
         let mut state=self.bake_preflight.take().filter(|old|old.color==self.document_color() && old.inputs.iter().map(|input|&input.key).eq(inputs.iter().map(|input|&input.key)))
-            .unwrap_or(BakePreflight {color:self.document_color(),owner:packet.scene.owner(),revision:packet.scene.revision(),inputs,next:0,renderer:None,pipelines:None,scene:None,source:None,initialized:false,windowed:false,coordinate:0,
+            .unwrap_or(BakePreflight {color:self.document_color(),owner:packet.scene.owner(),revision:packet.scene.revision(),inputs,next:0,renderer:None,pipelines:None,scene:None,source:None,initialized:false,windowed:false,steps:Vec::new(),retiring:None,coordinate:0,
                 output:None,output_recorded:false,planning:false,pages:Vec::new(),failure:None,projected_bytes:0});
         match projected {Ok(bytes)=>state.projected_bytes=bytes,Err(error)=>state.failure=Some(error)}
         if let Err(error)=state.advance(self,packet) {state.failure=Some(error);}
@@ -154,3 +169,7 @@ impl WgpuRasterizer {
         state.pages.iter().find(|(id,c,_)|*id==input && *c==coordinate).map(|(_,_,image)|image.view.clone())
     }
 }
+
+#[cfg(test)]
+#[path="bake_preflight_tests.rs"]
+mod tests;

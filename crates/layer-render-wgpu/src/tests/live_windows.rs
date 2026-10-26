@@ -1,6 +1,6 @@
 //! Live window seams, partial damage and resource ceilings against full-image
 //! composition. Edited images use an arithmetic tolerance, not byte parity.
-use super::image_windows::{effect, add_effect, document, set_entries, set_mask, insert_effect};
+use super::image_windows::{effect, add_effect, document, set_entries, set_mask};
 use super::*;
 use layer_core::color::{DocumentColor, SampleDepth, RgbSpace};
 use layer_core::{Document, CoverageSnapshot, Selection, authored::*};
@@ -297,27 +297,13 @@ fn native_live_animated_windows_refresh_with_empty_paint_damage_and_keep_frozen_
 /// halos, and store the same pixels as a bake of the whole layer.
 #[test]
 fn bakes_run_their_filters_in_bounded_windows_with_the_same_pixels() {
-    use layer_core::{BlendSpace, Document, EffectInstance, EffectValue, MergeKind, SeparationFilters};
+    use layer_core::{BlendSpace, MergeKind, SeparationFilters};
     use layer_engine::{CanvasEngine, ViewTransform, input_queue};
     const CAP: u64 = 16 * 1024 * 1024;
     let extent = [1100, 700];
     for depth in [SampleDepth::U8, SampleDepth::U16] {
         for space in BlendSpace::ALL {
-            let mut doc = Document::new(PortableId::random(), extent[0], extent[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-            let root = doc.artwork.root;
-            let composition = doc.artwork.compositions.get_mut(root).unwrap();
-            composition.color = DocumentColor { space: RgbSpace::Srgb, depth };
-            composition.blend = space;
-            let photo = doc.scene().order()[0];
-            let SourceTarget::Paint(paint) = doc.scene().source_target(photo).unwrap() else { unreachable!() };
-            doc.artwork.paint.get_mut(paint).unwrap().base = Some(layer_core::authored::PaintBase::new((layer_core::color::source::rgba8_source(extent, |x, y| {
-                [(x * 7 % 256) as u8, (y * 5 % 256) as u8, ((x ^ y) % 256) as u8, if (x / 97 + y / 61) % 3 == 0 { 140 } else { 255 }]
-            })).into()));
-            let mut effect = EffectInstance::new(layer_core::bundled_effect_catalog().get("gaussian_blur").unwrap().program());
-            effect.set("sigma", EffectValue::Number(9.)).unwrap();
-            let blur = insert_effect(&mut doc, effect);
-            doc.working.occurrence = Some(blur);
-            doc.working.target = None;
+            let (doc, photo) = super::image_windows::blurred_photo(extent, DocumentColor { space: RgbSpace::Srgb, depth }, space);
             let bake = |cap: u64, separate: bool| {
                 let gpu = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
                 let (_producer, consumer) = input_queue(8);

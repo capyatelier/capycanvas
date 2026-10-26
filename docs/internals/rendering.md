@@ -134,7 +134,7 @@ watercolor settles into the result, which keeps no wet state. The authored edit
 removes the merged occurrences; the accepted bake snapshot retains their sources,
 masks and original image tiles until the job finishes. The bake runs on the
 render owner; the UI thread only plans it. Large bakes advance through
-512 × 512 regions. Each submission captures its native tiles before cache
+1024 × 1024 steps. Each submission captures its native tiles before cache
 eviction can discard them. Intermediate native backing belongs to the renderer;
 history publishes the complete edit after the last region. Hosts poll readiness
 without waiting on the GPU and keep the previous artwork visible during the bake.
@@ -157,14 +157,19 @@ drawing cancels the capture and edits nothing. Convert to Object Layer shares an
 untouched photo's image, or captures the paint layer's raw appearance, trimmed to
 its visible pixels, the same way.
 
-A bake keeps no filter images. When its members' filters would need more
-image memory than the default image budget, it runs them in the bounded windows
-the display uses for filters (`windows::Plan`), each with its filters' halos
-and retired before the next, so a windowed bake stores the same pixels as a
-whole one. Pages keep only the part inside the result's extent, with coverage
-kept within 0–1, which a blur of translucent pixels can round past. A new,
-empty layer that an operation writes into reserves in history only the pages
-it can write (`RasterRevision::pending_within`).
+A live bake prepares each step's pages in a private renderer, at most one page
+per frame, before the frame that copies them into the result
+([`scene/bake_preflight.rs`](../../crates/layer-render-wgpu/src/scene/bake_preflight.rs)).
+It evaluates its members' filters once for the whole step and keeps those images
+until the step's last page. When the filters would need more image memory than
+the image budget, it runs them in the bounded windows the display uses for
+filters (`windows::Plan`), each with its filters' halos; a window's GPU work
+completes before the next window allocates its images, so a windowed bake
+stores the same pixels as a whole one within the budget. A bake keeps no filter
+images once its step is done. Pages keep only the part inside the result's
+extent, with coverage kept within 0–1, which a blur of translucent pixels can
+round past. A new, empty layer that an operation writes into reserves in history
+only the pages it can write (`RasterRevision::pending_within`).
 
 Frequency Separation bakes Low with an attached Gaussian blur, then computes High
 from the original and the captured Low with `FrequencyDetail`. High stores

@@ -54,21 +54,22 @@ impl Plan {
         self.regions_cached(scene,dirty,None)
     }
     pub(super) fn regions_cached<'a>(self,scene:SceneView<'a>,dirty:PixelRect,objects:Option<&'a object_spatial::SpatialIndex>)->impl Iterator<Item=(PixelRect,DocRect)>+'a {
+        self.outputs(dirty).map(move |output| (output, images::capture_window_cached(scene, output,objects)))
+    }
+
+    pub(super) fn outputs(self, dirty: PixelRect) -> impl Iterator<Item = PixelRect> {
         let side = self.side;
         (dirty.min_y()..dirty.max_y())
             .step_by(side as usize)
             .flat_map(move |y| {
                 (dirty.min_x()..dirty.max_x())
                     .step_by(side as usize)
-                    .map(move |x| {
-                        let output = PixelRect::new(
-                            x,
-                            y,
-                            x.saturating_add(side).min(dirty.max_x()),
-                            y.saturating_add(side).min(dirty.max_y()),
-                        );
-                        (output, images::capture_window_cached(scene, output,objects))
-                    })
+                    .map(move |x| PixelRect::new(
+                        x,
+                        y,
+                        x.saturating_add(side).min(dirty.max_x()),
+                        y.saturating_add(side).min(dirty.max_y()),
+                    ))
             })
     }
 }

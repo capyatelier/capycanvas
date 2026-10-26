@@ -40,6 +40,25 @@ pub(crate) fn insert_effect(doc: &mut Document, instance: EffectInstance) -> Occ
     owner
 }
 
+pub(crate) fn blurred_photo(extent: [u32; 2], color: DocumentColor, blend: layer_core::BlendSpace) -> (Document, OccurrenceHandle) {
+    let mut doc = Document::new(PortableId::random(), extent[0], extent[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+    let root = doc.artwork.root;
+    let composition = doc.artwork.compositions.get_mut(root).unwrap();
+    composition.color = color;
+    composition.blend = blend;
+    let photo = doc.scene().order()[0];
+    let SourceTarget::Paint(paint) = doc.scene().source_target(photo).unwrap() else { unreachable!() };
+    doc.artwork.paint.get_mut(paint).unwrap().base = Some(PaintBase::new((layer_core::color::source::rgba8_source(extent, |x, y| {
+        [(x * 7 % 256) as u8, (y * 5 % 256) as u8, ((x ^ y) % 256) as u8, if (x / 97 + y / 61) % 3 == 0 { 140 } else { 255 }]
+    })).into()));
+    let mut effect = EffectInstance::new(fixture("gaussian_blur").program());
+    effect.set("sigma", layer_core::EffectValue::Number(9.)).unwrap();
+    let blur = insert_effect(&mut doc, effect);
+    doc.working.occurrence = Some(blur);
+    doc.working.target = None;
+    (doc, photo)
+}
+
 pub(crate) fn program(generator: bool, global: bool) -> EffectInstance {
     let mut p = (*fixture("exposure").program()).clone();
     p.kind = if generator {
