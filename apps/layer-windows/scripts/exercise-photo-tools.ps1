@@ -1,5 +1,7 @@
-param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light','mix-dark','mix-light','transform-dark','transform-light')][string]$Theme='dark')
+param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light','mix-dark','mix-light','transform-dark','transform-light','distort-bilinear-dark','distort-bilinear-light','distort-bicubic-dark','distort-bicubic-light')][string]$Theme='dark')
 $ErrorActionPreference='Stop'
+$Theme=$Theme.ToLowerInvariant();$distortFilter=$null
+if($Theme -match '^distort-(bilinear|bicubic)-(dark|light)$'){$distortFilter='transform_'+$Matches[1];$Theme=$Matches[2]}
 $transformOnly=$Theme.StartsWith('transform-');if($transformOnly){$Theme=$Theme.Substring(10)}
 $mixOnly=$Theme.StartsWith('mix-');if($mixOnly){$Theme=$Theme.Substring(4)}
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
@@ -10,8 +12,15 @@ $Executable=(Resolve-Path -LiteralPath $Executable).Path
 $run=Join-Path $repo ('artifacts/windows/photo-tools/'+[Guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($run)|Out-Null
 $CapyTraceDirectory=$run
-$checks=[ordered]@{scope=$(if($transformOnly){'transform tail'}elseif($mixOnly){'Mixing only'}else{'all photo tools'})}
+$checks=[ordered]@{scope=$(if($distortFilter){$distortFilter+' only'}elseif($transformOnly){'transform tail'}elseif($mixOnly){'Mixing only'}else{'all photo tools'})}
 $CapyPopups=$true
+function Close-PhotoReview{
+ [CapyRowPointer]::Dispose()
+ & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Close -DiscardUnsaved -StateDirectory $run
+ if((Get-Item (Join-Path $run 'stderr.log')).Length){throw 'Native stderr requires review'}
+ $checks.evidence=$run
+ [pscustomobject]$checks|ConvertTo-Json|Tee-Object -FilePath (Join-Path $run 'results.json')
+}
 function Visible([string]$Id){$item=Find $Id;if($item -and !$item.Current.IsOffscreen){$item}}
 function Bar {Visible 'canvas-action-bar'}
 function Kind {(Model).state.canvas_bar.context.kind}
@@ -182,7 +191,7 @@ function Footprint-Endpoint{
  $chosen=@($candidates|Sort-Object { $_.distance })[0]
  [pscustomobject]@{requested=$requested;screen=$chosen.screen;actual_source=$chosen.source;camera=$camera;canvas=@($bounds.X,$bounds.Y,$bounds.Width,$bounds.Height);physical_pixels_per_source_pixel=$scale}
 }
-function Check-TransformFootprint{
+function Check-TransformFootprint([string[]]$Filters=@('transform_bilinear','transform_bicubic')){
  Add-Type -AssemblyName System.Drawing
  Add-Type -Path (Join-Path $PSScriptRoot 'PackageFixture.cs') -ReferencedAssemblies @(
   'System.IO.Compression.dll','System.IO.Compression.FileSystem.dll'
@@ -199,7 +208,8 @@ function Check-TransformFootprint{
   $bitmap.Save($source,[Drawing.Imaging.ImageFormat]::Png)
  }finally{$bitmap.Dispose()}
  $reports=@()
- try{foreach($filter in @('transform_bilinear','transform_bicubic')){
+ $persist={ [IO.File]::WriteAllText((Join-Path $run 'transform-footprint.json'),([pscustomobject]@{theme=$Theme;source=$source;source_sha256=(Get-FileHash -LiteralPath $source).Hash;reports=$reports}|ConvertTo-Json -Depth 30),[Text.UTF8Encoding]::new($false)) }
+ try{foreach($filter in $Filters){
   Open-Project $source;Idle;Footprint-View
   if((Width) -ne 2048 -or [int]@((Model).state.tabs|Where-Object active)[0].height -ne 2048){throw 'The dense Distort source did not open at its exact extent'}
   $original=Footprint-Checkpoint ($filter+'-original');$originalPixels=Wait-StablePixels {Footprint-Pixels}
@@ -247,7 +257,8 @@ function Check-TransformFootprint{
   $reopened=Footprint-Checkpoint ($filter+'-reopened')
   if($reopened.authored -cne $painted.authored -or $reopened.raster -cne $painted.raster -or (Wait-StablePixels {Footprint-Pixels}) -cne $paintedPixels){throw 'Save/reopen changed exact Distort and subsequent paint artwork or pixels'}
   $report.completed=$true;Capture ($filter+'-reopened') -WithModel -Composed
- }}finally{[IO.File]::WriteAllText((Join-Path $run 'transform-footprint.json'),([pscustomobject]@{theme=$Theme;source=$source;source_sha256=(Get-FileHash -LiteralPath $source).Hash;reports=$reports}|ConvertTo-Json -Depth 30),[Text.UTF8Encoding]::new($false))}
+  & $persist
+ }}finally{& $persist}
  $checks.distort_near_line_last_valid_backout_apply_paint_history_reopen='passed'
 }
 
@@ -328,6 +339,7 @@ try {
   return
  }
  Wait-Until {$b=(Find 'drawing-canvas').Current.BoundingRectangle;$b.Width -gt 1200} 'Maximized canvas did not settle' 10
+ if($distortFilter){Check-TransformFootprint @($distortFilter);Close-PhotoReview;return}
  Fit-Canvas;Start-Sleep -Milliseconds 300
  (Find 'Test stroke' -Name).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
  Wait-Until {(Model).state.document_file.modified} 'Controlled drawing did not finish'
@@ -435,11 +447,7 @@ try {
  }
  Check-PhotoTransforms
 
- [CapyRowPointer]::Dispose()
- & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Close -DiscardUnsaved -StateDirectory $run
- if((Get-Item (Join-Path $run 'stderr.log')).Length){throw 'Native stderr requires review'}
- $checks.evidence=$run
- [pscustomobject]$checks|ConvertTo-Json|Tee-Object -FilePath (Join-Path $run 'results.json')
+ Close-PhotoReview
 } catch {
  if($review -and !$review.HasExited){try{Capture 'failure' -WithModel}catch{}}
  [IO.File]::WriteAllText((Join-Path $run 'failure.txt'),($_|Out-String)+$_.ScriptStackTrace);throw

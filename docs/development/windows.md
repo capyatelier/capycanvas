@@ -831,11 +831,16 @@ native private-bake preparation; layer counts alone do not qualify capture pixel
 The fixture prepares two-dimensional ink and checks that its transform-body
 target clears the shared handle and pivot hit regions before injecting a finger
 drag. Thin ink can leave no unambiguous body target at Fit.
+Use `-Theme tail-dark` or `tail-light` for the remaining bar controls, masked bake
+and transform journeys after the separate Invert and glass checks have passed.
 
 Use `exercise-photo-tools.ps1 -Theme transform-dark` and `transform-light` for
 the remaining transform and layer operations: Warp Grid and Escape, Merge Down,
 Stamp Visible, Flatten confirmation, and the Distort footprint and saved-pixel
 checks. These scopes start with fresh ink and reuse the full journey's assertions.
+Use `-Theme distort-bilinear-dark` or `distort-bicubic-dark` for one filter's
+rollback, Apply, paint, history and reopen checks. Each has a matching light
+variant and retains the full exact-pixel and checkpoint assertions.
 
 | Where | Checks |
 | --- | --- |

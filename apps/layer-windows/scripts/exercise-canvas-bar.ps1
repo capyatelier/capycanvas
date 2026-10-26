@@ -1,6 +1,7 @@
-param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light','invert-dark','invert-light')][string]$Theme='dark')
+param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light','invert-dark','invert-light','tail-dark','tail-light')][string]$Theme='dark')
 $ErrorActionPreference='Stop'
 $Theme=$Theme.ToLowerInvariant();$invertOnly=$Theme.StartsWith('invert-');if($invertOnly){$Theme=$Theme.Substring(7)}
+$tailOnly=$Theme.StartsWith('tail-');if($tailOnly){$Theme=$Theme.Substring(5)}
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 $CapyWaitSeconds=45
 Add-Type -AssemblyName System.Drawing
@@ -48,7 +49,7 @@ $Executable=(Resolve-Path -LiteralPath $Executable).Path
 $run=Join-Path $repo ('artifacts/windows/canvas-bar/'+[Guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($run)|Out-Null
 $CapyTraceDirectory=$run
-$checks=[ordered]@{scope=$(if($invertOnly){'Invert input diagnostic'}else{'all canvas bar journeys'})}
+$checks=[ordered]@{scope=$(if($tailOnly){'remaining canvas bar controls'}elseif($invertOnly){'Invert input diagnostic'}else{'all canvas bar journeys'})}
 $barTaps=[Collections.Generic.List[object]]::new()
 $toolChoices=[Collections.Generic.List[object]]::new()
 $invokeTrace=[CapyBarInvokeTrace]::new()
@@ -252,6 +253,8 @@ try {
  $bar=(Bar).Current.BoundingRectangle
  if($bar.Top -lt $selection[1][1]){throw "The selection bar is not below the selection: $($bar.Top) < $($selection[1][1])"}
  if([Math]::Abs(($bar.X+$bar.Width/2)-$cx) -gt 40){throw 'The selection bar is not centred under the selection'}
+ $paint=Paint
+ if(!$tailOnly){
  $glass=@{snapshot=$null;key='';stable=0}
  Wait-Until {$m=Model;$key=($m.windows_glass|Select-Object regions,panel_revision|ConvertTo-Json -Compress);if($key -ceq $glass.key){$glass.stable++}else{$glass.key=$key;$glass.stable=0};$glass.snapshot=$m;$glass.stable -ge 3} 'Selection bar glass did not settle' 5
  $visibleGlass=[int]$glass.snapshot.windows_glass.regions;$glassState=Glass-State $glass.snapshot;$glassAnchor=$glass.snapshot.state.canvas_bar.anchor -join ','
@@ -267,7 +270,6 @@ try {
  Capture ('selection-'+$Theme)
  $checks.selection_below_object_with_glass='passed'
 
- $paint=Paint
  $invertAnchor=(Model).state.canvas_bar.anchor -join ',';$invertCheckpoint=Drawing-Checkpoint
  $invertBounds=(Control 'canvas-action-bar' -Arranged).Current.BoundingRectangle
  $invertPixels=Wait-StablePixels {((Screen-Pixels $cx ($cy-25))+':'+(Screen-Pixels ($cx+240) ($cy-25)))}
@@ -289,6 +291,7 @@ try {
  }
  if((Paint) -ne $paint){throw 'Bar taps painted on the canvas'}
  $checks.mouse_touch_pen_taps_do_not_paint='passed'
+ }
  if($invertOnly){Close-CanvasReview;return}
 
  foreach($device in @('mouse','touch','pen')){
