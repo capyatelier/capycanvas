@@ -25,15 +25,15 @@ internal val ControlShape = SquircleShape(ControlRadius)
 internal val TileShape = SquircleShape(50)
 
 /** Superellipse corners matching CSS `corner-shape: squircle`; radii clamp like rounded corners. */
-internal class SquircleShape(topStart: CornerSize, topEnd: CornerSize, bottomEnd: CornerSize, bottomStart: CornerSize) :
+internal class SquircleShape(topStart: CornerSize, topEnd: CornerSize, bottomEnd: CornerSize, bottomStart: CornerSize, private val physical: Boolean = false) :
     CornerBasedShape(topStart, topEnd, bottomEnd, bottomStart) {
     override fun copy(topStart: CornerSize, topEnd: CornerSize, bottomEnd: CornerSize, bottomStart: CornerSize) =
-        SquircleShape(topStart, topEnd, bottomEnd, bottomStart)
+        SquircleShape(topStart, topEnd, bottomEnd, bottomStart, physical)
 
     override fun createOutline(size: Size, topStart: Float, topEnd: Float, bottomEnd: Float, bottomStart: Float,
         layoutDirection: LayoutDirection): Outline {
         if (topStart + topEnd + bottomEnd + bottomStart == 0f) return Outline.Rectangle(size.toRect())
-        val ltr = layoutDirection == LayoutDirection.Ltr
+        val ltr = physical || layoutDirection == LayoutDirection.Ltr
         return Outline.Generic(Path().apply {
             addSquircle(size.toRect(), if (ltr) topStart else topEnd, if (ltr) topEnd else topStart,
                 if (ltr) bottomEnd else bottomStart, if (ltr) bottomStart else bottomEnd)
@@ -41,15 +41,15 @@ internal class SquircleShape(topStart: CornerSize, topEnd: CornerSize, bottomEnd
     }
 
     override fun equals(other: Any?) = other is SquircleShape && topStart == other.topStart &&
-        topEnd == other.topEnd && bottomEnd == other.bottomEnd && bottomStart == other.bottomStart
+        topEnd == other.topEnd && bottomEnd == other.bottomEnd && bottomStart == other.bottomStart && physical == other.physical
 
-    override fun hashCode() = listOf(topStart, topEnd, bottomEnd, bottomStart).hashCode()
+    override fun hashCode() = listOf(topStart, topEnd, bottomEnd, bottomStart, physical).hashCode()
 }
 
 internal fun SquircleShape(radius: Dp) = SquircleShape(radius, radius, radius, radius)
 
-internal fun SquircleShape(topStart: Dp = 0.dp, topEnd: Dp = 0.dp, bottomEnd: Dp = 0.dp, bottomStart: Dp = 0.dp) =
-    SquircleShape(CornerSize(topStart), CornerSize(topEnd), CornerSize(bottomEnd), CornerSize(bottomStart))
+internal fun SquircleShape(topStart: Dp = 0.dp, topEnd: Dp = 0.dp, bottomEnd: Dp = 0.dp, bottomStart: Dp = 0.dp, physical: Boolean = false) =
+    SquircleShape(CornerSize(topStart), CornerSize(topEnd), CornerSize(bottomEnd), CornerSize(bottomStart), physical)
 
 internal fun SquircleShape(percent: Int) = CornerSize(percent).let { SquircleShape(it, it, it, it) }
 

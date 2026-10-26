@@ -20,6 +20,11 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.click
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.asAndroidPath
+import androidx.compose.ui.graphics.Outline
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.LayoutDirection
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
@@ -27,6 +32,24 @@ import org.junit.Test
 class AndroidWorkspacePresentationTest {
     private val motion=object:MotionDurationScale { override var scaleFactor=1f }
     @get:Rule val compose=createComposeRule(effectContext=motion)
+
+    @Test fun physicalPanelCornerRadiiRemainFixedInRtlWhileLegacyShapesMirror() {
+        val physical=SquircleShape(0.dp,18.dp,6.dp,12.dp,physical=true)
+        val legacy=SquircleShape(0.dp,18.dp,6.dp,12.dp)
+        val mirrored=SquircleShape(18.dp,0.dp,12.dp,6.dp)
+        for (scale in listOf(1f,2f)) {
+            val size=Size(100f*scale,80f*scale)
+            val density=Density(scale)
+            fun points(shape:androidx.compose.ui.graphics.Shape,direction:LayoutDirection)=
+                (shape.createOutline(size,direction,density) as Outline.Generic).path.asAndroidPath().approximate(0.01f)
+            val original=points(legacy,LayoutDirection.Ltr)
+            assertArrayEquals(original,points(physical,LayoutDirection.Ltr),0f)
+            assertArrayEquals("Shared physical corners remain unchanged in RTL at density $scale",original,points(physical,LayoutDirection.Rtl),0f)
+            val legacyRtl=points(legacy,LayoutDirection.Rtl)
+            assertFalse("Legacy start/end corners must continue to mirror",original.contentEquals(legacyRtl))
+            assertArrayEquals(points(mirrored,LayoutDirection.Ltr),legacyRtl,0f)
+        }
+    }
 
     @Test fun zenFadeRetainsContentButImmediatelyReleasesHitTargets() {
         var visible by mutableStateOf(true)
