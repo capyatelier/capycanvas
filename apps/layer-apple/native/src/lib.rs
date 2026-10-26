@@ -311,8 +311,14 @@ pub unsafe extern "C" fn capy_apple_color_ui(json: *const c_char) -> u64 {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_apple_toolbar_ui(json: *const c_char) -> u64 {
     unsafe { stateless_json(json, "Missing toolbar request", |source| {
-        let (localization, request) = control_request(source)?;
-        layer_ui::toolbar_ui(request, &localization)
+        let request: ControlRequest<layer_ui::ToolbarUiRequest> = serde_json::from_str(source).map_err(|e| e.to_string())?;
+        match request.request {
+            layer_ui::ToolbarUiRequest::Metrics => Ok(layer_ui::toolbar_metrics()),
+            toolbar => {
+                let localization = layer_ui::Localizer::prepared(request.language).ok_or("apple_language_not_prepared")?;
+                layer_ui::toolbar_ui(toolbar, &localization)
+            }
+        }
     }) }
 }
 /// # Safety

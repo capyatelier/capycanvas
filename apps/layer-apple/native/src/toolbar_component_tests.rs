@@ -47,6 +47,16 @@ fn apple_enclose_fill_flat_choices_and_source_use_native_transport() {
 }
 
 #[test]
+fn apple_geometry_metrics_do_not_require_a_prepared_language() {
+    let request = CString::new(r#"{"language":"th","request":{"type":"metrics"}}"#).unwrap();
+    let output = unsafe { capy_apple_toolbar_ui(request.as_ptr()) };
+    let metrics: Value = serde_json::from_slice(handles::take_text(output).to_bytes()).unwrap();
+    assert_eq!(metrics, layer_ui::toolbar_metrics());
+    assert!(metrics["surface_radius"].as_f64().unwrap() > 0.);
+    assert!(metrics["layer_edge_inset"].as_f64().unwrap() > 0.);
+}
+
+#[test]
 fn apple_toolbar_queries_match_the_shared_transport_without_a_session() {
     let launch = CString::new(json!({"saved":"", "preferred_languages":["en"]}).to_string()).unwrap();
     let prepared = App(unsafe { launch_json(0, launch.as_ptr(), std::ptr::null_mut(), std::ptr::null_mut()) });

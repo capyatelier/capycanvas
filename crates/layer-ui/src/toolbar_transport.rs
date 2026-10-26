@@ -75,15 +75,19 @@ pub fn toolbar_number(request: NumericRequest, compact: bool, units: bool) -> Re
     Ok(result)
 }
 
+pub fn toolbar_metrics() -> serde_json::Value {
+    serde_json::json!({
+        "surface_radius": SURFACE_RADIUS,
+        "panel": PANEL_CONTROL_METRICS,
+        "layer_edge_inset": LAYER_EDGE_INSET,
+        "divider": {"size": TOOLBAR_DIVIDER_SIZE, "length": DIVIDER_LENGTH, "inset": TOOLBAR_DIVIDER_INSET},
+    })
+}
+
 pub fn toolbar_ui(request: ToolbarUiRequest, localizer: &Localizer) -> Result<serde_json::Value, String> {
     use serde_json::json;
     Ok(match request {
-        ToolbarUiRequest::Metrics => json!({
-            "surface_radius": SURFACE_RADIUS,
-            "panel": PANEL_CONTROL_METRICS,
-            "layer_edge_inset": LAYER_EDGE_INSET,
-            "divider": {"size": TOOLBAR_DIVIDER_SIZE, "length": DIVIDER_LENGTH, "inset": TOOLBAR_DIVIDER_INSET},
-        }),
+        ToolbarUiRequest::Metrics => toolbar_metrics(),
         ToolbarUiRequest::SliderPreview {
             control,
             style,
