@@ -1005,8 +1005,10 @@ impl DocumentService {
             let preview=package.view.preview().ok_or("Package has no preview")?;let [width,height]=preview.size();
             return crate::previews::CapyPreview::packet(serde_json::json!({"id":id,"width":width,"height":height}),preview.pixels().to_vec());
         }
-        let task = self.workflow.as_ref().filter(|t| t.id == id).ok_or("Document preview expired")?;
-        task.preview(index)
+        match self.workflow.as_ref().filter(|task| task.id == id) {
+            Some(task) => task.preview(index),
+            None => crate::previews::CapyPreview::packet(serde_json::json!({"id":id,"width":0,"height":0}), Vec::new()),
+        }
     }
     pub(crate) fn stop_worker(&mut self) -> Result<(), String> {
         self.palettes.stop();
@@ -1129,6 +1131,36 @@ mod tests {
         }
     }
 
+    fn assert_empty_preview(service: &DocumentService, id: u32, index: usize) {
+        let packet = crate::previews::store(service.preview(id, index).unwrap()).unwrap();
+        assert_ne!(packet, 0);
+        assert_eq!(crate::previews::copied_metadata(packet), serde_json::json!({"id":id,"width":0,"height":0}));
+        assert!(crate::previews::copied_bytes(packet).is_empty());
+        crate::previews::capy_preview_free(packet);
+    }
+
+    #[test]
+    fn retired_document_previews_are_empty_and_current_errors_remain_errors() {
+        let mut f = Fixture::new();
+        let checkpoint = f.host.session.engine().checkpoint();
+        for renderer_unavailable in [false, true] {
+            let task = crate::document_workflows::Task::capture(&mut f.host, 0).unwrap();
+            f.service.workflow_control = Some((task.id, task.control.clone()));
+            f.service.workflow = Some(task);
+            assert_eq!(f.service.preview(0, 0).err().as_deref(), Some("No comparison preview"));
+            assert_empty_preview(&f.service, 1, usize::MAX);
+            if renderer_unavailable {
+                f.service.renderer_unavailable(&mut f.host).unwrap();
+            } else {
+                f.act(DocumentAction::Workflow { id: 0, action: crate::document_workflows::Action::Cancel });
+            }
+            assert!(f.service.workflow.is_none());
+            assert_empty_preview(&f.service, 0, 0);
+            assert_eq!(f.host.session.engine().checkpoint(), checkpoint);
+            assert!(f.host.error.is_none());
+        }
+    }
+
     #[test]
     fn window_quit_preserves_unsaved_work_without_a_discard_prompt() {
         let mut f=Fixture::new();f.host.dispatch(UiAction::SetLayerOpacity{id:None,opacity:0.4}).unwrap();let checkpoint=f.host.session.engine().checkpoint();
@@ -1154,6 +1186,7 @@ mod tests {
             f.service.worker.shared.mailbox.lock().unwrap().completed=Some(Ok(Completed::Package(layer_ui::PackageView::new(outcome).unwrap())));f.service.poll(&mut f.host).unwrap();
             assert_eq!(f.host.session.engine().document(),&before);assert_eq!(f.host.session.state().document_file.epoch,epoch);assert!(f.service.active.is_none());assert!(f.host.session.state().requests.iter().all(|r|r.id!=id));
             let status=f.service.status().unwrap();let id=status["id"].as_u64().unwrap() as u32;assert_eq!(status["type"],"package");assert_eq!(status["summary"]["capabilities"]["edit"],false);assert_eq!(status["summary"]["capabilities"]["save"],false);assert_eq!(status["summary"]["capabilities"]["export"],disposition!=2);assert_eq!(f.service.preview(id,0).is_ok(),disposition!=2);
+            assert!(f.service.preview(id,1).is_err());assert_empty_preview(&f.service,id.wrapping_add(1),0);
             let destination=f.path("copied.capy");f.act(DocumentAction::Package{id,action:layer_ui::PackageAction::CopyOriginal,path:Some(destination.clone())});assert_eq!(f.service.status().unwrap()["type"],"package_busy");f.finish();assert_eq!(std::fs::read(&destination).unwrap(),bytes);assert_eq!(f.host.session.engine().document(),&before);
             let cancelled=Arc::new(AtomicBool::new(true));let view=f.service.package.as_ref().unwrap().view.clone();assert!(execute(Job::WritePackage{view,action:layer_ui::PackageAction::CopyOriginal,original:None,path:PathBuf::from(destination.clone()),refusal:"refused".into(),cancelled},&AtomicBool::new(false)).is_err());assert_eq!(std::fs::read(destination).unwrap(),bytes);
             let view=f.service.package.as_ref().unwrap().view.clone();let png=f.path("preview.png");
@@ -1171,6 +1204,7 @@ mod tests {
             }
             let cancelled_png=f.path("cancelled.png");assert!(execute(Job::WritePackage{view,action:layer_ui::PackageAction::ExportPreview,original:None,path:PathBuf::from(&cancelled_png),refusal:"refused".into(),cancelled:Arc::new(AtomicBool::new(true))},&AtomicBool::new(false)).is_err());assert!(!std::path::Path::new(&cancelled_png).exists());
             f.act(DocumentAction::Package{id,action:layer_ui::PackageAction::Close,path:None});assert!(f.service.package.is_none());assert_eq!(f.host.session.engine().document(),&before);
+            assert_empty_preview(&f.service,id,0);
         }
     }
 

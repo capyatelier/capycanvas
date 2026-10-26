@@ -184,6 +184,11 @@ and writes those exact PNG bytes on the document worker, refusing the package's
 own path. Both replace the save picker's placeholder file atomically.
 Unsupported portable packages remain in that view.
 
+Preview requests queued for a closed workflow return an empty image packet.
+Current workflow requests still report invalid preview indices and preparation
+errors. Closing an export or rebuilding the GPU therefore retires its images
+without leaving an error banner from an outdated request.
+
 Language changes prepare shared copy on the profile worker, then update retained
 controls in every window using that private profile. Publication waits for native
 text composition keys, canvas contacts and shared gestures to retire. System
@@ -1151,6 +1156,8 @@ Painting cursor shapes come from shared Rust and the shared GPU presenter. Tool
 uses the active tool's icon, aligned to its working point; Tool and brush size
 adds the current brush outline for brush tools. Windows presents the shared
 cursor choices directly in Pen & Input preferences.
+Idle pointer movement over native chrome retires the canvas cursor through the
+independent input dispatcher, including when the native control handles movement.
 `exercise-cursors.ps1 -Executable <path> -Theme dark` selects both choices,
 checks persisted settings, and compares composed mouse and pen hover pixels for
 six tools without changing the drawing. Repeat with `-Theme light`, or use

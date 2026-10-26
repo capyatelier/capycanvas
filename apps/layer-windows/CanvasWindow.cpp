@@ -191,10 +191,10 @@ void CanvasWindow::Open() {
     });
     root.AddHandler(UIElement::PointerPressedEvent(),box_value(contact),true);
     root.AddHandler(UIElement::PointerPressedEvent(),box_value(PointerEventHandler([](auto&&,auto&&){CapyUi::hideRevealedTooltip();})),true);
-    root.AddHandler(UIElement::PointerMovedEvent(),box_value(contact),true);
-    root.PointerMoved([weak=weak_from_this()](auto&&,PointerRoutedEventArgs const& e){
+    root.AddHandler(UIElement::PointerMovedEvent(),box_value(PointerEventHandler([weak=weak_from_this()](auto&&,PointerRoutedEventArgs const& e){
+        CapyUi::setTouchContact(e.Pointer().PointerDeviceType()==Microsoft::UI::Input::PointerDeviceType::Touch);
         if(auto self=weak.lock())self->ChromeMotion(e);
-    });
+    })),true);
     root.PointerExited([weak=weak_from_this()](auto&&,PointerRoutedEventArgs const& e){
         if(auto self=weak.lock())self->ChromeMotion(e,true);
     });
@@ -1575,6 +1575,11 @@ void CanvasWindow::ChromeMotion(PointerRoutedEventArgs const& e,bool leave) {
     if(closing||closed)return;
     auto point=e.GetCurrentPoint(root);auto position=point.Position();
     if(leave&&position.X>=0&&position.Y>=0&&position.X<root.ActualWidth()&&position.Y<root.ActualHeight())return;
+    auto source=e.OriginalSource().try_as<DependencyObject>();
+    while(source&&source!=panel&&source!=root)source=VisualTreeHelper::GetParent(source);
+    if(!point.IsInContact()&&(leave||source!=panel)&&inputDispatcher){
+        inputDispatcher.TryEnqueue([weak=weak_from_this()]{if(auto self=weak.lock();self&&!self->closing)self->SendIndependent(CanvasCommand{CanvasCommandKind::Input,R"({"type":"cursor_leave"})"});});
+    }
     {
         std::lock_guard lock(mutex);
         if(closing||!host||rendererDone.load())return;
