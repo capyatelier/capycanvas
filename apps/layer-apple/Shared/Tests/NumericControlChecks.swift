@@ -182,12 +182,16 @@ extension XCTestCase {
         }
         #endif
         waitForEditorInteraction(in: app)
+        let canvas = app.descendants(matching: .any)["canvas"].firstMatch
+        XCTAssertTrue(canvas.waitForExistence(timeout: 20))
+        expectation(for: NSPredicate(format: "value == %@", "Canvas ready"), evaluatedWith: canvas)
+        waitForExpectations(timeout: 30)
         let paint = app.buttons["workspace-switch-builtin:workspace:illustrator"]
+        expectation(for: NSPredicate(format: "enabled == YES"), evaluatedWith: paint)
+        waitForExpectations(timeout: 10)
         if !paint.isSelected { workspaceActivate(paint) }
         expectation(for: NSPredicate(format: "selected == YES"), evaluatedWith: paint)
         waitForExpectations(timeout: 10)
-        let canvas = app.descendants(matching: .any)["canvas"].firstMatch
-        XCTAssertTrue(canvas.waitForExistence(timeout: 20))
         expectation(for: NSPredicate(format: "value == %@", "Canvas ready"), evaluatedWith: canvas)
         waitForExpectations(timeout: 30)
         for name in ["painter", "illustrator", "photographer"] {
