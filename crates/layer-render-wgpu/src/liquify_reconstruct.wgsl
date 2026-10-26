@@ -57,14 +57,16 @@ fn prior_value(pixel: vec2<i32>, block: u32) -> vec4<u32> {
     if sources.pages[0].w == 0u { return vec4(0u, 0u, 16256u, 1065353216u); }
     if block == 1u { return textureLoad(prior_map, pixel, 0); }
     let at = pixel * i32(block) + i32(block / 2u) - 1;
-    var value = MapSample(vec2(0.), mat2x2(vec2(0.), vec2(0.)));
+    var displacement = vec2(0.);
+    var footprint = mat2x2(vec2(0.), vec2(0.));
     for (var y = 0; y < 2; y++) {
         for (var x = 0; x < 2; x++) {
             let sample = unpack_map(textureLoad(prior_map, at + vec2(x, y), 0));
-            value = MapSample(value.displacement + sample.displacement * .25, value.footprint + (sample.footprint - IDENTITY) * .25);
+            displacement += sample.displacement * .25;
+            footprint += (sample.footprint - IDENTITY) * .25;
         }
     }
-    return pack_map(MapSample(value.displacement, value.footprint + IDENTITY));
+    return pack_map(MapSample(displacement, footprint + IDENTITY));
 }
 
 fn current_average(pixel: vec2<i32>, block: u32) -> vec4<f32> {

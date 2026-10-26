@@ -91,6 +91,7 @@ fn liquify_influence(dab: Dab, at: vec2<f32>) -> Influence {
 fn trace_liquify(initial: vec2<f32>) -> Trace {
     var result = Trace(initial, IDENTITY, 1., vec2(0.));
     if style.deformation.z >= 0. { result.restore = style.deformation.z; return result; }
+    var footprint = IDENTITY;
     var remaining = style.operation.y;
     loop {
         if remaining == 0u { break; }
@@ -134,10 +135,10 @@ fn trace_liquify(initial: vec2<f32>) -> Trace {
                 result.gradient = (1. - s) * result.gradient - result.restore * gradient;
                 result.restore *= 1. - s;
             }
-            result = Trace(result.position, jacobian * result.footprint, result.restore, result.gradient);
+            footprint = jacobian * footprint;
         }
     }
-    return result;
+    return Trace(result.position, footprint, result.restore, result.gradient);
 }
 
 fn compose_liquify(initial: vec2<f32>, trace: Trace, stored: MapSample) -> MapSample {

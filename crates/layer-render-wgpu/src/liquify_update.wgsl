@@ -30,16 +30,18 @@ fn map_correction(pixel: vec2<i32>) -> MapSample {
 fn map_bilinear(at: vec2<f32>) -> MapSample {
     let p = vec2<i32>(floor(at - .5));
     let t = fract(at - .5);
-    var result = MapSample(vec2(0.), mat2x2(vec2(0.), vec2(0.)));
+    var displacement = vec2(0.);
+    var footprint = mat2x2(vec2(0.), vec2(0.));
     for (var y = 0; y < 2; y++) {
         for (var x = 0; x < 2; x++) {
             let weight = select(1. - t.x, t.x, x == 1) * select(1. - t.y, t.y, y == 1);
             if weight == 0. { continue; }
             let value = map_correction(p + vec2(x, y));
-            result = MapSample(result.displacement + value.displacement * weight, result.footprint + value.footprint * weight);
+            displacement += value.displacement * weight;
+            footprint += value.footprint * weight;
         }
     }
-    return result;
+    return MapSample(displacement, footprint);
 }
 
 fn unchanged_map(pixel: vec2<i32>) -> vec4<u32> {
