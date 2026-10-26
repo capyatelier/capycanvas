@@ -41,18 +41,56 @@ private final class TabletEvent: NSEvent {
     var force: Float = 1
     var time = ProcessInfo.processInfo.systemUptime
     var nativeType: NSEvent.EventType = .tabletPoint
+    var nativeSubtype: NSEvent.EventSubtype = .tabletPoint
     var nativeButton = 0
+    var device = 1
+    var angle: Float = 0
+    var capabilities = 0
+    var entering = true
+    var pointerType: NSEvent.PointingDeviceType = .pen
+    var lean = CGPoint.zero
+    var vendor: Int = 0
+    var serial: Int = 0
+    var unique: UInt64 = 0
     override var type: NSEvent.EventType { nativeType }
     override var buttonNumber: Int { nativeButton }
-    override var subtype: NSEvent.EventSubtype { .tabletPoint }
+    override var subtype: NSEvent.EventSubtype { nativeSubtype }
     override var locationInWindow: CGPoint { point }
     override var modifierFlags: NSEvent.ModifierFlags { [] }
     override var pressure: Float { force }
     override var timestamp: TimeInterval { time }
-    override var deviceID: Int { 1 }
+    override var deviceID: Int { device }
     override var buttonMask: NSEvent.ButtonMask { force > 0 ? .penTip : [] }
-    override var tilt: NSPoint { .zero }
-    override var rotation: Float { 0 }
+    override var tilt: NSPoint { lean }
+    override var rotation: Float { angle }
+    override var capabilityMask: Int { capabilities }
+    override var isEnteringProximity: Bool { entering }
+    override var pointingDeviceType: NSEvent.PointingDeviceType { pointerType }
+    override var vendorID: Int { vendor }
+    override var pointingDeviceSerialNumber: Int { serial }
+    override var uniqueID: UInt64 { unique }
+}
+
+private struct TabletRecordExpectation {
+    let name: String
+    let timestamp: UInt64
+    let phase: String
+    let flags: UInt32
+    let rotation: Double
+    let contact: String?
+}
+
+@MainActor private final class PenRestoreProjection {
+    let ui = EditorSnapshotState()
+    var failure: String?
+    var publicationKeys: [[String]] = []
+    func receive(_ next: JSON?, _ error: String?) {
+        if let error { failure = error }
+        guard let next else { return }
+        publicationKeys.append(next.object.keys.sorted().prefix(64).map { String($0.prefix(128)) })
+        if publicationKeys.count > 16 { publicationKeys.removeFirst() }
+        ui.receive(next)
+    }
 }
 
 private final class PaperCaptureGate: @unchecked Sendable {
@@ -112,6 +150,9 @@ private final class PaperCaptureGate: @unchecked Sendable {
     }
     @MainActor static func run(_ platform: UInt32) async throws {
         let paperOnly = CommandLine.arguments.contains("--paper")
+        let penResponseOnly = CommandLine.arguments.contains("--pen-response")
+        let deviceFlagsOnly = CommandLine.arguments.contains("--device-flags")
+        let retainArtifacts = paperOnly || penResponseOnly
         for (azimuth, x, y) in [(0.0, 1.0, 0.0), (Double.pi / 2, 0, 1), (Double.pi, -1, 0), (-Double.pi / 2, 0, -1)] {
             let tilt = StylusTilt.towardBarrel(altitude: .pi / 4, azimuth: azimuth)
             try require(abs(tilt.x - x * .pi / 4) < 1e-9 && abs(tilt.y - y * .pi / 4) < 1e-9,
@@ -120,16 +161,16 @@ private final class PaperCaptureGate: @unchecked Sendable {
             try require(abs(tablet.x - x * .pi / 4) < 1e-9 && abs(tablet.y - y * .pi / 4) < 1e-9,
                 "AppKit tilt, whose y axis points up, must tilt toward the barrel in view axes")
         }
-        let base = paperOnly ? URL(fileURLWithPath: ProcessInfo.processInfo.environment["CAPY_CANVAS_CAPTURES"] ?? FileManager.default.temporaryDirectory.path)
+        let base = retainArtifacts ? URL(fileURLWithPath: ProcessInfo.processInfo.environment["CAPY_CANVAS_CAPTURES"] ?? FileManager.default.temporaryDirectory.path)
             : FileManager.default.temporaryDirectory
         let root = base.appendingPathComponent("capy-canvas-input-\(UUID())")
-        if paperOnly { try await fileIO { try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false) } }
+        if retainArtifacts { try await fileIO { try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false) } }
         else { try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false) }
-        defer { if !paperOnly { try? FileManager.default.removeItem(at: root) } }
+        defer { if !retainArtifacts { try? FileManager.default.removeItem(at: root) } }
         let png = root.appendingPathComponent("artwork.png")
         var project = root.appendingPathComponent("rulers.capy")
         let storageRoot = root.appendingPathComponent("paper-storage")
-        let persistence = EditorPersistence(root:paperOnly ? storageRoot : nil)
+        let persistence = EditorPersistence(root:paperOnly || deviceFlagsOnly || penResponseOnly ? storageRoot : nil)
         let paperInput = root.appendingPathComponent("authored-paper.png")
         var cancelPaperImport = false
         if paperOnly {
@@ -192,24 +233,53 @@ private final class PaperCaptureGate: @unchecked Sendable {
             store.state["commands"].array.first { $0["id"].string == command }?["enabled"].bool == true
         }
         func newDocument() async throws {
-            try await invoke("new_document")
-            if store.projectFiles.confirming {
-                func discardButton(_ view: NSView) -> NSButton? {
-                    if let button = view as? NSButton, button.title == "Discard Changes" { return button }
-                    return view.subviews.lazy.compactMap(discardButton).first
+            let epoch = store.state["document_file"]["epoch"].uint
+            var phase = "invoke"
+            do {
+                try await invoke("new_document")
+                phase = "confirmation"
+                if store.projectFiles.confirming {
+                    func discardButton(_ view: NSView) -> NSButton? {
+                        if let button = view as? NSButton, button.title == "Discard Changes" { return button }
+                        return view.subviews.lazy.compactMap(discardButton).first
+                    }
+                    try await wait("Native discard confirmation") {
+                        window.attachedSheet?.contentView.flatMap(discardButton)?.isEnabled == true
+                    }
+                    window.attachedSheet!.contentView.flatMap(discardButton)!.performClick(nil)
                 }
-                try await wait("Native discard confirmation") {
-                    window.attachedSheet?.contentView.flatMap(discardButton)?.isEnabled == true
+                phase = "document completion"
+                try await wait("New 128px document", failure:{store.projectFiles.error ?? store.failure}) {
+                    let document = store.state["tabs"].array.first
+                    return store.state["document_file"]["epoch"].uint != epoch
+                        && !store.projectFiles.creating && !store.projectFiles.busy && !store.projectFiles.confirming
+                        && store.state["new_drawing"].isNull && store.state["requests"].array.isEmpty
+                        && document?["width"].uint == 128 && document?["height"].uint == 128
                 }
-                window.attachedSheet!.contentView.flatMap(discardButton)!.performClick(nil)
+                phase = "native sheet dismissal"
+                try await wait("Native confirmation dismissed") { window.attachedSheet == nil && window.isKeyWindow }
+                try require(store.projectFiles.error == nil, store.projectFiles.error ?? "")
+                phase = "fit canvas"
+                try await invoke("fit_canvas")
+                phase = "color"
+                try await action(["type":"set_color", "rgba":[0,0,1,1]])
+            } catch {
+                let document = store.state["tabs"].array.first ?? JSON()
+                try? await navigationSave(JSON(["platform":platform,"phase":phase,
+                    "failure":String(error.localizedDescription.prefix(4096)),"time_ns":FrameTrace.now(),
+                    "epoch_before":epoch,"epoch_current":store.state["document_file"]["epoch"].uint,
+                    "creating":store.projectFiles.creating,"busy":store.projectFiles.busy,"confirming":store.projectFiles.confirming,
+                    "new_drawing_open":!store.state["new_drawing"].isNull,
+                    "new_drawing_keys":store.state["new_drawing"].object.keys.sorted().prefix(64).map { String($0.prefix(128)) },
+                    "requests":store.state["requests"].array.prefix(8).map { ["id":$0["id"].raw,
+                        "type":$0["kind"]["type"].raw,"document":$0["kind"]["request"]["type"].raw] },
+                    "width":document["width"].raw,"height":document["height"].raw,
+                    "project_error":String((store.projectFiles.error ?? "").prefix(4096)),
+                    "native_failure":String((store.failure ?? "").prefix(4096)),
+                    "native_sheet":window.attachedSheet != nil,"window_key":window.isKeyWindow]),
+                    to:root.appendingPathComponent("new-document-failure.json"))
+                throw error
             }
-            try await wait("New 128px document") {
-                !store.projectFiles.busy && !store.projectFiles.confirming && store.state["requests"].array.isEmpty
-            }
-            try await wait("Native confirmation dismissed") { window.attachedSheet == nil && window.isKeyWindow }
-            try require(store.projectFiles.error == nil, store.projectFiles.error ?? "")
-            try await invoke("fit_canvas")
-            try await action(["type":"set_color", "rgba":[0,0,1,1]])
         }
         func pixels() async throws -> Data {
             try await fileIO { try? FileManager.default.removeItem(at: png) }
@@ -755,6 +825,261 @@ private final class PaperCaptureGate: @unchecked Sendable {
             let closed = await withCheckedContinuation { done in store.prepareClose { done.resume(returning:$0) } }
             try require(closed, "Private Paper persistence/recovery close")
             try await fileIO {}; try await drain(2)
+        }
+        func checkpoint() throws -> UInt64 {
+            let tabs = store.snapshot["document_tabs"]
+            guard let stamp = tabs["session_stamps"].array.first(where: { $0["id"].uint == tabs["selected"].uint }),
+                !stamp["stamp"]["checkpoint"].isNull else { throw HostFailure(message:"Missing actual session checkpoint") }
+            return stamp["stamp"]["checkpoint"].uint
+        }
+        func penResponseJourney() async throws {
+            guard let native = store.native, let theme = ProcessInfo.processInfo.environment["CAPY_PEN_THEME"],
+                ["light","dark"].contains(theme) else { throw HostFailure(message:"Mounted pen response owner and explicit light/dark theme") }
+            func press(_ id:String) async throws {
+                try await wait("Native pen response control \(id)") { paperElement(host,id) != nil }
+                try require(paperPress(paperElement(host,id)!), "Activate actual native pen response control \(id)")
+                try await drain()
+            }
+            try await wait("Native response owner recovery ready",failure:{store.failure}) { !store.recovery.restoring }
+            try await action(["type":"set_theme", "theme":theme]); try await newDocument()
+            let baseline = try await pixels(), originalCheckpoint = try checkpoint()
+            let history = [enabled("undo"),enabled("redo")], camera = store.state["camera"].stableKey
+            try await invoke("pen_tilt")
+            try await wait("Measured native Tilt utility") { store.penResponseBounds != nil && paperElement(host,"pen-tilt-apply") != nil }
+            try require(!store.state["tilt_calibration"]["ready"].bool, "Cold mounted Tilt must await its first native tablet callback")
+            let epoch = store.state["tilt_calibration"]["editor"]["controls"]["epoch"].uint
+            let untouched = store.state["tilt_calibration"]["editor"]["points"].stableKey
+            let tablet = TabletEvent(); tablet.device = 71; tablet.vendor = 9; tablet.unique = 123
+            tablet.nativeType = .tabletProximity; tablet.nativeSubtype = .tabletProximity
+            canvas.tabletProximity(with:tablet)
+            let area = store.camera.value["work_area"].array.map(\.number), scale = Double(window.backingScaleFactor)
+            try require(area.count == 4 && area.allSatisfy({ $0.isFinite }) && area[2] > 0 && area[3] > 0
+                && scale.isFinite && scale > 0, "Finite positive published Mac canvas work area")
+            let workArea = CGRect(x:area[0]/scale,y:area[1]/scale,width:area[2]/scale,height:area[3]/scale).intersection(canvas.bounds)
+            try require(!workArea.isNull && [workArea.minX,workArea.minY,workArea.width,workArea.height].allSatisfy({ $0.isFinite })
+                && workArea.width > 0 && workArea.height > 0, "Published work area intersects the native canvas")
+            let insetX = min(24,workArea.width/2), insetY = min(24,workArea.height/2)
+            let candidates = [CGPoint(x:workArea.minX+insetX,y:workArea.midY),
+                CGPoint(x:workArea.midX,y:workArea.maxY-insetY),CGPoint(x:workArea.midX,y:workArea.midY)]
+            guard let point = candidates.first(where: { point in
+                store.penResponseBounds?.contains(point) != true
+                    && host.hitTest(canvas.convert(point,to:host)) === canvas
+            }) else { throw HostFailure(message:"Clear native canvas point outside modeless Tilt utility") }
+            tablet.point = canvas.convert(point,to:nil); tablet.force = 0; tablet.lean = CGPoint(x:0.2,y:-0.3)
+            tablet.nativeType = .tabletPoint; tablet.nativeSubtype = .tabletPoint
+            canvas.tabletPoint(with:tablet)
+            try await wait("First native tablet callback binds the mounted Tilt utility") { store.state["tilt_calibration"]["ready"].bool }
+            try require(store.state["tilt_calibration"]["editor"]["controls"]["epoch"].uint == epoch
+                && store.state["tilt_calibration"]["editor"]["points"].stableKey == untouched,
+                "Native first binding retains the displayed curve owner and response")
+            try await press("pen-tilt-lighter")
+            try await wait("Actual sensitivity control edits shared response") { store.state["tilt_calibration"]["editor"]["points"].stableKey != untouched }
+            try await press("pen-tilt-reverse-horizontal")
+            try await wait("Actual independent axis control edits shared response") { store.state["tilt_calibration"]["axes"]["reverse_horizontal"].bool }
+            try await press("pen-tilt-apply")
+            try await wait("Actual native Apply closes Tilt") { store.state["tilt_calibration"].isNull }
+            let saved = await withCheckedContinuation { done in native.flushPersistence { done.resume(returning:$0) } }
+            try require(saved && store.failure == nil, store.failure ?? "Native response Apply persistence")
+            let source = NativePenDevice.appKitKey(vendor:9,unique:123,serial:0)
+            let profile = store.state["settings"]["tilt_calibrations"][source].stableKey
+            try require(!store.state["settings"]["tilt_calibrations"][source].isNull, "Actual tablet source key must own the applied response")
+            let disk = try await fileIO { try JSON.decode(String(decoding:Data(contentsOf:persistence.locations!.settings),as:UTF8.self)) }
+            try require(disk["tilt_calibrations"][source].stableKey == profile, "Native Apply flush stores exact source response")
+            let restoredProjection = PenRestoreProjection()
+            let restored = try NativeOwner(platform:platform,persistence:persistence,receive:{ next,error in
+                DispatchQueue.main.async { MainActor.assumeIsolated { restoredProjection.receive(next,error) } }
+            })
+            await withCheckedContinuation { (done: CheckedContinuation<Void,Never>) in
+                restored.submit(2,JSON(["type":"catalog"])) { _ in DispatchQueue.main.async { done.resume() } }
+            }
+            let restoredSettings = restoredProjection.ui.state["settings"]
+            try await navigationSave(JSON(["platform":platform,"theme":theme,"source_key":source,
+                "publication_keys":restoredProjection.publicationKeys,"has_settings":!restoredSettings.isNull,
+                "native_failure":restoredProjection.failure.map { String($0.prefix(4096)) } as Any? ?? NSNull(),
+                "profile":restoredSettings["tilt_calibrations"][source].raw,"expected_profile_key":profile]),
+                to:root.appendingPathComponent("pen-restore-projection.json"))
+            try require(restoredProjection.failure == nil && restoredSettings["tilt_calibrations"][source].stableKey == profile,
+                "Fresh owner restores the response selected by actual native controls")
+            let unchanged = try await pixels()
+            try require(unchanged == baseline && checkpoint() == originalCheckpoint && [enabled("undo"),enabled("redo")] == history
+                && store.state["camera"].stableKey == camera, "Native calibration controls preserve exact artwork, history and camera")
+            tablet.nativeType = .tabletProximity; tablet.nativeSubtype = .tabletProximity; tablet.entering = false
+            canvas.tabletProximity(with:tablet)
+            try await navigationSave(JSON(["platform":platform,"theme":theme,"source_key":source,
+                "delivery":"supplied public AppKit tablet callbacks and actual native accessibility presses",
+                "profile":store.state["settings"]["tilt_calibrations"][source].raw,"physical_pen":false]),
+                to:root.appendingPathComponent("pen-response-\(theme).json"))
+            note("PASS AppKit policy \(platform) \(theme): first tablet binding, native sensitivity/axis/Apply, private durable source profile and exact artwork/history")
+        }
+        func tabletDeviceFlags() async throws {
+            guard let native = store.native else { throw HostFailure(message: "Mounted native tablet owner") }
+            let decoder = ProcessInfo.processInfo.environment["CAPY_STROKE_RECORDING_TOOL"]
+                ?? FileManager.default.currentDirectoryPath + "/target/debug/examples/stroke-recording"
+            func recording(_ action: String) async throws -> JSON {
+                let reply: JSON = await withCheckedContinuation { done in
+                    store.query(["type": "stroke_recording", "action": action]) { done.resume(returning: $0) }
+                }
+                try require(!reply.isNull && store.failure == nil, store.failure ?? "Stroke recording query \(action)")
+                return reply
+            }
+            func flush() async throws {
+                await withCheckedContinuation { done in store.query(["type": "catalog"]) { _ in done.resume() } }
+                try require(store.failure == nil, store.failure ?? "Tablet input queue")
+            }
+            for theme in ["light", "dark"] {
+                try await action(["type": "set_theme", "theme": theme]); try await newDocument()
+                try await invoke("pen")
+                try await wait("Prepared tablet brush") { store.snapshot["brush_ready"].bool }
+                try require(try await recording("start")["recording"].bool, "Start native tablet recording")
+                var expected: [TabletRecordExpectation] = []
+                var ignored: [UInt64] = []
+                var timestamp: UInt64 = 0
+                func pose(_ event: TabletEvent, x: Double = 64) {
+                    let camera = store.state["camera"], scale = window.backingScaleFactor
+                    let local = CGPoint(x: (camera["translation"][0].number + x * camera["zoom"].number) / scale,
+                        y: (camera["translation"][1].number + 64 * camera["zoom"].number) / scale)
+                    event.point = canvas.convert(local, to: nil)
+                    timestamp = max(timestamp + 1_000_000, UInt64(ProcessInfo.processInfo.systemUptime * 1_000_000_000))
+                    event.time = Double(timestamp) / 1_000_000_000
+                }
+                func expect(_ name: String, _ event: TabletEvent, phase: String, flags: UInt32,
+                    rotation: Double? = nil, contact: String? = nil) {
+                    expected.append(TabletRecordExpectation(name: name, timestamp: UInt64(event.time * 1_000_000_000),
+                        phase: phase, flags: flags, rotation: rotation ?? Double(event.angle) * .pi / 180, contact: contact))
+                }
+                func proximity(_ event: TabletEvent, mask: Int, entering: Bool = true,
+                    terminal: String? = nil, flags: UInt32 = 0, contact: String? = nil) async throws {
+                    pose(event)
+                    event.nativeType = .tabletProximity; event.nativeSubtype = .tabletProximity
+                    event.capabilities = mask; event.entering = entering
+                    canvas.tabletProximity(with: event)
+                    if let terminal { expect(terminal, event, phase: "Up", flags: flags, rotation: 0, contact: contact) }
+                    try await flush()
+                }
+                func point(_ event: TabletEvent, _ name: String?, force: Float, phase: String,
+                    flags: UInt32 = 0, contact: String? = nil) async throws {
+                    pose(event)
+                    event.nativeType = .tabletPoint; event.nativeSubtype = .tabletPoint; event.force = force
+                    canvas.tabletPoint(with: event)
+                    if let name { expect(name, event, phase: phase, flags: flags, contact: contact) }
+                    else { ignored.append(UInt64(event.time * 1_000_000_000)) }
+                    try await flush()
+                }
+                func mouse(_ event: TabletEvent, _ name: String, type: NSEvent.EventType,
+                    flags: UInt32, contact: String) async throws {
+                    pose(event)
+                    event.nativeType = type; event.nativeSubtype = .tabletPoint
+                    let phase: String
+                    switch type {
+                    case .leftMouseDown: phase = "Down"; canvas.mouseDown(with: event)
+                    case .leftMouseDragged: phase = "Move"; canvas.mouseDragged(with: event)
+                    default: phase = "Up"; canvas.mouseUp(with: event)
+                    }
+                    expect(name, event, phase: phase, flags: flags, contact: contact)
+                    try await flush()
+                }
+                let barrel = UInt32(CAPY_APPLE_BARREL_TWIST)
+                let first = TabletEvent(); first.device = 71; first.force = 0
+                let second = TabletEvent(); second.device = 72; second.angle = 45; second.force = 0
+                try await proximity(first, mask: 0x2000)
+                try await point(first, "confirmed zero hover", force: 0, phase: "Hover", flags: barrel)
+                try await proximity(second, mask: 0x1000)
+                try await point(second, "orientation bit is not roll", force: 0, phase: "Hover")
+                try await point(second, "unconfirmed nonzero down", force: 1, phase: "Down", contact: "second")
+                try await point(second, "unconfirmed nonzero move", force: 1, phase: "Move", contact: "second")
+                try await point(second, "unconfirmed terminal", force: 0, phase: "Up", contact: "second")
+                try await point(first, "device pairing retains zero hover", force: 0, phase: "Hover", flags: barrel)
+                try await point(first, "confirmed zero down", force: 1, phase: "Down", flags: barrel, contact: "first")
+                try await proximity(first, mask: 0)
+                try await proximity(second, mask: 0x2000, entering: false)
+                try await point(second, nil, force: 1, phase: "Move")
+                try await point(first, "captured flags survive cache change", force: 1, phase: "Move", flags: barrel, contact: "first")
+                try await proximity(first, mask: 0, entering: false, terminal: "proximity terminal retains capture", flags: barrel, contact: "first")
+                first.angle = 90
+                try await point(first, "post-exit unknown down", force: 1, phase: "Down", contact: "after-exit")
+                try await point(first, "post-exit unknown move", force: 1, phase: "Move", contact: "after-exit")
+                try await point(first, "post-exit terminal", force: 0, phase: "Up", contact: "after-exit")
+                try await point(first, "post-exit nonzero hover", force: 0, phase: "Hover")
+                let mouseTablet = TabletEvent(); mouseTablet.device = 73
+                try await proximity(mouseTablet, mask: 0x2000)
+                try await mouse(mouseTablet, "mouse subtype zero down", type: .leftMouseDown, flags: barrel, contact: "mouse")
+                try await proximity(mouseTablet, mask: 0)
+                try await mouse(mouseTablet, "mouse capture survives cache change", type: .leftMouseDragged, flags: barrel, contact: "mouse")
+                mouseTablet.angle = 33; mouseTablet.force = 0
+                try await mouse(mouseTablet, "mouse terminal retains capture", type: .leftMouseUp, flags: barrel, contact: "mouse")
+                try await point(mouseTablet, "later hover uses updated cache", force: 0, phase: "Hover")
+                try await proximity(mouseTablet, mask: 0, entering: false)
+                let stopped = try await recording("stop")
+                try require(stopped["ready"].bool && !stopped["recording"].bool, "Stop native tablet recording")
+                let raw: Data = try await withCheckedThrowingContinuation { done in
+                    native.strokeRecordingData { done.resume(with: $0) }
+                }
+                let directory = root.appendingPathComponent("tablet-flags-\(platform)-\(theme)")
+                let expectedData = try JSONSerialization.data(withJSONObject: ["samples": expected.map {
+                    ["name": $0.name, "timestamp_ns": $0.timestamp, "phase": $0.phase,
+                     "flags": $0.flags, "rotation": $0.rotation, "contact": $0.contact as Any? ?? NSNull()] as [String: Any]
+                }, "ignored_timestamp_ns": ignored], options: [.sortedKeys])
+                let records: Data = try await fileIO {
+                    try require(FileManager.default.isExecutableFile(atPath: decoder),
+                        "Build the existing layer-engine stroke-recording example or set CAPY_STROKE_RECORDING_TOOL")
+                    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+                    try expectedData.write(to: directory.appendingPathComponent("expected.json"))
+                    let recording = directory.appendingPathComponent("capture.capystrokes")
+                    try Data().write(to: recording)
+                    let file = try FileHandle(forWritingTo: recording)
+                    let error = raw.withUnsafeBytes { buffer in
+                        takeNativeText(capy_stroke_recording_write(buffer.bindMemory(to: UInt8.self).baseAddress, raw.count, file.fileDescriptor))
+                    }
+                    try file.close()
+                    if let error { throw HostFailure(message: error) }
+                    let output = directory.appendingPathComponent("records.jsonl"), errors = directory.appendingPathComponent("decoder.log")
+                    try Data().write(to: output); try Data().write(to: errors)
+                    let stdout = try FileHandle(forWritingTo: output), stderr = try FileHandle(forWritingTo: errors)
+                    defer { try? stdout.close(); try? stderr.close() }
+                    let process = Process(); process.executableURL = URL(fileURLWithPath: decoder)
+                    process.arguments = ["dump", recording.path]; process.standardOutput = stdout; process.standardError = stderr
+                    try process.run(); process.waitUntilExit()
+                    try require(process.terminationStatus == 0, "Shared recording decoder: " + (try String(contentsOf: errors, encoding: .utf8)))
+                    let data = try Data(contentsOf: output)
+                    if let captures = ProcessInfo.processInfo.environment["CAPY_CANVAS_CAPTURES"] {
+                        let copy = URL(fileURLWithPath: captures).appendingPathComponent(directory.lastPathComponent)
+                        try FileManager.default.createDirectory(at: copy, withIntermediateDirectories: true)
+                        for name in ["capture.capystrokes", "records.jsonl", "decoder.log", "expected.json"] {
+                            try Data(contentsOf: directory.appendingPathComponent(name)).write(to: copy.appendingPathComponent(name))
+                        }
+                    }
+                    return data
+                }
+                let rawEvents = try String(decoding: records, as: UTF8.self).split(separator: "\n").map { try JSON.decode(String($0)) }
+                    .map { $0["Raw"]["event"] }.filter { !$0.isNull }
+                var contacts: [String: UInt64] = [:]
+                for sample in expected {
+                    let matches = rawEvents.filter { $0["timestamp_ns"].uint == sample.timestamp }
+                    try require(matches.count == 1, "Exactly one native raw event for \(sample.name): \(matches.count)")
+                    let event = matches[0]
+                    try require(event["phase"].string == sample.phase && event["tool"].string == "Pen",
+                        "Native phase/tool for \(sample.name): \(event.stableKey)")
+                    try require(event["flags"].uint & 0xc0 == UInt64(sample.flags), "Captured device flags for \(sample.name): \(event.stableKey)")
+                    try require(abs(event["twist_radians"].number - sample.rotation) < 1e-6,
+                        "Native numeric rotation for \(sample.name): \(event.stableKey)")
+                    if let contact = sample.contact {
+                        if let id = contacts[contact] { try require(event["device_id"].uint == id, "Native contact identity for \(sample.name)") }
+                        else { contacts[contact] = event["device_id"].uint }
+                    }
+                }
+                try require(ignored.allSatisfy { timestamp in !rawEvents.contains { $0["timestamp_ns"].uint == timestamp } },
+                    "An unrelated tablet device cannot inject into the captured contact")
+                try require(Set(contacts.values).count == contacts.count, "Fresh tablet contacts keep distinct captured identities")
+                _ = try await recording("saved")
+                note("PASS AppKit source callbacks policy \(platform) \(theme): zero roll/capability, device pairing, frozen flags, hover and terminal; physical tablet UNVERIFIED")
+            }
+        }
+        if penResponseOnly { try await penResponseJourney(); return }
+        if deviceFlagsOnly {
+            try await tabletDeviceFlags()
+            let closed = await withCheckedContinuation { done in store.prepareClose { done.resume(returning: $0) } }
+            try require(closed, "Close private device-capability storage")
+            return
         }
         if paperOnly { try await paperJourney(); return }
 
@@ -1401,7 +1726,7 @@ private final class PaperCaptureGate: @unchecked Sendable {
         Task { @MainActor in
             do {
                 let paperOnly = CommandLine.arguments.contains("--paper")
-                if paperOnly {
+                if paperOnly || CommandLine.arguments.contains("--pen-response") {
                     Task { try await Task.sleep(for:.seconds(240)); note("FAIL native fixture deadline; retain private artifacts"); exit(1) }
                 }
                 for platform: UInt32 in paperOnly ? [1] : [0, 1] { try await run(platform) }

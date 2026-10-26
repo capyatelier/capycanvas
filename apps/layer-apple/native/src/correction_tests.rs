@@ -114,6 +114,7 @@ fn select_region(app: &App) {
                 records.len(),
                 0,
                 capy_apple_camera_revision(app.0),
+                0,
             )
         },
         0

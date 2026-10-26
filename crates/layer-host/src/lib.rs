@@ -59,6 +59,56 @@ pub struct PointerBatch<'a> {
     pub device_flags: SampleFlags,
 }
 
+impl PointerBatch<'_> {
+    pub fn validate(&self, updates: &[u64], correction: bool) -> Result<(), &'static str> {
+        if self.device_flags.0 & !(SampleFlags::INDIRECT_POINTER.0 | SampleFlags::BARREL_TWIST.0) != 0
+            || self.records.is_empty() || !self.records.len().is_multiple_of(9)
+        {
+            return Err("Invalid native pointer batch");
+        }
+        if (!updates.is_empty() && updates.len() != self.records.len() / 9 * 2)
+            || updates.as_chunks::<2>().0.iter().any(|u| u[1] > 1 || (u[1] != 0 && u[0] == 0))
+            || (correction && (self.predicted || updates.is_empty() || updates.as_chunks::<2>().0.iter().any(|u| u[0] == 0)))
+            || (self.predicted && !updates.is_empty())
+        {
+            return Err("Invalid native input estimates");
+        }
+        Ok(())
+    }
+    pub fn contact_start(&self) -> Option<[f32; 2]> {
+        let event = self.event(self.records.first_chunk::<9>()?, [0, 0], false, 0);
+        (!self.predicted && event.phase == PenPhase::Down && event.is_finite())
+            .then_some([event.surface_position.x, event.surface_position.y])
+    }
+    fn pointer_tool(&self) -> ToolKind {
+        match self.tool {1 => ToolKind::Mouse, 2 => ToolKind::Eraser, 3 => ToolKind::Finger, _ => ToolKind::Pen}
+    }
+    fn event(&self, sample: &[f64; 9], update: [u64; 2], correction: bool, sequence: u64) -> PenEvent {
+        let valid_phase = sample[8].is_finite() && (0. ..=4.).contains(&sample[8]) && sample[8].fract() == 0.;
+        let phase = match if valid_phase {sample[8] as u8} else {4} {
+            0 => PenPhase::Hover, 1 => PenPhase::Down, 2 => PenPhase::Move, 3 => PenPhase::Up, _ => PenPhase::Cancel,
+        };
+        PenEvent {
+            device_id: self.id,
+            sequence: if update[0] != 0 {update[0]} else {sequence},
+            timestamp_ns: sample[7] as u64,
+            view_revision: self.view_revision,
+            surface_position: Point {x: sample[0] as f32, y: sample[1] as f32},
+            pressure: if valid_phase && sample[7].is_finite() && sample[7] >= 0. {sample[2] as f32} else {f32::NAN},
+            tilt_radians: [sample[3] as f32, sample[4] as f32],
+            twist_radians: sample[5] as f32,
+            distance: sample[6] as f32,
+            phase,
+            tool: self.pointer_tool(),
+            flags: SampleFlags(SampleFlags::PRIMARY.0
+                | if correction {SampleFlags::CORRECTION.0} else {0}
+                | if update[1] != 0 {SampleFlags::ESTIMATED.0} else {0}
+                | if self.predicted {SampleFlags::PREDICTED.0} else {0}
+                | self.device_flags.0),
+        }
+    }
+}
+
 pub struct NativeHost {
     pub canvas_frame_rate: std::sync::Arc<CanvasFrameRate>,
     pub session: Box<UiSession<Renderer>>,
@@ -493,87 +543,20 @@ impl NativeHost {
     ) -> Result<(), String> {
         let PointerBatch {
             id,
-            tool,
             button,
             records,
             predicted,
             view_revision,
-            device_flags,
+            ..
         } = batch;
         if !self.accepts_pointer_input(view_revision) {return Ok(());}
-        let pointer_tool=match tool {1=>ToolKind::Mouse,2=>ToolKind::Eraser,3=>ToolKind::Finger,_=>ToolKind::Pen};
-        if device_flags.0 & !(SampleFlags::INDIRECT_POINTER.0 | SampleFlags::BARREL_TWIST.0) != 0
-            || records.is_empty()
-            || !records.len().is_multiple_of(9)
-        {
-            if !predicted && !correction {self.cancel_pointer(id,pointer_tool)?;}
-            return Err("Invalid native pointer batch".into());
-        }
-        if (!updates.is_empty() && updates.len() != records.len() / 9 * 2)
-            || updates
-                .as_chunks::<2>()
-                .0
-                .iter()
-                .any(|u| u[1] > 1 || (u[1] != 0 && u[0] == 0))
-            || (correction
-                && (predicted
-                    || updates.is_empty()
-                    || updates.as_chunks::<2>().0.iter().any(|u| u[0] == 0)))
-            || (predicted && !updates.is_empty())
-        {
-            if !predicted && !correction {self.cancel_pointer(id,pointer_tool)?;}
-            return Err("Invalid native input estimates".into());
+        if let Err(error) = batch.validate(updates, correction) {
+            if !predicted && !correction {self.cancel_pointer(id, batch.pointer_tool())?;}
+            return Err(error.into());
         }
         for (index, sample) in records.as_chunks::<9>().0.iter().enumerate() {
-            let update = updates.get(index * 2..index * 2 + 2).unwrap_or(&[0, 0]);
-            let valid_phase=sample[8].is_finite() && (0. ..=4.).contains(&sample[8]) && sample[8].fract()==0.;
-            let phase = match if valid_phase {sample[8] as u8} else {4} {
-                0 => PenPhase::Hover,
-                1 => PenPhase::Down,
-                2 => PenPhase::Move,
-                3 => PenPhase::Up,
-                _ => PenPhase::Cancel,
-            };
-            let position = [sample[0] as f32, sample[1] as f32];
-            let event = PenEvent {
-                device_id: id,
-                sequence: if update[0] != 0 {
-                    update[0]
-                } else {
-                    self.sequence + 1
-                },
-                timestamp_ns: sample[7] as u64,
-                view_revision,
-                surface_position: Point {
-                    x: position[0],
-                    y: position[1],
-                },
-                pressure: if valid_phase && sample[7].is_finite() && sample[7]>=0. {sample[2] as f32} else {f32::NAN},
-                tilt_radians: [sample[3] as f32, sample[4] as f32],
-                twist_radians: sample[5] as f32,
-                distance: sample[6] as f32,
-                phase,
-                tool: pointer_tool,
-                flags: SampleFlags(
-                    SampleFlags::PRIMARY.0
-                        | if correction {
-                            SampleFlags::CORRECTION.0
-                        } else {
-                            0
-                        }
-                        | if update[1] != 0 {
-                            SampleFlags::ESTIMATED.0
-                        } else {
-                            0
-                        }
-                        | if predicted {
-                            SampleFlags::PREDICTED.0
-                        } else {
-                            0
-                        }
-                        | device_flags.0,
-                ),
-            };
+            let update: [u64; 2] = updates.get(index * 2..index * 2 + 2).unwrap_or(&[0, 0]).try_into().unwrap();
+            let event = batch.event(sample, update, correction, self.sequence + 1);
             if correction {
                 // Corrections refer to previously admitted sample tokens and never
                 // enter UI pointer ownership or replace the current cursor.

@@ -583,6 +583,11 @@ settings directory, on both Apple policies.
 independent axis toggles, Reset/Cancel, dragging and pressure/tilt switching.
 The persistence-owner fixture also checks tilt sensor binding and durable
 response/axis restoration across fresh owners and contact aliases in both themes.
+`tests/canvas-native-input.swift --pen-response` supplies native tablet callbacks,
+activates the mounted response controls and Apply, then verifies the exact source
+profile on disk and through a fresh owner. Run it with `CAPY_PEN_THEME=light` and
+`dark`. The `--device-flags` route checks captured rotation capabilities, matching
+devices, zero rotation and terminal samples through the native recording.
 The GPU-free Rust `apple_tilt_` tests cover both Apple policies through the C
 request boundary. The portable Swift input fixture checks actual action encoding,
 projected tilt and all four native coordinate frames:
@@ -624,6 +629,17 @@ A window-scoped monitor forwards raw gesture-event phases and leaves the
 original events available to AppKit. Registrations share the view's touch mask
 and restore it when the last owner detaches. Trackpad device extents already use
 points; apply the window's backing scale once when forwarding coordinates.
+
+Packed pointer APIs carry explicit device flags independently of predicted and
+estimated sample metadata. AppKit captures measured barrel rotation from the
+matching device's proximity rotation capability and retains it through the
+contact's terminal sample. UIKit retains a positive roll estimate-property bit
+from Pencil Down through predictions and delayed corrections. A zero angle keeps
+that confirmed capability; numeric angles alone never establish it. UIKit exposes
+no general roll-support query, so contacts without that positive evidence and
+hover remain unconfirmed. Neither adapter identifies a screenless pen from its
+tool kind. Physical rotation and indirect-device checks remain separate from
+injected input tests.
 
 ### Swift fixtures
 

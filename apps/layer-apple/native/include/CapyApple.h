@@ -225,16 +225,17 @@ int32_t capy_apple_test_gpu_fault(CapyApple app, uint32_t validation); /* Debug 
 /* Nine doubles per record: x/y physical pixels, pressure, tilt x/y radians,
    twist radians, distance, monotonic nanoseconds, phase (0 hover..4 cancel).
    tool: 0 pen, 1 mouse, 2 eraser, 3 touch; button: 0 primary, 1 pan, 2 other. */
+enum { CAPY_APPLE_INDIRECT_POINTER = 0x40, CAPY_APPLE_BARREL_TWIST = 0x80 };
 int32_t capy_apple_pointer(CapyApple app, uint64_t id, uint32_t tool, uint32_t button,
                           const double *records, size_t count, uint32_t predicted,
-                          uint64_t view_revision);
+                          uint64_t view_revision, uint32_t device_flags);
 /* Estimate metadata is two uint64_t values per nine-double sample: an opaque
    contact-local token (zero for untracked samples) and expecting updates (0/1).
    Corrections replace previously admitted points, including after pen-up, and
    must carry the original contact and view revision. They never route UI input. */
 int32_t capy_apple_pointer_updates(CapyApple app, uint64_t id, uint32_t tool, uint32_t button,
                                   const double *records, size_t count, const uint64_t *updates,
-                                  uint32_t correction, uint64_t view_revision);
+                                  uint32_t correction, uint64_t view_revision, uint32_t device_flags);
 /* Anchors are physical canvas pixels; wheel deltas are logical points.
    Magnification is a multiplicative factor; rotation is in radians. */
 int32_t capy_apple_scroll(CapyApple app, float x, float y, float dx, float dy,

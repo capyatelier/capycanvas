@@ -60,7 +60,7 @@ fn renderer_failure_retains_sources_history_settings_and_durable_recovery_on_bot
             });
             let revision = unsafe { capy_apple_camera_revision(app.0) };
             let down = [450.,350.,1.,0.,0.,0.,0.,3_000_000_000.,1.];
-            assert_eq!(unsafe { capy_apple_pointer(app.0, 9, 0, 0, down.as_ptr(), down.len(), 0, revision) }, 0);
+            assert_eq!(unsafe { capy_apple_pointer(app.0, 9, 0, 0, down.as_ptr(), down.len(), 0, revision, 0) }, 0);
             app.draw_frame();
             assert!(app.borrow().host.session.engine().has_active_stroke());
             let document = app.document().clone();
@@ -121,7 +121,7 @@ fn renderer_failure_retains_sources_history_settings_and_durable_recovery_on_bot
             app.full_snapshot();
             assert!(!app.borrow().host.session.rendering_suspended());
             let up = [480.,370.,1.,0.,0.,0.,0.,3_010_000_000.,3.];
-            assert_eq!(unsafe { capy_apple_pointer(app.0, 9, 0, 0, up.as_ptr(), up.len(), 0, revision) }, 0);
+            assert_eq!(unsafe { capy_apple_pointer(app.0, 9, 0, 0, up.as_ptr(), up.len(), 0, revision, 0) }, 0);
             app.draw_until_idle();
             assert_eq!(app.pixels(), imported);
             assert_eq!(unsafe { capy_apple_document_complete(app.0, request.as_u64().unwrap() as u32, 0) }, 0);

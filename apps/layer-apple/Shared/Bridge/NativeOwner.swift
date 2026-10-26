@@ -927,7 +927,7 @@ final class NativeOwner: @unchecked Sendable {
         }
     }
     func pointer(id: UInt64, tool: UInt32, button: UInt32, records: [Double], predicted: Bool, revision: UInt64,
-                 updates: [UInt64] = [], correction: Bool = false, device: NativePenDevice? = nil) {
+                 updates: [UInt64] = [], correction: Bool = false, deviceFlags: UInt32 = 0, device: NativePenDevice? = nil) {
         precondition(updates.isEmpty || updates.count == records.count / 9 * 2)
         let observation = trace.flatMap { $0.isRecording ? $0 : nil }
         let queued = observation == nil ? 0 : FrameTrace.now()
@@ -947,12 +947,12 @@ final class NativeOwner: @unchecked Sendable {
             }
             try records.withUnsafeBufferPointer {
                 if updates.isEmpty {
-                    try check(capy_apple_pointer(nativeValue(handle), id, tool, button, $0.baseAddress, $0.count, predicted ? 1 : 0, revision))
+                    try check(capy_apple_pointer(nativeValue(handle), id, tool, button, $0.baseAddress, $0.count, predicted ? 1 : 0, revision, deviceFlags))
                 } else {
                     let samples = $0
                     try updates.withUnsafeBufferPointer {
                         try check(capy_apple_pointer_updates(nativeValue(handle), id, tool, button, samples.baseAddress, samples.count,
-                            $0.baseAddress, correction ? 1 : 0, revision))
+                            $0.baseAddress, correction ? 1 : 0, revision, deviceFlags))
                     }
                 }
             }

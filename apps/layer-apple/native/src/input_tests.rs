@@ -57,7 +57,7 @@ fn apple_tilt_response_uses_stable_source_keys_across_hover_aliases_and_restart(
             assert_eq!(app.state()["tilt_calibration"]["ready"],true);
             assert_eq!(app.state()["tilt_calibration"]["editor"]["points"],response);
             tilt_pen_input(&app,42,"apple-fixture:first",0,None);
-            assert_eq!(unsafe {capy_apple_pointer(app.0,42,0,0,sample.as_ptr(),sample.len(),0,capy_apple_camera_revision(app.0))},0);
+            assert_eq!(unsafe {capy_apple_pointer(app.0,42,0,0,sample.as_ptr(),sample.len(),0,capy_apple_camera_revision(app.0),0)},0);
             let first=app.state()["tilt_calibration"].clone();
             tilt_pen_input(&app,0,"apple-fixture:second",0,Some([420.,340.,0.8,-0.2,0.6,0.,0.,1_100_000_000.,0.]));
             let retained=app.state()["tilt_calibration"].clone();
@@ -148,6 +148,270 @@ fn apple_tilt_editor_is_editable_before_first_pen_input_in_both_themes() {
 }
 
 #[test]
+fn packed_pointer_device_flags_preserve_zero_rotation_and_indirect_hover() {
+    use layer_engine::{SampleFlags, recording::{Record, StopReason}};
+    let indirect = u32::from(SampleFlags::INDIRECT_POINTER.0);
+    let barrel = u32::from(SampleFlags::BARREL_TWIST.0);
+    for platform in [0, 1] {
+        let app = App::new(platform);
+        let mut settings = app.state()["settings"].clone();
+        settings["cursor"] = json!("none");
+        app.action(json!({"type":"restore_settings","settings":settings}));
+        let recording = app.borrow().host.session.engine().recording.clone();
+        recording.lock().unwrap().start("apple-device-flags").unwrap();
+        let mut expected = Vec::new();
+        for updates in [false, true] {
+            for flags in [0, indirect, barrel, indirect | barrel] {
+                let sequence = expected.len() as u64 + 1;
+                let sample = [500., 400., 0.6, 0.2, -0.3, 0., 0., sequence as f64 * 1_000_000., 0.];
+                let revision = unsafe { capy_apple_camera_revision(app.0) };
+                let result = if updates {
+                    unsafe { capy_apple_pointer_updates(app.0, 9, 0, 0, sample.as_ptr(), sample.len(),
+                        [sequence, 0].as_ptr(), 0, revision, flags) }
+                } else {
+                    unsafe { capy_apple_pointer(app.0, 9, 0, 0, sample.as_ptr(), sample.len(), 0, revision, flags) }
+                };
+                assert_eq!(result, 0, "platform={platform} updates={updates} flags={flags:#x}");
+                let cursor = app.borrow().host.session.canvas_cursor().unwrap();
+                assert_eq!(cursor.mode, if flags & indirect != 0 { layer_ui::CursorMode::Sight } else { layer_ui::CursorMode::None });
+                expected.push(flags);
+            }
+        }
+        let mut recorder = recording.lock().unwrap();
+        recorder.stop(StopReason::Manual);
+        let events: Vec<_> = layer_engine::recording::read(recorder.bytes().unwrap().as_slice()).unwrap().into_iter()
+            .filter_map(|record| match record { Record::Raw { event, .. } => Some(event), _ => None }).collect();
+        assert_eq!(events.len(), expected.len());
+        for (event, flags) in events.into_iter().zip(expected) {
+            assert_eq!(u32::from(event.flags.0) & (indirect | barrel), flags);
+            assert_eq!(event.twist_radians, 0., "zero rotation retains its explicit capability");
+            assert_eq!(event.pressure, 0.6);
+            assert_eq!(event.tilt_radians, [0.2, -0.3]);
+        }
+        assert!(app.borrow().host.session.engine().backend().0.is_none());
+    }
+}
+
+#[test]
+fn packed_pointer_device_flags_reject_sample_and_high_bits_without_changing_hover() {
+    use layer_engine::SampleFlags;
+    for platform in [0, 1] {
+        let app = App::new(platform);
+        let revision = unsafe { capy_apple_camera_revision(app.0) };
+        let sample = [500., 400., 0.6, 0., 0., 0., 0., 1_000_000., 0.];
+        assert_eq!(unsafe { capy_apple_pointer(app.0, 9, 0, 0, sample.as_ptr(), sample.len(), 0, revision, 0) }, 0);
+        let before = app.borrow().host.session.canvas_cursor().unwrap();
+        let mut invalid = sample;
+        invalid[0] += 100.;
+        for flags in [u32::from(SampleFlags::PREDICTED.0), u32::from(SampleFlags::PRIMARY.0),
+            u32::from(SampleFlags::INVERTED.0), u32::from(SampleFlags::ESTIMATED.0),
+            u32::from(SampleFlags::CORRECTION.0), 1 << 8, 1 << 15, 1 << 16, 1 << 31,
+            (1 << 16) | u32::from(SampleFlags::BARREL_TWIST.0), u32::MAX] {
+            for updates in [false, true] {
+                let result = if updates {
+                    unsafe { capy_apple_pointer_updates(app.0, 9, 0, 0, invalid.as_ptr(), invalid.len(),
+                        [1, 0].as_ptr(), 0, revision, flags) }
+                } else {
+                    unsafe { capy_apple_pointer(app.0, 9, 0, 0, invalid.as_ptr(), invalid.len(), 0, revision, flags) }
+                };
+                assert_eq!(result, -1, "platform={platform} updates={updates} flags={flags:#x}");
+                let after = app.borrow().host.session.canvas_cursor().unwrap();
+                assert_eq!(after.center, before.center);
+                assert_eq!(after.mode, before.mode);
+            }
+        }
+    }
+}
+
+fn packed_admission_app(platform:u32)->App {
+    let app=fixtures::selection_app(platform);
+    app.action(json!({"type":"select_brush","id":layer_core::DefaultBrushPreset::GPen as u32}));
+    app.action(json!({"type":"set_brush_size","value":4}));
+    app.action(json!({"type":"set_tool_setting","id":"smoothing_strength","value":0}));
+    app.draw_until_idle();
+    fixtures::drag(&app,1,0,[8.,8.],[20.,8.]);
+    app.invoke("undo");app.draw_until_idle();
+    assert!(app.borrow().host.session.engine().can_redo());
+    app
+}
+
+fn packed_admission_sample(app:&App,x:f64,time:f64,phase:f64)->[f64;9] {
+    let [x,y]=fixtures::surface(app,[x,32.]);
+    [x,y,0.8,0.,0.,0.,0.,time,phase]
+}
+
+fn packed_admission_records(app:&App)->Vec<layer_engine::recording::Record> {
+    let recording=app.borrow().host.session.engine().recording.clone();
+    let mut recorder=recording.lock().unwrap();
+    recorder.stop(layer_engine::recording::StopReason::Manual);
+    let records=layer_engine::recording::read(recorder.bytes().unwrap().as_slice()).unwrap();
+    recorder.saved();records
+}
+
+#[test]
+fn packed_pointer_malformed_samples_preserve_valid_siblings_and_exact_history() {
+    use layer_engine::{PenPhase,recording::Record};
+    for platform in [0,1] {
+        for updates in [false,true] {
+            let app=packed_admission_app(platform);
+            let baseline=app.pixels();
+            let revision=unsafe {capy_apple_camera_revision(app.0)};
+            let valid=[packed_admission_sample(&app,16.,3_000_000_000.,1.),
+                packed_admission_sample(&app,24.,3_010_000_000.,2.),
+                packed_admission_sample(&app,40.,3_030_000_000.,2.),
+                packed_admission_sample(&app,48.,3_040_000_000.,3.)];
+            let oracle:Vec<_>=valid.into_iter().flatten().collect();
+            assert_eq!(unsafe {capy_apple_pointer(app.0,9,0,0,oracle.as_ptr(),oracle.len(),0,revision,0)},0);
+            app.draw_until_idle();let expected=app.pixels();assert_ne!(expected,baseline);
+            app.invoke("undo");app.draw_until_idle();assert_eq!(app.pixels(),baseline);
+            for (field,value) in [(0,f64::NAN),(0,f64::MAX),(3,f64::INFINITY),(7,-1.)] {
+                let document=app.document();let checkpoint=app.borrow().host.session.engine().checkpoint();
+                app.borrow().host.session.engine().recording.lock().unwrap().start("apple-malformed-siblings").unwrap();
+                let mut damaged=packed_admission_sample(&app,32.,3_020_000_000.,2.);damaged[field]=value;
+                let records:Vec<_>=[valid[0],valid[1],damaged,valid[2],valid[3]].into_iter().flatten().collect();
+                let metadata=[1,0,2,0,3,0,4,0,5,0];
+                let result=if updates {
+                    unsafe {capy_apple_pointer_updates(app.0,9,0,0,records.as_ptr(),records.len(),metadata.as_ptr(),0,revision,0)}
+                } else {unsafe {capy_apple_pointer(app.0,9,0,0,records.as_ptr(),records.len(),0,revision,0)}};
+                assert_eq!(result,0,"platform={platform} updates={updates} field={field}");
+                app.draw_until_idle();assert_eq!(app.pixels(),expected);
+                let recorded=packed_admission_records(&app);
+                let raw:Vec<_>=recorded.iter().filter_map(|r|if let Record::Raw{event,..}=r {Some(*event)}else{None}).collect();
+                assert_eq!(raw.len(),valid.len());
+                for (event,sample) in raw.iter().zip(valid) {
+                    assert!(event.is_finite());assert_eq!(event.device_id,9);
+                    assert_eq!([event.surface_position.x,event.surface_position.y],[sample[0] as f32,sample[1] as f32]);
+                    assert_eq!(event.timestamp_ns,sample[7] as u64);
+                }
+                assert_eq!(raw.iter().map(|e|e.phase).collect::<Vec<_>>(),[PenPhase::Down,PenPhase::Move,PenPhase::Move,PenPhase::Up]);
+                assert_eq!(recorded.iter().filter(|r|matches!(r,Record::End{cancelled:false,..})).count(),1);
+                assert!(!recorded.iter().any(|r|matches!(r,Record::End{cancelled:true,..})));
+                app.invoke("undo");app.draw_until_idle();assert_eq!(app.pixels(),baseline);
+                assert_project_document(&app.document(),&document);assert_eq!(app.document().working,document.working);assert_eq!(app.borrow().host.session.engine().checkpoint(),checkpoint);
+                assert!(app.borrow().host.session.engine().can_redo());
+                app.invoke("redo");app.draw_until_idle();assert_eq!(app.pixels(),expected);
+                app.invoke("undo");app.draw_until_idle();assert_eq!(app.pixels(),baseline);
+            }
+        }
+    }
+}
+
+#[test]
+fn packed_pointer_damaged_real_terminals_cancel_once_and_allow_fresh_contacts() {
+    use layer_engine::{PenPhase,recording::Record};
+    for platform in [0,1] {
+        let app=packed_admission_app(platform);let baseline=app.pixels();
+        for updates in [false,true] {
+            for phase in [3.,4.] {
+                let document=app.document();let checkpoint=app.borrow().host.session.engine().checkpoint();
+                let revision=unsafe {capy_apple_camera_revision(app.0)};
+                app.borrow().host.session.engine().recording.lock().unwrap().start("apple-malformed-terminal").unwrap();
+                let down=packed_admission_sample(&app,16.,3_000_000_000.,1.);
+                let moved=packed_admission_sample(&app,32.,3_010_000_000.,2.);
+                let prefix:Vec<_>=[down,moved].into_iter().flatten().collect();
+                assert_eq!(unsafe {capy_apple_pointer(app.0,9,0,0,prefix.as_ptr(),prefix.len(),0,revision,0)},0);
+                fixtures::until(&app,"Real contact did not start",||app.borrow().host.session.engine().has_active_stroke());
+                let mut damaged=packed_admission_sample(&app,48.,3_020_000_000.,phase);damaged[0]=f64::NAN;
+                let result=if updates {
+                    unsafe {capy_apple_pointer_updates(app.0,9,0,0,damaged.as_ptr(),damaged.len(),[3,0].as_ptr(),0,revision,0)}
+                } else {unsafe {capy_apple_pointer(app.0,9,0,0,damaged.as_ptr(),damaged.len(),0,revision,0)}};
+                assert_eq!(result,0,"platform={platform} updates={updates} phase={phase}");
+                app.draw_until_idle();assert_eq!(app.pixels(),baseline);assert_project_document(&app.document(),&document);assert_eq!(app.document().working,document.working);
+                assert_eq!(app.borrow().host.session.engine().checkpoint(),checkpoint);
+                assert!(app.borrow().host.session.engine().can_redo());
+                let late:Vec<_>=[packed_admission_sample(&app,52.,3_030_000_000.,2.),
+                    packed_admission_sample(&app,56.,3_040_000_000.,3.)].into_iter().flatten().collect();
+                assert_eq!(unsafe {capy_apple_pointer(app.0,9,0,0,late.as_ptr(),late.len(),0,revision,0)},0);
+                app.draw_until_idle();assert_eq!(app.pixels(),baseline);assert_project_document(&app.document(),&document);assert_eq!(app.document().working,document.working);
+                let recorded=packed_admission_records(&app);
+                let raw:Vec<_>=recorded.iter().filter_map(|r|if let Record::Raw{event,..}=r {Some(*event)}else{None}).collect();
+                assert_eq!(raw.iter().map(|e|e.phase).collect::<Vec<_>>(),[PenPhase::Down,PenPhase::Move,PenPhase::Cancel]);
+                let cancelled=raw.last().unwrap();assert!(cancelled.is_finite());assert_eq!(cancelled.device_id,9);
+                assert_eq!([cancelled.surface_position.x,cancelled.surface_position.y],[moved[0] as f32,moved[1] as f32]);
+                assert_eq!(recorded.iter().filter(|r|matches!(r,Record::End{cancelled:true,..})).count(),1);
+                fixtures::drag(&app,10,0,[16.,32.],[48.,32.]);let ink=app.pixels();assert_ne!(ink,baseline);
+                app.invoke("undo");app.draw_until_idle();assert_eq!(app.pixels(),baseline);
+                app.invoke("redo");app.draw_until_idle();assert_eq!(app.pixels(),ink);
+                app.invoke("undo");app.draw_until_idle();assert_eq!(app.pixels(),baseline);
+            }
+        }
+    }
+}
+
+#[test]
+fn packed_pointer_structural_failures_cancel_only_matching_real_current_owners() {
+    use layer_engine::{PenPhase,recording::Record};
+    for platform in [0,1] {
+        eprintln!("packed structure platform={platform}: initialize fixture and baseline");
+        let app=packed_admission_app(platform);let baseline=app.pixels();
+        let revision=unsafe {capy_apple_camera_revision(app.0)};
+        assert!(!app.borrow().host.accepts_pointer_input(0));
+        for case in ["short","null-records","metadata","null-updates","foreign-id","foreign-kind",
+            "predicted","correction","stale-sample","stale-short","stale-metadata","stale-null-updates"] {
+            eprintln!("packed structure platform={platform} case={case}: begin");
+            let settle=|step:&str| {
+                eprintln!("packed structure platform={platform} case={case}: {step}");
+                app.draw_until_idle();
+            };
+            let retired=|terminal:&str| {
+                let message=format!("packed structure platform={platform} case={case}: {terminal} must retire the real owner and drain input");
+                eprintln!("{message}");
+                fixtures::until(&app,&message,|| {
+                    let native=app.borrow();let engine=native.host.session.engine();
+                    !engine.has_active_stroke() && !engine.has_pending_input()
+                });
+            };
+            let document=app.document();let checkpoint=app.borrow().host.session.engine().checkpoint();
+            app.borrow().host.session.engine().recording.lock().unwrap().start("apple-malformed-structure").unwrap();
+            let prefix:Vec<_>=[packed_admission_sample(&app,16.,3_000_000_000.,1.),
+                packed_admission_sample(&app,32.,3_010_000_000.,2.)].into_iter().flatten().collect();
+            assert_eq!(unsafe {capy_apple_pointer(app.0,9,0,0,prefix.as_ptr(),prefix.len(),0,revision,0)},0);
+            let started=format!("packed structure platform={platform} case={case}: real contact must start");
+            eprintln!("{started}");
+            fixtures::until(&app,&started,||app.borrow().host.session.engine().has_active_stroke());
+            let mut terminal=packed_admission_sample(&app,48.,3_020_000_000.,3.);
+            let stale=case.starts_with("stale-");let delivered_revision=if stale {0}else{revision};
+            let id=if case=="foreign-id" {99}else{9};let tool=if case=="foreign-kind" {1}else{0};
+            let result=match case {
+                "metadata"|"correction"|"stale-metadata"=>unsafe {capy_apple_pointer_updates(app.0,9,0,0,terminal.as_ptr(),terminal.len(),
+                    [0,1].as_ptr(),u32::from(case=="correction"),delivered_revision,0)},
+                "null-updates"|"stale-null-updates"=>unsafe {capy_apple_pointer_updates(app.0,9,0,0,terminal.as_ptr(),terminal.len(),
+                    std::ptr::null(),0,delivered_revision,0)},
+                "null-records"=>unsafe {capy_apple_pointer(app.0,9,0,0,std::ptr::null(),terminal.len(),0,delivered_revision,0)},
+                "stale-sample"=>{terminal[0]=f64::NAN;unsafe {capy_apple_pointer(app.0,9,0,0,terminal.as_ptr(),terminal.len(),0,delivered_revision,0)}},
+                _=>unsafe {capy_apple_pointer(app.0,id,tool,0,terminal.as_ptr(),terminal.len()-1,u32::from(case=="predicted"),delivered_revision,0)},
+            };
+            assert_eq!(result,if stale {0}else{-1},"platform={platform} case={case}");
+            let cancels=matches!(case,"short"|"null-records"|"metadata"|"null-updates");
+            if cancels {
+                retired("rejected matching real batch");settle("settle cancelled contact");
+                assert_eq!(app.pixels(),baseline);assert_project_document(&app.document(),&document);assert_eq!(app.document().working,document.working);
+                assert_eq!(app.borrow().host.session.engine().checkpoint(),checkpoint);
+                assert!(app.borrow().host.session.engine().can_redo());
+            } else {
+                assert!(app.borrow().host.session.engine().has_active_stroke(),"platform={platform} case={case}");
+                let up=packed_admission_sample(&app,48.,3_030_000_000.,3.);
+                assert_eq!(unsafe {capy_apple_pointer(app.0,9,0,0,up.as_ptr(),up.len(),0,revision,0)},0);
+                retired("valid real Up after isolated rejection");settle("settle committed contact");
+                assert_ne!(app.pixels(),baseline);
+            }
+            let recorded=packed_admission_records(&app);
+            let raw:Vec<_>=recorded.iter().filter_map(|r|if let Record::Raw{event,..}=r {Some(*event)}else{None}).collect();
+            assert_eq!(raw.iter().map(|e|e.phase).collect::<Vec<_>>(),
+                [PenPhase::Down,PenPhase::Move,if cancels {PenPhase::Cancel}else{PenPhase::Up}],"platform={platform} case={case}");
+            assert!(raw.iter().all(|e|e.is_finite() && e.device_id==9 && e.tool==layer_engine::ToolKind::Pen));
+            assert_eq!(recorded.iter().filter(|r|matches!(r,Record::End{cancelled:true,..})).count(),usize::from(cancels));
+            if !cancels {app.invoke("undo");settle("undo committed contact");assert_eq!(app.pixels(),baseline);assert_project_document(&app.document(),&document);assert_eq!(app.document().working,document.working);}
+            eprintln!("packed structure platform={platform} case={case}: fresh native contact and idle");
+            fixtures::drag(&app,10,0,[16.,32.],[48.,32.]);let ink=app.pixels();assert_ne!(ink,baseline);
+            app.invoke("undo");settle("undo fresh contact");assert_eq!(app.pixels(),baseline);
+            app.invoke("redo");settle("redo fresh contact");assert_eq!(app.pixels(),ink);
+            app.invoke("undo");settle("restore baseline");assert_eq!(app.pixels(),baseline);
+        }
+    }
+}
+
+#[test]
 fn consumed_paint_timestamp_advances_only_after_real_input_reaches_the_engine() {
     assert_eq!(unsafe { capy_apple_consumed_paint_ns(0) }, 0);
     for platform in [0, 1] {
@@ -168,7 +432,7 @@ fn consumed_paint_timestamp_advances_only_after_real_input_reaches_the_engine() 
             let record = [x + offset, y, 0.8, 0., 0., 0., 0., timestamp as f64, phase];
             assert_eq!(unsafe {
                 capy_apple_pointer(app.0, 1, 0, 0, record.as_ptr(), record.len(), predicted,
-                    capy_apple_camera_revision(app.0))
+                    capy_apple_camera_revision(app.0), 0)
             }, 0);
             assert!(app.borrow().host.session.engine().has_pending_input());
             assert_eq!(unsafe { capy_apple_consumed_paint_ns(app.0) }, previous,
@@ -210,7 +474,7 @@ fn mac_manual_prediction_adds_lead_only_for_the_pen() {
             let handle = app.0;
             let send = move |record: &[f64]| {
                 assert_eq!(unsafe { capy_apple_pointer(handle, 1, tool, 0,
-                    record.as_ptr(), record.len(), 0, capy_apple_camera_revision(handle)) }, 0);
+                    record.as_ptr(), record.len(), 0, capy_apple_camera_revision(handle), 0) }, 0);
                 handles::app(handle).unwrap().host.prepare_canvas_frame(
                     record[7] as u64, record[7] as u64 + 8_000_000, true).unwrap();
             };
@@ -292,6 +556,7 @@ fn project_adoption_preserves_native_prediction_and_manual_lookahead() {
                             record.len(),
                             predicted,
                             capy_apple_camera_revision(app.0),
+                            0,
                         )
                     },
                     0
@@ -398,6 +663,7 @@ fn lasso_pointer_contacts_preserve_history_and_paint_enclosed_pixels_on_both_pla
                             records.len(),
                             0,
                             capy_apple_camera_revision(app.0),
+                            0,
                         )
                     },
                     0
@@ -549,6 +815,7 @@ fn estimated_input_abi_matches_final_sensor_oracle_pixels_and_history_on_both_pl
                                 metadata.as_ptr(),
                                 correction,
                                 revision,
+                                0,
                             )
                         },
                         0
@@ -641,7 +908,7 @@ fn apple_stroke_recordings_capture_hover_and_contacts_and_export_compressed() {
             let records: Vec<f64> = points.iter().enumerate().flat_map(|(i, &(x, phase))| {
                 [x, 300., if phase == 0. { 0. } else { 0.6 }, 0., 0., 0., 0., 3_000_000_000. + i as f64 * 5_000_000., phase]
             }).collect();
-            assert_eq!(unsafe { capy_apple_pointer(handle, id, 1, 0, records.as_ptr(), records.len(), 0, capy_apple_camera_revision(handle)) }, 0);
+            assert_eq!(unsafe { capy_apple_pointer(handle, id, 1, 0, records.as_ptr(), records.len(), 0, capy_apple_camera_revision(handle), 0) }, 0);
         };
         send(5, &[(400., 0.)]);
         send(5, &[(420., 1.), (440., 2.), (460., 2.), (460., 3.)]);
@@ -680,16 +947,4 @@ fn ipad_touch_timing_and_pencil_actions_reach_the_session() {
     let reply = app.request(1, json!({"type":"stylus_action","action":"switch_eraser"})).unwrap();
     assert_eq!(reply["handled"], true);
     assert!(app.borrow().host.session.command(layer_ui::CommandId::Eraser).selected);
-}
-
-#[test]
-fn control_activation_uses_keyboard_arrival() {
-    for (key, keyboard_focus, expected) in [("Space", false, false), ("Space", true, true), ("Enter", false, true)] {
-        let key = std::ffi::CString::new(key).unwrap();
-        unsafe {
-            assert_eq!(capy_apple_control_takes_key(key.as_ptr(), false, false, keyboard_focus), expected);
-            assert!(!capy_apple_control_takes_key(key.as_ptr(), true, false, keyboard_focus));
-            assert!(!capy_apple_control_takes_key(key.as_ptr(), false, true, keyboard_focus));
-        }
-    }
 }

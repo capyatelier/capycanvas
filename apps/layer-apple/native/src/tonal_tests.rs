@@ -80,7 +80,7 @@ fn apple_tonal_samples_visible_artwork_and_refines_inside_quick_mask() {
         assert!(selection_bounds(&app).is_some());
         let [x, y] = surface(&app, [16., 16.]);
         let records = [x, y, 1., 0., 0., 0., 0., 2_000_000_000., 1., x, y, 1., 0., 0., 0., 0., 2_010_000_000., 3.];
-        assert_eq!(unsafe { capy_apple_pointer(app.0, 40, 1, 0, records.as_ptr(), records.len(), 0, capy_apple_camera_revision(app.0)) }, 0);
+        assert_eq!(unsafe { capy_apple_pointer(app.0, 40, 1, 0, records.as_ptr(), records.len(), 0, capy_apple_camera_revision(app.0), 0) }, 0);
         until(&app, "point sample", || app.state()["tool_extra"][0]["Choice"]["items"].as_array().unwrap().last().unwrap()["selected"] == true);
         app.draw_until_idle();
         let [lower, upper] = bounds(&app);

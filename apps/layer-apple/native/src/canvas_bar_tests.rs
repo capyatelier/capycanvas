@@ -6,7 +6,7 @@ fn contact(app: &App, point: [f64; 2], phase: f64) {
     let [x, y] = surface(app, point);
     let records = [x, y, 1., 0., 0., 0., 0., 1_000_000_000. + phase * 1_000_000., phase];
     assert_eq!(
-        unsafe { capy_apple_pointer(app.0, 7, 0, 0, records.as_ptr(), records.len(), 0, capy_apple_camera_revision(app.0)) },
+        unsafe { capy_apple_pointer(app.0, 7, 0, 0, records.as_ptr(), records.len(), 0, capy_apple_camera_revision(app.0), 0) },
         0
     );
 }

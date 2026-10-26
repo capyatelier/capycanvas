@@ -5,13 +5,16 @@ private final class Contact: UITouch {
     var time = ProcessInfo.processInfo.systemUptime
     var device: UITouch.TouchType = .pencil
     var updateIndex: NSNumber? = 41
+    var estimated: UITouch.Properties = []
     var expected = UITouch.Properties(rawValue: 1 | 16)
     var pressure: CGFloat = 0.2
     var roll: CGFloat = 0.3
     override var type: UITouch.TouchType { device }
     override var timestamp: TimeInterval { time }
+    override func location(in view: UIView?) -> CGPoint { point }
     override func preciseLocation(in view: UIView?) -> CGPoint { point }
     override var estimationUpdateIndex: NSNumber? { updateIndex }
+    override var estimatedProperties: UITouch.Properties { estimated }
     override var estimatedPropertiesExpectingUpdates: UITouch.Properties { expected }
     override var force: CGFloat { pressure }
     override var maximumPossibleForce: CGFloat { 1 }
@@ -86,10 +89,15 @@ private final class Contact: UITouch {
         }
         try await flush()
         let contact = Contact()
+        let barrel: UInt32 = 0x80
+        contact.roll = 0; contact.estimated = .roll
         canvas.touchesBegan([contact], with: nil)
         try await flush()
         try require(canvas.estimates.pending.count == 1, "Pencil sample must await its sensor update")
         let original = canvas.estimates.pending.values.first!
+        try require(canvas.contacts[ObjectIdentifier(contact)]?.deviceFlags == barrel && original.deviceFlags == barrel,
+            "Explicit roll estimate metadata must establish the captured Pencil capability")
+        try require(original.record[5] == 0, "Measured zero roll must remain zero")
         // UIKit correlates updates by estimationUpdateIndex. A later callback
         // timestamp must not leave the original stroke sample unresolved.
         let update = Contact(); update.time = contact.time + 0.02
@@ -100,16 +108,23 @@ private final class Contact: UITouch {
             "Delayed Pencil correction was lost when its callback timestamp changed")
         try require(canvas.estimates.pending.values.first?.record[7] == original.record[7],
             "A correction must retain the observation's original time")
+        try require(canvas.estimates.pending.values.first?.deviceFlags == barrel,
+            "Partial corrections must retain the original capability flags")
         passed("Partial update uses the stable index and original observation time")
         update.time += 0.02; update.pressure = 0.1; update.roll = 2.1; update.expected = []
         canvas.touchesEstimatedPropertiesUpdated([update])
         try await flush()
         try require(canvas.estimates.pending.isEmpty, "Final update must release the retained estimate")
+        try require(canvas.contacts[ObjectIdentifier(contact)]?.deviceFlags == barrel,
+            "Final sensor updates must not discard the active contact's capability")
         passed("Final update releases the pending stroke sample")
         contact.time += 0.05; contact.point.x += 40; contact.updateIndex = 42; contact.expected = .force
+        contact.estimated = .force
         canvas.touchesMoved([contact], with: nil)
         try await flush()
         let next = canvas.estimates.pending.values.first!
+        try require(next.deviceFlags == barrel && canvas.contacts[ObjectIdentifier(contact)]?.deviceFlags == barrel,
+            "Later force-only estimates must retain the capability captured at Down")
         canvas.touchesEstimatedPropertiesUpdated([update])
         try await flush()
         try require(canvas.estimates.pending.count == 1 && canvas.estimates.pending.values.first!.record == next.record,
@@ -121,8 +136,40 @@ private final class Contact: UITouch {
         try await flush()
         try require(canvas.estimates.pending.isEmpty && canvas.contacts.isEmpty, "Cleanly finish corrected Pencil contact")
         passed("Completed contact retains no pending observations")
+        for (index, estimated, expected, roll, flags) in [
+            (43, UITouch.Properties.force, UITouch.Properties.force, CGFloat(1.7), UInt32(0)),
+            (44, UITouch.Properties.roll, UITouch.Properties.force, CGFloat(0), barrel),
+            (45, UITouch.Properties(), UITouch.Properties(), CGFloat(1.7), UInt32(0)),
+        ] {
+            let sample = Contact()
+            sample.updateIndex = NSNumber(value: index); sample.estimated = estimated
+            sample.expected = expected; sample.roll = roll
+            canvas.touchesBegan([sample], with: nil)
+            try await flush()
+            try require(canvas.contacts[ObjectIdentifier(sample)]?.deviceFlags == flags,
+                "Pencil capability must follow explicit roll metadata, including zero and nonzero angles")
+            if !expected.isEmpty {
+                try require(canvas.estimates.pending.values.first?.deviceFlags == flags,
+                    "Estimate storage must preserve each new contact's captured capability")
+            }
+            sample.estimated = []; sample.expected = []; sample.time += 0.01
+            canvas.touchesEstimatedPropertiesUpdated([sample])
+            canvas.touchesEnded([sample], with: nil)
+            try await flush()
+            try require(canvas.estimates.pending.isEmpty && canvas.contacts.isEmpty,
+                "Capability cases must retire their own contact and estimates")
+        }
+        let pointer = Contact()
+        pointer.device = .indirectPointer; pointer.updateIndex = 46
+        pointer.estimated = .roll; pointer.expected = .roll
+        canvas.touchesBegan([pointer], with: nil)
+        try await flush()
+        try require(canvas.contacts[ObjectIdentifier(pointer)]?.deviceFlags == 0 && canvas.estimates.pending.isEmpty,
+            "A non-Pencil contact must not claim a Pencil roll capability")
+        pointer.time += 0.01
+        canvas.touchesEnded([pointer], with: nil)
+        try await flush()
+        try require(canvas.contacts.isEmpty, "The indirect pointer must finish its own contact")
+        passed("Explicit roll metadata distinguishes zero rotation from unknown Pencil capability")
     }
-}
-@main struct CanvasPencilEstimateChecks {
-    static func main() { UIApplicationMain(CommandLine.argc, CommandLine.unsafeArgv, nil, NSStringFromClass(PencilEstimateChecks.self)) }
 }

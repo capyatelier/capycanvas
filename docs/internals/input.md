@@ -21,6 +21,9 @@ cancels its contact using the last valid sample. Damaged predictions and
 corrections leave the real contact intact. The session retains at most sixteen
 contacts in storage allocated once when it starts. Packed batches preserve
 valid siblings; malformed native structures cancel their matching real contact.
+Packed adapters use `PointerBatch` to validate estimate metadata and decode
+contact starts before forwarding numerical samples. Stale document revisions
+leave the current contact alone.
 GTK routes a damaged current Move through its latest eligible valid historical
 sample and retains historical paint order.
 

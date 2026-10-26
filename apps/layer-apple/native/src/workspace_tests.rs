@@ -39,6 +39,13 @@ fn apple_stack_auto_hide_consumes_native_contact_before_the_next_contact_paints(
         app.request(1, json!(layer_ui::UiInput::Chrome {
             event: layer_ui::ChromeEvent::Refresh, facts:Default::default(), viewport:[1200.,900.],
         }));
+        for (index, value) in [(0, f64::NAN), (2, f64::MAX), (7, -1.), (8, 1.5)] {
+            let mut sample = [900.,700.,1.,0.,0.,0.,0.,1_000_000_000.,1.];
+            sample[index] = value;
+            assert_eq!(unsafe { capy_apple_pointer(app.0,9,0,0,sample.as_ptr(),sample.len(),0,capy_apple_camera_revision(app.0),0) },0);
+            assert!(app.borrow().host.session.state().workspace.layout.column_stack(column).open_column.is_some());
+            assert!(app.borrow().dismissed_contacts.is_empty());
+        }
         // The gesture starts on the canvas outside the expanded member. Its
         // complete native down/move/up sequence belongs to auto-hide dismissal.
         let stroke = || {
@@ -53,7 +60,7 @@ fn apple_stack_auto_hide_consumes_native_contact_before_the_next_contact_paints(
             let records = [x,y,1.,0.,0.,0.,0.,1_000_000_000.,1.,
                 x+10.,y+10.,1.,0.,0.,0.,0.,1_010_000_000.,2.,
                 x+20.,y+20.,1.,0.,0.,0.,0.,1_020_000_000.,3.];
-            assert_eq!(unsafe { capy_apple_pointer(app.0, 1, 1, 0, records.as_ptr(), records.len(), 0, capy_apple_camera_revision(app.0)) }, 0);
+            assert_eq!(unsafe { capy_apple_pointer(app.0, 1, 1, 0, records.as_ptr(), records.len(), 0, capy_apple_camera_revision(app.0), 0) }, 0);
             app.draw_until_idle();
         };
         stroke();
@@ -383,6 +390,7 @@ fn apple_drawer_dismissal_consumes_the_entire_canvas_contact_then_allows_paintin
                         record.len(),
                         predicted,
                         revision,
+                        0,
                     )
                 },
                 0

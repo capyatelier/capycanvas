@@ -59,6 +59,7 @@ struct PencilContact {
     let id: UInt64
     let tool: UInt32
     let button: UInt32
+    var deviceFlags: UInt32 = 0
     var lastTimestamp: TimeInterval = -1
     var last: [Double] = []
 }
@@ -148,7 +149,9 @@ extension CanvasView {
                     button = buttons.contains(.primary) ? 0
                         : buttons.contains(.secondary) || buttons.contains(.button(3)) ? 1 : 2
                 }
-                contacts[key] = PencilContact(id: nextContact, tool: tool, button: button)
+                let roll = tool == 0 && touch.estimatedProperties.union(touch.estimatedPropertiesExpectingUpdates).contains(.roll)
+                contacts[key] = PencilContact(id: nextContact, tool: tool, button: button,
+                    deviceFlags: roll ? UInt32(CAPY_APPLE_BARREL_TWIST) : 0)
                 cancelPickerHold()
                 if tool == 3 && contacts.count == 1 { armPickerHold(key, id: nextContact, at: touch.preciseLocation(in: self)) }
             } else if let hold = pickerHold, hold.key == key {
@@ -169,7 +172,8 @@ extension CanvasView {
                 let record = pack(sample, phase: samplePhase)
                 let capture = estimates.capture(key: sample.estimationUpdateIndex?.uint64Value, contact: contact.id,
                     revision: revision, scale: contentScaleFactor, record: record,
-                    expected: contact.tool == 0 ? UInt64(sample.estimatedPropertiesExpectingUpdates.rawValue) : 0)
+                    expected: contact.tool == 0 ? UInt64(sample.estimatedPropertiesExpectingUpdates.rawValue) : 0,
+                    deviceFlags: contact.deviceFlags)
                 if let released = capture.released { sendCorrection(released) }
                 updates.append(contentsOf: capture.metadata)
                 records.append(contentsOf: record)
@@ -178,7 +182,8 @@ extension CanvasView {
             }
             if !records.isEmpty {
                 store.native?.pointer(id: contact.id, tool: contact.tool, button: contact.button, records: records,
-                    predicted: false, revision: revision, updates: updates, device: contact.tool == 0 ? pencilDevice(id: contact.id) : nil)
+                    predicted: false, revision: revision, updates: updates, deviceFlags: contact.deviceFlags,
+                    device: contact.tool == 0 ? pencilDevice(id: contact.id) : nil)
             }
             if phase >= 3 {
                 contacts.removeValue(forKey: key)
@@ -245,7 +250,7 @@ extension CanvasView {
     }
     private func sendCorrection(_ sample: EstimatedInput.Sample) {
         store.native?.pointer(id: sample.contact, tool: 0, button: 0, records: sample.record,
-            predicted: false, revision: sample.revision, updates: sample.metadata, correction: true)
+            predicted: false, revision: sample.revision, updates: sample.metadata, correction: true, deviceFlags: sample.deviceFlags)
     }
     func finishEstimates() { for sample in estimates.finish() { sendCorrection(sample) } }
     private func armPickerHold(_ key: ObjectIdentifier, id: UInt64, at start: CGPoint) {
@@ -273,7 +278,8 @@ extension CanvasView {
     }
     private func send(_ contact: PencilContact, records: [Double], predicted: Bool) {
         store.native?.pointer(id: contact.id, tool: contact.tool, button: contact.button, records: records,
-            predicted: predicted, revision: store.cameraRevision, device: contact.tool == 0 ? pencilDevice(id: contact.id) : nil)
+            predicted: predicted, revision: store.cameraRevision, deviceFlags: contact.deviceFlags,
+            device: contact.tool == 0 ? pencilDevice(id: contact.id) : nil)
     }
     @objc func hovered(_ recognizer: UIHoverGestureRecognizer) {
         guard contacts.values.allSatisfy({ $0.tool != 0 }) else { return }

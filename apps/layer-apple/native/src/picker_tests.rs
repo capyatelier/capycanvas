@@ -11,7 +11,7 @@ fn picker_app(platform: u32) -> App {
 fn pointer(app: &App, id: u64, tool: u32, phase: f64, [x, y]: [f64; 2], time: f64) {
     let records = [x, y, 0.6, 0., 0., 0., 0., time, phase];
     let camera = unsafe { capy_apple_camera_revision(app.0) };
-    assert_eq!(unsafe { capy_apple_pointer(app.0, id, tool, 0, records.as_ptr(), records.len(), 0, camera) }, 0);
+    assert_eq!(unsafe { capy_apple_pointer(app.0, id, tool, 0, records.as_ptr(), records.len(), 0, camera, 0) }, 0);
 }
 
 fn picking(app: &App) -> bool {

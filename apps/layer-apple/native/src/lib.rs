@@ -751,6 +751,7 @@ pub unsafe extern "C" fn capy_apple_pointer(
     count: usize,
     predicted: u32,
     view_revision: u64,
+    device_flags: u32,
 ) -> i32 {
     unsafe {
         apple_pointer(
@@ -760,6 +761,7 @@ pub unsafe extern "C" fn capy_apple_pointer(
             count,
             std::ptr::null(),
             0,
+            device_flags,
         )
     }
 }
@@ -777,18 +779,17 @@ pub unsafe extern "C" fn capy_apple_pointer_updates(
     updates: *const u64,
     correction: u32,
     view_revision: u64,
+    device_flags: u32,
 ) -> i32 {
-    if updates.is_null() {
-        return -1;
-    }
     unsafe {
         apple_pointer(
             app,
             ApplePointerInput {id,tool,button,predicted:0,view_revision},
             records,
-            count,
+            if updates.is_null() {0} else {count},
             updates,
             correction,
+            device_flags,
         )
     }
 }
@@ -800,6 +801,7 @@ unsafe fn apple_pointer(
     count: usize,
     updates: *const u64,
     correction: u32,
+    device_flags: u32,
 ) -> i32 {
     let Some(mut lease_app)=handles::app(app) else {
         return -1;
@@ -807,27 +809,26 @@ unsafe fn apple_pointer(
     let app=&mut *lease_app;
     let ApplePointerInput {id,tool,button,predicted,view_revision}=input;
     app.perform(|a| {
-        if records.is_null()
+        if !a.host.accepts_pointer_input(view_revision) { return Ok(()); }
+        if tool > 3 { return Err("Invalid Apple pointer tool".into()); }
+        let invalid = records.is_null()
             || count == 0
             || !count.is_multiple_of(9)
             || count > 8192 * 9
-            || tool > 3
             || button > 2
             || predicted > 1
             || correction > 1
-        {
-            return Err("Invalid Apple pointer batch".into());
-        }
-        let records = unsafe { std::slice::from_raw_parts(records, count) };
-        if !records.iter().all(|v| v.is_finite())
-            || records
-                .as_chunks::<9>().0.iter()
-                .any(|r| r[7] < 0. || r[8] < 0. || r[8] > 4. || r[8].fract() != 0.)
-        {
-            return Err("Invalid Apple pointer sample".into());
-        }
-        if !a.host.accepts_pointer_input(view_revision) {
-            return Ok(());
+            || device_flags & !u32::from(layer_engine::SampleFlags::INDIRECT_POINTER.0 | layer_engine::SampleFlags::BARREL_TWIST.0) != 0;
+        let records = if invalid { &[][..] } else { unsafe { std::slice::from_raw_parts(records, count) } };
+        let updates = if updates.is_null() || records.is_empty() {
+            &[][..]
+        } else {
+            unsafe { std::slice::from_raw_parts(updates, records.len() / 9 * 2) }
+        };
+        let batch = PointerBatch { id, tool: tool as u8, button: button as u8, records,
+            predicted: predicted != 0, view_revision, device_flags: layer_engine::SampleFlags(device_flags as u16) };
+        if batch.validate(updates, correction != 0).is_err() {
+            return a.host.pointer_batch_updates(batch, updates, correction != 0);
         }
         if a.dismissed_contacts.contains(&id) {
             if correction == 0 && predicted == 0 && records.as_chunks::<9>().0.iter().any(|r| r[8] >= 3.) {
@@ -835,23 +836,12 @@ unsafe fn apple_pointer(
             }
             return Ok(());
         }
-        let updates = if updates.is_null() {
-            &[][..]
-        } else {
-            unsafe { std::slice::from_raw_parts(updates, count / 9 * 2) }
-        };
-        if updates
-            .as_chunks::<2>().0.iter()
-            .any(|u| u[1] > 1 || (u[1] != 0 && u[0] == 0) || (correction != 0 && u[0] == 0))
-        {
-            return Err("Invalid Apple input estimates".into());
-        }
-        if correction == 0 && predicted == 0 && records[8] == 1. {
+        if correction == 0 && let Some(position) = batch.contact_start() {
             let viewport = a.host.logical;
             let physical = a.host.session.state().camera.viewport;
             let position = [
-                records[0] as f32 * viewport[0] / physical[0].max(1) as f32,
-                records[1] as f32 * viewport[1] / physical[1].max(1) as f32,
+                position[0] * viewport[0] / physical[0].max(1) as f32,
+                position[1] * viewport[1] / physical[1].max(1) as f32,
             ];
             let reply = a.host.input(layer_ui::UiInput::Chrome {
                 event: layer_ui::ChromeEvent::Contact {
@@ -868,19 +858,7 @@ unsafe fn apple_pointer(
                 return Ok(());
             }
         }
-        a.host.pointer_batch_updates(
-            PointerBatch {
-                id,
-                tool: tool as u8,
-                button: button as u8,
-                records,
-                predicted: predicted != 0,
-                view_revision,
-                device_flags: layer_engine::SampleFlags::NONE,
-            },
-            updates,
-            correction != 0,
-        )
+        a.host.pointer_batch_updates(batch, updates, correction != 0)
     })
     .map_or(-1, |_| 0)
 }

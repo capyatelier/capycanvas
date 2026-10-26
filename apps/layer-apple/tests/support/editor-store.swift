@@ -11,6 +11,13 @@ func decodedExportPixels(_ url: URL) throws -> Data {
     return result
 }
 
+func navigationSave(_ value: JSON, to url: URL) async throws {
+    try await Task.detached(priority: .utility) {
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(value.encoded().utf8).write(to: url, options: .atomic)
+    }.value
+}
+
 func storedTestFiles(_ root: URL) throws -> [String: Data] {
     var result: [String: Data] = [:]
     func visit(_ directory: URL) throws {

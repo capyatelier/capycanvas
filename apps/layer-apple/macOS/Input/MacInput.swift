@@ -1,4 +1,5 @@
 import AppKit
+import IOKit.hidsystem
 import QuartzCore
 
 @MainActor final class MacInput {
@@ -9,6 +10,7 @@ import QuartzCore
         let device: Int?
         let source: String?
         let tool: UInt32
+        let deviceFlags: UInt32
         let button: UInt32
         let nativeButton: Int
         var last: [Double]
@@ -16,7 +18,7 @@ import QuartzCore
     }
     private var contact: Contact?
     private var nextContact: UInt64 = 0
-    private var tools: [Int: UInt32] = [:]
+    private var tools: [Int: (tool: UInt32, flags: UInt32)] = [:]
     private var sources: [Int: String] = [:]
     private var sensorDevice: Int?
     private var modifiers: NSEvent.ModifierFlags = []
@@ -43,7 +45,7 @@ import QuartzCore
     }
     private func send(_ value: Contact, _ record: [Double]) {
         store.native?.pointer(id: value.id, tool: value.tool, button: value.button,
-            records: record, predicted: false, revision: store.cameraRevision,
+            records: record, predicted: false, revision: store.cameraRevision, deviceFlags: value.deviceFlags,
             device: value.source.map { NativePenDevice(id: value.id, key: $0) })
         view?.wake()
     }
@@ -95,9 +97,10 @@ import QuartzCore
             view?.window?.makeFirstResponder(view)
             nextContact &+= 1
             let device = tablet(event) ? event.deviceID : nil
-            let tool = device.map { tools[$0] ?? 0 } ?? 1
+            let tool = device.map { tools[$0]?.tool ?? 0 } ?? 1
             let button: UInt32 = event.buttonNumber == 0 ? 0 : event.buttonNumber <= 2 ? 1 : 2
-            let value = Contact(id: nextContact, device: device, source: device.map { sources[$0] ?? "appkit:pen" }, tool: tool, button: button,
+            let value = Contact(id: nextContact, device: device, source: device.map { sources[$0] ?? "appkit:pen" }, tool: tool,
+                deviceFlags: device.flatMap { tools[$0]?.flags } ?? 0, button: button,
                 nativeButton: event.buttonNumber, last: pack(event, phase: phase))
             contact = value; send(value, value.last)
         } else if var value = contact, value.nativeButton == event.buttonNumber {
@@ -126,7 +129,7 @@ import QuartzCore
             store.workspace.dismissTransients(at: nil)
             nextContact &+= 1
             let value = Contact(id: nextContact, device: event.deviceID, source: penDevice(event, id: nextContact).key,
-                tool: tools[event.deviceID] ?? 0, button: 0, nativeButton: 0,
+                tool: tools[event.deviceID]?.tool ?? 0, deviceFlags: tools[event.deviceID]?.flags ?? 0, button: 0, nativeButton: 0,
                 last: pack(event, phase: 1), chorded: chorded)
             contact = value; send(value, value.last)
         } else { hover(event) }
@@ -135,7 +138,8 @@ import QuartzCore
         if event.isEnteringProximity {
             sources[event.deviceID] = NativePenDevice.appKitKey(vendor: UInt64(event.vendorID), unique: event.uniqueID,
                 serial: UInt64(truncatingIfNeeded: event.pointingDeviceSerialNumber))
-            tools[event.deviceID] = event.pointingDeviceType == .eraser ? 2 : event.pointingDeviceType == .cursor ? 1 : 0
+            tools[event.deviceID] = (event.pointingDeviceType == .eraser ? 2 : event.pointingDeviceType == .cursor ? 1 : 0,
+                event.capabilityMask & Int(NX_TABLET_CAPABILITY_ROTATIONMASK) != 0 ? UInt32(CAPY_APPLE_BARREL_TWIST) : 0)
         } else {
             if contact?.device == event.deviceID { finishAtLastSample(timestamp: event.timestamp) }
             tools.removeValue(forKey: event.deviceID)
@@ -160,9 +164,11 @@ import QuartzCore
             leaveCanvasCursor(); clearHover(); return
         }
         canvasCursor = true; applyCursor()
-        let tool: UInt32 = tablet(event) ? tools[event.deviceID] ?? 0 : 1
+        let tool: UInt32 = tablet(event) ? tools[event.deviceID]?.tool ?? 0 : 1
         store.native?.pointer(id: 0, tool: tool, button: 0, records: pack(event, phase: 0),
-            predicted: false, revision: store.cameraRevision, device: tablet(event) ? penDevice(event, id: 0) : nil)
+            predicted: false, revision: store.cameraRevision,
+            deviceFlags: tablet(event) ? tools[event.deviceID]?.flags ?? 0 : 0,
+            device: tablet(event) ? penDevice(event, id: 0) : nil)
         view.wake()
     }
     private func finishAtLastSample(timestamp: TimeInterval) {

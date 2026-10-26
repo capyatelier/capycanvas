@@ -10,6 +10,7 @@ struct EstimatedInput {
         let token: UInt64
         let revision: UInt64
         let scale: CGFloat
+        let deviceFlags: UInt32
         var record: [Double]
         var expected: UInt64
         var metadata: [UInt64] { [token, expected == 0 ? 0 : 1] }
@@ -21,7 +22,7 @@ struct EstimatedInput {
     init(capacity: Int = 4096) { self.capacity = max(1, capacity) }
 
     mutating func capture(key: UInt64?, contact: UInt64, revision: UInt64, scale: CGFloat,
-                          record: [Double], expected: UInt64) -> (metadata: [UInt64], released: Sample?) {
+                          record: [Double], expected: UInt64, deviceFlags: UInt32 = 0) -> (metadata: [UInt64], released: Sample?) {
         guard let key else { return ([0, 0], nil) }
         if pending[key]?.contact == contact, let update = correct(key: key, record: record, expected: expected) {
             return (update.expected == 0 ? [0, 0] : update.metadata, update)
@@ -38,7 +39,7 @@ struct EstimatedInput {
         nextToken &+= 1
         precondition(nextToken != 0, "Input token space exhausted")
         let sample = Sample(contact: contact, token: nextToken, revision: revision,
-                            scale: scale, record: record, expected: expected)
+                            scale: scale, deviceFlags: deviceFlags, record: record, expected: expected)
         pending[key] = sample
         return (sample.metadata, released)
     }

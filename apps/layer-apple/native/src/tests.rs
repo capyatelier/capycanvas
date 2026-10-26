@@ -146,7 +146,7 @@ mod fixtures {
         }).collect();
         assert_eq!(
             unsafe {
-                capy_apple_pointer(app.0, id, device, 0, records.as_ptr(), records.len(), 0, capy_apple_camera_revision(app.0))
+                capy_apple_pointer(app.0, id, device, 0, records.as_ptr(), records.len(), 0, capy_apple_camera_revision(app.0), 0)
             },
             0
         );
@@ -1399,6 +1399,7 @@ impl App {
                     records.len(),
                     0,
                     revision,
+                    0,
                 )
             },
             0

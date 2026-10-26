@@ -71,6 +71,7 @@ fn contact(app: &App, id: u64, device: u32, phases: &[f64]) {
                 records.len(),
                 0,
                 capy_apple_camera_revision(app.0),
+                0,
             )
         },
         0
