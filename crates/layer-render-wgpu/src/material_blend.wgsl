@@ -317,23 +317,20 @@ fn painterly_field(contact: BlendContact, world: vec2<f32>) -> vec4<f32> {
     var lowest = 0.0;
     for (var sector = 0u; sector < 8u; sector += 1u) {
         let heading = f32(sector) * 0.7853982 + rotation;
-        var first = vec4<f32>(0.0);
-        var shift = vec4<f32>(0.0);
+        var mean = vec4<f32>(0.0);
         var square = 0.0;
         for (var tap = 0u; tap < 3u; tap += 1u) {
             let angle = heading + (f32(tap) - 1.0) * 0.3;
             let distance = select(0.45, 0.9, tap == 1u);
             let sample = blend_tap(contact.trace + (u * cos(angle) + v * sin(angle)) * distance);
-            if tap == 0u { first = sample; }
-            let deviation = sample - first;
-            shift += deviation;
-            square += dot(deviation, deviation);
+            mean += sample;
+            square += dot(sample, sample);
         }
-        shift /= 3.0;
-        let variance = (max(square / 3.0 - dot(shift, shift), 0.0) + 0.00002) * (1.0 - 0.5 * cos(heading));
+        mean /= 3.0;
+        let variance = (max(square / 3.0 - dot(mean, mean), 0.0) + 0.00002) * (1.0 - 0.5 * cos(heading));
         if sector == 0u || variance < lowest {
             lowest = variance;
-            best = first + shift;
+            best = mean;
         }
     }
     return best;
