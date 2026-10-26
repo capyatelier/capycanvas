@@ -14,27 +14,7 @@ extension XCTestCase {
     @MainActor func checkCanvasActionBar(in app: XCUIApplication, theme: String = "light") {
         app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"\#(theme)"},{"type":"set_color","rgba":[0.2,0.45,0.8,1]}]"#
         app.launch(); capturePaintEditor(in: app, theme: theme)
-        editorMenu(in: app, menu: "File", id: "new_document", label: "New…")
-        XCTAssertTrue(app.buttons["new-drawing-create"].waitForExistence(timeout: 60))
-        workspaceActivate(app.buttons["new-drawing-texture"])
-        let usePaper = app.buttons["new-drawing-paper-use"]
-        XCTAssertTrue(usePaper.waitForExistence(timeout: 10))
-        enterNewDrawingNumber("paper-relief", "0", in: app)
-        workspaceActivate(usePaper)
-        XCTAssertTrue(usePaper.waitForNonExistence(timeout: 10))
-        workspaceActivate(app.buttons["new-drawing-paper-color"])
-        let useColor = app.buttons["new-drawing-color-use"]
-        XCTAssertTrue(useColor.waitForExistence(timeout: 10))
-        let white = app.buttons["new-drawing-paper-color-0"]
-        XCTAssertEqual(white.label, "White")
-        workspaceActivate(white)
-        workspaceActivate(useColor)
-        XCTAssertTrue(useColor.waitForNonExistence(timeout: 10))
-        createNewDrawing(width: "1440", height: "1080", depth: 0, in: app)
-        expectation(for: NSPredicate { _, _ in
-            self.editorPixels(in: app).enumerated().allSatisfy { $0.offset % 4 == 3 || $0.element > 250 }
-        }, evaluatedWith: app)
-        waitForExpectations(timeout: 15)
+        createWhitePaperDrawing(width: "1440", height: "1080", in: app)
 
         let window = workspaceViewport(in: app)
         let bar = app.descendants(matching: .any)["canvas-action-bar"].firstMatch

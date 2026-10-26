@@ -44,6 +44,31 @@ extension XCTestCase {
         XCTAssertTrue(create.waitForNonExistence(timeout: 60))
     }
 
+    @MainActor func createWhitePaperDrawing(width: String = "2400", height: String = "1800", in app: XCUIApplication) {
+        editorMenu(in: app, menu: "File", id: "new_document", label: "New…")
+        XCTAssertTrue(app.buttons["new-drawing-create"].waitForExistence(timeout: 60))
+        workspaceActivate(app.buttons["new-drawing-texture"])
+        enterNewDrawingNumber("paper-relief", "0", in: app)
+        let usePaper = app.buttons["new-drawing-paper-use"]
+        workspaceActivate(usePaper)
+        XCTAssertTrue(usePaper.waitForNonExistence(timeout: 10))
+        workspaceActivate(app.buttons["new-drawing-paper-color"])
+        let white = app.buttons["new-drawing-paper-color-0"]
+        XCTAssertEqual(white.label, "White")
+        workspaceActivate(white)
+        let useColor = app.buttons["new-drawing-color-use"]
+        workspaceActivate(useColor)
+        XCTAssertTrue(useColor.waitForNonExistence(timeout: 10))
+        createNewDrawing(width: width, height: height, depth: 0, in: app)
+        let canvas = app.descendants(matching: .any)["canvas"].firstMatch
+        expectation(for: NSPredicate(format: "value == %@", "Canvas ready"), evaluatedWith: canvas)
+        waitForExpectations(timeout: 30)
+        expectation(for: NSPredicate { _, _ in
+            self.editorPixels(in: app).enumerated().allSatisfy { $0.offset % 4 == 3 || $0.element >= 253 }
+        }, evaluatedWith: app)
+        waitForExpectations(timeout: 15)
+    }
+
     #if os(iOS)
     @MainActor func selectedNewDrawingDocument(in app: XCUIApplication, expectedTitle: String? = nil) -> (id: String, label: String, value: String?) {
         editorMenu(in: app, menu: "Window", id: "drawings", label: "Drawings…")
