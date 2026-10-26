@@ -130,6 +130,8 @@ function Same-Curve($Left,$Right){
 function Maximize-DrawingWindow{
     [CapyWindowApi]::ShowWindow($drawingWindow,3)|Out-Null
     Wait-Until {$root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).Current.WindowVisualState -eq [System.Windows.Automation.WindowVisualState]::Maximized} 'The owned drawing did not maximize'
+    $drawing=Owned-DrawingWindow $review $drawingWindow.ToInt64()
+    $script:root=$drawing.Root
     Control 'drawing-canvas' -Arranged|Out-Null
     Wait-Until {
         $bounds=(Control 'drawing-canvas' -Arranged).Current.BoundingRectangle;$camera=(Model).state.camera
@@ -311,6 +313,26 @@ function Scroll-Pattern($Control,[switch]$Focus){
         $focusTarget.SetFocus();Wait-Until {$focusTarget.Current.HasKeyboardFocus} 'Native scroll container did not receive keyboard focus'
     }
     $pattern
+}
+function Reveal([string]$Id){
+ $item=Control $Id
+ $walker=[System.Windows.Automation.TreeWalker]::ControlViewWalker;$node=$walker.GetParent($item);$scroll=$null;$viewport=$null
+ while($node -and !$scroll){
+  $pattern=$null
+  if($node.TryGetCurrentPattern([System.Windows.Automation.ScrollPattern]::Pattern,[ref]$pattern) -and $pattern.Current.VerticallyScrollable){$scroll=$pattern;$viewport=$node}
+  $node=$walker.GetParent($node)
+ }
+ for($step=0;$step -lt 40;$step++){
+  $item=Control $Id;$bounds=$item.Current.BoundingRectangle
+  $clip=if($viewport){$viewport.Current.BoundingRectangle}else{$root.Current.BoundingRectangle};$clip.Inflate(1,1)
+  if(!$item.Current.IsOffscreen -and !$bounds.IsEmpty -and $clip.Contains($bounds)){return (Control $Id -Arranged)}
+  if(!$scroll){throw "$Id is clipped outside any scroll container"}
+  $before=$scroll.Current.VerticalScrollPercent
+  $amount=if(!$bounds.IsEmpty -and $bounds.Bottom -le $clip.Top){[System.Windows.Automation.ScrollAmount]::SmallDecrement}else{[System.Windows.Automation.ScrollAmount]::SmallIncrement}
+  $scroll.Scroll([System.Windows.Automation.ScrollAmount]::NoAmount,$amount)
+  Wait-Until {[Math]::Abs($scroll.Current.VerticalScrollPercent-$before) -gt .01} "$Id did not scroll into view"
+ }
+ throw "$Id stayed clipped in its scroll container"
 }
 function Focus-Keyboard($Element,[switch]$Backward){
     $Element.SetFocus()

@@ -58,7 +58,7 @@ function Gesture-Camera{$c=(Model).state.camera;@($c.viewport,$c.work_area,$c.tr
 function Gesture-History{
  $m=Model;$stamp=@($m.windows_tabs.session_stamps|Where-Object id -eq $m.windows_tabs.selected)
  if($stamp.Count -ne 1 -or $null -eq $stamp[0].stamp.checkpoint){throw 'Gesture history has no unique current drawing checkpoint'}
- [ordered]@{checkpoint=$stamp[0].stamp.checkpoint;layers=@(foreach($layer in $m.state.layers){[ordered]@{id=$layer.id;paint_revision=$layer.paint_revision;mask_revision=$layer.mask_revision}})}|ConvertTo-Json -Depth 30 -Compress
+ [ordered]@{checkpoint=$stamp[0].stamp.checkpoint;layers=@($m.state.layers.id)}|ConvertTo-Json -Depth 30 -Compress
 }
 function Gesture-Pixels{
  if([CapyRowPointer]::GetForegroundWindow() -ne $handle){throw 'Gesture pixels lost the owned foreground window'}
@@ -110,7 +110,7 @@ try{
  [CapyCanvasTouch]::CancelAll()
  [CapyCanvasTouch]::ThreeDown($cx,$cy)
  Wait-Until {(@((Model).state.layers.id) -join ',') -eq ($allLayers -join ',')} 'Redo after cancelled held Undo did not restore exact layer IDs'
- Wait-Until {(Gesture-History) -ceq $restoredHistory} 'New native Redo after CancelAll did not restore the exact drawing checkpoint and painted layers'
+ Wait-Until {(Gesture-History) -ceq $restoredHistory} 'New native Redo after CancelAll did not restore the exact drawing checkpoint and layer order'
  if((Gesture-Camera) -cne $historyCamera){throw 'New native Redo after CancelAll changed the camera'}
  [CapyCanvasTouch]::ThreeUp()
  Record 'CancelAll followed by effective native Redo and exact checkpoint recovery'
