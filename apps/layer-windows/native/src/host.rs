@@ -668,6 +668,9 @@ pub unsafe extern "C" fn capy_needs_frame(host: u64) -> i32 {
 pub unsafe extern "C" fn capy_poll_services(host: u64) -> i32 {
     guard(host, |host| {
         host.poll_services()?;
+        if let Some(presenter)=host.presenter.as_mut() {
+            host.native.poll_canvas_presentation(presenter)?;
+        }
         Ok(i32::from(host.native.dirty))
     })
 }

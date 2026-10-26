@@ -256,15 +256,22 @@ function Wait-PresentedFrame{
     if(!$review){return}
     $path=State-File;if(!$path){return}
     $folder=Split-Path -Parent $path;$leaf=Split-Path -Leaf $path
-    $frame=(@(foreach($kind in @('ui-state','camera-state')){
+    $states=@(foreach($kind in @('ui-state','camera-state')){
         $file=Join-Path $folder ($leaf -replace '^ui-state-',"$kind-")
-        if([IO.File]::Exists($file)){$state=Read-Snapshot $file;if($state.process_id -eq $review.Id){$state.presented}}
-    })|Measure-Object -Maximum).Maximum
+        if([IO.File]::Exists($file)){$state=Read-Snapshot $file;if($state.process_id -eq $review.Id){$state}}
+    })
+    $frame=($states|ForEach-Object {$_.presented}|Measure-Object -Maximum).Maximum
+    $epoch=($states|ForEach-Object {$_.presentation_epoch}|Measure-Object -Maximum).Maximum
     if($null -eq $frame){return}
     $presentation=Join-Path $folder ($leaf -replace '^ui-state-','presentation-state-')
     Wait-Until {
         $display=if([IO.File]::Exists($presentation)){Read-Snapshot $presentation}
-        $display.process_id -eq $review.Id -and ($null -eq $display.displayed -or $display.displayed -ge $frame)
+        if($display.process_id -ne $review.Id){return $false}
+        if($null -ne $epoch){
+            return $null -ne $display.presentation_epoch -and $display.presentation_epoch -ge $epoch -and
+                $null -ne $display.required -and ($null -eq $display.displayed -or $display.displayed -ge $display.required)
+        }
+        $null -eq $display.displayed -or $display.displayed -ge $frame
     } 'The display did not show the latest canvas frame'
 }
 function Wait-StablePixels([scriptblock]$CapturePixels){

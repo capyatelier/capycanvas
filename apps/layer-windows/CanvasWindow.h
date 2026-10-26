@@ -48,7 +48,7 @@ public:
     ~CanvasWindow();
 private:
     CanvasLatencyTrace latencyTrace{GetEnvironmentVariableW(L"CAPY_LATENCY_TRACE",nullptr,0)!=0};
-    struct PresentationTrace {bool const enabled;uint64_t presented=0,required=0;std::string displayed="null",published;};
+    struct PresentationTrace {bool const enabled;uint64_t presented=0,required=0,epoch=0;std::string displayed="null";};
     PresentationTrace presentationTrace{GetEnvironmentVariableW(L"CAPY_TRACE_UI",nullptr,0)!=0};
     void TracePresentation(bool frame,bool dirty);
     std::vector<std::wstring> launchFiles;

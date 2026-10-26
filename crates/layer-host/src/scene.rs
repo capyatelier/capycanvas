@@ -280,6 +280,20 @@ pub struct SceneDisplay {
 }
 
 impl NativeHost {
+    pub fn poll_canvas_presentation(&mut self, presenter: &mut ViewportPresenter) -> Result<(), String> {
+        if self.session.rendering_suspended() { return Ok(()); }
+        let Some(renderer)=self.session.renderer_mut().0.as_mut() else { return Ok(()); };
+        renderer.poll_startup().map_err(|e|e.to_string())?;
+        presenter.prepare_paper_lighting(renderer);
+        let progress=renderer.poll_startup().map_err(|e|e.to_string())?;
+        self.dirty|=presenter.prepare_paper_lighting(renderer)!=presenter.paper_lighting_drawn();
+        if self.startup!=progress {
+            self.startup=progress;
+            self.invalidate_snapshot();
+        }
+        Ok(())
+    }
+
     pub fn set_glass(&mut self, glass: &mut Glass, layout: GlassLayout) -> Result<(), String> {
         if glass.set(layout)? {
             self.dirty = true;

@@ -110,7 +110,7 @@ CanvasWindow::CanvasWindow(std::function<void()> create,std::function<void(uint6
      createWindow(std::move(create)),testDeviceLoss(std::move(deviceLoss)),onClosed(std::move(close)),workspacePreferencesChanged(std::move(preferencesChanged)) {
     // HWND/WindowId can be reused after an earlier window closes. Invalidate
     // its old diagnostic model before publishing the new live-window manifest.
-    if(GetEnvironmentVariableW(L"CAPY_TRACE_UI",nullptr,0))TraceState("ui-state","{}");
+    if(GetEnvironmentVariableW(L"CAPY_TRACE_UI",nullptr,0))for(auto kind:{"ui-state","camera-state","presentation-state"})TraceState(kind,"{}");
 }
 namespace {
 LRESULT CALLBACK AltKeyMenuFilter(HWND window,UINT message,WPARAM wparam,LPARAM lparam,UINT_PTR id,DWORD_PTR){
@@ -141,9 +141,11 @@ void CanvasWindow::TracePresentation(bool frame,bool dirty) {
     bool presented=stats[0]!=trace.presented;
     trace.presented=stats[0];
     trace.required=stats[0]+(dirty&&!(frame&&presented)?1:0);
-    if(frame||trace.published==trace.displayed)return;
-    trace.published=trace.displayed;
-    TraceState("presentation-state","{\"process_id\":"+std::to_string(GetCurrentProcessId())+",\"window_id\":"+std::to_string(windowId)+",\"displayed\":"+trace.displayed+"}");
+    ++trace.epoch;
+    if(frame)return;
+    auto value="{\"process_id\":"+std::to_string(GetCurrentProcessId())+",\"window_id\":"+std::to_string(windowId)+
+        ",\"presentation_epoch\":"+std::to_string(trace.epoch)+",\"required\":"+std::to_string(trace.required)+",\"displayed\":"+trace.displayed+"}";
+    TraceState("presentation-state",value);
 }
 std::string CanvasWindow::SystemTheme(){
     using winrt::Windows::UI::ViewManagement::UIColorType;
@@ -1442,7 +1444,8 @@ void CanvasWindow::Publish(std::string snapshot,CapySnapshotInfo const& info) {
     if(GetEnvironmentVariableW(L"CAPY_TRACE_UI",nullptr,0)){
         auto model=Windows::Data::Json::JsonObject::Parse(to_hstring(snapshot));
         auto identity="{\"process_id\":"+std::to_string(GetCurrentProcessId())+
-            ",\"window_id\":"+std::to_string(windowId)+",\"presented\":"+std::to_string(presentationTrace.required);
+            ",\"window_id\":"+std::to_string(windowId)+",\"presented\":"+std::to_string(presentationTrace.required)+
+            ",\"presentation_epoch\":"+std::to_string(presentationTrace.epoch);
         if(full)tracedModel=model;
         else if(info.layout&&tracedModel.HasKey(L"state"))WorkspaceView::MergeLayout(tracedModel,model);
         bool glassChanged=info.glass.length&&CapyUi::object(tracedModel,L"windows_glass").Stringify()!=CapyUi::object(model,L"windows_glass").Stringify();

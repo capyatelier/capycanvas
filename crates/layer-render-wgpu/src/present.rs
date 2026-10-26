@@ -447,9 +447,8 @@ impl ViewportPresenter {
         Ok(())
     }
 
-    /// Whether the paper-lighting pipelines can draw this frame, starting
-    /// their compilation when first wanted. Until then the plain pipelines draw.
-    fn paper_ready(&mut self, renderer: &WgpuRasterizer) -> bool {
+    pub fn prepare_paper_lighting(&mut self, renderer: &WgpuRasterizer) -> bool {
+        if renderer.paper_shade().is_none() { return false; }
         let (device, format, color) = (&renderer.device, self.format, self.color);
         let layout = &self.pipeline_layout;
         let paper = self.paper_pipeline.get_or_insert_with(|| {
@@ -1009,7 +1008,7 @@ impl ViewportPresenter {
     ) -> Result<(), GpuRasterError> {
         let Some([composite,coarse,next]) = renderer.presentation_views() else { return Ok(()); };
         if renderer.display_backup.is_none() && let Some(cache) = &renderer.scale_display { cache.refresh_half(renderer, encoder, &mut self.uploads)?; }
-        let lit = renderer.paper_shade().is_some() && self.paper_ready(renderer);
+        let lit = self.prepare_paper_lighting(renderer);
         let navigator = renderer.navigator.view().unwrap_or(&renderer.empty_view);
         let motion = renderer.display_motion();
         let motion_views = motion.map_or([&renderer.empty_view; 2], |(views, ..)| views);

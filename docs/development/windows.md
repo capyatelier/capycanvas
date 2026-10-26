@@ -762,7 +762,8 @@ Run `pwsh -NoProfile -File ./apps/layer-windows/tests/model-snapshot-reader.ps1`
 to check the UI fixture model reader during concurrent atomic snapshot publication.
 This windowless test needs no GPU and writes its results under `artifacts/windows`.
 It validates 100 reads and zero writer failures during concurrent publication
-without a throughput target.
+without a throughput target, plus six presentation-barrier cases covering stale
+acknowledgements, unused reservations, displayed frames and process ownership.
 Reports retain read durations and exception details; the reader closes each file
 before parsing its JSON. Release checks run script regressions before compiling
 the native client and retain their failure reports.
@@ -999,6 +1000,13 @@ Use `-PresetIds <ids>` for selected preset journeys with the same pixel and
 history assertions. That selection omits the separate Liquify Adjust/Reset tail;
 the results list the presets actually checked. Allocate the outer desktop-runner
 timeout for the selected cases without changing their functional deadlines.
+
+The render worker's existing service poll advances optional paper lighting while
+the canvas is idle. A completed lighting transition requests one presentation;
+pending compilation does not keep frames running. The headless hardware test
+`layer-host::tests::idle_paper_lighting_wakes_one_presentation_without_input`
+checks the initial plain paper, the idle lighting transition, unchanged authored
+data and the return to a quiet canvas.
 
 `exercise-canvas-editing.ps1 -Executable <path> -Theme dark` checks raster selection
 and transform previews with mouse and pen. Selecting Pen accepts the nonzero
@@ -1556,9 +1564,11 @@ the focused header journeys also check placement cancellation and keyboard input
 - **Capture composed pixels.** GPU pixel assertions use the owned window's
   screen rectangle on the private desktop. `PrintWindow` can return an earlier
   SwapChainPanel image. Wait for the expected visible change before comparing
-  pixels. Traced snapshots name the swap-chain present that shows their state
-  (`presented`), and `presentation-state` records the latest present that DXGI
-  reports as displayed; `Wait-StablePixels` waits for that frame before sampling,
+  pixels. Traced snapshots identify their render-owner observation with
+  `presentation_epoch`. The `presentation-state` acknowledgement must cover that
+  observation and its resolved `required` present must be displayed before
+  `Wait-StablePixels` samples. Completed no-op frames retire unused reservations,
+  while DXGI supplies the actual displayed count. This barrier is needed
   because the desktop compositor can show canvas frames more than a second late.
   For restoration, compare with the original pixels; a fixed dark-panel
   threshold cannot verify the same journey in the light theme. Keep the sample
