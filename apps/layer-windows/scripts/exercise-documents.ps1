@@ -1,4 +1,4 @@
-﻿param([Parameter(Mandatory)][string]$Executable,[switch]$RecoverGpu,[switch]$FailGpu,[ValidateSet('full','new-drawing','color-workflows','color-workflows-light','native-writeback','native-writeback-light')][string]$Journey='full')
+﻿param([Parameter(Mandatory)][string]$Executable,[string]$DebuggerPath,[switch]$RecoverGpu,[switch]$FailGpu,[ValidateSet('full','new-drawing','color-workflows','color-workflows-light','native-writeback','native-writeback-light')][string]$Journey='full')
 if($RecoverGpu -and $FailGpu){throw "Choose successful recovery or exhausted recovery, not both"}
 if($Journey -ne 'full' -and ($RecoverGpu -or $FailGpu)){throw 'GPU recovery requires the full document journey'}
 $ErrorActionPreference='Stop'
@@ -77,6 +77,7 @@ Write-Output "Document review process $($review.Id)"
 function Bind-ReviewWindow([string]$Message) {
     Wait-Until {$script:drawing=Owned-DrawingWindow $review;$null-ne$script:drawing} $Message 30
     $script:root=$drawing.Root;$script:scope=$root
+    if($DebuggerPath){$script:debugger=Start-CapyDebugger $review $DebuggerPath $run $drawing}
 }
 function Request-Close([switch]$WithPreferences) {
     # Shared completion precedes native dialog teardown. RequestClose ignores

@@ -15,6 +15,11 @@ on:
         description: Reuse the runtime artifact from a run with the same source_ref
         required: false
         type: string
+      capture_crashes:
+        description: Attach CDB to selected fixtures that support console debugging
+        required: false
+        type: boolean
+        default: false
 permissions:
   contents: read
   actions: read
@@ -81,14 +86,21 @@ jobs:
           LAYER_TEST_SOFTWARE_GPU: "1"
           CAPY_WAIT_SCALE: "3"
           FIXTURE_NAME: ${{ matrix.fixture }}
+          CAPTURE_CRASHES: ${{ inputs.capture_crashes }}
         run: |
           $executable = (Resolve-Path artifacts/windows/SoftwareAdapter/CapyCanvas.exe).Path
           $runner = (Resolve-Path tools/windows-vm/run-fixtures.ps1).Path
           $desktop = (Resolve-Path apps/layer-windows/scripts/test-desktop.ps1).Path
           $failed = [Collections.Generic.List[string]]::new()
           $names = @($env:FIXTURE_NAME)
+          $debugger = $null
+          if ($env:CAPTURE_CRASHES -eq 'true') {
+            $debugger = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits/10/Debuggers/x64/cdb.exe'
+            if (!(Test-Path -LiteralPath $debugger)) { throw 'The hosted Windows SDK CDB debugger is missing.' }
+          }
           foreach ($name in $names) {
             if ($name -in @('idle-brush:default', 'idle-brush:light')) {
+              if ($debugger) { throw 'Idle performance fixtures cannot run with crash debugging.' }
               $scale = $env:CAPY_WAIT_SCALE
               try {
                 $env:CAPY_WAIT_SCALE = $null
@@ -105,7 +117,9 @@ jobs:
             }
             $output = Join-Path $env:GITHUB_WORKSPACE ('artifacts/windows/readiness/' + $name.Replace(':', '-'))
             try {
-              & $desktop -ConfigureVmDisplay -Script $runner -Parameters @{Executable=$executable; Output=$output; Name=$name} -TimeoutSeconds 1320
+              $parameters = @{Executable=$executable; Output=$output; Name=$name}
+              if ($debugger) { $parameters.DebuggerPath = $debugger }
+              & $desktop -ConfigureVmDisplay -Script $runner -Parameters $parameters -TimeoutSeconds 1320
               $plan = Get-Content (Join-Path $output 'plan.json') -Raw | ConvertFrom-Json
               $results = @(Get-Content (Join-Path $output 'results.jsonl') | ConvertFrom-Json)
               Write-Output "Expected: $($plan.runs -join ', ')"
@@ -151,4 +165,7 @@ jobs:
           path: |
             artifacts/windows/
             !artifacts/windows/SoftwareAdapter/**
+            !artifacts/windows/**/*.dmp
+            !artifacts/windows/**/*.pdb
+            !artifacts/windows/**/debugger-*/symbols/**
           if-no-files-found: warn

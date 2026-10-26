@@ -2,6 +2,7 @@ param(
     [Parameter(Mandatory)][string]$Executable,
     [Parameter(Mandatory)][string]$Output,
     [string]$Name,
+    [string]$DebuggerPath,
     [ValidateRange(1,1440)][int]$TimeoutMinutes = 20
 )
 $ErrorActionPreference = 'Stop'
@@ -14,10 +15,12 @@ $runnerStarted = Get-Date
 $Executable = (Resolve-Path -LiteralPath $Executable).Path
 $scripts = (Resolve-Path (Join-Path $PSScriptRoot '../../apps/layer-windows/scripts')).Path
 $runs = [ordered]@{ shortcuts = $null }
+$debuggable = @()
 foreach ($script in Get-ChildItem (Join-Path $scripts 'exercise-*.ps1')) {
     $fixture = $script.BaseName -replace '^exercise-'
     $parameters = [System.Management.Automation.Language.Parser]::ParseFile($script.FullName, [ref]$null, [ref]$null).ParamBlock.Parameters
     if ('Executable' -notin $parameters.Name.VariablePath.UserPath) { continue }
+    if ('DebuggerPath' -in $parameters.Name.VariablePath.UserPath) { $debuggable += $fixture }
     $runs[$fixture] = @()
     foreach ($parameter in $parameters) {
         $option = $parameter.Name.VariablePath.UserPath
@@ -130,7 +133,9 @@ foreach ($run in $runs.GetEnumerator()) {
     $env:CAPY_FIXTURE_CONTEXT = "$log-context.json"
     $started = Get-Date
     try {
+        if ($DebuggerPath -and $fixture -notin $debuggable) { throw "Fixture $fixture does not support console debugging." }
         $arguments = if ($null -eq $run.Value) { Start-Shortcuts } else { @('-File', (Join-Path $scripts "exercise-$fixture.ps1"), '-Executable', $Executable) + $run.Value }
+        if ($DebuggerPath) { $arguments += @('-DebuggerPath', ('"' + $DebuggerPath + '"')) }
         $process = Start-Process (Get-Process -Id $PID).Path -ArgumentList (@('-NoProfile', '-Sta') + $arguments) -NoNewWindow -PassThru -RedirectStandardOutput "$log.log" -RedirectStandardError "$log.err"
         $null = $process.Handle
         $finished = $process.WaitForExit($TimeoutMinutes * 60000)

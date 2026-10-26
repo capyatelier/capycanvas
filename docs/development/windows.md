@@ -1156,6 +1156,10 @@ input can reuse a completed run's runtime when `source_ref` matches that build.
 The manual workflow checks functional behavior; it does not qualify hardware
 rendering or performance targets. Idle-brush journeys retain their default
 readiness deadlines; other VM fixtures use the runner's normal wait scale.
+For a document crash, select a narrow `documents` journey and set
+`capture_crashes=true`. CDB attaches to each owned private-profile window and
+records first-chance and unhandled access-violation stacks. Uploaded evidence
+excludes memory dumps and downloaded symbols. Do not debug performance runs.
 Run `gh workflow run release-checks.yml -f windows-only=true -f source_ref=<commit-sha>`
 to run the existing x64 and ARM64 release build, test and Clippy jobs directly.
 
@@ -1611,8 +1615,9 @@ can snap there while the pointer is over the canvas. After release, require an
 idle native gesture, an ended shared drag and the panel in the committed floating
 layout before testing its controls.
 
-`exercise-workspace-pickup.ps1 -DebuggerPath <cdb.exe>` attaches CDB before input
-and saves an access-violation stack and dump in the run directory.
+`exercise-workspace-pickup.ps1` and `exercise-documents.ps1` accept
+`-DebuggerPath <cdb.exe>` to attach CDB before input and save access-violation
+stacks and a local dump in each process's run directory.
 
 Panel tab strips use `ScrollView` with horizontal content and reserve touch and
 pen input for workspace dragging. Wheel scrolling remains native. Run every

@@ -245,25 +245,8 @@ try {
     Wait-Until {$script:drawing=Owned-DrawingWindow $review;$null -ne $drawing -and (Model).brush_ready -and (Model).state.theme -eq $Theme -and (Model).windows_workspace.ready -and !(Model).windows_workspace.busy} 'Workspace review did not start' 45
     $root=$drawing.Root
     if($DebuggerPath){
-        $DebuggerPath=(Resolve-Path -LiteralPath $DebuggerPath).Path
-        $debugCommands=Join-Path $run 'debugger.txt'
-        $debugLog=Join-Path $run 'debugger.log'
-        $symbols=Join-Path $repo 'artifacts/windows/symbols'
-        [IO.Directory]::CreateDirectory($symbols)|Out-Null
-        @(
-            ('.symfix "'+$symbols+'"')
-            ('.sympath+ "'+$directory+'"')
-            '.symopt+ 0x10'
-            'sxe -c ".ecxr; kv 60; .dump /ma crash.dmp; q" av'
-            '.echo CAPY_DEBUGGER_READY'
-            'g'
-        )|Set-Content -LiteralPath $debugCommands
-        $debugger=Start-Process -FilePath $DebuggerPath -WorkingDirectory $run -WindowStyle Hidden -PassThru -ArgumentList @(
-            '-p',[string]$review.Id,'-G','-cf',('"'+$debugCommands+'"'),'-logo',('"'+$debugLog+'"')
-        ) -RedirectStandardOutput (Join-Path $run 'debugger-console.log') -RedirectStandardError (Join-Path $run 'debugger-stderr.log')
-        $null=$debugger.Handle
+        $debugger=Start-CapyDebugger $review $DebuggerPath $run $drawing
         @{process_id=$review.Id;debugger_id=$debugger.Id;run=$run;device=$Device}|ConvertTo-Json|Set-Content (Join-Path $repo 'artifacts/windows/workspace-pickup-review.json')
-        Wait-Until {(Test-Path -LiteralPath $debugLog) -and (Select-String -LiteralPath $debugLog -Pattern '^CAPY_DEBUGGER_READY' -Quiet)} 'Console debugger did not attach' 30
     }
     if(Find 'Test stroke' -Name){throw 'Workspace fixture requires the production editor'}
     $null=[CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4))

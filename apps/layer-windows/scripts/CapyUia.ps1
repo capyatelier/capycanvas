@@ -38,6 +38,44 @@ function Wait-Until([scriptblock]$Condition,[string]$Message,[int]$Seconds=$scri
     }while($watch.Elapsed.TotalSeconds -lt $Seconds*$(if($env:CAPY_WAIT_SCALE){[double]$env:CAPY_WAIT_SCALE}else{1}))
     throw $Message
 }
+function Start-CapyDebugger([Diagnostics.Process]$Process,[string]$DebuggerPath,[string]$Run,$Drawing){
+    $owner=[uint32]0
+    [CapyWindowApi]::GetWindowThreadProcessId($Drawing.Handle,[ref]$owner)|Out-Null
+    $profile=[IO.Path]::GetFullPath($env:CAPY_STORAGE_DIR)
+    $fixtureRoot=[IO.Path]::GetFullPath($Run).TrimEnd([IO.Path]::DirectorySeparatorChar)+[IO.Path]::DirectorySeparatorChar
+    $context=Get-Content -LiteralPath $env:CAPY_FIXTURE_CONTEXT -Raw|ConvertFrom-Json
+    $owned=@($context.windows|Where-Object {$_.process_id -eq $Process.Id -and $_.hwnd -eq $Drawing.Handle.ToInt64() -and $_.executable -eq $Process.Path})
+    if(!$env:CAPY_PRIVATE_DESKTOP -or !$profile.StartsWith($fixtureRoot,[StringComparison]::OrdinalIgnoreCase) -or $owned.Count -ne 1 -or $Process.HasExited -or
+        $Drawing.Handle -eq [IntPtr]::Zero -or $owner -ne $Process.Id -or $Drawing.Root.Current.ProcessId -ne $Process.Id){
+        throw 'Console debugger requires the owned drawing and private fixture profile'
+    }
+    $DebuggerPath=(Resolve-Path -LiteralPath $DebuggerPath).Path
+    $debugRun=Join-Path $Run ('debugger-'+$Process.Id)
+    $symbols=Join-Path $debugRun 'symbols'
+    [IO.Directory]::CreateDirectory($symbols)|Out-Null
+    $debugCommands=Join-Path $debugRun 'commands.txt'
+    $debugLog=Join-Path $debugRun 'debugger.log'
+    @(
+        ('.symfix "'+$symbols+'"')
+        ('.sympath+ "'+(Split-Path -Parent $Process.Path)+'"')
+        '.symopt+ 0x10'
+        'sxe -c ".echo FIRST_CHANCE_AV; .exr -1; kv 60; gn" -c2 ".echo SECOND_CHANCE_AV; .exr -1; .ecxr; kv 60; ~*kv; lmv; .dump /m crash.dmp; q" av'
+        'sxe -c ".lastevent; q" epr'
+        '.echo CAPY_DEBUGGER_READY'
+        'g'
+    )|Set-Content -LiteralPath $debugCommands
+    $debugger=Start-Process -FilePath $DebuggerPath -WorkingDirectory $debugRun -WindowStyle Hidden -PassThru -ArgumentList @(
+        '-p',[string]$Process.Id,'-G','-cf',('"'+$debugCommands+'"'),'-logo',('"'+$debugLog+'"')
+    ) -RedirectStandardOutput (Join-Path $debugRun 'console.log') -RedirectStandardError (Join-Path $debugRun 'stderr.log')
+    $null=$debugger.Handle
+    try{
+        Wait-Until {(Test-Path -LiteralPath $debugLog) -and (Select-String -LiteralPath $debugLog -Pattern '^CAPY_DEBUGGER_READY' -Quiet)} 'Console debugger did not attach' 30
+    }catch{
+        if(!$debugger.HasExited){$debugger.Kill();$null=$debugger.WaitForExit(5000)}
+        throw
+    }
+    $debugger
+}
 function Update-CapyFixtureContext([scriptblock]$Update){
     if(!$env:CAPY_FIXTURE_CONTEXT){return}
     $context=@{}
