@@ -157,7 +157,7 @@ impl PaperTask {
         Self { capture: session.capture_library_import(), directory, localization: session.localization().clone() }
     }
     pub fn imports(&self) -> bool { matches!(self.capture.action, Some(PaperRequest::Import { .. })) }
-    pub fn work(&self, file: Option<(impl std::io::Read + std::io::Seek, &str)>, cancelled: &std::sync::atomic::AtomicBool) -> Result<PaperResult, String> {
+    pub fn work(&self, file: Option<(impl std::io::Read + std::io::Seek, &str)>, cancelled: &std::sync::atomic::AtomicBool, decode: crate::photo_reader::Decoder) -> Result<PaperResult, String> {
         let failed = |error: PaperLibraryError| error.message(&self.localization);
         let stopped = || cancelled.load(std::sync::atomic::Ordering::Relaxed);
         if stopped() { return Ok(PaperResult::Entries(list(&self.directory)?)); }
@@ -168,7 +168,7 @@ impl PaperTask {
             Some(PaperRequest::Import { layer }) => {
                 let (file, name) = file.ok_or_else(|| failed(PaperLibraryError::Unsupported))?;
                 let mut images = layer_ui::ImageImportBatch::new(Default::default(), layer_core::color::RgbSpace::ProPhoto, Default::default());
-                images.read(layer_core::Cancellable { inner: file, cancelled: stopped }, name, cancelled).map_err(|e| e.to_string())?;
+                images.read_with_decoder(layer_core::Cancellable { inner: file, cancelled: stopped }, name, cancelled, |mut input, limits, cancelled| decode(&mut input, limits, cancelled)).map_err(|e| e.to_string())?;
                 let (_, source) = images.take_sources(false)?.into_iter().next().ok_or_else(|| failed(PaperLibraryError::Unsupported))?;
                 let (id, image, entries) = import(&self.directory, &source, name, &stopped).map_err(failed)?;
                 PaperResult::Imported(*layer, id.clone(), canonical_source(&id, image, retained)?, entries)
@@ -213,7 +213,7 @@ mod tests {
         let run = |host: &mut crate::NativeHost, request: Option<u32>, file: Option<&std::fs::File>| {
             let task = PaperTask::capture(&host.session, request, directory.clone()).unwrap();
             assert_eq!(task.imports(), file.is_some());
-            let result = task.work(file.map(|file| (file, "Scan")), &std::sync::atomic::AtomicBool::new(false));
+            let result = task.work(file.map(|file| (file, "Scan")), &std::sync::atomic::AtomicBool::new(false), crate::photo_reader::local);
             task.apply(host, result, false).unwrap();
             assert_eq!(pending(host), None);
         };

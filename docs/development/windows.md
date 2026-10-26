@@ -107,7 +107,10 @@ the [control reviews](#control-reviews) and the [VM fixture build](windows-vm.md
 only packaging uses it.
 
 Always rebuild with `build.ps1` after Rust or shared changes. MSBuild alone copies
-whatever Rust DLL already exists, so you would test stale code. Close the test
+whatever Rust DLL and `capy-photo-reader.exe` already exist, so you would test
+stale code. Photo import fails without the helper beside `CapyCanvas.exe`;
+`photo_reader::tests` decodes through it and checks that its AppContainer cannot
+read a file in the user's temp folder. Close the test
 apps you started before rebuilding. Close every window of the current app before
 switching configurations; a new launch otherwise activates the running build.
 

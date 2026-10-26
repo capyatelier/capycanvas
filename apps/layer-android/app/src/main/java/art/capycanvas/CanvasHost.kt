@@ -420,6 +420,7 @@ class CanvasHost @JvmOverloads constructor(application: Application, screen: JSO
     private val suppressedContacts = mutableSetOf<Long>()
 
     init {
+        PhotoReader.context = application
         worker.post {
             attempt {
                 val workspaces = storage.workspaces.absolutePath

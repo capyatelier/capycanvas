@@ -150,6 +150,11 @@ guarantees.
 
 ## Storage
 
+External photos decode in `PhotoReaderService`, an isolated process with no
+storage, network or permissions. `PhotoReader` binds it from the import worker
+thread and passes descriptors for an input copy, the output package and
+diagnostics; a disconnected or failed service fails the import.
+
 Prepared drawing-close jobs remain allocated until
 `documentReleasePreparedClose`. Commit validates the shared close fence before
 taking the payload; release cancels a remaining payload or frees an already

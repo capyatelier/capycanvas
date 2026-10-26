@@ -69,8 +69,9 @@ impl OpenEnvironment {
         intent: layer_ui::ImportIntent,
         name: &str,
         cancel: &AtomicBool,
+        decode: crate::photo_reader::Decoder,
     ) -> Result<layer_ui::ImportOutcome, String> {
-        layer_ui::read_import(
+        layer_ui::read_import_with_decoder(
             input,
             intent,
             self.photo_policy,
@@ -78,6 +79,7 @@ impl OpenEnvironment {
             self.limits(),
             Default::default(),
             cancel,
+            |mut input, limits, cancelled| decode(&mut input, limits, cancelled),
         )
     }
 

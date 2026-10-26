@@ -56,6 +56,8 @@ mod input;
 mod palette_files;
 #[cfg(any(target_os = "windows", test))]
 mod paper_files;
+#[cfg(any(target_os = "windows", test))]
+mod photo_reader;
 #[cfg(target_os = "windows")]
 pub use host::*;
 

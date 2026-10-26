@@ -22,7 +22,7 @@ impl CapyPaperTask {
     }
     fn work(&self, fd: i32, name: &str) -> Result<PaperResult, String> {
         let file = (fd >= 0).then(|| ManuallyDrop::new(unsafe { File::from_raw_fd(fd) }));
-        self.task.work(file.as_deref().map(|file| (file, name)), &self.cancelled)
+        self.task.work(file.as_deref().map(|file| (file, name)), &self.cancelled, layer_host::photo_reader::local)
     }
     fn apply(&self, app: &mut CapyApple) -> Result<(), String> {
         let result = self.result.lock().unwrap_or_else(|e| e.into_inner()).take()

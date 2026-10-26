@@ -185,22 +185,27 @@ cost and input-to-display latency on the target device.
 
 Shared document compression and photo codecs use Rust implementations, including
 the explicitly selected Rust deflate backend. ICC transforms use Rust too.
-Linux external photo imports run in a one-shot `capy-photo-reader` process.
-Open, Place, Paste and paper import use the same shared import policy with that
-transport. The helper receives a read-only anonymous input file, bounded output
-and diagnostic handles, no inherited environment or other file descriptors.
-It requests termination if its parent dies and checks the startup parent race.
-Before decoding it installs an architecture-checked seccomp syscall allowlist
-that excludes every call that opens a path. Missing confinement fails the import
-without an unconfined retry. It cannot open files, connect to the network, create processes,
-execute programs, access a display or use the GPU.
-The child bounds additional virtual memory to its source and codec limits, and
-bounds CPU time and diagnostic output;
-the parent bounds the child/output phase to 120 seconds, kills and reaps
-canceled children, and spools bounded output. It validates the returned package through the existing
-foreign-package reader, extracts only the photo samples and metadata, and applies
-shared photo policy again. App-owned stores, generated caches and bundled assets
-keep their local readers. Other native hosts retain their local photo decoder.
+External photos opened, placed, pasted or imported as paper are decoded outside
+the app process on Linux, Windows and Android. `layer_host::photo_reader` copies
+the input to an anonymous file, hands the confined decoder that file plus output
+and diagnostic files, and accepts only a package the existing foreign-package
+reader validates; it extracts the photo samples and metadata and applies shared
+photo policy again. Each host only starts and confines the decoder:
+
+- Linux runs `capy-photo-reader` with no environment or other descriptors. It
+  requests termination if its parent dies, then installs an architecture-checked
+  seccomp allowlist that excludes every call that opens a path, connects to the
+  network or creates processes. Missing confinement fails the import. The parent
+  kills and reaps canceled children and stops waiting after 120 seconds.
+- Windows runs `capy-photo-reader.exe` in the `CapyCanvas.PhotoReader`
+  AppContainer with no capabilities, inheriting only the three files. The parent
+  grants that AppContainer read and execute on the helper and its adjacent VC
+  runtime; installed packages already allow every AppContainer to run them.
+- Android runs `PhotoReaderService` in an isolated process, which has no
+  permissions, storage or network, and passes it the three descriptors.
+
+Apple keeps its local decoder inside the app sandbox. App-owned stores, generated
+caches and bundled assets keep their local readers.
 Native workspace storage builds its bundled SQLite; it does not require system
 SQLite development packages. Apple builds link the SQLite that ships with macOS
 and iPadOS instead, so its file-system checks stay inside Apple's library. Toolkit dependencies belong to the Linux client,

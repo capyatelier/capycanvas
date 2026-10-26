@@ -370,7 +370,7 @@ impl ImageImportBatch {
         &mut self,input:R,name:&str,cancelled:&AtomicBool,
         decode:impl FnOnce(BufReader<R>,layer_color::photo::DecodeLimits,&AtomicBool)->Result<layer_color::photo::DecodedPhoto,String>,
     )->Result<(),String> {
-        let result=self.read_candidate_using(input,name,cancelled,decode);
+        let result=self.read_candidate_with_decoder(input,name,cancelled,decode);
         if result.is_err() {self.invalidate();}result
     }
     pub fn read_candidate(
@@ -379,9 +379,9 @@ impl ImageImportBatch {
         name: &str,
         cancelled: &AtomicBool,
     ) -> Result<(), String> {
-        self.read_candidate_using(input,name,cancelled,layer_color::photo::read_photo_detailed_with_cancel)
+        self.read_candidate_with_decoder(input,name,cancelled,layer_color::photo::read_photo_detailed_with_cancel)
     }
-    fn read_candidate_using<R:Read+Seek>(
+    pub fn read_candidate_with_decoder<R:Read+Seek>(
         &mut self,input:R,name:&str,cancelled:&AtomicBool,
         decode:impl FnOnce(BufReader<R>,layer_color::photo::DecodeLimits,&AtomicBool)->Result<layer_color::photo::DecodedPhoto,String>,
     )->Result<(),String> {

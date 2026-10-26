@@ -1580,6 +1580,7 @@ dependencies = [
 name = "layer-windows-link"
 version = "1.0.14"
 dependencies = [
+ "layer-host",
  "layer-windows",
 ]
 

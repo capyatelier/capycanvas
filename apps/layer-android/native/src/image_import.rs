@@ -184,8 +184,9 @@ pub extern "system" fn Java_art_capycanvas_Native_imageImportRead(
             .map_or(name.as_str(), |(stem, _)| stem);
         let control = b.control.clone();
         let file = layer_core::Cancellable { inner: file, cancelled: move || control.is_cancelled() };
-        if b.clipboard { b.images.read_candidate(BufReader::new(file), name, b.control.cancellation_flag()) }
-        else { b.images.read(BufReader::new(file), name, b.control.cancellation_flag()) }
+        let decode = |mut input: BufReader<_>, limits, cancelled: &_| crate::photo_reader::read(&mut input, limits, cancelled);
+        if b.clipboard { b.images.read_candidate_with_decoder(BufReader::new(file), name, b.control.cancellation_flag(), decode) }
+        else { b.images.read_with_decoder(BufReader::new(file), name, b.control.cancellation_flag(), decode) }
     })();
     if result.is_err() && !b.clipboard {
         b.images.invalidate();

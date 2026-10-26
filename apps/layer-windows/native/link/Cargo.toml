@@ -14,3 +14,4 @@ software-adapter-tests = ["layer-windows/software-adapter-tests"]
 
 [dependencies]
 layer-windows = { path = ".." }
+layer-host = { path = "../../../../crates/layer-host" }

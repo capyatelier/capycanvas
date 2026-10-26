@@ -162,7 +162,7 @@ fn prepare(t: &mut Task, input: Option<File>, papers: Option<&std::path::Path>) 
         Some(file) => {
             let outcome = e.open.read(file,
                 if t.place.is_some() { layer_ui::ImportIntent::Place } else { layer_ui::ImportIntent::Open },
-                &e.source_name, control.cancellation_flag())?;
+                &e.source_name, control.cancellation_flag(), crate::photo_reader::read)?;
             let imported = match outcome {
                 layer_ui::ImportOutcome::Editable(imported) => imported,
                 layer_ui::ImportOutcome::Package(outcome) => {

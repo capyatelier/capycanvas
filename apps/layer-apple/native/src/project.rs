@@ -616,14 +616,14 @@ unsafe fn prepare_project(task: u64, input: Result<Input<'_>, String>, name: Res
             Input::File(fd) => {
                 let file = host_file(fd);
                 let outcome = context.read(layer_core::Cancellable { inner: &*file, cancelled: || task.check_cancelled().is_err() },
-                    layer_ui::ImportIntent::Open, &name, task.control.cancellation_flag())?;
+                    layer_ui::ImportIntent::Open, &name, task.control.cancellation_flag(), layer_host::photo_reader::local)?;
                 match outcome {
                     layer_ui::ImportOutcome::Editable(value) => *imported = Some(value),
                     layer_ui::ImportOutcome::Package(value) => {*payload = Payload::Package(layer_ui::PackageView::new(value)?);return Ok(());}
                 }
             }
             Input::Bytes(bytes) => match context.read(Cursor::new(bytes),
-                layer_ui::ImportIntent::Open,&name,task.control.cancellation_flag())? {
+                layer_ui::ImportIntent::Open,&name,task.control.cancellation_flag(),layer_host::photo_reader::local)? {
                 layer_ui::ImportOutcome::Editable(value) => *imported = Some(value),
                 layer_ui::ImportOutcome::Package(value) => {*payload = Payload::Package(layer_ui::PackageView::new(value)?);return Ok(());}
             },

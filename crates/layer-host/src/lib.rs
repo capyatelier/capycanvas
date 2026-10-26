@@ -12,6 +12,7 @@ mod snapshot;
 mod model_update;
 pub mod open;
 pub mod papers;
+pub mod photo_reader;
 pub mod scene;
 pub mod storage;
 pub mod tasks;

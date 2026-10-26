@@ -55,7 +55,7 @@ try {
         [IO.Directory]::CreateDirectory((Split-Path -Parent $target))|Out-Null
         Copy-Item -LiteralPath $file.FullName -Destination $target
     }
-    foreach($name in @('CapyCanvas.exe','layer_windows.dll','dxcompiler.dll','CapyCanvas.pri','Microsoft.UI.Xaml.dll','Microsoft.WindowsAppRuntime.dll')){
+    foreach($name in @('CapyCanvas.exe','layer_windows.dll','capy-photo-reader.exe','dxcompiler.dll','CapyCanvas.pri','Microsoft.UI.Xaml.dll','Microsoft.WindowsAppRuntime.dll')){
         if(!(Test-Path -LiteralPath (Join-Path $payload $name) -PathType Leaf)){throw "Incomplete runtime payload: $name"}
     }
     $signed=[bool]$SignArguments

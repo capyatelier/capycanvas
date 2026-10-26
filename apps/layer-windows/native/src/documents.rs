@@ -331,7 +331,7 @@ fn prepare(
             std::io::Seek::rewind(&mut file).map_err(|e|io_error("read",e))?;
             opened_destination=Some((location(path.to_str().ok_or("Drawing path is invalid")?)?,fingerprint));
             environment.read(layer_core::Cancellable { inner: BufReader::new(file), cancelled: || cancel.load(Ordering::Acquire) }, layer_ui::ImportIntent::Open,
-                path.file_name().and_then(|v| v.to_str()).unwrap_or("Photo"), cancel)?
+                path.file_name().and_then(|v| v.to_str()).unwrap_or("Photo"), cancel, crate::photo_reader::read)?
         }
     };
     let imported=match imported {layer_ui::ImportOutcome::Editable(imported)=>imported,layer_ui::ImportOutcome::Package(outcome)=>return layer_ui::PackageView::new(outcome).map(Completed::Package)};

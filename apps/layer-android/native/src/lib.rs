@@ -57,6 +57,8 @@ mod color_preferences;
 mod proof;
 #[cfg(target_os = "android")]
 mod papers;
+#[cfg(target_os = "android")]
+mod photo_reader;
 
 #[cfg(target_os = "android")]
 mod hdr;

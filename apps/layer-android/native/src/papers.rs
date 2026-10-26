@@ -36,7 +36,7 @@ pub extern "system" fn Java_art_capycanvas_Native_paperWork(mut env: JNIEnv, _: 
     let job = crate::inspection::shared::<Job>(job)?;
     let file = (fd >= 0).then(|| unsafe { std::fs::File::from_raw_fd(fd) });
     let result = crate::inspection::on_worker("capy-paper", "Paper library worker failed",
-        || job.task.work(file.as_ref().map(|file| (file, name.as_str())), &job.cancelled));
+        || job.task.work(file.as_ref().map(|file| (file, name.as_str())), &job.cancelled, crate::photo_reader::read));
     *job.result.lock().unwrap_or_else(|e| e.into_inner()) = Some(result);
     })
 }

@@ -13,7 +13,7 @@ pub fn restrict(bytes:usize)->Result<(),String> {
         .split_whitespace().next().ok_or("Missing decoder memory size")?.parse::<u64>().map_err(|e|e.to_string())?;
     let page=unsafe {libc::sysconf(libc::_SC_PAGESIZE)};if page<=0 {return Err("Missing system page size".into());}
     let address_space=pages.checked_mul(page as u64).and_then(|base|base.checked_add(bytes as u64)).ok_or("Decoder memory limit overflow")?;
-    for (resource,maximum) in [(libc::RLIMIT_AS,address_space),(libc::RLIMIT_CPU,60),(libc::RLIMIT_CORE,0),(libc::RLIMIT_FSIZE,8192),(libc::RLIMIT_NPROC,0)] {
+    for (resource,maximum) in [(libc::RLIMIT_AS,address_space),(libc::RLIMIT_CPU,60),(libc::RLIMIT_CORE,0),(libc::RLIMIT_NPROC,0)] {
         let limit=libc::rlimit {rlim_cur:maximum,rlim_max:maximum};
         if unsafe {libc::setrlimit(resource,&limit)}!=0 {return Err(std::io::Error::last_os_error().to_string());}
     }

@@ -10,6 +10,7 @@ internal object Native {
     @JvmStatic external fun drawerFrame(request: String): String
     @JvmStatic external fun shaderInput(handle: Long)
     init { System.loadLibrary("layer_android") }
+    @JvmStatic external fun servePhoto(input: Int, output: Int, errors: Int, sourceBytes: Long, codecBytes: Long, dimension: Int): Boolean
     @JvmStatic external fun bootstrap(saved: String, locales: Array<String>): String
     @JvmStatic external fun storage(config: String, data: String, state: String, cache: String, temp: String): String
     @JvmStatic external fun languageRequest(handle: Long, locales: Array<String>): String?

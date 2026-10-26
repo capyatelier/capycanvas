@@ -105,7 +105,7 @@
     <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(ProjectDir)scripts\stage-assets.ps1&quot; -Destination &quot;$(OutDir)Assets&quot;" />
   </Target>
   <Target Name="CopyRustRuntime" AfterTargets="Build">
-    <Copy SourceFiles="$(CapyRustDirectory)\layer_windows.dll" DestinationFolder="$(OutDir)" />
+    <Copy SourceFiles="$(CapyRustDirectory)\layer_windows.dll;$(CapyRustDirectory)\capy-photo-reader.exe" DestinationFolder="$(OutDir)" />
   </Target>
   <Target Name="CopyShaderCompiler" AfterTargets="Build">
     <Copy SourceFiles="$(CapyPackages)\Microsoft.Direct3D.DXC.1.9.2609.5\build\native\bin\$(Platform)\dxcompiler.dll" DestinationFolder="$(OutDir)" />

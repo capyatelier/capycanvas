@@ -67,7 +67,7 @@ impl Service {
             let cancelled = Arc::new(AtomicBool::new(false));
             let file = std::fs::File::open(&path).map_err(|error| error.to_string())?;
             let mut batch = layer_ui::ImageImportBatch::new(Default::default(), layer_core::color::RgbSpace::ProPhoto, Default::default());
-            batch.read(BufReader::new(file), &name, &cancelled)?;
+            batch.read_with_decoder(BufReader::new(file), &name, &cancelled, |mut input, limits, cancelled| crate::photo_reader::read(&mut input, limits, cancelled))?;
             let (_, source) = batch.take_sources(false)?.into_iter().next().ok_or(PaperLibraryError::Unsupported)?;
             let (id, image, entries) = layer_host::papers::import(&directory, &source, &name, &|| false)?;
             Ok(Outcome::Imported(layer, id, image, entries))

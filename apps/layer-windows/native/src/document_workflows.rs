@@ -641,13 +641,14 @@ impl Task {
             } else {
                 path.file_stem().and_then(|s| s.to_str()).unwrap_or("Image")
             };
-            task.images.read(
+            task.images.read_with_decoder(
                 layer_core::Cancellable {
                     inner: file,
                     cancelled: || self.control.is_cancelled(),
                 },
                 name,
                 self.control.cancellation_flag(),
+                |mut input, limits, cancelled| crate::photo_reader::read(&mut input, limits, cancelled),
             )
             })();
             if let Err(error) = result {
