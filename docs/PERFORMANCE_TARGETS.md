@@ -86,6 +86,17 @@ small dispatches, or CPU submission overhead.
   target, with p99 intervals of at most two frame budgets (33.3, 22.2 and
   16.7 ms).
 
+**When `origin/main` already misses a target:**
+
+- Measure each affected row against a matched control: `origin/main` at your
+  base commit, on the same device, build type, fixture and input.
+- A change must not make any affected row worse than its control. Fix every
+  regression it causes, such as slower frames, extra stalls or redundant
+  rebuilding.
+- When the control also misses the target, record both results in the tier
+  table and finish the change. Closing a gap that predates your change is
+  separate work, never an open condition of your task.
+
 **How to run:**
 
 - Measure release or benchmark builds, warmed up, with at least three gestures

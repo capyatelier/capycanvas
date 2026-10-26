@@ -80,6 +80,10 @@ specific tasks.
   measure the affected rows by [its rules](docs/performance/measuring.md), and
   record the results in the tier tables. Report a target as met only from current
   measurements on that tier's reference hardware.
+- Don't chase a target that `origin/main` already misses. Fix any regression
+  against a matched `origin/main` control, record the shared miss, and finish
+  the task; closing that gap is separate work
+  ([pre-existing misses](docs/PERFORMANCE_TARGETS.md#qualification)).
 
 ### Finishing work
 
