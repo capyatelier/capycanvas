@@ -108,9 +108,13 @@ including older gaps; a port does not require an unrestricted historical audit.
   themes through `test-desktop.ps1`; retain its per-edit history JSON and composed
   captures. The default and `-ToolsOnly` scopes retain their existing journeys.
 - Run `exercise-liquify-pixels.ps1` for the focused Liquify seed, deformation,
-  history, Adjust, Reset and session checks; it reuses an existing private desktop
+  history, Adjust and Reset checks; it reuses an existing private desktop
   and otherwise creates one with a 900-second deadline. The idle-brush fixture's
-  `-LiquifyOnly` scope selects the same checks. Split Tilt runs with
+  `-LiquifyOnly` scope selects the same checks. Add `-SessionsOnly` for live
+  G-Pen and Hand round trips with exact committed pixels and history, retained
+  Adjust amount, and Adjust/Reset Undo/Redo. Repeat in both themes;
+  `-Theme sessions-light` selects the light session scope for fixture discovery.
+  Split Tilt runs with
   `exercise-tilt.ps1 -Journey baseline|cold-controls|first-curve|deferred|deferred-prior-edit|response|overlays`
   under `test-desktop.ps1` with a 600-second deadline per journey and repeat each
   in both themes. Omitting `-Journey` retains the full suite; a focused result

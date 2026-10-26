@@ -1,6 +1,7 @@
-param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme='dark',[int[]]$PresetIds=@(),[switch]$LiquifyOnly)
+param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme='dark',[int[]]$PresetIds=@(),[switch]$LiquifyOnly,[switch]$SessionsOnly)
 $ErrorActionPreference='Stop'
 if($LiquifyOnly -and $PresetIds.Count){throw 'LiquifyOnly cannot be combined with PresetIds'}
+if($SessionsOnly -and ($PresetIds.Count -or $LiquifyOnly)){throw 'SessionsOnly cannot be combined with PresetIds or LiquifyOnly'}
 $repo=(Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
 $scripts=$PSScriptRoot
 . (Join-Path $scripts 'CapyUia.ps1')
@@ -276,6 +277,64 @@ function Assert-History-Pixels([uint16]$Key,[string]$Expected,[string]$Name){
  if((Wait-StablePixels {Pixels}) -ne $Expected){throw "$Name composed samples did not remain exact"}
  Save-Pixels $Name $Expected
 }
+function Liquify-Sessions([string]$SeedPixels){
+ $records=[Collections.Generic.List[object]]::new()
+ foreach($away in @('G-Pen','Hand')){
+  $name='session-'+$away
+  $seedPaint=Revision
+  if((Wait-StablePixels {Pixels}) -cne $SeedPixels){throw "$name did not start with the exact seed"}
+  Select-Preset 'Liquify Push' 12
+  Stroke (Point 110 110) (Point 215 140)
+  Wait-Until {(Revision) -cne $seedPaint -and (Pixels) -cne $SeedPixels} "$name Push did not commit deformation"
+  $pushedPixels=Wait-StablePixels {Pixels};$pushedPaint=Revision;$pushedCheckpoint=Drawing-Checkpoint
+  Save-Pixels ($name+'-push') $pushedPixels
+  foreach($stage in @('push','adjust')){
+   $expectedPixels=if($stage -eq 'push'){$pushedPixels}else{$adjustedPixels}
+   $expectedPaint=Revision;$expectedCheckpoint=Drawing-Checkpoint
+   if($away -eq 'G-Pen'){Select-Preset 'G-Pen' 1}else{
+    $binding=@(@((Model).state.commands|Where-Object id -eq 'hand')[0].bindings|Where-Object {$_.key.Length -eq 1 -and !$_.command -and !$_.shift -and !$_.alt})[0]
+    if(!$binding){throw 'Hand has no unmodified single-key binding'}
+    Shortcut @() ([uint16][char]$binding.key.ToUpperInvariant())
+    Wait-Until {@((Model).state.commands|Where-Object id -eq 'hand')[0].selected} 'Hand did not become the active tool'
+    Park
+   }
+   if((Revision) -cne $expectedPaint -or (Drawing-Checkpoint) -cne $expectedCheckpoint -or (Wait-StablePixels {Pixels}) -cne $expectedPixels){throw "$name $stage tool departure changed committed artwork or history"}
+   Capture ($name+'-'+$stage+'-away') -WithModel -Composed
+   if($stage -eq 'push'){
+    Assert-History 0x5a $SeedPixels $seedPaint ($name+' outside-tool Push Undo')
+    Assert-History 0x59 $pushedPixels $pushedPaint ($name+' outside-tool Push Redo')
+    if((Drawing-Checkpoint) -cne $pushedCheckpoint){throw "$name outside-tool Redo changed the Push checkpoint"}
+   }
+   Select-Preset 'Liquify Push' 12
+   if((Revision) -cne $expectedPaint -or (Drawing-Checkpoint) -cne $expectedCheckpoint -or (Wait-StablePixels {Pixels}) -cne $expectedPixels){throw "$name $stage tool return changed committed artwork or history"}
+   foreach($id in @('liquify_adjust','liquify_reset')){
+    if(!@((Model).state.commands|Where-Object id -eq $id)[0].enabled -or !(Control ('tool-action-'+$id)).Current.IsEnabled){throw "$name did not retain $id after $stage tool return"}
+   }
+   if($stage -eq 'push'){
+    (Control 'tool-action-liquify_adjust').GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
+    Wait-Until {@((Model).state.tool_settings|Where-Object id -eq 'liquify_amount').Count -eq 1} "$name Adjust did not open after tool return"
+    (Control 'tool-setting-liquify_amount-slider' -Type ([System.Windows.Automation.ControlType]::Slider)).GetCurrentPattern([System.Windows.Automation.RangeValuePattern]::Pattern).SetValue(.5)
+    Park
+    Wait-Until {(Revision) -cne $pushedPaint -and (Pixels) -cne $pushedPixels} "$name Adjust did not commit changed artwork"
+    $adjustedPixels=Wait-StablePixels {Pixels};$adjustedPaint=Revision
+   }else{
+    $amount=@((Model).state.tool_settings|Where-Object id -eq 'liquify_amount')
+    if($amount.Count -ne 1 -or [Math]::Abs($amount[0].value-.5) -gt .001){throw "$name did not retain its open Adjust amount across the tool switch"}
+   }
+  }
+  Assert-History 0x5a $pushedPixels $pushedPaint ($name+' Adjust Undo')
+  Assert-History 0x59 $adjustedPixels $adjustedPaint ($name+' Adjust Redo')
+  (Control 'tool-action-liquify_reset').GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+  Park;Wait-Until {(Pixels) -ceq $SeedPixels} "$name Reset did not restore the original seeded artwork"
+  $resetPixels=Wait-StablePixels {Pixels};$resetPaint=Revision
+  Assert-History 0x5a $adjustedPixels $adjustedPaint ($name+' Reset Undo')
+  Assert-History 0x59 $resetPixels $resetPaint ($name+' Reset Redo')
+  Capture ($name+'-reset') -WithModel -Composed
+  $records.Add([ordered]@{away=$away;seed_pixels=$SeedPixels;seed_paint=$seedPaint;pushed_pixels=$pushedPixels;pushed_paint=$pushedPaint;pushed_checkpoint=$pushedCheckpoint;adjusted_pixels=$adjustedPixels;adjusted_paint=$adjustedPaint;reset_pixels=$resetPixels;reset_paint=$resetPaint;history='exact';tool_round_trips=@('push','open Adjust')})
+  $records|ConvertTo-Json -Depth 8|Set-Content -LiteralPath (Join-Path $run 'liquify-sessions.json')
+ }
+ $checks.liquify_sessions=@($records)
+}
 try{
  Enter-CapyEnvironment @('CAPY_TRACE_SHADER_JOBS')
  $env:CAPY_TRACE_UI='1';$env:CAPY_TRACE_SHADER_JOBS='1'
@@ -312,7 +371,7 @@ try{
   Invoke $(if(Find 'column-icon-brushes' -Visible){'column-icon-brushes'}elseif(Find 'drawer-tab-brushes' -Visible){'drawer-tab-brushes'}else{'panel-tab-brushes'})
  }
  Wait-Until {@((Model).layout.groups|Where-Object active -eq 'brushes').Count -eq 1} 'The native Tool Set did not open'
- $blenders=if($LiquifyOnly){@()}else{@(Blender-Presets)}
+ $blenders=if($LiquifyOnly -or $SessionsOnly){@()}else{@(Blender-Presets)}
  Fit-Canvas;Park
  Wait-Until {(Model).shaders_ready} 'Requested shader preparation did not complete' 180
  $checks.requested_preparation_complete=Observe 'requested-preparation-complete' $null
@@ -323,10 +382,12 @@ try{
  foreach($point in $samplePoints){if(!$projection.bounds.Contains([double]$point[0],[double]$point[1])){throw 'A composed sample lies outside the arranged canvas'}}
  @{projection=$projection;points=$samplePoints}|ConvertTo-Json -Depth 6|Set-Content -LiteralPath (Join-Path $run 'sample-grid.json')
  $seedBaseline=Wait-StablePixels {Pixels};Save-Pixels 'seed-baseline' $seedBaseline
+ if($SessionsOnly){Liquify-Sessions $seedBaseline}
  $cases=[Collections.Generic.List[object]]::new()
  $presets=@(@('Wet Round',11),@('Smudge',10),@('Liquify Push',12),@('G-Pen',1),@('Pencil',2),@('Charcoal',27),@('Pastel Block',17),@('Mixing Brush',59))|ForEach-Object {[pscustomobject]@{label=$_[0];id=$_[1];group=$(if($_[1] -eq 10){'blend'}elseif($_[1] -eq 59){'oil'}else{$null})}}
  $requested=@($presets)+@($blenders|Where-Object id -ne 10)
  if($LiquifyOnly){$requested=@($requested|Where-Object id -eq 12)}
+ if($SessionsOnly){$requested=@()}
  if($PresetIds.Count){
   foreach($id in $PresetIds){if($id -notin $requested.id){throw "Unknown brush preset: $id"}}
   $requested=@($requested|Where-Object id -in $PresetIds)
@@ -354,7 +415,7 @@ try{
   $cases.Add($case)
   $cases|ConvertTo-Json -Depth 8|Set-Content -LiteralPath (Join-Path $run 'brush-cases.json')
  }
- if(!$PresetIds.Count){
+ if(!$PresetIds.Count -and !$SessionsOnly){
  $seedPixels=Wait-StablePixels {Pixels}
  Select-Preset 'Liquify Push' 12
  $from=Point 110 110;$to=Point 215 140
@@ -418,8 +479,8 @@ try{
   }
  }
  }
- $checks.scope=if($LiquifyOnly){'Liquify only'}elseif($PresetIds.Count){'selected presets'}else{'all presets'}
- $checks.brush_cases='passed';$checks.preset_ids=@($cases.preset);$checks.liquify_adjust_scope=if($PresetIds.Count){'outside selected preset run'}else{'passed'};Close-Review -Discard
+ $checks.scope=if($SessionsOnly){'Liquify tool sessions only'}elseif($LiquifyOnly){'Liquify only'}elseif($PresetIds.Count){'selected presets'}else{'all presets'}
+ $checks.brush_cases=if($SessionsOnly){'outside session run'}else{'passed'};$checks.preset_ids=@($cases.preset);$checks.liquify_adjust_scope=if($SessionsOnly){'tool sessions'}elseif($PresetIds.Count){'outside selected preset run'}else{'passed'};Close-Review -Discard
  Start-Review 'close-pending'
  $pending=Observe 'before-close' $null
  $checks.close_pending_observation=!$pending.shaders_ready

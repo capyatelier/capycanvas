@@ -1,5 +1,7 @@
-param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme='dark',[switch]$Simple,[switch]$SimpleLight,[switch]$ThreeFinger)
+param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme='dark',[switch]$Simple,[switch]$SimpleLight,[switch]$ThreeFinger,[ValidateSet('full','held-history','held-history-light','layers','layers-light')][string]$Journey='full')
 if($SimpleLight){$Simple=$true;$Theme='light'}
+if($Journey.EndsWith('-light')){$Theme='light';$Journey=$Journey.Substring(0,$Journey.Length-6)}
+if($Journey -eq 'held-history'){$ThreeFinger=$true}
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 $CapyPopups=$true;$CapyFind='prefer-visible'
@@ -110,6 +112,7 @@ try{
  [CapyCanvasTouch]::ThreeUp()
  Record 'CancelAll followed by effective native Redo and exact checkpoint recovery'
  }
+ if($Journey -ne 'held-history'){
  Fit-GestureCanvas
  $pixelBounds=(Control 'drawing-canvas' -Arranged).Current.BoundingRectangle
  $pixelCamera=(Model).state.camera;$pixelTab=@((Model).state.tabs|Where-Object active)[0]
@@ -175,6 +178,7 @@ try{
  Undo-To {(@((Model).state.layers.id) -join ',') -eq ($all -join ',')} 'Final Undo did not restore inclusive merge range'
  if((Wait-StablePixels {Gesture-Pixels}) -cne $mergePixels){throw 'Final merge Undo did not restore exact composed artwork'}
  Record 'inclusive merge exact pixels and one-step Undo Redo'
+ if($Journey -eq 'full'){
  Fit-GestureCanvas;Wait-Until {$m=Model;$tab=@($m.state.tabs|Where-Object active)[0];$c=$m.state.camera;$zoom=.9*[Math]::Min($c.work_area[2]/$tab.width,$c.work_area[3]/$tab.height);[Math]::Abs($c.zoom-$zoom) -lt .001} 'Fit baseline did not acknowledge its camera';$fitted=(Model).state.camera
  [CapyCanvasTouch]::PairDown(($cx-100),$cy,($cx+100),$cy)
  for($i=1;$i -le 20;$i++){$angle=$i*[Math]::PI/40;$dx=[int](100*[Math]::Cos($angle));$dy=[int](100*[Math]::Sin($angle));[CapyCanvasTouch]::Pair(($cx-$dx),($cy-$dy),($cx+$dx),($cy+$dy));Start-Sleep -Milliseconds 12};End-Pair
@@ -210,9 +214,11 @@ try{
   Record 'independent pinch preferences retain ordinary zoom and enabled fit'
  }
  Capture ('touch-gestures-'+$Theme) -WithModel -Composed
+ }
+ }
  [CapyCanvasTouch]::Dispose();[CapyRowPointer]::Dispose()
  & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $handle.ToInt64() -Action Close -DiscardUnsaved
  if((Get-Item $stderr).Length){throw 'Gesture runtime stderr requires inspection'}
- @{theme=$Theme;simple=[bool]$Simple;three_finger=[bool]$ThreeFinger;held_cancel_scope=$(if($ThreeFinger){'CancelAll plus successful next native Redo and exact recovery; absence after cancellation acknowledgement unverified'}else{'not run'});system_touch_gestures=(Get-ItemProperty 'HKCU:\Control Panel\Desktop').TouchGestureSetting;checks=$checks;scope='OS-injected WinUI touch; hardware touch and performance unverified'}|ConvertTo-Json -Depth 20|Set-Content (Join-Path $run 'result.json')
+ @{theme=$Theme;journey=$Journey;simple=[bool]$Simple;three_finger=[bool]$ThreeFinger;held_cancel_scope=$(if($ThreeFinger){'CancelAll plus successful next native Redo and exact recovery; absence after cancellation acknowledgement unverified'}else{'not run'});system_touch_gestures=(Get-ItemProperty 'HKCU:\Control Panel\Desktop').TouchGestureSetting;checks=$checks;scope='OS-injected WinUI touch; hardware touch and performance unverified'}|ConvertTo-Json -Depth 20|Set-Content (Join-Path $run 'result.json')
 }catch{$failed=$true;$failure=$_;$CapyEach=$null;($failure.Exception.ToString()+[Environment]::NewLine+$failure.ScriptStackTrace)|Set-Content (Join-Path $run 'failure.txt');@{model=(Model);fitted=$fitted;prior=$prior;duration=$duration;reverse_duration=$reverseDuration;seed_revision=$revision;seed_paint_revision=$paintRevision;seed_point=@($cx,$cy);seed_idle_before_hold=$seedIdle;workspace_before_hold=$workspaceBeforeHold;seed_thumbnail_status=(Find "layer-$id-thumbnail").Current.ItemStatus;gesture_status=(Find "layer-list").Current.ItemStatus;canvas_has_focus=(Find "drawing-canvas").Current.HasKeyboardFocus;row_has_focus=(Find "layer-$id-name").Current.HasKeyboardFocus;checks=$checks}|ConvertTo-Json -Depth 90|Set-Content (Join-Path $run 'failure-state.json');try{Capture 'failure-screen' -Composed}catch{$_.Exception.ToString()|Set-Content (Join-Path $run 'capture-error.txt')};throw $failure}
 finally{[CapyCanvasTouch]::Dispose();[CapyRowPointer]::Dispose();if($review){$review.Refresh();if(!$review.HasExited){$review.Kill();$review.WaitForExit(8000)|Out-Null}};Exit-CapyEnvironment}

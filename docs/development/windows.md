@@ -1221,7 +1221,10 @@ ignored `artifacts/windows`.
 The `exercise-touch-gestures.ps1 -ThreeFinger` theme pair also runs the complete
 docked Layers body; `-Simple` runs it on the simple Layers card. Keep their
 effective seed and merge pixel/Undo/Redo checks without a duplicate default-body
-pair. CancelAll checks the next real Redo and exact recovery; it does not prove
+pair. Use `-Journey held-history` for held Undo/Redo and cancellation recovery,
+or `-Journey layers` for layer holds, opacity, swipes and inclusive merge history
+without repeating canvas pinch checks. Run each needed scope in both themes.
+CancelAll checks the next real Redo and exact recovery; it does not prove
 absence after a cancellation acknowledgement. Two-finger row swipes leave
 selection, opacity, Alpha Lock, history and camera unchanged at the pair boundary;
 the next effective one-finger Alpha Lock and its Undo check exact recovery.

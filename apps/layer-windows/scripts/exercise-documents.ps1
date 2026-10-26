@@ -176,6 +176,7 @@ function Type-Text([string]$Id,[string]$Text,[switch]$Commit) {
     Wait-Until {$entry.Current.HasKeyboardFocus} "The text field did not receive focus: $Id"
     $entry.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($Text)
     if($Commit){
+        $entry=Control $Id -Arranged;$entry.SetFocus()
         Wait-Until {$entry.Current.HasKeyboardFocus} "The text field lost focus before Enter: $Id"
         [CapyRowPointer]::Key([uint32]$review.Id,0x0D)
     }
