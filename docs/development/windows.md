@@ -528,7 +528,8 @@ message-only window named for its storage folders, then exits. Files open in the
 frontmost window; a launch without files opens a new window. A launch waits up to
 a minute for an instance that is still starting or closing. Builds with different
 storage never hand launches to each other; `exercise-file-activation.ps1` checks
-both cases.
+both cases. It also drags an image and a saved drawing from another window onto
+the drawing tabs, which opens each as a new drawing.
 
 ### Environment switches
 

@@ -304,7 +304,6 @@ native-dialog-link-failed = Windows เปิดลิงก์แอปไม�
 native-dialog-window-failed = Windows สร้างหน้าต่างไม่ได้
 native-dialog-fullscreen-failed = Windows เปลี่ยนโหมดเต็มจอไม่ได้
 native-dialog-link-unavailable = ลิงก์แอปใช้ไม่ได้
-native-dialog-drop-drawings = วางไฟล์ภาพวาดเพื่อเปิด
 native-drawing-storage-help = { $detail }
     เปิดเมนูภาพวาดแล้วเลือกลองเก็บภาพวาดอีกครั้ง
 native-dialog-preferences-failed = Windows เปิดการตั้งค่าไม่ได้

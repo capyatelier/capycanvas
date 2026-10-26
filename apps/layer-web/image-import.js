@@ -1,7 +1,7 @@
 import {liveCopy,bindCopy} from './localization.js';
 // Browser transport and hit targets only. Rust captures camera coordinates,
 // validates layer destinations, prepares the entire batch and owns its history.
-export function createImageImport({app,canvas,dispatch,applyChange,wake,element,button,message,gpuOperation,interpret,openClipboard}) {
+export function createImageImport({app,canvas,dispatch,applyChange,wake,element,button,message,gpuOperation,interpret,openClipboard,openFiles}) {
   const bootstrap=liveCopy(app,"bootstrap_view"),delivery=liveCopy(app,"document_delivery_copy");
   let incoming=null,control=null;
   const command=id=>app.state().commands.find(c=>c.id===id);
@@ -29,6 +29,9 @@ export function createImageImport({app,canvas,dispatch,applyChange,wake,element,
     if(!isFiles(e))return;
     e.preventDefault();clear();const target=hit(e),files=[...e.dataTransfer.files];
     if(!target||!files.length)return;
+    let command;
+    try{command=app.file_drop(files.map(file=>file.name),!!target.destination);}catch(error){message(error);return;}
+    if(command==='open_document'){openFiles(files).catch(error=>{if(error?.name!=='AbortError')message(error);});return;}
     incoming={...target,files};
     dispatch({type:'invoke',command:'import_image'});
     // The document request is serviced synchronously by dispatch. Never retain

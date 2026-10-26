@@ -438,6 +438,27 @@ export async function checkDrawingTabs({call,evaluate,settle}) {
   const changedLayers=await evaluate('layerApp.state().layers.length');
   await select(copies[1].id);
   assert.equal(await evaluate('layerApp.state().layers.length'),changedLayers-1,'Duplicate opens are independent editors');
+  const dropFiles=(target,names)=>evaluate(`(async()=>{const target=${target},bounds=target.getBoundingClientRect(),transfer=new DataTransfer();
+    for(const name of ${JSON.stringify(names)}){
+      if(name.endsWith('.capy')){transfer.items.add(new File([[...tabFiles.values()][0]],name));continue;}
+      const pixels=new OffscreenCanvas(12,8),context=pixels.getContext('2d');context.fillStyle='#c84';context.fillRect(0,0,12,8);
+      transfer.items.add(new File([await pixels.convertToBlob({type:'image/png'})],name,{type:'image/png'}));
+    }
+    const init={dataTransfer:transfer,bubbles:true,cancelable:true,clientX:bounds.x+bounds.width/2,clientY:bounds.y+bounds.height/2};
+    target.dispatchEvent(new DragEvent('dragover',init));target.dispatchEvent(new DragEvent('drop',init));})()`);
+  const dropped=async(target,name)=>{
+    const count=(await tabs()).tabs.length;await dropFiles(target,[name]);
+    await wait(`layerApp.app.document_tabs(0).tabs.length===${count+1}`);await ready();
+    const tab=(await tabs()).tabs.at(-1);
+    assert.ok(tab.title.startsWith(name.replace(/\.\w+$/,'')),`${name} opens as its own drawing: ${tab.title}`);
+    assert.equal((await tabs()).selected,tab.id,`${name} selects its new tab`);
+  };
+  await dropped('layerApp.canvas','dropped.capy');
+  const beforeBatch=(await tabs()).tabs.length;
+  await dropFiles('layerApp.canvas',['first.capy','second.capy']);await settle();await ready();
+  assert.equal(await evaluate(`document.querySelector('#status').textContent`),'Open drawings one at a time; drop a batch containing only images to add layers.','Several drawings dropped on the canvas give the shared refusal');
+  assert.equal((await tabs()).tabs.length,beforeBatch,'A refused canvas drop opens nothing');
+  await dropped(`document.querySelector('#drawing-title')`,'dropped-photo.png');
   await select(copies[0].id);
   const beforeFailedSave=(await tabs()).tabs.length;
   await evaluate(`window.tabSavePicker=window.showSaveFilePicker;window.showSaveFilePicker=async()=>({name:'failed.capy',async createWritable(){throw Error('Test write failure');}});layerApp.documents.close(BigInt(${copies[0].id}))`);
@@ -468,5 +489,5 @@ export async function checkDrawingTabs({call,evaluate,settle}) {
   assert.equal((await tabs()).resident_bytes,0,'Storage retries successfully after quota failure is removed');
   await mkdir('artifacts/document-tabs/web',{recursive:true});
   const shot=await call('Page.captureScreenshot',{format:'png'});await writeFile('artifacts/document-tabs/web/lifecycle.png',Buffer.from(shot.data,'base64'));
-  console.log('PASS drawing tabs: independent sessions/history, all pointer reorder, close decisions, selector, final drawing, OPFS redo-only exact storage, corrupt/duplicate opens, failed save, quota failure/retry');
+  console.log('PASS drawing tabs: independent sessions/history, all pointer reorder, close decisions, selector, final drawing, OPFS redo-only exact storage, corrupt/duplicate opens, canvas and tab file drops, failed save, quota failure/retry');
 }

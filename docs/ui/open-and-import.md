@@ -7,6 +7,7 @@
 | **Open image** | Create a document at the image's oriented pixel dimensions and fit the view. Transparency and the photo's descriptive metadata are kept; the editable `.capy` master is saved separately from the input photo. |
 | **Import image / paste another app's image** | Add a named [Object layer](image-objects.md) per image, with placement handles active. Place Image centers it on the canvas; external Paste centers it in the view unless the preset specifies otherwise. Pastes of Capy Canvas copies, Paste in Place and Paste Into follow [copy and paste](clipboard.md). The document's metadata does not change. |
 | **Drop image on canvas** | The same placement flow, centered at the drop point in document coordinates. |
+| **Drop files on the drawing tabs** | Open each `.capy` file or image as a new drawing tab, as Open does. |
 | **Drop onto Layers** | Above, below and into feedback, using the shared group, lock and clipping rules. |
 | **Apply placement** | Store each image's position, scale and rotation as its placement; the full-resolution image stays unchanged. |
 | **Original Size (100%)** | Restore native pixel scale for the selected images, including after Apply and save/reopen, keeping center, rotation and mirroring. |
@@ -26,8 +27,8 @@ compressed bytes.
 
 A batch is atomic: one named Object layer per file, and nothing is inserted if any file
 fails or the user cancels. The error names the failed file. A batch that mixes
-projects and images is rejected. `ImportIntent::for_drop` decides for GTK and
-Apple: one `.capy` file opens as a drawing on the canvas, image-only batches are
+projects and images is rejected. `ImportIntent::for_drop` decides for GTK, Web
+and Apple: one `.capy` file opens as a drawing on the canvas, image-only batches are
 placed, and several drawings, a mixed batch or a drawing dropped on a layer row
 are refused with a shared message. Hosts supply local files; providers without a
 local path are rejected. Android opens shared, viewed, dropped and pasted items

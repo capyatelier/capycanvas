@@ -514,7 +514,6 @@ copy_struct! { RecoveryCopy {
     fullscreen_failed: NATIVE_DIALOG_FULLSCREEN_FAILED,
     link_unavailable: NATIVE_DIALOG_LINK_UNAVAILABLE,
     link_open_failed: NATIVE_DIALOG_LINK_OPEN_FAILED,
-    drop_drawings: NATIVE_DIALOG_DROP_DRAWINGS,
     workspace_not_saved: NATIVE_DIALOG_WORKSPACE_NOT_SAVED,
     workspace_not_opened: NATIVE_DIALOG_WORKSPACE_NOT_OPENED,
     preferences_not_saved: NATIVE_DIALOG_PREFERENCES_NOT_SAVED,

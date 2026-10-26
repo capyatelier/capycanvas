@@ -80,6 +80,11 @@ impl WebApp {
     pub fn image_layer_drop(&self, target: u64, fraction: f32) -> Result<JsValue, JsValue> {
         serialize(&self.session.image_layer_drop_hint(target, fraction))
     }
+    pub fn file_drop(&self, names: Vec<String>, layer: bool) -> Result<JsValue, JsValue> {
+        let drawings = names.iter().map(|name| layer_ui::ImportIntent::is_drawing_path(std::path::Path::new(name)));
+        let intent = layer_ui::ImportIntent::for_drop(drawings, layer).map_err(|refusal| js(refusal.message(self.session.localization())))?;
+        serialize(&intent.command())
+    }
     pub fn capture_image_import(
         &self,
         id: u32,

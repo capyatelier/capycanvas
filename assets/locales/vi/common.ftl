@@ -527,7 +527,6 @@ native-dialog-link-failed = Windows không thể mở liên kết ứng dụng.
 native-dialog-window-failed = Windows không thể tạo cửa sổ.
 native-dialog-fullscreen-failed = Windows không thể đổi chế độ toàn màn hình.
 native-dialog-link-unavailable = Liên kết ứng dụng không khả dụng.
-native-dialog-drop-drawings = Thả tệp bản vẽ để mở
 
 native-drawing-storage-help = { $detail }
     Mở trình đơn bản vẽ và chọn Thử lưu trữ bản vẽ lại.

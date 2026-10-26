@@ -63,7 +63,7 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,canvasReady
     if(request){nativeDeliveries.set(request.id,Promise.resolve(files));event.preventDefault();applyChange(change);}
   });
   const images=createImageImport({app,canvas,dispatch,applyChange,wake,element,button,icon,message,gpuOperation,
-    openClipboard,interpret:()=>chooseSourceProfile({app,dialog,element,button})});
+    openClipboard,openFiles,interpret:()=>chooseSourceProfile({app,dialog,element,button})});
   const pruneHandles=()=>{const live=new Set(app.document_tabs(0).tabs.flatMap(t=>[t.uri,t.export_uri]));for(const key of handles.keys())if(!live.has(key))handles.delete(key);};
   const location=(name,handle)=>{const uri=`browser:${crypto.randomUUID()}`;if(handle)handles.set(uri,handle);return{uri,name};};
   const openDialogs=new Set();

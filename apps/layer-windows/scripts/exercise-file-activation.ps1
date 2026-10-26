@@ -10,6 +10,56 @@ $elsewhere=Join-Path $run 'elsewhere'
 [IO.Directory]::CreateDirectory($elsewhere)|Out-Null
 $CapyTraceDirectory=$run
 $review=$null;$other=$null
+if(!('CapyFileDrag' -as [type])){Add-Type -TypeDefinition @"
+using System;using System.ComponentModel;using System.Runtime.InteropServices;using System.Threading;
+public static class CapyFileDrag {
+ [StructLayout(LayoutKind.Sequential)] struct Mouse {public int dx,dy;public uint data,flags,time;public UIntPtr extra;}
+ [StructLayout(LayoutKind.Explicit,Size=40)] struct Input {[FieldOffset(0)]public uint type;[FieldOffset(8)]public Mouse mouse;}
+ [StructLayout(LayoutKind.Sequential)] struct Rect {public int left,top,right,bottom;}
+ [DllImport("user32.dll",SetLastError=true)] static extern uint SendInput(uint count,Input[] input,int size);
+ [DllImport("user32.dll")] static extern int GetSystemMetrics(int code);
+ [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr window,out Rect rect);
+ [DllImport("user32.dll")] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
+ public static volatile Exception Failure;
+ static void Send(uint flags,int x,int y){
+  var mouse=new Mouse{dx=(x-GetSystemMetrics(76))*65535/(GetSystemMetrics(78)-1),dy=(y-GetSystemMetrics(77))*65535/(GetSystemMetrics(79)-1),flags=flags|0xC001};
+  if(SendInput(1,new[]{new Input{mouse=mouse}},40)!=1)throw new Win32Exception(Marshal.GetLastWin32Error());
+ }
+ public static Thread Press(IntPtr source,int x,int y){
+  Rect rect;if(!GetWindowRect(source,out rect))throw new Win32Exception(Marshal.GetLastWin32Error());
+  int sx=(rect.left+rect.right)/2,sy=(rect.top+rect.bottom)/2;
+  Send(0,sx,sy);Send(2,sx,sy);
+  Failure=null;
+  var glide=new Thread(()=>{
+   try{
+    Thread.Sleep(400);
+    for(int step=1;step<=16;step++){Send(0,sx+(x-sx)*step/16,sy+(y-sy)*step/16);Thread.Sleep(40);}
+    for(int dwell=0;dwell<12;dwell++){Send(0,x+dwell%2,y);Thread.Sleep(60);}
+   }catch(Exception error){Failure=error;}
+   finally{try{Send(4,x,y);}catch(Exception error){Failure=Failure??error;}}
+  });
+  glide.Start();return glide;
+ }
+}
+"@}
+function Drop-Files([string[]]$Paths,[string]$Target){
+    [CapyWindowApi]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
+    $bounds=(Control $Target -Arranged).Current.BoundingRectangle
+    $shell=[powershell]::Create();$shell.Runspace=[runspacefactory]::CreateRunspace();$shell.Runspace.ApartmentState='STA';$shell.Runspace.Open()
+    try{
+        $null=$shell.AddScript({param($Paths,$X,$Y)
+            Add-Type -AssemblyName System.Windows.Forms,System.Drawing
+            [CapyFileDrag]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
+            $source=[Windows.Forms.Form]@{FormBorderStyle='None';ShowInTaskbar=$false;TopMost=$true;StartPosition='Manual';Bounds=[Drawing.Rectangle]::new($X-40,$Y+160,80,80)}
+            $source.Show();[Windows.Forms.Application]::DoEvents()
+            $glide=[CapyFileDrag]::Press($source.Handle,$X,$Y);[Windows.Forms.Application]::DoEvents()
+            $effect=$source.DoDragDrop([Windows.Forms.DataObject]::new([Windows.Forms.DataFormats]::FileDrop,[string[]]$Paths),[Windows.Forms.DragDropEffects]::Copy)
+            if(!$glide.Join(10000)){throw 'The file drag did not release'}
+            $source.Close();if([CapyFileDrag]::Failure){throw [CapyFileDrag]::Failure};[string]$effect
+        }).AddArgument($Paths).AddArgument([int]($bounds.X+$bounds.Width/2)).AddArgument([int]($bounds.Y+$bounds.Height/2))
+        $result=$shell.Invoke();if($shell.HadErrors){throw ($shell.Streams.Error|Out-String)};[string]$result[-1]
+    }finally{$shell.Runspace.Dispose();$shell.Dispose()}
+}
 function Tabs {@((Model).windows_tabs.tabs)}
 function Image([string]$Name,[Drawing.Color]$Color){
     $path=Join-Path $run $Name
@@ -57,10 +107,23 @@ try {
     Stop-Process -Id $other.Id -Force;$other.WaitForExit()
     $env:CAPY_STORAGE_DIR=Join-Path $run 'profile'
     if(@(Tabs).Count -ne $before+3){throw 'Another profile changed this window'}
+    $drawing=@{window=$null}
+    Wait-Until {$drawing.window=Owned-DrawingWindow $review;$null -ne $drawing.window} 'The drawing window is unavailable'
+    $root=$drawing.window.Root;$drawingWindow=$drawing.window.Handle
+    [CapyWindowApi]::SetForegroundWindow($drawingWindow)|Out-Null
+    $saved=Join-Path $run 'Dropped drawing.capy'
+    Save-ProjectAs $saved
+    $photo=Image 'Dropped photo.png' ([Drawing.Color]::FromArgb(255,220,160,30))
+    $effect=Drop-Files @($photo,$saved) 'drawing-tabs'
+    if($effect -ne 'Copy'){throw "The drawing tabs refused an image and a drawing: $effect"}
+    Wait-Until {@(Tabs).Count -eq $before+5 -and !(Model).state.document_file.busy} 'Files dropped on the drawing tabs did not open as drawings' 60
+    $titles=@(Tabs|Select-Object -Last 2|ForEach-Object title)
+    if($titles[0] -notlike 'Dropped photo*' -or $titles[1] -notlike 'Dropped drawing*'){throw "Dropped files opened out of order: $($titles -join ', ')"}
+    if(@(Tabs)[-1].id -ne (Model).windows_tabs.selected){throw 'The last dropped drawing is not selected'}
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close -DiscardUnsaved -StateDirectory $run
     if(!$review.WaitForExit(20000)){throw 'File activation review did not close'}
     if((Get-Item (Join-Path $run 'stderr.log')).Length){throw 'Native stderr requires review'}
-    [pscustomobject]@{forwarded_in_order='passed';relative_path='passed';launch_opens_window='passed';storage_isolated='passed';evidence=$run}|ConvertTo-Json|Tee-Object -FilePath (Join-Path $run 'results.json')
+    [pscustomobject]@{forwarded_in_order='passed';relative_path='passed';launch_opens_window='passed';storage_isolated='passed';tab_drop='passed';evidence=$run}|ConvertTo-Json|Tee-Object -FilePath (Join-Path $run 'results.json')
 } finally {
     if($other -and !$other.HasExited){Stop-Process -Id $other.Id -Force}
     if($review){$review.Refresh();if(!$review.HasExited){Stop-Process -Id $review.Id -Force}}

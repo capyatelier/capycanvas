@@ -534,7 +534,6 @@ native-dialog-link-failed = Windows konnte den Anwendungslink nicht öffnen.
 native-dialog-window-failed = Windows konnte kein Fenster erstellen.
 native-dialog-fullscreen-failed = Windows konnte den Vollbildmodus nicht ändern.
 native-dialog-link-unavailable = Der Anwendungslink ist nicht verfügbar.
-native-dialog-drop-drawings = Zeichnungsdateien hier ablegen, um sie zu öffnen
 
 native-drawing-storage-help = { $detail }
     Das Zeichnungsmenü öffnen und Zeichnungsspeicherung erneut versuchen wählen.

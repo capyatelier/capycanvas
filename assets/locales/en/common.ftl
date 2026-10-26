@@ -533,7 +533,6 @@ native-dialog-link-failed = Windows could not open the application link.
 native-dialog-window-failed = Windows could not create a window.
 native-dialog-fullscreen-failed = Windows could not change full screen.
 native-dialog-link-unavailable = The application link is unavailable.
-native-dialog-drop-drawings = Drop drawing files to open them
 
 native-drawing-storage-help = { $detail }
     Open the drawing menu and choose Retry drawing storage.

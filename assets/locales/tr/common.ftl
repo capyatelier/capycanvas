@@ -527,7 +527,6 @@ native-dialog-link-failed = Windows uygulama bağlantısını açamadı.
 native-dialog-window-failed = Windows pencere oluşturamadı.
 native-dialog-fullscreen-failed = Windows tam ekranı değiştiremedi.
 native-dialog-link-unavailable = Uygulama bağlantısı kullanılamıyor.
-native-dialog-drop-drawings = Çizim dosyalarını açmak için bırakın
 
 native-drawing-storage-help = { $detail }
     Çizim menüsünü açıp Çizim depolamasını yeniden dene seçeneğini kullanın.

@@ -351,7 +351,6 @@ native-dialog-link-failed = Windows 无法打开应用链接。
 native-dialog-window-failed = Windows 无法创建窗口。
 native-dialog-fullscreen-failed = Windows 无法切换全屏。
 native-dialog-link-unavailable = 应用链接不可用。
-native-dialog-drop-drawings = 拖放绘画文件以打开
 
 native-drawing-storage-help = { $detail }
     请打开绘画菜单并选择“重试绘画存储”。

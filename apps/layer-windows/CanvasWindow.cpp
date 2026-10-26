@@ -506,7 +506,7 @@ bool CanvasWindow::StartPrepared(CapyLaunch  prepared) {
     panel.Drop([weak=weak_from_this()](auto&&,DragEventArgs const& event){if(auto self=weak.lock();self&&!self->closing&&CapyUi::fileDrag(event)){
         auto action=CapyUi::imageDrop(CapyUi::object(self->lastModel,L"state"));auto point=event.GetPosition(self->panel);auto scale=self->panel.XamlRoot().RasterizationScale();
         action.Insert(L"screen",CapyUi::O({{L"x",CapyUi::N(point.X*scale)},{L"y",CapyUi::N(point.Y*scale)}}));
-        CapyUi::receiveImageDrop(event,action,[weak](std::string json){if(auto self=weak.lock();self&&!self->closing)self->Send(std::move(json),CanvasCommandKind::Document);});
+        CapyUi::receiveFileDrop(event,action,[weak](std::string json){if(auto self=weak.lock();self&&!self->closing)self->Send(std::move(json),CanvasCommandKind::Document);});
     }});
     for(auto [dialog,kind]:{std::pair{&canvasSize,SizeDialog::Kind::Canvas},std::pair{&imageSize,SizeDialog::Kind::Image}})
         *dialog=std::make_unique<SizeDialog>(kind,send,model,localization,root.XamlRoot(),

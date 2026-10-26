@@ -351,7 +351,6 @@ native-dialog-link-failed = Windowsでアプリのリンクを開けませんで
 native-dialog-window-failed = Windowsでウィンドウを作成できませんでした。
 native-dialog-fullscreen-failed = Windowsで全画面表示を切り替えられませんでした。
 native-dialog-link-unavailable = アプリのリンクを利用できません。
-native-dialog-drop-drawings = 描画ファイルをドロップして開く
 
 native-drawing-storage-help = { $detail }
     描画のメニューを開き、「描画の保存を再試行」を選択してください。

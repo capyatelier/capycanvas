@@ -527,7 +527,6 @@ native-dialog-link-failed = Windows не удалось открыть ссыл�
 native-dialog-window-failed = Windows не удалось создать окно.
 native-dialog-fullscreen-failed = Windows не удалось изменить полноэкранный режим.
 native-dialog-link-unavailable = Ссылка приложения недоступна.
-native-dialog-drop-drawings = Перетащите файлы рисунков для открытия
 
 native-drawing-storage-help = { $detail }
     Откройте меню рисунка и выберите повторное сохранение в хранилище.
