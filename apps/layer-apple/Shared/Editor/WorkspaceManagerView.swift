@@ -50,9 +50,15 @@ struct WorkspaceManagerView: View {
     @ObservedObject var workspaces: WorkspaceController
     @State private var query = ""
     @State private var optionCaptions: [String: String] = [:]
+    @State private var workspaceRowHeights: [String: CGFloat] = [:]
     private var header: JSON { nativeCopy["header"] }
     private var view: JSON { workspaces.view }
     private var toolbarMode: Bool { ["this_workspace", "toolbar_library"].contains(workspaces.page) }
+    private var workspaceRowsHeight: CGFloat {
+        view["rows"].array.prefix(7).reduce(0) { height, row in
+            height + max(56, workspaceRowHeights[row["id"].string] ?? 56)
+        }
+    }
     private var message: String? {
         if !view["error"].isNull { return view["error"].string }
         return view["switcher_error"].isNull ? nil : view["switcher_error"].string
@@ -76,7 +82,7 @@ struct WorkspaceManagerView: View {
                 if workspaces.page == "history" { history } else { browser }
             }
         }.padding(20).frame(minWidth: 340, idealWidth: workspaces.page == "workspaces" ? 460 : workspaces.page == "history" ? 480 : 620, maxWidth: workspaces.page == "workspaces" ? 620 : 800,
-            minHeight: workspaces.page == "workspaces" ? 0 : 360, idealHeight: workspaces.page == "workspaces" ? CGFloat(min(7,view["rows"].array.count))*56+176 : 600, maxHeight: 900)
+            minHeight: workspaces.page == "workspaces" ? 0 : 360, idealHeight: workspaces.page == "workspaces" ? workspaceRowsHeight+176 : 600, maxHeight: 900)
             .onKeyPress(.escape) { guard !NativeTextContext.composing else{return .ignored};if workspaces.inlineRename { workspaces.cancelPrompt() } else { workspaces.dismiss() }; return .handled }
             .accessibilityElement(children: .contain).accessibilityIdentifier("workspace-library-manager")
             .onChange(of: workspaces.page) { _, _ in query = "" }
@@ -87,6 +93,11 @@ struct WorkspaceManagerView: View {
             let title = row["title"].string
             return (title, NativeTextContext.caption(["type": "options_for", "title": title], language: language))
         }, uniquingKeysWith: { first, _ in first })
+    }
+    private func rememberWorkspaceRowHeights(_ heights: [String: CGFloat]) {
+        var measured = workspaceRowHeights
+        measured.merge(heights) { _, height in height }
+        if measured != workspaceRowHeights { workspaceRowHeights = measured }
     }
     private var browser: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -108,7 +119,8 @@ struct WorkspaceManagerView: View {
             } }
             if workspaces.page == "workspaces" {
                 VStack(alignment: .leading,spacing:6) {
-                    WorkspaceSwitcherRows(workspaces: workspaces).frame(height:CGFloat(min(7,view["rows"].array.count))*56)
+                    WorkspaceSwitcherRows(workspaces: workspaces, reportRowHeights: rememberWorkspaceRowHeights)
+                        .frame(minHeight: 0, idealHeight: workspaceRowsHeight, maxHeight: workspaceRowsHeight)
                     HStack(spacing:4) {
                         Button {workspaces.form(["type":"new"])} label: {SharedIcon(name:"plus").frame(width:34,height:34)}
                             .buttonStyle(.plain).disabled(workspaces.busy && !workspaces.inlineRename).accessibilityLabel(header["new_workspace"].string).accessibilityIdentifier("workspace-action-new")

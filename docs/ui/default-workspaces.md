@@ -257,7 +257,9 @@ Restore Starting Layout…; and Reset All Brushes…. Captions come from
   Workspace below. **+** and trash sit below the list, like Layers, with
   tooltips and accessible names. These use 34px dialog targets aligned with the
   list; Cancel and Switch use the app's right-aligned dialog footer. The dialog
-  fits up to seven measured rows and scrolls longer lists without a search bar. Its list
+  fits up to seven measured rows and scrolls longer lists without a search bar.
+  Apple retains each row's last measured height by workspace ID while lazy rows
+  are offscreen, using 56px until a row is measured. Its list
   and controls use the shared squircle rendering, with one outer list clip.
   Double-click a custom workspace's name or press
   F2 to rename it inline; Enter commits and Escape cancels. Touch and pen can

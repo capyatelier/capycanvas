@@ -4,6 +4,26 @@ import AppKit
 import SwiftUI
 
 @main final class WorkspaceSwitcherInputChecks: NativeWorkspaceInputFixture {
+    @MainActor static func managerGeometry(window: NSWindow, workspaces: WorkspaceController, rowsHost: NSView) async throws {
+        let host = NSHostingView(rootView: WorkspaceManagerView(workspaces: workspaces).font(.system(size: 40)))
+        defer { window.contentView = rowsHost }
+        window.contentView = host
+        window.setContentSize(CGSize(width: 560, height: 900))
+        window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
+        let ids = workspaces.view["rows"].array.prefix(7).map { $0["id"].string }
+        var marker: ReorderInputView?
+        try await wait("Workspace manager fits large measured rows", seconds: 5) {
+            host.layoutSubtreeIfNeeded(); marker = find(host)
+            guard let model = marker?.model as? WorkspaceRowInteraction else { return false }
+            return ids.allSatisfy { model.frames[$0] != nil }
+        }
+        let model = marker!.model as! WorkspaceRowInteraction
+        let measured = ids.compactMap { model.frames[$0]?.row.height }.reduce(0, +)
+        let viewport = marker!.enclosingScrollView!.contentView.bounds.height
+        try require(measured > CGFloat(ids.count) * 56 && viewport + 0.5 >= measured,
+            "A 40-point manager must fit its measured rows: viewport=\(viewport), rows=\(measured), count=\(ids.count)")
+        note("PASS: manager viewport fits rows measured above the 56-point fallback at 40-point text")
+    }
     @MainActor static func penChecks(marker: ReorderInputView, workspaces: WorkspaceController) async throws {
         let model = marker.model as! WorkspaceRowInteraction, window = marker.window!
         let order = workspaces.view["order"].array.map { $0.string }, first = order[0], last = order.last!
@@ -115,7 +135,9 @@ import SwiftUI
         defer { window.contentView = nil; window.close() }
         let host = NSHostingView(rootView: WorkspaceSwitcherRows(workspaces: workspaces)
             .padding(12).modifier(EditorPopoverHost()))
-        window.contentView = host; window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
+        try await managerGeometry(window: window, workspaces: workspaces, rowsHost: host)
+        window.setContentSize(CGSize(width: 560, height: 320))
+        window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
         note("Window mounted")
         try await drain(0.3); host.layoutSubtreeIfNeeded()
         note("Window event pump returned")

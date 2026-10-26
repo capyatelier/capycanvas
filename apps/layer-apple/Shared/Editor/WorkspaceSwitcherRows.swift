@@ -6,6 +6,7 @@ struct WorkspaceSwitcherRows: View {
     @Environment(\.editorPalette) private var palette
     private let rowHeight: CGFloat = 56
     @ObservedObject var workspaces: WorkspaceController
+    var reportRowHeights: ([String: CGFloat]) -> Void = { _ in }
     @StateObject private var interaction = WorkspaceRowInteraction()
     @State private var reorderCaptions: [String: String] = [:]
     @State private var switchCaptions: [String: String] = [:]
@@ -95,7 +96,8 @@ struct WorkspaceSwitcherRows: View {
                     Button {
                         workspaces.send(["type": "edit_switcher", "edit": pin["edit"].raw])
                     } label: {
-                        SharedIcon(name: pin["icon"].string).frame(width: 34, height: rowHeight).contentShape(Rectangle())
+                        SharedIcon(name: pin["icon"].string).frame(width: 34)
+                            .frame(minHeight: rowHeight, maxHeight: .infinity).contentShape(Rectangle())
                     }.buttonStyle(.plain).foregroundStyle(pin["selected"].bool ? Color.accentColor : Color.secondary)
                         .disabled(!pin["enabled"].bool).help(pin["label"].string).accessibilityLabel(pin["label"].string)
                         .accessibilityAddTraits(pin["selected"].bool ? .isSelected : [])
@@ -116,7 +118,8 @@ struct WorkspaceSwitcherRows: View {
                     .background(alignment:.trailing) {
                         if interaction.swipe==id,let action=row["options"].array.first(where:{$0["action"]["type"].string=="delete"}) {
                             Button(action["label"].string,role:.destructive){interaction.swipe=nil;interaction.swipeOffset=0;workspaces.activate(action["action"])}
-                                .buttonStyle(.plain).foregroundStyle(.white).frame(width:72,height:rowHeight).background(Color(red:0.78,green:0.16,blue:0.16)).accessibilityIdentifier("workspace-swipe-delete-"+id)
+                                .buttonStyle(.plain).foregroundStyle(.white).frame(width:72)
+                                .frame(minHeight:rowHeight,maxHeight:.infinity).background(Color(red:0.78,green:0.16,blue:0.16)).accessibilityIdentifier("workspace-swipe-delete-"+id)
                         }
                     }
                     .clipped()
@@ -129,7 +132,10 @@ struct WorkspaceSwitcherRows: View {
             }
         }.coordinateSpace(name: "workspace-manager-rows")
             .background(NativeReorderInput(model: interaction))
-            .onPreferenceChange(WorkspaceRowFrames.self) { interaction.frames = $0 }
+            .onPreferenceChange(WorkspaceRowFrames.self) { frames in
+                interaction.frames = frames
+                reportRowHeights(frames.compactMapValues { $0.row.height > 0 ? $0.row.height : nil })
+            }
             .overlay(alignment: .topLeading) { overlays }
             .onAppear { update() }
             .onChange(of: workspaces.view["rows"].stableKey) { _, _ in update() }
