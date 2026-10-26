@@ -40,6 +40,7 @@ final class EditorLaunchTests: XCTestCase {
     @MainActor func testCommandSearchFromMenu() { checkCommandSearch(in: ignoringSavedWindows(editorCaptureApplication()), fromMenu: true) }
     @MainActor func testNumericTextHistory() { checkNumericTextHistory(in: editorCaptureApplication()) }
     @MainActor func testNumericSettingsDone() { checkNumericSettingsDone(in: editorCaptureApplication()) }
+    @MainActor func testNumericSettingsDoneDark() { checkNumericSettingsDone(in: editorCaptureApplication(), theme: "dark") }
     @MainActor func testSettingsNumericReset() { checkSettingsNumericReset(in: editorCaptureApplication()) }
     @MainActor func testPressureCalibrationLight() { checkPressureCalibration(in: editorCaptureApplication(), theme: "light") }
     @MainActor func testPressureCalibrationDark() { checkPressureCalibration(in: editorCaptureApplication(), theme: "dark") }
@@ -51,6 +52,14 @@ final class EditorLaunchTests: XCTestCase {
         checkSettingsTextState(in: editorCaptureApplication(), keyboardSelection: false)
         #else
         checkSettingsTextState(in: editorCaptureApplication())
+        #endif
+    }
+
+    @MainActor func testSettingsTextStateDark() {
+        #if os(iOS)
+        checkSettingsTextState(in: editorCaptureApplication(), theme: "dark", keyboardSelection: false)
+        #else
+        checkSettingsTextState(in: editorCaptureApplication(), theme: "dark")
         #endif
     }
 

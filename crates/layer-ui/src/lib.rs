@@ -159,7 +159,7 @@ pub use customization::{ToolbarNameRefusal,
     canonical_tool_choice, tool_choice_localized,
 };
 pub use interaction::{
-    NavigationMode, control_takes_key,
+    NavigationMode, control_takes_key, settings_search_key,
     ChromeEvent, ChromeFacts, InputReply, Modifiers, PenButton, PointerButton, PointerKind, StylusAction, TouchPolicy,
     UiInput,
 };

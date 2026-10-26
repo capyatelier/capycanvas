@@ -21,6 +21,12 @@ pub fn control_takes_key(key: &str, modifiers: Modifiers, keyboard_focus: bool) 
     }
 }
 
+pub fn settings_search_key(key: &str, modifiers: Modifiers, editing: bool, capturing: bool) -> bool {
+    !editing && !capturing && !modifiers.command && !modifiers.alt
+        && key.chars().count() == 1
+        && key.chars().all(|c| !c.is_control() && !c.is_whitespace())
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PointerKind {
@@ -487,6 +493,22 @@ impl NavigationAxes {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settings_search_preserves_text_and_respects_native_ownership() {
+        let plain = Modifiers::default();
+        for key in ["p", "P", "é", "日", "/"] {
+            assert!(settings_search_key(key, plain, false, false), "{key}");
+            assert!(settings_search_key(key, Modifiers { shift: true, ..plain }, false, false));
+            assert!(!settings_search_key(key, plain, true, false));
+            assert!(!settings_search_key(key, plain, false, true));
+            assert!(!settings_search_key(key, Modifiers { command: true, ..plain }, false, false));
+            assert!(!settings_search_key(key, Modifiers { alt: true, ..plain }, false, false));
+        }
+        for key in ["", " ", "\t", "\n", "\u{1b}", "\u{7f}", "arrowup", "home", "enter", "f1", "f24"] {
+            assert!(!settings_search_key(key, plain, false, false), "{key:?}");
+        }
+    }
 
     #[test]
     fn space_activates_only_a_keyboard_focused_control_and_enter_always_does() {

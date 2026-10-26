@@ -3,8 +3,8 @@ import SwiftUI
 struct SettingsView: View {
     @ObservedObject var store: EditorStore
     @Environment(\.openURL) private var openURL
-    @FocusState private var searching: Bool
-    @State private var numberResets: [String: UInt64] = [:]
+    @State private var searching = false
+    @State private var editResets: [String: UInt64] = [:]
     @State private var linkFailed = false
     @State private var profiles = false
     @State private var headroomCaption = ""
@@ -14,12 +14,10 @@ struct SettingsView: View {
     var body: some View {
         NavigationSplitView {
             VStack {
-                EditorTextField(store.catalog["native_copy"]["shortcuts"]["search_settings"].string, value: model["query"].string) {
-                    action(["type": "search", "query": $0])
-                }
-                    .editorSearchInput().textFieldStyle(.roundedBorder).padding(.horizontal).focused($searching)
+                searchField
+                    .editorSearchInput().textFieldStyle(.roundedBorder).padding(.horizontal)
                     .accessibilityIdentifier("settings-search")
-                List(selection: Binding<String?>(get: { model["page"].string }, set: { if let next = $0 {
+                List(selection: Binding<String?>(get: { model["query"].string.isEmpty ? model["page"].string : nil }, set: { if let next = $0 {
                     searching = false
                     action(["type": "page", "page": next])
                 } })) {
@@ -45,6 +43,14 @@ struct SettingsView: View {
             ActionPickerSheet(store: store).modifier(EditorPopupPresentation())
         }
         .sheet(isPresented: $profiles) { ColorProfileLibrary(preferences: store.colorPreferences).modifier(EditorPopupPresentation()) }
+            .onChange(of: model["search_focus"].uint) { _, request in
+                DispatchQueue.main.async {
+                    let current = store.snapshot["preferences"]
+                    guard !current.isNull, current["search_focus"].uint == request else { return }
+                    searching = true
+                }
+            }
+            .onKeyPress(phases: [.down, .repeat]) { typedSearch($0) ? .handled : .ignored }
             .frame(minHeight: 420)
             #if os(macOS)
             .frame(minWidth: 560)
@@ -53,6 +59,12 @@ struct SettingsView: View {
                 openURL(url) { accepted in linkFailed = !accepted }
                 return .handled
             })
+    }
+    private var searchField: some View {
+        let field = EditorTextField(store.catalog["native_copy"]["shortcuts"]["search_settings"].string, value: model["query"].string) {
+            action(["type": "search", "query": $0])
+        }
+        return field.editorFocus($searching, identifier: "settings-search")
     }
     @ViewBuilder private var detail: some View {
         if !model["query"].string.isEmpty {
@@ -119,9 +131,22 @@ struct SettingsView: View {
         guard !model.isNull else { return }
         store.dispatch(["type": "preferences", "action": value])
     }
+    private func typedSearch(_ press: KeyPress) -> Bool {
+        guard !model.isNull else { return false }
+        let modifiers = ["command": !press.modifiers.intersection([.command, .control]).isEmpty,
+            "alt": press.modifiers.contains(.option), "shift": press.modifiers.contains(.shift)]
+        let request = JSON(["key": press.editorKey, "modifiers": modifiers,
+            "editing": NativeTextContext.composing || store.commandFocus() == "text",
+            "capturing": !model["capture"].isNull || !model["shortcut_editor"].isNull])
+        guard let text = try? request.encoded(), let response = text.withCString({ takeNativeText(capy_apple_settings_search_key($0)) }) else { return false }
+        guard (try? JSON.decode(response))?.bool == true else { return false }
+        store.input(["type": "key", "key": press.editorKey, "pressed": true, "repeat": press.phase == .repeat, "modifiers": modifiers])
+        return true
+    }
     private func edit(_ row: JSON, _ value: Any) { action(["type": "edit", "id": row["id"].raw, "value": value]) }
     @ViewBuilder private func preference(_ row: JSON) -> some View {
         let kind = row["kind"]
+        let reset = editResets[row["id"].string, default: 0]
         VStack(alignment: .leading, spacing: 4) {
             switch kind["type"].string {
             case "switch":
@@ -130,15 +155,15 @@ struct SettingsView: View {
             case "choice":
                 choice(row)
             case "number":
-                let reset = numberResets[row["id"].string, default: 0]
                 NumberControl(store: store, label: row["title"].string, value: kind["value"].number, control: kind["control"], panel: false) { value, completion in
-                    // Reset replaces this draft; a late focus callback from the
-                    // discarded editor must not overwrite the shared default.
-                    guard reset == numberResets[row["id"].string, default: 0] else { completion(nil); return }
+                    guard reset == editResets[row["id"].string, default: 0] else { completion(nil); return }
                     store.edit(["type": "preferences", "action": ["type": "edit", "id": row["id"].raw, "value": value]], completion: completion)
                 }.id(reset)
             case "swatches":
-                PreferenceSwatches(row: row, palette: EditorPalette(source: store.state["palette"])) { edit(row, $0) }
+                PreferenceSwatches(row: row, palette: EditorPalette(source: store.state["palette"])) { value in
+                    guard reset == editResets[row["id"].string, default: 0] else { return }
+                    edit(row, value)
+                }.id(reset)
             case "info":
                 LabeledContent(row["title"].string, value: kind["value"].string)
             case "action":
@@ -161,7 +186,7 @@ struct SettingsView: View {
             .contextMenu {
                 if !row["reset"].isNull {
                     Button(row["reset"]["label"].string) {
-                        if kind["type"].string == "number" { numberResets[row["id"].string, default: 0] &+= 1 }
+                        if ["number", "swatches"].contains(kind["type"].string) { editResets[row["id"].string, default: 0] &+= 1 }
                         action(["type": "reset", "id": row["id"].raw])
                     }.disabled(!row["reset"]["enabled"].bool)
                 }

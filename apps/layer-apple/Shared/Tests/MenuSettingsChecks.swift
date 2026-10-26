@@ -92,13 +92,17 @@ extension XCTestCase {
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)
     }
 
-    @MainActor func checkSettingsTextState(in app: XCUIApplication, keyboardSelection: Bool = true) {
-        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"invoke","command":"settings"},{"type":"preferences","action":{"type":"page","page":"appearance"}}]"#
+    @MainActor func checkSettingsTextState(in app: XCUIApplication, theme: String = "light", keyboardSelection: Bool = true) {
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"\#(theme)"},{"type":"invoke","command":"settings"},{"type":"preferences","action":{"type":"page","page":"appearance"}}]"#
         app.launch()
         func reopen() {
             workspaceActivate(app.buttons["settings-done"])
             XCTAssertTrue(app.buttons["settings-done"].waitForNonExistence(timeout: 5))
+            #if os(macOS)
             workspaceActivate(app.buttons["settings-button"])
+            #else
+            editorMenu(in: app, menu: "Edit", id: "settings", label: "Settings…")
+            #endif
             XCTAssertTrue(app.buttons["settings-done"].waitForExistence(timeout: 10))
         }
         for (id, label) in [("dark_base", "Dark theme base color"), ("light_base", "Light theme base color")] {
@@ -152,7 +156,7 @@ extension XCTestCase {
         workspaceActivate(accent)
         expectation(for: NSPredicate(format: "selected == YES"), evaluatedWith: accent)
         waitForExpectations(timeout: 5)
-        attachEditor(in: app, name: "settings-text-state")
+        attachEditor(in: app, name: "settings-text-state-\(theme)")
         workspaceActivate(app.buttons["settings-done"])
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)
     }
@@ -253,8 +257,8 @@ extension XCTestCase {
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)
     }
 
-    @MainActor func checkNumericSettingsDone(in app: XCUIApplication) {
-        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"invoke","command":"settings"},{"type":"preferences","action":{"type":"page","page":"canvas"}}]"#
+    @MainActor func checkNumericSettingsDone(in app: XCUIApplication, theme: String = "light") {
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"\#(theme)"},{"type":"invoke","command":"settings"},{"type":"preferences","action":{"type":"page","page":"canvas"}}]"#
         app.launch()
         let value = app.buttons["number-value-Scroll pan speed"]
         let entry = app.textFields["number-entry-Scroll pan speed"]
@@ -262,7 +266,11 @@ extension XCTestCase {
         XCTAssertTrue(entry.waitForExistence(timeout: 5)); entry.typeText("1 + 0.25")
         workspaceActivate(app.buttons["settings-done"])
         XCTAssertTrue(entry.waitForNonExistence(timeout: 5))
+        #if os(macOS)
         workspaceActivate(app.buttons["settings-button"])
+        #else
+        editorMenu(in: app, menu: "Edit", id: "settings", label: "Settings…")
+        #endif
         let search = app.textFields["settings-search"]
         XCTAssertTrue(search.waitForExistence(timeout: 10)); workspaceActivate(search); search.typeText("Scroll pan speed")
         #if os(iOS)
@@ -276,7 +284,7 @@ extension XCTestCase {
         XCTAssertTrue(value.waitForExistence(timeout: 5), "Opening a search result must reveal its setting")
         expectation(for: NSPredicate(format: "value BEGINSWITH %@", "1.25"), evaluatedWith: value)
         waitForExpectations(timeout: 5)
-        attachEditor(in: app, name: "settings-numeric-done")
+        attachEditor(in: app, name: "settings-numeric-done-\(theme)")
         workspaceActivate(search); search.typeText("theme")
         #if os(iOS)
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))

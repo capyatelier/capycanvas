@@ -1436,13 +1436,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                 // printable keys start search with the original case intact.
                 if pressed
                     && self.state.settings_open
-                    && !editing
-                    && !modifiers.command
-                    && !modifiers.alt
-                    && self.state.preferences.capture.is_none()
-                    && self.state.preferences.editing_shortcut.is_none()
-                    && key.chars().count() == 1
-                    && key.chars().all(|c| !c.is_control() && !c.is_whitespace())
+                    && settings_search_key(&key, modifiers, editing,
+                        self.state.preferences.capture.is_some() || self.state.preferences.editing_shortcut.is_some())
                 {
                     let query = format!("{}{key}", self.state.preferences.query);
                     reply.change = self.dispatch(UiAction::Preferences {

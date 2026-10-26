@@ -29,6 +29,20 @@ extension EnvironmentValues {
         set { self[InterfaceLanguageKey.self] = newValue }
     }
 }
+extension KeyPress {
+    var editorFunctionKey: Bool {
+        characters.unicodeScalars.count == 1 && (0xF704...0xF71B).contains(characters.unicodeScalars.first?.value ?? 0)
+    }
+    var editorKey: String {
+        let names: [KeyEquivalent: String] = [.upArrow: "arrowup", .downArrow: "arrowdown", .leftArrow: "arrowleft",
+            .rightArrow: "arrowright", .home: "home", .end: "end", .pageUp: "pageup", .pageDown: "pagedown",
+            .delete: "backspace", .deleteForward: "delete", KeyEquivalent("\u{F727}"): "insert", KeyEquivalent("\u{F746}"): "insert",
+            .return: "enter", .tab: "tab", .space: " ", .escape: "escape"]
+        if let name = names[key] { return name }
+        if editorFunctionKey, let scalar = characters.unicodeScalars.first { return "f\(scalar.value - 0xF703)" }
+        return characters
+    }
+}
 @MainActor enum NativeTextContext {
     static func numericLabels(_ label: String, language: String) -> JSON {
         do {

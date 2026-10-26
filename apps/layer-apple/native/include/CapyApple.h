@@ -157,6 +157,7 @@ CapyText capy_apple_color_ui(const char *json);
 CapyText capy_apple_toolbar_ui(const char *json);
 CapyText capy_apple_bubble_ui(const char *json);
 CapyText capy_apple_drawer_frame(const char *json);
+CapyText capy_apple_settings_search_key(const char *json);
 /* Stateless shared wheel hit test in local logical coordinates. Shape: 0 circle,
    1 square, 2 triangle. Result: 0 miss/invalid, 1 hue ring, 2 field. */
 uint32_t capy_apple_color_hit(float x, float y, float size, uint32_t shape);

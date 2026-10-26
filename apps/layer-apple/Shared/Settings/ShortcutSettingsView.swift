@@ -414,16 +414,10 @@ private struct ShortcutSearchChord {
     let raw: [String: Any]
     init?(_ press: KeyPress) {
         let command = !press.modifiers.intersection([.command, .control]).isEmpty, alt = press.modifiers.contains(.option)
-        let names: [KeyEquivalent: String] = [.upArrow: "arrowup", .downArrow: "arrowdown", .leftArrow: "arrowleft",
-            .rightArrow: "arrowright", .home: "home", .end: "end", .pageUp: "pageup", .pageDown: "pagedown",
-            .delete: "backspace", .deleteForward: "delete", KeyEquivalent("\u{F727}"): "insert", KeyEquivalent("\u{F746}"): "insert",
-            .return: "enter", .tab: "tab", .space: " ", .escape: "escape"]
-        let scalar = press.characters.unicodeScalars.first?.value ?? 0
-        let function = (0xF704...0xF71B).contains(scalar) ? "f\(scalar - 0xF703)" : nil
-        let key = names[press.key] ?? function ?? press.characters.lowercased()
+        let key = press.editorKey.lowercased()
         let editing = press.modifiers == .command
             && ["a", "c", "v", "x", "z", "backspace", "delete", "arrowleft", "arrowright", "home", "end"].contains(key)
-        guard !key.isEmpty, !editing, command || alt || function != nil else { return nil }
+        guard !key.isEmpty, !editing, command || alt || press.editorFunctionKey else { return nil }
         raw = ["key": key, "command": command, "shift": press.modifiers.contains(.shift), "alt": alt]
     }
 }

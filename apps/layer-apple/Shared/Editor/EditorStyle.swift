@@ -362,16 +362,36 @@ struct EditorTextField: View {
     let edit: (String) -> Void
     @State private var text: String
     @State private var pending: String?
+    private var focus: (value: Binding<Bool>, identifier: String)?
+    func editorFocus(_ value: Binding<Bool>, identifier: String) -> Self {
+        var field = self; field.focus = (value, identifier); return field
+    }
     init(_ label: String, value: String, edit: @escaping (String) -> Void) {
         self.label = label; self.value = value; self.edit = edit
         _text = State(initialValue: value)
     }
-    var body: some View {
-        TextField(label, text: Binding(get: { text }, set: { next in
+    private var binding: Binding<String> {
+        Binding(get: { text }, set: { next in
             // Native fields can resend their value when editing ends.
             guard next != text else { return }
             text = next; pending = next; edit(next)
-        }))
+        })
+    }
+    @ViewBuilder private var field: some View {
+        if let focus {
+            #if os(iOS)
+            let size: CGFloat = 17
+            #else
+            let size: CGFloat = 14
+            #endif
+            NumericTextField(label: label, text: binding, focused: focus.value, fontSize: size, color: .primary,
+                identifier: focus.identifier, submit: { _ in true }, cancel: { focus.value.wrappedValue = false },
+                alignment: .natural, selectsOnFocus: false, monospaced: false, rounded: true)
+                .frame(height: size + 10)
+        } else { TextField(label, text: binding) }
+    }
+    var body: some View {
+        field
             .onChange(of: value) { _, next in
                 if pending == nil || pending == next { text = next; pending = nil }
             }

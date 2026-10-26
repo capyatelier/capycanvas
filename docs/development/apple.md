@@ -353,6 +353,21 @@ mutation or release.
   Object layers use ordinary rows and shared actions; see [image objects](../ui/image-objects.md).
 - **Settings pages.** macOS sheets have no title bar. Put sub-page titles and Back
   buttons in the content; navigation titles and `.navigation` toolbar items are hidden.
+  Forward nonediting type-to-search input using the shared key predicate, then
+  follow `preferences.search_focus`. Native text, IME and shortcut capture keep
+  their keys. Normalize SwiftUI navigation and function keys before testing the
+  shared predicate, and preserve typed character case.
+  While search results are displayed, the native page list has no selection;
+  choosing any page forwards the shared Page action, which clears search.
+  Reset retires that row's number or custom-color draft before forwarding the
+  shared reset. Late Done and focus callbacks cannot commit a retired editor;
+  ordinary snapshot updates preserve the current focused draft.
+  `testNumericSettingsDone` and `testSettingsTextState`, with their Dark variants,
+  cover native Done, page activation and focused draft reset in both themes.
+  Build `tests/settings-links.swift` with `scripts/test-project-files.sh` and
+  `CAPY_TEST_BUILD_DIRECTORY` to retain its executable. Run it with
+  `--typed-search` for native list/button arrival, text editing, IME callbacks
+  and shortcut capture; its default route checks Settings link handling.
 - **Bubble pickup.** An admitted drag retains capture after its source drawer
   closes, through release or cancellation. A popup cancels the current edit
   before retiring its contact. Shared cancellation restores displaced bubbles

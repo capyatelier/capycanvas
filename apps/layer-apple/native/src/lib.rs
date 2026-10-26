@@ -330,6 +330,17 @@ pub unsafe extern "C" fn capy_apple_drawer_frame(json: *const c_char) -> u64 {
 /// # Safety
 /// `json` is readable NUL-terminated UTF-8 for this call.
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_apple_settings_search_key(json: *const c_char) -> u64 {
+    #[derive(serde::Deserialize)]
+    struct Request { key: String, modifiers: layer_ui::Modifiers, editing: bool, capturing: bool }
+    unsafe { stateless_json(json, "Missing settings key", |source| {
+        let request: Request = serde_json::from_str(source).map_err(|e| e.to_string())?;
+        Ok(serde_json::json!(layer_ui::settings_search_key(&request.key, request.modifiers, request.editing, request.capturing)))
+    }) }
+}
+/// # Safety
+/// `json` is readable NUL-terminated UTF-8 for this call.
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_apple_bubble_ui(json: *const c_char) -> u64 {
     unsafe { stateless_json(json, "Missing bubble request", |source| {
         layer_host::bubbles::query(serde_json::from_str(source).map_err(|e| e.to_string())?)
