@@ -74,7 +74,10 @@ style.
 GTK tool preview rows have a 54-pixel minimum and a 66-pixel natural height at
 the default text size. Their 40-pixel stroke previews retain their height as the
 panel shrinks. The icon and name occupy separate 26-pixel squircle surfaces,
-using the row's background color at 90% opacity with opaque text and icons.
+using the row's background color at 80% opacity with opaque text and icons.
+The row and caption surfaces share a 200 ms background-color transition for
+hover, press and selection changes. Selected preview rows retain the opaque
+selection color at every panel transparency level.
 Below 66 pixels these surfaces overlap the preview before the list scrolls.
 Larger text can increase the caption height. Filter rows preserve the image's
 aspect ratio and keep their captions below it. Every part of a tool row shows
@@ -98,7 +101,10 @@ GTK coverage is `workspace-motion.sh gtk --native-test=native_toolbar_variations
 blenders, retouch presets, Crop and Tonal range in both themes;
 `--native-test=native_toolbar_variations_overflow_input` focuses on title-bar
 sizes and overflow. `--native-test=native_panel_preview_input` checks tool and
-filter row compression and expansion; `--tooltips` checks captions across the whole row.
+filter row compression and expansion. `--native-test=native_tool_caption_hover_input`
+checks frame-by-frame row/caption colors, palette roles, opacity, settled pixels
+and moving presentation feedback through hover, press and reversal in both
+themes and every panel transparency level. `--tooltips` checks captions across the whole row.
 Web uses `workspace-motion.sh web --tool-variations`, and Apple runs
 `EditorLaunchTests/testToolGroups` and `testToolGroupsDark`. Run
 native popup journeys without `--tablet`, whose synthetic pen serials cannot

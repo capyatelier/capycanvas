@@ -229,6 +229,7 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 | Android palette pill opening at the work-area edge | 120 | **FPS unqualified.** Instant clamp; two actual presents per opening, all neighbors stationary in the diagnostic | [Native palette opening](#native-palette-opening), 2026-10-23 |
 | Android tool bubble drag through four neighbours | 120 | **Unqualified after the bubble release fixes.** Previous parity build: 115.00–116.55 actual app-window presents/s; p99 ≤16.667447 ms, default glass, 61 MP photo at Fit | [Native tool bubbles](#native-tool-bubbles), 2026-10-24 |
 | Web tool bubble drag through four neighbours | 120 | Unmeasured after the bubble release fixes; desktop browser journeys do not qualify the reference tablet | [Web checks](../development/web.md#tests), 2026-10-24 |
+| GTK Tool Set hover and press animation | 120 | Desktop diagnostic: **117.70 changing-color presents/s**, 115.78–118.06 per case; worst case gap p99 16.761 ms. Reference hardware unmeasured | [GTK tool caption hover](#gtk-tool-caption-hover), 2026-10-26 |
 | Panel or column resize | 120 | Expanding GTK divider desktop diagnostic: **54.49/s**, p99 41.689 ms; misses the 114 Hz floor. **Desktop diagnostic misses.** GTK GPU joins: 81.59–112.27 changing-geometry presents/s at 1×; 38.96–92.31 at 2×, worst p99 74.986 ms. Reference-tier qualification remains unset. Web Navigator: 30.00–30.64 Chrome surface presents/s; p99 50.00–58.34 ms | [Web Navigator layout](#web-navigator-layout), 2026-10-19; [GTK Color resize](#gtk-color-panel-resize), 2026-10-10; [GTK column bridge diagnostic](#gtk-column-bridge-diagnostic), 2026-10-25; [GTK Tool Set density](#gtk-tool-set-density), 2026-10-26; [GTK toolbar dividers](#gtk-toolbar-divider-resize), 2026-10-26 |
 | Pen pressure utility and curve drag | 120 | **Unqualified.** Current GTK desktop panel 119.20–119.40 presents/s, p99 up to 9.207 ms; curve 120.00, p99 up to 8.470 ms; reference tablet unmeasured | [GTK pen pressure utility](#gtk-pen-pressure-utility), 2026-10-10 UTC |
 | Windows tool bubble drag through four neighbours | 120 | Unmeasured on reference hardware; Surface Pro / Adreno X1-85 functional checks do not qualify timing (PresentMon ETW access denied) | [Windows tool bubbles](../development/windows.md#tool-bubbles) |
@@ -4378,6 +4379,38 @@ the frozen baseline. A Mac test-bundle compile overlapped the 17.5 run; the
 reference iPad ran only the workload. Evidence and stage/pen-up attribution are
 in `artifacts/ipados17/comparison/codegen-control/`.
 
+
+## GTK tool caption hover
+
+The 2026-10-26 UTC release diagnostic includes synchronized preview-row and
+caption colors and 80% caption opacity on `3170d1f58`. The private 1600 × 1000,
+120 Hz compositor uses NVIDIA RTX PRO 6000 Blackwell Max-Q, Vulkan 615.71.09.
+Twenty native cases cover both themes, all four panel transparency levels,
+selected and unselected rows, compact and natural-height previews, custom
+accent colors, hover reversals and pressed states. The regression fails on the
+preceding production code before checking the opacity change.
+
+After the fix, the maximum transient row/caption RGB difference is 1.08 channel
+levels out of 255; settled pixels differ by at most one level. Idle, hovered
+and pressed backgrounds match the shared panel/selection and foreground roles.
+Caption alpha is 0.8, with opaque glyphs. CPU render-node sampling happens
+after paint; GPU pixel readback happens only after transitions settle.
+
+Actual moving presentation feedback gives **117.70/s**, with a 16.667 ms gap
+p99 over 2,414 intervals from 2,558 unique presentations. Per-case cadence is
+115.78–118.06/s and gap p99 is 16.190–16.761 ms. Only changed-color
+frames with complete, positive GDK presentation times count. Timestamps are
+deduplicated within each case, gaps are retained within each phase, and idle
+and phase boundaries are excluded. Press and release have separate phases so
+the settled screenshot wait between them cannot count as an animation gap.
+CPU sampling overhead is 0.017 ms p95. This short desktop diagnostic does not
+qualify reference tablets or their canvas workloads.
+
+[Color and pixel traces](../../artifacts/tool-caption-hover/fixed-verified-traces.json),
+[presentation summary](../../artifacts/tool-caption-hover/fixed-verified-presentation-summary.json) and
+[source and executable provenance](../../artifacts/tool-caption-hover/fixed-verified-provenance.json)
+identify the measured build. [Baseline traces](../../artifacts/tool-caption-hover/baseline-traces.json)
+retain the original transition and selected-glass failures.
 
 ## GTK toolbar divider resize
 

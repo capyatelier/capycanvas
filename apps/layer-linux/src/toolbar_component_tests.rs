@@ -637,8 +637,231 @@ fn assert_preview_caption_paint(widget: &gtk::Widget) {
     let mut pixels = vec![0; texture.width() as usize * texture.height() as usize * 4];
     texture.download(&mut pixels, texture.width() as usize * 4);
     let alpha = pixels.as_chunks::<4>().0.iter().map(|pixel| pixel[3]).collect::<Vec<_>>();
-    assert!(alpha.iter().any(|value| (228..=232).contains(value)), "caption background uses90%opacity");
+    assert!(alpha.iter().any(|value| (202..=206).contains(value)), "caption background uses80%opacity");
     assert!(alpha.iter().any(|value| *value == 255), "caption glyphs retain opaque paint");
+}
+
+fn caption_background_color(node: &gtk::gsk::RenderNode) -> [f32; 4] {
+    if let Some(color) = node.downcast_ref::<gtk::gsk::ColorNode>() {
+        let color = color.color();
+        [color.red(), color.green(), color.blue(), color.alpha()]
+    } else if let Some(clip) = node.downcast_ref::<gtk::gsk::RoundedClipNode>() {
+        caption_background_color(&clip.child())
+    } else if let Some(clip) = node.downcast_ref::<gtk::gsk::ClipNode>() {
+        caption_background_color(&clip.child())
+    } else if let Some(transform) = node.downcast_ref::<gtk::gsk::TransformNode>() {
+        caption_background_color(&transform.child())
+    } else if let Some(opacity) = node.downcast_ref::<gtk::gsk::OpacityNode>() {
+        let mut color = caption_background_color(&opacity.child()); color[3] *= opacity.opacity(); color
+    } else if let Some(container) = node.downcast_ref::<gtk::gsk::ContainerNode>() {
+        assert_eq!(container.n_children(), 1, "one flat preview background");
+        caption_background_color(&container.child(0))
+    } else if let Some(fade) = node.downcast_ref::<gtk::gsk::CrossFadeNode>() {
+        let start = caption_background_color(&fade.start_child());
+        let end = caption_background_color(&fade.end_child());
+        std::array::from_fn(|channel| start[channel] + (end[channel] - start[channel]) * fade.progress())
+    } else { panic!("unexpected preview background node: {:?}", node.node_type()); }
+}
+
+#[allow(deprecated)]
+fn preview_background_node(widget: &gtk::Widget) -> gtk::gsk::RenderNode {
+    let snapshot = gtk::Snapshot::new();
+    snapshot.render_background(&widget.style_context(), 0., 0., widget.width() as f64, widget.height() as f64);
+    snapshot.to_node().expect("preview has a CSS background")
+}
+
+#[derive(Clone)]
+struct CaptionHoverFrame {
+    time: i64,
+    phase: &'static str,
+    colors: [[f32; 4]; 3],
+    changed: bool,
+    timing: Option<gdk::FrameTimings>,
+    sample_ms: f64,
+}
+
+fn caption_settled_pixels(d: &Driver, row: &gtk::Widget, icon: &gtk::Widget, name: &gtk::Widget) -> [[u8; 3]; 3] {
+    let texture = super::icons::capture_widget(&d.w.window, row);
+    let scale = row.scale_factor() as f32;
+    let bounds = row.compute_bounds(&d.w.window).unwrap();
+    let mut pixels = vec![0; texture.width() as usize * texture.height() as usize * 4];
+    texture.download(&mut pixels, texture.width() as usize * 4);
+    let points = [[bounds.x() + 3., bounds.y() + bounds.height() * 0.5],
+        { let b = icon.compute_bounds(&d.w.window).unwrap(); [b.x() + b.width() * 0.5, b.y() + b.height() - 3.] },
+        { let b = name.compute_bounds(&d.w.window).unwrap(); [b.x() + b.width() * 0.5, b.y() + b.height() - 3.] }];
+    points.map(|point| {
+        let x = ((point[0] - bounds.x()) * scale).round() as usize;
+        let y = ((point[1] - bounds.y()) * scale).round() as usize;
+        let pixel = &pixels[(y * texture.width() as usize + x) * 4..][..4];
+        [pixel[2], pixel[1], pixel[0]]
+    })
+}
+
+#[test]
+#[ignore = "private Mutter: --native-test=native_tool_caption_hover_input"]
+fn native_tool_caption_hover_input() {
+    let mut d = Driver::new("art.capycanvas.ToolCaptionHover");
+    d.input.settle_ms = 0;
+    restore(&d, WorkspacePreset::Illustrator);
+    d.w.dispatch(UiAction::Invoke { command: CommandId::Brush });
+    d.w.dispatch(UiAction::MovePanel { panel: Panel::Brushes,
+        target: DockTarget::Float { position: [400., 180.] }, viewport: [1600., 1000.] }); pump(250);
+    let presets = state(&d.w).tool_set.subtools.iter().filter_map(|item| item.preview).take(2).collect::<Vec<_>>();
+    assert_eq!(presets.len(), 2);
+    let row = d.named(&format!("brush-{}", presets[0]));
+    let body = row.clone().downcast::<gtk::Button>().unwrap().child().unwrap();
+    let preview = body.first_child().unwrap();
+    let caption = body.last_child().unwrap();
+    let icon = caption.first_child().unwrap();
+    let name = caption.last_child().unwrap();
+    let mut reports = Vec::new();
+    let mut max_rgb = 0.0f32;
+    let mut max_pixels = 0u8;
+    let mut max_alpha = 0.0f32;
+    let mut max_role = 0.0f32;
+    let output = d.input.dir.clone();
+    for theme in [Theme::Light, Theme::Dark] {
+        d.w.dispatch(UiAction::SetTheme { theme: Some(theme) }); pump(260);
+        for level in [layer_ui::Transparency::Off, layer_ui::Transparency::Low,
+            layer_ui::Transparency::Medium, layer_ui::Transparency::High] {
+            super::use_transparency(&d.w, level);
+            for selected in [false, true] {
+                for height in [700., 360.] {
+                    if height == 700. && (!selected || level != layer_ui::Transparency::High) { continue; }
+                    for custom in [false, true] {
+                        if custom && (!selected || height != 700. || level != layer_ui::Transparency::High) { continue; }
+                        d.w.dispatch(UiAction::Preferences { action: layer_ui::PreferenceAction::Edit {
+                            id: layer_ui::PreferenceId::Accent,
+                            value: layer_ui::PreferenceValue::Text(if custom { "#c75cdb" } else { "" }.into()),
+                        } });
+                        let layout = state(&d.w).workspace.layout;
+                        let group = layout.panel_group(Panel::Brushes).unwrap();
+                        let bounds = layout.workspace(1600., 1000., layer_ui::HEADER_HEIGHT, layer_ui::STATUS_HEIGHT)
+                            .groups.into_iter().find(|placement| placement.id == group).unwrap().bounds;
+                        let corner = [bounds.x + bounds.width, bounds.y + bounds.height];
+                        for (phase, position) in [(ContactPhase::Down, corner), (ContactPhase::Up, [corner[0], bounds.y + height])] {
+                            d.w.dispatch(UiAction::ResizeFloating { group, edge: layer_ui::ResizeEdge::BottomRight,
+                                phase, position, viewport: [1600., 1000.] });
+                        }
+                        d.input.perform(serde_json::json!([{"point":[1000.,800.]}]));
+                        d.w.dispatch(UiAction::SelectBrush { id: presets[usize::from(!selected)] }); pump(300);
+                        assert_eq!(row.has_css_class("selected-tool"), selected);
+                        assert_eq!(row.height(), if height == 700. { 66 } else { 54 });
+                        assert_eq!(preview.height(), 40);
+                        assert_eq!((icon.width(), icon.height(), name.height()), (26, 26, 26));
+                        let idle_cpu = [&row, &icon, &name].map(|widget| caption_background_color(&preview_background_node(widget)));
+                        let idle_pixels = caption_settled_pixels(&d, &row, &icon, &name);
+                        let frames = Rc::new(RefCell::new(Vec::<CaptionHoverFrame>::new()));
+                        let phase = Rc::new(Cell::new("enter-row"));
+                        let sampled = [row.clone(), icon.clone(), name.clone()];
+                        let last = Rc::new(Cell::new(caption_background_color(&preview_background_node(&row))));
+                        let clock = row.frame_clock().unwrap();
+                        let signal = clock.connect_after_paint({
+                            let frames = frames.clone(); let phase = phase.clone();
+                            move |clock| {
+                                let start = Instant::now();
+                                let colors = sampled.each_ref().map(|widget| caption_background_color(&preview_background_node(widget)));
+                                let changed = last.replace(colors[0]) != colors[0];
+                                frames.borrow_mut().push(CaptionHoverFrame { time: clock.frame_time(), phase: phase.get(),
+                                    colors, changed, timing: clock.current_timings(), sample_ms: start.elapsed().as_secs_f64() * 1000. });
+                            }
+                        });
+                        for (label, target, at, wait) in [
+                            ("enter-row", Some(&row), [0.5, 0.08], 260),
+                            ("leave", None, [0.,0.], 40),
+                            ("reenter-icon", Some(&icon), [0.5,0.5], 40),
+                            ("move-name", Some(&name), [0.5,0.5], 40),
+                            ("reverse-out", None, [0.,0.], 40),
+                            ("reverse-in", Some(&name), [0.5,0.5], 260),
+                        ] {
+                            phase.set(label);
+                            let point = target.map_or([1000.,800.], |widget| screen_point(widget, &d.w.window, at));
+                            d.input.perform(serde_json::json!([{"point":point}])); pump(wait);
+                        }
+                        let hover_cpu = [&row, &icon, &name].map(|widget| caption_background_color(&preview_background_node(widget)));
+                        let hover_pixels = caption_settled_pixels(&d, &row, &icon, &name);
+                        if selected && level == layer_ui::Transparency::High {
+                            d.capture_canvas(&format!("caption-hover-{theme:?}-{height}-{custom}.png"));
+                        }
+                        let mut pressed_cpu = None;
+                        if selected && level == layer_ui::Transparency::High && height == 700. && !custom {
+                            phase.set("pressed");
+                            d.input.perform(serde_json::json!([{ "down":true }])); pump(260);
+                            pressed_cpu = Some([&row, &icon, &name].map(|widget| caption_background_color(&preview_background_node(widget))));
+                            d.capture_canvas(&format!("caption-pressed-{theme:?}.png"));
+                            phase.set("released");
+                            d.input.perform(serde_json::json!([{ "down":false }]));
+                        }
+                        phase.set("settle-out");
+                        d.input.perform(serde_json::json!([{"point":[1000.,800.]}])); pump(280);
+                        clock.disconnect(signal);
+                        let frames = frames.borrow().clone();
+                        let mut case_rgb = 0.0f32;
+                        let mut case_alpha = 0.0f32;
+                        for frame in &frames {
+                            for color in &frame.colors[1..] {
+                                for channel in 0..3 { case_rgb = case_rgb.max((frame.colors[0][channel] - color[channel]).abs()); }
+                                case_alpha = case_alpha.max((color[3] - 0.8).abs());
+                            }
+                            case_alpha = case_alpha.max((frame.colors[0][3] - 1.).abs());
+                        }
+                        let palette = d.w.palette.get().unwrap();
+                        let base = (if selected { palette.selection } else { palette.panel }).0.map(|channel| channel as f32 / 255.);
+                        let foreground = palette.text.0.map(|channel| channel as f32 / 255.);
+                        let mut case_role = 0.0f32;
+                        for (colors, mix) in [(&idle_cpu, 0.), (&hover_cpu, 0.08)]
+                            .into_iter().chain(pressed_cpu.as_ref().map(|colors| (colors, 0.16))) {
+                            for color in colors { for channel in 0..3 {
+                                case_role = case_role.max((color[channel] - (base[channel] * (1. - mix) + foreground[channel] * mix)).abs());
+                            } }
+                        }
+                        max_role = max_role.max(case_role);
+                        max_rgb = max_rgb.max(case_rgb); max_alpha = max_alpha.max(case_alpha);
+                        let mut case_pixels = 0u8;
+                        for pixels in [idle_pixels, hover_pixels] {
+                            for color in &pixels[1..] { for channel in 0..3 { case_pixels = case_pixels.max(pixels[0][channel].abs_diff(color[channel])); } }
+                        }
+                        max_pixels = max_pixels.max(case_pixels);
+                        let mut seen = std::collections::BTreeSet::new();
+                        let mut phases = std::collections::BTreeMap::<&str, Vec<i64>>::new();
+                        for frame in frames.iter().filter(|frame| frame.changed) {
+                            let Some(timing) = frame.timing.as_ref().filter(|timing| timing.is_complete()) else { continue; };
+                            let time = timing.presentation_time();
+                            if time > 0 && seen.insert(time) { phases.entry(frame.phase).or_default().push(time); }
+                        }
+                        let intervals = phases.values_mut().flat_map(|times| {
+                            times.sort_unstable();
+                            times.windows(2).map(|pair| (pair[1] - pair[0]) as f64 / 1000.).collect::<Vec<_>>()
+                        }).collect::<Vec<_>>();
+                        let moving = seen.len();
+                        eprintln!("caption-hover {theme:?}/{level:?}/selected{selected}/{height}/custom{custom}: rgb_error={case_rgb}, pixel_error={case_pixels}, role_error={case_role}, frames={}, moving={moving}", frames.len());
+                        reports.push(serde_json::json!({"theme":format!("{theme:?}"),"transparency":format!("{level:?}"),
+                            "selected":selected,"height":row.height(),"custom_accent":custom,"max_rgb_error":case_rgb,
+                            "pixel_error":case_pixels,"alpha_error":case_alpha,"role_error":case_role,"idle_pixels":idle_pixels,"hover_pixels":hover_pixels,
+                            "idle_cpu":idle_cpu,"hover_cpu":hover_cpu,"pressed_cpu":pressed_cpu,"base_role_rgb":base,"foreground_role_rgb":foreground,
+                            "moving_frames":moving,"moving_interval_ms":intervals,"frames":frames.iter().map(|frame| serde_json::json!({
+                                "time":frame.time,"phase":frame.phase,"colors":frame.colors,"changed":frame.changed,"sample_ms":frame.sample_ms,
+                                "presentation_time":frame.timing.as_ref().filter(|timing| timing.is_complete()).map(|timing| timing.presentation_time())
+                            })).collect::<Vec<_>>() }));
+                        std::fs::write(output.join("caption-hover.json"), serde_json::to_vec_pretty(&reports).unwrap()).unwrap();
+                        for target in [&preview, &icon, &name, &row] {
+                            d.w.dispatch(UiAction::SelectBrush { id: presets[1] }); pump(60);
+                            let point = screen_point(target, &d.w.window, if target == &preview { [0.5,0.2] } else { [0.5,0.5] });
+                            d.input.click(point);
+                            assert_eq!(state(&d.w).brush.preset, presets[0]);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    assert!(max_rgb <= 3. / 255., "row/icon/name transient background RGB differ by{max_rgb}; inspect caption-hover.json");
+    assert!(reports.iter().all(|report| report["moving_frames"].as_u64().unwrap() >= 4), "native hover records actual transient color motion");
+    assert!(max_pixels <= 3, "settled visible row/caption colors differ by{max_pixels}levels");
+    assert!(max_role <= 3. / 255., "idle/hover/pressed backgrounds differ from their palette roles:{max_role}");
+    assert!(max_alpha <= 0.005, "opaque row/caption0.8alpha mismatch:{max_alpha}");
+    assert_preview_caption_paint(&icon); assert_preview_caption_paint(&name);
+    d.finish();
 }
 
 #[test]

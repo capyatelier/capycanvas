@@ -11,9 +11,10 @@ Windows. The [canvas action bar](canvas-action-bar.md) is a glass surface in
 the panel layer on every host that presents it, and it keeps its glass in Zen.
 Controls inside panels, such
 as inputs, lists and sliders, stay opaque. GTK tool preview captions shade the
-stroke image with a 90% opaque tint matching the row; their text and icons stay
+stroke image with an 80% opaque tint matching the row; their text and icons stay
 opaque. This tint does not request a separate backdrop blur. Menus, popovers and
-tooltips stay opaque.
+tooltips stay opaque. GTK preview rows retain their opaque control color when
+selected or hovered, so their caption backgrounds match through transitions.
 
 Off keeps the opaque theme. Title-bar controls, the zoom readout and the Zen
 button are opaque too.
