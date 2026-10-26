@@ -23,7 +23,7 @@ internal fun CanvasHost.colorTouch(surface: Long, id: PointerId, phase: String, 
     val dock = LocalDock.current
     val surface = remember { colorTouchSurfaces.incrementAndGet() }
     val inside by rememberUpdatedState(owns)
-    return (if (dock != null) contextAnchor(dock, colorWheelTarget) else this).pointerInput(host, surface, dock) {
+    return (if (dock != null) contextAnchor(dock, colorWheelTarget) else this).edgeControl().pointerInput(host, surface, dock) {
         awaitEachGesture {
             val first = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
             if (first.isConsumed || !inside(first.position)) return@awaitEachGesture

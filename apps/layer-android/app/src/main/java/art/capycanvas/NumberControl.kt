@@ -188,7 +188,7 @@ internal fun numericFailureCopy(error: Exception, language: String, fallback: St
         if (handler != null) host.numberKeyHandler = handler
         onDispose { if (handler != null && host.numberKeyHandler === handler) host.numberKeyHandler = null }
     }
-    val fineDrag = Modifier.pointerInput(control.toString(), enabled, panel, toolbar) {
+    val fineDrag = Modifier.edgeControl().pointerInput(control.toString(), enabled, panel, toolbar) {
         if (!enabled) return@pointerInput
         awaitEachGesture {
             val down = awaitFirstDown(requireUnconsumed = false)
@@ -245,7 +245,7 @@ internal fun numericFailureCopy(error: Exception, language: String, fallback: St
         host.textComposition.clear(requester)
         if (toolbar && host.toolbarEditorBounds == fieldBounds) host.toolbarEditorBounds = null
     } }
-    val contact = if (onEditPhase == null || !enabled) Modifier else Modifier.pointerInput(enabled) {
+    val contact = if (onEditPhase == null || !enabled) Modifier else Modifier.edgeControl().pointerInput(enabled) {
         awaitEachGesture {
             val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
             if (down.isConsumed) return@awaitEachGesture
@@ -286,7 +286,7 @@ internal fun numericFailureCopy(error: Exception, language: String, fallback: St
                 host.textComposition.update(requester, text, focused)
                 if (dirty) onText(it)
             }
-        }, Modifier.then(if (panel) Modifier.width(68.dp) else if (inline && valueOnly && !toolbar) Modifier.fillMaxWidth() else if (inline) Modifier.width(fixedWidth) else if (ranged) Modifier.widthIn(min = 48.dp, max = 100.dp).width(IntrinsicSize.Min) else if(compact) Modifier.width(fixedWidth) else Modifier.width(if (presentedText != null || control.optString("unit").isNotEmpty()) 80.dp else 60.dp)).height(height)
+        }, Modifier.edgeControl().then(if (panel) Modifier.width(68.dp) else if (inline && valueOnly && !toolbar) Modifier.fillMaxWidth() else if (inline) Modifier.width(fixedWidth) else if (ranged) Modifier.widthIn(min = 48.dp, max = 100.dp).width(IntrinsicSize.Min) else if(compact) Modifier.width(fixedWidth) else Modifier.width(if (presentedText != null || control.optString("unit").isNotEmpty()) 80.dp else 60.dp)).height(height)
             .onGloballyPositioned { fieldBounds = it.boundsInRoot(); if (toolbar && focused) host.toolbarEditorBounds = fieldBounds }
             .focusRequester(requester).onFocusChanged {
                 if (focused && !it.isFocused) { finish(); if (heldKey != null) endEdit() }
@@ -358,7 +358,7 @@ internal fun numericFailureCopy(error: Exception, language: String, fallback: St
                                 else if (steps != 0 && finish()) { apply(obj("type" to "step", "steps" to steps)); true } else false
                             }
                         }.focusable(enabled)
-                        .pointerInput(enabled) { if (enabled) awaitPointerEventScope { while (true) {
+                        .edgeControl().pointerInput(enabled) { if (enabled) awaitPointerEventScope { while (true) {
                             val event = awaitPointerEvent()
                             if (event.type == PointerEventType.Scroll && completeText()) {
                                 val delta = event.changes.sumOf { it.scrollDelta.y.toDouble() }
@@ -411,7 +411,7 @@ internal fun numericFailureCopy(error: Exception, language: String, fallback: St
     onDoubleTap: () -> Unit, onPoint: (Offset, Float) -> Unit) {
     val point by rememberUpdatedState(onPoint)
     val reset by rememberUpdatedState(onDoubleTap)
-    Canvas(modifier.alpha(if (enabled) 1f else .4f)
+    Canvas(modifier.alpha(if (enabled) 1f else .4f).edgeControl()
         .pointerInput(enabled) {
             if (!enabled) return@pointerInput
             detectTapGestures(onDoubleTap = { reset() })

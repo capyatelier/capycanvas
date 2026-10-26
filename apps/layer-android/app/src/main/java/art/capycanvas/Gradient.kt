@@ -114,7 +114,7 @@ import kotlin.math.roundToInt
                         }
                         else -> false
                     }
-                }.focusable().pointerInput(enabled) {
+                }.focusable().edgeControl().pointerInput(enabled) {
                     if(!enabled)return@pointerInput
                     awaitEachGesture {
                         val down=awaitFirstDown();down.consume();focus.requestFocus()

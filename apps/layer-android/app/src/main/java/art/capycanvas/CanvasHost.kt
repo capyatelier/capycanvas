@@ -577,6 +577,25 @@ class CanvasHost @JvmOverloads constructor(application: Application, screen: JSO
             presentWorkspace(presentation)
         }
     }
+    private var edgeTab: JSONObject? = null // Native owner only.
+    internal fun edgeContact(input: JSONObject, tab: JSONObject? = null, reply: (JSONObject) -> Unit = {}) = post {
+        val value = JSONObject(Native.input(handle, input.toString()))
+        val phase = input.getString("phase")
+        val handled = value.optBoolean("handled")
+        val deferred = edgeTab
+        edgeTab = if (phase == "down" && value.optBoolean("edge_select_on_release")) tab else deferred?.takeIf { phase == "move" && !handled }
+        val select = if (phase == "down") tab?.takeIf { edgeTab == null } else deferred?.takeIf { phase == "up" && !handled }
+        select?.let { Native.dispatch(handle, it.toString()) }
+        main.post { reply(value) }
+        if (phase == "move" && handled) {
+            if (workspacePresentation == null) choreographer?.postFrameCallback(workspaceFrame)
+            workspacePresentation = WorkspacePresentation(null) {}
+        } else if (handled || select != null) {
+            choreographer?.removeFrameCallback(workspaceFrame)
+            workspacePresentation = null
+            presentWorkspace(WorkspacePresentation(null) {})
+        }
+    }
     fun invoke(command: String) = dispatch(obj("type" to "invoke", "command" to command))
     fun customize(action: JSONObject) = dispatch(obj("type" to "customize", "action" to action))
     fun preference(action: JSONObject) = dispatch(obj("type" to "preferences", "action" to action))

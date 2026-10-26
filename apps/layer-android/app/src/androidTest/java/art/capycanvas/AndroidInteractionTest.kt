@@ -1476,8 +1476,16 @@ class AndroidInteractionTest {
             assertEquals(3, columns.size)
             assertEquals(6 * density, bounds("collapsed-column-45").top - bounds("collapsed-column-42").bottom, 1f)
             assertFalse(exists("column-divider-42-0"))
-            assertFalse("Closed stack has no resize affordance", exists("divider-40"))
-            assertTrue(snapshot().getJSONObject("layout").array("dividers").objects().first { it.getInt("id") == 40 }.getBoolean("fixed"))
+            assertFalse("A closed stack edge opens a member", snapshot().getJSONObject("layout").array("dividers").objects().first { it.getInt("id") == 40 }.getBoolean("fixed"))
+            val closedStack = workspace()
+            val member = columns[1].getJSONObject("bounds").rect()
+            val stackEdge = Offset(bounds("divider-40").center.x, bounds("workspace").top + (member.top + 20) * density)
+            event(MotionEvent.ACTION_DOWN, stackEdge); event(MotionEvent.ACTION_MOVE, stackEdge + Offset(90 * density, 0f)); settle()
+            assertNotNull("Dragging a closed stack edge opens the member beside the contact", collapsed()[1].objectOrNull("open"))
+            event(MotionEvent.ACTION_UP); settle()
+            assertEquals("Opening a member is transient", closedStack, workspace())
+            instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
+            waitFor("Back closes the dragged member") { collapsed().all { it.objectOrNull("open") == null } }
             openTile("brushes")
             val opened = columnFor("brushes").getJSONObject("open").getJSONObject("bounds").rect()
             assertEquals(bounds("collapsed-column-42").top / density, opened.top, 1f)
@@ -1511,6 +1519,68 @@ class AndroidInteractionTest {
             assertTrue(collapsed().all { it.objectOrNull("open") == null })
             instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_BACK); settle()
         }
+    }
+
+    @Test fun edgeReachGrabsColumnAndGroupEdges() {
+        val originalTheme = state().getJSONObject("settings").opt("theme") ?: JSONObject.NULL
+        fun split(id: Int, first: JSONObject, second: JSONObject) = obj("kind" to "split", "id" to id,
+            "axis" to "vertical", "fraction" to .5, "first" to first, "second" to second)
+        fun configure(extent: Int, root: JSONObject) {
+            fixture.put("zen_mode", false).getJSONObject("layout").apply {
+                put("bands", JSONArray(listOf(obj("id" to 40, "edge" to "left", "extent" to extent, "root" to root))))
+                for (key in listOf("floating", "collapsed", "column_stacks", "column_scroll", "fit_tab_groups", "fit_height_groups")) put(key, JSONArray())
+                put("next_id", maxOf(60, getInt("next_id")))
+            }
+            restore()
+        }
+        fun layout() = snapshot().getJSONObject("layout")
+        fun divider(id: Int) = layout().array("dividers").objects().first { it.getInt("id") == id }.getJSONObject("bounds").rect()
+        fun group(id: Int) = layout().array("groups").objects().first { it.getInt("id") == id }.getJSONObject("bounds").rect()
+        fun durable() = JSONObject(workspace()).getJSONObject("layout")
+        fun extent() = durable().array("bands").objects().first { it.getInt("id") == 40 }.number("extent")
+        fun screen(x: Float, y: Float) = bounds("workspace").topLeft + Offset(x * density, y * density)
+        fun swipe(from: Offset, to: Offset) {
+            event(MotionEvent.ACTION_DOWN, from)
+            for (i in 1..10) event(MotionEvent.ACTION_MOVE, from + (to - from) * (i / 10f))
+            SystemClock.sleep(220); event(MotionEvent.ACTION_UP, to); settle()
+        }
+        try {
+            for (theme in listOf("light", "dark")) for (pointer in pointerTools) {
+                tool = pointer
+                action(obj("type" to "set_theme", "theme" to theme))
+                val name = "$theme/" + when (pointer) { MotionEvent.TOOL_TYPE_MOUSE -> "mouse"; MotionEvent.TOOL_TYPE_STYLUS -> "pen"; else -> "touch" }
+                configure(320, tabs(41, "stats"))
+                var edge = divider(40)
+                val y = group(41).bottom - 60
+                val before = extent()
+                swipe(screen(edge.left - 20, y), screen(edge.left + 60, y))
+                assertEquals("$name: an outward swipe from inside the column grows it to the contact", 60 - edge.width / 2, extent() - before, 2f)
+                action(obj("type" to "invoke", "command" to "undo_workspace"))
+                swipe(screen(edge.right + 20, y), screen(edge.right + 70, y))
+                if (pointer == MotionEvent.TOOL_TYPE_FINGER) {
+                    assertTrue("$name: touch grabs the edge from the canvas", extent() > before + 40)
+                    action(obj("type" to "invoke", "command" to "undo_workspace"))
+                } else assertEquals("$name: the canvas keeps pen and mouse", before, extent(), .01f)
+                swipe(screen(edge.left - 20, y), screen(edge.left - 20, y - 60))
+                assertEquals("$name: a vertical swipe never grabs a column edge", before, extent(), .01f)
+
+                configure(320, split(42, tabs(41, "stats"), tabs(43, "navigator", "proof")))
+                val gap = divider(42)
+                swipe(screen(gap.center.x, gap.top - 10), screen(gap.center.x, gap.top + 50))
+                assertTrue("$name: a vertical swipe beside a gap moves it", divider(42).top - gap.top > 20)
+
+                configure(320, tabs(41, "stats"))
+                customize(obj("type" to "set_column_collapsed", "group" to 41, "collapsed" to true))
+                val icon = layout().array("collapsed").objects()[0].array("groups").objects()[0].array("icons").objects()[0].getJSONObject("bounds").rect()
+                swipe(screen(icon.center.x, icon.center.y), screen(icon.center.x + 90, icon.center.y))
+                assertEquals("$name: an outward swipe from a closed strip opens it", 0, durable().array("collapsed").length())
+
+                configure(420, tabs(41, "stats"))
+                edge = divider(40)
+                doubleTap(screen(edge.left - 20, group(41).bottom - 60))
+                assertEquals("$name: a double tap in the column edge reach resets its width", 0f, extent(), .01f)
+            }
+        } finally { action(obj("type" to "set_theme", "theme" to originalTheme)) }
     }
 
     @Test fun stackedColumnDropsKeepFooterAppendTargets() {

@@ -439,7 +439,7 @@ private fun copyText(context: android.content.Context, text: String) {
             if (event.type != KeyEventType.KeyDown || direction == 0f || onScrub == null) false
             else { onScrub(direction, if (event.isShiftPressed) "fast" else if (event.isCtrlPressed || event.isAltPressed) "fine" else "normal"); onEndScrub?.invoke(false); true }
         }.focusable()
-        .pointerInput(onScrub != null) {
+        .edgeControl().pointerInput(onScrub != null) {
             awaitEachGesture {
                 val down = awaitFirstDown()
                 var moved = false

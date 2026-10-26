@@ -105,7 +105,7 @@ internal fun DockInteraction.drawerContainerShape(bounds: JSONObject, radius: Fl
             }
             CompositionLocalProvider(LocalWorkspaceZ provides 160, LocalPalette provides LocalPalette.current.onGlass) {
                 Box(Modifier.placed(bounds, dock.density).zIndex(160f).testTag("collapsed-column-$id")
-                    .chromeRegion(dock).contextSource(dock, obj("kind" to "column", "column" to id)).panelSurface(6.dp, shape).glass(shape, LocalPalette.current.panelFill)) {
+                    .chromeRegion(dock).edgeSurface(dock).contextSource(dock, obj("kind" to "column", "column" to id)).panelSurface(6.dp, shape).glass(shape, LocalPalette.current.panelFill)) {
                     Box(Modifier.placed(content.relativeTo(bounds), dock.density).clipToBounds().scrollable(scroll, Orientation.Vertical)) {
                         val groups = column.array("groups").objects()
                         groups.forEachIndexed { index, group ->

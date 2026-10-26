@@ -549,7 +549,7 @@ private fun DrawScope.checker(colors: Palette) {
             .paletteFocus(controller).focusRequester(requester).hoverable(interactions).focusable(!covered, interactions)
             .paletteKeys({ controller.use(id) }, { menu(bounds.center, false) })
             .pointerHoverIcon(PointerIcon(if (lifted) AndroidPointerIcon.TYPE_GRABBING else AndroidPointerIcon.TYPE_GRAB))
-            .pointerInput(id, windowFocused, covered) {
+            .edgeControl().pointerInput(id, windowFocused, covered) {
                 if (!windowFocused || covered) return@pointerInput
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false)
@@ -644,7 +644,7 @@ private fun DrawScope.checker(colors: Palette) {
     LaunchedEffect(Unit) { focus.requestFocus() }
     DisposableEffect(Unit) { onDispose { host.editingText = false; host.textComposition.clear(focus) } }
     BasicTextField(value, { value = it; host.textComposition.update(focus, value, hadFocus) },
-        Modifier.widthIn(min = 64.dp, max = 180.dp).height(panelMetrics().height).paletteFocus(controller).focusRequester(focus).testTag("palette-name-editor")
+        Modifier.edgeControl().widthIn(min = 64.dp, max = 180.dp).height(panelMetrics().height).paletteFocus(controller).focusRequester(focus).testTag("palette-name-editor")
             .background(colors.input, ControlShape)
             .then(if (controller.message?.second == true) Modifier.border(1.dp, Color(0xffee5555), ControlShape) else Modifier)
             .onPreviewKeyEvent { event ->

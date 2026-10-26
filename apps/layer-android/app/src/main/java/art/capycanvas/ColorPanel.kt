@@ -236,7 +236,7 @@ private class ReadoutCorner(private val radius: Float) : Shape {
                     menu = true; true
                 } else false
             }
-            .pointerInput(slot, focusedWindow) {
+            .edgeControl().pointerInput(slot, focusedWindow) {
                 if (!focusedWindow) return@pointerInput
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
@@ -328,7 +328,7 @@ private data class ColorFieldRequest(val shape:String,val hue:Float,val pixels:I
         LaunchedEffect(request) { requests.send(request) }
         DisposableEffect(requests) { onDispose { requests.close() } }
         Canvas(Modifier.fillMaxSize().testTag("color-wheel").semantics { contentDescription = host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("wheel") }
-            .pointerInput(shape, focused, interactive) {
+            .edgeControl().pointerInput(shape, focused, interactive) {
                 if (!focused || !interactive) return@pointerInput
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
@@ -458,7 +458,7 @@ private data class ColorFieldRequest(val shape:String,val hue:Float,val pixels:I
     val current by rememberUpdatedState(view)
     val action by rememberUpdatedState(color)
     val density=LocalDensity.current.density
-    return pointerInput(density) {
+    return edgeControl().pointerInput(density) {
         var lastTap=0L
         var lastPoint=Offset.Zero
         awaitEachGesture {
@@ -495,7 +495,7 @@ private data class ColorFieldRequest(val shape:String,val hue:Float,val pixels:I
             val next = when (event.key) { Key.MoveHome -> range.start; Key.MoveEnd -> range.endInclusive; else -> stops + delta }
             if (delta != 0f || event.key in listOf(Key.MoveHome, Key.MoveEnd)) { action(obj("op" to "hdr_intensity", "stops" to next.coerceIn(range))); true } else false
         }
-    }.focusable(adjustable).pointerInput(adjustable, stops, range) {
+    }.focusable(adjustable).edgeControl().pointerInput(adjustable, stops, range) {
         if (adjustable) awaitPointerEventScope { while (true) {
             val event = awaitPointerEvent()
             if (event.type == PointerEventType.Scroll) {

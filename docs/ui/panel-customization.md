@@ -492,7 +492,8 @@ Wayland/Vulkan display. Against a served web client (`LAYER_WEB_URL`, or
 1200×900 with the `native_web_parity_reference` JSON and PNGs; run it headed,
 because its pixel checks sample the presented canvas and glass. Android runs
 `apps/layer-android/run.sh test`; `AndroidHostTest` covers the same contracts
-with native Compose input, including `toolbarManagerSelectsConfirmsDeletesAndRestores`.
+with native Compose input, including `toolbarManagerSelectsConfirmsDeletesAndRestores`,
+and `AndroidInteractionTest.edgeReachGrabsColumnAndGroupEdges` covers edge reach.
 
 ## Collapsed columns
 
@@ -568,15 +569,19 @@ tab on release (`edge_select_on_release`), or to capture the contact and show a
 resize pointer (`edge_cursor`); the session then drives the handle's drag and
 advances the catch-up in `frame`. Replies also say whether the contact is
 still pending (`edge_pending`), so a host can stop forwarding it. A native
-double press in the reach sends `UiInput::EdgeDoublePress`. GTK and Web
-implement this. Web treats text fields,
+double press in the reach sends `UiInput::EdgeDoublePress`. GTK, Web and
+Android implement this. Web treats text fields,
 layer rows, held tiles and `touch-action: none` controls as inputs, and
 immediate drag sources, sideways swipe owners and horizontal scrollers as
 pickups. Panel surfaces use `touch-action: pan-y` so horizontal touch reaches
 the session, and Web cancels `touchmove` while the session holds or owns the
-contact. Android, Apple and
-Windows still use only the thin handles, but share the ownership, collapse and
-stack rules.
+contact. Android classifies from Compose's own hit test: group and closed-strip
+surfaces (`edgeSurface`) and swipe controls (`edgeControl`) mark the press, and
+the workspace reads the marks at the press's final pass. Its session runs on
+the native owner thread, so that thread also decides when a pressed tab is
+selected; the workspace withholds or consumes motion from the latest reply.
+Apple and Windows still use only the thin handles, but share the ownership,
+collapse and stack rules.
 
 [Stacked columns](stacked-columns.md) replace the former Group panel mode. Each
 stack contains complete collapsed columns and owns “Open individual panels” and

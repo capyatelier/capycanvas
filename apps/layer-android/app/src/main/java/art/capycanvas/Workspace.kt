@@ -399,7 +399,7 @@ private val HiddenChromeShape=object:Shape {
                     val placement = if (expansion == null) Modifier.workspacePlaced(host, group.getInt("id"), bounds, shown, density) else Modifier.placed(bounds, density)
                     val opening = remember { PanelOpening() }
                     ZenChrome(visible,placement.zIndex(z.toFloat()).testTag("group-${group.getInt("id")}"),opacity) {
-                    Box(Modifier.fillMaxSize().chromeRegion(dock)
+                    Box(Modifier.fillMaxSize().chromeRegion(dock).edgeSurface(dock)
                         .then(if (expansion != null) Modifier.shadow(16.dp, shape).clip(shape)
                             else Modifier.panelSurface(6.dp, shape, opening = opening))
                         .then(if (expansion == null) Modifier.glass(shape) else Modifier)) {

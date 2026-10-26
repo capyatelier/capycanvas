@@ -79,7 +79,7 @@ import kotlin.math.*
                 CustomAccessibilityAction(numeric[1].getString("increase")){nudge(0,0,1.0);true},CustomAccessibilityAction(numeric[1].getString("decrease")){nudge(0,0,-1.0);true},
                 CustomAccessibilityAction(numeric[2].getString("increase")){nudge(1,0,1.0);true},CustomAccessibilityAction(numeric[2].getString("decrease")){nudge(1,0,-1.0);true},
                 CustomAccessibilityAction(numeric[3].getString("increase")){nudge(2,0,1.0);true},CustomAccessibilityAction(numeric[3].getString("decrease")){nudge(2,0,-1.0);true})
-        }.onKeyEvent(::key).onFocusChanged{if(it.isFocused){focusedPart=0;selectedPart=0}else{if(focusedPart==0)focusedPart=-1;cancel()}}.focusRequester(focus[0]).focusable().pointerInput(side) {
+        }.onKeyEvent(::key).onFocusChanged{if(it.isFocused){focusedPart=0;selectedPart=0}else{if(focusedPart==0)focusedPart=-1;cancel()}}.focusRequester(focus[0]).focusable().edgeControl().pointerInput(side) {
             var lastTap=0L;var lastPart=-1;var lastPosition=Offset.Zero
             awaitEachGesture {
                 val down=awaitFirstDown(requireUnconsumed=false);val initial=query(down.position)

@@ -7,9 +7,12 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.input.pointer.AwaitPointerEventScope
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.PointerType
+import androidx.compose.ui.input.pointer.isPrimaryPressed
 import androidx.compose.ui.input.pointer.isSecondaryPressed
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.pointerHoverIcon
@@ -42,6 +45,19 @@ internal val LocalDock = staticCompositionLocalOf<DockInteraction?> { null }
     val mouse = pointerHoverIcon(icon, overrideDescendants = type != null)
     return if (type == null || type == AndroidPointerIcon.TYPE_GRABBING || type == AndroidPointerIcon.TYPE_GRAB) mouse
         else mouse.stylusHoverIcon(icon, overrideDescendants = true)
+}
+
+internal fun pointerKind(type: PointerType) = when (type) {
+    PointerType.Mouse -> "mouse"
+    PointerType.Stylus, PointerType.Eraser -> "pen"
+    else -> "touch"
+}
+
+private fun edgePointerIcon(cursor: String) = when (cursor) {
+    "col-resize", "ew-resize" -> AndroidPointerIcon.TYPE_HORIZONTAL_DOUBLE_ARROW
+    "row-resize", "ns-resize" -> AndroidPointerIcon.TYPE_VERTICAL_DOUBLE_ARROW
+    "nwse-resize" -> AndroidPointerIcon.TYPE_TOP_LEFT_DIAGONAL_DOUBLE_ARROW
+    else -> AndroidPointerIcon.TYPE_TOP_RIGHT_DIAGONAL_DOUBLE_ARROW
 }
 
 internal fun resizePointerIcon(edge: String) = when (edge) {
@@ -99,7 +115,69 @@ internal class DockInteraction(val host: CanvasHost) {
     var dragCursor by mutableStateOf<Int?>(null)
         private set
     fun pickupCursor(armed: Boolean) {
-        if (!dragging) dragCursor = if (armed) AndroidPointerIcon.TYPE_GRAB else null
+        if (!dragging && edge?.claimed != true) dragCursor = if (armed) AndroidPointerIcon.TYPE_GRAB else null
+    }
+    class EdgeContact(val id: Long, val canvas: Boolean, val kind: String, val origin: Offset, var position: Offset = origin) {
+        var pending = true
+        var hold = false
+        var selectOnRelease = false
+        var claimed = false
+    }
+    var edge: EdgeContact? = null
+        private set
+    private var edgeContacts = 0L
+    var edgeSurfaceHit = false
+    var edgeControlHit: String? = null
+    fun edgeContactClass(point: Offset, source: Region?): String? {
+        if (!enabled || popupOpen || contextMenu != null) return null
+        val action = source?.action
+        if (!edgeSurfaceHit) return "free".takeIf { source == null && chromeRegions.values.none { it.bounds.contains(point) } }
+        if (action != null && action.getString("type") !in listOf("drag_workspace", "tile_drag")) return null
+        return edgeControlHit ?: when {
+            action == null -> "free"
+            source?.holdToDrag == true -> if (action.optJSONObject("item")?.optString("kind") == "tile") "input" else "free"
+            else -> "pickup"
+        }
+    }
+    private fun edgeInput(contact: EdgeContact, phase: String, time: Long, kind: String = "free") = obj("type" to "edge_contact",
+        "id" to contact.id, "phase" to phase, "kind" to contact.kind, "contact" to kind,
+        "position" to JSONArray(listOf(contact.position.x / density, contact.position.y / density)),
+        "viewport" to viewport, "time_ns" to time * 1_000_000)
+    fun beginEdge(down: PointerInputChange, contact: String, tab: JSONObject?) {
+        val next = EdgeContact(++edgeContacts, !edgeSurfaceHit, pointerKind(down.type), down.position)
+        edge = next
+        host.edgeContact(edgeInput(next, "down", down.uptimeMillis, contact), tab) { reply ->
+            next.selectOnRelease = reply.optBoolean("edge_select_on_release")
+            edgeReply(next, reply)
+        }
+    }
+    /** The contact when the shared session owns this change, or withholds motion
+     * beyond [slop], where scrollers start and taps end. */
+    fun edgeMotion(change: PointerInputChange, slop: Float): EdgeContact? {
+        val current = edge ?: return null
+        current.position = change.position
+        if (!change.pressed) edge = null
+        host.edgeContact(edgeInput(current, if (change.pressed) "move" else "up", change.uptimeMillis)) { edgeReply(current, it) }
+        if (!change.pressed && current.claimed) dragCursor = null
+        val withheld = change.pressed && current.hold && (change.position - current.origin).getDistance() > slop
+        return current.takeIf { it.claimed || withheld }?.also { change.consume() }
+    }
+    private fun edgeReply(current: EdgeContact, reply: JSONObject) {
+        if (edge !== current) return
+        current.pending = reply.optBoolean("edge_pending")
+        current.hold = reply.optBoolean("edge_hold") || reply.optBoolean("edge_select_on_release")
+        val cursor = reply.nullableString("edge_cursor")
+        if (cursor != null) {
+            if (!current.claimed) closeContext()
+            current.claimed = true
+            dragCursor = edgePointerIcon(cursor)
+        } else if (!current.pending && !current.claimed && !current.selectOnRelease) edge = null
+    }
+    fun cancelEdge() {
+        val current = edge ?: return
+        edge = null
+        host.edgeContact(edgeInput(current, "cancel", android.os.SystemClock.uptimeMillis()))
+        if (current.claimed) dragCursor = null
     }
     var expansion by mutableStateOf<JSONObject?>(null)
     var configurationHeight by mutableFloatStateOf(0f)
@@ -186,6 +264,8 @@ internal class DockInteraction(val host: CanvasHost) {
         cancelPendingContext()
         contactPosition = point
         contactType = type
+        edgeSurfaceHit = false
+        edgeControlHit = null
     }
     fun cancelPendingContext() { if (contextMenu == null && contextTarget != null) closeContext() }
     fun windowFocus(value: Boolean) {
@@ -260,6 +340,7 @@ internal class DockInteraction(val host: CanvasHost) {
     private fun query() = obj("type" to "drop", "item" to active?.optJSONObject("item"),
         "position" to JSONArray(listOf(position.x, position.y)), "tabs" to JSONArray(tabHits()), "expansion" to expansion)
     fun start(action: JSONObject, point: Offset, cursor: Int) {
+        cancelEdge()
         host.beginWorkspaceGesture()
         active = action; position = point; dragging = true
         val panel = action.optJSONObject("item")?.takeIf { it.optString("kind") == "panel" }?.optString("panel")
@@ -364,6 +445,7 @@ private fun Modifier.workspaceGestureCapture(dock: DockInteraction, focused: Boo
     if (!focused) return@pointerInput
     data class Tap(val target: String, val time: Long, val position: Offset, val device: PointerType)
     var chromeTap: Tap? = null
+    var edgeTap: Tap? = null
     awaitEachGesture {
         val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
         dock.cancelPendingContext()
@@ -383,10 +465,18 @@ private fun Modifier.workspaceGestureCapture(dock: DockInteraction, focused: Boo
                 dock.host.chrome(obj("kind" to "contact", "canvas" to false,
                     "position" to JSONArray(listOf(down.position.x / dock.density, down.position.y / dock.density))), dock.facts().put("contact_tab", tab?.optString("panel")))
             }
+            // Invisible resize strips have no child button to consume their
+            // press. Do not let the underlying SurfaceView begin a stroke/pan.
+            if (source != null && (source.action != null || source.context != null) &&
+                source.action?.getString("type") !in listOf("drag_workspace", "tile_drag")) down.consume()
+            val buttons = awaitPointerEvent(PointerEventPass.Final).buttons
+            val primary = (down.type != PointerType.Mouse || buttons.isPrimaryPressed) && !buttons.isSecondaryPressed
+            val select = tab?.takeIf { primary }?.let { obj("type" to "select_panel_tab", "group" to it.getInt("group"), "panel" to it.getString("panel")) }
+            val contact = dock.edgeContactClass(down.position, source)?.takeIf { primary }
+            val resettable = contact == "free" && dock.edgeSurfaceHit && source?.action == null && source?.context?.optString("kind") != "column"
+            var tapUp: PointerInputChange? = null
+            if (contact != null) dock.beginEdge(down, contact, select) else select?.let { dock.host.dispatch(it) }
             if (source != null && (source.action != null || source.context != null)) {
-                // Invisible resize strips have no child button to consume their
-                // press. Do not let the underlying SurfaceView begin a stroke/pan.
-                if (source.action?.getString("type") !in listOf("drag_workspace", "tile_drag")) down.consume()
                 if (currentEvent.buttons.isSecondaryPressed) {
                     source.context?.let(dock::context)
                     down.consume()
@@ -411,7 +501,6 @@ private fun Modifier.workspaceGestureCapture(dock: DockInteraction, focused: Boo
                 dock.contactHeld = true
                 dock.contactSource = source.token
                 dock.retiredContext = null
-                if (tab != null) dock.host.dispatch(obj("type" to "select_panel_tab", "group" to tab.getInt("group"), "panel" to tab.getString("panel")))
                 fun sourceExists() = dock.regions[source.token]?.let { it.action?.toString() == source.action?.toString() } == true
                 fun retire() {
                     retired = true
@@ -430,17 +519,28 @@ private fun Modifier.workspaceGestureCapture(dock: DockInteraction, focused: Boo
                                 continue
                             }
                             held = true
+                            dock.cancelEdge()
                             if (source.holdToDrag && down.type == PointerType.Mouse) dock.pickupCursor(true)
                             source.context?.let(dock::holdContext)
                             continue
                         }
-                        if (event.changes.any { it.id != down.id && it.pressed }) { event.changes.forEach { it.consume() }; break }
+                        if (event.changes.any { it.id != down.id && it.pressed }) {
+                            if (dock.edge?.claimed != true) { event.changes.forEach { it.consume() }; break }
+                            event.changes.forEach { if (it.id != down.id) it.consume() }
+                        }
                         val change = event.changes.firstOrNull { it.id == down.id } ?: break
                         remaining = (remaining - (change.uptimeMillis - eventTime)).coerceAtLeast(1)
                         eventTime = change.uptimeMillis
                         // Compose represents ACTION_CANCEL as an already-consumed
                         // release. Preserve the shared transaction before consuming it.
                         if (dock.bubbleCaptured || !change.pressed && change.isConsumed) break
+                        val edge = if (started) null else dock.edgeMotion(change, viewConfiguration.touchSlop)
+                        if (edge?.claimed == true) {
+                            if (!retired) retire()
+                            if (!change.pressed) { released = true; break }
+                            continue
+                        }
+                        if (edge != null && change.pressed) continue
                         if (held) change.consume()
                         if (dock.popupOpen || !dock.enabled) break
                         if (!started && !retired && !sourceExists()) retire()
@@ -456,6 +556,7 @@ private fun Modifier.workspaceGestureCapture(dock: DockInteraction, focused: Boo
                             dock.move(change.position / dock.density)
                         }
                         if (!change.pressed) {
+                            tapUp = change.takeUnless { it.isConsumed || retired || held }
                             if (retired) change.consume()
                             if (started) dock.finish(false)
                             else if (tapTarget != null && !held && !retired && change.uptimeMillis - down.uptimeMillis < viewConfiguration.longPressTimeoutMillis) {
@@ -481,10 +582,51 @@ private fun Modifier.workspaceGestureCapture(dock: DockInteraction, focused: Boo
                     dock.retiredContext = null
                 }
             }
+            followEdge(dock, down)?.let { tapUp = it }
             // Non-draggable chrome still needs the original device when a
             // child delivers its native long-click callback.
             while (currentEvent.changes.any { it.pressed }) awaitPointerEvent(PointerEventPass.Final)
-        } finally { dock.headerHeld = false; dock.refresh(); dock.contactType = null; dock.contactPosition = null; dock.contactSource = null }
+            val up = tapUp?.takeIf { resettable }?.let { awaitPointerEvent(PointerEventPass.Final).changes.firstOrNull { it.id == down.id } }
+            val previousEdgeTap = edgeTap
+            edgeTap = up?.takeIf { !it.isConsumed && it.uptimeMillis - down.uptimeMillis < viewConfiguration.longPressTimeoutMillis &&
+                (it.position - down.position).getDistance() <= viewConfiguration.touchSlop }?.let { Tap("edge", it.uptimeMillis, it.position, down.type) }
+            if (edgeTap != null && previousEdgeTap?.device == down.type &&
+                down.uptimeMillis - previousEdgeTap.time in viewConfiguration.doubleTapMinTimeMillis..viewConfiguration.doubleTapTimeoutMillis &&
+                (down.position - previousEdgeTap.position).getDistance() <= viewConfiguration.touchSlop * 2) {
+                edgeTap = null
+                dock.host.input(obj("type" to "edge_double_press", "kind" to pointerKind(down.type), "contact" to "free",
+                    "position" to JSONArray(listOf(down.position.x / dock.density, down.position.y / dock.density)), "viewport" to dock.viewport))
+            }
+        } finally { dock.cancelEdge(); dock.headerHeld = false; dock.refresh(); dock.contactType = null; dock.contactPosition = null; dock.contactSource = null }
+    }
+}
+
+/** The unconsumed release, seen in the initial pass, when it ends the contact. */
+private suspend fun AwaitPointerEventScope.followEdge(dock: DockInteraction, down: PointerInputChange): PointerInputChange? {
+    while (dock.edge != null) {
+        val event = awaitPointerEvent(PointerEventPass.Initial)
+        val others = event.changes.filter { it.id != down.id && it.pressed }
+        if (others.isNotEmpty() && dock.edge?.claimed != true) { dock.cancelEdge(); return null }
+        others.forEach { it.consume() }
+        val change = event.changes.firstOrNull { it.id == down.id } ?: run { dock.cancelEdge(); return null }
+        if (!change.pressed && change.isConsumed) { dock.cancelEdge(); return null }
+        val owner = dock.edgeMotion(change, viewConfiguration.touchSlop)
+        if (!change.pressed) return change.takeIf { owner == null }
+        if (owner == null && dock.edge?.canvas == false &&
+            awaitPointerEvent(PointerEventPass.Final).changes.firstOrNull { it.id == down.id }?.isConsumed == true) dock.cancelEdge()
+    }
+    return null
+}
+
+@Composable internal fun Modifier.edgeSurface(dock: DockInteraction): Modifier = pointerInput(dock) {
+    awaitEachGesture { awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial); dock.edgeSurfaceHit = true }
+}
+
+/** Marks a control that owns swipes ("input") or sideways swipes ("pickup"). */
+@Composable internal fun Modifier.edgeControl(contact: String = "input"): Modifier {
+    val dock = LocalDock.current ?: return this
+    return pointerInput(dock, contact) {
+        awaitEachGesture { awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial); dock.edgeControlHit = contact }
     }
 }
 

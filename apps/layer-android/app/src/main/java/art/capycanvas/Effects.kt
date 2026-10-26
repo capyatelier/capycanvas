@@ -379,7 +379,7 @@ private data class CurveTap(val position: Offset, val time: Long, val epoch: Lon
                                 true
                             }
                         }.focusable(enabled)
-                        .pointerInput(target.toString(), enabled) {
+                        .edgeControl().pointerInput(target.toString(), enabled) {
                             if (!enabled) return@pointerInput
                             awaitEachGesture {
                                 val down = awaitFirstDown(); down.consume(); focus.requestFocus(); cancel()

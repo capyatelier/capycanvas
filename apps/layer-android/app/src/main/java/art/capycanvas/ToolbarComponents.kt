@@ -86,7 +86,7 @@ private fun formatted(language: String, control: JSONObject, value: Float, units
     val onPosition by rememberUpdatedState(position)
     val onStep by rememberUpdatedState(step)
     val onPhase by rememberUpdatedState(phase)
-    return pointerInput(control.toString(), enabled) {
+    return edgeControl().pointerInput(control.toString(), enabled) {
         if (!enabled) return@pointerInput
         awaitEachGesture {
             val down = awaitFirstDown(requireUnconsumed = false)
@@ -580,7 +580,7 @@ internal fun menuButtonWidth(caption: String, textWidth: (String) -> Float, dens
         .alpha(if (enabled) 1f else .4f).semantics {
             contentDescription = label; progressBarRangeInfo = ProgressBarRangeInfo(fill, 0f..1f)
             if (enabled) setProgress { onChange(it, false, 0f); onContact(false, false); true } else disabled()
-        }.pointerInput(vertical, enabled) {
+        }.edgeControl().pointerInput(vertical, enabled) {
             if (!enabled) return@pointerInput
             awaitEachGesture {
                 val down = awaitFirstDown(); down.consume()

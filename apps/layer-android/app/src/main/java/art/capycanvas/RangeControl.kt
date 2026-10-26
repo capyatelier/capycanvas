@@ -81,7 +81,7 @@ private data class RangeContact(val index: Int, val before: Float, val domain: P
             if (showSlider) BoxWithConstraints(Modifier.weight(1f).height(28.dp).testTag("$prefix-range-track")
                 .onPreviewKeyEvent {
                     if (it.type == KeyEventType.KeyDown && it.key == Key.Escape && contact != null) { end(true); true } else false
-                }.pointerInput(spec.toString()) {
+                }.edgeControl().pointerInput(spec.toString()) {
                     awaitEachGesture {
                         val down = awaitFirstDown()
                         if (currentEvent.buttons.isSecondaryPressed) return@awaitEachGesture

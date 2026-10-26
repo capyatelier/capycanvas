@@ -359,7 +359,7 @@ internal class LayerSwipe {
             when(highlight) { "above" -> drawLine(colors.accent,Offset.Zero,Offset(size.width,0f),2*density)
                 "below" -> drawLine(colors.accent,Offset(0f,size.height),Offset(size.width,size.height),2*density)
                 "into" -> drawRect(colors.accent,style=androidx.compose.ui.graphics.drawscope.Stroke(2*density)) }
-        }.then(if(preview || rename==id) Modifier else Modifier.pointerInput(id,focused,full) {
+        }.then(if(preview || rename==id) Modifier else Modifier.edgeControl().pointerInput(id,focused,full) {
             if (!focused) return@pointerInput
             awaitEachGesture {
                 val down=awaitFirstDown(requireUnconsumed=false,pass=PointerEventPass.Initial); press=down.position
@@ -371,7 +371,7 @@ internal class LayerSwipe {
                 contactActive=true
                 holdEligible=true
                 val row=latest
-                val kind=when(down.type) { PointerType.Mouse -> "mouse"; PointerType.Stylus,PointerType.Eraser -> "pen"; else -> "touch" }
+                val kind=pointerKind(down.type)
                 val handle=full && resting && gripBounds.contains(origin+down.position)
                 fun pickup(row:JSONObject)=if(handle)row.getBoolean("drag_from_handle") else kind in row.array("drag_from_body").values()
                 var directDrag=resting && pickup(row)
@@ -551,7 +551,7 @@ internal class LayerSwipe {
                 var name by remember { mutableStateOf(TextFieldValue(layer.getString("label"),TextRange(0,layer.getString("label").length))) }
                 val focus=remember { FocusRequester() }; var hadFocus by remember { mutableStateOf(false) }; var done by remember { mutableStateOf(false) }
                 fun finish(cancel: Boolean = false) { if(!done) { done=true; host.layer(if(cancel || name.text.isBlank())obj("op" to "cancel_rename") else obj("op" to "rename","id" to id,"name" to name.text)) } }
-                BasicTextField(name,{name=it;host.textComposition.update(focus,name,hadFocus)},Modifier.fillMaxWidth().testTag("layer-name-editor-$id").focusRequester(focus).onPreviewKeyEvent { event ->
+                BasicTextField(name,{name=it;host.textComposition.update(focus,name,hadFocus)},Modifier.edgeControl().fillMaxWidth().testTag("layer-name-editor-$id").focusRequester(focus).onPreviewKeyEvent { event ->
                     val key = event.nativeKeyEvent
                     if (key.keyCode == android.view.KeyEvent.KEYCODE_ESCAPE) {
                         val owned=name.composition != null || host.textComposition.owns(key)

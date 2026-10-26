@@ -214,7 +214,7 @@ private data class ChromeFocusIndication(val color: Color) : IndicationNodeFacto
     }
     DisposableEffect(Unit) { onDispose { if (focused) host.editingText = false; host.textComposition.clear(requester) } }
     val colors = LocalPalette.current
-    Column(modifier.background(background ?: colors.input, shape)) {
+    Column(modifier.edgeControl().background(background ?: colors.input, shape)) {
         label?.let { Box(Modifier.padding(start = 10.dp, top = 6.dp)) { it() } }
         BasicTextField(text, { next ->
             val previous = text.text

@@ -80,7 +80,7 @@ import kotlin.math.roundToInt
                 placement = if (clip.isEmpty) null else obj(
                     "bounds" to JSONArray(listOf(origin.x, origin.y, coords.size.width, coords.size.height)),
                     "clip" to rect(clip), "order" to order)
-            }.pointerInput(host, density) {
+            }.edgeControl().pointerInput(host, density) {
                 awaitEachGesture {
                     val down = awaitFirstDown(); down.consume()
                     fun send(phase: String, point: Offset) = host.dispatch(obj("type" to "navigator", "phase" to phase,
