@@ -257,6 +257,14 @@ width changes still update and measure the retained body. Collapsed columns
 retain their path while its size and corner radii are unchanged. GPU readiness
 updates independently of that geometry cache. Layout observers must not replace
 identical geometry or rebind unchanged hidden controls on every notification.
+Workspace observers collect measurements, panel bridges, backgrounds and Navigator
+placements through one pending XAML rendering callback. Control placement stays
+immediate; glass collection does not re-enter layout observation. Accepted layout
+or document changes invalidate outstanding bridge replies before the deferred
+measurement. GPU acknowledgements update native fallback visibility separately.
+Caption and interactive regions use the non-client pointer source directly;
+the published passthrough cache includes the regions already submitted during
+resize. Leaving the overlapped presenter clears custom caption/input regions.
 WinUI attaches a composition-surface handle during creation and recovery.
 Buffer configuration and resize stay on the render owner, outside the UI thread.
 Buffer capacity grows in 128-pixel blocks; source rectangles and presentation

@@ -35,9 +35,17 @@ The fast two-axis follow-up still reproduces grow-only black right/bottom region
 that clear on release. Retaining unchanged layout callbacks removes an 80% idle
 UI feedback loop, but rapid resizing still uses 88–92% UI CPU with only 27–28
 native window-size changes/s on the 60 Hz laptop. Treat the landed improvements
-as partial. The earlier approximately 58 renderer calls/s did not measure native
-UI cadence. Prioritize the remaining repeated bridge/background and layout work,
-and inspect the composed native controls as well as the canvas.
+as partial. Subsequent frame-based workspace observation and direct caption
+regions improve native size changes to about 43/s, with 90–95% UI CPU after
+the latest rebase. Black regions
+remain. A minimal WinUI window with a solid Grid and two corner markers also
+shows grow-only black bands without Rust, a GPU swap chain or editor work;
+Capy's heavier UI work greatly increases the lag. The earlier approximately 58
+renderer calls/s did not measure native UI cadence. Prioritize the remaining
+native layout/geometry cost and framework resize synchronization, and inspect
+the composed native controls as well as the canvas. Saved models confirm that
+the local fixture's `Sketch` filename label actually used the default Paint
+workspace; select and verify the workspace explicitly on the receiving computer.
 
 Previous `artifacts/windows/resize-investigation/` files, binaries and temporary
 UI timing probes are local and are **not delivered by Git**. Build on the new

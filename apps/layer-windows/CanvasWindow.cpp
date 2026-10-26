@@ -331,15 +331,18 @@ void CanvasWindow::Resize() {
             // Painting snapshots can refresh header state without moving controls.
             // Only changed hit geometry needs a non-client window update.
             if(!same){
-                titlebar.SetDragRectangles(regions);
-                // Caption changes alone do not reliably retire pen/touch hit
-                // regions. Publish the complementary interactive regions too.
                 auto source=Microsoft::UI::Input::InputNonClientPointerSource::GetForWindowId(window.AppWindow().Id());
+                source.SetRegionRects(Microsoft::UI::Input::NonClientRegionKind::Caption,regions);
                 source.SetRegionRects(Microsoft::UI::Input::NonClientRegionKind::Passthrough,inputRegions);
-                bubbleInputRegions.clear();
+                bubbleInputRegions=inputRegions;
                 captionRegions=std::move(regions);captionInputRegions=std::move(inputRegions);captionRegionsValid=true;
             }
-        }else captionRegionsValid=false;
+        }else if(captionRegionsValid){
+            auto source=Microsoft::UI::Input::InputNonClientPointerSource::GetForWindowId(window.AppWindow().Id());
+            source.ClearRegionRects(Microsoft::UI::Input::NonClientRegionKind::Caption);
+            source.ClearRegionRects(Microsoft::UI::Input::NonClientRegionKind::Passthrough);
+            captionRegions.clear();captionInputRegions.clear();bubbleInputRegions.clear();captionRegionsValid=false;
+        }
     }
     {
         std::lock_guard lock(mutex);

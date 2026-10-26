@@ -244,7 +244,7 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 | Web tool bubble drag through four neighbours | 120 | Unmeasured after the bubble release fixes; desktop browser journeys do not qualify the reference tablet | [Web checks](../development/web.md#tests), 2026-10-24 |
 | GTK Tool Set hover and press animation | 120 | Desktop diagnostic: **117.76 changing-color presents/s**, 116.67–118.08 per case; pooled gap p99 16.646 ms. Reference hardware unmeasured | [GTK tool caption hover](#gtk-tool-caption-hover), 2026-10-26 |
 | Panel or column resize | 120 | Expanding GTK divider desktop diagnostic: **54.49/s**, p99 41.689 ms; misses the 114 Hz floor. **Desktop diagnostic misses.** GTK GPU joins: 81.59–112.27 changing-geometry presents/s at 1×; 38.96–92.31 at 2×, worst p99 74.986 ms. Reference-tier qualification remains unset. Web Navigator: 30.00–30.64 Chrome surface presents/s; p99 50.00–58.34 ms | [Web Navigator layout](#web-navigator-layout), 2026-10-19; [GTK Color resize](#gtk-color-panel-resize), 2026-10-10; [GTK column bridge diagnostic](#gtk-column-bridge-diagnostic), 2026-10-25; [GTK Tool Set density](#gtk-tool-set-density), 2026-10-26; [GTK toolbar dividers](#gtk-toolbar-divider-resize), 2026-10-26 |
-| Windows window resize | 120 | Unqualified; local 60 Hz fast corner resize still visibly misses: native size changes 27–28/s, UI CPU 88–92%, transient black regions. Publication-only timings do not establish resize performance | [Windows window resize](#windows-window-resize), 2026-10-26 |
+| Windows window resize | 120 | Unqualified; local 60 Hz fast corner resize still visibly misses: native size changes about 43/s, UI CPU 90–95%, transient black regions. Publication-only timings do not establish resize performance | [Windows window resize](#windows-window-resize), 2026-10-26 |
 | Pen pressure utility and curve drag | 120 | **Unqualified.** Current GTK desktop panel 119.20–119.40 presents/s, p99 up to 9.207 ms; curve 120.00, p99 up to 8.470 ms; reference tablet unmeasured | [GTK pen pressure utility](#gtk-pen-pressure-utility), 2026-10-10 UTC |
 | Windows tool bubble drag through four neighbours | 120 | Unmeasured on reference hardware; Surface Pro / Adreno X1-85 functional checks do not qualify timing (PresentMon ETW access denied) | [Windows tool bubbles](../development/windows.md#tool-bubbles) |
 | Windows HDR color bubble drag and intensity scrub | 120 | Unmeasured on reference hardware; native input and pixel checks do not qualify presentation timing (PresentMon ETW access denied) | [Windows tool bubbles](../development/windows.md#tool-bubbles) |
@@ -5277,7 +5277,7 @@ workspace placement passes/s. Neither count establishes smooth resizing.
 
 A controlled x64 C++ comparison at `07c5c8e57` uses identical frozen Rust from
 the previous desktop diagnostic, so it isolates native changes rather than
-qualifying a complete current-main build. The drawing is 2005 × 1504 in Sketch,
+qualifying a complete current-main build. The drawing is 2005 × 1504 in the default Paint workspace,
 with default glass. Six-second bottom-right growth and rapid reversals span
 1100 × 750 to 2100 × 1350; actual input delivery is approximately 207–209 Hz.
 Bounded composed captures run on a separate thread. UI CPU comes from
@@ -5306,3 +5306,43 @@ GPU panel acknowledgement convergence. Exact native control-value matching and
 a forced acknowledgement at unchanged bounds remain unverified. Native size
 counts are not displayed-frame timestamps. Raw samples, images, hashes and the
 controlled comparison remain under `artifacts/windows/resize-followup/`.
+
+A native-only follow-up to `1e1b050cf` coalesces workspace observations at XAML
+rendering, caches the accepted bridge context, and publishes caption regions
+through the non-client pointer source. The same frozen Rust DLL and default
+Paint workload isolate these C++ changes. The fixture's `Sketch` filename label
+was incorrect: saved models identify `builtin:workspace:illustrator` (Paint).
+
+| Diagnostic | Retained layout callbacks | Frame-based observation and caption regions |
+| --- | --- | --- |
+| Growth: native size changes/s | 28.5 | 42.0 |
+| Growth: UI CPU | 88.2% | 85.6% |
+| Reversal: native size changes/s | 27.5 | 41.3 |
+| Reversal: UI CPU | 92.1% | 92.7% |
+| Maximum sampled black interior during reversals | 43.2% | 34.4% |
+| Reversal captures with more than 1% black interior | 18/48 | 20/52 |
+
+These single growth/reversal diagnostics show faster native size processing,
+not a sustained presentation pass. Black regions remain. Successful DXGI
+present counters advance during motion; that does not establish that XAML or
+the composed window follows each input. Fast reversals still saturate the UI
+thread. The shrink contact misses its corner and is excluded.
+
+An isolated WinUI 3 window using the same 2.5.1 runtime, a solid Grid and two
+corner markers also reproduces black right/bottom bands without editor state,
+JSON, custom caption regions, a swap chain or Rust. Native size changes reach
+167–168/s, with 29–31% UI CPU; 3 of 182 sampled captures show black interior,
+up to 1.59% on the inset sample grid. All 18 post-release captures are clear.
+The default title bar remains current while the Grid and its bottom-right marker
+end at an older extent. This demonstrates a framework resize contribution;
+Capy's much larger lag also includes its native layout/geometry workload. It
+does not establish that removing Capy's workload fixes framework synchronization.
+The minimal shrink contact also misses and is excluded.
+
+After rebasing onto `ee9dd3547`, which also changes native panel-height handling,
+a repeat gives 42.5/42.6 native size changes/s for growth/reversals, 89.5/95.0%
+UI CPU, and 0% settled idle UI CPU. Reversal black interior reaches 36.4%, with
+23/52 captures above 1%; this remains a failure. These post-rebase numbers do
+not isolate the observation change from the incoming panel-height change.
+Exact sources, binary hashes, raw inputs, CPU samples and composed images are retained in
+`artifacts/windows/resize-followup/`, including `minimal-winui/`.
