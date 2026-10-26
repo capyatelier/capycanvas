@@ -23,6 +23,7 @@ struct ColorWheelInput: UIViewRepresentable {
         var phase: (String) -> Void = { _ in }
         let contact = Contact()
         private var touchInput: ColorTouchRecognizer?
+        var touchesClaimed: Bool { touchInput?.surface?.claimed == true }
         var size: CGFloat { min(bounds.width, bounds.height) }
         override init(frame: CGRect) {
             super.init(frame: frame)
@@ -54,6 +55,7 @@ struct ColorWheelInput: UIViewRepresentable {
         private var part: UInt32 = 0
         override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
             guard touch == nil, let touch = touches.first, let view = view as? ContactView else { return }
+            guard !view.touchesClaimed else { state = .failed; return }
             let point = touch.location(in: view)
             part = view.hit(point)
             guard part != 0 else { state = .failed; return }

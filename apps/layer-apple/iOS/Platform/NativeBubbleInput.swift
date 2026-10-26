@@ -38,7 +38,10 @@ final class BubbleRecognizer: UIGestureRecognizer {
             let result = model.down(point, id: next, device: device, clicks: touch.tapCount,
                 doubleTime: 0, time: touch.timestamp)
             marker.focusBubbleKeyboard()
-            guard result != .ignore else { continue }
+            guard result != .ignore else {
+                if colorKeys.contains(ObjectIdentifier(touch)) { contacts[ObjectIdentifier(touch)] = next }
+                continue
+            }
             contacts[ObjectIdentifier(touch)] = next
             if result == .capture { state = state == .possible ? .began : .changed }
         }

@@ -96,6 +96,7 @@ struct ParameterInput: UIViewRepresentable {
         var selected: UInt32 = 1
         var keyActive = false
         private var touchInput: ColorTouchRecognizer?
+        var touchesClaimed: Bool { touchInput?.surface?.claimed == true }
         override var canBecomeFirstResponder: Bool { true }
         var size: CGFloat { bounds.width }
         override init(frame: CGRect) { super.init(frame: frame); isOpaque = false; backgroundColor = .clear; addGestureRecognizer(contact) }
@@ -135,6 +136,7 @@ struct ParameterInput: UIViewRepresentable {
         private var point = CGPoint.zero
         override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
             guard touch == nil, let t = touches.first, let v = view as? ContactView else { return }
+            guard !v.touchesClaimed else { state = .failed; return }
             point = t.location(in: v); part = v.hit(point)
             guard part != 0 else { state = .failed; return }
             v.selected = part; v.becomeFirstResponder()

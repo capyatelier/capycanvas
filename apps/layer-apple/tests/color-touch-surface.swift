@@ -1,4 +1,5 @@
 import Foundation
+import CoreGraphics
 
 final class Owner {}
 
@@ -23,12 +24,14 @@ final class Owner {}
         precondition(surface.claimed && retired == 2, "the second finger retires each single-finger pick once")
         surface.contact(ObjectIdentifier(c), phase: "down", position: CGPoint(x: 40, y: 70), timestamp: 1.53)
         precondition(retired == 2)
-        for (key, phase) in [(a, "up"), (b, "up"), (c, "cancel")] {
-            surface.contact(ObjectIdentifier(key), phase: phase, position: CGPoint(x: 1, y: 2), timestamp: 1.6)
+        for key in [a, b] {
+            surface.contact(ObjectIdentifier(key), phase: "up", position: CGPoint(x: 1, y: 2), timestamp: 1.6)
         }
+        precondition(surface.claimed && surface.tracks(ObjectIdentifier(c)), "a staggered third finger remains claimed")
+        surface.contact(ObjectIdentifier(c), phase: "up", position: CGPoint(x: 1, y: 2), timestamp: 1.7)
         precondition(!surface.claimed && !surface.tracks(ObjectIdentifier(a)))
         let decoded = try sent.map { try JSONSerialization.jsonObject(with: JSONSerialization.data(withJSONObject: $0)) as! [String: Any] }
-        precondition(decoded.map { $0["phase"] as! String } == ["down", "down", "down", "up", "up", "cancel"])
+        precondition(decoded.map { $0["phase"] as! String } == ["down", "down", "down", "up", "up", "up"])
         precondition(decoded.map { ($0["id"] as! NSNumber).uint64Value } == [1, 2, 3, 1, 2, 3])
         precondition(decoded.allSatisfy { $0["type"] as? String == "color_touch" && ($0["surface"] as! NSNumber).uint64Value == surface.surface })
         precondition((decoded[0]["position"] as! [NSNumber]).map(\.doubleValue) == [20, 30])
