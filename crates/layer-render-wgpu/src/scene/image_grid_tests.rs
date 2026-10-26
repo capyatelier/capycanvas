@@ -20,6 +20,44 @@ fn correction_gather_finishes_with_repeated_identical_transform_damage() {
     correction_progress(CorrectionChange::RepeatedDamage);
 }
 
+#[test]
+fn cold_correction_gather_finishes_resident_pages_and_requests_the_next() {
+    use crate::scene::scale::tests::source_progress::{photo, EXTENT};
+    use crate::tests::native_effects::{insert_effect, refresh};
+    use layer_core::{EffectInstance, EffectValue};
+    let mut doc = photo(0);
+    let mut filter = EffectInstance::new(crate::tests::fixture("gaussian_blur").program());
+    filter.set("sigma", EffectValue::Number(0.)).unwrap();
+    insert_effect(&mut doc, filter);
+    let root = doc.composition().result;
+    doc.artwork.stacks.get_mut(root).unwrap().entries.swap(0, 1);
+    refresh(&mut doc);
+    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    r.source_tiles.get_mut().admit(1 << 32);
+    let mut scene = Scene::new(&r).unwrap();
+    let full = PixelRect::full(EXTENT);
+    let window = DocRect { min: [0; 2], max: EXTENT.map(i64::from) };
+    let pages = page_coordinates(full).count();
+    let mut attempts = 0;
+    loop {
+        let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+        let frame = layer_render::FramePacket { blend_space: layer_core::BlendSpace::Linear, ..crate::test_support::packet(doc.scene(), EXTENT) };
+        let result = scene.prepare_region(&mut r, frame, (full, window), full, false, &mut encoder);
+        r.uploads.finish(&encoder);
+        encoder.submit(&r.queue);
+        attempts += 1;
+        match result {
+            Ok(()) => break,
+            Err(GpuRasterError::DeferredObjectWork) => {}
+            Err(error) => panic!("{error}"),
+        }
+        assert!(2 * attempts < pages, "a gather attempt must finish every page whose decode arrived and request more than one page");
+        crate::test_support::complete(&r);
+        crate::test_support::settle_decodes(&mut r);
+    }
+    assert!(attempts > 1, "the photo starts cold");
+}
+
 #[derive(Clone, Copy)]
 enum CorrectionChange { Discard, Scope, Opacity, RepeatedDamage }
 

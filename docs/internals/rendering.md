@@ -377,7 +377,9 @@ tile the workers have finished and records the idle tap budget unless painting o
 object motion is active. Object captures encode and release completed results one
 native page at a time.
 Native filter input gathers retain completed pages across these retries; a
-partial input never marks its filter output valid. Authored edits, new contacts
+partial input never marks its filter output valid. A page waiting for decodes
+does not stop the gather: later pages finish if their tiles are resident and
+request theirs while the decode queue has room. Authored edits, new contacts
 and changes to input interpretation discard that unfinished gather.
 Before a cold live object can interrupt composition, the renderer copies the
 accepted viewport inputs on the GPU and retains their geometry. Physical copies

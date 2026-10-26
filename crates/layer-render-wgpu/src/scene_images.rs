@@ -517,13 +517,27 @@ impl Scene {
                             pages: input_dirty.pages().into_iter().collect() });
                     }
                     cached.valid = false;
-                    while let Some(tile) = cached.input_gather.as_ref().unwrap().pages.first().copied() {
+                    let mut next = cached.input_gather.as_ref().unwrap().pages.first().copied();
+                    let mut waiting = false;
+                    while let Some(tile) = next {
+                        self.decode_wait = false;
                         let result = (|| {
                             let pixels = self.group(r, packet, layer_core::composite_input_scope(scene, handle), tile)?;
                             self.capture_tile(r, pixels, &cached.input, tile, input);
                             self.encode_jobs(r, encoder)
                         })();
-                        if let Err(error) = result {
+                        let pages = &mut cached.input_gather.as_mut().unwrap().pages;
+                        next = pages.range((std::ops::Bound::Excluded(tile), std::ops::Bound::Unbounded)).next().copied();
+                        let failure = match result {
+                            Ok(()) => { pages.remove(&tile); None }
+                            Err(GpuRasterError::DeferredObjectWork) if self.decode_wait && next.is_some() && r.decode_queue_has_room() => {
+                                self.object_results.reset_used(); self.exact_object_results.reset_used();
+                                waiting = true;
+                                None
+                            }
+                            Err(error) => Some(error),
+                        }.or_else(|| (waiting && next.is_none()).then_some(GpuRasterError::DeferredObjectWork));
+                        if let Some(error) = failure {
                             self.stop_before = None;
                             self.object_results.reset_used(); self.exact_object_results.reset_used();
                             if matches!(error, GpuRasterError::DeferredObjectWork) {
@@ -539,7 +553,6 @@ impl Scene {
                             }
                             return Err(error);
                         }
-                        cached.input_gather.as_mut().unwrap().pages.remove(&tile);
                         self.object_results.flush_retired(encoder); self.exact_object_results.flush_retired(encoder);
                         self.clear_material_pages(); self.used.fill(false);
                     }
