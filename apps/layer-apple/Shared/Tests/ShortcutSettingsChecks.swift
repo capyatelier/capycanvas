@@ -9,7 +9,11 @@ extension XCTestCase {
             waitForExpectations(timeout: 10)
         }
         func back() { workspaceActivate(app.buttons["settings-back"]) }
+        #if os(macOS)
         workspaceActivate(app.buttons["settings-button"])
+        #else
+        editorMenu(in: app, menu: "Edit", id: "settings", label: "Settings…")
+        #endif
         workspaceActivate(app.staticTexts["settings-page-shortcuts"])
         let search = app.textFields["shortcut-search"]
         XCTAssertTrue(search.waitForExistence(timeout: 10))

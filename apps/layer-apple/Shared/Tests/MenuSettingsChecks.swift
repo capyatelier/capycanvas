@@ -235,14 +235,22 @@ extension XCTestCase {
         waitForExpectations(timeout: 5)
         workspaceActivate(app.buttons["settings-done"])
         XCTAssertTrue(first.waitForNonExistence(timeout: 5))
+        #if os(macOS)
         workspaceActivate(app.buttons["settings-button"])
+        #else
+        editorMenu(in: app, menu: "Edit", id: "settings", label: "Settings…")
+        #endif
         XCTAssertTrue(first.waitForExistence(timeout: 10)); XCTAssertTrue(first.isSelected)
 
         workspaceActivate(app.staticTexts["settings-page-shortcuts"])
         let search = app.textFields["shortcut-search"]
         XCTAssertTrue(search.waitForExistence(timeout: 5)); workspaceActivate(search); search.typeText("Zen")
         let shortcut = app.buttons["shortcut-command.ZenMode"]
-        XCTAssertTrue(shortcut.waitForExistence(timeout: 5)); workspaceActivate(shortcut)
+        XCTAssertTrue(shortcut.waitForExistence(timeout: 5))
+        #if os(iOS)
+        dismissEditorKeyboard(in: app)
+        #endif
+        workspaceActivate(shortcut)
         let add = app.buttons["shortcut-add"]
         XCTAssertTrue(add.waitForExistence(timeout: 5)); workspaceActivate(add)
         let cancel = app.buttons["shortcut-cancel"]
