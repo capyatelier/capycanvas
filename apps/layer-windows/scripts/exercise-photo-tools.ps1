@@ -75,9 +75,10 @@ function Pick-ToolAction([string]$Group,[string]$Command,[string]$Device){
  Wait-Until {(Command $Command).selected} "Tool Settings did not select $Command"
 }
 function Touch([string]$Device,[int[]]$At){[CapyRowPointer]::Down($Device,$At[0],$At[1]);Start-Sleep -Milliseconds 40;[CapyRowPointer]::Up();Start-Sleep -Milliseconds 150}
-function Drag([string]$Device,[int[]]$From,[int[]]$To,[scriptblock]$BeforeLast){
+function Drag([string]$Device,[int[]]$From,[int[]]$To,[ValidateRange(1,12)][int]$Steps=12){
+ Wait-PresentedFrame
  [CapyRowPointer]::Down($Device,$From[0],$From[1])
- for($step=1;$step -le 12;$step++){[CapyRowPointer]::Move([int]($From[0]+($To[0]-$From[0])*$step/12),[int]($From[1]+($To[1]-$From[1])*$step/12));Start-Sleep -Milliseconds 12;if($step -eq 11 -and $BeforeLast){& $BeforeLast}}
+ for($step=1;$step -le $Steps;$step++){[CapyRowPointer]::Move([int]($From[0]+($To[0]-$From[0])*$step/$Steps),[int]($From[1]+($To[1]-$From[1])*$step/$Steps));Start-Sleep -Milliseconds 12}
  [CapyRowPointer]::Up();Start-Sleep -Milliseconds 150
 }
 function Tool([string]$Command){
@@ -209,27 +210,18 @@ function Check-TransformFootprint{
   $initial=Footprint-Corners
   $expected=@(@(0,0),@(2048,0),@(2048,2048),@(0,2048))
   foreach($corner in 0..3){foreach($axis in 0..1){if($initial[$corner][$axis] -ne $expected[$corner][$axis]){throw 'The dense source did not start at all four exact corners'}}}
-  $endpoint=Footprint-Endpoint;$last=@{corners=$null}
-  Invoke-Id 'tool-choice-transform-reference-0'
-  Wait-Until {@((Model).state.tool_extra|Where-Object {$_.Choice.id -eq 'transform-reference'})[0].Choice.items[0].selected} 'The live Distort corner reference did not select'
-  $dragStart=Screen-Point @(0,0)
-  $beforeLast=@([int]($dragStart[0]+($endpoint.screen[0]-$dragStart[0])*11/12),[int]($dragStart[1]+($endpoint.screen[1]-$dragStart[1])*11/12))
-  Drag 'pen' $dragStart $endpoint.screen {
-   $live=@{corner=$null}
-   Wait-Until {
-    $m=Model;$settings=$m.state.tool_settings
-    $live.corner=@([double]@($settings|Where-Object id -eq 'transform_x')[0].value,[double]@($settings|Where-Object id -eq 'transform_y')[0].value)
-    $x=[int]($endpoint.canvas[0]+($live.corner[0]*$endpoint.camera.zoom+$endpoint.camera.translation[0])*$endpoint.canvas[2]/$endpoint.camera.viewport[0])
-    $y=[int]($endpoint.canvas[1]+($live.corner[1]*$endpoint.camera.zoom+$endpoint.camera.translation[1])*$endpoint.canvas[3]/$endpoint.camera.viewport[1])
-    $x -eq $beforeLast[0] -and $y -eq $beforeLast[1]
-   } 'The native pen did not present its last valid corner at the exact requested screen pixel'
-   $last.corners=@($live.corner,$initial[1],$initial[2],$initial[3])
-  }
+  $endpoint=Footprint-Endpoint
+  $valid=Screen-Point @(400,300)
+  Drag 'pen' (Screen-Point @(0,0)) $valid
+  $last=Footprint-Corners
+  $lastPoint=Screen-Point $last[0]
+  if($lastPoint[0] -ne $valid[0] -or $lastPoint[1] -ne $valid[1] -or (Json @($last[1],$last[2],$last[3])) -cne (Json @($initial[1],$initial[2],$initial[3]))){throw 'The valid native Distort drag did not move only its requested corner'}
+  Drag 'pen' $lastPoint $endpoint.screen 1
   Wait-Until {(Model).state.notice.text -ceq "The pixels can't be squeezed this far"} 'The near-line drag did not publish the shared squeeze refusal'
   $notice=(Model).state.notice;$accepted=Footprint-Corners
-  $report=[ordered]@{filter=$filter;endpoint=$endpoint;initial=$initial;last_valid=$last.corners;accepted=$accepted;notice=$notice;completed=$false};$reports+=$report
+  $report=[ordered]@{filter=$filter;endpoint=$endpoint;initial=$initial;last_valid=$last;accepted=$accepted;notice=$notice;completed=$false};$reports+=$report
   if((Model).state.host_error -or (Kind) -ne 'transform' -or !(Control 'drawing-canvas').Current.IsEnabled){throw 'The near-line drag stopped the native canvas'}
-  if((Json $accepted) -cne (Json $last.corners)){throw 'The refused near-line pose did not retain all four exact last-valid corners'}
+  if((Json $accepted) -cne (Json $last)){throw 'The refused near-line pose did not retain all four exact last-valid corners'}
   if($notice.text -cne "The pixels can't be squeezed this far"){throw 'The near-line drag did not publish the shared squeeze refusal'}
   Capture ($filter+'-refused') -WithModel -Composed
   Drag 'pen' (Screen-Point $accepted[0]) (Screen-Point @(512,512));Idle

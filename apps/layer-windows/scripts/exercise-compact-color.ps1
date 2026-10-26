@@ -304,7 +304,8 @@ function Slot-Pixels([string]$Name=''){
 }
 function Slot-Receipt([string]$Name,[string]$Expected,[string]$Observed){
     $captured=Slot-Pixels $Name
-    [ordered]@{expected_pixels=$Expected;observed_pixels=$Observed;captured_pixels=$captured;point=$script:slotPixelPoint;checkpoint=(Slot-Checkpoint);colors=(Slot-Colors);camera=(Model).state.camera}|ConvertTo-Json -Depth 12|Set-Content (Join-Path $run ($Name+'.json'))
+    $model=Model
+    [ordered]@{expected_pixels=$Expected;observed_pixels=$Observed;captured_pixels=$captured;point=$script:slotPixelPoint;checkpoint=(Slot-Checkpoint);colors=(Slot-Colors);camera=$model.state.camera;readiness=($model|Select-Object gpu_ready,canvas_ready,brush_ready,shaders_ready)}|ConvertTo-Json -Depth 12|Set-Content (Join-Path $run ($Name+'.json'))
 }
 function Slot-ColorPanel{
     if(!(Find 'color-foreground' -Visible)){
@@ -394,7 +395,10 @@ function Slot-MenuJourney{
     Fit-Canvas
     $canvas=(Control 'drawing-canvas' -Arranged).Current.BoundingRectangle;$camera=(Model).state.camera;$area=$camera.work_area
     $script:slotPixelPoint=@([int]($canvas.X+($area[0]+$area[2]/2)*$canvas.Width/$camera.viewport[0]),[int]($canvas.Y+($area[1]+$area[3]/2)*$canvas.Height/$camera.viewport[1]))
-    Slot-Park;$empty=Wait-StablePixels {Slot-Pixels};$before=Slot-Checkpoint
+    Slot-Park
+    Wait-Until {$model=Model;$model.canvas_ready -and $model.brush_ready -and $model.shaders_ready} 'The slot-menu pixel baseline did not finish its idle shaders'
+    $empty=Wait-StablePixels {Slot-Pixels};$before=Slot-Checkpoint
+    Slot-Receipt 'slot-empty' $empty $empty
     [CapyRowPointer]::Down('mouse',($script:slotPixelPoint[0]-30),$script:slotPixelPoint[1])
     try{for($step=1;$step -le 12;$step++){[CapyRowPointer]::Move(($script:slotPixelPoint[0]-30+$step*5),$script:slotPixelPoint[1]);Start-Sleep -Milliseconds 12}}finally{[CapyRowPointer]::Up()}
     Slot-Park
@@ -440,8 +444,12 @@ function Slot-MenuJourney{
         Capture ('slot-menu-apply-'+$case.target) -WithModel -Composed
     }
     $colors=Slot-Colors
+    $undoRevision=(Model).state.document_file.revision
     (Control 'drawing-canvas').SetFocus();[CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),0x5A);Slot-Park
-    Wait-Until {(Slot-Pixels) -eq $empty} 'One Undo after slot menus did not remove only the seed stroke'
+    Wait-Until {(Model).state.document_file.revision -gt $undoRevision -and !((Model).state.commands|Where-Object id -eq 'undo').enabled -and ((Model).state.commands|Where-Object id -eq 'redo').enabled} 'One Undo after slot menus did not acknowledge removing the seed stroke'
+    $undone=Wait-StablePixels {Slot-Pixels}
+    Slot-Receipt 'slot-undone' $empty $undone
+    if($undone -ne $empty){throw 'One Undo after slot menus did not remove only the seed stroke'}
     (Control 'drawing-canvas').SetFocus();[CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),0x59);Slot-Park
     Wait-Until {(Slot-Pixels) -eq $artwork} 'One Redo after slot menus did not restore exact seed artwork'
     if((Slot-Colors) -ne $colors){throw 'Artwork Undo/Redo changed the accepted slot paints'}

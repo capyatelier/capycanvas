@@ -1667,6 +1667,8 @@ Blender session checks validate the saved document center before resizing the
 restored window. Maximizing can change toolbar width and the visible work area;
 check the shared resize behavior and project the same document sample into its
 new native position before comparing exact pixels and history.
+Use native Actual Pixels before the paint baselines so fractional display
+rounding across a window resize does not change the compared samples.
 Use `slider-preference-dark/light` to check the global preference, workspace
 history and SQLite restart without repeating the independent fan and Blender
 checks. `exercise-idle-brush.ps1 -WetRoundOnly` retains the single Wet Round

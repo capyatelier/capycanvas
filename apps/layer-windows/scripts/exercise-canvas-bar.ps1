@@ -128,6 +128,13 @@ function Tap([string]$Id,[string]$Device){
    $bounds=$item.Current.BoundingRectangle;$parentBounds=$parent.Current.BoundingRectangle
    $record.parent=$parentBounds;$record.bounds=$bounds
    if($bounds.IsEmpty -or $bounds.Width -le 0 -or $bounds.Height -le 0 -or !$parentBounds.Contains($bounds)){return $false}
+   $view=(Model).state.canvas_bar|Select-Object context,anchor,placement|ConvertTo-Json -Depth 5 -Compress
+   Wait-PresentedFrame
+   $parent=if($Id -like 'canvas-bar-*'){Bar}else{$root}
+   if(!$parent -or $parent.Current.BoundingRectangle -ne $parentBounds){return $false}
+   $item=Find $Id -Within $parent
+   if(!$item -or $item.Current.IsOffscreen -or !$item.Current.IsEnabled -or $item.Current.BoundingRectangle -ne $bounds){return $false}
+   if(((Model).state.canvas_bar|Select-Object context,anchor,placement|ConvertTo-Json -Depth 5 -Compress) -cne $view){return $false}
    $target.point=Center $item;$record.before=Input-Trace $target.point[0] $target.point[1]
    $record.before.foreground -eq $drawingWindow.ToInt64() -and @($record.before.hit|Where-Object {$_.process -eq $review.Id}).Count -gt 0
   } "Native pointer target $Id did not arrange inside its current foreground owner" 10

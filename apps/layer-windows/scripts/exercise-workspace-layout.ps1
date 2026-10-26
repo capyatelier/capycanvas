@@ -115,10 +115,11 @@ function Preset-Geometry([string]$Top){
     if(![CapyRowPointer]::ClientToScreen([IntPtr]$root.Current.NativeWindowHandle,[ref]$origin)){throw 'Native client origin is unavailable'}
     foreach($group in $groups){
         $node=Control ('workspace-group-'+$group.id) -Arranged
-        $group=@((Model).layout.groups|Where-Object id -eq $group.id)[0]
+        $snapshot=Model
+        $group=@($snapshot.layout.groups|Where-Object id -eq $group.id)[0]
         if(!$group){throw 'Arranged preset group lost its current shared identity'}
         $box=Native-Bounds ([string]$group.id) $scale -Group;$shared=$group.bounds
-        $receipt=[ordered]@{group=$group.id;shared=$shared;native_group=$box;uia_group=$node.Current.BoundingRectangle;client_origin=@($origin.x,$origin.y);control=@(Control-Trace $node)}
+        $receipt=[ordered]@{group=$group.id;shared=$shared;panel_measurements=$snapshot.panel_measurements;native_group=$box;uia_group=$node.Current.BoundingRectangle;client_origin=@($origin.x,$origin.y);control=@(Control-Trace $node)}
         try{
             if($node.Current.ProcessId -ne $review.Id -or !$root.Current.BoundingRectangle.Contains($box)){throw 'Preset group left its owned visible window'}
             foreach($pair in @(@($box.X,($origin.x+$shared.x*$scale)),@($box.Y,($origin.y+$shared.y*$scale)),@($box.Width,($shared.width*$scale)),@($box.Height,($shared.height*$scale)))){
@@ -146,7 +147,7 @@ function Preset-Geometry([string]$Top){
             }
         }catch{try{Capture 'preset-scroll-failure' -WithModel -Composed}catch{};throw}
         finally{$receipt|ConvertTo-Json -Depth 12|Set-Content (Join-Path $run ('preset-scroll-'+$group.id+'.json'))}
-        $records+=@{id=$group.id;panels=$group.panels;shared=$shared;native=@($box.X,$box.Y,$box.Width,$box.Height);minimum_body=$group.min_body_height;native_body_height=$body.Height;native_extent_height=$extent*$scale;native_vertical_offset=$offset*$scale;native_vertical_view_size=$view}
+        $records+=@{id=$group.id;panels=$group.panels;shared=$shared;native=@($box.X,$box.Y,$box.Width,$box.Height);minimum_body=$group.min_body_height;native_body_height=$body.Height;native_extent_height=$extent*$scale;native_vertical_offset=$offset*$scale;native_vertical_view_size=$view;panel_measurements=$snapshot.panel_measurements;authored_layout=$snapshot.state.workspace.layout}
     }
     if($records[0].native[1]+$records[0].native[3] -ge $records[1].native[1] -or $records[1].native[1]+$records[1].native[3] -ge $records[2].native[1]){throw 'Preset primary groups overlap or have the wrong vertical order'}
     return $records
@@ -163,6 +164,7 @@ function Check-PresetGroups{
                 Invoke ('panel-tab-'+$tab)
                 Wait-Until {@((Model).layout.groups|Where-Object id -eq $layerGroup.id)[0].active -eq $tab} 'Preset tab did not acknowledge its active panel'
                 $after=@(Preset-Geometry $preset.top)
+                @{workspace=$preset.id;width=$width;tab=$tab;before=$before;after=$after}|ConvertTo-Json -Depth 40|Set-Content (Join-Path $run ('preset-tabs-'+$preset.name+'-'+$width+'-'+$tab+'.json'))
                 for($i=0;$i -lt $before.Count;$i++){
                     if(($before[$i].shared|ConvertTo-Json -Compress) -cne ($after[$i].shared|ConvertTo-Json -Compress)){throw 'Switching Layers and Filters changed the shared group allocation'}
                     for($axis=0;$axis -lt 4;$axis++){if([Math]::Abs($before[$i].native[$axis]-$after[$i].native[$axis]) -gt 1){throw 'Switching Layers and Filters moved the native group frame'}}

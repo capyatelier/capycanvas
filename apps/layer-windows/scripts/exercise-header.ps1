@@ -559,7 +559,7 @@ function Check-Catalog {
     WindowCommand 'undo_workspace'
     Wait-Until {(HeaderJson) -eq $initial} 'Recovery menu could not undo the empty titlebar'
     Check-Geometry
-    & (Join-Path $PSScriptRoot 'exercise-header-settings.ps1') -ProcessId $review.Id -StateFile (State-File)
+    & (Join-Path $PSScriptRoot 'exercise-header-settings.ps1') -ProcessId $review.Id -StateFile (State-File) -EvidenceDirectory $run
     Check-Geometry
 }
 
