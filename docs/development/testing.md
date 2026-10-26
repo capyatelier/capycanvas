@@ -51,6 +51,10 @@ Host snapshot-query tests preserve pending UI and host-service publications in
 both transport modes, including the model baseline and prepared geometry across
 a density change. Complete snapshot reads do not acknowledge streamed updates.
 
+`AndroidWorkspacePresentationTest` checks that nested layout updates retain
+ancestor and sibling reader scopes while changed fields invalidate their
+readers, including removing and restoring JSON-null keys.
+
 GTK `squircle::tests` checks corner and shadow conversion beneath bridge masks
 and effect wrappers without a window. `render_thread::tests::chrome_` checks
 unpublished requests, coalescing behind a held buffer, stale releases and idle

@@ -25,6 +25,10 @@ import androidx.compose.ui.graphics.asAndroidPath
 import androidx.compose.ui.graphics.Outline
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.runtime.snapshots.Snapshot
+import androidx.compose.runtime.snapshots.SnapshotStateObserver
+import org.json.JSONArray
+import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
@@ -32,6 +36,26 @@ import org.junit.Test
 class AndroidWorkspacePresentationTest {
     private val motion=object:MotionDurationScale { override var scaleFactor=1f }
     @get:Rule val compose=createComposeRule(effectContext=motion)
+
+    private fun observedModelReads(test: (SnapshotStateObserver, MutableSet<String>, (String) -> Unit) -> Unit) {
+        compose.setContent { }
+        compose.runOnIdle {
+            val invalidated=linkedSetOf<String>()
+            val changed: (String) -> Unit={ invalidated.add(it) }
+            val observer=SnapshotStateObserver { callback -> callback() }
+            try {
+                observer.start()
+                test(observer,invalidated,changed)
+            } finally { observer.stop();observer.clear() }
+        }
+    }
+
+    private fun workspaceModel()=ObservedModel(listOf("layout","state","state.workspace","state.workspace.layout")).apply {
+        assign(obj("layout" to obj("collapsed" to JSONArray().put(obj("id" to 4)),
+            "groups" to JSONArray().put(obj("id" to 5,"height" to 200))),
+            "state" to obj("workspace" to obj("layout" to obj("bands" to JSONArray().put(obj("id" to 4,"extent" to 240)),
+                "floating" to JSONArray())))))
+    }
 
     @Test fun physicalPanelCornerRadiiRemainFixedInRtlWhileLegacyShapesMirror() {
         val physical=SquircleShape(0.dp,18.dp,6.dp,12.dp,physical=true)
@@ -49,6 +73,88 @@ class AndroidWorkspacePresentationTest {
             assertFalse("Legacy start/end corners must continue to mirror",original.contentEquals(legacyRtl))
             assertArrayEquals(points(mirrored,LayoutDirection.Ltr),legacyRtl,0f)
         }
+    }
+
+    @Test fun layoutPublicationInvalidatesOnlyChangedLayoutReaders() = observedModelReads { observer,invalidated,changed ->
+        val root=workspaceModel()
+        val layout=root.getJSONObject("layout")
+        val collapsed=layout.getJSONArray("collapsed")
+        val groups=layout.getJSONArray("groups")
+        Snapshot.sendApplyNotifications()
+        observer.observeReads("outer",changed) { root.getJSONObject("layout") }
+        observer.observeReads("collapsed",changed) { layout.getJSONArray("collapsed") }
+        observer.observeReads("groups",changed) { layout.getJSONArray("groups") }
+        val next=shareModel(layout,JSONObject(layout.toString()).put("groups",JSONArray().put(obj("id" to 5,"height" to 212)))) as JSONObject
+        assertSame(collapsed,next.getJSONArray("collapsed"))
+        Snapshot.withMutableSnapshot { root.put("layout",next) }
+        Snapshot.sendApplyNotifications()
+        assertSame(layout,root.getJSONObject("layout"))
+        assertSame(collapsed,layout.getJSONArray("collapsed"))
+        assertNotSame(groups,layout.getJSONArray("groups"))
+        assertEquals(212,layout.getJSONArray("groups").getJSONObject(0).getInt("height"))
+        assertEquals(setOf("groups"),invalidated)
+        invalidated.clear()
+        Snapshot.withMutableSnapshot { root.put("layout",next) }
+        Snapshot.sendApplyNotifications()
+        assertTrue("Repeating identical layout must not invalidate any scope",invalidated.isEmpty())
+    }
+
+    @Test fun nestedWorkspaceLayoutPublicationRetainsReaderScopes() = observedModelReads { observer,invalidated,changed ->
+        val root=workspaceModel()
+        val state=root.getJSONObject("state")
+        val workspace=state.getJSONObject("workspace")
+        val layout=workspace.getJSONObject("layout")
+        val floating=layout.getJSONArray("floating")
+        Snapshot.sendApplyNotifications()
+        observer.observeReads("state",changed) { root.getJSONObject("state") }
+        observer.observeReads("workspace",changed) { state.getJSONObject("workspace") }
+        observer.observeReads("layout",changed) { workspace.getJSONObject("layout") }
+        observer.observeReads("bands",changed) { layout.getJSONArray("bands") }
+        observer.observeReads("floating",changed) { layout.getJSONArray("floating") }
+        val next=JSONObject(workspace.toString()).apply {
+            getJSONObject("layout").put("bands",JSONArray().put(obj("id" to 4,"extent" to 252)))
+        }
+        val retained=shareModel(workspace,next) as JSONObject
+        Snapshot.withMutableSnapshot { state.put("workspace",retained) }
+        Snapshot.sendApplyNotifications()
+        assertSame(state,root.getJSONObject("state"))
+        assertSame(workspace,state.getJSONObject("workspace"))
+        assertSame(layout,workspace.getJSONObject("layout"))
+        assertSame(floating,layout.getJSONArray("floating"))
+        assertEquals(252,layout.getJSONArray("bands").getJSONObject(0).getInt("extent"))
+        assertEquals(setOf("bands"),invalidated)
+    }
+
+    @Test fun removedNestedKeysInvalidateTheirReadersAndCanBeReadded() = observedModelReads { observer,invalidated,changed ->
+        val root=workspaceModel()
+        val layout=root.getJSONObject("layout")
+        layout.put("notice",obj("id" to 7)).put("nullable",JSONObject.NULL)
+        val groups=layout.getJSONArray("groups")
+        Snapshot.sendApplyNotifications()
+        observer.observeReads("outer",changed) { root.getJSONObject("layout") }
+        observer.observeReads("groups",changed) { layout.getJSONArray("groups") }
+        observer.observeReads("notice",changed) { layout.has("notice") }
+        observer.observeReads("nullable",changed) { layout.has("nullable") }
+        observer.observeReads("keys",changed) { layout.keys().asSequence().toList() }
+        val next=JSONObject(layout.toString()).apply { remove("notice");remove("nullable") }
+        Snapshot.withMutableSnapshot { root.put("layout",shareModel(layout,next)) }
+        Snapshot.sendApplyNotifications()
+        assertSame(layout,root.getJSONObject("layout"))
+        assertSame(groups,layout.getJSONArray("groups"))
+        assertFalse(layout.has("notice"))
+        assertFalse("A present JSON-null key must be removed, too",layout.has("nullable"))
+        assertEquals(setOf("notice","nullable","keys"),invalidated)
+        invalidated.clear()
+        observer.observeReads("notice",changed) { layout.has("notice") }
+        observer.observeReads("nullable",changed) { layout.has("nullable") }
+        observer.observeReads("keys",changed) { layout.keys().asSequence().toList() }
+        val readded=JSONObject(layout.toString()).put("notice",obj("id" to 8)).put("nullable",JSONObject.NULL)
+        Snapshot.withMutableSnapshot { root.put("layout",shareModel(layout,readded)) }
+        Snapshot.sendApplyNotifications()
+        assertSame(layout,root.getJSONObject("layout"))
+        assertTrue(layout.has("notice"));assertTrue(layout.has("nullable"))
+        assertEquals(8,layout.getJSONObject("notice").getInt("id"))
+        assertEquals(setOf("notice","nullable","keys"),invalidated)
     }
 
     @Test fun zenFadeRetainsContentButImmediatelyReleasesHitTargets() {

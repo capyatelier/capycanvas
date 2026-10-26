@@ -22,7 +22,10 @@ internal class ObservedModel(private val nested: List<String> = emptyList()) : J
     override fun keys(): MutableIterator<String> { shape.intValue; return super.keys() }
     override fun names(): JSONArray? { shape.intValue; return super.names() }
 
-    override fun put(name: String, value: Any?): JSONObject = apply { store(name, value) }
+    override fun put(name: String, value: Any?): JSONObject = apply {
+        if (value is JSONObject && nested.any { it == name || it.startsWith("$name.") }) child(name).assign(value)
+        else store(name, value)
+    }
     override fun put(name: String, value: Boolean): JSONObject = put(name, value as Any?)
     override fun put(name: String, value: Double): JSONObject = put(name, value as Any?)
     override fun put(name: String, value: Int): JSONObject = put(name, value as Any?)
@@ -46,7 +49,7 @@ internal class ObservedModel(private val nested: List<String> = emptyList()) : J
 
     private fun store(name: String, value: Any?) {
         val previous = super.opt(name)
-        if (previous == value) return
+        if (previous === value || (previous != null && value != null && previous == value)) return
         if (value == null) super.remove(name) else super.put(name, value)
         val version = versions[name]
         if (version == null) versions[name] = mutableIntStateOf(0) else version.intValue++
