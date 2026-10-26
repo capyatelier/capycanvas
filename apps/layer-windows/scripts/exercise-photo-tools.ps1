@@ -295,7 +295,7 @@ try {
  $center=Screen ($width/2) ($height/2)
  Drag 'mouse' @(($center[0]-260),($center[1]-200)) @(($center[0]+260),($center[1]+200))
  Wait-Until {(Model).state.layer_tools.has_selection -and (Kind) -eq 'selection'} 'The selection did not finish'
- $null=Tool 'move'
+ Run (Command 'move').label
  Wait-Until {(Model).state.layer_tools.tool -eq 'move' -and (Kind) -eq 'selection' -and (Bar)} 'The selection bar did not stay under Move'
  $before=Paint;$layers=@(Layers).Count
  [CapyRowPointer]::Hover($center[0],$center[1]);Start-Sleep -Milliseconds 200

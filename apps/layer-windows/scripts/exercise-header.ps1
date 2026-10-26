@@ -161,6 +161,12 @@ function Start-Review([string]$Phase) {
     Check-Geometry
 }
 function Check-PenOrder {
+    $before=(Model).state;$groups=@($before.tool_set.groups)
+    $prior=@(0..($groups.Count-1)|Where-Object {$groups[$_].selected})
+    $pen=@(0..($groups.Count-1)|Where-Object {$groups[$_].action.type -eq 'choose_tool_variant' -and $groups[$_].action.variant.type -eq 'brush_group' -and $groups[$_].action.variant.group -eq 'pen'})
+    if($prior.Count -ne 1 -or $pen.Count -ne 1){throw 'The native Tool Set has no unique current and Pen brush groups'}
+    if($prior[0] -ne $pen[0]){Invoke ('tool-group-'+$pen[0]);Wait-Until {(Model).state.tool_set.groups[$pen[0]].selected} 'The Pen group did not activate'}
+    try{
     $state=(Model).state;$items=@($state.tool_set.subtools);$original=$state.brush.preset
     $rough=@(0..($items.Count-1)|Where-Object {$items[$_].preview -eq 28})
     $blotty=@(0..($items.Count-1)|Where-Object {$items[$_].preview -eq 33})
@@ -191,6 +197,9 @@ function Check-PenOrder {
         }finally{
             if($scroll.Current.VerticallyScrollable){Scroll-Position $target $scrollPercent}
         }
+    }
+    }finally{
+        if($prior[0] -ne $pen[0]){Invoke ('tool-group-'+$prior[0]);Wait-Until {(Model).state.brush.preset -eq $before.brush.preset -and (Model).state.tool_set.groups[$prior[0]].selected} 'The original brush group did not restore'}
     }
 }
 function Check-CompactWorkspace {

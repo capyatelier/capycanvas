@@ -340,7 +340,7 @@ function Check-PropertyValueScrub {Pointer-Session {
             $fine=[Math]::Round($expected+$steps/10/100,3);$fineText=($fine*100).ToString('0.#',[Globalization.CultureInfo]::InvariantCulture)+' %'
             [CapyRowPointer]::Hold(0x10,$true)
             try{
-                for($step=7;$step -le 12;$step++){[CapyRowPointer]::Move($x,$y-5*$step-1);Start-Sleep -Milliseconds 35}
+                for($step=7;$step -le 12;$step++){[CapyRowPointer]::Move($x,$y-5*$step-2);Start-Sleep -Milliseconds 35}
                 try{Wait-Until {[Math]::Abs((Property 'opacity').value.value-$fine) -lt 1e-6 -and (Control 'property-opacity').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value -eq $fineText} "Shift did not continue the scrub ten times slower from $expected to $fine"}catch{throw "Shift scrub actual=$((Property 'opacity').value.value), native=$((Control 'property-opacity').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value): $_"}
                 Capture "opacity-fine-scrub-$((Model).state.theme)" -Composed
                 Assert-NumericReadoutFit (Control 'layer-opacity') ([CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.)
