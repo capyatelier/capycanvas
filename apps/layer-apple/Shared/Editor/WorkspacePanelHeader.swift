@@ -161,7 +161,7 @@ struct WorkspaceTabStrip: View {
         let moving = slide.grab.flatMap { grab -> (frame: WorkspaceTabFrame, offset: CGFloat, source: Bool)? in
             guard grab.group == group, !slide.preview.isNull,
                 let index = grab.panels.firstIndex(of: active), grab.frames.indices.contains(index) else { return nil }
-            return (grab.frames[index], slide.offset(group: group, index: index), index == grab.source)
+            return (grab.frames[index], CGFloat(slide.offset(group: group, index: index)), index == grab.source)
         }
         WorkspaceTabStripFill(shape: shape, tab: moving?.frame ?? tab, strip: strip, panel: panel, offset: moving?.offset ?? 0)
             .animation(moving?.source != false || reduceMotion ? nil : .timingCurve(0, 0, 0.58, 1, duration: 0.12), value: moving?.offset ?? 0)
