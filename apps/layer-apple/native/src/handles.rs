@@ -62,6 +62,7 @@ mod tests {
         let bytes=store(vec![17u8,29,43]);
         let text=text(CString::new("日本語🎨").unwrap());
         for raw in [0,1,u64::MAX,bytes,text] {
+            assert_eq!(unsafe {capy_session_failures(raw)},0);
             let mut preview=CapyProjectPreview {width:91,height:91,count:91};
             assert_eq!(unsafe {capy_project_preview_at(raw,0,&mut preview)},-1);
             assert_eq!((preview.width,preview.height,preview.count),(0,0,0));

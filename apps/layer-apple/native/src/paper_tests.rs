@@ -194,6 +194,7 @@ fn apple_paper_worker_failure_retires_its_request_without_authored_changes() {
     let before=document(&app);let mark=checkpoint(&app);let dirty=app.state()["document_file"]["modified"].clone();
     unsafe { capy_paper_work(job.0,-1,c"Invalid input".as_ptr()) };
     let error=unsafe { capy_paper_error(job.0) };assert!(!(error==0));
+    capy_apple_string_free(error);
     job.apply(&app);assert_project_document(&document(&app),&before);assert_eq!(checkpoint(&app),mark);
     assert_eq!(app.state()["document_file"]["modified"],dirty);
     assert!(!app.borrow().host.session.state().requests.iter().any(|item|item.id==id));
@@ -295,6 +296,7 @@ fn apple_new_drawing_imports_paper_into_the_library_without_changing_the_drawing
         let failed=PaperJob::import(&app,&directory);let pointer=failed.0;
         std::thread::spawn(move ||unsafe { capy_paper_work(pointer,-1,c"Missing".as_ptr()) }).join().unwrap();
         let error=unsafe { capy_paper_error(failed.0) };assert!(!(error==0));
+        capy_apple_string_free(error);
         assert_eq!(unsafe { capy_apple_paper_apply(app.0,failed.0) },-1);
         assert_project_document(&document(&app),&before);
     }
@@ -364,7 +366,7 @@ fn apple_failed_initial_material_notifies_once_and_reload_does_not_repeat_the_fa
     effect(&app,json!({"op":"set","layer":layer(&app),"key":"texture","value":{"kind":"choice","value":layer_core::paper::built_in_papers().len()}}));
     let request=paper_request(&app);let job=PaperJob::new(&app,request,&directory);
     unsafe {capy_paper_work(job.0,-1,c"Cotton".as_ptr())};
-    let error=unsafe {capy_paper_error(job.0)};assert!(!(error==0));job.apply(&app);
+    let error=unsafe {capy_paper_error(job.0)};assert!(!(error==0));capy_apple_string_free(error);job.apply(&app);
     assert!(!app.borrow().host.session.state().requests.iter().any(|item|item.id==request));
     assert!(app.state()["host_error"].is_string());assert_project_document(&document(&app),&before);
     let job=PaperJob::new(&app,0,&directory);job.work(None);job.apply(&app);
