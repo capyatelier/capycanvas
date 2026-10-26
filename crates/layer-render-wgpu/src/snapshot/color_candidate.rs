@@ -14,7 +14,7 @@ pub struct ColorCanvas {
     analysis: Option<crate::effect_analysis::Job>,
     analysed: bool,
     submitted: bool,
-    finished: Arc<AtomicBool>,
+    finished: Option<Arc<AtomicBool>>,
 }
 impl SnapshotGpu {
     pub fn color_canvas(
@@ -66,7 +66,7 @@ impl SnapshotGpu {
             analysis: None,
             analysed: false,
             submitted: false,
-            finished: Default::default(),
+            finished: None,
         })
     }
 }
@@ -85,8 +85,8 @@ impl ColorCanvas {
             .device()
             .poll(wgpu::PollType::Poll)
             .map_err(|e| GpuRasterError::Color(e.to_string()))?;
-        if self.submitted {
-            return Ok(self.finished.load(Ordering::Acquire));
+        if let Some(finished) = &self.finished {
+            return Ok(finished.load(Ordering::Acquire));
         }
         if self.validating
             && let Some(result) = renderer.take_effect_validation()
@@ -114,7 +114,7 @@ impl ColorCanvas {
             }
         }
 
-        let restored: Vec<_> = scene.targets().filter_map(|t| scene.raster(t).map(|r| (t, r.clone()))).collect();
+        let restored: Vec<_> = scene.targets().filter(|_| !self.submitted).filter_map(|t| scene.raster(t).map(|r| (t, r.clone()))).collect();
         let packet = FramePacket {
             commit_rasters: true,
             time_seconds: self.context.elapsed,
@@ -126,24 +126,28 @@ impl ColorCanvas {
             dabs: &[],
             dab_batches: &[],
             restore_rasters: &restored,
-            reset_layers: true,
-            composite_all: true,
+            reset_layers: !self.submitted,
+            composite_all: !self.submitted,
             blend_space: document.composition().blend,
         };
-        if !renderer.raster_dependencies_ready(packet, None) {
+        if !renderer.can_submit() || !renderer.raster_dependencies_ready(packet, None) {
             return Ok(false);
         }
         renderer.submit(packet)?;
-        let finished = self.finished.clone();
-        renderer
-            .queue()
-            .on_submitted_work_done(move || finished.store(true, Ordering::Release));
         self.submitted = true;
+        if renderer.has_presentable_frame() {
+            let finished = Arc::new(AtomicBool::new(false));
+            let done = finished.clone();
+            renderer
+                .queue()
+                .on_submitted_work_done(move || done.store(true, Ordering::Release));
+            self.finished = Some(finished);
+        }
         Ok(false)
     }
     pub fn take_ready(mut self) -> Result<WgpuRasterizer, GpuRasterError> {
         self.control.check()?;
-        if !self.submitted || !self.finished.load(Ordering::Acquire) {
+        if !self.finished.as_ref().is_some_and(|finished| finished.load(Ordering::Acquire)) {
             return Err(GpuRasterError::Color("Color canvas is not ready".into()));
         }
         Ok(self.renderer.take().unwrap())

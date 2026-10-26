@@ -49,9 +49,9 @@ publishing them together. Source preparation includes transform and retouch
 footprints, displaced Liquify inputs and brush neighborhoods before authored
 frame work begins. Preparation admits projected outputs alongside retained
 outputs and published pages under the renderer's composition and cache policy.
-Native and browser document candidates finish their initial canvas preparation
-before restoring editor history or adopting the drawing, using the operation's
-existing cancellation and deadline.
+Native and browser document and color candidates finish their initial canvas
+preparation before restoring editor history or adopting the drawing, using the
+operation's existing cancellation and deadline.
 
 `CanvasEngine`, in `layer-engine`, connects that model to drawing input. It
 interprets ordered pen samples, evaluates brush dynamics and produces work for a
