@@ -73,13 +73,34 @@ import QuartzCore
                     func lit() -> Bool { store.state["layer_properties"]["controls"].array.contains { $0["key"].string == "light" } }
                     for row in store.state["layers"].array where !lit() { try await action(["type": "select_layer", "id": row["id"].uint]) }
                     try require(lit(), "The Paper layer must expose its Light dial")
+                    try await action(["type": "effect", "action": ["op": "set",
+                        "layer": store.state["layer_properties"]["layer"].uint,
+                        "key": "relief", "value": ["kind": "number", "value": 0]]])
+                    let flatControls = store.state["layer_properties"]["controls"].array
+                    try require(flatControls.first { $0["key"].string == "relief" }!["value"]["value"].number == 0
+                        && flatControls.first { $0["key"].string == "light" }!["disabled"].bool,
+                        "The Light fixture must publish zero relief and a disabled dial before mounting")
                 }
                 let layer = store.state["layer_properties"]["layer"].uint
                 let brushControl = mode == "brush-size" || mode == "brush-opacity"
+                let brushControlID = mode == "brush-size" ? "brush_size" : "brush_opacity"
+                if brushControl {
+                    try await action(["type": "select_brush", "id": 1])
+                    try require(store.state["brush"]["preset"].uint == 1,
+                        "The brush-control fixture must start with the published GPen preset")
+                    try await action(["type": "customize", "action": ["type": "set_control_visible",
+                        "panel": "sizes", "control": brushControlID, "visible": true]])
+                }
+                let brushPanel = store.panel("sizes")
+                let brushItems = brushPanel["controls"].array.filter { $0["control"].string == brushControlID }
+                if brushControl {
+                    try require(brushItems.count == 1 && brushItems[0]["visible_in_panel"].bool && !brushItems[0]["label"].string.isEmpty,
+                        "The shared Sizes panel must publish its visible brush control and label")
+                }
                 let defaultValues = JSON(store.state["layer_properties"]["controls"].array.map { $0["value"].raw }).stableKey
                 let key = effect == "curves" ? "rgb" : effect == "gradient_map" ? "gradient"
                     : effect == "brightness_contrast" ? "brightness" : mode == "light" ? "light" : "opacity"
-                let identifier = toolControl ? "tool-tolerance" : brushControl ? (mode == "brush-size" ? "Brush size" : "Brush opacity")
+                let identifier = toolControl ? "tool-tolerance" : brushControl ? brushItems[0]["label"].string
                     : mode == "layer-opacity" ? mode : effect == "gradient_map"
                     ? "gradient-strip"
                     : "property-" + key
@@ -98,9 +119,8 @@ import QuartzCore
                 let content = AnyView(Group {
                     if toolControl { ToolSettingsControls(store: store) }
                     else if brushControl {
-                        PanelControls(store: store, panel: JSON(["id": "sizes", "controls": [
-                            ["control": mode == "brush-size" ? "brush_size" : "brush_opacity", "visible_in_panel": true]
-                        ]]), scrollable: false, measureForWorkspace: false)
+                        PanelControls(store: store, panel: brushPanel.replacing("controls", with: JSON(brushItems.map(\.raw))),
+                            scrollable: false, measureForWorkspace: false)
                     } else if mode == "layer-opacity" { LayerOpacityField(store: store) }
                     else { LayerPropertiesPanel(store: store) }
                 }.padding(6).frame(width: 300, height: 500, alignment: .topLeading)
@@ -131,8 +151,10 @@ import QuartzCore
                         throw HostFailure(message: "Missing mounted property field before target switch")
                     }
                     delegate.controlTextDidBeginEditing?(Notification(name: NSControl.textDidBeginEditingNotification, object: field))
-                    field.stringValue = text
-                    delegate.controlTextDidChange?(Notification(name: NSControl.textDidChangeNotification, object: field))
+                    guard let editor = field.currentEditor() as? NSTextView else {
+                        throw HostFailure(message: "The mounted number must own its AppKit field editor")
+                    }
+                    editor.insertText(text, replacementRange: NSRange(location: 0, length: editor.string.utf16.count))
                     try await drain()
                     try require(field.stringValue == text, "The property draft must remain unfinished")
                     guard let entryFrame = geometry.frames[identifier + ":entry"] else {
@@ -216,7 +238,11 @@ import QuartzCore
                     try require(abs(entry.width - 68) < 0.5 && abs(entry.height - store.panelMetrics.height) < 0.5
                         && abs(entry.maxX - root.maxX) < 0.5 && abs(entry.maxY - root.maxY) < 0.5,
                         "Mounted panel entries must occupy 68 points by the panel control height at the bottom right")
+                    let presetBeforeSwitch = store.state["brush"]["preset"].uint
                     try await action(["type": "select_brush", "id": 2])
+                    let presetAfterSwitch = store.state["brush"]["preset"].uint
+                    try require(presetBeforeSwitch == 1 && presetAfterSwitch == 2 && presetBeforeSwitch != presetAfterSwitch,
+                        "The retained brush draft must face a different published preset before its commit")
                     let replacement = value()
                     try await commit(field, delegate)
                     try require(abs(value() - replacement) < 0.0001,
