@@ -280,12 +280,13 @@ extension XCTestCase {
         func reveal(_ id: String) -> XCUIElement {
             let element = newDrawingElement(id, in: app)
             #if os(iOS)
-            revealEditorControl(element, in: scroll)
+            revealEditorControl(element, identifier: id, type: .any, in: scroll)
             #endif
             return element
         }
-        let tiles = app.buttons.matching(NSPredicate(format: "identifier MATCHES %@", "new-drawing-paper-color-[0-9]+"))
-        let before = tiles.count
+        guard let before = Int(editorText(reveal("new-drawing-paper-color-count"))) else {
+            return XCTFail("The paper palette must expose its shared color count")
+        }
         let entry = app.textFields["color-entry-hex"]
         func revealHex() { _ = reveal(entry.exists ? "color-entry-hex" : "color-value-hex") }
         revealHex()
@@ -299,9 +300,9 @@ extension XCTestCase {
         XCTAssertTrue(entry.waitForExistence(timeout: 5))
         replaceEditorText(entry, with: "#4A7CBD", in: app)
         workspaceActivate(reveal("new-drawing-add-paper-color"))
+        XCTAssertEqual(editorText(reveal("new-drawing-paper-color-count")), String(before + 1))
         let stored = reveal("new-drawing-paper-color-\(before)")
         XCTAssertTrue(stored.waitForExistence(timeout: 10))
-        XCTAssertEqual(tiles.count, before + 1)
         expectation(for: NSPredicate(format: "selected == YES"), evaluatedWith: stored)
         waitForExpectations(timeout: 10)
         workspaceActivate(reveal("new-drawing-paper-color-5"))

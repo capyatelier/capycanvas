@@ -107,7 +107,7 @@ extension XCTestCase {
             guard let current = try? scroll.snapshot() else { return XCTFail("The native scroll must remain mounted") }
             let viewport = current.frame.intersection(windowBounds), nodes = descendants(current)
             guard positive(viewport) else { return XCTFail("The native scroll needs a finite viewport inside its window") }
-            let matches = nodes.filter { $0.identifier == identifier && $0.elementType == type }
+            let matches = nodes.filter { $0.identifier == identifier && (type == .any || $0.elementType == type) }
             guard matches.count <= 1 else { return XCTFail("The lazy control must have one semantic identity: \(identifier)") }
             if let target = matches.first, positive(target.frame) {
                 guard target.frame.width <= viewport.width && target.frame.height <= viewport.height else {

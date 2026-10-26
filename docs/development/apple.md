@@ -383,6 +383,9 @@ mutation or release.
   and preset naming when their native fields mount. Forward unconsumed Escape
   to shared Back, preserving native text and composition handling. Add and Use
   Color commit the focused color draft before forwarding their shared action.
+- **Lazy controls in journeys.** Reveal unmounted scroll children by their
+  stable identifier before querying availability. Read shared counts instead
+  of counting the currently mounted accessibility children.
 - **UIKit fields.** iPadOS consumes Escape before SwiftUI handlers. Use UIKit text
   fields with priority key commands, explicit height, and fonts/placeholders assigned
   only when changed, to avoid repeated size invalidation.

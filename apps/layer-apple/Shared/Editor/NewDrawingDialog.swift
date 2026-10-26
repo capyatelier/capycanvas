@@ -567,7 +567,7 @@ private struct NewDrawingPaperColor: View {
         return VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
                 Text(copy["paper_colors"].string)
-                Text(drawer["count"].string).foregroundStyle(.secondary)
+                Text(drawer["count"].string).foregroundStyle(.secondary).accessibilityIdentifier("new-drawing-paper-color-count")
             }
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 44, maximum: 44), spacing: 10)], alignment: .leading, spacing: 10) {
                 ForEach(choices.indices, id: \.self) { index in swatch(choices[index], rgba: previews[index]["rgba"], index: index) }
