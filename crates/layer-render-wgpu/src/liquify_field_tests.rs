@@ -1334,7 +1334,7 @@ fn sustained_pinch_preview_keeps_opaque_center_at_finite_footprint() {
     let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let mut doc=placement::paint_document(extent,"sustained Pinch finite preview");
     placement::set_source(&mut doc,layer_core::color::source::rgba8_source(extent,|_,_|[83,149,211,255]));
-    r.submit(FramePacket{view,reset_layers:true,..crate::test_support::packet(doc.scene(),extent)}).unwrap();
+    crate::test_support::submit_settled(&mut r,FramePacket{view,reset_layers:true,..crate::test_support::packet(doc.scene(),extent)});
     let target=placement::target(&doc);
     let mut contact=dab([0.;4]);
     contact.center=Point{x:126.5,y:126.5};
@@ -1354,7 +1354,7 @@ fn sustained_pinch_preview_keeps_opaque_center_at_finite_footprint() {
         batch
     }).collect::<Vec<_>>();
     placement::paint_mut(&mut doc).raster=RasterRevision::pending();
-    r.submit(FramePacket{view,dabs:&dabs,dab_batches:&batches,
+    crate::test_support::submit_ready(&mut r,FramePacket{view,dabs:&dabs,dab_batches:&batches,
         ..crate::test_support::packet(doc.scene(),extent)}).unwrap();
     let field=placement::paint(&doc).raster.liquify().unwrap().field.clone();
     let field=field.as_any().downcast_ref::<Field>().unwrap();
