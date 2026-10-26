@@ -21,7 +21,20 @@ function Bar {$bar=Find 'canvas-action-bar';if($bar -and !$bar.Current.IsOffscre
 function Kind {(Model).state.canvas_bar.context.kind}
 function Paint {@((Model).state.layers|ForEach-Object {"$($_.id):$($_.paint_revision)"}) -join ','}
 function Value([string]$Id){((Model).state.tool_settings|Where-Object id -eq $Id).value}
-function Glass {[int](Model).windows_glass.regions}
+function Glass-State($Snapshot){
+ [ordered]@{selection=$Snapshot.state.layer_tools.has_selection;paint=@($Snapshot.state.layers|Select-Object id,paint_revision);document=$Snapshot.state.document_file|Select-Object epoch,revision,modified;viewport=$Snapshot.state.camera.viewport;chrome=$Snapshot.state.customization;panel_revision=$Snapshot.windows_glass.panel_revision}|ConvertTo-Json -Depth 20 -Compress
+}
+function Bar-Visibility([bool]$Visible){
+ $choice=@((Model).state.commands|Where-Object id -eq 'show_canvas_action_bar')[0]
+ if(!$choice.enabled -or [bool]$choice.selected -eq $Visible){throw 'Canvas bar visibility did not start in the expected state'}
+ & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'View'
+ $item=Control 'show_canvas_action_bar' -Type ([System.Windows.Automation.ControlType]::MenuItem) -Arranged
+ if($item.Current.ProcessId -ne $review.Id){throw 'Canvas bar menu item belongs to another process'}
+ $pattern=$null
+ if($item.TryGetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern,[ref]$pattern)){$pattern.Toggle()}
+ else{$item.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()}
+ Wait-Until {$m=Model;[bool]@($m.state.commands|Where-Object id -eq 'show_canvas_action_bar')[0].selected -eq $Visible -and [bool]$m.state.workspace.layout.canvas_bar -eq $Visible -and [bool](Bar) -eq $Visible -and !(MenuOpen)} 'Canvas bar visibility did not acknowledge its native menu action' 5
+}
 function Choice([string]$Id){@((Model).state.canvas_bar.items|Where-Object {$_.option.Choice.id -eq $Id})[0].option.Choice}
 function MenuOpen{
  $condition=[System.Windows.Automation.AndCondition]::new(
@@ -123,16 +136,24 @@ try {
  Wait-Until {(Paint) -ne $preparedPaint} 'Controlled two-dimensional drawing did not finish'
 
  $selectionTile=Tool-Tile 'lasso';Invoke-Id $selectionTile;Subtool 'rectangle_select'
- $glass=@{count=-1;stable=0}
- Wait-Until {$count=Glass;if($count -eq $glass.count){$glass.stable++}else{$glass.count=$count;$glass.stable=0};$glass.stable -ge 3} 'Selection tool glass did not settle'
- $glassBefore=$glass.count
  $selection=@(@(($cx-160),($cy-110)),@(($cx+160),($cy+60)))
  Drag 'mouse' $selection[0] $selection[1]
  Wait-Until {(Model).state.layer_tools.has_selection -and (Kind) -eq 'selection' -and (Bar)} 'The selection bar did not appear' 10
  $bar=(Bar).Current.BoundingRectangle
  if($bar.Top -lt $selection[1][1]){throw "The selection bar is not below the selection: $($bar.Top) < $($selection[1][1])"}
  if([Math]::Abs(($bar.X+$bar.Width/2)-$cx) -gt 40){throw 'The selection bar is not centred under the selection'}
- Wait-Until {(Glass) -ge $glassBefore+1} 'The bar did not register its glass region' 5
+ $glass=@{snapshot=$null;key='';stable=0}
+ Wait-Until {$m=Model;$key=($m.windows_glass|Select-Object regions,panel_revision|ConvertTo-Json -Compress);if($key -ceq $glass.key){$glass.stable++}else{$glass.key=$key;$glass.stable=0};$glass.snapshot=$m;$glass.stable -ge 3} 'Selection bar glass did not settle' 5
+ $visibleGlass=[int]$glass.snapshot.windows_glass.regions;$glassState=Glass-State $glass.snapshot;$glassAnchor=$glass.snapshot.state.canvas_bar.anchor -join ','
+ $glassProbe=[ordered]@{visible=$glass.snapshot.windows_glass;state=$glassState;anchor=$glassAnchor}
+ try{
+  Bar-Visibility $false
+  Wait-Until {$m=Model;(Glass-State $m) -ceq $glassState -and [int]$m.windows_glass.regions -eq $visibleGlass-1} 'Hiding the selection bar did not remove exactly its glass region' 5
+  $glassProbe.hidden=(Model).windows_glass
+  Bar-Visibility $true
+  Wait-Until {$m=Model;(Glass-State $m) -ceq $glassState -and ($m.state.canvas_bar.anchor -join ',') -ceq $glassAnchor -and [int]$m.windows_glass.regions -eq $visibleGlass} 'Showing the selection bar did not restore exactly its glass region and selection' 5
+  $glassProbe.restored=(Model).windows_glass
+ }finally{$glassProbe.current=(Model).windows_glass;$glassProbe|ConvertTo-Json -Depth 6|Set-Content (Join-Path $run 'selection-bar-glass-registration.json')}
  Capture ('selection-'+$Theme)
  $checks.selection_below_object_with_glass='passed'
 

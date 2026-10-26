@@ -230,7 +230,7 @@ function Ensure-Sources{
     Drag $from $to;Wait-Until {(Model).picker} 'Native tool component did not open picker'
     $wantedSources=@(@('command','drawing_brush'),@('color',''),@('color_picker',''),@('command','undo'),@('panel','layers'),@('command','next_drawing'))
     if($BlendersOnly){$wantedSources=@(@('brush','25'),@('brush','51'),@('brush','55'),@('brush','49'))}
-    elseif($SlidersOnly){$wantedSources+=@(@('brush','25'),@('brush','51'),@('brush','55'),@('brush','49'),@('tool_slot','drawing'),@('command','lasso'))}
+    elseif($SlidersOnly){$wantedSources=@(@('command','drawing_brush'),@('color_picker',''),@('brush','25'),@('brush','51'),@('brush','55'),@('brush','49'),@('tool_slot','drawing'),@('command','lasso'))}
     foreach($wanted in $wantedSources){
         (Control 'tool-picker-search').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('')
         Wait-Until {(Model).picker.query -eq ''} 'Picker did not clear search'
@@ -383,7 +383,7 @@ function Invoke-SliderChecks{
     & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Window';Invoke 'redo_workspace'
     Wait-Until {(Slider-Layout) -ceq $enabled -and @((View $controls).rings).Count -eq 2} 'Workspace Redo did not restore the exact enabled layout'
     Slider-Toggle $controls $false
-    & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Window';Invoke 'put_back_bubbles'
+    & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'View';Invoke 'put_back_bubbles'
     Wait-Until {$b=(Model).state.workspace.layout.bubbles;!@(Packets).Count -and !$b.show_sliders -and !@($b.bubbles).Count -and !@($b.rings).Count -and !@($b.kept).Count -and !(Model).windows_workspace.dirty -and !(Model).windows_workspace.saving} 'Empty bubble workspace did not autosave its global off preference'
     $empty=Slider-Layout;Check-Artwork 'global-slider-and-workspace-history' $revision
     Settled-Capture 'global-sliders-empty'
@@ -441,7 +441,7 @@ function Blender-SavedState{
 }
 function Invoke-BlenderCellChecks([int]$Preset,[string]$CellId,[double]$DefaultCell,[double]$DefaultSpread,[string[]]$Primary,[string]$Tag){
     $before=Revision;$area=(Model).layout.work_area
-    if(@(Packets).Count){& (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Window';Invoke 'put_back_bubbles'}
+    if(@(Packets).Count){& (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'View';Invoke 'put_back_bubbles'}
     Wait-Until {!@(Packets).Count -and !(Model).windows_workspace.dirty -and !(Model).windows_workspace.saving} 'Blender phase did not retire the completed slider fixture bubbles'
     $id=Take 'brush' ([string]$Preset) ($area.x+$area.width*.25) ($area.y+$area.height*.3)
     if(!(View $id).selected){Tap (Center $id)}

@@ -462,6 +462,7 @@ function Choose-Path([string]$Path) {
     if($entry.Current.ProcessId -ne $review.Id){throw 'Wrong picker filename owner'}
     [CapyDocumentControls]::TypeText([IntPtr]$entry.Current.NativeWindowHandle,$Path)
     Picker-Button '1'
+    $script:scope=$root
 }
 function Write-PreservedPackage([string]$Destination,[byte[]]$Preview) {
     $members=[CapyPackageFixture]::Read((Join-Path $repo 'crates/layer-core/src/package/codec/fixtures/authored-filters.capy'))

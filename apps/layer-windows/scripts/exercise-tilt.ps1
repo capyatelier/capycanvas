@@ -361,6 +361,14 @@ function Move-Utility([double]$X,[double]$Y){
     Drag 'mouse' $from $to
     Wait-Until {$actual=(Control 'pen-tilt-dialog' -Arranged).Current.BoundingRectangle;[Math]::Abs($actual.Left-$X) -lt 2 -and [Math]::Abs($actual.Top-$Y) -lt 2} 'Utility did not reach its native overlap target'
 }
+function Park-UtilityCapture{
+    $window=$root.Current.BoundingRectangle
+    [CapyRowPointer]::Hover([int]($window.Left+$window.Width/2),[int]($window.Top+42*$scale))
+    $tooltip=[System.Windows.Automation.AndCondition]::new(
+        [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::ToolTip),
+        [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ProcessIdProperty,$review.Id))
+    Wait-Until {!@([System.Windows.Automation.AutomationElement]::RootElement.FindAll([System.Windows.Automation.TreeScope]::Descendants,$tooltip)|Where-Object {!$_.Current.IsOffscreen}).Count} 'Utility tooltip did not leave the capture area'
+}
 function Utility-Overlays{
     Start-Review -Maximized;Tool 'lasso'
     if(!(Column)){Context 'panel-tab-layers';Invoke 'Collapse column' -Name;Wait-Until {Column} 'Layers column did not collapse'}
@@ -379,6 +387,7 @@ function Utility-Overlays{
     $curve=Curve;Native-Click 'pen-tilt-lighter';Wait-Until {(Curve) -ne $curve} 'The utility did not receive the native click above the expanded column'
     if(!(Column).open){throw 'The utility click fell through and closed the expanded column'}
     Native-Click 'pen-tilt-reset';Wait-Until {(Curve) -eq $curve} 'Reset did not settle before the opaque-pixel checkpoint'
+    Park-UtilityCapture
     Capture 'utility-over-column' -WithModel -Composed
     $x=[int]([Math]::Max($frame.Left+60,$column.Left+48));$y=[int]([Math]::Max($frame.Top+60,$column.Top+48))
     $sample=[Windows.Rect]::new($x-48,$y-48,96,96)
@@ -395,6 +404,7 @@ function Utility-Overlays{
     }
     if($samples.Count -lt 2){throw 'The utility interior does not overlap an expanded column connector sample'}
     Invoke-Id 'column-icon-layers';Wait-Until {!(Column).open} 'The reference column did not close'
+    Park-UtilityCapture
     if(!(Same-Bounds (Tilt).bounds $bounds)){throw 'Closing the column moved the manually placed utility'}
     foreach($sample in $samples){$sample.after_pixels=Wait-StablePixels {Screen-Pixels $sample.x $sample.y (Join-Path $run ("utility-$($sample.kind)-after.png"))}}
     Evidence 'utility-over-column' @{default_bounds=$initial;work_area=$work;drawer=$drawer;overlap=$bounds;connections=$connections;samples=$samples}
