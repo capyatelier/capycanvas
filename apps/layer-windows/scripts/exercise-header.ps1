@@ -1,5 +1,7 @@
-﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('mouse','pen','touch')][string]$Device='mouse',[ValidateSet('paint','sketch','photo')][string]$Workspace='paint',[switch]$Catalog,[ValidateSet('dark','light')][string]$Theme='dark',[ValidateSet('full','background','options','options-light','options-pen','options-touch','menus','menus-light','zen','zen-workspace')][string]$Journey='full')
+﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('mouse','pen','touch')][string]$Device='mouse',[ValidateSet('paint','sketch','photo')][string]$Workspace='paint',[switch]$Catalog,[ValidateSet('dark','light')][string]$Theme='dark',[ValidateSet('full','catalog','catalog-light','background','options','options-light','options-pen','options-touch','menus','menus-light','zen','zen-workspace')][string]$Journey='full')
 $ErrorActionPreference='Stop'
+$catalogJourney=$Journey -in @('catalog','catalog-light')
+if($Journey -eq 'catalog-light'){$Theme='light'}
 if($Journey -eq 'options-light'){$Theme='light'}
 if($Journey -eq 'menus-light'){$Theme='light'}
 if($Journey -eq 'options-pen'){$Device='pen'}
@@ -161,12 +163,55 @@ function Start-Review([string]$Phase) {
     Check-Geometry
 }
 function Check-PenOrder {
-    $before=(Model).state;$groups=@($before.tool_set.groups)
-    $prior=@(0..($groups.Count-1)|Where-Object {$groups[$_].selected})
-    $pen=@(0..($groups.Count-1)|Where-Object {$groups[$_].action.type -eq 'choose_tool_variant' -and $groups[$_].action.variant.type -eq 'brush_group' -and $groups[$_].action.variant.group -eq 'pen'})
-    if($prior.Count -ne 1 -or $pen.Count -ne 1){throw 'The native Tool Set has no unique current and Pen brush groups'}
-    if($prior[0] -ne $pen[0]){Invoke ('tool-group-'+$pen[0]);Wait-Until {(Model).state.tool_set.groups[$pen[0]].selected} 'The Pen group did not activate'}
+    function BrushSetsMenu {
+        $window=@((Model).application_menus|Where-Object id -eq 'window')[0].model
+        $choice=@($window.sections|ForEach-Object {$_}|Where-Object {$_.action.type -eq 'customize' -and $_.action.action.type -eq 'set_panel_visible' -and $_.action.action.panel -eq 'brush_sets'})
+        if($choice.Count -ne 1){throw 'The shared Window menu has no unique Brushes panel'}
+        $choice[0]
+    }
+    function Show-BrushSets([bool]$Visible) {
+        $choice=BrushSetsMenu
+        if([bool]$choice.selected -eq $Visible){return}
+        & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Window'
+        (Control $choice.label -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)).GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
+        Wait-Until {[bool](BrushSetsMenu).selected -eq $Visible -and !(Find $choice.label -Name -Type ([System.Windows.Automation.ControlType]::MenuItem) -Visible)} 'The Brushes panel did not acknowledge its visibility'
+    }
+    $before=(Model).state;$groups=@($before.tool_panels.brush_sets.groups)
+    $prior=@($groups|Where-Object selected);$pen=@($groups|Where-Object {$_.action.type -eq 'select_brush_set' -and $_.action.group -eq 'pen'})
+    if($prior.Count -ne 1 -or $pen.Count -ne 1){throw 'The shared Brushes panel has no unique current and Pen categories'}
+    $visible=[bool](BrushSetsMenu).selected
+    Show-BrushSets $true
     try{
+        $categories=@(foreach($choice in $groups){
+            $button=Reveal ('brush-set-'+$choice.icon)
+            if($button.Current.Name -ne $choice.label -or ($button.Current.ItemStatus -eq 'Selected') -ne [bool]$choice.selected){throw 'A native brush category has a stale caption or selection'}
+            @{group=$choice.action.group;icon=$choice.icon;name=$button.Current.Name;selected=$choice.selected;bounds=$button.Current.BoundingRectangle;runtime_id=($button.GetRuntimeId() -join ':')}
+        })
+        $null=Reveal ('brush-set-'+$pen[0].icon)
+        Invoke ('brush-set-'+$pen[0].icon)
+        Wait-Until {$m=Model;$m.state.brush.tool -eq 'pen' -and @($m.state.tool_panels.brush_sets.groups|Where-Object {$_.action.group -eq 'pen' -and $_.selected}).Count -eq 1 -and (Control ('brush-set-'+$pen[0].icon)).Current.ItemStatus -eq 'Selected'} 'The Pen category did not activate'
+        @{categories=$categories;selected_icon=$pen[0].icon;visual_review='required: shared medium icons, category captions and selected styling'}|ConvertTo-Json -Depth 10|Set-Content (Join-Path $run 'paint-categories-layout.json')
+        Capture 'paint-categories' -WithModel -Composed
+    }finally{Show-BrushSets $visible}
+    try{
+    $hint=@((Model).state.commands|Where-Object id -eq 'pen')[0]
+    if(!$hint.shortcut){throw 'The shared Pen command has no shortcut hint'}
+    $tooltip=[System.Windows.Automation.AndCondition]::new(
+        [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::ToolTip),
+        [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ProcessIdProperty,$review.Id))
+    function PenTooltip {
+        foreach($window in Owned-ProcessWindows $review){
+            foreach($tip in $window.Root.FindAll([System.Windows.Automation.TreeScope]::Subtree,$tooltip)){
+                if(!$tip.Current.IsOffscreen -and $tip.Current.ProcessId -eq $review.Id){return $tip}
+            }
+        }
+    }
+    $away=At 'drawing-canvas';[CapyRowPointer]::Hover($away.x,$away.y)
+    $at=At (Tool-Tile 'pen');[CapyRowPointer]::Hover($at.x,$at.y)
+    Wait-Until {$tip=PenTooltip;$tip -and $tip.Current.Name -eq $hint.tooltip} 'The native Pen tooltip did not show its shared shortcut'
+    Capture 'pen-shortcut-tooltip' -Composed
+    [CapyRowPointer]::Hover($away.x,$away.y)
+    Wait-Until {!(PenTooltip)} 'The Pen shortcut tooltip did not dismiss'
     $state=(Model).state;$items=@($state.tool_set.subtools);$original=$state.brush.preset
     $rough=@(0..($items.Count-1)|Where-Object {$items[$_].preview -eq 28})
     $blotty=@(0..($items.Count-1)|Where-Object {$items[$_].preview -eq 33})
@@ -188,7 +233,7 @@ function Check-PenOrder {
         if($records[1].bounds.Top -lt $records[0].bounds.Bottom-1){throw 'Native Blotty Ink is not arranged below Rough G-Pen'}
         Invoke ('tool-subtool-'+$blotty[0])
         Wait-Until {$m=Model;$m.state.brush.preset -eq 33 -and $m.state.tool_set.subtools[$blotty[0]].selected -and (Control ('tool-subtool-'+$blotty[0])).Current.ItemStatus -eq 'Selected'} 'Native Blotty Ink selection did not reach the shared brush'
-        @{items=$records;selected=(Model).state.brush.preset;previous=$original;raw_review='required: Rough G-Pen and Blotty Ink order, captions, preview and selected styling'}|ConvertTo-Json -Depth 10|Set-Content (Join-Path $run 'blotty-ink-order-layout.json')
+        @{items=$records;selected=(Model).state.brush.preset;previous=$original;shortcut_tooltip=$hint.tooltip;raw_review='required: Rough G-Pen and Blotty Ink order, captions, preview and selected styling'}|ConvertTo-Json -Depth 10|Set-Content (Join-Path $run 'blotty-ink-order-layout.json')
         Capture 'blotty-ink-order' -WithModel -Composed
     }finally{
         try{
@@ -199,7 +244,7 @@ function Check-PenOrder {
         }
     }
     }finally{
-        if($prior[0] -ne $pen[0]){Invoke ('tool-group-'+$prior[0]);Wait-Until {(Model).state.brush.preset -eq $before.brush.preset -and (Model).state.tool_set.groups[$prior[0]].selected} 'The original brush group did not restore'}
+        if($prior[0].action.group -ne 'pen'){Invoke (Tool-Tile $before.brush.tool);Wait-Until {(Model).state.brush.preset -eq $before.brush.preset -and @((Model).state.tool_panels.brush_sets.groups|Where-Object {$_.action.group -eq $prior[0].action.group -and $_.selected}).Count -eq 1} 'The original brush category did not restore'}
     }
 }
 function Check-CompactWorkspace {
@@ -712,6 +757,14 @@ try {
     $env:CAPY_STORAGE_DIR=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1'
     [IO.File]::WriteAllText((Settings-File),(@{theme=$Theme}|ConvertTo-Json))
     Start-Review 'initial';Capture 'normal'
+    if($catalogJourney){
+        Check-CompactWorkspace;Check-PenOrder;Check-Catalog
+        & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Close -DiscardUnsaved
+        if((Get-Item -LiteralPath $stderr).Length){throw 'Native stderr requires inspection'}
+        @{theme=$Theme;journey=$Journey;workspace_caption_padding_and_group='passed';paint_categories='passed';pen_preset_order_and_selection='passed';pen_shortcut_tooltip='passed';header_component_catalog='passed';run=$run}|ConvertTo-Json|Set-Content (Join-Path $run 'results.json')
+        Get-Content (Join-Path $run 'results.json')
+        return
+    }
     Check-BackgroundContext
     if($Journey -eq 'background'){
         & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Close -DiscardUnsaved

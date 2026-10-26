@@ -11,6 +11,7 @@ $run=Join-Path $repo ('artifacts/windows/canvas-bar/'+[Guid]::NewGuid().ToString
 $CapyTraceDirectory=$run
 $checks=[ordered]@{}
 $barTaps=[Collections.Generic.List[object]]::new()
+$toolChoices=[Collections.Generic.List[object]]::new()
 function Owned([string]$Id,[switch]$Name,$Type){
  $property=if($Name){[System.Windows.Automation.AutomationElement]::NameProperty}else{[System.Windows.Automation.AutomationElement]::AutomationIdProperty}
  $condition=[System.Windows.Automation.AndCondition]::new([System.Windows.Automation.PropertyCondition]::new($property,$Id),
@@ -74,12 +75,32 @@ function Tap([string]$Id,[string]$Device){
  }finally{$barTaps|ConvertTo-Json -Depth 12|Set-Content -LiteralPath (Join-Path $run 'native-taps.json')}
 }
 function Subtool([string]$Command){
- $choice=Tool-Choice $Command;Invoke-Id $choice.id
- Wait-Until {@((Model).state.tool_set.($choice.list))[$choice.index].selected} "$Command did not activate"
+ $choice=Tool-Choice $Command
+ $expected=@((Model).state.tool_set.($choice.list))[$choice.index]
+ $action=$expected.action|ConvertTo-Json -Depth 10 -Compress
+ $record=[ordered]@{command=$Command;id=$choice.id;label=$expected.label;action=$action;native_name=$null;after=$null}
+ $toolChoices.Add($record)
+ $target=@{item=$null}
+ try{
+  Wait-Until {
+   $item=@((Model).state.tool_set.($choice.list))[$choice.index]
+   $target.item=Find $choice.id
+   if(!$target.item){return $false}
+   $record.native_name=$target.item.Current.Name
+   ($item.action|ConvertTo-Json -Depth 10 -Compress) -ceq $action -and $record.native_name -ceq $expected.label -and !$target.item.Current.IsOffscreen -and $target.item.Current.IsEnabled
+  } "$Command did not receive its current native tool row"
+  $target.item.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+  Wait-Until {
+   $m=Model;$item=@($m.state.tool_set.($choice.list))[$choice.index]
+   $record.after=@($m.state.commands|Where-Object id -eq $Command)[0]
+   $record.after.selected -and $item.selected -and ($item.action|ConvertTo-Json -Depth 10 -Compress) -ceq $action
+  } "$Command did not activate its requested shared tool"
+ }finally{$toolChoices|ConvertTo-Json -Depth 12|Set-Content -LiteralPath (Join-Path $run 'tool-choices.json')}
 }
 function Check-BarGeometry([string]$Context){
  $scale=[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.
- $bar=(Bar).Current.BoundingRectangle
+ $owner=Control 'canvas-action-bar' -Arranged
+ $bar=$owner.Current.BoundingRectangle
  if([Math]::Abs($bar.Height/$scale-36) -gt 1){throw "The $Context bar is not one 36-point tile tall: $($bar.Height/$scale)"}
  foreach($item in @((Model).state.canvas_bar.items)+@((Model).state.canvas_bar.completion)){
   if($item.menu){$id="canvas-bar-menu-$($item.menu)"}elseif($item.option.Action){$id="canvas-bar-$($item.option.Action.state.id)"}else{continue}

@@ -2161,6 +2161,9 @@ For workspace panel controls, reveal rows within the published native
 `panel-body-scroll-N` bounds, converted to screen coordinates. A scroll provider's
 UIA bounds can include its full content extent. Keep its ScrollPattern for input;
 use the allocated body viewport for visibility and scroll direction.
+Groups also have a horizontal tab-strip scroller. Panel allocation fixtures select
+the unique owned body provider by the published body viewport before checking its
+scroll extent; counting every provider below the whole group includes the tabs.
 Top captures reuse each row's validated expected height when revealing it again.
 Docked Tool fixtures dismiss any tool drawer with canvas focus and Escape after
 selection, then wait for shared closure and native drawer removal before finding

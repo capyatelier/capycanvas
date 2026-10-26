@@ -338,13 +338,22 @@ function Snapshot-Control($Snapshot,[string]$Id,$Type){
     }
     if($script:CapyFind -eq 'prefer-visible'){$first}
 }
-function Scroll-Pattern($Control,[switch]$Focus){
+function Scroll-Pattern($Control,[switch]$Focus,[string]$ViewportId){
     $provider=$Control;$pattern=$null
     if(!$provider.TryGetCurrentPattern([System.Windows.Automation.ScrollPattern]::Pattern,[ref]$pattern)){
         $condition=[System.Windows.Automation.AndCondition]::new(
             [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,'PART_ScrollPresenter'),
             [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::IsScrollPatternAvailableProperty,$true))
         $providers=@($Control.FindAll([System.Windows.Automation.TreeScope]::Descendants,$condition))
+        if($ViewportId){
+            $viewport=Native-Bounds $ViewportId ([CapyRowPointer]::GetDpiForWindow([IntPtr]$root.Current.NativeWindowHandle)/96.)
+            $providers=@($providers|Where-Object {
+                $current=$_.Current;$bounds=$current.BoundingRectangle
+                $current.ProcessId -eq $review.Id -and !$current.IsOffscreen -and !$bounds.IsEmpty -and
+                    [Math]::Abs($bounds.X-$viewport.X) -le 1 -and [Math]::Abs($bounds.Y-$viewport.Y) -le 1 -and
+                    [Math]::Abs($bounds.Width-$viewport.Width) -le 1 -and $bounds.Height+1 -ge $viewport.Height
+            })
+        }
         if($providers.Count -ne 1){throw 'Native scroll container must have exactly one scroll provider'}
         $provider=$providers[0];$pattern=$provider.GetCurrentPattern([System.Windows.Automation.ScrollPattern]::Pattern)
     }

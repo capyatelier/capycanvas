@@ -112,7 +112,12 @@ function Preset-Geometry([string]$Top){
             if($viewport -le 0 -or [Math]::Abs($body.Height-$viewport*$scale) -gt 1 -or $extent*$scale+1 -lt $group.min_body_height*$scale -or $offset -lt 0 -or $offset*$scale -gt [Math]::Max(0,$extent-$viewport)*$scale+1){throw 'Preset lost its finite scroll viewport or published minimum body extent'}
             $view=$null
             if(($extent-$viewport)*$scale -gt 1){
-                $pattern=Scroll-Pattern $node
+                $condition=[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::IsScrollPatternAvailableProperty,$true)
+                $receipt.scroll_providers=@(foreach($provider in $node.FindAll([System.Windows.Automation.TreeScope]::Descendants,$condition)){
+                    $current=$provider.Current;$pattern=$provider.GetCurrentPattern([System.Windows.Automation.ScrollPattern]::Pattern)
+                    @{id=$current.AutomationId;process=$current.ProcessId;bounds=$current.BoundingRectangle;vertical=$pattern.Current.VerticallyScrollable;view_size=$pattern.Current.VerticalViewSize;percent=$pattern.Current.VerticalScrollPercent}
+                })
+                $pattern=Scroll-Pattern $node -ViewportId ('panel-body-scroll-'+$group.id)
                 $view=$pattern.Current.VerticalViewSize
                 $receipt.provider=@{vertical=$pattern.Current.VerticallyScrollable;view_size=$view;percent=$pattern.Current.VerticalScrollPercent}
                 if(!$pattern.Current.VerticallyScrollable -or $view -le 0 -or $view -gt 100 -or [double]::IsNaN($view) -or [Math]::Abs($extent*$scale*$view/100-$body.Height) -gt 1){throw 'Overflowing preset body has no matching native scroll provider'}

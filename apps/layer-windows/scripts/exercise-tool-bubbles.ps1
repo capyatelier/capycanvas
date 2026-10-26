@@ -563,7 +563,9 @@ function Invoke-BlenderCellChecks([int]$Preset,[string]$CellId,[double]$DefaultC
     Restart-BubbleReview ($Tag+'-restart-stderr.log')
     Wait-Until {(Model).state.document_file.location.uri -eq $file -and !(Model).windows_recovery.busy -and !(Model).windows_recovery.restoring} 'Native Blender session did not reopen its saved drawing'
     $script:w=(Control 'drawing-canvas' -Arranged).Current.BoundingRectangle
-    if((Blender-SavedState) -cne $savedState -or @((Model).state.tool_settings|Where-Object id -eq $CellId)[0].value -ne 12){throw 'Native session restart lost Blender12, its source, document checkpoint, history or pixel projection'}
+    $restoredState=Blender-SavedState
+    @{before=($savedState|ConvertFrom-Json);after=($restoredState|ConvertFrom-Json)}|ConvertTo-Json -Depth 30|Set-Content -LiteralPath (Join-Path $run ($Tag+'-session-projection.json'))
+    if($restoredState -cne $savedState -or @((Model).state.tool_settings|Where-Object id -eq $CellId)[0].value -ne 12){throw 'Native session restart lost Blender12, its source, document checkpoint, history or pixel projection'}
     $nativeCell=(Blender-Field $CellId).GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value
     if((View $id).source.control.id -ne $Preset -or !(View $id).selected -or [double]$nativeCell -ne 12){throw 'Restored Blender source and native Cell Size did not show the saved12'}
     [CapyRowPointer]::Hover($w.X+4,$w.Y+4)
