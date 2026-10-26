@@ -960,3 +960,71 @@ fn control_activation_uses_keyboard_arrival() {
         }
     }
 }
+
+#[test]
+fn apple_mixing_and_retouch_presets_change_local_pixels_with_exact_history() {
+    use layer_core::DefaultBrushPreset as Brush;
+    for platform in [0, 1] {
+        let app = fixtures::drawing_app(platform, [128, 96]);
+        app.action(json!({"type":"set_color","rgba":[0.8,0.2,0.12,1]}));
+        app.invoke("select_all"); app.invoke("fill_selection"); app.invoke("deselect");
+        app.draw_until_idle();
+        let paper = app.pixels();
+        app.action(json!({"type":"select_brush","id":Brush::GPen as u32}));
+        app.action(json!({"type":"set_brush_size","value":8}));
+        app.action(json!({"type":"set_tool_setting","id":"smoothing_strength","value":0}));
+        app.action(json!({"type":"set_color","rgba":[0.04,0.15,0.85,1]}));
+        fixtures::drag(&app, 1, 0, [64.,48.], [64.,48.]);
+        let baseline = app.pixels();
+        assert_ne!(baseline, paper, "The seed must contain a painted blue blemish on red");
+        for (index, preset) in [Brush::BlendingStump, Brush::Tissue, Brush::DitherBlender,
+            Brush::ScatterBlender, Brush::CloneStamp, Brush::HealingBrush, Brush::SpotHealingBrush]
+            .into_iter().enumerate() {
+            app.action(json!({"type":"select_brush","id":preset as u32}));
+            app.action(json!({"type":"set_brush_size","value":24}));
+            app.action(json!({"type":"set_brush_strength","value":1}));
+            app.action(json!({"type":"set_tool_setting","id":"smoothing_strength","value":0}));
+            match preset {
+                Brush::DitherBlender => {
+                    app.action(json!({"type":"set_tool_setting","id":"spread","value":0.5}));
+                    app.action(json!({"type":"set_tool_setting","id":"dither_cell_size","value":6}));
+                }
+                Brush::ScatterBlender => {
+                    app.action(json!({"type":"set_tool_setting","id":"spread","value":0.45}));
+                    app.action(json!({"type":"set_tool_setting","id":"scatter_cell_size","value":5}));
+                }
+                Brush::CloneStamp | Brush::HealingBrush | Brush::SpotHealingBrush => {
+                    app.invoke("selection_editing");
+                    if preset != Brush::SpotHealingBrush {
+                        app.invoke("clone_source_arm");
+                        fixtures::drag(&app, 10 + index as u64 * 2, 0, [24.,48.], [24.,48.]);
+                    }
+                }
+                _ => {}
+            }
+            app.draw_until_idle();
+            assert_eq!(app.pixels(), baseline, "{platform} {preset:?}: configuring a tool cannot paint");
+            fixtures::drag(&app, 11 + index as u64 * 2, 0, [58.,48.], [70.,48.]);
+            let changed = app.pixels();
+            assert_eq!(changed.len(), 128 * 96 * 4);
+            let mut inside = 0;
+            for (pixel, (actual, previous)) in changed.as_chunks::<4>().0.iter()
+                .zip(baseline.as_chunks::<4>().0).enumerate() {
+                let (x, y) = (pixel % 128, pixel / 128);
+                if (34..94).contains(&x) && (18..78).contains(&y) {
+                    inside += usize::from(actual != previous);
+                } else {
+                    assert_eq!(actual, previous, "{platform} {preset:?}: untouched exterior at {x},{y}");
+                }
+            }
+            assert!(inside > 0, "{platform} {preset:?}: the stroke must change the seeded patch");
+            assert!(app.state()["host_error"].is_null());
+            app.invoke("undo"); app.draw_until_idle();
+            assert_eq!(app.pixels(), baseline, "{platform} {preset:?}: one Undo restores every seed pixel");
+            app.invoke("redo"); app.draw_until_idle();
+            assert_eq!(app.pixels(), changed, "{platform} {preset:?}: Redo restores the exact painted result");
+            app.invoke("undo"); app.draw_until_idle();
+            assert_eq!(app.pixels(), baseline, "{platform} {preset:?}: each preset starts from the same artwork");
+        }
+    }
+}
