@@ -102,14 +102,15 @@ fn rejected_views_and_abandoned_composition_preserve_artwork() {
     let before = present(&r, &mut presenter, v);
     let texture = r.scale_display.as_ref().unwrap().texture().clone();
     let metrics = r.metrics();
-    for rejected in [
-        ViewState { document_to_surface: [f32::NAN; 6], ..v },
-        ViewState { document_to_surface: [0.; 6], ..v },
-        ViewState { width_px: 8192, height_px: 8192,
-            document_to_surface: [1., 0., 0., 1., 0., 0.] },
+    let oversized = [r.max_document_dimension() + 1, 8192];
+    for (rejected, extent) in [
+        (ViewState { document_to_surface: [f32::NAN; 6], ..v }, [8192; 2]),
+        (ViewState { document_to_surface: [0.; 6], ..v }, [8192; 2]),
+        (ViewState { width_px: 8192, height_px: 8192,
+            document_to_surface: [1., 0., 0., 1., 0., 0.] }, oversized),
     ] {
         assert!(r.submit(FramePacket { view: rejected, reset_layers: true,
-            ..packet(doc.scene(), [8192; 2]) }).is_err());
+            ..packet(doc.scene(), extent) }).is_err());
         assert_eq!(r.document_extent, doc.composition().size);
         assert_eq!(r.scale_display.as_ref().unwrap().texture(), &texture);
         assert_eq!(r.metrics(), metrics);
@@ -122,7 +123,7 @@ fn rejected_views_and_abandoned_composition_preserve_artwork() {
     let occurrence=abandoned.artwork.occurrences.get_mut(overlay).unwrap();occurrence.opacity=0.7;occurrence.blend=layer_core::LayerBlend::Multiply;
     insert_occurrence(&mut abandoned,overlay,0);
     let frame = FramePacket { view: v, ..packet(abandoned.scene(), doc.composition().size) };
-    crate::test_support::submit_ready(&mut r, frame).unwrap();
+    super::submit_published(&mut r, frame);
     assert!(r.has_pending_work());
     let mut scene = r.scene.take().unwrap();
     let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
