@@ -127,6 +127,10 @@ function Preset-Geometry([string]$Top){
             }
             $body=Native-Bounds ('panel-body-scroll-'+$group.id) $scale
             $presentation=(Workspace-Root).Current.ItemStatus|ConvertFrom-Json
+            $previewIds=@($presentation.elements|Where-Object {$_.id -like 'filter-preview-*'}|Select-Object -First 5 -ExpandProperty id)
+            $filterIds=@($previewIds|ForEach-Object {$_ -replace '^filter-preview-','filter-'})
+            $filterBounds=@($presentation.elements|Where-Object {$_.id -in @('filter-picker','filter-list') -or $_.id -in $previewIds -or $_.id -in $filterIds})
+            $receipt.native_filter_bounds=$filterBounds
             $scroll=@($presentation.groups|Where-Object id -eq $group.id)[0].body_scroll
             $receipt.native_body=$body;$receipt.body_scroll=$scroll
             if(!$scroll -or !$box.Contains($body) -or !$root.Current.BoundingRectangle.Contains($body)){throw 'Preset body viewport left its owned group allocation'}
@@ -147,7 +151,7 @@ function Preset-Geometry([string]$Top){
             }
         }catch{try{Capture 'preset-scroll-failure' -WithModel -Composed}catch{};throw}
         finally{$receipt|ConvertTo-Json -Depth 12|Set-Content (Join-Path $run ('preset-scroll-'+$group.id+'.json'))}
-        $records+=@{id=$group.id;panels=$group.panels;shared=$shared;native=@($box.X,$box.Y,$box.Width,$box.Height);minimum_body=$group.min_body_height;native_body_height=$body.Height;native_extent_height=$extent*$scale;native_vertical_offset=$offset*$scale;native_vertical_view_size=$view;panel_measurements=$snapshot.panel_measurements;authored_layout=$snapshot.state.workspace.layout}
+        $records+=@{id=$group.id;panels=$group.panels;shared=$shared;native=@($box.X,$box.Y,$box.Width,$box.Height);minimum_body=$group.min_body_height;native_body_height=$body.Height;native_extent_height=$extent*$scale;native_vertical_offset=$offset*$scale;native_vertical_view_size=$view;panel_measurements=$snapshot.panel_measurements;authored_layout=$snapshot.state.workspace.layout;native_filter_bounds=$filterBounds;native_presentation_revision=$presentation.revision;native_model_revision=$presentation.model_revision}
     }
     if($records[0].native[1]+$records[0].native[3] -ge $records[1].native[1] -or $records[1].native[1]+$records[1].native[3] -ge $records[2].native[1]){throw 'Preset primary groups overlap or have the wrong vertical order'}
     return $records

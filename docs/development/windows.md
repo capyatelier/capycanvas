@@ -270,7 +270,8 @@ height changes publish the complete model and its new clearance.
 The presentation mailbox applies the latest required layout before later motion.
 Inactive panel measurement uses the live body's allocated width and reapplies
 bindings on an accepted full publication; width changes update and measure the
-retained body. Collapsed columns
+retained body. Filter preview heights follow their stretched content width,
+keeping cached and visible tab measurements consistent after resizing. Collapsed columns
 retain their path while its size and corner radii are unchanged. GPU readiness
 updates independently of that geometry cache. Layout observers must not replace
 identical geometry or rebind unchanged hidden controls on every notification.

@@ -123,8 +123,8 @@ struct FiltersView : std::enable_shared_from_this<FiltersView> {
                 pick.Padding({6,3,6,3});
                 StackPanel content;content.Spacing(4);Image preview;preview.Stretch(Stretch::Uniform);preview.IsHitTestVisible(false);
                 preview.HorizontalAlignment(HorizontalAlignment::Stretch);
-                preview.SizeChanged([](winrt::Windows::Foundation::IInspectable const& sender,SizeChangedEventArgs const& size){
-                    auto image=sender.as<Image>();auto height=size.NewSize().Width/6;if(!(std::abs(image.Height()-height)<.5))image.Height(height);
+                content.SizeChanged([image=winrt::make_weak(preview)](winrt::Windows::Foundation::IInspectable const&,SizeChangedEventArgs const& size){
+                    if(auto view=image.get()){auto height=size.NewSize().Width/6;if(view.Height()!=height)view.Height(height);}
                 });
                 bool bundled=flag(choice,L"bundled_preview");
                 if(bundled){
