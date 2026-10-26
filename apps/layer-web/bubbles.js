@@ -1,4 +1,5 @@
 import {createBubbleInput} from './bubble-input.js';
+import {colorTouchInput} from './color-touch.js';
 import {createLayerInspector} from './layer-inspector.js';
 import {wheelPainter,hueStopCache,rgba,json} from './color-wheel.js';
 import {createLayerThumbnails} from './layers.js';
@@ -16,7 +17,7 @@ const cornerShape=CSS.supports('corner-shape','squircle');
 const itemScale=node=>node.classList.contains('bubble-hot')?(node.classList.contains('bubble-brush')?1.06:1.12):1;
 const enabledAlpha=node=>node.classList.contains('bubble-disabled')?.45:1;
 
-export function createBubbles({app,workspace,element,button,icon,state,dispatch,wake,glassChanged,customization,contentPanel,rasterWorker,asset,cancelWorkspace,viewport,leaveCanvas}) {
+export function createBubbles({app,workspace,element,button,icon,state,dispatch,applyChange,wake,glassChanged,customization,contentPanel,rasterWorker,asset,cancelWorkspace,viewport,leaveCanvas}) {
   const root=element('div','tool-bubbles'),stampCanvas=element('canvas','bubble-stamp');
   root.id='tool-bubbles';workspace.append(stampCanvas,root);
   const records=new Map(),reduced=matchMedia('(prefers-reduced-motion: reduce)'),hueStops=hueStopCache(app);
@@ -24,7 +25,7 @@ export function createBubbles({app,workspace,element,button,icon,state,dispatch,
   let dirty=true,active=false,stamp,stampBusy=false,stampPending=false,stampWanted=null,stampGeneration=0,stroke=false,restoreAt=null;
   const send=(action,plain=false)=>{dispatch(plain?action:{type:'bubble',action});active=true;wake();};
   const menu=(r,p)=>{r.root.menuModel=()=>app.context_menu({kind:'bubble',id:r.view.id});customization.openMenu(r.root,p);};
-  const input=createBubbleInput({app,workspace,records,send,wake,menu,dismiss:()=>customization.dismissContext(),cancelWorkspace,viewport,leaveCanvas});
+  const input=createBubbleInput({app,workspace,records,send,wake,menu,dismiss:()=>customization.dismissContext(),cancelWorkspace,viewport,leaveCanvas,colorTouch:colorTouchInput({app,applyChange,wake})});
   function surface(r,node,center,size,radius=size[1]/2,shape=0) {
     place(node,center,size);const box={node,center,size,radius,shape};node.bubbleSurface=box;r.boxes.push(box);return node;
   }

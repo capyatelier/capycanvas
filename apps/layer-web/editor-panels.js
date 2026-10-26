@@ -4,11 +4,12 @@ import {liveCopy,bindCopy} from './localization.js';
 import { createRasterWorker } from './raster-worker-client.js';
 import { chooseColor } from './color-editor.js';
 import { wheelPainter, wheelPicker, hueStopCache, wheelHit, rgba } from './color-wheel.js';
+import { colorTouchInput } from './color-touch.js';
 import { createRangeControl } from './range-control.js';
 import { actionField, choiceField } from './toolbar-components.js';
 import {gradientEditor} from './gradient.js';
 // DOM widgets for shared editor models. Rust owns tool/color/geometry policy.
-export function createEditorPanels({ selectionUi, app, wasmModule, state, element, button, icon, numberField, dispatch, asset, wake, applyChange, contentChanged }) {
+export function createEditorPanels({ selectionUi, app, wasmModule, state, element, button, icon, numberField, dispatch, asset, wake, applyChange, contentChanged, showContext }) {
   const catalog=liveCopy(app,"catalog"),copy=catalog.native_copy;
   const updates = new Map(), navigators = new Set(), pendingPaints = new Set();
   let positioning = 0, nextNavigator = 1;
@@ -234,10 +235,10 @@ export function createEditorPanels({ selectionUi, app, wasmModule, state, elemen
     // Match the wheel marker: the white ring and dark edge stay visible on every ramp color.
     markerShadow.setAttribute('fill','none');markerShadow.setAttribute('stroke','rgba(0,0,0,.5)');markerShadow.setAttribute('stroke-width','4');
     marker.setAttribute('fill','white');marker.setAttribute('stroke','white');marker.setAttribute('stroke-width','2');arc.append(track,markerShadow,marker,caption);stage.append(arc);
-    let arcContact=null,originalIntensity=0;
+    let arcContact=null;
     const arcPick=e=>{const r=stage.getBoundingClientRect();const hit=app.color_ui({type:'arc',size:r.width,point:[e.clientX-r.x,e.clientY-r.y]});color({op:'hdr_intensity',stops:-2+8*hit.fraction});};
-    track.onpointerdown=e=>{if(e.button!==0||displayColors().slot==='transparent')return;arcContact=e.pointerId;originalIntensity=view.intensity;track.setPointerCapture(e.pointerId);e.preventDefault();arcPick(e);};track.onpointermove=e=>{if(e.pointerId===arcContact)arcPick(e)};track.onpointerup=e=>{if(e.pointerId===arcContact){arcPick(e);arcContact=null;}};
-    for(const event of ['pointercancel','lostpointercapture'])track.addEventListener(event,e=>{if(e.pointerId===arcContact){arcContact=null;color({op:'hdr_intensity',stops:originalIntensity});}});
+    track.onpointerdown=e=>{if(e.button!==0||displayColors().slot==='transparent')return;arcContact=e.pointerId;track.setPointerCapture(e.pointerId);e.preventDefault();arcPick(e);};track.onpointermove=e=>{if(e.pointerId===arcContact)arcPick(e)};track.onpointerup=e=>{if(e.pointerId===arcContact){arcPick(e);arcContact=null;}};
+    for(const event of ['pointercancel','lostpointercapture'])track.addEventListener(event,e=>{if(e.pointerId===arcContact)arcContact=null;});
     track.ondblclick=()=>color({op:'hdr_intensity',stops:0});track.onkeydown=e=>{if(['ArrowLeft','ArrowDown','ArrowRight','ArrowUp','Home'].includes(e.key)){e.preventDefault();color({op:'hdr_intensity',stops:e.key==='Home'?0:Math.max(-2,Math.min(6,view.intensity+(['ArrowLeft','ArrowDown'].includes(e.key)?-.1:.1)))});}};
     const readout=button("",()=>color({op:"toggle_readout"}),"color-readout"),numbers=element("canvas");
     numbers.setAttribute("aria-hidden","true");readout.append(numbers);stage.append(readout);
@@ -315,7 +316,27 @@ export function createEditorPanels({ selectionUi, app, wasmModule, state, elemen
       });
     }
     const hit=wheelHit(app);
-    wheelPicker(wheel,(size,point)=>hit(size,point,view.shape),color);
+    const picker=wheelPicker(wheel,(size,point)=>hit(size,point,view.shape),color);
+    const touches=colorTouchInput({app,applyChange,wake});
+    const inside=e=>{
+      if(e.target===track)return true;
+      if(e.target!==wheel||!view)return false;
+      const r=wheel.getBoundingClientRect(),[x,y]=view.geometry.center;
+      return Math.hypot((e.clientX-r.x)/r.width-x,(e.clientY-r.y)/r.height-y)<=view.geometry.outer;
+    };
+    let pressed=null;
+    const contact=phase=>dispatch({type:'color_contact',phase});
+    const history=e=>{
+      if(e.type==='pointerdown'&&e.button===0&&pressed==null&&inside(e)){pressed=e.pointerId;contact('down');}
+      if(!touches.route(e,inside(e)))return;
+      if(e.type==='pointerdown'){picker.cancel();arcContact=null;pressed=null;}
+      e.preventDefault();e.stopImmediatePropagation();
+    };
+    const release=e=>{if(e.pointerId!==pressed)return;pressed=null;contact(e.type==='pointerup'?'up':'cancel');};
+    for(const type of ['pointerdown','pointermove','pointerup','pointercancel'])stage.addEventListener(type,history,true);
+    for(const type of ['pointerup','pointercancel','lostpointercapture'])stage.addEventListener(type,release);
+    wheel.menuModel=()=>app.context_menu({kind:'color_wheel'});
+    stage.addEventListener('contextmenu',e=>{if(!inside(e))return;e.preventDefault();e.stopPropagation();showContext(wheel,[e.clientX,e.clientY]);});
     // Preserve native button activation instead of treating Space as canvas pan.
     for(const name of ["keydown","keyup"])root.addEventListener(name,e=>{if(e.target.closest("button")&&(e.key===" "||e.key==="Enter"))e.stopPropagation();});
     for(const name of ["focus","blur"])readout.addEventListener(name,draw);
@@ -323,7 +344,7 @@ export function createEditorPanels({ selectionUi, app, wasmModule, state, elemen
     function flushPaint() { pendingPaints.delete(flushPaint); cancelAnimationFrame(resizeFrame); resizeFrame=null; draw(); }
     function queuePaint() { pendingPaints.add(flushPaint); if(!resizeFrame)resizeFrame=requestAnimationFrame(flushPaint); }
     const resize=new ResizeObserver(queuePaint);resize.observe(frame);
-    root.navigatorDispose=()=>{painter.dispose();resize.disconnect();cancelAnimationFrame(resizeFrame);pendingPaints.delete(flushPaint)};
+    root.navigatorDispose=()=>{painter.dispose();touches.dispose();if(pressed!=null){pressed=null;contact('up');}resize.disconnect();cancelAnimationFrame(resizeFrame);pendingPaints.delete(flushPaint)};
     return ()=>{
       const preview=app.color_preview();
       const active=preview.picker.preview!=null;

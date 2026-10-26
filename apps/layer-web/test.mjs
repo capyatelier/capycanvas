@@ -47,6 +47,7 @@ import {checkProof} from "./proof.test.mjs";
 import {checkPackageView} from "./package-view.test.mjs";
 import {checkNumericControls} from './numeric-controls.test.mjs';
 import {checkColorPanel} from "./color-panel.test.mjs";
+import {checkColorUndo} from "./color-undo.test.mjs";
 import {checkColorEditor} from "./color-editor.test.mjs";
 import {checkDragPickup} from "./drag-pickup.test.mjs";
 import {checkZen} from "./zen.test.mjs";
@@ -148,7 +149,7 @@ const cdp = await launchChrome(
     "--window-size=1440,1000",
   ],
   {
-    timeout: process.argv.includes('--transform-footprint')?60000:process.argv.some(x=>['--capture-readiness','--hdr-bubbles','--vector-edges','--vector-files','--layer-properties-drawer','--drawing-tabs-recovery','--scopes','--tonal-controls','--gradients','--panel-controls'].includes(x))?300000:process.argv.some(x=>["--enclose-fill","--vector-tools","--vector-milestone","--selection-tools","--color-mixing","--contact-brushes","--layer-properties-drawer","--filter-drawer","--artistic-filters","--filter-previews","--spatial-filter-windows","--lookup-transport","--local-adjustments","--drawing-tabs","--shared-workflows","--live-language-color","--live-language-proof","--live-language-delivery","--live-language-surfaces","--live-language-toolbar","--live-language-effects","--hdr","--hdr-performance","--proof","--portable-photo","--image-object-fixture","--image-rows","--image-layers","--package-view","--export-metadata","--filter-investigation","--paper-texture-readiness","--pipeline-readiness","--tip-resize-readiness","--gpu-failure-lifecycle","--callback-boundaries","--blending","--editor","--new-drawing"].includes(x)) ? 180000 : 30000,
+    timeout: process.argv.includes('--transform-footprint')?60000:process.argv.some(x=>['--capture-readiness','--hdr-bubbles','--color-undo','--vector-edges','--vector-files','--layer-properties-drawer','--drawing-tabs-recovery','--scopes','--tonal-controls','--gradients','--panel-controls'].includes(x))?300000:process.argv.some(x=>["--enclose-fill","--vector-tools","--vector-milestone","--selection-tools","--color-mixing","--contact-brushes","--layer-properties-drawer","--filter-drawer","--artistic-filters","--filter-previews","--spatial-filter-windows","--lookup-transport","--local-adjustments","--drawing-tabs","--shared-workflows","--live-language-color","--live-language-proof","--live-language-delivery","--live-language-surfaces","--live-language-toolbar","--live-language-effects","--hdr","--hdr-performance","--proof","--portable-photo","--image-object-fixture","--image-rows","--image-layers","--package-view","--export-metadata","--filter-investigation","--paper-texture-readiness","--pipeline-readiness","--tip-resize-readiness","--gpu-failure-lifecycle","--callback-boundaries","--blending","--editor","--new-drawing"].includes(x)) ? 180000 : 30000,
     onEvent: (event) => {
       if (
         event.method === "Runtime.consoleAPICalled" &&
@@ -369,6 +370,7 @@ try {
     }, checkErrors],
     [process.argv.includes("--numeric-controls"), () => checkNumericControls({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--color-panel"), () => checkColorPanel({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--color-undo"), () => checkColorUndo({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--color-editor"), () => checkColorEditor({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--layer-properties-drawer"), () => checkLayerPropertiesDrawer({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--filter-drawer"), () => checkFilterDrawer({call,evaluate,settle}), checkErrors],

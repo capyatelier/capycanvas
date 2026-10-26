@@ -68,6 +68,7 @@ export function wheelPicker(canvas, hit, pick) {
   canvas.addEventListener("pointerdown",e=>{if(e.button!==0)return;const r=canvas.getBoundingClientRect(),part=hit(r.width,[e.clientX-r.x,e.clientY-r.y]);if(!part)return;contact={id:e.pointerId,part};canvas.setPointerCapture(e.pointerId);e.preventDefault();send(e);});
   canvas.addEventListener("pointermove",e=>{if(contact?.id===e.pointerId)send(e);});
   for(const name of ["pointerup","pointercancel","lostpointercapture"])canvas.addEventListener(name,e=>{if(contact?.id===e.pointerId)contact=null;});
+  return {cancel(){if(contact&&canvas.hasPointerCapture(contact.id))canvas.releasePointerCapture(contact.id);contact=null;}};
 }
 
 export const hueStopCache = app => {

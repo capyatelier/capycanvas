@@ -635,6 +635,6 @@ export function createCustomization({ app, catalog, state, paintPair, workspace,
       return list;
     }));
   }
-  return { refresh, arrange, target, renderMenu, refreshMenu, refreshContextMenu, dismissContext, openMenu, variationMarker, field, discardFields, tileWidget, refreshTile, layoutTile, present, view: (id) => views.get(id), layoutTiles,
+  return { refresh, arrange, target, renderMenu, refreshMenu, refreshContextMenu, dismissContext, openMenu, showContext, variationMarker, field, discardFields, tileWidget, refreshTile, layoutTile, present, view: (id) => views.get(id), layoutTiles,
     placement: () => expanded?.placement ?? null };
 }

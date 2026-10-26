@@ -1,4 +1,4 @@
-export function createBubbleInput({app, workspace, records, send, wake, menu, dismiss, cancelWorkspace, viewport,leaveCanvas}) {
+export function createBubbleInput({app, workspace, records, send, wake, menu, dismiss, cancelWorkspace, viewport,leaveCanvas,colorTouch}) {
   let contact, source, lastRing, suppressClick=false;
   const point=e=>[e.clientX,e.clientY];
   const distance=(a,b)=>Math.hypot(a[0]-b[0],a[1]-b[1]);
@@ -71,8 +71,8 @@ export function createBubbleInput({app, workspace, records, send, wake, menu, di
       c.fingers.set(e.pointerId,p);workspace.setPointerCapture(e.pointerId);
       if(c.fingers.size===2&&!c.pair) {
         stopHold();lastRing=null;restore(c);dismiss();
-        const pair=pairPoints(c);c.pair={...pair,start:Math.max(1,pair.distance),scale:1,ended:false};
-        c.grab=grab(c.r.view.id);drag(c.grab,'down',pair.mid);c.mode='pair';
+        const pair=pairPoints(c);c.pair={...pair,origin:pair.mid,start:Math.max(1,pair.distance),scale:1,lifted:false,ended:false};
+        c.grab=grab(c.r.view.id);c.mode='pair';
       }
       return consume(e);
     }
@@ -127,7 +127,12 @@ export function createBubbleInput({app, workspace, records, send, wake, menu, di
     if(c.mode==='native')return;
     if(c.pair) {
       if(!c.pair.ended) {
-        const pair=pairPoints(c);c.pair.mid=pair.mid;
+        const pair=pairPoints(c);
+        if(!c.pair.lifted) {
+          if(distance(pair.mid,c.pair.origin)<=8&&Math.abs(pair.distance-c.pair.start)<=8)return consume(e);
+          c.pair.lifted=true;drag(c.grab,'down',c.pair.origin);
+        }
+        c.pair.mid=pair.mid;
         if(c.r.view.kind==='color') {
           c.pair.scale=app.bubble_pinched_size(c.r.view.diameter,pair.distance/c.pair.start)/c.r.view.diameter;
           c.r.pinch=c.pair.scale;
@@ -168,8 +173,11 @@ export function createBubbleInput({app, workspace, records, send, wake, menu, di
     stopHold();if(cancel)lastRing=null;
     if(c.pair) {
       if(!c.pair.ended) {
-        c.pair.ended=true;c.r.pinch=1;drag(c.grab,cancel?'cancel':'up',c.pair.mid);
-        if(!cancel&&c.r.view.kind==='color'&&Math.abs(c.pair.scale-1)>.01)send({type:'resize',id:c.r.view.id,scale:c.pair.scale});
+        c.pair.ended=true;
+        if(c.pair.lifted) {
+          c.r.pinch=1;drag(c.grab,cancel?'cancel':'up',c.pair.mid);
+          if(!cancel&&c.r.view.kind==='color'&&Math.abs(c.pair.scale-1)>.01)send({type:'resize',id:c.r.view.id,scale:c.pair.scale});
+        }
       }
     } else if(cancel){restore(c);if(c.held)dismiss();}
     else if(!c.held) {
@@ -191,6 +199,7 @@ export function createBubbleInput({app, workspace, records, send, wake, menu, di
   window.addEventListener('keydown',e=>{if(e.key==='Escape'&&(contact||source)){end(null,true);consume(e);}},true);
   return {
     handle(e) {
+      if(e.pointerType==='touch'&&!e.bubbleNativeCancel){const r=e.type==='pointerdown'&&!native(e)?target(point(e)):null;colorTouch.route(e,r?.view.kind==='color');}
       if(e.type==='pointerdown')return down(e);
       if(e.type==='pointermove')return move(e);
       if(e.type==='pointerup')return end(e);

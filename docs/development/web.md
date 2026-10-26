@@ -230,7 +230,7 @@ Those browser callback measurements do not qualify presentation rates.
 Pure unit tests need no browser or GPU:
 
 ```bash
-node --test apps/layer-web/{run,package,frame,bubbles,glass,pointer,workspace-client,canvas-bar,notice,zoom-readout,export-controls,size-dialog,text-input,localization}.test.mjs
+node --test apps/layer-web/{run,package,frame,bubbles,glass,pointer,color-touch,workspace-client,canvas-bar,notice,zoom-readout,export-controls,size-dialog,text-input,localization}.test.mjs
 node --test apps/layer-web/{numeric,histogram,gpu-diagnostics,raster-worker-client,pipeline-wait,workspace-manager-copy,toolbar-components-copy,color-controls-copy,document-color-copy}.test.mjs
 ```
 
@@ -379,7 +379,7 @@ reloading its corrupted workspace and preference fixtures.
 | Vector layers | `--vector-tools`, `--vector-milestone`, `--vector-edges`, `--vector-files` |
 | Canvas bar, notices, footer zoom | `--canvas-bar`, `--notices`, `--zoom-controls`, `--zoom-readout`, `--zoom-tool-settings`, `--move-selection` |
 | Retouching | `--clone`, `--heal` |
-| Color | `--color-panel`, `--color-wheel-resize`, `--color-picker`, `--palettes`, `--scopes-smoke`, `--scopes`, `--tonal-controls` |
+| Color | `--color-panel`, `--color-undo`, `--color-wheel-resize`, `--color-picker`, `--palettes`, `--scopes-smoke`, `--scopes`, `--tonal-controls` |
 | Layers and filters | `--paper-texture-readiness`, `--tip-resize-readiness`, `--paper-rows`, `--paper-library`, `--layers`, `--layer-relationships`, `--blend-menu`, `--pass-through`, `--blending`, `--adjustments`, `--curves`, `--gradients`, `--pointwise-effects`, `--artistic-filters`, `--filter-drawer`, `--filter-previews`, `--spatial-filter-windows`, `--photo-edit`, `--merges`, `--retouch-layers` |
 | Canvas size, crop and image commands | `--canvas-size`, `--crop`, `--image-commands` |
 | New drawing | `--new-drawing` walks the dialog: sizes, presets, paper, Texture visibility, paper color, the Import… tile and Create. Other journeys create drawings with `createDrawing` from `new-drawing-fixture.mjs`, on flat paper unless they pass `relief`. |
