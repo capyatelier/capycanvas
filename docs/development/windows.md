@@ -405,9 +405,7 @@ and checks that the accepted color comes from under the finger while the loupe
 is lifted above it at the current display scale.
 
 The Layers panel presents shared attachment actions, owner visibility and group mode.
-Workspace groups use their shared panel title as the accessible name. Native panel
-content and scroll viewports use the allocated body height and shared minimum, so
-fields remain reachable inside short groups.
+Workspace groups use their shared panel title as the accessible name.
 Decorative clipping rails and effect links use realized thumbnail geometry and remain
 clipped to the scrolling viewport. A content-thumbnail drop attaches to that layer's
 output; a row drop uses shared insertion policy. Native drag feedback uses the shared
@@ -1398,9 +1396,11 @@ the focused header journeys also check placement cancellation and keyboard input
 - **Unlocked desktop, one at a time.** Fixtures need an unlocked interactive
   desktop and foreground input. Run them sequentially.
 - **Resolve the drawing window.** Use `Owned-DrawingWindow` from `CapyUia.ps1` at
-  startup and after reopening. Keep its root and HWND for input, sizing,
-  captures and window close; `Process.MainWindowHandle` can select an input-indicator
-  overlay in the same process. Startup-close checks resolve this window without
+  startup and after reopening. It creates UI Automation roots from native window
+  handles owned by the process and requires the drawing-canvas peer. Keep its root
+  and HWND for input, sizing, captures and window close;
+  `Process.MainWindowHandle` can select an input-indicator overlay in the same
+  process. Startup-close checks resolve this window without
   waiting for brush readiness. Set `CapyTraceDirectory` when traces live outside the
   executable directory, and pass that directory as `-StateDirectory` to
   `exercise-window.ps1` for sizing and closing.

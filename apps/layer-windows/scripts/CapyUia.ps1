@@ -1,8 +1,11 @@
 ﻿Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
 if(!('CapyWindowApi' -as [type])){Add-Type -TypeDefinition @"
-using System;using System.Runtime.InteropServices;using System.Text;
+using System;using System.Runtime.InteropServices;using System.Text;using System.Collections.Generic;
 public static class CapyWindowApi {
+ delegate bool EnumWindow(IntPtr window,IntPtr parameter);
+ [DllImport("user32.dll",SetLastError=true)]static extern bool EnumWindows(EnumWindow callback,IntPtr parameter);
  [DllImport("user32.dll")]public static extern uint GetWindowThreadProcessId(IntPtr h,out uint owner);
+ public static IntPtr[] Windows(uint process){var windows=new List<IntPtr>();if(!EnumWindows((window,parameter)=>{uint owner;GetWindowThreadProcessId(window,out owner);if(owner==process)windows.Add(window);return true;},IntPtr.Zero))throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());return windows.ToArray();}
  [DllImport("user32.dll")]public static extern bool PostMessage(IntPtr h,uint m,UIntPtr w,IntPtr l);
  [DllImport("user32.dll")]public static extern bool SetForegroundWindow(IntPtr h);
  [DllImport("user32.dll")]public static extern bool ShowWindow(IntPtr h,int n);
@@ -76,14 +79,13 @@ function Record-CapyFixtureClose([int]$ProcessId,[long]$WindowHandle,[bool]$Wind
     Update-CapyFixtureContext {param($context);$context.closes=@($context.closes)+@($entry)}
 }
 function Owned-ProcessWindows([Diagnostics.Process]$Process,[long]$WindowHandle){
-    $windows=if($WindowHandle){@([System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]$WindowHandle))}
-        else{[System.Windows.Automation.AutomationElement]::RootElement.FindAll([System.Windows.Automation.TreeScope]::Children,
-            [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ProcessIdProperty,$Process.Id))}
-    foreach($window in $windows){
-        if(!$window){continue}
-        $current=$window.Current;$handle=[IntPtr]$current.NativeWindowHandle;$owner=[uint32]0
+    $windows=if($WindowHandle){@([IntPtr]$WindowHandle)}else{[CapyWindowApi]::Windows([uint32]$Process.Id)}
+    foreach($handle in $windows){
+        $owner=[uint32]0
         [CapyWindowApi]::GetWindowThreadProcessId($handle,[ref]$owner)|Out-Null
-        if($handle -ne [IntPtr]::Zero -and $owner -eq $Process.Id -and $current.ProcessId -eq $Process.Id){
+        if($handle -eq [IntPtr]::Zero -or $owner -ne $Process.Id){continue}
+        $window=[System.Windows.Automation.AutomationElement]::FromHandle($handle)
+        if($window -and $window.Current.ProcessId -eq $Process.Id){
             [pscustomobject]@{Root=$window;Handle=$handle}
         }
     }

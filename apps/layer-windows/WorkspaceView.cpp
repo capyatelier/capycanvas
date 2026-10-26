@@ -751,7 +751,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             double bodyHeight=std::max(0.,double(previewBox.Height)-(flag(geometry,L"tabs_visible")?36.:0.)
                 -num(object(geometry,L"footer_grip"),L"height"));
             double minimum=object(geometry,L"tiles").Size()?0.:num(geometry,L"min_body_height");
-            if(group.bodyViewport){auto height=std::max(bodyHeight,minimum);group.bodyViewport.Height(height);group.body->Root().Height(height);group.bodyScroll.Height(bodyHeight);}
+            if(group.bodyViewport)group.bodyViewport.Height(std::max(bodyHeight,minimum));
             group.body->Layout(geometry);
             if(group.footer){
                 auto grip=rectangle(object(group.geometry,L"footer_grip"));
