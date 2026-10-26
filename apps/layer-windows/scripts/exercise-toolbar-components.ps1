@@ -120,10 +120,14 @@ try {
     foreach($kind in @('brush_size_slider','brush_strength_slider')){
         $tile=Tile $kind
         foreach($option in @('Show value','Expand to fit')){
-            (Control "slider-cap-$($tile.id)").SetFocus()
+            $cap=Control "slider-cap-$($tile.id)" -Arranged
+            $cap.SetFocus()
+            Wait-Until {$cap.Current.HasKeyboardFocus} 'The current slider cap did not receive keyboard focus'
             [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x10),0x79)
             Invoke $option -Name
             Wait-Until {!(Find $option -Name -Visible)} "$option menu did not close"
+            $field=if($option -eq 'Show value'){'show_value'}else{'expand'}
+            Wait-Until {(Tile $kind).slider_style.$field} "$option did not publish its slider style"
         }
         Wait-Until {(Tile $kind).slider_style.show_value -and (Tile $kind).slider_style.expand} 'Slider display options did not persist'
         (Control "component-slider-$($tile.id)").GetCurrentPattern([System.Windows.Automation.RangeValuePattern]::Pattern).SetValue(1)

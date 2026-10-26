@@ -763,6 +763,12 @@ publication failures and cleanup warnings after committed checkpoints.
 preservation and relative notice paths without a window, including PowerShell 5.
 `tests/ink-color.ps1` checks document-fixture color comparisons with encoded RGB
 and optional preserved linear channels; black need not store `linear_rgb`.
+`tests/document-invoke.ps1` checks a paper drawer action whose UIA peer retires
+after committing: observe the shared acknowledgement without repeating the action.
+Use `exercise-documents.ps1 -Journey gpu-recovery` for just the imported-image
+checkpoint, two GPU replacements, queued/active pen input, exact exported pixels
+and retained history. Native writeback initializes its pointer driver before
+parking or injecting input, and disposes it after each checked operation.
 Shared filesystem and SQLite calls resolve existing paths before native publication,
 including when private storage or backup directories exceed the legacy Windows path
 length. Window-free core and native workspace regressions check long-path recovery

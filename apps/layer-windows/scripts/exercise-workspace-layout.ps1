@@ -1,4 +1,4 @@
-param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme='dark')
+param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme='dark',[ValidateSet('all','diagnostics-fps')][string]$Journey='all')
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
@@ -152,6 +152,7 @@ try{
     [CapyRowPointer]::Initialize([uint32]$review.Id)
     $ids=@('file','edit','image','layer','select','filter','view','window')
     $scale=[CapyWorkspaceHeader]::GetDpiForWindow($drawing.Handle)/96.
+    if($Journey -eq 'all'){
     Check-PresetGroups
     foreach($size in @(@{width=744;compact=$true},@{width=1200;compact=$false},@{width=744;compact=$true})){
         $entry=& (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'File' -Inspect
@@ -195,6 +196,7 @@ try{
             [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::Button)))
     $close.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
     Wait-Until {$null -eq (Model).preferences -and (Control 'drawing-canvas').Current.IsEnabled} 'About did not close'
+    }
     & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'window'
     $stats=Panel-Menu 'stats'
     # The current default keeps Diagnostics in an inactive Navigator tab.
@@ -258,7 +260,11 @@ try{
     Assert-RendererHealthy $review.Id $drawing
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close -DiscardUnsaved
     if((Get-Item -LiteralPath $stderr).Length){throw 'Native stderr requires inspection'}
+    if($Journey -eq 'diagnostics-fps'){
+        [pscustomobject]@{journey=$Journey;diagnostics_query_and_row_retention='passed';diagnostics_visibility_and_workspace_undo='passed';native_resize='passed';zero_exit='passed';run=$run}|ConvertTo-Json
+    }else{
     [pscustomobject]@{preset_grouping_native_bounds_tabs_and_reload='passed';shared_menus='passed';compact_and_expanded_header='passed';responsive_menu_focus='passed';selection_commands='passed';about_page='passed';diagnostics_query_and_row_retention='passed';diagnostics_visibility_and_workspace_undo='passed';native_resize='passed';zero_exit='passed';scope='native UI Automation; physical docking, drawers, full layout parity and presentation remain separate'}|ConvertTo-Json
+    }
 }catch{
     [IO.File]::WriteAllText((Join-Path $run 'failure.txt'),($_|Out-String)+$_.ScriptStackTrace);throw
 }finally{

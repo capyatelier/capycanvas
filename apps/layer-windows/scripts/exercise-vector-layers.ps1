@@ -1,4 +1,4 @@
-param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme='dark',[switch]$ToolsOnly)
+param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme='dark',[switch]$ToolsOnly,[ValidateSet('all','editing')][string]$Journey='all')
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 $CapyFind='prefer-visible';$CapyWaitSeconds=20;$CapyEach={[CapyRowPointer]::Verify()}
@@ -10,7 +10,7 @@ $Executable=(Resolve-Path -LiteralPath $Executable).Path
 $run=Join-Path $repo ('artifacts/windows/vector-layers/'+$Theme+'-'+[Guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($run)|Out-Null
 $CapyTraceDirectory=$run
-$checks=[ordered]@{theme=$Theme;tools_only=[bool]$ToolsOnly}
+$checks=[ordered]@{theme=$Theme;tools_only=[bool]$ToolsOnly;journey=$Journey}
 $observations=[Collections.Generic.List[object]]::new()
 $findings=[Collections.Generic.List[string]]::new()
 $review=$null;$projection=$null;$noticeFrame=$null
@@ -121,6 +121,80 @@ function Vector-Availability([long]$Layer,[long]$Pen){
  if((Revision)-ne$revision -or (Tool-Samples $points)-cne$pixels){throw 'Checking unavailable choices changed the exact artwork or history'}
  $checks.tool_reason=[ordered]@{dim=$dim;clear=$clear;clickable_and_immediate='passed';pen_retained='passed';sculpt_before_stroke='passed'}
 }
+function Editing-Command([string]$Id){
+ $label=Label $Id
+ if(!$label){throw "The shared command $Id is missing"}
+ $null=Search $label {param($result) $result.label -eq $label}.GetNewClosure() $label
+ Park
+}
+function Editing-Settled{
+ Wait-Until {$m=Model;@($m.state.requests).Count -eq 0 -and !$m.state.document_file.busy} 'The vector editing request did not finish' 60
+}
+function Editing-History([string]$Name,$Points,[scriptblock]$Action,[scriptblock]$Assert){
+ Park;$before=Drawing-Checkpoint;$pixels=Tool-Samples $Points
+ $record=[ordered]@{name=$Name;before=$before;after=$null;undo=$null;redo=$null}
+ try{
+  & $Action
+  Editing-Settled
+  Wait-Until {(Drawing-Checkpoint) -cne $before} "$Name did not author a change"
+  Park;& $Assert
+  $after=Drawing-Checkpoint;$afterPixels=Tool-Samples $Points;$record.after=$after
+  Shortcut-Command 'undo';Park
+  Wait-Until {$record.undo=Drawing-Checkpoint;$record.undo -ceq $before -and (Tool-Samples $Points) -ceq $pixels} "$Name Undo did not restore its exact checkpoint and pixels" 30
+  Shortcut-Command 'redo';Park
+  Wait-Until {$record.redo=Drawing-Checkpoint;$record.redo -ceq $after -and (Tool-Samples $Points) -ceq $afterPixels} "$Name Redo did not restore its exact checkpoint and pixels" 30
+  $checks[$Name]=[ordered]@{checkpoint_undo='exact';checkpoint_redo='exact';sample_pixels=$Points.Count*81}
+  Capture ("editing-$Name-$Theme") -WithModel -Composed
+ }finally{$record|ConvertTo-Json -Depth 6|Set-Content -LiteralPath (Join-Path $run ("editing-$Name-history.json"))}
+}
+function Vector-Editing{
+ $layer=New-VectorLayer
+ Tool-Panel 'tool_settings';Tool-Number 'tool-setting-size' '24'
+ Select-Tool 'figure'
+ $null=Choose-Tool-Item (Tool-Item 'groups' {param($item) $item.icon -eq 'rectangle'} 'Rectangle') -Acknowledged
+ $null=Choose-Tool-Item (Tool-Item 'subtools' {param($item) $item.action.action.tool.figure.shape -eq 'rectangle' -and $item.action.action.tool.figure.paint -eq 'fill'} 'a filled rectangle') -Acknowledged
+ Stroke (Line @(400,400) @(700,620))
+ Shortcut-Command 'move';Stroke (Line @(550,510) @(550,510) 1)
+ $points=@(@(400,500),@(410,500),@(550,510),@(600,510),@(750,510),@(900,510))
+ Editing-History 'nudge' $points {Key 0x27} {if((Tool-Samples $points) -ceq $pixels){throw 'The one-pixel nudge did not move the sampled edge'}}
+ Shortcut-Command 'undo';Park
+ Editing-History 'shift-nudge' $points {[CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x10),0x27)} {Expect 'Shift nudge leaves the old edge' @(402,500) 'ink' $false;Expect 'Shift nudge keeps the shifted interior' @(415,500) 'ink'}
+ Shortcut-Command 'undo';Park
+ Editing-History 'alt-drag' $points {
+  [CapyRowPointer]::Hold(0x12,$true)
+  try{Stroke (Line @(550,510) @(900,510))}finally{[CapyRowPointer]::Hold(0x12,$false)}
+ } {Expect 'Alt drag retains the original' @(550,510) 'ink';Expect 'Alt drag authors a copy' @(900,510) 'ink'}
+ Shortcut-Command 'undo';Park
+ Stroke (Line @(550,510) @(550,510) 1)
+ $reach=30*[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96
+ $scale=$projection.bounds.Width/$projection.camera.viewport[0]*$projection.camera.zoom
+ $reach/=$scale
+ Editing-History 'rotation' $points {Stroke (Line @(550,(400-$reach)) @((550+110+$reach),510))} {Expect 'Rotated rectangle leaves its old left interior' @(410,510) 'ink' $false;Expect 'Rotated rectangle keeps its centre' @(550,510) 'ink'}
+ Shortcut-Command 'undo';Park
+ Stroke (Line @(550,510) @(550,510) 1)
+ $clipboardCheckpoint=Drawing-Checkpoint
+ Shortcut-Command 'copy';Park;Editing-Settled
+ if((Drawing-Checkpoint) -cne $clipboardCheckpoint){throw 'Copy changed authored history'}
+ Editing-History 'paste-in-place' $points {Editing-Command 'paste_in_place'} {Expect 'Paste in Place preserves visible location' @(550,510) 'ink';if((Active).id -ne $layer){throw 'Paste in Place left the vector layer'}}
+ Editing-History 'cut' $points {Shortcut-Command 'cut'} {Expect 'Cut leaves the original path' @(550,510) 'ink'}
+ Set-Color '#26B340';Select-Tool 'figure'
+ Stroke (Line @(500,450) @(800,670))
+ Expect 'Second rectangle covers the first' @(600,510) 'green'
+ Shortcut-Command 'move';Stroke (Line @(450,510) @(450,510) 1)
+ Editing-History 'arrange-front' $points {Editing-Command 'bring_to_front'} {Expect 'Bring to Front changes the overlapping paths' @(600,510) 'ink'}
+ Editing-History 'arrange-back' $points {Editing-Command 'send_to_back'} {Expect 'Send to Back restores the green overlap' @(600,510) 'green'}
+ Tool-Panel 'layers';Invoke 'layer-add-mask'
+ Wait-Until {(Model).state.layer_tools.editing_layer.has_mask} 'The vector layer did not gain a mask'
+ Invoke "layer-$layer-mask"
+ Wait-Until {(Model).state.layer_tools.editing_layer.mask_selected} 'The vector mask did not become the editing target'
+ $null=Select-Brush 'G-Pen';Select-Tool 'eraser'
+ Tool-Panel 'tool_settings';Tool-Number 'tool-setting-size' '100'
+ Editing-History 'mask-stroke' @(@(450,510),@(600,510)) {Stroke (Line @(450,470) @(450,550))} {Expect 'Mask erases the vector appearance' @(450,510) 'ink' $false}
+ Tool-Panel 'layers';Invoke "layer-$layer-content"
+ Wait-Until {!(Model).state.layer_tools.editing_layer.mask_selected -and (Active).id -eq $layer -and (Vector (Active))} 'The vector content target did not return'
+ Tool-Panel 'layers'
+ Write-Output 'PASS: Native vector editing with exact checkpoint and sampled-pixel Undo/Redo'
+}
 function Vector-Tools{
  $layer=New-VectorLayer
  Tool-Panel 'tool_settings'
@@ -193,7 +267,7 @@ try{
  Wait-Until {(Control 'drawing-canvas' -Arranged).Current.BoundingRectangle.Width -gt 1200 -and !(Model).windows_workspace.busy} 'The maximized canvas did not settle'
  if((Model).state.theme -ne $Theme){throw "The review opened in $((Model).state.theme) instead of $Theme"}
  Use-PaintWorkspace
- if($ToolsOnly){
+ if($ToolsOnly -or $Journey -eq 'editing'){
   & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'File';Invoke 'new_document'
   $epoch=(Model).state.document_file.epoch
   New-DrawingPixels 2000 1400;Invoke 'new-drawing-create'
@@ -203,7 +277,7 @@ try{
  Fit-Canvas;Park;Take-Projection
  Footer-Check 'start'
 
- if($ToolsOnly){Vector-Tools}else{
+ if($Journey -eq 'editing'){Vector-Editing}elseif($ToolsOnly){Vector-Tools}else{
  $pencil=Select-Brush 'Pencil'
  $v1=New-VectorLayer
  $gpen=@{id=$null}

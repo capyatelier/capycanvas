@@ -1,6 +1,8 @@
-﻿param([Parameter(Mandatory)][string]$Executable,[string]$DebuggerPath,[switch]$RecoverGpu,[switch]$FailGpu,[ValidateSet('full','new-drawing','color-workflows','color-workflows-light','native-writeback','native-writeback-light')][string]$Journey='full')
+﻿param([Parameter(Mandatory)][string]$Executable,[string]$DebuggerPath,[switch]$RecoverGpu,[switch]$FailGpu,[ValidateSet('full','new-drawing','gpu-recovery','color-workflows','color-workflows-light','native-writeback','native-writeback-light')][string]$Journey='full')
+$gpuRecovery=$Journey -eq 'gpu-recovery'
+if($gpuRecovery){$RecoverGpu=$true}
 if($RecoverGpu -and $FailGpu){throw "Choose successful recovery or exhausted recovery, not both"}
-if($Journey -ne 'full' -and ($RecoverGpu -or $FailGpu)){throw 'GPU recovery requires the full document journey'}
+if($Journey -notin @('full','gpu-recovery') -and ($RecoverGpu -or $FailGpu)){throw 'GPU recovery requires the full or GPU recovery journey'}
 $ErrorActionPreference='Stop'
 $focusedColor=$Journey.StartsWith('color-workflows')
 $nativeWriteback=$Journey.StartsWith('native-writeback')
@@ -69,7 +71,7 @@ $env:CAPY_SMOKE_TEST='1'
 $env:CAPY_TEST_DISPLAY='1'
 $env:CAPY_TEST_PRIMARY='1'
 $stderr=Join-Path $run 'stderr.log'
-if($focusedColor -or $nativeWriteback){[IO.File]::WriteAllText((Settings-File),(@{language=@{Explicit='en'};theme=$(if($Journey.EndsWith('-light')){'light'}else{'dark'})}|ConvertTo-Json -Depth 4))}
+if($focusedColor -or $nativeWriteback -or $gpuRecovery){[IO.File]::WriteAllText((Settings-File),(@{language=@{Explicit='en'};theme=$(if($Journey.EndsWith('-light')){'light'}else{'dark'})}|ConvertTo-Json -Depth 4))}
 $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError $stderr
 $null=$review.Handle
 [IO.File]::WriteAllText((Join-Path $repo 'artifacts/windows/document-ui-review.pid'),[string]$review.Id)
@@ -157,10 +159,12 @@ function File-Command([string]$Id,[scriptblock]$Options) {
 function Drawing {(Model).state.new_drawing}
 function Drawer {$view=Drawing;if($view){$view.drawer}}
 function Owned([string]$Id) {$hit=@{item=$null};Wait-Until {$hit.item=Find $Id -Within $root;$null -ne $hit.item} "Missing control: $Id";$hit.item}
-function Press([string]$Id) {
+function Press([string]$Id,[scriptblock]$Acknowledged,[string]$Message) {
     $hit=@{item=$null}
     Wait-Until {$hit.item=Find $Id -Within $root;$hit.item -and $hit.item.Current.IsEnabled} "Missing enabled control: $Id"
-    $hit.item.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+    try{$hit.item.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()}
+    catch [System.Windows.Automation.ElementNotAvailableException]{if(!$Acknowledged){throw}}
+    if($Acknowledged){Wait-Until $Acknowledged $Message}
 }
 function Foreground {[CapyRowPointer]::SetForegroundWindow($drawing.Handle)|Out-Null;Wait-Until {[CapyRowPointer]::GetForegroundWindow() -eq $drawing.Handle} 'The review did not take foreground input'}
 function Type-Text([string]$Id,[string]$Text,[switch]$Commit) {
@@ -291,15 +295,13 @@ function New-Journey([string]$Theme,[switch]$Full) {
     Press 'new-drawing-paper-tile-0'
     Wait-Until {$drawer=Drawer;$drawer.tiles[0].selected -and !$drawer.relief.enabled -and !(Owned 'new-drawing-paper-relief').Current.IsEnabled} 'No paper did not disable Texture visibility'
     New-Capture 'paper-none'
-    Press 'new-drawing-paper-use'
-    Wait-Until {$view=Drawing;!$view.drawer -and !$view.setup.paper.texture -and $null -eq $view.page.relief -and !(Find 'new-drawing-texture-relief' -Within $root)} 'No paper kept the texture visibility line'
+    Press 'new-drawing-paper-use' {$view=Drawing;!$view.drawer -and !$view.setup.paper.texture -and $null -eq $view.page.relief -and !(Find 'new-drawing-texture-relief' -Within $root)} 'No paper kept the texture visibility line'
     Open-Drawer 'new-drawing-texture' 'paper'
     $paper=Item-Index (Drawer).tiles {param($item)$item.id -eq 'cold_press'}
     Press "new-drawing-paper-tile-$paper"
     Wait-Until {$drawer=Drawer;$drawer.tiles[$paper].selected -and $drawer.relief.enabled -and (Owned 'new-drawing-paper-relief').Current.IsEnabled} 'The paper tile did not select'
     Type-Text 'new-drawing-paper-relief' '150'
-    Press 'new-drawing-paper-use'
-    Wait-Until {$view=Drawing;!$view.drawer -and $view.setup.paper.texture -eq 'cold_press' -and $view.setup.paper.relief -eq 150 -and $view.page.relief -eq '150 %'} 'Use Texture did not apply the typed texture visibility'
+    Press 'new-drawing-paper-use' {$view=Drawing;!$view.drawer -and $view.setup.paper.texture -eq 'cold_press' -and $view.setup.paper.relief -eq 150 -and $view.page.relief -eq '150 %'} 'Use Texture did not apply the typed texture visibility'
     Wait-Until {(Owned 'new-drawing-texture-relief').Current.Name -eq '150 %'} 'The texture tile did not show the new texture visibility'
     Open-Drawer 'new-drawing-texture' 'paper'
     Wait-Until {(Field-Value 'new-drawing-paper-relief') -eq 150} 'Texture visibility did not reopen with the sheet value'
@@ -335,8 +337,7 @@ function New-Journey([string]$Theme,[switch]$Full) {
         Wait-Until {@((Drawer).tiles|Where-Object {$_.selected -and $_.label -eq 'Fixture paper'}).Count -eq 1} 'Import did not pick the imported paper' 45
         Import-Last
         $imported=@((Drawer).tiles|Where-Object selected)[0].id
-        Press 'new-drawing-paper-use'
-        Wait-Until {!(Drawer) -and (Drawing).setup.paper.texture -eq $imported -and (Drawing).page.texture -eq 'Fixture paper'} 'The imported paper was not used'
+        Press 'new-drawing-paper-use' {!(Drawer) -and (Drawing).setup.paper.texture -eq $imported -and (Drawing).page.texture -eq 'Fixture paper'} 'The imported paper was not used'
     }
     Open-Drawer 'new-drawing-paper-color' 'paper_color'
     New-Capture 'paper-color'
@@ -645,6 +646,59 @@ function Draw-Below {
     }finally{[CapyDocumentControls]::SetThreadDpiAwarenessContext($context)|Out-Null}
     Wait-Until {(Model).state.document_file.revision -gt $revision} 'The stroke below the controlled stroke did not modify the drawing'
 }
+function Test-GpuRecovery {
+    function Signature {
+        $state=(Model).state
+        foreach($field in @('revision','export_uri')){$state.document_file.PSObject.Properties.Remove($field)}
+        @($state.document_file,$state.camera,$state.workspace,$state.brush)|ConvertTo-Json -Depth 80 -Compress
+    }
+    $png={
+        Combo-Select (Find-Id 'export-format') {$_.Current.Name -like 'PNG*'}
+        Wait-Until {$format=Find-Id 'export-format';$format -and (Combo-Value $format) -like 'PNG*'} 'Export did not choose PNG'
+    }
+    $reference=Join-Path $run 'Recovered-0.png'
+    $script:scope=$root;File-Command 'export_document' $png;Picker 'Save As';Choose-Path $reference;Idle
+    Wait-Until {Test-Path -LiteralPath $reference} 'The drawing did not export before GPU recovery'
+    $exportHash=(Get-FileHash -LiteralPath $reference -Algorithm SHA256).Hash
+    $beforeRecovery=Signature
+    foreach($attempt in 1..2){
+        $generation=(Model).windows_gpu_generation
+        $documentRevision=(Model).state.document_file.revision
+        $script:scope=$root
+        Invoke-Control 'Undo'
+        Wait-Until {(Model).state.document_file.revision -gt $documentRevision} 'Pre-recovery Undo did not finish'
+        $undone=(Model).state.document_file.revision
+        if($attempt -eq 2){
+            Wait-Until {(Stroke-InkPixels) -eq 0} 'Pre-recovery Undo did not reach the canvas'
+            Invoke-Control 'Test pen begin'
+            Wait-Until {(Stroke-InkPixels) -ge 100} 'Active pen stroke did not render before removal'
+            & (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $review.Id -Output (Join-Path $run 'active-pen-before-loss.png') -ClientOnly *> (Join-Path $run 'active-pen-before-loss.json')
+            Start-GpuLoss @('Test pen end')
+        }else{
+            Start-GpuLoss @('Test pen')
+        }
+        Wait-Until {(Model).windows_gpu_generation -eq $generation+1 -and (Model).brush_ready} 'GPU reconstruction did not finish' 60
+        Wait-Until {(Model).state.document_file.revision -gt $undone} 'GPU recovery lost queued pen samples'
+        $documentRevision=(Model).state.document_file.revision
+        Wait-Until {(Signature) -eq $beforeRecovery} 'GPU recovery changed document, history, camera, workspace or brush'
+        $status=Find-Id 'canvas-status'
+        if($status -and !$status.Current.IsOffscreen){throw ('GPU recovery reports an error: '+$status.Current.Name)}
+        $restored=Join-Path $run ("Recovered-$attempt.png")
+        File-Command 'export_document' $png;Picker 'Save As';Choose-Path $restored;Idle
+        Wait-Until {Test-Path -LiteralPath $restored} 'Recovered GPU did not export'
+        if((Get-FileHash -LiteralPath $restored -Algorithm SHA256).Hash -ne $exportHash){
+            throw 'GPU reconstruction changed exported pixels'
+        }
+        $script:scope=$root
+        Invoke-Control 'Undo'
+        Wait-Until {(Model).state.document_file.revision -ne $documentRevision} 'Undo after reconstruction did not change the document'
+        $undoRevision=(Model).state.document_file.revision
+        Invoke-Control 'Redo'
+        Wait-Until {(Model).state.document_file.revision -ne $undoRevision -and (Signature) -eq $beforeRecovery} 'Redo after reconstruction did not restore the drawing'
+        Wait-Until {$thumbnail=Find-Id "layer-$imported-thumbnail";$thumbnail -and $thumbnail.Current.ItemStatus -eq 'Ready'} 'Imported image thumbnail did not recover' 15
+    }
+    & (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $review.Id -Output (Join-Path $run 'gpu-recovered.png') -ClientOnly *> (Join-Path $run 'gpu-capture.json')
+}
 function Test-LightNewDrawing {
     $env:CAPY_STORAGE_DIR=Join-Path $run 'light-profile'
     [IO.File]::WriteAllText((Settings-File),(@{language=@{Explicit='en'};theme='light'}|ConvertTo-Json -Depth 4))
@@ -663,7 +717,7 @@ function Test-LightNewDrawing {
 Bind-ReviewWindow 'No review window'
 Wait-Until {(Model).brush_ready} 'Canvas startup did not finish' 45
 if(!(Model).windows_isolated_settings){throw 'Review must use an isolated profile'}
-if($focusedColor){
+if($focusedColor -or $gpuRecovery){
     Open-NewDrawing
     Pick-Choice 'new-drawing-unit' (Value-Index (Drawing).units 'px')
     if((Drawing).linked){Press 'new-drawing-link';Wait-Until {!(Drawing).linked} 'Focused drawing did not unlink its dimensions'}
@@ -795,6 +849,8 @@ function Writeback-Point([double]$X,[double]$Y,$p) {
 }
 function Writeback-Checked([scriptblock]$Action) {
     Foreground
+    [CapyRowPointer]::Initialize([uint32]$review.Id)
+    try{
     $window=$root.Current.BoundingRectangle;[CapyRowPointer]::Hover([int]($window.X+20),[int]($window.Y+20))
     $projection=Writeback-Projection
     if((Writeback-Geometry $projection|ConvertTo-Json -Depth 8 -Compress) -cne $script:writebackProjection){throw 'Native writeback pixel projection changed'}
@@ -802,6 +858,7 @@ function Writeback-Checked([scriptblock]$Action) {
     try{& $Action $projection}finally{
         if((Writeback-Projection|ConvertTo-Json -Depth 20 -Compress) -cne $signature){throw 'Native writeback owned projection changed during sampling or input'}
     }
+    }finally{[CapyRowPointer]::Dispose()}
 }
 function Writeback-Pixels([string]$Name,$Projection) {
     (@(foreach($x in @(128,384,640)){
@@ -814,12 +871,9 @@ function Writeback-Stroke([string]$Device) {
     Writeback-Checked {param($p)
         $context=[CapyDocumentControls]::SetThreadDpiAwarenessContext([IntPtr](-4))
         try{
-            [CapyRowPointer]::Initialize([uint32]$review.Id)
-            try{
                 $point=Writeback-Point 96 128 $p;[CapyRowPointer]::Down($Device,$point[0],$point[1])
                 try{foreach($x in 1..32){$point=Writeback-Point (96+18*$x) 128 $p;[CapyRowPointer]::Move($point[0],$point[1]);Start-Sleep -Milliseconds 8}}finally{[CapyRowPointer]::Up()}
                 [CapyRowPointer]::Verify()
-            }finally{[CapyRowPointer]::Dispose()}
         }finally{[CapyDocumentControls]::SetThreadDpiAwarenessContext($context)|Out-Null}
     }
 }
@@ -899,7 +953,7 @@ if($nativeWriteback){
     try{Native-Writeback}finally{[CapyDocumentControls]::SetThreadDpiAwarenessContext($context)|Out-Null}
     return
 }
-if(!$FailGpu){Color-Workflows}
+if(!$FailGpu -and !$gpuRecovery){Color-Workflows}
 if($focusedColor){
     $moveTile=@((Model).panels|Where-Object id -eq 'toolbar')[0].tiles|Where-Object {$_.resolved_control.command -eq 'move'}|Select-Object -First 1
     if(!$moveTile){throw 'The shared toolbar has no Move command tile'}
@@ -925,6 +979,23 @@ function Import-Start {
 function Import-Idle {
     Wait-Until {$current=Model;$current -and !$current.state.document_file.busy} 'Image import did not finish' 30
     $script:scope=$root
+}
+if($gpuRecovery){
+    Import-Start;Choose-Path $imageSource;Import-Idle
+    Wait-Until {@((Model).state.layers).Count -eq 3 -and (Model).state.layer_tools.editing_layer.object} 'Image layer was not selected'
+    $imported=(Model).state.layer_tools.editing_layer.id
+    Wait-Until {(Find-Id "layer-$imported-thumbnail").Current.ItemStatus -eq 'Ready'} 'Imported image thumbnail did not arrive' 15
+    Invoke-Control 'Apply transform'
+    Wait-Until {((Model).state.commands|Where-Object id -eq 'undo').enabled} 'Placement did not enter undo history'
+    File-Command 'save_document';Picker 'Save As';Choose-Path $first;Idle
+    Wait-Until {(Test-Path -LiteralPath $first) -and (Model).state.document_file.location.uri -eq $first -and !(Model).state.document_file.modified} 'GPU recovery seed did not save cleanly'
+    Draw
+    Test-GpuRecovery
+    File-Command 'close_document';Confirm-Dialog;Invoke-Control 'Discard Changes'
+    Wait-Closed 'GPU recovery review close did not finish'
+    if((Get-Item -LiteralPath $stderr).Length){throw 'GPU recovery native review reported stderr'}
+    @{journey=$Journey;gpu_recovery='two replacements, queued and active pen strokes, identical exported pixels, thumbnails and Undo/Redo passed';evidence=$run}|ConvertTo-Json
+    return
 }
 $opacity=Find-Id 'layer-opacity'
 $opacity.SetFocus();$opacity.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('55')
@@ -1049,59 +1120,7 @@ $script:scope=$root
 File-Command 'close_document';Confirm-Dialog;Invoke-Control 'Discard Changes';$script:scope=$root;Idle
 Wait-Until {(Model).state.document_file.location.uri -eq $first} 'Closing the photo did not return to the drawing'
 
-if($RecoverGpu){
-    function Signature {
-        $state=(Model).state
-        foreach($field in @('revision','export_uri')){$state.document_file.PSObject.Properties.Remove($field)}
-        @($state.document_file,$state.camera,$state.workspace,$state.brush)|ConvertTo-Json -Depth 80 -Compress
-    }
-    $png={
-        Combo-Select (Find-Id 'export-format') {$_.Current.Name -like 'PNG*'}
-        Wait-Until {$format=Find-Id 'export-format';$format -and (Combo-Value $format) -like 'PNG*'} 'Export did not choose PNG'
-    }
-    $reference=Join-Path $run 'Recovered-0.png'
-    $script:scope=$root;File-Command 'export_document' $png;Picker 'Save As';Choose-Path $reference;Idle
-    Wait-Until {Test-Path -LiteralPath $reference} 'The drawing did not export before GPU recovery'
-    $exportHash=(Get-FileHash -LiteralPath $reference -Algorithm SHA256).Hash
-    $beforeRecovery=Signature
-    foreach($attempt in 1..2){
-        $generation=(Model).windows_gpu_generation
-        $documentRevision=(Model).state.document_file.revision
-        $script:scope=$root
-        Invoke-Control 'Undo'
-        Wait-Until {(Model).state.document_file.revision -gt $documentRevision} 'Pre-recovery Undo did not finish'
-        $undone=(Model).state.document_file.revision
-        if($attempt -eq 2){
-            Wait-Until {(Stroke-InkPixels) -eq 0} 'Pre-recovery Undo did not reach the canvas'
-            Invoke-Control 'Test pen begin'
-            Wait-Until {(Stroke-InkPixels) -ge 100} 'Active pen stroke did not render before removal'
-            & (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $review.Id -Output (Join-Path $run 'active-pen-before-loss.png') -ClientOnly *> (Join-Path $run 'active-pen-before-loss.json')
-            Start-GpuLoss @('Test pen end')
-        }else{
-            Start-GpuLoss @('Test pen')
-        }
-        Wait-Until {(Model).windows_gpu_generation -eq $generation+1 -and (Model).brush_ready} 'GPU reconstruction did not finish' 60
-        Wait-Until {(Model).state.document_file.revision -gt $undone} 'GPU recovery lost queued pen samples'
-        $documentRevision=(Model).state.document_file.revision
-        Wait-Until {(Signature) -eq $beforeRecovery} 'GPU recovery changed document, history, camera, workspace or brush'
-        $status=Find-Id 'canvas-status'
-        if($status -and !$status.Current.IsOffscreen){throw ('GPU recovery reports an error: '+$status.Current.Name)}
-        $restored=Join-Path $run ("Recovered-$attempt.png")
-        File-Command 'export_document' $png;Picker 'Save As';Choose-Path $restored;Idle
-        Wait-Until {Test-Path -LiteralPath $restored} 'Recovered GPU did not export'
-        if((Get-FileHash -LiteralPath $restored -Algorithm SHA256).Hash -ne $exportHash){
-            throw 'GPU reconstruction changed exported pixels'
-        }
-        $script:scope=$root
-        Invoke-Control 'Undo'
-        Wait-Until {(Model).state.document_file.revision -ne $documentRevision} 'Undo after reconstruction did not change the document'
-        $undoRevision=(Model).state.document_file.revision
-        Invoke-Control 'Redo'
-        Wait-Until {(Model).state.document_file.revision -ne $undoRevision -and (Signature) -eq $beforeRecovery} 'Redo after reconstruction did not restore the drawing'
-        Wait-Until {$thumbnail=Find-Id "layer-$imported-thumbnail";$thumbnail -and $thumbnail.Current.ItemStatus -eq 'Ready'} 'Imported image thumbnail did not recover' 15
-    }
-    & (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $review.Id -Output (Join-Path $run 'gpu-recovered.png') -ClientOnly *> (Join-Path $run 'gpu-capture.json')
-}
+if($RecoverGpu){Test-GpuRecovery}
 
 File-Command 'save_document';Idle
 Wait-Until {$current=Model;$current -and !$current.state.document_file.modified} 'Save to existing location did not clear the captured checkpoint'

@@ -101,6 +101,12 @@ including older gaps; a port does not require an unrestricted historical audit.
   code; unrelated upstream commits don't invalidate them. Investigate failures
   with evidence and a specific hypothesis before retrying; reuse existing
   automation.
+- Run `exercise-vector-layers.ps1 -Journey editing` for native vector arrow and
+  Shift-arrow nudges, Alt-drag copying, rotation, clipboard, front/back arrangement
+  and mask painting. Each authored edit must restore its exact drawing checkpoint
+  and sampled artwork pixels with one Undo and one Redo. Run this scope in both
+  themes through `test-desktop.ps1`; retain its per-edit history JSON and composed
+  captures. The default and `-ToolsOnly` scopes retain their existing journeys.
 - Run `exercise-liquify-pixels.ps1` for the focused Liquify seed, deformation,
   history, Adjust, Reset and session checks; it reuses an existing private desktop
   and otherwise creates one with a 900-second deadline. The idle-brush fixture's
@@ -109,6 +115,12 @@ including older gaps; a port does not require an unrestricted historical audit.
   under `test-desktop.ps1` with a 600-second deadline per journey and repeat each
   in both themes. Omitting `-Journey` retains the full suite; a focused result
   reports only its completed journeys.
+- Use `exercise-workspace-layout.ps1 -Journey diagnostics-fps` under the private
+  desktop runner to check Diagnostics independently of preset grouping and menu
+  layout. It retains submitted-frame counts, cached pan, idle zero FPS, localized
+  row identity, GPU recovery, resize and visibility/Undo assertions. The default
+  `all` journey still runs the complete workspace suite; repeat either scope in
+  light and dark themes.
 
 ## 5. Close and commit
 
