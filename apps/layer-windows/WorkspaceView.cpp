@@ -62,7 +62,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     std::unique_ptr<WorkspaceExpansion> expansion;
     struct Measurement {double tab=36,content=320;J scroll;};
     std::map<std::wstring,Measurement> measurements;
-    struct Offscreen {std::wstring key;std::shared_ptr<WorkspaceData> data;std::unique_ptr<PanelBody> body;};
+    struct Offscreen {std::wstring key;std::shared_ptr<WorkspaceData> data;std::unique_ptr<PanelBody> body;uint64_t publication=0;};
     std::map<std::wstring,Offscreen> offscreen;
     Canvas measureHost;
     hstring lastMeasurements;
@@ -667,6 +667,8 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
                 auto panelId=value.GetString();if(panelId==active)continue;
                 auto panel=find(array(data->model,L"panels"),L"id",panelId);if(!panel.Size()||array(panel,L"tiles").Size())continue;
                 std::wstring name(panelId);keep.insert(name);auto& copy=offscreen[name];
+                if(copy.data){copy.data->state=data->state;copy.data->model=data->model;}
+                if(!copy.body||copy.publication!=fullUpdates){
                 auto key=std::wstring(panelStructure(panel).Stringify());
                 if(copy.key!=key||!copy.body){
                     auto inert=std::make_shared<WorkspaceData>(*data);
@@ -677,7 +679,9 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
                     body->Root().Width(width);body->Apply(true);measureHost.Children().Append(body->Root());
                     if(copy.body){uint32_t at=0;if(measureHost.Children().IndexOf(copy.body->Root(),at))measureHost.Children().RemoveAt(at);}
                     copy.data=inert;copy.body=std::move(body);copy.key=key;
-                }else{copy.data->state=data->state;copy.data->model=data->model;copy.body->Apply(true);}
+                }else copy.body->Apply(true);
+                copy.publication=fullUpdates;
+                }
                 if(copy.body->Root().Width()!=width)copy.body->Root().Width(width);
                 double height=copy.body->ContentHeight();
                 if(std::isfinite(height)&&height>=0&&measurements.contains(name)){

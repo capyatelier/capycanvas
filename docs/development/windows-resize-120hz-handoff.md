@@ -31,6 +31,14 @@ The frozen 60 Hz diagnostic and its limits are in
 Its 5.1–5.5 ms Paint publication mean excludes deferred glass and other WinUI
 layout/composition work. It does not establish a 120 Hz frame budget.
 
+The fast two-axis follow-up still reproduces grow-only black right/bottom regions
+that clear on release. Retaining unchanged layout callbacks removes an 80% idle
+UI feedback loop, but rapid resizing still uses 88–92% UI CPU with only 27–28
+native window-size changes/s on the 60 Hz laptop. Treat the landed improvements
+as partial. The earlier approximately 58 renderer calls/s did not measure native
+UI cadence. Prioritize the remaining repeated bridge/background and layout work,
+and inspect the composed native controls as well as the canvas.
+
 Previous `artifacts/windows/resize-investigation/` files, binaries and temporary
 UI timing probes are local and are **not delivered by Git**. Build on the new
 computer and use the tracked helpers below. No temporary probes remain in main.
@@ -103,14 +111,20 @@ Keep the fixture limited to these steps:
    size is a separate diagnostic. Also run the
    ordinary working size on the 120 Hz monitor.
 4. Prime one native edge drag, return to the starting bounds, and let shader and
-   layout work settle. Measure three six-second horizontal edge drags with
-   reversals. Use the native non-client resize border and OS mouse input, retain
+   layout work settle. Record one second of idle UI-thread CPU before input.
+   Measure three six-second drags, including bottom-right growth beyond the
+   initial size and rapid two-axis reversals. On a sufficiently large display,
+   include the 1100 × 750 to 2100 × 1350 range used in the black-region repro.
+   Select workspaces before narrowing the window. Use the native non-client
+   resize border and OS mouse input, retain
    foreground PID/HWND checks, and release the button in `finally`.
 5. Pace requested positions at 240 Hz with actual QPC timestamps, no catch-up
    bursts, and no fixed 16 ms sleep. The old local runner used 16 ms producer
    steps; that limits changing input to about 62.5/s and cannot test sustained
    120 Hz geometry. Log achieved producer cadence and actual window bounds;
    fail the workload if injection is too slow or the window does not resize.
+   Recheck the actual corner and foreground ownership before each contact;
+   a missed resize handle invalidates that contact, even if input was delivered.
    Keep endpoints inside a range that preserves the same panel arrangement.
 6. Separately measure programmatic resize over the same width range. Treat it as
    a diagnostic, not a replacement for interactive edge dragging. Record buffer
@@ -121,6 +135,11 @@ Keep the fixture limited to these steps:
    runtime identities and screenshots before/after, outside the timing windows.
    Verify retained controls, readable content, correct viewport scale and settled
    shadows/glass. Confirm the window still paints and closes normally afterward.
+
+Use a separate diagnostic capture pass during growth and reversals. Before/after
+images miss transient black regions. Sample the interior inside the real window
+border, compare native content bounds against it, and record maximum black area
+and recovery after release. Keep capture overhead out of the qualification run.
 
 Run the fixture through `test-desktop.ps1` using its `-Script`, `-Parameters`
 hashtable and `-TimeoutSeconds` arguments. Reuse its fresh desktop rather than

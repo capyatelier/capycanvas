@@ -252,6 +252,11 @@ new content, collapse and completed gestures retain full model publication.
 Header item measurements at an unchanged bar height also retain content;
 height changes publish the complete model and its new clearance.
 The presentation mailbox applies the latest required layout before later motion.
+Inactive panel measurement reapplies bindings on an accepted full publication;
+width changes still update and measure the retained body. Collapsed columns
+retain their path while its size and corner radii are unchanged. GPU readiness
+updates independently of that geometry cache. Layout observers must not replace
+identical geometry or rebind unchanged hidden controls on every notification.
 WinUI attaches a composition-surface handle during creation and recovery.
 Buffer configuration and resize stay on the render owner, outside the UI thread.
 Buffer capacity grows in 128-pixel blocks; source rectangles and presentation

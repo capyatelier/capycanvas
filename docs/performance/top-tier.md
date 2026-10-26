@@ -244,7 +244,7 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 | Web tool bubble drag through four neighbours | 120 | Unmeasured after the bubble release fixes; desktop browser journeys do not qualify the reference tablet | [Web checks](../development/web.md#tests), 2026-10-24 |
 | GTK Tool Set hover and press animation | 120 | Desktop diagnostic: **117.76 changing-color presents/s**, 116.67–118.08 per case; pooled gap p99 16.646 ms. Reference hardware unmeasured | [GTK tool caption hover](#gtk-tool-caption-hover), 2026-10-26 |
 | Panel or column resize | 120 | Expanding GTK divider desktop diagnostic: **54.49/s**, p99 41.689 ms; misses the 114 Hz floor. **Desktop diagnostic misses.** GTK GPU joins: 81.59–112.27 changing-geometry presents/s at 1×; 38.96–92.31 at 2×, worst p99 74.986 ms. Reference-tier qualification remains unset. Web Navigator: 30.00–30.64 Chrome surface presents/s; p99 50.00–58.34 ms | [Web Navigator layout](#web-navigator-layout), 2026-10-19; [GTK Color resize](#gtk-color-panel-resize), 2026-10-10; [GTK column bridge diagnostic](#gtk-column-bridge-diagnostic), 2026-10-25; [GTK Tool Set density](#gtk-tool-set-density), 2026-10-26; [GTK toolbar dividers](#gtk-toolbar-divider-resize), 2026-10-26 |
-| Windows window resize | 120 | Unqualified; local 60 Hz diagnostic: Paint UI publication 5.1–5.5 ms, Photo 5.9 ms; measured Paint UI busy time 43.5–43.7%. Presented-frame timing and reference hardware unmeasured | [Windows window resize](#windows-window-resize), 2026-10-26 UTC |
+| Windows window resize | 120 | Unqualified; local 60 Hz fast corner resize still visibly misses: native size changes 27–28/s, UI CPU 88–92%, transient black regions. Publication-only timings do not establish resize performance | [Windows window resize](#windows-window-resize), 2026-10-26 |
 | Pen pressure utility and curve drag | 120 | **Unqualified.** Current GTK desktop panel 119.20–119.40 presents/s, p99 up to 9.207 ms; curve 120.00, p99 up to 8.470 ms; reference tablet unmeasured | [GTK pen pressure utility](#gtk-pen-pressure-utility), 2026-10-10 UTC |
 | Windows tool bubble drag through four neighbours | 120 | Unmeasured on reference hardware; Surface Pro / Adreno X1-85 functional checks do not qualify timing (PresentMon ETW access denied) | [Windows tool bubbles](../development/windows.md#tool-bubbles) |
 | Windows HDR color bubble drag and intensity scrub | 120 | Unmeasured on reference hardware; native input and pixel checks do not qualify presentation timing (PresentMon ETW access denied) | [Windows tool bubbles](../development/windows.md#tool-bubbles) |
@@ -5265,3 +5265,44 @@ glass traversal and native layout together still need measurement at 120 Hz.
 The publication mean alone does not establish an 8.33 ms frame budget. Exact binary hashes,
 raw samples, captures, retained-control checks and comparison scripts remain
 under `artifacts/windows/resize-investigation/`.
+
+### Fast two-axis growth
+
+A composed-capture diagnostic on the same computer reproduces stale native
+content and black right/bottom regions while enlarging the window; they clear
+after release. The earlier 16 ms horizontal producer stayed within retained
+capacity, captured only settled images, and did not measure the entire UI
+thread. Its approximately 58 renderer calls/s accompanied only about 25 native
+workspace placement passes/s. Neither count establishes smooth resizing.
+
+A controlled x64 C++ comparison at `07c5c8e57` uses identical frozen Rust from
+the previous desktop diagnostic, so it isolates native changes rather than
+qualifying a complete current-main build. The drawing is 2005 × 1504 in Sketch,
+with default glass. Six-second bottom-right growth and rapid reversals span
+1100 × 750 to 2100 × 1350; actual input delivery is approximately 207–209 Hz.
+Bounded composed captures run on a separate thread. UI CPU comes from
+`GetThreadTimes`; size changes are observed with `GetWindowRect`.
+
+| Diagnostic | Baseline | Retained layout callbacks |
+| --- | --- | --- |
+| Settled UI CPU, one second without input | 80.2% | 0.0% |
+| Growth: native size changes/s | 18.3 | 28.5 |
+| Growth: UI CPU | 91.4% | 88.2% |
+| Reversal: native size changes/s | 17.0 | 27.5 |
+| Reversal: UI CPU | 95.5% | 92.1% |
+| Maximum sampled black interior | 54.7% | 43.2% |
+| Reversal captures with more than 1% black interior | 9/48 | 18/48 |
+
+Retaining unchanged sidebar path geometry and applying inactive-panel bindings
+only on full publications removes the idle layout feedback loop. It improves
+native size cadence but **does not fix the black regions or meet the resize
+target**. Capture timings vary with native progress; the peak reduction is not
+evidence of a black-region fix. The baseline shrink-only contact missed its
+corner and is invalid; no paired shrink comparison is reported.
+
+Focused functional checks in both themes preserve finite inactive Proof and
+Diagnostics measurements through narrow/wide resizing, tab reactivation, and
+GPU panel acknowledgement convergence. Exact native control-value matching and
+a forced acknowledgement at unchanged bounds remain unverified. Native size
+counts are not displayed-frame timestamps. Raw samples, images, hashes and the
+controlled comparison remain under `artifacts/windows/resize-followup/`.

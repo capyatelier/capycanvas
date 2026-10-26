@@ -25,6 +25,13 @@ struct Column:std::enable_shared_from_this<Column>{
     double reported=0;
     bool applying=false;
     std::array<float,4> corners{SurfaceRadius,SurfaceRadius,SurfaceRadius,SurfaceRadius};
+    std::array<float,6> surfaceShape{};
+    void shape(float width,float height){
+        std::array<float,6> next{width,height,corners[0],corners[1],corners[2],corners[3]};
+        if(next==surfaceShape)return;
+        surfaceShape=next;surface.Data(squircleRectangle(width,height,corners));
+        background.CornerRadius({corners[0]*CornerFit,corners[1]*CornerFit,corners[2]*CornerFit,corners[3]*CornerFit});
+    }
     void init(){
         auto weak=weak_from_this();
         background.Background(clear());background.CornerRadius({SurfaceRadius*CornerFit,SurfaceRadius*CornerFit,SurfaceRadius*CornerFit,SurfaceRadius*CornerFit});background.Child(frame);
@@ -61,8 +68,7 @@ struct Column:std::enable_shared_from_this<Column>{
         if(source.Size()){auto square=sourceCorners(data,source,bounds);for(int i=0;i<4;++i)if(square[i])corners[i]=0;}
         auto open=object(geometry,L"open");
         auto facing=str(source,L"direction"),joined=str(object(source,L"anchor"),L"origin");
-        surface.Data(squircleRectangle(float(num(bounds,L"width")),float(num(bounds,L"height")),corners));
-        background.CornerRadius({corners[0]*CornerFit,corners[1]*CornerFit,corners[2]*CornerFit,corners[3]*CornerFit});
+        shape(float(num(bounds,L"width")),float(num(bounds,L"height")));
         place(grip,local(object(geometry,L"grip"),bounds));place(scroll,local(content,bounds));
         double offset=0;
         for(auto entry:array(object(object(data->state,L"workspace"),L"layout"),L"column_scroll")){
@@ -146,8 +152,7 @@ struct Column:std::enable_shared_from_this<Column>{
             auto r=pair.GetArrayAt(1);found->second.CornerRadius({r.GetNumberAt(0)*CornerFit,r.GetNumberAt(1)*CornerFit,r.GetNumberAt(2)*CornerFit,r.GetNumberAt(3)*CornerFit});}
         gpu=false;for(auto value:array(frame,L"bridges"))if(value.GetArray().GetNumberAt(0)==id)gpu=ready;
         surface.Opacity(gpu?0:1);
-        surface.Data(squircleRectangle(float(background.ActualWidth()),float(background.ActualHeight()),corners));
-        background.CornerRadius({corners[0]*CornerFit,corners[1]*CornerFit,corners[2]*CornerFit,corners[3]*CornerFit});
+        shape(float(background.ActualWidth()),float(background.ActualHeight()));
     }
     void collectGlass(A& regions,UIElement const& reference)const{
         if(!gpu)appendGlass(regions,background,reference,{corners[0],corners[1],corners[2],corners[3]},true);
