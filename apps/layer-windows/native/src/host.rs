@@ -76,6 +76,7 @@ pub struct CapyHost {
     glass: Glass,
     presented_panel_revision: Option<u64>,
     published_panel_revision: Option<u64>,
+    published_glass_count: usize,
     scale: f32,
     blank_presented: bool,
     prediction_frames: Option<[u64; 2]>, // opt-in, accumulated across document switches
@@ -180,6 +181,7 @@ impl CapyHost {
             glass: Default::default(),
             presented_panel_revision: None,
             published_panel_revision: None,
+            published_glass_count: 0,
             scale,
             blank_presented: false,
             prediction_frames: std::env::var_os("CAPY_LATENCY_TRACE").map(|_| [0; 2]),
@@ -1035,6 +1037,7 @@ pub struct CapySnapshotInfo {
     localization: CapySnapshotRange,
     navigation_cursor: CapySnapshotRange,
     brush_ready: CapySnapshotRange,
+    glass: CapySnapshotRange,
 }
 impl CapySnapshotInfo {
     fn read(bytes: &[u8]) -> Result<Self, serde_json::Error> {
@@ -1049,6 +1052,7 @@ impl CapySnapshotInfo {
             localization: fields.nonempty_object_range("localization")?.into(),
             navigation_cursor: fields.range("navigation_cursor").into(),
             brush_ready: fields.range("brush_ready").into(),
+            glass: fields.range("windows_glass").into(),
         })
     }
 }
@@ -1142,11 +1146,11 @@ pub unsafe extern "C" fn capy_snapshot(host: u64, info: *mut CapySnapshotInfo) -
             }),
         };
         let extension = serde_json::to_vec(&metadata).map_err(err)?;
+        let glass_changed=host.published_panel_revision!=host.presented_panel_revision||host.published_glass_count!=host.glass.count();
         let update=host.native.take_layout_update_bytes().map_err(err)?;
         let bytes=match update {
             Some(bytes)=>Some(layer_host::extend_update(bytes,&extension)),
-            None if host.published_panel_revision!=host.presented_panel_revision=>Some(serde_json::to_vec(&serde_json::json!({
-                "workspace_update":host.native.session.workspace_update(),
+            None if glass_changed=>Some(serde_json::to_vec(&serde_json::json!({
                 "windows_glass":{"regions":host.glass.count(),"frames":host.presenter.as_ref().map_or([0;2],|p|p.backdrop_frames()),
                     "panel_revision":host.presented_panel_revision},
             })).map_err(err)?),
@@ -1155,6 +1159,7 @@ pub unsafe extern "C" fn capy_snapshot(host: u64, info: *mut CapySnapshotInfo) -
         if let Some(bytes) = bytes {
             host.localization_generation = Some(generation);
             host.published_panel_revision=host.presented_panel_revision;
+            host.published_glass_count=host.glass.count();
             let routing = if info.is_null() { None } else { Some(CapySnapshotInfo::read(&bytes).map_err(err)?) };
             let snapshot = CString::new(bytes).map_err(err)?;
             if let Some(routing) = routing { unsafe { *info = routing; } }
@@ -1719,7 +1724,13 @@ mod snapshot_routing_tests {
         let first=(4*std::mem::size_of::<u32>()+a-1)&!(a-1);
         assert_eq!(std::mem::offset_of!(CapySnapshotInfo,camera),first);
         assert_eq!(std::mem::offset_of!(CapySnapshotInfo,brush_ready),first+6*std::mem::size_of::<usize>());
-        assert_eq!(std::mem::size_of::<CapySnapshotInfo>(),first+8*std::mem::size_of::<usize>());
+        assert_eq!(std::mem::offset_of!(CapySnapshotInfo,glass),first+8*std::mem::size_of::<usize>());
+        assert_eq!(std::mem::size_of::<CapySnapshotInfo>(),first+10*std::mem::size_of::<usize>());
+        for bytes in [br#"{"camera":{},"windows_glass":{"panel_revision":3}}"#.as_slice(),
+            br#"{"command_search":null,"windows_glass":{"panel_revision":3}}"#] {
+            let info=CapySnapshotInfo::read(bytes).unwrap();
+            assert_eq!(&bytes[info.glass.offset..info.glass.offset+info.glass.length],br#"{"panel_revision":3}"#);
+        }
     }
     #[test]
     fn snapshot_error_resets_descriptor_without_a_host() {
@@ -1727,7 +1738,7 @@ mod snapshot_routing_tests {
         assert_eq!(unsafe { capy_snapshot(0,&mut info) },0);
         assert_eq!((info.full,info.workspace,info.search,info.layout),(0,0,0,0));
         assert!(unsafe { capy_surface_handle(0) }.is_null());
-        for range in [info.camera,info.localization,info.navigation_cursor,info.brush_ready] {
+        for range in [info.camera,info.localization,info.navigation_cursor,info.brush_ready,info.glass] {
             assert_eq!((range.offset,range.length),(0,0));
         }
         assert_eq!(unsafe { capy_snapshot(0,std::ptr::null_mut()) },0);

@@ -350,8 +350,12 @@ void CanvasWindow::Resize() {
     PublishGlass();
 }
 void CanvasWindow::PublishGlass(){
-    dispatcher.TryEnqueue([weak=weak_from_this()]{
-    auto self=weak.lock();if(!self||self->closing||self->closed||!self->panel||!self->workspace)return;
+    if(glassPosted||closing||closed||!panel||!workspace)return;
+    glassPosted=true;
+    if(!dispatcher.TryEnqueue([weak=weak_from_this()]{
+    auto self=weak.lock();if(!self)return;
+    self->glassPosted=false;
+    if(self->closing||self->closed||!self->panel||!self->workspace)return;
     if(self->header)self->header->SetDrawerSources(self->workspace->DrawerSources());
     if(self->captionRegionsValid){
         auto bubbles=self->workspace->OverlayInputRegions(self->panel);auto scale=self->root.XamlRoot().RasterizationScale();auto input=self->captionInputRegions;
@@ -371,7 +375,7 @@ void CanvasWindow::PublishGlass(){
     request.Insert(L"panels",panels);request.Insert(L"panel_revision",CapyUi::N(double(panelRevision)));
     auto json=to_string(request.Stringify());
     if(json==self->lastGlass)return;self->lastGlass=json;self->Send(json,CanvasCommandKind::Glass);
-    });
+    }))glassPosted=false;
 }
 void CanvasWindow::Start() {
     if(renderer.joinable()||closing)return;
@@ -1389,6 +1393,7 @@ void CanvasWindow::Publish(std::string snapshot,CapySnapshotInfo const& info) {
     std::optional<std::string> camera;
     if(info.camera.length)camera="{\"camera\":"+value(info.camera)+"}";
     auto localizationBytes=value(info.localization);
+    auto glass=info.glass.length?"{\"windows_glass\":"+value(info.glass)+"}":"";
     // Explicit local test evidence. This can include user state and is never
     // enabled by ordinary launches.
     if(GetEnvironmentVariableW(L"CAPY_TRACE_UI",nullptr,0)){
@@ -1397,7 +1402,9 @@ void CanvasWindow::Publish(std::string snapshot,CapySnapshotInfo const& info) {
             ",\"window_id\":"+std::to_string(windowId);
         if(full)tracedModel=model;
         else if(info.layout&&tracedModel.HasKey(L"state"))WorkspaceView::MergeLayout(tracedModel,model);
-        if(full||info.layout)TraceState("ui-state",identity+",\"model\":"+to_string(tracedModel.Stringify())+"}");
+        bool glassChanged=info.glass.length&&CapyUi::object(tracedModel,L"windows_glass").Stringify()!=CapyUi::object(model,L"windows_glass").Stringify();
+        if(glassChanged)tracedModel.Insert(L"windows_glass",model.GetNamedValue(L"windows_glass"));
+        if(full||info.layout||glassChanged)TraceState("ui-state",identity+",\"model\":"+to_string(tracedModel.Stringify())+"}");
         if(full||model.HasKey(L"command_search")){
             auto search=full?CapyUi::object(model,L"state").GetNamedValue(L"command_search",Windows::Data::Json::JsonValue::CreateNullValue()):model.GetNamedValue(L"command_search");
             TraceState("search-state",identity+",\"search\":"+to_string(search.Stringify())+"}");
@@ -1417,7 +1424,7 @@ void CanvasWindow::Publish(std::string snapshot,CapySnapshotInfo const& info) {
     bool post;
     {
         std::lock_guard lock(mutex);if(closing)return;
-        snapshots.Push(std::move(snapshot),full,info.workspace!=0,std::move(camera),info.search!=0,std::move(localizationBytes),info.layout!=0);
+        snapshots.Push(std::move(snapshot),full,info.workspace!=0,std::move(camera),info.search!=0,std::move(localizationBytes),info.layout!=0,std::move(glass));
         post=!snapshotPosted;snapshotPosted=true;
     }
     if(post)dispatcher.TryEnqueue([weak=weak_from_this()]{if(auto self=weak.lock())self->ApplyPending();});
@@ -1430,15 +1437,21 @@ void CanvasWindow::ApplyPending() {
         batch=snapshots.Take();
     }
     try {
+        auto apply=[&](std::string const& bytes){
+            auto model=Windows::Data::Json::JsonObject::Parse(to_hstring(bytes));
+            if(model.HasKey(L"windows_glass"))model.Remove(L"windows_glass");
+            workspace->Apply(model);
+        };
         if(!batch.full.empty()){
             auto model=Windows::Data::Json::JsonObject::Parse(to_hstring(batch.full));
             if(!batch.localization.empty())model.Insert(L"localization",Windows::Data::Json::JsonObject::Parse(to_hstring(batch.localization)));
             ApplyModel(model);
         }
-        if(!closing&&!batch.layout.empty())workspace->Apply(Windows::Data::Json::JsonObject::Parse(to_hstring(batch.layout)));
-        if(!closing&&!batch.workspace.empty())workspace->Apply(Windows::Data::Json::JsonObject::Parse(to_hstring(batch.workspace)));
-        if(!closing&&!batch.camera.empty())workspace->Apply(Windows::Data::Json::JsonObject::Parse(to_hstring(batch.camera)));
-        if(!closing&&!batch.search.empty())workspace->Apply(Windows::Data::Json::JsonObject::Parse(to_hstring(batch.search)));
+        if(!closing&&!batch.layout.empty())apply(batch.layout);
+        if(!closing&&!batch.workspace.empty())apply(batch.workspace);
+        if(!closing&&!batch.camera.empty())apply(batch.camera);
+        if(!closing&&!batch.search.empty())apply(batch.search);
+        if(!closing&&!batch.glass.empty())workspace->Apply(Windows::Data::Json::JsonObject::Parse(to_hstring(batch.glass)));
     } catch(hresult_error const& error) {Fail(to_string(error.message()));}
 }
 

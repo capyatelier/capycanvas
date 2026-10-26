@@ -127,6 +127,7 @@ private:
     winrt::Microsoft::UI::Xaml::Controls::Grid root;
     CanvasSnapshotMailbox snapshots;
     bool snapshotPosted=false;
+    bool glassPosted=false;
     void UpdateNavigationCursor();
     void Publish(std::string snapshot, CapySnapshotInfo const& info);
     void ApplyPending();

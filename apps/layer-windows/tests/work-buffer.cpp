@@ -35,9 +35,10 @@ int main() {
     penSources.Forget(7);assert(!penSources.Describe(8,false));
     assert(penSources.Update(7,"physical-pen"));assert(!penSources.Describe(7,false));
     std::cout<<"Pen sources register again when drawing sessions or epochs change\n";
-    static_assert(offsetof(CapySnapshotInfo,camera)==((3*sizeof(uint32_t)+alignof(size_t)-1)&~(alignof(size_t)-1)));
+    static_assert(offsetof(CapySnapshotInfo,camera)==((4*sizeof(uint32_t)+alignof(size_t)-1)&~(alignof(size_t)-1)));
     static_assert(offsetof(CapySnapshotInfo,brush_ready)==offsetof(CapySnapshotInfo,camera)+6*sizeof(size_t));
-    static_assert(sizeof(CapySnapshotInfo)==offsetof(CapySnapshotInfo,camera)+8*sizeof(size_t));
+    static_assert(offsetof(CapySnapshotInfo,glass)==offsetof(CapySnapshotInfo,camera)+8*sizeof(size_t));
+    static_assert(sizeof(CapySnapshotInfo)==offsetof(CapySnapshotInfo,camera)+10*sizeof(size_t));
 #ifdef _WIN32
     auto traceFolder=std::filesystem::temp_directory_path()/(L"capy-trace-"+std::to_wstring(GetCurrentProcessId())+L"-"+std::to_wstring(GetTickCount64()));
     assert(std::filesystem::create_directory(traceFolder));
@@ -330,6 +331,15 @@ int main() {
     snapshots.Push("motion G",false,true);
     shown=snapshots.Take();
     assert(shown.full=="models E"&&shown.search=="search open"&&shown.workspace=="motion G");
+    snapshots.Push("search + glass 1",false,false,{},true,{},false,"glass 1");
+    snapshots.Push("layout + glass 2",false,true,{},false,{},true,"glass 2");
+    snapshots.Push("camera + glass 3",false,false,"camera 3",false,{},false,"glass 3");
+    shown=snapshots.Take();
+    assert(shown.search=="search + glass 1"&&shown.layout=="layout + glass 2"&&shown.camera=="camera 3"&&shown.glass=="glass 3");
+    snapshots.Push("glass 4",false,false,{},false,{},false,"glass 4");
+    snapshots.Push("replacement model + glass 5",true,true,{},false,{},false,"glass 5");
+    shown=snapshots.Take();
+    assert(shown.full=="replacement model + glass 5"&&shown.glass=="glass 5"&&shown.search.empty());
     snapshots.Push("search query",false,false,{},true);
     snapshots.Push("models F (search closed)",true,true);
     shown=snapshots.Take();

@@ -86,6 +86,8 @@ whole client area, including behind the custom title bar.
   changes against retained content revisions. Windows updates native geometry
   without parsing panel content or refreshing unrelated controls. Its mailbox
   retains the latest layout before any subsequent motion and camera updates.
+  Glass topology requests a redraw and compact metadata without invalidating
+  retained content. The UI coalesces queued glass collection requests.
 - **Workers.** File, clipboard, profile, settings and SQLite work runs on workers;
   the render thread polls completions without blocking. Replaced GPU resources
   retire off the render thread.

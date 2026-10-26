@@ -749,9 +749,12 @@ requiring the system-wide long-path setting.
 Drawer and expansion query lifecycle tests live in `layer-host`. Windows
 workspace tests cover native snapshot insets and the JSON/CPU packet boundary.
 Native glass geometry uses `NativeHost::set_glass`: a changed layout requests a
-redraw and republishes host metadata without editing the document. Identical or
+redraw while retaining the UI model, including when the region count changes.
+Windows publishes counts and GPU panel acknowledgements as compact metadata;
+camera and search updates preserve those acknowledgements. Deferred glass
+collection coalesces requests queued before the next traversal. Identical or
 invalid layouts preserve the publication cache. The window-free
-`glass_updates_publish_host_metadata_without_document_edits` regression checks
+`glass_topology_retains_layout_publications_and_document_state` regression checks
 this contract; run `exercise-canvas-bar.ps1` with `-Theme dark` and `-Theme light`
 to check the selection bar's native glass registration and menu actions.
 The same journey checks Adjust attaching Curves to the editing layer with the

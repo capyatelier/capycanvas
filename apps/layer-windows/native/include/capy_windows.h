@@ -131,7 +131,7 @@ __declspec(dllimport) int32_t capy_frame(CapyHost, uint64_t now_ns, uint64_t pre
 typedef struct CapySnapshotRange { size_t offset, length; } CapySnapshotRange;
 typedef struct CapySnapshotInfo {
     uint32_t full, workspace, search, layout;
-    CapySnapshotRange camera, localization, navigation_cursor, brush_ready;
+    CapySnapshotRange camera, localization, navigation_cursor, brush_ready, glass;
 } CapySnapshotInfo;
 __declspec(dllimport) CapyString capy_snapshot(CapyHost, CapySnapshotInfo*);
 __declspec(dllimport) CapyString capy_query(CapyHost, const char* json);

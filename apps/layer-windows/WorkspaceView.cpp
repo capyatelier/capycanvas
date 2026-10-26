@@ -367,12 +367,19 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             if(!publication.Accept(full,revision(update,L"revision"),revision(update,L"model_revision"),revision(update,L"content_revision"),reflow))return false;
             workspaceUpdate=update;
         }
+        if(!full&&!reflow&&snapshot.HasKey(L"windows_glass")){
+            auto previous=num(object(data->model,L"windows_glass"),L"panel_revision",-1);
+            data->model.Insert(L"windows_glass",snapshot.GetNamedValue(L"windows_glass"));
+            if(previous!=num(object(data->model,L"windows_glass"),L"panel_revision",-1)){
+                backgrounds();if(glassChanged)glassChanged();
+            }
+            if(snapshot.Size()==1){tracePresentation();return true;}
+        }
         if(!full&&snapshot.HasKey(L"command_search")){
             data->state.Insert(L"command_search",snapshot.GetNamedValue(L"command_search"));commandSearch->Apply(data->state);
             return true;
         }
         if(!full&&!reflow){
-            if(snapshot.HasKey(L"windows_glass")){data->model.Insert(L"windows_glass",snapshot.GetNamedValue(L"windows_glass"));backgrounds();}
             if(snapshot.HasKey(L"color_preview")){data->colorPreview=object(snapshot,L"color_preview");data->queueColors();}
             else if(WorkspaceData::previewing(data->colorPreview)){data->colorPreview=J{};data->queueColors();}
             if(update.Size()){++motionUpdates;applyMotion(object(update,L"drag"));canvasBar->Dragging(object(update,L"drag").Size()!=0);}
@@ -773,6 +780,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         backgrounds();if(publish)publishOverviews();
     }
     void appendGroupOverviews(A& slots,Group const& group){
+        if(!(group.body&&group.body->navigator)&&!(group.presented.Size()&&group.configuration))return;
         if(!group.frame.IsLoaded()||group.frame.Visibility()!=Visibility::Visible||group.frame.Opacity()<=0)return;
         auto start=slots.Size();auto clip=visibleBounds(group.frame,root);int order=visualOrder(root,group.frame);
         if(group.body&&group.body->navigator){

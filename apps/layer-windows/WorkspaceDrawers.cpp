@@ -494,6 +494,7 @@ struct WorkspaceDrawers::Impl:std::enable_shared_from_this<Impl>{
             auto model=value.GetObject();models[std::to_wstring(uint32_t(num(object(model,L"anchor"),L"column")))]=model;
         }
         auto tool=object(customization,L"drawer");if(tool.Size())models[L"tool"]=tool;
+        if(models.empty()&&drawers.empty()&&!lastFacts.empty())return;
         for(auto const& [id,model]:models)if(!drawers.contains(id)){
             auto drawer=std::make_shared<Drawer>();drawer->data=data;drawer->workspace=root;drawer->gestures=gestures;drawer->id=id;
             auto weak=weak_from_this();auto weakDrawer=std::weak_ptr<Drawer>(drawer);

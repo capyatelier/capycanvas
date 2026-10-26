@@ -281,10 +281,8 @@ pub struct SceneDisplay {
 
 impl NativeHost {
     pub fn set_glass(&mut self, glass: &mut Glass, layout: GlassLayout) -> Result<(), String> {
-        let count = glass.count();
         if glass.set(layout)? {
             self.dirty = true;
-            if count != glass.count() { self.invalidate_snapshot(); }
         }
         Ok(())
     }
@@ -545,7 +543,7 @@ mod tests {
             "arcs":[[x,40,20,6,0.25,1.5,strength]]
         })).unwrap();
         host.set_glass(&mut layer, layout(10., 1.)).unwrap();
-        assert!(host.take_update_bytes().unwrap().is_some());
+        assert!(host.take_update_bytes().unwrap().is_none());
         let mut previous = layer.regions(1.5).to_vec();
         for (x, strength) in [(30.,1.),(30.,0.5),(60.,0.125)] {
             host.dirty = false;
@@ -563,17 +561,18 @@ mod tests {
         host.set_glass(&mut layer, glass(serde_json::json!({"regions":[],"connections":[]})).unwrap()).unwrap();
         assert!(host.dirty);
         assert_eq!(layer.count(), 0);
-        assert!(host.take_update_bytes().unwrap().is_some(), "A changed count must republish host metadata");
+        assert!(host.take_update_bytes().unwrap().is_none(), "Glass topology must retain the UI model");
         assert_eq!(host.session.state().revision, revision);
     }
 
     #[test]
-    fn glass_updates_publish_host_metadata_without_document_edits() {
+    fn glass_topology_retains_layout_publications_and_document_state() {
         let mut host = NativeHost::new(layer_ui::Platform::Windows).unwrap();
         let mut layer = Glass::default();
-        assert!(host.take_update_bytes().unwrap().is_some());
-        assert!(host.take_update_bytes().unwrap().is_none());
+        assert!(host.take_layout_update_bytes().unwrap().is_some());
+        assert!(host.take_layout_update_bytes().unwrap().is_none());
         let revision = host.session.state().revision;
+        let publication = serde_json::to_value(host.session.workspace_update()).unwrap();
         for regions in [
             vec![[10, 20, 100, 50, 8, 8, 8, 8]],
             vec![[10, 20, 100, 50, 8, 8, 8, 8], [50, 80, 200, 40, 8, 8, 8, 8]],
@@ -583,11 +582,9 @@ mod tests {
             host.dirty = false;
             host.set_glass(&mut layer, glass(layout.clone()).unwrap()).unwrap();
             assert!(host.dirty);
-            let bytes = host.take_update_bytes().unwrap().expect("Changed glass publishes host metadata");
-            let metadata = serde_json::to_vec(&serde_json::json!({"windows_glass": {"regions": layer.count()}})).unwrap();
-            let update: serde_json::Value = serde_json::from_slice(&crate::extend_update(bytes, &metadata)).unwrap();
-            assert!(update["state"].is_object());
-            assert_eq!(update["windows_glass"]["regions"], regions.len());
+            assert!(host.take_layout_update_bytes().unwrap().is_none());
+            assert_eq!(layer.count(), regions.len());
+            assert_eq!(serde_json::to_value(host.session.workspace_update()).unwrap(), publication);
             assert_eq!(host.session.state().revision, revision);
             host.dirty = false;
             host.set_glass(&mut layer, glass(layout).unwrap()).unwrap();
