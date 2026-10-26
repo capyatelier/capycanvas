@@ -417,7 +417,9 @@ Dry painting and native color canonicalization mark changed cells; untracked dry
 destinations bind a disabled flag set. A retained compact prediction compares old
 and new RGBA32F bits while writing its complete page. Its surface
 records the source and coordinate of that write. Native-only submissions retain
-the last rendered prediction; visible removal retires prediction-only flags. Cold, rebound, removed and
+the last rendered prediction; visible removal retires prediction-only flags.
+Resident pages that only copy their photo base carry no flags until an edit
+writes them. Cold, rebound, removed and
 unsupported contributions force their affected cells. Unchanged idle refinement
 retains conservative flags until the next source-write frame; changes to the
 view, display admission or authored input prepare them again.

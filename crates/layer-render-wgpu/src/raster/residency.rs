@@ -40,6 +40,12 @@ impl WgpuRasterizer {
             .map(|key| key.coordinate)
     }
 
+    pub(crate) fn base_copy(&self, scene: SceneView<'_>, id: SourceTarget, coordinate: [u32; 2]) -> bool {
+        scene.paint_base(id).is_some_and(|base| source_access::paint_base_contains(base, coordinate))
+            && !self.native_backing(id).is_some_and(|data| data.tiles.contains_key(&TileKey { plane: RasterPlane::Color, coordinate }))
+            && !self.raster.as_ref().and_then(|raster| raster.targets.get(&id)).is_some_and(|target| target.changed.contains(&coordinate))
+    }
+
     /// Forget `target`'s pages, in every plane, where `keep` is false. A
     /// transform that moved every pixel of the target left them empty, so
     /// neither the GPU nor the next publication holds them.

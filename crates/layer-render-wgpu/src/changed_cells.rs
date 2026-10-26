@@ -77,6 +77,7 @@ impl ChangedCells {
             && scene::same_metadata(r,packet);
         let wanted:BTreeSet<_>=r.paint_layers.iter().filter(|l|allowed && cache.native_preview_input(packet,l.id)
             && packet.scene.target_offset(l.id)==[0; 2]).flat_map(|l|l.pages.iter().map(|p|(l.id,p.coordinate)))
+            .filter(|&(id,c)|!r.base_copy(packet.scene,id,c))
             .chain(tiles.iter().zip(packet.dab_batches).filter(|(_,b)|allowed && cache.native_preview_input(packet,b.target)
                 && packet.scene.target_offset(b.target)==[0; 2]).flat_map(|(t,b)|t.iter().map(|t|(b.target,t.coordinate))))
             .chain(r.preview_layer_id.into_iter().filter(|id|!packet.commit_rasters && allowed && r.preview_contribution && cache.native_preview_input(packet,*id))
