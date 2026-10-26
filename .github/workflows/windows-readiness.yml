@@ -11,13 +11,19 @@ on:
         required: false
         type: string
         default: '["vector-layers:default","vector-layers:light","vector-layers:ToolsOnly","vector-edges:default","vector-edges:light","idle-brush:default","idle-brush:light","touch-gestures:ThreeFinger","tool-bubbles:default","tool-bubbles:light-mouse","tool-bubbles:SlidersOnly","header:zen"]'
+      runtime_run_id:
+        description: Reuse the runtime artifact from a run with the same source_ref
+        required: false
+        type: string
 permissions:
   contents: read
+  actions: read
 env:
   CARGO_TERM_COLOR: never
   RUST_VERSION: "1.99.0"
 jobs:
   windows-x64:
+    if: ${{ inputs.runtime_run_id == '' }}
     runs-on: windows-2025
     timeout-minutes: 120
     defaults:
@@ -48,6 +54,7 @@ jobs:
 
   fixtures:
     needs: windows-x64
+    if: ${{ !cancelled() && (needs.windows-x64.result == 'success' || inputs.runtime_run_id != '') }}
     runs-on: windows-2025
     timeout-minutes: 60
     strategy:
@@ -63,10 +70,54 @@ jobs:
         with:
           ref: ${{ inputs.source_ref || github.sha }}
       - run: git rev-parse HEAD
+      - name: Set the private VM display size
+        run: |
+          Add-Type -TypeDefinition @'
+          using System;
+          using System.ComponentModel;
+          using System.Runtime.InteropServices;
+          public static class CapyVmDisplay {
+            const uint UseBitsPerPixel=0x40000, UseWidth=0x80000, UseHeight=0x100000, Fullscreen=4;
+            [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
+            public struct Mode {
+              [MarshalAs(UnmanagedType.ByValTStr, SizeConst=32)] public string DeviceName;
+              public ushort SpecVersion, DriverVersion, Size, DriverExtra;
+              public uint Fields;
+              public int PositionX, PositionY;
+              public uint Orientation, FixedOutput;
+              public short Color, Duplex, YResolution, TTOption, Collate;
+              [MarshalAs(UnmanagedType.ByValTStr, SizeConst=32)] public string FormName;
+              public ushort LogPixels;
+              public uint BitsPerPixel, Width, Height, DisplayFlags, Frequency;
+              public uint IcmMethod, IcmIntent, MediaType, DitherType, Reserved1, Reserved2, PanningWidth, PanningHeight;
+            }
+            [DllImport("user32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+            static extern bool EnumDisplaySettings(string device, int index, ref Mode mode);
+            [DllImport("user32.dll", CharSet=CharSet.Unicode)]
+            static extern int ChangeDisplaySettingsEx(string device, ref Mode mode, IntPtr window, uint flags, IntPtr parameter);
+            static Mode Current() {
+              var mode = new Mode { Size=(ushort)Marshal.SizeOf(typeof(Mode)) };
+              if (!EnumDisplaySettings(null, -1, ref mode)) throw new Win32Exception(Marshal.GetLastWin32Error());
+              return mode;
+            }
+            public static void SetSize(uint width, uint height) {
+              var mode=Current();mode.Fields=UseBitsPerPixel|UseWidth|UseHeight;
+              mode.BitsPerPixel=32;mode.Width=width;mode.Height=height;
+              int result=ChangeDisplaySettingsEx(null,ref mode,IntPtr.Zero,Fullscreen,IntPtr.Zero);
+              if(result!=0)throw new InvalidOperationException("VM display mode rejected: "+result);
+              mode=Current();
+              if(mode.Width!=width||mode.Height!=height)throw new InvalidOperationException("VM display size did not change");
+              Console.WriteLine("VM display: "+mode.Width+"x"+mode.Height+", "+mode.BitsPerPixel+" bpp");
+            }
+          }
+          '@
+          [CapyVmDisplay]::SetSize(2560,1600)
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: windows-x64-readiness-runtime
           path: artifacts/windows/SoftwareAdapter
+          run-id: ${{ inputs.runtime_run_id || github.run_id }}
+          github-token: ${{ github.token }}
       - name: Native fixtures on private desktops
         env:
           LAYER_TEST_SOFTWARE_GPU: "1"

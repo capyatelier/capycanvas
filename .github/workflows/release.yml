@@ -4,10 +4,19 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      windows-packages-only:
+        description: Build only the unsigned Windows packages
+        default: false
+        type: boolean
+      source_ref:
+        description: Full source SHA for a Windows-only package build
+        required: false
+        type: string
 permissions:
   contents: read
 concurrency:
-  group: ${{ github.event_name == 'push' && 'release' || format('release-dry-run-{0}', github.ref) }}
+  group: ${{ github.event_name == 'push' && 'release' || (inputs.windows-packages-only && format('windows-packages-{0}', inputs.source_ref || github.sha) || format('release-dry-run-{0}', github.ref)) }}
   cancel-in-progress: false
 env:
   CARGO_TERM_COLOR: always
@@ -23,6 +32,8 @@ jobs:
       publish: ${{ steps.version.outputs.publish }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.windows-packages-only && inputs.source_ref || github.sha }}
       - id: version
         run: |
           version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml)
@@ -55,12 +66,14 @@ jobs:
           test "$status" = identical || test "$status" = behind
 
   checks:
+    if: ${{ !inputs.windows-packages-only }}
     needs: version
     uses: ./.github/workflows/release-checks.yml
     with:
       rust-version: ${{ needs.version.outputs.rust }}
 
   web:
+    if: ${{ !inputs.windows-packages-only }}
     needs: version
     runs-on: ubuntu-24.04
     steps:
@@ -80,6 +93,7 @@ jobs:
           if-no-files-found: error
 
   flatpak:
+    if: ${{ !inputs.windows-packages-only }}
     needs: version
     runs-on: ubuntu-24.04
     environment: ${{ needs.version.outputs.publish == 'true' && 'release' || '' }}
@@ -110,6 +124,7 @@ jobs:
           if-no-files-found: error
 
   android:
+    if: ${{ !inputs.windows-packages-only }}
     needs: version
     runs-on: ubuntu-24.04
     environment: ${{ needs.version.outputs.publish == 'true' && 'release' || '' }}
@@ -172,6 +187,9 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.windows-packages-only && inputs.source_ref || github.sha }}
+      - run: git rev-parse HEAD
       - run: |
           rustup toolchain install $env:RUST_VERSION --profile minimal --component rust-docs --target ${{ matrix.target }}
           rustup default $env:RUST_VERSION
@@ -216,6 +234,7 @@ jobs:
           if-no-files-found: error
 
   apple:
+    if: ${{ !inputs.windows-packages-only }}
     needs: version
     runs-on: macos-26
     environment: ${{ needs.version.outputs.publish == 'true' && 'release' || '' }}
@@ -347,6 +366,8 @@ jobs:
       - name: Record every job and the tested revision
         env:
           RESULTS: ${{ toJSON(needs) }}
+          SOURCE_REF: ${{ inputs.windows-packages-only && inputs.source_ref || github.sha }}
+          WINDOWS_PACKAGES_ONLY: ${{ inputs.windows-packages-only }}
         run: |
           mkdir report
           python3 - <<'PYCODE'
@@ -354,7 +375,7 @@ jobs:
           results = json.loads(os.environ['RESULTS'])
           publish = os.environ['SIGNED'] == 'true'
           excluded = 'Hardware required: renderer pixel/reference suites, GPU timestamp/timing and pipeline-cache qualification, native canvas UI journeys, physical pen/touch, HDR, device loss and performance. CPU models and Windows WARP tests do not qualify hardware rendering. Signing and store acceptance are exercised only by tag pushes.'
-          report = {'commit': os.environ['GITHUB_SHA'], 'ref': os.environ['GITHUB_REF'], 'publish': publish, 'jobs': {name: job['result'] for name, job in results.items()}, 'hardware_checks': excluded}
+          report = {'commit': os.environ['SOURCE_REF'], 'workflow_commit': os.environ['GITHUB_SHA'], 'ref': os.environ['GITHUB_REF'], 'publish': publish, 'windows_packages_only': os.environ.get('WINDOWS_PACKAGES_ONLY', 'false') == 'true', 'jobs': {name: job['result'] for name, job in results.items()}, 'hardware_checks': excluded}
           pathlib.Path('report/results.json').write_text(json.dumps(report, indent=2) + '\n')
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
               summary.write(f"{'Release' if publish else 'Release dry run'} at `{report['commit']}`\n\n| Job | Result |\n| --- | --- |\n")
@@ -362,7 +383,7 @@ jobs:
                   summary.write(f'| {name} | {result} |\n')
               summary.write('\n' + excluded + '\n')
           PYCODE
-      - if: needs.apple.result == 'success' && needs.web.result == 'success' && needs.flatpak.result == 'success' && needs.android.result == 'success' && needs.windows.result == 'success'
+      - if: needs.windows.result == 'success' && (inputs.windows-packages-only || (needs.apple.result == 'success' && needs.web.result == 'success' && needs.flatpak.result == 'success' && needs.android.result == 'success'))
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: '*-package'
@@ -386,11 +407,12 @@ jobs:
       - name: Require successful checks and packages
         env:
           RESULTS: ${{ toJSON(needs) }}
+          WINDOWS_PACKAGES_ONLY: ${{ inputs.windows-packages-only }}
         run: |
           python3 - <<'PYCODE'
           import json, os, sys
           results = json.loads(os.environ['RESULTS'])
-          required = set(results) - ({'android-publish', 'ipad-publish'} if os.environ['SIGNED'] != 'true' else set())
+          required = {'version', 'windows'} if os.environ.get('WINDOWS_PACKAGES_ONLY', 'false') == 'true' else set(results) - ({'android-publish', 'ipad-publish'} if os.environ['SIGNED'] != 'true' else set())
           sys.exit(any(results[name]['result'] != 'success' for name in required))
           PYCODE
 
