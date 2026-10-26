@@ -4,12 +4,14 @@ struct WorkspaceCollapsedColumns: View {
     @ObservedObject var store: EditorStore
     var body: some View {
         ForEach(store.snapshot["layout"]["collapsed"].array, id: \.workspaceColumnID) { column in
-            ForEach(column["open"]["connections"].array.indices, id: \.self) { index in
-                let connection = column["open"]["connections"][index]
-                DrawerBridge(connection: connection[1]).fill(EditorPalette(source: store.state["palette"]).glassPanel)
-                    .placed(connection[1]["bounds"]).allowsHitTesting(false).zIndex(159)
-                    .modifier(GlassConnection(key: "column:\(column["id"].uint):\(connection[0].string)", connection: connection[1]))
-                    .accessibilityIdentifier("column-connection-\(column["id"].uint)-\(connection[0].string)")
+            if !store.glass.panelColumnConnected(column["id"].uint) {
+                ForEach(column["open"]["connections"].array.indices, id: \.self) { index in
+                    let connection = column["open"]["connections"][index]
+                    DrawerBridge(connection: connection[1]).fill(EditorPalette(source: store.state["palette"]).glassPanel)
+                        .placed(connection[1]["bounds"]).allowsHitTesting(false).zIndex(159)
+                        .modifier(GlassConnection(key: "column:\(column["id"].uint):\(connection[0].string)", connection: connection[1]))
+                        .accessibilityIdentifier("column-connection-\(column["id"].uint)-\(connection[0].string)")
+                }
             }
             WorkspaceCollapsedColumn(store: store, id: column["id"].uint)
                 .environment(\.workspaceLayer, 160).zIndex(160)
@@ -78,6 +80,7 @@ private struct WorkspaceCollapsedColumnContent: View {
                                 store.customize(["type": "toggle_column_drawer", "group": group["group"].raw, "panel": panel["id"].raw])
                             }.modifier(WorkspaceDrag(workspace: store.workspace, item: JSON(["kind": "panel", "panel": panel["id"].raw]),
                                 surface: .tile, context: JSON(["kind": "panel", "panel": panel["id"].raw])))
+                                .modifier(PanelBridgeMeasurement(key: "column-icon:\(column["id"].uint):\(panel["id"].string)"))
                                 .placed(JSON(icon["bounds"].rect.offsetBy(dx: -clip.rect.minX, dy: -clip.rect.minY + offset)))
                                 .accessibilityIdentifier("column-icon-" + panel["id"].string)
                         }
@@ -86,7 +89,9 @@ private struct WorkspaceCollapsedColumnContent: View {
             }.onChange(of: offset) { _, next in
                 if abs(scrollPosition.offset - next) > 0.5 { scrollPosition.scrollTo(y: next) }
             }.environment(\.workspaceClip, clip.rect)
-                .scrollIndicators(.hidden).placed(clip.relative(to: base))
+                .scrollIndicators(.hidden)
+                .modifier(PanelBridgeMeasurement(key: "column-content:\(column["id"].uint)"))
+                .placed(clip.relative(to: base))
             PanelGrip(vertical: true).frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle())
                 .accessibilityElement().accessibilityHidden(false).accessibilityLabel(store.catalog["document_delivery_copy"]["move_column"].string)
                 .modifier(WorkspaceDrag(workspace: store.workspace, item: JSON(["kind": "column", "column": column["id"].raw]),
@@ -98,7 +103,10 @@ private struct WorkspaceCollapsedColumnContent: View {
             .environment(\.editorPalette, palette.glassy)
             .modifier(DrawerContainerSurface(drawers: store.contentDrawers, bounds: column["bounds"].rect,
                 cuts: column["open"]["connections"].array.map { $0[1]["bounds"].rect }, fill: palette.glassPanel,
-                shadow: 4, shadowOpacity: 0.16, extra: openSources, identifier: "collapsed-column-\(column["id"].uint)"))
+                shadow: 4, shadowOpacity: 0.16, extra: openSources,
+                sharedRadii: store.glass.panelColumnRadii(column["id"].uint),
+                gpuSurface: store.glass.panelColumnConnected(column["id"].uint), identifier: "collapsed-column-\(column["id"].uint)"))
+            .modifier(PanelBridgeMeasurement(key: "column:\(column["id"].uint)"))
     }
 
 }
@@ -293,17 +301,22 @@ private struct DrawerContainerSurface: ViewModifier {
     var joined = JSON()
     var excluding: String?
     var extra: [DrawerSource] = []
+    var sharedRadii: [CGFloat]? = nil
+    var gpuSurface = false
     let identifier: String
     func body(content: Content) -> some View {
         let sources = drawers.sources.filter { $0.key != excluding }.map(\.value) + extra
-        let shape = SquircleShape(SquircleShape.surfaceRadius,
-            square: DrawerSource.square(bounds, radius: SquircleShape.surfaceRadius, sources: sources, joined: joined))
+        let shape = sharedRadii.map { SquircleShape(topLeading: $0[0], topTrailing: $0[1], bottomTrailing: $0[2], bottomLeading: $0[3]) }
+            ?? SquircleShape(SquircleShape.surfaceRadius,
+                square: DrawerSource.square(bounds, radius: SquircleShape.surfaceRadius, sources: sources, joined: joined))
         ZStack(alignment: .topLeading) {
-            OutsideShadow(shape: shape, opacity: shadowOpacity, radius: shadow, y: 2,
-                cuts: cuts.map { $0.offsetBy(dx: -bounds.minX, dy: -bounds.minY) })
+            if !gpuSurface {
+                OutsideShadow(shape: shape, opacity: shadowOpacity, radius: shadow, y: 2,
+                    cuts: cuts.map { $0.offsetBy(dx: -bounds.minX, dy: -bounds.minY) })
+            }
             content.clipShape(shape.fittedClip)
-                .background { shape.fill(fill) }
-                .modifier(GlassRegistration(shape: shape))
+                .background { if !gpuSurface { shape.fill(fill) } }
+                .modifier(GlassRegistration(shape: shape, active: !gpuSurface))
                 .accessibilityElement(children: .contain).accessibilityIdentifier(identifier)
         }
     }

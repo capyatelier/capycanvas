@@ -3,6 +3,7 @@ import SwiftUI
 struct WorkspacePanels: View {
     @ObservedObject var store: EditorStore
     @ObservedObject var workspace: WorkspacePresentation
+    @State private var panelBridgeAllocations: [String: PanelBridgeAllocation] = [:]
     private var groups: [JSON] {
         store.snapshot["layout"]["groups"].array.sorted {
             ($0["id"].uint == workspace.expansion["group"].uint ? 1 : 0)
@@ -67,6 +68,14 @@ struct WorkspacePanels: View {
             .onPreferenceChange(WorkspaceSources.self) { workspace.sourceInstances = $0 }
             .onPreferenceChange(PanelSizeFacts.self) { store.panelMeasurements.receive($0) }
             .onChange(of: store.snapshot["panel_measurements"].stableKey) { _, _ in store.panelMeasurements.reconcile() }
+            .onPreferenceChange(PanelBridgeAllocations.self) { allocations in
+                panelBridgeAllocations = allocations
+                store.glass.panelMeasurements(allocations, layout: store.snapshot["layout"])
+            }
+            .onChange(of: store.snapshot["layout"].stableKey) { _, _ in
+                store.glass.panelMeasurements(panelBridgeAllocations, layout: store.snapshot["layout"])
+            }
+            .onChange(of: store.state["palette"]["glass"].stableKey) { _, _ in store.glass.panelTabsChanged() }
             .onPreferenceChange(DrawerTileMeasurements.self) { store.contentDrawers.measureTiles($0) }
             .onPreferenceChange(ColumnDrawerMeasurements.self) { store.contentDrawers.measureColumns($0) }
             .onDisappear { store.contentDrawers.measureColumns([:]); store.contentDrawers.measureTiles([:]) }
@@ -110,6 +119,7 @@ private struct WorkspacePanelGroup: View {
             WorkspacePanelGroupContent(store: store, group: group, expansion: expansion,
                 panels: group["panels"].array.map { store.panel($0.string) })
                 .environment(\.workspaceGesturesEnabled, (!store.snapshot["chrome_hidden"].bool || group["floating"].bool || group["zen_kept"].bool) && (workspace.expansion.isNull || !expansion.isNull))
+                .modifier(PanelBridgeMeasurement(key: "group:\(id)", active: expansion.isNull))
                 .modifier(WorkspacePlacement(motion: store.workspaceMotion, group: group,
                     bounds: expansion.isNull ? group["bounds"] : expansion["bounds"], clipsGroup: true))
                 .allowsHitTesting(workspace.expansion.isNull || !expansion.isNull)
@@ -129,16 +139,21 @@ private struct WorkspacePanelGroupContent: View {
     }
     var body: some View {
         let sources = Array(store.contentDrawers.sources.values)
-        let square = DrawerSource.square(group["bounds"].rect, radius: radius, sources: sources)
-        let shape = SquircleShape(radius, square: square)
+        let connected = expansion.isNull && store.glass.panelGroupConnected(group["id"].uint)
+        let sharedRadii = store.glass.panelGroupRadii(group["id"].uint)
+        let square = sharedRadii == nil ? DrawerSource.square(group["bounds"].rect, radius: radius, sources: sources) : []
+        let shape = sharedRadii.map { SquircleShape(topLeading: $0[0], topTrailing: $0[1], bottomTrailing: $0[2], bottomLeading: $0[3]) }
+            ?? SquircleShape(radius, square: square)
         ZStack(alignment: .topLeading) {
-            if expansion.isNull { OutsideShadow(shape: shape, opacity: 0.16, radius: 4, y: 2) }
+            if expansion.isNull && !connected { OutsideShadow(shape: shape, opacity: 0.16, radius: 4, y: 2) }
             Group {
                 if expansion.isNull {
                     content.clipShape(shape.fittedClip)
                         .environment(\.editorPalette, palette.glassy)
-                        .backgroundPreferenceValue(WorkspaceActiveTab.self) { tab in surface(radius: radius, square: square, tab: tab) }
-                        .modifier(GlassRegistration(shape: shape))
+                        .backgroundPreferenceValue(WorkspaceActiveTab.self) { tab in
+                            if !connected { surface(radius: radius, square: square, tab: tab) }
+                        }
+                        .modifier(GlassRegistration(shape: shape, active: !connected))
                 } else {
                     content.background(palette["panel"])
                         .clipShape(WorkspacePanelShape(expansion: expansion, radius: radius, square: []))

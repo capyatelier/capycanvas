@@ -44,8 +44,8 @@ is drawn above the first group; separators only appear between groups within
 a member. The first tile starts at the member's top edge. Dropping a panel or
 group in the workspace gap immediately above it prepends a group within that
 member while its first group remains unscrolled. Whole-column drags retain the
-gap's stack insertion target. GTK and Windows present this placement and the GPU joins
-below. Web, Android and Apple still need their native alignment and
+gap's stack insertion target. GTK, Windows and Apple present this placement and
+the GPU joins below. Web and Android still need their native alignment and
 bridge-rendering adapters updated to consume the shared geometry.
 
 An open member uses the full available workspace height, aligned with the
@@ -73,6 +73,12 @@ Only that matching revision suppresses the native backing and shadow; controls,
 focus, scrolling and input targets remain native. Missing or retired allocations
 clear the join rather than borrowing another group's bounds. Ordinary individual
 panel drawers retain their shared drawer connection.
+
+Apple uses the same allocation and presentation contract. Swift reports the
+retained group, collapsed-column, content and icon frames in workspace points;
+the shared projection supplies receiver and column radii to Metal. Native panel
+and column controls keep their clips and input, and retire their inferred backing,
+shadow and connector only after the matching Metal panel revision is presented.
 
 GTK rounds absolute layout edges once to integer logical pixels, then derives
 native sizes from those edges. A divider step grows one neighboring panel by

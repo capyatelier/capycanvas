@@ -80,7 +80,7 @@ extension XCTestCase {
     }
 
     @MainActor func checkColumnWidthReset(in app: XCUIApplication, theme: String) {
-        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"\#(theme)"}]"#
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"\#(theme)"},{"type":"workspace_manager","command":{"type":"switch","id":"builtin:workspace:illustrator"}}]"#
         app.launch()
         func matching(_ prefix: String) -> [XCUIElement] {
             app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", prefix)).allElementsBoundByIndex

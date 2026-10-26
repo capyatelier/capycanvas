@@ -30,6 +30,7 @@ pub struct MetalHost {
     timing: Option<GpuFrameTimer>,
     pub(crate) navigators: Navigators,
     pub(crate) glass: Glass,
+    presented_panel_revision: Option<u64>,
     watch: layer_host::DeviceWatch,
     screen_presented: Option<Instant>,
 }
@@ -93,6 +94,7 @@ impl MetalHost {
         let retained = self.local_tone.current(host).is_some();
         serde_json::json!({"hdr":hdr,"hdr_output":hdr_output,"retained":retained,"error":self.local_tone.error,
             "glass_regions":self.glass.count(),
+            "panel_revision":self.presented_panel_revision,
             "backdrop_frames":self.surface.as_ref().map_or([0; 2], |s| s.presenter.backdrop_frames())})
     }
     fn encoding(color:layer_core::color::DocumentColor)->SdrSurfaceColor {
@@ -108,6 +110,7 @@ impl MetalHost {
         self.watch = watch;
         self.timing = None;
         self.blank_presented = false;
+        self.presented_panel_revision = None;
         self.cursor = Default::default();
         host.startup = Default::default();
         if retired.0.is_some() {
@@ -146,6 +149,7 @@ impl MetalHost {
         let retired = host.session.renderer_mut().0.take();
         self.instance = None;
         self.blank_presented = false;
+        self.presented_panel_revision = None;
         self.cursor = Default::default();
         host.document_adopted();
         host.dirty = false;
@@ -236,8 +240,9 @@ impl MetalHost {
         if gpu.document_color().depth.is_float(){config.format=wgpu::TextureFormat::Rgba16Float;}
         config.color_space = encoding.surface_color_space();
         surface.configure(gpu.device(), &config);
-        let presenter = ViewportPresenter::for_surface(gpu, config.format, encoding)
+        let mut presenter = ViewportPresenter::for_surface(gpu, config.format, encoding)
             .map_err(|e| format!("Metal viewport creation: {e}"))?;
+        presenter.prepare_chrome(gpu);
         self.surface = Some(Surface {
             surface,
             config,
@@ -260,6 +265,7 @@ impl MetalHost {
 
     pub fn detach(&mut self) {
         self.surface = None;
+        self.presented_panel_revision = None;
     }
 
     pub fn set_timing_enabled(&mut self, enabled: bool) {
@@ -337,7 +343,14 @@ impl MetalHost {
             surface.config.color_space=encoding.surface_color_space();
             surface.surface.configure(gpu.device(),&surface.config);
             surface.presenter = ViewportPresenter::for_surface(gpu, surface.config.format, encoding).map_err(error)?;
+            surface.presenter.prepare_chrome(gpu);
+            self.presented_panel_revision = None;
             surface.working_color = gpu.document_color();
+        }
+        surface.presenter.set_panel_surfaces(gpu, self.glass.panels(scale));
+        if !surface.presenter.prepare_chrome(gpu) {
+            host.dirty = true;
+            return Ok((true, costs));
         }
         let display = SceneDisplay { scale, headroom: self.headroom, blank_presented: self.blank_presented, compositor_hdr: false };
         host.compose_scene(&mut surface.presenter, &mut self.cursor, &self.navigators,
@@ -394,6 +407,11 @@ impl MetalHost {
         costs[3] = clock.elapsed().as_nanos() as u64 - costs[..3].iter().sum::<u64>();
         gpu.device().poll(wgpu::PollType::Poll).map_err(error)?;
         costs[4] = clock.elapsed().as_nanos() as u64 - costs[..4].iter().sum::<u64>();
+        let revision = Some(self.glass.panel_revision());
+        if self.presented_panel_revision != revision {
+            self.presented_panel_revision = revision;
+            host.invalidate_snapshot();
+        }
         Ok((host.dirty, costs))
     }
 }

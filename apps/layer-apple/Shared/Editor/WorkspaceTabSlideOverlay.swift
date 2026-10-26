@@ -6,15 +6,17 @@ struct WorkspaceTabSlideOverlay: View {
     @ObservedObject var store: EditorStore
     let slide: WorkspaceTabSlide
     var body: some View {
-        if let grab = slide.grab, !slide.preview.isNull {
-            let groups = store.snapshot["layout"]["groups"].array
-                + store.state["customization"]["column_drawers"].array.map { $0["tabs"].replacing("id", with: $0["tabs"]["group"]) }
-            let active = groups.first { $0["id"].uint == grab.group }?["active"].string ?? ""
-            let drawer = store.state["customization"]["column_drawers"].array.contains { $0["tabs"]["group"].uint == grab.group }
-            let panels = store.workspace.presentedTabs(group: grab.group, panels: grab.panels.map { store.panel($0) })
-            WorkspaceTabSlideContent(slide: slide, grab: grab, panels: panels, active: active, drawer: drawer, palette: EditorPalette(source: store.state["palette"]))
-                .id(grab.id)
-        }
+        Group {
+            if let grab = slide.grab, !slide.preview.isNull {
+                let groups = store.snapshot["layout"]["groups"].array
+                    + store.state["customization"]["column_drawers"].array.map { $0["tabs"].replacing("id", with: $0["tabs"]["group"]) }
+                let active = groups.first { $0["id"].uint == grab.group }?["active"].string ?? ""
+                let drawer = store.state["customization"]["column_drawers"].array.contains { $0["tabs"]["group"].uint == grab.group }
+                let panels = store.workspace.presentedTabs(group: grab.group, panels: grab.panels.map { store.panel($0) })
+                WorkspaceTabSlideContent(slide: slide, grab: grab, panels: panels, active: active, drawer: drawer, palette: EditorPalette(source: store.state["palette"]))
+                    .id(grab.id)
+            }
+        }.onChange(of: slide.preview.stableKey, initial: true) { _, _ in store.glass.panelSlideChanged() }
     }
 }
 

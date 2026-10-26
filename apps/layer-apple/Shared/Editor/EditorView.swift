@@ -109,7 +109,10 @@ struct EditorView<Canvas: View>: View {
                 return JSON(["group": parts[0], "index": parts[1], "bounds": ["x": rect.minX, "y": rect.minY, "width": rect.width, "height": rect.height]])
             }
         }
-        .onPreferenceChange(WorkspaceTabFrames.self) { store.workspace.tabFrames = $0 }
+        .onPreferenceChange(WorkspaceTabFrames.self) {
+            store.workspace.tabFrames = $0
+            store.glass.panelTabsChanged()
+        }
         .ignoresSafeArea()
         .overlay { CommandSearchLayer(store: store).ignoresSafeArea(.container) }
         .foregroundStyle(palette["text"])

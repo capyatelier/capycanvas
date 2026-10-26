@@ -6,6 +6,12 @@ import SwiftUI
     private var connections: [String: JSON] = [:]
     private var arcs: [UUID: [CGFloat]] = [:]
     private var colorBubbles: [UUID: [CGFloat]] = [:]
+    private var panelAllocations: [String: PanelBridgeAllocation] = [:]
+    private var panelFrame = JSON()
+    private var panelQueryKey = ""
+    private var panelRevision: UInt64 = 0
+    private var panelSurfaceColumns = Set<UInt64>()
+    private var panelSurfaceGroups = Set<UInt64>()
     private var scheduled = false
     private var sent = ""
     init(store: EditorStore) { self.store = store }
@@ -23,6 +29,70 @@ import SwiftUI
     func colorBubble(_ id: UUID, _ value: [CGFloat]?) {
         guard colorBubbles[id] != value else { return }; colorBubbles[id] = value; schedule()
     }
+    func panelMeasurements(_ allocations: [String: PanelBridgeAllocation], layout: JSON) {
+        panelAllocations = allocations
+        guard let store else { return }
+        let groups = layout["groups"].array.compactMap { group -> [Any]? in
+            guard let allocation = allocations["group:\(group["id"].uint)"], !allocation.bounds.isEmpty else { return nil }
+            return [group["id"].uint, allocation.bounds.json]
+        }
+        let columns = layout["collapsed"].array.compactMap { column -> [String: Any]? in
+            let id = column["id"].uint
+            guard let bounds = allocations["column:\(id)"]?.bounds,
+                let content = allocations["column-content:\(id)"]?.bounds,
+                !bounds.isEmpty, !content.isEmpty else { return nil }
+            let icons: [Any] = column["groups"].array.flatMap { $0["icons"].array }.compactMap { icon in
+                guard let allocation = allocations["column-icon:\(id):\(icon["panel"].string)"], !allocation.bounds.isEmpty else { return nil }
+                return [icon["panel"].string, allocation.bounds.json]
+            }
+            guard icons.count == column["groups"].array.flatMap({ $0["icons"].array }).count else { return nil }
+            return ["column": id, "bounds": bounds.json, "content": content.json, "icons": icons]
+        }
+        let request = JSON(["type": "panel_bridges", "viewport": layout["viewport"].raw,
+            "measure": ["groups": groups, "columns": columns]])
+        let key = JSON([request.raw, layout.raw, store.state["document_file"]["epoch"].raw]).stableKey
+        guard key != panelQueryKey else { flush(); return }
+        panelQueryKey = key
+        setPanelFrame(JSON())
+        flush()
+        DispatchQueue.main.async { [weak store = store] in store?.objectWillChange.send() }
+        store.query(request.object) { [weak self] frame in
+            guard let self, self.panelQueryKey == key else { return }
+            guard !frame.isNull else { self.panelQueryKey = ""; return }
+            self.setPanelFrame(frame)
+            self.flush()
+            self.store?.objectWillChange.send()
+        }
+    }
+    func panelTabsChanged() {
+        flush()
+        DispatchQueue.main.async { [weak store = store] in store?.objectWillChange.send() }
+    }
+    func panelSlideChanged() { flush() }
+    func panelGroupConnected(_ id: UInt64) -> Bool {
+        panelBridgesReady && panelSurfaceGroups.contains(id)
+    }
+    func panelColumnConnected(_ id: UInt64) -> Bool {
+        panelBridgesReady && panelSurfaceColumns.contains(id)
+    }
+    func panelGroupRadii(_ id: UInt64) -> [CGFloat]? {
+        guard panelGroupConnected(id) else { return nil }
+        return panelFrame["groups"].array.first { $0["group"].uint == id }?["radii"].array.map { CGFloat($0.number) }
+    }
+    func panelColumnRadii(_ id: UInt64) -> [CGFloat]? {
+        guard panelColumnConnected(id) else { return nil }
+        return panelFrame["columns"].array.first { $0["column"].uint == id }?["radii"].array.map { CGFloat($0.number) }
+    }
+    private var panelBridgesReady: Bool {
+        guard let store else { return false }
+        return !panelFrame["bridges"].array.isEmpty
+            && store.snapshot["display_status"]["panel_revision"].optionalUInt == panelRevision
+    }
+    private func setPanelFrame(_ frame: JSON) {
+        guard frame.stableKey != panelFrame.stableKey else { return }
+        panelFrame = frame
+        panelRevision &+= 1
+    }
     private func schedule() {
         guard !scheduled else { return }
         scheduled = true
@@ -30,14 +100,93 @@ import SwiftUI
     }
     private func flush() {
         scheduled = false
+        let panels = panelSurfaces()
         let payload = JSON(["regions": boxes.sorted { $0.key.uuidString < $1.key.uuidString }.map { $0.value.map(Double.init) },
             "connections": connections.keys.sorted().compactMap { connections[$0]?.raw },
             "arcs": arcs.sorted { $0.key.uuidString < $1.key.uuidString }.map { $0.value.map(Double.init) },
-            "color_bubbles": colorBubbles.sorted { $0.key.uuidString < $1.key.uuidString }.map { $0.value.map(Double.init) }])
+            "color_bubbles": colorBubbles.sorted { $0.key.uuidString < $1.key.uuidString }.map { $0.value.map(Double.init) },
+            "panels": panels, "panel_revision": panelRevision])
         let key = payload.stableKey
         guard key != sent else { return }
         sent = key
         store?.native?.glassRegions(payload)
+    }
+    private func panelSurfaces() -> [Any] {
+        panelSurfaceColumns.removeAll(keepingCapacity: true)
+        panelSurfaceGroups.removeAll(keepingCapacity: true)
+        guard let store else { return [] }
+        let panel = store.state["palette"]["glass"]["panel"].array.map(\.number)
+        let strip = store.state["palette"]["glass"]["strip"].array.map(\.number)
+        guard panel.count == 4, strip.count == 4 else { return [] }
+        return panelFrame["columns"].array.compactMap { column in
+            let id = column["column"].uint
+            let bridges = panelFrame["bridges"].array.filter { $0[0].uint == id }.map { $0[2] }
+            guard let first = bridges.first,
+                let columnAllocation = panelAllocations["column:\(id)"], !bridges.isEmpty else { return nil }
+            let receivers: [[String: Any]] = first["receivers"].array.compactMap { receiver in
+                let group = receiver["group"].uint
+                guard let allocation = panelAllocations["group:\(group)"], !allocation.bounds.isEmpty else { return nil }
+                let tabbed = store.snapshot["layout"]["groups"].array.first { $0["id"].uint == group }?["tabs_visible"].bool == true
+                let active = store.snapshot["layout"]["groups"].array.first { $0["id"].uint == group }?["active"].string ?? ""
+                let panels = store.snapshot["layout"]["groups"].array.first { $0["id"].uint == group }?["panels"].array.map(\.string) ?? []
+                let index = panels.firstIndex(of: active)
+                let tab = index.flatMap { store.workspace.tabFrames["\(group):\($0)"] }
+                let moving = store.workspace.tabSlide.grab.flatMap { grab -> (WorkspaceTabFrame, CGFloat)? in
+                    guard grab.group == group, !store.workspace.tabSlide.preview.isNull,
+                        let index = grab.panels.firstIndex(of: active), grab.frames.indices.contains(index) else { return nil }
+                    return (grab.frames[index], CGFloat(store.workspace.tabSlide.offset(group: group, index: index)))
+                }
+                let tabBar = tabbed ? CGRect(x: allocation.bounds.minX, y: allocation.bounds.minY,
+                    width: allocation.bounds.width, height: min(36, allocation.bounds.height)) : .zero
+                return ["group": group, "tab_bar": tabBar.values,
+                    "active_tab": (tabbed ? moving.map { $0.0.bounds.offsetBy(dx: $0.1, dy: 0) }
+                        ?? tab?.bounds : nil)?.values ?? CGRect.zero.values,
+                    "tab_clip": (tabbed ? tabBar.intersection(moving?.0.clip ?? tab?.clip ?? tabBar) : .zero).values,
+                    "color": panel.withOpacity(allocation.opacity), "strip_color": strip.withOpacity(allocation.opacity)]
+            }
+            guard receivers.count == first["receivers"].array.count else { return nil }
+            panelSurfaceColumns.insert(id)
+            panelSurfaceGroups.formUnion(first["receivers"].array.map { $0["group"].uint })
+            return ["offset": [0, 0], "sidebar": column["bounds"].rect.values,
+                "radii": column["radii"].raw, "color": panel.withOpacity(columnAllocation.opacity),
+                "bridges": bridges.map(\.raw), "groups": receivers]
+        }
+    }
+}
+
+struct PanelBridgeAllocation: Equatable {
+    let bounds: CGRect
+    let opacity: Double
+}
+
+struct PanelBridgeAllocations: PreferenceKey {
+    static var defaultValue: [String: PanelBridgeAllocation] { [:] }
+    static func reduce(value: inout [String: PanelBridgeAllocation], nextValue: () -> [String: PanelBridgeAllocation]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, next in next })
+    }
+}
+
+struct PanelBridgeMeasurement: ViewModifier {
+    let key: String
+    var active = true
+    @Environment(\.workspaceChromeOpacity) private var opacity
+    func body(content: Content) -> some View {
+        content.background(GeometryReader { geometry in
+            let bounds = geometry.frame(in: .named("editor-workspace"))
+            Color.clear.preference(key: PanelBridgeAllocations.self,
+                value: !active || opacity <= 0 || bounds.isEmpty ? [:]
+                    : [key: PanelBridgeAllocation(bounds: bounds, opacity: opacity)])
+        })
+    }
+}
+
+private extension CGRect {
+    var json: [String: Double] { ["x": Double(minX), "y": Double(minY), "width": Double(width), "height": Double(height)] }
+    var values: [Double] { isNull ? [0, 0, 0, 0] : [Double(minX), Double(minY), Double(width), Double(height)] }
+}
+private extension Array where Element == Double {
+    func withOpacity(_ opacity: Double) -> [Double] {
+        indices.contains(3) ? enumerated().map { $0.offset == 3 ? $0.element * opacity : $0.element } : self
     }
 }
 
