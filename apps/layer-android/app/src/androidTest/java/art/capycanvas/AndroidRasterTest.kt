@@ -1903,8 +1903,6 @@ class AndroidRasterTest {
         fun shell(command: String) = ParcelFileDescriptor.AutoCloseInputStream(
             instrumentation.uiAutomation.executeShellCommand(command)
         ).use { it.readBytes().decodeToString() }
-        // Read the published state; Native.snapshot would consume the
-        // publication before Compose can receive it.
         compose.waitForIdle()
         val camera=host.snapshot!!.getJSONObject("state").getJSONObject("camera");val zoom=camera.getDouble("zoom");val translation=camera.getJSONArray("translation")
         var origin=androidx.compose.ui.geometry.Offset.Zero

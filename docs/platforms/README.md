@@ -115,7 +115,11 @@ changes to wgpu's HAL are listed in [vendor/README.md](../../vendor/README.md).
 The `capy-canvas` thread owns the Rust session, the wgpu device and the
 swapchain; Compose stays on the main thread. Actions and models cross JNI as
 JSON, and `Native.modelUpdate` sends only changed paths
-([model_update.rs](../../crates/layer-host/src/model_update.rs)). The system bars
+([model_update.rs](../../crates/layer-host/src/model_update.rs)).
+`Native.snapshot` reads a complete snapshot through `NativeHost::snapshot_bytes`
+without acknowledging that publication stream, replacing its model baseline or
+changing its prepared geometry. Read-only consumers cannot steal updates from
+the native UI. The system bars
 stay hidden, and the workspace reserves only display cutouts, so bar animations
 never resize the Vulkan buffer. An opaque cover hides the `SurfaceView` until
 the first frame of each surface generation completes. Surface loss keeps the

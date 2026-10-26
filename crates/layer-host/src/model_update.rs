@@ -180,6 +180,37 @@ mod tests {
         serde_json::from_slice(&host.take_model_update_bytes().unwrap().unwrap()).unwrap()
     }
 
+    #[test]
+    fn snapshot_queries_do_not_acknowledge_pending_ui_or_host_updates() {
+        use layer_ui::{Platform,UiAction};
+        for model_transport in [false,true] {
+            let mut host=NativeHost::new(Platform::Android).unwrap();
+            let take=|host: &mut NativeHost|if model_transport {
+                host.take_model_update_bytes().unwrap()
+            } else {host.take_layout_update_bytes().unwrap()};
+            let mut retained: Value=serde_json::from_slice(&take(&mut host).unwrap()).unwrap();
+            for service_update in [false,true] {
+                if service_update {host.error=Some("Surface lost".into());}
+                else {host.dispatch(UiAction::SetBrushSize {value:42.}).unwrap();}
+                let acknowledged=host.last_snapshot.clone();
+                let revisions=(host.last_workspace_model_revision,host.last_workspace_content_revision,host.last_camera_revision);
+                let baseline=host.last_model_snapshot.as_ref().map(|b|b.text.clone());
+                let bytes=host.snapshot_bytes().unwrap();
+                assert_eq!(bytes,host.snapshot_bytes().unwrap());
+                assert!(host.last_snapshot==acknowledged);
+                assert_eq!((host.last_workspace_model_revision,host.last_workspace_content_revision,host.last_camera_revision),revisions);
+                assert_eq!(host.model_transport,model_transport);
+                assert_eq!(host.last_model_snapshot.as_ref().map(|b|b.text.clone()),baseline);
+                let current: Value=serde_json::from_slice(&bytes).unwrap();
+                let packet=take(&mut host).expect("a query cannot consume the subscriber's pending update");
+                apply(&mut retained,serde_json::from_slice(&packet).unwrap());
+                assert_eq!(retained["state"],current["state"]);
+                assert_eq!(retained["error"],current["error"]);
+                assert!(take(&mut host).is_none());
+            }
+        }
+    }
+
     fn expected_model(host: &NativeHost) -> Value {
         let mut expected = host.snapshot();
         expected["workspace_update"] = serde_json::to_value(host.session.workspace_update()).unwrap();

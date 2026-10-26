@@ -59,6 +59,13 @@ impl<'a> SnapshotFields<'a> {
 }
 
 impl NativeHost {
+    pub fn snapshot_bytes(&self) -> Result<Vec<u8>,serde_json::Error> {
+        let mut bytes=Vec::new();
+        let mut serializer=serde_json::Serializer::with_formatter(&mut bytes,SnapshotFormatter);
+        self.serialize_snapshot(&mut serializer,&self.session.workspace_update(),false)?;
+        Ok(bytes)
+    }
+
     /// Shared incremental publication: a full snapshot establishes model_revision;
     /// later workspace_update messages replace only transient geometry. Consumers
     /// apply matching revisions at placement/draw time and retain panel content.
@@ -202,7 +209,7 @@ impl NativeHost {
             self.last_camera_revision = Some(camera.revision);
             return Ok(Some(snapshot));
         }
-        let snapshot = self.serialize_snapshot(serializer, &update)?;
+        let snapshot = self.serialize_snapshot(serializer, &update,self.model_transport)?;
         // A serializer failure cannot acknowledge an update that was not sent.
         self.last_snapshot = Some(key);
         self.last_workspace_content_revision = Some(update.content_revision);
@@ -213,7 +220,7 @@ impl NativeHost {
 
     #[cfg(test)]
     pub(super) fn snapshot(&self) -> serde_json::Value {
-        self.serialize_snapshot(serde_json::value::Serializer, &self.session.workspace_update())
+        self.serialize_snapshot(serde_json::value::Serializer, &self.session.workspace_update(),self.model_transport)
             .expect("Native snapshot contains JSON-compatible fields")
     }
 
@@ -247,6 +254,7 @@ impl NativeHost {
         &self,
         serializer: S,
         update: &layer_ui::WorkspaceUpdate,
+        model_transport: bool,
     ) -> Result<S::Ok, S::Error> {
         let layout = self.session.layout(self.logical);
         let state = self.session.state();
@@ -303,7 +311,7 @@ impl NativeHost {
             &self.session.filter_preview_revision(),
         )?;
         map.serialize_entry("application_menus", &menus)?;
-        map.serialize_entry("header", &self.session.header_view_with(!self.model_transport))?;
+        map.serialize_entry("header", &self.session.header_view_with(!model_transport))?;
         map.serialize_entry("proof_panel", &layer_ui::color_management::proof_view(&self.session))?;
         map.serialize_entry("color_preview", &self.color_preview())?;
         let colors = state.display_colors();

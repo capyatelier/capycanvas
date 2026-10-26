@@ -1270,9 +1270,8 @@ pub extern "system" fn Java_art_capycanvas_Native_snapshot(
     handle: jlong,
 ) -> jstring {
     crate::jni_entry!(env, handle, capy_app, {
-    match capy_app.host.take_layout_update_bytes() {
-        Ok(Some(bytes)) => string(&mut env, String::from_utf8(bytes).map_err(error)),
-        Ok(None) => std::ptr::null_mut(),
+    match capy_app.host.snapshot_bytes() {
+        Ok(bytes) => string(&mut env, String::from_utf8(bytes).map_err(error)),
         Err(e) => string(&mut env, Err(error(e))),
     }
     })
