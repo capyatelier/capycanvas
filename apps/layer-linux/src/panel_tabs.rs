@@ -12,6 +12,7 @@ mod imp {
         pub style: Cell<TabStyle>,
         pub hover_bottom: RefCell<Vec<[i8; 2]>>,
         pub tints: RefCell<Option<[gtk::Box; 2]>>,
+        pub gpu_background: Cell<bool>,
     }
     #[glib::object_subclass]
     impl ObjectSubclass for Strip {
@@ -97,7 +98,8 @@ mod imp {
             let selected = buttons.iter().find(|b| b.has_css_class("selected-tool") && b.opacity() > 0.);
             let active = selected.and_then(|tab| tab.compute_bounds(&*obj));
             let background = gtk::Snapshot::new();
-            background.append_color(&strip.color(), &bounds);
+            let gpu=self.gpu_background.get();
+            if !gpu { background.append_color(&strip.color(), &bounds); }
             let corners = self.hover_bottom.borrow();
             for (i, button) in buttons.iter().enumerate().filter(|(_, button)| Some(*button) != selected) {
                 if button.is_sensitive() && button.opacity() > 0. && !button.has_css_class("selected-tool")
@@ -110,8 +112,8 @@ mod imp {
                         let _ = cr.fill();
                     }
             }
-            let Some(mut node) = background.to_node() else { return };
-            if let Some(tab) = active {
+            let mut node = background.to_node().unwrap_or_else(||gtk::gsk::ColorNode::new(&gtk::gdk::RGBA::TRANSPARENT,&bounds).upcast());
+            if let Some(tab) = active.filter(|_|!gpu) {
                 let mask = gtk::Snapshot::new();
                 let cr = mask.append_cairo(&bounds);
                 let radius = gtk::graphene::Size::new(layer_ui::SURFACE_RADIUS, layer_ui::SURFACE_RADIUS);
@@ -124,16 +126,7 @@ mod imp {
                 let _ = cr.fill();
                 drop(cr);
                 let mask = mask.to_node().unwrap();
-                let strip = gtk::gsk::MaskNode::new(node, &mask, gtk::gsk::MaskMode::InvertedAlpha);
-                let tab = gtk::gsk::MaskNode::new(gtk::gsk::ColorNode::new(&foot.color(), &bounds), mask, gtk::gsk::MaskMode::Alpha);
-                let average = gtk::gsk::CrossFadeNode::new(strip, tab, 0.5);
-                let restore_alpha = gtk::graphene::Matrix::from_float([
-                    1., 0., 0., 0.,
-                    0., 1., 0., 0.,
-                    0., 0., 1., 0.,
-                    0., 0., 0., 2.,
-                ]);
-                node = gtk::gsk::ColorMatrixNode::new(average, &restore_alpha, &gtk::graphene::Vec4::zero()).upcast();
+                node = super::masked_fill(node, gtk::gsk::ColorNode::new(&foot.color(), &bounds).upcast(), mask);
             }
             snapshot.append_node(if strip.color().alpha() < 1. || foot.color().alpha() < 1. {
                 crate::glass::surface(node)
@@ -147,11 +140,79 @@ mod imp {
         }
     }
 }
+
+fn masked_fill(background: gtk::gsk::RenderNode, foreground: gtk::gsk::RenderNode, mask: gtk::gsk::RenderNode) -> gtk::gsk::RenderNode {
+    let outside = gtk::gsk::MaskNode::new(background, &mask, gtk::gsk::MaskMode::InvertedAlpha);
+    let inside = gtk::gsk::MaskNode::new(foreground, mask, gtk::gsk::MaskMode::Alpha);
+    let average = gtk::gsk::CrossFadeNode::new(outside, inside, 0.5);
+    let restore_alpha = gtk::graphene::Matrix::from_float([
+        1., 0., 0., 0.,
+        0., 1., 0., 0.,
+        0., 0., 1., 0.,
+        0., 0., 0., 2.,
+    ]);
+    gtk::gsk::ColorMatrixNode::new(average, &restore_alpha, &gtk::graphene::Vec4::zero()).upcast()
+}
+
+mod bar_imp {
+    use super::*;
+    #[derive(Default)]
+    pub struct Bar {
+        pub content: RefCell<Option<gtk::Box>>,
+    }
+    #[glib::object_subclass]
+    impl ObjectSubclass for Bar {
+        const NAME: &'static str = "CapyPanelTabBar";
+        type Type = super::PanelTabBar;
+        type ParentType = gtk::Widget;
+        fn class_init(klass: &mut Self::Class) { klass.set_layout_manager_type::<gtk::BinLayout>(); }
+    }
+    impl ObjectImpl for Bar {
+        fn dispose(&self) {
+            if let Some(content) = self.content.take() { content.unparent(); }
+        }
+    }
+    impl WidgetImpl for Bar {
+        fn snapshot(&self, snapshot: &gtk::Snapshot) {
+            let Some(content) = self.content.borrow().clone() else { return };
+            let obj = self.obj();
+            let bounds = gtk::graphene::Rect::new(0., 0., obj.width() as f32, obj.height() as f32);
+            let child = gtk::Snapshot::new();
+            obj.snapshot_child(&content, &child);
+            let Some(node) = child.to_node() else { return };
+            snapshot.append_node(super::tab_bar_clip(&node, &bounds));
+        }
+    }
+}
+fn tab_bar_clip(node: &gtk::gsk::RenderNode, bounds: &gtk::graphene::Rect) -> gtk::gsk::RenderNode {
+    let radius = gtk::graphene::Size::new(TAB_RADIUS, TAB_RADIUS);
+    let square = gtk::graphene::Size::new(0., 0.);
+    let mut outline = gtk::gsk::RoundedRect::new(*bounds, radius, radius, square, square);
+    outline.normalize();
+    gtk::gsk::RoundedClipNode::new(node, &outline).upcast()
+}
+glib::wrapper! {
+    pub struct PanelTabBar(ObjectSubclass<bar_imp::Bar>)
+        @extends gtk::Widget, @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
+}
+pub(crate) fn bar(content: &gtk::Box) -> PanelTabBar {
+    let bar: PanelTabBar = glib::Object::new();
+    bar.set_widget_name("panel-tab-bar");
+    content.set_parent(&bar);
+    *bar.imp().content.borrow_mut() = Some(content.clone());
+    bar
+}
 glib::wrapper! {
     pub struct PanelTabs(ObjectSubclass<imp::Strip>)
         @extends gtk::Widget, @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
 }
 impl PanelTabs {
+    pub fn set_gpu_background(&self,enabled: bool) {
+        if self.imp().gpu_background.replace(enabled)!=enabled {self.queue_draw();}
+    }
+    pub fn surface_colors(&self) -> [gtk::gdk::RGBA;2] {
+        self.imp().tints.borrow().as_ref().map_or([gtk::gdk::RGBA::TRANSPARENT;2],|tints|tints.each_ref().map(|t|t.color()))
+    }
     pub fn new(style: TabStyle) -> Self {
         let tabs: Self = glib::Object::new();
         tabs.imp().style.set(style);
@@ -240,4 +301,29 @@ pub(crate) fn strip_end(child: &impl IsA<gtk::Widget>) -> gtk::Box {
     end.set_halign(gtk::Align::End);
     end.append(child);
     end
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tab_bar_corners_clip_content_without_painting_an_unowned_backing() {
+        let bounds=gtk::graphene::Rect::new(0.,0.,100.,30.);
+        let content=gtk::gsk::ColorNode::new(&gtk::gdk::RGBA::WHITE,&bounds).upcast();
+        let node=tab_bar_clip(&content,&bounds);
+        let clip=node.downcast_ref::<gtk::gsk::RoundedClipNode>().unwrap();
+        assert_eq!(clip.child().as_ptr(),content.as_ptr());
+        assert_eq!(clip.clip().corner().map(|r|r.width()),[TAB_RADIUS,TAB_RADIUS,0.,0.]);
+        let converted=crate::squircle::converted(&node,1.);
+        let mut pixels=gtk::cairo::ImageSurface::create(gtk::cairo::Format::ARgb32,100,30).unwrap();
+        let cr=gtk::cairo::Context::new(&pixels).unwrap();
+        converted.draw(&cr);
+        drop(cr);
+        let stride=pixels.stride() as usize;
+        let bytes=pixels.data().unwrap();
+        let alpha=|x:usize,y:usize|bytes[y*stride+x*4+3];
+        assert_eq!([alpha(0,0),alpha(99,0)],[0,0]);
+        assert_eq!([alpha(50,0),alpha(0,29),alpha(99,29)],[255,255,255]);
+    }
 }

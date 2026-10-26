@@ -2276,11 +2276,13 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         let menubar = (!docks_hidden && !matches!(item, DockItem::Tile { .. }))
             .then(|| self.state.workspace.layout.menubar_drop_hint(&resolved, position)).flatten();
+        let prepend = (!docks_hidden && matches!(item, DockItem::Panel { .. } | DockItem::Group { .. }))
+            .then(|| resolved.prepend_group_drop_hint(position)).flatten();
         let compact_edge = (!docks_hidden)
             .then(|| self.state.workspace.layout.compact_edge_drop_hint(
                 &resolved, item, position, self.workspace_drag.and_then(|drag| drag.preview),
             )).flatten();
-        let mut hint = if let Some(hint) = compact_edge.or(menubar) {
+        let mut hint = if let Some(hint) = prepend.or(compact_edge).or(menubar) {
             hint
         } else if let DockItem::Column { column } = item {
             if docks_hidden {
@@ -3380,17 +3382,21 @@ impl<R: CanvasRenderer> UiSession<R> {
                         self.workspace_history.cancel(&mut self.state.workspace);
                     }
                 } else {
-                    let resize = self
+                    let Some(resize) = self
                         .floating_resize
                         .filter(|resize| resize.group == group && resize.edge == edge)
-                        .ok_or("Floating resize is not active")?;
-                    self.state.workspace.layout.resize_floating(
+                        else {return Ok(UiChange::default());};
+                    if let Err(error)=self.state.workspace.layout.resize_floating(
                         group,
                         edge,
                         resize.start,
                         [position[0] - resize.press[0], position[1] - resize.press[1]],
                         viewport,
-                    )?;
+                    ) {
+                        self.floating_resize=None;
+                        self.workspace_history.finish(&self.state.workspace);
+                        return Err(error);
+                    }
                     if phase == ContactPhase::Up {
                         self.floating_resize = None;
                         self.workspace_history.finish(&self.state.workspace);
@@ -3906,11 +3912,15 @@ impl<R: CanvasRenderer> UiSession<R> {
                         self.divider_drag = Some((id, drag));
                         (0, false)
                     } else {
-                        let (_, mut drag) = self
+                        let Some((_, mut drag)) = self
                             .divider_drag
                             .filter(|(active, _)| *active == id)
-                            .ok_or("Divider drag is not active")?;
-                        self.resize_divider(id, position, viewport, &mut drag)?;
+                            else {return Ok(UiChange::default());};
+                        if let Err(error)=self.resize_divider(id, position, viewport, &mut drag) {
+                            self.divider_drag=None;
+                            self.workspace_history.finish(&self.state.workspace);
+                            return Err(error);
+                        }
                         self.divider_drag = Some((id, drag));
                         if phase == ContactPhase::Up {
                             self.divider_drag = None;
@@ -4069,6 +4079,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
         };
         if let Some(before) = workspace_before {
+            let divider=self.divider_drag.take().is_some();
+            let floating=self.floating_resize.take().is_some();
+            if divider || floating {self.workspace_history.finish(&before);}
             let mut after = self.state.workspace.clone();
             self.state.customization.committed_header(&mut after.layout);
             if let Some(description) = workspace_description {
@@ -12097,9 +12110,10 @@ mod tests {
                     position: to,
                     viewport
                 })
-                .is_err()
+                .is_ok()
             );
             assert_eq!(s.state.workspace.layout, dragged);
+            s.require_workspace_idle().unwrap();
             s.state.workspace.layout = before;
             s.dispatch(UiAction::NudgeDivider {
                 id: d.id,

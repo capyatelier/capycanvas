@@ -1271,6 +1271,7 @@ impl ResizeEdge {
 pub struct GroupPlacement {
     pub id: u32,
     pub bounds: Bounds,
+    pub corner_radii: [f32; 4],
     pub panels: Vec<Panel>,
     pub active: Panel,
     pub axis: Axis,
@@ -2377,16 +2378,19 @@ impl DockLayout {
         position: [f32; 2],
         viewport: [f32; 2],
     ) -> Result<(), String> {
-        self.resize(
+        if !viewport.into_iter().all(|v|v.is_finite() && v>0.) {return Err("Invalid dock size".into());}
+        let top=if self.header_presentation.height>0. {self.header_presentation.height} else {crate::HEADER_HEIGHT};
+        self.resize_available(
             id,
             [
                 position[0] - WORKSPACE_SPACING,
-                position[1] - crate::HEADER_HEIGHT,
+                position[1] - top,
             ],
             [
-                viewport[0] - WORKSPACE_SPACING * 2.0,
-                self.workspace_height(viewport[1]) - crate::HEADER_HEIGHT - WORKSPACE_SPACING,
+                (viewport[0] - WORKSPACE_SPACING * 2.0).max(1.),
+                (self.workspace_height(viewport[1]) - top - WORKSPACE_SPACING).max(1.),
             ],
+            viewport[0],
         )
     }
     pub(crate) fn free_area(&self, viewport: [f32; 2]) -> Bounds {
@@ -3172,12 +3176,21 @@ impl DockLayout {
         position: [f32; 2],
         viewport: [f32; 2],
     ) -> Result<(), String> {
+        self.resize_available(id,position,viewport,viewport[0])
+    }
+    fn resize_available(
+        &mut self,
+        id: u32,
+        position: [f32;2],
+        viewport: [f32;2],
+        viewport_width: f32,
+    ) -> Result<(),String> {
         if !position.into_iter().chain(viewport).all(f32::is_finite)
             || viewport.into_iter().any(|v| v <= 0.0)
         {
             return Err("Invalid dock size".into());
         }
-        let resolved = self.resolve(viewport[0], viewport[1]);
+        let resolved = self.resolve_available(viewport[0], viewport[1],viewport_width);
         let d = resolved
             .dividers
             .iter()
@@ -3204,7 +3217,7 @@ impl DockLayout {
             return Ok(());
         }
         let base = self.column_stacks.iter().any(|s| self.open_stack_column(s.column).is_some())
-            .then(|| self.resolve_bands(viewport[0], viewport[1], &self.bands, false, viewport[0]));
+            .then(|| self.resolve_bands(viewport[0], viewport[1], &self.bands, false, viewport_width));
         let original = base
             .as_ref()
             .and_then(|base| base.dividers.iter().find(|b| b.id == id))
@@ -4526,6 +4539,7 @@ fn tabs_placement(
     GroupPlacement {
         id: *id,
         bounds,
+        corner_radii: [SURFACE_RADIUS; 4],
         panels: panels.clone(),
         active: *active,
         axis: orientation,

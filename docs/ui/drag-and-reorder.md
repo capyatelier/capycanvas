@@ -187,9 +187,11 @@ Collapsed-column dividers create a new group using a shared drop area with total
 height one third of a tile (12 logical pixels for a 36px tile), centered on the
 visible divider. The thin blue preview stays on that divider; adjacent tile bodies
 still join an existing group. Clip targets to the scrolling content and exclude
-the fixed member grips. The top padding has a prepend drop target without
-a painted separator; its blue preview may be thinner at the clip edge. Only
-dividers between groups are painted.
+the fixed member grips. The first tile starts at the column top. The workspace
+gap immediately above the column prepends a group, with a blue preview on the
+column's top edge, while its first group remains unscrolled. This target takes
+priority over title-bar stacking for panels and groups; whole columns retain
+their stack targets. Only dividers between groups are painted.
 GTK and Web regression:
 `tools/performance/workspace-motion.sh gtk --column-drops` (or `web`).
 

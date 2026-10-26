@@ -143,17 +143,24 @@ fn native_squircle_corners() {
 
     let corner = gtk::graphene::Size::new(9.72, 9.72);
     let float = gdk::MemoryTexture::new(1, 1, gdk::MemoryFormat::R32g32b32a32Float, &glib::Bytes::from_owned(vec![0u8; 16]), 16);
-    for [width, height] in [[272., 300.], [40., 40.]] {
+    for ([width, height], radius, masked) in [[272., 300.], [40., 40.]].into_iter().flat_map(|size|
+        [0., 3.24, 9.72].into_iter().flat_map(move |radius| [false, true].map(move |masked| (size, radius, masked))))
+    {
         let outline = gtk::gsk::RoundedRect::new(
             gtk::graphene::Rect::new(0., 0., width, height),
             gtk::graphene::Size::new(0., 0.),
             corner,
-            corner,
-            corner,
+            gtk::graphene::Size::new(radius, radius),
+            gtk::graphene::Size::new(radius, radius),
         );
         let drawer_shadow = gtk::gsk::OutsetShadowNode::new(&outline, &gdk::RGBA::new(0., 0., 0., 0.4), 0., 8., 0., 24.);
-        let converted = crate::squircle::converted(drawer_shadow.upcast_ref(), 1.);
-        assert!(!converted.is::<gtk::gsk::OutsetShadowNode>(), "blurred squircle shadows bypass GTK's box-shadow shader");
+        let node = if masked {
+            gtk::gsk::MaskNode::new(drawer_shadow, gtk::gsk::ColorNode::new(&gdk::RGBA::WHITE,
+                &gtk::graphene::Rect::new(width - 6., 0., 6., height)), gtk::gsk::MaskMode::InvertedAlpha).upcast()
+        } else { drawer_shadow.upcast() };
+        let converted = crate::squircle::converted(&node, 1.);
+        let shadow = converted.downcast_ref::<gtk::gsk::MaskNode>().map_or_else(|| converted.clone(), |n| n.source());
+        assert!(!shadow.is::<gtk::gsk::OutsetShadowNode>(), "masked and unmasked shadows bypass GTK's box-shadow shader");
         let snapshot = gtk::Snapshot::new();
         snapshot.append_texture(&float, &gtk::graphene::Rect::new(0., 0., 1., 1.));
         snapshot.append_node(&converted);

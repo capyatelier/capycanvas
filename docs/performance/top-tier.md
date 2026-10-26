@@ -225,11 +225,11 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 | Attached filter drag inside a clipping run | 120 | **Not met.** 93.24–102.71 native UI fps; moving-frame gap p99 25.00–33.33 ms | [Filter attachment feedback](#filter-attachment-feedback), 2026-10-04 |
 | Navigation with 32 visible paint layers | 120 | | |
 | Drawing with 32 visible paint layers, G-Pen 1024 px | 120 | | |
-| Panel, tab, column or toolbar drag and docking | 120 | **Not met.** Toolbar or component drag 103–119 fps. GTK desktop group probe fails its 114 Hz floor; current short tab probe gives 110.79–120.02 presents/s, with one touch trial below that floor. Other continuous-tab revisions remain unqualified | `dc27e04d`, 2026-09-23; [GTK panel-tab input diagnostic](#gtk-panel-tab-input-diagnostic), [tab-hover diagnostic](#gtk-tab-hover-diagnostic) and [panel-tab compositing](#panel-tab-compositing), 2026-10-24–25 |
+| Panel, tab, column or toolbar drag and docking | 120 | **Not met.** Toolbar or component drag 103–119 fps. Revised GTK chrome handoff: one short desktop group drag gives 120.00 presents/s, p99 9.301 ms; the next tab pickup fails. Short tab probes give 110.79–120.02 presents/s, with one touch trial below the floor. Reference-tier qualification remains open | `dc27e04d`, 2026-09-23; [GTK panel-tab input diagnostic](#gtk-panel-tab-input-diagnostic), [tab-hover diagnostic](#gtk-tab-hover-diagnostic), [panel-tab compositing](#panel-tab-compositing) and [GTK column bridge diagnostic](#gtk-column-bridge-diagnostic), 2026-10-24–25 |
 | Android palette pill opening at the work-area edge | 120 | **FPS unqualified.** Instant clamp; two actual presents per opening, all neighbors stationary in the diagnostic | [Native palette opening](#native-palette-opening), 2026-10-23 |
 | Android tool bubble drag through four neighbours | 120 | **Unqualified after the bubble release fixes.** Previous parity build: 115.00–116.55 actual app-window presents/s; p99 ≤16.667447 ms, default glass, 61 MP photo at Fit | [Native tool bubbles](#native-tool-bubbles), 2026-10-24 |
 | Web tool bubble drag through four neighbours | 120 | Unmeasured after the bubble release fixes; desktop browser journeys do not qualify the reference tablet | [Web checks](../development/web.md#tests), 2026-10-24 |
-| Panel or column resize | 120 | **Web diagnostic:** Navigator column 30.00–30.64 Chrome surface presents/s; p99 50.00–58.34 ms. Tier qualification remains unset | [Web Navigator layout](#web-navigator-layout), 2026-10-19; [GTK Color resize](#gtk-color-panel-resize), 2026-10-10 |
+| Panel or column resize | 120 | **Desktop diagnostic misses.** GTK GPU joins: 81.59–112.27 changing-geometry presents/s at 1×; 38.96–92.31 at 2×, worst p99 74.986 ms. Reference-tier qualification remains unset. Web Navigator: 30.00–30.64 Chrome surface presents/s; p99 50.00–58.34 ms | [Web Navigator layout](#web-navigator-layout), 2026-10-19; [GTK Color resize](#gtk-color-panel-resize), 2026-10-10; [GTK column bridge diagnostic](#gtk-column-bridge-diagnostic), 2026-10-25 |
 | Pen pressure utility and curve drag | 120 | **Unqualified.** Current GTK desktop panel 119.20–119.40 presents/s, p99 up to 9.207 ms; curve 120.00, p99 up to 8.470 ms; reference tablet unmeasured | [GTK pen pressure utility](#gtk-pen-pressure-utility), 2026-10-10 UTC |
 | Windows tool bubble drag through four neighbours | 120 | Unmeasured on reference hardware; Surface Pro / Adreno X1-85 functional checks do not qualify timing (PresentMon ETW access denied) | [Windows tool bubbles](../development/windows.md#tool-bubbles) |
 | Windows HDR color bubble drag and intensity scrub | 120 | Unmeasured on reference hardware; native input and pixel checks do not qualify presentation timing (PresentMon ETW access denied) | [Windows tool bubbles](../development/windows.md#tool-bubbles) |
@@ -4378,6 +4378,83 @@ the frozen baseline. A Mac test-bundle compile overlapped the 17.5 run; the
 reference iPad ran only the workload. Evidence and stage/pen-up attribution are
 in `artifacts/ipados17/comparison/codegen-control/`.
 
+
+## GTK column bridge diagnostic
+
+Receiver-scoped joins, background chrome preparation, resize-lifecycle audit
+and native allocation rounding changes, including the six-pixel corner field
+blend, are unmeasured. The workstation timings below describe the preceding
+GPU rollout.
+
+The 2026-10-25 release GTK renderer moves the joined sidebar, panel and bridge
+backgrounds to one GPU coverage field. The GPU caches normalized outer curves
+once; gap caps are analytic. Native motion updates bounds, colors and selected
+tile positions. CPU contour tracing, GTK bridge masks and per-contour glass
+bands are removed. Native controls and the tab bar's rounded outline remain
+above the GPU background, committed with its matching chrome revision.
+
+The workstation has NVIDIA RTX PRO 6000 Blackwell Max-Q, Vulkan 615.71.09,
+and a private 120 Hz compositor. Scale 1 is 1600 × 1000 physical pixels;
+scale 2 is 3200 × 2000. Six custom toolbars and the default drawing exercise
+partial source and receiving curves, exact aligned edges and a 6 px panel gap.
+This workload does not qualify reference tablets or their photo canvases.
+The host also runs other sessions' VM and test processes; attribution-run
+inventories retain their CPU load and GPU utilization. These measurements do
+not establish an isolated before/after comparison.
+
+Mouse, touch and tablet-proxy bridge contacts pass in both themes on both sides
+at scales 1 and 2. Checks include first/last physical tile rows, body tint,
+selected-tile seams, tab-bar rounding, gap caps and Undo/Redo. GPU tests also
+cover mirrored entry/exit, flat aligned boundaries, constant broad cap depth,
+clipped selected tabs, a hidden sidebar and finite RGBA16Float output.
+
+Compositor transition recordings retain 482 and 479 frames at scales 1 and 2.
+All 961 sampled frames have zero RGB≤8 pixels in the 24 px logical corridor
+covering the bridge and receiving corners. All 192 native alignment samples
+have zero endpoint error. These sampled recordings check flashes and geometry;
+they do not establish every refresh or sustained frame rate.
+
+Continuous mouse resize uses a priming gesture followed by three six-second
+contacts in every theme/side pair at each scale, with 1,500 injected moves at
+4 ms cadence. The triangle path stays above the native minimum height and
+changes the shown panel height through 72 px. Displayed chrome revisions map
+to measured geometry; no shown revisions are missing. This task's builds and capture
+compression finish before measurement.
+
+| Scale | Measured contacts | Changing-geometry presents/s | Presentation-gap p99 range |
+| --- | --- | --- | --- |
+| 1 | 12 | 81.59–112.27 | 16.783–41.694 ms |
+| 2 | 12 | 38.96–92.31 | 25.093–74.986 ms |
+
+All 24 contacts miss the 114 Hz floor or the 16.667 ms p99 limit. The shader
+implementation does not establish that native resize lag is fixed. Per-contact
+JSON retains full-contact counts/duration, onset, tail and longest gaps beside
+the moving-only cadence. The earlier fixed-height probe used a path below the
+native minimum and cannot serve as a timing baseline.
+
+A focused light-theme left-column run exports existing timing counters after
+each primed contact. Its three 1× contacts give 95.94–97.98 changing-geometry
+presents/s; three 2× contacts give 59.51–80.35. GPU frame-time p99 is at most
+0.649 ms at 1× and 1.492 ms at 2×. Render-worker elapsed p99 is at most
+0.850/1.042 ms respectively. Owner dispatch and canvas frame-handler probes
+also remain below the frame budget, but do not cover native GTK layout,
+squircle conversion, GSK rendering or compositor scheduling. The data does not
+identify which of those phases causes the remaining gaps.
+
+Canvas feedback can repeat a worker frame ID when its surface is retained.
+Existing counters do not join those IDs to chrome revisions, so worker draw
+counts cannot substitute for fresh native-geometry presentations. The raw
+vectors, inventories and distributions remain in `motion-attribution.json`
+and the per-contact JSON beneath the current evidence directory.
+
+The previous CPU implementation measured per-contour generation p50/maximum
+of 0.322/0.378 ms at scale 1, 0.891/1.021 ms at scale 2 and 2.929/3.233 ms at
+scale 4, with up to 130 glass bands. That work regenerated when geometry
+changed; it excluded native layout, other selected tiles and presentation.
+Those costs identify the removed CPU work, not a measured end-to-end speedup.
+
+Current evidence is in `artifacts/column-bridge-gpu-gtk/`; the previous CPU
+samples remain in `artifacts/column-bridge-y-gtk/panel-bridge-contour-cost.log`.
 
 ## GTK panel-tab input diagnostic
 

@@ -202,7 +202,7 @@ mod allocation {
                 height as f32,
                 HEADER_HEIGHT,
                 STATUS_HEIGHT,
-            );
+            ).with_panel_bridges();
             if let Some((id, from, progress)) = self.transition.get()
                 && let Some(group) = resolved.groups.iter_mut().find(|g| g.id == id)
             {
@@ -270,10 +270,6 @@ mod allocation {
                         .iter()
                         .find(|(i, _)| i == id)
                         .and_then(|(_, d)| d.connection().map(|c| c.bounds)),
-                    Slot::ColumnConnection(id, panel) => resolved.collapsed.iter()
-                        .find(|c| c.id == *id).and_then(|c| c.open.as_ref())
-                        .and_then(|o| o.connections.iter().find(|(p, _)| p == panel))
-                        .map(|(_, connection)| connection.bounds),
                     Slot::Column(id) => resolved
                         .collapsed
                         .iter()
@@ -336,6 +332,7 @@ mod allocation {
                         allocate_at(child, b);
                     }
                 }
+                owner.columns.present_connections(&owner, &resolved);
                 owner.queue_panel_measurements();
                 owner.present_popovers();
                 let scale = owner.area.scale_factor() as u32;
@@ -358,11 +355,12 @@ mod allocation {
             let snapshot = &composed;
             let owner = self.owner.borrow().upgrade();
             let mut nodes = Vec::new();
+            let column_surfaces = owner.as_ref().map(|w| w.columns.snapshot(w)).unwrap_or_default();
             let mut holes = Vec::new();
             let mut projections = Vec::new();
             for (order, (slot, child)) in self.children.borrow().iter().enumerate() {
                 let native = gtk::Snapshot::new();
-                if child.has_css_class("expanded-panel") {
+                if child.has_css_class("expanded-panel") && !child.has_css_class("gpu-panel-surface") {
                     native.push_shadow(&[gtk::gsk::Shadow::new(
                         gdk::RGBA::new(0., 0., 0., 0.4),
                         0.,
@@ -371,7 +369,7 @@ mod allocation {
                     )]);
                 }
                 self.obj().snapshot_child(child, &native);
-                if child.has_css_class("expanded-panel") {
+                if child.has_css_class("expanded-panel") && !child.has_css_class("gpu-panel-surface") {
                     native.pop();
                 }
                 let node = native.to_node();
@@ -388,8 +386,9 @@ mod allocation {
             }
             let mut connectors = Vec::new();
             let mut chrome_changed = false;
-            let mut fading = false;
             if let Some(owner) = &owner {
+                let panels_changed=*owner.panel_surfaces.borrow()!=column_surfaces;
+                chrome_changed|=panels_changed;
                 let mut regions = Vec::new();
                 if let Some(glass) = owner.palette.get().map(|p| p.glass).filter(|g| g.transparency.enabled()) {
                     let surfaces = glass.surfaces();
@@ -398,18 +397,18 @@ mod allocation {
                             crate::glass::collect(node, &surfaces, &mut regions);
                         }
                     }
-                    owner.glass_connectors(&mut connectors);
+                    owner.drawer_glass_connectors(&mut connectors);
                     regions.extend_from_slice(&connectors);
+                    regions.extend(column_surfaces.iter().map(|surface|layer_render_wgpu::BackdropRegion::rounded(
+                        surface.bounds(),[0.;4],layer_render_wgpu::BackdropRegion::SQUIRCLE).with_strength(0.)));
                 }
                 if *owner.glass.borrow() != regions {
-                    let shape = |r: &layer_render_wgpu::BackdropRegion| r.with_strength(1.);
-                    fading = owner.glass.borrow().iter().map(shape).eq(regions.iter().map(shape));
                     *owner.glass.borrow_mut() = regions;
                     chrome_changed = true;
                 }
+                if panels_changed { *owner.panel_surfaces.borrow_mut()=column_surfaces; }
                 if owner.navigator_overviews.commit(projections) {
                     chrome_changed = true;
-                    fading = false;
                 }
             }
             for (order, (slot, node)) in nodes.iter().enumerate() {
@@ -419,10 +418,10 @@ mod allocation {
                 if matches!(slot, Slot::Canvas | Slot::PressureCalibration) {
                     snapshot.append_node(node);
                 } else {
-                    let bridge = matches!(slot, Slot::DrawerConnection(_) | Slot::ColumnConnection(_, _));
+                    let bridge = matches!(slot, Slot::DrawerConnection(_));
                     crate::navigator::Overviews::append_clipped(
                         snapshot,
-                        node,
+                        &node,
                         holes
                             .iter()
                             .filter(|(above, _)| *above >= order)
@@ -456,7 +455,7 @@ mod allocation {
             let composed = composed.to_node();
             let snapshot = target;
             match &owner {
-                Some(owner) => owner.present_chrome(snapshot, composed, chrome_changed, fading),
+                Some(owner) => owner.present_chrome(snapshot, composed, chrome_changed),
                 None => if let Some(node) = composed { snapshot.append_node(&node); },
             }
             if let Some(owner) = &owner
@@ -494,21 +493,19 @@ mod allocation {
     }
 }
 
-/// Places a child on the surface's device-pixel grid. Sizes follow the rounded
-/// far edges, so shared-layout gaps stay whole pixels between neighbors.
 pub(crate) fn allocate_at(child: &gtk::Widget, b: Bounds) {
-    let scale = child
-        .native()
-        .and_then(|native| native.surface())
-        .map_or_else(|| child.scale_factor() as f32, |surface| surface.scale() as f32);
-    let snap = |v: f32| (v * scale).round() / scale;
-    let (x, y) = (snap(b.x), snap(b.y));
+    let b=native_allocation(b);
     child.allocate(
-        (snap(b.x + b.width) - x).round().max(1.0) as i32,
-        (snap(b.y + b.height) - y).round().max(1.0) as i32,
+        b.width as i32,
+        b.height as i32,
         -1,
-        Some(gtk::gsk::Transform::new().translate(&gtk::graphene::Point::new(x, y))),
+        Some(gtk::gsk::Transform::new().translate(&gtk::graphene::Point::new(b.x,b.y))),
     );
+}
+
+fn native_allocation(b: Bounds) -> Bounds {
+    let (x,y)=(b.x.round(),b.y.round());
+    Bounds {x,y,width:((b.x+b.width).round()-x).max(1.),height:((b.y+b.height).round()-y).max(1.)}
 }
 
 glib::wrapper! {
@@ -575,7 +572,6 @@ enum Slot {
     DrawerShadow(u32),
     DrawerConnection(u32),
     Column(u32),
-    ColumnConnection(u32, Panel),
     CanvasBar,
     PressureCalibration,
     Bubbles,
@@ -890,6 +886,8 @@ pub struct Workspace {
     pub(crate) tooltips: Rc<crate::tooltips::PenTooltips>,
     pub(crate) surface: DockSurface,
     palette_css: gtk::CssProvider,
+    column_corner_css: gtk::CssProvider,
+    column_corner_styles: RefCell<Vec<(String, [f32; 4])>>,
     palette: Cell<Option<ThemePalette>>,
     header: header::Header,
     zen_capy: gtk::Button,
@@ -929,11 +927,10 @@ pub struct Workspace {
     navigator: crate::navigator::Navigator,
     navigator_overviews: Rc<crate::navigator::Overviews>,
     glass: RefCell<Vec<layer_render_wgpu::BackdropRegion>>,
+    panel_surfaces: RefCell<Vec<layer_render_wgpu::PanelSurface>>,
     chrome: crate::glass::Chrome,
     chrome_released: Cell<u64>,
     chrome_presented: Cell<bool>,
-    chrome_hold: Cell<bool>,
-    chrome_moving: Cell<bool>,
     measure_on_allocate: Cell<bool>,
     pub(crate) layer_panel: crate::layers::LayerPanel,
     pub(crate) effects: Rc<crate::effects::EffectPanels>,
@@ -978,6 +975,7 @@ impl Drop for Workspace {
             if popover.parent().as_ref() == Some(self.surface.upcast_ref()) { popover.unparent(); }
         }
         gtk::style_context_remove_provider_for_display(&self.area.display(), &self.palette_css);
+        gtk::style_context_remove_provider_for_display(&self.area.display(), &self.column_corner_css);
     }
 }
 
@@ -1096,6 +1094,12 @@ impl Workspace {
             NEXT_WINDOW.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         ));
         let palette_css = gtk::CssProvider::new();
+        let column_corner_css = gtk::CssProvider::new();
+        gtk::style_context_add_provider_for_display(
+            &gtk::prelude::WidgetExt::display(&window),
+            &column_corner_css,
+            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 1,
+        );
         gtk::style_context_add_provider_for_display(
             &gtk::prelude::WidgetExt::display(&window),
             &palette_css,
@@ -1239,6 +1243,8 @@ impl Workspace {
             documents: crate::documents::Documents::new_localized(&localization),
             surface,
             palette_css,
+            column_corner_css,
+            column_corner_styles: RefCell::default(),
             palette: Cell::new(None),
             header,
             zen_capy,
@@ -1304,11 +1310,10 @@ impl Workspace {
             navigator,
             navigator_overviews,
             glass: RefCell::new(Vec::new()),
+            panel_surfaces: RefCell::new(Vec::new()),
             chrome: Default::default(),
             chrome_released: Cell::new(0),
             chrome_presented: Cell::new(false),
-            chrome_hold: Cell::new(false),
-            chrome_moving: Cell::new(false),
             measure_on_allocate: Cell::new(false),
             layer_panel,
             effects,
@@ -2094,7 +2099,7 @@ impl Workspace {
                     && !widget.has_css_class("floating-panel")
                     && !matches!(slot, Slot::Group(id) if keeps(*id));
                 let can_target = !hidden && !widget.has_css_class("fixed-stack-divider")
-                    && !matches!(slot, Slot::DrawerShadow(_) | Slot::ColumnConnection(_, _));
+                    && !matches!(slot, Slot::DrawerShadow(_));
                 if widget.has_css_class("zen-hidden") == hidden && widget.can_target() == can_target
                 {
                     continue;
@@ -2484,8 +2489,10 @@ impl Workspace {
                             .placements(g.session.state(), area.scale_factor() as f32);
                         g.session.renderer_mut().overviews = overviews;
                         g.session.renderer_mut().chrome = this.chrome.revision();
-                        g.session.renderer_mut().chrome_hold = this.chrome_hold.get();
+                        g.session.renderer_mut().chrome_hold = true;
                         let scale = area.scale_factor() as f32;
+                        g.session.renderer_mut().panel_surfaces=this.panel_surfaces.borrow().iter().cloned()
+                            .map(|surface|surface.scaled(scale)).collect();
                         let blur = g.session.state().palette.glass.blur;
                         g.session.renderer_mut().backdrop_style = layer_render_wgpu::BackdropBlurStyle {
                             levels: blur.levels,
@@ -3017,23 +3024,18 @@ impl Workspace {
         self.update_backdrop();
     }
 
-    fn present_chrome(self: &Rc<Self>, snapshot: &gtk::Snapshot, node: Option<gtk::gsk::RenderNode>, changed: bool, fading: bool) {
+    fn present_chrome(self: &Rc<Self>, snapshot: &gtk::Snapshot, node: Option<gtk::gsk::RenderNode>, changed: bool) {
         let Some(node) = node else { return };
-        let previous = self.chrome_moving.replace(changed);
-        let moving = changed && (previous || fading || self.workspace_drag.borrow().is_some());
-        if changed {
-            self.chrome_hold.set(!moving);
-        }
         let presented = self.gpu.try_borrow().ok().and_then(|g| {
             g.as_ref().filter(|g| g.session.engine().backend().startup.complete)
                 .map(|g| g.session.engine().backend().presented_chrome())
-        }).filter(|_| !moving);
+        });
         let (node, revision, waiting) = self.chrome.compose(node, changed, presented, glib::monotonic_time());
         snapshot.append_node(&node);
         let weak = Rc::downgrade(self);
         if changed {
             glib::idle_add_local_once(glib::clone!(#[strong] weak, move || {
-                if let Some(w) = weak.upgrade() { w.wake_frame(!moving, false); }
+                if let Some(w) = weak.upgrade() { w.wake_frame(true, false); }
             }));
         }
         if waiting && changed {
@@ -3077,7 +3079,7 @@ impl Workspace {
             self.surface.height().max(1) as f32,
             HEADER_HEIGHT,
             STATUS_HEIGHT,
-        )
+        ).with_panel_bridges()
     }
     fn queue_panel_measurements(self: &Rc<Self>) {
         if self.measuring_panels.replace(true) {
@@ -3264,6 +3266,7 @@ impl Workspace {
             for group in resolved.groups.iter().filter(|g| !built.contains(&g.id)) {
                 let column = gtk::Box::new(gtk::Orientation::Vertical, 0);
                 let root = PanelColumns::new(&column);
+                root.add_css_class(&format!("column-group-{}", group.id));
                 if group.floating {
                     root.add_css_class("floating-panel");
                 }
@@ -3312,7 +3315,7 @@ impl Workspace {
                     self.install_panel_drag(&header, DockItem::Group { group: group.id });
                     header.append(&crate::panel_tabs::strip_end(&grip));
                     self.install_context(&header, ContextTarget::Group { group: group.id });
-                    column.append(&header);
+                    column.append(&crate::panel_tabs::bar(&header));
                 }
                 let stack = gtk::Stack::new();
                 stack.add_css_class("panel-body");
@@ -3517,8 +3520,28 @@ impl Workspace {
             view.tab_strip.queue_resize();
             view.tab_strip.queue_draw();
         }
-        self.columns.reconcile(self, layout, &resolved);
+        self.columns.reconcile(self, layout, &resolved, rebuilt);
         self.surface.queue_allocate();
+    }
+    fn present_column_corners(&self, resolved: &ResolvedLayout) {
+        let styles: Vec<_> = resolved.groups.iter()
+            .map(|group| (format!("column-group-{}", group.id), group.corner_radii))
+            .chain(resolved.collapsed.iter().map(|column| (format!("column-strip-{}", column.id), column.corner_radii)))
+            .chain(resolved.collapsed.iter().flat_map(|column| column.groups.iter().flat_map(|group| &group.icons)
+                .enumerate().map(move |(i, icon)| (format!("column-tile-{}-{i}", column.id), icon.corner_radii))))
+            .collect();
+        if *self.column_corner_styles.borrow() == styles { return; }
+        use std::fmt::Write;
+        let mut css = String::new();
+        for (class, radii) in &styles {
+            write!(css, "#{} .{class} {{", self.window.widget_name()).unwrap();
+            for (corner, radius) in ["nw", "ne", "se", "sw"].into_iter().zip(radii) {
+                write!(css, "--panel-radius-{corner}:{}px;", radius * crate::squircle::CORNER_FIT).unwrap();
+            }
+            css.push('}');
+        }
+        self.column_corner_css.load_from_string(&css);
+        *self.column_corner_styles.borrow_mut() = styles;
     }
     fn constrain_group_bodies(&self, resolved: &ResolvedLayout) {
         for view in self.groups.borrow().iter() {
@@ -3533,15 +3556,10 @@ impl Workspace {
             }
         }
     }
-    fn glass_connectors(&self, out: &mut Vec<layer_render_wgpu::BackdropRegion>) {
+    fn drawer_glass_connectors(&self, out: &mut Vec<layer_render_wgpu::BackdropRegion>) {
         for drawer in self.drawers() {
             if let Some(connection) = drawer.geometry(self).and_then(|p| p.connection()) {
                 crate::glass::connector(&connection, out);
-            }
-        }
-        for column in &self.resolved().collapsed {
-            for (_, connection) in column.open.iter().flat_map(|o| &o.connections) {
-                crate::glass::connector(connection, out);
             }
         }
     }
@@ -3917,6 +3935,15 @@ impl Workspace {
         point: [f32; 2],
         sequence: Option<gdk::EventSequence>,
     ) -> bool {
+        if phase!=ContactPhase::Cancel {
+            let invalidated=self.workspace_drag.borrow().as_ref().filter(|drag|
+                matches!(drag.target,DragTarget::Header(_) | DragTarget::Divider(_) | DragTarget::Resize(..))
+                    && (!drag.source.is_ancestor(&self.surface) || drag.source.parent()!=drag.parent)).cloned();
+            if let Some(drag)=invalidated {
+                let handled=self.workspace_drag_input(ContactPhase::Cancel,drag.point,drag.sequence);
+                if phase!=ContactPhase::Down {return handled;}
+            }
+        }
         if phase == ContactPhase::Down {
             if self.workspace_drag.borrow().is_none()
                 && let Some((source, target)) = self.drag_source_at(point)
@@ -3956,13 +3983,6 @@ impl Workspace {
             .filter(|d| d.sequence == sequence)
         else {
             return false;
-        };
-        let phase = if matches!(drag.target, DragTarget::Header(_))
-            && (!drag.source.is_ancestor(&self.surface) || drag.source.parent() != drag.parent)
-        {
-            ContactPhase::Cancel
-        } else {
-            phase
         };
         if matches!(phase, ContactPhase::Up | ContactPhase::Cancel) {
             self.workspace_drag.borrow_mut().take();
@@ -4299,3 +4319,6 @@ pub(crate) fn selected(widget: &impl IsA<gtk::Widget>, selected: bool) {
 #[cfg(test)]
 #[path = "tests.rs"]
 pub(crate) mod tests;
+#[cfg(test)]
+#[path = "workspace_allocation_tests.rs"]
+mod allocation_tests;

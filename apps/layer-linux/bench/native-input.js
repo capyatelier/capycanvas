@@ -111,6 +111,9 @@ const motionCadence = workspaceMotion || [
     'native_workspace_motion_input', 'native_workspace_tab_motion_input',
     'native_workspace_drop_sizes', 'native_workspace_drag_edges',
     'native_color_panel_input', 'native_column_stack_input', 'native_workspace_resize_input',
+    'native_column_panel_bridge_input',
+    'native_column_panel_bridge_motion',
+    'native_column_panel_bridge_transitions',
 ].includes(nativeTest);
 const nativeTestTimeout = Number(GLib.getenv('LAYER_NATIVE_TEST_TIMEOUT_MS') ?? 180000);
 if (!Number.isFinite(nativeTestTimeout) || nativeTestTimeout <= 0) throw new Error('LAYER_NATIVE_TEST_TIMEOUT_MS must be positive and finite');

@@ -135,8 +135,7 @@ list.workspace-manager-items { border-radius: 0; box-shadow: none; }
 .status-bubble, button.flat.status-bubble { background-color: var(--glass-chip); border-radius: calc(12px * var(--corner-fit)); padding: 3px 10px; }
 button.flat.status-bubble:hover { background-image: image(alpha(var(--window-fg-color), .10)); }
 button.flat.status-bubble:active { background-image: image(alpha(var(--window-fg-color), .16)); }
-.dock-panel { background: var(--panel-bg); border-radius: var(--surface-radius); box-shadow: 0 2px 8px alpha(black, .16); font-size: var(--ui-text-size); }
-.collapsed-column { border-radius: var(--surface-radius); }
+.dock-panel { --panel-radius-nw: var(--surface-radius); --panel-radius-ne: var(--surface-radius); --panel-radius-se: var(--surface-radius); --panel-radius-sw: var(--surface-radius); background: var(--panel-bg); border-radius: var(--panel-radius-nw) var(--panel-radius-ne) var(--panel-radius-se) var(--panel-radius-sw); box-shadow: 0 2px 8px alpha(black, .16); font-size: var(--ui-text-size); }
 .content-drawer { box-shadow: none; }
 .drawer-shadow { background: transparent; border-radius: var(--surface-radius); box-shadow: 0 2px 8px alpha(black, .16); }
 .drawer-connection { color: var(--panel-bg); }
@@ -144,7 +143,8 @@ button.flat.status-bubble:active { background-image: image(alpha(var(--window-fg
 .medium-tiles { --tile-radius: 27px; }
 .large-tiles { --tile-radius: 36px; }
 .tool-strip { --surface-radius: calc(var(--tile-radius) * var(--corner-fit)); }
-.toolbar-controls button.tile-button, .collapsed-column .tile-button { border-radius: calc(var(--tile-radius) * var(--corner-fit)); }
+.toolbar-controls button.tile-button { border-radius: calc(var(--tile-radius) * var(--corner-fit)); }
+.collapsed-column .tile-button { --panel-radius-nw: calc(var(--tile-radius) * var(--corner-fit)); --panel-radius-ne: calc(var(--tile-radius) * var(--corner-fit)); --panel-radius-se: calc(var(--tile-radius) * var(--corner-fit)); --panel-radius-sw: calc(var(--tile-radius) * var(--corner-fit)); border-radius: var(--panel-radius-nw) var(--panel-radius-ne) var(--panel-radius-se) var(--panel-radius-sw); }
 .dock-panel.canvas-action-bar { padding: 0; }
 .dock-panel.canvas-action-bar button { min-width: 36px; min-height: 36px; padding: 0; border-radius: calc(var(--tile-radius) * var(--corner-fit)); }
 .canvas-action-bar button:checked { background: var(--selection-bg); }
@@ -567,3 +567,13 @@ button.new-drawing-pill:checked { background: var(--header-selection); color: va
 window.capy-workspace.glass .utility-panel { background: var(--panel-bg); }
 .utility-title { font-weight: 700; }
 .utility-header button.utility-close { min-width: 24px; min-height: 24px; padding: 0; border-radius: var(--control-radius); }
+
+window.capy-workspace .dock-panel.gpu-panel-surface,
+window.capy-workspace.glass .dock-panel.gpu-panel-surface { background: transparent; box-shadow: none; }
+window.capy-workspace .dock-panel.gpu-panel-surface > .panel-preview,
+window.capy-workspace .dock-panel.gpu-panel-surface .panel-body,
+window.capy-workspace .dock-panel.gpu-panel-surface .panel-footer,
+window.capy-workspace .dock-panel.gpu-panel-surface .tab-strip-end,
+window.capy-workspace.glass .dock-panel.gpu-panel-surface.tabbed:not(.expanded-panel) .panel-body,
+window.capy-workspace.glass .dock-panel.gpu-panel-surface.tabbed:not(.expanded-panel) .panel-footer,
+window.capy-workspace.glass .dock-panel.gpu-panel-surface .tab-strip-end { background: transparent; }

@@ -12,6 +12,46 @@ platform builds, packaging, script suites and software-adapter correctness tests
 ([release validation](releasing.md#release-validation)). Run the checks for every
 area your change touches; hosted validation does not replace hardware journeys.
 
+Shared `panel_bridges::tests` checks the allocated facing-edge geometry in both
+opening directions. Renderer `panel_surface::tests` exercises the actual GPU
+background without a window: broad constant-size gap caps, flat aligned edges,
+mirrored attachments, panel/bridge seams and finite float output during entry
+and exit, plus replacement through an empty scene and unrelated receivers with
+target retention enabled and disabled.
+Remote-anchor and single-anchor GPU cases check whole unattached corners on
+both sides of a multi-panel column, as well as the adjacent gap's cap and core.
+The six-pixel corner-entry case samples the whole original corner void through
+the transition, mirrored in both axes at 1× and 2× with light and dark fills.
+It checks gradual fill from the eligibility cutoff through full attachment.
+The connected-edge case moves a real panel gap past the tile bottom and its
+vertical reflection. Source-edge and bridge-core samples check continuity
+through the original corner radius, including a gap just below the tile.
+Renderer audit cases compare panel glass against the existing blur at odd-sized
+viewports and after cached reprojection, exclude absent sidebar shadows, and
+preserve normalized asymmetric facing corners.
+Shared `divider_geometry_` tests cover measured-header coordinate round trips,
+removing active resize sources through tab merges, late events and separate
+resize/move Undo/Redo entries. GTK `panel_tabs::tests` checks that unconnected
+tab corners stay transparent without a native window.
+GTK `workspace::allocation_tests` checks fixed gaps, outer edges and equal,
+opposite sibling resizing across fractional divider positions and resolved layouts.
+The ignored no-window GPU check
+`render_thread::tests::workspace_presenter_prepares_chrome_before_first_panel_parameters`
+exercises the GTK presenter factory for SDR, HDR and color replacement. It checks
+that chrome prepares before the first nonempty panel/glass parameters arrive.
+GTK's bridge journeys capture the GPU background and the composed
+native controls; rendering a GTK widget alone omits the GPU underlay.
+
+GTK `squircle::tests` checks corner and shadow conversion beneath bridge masks
+and effect wrappers without a window. `render_thread::tests::chrome_` checks
+unpublished requests, coalescing behind a held buffer, stale releases and idle
+expiry with supplied timestamps. `native_squircle_corners` also downloads float
+pixels for masked shadows with zero, partial and full connected-corner radii.
+For scaled-display edge checks, render in physical pixels and round the cropped
+viewport outward to that grid. A fractional crop origin can introduce edge
+coverage absent from the displayed frame; compare suspected flashes or seams
+with a real compositor recording.
+
 Native-tile writeback tests request both four and eight storage buffers per
 stage and require the same portable RGBA and gray-alpha batch sizes. The Web
 `--native-writeback` journey records actual browser-device limits and encoder

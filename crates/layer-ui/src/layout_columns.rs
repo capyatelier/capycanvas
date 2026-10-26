@@ -13,6 +13,7 @@ pub struct CollapsedColumn {
 pub struct ColumnIcon {
     pub panel: Panel,
     pub bounds: Bounds,
+    pub corner_radii: [f32; 4],
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -32,6 +33,7 @@ pub struct CollapsedColumnPlacement {
     pub stack: u32,
     pub bounds: Bounds,
     pub grip: Bounds,
+    pub corner_radii: [f32; 4],
     pub empty: Bounds,
     /// Clip/scroll the groups in this area, leaving the grip fixed.
     pub content: Bounds,
@@ -39,6 +41,28 @@ pub struct CollapsedColumnPlacement {
     pub open: Option<OpenColumn>,
 }
 impl CollapsedColumnPlacement {
+    pub(crate) fn prepend_group_drop_hint(&self, point: [f32; 2]) -> Option<DropHint> {
+        let first = self.groups.first()?;
+        if first.bounds.y < self.content.y || self.content.height <= 0. {
+            return None;
+        }
+        let target = Bounds {
+            y: self.bounds.y - WORKSPACE_SPACING,
+            height: WORKSPACE_SPACING,
+            ..self.bounds
+        };
+        target.contains(point[0], point[1]).then(|| DropHint {
+            target: DockTarget::Split {
+                group: first.group,
+                edge: Edge::Top,
+            },
+            bounds: Bounds {
+                height: 3.0_f32.min(self.content.height),
+                ..self.content
+            },
+        })
+    }
+
     /// The final tile boundary has the same 12px reach as an internal divider.
     /// Compact members have only the 6px footer margin below their last tile:
     /// use that margin and the tile's lower edge, without taking the grip.
@@ -76,11 +100,9 @@ impl CollapsedColumnPlacement {
     }
 
     fn divider_bounds(bounds: Bounds, leading: bool) -> Bounds {
-        // Top padding keeps its prepend drop target, without a painted line.
-        // Dividers between groups retain the toolbar's centered 8px slot.
         let center = bounds.y
             - if leading {
-                5.5
+                0.
             } else {
                 TOOLBAR_DIVIDER_SIZE * 0.5 + 2.
             };
@@ -153,6 +175,9 @@ impl CollapsedColumnPlacement {
     /// Vertical strips insert tabs vertically; divider neighborhoods create groups.
     /// The grip and clipped overflow are never accidental targets.
     pub fn drop_hint(&self, point: [f32; 2]) -> Option<DropHint> {
+        if let Some(hint) = self.prepend_group_drop_hint(point) {
+            return Some(hint);
+        }
         let [x, y] = point;
         if !self.bounds.contains(x, y)
             || self.grip.contains(x, y)
@@ -163,7 +188,7 @@ impl CollapsedColumnPlacement {
         // The total target is one third of a tile (12px), centered on the
         // separator. Adjacent tile bodies retain their tab insertion targets.
         // Check all separators first so the preceding group cannot steal a hit.
-        for group in &self.groups {
+        for group in self.groups.iter().skip(1) {
             let divider_y = self.divider_y(group);
             if self.content.contains(x, divider_y) && (y - divider_y).abs() <= TILE_SIZE / 6. {
                 return Some(self.divider_drop_hint(group));
@@ -1129,6 +1154,7 @@ pub(super) fn resolve_column(node: &DockNode, bounds: Bounds) -> CollapsedColumn
                     .enumerate()
                     .map(|(index, panel)| ColumnIcon {
                         panel: *panel,
+                        corner_radii: [TILE_SIZE * 0.5; 4],
                         bounds: Bounds {
                             y: *y + index as f32 * (TILE_SIZE + TILE_GAP),
                             height: TILE_SIZE,
@@ -1152,8 +1178,7 @@ pub(super) fn resolve_column(node: &DockNode, bounds: Bounds) -> CollapsedColumn
             }
         }
     }
-    // Keep top padding for rounded tiles and the prepend drop target.
-    let mut y = content.y + 6.;
+    let mut y = content.y;
     visit(node, content, &mut y, &mut groups);
     let empty = Bounds {
         y: y.min(grip.y),
@@ -1167,6 +1192,7 @@ pub(super) fn resolve_column(node: &DockNode, bounds: Bounds) -> CollapsedColumn
         stack: node.id(),
         bounds,
         grip,
+        corner_radii: [SURFACE_RADIUS; 4],
         content,
         empty,
         groups,
@@ -1692,7 +1718,26 @@ mod tests {
             let r = geometry(&layout);
             let c = &r.collapsed[0];
             for (index, group) in c.groups.iter().enumerate() {
-                let divider_y = group.bounds.y - if index == 0 { 5.5 } else { 6. };
+                if index == 0 {
+                    assert_eq!(group.bounds.y, c.bounds.y);
+                    for x in [c.bounds.x + 1., c.bounds.x + 18., c.bounds.x + 35.] {
+                        for offset in [-6., -3., -0.01] {
+                            let hint = c.drop_hint([x, c.bounds.y + offset]).unwrap();
+                            assert_eq!(hint.target, DockTarget::Split {
+                                group: group.group,
+                                edge: Edge::Top,
+                            });
+                            assert_eq!(hint.bounds.y, c.bounds.y);
+                            assert_eq!(hint.bounds.height, 3.);
+                        }
+                        for offset in [0., 3., 6.] {
+                            assert_eq!(c.drop_hint([x, group.bounds.y + offset]).unwrap().target,
+                                DockTarget::Tab { group: group.group, index: Some(0) });
+                        }
+                    }
+                    continue;
+                }
+                let divider_y = group.bounds.y - 6.;
                 for x in [c.bounds.x + 1., c.bounds.x + 18., c.bounds.x + 35.] {
                     for offset in [-5., 0., 5.] {
                         let y = divider_y + offset;
@@ -1744,11 +1789,12 @@ mod tests {
                     x: 5.,
                     y: 12.,
                     width: TILE_SIZE,
-                    height: 110.,
+                    height: 100.,
                 },
             );
-            assert_eq!(c.groups[0].divider.y, c.bounds.y);
+            assert_eq!(c.groups[0].divider.y + 0.5, c.bounds.y);
             c.scroll(offset);
+            assert_eq!(c.prepend_group_drop_hint([c.bounds.x + 18., c.bounds.y - 3.]).is_some(), offset == 0.);
             for (index, group) in c.groups.iter().enumerate() {
                 assert_eq!(group.divider.height, if index == 0 { 0. } else { 1. });
                 assert_eq!(group.divider.y + 0.5, c.divider_y(group));

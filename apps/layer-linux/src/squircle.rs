@@ -294,6 +294,20 @@ impl Converter {
         }
     }
 
+    fn rebuild_pair(
+        &mut self,
+        node: &gsk::RenderNode,
+        first: &gsk::RenderNode,
+        second: &gsk::RenderNode,
+        wrap: impl FnOnce(&gsk::RenderNode, &gsk::RenderNode) -> gsk::RenderNode,
+    ) -> gsk::RenderNode {
+        let a = self.convert(first);
+        let b = self.convert(second);
+        if a.as_ptr() == first.as_ptr() && b.as_ptr() == second.as_ptr() {
+            node.clone()
+        } else { wrap(&a, &b) }
+    }
+
     fn rewrite(&mut self, node: &gsk::RenderNode) -> gsk::RenderNode {
         if let Some(container) = node.downcast_ref::<gsk::ContainerNode>() {
             let children: Vec<_> = (0..container.n_children()).map(|i| container.child(i)).collect();
@@ -317,6 +331,29 @@ impl Converter {
         if let Some(opacity) = node.downcast_ref::<gsk::OpacityNode>() {
             let alpha = opacity.opacity();
             return self.rebuild(node, &opacity.child(), |child| gsk::OpacityNode::new(child, alpha).upcast());
+        }
+        if let Some(mask) = node.downcast_ref::<gsk::MaskNode>() {
+            return self.rebuild_pair(node, &mask.source(), &mask.mask(), |source, child| {
+                gsk::MaskNode::new(source, child, mask.mask_mode()).upcast()
+            });
+        }
+        if let Some(color) = node.downcast_ref::<gsk::ColorMatrixNode>() {
+            return self.rebuild(node, &color.child(), |child| {
+                gsk::ColorMatrixNode::new(child, &color.color_matrix(), &color.color_offset()).upcast()
+            });
+        }
+        if let Some(blur) = node.downcast_ref::<gsk::BlurNode>() {
+            return self.rebuild(node, &blur.child(), |child| gsk::BlurNode::new(child, blur.radius()).upcast());
+        }
+        if let Some(fade) = node.downcast_ref::<gsk::CrossFadeNode>() {
+            return self.rebuild_pair(node, &fade.start_child(), &fade.end_child(), |start, end| {
+                gsk::CrossFadeNode::new(start, end, fade.progress()).upcast()
+            });
+        }
+        if let Some(blend) = node.downcast_ref::<gsk::BlendNode>() {
+            return self.rebuild_pair(node, &blend.bottom_child(), &blend.top_child(), |bottom, top| {
+                gsk::BlendNode::new(bottom, top, blend.blend_mode()).upcast()
+            });
         }
         if let Some(isolation) = node.downcast_ref::<gsk::IsolationNode>() {
             let isolations = isolation.isolations();
@@ -459,6 +496,74 @@ impl Converter {
 
 pub(crate) fn converted(node: &gsk::RenderNode, scale: f64) -> gsk::RenderNode {
     Converter::default().frame(node, scale)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn panel(radius: f32) -> gsk::RenderNode {
+        let bounds = graphene::Rect::new(0., 0., 80., 120.);
+        let outline = gsk::RoundedRect::new(
+            bounds,
+            graphene::Size::new(18., 18.),
+            graphene::Size::new(18., 18.),
+            graphene::Size::new(radius, radius),
+            graphene::Size::new(radius, radius),
+        );
+        gsk::ContainerNode::new(&[
+            gsk::RoundedClipNode::new(gsk::ColorNode::new(&gdk::RGBA::WHITE, &bounds), &outline).upcast(),
+            gsk::OutsetShadowNode::new(&outline, &gdk::RGBA::BLACK, 0., 2., 0., 6.).upcast(),
+        ]).upcast()
+    }
+
+    fn assert_converted_panel(node: &gsk::RenderNode) {
+        let panel = node.downcast_ref::<gsk::ContainerNode>().unwrap();
+        assert!(panel.child(0).is::<gsk::MaskNode>(), "rounded panel must retain its squircle mask");
+        assert!(!panel.child(1).is::<gsk::OutsetShadowNode>(), "native shadow must be converted inside wrappers");
+    }
+
+    #[test]
+    fn bridge_masks_convert_both_children_and_retain_their_mode_across_corner_changes() {
+        let mut converter = Converter::default();
+        for scale in [1., 1.25, 2.] {
+            for radius in [18., 6., 0., 6., 18.] {
+                let node = gsk::MaskNode::new(panel(radius), panel(18. - radius), gsk::MaskMode::InvertedAlpha).upcast();
+                let converted = converter.frame(&node, scale);
+                let mask = converted.downcast_ref::<gsk::MaskNode>().unwrap();
+                assert_eq!(mask.mask_mode(), gsk::MaskMode::InvertedAlpha);
+                assert_converted_panel(&mask.source());
+                assert_converted_panel(&mask.mask());
+                assert_eq!(converter.frame(&node, scale).as_ptr(), converted.as_ptr());
+            }
+        }
+    }
+
+    #[test]
+    fn effect_wrappers_preserve_parameters_and_convert_panel_corners_and_shadows() {
+        let mut converter = Converter::default();
+        let matrix = graphene::Matrix::new_scale(0.5, 0.75, 1.);
+        let offset = graphene::Vec4::new(0.1, 0.2, 0.3, 0.);
+        let color = gsk::ColorMatrixNode::new(panel(0.), &matrix, &offset).upcast();
+        let color = converter.frame(&color, 1.25).downcast::<gsk::ColorMatrixNode>().unwrap();
+        assert_eq!(color.color_matrix(), matrix);
+        assert_eq!(color.color_offset(), offset);
+        assert_converted_panel(&color.child());
+        let blur = gsk::BlurNode::new(panel(6.), 3.).upcast();
+        let blur = converter.frame(&blur, 1.25).downcast::<gsk::BlurNode>().unwrap();
+        assert_eq!(blur.radius(), 3.);
+        assert_converted_panel(&blur.child());
+        let fade = gsk::CrossFadeNode::new(panel(0.), panel(18.), 0.4).upcast();
+        let fade = converter.frame(&fade, 1.25).downcast::<gsk::CrossFadeNode>().unwrap();
+        assert_eq!(fade.progress(), 0.4);
+        assert_converted_panel(&fade.start_child());
+        assert_converted_panel(&fade.end_child());
+        let blend = gsk::BlendNode::new(panel(0.), panel(18.), gsk::BlendMode::Multiply).upcast();
+        let blend = converter.frame(&blend, 1.25).downcast::<gsk::BlendNode>().unwrap();
+        assert_eq!(blend.blend_mode(), gsk::BlendMode::Multiply);
+        assert_converted_panel(&blend.bottom_child());
+        assert_converted_panel(&blend.top_child());
+    }
 }
 
 fn surface_extent(widget: &gtk::Widget) -> gsk::RenderNode {

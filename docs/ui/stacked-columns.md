@@ -19,7 +19,7 @@ reopen as ordinary groups, preserving their panels, selected tabs and split tree
 
 Dropping an individual panel, a whole toolbar, or a tab group into a
 member's empty lower area or footer grip creates a new collapsed column after
-that member. The gap between members is also an insertion target. The new
+that member. The new
 column contains only the dropped content; a whole group retains its tab order,
 active tab and tab style, and a toolbar retains its tools. Stack preferences
 apply to the new member. Icon bodies still insert tabs and group dividers still
@@ -41,7 +41,12 @@ already selected tile in the open member closes it.
 
 Stacked members have the standard 6 px workspace gap between them. No separator
 is drawn above the first group; separators only appear between groups within
-a member. Top padding retains the drop target for inserting a first group.
+a member. The first tile starts at the member's top edge. Dropping a panel or
+group in the workspace gap immediately above it prepends a group within that
+member while its first group remains unscrolled. Whole-column drags retain the
+gap's stack insertion target. GTK presents this placement and the GPU joins
+below. Web, Android, Apple and Windows still need their native alignment and
+bridge-rendering adapters updated to consume the shared geometry.
 
 An open member uses the full available workspace height, aligned with the
 stack’s top and bottom. It keeps the normal outer workspace inset, without
@@ -50,6 +55,80 @@ and one from the canvas and toolbars beside it, as for an expanded column.
 Its normal tab groups and split dividers are rendered by the ordinary dock views. The sidebar highlights the active tile of every visible
 tab group in the open column. Drawer-style connectors join those active tiles
 to the expanded column.
+
+GTK resolves selected tiles against allocated receiving panels through
+`ResolvedLayout::panel_bridges`. It sends sidebar, panel, tab and tile bounds to
+the existing GPU background renderer. The sidebar, receiving backgrounds and
+bridges share one coverage calculation and one shadow. GTK retains the controls,
+input targets, hover feedback and tab-bar content clip. The tab bar keeps its
+own rounded upper outline. Corner backing belongs to an actual GPU attachment;
+an unconnected native tab bar only clips its content and adds no corner filler.
+
+GTK rounds absolute layout edges once to integer logical pixels, then derives
+native sizes from those edges. A divider step grows one neighboring panel by
+the same amount it shrinks the other, preserving the workspace gap and outer
+edges at every display scale. GPU bridge geometry uses the allocated bounds.
+
+Bridge receivers carry stable group IDs and all four corner radii. GTK derives
+native-background suppression and GPU emission from those same facing receivers;
+other groups keep their native backgrounds. Rebuilding panel groups or collapsed
+strips clears their connection frame before the next allocation publishes one.
+Missing native bounds never fall back to a different group's position.
+Each tile contributes a bridge only to vertically adjacent receivers, using
+each receiver's own upper and lower corner profiles. A distant tile cannot fill
+an intervening group's rounded corner through a column-wide bridge envelope.
+Attachment uses the vertical separation of the complete panel and tile
+intervals. With tile bounds `[B,E]` and panel bounds `[T,P]`, separation is
+`d = max(B-P, T-E, 0)`. The patch blends the original rounded panel field into
+the attached field with `S(clamp(1-d/6,0,1))`, where
+`S(t) = 6t^5 - 15t^4 + 10t^3`, before combining patches. Touching or overlapping
+intervals retain the existing joined profile. The panel keeps its original
+radius; a newly eligible patch cannot bypass the blend and fill the corner immediately.
+
+For a standard 6 px gap with top `g`, moving between panels above and below a
+tile has these attachment keyframes:
+
+| Gap position | Receiving panels |
+| --- | --- |
+| `g <= B-6` | Lower connected; upper absent. |
+| `B-6 < g < B` | Upper enters over 6 px; lower stays connected. |
+| `B <= g <= E-6` | Both connected; the gap retains its full broad cap. |
+| `E-6 < g < E` | Lower exits over 6 px; upper stays connected. |
+| `g >= E` | Upper connected; lower absent. |
+
+A gap just below the tile bottom cannot fade the upper panel's existing bridge.
+Aligned panel/tile tops and aligned bottoms retain their flat outer boundaries.
+
+The GPU builds the normalized outer-curve profiles once. A positive symmetric
+smoothing kernel preserves an exactly straight boundary when the panel and tile
+tops align; bottom alignment is its vertical reflection. Offset boundaries join
+with continuous curvature. The panel and sidebar keep their separate corner
+sizes in the published geometry.
+
+Gap positions drive entry and exit. With gap top `g`, height `h`, and tile top
+and bottom `B` and `E`, clamped quintic ramps use `(g+h-B)/h` and `(E-g)/h`.
+The gap's broad cap translates toward the panel plane while retaining its shape.
+Its implicit boundary is `abs((x-m)/D)^3 + ((y-c)/(h/2))^2 = 1`, where `c` is
+the gap center. For the standard 6 px gap and bridge, `D` is 4 px, leaving 2 px
+of connected bridge. The cap never widens the gap and meets its flat edges with
+zero curvature. Facing background corners fill as their attachments form; the
+tab bar's own rounding is independent of that backing.
+
+Dragging updates compact GPU parameters. It does not sample a CPU shape field,
+trace contours, rasterize bridge masks or generate glass bands. Tint, glass and
+shadow use the same GPU shape, and unchanged artwork retains the existing blur
+cache. Unchanged scenes retain their packed geometry; viewport and cached-blur
+reprojection update only their sampling parameters. Changed native chrome and
+its matching GPU background commit together;
+the input thread never waits for GPU completion. The worker retains the matching
+published buffer until GTK releases its revision, with the existing 100 ms
+recovery limit.
+
+GTK's common presenter factory schedules bridge, profile and glass pipelines
+on the background shader compiler at startup and for HDR/color replacements.
+The profile table is generated before chrome becomes ready. Presentation waits
+for that readiness without compiling pipelines or waiting for GPU completion in
+the drag path; color candidates prepare before adoption.
 
 Vertical groups retain saved proportions when their measured scroll targets fit.
 A scroll target includes fixed controls and four measured rows, or four tile
@@ -95,7 +174,8 @@ for full-column opening. Column grips expose the shared stack preferences, and
 closed aggregate dividers have no native resize source.
 
 On GTK, Web and Android, dropping a panel, toolbar, tab group or column in the menu/title bar
-prepends it to the side column directly below the pointer. An expanded column
+prepends it to the side column directly below the pointer, except in the
+first-group prepend strip described above. An expanded column
 receives new groups; a collapsed stack receives a new first member. A column
 inserted among expanded groups keeps its tree and opens its contents. No panel
 group reserves the upper portion of its body for a split insertion. Instead,
@@ -115,6 +195,12 @@ the grouping; that remains a real move with one undo step.
 ## Checks
 
 ```sh
+cargo test --locked --release -p layer-linux --lib workspace::allocation_tests
+LAYER_TEST_ARTIFACTS=artifacts/ui/column-panel-bridges bash tools/performance/workspace-motion.sh gtk --native-test=native_column_panel_bridge_input --tablet
+LAYER_TEST_ARTIFACTS=artifacts/ui/column-panel-configuration bash tools/performance/workspace-motion.sh gtk --native-test=native_column_panel_bridge_configuration
+LAYER_TEST_ARTIFACTS=artifacts/ui/column-panel-bridges-motion bash tools/performance/workspace-motion.sh gtk --native-test=native_column_panel_bridge_motion
+LAYER_TEST_ARTIFACTS=artifacts/ui/column-panel-bridge-timings bash tools/performance/workspace-motion.sh gtk --native-test=native_column_panel_bridge_motion_diagnostic
+LAYER_TEST_ARTIFACTS=artifacts/ui/column-bridge-transitions LAYER_NATIVE_CAPTURE_DIR="$CAPY_BRIDGE_CAPTURE_DIR" bash tools/performance/workspace-motion.sh gtk --native-test=native_column_panel_bridge_transitions
 bash tools/performance/workspace-motion.sh gtk --native-test=native_stack_member_drop_input
 bash tools/performance/workspace-motion.sh gtk --native-test=native_column_group_append_input
 bash tools/performance/workspace-motion.sh gtk --native-test=native_layout_drop_input
@@ -123,6 +209,28 @@ bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/colum
 bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/column-stack-persistence.swift
 ./apps/layer-windows/scripts/exercise-column-stacks.ps1 -Executable artifacts/windows/Release/CapyCanvas.exe -Device mouse
 ```
+
+The panel-bridge journey checks GPU background pixels, partial curves, gap caps,
+first/last physical tile rows, selected-tile seam pixels, tab-bar corner colors
+and Undo/Redo with mouse, touch and the tablet proxy in both themes on both sides. Its divider starts on a half-pixel coordinate to exercise alignment.
+The configuration journey checks that opening all controls expands the column,
+retires its GPU connection and restores the ordinary native configuration
+background, with clear space above it.
+Set `CAPY_BRIDGE_CAPTURE_DIR` to an owned SSD scratch directory for the transition
+journey. It records the actual compositor while switching tiles through eight
+panel-height fixtures in both themes on both sides, without synchronous pixel
+readback during recording. It requires upper-only and lower-only gap overlaps
+in each theme/side pair, verifies exact native tile/bridge extents, and saves
+the geometry beside its final screenshots; review the recorded frames for flashes.
+The separate motion journey runs without the tablet proxy and records a priming
+resize and three six-second mouse resize traces in each theme on each side,
+using completed presentation timings only while geometry changes. Its custom
+toolbars and default drawing provide a workstation diagnostic, not reference-tier
+qualification. The path uses the allocated minimum panel height so that its
+entire measured contact changes geometry; see the
+[GTK diagnostic](../performance/top-tier.md#gtk-column-bridge-diagnostic).
+The focused timing diagnostic runs the light-theme left column and exports
+existing owner, worker, GPU and presentation counters after each contact.
 
 Repeat the Windows run with `-Device pen` and `-Device touch`, serially on an
 unlocked desktop; the pointer leaves the strip before the Zen assertion because

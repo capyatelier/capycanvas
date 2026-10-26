@@ -14,7 +14,9 @@ fn native_collapsed_divider_drop_input() {
     let mut input = RemoteInput::new();
     input.ready();
     pump(500);
-    for edge in [Edge::Left, Edge::Right] {
+    for (theme, edge) in [Theme::Light, Theme::Dark].into_iter()
+        .flat_map(|theme| [Edge::Left, Edge::Right].map(|edge| (theme, edge))) {
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
         let mut fixture = layer_ui::WorkspaceState::default();
         fixture.layout.bands[0].edge = edge;
         fixture.layout.bands[1].edge = if edge == Edge::Left {
@@ -33,9 +35,10 @@ fn native_collapsed_divider_drop_input() {
         for touch in [false, true] {
             let device = if touch { "touch" } else { "mouse" };
             // +/-5px belongs to the divider; +/-8px joins a neighboring group.
-            for (offset, merge, cancel) in [(0., false, false), (8., true, false), (5., false, true)] {
+            for (leading, offset, merge, cancel) in [(true, -3., false, false), (true, 1., true, false),
+                (true, -3., false, true), (false, 0., false, false), (false, 8., true, false), (false, 5., false, true)] {
                 println!(
-                    "Checking {edge:?}, touch={touch}, offset={offset}, merge={merge}, cancel={cancel}"
+                    "Checking {theme:?}/{edge:?}, touch={touch}, leading={leading}, offset={offset}, merge={merge}, cancel={cancel}"
                 );
                 w.dispatch(UiAction::RestoreWorkspace {
                     workspace: Box::new(fixture.clone()),
@@ -44,21 +47,26 @@ fn native_collapsed_divider_drop_input() {
                 let before = saved();
                 let r = w.resolved();
                 let column = r.collapsed.iter().find(|c| c.id == 4).unwrap();
-                let group = &column.groups[1];
-                let divider_y = group.bounds.y - 6.;
+                let group = &column.groups[usize::from(!leading)];
+                let divider_y = if leading { column.bounds.y } else { group.bounds.y - 6. };
                 let destination = [column.bounds.x + 18., divider_y + offset];
-                let merge_group = if offset < 0. { 5 } else { 6 };
+                let merge_group = if leading || offset < 0. { 5 } else { 6 };
+                let first = w.columns.button(column.id, column.groups[0].icons[0].panel).unwrap()
+                    .compute_bounds(&w.surface).unwrap();
+                assert!((first.y() - column.bounds.y).abs() <= 1., "first tile starts at the column top");
                 let strip = find_named(w.surface.upcast_ref(), "collapsed-column-4").unwrap();
-                let separator = find_css(&strip, "collapsed-group")
-                    .unwrap()
-                    .next_sibling()
-                    .unwrap();
-                assert!(separator.has_css_class("column-divider"));
-                let divider = separator.compute_bounds(&w.surface).unwrap();
-                assert!(
-                    (divider.y() + divider.height() / 2. - divider_y).abs() < 1.,
-                    "native/shared divider alignment"
-                );
+                if !leading {
+                    let separator = find_css(&strip, "collapsed-group")
+                        .unwrap()
+                        .next_sibling()
+                        .unwrap();
+                    assert!(separator.has_css_class("column-divider"));
+                    let divider = separator.compute_bounds(&w.surface).unwrap();
+                    assert!(
+                        (divider.y() + divider.height() / 2. - divider_y).abs() < 1.,
+                        "native/shared divider alignment"
+                    );
+                }
                 let source = find_named(w.surface.upcast_ref(), "column-icon-Layers")
                     .unwrap()
                     .compute_bounds(&w.surface)
@@ -101,12 +109,13 @@ fn native_collapsed_divider_drop_input() {
                     assert_eq!(
                         hint.target,
                         DockTarget::Split {
-                            group: 6,
+                            group: group.group,
                             edge: Edge::Top
                         },
                         "{edge:?}, touch={touch}, offset={offset}"
                     );
-                    assert!((hint.bounds.y + hint.bounds.height / 2. - divider_y).abs() < 1.);
+                    if leading { assert_eq!(hint.bounds.y, column.bounds.y); }
+                    else { assert!((hint.bounds.y + hint.bounds.height / 2. - divider_y).abs() < 1.); }
                 }
                 if cancel {
                     input.perform(
@@ -116,8 +125,11 @@ fn native_collapsed_divider_drop_input() {
                         w.workspace_drag.borrow().is_none(),
                         "Escape cancels before release"
                     );
-                } else if edge == Edge::Left && !touch && !merge && offset == 0. {
-                    capture_reference(&w, "/tmp/capy-column-drop-gtk.png", 1.0);
+                } else if !leading && edge == Edge::Left && !touch && !merge && offset == 0. {
+                    let output = std::env::var("LAYER_TEST_ARTIFACTS")
+                        .unwrap_or_else(|_| "artifacts/column-leading-drop/gtk".into());
+                    std::fs::create_dir_all(&output).unwrap();
+                    capture_reference(&w, &format!("{output}/column-drop-{theme:?}.png"), 1.0);
                 }
                 input.perform(serde_json::json!([contact(device, "up", destination)]));
                 assert!(w.workspace_drag.borrow().is_none());

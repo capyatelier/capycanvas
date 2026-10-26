@@ -53,6 +53,11 @@ flattens facing corners within `SURFACE_RADIUS` of the tile
 (`DrawerPlacement::source_corners`), so a padded container's larger rounding
 never clips the square join. A closing drawer keeps these joins while its body
 and connector shrink; they round again only once the drawer is removed.
+Open collapsed columns publish corner geometry for their sidebar and ordinary
+panel groups. GTK uses the per-corner radii and receiving-panel geometry
+described in [stacked columns](stacked-columns.md), including partial curves and
+continuous connections with inverted curves at panel gaps. GTK's connected tab bar
+keeps its own upper outline, with panel-colored fill behind its rounded corners.
 
 Panel-tab hover keeps the existing 18-unit upper corners. Shared
 `TabPresentation.hover_bottom` publishes the left and right lower radii:
@@ -113,7 +118,10 @@ circular rounded clip, uniform border or outline, and outset shadow as a
 squircle with the circle radius divided by the fit. Undesigned toolkit radii
 keep their former visual rounding the same way. Masks are rasterized once per
 device-pixel geometry and reused as GPU textures; unchanged render nodes,
-including shadow-wrapped subtrees, are reused between frames.
+including shadow-wrapped subtrees, are reused between frames. Conversion descends
+through bridge masks, color matrices, crossfades, blends and blur nodes. Both
+children of a mask or transition retain the same corner and shadow conversion
+as an unwrapped panel, including when a connected corner reaches zero radius.
 Blurred outset shadows never reach GTK's analytic box-shadow shader. In GTK
 4.22 it returns NaN near rounded corners for some radius-to-blur ratios on
 NVIDIA, including the 9.72px drawer radius with its 24px blur. HDR windows
@@ -125,6 +133,13 @@ node.
 Subtrees that must stay round are drawn through `squircle::append_round`.
 Rust-drawn rounded rectangles in the workspace multiply design radii by
 `squircle::CORNER_FIT`.
+
+GTK's connected collapsed-column backgrounds use the workspace GPU renderer instead
+of GTK masks. A cached normalized profile supplies smooth outer joins; analytic
+gap caps stay within the panel gap. One coverage field supplies the sidebar,
+receiving panels, bridges, glass and shadow. Native controls retain their clips,
+and the tab bar retains its own rounded upper outline over the joined backing.
+See [stacked columns](stacked-columns.md).
 
 Android uses `SquircleShape`, a Compose `CornerBasedShape`, through
 `TileShape`, `SurfaceShape` and `ControlShape`; custom paths share
@@ -171,9 +186,11 @@ appear in native drag snapshots.
   and reduced motion. Android's selection timing fixture is described in
   [Android benchmarks](../development/android.md#benchmarks).
 - GTK: `tools/performance/workspace-motion.sh gtk --native-test=native_squircle_corners`
-  (corner picks reach tiles, shadowed subtrees convert and blurred drawer shadows
-  stay finite; add `GDK_DEBUG=color-mgmt MUTTER_DEBUG_FORCE_HDR=1` for the HDR
+  (corner picks reach tiles, masked and unmasked shadows with changing corner
+  radii stay finite; add `GDK_DEBUG=color-mgmt MUTTER_DEBUG_FORCE_HDR=1` for the HDR
   path), plus `--drawer-style` and `--drag-pickup`.
+  Window-free `squircle::tests` covers wrapper parameters, both mask/transition
+  children, changing corner radii, scale changes and retained converted nodes.
 - Web: `apps/layer-web/test.mjs` with `--drawer-style`, `--toolbar-components`,
   `--compact-workspaces`, `--tab-styles` and `--title-bar-state`.
 - Apple: `bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/squircle-geometry.swift`

@@ -301,6 +301,10 @@ impl BackdropBlur {
         self.frames
     }
 
+    pub fn cached(&self) -> Option<(&wgpu::Texture, Affine)> {
+        self.cache.as_ref().map(|(texture,_)| (texture,self.reprojection))
+    }
+
     fn bind(&self, device: &wgpu::Device, texture: &wgpu::Texture) -> wgpu::BindGroup {
         crate::bindings::group(device, "backdrop blur", &self.layout, [
             wgpu::BindingResource::TextureView(&texture.create_view(&Default::default())),

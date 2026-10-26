@@ -140,6 +140,10 @@ dock allocator. This shares docking rules without prescribing widget types.
 Both frontends dispatch `DragDivider` phases in full-window logical coordinates
 and `NudgeDivider` directions for keyboard resizing. Rust owns drag lifecycle,
 the 12px nudge step, inset conversion, direction, handle thickness, ratios and limits.
+Allocation and resizing use the same measured header origin and full-window
+width for responsive sizing. An accepted workspace edit finishes any active
+resize as its own history entry before recording the edit; late resize events
+are inert. GTK retires detached resize sources before admitting another contact.
 Resize gestures preserve the pointer-to-divider grab offset in stable window
 coordinates, never accumulating offsets from a moving handle. GTK uses the
 [surface-relative event position](https://docs.gtk.org/gdk4/method.Event.get_position.html).

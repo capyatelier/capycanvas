@@ -112,6 +112,8 @@ mod test_support;
 mod present;
 mod backdrop_blur;
 pub use backdrop_blur::{BackdropBlurStyle, BackdropRegion};
+mod panel_surface;
+pub use panel_surface::{PanelSurface, PanelSurfaceGroup};
 mod present_picker;
 mod artwork;
 mod display_mips;
@@ -1565,6 +1567,7 @@ impl WgpuRasterizer {
         if self.object_deferred {return None;}
         self.scale_display.as_ref().map(|cache|[cache.view(),cache.coarse_view(),cache.next_view()])
     }
+    pub fn has_presentable_frame(&self) -> bool { self.presentation_views().is_some() }
     pub(crate) fn presentation_views(&self)->Option<[&wgpu::TextureView;3]> {
         if self.display_backup.is_some() {return self.display_views();}
         if self.object_deferred {return None;}

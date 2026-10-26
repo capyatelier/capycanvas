@@ -534,7 +534,7 @@ impl View {
                 grip.set_size_request(20, 24);
                 grip.set_valign(gtk::Align::Center);
                 header.append(&crate::panel_tabs::strip_end(&grip));
-                container.append(&header);
+                container.append(&crate::panel_tabs::bar(&header));
                 scroller.add_css_class("panel-body");
                 scroller.set_vexpand(true);
                 container.append(&scroller);
@@ -869,18 +869,9 @@ impl Drawer {
             let connection = result.connection();
             view.connection_geometry.set(connection);
             view.connection.queue_draw();
-            for (index, class) in ["join-nw", "join-ne", "join-se", "join-sw"]
-                .into_iter()
-                .enumerate()
-            {
-                if connection.is_some_and(|c| c.square_corners[index]) {
-                    view.root.add_css_class(class);
-                    view.shadow.add_css_class(class);
-                } else {
-                    view.root.remove_css_class(class);
-                    view.shadow.remove_css_class(class);
-                }
-            }
+            let corners = connection.map_or([false; 4], |c| c.square_corners);
+            customization::square_corners(&view.root, corners);
+            customization::square_corners(&view.shadow, corners);
         }
         self.mark_origin(w, Some(&result));
         *self.presented.borrow_mut() = Some(result.clone());

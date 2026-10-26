@@ -1,5 +1,165 @@
 const STACK_VIEW: [f32; 2] = [1800., 1100.];
 
+fn measured_divider_session() -> UiSession<Recorder> {
+    let mut s = session(Platform::Gtk);
+    s.state.workspace.layout.bands.iter_mut().find(|band| band.id == 3).unwrap().extent = 420.;
+    s.dispatch(UiAction::MeasureHeader { height: HEADER_HEIGHT + 24., items: Vec::new() }).unwrap();
+    s
+}
+
+#[test]
+fn divider_geometry_measured_header_current_center_is_noop() {
+    let mut failures = Vec::new();
+    for axis in [Axis::Vertical, Axis::Horizontal] {
+        let mut s = measured_divider_session();
+        let divider = s.layout(STACK_VIEW).dividers.into_iter().find(|d| d.axis == axis).unwrap();
+        let center = [divider.bounds.x + divider.bounds.width * 0.5, divider.bounds.y + divider.bounds.height * 0.5];
+        let before = crate::durable_layout(&s.state.workspace.layout);
+        s.state.workspace.layout.resize_workspace(divider.id, center, STACK_VIEW).unwrap();
+        if crate::durable_layout(&s.state.workspace.layout) != before {
+            failures.push(format!("{axis:?} divider {} changed at its current measured-header center {center:?}", divider.id));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("; "));
+}
+
+#[test]
+fn divider_geometry_measured_header_moves_twelve_pixels_in_both_axes() {
+    let mut failures = Vec::new();
+    for axis in [Axis::Vertical, Axis::Horizontal] {
+        for delta in [-12., 12.] {
+            let mut s = measured_divider_session();
+            let divider = s.layout(STACK_VIEW).dividers.into_iter().find(|d| d.axis == axis).unwrap();
+            let dimension = usize::from(axis == Axis::Vertical);
+            let center = |d: &Divider| [d.bounds.x + d.bounds.width * 0.5, d.bounds.y + d.bounds.height * 0.5];
+            let start = center(&divider);
+            let mut target = start; target[dimension] += delta;
+            s.state.workspace.layout.resize_workspace(divider.id, target, STACK_VIEW).unwrap();
+            let updated = s.layout(STACK_VIEW).dividers.into_iter().find(|d| d.id == divider.id).unwrap();
+            let actual = center(&updated)[dimension] - start[dimension];
+            if (actual - delta).abs() >= 0.01 {
+                failures.push(format!("{axis:?} divider {} moved {actual}px for requested {delta}px with a measured header", divider.id));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("; "));
+}
+
+fn assert_ordinary_divider_structure(s: &UiSession<Recorder>) {
+    fn splits(node: &DockNode, expected: &mut std::collections::BTreeMap<u32, (bool, Axis)>) {
+        if let DockNode::Split { id, axis, first, second, .. } = node {
+            assert!(expected.insert(*id, (false, *axis)).is_none());
+            splits(first, expected); splits(second, expected);
+        }
+    }
+    let layout = &s.state.workspace.layout;
+    layout.validate().unwrap();
+    let resolved = s.layout(STACK_VIEW);
+    assert!(resolved.collapsed.is_empty());
+    let mut expected = std::collections::BTreeMap::new();
+    for band in &layout.bands {
+        if band.alignment.is_none() {
+            assert!(expected.insert(band.id, (true, band.edge.axis())).is_none());
+            splits(&band.root, &mut expected);
+        }
+    }
+    let mut actual = std::collections::BTreeMap::new();
+    for divider in &resolved.dividers {
+        assert!(actual.insert(divider.id, (divider.band, divider.axis)).is_none(), "duplicate resolved divider {}", divider.id);
+        assert!(!divider.fixed && divider.bounds.width > 0. && divider.bounds.height > 0.);
+    }
+    assert_eq!(actual, expected, "every surviving band and split owns exactly one divider");
+}
+
+#[test]
+fn divider_geometry_merge_retires_active_drag_and_recovers_history() {
+    let mut s = session(Platform::Gtk);
+    assert_ordinary_divider_structure(&s);
+    let before = crate::durable_layout(&s.state.workspace.layout);
+    let divider = s.layout(STACK_VIEW).dividers.into_iter().find(|d| !d.band && d.axis == Axis::Vertical).unwrap();
+    let center = [divider.bounds.x + divider.bounds.width * 0.5, divider.bounds.y + divider.bounds.height * 0.5];
+    s.dispatch(UiAction::DragDivider { id: divider.id, phase: ContactPhase::Down, position: center, viewport: STACK_VIEW }).unwrap();
+    let moved = [center[0], center[1] + 12.];
+    s.dispatch(UiAction::DragDivider { id: divider.id, phase: ContactPhase::Move, position: moved, viewport: STACK_VIEW }).unwrap();
+    let resized = crate::durable_layout(&s.state.workspace.layout);
+    assert_ne!(resized, before);
+    assert!(s.localization_input_busy());
+    s.dispatch(UiAction::MovePanel { panel: Panel::Brushes, target: DockTarget::Tab { group: 8, index: None }, viewport: STACK_VIEW }).unwrap();
+    assert_ordinary_divider_structure(&s);
+    assert!(!s.layout(STACK_VIEW).dividers.iter().any(|d| d.id == divider.id));
+    let merged = crate::durable_layout(&s.state.workspace.layout);
+    assert_ne!(merged, before);
+    for phase in [ContactPhase::Move, ContactPhase::Up] {
+        s.dispatch(UiAction::DragDivider { id: divider.id, phase, position: moved, viewport: STACK_VIEW }).unwrap();
+    }
+    assert!(!s.localization_input_busy(), "removed divider must retire its gesture after late Move/Up");
+    s.require_workspace_idle().unwrap();
+    assert!(s.command(CommandId::UndoWorkspace).enabled, "the tab merge remains one recoverable history entry");
+    invoke(&mut s, CommandId::UndoWorkspace);
+    assert_eq!(crate::durable_layout(&s.state.workspace.layout), resized, "undo merge preserves the preceding resize");
+    assert_ordinary_divider_structure(&s);
+    invoke(&mut s, CommandId::UndoWorkspace);
+    assert_eq!(crate::durable_layout(&s.state.workspace.layout), before);
+    assert_ordinary_divider_structure(&s);
+    invoke(&mut s, CommandId::RedoWorkspace);
+    assert_eq!(crate::durable_layout(&s.state.workspace.layout), resized);
+    assert_ordinary_divider_structure(&s);
+    invoke(&mut s, CommandId::RedoWorkspace);
+    assert_eq!(crate::durable_layout(&s.state.workspace.layout), merged);
+    assert_ordinary_divider_structure(&s);
+    let next = s.layout(STACK_VIEW).dividers.into_iter().find(|d| d.band && d.axis == Axis::Horizontal).unwrap();
+    let start = [next.bounds.x + next.bounds.width * 0.5, next.bounds.y + next.bounds.height * 0.5];
+    for phase in [ContactPhase::Down, ContactPhase::Move, ContactPhase::Up] {
+        let position = if phase == ContactPhase::Down { start } else { [start[0] + 12., start[1]] };
+        s.dispatch(UiAction::DragDivider { id: next.id, phase, position, viewport: STACK_VIEW }).unwrap();
+    }
+    s.require_workspace_idle().unwrap();
+    assert_ne!(crate::durable_layout(&s.state.workspace.layout), merged);
+    invoke(&mut s, CommandId::UndoWorkspace);
+    assert_eq!(crate::durable_layout(&s.state.workspace.layout), merged);
+    assert_ordinary_divider_structure(&s);
+}
+
+#[test]
+fn divider_geometry_floating_tab_merge_retires_resize_and_recovers_history() {
+    let mut s = session(Platform::Gtk);
+    s.dispatch(UiAction::MovePanel { panel: Panel::Brushes, target: DockTarget::Float { position: [700., 220.] }, viewport: STACK_VIEW }).unwrap();
+    let workspace = s.state.workspace.clone();
+    s.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(workspace) }).unwrap();
+    let before = crate::durable_layout(&s.state.workspace.layout);
+    let source = s.layout(STACK_VIEW).groups.into_iter().find(|g| g.floating && g.panels.contains(&Panel::Brushes)).unwrap();
+    let start = [source.bounds.x + source.bounds.width, source.bounds.y + source.bounds.height * 0.5];
+    let moved = [start[0] + 12., start[1]];
+    for phase in [ContactPhase::Down, ContactPhase::Move] {
+        s.dispatch(UiAction::ResizeFloating { group: source.id, edge: ResizeEdge::Right, phase,
+            position: if phase == ContactPhase::Down { start } else { moved }, viewport: STACK_VIEW }).unwrap();
+    }
+    let resized = crate::durable_layout(&s.state.workspace.layout);
+    assert_ne!(resized, before);
+    assert!(s.localization_input_busy());
+    s.dispatch(UiAction::MovePanel { panel: Panel::Brushes, target: DockTarget::Tab { group: 8, index: None }, viewport: STACK_VIEW }).unwrap();
+    assert!(s.state.workspace.layout.floating.is_empty());
+    let merged = crate::durable_layout(&s.state.workspace.layout);
+    assert_ordinary_divider_structure(&s);
+    for phase in [ContactPhase::Move, ContactPhase::Up] {
+        s.dispatch(UiAction::ResizeFloating { group: source.id, edge: ResizeEdge::Right, phase,
+            position: moved, viewport: STACK_VIEW }).unwrap();
+    }
+    assert!(!s.localization_input_busy());
+    s.require_workspace_idle().unwrap();
+    invoke(&mut s, CommandId::UndoWorkspace);
+    assert_eq!(crate::durable_layout(&s.state.workspace.layout), resized, "undo merge preserves the preceding floating resize");
+    assert_ordinary_divider_structure(&s);
+    invoke(&mut s, CommandId::UndoWorkspace);
+    assert_eq!(crate::durable_layout(&s.state.workspace.layout), before);
+    assert_ordinary_divider_structure(&s);
+    invoke(&mut s, CommandId::RedoWorkspace);
+    assert_eq!(crate::durable_layout(&s.state.workspace.layout), resized);
+    invoke(&mut s, CommandId::RedoWorkspace);
+    assert_eq!(crate::durable_layout(&s.state.workspace.layout), merged);
+    assert_ordinary_divider_structure(&s);
+}
+
 fn three_member_target() -> UiSession<Recorder> {
     let mut s = session(Platform::Gtk);
     let layout = &mut s.state.workspace.layout;
@@ -356,7 +516,6 @@ fn gtk_stack_member_targets_preserve_tabs_dividers_and_other_hosts() {
         (center(above.grip), left),
         (center(below.grip), right),
         (center(below.empty), right),
-        (gap, left),
     ] {
         let hint = s.drop_hint(STACK_VIEW, point, &[], item, None).unwrap();
         assert_eq!(
@@ -367,6 +526,8 @@ fn gtk_stack_member_targets_preserve_tabs_dividers_and_other_hosts() {
             }
         );
     }
+    assert_eq!(s.drop_hint(STACK_VIEW, gap, &[], item, None).unwrap().target,
+        DockTarget::Split { group: below.groups[0].group, edge: Edge::Top });
     let icon = center(above.groups[0].icons[0].bounds);
     assert!(matches!(
         s.drop_hint(STACK_VIEW, icon, &[], item, None)
@@ -421,6 +582,154 @@ fn gtk_stack_member_targets_preserve_tabs_dividers_and_other_hosts() {
             .is_err()
     );
     assert_eq!(s.state.workspace.layout, before);
+}
+
+#[test]
+fn first_groups_accept_drops_above_each_member_without_padding() {
+    for platform in Platform::ALL {
+        for edge in [Edge::Left, Edge::Right] {
+            for index in 0..3 {
+                for item in [DockItem::Panel { panel: Panel::Properties }, DockItem::Group { group: 8 },
+                    DockItem::Group { group: 2 }] {
+                    let mut s = three_member_target();
+                    s.set_platform(platform);
+                    s.state.workspace.layout.bands[0].edge = edge;
+                    s.state.workspace.layout.bands[1].edge = if edge == Edge::Left { Edge::Right } else { Edge::Left };
+                    let members = s.state.workspace.layout.column_stack(4).members;
+                    let resolved = s.layout(STACK_VIEW);
+                    let column = resolved.collapsed.iter().find(|c| c.id == members[index]).unwrap();
+                    let first = column.groups.first().unwrap();
+                    let x = column.bounds.x + TILE_SIZE * 0.5;
+                    assert_eq!(first.bounds.y, column.bounds.y);
+                    let hint = s.drop_hint(STACK_VIEW, [x, column.bounds.y - 3.], &[], item, None).unwrap();
+                    assert_eq!(hint.target, DockTarget::Split { group: first.group, edge: Edge::Top });
+                    assert_eq!(hint.bounds.y, column.bounds.y);
+                    assert!(matches!(s.drop_hint(STACK_VIEW, [x, first.bounds.y + 1.], &[], item, None).unwrap().target,
+                        DockTarget::Tab { group, .. } if group == first.group));
+                    assert!(resolved.drop_hint(x, column.bounds.y - 3., &[], false).is_none());
+                    let before = crate::durable_layout(&s.state.workspace.layout);
+                    s.dispatch(item.move_action(hint.target, STACK_VIEW)).unwrap();
+                    let stack = s.state.workspace.layout.column_stack(4);
+                    assert_eq!(stack.members.len(), members.len());
+                    for other in 0..members.len() {
+                        if other != index { assert_eq!(stack.members[other], members[other]); }
+                    }
+                    let after_layout = s.layout(STACK_VIEW);
+                    let updated = after_layout.collapsed.iter().find(|c| c.id == stack.members[index]).unwrap();
+                    assert_eq!(updated.groups.len(), column.groups.len() + 1);
+                    assert_eq!(updated.groups[1].group, first.group);
+                    let after = crate::durable_layout(&s.state.workspace.layout);
+                    invoke(&mut s, CommandId::UndoWorkspace);
+                    assert_eq!(crate::durable_layout(&s.state.workspace.layout), before);
+                    invoke(&mut s, CommandId::RedoWorkspace);
+                    assert_eq!(crate::durable_layout(&s.state.workspace.layout), after);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn panel_bridges_preserve_the_receivers_original_corner_radii() {
+    for edge in [Edge::Left, Edge::Right] {
+        for clearance in [0., 0.5, 4., 10., 18., 24.] {
+            let mut resolved = column_bridge_fixture(edge);
+            let target = resolved.groups.iter_mut().find(|group| group.id == 5).unwrap();
+            target.bounds.y = 100. - clearance;
+            target.bounds.height = 160.;
+            let resolved = resolved.with_panel_bridges();
+            let target = resolved.groups.iter().find(|group| group.id == 5).unwrap();
+            assert_eq!(target.corner_radii, [SURFACE_RADIUS; 4]);
+            let column = &resolved.collapsed[0];
+            let corner = if edge == Edge::Left { 1 } else { 0 };
+            assert_eq!(column.corner_radii[corner], 0.);
+            let bridges = resolved.panel_bridges();
+            assert_eq!(bridges.len(), 1);
+            assert_eq!(bridges[0].2.anchor.y, 100.);
+            assert_eq!(bridges[0].2.receivers[0].radii, [SURFACE_RADIUS;4]);
+        }
+    }
+}
+
+fn column_bridge_fixture(edge: Edge) -> ResolvedLayout {
+    let mut s = three_member_target();
+    s.state.workspace.layout.bands[0].edge = edge;
+    s.state.workspace.layout.bands[1].edge = if edge == Edge::Left { Edge::Right } else { Edge::Left };
+    click_column(&mut s, Panel::Brushes);
+    let mut r = s.layout(STACK_VIEW);
+    r.collapsed.retain(|column| column.id == 4);
+    r.groups.retain(|group| matches!(group.id, 5 | 6));
+    let c = &mut r.collapsed[0];
+    c.bounds.y = 100.;
+    c.bounds.height = 240.;
+    c.content.y = 100.;
+    c.content.height = 210.;
+    c.groups[0].icons[0].bounds.y = 100.;
+    c.groups[0].icons[0].bounds.height = TILE_SIZE;
+    c.groups[1].icons.clear();
+    for (id, y) in [(5, 100.), (6, 300.)] {
+        let target = r.groups.iter_mut().find(|group| group.id == id).unwrap();
+        target.bounds.y = y;
+        target.bounds.height = 160.;
+    }
+    r
+}
+
+#[test]
+fn panel_bridge_receivers_keep_identity_and_only_own_the_facing_groups() {
+    for edge in [Edge::Left,Edge::Right] {
+        let mut resolved=column_bridge_fixture(edge).with_panel_bridges();
+        let radii=[18.,12.,6.,0.];
+        resolved.groups.iter_mut().find(|g|g.id==5).unwrap().corner_radii=radii;
+        resolved.groups.iter_mut().find(|g|g.id==6).unwrap().bounds.x+=100.;
+        let bridges=resolved.panel_bridges();
+        assert_eq!(bridges.len(),1);
+        assert_eq!(bridges[0].2.receivers.iter().map(|r|r.group).collect::<Vec<_>>(),vec![5]);
+        assert_eq!(bridges[0].2.receivers[0].radii,radii);
+        resolved.groups.reverse();
+        assert_eq!(resolved.panel_bridges(),bridges);
+        resolved.collapsed[0].open=None;
+        assert!(resolved.panel_bridges().is_empty());
+        let closed=resolved.with_panel_bridges();
+        assert!(closed.collapsed[0].groups.iter().flat_map(|g|&g.icons).all(|icon|
+            icon.corner_radii==[icon.bounds.width.min(icon.bounds.height)*0.5;4]));
+    }
+}
+
+#[test]
+fn flush_column_connections_keep_the_receiving_radius_and_join_the_source_corner() {
+    for platform in Platform::ALL {
+        for edge in [Edge::Left, Edge::Right] {
+            let mut s = three_member_target();
+            s.set_platform(platform);
+            s.state.workspace.layout.bands[0].edge = edge;
+            s.state.workspace.layout.bands[1].edge = if edge == Edge::Left { Edge::Right } else { Edge::Left };
+            let closed = s.layout(STACK_VIEW).with_panel_bridges();
+            assert!(closed.collapsed.iter().all(|c| c.corner_radii.iter().all(|r| *r > 0.)));
+            let original_radii: Vec<_> = closed.groups.iter().map(|g| (g.id,g.corner_radii)).collect();
+            click_column(&mut s, Panel::Brushes);
+            let resolved = s.layout(STACK_VIEW).with_panel_bridges();
+            let column = resolved.collapsed.iter().find(|c| c.id == 4).unwrap();
+            let open = column.open.as_ref().unwrap();
+            let first = &column.groups[0];
+            let connection = &open.connections.iter().find(|(panel, _)| *panel == first.active).unwrap().1;
+            assert_eq!(first.bounds.y, open.bounds.y);
+            assert_eq!(connection.bounds.y, first.bounds.y);
+            assert_eq!(connection.radii, [0., WORKSPACE_SPACING]);
+            let source_corner = if edge == Edge::Left { 1 } else { 0 };
+            assert_eq!(column.corner_radii.map(|r| r == 0.), std::array::from_fn(|i| i == source_corner));
+            let target = resolved.groups.iter().find(|g| g.id == first.group).unwrap();
+            let target_corner = if edge == Edge::Left { 0 } else { 1 };
+            assert_eq!(target.corner_radii[target_corner], SURFACE_RADIUS);
+            for (_, lower) in open.connections.iter().skip(1) {
+                assert!(lower.radii.iter().all(|r| *r > 0.));
+            }
+            click_column(&mut s, Panel::Brushes);
+            let closed = s.layout(STACK_VIEW).with_panel_bridges();
+            assert!(closed.collapsed.iter().all(|c| c.corner_radii.iter().all(|r| *r > 0.)));
+            assert_eq!(closed.groups.iter().map(|g| (g.id,g.corner_radii)).collect::<Vec<_>>(),original_radii);
+        }
+    }
 }
 
 #[test]

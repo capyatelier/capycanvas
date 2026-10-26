@@ -142,7 +142,8 @@ impl DrawerConnection {
             [min[0], min[1], max[0] - min[0], max[1] - min[1]]
         };
         let [length, depth] = [self.length, self.depth];
-        let mut shapes = vec![(square(0., 0., length, depth), [0.; 4])];
+        let mut shapes = Vec::new();
+        if length > 0. && depth > 0. { shapes.push((square(0., 0., length, depth), [0.; 4])); }
         for (edge, r, direction) in [(0., self.radii[0], -1.), (length, self.radii[1], 1.)] {
             if r <= 0. {
                 continue;
@@ -737,6 +738,7 @@ impl CustomizationState {
                 Some(GroupPlacement {
                     id: group,
                     bounds,
+                    corner_radii: [SURFACE_RADIUS; 4],
                     panels: panels.to_vec(),
                     active,
                     axis: Axis::Vertical,

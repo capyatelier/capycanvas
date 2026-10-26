@@ -12723,7 +12723,8 @@ impl RemoteInput {
         pump(self.settle_ms);
     }
     pub(crate) fn click(&mut self, point: [f32; 2]) {
-        self.perform(serde_json::json!([{ "point": point }, { "down": true }, { "down": false }]));
+        self.perform(serde_json::json!([{ "point": point }]));
+        self.perform(serde_json::json!([{ "down": true }, { "down": false }]));
     }
     fn key(&mut self, key: u32) {
         self.perform(

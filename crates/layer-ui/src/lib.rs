@@ -111,6 +111,8 @@ pub use header_drag::*;
 mod bubbles;
 pub use bubbles::*;
 mod drawers;
+mod panel_bridges;
+pub use panel_bridges::{PanelBridge, PanelBridgeReceiver};
 pub use drawers::{
     ColumnDrawerMeasurement, ContentDrawer, DrawerAnchor, DrawerConnection, DrawerDismissal,
     DrawerPlacement, DrawerTabs, DrawerTileMeasurement, TileAnchor, drawer_frame,

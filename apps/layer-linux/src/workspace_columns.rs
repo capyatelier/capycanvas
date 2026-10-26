@@ -7,16 +7,122 @@ struct Strip {
     root: gtk::Box,
     key: Vec<(u32, Vec<Panel>)>,
     buttons: Vec<(Panel, gtk::Button)>,
-    open_tiles: RefCell<Vec<(Panel, Edge)>>,
     scroll: gtk::Adjustment,
     updating_scroll: Rc<Cell<bool>>,
+    tint: gtk::Box,
+}
+impl Strip {
+    fn matches(&self, column: &layer_ui::CollapsedColumnPlacement) -> bool {
+        self.id==column.id && self.root.parent().is_some() && self.key.len()==column.groups.len()
+            && self.key.iter().zip(&column.groups).all(|((id,panels),group)|
+                *id==group.group && panels.iter().copied().eq(group.icons.iter().map(|icon|icon.panel)))
+    }
 }
 #[derive(Default)]
 pub(super) struct Columns {
     strips: RefCell<Vec<Strip>>,
+    pub(super) connection_geometry: RefCell<Vec<(u32, Panel, layer_ui::PanelBridge)>>,
     pub drawers: RefCell<Vec<Rc<drawers::Drawer>>>,
 }
 impl Columns {
+    pub fn present_connections(&self, w: &Workspace, layout: &ResolvedLayout) {
+        let mut layout = layout.clone();
+        let groups = w.groups.borrow();
+        layout.groups.retain_mut(|group| {
+            let Some(bounds) = groups.iter().find(|g| g.id == group.id).and_then(|g| g.root.compute_bounds(&w.surface)) else {return false;};
+            if bounds.width()<=0. || bounds.height()<=0. {return false;}
+            group.bounds = Bounds { x: bounds.x(), y: bounds.y(), width: bounds.width(), height: bounds.height() };
+            true
+        });
+        let strips = self.strips.borrow();
+        layout.collapsed.retain_mut(|column| {
+            let Some(strip) = strips.iter().find(|s| s.id == column.id) else { return false; };
+            let Some(bounds) = strip.root.compute_bounds(&w.surface) else {return false;};
+            column.bounds = Bounds { x: bounds.x(), y: bounds.y(), width: bounds.width(), height: bounds.height() };
+            let Some(content) = strip.root.first_child().and_then(|scroll| scroll.compute_bounds(&w.surface)) else {return false;};
+            column.content = Bounds {x:content.x(),y:content.y(),width:content.width(),height:content.height()};
+            for icon in column.groups.iter_mut().flat_map(|g| &mut g.icons) {
+                if let Some(bounds) = strip.buttons.iter().find(|(p, _)| *p == icon.panel).and_then(|(_, b)| b.compute_bounds(&w.surface)) {
+                    icon.bounds = Bounds { x: bounds.x(), y: bounds.y(), width: bounds.width(), height: bounds.height() };
+                } else {icon.bounds=Bounds::default();}
+            }
+            if let Some(open) = &mut column.open {
+                let bounds = layout.groups.iter().filter(|g| column.groups.iter().any(|c| c.group == g.id)).map(|g| g.bounds);
+                if let Some(bounds) = bounds.reduce(|a, b| Bounds {
+                    x: a.x.min(b.x), y: a.y.min(b.y),
+                    width: (a.x + a.width).max(b.x + b.width) - a.x.min(b.x),
+                    height: (a.y + a.height).max(b.y + b.height) - a.y.min(b.y),
+                }) { open.bounds = bounds; }
+            }
+            true
+        });
+        drop(strips);
+        drop(groups);
+        let layout = layout.with_panel_bridges();
+        w.present_column_corners(&layout);
+        let bridges=layout.panel_bridges();
+        self.present_surface_ownership(w,&bridges);
+        *self.connection_geometry.borrow_mut()=bridges;
+    }
+
+    fn present_surface_ownership(&self,w: &Workspace,bridges: &[(u32,Panel,layer_ui::PanelBridge)]) {
+        let roots: Vec<_>=w.groups.borrow().iter().map(|g|(g.root.clone().upcast::<gtk::Widget>(),Some(g.tab_strip.clone()),
+            bridges.iter().any(|(_,_,b)|b.receivers.iter().any(|r|r.group==g.id)))).chain(self.strips.borrow().iter()
+            .map(|s|(s.root.clone().upcast(),None,bridges.iter().any(|(id,..)|*id==s.id)))).collect();
+        for (root,tabs,active) in roots {
+            if let Some(tabs)=tabs {tabs.set_gpu_background(active);}
+            if root.has_css_class("gpu-panel-surface")!=active {
+                if active { root.add_css_class("gpu-panel-surface"); } else { root.remove_css_class("gpu-panel-surface"); }
+            }
+        }
+    }
+
+    pub fn snapshot(&self, w: &Workspace) -> Vec<layer_render_wgpu::PanelSurface> {
+        let rect = |b: gtk::graphene::Rect| [b.x(),b.y(),b.width(),b.height()];
+        let rgba = |c: gdk::RGBA| [c.red(),c.green(),c.blue(),c.alpha()];
+        let strips=self.strips.borrow();
+        let geometry=self.connection_geometry.borrow();
+        let groups=w.groups.borrow();
+        let mut surfaces=Vec::new();
+        for strip in strips.iter() {
+            let Some((_,_,first))=geometry.iter().find(|(id,..)|*id==strip.id) else { continue; };
+            let Some(sidebar)=strip.root.compute_bounds(&w.surface) else { continue; };
+            let source_visible=!strip.root.has_css_class("zen-hidden");
+            let color=rgba(strip.tint.color());
+            let mut panels=Vec::new();
+            for receiver in &first.receivers {
+                let bounds=receiver.bounds;
+                let Some(group)=groups.iter().find(|g|g.id==receiver.group) else { continue; };
+                if group.root.has_css_class("zen-hidden") { continue; }
+                let mut bar=group.tab_strip.parent();
+                while bar.as_ref().is_some_and(|b|b.widget_name()!="panel-tab-bar") { bar=bar.and_then(|b|b.parent()); }
+                let bar=bar.filter(|b|group.tabs_visible && b.is_mapped()).and_then(|b|b.compute_bounds(&w.surface));
+                let active=group.tabs.iter().find(|(_,b)|b.has_css_class("selected-tool") && b.opacity()>0.)
+                    .and_then(|(_,b)|b.compute_bounds(&w.surface));
+                let mut viewport=group.tab_strip.parent();
+                while viewport.as_ref().is_some_and(|b|!b.is::<gtk::ScrolledWindow>()) { viewport=viewport.and_then(|b|b.parent()); }
+                let clip=viewport.and_then(|b|b.compute_bounds(&w.surface)).or(bar);
+                let colors=group.tab_strip.surface_colors();
+                panels.push(layer_render_wgpu::PanelSurfaceGroup {
+                    bounds:[bounds.x,bounds.y,bounds.width,bounds.height],radii:receiver.radii,
+                    tab_bar:bar.map_or([0.;4],rect),active_tab:active.map_or([0.;4],rect),tab_clip:clip.map_or([0.;4],rect),
+                    color,strip_color:if bar.is_some() {rgba(colors[0])} else {color},
+                });
+            }
+            if panels.is_empty() && !source_visible { continue; }
+            let anchors=if source_visible && !panels.is_empty() {
+                geometry.iter().filter(|(id,..)|*id==strip.id).map(|(_,_,g)|[g.anchor.x,g.anchor.y,g.anchor.width,g.anchor.height]).collect()
+            } else {Vec::new()};
+            let radii=w.column_corner_styles.borrow().iter().find(|(name,_)|name==&format!("column-strip-{}",strip.id))
+                .map_or([SURFACE_RADIUS;4],|(_,r)|*r);
+            surfaces.push(layer_render_wgpu::PanelSurface { sidebar:if source_visible {rect(sidebar)} else {[0.;4]},sidebar_radii:radii,
+                plane:first.plane,bridge_width:first.width(),direction:if first.direction==Edge::Right {1.} else {-1.},scale:1.,
+                color,groups:panels,anchors,
+            });
+        }
+        surfaces
+    }
+
     pub fn background_at(&self, w: &Workspace, point: [f32; 2]) -> Option<u32> {
         let mut picked = w
             .surface
@@ -54,18 +160,20 @@ impl Columns {
             for (panel, button) in &strip.buttons {
                 customization::drawer_origin(
                     button,
-                    strip
-                        .open_tiles
-                        .borrow()
-                        .iter()
-                        .find(|(p, _)| p == panel)
-                        .map(|(_, edge)| *edge)
-                        .or_else(|| origin.filter(|(p, _)| p == panel).map(|(_, edge)| edge)),
+                    origin.filter(|(p, _)| p == panel).map(|(_, edge)| edge),
                 );
             }
         }
     }
-    pub fn reconcile(&self, w: &Rc<Workspace>, layout: &DockLayout, resolved: &ResolvedLayout) {
+    pub fn reconcile(&self, w: &Rc<Workspace>, layout: &DockLayout, resolved: &ResolvedLayout, groups_changed: bool) {
+        let projection_changed=groups_changed || {
+            let strips=self.strips.borrow();
+            strips.len()!=resolved.collapsed.len() || resolved.collapsed.iter().any(|c|!strips.iter().any(|s|s.matches(c)))
+        };
+        if projection_changed {
+            self.connection_geometry.borrow_mut().clear();
+            self.present_surface_ownership(w,&[]);
+        }
         let mut strips = self.strips.borrow_mut();
         strips.retain(|s| resolved.collapsed.iter().any(|c| c.id == s.id));
         w.surface.remove_slots(|slot| matches!(slot, Slot::Column(id) if !resolved.collapsed.iter().any(|c| c.id == id)));
@@ -76,7 +184,7 @@ impl Columns {
                 .map(|g| (g.group, g.icons.iter().map(|i| i.panel).collect()))
                 .collect();
             let old = strips.iter().position(|s| s.id == c.id);
-            if old.is_none_or(|i| strips[i].key != key || strips[i].root.parent().is_none()) {
+            if old.is_none_or(|i| !strips[i].matches(c)) {
                 if let Some(i) = old {
                     strips.remove(i);
                 }
@@ -84,12 +192,13 @@ impl Columns {
                 let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
                 root.add_css_class("dock-panel");
                 root.add_css_class("collapsed-column");
+                root.add_css_class(&format!("column-strip-{}", c.id));
                 root.set_widget_name(&format!("collapsed-column-{}", c.id));
                 root.set_overflow(gtk::Overflow::Hidden);
                 w.install_context(&root, ContextTarget::Column { column: c.id });
                 let content = gtk::Box::new(gtk::Orientation::Vertical, 2);
-                content.set_margin_top(WORKSPACE_SPACING as i32);
                 let mut buttons = Vec::new();
+                let mut ordinal = 0;
                 for (index, group) in c.groups.iter().enumerate() {
                     if index > 0 {
                         content.append(&column_separator());
@@ -111,6 +220,8 @@ impl Columns {
                         button.set_widget_name(&format!("column-icon-{:?}", icon.panel));
                         button.add_css_class("flat");
                         button.add_css_class("tile-button");
+                        button.add_css_class(&format!("column-tile-{}-{ordinal}", c.id));
+                        ordinal += 1;
                         button.set_size_request(TILE_SIZE as i32, TILE_SIZE as i32);
                         button.set_child(Some(&w.customization.icon(w, config.icon(), 20)));
                         // An icon tile remains a held source even though it moves a panel.
@@ -180,23 +291,22 @@ impl Columns {
                 footer.append(&grip);
                 w.install_panel_drag(&footer, DockItem::Column { column: c.id });
                 root.append(&footer);
+                let tint = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+                tint.add_css_class("drawer-connection");
+                tint.set_visible(false);
+                root.append(&tint);
                 w.surface.add(Slot::Column(c.id), &root);
                 strips.push(Strip {
                     id: c.id,
                     root,
                     key,
                     buttons,
-                    open_tiles: RefCell::default(),
                     scroll: scroll.vadjustment(),
                     updating_scroll,
+                    tint,
                 });
             }
             let strip = strips.iter().find(|s| s.id == c.id).unwrap();
-            *strip.open_tiles.borrow_mut() = c
-                .open
-                .as_ref()
-                .map(|o| c.groups.iter().map(|g| (g.active, o.direction)).collect())
-                .unwrap_or_default();
             for (panel, button) in &strip.buttons {
                 let active = c
                     .open
@@ -205,7 +315,7 @@ impl Columns {
                 selected(button, active);
                 customization::drawer_origin(
                     button,
-                    active.then(|| c.open.as_ref().unwrap().direction),
+                    None,
                 );
             }
             let offset = layout
@@ -221,76 +331,6 @@ impl Columns {
             }
         }
         drop(strips);
-        w.surface.remove_slots(|slot| {
-            matches!(slot, Slot::ColumnConnection(id, panel)
-            if !resolved.collapsed.iter().any(|c| c.id == id && c.open.as_ref()
-                .is_some_and(|o| o.connections.iter().any(|(p, _)| *p == panel))))
-        });
-        for c in &resolved.collapsed {
-            let Some(open) = &c.open else {
-                continue;
-            };
-            for (panel, _) in &open.connections {
-                let slot = Slot::ColumnConnection(c.id, *panel);
-                if w.surface
-                    .imp()
-                    .children
-                    .borrow()
-                    .iter()
-                    .any(|(s, _)| *s == slot)
-                {
-                    continue;
-                }
-                let area = gtk::DrawingArea::new();
-                area.add_css_class("drawer-connection");
-                area.set_widget_name(&format!("column-connection-{}-{panel:?}", c.id));
-                area.set_can_target(false);
-                let (column, panel) = (c.id, *panel);
-                area.set_draw_func(glib::clone!(
-                    #[weak]
-                    w,
-                    move |area, cr, _, _| {
-                        let resolved = w.resolved();
-                        let Some(connection) = resolved
-                            .collapsed
-                            .iter()
-                            .find(|c| c.id == column)
-                            .and_then(|c| c.open.as_ref())
-                            .and_then(|o| o.connections.iter().find(|(p, _)| *p == panel))
-                            .map(|(_, c)| c)
-                        else {
-                            return;
-                        };
-                        let color = area.color();
-                        cr.set_source_rgba(
-                            color.red().into(),
-                            color.green().into(),
-                            color.blue().into(),
-                            color.alpha().into(),
-                        );
-                        let [xx, yx, xy, yy, x, y] = connection.transform.map(f64::from);
-                        cr.transform(gtk::cairo::Matrix::new(xx, yx, xy, yy, x, y));
-                        cr.rectangle(0., 0., connection.length.into(), connection.depth.into());
-                        concave_foot(
-                            cr,
-                            0.,
-                            connection.depth.into(),
-                            connection.radii[0].into(),
-                            -1.,
-                        );
-                        concave_foot(
-                            cr,
-                            connection.length.into(),
-                            connection.depth.into(),
-                            connection.radii[1].into(),
-                            1.,
-                        );
-                        let _ = cr.fill();
-                    }
-                ));
-                w.surface.add(slot, &area);
-            }
-        }
     }
     pub fn refresh_drawers(&self, w: &Rc<Workspace>, state: &UiState, regions: u32) {
         // The remembered active tab is not an open drawer. Only its current

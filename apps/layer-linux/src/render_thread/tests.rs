@@ -28,6 +28,100 @@ fn retired_context_capture_resolves_failure_without_changing_sources() {
 use super::*;
 use gtk::prelude::*;
 
+#[test]
+#[ignore = "hardware GPU, no window: workspace presenter startup and replacement"]
+fn workspace_presenter_prepares_chrome_before_first_panel_parameters() {
+    fn prepared(renderer: &mut WgpuRasterizer, kind: &str) {
+        for (format, color) in [
+            (wgpu::TextureFormat::Rgba8UnormSrgb, layer_render_wgpu::SdrSurfaceColor::Srgb),
+            (wgpu::TextureFormat::Rgba16Float, layer_render_wgpu::SdrSurfaceColor::WindowsScrgb),
+        ] {
+            let mut presenter = workspace_presenter(renderer, format, color).unwrap();
+            assert!(!presenter.chrome_ready(), "{kind}/{format:?}: cold chrome must prepare asynchronously");
+            let deadline = std::time::Instant::now() + Duration::from_secs(60);
+            while !presenter.prepare_chrome(renderer) {
+                assert!(std::time::Instant::now() < deadline, "{kind}/{format:?}: chrome preparation timed out");
+                renderer.device().poll(wgpu::PollType::Poll).unwrap();
+                renderer.poll_startup().unwrap();
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            assert!(presenter.pipelines_ready(renderer) && presenter.chrome_ready());
+            presenter.set_backdrop(renderer, &[layer_render_wgpu::BackdropRegion::rounded(
+                [96., 24., 144., 160.], [18.; 4], layer_render_wgpu::BackdropRegion::SQUIRCLE,
+            )], Default::default(), false);
+            presenter.set_panel_surfaces(renderer, &[layer_render_wgpu::PanelSurface {
+                sidebar: [54., 8., 36., 208.], sidebar_radii: [18.; 4], plane: 96.,
+                bridge_width: 6., direction: 1., scale: 1., color: [0.5, 0.5, 0.5, 1.],
+                anchors: vec![[54., 80., 36., 36.]],
+                groups: vec![layer_render_wgpu::PanelSurfaceGroup {
+                    bounds: [96., 24., 144., 160.], radii: [18.; 4], tab_bar: [96., 24., 144., 30.],
+                    active_tab: [96., 24., 36., 30.], tab_clip: [96., 24., 144., 30.],
+                    color: [0.5, 0.5, 0.5, 1.], strip_color: [0.4, 0.4, 0.4, 1.],
+                }],
+            }]);
+            assert!(presenter.pipelines_ready(renderer) && presenter.chrome_ready(),
+                "{kind}/{format:?}: the first panel and backdrop reuse prepared pipelines and profiles");
+            assert!(presenter.prepare_chrome(renderer));
+        }
+    }
+    let reference = WgpuRasterizer::new_native_headless(Default::default()).expect("hardware GPU required");
+    assert_ne!(reference.adapter().get_info().device_type, wgpu::DeviceType::Cpu);
+    let mut renderer = WgpuRasterizer::from_wgpu_native_staged(reference.adapter().clone(),
+        reference.device().clone(), reference.queue().clone(), Default::default()).unwrap();
+    prepared(&mut renderer, "initial/HDR replacement");
+    let mut candidate = renderer.color_candidate_staged(layer_core::color::DocumentColor {
+        space: layer_core::color::RgbSpace::DisplayP3, ..Default::default()
+    }).unwrap();
+    prepared(&mut candidate, "color candidate");
+    drop(candidate);
+    drop(renderer);
+    drop(reference);
+    layer_render_wgpu::finish_shader_compiler_shutdown();
+}
+
+#[test]
+fn chrome_requests_wait_for_publication_and_coalesce_behind_the_held_buffer() {
+    let mut chrome = ChromeHandoff::default();
+    let now = std::time::Instant::now();
+    chrome.request(1, true);
+    assert_eq!(chrome.published, 0);
+    assert!(chrome.can_present());
+    assert!(chrome.should_hold());
+    chrome.request(2, true);
+    assert_eq!(chrome.published, 0, "an unacquired buffer cannot acknowledge either request");
+    assert_eq!(chrome.publish(now), Some(2));
+    chrome.request(3, true);
+    chrome.request(4, true);
+    assert!(!chrome.can_present());
+    assert_eq!(chrome.published, 2, "new requests must preserve the held buffer's revision");
+    assert!(!chrome.release(1));
+    assert!(!chrome.can_present());
+    assert!(chrome.release(2), "release matches the held revision, not the latest request");
+    assert!(chrome.can_present());
+    assert_eq!(chrome.publish(now), Some(4));
+    assert!(!chrome.release(2));
+    assert!(chrome.release(4));
+    assert_eq!(chrome.publish(now), None);
+    assert!(chrome.can_present());
+}
+
+#[test]
+fn chrome_hold_expires_without_new_requests_extending_its_deadline() {
+    let mut chrome = ChromeHandoff::default();
+    let now = std::time::Instant::now();
+    chrome.request(1, true);
+    assert_eq!(chrome.publish(now), Some(1));
+    chrome.request(2, true);
+    assert!(!chrome.expire(now + CHROME_SYNC_LIMIT / 2));
+    chrome.request(3, false);
+    assert!(!chrome.can_present(), "a fade cannot overwrite a held shape change");
+    assert!(chrome.expire(now + CHROME_SYNC_LIMIT));
+    assert!(chrome.can_present());
+    assert_eq!(chrome.publish(now + CHROME_SYNC_LIMIT), Some(3));
+    assert!(chrome.can_present(), "fades need no parent-commit hold");
+    assert!(!chrome.expire(now + CHROME_SYNC_LIMIT * 2));
+}
+
 fn pump_worker_window() {
     let context = gtk::glib::MainContext::default();
     while context.pending() { context.iteration(false); }

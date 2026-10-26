@@ -2,6 +2,452 @@
 use super::*;
 
 #[test]
+#[ignore = "isolated workspace-motion.sh gtk --native-test=native_column_panel_bridge_input --tablet"]
+fn native_column_panel_bridge_input() {
+    column_panel_bridges(&["mouse", "touch", "pen"], false);
+}
+
+#[test]
+#[ignore = "isolated workspace-motion.sh gtk --native-test=native_column_panel_bridge_motion"]
+fn native_column_panel_bridge_motion() {
+    column_panel_bridges(&["mouse"], true);
+}
+
+#[test]
+#[ignore = "isolated workspace-motion.sh gtk --native-test=native_column_panel_bridge_motion_diagnostic"]
+fn native_column_panel_bridge_motion_diagnostic() {
+    column_panel_bridge_cases(&["mouse"], true, &[Theme::Light], &[Edge::Left]);
+}
+
+#[test]
+#[ignore = "isolated workspace-motion.sh gtk --native-test=native_column_panel_bridge_configuration"]
+fn native_column_panel_bridge_configuration() {
+    let app = native_test_app("art.capycanvas.BridgeConfiguration");
+    gtk::Settings::default().unwrap().set_gtk_enable_animations(false);
+    let w = fixture_workspace(&app);
+    w.window.maximize(); w.window.present(); pump(1600); wait_workspaces(&w);
+    let viewport = [w.surface.width() as f32, w.surface.height() as f32];
+    let mut input = RemoteInput::new().settle_ms(100).timeout_secs(10);
+    let output = std::env::var_os("LAYER_TEST_ARTIFACTS").map_or(input.dir.clone(), Into::into);
+    std::fs::create_dir_all(&output).unwrap();
+    input.ready();
+    for theme in [Theme::Light, Theme::Dark] {
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        for edge in [Edge::Left, Edge::Right] {
+            let (mut fixture, panels) = native_bridge_fixture(viewport, 84.5);
+            fixture.layout.bands[0].edge = edge;
+            w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(fixture) }); pump(200);
+            let panel = panels[2];
+            let button = w.columns.button(4, panel).unwrap().compute_bounds(&w.surface).unwrap();
+            input.click([button.x() + button.width() * 0.5, button.y() + button.height() * 0.5]);
+            assert!(!w.columns.snapshot(&w).is_empty(), "configuration begins on a GPU-connected column");
+            let before = layer_ui::durable_layout(&state(&w).workspace.layout);
+            w.dispatch(UiAction::Customize { action: CustomizationAction::ShowAllControls { panel } }); pump(300);
+            assert!(w.customization.placement().is_some());
+            let root = w.groups.borrow().iter().find(|group| group.id == 5).unwrap().root.clone();
+            assert!(!root.has_css_class("gpu-panel-surface") && root.has_css_class("expanded-panel"));
+            assert!(w.columns.button(4, panel).is_none(), "configuration retires its compact source strip");
+            until(|| w.columns.snapshot(&w).is_empty() && ui_session(&w).engine().backend().panel_surfaces.is_empty(),
+                "configuration must retire uploaded GPU panel surfaces");
+            let preview = root.imp().preview.borrow().clone().unwrap().compute_bounds(&w.surface).unwrap();
+            let configuration = root.imp().configuration.borrow().clone().unwrap().compute_bounds(&w.surface).unwrap();
+            let whole = root.compute_bounds(&w.surface).unwrap();
+            assert!(configuration.y() > whole.y() + 1., "configuration fixture leaves empty space above its body");
+            assert!(whole.width() > preview.width() && whole.contains_rect(&configuration),
+                "ordinary configuration remains a second column of the native panel");
+            let expanded = layer_ui::durable_layout(&state(&w).workspace.layout);
+            assert_ne!(expanded, before, "configuration reveals the ordinary column through shared policy");
+            let gpu = ui_session(&w).engine().backend().capture().expect("capture retired GPU panel surfaces");
+            let empty = [configuration.x() + configuration.width() * 0.5, (whole.y() + configuration.y()) * 0.5];
+            let pixel = column_bridge_pixel(&gpu, viewport, empty);
+            let clear = column_bridge_pixel(&gpu, viewport, [viewport[0] * 0.5, empty[1]]);
+            assert!(pixel[..3].iter().zip(&clear[..3]).all(|(a, b)| a.abs_diff(*b) <= 2),
+                "GPU panel must not fill empty space above configuration: {pixel:?} vs {clear:?}");
+            let texture = crate::with_canvas_snapshot(&w, || crate::snapshot_window(&w.window, 1.));
+            texture.save_to_png(output.join(format!("connected-configuration-{theme:?}-{edge:?}.png"))).unwrap();
+            let mut download = gdk::TextureDownloader::new(&texture);
+            download.set_format(gdk::MemoryFormat::R8g8b8a8);
+            let (bytes, stride) = download.download_bytes();
+            let point = w.surface.compute_point(&w.window,
+                &gtk::graphene::Point::new(configuration.x() + 6., configuration.y() + configuration.height() * 0.5)).unwrap();
+            let offset = point.y().floor() as usize * stride + point.x().floor() as usize * 4;
+            let expected = w.palette.get().unwrap().panel.0;
+            assert!(bytes[offset..offset + 3].iter().zip(expected).all(|(a, b)| a.abs_diff(b) <= 2),
+                "connected configuration keeps its native opaque panel background: {:?} vs {expected:?}", &bytes[offset..offset + 4]);
+            w.dispatch(UiAction::Customize { action: CustomizationAction::CloseExpanded }); pump(200);
+            assert!(w.customization.placement().is_none());
+            assert_eq!(layer_ui::durable_layout(&state(&w).workspace.layout), expanded);
+        }
+    }
+    input.finish(); w.window.destroy(); pump(100);
+}
+
+#[test]
+#[ignore = "isolated workspace-motion.sh gtk --native-test=native_column_panel_bridge_transitions; LAYER_NATIVE_CAPTURE_DIR=<dir>"]
+fn native_column_panel_bridge_transitions() {
+    let app = native_test_app("art.capycanvas.BridgeTransitions");
+    let w = fixture_workspace(&app);
+    w.window.maximize();
+    w.window.present();
+    pump(1600);
+    wait_workspaces(&w);
+    let viewport = [w.surface.width() as f32, w.surface.height() as f32];
+    let mut input = RemoteInput::new().settle_ms(60).timeout_secs(20);
+    let output = std::env::var_os("LAYER_TEST_ARTIFACTS").map_or(input.dir.clone(), Into::into);
+    std::fs::create_dir_all(&output).unwrap();
+    let mut samples = Vec::new();
+    input.ready();
+    for theme in [Theme::Light, Theme::Dark] {
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        for edge in [Edge::Left, Edge::Right] {
+            let mut partial = [false; 2];
+            input.perform(serde_json::json!([{"record_start":format!("bridge-transitions-{theme:?}-{edge:?}").to_lowercase()}]));
+            for height in [68.5, 72.5, 76.5, 84.5, 104.5, 108.5, 112.5, 116.5] {
+                let (mut fixture, panels) = native_bridge_fixture(viewport, height);
+                fixture.layout.bands[0].edge = edge;
+                w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(fixture) });
+                pump(100);
+                for panel in [panels[2], panels[3], panels[2]] {
+                    let button = w.columns.button(4, panel).unwrap();
+                    let b = button.compute_bounds(&w.surface).unwrap();
+                    input.click([b.x() + b.width() * 0.5, b.y() + b.height() * 0.5]);
+                    let b = button.compute_bounds(&w.surface).unwrap();
+                    let geometry = w.columns.connection_geometry.borrow();
+                    let bridge = &geometry.iter().find(|(column, p, _)| *column == 4 && *p == panel).unwrap().2;
+                    let top = bridge.anchor.y;
+                    let bottom = top + bridge.anchor.height;
+                    assert!((top - b.y()).abs() < 0.001 && (bottom - b.y() - b.height()).abs() < 0.001,
+                        "the bridge spans the allocated tile exactly: {top}..{bottom} vs {b:?}");
+                    let groups = w.groups.borrow();
+                    let receiving: Vec<_> = [5, 6].into_iter().map(|id|
+                        groups.iter().find(|g| g.id == id).unwrap().root.compute_bounds(&w.surface).unwrap()).collect();
+                    let gap = [receiving[0].y() + receiving[0].height(), receiving[1].y()];
+                    let gap_partial = [bottom > gap[0] && bottom < gap[1], top > gap[0] && top < gap[1]];
+                    for i in 0..2 { partial[i] |= gap_partial[i]; }
+                    let r = w.resolved();
+                    let icon = r.collapsed.iter().find(|c| c.id == 4).unwrap().groups.iter().flat_map(|g| &g.icons)
+                        .find(|i| i.panel == panel).unwrap();
+                    samples.push(serde_json::json!({"theme":format!("{theme:?}"),"edge":format!("{edge:?}"),"panel":panel,
+                        "height":height,"native_tile":[b.x(),b.y(),b.width(),b.height()],"logical_tile":icon.bounds,
+                        "bridge":[top,bottom],"gap_partial":gap_partial}));
+                }
+            }
+            assert!(partial[0] && partial[1], "recorded fixtures must cover upper-only and lower-only partial gap overlaps");
+            input.perform(serde_json::json!([{"record_stop":true}]));
+            capture_reference(&w, output.join(format!("bridge-transitions-{theme:?}-{edge:?}.png")).to_str().unwrap(), 1.);
+        }
+    }
+    std::fs::write(output.join("bridge-alignment.json"), serde_json::to_vec_pretty(&samples).unwrap()).unwrap();
+    input.finish();
+    w.window.destroy();
+    pump(100);
+}
+
+fn native_bridge_fixture(viewport: [f32; 2], height: f32) -> (layer_ui::WorkspaceState, Vec<Panel>) {
+    let mut fixture = layer_ui::WorkspaceState::default();
+    let panels: Vec<_> = (0..6).map(|i| fixture.layout.add_toolbar(None, &format!("Bridge {i}"),
+        &[ToolbarControl::Command { command: CommandId::Brush }]).unwrap()).collect();
+    fixture.layout.bands = vec![DockBand { alignment: None, id: 3, edge: Edge::Left, extent: 300.,
+        root: DockNode::Split { id: 4, axis: Axis::Vertical,
+            fraction: height / (viewport[1] - HEADER_HEIGHT - WORKSPACE_SPACING * 2.),
+            first: Box::new(DockNode::Tabs { id: 5, panels: panels[..5].to_vec(), active: panels[0], tab_style: TabStyle::Icon }),
+            second: Box::new(DockNode::Tabs { id: 6, panels: vec![panels[5]], active: panels[5], tab_style: TabStyle::Icon }),
+        } }];
+    fixture.layout.floating.clear();
+    fixture.layout.collapsed.clear();
+    fixture.layout.column_stacks.clear();
+    fixture.layout.column_scroll.clear();
+    fixture.layout.set_column_collapsed(5, true, viewport).unwrap();
+    (fixture, panels)
+}
+
+fn column_panel_bridges(devices: &[&str], measure: bool) {
+    column_panel_bridge_cases(devices, measure, &[Theme::Light, Theme::Dark], &[Edge::Left, Edge::Right]);
+}
+
+fn column_panel_bridge_cases(devices: &[&str], measure: bool, themes: &[Theme], edges: &[Edge]) {
+    let app = native_test_app("art.capycanvas.PanelBridges");
+    let w = fixture_workspace(&app);
+    w.window.maximize(); w.window.present(); pump(1600); wait_workspaces(&w);
+    let viewport = [w.surface.width() as f32, w.surface.height() as f32];
+    let mut input = RemoteInput::new().settle_ms(160).timeout_secs(10);
+    let output = std::env::var_os("LAYER_TEST_ARTIFACTS").map_or(input.dir.clone(), Into::into);
+    std::fs::create_dir_all(&output).unwrap();
+    let (fixture, panels) = native_bridge_fixture(viewport, 84.5);
+    let mut motion_failures = Vec::new();
+    input.ready();
+    for &theme in themes {
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        for &edge in edges { for &device in devices {
+            let mut fixture = fixture.clone(); fixture.layout.bands[0].edge = edge;
+            w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(fixture) }); pump(300);
+            for (index, panel) in panels[..3].iter().copied().enumerate() {
+                let button = w.columns.button(4, panel).unwrap();
+                let b = button.compute_bounds(&w.surface).unwrap();
+                let point = [b.x() + b.width() * 0.5, b.y() + b.height() * 0.5];
+                assert!(w.drag_target_at(point) == Some(DragTarget::Dock(DockItem::Panel { panel })));
+                if device == "mouse" { input.click(point); }
+                else { input.perform(serde_json::json!([contact(device, "down", point), contact(device, "up", point)])); }
+                pump(200);
+                let r = w.resolved();
+                let shared = ui_session(&w).layout(viewport);
+                assert_eq!(shared.groups.iter().find(|g| g.id == 5).unwrap().active, panel);
+                let c = r.collapsed.iter().find(|c| c.id == 4).unwrap();
+                assert!(c.open.is_some());
+                let target = r.groups.iter().find(|g| g.id == 5).unwrap();
+                assert_eq!(target.corner_radii, [SURFACE_RADIUS; 4], "receiver keeps its original outline");
+                let bridge = w.columns.connection_geometry.borrow().iter()
+                    .find(|(column, p, _)| *column == 4 && *p == panel).unwrap().2.clone();
+                let direction = if edge == Edge::Left { 1. } else { -1. };
+                let source = if edge == Edge::Left { b.x() + b.width() } else { b.x() };
+                let width = (bridge.plane - source).abs();
+                let image = column_bridge_capture(&w);
+                gdk::MemoryTexture::new(image.width as i32, image.height as i32, gdk::MemoryFormat::R8g8b8a8Premultiplied,
+                    &glib::Bytes::from_owned(image.bytes.clone()), image.stride as usize)
+                    .save_to_png(output.join(format!("gpu-bridge-{theme:?}-{edge:?}-{device}-{index}.png"))).unwrap();
+                let reference = column_bridge_pixel(&image, viewport,
+                    [bridge.plane + direction * 24., target.bounds.y + target.bounds.height - 18.]);
+                for group in w.columns.snapshot(&w).iter().flat_map(|surface| &surface.groups) {
+                    let pixel = column_bridge_pixel(&image, viewport,
+                        [bridge.plane + direction * 24., group.bounds[1] + group.bounds[3] * 0.5]);
+                    assert!(pixel[..3].iter().zip(&reference[..3]).all(|(a, b)| a.abs_diff(*b) <= 2),
+                        "every receiving GPU panel keeps its themed body color: {pixel:?} vs {reference:?}; bounds={:?}", group.bounds);
+                }
+                if index == 2 {
+                    let next = r.groups.iter().find(|g| g.id == 6).unwrap();
+                    let gap = (target.bounds.y + target.bounds.height + next.bounds.y) * 0.5;
+                    let connected = column_bridge_pixel(&image, viewport, [source + direction * width * 0.25, gap]);
+                    assert!(connected[..3].iter().zip(&reference[..3]).all(|(a, b)| a.abs_diff(*b) <= 2),
+                        "the GPU bridge remains connected beside the gap notch: {connected:?} vs {reference:?}");
+                    let notch = column_bridge_pixel(&image, viewport, [bridge.plane - direction * width * 0.1, gap]);
+                    let clear = column_bridge_pixel(&image, viewport,
+                        [bridge.plane + direction * (target.bounds.width + 24.), gap]);
+                    let distance = |a: [u8; 4], b: [u8; 4]| a[..3].iter().zip(&b[..3])
+                        .map(|(a, b)| u32::from(a.abs_diff(*b))).sum::<u32>();
+                    assert!(distance(notch, clear) < distance(notch, reference),
+                        "the GPU gap curve cuts into the bridge: notch={notch:?}, clear={clear:?}, panel={reference:?}");
+                    column_bridge_tile_pixels(&w, &button, [target.bounds.y + target.bounds.height, next.bounds.y]);
+                }
+                let groups = w.groups.borrow();
+                let root = &groups.iter().find(|g| g.id == 5).unwrap().root;
+                let bar = find_named(root.upcast_ref(), "panel-tab-bar").unwrap();
+                if w.palette.get().unwrap().glass.transparency.enabled() {
+                    let bounds = bar.compute_bounds(&w.surface).unwrap();
+                    let p = [bounds.x() + bounds.width() * 0.5, bounds.y() + bounds.height() * 0.5];
+                    let surfaces = w.columns.snapshot(&w);
+                    assert!(surfaces.iter().flat_map(|surface| &surface.groups).any(|group|
+                        p[0] >= group.tab_bar[0] && p[1] >= group.tab_bar[1]
+                            && p[0] < group.tab_bar[0] + group.tab_bar[2] && p[1] < group.tab_bar[1] + group.tab_bar[3]),
+                        "GPU panel surfaces include the complete tab bar");
+                }
+                let offset = 0.5 * viewport[1] / image.height as f32;
+                for y in [b.y() + offset, b.y() + b.height() - offset] {
+                    let pixel = column_bridge_pixel(&image, viewport, [source + direction * offset, y]);
+                    assert!(pixel[..3].iter().zip(&reference[..3]).all(|(a, b)| a.abs_diff(*b) <= 2),
+                        "complete first/last GPU tile rows: {pixel:?} vs {reference:?}");
+                }
+                drop(groups);
+                capture_reference(&w, output.join(format!("bridge-{theme:?}-{edge:?}-{device}-{index}.png")).to_str().unwrap(), 1.);
+                if index == 2 {
+                    let before = layer_ui::durable_layout(&state(&w).workspace.layout);
+                    let divider = r.dividers.iter().find(|d| d.id == 4 && !d.band).unwrap();
+                    let start = [divider.bounds.x + divider.bounds.width * 0.5, divider.bounds.y + divider.bounds.height * 0.5];
+                    input.perform(serde_json::json!([contact(device, "down", start)]));
+                    for delta in [12., 24., 36., 48.] {
+                        input.perform(serde_json::json!([contact(device, "move", [start[0], start[1] + delta])]));
+                        let current = w.resolved();
+                        let target = current.groups.iter().find(|g| g.id == 5).unwrap();
+                        assert_eq!(target.corner_radii, [SURFACE_RADIUS; 4]);
+                    }
+                    input.perform(serde_json::json!([contact(device, "up", [start[0], start[1] + 48.])]));
+                    let after = layer_ui::durable_layout(&state(&w).workspace.layout);
+                    assert_ne!(after, before);
+                    w.dispatch(UiAction::Invoke { command: CommandId::UndoWorkspace });
+                    assert_eq!(layer_ui::durable_layout(&state(&w).workspace.layout), before);
+                    w.dispatch(UiAction::Invoke { command: CommandId::RedoWorkspace });
+                    assert_eq!(layer_ui::durable_layout(&state(&w).workspace.layout), after);
+                    if measure && device == "mouse" {
+                        w.dispatch(UiAction::Invoke { command: CommandId::UndoWorkspace }); pump(200);
+                        motion_failures.extend(column_bridge_motion(&w, &mut input, &output, theme, edge));
+                    }
+                }
+            }
+        }}
+    }
+    input.finish(); w.window.destroy(); pump(100);
+    assert!(motion_failures.is_empty(), "bridge presentation targets failed: {motion_failures:?}");
+}
+
+fn column_bridge_capture(w: &Workspace) -> layer_render::ReadbackImage {
+    until(|| {
+        let expected = w.columns.snapshot(w);
+        let scale = w.area.scale_factor() as f32;
+        let uploaded: Vec<_> = expected.iter().cloned().map(|surface| surface.scaled(scale)).collect();
+        !expected.is_empty() && ui_session(w).engine().backend().panel_surfaces == uploaded
+    }, "GPU panel surfaces must reach the frame before capture");
+    ui_session(w).engine().backend().capture().expect("capture GPU panel backgrounds")
+}
+
+fn column_bridge_pixel(image: &layer_render::ReadbackImage, extent: [f32; 2], point: [f32; 2]) -> [u8; 4] {
+    let x = (point[0] * image.width as f32 / extent[0]).floor() as usize;
+    let y = (point[1] * image.height as f32 / extent[1]).floor() as usize;
+    assert!(x < image.width as usize && y < image.height as usize, "GPU sample {point:?} lies inside {extent:?}");
+    image.bytes[y * image.stride as usize + x * 4..y * image.stride as usize + x * 4 + 4].try_into().unwrap()
+}
+
+fn column_bridge_tile_pixels(w: &Workspace, button: &gtk::Button, boundaries: [f32; 2]) {
+    let scale = w.surface.native().and_then(|n| n.surface()).unwrap().scale() as f32;
+    let texture = crate::with_canvas_snapshot(w, || crate::snapshot_window(&w.window, scale));
+    let mut download = gdk::TextureDownloader::new(&texture);
+    download.set_format(gdk::MemoryFormat::R8g8b8a8);
+    let (bytes, stride) = download.download_bytes();
+    let bounds = button.compute_bounds(&w.window).unwrap();
+    let origin = w.surface.compute_bounds(&w.window).unwrap();
+    let x = ((if bounds.x() < w.window.width() as f32 * 0.5 { bounds.x() + bounds.width() - 3. }
+        else { bounds.x() + 2. }) * scale).floor() as usize;
+    let sample = |y: usize| <[u8; 4]>::try_from(&bytes[y * stride + x * 4..y * stride + x * 4 + 4]).unwrap();
+    let reference = sample(((bounds.y() + bounds.height() * 0.5) * scale).floor() as usize);
+    for boundary in boundaries {
+        let y = (boundary + origin.y()) * scale;
+        for y in y.floor() as usize - 1..=y.ceil() as usize + 1 {
+            let pixel = sample(y);
+            assert!(pixel.iter().zip(reference).all(|(a, b)| a.abs_diff(b) <= 1),
+                "a GPU bridge boundary must not cut a line through its selected GTK tile at {x},{y}: {pixel:?} vs {reference:?}");
+        }
+    }
+}
+
+fn column_bridge_motion(w: &Rc<Workspace>, input: &mut RemoteInput, output: &std::path::Path, theme: Theme, edge: Edge) -> Vec<String> {
+    let interval = std::env::var("LAYER_NATIVE_EVENT_MS").map_or(4, |value| value.parse::<u32>().unwrap());
+    assert_eq!(interval, 4, "bridge motion uses 1500 moves at 4 ms cadence");
+    let refresh = std::env::var("LAYER_MOTION_REFRESH").map_or(120., |value| value.parse::<f64>().unwrap());
+    let minimum = std::env::var("LAYER_MOTION_MIN_HZ").map_or(refresh * 0.95, |value| value.parse::<f64>().unwrap());
+    let settle = std::mem::replace(&mut input.settle_ms, 0);
+    let resolved = w.resolved();
+    let panel = resolved.collapsed.iter().find(|column| column.id == 4).unwrap().groups[0].icons.last().unwrap().panel;
+    let button = w.columns.button(4, panel).unwrap().compute_bounds(&w.surface).unwrap();
+    input.click([button.x() + button.width() * 0.5, button.y() + button.height() * 0.5]); pump(200);
+    let before = layer_ui::durable_layout(&state(w).workspace.layout);
+    let worker_stats = ui_session(w).engine().backend().stats.clone();
+    let mut failures = Vec::new();
+    for run in 0usize..4 {
+        pump(gtk::Settings::for_display(&w.surface.display()).gtk_double_click_time().max(0) as u64 + 20);
+        let r = w.resolved();
+        let divider = r.dividers.iter().find(|d| d.id == 4 && !d.band).unwrap();
+        let start = [divider.bounds.x + divider.bounds.width * 0.5, divider.bounds.y + divider.bounds.height * 0.5];
+        assert!(w.drag_target_at(start) == Some(DragTarget::Divider(4)), "motion begins on the receiving-panel divider");
+        let root = w.groups.borrow().iter().find(|group| group.id == 5).unwrap().root.clone();
+        let original = root.compute_bounds(&w.surface).unwrap().height();
+        let original_revision = w.chrome.revision();
+        input.perform(serde_json::json!([contact("mouse", "move", start)]));
+        input.perform(serde_json::json!([contact("mouse", "down", start)]));
+        input.perform(serde_json::json!([contact("mouse", "move", [start[0], start[1] + 40.])]));
+        pump(50);
+        assert!(w.workspace_drag.borrow().as_ref().is_some_and(|drag| drag.started && drag.target == DragTarget::Divider(4)),
+            "motion keeps the native divider drag active");
+        let picked_up = root.compute_bounds(&w.surface).unwrap().height();
+        assert!((picked_up - original).abs() > 1.,
+            "native divider pickup must resize before measuring: {original} -> {picked_up}; shared={:?}",
+            w.resolved().groups.iter().find(|group| group.id == 5).unwrap().bounds);
+        let pickup_revision = w.chrome.revision();
+        let center = [start[0], start[1] + (picked_up - original).max(40.) + 40.];
+        input.perform(serde_json::json!([contact("mouse", "move", center)])); pump(50);
+        let centered = root.compute_bounds(&w.surface).unwrap().height();
+        w.publication.inputs.borrow_mut().clear();
+        w.publication.frames.borrow_mut().clear();
+        *worker_stats.lock().unwrap() = Default::default();
+        let clock = w.surface.frame_clock().unwrap();
+        let samples = Rc::new(RefCell::new(Vec::new()));
+        let previous = Rc::new(Cell::new(centered));
+        let revisions = Rc::new(RefCell::new(std::collections::BTreeMap::from([
+            (original_revision, original), (pickup_revision, picked_up), (w.chrome.revision(), centered),
+        ])));
+        let missing = Rc::new(RefCell::new(Vec::new()));
+        let callbacks = Rc::new(Cell::new(0));
+        let painted = clock.connect_after_paint(glib::clone!(#[strong] root, #[strong] samples, #[strong] previous,
+            #[strong] revisions, #[strong] missing, #[strong] callbacks,
+            #[weak] w, move |clock| {
+                callbacks.set(callbacks.get() + 1);
+                let bounds = root.compute_bounds(&w.surface).unwrap();
+                revisions.borrow_mut().insert(w.chrome.revision(), bounds.height());
+                let shown = w.chrome_released.get();
+                let Some(height) = revisions.borrow().get(&shown).copied() else {
+                    missing.borrow_mut().push(shown);
+                    return;
+                };
+                let changed = previous.replace(height) != height;
+                samples.borrow_mut().push((clock.frame_time(), height, changed, clock.current_timings()));
+            }));
+        let events: Vec<_> = (0..1500).map(|i| {
+            let phase = ((i + 62) % 250) as f32 / 250.;
+            contact("mouse", "move", [center[0], center[1] + 36. * (1. - 4. * (phase - 0.5).abs())])
+        }).collect();
+        let began = glib::monotonic_time();
+        input.perform(serde_json::to_value(events).unwrap());
+        let ended = glib::monotonic_time();
+        clock.disconnect(painted);
+        let inputs = w.publication.inputs.borrow().len();
+        input.perform(serde_json::json!([contact("mouse", "up", center)]));
+        pump(200);
+        let mut presented: Vec<_> = samples.borrow().iter().filter(|(_, _, changed, _)| *changed)
+            .filter_map(|(_, _, _, timing)| timing.as_ref()).filter(|t| t.is_complete() && t.presentation_time() > 0)
+            .map(|t| t.presentation_time()).collect();
+        presented.sort_unstable(); presented.dedup();
+        let mut all_presented: Vec<_> = samples.borrow().iter().filter_map(|(_, _, _, timing)| timing.as_ref())
+            .filter(|t| t.is_complete() && t.presentation_time() > 0).map(|t| t.presentation_time()).collect();
+        all_presented.sort_unstable(); all_presented.dedup();
+        let mut gaps: Vec<_> = presented.windows(2).map(|p| (p[1] - p[0]) as f64 / 1000.).collect();
+        gaps.sort_by(f64::total_cmp);
+        let hz = (presented.len() > 1).then(|| (presented.len() - 1) as f64 * 1e6 / (presented.last().unwrap() - presented[0]) as f64);
+        let p99 = gaps.get(gaps.len() * 99 / 100).copied();
+        let heights: Vec<_> = samples.borrow().iter().map(|(_, height, _, _)| *height).collect();
+        let range = [heights.iter().copied().fold(f32::INFINITY, f32::min), heights.iter().copied().fold(f32::NEG_INFINITY, f32::max)];
+        let onset = presented.first().map(|time| (*time - began) as f64 / 1000.);
+        let tail = presented.last().map(|time| (ended - *time).max(0) as f64 / 1000.);
+        let longest = gaps.last().copied().into_iter().chain(onset).chain(tail).fold(0., f64::max);
+        let mut report = serde_json::json!({"run":run.checked_sub(1),"priming":run==0,"input":"mouse",
+            "theme":format!("{theme:?}"),"edge":format!("{edge:?}"),"scale":w.surface.native().and_then(|n|n.surface()).unwrap().scale(),
+            "scope":"GTK workstation diagnostic; custom toolbars and default drawing; no reference-tier qualification",
+            "input_moves":1500,"path":"triangle","amplitude_px":36,"center":center,
+            "pickup_height":picked_up,"native_input_samples":inputs,"input_window_us":[began,ended],
+            "moving_presentations":presented,"presentation_hz":hz,"moving_gap_p99_ms":p99,
+            "paint_callbacks":callbacks.get(),"height_range":range,"full_contact_presentations":all_presented.len(),
+            "missing_shown_revisions":*missing.borrow(),"requested_revision_heights":*revisions.borrow(),
+            "full_contact_duration_s":(ended-began) as f64/1e6,"onset_ms":onset,"tail_ms":tail,"longest_gap_ms":longest,
+            "minimum_hz":minimum,"maximum_p99_ms":2000./refresh});
+        {
+            let stats = worker_stats.lock().unwrap();
+            report["timing"] = serde_json::json!({
+                "ui_input_ms":*w.publication.inputs.borrow(),"ui_placement_frames":*w.publication.frames.borrow(),
+                "input_cpu":stats.input_cpu,"input_handler_cpu":stats.input_handler_cpu,
+                "frame_handler_cpu":stats.frame_handler_cpu,"wake_lateness":stats.wake_lateness,
+                "worker_cpu":stats.cpu,"worker_cpu_stages":stats.cpu_stages,"worker_thread_cpu":stats.thread_cpu,
+                "worker_gpu":stats.gpu,"canvas_presentation":stats.presented,"backdrop_frames":stats.backdrop_frames,
+                "raster_commits":stats.raster_commits,"camera_views":stats.camera_views,
+                "shown_geometry_frames":samples.borrow().iter().map(|(time,height,changed,_)|
+                    (*time,*height,*changed)).collect::<Vec<_>>(),
+                "final_requested_chrome":w.chrome.revision(),"final_shown_chrome":w.chrome_released.get(),
+            });
+        }
+        let name = if run==0 {"prime".into()} else {(run-1).to_string()};
+        std::fs::write(output.join(format!("bridge-motion-{theme:?}-{edge:?}-{name}.json")), serde_json::to_vec_pretty(&report).unwrap()).unwrap();
+        eprintln!("Bridge motion {theme:?}/{edge:?}/{name}: {report}");
+        w.dispatch(UiAction::Invoke { command: CommandId::UndoWorkspace }); pump(200);
+        assert_eq!(layer_ui::durable_layout(&state(w).workspace.layout), before, "one undo restores the resize fixture");
+        assert!(missing.borrow().is_empty(), "displayed chrome revisions must have measured geometry: {:?}", missing.borrow());
+        assert!(inputs > 200 && range[1] - range[0] > 12. && presented.len() > 1,
+            "native input must move actual panel geometry: inputs={inputs}, height_range={range:?}, presents={}", presented.len());
+        if run > 0 {
+            if hz.unwrap() < minimum || p99.unwrap() > 2000./refresh {
+                failures.push(format!("{theme:?}/{edge:?}/{name}: {} Hz, p99 {} ms", hz.unwrap(), p99.unwrap()));
+            }
+        }
+    }
+    input.settle_ms = settle;
+    failures
+}
+
+#[test]
 #[ignore = "isolated native-input.js --native-test=native_stack_member_drop_input"]
 fn native_stack_member_drop_input() {
     native_stack_drop_input(false);
@@ -522,6 +968,8 @@ fn native_column_stack_input() {
                 )
                 .unwrap();
                 let bounds = root.compute_bounds(&w.surface).unwrap();
+                assert!(w.column_corner_styles.borrow().iter().any(|(class, radii)|
+                    class == &format!("column-strip-{}", column.id) && *radii == column.corner_radii));
                 assert!((bounds.y() - column.bounds.y).abs() <= 1.);
                 assert!((bounds.height() - column.bounds.height).abs() <= 1.);
 
@@ -535,7 +983,7 @@ fn native_column_stack_input() {
                         .unwrap();
                     assert!(
                         (tile.y() - icon.bounds.y).abs() <= 1.,
-                        "tile geometry follows shared top padding"
+                        "tile geometry follows the shared column layout"
                     );
                 }
             }
@@ -544,6 +992,8 @@ fn native_column_stack_input() {
                 let views = w.groups.borrow();
                 let native = views.iter().find(|v| v.id == group.group).unwrap();
                 let b = native.root.compute_bounds(&w.surface).unwrap();
+                assert!(w.column_corner_styles.borrow().iter().any(|(class, radii)|
+                    class == &format!("column-group-{}", shared.id) && *radii == shared.corner_radii));
                 assert!(
                     (b.x() - shared.bounds.x).abs() <= 1. && (b.y() - shared.bounds.y).abs() <= 1.
                 );

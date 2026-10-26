@@ -115,7 +115,9 @@ fn menubar_prepends_every_column_payload_on_both_sides() {
                     let hint = s.drop_hint(VIEW, [x, y], &[], item, None).unwrap();
                     assert_eq!(
                         hint.target,
-                        if collapsed {
+                        if collapsed && y >= bounds.y - WORKSPACE_SPACING && !matches!(item, DockItem::Column { .. }) {
+                            DockTarget::Split { group: 5, edge: Edge::Top }
+                        } else if collapsed {
                             DockTarget::StackColumn {
                                 column: 4,
                                 before: true,

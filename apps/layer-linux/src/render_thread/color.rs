@@ -224,14 +224,18 @@ impl Worker {
                 .map_err(error)?;
             std::thread::sleep(Duration::from_millis(2));
         }
-        let mut presenter = ViewportPresenter::for_surface(
+        let mut presenter = workspace_presenter(
             &renderer,
             self.config.format,
             self.hdr_encoding.unwrap_or_else(|| self.view_color.surface()),
-        )
-        .map_err(error)?;
+        )?;
         presenter.set_hdr_view(&renderer, request.project.composition().color.depth.is_float().then_some(request.project.output().sdr), if self.preview_sdr { 1. } else { self.display_headroom }).map_err(error)?;
-        presenter.prepare_overviews(&renderer);
+        while !presenter.prepare_chrome(&renderer) {
+            check()?;
+            renderer.poll_startup().map_err(error)?;
+            renderer.device().poll(wgpu::PollType::Poll).map_err(error)?;
+            std::thread::sleep(Duration::from_millis(2));
+        }
         check()?;
         Ok(Prepared {
             id: request.id,

@@ -3,7 +3,7 @@
 use crate::{BackdropBlurStyle, BackdropRegion, GpuRasterError, SdrSurfaceColor, Uploads, WgpuRasterizer};
 use layer_render::{CanvasRenderer, CursorSegment, ViewState};
 
-const CAMERA_SIZE: u64 = 624;
+pub(super) const CAMERA_SIZE: u64 = 624;
 const SOURCE_CAMERA: u32 = 768;
 
 /// The viewport shader for `format` and `color`; `paper` keeps the paper
@@ -29,7 +29,7 @@ fn viewport_shader(device: &crate::PipelineDevice, format: wgpu::TextureFormat, 
                 crate::view_color::hdr_shader(device.working_space(), color.primaries()),
                 concat!(include_str!("float_number.wgsl"), "\n", include_str!("guide_luminance.wgsl"), "\n", include_str!("hdr_view.wgsl")),
                 concat!(include_str!("tetrahedron.wgsl"), "\n", include_str!("proof_view.wgsl")),
-                [device.float_sampling_wgsl(), include_str!("area_sample.wgsl"), include_str!("mapped_sample.wgsl"), include_str!("paper_shade.wgsl"), include_str!("present.wgsl")].join("\n").replace("resample.", "camera.mapped."),
+                [device.float_sampling_wgsl(), include_str!("area_sample.wgsl"), include_str!("mapped_sample.wgsl"), include_str!("paper_shade.wgsl"), include_str!("present.wgsl"), include_str!("panel_surface.wgsl")].join("\n").replace("resample.", "camera.mapped."),
                 crate::view_color::checker_shader(),
                 include_str!("present_screen.wgsl")
             )
@@ -124,6 +124,8 @@ pub struct ViewportPresenter {
     motion_views: Option<[wgpu::TextureView; 2]>,
     overlays_changed: bool,
     backdrop: Option<crate::backdrop_blur::BackdropBlur>,
+    panels: Option<crate::panel_surface::PanelSurfaces>,
+    panel_surfaces_changed: bool,
     source_camera: Option<[f32; 156]>,
     presented_area: u64,
     shaded_area: u64,
@@ -436,6 +438,10 @@ impl ViewportPresenter {
     pub async fn prepare(&mut self, renderer: &WgpuRasterizer) -> Result<(), GpuRasterError> {
         crate::Deferred::prepare_all(self.pipeline.iter().chain([&self.surround_pipeline, &self.cursor_pipeline]).chain(self.backdrop.iter().flat_map(|b|b.pipelines())))
             .await.map_err(GpuRasterError::Effect)?;
+        if let Some(panels) = &self.panels {
+            crate::Deferred::prepare_all([&panels.pipeline]).await.map_err(GpuRasterError::Effect)?;
+            crate::Deferred::prepare_all([&panels.profile_pipeline]).await.map_err(GpuRasterError::Effect)?;
+        }
         crate::Deferred::prepare_all(renderer.scene_pipelines.scale_pipelines())
             .await.map_err(GpuRasterError::Effect)?;
         Ok(())
@@ -461,6 +467,10 @@ impl ViewportPresenter {
         let mut ready = startup.compiler.require(self.pipeline.iter().chain([&self.surround_pipeline, &self.cursor_pipeline]), crate::startup::DOCUMENT);
         ready &= startup.compiler.require(self.overview_pipeline.iter().chain(self.picker.pipeline.iter()), crate::startup::BRUSH);
         if let Some(backdrop) = &self.backdrop { ready &= startup.compiler.require(backdrop.pipelines(), crate::startup::DOCUMENT); }
+        if let Some(panels) = &self.panels {
+            ready &= startup.compiler.require([&panels.pipeline],crate::startup::DOCUMENT);
+            ready &= startup.compiler.require([&panels.profile_pipeline],crate::startup::DOCUMENT);
+        }
         startup.compiler.start();
         ready
     }
@@ -712,6 +722,8 @@ impl ViewportPresenter {
             motion_views: None,
             overlays_changed: false,
             backdrop: None,
+            panels: None,
+            panel_surfaces_changed: false,
             source_camera: None,
             presented_area: 0,
             shaded_area: 0,
@@ -809,6 +821,26 @@ impl ViewportPresenter {
         if let Some(backdrop) = &other.backdrop {
             self.set_backdrop(renderer, backdrop.regions(), backdrop.style(), false);
         }
+        if let Some(panels) = &other.panels { self.set_panel_surfaces(renderer,panels.surfaces()); }
+    }
+
+    pub fn set_panel_surfaces(&mut self, renderer: &WgpuRasterizer, surfaces: &[crate::PanelSurface]) {
+        if surfaces.is_empty() && self.panels.is_none() { return; }
+        let panels=self.panels.get_or_insert_with(||crate::panel_surface::PanelSurfaces::new(&renderer.device,&self.uniform,&self.shader,self.format));
+        self.panel_surfaces_changed |= panels.set(surfaces);
+    }
+
+    pub fn prepare_chrome(&mut self, renderer: &WgpuRasterizer) -> bool {
+        self.prepare_overviews(renderer);
+        self.backdrop.get_or_insert_with(||crate::backdrop_blur::BackdropBlur::new(&renderer.device,self.format));
+        self.panels.get_or_insert_with(||crate::panel_surface::PanelSurfaces::new(&renderer.device,&self.uniform,&self.shader,self.format));
+        if !self.pipelines_ready(renderer) {return false;}
+        self.panels.as_ref().unwrap().warm_profile(renderer.device(),renderer.queue()) && self.chrome_ready()
+    }
+
+    pub fn chrome_ready(&self) -> bool {
+        self.panels.as_ref().is_some_and(|panels|panels.ready())
+            && self.backdrop.as_ref().is_some_and(|backdrop|backdrop.pipelines().into_iter().all(crate::Deferred::ready))
     }
 
     pub fn backdrop_frames(&self) -> [u64; 2] {
@@ -874,6 +906,7 @@ impl ViewportPresenter {
             || previous.proof != self.proof_options
             || previous.screen != self.screen_options
             || self.overlays_changed
+            || self.panel_surfaces_changed
             || self.shade.changed(renderer)
             || self.picker.changed()
             || self.camera_data.is_none_or(|old| old[62..64] != renderer.clipping_preview.map(f32::from))
@@ -1182,7 +1215,7 @@ impl ViewportPresenter {
                     && previous.selection_revision.wrapping_add(1) != renderer.selection_paint_revision)
                 || (previous.revision != renderer.composite_revision
                     && previous.revision.wrapping_add(1) != renderer.composite_revision);
-            let full = content || bindings_changed || camera_changed || (selection_changed && outline.is_none()) || self.presented_paper != Some(lit);
+            let full = content || bindings_changed || camera_changed || self.panel_surfaces_changed || (selection_changed && outline.is_none()) || self.presented_paper != Some(lit);
             let cursor =
                 crate::present_damage::cursor_bounds(&self.cursor_vertices, view, self.quarter_turns);
             let repaint = if full {
@@ -1301,6 +1334,9 @@ impl ViewportPresenter {
                 }
             }
         }
+        if !overview_only && let Some(panels)=self.panels.as_mut() {
+            panels.prepare(renderer.device(),&mut self.uploads,encoder,self.backdrop.as_ref().and_then(|b|b.cached()))?;
+        }
         let (regions, full) = if self.retained || overview_only {
             (regions, full)
         } else {
@@ -1403,6 +1439,10 @@ impl ViewportPresenter {
                     backdrop.draw(&mut pass, *repaint);
                     pass.set_bind_group(0, self.bind_group.as_ref().unwrap(), &[0]);
                 }
+                if let Some(panels)=&self.panels {
+                    panels.draw(&mut pass);
+                    pass.set_bind_group(0,self.bind_group.as_ref().unwrap(),&[0]);
+                }
             }
             if !self.overviews.is_empty() {
                 pass.set_pipeline(self.overview_pipeline.as_ref().unwrap());
@@ -1417,6 +1457,7 @@ impl ViewportPresenter {
         self.presented_selection_overlay = renderer.selection_overlay;
         self.presented_paper = Some(lit);
         self.overlays_changed = false;
+        if !overview_only { self.panel_surfaces_changed = false; }
         Ok(())
     }
 }

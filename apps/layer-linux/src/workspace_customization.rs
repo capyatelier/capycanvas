@@ -2,6 +2,12 @@
 //! GTK owns gestures/widgets; catalogs, selection, validation and edits are Rust UI policy.
 use super::*;
 
+pub(super) fn square_corners(widget: &impl IsA<gtk::Widget>, corners: [bool; 4]) {
+    for (square, class) in corners.into_iter().zip(["join-nw", "join-ne", "join-se", "join-sw"]) {
+        if square { widget.add_css_class(class); } else { widget.remove_css_class(class); }
+    }
+}
+
 pub(super) fn drawer_origin(button: &gtk::Button, direction: Option<Edge>) {
     if direction.is_some() {
         button.add_css_class("drawer-open");

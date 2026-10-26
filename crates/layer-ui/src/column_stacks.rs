@@ -35,9 +35,49 @@ pub struct OpenColumn {
 }
 
 impl ResolvedLayout {
-    /// Empty space and footer grips append a new member; the gap between
-    /// members inserts there. The last tile's boundary appends a group within
-    /// its member before the empty-space/handle target can claim the contact.
+    pub fn with_panel_bridges(mut self) -> Self {
+        for group in &mut self.groups {
+            let radius = group.tiles.as_ref().filter(|_| !group.tabs_visible)
+                .map_or(SURFACE_RADIUS, |tiles| tiles.presentation.tile_corner_radius)
+                .min(group.bounds.width * 0.5).min(group.bounds.height * 0.5).max(0.);
+            group.corner_radii = [radius; 4];
+        }
+        for column in &mut self.collapsed {
+            let radius = SURFACE_RADIUS.min(column.bounds.width * 0.5).min(column.bounds.height * 0.5).max(0.);
+            column.corner_radii = [radius; 4];
+            let source_corners = if column.open.as_ref().is_some_and(|open| open.direction == Edge::Right) { [1, 2] } else { [0, 3] };
+            let members: Vec<_> = column.groups.iter().map(|group| group.group).collect();
+            for group in &mut column.groups {
+                for icon in &mut group.icons {
+                    icon.corner_radii = [icon.bounds.width.min(icon.bounds.height) * 0.5; 4];
+                    if column.open.is_none() { continue; }
+                    if icon.panel != group.active { continue; }
+                    let Some(anchor) = icon.bounds.intersection(column.content) else { continue; };
+                    if !self.groups.iter().any(|target| members.contains(&target.id)
+                        && anchor.y < target.bounds.y + target.bounds.height + WORKSPACE_SPACING
+                        && anchor.y + anchor.height > target.bounds.y - WORKSPACE_SPACING) { continue; }
+                    for (corner, distance) in source_corners.into_iter().zip([
+                        anchor.y - column.bounds.y, column.bounds.y + column.bounds.height - anchor.y - anchor.height,
+                    ]) { column.corner_radii[corner] = column.corner_radii[corner].min(distance.max(0.)); }
+                    for (corner, distance) in source_corners.into_iter().zip([
+                        anchor.y - icon.bounds.y, icon.bounds.y + icon.bounds.height - anchor.y - anchor.height,
+                    ]) { icon.corner_radii[corner] = icon.corner_radii[corner].min(distance.max(0.)); }
+                }
+            }
+        }
+        self
+    }
+
+    pub(crate) fn prepend_group_drop_hint(&self, point: [f32; 2]) -> Option<DropHint> {
+        if self.groups.iter().any(|g| g.bounds.contains(point[0], point[1])) {
+            return None;
+        }
+        self.collapsed.iter().rev().find_map(|member| member.prepend_group_drop_hint(point))
+    }
+
+    /// Empty space and footer grips append a member. Leading gaps prepend a
+    /// visible first group; the last tile's boundary appends a group before
+    /// the empty-space/handle target can claim the contact.
     pub(crate) fn stack_item_drop_hint(&self, point: [f32; 2]) -> Option<DropHint> {
         if self
             .groups
@@ -47,7 +87,8 @@ impl ResolvedLayout {
             return None;
         }
         for member in &self.collapsed {
-            if let Some(hint) = member.append_group_drop_hint(point) {
+            if let Some(hint) = member.prepend_group_drop_hint(point)
+                .or_else(|| member.append_group_drop_hint(point)) {
                 return Some(hint);
             }
             if member.empty.contains(point[0], point[1]) || member.grip.contains(point[0], point[1])
