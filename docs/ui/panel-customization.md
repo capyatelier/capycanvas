@@ -79,8 +79,8 @@ GTK tool preview rows have a 54-pixel minimum and a 66-pixel natural height at
 the default text size. Their 40-pixel stroke previews retain their height as the
 panel shrinks. The icon and name occupy separate 26-pixel squircle surfaces,
 using the row's background color at 20% opacity (80% transparent), with opaque text and icons.
-The row and caption surfaces share a 200 ms background-color transition for
-hover, press and selection changes. Selected preview rows retain the opaque
+The row and caption surfaces resolve hover, press and selection directly from
+the row state and share a 200 ms background-color transition. Selected preview rows retain the opaque
 selection color at every panel transparency level.
 Below 66 pixels these surfaces overlap the preview before the list scrolls.
 Larger text can increase the caption height. Filter rows preserve the image's

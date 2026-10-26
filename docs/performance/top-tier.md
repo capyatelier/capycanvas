@@ -242,7 +242,7 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 | Android palette pill opening at the work-area edge | 120 | **FPS unqualified.** Instant clamp; two actual presents per opening, all neighbors stationary in the diagnostic | [Native palette opening](#native-palette-opening), 2026-10-23 |
 | Android tool bubble drag through four neighbours | 120 | **Unqualified after the bubble release fixes.** Previous parity build: 115.00–116.55 actual app-window presents/s; p99 ≤16.667447 ms, default glass, 61 MP photo at Fit | [Native tool bubbles](#native-tool-bubbles), 2026-10-24 |
 | Web tool bubble drag through four neighbours | 120 | Unmeasured after the bubble release fixes; desktop browser journeys do not qualify the reference tablet | [Web checks](../development/web.md#tests), 2026-10-24 |
-| GTK Tool Set hover and press animation | 120 | Desktop diagnostic: **117.93 changing-color presents/s**, 117.38–118.14 per case; worst case gap p99 16.715 ms. Reference hardware unmeasured | [GTK tool caption hover](#gtk-tool-caption-hover), 2026-10-26 |
+| GTK Tool Set hover and press animation | 120 | Desktop diagnostic: **117.76 changing-color presents/s**, 116.67–118.08 per case; pooled gap p99 16.646 ms. Reference hardware unmeasured | [GTK tool caption hover](#gtk-tool-caption-hover), 2026-10-26 |
 | Panel or column resize | 120 | Expanding GTK divider desktop diagnostic: **54.49/s**, p99 41.689 ms; misses the 114 Hz floor. **Desktop diagnostic misses.** GTK GPU joins: 81.59–112.27 changing-geometry presents/s at 1×; 38.96–92.31 at 2×, worst p99 74.986 ms. Reference-tier qualification remains unset. Web Navigator: 30.00–30.64 Chrome surface presents/s; p99 50.00–58.34 ms | [Web Navigator layout](#web-navigator-layout), 2026-10-19; [GTK Color resize](#gtk-color-panel-resize), 2026-10-10; [GTK column bridge diagnostic](#gtk-column-bridge-diagnostic), 2026-10-25; [GTK Tool Set density](#gtk-tool-set-density), 2026-10-26; [GTK toolbar dividers](#gtk-toolbar-divider-resize), 2026-10-26 |
 | Windows window resize | 120 | Unqualified; local 60 Hz diagnostic: Paint UI publication 5.1–5.5 ms, Photo 5.9 ms; measured Paint UI busy time 43.5–43.7%. Presented-frame timing and reference hardware unmeasured | [Windows window resize](#windows-window-resize), 2026-10-26 UTC |
 | Pen pressure utility and curve drag | 120 | **Unqualified.** Current GTK desktop panel 119.20–119.40 presents/s, p99 up to 9.207 ms; curve 120.00, p99 up to 8.470 ms; reference tablet unmeasured | [GTK pen pressure utility](#gtk-pen-pressure-utility), 2026-10-10 UTC |
@@ -4440,6 +4440,18 @@ diagnostic, not reference-tier qualification.
 [presentation summary](../../artifacts/tool-caption-transparency/hover-summary.json) and
 [build provenance](../../artifacts/tool-caption-transparency/final-provenance.json)
 identify the followup build.
+
+Direct row-state selectors remove a pressed-caption delay found in broader
+regression testing. The same 20-case oracle retains its 3/255 transient RGB
+limit: the worst difference changes from 3.95 to 2.21 levels, with exact 0.2
+alpha, correct palette roles and no settled pixel difference. Release binary
+`4735e46d57873aaff41a71bbef341eb856d5d2dc09e60453981502f73d3a1962`
+records 2,378 moving presentation intervals at 117.76/s, 116.67–118.08/s per
+case, with pooled gap p99 16.646 ms and CPU sampling p95 0.0204 ms.
+This remains a short diagnostic on the same desktop hardware, with reference
+hardware unmeasured. [Measurements](../../artifacts/gtk-full-regression/repair-hover-summary.json)
+and [native traces](../../artifacts/gtk-full-regression/repair-native_tool_caption_hover_input/native-output/caption-hover.json)
+retain the complete results.
 
 ## GTK toolbar divider resize
 
