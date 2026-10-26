@@ -1,4 +1,5 @@
 import {checkToolBubbles,installBubbleInputTrace} from "./tool-bubbles.test.mjs";
+import {checkEraserBubbles} from './eraser-bubbles.test.mjs';
 import {checkCurves} from "./effects.test.mjs";
 import {checkPressureCalibration} from './pressure-calibration.test.mjs';
 import {checkTiltCalibration} from './tilt-calibration.test.mjs';
@@ -130,6 +131,7 @@ try {
       await checkPrediction({call,evaluate,settle});
     }, checkErrors],
     [process.argv.includes("--tool-bubbles"), () => checkToolBubbles({call,evaluate,settle}), checkErrors],
+    [process.argv.includes('--eraser-bubbles'), () => checkEraserBubbles({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--smoothing"), () => checkSmoothing({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--liquify-amount-bench"), () => checkLiquify({call,evaluate,settle},{benchmark:true}), checkErrors],
     [process.argv.includes("--liquify-journey"), () => checkLiquify({call,evaluate,settle}), checkErrors],

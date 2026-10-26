@@ -2486,13 +2486,13 @@ fn native_brush_drawer_input() {
         pump(120);
         crate::snapshot(&d.w).save_to_png(output.join(format!("brush-drawer-{theme:?}.png"))).unwrap();
     }
-    assert_eq!(state(&d.w).tool_panels.brush_sets.groups.len(), 10);
+    assert_eq!(state(&d.w).tool_panels.brush_sets.groups.len(), 7);
     let sculpt = d.header_tool(ToolbarControl::Command { command: CommandId::Sculpt });
     d.click_name(&sculpt);
     let sculpt_sets = d.named("drawer-panel-SculptSets");
     assert_eq!(
         state(&d.w).tool_panels.sculpt_sets.groups.iter().map(|s| s.label.as_ref()).collect::<Vec<_>>(),
-        ["Blend", "Liquify", "Clone", "Heal", "Spot Heal"]
+        ["Blend", "Paint mixing", "Effects", "Liquify", "Retouch"]
     );
     let liquify = find_named(&sculpt_sets, "sculpt-set-liquify").unwrap();
     let p = d.point(&liquify);
@@ -2500,7 +2500,8 @@ fn native_brush_drawer_input() {
         .perform(serde_json::json!([{"touch":"down","point":p},{"touch":"up"}]));
     assert_eq!(state(&d.w).brush.tool, layer_ui::Tool::Liquify);
     d.header_icon(CommandId::Sculpt, "liquify");
-    assert_eq!(d.header_icon(CommandId::DrawingBrush, "paint"), brush_icon);
+    let remembered_icon = layer_ui::brush_catalog().find(|choice| choice.id == remembered).unwrap().icon;
+    assert_eq!(d.header_icon(CommandId::DrawingBrush, remembered_icon), brush_icon);
     assert!(state(&d.w).customization.drawer.is_some());
     d.number(&find_named(&d.named("tool-drawer"), "tool-setting-size").unwrap(), "79");
     let sculpt_preset = state(&d.w).brush.preset;

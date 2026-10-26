@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {mkdir,writeFile} from 'node:fs/promises';
 
 // Run inside the isolated selection-tools fixture on desktop or Android Chrome.
-export async function checkPaintableSelections({call,evaluate,settle,send,invoke,point,at}) {
+export async function checkPaintableSelections({call,evaluate,settle,send,invoke,point,at,wait}) {
   const view=()=>evaluate('JSON.parse(JSON.stringify(layerApp.state().layer_tools,(_,v)=>typeof v==="bigint"?String(v):v))');
   const layersOpener=await evaluate('String(layerApp.state().workspace.layout.header.zones.flat().find(e=>e.item.control?.panel==="layers").id)');
   const toggleLayers=async()=>{await evaluate(`document.querySelector('[data-header-item="${layersOpener}"] .header-tool').click()`);await settle();};
@@ -129,9 +129,11 @@ export async function checkPaintableSelections({call,evaluate,settle,send,invoke
   await invoke('deselect');
   await invoke('rectangle_select');await invoke('selection_new');
   for(const [key,code,windowsVirtualKeyCode,modifiers,mode] of [['Shift','ShiftLeft',16,8,'selection_add'],['Alt','AltLeft',18,1,'selection_subtract'],['Shift','ShiftLeft',16,9,'selection_intersect']]) {
-    await call('Input.dispatchKeyEvent',{type:'keyDown',key,code,windowsVirtualKeyCode,modifiers});await settle();
+    await call('Input.dispatchKeyEvent',{type:'keyDown',key,code,windowsVirtualKeyCode,modifiers});
+    await wait(`layerApp.state().commands.find(c=>c.id===${JSON.stringify(mode)}).selected`);
     assert.ok(await evaluate(`layerApp.state().commands.find(c=>c.id===${JSON.stringify(mode)}).selected`),mode);
-    await call('Input.dispatchKeyEvent',{type:'keyUp',key,code,windowsVirtualKeyCode,modifiers:0});await settle();
+    await call('Input.dispatchKeyEvent',{type:'keyUp',key,code,windowsVirtualKeyCode,modifiers:0});
+    await wait('layerApp.state().commands.find(c=>c.id==="selection_new").selected');
     assert.ok(await evaluate('layerApp.state().commands.find(c=>c.id==="selection_new").selected'));
   }
   console.log('PASS Quick Mask normal row and properties, pen coverage, light/dark overlay, compact load icon, mouse/touch rename, Grow/Shrink/Smooth refinement, saved selection edit/load, reselect');

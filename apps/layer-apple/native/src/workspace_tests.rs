@@ -232,17 +232,23 @@ fn apple_default_workspace_reaches_every_grouped_brush_without_changing_artwork(
                 Some(tile) => app.action(json!({"type":"activate_tile","panel":"toolbar","tile":tile["id"]})),
                 None => app.invoke(command.as_str().unwrap()),
             }
+            let state = app.state();
+            reachable.insert(state["brush"]["preset"].as_u64().unwrap());
+            assert_eq!(state["brush"]["color"], color);
+            assert_eq!(state["layers"], layers);
             let groups = app.state()["tool_set"]["groups"]
                 .as_array()
                 .unwrap()
                 .clone();
-            for group in groups {
-                app.action(group["action"].clone());
+            let categories: Vec<_> = if groups.is_empty() { vec![None] }
+                else { groups.into_iter().map(|group| Some(group["action"].clone())).collect() };
+            for category in categories {
+                if let Some(action) = &category { app.action(action.clone()); }
                 let subtools = app.state()["tool_set"]["subtools"]
                     .as_array()
                     .unwrap()
                     .clone();
-                assert!(!subtools.is_empty());
+                assert!(category.is_none() || !subtools.is_empty());
                 for subtool in subtools {
                     app.action(subtool["action"].clone());
                     let id = subtool["preview"].as_u64().unwrap();

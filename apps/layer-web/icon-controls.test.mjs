@@ -29,8 +29,9 @@ export async function checkIconControls({call,evaluate,settle}, output) {
   const check = async name => {
     const view=await evaluate("layerApp.state().tool_set");
     for(const kind of ["groups","subtools"]) {
+      if(kind==="groups"&&view.groups.length<=1)continue;
       const plain=view[kind].filter(i=>i.preview==null);
-      assert.equal(new Set(plain.map(i=>i.icon)).size,plain.length,`${name}: ${kind} differentiate choices`);
+      assert.equal(new Set(plain.map(i=>i.label)).size,plain.length,`${name}: ${kind} identify choices`);
       for(const item of view[kind]) {
         const node=await evaluate(`(()=>{const b=[...document.querySelectorAll('.dock-group .tool-${kind} [data-tool-choice]')].find(b=>b.dataset.toolChoice===${JSON.stringify(item.label)});if(!b)return null;b.scrollIntoView({block:'nearest'});const svg=b.querySelector('svg[data-asset]'),r=svg?.getBoundingClientRect(),t=b.getBoundingClientRect();return {icon:svg?.dataset.asset,w:r?.width,h:r?.height,inside:r&&r.left>=t.left&&r.right<=t.right&&r.top>=t.top&&r.bottom<=t.bottom,preview:b.querySelector('img')?.complete,label:b.getAttribute('aria-label')};})()`);
         assert.ok(node,`${name}: ${item.label} is rendered`);
@@ -51,15 +52,23 @@ export async function checkIconControls({call,evaluate,settle}, output) {
         await dispatch({type:"select_brush",id:category.brushes[0].id});
         await wait("layerApp.app.brush_ready()");
         const click=async (kind,label)=>{await evaluate(`(()=>{const b=[...document.querySelectorAll('.dock-group .tool-${kind} [data-tool-choice]')].find(b=>b.dataset.toolChoice===${JSON.stringify(label)});b.click();})()`);await settle();await wait("layerApp.app.brush_ready()");};
-        await click("groups",category.label);
-        const selected=await evaluate("layerApp.state().tool_set.groups.find(g=>g.selected)");
-        assert.equal(selected.icon,category.icon);
-        for(const brush of category.brushes) {await click("subtools",brush.label);assert.equal(await evaluate("layerApp.state().brush.preset"),brush.id);}
+        const groups=await evaluate("layerApp.state().tool_set.groups");
+        if(groups.length>1)await click("groups",groups.find(g=>g.selected).label);
+        for(const brush of category.brushes) {
+          await dispatch({type:"select_brush",id:brush.id});await wait("layerApp.app.brush_ready()");
+          const choices=await evaluate("layerApp.state().tool_set.subtools");
+          const choice=choices.find(item=>item.preview===brush.id)??choices.find(item=>item.selected);
+          if(choice)await click("subtools",choice.label);
+          else assert.equal(choices.length,0,'A sole tool preset has no redundant choice row');
+          assert.equal(await evaluate("layerApp.state().brush.preset"),brush.id);
+        }
         await check(`${theme}-${category.label}`);
-        await shot(`${theme}-medium-${category.icon}`,'.dock-group .brushes-control');
+        const count=await evaluate('layerApp.state().tool_set.groups.length+layerApp.state().tool_set.subtools.length');
+        if(count)await shot(`${theme}-medium-${category.icon}`,'.dock-group .brushes-control');
+        else assert.equal(await evaluate('document.querySelectorAll(".dock-group .brushes-control [data-tool-choice]").length'),0,'A single preset leaves no redundant Tool Set rows');
       }
       for(const command of catalog.tool_commands) {
-        if(["pen","pencil","brush","airbrush","decoration","blend","liquify","eraser"].includes(command))continue;
+        if(["pen","pencil","brush","airbrush","retouch","blend","liquify","eraser"].includes(command))continue;
         await cancelTransform();
         if(!await evaluate(`layerApp.state().commands.find(c=>c.id===${JSON.stringify(command)}).enabled`)) {
           assert.equal(command,"scale_rotate","Only content transforms are unavailable on blank artwork");continue;

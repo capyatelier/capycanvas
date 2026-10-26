@@ -691,6 +691,62 @@ class AndroidToolBubblesTest {
             }
         }
     }
+    @Test fun sketchEraserBubbleKeepsItsHaloChooserAndSettingsAcrossThemesAndDevices() {
+        val tags=host.bootstrap!!.array("shipped_tags").values()
+        action(obj("type" to "preferences","action" to obj("type" to "edit","id" to "language","value" to tags.indexOf("en")+1)))
+        waitFor("English Eraser bubble fixture") { host.languageTag=="en" }
+        val sketch=JSONObject(state().getJSONObject("workspace").toString()).apply { put("zen_mode",false) }
+        val header=sketch.getJSONObject("layout").getJSONObject("header").array("zones").values()
+            .flatMap { (it as JSONArray).objects() }.single {
+                it.getJSONObject("item").objectOrNull("control")?.optString("command")=="eraser"
+            }.getInt("id")
+        val preset=host.catalog.array("brush_categories").objects().single { it.getString("id")=="eraser" }
+            .array("brushes").objects().single().getLong("id")
+        val arguments=androidx.test.platform.app.InstrumentationRegistry.getArguments()
+        val themes=arguments.getString("bubbleTheme")?.let { listOf(it) } ?: listOf("light","dark")
+        val inputs=arguments.getString("bubbleInput")?.let { name -> listOf(when(name) {
+            "mouse" -> MotionEvent.TOOL_TYPE_MOUSE; "touch" -> MotionEvent.TOOL_TYPE_FINGER; "pen" -> MotionEvent.TOOL_TYPE_STYLUS
+            else -> error("Unknown bubble input $name")
+        }) } ?: listOf(MotionEvent.TOOL_TYPE_MOUSE,MotionEvent.TOOL_TYPE_FINGER,MotionEvent.TOOL_TYPE_STYLUS)
+        for(theme in themes) for(input in inputs) {
+            tool=input;root=null;case="sketch-eraser-$theme-$input"
+            action(obj("type" to "restore_workspace","workspace" to JSONObject(sketch.toString())))
+            action(obj("type" to "set_theme","theme" to theme))
+            invoke("pen")
+            val target=workspace().let { Offset(it.left+it.width*.4f,it.top+it.height*.5f) }
+            val id=take(header,target)
+            val initial=view(id)
+            assertEquals("dial",initial.getString("kind"))
+            assertEquals("eraser",initial.getString("icon"))
+            assertTrue(initial.getBoolean("selected") && initial.getBoolean("open"))
+            assertEquals(preset,state().getJSONObject("brush").getLong("preset"))
+            assertTrue("Eraser opens its native slider halo",initial.array("rings").length()>0)
+            assertEquals(0,initial.array("chooser").length())
+            assertHaloGeometry(id)
+            val ring=initial.array("rings").objects().first()
+            val key=ring.getString("setting");val before=setting(key)
+            val from=ring.getDouble("fill").toFloat();val ringTarget=if(from<.5f) .8f else .2f
+            stroke(ringPoint(id,ring,from),ringPoint(id,ring,(from+ringTarget)/2),ringPoint(id,ring,ringTarget))
+            waitFor("Eraser native arc changes $key") { setting(key)!=before }
+            val changed=setting(key)
+            tap(stable(id))
+            waitFor("Eraser dial opens its sole leaf") { view(id).array("chooser").length()==1 }
+            val choice=view(id).array("chooser").objects().single()
+            assertEquals("Eraser",choice.getString("label"))
+            assertTrue(choice.getBoolean("selected") && choice.getBoolean("enabled"))
+            val at=choice.array("center")
+            tap(center(id)+Offset(at.getDouble(0).toFloat(),at.getDouble(1).toFloat())*density)
+            waitFor("Eraser choice keeps its slider halo") { view(id).array("chooser").length()==0 && view(id).array("rings").length()>0 }
+            assertEquals(preset,state().getJSONObject("brush").getLong("preset"))
+            assertEquals(changed,setting(key))
+            invoke("pen");tap(stable(id))
+            waitFor("Eraser bubble reactivates its remembered tool") { state().getJSONObject("brush").getLong("preset")==preset && view(id).getBoolean("selected") }
+            assertEquals(changed,setting(key))
+            shot("halo-and-choice")
+            putBack(id)
+            assertTrue("Eraser returns to its native Sketch header",packets().isEmpty())
+        }
+    }
     @Test fun nativeBubblesAcrossThemesAndDevices() {
         val arguments = androidx.test.platform.app.InstrumentationRegistry.getArguments()
         val themes = arguments.getString("bubbleTheme")?.let { listOf(it) } ?: listOf("light", "dark")

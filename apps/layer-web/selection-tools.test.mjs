@@ -117,7 +117,7 @@ export async function checkSelectionTools({call, evaluate, settle}) {
       await invoke('redo'); assert.equal(await evaluate('layerApp.state().layer_tools.has_selection'),true);
     }
     await invoke('deselect');
-    await checkPaintableSelections({call,evaluate,settle,send,invoke,point,at});
+    await checkPaintableSelections({call,evaluate,settle,send,invoke,point,at,wait});
     await workspace({type:'switch',id:'builtin:workspace:photographer'});
     const commands=await evaluate('layerApp.state().commands');
     assert.ok(tools.every(id=>commands.some(c=>c.id===id)));

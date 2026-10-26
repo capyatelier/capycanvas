@@ -51,7 +51,7 @@ export async function checkBrushDrawers({call, evaluate, settle}) {
     await send({type:'invoke',command:'drawing_brush'});
     await contact(header('drawing_brush'));
     await check('brush_sets');
-    assert.deepEqual(await evaluate('layerApp.state().tool_panels.brush_sets.groups.map(s=>s.label)'),['Pen','Marker','Pencil','Pastel','Paint','Watercolor','Oil paint','Airbrush','Spray','Texture']);
+    assert.deepEqual(await evaluate('layerApp.state().tool_panels.brush_sets.groups.map(s=>s.label)'),['Pen','Pencil','Pastel','Paint','Watercolor','Oil paint','Airbrush']);
     await evaluate('window.brushSetRoot=document.querySelector(".content-drawer .brush-sets-control")');
     for(const [device,label] of [['mouse','Pencil'],['touch','Pastel'],['pen','Paint']]) {
       assert.ok(await evaluate(`document.querySelector(${JSON.stringify(set('brush_sets',label))}).getBoundingClientRect().height>=44`));
@@ -65,7 +65,7 @@ export async function checkBrushDrawers({call, evaluate, settle}) {
     const drawing=await evaluate('layerApp.state().brush.preset');
     for(const theme of ['light','dark']) {await send({type:'set_theme',theme}); await capture(`brush-${theme}`);}
     await contact(header('sculpt'),'pen'); await check('sculpt_sets');
-    assert.deepEqual(await evaluate('layerApp.state().tool_panels.sculpt_sets.groups.map(s=>s.label)'),['Blend','Wet paint','Effects','Liquify','Retouch']);
+    assert.deepEqual(await evaluate('layerApp.state().tool_panels.sculpt_sets.groups.map(s=>s.label)'),['Blend','Paint mixing','Effects','Liquify','Retouch']);
     for(const device of ['mouse','touch','pen']) for(const label of ['Liquify','Blend']) {
       await contact(set('sculpt_sets',label),device); await check('sculpt_sets');
       assert.equal(await evaluate('layerApp.state().brush.tool'),label.toLowerCase());
@@ -77,7 +77,7 @@ export async function checkBrushDrawers({call, evaluate, settle}) {
     await contact(header('drawing_brush'));
     assert.deepEqual(await evaluate('[layerApp.state().brush.preset,layerApp.state().brush.diameter]'),[drawing,37]);
     await contact(header('eraser'),'touch');
-    assert.deepEqual((await drawer()).columns,[['tools'],['tool_settings']]);
+    assert.deepEqual((await drawer()).columns,[['tool_settings']]);
     assert.equal(await evaluate('document.querySelectorAll(".content-drawer .tool-groups").length'),0);
     await capture('eraser');
     assert.ok(await evaluate('layerApp.state().commands.filter(c=>["drawing_brush","sculpt"].includes(c.id)).every(c=>!c.selected)'));

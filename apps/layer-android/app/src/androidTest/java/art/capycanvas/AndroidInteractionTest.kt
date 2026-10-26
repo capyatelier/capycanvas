@@ -1821,7 +1821,7 @@ class AndroidInteractionTest {
 
     @Test fun toolbarDrawersSwitchToolsOnFirstTap() {
         val originalPreset = state().getJSONObject("brush").getInt("preset")
-        val toolCommands = setOf("pen", "pencil", "brush", "eraser", "airbrush", "decoration", "blend", "liquify",
+        val toolCommands = setOf("pen", "pencil", "brush", "eraser", "airbrush", "retouch", "blend", "liquify",
             "lasso", "move", "hand", "eyedropper", "gradient", "figure", "ruler", "auto_select", "fill")
         val originalTool = state().array("commands").objects().firstOrNull {
             it.optBoolean("selected") && it.getString("id") in toolCommands

@@ -215,6 +215,11 @@ light/dark mouse, touch and pen journeys; `device.test.mjs --tool-bubbles` runs
 the same contacts in tablet Chrome. See the [host contract](../ui/tool-bubbles.md#host-contract)
 for presentation and input requirements.
 
+`test.mjs --eraser-bubbles` and `device.test.mjs --eraser-bubbles` check Sketch's
+settings-only Eraser with mouse, touch and pen in both themes. They cover selected
+and unselected tear-outs, its singleton Eraser choice, settings, native options,
+erasing, exact Undo/Redo pixels and returning the bubble to its toolbar.
+
 `workspace-motion.sh web --hdr-bubbles` checks the HDR bubble's equal-margin
 outline in both themes at all three sizes, with the paint pair, recent colors
 and palette enabled. Mouse, touch and pen contacts edit intensity, reset it and

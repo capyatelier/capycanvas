@@ -27,16 +27,16 @@ export async function checkToolbarDrawerSwitching({call,evaluate,settle}) {
   };
   const check=async(i)=>{
     const drawer=await model();assert.equal(drawer?.anchor.tile,ids[i],'One click moves the drawer to the new tool');
-    assert.deepEqual(drawer.columns,i===2?[['color','palettes']]:[[i===1?'tools':'brushes'],['tool_settings']]);
+    assert.deepEqual(drawer.columns,i===2?[['color','palettes']]:i===1?[['tool_settings']]:[['brushes'],['tool_settings']]);
     assert.ok(await evaluate(`document.querySelector(${JSON.stringify(selector(i))}).dataset.drawerFacing`),'Connector corners follow the new opener');
     if(i!==2) {
       assert.equal(await evaluate(`document.querySelector(${JSON.stringify(selector(i))}).getAttribute('aria-pressed')`),'true','New tool activates immediately');
       assert.equal(await evaluate('layerApp.state().brush.tool'),i===0?'brush':'eraser');
     }
-    assert.equal(await evaluate('document.querySelectorAll(\'.content-drawer[data-drawer="tool"] > .drawer-column\').length'),i===2?1:2);
+    assert.equal(await evaluate('document.querySelectorAll(\'.content-drawer[data-drawer="tool"] > .drawer-column\').length'),i===0?2:1);
     if(i===2)assert.ok(await evaluate('(()=>{const column=document.querySelector(\'.content-drawer[data-drawer="tool"] > .drawer-column\').getBoundingClientRect(),footer=document.querySelector(\'.content-drawer[data-drawer="tool"] .palette-footer\').getBoundingClientRect();return footer.top>=column.top&&footer.bottom<=column.bottom+1})()'),'The color drawer must show the complete Palette footer');
   };
-  const toolCommands=['pen','pencil','brush','eraser','airbrush','decoration','blend','liquify','lasso','move','hand','eyedropper','gradient','figure','ruler','auto_select','fill'];
+  const toolCommands=['pen','pencil','brush','eraser','airbrush','retouch','blend','liquify','lasso','move','hand','eyedropper','gradient','figure','ruler','auto_select','fill'];
   const originalTool=saved.commands.find(c=>c.selected&&toolCommands.includes(c.id))?.id;
   try {
     await send({type:'restore_workspace',workspace:fixture});

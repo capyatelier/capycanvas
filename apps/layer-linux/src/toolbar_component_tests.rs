@@ -1312,7 +1312,8 @@ fn native_toolbar_variations_input() {
                     d.click(&opener);
                     assert_eq!(state(&d.w).customization.drawer.as_ref().unwrap().anchor, anchor);
                     let menu = ui_session(&d.w).context_menu(ContextTarget::ToolVariants { anchor }).unwrap();
-                    let docked = state(&d.w).tool_set.groups;
+                    let tool_set = state(&d.w).tool_set;
+                    let docked = if tool_set.groups.is_empty() { &tool_set.subtools } else { &tool_set.groups };
                     assert_eq!(docked.iter().map(|item| item.label.as_ref()).collect::<Vec<_>>(),
                         menu.sections[0].iter()
                             .map(|item| item.label.as_str()).collect::<Vec<_>>());

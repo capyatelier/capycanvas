@@ -46,18 +46,33 @@ export async function checkToolVariations({call,evaluate,settle}) {
     await settle();assert.ok(await menuOpen(),`${device}: context menu from tool button`);assert.deepEqual(await evaluate('layerApp.state().customization.drawer?.anchor??null'),drawer,'context gesture does not activate tool');
     const rows=(await model(anchor)).sections.flat();assert.deepEqual(await evaluate("[...document.querySelectorAll('.panel-context-menu .menu-label')].map(n=>n.textContent)"),rows.map(row=>row.label));
   };
-  const checkCommandGroup=async(anchor,selector,icons=[])=>{
-    const view=groupView(anchor),body=groupBody(anchor,selector),rows=(await model({kind:'tool_variants',anchor})).sections.flat();
-    assert.ok(rows.length,'existing command group has choices');assert.equal(await evaluate(`${view}.has_variants`),true);
+  const checkCommandGroup=async(anchor,selector,icons=[],singleLeaf=false)=>{
+    const view=groupView(anchor),body=groupBody(anchor,selector);
+    if(singleLeaf) {
+      assert.equal(await evaluate("layerApp.app.catalog().brush_categories.find(category=>category.id==='eraser').brushes.length"),1,'the Eraser has exactly one leaf');
+      assert.equal(await evaluate(`${view}.has_variants`),false,'a single leaf has no variation menu');
+      assert.equal(await evaluate(`document.querySelector(${JSON.stringify(selector+' .tool-variations')}).hidden`),true);
+      await send({type:'customize',action:{type:'close_expanded'}});await send({type:'invoke',command:'hand'});
+      await click(body);assert.equal(await evaluate(`${view}.selected`),true);assert.equal(await evaluate('layerApp.state().customization.drawer==null'),true);
+      await click(body);assert.deepEqual(await evaluate('layerApp.state().customization.drawer.anchor'),anchor);
+      assert.deepEqual(await evaluate('layerApp.state().customization.drawer.columns'),[['tool_settings']]);
+      return {rows:[],body,view};
+    }
+    const rows=(await model({kind:'tool_variants',anchor})).sections.flat();
+    assert.ok(rows.length>1,'existing command group has multiple choices');assert.equal(await evaluate(`${view}.has_variants`),true);
     assert.equal(await evaluate(`document.querySelector(${JSON.stringify(selector+' .tool-variations')}).hidden`),false,'command group exposes its decorative corner');
     await markerActivation(anchor,selector);
     await evaluate(`window.retainedCommandGroup=document.querySelector(${JSON.stringify(selector)})`);
-    for(const icon of icons.length?icons:[rows.find(r=>!r.selected)?.icon??rows[0].icon]) {
-      const choice=rows.find(row=>row.icon===icon);assert.ok(choice,`group exposes ${icon}`);
+    for(const medium of icons.length?icons:[rows.find(r=>!r.selected)?.icon??rows[0].icon]) {
+      const icon=typeof medium==='string'?medium:medium.icon;
+      const choice=rows.find(row=>row.icon===icon&&(typeof medium==='string'||row.label===medium.label));assert.ok(choice,`group exposes ${JSON.stringify(medium)}`);
       await openChoices(anchor,selector);
       await choose(choice.label);await wait(`${view}.selected`);
-      assert.equal(await evaluate(`${view}.icon`),icon);
-      assert.equal(await evaluate(`document.querySelector(${JSON.stringify(body+' > svg')}).dataset.asset`),icon,'native group icon follows chosen medium');
+      const variant=choice.action.variant;
+      const selectedIcon=['brush_group','brush_preset'].includes(variant?.type)
+        ? await evaluate('layerApp.app.catalog().brush_categories.flatMap(c=>c.brushes).find(b=>b.id===layerApp.state().brush.preset).icon') : icon;
+      assert.equal(await evaluate(`${view}.icon`),selectedIcon);
+      assert.equal(await evaluate(`document.querySelector(${JSON.stringify(body+' > svg')}).dataset.asset`),selectedIcon,'native group icon follows the remembered preset');
       assert.equal(await evaluate(`document.querySelector(${JSON.stringify(selector)})===retainedCommandGroup`),true,'existing group retains its native control');
     }
     await send({type:'customize',action:{type:'close_expanded'}});await click(body);
@@ -80,7 +95,7 @@ export async function checkToolVariations({call,evaluate,settle}) {
       const selector=`.toolbar-controls[data-panel="toolbar"] > [data-tile="${tile.id}"]`,anchor={kind:'tile',panel:'toolbar',tile:tile.id};
       const variants=await model({kind:'tool_variants',anchor}),rows=variants.sections.flat();assert.ok(rows.length>1);
       if(slot==='fill')assert.deepEqual(rows.map(row=>row.label),['Fill','Lasso fill','Enclose and Fill']);
-      const categories=rows.filter(row=>row.label!=='Enclose and Fill').map(row=>row.label);
+      const categories=rows.map(row=>row.label);
       await markerPoint(anchor,selector);
       assert.ok(rows.every(r=>r.action&&r.icon));
       const target={kind:'tile',panel:'toolbar',tile:tile.id},full=await model(target);
@@ -141,8 +156,8 @@ export async function checkToolVariations({call,evaluate,settle}) {
         assert.deepEqual(leaves.slice(-3).map(row=>row.label),['Fill','Lasso fill','Enclose and Fill']);
         await openChoices(fillAnchor,fillSelector);await choose('Enclose and Fill');
         assert.deepEqual(await evaluate('layerApp.state().tool_set.groups.map(item=>item.label)'),
-          leaves.filter(row=>row.label!=='Enclose and Fill').map(row=>row.label),'Photo Fill retains broad categories');
-        assert.deepEqual(await evaluate('layerApp.state().tool_set.subtools.map(item=>item.label)'),['Lasso fill','Enclose and Fill']);
+          leaves.map(row=>row.label),'Photo Fill retains broad categories');
+        assert.deepEqual(await evaluate('layerApp.state().tool_set.subtools.map(item=>item.label)'),[],'Photo Fill keeps leaf tools directly in its category list');
       }
       await send({type:'restore_workspace',workspace:fixture});
     }
@@ -150,11 +165,11 @@ export async function checkToolVariations({call,evaluate,settle}) {
       device='mouse';await click('.workspace-switcher button[data-workspace-id="builtin:workspace:illustrator"]');
       await wait('JSON.parse(layerApp.app.workspace_view()).ready&&!JSON.parse(layerApp.app.workspace_view()).busy');await send({type:'set_theme',theme});
       const paint=await evaluate('layerApp.state().workspace'),tiles=paint.layout.panels.find(p=>p.id==='toolbar').content.tiles;
-      for(const [index,[command,icons]] of [['pen',['marker']],['pencil',['pastel']],['brush',['watercolor','oil-paint']],['airbrush',['spray']],['eraser',[]],['decoration',[]],['liquify',[]]].entries()) {
+      for(const [index,[command,icons]] of [['pen',[{label:'Marker',icon:'marker'}]],['pencil',['pastel']],['brush',['watercolor','oil-paint']],['airbrush',[{label:'Spray',icon:'spray'}]],['eraser',[]],['retouch',[]],['liquify',[]]].entries()) {
         device=['mouse','touch','pen'][index%3];
-        const tile=tiles.find(t=>t.control.command===command);assert.ok(tile,`Paint has existing ${command} group`);console.log(`Paint group: ${command}/${theme}/${device}`);
+        const tile=tiles.find(t=>t.control.command===command||t.control.slot===command);assert.ok(tile,`Paint has existing ${command} group`);console.log(`Paint group: ${command}/${theme}/${device}`);
         const anchor={kind:'tile',panel:'toolbar',tile:tile.id},selector=`.toolbar-controls[data-panel="toolbar"] > [data-tile="${tile.id}"]`;
-        await checkCommandGroup(anchor,selector,icons);
+        await checkCommandGroup(anchor,selector,icons,command==='eraser');
         assert.deepEqual(await evaluate(`layerApp.state().workspace.layout.panels.find(p=>p.id==='toolbar').content.tiles.find(t=>t.id===${tile.id}).control`),tile.control,'medium choices preserve existing command configuration');
         await send({type:'customize',action:{type:'close_expanded'}});
       }
@@ -169,12 +184,15 @@ export async function checkToolVariations({call,evaluate,settle}) {
         await openChoices(anchor,selector);await choose(rows[0].label);await wait(`${view}.selected`);
         const dock='.dock-group .brushes-control .'+(slot.includes('selection')?'tool-subtools':'tool-groups');
         const dockLabels=await evaluate(`[...document.querySelectorAll('${dock} .tool-choice-name')].map(n=>n.textContent)`);
-        const categories=slot==='fill'?['Fill','Lasso fill']:rows.map(row=>row.label);
+        const categories=rows.map(row=>row.label);
         assert.deepEqual([...dockLabels].sort(),categories.slice().sort(),'docked Tool Set has the scoped categories');
         if(slot.includes('selection'))assert.deepEqual(await evaluate(`[...document.querySelectorAll('${dock} .tool-choice-name')].map(n=>getComputedStyle(n).textAlign)`),dockLabels.map(()=>'right'),'docked tool rows right-align their names like GTK');
         const alternate=rows.find(row=>row.label!==rows[0].label)||rows[0];
-        await click(`${dock} [data-tool-choice="${alternate.label}"]`);assert.equal(await evaluate(`${view}.icon`),alternate.icon,'docked sibling updates its group icon');
+        await click(`${dock} [data-tool-choice="${alternate.label}"]`);
+        assert.equal(await evaluate('layerApp.state().tool_set.groups.concat(layerApp.state().tool_set.subtools).find(item=>item.selected)?.label'),alternate.label,'docked sibling becomes the selected choice');
+        assert.equal(await evaluate(`${view}.icon`),slot==='blend'?'blend':alternate.icon,'docked sibling uses its shared group icon');
         await send({type:'customize',action:{type:'close_expanded'}});await click(groupBody(anchor,selector));await settleDrawer();
+        assert.deepEqual(await evaluate('layerApp.state().customization.drawer.anchor'),anchor,'docked sibling retains its slot origin');
         const drawerLabels=await evaluate("[...document.querySelectorAll('.content-drawer .brushes-control .tool-groups .tool-choice-name')].map(n=>n.textContent)");
         assert.deepEqual(drawerLabels,categories,'full selection drawer keeps the scoped categories');
         selection[slot]={menu:rows.map(row=>row.label),dock:dockLabels,drawer:drawerLabels};
@@ -184,7 +202,7 @@ export async function checkToolVariations({call,evaluate,settle}) {
       await send({type:'restore_workspace',workspace:paint});
       device='mouse';await click('.workspace-switcher button[data-workspace-id="builtin:workspace:painter"]');await wait('JSON.parse(layerApp.app.workspace_view()).ready&&!JSON.parse(layerApp.app.workspace_view()).busy');await send({type:'set_theme',theme});
       const sketch=await evaluate('layerApp.state().workspace');
-      for(const [index,[command,icons,columns]] of [['drawing_brush',['marker','pastel','watercolor','oil-paint','spray'],3],['sculpt',['liquify'],3],['select',['polygon-select'],2]].entries()) {
+      for(const [index,[command,icons,columns]] of [['drawing_brush',['pen','pastel','watercolor','oil-paint','airbrush'],3],['sculpt',['liquify'],3],['select',['polygon-select'],2]].entries()) {
         device=['mouse','pen','touch'][index];
         const entry=sketch.layout.header.zones.flat().find(item=>item.item.control?.command===command);assert.ok(entry);
         const anchor={kind:'header',id:entry.id},selector=`[data-header-item="${entry.id}"]`;

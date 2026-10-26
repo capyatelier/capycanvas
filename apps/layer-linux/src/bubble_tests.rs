@@ -767,6 +767,92 @@ fn native_bubble_chooser_sliders() {
 }
 
 #[test]
+#[ignore = "private display: --native-test=native_sketch_eraser_bubble_light"]
+fn native_sketch_eraser_bubble_light() {
+    sketch_eraser_bubble(Theme::Light);
+}
+
+#[test]
+#[ignore = "private display: --native-test=native_sketch_eraser_bubble_dark"]
+fn native_sketch_eraser_bubble_dark() {
+    sketch_eraser_bubble(Theme::Dark);
+}
+
+fn sketch_eraser_bubble(theme: Theme) {
+    let mut d = Driver::new("art.capycanvas.SketchEraserBubble");
+    let control = ToolbarControl::Command { command: CommandId::Eraser };
+    let source = BubbleSource::Control { control };
+    for device in ["mouse", "touch"] {
+        let name = format!("eraser-{theme:?}-{device}").to_lowercase();
+        d.w.dispatch(UiAction::RestoreWorkspace {
+            workspace: Box::new(WorkspaceState { layout: WorkspacePreset::Painter.layout(Platform::Gtk), ..WorkspaceState::default() }),
+        });
+        d.w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        d.w.dispatch(UiAction::SelectLayer { id: 1 });
+        d.w.dispatch(UiAction::Invoke { command: CommandId::ClearLayer });
+        d.w.dispatch(UiAction::SelectBrush { id: layer_core::DefaultBrushPreset::GPen as u32 });
+        d.w.dispatch(UiAction::SetBrushSize { value: 96. });
+        d.w.dispatch(UiAction::SetColor { rgba: [0., 0., 0., 1.] });
+        super::new_photo::ready(&d.w);
+        let path = [canvas_spot(&d, 0.55, 0.65), canvas_spot(&d, 0.7, 0.65)];
+        stroke(&mut d, "mouse", &path);
+        super::new_photo::ready(&d.w);
+        let opener = header_of(&d, control);
+        let spot = canvas_spot(&d, 0.3, 0.4);
+        tear(&mut d, device, &opener, spot);
+        capture(&mut d, &format!("{name}-created"));
+        let bubble = find(&d, source);
+        assert!(bubble.is_some(), "{name}: Eraser header tear creates a retained bubble; sources={:?}", views(&d).iter().map(|view| view.source).collect::<Vec<_>>());
+        let bubble = bubble.unwrap();
+        assert!(bubble.selected && bubble.open && !bubble.rings.is_empty(), "{name}: Eraser opens its settings");
+        assert_eq!(state(&d.w).brush.tool, layer_ui::Tool::Eraser);
+        let id = bubble.id;
+        let at = center(&d, id);
+        tap(&mut d, device, at);
+        let options = find_id(&d, id).unwrap();
+        assert_eq!(options.chooser.len(), 1, "{name}: the Eraser choice stays available");
+        let choice = options.chooser[0].clone();
+        assert_eq!(choice.kind, ChooserKind::Tool);
+        assert_eq!(choice.label.as_str(), "Eraser");
+        capture(&mut d, &format!("{name}-options"));
+        let choice_at = item_point(&d, id, &choice);
+        tap(&mut d, device, choice_at);
+        assert!(find_id(&d, id).unwrap().open && !find_id(&d, id).unwrap().rings.is_empty());
+        d.w.dispatch(UiAction::Invoke { command: CommandId::DrawingBrush });
+        tap(&mut d, device, at);
+        assert_eq!(state(&d.w).brush.tool, layer_ui::Tool::Eraser);
+        let reopened = find_id(&d, id).unwrap();
+        assert!(reopened.selected && reopened.open && !reopened.rings.is_empty(), "{name}: selecting Eraser restores its settings");
+        let ring = reopened.rings.iter().find(|ring| ring.enabled).unwrap().clone();
+        let value = |d: &Driver| state(&d.w).tool_settings.iter().find(|setting| setting.id == ring.setting).map(|setting| setting.value);
+        let before_setting = value(&d);
+        let arc = |fraction| { let point = ring.arc.point(fraction); [at[0] + point[0], at[1] + point[1]] };
+        stroke(&mut d, device, &[arc(0.2), arc(0.8)]);
+        assert_ne!(value(&d), before_setting, "{name}: Eraser's native setting arc changes its value");
+        d.w.dispatch(UiAction::ResetToolSetting { id: ring.setting.into() });
+        d.w.dispatch(UiAction::SetBrushSize { value: 128. });
+        super::new_photo::ready(&d.w);
+        let before = super::place_source::snapshot(&d.w);
+        let ink = paper_pixels(&d.w);
+        stroke(&mut d, "mouse", &path);
+        super::new_photo::ready(&d.w);
+        pump(700);
+        let erased = super::place_source::snapshot(&d.w);
+        assert_ne!(erased, before, "{name}: Eraser changes artwork pixels");
+        assert!(paper_pixels(&d.w) > ink + 500, "{name}: Eraser visibly reveals the paper");
+        capture(&mut d, &format!("{name}-erased"));
+        d.w.dispatch(UiAction::Invoke { command: CommandId::Undo });
+        super::new_photo::ready(&d.w);
+        assert_eq!(super::place_source::snapshot(&d.w), before, "{name}: Undo restores exact authored pixels");
+        d.w.dispatch(UiAction::Invoke { command: CommandId::Redo });
+        super::new_photo::ready(&d.w);
+        assert_eq!(super::place_source::snapshot(&d.w), erased, "{name}: Redo restores exact erased pixels");
+        assert!(state(&d.w).host_error.is_none());
+    }
+    d.finish();
+}
+
+#[test]
 #[ignore = "private display: workspace-motion.sh gtk --native-test=native_tool_bubbles"]
 fn native_tool_bubbles() {
     let mut d = Driver::new("art.capycanvas.ToolBubbles");

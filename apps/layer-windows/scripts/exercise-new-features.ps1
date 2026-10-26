@@ -113,7 +113,7 @@ try {
     $filters=HeaderId 'panel' 'adjustments';$layers=HeaderId 'panel' 'layers'
     Tap $brush;Drawer @('brush_sets','tools','tool_settings')
     $sets=@((Model).state.tool_panels.brush_sets.groups)
-    if(($sets.label -join ',') -ne 'Pen,Marker,Pencil,Pastel,Paint,Watercolor,Oil paint,Airbrush,Spray,Texture'){throw 'Brush categories differ from shared reference'}
+    if(($sets.label -join ',') -ne 'Pen,Pencil,Pastel,Paint,Watercolor,Oil paint,Airbrush'){throw 'Brush categories differ from shared reference'}
     foreach($pair in @(@('mouse','pencil'),@('touch','pastel'),@('pen','paintbrush'))){
         $choice=$sets|Where-Object {$_.icon -eq $pair[1] -or $_.label -eq $(switch($pair[1]){'pencil'{'Pencil'};'pastel'{'Pastel'};default{'Paint'}})}|Select-Object -First 1
         Tap ('brush-set-'+$choice.icon) $pair[0];Drawer @('brush_sets','tools','tool_settings')

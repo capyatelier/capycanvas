@@ -1,6 +1,7 @@
 import {checkHdrBubbles} from './hdr-bubbles.test.mjs';
 import {checkBubbleRelease,checkBubbleReleaseColdStartup} from './bubble-release-journey.test.mjs';
 import {checkToolBubbles,installBubbleInputTrace} from "./tool-bubbles.test.mjs";
+import {checkEraserBubbles} from './eraser-bubbles.test.mjs';
 import {checkGradientDefinitions} from './gradient.test.mjs';
 import {checkNativeWriteback,installNativeWritebackTrace} from './native-writeback.test.mjs';
 import {installHealPortabilityTrace} from './heal-portability.test.mjs';
@@ -442,6 +443,7 @@ try {
       await checkPrediction({call, evaluate, settle});
     }, checkErrors],
     [process.argv.includes("--tool-bubbles"), () => checkToolBubbles({call,evaluate,settle}), checkErrors],
+    [process.argv.includes('--eraser-bubbles'), () => checkEraserBubbles({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--hdr-bubbles"), () => checkHdrBubbles({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--smoothing"), () => checkSmoothing({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--prediction"), () => checkPrediction({call, evaluate, settle}), checkErrors],

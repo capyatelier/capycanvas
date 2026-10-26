@@ -102,8 +102,9 @@ class AndroidIconEditorTest {
             val view = state().getJSONObject("tool_set")
             for (kind in listOf("groups", "subtools")) {
                 val items = view.array(kind).objects()
+                if (kind == "groups" && items.size <= 1) continue
                 val plain = items.filter { it.isNull("preview") }
-                assertEquals("Modes need distinct icons", plain.size, plain.map { it.getString("icon") }.toSet().size)
+                assertEquals("Choices need distinct names", plain.size, plain.map { it.getString("label") }.toSet().size)
                 for (item in items) {
                     val label = item.getString("label")
                     val glyph = toolNode("tool-${if (kind == "groups") "group" else "subtool"}-icon-$label", unmerged = true)
@@ -115,7 +116,7 @@ class AndroidIconEditorTest {
             }
         }
         val categories = app.catalog.array("brush_categories").objects()
-        assertEquals("Every painting medium has an icon", 13, categories.map { it.getString("icon") }.toSet().size)
+        assertEquals("Every painting medium has an icon", categories.size, categories.map { it.getString("icon") }.toSet().size)
         val records = org.json.JSONArray()
         for (theme in listOf("light", "dark")) {
             dispatch(obj("type" to "set_theme", "theme" to theme))
@@ -125,10 +126,19 @@ class AndroidIconEditorTest {
                 val label = category.getString("label")
                 val brushes = category.array("brushes").objects()
                 dispatch(obj("type" to "select_brush", "id" to brushes.first().getInt("id")))
-                toolNode("tool-group-$label").performScrollTo().performClick()
+                val groups = state().getJSONObject("tool_set").array("groups").objects()
+                if (groups.size > 1) {
+                    val selected = groups.first { it.getBoolean("selected") }.getString("label")
+                    toolNode("tool-group-$selected").performScrollTo().performClick()
+                }
                 compose.waitForIdle()
                 for (brush in brushes) {
-                    toolNode("subtool-${brush.getString("label")}").performScrollTo().performClick()
+                    dispatch(obj("type" to "select_brush", "id" to brush.getInt("id")))
+                    val choices = state().getJSONObject("tool_set").array("subtools").objects()
+                    val choice = choices.firstOrNull { it.optInt("preview", -1) == brush.getInt("id") }
+                        ?: choices.firstOrNull { it.optBoolean("selected") }
+                    if (choice != null) toolNode("subtool-${choice.getString("label")}").performScrollTo().performClick()
+                    else assertTrue("A sole tool preset has no redundant choice row", choices.isEmpty())
                     try {
                         compose.waitUntil(10_000) { state().getJSONObject("brush").getInt("preset") == brush.getInt("id") && app.snapshot?.optBoolean("brush_ready") == true }
                     } catch (failure: Throwable) {
@@ -137,13 +147,10 @@ class AndroidIconEditorTest {
                     }
                 }
                 checkChoices()
-                val selected = state().getJSONObject("tool_set").array("groups").objects().first { it.getBoolean("selected") }
-                assertEquals(category.getString("icon"), selected.getString("icon"))
-                toolNode("tool-group-$label").performScrollTo()
                 capture("group-$group", "medium-$theme-${category.getString("icon")}")
-                records.put(obj("theme" to theme, "category" to label, "icon" to selected.getString("icon")))
+                records.put(obj("theme" to theme, "category" to label, "icon" to category.getString("icon")))
             }
-            val painting = setOf("pen", "pencil", "brush", "eraser", "airbrush", "decoration", "blend", "liquify")
+            val painting = setOf("pen", "pencil", "brush", "eraser", "airbrush", "retouch", "blend", "liquify")
             for (command in app.catalog.array("tool_commands").values().map { it.toString() }.filter { it !in painting }) {
                 cancelTransform()
                 val available = state().array("commands").objects().first { it.getString("id") == command }.getBoolean("enabled")

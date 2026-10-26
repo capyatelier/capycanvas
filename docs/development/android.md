@@ -323,6 +323,10 @@ Layers/Properties cards and workspace undo/redo. Escape must dismiss a held
 menu before the next canvas contact. Replacing the workspace during a captured
 ring contact must leave no stale action or notice on release. Run it on both reference
 tablets after changing the presenter or capture path.
+`sketchEraserBubbleKeepsItsHaloChooserAndSettingsAcrossThemesAndDevices` checks
+Sketch's Eraser tear-out, slider halo, sole preset chooser, remembered settings
+and return to the header in both themes with all three input types. Use
+`-e bubbleTheme light|dark -e bubbleInput mouse|touch|pen` for independent runs.
 `haloAndFaceShareTheCoreCenter` additionally checks measured face and arc-icon
 positions with swapped controls and a 220 × 420 dp private window.
 `countBadgesKeepTheirAnchorWhenTextWidens` checks one- and two-digit counts in

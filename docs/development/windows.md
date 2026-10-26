@@ -966,10 +966,17 @@ so independent choices remain independently selectable. Fixtures find tools with
 current variation.
 
 `exercise-tool-variations.ps1 -Executable <path> -Theme dark` walks grouped Paint
-and Photo selection tools, the Eraser category, and a drawing group added to the
-header through customization, then narrows the window until that group overflows,
-with injected mouse, pen and touch. Repeat with `-Theme light`.
+and Photo selection tools, the single-preset Eraser settings, and a drawing group
+added to the header through customization, then narrows the window until that
+group overflows, with injected mouse, pen and touch. Repeat with `-Theme light`.
+It checks Eraser's absent group marker and settings-only drawer, Marker under Pen,
+Spray under Airbrush, all 65 customization presets and native search for Marker,
+Spray and Dual Texture. The vector-layer fixture retains the three vector
+Eraser modes.
 The VM fixture names are `tool-variations` and `tool-variations:light`.
+`tool-variations:sketch` and `tool-variations:sketch-light` isolate all eight
+default Sketch header drawers, native pen pixels, retained anchors and exact
+Undo/Redo pixels in each theme.
 
 Properties sliders use the shared [compact numeric layout](../ui/numeric-controls.md),
 with the track beneath the caption and room for the value and its editor.
@@ -1696,6 +1703,12 @@ actions against exact artwork pixels in both themes.
 Use `NumericOnly`, `CurveOnly`, `NativeControlsOnly`, `ScrollEpochOnly`,
 `HistoryOnly`, `HistoryLightOnly`, `MenuOnly` and `RapidOnly` to isolate the
 corresponding journeys on a private desktop with a disposable profile.
+`EraserOnly` and `EraserLightOnly` use Sketch's default Eraser source for native
+tear-out, slider options and size controls, half-pressure pen erasure and exact
+Undo/Redo pixels, and saved workspace restoration in each theme. The injected
+pen reports 512/1024 pressure; its erase stroke must reduce the seeded sample's
+RGB difference from blank by at least half. Raw blank, painted and erased
+samples accompany the result.
 
 Hardware qualification uses a normal optimized build and actual mouse, fingers
 and a pressure pen. Repeat tear-out and return, chooser and halo changes, wheel

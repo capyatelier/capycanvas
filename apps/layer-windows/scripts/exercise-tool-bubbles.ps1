@@ -1,6 +1,7 @@
 param([Parameter(Mandatory)][string]$Executable,
-    [ValidateSet('dark-mouse','dark-touch','dark-pen','light-mouse','light-touch','light-pen')][string]$Variant='dark-mouse',[switch]$RapidOnly,[switch]$SlidersOnly,[switch]$BlendersOnly,[switch]$HistoryOnly,[switch]$HistoryLightOnly,[switch]$NativeControlsOnly,[switch]$ScrollEpochOnly,[switch]$NumericOnly,[switch]$CurveOnly,[switch]$MenuOnly,[switch]$ObserverOnly,[switch]$VisualOnly,[switch]$BeadTransitionsOnly,[switch]$HdrOnly,[switch]$HdrRetirementOnly,[ValidateSet('F16','F32')][string]$HdrDepth='F16')
+    [ValidateSet('dark-mouse','dark-touch','dark-pen','light-mouse','light-touch','light-pen')][string]$Variant='dark-mouse',[switch]$RapidOnly,[switch]$SlidersOnly,[switch]$BlendersOnly,[switch]$EraserOnly,[switch]$EraserLightOnly,[switch]$HistoryOnly,[switch]$HistoryLightOnly,[switch]$NativeControlsOnly,[switch]$ScrollEpochOnly,[switch]$NumericOnly,[switch]$CurveOnly,[switch]$MenuOnly,[switch]$ObserverOnly,[switch]$VisualOnly,[switch]$BeadTransitionsOnly,[switch]$HdrOnly,[switch]$HdrRetirementOnly,[ValidateSet('F16','F32')][string]$HdrDepth='F16')
 $ErrorActionPreference='Stop'
+if($EraserLightOnly){$EraserOnly=$true;$Variant='light-mouse'}
 if($HdrRetirementOnly){$HdrOnly=$true}
 if($BlendersOnly){$SlidersOnly=$true}
 if($NumericOnly -and !$PSBoundParameters.ContainsKey('Variant')){
@@ -968,6 +969,70 @@ function Controls([long]$Id){
     }
     $checks.Add('arc-dab-cancel-reset')
 }
+function Invoke-EraserChecks {
+    Wait-Until {(Model).shaders_ready -and (Model).canvas_ready -and (Model).brush_ready} 'The current Sketch presentation did not finish preparing' 45
+    $area=(Model).layout.work_area;$paper=Document-Point .45 .65
+    $m=Model;$document=@($m.state.tabs|Where-Object active)[0]
+    $end=Document-Point (.45+60*$scale/$m.state.camera.zoom/$document.width) .65
+    [CapyRowPointer]::Hover($w.X+20,$w.Y+20)
+    $blank=Wait-StablePixels {Screen-Pixels $paper.x $paper.y};$revision=Revision
+    $null=Screen-Pixels $paper.x $paper.y (Join-Path $run 'eraser-blank.png')
+    Drag $paper $end -PointerDevice 'pen';[CapyRowPointer]::Hover($w.X+20,$w.Y+20)
+    Wait-Until {(Revision) -gt $revision -and (Screen-Pixels $paper.x $paper.y) -ne $blank} 'The Eraser fixture did not seed actual pen pixels' 45
+    Wait-Until {(Model).shaders_ready -and (Model).canvas_ready -and (Model).brush_ready} 'The seeded Sketch presentation did not finish preparing' 45
+    Settled-Capture 'eraser-seeded'
+    $painted=Wait-StablePixels {Screen-Pixels $paper.x $paper.y};$revision=Revision
+    $null=Screen-Pixels $paper.x $paper.y (Join-Path $run 'eraser-painted.png')
+    $eraser=Take 'command' 'eraser' ($area.x+$area.width*.8) ($area.y+$area.height*.2)
+    Check-Artwork 'eraser-tear-out' $revision
+    Capture 'eraser-torn' -WithModel -Composed
+    if((View $eraser).source.control.command -ne 'eraser'){throw 'The native Eraser bubble lost its command source'}
+    if(!(View $eraser).selected){Tap (Center $eraser)}
+    Wait-Until {(View $eraser).selected -and @((View $eraser).rings).Count -gt 0} 'The Eraser bubble did not select with its size halo'
+    Capture 'eraser-selected' -WithModel -Composed
+    Hold-Bubble $eraser;Settled-Capture 'eraser-options'
+    $sizeLabel=@((Model).state.tool_settings|Where-Object id -eq 'size')[0].label
+    $sizeToggle=(Menu-Item $sizeLabel).GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)
+    if($sizeToggle.Current.ToggleState -eq [System.Windows.Automation.ToggleState]::Off){$sizeToggle.Toggle()}
+    Wait-Until {@((View $eraser).rings|Where-Object setting -eq 'size').Count -eq 1} 'The native Eraser ring menu did not enable Brush size'
+    Escape;Wait-Until {!(Find 'Put back' -Name -Visible)} 'Eraser options did not dismiss'
+    Slider-Toggle $eraser $false
+    Wait-Until {@((View $eraser).rings).Count -eq 0} 'The Eraser option did not hide its sliders'
+    Slider-Toggle $eraser $true
+    Wait-Until {@((View $eraser).rings).Count -gt 0} 'The Eraser option did not restore its sliders'
+    Controls $eraser;Check-Artwork 'eraser-options-and-size' $revision
+    [CapyRowPointer]::Hover($w.X+20,$w.Y+20)
+    Wait-Until {(Screen-Pixels $paper.x $paper.y) -eq $painted} 'Eraser options changed the seeded artwork pixels' 45
+    Drag $paper $end -PointerDevice 'pen';[CapyRowPointer]::Hover($w.X+20,$w.Y+20)
+    Wait-Until {(Revision) -gt $revision -and (Screen-Pixels $paper.x $paper.y) -ne $painted} 'The native Eraser bubble did not erase the pen pixels' 45
+    $erased=Wait-StablePixels {Screen-Pixels $paper.x $paper.y}
+    $null=Screen-Pixels $paper.x $paper.y (Join-Path $run 'eraser-erased.png')
+    $reference=[Drawing.Bitmap]::new((Join-Path $run 'eraser-blank.png'))
+    $seeded=[Drawing.Bitmap]::new((Join-Path $run 'eraser-painted.png'))
+    $removed=[Drawing.Bitmap]::new((Join-Path $run 'eraser-erased.png'))
+    $seedError=0L;$eraseError=0L
+    try{
+        foreach($y in 0..95){foreach($x in 0..95){
+            $white=$reference.GetPixel($x,$y);$ink=$seeded.GetPixel($x,$y);$faded=$removed.GetPixel($x,$y)
+            $seedError+=[Math]::Abs([int]$white.R-$ink.R)+[Math]::Abs([int]$white.G-$ink.G)+[Math]::Abs([int]$white.B-$ink.B)
+            $eraseError+=[Math]::Abs([int]$white.R-$faded.R)+[Math]::Abs([int]$white.G-$faded.G)+[Math]::Abs([int]$white.B-$faded.B)
+        }}
+    }finally{$reference.Dispose();$seeded.Dispose();$removed.Dispose()}
+    if($seedError -le 0 -or $eraseError*2 -gt $seedError){throw 'The native half-pressure Eraser stroke did not remove at least half the visible ink'}
+    (Control 'drawing-canvas').SetFocus();[CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),0x5a)
+    Wait-Until {(Screen-Pixels $paper.x $paper.y) -eq $painted} 'Eraser Undo did not restore the exact pen pixels' 45
+    [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11,0x10),0x5a)
+    Wait-Until {(Screen-Pixels $paper.x $paper.y) -eq $erased} 'Eraser Redo did not restore the exact erased pixels' 45
+    Settled-Capture 'eraser-erased'
+    Wait-Until {!(Model).windows_workspace.dirty -and !(Model).windows_workspace.saving} 'The Eraser bubble workspace did not become durable'
+    $saved=Slider-Layout;Restart-BubbleReview 'eraser-restart-stderr.log'
+    if((Slider-Layout) -cne $saved -or (View $eraser).source.control.command -ne 'eraser'){throw 'The saved Eraser source did not survive native workspace restoration'}
+    $null=Slider-Menu $eraser $true;Escape;Settled-Capture 'eraser-restored'
+    $position=Center $eraser;[CapyRowPointer]::RightClick($position.x,$position.y)
+    (Menu-Item 'Put back').GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+    Wait-Until {$null -eq (Packet $eraser)} 'The restored Eraser bubble did not put back'
+    $checks.Add('eraser-default-Sketch-native-tear-options-size-exact-erase-undo-redo-workspace-restart')
+}
 function Invoke-RetiredMenu($Pattern,[string]$Evidence){
     $errors=@();$retired=$false
     try{$Pattern.Invoke()}catch{
@@ -1072,7 +1137,7 @@ function Rapid-Reopen([long]$Id){
 try{
     Enter-CapyEnvironment @('CAPY_LATENCY_TRACE')
     $env:CAPY_STORAGE_DIR=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1';$env:CAPY_LATENCY_TRACE='1';$env:CAPY_SMOKE_TEST='1';$env:CAPY_TEST_DISPLAY='1';$env:CAPY_TEST_PRIMARY='1'
-    $settings=@{theme=$Theme};if($SlidersOnly){$settings.language=@{Explicit='en'}}
+    $settings=@{theme=$Theme};if($SlidersOnly -or $EraserOnly){$settings.language=@{Explicit='en'}}
     [IO.File]::WriteAllText((Settings-File),($settings|ConvertTo-Json -Depth 4))
     $stderr=Join-Path $run 'stderr.log'
     $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -PassThru -RedirectStandardError $stderr
@@ -1090,7 +1155,7 @@ try{
         Wait-Until {(Model).windows_workspace.id -eq 'builtin:workspace:painter' -and (Model).windows_workspace.ready -and !(Model).windows_workspace.busy} 'Fixture Sketch workspace did not open'
     }
     if($HdrOnly){New-BubbleHdrDrawing $HdrDepth}
-    Ensure-Sources
+    if(!$EraserOnly){Ensure-Sources}
     if($HdrOnly){Show-BubbleHdrColor}
     & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'View'
     Invoke 'fit_canvas'
@@ -1111,6 +1176,13 @@ try{
         if((Get-Item -LiteralPath $stderr).Length){throw 'HDR bubble native stderr requires inspection'}
         $scope=if($HdrRetirementOnly){'HDR color context retirement, clear native status and painting with exact Undo after drawing activation'}else{'HDR color bubble native input, accessibility, geometry and composed pixels'}
         @{variant=$Variant;depth=$HdrDepth;checks=@($checks);scope=($scope+'; physical digitizers and HDR display luminance unverified')}|ConvertTo-Json -Depth 12|Set-Content (Join-Path $run 'results.json')
+        return
+    }
+    if($EraserOnly){
+        Invoke-EraserChecks
+        & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Close -DiscardUnsaved|Out-Null
+        if((Get-Item -LiteralPath $stderr).Length){throw 'Native Eraser bubble stderr requires inspection'}
+        [IO.File]::WriteAllText((Join-Path $run 'results.json'),(@{variant=$Variant;checks=@($checks);scope='Default Sketch Eraser native tear, options, exact erase history and saved workspace restoration'}|ConvertTo-Json -Depth 12),[Text.UTF8Encoding]::new($false))
         return
     }
     if($SlidersOnly){
