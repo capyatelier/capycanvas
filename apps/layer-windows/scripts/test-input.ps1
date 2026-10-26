@@ -35,24 +35,28 @@ if($LASTEXITCODE -ne 0){throw 'Canvas queue test failed.'}
  $tokens=$null;$errors=$null
  $ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot 'build.ps1'),[ref]$tokens,[ref]$errors)
  if($errors.Count){throw 'Build script parse failed'}
- $directory=$ast.FindAll({param($node) $node -is [Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -eq '$intermediateDirectory'},$true)
+ $directory=@($ast.EndBlock.Statements|Where-Object {
+  ($_ -is [Management.Automation.Language.IfStatementAst] -and $_.Clauses[0].Item1.Extent.Text -eq '!$IntermediateDirectory') -or
+  ($_ -is [Management.Automation.Language.AssignmentStatementAst] -and $_.Left.Extent.Text -eq '$IntermediateDirectory')
+ })
  $nativeBuild=$ast.FindAll({param($node) $node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -eq 'msbuild'},$true)
- if($directory.Count -ne 1 -or $nativeBuild.Count -ne 1){throw 'Expected one native build and intermediate directory'}
+ if($directory.Count -ne 2 -or $nativeBuild.Count -ne 1){throw 'Expected default and normalized intermediate directory and one native build'}
  . (Join-Path $PSScriptRoot 'WindowsArchitecture.ps1')
  function msbuild {$script:nativeBuildArguments=@($args)}
  $Configuration='Release';$fixture='false';$toolset='v145';$PackagesDirectory='C:\fixture\packages'
  $seen=@()
- foreach($case in @(@{architecture='x64';output='C:\fixture\first';expected='C:\fixture\first.obj'},@{architecture='arm64';output='C:\fixture\second\';expected='C:\fixture\second.obj'})){
+ foreach($case in @(@{architecture='x64';output='C:\fixture\first';expected='C:\fixture\first.obj'},@{architecture='arm64';output='C:\fixture\second\';expected='C:\fixture\second.obj'},@{architecture='arm64';output='C:\fixture\third';intermediate='C:\fixture\shared.obj';expected='C:\fixture\shared.obj'})){
   $build=Resolve-WindowsArchitecture $case.architecture
   $rustDirectory='C:\fixture\cargo-target\'+$build.target+'\release'
   $OutputDirectory=$case.output
-  Invoke-Expression $directory[0].Extent.Text
+  $IntermediateDirectory=$case.intermediate
+  foreach($statement in $directory){Invoke-Expression $statement.Extent.Text}
   Invoke-Expression $nativeBuild[0].Extent.Text
   if($script:nativeBuildArguments -notcontains "/p:Platform=$($build.platform)" -or $script:nativeBuildArguments -notcontains "/p:CapyRustDirectory=$rustDirectory"){throw 'The native build did not link the selected Rust target'}
   if($script:nativeBuildArguments -notcontains "/p:IntDir=$($case.expected)/" -or $script:nativeBuildArguments -notcontains "/p:OutDir=$OutputDirectory/"){throw 'The native build did not isolate intermediates beside its output'}
   $seen+=$intermediateDirectory
  }
- if(@($seen|Select-Object -Unique).Count -ne 2){throw 'Distinct native outputs reused intermediate objects'}
+ if(@($seen|Select-Object -Unique).Count -ne 3){throw 'Distinct native outputs reused intermediate objects'}
 }
 
 & {
