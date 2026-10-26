@@ -95,7 +95,8 @@ Edit points and Crop. Figure, Ruler and Gradient expose their variations in the
 same positions. Pen and Pencil remain separate. Pen includes Marker in its
 preset list; Pencil exposes Pencil and Pastel; Brush exposes Paint,
 Watercolor and Oil, with Dual Texture in Paint. Airbrush lists Airbrush and
-Spray directly. The other brush categories expose their presets. Hand groups
+Spray directly. Marker, Spray and Dual Texture retain their own preset icons in
+tool rows, remembered toolbar buttons and canvas cursors. The other brush categories expose their presets. Hand groups
 Rotate View; Zoom is a separate button beside it.
 Every group has a softly rounded bottom-right
 triangle and remembers the selected subgroup's icon, including when inactive.

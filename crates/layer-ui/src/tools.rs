@@ -140,7 +140,16 @@ impl ToolGroup {
 
 // Each preset has exactly one owning tool/group. Stable numeric preset IDs are
 // also the keys of the GPU preview cache and saved brush assets.
-const PRESETS: &[(DefaultBrushPreset, MessageId, ToolGroup)] = &[
+macro_rules! preset_catalog {
+    ($(($preset:path, $label:path, $group:path $(, $icon:literal)? $(,)?)),* $(,)?) => {
+        const PRESETS: &[(DefaultBrushPreset, MessageId, ToolGroup, Option<&str>)] = &[
+            $(($preset, $label, $group, preset_catalog!(@icon $($icon)?))),*
+        ];
+    };
+    (@icon $icon:literal) => { Some($icon) };
+    (@icon) => { None };
+}
+preset_catalog![
     (DefaultBrushPreset::GPen, MessageId::BRUSH_PRESET_GPEN, ToolGroup::Pen),
     (DefaultBrushPreset::Monoline, MessageId::BRUSH_PRESET_MONOLINE, ToolGroup::Pen),
     (DefaultBrushPreset::RoughGPen, MessageId::BRUSH_PRESET_ROUGH_GPEN, ToolGroup::Pen),
@@ -166,7 +175,7 @@ const PRESETS: &[(DefaultBrushPreset, MessageId, ToolGroup)] = &[
         MessageId::BRUSH_PRESET_BRUSHED_INK,
         ToolGroup::Pen,
     ),
-    (DefaultBrushPreset::Marker, MessageId::BRUSH_PRESET_MARKER, ToolGroup::Pen),
+    (DefaultBrushPreset::Marker, MessageId::BRUSH_PRESET_MARKER, ToolGroup::Pen, "marker"),
     (DefaultBrushPreset::Pencil, MessageId::BRUSH_PRESET_PENCIL, ToolGroup::Pencil),
     (
         DefaultBrushPreset::PointyPencil,
@@ -241,11 +250,11 @@ const PRESETS: &[(DefaultBrushPreset, MessageId, ToolGroup)] = &[
         MessageId::BRUSH_PRESET_AIRBRUSH,
         ToolGroup::Airbrush,
     ),
-    (DefaultBrushPreset::Spray, MessageId::BRUSH_PRESET_SPRAY, ToolGroup::Airbrush),
+    (DefaultBrushPreset::Spray, MessageId::BRUSH_PRESET_SPRAY, ToolGroup::Airbrush, "spray"),
     (
         DefaultBrushPreset::DualTexture,
         MessageId::BRUSH_PRESET_DUAL_TEXTURE,
-        ToolGroup::Paint,
+        ToolGroup::Paint, "decoration",
     ),
     (DefaultBrushPreset::Smudge, MessageId::BRUSH_PRESET_SMUDGE, ToolGroup::Blend),
     (DefaultBrushPreset::SoftBlender, MessageId::BRUSH_PRESET_SOFT_BLENDER, ToolGroup::Blend),
@@ -345,10 +354,10 @@ pub fn brush_ids() -> impl Iterator<Item = u32> {
 }
 pub fn brush_catalog() -> impl Iterator<Item = BrushChoice> {
     let english = Localizer::shared(UiLanguage::English);
-    PRESETS.iter().map(move |&(preset, label, group)| brush_choice(preset, label, group, &english))
+    PRESETS.iter().map(move |&(preset, label, group, _)| brush_choice(preset, label, group, &english))
 }
 pub fn brush_catalog_localized(localizer: &Localizer) -> impl Iterator<Item = BrushChoice> + '_ {
-    PRESETS.iter().map(move |&(preset, label, group)| brush_choice(preset, label, group, localizer))
+    PRESETS.iter().map(move |&(preset, label, group, _)| brush_choice(preset, label, group, localizer))
 }
 pub fn brush_label_localized(id: u32, localizer: &Localizer) -> Option<Arc<str>> {
     PRESETS.iter().find(|preset| preset.0 as u32 == id).map(|preset| localizer.text(preset.1))
@@ -357,7 +366,7 @@ fn brush_category(group: ToolGroup, localizer: &Localizer) -> BrushCategory {
     BrushCategory {
         id: group, label: group.localized_label(localizer), icon: group.icon(),
         brushes: PRESETS.iter().filter(|preset| preset.2 == group)
-            .map(|&(preset, label, group)| brush_choice(preset, label, group, localizer)).collect(),
+            .map(|&(preset, label, group, _)| brush_choice(preset, label, group, localizer)).collect(),
     }
 }
 pub fn brush_categories() -> impl Iterator<Item = BrushCategory> {
@@ -388,11 +397,13 @@ pub(crate) fn group(id: u32) -> ToolGroup {
 pub(crate) fn tool(id: u32) -> Tool {
     RETOUCHING.iter().find(|r| r.0 as u32 == id).map_or_else(|| group(id).tool(), |r| r.1)
 }
-/// A preset's icon: its medium for drawing tools and its tool for sculpting,
-/// whose sets mix kinds of the same tool.
+/// Preset identity defaults to its drawing medium or sculpting tool.
 pub(crate) fn icon(id: u32) -> &'static str {
-    let tool = tool(id);
-    if is_sculpt(tool) { tool.command().icon().expect("sculpting tools have icons") } else { group(id).icon() }
+    let preset = PRESETS.iter().find(|preset| preset.0 as u32 == id).expect("validated brush");
+    preset.3.unwrap_or_else(|| {
+        let tool = tool(id);
+        if is_sculpt(tool) { tool.command().icon().expect("sculpting tools have icons") } else { preset.2.icon() }
+    })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
@@ -538,7 +549,7 @@ pub(crate) fn view(brush: &BrushState, canvas_tool: LayerCanvasTool, localizer: 
         subtools: PRESETS
             .iter()
             .filter(|p| p.2 == active)
-            .map(|&(preset, label, _)| ToolSetItem { enabled: true, disabled_reason: None,
+            .map(|&(preset, label, _, _)| ToolSetItem { enabled: true, disabled_reason: None,
                 label: localizer.text(label),
                 icon: icon(preset as u32),
                 action: UiAction::SelectBrush { id: preset as u32 },
@@ -776,7 +787,7 @@ mod tests {
         assert_eq!(PRESETS.len(), 65);
         assert_eq!(ToolGroup::ALL.len(), 13);
         let mut ids = std::collections::BTreeSet::new();
-        for &(preset, _, group) in PRESETS {
+        for &(preset, _, group, _) in PRESETS {
             assert!(ids.insert(preset as u32));
             assert!(group.holds(tool(preset as u32)));
         }

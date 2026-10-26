@@ -1101,3 +1101,37 @@ fn window_workspace_inheritance_replaces_slot_memory_and_keeps_document_tool_sta
         assert!(next.command(CommandId::Airbrush).selected);
     }
 }
+
+#[test]
+fn preset_icons_follow_catalog_rows_remembered_tiles_and_canvas_cursors() {
+    for platform in Platform::ALL {
+        for (preset, icon) in [
+            (DefaultBrushPreset::Marker, "marker"),
+            (DefaultBrushPreset::Spray, "spray"),
+            (DefaultBrushPreset::DualTexture, "decoration"),
+        ] {
+            let (mut s, panel, ids) = slot_fixture(platform, &[ToolSlotId::Drawing]);
+            let anchor = DrawerAnchor::Tile { panel, tile: ids[0] };
+            s.state.settings.cursor = CursorMode::Tool;
+            let id = preset as u32;
+            assert_eq!(tools::brush_catalog().find(|item| item.id == id).unwrap().icon, icon);
+            assert_eq!(tools::brush_categories().flat_map(|category| category.brushes)
+                .find(|item| item.id == id).unwrap().icon, icon);
+            s.dispatch(UiAction::SelectBrush { id }).unwrap();
+            activate_slot(&mut s, anchor);
+            let view = s.state().customization.drawer.as_ref().unwrap().tool_set.as_ref().unwrap();
+            assert_eq!(view.subtools.iter().find(|item| item.preview == Some(id)).unwrap().icon, icon);
+            s.cursor_input(Some(event(&s, 1, PenPhase::Hover, 0.)));
+            assert_eq!(s.canvas_cursor().unwrap().segments[0].marker,
+                layer_render::tool_cursor_marker(icon).unwrap());
+            invoke(&mut s, CommandId::Eraser);
+            let tile = s.panel_view(panel).unwrap().tiles.into_iter().find(|item| item.id == ids[0]).unwrap();
+            assert!(!tile.choice.selected);
+            assert_eq!(tile.choice.icon, icon);
+            activate_slot(&mut s, anchor);
+            assert_eq!(s.state().brush.preset, id);
+            assert_eq!(s.canvas_cursor().unwrap().segments[0].marker,
+                layer_render::tool_cursor_marker(icon).unwrap());
+        }
+    }
+}
