@@ -55,11 +55,6 @@ function Open-SimpleLayers {
 }
 function Undo-To([scriptblock]$Expected,[string]$Message){$revision=(Model).state.document_file.revision;Invoke 'Undo' -Name;Wait-Until {(Model).state.document_file.revision -gt $revision -and (& $Expected)} $Message}
 function Gesture-Camera{$c=(Model).state.camera;@($c.viewport,$c.work_area,$c.translation,$c.zoom,$c.rotation,$c.flipped)|ConvertTo-Json -Depth 8 -Compress}
-function Gesture-History{
- $m=Model;$stamp=@($m.windows_tabs.session_stamps|Where-Object id -eq $m.windows_tabs.selected)
- if($stamp.Count -ne 1 -or $null -eq $stamp[0].stamp.checkpoint){throw 'Gesture history has no unique current drawing checkpoint'}
- [ordered]@{checkpoint=$stamp[0].stamp.checkpoint;layers=@($m.state.layers.id)}|ConvertTo-Json -Depth 30 -Compress
-}
 function Gesture-Pixels{
  if([CapyRowPointer]::GetForegroundWindow() -ne $handle){throw 'Gesture pixels lost the owned foreground window'}
  Screen-Pixels $cx $cy
@@ -103,14 +98,14 @@ try{
  [CapyCanvasTouch]::ThreeDown($cx,$cy)
  Wait-Until {(@((Model).state.layers.id) -join ',') -eq ($allLayers -join ',')} 'Held three fingers did not repeat Redo'
  [CapyCanvasTouch]::ThreeUp()
- $restoredHistory=Gesture-History
+ $restoredHistory=Drawing-Checkpoint
  Record 'held canvas Undo and Redo repeat'
  [CapyCanvasTouch]::PairDown(($cx-80),$cy,($cx+80),$cy)
  Wait-Until {(Model).state.layers.Count -lt $allLayers.Count} 'Cancellation did not begin from effective held Undo'
  [CapyCanvasTouch]::CancelAll()
  [CapyCanvasTouch]::ThreeDown($cx,$cy)
  Wait-Until {(@((Model).state.layers.id) -join ',') -eq ($allLayers -join ',')} 'Redo after cancelled held Undo did not restore exact layer IDs'
- Wait-Until {(Gesture-History) -ceq $restoredHistory} 'New native Redo after CancelAll did not restore the exact drawing checkpoint and layer order'
+ Wait-Until {(Drawing-Checkpoint) -ceq $restoredHistory} 'New native Redo after CancelAll did not restore the exact drawing checkpoint and layer order'
  if((Gesture-Camera) -cne $historyCamera){throw 'New native Redo after CancelAll changed the camera'}
  [CapyCanvasTouch]::ThreeUp()
  Record 'CancelAll followed by effective native Redo and exact checkpoint recovery'
@@ -149,11 +144,11 @@ try{
  Wait-Until {$null -eq (Model).state.layer_tools.opacity_popup} 'Opacity flyout did not close'
  Undo-To {[Math]::Abs((Model).state.layer_tools.editing_layer.opacity-$opacity) -lt .001} 'Undo did not restore gesture opacity';Record 'two-finger tap opacity edit and Undo'
  $p=Pair-OnRow $id;$selected=(Row $id).selected;$alpha=(Row $id).alpha_locked
- $swipeOpacity=(Row $id).opacity;$swipeHistory=Gesture-History;$swipeCamera=Gesture-Camera
+ $swipeOpacity=(Row $id).opacity;$swipeHistory=Drawing-Checkpoint;$swipeCamera=Gesture-Camera
  Begin-Pair $p
  for($i=1;$i -le 8;$i++){[CapyCanvasTouch]::Pair(($p.ax+$i*7),$p.y,($p.bx+$i*7),$p.y);Start-Sleep -Milliseconds 10}
  End-Pair
- if((Row $id).selected -ne $selected -or (Row $id).alpha_locked -ne $alpha -or (Row $id).opacity -ne $swipeOpacity -or (Gesture-History) -cne $swipeHistory -or (Gesture-Camera) -cne $swipeCamera){throw 'Two-finger swipe changed selection, opacity, Alpha Lock, history or camera at the pair boundary'}
+ if((Row $id).selected -ne $selected -or (Row $id).alpha_locked -ne $alpha -or (Row $id).opacity -ne $swipeOpacity -or (Drawing-Checkpoint) -cne $swipeHistory -or (Gesture-Camera) -cne $swipeCamera){throw 'Two-finger swipe changed selection, opacity, Alpha Lock, history or camera at the pair boundary'}
  $p=Point "layer-$id-name";[CapyCanvasTouch]::Down(1,$p.x,$p.y)
  for($i=1;$i -le 8;$i++){[CapyCanvasTouch]::Move(1,($p.x+$i*7),$p.y);Start-Sleep -Milliseconds 10};[CapyCanvasTouch]::Up(1)
  Wait-Until {(Row $id).alpha_locked -ne $alpha} 'One-finger right swipe did not toggle Alpha Lock'
@@ -161,7 +156,7 @@ try{
  if((Row $id).opacity -ne $swipeOpacity -or (Gesture-Camera) -cne $swipeCamera){throw 'Acknowledged Alpha Lock after the pair changed opacity or camera'}
  Record 'two-finger right swipe leaves selection unchanged'
  Undo-To {(Row $id).alpha_locked -eq $alpha} 'Undo did not restore Alpha Lock';Record 'one-finger Alpha Lock remains available'
- if((Gesture-History) -cne $swipeHistory -or (Gesture-Camera) -cne $swipeCamera){throw 'One Alpha Lock Undo did not restore the exact pre-pair history and camera'}
+ if((Drawing-Checkpoint) -cne $swipeHistory -or (Gesture-Camera) -cne $swipeCamera){throw 'One Alpha Lock Undo did not restore the exact pre-pair history and camera'}
  $all=@((Model).state.layers.id);$upper=Pair-OnRow $id;$lower=Pair-OnRow $base
  $x=$upper.ax;$ay=$upper.y;$by=$lower.y;$distance=$by-$ay
  if([Math]::Abs($distance) -lt 60){throw 'Inclusive merge endpoints are too close'}
@@ -198,7 +193,7 @@ try{
  $checks.Add(@{name='quick fit and reverse restore';inward_injection_ms=$duration;outward_injection_ms=$reverseDuration;before=$prior;fitted=$quickFitted;restored=(Model).state.camera})
  if(!$Simple){
   if((Model).state.settings.quick_pinch_fit -ne $true -or (Model).state.settings.quick_pinch_restore -ne $true){throw 'Full touch profile did not start with both pinch preferences enabled'}
-  $pinchHistory=Gesture-History
+  $pinchHistory=Drawing-Checkpoint
   Set-PinchPreferences $false $true
   $beforePinch=(Model).state.camera;$null=[CapyCanvasTouch]::QuickPinch($cx,$cy,$false)
   Wait-Until {[Math]::Abs((Model).state.camera.zoom/$beforePinch.zoom-.5) -lt .01} 'Disabled fit did not keep ordinary inward zoom'
@@ -211,7 +206,7 @@ try{
   Wait-Until {[Math]::Abs((Model).state.camera.zoom/$beforePinch.zoom-2) -lt .01} 'Disabled restore did not keep ordinary outward zoom'
   Assert-OrdinaryPinch $beforePinch (Model).state.camera 2
   Set-PinchPreferences $true $true
-  if((Gesture-History) -cne $pinchHistory){throw 'Preference-controlled pinches changed authored history'}
+  if((Drawing-Checkpoint) -cne $pinchHistory){throw 'Preference-controlled pinches changed authored history'}
   Record 'independent pinch preferences retain ordinary zoom and enabled fit'
  }
  Capture ('touch-gestures-'+$Theme) -WithModel -Composed

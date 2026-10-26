@@ -119,6 +119,11 @@ function Owned-DrawingWindow([Diagnostics.Process]$Process,[long]$WindowHandle,[
     if($WindowHandle -and $found.Count -ne 1){throw 'The specified window is not an owned drawing window'}
     if($found.Count){Register-CapyFixtureWindow $Process $found[0].Handle.ToInt64() $TraceDirectory;$found[0]}
 }
+function Drawing-Checkpoint{
+ $m=Model;$stamp=@($m.windows_tabs.session_stamps|Where-Object id -eq $m.windows_tabs.selected)
+ if($stamp.Count -ne 1 -or $null -eq $stamp[0].stamp.checkpoint){throw 'Drawing has no unique current checkpoint'}
+ [ordered]@{checkpoint=$stamp[0].stamp.checkpoint;layers=@($m.state.layers.id)}|ConvertTo-Json -Depth 30 -Compress
+}
 function Same-Curve($Left,$Right){
     if($null -eq $Left -or $null -eq $Right -or $Left.Count -ne $Right.Count){return $false}
     for($i=0;$i -lt $Left.Count;$i++){
@@ -581,7 +586,8 @@ function Use-PaintWorkspace{
     $id='builtin:workspace:illustrator'
     if((Model).windows_workspace.id -eq $id){return}
     $found=@{switch=$null;menu=$null}
-    Wait-Until {$found.switch=Find ('workspace-switch-'+$id) -Visible;$found.menu=Find 'header-workspace-menu' -Visible;$found.switch -or $found.menu} 'No Paint workspace switch' 15
+    Wait-Until {if((Model).windows_workspace.id -eq $id){return $true};$found.switch=Find ('workspace-switch-'+$id) -Visible;$found.menu=Find 'header-workspace-menu' -Visible;$found.switch -or $found.menu} 'No Paint workspace switch' 15
+    if((Model).windows_workspace.id -eq $id){return}
     if(!$found.switch){Invoke-Id 'header-workspace-menu';$found.switch=Control 'Paint' -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)}
     Wait-Until {try{$found.switch.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle();$true}catch{$false}} 'The Paint switch stayed unavailable' 20
     Wait-Until {(Model).windows_workspace.id -eq $id -and !(Model).windows_workspace.busy} 'Paint did not open' 30

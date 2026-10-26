@@ -1,7 +1,8 @@
 param([Parameter(Mandatory)][string]$Executable,
-    [ValidateSet('dark-mouse','dark-touch','dark-pen','light-mouse','light-touch','light-pen')][string]$Variant='dark-mouse',[switch]$RapidOnly,[switch]$SlidersOnly,[switch]$HistoryOnly,[switch]$HistoryLightOnly,[switch]$NativeControlsOnly,[switch]$ScrollEpochOnly,[switch]$NumericOnly,[switch]$CurveOnly,[switch]$MenuOnly,[switch]$ObserverOnly,[switch]$VisualOnly,[switch]$BeadTransitionsOnly,[switch]$HdrOnly,[switch]$HdrRetirementOnly,[ValidateSet('F16','F32')][string]$HdrDepth='F16')
+    [ValidateSet('dark-mouse','dark-touch','dark-pen','light-mouse','light-touch','light-pen')][string]$Variant='dark-mouse',[switch]$RapidOnly,[switch]$SlidersOnly,[switch]$BlendersOnly,[switch]$HistoryOnly,[switch]$HistoryLightOnly,[switch]$NativeControlsOnly,[switch]$ScrollEpochOnly,[switch]$NumericOnly,[switch]$CurveOnly,[switch]$MenuOnly,[switch]$ObserverOnly,[switch]$VisualOnly,[switch]$BeadTransitionsOnly,[switch]$HdrOnly,[switch]$HdrRetirementOnly,[ValidateSet('F16','F32')][string]$HdrDepth='F16')
 $ErrorActionPreference='Stop'
 if($HdrRetirementOnly){$HdrOnly=$true}
+if($BlendersOnly){$SlidersOnly=$true}
 if($NumericOnly -and !$PSBoundParameters.ContainsKey('Variant')){
     foreach($variant in @('dark-touch','light-touch')){& $PSCommandPath -Executable $Executable -Variant $variant -NumericOnly}
     return
@@ -222,7 +223,8 @@ function Ensure-Sources{
     $to=Screen ($z.x+$z.width*.5) ($z.y+$z.height*.5)
     Drag $from $to;Wait-Until {(Model).picker} 'Native tool component did not open picker'
     $wantedSources=@(@('command','drawing_brush'),@('color',''),@('color_picker',''),@('command','undo'),@('panel','layers'),@('command','next_drawing'))
-    if($SlidersOnly){$wantedSources+=@(@('brush','25'),@('brush','51'),@('brush','55'),@('brush','49'),@('tool_slot','drawing'),@('command','lasso'))}
+    if($BlendersOnly){$wantedSources=@(@('brush','25'),@('brush','51'),@('brush','55'),@('brush','49'))}
+    elseif($SlidersOnly){$wantedSources+=@(@('brush','25'),@('brush','51'),@('brush','55'),@('brush','49'),@('tool_slot','drawing'),@('command','lasso'))}
     foreach($wanted in $wantedSources){
         (Control 'tool-picker-search').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('')
         Wait-Until {(Model).picker.query -eq ''} 'Picker did not clear search'
@@ -289,7 +291,7 @@ function Slider-Hit([long]$Id,[double[]]$Point){
     [CapyBubbleFixtureNative]::Query((Join-Path $directory 'layer_windows.dll'),$request)|ConvertFrom-Json
 }
 function Short-FanOpen([long]$Id){
-    if(!(View $Id).selected){Tap (Center $Id);Wait-Until {(View $Id).selected -and @((View $Id).rings).Count -gt 0} 'Medium first selection did not open its halo'}
+    if(!(View $Id).selected -or (!@((View $Id).rings).Count -and !@((View $Id).chooser).Count)){Tap (Center $Id);Wait-Until {(View $Id).selected -and @((View $Id).rings).Count -gt 0} 'Medium selection did not open its halo'}
     if(!@((View $Id).chooser).Count){Tap (Center $Id)}
     Wait-Until {@((View $Id).chooser).Count -gt 0} 'Short medium did not open its brush fan'
 }
@@ -414,26 +416,28 @@ function Blender-Field([string]$Id){
 }
 function Blender-Value([string]$Id,[string]$Value,[Nullable[double]]$Expected=$null){
     if($null -eq $Expected){$Expected=[double]$Value}
+    $canonical=[single]$Expected
     $field=Blender-Field $Id;$field.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($Value)
     [CapyRowPointer]::Key([uint32]$review.Id,13);(Control 'drawing-canvas').SetFocus()
-    Wait-Until {@((Model).state.tool_settings|Where-Object id -eq $Id)[0].value -eq [double]$Expected -and (Model).brush_ready} 'Native Blender numeric field did not commit and prepare its exact value'
+    Wait-Until {[single](@((Model).state.tool_settings|Where-Object id -eq $Id)[0].value) -eq $canonical -and (Model).brush_ready} 'Native Blender numeric field did not commit and prepare its exact value'
 }
 function Blender-SavedState{
     $m=Model;$stamp=@($m.windows_tabs.session_stamps|Where-Object id -eq $m.windows_tabs.selected)
     if($stamp.Count -ne 1 -or $null -eq $stamp[0].stamp.checkpoint){throw 'Blender persistence has no unique current document checkpoint'}
     $c=$m.state.camera;$box=(Control 'drawing-canvas' -Arranged).Current.BoundingRectangle
     [ordered]@{location=$m.state.document_file.location.uri;modified=$m.state.document_file.modified;checkpoint=$stamp[0].stamp.checkpoint;preset=$m.state.brush.preset;
-        layers=@(foreach($layer in $m.state.layers){[ordered]@{id=$layer.id;paint_revision=$layer.paint_revision;mask_revision=$layer.mask_revision}});
+        layers=@($m.state.layers.id);
         settings=@(foreach($setting in $m.state.tool_settings){[ordered]@{id=$setting.id;value=$setting.value}});
         history=@(foreach($command in $m.state.commands){if($command.id -in @('undo','redo')){[ordered]@{id=$command.id;enabled=$command.enabled}}});
         camera=[ordered]@{viewport=$c.viewport;work_area=$c.work_area;translation=$c.translation;zoom=$c.zoom;rotation=$c.rotation;flipped=$c.flipped};native_canvas=@($box.X,$box.Y,$box.Width,$box.Height)}|ConvertTo-Json -Depth 30 -Compress
 }
 function Invoke-BlenderCellChecks([int]$Preset,[string]$CellId,[double]$DefaultCell,[double]$DefaultSpread,[string[]]$Primary,[string]$Tag){
     $before=Revision;$area=(Model).layout.work_area
-    & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Window';Invoke 'put_back_bubbles'
+    if(@(Packets).Count){& (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Window';Invoke 'put_back_bubbles'}
     Wait-Until {!@(Packets).Count -and !(Model).windows_workspace.dirty -and !(Model).windows_workspace.saving} 'Blender phase did not retire the completed slider fixture bubbles'
     $id=Take 'brush' ([string]$Preset) ($area.x+$area.width*.25) ($area.y+$area.height*.3)
     if(!(View $id).selected){Tap (Center $id)}
+    if((Model).state.workspace.layout.bubbles.show_sliders){Slider-Toggle $id $false}
     Slider-Toggle $id $true
     Wait-Until {(Model).state.brush.preset -eq $Preset -and (Model).brush_ready -and @((View $id).rings).Count -eq $Primary.Count} 'Blender did not prepare its profile primary rings'
     Assert-BlenderCellSettings (Model).state.tool_settings $CellId $Primary
@@ -487,17 +491,17 @@ function Invoke-BlenderCellChecks([int]$Preset,[string]$CellId,[double]$DefaultC
     Blender-Select 25;Blender-Value 'size' '64'
     $clear=Clear-CanvasPoint ('tool-bubble-'+$id) 128 0;$sample=@{x=$clear[0]+64;y=$clear[1]}
     [CapyRowPointer]::Hover($w.X+4,$w.Y+4);$blank=Wait-StablePixels {Screen-Pixels $sample.x $sample.y}
-    $blankLayers=@((Model).state.layers|Select-Object id,paint_revision,mask_revision)|ConvertTo-Json -Depth 8 -Compress
+    $blankCheckpoint=Drawing-Checkpoint
     [CapyRowPointer]::Down('pen',$sample.x,($sample.y-16));[CapyRowPointer]::Move($sample.x,($sample.y+16));[CapyRowPointer]::Up()
     Wait-Until {(Revision) -gt $before} 'Blender seed stroke did not commit'
     [CapyRowPointer]::Hover($w.X+4,$w.Y+4);$seed=Wait-StablePixels {Screen-Pixels $sample.x $sample.y}
-    $seedLayers=@((Model).state.layers|Select-Object id,paint_revision,mask_revision)|ConvertTo-Json -Depth 8 -Compress
+    $seedCheckpoint=Drawing-Checkpoint
     if($seed -ceq $blank){throw 'Blender fixture seed did not create effective artwork'}
     Blender-Select $Preset;Blender-Value 'size' '64';$seedRevision=Revision
     [CapyRowPointer]::Down('pen',$clear[0],$clear[1]);for($step=1;$step -le 16;$step++){[CapyRowPointer]::Move(($clear[0]+8*$step),$clear[1]);Start-Sleep -Milliseconds 15};[CapyRowPointer]::Up()
     Wait-Until {(Revision) -gt $seedRevision} 'Blender stroke did not commit'
     [CapyRowPointer]::Hover($w.X+4,$w.Y+4);$painted=Wait-StablePixels {Screen-Pixels $sample.x $sample.y}
-    $paintedLayers=@((Model).state.layers|Select-Object id,paint_revision,mask_revision)|ConvertTo-Json -Depth 8 -Compress
+    $paintedCheckpoint=Drawing-Checkpoint
     if($painted -ceq $seed){throw 'Blender stroke did not change its seeded artwork'}
     Blender-Value $CellId '12'
     $file=Join-Path $run ($Tag+' editing-state.capy');Save-ProjectAs $file
@@ -514,10 +518,10 @@ function Invoke-BlenderCellChecks([int]$Preset,[string]$CellId,[double]$DefaultC
     [CapyRowPointer]::Hover($w.X+4,$w.Y+4)
     if((Wait-StablePixels {Screen-Pixels $sample.x $sample.y}) -cne $painted -or (Get-FileHash -LiteralPath $file).Hash -cne $savedFile){throw 'Native Blender session restart changed authored pixels or its saved file'}
     Capture ($Tag+'-session-restored') -WithModel -Composed
-    foreach($history in @(@{action='Undo';pixels=$seed;layers=$seedLayers},@{action='Redo';pixels=$painted;layers=$paintedLayers},@{action='Undo';pixels=$seed;layers=$seedLayers},@{action='Undo';pixels=$blank;layers=$blankLayers})){
+    foreach($history in @(@{action='Undo';pixels=$seed;checkpoint=$seedCheckpoint},@{action='Redo';pixels=$painted;checkpoint=$paintedCheckpoint},@{action='Undo';pixels=$seed;checkpoint=$seedCheckpoint},@{action='Undo';pixels=$blank;checkpoint=$blankCheckpoint})){
         & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action $history.action
         Wait-Until {(Screen-Pixels $sample.x $sample.y) -ceq $history.pixels} 'Blender native history did not restore the exact composed pixels'
-        if((@((Model).state.layers|Select-Object id,paint_revision,mask_revision)|ConvertTo-Json -Depth 8 -Compress) -cne $history.layers){throw 'Blender Undo or Redo did not restore the exact layer paint checkpoint'}
+        if((Drawing-Checkpoint) -cne $history.checkpoint){throw 'Blender Undo or Redo did not restore the exact authored checkpoint and layer order'}
     }
     [IO.File]::WriteAllText((Join-Path $run ($Tag+'-controls.json')),(@{preset=$Preset;primary=$Primary;defaults=@{spread=$DefaultSpread;cell=$DefaultCell};controls=$controlState;overrides=$overrides;cancelled=$cancelled;retained=$retained;schema=(Model).state.tool_settings;rings=$observations;blank=$blank;seed=$seed;painted=$painted;persistence='native saved open drawing and serialized editing-state session restart';saved_state=$savedState;file=$file;file_sha256=$savedFile;physical_input_and_performance='unverified'}|ConvertTo-Json -Depth 30),[Text.UTF8Encoding]::new($false))
     $checks.Add($Tag+'-native-schema-rings-numeric-cancel-reset-retained-overrides-session-persistence-effective-paint-Undo-Redo')
@@ -1110,12 +1114,13 @@ try{
         return
     }
     if($SlidersOnly){
-        Invoke-SliderChecks
+        if(!$BlendersOnly){Invoke-SliderChecks}
         Invoke-BlenderCellChecks 55 'dither_cell_size' 4 .08 @('spread','dither_cell_size') 'dither55'
         Invoke-BlenderCellChecks 49 'scatter_cell_size' 3 .2 @('spread','scatter_cell_size','grit') 'scatter49'
         & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Close -DiscardUnsaved|Out-Null
         if((Get-Item -LiteralPath $stderr).Length){throw 'Restarted slider fixture stderr requires inspection'}
-        [IO.File]::WriteAllText((Join-Path $run 'results.json'),(@{variant=$Variant;checks=@($checks);scope='Native global slider menus, history and SQLite persistence; physical input and performance separate'}|ConvertTo-Json -Depth 12),[Text.UTF8Encoding]::new($false))
+        $scope=if($BlendersOnly){'Native Blender panel controls, rings, painting and editing-state persistence'}else{'Native global slider menus, history and SQLite persistence'}
+        [IO.File]::WriteAllText((Join-Path $run 'results.json'),(@{variant=$Variant;blenders_only=[bool]$BlendersOnly;checks=@($checks);scope=($scope+'; physical input and performance separate')}|ConvertTo-Json -Depth 12),[Text.UTF8Encoding]::new($false))
         return
     }
     if(!$NumericOnly -and !$CurveOnly){

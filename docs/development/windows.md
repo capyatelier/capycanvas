@@ -1560,6 +1560,9 @@ states save document crops from the sampled bitmap with camera and document
 metadata. Run `tests/uia-projection-snapshot.ps1` in PowerShell 5 and 7 for the
 cached native projection, live canvas guards and dense pixel regression.
 
+Use `exercise-tool-bubbles.ps1 -BlendersOnly` with `-Variant dark-mouse` and
+`light-mouse` for independent Blender panel, ring and saved-state checks.
+
 `exercise-canvas-touch.ps1 -ScrubOnly -Theme dark` checks three-finger clearing
 at horizontal, diagonal and vertical angles, cancellation and locked-layer refusal.
 Each clear preserves the camera and has one exact Undo and Redo. Fresh two-finger
