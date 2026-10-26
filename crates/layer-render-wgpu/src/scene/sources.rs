@@ -231,7 +231,7 @@ impl DecodedTiles {
             let Some(index) = self.slots.iter().enumerate().filter(|(_,slot)| Arc::strong_count(&slot.lease)==1)
                 .min_by_key(|(_,slot)|slot.used).map(|(index,_)|index) else { return Ok(false); };
             let slot = self.slots.swap_remove(index);
-            if slot.key.is_some() { self.evictions += 1; }
+            if slot.valid.load(Ordering::Acquire) { self.evictions += 1; }
             let retired = self.retired_bytes.clone();
             let tile_bytes = self.tile_bytes();
             retired.fetch_add(tile_bytes, Ordering::Relaxed);
@@ -385,7 +385,6 @@ impl DecodedTiles {
                 None,
             ));
         }
-        self.misses += 1;
         let unused = self.slots.iter().position(|s| Arc::strong_count(&s.lease) == 1 && !s.valid.load(Ordering::Acquire));
         let index = if let Some(index) = unused { index } else if self.slots.len() < self.slot_limit() {
             let texture = r.device.create_texture(&wgpu::TextureDescriptor {
@@ -426,7 +425,7 @@ impl DecodedTiles {
                 .0
         };
         let slot = &mut self.slots[index];
-        if slot.key.is_some() { self.evictions += 1; }
+        if slot.valid.load(Ordering::Acquire) { self.evictions += 1; }
         slot.key = Some(key);
         slot.used = self.clock;
         let write = crate::submission::CacheWrite::new();
@@ -544,6 +543,7 @@ impl DecodedTiles {
             FLOAT_TILE_BYTES
         };
         pending.write.track(encoder);
+        self.misses += 1;
         Ok(bytes)
     }
 

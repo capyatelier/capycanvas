@@ -220,6 +220,7 @@ fn cold_native_color_composition_sampling_and_thumbnails_match_resident_tiles() 
                 .wait_data().unwrap().tiles.values()
                 .map(|tile| tile.wait_backing().unwrap().content_digest().unwrap()).collect();
             assert_eq!(cold.source_cache_work()[1], unique_samples.len() as u64);
+            assert_eq!(cold.source_tiles.borrow().evictions, 0, "resident capacity holds every unique sample");
         }
     }
 }
