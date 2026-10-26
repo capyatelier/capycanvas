@@ -368,7 +368,7 @@ import Darwin
            let modifiers = value["modifiers"] as? [String: Any],
            palettes.key(key, pressed: value["pressed"] as? Bool == true,
                command: modifiers["command"] as? Bool == true, shift: modifiers["shift"] as? Bool == true) { return }
-        if value["type"] as? String == "key", value["key"] as? String == "Escape", value["pressed"] as? Bool == true {
+        if value["type"] as? String == "key", value["key"] as? String == "escape", value["pressed"] as? Bool == true {
             workspace.dismissTransients(at: nil)
         }
         if value["type"] as? String == "key", value["pressed"] as? Bool == true,

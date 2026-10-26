@@ -90,8 +90,17 @@ import SwiftUI
     }
     func consumeClick() -> Bool { defer { suppressClick = false }; return suppressClick }
     func validate() {
-        if let contact, !enabled || bubbles?.items.contains(where: { $0 === contact.item && $0.source == contact.source }) != true { retire() }
-        if let candidate, !enabled || sourceIdentity(candidate.grab) != candidate.identity { retire() }
+        if let contact {
+            let current = bubbles?.items.contains { $0 === contact.item && $0.source == contact.source } == true
+            if !enabled || !current {
+                retire()
+                if current { restore(contact) }
+            }
+        }
+        if let candidate, !enabled || (!candidate.moving && sourceIdentity(candidate.grab) != candidate.identity) {
+            retire()
+            if candidate.moving { drag(candidate.grab, "cancel", candidate.last) }
+        }
     }
     func retire() {
         if let item = contact?.item {

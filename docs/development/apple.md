@@ -353,6 +353,10 @@ mutation or release.
   Object layers use ordinary rows and shared actions; see [image objects](../ui/image-objects.md).
 - **Settings pages.** macOS sheets have no title bar. Put sub-page titles and Back
   buttons in the content; navigation titles and `.navigation` toolbar items are hidden.
+- **Bubble pickup.** An admitted drag retains capture after its source drawer
+  closes, through release or cancellation. A popup cancels the current edit
+  before retiring its contact. Shared cancellation restores displaced bubbles
+  and the preceding workspace. Canonical native Escape dismisses stamp previews.
 - **UIKit fields.** iPadOS consumes Escape before SwiftUI handlers. Use UIKit text
   fields with priority key commands, explicit height, and fonts/placeholders assigned
   only when changed, to avoid repeated size invalidation.

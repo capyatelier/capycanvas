@@ -1438,6 +1438,37 @@ fn settle(s: &mut UiSession<Recorder>, from: u64) -> u64 {
 }
 
 #[test]
+fn cancelling_a_bubble_drag_restores_settled_positions_after_motion_and_collisions() {
+    for frames in [1, 4, 16] {
+        let mut s = desk();
+        take_control(&mut s, ToolbarControl::Command { command: CommandId::DrawingBrush }, [760., 340.]);
+        let id = take_control(&mut s, ToolbarControl::Panel { panel: Panel::Layers }, [800., 420.]);
+        let mut now = settle(&mut s, 0);
+        assert!(!s.step_bubbles(now));
+        let authored = s.state.workspace.clone();
+        let before = s.bubble_placements();
+        let origin = before.iter().find(|p| p.id == id).unwrap().center;
+        let grab = BubbleGrab::Bubble { id };
+        contact(&mut s, grab, ContactPhase::Down, origin).unwrap();
+        contact(&mut s, grab, ContactPhase::Move, [120., 30.]).unwrap();
+        for _ in 0..frames {
+            now += 16_666_667;
+            s.step_bubbles(now);
+        }
+        contact(&mut s, grab, ContactPhase::Cancel, [120., 30.]).unwrap();
+        settle(&mut s, now);
+        assert_eq!(s.state.workspace, authored, "cancellation preserves authored layout");
+        let after = s.bubble_placements();
+        for original in before {
+            let restored = after.iter().find(|p| p.id == original.id).unwrap();
+            assert!(!restored.lifted && !restored.homing);
+            assert!((restored.center[0] - original.center[0]).hypot(restored.center[1] - original.center[1]) < 0.1,
+                "{frames} frames, bubble {}: {:?} -> {:?}", original.id, original.center, restored.center);
+        }
+    }
+}
+
+#[test]
 fn opening_the_palette_pill_keeps_its_whole_surface_inside_the_work_area() {
     for right in [false,true] {
         let mut s=desk();

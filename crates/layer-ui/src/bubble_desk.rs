@@ -204,6 +204,13 @@ impl Desk {
         }
         self.moved = true;
     }
+    pub(crate) fn cancel(&mut self, before: Self) {
+        let still = self.still;
+        *self = before;
+        self.still = still;
+        self.clock = None;
+        self.moved = true;
+    }
     pub(crate) fn grow(&mut self, grown: Vec<(u32, Vec<Shape>)>) {
         if self.grown != grown {
             self.grown = grown;

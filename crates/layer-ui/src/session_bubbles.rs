@@ -50,6 +50,7 @@ pub(crate) struct Bubbles {
     desk: Desk,
     bounds: Option<(BoundsKey, Bounds)>,
     drag: Option<BubbleDrag>,
+    drag_desk: Option<Desk>,
     halo: Option<(u32, u32)>,
     ring: Option<RingContact>,
     wheel: Option<WheelContact>,
@@ -1205,6 +1206,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             ContactPhase::Up if present => {
                 self.bubble_state.drag = None;
+                self.bubble_state.drag_desk = None;
                 self.bubble_state.desk.home(false);
                 if self.bubble_homing(viewport, position, drag.source) {
                     let source = self.bubble(drag.id)?.source;
@@ -1232,8 +1234,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             _ => {
                 self.bubble_state.drag = None;
-                self.bubble_state.desk.home(false);
-                self.bubble_state.desk.release();
+                if let Some(before) = self.bubble_state.drag_desk.take() { self.bubble_state.desk.cancel(before); }
                 self.workspace_history.cancel(&mut self.state.workspace);
             }
         }
@@ -1261,6 +1262,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             return Err("Another item is already moving".into());
         }
         let (source, bounds) = self.grab_source(grab, viewport)?;
+        let desk = self.bubble_state.desk.clone();
         let existing = match grab {
             BubbleGrab::Bubble { id } | BubbleGrab::Rim { id } => Some(id),
             _ => self.state.workspace.layout.bubbles.find(source).map(|b| b.id),
@@ -1305,6 +1307,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.bubble_state.card = Some(id);
             self.bubble_state.properties = false;
         }
+        self.bubble_state.drag_desk = Some(desk);
         self.bubble_state.drag = Some(BubbleDrag { id, offset: [center[0] - position[0], center[1] - position[1]], source: bounds, pulled });
         self.sync_bubbles();
         self.bubble_state.desk.grab(id);

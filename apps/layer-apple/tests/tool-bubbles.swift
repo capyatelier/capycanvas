@@ -141,6 +141,8 @@ private struct BubbleGlassProbeView: View {
                 throw HostFailure(message: "The glass homing check needs actual header geometry")
             }
             let origin = item.placement.center, target = CGPoint(x: header.midX, y: header.midY)
+            let authoredLayout = store.state["workspace"]["layout"].stableKey
+            let initialMoving = bubbles.needsFrame
             let model = item.model.stableKey, progress = [item.cardProgress, item.faceProgress]
             let restingHeight = item.card.isNull ? 22 : item.card["size"][1].number
             let expectedHeight = restingHeight * 0.82
@@ -156,9 +158,14 @@ private struct BubbleGlassProbeView: View {
                 "Actual Layers glass follows placement without model or ramp changes")
             note("PASS actual Layers \(item.card.isNull ? "count" : "card") glass strength .55 at scaled height \(expectedHeight), unchanged model/ramp")
             try await action(["type": "drag", "grab": grab, "phase": "cancel", "position": [target.x, target.y], "viewport": [1200, 870]])
-            try await wait("Actual Layers glass cancellation restores placement", failure: { store.failure }, step: tick) {
-                !item.placement.homing && !item.placement.lifted && hypot(item.placement.center.x - origin.x, item.placement.center.y - origin.y) < 0.1
-                    && glass()["regions"].array.contains { abs($0[3].number - restingHeight) < 0.5 && abs($0[9].number - 1) < 0.001 }
+            do {
+                try await wait("Actual Layers glass cancellation restores placement", failure: { store.failure }, step: tick) {
+                    !item.placement.homing && !item.placement.lifted && hypot(item.placement.center.x - origin.x, item.placement.center.y - origin.y) < 0.1
+                        && glass()["regions"].array.contains { abs($0[3].number - restingHeight) < 0.5 && abs($0[9].number - 1) < 0.001 }
+                }
+            } catch {
+                note("Layers cancellation diagnostic platform=\(platform) theme=\(theme) id=\(item.id) origin=\(origin) final=\(item.placement.center) lifted=\(item.placement.lifted) homing=\(item.placement.homing) initiallyMoving=\(initialMoving) moving=\(bubbles.needsFrame) authoredLayoutEqual=\(store.state["workspace"]["layout"].stableKey == authoredLayout) restingHeight=\(restingHeight) glass=\(glass().stableKey)")
+                throw error
             }
             try await settled("Actual Layers glass homing cancellation")
         }
@@ -171,10 +178,149 @@ private struct BubbleGlassProbeView: View {
             guard let item = bubbles.items.first(where: { $0.view["source"]["control"].stableKey == source["resolved_control"].stableKey }) ?? bubbles.items.last else { throw HostFailure(message: "Taken source has no retained presentation") }
             return item
         }
+        if CommandLine.arguments.contains("--blocked-contacts") {
+            let model = bubbles.input, blocker = UUID()
+            model.viewport = CGSize(width: 1200, height: 870)
+            func interrupt() async throws {
+                store.workspace.popover(blocker, open: true)
+                model.cancel()
+                try await tick()
+                store.workspace.popover(blocker, open: false)
+                try await tick()
+                try require(!model.active, "A blocked native contact retires after shared cancellation")
+            }
+            defer { store.workspace.popover(blocker, open: false) }
+            try await store.apply(["type": "set_color", "rgba": [0.2, 0.45, 0.8, 1]])
+            let color = try await take({ $0["resolved_control"]["kind"].string == "color" }, at: CGPoint(x: 760, y: 400))
+            let center = color.placement.center
+            let start = CGPoint(x: center.x, y: center.y - 85), end = CGPoint(x: center.x + 85, y: center.y)
+            let before = store.state["colors"].stableKey
+            for id: UInt64 in [900, 901] {
+                try require(model.down(start, id: id, device: .touch, clicks: 1, doubleTime: 0.4, time: Double(id)) == .capture,
+                    "An admitted wheel contact captures before a native popup opens")
+                _ = model.move(end, id: id)
+                try await wait("The wheel contact changes paint", failure: { store.failure }, step: tick) {
+                    store.state["colors"].stableKey != before
+                }
+                try await interrupt()
+                try require(store.state["colors"].stableKey == before && store.failure == nil,
+                    "A native popup must cancel and restore the wheel before retiring its contact")
+            }
+            note("PASS blocked wheel and repeated contact: platform=\(platform) theme=\(theme)")
+            let brush = try await take({ $0["resolved_control"]["command"].string == "drawing_brush" }, at: CGPoint(x: 420, y: 340))
+            guard let ringIndex = brush.view["rings"].array.lastIndex(where: { $0["setting"].string != "size" }) else {
+                throw HostFailure(message: "The blocked-contact check needs a real brush ring")
+            }
+            let thumb = brush.model["rings"][ringIndex]["thumb"].point
+            let point = CGPoint(x: brush.placement.center.x + thumb.x, y: brush.placement.center.y + thumb.y)
+            let arc = brush.view["rings"][ringIndex]["arc"]
+            let angle = (arc["start"].number + arc["sweep"].number * 0.8) * .pi / 180
+            let destination = CGPoint(x: brush.placement.center.x + cos(angle) * arc["radius"].number,
+                y: brush.placement.center.y + sin(angle) * arc["radius"].number)
+            let settings = store.state["brush"].stableKey
+            let toolSettings = store.state["tool_settings"].stableKey
+            _ = model.down(point, id: 902, device: .mouse, clicks: 1, doubleTime: 0.4, time: 902)
+            _ = model.move(destination, id: 902)
+            try await wait("The ring contact changes its setting", failure: { store.failure }, step: tick) {
+                store.state["tool_settings"].stableKey != toolSettings
+            }
+            try await interrupt()
+            try require(store.state["brush"].stableKey == settings && store.state["tool_settings"].stableKey == toolSettings,
+                "A native popup restores the complete ring setting")
+            note("PASS blocked ring exact rollback: platform=\(platform) theme=\(theme)")
+            let layout = store.state["workspace"]["layout"].stableKey, origin = brush.placement.center
+            _ = model.down(origin, id: 903, device: .mouse, clicks: 1, doubleTime: 0.4, time: 903)
+            _ = model.move(CGPoint(x: origin.x + 80, y: origin.y + 40), id: 903)
+            try await wait("The bubble contact lifts", failure: { store.failure }, step: tick) { brush.placement.lifted }
+            try await interrupt(); try await settled("Blocked drag cancellation")
+            try require(store.state["workspace"]["layout"].stableKey == layout && !brush.placement.lifted,
+                "A native popup restores the exact layout of an interrupted bubble drag")
+            let closed = await withCheckedContinuation { done in store.prepareClose { done.resume(returning: $0) } }
+            try require(closed, "Close private blocked-contact storage")
+            note("PASS blocked wheel, repeated contact, ring and drag cancellation: platform=\(platform) theme=\(theme)")
+            return
+        }
         guard let brushEntry = store.snapshot["header"]["model"]["zones"].array.flatMap(\.array).first(where: {
             $0["item"]["control"]["command"].string == "drawing_brush"
         }) else { throw HostFailure(message: "Missing shared drawing brush source: \(store.snapshot["header"]["model"].stableKey)") }
         let brushSource = brushEntry["id"].uint
+        func drawerVariants() -> [BubbleChoice] {
+            bubbles.input.choiceSources.values.filter {
+                $0.grab["kind"].string == "variant" && $0.bounds.width > 20 && $0.bounds.height > 20
+            }
+        }
+        for cancelled in [false, true] {
+            let before = store.state["workspace"]["layout"].stableKey
+            let count = bubbles.items.count
+            try await store.apply(["type": "customize", "action": ["type": "toggle_header_drawer", "id": brushSource]])
+            try await wait("Mounted variant drawer", failure: { store.failure }, step: tick) {
+                guard let drawer = store.contentDrawers.items["tool"], drawer.interactive else { return false }
+                let bounds = drawer.geometry["placement"]["bounds"].rect
+                return drawerVariants().contains { bounds.contains($0.bounds) }
+            }
+            try await drain(store.catalog["panel_expansion_ms"].number / 1000 + 0.1)
+            guard let drawer = store.contentDrawers.items["tool"],
+                  let choice = drawerVariants().filter({ drawer.geometry["placement"]["bounds"].rect.contains($0.bounds) })
+                    .sorted(by: { a, b in a.bounds.minY == b.bounds.minY ? a.bounds.minX < b.bounds.minX : a.bounds.minY < b.bounds.minY }).first else {
+                throw HostFailure(message: "The real drawer must publish a mounted variant source")
+            }
+            let identity = choice.grab.stableKey, bounds = drawer.geometry["placement"]["bounds"].rect
+            let start = CGPoint(x: choice.bounds.midX, y: choice.bounds.midY)
+            let groups = store.snapshot["layout"]["groups"].array.map { $0["bounds"].rect }
+            guard let outside = [CGPoint(x: 1000, y: 650), CGPoint(x: 800, y: 650), CGPoint(x: 400, y: 650)].first(where: { point in
+                input.bounds.contains(point) && !bounds.insetBy(dx: -100, dy: -100).contains(point)
+                    && !groups.contains(where: { $0.contains(point) })
+            }) else { throw HostFailure(message: "The variant pickup needs canvas beyond its drawer") }
+            let number = cancelled ? 501 : 500
+            try event(.leftMouseDown, at: start, marker: input, number: number)
+            try await drain(0.03)
+            try require(bubbles.input.active && !bubbles.input.captures, "The native drawer row observes its initial contact")
+            try event(.leftMouseDragged, at: outside, marker: input, number: number)
+            try await wait("Variant pickup closes and withdraws its drawer", failure: { store.failure }, step: tick) {
+                store.state["customization"]["drawer"].isNull && store.contentDrawers.items["tool"] == nil
+                    && !bubbles.input.choiceSources.values.contains { $0.grab.stableKey == identity }
+            }
+            try require(bubbles.input.active && bubbles.input.captures,
+                "A pulled variant retains native capture after its drawer source disappears")
+            guard let lifted = bubbles.items.first(where: { $0.placement.lifted }) else {
+                throw HostFailure(message: "The retained native contact must own a shared lifted bubble")
+            }
+            let next = CGPoint(x: outside.x - 30, y: outside.y + 25)
+            try event(.leftMouseDragged, at: next, marker: input, number: number)
+            try await wait("Variant follows after drawer removal", failure: { store.failure }, step: tick) {
+                hypot(lifted.placement.center.x - next.x, lifted.placement.center.y - next.y) < 1
+            }
+            if cancelled {
+                try key("\u{1b}", code: 53, window: window)
+                try await wait("Native variant cancellation", failure: { store.failure }, step: tick) { !bubbles.input.active }
+            }
+            try event(.leftMouseUp, at: next, marker: input, number: number)
+            try await tick(); try await settled("Variant pickup terminal event")
+            try require(!bubbles.input.active && bubbles.items.allSatisfy { !$0.placement.lifted },
+                "Native release or cancellation retires the lifted owner")
+            if cancelled {
+                try require(store.state["workspace"]["layout"].stableKey == before && bubbles.items.count == count,
+                    "Cancelling a drawer variant restores the exact preceding layout")
+            } else {
+                let committed = store.state["workspace"]["layout"].stableKey
+                try require(committed != before && bubbles.items.count == count + 1,
+                    "Native release commits the drawer variant after source withdrawal")
+                try await store.apply(["type": "invoke", "command": "undo_workspace"])
+                try await wait("Drawer pickup layout Undo", failure: { store.failure }, step: tick) {
+                    store.state["workspace"]["layout"].stableKey == before
+                }
+                try require(store.state["workspace"]["layout"].stableKey == before, "Drawer pickup is one layout Undo step")
+                try await store.apply(["type": "invoke", "command": "redo_workspace"])
+                try await wait("Drawer pickup layout Redo", failure: { store.failure }, step: tick) {
+                    store.state["workspace"]["layout"].stableKey == committed
+                }
+                try require(store.state["workspace"]["layout"].stableKey == committed, "Layout Redo restores the completed drawer pickup")
+                try await settled("Restored drawer variant")
+            }
+        }
+        try await action(["type": "put_back_all"]); try await settled("Drawer pickup cleanup")
+        try require(bubbles.items.isEmpty, "Drawer pickup checks leave the original empty desk")
+        note("PASS native drawer variant release, next pickup and cancellation: platform=\(platform) theme=\(theme)")
         try await wait("Native header geometry") { store.header.geometry["items"].array.contains { $0["id"].uint == brushSource } }
         let source = store.header.geometry["items"].array.first { $0["id"].uint == brushSource }!["bounds"].rect
         let pickup = CGPoint(x: source.midX, y: source.midY), destination = CGPoint(x: 420, y: 340)
@@ -432,6 +578,8 @@ private struct BubbleGlassProbeView: View {
         try await wait("Current held toolbar drop", failure: { store.failure }, step: tick) { store.state["workspace"]["layout"].stableKey != layout }
         try require(bubbles.items.isEmpty, "An ordinary toolbar drop stays in its shared target")
         note("PASS tool bubbles platform=\(platform) theme=\(theme): retained motion, ring/wheel pair rollback, pinch, menus, card, Zen, fades and idle")
+        let closed = await withCheckedContinuation { done in store.prepareClose { done.resume(returning: $0) } }
+        try require(closed, "Close private bubble storage")
         withExtendedLifetime(input) {}
     }
     @MainActor static func checkTransitions() throws {

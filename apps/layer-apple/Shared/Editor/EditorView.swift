@@ -73,6 +73,19 @@ struct EditorView<Canvas: View>: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .modifier(EditorPopoverHost())
         .coordinateSpace(name: "editor-workspace")
+        .onKeyPress(keys: [.escape], phases: [.down, .repeat]) { [store] press in
+            guard !NativeTextContext.composing, store.commandFocus() != "text",
+                let owner = store.workspace.sliderPreview.content?.owner else { return .ignored }
+            let modifiers = ["command": !press.modifiers.intersection([.command, .control]).isEmpty,
+                "alt": press.modifiers.contains(.option), "shift": press.modifiers.contains(.shift)]
+            DispatchQueue.main.async { [weak store] in
+                guard let store, store.workspace.sliderPreview.content?.owner == owner else { return }
+                for pressed in [true, false] {
+                    store.input(["type": "key", "key": "escape", "pressed": pressed, "repeat": false, "modifiers": modifiers])
+                }
+            }
+            return .handled
+        }
         .onPreferenceChange(BubbleChoices.self) { store.bubbles.input.choiceSources = $0 }
         .onPreferenceChange(BubbleNativeRegions.self) { store.bubbles.input.nativeRegions = $0 }
         .editorChromeContact { point, held in
