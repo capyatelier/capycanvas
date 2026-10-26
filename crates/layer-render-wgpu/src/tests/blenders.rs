@@ -731,16 +731,17 @@ fn painterly_blends_high_contrast_hdr_without_a_variance_ceiling() {
         canvas.composite().into_iter().map(|p| [p[0] / f64::from(scale), p[1] / f64::from(scale), p[2] / f64::from(scale), p[3]]).collect::<Vec<_>>()
     };
     let low = draw(1.);
-    let high = draw(65504.);
-    let mut worst = (0., 0, [0.; 4], [0.; 4]);
-    for (i, (a, b)) in low.into_iter().zip(high).enumerate() {
-        if !(48..88).contains(&(i % 128)) || !(60..68).contains(&(i / 128)) { continue; }
-        assert!(a.iter().chain(&b).all(|v| v.is_finite()), "nonfinite Painterly pigment: {a:?}, {b:?}");
-        let error = (0..4).map(|c| (a[c] - b[c]).abs()).fold(0f64, f64::max);
-        if error > worst.0 { worst = (error, i, a, b); }
+    for scale in [65504., 64999., 33333.] {
+        let mut worst = (0., 0, [0.; 4], [0.; 4]);
+        for (i, (a, b)) in low.iter().zip(draw(scale)).enumerate() {
+            if !(48..88).contains(&(i % 128)) || !(60..68).contains(&(i / 128)) { continue; }
+            assert!(a.iter().chain(&b).all(|v| v.is_finite()), "nonfinite Painterly pigment: {a:?}, {b:?}");
+            let error = (0..4).map(|c| (a[c] - b[c]).abs()).fold(0f64, f64::max);
+            if error > worst.0 { worst = (error, i, *a, b); }
+        }
+        eprintln!("Painterly HDR scale {scale} worst {worst:?}");
+        assert!(worst.0 < 0.001, "Painterly HDR scale {scale} mismatch: {worst:?}");
     }
-    eprintln!("Painterly HDR scale worst {worst:?}");
-    assert!(worst.0 < 0.001, "Painterly HDR scale mismatch: {worst:?}");
 }
 
 fn dither_cell_pattern(canvas: &mut Canvas, color: impl Fn(u32, u32) -> [f32; 4]) {

@@ -317,23 +317,22 @@ fn painterly_field(contact: BlendContact, world: vec2<f32>) -> vec4<f32> {
     var lowest = 0.0;
     for (var sector = 0u; sector < 8u; sector += 1u) {
         let heading = f32(sector) * 0.7853982 + rotation;
-        var mean = vec4<f32>(0.0);
-        var square = 0.0;
-        for (var tap = 0u; tap < 3u; tap += 1u) {
-            let angle = heading + (f32(tap) - 1.0) * 0.3;
-            let distance = select(0.45, 0.9, tap == 1u);
-            let sample = blend_tap(contact.trace + (u * cos(angle) + v * sin(angle)) * distance);
-            mean += sample;
-            square += dot(sample, sample);
+        var sum = vec4<f32>(0.0);
+        var spread = 0.0;
+        for (var side = -1.0; side < 1.5; side += 1.0) {
+            let angle = heading + side * 0.3;
+            let sample = blend_tap(contact.trace + (u * cos(angle) + v * sin(angle)) * (0.9 - 0.45 * abs(side)));
+            let deviation = sample * (side + 1.0) - sum;
+            spread += dot(deviation, deviation) * (3.0 - 2.0 * side);
+            sum += sample;
         }
-        mean /= 3.0;
-        let variance = (max(square / 3.0 - dot(mean, mean), 0.0) + 0.00002) * (1.0 - 0.5 * cos(heading));
+        let variance = (spread / 18.0 + 0.00002) * (1.0 - 0.5 * cos(heading));
         if sector == 0u || variance < lowest {
             lowest = variance;
-            best = mean;
+            best = sum;
         }
     }
-    return best;
+    return best / 3.0;
 }
 
 fn crystal_field(world: vec2<f32>, contact: BlendContact) -> vec4<f32> {

@@ -245,7 +245,9 @@ the reconstructed alpha. Texture-Keeping divides its frequency bands by their
 actual coverage. Hue preserves extended RGB until native publication, and
 Comb uses the document profile's luminance coefficients.
 Painterly compares sectors against its first candidate, without an absolute
-variance ceiling that could reject every sector on HDR paint.
+variance ceiling that could reject every sector on HDR paint. Each sector
+accumulates its variance from each tap's deviation from the mean of the taps
+before it, so a flat sector has exactly zero variance at any scale.
 
 Dither uses [`material_dither.wgsl`](../../crates/layer-render-wgpu/src/material_dither.wgsl).
 It samples seven fixed disc offsets with exact texel loads from stroke-start
