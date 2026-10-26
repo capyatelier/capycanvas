@@ -1609,6 +1609,9 @@ focus and retained control identities. The default `compact-color` also runs its
 wheel, readout, menu and drawer journeys. Use both themes when changing swatch
 presentation.
 `compact-color:input` isolates overlap routing and focus from border pixel checks.
+Swatch pen and touch holds use the native gesture recognizer and suppress the
+release click. Short touch contacts still select a paint slot.
+
 `exercise-compact-color.ps1 -Journey slot-menu-dark` and `slot-menu-light` walk
 the shared paint-slot menu through mouse, keyboard, pen and touch. They check
 editing another slot without changing selection on Cancel, targeted Apply,

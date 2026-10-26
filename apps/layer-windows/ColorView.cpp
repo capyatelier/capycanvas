@@ -138,6 +138,9 @@ struct View:std::enable_shared_from_this<View>{
     bool fitHeight=false;
     Image image;TextBlock drawError;
     std::array<Button,3> swatches;
+    std::array<std::shared_ptr<PointerClick>,2> slotClicks;
+    struct SlotHold {PointerGesture recognizer;std::optional<uint32_t> pointer;};
+    std::array<SlotHold,2> slotHolds;
     std::array<SwatchFace,3> swatchFaces;
     std::array<bool,3> hovered{};
     Button edit;Shapes::Ellipse editFill;bool editHovered=false;
@@ -283,7 +286,10 @@ struct View:std::enable_shared_from_this<View>{
         stage.Children().Append(edit);
         const std::array<hstring,3> slots{L"background",L"foreground",L"transparent"};
         for(int i=0;i<3;i++){
-            auto slot=slots[i];auto pick=control(slot,[weak,slot]{if(auto self=weak.lock())self->send(O({{L"op",S(L"select")},{L"slot",S(slot)}}));});
+            auto slot=slots[i];auto pick=control(slot,[weak,slot,i]{if(auto self=weak.lock()){
+                if(i<2&&self->slotClicks[i]->SuppressClick())return;
+                self->send(O({{L"op",S(L"select")},{L"slot",S(slot)}}));
+            }});
             if(i<2)pick.DoubleTapped([weak,slot](auto&&,auto&&){if(auto self=weak.lock()){
                 self->send(O({{L"op",S(L"select")},{L"slot",S(slot)}}));self->editColor(slot);
             }});
@@ -292,6 +298,31 @@ struct View:std::enable_shared_from_this<View>{
             sample.Children().Append(swatchFaces[i].root);
             pick.Content(sample);swatches[i]=pick;stage.Children().Append(pick);
             if(i<2){
+                slotClicks[i]=PointerGesture::Clicks(pick,[](uint32_t,bool){});
+                PointerGesture::OwnHolding(pick);
+                pick.AddHandler(UIElement::PointerPressedEvent(),box_value(PointerEventHandler([weak,i](auto&& sender,PointerRoutedEventArgs const& e){
+                    if(auto self=weak.lock()){
+                        auto source=sender.template as<Button>();auto point=e.GetCurrentPoint(source);auto& hold=self->slotHolds[i];
+                        if(hold.pointer||!PointerGesture::PrimaryContact(point)||point.PointerDeviceType()==Microsoft::UI::Input::PointerDeviceType::Mouse)return;
+                        hold.pointer=point.PointerId();hold.recognizer.Begin(source,point);
+                    }
+                })),true);
+                pick.AddHandler(UIElement::PointerMovedEvent(),box_value(PointerEventHandler([weak,i](auto&& sender,PointerRoutedEventArgs const& e){
+                    if(auto self=weak.lock();self&&self->slotHolds[i].pointer==e.Pointer().PointerId())self->slotHolds[i].recognizer.Move(sender.template as<Button>(),e);
+                })),true);
+                PointerGesture::OnCompleted(pick,[weak,i](PointerRoutedEventArgs const& e,bool cancel){if(auto self=weak.lock()){
+                    auto& hold=self->slotHolds[i];if(hold.pointer!=e.Pointer().PointerId())return;
+                    hold.pointer.reset();if(cancel)hold.recognizer.CompleteGesture();else hold.recognizer.ProcessUpEvent(e.GetCurrentPoint(self->swatches[i]));
+                }});
+                pick.Unloaded([weak,i](auto&&,auto&&){if(auto self=weak.lock()){
+                    self->slotHolds[i].pointer.reset();self->slotHolds[i].recognizer.CompleteGesture();
+                }});
+                slotHolds[i].recognizer.Holding([weak,slot,i](auto&&,Microsoft::UI::Input::HoldingEventArgs const& e){
+                    if(auto self=weak.lock();self&&self->slotHolds[i].pointer&&e.HoldingState()==Microsoft::UI::Input::HoldingState::Started){
+                        self->slotClicks[i]->Suppress(*self->slotHolds[i].pointer);
+                        self->showSlotMenu(self->swatches[i],slot,e.Position());
+                    }
+                });
                 pick.ContextRequested([weak,slot](auto&& sender,ContextRequestedEventArgs const& e){
                     e.Handled(true);if(auto self=weak.lock()){
                         auto source=sender.template as<Button>();Point at{};if(!e.TryGetPosition(source,at))at={0,float(source.ActualHeight())};
