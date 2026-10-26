@@ -1268,9 +1268,9 @@ impl NewDrawing {
         let weak = self.this.clone();
         browser.search.connect_search_changed(move |search| if let Some(dialog) = weak.upgrade() { dialog.send(NewDrawingAction::Search { query: search.text().into() }); });
         let weak = self.this.clone();
-        browser.search.connect_stop_search(move |search| {
+        browser.search.connect_stop_search(move |_| {
             let Some(dialog) = weak.upgrade() else { return };
-            if search.text().is_empty() { dialog.send(NewDrawingAction::Back); } else { search.set_text(""); }
+            dialog.send(NewDrawingAction::Back);
         });
         let weak = self.this.clone();
         browser.grid.connect_selected_children_changed(move |grid| {

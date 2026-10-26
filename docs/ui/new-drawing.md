@@ -101,7 +101,8 @@ iPadOS report pixels without a known PPI. The shared constructor applies the
    material and the limits. The host builds the drawing from it on its worker
    (`OpenEnvironment::new_drawing` on native hosts) for the pending New request.
    Adoption names the drawing with `inherit_new_drawing_name`.
-5. `Cancel`, or `Back` on the main page, closes the dialog; the host completes
+5. `Back` leaves preset naming, clears a nonempty preset search, then closes the
+   drawer. `Cancel`, or `Back` on the main page, closes the dialog; the host completes
    the New request as cancelled.
 
 GTK is the reference presentation: [`new_drawing.rs`](../../apps/layer-linux/src/new_drawing.rs)

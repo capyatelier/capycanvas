@@ -568,6 +568,7 @@ impl NewDrawingDialog {
             NewDrawingAction::CloseDrawer => self.drawer = None,
             NewDrawingAction::Back => match &mut self.drawer {
                 Some(Drawer::Presets(browser)) if browser.save.is_some() => browser.save = None,
+                Some(Drawer::Presets(browser)) if !browser.query.is_empty() => browser.query.clear(),
                 _ => self.drawer = None,
             },
             NewDrawingAction::Tab { index } => {
@@ -752,6 +753,30 @@ mod tests {
         act(&mut s, NewDrawingAction::Back);
         assert!(s.state.new_drawing.is_none());
         assert!(s.new_drawing_order().is_none());
+    }
+
+    #[test]
+    fn back_leaves_naming_then_search_then_the_drawer_on_every_platform() {
+        for platform in Platform::ALL {
+            let mut s = session(platform);
+            open(&mut s);
+            act(&mut s, NewDrawingAction::Presets);
+            act(&mut s, NewDrawingAction::Search { query: "chalk".into() });
+            act(&mut s, NewDrawingAction::SaveAs);
+            assert!(browser(&s).save.is_some());
+            act(&mut s, NewDrawingAction::Back);
+            assert!(browser(&s).save.is_none(), "{platform:?}: Back first leaves preset naming");
+            assert_eq!(browser(&s).query, "chalk", "{platform:?}: leaving naming keeps the search");
+            act(&mut s, NewDrawingAction::Back);
+            assert!(matches!(view(&s).drawer, Some(NewDrawingDrawerView::Presets(_))), "{platform:?}: Back clears search before closing its drawer");
+            assert_eq!(browser(&s).query, "");
+            assert!(browser(&s).tabs_enabled);
+            act(&mut s, NewDrawingAction::Back);
+            assert!(view(&s).drawer.is_none());
+            act(&mut s, NewDrawingAction::Back);
+            assert!(s.state.new_drawing.is_none());
+            assert!(s.new_drawing_order().is_none());
+        }
     }
 
     #[test]

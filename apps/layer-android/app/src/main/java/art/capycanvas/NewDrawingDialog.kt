@@ -157,10 +157,6 @@ private class DrawerMemory { var shown: JSONObject? = null; var open = false; va
     if (drawer != null) { if (!memory.open) memory.opening++; memory.shown = drawer }
     memory.open = drawer != null
     val wide = minOf(720, LocalConfiguration.current.screenWidthDp - 32).dp >= WideDialog
-    fun back() {
-        val query = drawer?.takeIf { it.getString("kind") == "presets" && it.isNull("save") }?.getString("query").orEmpty()
-        if (query.isEmpty()) actions.send("back") else { focus.clearFocus(); actions.send("search", "query" to "") }
-    }
     fun accept() {
         when (drawer?.getString("kind")) {
             null -> if (view.getBoolean("can_create")) actions.create()
@@ -174,7 +170,7 @@ private class DrawerMemory { var shown: JSONObject? = null; var open = false; va
         val kind = drawer?.getString("kind")
         if (host.textComposition.owns(event)) false
         else when (event.keyCode) {
-            AndroidKeyEvent.KEYCODE_ESCAPE -> if (actions.typing() || (kind == "paper_color" && host.editingText)) false else { if (pressed) back(); true }
+            AndroidKeyEvent.KEYCODE_ESCAPE -> if (actions.typing() || (kind == "paper_color" && host.editingText)) false else { if (pressed) actions.send("back"); true }
             AndroidKeyEvent.KEYCODE_ENTER, AndroidKeyEvent.KEYCODE_NUMPAD_ENTER ->
                 if (host.editingText || kind == "paper_color" || (kind == "paper" && actions.importFocused)) false else { if (pressed) accept(); true }
             else -> false

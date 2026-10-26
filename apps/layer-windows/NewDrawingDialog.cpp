@@ -307,7 +307,6 @@ struct NewDrawingDialog::Impl:std::enable_shared_from_this<Impl>{
             if(self->programmatic||self->stopping)return;
             e.Cancel(true);
             if(self->form&&self->form->escape())return;
-            if(self->presetsDrawer.open&&self->search.FocusState()!=FocusState::Unfocused&&!self->search.Text().empty()){self->search.Text(L"");return;}
             self->send(op(L"back"));
         }});
         watchPaperPreviews(data,weak_from_this(),[weak]{if(auto self=weak.lock())self->refreshArt();});

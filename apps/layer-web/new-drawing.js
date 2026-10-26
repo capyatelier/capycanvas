@@ -218,8 +218,8 @@ export function createNewDrawing({app, state, applyChange, element, button, icon
     const search = element('input'); search.id = 'new-drawing-search'; search.type = 'search'; search.autocomplete = 'off'; search.spellcheck = false;
     search.addEventListener('input', () => send({op:'search', query:search.value}));
     search.addEventListener('keydown', e => {
-      if (e.key !== 'Escape' || !search.value || composingKey(e)) return;
-      e.preventDefault(); e.stopPropagation(); search.value = ''; send({op:'search', query:''});
+      if (e.key !== 'Escape' || composingKey(e)) return;
+      e.preventDefault(); e.stopPropagation(); send({op:'back'});
     });
     const searchBox = element('label', 'new-drawing-search'); searchBox.append(icon('search'), search);
     const searchHead = element('div', 'new-drawing-drawer-head'); searchHead.append(searchBox);

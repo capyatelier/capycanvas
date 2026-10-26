@@ -351,9 +351,7 @@ private struct NewDrawingDialog: View {
         }.accessibilityElement(children: .contain).accessibilityIdentifier("new-drawing-browser")
             .onKeyPress(.escape) {
                 guard !NativeTextContext.composing else { return .ignored }
-                if !drawer["save"].isNull { send(["op": "back"]) }
-                else if !query.isEmpty { query = ""; send(["op": "search", "query": ""]) }
-                else { send(["op": "back"]) }
+                send(["op": "back"])
                 return .handled
             }
     }
