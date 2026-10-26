@@ -164,12 +164,21 @@ membership, preferences, widths and ordinary split ratios are saved. Completed
 stacking and resizing gestures each produce one workspace undo step, with
 cancellation restoring the previous state.
 
-A closed stack containing multiple columns has a fixed sidebar width. Its
-outer divider has no resize affordance; dragging it, nudging it with the
-keyboard or resetting its width cannot expand the aggregate tree. Open a member
-with a tile, then resize its canvas-facing edge. That changes only the open
+A closed stack containing multiple columns has a fixed sidebar width. Dragging
+its outer edge 36 logical pixels toward the canvas opens the member level with
+the contact, without a history entry; reversing before the open edge closes it
+again. Past the open edge, the same drag resizes that member's canvas-facing
+edge, as it does after opening a member with a tile. That changes only the open
 member's remembered width and stops at its panels' minimum width, preserving
-the stack, its other members and the existing undo/cancel behavior.
+the stack, its other members and the existing undo/cancel behavior. Nudging the
+closed edge with the keyboard or resetting its width cannot expand the aggregate
+tree. With “Open individual panels” enabled no member column opens, so the edge
+has no resize affordance.
+
+Dragging an open member's edge inward past 108 logical pixels beyond its
+minimum width, or down to the icon-strip width, closes the member like its tile
+does; reversing the same drag reopens it. Closing keeps the width from before
+the drag and adds no layout history.
 
 Old Group panel settings migrate to “Open individual panels” disabled. The
 custom all-tabs renderer, per-panel height weights and dedicated resize actions
@@ -180,8 +189,8 @@ except that Paint opens its right stack on load. Photo and Paint's stacks are
 described in [default workspaces](default-workspaces.md#arrangements).
 
 Apple uses the ordinary SwiftUI dock groups, dividers and drawer connector shape
-for full-column opening. Column grips expose the shared stack preferences, and
-closed aggregate dividers have no native resize source.
+for full-column opening. Column grips expose the shared stack preferences.
+Every host omits the resize source of a divider that Rust publishes as `fixed`.
 
 On GTK, Web and Android, dropping a panel, toolbar, tab group or column in the menu/title bar
 prepends it to the side column directly below the pointer, except in the

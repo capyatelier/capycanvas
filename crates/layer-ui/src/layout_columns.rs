@@ -700,11 +700,6 @@ impl DockLayout {
         if !viewport.into_iter().all(|v| v.is_finite() && v > 0.) {
             return Err("Invalid workspace size".into());
         }
-        let index = self
-            .bands
-            .iter()
-            .position(|b| b.id == id && matches!(b.edge, Edge::Left | Edge::Right))
-            .ok_or("This divider has no side column")?;
         let resolved = self.resolved(viewport);
         if let Some(member) = resolved.open_column_at_divider(id) {
             let mut tree = self.node(member).ok_or("Unknown open column")?.clone();
@@ -717,17 +712,23 @@ impl DockLayout {
             *self.node_mut(member).unwrap() = tree;
             return Ok(());
         }
-        if resolved.dividers.iter().find(|d| d.id == id)
-            .is_some_and(|d| self.fixed_stack_divider(d))
-        {
+        let divider = resolved.dividers.iter().find(|d| d.id == id).ok_or("Unknown divider")?;
+        if self.fixed_stack_divider(divider) {
             return Ok(());
         }
-        let mut root = self.bands[index].root.clone();
-        let bounds = subtree_bounds(&root, &resolved).ok_or("The column is not visible")?;
-        self.collapsed.retain(|c| c.root != root.id());
-        let width = default_column_width(&mut root, bounds.height, viewport[0], self);
-        self.bands[index].extent = if root.has_content() { 0. } else { width + WORKSPACE_SPACING };
-        self.bands[index].root = root;
+        let (column, _) = self.divider_column(divider).ok_or("This divider has no side column")?;
+        let mut tree = self.node(column).ok_or("Unknown column")?.clone();
+        let bounds = subtree_bounds(&tree, &resolved).ok_or("The column is not visible")?;
+        self.collapsed.retain(|c| c.root != column);
+        let width = default_column_width(&mut tree, bounds.height, viewport[0], self);
+        let automatic = tree.has_content();
+        *self.node_mut(column).unwrap() = tree;
+        let band = self.bands.iter_mut().find(|b| b.root.find(column).is_some()).unwrap();
+        band.extent = if automatic && band.root.id() == column {
+            0.
+        } else {
+            column_width(&mut band.root, column, width, &resolved).unwrap() + WORKSPACE_SPACING
+        };
         Ok(())
     }
 
@@ -819,41 +820,11 @@ impl DockLayout {
     /// Follow horizontal splits so a band's outside handle can also open its
     /// outermost collapsed column. Vertical groups contain no collapsed columns.
     pub(crate) fn collapsed_divider_columns(&self, divider: &Divider) -> [Option<u32>; 2] {
-        fn edge_column(layout: &DockLayout, node: &DockNode, right: bool) -> Option<u32> {
-            if layout.is_collapsed(node.id()) {
-                return Some(node.id());
-            }
-            if let DockNode::Split {
-                axis: Axis::Horizontal,
-                first,
-                second,
-                ..
-            } = node
-            {
-                edge_column(layout, if right { second } else { first }, right)
-            } else {
-                None
-            }
+        let mut columns = [None; 2];
+        if let Some((column, edge)) = self.divider_column(divider).filter(|(column, _)| self.is_collapsed(*column)) {
+            columns[usize::from(edge == Edge::Right)] = Some(column);
         }
-        if divider.axis != Axis::Horizontal {
-            return [None; 2];
-        }
-        if divider.band {
-            let Some(band) = self.bands.iter().find(|b| b.id == divider.id) else {
-                return [None; 2];
-            };
-            let mut columns = [None; 2];
-            columns[usize::from(divider.reversed)] =
-                edge_column(self, &band.root, !divider.reversed);
-            columns
-        } else if let Some(DockNode::Split { first, second, .. }) = self.node(divider.id) {
-            [
-                edge_column(self, first, true),
-                edge_column(self, second, false),
-            ]
-        } else {
-            [None; 2]
-        }
+        columns
     }
 
     /// A closed stack has no column body whose width could be changed.
@@ -865,6 +836,97 @@ impl DockLayout {
         })
     }
 
+    pub(crate) fn divider_column(&self, divider: &Divider) -> Option<(u32, Edge)> {
+        fn split_on_chain(node: &DockNode, id: u32) -> Option<&DockNode> {
+            match node {
+                DockNode::Split { id: split, axis: Axis::Horizontal, first, second, .. } => {
+                    if *split == id { Some(node) } else { split_on_chain(first, id).or_else(|| split_on_chain(second, id)) }
+                }
+                _ => None,
+            }
+        }
+        if divider.axis != Axis::Horizontal {
+            return None;
+        }
+        let band = self.bands.iter().find(|b| if divider.band { b.id == divider.id } else { b.root.find(divider.id).is_some() })?;
+        if band.alignment.is_some() || !matches!(band.edge, Edge::Left | Edge::Right) {
+            return None;
+        }
+        let left = band.edge == Edge::Left;
+        let mut node = if divider.band {
+            &band.root
+        } else {
+            let DockNode::Split { first, second, .. } = split_on_chain(&band.root, divider.id)? else { return None };
+            if left { first } else { second }
+        };
+        while let DockNode::Split { axis: Axis::Horizontal, first, second, .. } = node {
+            node = if left { second } else { first };
+        }
+        Some((node.id(), band.edge))
+    }
+
+    pub(crate) fn divider_owner(&self, divider: &Divider) -> Option<Edge> {
+        if divider.band {
+            self.bands.iter().find(|b| b.id == divider.id).map(|b| b.edge)
+        } else {
+            self.divider_column(divider).map(|(_, edge)| edge)
+        }
+    }
+
+    pub(super) fn resize_column_edge(&mut self, divider: &Divider, delta: f32, geometry: &ResolvedLayout) -> bool {
+        fn groups(node: &DockNode, out: &mut Vec<u32>) {
+            match node {
+                DockNode::Tabs { id, .. } => out.push(*id),
+                DockNode::Split { first, second, .. } => { groups(first, out); groups(second, out); }
+            }
+        }
+        let Some((column, edge)) = self.divider_column(divider) else { return false };
+        let Some(bounds) = self.node(column).and_then(|node| subtree_bounds(node, geometry)) else { return false };
+        let node = self.node(column).unwrap();
+        let mut width = (bounds.width + if edge == Edge::Left { delta } else { -delta }).max(self.column_min_width(node, bounds.height));
+        let mut affected = Vec::new();
+        groups(node, &mut affected);
+        self.fit_tab_groups.retain(|g| !affected.contains(g));
+        let band = self.bands.iter_mut().find(|b| b.root.find(column).is_some()).unwrap();
+        let mut extent = column_width(&mut band.root, column, width, geometry).unwrap() + WORKSPACE_SPACING;
+        if extent > 800. {
+            width -= extent - 800.;
+            extent = column_width(&mut band.root, column, width, geometry).unwrap() + WORKSPACE_SPACING;
+        }
+        band.extent = extent.max(TILE_SIZE + WORKSPACE_SPACING);
+        true
+    }
+
+    pub(crate) fn divider_opens_member(&self, divider: &Divider) -> bool {
+        self.collapsed_divider_columns(divider)
+            .into_iter()
+            .flatten()
+            .any(|column| self.column_stack(column).members.len() > 1 && !self.column_stack(column).drawers)
+    }
+
+    pub(crate) fn open_column_minimum(&self, column: u32) -> f32 {
+        self.node(column).map_or(128., |node| expanded_node_width(node, self, DockLayout::group_preferred_width).clamp(128., 800.))
+    }
+
+    pub(crate) fn close_at_open_divider(&self, geometry: &ResolvedLayout, id: u32, position: [f32; 2], viewport_width: f32) -> Option<ResizeCollapse> {
+        let column = geometry.open_column_at_divider(id)?;
+        let open = geometry.collapsed.iter().find_map(|c| c.open.as_ref().filter(|o| o.column == column))?;
+        let reversed = open.direction == Edge::Left;
+        let collapse = ResizeCollapse {
+            root: column,
+            expanded_width: self.expanded_column_width(column, viewport_width),
+            origin: if reversed {
+                open.bounds.x + open.bounds.width - WORKSPACE_SPACING * 0.5
+            } else {
+                open.bounds.x + WORKSPACE_SPACING * 0.5
+            },
+            reversed,
+            minimum: self.open_column_minimum(column),
+            member: true,
+        };
+        collapse.contains(position[0]).then_some(collapse)
+    }
+
     pub(crate) fn collapse_at_divider(
         &self,
         id: u32,
@@ -872,47 +934,27 @@ impl DockLayout {
         viewport: [f32; 2],
     ) -> Option<ResizeCollapse> {
         let geometry = self.resolved(viewport);
-        let divider = geometry
-            .dividers
-            .iter()
-            .find(|d| d.id == id && d.axis == Axis::Horizontal)?;
-        let collapse = |node: &DockNode, reversed: bool| {
-            if self.is_collapsed(node.id()) || !self.is_top_level_column(node.id()) {
-                return None;
-            }
-            let minimum = tab_preferred_width(node, self).max(ribbon_preferred_width(
-                node,
-                Axis::Vertical,
-                divider.parent.height,
-                self,
-            ));
-            let collapse = ResizeCollapse {
-                root: node.id(),
-                expanded_width: subtree_bounds(node, &geometry)?.width,
-                origin: if reversed {
-                    divider.parent.x + divider.parent.width - WORKSPACE_SPACING * 0.5
-                } else {
-                    divider.parent.x + WORKSPACE_SPACING * 0.5
-                },
-                reversed,
-                minimum,
-            };
-            collapse.contains(position[0]).then_some(collapse)
-        };
-        let collapse = if divider.band {
-            let node = &self.bands.iter().find(|b| b.id == id)?.root;
-            collapse(node, divider.reversed)?
-        } else {
-            let DockNode::Split { first, second, .. } = self.node(id)? else {
-                return None;
-            };
-            collapse(first, false).or_else(|| collapse(second, true))?
-        };
-        if matches!(self.node(collapse.root)?, DockNode::Tabs { panels, active, .. } if panels.len() == 1 && active.kind() == PanelKind::Tiles)
-        {
+        let divider = geometry.dividers.iter().find(|d| d.id == id)?;
+        let (column, edge) = self.divider_column(divider)?;
+        let node = self.node(column)?;
+        if self.is_collapsed(column) || !node.has_content() {
             return None;
         }
-        Some(collapse)
+        let bounds = subtree_bounds(node, &geometry)?;
+        let reversed = edge == Edge::Right;
+        let collapse = ResizeCollapse {
+            root: column,
+            expanded_width: bounds.width,
+            origin: if reversed {
+                bounds.x + bounds.width - WORKSPACE_SPACING * 0.5
+            } else {
+                bounds.x + WORKSPACE_SPACING * 0.5
+            },
+            reversed,
+            minimum: tab_preferred_width(node, self).max(ribbon_preferred_width(node, Axis::Vertical, divider.parent.height, self)),
+            member: false,
+        };
+        collapse.contains(position[0]).then_some(collapse)
     }
 
     pub(super) fn validate_columns(&self) -> Result<(), String> {
@@ -1399,20 +1441,26 @@ mod tests {
     }
 
     #[test]
-    fn resize_collapse_uses_top_level_columns_only() {
+    fn resize_collapse_acts_on_the_column_on_the_screen_side_of_each_edge() {
         let mut layout = DockLayout::default();
         let DockNode::Split { axis, .. } = &mut layout.bands[0].root else {
             unreachable!();
         };
         *axis = Axis::Horizontal;
+        assert_eq!(layout.bands[0].edge, Edge::Left);
         assert_collapse_threshold(&layout, 4, 5, false, (TOOL_PANEL_MIN_WIDTH - 108.).max(TILE_SIZE), true);
-        // Brush size has no content minimum: the existing icon-width trigger
-        // still wins for this narrow column.
-        assert_collapse_threshold(&layout, 4, 6, true, TILE_SIZE, true);
-
-        // The combined side-by-side tree is not another collapsible column.
-        let d = geometry(&layout).dividers.into_iter().find(|d| d.id == 3).unwrap();
-        assert_eq!(layout.collapse_at_divider(3, [d.parent.x + TILE_SIZE, d.bounds.y], VIEW), None);
+        let r = geometry(&layout);
+        let edge = r.dividers.iter().find(|d| d.id == 3).unwrap();
+        let inner = r.groups.iter().find(|g| g.id == 6).unwrap().bounds;
+        let at = |width: f32| [inner.x + width + WORKSPACE_SPACING * 0.5, edge.bounds.y + 20.];
+        assert_eq!(layout.collapse_at_divider(3, at(TILE_SIZE), VIEW).map(|c| c.root), Some(6), "the band edge collapses the column touching it");
+        assert_eq!(layout.collapse_at_divider(3, at(TILE_SIZE + 0.5), VIEW), None);
+        let gap = r.dividers.iter().find(|d| d.id == 4).unwrap();
+        assert_eq!(
+            layout.collapse_at_divider(4, [gap.parent.x + gap.parent.width - 1., gap.bounds.y + 20.], VIEW),
+            None,
+            "the gap between columns belongs to the outer column and never collapses the inner one"
+        );
     }
 
     #[test]

@@ -118,7 +118,7 @@ pub(crate) fn gesture_pointer_kind(gesture: &impl IsA<gtk::Gesture>) -> PointerK
     gesture.last_event(gesture.last_updated_sequence().as_ref()).map_or(PointerKind::Mouse, |event| pointer_kind(&event))
 }
 
-fn pointer_kind(event: &gdk::Event) -> PointerKind {
+pub(crate) fn pointer_kind(event: &gdk::Event) -> PointerKind {
     if event.device_tool().is_some() || event.device().is_some_and(|d| d.source() == gdk::InputSource::Pen) {
         PointerKind::Pen
     } else if event.device().is_some_and(|d| d.source() == gdk::InputSource::Touchscreen) {
@@ -162,6 +162,19 @@ unsafe extern "C" fn scrollbar_input_before_dispatch(
         }
     });
     1
+}
+
+pub(crate) fn swipe_control(widget: &gtk::Widget) -> bool {
+    let controllers = widget.observe_controllers();
+    widget.has_css_class("workspace-reorder-handle")
+        || widget.has_css_class("document-tab")
+        || widget.has_css_class("panel-grip")
+        || widget.is::<gtk::Range>() || widget.is::<gtk::Editable>()
+        || widget.is::<crate::number_control::NumberControl>()
+        || !widget.is::<gtk::ScrolledWindow>() && !widget.is::<crate::swipe_row::SwipeRow>()
+            && (0..controllers.n_items()).filter_map(|i| controllers.item(i)).any(|c| {
+                c.is::<gtk::GestureDrag>() || c.is::<gtk::GestureSwipe>() || c.is::<gtk::GestureStylus>()
+            })
 }
 
 /// GTK's built-in kinetic scrolling only accepts touchscreen sequences. Give
@@ -1037,6 +1050,19 @@ impl Input {
                 }
             }
         ));
+    }
+    pub(crate) fn cancel_touch(&self, workspace: &Rc<Workspace>, sequence: &gdk::EventSequence, time: u32) {
+        let Some(id) = self.touches.borrow_mut().remove(sequence) else { return };
+        self.picker_hold.input(workspace, id, ContactPhase::Cancel, [0.; 2], self.touches.borrow().len());
+        workspace.interact(UiInput::Pointer {
+            id,
+            phase: ContactPhase::Cancel,
+            kind: PointerKind::Touch,
+            button: PointerButton::Primary,
+            position: [0.; 2],
+            time_ns: self.timestamp(time),
+        });
+        self.touch_points.borrow_mut().remove(&id);
     }
     fn cancel(&self, workspace: &Rc<Workspace>) {
         self.picker_hold.cancel();

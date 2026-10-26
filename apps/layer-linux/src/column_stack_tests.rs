@@ -663,10 +663,17 @@ fn native_stack_drop_input(append: bool) {
                             event("move", destination),
                             event("up", destination)
                         ]));
+                        let layout = state(&w).workspace.layout;
+                        assert_eq!(layout.panel_group(Panel::Layers), before.panel_group(Panel::Layers),
+                            "collapsed tiles cannot reorder before holding");
+                        if layer_ui::durable_layout(&layout) != before {
+                            w.dispatch(UiAction::Invoke { command: CommandId::UndoWorkspace });
+                            pump(150);
+                        }
                         assert_eq!(
                             layer_ui::durable_layout(&state(&w).workspace.layout),
                             before,
-                            "collapsed tiles cannot reorder before holding"
+                            "an unheld swipe from a collapsed tile only grabs its column edge"
                         );
                     }
                     input.perform(serde_json::json!([event("down", start)]));

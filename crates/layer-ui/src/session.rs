@@ -3931,6 +3931,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                                 drag.phase = ResizeDragPhase::Expand {
                                     columns,
                                     edge: divider.bounds.x + divider.bounds.width * 0.5,
+                                    cross: position[1],
                                 };
                             }
                         }
@@ -4613,21 +4614,19 @@ impl<R: CanvasRenderer> UiSession<R> {
         drag: &mut ResizeDrag,
     ) -> Result<(), String> {
         let point = drag.position(position);
-        let resolved = self.layout(viewport);
-        if resolved.dividers.iter().find(|d| d.id == id)
-            .is_some_and(|d| self.state.workspace.layout.fixed_stack_divider(d))
-        {
+        let mut resolved = self.layout(viewport);
+        if resolved.dividers.iter().find(|d| d.id == id).is_some_and(|d| d.fixed) {
             return Ok(());
         }
-        let projected = resolved.open_column_at_divider(id).is_some()
-            || resolved.collapsed.iter().filter_map(|c| c.open.as_ref()).any(|o| {
-                self.state.workspace.layout.column_contains(o.column, id)
-            });
-        if projected { return self.state.workspace.layout.resize_workspace(id, point, viewport); }
-
+        let initial = drag.phase;
         loop {
             match drag.phase {
-                ResizeDragPhase::Resizing => break,
+                ResizeDragPhase::Resizing => {
+                    if !matches!(initial, ResizeDragPhase::Resizing) {
+                        resolved = self.layout(viewport);
+                    }
+                    break;
+                }
                 ResizeDragPhase::Collapsed(collapse) => {
                     if collapse.contains(point[0]) {
                         return Ok(());
@@ -4643,10 +4642,14 @@ impl<R: CanvasRenderer> UiSession<R> {
                     {
                         column.expanded_width = collapse.expanded_width;
                     }
-                    layout.set_column_collapsed(collapse.root, false, viewport)?;
+                    if collapse.member {
+                        layout.column_stack_mut(collapse.root).open_column = Some(collapse.root);
+                    } else {
+                        layout.set_column_collapsed(collapse.root, false, viewport)?;
+                    }
                     drag.phase = ResizeDragPhase::Resizing;
                 }
-                ResizeDragPhase::Expand { columns, edge } => {
+                ResizeDragPhase::Expand { columns, edge, cross } => {
                     let delta = point[0] - edge;
                     // Opening uses a fixed 36 logical pixels of outward movement,
                     // independent of the column's saved or minimum width.
@@ -4657,16 +4660,28 @@ impl<R: CanvasRenderer> UiSession<R> {
                     let Some(root) = columns[usize::from(reversed)] else {
                         return Ok(());
                     };
-                    self.state
-                        .workspace
-                        .layout
-                        .expand_column_for_resize(root, viewport)?;
+                    let stack = self.state.workspace.layout.column_stack(root);
+                    if stack.members.len() > 1 {
+                        let reach = |c: &CollapsedColumnPlacement| c.bounds.distance_to([c.bounds.x, cross]);
+                        let member = self.layout(viewport).collapsed.iter()
+                            .filter(|c| c.stack == stack.column)
+                            .min_by(|a, b| reach(a).total_cmp(&reach(b)))
+                            .map(|c| c.id)
+                            .ok_or("The stack has no visible member")?;
+                        self.state.workspace.layout.column_stack_mut(root).open_column = Some(member);
+                    } else {
+                        self.state
+                            .workspace
+                            .layout
+                            .expand_column_for_resize(root, viewport)?;
+                    }
                     let divider = self.divider(id, viewport)?;
                     drag.phase = ResizeDragPhase::CatchUp {
                         columns,
                         collapsed_edge: edge,
                         edge: divider.bounds.x + divider.bounds.width * 0.5,
                         reversed,
+                        cross,
                     };
                 }
                 ResizeDragPhase::CatchUp {
@@ -4674,6 +4689,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     collapsed_edge,
                     edge,
                     reversed,
+                    cross,
                 } => {
                     if if reversed {
                         point[0] <= edge
@@ -4704,6 +4720,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         drag.phase = ResizeDragPhase::Expand {
                             columns,
                             edge: collapsed_edge,
+                            cross,
                         };
                         // The same event can already be past the opposite opening
                         // threshold when both neighbors started collapsed.
@@ -4711,6 +4728,25 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
             }
         }
+        if let Some(mut close) = self.state.workspace.layout.close_at_open_divider(&resolved, id, point, viewport[0]) {
+            let original = self.workspace_history.gesture_start()
+                .and_then(|s| s.layout.collapsed.iter().find(|c| c.root == close.root).map(|c| c.expanded_width));
+            let layout = &mut self.state.workspace.layout;
+            if let Some(width) = original {
+                close.expanded_width = width;
+                if let Some(column) = layout.collapsed.iter_mut().find(|c| c.root == close.root) {
+                    column.expanded_width = width;
+                }
+            }
+            layout.column_stack_mut(close.root).open_column = None;
+            drag.phase = ResizeDragPhase::Collapsed(close);
+            return Ok(());
+        }
+        let projected = resolved.open_column_at_divider(id).is_some()
+            || resolved.collapsed.iter().filter_map(|c| c.open.as_ref()).any(|o| {
+                self.state.workspace.layout.column_contains(o.column, id)
+            });
+        if projected { return self.state.workspace.layout.resize_workspace(id, point, viewport); }
         let collapse = self.state.workspace.layout.collapse_at_divider(id, point, viewport);
         if let Some(collapse) = collapse {
             let root = collapse.root;
@@ -14010,7 +14046,7 @@ mod tests {
     }
 
     #[test]
-    fn reversing_an_opening_can_open_the_opposite_collapsed_neighbor_in_one_move() {
+    fn reversing_an_opening_closes_it_without_opening_the_inner_neighbor() {
         for right in [false, true] {
             // Open the anchored subcolumn first so its edge moves outward.
             let mut t = CollapsedResizeTest::new(right, Some(right));
@@ -14037,7 +14073,7 @@ mod tests {
             assert!(t.edge_distance() > 36.);
             t.drag(ContactPhase::Move, -36.);
             assert!(t.session.state.workspace.layout.is_collapsed(t.root));
-            assert!(!t.session.state.workspace.layout.is_collapsed(other));
+            assert!(t.session.state.workspace.layout.is_collapsed(other), "the gap belongs to the outer column");
             t.drag(ContactPhase::Cancel, -36.);
             assert_eq!(t.session.state.workspace, before);
         }
@@ -14046,7 +14082,7 @@ mod tests {
     #[test]
     fn drag_collapse_reverses_at_its_original_threshold_without_an_edge_wait() {
         for right in [false, true] {
-            for nested in [None, Some(false), Some(true)] {
+            for nested in [None, Some(right)] {
                 for finish in 0..3 {
                     let mut t = CollapsedResizeTest::new(right, nested);
                     t.session
@@ -14167,19 +14203,25 @@ mod tests {
     }
 
     #[test]
-    fn nested_collapsed_dividers_wait_then_open_the_requested_side() {
+    fn a_gap_between_columns_waits_then_opens_only_its_outer_column() {
         for right in [false, true] {
-            for second in [false, true] {
-                let mut t = CollapsedResizeTest::new(right, Some(second));
-                t.check_opening(false);
+            CollapsedResizeTest::new(right, Some(right)).check_opening(false);
+            let mut inner = CollapsedResizeTest::new(right, Some(!right));
+            let before = inner.session.state.workspace.clone();
+            inner.drag(ContactPhase::Down, 0.);
+            for distance in [36., 100., 200.] {
+                inner.drag(ContactPhase::Move, distance);
+                assert!(inner.session.state.workspace.layout.is_collapsed(inner.root), "the inner column opens from its own edge");
             }
+            inner.drag(ContactPhase::Cancel, 0.);
+            assert_eq!(inner.session.state.workspace, before);
         }
     }
 
     #[test]
     fn adjacent_collapsed_columns_do_not_latch_the_expanding_neighbor() {
         for right in [false, true] {
-            for second in [false, true] {
+            for second in [right] {
                 let mut t = CollapsedResizeTest::new(right, Some(second));
                 let other = if second { 5 } else { 6 };
                 t.session

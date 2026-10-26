@@ -118,6 +118,8 @@ mod workspace_drop_size;
 mod workspace_motion;
 #[path = "workspace_resize_tests.rs"]
 mod workspace_resize;
+#[path = "workspace_edge_grab_tests.rs"]
+mod workspace_edge_grab;
 #[path = "fullscreen_tests.rs"]
 mod fullscreen;
 #[path = "screen_view_tests.rs"]
@@ -4893,7 +4895,7 @@ fn command(w: &Workspace, id: CommandId) -> gtk::Button {
     panic!("No native control for {id:?}");
 }
 fn double_press_handle(w: &Rc<Workspace>, point: [f32; 2]) -> bool {
-    let Some(action) = w.handle_double_press_action(point) else {
+    let Some(action) = w.handle_double_press_action(point, PointerKind::Mouse) else {
         return false;
     };
     w.workspace_drag_input(ContactPhase::Cancel, point, None);

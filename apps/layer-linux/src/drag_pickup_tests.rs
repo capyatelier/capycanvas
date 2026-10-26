@@ -165,14 +165,11 @@ fn native_drag_pickup_input() {
                     }
                     input.perform(serde_json::json!([contact(device, "move", point)]));
                     let expected = held || !source.ends_with("tile") && source != "column";
-                    assert_eq!(
-                        w.workspace_drag
-                            .borrow()
-                            .as_ref()
-                            .is_some_and(|d| d.started),
-                        expected,
-                        "touch={touch} {source} held={held}: pickup"
-                    );
+                    let started = |edge: bool| w.workspace_drag.borrow().as_ref()
+                        .is_some_and(|d| d.started && matches!(d.target, DragTarget::Divider(_)) == edge);
+                    assert_eq!(started(false), expected, "touch={touch} {source} held={held}: pickup");
+                    let edge = !held && source == "column";
+                    assert_eq!(started(true), edge, "touch={touch} {source} held={held}: an unheld swipe from a collapsed icon grabs its column edge");
                     if !touch && expected {
                         assert_eq!(cursor().as_deref(), Some("grabbing"), "{source}: dragging cursor");
                     }
@@ -206,6 +203,10 @@ fn native_drag_pickup_input() {
                         pump(150);
                         assert_eq!(saved(), after, "single redo");
                     } else {
+                        if edge && !cancel && saved() != before {
+                            w.dispatch(UiAction::Invoke { command: CommandId::UndoWorkspace });
+                            pump(150);
+                        }
                         assert_eq!(saved(), before, "cancel/unheld tile cannot move");
                     }
                 }

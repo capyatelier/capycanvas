@@ -473,6 +473,9 @@ the status display.
 ## Checks
 
 ```sh
+cargo test --locked -p layer-ui --lib edge_grab
+bash tools/performance/workspace-motion.sh gtk --native-test=native_edge_grab_columns_input --tablet
+bash tools/performance/workspace-motion.sh gtk --native-test=native_edge_grab_panels_input --tablet
 cargo test -p layer-linux native_group_tab_styles -- --ignored --test-threads=1
 cargo test --release -p layer-linux native_panel_customization -- --ignored --test-threads=1
 cargo test --release -p layer-linux native_panel_expansion -- --ignored --test-threads=1
@@ -492,13 +495,76 @@ with native Compose input, including `toolbarManagerSelectsConfirmsDeletesAndRes
 
 ## Collapsed columns
 
-Dragging an expanded side column's divider inward collapses the column after
-108 logical pixels (three small tiles) past its fitted width limit. Narrow columns
+Dragging an expanded side column's edge toward the screen edge collapses the
+column on that edge's screen side after 108 logical pixels (three small tiles)
+past its fitted width limit; see [edge reach](#edge-reach). Narrow columns
 collapse at the 36-pixel icon-strip width when that keeps the trigger reachable.
 Reversing the same drag across its collapse boundary opens the column again. A
 drag that starts collapsed opens after 36 logical pixels outward. Collapse retains
 the width from before the gesture; resizing, collapse and reversal share one
 workspace undo step.
+
+### Edge reach
+
+Dock dividers and floating panel edges reach past their thin handles. Every
+edge has an owner, the thing it resizes, and acts on nothing else:
+
+| Edge | Owner | Moving away from the screen edge |
+| --- | --- | --- |
+| Column edge, including the gap between side-by-side columns | The column on its screen-edge side; columns farther in keep their widths | Grows the owner, or opens it when closed |
+| Gap between groups in a column | Both groups, in proportion | Moves the gap |
+| Top or bottom toolbar band edge, including the Commands bar | The toolbar band | Adds lanes |
+| Floating panel left, right or bottom edge, or bottom corner | The panel | Grows the panel |
+
+Moving toward the screen edge shrinks the owner. Past 108 logical pixels beyond
+its minimum, or at the icon-strip width, a column holding a panel collapses and
+an open stack member closes; reversing reopens it. Columns of toolbars never
+collapse and stop at one lane.
+
+Each side of an edge reaches by ownership:
+
+| Side of the edge | Reach |
+| --- | --- |
+| Its owner: a column | 36 logical pixels, or a closed strip's whole width except member grips |
+| Its owner: a panel or toolbar, for vertical resizing | 24 pixels when it scrolls, 36 when it fits |
+| Its owner: a tab strip, for vertical resizing | The strip's top 6 pixels, except the trailing tile with the group grip |
+| Not its owner: the canvas | 36 pixels for touch; pen and mouse draw or navigate there |
+| Not its owner: other chrome | None beyond the 6-pixel handle |
+
+A floating panel reaches 36 pixels inside its left and right edges and 24 or 36
+inside its bottom edge; where those meet, the drag resizes the bottom corner.
+Its tab strip stays the place to move it, and outside it pen and mouse keep the
+6-pixel handles.
+
+A contact in an edge's reach grabs it after travelling a third of a tile (12
+logical pixels) along the resize axis and at least twice as far as across it; a
+floating corner takes any 12 pixels. Near two edges, the direction chooses.
+Other first movements leave the contact to the control beneath it. Once grabbed
+the edge never moves against the contact: moving away from it, the edge eases
+after the contact over 150 ms; moving toward it, the edge waits until the
+contact arrives. The drag is then the handle's own drag, with one undo step,
+and mouse and pen show its resize pointer until release.
+
+Controls keep what they already drag. Grips, sliders, text fields, tool tiles
+that tear off bubbles, the Navigator, color fields, curve and gradient editors,
+palette colors and reorder handles keep every swipe. Tab strips, layer rows and
+rows that tear off bubbles keep sideways swipes but yield vertical ones beside
+an edge that resizes vertically. Until such a contact decides, the panel does
+not scroll, rows do not tear off, tabs do not move, and a press on a tab strip
+selects its tab on release. Hold-to-drag tiles yield before their hold arms.
+
+Double-clicking or double-tapping in a column edge's reach resets its owner to
+its preferred width, except on buttons, rows and swipe controls.
+
+Rust owns ownership (`DockLayout::divider_column`, published as
+`Divider::owner_side`), reach (`ResolvedLayout::edge_grab_at`, `edge_reset_at`),
+recognition (`EdgeGrab::track`) and catch-up (`EdgeGrab::position`). Hosts
+classify the control under the contact as free, a pickup that keeps sideways
+swipes, or a swipe control (`EdgeContact`), capture it once Rust claims it,
+dispatch the claimed `EdgeTarget` as its ordinary divider or floating resize
+drag and advance the catch-up on their frame clock. GTK implements this; Web,
+Android, Apple and Windows still use only the thin handles, but share the
+ownership, collapse and stack rules.
 
 [Stacked columns](stacked-columns.md) replace the former Group panel mode. Each
 stack contains complete collapsed columns and owns “Open individual panels” and

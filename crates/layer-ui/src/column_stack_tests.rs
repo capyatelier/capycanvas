@@ -1016,65 +1016,117 @@ fn stack_move(s: &mut UiSession<Recorder>, source: u32, target: u32, before: boo
     .unwrap();
 }
 
+fn drag_divider(s: &mut UiSession<Recorder>, id: u32, phase: ContactPhase, position: [f32; 2]) {
+    s.dispatch(UiAction::DragDivider { id, phase, position, viewport: STACK_VIEW }).unwrap();
+    s.state.workspace.validate().unwrap();
+}
+
+fn stack_divider(s: &UiSession<Recorder>, stack: u32) -> Divider {
+    s.layout(STACK_VIEW).dividers.into_iter()
+        .find(|d| s.state.workspace.layout.collapsed_divider_columns(d).contains(&Some(stack)))
+        .unwrap()
+}
+
 #[test]
-fn closed_multi_column_stacks_ignore_width_resize_without_expanding_their_tree() {
+fn closed_multi_column_stacks_open_the_member_beside_the_contact_without_resizing_the_stack() {
     for on_left in [false, true] {
-        let (mut s, left, right) = stack_fixture();
-        let (source, target) = if on_left {
-            (right, left)
-        } else {
-            (left, right)
-        };
-        stack_move(&mut s, source, target, false);
-        let stack = s.state.workspace.layout.column_stack(target).column;
-        let resolved = s.layout(STACK_VIEW);
-        let divider = resolved
-            .dividers
-            .iter()
-            .find(|d| {
-                s.state
-                    .workspace
-                    .layout
-                    .collapsed_divider_columns(d)
-                    .contains(&Some(stack))
-            })
-            .unwrap();
-        assert!(divider.fixed, "Hosts must omit this resize affordance");
-        let id = divider.id;
-        let start = [
-            divider.bounds.x + divider.bounds.width * 0.5,
-            divider.bounds.y + 100.,
-        ];
-        let before = crate::durable_layout(&s.state.workspace.layout);
-        for offset in [-900., 900.] {
-            for phase in [ContactPhase::Down, ContactPhase::Move, ContactPhase::Up] {
-                s.dispatch(UiAction::DragDivider {
-                    id,
-                    phase,
-                    viewport: STACK_VIEW,
-                    position: if phase == ContactPhase::Down {
-                        start
-                    } else {
-                        [start[0] + offset, start[1]]
-                    },
-                })
-                .unwrap();
-                assert_eq!(crate::durable_layout(&s.state.workspace.layout), before);
-                s.state.workspace.validate().unwrap();
-            }
+        for lower in [false, true] {
+            let (mut s, left, right) = stack_fixture();
+            let (source, target) = if on_left { (right, left) } else { (left, right) };
+            stack_move(&mut s, source, target, false);
+            let stack = s.state.workspace.layout.column_stack(target);
+            let resolved = s.layout(STACK_VIEW);
+            let members: Vec<_> = resolved.collapsed.iter().filter(|c| c.stack == stack.column).collect();
+            let member = members[usize::from(lower)].clone();
+            let other = members[usize::from(!lower)].id;
+            let divider = stack_divider(&s, stack.column);
+            assert!(!divider.fixed, "the closed stack edge opens a member");
+            let outward = if divider.bounds.x > member.bounds.x { 1. } else { -1. };
+            let start = [divider.bounds.x + divider.bounds.width * 0.5, member.bounds.y + member.bounds.height * 0.5];
+            let at = |distance: f32| [start[0] + outward * distance, start[1]];
+            let before = crate::durable_layout(&s.state.workspace.layout);
+            let other_width = s.state.workspace.layout.expanded_column_width(other, STACK_VIEW[0]);
+            let open = |s: &UiSession<Recorder>| s.state.workspace.layout.open_stack_column(stack.column);
+            drag_divider(&mut s, divider.id, ContactPhase::Down, start);
+            drag_divider(&mut s, divider.id, ContactPhase::Move, at(-900.));
+            assert_eq!(open(&s), None, "pushing toward the screen edge opens nothing");
+            drag_divider(&mut s, divider.id, ContactPhase::Move, at(TILE_SIZE - 1.));
+            assert_eq!(open(&s), None);
+            drag_divider(&mut s, divider.id, ContactPhase::Move, at(TILE_SIZE + 1.));
+            assert_eq!(open(&s), Some(member.id), "on_left={on_left} lower={lower}");
+            assert_eq!(crate::durable_layout(&s.state.workspace.layout), before, "opening a member is transient");
+            drag_divider(&mut s, divider.id, ContactPhase::Move, at(0.));
+            assert_eq!(open(&s), None, "reversing before the open edge closes the member again");
+            drag_divider(&mut s, divider.id, ContactPhase::Move, at(900.));
+            drag_divider(&mut s, divider.id, ContactPhase::Up, at(900.));
+            assert_eq!(open(&s), Some(member.id));
+            assert_eq!(s.state.workspace.layout.expanded_column_width(member.id, STACK_VIEW[0]), 800., "its edge resizes the open member");
+            assert_eq!(s.state.workspace.layout.expanded_column_width(other, STACK_VIEW[0]), other_width);
+            assert_eq!(s.state.workspace.layout.column_stack(target).members, stack.members);
+            assert!(s.command(CommandId::UndoWorkspace).enabled, "the resize is one workspace step");
+            invoke(&mut s, CommandId::UndoWorkspace);
+            assert_eq!(crate::durable_layout(&s.state.workspace.layout), before);
+            s.state.workspace.layout.column_stack_mut(stack.column).open_column = None;
+            let divider = stack_divider(&s, stack.column);
+            s.dispatch(UiAction::NudgeDivider { id: divider.id, forward: true, viewport: STACK_VIEW }).unwrap();
+            s.dispatch(UiAction::ResetColumnWidth { id: divider.id, viewport: STACK_VIEW }).unwrap();
+            assert_eq!(crate::durable_layout(&s.state.workspace.layout), before, "keyboard and reset never expand the aggregate");
         }
-        s.dispatch(UiAction::NudgeDivider {
-            id,
-            forward: true,
-            viewport: STACK_VIEW,
-        })
-        .unwrap();
-        s.dispatch(UiAction::ResetColumnWidth {
-            id,
-            viewport: STACK_VIEW,
-        })
-        .unwrap();
+    }
+}
+
+#[test]
+fn closed_multi_column_stacks_with_individual_panels_keep_a_fixed_edge() {
+    let (mut s, left, right) = stack_fixture();
+    stack_move(&mut s, right, left, false);
+    let stack = s.state.workspace.layout.column_stack(left).column;
+    s.state.workspace.layout.column_stack_mut(stack).drawers = true;
+    let divider = stack_divider(&s, stack);
+    assert!(divider.fixed, "no member column can open, so hosts omit the affordance");
+    let start = [divider.bounds.x + divider.bounds.width * 0.5, divider.bounds.y + 100.];
+    let before = crate::durable_layout(&s.state.workspace.layout);
+    for offset in [-900., 900.] {
+        drag_divider(&mut s, divider.id, ContactPhase::Down, start);
+        drag_divider(&mut s, divider.id, ContactPhase::Move, [start[0] + offset, start[1]]);
+        drag_divider(&mut s, divider.id, ContactPhase::Up, [start[0] + offset, start[1]]);
         assert_eq!(crate::durable_layout(&s.state.workspace.layout), before);
+        assert_eq!(s.state.workspace.layout.open_stack_column(stack), None);
+    }
+}
+
+#[test]
+fn dragging_an_open_member_inward_closes_it_and_reversing_reopens_it() {
+    for panel in [Panel::Brushes, Panel::Layers] {
+        let (mut s, ..) = stack_fixture();
+        click_column(&mut s, panel);
+        let group = s.state.workspace.layout.panel_group(panel).unwrap();
+        let column = s.state.workspace.layout.collapsed_column_for_group(group).unwrap();
+        assert_eq!(s.state.workspace.layout.open_stack_column(column), Some(column));
+        let resolved = s.layout(STACK_VIEW);
+        let divider = resolved.dividers.iter().find(|d| resolved.open_column_at_divider(d.id) == Some(column)).unwrap().clone();
+        let open = resolved.collapsed.iter().find_map(|c| c.open.clone()).unwrap();
+        let inward = if open.direction == Edge::Left { 1. } else { -1. };
+        let start = [divider.bounds.x + divider.bounds.width * 0.5, divider.bounds.y + 200.];
+        let at = |distance: f32| [start[0] + inward * distance, start[1]];
+        let before = crate::durable_layout(&s.state.workspace.layout);
+        let width = s.state.workspace.layout.expanded_column_width(column, STACK_VIEW[0]);
+        let minimum = s.state.workspace.layout.open_column_minimum(column);
+        let undo = s.command(CommandId::UndoWorkspace).enabled;
+        let closing = open.bounds.width - (minimum - 3. * TILE_SIZE).max(TILE_SIZE);
+        drag_divider(&mut s, divider.id, ContactPhase::Down, start);
+        drag_divider(&mut s, divider.id, ContactPhase::Move, at(closing - 1.));
+        assert_eq!(s.state.workspace.layout.open_stack_column(column), Some(column), "{panel:?} stays open at its minimum");
+        drag_divider(&mut s, divider.id, ContactPhase::Move, at(closing + 1.));
+        assert_eq!(s.state.workspace.layout.open_stack_column(column), None, "{panel:?} closes past the collapse distance");
+        assert_eq!(s.state.workspace.layout.expanded_column_width(column, STACK_VIEW[0]), width, "closing keeps the width from before the drag");
+        drag_divider(&mut s, divider.id, ContactPhase::Move, at(0.));
+        assert_eq!(s.state.workspace.layout.open_stack_column(column), Some(column), "{panel:?} reopens on reversal");
+        assert_eq!(s.state.workspace.layout.expanded_column_width(column, STACK_VIEW[0]), width);
+        drag_divider(&mut s, divider.id, ContactPhase::Move, at(closing + 40.));
+        drag_divider(&mut s, divider.id, ContactPhase::Up, at(closing + 40.));
+        assert_eq!(s.state.workspace.layout.open_stack_column(column), None);
+        assert_eq!(crate::durable_layout(&s.state.workspace.layout), before, "closing is transient");
+        assert_eq!(s.command(CommandId::UndoWorkspace).enabled, undo, "closing adds no layout history");
     }
 }
 
@@ -1645,4 +1697,77 @@ fn set_auto_hide(s: &mut UiSession<Recorder>, column: u32, auto_hide: bool) {
 
 fn set_collapsed(s: &mut UiSession<Recorder>, group: u32, collapsed: bool) {
     customize(s, CustomizationAction::SetColumnCollapsed { group, collapsed });
+}
+
+#[test]
+fn column_edges_act_on_the_column_on_their_screen_side() {
+    fn groups(node: &DockNode, out: &mut Vec<u32>) {
+        match node {
+            DockNode::Tabs { id, .. } => out.push(*id),
+            DockNode::Split { first, second, .. } => { groups(first, out); groups(second, out); }
+        }
+    }
+    let width = |s: &UiSession<Recorder>, node: &DockNode| {
+        let mut ids = Vec::new();
+        groups(node, &mut ids);
+        let r = s.layout(STACK_VIEW);
+        let bounds: Vec<_> = r.groups.iter().filter(|g| ids.contains(&g.id)).map(|g| g.bounds).collect();
+        bounds.iter().map(|b| b.x + b.width).fold(f32::MIN, f32::max) - bounds.iter().map(|b| b.x).fold(f32::MAX, f32::min)
+    };
+    let center = |d: &Divider| [d.bounds.x + d.bounds.width * 0.5, 400.];
+    for panel in [Panel::Navigator, Panel::Layers] {
+        let mut s = session(Platform::Gtk);
+        s.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(crate::WorkspaceState { layout: WorkspacePreset::Illustrator.layout(Platform::Gtk), ..Default::default() }) }).unwrap();
+        let toolbar = s.state.workspace.layout.panel_group(Panel::Toolbar).unwrap();
+        let band = s.state.workspace.layout.bands.iter().find(|b| b.root.group_for(Panel::Toolbar).is_some()).unwrap().id;
+        s.dispatch(UiAction::MovePanel { panel, target: DockTarget::Split { group: toolbar, edge: Edge::Right }, viewport: STACK_VIEW }).unwrap();
+        let root = s.state.workspace.layout.bands.iter().find(|b| b.id == band).unwrap().root.clone();
+        let DockNode::Split { id: gap, axis: Axis::Horizontal, first, second, .. } = &root else { panic!("{panel:?} shares the band: {root:?}") };
+        let (outer, inner) = ((**first).clone(), (**second).clone());
+        assert!(outer.group_for(Panel::Toolbar).is_some());
+        let [outer_width, inner_width] = [width(&s, &outer), width(&s, &inner)];
+        let divider = |s: &UiSession<Recorder>, id: u32| s.layout(STACK_VIEW).dividers.into_iter().find(|d| d.id == id).unwrap();
+        assert_eq!(divider(&s, *gap).owner_side, Some(Edge::Left));
+
+        let start = center(&divider(&s, *gap));
+        drag_divider(&mut s, *gap, ContactPhase::Down, start);
+        drag_divider(&mut s, *gap, ContactPhase::Move, [start[0] + 40., start[1]]);
+        assert!((width(&s, &outer) - outer_width - 40.).abs() < 0.5, "{panel:?}: dragging the gap outward grows the toolbar");
+        assert!((width(&s, &inner) - inner_width).abs() < 0.5, "{panel:?}: the column farther in keeps its width");
+        drag_divider(&mut s, *gap, ContactPhase::Move, [start[0] - 200., start[1]]);
+        assert!(!s.state.workspace.layout.is_collapsed(inner.id()) && !s.state.workspace.layout.is_collapsed(outer.id()), "{panel:?}: a toolbar never collapses");
+        assert!((width(&s, &outer) - TILE_SIZE).abs() < 0.5, "{panel:?}: the toolbar stops at one tile: {}", width(&s, &outer));
+        assert!((width(&s, &inner) - inner_width).abs() < 0.5, "{panel:?}: the inner column keeps its width");
+        drag_divider(&mut s, *gap, ContactPhase::Up, [start[0] - 200., start[1]]);
+
+        let start = center(&divider(&s, band));
+        drag_divider(&mut s, band, ContactPhase::Down, start);
+        drag_divider(&mut s, band, ContactPhase::Move, [start[0] - 20., start[1]]);
+        assert!((width(&s, &outer) - TILE_SIZE).abs() < 0.5, "{panel:?}: the band edge leaves the toolbar alone");
+        assert!((inner_width - 20. - width(&s, &inner)).abs() < 0.5, "{panel:?}: the band edge resizes the column touching it");
+        drag_divider(&mut s, band, ContactPhase::Move, [start[0] - inner_width, start[1]]);
+        assert!(s.state.workspace.layout.is_collapsed(inner.id()), "{panel:?}: the touching column collapses");
+        assert!((width(&s, &outer) - TILE_SIZE).abs() < 0.5);
+        drag_divider(&mut s, band, ContactPhase::Move, start);
+        assert!(!s.state.workspace.layout.is_collapsed(inner.id()), "{panel:?}: reversing reopens it");
+        drag_divider(&mut s, band, ContactPhase::Up, start);
+        assert!((width(&s, &inner) - inner_width).abs() < 0.5);
+    }
+}
+
+#[test]
+fn a_column_of_toolbars_shrinks_to_one_tile_without_collapsing() {
+    let mut s = session(Platform::Gtk);
+    s.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(crate::WorkspaceState { layout: WorkspacePreset::Illustrator.layout_for_device(Platform::Gtk, true), ..Default::default() }) }).unwrap();
+    let band = s.state.workspace.layout.bands.iter().find(|b| b.root.group_for(Panel::Toolbar).is_some()).unwrap().clone();
+    assert!(matches!(band.root, DockNode::Split { axis: Axis::Vertical, .. }), "the tablet layout stacks two toolbars");
+    let d = s.layout(STACK_VIEW).dividers.into_iter().find(|d| d.id == band.id).unwrap();
+    let start = [d.bounds.x + d.bounds.width * 0.5, 400.];
+    drag_divider(&mut s, band.id, ContactPhase::Down, start);
+    drag_divider(&mut s, band.id, ContactPhase::Move, [0., start[1]]);
+    drag_divider(&mut s, band.id, ContactPhase::Up, [0., start[1]]);
+    assert!(!s.state.workspace.layout.is_collapsed(band.root.id()));
+    for g in s.layout(STACK_VIEW).groups.iter().filter(|g| g.panels.iter().all(|p| p.kind() == PanelKind::Tiles) && g.bounds.x < 20.) {
+        assert_eq!(g.bounds.width, TILE_SIZE, "{:?} keeps one lane", g.panels);
+    }
 }

@@ -9,6 +9,9 @@ use serde::{Deserialize, Serialize};
 
 #[path = "column_stacks.rs"]
 mod column_stacks;
+#[path = "edge_grab.rs"]
+mod edge_grab;
+pub use edge_grab::{EdgeContact, EdgeGrab, EdgeGrabProgress, EdgeTarget, EDGE_GRAB_CATCH_UP_MS, EDGE_GRAB_DISTANCE};
 #[path = "layout_columns.rs"]
 mod columns;
 #[path = "notice_placement.rs"]
@@ -605,6 +608,7 @@ pub(crate) enum ResizeDragPhase {
     Expand {
         columns: [Option<u32>; 2],
         edge: f32,
+        cross: f32,
     },
     /// Use the original opening threshold until the pointer reaches the expanded edge.
     CatchUp {
@@ -612,6 +616,7 @@ pub(crate) enum ResizeDragPhase {
         collapsed_edge: f32,
         edge: f32,
         reversed: bool,
+        cross: f32,
     },
 }
 
@@ -622,6 +627,7 @@ pub(crate) struct ResizeCollapse {
     origin: f32,
     reversed: bool,
     minimum: f32,
+    pub member: bool,
 }
 impl ResizeCollapse {
     pub fn contains(self, x: f32) -> bool {
@@ -1294,6 +1300,8 @@ pub struct GroupPlacement {
     pub min_body_height: f32,
     /// Content-local trailing drag strip for a lone built-in panel with no tab.
     pub footer_grip: Option<Bounds>,
+    #[serde(default)]
+    pub scrolls: bool,
     pub floating: bool,
     pub zen_kept: bool,
     pub resize_handles: Vec<FloatingResizeHandle>,
@@ -1319,8 +1327,10 @@ impl GroupPlacement {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Divider {
-    /// Closed stacks have no body to resize; hosts omit the resize affordance.
+    /// Nothing opens or resizes from this edge; hosts omit the resize affordance.
     pub fixed: bool,
+    #[serde(default)]
+    pub owner_side: Option<Edge>,
     pub id: u32,
     pub band: bool,
     pub axis: Axis,
@@ -2493,6 +2503,16 @@ impl DockLayout {
             .filter(|h| *h > 0.0)
             .reduce(f32::max)
     }
+    pub(crate) fn column_min_width(&self, node: &DockNode, height: f32) -> f32 {
+        node_width(node, self, DockLayout::group_min_width)
+            .max(ribbon_cross_width(node, Axis::Vertical, height, self, false, false))
+            .max(TILE_SIZE)
+    }
+    pub(crate) fn panel_scrolls(&self, panel: Panel, body_height: f32) -> bool {
+        panel.kind() == PanelKind::Content
+            && self.measurements.iter().find(|m| m.panel == panel && m.content_height > 0.)
+                .is_none_or(|m| m.scroll.is_some() && m.content_height > body_height + 0.5)
+    }
     pub(crate) fn group_min_body_height(&self, panels: &[Panel]) -> f32 {
         self.measurements.iter()
             .filter(|m| panels.contains(&m.panel) && m.content_height > 0.)
@@ -3234,7 +3254,7 @@ impl DockLayout {
             let open = resolved.collapsed.iter().find_map(|c| c.open.as_ref().filter(|o| o.column == column)).unwrap();
             let delta = coordinate - center;
             let width = open.bounds.width + if open.direction == Edge::Right { delta } else { -delta };
-            let minimum = expanded_node_width(self.node(column).unwrap(), self, DockLayout::group_preferred_width).clamp(128., 800.);
+            let minimum = self.open_column_minimum(column);
             self.collapsed.iter_mut().find(|c| c.root == column).unwrap().expanded_width = width.clamp(minimum, 800.);
             return Ok(());
         }
@@ -3256,6 +3276,9 @@ impl DockLayout {
         let mut position = position;
         position[dimension] = original_center + coordinate - center;
         let d = original;
+        if self.resize_column_edge(d, coordinate - center, base.as_ref().unwrap_or(&resolved)) {
+            return Ok(());
+        }
         if d.axis == Axis::Horizontal {
             // A deliberate width adjustment takes over from tab auto-sizing.
             let affected: Vec<_> = resolved
@@ -3399,6 +3422,7 @@ impl DockLayout {
             let divider = bounds.strip(opposite, extent.min(WORKSPACE_SPACING));
             result.dividers.push(Divider {
                 fixed: false,
+                owner_side: None,
                 id: band.id,
                 band: true,
                 axis: band.edge.axis(),
@@ -3409,7 +3433,8 @@ impl DockLayout {
             resolve_node(&band.root, bounds, axis, self, &mut result, open_columns);
         }
         for divider in &mut result.dividers {
-            divider.fixed = self.fixed_stack_divider(divider);
+            divider.fixed = self.fixed_stack_divider(divider) && !self.divider_opens_member(divider);
+            divider.owner_side = self.divider_owner(divider);
         }
         result.work_area = remaining;
         result
@@ -4576,6 +4601,7 @@ fn tabs_placement(
             width: bounds.width,
             height: PANEL_GRIP_HEIGHT.min(bounds.height),
         }),
+        scrolls: layout.panel_scrolls(*active, bounds.height - if tabs_visible { TAB_BAR_HEIGHT } else if active.kind() == PanelKind::Content { PANEL_GRIP_HEIGHT } else { 0. }),
         floating: false,
         zen_kept: layout.shows_in_zen(*id),
         resize_handles: Vec::new(),
@@ -4692,6 +4718,7 @@ fn resolve_node(
             let divider = rest.strip(edge, gap);
             result.dividers.push(Divider {
                 fixed: false,
+                owner_side: None,
                 id: *id,
                 band: false,
                 axis: *axis,

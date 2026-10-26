@@ -166,7 +166,8 @@ pub use interaction::{
 pub use layout::{
     Axis, Bounds, CollapsedColumn, CollapsedColumnPlacement, CollapsedGroup, OpenColumn,
     ColumnIcon, ColumnStack, Divider, DockBand, DockItem,
-    DockLayout, DockNode, DockTarget, Edge, EdgeAlignment, FloatingGroup, FloatingResizeHandle,
+    DockLayout, DockNode, DockTarget, Edge, EdgeAlignment, EdgeContact, EdgeGrab, EdgeGrabProgress, EdgeTarget, EDGE_GRAB_CATCH_UP_MS,
+    EDGE_GRAB_DISTANCE, FloatingGroup, FloatingResizeHandle,
     FloatingToolbarLayout, GroupPlacement, PANEL_CONFIGURATION_WIDTH, PANEL_EXPANSION_MS, Panel,
     NoticePlacement, PanelExpansion, PanelMeasurement, PanelScrollMeasurement, ResizeEdge, ResolvedLayout,
     WorkspacePreset,

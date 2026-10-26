@@ -745,6 +745,7 @@ impl CustomizationState {
                     tabs_visible: true,
                     min_body_height: layout.group_min_body_height(panels),
                     footer_grip: None,
+                    scrolls: layout.panel_scrolls(active, bounds.height - TAB_BAR_HEIGHT),
                     floating: false,
                     zen_kept: layout.shows_in_zen(group),
                     resize_handles: Vec::new(),

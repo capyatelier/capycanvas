@@ -26,6 +26,8 @@ pub(crate) use customization::tool_group_overlay;
 pub(crate) mod toolbar_components;
 #[path = "workspace_drawer.rs"]
 mod drawers;
+#[path = "workspace_edge_grab.rs"]
+mod edge_grab;
 #[path = "workspace_header.rs"]
 mod header;
 #[path = "workspace_manager.rs"]
@@ -801,6 +803,7 @@ struct NativeWorkspaceDrag {
     cursor: Option<(gtk::Widget, Option<gdk::Cursor>)>,
     tab: Option<NativeTabSlide>,
     tab_grab: Option<NativeTabSlide>,
+    grab: Option<edge_grab::NativeEdgeGrab>,
 }
 
 struct GroupView {
@@ -897,6 +900,7 @@ pub struct Workspace {
     dragging: Cell<bool>,
     drag_targets: RefCell<Vec<(glib::WeakRef<gtk::Widget>, DragTarget)>>,
     workspace_drag: RefCell<Option<NativeWorkspaceDrag>>,
+    edge_grabs: edge_grab::EdgeGrabs,
     publication: workspace_update::Publication,
     measuring_panels: Cell<bool>,
     drop_hint: RefCell<Option<DropHint>>,
@@ -1254,6 +1258,7 @@ impl Workspace {
             dragging: Cell::new(false),
             drag_targets: RefCell::new(Vec::new()),
             workspace_drag: RefCell::new(None),
+            edge_grabs: Default::default(),
             publication: workspace_update::Publication::default(),
             drop_hint: RefCell::new(None),
             measuring_panels: Cell::new(false),
@@ -1594,7 +1599,18 @@ impl Workspace {
         let press = gtk::GestureClick::new();
         press.set_button(1);
         press.set_propagation_phase(gtk::PropagationPhase::Capture);
-        press.connect_pressed(glib::clone!(#[weak(rename_to = w)] self, move |_, _, _, _| w.dispatch(action.clone())));
+        let deferred = Rc::new(Cell::new(false));
+        press.connect_pressed(glib::clone!(#[weak(rename_to = w)] self, #[strong] action, #[strong] deferred, move |_, _, _, _| {
+            deferred.set(w.edge_gap_pending());
+            if !deferred.get() {
+                w.dispatch(action.clone());
+            }
+        }));
+        press.connect_released(glib::clone!(#[weak(rename_to = w)] self, move |_, _, _, _| {
+            if deferred.replace(false) {
+                w.dispatch(action.clone());
+            }
+        }));
         button.add_controller(press);
         button
     }
@@ -3408,7 +3424,7 @@ impl Workspace {
         for (slot, handle) in self.surface.imp().children.borrow().iter() {
             let Slot::Divider(id) = slot else { continue };
             let Some(divider) = resolved.dividers.iter().find(|d| d.id == *id) else { continue };
-            let fixed = layout.fixed_stack_divider(divider);
+            let fixed = divider.fixed;
             if fixed {
                 handle.add_css_class("fixed-stack-divider");
             } else {
@@ -3971,6 +3987,7 @@ impl Workspace {
                     cursor: None,
                     tab: None,
                     tab_grab: None,
+                    grab: None,
                 };
                 *self.workspace_drag.borrow_mut() = Some(drag);
             }
@@ -4117,7 +4134,14 @@ impl Workspace {
             drag.target,
             DragTarget::Dock(DockItem::Tile { .. }) | DragTarget::Header(_)
         ) {
-            self.dispatch_drag(drag.target, ContactPhase::Move, point);
+            let position = drag.grab.as_mut().map_or(point, |grab| grab.position(point));
+            if let Some(current) = self.workspace_drag.borrow_mut().as_mut() {
+                current.grab = drag.grab;
+            }
+            self.dispatch_drag(drag.target, ContactPhase::Move, position);
+            if let Some(grab) = drag.grab {
+                self.set_drag_cursor(&mut drag, grab.cursor);
+            }
         }
         if let DragTarget::Dock(item) = drag.target {
             if matches!(item, DockItem::Tile { .. }) {
@@ -4133,7 +4157,7 @@ impl Workspace {
         true
     }
 
-    fn handle_double_press_action(&self, point: [f32; 2]) -> Option<UiAction> {
+    fn handle_double_press_action(&self, point: [f32; 2], kind: PointerKind) -> Option<UiAction> {
         let viewport = [self.surface.width() as f32, self.surface.height() as f32];
         if let Some(column) = self.columns.background_at(self, point) {
             return self
@@ -4143,13 +4167,13 @@ impl Workspace {
                 .find(|c| c.id == column)
                 .map(|c| c.expand_action());
         }
-        match self.drag_target_at(point) {
+        match self.drag_target_at(point).or_else(|| self.edge_reset_divider(point, kind).map(DragTarget::Divider)) {
             Some(DragTarget::Divider(id))
                 if self
                     .resolved()
                     .dividers
                     .iter()
-                    .any(|d| d.id == id && d.band && d.axis == layer_ui::Axis::Horizontal) =>
+                    .any(|d| d.id == id && d.owner_side.is_some() && d.axis == layer_ui::Axis::Horizontal) =>
             {
                 Some(UiAction::ResetColumnWidth { id, viewport })
             }
@@ -4176,9 +4200,10 @@ impl Workspace {
             column_click,
             move |gesture, _, x, y| {
                 let point = [x as f32, y as f32];
-                let target = w.drag_target_at(point);
-                let collapsed_column = w.columns.background_at(&w, point);
                 let Some(event) = gesture.current_event() else { return };
+                let kind = crate::input::pointer_kind(&event);
+                let target = w.drag_target_at(point).or_else(|| w.edge_reset_divider(point, kind).map(DragTarget::Divider));
+                let collapsed_column = w.columns.background_at(&w, point);
                 let source = event.device().map(|device| device.source());
                 let handle = collapsed_column
                     .map(|column| DragTarget::Dock(DockItem::Column { column }))
@@ -4196,7 +4221,7 @@ impl Workspace {
                 }));
                 if !double { return; }
                 column_click.set(None);
-                let Some(action) = w.handle_double_press_action(point) else { return };
+                let Some(action) = w.handle_double_press_action(point, kind) else { return };
                 gesture.set_state(gtk::EventSequenceState::Claimed);
                 // The captured double-click consumes release; retire any
                 // pending press so later motion cannot start a stale drag.
@@ -4267,8 +4292,8 @@ impl Workspace {
                     gtk::prelude::GtkWindowExt::set_focus(&w.window, None::<&gtk::Widget>);
                 }
                 let starting = phase == ContactPhase::Down && w.workspace_drag.borrow().is_none();
-                let handled =
-                    point.is_some_and(|point| w.workspace_drag_input(phase, point, sequence));
+                let handled = phase == ContactPhase::Move && point.is_some_and(|point| w.edge_grab_motion(event, point, sequence.clone()))
+                    || point.is_some_and(|point| w.workspace_drag_input(phase, point, sequence.clone()));
                 if starting && let Some(drag) = w.workspace_drag.borrow_mut().as_mut() {
                     // A tablet has its own GDK device; touch has no cursor.
                     drag.device = if touch { None } else { event.device() };
@@ -4282,6 +4307,11 @@ impl Workspace {
                                 )
                             });
                     }
+                }
+                match (phase, point) {
+                    (ContactPhase::Down, Some(point)) => w.edge_grab_press(event, point, sequence, starting),
+                    (ContactPhase::Up | ContactPhase::Cancel, _) => w.edge_grab_release(&sequence),
+                    _ => {}
                 }
                 if handled {
                     column_click.set(None);

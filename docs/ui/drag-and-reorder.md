@@ -208,6 +208,13 @@ empty groups are also cleaned up when a workspace is opened.
 This convention governs pickup for reordering and moving UI containers. It does
 not add holds to drawing, selection/transform handles, canvas/navigation drags,
 color wheels, curve/gradient handles, sliders, scrollbars, or resize handles.
+Dock and floating edges also reach past their handles; see
+[edge reach](panel-customization.md#edge-reach). Sideways edge reach never takes
+a contact from a surface in the table above that drags without a hold. Beside an
+edge that resizes vertically, a vertical swipe from the top 6 pixels of a tab or
+from a row that tears off bubbles resizes instead, and a tab pressed there
+selects on release rather than on press. Tool tiles that tear off bubbles keep
+every swipe. A hold-to-drag tile yields to edge reach only before its hold arms.
 It also does not make every button, picker result, or library row reorderable;
 the control must already offer or deliberately gain that capability.
 
