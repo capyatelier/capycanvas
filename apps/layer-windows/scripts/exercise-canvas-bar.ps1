@@ -10,6 +10,7 @@ $run=Join-Path $repo ('artifacts/windows/canvas-bar/'+[Guid]::NewGuid().ToString
 [IO.Directory]::CreateDirectory($run)|Out-Null
 $CapyTraceDirectory=$run
 $checks=[ordered]@{}
+$barTaps=[Collections.Generic.List[object]]::new()
 function Owned([string]$Id,[switch]$Name,$Type){
  $property=if($Name){[System.Windows.Automation.AutomationElement]::NameProperty}else{[System.Windows.Automation.AutomationElement]::AutomationIdProperty}
  $condition=[System.Windows.Automation.AndCondition]::new([System.Windows.Automation.PropertyCondition]::new($property,$Id),
@@ -53,8 +54,24 @@ function AnchorQuadrant{$m=Model;$a=$m.state.canvas_bar.anchor;$c=$m.state.camer
  $point}
 function Center($Element){$r=$Element.Current.BoundingRectangle;@([int]($r.X+$r.Width/2),[int]($r.Y+$r.Height/2))}
 function Tap([string]$Id,[string]$Device){
- $item=@{value=$null};Wait-Until {$item.value=Find $Id;$item.value -and !$item.value.Current.IsOffscreen -and $item.value.Current.IsEnabled} "Missing bar control $Id" 10
- $at=Center (Control $Id -Arranged);[CapyRowPointer]::Down($Device,$at[0],$at[1]);Start-Sleep -Milliseconds 40;[CapyRowPointer]::Up()
+ $target=@{point=$null}
+ $record=[ordered]@{id=$Id;device=$Device;parent=$null;bounds=$null;before=$null;after=$null;context=(Model).state.canvas_bar.context}
+ $barTaps.Add($record)
+ try{
+  Wait-Until {
+   $parent=if($Id -like 'canvas-bar-*'){Bar}else{$root}
+   if(!$parent){return $false}
+   $item=Find $Id -Within $parent
+   if(!$item -or $item.Current.IsOffscreen -or !$item.Current.IsEnabled){return $false}
+   $bounds=$item.Current.BoundingRectangle;$parentBounds=$parent.Current.BoundingRectangle
+   $record.parent=$parentBounds;$record.bounds=$bounds
+   if($bounds.IsEmpty -or $bounds.Width -le 0 -or $bounds.Height -le 0 -or !$parentBounds.Contains($bounds)){return $false}
+   $target.point=Center $item;$record.before=Input-Trace $target.point[0] $target.point[1]
+   $record.before.foreground -eq $drawingWindow.ToInt64() -and @($record.before.hit|Where-Object {$_.process -eq $review.Id}).Count -gt 0
+  } "Native pointer target $Id did not arrange inside its current foreground owner" 10
+  [CapyRowPointer]::Down($Device,$target.point[0],$target.point[1]);Start-Sleep -Milliseconds 40;[CapyRowPointer]::Up()
+  $record.after=Input-Trace $target.point[0] $target.point[1]
+ }finally{$barTaps|ConvertTo-Json -Depth 12|Set-Content -LiteralPath (Join-Path $run 'native-taps.json')}
 }
 function Subtool([string]$Command){
  $choice=Tool-Choice $Command;Invoke-Id $choice.id

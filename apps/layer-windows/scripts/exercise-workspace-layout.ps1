@@ -89,19 +89,19 @@ function Preset-Groups([string]$Top){
     return @($upper[0],$properties[0],$layers[0])
 }
 function Preset-Geometry([string]$Top){
-    $groups=@(Preset-Groups $Top);$records=@();$origin=$null
+    $groups=@(Preset-Groups $Top);$records=@();$origin=[CapyRowPointer+Point]::new()
+    if(![CapyRowPointer]::ClientToScreen([IntPtr]$root.Current.NativeWindowHandle,[ref]$origin)){throw 'Native client origin is unavailable'}
     foreach($group in $groups){
         $node=Control ('workspace-group-'+$group.id) -Arranged
         $group=@((Model).layout.groups|Where-Object id -eq $group.id)[0]
         if(!$group){throw 'Arranged preset group lost its current shared identity'}
-        $box=$node.Current.BoundingRectangle;$shared=$group.bounds
-        if($node.Current.ProcessId -ne $review.Id -or !$root.Current.BoundingRectangle.Contains($box)){throw 'Preset group left its owned visible window'}
-        if(!$origin){$origin=@(($box.X-$shared.x*$scale),($box.Y-$shared.y*$scale))}
-        foreach($pair in @(@($box.X,($origin[0]+$shared.x*$scale)),@($box.Y,($origin[1]+$shared.y*$scale)),@($box.Width,($shared.width*$scale)),@($box.Height,($shared.height*$scale)))){
-            if([Math]::Abs($pair[0]-$pair[1]) -gt 1){throw 'Native preset allocation differs from the current shared group bounds'}
-        }
-        $receipt=[ordered]@{group=$group.id;control=@(Control-Trace $node)}
+        $box=Native-Bounds ([string]$group.id) $scale -Group;$shared=$group.bounds
+        $receipt=[ordered]@{group=$group.id;shared=$shared;native_group=$box;uia_group=$node.Current.BoundingRectangle;client_origin=@($origin.x,$origin.y);control=@(Control-Trace $node)}
         try{
+            if($node.Current.ProcessId -ne $review.Id -or !$root.Current.BoundingRectangle.Contains($box)){throw 'Preset group left its owned visible window'}
+            foreach($pair in @(@($box.X,($origin.x+$shared.x*$scale)),@($box.Y,($origin.y+$shared.y*$scale)),@($box.Width,($shared.width*$scale)),@($box.Height,($shared.height*$scale)))){
+                if([Math]::Abs($pair[0]-$pair[1]) -gt 1){throw 'Native preset allocation differs from the current shared group bounds'}
+            }
             $body=Native-Bounds ('panel-body-scroll-'+$group.id) $scale
             $presentation=(Workspace-Root).Current.ItemStatus|ConvertFrom-Json
             $scroll=@($presentation.groups|Where-Object id -eq $group.id)[0].body_scroll
