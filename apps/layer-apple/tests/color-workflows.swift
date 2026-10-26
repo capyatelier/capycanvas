@@ -5,6 +5,21 @@ import QuartzCore
 /// storage in disposable sessions. UI delivery is a separate XCTest workflow.
 @main struct ColorWorkflowChecks {
     @MainActor static func main() async throws {
+        try await Task.detached {
+            for language in ["en", "ja"] {
+                let configuration = try JSON(["saved": "", "preferred_languages": [language]]).encoded()
+                var error: UInt64 = 0
+                let prepared = configuration.withCString { nativeHandle(capy_apple_prepare_launch($0, &error)) }
+                let failure = takeNativeText(error)
+                guard let prepared else { throw HostFailure(message: failure ?? "Profile language preparation failed") }
+                capy_apple_launch_free(prepared)
+            }
+        }.value
+        try profileProjectionAndCache()
+        if CommandLine.arguments.contains("--profiles-only") {
+            print("PASS: shared profile query projection, visibility identity and cache invalidation")
+            return
+        }
         for platform: UInt32 in [0, 1] {
             let root = FileManager.default.temporaryDirectory.appendingPathComponent("capy-color-workflows-\(UUID())")
             defer { try? FileManager.default.removeItem(at: root) }
@@ -87,5 +102,49 @@ import QuartzCore
             print("PASS: platform \(platform), New drawing presets/validation/Cancel, all tagged palette spaces, document adoption and fresh-owner durable restoration")
             withExtendedLifetime(surface) {}
         }
+    }
+    @MainActor static func profileProjectionAndCache() throws {
+        let ids = ["a", "b", "c"].map { String(repeating: $0, count: 64) }
+        let entries = [
+            JSON(["id": ids[0], "bytes": 2602, "name": "", "channels": "Gray", "visible": false]),
+            JSON(["id": ids[1], "bytes": 3101, "name": "Größe", "channels": "Rgb", "visible": true]),
+            JSON(["id": ids[2], "bytes": 17, "name": "", "visible": false]),
+        ]
+        let original = entries.map(\.stableKey)
+        let response = ColorUI.resolve(["type": "profile_entries", "entries": entries.map(\.raw), "query": "GRÖSSE"], language: "en")
+        try require(response["error"].isNull, "Profile transport must accept metadata and prepared language: \(response.stableKey)")
+        let filtered = ColorUI.profileEntries(entries, language: "en", query: "GRÖSSE")
+        try require(filtered.count == 1 && filtered[0]["id"].string == ids[1] && filtered[0]["visible"].bool,
+            "A filtered profile must retain visibility by ID rather than the input row position")
+        for (name, query) in [("Işık İçe aktar", "IŞIK İÇE AKTAR"), ("Tiếng Việt", "Tie\u{302}\u{301}ng Vie\u{323}\u{302}t")] {
+            let named = entries[1].replacing("name", with: JSON(name))
+            let rows = ColorUI.profileEntries([entries[0], named], language: "en", query: query)
+            try require(rows.count == 1 && rows[0]["name"].string == name && rows[0]["visible"].bool,
+                "Native profile queries must use shared locale normalization and preserve literal names")
+        }
+        let cache = ProfileEntryCopyCache()
+        let all = cache.rows(entries, language: "en")
+        try require(Set(all.map { $0["id"].string }) == Set(ids), "An omitted profile query must include all metadata")
+        try require(cache.rows(entries, language: "en", query: ids[1]).map { $0["id"].string } == [ids[1]],
+            "A query change must invalidate retained profile captions")
+        let unavailable = cache.rows(entries, language: "en", query: ids[2])
+        try require(unavailable.count == 1 && unavailable[0]["id"].string == ids[2] && !unavailable[0]["visible"].bool,
+            "Changing only the query must replace the filtered row and its visibility")
+        try require(cache.rows(entries, language: "en", query: "no matching profile").isEmpty,
+            "An unmatched query must not retain previous rows")
+        try require(cache.rows(entries, language: "en").map(\.stableKey) == all.map(\.stableKey),
+            "Clearing a query must restore every retained profile")
+        let japanese = cache.rows(entries, language: "ja")
+        let englishDetails = all.first { $0["id"].string == ids[0] }?["details"].string
+        let japaneseDetails = japanese.first { $0["id"].string == ids[0] }?["details"].string
+        try require(japanese.map(\.stableKey) == ColorUI.profileEntries(entries, language: "ja").map(\.stableKey)
+            && japaneseDetails != englishDetails,
+            "A language change must reproject retained captions without profile bytes")
+        _ = cache.rows(entries, language: "ja", query: ids[1])
+        var hidden = entries
+        hidden[1] = hidden[1].replacing("visible", with: JSON(false))
+        let changed = cache.rows(hidden, language: "ja", query: ids[1])
+        try require(changed.count == 1 && !changed[0]["visible"].bool, "Metadata changes must invalidate cached visibility")
+        try require(entries.map(\.stableKey) == original, "Projection and filtering must preserve retained metadata")
     }
 }

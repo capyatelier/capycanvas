@@ -19,6 +19,9 @@ struct NumericTextField: UIViewRepresentable {
     var selectsReplacedText = false
     var borderStyle: UITextField.BorderStyle = .none
     var keyboardType: UIKeyboardType = .default
+    var selectsOnFocus = true
+    var monospaced = true
+    var rounded = false
     @Environment(\.isEnabled) private var enabled
     func makeCoordinator() -> Coordinator { Coordinator(self) }
     func makeUIView(context: Context) -> Field {
@@ -38,11 +41,12 @@ struct NumericTextField: UIViewRepresentable {
             context.coordinator.updateText(field)
         }
         if field.textAlignment != alignment { field.textAlignment = alignment }
-        if field.borderStyle != borderStyle { field.borderStyle = borderStyle }
+        let border = rounded ? UITextField.BorderStyle.roundedRect : borderStyle
+        if field.borderStyle != border { field.borderStyle = border }
         if field.keyboardType != keyboardType { field.keyboardType = keyboardType }
         if field.returnKeyType != returnKey { field.returnKeyType = returnKey }
         if field.placeholder != placeholder ?? label { field.placeholder = placeholder ?? label }
-        let font = UIFont.monospacedDigitSystemFont(ofSize: fontSize, weight: .regular)
+        let font = monospaced ? UIFont.monospacedDigitSystemFont(ofSize: fontSize, weight: .regular) : .systemFont(ofSize: fontSize)
         if field.font != font { field.font = font }
         field.textColor = UIColor(color); field.isEnabled = enabled
         field.accessibilityLanguage = interfaceLanguage.isEmpty ? nil : interfaceLanguage
@@ -54,6 +58,7 @@ struct NumericTextField: UIViewRepresentable {
             DispatchQueue.main.async { [weak field] in
                 guard coordinator.parent.focused, let field, !field.isFirstResponder else { return }
                 field.becomeFirstResponder()
+                if !coordinator.parent.selectsOnFocus { field.selectedTextRange = field.textRange(from: field.endOfDocument, to: field.endOfDocument) }
             }
         } else if !focused && field.isFirstResponder {
             // UIKit consults the hosting view's responder graph while resigning.
@@ -84,8 +89,10 @@ struct NumericTextField: UIViewRepresentable {
         @objc func changed(_ field: UITextField) { parent.text = field.text ?? "" }
         func textFieldDidBeginEditing(_ textField: UITextField) {
             if !parent.focused { parent.focused = true }
-            DispatchQueue.main.async { [weak textField] in
-                if let textField, textField.isFirstResponder { textField.selectAll(nil) }
+            if parent.selectsOnFocus {
+                DispatchQueue.main.async { [weak textField] in
+                    if let textField, textField.isFirstResponder { textField.selectAll(nil) }
+                }
             }
         }
         func textFieldDidEndEditing(_ textField: UITextField) { if parent.focused { parent.focused = false } }

@@ -83,6 +83,10 @@ entry without changing the effect application.
   bounds. Refused text stays in the editor with its localized error. Pending
   commits must succeed before step buttons or dialog Apply can proceed. Native
   composition holds text and value until the IME finishes.
+  Apple form admission follows the mounted control's identity; callbacks from a
+  retired field cannot remove or replace the current field's draft validation.
+  After admission, a focused field follows shared form changes while unfinished
+  expressions stay available for correction.
 
 Number readouts and their text editors accept wheel steps after committing any
 pending text. Refused text consumes the wheel without changing the value.

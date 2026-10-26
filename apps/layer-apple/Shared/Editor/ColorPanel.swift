@@ -7,9 +7,6 @@ struct ColorPanel: View {
     @FocusState private var readoutFocused: Bool
     private var model: JSON { store.colorPanel }
     private var hdr: Bool { model["hdr"].bool }
-    private var context: String {
-        "\(store.state["document_file"]["epoch"].uint):\(model["rgb_space"].string):\(model["shape"].string):\(store.displayColors["paint_slot"].string)"
-    }
     private var captureState: String? {
         #if DEBUG
         guard ProcessInfo.processInfo.environment["CAPY_COLOR_PROBE"] == "1" else { return nil }
@@ -22,6 +19,7 @@ struct ColorPanel: View {
     }
     var body: some View {
         GeometryReader { allocation in
+            let wheelContext = store.snapshot["color_wheel_context"], editContext = store.snapshot["color_edit_context"]
             let full = ColorUI.resolve(["type": "picker_layout", "size": max(128, allocation.size.width), "hdr": hdr])
             let side = max(128, allocation.size.width * min(1, allocation.size.height / max(1, full["height"].number)))
             let spec = resources.resolve(["type": "picker_layout", "size": side, "hdr": hdr])
@@ -30,10 +28,10 @@ struct ColorPanel: View {
             ZStack(alignment: .topLeading) {
                 ColorWheelDrawing(model: model, bounds: layout["wheel"], viewing: hdr ? store.colorViewing : JSON())
                     .frame(width: side, height: side).allowsHitTesting(false)
-                ColorWheelInput(shape: ColorWheelShape(model["shape"].string).rawValue, context: context,
+                ColorWheelInput(shape: ColorWheelShape(model["shape"].string).rawValue, context: wheelContext.stableKey,
                     value: captureState ?? model["readout_description"].string) { part, point, size in
                     color(["op": "pick_wheel", "part": part == 1 ? "hue" : "field",
-                        "point": [point.x, point.y], "size": size])
+                        "point": [point.x, point.y], "size": size], context: wheelContext)
                 }.colorPlaced(layout["wheel"], id: "wheel")
                 ForEach(["background", "foreground", "transparent"], id: \.self) { slot in
                     let swatch = model["swatches"].array.first { $0["slot"].string == slot } ?? JSON()
@@ -55,8 +53,10 @@ struct ColorPanel: View {
                 }
                 PaintColorControls(store: store, compact: true).colorPlaced(layout["edit"], id: "edit")
                 if hdr {
-                    HDRIntensityArc(model: model, viewing: store.colorViewing, identity: "\(store.state["document_file"]["epoch"].uint):\(store.displayColors["paint_slot"].string)",
-                        language: store.interfaceLanguage, geometry: spec["arc"], caption: layout["intensity_caption"], size: side) { color(["op": "hdr_intensity", "stops": $0]) }
+                    HDRIntensityArc(model: model, viewing: store.colorViewing, identity: editContext.stableKey,
+                        language: store.interfaceLanguage, geometry: spec["arc"], caption: layout["intensity_caption"], size: side) {
+                        color(["op": "hdr_intensity", "stops": $0], context: editContext)
+                    }
                         .frame(width: side, height: height)
                 }
                 ForEach(0..<2, id: \.self) { index in
@@ -100,6 +100,7 @@ struct ColorPanel: View {
             }
     }
     private func color(_ action: [String: Any]) { store.dispatch(["type": "color", "action": action]) }
+    private func color(_ action: [String: Any], context: JSON) { store.dispatch(["type": "color_edit", "context": context.raw, "action": action]) }
     static func aspect(hdr: Bool) -> CGFloat {
         hdr ? max(226, ColorUI.resolve(["type": "picker_layout", "size": 226, "hdr": true])["height"].number) / 226 : 1
     }
@@ -108,10 +109,11 @@ struct ColorPanel: View {
 extension EditorStore {
     func editPaintColor(_ slot: String) {
         guard slot != "transparent" else { return }
+        let context = snapshot["color_edit_context"]
         colorEditing.open(colors: displayColors, slot: slot, viewing: colorViewing) { [weak self] color, intensity in
             var action: [String: Any] = ["op": intensity == nil ? "set_slot" : "set_slot_intensity", "slot": slot, "color": color.raw]
             if let intensity { action["stops"] = intensity }
-            self?.edit(["type": "color", "action": action]) { if let error = $0 { self?.failure = error } }
+            self?.edit(["type": "color_edit", "context": context.raw, "action": action]) { if let error = $0 { self?.failure = error } }
         }
     }
 }
@@ -123,25 +125,17 @@ private struct PaintSwatchMenu: ViewModifier {
     @ViewBuilder func body(content: Content) -> some View {
         if slot == "transparent" { content }
         else {
-            content.simultaneousGesture(TapGesture(count: 2).onEnded { choose("edit") })
-                .nativeEditorContextMenu(identity: "color-swatch-" + slot, load: { $0(menu) },
+            content.simultaneousGesture(TapGesture(count: 2).onEnded {
+                store.dispatch(["type": "color_slot_menu", "slot": slot, "library": false])
+            })
+                .nativeEditorContextMenu(identity: "color-swatch-" + slot, load: { done in
+                    store.query(["type": "context", "target": ["kind": "color_slot", "slot": slot]]) {
+                        done(AppleContextMenu($0) { store.dispatch($0) })
+                    }
+                },
                     visibility: { store.workspace.popover(popupID, open: $0) })
                 .onDisappear { store.workspace.popover(popupID, open: false) }
         }
-    }
-    private var menu: AppleContextMenu {
-        let copy = store.catalog["native_copy"]["color"]
-        func item(_ op: String, _ label: String, icon: String = "") -> [String: Any] {
-            ["label": copy[label].raw, "icon": icon, "enabled": true, "identifier": "color-\(op)-menu", "action": ["op": op]]
-        }
-        return AppleContextMenu(JSON(["sections": [[item("edit", "edit_menu"), item("library", "palettes"),
-            item("swap", "swap", icon: "color-swap")]]])) { choose($0["op"].string) }
-    }
-    private func choose(_ op: String) {
-        if op == "swap" { store.dispatch(["type": "color", "action": ["op": "swap"]]); return }
-        store.dispatch(["type": "color", "action": ["op": "select", "slot": slot]])
-        if op == "edit" { store.editPaintColor(slot) }
-        else { store.query(["type": "reveal_panel", "panel": "palettes"]) { _ in } }
     }
 }
 

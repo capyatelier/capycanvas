@@ -23,12 +23,11 @@ private enum SizeKind: String {
 private struct SizeForm: View {
     @ObservedObject var store: EditorStore
     let kind: SizeKind
-    @State private var admissions: [String: (Bool) -> Bool] = [:]
+    @State private var admissions = NumericAdmissions()
     private var view: JSON { store.state["layer_tools"][kind.rawValue] }
     private func send(_ action: [String: Any]) { store.dispatch(["type": kind.rawValue, "action": action]) }
     private func finish(_ discard: Bool) -> Bool {
-        let results = admissions.values.map { $0(discard) }
-        return results.allSatisfy { $0 }
+        admissions.finish(discard)
     }
     private func choose(_ action: [String: Any]) {
         guard finish(false) else { return }
@@ -64,7 +63,7 @@ private struct SizeForm: View {
     }
     private func number(_ label: String, value: Double, control: JSON, op: String) -> some View {
         NumberControl(store: store, label: label, value: value, control: control, identifier: kind.identifier + "-" + op, entryWidth: 96,
-            registerAdmission: { key, admission in admissions[key] = admission }) { value, completion in
+            registerAdmission: { key, change in admissions.receive(key, change) }) { value, completion in
             send(["op": op, "value": value]); completion(nil)
         }.id(control.stableKey)
     }

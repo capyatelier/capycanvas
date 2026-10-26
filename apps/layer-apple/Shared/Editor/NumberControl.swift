@@ -14,12 +14,13 @@ struct NumberControl: View {
     var entryWidth: CGFloat = 48
     var affixes: (prefix: String, suffix: String)? = nil
     var toolbar: Toolbar? = nil
-    var registerAdmission: ((String, ((Bool) -> Bool)?) -> Void)? = nil
+    var registerAdmission: ((String, NumericAdmissions.Change) -> Void)? = nil
     var gestureChange: ((String, Double, @escaping @MainActor (String?) -> Void) -> Void)? = nil
     var positionChange: ((Double, @escaping @MainActor (String?) -> Void) -> Void)? = nil
     var reset: (() -> Void)? = nil
     let change: (Double, @escaping @MainActor (String?) -> Void) -> Void
     @State private var field = NumericEditState()
+    @State private var admissionOwner = UUID()
     @State private var formatted = JSON()
     @State private var numericLabels = JSON()
     @State private var showsEntry = false
@@ -49,8 +50,8 @@ struct NumberControl: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             if let toolbar {
-                HStack(spacing: 4) {
-                    if toolbar.slider { sliderTrack.frame(width: 56) }
+                HStack(spacing: 2) {
+                    if toolbar.slider { sliderTrack.padding(.horizontal, 2).frame(width: 60) }
                     if showsEntry || field.dirty { numericEntry } else { valueButton }
                 }
             } else if inline {
@@ -103,7 +104,7 @@ struct NumberControl: View {
                 }.frame(height: store.panelMetrics.sliderHeight).modifier(NumberControlMeasurement(id: key + ":header"))
             } else {
                 HStack(spacing: compact ? store.panelMetrics.spacing : 6) {
-                    Text(label).lineLimit(1).truncationMode(.tail)
+                    Text(label).lineLimit(2).truncationMode(.tail)
                         .frame(maxWidth: .infinity, alignment: .leading).padding(.leading, compact ? 0 : 6)
                         .modifier(NumberControlMeasurement(id: key + ":label"))
                     if !slider {
@@ -133,15 +134,15 @@ struct NumberControl: View {
         }
         .modifier(NumberControlMeasurement(id: key + ":root"))
         .modifier(BubbleNativeControl(cancel: { cancelDrag(); cancel() }))
-        .onAppear { field.receive(value); format(); measureInlineRange(); registerAdmission?(key, admit) }
+        .onAppear { field.receive(value); format(); measureInlineRange(); registerAdmission?(key, .mounted(admissionOwner, admit)) }
         .onChange(of: store.interfaceLanguage) { _, _ in numericLabels = NativeTextContext.numericLabels(label, language: store.interfaceLanguage); format() }
         .onChange(of: label, initial: true) { _, next in numericLabels = NativeTextContext.numericLabels(next, language: store.interfaceLanguage) }
-        .onChange(of: value) { _, next in field.receive(next); format(); registerAdmission?(key, admit) }
+        .onChange(of: value) { _, next in field.receive(next); format(); registerAdmission?(key, .updated(admissionOwner, admit)) }
         .onChange(of: presentedText) { _, _ in format() }
-        .onChange(of: control.stableKey) { _, _ in registerAdmission?(key, admit) }
+        .onChange(of: control.stableKey) { _, _ in registerAdmission?(key, .updated(admissionOwner, admit)) }
         .onChange(of: contact) { _, active in if !active { cancelDrag() } }
         .onChange(of: enabled) { _, active in if !active { cancelDrag() } }
-        .onDisappear { registerAdmission?(key, nil); cancelDrag() }
+        .onDisappear { registerAdmission?(key, .unmounted(admissionOwner)); cancelDrag() }
         .onChange(of: editing) { _, focused in
             if focused {
                 if !field.dirty { field.text = formatted["edit"].string }
@@ -193,7 +194,7 @@ struct NumberControl: View {
     private var valueReadout: some View {
         Button { showsEntry = true } label: {
             Text(formatted["text"].string).monospacedDigit().lineLimit(1)
-                .frame(maxWidth: inline || valueOnly || toolbar != nil ? .infinity : nil, alignment: valueOnly ? .center : .trailing)
+                .frame(maxWidth: inline || valueOnly || toolbar != nil ? .infinity : nil, alignment: valueOnly || toolbar != nil ? .center : .trailing)
                 .padding(.horizontal, 6).frame(height: store.panelMetrics.height)
         }.buttonStyle(EditorControlButtonStyle()).opacity(enabled ? 1 : 0.36)
             // An asynchronous rejection can arrive after text entry closes.
@@ -284,7 +285,7 @@ struct NumberControl: View {
             text: Binding(get: { field.text }, set: { field.text = $0; field.dirty = true }),
             focused: $editing, fontSize: max(1, store.catalog["text_size_pt"].number * 4 / 3),
             color: palette["text"], identifier: "number-entry-" + key,
-            submit: finish, cancel: cancel, step: step)
+            submit: finish, cancel: cancel, step: step, alignment: toolbar != nil ? .center : .right)
             .focusedValue(\.editorTextCommit, { _ = commit() })
             .frame(width: valueOnly || inline || toolbar != nil || affixes != nil ? nil : compactPanel ? 56 : slider ? 80 : spinWidth)
             .padding(.horizontal, 6).frame(height: compact || toolbar != nil || valueOnly || slider || compactPanel ? store.panelMetrics.height : 32)
@@ -325,7 +326,7 @@ struct NumberControl: View {
         do {
             formatted = try resolveNumber(value: field.value, operation: ["type": "format"])
             if let presentedText { formatted = formatted.replacing("text", with: JSON(presentedText)).replacing("edit", with: JSON(presentedText)) }
-            if !field.dirty && !editing { field.text = formatted[slider || compactPanel ? "edit" : "text"].string }
+            if !field.dirty { field.text = formatted[editing || slider || compactPanel ? "edit" : "text"].string }
         } catch { field.error = error.localizedDescription }
     }
     private func measureInlineRange() {

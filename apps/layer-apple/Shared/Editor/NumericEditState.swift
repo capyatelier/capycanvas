@@ -1,5 +1,27 @@
 import Foundation
 
+struct NumericAdmissions {
+    enum Change {
+        case mounted(UUID, (Bool) -> Bool)
+        case updated(UUID, (Bool) -> Bool)
+        case unmounted(UUID)
+    }
+    private var entries: [String: (owner: UUID, admit: (Bool) -> Bool)] = [:]
+
+    mutating func receive(_ key: String, _ change: Change) {
+        switch change {
+        case let .mounted(owner, admit): entries[key] = (owner, admit)
+        case let .updated(owner, admit):
+            if entries[key]?.owner == owner { entries[key] = (owner, admit) }
+        case let .unmounted(owner):
+            if entries[key]?.owner == owner { entries.removeValue(forKey: key) }
+        }
+    }
+    func finish(_ discard: Bool = false, only key: String? = nil) -> Bool {
+        entries.filter { key == nil || $0.key == key }.values.map { $0.admit(discard) }.allSatisfy { $0 }
+    }
+}
+
 /// Presentation state only. Rust owns expressions, units, stepping and ranges.
 /// Keep optimistic edits ahead of queued snapshot echoes without losing drafts.
 struct NumericEditState {

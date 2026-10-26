@@ -86,7 +86,7 @@ struct CanvasPreviewPanel: View {
     let operations: Operations
     let palette: EditorPalette
     @Environment(\.capyCommonCopy) private var common
-    @State private var commitNumber: ((Bool) -> Bool)?
+    @State private var admissions = NumericAdmissions()
     @State private var responded = false
     private func send(_ op: String, _ fields: [String: Any] = [:]) {
         store.dispatch(["type": operations.type, "action": fields.merging(["op": op]) { $1 }])
@@ -94,10 +94,10 @@ struct CanvasPreviewPanel: View {
     private func respond(_ apply: Bool) {
         guard !responded else { return }
         if apply {
-            guard commitNumber?(false) != false else { return }
+            guard admissions.finish() else { return }
             responded = true; send(operations.apply)
         } else {
-            responded = true; _ = commitNumber?(true); send(operations.cancel)
+            responded = true; _ = admissions.finish(true); send(operations.cancel)
         }
     }
     var body: some View {
@@ -105,7 +105,7 @@ struct CanvasPreviewPanel: View {
         VStack(alignment: .leading, spacing: 10) {
             Text(view["title"].string).fontWeight(.bold).accessibilityIdentifier(identifier + "-title")
             NumberControl(store: store, label: view["label"].string, value: view["radius"].number,
-                control: view["numeric"], identifier: identifier + "-value", registerAdmission: { _, admission in commitNumber = admission }) { value, completion in
+                control: view["numeric"], identifier: identifier + "-value", registerAdmission: { key, change in admissions.receive(key, change) }) { value, completion in
                 send(operations.value, ["radius": value]); completion(nil)
             }.id(view["kind"].string)
             HStack(spacing: 8) {

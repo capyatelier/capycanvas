@@ -13,6 +13,10 @@ struct NumericTextField: NSViewRepresentable {
     let submit: (_ returnToCanvas: Bool) -> Bool
     let cancel: () -> Void
     var step: ((Int) -> Void)? = nil
+    var alignment: NSTextAlignment = .right
+    var selectsOnFocus = true
+    var monospaced = true
+    var rounded = false
     @Environment(\.isEnabled) private var enabled
     func makeCoordinator() -> Coordinator { Coordinator(self) }
     func makeNSView(context: Context) -> NSTextField {
@@ -29,11 +33,15 @@ struct NumericTextField: NSViewRepresentable {
         (field as? Field)?.beginEditing = {
             let beginning = !context.coordinator.parent.focused
             context.coordinator.parent.focused = true
-            return beginning
+            return beginning && context.coordinator.parent.selectsOnFocus
         }
         if (field.currentEditor() as? NSTextView)?.hasMarkedText() != true && field.stringValue != text { field.stringValue = text }
         field.placeholderString = label
-        field.font = .monospacedDigitSystemFont(ofSize: fontSize, weight: .regular)
+        field.font = monospaced ? .monospacedDigitSystemFont(ofSize: fontSize, weight: .regular) : .systemFont(ofSize: fontSize)
+        if field.alignment != alignment { field.alignment = alignment }
+        if field.isBezeled != rounded { field.isBezeled = rounded }
+        if field.drawsBackground != rounded { field.drawsBackground = rounded }
+        if rounded && field.bezelStyle != .roundedBezel { field.bezelStyle = .roundedBezel }
         field.textColor = NSColor(color); field.isEnabled = enabled
         field.setAccessibilityLabel(label); field.setAccessibilityIdentifier(identifier)
         if focused && field.currentEditor() == nil {
@@ -41,7 +49,8 @@ struct NumericTextField: NSViewRepresentable {
             DispatchQueue.main.async { [weak field] in
                 guard coordinator.parent.focused, let field, field.currentEditor() == nil else { return }
                 field.window?.makeFirstResponder(field)
-                field.currentEditor()?.selectAll(nil)
+                if coordinator.parent.selectsOnFocus { field.currentEditor()?.selectAll(nil) }
+                else { (field.currentEditor() as? NSTextView)?.setSelectedRange(NSRange(location: field.stringValue.utf16.count, length: 0)) }
             }
         } else if !focused && field.currentEditor() != nil {
             let coordinator = context.coordinator

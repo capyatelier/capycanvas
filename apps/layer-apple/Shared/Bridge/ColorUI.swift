@@ -19,9 +19,9 @@ enum ColorUI {
             return try JSON.decode(response)
         } catch { return JSON(["error": error.localizedDescription]) }
     }
-    static func profileEntries(_ entries: [JSON], language: String) -> [JSON] {
-        let rows = resolve(["type": "profile_entries", "entries": entries.map(\.raw)], language: language).array
-        return zip(entries, rows).map { entry, row in row.replacing("visible", with: entry["visible"]) }
+    static func profileEntries(_ entries: [JSON], language: String, query: String = "") -> [JSON] {
+        let rows = resolve(["type": "profile_entries", "entries": entries.map(\.raw), "query": query], language: language).array
+        return rows.map { row in row.replacing("visible", with: entries.first { $0["id"].string == row["id"].string }?["visible"] ?? JSON(false)) }
             .sorted { $0["name"].string.localizedStandardCompare($1["name"].string) == .orderedAscending }
     }
     static func preview(_ color: JSON) -> JSON {

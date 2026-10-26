@@ -24,7 +24,7 @@ private extension EditorPalette {
 private struct NewDrawingDialog: View {
     @ObservedObject var store: EditorStore
     @State private var error: String?
-    @State private var admissions: [String: (Bool) -> Bool] = [:]
+    @State private var admissions = NumericAdmissions()
     @State private var width: CGFloat = 720
     @State private var name = ""
     @State private var query = ""
@@ -92,7 +92,7 @@ private struct NewDrawingDialog: View {
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
         #endif
         DispatchQueue.main.async {
-            guard admissions.filter({ key == nil || $0.key == key }).values.map({ $0(false) }).allSatisfy({ $0 }) else { return }
+            guard admissions.finish(only: key) else { return }
             action()
         }
     }
@@ -232,7 +232,7 @@ private struct NewDrawingDialog: View {
         let op = axis == 0 ? "width" : "height"
         return NumberControl(store: store, label: copy[op + "_name"].string, value: view["values"][axis].number, control: view["numeric"],
             identifier: "new-drawing-" + op, affixes: (copy[op].string, ""),
-            registerAdmission: { key, admission in admissions[key] = admission }) { value, completion in
+            registerAdmission: { key, change in admissions.receive(key, change) }) { value, completion in
             store.projectFiles.newDrawing(["op": op, "value": value]) { failure in error = failure; completion(failure) }
         }.id(view["numeric"].stableKey).frame(width: 96, height: 34).background(palette.newDrawingField, in: SquircleShape.control)
     }
@@ -260,7 +260,7 @@ private struct NewDrawingDialog: View {
         HStack(spacing: 0) {
             NumberControl(store: store, label: copy["resolution"].string, value: view["setup"]["resolution"].number,
                 control: view["resolution_numeric"], identifier: "new-drawing-resolution", affixes: ("", copy["resolution_unit"].string),
-                registerAdmission: { key, admission in admissions[key] = admission }) { value, completion in
+                registerAdmission: { key, change in admissions.receive(key, change) }) { value, completion in
                 store.projectFiles.newDrawing(["op": "resolution", "value": value]) { failure in error = failure; completion(failure) }
             }.frame(width: 86)
             Button { resolutions = true } label: {
@@ -459,7 +459,7 @@ private struct NewDrawingDialog: View {
                 }.padding(20).frame(maxWidth: .infinity)
             }
             EditorDialogFooter(label: copy["use_texture"].string, identifiers: (cancel: "new-drawing-paper-cancel", apply: "new-drawing-paper-use"),
-                cancel: { _ = admissions[Self.reliefField]?(true); send(["op": "close_drawer"]) }, apply: usePaper) {
+                cancel: { _ = admissions.finish(true, only: Self.reliefField); send(["op": "close_drawer"]) }, apply: usePaper) {
                 reliefRow(drawer["relief"])
             }
         }.accessibilityElement(children: .contain).accessibilityIdentifier("new-drawing-paper-drawer")
@@ -471,7 +471,7 @@ private struct NewDrawingDialog: View {
             Text(copy["relief"].string).lineLimit(1).truncationMode(.tail).help(copy["relief"].string)
             NumberControl(store: store, label: copy["relief"].string, value: relief["value"].number, control: relief["numeric"],
                 identifier: Self.reliefField, affixes: ("", copy["relief_unit"].string),
-                registerAdmission: { key, admission in admissions[key] = admission }) { value, completion in
+                registerAdmission: { key, change in admissions.receive(key, change) }) { value, completion in
                 store.projectFiles.newDrawing(["op": "paper_relief", "value": value]) { failure in error = failure; completion(failure) }
             }.frame(width: 62).padding(.trailing, 10).frame(height: 34).background(palette.newDrawingField, in: SquircleShape.control)
         }.disabled(!enabled).opacity(enabled ? 1 : 0.4).padding(.trailing, 8)

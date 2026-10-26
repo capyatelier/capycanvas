@@ -5,7 +5,7 @@ use super::*;
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ColorUiRequest {
-    ProfileEntries { entries: Vec<crate::profile_library::ProfileEntry> },
+    ProfileEntries { entries: Vec<crate::profile_library::ProfileEntry>, #[serde(default)] query: String },
     IntensityArc { size:f32, stops:f32, #[serde(default)] depth:Option<layer_core::color::SampleDepth>, base:RgbColor, document_space:RgbSpace, recipe:layer_core::color::hdr::SdrRendition, headroom:f32 },
     IntensityPoint {size:f32, point:[f32;2], minimum:f32, maximum:f32},
     PickerLayout { size: f32, #[serde(default)] hdr: bool },
@@ -68,7 +68,8 @@ fn color_ui(request: ColorUiRequest) -> Result<serde_json::Value, String> { colo
 
 pub fn color_ui_localized(request: ColorUiRequest, localizer: &crate::localization::Localizer) -> Result<serde_json::Value, String> {
     let value = match request {
-        ColorUiRequest::ProfileEntries { entries } => return Ok(serde_json::Value::Array(entries.iter().map(|entry| entry.localized_view(localizer)).collect())),
+        ColorUiRequest::ProfileEntries { entries, query } => return Ok(serde_json::Value::Array(entries.iter()
+            .filter(|entry| entry.matches(&query, localizer)).map(|entry| entry.localized_view(localizer)).collect())),
         ColorUiRequest::IntensityPoint {size,point,minimum,maximum} => {
             if !point.iter().all(|v|v.is_finite()) || !minimum.is_finite() || !maximum.is_finite() || minimum>=maximum || minimum < -149. || maximum>128. {return Err("Invalid intensity range".into());}
             let a=HdrIntensityArc::new(size).ok_or("Invalid picker extent")?;
@@ -261,6 +262,54 @@ mod tests {
     use super::*;
     fn editor_json(request: serde_json::Value) -> serde_json::Value {
         color_ui(serde_json::from_value(request).unwrap()).unwrap()
+    }
+    #[test]
+    fn profile_entry_transport_filters_normalized_names_and_preserves_authored_values() {
+        use crate::profile_library::ProfileEntry;
+        use layer_core::color::ProfileChannels;
+        let names = [("Işık İçe aktar", "IŞIK İÇE AKTAR"), ("Größe", "GRÖSSE"),
+            ("Tiếng Việt", "Tie\u{302}\u{301}ng Vie\u{323}\u{302}t")];
+        let entries: Vec<_> = names.iter().enumerate().map(|(index, (name, _))| ProfileEntry {
+            id: char::from(b'a' + index as u8).to_string().repeat(64), bytes: 2602 + index as u64,
+            name: (*name).into(), channels: Some(ProfileChannels::Rgb), profile: None, issue: None,
+        }).collect();
+        let payload = serde_json::to_value(&entries).unwrap();
+        let request = |query: &str| editor_json(serde_json::json!({"type":"profile_entries", "entries":payload, "query":query}));
+        let all = editor_json(serde_json::json!({"type":"profile_entries", "entries":payload}));
+        assert_eq!(all, request(""));
+        assert_eq!(all.as_array().unwrap().len(), entries.len());
+        for (index, (name, query)) in names.iter().enumerate() {
+            let rows = request(query);
+            assert_eq!(rows.as_array().unwrap().len(), 1);
+            assert_eq!(rows[0]["id"], entries[index].id);
+            assert_eq!(rows[0]["name"], *name);
+            assert_eq!(rows[0]["bytes"], entries[index].bytes);
+            assert_eq!(rows, request(&entries[index].id));
+        }
+        assert_eq!(request("Tieng Viet"), serde_json::json!([]));
+        assert_eq!(request("no matching profile"), serde_json::json!([]));
+        assert_eq!(serde_json::to_value(&entries).unwrap(), payload);
+    }
+    #[test]
+    fn profile_entry_transport_searches_current_localized_captions() {
+        use crate::profile_library::ProfileEntry;
+        use layer_core::color::ProfileChannels;
+        let entries = vec![
+            ProfileEntry { id: "a".repeat(64), bytes: 2602, name: String::new(), channels: Some(ProfileChannels::Gray), profile: None, issue: None },
+            ProfileEntry { id: "b".repeat(64), bytes: 17, name: String::new(), channels: None, profile: None, issue: Some(crate::ColorFeatureError::ProfileMissing) },
+        ];
+        for language in crate::UiLanguage::ALL {
+            let localizer = crate::Localizer::shared(language);
+            let request = |query: String| color_ui_localized(serde_json::from_value(serde_json::json!({
+                "type":"profile_entries", "entries":entries, "query":query,
+            })).unwrap(), &localizer).unwrap();
+            for entry in &entries {
+                let rows = request(entry.details(&localizer));
+                assert_eq!(rows, serde_json::json!([entry.localized_view(&localizer)]));
+                let rows = request(entry.display_name(&localizer));
+                assert!(rows.as_array().unwrap().iter().any(|row| row["id"] == entry.id));
+            }
+        }
     }
     #[test]
     fn picker_layout_transports_the_intensity_gradient_origin() {

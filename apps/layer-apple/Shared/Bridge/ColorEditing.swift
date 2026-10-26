@@ -3,6 +3,7 @@ import SwiftUI
 @MainActor final class ColorEditingController: ObservableObject {
     private weak var store: EditorStore?
     @Published private(set) var session: ColorEditorSession?
+    private var slotRequest: UInt64 = 0
     init(store: EditorStore) { self.store = store }
     func open(colors: JSON, slot: String? = nil, value: JSON? = nil, opaque: Bool = false, viewing: JSON = JSON(),
         use: @escaping (JSON, Double?) -> Void) {
@@ -12,7 +13,15 @@ import SwiftUI
             opaque: opaque, viewing: viewing, use: use)
     }
     func ended(_ session: ColorEditorSession) { if self.session === session { self.session = nil } }
-    func receive(_ picker: JSON) { session?.receive(picker) }
+    func receive(_ state: JSON) {
+        session?.receive(state["color_picker"])
+        guard let store, let request = state["requests"].array.first(where: {
+            $0["kind"]["type"].string == "color_slot" && $0["id"].uint > slotRequest
+        }) else { return }
+        slotRequest = request["id"].uint
+        store.dispatch(["type": "complete_request", "id": slotRequest, "error": NSNull()])
+        store.editPaintColor(request["kind"]["slot"].string)
+    }
 }
 
 @MainActor final class ColorEditorSession: ObservableObject, Identifiable {

@@ -214,7 +214,7 @@ import Darwin
                 if !SnapshotProjection.equal(camera.value.raw, state["camera"].raw) { camera.value = state["camera"] }
                 proof.receive(state.json, gpuReady: snapshot["gpu_ready"].bool)
                 drawingTabs.receive()
-                colorEditing.receive(state["color_picker"])
+                colorEditing.receive(state.json)
                 projectFiles.receive(state.json)
                 papers.receive()
                 windowPresentation.receive(state.json)
