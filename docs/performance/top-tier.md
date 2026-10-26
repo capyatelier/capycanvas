@@ -3428,6 +3428,7 @@ measurements remain required.
 | M2 Pro Mac mini, 90 Hz: drawing profiles | Not measured | Not measured | Unqualified; current optimized comparison required |
 | M4 iPad Pro, 120 Hz: drawing profiles | Not measured | Not measured | Unqualified; current optimized comparison required |
 | M4 iPad Pro, 120 Hz: reference-photo G-Pen, 2048 px, light / dark | 117.804 / 117.915 completed and fresh updates/s lower bounds; raw traces and reports: `artifacts/apple/port-current/finish-20261025/m4-gpen-budget/{light,dark}/` | 16.667 / 16.667 ms completion gaps | **Not met:** below 120 completed and fresh updates/s |
+| M4 iPad Pro, 120 Hz: reference-photo Wet Watercolor, 512 px, light / dark, `80dc39fba` build | 119.416 / 119.527 completed updates/s; traces: `artifacts/apple-watercolor-20261026/{light,dark}/` | 8.334 / 8.334 ms completion gaps | **Not met:** below 120 updates/s; latest source unmeasured |
 | Mac: Palette resize, light and dark | Not measured | Not measured | Unqualified; current optimized measurement required |
 | Mac and iPad: layer scrolling and drawer transitions, light and dark | Not measured | Not measured | Unqualified; current motion measurements required |
 | M2 Pro Mac: brush-size stamp preview, light | Longest unchanged or unsampled interval: 92.44 ms; prior 1,244.49 ms | Not measured | Four original six-second continuity checks pass; presentation rate unqualified |
