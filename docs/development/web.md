@@ -77,6 +77,10 @@ They retain held contacts but call compiler timing methods only after the app is
 published. The frame suite checks the actual hooks before and after publication,
 including input before GPU attachment and the retained resume timer.
 
+Glass tints use representable premultiplied RGBA8 values at CSS serialization,
+so SVG filters and native backgrounds agree on solid coverage at every display
+scale.
+
 The session runs on the browser event loop without shared memory. File decoding,
 encoding and color work run in `raster-worker.js` through the shared
 `package::transfer` descriptor and bounded transferable payloads. The descriptor

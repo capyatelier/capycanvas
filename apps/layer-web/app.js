@@ -141,7 +141,11 @@ function applyTheme(theme, palette) {
   }
   const rgba = color => `rgb(${color.slice(0, 3).map(v => v * 255).join(" ")} / ${color[3]})`;
   if (palette) for (const [name, color] of Object.entries(palette.glass)) {
-    if (Array.isArray(color)) document.body.style.setProperty(`--glass-${name.replaceAll("_", "-")}`, rgba(color));
+    if (Array.isArray(color)) {
+      const alpha8 = Math.round(color[3] * 255);
+      const channels = color.slice(0, 3).map(value => alpha8 ? Math.round(value * alpha8) / alpha8 : 0);
+      document.body.style.setProperty(`--glass-${name.replaceAll("_", "-")}`, rgba([...channels, alpha8 / 255]));
+    }
   }
   if (palette) {
     document.body.style.setProperty("--control-fill", rgba(palette.control_fill));
