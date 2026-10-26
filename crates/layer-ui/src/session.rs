@@ -5415,7 +5415,6 @@ impl<R: CanvasRenderer> UiSession<R> {
             | CommandId::Brush
             | CommandId::Eraser
             | CommandId::Airbrush
-            | CommandId::Decoration
             | CommandId::Blend
             | CommandId::Liquify
             | CommandId::Clone
@@ -9551,7 +9550,7 @@ mod tests {
             assert_eq!(drawer.columns, [vec![Panel::BrushSets], vec![Panel::Tools], vec![Panel::ToolSettings]]);
             assert_eq!(drawer.column_widths(1200.), [160., 242., 242.]);
             let sets = s.state.tool_panels.brush_sets.groups.clone();
-            assert_eq!(sets.len(), 10);
+            assert_eq!(sets.len(), 7);
             assert!(sets.iter().all(|set| !matches!(set.label.as_ref(), "Eraser" | "Blend" | "Liquify")));
             let mut remembered = Vec::new();
             for set in sets {
@@ -9613,7 +9612,7 @@ mod tests {
             s.dispatch(UiAction::ActivateHeaderItem { id }).unwrap();
             let drawer = s.state.customization.drawer.clone().unwrap();
             assert_eq!(drawer.columns, [vec![Panel::SculptSets], vec![Panel::Tools], vec![Panel::ToolSettings]]);
-            assert_eq!(s.state.tool_panels.sculpt_sets.groups.iter().map(|s| s.label.as_ref()).collect::<Vec<_>>(), ["Blend", "Wet paint", "Effects", "Liquify", "Retouch"]);
+            assert_eq!(s.state.tool_panels.sculpt_sets.groups.iter().map(|s| s.label.as_ref()).collect::<Vec<_>>(), ["Blend", "Paint mixing", "Effects", "Liquify", "Retouch"]);
             for set in s.state.tool_panels.sculpt_sets.groups.clone() {
                 s.dispatch(set.action).unwrap();
                 assert_eq!(s.state.customization.drawer.as_ref(), Some(&drawer));
@@ -9637,7 +9636,7 @@ mod tests {
             }] }).unwrap();
             s.dispatch(UiAction::ActivateHeaderItem { id: eraser }).unwrap();
             assert_eq!(s.state.customization.drawer.as_ref().unwrap().columns,
-                [vec![Panel::Tools], vec![Panel::ToolSettings]]);
+                [vec![Panel::ToolSettings]]);
             let capture = s.capture_workspace().unwrap();
             let json = serde_json::to_string(&capture).unwrap();
             let mut restored = session(platform);
@@ -9661,13 +9660,10 @@ mod tests {
         for tool in Tool::ALL {
             invoke(&mut s, tool.command());
             assert_eq!(s.state.brush.tool, tool);
-            let groups = s.state.tool_set.groups.clone();
-            assert_eq!(groups.iter().filter(|g| g.selected).count(), 1);
-            for group in groups {
-                s.dispatch(group.action).unwrap();
-                let last = s.state.tool_set.subtools.last().unwrap().clone();
-                s.dispatch(last.action).unwrap();
-                let id = last.preview.unwrap();
+            for group in ToolGroup::ALL.into_iter().filter(|group| group.holds(tool)) {
+                s.dispatch(UiAction::SelectToolGroup { group }).unwrap();
+                let id = tools::group_presets(group).filter(|&id| tools::tool(id) == tool).last().unwrap();
+                s.dispatch(UiAction::SelectBrush { id }).unwrap();
                 assert_eq!(s.state.brush.preset, id);
                 let size = id as f32 + 10.0;
                 s.dispatch(UiAction::SetBrushSize { value: size }).unwrap();
@@ -9684,7 +9680,7 @@ mod tests {
                         .iter()
                         .filter(|b| b.selected)
                         .count(),
-                    1
+                    usize::from(!s.state.tool_set.subtools.is_empty())
                 );
                 assert_eq!(s.state.brush.color, color);
             }
@@ -9805,10 +9801,9 @@ mod tests {
         let tiles = panel.tiles_mut().unwrap();
         tiles.clear();
         for (i, command) in [
-            CommandId::Decoration,
             CommandId::Airbrush,
-            CommandId::Decoration,
             CommandId::Brush,
+            CommandId::Airbrush,
         ]
         .into_iter()
         .enumerate()
@@ -9820,10 +9815,10 @@ mod tests {
         }
         invoke(&mut s, CommandId::Eraser);
         for command in [
-            CommandId::Decoration,
             CommandId::Airbrush,
             CommandId::Brush,
-            CommandId::Decoration,
+            CommandId::Airbrush,
+            CommandId::Brush,
         ] {
             s.dispatch(UiAction::CycleTool {
                 family: ToolFamily::Paint,
@@ -16518,7 +16513,7 @@ mod tests {
                             &vec![400.; previous.columns.len()],
                         )
                         .unwrap();
-                    let next = ContentDrawer::for_tile(
+                    let mut next = ContentDrawer::for_tile(
                         &s.state.workspace.layout,
                         TileAnchor {
                             panel: Panel::Toolbar,
@@ -16526,6 +16521,7 @@ mod tests {
                         },
                     )
                     .unwrap();
+                    if tile == eraser { next.columns = vec![vec![Panel::ToolSettings]]; }
                     let target = next
                         .placement(
                             &s.state.workspace.layout,

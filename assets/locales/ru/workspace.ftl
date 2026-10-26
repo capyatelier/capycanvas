@@ -212,7 +212,6 @@ workspace-tool-description-pencil = Делать наброски каранда
 workspace-tool-description-brush = Рисовать текущей кистью
 workspace-tool-description-eraser = Стирать краску с активного слоя
 workspace-tool-description-airbrush = Наносить мягкий цвет или распыление
-workspace-tool-description-decoration = Рисовать текстурными штампами
 workspace-tool-description-blend = Смешивать и размазывать краску
 workspace-tool-description-liquify = Сдвигать и закручивать краску
 workspace-tool-description-lasso = Рисовать выделение от руки

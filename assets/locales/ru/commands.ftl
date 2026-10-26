@@ -31,7 +31,6 @@ command-pencil = Карандаш
 command-brush = Кисть для рисования
 command-eraser = Ластик
 command-airbrush = Аэрограф
-command-decoration = Декор
 command-blend = Смешивание
 command-liquify = Пластика
 command-lasso = Выделение лассо

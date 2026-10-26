@@ -210,7 +210,6 @@ workspace-tool-description-pencil = 使用铅笔和色粉进行素描
 workspace-tool-description-brush = 使用当前画笔绘画
 workspace-tool-description-eraser = 擦除当前图层上的绘画内容
 workspace-tool-description-airbrush = 叠加柔和的颜色或喷雾
-workspace-tool-description-decoration = 使用纹理印章绘画
 workspace-tool-description-blend = 混合和涂抹现有颜料
 workspace-tool-description-liquify = 推移和扭转现有绘画内容
 workspace-tool-description-lasso = 徒手绘制选区

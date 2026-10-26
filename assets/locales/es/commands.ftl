@@ -31,7 +31,6 @@ command-pencil = Lápiz
 command-brush = Pincel de pintura
 command-eraser = Borrador
 command-airbrush = Aerógrafo
-command-decoration = Decoración
 command-blend = Mezclar
 command-liquify = Licuar
 command-lasso = Selección con lazo

@@ -4,8 +4,8 @@
 
 GTK, Web, Android, macOS, iPadOS and Windows provide Rectangle Select, Ellipse Select, Polygonal Lasso, and Select by Color.
 Photo places these alongside Lasso and Auto select in its Tools toolbar. Sketch
-uses a Select title-bar command and a two-panel Tools → Tool drawer, matching
-the Eraser drawer. The Select command remembers the last chosen selection tool
+uses a Select title-bar command and a two-panel Tools → Tool drawer.
+The Select command remembers the last chosen selection tool
 in the workspace.
 The same hosts also provide [Tonal range](tonal-selection.md) for HDR-aware luminance masks.
 

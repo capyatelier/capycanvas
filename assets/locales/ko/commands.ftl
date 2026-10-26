@@ -31,7 +31,6 @@ command-pencil = 연필
 command-brush = 페인트 브러시
 command-eraser = 지우개
 command-airbrush = 에어브러시
-command-decoration = 장식
 command-blend = 혼색
 command-liquify = 왜곡
 command-lasso = 올가미 선택

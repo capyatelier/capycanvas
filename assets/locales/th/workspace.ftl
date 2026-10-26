@@ -207,7 +207,6 @@ workspace-tool-description-pencil = ร่างภาพด้วยดิน�
 workspace-tool-description-brush = ระบายสีด้วยพู่กันปัจจุบัน
 workspace-tool-description-eraser = ลบสีจากเลเยอร์ปัจจุบัน
 workspace-tool-description-airbrush = เพิ่มสีนุ่มหรือพ่นสี
-workspace-tool-description-decoration = ระบายด้วยตราประทับพื้นผิว
 workspace-tool-description-blend = ผสมและป้ายสีที่มีอยู่
 workspace-tool-description-liquify = ผลักและบิดสีที่มีอยู่
 workspace-tool-description-lasso = วาดพื้นที่เลือกอิสระ

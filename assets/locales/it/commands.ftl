@@ -31,7 +31,6 @@ command-pencil = Matita
 command-brush = Pennello
 command-eraser = Gomma
 command-airbrush = Aerografo
-command-decoration = Decorazione
 command-blend = Sfuma
 command-liquify = Fluidifica
 command-lasso = Selezione con lazo

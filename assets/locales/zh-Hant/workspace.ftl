@@ -210,7 +210,6 @@ workspace-tool-description-pencil = 使用鉛筆與粉彩進行素描
 workspace-tool-description-brush = 使用目前筆刷繪畫
 workspace-tool-description-eraser = 擦除目前圖層上的繪畫內容
 workspace-tool-description-airbrush = 疊加柔和的色彩或噴霧
-workspace-tool-description-decoration = 使用紋理印章繪畫
 workspace-tool-description-blend = 混合與塗抹現有顏料
 workspace-tool-description-liquify = 推移與扭轉現有繪畫內容
 workspace-tool-description-lasso = 徒手繪製選取範圍

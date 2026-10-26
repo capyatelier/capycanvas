@@ -339,7 +339,7 @@ fn action_description(action: &UiAction, l: &Localizer) -> String {
         UiAction::Invoke { command } => match command {
             DrawingBrush => l.text(MessageId::COMMANDS_HELP_DRAWING_BRUSH).to_string(),
             Sculpt => l.text(MessageId::COMMANDS_HELP_SCULPT).to_string(),
-            Pen | Pencil | Brush | Eraser | Airbrush | Decoration | Blend | Liquify => {
+            Pen | Pencil | Brush | Eraser | Airbrush | Blend | Liquify => {
                 l.text(MessageId::COMMANDS_HELP_PEN).to_string()
             }
             Clone => l.text(MessageId::COMMANDS_HELP_CLONE).to_string(),

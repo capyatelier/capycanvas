@@ -209,7 +209,6 @@ workspace-tool-description-pencil = Phác thảo bằng bút chì và phấn ti�
 workspace-tool-description-brush = Vẽ bằng cọ hiện tại
 workspace-tool-description-eraser = Tẩy màu trên lớp hiện tại
 workspace-tool-description-airbrush = Tô dần màu mềm hoặc phun màu
-workspace-tool-description-decoration = Vẽ bằng dấu có kết cấu
 workspace-tool-description-blend = Hòa và miết màu có sẵn
 workspace-tool-description-liquify = Đẩy và xoắn màu có sẵn
 workspace-tool-description-lasso = Vẽ vùng chọn tự do

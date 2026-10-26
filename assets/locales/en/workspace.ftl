@@ -210,7 +210,6 @@ workspace-tool-description-pencil = Sketch with pencils and pastels
 workspace-tool-description-brush = Paint with the current brush
 workspace-tool-description-eraser = Erase paint from the active layer
 workspace-tool-description-airbrush = Build up soft color or spray
-workspace-tool-description-decoration = Paint with textured stamps
 workspace-tool-description-blend = Mix and smear existing paint
 workspace-tool-description-liquify = Push and twist existing paint
 workspace-tool-description-lasso = Draw a freehand selection

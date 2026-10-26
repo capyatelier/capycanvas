@@ -30,77 +30,64 @@ mod enclose_fill_checks {
     }
 
     #[test]
-    fn enclose_fill_is_a_remembered_lasso_subtool_in_toolbar_and_header_drawers() {
+    fn fill_siblings_stay_flat_in_toolbar_header_drawers_and_restored_state() {
         for platform in Platform::ALL {
             for control in [ToolbarControl::Command { command: CommandId::Fill },
-                ToolbarControl::ToolSlot { slot: ToolSlotId::PhotoFill }] {
+                ToolbarControl::ToolSlot { slot: ToolSlotId::PhotoFill },
+                ToolbarControl::ToolSlot { slot: ToolSlotId::LassoFill }] {
                 let (mut s, panel, ids) = group_fixture(platform, &[control]);
                 let tile = DrawerAnchor::Tile { panel, tile: ids[0] };
                 let header = add_group_header(&mut s, control);
-                let enclose = ToolVariant::Command { command: CommandId::EncloseFill };
-                let fill_label = CommandId::Fill.localized_label(s.localization());
-                let lasso_label = CommandId::LassoFill.localized_label(s.localization());
-                let enclose_label = CommandId::EncloseFill.localized_label(s.localization());
+                let commands = if control == (ToolbarControl::ToolSlot { slot: ToolSlotId::LassoFill }) {
+                    &[CommandId::LassoFill, CommandId::EncloseFill][..]
+                } else { &[CommandId::Fill, CommandId::LassoFill, CommandId::EncloseFill][..] };
+                let check = |s: &UiSession<Recorder>, view: &ToolSetView, anchor: DrawerAnchor| {
+                    let siblings: Vec<_> = view.groups.iter().chain(&view.subtools).filter_map(|item|
+                        if let UiAction::ChooseToolVariant { anchor: origin, variant: ToolVariant::Command { command } } = item.action {
+                            assert_eq!(origin, anchor);
+                            Some((command, item.selected))
+                        } else { None }).collect();
+                    assert_eq!(siblings.iter().map(|(command, _)| *command).collect::<Vec<_>>(), commands);
+                    assert_eq!(siblings.iter().filter(|(_, selected)| *selected).count(), 1);
+                    assert!(siblings.iter().all(|(command, selected)| *selected == s.command(*command).selected));
+                };
                 for anchor in [tile, header] {
-                    s.dispatch(slot_choice(&s, anchor, enclose)).unwrap();
-                    let check = |s: &UiSession<Recorder>, view: &ToolSetView| {
-                        let categories = view.groups.iter().filter(|item|
-                            [fill_label.as_ref(), lasso_label.as_ref(), enclose_label.as_ref()].contains(&item.label.as_ref()))
-                            .map(|item| item.label.as_ref()).collect::<Vec<_>>();
-                        assert_eq!(categories, [fill_label.as_ref(), lasso_label.as_ref()]);
-                        assert_eq!(view.groups.iter().filter(|item| item.selected).map(|item| item.label.as_ref()).collect::<Vec<_>>(), [lasso_label.as_ref()]);
-                        assert_eq!(view.subtools.iter().map(|item| item.label.as_ref()).collect::<Vec<_>>(), [lasso_label.as_ref(), enclose_label.as_ref()]);
-                        assert_eq!(view.subtools.iter().filter(|item| item.selected).map(|item| item.label.as_ref()).collect::<Vec<_>>(), [enclose_label.as_ref()]);
-                        assert!(s.command(CommandId::EncloseFill).selected);
-                    };
-                    check(&s, &s.state().tool_set);
-                    activate_slot(&mut s, anchor);
-                    let drawer = s.state().customization.drawer.as_ref().unwrap();
-                    assert_eq!(drawer.anchor, anchor);
-                    check(&s, drawer.tool_set.as_ref().unwrap());
-                    for source in [CommandId::SelectionVisible, CommandId::SelectionEditing, CommandId::SelectionReference] {
-                        let options = s.state().tool_options();
-                        let ToolOption::Choice { label, items: variants, .. } = options.iter().find(|option|
-                            matches!(option, ToolOption::Choice { id: "variant", .. })).unwrap() else { unreachable!() };
-                        assert_eq!(label, &s.localization().text(MessageId::TOOLBAR_VARIANT));
-                        assert_eq!(variants.len(), 2);
-                        let ToolOption::Choice { items, .. } = options.iter().find(|option|
-                            matches!(option, ToolOption::Choice { id: "selection-source", .. })).unwrap() else { unreachable!() };
-                        assert_eq!(items.len(), 3);
-                        let action = items.iter().find(|item| item.action == UiAction::Invoke { command: source }).unwrap().action.clone();
-                        s.dispatch(UiAction::ToolbarEdit { context: s.state().toolbar_context(), action: Box::new(action) }).unwrap();
-                        assert!(s.command(source).selected);
-                        check(&s, &s.state().tool_set);
-                        check(&s, s.state().customization.drawer.as_ref().unwrap().tool_set.as_ref().unwrap());
+                    for &command in commands {
+                        let variant = ToolVariant::Command { command };
+                        s.dispatch(slot_choice(&s, anchor, variant)).unwrap();
+                        check(&s, &s.state().tool_set, anchor);
+                        activate_slot(&mut s, anchor);
+                        let drawer = s.state().customization.drawer.as_ref().unwrap();
+                        assert_eq!(drawer.anchor, anchor);
+                        check(&s, drawer.tool_set.as_ref().unwrap(), anchor);
+                        if command == CommandId::EncloseFill {
+                            for source in [CommandId::SelectionVisible, CommandId::SelectionEditing, CommandId::SelectionReference] {
+                                let options = s.state().tool_options();
+                                let ToolOption::Choice { items, .. } = options.iter().find(|option|
+                                    matches!(option, ToolOption::Choice { id: "selection-source", .. })).unwrap() else { unreachable!() };
+                                assert_eq!(items.len(), 3);
+                                let action = items.iter().find(|item| item.action == UiAction::Invoke { command: source }).unwrap().action.clone();
+                                s.dispatch(UiAction::ToolbarEdit { context: s.state().toolbar_context(), action: Box::new(action) }).unwrap();
+                                assert!(s.command(source).selected);
+                                check(&s, s.state().customization.drawer.as_ref().unwrap().tool_set.as_ref().unwrap(), anchor);
+                            }
+                        }
+                        assert_eq!(selected_slot_variant(&s, tile), variant);
+                        assert_eq!(selected_slot_variant(&s, header), variant);
+                        activate_slot(&mut s, anchor);
+                        assert!(s.state().customization.drawer.is_none());
                     }
-                    let category = |s: &UiSession<Recorder>, label: &str| s.state().tool_set.groups.iter().find(|item| item.label.as_ref() == label).unwrap().action.clone();
-                    s.dispatch(category(&s, &fill_label)).unwrap();
-                    assert!(s.command(CommandId::Fill).selected);
-                    s.dispatch(category(&s, &lasso_label)).unwrap();
-                    check(&s, &s.state().tool_set);
-                    assert_eq!(selected_slot_variant(&s, tile), enclose);
-                    assert_eq!(selected_slot_variant(&s, header), enclose);
-                    let ordinary = s.state().tool_set.subtools.iter().find(|item| item.label.as_ref() == lasso_label.as_ref()).unwrap().action.clone();
-                    s.dispatch(ordinary).unwrap();
-                    assert!(s.command(CommandId::LassoFill).selected);
-                    assert!(!s.state().tool_actions.iter().any(|action| action.group() == Some(ToolActionGroup::SelectionSource)));
-                    s.dispatch(category(&s, &fill_label)).unwrap();
-                    s.dispatch(category(&s, &lasso_label)).unwrap();
-                    assert!(s.command(CommandId::LassoFill).selected);
-                    activate_slot(&mut s, anchor);
-                    assert!(s.state().customization.drawer.is_none());
                 }
-                s.dispatch(slot_choice(&s, tile, enclose)).unwrap();
-                s.dispatch(slot_choice(&s, tile, ToolVariant::Command { command: CommandId::Fill })).unwrap();
-                let capture = s.capture_workspace().unwrap();
+                invoke(&mut s, CommandId::Hand);
                 let mut restored = session(platform);
                 restored.restore_editing(s.editing_state()).unwrap();
-                restored.adopt_workspace(PreparedWorkspace::new(capture).unwrap()).unwrap();
-                let category = restored.state().tool_set.groups.iter().find(|item| item.label.as_ref() == lasso_label.as_ref()).unwrap().action.clone();
-                restored.dispatch(category).unwrap();
-                assert!(restored.command(CommandId::EncloseFill).selected);
+                restored.adopt_workspace(PreparedWorkspace::new(s.capture_workspace().unwrap()).unwrap()).unwrap();
+                let enclose = ToolVariant::Command { command: CommandId::EncloseFill };
                 assert_eq!(selected_slot_variant(&restored, tile), enclose);
                 assert_eq!(selected_slot_variant(&restored, header), enclose);
+                activate_slot(&mut restored, tile);
+                assert!(restored.command(CommandId::EncloseFill).selected);
+                assert!(restored.command(CommandId::SelectionReference).selected);
             }
         }
     }

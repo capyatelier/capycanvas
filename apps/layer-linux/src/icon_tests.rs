@@ -520,6 +520,7 @@ fn controls(app: &adw::Application, output: &Path) {
         "native brush startup",
     );
     let mut workspace = state(&w).workspace;
+    workspace.layout = layer_ui::DockLayout::editor_default();
     // Show the real tool settings beside the docked category/preset projection.
     workspace
         .layout
@@ -568,15 +569,27 @@ fn controls(app: &adw::Application, output: &Path) {
                 id: category.brushes[0].id,
             });
             pump(100);
-            let index = state(&w)
-                .tool_set
-                .groups
-                .iter()
-                .position(|g| g.label == category.label)
-                .unwrap();
-            let button = w.tool_set.group_buttons.borrow()[index].clone();
-            click(&button);
-            assert!(button.has_css_class("selected-tool"));
+            if category.id == layer_ui::ToolGroup::Retouch {
+                let layout = state(&w).workspace.layout;
+                let (panel, tile) = layout.panels.iter().find_map(|panel| panel.tiles().iter()
+                    .find(|tile| tile.control == ToolbarControl::ToolSlot { slot: ToolSlotId::Retouch })
+                    .map(|tile| (panel.id, tile.id))).unwrap();
+                w.dispatch(UiAction::ChooseToolVariant { anchor: DrawerAnchor::Tile { panel, tile },
+                    variant: ToolVariant::BrushPreset { id: category.brushes[0].id } });
+                pump(100);
+            }
+            if let Some(index) = state(&w).tool_set.groups.iter().position(|g| g.label == category.label) {
+                let button = w.tool_set.group_buttons.borrow()[index].clone();
+                click(&button);
+                assert!(button.has_css_class("selected-tool"));
+            }
+            if category.id == layer_ui::ToolGroup::Eraser {
+                assert!(state(&w).tool_set.groups.is_empty() && state(&w).tool_set.subtools.is_empty());
+                let icon = find_named(w.window.upcast_ref(), "layer-eraser-symbolic").unwrap();
+                assert!(icon.is_mapped());
+                records.push(serde_json::json!({"theme":label,"kind":"tool","label":category.label,"icon":category.icon}));
+                continue;
+            }
             for choice in &category.brushes {
                 let button = w
                     .tool_set
@@ -596,8 +609,9 @@ fn controls(app: &adw::Application, output: &Path) {
                 assert_eq!(state(&w).brush.preset, choice.id);
                 assert!(button.has_css_class("selected-tool"));
             }
-            let first_group = w.tool_set.group_buttons.borrow()[0].clone();
-            scroll_to(&first_group);
+            let first = w.tool_set.group_buttons.borrow().first().cloned()
+                .or_else(|| w.tool_set.buttons.borrow().first().map(|(_, button, _)| button.clone())).unwrap();
+            scroll_to(&first);
             check_tool_set(&w, &mut records, label);
             capture_widget(&w.window, &w.panel_widget(Panel::Brushes))
                 .save_to_png(output.join(format!("{label}-medium-{}.png", category.icon)))
@@ -610,7 +624,6 @@ fn controls(app: &adw::Application, output: &Path) {
                     | CommandId::Pencil
                     | CommandId::Brush
                     | CommandId::Airbrush
-                    | CommandId::Decoration
                     | CommandId::Blend
                     | CommandId::Liquify
                     | CommandId::Eraser

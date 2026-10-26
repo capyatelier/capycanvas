@@ -210,7 +210,6 @@ workspace-tool-description-pencil = Hacer bocetos con lápices y pasteles
 workspace-tool-description-brush = Pintar con el pincel actual
 workspace-tool-description-eraser = Borrar pintura de la capa activa
 workspace-tool-description-airbrush = Acumular color suave o pulverizado
-workspace-tool-description-decoration = Pintar con sellos con textura
 workspace-tool-description-blend = Mezclar y extender pintura existente
 workspace-tool-description-liquify = Empujar y retorcer pintura existente
 workspace-tool-description-lasso = Dibujar una selección a mano alzada

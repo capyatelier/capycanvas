@@ -31,7 +31,6 @@ command-pencil = Crayon
 command-brush = Pinceau de peinture
 command-eraser = Gomme
 command-airbrush = Aérographe
-command-decoration = Décoration
 command-blend = Mélange
 command-liquify = Fluidité
 command-lasso = Sélection au lasso

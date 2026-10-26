@@ -210,7 +210,6 @@ workspace-tool-description-pencil = 鉛筆やパステルでスケッチしま�
 workspace-tool-description-brush = 現在のブラシで描きます。
 workspace-tool-description-eraser = 編集中のレイヤーの描画を消します。
 workspace-tool-description-airbrush = 柔らかい色やスプレーを重ねます。
-workspace-tool-description-decoration = 質感のあるスタンプで描きます。
 workspace-tool-description-blend = 描画済みの色を混ぜたり、引き伸ばしたりします。
 workspace-tool-description-liquify = 描画済みの内容を押したり、ねじったりします。
 workspace-tool-description-lasso = 自由な形の選択範囲を描きます。

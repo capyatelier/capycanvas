@@ -31,7 +31,6 @@ command-pencil = ดินสอ
 command-brush = พู่กันระบายสี
 command-eraser = ยางลบ
 command-airbrush = แอร์บรัช
-command-decoration = ตกแต่ง
 command-blend = เกลี่ยสี
 command-liquify = บิดรูป
 command-lasso = พื้นที่เลือกบ่วง

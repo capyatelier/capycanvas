@@ -211,7 +211,6 @@ workspace-tool-description-pencil = Esboçar com lápis e pastéis
 workspace-tool-description-brush = Pintar com o pincel atual
 workspace-tool-description-eraser = Apagar tinta da camada ativa
 workspace-tool-description-airbrush = Acumular cor suave ou spray
-workspace-tool-description-decoration = Pintar com carimbos texturizados
 workspace-tool-description-blend = Misturar e espalhar tinta existente
 workspace-tool-description-liquify = Empurrar e torcer tinta existente
 workspace-tool-description-lasso = Desenhar uma seleção à mão livre

@@ -210,7 +210,6 @@ workspace-tool-description-pencil = Mit Bleistiften und Pastell skizzieren
 workspace-tool-description-brush = Mit dem aktuellen Pinsel malen
 workspace-tool-description-eraser = Farbe von der aktiven Ebene radieren
 workspace-tool-description-airbrush = Weiche Farbe oder Sprühfarbe aufbauen
-workspace-tool-description-decoration = Mit texturierten Stempeln malen
 workspace-tool-description-blend = Vorhandene Farbe mischen und verwischen
 workspace-tool-description-liquify = Vorhandene Farbe verschieben und verdrehen
 workspace-tool-description-lasso = Eine Freihandauswahl zeichnen

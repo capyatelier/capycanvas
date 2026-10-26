@@ -31,7 +31,6 @@ command-pencil = Pencil
 command-brush = Paint Brush
 command-eraser = Eraser
 command-airbrush = Airbrush
-command-decoration = Decoration
 command-blend = Blend
 command-liquify = Liquify
 command-lasso = Lasso selection

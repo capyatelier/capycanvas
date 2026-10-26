@@ -14,7 +14,6 @@ crate::variants! {
         Brush,
         Eraser,
         Airbrush,
-        Decoration,
         Blend,
         Liquify,
         Clone,
@@ -30,7 +29,6 @@ impl Tool {
             Self::Brush => CommandId::Brush,
             Self::Eraser => CommandId::Eraser,
             Self::Airbrush => CommandId::Airbrush,
-            Self::Decoration => CommandId::Decoration,
             Self::Blend => CommandId::Blend,
             Self::Liquify => CommandId::Liquify,
             Self::Clone => CommandId::Clone,
@@ -63,7 +61,7 @@ impl ToolFamily {
     pub fn commands(self) -> &'static [CommandId] {
         match self {
             Self::Ink => &[CommandId::Pen, CommandId::Pencil],
-            Self::Paint => &[CommandId::Brush, CommandId::Airbrush, CommandId::Decoration],
+            Self::Paint => &[CommandId::Brush, CommandId::Airbrush],
             Self::Blend => &[CommandId::Blend, CommandId::Liquify],
             Self::Retouch => &[CommandId::Clone, CommandId::Heal, CommandId::SpotHeal],
         }
@@ -117,7 +115,6 @@ macro_rules! tool_groups {
 
 tool_groups! {
     Pen: Pen, TOOL_GROUP_PEN, "pen";
-    Marker: Pen, TOOL_GROUP_MARKER, "marker";
     Pencil: Pencil, TOOL_GROUP_PENCIL, "pencil";
     Pastel: Pencil, TOOL_GROUP_PASTEL, "pastel";
     Paint: Brush, TOOL_GROUP_PAINT, "paint";
@@ -125,8 +122,6 @@ tool_groups! {
     Oil: Brush, TOOL_GROUP_OIL, "oil-paint";
     Eraser: Eraser, TOOL_GROUP_ERASER, "eraser";
     Airbrush: Airbrush, TOOL_GROUP_AIRBRUSH, "airbrush";
-    Spray: Airbrush, TOOL_GROUP_SPRAY, "spray";
-    Decoration: Decoration, TOOL_GROUP_DECORATION, "decoration";
     Blend: Blend, TOOL_GROUP_BLEND, "blend";
     WetPaint: Blend, TOOL_GROUP_WET_PAINT, "water";
     Effects: Blend, TOOL_GROUP_EFFECTS, "star";
@@ -171,7 +166,7 @@ const PRESETS: &[(DefaultBrushPreset, MessageId, ToolGroup)] = &[
         MessageId::BRUSH_PRESET_BRUSHED_INK,
         ToolGroup::Pen,
     ),
-    (DefaultBrushPreset::Marker, MessageId::BRUSH_PRESET_MARKER, ToolGroup::Marker),
+    (DefaultBrushPreset::Marker, MessageId::BRUSH_PRESET_MARKER, ToolGroup::Pen),
     (DefaultBrushPreset::Pencil, MessageId::BRUSH_PRESET_PENCIL, ToolGroup::Pencil),
     (
         DefaultBrushPreset::PointyPencil,
@@ -246,11 +241,11 @@ const PRESETS: &[(DefaultBrushPreset, MessageId, ToolGroup)] = &[
         MessageId::BRUSH_PRESET_AIRBRUSH,
         ToolGroup::Airbrush,
     ),
-    (DefaultBrushPreset::Spray, MessageId::BRUSH_PRESET_SPRAY, ToolGroup::Spray),
+    (DefaultBrushPreset::Spray, MessageId::BRUSH_PRESET_SPRAY, ToolGroup::Airbrush),
     (
         DefaultBrushPreset::DualTexture,
         MessageId::BRUSH_PRESET_DUAL_TEXTURE,
-        ToolGroup::Decoration,
+        ToolGroup::Paint,
     ),
     (DefaultBrushPreset::Smudge, MessageId::BRUSH_PRESET_SMUDGE, ToolGroup::Blend),
     (DefaultBrushPreset::SoftBlender, MessageId::BRUSH_PRESET_SOFT_BLENDER, ToolGroup::Blend),
@@ -710,6 +705,7 @@ mod tests {
     #[test]
     fn every_brush_has_one_tool_and_group_and_every_group_is_populated() {
         assert_eq!(PRESETS.len(), 65);
+        assert_eq!(ToolGroup::ALL.len(), 13);
         let mut ids = std::collections::BTreeSet::new();
         for &(preset, _, group) in PRESETS {
             assert!(ids.insert(preset as u32));

@@ -31,7 +31,6 @@ command-pencil = 铅笔
 command-brush = 绘画画笔
 command-eraser = 橡皮擦
 command-airbrush = 喷枪
-command-decoration = 装饰
 command-blend = 混色
 command-liquify = 液化
 command-lasso = 套索选区

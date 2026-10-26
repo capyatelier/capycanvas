@@ -210,7 +210,6 @@ workspace-tool-description-pencil = Crea schizzi con matite e pastelli
 workspace-tool-description-brush = Dipingi con il pennello corrente
 workspace-tool-description-eraser = Cancella pittura dal livello attivo
 workspace-tool-description-airbrush = Accumula colore morbido o spruzzo
-workspace-tool-description-decoration = Dipingi con timbri con trama
 workspace-tool-description-blend = Mescola e trascina la pittura esistente
 workspace-tool-description-liquify = Spingi e torci la pittura esistente
 workspace-tool-description-lasso = Disegna una selezione a mano libera

@@ -31,7 +31,6 @@ command-pencil = Bút chì
 command-brush = Cọ vẽ
 command-eraser = Tẩy
 command-airbrush = Bút phun
-command-decoration = Trang trí
 command-blend = Hòa màu
 command-liquify = Biến dạng
 command-lasso = Chọn tự do

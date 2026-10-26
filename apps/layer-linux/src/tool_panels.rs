@@ -94,7 +94,9 @@ impl ToolSet {
                     ((if media { layer_ui::BRUSH_SETS_MIN_WIDTH } else { layer_ui::TOOL_PANEL_MIN_WIDTH }) - 2.0 * layer_ui::PANEL_CONTENT_INSET) as i32,
                     if media { TOOL_ROW_HEIGHT } else { layer_ui::TILE_SIZE as i32 },
                 );
-                button.set_child(Some(&aligned_icon_label(&item.label, item.icon, if media { 0.0 } else { 1.0 })));
+                let content = aligned_icon_label(&item.label, item.icon, if media { 0.0 } else { 1.0 });
+                if let Some(label) = content.last_child().and_downcast::<gtk::Label>() { crate::panel_controls::two_lines(&label); }
+                button.set_child(Some(&content));
                 if let Some(grab) = layer_ui::BubbleGrab::for_choice(&item.action) {
                     workspace.register_tear(&button, grab);
                 }

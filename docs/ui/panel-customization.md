@@ -28,16 +28,17 @@ hints. An unavailable remembered tool keeps its variations reachable.
 
 Every tool group uses the same softly rounded bottom-right triangle in Paint,
 Photo and Sketch, in both toolbars and the title bar. GTK, Web, Android and
-Windows render the shared `tool-group` icon. Brush categories remain groups even
-when they contain only one preset; pinned brush presets and individual leaf
-tools have no group marker. The triangle's painted edges have at least 6px of
-right and bottom clearance, including Small, Medium and Large title-bar tools;
+Windows render the shared `tool-group` icon. Controls with a single preset,
+pinned brush presets and individual leaf tools have no group marker or redundant
+variation menu. A single brush category has no category selector. The triangle's
+painted edges have at least 6px of right and bottom clearance, including Small,
+Medium and Large title-bar tools;
 the corner stays part of the tool button's primary target, without a separate
 focus stop or menu action. Title-bar overflow preserves these interactions in
 scrolling lists; see [the window bar](window-bar.md).
 
 The tile icon follows the remembered variation, including brush media such as
-Marker, Pastel, Watercolor, Oil and Spray. Brush category tooltips also name the
+Pastel, Watercolor and Oil. Brush category tooltips also name the
 remembered medium. Brush size and opacity do not change that identity. The full
 grouped drawer presents sibling variations, the active tool's presets or modes,
 and its settings.
@@ -54,11 +55,14 @@ sibling updates the retained drawer at the same origin.
 Sketch's Brush and Sculpt retain their three-column drawers. Tool Options uses
 the same complete projection through More tool options.
 
-Paint's Blend group presents Blend, Wet paint, Effects and Retouch as sibling
+Paint's Blend group presents Blend, Paint mixing and Effects as sibling
 sets in its menu, drawer and Tool Set panel. The presets of the selected set
-appear below them. Choosing any preset, including Healing or Spot Healing,
-keeps the drawer open and the originating tile selected. The tile remembers
-the set and its last preset when another tool is active.
+appear below them. Retouch has its own toolbar position and presents Clone,
+Healing and Spot Healing directly. Choosing any preset keeps its drawer open and
+the originating tile selected. Each tile remembers its last preset when another
+tool is active. Fill presents Fill, Lasso Fill and Enclose and Fill at one level
+in its menu, drawer and Tool Set. Single-preset tools open settings directly;
+the vector Eraser also retains its erase-mode choices.
 
 Tool Set category buttons fill their grid cells, so hover, selection and input
 cover the whole category. Tool rows keep the icon at the leading edge and

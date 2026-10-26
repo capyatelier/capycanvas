@@ -59,7 +59,6 @@ command-eraser = Penghapus
 
 command-airbrush = Kuas Semprot Halus
 
-command-decoration = Dekorasi
 
 command-blend = Baurkan
 

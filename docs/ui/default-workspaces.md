@@ -40,13 +40,13 @@ into the restored editor before its controls appear.
   contains keyboard shortcuts and About, including website and source links.
   Rust owns all menu copy, sections, availability and shortcut hints.
 - **Tool keys** follow [Clip Studio Paint's families](https://help.clip-studio.com/en-us/manual_en/780_shortcuts/Tool_Shortcuts.htm):
-  P Pen/Pencil, B Brush/Airbrush/Decoration, E Eraser, J Blend/Liquify, S
+  P Pen/Pencil, B Brush/Airbrush, E Eraser, J Blend/Liquify, S
   Clone Stamp/Healing Brush/Spot Healing Brush, M selection, W Auto select, F Fill, G Gradient, O Move, U Figure, Shift+U Ruler,
   H Hand and I Eyedropper. Repeating a family key cycles its tools in toolbar
   order. Space pans temporarily, Tab toggles Zen, and Primary+0 fits the canvas.
 - **Tool Set and Tool** show only the active tool's groups and settings. Group
-  buttons have an icon and a name, with exactly one selected; the list below
-  shows the group's subtools with stroke previews, and each tool remembers its
+  buttons appear when there are multiple categories, with exactly one selected.
+  The list below shows the group's subtools with stroke previews, and each tool remembers its
   last subtool. Both panels fit three standard tiles at their minimum width;
   Layers keeps a six-tile minimum.
 - **Dividers** are real toolbar items with stable identities, compact geometry,
@@ -77,18 +77,19 @@ fit content measured at the allocated width, including inactive tabs.
 | Photo | Commands toolbar outermost at the top, with Tool Options appended and without Clear, Fill Selection and Flip. Tools toolbar with Small tiles and grouped selection and retouching tools. A permanently expanded far-right column of Histogram/Waveform, Properties and Layers/Filters, and a collapsed strip beside it with Tool Set/Diagnostics, Tool/Brush size and Navigator/Proof, closed on load. |
 
 Paint keeps 18 tool positions: Pen, Pencil, Brush,
-Eraser, Airbrush, Decoration, Blend, Liquify; Selection, Auto select, Fill,
+Eraser, Airbrush, Retouch, Blend, Liquify; Selection, Auto select, Fill,
 Gradient; Operation, Figure, Ruler, Hand, Zoom and Eyedropper. The color selector is
 separate. Selection contains Lasso, Rectangle, Ellipse, Polygon and Paint
-Selection; Auto select includes Select by Color and Tonal range; Fill includes
-the Lasso Fill category, containing Lasso Fill and Enclose and Fill. Blend
-exposes Blend, Wet paint, Effects and Retouch, with Clone Stamp, Healing Brush
-and Spot Healing Brush in Retouch. Operation contains Move, Scale/rotate,
+Selection; Auto select includes Select by Color and Tonal range. Fill offers
+Fill, Lasso Fill and Enclose and Fill as siblings. Blend exposes Blend,
+Paint mixing and Effects; Retouch offers Clone Stamp, Healing Brush and
+Spot Healing Brush directly. Operation contains Move, Scale/rotate,
 Edit points and Crop. Figure, Ruler and Gradient expose their variations in the
-same positions. Pen and Pencil remain separate. Pen exposes
-Pen and Marker; Pencil exposes Pencil and Pastel; Brush exposes Paint,
-Watercolor and Oil; Airbrush exposes Airbrush and Spray. The other brush
-categories expose their presets. Hand groups Rotate View; Zoom is a separate button beside it.
+same positions. Pen and Pencil remain separate. Pen includes Marker in its
+preset list; Pencil exposes Pencil and Pastel; Brush exposes Paint,
+Watercolor and Oil, with Dual Texture in Paint. Airbrush lists Airbrush and
+Spray directly. The other brush categories expose their presets. Hand groups
+Rotate View; Zoom is a separate button beside it.
 Every group has a softly rounded bottom-right
 triangle and remembers the selected subgroup's icon, including when inactive.
 Selection menus, drawers and the docked Tool Set use the same separate manual
@@ -100,7 +101,7 @@ Photo has 16 tool positions on these hosts: Operation, Crop; Marquee, Lasso,
 Auto select, Paint Selection; Drawing, Eraser, Clone, Healing, Blend, Liquify,
 Gradient/Fill; Hand, Zoom and Eyedropper, followed by the color selector. Marquee holds
 Rectangle and Ellipse, Lasso holds Lasso and Polygon, and Drawing holds Brush,
-Pen, Pencil, Airbrush and Decoration. Healing starts with Spot Heal and includes
+Pen, Pencil and Airbrush. Healing starts with Spot Heal and includes
 Heal. Gradient/Fill includes all existing gradient variations, Fill and Lasso
 Fill. Auto select includes Tonal range. Figure and Ruler remain available in
 Add Tools, and Quick Mask stays in Select.
@@ -125,11 +126,11 @@ sits at the bottom of the row, and Tool holds the settings. Brush restores
 the most recently selected drawing tool; clicking it while selected opens or
 closes its drawer, and choosing a set keeps the drawer open and restores that
 set's last tool. **Sculpt** opens **Sculpting → Tools → Tool** with the Blend,
-Wet paint, Effects, Liquify and Retouch sets; Retouch holds the Clone Stamp,
-Healing Brush and Spot Healing Brush, which stay separate tools. Eraser has a
-two-panel **Tools → Tool** drawer. Brush and Sculpt
-each remember their own selection across workspace switches and restarts.
-Brush, Sculpt, Eraser and Select use the same corner triangle and subgroup icons
+Paint mixing, Effects, Liquify and Retouch sets; Retouch holds the Clone Stamp,
+Healing Brush and Spot Healing Brush, which stay separate tools. Eraser opens
+Tool settings directly on paint layers; vector layers also show its erase modes.
+Brush and Sculpt each remember their own selection across workspace switches and restarts.
+Brush, Sculpt and Select use the same corner triangle and subgroup icons
 as Paint and Photo, with the same
 [tool selection and menu interactions](panel-customization.md#tool-variations).
 Brushes, Sculpting and Tools are ordinary panels: Brushes starts 160 logical

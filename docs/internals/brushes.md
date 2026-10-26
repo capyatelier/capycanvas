@@ -135,7 +135,7 @@ layer and lays no color of its own. They come in three sets:
   back, the Texture-Keeping Blender, which keeps fine brush texture over the
   blended color, and the Hue Blender, which blends hue and saturation but keeps
   every pixel's lightness.
-- **Wet paint**, which moves paint as a brush or knife does: the Natural
+- **Paint mixing**, which moves paint as a brush or knife does: the Natural
   Blender, the Wet Blender, which carries what each part of the tip picked up
   and runs dry, the Color Mixer, which carries one color averaged over the tip,
   as Clip Studio Paint's Blend mode does, the Blending Knife, which scrapes

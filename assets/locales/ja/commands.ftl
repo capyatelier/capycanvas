@@ -31,7 +31,6 @@ command-pencil = 鉛筆
 command-brush = 絵筆
 command-eraser = 消しゴム
 command-airbrush = エアブラシ
-command-decoration = 装飾
 command-blend = 混色
 command-liquify = ゆがみ
 command-lasso = 投げなわ選択

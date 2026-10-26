@@ -31,7 +31,6 @@ command-pencil = Kurşun kalem
 command-brush = Boya fırçası
 command-eraser = Silgi
 command-airbrush = Pistole
-command-decoration = Süsleme
 command-blend = Karıştır
 command-liquify = Sıvılaştır
 command-lasso = Kement seçimi

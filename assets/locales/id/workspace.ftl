@@ -413,7 +413,6 @@ workspace-tool-description-eraser = Hapus cat dari lapisan aktif
 
 workspace-tool-description-airbrush = Tumpuk warna lembut atau semprotan
 
-workspace-tool-description-decoration = Lukis dengan cap bertekstur
 
 workspace-tool-description-blend = Campur dan coreng cat yang ada
 

@@ -210,7 +210,6 @@ workspace-tool-description-pencil = Kurşun kalem ve pastellerle eskiz yapın
 workspace-tool-description-brush = Geçerli fırçayla boyayın
 workspace-tool-description-eraser = Etkin katmandan boyayı silin
 workspace-tool-description-airbrush = Yumuşak renk veya sprey katmanları oluşturun
-workspace-tool-description-decoration = Dokulu damgalarla boyayın
 workspace-tool-description-blend = Mevcut boyayı karıştırın ve yayın
 workspace-tool-description-liquify = Mevcut boyayı itin ve bükün
 workspace-tool-description-lasso = Serbest bir seçim çizin

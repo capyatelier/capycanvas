@@ -210,7 +210,6 @@ workspace-tool-description-pencil = 연필과 파스텔로 스케치합니다.
 workspace-tool-description-brush = 현재 브러시로 그립니다.
 workspace-tool-description-eraser = 활성 레이어에 그린 내용을 지웁니다.
 workspace-tool-description-airbrush = 부드러운 색상을 쌓거나 분사합니다.
-workspace-tool-description-decoration = 질감 있는 도장으로 그립니다.
 workspace-tool-description-blend = 기존 물감을 섞고 문지릅니다.
 workspace-tool-description-liquify = 기존 물감을 밀고 비틉니다.
 workspace-tool-description-lasso = 자유형 선택 영역을 그립니다.

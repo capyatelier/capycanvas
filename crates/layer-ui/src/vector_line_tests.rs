@@ -1953,7 +1953,7 @@ fn dimmed_tools_rows_tiles_and_title_bar_items_say_why() {
     let unavailable = s.localization().text(MessageId::OBJECTS_VECTOR_UNAVAILABLE).to_string();
     assert_eq!(row(&s, DefaultBrushPreset::RoughGPen), Some((true, Some(unavailable.clone()))), "dimmed but still choosable");
     assert_eq!(row(&s, DefaultBrushPreset::GPen), Some((true, None)));
-    let dimmed: Vec<_> = s.state.tool_set.groups.iter().filter(|group| group.disabled_reason.is_some()).collect();
+    let dimmed: Vec<_> = s.state.tool_panels.brush_sets.groups.iter().filter(|group| group.disabled_reason.is_some()).collect();
     assert!(!dimmed.is_empty() && dimmed.iter().all(|group| group.enabled && group.disabled_reason.as_deref() == Some(unavailable.as_str())), "dimmed brush groups say why and stay choosable");
     let rough = s.state.tool_set.subtools.iter().find(|item| item.action == UiAction::SelectBrush { id: DefaultBrushPreset::RoughGPen as u32 }).unwrap().action.clone();
     s.dispatch(rough).unwrap();

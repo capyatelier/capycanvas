@@ -6,7 +6,7 @@ variants! {
     #[serde(rename_all = "snake_case")]
     pub enum ToolSlotId {
         Drawing, Marquee, Lasso, AutomaticSelection, ManualSelection, Healing,
-        PhotoFill, Fill, LassoFill, Blend, Operation, Figure, Ruler, Gradient,
+        PhotoFill, Fill, LassoFill, Blend, Retouch, Operation, Figure, Ruler, Gradient,
     }
 }
 
@@ -50,7 +50,13 @@ impl ToolbarControl {
             _ => return None,
         })
     }
-    pub fn has_variants(self) -> bool { self.tool_group().is_some() }
+    pub fn has_variants(self) -> bool {
+        self.tool_group().is_some_and(|group| match group {
+            ToolControlGroup::Slot(slot) => slot.variants().len() > 1,
+            ToolControlGroup::Brush(tool) => tools::brush_ids().filter(|&id| tools::tool(id) == tool).take(2).count() > 1,
+            _ => true,
+        })
+    }
 }
 impl ToolControlGroup {
     fn variants(self) -> Vec<ToolVariant> {
@@ -101,6 +107,7 @@ const fn command(command: CommandId) -> ToolVariant {
 }
 impl ToolSlotId {
     pub(crate) fn member(self, variant: ToolVariant) -> Option<ToolVariant> {
+        if self.variants().contains(&variant) { return Some(variant); }
         let variant = if let ToolVariant::BrushPreset { id } = variant {
             preset(id).ok()?;
             ToolVariant::BrushGroup { group: tools::group(id) }
@@ -121,7 +128,6 @@ impl ToolSlotId {
                         command(C::Pen),
                         command(C::Pencil),
                         command(C::Airbrush),
-                        command(C::Decoration),
                     ]
                 }
             }
@@ -160,7 +166,11 @@ impl ToolSlotId {
                 V::BrushGroup { group: ToolGroup::Blend },
                 V::BrushGroup { group: ToolGroup::WetPaint },
                 V::BrushGroup { group: ToolGroup::Effects },
-                V::BrushGroup { group: ToolGroup::Retouch },
+            ] },
+            Self::Retouch => const { &[
+                V::BrushPreset { id: DefaultBrushPreset::CloneStamp as u32 },
+                V::BrushPreset { id: DefaultBrushPreset::HealingBrush as u32 },
+                V::BrushPreset { id: DefaultBrushPreset::SpotHealingBrush as u32 },
             ] },
             Self::Operation => const { &[command(C::Move), command(C::ScaleRotate), command(C::EditPoints), command(C::Crop)] },
             Self::Figure => {
@@ -218,6 +228,7 @@ impl ToolSlotId {
             Self::Figure => CommandId::Figure.localized_label(localization).to_string(),
             Self::Ruler => CommandId::Ruler.localized_label(localization).to_string(),
             Self::Blend => CommandId::Blend.localized_label(localization).to_string(),
+            Self::Retouch => ToolGroup::Retouch.localized_label(localization).to_string(),
             Self::LassoFill => CommandId::LassoFill.localized_label(localization).to_string(),
             Self::Gradient => CommandId::Gradient
                 .localized_label(localization)
@@ -507,22 +518,17 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     fn group_tool_set(&self, group: ToolControlGroup, anchor: Option<DrawerAnchor>) -> ToolSetView {
         let mut view = self.mark_path_brushes(tools::view(&self.state.brush, self.layer_interaction.tool, self.localization()));
+        if view.groups.len() == 1 { view.groups.clear(); }
         if matches!(group, ToolControlGroup::Drawing | ToolControlGroup::Sculpt) { return view; }
-        let lasso = ToolControlGroup::Slot(ToolSlotId::LassoFill);
-        let remembered_lasso = self.group_variant(lasso);
-        let choices = self.group_choices(group, anchor).into_iter().filter_map(|(variant, mut item)| {
-            if lasso.contains(variant) {
-                if variant != remembered_lasso { return None; }
-                item.label = CommandId::LassoFill.localized_label(self.localization());
-                item.icon = CommandId::LassoFill.icon().unwrap();
-                item.selected = lasso.active(&self.state);
-            }
-            Some(item)
-        }).collect();
-        if lasso.active(&self.state) {
-            view.subtools = self.group_choices(lasso, anchor).into_iter().map(|(_, item)| item).collect();
-        }
+        let choices: Vec<_> = self.group_choices(group, anchor).into_iter().map(|(_, item)| item).collect();
+        let leaf_brushes = group.variants().iter().all(|variant| match variant {
+            ToolVariant::BrushPreset { .. } => true,
+            ToolVariant::Command { command } => command.paint_tool().is_some_and(|tool|
+                tools::brush_ids().filter(|&id| tools::tool(id) == tool).take(2).count() == 1),
+            _ => false,
+        });
         match group {
+            ToolControlGroup::Slot(_) if leaf_brushes => { view.groups.clear(); view.subtools = choices; },
             ToolControlGroup::Slot(slot) => {
                 if self.layer_interaction.tool == LayerCanvasTool::Paint {
                     view.groups.retain(|item| !matches!(item.action, UiAction::SelectToolGroup { group }
@@ -536,7 +542,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             ToolControlGroup::Selection | ToolControlGroup::Navigation => { view.groups.clear(); view.subtools = choices; },
             ToolControlGroup::Brush(tool) => {
                 if ToolGroup::ALL.iter().filter(|g| g.holds(tool)).count() > 1 { view.groups = choices; }
-                else { view.subtools = choices; }
+                else { view.subtools = if choices.len() > 1 { choices } else { Vec::new() }; }
             },
             ToolControlGroup::Drawing | ToolControlGroup::Sculpt => (),
         }
@@ -592,7 +598,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .text(MessageId::COMMANDS_UNAVAILABLE_IN_THE_CURRENT_TOOL_OR_EDIT_TARGET)
                 .to_string());
         };
-        let Some(group) = control.tool_group() else { return Err(self.localization().text(MessageId::COMMANDS_UNAVAILABLE_IN_THE_CURRENT_TOOL_OR_EDIT_TARGET).to_string()); };
+        let Some(group) = control.tool_group().filter(|_| control.has_variants()) else { return Err(self.localization().text(MessageId::COMMANDS_UNAVAILABLE_IN_THE_CURRENT_TOOL_OR_EDIT_TARGET).to_string()); };
         let remembered = self.group_variant(group);
         let items = self.group_choices(group, Some(anchor)).into_iter()
             .map(|(variant, choice)| {
@@ -661,7 +667,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                         }
                         return false;
                     }
-                    let columns = control.drawer_columns().unwrap();
+                    let mut columns = control.drawer_columns().unwrap();
+                    let choices = self.current_tool_set();
+                    if matches!(group, ToolControlGroup::Brush(_)) && choices.groups.len() + choices.subtools.len() <= 1 {
+                        columns.retain(|column| !column.iter().all(|panel| matches!(panel, Panel::Tools | Panel::Brushes)));
+                    }
                     let drawer = self.state.customization.drawer.as_mut().unwrap();
                     if drawer.columns != columns || drawer.tool_set.is_some() {
                         drawer.columns = columns;

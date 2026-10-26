@@ -219,7 +219,7 @@ fn healing_brushes_join_the_retouching_tools_and_spot_healing_needs_no_disc() {
     }
     assert_eq!(
         s.state.tool_panels.sculpt_sets.groups.iter().map(|g| g.label.as_ref()).collect::<Vec<_>>(),
-        ["Blend", "Wet paint", "Effects", "Liquify", "Retouch"]
+        ["Blend", "Paint mixing", "Effects", "Liquify", "Retouch"]
     );
 
     invoke(&mut s, CommandId::Heal);

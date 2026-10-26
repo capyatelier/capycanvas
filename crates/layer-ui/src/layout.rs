@@ -1391,7 +1391,7 @@ impl DockLayout {
             command(Brush),
             command(Eraser),
             command(Airbrush),
-            command(Decoration),
+            ToolbarControl::ToolSlot { slot: crate::ToolSlotId::Retouch },
             command(Blend),
             command(Liquify),
             Divider,
@@ -4722,7 +4722,7 @@ mod tests {
         assert_eq!(
             commands(Panel::Toolbar),
             [
-                Pen, Pencil, Brush, Eraser, Airbrush, Decoration, Blend, Liquify, Lasso,
+                Pen, Pencil, Brush, Eraser, Airbrush, Blend, Liquify, Lasso,
                 AutoSelect, Fill, Gradient, Move, Figure, Ruler, Hand, Zoom, Eyedropper
             ]
         );
@@ -4741,6 +4741,7 @@ mod tests {
             ]
         );
         let tools = layout.panel(Panel::Toolbar).unwrap().tiles();
+        assert_eq!(tools[5].control, ToolbarControl::ToolSlot { slot: crate::ToolSlotId::Retouch });
         assert_eq!(tools[8].control, ToolbarControl::Divider);
         assert_eq!(tools[13].control, ToolbarControl::Divider);
         assert_eq!(tools.last().unwrap().control, ToolbarControl::Color);

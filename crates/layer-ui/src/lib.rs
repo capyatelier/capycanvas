@@ -481,7 +481,6 @@ command_ids! {
     Brush,
     Eraser,
     Airbrush,
-    Decoration,
     Blend,
     Liquify,
     LiquifyReset,
@@ -782,7 +781,6 @@ impl CommandId {
             Self::Brush => "brush",
             Self::Eraser => "eraser",
             Self::Airbrush => "airbrush",
-            Self::Decoration => "decoration",
             Self::Blend => "blend",
             Self::Liquify => "liquify",
             Self::LiquifyReset => "reset",
@@ -993,7 +991,7 @@ impl CommandId {
             Self::FrequencySeparation => "frequency-separation",
         })
     }
-    pub const TOOLS: [Self; 36] = [
+    pub const TOOLS: [Self; 35] = [
         Self::SelectionBrush,
         Self::TonalSelect,
         Self::DrawingBrush,
@@ -1003,7 +1001,6 @@ impl CommandId {
         Self::Brush,
         Self::Eraser,
         Self::Airbrush,
-        Self::Decoration,
         Self::Blend,
         Self::Liquify,
         Self::Clone,
@@ -1074,7 +1071,6 @@ impl CommandId {
             Self::Brush => MessageId::COMMAND_BRUSH,
             Self::Eraser => MessageId::COMMAND_ERASER,
             Self::Airbrush => MessageId::COMMAND_AIRBRUSH,
-            Self::Decoration => MessageId::COMMAND_DECORATION,
             Self::Blend => MessageId::COMMAND_BLEND,
             Self::Liquify => MessageId::COMMAND_LIQUIFY,
             Self::LiquifyReset => MessageId::COMMAND_LIQUIFY_RESET,

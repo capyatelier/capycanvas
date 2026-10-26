@@ -129,10 +129,10 @@ fn header_group_variations(d: &mut Driver, theme: Theme) {
             format!("header-group-menu-{size:?}-{theme:?}.png")).to_str().unwrap());
         let menu = ui_session(&d.w).context_menu(ContextTarget::ToolVariants { anchor }).unwrap();
         let index = menu.sections[0].iter().position(|item| matches!(item.action,
-            Some(UiAction::ChooseToolVariant { variant: ToolVariant::BrushGroup { group: layer_ui::ToolGroup::Marker }, .. }))).unwrap();
+            Some(UiAction::ChooseToolVariant { variant: ToolVariant::BrushGroup { group: layer_ui::ToolGroup::Pastel }, .. }))).unwrap();
         choose_variant(d, anchor, index);
-        assert_eq!(state(&d.w).brush.tool, layer_ui::ToolGroup::Marker.tool());
-        assert!(find_named(&widget, "layer-marker-symbolic").is_some());
+        assert_eq!(state(&d.w).brush.tool, layer_ui::ToolGroup::Pastel.tool());
+        assert!(find_named(&widget, "layer-pastel-symbolic").is_some());
         assert!(state(&d.w).customization.drawer.is_none());
         assert!(!variant_context(d).is_mapped());
     }
@@ -156,11 +156,9 @@ fn paint_category_variations(d: &mut Driver, theme: Theme) {
     restore(d, WorkspacePreset::Illustrator);
     assert_toolbar_markers(d);
     for (command, group) in [
-        (CommandId::Pen, layer_ui::ToolGroup::Marker),
         (CommandId::Pencil, layer_ui::ToolGroup::Pastel),
         (CommandId::Brush, layer_ui::ToolGroup::Watercolor),
         (CommandId::Brush, layer_ui::ToolGroup::Oil),
-        (CommandId::Airbrush, layer_ui::ToolGroup::Spray),
     ] {
         d.w.dispatch(UiAction::Invoke { command: CommandId::Lasso });
         pump(150);
@@ -179,7 +177,7 @@ fn paint_category_variations(d: &mut Driver, theme: Theme) {
         assert!(state(&d.w).customization.drawer.is_none(), "first click restores the medium");
         d.capture_canvas(&format!("paint-{group:?}-{theme:?}.png"));
     }
-    for command in [CommandId::Eraser, CommandId::Decoration, CommandId::Liquify] {
+    for command in [CommandId::Pen, CommandId::Airbrush, CommandId::Liquify] {
         let anchor = control_anchor(d, ToolbarControl::Command { command });
         let widget = anchor_widget(d, anchor);
         assert_group_marker(&widget, true);
@@ -211,7 +209,7 @@ fn paint_slot_variations(d: &mut Driver, theme: Theme) {
         (ToolSlotId::ManualSelection, vec![CommandId::Lasso, CommandId::RectangleSelect,
             CommandId::EllipseSelect, CommandId::PolygonSelect, CommandId::SelectionBrush]),
         (ToolSlotId::AutomaticSelection, vec![CommandId::AutoSelect, CommandId::ColorSelect, CommandId::TonalSelect]),
-        (ToolSlotId::Fill, vec![CommandId::Fill, CommandId::LassoFill]),
+        (ToolSlotId::Fill, vec![CommandId::Fill, CommandId::LassoFill, CommandId::EncloseFill]),
         (ToolSlotId::Operation, vec![CommandId::Move, CommandId::ScaleRotate, CommandId::EditPoints, CommandId::Crop]),
     ] {
         let anchor = slot_anchor(d, slot);
@@ -224,8 +222,7 @@ fn paint_slot_variations(d: &mut Driver, theme: Theme) {
             _ => None,
         }).collect::<Vec<_>>();
         assert_eq!(actual.len(), commands.len());
-        assert!(commands.iter().all(|command| actual.contains(command)
-            || slot == ToolSlotId::Fill && *command == CommandId::LassoFill && actual.contains(&CommandId::EncloseFill)));
+        assert_eq!(actual, commands);
         let tools = d.w.panel_widget(Panel::Brushes);
         for command in &commands {
             let label = ui_session(&d.w).command(*command).label;
@@ -234,24 +231,18 @@ fn paint_slot_variations(d: &mut Driver, theme: Theme) {
         let last = commands.last().unwrap();
         let label = ui_session(&d.w).command(*last).label;
         d.click(&mapped_label(&tools, &label).unwrap());
-        assert!(ui_session(&d.w).command(*last).selected
-            || slot == ToolSlotId::Fill && ui_session(&d.w).command(CommandId::EncloseFill).selected);
+        assert!(ui_session(&d.w).command(*last).selected);
         if slot == ToolSlotId::Fill {
-            assert_eq!(state(&d.w).tool_set.subtools.iter().map(|item| item.label.as_ref()).collect::<Vec<_>>(),
-                ["Lasso fill", "Enclose and Fill"]);
-            let ordinary = widgets(&tools).find(|widget| widget.has_css_class("brush-choice")
-                && mapped_label(widget, "Lasso fill").is_some()).unwrap();
-            d.click(&ordinary);
-            assert!(ui_session(&d.w).command(CommandId::LassoFill).selected);
-            d.click(&mapped_label(&tools, "Enclose and Fill").unwrap());
-            assert!(ui_session(&d.w).command(CommandId::EncloseFill).selected);
-            let groups = widgets(&tools).find(|widget| widget.has_css_class("tool-groups")).unwrap();
-            d.click(&mapped_label(&groups, "Fill").unwrap());
-            assert!(ui_session(&d.w).command(CommandId::Fill).selected);
-            d.click(&mapped_label(&groups, "Lasso fill").unwrap());
-            assert!(ui_session(&d.w).command(CommandId::EncloseFill).selected,
-                "the Lasso Fill category remembers its Enclose subtool");
-            assert_eq!(state(&d.w).tool_set.groups.len(), 2);
+            assert!(state(&d.w).tool_set.subtools.is_empty());
+            assert_eq!(state(&d.w).tool_set.groups.len(), 3);
+            for command in &commands {
+                let label = ui_session(&d.w).command(*command).label;
+                let caption = mapped_label(&tools, &label).unwrap();
+                assert!(!caption.downcast_ref::<gtk::Label>().unwrap().layout().is_ellipsized(),
+                    "{command:?}: flat Fill captions fit the default Tool Set");
+                d.click(&caption);
+                assert!(ui_session(&d.w).command(*command).selected);
+            }
         }
         d.capture_canvas(&format!("paint-selection-{slot:?}-{theme:?}.png"));
     }
@@ -266,7 +257,7 @@ fn paint_blend_variations(d: &mut Driver, theme: Theme) {
     let anchor = slot_anchor(d, ToolSlotId::Blend);
     let opener = anchor_widget(d, anchor);
     let groups = [layer_ui::ToolGroup::Blend, layer_ui::ToolGroup::WetPaint,
-        layer_ui::ToolGroup::Effects, layer_ui::ToolGroup::Retouch];
+        layer_ui::ToolGroup::Effects];
     secondary_group_click(d, &opener);
     let menu = ui_session(&d.w).context_menu(ContextTarget::ToolVariants { anchor }).unwrap();
     let variants = menu.sections.iter().flatten().filter_map(|item| match item.action {
@@ -282,7 +273,7 @@ fn paint_blend_variations(d: &mut Driver, theme: Theme) {
             d.click(&opener);
             assert_eq!(state(&d.w).customization.drawer.as_ref().unwrap().anchor, anchor);
         }
-        for (group, count) in groups.into_iter().zip([8, 5, 7, 3]) {
+        for (group, count) in groups.into_iter().zip([8, 5, 7]) {
             let tools = if drawer { d.named("drawer-panel-Brushes") }
                 else { d.w.panel_widget(Panel::Brushes) };
             let categories = widgets(&tools).find(|widget| widget.has_css_class("tool-groups")).unwrap();
@@ -290,9 +281,6 @@ fn paint_blend_variations(d: &mut Driver, theme: Theme) {
             let category = mapped_label(&categories, &label).unwrap();
             super::histogram::scroll_to(&category);
             d.click(&category);
-            if drawer && group == layer_ui::ToolGroup::Retouch {
-                d.capture_canvas(&format!("paint-retouch-drawer-before-{theme:?}.png"));
-            }
             let presets = layer_ui::brush_catalog().filter(|choice| choice.group == group)
                 .map(|choice| choice.id).collect::<Vec<_>>();
             assert_eq!(presets.len(), count);
@@ -312,16 +300,6 @@ fn paint_blend_variations(d: &mut Driver, theme: Theme) {
                     assert_eq!(state(&d.w).customization.drawer.as_ref().unwrap().anchor, anchor,
                         "{group:?}/{preset}: choosing a preset retains the drawer");
                 }
-                if group == layer_ui::ToolGroup::Retouch {
-                    let command = match preset {
-                        id if id == layer_core::DefaultBrushPreset::HealingBrush as u32 => CommandId::Heal,
-                        id if id == layer_core::DefaultBrushPreset::SpotHealingBrush as u32 => CommandId::SpotHeal,
-                        _ => CommandId::Clone,
-                    };
-                    assert!(ui_session(&d.w).command(command).selected);
-                    let expected = format!("layer-{}-symbolic", ui_session(&d.w).command(command).icon.unwrap());
-                    assert_eq!(icon, expected);
-                }
             }
             d.capture_canvas(&format!("paint-blend-{group:?}-{drawer}-{theme:?}.png"));
         }
@@ -330,16 +308,136 @@ fn paint_blend_variations(d: &mut Driver, theme: Theme) {
             assert!(state(&d.w).customization.drawer.is_none());
         }
     }
+}
+
+fn paint_direct_presets(d: &mut Driver, theme: Theme) {
+    use layer_core::DefaultBrushPreset as P;
+    restore(d, WorkspacePreset::Illustrator);
+    assert_eq!(layer_ui::brush_catalog().count(), 65);
+    assert_eq!(layer_ui::brush_categories().count(), 13);
+    for (command, preset, count) in [(CommandId::Pen, P::Marker, 10),
+        (CommandId::Airbrush, P::Spray, 2), (CommandId::Brush, P::DualTexture, 8)] {
+        let anchor = control_anchor(d, ToolbarControl::Command { command });
+        let opener = anchor_widget(d, anchor);
+        secondary_group_click(d, &opener);
+        let menu = ui_session(&d.w).context_menu(ContextTarget::ToolVariants { anchor }).unwrap();
+        let index = if command == CommandId::Brush {
+            menu.sections.iter().flatten().position(|item| matches!(item.action,
+                Some(UiAction::ChooseToolVariant { variant: ToolVariant::BrushGroup { group: layer_ui::ToolGroup::Paint }, .. }))).unwrap()
+        } else {
+            let variants = menu.sections.iter().flatten().filter_map(|item| match item.action {
+                Some(UiAction::ChooseToolVariant { variant, .. }) => Some(variant), _ => None,
+            }).collect::<Vec<_>>();
+            assert_eq!(variants.len(), count);
+            assert!(variants.iter().all(|variant| matches!(variant, ToolVariant::BrushPreset { .. })));
+            variants.iter().position(|variant| *variant == ToolVariant::BrushPreset { id: preset as u32 }).unwrap()
+        };
+        choose_variant(d, anchor, index);
+        if command != CommandId::Brush { assert_eq!(state(&d.w).brush.preset, preset as u32); }
+        assert_eq!(state(&d.w).tool_set.subtools.len(), count);
+        for drawer in [false, true] {
+            if drawer { d.click(&opener); }
+            let tools = if drawer { d.named("drawer-panel-Brushes") }
+                else { d.w.panel_widget(Panel::Brushes) };
+            let row = find_named(&tools, &format!("brush-{}", preset as u32)).unwrap();
+            super::histogram::scroll_to(&row);
+            d.click(&row);
+            assert_eq!(state(&d.w).brush.preset, preset as u32);
+            if drawer {
+                assert_eq!(state(&d.w).customization.drawer.as_ref().unwrap().anchor, anchor);
+                d.capture_canvas(&format!("direct-preset-{preset:?}-{theme:?}.png"));
+                d.click(&opener);
+            }
+        }
+    }
+}
+
+fn paint_retouch_variations(d: &mut Driver, theme: Theme) {
+    use layer_core::DefaultBrushPreset as P;
+    restore(d, WorkspacePreset::Illustrator);
+    let anchor = slot_anchor(d, ToolSlotId::Retouch);
+    let opener = anchor_widget(d, anchor);
+    let presets = [P::CloneStamp, P::HealingBrush, P::SpotHealingBrush];
+    secondary_group_click(d, &opener);
+    let menu = ui_session(&d.w).context_menu(ContextTarget::ToolVariants { anchor }).unwrap();
+    let variants = menu.sections.iter().flatten().filter_map(|item| match item.action {
+        Some(UiAction::ChooseToolVariant { variant, .. }) => Some(variant), _ => None,
+    }).collect::<Vec<_>>();
+    assert_eq!(variants, presets.map(|preset| ToolVariant::BrushPreset { id: preset as u32 }));
+    capture_popover(&variant_context(d), d.input.dir.join(format!("retouch-menu-{theme:?}.png")).to_str().unwrap());
+    choose_variant(d, anchor, 0);
+    for drawer in [false, true] {
+        if drawer { d.click(&opener); }
+        let tools = if drawer { d.named("drawer-panel-Brushes") } else { d.w.panel_widget(Panel::Brushes) };
+        assert!(state(&d.w).tool_set.groups.is_empty());
+        assert_eq!(state(&d.w).tool_set.subtools.len(), 3);
+        for (preset, command) in presets.into_iter().zip([CommandId::Clone, CommandId::Heal, CommandId::SpotHeal]) {
+            let row = find_named(&tools, &format!("brush-{}", preset as u32)).unwrap();
+            super::histogram::scroll_to(&row);
+            d.click(&row);
+            assert_eq!(state(&d.w).brush.preset, preset as u32);
+            assert!(ui_session(&d.w).command(command).selected);
+            let DrawerAnchor::Tile { panel, tile } = anchor else { unreachable!() };
+            let view = ui_session(&d.w).panel_view(panel).unwrap();
+            assert!(view.tiles.iter().find(|view| view.id == tile).unwrap().choice.selected);
+            let icon = format!("layer-{}-symbolic", ui_session(&d.w).command(command).icon.unwrap());
+            assert!(find_named(&opener, &icon).is_some());
+            if drawer {
+                assert_eq!(state(&d.w).customization.drawer.as_ref().unwrap().anchor, anchor);
+                d.capture_canvas(&format!("retouch-{preset:?}-{theme:?}.png"));
+            }
+        }
+        if drawer { d.click(&opener); }
+    }
     for command in [CommandId::Clone, CommandId::Heal, CommandId::SpotHeal] {
-        d.w.dispatch(UiAction::Invoke { command });
-        pump(100);
-        let expected = format!("layer-{}-symbolic", ui_session(&d.w).command(command).icon.unwrap());
-        d.w.dispatch(UiAction::Invoke { command: CommandId::Lasso });
-        pump(100);
-        assert!(find_named(&opener, &expected).is_some(), "inactive Blend retains {command:?} icon");
+        d.w.dispatch(UiAction::Invoke { command }); pump(100);
+        let icon = format!("layer-{}-symbolic", ui_session(&d.w).command(command).icon.unwrap());
+        d.w.dispatch(UiAction::Invoke { command: CommandId::Lasso }); pump(100);
+        assert!(find_named(&opener, &icon).is_some());
         d.click(&opener);
         assert!(ui_session(&d.w).command(command).selected);
     }
+}
+
+fn paint_leaf_tools(d: &mut Driver, theme: Theme) {
+    restore(d, WorkspacePreset::Illustrator);
+    for command in [CommandId::Eraser, CommandId::Clone, CommandId::Heal, CommandId::SpotHeal] {
+        let control = ToolbarControl::Command { command };
+        d.w.dispatch(HeaderAction::Add { zone: HeaderZone::Left, before: None,
+            item: HeaderItem::Tool { control } }.action());
+        pump(150);
+        let id = state(&d.w).workspace.layout.header.entries().find(|entry|
+            entry.item == HeaderItem::Tool { control }).unwrap().id;
+        let anchor = DrawerAnchor::Header { id };
+        let opener = anchor_widget(d, anchor);
+        assert_group_marker(&opener, false);
+        assert!(ui_session(&d.w).context_menu(ContextTarget::ToolVariants { anchor }).is_err());
+        d.w.dispatch(UiAction::Invoke { command: CommandId::Lasso }); pump(100);
+        d.click(&opener);
+        assert!(ui_session(&d.w).command(command).selected);
+        assert!(state(&d.w).customization.drawer.is_none());
+        d.click(&opener);
+        let drawer = state(&d.w).customization.drawer.unwrap();
+        assert_eq!(drawer.anchor, anchor);
+        assert_eq!(drawer.columns, [vec![Panel::ToolSettings]]);
+        d.capture_canvas(&format!("leaf-{command:?}-{theme:?}.png"));
+        d.click(&opener);
+    }
+    d.w.dispatch(UiAction::Layer { action: LayerAction::NewVector }); pump(150);
+    let opener = anchor_widget(d, control_anchor(d, ToolbarControl::Command { command: CommandId::Eraser }));
+    d.w.dispatch(UiAction::Invoke { command: CommandId::Eraser }); pump(100);
+    d.click(&opener);
+    assert_eq!(state(&d.w).customization.drawer.as_ref().unwrap().columns,
+        [vec![Panel::Tools], vec![Panel::ToolSettings]]);
+    let drawer = d.named("drawer-panel-Tools");
+    for command in [CommandId::EraseTouchedPart, CommandId::EraseToIntersection, CommandId::EraseWholePaths] {
+        let label = ui_session(&d.w).command(command).label;
+        d.click(&mapped_label(&drawer, &label).unwrap());
+        assert!(ui_session(&d.w).command(command).selected);
+    }
+    d.capture_canvas(&format!("vector-eraser-{theme:?}.png"));
+    d.click(&opener);
+    d.w.dispatch(UiAction::Invoke { command: CommandId::Undo }); pump(100);
 }
 
 #[test]
@@ -559,12 +657,12 @@ fn sketch_overflow_variations(d: &mut Driver, theme: Theme) {
     let anchor = DrawerAnchor::Header { id: hidden.id };
     let menu = ui_session(&d.w).context_menu(ContextTarget::ToolVariants { anchor }).unwrap();
     let index = menu.sections[0].iter().position(|item| matches!(item.action,
-        Some(UiAction::ChooseToolVariant { variant: ToolVariant::BrushGroup { group: layer_ui::ToolGroup::Marker }, .. }))).unwrap();
+        Some(UiAction::ChooseToolVariant { variant: ToolVariant::BrushGroup { group: layer_ui::ToolGroup::Pastel }, .. }))).unwrap();
     choose_variant(d, anchor, index);
-    assert_eq!(state(&d.w).brush.tool, layer_ui::ToolGroup::Marker.tool());
+    assert_eq!(state(&d.w).brush.tool, layer_ui::ToolGroup::Pastel.tool());
     assert!(state(&d.w).customization.drawer.is_none());
     assert_eq!(state(&d.w).workspace.layout.header, model);
-    assert!(find_named(&anchor_widget(d, anchor), "layer-marker-symbolic").is_some());
+    assert!(find_named(&anchor_widget(d, anchor), "layer-pastel-symbolic").is_some());
     assert!(!context.is_mapped() && !overflow.is_mapped());
 }
 
@@ -723,7 +821,7 @@ fn native_toolbar_variations_input() {
                     let menu = ui_session(&d.w).context_menu(ContextTarget::ToolVariants { anchor }).unwrap();
                     let docked = state(&d.w).tool_set.groups;
                     assert_eq!(docked.iter().map(|item| item.label.as_ref()).collect::<Vec<_>>(),
-                        menu.sections[0].iter().filter(|item| item.label != "Enclose and Fill")
+                        menu.sections[0].iter()
                             .map(|item| item.label.as_str()).collect::<Vec<_>>());
                     let label = &menu.sections[0][index].label;
                     let drawer = d.named("drawer-panel-Brushes");
@@ -750,6 +848,9 @@ fn native_paint_toolbar_variations_input() {
         paint_category_variations(&mut d, theme);
         paint_slot_variations(&mut d, theme);
         paint_blend_variations(&mut d, theme);
+        paint_direct_presets(&mut d, theme);
+        paint_retouch_variations(&mut d, theme);
+        paint_leaf_tools(&mut d, theme);
     }
     d.finish();
 }

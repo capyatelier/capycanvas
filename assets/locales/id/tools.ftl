@@ -196,7 +196,6 @@ tool-group-airbrush = Kuas semprot halus
 
 tool-group-blend = Baurkan
 
-tool-group-decoration = Tekstur
 
 tool-group-effects = Efek
 
@@ -204,7 +203,6 @@ tool-group-eraser = Penghapus
 
 tool-group-liquify = Cairkan
 
-tool-group-marker = Spidol
 
 tool-group-oil = Cat minyak
 
@@ -218,11 +216,10 @@ tool-group-pencil = Pensil
 
 tool-group-retouch = Retus
 
-tool-group-spray = Semprot
 
 tool-group-watercolor = Cat air
 
-tool-group-wet-paint = Cat basah
+tool-group-wet-paint = Pencampuran cat
 
 tool-mode-crop = Pangkas
 

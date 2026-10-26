@@ -787,19 +787,6 @@ fn the_media_ring_shows_a_mediums_brushes_and_a_choice_closes_it() {
 }
 
 #[test]
-fn a_medium_with_one_brush_still_fans_it() {
-    let mut s = desk();
-    let id = take_control(&mut s, ToolbarControl::Command { command: CommandId::DrawingBrush }, [480., 520.]);
-    open_ring(&mut s, id);
-    let single = items(&view(&s, id), ChooserKind::Medium).into_iter().find(|m| m.enabled && !several_brushes(&s, m)).expect("a medium with one brush");
-    choose(&mut s, id, ContactPhase::Down, single.center);
-    choose(&mut s, id, ContactPhase::Up, single.center);
-    let open = view(&s, id);
-    assert!(items(&open, ChooserKind::Medium).iter().any(|m| m.shown && m.label == single.label));
-    assert_eq!(items(&open, ChooserKind::Brush).len(), 1, "its one brush shows beside it instead of being picked");
-}
-
-#[test]
 fn a_press_can_slide_through_a_medium_to_its_brush() {
     let mut s = desk();
     let id = take_control(&mut s, ToolbarControl::Command { command: CommandId::DrawingBrush }, FAR);
