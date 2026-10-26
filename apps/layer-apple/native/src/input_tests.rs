@@ -1028,3 +1028,35 @@ fn apple_mixing_and_retouch_presets_change_local_pixels_with_exact_history() {
         }
     }
 }
+
+#[test]
+fn color_wheel_contacts_taps_and_menu_step_each_paint() {
+    for platform in [0, 1] {
+        let app = App::new(platform);
+        let foreground = |app: &App| app.state()["colors"]["foreground"].clone();
+        let original = foreground(&app);
+        app.action(json!({"type":"color_contact","phase":"down"}));
+        for point in [[140., 70.], [150., 80.]] {
+            app.action(json!({"type":"color","action":{"op":"pick_wheel","part":"field","point":point,"size":200.}}));
+        }
+        app.action(json!({"type":"color_contact","phase":"up"}));
+        let picked = foreground(&app);
+        assert_ne!(picked, original);
+        let touch = |id: u64, phase: &str, x: f64, ms: u64| app.request(1, json!({"type":"color_touch","surface":7,"id":id,
+            "phase":phase,"position":[x, 40.],"time_ns":ms * 1_000_000})).unwrap();
+        assert_eq!(touch(1, "down", 20., 1)["handled"], false);
+        assert_eq!(touch(2, "down", 80., 2)["handled"], true);
+        touch(1, "up", 20., 40);
+        touch(2, "up", 80., 41);
+        assert_eq!(foreground(&app), original, "a two-finger tap undoes the whole contact");
+        let menu = app.request(2, json!({"type":"context","target":{"kind":"color_wheel"}})).unwrap();
+        let [undo, redo] = [&menu["sections"][0][0], &menu["sections"][0][1]];
+        assert_eq!((&undo["enabled"], &redo["enabled"]), (&json!(false), &json!(true)));
+        app.action(redo["action"].clone());
+        assert_eq!(foreground(&app), picked, "the wheel menu redoes");
+        app.action(json!({"type":"color_contact","phase":"down"}));
+        app.action(json!({"type":"color","action":{"op":"pick_wheel","part":"hue","point":[100., 4.],"size":200.}}));
+        app.action(json!({"type":"color_contact","phase":"cancel"}));
+        assert_eq!(foreground(&app), picked, "a cancelled contact restores its paint");
+    }
+}

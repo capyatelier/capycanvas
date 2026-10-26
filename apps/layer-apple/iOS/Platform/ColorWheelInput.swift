@@ -5,11 +5,14 @@ struct ColorWheelInput: UIViewRepresentable {
     let shape: UInt32
     let context: String
     let value: String
+    var touches: ColorTouchSurface? = nil
+    var contact: ((String) -> Void)? = nil
     let pick: (UInt32, CGPoint, CGFloat) -> Void
     func makeUIView(context: Context) -> ContactView { ContactView() }
     func updateUIView(_ view: ContactView, context: Context) {
         if view.colorContext != self.context { view.contact.cancel() }
-        view.shape = shape; view.colorContext = self.context; view.pick = pick
+        view.shape = shape; view.colorContext = self.context; view.pick = pick; view.phase = contact ?? { _ in }
+        view.attach(touches)
         view.accessibilityValue = value
         view.accessibilityLabel = context.environment.capyNativeCopy["color"]["wheel"].string
     }
@@ -17,7 +20,9 @@ struct ColorWheelInput: UIViewRepresentable {
         var shape: UInt32 = 0
         var colorContext = ""
         var pick: (UInt32, CGPoint, CGFloat) -> Void = { _, _, _ in }
+        var phase: (String) -> Void = { _ in }
         let contact = Contact()
+        private var touchInput: ColorTouchRecognizer?
         var size: CGFloat { min(bounds.width, bounds.height) }
         override init(frame: CGRect) {
             super.init(frame: frame)
@@ -26,7 +31,17 @@ struct ColorWheelInput: UIViewRepresentable {
             addGestureRecognizer(contact)
         }
         required init?(coder: NSCoder) { fatalError("Use init(frame:)") }
-        override func point(inside point: CGPoint, with event: UIEvent?) -> Bool { hit(point) != 0 }
+        override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+            touchInput == nil ? hit(point) != 0 : hypot(point.x - bounds.midX, point.y - bounds.midY) <= size / 2
+        }
+        func attach(_ surface: ColorTouchSurface?) {
+            guard touchInput?.surface !== surface else { return }
+            if let touchInput { removeGestureRecognizer(touchInput); touchInput.surface?.remove(self); self.touchInput = nil }
+            guard let surface else { return }
+            let recognizer = ColorTouchRecognizer(surface: surface)
+            addGestureRecognizer(recognizer); touchInput = recognizer
+            surface.onClaim(self) { [weak self] in self?.contact.cancel() }
+        }
         func hit(_ point: CGPoint) -> UInt32 {
             capy_apple_color_hit(Float(point.x), Float(point.y), Float(size), shape)
         }
@@ -43,7 +58,7 @@ struct ColorWheelInput: UIViewRepresentable {
             part = view.hit(point)
             guard part != 0 else { state = .failed; return }
             self.touch = touch; state = .began
-            view.pick(part, point, view.size)
+            view.phase("down"); view.pick(part, point, view.size)
         }
         override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
             guard let touch, touches.contains(touch), part != 0, let view = view as? ContactView else { return }
@@ -51,11 +66,14 @@ struct ColorWheelInput: UIViewRepresentable {
         }
         override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
             guard let touch, touches.contains(touch) else { return }
-            if part != 0, let view = view as? ContactView { view.pick(part, touch.location(in: view), view.size) }
+            if part != 0, let view = view as? ContactView { view.pick(part, touch.location(in: view), view.size); view.phase("up") }
             state = .ended
         }
         override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) { cancel() }
-        func cancel() { if state == .began || state == .changed { state = .cancelled }; part = 0; touch = nil }
+        func cancel() {
+            if state == .began || state == .changed { state = .cancelled; (view as? ContactView)?.phase("cancel") }
+            part = 0; touch = nil
+        }
         override func reset() { super.reset(); part = 0; touch = nil }
     }
 }

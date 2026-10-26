@@ -7,11 +7,13 @@ struct ColorWheelInput: NSViewRepresentable {
     let shape: UInt32
     let context: String
     let value: String
+    var touches: ColorTouchSurface? = nil
+    var contact: ((String) -> Void)? = nil
     let pick: (UInt32, CGPoint, CGFloat) -> Void
     func makeNSView(context: Context) -> ContactView { ContactView() }
     func updateNSView(_ view: ContactView, context: Context) {
-        if view.colorContext != self.context { view.part = 0 }
-        view.shape = shape; view.colorContext = self.context; view.pick = pick
+        if view.colorContext != self.context { view.cancel() }
+        view.shape = shape; view.colorContext = self.context; view.pick = pick; view.phase = contact ?? { _ in }
         view.setAccessibilityValue(value)
         view.setAccessibilityLabel(context.environment.capyNativeCopy["color"]["wheel"].string)
     }
@@ -20,6 +22,7 @@ struct ColorWheelInput: NSViewRepresentable {
         var colorContext = ""
         var part: UInt32 = 0
         var pick: (UInt32, CGPoint, CGFloat) -> Void = { _, _, _ in }
+        var phase: (String) -> Void = { _ in }
         override var isFlipped: Bool { true }
         private var size: CGFloat { min(bounds.width, bounds.height) }
         override init(frame: NSRect) {
@@ -38,12 +41,17 @@ struct ColorWheelInput: NSViewRepresentable {
         override func mouseDown(with event: NSEvent) {
             let point = convert(event.locationInWindow, from: nil)
             part = hit(point)
-            if part != 0 { pick(part, point, size) }
+            if part != 0 { phase("down"); pick(part, point, size) }
         }
         override func mouseDragged(with event: NSEvent) {
             if part != 0 { pick(part, convert(event.locationInWindow, from: nil), size) }
         }
-        override func mouseUp(with event: NSEvent) { mouseDragged(with: event); part = 0 }
-        override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); if window == nil { part = 0 } }
+        override func mouseUp(with event: NSEvent) {
+            mouseDragged(with: event)
+            if part != 0 { phase("up") }
+            part = 0
+        }
+        func cancel() { if part != 0 { phase("cancel") }; part = 0 }
+        override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); if window == nil { cancel() } }
     }
 }

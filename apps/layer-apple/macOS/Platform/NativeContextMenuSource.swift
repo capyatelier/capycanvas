@@ -3,8 +3,8 @@ import SwiftUI
 
 extension View {
     func nativeEditorContextMenu(identity: String, load: @escaping AppleContextMenuRequest,
-        visibility: @escaping (Bool) -> Void) -> some View {
-        overlay(NativeContextMenuInput(identity: identity, load: load, visibility: visibility))
+        visibility: @escaping (Bool) -> Void, region: ((CGPoint, CGSize) -> Bool)? = nil) -> some View {
+        overlay(NativeContextMenuInput(identity: identity, load: load, visibility: visibility, region: region))
     }
 }
 
@@ -12,10 +12,11 @@ private struct NativeContextMenuInput: NSViewRepresentable {
     let identity: String
     let load: AppleContextMenuRequest
     let visibility: (Bool) -> Void
+    let region: ((CGPoint, CGSize) -> Bool)?
     func makeNSView(context: Context) -> NativeContextMenuInputView { NativeContextMenuInputView() }
     func updateNSView(_ view: NativeContextMenuInputView, context: Context) {
         if view.identity != identity { view.invalidate() }
-        view.identity = identity; view.load = load; view.visibility = visibility
+        view.identity = identity; view.load = load; view.visibility = visibility; view.region = region
     }
     static func dismantleNSView(_ view: NativeContextMenuInputView, coordinator: ()) { view.invalidate() }
 }
@@ -24,6 +25,7 @@ final class NativeContextMenuInputView: NSView {
     var identity = ""
     var load: AppleContextMenuRequest = { $0(nil) }
     var visibility: (Bool) -> Void = { _ in }
+    var region: ((CGPoint, CGSize) -> Bool)?
     private var request = UUID()
     private var presentedMenu: NSMenu?
     private var timer: Timer?
@@ -31,6 +33,7 @@ final class NativeContextMenuInputView: NSView {
     override var isFlipped: Bool { true }
     override func hitTest(_ point: NSPoint) -> NSView? {
         guard NSApp.currentEvent?.type == .rightMouseDown else { return nil }
+        if let region, !region(convert(point, from: superview), bounds.size) { return nil }
         return super.hitTest(point)
     }
     override func viewDidMoveToWindow() {

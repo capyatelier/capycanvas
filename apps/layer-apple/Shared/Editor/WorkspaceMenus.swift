@@ -5,11 +5,12 @@ import SwiftUI
 struct WorkspaceContext: ViewModifier {
     @ObservedObject var store: EditorStore
     let target: JSON
+    var region: ((CGPoint, CGSize) -> Bool)? = nil
     @State private var generation = UUID()
     @State private var popupID = UUID()
     func body(content: Content) -> some View {
         content.nativeEditorContextMenu(identity: "\(store.state["document_file"]["epoch"].uint):\(target.stableKey)",
-            load: loadNativeMenu, visibility: { store.workspace.popover(popupID, open: $0) })
+            load: loadNativeMenu, visibility: { store.workspace.popover(popupID, open: $0) }, region: region)
             .onChange(of: target.stableKey) { _, _ in generation = UUID() }
             .onChange(of: store.state["document_file"]["epoch"].uint) { _, _ in generation = UUID() }
             .onDisappear { generation = UUID(); store.workspace.popover(popupID, open: false) }

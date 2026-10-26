@@ -52,7 +52,7 @@ area opens **Undo color change** and **Redo color change**
 (`ContextTarget::ColorWheel`); outside it, the panel keeps its customization
 menu. Shared code lives in [`color/history.rs`](../../crates/layer-ui/src/color/history.rs)
 and [`color_history_session.rs`](../../crates/layer-ui/src/color_history_session.rs).
-Only GTK presents it so far.
+GTK, macOS and iPadOS present it.
 
 GTK prepares the field and managed hue ring on one worker with one replaceable
 pending request. Panel resizing scales only the retained hue ring and field;

@@ -16,6 +16,8 @@ import SwiftUI
         var fingers: [UInt64: CGPoint]
         var held = false
         var pairEnded = false
+        var pairLifted = false
+        var pairOrigin = CGPoint.zero
         var spread: CGFloat = 1
         var scale: CGFloat = 1
         var midpoint = CGPoint.zero
@@ -38,6 +40,7 @@ import SwiftUI
     private var lastRing: (id: UInt64, kind: String, point: CGPoint, time: TimeInterval)?
     private var suppressClick = false
     var hold: (() -> Void)?
+    let colorTouches = ColorTouchSurface()
     private(set) var generation: UInt64 = 0
     var viewport = CGSize.zero
     var choiceSources: [String: BubbleChoice] = [:]
@@ -81,7 +84,11 @@ import SwiftUI
         guard let c = contact else { return false }
         return hypot(point.x - c.item.placement.center.x, point.y - c.item.placement.center.y) <= c.item.model["reach"].number + 90
     }
-    init(bubbles: WorkspaceBubbles, store: EditorStore?) { self.bubbles = bubbles; self.store = store }
+    init(bubbles: WorkspaceBubbles, store: EditorStore?) {
+        self.bubbles = bubbles; self.store = store
+        colorTouches.send = { [weak store] in store?.input($0) }
+    }
+    func colorTouch(at point: CGPoint) -> Bool { enabled && bubbles?.hit(point)?.0.view["kind"].string == "color" }
     var enabled: Bool {
         guard let store, let bubbles else { return false }
         return store.failure == nil && store.workspaces?.presented != true
@@ -166,7 +173,7 @@ import SwiftUI
             let pair = Array(c.fingers.values)
             c.midpoint = CGPoint(x: (pair[0].x + pair[1].x) / 2, y: (pair[0].y + pair[1].y) / 2)
             c.spread = max(1, hypot(pair[0].x - pair[1].x, pair[0].y - pair[1].y))
-            c.mode = "pair"; drag(grab(c.item.id), "down", c.midpoint)
+            c.pairOrigin = c.midpoint; c.mode = "pair"
             return .capture
         }
         guard bubbles.menu.isNull else { return .ignore }
@@ -230,10 +237,14 @@ import SwiftUI
             guard c.fingers.count == 2, !c.pairEnded else { return true }
             let pair = Array(c.fingers.values)
             c.midpoint = CGPoint(x: (pair[0].x + pair[1].x) / 2, y: (pair[0].y + pair[1].y) / 2)
+            let spread = hypot(pair[0].x - pair[1].x, pair[0].y - pair[1].y)
+            if !c.pairLifted {
+                guard hypot(c.midpoint.x - c.pairOrigin.x, c.midpoint.y - c.pairOrigin.y) > 8 || abs(spread - c.spread) > 8 else { return true }
+                c.pairLifted = true; drag(grab(c.item.id), "down", c.pairOrigin)
+            }
             if c.item.view["kind"].string == "color" {
                 let size = c.item.view["diameter"].number
-                c.scale = BubbleUI.resolve(["type": "pinched_size", "size": size,
-                    "scale": hypot(pair[0].x - pair[1].x, pair[0].y - pair[1].y) / c.spread]).number / size
+                c.scale = BubbleUI.resolve(["type": "pinched_size", "size": size, "scale": spread / c.spread]).number / size
                 c.item.placement.pinch = c.scale
             }
             drag(grab(c.item.id), "move", c.midpoint); return true
@@ -273,9 +284,11 @@ import SwiftUI
         let captured = c.mode != "native"
         if cancelled { lastRing = nil; restore(c); c.mode = "retired"; c.pairEnded = true }
         else if c.mode == "pair" && !c.pairEnded {
-            c.pairEnded = true; drag(grab(c.item.id), "up", c.midpoint)
-            c.item.placement.pinch = 1
-            if c.item.view["kind"].string == "color" && abs(c.scale - 1) > 0.01 { bubbles?.action(["type": "resize", "id": c.item.id, "scale": c.scale]) }
+            c.pairEnded = true; c.item.placement.pinch = 1
+            if c.pairLifted {
+                drag(grab(c.item.id), "up", c.midpoint)
+                if c.item.view["kind"].string == "color" && abs(c.scale - 1) > 0.01 { bubbles?.action(["type": "resize", "id": c.item.id, "scale": c.scale]) }
+            }
         } else if !c.held {
             switch c.mode {
             case "moving", "rim": drag(grab(c.item.id, rim: c.mode == "rim"), "up", point)
@@ -315,7 +328,7 @@ import SwiftUI
     private func restore(_ c: Contact) {
         c.item.placement.pinch = 1
         if c.mode == "native" { for cancel in Array(cancellations.values) { cancel() } }
-        else if c.mode == "pair", !c.pairEnded { drag(grab(c.item.id), "cancel", c.midpoint) }
+        else if c.mode == "pair", !c.pairEnded, c.pairLifted { drag(grab(c.item.id), "cancel", c.midpoint) }
         else if c.mode == "moving" || c.mode == "rim" { drag(grab(c.item.id, rim: c.mode == "rim"), "cancel", c.last) }
         else if ["ring", "intensity", "beads", "choose"].contains(c.mode) || (c.mode == "wheel" && !c.part.isNull) { send(c, c.mode, "cancel", c.last) }
         c.mode = "pending"

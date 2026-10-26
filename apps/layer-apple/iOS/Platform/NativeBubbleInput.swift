@@ -6,6 +6,7 @@ final class BubbleRecognizer: UIGestureRecognizer {
     private var next: UInt64 = 0
     private var timer: Timer?
     private var secondary = false
+    private var colorKeys = Set<ObjectIdentifier>()
     private var model: BubbleInteraction? { marker?.model?.bubbleInput }
     init(marker: ReorderInputView) {
         self.marker = marker; super.init(target: nil, action: nil)
@@ -19,6 +20,11 @@ final class BubbleRecognizer: UIGestureRecognizer {
         model.viewport = marker.bounds.size
         for touch in touches {
             let point = touch.location(in: marker)
+            if touch.type == .direct, model.colorTouch(at: point) {
+                colorKeys.insert(ObjectIdentifier(touch))
+                model.colorTouches.contact(ObjectIdentifier(touch), phase: "down",
+                    position: ColorTouchRecognizer.position(touch), timestamp: touch.timestamp)
+            }
             guard marker.bounds.contains(point) || model.active else { continue }
             next &+= 1
             let device: ReorderDevice = touch.type == .pencil ? .pen : touch.type == .indirectPointer ? .mouse : .touch
@@ -49,6 +55,8 @@ final class BubbleRecognizer: UIGestureRecognizer {
         guard let marker, let model else { return }
         var capture = false
         for touch in touches {
+            model.colorTouches.contact(ObjectIdentifier(touch), phase: "move",
+                position: ColorTouchRecognizer.position(touch), timestamp: touch.timestamp)
             guard let id = contacts[ObjectIdentifier(touch)] else { continue }
             for sample in event.coalescedTouches(for: touch) ?? [touch] {
                 capture = model.move(sample.location(in: marker), id: id) || capture
@@ -61,6 +69,9 @@ final class BubbleRecognizer: UIGestureRecognizer {
     private func finish(_ touches: Set<UITouch>, cancelled: Bool) {
         guard let marker else { return }
         for touch in touches {
+            colorKeys.remove(ObjectIdentifier(touch))
+            model?.colorTouches.contact(ObjectIdentifier(touch), phase: cancelled ? "cancel" : "up",
+                position: ColorTouchRecognizer.position(touch), timestamp: touch.timestamp)
             guard let id = contacts.removeValue(forKey: ObjectIdentifier(touch)) else { continue }
             _ = model?.up(touch.location(in: marker), id: id, cancelled: cancelled)
         }
@@ -70,5 +81,9 @@ final class BubbleRecognizer: UIGestureRecognizer {
         }
     }
     func cancel() { timer?.invalidate(); timer = nil; contacts.removeAll(); if state == .began || state == .changed { state = .cancelled } }
-    override func reset() { super.reset(); timer?.invalidate(); timer = nil; contacts.removeAll(); secondary = false }
+    override func reset() {
+        for key in colorKeys { model?.colorTouches.contact(key, phase: "cancel", position: .zero, timestamp: ProcessInfo.processInfo.systemUptime) }
+        colorKeys.removeAll()
+        super.reset(); timer?.invalidate(); timer = nil; contacts.removeAll(); secondary = false
+    }
 }

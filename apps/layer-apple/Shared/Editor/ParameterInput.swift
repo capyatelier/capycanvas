@@ -17,6 +17,7 @@ struct ParameterInput: NSViewRepresentable {
     let region: ParameterInputRegion
     let identity: String
     var nudge: ((String, UInt32, [Double]) -> Void)? = nil
+    var touches: ColorTouchSurface? = nil
     let event: (String, UInt32, CGPoint, CGFloat) -> Void
     func makeNSView(context: Context) -> ContactView { ContactView() }
     func updateNSView(_ view: ContactView, context: Context) {
@@ -77,11 +78,13 @@ struct ParameterInput: UIViewRepresentable {
     let region: ParameterInputRegion
     let identity: String
     var nudge: ((String, UInt32, [Double]) -> Void)? = nil
+    var touches: ColorTouchSurface? = nil
     let event: (String, UInt32, CGPoint, CGFloat) -> Void
     func makeUIView(context: Context) -> ContactView { ContactView() }
     func updateUIView(_ view: ContactView, context: Context) {
         if view.identity != identity || view.region != region || !enabled { view.cancel() }
         view.identity = identity; view.region = region; view.enabled = enabled; view.event = event; view.nudge = nudge
+        view.attach(touches)
     }
     static func dismantleUIView(_ view: ContactView, coordinator: ()) { view.cancel() }
     final class ContactView: UIView {
@@ -92,12 +95,21 @@ struct ParameterInput: UIViewRepresentable {
         var nudge: ((String, UInt32, [Double]) -> Void)?
         var selected: UInt32 = 1
         var keyActive = false
+        private var touchInput: ColorTouchRecognizer?
         override var canBecomeFirstResponder: Bool { true }
         var size: CGFloat { bounds.width }
         override init(frame: CGRect) { super.init(frame: frame); isOpaque = false; backgroundColor = .clear; addGestureRecognizer(contact) }
         required init?(coder: NSCoder) { fatalError("Use init(frame:)") }
         func hit(_ p: CGPoint) -> UInt32 { enabled ? region.hit(p, in: bounds) : 0 }
         override func point(inside p: CGPoint, with event: UIEvent?) -> Bool { hit(p) != 0 }
+        func attach(_ surface: ColorTouchSurface?) {
+            guard touchInput?.surface !== surface else { return }
+            if let touchInput { removeGestureRecognizer(touchInput); touchInput.surface?.remove(self); self.touchInput = nil }
+            guard let surface else { return }
+            let recognizer = ColorTouchRecognizer(surface: surface)
+            addGestureRecognizer(recognizer); touchInput = recognizer
+            surface.onClaim(self) { [weak self] in self?.cancel() }
+        }
         override func didMoveToWindow() { super.didMoveToWindow(); if window == nil { cancel() } }
         override func resignFirstResponder() -> Bool { cancel(); return super.resignFirstResponder() }
         func cancel() {

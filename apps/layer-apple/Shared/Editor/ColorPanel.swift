@@ -4,6 +4,7 @@ struct ColorPanel: View {
     @State private var shapeCaptions: [String: String] = [:]
     @ObservedObject var store: EditorStore
     @StateObject private var resources = ColorUIResourceCache()
+    @State private var touches = ColorTouchSurface()
     @FocusState private var readoutFocused: Bool
     private var model: JSON { store.colorPanel }
     private var hdr: Bool { model["hdr"].bool }
@@ -29,10 +30,11 @@ struct ColorPanel: View {
                 ColorWheelDrawing(model: model, bounds: layout["wheel"], viewing: hdr ? store.colorViewing : JSON())
                     .frame(width: side, height: side).allowsHitTesting(false)
                 ColorWheelInput(shape: ColorWheelShape(model["shape"].string).rawValue, context: wheelContext.stableKey,
-                    value: captureState ?? model["readout_description"].string) { part, point, size in
+                    value: captureState ?? model["readout_description"].string, touches: touches, contact: contact) { part, point, size in
                     color(["op": "pick_wheel", "part": part == 1 ? "hue" : "field",
                         "point": [point.x, point.y], "size": size], context: wheelContext)
-                }.colorPlaced(layout["wheel"], id: "wheel")
+                }.modifier(WorkspaceContext(store: store, target: JSON(["kind": "color_wheel"]), region: Self.insideWheel))
+                    .colorPlaced(layout["wheel"], id: "wheel")
                 ForEach(["background", "foreground", "transparent"], id: \.self) { slot in
                     let swatch = model["swatches"].array.first { $0["slot"].string == slot } ?? JSON()
                     Button { color(["op": "select", "slot": slot]) } label: {
@@ -54,10 +56,14 @@ struct ColorPanel: View {
                 PaintColorControls(store: store, compact: true).colorPlaced(layout["edit"], id: "edit")
                 if hdr {
                     HDRIntensityArc(model: model, viewing: store.colorViewing, identity: editContext.stableKey,
-                        language: store.interfaceLanguage, geometry: spec["arc"], caption: layout["intensity_caption"], size: side) {
+                        language: store.interfaceLanguage, geometry: spec["arc"], caption: layout["intensity_caption"], size: side,
+                        contact: contact, touches: touches) {
                         color(["op": "hdr_intensity", "stops": $0], context: editContext)
                     }
                         .frame(width: side, height: height)
+                        #if os(macOS)
+                        .modifier(WorkspaceContext(store: store, target: JSON(["kind": "color_wheel"]), region: Self.insideArc))
+                        #endif
                 }
                 ForEach(0..<2, id: \.self) { index in
                     let shape = model["other_shapes"][index].string
@@ -95,11 +101,20 @@ struct ColorPanel: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }.aspectRatio(1 / Self.aspect(hdr: hdr), contentMode: .fit).frame(minWidth: 128, minHeight: 128)
             .modifier(ColorPanelMeasurement(id: "panel"))
-            .accessibilityElement(children: .contain).accessibilityIdentifier("color-panel-controls").onChange(of: store.interfaceLanguage, initial: true) { _, _ in
+            .accessibilityElement(children: .contain).accessibilityIdentifier("color-panel-controls")
+            .onAppear { let store = store; touches.send = { store.input($0) } }
+            .onChange(of: store.interfaceLanguage, initial: true) { _, _ in
                 for shape in ["circle", "triangle", "square"] { shapeCaptions[shape] = NativeTextContext.caption(["type": "color_shape", "shape": shape], language: store.interfaceLanguage) }
             }
     }
     private func color(_ action: [String: Any]) { store.dispatch(["type": "color", "action": action]) }
+    private func contact(_ phase: String) { store.dispatch(["type": "color_contact", "phase": phase]) }
+    static func insideWheel(_ point: CGPoint, _ size: CGSize) -> Bool {
+        hypot(point.x - size.width / 2, point.y - size.height / 2) <= min(size.width, size.height) / 2
+    }
+    static func insideArc(_ point: CGPoint, _ size: CGSize) -> Bool {
+        capy_apple_parameter_hit(Float(point.x), Float(point.y), Float(size.width), true) != 0
+    }
     private func color(_ action: [String: Any], context: JSON) { store.dispatch(["type": "color_edit", "context": context.raw, "action": action]) }
     static func aspect(hdr: Bool) -> CGFloat {
         hdr ? max(226, ColorUI.resolve(["type": "picker_layout", "size": 226, "hdr": true])["height"].number) / 226 : 1

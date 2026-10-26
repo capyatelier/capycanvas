@@ -445,6 +445,25 @@ stroke fading and homing even when their retained content stays unchanged.
 Menu replies retain drawing, source and request ownership. Shared headings and
 keep-open choices survive native menu projection.
 
+[Color undo](../ui/color-picker.md#color-undo) brackets each Color panel wheel
+and intensity-arc press with `color_contact`. On iPadOS, `ColorTouchSurface`
+forwards the direct touches on the wheel circle, the arc and the color ring as
+`color_touch` input, one surface per panel or bubble layer, and the second finger
+retires the single-finger pick. Two fingers lift a bubble only after they move
+8 points. A secondary click inside the wheel circle, and on the Mac also on the
+arc, opens the shared `color_wheel` menu; the iPadOS arc has no menu because a
+hosting controller over the arc would take the wheel's touches. The portable
+fixture runs on Linux too:
+
+```sh
+swiftc -parse-as-library apps/layer-apple/Shared/Bridge/ColorTouchSurface.swift \
+  apps/layer-apple/tests/color-touch-surface.swift -o artifacts/color-touch-surface
+artifacts/color-touch-surface
+```
+
+The native taps, the threshold and both menus still need a check on a Mac and
+an iPad.
+
 Labels use the app's native system font at the shared size, matching its other
 native controls. Font rasterization and window chrome differ from GTK and Web.
 Visual checks match authored state, camera, geometry and colors while retaining

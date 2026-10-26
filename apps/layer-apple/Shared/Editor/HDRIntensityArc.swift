@@ -9,6 +9,8 @@ struct HDRIntensityArc: View {
     let geometry: JSON
     let caption: JSON
     let size: CGFloat
+    var contact: ((String) -> Void)? = nil
+    var touches: ColorTouchSurface? = nil
     let set: (Double) -> Void
     @State private var original: Double?
     @State private var range: [Double]?
@@ -22,18 +24,18 @@ struct HDRIntensityArc: View {
                 center: point(geometry["center"]), marker: point(arc["marker"]), width: geometry["width"].number, radius: geometry["marker_radius"].number,
                 zero: point(arc["zero"]))
             ParameterInput(region: .parameter(hdr: true), identity: identity, nudge: { phase, _, delta in
-                if phase == "down" { original = model["intensity"].number }
-                if phase == "cancel" { if let original { set(original) }; original = nil; return }
-                if phase == "up" { original = nil; return }
+                if phase == "down" { original = model["intensity"].number; contact?("down") }
+                if phase == "cancel" { if let original { set(original) }; original = nil; contact?("cancel"); return }
+                if phase == "up" { original = nil; contact?("up"); return }
                 set(model["intensity"].number + (delta[0] + delta[1]) * 0.1)
-            }) { phase, _, p, side in
+            }, touches: touches) { phase, _, p, side in
                 if phase == "reset" { set(0); return }
-                if phase == "cancel" { if let original { set(original) }; original = nil; range = nil; return }
-                if phase == "down" { original = model["intensity"].number; range = [arc["minimum"].number, arc["maximum"].number] }
+                if phase == "cancel" { if let original { set(original) }; original = nil; range = nil; contact?("cancel"); return }
+                if phase == "down" { original = model["intensity"].number; range = [arc["minimum"].number, arc["maximum"].number]; contact?("down") }
                 let range = range ?? [arc["minimum"].number, arc["maximum"].number]
                 let value = ColorUI.resolve(["type": "intensity_point", "size": side, "point": [p.x, p.y], "minimum": range[0], "maximum": range[1]], language: language)
                 if !value.isNull { set(value.number) }
-                if phase == "up" { original = nil; self.range = nil }
+                if phase == "up" { original = nil; self.range = nil; contact?("up") }
             }.accessibilityHidden(true)
             let font = caption[2].number, label = String(format: "%+.2f EV", model["intensity"].number)
             Text(label).font(.system(size: font)).monospacedDigit().fixedSize().allowsHitTesting(false)
