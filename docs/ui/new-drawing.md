@@ -21,7 +21,8 @@ If display dimensions are unavailable, the sheet is 1,440 × 1,080 px.
   common choices), Color (space, depth, blending) and Paper (the texture, with
   its Texture visibility in fainter text below its name, and the paper color).
   Presets ⌃, Cancel and Create sit in the footer; clicking the preview opens
-  Presets too.
+  Presets too. The grain darkens and lightens the paper color with transparent
+  black and white marks; hidden paper keeps the grain at 35% opacity.
 - **Units.** Millimetres, centimetres and inches keep the sheet's physical size
   when the resolution changes; pixels keep the pixel size. Dragging W or H
   lands on whole pixels and millimetres, tenths of a centimetre and eighths of

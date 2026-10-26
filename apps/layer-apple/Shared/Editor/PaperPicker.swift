@@ -24,9 +24,10 @@ final class NativePaperPreviews: @unchecked Sendable {
     private let ids: [String]
     init(_ handle: UInt64, ids: [String]) { self.handle = handle; self.ids = ids }
     deinit { let handle = handle; NativeProjectTask.io.async { capy_paper_previews_free(nativeValue(handle)) } }
-    struct Decoded: @unchecked Sendable { let images: [String: CGImage] }
+    struct Decoded: @unchecked Sendable { let images: [String: CGImage]; let grains: [String: CGImage] }
     func decode() -> Decoded {
         var images: [String:CGImage] = [:]
+        var grains: [String:CGImage] = [:]
         for index in 0..<min(ids.count,capy_paper_previews_count(nativeValue(handle))) {
             var count = 0
             let side = Int(capy_paper_previews_read(nativeValue(handle),index,&count))
@@ -37,13 +38,28 @@ final class NativePaperPreviews: @unchecked Sendable {
                     space:CGColorSpaceCreateDeviceGray(),bitmapInfo:CGBitmapInfo(rawValue:CGImageAlphaInfo.none.rawValue),
                     provider:provider,decode:nil,shouldInterpolate:true,intent:.relativeColorimetric) else { continue }
             images[ids[index]] = image
+            var rgba = [UInt8](repeating: 0, count: count * 4)
+            for (pixel, value) in data.enumerated() {
+                let shade = Double(value) / 255 - 0.5
+                let alpha = UInt8((abs(shade) * (shade < 0 ? 0.7 : 0.25) * 255).rounded())
+                let color: UInt8 = shade < 0 ? 0 : alpha
+                let offset = pixel * 4
+                rgba[offset] = color; rgba[offset + 1] = color; rgba[offset + 2] = color; rgba[offset + 3] = alpha
+            }
+            if let provider = CGDataProvider(data: Data(rgba) as CFData),
+                let grain = CGImage(width: side, height: side, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: side * 4,
+                    space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+                    provider: provider, decode: nil, shouldInterpolate: true, intent: .relativeColorimetric) {
+                grains[ids[index]] = grain
+            }
         }
-        return Decoded(images:images)
+        return Decoded(images: images, grains: grains)
     }
 }
 
 @MainActor final class PaperPreviewCache: ObservableObject {
     @Published private(set) var images: [String:CGImage] = [:]
+    @Published private(set) var grains: [String:CGImage] = [:]
     private weak var store: EditorStore?
     private var requested = Set<String>()
     init(store: EditorStore) { self.store = store }
@@ -54,7 +70,9 @@ final class NativePaperPreviews: @unchecked Sendable {
             native.paperPreviews(ids:[id]) { done.resume(returning:$0) }
         }
         let decoded = await Task.detached(priority:.utility) { previews?.decode() }.value
-        if let image = decoded?.images[id] { images[id] = image } else { requested.remove(id) }
+        if let image = decoded?.images[id], let grain = decoded?.grains[id] {
+            grains[id] = grain; images[id] = image
+        } else { requested.remove(id) }
     }
 }
 

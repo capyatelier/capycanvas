@@ -599,9 +599,9 @@ struct NewDrawingSheet: View {
         let shown = sheet["shown"].bool, texture = sheet["texture"].raw as? String
         ZStack {
             ColorSwatch(rgba: shown ? ColorUI.preview(sheet["color"])["rgba"] : JSON([0, 0, 0, 0]))
-            if let texture, let image = previews.images[texture] {
+            if let texture, let image = previews.grains[texture] {
                 Image(decorative: image, scale: CGFloat(image.width) / grain).resizable(resizingMode: .tile)
-                    .blendMode(.overlay).opacity(shown ? 0.8 : 0.35)
+                    .opacity(shown ? 1 : 0.35)
             }
         }.compositingGroup()
             .frame(width: max(4, (width * scale).rounded()), height: max(4, (height * scale).rounded()))
