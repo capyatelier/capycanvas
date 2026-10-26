@@ -727,14 +727,23 @@ fn measured_panel_bridges_use_only_current_allocations_and_preserve_receiver_ide
         let mut moved=measure.clone();moved.groups[0].1.y+=0.5;
         let moved_frame=resolved.clone().measured_panel_bridges(moved.clone()).unwrap();
         assert_eq!(moved_frame.groups[0].bounds,moved.groups[0].1);
-        for mutation in 0..5 {
+        let mut retired=measure.clone();
+        retired.groups.push((u32::MAX,Bounds::default()));
+        retired.columns[0].icons.push((Panel::CustomToolbar(u32::MAX),Bounds::default()));
+        retired.columns.push(crate::PanelColumnMeasure {
+            column:u32::MAX,bounds:Bounds::default(),content:Bounds::default(),icons:vec![],
+        });
+        let with_retired=resolved.clone().measured_panel_bridges(retired).unwrap();
+        assert_eq!(serde_json::to_value(with_retired).unwrap(),json);
+        for mutation in 0..6 {
             let mut invalid=measure.clone();
             match mutation {
                 0=>invalid.groups.push(invalid.groups[0]),
-                1=>invalid.groups[0].0=u32::MAX,
-                2=>invalid.groups[0].1.x=f32::NAN,
-                3=>invalid.columns[0].content.width=-1.,
-                _=>invalid.columns[0].icons.push((Panel::CustomToolbar(u32::MAX),Bounds::default())),
+                1=>invalid.groups[0].1.x=f32::NAN,
+                2=>invalid.columns[0].content.width=-1.,
+                3=>invalid.columns.push(invalid.columns[0].clone()),
+                4=>{let icon=invalid.columns[0].icons[0];invalid.columns[0].icons.push(icon);},
+                _=>invalid.groups.push((u32::MAX,Bounds{x:f32::NAN,..Bounds::default()})),
             }
             assert!(resolved.clone().measured_panel_bridges(invalid).is_err(),"{edge:?} case {mutation}");
         }

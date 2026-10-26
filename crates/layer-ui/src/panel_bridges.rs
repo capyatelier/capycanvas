@@ -59,12 +59,9 @@ impl ResolvedLayout {
         let valid = |b: Bounds| [b.x,b.y,b.width,b.height].into_iter().all(f32::is_finite) && b.width>=0. && b.height>=0.;
         let mut groups = std::collections::HashSet::new();
         let mut columns = std::collections::HashSet::new();
-        if measure.groups.iter().any(|(id,b)| !groups.insert(*id) || !valid(*b) || !self.groups.iter().any(|g|g.id==*id))
+        if measure.groups.iter().any(|(id,b)| !groups.insert(*id) || !valid(*b))
             || measure.columns.iter().any(|c| !columns.insert(c.column) || !valid(c.bounds) || !valid(c.content)
-                || !self.collapsed.iter().any(|column|column.id==c.column)
-                || {let mut icons=std::collections::HashSet::new();c.icons.iter().any(|(panel,b)| !icons.insert(*panel) || !valid(*b)
-                    || !self.collapsed.iter().filter(|column|column.id==c.column).flat_map(|column|&column.groups)
-                        .flat_map(|group|&group.icons).any(|icon|icon.panel==*panel))}) {
+                || {let mut icons=std::collections::HashSet::new();c.icons.iter().any(|(panel,b)| !icons.insert(*panel) || !valid(*b))}) {
             return Err("Invalid panel measurements".into());
         }
         self.groups.retain_mut(|group| {

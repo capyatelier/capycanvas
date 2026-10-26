@@ -70,8 +70,8 @@ glass transport carries receiver IDs, four corner radii and native tab bounds to
 the render worker. It applies the surface offset and display scale once, prepares
 the existing GPU chrome pipelines, and acknowledges the revision after presenting.
 Only that matching revision suppresses the native backing and shadow; controls,
-focus, scrolling and input targets remain native. Missing or retired allocations
-clear the join rather than borrowing another group's bounds. Ordinary individual
+focus, scrolling and input targets remain native. Retired allocation IDs are ignored; duplicate, nonfinite or negative measurements
+are rejected. Missing current allocations clear the join. Ordinary individual
 panel drawers retain their shared drawer connection.
 
 Apple uses the same allocation and presentation contract. Swift reports the
