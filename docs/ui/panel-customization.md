@@ -310,7 +310,9 @@ picker's availability rules.
   Resizing and restored sizes keep fixed controls and one complete scrolling
   row, two for Palettes, or one tile of continuous content. Compact bodies keep
   one tile of viewport and scroll when their natural height exceeds it. Later
-  content growth leaves established floating dimensions unchanged.
+  content growth leaves established floating dimensions unchanged. A newly
+  automatic float may fit once when a previously unseen tab is first measured;
+  established and manually resized floats stay fixed.
   When removal leaves a floating group with only a toolbar, clear the group's
   manual size and tab-fit constraint and restore that toolbar's default grid,
   without moving its anchor. This applies to hiding and moving panels alike.

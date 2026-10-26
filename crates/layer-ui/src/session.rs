@@ -323,6 +323,7 @@ pub struct UiSession<R: CanvasRenderer> {
     divider_drag: Option<(u32, ResizeDrag)>,
     edge_contacts: edge_contacts::EdgeContacts,
     floating_resize: Option<FloatingResize>,
+    floating_auto_fit: Vec<(u32, Vec<Panel>)>,
     workspace_drag: Option<WorkspaceDrag>,
     bubble_state: session_bubbles::Bubbles,
     color_history: color_history_session::ColorHistories,
@@ -556,6 +557,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             divider_drag: None,
             edge_contacts: Default::default(),
             floating_resize: None,
+            floating_auto_fit: Vec::new(),
             workspace_drag: None,
             bubble_state: Default::default(),
             color_history: Default::default(),
@@ -2185,6 +2187,16 @@ impl<R: CanvasRenderer> UiSession<R> {
                     (!drag.source_is_icon).then_some(drag.source.height),
                     drag.torn_off,
                 )?;
+                if drag.torn_off {
+                    let layout = &mut self.state.workspace.layout;
+                    let pending: Vec<_> = layout.group_panels(group)?.iter().copied().filter(|panel|
+                        !layout.measurements.iter().any(|measurement| measurement.panel == *panel && measurement.content_height > 0.)
+                    ).collect();
+                    self.floating_auto_fit.retain(|(id, _)| *id != group);
+                    if !pending.is_empty() {
+                        self.floating_auto_fit.push((group, pending));
+                    }
+                }
             }
             self.workspace_drag = None;
             self.workspace_tab_drag = None;
@@ -3361,7 +3373,31 @@ impl<R: CanvasRenderer> UiSession<R> {
                         accepted.push(measurement);
                     }
                 }
-                replace_if_changed(&mut self.state.workspace.layout.measurements, accepted)
+                if self.state.workspace.layout.measurements == accepted { (0, false) } else if self.floating_auto_fit.is_empty() {
+                    self.state.workspace.layout.measurements = accepted;
+                    (LAYOUT, false)
+                } else {
+                    let viewport = self.logical_viewport.or(self.interaction.viewport)
+                        .unwrap_or(self.state.camera.viewport.map(|value| value as f32));
+                    let before = self.state.workspace.layout.resolved(viewport);
+                    let first: Vec<_> = self.floating_auto_fit.iter().filter_map(|(group, panels)| {
+                        let measured: Vec<_> = panels.iter().copied().filter(|panel|
+                            accepted.iter().any(|measurement| measurement.panel == *panel && measurement.content_height > 0.)
+                        ).collect();
+                        if measured.is_empty() { None } else {
+                            Some((*group, measured, before.groups.iter().find(|placed| placed.id == *group)?.bounds))
+                        }
+                    }).collect();
+                    self.state.workspace.layout.measurements = accepted;
+                    for (group, measured, preview) in first {
+                        self.state.workspace.layout.settle_floating_drop(group, viewport, preview, Some(preview.height), true)?;
+                        if let Some((_, panels)) = self.floating_auto_fit.iter_mut().find(|(id, _)| *id == group) {
+                            panels.retain(|pending| !measured.contains(pending));
+                        }
+                    }
+                    self.floating_auto_fit.retain(|(_, panels)| !panels.is_empty());
+                    (LAYOUT, false)
+                }
             }
             UiAction::DragWorkspace {
                 item,
@@ -3427,6 +3463,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         return Err(error);
                     }
                     if phase == ContactPhase::Up {
+                        self.floating_auto_fit.retain(|(id, _)| *id != group);
                         self.floating_resize = None;
                         self.workspace_history.finish(&self.state.workspace);
                     }
@@ -3533,6 +3570,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.workspace_history = workspace::WorkspaceHistory::default();
                 self.divider_drag = None;
                 self.floating_resize = None;
+                self.floating_auto_fit.clear();
                 self.workspace_drag = None;
                 self.workspace_tab_drag = None;
                 self.state.customization = CustomizationState::default();
@@ -4100,6 +4138,14 @@ impl<R: CanvasRenderer> UiSession<R> {
                 (SETTINGS, false)
             }
         };
+        let layout = &self.state.workspace.layout;
+        self.floating_auto_fit.retain_mut(|(group, pending)| {
+            let Some(panels) = layout.floating.iter().find_map(|floating| match &floating.root {
+                DockNode::Tabs { id, panels, .. } if id == group => Some(panels), _ => None,
+            }) else { return false };
+            pending.retain(|panel| panels.contains(panel));
+            !pending.is_empty()
+        });
         if let Some(before) = workspace_before {
             let divider=self.divider_drag.take().is_some();
             let floating=self.floating_resize.take().is_some();
@@ -5596,6 +5642,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     ..Default::default()
                 };
                 self.floating_resize = None;
+                self.floating_auto_fit.clear();
                 self.workspace_drag = None;
                 self.workspace_tab_drag = None;
                 self.interaction.keep_chrome_until_contact = self.state.workspace.zen_mode;
@@ -12294,6 +12341,64 @@ mod tests {
         assert_eq!(app.state.workspace, baseline);
         invoke(&mut app, CommandId::RedoWorkspace);
         assert_eq!(app.state.workspace, after);
+    }
+
+    #[test]
+    fn unseen_floating_tabs_fit_once_and_manual_resize_retires_refitting() {
+        let viewport = [1200., 900.];
+        let mut app = session(Platform::Mac);
+        app.state.workspace.layout = WorkspacePreset::Photographer.layout(Platform::Mac);
+        app.state.workspace.layout.open_default_columns(Platform::Mac);
+        let group = app.state.workspace.layout.panel_group(Panel::Histogram).unwrap();
+        app.state.workspace.layout.move_panel(viewport, Panel::Layers, DockTarget::Tab { group, index: None }).unwrap();
+        app.state.workspace.layout.move_panel(viewport, Panel::Proof, DockTarget::Tab { group, index: None }).unwrap();
+        let measurement = |panel, content_height| PanelMeasurement { panel, tab_width: 100., content_height, scroll: None };
+        app.dispatch(UiAction::MeasurePanels { measurements: vec![
+            measurement(Panel::Histogram, 320.), measurement(Panel::Waveform, 0.),
+            measurement(Panel::Layers, 0.), measurement(Panel::Proof, 0.),
+        ] }).unwrap();
+        let source = app.layout(viewport).groups.into_iter().find(|placed| placed.id == group).unwrap().bounds;
+        let item = DockItem::Group { group };
+        app.drag_workspace(item, ContactPhase::Down, [source.x + 40., source.y + 12.], viewport, &[]).unwrap();
+        app.drag_workspace(item, ContactPhase::Move, [600., 400.], viewport, &[]).unwrap();
+        app.drag_workspace(item, ContactPhase::Up, [600., 400.], viewport, &[]).unwrap();
+        let placed = |app: &UiSession<_>| app.layout(viewport).groups.into_iter().find(|placed| placed.id == group).unwrap().bounds;
+        let before = placed(&app);
+        app.dispatch(UiAction::MeasurePanels { measurements: vec![
+            measurement(Panel::Histogram, 320.), measurement(Panel::Waveform, 520.),
+            measurement(Panel::Layers, 0.), measurement(Panel::Proof, 0.),
+        ] }).unwrap();
+        let fitted = placed(&app);
+        assert!(fitted.height > before.height);
+        app.dispatch(UiAction::SelectPanelTab { group, panel: Panel::Waveform }).unwrap();
+        assert_eq!(placed(&app), fitted);
+
+        let edge = ResizeEdge::Bottom;
+        let press = [fitted.x + fitted.width * 0.5, fitted.y + fitted.height];
+        let resized = [press[0], press[1] - 100.];
+        for (phase, position) in [(ContactPhase::Down, press), (ContactPhase::Move, resized), (ContactPhase::Cancel, resized)] {
+            app.dispatch(UiAction::ResizeFloating { group, edge, phase, position, viewport }).unwrap();
+        }
+        app.dispatch(UiAction::SelectPanelTab { group, panel: Panel::Layers }).unwrap();
+        app.dispatch(UiAction::MeasurePanels { measurements: vec![
+            measurement(Panel::Histogram, 320.), measurement(Panel::Waveform, 520.),
+            measurement(Panel::Layers, 700.), measurement(Panel::Proof, 0.),
+        ] }).unwrap();
+        let first_fit = placed(&app);
+        assert!(first_fit.height > fitted.height);
+
+        let press = [first_fit.x + first_fit.width * 0.5, first_fit.y + first_fit.height];
+        let resized = [press[0], press[1] - 100.];
+        for (phase, position) in [(ContactPhase::Down, press), (ContactPhase::Move, resized), (ContactPhase::Up, resized)] {
+            app.dispatch(UiAction::ResizeFloating { group, edge, phase, position, viewport }).unwrap();
+        }
+        let manual = placed(&app);
+        app.dispatch(UiAction::SelectPanelTab { group, panel: Panel::Proof }).unwrap();
+        app.dispatch(UiAction::MeasurePanels { measurements: vec![
+            measurement(Panel::Histogram, 320.), measurement(Panel::Waveform, 520.),
+            measurement(Panel::Layers, 700.), measurement(Panel::Proof, 800.),
+        ] }).unwrap();
+        assert_eq!(placed(&app), manual);
     }
 
     #[test]
