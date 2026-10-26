@@ -58,6 +58,7 @@ import {checkPenRendering} from "./pen-rendering.test.mjs";
 import {checkSmoothing} from "./smoothing.test.mjs";
 import {checkTooltips} from "./tooltips.test.mjs";
 import {checkColumnStacks} from "./column-stacks.test.mjs";
+import {checkEdgeReach} from "./edge-reach.test.mjs";
 import {checkLayoutDrops} from "./layout-drops.test.mjs";
 import {checkColumnDrops} from "./column-drops.test.mjs";
 import {checkWorkspaceFocus,checkWorkspaceSwitcher,checkWorkspaceOptions,checkWorkspaceMenuRefresh} from "./workspace-switcher.test.mjs";
@@ -339,6 +340,7 @@ try {
     [process.argv.includes("--header-controls"), () => checkHeaderControls({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--layout-drops"), () => checkLayoutDrops({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--column-stacks"), () => checkColumnStacks({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--edge-reach"), () => checkEdgeReach({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--column-drops"), () => checkColumnDrops({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--tooltips"), () => checkTooltips({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--drag-pickup"), () => checkDragPickup({call,evaluate,settle}), checkErrors],

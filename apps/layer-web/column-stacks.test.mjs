@@ -59,8 +59,13 @@ export async function checkColumnStacks({call,evaluate,settle}) {
     assert.equal(layout.collapsed.length,2);
     assert.equal(layout.collapsed[1].bounds.y-layout.collapsed[0].bounds.y-layout.collapsed[0].bounds.height,6);
     assert.equal(await evaluate('document.querySelector(".collapsed-content").firstElementChild.classList.contains("column-tab")'),true);
-    assert.ok(layout.dividers.find(d=>d.id===40).fixed);
-    assert.equal(await evaluate('document.querySelectorAll(".divider.horizontal").length'),1,'Closed stack has no resize handle');
+    const stackEdge=layout.dividers.find(d=>d.id===40),member=layout.collapsed[1];
+    assert.ok(!stackEdge.fixed,'A closed stack edge opens a member');
+    const closedStack=await snapshot(),from={x:stackEdge.bounds.x+stackEdge.bounds.width/2,y:member.bounds.y+20};
+    await input('down',from);await input('move',{x:from.x+90,y:from.y});await wait(100);await input('up');await wait(180);
+    assert.ok((await resolved()).collapsed.find(c=>c.id===member.id).open,'Dragging a closed stack edge opens the member beside the contact');
+    assert.deepEqual(await snapshot(),closedStack,'Opening a member is transient');
+    await escape();layout=await resolved();
     await evaluate(`window.__stackTile=document.querySelector(${JSON.stringify(tile('brushes'))})`);
     await click(tile('brushes'));layout=await resolved();
     const opened=layout.collapsed[0].open;

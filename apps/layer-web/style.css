@@ -517,6 +517,7 @@ button.layer-row { justify-content: center; gap: var(--panel-group-spacing); fon
 .number-inline .number-value-box > * { grid-area: 1/1; min-width: 0; width: 100%; font-variant-numeric: tabular-nums; }
 .number-inline .number-value-box > .number-entry { width: 0; min-width: 100%; }
 .number-inline .number-measure { visibility: hidden; padding: 2px 6px; }
+:where(.dock-group, .dock-group *, .collapsed-column, .collapsed-column *) { touch-action: pan-y; }
 .divider { touch-action: none; user-select: none; -webkit-user-select: none; -webkit-tap-highlight-color: transparent; background: transparent; z-index: 3; }
 .divider.horizontal { cursor: col-resize; }
 .divider.vertical { cursor: row-resize; }

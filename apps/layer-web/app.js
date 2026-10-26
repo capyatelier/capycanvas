@@ -1,4 +1,5 @@
 import { addScrollbar } from "./scrollbars.js";
+import { edgeContactClass, edgeResetClass } from "./edge-reach.js";
 import { brushSizeGrid } from "./brush-sizes.js";
 import init, { WebApp, WebGpu, configure_raster_worker, configure_gpu_diagnostics, automatic_tab_names } from "./pkg/layer_web.js";
 import { createRasterWorker } from "./raster-worker-client.js";
@@ -1192,6 +1193,7 @@ function endWorkspaceGesture(e, cancel = false) {
     } else workspaceGestureEvent(cancel ? "cancel" : "up", e || drag.last);
   }
   if (cancel && drag.context) customization.dismissContext();
+  if (!cancel && !drag.started && drag.selectTab) dispatch(drag.selectTab);
   workspaceGesture = null;
   clearTabSlide(drag);
   workspaceCursor(null);
@@ -1200,6 +1202,54 @@ function endWorkspaceGesture(e, cancel = false) {
   if (!cancel && (drag.started || drag.held || drag.context)) { e?.preventDefault(); e?.stopPropagation(); }
   updateZen();
 }
+let edgeContact = null, edgeContacts = 0, lastPointerKind = "mouse";
+function edgeInput(phase, e, contact = "free") {
+  return input({ type: "edge_contact", id: BigInt(edgeContact.id), phase, kind: e.pointerType || "mouse", contact,
+    position: [e.clientX, e.clientY], viewport: workspaceViewport, time_ns: BigInt(Math.round(performance.now() * 1e6)) });
+}
+function endEdgeContact(e, phase) {
+  const edge = edgeContact;
+  if (!edge || !e.isTrusted || edge.pointerId !== e.pointerId) return;
+  edgeInput(phase, e);
+  edgeContact = null;
+  if (!edge.claimed) return;
+  if (workspace.hasPointerCapture(e.pointerId)) workspace.releasePointerCapture(e.pointerId);
+  workspaceCursor(null);
+  e.preventDefault(); e.stopImmediatePropagation();
+}
+workspace.addEventListener("pointerdown", e => {
+  if (!e.isTrusted) return;
+  lastPointerKind = e.pointerType || "mouse";
+  if (e.button !== 0) return;
+  if (edgeContact) {
+    if (!edgeContact.claimed && e.pointerType === "touch") { edgeInput("cancel", e); edgeContact = null; }
+    return;
+  }
+  const contact = e.isPrimary ? edgeContactClass(e.target, canvas) : null;
+  if (!contact) return;
+  edgeContact = { id: ++edgeContacts, pointerId: e.pointerId, canvas: e.target === canvas, claimed: false, hold: false };
+  edgeContact.selectOnRelease = edgeContact.hold = !!edgeInput("down", e, contact).edge_select_on_release;
+}, { capture: true });
+workspace.addEventListener("pointermove", e => {
+  const edge = edgeContact;
+  if (!edge || !e.isTrusted || edge.pointerId !== e.pointerId) return;
+  if (!edge.claimed && workspaceGesture?.started) { edgeInput("cancel", e); edgeContact = null; return; }
+  const reply = edgeInput("move", e);
+  edge.hold = !!reply.edge_hold;
+  if (reply.edge_cursor) {
+    if (!edge.claimed) {
+      edge.claimed = true;
+      if (workspaceGesture && !workspaceGesture.started) endWorkspaceGesture(null, true);
+      customization.dismissContext();
+      if (edge.canvas) canvas.dispatchEvent(new PointerEvent("pointercancel", { pointerId: e.pointerId, pointerType: e.pointerType, clientX: e.clientX, clientY: e.clientY, bubbles: true }));
+      workspace.setPointerCapture(e.pointerId);
+    }
+    workspaceCursor(reply.edge_cursor);
+  }
+  if (reply.edge_cursor || reply.edge_hold) { e.preventDefault(); e.stopImmediatePropagation(); }
+}, { capture: true });
+window.addEventListener("pointerup", e => endEdgeContact(e, "up"), { capture: true });
+window.addEventListener("pointercancel", e => endEdgeContact(e, "cancel"), { capture: true });
 workspace.addEventListener("pointerdown", e => {
   if (e.button !== 0 || !e.isPrimary || workspaceGesture) return;
   const node = e.target.closest("[data-workspace-drag]");
@@ -1210,8 +1260,11 @@ workspace.addEventListener("pointerdown", e => {
   workspaceGesture.tile = workspaceGesture.action.item?.kind === "tile";
   if (workspaceGesture.waitForHold)
     workspaceGestureSourceObserver.observe(workspace, { childList: true, subtree: true });
-  if (node.matches('.dock-tab[data-group]'))
-    dispatch({type:"select_panel_tab",group:Number(node.dataset.group),panel:node.dataset.panel});
+  if (node.matches('.dock-tab[data-group]')) {
+    const tab = {type:"select_panel_tab",group:Number(node.dataset.group),panel:node.dataset.panel};
+    if (edgeContact?.selectOnRelease) workspaceGesture.selectTab = tab;
+    else dispatch(tab);
+  }
   // External resize strips are outside the unselectable panel. Prevent a
   // native text-selection drag from stealing their pointer sequence.
   if (workspaceGesture.action.type !== "drag_workspace") e.preventDefault();
@@ -1252,7 +1305,7 @@ workspace.addEventListener("pointermove", e => {
   e.preventDefault(); e.stopPropagation();
 }, { capture: true });
 workspace.addEventListener("touchmove", e => {
-  if (workspaceGesture?.context && e.touches.length === 1) e.preventDefault();
+  if ((workspaceGesture?.context || edgeContact?.hold || edgeContact?.claimed) && e.touches.length === 1 && e.cancelable) e.preventDefault();
 }, { passive: false });
 window.addEventListener("pointerup", e => endWorkspaceGesture(e), { capture: true });
 window.addEventListener("pointercancel", e => endWorkspaceGesture(e, true), { capture: true });
@@ -1295,10 +1348,17 @@ workspace.addEventListener("dblclick", e => {
   }
   if (e.target.closest(".dock-tab")) return;
   const node = e.target.closest("[data-workspace-drag]");
-  if (!node) return;
+  if (!node) {
+    const contact = edgeResetClass(e.target, canvas);
+    if (contact && input({ type: "edge_double_press", kind: lastPointerKind, contact, position: [e.clientX, e.clientY], viewport: workspaceViewport }).handled) {
+      e.preventDefault(); e.stopPropagation();
+      endWorkspaceGesture(null, true);
+    }
+    return;
+  }
   const action = JSON.parse(node.dataset.workspaceDrag);
   if (action.type === "drag_divider" && layout.dividers.some(d =>
-    d.id === action.id && d.band && d.axis === "horizontal")) {
+    d.id === action.id && d.owner_side && d.axis === "horizontal")) {
     e.preventDefault(); e.stopPropagation();
     endWorkspaceGesture(null, true);
     dispatch({ type: "reset_column_width", id: action.id });

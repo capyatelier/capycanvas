@@ -476,6 +476,7 @@ the status display.
 cargo test --locked -p layer-ui --lib edge_grab
 bash tools/performance/workspace-motion.sh gtk --native-test=native_edge_grab_columns_input --tablet
 bash tools/performance/workspace-motion.sh gtk --native-test=native_edge_grab_panels_input --tablet
+bash tools/performance/workspace-motion.sh web --edge-reach
 cargo test -p layer-linux native_group_tab_styles -- --ignored --test-threads=1
 cargo test --release -p layer-linux native_panel_customization -- --ignored --test-threads=1
 cargo test --release -p layer-linux native_panel_expansion -- --ignored --test-threads=1
@@ -566,9 +567,14 @@ withhold motion from the controls beneath (`edge_hold`), to select a pressed
 tab on release (`edge_select_on_release`), or to capture the contact and show a
 resize pointer (`edge_cursor`); the session then drives the handle's drag and
 advances the catch-up in `frame`. A native double press in the reach sends
-`UiInput::EdgeDoublePress`. GTK implements this; Web, Android, Apple and Windows
-still use only the thin handles, but share the ownership, collapse and stack
-rules.
+`UiInput::EdgeDoublePress`. GTK and Web implement this. Web treats text fields,
+layer rows, held tiles and `touch-action: none` controls as inputs, and
+immediate drag sources, sideways swipe owners and horizontal scrollers as
+pickups. Panel surfaces use `touch-action: pan-y` so horizontal touch reaches
+the session, and Web cancels `touchmove` while the session holds or owns the
+contact. Android, Apple and
+Windows still use only the thin handles, but share the ownership, collapse and
+stack rules.
 
 [Stacked columns](stacked-columns.md) replace the former Group panel mode. Each
 stack contains complete collapsed columns and owns “Open individual panels” and
