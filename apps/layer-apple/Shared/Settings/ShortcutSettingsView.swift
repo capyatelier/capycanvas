@@ -396,16 +396,29 @@ struct ShortcutNavigationRow: View {
 
 private struct ShortcutSearchField: View {
     @ObservedObject var store: EditorStore
+    @FocusState private var focused: Bool
     private func action(_ value: [String: Any]) { store.dispatch(["type": "preferences", "action": value]) }
     var body: some View {
         EditorTextField(store.catalog["native_copy"]["shortcuts"]["search_or_press"].string, value: store.snapshot["preferences"]["shortcut_query"].string) {
             action(["type": "search_shortcuts", "query": $0])
         }
             .editorSearchInput().textFieldStyle(.roundedBorder).accessibilityIdentifier("shortcut-search")
+            .focused($focused)
             .onKeyPress(phases: .down) { press in
                 guard let chord = ShortcutSearchChord(press) else { return .ignored }
                 action(["type": "search_shortcut_key", "chord": chord.raw])
                 return .handled
+            }
+            .background {
+                #if os(macOS)
+                ShortcutKeyCapture(consuming: { key, command, shift, alt in
+                    guard focused else { return false }
+                    let function = key.first == "f" && (Int(key.dropFirst()).map { (1...20).contains($0) } == true)
+                    guard let chord = ShortcutSearchChord(key: key, command: command, shift: shift, alt: alt, function: function) else { return false }
+                    action(["type": "search_shortcut_key", "chord": chord.raw])
+                    return true
+                }).frame(width: 0, height: 0)
+                #endif
             }
     }
 }
@@ -414,11 +427,15 @@ private struct ShortcutSearchChord {
     let raw: [String: Any]
     init?(_ press: KeyPress) {
         let command = !press.modifiers.intersection([.command, .control]).isEmpty, alt = press.modifiers.contains(.option)
-        let key = press.editorKey.lowercased()
-        let editing = press.modifiers == .command
+        self.init(key: press.editorKey, command: command, shift: press.modifiers.contains(.shift), alt: alt,
+            function: press.editorFunctionKey)
+    }
+    init?(key: String, command: Bool, shift: Bool, alt: Bool, function: Bool) {
+        let key = key.lowercased()
+        let editing = command && !shift && !alt
             && ["a", "c", "v", "x", "z", "backspace", "delete", "arrowleft", "arrowright", "home", "end"].contains(key)
-        guard !key.isEmpty, !editing, command || alt || press.editorFunctionKey else { return nil }
-        raw = ["key": key, "command": command, "shift": press.modifiers.contains(.shift), "alt": alt]
+        guard !key.isEmpty, !editing, command || alt || function else { return nil }
+        raw = ["key": key, "command": command, "shift": shift, "alt": alt]
     }
 }
 

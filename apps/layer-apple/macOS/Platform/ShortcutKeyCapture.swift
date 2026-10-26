@@ -1,44 +1,58 @@
 import AppKit
 import SwiftUI
 
-/// A local event monitor exists only while this capture sheet is mounted. It
-/// receives chords before menu equivalents, including Escape and Command keys.
 struct ShortcutKeyCapture: NSViewRepresentable {
-    let captured: (String, Bool, Bool, Bool) -> Void
+    let captured: (String, Bool, Bool, Bool) -> Bool
+    private let selective: Bool
+    init(captured: @escaping (String, Bool, Bool, Bool) -> Void) {
+        self.captured = { key, command, shift, alt in captured(key, command, shift, alt); return true }
+        selective = false
+    }
+    init(consuming: @escaping (String, Bool, Bool, Bool) -> Bool) {
+        captured = consuming; selective = true
+    }
     func makeCoordinator() -> Coordinator { Coordinator() }
     func makeNSView(context: Context) -> NSView {
         let view = NSView()
         let coordinator = context.coordinator
         coordinator.captured = captured
+        coordinator.selective = selective
         coordinator.monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { [weak view, weak coordinator] event in
             guard let view, event.window === view.window, view.window?.isKeyWindow == true else { return event }
             guard (view.window?.firstResponder as? NSTextInputClient)?.hasMarkedText() != true else { return event }
             if event.type == .flagsChanged {
+                if coordinator?.selective == true { return event }
                 let flags = event.modifierFlags, previous = coordinator?.flags ?? []
                 coordinator?.flags = flags
                 for (flag, name): (NSEvent.ModifierFlags, String) in [(.shift, "Shift"), (.control, "Control"), (.option, "Alt"), (.command, "Meta")]
                     where flags.contains(flag) && !previous.contains(flag) {
-                    coordinator?.captured?(name, !flags.intersection([.command, .control]).isEmpty, flags.contains(.shift), flags.contains(.option))
+                    _ = coordinator?.captured?(name, !flags.intersection([.command, .control]).isEmpty, flags.contains(.shift), flags.contains(.option))
                 }
             } else if !event.isARepeat {
                 let key = AppleKeyName.name(event)
                 let flags = event.modifierFlags
-                if !key.isEmpty { coordinator?.captured?(key, !flags.intersection([.command, .control]).isEmpty,
-                    flags.contains(.shift), flags.contains(.option)) }
+                if !key.isEmpty {
+                    let consumed = coordinator?.captured?(key, !flags.intersection([.command, .control]).isEmpty,
+                        flags.contains(.shift), flags.contains(.option)) == true
+                    if coordinator?.selective == true { return consumed ? nil : event }
+                }
             }
-            return nil
+            return coordinator?.selective == true ? event : nil
         }
         return view
     }
-    func updateNSView(_ view: NSView, context: Context) { context.coordinator.captured = captured }
+    func updateNSView(_ view: NSView, context: Context) {
+        context.coordinator.captured = captured; context.coordinator.selective = selective
+    }
     static func dismantleNSView(_ view: NSView, coordinator: Coordinator) {
         if let monitor = coordinator.monitor { NSEvent.removeMonitor(monitor) }
         coordinator.monitor = nil; coordinator.captured = nil
     }
     final class Coordinator {
         var monitor: Any?
+        var selective = false
         var flags: NSEvent.ModifierFlags = []
-        var captured: ((String, Bool, Bool, Bool) -> Void)?
+        var captured: ((String, Bool, Bool, Bool) -> Bool)?
     }
 }
 
