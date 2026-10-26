@@ -805,7 +805,10 @@ this contract; run `exercise-canvas-bar.ps1` with `-Theme dark` and `-Theme ligh
 to check the selection bar's native glass registration and menu actions.
 The same journey checks Adjust attaching Curves to the editing layer with the
 selection as its mask, then verifies that one Undo restores the layer, selection
-and composed pixels. It also checks Keep proportions across Scale and Distort,
+and composed pixels.
+Loading a mask produces integer pixel bounds within one document pixel of the
+original contour; Adjust Undo must still restore the exact original contour.
+It also checks Keep proportions across Scale and Distort,
 and switches between the wide mode row and narrow mode menu.
 The full journey also attaches selection-masked Invert, merges visible layers,
 checks exact interior and exterior pixels through Undo and Redo, and forces a
@@ -1028,8 +1031,11 @@ like the slider, a mouse drag that continues ten times slower while Shift is
 held, release, Escape while held, label reset and one Undo per drag in both
 themes.
 It also checks narrow Russian captions and a return to wider English controls
-with retained values and identity. The ordinary full effects journey also runs
-the value drags. A secondary mouse drag on the readout must preserve the shared
+with retained values and identity.
+Use `-VisibilityOnly` for active curve preview, hiding Properties through its
+visible Window menu item, shared hide acknowledgement and exact curve history.
+The ordinary full effects journey also runs the value drags. A secondary mouse
+drag on the readout must preserve the shared
 value, editor and focus. Review the composed captures.
 
 Properties, Tool Settings and Tool Options share one gradient editor
@@ -1620,7 +1626,8 @@ metadata. Run `tests/uia-projection-snapshot.ps1` in PowerShell 5 and 7 for the
 cached native projection, live canvas guards and dense pixel regression.
 
 Use `exercise-tool-bubbles.ps1 -BlendersOnly` with `-Variant dark-mouse` and
-`light-mouse` for independent Blender panel, ring and saved-state checks.
+`light-mouse` for independent Blender panel, ring and saved-state checks. Wait
+for the native bubble layout to settle after preset reselection before reset.
 
 `exercise-canvas-touch.ps1 -ScrubOnly -Theme dark` checks three-finger clearing
 at horizontal, diagonal and vertical angles, cancellation and locked-layer refusal.

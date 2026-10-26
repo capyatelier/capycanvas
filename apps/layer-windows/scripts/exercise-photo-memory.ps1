@@ -96,7 +96,12 @@ try{
     Wait-Until {$control.ready} 'Photo memory monitor did not start' 10
     Open-Project $photo
     Wait-Until {$m=Model;$tab=@($m.state.tabs|Where-Object active)[0];$tab.width -eq $Width -and $tab.height -eq $Height -and $m.canvas_ready -and $m.brush_ready -and !$m.state.document_file.busy -and !@($m.state.requests).Count} 'Large photo did not become ready' 120
-    Fit-Canvas
+    Wait-Until {
+        $camera=(Model).state.camera;$work=$camera.work_area
+        $camera.translation[0] -ge $work[0] -and $camera.translation[1] -ge $work[1] -and
+        $camera.translation[0]+$Width*$camera.zoom -le $work[0]+$work[2]+1 -and
+        $camera.translation[1]+$Height*$camera.zoom -le $work[1]+$work[3]+1
+    } 'The opened large photo did not fit its native work area'
     $samples=@();$expected=@(@(220,40,30),@(30,60,220),@(30,180,60),@(220,180,30))
     foreach($index in 0..3){
         $x=$Width*$(if($index%2){.75}else{.25});$y=$Height*$(if($index -ge 2){.75}else{.25})

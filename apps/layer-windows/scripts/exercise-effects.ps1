@@ -1,4 +1,4 @@
-﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light','curve-dark','curve-light')][string]$Theme='dark',[switch]$PropertyLayout)
+﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light','curve-dark','curve-light')][string]$Theme='dark',[switch]$PropertyLayout,[switch]$VisibilityOnly)
 $ErrorActionPreference='Stop'
 $curveOnly=$Theme.StartsWith('curve-');if($curveOnly){$Theme=$Theme.Substring(6)}
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
@@ -81,10 +81,28 @@ function Select-Panel([string]$Id){
 }
 function Properties-Visibility([bool]$Visible){
     $window=@((Model).application_menus|Where-Object id -eq 'window')[0]
-    $item=@($window.model.sections|ForEach-Object {$_}|Where-Object {$_.action.type -eq 'customize' -and $_.action.action.type -eq 'set_panel_visible' -and $_.action.action.panel -eq 'properties'})[0]
-    if(!$item -or [bool]$item.selected -eq $Visible){throw 'Properties visibility did not start in the expected state'}
+    $items=@($window.model.sections|ForEach-Object {$_}|Where-Object {$_.action.type -eq 'customize' -and $_.action.action.type -eq 'set_panel_visible' -and $_.action.action.panel -eq 'properties'})
+    if($items.Count -ne 1 -or !$items[0].enabled -or [bool]$items[0].selected -eq $Visible -or [bool]$items[0].action.action.visible -ne $Visible){throw 'Properties visibility did not start in the expected state'}
+    $item=$items[0]
     & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'window' -Caption $window.label
-    Invoke $item.label -Name
+    $target=@{native=$null}
+    Wait-Until {
+        $target.native=Find $item.label -Name -Type ([System.Windows.Automation.ControlType]::MenuItem) -Visible
+        $target.native -and $target.native.Current.ProcessId -eq $review.Id -and $target.native.Current.IsEnabled -and !$target.native.Current.BoundingRectangle.IsEmpty
+    } 'The visible owned Properties menu item did not open'
+    $pattern=$null
+    $toggle=$target.native.TryGetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern,[ref]$pattern)
+    if($toggle){
+        if([int]$pattern.Current.ToggleState -ne [int][bool]$item.selected){throw 'The native Properties menu toggle differs from the shared action'}
+    }elseif(!$target.native.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern,[ref]$pattern)){throw 'The Properties menu item cannot be invoked'}
+    @{action=$item.action;caption=$item.label;target=@(Control-Trace $target.native);pattern=$(if($toggle){'Toggle'}else{'Invoke'})}|ConvertTo-Json -Depth 12|Set-Content (Join-Path $run ('properties-visibility-'+[guid]::NewGuid().ToString('N')+'.json'))
+    if($toggle){$pattern.Toggle()}else{$pattern.Invoke()}
+    Wait-Until {
+        $m=Model;$window=@($m.application_menus|Where-Object id -eq 'window')[0]
+        $items=@($window.model.sections|ForEach-Object {$_}|Where-Object {$_.action.type -eq 'customize' -and $_.action.action.type -eq 'set_panel_visible' -and $_.action.action.panel -eq 'properties'})
+        $placed=@($m.layout.groups|Where-Object {$_.panels -contains 'properties'}).Count -gt 0
+        $items.Count -eq 1 -and [bool]$items[0].selected -eq $Visible -and [bool]$items[0].action.action.visible -ne $Visible -and $placed -eq $Visible
+    } 'Properties did not acknowledge the shared visibility action'
     Wait-Until {$shown=Find 'property-rgb-curve' -Visible;[bool]$shown -eq $Visible} 'Properties did not reach the requested native visibility'
 }
 function Select-Filter([string]$Id,[string]$Label){
@@ -486,7 +504,7 @@ function Check-LogCurve {Pointer-Session {
     Capture 'curve-log-hdr'
 }}
 
-function Check-CurveGestures {
+function Check-CurveGestures([switch]$VisibilityOnly) {
     function Curve-Json {ConvertTo-Json -InputObject ((Property 'rgb').value.value) -Compress -Depth 10}
     function Curve-At([double]$X,[double]$Y) {
         Show-Graph
@@ -513,6 +531,13 @@ function Check-CurveGestures {
         Invoke 'Redo' -Name;Wait-Until {(Curve-Json) -eq $edited} "$Reason consumed Redo"
         Invoke 'Undo' -Name;Wait-Until {(Curve-Json) -eq $original} "$Reason changed history"
     }
+    function Check-CurveVisibility([string]$Device) {
+        Move-Curve $Device;Properties-Visibility $false
+        Wait-Until {(Curve-Json) -eq $original} "$Device hidden curve kept the preview"
+        [CapyRowPointer]::Up();Properties-Visibility $true
+        Wait-Until {$null -ne (Find 'property-rgb-curve')} 'Curve did not reopen'
+        Check-Redo "$Device source hide"
+    }
     Pointer-Session {
         if((Field 'input').Current.IsEnabled -or (Field 'output').Current.IsEnabled){throw 'Input and Output were enabled without a selected point'}
         $unselected=(Property 'rgb').curve
@@ -531,6 +556,7 @@ function Check-CurveGestures {
             $edited=Curve-Json
             Invoke 'Undo' -Name;Wait-Until {(Curve-Json) -eq $original} "$device drag needs more than one Undo"
             Check-Redo "$device completed drag"
+            if($VisibilityOnly){Check-CurveVisibility $device;continue}
             $point=(Property 'rgb').value.value[1];$at=Curve-At $point[0] $point[1]
             [CapyRowPointer]::Down($device,$at[0]+3,$at[1]+3);[CapyRowPointer]::Up()
             Start-Sleep -Milliseconds 150
@@ -550,11 +576,7 @@ function Check-CurveGestures {
                 Wait-Until {(Curve-Json) -eq $original} "$device native cancellation kept the curve preview"
                 Check-Redo "$device native cancellation"
             }
-            Move-Curve $device;Properties-Visibility $false
-            Wait-Until {(Curve-Json) -eq $original} "$device hidden curve kept the preview"
-            [CapyRowPointer]::Up();Properties-Visibility $true
-            Wait-Until {$null -ne (Find 'property-rgb-curve')} 'Curve did not reopen'
-            Check-Redo "$device source hide"
+            Check-CurveVisibility $device
             # A canceled insertion must also remove its provisional handle.
             $at=Curve-At .3 .9
             [CapyRowPointer]::Down($device,$at[0],$at[1])
@@ -572,6 +594,11 @@ function Check-CurveGestures {
             if((Property 'rgb').value.value.Count -ne 4){throw "$device insert and drag did not keep the point"}
             Invoke 'Undo' -Name;Wait-Until {(Curve-Json) -eq $original} "$device insert and drag was not one Undo"
             Write-Host "$device curve: one-step history, unchanged click, Escape, source hide, insertion rollback and insert-drag passed"
+        }
+        if($VisibilityOnly){
+            Capture 'curve-visibility' -WithModel -Composed
+            Invoke 'Undo' -Name;Wait-Until {(Curve-Json) -eq $endpoints} 'Seed insertion was not one Undo'
+            return 'mouse, pen and touch visibility: passed'
         }
         if(!(Find 'property-rgb-reset')){throw 'Modified curve hides its reset icon'}
         foreach($device in @('mouse','pen','touch')){
@@ -648,12 +675,12 @@ try {
     }
     if(!$resized){throw 'Initial resize did not reach the canvas'}
     $root=(Owned-DrawingWindow $review $drawingWindow.ToInt64()).Root
-    if($curveOnly){
+    if($curveOnly -or $VisibilityOnly){
         Select-Filter 'curves' 'Curves'
-        $curveGestures=Check-CurveGestures
+        $curveGestures=Check-CurveGestures -VisibilityOnly:$VisibilityOnly
         & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Close -DiscardUnsaved
         if((Get-Item -LiteralPath $stderr).Length){throw 'Native stderr requires inspection'}
-        @{theme=$Theme;curve_pointer_transactions=$curveGestures;run=$run}|ConvertTo-Json
+        @{theme=$Theme;visibility_only=[bool]$VisibilityOnly;curve_pointer_transactions=$curveGestures;run=$run}|ConvertTo-Json
         return
     }
     if($PropertyLayout){

@@ -482,6 +482,7 @@ function Invoke-BlenderCellChecks([int]$Preset,[string]$CellId,[double]$DefaultC
     $retained=@((Model).state.tool_settings|Where-Object {$_.id -in $Primary}|Select-Object id,value)|ConvertTo-Json -Compress
     if($retained -cne $overrides){throw 'Native preset reselection lost Blender primary overrides'}
     if(!@((View $id).rings).Count){Tap (Center $id)}
+    Wait-BubbleVisualLayout
     $ring=@((View $id).rings|Where-Object setting -eq $CellId)[0];$point=Ring-Point $id $ring .5
     [CapyRowPointer]::DoubleClick($Device,$point.x,$point.y)|Out-Null
     Wait-Until {@((Model).state.tool_settings|Where-Object id -eq $CellId)[0].value -eq $DefaultCell} 'Native Blender Cell Size reset did not restore its shared default'

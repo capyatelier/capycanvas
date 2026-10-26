@@ -163,7 +163,7 @@ try {
  $checks.selection_menus_copy_to_layer_one_undo_step='passed'
  Check-BarGeometry 'selection'
 
- $adjustBefore=Model;$selectionAnchor=$adjustBefore.state.canvas_bar.anchor -join ','
+ $adjustBefore=Model;$selectionCorners=@($adjustBefore.state.canvas_bar.anchor);$selectionAnchor=$selectionCorners -join ','
  $adjustLayers=$adjustBefore.state.layers|ConvertTo-Json -Depth 20 -Compress
  $adjustUndo=[bool]@($adjustBefore.state.commands|Where-Object id -eq 'undo')[0].enabled
  $away=Center (Control $selectionTile -Arranged);[CapyRowPointer]::Hover($away[0],$away[1])
@@ -180,7 +180,12 @@ try {
  $mask=Control ("layer-$($adjustment.id)-mask") -Arranged
  $at=Center $mask;[CapyRowPointer]::Hover($at[0],$at[1]);[CapyRowPointer]::Hold(0x11,$true)
  try{Tap ("layer-$($adjustment.id)-mask") 'mouse'}finally{[CapyRowPointer]::Hold(0x11,$false)}
- Wait-Until {(Model).state.layer_tools.has_selection -and (Kind) -eq 'selection' -and ((Model).state.canvas_bar.anchor -join ',') -ceq $selectionAnchor} 'The new effect mask did not reload the original rectangle selection' 10
+ Wait-Until {
+  $m=Model;$corners=@($m.state.canvas_bar.anchor)
+  $m.state.layer_tools.has_selection -and $m.state.canvas_bar.context.kind -eq 'selection' -and $corners.Count -eq 4 -and @((0..3)|Where-Object {
+   [double]::IsNaN($corners[$_]) -or [double]::IsInfinity($corners[$_]) -or $corners[$_] -ne [Math]::Truncate($corners[$_]) -or [Math]::Abs($corners[$_]-$selectionCorners[$_]) -gt 1
+  }).Count -eq 0
+ } 'The new effect mask did not reload the rectangle within pixel sampling bounds' 10
  (Find 'drawing-canvas').SetFocus()
  [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),[uint16]0x5A)
  Wait-Until {$m=Model;!$m.state.layer_tools.has_selection -and ($m.state.layers|ConvertTo-Json -Depth 20 -Compress) -ceq $effectLayers -and @($m.state.commands|Where-Object id -eq 'undo')[0].enabled -and @($m.state.commands|Where-Object id -eq 'redo')[0].enabled} 'One Undo did not remove only the loaded mask selection and preserve the effect history' 5
