@@ -132,6 +132,10 @@ navigation while mouse buttons are held, continued contact after scrolling,
 cancellation, and exclusion during painting. None of these replace a physical
 Pencil or tablet check.
 
+`CAPY_VECTOR_INPUT_ONLY=1` runs the UIKit modifier fixture's vector journeys in
+both themes: ink, Move, Properties, Arrange, Path, Edit Points, masks,
+Rasterize, save and reopen, with exact pixel and Undo/Redo checks.
+
 AppKit cursor assertions run before yielding after a supplied hover event, since the
 system pointer can update the cursor independently of that event.
 UIKit file fixtures supply the export-delivery callback for project saves as

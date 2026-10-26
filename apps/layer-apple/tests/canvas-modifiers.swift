@@ -62,6 +62,7 @@ private final class NativeRotation: UIRotationGestureRecognizer {
 @MainActor private final class ModifierChecks: NSObject, UIApplicationDelegate, UIWindowSceneDelegate {
     private var completedGroups = 0
     private let runID = ProcessInfo.processInfo.environment["CAPY_INPUT_RUN"] ?? UUID().uuidString
+    private var vectorsOnly: Bool { ProcessInfo.processInfo.environment["CAPY_VECTOR_INPUT_ONLY"] == "1" }
     func application(_ application: UIApplication, configurationForConnecting session: UISceneSession,
         options: UIScene.ConnectionOptions) -> UISceneConfiguration {
         let configuration = UISceneConfiguration(name: "Input Checks", sessionRole: session.role)
@@ -73,7 +74,7 @@ private final class NativeRotation: UIRotationGestureRecognizer {
         Task { @MainActor in
             do {
                 try await run(); try report(nil)
-                print("PASS: UIKit contact modifiers and ruler history"); exit(0)
+                print("PASS: UIKit contact input, artwork and history"); exit(0)
             } catch {
                 try? report(error.localizedDescription)
                 print("FAIL: \(error.localizedDescription)"); exit(1)
@@ -97,6 +98,7 @@ private final class NativeRotation: UIRotationGestureRecognizer {
         guard value else { throw HostFailure(message: message) }
     }
     private func run() async throws {
+        try require(StorageLocations.installation != nil, "Prepare private process temporary storage")
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("capy-modifiers-\(UUID())")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -182,6 +184,7 @@ private final class NativeRotation: UIRotationGestureRecognizer {
         }
         try await flush()
         store.cameraRevision = store.state["camera"]["revision"].uint
+        if !vectorsOnly {
         for device: UITouch.TouchType in [.indirectPointer, .pencil] {
             for (name, flags, constrained) in [
                 ("held before contact", [UIKeyModifierFlags.shift, .shift, .shift], true),
@@ -256,18 +259,21 @@ private final class NativeRotation: UIRotationGestureRecognizer {
             try require(try await rulers().array.isEmpty, "Palm exclusion and cancellation must not commit a ruler")
             passed("PASS: palm exclusion, \(fingerFirst ? "finger" : "Pencil") first, identity reuse and cancellation")
         }
+        }
         try await artwork(store: store, canvas: canvas, root: root)
     }
 
     private func artwork(store: EditorStore, canvas: CanvasView, root: URL) async throws {
         let native = store.native!, png = root.appendingPathComponent("artwork.png")
+        let vectorPackage = root.appendingPathComponent("vectors.capy")
         store.projectFiles = ProjectFiles(store: store, dialogs: .init(
             open: { _, done in done([]) }, save: { _, _, done in done(nil) },
             create: { _, done in done([["op": "unit", "unit": "px"], ["op": "width", "value": 128], ["op": "height", "value": 128],
                 ["op": "paper"], ["op": "paper_relief", "value": 0], ["op": "use_paper"], ["op": "paper_color"],
                 ["op": "paper_color_value", "color": ["space": "Srgb", "rgba": [1, 1, 1, 1]]], ["op": "use_paper_color"]]) },
             export: { staging, done in
-                do { try FileManager.default.copyItem(at: staging, to: png); done(png) }
+                let destination = staging.pathExtension == "capy" ? vectorPackage : png
+                do { try FileManager.default.copyItem(at: staging, to: destination); done(destination) }
                 catch { store.failure = error.localizedDescription; done(nil) }
             }, exportOptions: { $0.choose($0.recipe) }))
         func flush() async throws {
@@ -285,7 +291,16 @@ private final class NativeRotation: UIRotationGestureRecognizer {
         func wait(_ description: String, _ ready: () -> Bool) async throws {
             let deadline = Date().addingTimeInterval(30)
             while !ready() {
-                try require(Date() < deadline, description)
+                if Date() >= deadline {
+                    let context = JSON(["drawing":store.drawingIdentity,
+                        "file":store.state["document_file"].raw, "layers":store.state["layers"].raw,
+                        "tool":store.state["layer_tools"].raw, "requests":store.state["requests"].raw,
+                        "canvas_ready":store.snapshot["canvas_ready"].raw, "busy":store.projectFiles.busy,
+                        "package":store.projectFiles.packageSummary?.raw ?? NSNull(),
+                        "profile":store.projectFiles.pendingProfile?.raw ?? NSNull(),
+                        "project_error":store.projectFiles.error as Any? ?? NSNull()])
+                    throw HostFailure(message: description + ": " + context.stableKey)
+                }
                 try await flush(); try await Task.sleep(for: .milliseconds(10))
             }
         }
@@ -299,9 +314,9 @@ private final class NativeRotation: UIRotationGestureRecognizer {
             try await action(["type":"layer", "action":["op":"tool", "tool":value]])
         }
         func newDocument() async throws {
-            let epoch = store.state["document_file"]["epoch"].uint
+            let identity = store.drawingIdentity
             try await invoke("new_document")
-            try await wait("Create replacement drawing") { store.state["document_file"]["epoch"].uint != epoch && !store.projectFiles.busy }
+            try await wait("Create replacement drawing") { store.drawingIdentity != identity && !store.projectFiles.busy }
             try require(store.projectFiles.error == nil, store.projectFiles.error ?? "")
             try await invoke("fit_canvas")
             try await wait("Prepare replacement drawing") { store.snapshot["brush_ready"].bool }
@@ -375,6 +390,7 @@ private final class NativeRotation: UIRotationGestureRecognizer {
         try await action(["type":"set_color", "rgba":[0,0,1,1]])
         try await action(["type":"set_brush_size", "value":4])
         let paper = try await pixels()
+        if !vectorsOnly {
         let scroll = Scroll(), scrollEvent = ContactEvent(); scrollEvent.nativeType = .scroll
         func sameCamera(_ before: JSON) -> Bool {
             ["translation", "zoom", "rotation"].allSatisfy {
@@ -439,11 +455,11 @@ private final class NativeRotation: UIRotationGestureRecognizer {
             rotation.phase = phase; rotation.rotation = angle
             canvas.rotated(rotation); try await flush()
         }
-        func recall(_ before: JSON, completed: JSON) async throws {
+        func recall(_ label: String, _ before: JSON, completed: JSON) async throws {
             try await invoke("previous_view")
-            try require(recalledCamera(before), "Previous View must recall the beginning of the entire UIKit gesture")
+            try require(recalledCamera(before), "\(label): Previous View must recall the beginning of the entire UIKit gesture; expected=\(before.stableKey), actual=\(store.state["camera"].stableKey)")
             try await invoke("previous_view")
-            try require(recalledCamera(completed), "Previous View must return to the completed UIKit gesture")
+            try require(recalledCamera(completed), "\(label): Previous View must return to the completed UIKit gesture; expected=\(completed.stableKey), actual=\(store.state["camera"].stableKey)")
         }
         try await path([CGPoint(x: 24, y: 64), CGPoint(x: 104, y: 64)], device: .pencil)
         let gesturePainted = try await pixels()
@@ -517,19 +533,20 @@ private final class NativeRotation: UIRotationGestureRecognizer {
                 }
                 let completed = store.state["camera"]
                 try require(!recalledCamera(beginning), "The supplied UIKit \(mode) gesture must move the view")
-                try await recall(beginning, completed: completed)
+                try await recall("\(theme) \(mode)", beginning, completed: completed)
             }
             for interruption in ["cancel", "blur"] {
                 try await pinched(.began)
                 try await pinched(.changed, scale: 1.10)
                 if interruption == "cancel" { try await pinched(.cancelled) }
-                else { store.input(["type": "blur"]); try await flush() }
+                else { canvas.interruptContacts(); store.input(["type": "blur"]); try await flush() }
+                try require(canvas.indirectGestures.isEmpty, "\(theme) \(interruption): native interruption must retire indirect recognizers")
                 let resumed = store.state["camera"]
                 try await rotated(.began)
                 try await rotated(.changed, angle: .pi / 18)
                 try await rotated(.changed, angle: .pi / 36)
                 try await rotated(.ended)
-                try await recall(resumed, completed: store.state["camera"])
+                try await recall("\(theme) after \(interruption)", resumed, completed: store.state["camera"])
             }
             try await tool("select")
             for device: UITouch.TouchType in [.indirectPointer, .pencil] {
@@ -552,7 +569,7 @@ private final class NativeRotation: UIRotationGestureRecognizer {
                 try await pinched(.ended)
                 try await rotated(.changed, angle: .pi / 36)
                 try await rotated(.ended)
-                try await recall(firstAccepted, completed: store.state["camera"])
+                try await recall("\(theme) after rejected \(device) beginning", firstAccepted, completed: store.state["camera"])
             }
             try await action(["type": "select_brush", "id": 1])
             try await wait("Restore the navigation exclusion brush") { store.snapshot["brush_ready"].bool }
@@ -578,7 +595,7 @@ private final class NativeRotation: UIRotationGestureRecognizer {
         try await pinched(.changed, scale: 1.10)
         try await pinched(.changed, scale: 1.05)
         try await pinched(.ended)
-        try await recall(resumed, completed: store.state["camera"])
+        try await recall("after captured-contact cancellation", resumed, completed: store.state["camera"])
         try require(try await pixels() == gesturePainted, "Captured-contact exclusion and resumed recall must preserve every pixel")
         try await history(paper, gesturePainted)
         try await newDocument()
@@ -801,6 +818,144 @@ private final class NativeRotation: UIRotationGestureRecognizer {
                 }
             }
         }
+        }
+        func vectorLayer() async throws -> UInt64 {
+            try await newDocument()
+            try await action(["type":"select_brush", "id":2])
+            try require(store.state["brush"]["preset"].uint == 2, "Prepare Pencil before discovering a vector layer")
+            try await wait("Admit New Vector") { store.command("new_vector_layer")["enabled"].bool }
+            try await invoke("new_vector_layer")
+            try await wait("New Vector must publish a vector row") {
+                let layer = store.state["layer_tools"]["editing_layer"]["id"].uint
+                return store.state["layers"].array.contains {
+                    $0["id"].uint == layer && $0["content_icon"].string == "layer-path-symbolic"
+                }
+            }
+            let layer = store.state["layer_tools"]["editing_layer"]["id"].uint
+            try require(store.state["brush"]["preset"].uint == 1, "New Vector must select G-Pen")
+            try await action(["type":"set_color", "rgba":[0,0,1,1]])
+            try await action(["type":"set_brush_size", "value":4])
+            try await wait("Prepare vector G-Pen") { store.snapshot["brush_ready"].bool }
+            return layer
+        }
+        func property(_ layer: UInt64, _ key: String, kind: String, value: Any) async throws {
+            try require(store.state["layer_properties"]["controls"].array.contains { $0["key"].string == key },
+                "Selected paths must expose \(key) in Properties")
+            try await action(["type":"effect", "action":["op":"set", "layer":layer, "key":key,
+                "value":["kind":kind, "value":value]]])
+        }
+        for theme in ["light", "dark"] {
+            try await action(["type":"set_theme", "theme":theme])
+            let layer = try await vectorLayer()
+            try await path([CGPoint(x:24,y:24), CGPoint(x:40,y:24), CGPoint(x:56,y:24)], device:.pencil)
+            let line = try await pixels()
+            try require(colored(line,40,24) && !colored(line,40,40), "Supplied Pencil must ink the vector path only")
+            try await history(paper,line)
+            try await invoke("redo")
+            try await invoke("move")
+            try await path([CGPoint(x:40,y:24), CGPoint(x:40,y:32), CGPoint(x:40,y:40)], device:.pencil)
+            let moved = try await pixels()
+            try require(colored(moved,40,40) && !colored(moved,40,24), "Move must relocate the selected vector path")
+            try await history(line,moved)
+            try await invoke("redo")
+            try await invoke("select_all")
+            try await property(layer,"path_outline_color",kind:"color",value:["space":"Srgb","rgba":[1,0,0,1]])
+            let restyled = try await pixels()
+            try require(colored(restyled,40,40,red:true) && !colored(restyled,40,40), "Properties must recolor the selected path")
+            try await history(moved,restyled)
+            try await invoke("redo")
+            try await invoke("select_all")
+            try await property(layer,"path_width",kind:"number",value:12)
+            let widened = try await pixels()
+            try require(colored(widened,40,44,red:true) && !colored(restyled,40,44,red:true), "Properties must widen the selected path")
+            try await history(restyled,widened)
+            passed("PASS: supplied UIKit Pencil vector ink, Move, Properties color/width and exact PNG history in \(theme)")
+
+            _ = try await vectorLayer()
+            try await tool(["figure":["shape":"rectangle","paint":"fill"]])
+            try await path([CGPoint(x:16,y:16),CGPoint(x:80,y:80)],device:.pencil)
+            try await action(["type":"set_color","rgba":[1,0,0,1]])
+            try await path([CGPoint(x:48,y:48),CGPoint(x:112,y:112)],device:.pencil)
+            let front = try await pixels()
+            try require(colored(front,64,64,red:true) && colored(front,32,32), "New vector figures must overlap in their authored order")
+            try await invoke("send_to_back")
+            let back = try await pixels()
+            try require(colored(back,64,64) && colored(back,96,96,red:true), "Arrange must restack the selected path within its vector layer")
+            try await history(front,back)
+            try await invoke("redo")
+            try await invoke("bring_to_front")
+            try require(try await pixels() == front, "Bring to Front must restore the exact original path order")
+            passed("PASS: supplied UIKit Pencil vector figures, Arrange and exact PNG history in \(theme)")
+
+            _ = try await vectorLayer()
+            try await tool(["figure":["shape":"path","paint":"outline"]])
+            for point in [CGPoint(x:24,y:96),CGPoint(x:48,y:112)] { try await path([point,point],device:.pencil) }
+            try require(store.command("finish_path")["enabled"].bool, "Path must publish its Finish action while drafting")
+            try await invoke("cancel_path")
+            let cancelledPath = try await pixels()
+            try require(!store.command("finish_path")["enabled"].bool && cancelledPath == paper,
+                "Cancel Path must retire the draft without changing artwork")
+            for point in [CGPoint(x:24,y:24),CGPoint(x:64,y:24),CGPoint(x:104,y:64)] { try await path([point,point],device:.pencil) }
+            try await invoke("finish_path")
+            let openPath = try await pixels()
+            try require(colored(openPath,44,24) && !colored(openPath,44,36), "Finish Path must commit the supplied anchors")
+            try await invoke("edit_points")
+            try require(store.state["layer_tools"]["tool"].string == "edit_points", "Edit Points must become the active tool")
+            try await path([CGPoint(x:24,y:24),CGPoint(x:24,y:36),CGPoint(x:24,y:48)],device:.pencil)
+            let edited = try await pixels()
+            try require(colored(edited,44,36) && !colored(edited,44,24), "Edit Points must move an anchor without moving the other anchors")
+            try await history(openPath,edited)
+            try await invoke("rasterize_layer")
+            try require(try await pixels() == openPath, "Rasterize Layer must keep every vector pixel")
+            try require(!store.command("rasterize_layer")["enabled"].bool, "Rasterize Layer must replace the vector content with paint")
+            try await invoke("undo")
+            let restoredPath = try await pixels()
+            try require(store.command("rasterize_layer")["enabled"].bool && restoredPath == openPath,
+                "One Undo must restore editable vector content without changing its picture")
+            passed("PASS: supplied UIKit Pencil Path draft/cancel/finish, Edit Points, Rasterize and exact PNG history in \(theme)")
+
+            let maskedLayer = try await vectorLayer()
+            try await action(["type":"set_brush_size","value":8])
+            try await path([CGPoint(x:16,y:64),CGPoint(x:64,y:64),CGPoint(x:112,y:64)],device:.pencil)
+            let unmasked = try await pixels()
+            try await action(["type":"layer","action":["op":"add_mask","id":maskedLayer,"replace":false]])
+            try await action(["type":"layer","action":["op":"select","id":maskedLayer,"mask":true]])
+            try require(store.state["layer_tools"]["editing_layer"]["mask_selected"].bool, "The vector mask must become the drawing target")
+            try await invoke("eraser")
+            try await action(["type":"set_brush_size","value":24])
+            try await wait("Prepare vector layer-mask eraser") { store.snapshot["brush_ready"].bool }
+            try await path([CGPoint(x:64,y:32),CGPoint(x:64,y:64),CGPoint(x:64,y:96)],device:.pencil)
+            let masked = try await pixels()
+            try require(!colored(masked,64,64) && colored(masked,32,64) && colored(masked,96,64),
+                "Painting the vector mask must hide only the crossed part of its path")
+            try await history(unmasked,masked)
+            try await invoke("redo")
+            try await action(["type":"layer","action":["op":"select","id":maskedLayer,"mask":false]])
+            try? FileManager.default.removeItem(at:vectorPackage)
+            try await invoke("save_document_as")
+            try await wait("Save masked vector package") { !store.projectFiles.busy && FileManager.default.fileExists(atPath:vectorPackage.path) }
+            try require(store.projectFiles.error == nil, store.projectFiles.error ?? "Save masked vector package")
+            try await newDocument()
+            let identity = store.drawingIdentity
+            store.projectFiles.openURL(vectorPackage)
+            try await wait("Reopen masked vector package") { !store.projectFiles.busy && store.drawingIdentity != identity }
+            try require(store.projectFiles.error == nil, store.projectFiles.error ?? "Reopen masked vector package")
+            try require(try await pixels() == masked, "Save and reopen must preserve every masked vector pixel")
+            guard let reopened = store.state["layers"].array.first(where: { $0["content_icon"].string == "layer-path-symbolic" }) else {
+                throw HostFailure(message:"Reopened package must retain editable vector content")
+            }
+            try require(reopened["has_mask"].bool, "Reopened vector layer must retain its authored mask")
+            try await action(["type":"layer","action":["op":"select","id":reopened["id"].uint,"mask":false]])
+            try await invoke("rasterize_layer")
+            try require(try await pixels() == masked, "Rasterizing the reopened vector layer must preserve its masked picture")
+            try await invoke("undo")
+            let restoredMask = try await pixels()
+            try require(store.command("rasterize_layer")["enabled"].bool && restoredMask == masked,
+                "Undo must restore the reopened vector and its mask")
+            passed("PASS: supplied UIKit Pencil vector masks, save/reopen, masked Rasterize and exact PNG history in \(theme)")
+        }
+        let closed = await withCheckedContinuation { done in store.prepareClose { done.resume(returning: $0) } }
+        try require(closed, "Close private UIKit input storage")
     }
 }
 
