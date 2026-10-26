@@ -28,7 +28,8 @@ fn boundary(code:u32)->f32 {
 }
 fn bracket(value:f32,code:u32)->bool {
     if code>0u && value<boundary(code-1u) {return false;}
-    return code==settings.maximum || value<boundary(code);
+    if code>=settings.maximum {return true;}
+    return value<boundary(code);
 }
 fn quantize(value:f32)->u32 {
     if value==0. {return 0u;}
