@@ -121,6 +121,15 @@ including older gaps; a port does not require an unrestricted historical audit.
   row identity, GPU recovery, resize and visibility/Undo assertions. The default
   `all` journey still runs the complete workspace suite; repeat either scope in
   light and dark themes.
+- Run `exercise-photo-memory.ps1` through `test-desktop.ps1` with a 600-second
+  deadline to generate and open a streamed 12000 by 8000 PNG in a private profile.
+  It checks the four colored quadrants and observes only the owned app and its
+  `capy-photo-reader.exe` children. `results.json` records the decoder's actual
+  source/codec admission arguments, observed process peaks and sampled combined
+  private memory. Sampling can miss exit-time growth; these measurements do not
+  qualify a hardware target or impose a whole-editor cap. Shared photo budgets
+  bound codec admission and compressed source ownership. The generated PNG is
+  removed after the run; smaller `-Width` and `-Height` values support smoke checks.
 
 ## 5. Close and commit
 

@@ -893,9 +893,12 @@ function Native-Writeback {
         Writeback-Ready
         Press (Tool-Tile 'pen')
         Writeback-Panel 'tool_settings'
-        $subtools=@((Model).state.tool_set.subtools);$gpen=@(0..($subtools.Count-1)|Where-Object {$subtools[$_].preview -eq 1})
-        if($gpen.Count -ne 1){throw 'The native Pen group has no unique G-Pen'}
-        Press "tool-subtool-$($gpen[0])"
+        $gpen=@{index=$null}
+        Wait-Until {
+            $subtools=@((Model).state.tool_set.subtools);$indices=@(0..($subtools.Count-1)|Where-Object {$subtools[$_].preview -eq 1})
+            if($indices.Count -ne 1){return $false};$gpen.index=$indices[0];$true
+        } 'The native Pen group has no unique G-Pen'
+        Press "tool-subtool-$($gpen.index)"
         Wait-Until {(Model).state.brush.preset -eq 1 -and (Model).brush_ready} 'G-Pen did not prepare for native writeback' 60
         Type-Text 'tool-setting-size' '160' -Commit
         Wait-Until {[Math]::Abs((Model).state.brush.diameter-160) -lt .001} 'Native writeback brush size did not commit'

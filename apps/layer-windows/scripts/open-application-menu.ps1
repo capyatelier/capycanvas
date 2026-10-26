@@ -55,6 +55,20 @@ function Submenu {
     if(!$entry -and $Caption){$entry=Visible-Control $Caption ([System.Windows.Automation.ControlType]::MenuItem) -ByName}
     $entry
 }
+function Invoke-MenuButton($Button) {
+    try{$Button.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()}
+    catch [System.Windows.Automation.ElementNotAvailableException]{
+        do{
+            foreach($entry in @(Read-MenuNodes -Popup)){
+                $current=$entry.Cached
+                if(!$current.IsOffscreen -and $current.ControlType -eq [System.Windows.Automation.ControlType]::MenuItem){return}
+            }
+            if($watch.Elapsed.TotalSeconds -ge $menuDeadline){throw}
+            Start-Sleep -Milliseconds 50
+        }while($true)
+    }
+}
+$menuDeadline=8*$(if($env:CAPY_WAIT_SCALE){[double]$env:CAPY_WAIT_SCALE}else{1})
 $watch=[Diagnostics.Stopwatch]::StartNew()
 do{
     $menuNodes=@(Read-MenuNodes)
@@ -63,14 +77,14 @@ do{
     $submenu=if(!$button -and !$Inspect){Submenu}
     if($button -or $overflow -or $submenu){break}
     Start-Sleep -Milliseconds 50
-}while($watch.Elapsed.TotalSeconds -lt 8*$(if($env:CAPY_WAIT_SCALE){[double]$env:CAPY_WAIT_SCALE}else{1}))
+}while($watch.Elapsed.TotalSeconds -lt $menuDeadline)
 if($Inspect){
     if(!$button){$button=$overflow}
     if(!$button){throw 'The application menu has no visible entry point'}
     return $button
 }
 if($button){
-    $button.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+    Invoke-MenuButton $button
     if($PassThru){$button}
     return
 }
