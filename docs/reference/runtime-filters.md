@@ -655,6 +655,54 @@ See [the Tent Blur package](../../examples/filters/tent-blur/README.md) and
 [web packaging](../development/web-packaging.md). All shaders added here are original code;
 no third-party shader implementation was imported.
 
+## Dither Spread, Scatter and Crystallize
+
+These Artistic filters select complete native source RGBA pixels. They evaluate
+at native resolution in the document's blending space, without averaging source
+colors. Their cell patterns use the saved effect reference, so captures, tiles,
+zoom and export share the same pattern. Opacity, masks and blend modes apply
+afterward through the ordinary effect composition.
+
+Dither Spread samples four neighboring cells, orders their representatives by
+premultiplied luminance and uses a 2 × 2 Bayer pattern to choose a color. Spread
+defaults to 16 px, Cell size to 4 px and Density to 100%. Scatter uses staggered
+square cells with independently hashed source positions; its defaults are
+20 px, 3 px and 100%. Density gates whole cells rather than interpolating RGB.
+Inactive cells also use native pixel reads under a transformed reference.
+Zero Spread or Density preserves the input. Cell size sliders cover 1–50 px;
+cell sizes and spread use square-root mapping for finer control of small values.
+
+Crystallize assigns each pixel to an irregular cell and copies the native pixel
+at its site. Cell size defaults to 16 px and Stretch to 25%; negative Stretch
+lengthens cells vertically, positive horizontally. Each axis grows by at most
+two. Sites remain within the central half of their grid cells. In normalized
+coordinates, the current cell's site is at most `sqrt(2) × .75` away, whereas
+any site outside the surrounding 3 × 3 grid is at least 1.25 away. Nine fixed
+candidates therefore find the true nearest site; ties use row-major order.
+Scatter and Crystallize save Variation with every other parameter.
+
+`fx_sample_nearest(p)` maps a reference position into the current input grid
+and loads its containing native pixel. It clamps to the true finite source
+support, independently of temporary capture windows. It performs no color
+interpolation. Ordinary `fx_sample()` retains bilinear sampling.
+
+Image-pass sampling may declare `{"kind":"sum","parameters":[{"key":"spread",
+"scale":1},{"key":"cell_size","scale":1}],"padding":1}`. Its radius is the
+ceiling of the weighted current values plus padding. One to sixteen nonnegative
+numeric terms are accepted, and the declared maximum must fit the 4096 px
+footprint limit. This metadata is retained in custom filter definitions; built-in
+artwork stores the filter ID and authored values. Dither Spread requires
+`Spread + 1.5 × Cell size + 2` because donor-cell quantization can cross another
+cell boundary. Scatter requires `Spread + Cell size + 1`. Crystallize uses
+`2.125 × Cell size + 3`, including maximum Stretch, rounding and the minimum
+one-unit cell for authored lengths below the slider range.
+
+All three use one image pass with no lookup preparation, auxiliary textures,
+workgroup storage, atomics or feature-specific shader instructions. Dither
+Spread loads four donors and uses five compare/exchanges; Scatter and
+Crystallize load one donor. Increasing cell size or spread changes the input
+footprint, not the number of samples or candidates per output pixel.
+
 ## Painterly
 
 Painterly uses four overlapping quadrants, each sampled on a 3 x 3 grid at

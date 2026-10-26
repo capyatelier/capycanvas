@@ -76,6 +76,11 @@
     "separation":{"dimension":"composition_pixels","kind":{"kind":"number","max":65536.0,"min":0.0},"opaque":false},
     "time":{"dimension":"time","kind":{"kind":"number","max":3600.0,"min":0.0},"opaque":false}
   }},
+  "crystallize": {"version":1,"kind":"adjustment","alpha":"filter","space":"blending","time":false,"constraints":[],"parameters": {
+    "cell_size":{"dimension":"composition_pixels","kind":{"kind":"number","max":65536.0,"min":0.0},"opaque":false},
+    "seed":{"dimension":"scalar","kind":{"kind":"number","max":65535.0,"min":0.0},"opaque":false},
+    "stretch":{"dimension":"scalar","kind":{"kind":"number","max":100.0,"min":-100.0},"opaque":false}
+  }},
   "curves": {"version":1,"kind":"adjustment","alpha":"preserve","space":"linear","time":false,"constraints":[],"parameters": {
     "blue":{"dimension":"scalar","kind":{"kind":"curve"},"opaque":false},
     "domain":{"dimension":"scalar","kind":{"kind":"choice","options":["encoded_rgb","log_hdr"]},"opaque":false},
@@ -91,6 +96,11 @@
     "strength":{"dimension":"scalar","kind":{"kind":"number","max":100.0,"min":0.0},"opaque":false}
   }},
   "desaturate": {"version":1,"kind":"adjustment","alpha":"preserve","space":"linear","time":false,"constraints":[],"parameters": {
+  }},
+  "dither_spread": {"version":1,"kind":"adjustment","alpha":"filter","space":"blending","time":false,"constraints":[],"parameters": {
+    "cell_size":{"dimension":"composition_pixels","kind":{"kind":"number","max":65536.0,"min":0.0},"opaque":false},
+    "density":{"dimension":"scalar","kind":{"kind":"number","max":100.0,"min":0.0},"opaque":false},
+    "spread":{"dimension":"composition_pixels","kind":{"kind":"number","max":65536.0,"min":0.0},"opaque":false}
   }},
   "domain_warp": {"version":2,"kind":"adjustment","alpha":"filter","space":"linear","time":true,"constraints":[],"parameters": {
     "animate":{"dimension":"scalar","kind":{"kind":"toggle"},"opaque":false},
@@ -285,6 +295,12 @@
     "speed":{"dimension":"scalar","kind":{"kind":"number","max":4.0,"min":0.0},"opaque":false},
     "time":{"dimension":"time","kind":{"kind":"number","max":3600.0,"min":0.0},"opaque":false},
     "wavelength":{"dimension":"composition_pixels","kind":{"kind":"number","max":65536.0,"min":0.0},"opaque":false}
+  }},
+  "scatter": {"version":1,"kind":"adjustment","alpha":"filter","space":"blending","time":false,"constraints":[],"parameters": {
+    "cell_size":{"dimension":"composition_pixels","kind":{"kind":"number","max":65536.0,"min":0.0},"opaque":false},
+    "density":{"dimension":"scalar","kind":{"kind":"number","max":100.0,"min":0.0},"opaque":false},
+    "seed":{"dimension":"scalar","kind":{"kind":"number","max":65535.0,"min":0.0},"opaque":false},
+    "spread":{"dimension":"composition_pixels","kind":{"kind":"number","max":65536.0,"min":0.0},"opaque":false}
   }},
   "selective_color": {"version":1,"kind":"adjustment","alpha":"preserve","space":"linear","time":false,"constraints":[],"parameters": {
     "blacks_black":{"dimension":"scalar","kind":{"kind":"number","max":100.0,"min":-100.0},"opaque":false},

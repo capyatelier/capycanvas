@@ -3001,6 +3001,86 @@ class AndroidRasterTest {
         }
     }
 
+    @Test fun artisticCellFiltersKeepNativePixelsControlsAndHistory() {
+        val pattern = File(files, "artistic-source.png")
+        val bitmap = android.graphics.Bitmap.createBitmap(128, 128, android.graphics.Bitmap.Config.ARGB_8888)
+        val source = IntArray(128 * 128) { index ->
+            val x = index % 128; val y = index / 128
+            android.graphics.Color.rgb(x * 2, y * 2, if ((x / 7 + y / 11) % 2 == 0) 32 else 224)
+        }
+        bitmap.setPixels(source, 0, 128, 0, 0, 128, 128)
+        pattern.outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+        bitmap.recycle()
+        action(obj("type" to "preferences", "action" to obj("type" to "edit", "id" to "missing_profile", "value" to 0)))
+        val output = File(activity.getExternalFilesDir(null), "artistic-cell-filters").apply { mkdirs() }
+        fun pixels(name: String): List<Int> {
+            val bytes = png(name, builtinRecipe(2).put("format", "Png").put("depth", "U8"))
+            val image = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+            val values = IntArray(image.width * image.height)
+            image.getPixels(values, 0, image.width, 0, 0, image.width, image.height)
+            image.recycle()
+            return values.toList()
+        }
+        for (theme in listOf("light", "dark")) for ((id, label) in listOf(
+            "dither_spread" to "Dither Spread", "scatter" to "Scatter", "crystallize" to "Crystallize")) {
+            open(pattern); refresh()
+            send(obj("type" to "set_theme", "theme" to theme))
+            action(obj("type" to "customize", "action" to obj("type" to "set_panel_visible", "panel" to "properties", "visible" to true)))
+            val group = host.panelGroup("properties")
+            action(obj("type" to "customize", "action" to obj("type" to "set_column_collapsed", "group" to group.getInt("id"), "collapsed" to false)))
+            action(obj("type" to "select_panel_tab", "group" to group.getInt("id"), "panel" to "properties"))
+            val prefix = "artistic-$theme-$id"
+            val original = sourceIdentity(manifest(save("$prefix-original.capy")))
+            val before = pixels("$prefix-before.png")
+            val palette = before.toSet()
+            compose.onNodeWithTag("properties-add-filter").performClick()
+            compose.onNodeWithText("Artistic").performClick()
+            compose.onNodeWithText(label).performClick()
+            compose.waitUntil(60_000) { drawingSettled() }; refresh()
+            val layer = native { state(it).getJSONObject("layer_properties").getLong("layer") }
+            fun controls() = native { state(it).getJSONObject("layer_properties").array("controls").objects() }
+            val cell = controls().first { it.getString("key") == "cell_size" }
+            val numeric = cell.getJSONObject("kind").getJSONObject("numeric")
+            assertEquals(1.0, numeric.getDouble("step"), 0.0)
+            assertEquals(0, numeric.getInt("digits"))
+            assertEquals(if (id == "crystallize") 128.0 else 50.0, numeric.getDouble("max"), 0.0)
+            val editor = if (numeric.getString("kind") == "slider") "number-value-cell_size" else "number-Cell size"
+            compose.waitUntil(30_000) { compose.onAllNodesWithTag(editor).fetchSemanticsNodes().isNotEmpty() }
+            compose.onNodeWithTag(editor).performScrollTo().performClick()
+            compose.onNodeWithTag("number-Cell size").performTextReplacement("13")
+            compose.onNodeWithTag("number-Cell size").performImeAction()
+            compose.waitUntil(30_000) { controls().first { it.getString("key") == "cell_size" }.getJSONObject("value").getDouble("value") == 13.0 }
+            compose.runOnUiThread {
+                activity.getSystemService(android.view.inputmethod.InputMethodManager::class.java)
+                    .hideSoftInputFromWindow(activity.window.decorView.windowToken, 0)
+            }
+            compose.waitForIdle()
+            compose.waitUntil(60_000) { drawingSettled() }
+            SystemClock.sleep(250)
+            instrumentation.uiAutomation.takeScreenshot()?.let { shot ->
+                try { File(output, "$theme-$id.png").outputStream().use { shot.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) } }
+                finally { shot.recycle() }
+            }
+            val edited = pixels("$prefix-edited.png")
+            invoke("undo"); val initial = pixels("$prefix-undone.png")
+            assertNotEquals("$id changes the GPU output", before, initial)
+            assertTrue("$id copies native source colors", initial.all { it in palette })
+            assertNotEquals("$id Cell size changes the GPU output", initial, edited)
+            invoke("redo"); assertEquals(edited, pixels("$prefix-redone.png"))
+            if (id != "crystallize") {
+                send(obj("type" to "effect", "action" to obj("op" to "set", "layer" to layer, "key" to "density", "value" to obj("kind" to "number", "value" to 0))))
+                assertEquals("Zero density preserves every native source pixel", before, pixels("$prefix-zero.png"))
+                invoke("undo")
+            }
+            val saved = manifest(save("$prefix-final.capy"))
+            assertEquals(original, sourceIdentity(saved))
+            open(File(files, "$prefix-final.capy")); refresh()
+            assertEquals(saved.artworkRecords().toString(), manifest(save("$prefix-reopened.capy")).artworkRecords().toString())
+            assertEquals(edited, pixels("$prefix-reopened.png"))
+            assertNull(host.failure); assertNull(host.actionError)
+        }
+    }
+
     @Test fun countFilterControlsStepAndPersistWholeValues() {
         val task = native { handle -> val (id,file)=newRequest(handle,128,128)
             Native.projectTask(handle,id,"null",file.getLong("epoch"),file.getLong("revision")) }

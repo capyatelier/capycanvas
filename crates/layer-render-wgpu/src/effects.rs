@@ -907,6 +907,19 @@ fn fx_reference_sample(image:texture_2d<f32>,p:vec2<f32>,context:FxGrid)->vec4<f
 fn fx_sample(p:vec2<f32>)->vec4<f32> {
     return fx_reference_sample(front,p,fx_front_grid);
 }
+fn fx_sample_nearest(p:vec2<f32>)->vec4<f32> {
+    let context=fx_front_grid;
+    var point=p;
+    if !FX_REFERENCE_IDENTITY {let m=fx_reference_linear;point=vec2(m.x*p.x+m.z*p.y,m.y*p.x+m.w*p.y);}
+    if !context.reference {point+=fx_reference_frame.xy;}
+    if context.grid.z<=0. {return fx_load(front,vec2<i32>(floor(point)));}
+    if any(context.bounds.zw<=context.bounds.xy)||any(context.support.zw<context.support.xy) {return vec4(0.);}
+    if !FX_CLAMP_INPUT&&(any(point<context.bounds.xy)||any(point>=context.bounds.zw)) {return vec4(0.);}
+    let sample=select(point,clamp(point,context.support.xy,context.support.zw),FX_CLAMP_INPUT);
+    if context.step==1. {return fx_load(front,vec2<i32>(floor(sample-context.grid.xy)));}
+    return fx_load(front,vec2<i32>(floor(vec2(fx_grid_coordinate(sample.x,context.bounds.x,context.bounds.z,context.grid.x,context.step),
+        fx_grid_coordinate(sample.y,context.bounds.y,context.bounds.w,context.grid.y,context.step)))));
+}
 fn fx_sample_bounds()->vec4<f32> {
     let support=fx_support_bounds(settings.operation_linear.x);
     let a=fx_from_document(support.xy);let b=fx_from_document(support.zw);

@@ -63,6 +63,19 @@ navigation during filtering. Native witnesses and all raw values remain in
 
 ## Operations
 
+### Artistic cell filters
+
+| Filter at insertion defaults, painting into its input | Fresh filtered updates/s | 60/s target |
+| --- | --- | --- |
+| Dither Spread, Spread 16 px / cells 4 px / Density 100% | Unmeasured | Open |
+| Scatter, Spread 20 px / cells 3 px / Density 100% | Unmeasured | Open |
+| Crystallize, cells 16 px / Stretch 25% | Unmeasured | Open |
+
+The portable native-pixel algorithms use fixed sampling counts. Their
+[contracts and footprints](../reference/runtime-filters.md#dither-spread-scatter-and-crystallize)
+apply at every tier. Correctness tests and desktop diagnostics do not qualify
+fresh filtered completion rate, age, gaps or settling on this reference device.
+
 ### Dither cell sizes
 
 | Cell size, 512 px brush | Completed updates/s on the tier canvas | 60/s target |

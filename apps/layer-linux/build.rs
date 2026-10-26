@@ -2,6 +2,14 @@ fn main() {
     let source = "../layer-web/icons";
     println!("cargo:rerun-if-changed={source}");
     let output = std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
+    let previews = "../layer-web/filter-previews";
+    println!("cargo:rerun-if-changed={previews}");
+    let mut swatches: Vec<_> = std::fs::read_dir(previews).unwrap().map(|entry| entry.unwrap().path())
+        .filter(|path| path.extension().is_some_and(|extension| extension == "webp")).collect();
+    swatches.sort();
+    let entries = swatches.iter().map(|path| format!("({:?}, include_bytes!({:?}) as &'static [u8])",
+        path.file_stem().unwrap().to_str().unwrap(), path.canonicalize().unwrap())).collect::<Vec<_>>().join(",\n");
+    std::fs::write(output.join("filter_swatches.rs"), format!("&[{entries}]")).unwrap();
     let mut names: Vec<_> = std::fs::read_dir(source)
         .unwrap()
         .map(|e| e.unwrap().file_name().into_string().unwrap())

@@ -163,3 +163,6 @@ fn saved_vector_render_contract() {
 
 #[path = "painterly_contract_tests.rs"]
 mod painterly_contract;
+
+#[path = "artistic_cell_contract_tests.rs"]
+mod artistic_cell_contract;

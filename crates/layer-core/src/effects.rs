@@ -172,7 +172,17 @@ pub enum EffectSampling {
         scale: f32,
         padding: u32,
     },
+    Sum {
+        parameters: Arc<[EffectSamplingParameter]>,
+        padding: u32,
+    },
     Document,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct EffectSamplingParameter {
+    pub key: Arc<str>,
+    pub scale: f32,
 }
 
 impl EffectSampling {
@@ -190,6 +200,15 @@ impl EffectSampling {
                 }
                 _ => None,
             },
+            Self::Sum { parameters, padding } => {
+                let radius = parameters.iter().try_fold(f64::from(*padding), |sum, parameter| {
+                    match effect.parameter(&parameter.key)? {
+                        (_, EffectValue::Number(value)) => Some(sum + f64::from(*value) * f64::from(parameter.scale)),
+                        _ => None,
+                    }
+                })?.ceil();
+                (radius.is_finite() && (0.0..=f64::from(u32::MAX)).contains(&radius)).then_some(radius as u32)
+            }
             Self::Document => None,
         }
     }
@@ -622,8 +641,20 @@ impl<'a> EffectView<'a> {
             {
                 return Err("Invalid image pass");
             }
-            if let EffectSampling::Parameter{key,scale,padding}=&pass.sampling
-                && (!scale.is_finite() || *scale<0. || !self.program.parameters.iter().any(|p| p.key==*key && matches!(p.kind,EffectParameterKind::Number{min,max,..} if min>=0. && max*scale+*padding as f32<=4096.))) {
+            let maximum = |key: &Arc<str>, scale: f32| {
+                if !scale.is_finite() || scale < 0. { return None; }
+                self.program.parameters.iter().find_map(|p| match p.kind {
+                    EffectParameterKind::Number { min, max, .. } if p.key == *key && min >= 0. => Some(f64::from(max) * f64::from(scale)),
+                    _ => None,
+                })
+            };
+            let valid = match &pass.sampling {
+                EffectSampling::Parameter { key, scale, padding } => maximum(key, *scale).is_some_and(|value| value.ceil() + f64::from(*padding) <= 4096.),
+                EffectSampling::Sum { parameters, padding } => !parameters.is_empty() && parameters.len() <= 16
+                    && parameters.iter().try_fold(f64::from(*padding), |sum, p| Some(sum + maximum(&p.key, p.scale)?)).is_some_and(|value| value.ceil() <= 4096.),
+                _ => true,
+            };
+            if !valid {
                 return Err("Invalid parameter-derived sampling footprint");
             }
         }
@@ -1223,6 +1254,26 @@ mod tests {
             EffectInstance::new(fixture("kaleidoscope").program()).damage_radius(),
             None
         );
+    }
+    #[test]
+    fn cell_filter_footprints_add_current_lengths_and_reject_invalid_sums() {
+        for (id, size_scale, padding) in [("dither_spread",1.5,2.),("scatter",1.,1.)] {
+            let mut effect=EffectInstance::new(fixture(id).program());
+            effect.set("spread",EffectValue::Number(40.)).unwrap();
+            effect.set("cell_size",EffectValue::Number(50.)).unwrap();
+            assert_eq!(effect.program.passes[0].sampling.radius(effect.view()),Some((40.+size_scale*50.+padding) as u32));
+            effect.set("cell_size",EffectValue::Number(1.)).unwrap();
+            assert_eq!(effect.program.passes[0].sampling.radius(effect.view()),Some((40f32+size_scale+padding).ceil() as u32));
+        }
+        let mut program=(*fixture("scatter").program()).clone();
+        for parameters in [vec![],vec![EffectSamplingParameter {key:"missing".into(),scale:1.}],
+            vec![EffectSamplingParameter {key:"spread".into(),scale:-1.}],
+            vec![EffectSamplingParameter {key:"spread".into(),scale:f32::INFINITY}],
+            vec![EffectSamplingParameter {key:"spread".into(),scale:32.}],
+            vec![EffectSamplingParameter {key:"spread".into(),scale:1.};17]] {
+            Arc::make_mut(&mut program.passes)[0].sampling=EffectSampling::Sum {parameters:parameters.into(),padding:1};
+            assert!(EffectInstance::new(Arc::new(program.clone())).validate().is_err());
+        }
     }
     #[test]
     fn preparation_has_bounded_storage_and_known_dependencies() {

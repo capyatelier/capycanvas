@@ -12,6 +12,7 @@ import {checkToolbarComponents} from './toolbar-components.test.mjs';
 import {checkSelectionTools} from "./selection-tools.test.mjs";
 import {checkLayerPropertiesDrawer} from "./layer-properties-drawer.test.mjs";
 import {checkFilterDrawer} from "./filter-drawer.test.mjs";
+import {checkArtisticFilters} from "./artistic-filters.test.mjs";
 import {checkBrushDrawers} from "./brush-drawers.test.mjs";
 import {checkStrokeRecording} from './stroke-recording.test.mjs';
 import {checkContactBrushes} from "./contact-brushes.test.mjs";
@@ -121,6 +122,7 @@ try {
     [process.argv.includes("--toolbar-components"), () => checkToolbarComponents({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--layer-properties-drawer"), () => checkLayerPropertiesDrawer({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--filter-drawer"), () => checkFilterDrawer({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--artistic-filters"), () => checkArtisticFilters({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--stroke-recording"), () => checkStrokeRecording({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--contact-brushes"), () => checkContactBrushes({call,evaluate,settle},process.env.LAYER_BRUSH_PHOTO_URL), checkErrors],
     [process.argv.includes("--pen"), async () => {

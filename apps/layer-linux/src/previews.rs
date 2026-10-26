@@ -28,26 +28,11 @@ fn bytes(id: u32, theme: Theme) -> Option<&'static [u8]> {
     };
     images.into_iter().find(|(preset, _)| *preset == id).map(|(_, bytes)| bytes)
 }
-macro_rules! filter_swatches {
-    ($($id:literal),*) => {
-        [$(($id, include_bytes!(concat!("../../layer-web/filter-previews/", $id, ".webp")) as &'static [u8])),*]
-    };
-}
 fn filter_bytes(id: &str) -> Option<&'static [u8]> {
-    filter_swatches!(
-        "brightness_to_opacity", "shadows_highlights", "clarity", "dehaze", "curves", "levels",
-        "brightness_contrast", "hue_saturation", "invert", "threshold", "desaturate",
-        "photo_filter", "selective_color", "channel_mixer", "color_lookup", "color_balance",
-        "exposure", "vibrance", "black_white", "gradient_map", "posterize", "gaussian_blur",
-        "unsharp_mask", "high_pass", "motion_blur", "denoise", "edge_detect", "white_balance",
-        "split_tone", "vignette", "film_grain", "bloom", "soft_focus", "halftone", "crosshatch",
-        "emboss", "pixel_mosaic", "chromatic_aberration", "painterly", "solarize", "pencil",
-        "kaleidoscope", "swirl", "ripple", "glass", "rainy_glass", "vhs", "crt", "heat_haze",
-        "iridescence", "domain_warp", "solid_color", "paper", "gradient_fill"
-    )
-    .into_iter()
+    let swatches: &[(&str, &'static [u8])] = include!(concat!(env!("OUT_DIR"), "/filter_swatches.rs"));
+    swatches.iter()
     .find(|(filter, _)| *filter == id)
-    .map(|(_, bytes)| bytes)
+    .map(|(_, bytes)| *bytes)
 }
 pub fn filter_texture(id: &str) -> gdk::Paintable {
     swatch(filter_bytes(id).expect("every built-in filter has a bundled preview"))

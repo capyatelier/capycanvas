@@ -224,6 +224,7 @@ pub fn encode_program(program: &Arc<EffectProgram>, writer: &mut impl ResourceWr
     if !passes.is_empty() {data["passes"]=Value::Array(passes.iter().map(|pass| {let EffectPass {entry,sampling}=pass;json!({"entry":entry,"sampling":match sampling {
         EffectSampling::Neighborhood {radius}=>json!({"kind":"neighborhood","radius":radius}),
         EffectSampling::Parameter {key,scale,padding}=>json!({"kind":"parameter","key":key,"scale":scale,"padding":padding}),
+        EffectSampling::Sum {parameters,padding}=>json!({"kind":"sum","parameters":parameters,"padding":padding}),
         EffectSampling::Document=>json!({"kind":"document"})}})}).collect());}
     if !lookups.is_empty() {data["lookups"]=Value::Array(lookups.iter().map(|lookup| {let EffectLookup {wgsl,entry,dependencies,values,workgroup_size,workgroups}=lookup;Ok(json!({"code":encode_code(wgsl,writer)?,
         "entry":entry,"dependencies":dependencies,"values":values,"workgroup_size":workgroup_size,"workgroups":workgroups}))})
@@ -241,6 +242,11 @@ fn decode_sampling(value: &Value) -> DecodeResult<EffectSampling> {
         "neighborhood"=>{object(value,&["kind","radius"])?;EffectSampling::Neighborhood {radius:u32_value(required(fields,"radius")?)?}},
         "parameter"=>{object(value,&["kind","key","scale","padding"])?;EffectSampling::Parameter {
             key:text(required(fields,"key")?)?,scale:finite_f32(required(fields,"scale")?)?,padding:u32_value(required(fields,"padding")?)?}},
+        "sum"=>{object(value,&["kind","parameters","padding"])?;EffectSampling::Sum {
+            parameters:required(fields,"parameters")?.as_array().filter(|values| (1..=16).contains(&values.len())).ok_or("Expected one to sixteen sampling parameters")?.iter().map(|value| {
+                let fields=object(value,&["key","scale"])?;
+                Ok(EffectSamplingParameter {key:text(required(fields,"key")?)?,scale:finite_f32(required(fields,"scale")?)?})
+            }).collect::<DecodeResult<Vec<_>>>()?.into(),padding:u32_value(required(fields,"padding")?)?}},
         "document"=>{object(value,&["kind"])?;EffectSampling::Document},
         _=>return Err(unsupported("sampling")),
     })

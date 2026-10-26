@@ -561,3 +561,62 @@ fn native_animated_filter_moves() {
     }
     input.finish();w.window.destroy();pump(100);
 }
+
+#[test]
+#[ignore = "private display, native input and hardware GPU"]
+fn native_artistic_cell_filters() {
+    let app = native_test_app("art.capycanvas.ArtisticCellFilters");
+    let w = start(&app);
+    let directory = std::path::PathBuf::from(std::env::var("LAYER_TEST_ARTIFACTS").unwrap_or_else(|_| "../../artifacts/artistic-filters/gtk".into()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let mut input = RemoteInput::new().timeout_secs(30);
+    input.ready();
+    for theme in [Theme::Light, Theme::Dark] {
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        for (id, query, edits) in [
+            ("dither_spread", "Dither Spread", &[("spread", "64"), ("cell_size", "12"), ("density", "65")][..]),
+            ("scatter", "Scatter", &[("spread", "64"), ("cell_size", "12"), ("density", "65"), ("seed", "7")][..]),
+            ("crystallize", "Crystallize", &[("cell_size", "48"), ("stretch", "60"), ("seed", "7")][..]),
+        ] {
+            w.customize(CustomizationAction::SetPanelVisible { panel: Panel::Adjustments, visible: true });
+            w.customize(CustomizationAction::CloseExpanded);
+            w.dispatch(UiAction::MovePanel { panel: Panel::Adjustments, target: DockTarget::Edge { edge: Edge::Right, outer: false }, viewport: [w.window.width() as f32, 800.] });
+            w.dispatch(UiAction::FilterPicker { action: layer_ui::FilterPickerAction::Category { category: None } });
+            w.dispatch(UiAction::FilterPicker { action: layer_ui::FilterPickerAction::Search { query: query.into() } });
+            ready(&w);
+            let row = named::<gtk::Button>(w.window.upcast_ref(), &format!("adjustment-{id}"));
+            scroll_to(row.upcast_ref());
+            let picture = descendant::<gtk::Picture>(&row).unwrap();
+            until(|| picture.paintable().is_some(), "Artistic filter thumbnail loads");
+            until(|| {
+                let texture = super::icons::capture_widget(&w.window, &picture);
+                let mut bytes = vec![0; texture.width() as usize * texture.height() as usize * 4];
+                texture.download(&mut bytes, texture.width() as usize * 4);
+                bytes.as_chunks::<4>().0.iter().any(|p| p[..3].iter().max().unwrap() - p[..3].iter().min().unwrap() > 20)
+            }, "Artistic thumbnail displays colors");
+            capture(&w, &directory, &format!("catalog-{id}-{theme:?}"));
+            input.click(screen_point(row.upcast_ref(), &w.window, [0.5, 0.5]));
+            ready(&w);
+            configure_properties(&w);
+            let keys = state(&w).layer_properties.controls.iter().map(|c| c.key.clone()).collect::<Vec<_>>();
+            assert_eq!(keys, edits.iter().map(|(key, _)| (*key).to_owned()).collect::<Vec<_>>(), "{id}: native Properties controls");
+            let before = canvas_pixel(&w);
+            for (key, text) in edits { edit(&w, &mut input, key, text); }
+            assert_ne!(canvas_pixel(&w), before, "{id}: native edits change rendered artwork");
+            let (key, text) = edits.last().unwrap();
+            w.dispatch(UiAction::Invoke { command: CommandId::Undo });
+            ready(&w);
+            assert_ne!(value(&w, key), EffectValue::Number(text.parse().unwrap()));
+            w.dispatch(UiAction::Invoke { command: CommandId::Redo });
+            ready(&w);
+            assert_eq!(value(&w, key), EffectValue::Number(text.parse().unwrap()));
+            capture(&w, &directory, &format!("properties-{id}-{theme:?}"));
+            assert!(state(&w).host_error.is_none(), "{id}");
+            w.dispatch(UiAction::Invoke { command: CommandId::DeleteLayer });
+            ready(&w);
+        }
+    }
+    input.finish();
+    w.window.destroy();
+    pump(100);
+}

@@ -488,6 +488,13 @@ They cover original images, two-channel backing at every document depth,
 colored live brush input before publication, scaled previews with in-place and
 candidate writeback, exact undo and save/reopen. Native gray-alpha writeback
 also covers odd partial regions and untouched packed half words. The shared UI’s
+`artistic_cell_contract` checks native RGBA preservation, bounded Voronoi search,
+seed stability, transformed coordinates, capture windows and portable GPU limits
+for Dither Spread, Scatter and Crystallize. Their real control/history journeys
+are GTK's `native_artistic_cell_filters`, Web's `--artistic-filters` and Android's
+`artisticCellFiltersKeepNativePixelsControlsAndHistory`; each covers light and
+dark themes. Rebuild bundled previews with the existing preview baker.
+
 `filter_drawer_tests` checks captured layer owners and the top of the local
 filter chain. Native journeys are GTK’s `native_layer_color_modes_and_add_filter`,
 Web’s `--filter-drawer`, Android’s
@@ -706,6 +713,9 @@ brush previews with `cargo run --locked --release -p layer-bench -- --brush-prev
 and bundled filter previews with
 `cargo test --locked -p layer-render-wgpu --features bake write_bundled_filter_previews -- --ignored`.
 Both write lossy WebP through `layer_render_wgpu::bundled_preview_webp`.
+GTK generates its embedded filter-preview lookup from that asset directory;
+the other hosts package or serve the same files. Its
+`every_built_in_filter_has_a_bundled_preview` test checks catalog coverage.
 Blenders, Liquify, the retouching tools and the Eraser preview on greyscale scenes
 that fill the swatch: a shaded stroke-shaped tube for most blenders, a halftone
 for Liquify, and source and brush rings for Clone and Healing.
