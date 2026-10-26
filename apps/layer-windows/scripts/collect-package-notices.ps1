@@ -92,7 +92,7 @@ foreach($line in $tree){
         if($end -lt 0){throw 'SQLite source notice not found'}
         [IO.File]::WriteAllText((Join-Path $Destination "Cargo/$key/SQLITE-NOTICE.txt"),$sqlite.Substring(0,$end+2),$utf8)
     }
-    $dependencies[$key]=[ordered]@{name=$name;version=$version;license=$license;source=$(if($localSource){"vendor/"+[IO.Path]::GetRelativePath((Join-Path $repo 'vendor'),$source).Replace('\','/')}else{"https://crates.io/crates/$name/$version"})}
+    $dependencies[$key]=[ordered]@{name=$name;version=$version;license=$license;source=$(if($localSource){"vendor/"+$source.Substring($vendorRoot.Length).Replace([IO.Path]::DirectorySeparatorChar,'/')}else{"https://crates.io/crates/$name/$version"})}
 }
 [xml]$config=Get-Content (Join-Path $repo 'apps/layer-windows/packages.config') -Raw
 foreach($package in $config.packages.package){

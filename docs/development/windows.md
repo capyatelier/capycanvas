@@ -757,6 +757,8 @@ reopened artwork as well as tab and history state. Repeat with `-Theme light`;
 the VM fixture runner selects both variants. Window-free `recovery::tests` also
 check saved failure details, stale restore completions, identity remapping,
 publication failures and cleanup warnings after committed checkpoints.
+`tests/recovery-fixture.ps1 -Output <fresh-directory>` checks failed-source byte
+preservation and relative notice paths without a window, including PowerShell 5.
 Shared filesystem and SQLite calls resolve existing paths before native publication,
 including when private storage or backup directories exceed the legacy Windows path
 length. Window-free core and native workspace regressions check long-path recovery

@@ -58,7 +58,7 @@ function Disk-Signature {
 function Failed-Source {
     $directory=Split-Path -Parent $head
     @(Get-ChildItem -LiteralPath $directory -File -Recurse|Where-Object {$_.Name -notin @('restore-error.txt','.lock')}|Sort-Object FullName|ForEach-Object {
-        @{path=[IO.Path]::GetRelativePath($directory,$_.FullName);bytes=$_.Length;sha256=(Get-FileHash -LiteralPath $_.FullName).Hash}
+        @{path=$_.FullName.Substring($directory.Length+1);bytes=$_.Length;sha256=(Get-FileHash -LiteralPath $_.FullName).Hash}
     })|ConvertTo-Json -Compress
 }
 function Recovery-Diagnostic([string]$Label) {
