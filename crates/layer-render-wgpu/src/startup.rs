@@ -134,7 +134,7 @@ impl Requirements {
         }
         if view.order().iter().any(|&h| view.object_layer(h).is_some()) {
             required.compute.extend(r.scene_pipelines.objects.pipelines().into_iter().cloned());
-            required.render.extend(r.scene_pipelines.source.required().into_iter().cloned());
+            required.render.push(r.scene_pipelines.source.pipeline.clone());
         }
         if view.order().iter().any(|&h| view.vector_layer(h).is_some()) {
             required.compute.push(r.scene_pipelines.vector.pipeline().clone());
@@ -415,7 +415,7 @@ impl WgpuRasterizer {
                 required.compute.extend(self.scene_pipelines.scale_pipelines().into_iter().cloned());
             }
             if self.native_edit.is_some() || shader.key.source {
-                required.render.extend(self.scene_pipelines.source.required().into_iter().cloned());
+                required.render.push(self.scene_pipelines.source.pipeline.clone());
             }
             if shader.key.objects {
                 required.compute.extend(self.scene_pipelines.objects.pipelines().map(Clone::clone));

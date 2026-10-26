@@ -254,7 +254,7 @@ impl SnapshotRenderer {
         self.control.check()?;
         let r = &mut self.renderer;
         let mut required = startup::Requirements::default();
-        required.render.extend(r.scene_pipelines.source.required().into_iter().cloned());
+        required.render.push(r.scene_pipelines.source.pipeline.clone());
         if let Some(plan) = &self.raw_plan {
             for &plane in &self.raw_planes {
                 let target = if plane == RasterPlane::Mask { plan.coverage.map(SourceTarget::Coverage).unwrap_or(plan.target) }

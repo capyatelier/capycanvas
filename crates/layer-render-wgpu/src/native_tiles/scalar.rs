@@ -4,7 +4,6 @@
 use super::{MAX_BATCH_TILES, buffer_entry};
 use crate::{GpuRasterError, PipelineDevice};
 use layer_core::color::{AlphaAssociation, SampleDepth, PixelDescriptor, TransferEncoding};
-use layer_render::CanvasRenderer;
 
 /// Exact native coverage restored into a private R32Float working candidate.
 pub struct NativeScalarRestore<'a> {
@@ -43,62 +42,45 @@ impl crate::WgpuRasterizer {
         if requests.is_empty() {
             return Ok(());
         }
-        let space=self.document_color().space;
-        self.prepare_raster_uploads(&requests.iter().map(|request|(request.blob.clone(),space,space)).collect::<Vec<_>>())?;
         self.submit_restore(|r, scene, encoder| scene.restore_native_scalars(r, requests, encoder))
     }
 }
-pub(crate) fn restore_upload(
-    r: &crate::WgpuRasterizer,
-    request: &NativeScalarRestore<'_>,
+pub(crate) const COVERAGE_TILE_BYTES: u64 = 256 * 256 * 4;
+pub(crate) fn upload_coverage(
+    r: &mut crate::WgpuRasterizer,
     encoder: &mut crate::submission::CommandEncoder,
-) -> Result<u64, GpuRasterError> {
-    if !r.snapshot_worker {return Err(GpuRasterError::DeferredObjectWork);}
-    let bytes = request.blob.decode().map_err(GpuRasterError::Color)?;
-    let step = usize::from(request.blob.descriptor.bits_per_channel / 8);
-    let reciprocal = reciprocal(if step == 1 { SampleDepth::U8 } else { SampleDepth::U16 });
-    let buffer = r.device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("bounded scalar restore upload"),
-        size: 256 * 256 * 4,
-        usage: wgpu::BufferUsages::COPY_SRC,
-        mapped_at_creation: true,
-    });
-    {
-        let mut mapped = buffer
-            .get_mapped_range_mut(..)
-            .map_err(|e| GpuRasterError::MapFailed(e.to_string()))?;
+    working: &wgpu::Texture,
+    depth: SampleDepth,
+    samples: &[u8],
+    channels: usize,
+) -> Result<(), GpuRasterError> {
+    let step = depth.bytes();
+    if depth.is_float() || samples.len() != 256 * 256 * channels * step {
+        return Err(GpuRasterError::Color("Invalid native coverage samples".into()));
+    }
+    let reciprocal = reciprocal(depth);
+    r.uploads.write_texture(encoder, working, 1024, |mapped| {
         let mut row = [0u8; 1024];
-        for (y, source) in bytes.chunks_exact(256 * step).enumerate() {
+        for (y, source) in samples.chunks_exact(256 * channels * step).enumerate() {
             for (target, sample) in row
                 .as_chunks_mut::<4>()
                 .0
                 .iter_mut()
-                .zip(source.chunks_exact(step))
+                .zip(source.chunks_exact(channels * step))
             {
                 let code = if step == 1 {
-                    sample[0] as f32
+                    f32::from(sample[0])
                 } else {
-                    u16::from_le_bytes(sample.try_into().unwrap()) as f32
+                    f32::from(u16::from_le_bytes([sample[0], sample[1]]))
                 };
                 *target = (code * reciprocal).to_le_bytes();
             }
             mapped.slice(y * 1024..(y + 1) * 1024).copy_from_slice(&row);
         }
-    }
-    buffer.unmap();
-    encoder.copy_buffer_to_texture(
-        wgpu::TexelCopyBufferInfo {
-            buffer: &buffer,
-            layout: wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(1024),
-                rows_per_image: Some(256),
-            },
-        },
-        request.working.as_image_copy(),
-        request.working.size(),
-    );
-    Ok(buffer.size())
+    })?;
+    let in_flight = r.source_tiles.borrow().charge_upload(encoder, COVERAGE_TILE_BYTES);
+    r.metrics.source_upload_peak_bytes = r.metrics.source_upload_peak_bytes.max(in_flight);
+    Ok(())
 }
 
 /// Private publication candidates. Initialize both outputs from the previous

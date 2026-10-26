@@ -30,11 +30,15 @@ These pages are software-managed regions of the document, separate from the
 small on-chip tiles used internally by some GPU architectures.
 
 Native raster restoration stages color, mask and watercolor wetness pages in
-separate typed vectors. [The restore path](../../crates/layer-render-wgpu/src/raster.rs)
+separate typed vectors. [The restore path](../../crates/layer-render-wgpu/src/raster/staging.rs)
 publishes them only after every tile upload and the final cached batch succeed.
-A failed decode or upload leaves every live page intact; decoding holds one CPU
-tile at a time. Cache trimming preserves the prepared frame’s required source and
-destination pages until that frame consumes them.
+Workers prepare its tiles in order, at most eighteen ahead of the next upload.
+Color tiles decode through the bounded source cache. Mask and wetness samples
+wait in that window until their turn, then upload straight into their private
+Float32 scalar pages, so coverage never occupies decoded source slots. A failed
+decode or upload leaves every live page intact. Cache trimming preserves the
+prepared frame’s required source and destination pages until that frame
+consumes them.
 The native paint cache uses the existing allowance for completed display pixels,
 which is bounded by reported device and process headroom, with a 256 MiB minimum
 for small or unknown budgets. It allocates pages on demand. Private preparation

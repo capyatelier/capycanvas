@@ -53,6 +53,12 @@ enum RasterIdentity {
     Encoded([u8; 32]),
     Owner(u64),
 }
+impl RasterIdentity {
+    fn of(blob: &TileBlob) -> Self {
+        blob.encoded_fingerprint().map_or_else(|| Self::Owner(blob.owner_identity()), Self::Encoded)
+    }
+}
+pub(crate) fn same_raster_samples(a: &TileBlob, b: &TileBlob) -> bool { RasterIdentity::of(a) == RasterIdentity::of(b) }
 enum Key {
     Image(Weak<SourceImage>, [u32; 2]),
     PaintBase(Weak<SourceImage>, [u32; 2], [u32; 2]),
@@ -60,9 +66,7 @@ enum Key {
 }
 impl Key {
     fn raster(blob: &TileBlob, space: RgbSpace, destination: RgbSpace) -> Self {
-        Self::Raster(blob.encoded_fingerprint().map_or_else(
-            || RasterIdentity::Owner(blob.owner_identity()), RasterIdentity::Encoded,
-        ), space, destination)
+        Self::Raster(RasterIdentity::of(blob), space, destination)
     }
     fn matches(&self, other: &Self) -> bool {
         match (self, other) {
@@ -733,18 +737,9 @@ fn rgb_settings(
 pub(crate) struct Pipelines {
     layout: wgpu::BindGroupLayout,
     pub pipeline: Deferred<wgpu::RenderPipeline>,
-    scalar_layout:wgpu::BindGroupLayout,
-    scalar:Deferred<wgpu::RenderPipeline>,
 }
 impl Pipelines {
-    pub fn required(&self)->[&Deferred<wgpu::RenderPipeline>;2] {[&self.pipeline,&self.scalar]}
     pub fn new(device: &PipelineDevice, uniforms: &wgpu::BindGroupLayout) -> Self {
-        let scalar_layout=crate::bindings::layout(device,"restored scalar source",&[crate::bindings::texture(0,wgpu::ShaderStages::FRAGMENT,false)]);
-        let scalar_pipeline_layout=device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {label:Some("restored scalar"),bind_group_layouts:&[Some(&scalar_layout)],immediate_size:0});
-        let scalar={let device=device.clone();Deferred::pipeline(move|mode| {
-            let shader=device.create_shader_module(wgpu::ShaderModuleDescriptor {label:Some("restored scalar"),source:wgpu::ShaderSource::Wgsl(include_str!("scalar_restore.wgsl").into())});
-            fullscreen_pipeline_recipe(mode,&device,&scalar_pipeline_layout,&shader,"fragment_main",None,device.scalar_format(),"restored scalar")
-        })};
         let layout = crate::bindings::layout(device, "integer source samples", &[
             crate::bindings::texture_of(
                 0,
@@ -782,13 +777,7 @@ impl Pipelines {
                 "decode source tile",
             )
         });
-        Self { layout, pipeline,scalar_layout,scalar }
-    }
-    pub fn copy_scalar(&self,device:&PipelineDevice,encoder:&mut crate::submission::CommandEncoder,source:&wgpu::TextureView,target:&wgpu::Texture) {
-        let binding=crate::bindings::group(device,"restored scalar source",&self.scalar_layout,[wgpu::BindingResource::TextureView(source)]);
-        let view=target.create_view(&Default::default());
-        let mut pass=encoder.color_pass("restored scalar",&view,wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT));
-        pass.set_pipeline(&self.scalar);pass.set_bind_group(0,&binding,&[]);pass.draw(0..3,0..1);
+        Self { layout, pipeline }
     }
 }
 

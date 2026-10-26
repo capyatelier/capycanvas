@@ -214,11 +214,13 @@ pub(crate) struct RasterDecodeRequest {
     pub blob:Arc<layer_core::raster::TileBlob>,
     pub space:RgbSpace,
     pub destination:RgbSpace,
+    pub scalar:bool,
 }
 pub(crate) struct PreparedRasterTile {
     pub blob:Arc<layer_core::raster::TileBlob>,
     pub space:RgbSpace,
     pub destination:RgbSpace,
+    pub scalar:bool,
     pub pixels:Result<crate::scene::sources::PreparedSourcePixels,String>,
 }
 pub fn prepare_raster_tile(blob:&Arc<layer_core::raster::TileBlob>,space:RgbSpace,cache:&layer_core::raster::DecodedTileCache)->Result<crate::scene::sources::PreparedSourcePixels,String> {
@@ -302,13 +304,13 @@ pub(crate) fn image_decode_failure<'a>(failures:&'a [crate::moving_projection::F
 #[derive(Clone)]
 enum DecodeKey {
     Image(Weak<SourceImage>,[u32;2]),
-    Raster(Weak<layer_core::raster::TileBlob>,RgbSpace,RgbSpace),
+    Raster(Weak<layer_core::raster::TileBlob>,RgbSpace,RgbSpace,bool),
 }
 impl DecodeKey {
     fn matches(&self,other:&Self)->bool {
         match (self,other) {
             (Self::Image(a,p),Self::Image(b,q))=>a.ptr_eq(b) && p==q,
-            (Self::Raster(a,space,destination),Self::Raster(b,other,target))=>a.ptr_eq(b) && space==other && destination==target,
+            (Self::Raster(a,space,destination,scalar),Self::Raster(b,other,target,coverage))=>a.ptr_eq(b) && space==other && destination==target && scalar==coverage,
             _=>false,
         }
     }
@@ -387,7 +389,7 @@ fn prepare_request(request:MipDecodeRequest,destination:RgbSpace,cache:&layer_co
     match request {
         MipDecodeRequest::Raster(request) => {
             let pixels=contained(||prepare_raster_tile(&request.blob,request.space,cache));
-            PreparedImageWork::Raster(PreparedRasterTile {blob:request.blob,space:request.space,destination:request.destination,pixels})
+            PreparedImageWork::Raster(PreparedRasterTile {blob:request.blob,space:request.space,destination:request.destination,scalar:request.scalar,pixels})
         },
         MipDecodeRequest::Coordinates(request) => {
             let pixels=contained(|| if request.destination.strong_count()==0 {Err("Coordinate request cancelled".into())}
@@ -435,9 +437,9 @@ impl MipDecodeQueue {
         let weak=Arc::downgrade(&source);
         self.enqueue(MipDecodeRequest::Image(ImageDecodeRequest {id,source,coordinate}),Some(DecodeKey::Image(weak,coordinate)))
     }
-    pub(crate) fn request_raster(&mut self,blob:Arc<layer_core::raster::TileBlob>,space:RgbSpace,destination:RgbSpace)->bool {
-        let key=DecodeKey::Raster(Arc::downgrade(&blob),space,destination);
-        self.enqueue(MipDecodeRequest::Raster(RasterDecodeRequest {blob,space,destination}),Some(key))
+    pub(crate) fn request_raster(&mut self,blob:Arc<layer_core::raster::TileBlob>,space:RgbSpace,destination:RgbSpace,scalar:bool)->bool {
+        let key=DecodeKey::Raster(Arc::downgrade(&blob),space,destination,scalar);
+        self.enqueue(MipDecodeRequest::Raster(RasterDecodeRequest {blob,space,destination,scalar}),Some(key))
     }
     pub(crate) fn request_coordinates(&mut self,inverse:[f64;6],size:[u32;2],first:u32,count:u32,destination:CoordinateDestination)->bool {
         self.enqueue(MipDecodeRequest::Coordinates(CoordinateRequest {inverse,size,first,count,destination}),None)
@@ -464,7 +466,7 @@ impl MipDecodeQueue {
         self.ready.fetch_sub(1,Ordering::AcqRel);
         let key=match &result {
             PreparedImageWork::Image(tile)=>Some(DecodeKey::Image(Arc::downgrade(&tile.source),tile.coordinate)),
-            PreparedImageWork::Raster(tile)=>Some(DecodeKey::Raster(Arc::downgrade(&tile.blob),tile.space,tile.destination)),
+            PreparedImageWork::Raster(tile)=>Some(DecodeKey::Raster(Arc::downgrade(&tile.blob),tile.space,tile.destination,tile.scalar)),
             PreparedImageWork::Coordinates {..}=>None,
         };
         let index=self.outstanding.iter().position(|stored|match (stored,&key) {
@@ -607,8 +609,8 @@ mod tests {
             (hdr,[-1f32,2.,0.25,0.5].into_iter().flat_map(f32::to_le_bytes).collect(),[-1f32,2.,0.25,0.5].into_iter().flat_map(f32::to_le_bytes).collect()),
         ] {
             let blob=Arc::new(layer_core::raster::TileBlob::encode(descriptor,&input.repeat((PAGE_SIZE*PAGE_SIZE) as usize)).unwrap());
-            assert!(queue.request_raster(blob.clone(),RgbSpace::Srgb,RgbSpace::DisplayP3));
-            assert!(queue.request_raster(blob.clone(),RgbSpace::Srgb,RgbSpace::DisplayP3));
+            assert!(queue.request_raster(blob.clone(),RgbSpace::Srgb,RgbSpace::DisplayP3,false));
+            assert!(queue.request_raster(blob.clone(),RgbSpace::Srgb,RgbSpace::DisplayP3,false));
             assert_eq!(queue.outstanding.len(),1);
             let PreparedImageWork::Raster(tile)=drain(&mut queue,1).pop().unwrap() else {panic!("Raster preparation returns native samples");};
             assert!(Arc::ptr_eq(&tile.blob,&blob));assert_eq!(tile.space,RgbSpace::Srgb);assert_eq!(tile.destination,RgbSpace::DisplayP3);

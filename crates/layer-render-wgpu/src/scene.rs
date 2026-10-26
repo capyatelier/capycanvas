@@ -585,18 +585,13 @@ impl Scene {
         requests: &[crate::native_tiles::scalar::NativeScalarRestore<'_>],
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<(), GpuRasterError> {
+        if !r.snapshot_worker {return Err(GpuRasterError::DeferredObjectWork);}
         for request in requests {
-            if !r.snapshot_worker {
-                let space=r.document_color().space;
-                let view=r.source_tiles.borrow().prepared_raster_view(request.blob,space,space).cloned().ok_or(GpuRasterError::DeferredObjectWork)?;
-                r.scene_pipelines.source.copy_scalar(&r.device,encoder,&view,request.working);continue;
-            }
             if r.source_tiles.borrow().uploads_full() {
                 Self::submit_source_uploads(r, encoder)?;
             }
-            let bytes = crate::native_tiles::scalar::restore_upload(r, request, encoder)?;
-            let in_flight = r.source_tiles.borrow().charge_upload(encoder, bytes);
-            r.metrics.source_upload_peak_bytes = r.metrics.source_upload_peak_bytes.max(in_flight);
+            let samples = request.blob.decode().map_err(GpuRasterError::Color)?;
+            crate::native_tiles::scalar::upload_coverage(r, encoder, request.working, request.blob.descriptor.depth(), &samples, 1)?;
         }
         Ok(())
     }

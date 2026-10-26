@@ -214,7 +214,7 @@ fn native_bake_defers_cold_mask_restoration_to_its_parent_compiler() {
     assert_ne!(reference.adapter().get_info().device_type,wgpu::DeviceType::Cpu);
     let renderer=staged_renderer(&reference,color);
     let compiler=renderer.startup.as_ref().unwrap().compiler.clone();
-    assert!(!renderer.scene_pipelines.source.required()[1].ready());
+    assert!(!renderer.scene_pipelines.source.pipeline.ready());
     let mut engine=layer_engine::CanvasEngine::new(renderer,document,layer_engine::input_queue(8).1,
         crate::test_support::view(EXTENT),layer_engine::ViewTransform::IDENTITY).unwrap();
     let before=engine.checkpoint();let plan=engine.document().merge_plan(layer_core::MergeKind::Visible).unwrap();let target=plan.target;
@@ -230,13 +230,13 @@ fn native_bake_defers_cold_mask_restoration_to_its_parent_compiler() {
         compiler.check().unwrap();assert!(Instant::now()<deadline,"private capture recipes did not prepare");
         std::thread::sleep(Duration::from_millis(1));
     }
-    assert!(!engine.backend().scene_pipelines.source.required()[1].ready());
+    assert!(!engine.backend().scene_pipelines.source.pipeline.ready());
     let (entered,entry)=mpsc::channel();let (release,held)=mpsc::channel();
     compiler.enqueue(startup::DOCUMENT,move || {let _=entered.send(());let _=held.recv();Ok(())});compiler.start();
     entry.recv_timeout(Duration::from_secs(5)).unwrap();let pending=compiler.pending();
     assert!(!engine.backend_mut().prepare_bakes(frame));
     assert!(compiler.pending()>pending,"mask restore recipes bypassed the held parent compiler");
-    assert!(!engine.backend().scene_pipelines.source.required()[1].ready());
+    assert!(!engine.backend().scene_pipelines.source.pipeline.ready());
     assert!(engine.backend().prepared_bake(target,0,[0;2]).is_none());assert_eq!(engine.checkpoint(),merged);
     release.send(()).unwrap();
     let settle=|engine:&mut layer_engine::CanvasEngine<WgpuRasterizer>| {
@@ -247,7 +247,7 @@ fn native_bake_defers_cold_mask_restoration_to_its_parent_compiler() {
             assert!(Instant::now()<deadline,"masked bake did not settle");std::thread::sleep(Duration::from_millis(1));
         }
     };
-    settle(&mut engine);assert!(engine.backend().scene_pipelines.source.required()[1].ready());
+    settle(&mut engine);assert!(engine.backend().scene_pipelines.source.pipeline.ready());
     let pixels=float_pixels(engine.backend(),crate::test_support::document_texture(engine.backend()));
     assert_eq!(pixels.len(),(EXTENT[0]*EXTENT[1]) as usize);
     for (i,pixel) in pixels.iter().enumerate() {

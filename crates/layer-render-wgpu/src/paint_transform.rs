@@ -218,7 +218,7 @@ impl PaintTransforms {
         if state.preview.is_some() { return Ok(()); }
         if let Some(startup) = &r.startup {
             let mip = r.display_pipelines.get_or_insert_with(|| display_mips::Pipelines::new(&r.device));
-            let ready = startup.compiler.require(r.scene_pipelines.source.required(), startup::OTHER)
+            let ready = startup.compiler.require([&r.scene_pipelines.source.pipeline], startup::OTHER)
                 & startup.compiler.require([&state.color.display_pipeline()], startup::OTHER)
                 & startup.compiler.require([&mip.reduce, &mip.fused_reduce], startup::OTHER)
                 & startup.compiler.require(r.selection_clip.pipelines(), startup::OTHER);

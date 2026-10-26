@@ -3389,6 +3389,10 @@ impl WgpuRasterizer {
         let held=self.source_results.iter().position(|(_,result)|receipt.as_ref().is_none_or(|receipt|Self::receipt_matches(receipt,result)));
         let Some(prepared)=held.and_then(|index|self.source_results.remove(index)).map(|(_,result)|result)
             .or_else(||self.moving_decode.as_mut().and_then(|(_,queue)|queue.poll())) else {return Ok(None);};
+        let prepared=match prepared {
+            object_image_mips::PreparedImageWork::Raster(prepared) if prepared.scalar=>{self.hold_restore_scalar(prepared);return Ok(None);},
+            prepared=>prepared,
+        };
         if let Some(receipt)=receipt && !Self::receipt_matches(&receipt,&prepared) {
             self.source_results.push_back((space,prepared));return Ok(None);
         }
@@ -3477,6 +3481,12 @@ impl WgpuRasterizer {
         self.request_raster_decode_to(blob,source,self.device.working_space())
     }
     pub(crate) fn request_raster_decode_to(&mut self, blob: Arc<layer_core::raster::TileBlob>, source: layer_core::color::RgbSpace,destination:layer_core::color::RgbSpace) -> Result<bool, GpuRasterError> {
+        self.request_raster_preparation(blob,source,destination,false)
+    }
+    pub(crate) fn request_scalar_decode(&mut self, blob: Arc<layer_core::raster::TileBlob>, space: layer_core::color::RgbSpace) -> Result<bool, GpuRasterError> {
+        self.request_raster_preparation(blob,space,space,true)
+    }
+    fn request_raster_preparation(&mut self, blob: Arc<layer_core::raster::TileBlob>, source: layer_core::color::RgbSpace,destination:layer_core::color::RgbSpace,scalar:bool) -> Result<bool, GpuRasterError> {
         scene::sources::validate_raster(&blob, source)?;
         #[cfg(target_arch="wasm32")]
         if self.browser_raster_decoder.is_none() && !self.snapshot_worker { return Err(GpuRasterError::Color("Raster preparation worker unavailable".into())); }
@@ -3486,14 +3496,14 @@ impl WgpuRasterizer {
             #[cfg(target_arch="wasm32")]
             {self.browser_image_result=Default::default();self.browser_image_wake=Default::default();}
         }
-        if self.source_results.iter().any(|(context,result)|*context==space && matches!(result,object_image_mips::PreparedImageWork::Raster(tile) if Arc::ptr_eq(&tile.blob,&blob) && tile.space==source && tile.destination==destination)) {return Ok(true);}
-        let receipt=self.source_receipt.as_ref().and_then(std::sync::Weak::upgrade).is_some_and(|receipt|receipt.matches_raster(&blob,source,destination));
+        if self.source_results.iter().any(|(context,result)|*context==space && matches!(result,object_image_mips::PreparedImageWork::Raster(tile) if Arc::ptr_eq(&tile.blob,&blob) && tile.space==source && tile.destination==destination && tile.scalar==scalar)) {return Ok(true);}
+        let receipt=!scalar && self.source_receipt.as_ref().and_then(std::sync::Weak::upgrade).is_some_and(|receipt|receipt.matches_raster(&blob,source,destination));
         if self.moving_decode.as_ref().is_some_and(|(_,queue)|!queue.accepts_held(self.source_results.len(),receipt)) {return Ok(false);}
         let weak=Arc::downgrade(&blob);
         if let Some((_,_,_,error))=self.failed_raster_tiles.iter().find(|(stored,from,to,_)|stored.ptr_eq(&weak) && *from==source && *to==destination) {
             return Err(GpuRasterError::Color(error.clone()));
         }
-        let requested = self.image_decode_queue(space)?.request_raster(blob, source, destination);
+        let requested = self.image_decode_queue(space)?.request_raster(blob, source, destination, scalar);
         #[cfg(target_arch="wasm32")]
         self.dispatch_browser_image_decode()?;
         Ok(requested)
@@ -3537,7 +3547,7 @@ impl WgpuRasterizer {
                     Box::pin(async move {
                         let pixels = if let Some(callback)=callback {callback(request.blob.clone(), request.space, request.destination).await}
                             else {object_image_mips::prepare_raster_tile(&request.blob,request.space,&cache)};
-                        object_image_mips::PreparedImageWork::Raster(object_image_mips::PreparedRasterTile {blob:request.blob,space:request.space,destination:request.destination,pixels})
+                        object_image_mips::PreparedImageWork::Raster(object_image_mips::PreparedRasterTile {blob:request.blob,space:request.space,destination:request.destination,scalar:request.scalar,pixels})
                     })
                 },
                 object_image_mips::MipDecodeRequest::Coordinates(request) => {

@@ -145,8 +145,11 @@ fn native_mask_restoration_keeps_existing_scalar_path() {
     r.ensure_document_metadata([9504, 6336],document.scene()).unwrap();
     let first = data(color, 33, &[RasterPlane::Mask], 1);
     let before = r.metrics.native_restore_submissions;
+    let decoded = |r: &WgpuRasterizer| (r.source_tiles.borrow().gpu_bytes(), r.source_tiles.borrow().misses);
+    let slots = decoded(&r);
     prepare(&mut r,|r|r.restore_raster(source, &RasterData::default(), &first)).unwrap();
     assert!((1..=66).contains(&(r.metrics.native_restore_submissions-before)));
+    assert_eq!(decoded(&r), slots, "restored mask tiles occupied decoded source slots");
     assert_eq!(r.layer_masks.pages.len(), 33);
     for (key, tile) in &first.tiles {
         let expected = tile.wait_backing().unwrap().decode().unwrap();
