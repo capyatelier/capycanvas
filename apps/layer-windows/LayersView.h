@@ -75,6 +75,7 @@ struct LayerRow : std::enable_shared_from_this<LayerRow> {
     void commit(bool cancel);
     void context(bool mask,UIElement const& anchor);
     bool loadThumbnail(bool mask);
+    bool loadThumbnail(bool mask,winrt::Windows::System::VirtualKeyModifiers modifiers);
     void editFill();
     void chooseTexture();
     void highlight(int position, bool attachment = false);

@@ -395,7 +395,9 @@ The Layers panel presents shared attachment actions, owner visibility and group 
 Decorative clipping rails and effect links use realized thumbnail geometry and remain
 clipped to the scrolling viewport. A content-thumbnail drop attaches to that layer's
 output; a row drop uses shared insertion policy. Native drag feedback uses the shared
-normalized destination and release revalidates the original hit. Right swipes dispatch
+normalized destination and release revalidates the original hit. Thumbnail selection
+loads use Ctrl, Shift and Alt from the original pointer press, including group masks.
+Right swipes dispatch
 the shared row action. `exercise-layers.ps1 -Relationships` checks these interactions
 and their undo history in both themes, alongside the existing pickup fixture variants.
 Row padding belongs to the moving content; revealed actions fill the row height

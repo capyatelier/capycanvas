@@ -79,9 +79,15 @@ void LayerRow::chooseTexture(){
     if(flag(object(model(),L"paper"),L"editable"))ChooseTexture(data,texture,id);
 }
 bool LayerRow::loadThumbnail(bool isMask){
-    if(!(GetKeyState(VK_CONTROL)&0x8000)||flag(model(),L"group")||data->updating||!current())return false;
+    using Mod=Windows::System::VirtualKeyModifiers;
+    return loadThumbnail(isMask,(GetKeyState(VK_CONTROL)&0x8000?Mod::Control:Mod::None)|
+        (GetKeyState(VK_SHIFT)&0x8000?Mod::Shift:Mod::None)|(GetKeyState(VK_MENU)&0x8000?Mod::Menu:Mod::None));
+}
+bool LayerRow::loadThumbnail(bool isMask,Windows::System::VirtualKeyModifiers modifiers){
+    using Mod=Windows::System::VirtualKeyModifiers;
+    if((modifiers&Mod::Control)==Mod::None||(!isMask&&flag(model(),L"group"))||data->updating||!current())return false;
     data->dispatchDocument(O({{L"type",S(L"selection")},{L"action",O({{L"op",S(L"load_thumbnail")},{L"id",N(id)},{L"mask",B(isMask)},
-        {L"shift",B((GetKeyState(VK_SHIFT)&0x8000)!=0)},{L"alt",B((GetKeyState(VK_MENU)&0x8000)!=0)}})}}),epoch);
+        {L"shift",B((modifiers&Mod::Shift)!=Mod::None)},{L"alt",B((modifiers&Mod::Menu)!=Mod::None)}})}}),epoch);
     return true;
 }
 void LayerRow::init(){

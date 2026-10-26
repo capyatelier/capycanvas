@@ -244,6 +244,7 @@ struct LayerRowDrag::Impl:std::enable_shared_from_this<Impl>{
             origin=position=point.Position();initialScroll=list.VerticalOffset();windowHandle=GetAncestor(GetForegroundWindow(),GA_ROOTOWNER);
             for(auto node=original;node&&node!=surface;node=VisualTreeHelper::GetParent(node))
                 if(auto item=node.try_as<UIElement>())path.emplace_back(make_weak(item));
+            if((mask||inside(original,row->content))&&row->loadThumbnail(mask,e.KeyModifiers())){ignoreClick=true;pickup=false;e.Handled(true);}
             if(grip&&pickup){ignoreClick=true;if(!claim())return;}
             recognizing=true;recognizer.Begin(row->root,point,device==NativeInput::PointerDeviceType::Mouse?NativeInput::GestureSettings::None:NativeInput::GestureSettings::Hold);
             tickAt=std::chrono::steady_clock::now();timer.Start();evidence();return;
