@@ -76,6 +76,8 @@ android {
     sourceSets["main"].assets.srcDirs("../../layer-web/icons", "../../layer-web/brush-previews", "../../layer-web/filter-previews")
     sourceSets["main"].assets.srcDir(layout.buildDirectory.dir("generated/capy/assets").get().asFile)
     sourceSets["main"].res.srcDir(layout.buildDirectory.dir("generated/capy/res").get().asFile)
+    sourceSets["benchmark"].kotlin.directories.add("src/workspaceBenchmark/java")
+    sourceSets.maybeCreate("androidTestDebug").kotlin.directories.add("src/workspaceBenchmark/java")
     testOptions { animationsDisabled = true }
 }
 

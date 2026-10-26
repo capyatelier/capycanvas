@@ -31,7 +31,13 @@ viewports and after cached reprojection, exclude absent sidebar shadows, and
 preserve normalized asymmetric facing corners.
 Shared `divider_geometry_` tests cover measured-header coordinate round trips,
 removing active resize sources through tab merges, late events and separate
-resize/move Undo/Redo entries. GTK `panel_tabs::tests` checks that unconnected
+resize/move Undo/Redo entries. Shared workspace-navigation tests hold a divider
+drag across camera movement, viewport resizing, unchanged frames and a return to
+the original view;
+retained presentation stays ineligible until a new workspace gesture begins.
+Dispatch synchronizes eligibility on success and error returns, including resize
+errors that retire the gesture.
+GTK `panel_tabs::tests` checks that unconnected
 tab corners stay transparent without a native window.
 GTK `workspace::allocation_tests` checks fixed gaps, outer edges and equal,
 opposite sibling resizing across fractional divider positions and resolved layouts.

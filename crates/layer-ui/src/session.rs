@@ -320,6 +320,7 @@ pub struct UiSession<R: CanvasRenderer> {
     logical_viewport: Option<[f32; 2]>,
     initial_fit: bool,
     automatic_camera_revision: u64,
+    workspace_view_revision: Option<u64>,
     divider_drag: Option<(u32, ResizeDrag)>,
     edge_contacts: edge_contacts::EdgeContacts,
     floating_resize: Option<FloatingResize>,
@@ -419,13 +420,28 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub fn renderer_generation(&self) -> u64 { self.renderer_generation }
     pub fn preferences_revision(&self) -> u64 { self.preferences_revision }
 
+    pub fn workspace_interaction_active(&self) -> bool {
+        self.divider_drag.is_some() || self.floating_resize.is_some()
+            || self.workspace_drag.is_some() || self.workspace_tab_drag.is_some()
+    }
+
+    pub fn workspace_view_unchanged(&self) -> bool {
+        self.workspace_interaction_active()
+            && self.workspace_view_revision==Some(self.state.camera.revision)
+    }
+
+    fn sync_workspace_view(&mut self) {
+        if self.workspace_interaction_active() {
+            if self.workspace_view_revision.is_none() {self.workspace_view_revision=Some(self.state.camera.revision);}
+        } else {self.workspace_view_revision=None;}
+    }
+
     pub fn localization_input_busy(&self) -> bool {
         self.pressure_calibration.input_busy() || self.tilt_calibration.editor.input_busy() || !self.canvas_idle() || self.input_pending || self.touch.is_active()
             || self.interaction.pointer.is_some() || self.interaction.facts.held
             || self.interaction.facts.dragging || self.interaction.axes.active()
             || self.operation.dragging() || self.operation.nudging() || self.navigator_drag.is_some()
-            || self.divider_drag.is_some() || self.floating_resize.is_some()
-            || self.workspace_drag.is_some() || self.workspace_tab_drag.is_some()
+            || self.workspace_interaction_active()
     }
 
     pub fn set_localization(&mut self, localization: std::sync::Arc<Localizer>) -> bool {
@@ -554,6 +570,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             logical_viewport: None,
             initial_fit: true,
             automatic_camera_revision: 0,
+            workspace_view_revision: None,
             divider_drag: None,
             edge_contacts: Default::default(),
             floating_resize: None,
@@ -2862,6 +2879,13 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub fn dispatch(&mut self, action: UiAction) -> Result<UiChange, String> {
+        self.sync_workspace_view();
+        let result=self.dispatch_inner(action);
+        self.sync_workspace_view();
+        result
+    }
+
+    fn dispatch_inner(&mut self, action: UiAction) -> Result<UiChange, String> {
         let Some(swap) = color_history_session::paint_edit(&action).filter(|_| !self.defers(&action)) else {
             return self.dispatch_action(action);
         };

@@ -24,6 +24,10 @@ class UiStartupInstrumentation : Instrumentation() {
         start()
     }
     override fun onStart() {
+        if (arguments.getString("workspaceBenchmark") == "true" || arguments.getString("viewportBenchmark") == "true") {
+            workspaceTiming()
+            return
+        }
         var activity: MainActivity? = null
         var frameObserver: Choreographer.FrameCallback? = null
         var observing = true
@@ -126,6 +130,56 @@ class UiStartupInstrumentation : Instrumentation() {
                 it.finish()
             } }
             AppStorage.directoryForTest = null
+        }
+        finish(Activity.RESULT_OK, result)
+    }
+
+    private fun workspaceTiming() {
+        var activity: MainActivity? = null
+        val result = Bundle()
+        val root = File(targetContext.cacheDir, "workspace-benchmark-${System.nanoTime()}")
+        val previousFileJobs = DocumentController.nativeFileJobsForTest
+        AppStorage.directoryForTest = root
+        DocumentController.nativeFileJobsForTest = true
+        try {
+            val label = checkNotNull(arguments.getString("label"))
+            require(label.matches(Regex("[a-zA-Z0-9_-]+")))
+            activity = startActivitySync(Intent(targetContext, MainActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)) as MainActivity
+            runOnMainSync { activity.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE }
+            val host = activity.host
+            val until = SystemClock.uptimeMillis() + 180_000
+            do {
+                var ready = false
+                runOnMainSync {
+                    check(host.failure == null) { host.failure!! }
+                    ready = host.snapshot?.optBoolean("brush_ready") == true && host.recovery.ready &&
+                        host.workspaceManager?.let { it.optBoolean("ready") && !it.optBoolean("busy") } == true &&
+                        activity.resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+                }
+                if (ready) break
+                check(SystemClock.uptimeMillis() < until) { "Workspace benchmark startup timed out" }
+                SystemClock.sleep(16)
+            } while (true)
+            if (arguments.getString("viewportBenchmark") == "true") {
+                ViewportFrameTiming(this, arguments).run(activity)
+                result.putString("stream", "\nVIEWPORT_COMPLETE $label\n")
+            } else {
+                val workload = arguments.getString("workspaceWorkload", "gap")
+                require(workload == "gap" || workload == "panel")
+                WorkspaceFrameTiming(this, arguments).run(activity, resize = workload == "gap", bridge = true)
+                result.putString("stream", "\nWORKSPACE_COMPLETE $label\n")
+            }
+        } catch (error: Throwable) {
+            result.putString("stream", "\n${error.stackTraceToString()}\n")
+            finish(Activity.RESULT_CANCELED, result)
+            return
+        } finally {
+            activity?.let { runOnMainSync { it.finish() } }
+            targetContext.deleteSharedPreferences(CanvasHost.preferencesName)
+            DocumentController.nativeFileJobsForTest = previousFileJobs
+            AppStorage.directoryForTest = null
+            root.deleteRecursively()
         }
         finish(Activity.RESULT_OK, result)
     }

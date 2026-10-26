@@ -262,9 +262,9 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 | Attached filter drag inside a clipping run | 60 | **Not met.** 55.64–59.72 native UI fps; moving-frame gap p99 16.75–33.34 ms | [Filter attachment feedback](#filter-attachment-feedback), 2026-10-04 |
 | Navigation with 8 visible paint layers | 60 | | |
 | Drawing with 8 visible paint layers, G-Pen 1024 px | 60 | **Not met.** Navigator open, Fit: 50.12 fresh updates/s (48.65–51.65), completion gap p99 29.30–32.87 ms | Retained-Navigator painting below; seven photo layers and one drawing layer |
-| Panel, tab, column or toolbar drag and docking | 60 | **Unqualified.** Baseline Web floating group/Navigator drags: 18.45–19.41/21.49–22.36 RAF placements/s; continuous-tab revisions unqualified on this reference device; GTK GPU joins and revised chrome handoff are unmeasured | [Web workspace diagnostic](#web-workspace-diagnostic), 2026-10-19; Navigator model assertion fails; [panel-tab compositing](top-tier.md#panel-tab-compositing) and [GTK column bridge diagnostic](top-tier.md#gtk-column-bridge-diagnostic), 2026-10-25 |
+| Panel, tab, column or toolbar drag and docking | 60 | **Pre-existing gap; unqualified.** Recorded Android light group drag: 58.47–58.99 actual window presents/s; fresh bounds were not collected for this motion. Other hosts retain their existing measurements | [Native column bridges](#native-column-bridges); [Web workspace diagnostic](#web-workspace-diagnostic), 2026-10-26 |
 | GTK Tool Set hover and press animation | 60 | Unmeasured on reference hardware; the short desktop GTK diagnostic does not qualify this tier | [GTK tool caption hover](top-tier.md#gtk-tool-caption-hover), 2026-10-26 |
-| Panel or column resize | 60 | GTK compact Tool Set and expanding divider revisions unmeasured on reference hardware. **Unqualified.** Baseline Web column/Navigator resizes: 8.43–8.83 changing-geometry updates/s, p99 150.0–183.3 ms; current candidate and GTK GPU column joins unmeasured on reference hardware | [Web workspace diagnostic](#web-workspace-diagnostic), 2026-10-19; [GTK column bridge diagnostic](top-tier.md#gtk-column-bridge-diagnostic), 2026-10-25; [GTK Tool Set density](top-tier.md#gtk-tool-set-density), 2026-10-26; [GTK toolbar dividers](top-tier.md#gtk-toolbar-divider-resize), 2026-10-26 |
+| Panel or column resize | 60 | **Pre-existing gap; unqualified.** Android gap: original 27.79 presented fps / 26.07 fresh bounds/s; retained port 53.64–58.47 presented fps / 41.71–42.97 fresh bounds/s. Web: original 8.43–8.63 bounds updates/s; SVG 21.40–23.42 geometry updates/s alongside 21.11–23.14 total Chrome presents/s GTK compact Tool Set and expanding divider revisions remain unmeasured on this tier. | [Native column bridges](#native-column-bridges); [Web SVG column bridges](#web-svg-column-bridges); [GTK Tool Set density](top-tier.md#gtk-tool-set-density), [GTK toolbar dividers](top-tier.md#gtk-toolbar-divider-resize), 2026-10-26 |
 | Pen pressure utility and curve drag | 60 | Unmeasured on reference hardware | [Pen pressure measurement protocol](../ui/pen-pressure.md#validation); GTK desktop measurements do not qualify this tier |
 | Android tool bubble drag through four neighbours | 60 | Unmeasured after the bubble release fixes; the 24 MP MovinkPad 11 measurement does not qualify the TCL reference tablet | [Native tool bubbles](mid-tier.md#native-tool-bubbles), 2026-10-24 |
 | Web tool bubble drag through four neighbours | 60 | Unmeasured after the bubble release fixes; desktop browser journeys do not qualify the TCL reference tablet | [Web checks](../development/web.md#tests), 2026-10-24 |
@@ -2631,3 +2631,82 @@ session and was not measured.
 
 The [architecture](../architecture.md) defines the worker and queue bounds.
 Warm canvas motion keeps its existing preparation and GPU paths.
+
+## Native column bridges
+
+The low-tier resize gap predates this port. These recorded checkpoints improve
+on the original rates; **the 60 Hz target remains unqualified**. Presented
+window frames and fresh native bounds are separate measurements.
+
+| Light gap resize checkpoint | Actual window presents/s | Fresh bounds updates/s |
+| --- | --- | --- |
+| Original `ab6a16b7`, APK `fb5519cc` | 22.91 / 27.79 / 30.86 | 21.81 / 26.07 / 29.22 |
+| Shared paths and mask shadow, APK `1e7504b2` | 46.57 / 49.16 / 49.88 | 33.07 / 34.22 / 32.98 |
+| Matched FIFO control, APK `d8c080e3` | 48.64 / 50.74 / 49.64 | 36.13 / 34.82 / 35.36 |
+| Retained presentation, APK `ccee00b5` | 53.64 / 57.79 / 58.47 | 41.71 / 42.97 / 41.74 |
+
+Captured on the reference TCL at factory density 320, font scale 1, 60 Hz and
+thermal status 0, using the 4248 × 2832 photo plus an empty paint layer at Fit,
+Low transparency, one primer and three six-second moving contacts. The original
+benchmark is unminified and app-traced; later builds use release Rust and R8
+without app tracing. The original-to-port rows are descriptive checkpoints,
+not an isolated comparison. The FIFO/retained pair has identical DEX, resources,
+manifest and ART profile, with only its source-built native library changed.
+SurfaceFlinger window latches join actual display presentation times; they do
+not identify a fresh geometry revision on every presented buffer.
+
+The merged native path retains authored allocation bounds, original control
+clips and a quarter-size GPU shadow mask. Strict ten-keyframe bridge-face and
+selected-source checks pass in both themes. Sampled shadow edges differ by at
+most one RGB level from the full-size shadow. Retained presentation cuts
+successful acquisition from 1,488 / 2,135 / 2,010 ms to 28 / 36 / 29 ms per
+contact in the clean matched pair. Its first contact remains below the nominal
+rate floor; native bounds updates remain below window cadence.
+
+The navigation comparison completes eighteen paired cases with camera, palette,
+settings, Navigator and glass parity, preserving every previously passing row.
+Photo/Navigator-open pan and rotation retain approximately 60.02 presented fps
+in both builds. Existing pinch stalls also occur in the control. Navigation,
+ink, overlap and surface-lifecycle functional checks pass. These checks protect
+the retained-presentation change; they do not qualify panel motion.
+
+Recorded builds and raw measurements are under
+`artifacts/column-bridge-android/baseline/`, `candidate-fill-only-shadow/` and
+`candidate-workspace-shared-readonly/`. The current implementation excludes the
+unproductive command-validation cache. Further cold-contact investigation is
+deferred.
+
+## Web SVG column bridges
+
+The Web resize gap also predates this port. **These rates are unqualified**;
+the original presented rate is unavailable, and Chrome content presents do not
+prove fresh SVG geometry on every displayed frame.
+
+| Recorded checkpoint | Chrome content presents/s | Fresh geometry updates/s |
+| --- | --- | --- |
+| Original left-column resize, `a46600c8d` | Unknown | 8.46 / 8.43 / 8.63 |
+| Shared SVG, Wasm `b2746aed` | 21.11 / 21.62 / 23.14 | 21.40 / 22.03 / 23.42 |
+
+Both use the 4248 × 2832 photo plus an empty paint layer at Fit with Low glass.
+The older baseline uses dark theme, Chrome 154, density 272/DPR 1.7, CDP mouse
+and three warmed five-second contacts. Its clock-anchor uncertainty prevents
+an accepted presented-FPS measurement. The SVG checkpoint uses light theme,
+Chrome 155, factory density 320/DPR 2, OS pen and three six-second contacts,
+with thermal status 0. These different protocols establish the pre-existing
+gap and recorded port rates, not a matched causal speedup.
+
+The SVG checkpoint predates the completed-pose cache experiment; the current
+implementation retains worker coalescing and stale-result guards without that
+cache, additional compositing hints, header-band filters or one-pass canvas
+experiments. Strict 80-position bridge checks pass. The unchanged Layers
+sharpness assertion fails identically at DPR 1 on pristine `ab6a16b7` and the
+cleaned port: 58 changed channels out of 168,000, maximum difference 29. The
+remaining rendering, Navigator and docking assertions pass in a separately
+reported continuation; this is not a full-suite pass.
+
+Baseline evidence is in
+`artifacts/navigator-layout-fix/tcl/baseline-sf-performance/`; the SVG checkpoint
+is in `artifacts/column-bridge-web-shipping-final/`. Cleanup verification is in
+`artifacts/column-bridge-web-rollback-final/`, with pristine comparison evidence
+in `artifacts/column-bridge-web-pristine-baseline/`. Drag-rate root-cause work is
+deferred.

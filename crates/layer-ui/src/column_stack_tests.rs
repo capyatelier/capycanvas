@@ -74,11 +74,13 @@ fn assert_ordinary_divider_structure(s: &UiSession<Recorder>) {
 #[test]
 fn divider_geometry_merge_retires_active_drag_and_recovers_history() {
     let mut s = session(Platform::Gtk);
+    assert!(!s.workspace_interaction_active());
     assert_ordinary_divider_structure(&s);
     let before = crate::durable_layout(&s.state.workspace.layout);
     let divider = s.layout(STACK_VIEW).dividers.into_iter().find(|d| !d.band && d.axis == Axis::Vertical).unwrap();
     let center = [divider.bounds.x + divider.bounds.width * 0.5, divider.bounds.y + divider.bounds.height * 0.5];
     s.dispatch(UiAction::DragDivider { id: divider.id, phase: ContactPhase::Down, position: center, viewport: STACK_VIEW }).unwrap();
+    assert!(s.workspace_interaction_active());
     let moved = [center[0], center[1] + 12.];
     s.dispatch(UiAction::DragDivider { id: divider.id, phase: ContactPhase::Move, position: moved, viewport: STACK_VIEW }).unwrap();
     let resized = crate::durable_layout(&s.state.workspace.layout);
@@ -93,6 +95,7 @@ fn divider_geometry_merge_retires_active_drag_and_recovers_history() {
         s.dispatch(UiAction::DragDivider { id: divider.id, phase, position: moved, viewport: STACK_VIEW }).unwrap();
     }
     assert!(!s.localization_input_busy(), "removed divider must retire its gesture after late Move/Up");
+    assert!(!s.workspace_interaction_active());
     s.require_workspace_idle().unwrap();
     assert!(s.command(CommandId::UndoWorkspace).enabled, "the tab merge remains one recoverable history entry");
     invoke(&mut s, CommandId::UndoWorkspace);
@@ -118,6 +121,85 @@ fn divider_geometry_merge_retires_active_drag_and_recovers_history() {
     invoke(&mut s, CommandId::UndoWorkspace);
     assert_eq!(crate::durable_layout(&s.state.workspace.layout), merged);
     assert_ordinary_divider_structure(&s);
+}
+
+#[test]
+fn workspace_view_stays_buffered_until_a_new_workspace_gesture() {
+    let mut s=measured_divider_session();
+    s.set_viewport(STACK_VIEW,[1800,1100]).unwrap();
+    let divider=s.layout(STACK_VIEW).dividers.into_iter().find(|d|!d.band && d.axis==Axis::Vertical).unwrap();
+    let center=[divider.bounds.x+divider.bounds.width/2.,divider.bounds.y+divider.bounds.height/2.];
+    let drag=|phase,position|UiAction::DragDivider {id:divider.id,phase,position,viewport:STACK_VIEW};
+    assert!(!s.workspace_view_unchanged());
+    s.dispatch(drag(ContactPhase::Down,center)).unwrap();
+    assert!(s.workspace_view_unchanged());
+    let moved=[center[0],center[1]+12.];
+    s.dispatch(drag(ContactPhase::Move,moved)).unwrap();
+    assert!(s.workspace_view_unchanged());
+    let before=s.state.camera.view();
+    s.gesture([500.,400.],[512.,400.],1.,0.).unwrap();
+    assert_ne!(s.state.camera.view(),before);
+    for _ in 0..3 {
+        assert!(s.workspace_interaction_active());
+        assert!(!s.workspace_view_unchanged());
+        s.dispatch(drag(ContactPhase::Move,moved)).unwrap();
+    }
+    s.gesture([512.,400.],[500.,400.],1.,0.).unwrap();
+    assert_eq!(s.state.camera.view(),before);
+    assert!(!s.workspace_view_unchanged(),"returning the camera cannot re-admit the same gesture");
+    s.dispatch(drag(ContactPhase::Up,moved)).unwrap();
+    assert!(!s.workspace_interaction_active());
+    assert!(!s.workspace_view_unchanged());
+    s.dispatch(drag(ContactPhase::Down,moved)).unwrap();
+    assert!(s.workspace_view_unchanged(),"a new gesture may retain its unchanged canvas view");
+    s.set_viewport([1801.,1100.],[1801,1100]).unwrap();
+    assert!(!s.workspace_view_unchanged(),"viewport changes also revoke retained presentation");
+    s.dispatch(drag(ContactPhase::Move,moved)).unwrap();
+    assert!(!s.workspace_view_unchanged());
+    s.set_viewport(STACK_VIEW,[1800,1100]).unwrap();
+    assert!(!s.workspace_view_unchanged(),"returning the viewport cannot re-admit the same gesture");
+    s.dispatch(drag(ContactPhase::Cancel,moved)).unwrap();
+    assert!(!s.workspace_view_unchanged());
+    s.dispatch(drag(ContactPhase::Down,moved)).unwrap();
+    assert!(s.workspace_view_unchanged());
+    s.dispatch(drag(ContactPhase::Up,moved)).unwrap();
+}
+
+#[test]
+fn workspace_view_readmits_after_failed_resize_and_cancel() {
+    for floating in [false, true] {
+        let mut s = measured_divider_session();
+        s.set_viewport(STACK_VIEW, [1800, 1100]).unwrap();
+        let (id, center) = if floating {
+            s.dispatch(UiAction::MovePanel { panel: Panel::Brushes,
+                target: DockTarget::Float { position: [700., 220.] }, viewport: STACK_VIEW }).unwrap();
+            let group = s.layout(STACK_VIEW).groups.into_iter().find(|g| g.floating).unwrap();
+            (group.id, [group.bounds.x + group.bounds.width, group.bounds.y + group.bounds.height * 0.5])
+        } else {
+            let divider = s.layout(STACK_VIEW).dividers.into_iter().find(|d| !d.band && d.axis == Axis::Vertical).unwrap();
+            (divider.id, [divider.bounds.x + divider.bounds.width * 0.5, divider.bounds.y + divider.bounds.height * 0.5])
+        };
+        let resize = |phase, position| if floating {
+            UiAction::ResizeFloating { group: id, edge: ResizeEdge::Right, phase, position, viewport: STACK_VIEW }
+        } else {
+            UiAction::DragDivider { id, phase, position, viewport: STACK_VIEW }
+        };
+        s.dispatch(resize(ContactPhase::Down, [center[0], -f32::MAX])).unwrap();
+        assert!(s.workspace_view_unchanged());
+        s.gesture([500., 400.], [512., 400.], 1., 0.).unwrap();
+        assert!(!s.workspace_view_unchanged());
+        let error = s.dispatch(resize(ContactPhase::Move, [center[0], f32::MAX])).unwrap_err();
+        assert_eq!(error, if floating { "Invalid floating panel size" } else { "Invalid dock size" });
+        assert!(!s.workspace_interaction_active());
+        s.dispatch(resize(ContactPhase::Down, center)).unwrap();
+        assert!(s.workspace_view_unchanged(), "a failed resize must retire its navigation latch");
+        s.gesture([500., 400.], [512., 400.], 1., 0.).unwrap();
+        s.dispatch(resize(ContactPhase::Cancel, center)).unwrap();
+        assert!(!s.workspace_view_unchanged());
+        s.dispatch(resize(ContactPhase::Down, center)).unwrap();
+        assert!(s.workspace_view_unchanged(), "a canceled resize must admit the next gesture");
+        s.dispatch(resize(ContactPhase::Cancel, center)).unwrap();
+    }
 }
 
 #[test]

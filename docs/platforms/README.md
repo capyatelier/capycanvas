@@ -93,8 +93,10 @@ implementation.
 Android draws pen strokes into one retained Vulkan shared-demand image
 (`VK_KHR_shared_presentable_image`), redrawing only the damaged regions. The
 display can read while the app writes, so ink can tear; the trade is lower pen
-latency. Camera changes switch to FIFO presentation and stay buffered until the
-next paint contact, which switches back before any brush GPU work is submitted.
+latency. Camera changes switch to FIFO presentation. A new paint contact or a
+workspace gesture with an unchanged camera and viewport can return to shared
+presentation. A camera or viewport change revokes that workspace gesture's
+eligibility until it ends; another layout update cannot switch it back.
 Buffered navigation permits two GPU frames in flight. Viewport redraws and
 timestamp observations do not become artwork dependencies. Before presenting,
 the queue checks completion of preceding artwork, uploads and background jobs

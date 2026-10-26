@@ -688,6 +688,20 @@ APK calls, so test-APK benchmarks use the unminified build.
   `-e workspaceTransparency 0`–`3` sets panel transparency (off to high) and
   restores it afterwards. Results appear in logcat under `CapyDragPerf` and
   `CapyResizePerf`.
+  The gap and panel column benchmarks can also run inside the app with
+  `android-viewport-presents.py --workspace-workload gap --workspace-runner self`.
+  This uses `UiStartupInstrumentation` and supports `-PcapyOptimize=true` without
+  a separate JUnit APK. Both entry points share `WorkspaceFrameTiming`, including
+  the fixture, input, pixel checks and report format. Its source directory is
+  compiled into the benchmark app and debug AndroidTest APK only; ordinary app
+  builds exclude it. Compare optimization settings with the same self runner,
+  document and display conditions, and retain each APK's compilation status.
+  Normal workspace captures leave app ATrace disabled and use explicit boot-clock
+  contact timestamps for the SurfaceFlinger join. Monotonic read brackets validate
+  the clock offset. `--profile` enables app tracing and uses the async trace window;
+  its GPU query polling changes the workload. Reports retain raw host frame/input
+  rows and their field names under `host_metrics`, including rows that settle after
+  the contact. Filter those rows to the recorded monotonic input bounds.
 - **Workspace switcher scrolling.**
   `AndroidWorkspacePerformanceTest#workspaceSwitcherScrollFrameTiming` runs with
   `-e switcherBenchmark true -e photo <readable-tier-photo.jpg>`. It scrolls the

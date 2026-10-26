@@ -581,12 +581,12 @@ impl App {
         {
             let surface = self.surface.as_mut().unwrap();
             let gpu = self.host.session.engine().backend().0.as_ref().unwrap();
-            // Navigation rewrites the whole displayed image. Keep it buffered even
-            // after the gesture settles; only a new brush stroke returns to ink
-            // presentation. A simultaneous view change takes precedence over ink.
             let ink = if surface.last_view.is_some_and(|previous| previous != view) {
                 false
             } else if paint_start != surface.last_paint_start {
+                true
+            } else if self.host.session.workspace_view_unchanged()
+                && surface.ink_present_mode==wgpu::PresentMode::SharedDemandRefresh {
                 true
             } else {
                 surface.ink

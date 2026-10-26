@@ -482,6 +482,24 @@ completion, including warm-up, pen-up, undo and deferred captures.
   100 frames or fewer; use `--duration-ms 8000` where the tier presents near
   20/s. `--extra transparency=off,navigator=false` passes further test
   arguments.
+- The optimized benchmark APK can run the same viewport helper without a
+  separate JUnit APK: add `--viewport-runner self`. The JUnit entry point and
+  self runner share fixture setup, gesture input and assertions. Add
+  `--default-canvas` to retain the actual startup canvas and paper;
+  otherwise `--photo`, `--width` and `--height` select the tier fixture.
+  Use `--extra navigator=false` or `navigator=true` for the visibility pair.
+  New reports include bracketed boot/monotonic contact bounds, full-contact
+  canvas presentation counts, onset and longest gaps. Moving cadence excludes
+  100 ms at either contact edge; completion-attributed cadence remains a
+  separate field. Normal collection omits app ATrace; this viewport helper
+  explicitly retains its existing GPU timing queries for both matched builds.
+- For a native-only Android comparison, keep the optimized DEX, resources,
+  manifest and ART profile identical. Build each native library from its exact
+  source checkpoint, then verify that only the intended library payload differs
+  after packaging. Preserve native compression, page alignment and signing.
+  Separate clean and incremental Compose builds can generate different class
+  bytes from identical Kotlin sources, so source hashes alone do not establish
+  this control.
 - The brush runner's `-e mode pinch` does the same on the photo.
 - The MovinkPad 11 runs at 90 Hz only for apps enabled in Settings › Display ›
   Adaptive (`com.android.settings/.display.AdaptiveAPPRefreshRateActivity`);
@@ -517,9 +535,26 @@ Undo/Redo. A fixed delay is not a completion check. Set both
 photo size. Browser frame callbacks alone do not establish GPU-completed
 throughput.
 
+Close the exact browser targets a benchmark created when its capture finishes;
+stopping its HTTP server leaves pages and Wasm workers resident. Preserve other
+targets and their storage. Before a Native/Web comparison, record browser,
+renderer and GPU process PSS together with available RAM and swap; browser-process
+PSS alone omits the workers' memory. Keep this background load consistent across
+the matched cases.
+
 **Workspace motion (desktop and Web).** Use
 `tools/performance/workspace-motion.sh` with `LAYER_MOTION_MIN_HZ` at 95% of the
 tier rate.
+
+**Workspace columns (Android).** `android-viewport-presents.py --workspace-workload
+gap --workspace-runner self` supports the optimized benchmark APK. Normal runs
+keep app ATrace off: tracing the app also enables renderer GPU queries and polling.
+Actual SurfaceFlinger presentations use the report's `begin_boot_ns`/`end_boot_ns`;
+bracketed monotonic reads must admit a consistent clock offset. Profiles and older
+reports retain async trace windows. Raw `host_metrics` frame/input rows carry field
+names and monotonic timestamps; separate contact work from post-contact settling.
+App-window presents alone do not map a particular fresh geometry revision to a
+displayed buffer. Keep input, publication and changed-bound counts alongside them.
 
 **Brushes (Windows).** Build `cargo build --locked --release -p layer-render-wgpu
 --example brush_frames`, list adapters with `brush_frames.exe --adapters`, then

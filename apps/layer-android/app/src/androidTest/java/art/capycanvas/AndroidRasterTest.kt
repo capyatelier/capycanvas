@@ -395,7 +395,12 @@ class AndroidRasterTest {
         tick()
     }
     private fun png(name: String, recipe: JSONObject? = null): ByteArray {
-        val id=native {request(it,"export_document").first}
+        native { Native.dispatch(it,obj("type" to "invoke","command" to "export_document").toString()) }
+        compose.waitUntil(120_000) {
+            tick()
+            native { state(it).array("requests").objects().any { request -> request.getJSONObject("kind").optString("type") == "document" } }
+        }
+        val id=native {request(it,"export_document",false).first}
         var task=0L
         val deadline=SystemClock.uptimeMillis()+60_000
         while(task==0L && SystemClock.uptimeMillis()<deadline) {
@@ -1777,7 +1782,7 @@ class AndroidRasterTest {
         // Real first-use dialog, cancellation, sensible defaults.
         setup("soft_proof");assertFalse(native{state(it).getBoolean("soft_proof")})
         compose.onNodeWithText("Black ink").assertExists()
-        compose.onNodeWithText("Choose Profile…").assertExists();SystemClock.sleep(400);cancel()
+        compose.onNodeWithText(host.catalog.getJSONObject("profile_copy").getString("choose")).assertExists();SystemClock.sleep(400);cancel()
         assertTrue(native{JSONObject(Native.query(it,obj("type" to "proof_form").toString())).isNull("document_profile")})
         // Obtain a portable RGB ICC through the real profiled file pipeline.
         val wide=builtinRecipe(1)
@@ -1859,7 +1864,7 @@ class AndroidRasterTest {
         repeat(2){case->
             setup()
             val flag=Native.captureControl()
-            val task=native{h->Native.dispatch(h,obj("type" to "invoke","command" to "soft_proof_setup").toString());val request=state(h).getJSONArray("requests").objects().first{it.getJSONObject("kind").getString("type")=="soft_proof_setup"}.getInt("id");Native.proofTask(h,request,retained,flag)}
+            val (requestId,task)=native{h->Native.dispatch(h,obj("type" to "invoke","command" to "soft_proof_setup").toString());val request=state(h).getJSONArray("requests").objects().first{it.getJSONObject("kind").getString("type")=="soft_proof_setup"}.getInt("id");request to Native.proofTask(h,request,retained,flag)}
             try{
                 if(case==0){
                     val failure=java.util.concurrent.atomic.AtomicReference<Throwable?>()
@@ -1871,6 +1876,7 @@ class AndroidRasterTest {
                     assertNotNull("Cancellation must reject preparation",failure.get())
                 }else Native.proofWork(task)
                 hide()
+                compose.waitUntil(30_000) { native { state(it).array("requests").objects().none { request -> request.getInt("id") == requestId } } }
                 assertTrue("Dismissed request must reject prepared results",runCatching{native{Native.proofCheck(it,task)}}.isFailure)
                 assertEquals(retained,current().toString())
                 assertTrue(runBlocking{ProfileStore.list(activity).isEmpty()})
@@ -4542,9 +4548,126 @@ class AndroidRasterTest {
         assertTrue(display().getLong("presentation_switches") >= 6)
         assertNull(host.failure)
     }
+    @Test fun workspaceNavigationStaysBufferedUntilANewDrag() {
+        fun display() = native { JSONObject(Native.displayStatus(it)) }
+        org.junit.Assume.assumeTrue("The overlap gate requires SharedDemandRefresh",
+            display().getString("ink_present_mode") == "SharedDemandRefresh")
+        fun layout() = native {
+            JSONObject(Native.snapshot(it)!!).getJSONObject("layout")
+        }
+        val initial = layout()
+        val viewport = initial.getJSONArray("viewport")
+        val registered = native { state(it).getJSONObject("workspace").getJSONObject("layout").getJSONArray("panels") }
+        assertTrue("Brushes is registered in the isolated workspace: $registered", registered.objects().any { it.getString("id") == "brushes" })
+        action(obj("type" to "customize", "action" to obj("type" to "set_panel_visible", "panel" to "brushes", "visible" to true)))
+        val visibleLayout = layout()
+        assertTrue("Brushes has a native dock group before Float: $visibleLayout", visibleLayout.array("groups").objects().any { "brushes" in it.array("panels").values() })
+        action(obj("type" to "move_panel", "panel" to "brushes", "viewport" to viewport,
+            "target" to obj("kind" to "float", "position" to org.json.JSONArray(listOf(viewport.getDouble(0) * .6, viewport.getDouble(1) * .2)))))
+        val floatingLayout = layout()
+        val floating = floatingLayout.array("groups").objects().firstOrNull { it.getBoolean("floating") && "brushes" in it.array("panels").values() }
+        assertNotNull("The overlap fixture contains a floating Brushes group: $floatingLayout", floating)
+        val id = checkNotNull(floating).getInt("id")
+        fun center(): Pair<Double, Double> {
+            val bounds = layout().array("groups").objects().first { it.getInt("id") == id }.getJSONObject("bounds")
+            return (bounds.getDouble("x") + bounds.getDouble("width") / 2) to
+                (bounds.getDouble("y") + bounds.getDouble("height"))
+        }
+        fun drag(phase: String, position: Pair<Double, Double>) = native {
+            Native.dispatch(it, obj("type" to "resize_floating", "group" to id, "edge" to "bottom", "phase" to phase,
+                "position" to org.json.JSONArray(listOf(position.first, position.second)), "viewport" to viewport).toString())
+        }
+        fun awaitMode(mode: String) = compose.waitUntil(10_000) { tick(); display().getString("present_mode") == mode }
+        val start = center()
+        assertTrue("The native Bottom resize edge is inside the viewport: $floatingLayout",
+            start.first > 0 && start.first < viewport.getDouble(0) && start.second > 0 && start.second <= viewport.getDouble(1))
+        try {
+            drag("down", start)
+            awaitMode("SharedDemandRefresh")
+            val camera = native { state(it).getJSONObject("camera") }
+            val area = camera.getJSONArray("work_area")
+            val cx = area.getDouble(0) + area.getDouble(2) * .25
+            val cy = area.getDouble(1) + area.getDouble(3) / 2
+            fun finger(pointer: Int, phase: String, offset: Double) = native {
+                Native.input(it, obj("type" to "pointer", "kind" to "touch", "button" to "primary",
+                    "id" to pointer, "phase" to phase, "time_ns" to System.nanoTime(),
+                    "position" to org.json.JSONArray(listOf(cx + (if (pointer == 11) -80 else 80) + offset, cy))).toString())
+            }
+            finger(11, "down", 0.0)
+            finger(12, "down", 0.0)
+            for (step in 1..12) {
+                SystemClock.sleep(10)
+                finger(11, "move", step * 5.0)
+                finger(12, "move", step * 5.0)
+                tick()
+            }
+            finger(11, "up", 60.0)
+            finger(12, "up", 60.0)
+            assertNotEquals("The overlapping touch gesture pans the canvas", camera.getJSONArray("translation").toString(),
+                native { state(it).getJSONObject("camera").getJSONArray("translation").toString() })
+            awaitMode("Fifo")
+            val bufferedSwitches = display().getLong("presentation_switches")
+            repeat(6) { step ->
+                SystemClock.sleep(20)
+                drag("move", start.first to start.second + step + 1)
+                tick()
+                assertEquals("Fifo", display().getString("present_mode"))
+                assertEquals("Unchanged frames cannot reconfigure the held drag", bufferedSwitches, display().getLong("presentation_switches"))
+            }
+            repeat(6) {
+                SystemClock.sleep(20)
+                tick()
+                assertEquals("Fifo", display().getString("present_mode"))
+                assertEquals(bufferedSwitches, display().getLong("presentation_switches"))
+            }
+            drag("up", start.first to start.second + 6)
+            drag("down", center())
+            awaitMode("SharedDemandRefresh")
+            assertTrue(display().getLong("presentation_switches") > bufferedSwitches)
+            assertNull(host.failure)
+        } finally { drag("cancel", start) }
+    }
     @Test fun frontBufferSurfaceLifecycle() {
+        var readyAttempt = 0
+        val diagnosticLabel = InstrumentationRegistry.getArguments().getString("lifecycleDiagnosticLabel", "run")!!
+        require(diagnosticLabel.matches(Regex("[a-zA-Z0-9_-]+")))
         fun ready() {
-            compose.waitUntil(60_000) { host.surfaceReady && host.snapshot?.let { it.optBoolean("brush_ready") && it.optBoolean("shaders_ready") }==true }
+            val attempt = ++readyAttempt
+            fun diagnostic(stage: String) {
+                var ui = JSONObject()
+                scenario.onActivity {
+                    val snapshot = host.snapshot
+                    ui = obj("surface_ready" to host.surfaceReady, "failure" to host.failure, "action_error" to host.actionError,
+                        "gpu_ready" to snapshot?.opt("gpu_ready"), "canvas_ready" to snapshot?.opt("canvas_ready"),
+                        "brush_ready" to snapshot?.opt("brush_ready"), "shaders_ready" to snapshot?.opt("shaders_ready"),
+                        "document_file" to snapshot?.optJSONObject("state")?.optJSONObject("document_file"),
+                        "document_input_blocked" to host.documentInputBlocked, "documents_working" to host.documents.working)
+                }
+                val nativeState = runCatching { native {
+                    val snapshot = JSONObject(Native.snapshot(it)!!)
+                    obj("display" to JSONObject(Native.displayStatus(it)), "rendering_pending" to Native.renderingPending(it),
+                        "gpu_ready" to snapshot.opt("gpu_ready"), "canvas_ready" to snapshot.opt("canvas_ready"),
+                        "brush_ready" to snapshot.opt("brush_ready"), "shaders_ready" to snapshot.opt("shaders_ready"))
+                } }.getOrElse { obj("error" to it.stackTraceToString()) }
+                val report = obj("attempt" to attempt, "stage" to stage, "boot_ns" to SystemClock.elapsedRealtimeNanos(),
+                    "host" to ui, "native" to nativeState)
+                File(files, "front-buffer-ready-$diagnosticLabel-$attempt-$stage.json").writeText(report.toString(2))
+                println("FRONT_BUFFER_READY_DIAGNOSTIC $report")
+            }
+            try {
+                compose.waitUntil(60_000) { tick(); host.surfaceReady && host.snapshot?.let { it.optBoolean("brush_ready") && it.optBoolean("shaders_ready") }==true }
+            } catch (failure: androidx.compose.ui.test.ComposeTimeoutException) {
+                runCatching { diagnostic("timeout-before-tick") }.exceptionOrNull()?.let { failure.addSuppressed(it) }
+                runCatching {
+                    tick()
+                    diagnostic("after-one-tick-before-publication")
+                    val published = java.util.concurrent.CountDownLatch(1)
+                    scenario.onActivity { host.documentChanged { published.countDown() } }
+                    assertTrue("Diagnostic publication completed", published.await(10, java.util.concurrent.TimeUnit.SECONDS))
+                    diagnostic("after-one-tick-and-publication")
+                }.exceptionOrNull()?.let { failure.addSuppressed(it) }
+                throw failure
+            }
             compose.waitUntil(10_000) { !tick() }
             assertNull(host.failure)
             val display=native { JSONObject(Native.displayStatus(it)) }
