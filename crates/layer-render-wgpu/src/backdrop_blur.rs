@@ -428,6 +428,7 @@ impl BackdropBlur {
         self.interiors.clear();
         let mut edges = Vec::with_capacity(8 * self.placed.len());
         for region in &self.placed {
+            if region.shape[1]==0. {continue;}
             let [x, y, w, h] = region.bounds;
             let round = region.radii.iter().fold(0f32, |a, b| a.max(*b)).ceil() + 1.;
             let lines = |start: f32, size: f32, max: u32| {

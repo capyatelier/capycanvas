@@ -8,7 +8,7 @@ const SOURCE_CAMERA: u32 = 768;
 
 /// The viewport shader for `format` and `color`; `paper` keeps the paper
 /// lighting code, which the plain variant leaves out.
-fn viewport_shader(device: &crate::PipelineDevice, format: wgpu::TextureFormat, color: SdrSurfaceColor, paper: bool) -> wgpu::ShaderModule {
+pub(super) fn viewport_shader(device: &crate::PipelineDevice, format: wgpu::TextureFormat, color: SdrSurfaceColor, paper: bool) -> wgpu::ShaderModule {
     device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some(if paper { "viewport shader with paper lighting" } else { "viewport shader" }),
         source: wgpu::ShaderSource::Wgsl(
@@ -439,7 +439,7 @@ impl ViewportPresenter {
         crate::Deferred::prepare_all(self.pipeline.iter().chain([&self.surround_pipeline, &self.cursor_pipeline]).chain(self.backdrop.iter().flat_map(|b|b.pipelines())))
             .await.map_err(GpuRasterError::Effect)?;
         if let Some(panels) = &self.panels {
-            crate::Deferred::prepare_all([&panels.pipeline]).await.map_err(GpuRasterError::Effect)?;
+            crate::Deferred::prepare_all([&panels.pipeline,&panels.mask_pipeline]).await.map_err(GpuRasterError::Effect)?;
             crate::Deferred::prepare_all([&panels.profile_pipeline]).await.map_err(GpuRasterError::Effect)?;
         }
         crate::Deferred::prepare_all(renderer.scene_pipelines.scale_pipelines())
@@ -468,7 +468,7 @@ impl ViewportPresenter {
         ready &= startup.compiler.require(self.overview_pipeline.iter().chain(self.picker.pipeline.iter()), crate::startup::BRUSH);
         if let Some(backdrop) = &self.backdrop { ready &= startup.compiler.require(backdrop.pipelines(), crate::startup::DOCUMENT); }
         if let Some(panels) = &self.panels {
-            ready &= startup.compiler.require([&panels.pipeline],crate::startup::DOCUMENT);
+            ready &= startup.compiler.require([&panels.pipeline,&panels.mask_pipeline],crate::startup::DOCUMENT);
             ready &= startup.compiler.require([&panels.profile_pipeline],crate::startup::DOCUMENT);
         }
         startup.compiler.start();
@@ -907,6 +907,7 @@ impl ViewportPresenter {
             || previous.screen != self.screen_options
             || self.overlays_changed
             || self.panel_surfaces_changed
+            || self.panels.as_ref().is_some_and(|p|p.needs_refresh())
             || self.shade.changed(renderer)
             || self.picker.changed()
             || self.camera_data.is_none_or(|old| old[62..64] != renderer.clipping_preview.map(f32::from))
@@ -1215,7 +1216,7 @@ impl ViewportPresenter {
                     && previous.selection_revision.wrapping_add(1) != renderer.selection_paint_revision)
                 || (previous.revision != renderer.composite_revision
                     && previous.revision.wrapping_add(1) != renderer.composite_revision);
-            let full = content || bindings_changed || camera_changed || self.panel_surfaces_changed || (selection_changed && outline.is_none()) || self.presented_paper != Some(lit);
+            let full = content || bindings_changed || camera_changed || self.panel_surfaces_changed || self.panels.as_ref().is_some_and(|p|p.needs_refresh()) || (selection_changed && outline.is_none()) || self.presented_paper != Some(lit);
             let cursor =
                 crate::present_damage::cursor_bounds(&self.cursor_vertices, view, self.quarter_turns);
             let repaint = if full {
@@ -1335,7 +1336,7 @@ impl ViewportPresenter {
             }
         }
         if !overview_only && let Some(panels)=self.panels.as_mut() {
-            panels.prepare(renderer.device(),&mut self.uploads,encoder,self.backdrop.as_ref().and_then(|b|b.cached()))?;
+            panels.prepare(renderer.device(),&mut self.uploads,encoder,self.backdrop.as_ref().and_then(|b|b.cached()),[view.width_px,view.height_px],self.quarter_turns)?;
         }
         let (regions, full) = if self.retained || overview_only {
             (regions, full)

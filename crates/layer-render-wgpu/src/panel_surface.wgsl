@@ -2,6 +2,7 @@
 @group(2) @binding(1) var<storage,read> panel_profiles: array<vec2<f32>>;
 @group(2) @binding(2) var panel_backdrop: texture_2d<f32>;
 @group(2) @binding(3) var panel_sampler: sampler;
+@group(2) @binding(4) var panel_coverage: texture_2d<f32>;
 
 struct PanelVertex {
     @builtin(position) position: vec4<f32>,
@@ -204,13 +205,31 @@ fn pnl_tint(p: vec2<f32>,header: u32) -> vec4<f32> {
     return color;
 }
 
+fn pnl_coverage(point: vec2<f32>,header: u32) -> vec2<f32> {
+    let field=pnl_field(point,header);
+    let coverage=clamp(.5-field,0.,1.);
+    let scale=panel_data[header+3u].w;
+    let shadow_distance=max(pnl_field(point-vec2(0.,2.*scale),header),0.);
+    let shadow=.16*exp(-shadow_distance*shadow_distance/(32.*scale*scale));
+    return vec2(coverage,shadow);
+}
+
+@vertex fn panel_mask_vertex(@builtin(vertex_index) vertex: u32,@builtin(instance_index) instance: u32) -> PanelVertex {
+    let corner=array<vec2<f32>,6>(vec2(0.,0.),vec2(1.,0.),vec2(0.,1.),vec2(0.,1.),vec2(1.,0.),vec2(1.,1.));
+    return PanelVertex(vec4(corner[vertex]*vec2(2.,-2.)+vec2(-1.,1.),0.,1.),3u+instance*6u);
+}
+
+@fragment fn panel_mask_fragment(in: PanelVertex) -> @location(0) vec2<f32> {
+    let origin=max(floor(panel_data[in.header].xy),vec2(0.));
+    return pnl_coverage(origin+in.position.xy,in.header);
+}
+
 @fragment fn panel_fragment(in: PanelVertex) -> @location(0) vec4<f32> {
     let point=logical_surface(in.position.xy*camera.rotation.w);
-    let field=pnl_field(point,in.header);
-    let coverage=clamp(.5-field,0.,1.);
-    let scale=panel_data[in.header+3u].w;
-    let shadow_distance=max(pnl_field(point-vec2(0.,2.*scale),in.header),0.);
-    let shadow=.16*exp(-shadow_distance*shadow_distance/(32.*scale*scale));
+    let origin=max(floor(panel_data[in.header].xy),vec2(0.));
+    let mask=textureLoad(panel_coverage,vec2<i32>(floor(point-origin)),0).xy;
+    let coverage=mask.x;
+    let shadow=mask.y;
     var tint=pnl_tint(point,in.header);
     if panel_data[0].z>0. {
         let transform=panel_data[1];

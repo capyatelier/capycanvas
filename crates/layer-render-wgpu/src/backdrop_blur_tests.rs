@@ -190,6 +190,23 @@ fn region_list_changes_repaint_only_added_and_removed_glass() {
 }
 
 #[test]
+fn zero_strength_regions_keep_blur_demand_without_composite_draws() {
+    let r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let mut blur=BackdropBlur::new(&r.device,FORMAT);
+    blur.set_regions(&[region([32.,16.,128.,96.],[18.;4]).with_strength(0.)]);
+    let mut encoder=r.device().create_command_encoder(&Default::default());
+    let mut uploads=crate::Uploads::new(r.device(),4096);
+    let mut repaint=Vec::new();
+    blur.encode(&r,&mut encoder,&mut uploads,[256,128],0,layer_core::Affine::IDENTITY,false,None,|_|{},None,&mut repaint).unwrap();
+    uploads.finish(&encoder);
+    r.queue().submit([encoder.finish()]);
+    assert!(blur.cached().is_some() && blur.frames()[0]==1,"panel consumers retain a prepared backdrop");
+    assert_eq!(blur.edges,0,"zero-alpha composites must not shade a bounding rectangle");
+    assert!(blur.interiors().is_empty(),"blur demand is not an opaque occluder");
+    assert!(!repaint.is_empty());
+}
+
+#[test]
 fn glass_follows_a_new_surround() {
     let size = [256, 128];
     let r = document(size);

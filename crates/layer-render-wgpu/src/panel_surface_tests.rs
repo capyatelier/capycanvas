@@ -558,6 +558,91 @@ fn gpu_panel_surface_scene_replacement_clears_old_sources_and_anchor_attachments
 }
 
 #[test]
+fn gpu_panel_surface_cached_shapes_follow_resize_scale_palette_and_rotation() {
+    let renderer=renderer();
+    let format=wgpu::TextureFormat::Rgba8Unorm;
+    let mut retained=ViewportPresenter::for_renderer(&renderer,format);
+    for (size,turns,scale,palette,geometry) in [
+        (SIZE,0,1.,false,false),([263,229],0,1.,false,false),([263,229],1,1.,false,false),
+        ([263,229],1,1.,true,false),([263,229],1,1.,true,true),([512,448],3,2.,true,true),
+    ] {
+        let mut scene=tabbed_receiver_column();
+        if palette {scene.color=[0.1,0.3,0.2,0.8];scene.groups[0].color=[0.4,0.2,0.7,0.8];}
+        if geometry {scene.groups[0].radii=[12.,18.,6.,0.];scene.anchors[0][1]+=8.;}
+        scene.groups[1].active_tab=[126.,78.,54.,30.];
+        scene.groups[1].tab_clip=[132.,78.,40.,30.];
+        let surfaces=[scene.clone().scaled(scale),mirrored(surface(104.),false).scaled(scale)];
+        let render=|presenter:&mut ViewportPresenter| {
+            presenter.set_surface_rotation(turns);
+            presenter.set_panel_surfaces(&renderer,&surfaces);
+            let extent=if turns%2==0 {size}else {[size[1],size[0]]};
+            let target=crate::create_target(renderer.device(),extent,format,"cached panel shape transition").0;
+            presenter.present(&renderer,&target.create_view(&Default::default()),camera(size),[0.,0.,0.,1.]).unwrap();
+            crate::layer_tests::page_bytes(&renderer,&target)
+        };
+        let actual=render(&mut retained);
+        let mut fresh=ViewportPresenter::for_renderer(&renderer,format);
+        assert_eq!(actual,render(&mut fresh),"stale shape after size={size:?},turns={turns},scale={scale}");
+        assert_eq!(actual,render(&mut retained),"unchanged shape must preserve its exact pixels");
+    }
+}
+
+#[test]
+fn gpu_panel_shape_cache_recovers_a_discarded_presentation() {
+    let renderer=renderer();
+    let format=wgpu::TextureFormat::Rgba8Unorm;
+    let target=crate::create_target(renderer.device(),SIZE,format,"discarded panel mask").0;
+    let mut presenter=ViewportPresenter::for_renderer(&renderer,format);
+    presenter.set_target_retention(true);
+    presenter.set_panel_surfaces(&renderer,&[surface(104.)]);
+    presenter.present(&renderer,&target.create_view(&Default::default()),camera(SIZE),[0.,0.,0.,1.]).unwrap();
+    let replacement=mirrored(surface(77.),false);
+    presenter.set_panel_surfaces(&renderer,&[replacement.clone()]);
+    let mut discarded=renderer.device().create_command_encoder(&Default::default());
+    presenter.encode(&renderer,&mut discarded,&target.create_view(&Default::default()),camera(SIZE),[0.,0.,0.,1.]).unwrap();
+    drop(discarded);
+    assert!(presenter.needs_present(&renderer,camera(SIZE),[0.,0.,0.,1.]),"discarded shape rendering must schedule another presentation");
+    presenter.present(&renderer,&target.create_view(&Default::default()),camera(SIZE),[0.,0.,0.,1.]).unwrap();
+    let actual=crate::layer_tests::page_bytes(&renderer,&target);
+    let expected=pixels(&renderer,&mut ViewportPresenter::for_renderer(&renderer,format),&replacement,1,format);
+    assert_eq!(actual,expected,"discarded mask work must recover every original surface pixel");
+}
+
+#[test]
+fn gpu_panel_shape_cache_keeps_reprojection_and_recovers_discarded_geometry() {
+    let renderer=renderer();
+    let device=renderer.device();
+    let uniform=device.create_buffer(&wgpu::BufferDescriptor {label:Some("panel cache viewport"),
+        size:crate::present::CAMERA_SIZE,usage:wgpu::BufferUsages::UNIFORM,mapped_at_creation:false});
+    let shader=crate::present::viewport_shader(&renderer.device,wgpu::TextureFormat::Rgba8Unorm,crate::SdrSurfaceColor::Srgb,false);
+    let mut panels=super::PanelSurfaces::new(&renderer.device,&uniform,&shader,wgpu::TextureFormat::Rgba8Unorm);
+    pollster::block_on(crate::Deferred::prepare_all([&panels.pipeline,&panels.mask_pipeline])).unwrap();
+    pollster::block_on(crate::Deferred::prepare_all([&panels.profile_pipeline])).unwrap();
+    let blur=crate::create_target(device,[64,56],wgpu::TextureFormat::Rgba16Float,"panel cached blur").0;
+    let frame=|panels:&mut super::PanelSurfaces,affine| {
+        let mut encoder=device.create_command_encoder(&Default::default());
+        let mut uploads=crate::Uploads::new(device,4096);
+        panels.prepare(device,&mut uploads,&mut encoder,Some((&blur,affine)),SIZE,0).unwrap();
+        uploads.finish(&encoder);
+        encoder
+    };
+    let mut scene=surface(104.);
+    panels.set(&[scene.clone()]);
+    renderer.queue().submit([frame(&mut panels,layer_core::Affine::IDENTITY).finish()]);
+    assert!(panels.mask_valid.load(std::sync::atomic::Ordering::Acquire));
+    drop(frame(&mut panels,layer_core::Affine::translation(layer_core::Point{x:4.,y:3.})));
+    assert!(panels.mask_valid.load(std::sync::atomic::Ordering::Acquire),"blur reprojection must not encode panel shape work");
+    scene.anchors[0][1]+=8.;
+    panels.set(&[scene]);
+    drop(frame(&mut panels,layer_core::Affine::IDENTITY));
+    assert!(!panels.mask_valid.load(std::sync::atomic::Ordering::Acquire),"discarded geometry cannot publish a valid mask");
+    renderer.queue().submit([frame(&mut panels,layer_core::Affine::IDENTITY).finish()]);
+    assert!(panels.mask_valid.load(std::sync::atomic::Ordering::Acquire));
+    let mask=panels.masks[0].as_ref().unwrap();
+    assert!(mask.texture.width()<=SIZE[0] && mask.texture.height()<=SIZE[1],"cache allocations stay inside the physical viewport");
+}
+
+#[test]
 fn gpu_panel_surface_remote_anchors_preserve_unattached_receiver_corners() {
     let renderer = renderer();
     let format = wgpu::TextureFormat::Rgba8Unorm;

@@ -59,6 +59,7 @@ impl PanelSurface {
 
 pub(crate) struct PanelSurfaces {
     pub pipeline: Deferred<wgpu::RenderPipeline>,
+    pub mask_pipeline: Deferred<wgpu::RenderPipeline>,
     pub profile_pipeline: Deferred<wgpu::ComputePipeline>,
     layout: wgpu::BindGroupLayout,
     profile_group: wgpu::BindGroup,
@@ -68,12 +69,21 @@ pub(crate) struct PanelSurfaces {
     data: Vec<[f32; 4]>,
     uploaded: Arc<AtomicBool>,
     buffer: wgpu::Buffer,
-    group: Option<wgpu::BindGroup>,
+    mask_layout: wgpu::BindGroupLayout,
+    mask_group: Option<wgpu::BindGroup>,
+    masks: Vec<Option<PanelMask>>,
+    mask_view: Option<([u32; 2], u32)>,
+    mask_valid: Arc<AtomicBool>,
     blur: wgpu::Texture,
     empty: wgpu::Texture,
     sampler: wgpu::Sampler,
     spacer: wgpu::BindGroup,
     camera: wgpu::BindGroup,
+}
+
+struct PanelMask {
+    texture: wgpu::Texture,
+    group: Option<wgpu::BindGroup>,
 }
 
 impl PanelSurfaces {
@@ -85,6 +95,7 @@ impl PanelSurfaces {
             storage(1,wgpu::ShaderStages::FRAGMENT,true),
             crate::bindings::texture(2,wgpu::ShaderStages::FRAGMENT,true),
             crate::bindings::sampler(3,wgpu::ShaderStages::FRAGMENT,wgpu::SamplerBindingType::Filtering),
+            crate::bindings::texture(4,wgpu::ShaderStages::FRAGMENT,false),
         ]);
         let empty_layout = crate::bindings::layout(device, "panel surface spacer", &[]);
         let spacer = crate::bindings::group(device,"panel surface spacer",&empty_layout,[]);
@@ -101,6 +112,14 @@ impl PanelSurfaces {
                 color: wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING.color,
                 alpha: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::Zero, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::Add },
             }));
+        let mask_layout=crate::bindings::layout(device,"panel coverage",&[
+            storage(0,wgpu::ShaderStages::VERTEX_FRAGMENT,true),storage(1,wgpu::ShaderStages::FRAGMENT,true),
+        ]);
+        let mask_pipeline_layout=device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label:Some("panel coverage"),bind_group_layouts:&[Some(&empty_layout),Some(&empty_layout),Some(&mask_layout)],immediate_size:0,
+        });
+        let mask_pipeline=crate::present::surface_pipeline(device,"panel coverage",&mask_pipeline_layout,shader,
+            ["panel_mask_vertex","panel_mask_fragment"],None,wgpu::TextureFormat::Rg16Float,None);
         let profile_layout = crate::bindings::layout(device,"panel boundary profiles",&[storage(0,wgpu::ShaderStages::COMPUTE,false)]);
         let profile = device.create_buffer(&wgpu::BufferDescriptor { label:Some("panel boundary profiles"),
             size:512*257*8, usage:wgpu::BufferUsages::STORAGE, mapped_at_creation:false });
@@ -119,12 +138,13 @@ impl PanelSurfaces {
             size:wgpu::Extent3d {width:1,height:1,depth_or_array_layers:1},mip_level_count:1,sample_count:1,
             dimension:wgpu::TextureDimension::D2,format:wgpu::TextureFormat::Rgba16Float,
             usage:wgpu::TextureUsages::TEXTURE_BINDING,view_formats:&[], });
-        Self { pipeline,profile_pipeline,layout,profile_group,profile,
+        Self { pipeline,mask_pipeline,profile_pipeline,layout,profile_group,profile,
             profile_ready:Arc::new(AtomicBool::new(false)),surfaces:Vec::new(),data:Vec::new(),
             uploaded:Arc::new(AtomicBool::new(false)),
             buffer:device.create_buffer(&wgpu::BufferDescriptor {label:Some("panel surface parameters"),size:64,
                 usage:wgpu::BufferUsages::STORAGE|wgpu::BufferUsages::COPY_DST,mapped_at_creation:false}),
-            group:None,blur:empty.clone(),empty,spacer,camera,
+            mask_layout,mask_group:None,masks:Vec::new(),mask_view:None,mask_valid:Arc::new(AtomicBool::new(false)),
+            blur:empty.clone(),empty,spacer,camera,
             sampler:device.create_sampler(&wgpu::SamplerDescriptor {label:Some("panel backdrop"),mag_filter:wgpu::FilterMode::Linear,min_filter:wgpu::FilterMode::Linear,..Default::default()}),
         }
     }
@@ -150,15 +170,20 @@ impl PanelSurfaces {
             ]);
         }
         self.uploaded.store(false,Ordering::Release);
+        self.mask_valid.store(false,Ordering::Release);
         true
     }
 
     pub fn ready(&self) -> bool {
-        self.pipeline.ready() && self.profile_pipeline.ready() && self.profile_ready.load(Ordering::Acquire)
+        self.pipeline.ready() && self.mask_pipeline.ready() && self.profile_pipeline.ready() && self.profile_ready.load(Ordering::Acquire)
+    }
+
+    pub fn needs_refresh(&self) -> bool {
+        !self.surfaces.is_empty() && !self.mask_valid.load(Ordering::Acquire)
     }
 
     pub fn warm_profile(&self,device: &wgpu::Device,queue: &wgpu::Queue) -> bool {
-        if !self.pipeline.ready() || !self.profile_pipeline.ready() {return false;}
+        if !self.pipeline.ready() || !self.mask_pipeline.ready() || !self.profile_pipeline.ready() {return false;}
         if !self.profile_ready.load(Ordering::Acquire) {
             let mut encoder=device.create_command_encoder(&wgpu::CommandEncoderDescriptor {label:Some("prepare panel boundary profiles")});
             self.encode_profile(&mut encoder);
@@ -180,9 +205,12 @@ impl PanelSurfaces {
     }
 
     pub fn prepare(&mut self, device: &wgpu::Device, uploads: &mut Uploads, encoder: &mut wgpu::CommandEncoder,
-        blur: Option<(&wgpu::Texture,layer_core::Affine)>) -> Result<(),GpuRasterError> {
+        blur: Option<(&wgpu::Texture,layer_core::Affine)>, extent: [u32; 2], turns: u32) -> Result<(),GpuRasterError> {
         self.encode_profile(encoder);
-        if self.surfaces.is_empty() { return Ok(()); }
+        if self.surfaces.is_empty() { self.masks.clear();return Ok(()); }
+        if self.mask_view!=Some((extent,turns)) {
+            self.mask_view=Some((extent,turns));self.mask_valid.store(false,Ordering::Release);
+        }
         let mut header=[[0.;4],[1.,0.,0.,1.],[0.;4]];
         if let Some((texture,affine))=blur {
             header[0]=[0.25/texture.width() as f32,0.25/texture.height() as f32,1.,0.];
@@ -198,19 +226,61 @@ impl PanelSurfaces {
             if self.buffer.size()<bytes.len() as u64 {
                 self.buffer=device.create_buffer(&wgpu::BufferDescriptor {label:Some("panel surface parameters"),size:(bytes.len() as u64).next_power_of_two(),
                     usage:wgpu::BufferUsages::STORAGE|wgpu::BufferUsages::COPY_DST,mapped_at_creation:false});
-                self.group=None;
+                self.mask_group=None;
+                for mask in self.masks.iter_mut().flatten() {mask.group=None;}
             }
             uploads.write(encoder,&self.buffer,bytes)?;
             self.uploaded.store(true,Ordering::Release);
             crate::submission::CacheWrite::shared(self.uploaded.clone()).track(encoder);
         }
         let texture=blur.map_or(&self.empty,|(texture,_)| texture);
-        if &self.blur!=texture { self.blur=texture.clone();self.group=None; }
-        if self.group.is_none() {
-            self.group=Some(crate::bindings::group(device,"connected panel surfaces",&self.layout,[
+        if &self.blur!=texture {
+            self.blur=texture.clone();for mask in self.masks.iter_mut().flatten() {mask.group=None;}
+        }
+        self.masks.resize_with(self.surfaces.len(),||None);
+        for (i,mask) in self.masks.iter_mut().enumerate() {
+            let area=self.data[3+i*6];
+            let size:[u32;2]=std::array::from_fn(|axis| {
+                let low=area[axis].floor().clamp(0.,extent[axis] as f32);
+                let high=(area[axis]+area[axis+2]).ceil().clamp(0.,extent[axis] as f32);
+                (high-low).max(0.) as u32
+            });
+            if size.contains(&0) {*mask=None;continue;}
+            if mask.as_ref().is_none_or(|m|[m.texture.width(),m.texture.height()]!=size) {
+                *mask=Some(PanelMask {texture:device.create_texture(&wgpu::TextureDescriptor {
+                    label:Some("panel coverage"),size:wgpu::Extent3d {width:size[0],height:size[1],depth_or_array_layers:1},
+                    mip_level_count:1,sample_count:1,dimension:wgpu::TextureDimension::D2,format:wgpu::TextureFormat::Rg16Float,
+                    usage:wgpu::TextureUsages::RENDER_ATTACHMENT|wgpu::TextureUsages::TEXTURE_BINDING,view_formats:&[],
+                }),group:None});
+                self.mask_valid.store(false,Ordering::Release);
+            }
+            let mask=mask.as_mut().unwrap();
+            if mask.group.is_none() {
+                mask.group=Some(crate::bindings::group(device,"connected panel surfaces",&self.layout,[
+                    self.buffer.as_entire_binding(),self.profile.as_entire_binding(),
+                    wgpu::BindingResource::TextureView(&self.blur.create_view(&Default::default())),wgpu::BindingResource::Sampler(&self.sampler),
+                    wgpu::BindingResource::TextureView(&mask.texture.create_view(&Default::default())),
+                ]));
+            }
+        }
+        if !self.mask_valid.load(Ordering::Acquire) {
+            let group=self.mask_group.get_or_insert_with(||crate::bindings::group(device,"panel coverage",&self.mask_layout,[
                 self.buffer.as_entire_binding(),self.profile.as_entire_binding(),
-                wgpu::BindingResource::TextureView(&self.blur.create_view(&Default::default())),wgpu::BindingResource::Sampler(&self.sampler),
             ]));
+            for (i,mask) in self.masks.iter().enumerate().filter_map(|(i,m)|m.as_ref().map(|m|(i,m))) {
+                let target=mask.texture.create_view(&Default::default());
+                let mut pass=encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label:Some("panel coverage"),color_attachments:&[Some(wgpu::RenderPassColorAttachment {
+                        view:&target,depth_slice:None,resolve_target:None,
+                        ops:wgpu::Operations {load:wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),store:wgpu::StoreOp::Store},
+                    })],depth_stencil_attachment:None,timestamp_writes:None,occlusion_query_set:None,multiview_mask:None,
+                });
+                pass.set_pipeline(&self.mask_pipeline);
+                pass.set_bind_group(0,&self.spacer,&[]);pass.set_bind_group(1,&self.spacer,&[]);pass.set_bind_group(2,&*group,&[]);
+                pass.draw(0..6,i as u32..i as u32+1);
+            }
+            self.mask_valid.store(true,Ordering::Release);
+            crate::submission::CacheWrite::shared(self.mask_valid.clone()).track(encoder);
         }
         Ok(())
     }
@@ -220,7 +290,9 @@ impl PanelSurfaces {
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0,&self.camera,&[0]);
         pass.set_bind_group(1,&self.spacer,&[]);
-        pass.set_bind_group(2,self.group.as_ref().unwrap(),&[]);
-        pass.draw(0..6,0..self.surfaces.len() as u32);
+        for (i,mask) in self.masks.iter().enumerate().filter_map(|(i,m)|m.as_ref().map(|m|(i,m))) {
+            pass.set_bind_group(2,mask.group.as_ref().unwrap(),&[]);
+            pass.draw(0..6,i as u32..i as u32+1);
+        }
     }
 }

@@ -532,6 +532,12 @@ This uses the app's pinned DXC compiler instead of falling back to system FXC.
 The example drains pen-up and host-backed raster publication before reading a
 completed stroke or changing history, outside the per-frame timing intervals.
 
+Panel surface coverage and shadows are cached until their geometry, scale,
+surface extent or rotation changes. Live backdrop, tint and HDR composition
+still run for each submitted frame. Include visible panels in before/after
+captures when changing this path, and run the panel-surface and backdrop pixel
+tests, including discarded submissions and rotated surfaces.
+
 **Pen latency (Windows).** The harness commits the requested brush diameter and
 checks its shared settled readout before injecting input. Against a Release
 build, run
