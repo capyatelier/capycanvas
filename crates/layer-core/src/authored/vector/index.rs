@@ -21,7 +21,7 @@ fn span(bounds: [f64; 4]) -> [i32; 4] {
     let cell = |v: f64| (v / CELL).floor().clamp(f64::from(i32::MIN), f64::from(i32::MAX)) as i32;
     [cell(bounds[0]), cell(bounds[1]), cell(bounds[2]), cell(bounds[3])]
 }
-fn spread([x0, y0, x1, y1]: [i32; 4]) -> i64 { (i64::from(x1) - i64::from(x0) + 1) * (i64::from(y1) - i64::from(y0) + 1) }
+fn spread([x0, y0, x1, y1]: [i32; 4]) -> i64 { (i64::from(x1) - i64::from(x0) + 1).saturating_mul(i64::from(y1) - i64::from(y0) + 1) }
 fn meets(a: [f64; 4], b: [f64; 4]) -> bool { a[0] <= b[2] && b[0] <= a[2] && a[1] <= b[3] && b[1] <= a[3] }
 
 impl VectorIndex {
@@ -186,4 +186,23 @@ mod tests {
         assert_eq!(index.within(&object, area), VectorIndex::default().within(&object, area), "undo to the first version finds what a fresh index finds");
         assert_eq!(index.within(&current, area), VectorIndex::default().within(&current, area));
     }
+    #[test]
+    fn extreme_finite_queries_match_the_linear_oracle() {
+        assert_eq!(spread([i32::MIN, i32::MIN, i32::MAX, i32::MAX]), i64::MAX);
+        let object = VectorObject::from_records(vec![line(1, [0., 0.], [100., 0.]), line(2, [0., 600.], [9000., 6400.])]);
+        let mut index = VectorIndex::default();
+        index.update(&object);
+        for area in [
+            [-f64::MAX, -f64::MAX, f64::MAX, f64::MAX],
+            [-f64::MAX, 0., f64::MAX, f64::MAX],
+            [250., 250., 260., 260.],
+        ] {
+            let expected: Vec<_> = object.chunks().iter().enumerate().flat_map(|(chunk, records)|
+                VectorIndex::visible(records).filter(move |(_, bounds)| meets(*bounds, area))
+                    .map(move |(record, _)| (chunk as u32, record))).collect();
+            assert_eq!(index.candidates(area), expected);
+        }
+        assert_eq!(index.within(&object, [-f64::MAX, -f64::MAX, f64::MAX, f64::MAX]), [ItemId(1), ItemId(2)].into());
+    }
+
 }
