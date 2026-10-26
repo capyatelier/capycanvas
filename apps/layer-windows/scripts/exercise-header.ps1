@@ -568,7 +568,7 @@ function Check-ZenToolbar([string]$Theme) {
     Wait-Until {(Model).chrome_hidden -and !(ToolbarGroup).zen_kept -and !(Find 'ribbon-grip-toolbar' -Visible)} 'Outside touch did not hide the peeked toolbar'
     (Control 'drawing-canvas').SetFocus()
     [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),[uint16]0x4B)
-    Wait-Until {(Find 'command-search' -Visible) -and (Control 'command-search-query').Current.HasKeyboardFocus -and (Model).state.workspace.zen_mode} 'Command search did not open in Zen'
+    Wait-Until {(Find 'command-search' -Visible) -and (Control 'command-search').Current.HasKeyboardFocus -and (Model).state.workspace.zen_mode} 'Command search did not open in Zen'
     [CapyRowPointer]::Key([uint32]$review.Id,0x1B)
     Wait-Until {!(Find 'command-search' -Visible) -and !(Search-State) -and (Model).chrome_hidden -and (Model).state.workspace.zen_mode} 'One Escape did not close only command search in Zen'
     (Control 'drawing-canvas').SetFocus();[CapyRowPointer]::Key([uint32]$review.Id,0x1B)
