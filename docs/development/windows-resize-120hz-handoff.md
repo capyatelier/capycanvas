@@ -22,6 +22,8 @@ git merge-base --is-ancestor 80973432e HEAD
 if ($LASTEXITCODE -ne 0) { throw 'Missing frame-based workspace observation' }
 git merge-base --is-ancestor 846aabea3 HEAD
 if ($LASTEXITCODE -ne 0) { throw 'Missing background snapshot decoding' }
+git merge-base --is-ancestor f09f45b0d HEAD
+if ($LASTEXITCODE -ne 0) { throw 'Missing retained panel graphics and Navigator geometry fix' }
 ```
 
 `d66f45ed9` retains shared layout content, moves swap-chain configuration and
@@ -51,9 +53,18 @@ to 5.57–6.19 ms and reduces cadence to 97–105 changes/s. `CTitleBar` appears
 In Capy, extension off from construction, with the unsupported Tall setter
 omitted, still retains `AppWindowTitleBarFeature` and `CTitleBar::UpdateSize`.
 That control needs 17.2–18.5 ms per native change and does not measure removal of
-the feature. Production chrome remains unchanged. A custom frame needs a scratch
-WinUI input-routing check before implementation, including child-window hit
-testing, caption drags, Snap, accessibility and fullscreen restoration.
+the feature. Production chrome remains unchanged. A scratch frame using public
+nonclient input regions passes mouse/pen/touch client clicks, caption drags and
+diagonal resizing. The initial child-window transparency approach fails actual
+dragging despite correct direct hit-test replies. Maximization needs the client
+rectangle constrained to the work area and hit regions expressed in client
+coordinates. Reliable repeated fullscreen restoration, caption visual states,
+Snap, physical close and dark/inactive styling remain unverified. This is a
+feasibility result, not a production replacement or a measured Capy speedup.
+The same-content minimal timing pair needs 3.77–4.41 ms per native change with
+custom regions, versus 1.70–2.33 ms with the default frame. `CTitleBar` leaves
+the captured motion stacks, but native region publication remains prominent.
+The client extents differ; see the full limits in the linked tier table.
 
 The panel milestone moves unexpanded fills into retained compositor vector
 geometry and caches blurred shadow patches. The normal XAML background host
@@ -68,13 +79,17 @@ one physical pixel of the reference contour; uniform interior colors match
 exactly. Hardware checks cover 150% scale, with window-free shadow math at
 100%, 150% and 200%.
 
+The pushed panel milestone is `f09f45b0d`. Its normal Release x64 rebuild with
+current-main Rust and the focused native tests pass. The timings above retain
+their frozen baseline Rust identity; they do not measure the newly rebuilt DLL.
+
 Navigator cutouts also observe native size changes through a coalesced callback.
 This removes a stale surround exposed by configuration resizing. Check the live
 visible overview bounds against the published slot intersected with its clip;
 the tracked expansion journey waits for that agreement after resizing.
 
 This remains above the 8.33 ms CPU budget. Next measurements should separate
-header placement from restyling and move packet decoding/diffing off the UI
+header placement from restyling and convert and diff decoded packets off the UI
 thread. Keep the remaining native title-bar feature in the profile; changing
 the extension flag alone does not eliminate it. Preserve the current chrome
 until a custom-frame feasibility check and decision are complete.

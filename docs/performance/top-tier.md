@@ -244,7 +244,7 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 | Web tool bubble drag through four neighbours | 120 | Unmeasured after the bubble release fixes; desktop browser journeys do not qualify the reference tablet | [Web checks](../development/web.md#tests), 2026-10-24 |
 | GTK Tool Set hover and press animation | 120 | Desktop diagnostic: **117.76 changing-color presents/s**, 116.67–118.08 per case; pooled gap p99 16.646 ms. Reference hardware unmeasured | [GTK tool caption hover](#gtk-tool-caption-hover), 2026-10-26 |
 | Panel or column resize | 120 | Expanding GTK divider desktop diagnostic: **54.49/s**, p99 41.689 ms; misses the 114 Hz floor. **Desktop diagnostic misses.** GTK GPU joins: 81.59–112.27 changing-geometry presents/s at 1×; 38.96–92.31 at 2×, worst p99 74.986 ms. Reference-tier qualification remains unset. Web Navigator: 30.00–30.64 Chrome surface presents/s; p99 50.00–58.34 ms | [Web Navigator layout](#web-navigator-layout), 2026-10-19; [GTK Color resize](#gtk-color-panel-resize), 2026-10-10; [GTK column bridge diagnostic](#gtk-column-bridge-diagnostic), 2026-10-25; [GTK Tool Set density](#gtk-tool-set-density), 2026-10-26; [GTK toolbar dividers](#gtk-toolbar-divider-resize), 2026-10-26 |
-| Windows window resize | 120 | Unqualified; local 60 Hz fast corner resize still visibly misses: native size changes 47–49/s, UI CPU 84–92%, transient black regions. Publication-only timings do not establish resize performance | [Windows window resize](#windows-window-resize), 2026-10-26 |
+| Windows window resize | 120 | Unqualified; retained-panel diagnostic on the local 60 Hz laptop: 53.8–55.7 native changes/s, 89.3–91.4% UI CPU, pooled 16.48/16.58 ms per observed change for growth/reversal. Frozen-Rust host comparison; displayed motion and reference hardware remain unmeasured | [Windows window resize](#windows-window-resize), 2026-10-26 |
 | Pen pressure utility and curve drag | 120 | **Unqualified.** Current GTK desktop panel 119.20–119.40 presents/s, p99 up to 9.207 ms; curve 120.00, p99 up to 8.470 ms; reference tablet unmeasured | [GTK pen pressure utility](#gtk-pen-pressure-utility), 2026-10-10 UTC |
 | Windows tool bubble drag through four neighbours | 120 | Unmeasured on reference hardware; Surface Pro / Adreno X1-85 functional checks do not qualify timing (PresentMon ETW access denied) | [Windows tool bubbles](../development/windows.md#tool-bubbles) |
 | Windows HDR color bubble drag and intensity scrub | 120 | Unmeasured on reference hardware; native input and pixel checks do not qualify presentation timing (PresentMon ETW access denied) | [Windows tool bubbles](../development/windows.md#tool-bubbles) |
@@ -5428,6 +5428,9 @@ colorization, title painting and child-window repositioning. This control does
 not measure removal of that feature. Tall cannot be set with extension off;
 the separate control that sets Tall before turning extension off also retains
 `CTitleBar` and shows no consistent improvement. Production chrome is unchanged.
+Capy accesses the title-bar object during startup, resize metric reads,
+prepared-window styling and model-driven color updates; the extension-off
+control leaves those other paths active.
 
 Both `attribute-owners.awk` and `attribute-stacks.awk` use phases 0 and 2. Their
 disjoint sample shares are diagnostics, not CPU-time attribution. Full tallies,
@@ -5437,6 +5440,56 @@ under `artifacts/windows/resize-followup/step12-33db3fe98/` and
 UIA lookup times out before input or sampling; its unchanged repeat passes and
 the invalid attempt is excluded. These 60 Hz measurements are native bounds
 observations, not presented FPS or 120 Hz qualification.
+
+### Scratch native frame
+
+A standalone WinUI prototype keeps the same XAML header and body in two builds:
+default native chrome and a custom frame using public nonclient input regions,
+with no title-bar APIs. Both use the identical runtime as the controls above.
+Each runs twice with the same 18-second outer-size workload and 200 raw UI
+stack samples. Per-resize region readbacks are removed, and unchanged region
+kinds are cached. The missed shrink contact is excluded in all four runs.
+
+| Frame | Native changes/s, growth/reversal | UI CPU | UI CPU ms/observed change | Title-bar samples: owner / nearest leaf |
+| --- | ---: | ---: | ---: | ---: |
+| Default native, same XAML content | 168.2–168.6 / 165.3–171.2 | 28.6–38.5% | 1.70–2.33 | 0/230 / 0/230 |
+| Custom, public nonclient regions | 171.8–172.4 / 165.3–167.7 | 65.1–72.9% | 3.77–4.41 | 0/230 / 0/230 |
+
+At 150% scale both start at an outer 1100 × 750 pixels, but the custom client
+is 1100 × 750 and the default client is 1078 × 694. This extent difference
+limits the comparison. These are 60 Hz native-bounds diagnostics, not displayed
+FPS, a measured Capy speedup or a production-ready replacement.
+
+Both attribution methods retain 230 moving samples per variant:
+
+| Method and category | Default samples | Custom samples |
+| --- | ---: | ---: |
+| Owning callback: other app code | 0 | 206 |
+| Owning callback: window messages/composition/unresolved | 218 | 10 |
+| Owning callback: XAML measure/arrange | 8 | 9 |
+| Owning callback: XAML render walk | 4 | 5 |
+| Nearest leaf: window regions | 3 | 102 |
+| Nearest leaf: XAML layout | 6 | 7 |
+| Nearest leaf: XAML render/composition | 7 | 13 |
+| Either method: title bar | 0 | 0 |
+
+The broad app-owner bucket includes calls into the SDK. Inclusive custom
+stacks contain nonclient input-source paths in 217/230 samples, region
+publication in 102/230 and `NtUserSetWindowRgn` in 61/230; these overlap.
+`PaintState` appears in only 1/230 samples. The evidence points to native
+region publication as remaining prototype work, rather than caption restyling.
+Full tallies, exact binary/PDB identities and raw runs stay under
+`artifacts/windows/resize-followup/custom-frame-timing/paired-report.md`.
+
+Public regions pass native mouse/pen/touch caption dragging, diagonal resizing
+and client activation. The discarded child `HTTRANSPARENT` approach fails an
+actual drag despite passing direct hit-test probes. Maximized custom client
+bounds initially extend 11 pixels past each work-area edge; constraining the
+client in `WM_NCCALCSIZE` fixes that, while preserving invisible outer borders.
+Hit regions then use client coordinates. Repeated fullscreen restoration,
+caption hover/pressed/cancel visuals, Snap, physical close and dark/inactive
+styling remain unverified. Controller encoding and transition failures are
+preserved in the local feasibility report. Production chrome is unchanged.
 
 ### Retained panel graphics
 
