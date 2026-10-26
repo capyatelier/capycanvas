@@ -95,7 +95,8 @@ touch gestures.
 AppKit forwards indirect trackpad contacts with stable IDs, native timestamps
 and positions in the touch device's point coordinates. Shared Rust recognizes
 the [three-finger scrub](../../docs/ui/settings.md#touch-gestures-and-pen-buttons)
-on both Apple hosts. Trackpad contacts do not generate tap shortcuts or duplicate
+and quick inward-pinch fit and reverse-pinch restore on both Apple hosts.
+Trackpad contacts do not generate Undo/Redo tap or hold shortcuts, or duplicate
 native two-finger pan, pinch and rotation. Native navigation pauses while three
 or more fingers are down and until a recognized scrub's last finger lifts.
 System-reserved trackpad gestures must reach the app for recognition to work.

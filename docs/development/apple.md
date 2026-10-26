@@ -157,10 +157,10 @@ apps installed under the old `art.capycanvas.apple.ipad` and
 never read or replace; leave them and their data alone.
 
 The Mac app runs in the App Sandbox with the hardened runtime in every
-configuration. `macOS/App/CapyCanvas.entitlements` grants only
-`com.apple.security.app-sandbox` and
-`com.apple.security.files.user-selected.read-write`: files reach the app
-through Open and Save panels, Finder, drag and drop and the clipboard. Its
+configuration. `macOS/App/CapyCanvas.entitlements` grants
+`com.apple.security.app-sandbox`, user-selected read/write access and
+`com.apple.security.files.bookmarks.app-scope` for retained file grants. Files
+reach the app through Open and Save panels, Finder, drag and drop and the clipboard. Its
 storage folders live in `~/Library/Containers/<bundle id>/Data`. The iPad app
 needs no entitlements.
 

@@ -57,9 +57,12 @@ write_json(manifest / "Contents.json", {
     "info": {"version": 1, "author": "xcode"},
 })
 for prefix, folder in (("preview", "brush-previews"), ("filter", "filter-previews")):
-    for stale in CATALOG.glob(f"{prefix}-*.imageset"):
-        shutil.rmtree(stale)
-    for source in sorted((ROOT / "apps/layer-web" / folder).glob("*.webp")):
+    sources = sorted((ROOT / "apps/layer-web" / folder).glob("*.webp"))
+    names = {f"{prefix}-{source.stem}.dataset" for source in sources}
+    for stale in CATALOG.glob(f"{prefix}-*.*set"):
+        if stale.name not in names:
+            shutil.rmtree(stale)
+    for source in sources:
         dest = CATALOG / f"{prefix}-{source.stem}.dataset"
         dest.mkdir(exist_ok=True)
         shutil.copy2(source, dest / source.name)

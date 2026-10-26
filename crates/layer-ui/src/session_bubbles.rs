@@ -224,7 +224,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     fn hdr_color_bubbles(&self) -> bool {
-        matches!(self.state.platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Windows | Platform::Mac | Platform::Ios) && self.selection_masks.target().is_none()
+        self.selection_masks.target().is_none()
             && self.engine.document().composition().color.depth.is_float()
     }
 
