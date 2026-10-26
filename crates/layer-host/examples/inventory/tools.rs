@@ -1,4 +1,4 @@
-//! Follow the rendered tool choices instead of duplicating the list of modes.
+//! Traverse catalog entry points and their rendered tool choices.
 use super::*;
 use std::collections::{BTreeSet, VecDeque};
 
@@ -8,6 +8,8 @@ pub(super) fn inventory(platform: Platform) -> Vec<Value> {
         .tool_commands
         .iter()
         .map(|&command| vec![UiAction::Invoke { command }])
+        .chain(catalog.brush_categories.iter().flat_map(|category| &category.brushes)
+            .map(|brush| vec![UiAction::SelectBrush { id: brush.id }]))
         .collect();
     let mut visited = BTreeSet::new();
     let mut result = Vec::new();
@@ -81,8 +83,14 @@ pub(super) fn inventory(platform: Platform) -> Vec<Value> {
 fn tool_paths_restore_remembered_brush_families() {
     for platform in [Platform::Mac, Platform::Ios] {
         let choices = inventory(platform);
-        let groups: Vec<_> = choices.iter().filter(|choice| choice["select"]["type"] == "select_tool_group").collect();
-        assert!(!groups.is_empty());
-        for group in groups { assert!(group["error"].is_null(), "{group}"); }
+        for brush in layer_ui::ui_catalog().brush_categories.iter().flat_map(|category| &category.brushes) {
+            let selected = json!(UiAction::SelectBrush { id: brush.id });
+            let visits: Vec<_> = choices.iter().filter(|choice| choice["select"] == selected).collect();
+            assert_eq!(visits.len(), 1, "Every catalog preset must have its own inventory path: {selected}");
+            assert!(visits[0]["error"].is_null(), "{}", visits[0]);
+        }
+        let sets: Vec<_> = choices.iter().filter(|choice| choice["select"]["type"] == "select_brush_set").collect();
+        assert!(!sets.is_empty());
+        for set in sets { assert!(set["error"].is_null(), "{set}"); }
     }
 }

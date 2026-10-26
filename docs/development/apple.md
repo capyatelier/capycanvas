@@ -1098,7 +1098,9 @@ python3 apps/layer-apple/scripts/test-property-audit.py "$TMPDIR/capy-inventory.
 ```
 
 Passing the audit establishes catalog coverage, not working native workflows.
-The inventory restores editing memory before each tool path and compares all
+The inventory visits every catalog tool command and brush preset, then follows
+the rendered choices; flattened or singleton tool groups cannot hide a preset.
+It restores editing memory before each tool path and compares all
 authored filter values, including values hidden by conditional controls. Projected
 control readbacks retain their published types; Undo, Redo and rejected locked
 or disabled edits also compare the complete authored effect and spatial mapping.
