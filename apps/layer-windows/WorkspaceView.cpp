@@ -431,6 +431,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
                 root.Children().Append(group.shadow.Root());root.Children().Append(group.frame);
                 AutomationProperties::SetAutomationId(group.frame,L"workspace-group-"+to_hstring(id));
             }
+            AutomationProperties::SetName(group.frame,str(panel,L"title"));
             group.geometry=geometry;group.offset={};
             if(float fit=groupRadius(geometry)*CornerFit;group.frame.CornerRadius().TopLeft!=fit){group.frame.CornerRadius({fit,fit,fit,fit});group.border.CornerRadius({fit,fit,fit,fit});}
             // Geometry-only changes retain controls, focus, capture and scroll.
@@ -750,7 +751,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             double bodyHeight=std::max(0.,double(previewBox.Height)-(flag(geometry,L"tabs_visible")?36.:0.)
                 -num(object(geometry,L"footer_grip"),L"height"));
             double minimum=object(geometry,L"tiles").Size()?0.:num(geometry,L"min_body_height");
-            if(group.bodyViewport)group.bodyViewport.Height(std::max(bodyHeight,minimum));
+            if(group.bodyViewport){auto height=std::max(bodyHeight,minimum);group.bodyViewport.Height(height);group.body->Root().Height(height);group.bodyScroll.Height(bodyHeight);}
             group.body->Layout(geometry);
             if(group.footer){
                 auto grip=rectangle(object(group.geometry,L"footer_grip"));

@@ -397,6 +397,9 @@ and checks that the accepted color comes from under the finger while the loupe
 is lifted above it at the current display scale.
 
 The Layers panel presents shared attachment actions, owner visibility and group mode.
+Workspace groups use their shared panel title as the accessible name. Native panel
+content and scroll viewports use the allocated body height and shared minimum, so
+fields remain reachable inside short groups.
 Decorative clipping rails and effect links use realized thumbnail geometry and remain
 clipped to the scrolling viewport. A content-thumbnail drop attaches to that layer's
 output; a row drop uses shared insertion policy. Native drag feedback uses the shared
