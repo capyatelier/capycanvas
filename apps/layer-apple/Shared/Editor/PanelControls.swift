@@ -30,6 +30,7 @@ struct PanelControls: View {
         panel["id"].string == "color" && panel["controls"].array.filter { $0["visible_in_panel"].bool }.map { $0["control"].string } == ["color_wheel"]
     }
     private var padding: CGFloat { store.panelMetrics.inset }
+    private var fitsScope: Bool { ["histogram", "waveform"].contains(panel["id"].string) }
     var body: some View {
         contents.environment(\.measuresWorkspacePanel, measureForWorkspace).environment(\.compactPanelControls, true)
             .modifier(WorkspaceDrag(workspace: store.workspace, item: JSON(["kind": "panel", "panel": panel["id"].raw]),
@@ -60,7 +61,7 @@ struct PanelControls: View {
         Group {
             if scrollable {
                 GeometryReader { viewport in
-                    let maximumHeight = max(128, viewport.size.height - padding * 2)
+                    let maximumHeight = max(fitsScope ? 0 : 128, viewport.size.height - padding * 2)
                     Group {
                         if #unavailable(iOS 18.0), fitsColorWheel, colorWheelHeight(viewport.size.width) <= viewport.size.height {
                             controlBody(maximumHeight: maximumHeight).frame(height: colorWheelHeight(viewport.size.width), alignment: .top)
@@ -84,7 +85,7 @@ struct PanelControls: View {
                 }
         }.padding(padding)
             .frame(maxWidth: .infinity, alignment: .topLeading)
-            .modifier(PanelBodyMeasurement(panel: panel["id"].string,
+            .modifier(PanelBodyMeasurement(panel: panel["id"].string, intrinsicHeight: fitsScope ? padding * 2 : nil,
                 kind: scrollable && !["color", "histogram", "waveform"].contains(panel["id"].string) ? .scroll : .fixed,
                 naturalHeight: fitsColorWheel ? colorWheelHeight : nil))
     }
@@ -104,7 +105,7 @@ struct PanelControls: View {
                 ColorPanel(store: store)
             }.frame(maxHeight: maximumHeight)
         case "properties": LayerPropertiesPanel(store: store)
-        case "histogram", "waveform": ScopeControl(store: store, kind: item["control"].string)
+        case "histogram", "waveform": ScopeControl(store: store, kind: item["control"].string, maximumHeight: maximumHeight)
         case "stats": RendererStatsPanel(store: store, stats: store.rendererStats)
         case "brush_size": number(item["label"].string, key: "diameter", spec: "brush_size", action: "set_brush_size")
         case "brush_opacity": number(item["label"].string, key: "opacity", spec: "opacity", action: "set_brush_opacity")

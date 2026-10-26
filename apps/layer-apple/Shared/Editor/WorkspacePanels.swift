@@ -24,6 +24,7 @@ struct WorkspacePanels: View {
                             let handle = group["resize_handles"][index]
                             WorkspaceResizeHandle(store: store, action: JSON(["type": "resize_floating", "group": group["id"].raw, "edge": handle["edge"].raw]))
                                 .modifier(WorkspacePlacement(motion: store.workspaceMotion, group: group, bounds: handle["bounds"]))
+                                .accessibilityIdentifier("workspace-resize-\(group["id"].uint)-\(handle["edge"].string)")
                         }
                     }
                 }.modifier(WorkspaceChromeVisibility(hidden: store.snapshot["chrome_hidden"].bool && !group["floating"].bool && !group["zen_kept"].bool))

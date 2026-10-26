@@ -1,23 +1,36 @@
 import AppKit
 import SwiftUI
+import Darwin
 
 @MainActor private final class PanelGeometry {
     var navigators: [UUID: NavigatorPlacement] = [:]
 }
 
 @main struct PanelMeasurementChecks {
-    @MainActor static func main() async throws {
+    @MainActor static func main() {
         _ = NSApplication.shared
-        NSApp.setActivationPolicy(.prohibited)
-        for platform: UInt32 in [0, 1] { try await check(platform) }
+        NSApp.setActivationPolicy(.accessory)
+        Task { @MainActor in
+            do {
+                var completed = 0
+                FileHandle.standardError.write(Data("PANEL_MEASUREMENTS_BEGIN policies=2\n".utf8))
+                for platform: UInt32 in [0, 1] { try await check(platform); completed += 1 }
+                FileHandle.standardError.write(Data("PANEL_MEASUREMENTS_COMPLETE policies=\(completed) scope_matrices=\(completed * 4)\n".utf8))
+                exit(0)
+            } catch {
+                FileHandle.standardError.write(Data("FAIL: \(error)\n".utf8)); exit(1)
+            }
+        }
+        NSApp.run()
     }
     @MainActor static func check(_ platform: UInt32) async throws {
-        let store = EditorStore(platform: platform, persistence: EditorPersistence(root: nil))
+        var store = EditorStore(platform: platform, persistence: EditorPersistence(root: nil))
         let geometry = PanelGeometry()
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1200, height: 900),
                               styleMask: [.borderless], backing: .buffered, defer: true)
         window.isReleasedWhenClosed = false
         defer { window.contentView = nil; window.close() }
+        var advanceFrames: (() async -> Void)?
         func wait(_ label: String, _ predicate: () -> Bool) async throws {
             let deadline = Date().addingTimeInterval(15)
             while !predicate() {
@@ -27,6 +40,7 @@ import SwiftUI
                     FileHandle.standardError.write(Data("Measurements: \(store.snapshot["panel_measurements"].stableKey)\nGroups: \(store.snapshot["layout"]["groups"].stableKey)\nNavigators: \(geometry.navigators.count)\n".utf8))
                     throw NSError(domain: label, code: 1)
                 }
+                if let advanceFrames { await advanceFrames() }
                 try await Task.sleep(for: .milliseconds(5))
             }
         }
@@ -219,10 +233,11 @@ import SwiftUI
         for panel in ["navigator", "sizes"] where group(panel)["active"].string != panel {
             try await store.apply(["type": "select_panel_tab", "group": group(panel)["id"].raw, "panel": panel])
         }
-        window.contentView = NSHostingView(rootView: WorkspacePanels(store: store, workspace: store.workspace)
+        let host = NSHostingView(rootView: WorkspacePanels(store: store, workspace: store.workspace)
             .frame(width: 1200, height: 900).coordinateSpace(name: "editor-workspace")
             .font(.system(size: 44 / 3))
             .onPreferenceChange(NavigatorPlacements.self) { geometry.navigators = $0 })
+        window.contentView = host
         try await wait("Native labels and bodies") {
             store.snapshot["panel_measurements"].array.count == store.snapshot["panels"].array.count
                 && measured("sizes")["content_height"].number > 20 && geometry.navigators.count == 1
@@ -316,6 +331,148 @@ import SwiftUI
         try await wait("One Undo restores the docked panel") { store.state["workspace"]["layout"].stableKey == beforeDrag }
         try await store.apply(["type": "invoke", "command": "redo_workspace"])
         try await wait("One Redo restores the fitted float") { store.state["workspace"]["layout"].stableKey == afterDrag }
+        guard let path = ProcessInfo.processInfo.environment["CAPY_STORAGE_DIR"], path.hasPrefix("/") else {
+            throw NSError(domain: "The Photo scope phase requires an absolute owned CAPY_STORAGE_DIR", code: 1)
+        }
+        let photoRoot = URL(fileURLWithPath: path, isDirectory: true)
+            .appendingPathComponent("photo-scopes-\(platform)-\(UUID())", isDirectory: true)
+        try FileManager.default.createDirectory(at: photoRoot, withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700])
+        FileHandle.standardError.write(Data("SCOPE_PRIVATE_ROOT platform=\(platform) path=\(photoRoot.path) preserved=true\n".utf8))
+        store = EditorStore(platform: platform, persistence: EditorPersistence(root: photoRoot))
+        host.rootView = WorkspacePanels(store: store, workspace: store.workspace)
+            .frame(width: 1200, height: 900).coordinateSpace(name: "editor-workspace")
+            .font(.system(size: 44 / 3))
+            .onPreferenceChange(NavigatorPlacements.self) { geometry.navigators = $0 }
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        try await wait("Photo private workspace editor is ready") {
+            window.isVisible && store.workspaces?.ready == true && !store.state.isNull && !store.catalog.isNull
+        }
+        store.native?.resize(width: 1200, height: 900, scale: 1)
+        try await wait("Photo private workspace has the owned fixture viewport") {
+            store.snapshot["layout"]["viewport"].array.map(\.number) == [1200, 900]
+                && window.contentView === host
+        }
+        let native = store.native!
+        let scopeSurface = attachSurface(store, CGSize(width: 1200, height: 900))
+        defer { native.detach(); withExtendedLifetime(scopeSurface) {} }
+        advanceFrames = { await frame(native) }
+        try await prepare(native, "Photo scope analysis")
+        try await store.workspaces!.started()
+        try await store.workspaces!.perform(["type": "switch", "id": "builtin:workspace:photographer"])
+        try await wait("Photo scope group is mounted") { !group("histogram").isNull && !group("waveform").isNull }
+        func nativeElement(_ root: NSObject, _ identifier: String, depth: Int = 0) -> NSObject? {
+            guard depth < 32 else { return nil }
+            let id = NSSelectorFromString("accessibilityIdentifier")
+            if root.responds(to: id), root.perform(id)?.takeUnretainedValue() as? String == identifier { return root }
+            let children = NSSelectorFromString("accessibilityChildren")
+            let values = root.responds(to: children) ? root.perform(children)?.takeUnretainedValue() as? [NSObject] ?? [] : []
+            for child in values { if let found = nativeElement(child, identifier, depth: depth + 1) { return found } }
+            return nil
+        }
+        func nativeFrame(_ identifier: String) -> CGRect? {
+            guard let element = nativeElement(host, identifier) else { return nil }
+            let selector = NSSelectorFromString("accessibilityFrame")
+            guard element.responds(to: selector) else { return nil }
+            let frame = unsafeBitCast(element.method(for: selector),
+                to: (@convention(c) (AnyObject, Selector) -> CGRect).self)(element, selector)
+            guard frame.minX.isFinite && frame.minY.isFinite && frame.width.isFinite && frame.height.isFinite
+                && frame.width > 0 && frame.height > 0 else { return nil }
+            return CGRect(x: frame.minX - window.frame.minX, y: window.frame.maxY - frame.maxY,
+                width: frame.width, height: frame.height)
+        }
+        func scopeFrames(_ kind: String) -> [String: CGRect]? {
+            var frames: [String: CGRect] = [:]
+            for part in ["source", "channel", "chart", "log", "status", "shadows", "highlights"] {
+                guard let frame = nativeFrame("scope-\(kind)-\(part)") else { return nil }
+                frames[part] = frame
+            }
+            return frames
+        }
+        func documentWitness() -> String {
+            let layers = store.state["layers"], stamps = store.snapshot["document_tabs"]["session_stamps"]
+            let history = store.state["commands"].array.filter { ["undo", "redo"].contains($0["id"].string) }
+            precondition(!layers.array.isEmpty && !stamps.array.isEmpty && history.count == 2,
+                "Scope resizing must observe actual artwork, checkpoint owners and Undo/Redo states")
+            return JSON(["layers": layers.raw, "checkpoints": stamps.raw, "history": history.map(\.raw),
+                "selection": store.state["selection"].raw]).stableKey
+        }
+        func allocation(_ kind: String, height: Double) async throws {
+            let bounds = group(kind)["bounds"].rect
+            for phase in ["down", "move", "up"] {
+                try await store.apply(["type": "resize_floating", "group": group(kind)["id"].raw,
+                    "edge": "bottom", "phase": phase,
+                    "position": [bounds.midX, phase == "down" ? bounds.maxY : bounds.minY + height],
+                    "viewport": [1200, 900]])
+            }
+            try await wait("The real floating scope reaches its manual allocation") {
+                abs(group(kind)["bounds"]["height"].number - height) < 0.02 && window.contentView === host
+            }
+            try await wait("SCOPE_AX_PREREQUISITE: actual mounted \(kind) chart and native rows") { scopeFrames(kind) != nil }
+            try await settle()
+        }
+        func ordered(_ frames: [String: CGRect]) -> Bool {
+            frames["source"]!.maxY <= frames["chart"]!.minY
+                && frames["channel"]!.maxY <= frames["chart"]!.minY
+                && frames["chart"]!.maxY <= frames["log"]!.minY
+                && frames["log"]!.maxY <= frames["status"]!.minY
+                && frames["log"]!.maxY <= frames["shadows"]!.minY
+        }
+        for theme in ["light", "dark"] {
+            try await store.apply(["type": "set_theme", "theme": theme])
+            window.appearance = NSAppearance(named: theme == "dark" ? .darkAqua : .aqua)
+            for (index, kind) in ["histogram", "waveform"].enumerated() {
+                if !group(kind)["floating"].bool { try await float(kind, x: Double(320 + index * 320)) }
+                try await store.apply(["type": "select_panel_tab", "group": group(kind)["id"].raw, "panel": kind])
+                try await wait("The presented scope publishes real analysis") {
+                    !store.state[kind]["description"].string.isEmpty
+                }
+                try await allocation(kind, height: 450)
+                try await wait("Scope native chart and rows are exposed") {
+                    scopeFrames(kind) != nil && measured(kind)["content_height"].number > 0
+                }
+                try await settle()
+                let first = scopeFrames(kind)!, natural = measured(kind)["content_height"].number
+                let firstBounds = group(kind)["bounds"].rect
+                let artwork = documentWitness(), saved = store.state["workspace"]["layout"].stableKey
+                precondition(ordered(first), "The first real floating allocation retains ordered controls")
+                try await allocation(kind, height: 550)
+                let grown = scopeFrames(kind)!, grownBounds = group(kind)["bounds"].rect
+                FileHandle.standardError.write(Data("SCOPE_GEOMETRY platform=\(platform) theme=\(theme) kind=\(kind) first=\(first) grown=\(grown) first_group=\(firstBounds) grown_group=\(grownBounds) natural=\(natural) measured=\(measured(kind).stableKey)\n".utf8))
+                precondition(grown["chart"]!.height > first["chart"]!.height,
+                    "A taller real floating scope must grow its mounted native chart")
+                precondition(abs((grown["chart"]!.height - first["chart"]!.height)
+                    - (grownBounds.height - firstBounds.height)) < 0.02,
+                    "The chart alone consumes the added actual body height")
+                precondition(ordered(grown), "Growing the chart must retain Log and footer order")
+                for part in ["source", "channel", "log", "status", "shadows", "highlights"] {
+                    precondition(abs(grown[part]!.height - first[part]!.height) < 0.02,
+                        "Scope resizing must preserve native \(part) height")
+                }
+                precondition(abs(grown["log"]!.width - first["log"]!.width) < 0.02,
+                    "This height-only regression must retain the actual scope width")
+                precondition(abs(measured(kind)["content_height"].number - natural) < 0.02,
+                    "Allocated chart height must not replace the natural fitting request")
+                try await allocation(kind, height: 450)
+                try await wait("The same mounted chart returns to its first manual allocation") {
+                    guard let restored = scopeFrames(kind) else { return false }
+                    return abs(restored["chart"]!.height - first["chart"]!.height) < 0.02
+                        && abs(measured(kind)["content_height"].number - natural) < 0.02
+                }
+                precondition(documentWitness() == artwork && store.state["workspace"]["layout"].stableKey == saved,
+                    "Scope allocation and restoration preserve layers/checkpoints, artwork Undo/Redo and saved layout")
+                let settled = store.state["revision"].uint
+                for _ in 0..<40 {
+                    host.layoutSubtreeIfNeeded()
+                    try await Task.sleep(for: .milliseconds(5))
+                }
+                precondition(store.state["revision"].uint == settled,
+                    "Restored natural measurements must not create a publication loop")
+                FileHandle.standardError.write(Data("SCOPE_ALLOCATION_PASS platform=\(platform) theme=\(theme) kind=\(kind) heights=450,550,450\n".utf8))
+            }
+        }
+        await store.workspaces!.detached()
         print("PASS: platform \(platform), native tab/body/scroll measurements, floating/tab fit, width reflow, visibility/history, one Navigator, stable publication, frozen drag preview and fitted release with one-step history")
     }
 }

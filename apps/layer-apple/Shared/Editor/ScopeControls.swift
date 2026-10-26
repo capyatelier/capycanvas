@@ -31,27 +31,16 @@ struct ScopeGraph: View {
 struct ScopeFooter: View {
     @ObservedObject var store: EditorStore
     let kind: String
-    var logarithmic = false
     private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
     private func send(_ type: String, _ enabled: Bool) {
         store.dispatch(["type": "histogram", "action": ["type": type, "enabled": enabled]])
     }
     var body: some View {
         let view = store.state[kind], histogram = store.state["histogram"]
-        HStack(spacing: 4) {
-            Text(view["status"].string).lineLimit(1).truncationMode(.tail).foregroundStyle(palette["text"].opacity(0.7))
+        HStack(spacing: store.panelMetrics.spacing) {
+            Text(view["status"].string).lineLimit(1).truncationMode(.tail).foregroundStyle(palette["text"].opacity(0.55))
                 .frame(maxWidth: .infinity, alignment: .leading).help(view["status"].string)
                 .accessibilityIdentifier("scope-\(kind)-status")
-            if logarithmic {
-                Toggle(view["labels"][0].string, isOn: Binding(get: { view["logarithmic"].bool },
-                    set: { send(kind == "waveform" ? "waveform_logarithmic" : "logarithmic", $0) }))
-                    #if os(macOS)
-                    .toggleStyle(.checkbox)
-                    #else
-                    .toggleStyle(.switch).controlSize(.mini)
-                    #endif
-                    .lineLimit(1).fixedSize().accessibilityIdentifier("scope-\(kind)-log")
-            }
             ForEach(Array(["shadows", "highlights"].enumerated()), id: \.offset) { index, name in
                 let on = histogram[name].bool
                 Button { send(name, !on) } label: {
@@ -69,36 +58,78 @@ struct ScopeControl: View {
     @ObservedObject var store: EditorStore
     let kind: String
     var tonal = false
+    var maximumHeight: CGFloat? = nil
+    @Environment(\.measuresWorkspacePanel) private var measuresWorkspacePanel
     private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
     private func select(_ type: String, _ index: Int) {
         store.dispatch(["type": "histogram", "action": ["type": type, "index": index]])
     }
     var body: some View {
         let view = store.state[kind], waveform = kind == "waveform", copy = store.catalog["native_copy"]
-        VStack(alignment: .leading, spacing: 4) {
+        ScopeLayout(graph: tonal ? 0 : 1, maximumHeight: maximumHeight, spacing: store.panelMetrics.spacing) {
             if !tonal {
-                HStack(spacing: 4) {
+                HStack(spacing: store.panelMetrics.spacing) {
                     EditorChoice(label: copy["sampler"]["source"].string, options: view["sources"].array.map(\.string),
                         selected: Int(view["source"].uint), identifier: "scope-\(kind)-source", background: palette.controlFill, height: store.panelMetrics.height) { select("source", $0) }
                     EditorChoice(label: copy["color"]["channel"].string, options: view["channels"].array.map(\.string),
                         selected: Int(view["channel"].uint), identifier: "scope-\(kind)-channel", background: palette.controlFill, height: store.panelMetrics.height) {
                         select(waveform ? "waveform_channel" : "channel", $0)
                     }
-                }
+                }.modifier(PanelBodyMeasurement(panel: kind, part: "toolbar", spacing: store.panelMetrics.spacing))
             }
-            ScopeGraph(store: store, scopes: store.scopes, kind: kind).frame(height: tonal ? 120 : 160)
+            ScopeGraph(store: store, scopes: store.scopes, kind: kind)
+                .frame(minHeight: 0, idealHeight: tonal ? 120 : 160, maxHeight: tonal ? 120 : .infinity)
                 .overlay(alignment: .leading) {
                     if waveform {
                         VStack(alignment: .leading) {
                             Text(view["axis"][1].string); Spacer(minLength: 0); Text(view["axis"][0].string)
-                        }.padding(.leading, 3).foregroundStyle(palette["text"].opacity(0.7)).allowsHitTesting(false)
+                        }.padding(.leading, 3).foregroundStyle(palette["text"].opacity(0.55)).allowsHitTesting(false)
                     }
-                }
+                }.clipped().modifier(PanelBodyMeasurement(panel: kind, part: "graph", intrinsicHeight: tonal ? 120 : 160,
+                    spacing: store.panelMetrics.spacing))
             if !tonal && !waveform {
                 HStack { Text(view["axis"][0].string); Spacer(minLength: 0); Text(view["axis"][1].string) }
-                    .foregroundStyle(palette["text"].opacity(0.7))
+                    .foregroundStyle(palette["text"].opacity(0.55))
+                    .modifier(PanelBodyMeasurement(panel: kind, part: "axis", spacing: store.panelMetrics.spacing))
             }
-            ScopeFooter(store: store, kind: kind, logarithmic: !tonal)
-        }.accessibilityElement(children: .contain).accessibilityIdentifier("scope-" + kind)
+            if !tonal {
+                Toggle(view["labels"][0].string, isOn: Binding(get: { view["logarithmic"].bool },
+                    set: { store.dispatch(["type": "histogram", "action": ["type": waveform ? "waveform_logarithmic" : "logarithmic", "enabled": $0]]) }))
+                    .toggleStyle(PanelCheckStyle(minHeight: store.panelMetrics.height, lineLimit: nil))
+                    .accessibilityIdentifier("scope-\(kind)-log")
+                    .modifier(PanelBodyMeasurement(panel: kind, part: "log", spacing: store.panelMetrics.spacing))
+            }
+            ScopeFooter(store: store, kind: kind).modifier(PanelBodyMeasurement(panel: kind, part: "footer"))
+        }.environment(\.measuresWorkspacePanel, measuresWorkspacePanel && !tonal)
+            .accessibilityElement(children: .contain).accessibilityIdentifier("scope-" + kind)
+    }
+}
+
+private struct ScopeLayout: Layout {
+    let graph: Int
+    let maximumHeight: CGFloat?
+    let spacing: CGFloat
+    private func sizes(_ proposal: ProposedViewSize, _ subviews: Subviews) -> [CGSize] {
+        subviews.map { $0.sizeThatFits(ProposedViewSize(width: proposal.width, height: nil)) }
+    }
+    private func fixedHeight(_ sizes: [CGSize]) -> CGFloat {
+        sizes.enumerated().filter { $0.offset != graph }.reduce(0) { $0 + $1.element.height }
+            + CGFloat(max(0, sizes.count - 1)) * spacing
+    }
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let sizes = sizes(proposal, subviews), fixed = fixedHeight(sizes), natural = fixed + sizes[graph].height
+        return CGSize(width: proposal.width ?? sizes.map(\.width).max() ?? 0,
+            height: max(fixed, maximumHeight ?? natural))
+    }
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let sizes = sizes(ProposedViewSize(width: bounds.width, height: nil), subviews)
+        let graphHeight = max(0, bounds.height - fixedHeight(sizes))
+        var y = bounds.minY
+        for (index, view) in subviews.enumerated() {
+            let height = index == graph ? graphHeight : sizes[index].height
+            view.place(at: CGPoint(x: bounds.minX, y: y), anchor: .topLeading,
+                proposal: ProposedViewSize(width: bounds.width, height: height))
+            y += height + spacing
+        }
     }
 }

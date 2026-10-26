@@ -330,6 +330,9 @@ mutation or release.
   its delegate completes selection or cancellation.
 - **Panel checkboxes.** Use the shared accent and accent foreground when checked,
   and the panel border line when unchecked. Let captions request wrapping.
+- **Scopes.** Measure the toolbar, axes, Log row and footer independently. Give
+  the graph the remaining allocated height while keeping its natural workspace
+  measurement independent of the current allocation.
 - **Independent publications.** Handle small `layer-host` packets such as
   `{command_search, revision}` in `EditorSnapshotState.receive` without promoting
   the content revision or refreshing retained panels and thumbnails.
