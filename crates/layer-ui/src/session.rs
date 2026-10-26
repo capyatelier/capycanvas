@@ -1789,7 +1789,6 @@ impl<R: CanvasRenderer> UiSession<R> {
             workspace_update: self.workspace_update(),
             layout: self.layout(viewport),
             workspace_layout: crate::WorkspaceLayoutState {
-                header_presentation: &layout.header_presentation,
                 bands: &layout.bands,
                 floating: &layout.floating,
                 collapsed: &layout.collapsed,
@@ -1798,6 +1797,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 column_stacks: &layout.column_stacks,
             },
             camera: &self.state.camera,
+            header_presentation: &layout.header_presentation,
             panel_measurements: &layout.measurements,
         }
     }

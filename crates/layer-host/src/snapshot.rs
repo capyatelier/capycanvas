@@ -337,6 +337,7 @@ impl NativeHost {
         map.serialize_entry("toolbar_manager", &self.session.toolbar_manager())?;
         map.serialize_entry("panel_measurements", &state.workspace.layout.measurements)?;
         map.serialize_entry("titlebar_insets", &state.workspace.layout.titlebar_insets)?;
+        map.serialize_entry("header_presentation", &state.workspace.layout.header_presentation)?;
         map.serialize_entry(
             "header_presentation_height",
             &state.workspace.layout.header_presentation.height,
@@ -804,7 +805,15 @@ mod tests {
                 assert_eq!(packet["layout"], full["layout"]);
                 assert_eq!(packet["camera"], full["state"]["camera"]);
                 assert_eq!(initial["header"], full["header"]);
-                assert_eq!(packet["workspace_layout"]["header_presentation"], serde_json::to_value(&host.session.state().workspace.layout.header_presentation).unwrap());
+                let mut retained_layout = initial["state"]["workspace"]["layout"].clone();
+                for (field, value) in packet["workspace_layout"].as_object().unwrap() {
+                    retained_layout.as_object_mut().unwrap().insert(field.clone(), value.clone());
+                }
+                assert_eq!(retained_layout, full["state"]["workspace"]["layout"]);
+                assert!(retained_layout.get("header_presentation").is_none());
+                assert_eq!(packet["header_presentation"], full["header_presentation"]);
+                assert_eq!(packet["header_presentation"]["items"][0]["bounds"]["x"], x);
+                assert_eq!(packet["header_presentation"], serde_json::to_value(&host.session.state().workspace.layout.header_presentation).unwrap());
             }
             host.dispatch(measurement(160., 60.)).unwrap();
             let taller = layout_update(&mut host);

@@ -20,8 +20,9 @@
 //! against matching content_revision before advancing model_revision.
 //! `workspace_layout` replaces
 //! bands, floating groups, collapsed columns, column_stacks, fit_tab_groups and
-//! fit_height_groups and measured header presentation in the retained workspace;
-//! it is live gesture state, not a persistence request. Collapse/expand, content edits, completion and
+//! fit_height_groups in the retained workspace. This is live gesture state, not
+//! a persistence request. `header_presentation` separately publishes transient
+//! measured header bounds. Collapse/expand, content edits, completion and
 //! cancellation still publish full models. Consumers of take_update_bytes
 //! refresh all models at each model_revision.
 //!
@@ -53,6 +54,7 @@ pub struct WorkspaceLayoutUpdate<'a> {
     pub workspace_update: WorkspaceUpdate,
     pub layout: crate::ResolvedLayout,
     pub workspace_layout: WorkspaceLayoutState<'a>,
+    pub header_presentation: &'a crate::HeaderPresentation,
     // Work area changes without a camera navigation revision.
     pub camera: &'a crate::Camera,
     pub panel_measurements: &'a [crate::PanelMeasurement],
@@ -60,7 +62,6 @@ pub struct WorkspaceLayoutUpdate<'a> {
 
 #[derive(Serialize)]
 pub struct WorkspaceLayoutState<'a> {
-    pub header_presentation: &'a crate::HeaderPresentation,
     pub bands: &'a [crate::DockBand],
     pub floating: &'a [crate::FloatingGroup],
     pub collapsed: &'a [crate::CollapsedColumn],

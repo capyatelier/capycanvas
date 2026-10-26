@@ -69,8 +69,12 @@ target the live active layer instead of resolving it from a frontend snapshot.
 
 `ContentDrawer` uses one control factory for header and toolbar openers. Its
 columns compose Color with Palettes; Layers carries the Properties page state.
-Retained layout updates include measured header positions. Hosts apply those
-positions with the panel geometry so header drawers keep a current opener.
+Retained layout updates publish transient measured header positions as
+`header_presentation`, beside the authored `workspace_layout` patch. Full native
+snapshots publish the same field beside `state`; measurements never enter
+`state.workspace.layout`. Shared layout uses these positions to keep header
+drawers at their current opener. GTK retains the same measurements in its typed
+layout when applying panel geometry.
 Reusable panel views contain controls and have no panel background or shadow.
 Dock groups, drawers and standalone workspace chrome own their surfaces. GTK
 assigns `dock-panel` only to those containers. Configuration expansion makes
