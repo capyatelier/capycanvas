@@ -709,9 +709,7 @@ function arrange(nextLayout, layoutOnly = false) {
     customization.arrange(layout);
   }
   workspaceChrome?.arrange(layout,layoutOnly);
-  if (layoutOnly) {
-    if (editor.flushPositions() && gpuReady && app.reflow_navigators()) wake();
-  } else editor.queuePositions();
+  editor.queuePositions();
   place($("canvas-status"), layout.status);
   // The help occupies the same unobstructed area used for fitting the document.
   // Panels remain native UI siblings above the full-window drawing surface.

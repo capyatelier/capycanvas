@@ -81,6 +81,10 @@ Glass tints use representable premultiplied RGBA8 values at CSS serialization,
 so SVG filters and native backgrounds agree on solid coverage at every display
 scale.
 
+One ResizeObserver batches Navigator extents after browser layout and updates
+their GPU surfaces before painting. Resize publication does not force a native
+control bounds measurement or restore an older cached extent.
+
 The session runs on the browser event loop without shared memory. File decoding,
 encoding and color work run in `raster-worker.js` through the shared
 `package::transfer` descriptor and bounded transferable payloads. The descriptor

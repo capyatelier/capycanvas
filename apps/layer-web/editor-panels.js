@@ -11,7 +11,7 @@ import {gradientEditor} from './gradient.js';
 // DOM widgets for shared editor models. Rust owns tool/color/geometry policy.
 export function createEditorPanels({ selectionUi, app, wasmModule, state, element, button, icon, numberField, dispatch, asset, wake, applyChange, contentChanged, showContext }) {
   const catalog=liveCopy(app,"catalog"),copy=catalog.native_copy;
-  const updates = new Map(), navigators = new Set(), pendingPaints = new Set();
+  const updates = new Map(), navigators = new Map(), pendingPaints = new Set();
   let positioning = 0, nextNavigator = 1;
   const fieldWorker = createRasterWorker(wasmModule);
   const displayColors=()=>state().layer_tools.mask_editing?.colors??state().colors;
@@ -366,13 +366,10 @@ export function createEditorPanels({ selectionUi, app, wasmModule, state, elemen
   function navigatorPanel(root) {
     const overview=element("div","navigator-overview"),surface=element("canvas","navigator-surface"),clip=element("div","navigator-clip"),hole=element("div","overview-hole");clip.append(surface);overview.append(clip,hole);root.append(overview);
     const controls=createNavigationControls({element,button,icon,dispatch,commands:liveCopy(app,"catalog").navigator_commands});root.append(controls);
-    const record={id:nextNavigator++,root,overview,surface,hole,size:""};navigators.add(record);
+    const record={id:nextNavigator++,root,overview,surface,hole,size:""};navigators.set(overview,record);
     app.navigator_surface(record.id,surface);
-    const resize=new ResizeObserver(([entry])=>{
-      record.extent={width:entry.contentRect.width,height:entry.contentRect.height};
-      queuePositions();
-    });resize.observe(overview);
-    root.navigatorDispose=()=>{resize.disconnect();navigators.delete(record);app.remove_navigator_surface(record.id);};
+    navigatorSizes.observe(overview);
+    root.navigatorDispose=()=>{navigatorSizes.unobserve(overview);navigators.delete(overview);app.remove_navigator_surface(record.id);};
     let contact=null;
     const send=(e,phase)=>{const r=overview.getBoundingClientRect();dispatch({type:"navigator",phase,position:[e.clientX-r.x,e.clientY-r.y],viewport:[r.width,r.height]});};
     overview.addEventListener("pointerdown",e=>{if(e.button!==0)return;contact=e.pointerId;overview.setPointerCapture(contact);e.preventDefault();send(e,"down");});
@@ -386,17 +383,11 @@ export function createEditorPanels({ selectionUi, app, wasmModule, state, elemen
       queuePositions();
     };
   }
-  function measurePositions(synchronous=false) {
+  function measurePositions() {
     let resized=false;
-    // Observer geometry is sufficient for content/camera publications. Live
-    // resize explicitly flushes once, batching reads before surface writes.
-    const measured=[...navigators].map(record=>[record,
-      synchronous || !record.extent ? record.overview.getBoundingClientRect() : record.extent]);
-    for(const [record,r] of measured) {
-      // A live drag can flush before ResizeObserver delivers its next entry.
-      // Subsequent scheduled work must not briefly restore the older extent.
-      record.extent={width:r.width,height:r.height};
-      const {overview,hole}=record;
+    for(const record of navigators.values()) {
+      const r=record.extent;if(!r)continue;
+      const {hole}=record;
       // CSS transforms do not resize this native GPU canvas. DOM compositing
       // supplies scrolling, stacking and clipping without per-motion JS/GPU work.
       const scale=devicePixelRatio||1;
@@ -416,11 +407,17 @@ export function createEditorPanels({ selectionUi, app, wasmModule, state, elemen
     }
     return resized;
   }
-  function updatePositions(){positioning=0;if(measurePositions()&&app.reflow_navigators())wake();}
+  function updatePositions(){if(positioning)cancelAnimationFrame(positioning);positioning=0;if(measurePositions()&&app.reflow_navigators())wake();}
   function queuePositions(){if(!positioning)positioning=requestAnimationFrame(updatePositions);}
-  function flushPositions(){if(positioning)cancelAnimationFrame(positioning);positioning=0;return measurePositions(true);}
+  const navigatorSizes=new ResizeObserver(entries=>{
+    for(const entry of entries) {
+      const record=navigators.get(entry.target);
+      if(record)record.extent={width:entry.contentRect.width,height:entry.contentRect.height};
+    }
+    updatePositions();
+  });
   window.addEventListener("resize",queuePositions);
-  return {control,queuePositions,flushPositions,
+  return {control,queuePositions,
     // Paint UI rasters after controls, geometry and theme writes have settled.
     // This avoids rasterizing the old color-wheel size before arrange() resizes it.
     flushPaint(){for(const paint of [...pendingPaints])paint();},
