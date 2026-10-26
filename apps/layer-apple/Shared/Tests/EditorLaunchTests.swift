@@ -325,14 +325,22 @@ final class EditorLaunchTests: XCTestCase {
 
     @MainActor func testNewDrawingAndExportCancellation() throws {
         let app = ignoringSavedWindows(editorTestApplication())
+        #if os(iOS)
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"}]"#
+        #else
         app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"invoke","command":"new_document"}]"#
+        #endif
         app.launch()
         checkNewDrawingAndExportCancellation(in: app)
     }
 
     @MainActor func testNewDrawingAndExportCancellationDark() throws {
         let app = ignoringSavedWindows(editorTestApplication())
+        #if os(iOS)
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"dark"}]"#
+        #else
         app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"dark"},{"type":"invoke","command":"new_document"}]"#
+        #endif
         app.launch()
         checkNewDrawingAndExportCancellation(in: app)
     }

@@ -597,13 +597,12 @@ extension XCTestCase {
             XCTAssertTrue(element.waitForExistence(timeout: 15))
             element.clickOrTap()
         }
+        #if os(iOS)
+        let initialDocument = selectedNewDrawingDocument(in: app)
+        editorMenu(in: app, menu: "File", id: "new_document", label: "New…")
+        #endif
         let create = app.buttons["new-drawing-create"], resolution = newDrawingNumber("resolution", in: app)
         XCTAssertTrue(resolution.waitForExistence(timeout: 15))
-        #if os(iOS)
-        let initialTitle = editorDocumentTitle(in: app)
-        let initialDescription = initialTitle.value as? String ?? initialTitle.label
-        XCTAssertFalse(initialDescription.isEmpty)
-        #endif
         XCTAssertEqual(resolution.value as? String, "300")
         let form = XCTAttachment(screenshot: app.windows.firstMatch.screenshot())
         form.name = "new-drawing-resolution"; form.lifetime = .keepAlways; add(form)
@@ -641,10 +640,14 @@ extension XCTestCase {
         #endif
         activate(create)
         XCTAssertTrue(create.waitForNonExistence(timeout: 30))
+        #if os(iOS)
+        let created = selectedNewDrawingDocument(in: app, expectedTitle: "63 × 47")
+        #else
         let title = editorDocumentTitle(in: app)
         expectation(for: NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", "63 × 47", "63 × 47"), evaluatedWith: title)
         waitForExpectations(timeout: 30)
         let created = editorText(title)
+        #endif
         editorMenu(in: app, menu: "Image", id: "image_size", label: "Image Size…")
         let ppi = app.textFields["number-entry-image-size-resolution"], sizeApply = app.buttons["image-size-apply"]
         XCTAssertTrue(ppi.waitForExistence(timeout: 15))
@@ -703,16 +706,17 @@ extension XCTestCase {
         expectation(for: NSPredicate(format: "exists == NO"), evaluatedWith: cancel)
         #endif
         waitForExpectations(timeout: 10)
+        #if os(iOS)
+        let retained = selectedNewDrawingDocument(in: app)
+        XCTAssertEqual(retained.id, created.id, "Export cancellation must retain the drawing")
+        #else
         XCTAssertEqual(editorText(title), created, "Export cancellation must retain the drawing")
+        #endif
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)
         #if os(iOS)
         editorMenu(in: app, menu: "File", id: "close_document", label: "Close")
-        expectation(for: NSPredicate { _, _ in
-            let restored = self.editorDocumentTitle(in: app)
-            return app.state == .runningForeground &&
-                (restored.label == initialDescription || restored.value as? String == initialDescription)
-        }, evaluatedWith: app)
-        waitForExpectations(timeout: 15)
+        let restored = selectedNewDrawingDocument(in: app)
+        XCTAssertEqual(restored.id, initialDocument.id, "Closing the new drawing must restore the original drawing")
         #endif
     }
 }
