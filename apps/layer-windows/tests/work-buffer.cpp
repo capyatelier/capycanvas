@@ -12,6 +12,7 @@
 #include "../CanvasLatencyTrace.h"
 #include "../CanvasSnapshotMailbox.h"
 #include "../WorkspacePublication.h"
+#include "../WorkspaceSurfaceGeometry.h"
 #include "../GamepadState.h"
 #include <algorithm>
 #include <string>
@@ -26,6 +27,21 @@
 #endif
 
 int main() {
+    for(float scale:{1.f,1.5f,2.f}){
+        std::array<float,4> radii{18,0,12,6};
+        auto shadow=CapyUi::shadowRaster(242,400,radii,scale,12,2);
+        assert(shadow==CapyUi::shadowRaster(1200,900,radii,scale,12,2));
+        assert(shadow.padding==48*scale&&shadow.insets[0]/scale==114);
+        auto asymmetric=CapyUi::shadowRaster(500,500,{0,100,0,0},scale,12,2);
+        assert(asymmetric.panel[0]>=200*scale&&asymmetric.panel[1]>=200*scale);
+        auto shortPanel=CapyUi::shadowRaster(21,72,radii,scale,12,2);
+        assert(shortPanel.panel[0]==21*scale&&shortPanel.panel[1]==72*scale);
+        assert(shortPanel.radii[0]==10.5f*scale&&shortPanel.radii[2]==10.5f*scale);
+        assert(shortPanel.insets[0]+shortPanel.insets[2]==shortPanel.extent[0]);
+        assert(shortPanel!=CapyUi::shadowRaster(22,72,radii,scale,12,2));
+        assert(shadow!=CapyUi::shadowRaster(242,400,{18,0,0,6},scale,12,2));
+    }
+    std::cout<<"Panel shadows: fixed raster under stretch, physical corner caps and exact short axes passed\n";
     PenSourceCache penSources;
     penSources.Select("document-1/epoch-1");assert(penSources.Describe(7,false));
     assert(penSources.Update(7,"physical-pen"));assert(!penSources.Describe(7,false));assert(penSources.Describe(7,true));

@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "WorkspaceShadow.h"
+#include "WorkspaceSurface.h"
 #include <winrt/Microsoft.UI.Xaml.Hosting.h>
 #include <winrt/Windows.Graphics.h>
 #include <d2d1.h>
@@ -10,7 +11,7 @@ namespace CapyUi {
 using namespace Microsoft::UI::Composition;
 using Microsoft::UI::Xaml::Hosting::ElementCompositionPreview;
 namespace {
-constexpr float padding=48;
+constexpr float padding=WorkspaceShadowPadding;
 struct GeometrySource:winrt::implements<GeometrySource,winrt::Windows::Graphics::IGeometrySource2D,ABI::Windows::Graphics::IGeometrySource2DInterop>{
     winrt::com_ptr<ID2D1Geometry> geometry;
     explicit GeometrySource(winrt::com_ptr<ID2D1Geometry> value):geometry(std::move(value)){}
@@ -72,10 +73,13 @@ void ClipSurface(UIElement const& element,float width,float height,std::array<fl
 struct WorkspaceShadow::State {
     SpriteVisual visual{nullptr};
     DropShadow shadow{nullptr};
+    RetainedShadow retained;
+    XamlRoot::Changed_revoker scaleChanged;
+    bool rounded=false;
     float width=0,height=0,blur=8,offset=2,opacity=.16f;
     std::optional<ShadowCut> cut;
     void apply(){
-        if(!visual)return;
+        if(!visual||rounded)return;
         visual.Size({width,height});visual.Offset({padding,padding,0});
         if(cut&&width>0&&height>0){
             auto compositor=visual.Compositor();
@@ -92,11 +96,20 @@ WorkspaceShadow::WorkspaceShadow():state(std::make_shared<State>()){
     root.Loaded([state=state,host=make_weak(root),shape=make_weak(mask)](auto&&,auto&&){
         auto root=host.get();auto mask=shape.get();if(!root||!mask)return;
         auto compositor=ElementCompositionPreview::GetElementVisual(root).Compositor();
+        state->scaleChanged.revoke();
+        if(auto xaml=root.XamlRoot()){
+            state->retained.RasterizationScale(float(xaml.RasterizationScale()));
+            state->scaleChanged=xaml.Changed(auto_revoke,[weak=std::weak_ptr<State>(state)](auto&& sender,auto&&){
+                if(auto value=weak.lock())value->retained.RasterizationScale(float(sender.RasterizationScale()));
+            });
+        }
+        if(state->rounded)state->retained.Create(compositor);
         state->shadow=compositor.CreateDropShadow();state->shadow.Color({255,0,0,0});
         state->shadow.Mask(mask.GetAlphaMask());
         state->visual=compositor.CreateSpriteVisual();state->visual.Shadow(state->shadow);
-        state->apply();ElementCompositionPreview::SetElementChildVisual(root,state->visual);
+        state->apply();ElementCompositionPreview::SetElementChildVisual(root,state->rounded?state->retained.visual:state->visual);
     });
+    root.Unloaded([weak=std::weak_ptr<State>(state)](auto&&,auto&&){if(auto value=weak.lock())value->scaleChanged.revoke();});
 }
 void WorkspaceShadow::Layout(Windows::Foundation::Rect bounds,int order,bool visible){
     root.Width(bounds.Width+2*padding);root.Height(bounds.Height+2*padding);
@@ -111,7 +124,15 @@ void WorkspaceShadow::Cut(std::vector<Windows::Foundation::Point> contour){
 }
 void WorkspaceShadow::Uncut(){state->cut.reset();state->apply();}
 void WorkspaceShadow::Shape(Geometry const& geometry,float width,float height,float blur,float offset,float opacity){
+    bool rounded=std::exchange(state->rounded,false);maskHost.Visibility(Visibility::Visible);
     mask.Data(geometry);mask.Width(width);mask.Height(height);
     state->width=width;state->height=height;state->blur=blur;state->offset=offset;state->opacity=opacity;state->apply();
+    if(rounded&&state->visual)ElementCompositionPreview::SetElementChildVisual(root,state->visual);
+}
+void WorkspaceShadow::Rounded(float width,float height,std::array<float,4> radii,float blur,float offset,float opacity){
+    bool rounded=std::exchange(state->rounded,true);maskHost.Visibility(Visibility::Collapsed);
+    state->retained.Present(width,height,radii,blur,offset,opacity);
+    if(!state->retained.visual&&root.IsLoaded())state->retained.Create(ElementCompositionPreview::GetElementVisual(root).Compositor());
+    if(!rounded&&state->retained.visual)ElementCompositionPreview::SetElementChildVisual(root,state->retained.visual);
 }
 }

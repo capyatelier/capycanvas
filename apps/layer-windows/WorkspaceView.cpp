@@ -15,6 +15,7 @@
 #include "WorkspacePublication.h"
 #include "OverviewOcclusion.h"
 #include "WorkspaceShadow.h"
+#include "WorkspaceSurface.h"
 #include "WorkspaceDrawers.h"
 #include "WorkspaceBubbles.h"
 #include <set>
@@ -93,7 +94,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         Bindings paintIcons;
         ScrollView tabScroll{nullptr};
         ScrollView bodyScroll{nullptr};
-        Microsoft::UI::Xaml::Shapes::Path background;
+        WorkspaceSurface background;
         WorkspaceTabSurface strip;
         std::array<float,4> corners{SurfaceRadius,SurfaceRadius,SurfaceRadius,SurfaceRadius};
         Border footer{nullptr};
@@ -433,8 +434,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
                 group.frame.Child(group.content);group.frame.Background(clear());group.frame.CornerRadius({SurfaceRadius*CornerFit,SurfaceRadius*CornerFit,SurfaceRadius*CornerFit,SurfaceRadius*CornerFit});
                 group.frame.RenderTransform(group.translation);group.shadow.Root().RenderTransform(TranslateTransform());
                 group.content.Clip(group.clip);
-                group.background.IsHitTestVisible(false);group.background.Fill(data->brush(L"panel"));
-                group.content.Children().Append(group.background);group.content.Children().Append(group.strip.Root());group.content.Children().Append(group.border);
+                group.content.Children().Append(group.background.Root());group.content.Children().Append(group.strip.Root());group.content.Children().Append(group.border);
                 group.configurationFrame.Background(clear());group.content.Children().Append(group.configurationFrame);
                 root.Children().Append(group.shadow.Root());root.Children().Append(group.frame);
                 AutomationProperties::SetAutomationId(group.frame,L"workspace-group-"+to_hstring(id));
@@ -893,24 +893,23 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
                 {L"radius",N(radius)},{L"corners",radii},{L"width",N(num(document,L"width"))},{L"height",N(num(document,L"height"))}}).Stringify();
             if(key==group.backgroundKey)continue;group.backgroundKey=key;
             group.corners=tabbed&&!expanded?std::array<float,4>{SurfaceRadius,SurfaceRadius,corners[2],corners[3]}:corners;
-            GeometryGroup shape;shape.FillRule(FillRule::EvenOdd);
             float width=float(num(bounds,L"width")),height=float(num(bounds,L"height"));
-            auto outline=expanded?expansionShape(group.presented):tabbed?squircleRectangle(width,std::max(0.f,height-36),{0,0,corners[2],corners[3]}):squircleRectangle(width,height,corners);
+            GeometryGroup shape{nullptr};
+            if(expanded){shape=GeometryGroup();shape.FillRule(FillRule::EvenOdd);shape.Children().Append(expansionShape(group.presented));}
             cutStrip(group);
-            if(tabbed&&!expanded){TranslateTransform body;body.Y(36);outline.Transform(body);}
-            group.background.Fill(expanded?data->brush(L"panel"):data->glass(source.Size()?L"source":L"panel"));
+            float top=tabbed&&!expanded?36.f:0;
+            Canvas::SetTop(group.background.Root(),top);
+            auto color=(expanded?data->brush(L"panel"):data->glass(source.Size()?L"source":L"panel")).Color();
             if(group.header)group.header.Background(expanded?data->brush(L"tabbar"):clear());
             if(group.activeTab)for(auto layer:group.activeTab.Children())if(auto canvas=layer.try_as<Canvas>())for(auto item:canvas.Children())if(auto path=item.try_as<Microsoft::UI::Xaml::Shapes::Path>())
                 path.Fill(expanded?Brush(data->brush(L"panel")):Brush(nullptr));
             auto shadowKey=O({{L"expansion",group.presented},{L"radius",N(radius)},{L"width",bounds.GetNamedValue(L"width")},{L"height",bounds.GetNamedValue(L"height")}}).Stringify();
             if(shadowKey!=group.shadowKey){
                 group.shadowKey=shadowKey;
-                // WinUI geometries have one owner; retain a separate mask outline.
-                auto mask=expanded?expansionShape(group.presented):squircleRectangle(float(num(bounds,L"width")),float(num(bounds,L"height")),{radius,radius,radius,radius});
-                group.shadow.Shape(mask,float(num(bounds,L"width")),float(num(bounds,L"height")),expanded?36.f:12.f,expanded?8.f:2.f,expanded?.4f:.16f);
-                if(expanded)group.shadow.Uncut();else group.shadow.Cut({radius,radius,radius,radius});
+                if(expanded){group.shadow.Shape(expansionShape(group.presented),width,height,36,8,.4f);group.shadow.Uncut();}
+                else group.shadow.Rounded(width,height,{radius,radius,radius,radius},12,2,.16f);
             }
-            shape.Children().Append(outline);
+            std::vector<Rect> holes;
             for(auto value:slots){
                 auto slot=value.GetObject();auto area=array(slot,L"bounds"),clip=array(slot,L"clip");float image[4]{};
                 if(area.Size()!=4||clip.Size()!=4||!capy_navigator_image(float(area.GetNumberAt(2)),float(area.GetNumberAt(3)),
@@ -919,9 +918,11 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
                 hole=intersect(hole,{float(clip.GetNumberAt(0)),float(clip.GetNumberAt(1)),float(clip.GetNumberAt(2)),float(clip.GetNumberAt(3))});
                 if(hole.Width<=0||hole.Height<=0)continue;
                 hole.X-=float(num(bounds,L"x"));hole.Y-=float(num(bounds,L"y"));
-                RectangleGeometry cutout;cutout.Rect(hole);shape.Children().Append(cutout);
+                if(expanded){RectangleGeometry cutout;cutout.Rect(hole);shape.Children().Append(cutout);}
+                else{hole.Y-=top;holes.push_back(hole);}
             }
-            group.background.Data(shape);
+            if(expanded)group.background.Shape(shape,color);
+            else group.background.Rounded(width,std::max(0.f,height-top),tabbed?std::array<float,4>{0,0,corners[2],corners[3]}:corners,color,std::move(holes));
         }
     }
     void presentPanelBridges(){
@@ -929,7 +930,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         for(auto& [id,group]:groups){
             if(!group.frame.IsLoaded()||group.hidden)continue;
             group.gpu=panelBridgeGroup(id)&&!group.presented.Size();
-            group.background.Opacity(group.gpu?0:1);group.strip.Root().Opacity(group.gpu?0:1);group.shadow.Root().Opacity(group.gpu?0:group.frame.Opacity());
+            group.background.Root().Opacity(group.gpu?0:1);group.strip.Root().Opacity(group.gpu?0:1);group.shadow.Root().Opacity(group.gpu?0:group.frame.Opacity());
         }
     }
     void cutStrip(uint32_t id){if(auto found=groups.find(id);found!=groups.end())cutStrip(found->second);}

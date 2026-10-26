@@ -25,7 +25,7 @@ struct NavigatorView::Impl : std::enable_shared_from_this<Impl> {
     Bindings bindings;
     std::optional<uint32_t> pointer;
     hstring geometryKey;
-    bool visible=true;
+    bool visible=true,geometryQueued=false;
     Impl(std::shared_ptr<WorkspaceData> state,std::function<void()> changed):
         data(std::move(state)),layoutChanged(std::move(changed)){}
     void send(wchar_t const* phase,Point at){
@@ -35,6 +35,16 @@ struct NavigatorView::Impl : std::enable_shared_from_this<Impl> {
     }
     void cancel(){
         if(pointer){pointer.reset();send(L"cancel",{});overview.ReleasePointerCaptures();}
+    }
+    void queueGeometry(){
+        if(geometryQueued)return;geometryQueued=true;
+        auto queue=root.DispatcherQueue();
+        if(!queue||!queue.TryEnqueue(Microsoft::UI::Dispatching::DispatcherQueuePriority::Low,[weak=weak_from_this()]{
+            if(auto self=weak.lock()){
+                self->geometryQueued=false;if(!self->root.IsLoaded())return;
+                self->refreshGeometry();self->layoutChanged();
+            }
+        }))geometryQueued=false;
     }
     void init(){
         auto weak=weak_from_this();
@@ -68,13 +78,15 @@ struct NavigatorView::Impl : std::enable_shared_from_this<Impl> {
             }e.Handled(true);
         }});
         root.Unloaded([weak](auto&&,auto&&){if(auto self=weak.lock()){self->cancel();self->layoutChanged();}});
-        root.LayoutUpdated([weak](auto&&,auto&&){if(auto self=weak.lock()){self->refreshGeometry();self->layoutChanged();}});
+        auto geometryChanged=[weak](auto&&,auto&&){if(auto self=weak.lock())self->queueGeometry();};
+        root.Loaded(geometryChanged);root.SizeChanged(geometryChanged);overview.SizeChanged(geometryChanged);
+        root.LayoutUpdated([weak](auto&&,auto&&){if(auto self=weak.lock())self->layoutChanged();});
     }
     void refreshGeometry(){
         double width=root.ActualWidth(),height=root.ActualHeight();
         if(!root.IsLoaded()||width<=0||height<=0)return;
         double imageHeight=std::clamp(height-fixedHeight(),0.,naturalImage(width));
-        if(overview.Height()!=imageHeight){overview.Height(imageHeight);return;}
+        if(overview.Height()!=imageHeight)overview.Height(imageHeight);
         auto tabs=array(data->state,L"tabs");auto document=tabs.Size()?tabs.GetObjectAt(0):J{};
         float bounds[4]{};
         bool valid=capy_navigator_image(float(overview.ActualWidth()),float(overview.ActualHeight()),
@@ -105,7 +117,7 @@ struct NavigatorView::Impl : std::enable_shared_from_this<Impl> {
     void apply(bool show){
         visible=show;if(!visible)cancel();
         for(auto const& bind:bindings)bind();
-        refreshGeometry();
+        queueGeometry();
     }
     J placement(UIElement const& reference,Rect clip,int order)const{
         if(!visible||!root.IsLoaded()||overview.ActualWidth()<=8||overview.ActualHeight()<=8)return {};

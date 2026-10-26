@@ -50,11 +50,43 @@ function Dismiss([string]$Panel,[string]$Source="panel-tab-$Panel"){
     Wait-Until {$null -eq (Model).state.customization.expanded -and $null -eq (Find "panel-configuration-$Panel")} "Escape did not close $Panel configuration"
 }
 function Toggle([string]$Id){(Control $Id).GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()}
+function Wait-OverviewProjection{
+    $drawingWindow=[IntPtr]$root.Current.NativeWindowHandle
+    $origin=[CapyRowPointer+Point]::new()
+    if(![CapyRowPointer]::ClientToScreen($drawingWindow,[ref]$origin)){throw 'Cannot locate overview projection'}
+    $scale=[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.
+    Wait-Until {
+        $workspace=Workspace-Root
+        if(!$workspace){return $false}
+        $slots=@(($workspace.Current.ItemStatus|ConvertFrom-Json).overviews|Where-Object {$_.opacity -gt 0})
+        $visible=@(foreach($slot in $slots){
+            $b=$slot.bounds;$c=$slot.clip
+            $x=[Math]::Max($b[0],$c[0]);$y=[Math]::Max($b[1],$c[1])
+            $right=[Math]::Min($b[0]+$b[2],$c[0]+$c[2]);$bottom=[Math]::Min($b[1]+$b[3],$c[1]+$c[3])
+            if($right -gt $x -and $bottom -gt $y){@{left=$origin.x+$x*$scale;top=$origin.y+$y*$scale;right=$origin.x+$right*$scale;bottom=$origin.y+$bottom*$scale}}
+        })
+        $remaining=[Collections.Generic.List[object]]::new()
+        foreach($item in $root.FindAll([System.Windows.Automation.TreeScope]::Descendants,
+            [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,'navigator-overview'))){
+            $current=$item.Current;$box=$current.BoundingRectangle
+            if($current.ProcessId -eq $review.Id -and !$current.IsOffscreen -and $box.Width -gt 0 -and $box.Height -gt 0){$remaining.Add($box)}
+        }
+        if(!$visible.Count -or $visible.Count -ne $remaining.Count){return $false}
+        foreach($box in $visible){
+            $match=$remaining|Sort-Object {[Math]::Abs($_.Left-$box.left)+[Math]::Abs($_.Top-$box.top)}|Select-Object -First 1
+            if([Math]::Abs($match.Left-$box.left) -gt 2 -or [Math]::Abs($match.Top-$box.top) -gt 2 -or
+                [Math]::Abs($match.Right-$box.right) -gt 2 -or [Math]::Abs($match.Bottom-$box.bottom) -gt 2){return $false}
+            $remaining.Remove($match)|Out-Null
+        }
+        $true
+    } 'Published overview slots did not converge to live Navigator bounds'
+}
 function Check-OverviewOverlap($Configuration){
     $overview=(Control 'navigator-overview' -Within $Configuration).Current.BoundingRectangle
+    $drawingWindow=[IntPtr]$root.Current.NativeWindowHandle
     $origin=[CapyRowPointer+Point]::new()
-    if(![CapyRowPointer]::ClientToScreen($review.MainWindowHandle,[ref]$origin)){throw 'Cannot locate client capture'}
-    $scale=[CapyRowPointer]::GetDpiForWindow($review.MainWindowHandle)/96.
+    if(![CapyRowPointer]::ClientToScreen($drawingWindow,[ref]$origin)){throw 'Cannot locate client capture'}
+    $scale=[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.
     $document=(Model).state.tabs[0]
     $fit=[Math]::Min(($overview.Width-8*$scale)/$document.width,($overview.Height-8*$scale)/$document.height)
     $width=$document.width*$fit;$height=$document.height*$fit
@@ -176,7 +208,12 @@ try{
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Resize -Width 1100 -Height 1000
     Start-Sleep -Milliseconds 400
     Capture 'navigator-before' -Composed
+    & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Resize -Width 1500 -Height 1000
     $configuration=Configure 'navigator'
+    & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Resize -Width 1800 -Height 1100
+    Wait-OverviewProjection
+    & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Resize -Width 1100 -Height 1000
+    Wait-OverviewProjection
     $null=Control 'navigator-overview' -Within $configuration
     Invoke 'Test stroke' -Name
     Wait-Until {(Model).state.document_file.modified} 'Controlled stroke did not dirty the review'

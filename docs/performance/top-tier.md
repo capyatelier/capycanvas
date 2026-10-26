@@ -5406,6 +5406,109 @@ so it neither demonstrates a speedup nor rules out its cost. The scratch change
 is not shipped. Raw evidence and exclusive attribution stay in
 `artifacts/windows/resize-followup/`, including `titlebar-pair-report.md`.
 
+### Current-source title-bar controls
+
+A fresh normal x64 Release build at `33db3fe98` includes the current Rust
+interface. Host-only controls freeze that DLL. Each build runs twice in a fresh
+private Paint profile with UI tracing disabled, 200 UI stack samples per run and
+the same six-second growth and reversal contacts. The missed shrink contact is
+excluded throughout. The minimal WinUI controls use the identical runtime DLL.
+
+| Control | Native size changes/s | UI CPU | UI CPU ms/change | Title-bar samples: owner / nearest leaf |
+| --- | ---: | ---: | ---: | ---: |
+| Capy, current chrome | 45.5–52.0 | 89.0–93.2% | 17.1–20.5 | 45/231 / 46/231 |
+| Capy, extension off from construction, no Tall setter | 48.5–54.3 | 85.9–94.0% | 17.2–18.5 | 57/230 / 57/230 |
+| Minimal WinUI, plain | 169–175 | 27.6–29.4% | 1.64–1.70 | 0/230 / 0/230 |
+| Minimal WinUI, extended content and Tall title bar | 97–105 | 55.2–61.7% | 5.57–6.19 | 86/230 / 88/230 |
+
+The minimal control isolates about 4 ms more UI CPU per observed native change.
+In Capy, turning extension off changes the visible chrome but retains
+`AppWindowTitleBarFeature::FeatureProc` → `CTitleBar::UpdateSize`, caption bitmap
+colorization, title painting and child-window repositioning. This control does
+not measure removal of that feature. Tall cannot be set with extension off;
+the separate control that sets Tall before turning extension off also retains
+`CTitleBar` and shows no consistent improvement. Production chrome is unchanged.
+
+Both `attribute-owners.awk` and `attribute-stacks.awk` use phases 0 and 2. Their
+disjoint sample shares are diagnostics, not CPU-time attribution. Full tallies,
+per-contact numbers, exact binaries/PDB identities and composed captures remain
+under `artifacts/windows/resize-followup/step12-33db3fe98/` and
+`artifacts/windows/resize-followup/minimal-controls/`. One minimal-window startup
+UIA lookup times out before input or sampling; its unchanged repeat passes and
+the invalid attempt is excluded. These 60 Hz measurements are native bounds
+observations, not presented FPS or 120 Hz qualification.
+
+### Retained panel graphics
+
+The host-only comparison based on `33db3fe98` freezes the same current Rust DLL
+and repeats the explicit Paint workload twice per build. Unexpanded fills use
+retained compositor vector paths with padded render bounds; their XAML Canvas
+hosts no longer change size. Shadows capture a canonical blurred outline and
+stretch nine retained patches, keeping exact short dimensions where opposing
+corners or blur interact. Expanded joined outlines keep their existing paths.
+
+| Phase | Baseline native changes/s | Retained changes/s | Baseline UI CPU | Retained UI CPU | Pooled UI CPU ms/change, before → after |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Growth | 48.5–52.0 | 54.5–55.2 | 89.0% | 89.3–91.4% | 17.72 → 16.48 |
+| Reversal | 45.5–51.3 | 53.8–55.7 | 92.4–93.2% | 90.4–91.1% | 19.17 → 16.58 |
+
+Pooled CPU time divided by counted native changes falls 7.0% and 13.6%.
+These two repeats support a local improvement; the sample remains limited.
+UI work stays above the 8.33 ms CPU budget for one change per 120 Hz frame
+and does not qualify presented motion.
+
+Both attribution methods use 231 baseline and 230 candidate motion samples:
+
+| Method and category | Baseline samples | Retained samples |
+| --- | ---: | ---: |
+| Nearest leaf: JSON | 40 | 48 |
+| Nearest leaf: XAML layout | 11 | 16 |
+| Nearest leaf: XAML render/composition | 35 | 32 |
+| Nearest leaf: title bar | 46 | 52 |
+| Owning callback: apply layout packet | 30 | 31 |
+| Owning callback: measurements/backgrounds | 30 | 16 |
+| Owning callback: header reflow/present | 8 | 12 |
+| Owning callback: caption regions | 6 | 13 |
+| Owning callback: XAML measure/arrange | 15 | 20 |
+| Owning callback: XAML render walk | 31 | 27 |
+| Owning callback: title bar | 45 | 52 |
+
+These sample counts do not establish time spent in individual owners. Remaining
+packet access, header presentation and title-bar work still need measurement.
+The new vector fill does not appear as a point-construction hot path in these
+samples. Raw contacts, exact PDB identities and complete tallies remain in
+`artifacts/windows/resize-followup/step12-33db3fe98/retained-panels-observer-report.md`.
+
+Removing incidental XAML redraws exposes a stale Navigator surround during
+configuration resizing. A diagnostic retains a 120.7-DIP cutout while the
+published overview is 169.3 DIP. Navigator now observes root and overview size
+changes through one deferred callback and keeps the height setter's current
+actual-size geometry pass. The native cutout, visible control and published
+slot converge within one physical pixel, without an idle UI loop. The corrected
+paper fit is 321 × 242 pixels, versus the old stale 315 × 237 fit; the separate
+white strip disappears. The projection regression gate rejects the stale
+capture and accepts the corrected capture. Sizing rules are unchanged.
+
+The hardware composition fixture compares light/dark plain, small, fractional,
+asymmetric, square-top, Navigator-hole and translucent surfaces. All 16 normal
+cases preserve uniform interior colors exactly and stay within one physical
+pixel of the reference contour. Quarter-DIP placement has boundary antialiasing
+differences: horizontal scanline endpoints can differ by four pixels near a
+horizontal tangent, while symmetric two-dimensional contour distance remains
+at most one pixel. The unchanged two-pixel geometric check rejects the discarded
+stretched-corner candidate at 15.7–18.9 pixels; separate interior checks reject
+its successor's seams. Pixel evidence stays under
+`artifacts/windows/resize-followup/surface-visual/`.
+
+The window-free native executable passes its shadow-cache, asymmetric-radius,
+physical-cap and exact-short-axis assertions at scales 1, 1.5 and 2. The normal
+Release native build passes. Baseline and candidate each pass the focused
+light/dark routes: caption drags, mouse/pen/touch header clicks, fullscreen
+restore, retained controls, panel acknowledgement convergence, Navigator
+configuration expansion/resizing/dismissal and normal close. Hardware pixels
+and input are checked at 150% scale; other display densities and 120 Hz
+presentation remain unverified.
+
 ### Exposed-area color probes
 
 On the same 2.5.1 runtime and minimal blue-Grid window, an opaque magenta

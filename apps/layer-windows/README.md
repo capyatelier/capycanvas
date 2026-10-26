@@ -90,6 +90,13 @@ whole client area, including behind the custom title bar.
   retains the latest layout before any subsequent motion and camera updates.
   Glass topology requests a redraw and compact metadata without invalidating
   retained content. The UI coalesces queued glass collection requests.
+- **Panel surfaces.** Unexpanded groups draw their squircle fills and Navigator
+  holes through retained compositor vector geometry. Render bounds round outward
+  to preserve fractional edge coverage. Their XAML hosts do not resize.
+  Blurred shadows retain fixed corner patches and stretch their flat areas;
+  sources change with style, display density or a short dimension where opposing
+  corners or shadows interact. Expanded joined outlines retain their exact paths.
+  Navigator cutouts follow native size changes through a coalesced UI callback.
 - **Workers.** File, clipboard, profile, settings and SQLite work runs on workers;
   the render thread polls completions without blocking. Replaced GPU resources
   retire off the render thread.

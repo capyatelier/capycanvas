@@ -35,31 +35,49 @@ The frozen 60 Hz diagnostic and its limits are in
 Its 5.1–5.5 ms Paint publication mean excludes deferred glass and other WinUI
 layout/composition work. It does not establish a 120 Hz frame budget.
 
-The fast two-axis follow-up still reproduces grow-only black right/bottom regions
-that clear on release. Retaining unchanged layout callbacks removes an 80% idle
-UI feedback loop, but rapid resizing still uses 88–92% UI CPU with only 27–28
-native window-size changes/s on the 60 Hz laptop. Treat the landed improvements
-as partial. Subsequent frame-based workspace observation and direct caption
-regions improve native size changes to about 43/s, with 90–95% UI CPU after
-the latest rebase. Black regions
-remain. A minimal WinUI window with a solid Grid and two corner markers also
-shows grow-only black bands without Rust, a GPU swap chain or editor work;
-Capy's heavier UI work greatly increases the lag. The earlier approximately 58
-renderer calls/s did not measure native UI cadence. Prioritize the remaining
-WinUI drawing/layout, native window regions, packet parsing and framework
-resize synchronization. The last bounded UI stack sample shows the earlier
-bridge/background and repeated stringification hot paths largely removed;
-it does not identify another small unchanged-geometry cache fix. Inspect the
-composed native controls as well as the canvas. Saved models confirm that
-the local fixture's `Sketch` filename label actually used the default Paint
-workspace; select and verify the workspace explicitly on the receiving computer.
+The fresh normal Release baseline at `33db3fe98` reaches 45.5–52.0 native size
+changes/s with 89.0–93.2% UI CPU, or 17.1–20.5 ms UI CPU per native change.
+These are two runs on the 60 Hz laptop, with Paint selected explicitly, private
+profiles and UI tracing disabled. The six-second growth and reversal contacts
+engage; the missed shrink contact is excluded. Renderer calls do not establish
+native UI cadence or displayed FPS. Inspect the composed controls and canvas.
+Earlier local filenames labelled `Sketch` actually used Paint; select and verify
+the workspace explicitly on the receiving computer.
 
-Background decoding subsequently reaches 46.8/49.0 native size changes/s for
-growth/reversals, with 84.0/92.4% UI CPU on the same frozen-Rust diagnostic.
-Queries retain snapshot-before-reply ordering while parsing moves off the UI
-thread. Black regions remain. The title-bar-disabled scratch experiment retains
-`CTitleBar` stacks and `WS_CAPTION`, so its inconsistent result does not establish
-the effect of removing native title-bar work. It is not a shipped chrome change.
+The matching-runtime minimal window needs 1.64–1.70 ms UI CPU per change and
+reaches 169–175 native changes/s. Enabling extended content and Tall raises that
+to 5.57–6.19 ms and reduces cadence to 97–105 changes/s. `CTitleBar` appears in
+37% of owning-callback motion samples, versus zero in the plain control.
+In Capy, extension off from construction, with the unsupported Tall setter
+omitted, still retains `AppWindowTitleBarFeature` and `CTitleBar::UpdateSize`.
+That control needs 17.2–18.5 ms per native change and does not measure removal of
+the feature. Production chrome remains unchanged. A custom frame needs a scratch
+WinUI input-routing check before implementation, including child-window hit
+testing, caption drags, Snap, accessibility and fullscreen restoration.
+
+The panel milestone moves unexpanded fills into retained compositor vector
+geometry and caches blurred shadow patches. The normal XAML background host
+does not resize. On the same frozen-Rust comparison, pooled UI CPU per native
+change falls from 17.72 to 16.48 ms during growth and from 19.17 to 16.58 ms during
+reversals. Two-run cadence ranges are 54.5–55.2 and 53.8–55.7 native changes/s;
+these remain limited 60 Hz diagnostics. Light/dark
+appearance, caption/header input, fullscreen restoration, retained controls,
+panel acknowledgements, configuration expansion/resizing/dismissal and normal
+close pass. Subpixel positions retain boundary antialiasing differences within
+one physical pixel of the reference contour; uniform interior colors match
+exactly. Hardware checks cover 150% scale, with window-free shadow math at
+100%, 150% and 200%.
+
+Navigator cutouts also observe native size changes through a coalesced callback.
+This removes a stale surround exposed by configuration resizing. Check the live
+visible overview bounds against the published slot intersected with its clip;
+the tracked expansion journey waits for that agreement after resizing.
+
+This remains above the 8.33 ms CPU budget. Next measurements should separate
+header placement from restyling and move packet decoding/diffing off the UI
+thread. Keep the remaining native title-bar feature in the profile; changing
+the extension flag alone does not eliminate it. Preserve the current chrome
+until a custom-frame feasibility check and decision are complete.
 
 Matching-background experiments also fail to recolor the exposed bands. A solid
 magenta compositor backdrop, a custom `Window.SystemBackdrop`, and a native
