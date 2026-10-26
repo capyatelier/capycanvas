@@ -42,8 +42,11 @@ remain. A minimal WinUI window with a solid Grid and two corner markers also
 shows grow-only black bands without Rust, a GPU swap chain or editor work;
 Capy's heavier UI work greatly increases the lag. The earlier approximately 58
 renderer calls/s did not measure native UI cadence. Prioritize the remaining
-native layout/geometry cost and framework resize synchronization, and inspect
-the composed native controls as well as the canvas. Saved models confirm that
+WinUI drawing/layout, native window regions, packet parsing and framework
+resize synchronization. The last bounded UI stack sample shows the earlier
+bridge/background and repeated stringification hot paths largely removed;
+it does not identify another small unchanged-geometry cache fix. Inspect the
+composed native controls as well as the canvas. Saved models confirm that
 the local fixture's `Sketch` filename label actually used the default Paint
 workspace; select and verify the workspace explicitly on the receiving computer.
 

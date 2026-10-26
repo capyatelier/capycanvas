@@ -5346,3 +5346,14 @@ UI CPU, and 0% settled idle UI CPU. Reversal black interior reaches 36.4%, with
 not isolate the observation change from the incoming panel-height change.
 Exact sources, binary hashes, raw inputs, CPU samples and composed images are retained in
 `artifacts/windows/resize-followup/`, including `minimal-winui/`.
+
+A final bounded UI stack pass on the same native binary captures 200 independent
+snapshots, including 115 during motion. Compared with the pre-coalescing sample,
+background callbacks fall from 44 moving snapshots to 0 and bridge measurement
+from 27 to 1. Remaining stacks include XAML drawing/layout, native window regions
+and packet parsing. Inclusive counts overlap and are not CPU percentages; this
+sample does not identify another small geometry-cache fix. Symbol-network timeout
+requires offline resolution, leaving 110 of 11,617 frames unmapped. The owned app
+closes through the fixture's cleanup path; the regular close assertion is not
+reached in this profiling pass. The separate light/dark functional close checks
+pass normally. Raw stacks and symbolization evidence stay with the local run.
