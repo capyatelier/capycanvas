@@ -1,4 +1,4 @@
-param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme='dark')
+param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme='dark',[ValidateSet('all','baseline','cold-controls','first-curve','deferred','deferred-prior-edit','response','overlays')][string]$Journey='all')
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
@@ -427,12 +427,14 @@ function Short-Viewport{
     Capture 'short-viewport' -WithModel -Composed
     Native-Click 'pen-tilt-close';Maximize-DrawingWindow
 }
+$completed=[Collections.Generic.List[string]]::new()
 try{
     Enter-CapyEnvironment
     $env:CAPY_STORAGE_DIR=Join-Path $run 'profile'
     [IO.File]::WriteAllText((Settings-File),(@{theme=$Theme;cursor='none';language=@{Explicit='en'}}|ConvertTo-Json -Depth 4))
     $env:CAPY_TRACE_UI='1';$env:CAPY_SMOKE_TEST='1';$env:CAPY_TEST_DISPLAY='1';$env:CAPY_TEST_PRIMARY='1'
     [CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
+    if($Journey -in @('all','baseline')){
     Start-Review -Maximized;Tool 'lasso';Open-Tilt;Assert-Geometry
     if((Tilt).ready -or (Control 'pen-tilt-apply').Current.IsEnabled){throw 'A cold editor already claims a pen device'}
     $saved=Saved;$curve=Curve;$frame=(Control 'pen-tilt-dialog' -Arranged).Current.BoundingRectangle;$beforeDrag=Model
@@ -506,15 +508,27 @@ try{
     if((Saved) -ne $persisted -or (Curve) -ne $applied -or (Json (Tilt).axes) -ne $axes){throw 'Restart did not rebind the same persisted physical-source calibration'}
     Capture 'persisted-profile' -WithModel
     Native-Click 'pen-tilt-close';Close-Review
+    $completed.Add('baseline')
+    Evidence 'checkpoint-baseline' @{journey='baseline';status='passed'}
+    }
     $env:CAPY_STORAGE_DIR=Join-Path $run 'first-contact-profile'
     [IO.File]::WriteAllText((Settings-File),(@{theme=$Theme;cursor='none';language=@{Explicit='en'}}|ConvertTo-Json -Depth 4))
-    Cold-Controls
-    First-CurveContact
-    Deferred-CurveContact
-    Deferred-CurveContact -PriorEdit
-    Response-Switching
-    Utility-Overlays
-    @{theme=$Theme;cold_lasso_and_placement='passed';circle_and_header_sensor_only='passed';all_axes_combinations='passed';curve_mouse_touch_pen='passed';apply_cancel_reset_and_restart='passed';cold_controls_and_first_curve_contact='passed';deferred_touch_binding_and_prior_intent='passed';response_switching_and_layout='passed';opaque_column_header_and_short_viewport='passed';scope='isolated OS-injected input; concurrent mouse-plus-pen, physical pen, rotated hardware and frame performance unverified';run=$run}|ConvertTo-Json
+    $journeys=[ordered]@{
+        'cold-controls'={Cold-Controls}
+        'first-curve'={First-CurveContact}
+        'deferred'={Deferred-CurveContact}
+        'deferred-prior-edit'={Deferred-CurveContact -PriorEdit}
+        'response'={Response-Switching}
+        'overlays'={Utility-Overlays}
+    }
+    foreach($name in $journeys.Keys){
+        if($Journey -ne 'all' -and $Journey -ne $name){continue}
+        Write-Output "Tilt journey: $name"
+        & $journeys[$name]
+        $completed.Add($name)
+        Evidence ('checkpoint-'+$name) @{journey=$name;status='passed'}
+    }
+    @{theme=$Theme;journey=$Journey;passed_journeys=@($completed.ToArray());scope='isolated OS-injected input; concurrent mouse-plus-pen, physical pen, rotated hardware and frame performance unverified';run=$run}|ConvertTo-Json
 }catch{
     try{Capture 'failure' -WithModel}catch{}
     [IO.File]::WriteAllText((Join-Path $run 'failure.txt'),($_|Out-String)+$_.ScriptStackTrace);throw

@@ -1,5 +1,6 @@
-param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme='dark',[int[]]$PresetIds=@())
+param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme='dark',[int[]]$PresetIds=@(),[switch]$LiquifyOnly)
 $ErrorActionPreference='Stop'
+if($LiquifyOnly -and $PresetIds.Count){throw 'LiquifyOnly cannot be combined with PresetIds'}
 $repo=(Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
 $scripts=$PSScriptRoot
 . (Join-Path $scripts 'CapyUia.ps1')
@@ -311,7 +312,7 @@ try{
   Invoke $(if(Find 'column-icon-brushes' -Visible){'column-icon-brushes'}elseif(Find 'drawer-tab-brushes' -Visible){'drawer-tab-brushes'}else{'panel-tab-brushes'})
  }
  Wait-Until {@((Model).layout.groups|Where-Object active -eq 'brushes').Count -eq 1} 'The native Tool Set did not open'
- $blenders=@(Blender-Presets)
+ $blenders=if($LiquifyOnly){@()}else{@(Blender-Presets)}
  Fit-Canvas;Park
  Wait-Until {(Model).shaders_ready} 'Requested shader preparation did not complete' 180
  $checks.requested_preparation_complete=Observe 'requested-preparation-complete' $null
@@ -325,6 +326,7 @@ try{
  $cases=[Collections.Generic.List[object]]::new()
  $presets=@(@('Wet Round',11),@('Smudge',10),@('Liquify Push',12),@('G-Pen',1),@('Pencil',2),@('Charcoal',27),@('Pastel Block',17),@('Mixing Brush',59))|ForEach-Object {[pscustomobject]@{label=$_[0];id=$_[1];group=$(if($_[1] -eq 10){'blend'}elseif($_[1] -eq 59){'oil'}else{$null})}}
  $requested=@($presets)+@($blenders|Where-Object id -ne 10)
+ if($LiquifyOnly){$requested=@($requested|Where-Object id -eq 12)}
  if($PresetIds.Count){
   foreach($id in $PresetIds){if($id -notin $requested.id){throw "Unknown brush preset: $id"}}
   $requested=@($requested|Where-Object id -in $PresetIds)
@@ -416,6 +418,7 @@ try{
   }
  }
  }
+ $checks.scope=if($LiquifyOnly){'Liquify only'}elseif($PresetIds.Count){'selected presets'}else{'all presets'}
  $checks.brush_cases='passed';$checks.preset_ids=@($cases.preset);$checks.liquify_adjust_scope=if($PresetIds.Count){'outside selected preset run'}else{'passed'};Close-Review -Discard
  Start-Review 'close-pending'
  $pending=Observe 'before-close' $null
