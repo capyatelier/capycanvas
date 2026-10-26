@@ -1,0 +1,104 @@
+name: Windows readiness
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: Full source commit SHA (defaults to this workflow commit)
+        required: false
+        type: string
+permissions:
+  contents: read
+env:
+  CARGO_TERM_COLOR: never
+  RUST_VERSION: "1.99.0"
+jobs:
+  linux-profile:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.source_ref || github.sha }}
+      - run: git rev-parse HEAD
+      - run: node --test tools/build/development-profile.test.mjs
+
+  windows-x64:
+    runs-on: windows-2025
+    timeout-minutes: 360
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.source_ref || github.sha }}
+      - run: git rev-parse HEAD
+      - run: |
+          rustup toolchain install $env:RUST_VERSION --profile minimal --target x86_64-pc-windows-msvc
+          rustup default $env:RUST_VERSION
+      - name: Build native x64 Release for WARP fixtures
+        run: ./apps/layer-windows/scripts/build.ps1 -Configuration Release -Architecture x64 -SoftwareAdapterTests -OutputDirectory artifacts/windows/SoftwareAdapter
+      - name: Native fixtures on private desktops
+        env:
+          LAYER_TEST_SOFTWARE_GPU: "1"
+          CAPY_WAIT_SCALE: "3"
+        run: |
+          $executable = (Resolve-Path artifacts/windows/SoftwareAdapter/CapyCanvas.exe).Path
+          $runner = (Resolve-Path tools/windows-vm/run-fixtures.ps1).Path
+          $desktop = (Resolve-Path apps/layer-windows/scripts/test-desktop.ps1).Path
+          $failed = [Collections.Generic.List[string]]::new()
+          $names = @(
+            'vector-layers:default', 'vector-layers:light', 'vector-layers:ToolsOnly',
+            'vector-edges:default', 'vector-edges:light',
+            'idle-brush:default', 'idle-brush:light',
+            'touch-gestures:ThreeFinger',
+            'tool-bubbles:default', 'tool-bubbles:light-mouse', 'tool-bubbles:SlidersOnly', 'header:zen'
+          )
+          foreach ($name in $names) {
+            $output = Join-Path $env:GITHUB_WORKSPACE ('artifacts/windows/readiness/' + $name.Replace(':', '-'))
+            try {
+              & $desktop -Script $runner -Parameters @{Executable=$executable; Output=$output; Name=$name} -TimeoutSeconds 1320
+              $plan = Get-Content (Join-Path $output 'plan.json') -Raw | ConvertFrom-Json
+              $results = @(Get-Content (Join-Path $output 'results.jsonl') | ConvertFrom-Json)
+              Write-Output "Expected: $($plan.runs -join ', ')"
+              $results | Format-Table name, exit, seconds, message -AutoSize
+              if (!(Test-Path (Join-Path $output 'complete'))) { throw 'Fixture runner did not complete.' }
+              if (!$plan.runs.Count -or ($plan.runs -join ',') -cne ($results.name -join ',')) { throw 'Fixture results differ from the expected plan.' }
+              if (@($results | Where-Object { $_.exit -ne 0 }).Count) { throw 'Fixture failed; inspect its result and evidence.' }
+            } catch {
+              $failed.Add($name)
+              Write-Warning "$name`: $_"
+              if (!(Test-Path (Join-Path $output 'plan.json'))) { throw }
+            }
+            $lightParameters = switch ($name) {
+              'vector-layers:ToolsOnly' { @{Executable=$executable; ToolsOnly=$true; Theme='light'} }
+              'touch-gestures:ThreeFinger' { @{Executable=$executable; ThreeFinger=$true; Theme='light'} }
+              'tool-bubbles:SlidersOnly' { @{Executable=$executable; SlidersOnly=$true; Variant='light-mouse'} }
+            }
+            if ($lightParameters) {
+              $lightName = "$name light"
+              try {
+                Write-Output "Expected: $lightName"
+                $lightScript = (Resolve-Path ("apps/layer-windows/scripts/exercise-" + ($name -split ':')[0] + '.ps1')).Path
+                & $desktop -Script $lightScript -Parameters $lightParameters -TimeoutSeconds 1320
+              } catch {
+                $failed.Add($lightName)
+                Write-Warning "$lightName`: $_"
+              }
+            }
+          }
+          if ($failed.Count) { throw "Failed fixtures: $($failed -join ', ')" }
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !cancelled() }}
+        with:
+          name: windows-x64-readiness
+          path: |
+            artifacts/windows/readiness/
+            artifacts/windows/test-desktop/
+            artifacts/windows/vector-layers/
+            artifacts/windows/vector-edges/
+            artifacts/windows/idle-brush/
+            artifacts/windows/touch-gestures/
+            artifacts/windows/tool-bubbles/
+            artifacts/windows/header/
+            artifacts/windows/SoftwareAdapter/*.log
+          if-no-files-found: warn

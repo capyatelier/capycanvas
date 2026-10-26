@@ -47,7 +47,8 @@ class BootstrapMetadataTests(unittest.TestCase):
         self.assertEqual(project.count('"-llayer_apple",'), project.count('"-lsqlite3",'))
         entitlements = plistlib.loads((APPLE / "macOS/App/CapyCanvas.entitlements").read_bytes())
         self.assertEqual(entitlements, {"com.apple.security.app-sandbox": True,
-            "com.apple.security.files.user-selected.read-write": True})
+            "com.apple.security.files.user-selected.read-write": True,
+            "com.apple.security.files.bookmarks.app-scope": True})
         for platform in ("iOS", "macOS"):
             info = plistlib.loads((APPLE / platform / "App/Info.plist").read_bytes())
             self.assertIs(info["ITSAppUsesNonExemptEncryption"], False)

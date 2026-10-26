@@ -40,6 +40,8 @@ require("node:fs").appendFileSync(process.env.COMMAND_LOG,
     if (platform === "linux") {
       assert.deepEqual(commands.shift(), ["bash", "tools/build/gtk-runtime/build.sh",
         join(bin, "gtk cache"), join(bin, "gtk cache/prefix")]);
+      assert.deepEqual(commands.shift(), ["cargo", "build", "--locked", "--profile", expected,
+        "-p", "layer-linux", "--bin", "capy-photo-reader"]);
     }
     assert.deepEqual(commands[0], platform === "linux"
       ? ["cargo", "run", "--locked", "--profile", expected, "-p", "layer-linux", "--", ...args]
