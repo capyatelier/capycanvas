@@ -935,10 +935,12 @@ impl ImageTransformState {
         }).collect::<Result<Vec<_>, _>>()?;
         let channels: Vec<_> = channel_pages.into_iter().zip(plans).map(|(pages, windows)| ChannelPlan { pages, windows }).collect();
         let mut leases = Vec::new();
-        for (snapshot, channel) in self.sources.iter().zip(&channels) {
-            let Some(snapshot) = snapshot else { continue };
-            let read: std::collections::BTreeSet<_> = channel.windows.iter().flat_map(|window| &window.jobs).flat_map(|(job, _)| job.sources.iter().copied()).collect();
-            leases.extend(snapshot.prepare_pages(r, &read.into_iter().collect::<Vec<_>>(), encoder)?);
+        for (index, channel) in channels.iter().enumerate() {
+            if self.sources[index].is_none() { continue; }
+            let read: Vec<_> = channel.windows.iter().flat_map(|window| &window.jobs).flat_map(|(job, _)| job.sources.iter().copied())
+                .collect::<std::collections::BTreeSet<_>>().into_iter().collect();
+            if index == 0 { self.capture_originals(r, encoder, &read)?; }
+            leases.extend(self.sources[index].as_ref().unwrap().prepare_pages(r, &read, encoder)?);
         }
         Ok(Some(SourcePlan { index, mesh, support, coordinates, initialize, leases, channels }))
     }
@@ -1038,9 +1040,6 @@ impl ImageTransformState {
                     Some((c, Target { texture: texture.clone(), region: target.region, initialize: target.initialize }))
                 }).collect(),
             }).collect();
-            if channel == 0 && r.device.working_format().block_copy_size(None) == Some(4) {
-                self.capture_originals(r, encoder, &windows)?;
-            }
             self.draw_windows(r, encoder, channel, transform, taps, &windows, self.has_selection)?;
         }
         // The next stroke establishes fresh stroke-scoped accumulation. Keep
@@ -1256,59 +1255,53 @@ impl ImageTransformState {
         Ok(())
     }
 
-    /// Decode each original photo or backing tile the jobs sample into a page
-    /// owned by the transaction, once. Later frames bind those pages instead
-    /// of cycling a large photo through the bounded source cache. An 8-bit
-    /// working page costs a quarter of a cached Float32 tile.
+    /// Copy the original photo or backing tiles the jobs sample into pages
+    /// owned by the transaction when the free decoded slots cannot hold them
+    /// at once. Later frames bind those pages instead of cycling a large photo
+    /// through the bounded source cache, and batches waiting for decodes resume.
     fn capture_originals(
         &mut self,
         r: &mut WgpuRasterizer,
         encoder: &mut crate::submission::CommandEncoder,
-        windows: &[Window],
+        read: &[[u32; 2]],
     ) -> Result<(), GpuRasterError> {
         let snapshot = self.sources[0].as_ref().unwrap();
-        let missing: std::collections::BTreeSet<_> = windows
-            .iter()
-            .flat_map(|window| window.jobs.iter())
-            .flat_map(|(job, _)| job.sources.iter().copied())
-            .filter(|c| !snapshot.pages.contains_key(c))
-            .collect();
-        if missing.is_empty() {
-            return Ok(());
-        }
+        let uncaptured = |c: &[u32; 2]| snapshot.contains(*c) && !snapshot.pages.contains_key(c);
+        if read.iter().filter(|c| uncaptured(c)).count() < r.source_tiles.borrow().free_slots() { return Ok(()); }
+        let missing: Vec<_> = read.iter().copied().filter(uncaptured).collect();
         let format = r.device.working_format();
-        let targets: Vec<_> = missing
-            .into_iter()
-            .map(|coordinate| {
+        let identity = layer_core::ImageTransform::default();
+        let mut waiting = false;
+        for batch in missing.chunks(SOURCE_SLOTS) {
+            let targets: Vec<_> = batch.iter().map(|&coordinate| {
                 let capture = self.captures[0]
                     .entry(coordinate)
                     .or_insert_with(|| snapshot_page(&r.device, format));
                 if capture.texture.format() != format {
                     *capture = snapshot_page(&r.device, format);
                 }
-                let target = Target {
-                    texture: capture.texture.clone(),
-                    region: PixelRect::full([PAGE_SIZE; 2]),
-                    initialize: false,
-                };
-                (coordinate, target)
-            })
-            .collect();
-        let identity = layer_core::ImageTransform::default();
-        let copies = self.plan_windows(r, 0, &identity, None, targets, snapshot.bounds)?;
-        self.draw_windows(r, encoder, 0, &identity, pixel_transform::PREVIEW_TAPS, &copies, false)?;
-        let snapshot = self.sources[0].as_mut().unwrap();
-        for (coordinate, _) in copies.iter().flat_map(|window| &window.pages) {
-            let capture = &self.captures[0][coordinate];
-            snapshot.pages.insert(
-                *coordinate,
-                snapshot::SnapshotPage {
-                    texture: capture.texture.clone(),
-                    view: capture.view.clone(),
-                },
-            );
+                (coordinate, Target { texture: capture.texture.clone(), region: PixelRect::full([PAGE_SIZE; 2]), initialize: false })
+            }).collect();
+            let snapshot = self.sources[0].as_ref().unwrap();
+            let copies = self.plan_windows(r, 0, &identity, None, targets, snapshot.bounds)?;
+            let sources: Vec<_> = copies.iter().flat_map(|window| &window.jobs).flat_map(|(job, _)| job.sources.iter().copied())
+                .collect::<std::collections::BTreeSet<_>>().into_iter().collect();
+            let _leases = match snapshot.prepare_pages(r, &sources, encoder) {
+                Err(GpuRasterError::DeferredObjectWork) => {
+                    waiting = true;
+                    if r.decode_queue_has_room() { continue; }
+                    break;
+                }
+                leases => leases?,
+            };
+            self.draw_windows(r, encoder, 0, &identity, pixel_transform::PREVIEW_TAPS, &copies, false)?;
+            let snapshot = self.sources[0].as_mut().unwrap();
+            for (coordinate, _) in copies.iter().flat_map(|window| &window.pages) {
+                let capture = &self.captures[0][coordinate];
+                snapshot.pages.insert(*coordinate, snapshot::SnapshotPage::of(&capture.texture, &capture.view));
+            }
         }
-        Ok(())
+        if waiting { Err(GpuRasterError::DeferredObjectWork) } else { Ok(()) }
     }
 
     fn capture_destination(
@@ -1483,6 +1476,7 @@ impl ImageTransformState {
         if !same_source {
             damage.extend(self.cancel_preview(r, encoder)?);
             self.capture_source(r, encoder, next.target, None, next.selection.as_ref(), (extent,None))?;
+            self.prepared_preview = layer.map(|(scene, _)| (next.clone(), scene.owner(), scene.revision()));
         }
         let regions = next
             .transform

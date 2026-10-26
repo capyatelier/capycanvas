@@ -618,3 +618,27 @@ fn mapped_display_backup_shares_one_immutable_copy() {
     assert!(pixels(&r, &source).iter().flatten().all(|value| *value == 0.));
     for view in &backup.views { assert_eq!(pixels(&r, view.texture()), before); }
 }
+
+#[test]
+fn native_previews_larger_than_the_decoded_floor_draw_from_resumed_original_captures() {
+    let doc = document_at([4097,2049]);
+    let extent = doc.composition().size;
+    let preview = layer_render::TransformPreview {transaction:1,target:source_at(&doc,0),moving:false,selection:None,
+        transform:ImageTransform::affine(Affine::around(Point {x:2048.,y:1024.},[0.8,0.9],0.15,Point::default()))};
+    let [floor,reference] = [0u64,1 << 33].map(|allowance| {
+        let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+        r.test.reference = true;
+        r.source_tiles.get_mut().admit(allowance);
+        let mut frame = packet(doc.scene(),extent);
+        crate::test_support::submit_settled(&mut r,frame);
+        frame.composite_all = false;
+        r.set_transform_preview(Some(&preview)).unwrap();
+        crate::test_support::submit_settled(&mut r,frame);
+        r
+    });
+    let pages = page_coordinates(PixelRect::full(extent)).count() as u64;
+    assert!(floor.source_tiles.borrow().admitted_bytes()[0] < pages * crate::scene::sources::FLOAT_TILE_BYTES);
+    assert!(!floor.transform_sources_pending && floor.transforms.as_ref().unwrap().has_preview());
+    assert_eq!(pixels(&floor,crate::test_support::document_texture(&floor)),pixels(&reference,crate::test_support::document_texture(&reference)),
+        "a preview reading more originals than the decoded slots hold must match one whose originals all fit");
+}

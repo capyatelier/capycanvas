@@ -263,6 +263,9 @@ impl DecodedTiles {
         self.transfer.prepare(device, space).cloned()
     }
     pub(crate) fn invalidate(&mut self) {for slot in &self.slots {slot.valid.store(false,Ordering::Release);}}
+    pub(crate) fn free_slots(&self) -> usize {
+        self.slot_limit().saturating_sub(self.slots.iter().filter(|slot| Arc::strong_count(&slot.lease) > 1).count())
+    }
     pub(crate) fn begin_unit(&mut self) { self.unit = Some(self.clock); self.overflowed = false; }
     pub(crate) fn end_unit(&mut self) -> bool { self.unit = None; std::mem::take(&mut self.overflowed) }
     pub fn prepared_view(
