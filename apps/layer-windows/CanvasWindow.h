@@ -125,12 +125,25 @@ private:
     std::unordered_set<uint64_t> consumedContacts; // render thread
     winrt::Microsoft::UI::Xaml::Controls::StackPanel toolbar;
     winrt::Microsoft::UI::Xaml::Controls::Grid root;
-    CanvasSnapshotMailbox snapshots;
-    bool snapshotPosted=false;
+    struct SnapshotState {
+        std::mutex mutex;
+        CanvasSnapshotMailbox pending;
+        CanvasQuerySlots queries;
+        std::deque<std::pair<uint64_t,std::function<void()>>> replies;
+        void Close(){pending.Close();replies.clear();}
+    };
+    struct PreparedSnapshots {
+        winrt::Windows::Data::Json::JsonObject full{nullptr},layout{nullptr},workspace{nullptr},camera{nullptr},search{nullptr},localization{nullptr},glass{nullptr};
+    };
+    std::shared_ptr<SnapshotState> snapshots=std::make_shared<SnapshotState>();
     bool glassPosted=false;
     void UpdateNavigationCursor();
     void Publish(std::string snapshot, CapySnapshotInfo const& info);
-    void ApplyPending();
+    void QueueSnapshots();
+    static winrt::fire_and_forget DecodeSnapshots(std::shared_ptr<SnapshotState>,
+        winrt::Microsoft::UI::Dispatching::DispatcherQueue,std::weak_ptr<CanvasWindow>,CanvasSnapshotMailbox::Batch);
+    void ApplyPending(PreparedSnapshots);
+    void FailPresentation(std::string);
     void ApplyModel(winrt::Windows::Data::Json::JsonObject const&);
     void Popup(bool open);
     void UpdatePopup();

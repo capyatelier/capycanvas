@@ -10,12 +10,10 @@ inline bool QueryWorkspace(PreviewTransport const& transport,J const& request,
     if(!transport||!dispatcher)return false;
     return transport(CanvasQueryKind::Workspace,to_string(request.Stringify()),
         [dispatcher,reply=std::move(reply)](PreviewPacket packet){
-            dispatcher.TryEnqueue([reply,packet=std::move(packet)]{
-                J result;
-                if(packet)try{result=J::Parse(to_hstring(NativeString(capy_preview_metadata(packet.get())).get()));}
-                    catch(hresult_error const& error){OutputDebugStringW(error.message().c_str());}
-                reply(result);
-            });
+            J result;
+            if(packet)try{result=J::Parse(to_hstring(NativeString(capy_preview_metadata(packet.get())).get()));}
+                catch(hresult_error const& error){OutputDebugStringW(error.message().c_str());}
+            dispatcher.TryEnqueue([reply,result=std::move(result)]{reply(result);});
         });
 }
 inline void actionTooltip(std::shared_ptr<WorkspaceData> const& data,FrameworkElement const& owner,Control const& target,std::function<J()> action){

@@ -6,6 +6,7 @@
 #include <optional>
 #include <string>
 #include <utility>
+#include <atomic>
 
 enum class CanvasQueryKind { Filters, Thumbnails, LayerMenu, Workspace, Document, Papers };
 using PreviewPacket=NativePreview;
@@ -40,4 +41,20 @@ public:
     void Clear(){items.clear();}
 private:
     std::deque<CanvasQuery> items;
+};
+
+class CanvasQuerySlots {
+    struct Slot {
+        std::shared_ptr<std::atomic<size_t>> count;
+        bool held=false;
+        explicit Slot(std::shared_ptr<std::atomic<size_t>> value):count(std::move(value)){}
+        ~Slot(){if(held)--*count;}
+    };
+    std::shared_ptr<std::atomic<size_t>> count=std::make_shared<std::atomic<size_t>>(0);
+public:
+    std::shared_ptr<void> Acquire(){
+        auto slot=std::make_shared<Slot>(count);
+        if(count->fetch_add(1)>=CanvasQueryQueue::MaxItems){--*count;return {};}
+        slot->held=true;return slot;
+    }
 };

@@ -244,7 +244,7 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 | Web tool bubble drag through four neighbours | 120 | Unmeasured after the bubble release fixes; desktop browser journeys do not qualify the reference tablet | [Web checks](../development/web.md#tests), 2026-10-24 |
 | GTK Tool Set hover and press animation | 120 | Desktop diagnostic: **117.76 changing-color presents/s**, 116.67–118.08 per case; pooled gap p99 16.646 ms. Reference hardware unmeasured | [GTK tool caption hover](#gtk-tool-caption-hover), 2026-10-26 |
 | Panel or column resize | 120 | Expanding GTK divider desktop diagnostic: **54.49/s**, p99 41.689 ms; misses the 114 Hz floor. **Desktop diagnostic misses.** GTK GPU joins: 81.59–112.27 changing-geometry presents/s at 1×; 38.96–92.31 at 2×, worst p99 74.986 ms. Reference-tier qualification remains unset. Web Navigator: 30.00–30.64 Chrome surface presents/s; p99 50.00–58.34 ms | [Web Navigator layout](#web-navigator-layout), 2026-10-19; [GTK Color resize](#gtk-color-panel-resize), 2026-10-10; [GTK column bridge diagnostic](#gtk-column-bridge-diagnostic), 2026-10-25; [GTK Tool Set density](#gtk-tool-set-density), 2026-10-26; [GTK toolbar dividers](#gtk-toolbar-divider-resize), 2026-10-26 |
-| Windows window resize | 120 | Unqualified; local 60 Hz fast corner resize still visibly misses: native size changes about 43/s, UI CPU 90–95%, transient black regions. Publication-only timings do not establish resize performance | [Windows window resize](#windows-window-resize), 2026-10-26 |
+| Windows window resize | 120 | Unqualified; local 60 Hz fast corner resize still visibly misses: native size changes 47–49/s, UI CPU 84–92%, transient black regions. Publication-only timings do not establish resize performance | [Windows window resize](#windows-window-resize), 2026-10-26 |
 | Pen pressure utility and curve drag | 120 | **Unqualified.** Current GTK desktop panel 119.20–119.40 presents/s, p99 up to 9.207 ms; curve 120.00, p99 up to 8.470 ms; reference tablet unmeasured | [GTK pen pressure utility](#gtk-pen-pressure-utility), 2026-10-10 UTC |
 | Windows tool bubble drag through four neighbours | 120 | Unmeasured on reference hardware; Surface Pro / Adreno X1-85 functional checks do not qualify timing (PresentMon ETW access denied) | [Windows tool bubbles](../development/windows.md#tool-bubbles) |
 | Windows HDR color bubble drag and intensity scrub | 120 | Unmeasured on reference hardware; native input and pixel checks do not qualify presentation timing (PresentMon ETW access denied) | [Windows tool bubbles](../development/windows.md#tool-bubbles) |
@@ -5357,3 +5357,42 @@ requires offline resolution, leaving 110 of 11,617 frames unmapped. The owned ap
 closes through the fixture's cleanup path; the regular close assertion is not
 reached in this profiling pass. The separate light/dark functional close checks
 pass normally. Raw stacks and symbolization evidence stay with the local run.
+
+### Background snapshot decoding
+
+A host-only comparison based on `342de5541` uses identical frozen Rust and
+explicitly selects Paint in fresh private profiles. Each build runs the same
+six-second growth and reversal contacts, with 200 bounded UI stack snapshots.
+The shrink-only contact does not engage and is excluded.
+
+| Diagnostic | Current baseline | Background decoding |
+| --- | --- | --- |
+| Growth: native size changes/s | 40.0 | 46.8 |
+| Growth: UI CPU | 87.2% | 84.0% |
+| Reversal: native size changes/s | 44.5 | 49.0 |
+| Reversal: UI CPU | 91.4% | 92.4% |
+| JSON share of attributed motion samples | 30/115 (26.1%) | 19/114 (16.7%) |
+
+These are native bounds observations and disjoint stack-sample categories,
+not displayed FPS or CPU-time attribution. JSON parsing moves to a bounded
+background job; remaining UI JSON access includes geometry and model traversal.
+The queued-snapshot barrier retains ordering for replies from the render owner.
+Black regions remain, reaching 61.9% of the inset sample grid during reversals;
+these diagnostics still do not qualify the resize target or a complete
+current-main Rust build. Focused window-free mailbox tests cover held decodes,
+anchor/query ordering, concurrent publication, terminal close and query-slot
+lifetimes. Light/dark native checks preserve caption drags, mouse/pen/touch
+header clicks, retained controls, fullscreen restore and acknowledgement
+convergence; a language change and restoration interleave resize publications.
+Both windows close normally after resizing. A parser still in flight at that
+exact close boundary is not forced by the GUI fixture. Exact reactivated-control
+values and a forced GPU acknowledgement at unchanged bounds remain unverified.
+
+The separate title-bar scratch comparison calls
+`OverlappedPresenter.SetBorderAndTitleBar(true,false)` without changing production
+chrome. Growth/reversal cadence is 46.5/41.1 size changes/s, versus 40.0/44.5;
+UI CPU is 90.3/93.2%, versus 87.2/91.4%. Both windows retain `WS_CAPTION` and
+`CTitleBar` stacks. The experiment does not isolate removal of that implementation,
+so it neither demonstrates a speedup nor rules out its cost. The scratch change
+is not shipped. Raw evidence and exclusive attribution stay in
+`artifacts/windows/resize-followup/`, including `titlebar-pair-report.md`.

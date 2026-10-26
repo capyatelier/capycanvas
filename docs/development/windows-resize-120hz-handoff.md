@@ -50,6 +50,13 @@ composed native controls as well as the canvas. Saved models confirm that
 the local fixture's `Sketch` filename label actually used the default Paint
 workspace; select and verify the workspace explicitly on the receiving computer.
 
+Background decoding subsequently reaches 46.8/49.0 native size changes/s for
+growth/reversals, with 84.0/92.4% UI CPU on the same frozen-Rust diagnostic.
+Queries retain snapshot-before-reply ordering while parsing moves off the UI
+thread. Black regions remain. The title-bar-disabled scratch experiment retains
+`CTitleBar` stacks and `WS_CAPTION`, so its inconsistent result does not establish
+the effect of removing native title-bar work. It is not a shipped chrome change.
+
 Previous `artifacts/windows/resize-investigation/` files, binaries and temporary
 UI timing probes are local and are **not delivered by Git**. Build on the new
 computer and use the tracked helpers below. No temporary probes remain in main.

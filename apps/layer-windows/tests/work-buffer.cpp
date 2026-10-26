@@ -17,6 +17,9 @@
 #include <vector>
 #include <cassert>
 #include <iostream>
+#include <atomic>
+#include <mutex>
+#include <thread>
 #ifdef _WIN32
 #include "../TraceFile.h"
 #endif
@@ -347,6 +350,77 @@ int main() {
     shown=snapshots.Take();
     assert(shown.full.empty()&&shown.workspace.empty()&&shown.camera.empty());
     std::cout<<"Canvas presentation: retained models, independent motion/camera coalescing and completion boundaries passed\n";
+    CanvasSnapshotMailbox decoding;
+    decoding.Push("full A",true,true,{},false,"catalog A",false,"glass A");
+    auto firstDecode=decoding.BeginDecode();
+    assert(firstDecode&&firstDecode->full=="full A"&&firstDecode->localization=="catalog A");
+    auto firstSequence=firstDecode->sequence;
+    assert(!decoding.IsPosted(firstSequence));
+    decoding.Push("layout B",false,true,"camera B",false,{},true,"glass B");
+    decoding.Push("motion C",false,true);
+    decoding.Push("motion D",false,true,"camera D");
+    decoding.Push("search D",false,false,{},true);
+    auto querySequence=decoding.Sequence();
+    assert(querySequence>firstSequence&&!decoding.IsPosted(querySequence));
+    decoding.Posted(firstSequence);
+    assert(decoding.IsPosted(firstSequence)&&!decoding.IsPosted(querySequence));
+    assert(!decoding.BeginDecode());
+    decoding.CompleteDecode();
+    auto secondDecode=decoding.BeginDecode();
+    assert(secondDecode&&secondDecode->full.empty()&&secondDecode->layout=="layout B"&&secondDecode->workspace=="motion D");
+    assert(secondDecode->camera=="camera D"&&secondDecode->search=="search D"&&secondDecode->glass=="glass B");
+    assert(secondDecode->sequence==querySequence);
+    decoding.Posted(secondDecode->sequence);decoding.Posted(firstSequence);
+    assert(decoding.IsPosted(querySequence));
+    decoding.Push("layout E",false,true,{},false,{},true);
+    decoding.Push("full F",true,true);
+    decoding.Push("new camera",false,false,"camera F");
+    assert(!decoding.BeginDecode());
+    decoding.CompleteDecode();
+    auto thirdDecode=decoding.BeginDecode();
+    assert(thirdDecode&&thirdDecode->full=="full F"&&thirdDecode->layout.empty()&&thirdDecode->workspace.empty());
+    assert(thirdDecode->camera=="camera F"&&thirdDecode->localization.empty()&&firstDecode->localization=="catalog A");
+    decoding.Push("dependent delta",false,true);
+    decoding.Close();decoding.CompleteDecode();
+    decoding.Push("late full",true,true);
+    assert(decoding.Closed()&&!decoding.BeginDecode()&&decoding.Take().full.empty()&&!decoding.IsPosted(querySequence));
+    std::mutex decodeMutex;
+    CanvasSnapshotMailbox concurrent;
+    concurrent.Push("initial full",true,true);
+    std::atomic<bool> published=false;
+    unsigned activeDecoders=0,decodeCount=0;
+    bool fullApplied=false;
+    std::string lastDecodedCamera;
+    auto consume=[&]{
+        for(;;){
+            std::optional<CanvasSnapshotMailbox::Batch> batch;
+            {
+                std::lock_guard lock(decodeMutex);
+                batch=concurrent.BeginDecode();
+                if(batch){assert(activeDecoders==0);++activeDecoders;++decodeCount;}
+                else if(published.load()&&activeDecoders==0)break;
+            }
+            if(!batch){std::this_thread::yield();continue;}
+            std::this_thread::yield();
+            {
+                std::lock_guard lock(decodeMutex);
+                if(!batch->full.empty())fullApplied=true;
+                if(!batch->camera.empty()){assert(fullApplied);lastDecodedCamera=batch->camera;}
+                assert(activeDecoders==1);--activeDecoders;concurrent.CompleteDecode();
+            }
+        }
+    };
+    std::thread decodeOne(consume),decodeTwo(consume);
+    std::thread publish([&]{
+        for(unsigned i=0;i<1000;++i){
+            std::lock_guard lock(decodeMutex);
+            concurrent.Push("camera update",false,false,std::to_string(i));
+        }
+        published=true;
+    });
+    publish.join();decodeOne.join();decodeTwo.join();
+    assert(fullApplied&&decodeCount>0&&lastDecodedCamera=="999");
+    std::cout<<"Canvas decoding: bounded leases, dependent batches, catalog retention, concurrent publication and terminal close passed\n";
     snapshots.Push("translated models",true,true,{},false,"Japanese context");
     snapshots.Push("newer models",true,true);
     shown=snapshots.Take();
@@ -496,6 +570,17 @@ int main() {
     assert(queries.Take(CanvasQueryKind::Workspace)->json=="second");
     assert(!queries.Take(CanvasQueryKind::Workspace));
     assert(queries.Take()->json=="menu");assert(queries.Take()->json=="thumbnail");assert(queries.Empty());
+    CanvasQuerySlots slots;
+    std::vector<std::shared_ptr<void>> held;
+    std::deque<std::function<void()>> deferred;
+    for(size_t i=0;i<CanvasQueryQueue::MaxItems;++i){held.push_back(slots.Acquire());assert(held.back());}
+    assert(!slots.Acquire());
+    for(auto const& slot:held)deferred.push_back([slot]{});
+    held.clear();assert(!slots.Acquire());
+    deferred.pop_front();auto replacement=slots.Acquire();assert(replacement&&!slots.Acquire());
+    deferred.clear();replacement.reset();
+    for(size_t i=0;i<CanvasQueryQueue::MaxItems;++i){held.push_back(slots.Acquire());assert(held.back());}
+    held.clear();
     std::cout<<"Canvas queries: menu priority, FIFO geometry/pixels, bounded retained allocation, retry ownership and disposal passed\n";
 
     std::vector<std::string> sent;

@@ -537,8 +537,27 @@ bool CanvasWindow::StartPrepared(CapyLaunch  prepared) {
 }
 bool CanvasWindow::RequestPreviews(CanvasQueryKind kind,std::string json,PreviewReply reply) {
     {std::lock_guard lock(mutex);
-        if(closing||!host||rendererDone.load()||transportFailed||(inputStopped&&kind!=CanvasQueryKind::Workspace))return false;
-        if(!previewWork.Push(CanvasQuery{kind,std::move(json),std::move(reply)}))return false;
+        if(closing||!host||rendererDone.load()||transportFailed||(inputStopped&&kind!=CanvasQueryKind::Workspace)||json.capacity()>CanvasQueryQueue::MaxPayload)return false;
+        if(kind==CanvasQueryKind::LayerMenu)previewWork.Take(kind);
+        auto state=snapshots;
+        {
+            std::lock_guard snapshotLock(state->mutex);
+            if(state->pending.Closed())return false;
+        }
+        auto reservation=state->queries.Acquire();if(!reservation)return false;
+        auto ordered=[state,reservation,reply=std::move(reply)](PreviewPacket packet)mutable{
+            auto deliver=[reservation,reply=std::move(reply),packet=std::move(packet)]()mutable{reply(std::move(packet));};
+            {
+                std::lock_guard snapshotLock(state->mutex);
+                if(state->pending.Closed())return;
+                auto sequence=state->pending.Sequence();
+                if(!state->pending.IsPosted(sequence)){
+                    state->replies.emplace_back(sequence,std::move(deliver));return;
+                }
+            }
+            deliver();
+        };
+        if(!previewWork.Push(CanvasQuery{kind,std::move(json),std::move(ordered)}))return false;
     }
     wake.notify_one();return true;
 }
@@ -1297,6 +1316,7 @@ void CanvasWindow::Stop() {
     {std::lock_guard lock(mutex);if(closing)return;}
     if(settings)settings->CommitEdits();
     {std::lock_guard lock(mutex);closing=true;}
+    {std::lock_guard lock(snapshots->mutex);snapshots->Close();}
     CancelPickerHold(xamlPickerHold);xamlPickerHold.recognizer=nullptr;xamlPickerHold.contacts.clear();xamlContacts.clear();
     CapyLifecycle("close_authorized");
     if(settings)settings->Hide();
@@ -1424,37 +1444,82 @@ void CanvasWindow::Publish(std::string snapshot,CapySnapshotInfo const& info) {
             if(auto self=weak.lock())self->UpdateNavigationCursor();
         });
     }
-    bool post;
     {
-        std::lock_guard lock(mutex);if(closing)return;
-        snapshots.Push(std::move(snapshot),full,info.workspace!=0,std::move(camera),info.search!=0,std::move(localizationBytes),info.layout!=0,std::move(glass));
-        post=!snapshotPosted;snapshotPosted=true;
+        std::lock_guard lock(snapshots->mutex);
+        snapshots->pending.Push(std::move(snapshot),full,info.workspace!=0,std::move(camera),info.search!=0,std::move(localizationBytes),info.layout!=0,std::move(glass));
     }
-    if(post)dispatcher.TryEnqueue([weak=weak_from_this()]{if(auto self=weak.lock())self->ApplyPending();});
+    QueueSnapshots();
 }
-void CanvasWindow::ApplyPending() {
-    CanvasSnapshotMailbox::Batch batch;
+void CanvasWindow::QueueSnapshots() {
+    std::optional<CanvasSnapshotMailbox::Batch> batch;
     {
-        std::lock_guard lock(mutex);snapshotPosted=false;
-        if(closing)return;
-        batch=snapshots.Take();
+        std::lock_guard lock(snapshots->mutex);batch=snapshots->pending.BeginDecode();
     }
+    if(batch)DecodeSnapshots(snapshots,dispatcher,weak_from_this(),std::move(*batch));
+}
+winrt::fire_and_forget CanvasWindow::DecodeSnapshots(std::shared_ptr<SnapshotState> state,
+    Microsoft::UI::Dispatching::DispatcherQueue queue,std::weak_ptr<CanvasWindow> owner,CanvasSnapshotMailbox::Batch raw) {
+    auto sequence=raw.sequence;
+    PreparedSnapshots batch;
+    std::string failure;
     try {
-        auto apply=[&](std::string const& bytes){
-            auto model=Windows::Data::Json::JsonObject::Parse(to_hstring(bytes));
-            if(model.HasKey(L"windows_glass"))model.Remove(L"windows_glass");
-            workspace->Apply(model);
+        co_await winrt::resume_background();
+        auto parse=[](std::string const& bytes,bool patch=false){
+            if(bytes.empty())return Windows::Data::Json::JsonObject{nullptr};
+            auto value=Windows::Data::Json::JsonObject::Parse(to_hstring(bytes));
+            if(patch&&value.HasKey(L"windows_glass"))value.Remove(L"windows_glass");
+            return value;
         };
-        if(!batch.full.empty()){
-            auto model=Windows::Data::Json::JsonObject::Parse(to_hstring(batch.full));
-            if(!batch.localization.empty())model.Insert(L"localization",Windows::Data::Json::JsonObject::Parse(to_hstring(batch.localization)));
-            ApplyModel(model);
+        batch={parse(raw.full),parse(raw.layout,true),parse(raw.workspace,true),parse(raw.camera,true),parse(raw.search,true),parse(raw.localization),parse(raw.glass)};
+    }catch(hresult_error const& error){failure=to_string(error.message());}
+     catch(std::exception const& error){failure=error.what();}
+    raw={};
+    bool failed=!failure.empty();
+    if(failed){std::lock_guard lock(state->mutex);state->Close();}
+    bool posted=false;
+    try{posted=queue.TryEnqueue([state,owner,batch=std::move(batch),failure=std::move(failure)]()mutable{
+        {
+            std::lock_guard lock(state->mutex);
+            state->pending.CompleteDecode();
+            if(state->pending.Closed()&&failure.empty())return;
         }
-        if(!closing&&!batch.layout.empty())apply(batch.layout);
-        if(!closing&&!batch.workspace.empty())apply(batch.workspace);
-        if(!closing&&!batch.camera.empty())apply(batch.camera);
-        if(!closing&&!batch.search.empty())apply(batch.search);
-        if(!closing&&!batch.glass.empty())workspace->Apply(Windows::Data::Json::JsonObject::Parse(to_hstring(batch.glass)));
+        auto self=owner.lock();if(!self||self->closing)return;
+        if(!failure.empty()){
+            self->FailPresentation(std::move(failure));return;
+        }
+        self->QueueSnapshots();self->ApplyPending(std::move(batch));
+    });}catch(hresult_error const& error){OutputDebugStringW(error.message().c_str());}
+    if(!posted){std::lock_guard lock(state->mutex);state->Close();co_return;}
+    if(failed)co_return;
+    std::deque<std::function<void()>> replies;
+    {
+        std::lock_guard lock(state->mutex);
+        state->pending.Posted(sequence);
+        while(!state->replies.empty()&&state->pending.IsPosted(state->replies.front().first)){
+            replies.push_back(std::move(state->replies.front().second));state->replies.pop_front();
+        }
+    }
+    try{for(auto& reply:replies)reply();}
+    catch(hresult_error const& error){failure=to_string(error.message());}
+    catch(std::exception const& error){failure=error.what();}
+    if(!failure.empty())queue.TryEnqueue([owner,failure=std::move(failure)]{
+        if(auto self=owner.lock())self->FailPresentation(failure);
+    });
+}
+void CanvasWindow::FailPresentation(std::string message) {
+    {std::lock_guard lock(snapshots->mutex);snapshots->Close();}
+    {std::lock_guard lock(mutex);transportFailed=true;}
+    wake.notify_all();space.notify_all();Fail(std::move(message));
+}
+void CanvasWindow::ApplyPending(PreparedSnapshots batch) {
+    if(closing)return;
+    try {
+        if(batch.full){
+            if(batch.localization)batch.full.Insert(L"localization",batch.localization);
+            ApplyModel(batch.full);
+        }
+        for(auto const& patch:{batch.layout,batch.workspace,batch.camera,batch.search,batch.glass})
+            if(!closing&&patch)workspace->Apply(patch);
     } catch(hresult_error const& error) {Fail(to_string(error.message()));}
 }
 

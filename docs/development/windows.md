@@ -241,9 +241,18 @@ sample refusals use shared admission so valid neighbors still reach the canvas.
 Damaged real releases cancel from the last valid pose; the native recovery cache
 keeps valid real samples and retires matching releases.
 
-The render owner routes snapshots using ranges in the exact copied UTF-8. The UI
-parses retained models; full model parsing on the owner is limited to opt-in
-UI traces. Presentation and overview pipelines are prepared on the shader workers;
+The render owner routes snapshots using ranges in the exact copied UTF-8.
+A window coalesces raw presentation slots before one background decode. At most
+one decoded batch waits for UI ownership; the next decode starts when the UI
+takes that batch. Full models retain their dependent layout, motion, camera,
+search and glass order, including localization carried by an earlier batch.
+Query replies wait until the UI callback for their snapshot has been queued;
+queued, in-flight and deferred queries share the eight-query admission limit.
+Decoding and workspace-reply parsing stay off the UI thread. JSON objects transfer
+exclusively to the UI, and closing retires queued work without waiting on it.
+A decode failure stops the channel instead of applying dependent patches.
+Full model parsing on the render owner is limited to opt-in UI traces.
+Presentation and overview pipelines are prepared on the shader workers;
 an acquired frame remains owned until presentation is ready. Cursor and brush
 readiness keep their original publication boundaries.
 
