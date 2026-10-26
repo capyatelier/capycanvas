@@ -1,7 +1,9 @@
 param([Parameter(Mandatory)][string]$Executable,
-    [ValidateSet('dark-mouse','dark-touch','dark-pen','light-mouse','light-touch','light-pen','blenders-dark','blenders-light','sliders-dark','sliders-light','blender-controls-dark','blender-controls-light','hdr-f16-dark','hdr-f16-light')][string]$Variant='dark-mouse',[switch]$RapidOnly,[switch]$SlidersOnly,[switch]$BlendersOnly,[switch]$EraserOnly,[switch]$EraserLightOnly,[switch]$HistoryOnly,[switch]$HistoryLightOnly,[switch]$NativeControlsOnly,[switch]$ScrollEpochOnly,[switch]$NumericOnly,[switch]$CurveOnly,[switch]$MenuOnly,[switch]$ObserverOnly,[switch]$VisualOnly,[switch]$BeadTransitionsOnly,[switch]$HdrOnly,[switch]$HdrRetirementOnly,[switch]$HdrPreviewOnly,[ValidateSet('F16','F32')][string]$HdrDepth='F16')
+    [ValidateSet('dark-mouse','dark-touch','dark-pen','light-mouse','light-touch','light-pen','blenders-dark','blenders-light','sliders-dark','sliders-light','blender-controls-dark','blender-controls-light','hdr-f16-dark','hdr-f16-light','slider-preference-dark','slider-preference-light')][string]$Variant='dark-mouse',[switch]$RapidOnly,[switch]$SlidersOnly,[switch]$BlendersOnly,[switch]$EraserOnly,[switch]$EraserLightOnly,[switch]$HistoryOnly,[switch]$HistoryLightOnly,[switch]$NativeControlsOnly,[switch]$ScrollEpochOnly,[switch]$NumericOnly,[switch]$CurveOnly,[switch]$MenuOnly,[switch]$ObserverOnly,[switch]$VisualOnly,[switch]$BeadTransitionsOnly,[switch]$HdrOnly,[switch]$HdrRetirementOnly,[switch]$HdrPreviewOnly,[ValidateSet('F16','F32')][string]$HdrDepth='F16')
 $ErrorActionPreference='Stop'
 if($Variant -match '^hdr-f16-(dark|light)$'){$HdrOnly=$true;$HdrPreviewOnly=$true;$HdrDepth='F16';$Variant=$Matches[1]+'-mouse'}
+$sliderPreferenceOnly=$Variant.StartsWith('slider-preference-')
+if($Variant -match '^slider-preference-(dark|light)$'){$SlidersOnly=$true;$Variant=$Matches[1]+'-mouse'}
 $blenderControlsOnly=$Variant.StartsWith('blender-controls-')
 if($Variant -match '^(blenders|sliders|blender-controls)-(dark|light)$'){$BlendersOnly=$Matches[1] -ne 'sliders';$SlidersOnly=$true;$Variant=$Matches[2]+'-mouse'}
 if($EraserLightOnly){$EraserOnly=$true;$Variant='light-mouse'}
@@ -379,7 +381,7 @@ function Restart-BubbleReview([string]$LogName='restart-stderr.log'){
     Wait-Until {(Model).layout.viewport[0] -gt 1000} 'Restarted slider fixture did not maximize'
 }
 function Invoke-SliderChecks{
-    Invoke-ShortFanChecks
+    if(!$sliderPreferenceOnly){Invoke-ShortFanChecks}
     $area=(Model).layout.work_area
     $medium=Slider-Medium 'pastel' ($area.x+$area.width*.25) ($area.y+$area.height*.7)
     if((Model).state.workspace.layout.bubbles.show_sliders -ne $true){throw 'Fresh workspace slider preference did not default to true'}
@@ -398,7 +400,7 @@ function Invoke-SliderChecks{
     $point=Center $added;[CapyRowPointer]::RightClick($point.x,$point.y);(Menu-Item 'Put back').GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
     Wait-Until {$null -eq (Packet $added)} 'New slider fixture bubble did not put back'
     foreach($swap in 1..2){$null=Slider-Menu $controls $false;(Menu-Item 'Swap sliders').GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle();Wait-Until {(View $controls).options.swap -eq ($swap -eq 1)} 'Independent native swap option did not publish';if((Model).state.workspace.layout.bubbles.show_sliders -ne $false){throw 'Per-source swap reset the global slider preference'};Escape}
-    Activate-HeaderSource 'command' 'lasso';Wait-Until {(Model).state.layer_tools.tool -eq 'lasso'} 'Native Lasso header source did not activate'
+    Activate-HeaderSource 'command' 'lasso';Wait-Until {@((Model).state.commands|Where-Object {$_.id -eq 'lasso' -and $_.selected}).Count -eq 1} 'Native Lasso header source did not activate'
     Tap (Center $brush);Wait-Until {(View $brush).selected} 'Hidden-slider contact did not select its brush'
     if(@((View $brush).rings).Count -or (View $medium).selected){throw 'Hidden-slider selection reopened sliders or selected the other menu source'}
     $disabled=Slider-Layout;Slider-Toggle $medium $true;Slider-Menus $ids $true
@@ -1237,11 +1239,13 @@ try{
     }
     if($SlidersOnly){
         if(!$BlendersOnly){Invoke-SliderChecks}
+        if(!$sliderPreferenceOnly){
         Invoke-BlenderCellChecks 55 'dither_cell_size' 4 .08 @('spread','dither_cell_size') 'dither55'
         Invoke-BlenderCellChecks 49 'scatter_cell_size' 3 .2 @('spread','scatter_cell_size','grit') 'scatter49'
+        }
         & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Close -DiscardUnsaved|Out-Null
         if((Get-Item -LiteralPath $stderr).Length){throw 'Restarted slider fixture stderr requires inspection'}
-        $scope=if($blenderControlsOnly){'Native Blender panel controls, rings, numeric cancellation, defaults, reset and retained overrides'}elseif($BlendersOnly){'Native Blender panel controls, rings, painting and editing-state persistence'}else{'Native global slider menus, history and SQLite persistence'}
+        $scope=if($blenderControlsOnly){'Native Blender panel controls, rings, numeric cancellation, defaults, reset and retained overrides'}elseif($BlendersOnly){'Native Blender panel controls, rings, painting and editing-state persistence'}elseif($sliderPreferenceOnly){'Native global slider preference, four sources, history and SQLite persistence; short fans and Blender checks excluded'}else{'Native global slider menus, history and SQLite persistence'}
         [IO.File]::WriteAllText((Join-Path $run 'results.json'),(@{variant=$Variant;blenders_only=[bool]$BlendersOnly;checks=@($checks);scope=($scope+'; physical input and performance separate')}|ConvertTo-Json -Depth 12),[Text.UTF8Encoding]::new($false))
         return
     }

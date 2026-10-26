@@ -140,6 +140,27 @@ function Footprint-History([uint16]$Key,$Expected,[string]$Pixels,[string]$Name)
  if($restored.authored -cne $Expected.authored -or $restored.raster -cne $Expected.raster){throw "$Name did not restore exact authored and raster identities"}
  if((Wait-StablePixels {Footprint-Pixels}) -cne $Pixels){throw "$Name did not restore the exact composed pixels"}
 }
+function Footprint-View{
+ Fit-Canvas;Idle
+ Invoke-Id 'canvas-view-info'
+ $choice=@{item=$null}
+ Wait-Until {$choice.item=Zoom-Item 'zoom-50';$choice.item -and $choice.item.Current.IsEnabled} 'The Distort zoom menu did not offer 50%'
+ $choice.item.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+ Wait-Until {!(Zoom-Item 'zoom-50') -and (Model).state.camera.zoom -eq .5} 'The Distort view did not acknowledge 50% zoom'
+ $null=Tool 'hand'
+ Wait-Until {(Command 'hand').selected} 'Hand did not activate for the Distort view'
+ $camera=(Model).state.camera;$bounds=(Control 'drawing-canvas' -Arranged).Current.BoundingRectangle
+ $origin=Screen-Point @(0,0);$center=Screen-Point @(1024,1024)
+ $target=@([int]($bounds.X+($camera.work_area[0]+48)*$bounds.Width/$camera.viewport[0]),[int]($bounds.Y+($camera.work_area[1]+48)*$bounds.Height/$camera.viewport[1]))
+ Drag 'mouse' $center @(($center[0]+$target[0]-$origin[0]),($center[1]+$target[1]-$origin[1]))
+ Wait-Until {$at=Screen-Point @(0,0);$at[0] -eq $target[0] -and $at[1] -eq $target[1]} 'The native Hand drag did not place the Distort source inside the work area'
+ foreach($point in @(@(0,0),@(1023,1023),@(100,100),@(1540,1230))){
+  $at=Screen-Point $point;$camera=(Model).state.camera
+  $x=($at[0]-$bounds.X)*$camera.viewport[0]/$bounds.Width;$y=($at[1]-$bounds.Y)*$camera.viewport[1]/$bounds.Height
+  if($x -lt $camera.work_area[0] -or $x -gt $camera.work_area[0]+$camera.work_area[2] -or $y -lt $camera.work_area[1] -or $y -gt $camera.work_area[1]+$camera.work_area[3]){throw 'A native Distort target lies outside the unobstructed work area'}
+ }
+ Idle
+}
 function Footprint-Endpoint{
  $camera=(Model).state.camera;$bounds=(Control 'drawing-canvas' -Arranged).Current.BoundingRectangle
  if($camera.rotation -ne 0 -or $camera.flipped[0] -or $camera.flipped[1]){throw 'Near-line Distort requires the fitted unrotated view'}
@@ -176,7 +197,7 @@ function Check-TransformFootprint{
  }finally{$bitmap.Dispose()}
  $reports=@()
  try{foreach($filter in @('transform_bilinear','transform_bicubic')){
-  Open-Project $source;Idle;Fit-Canvas;Idle
+  Open-Project $source;Idle;Footprint-View
   if((Width) -ne 2048 -or [int]@((Model).state.tabs|Where-Object active)[0].height -ne 2048){throw 'The dense Distort source did not open at its exact extent'}
   $original=Footprint-Checkpoint ($filter+'-original');$originalPixels=Wait-StablePixels {Footprint-Pixels}
   foreach($value in $originalPixels.Split(',')){$color=[Drawing.Color]::FromArgb([int]$value);if($color.A -ne 255 -or $color.R -lt 25 -or $color.R -gt 230 -or $color.G -lt 25 -or $color.G -gt 230 -or $color.B -lt 25 -or $color.B -gt 230){throw 'Actual canvas samples did not display the dense opaque photo'}}
@@ -213,7 +234,7 @@ function Check-TransformFootprint{
   $saved=Footprint-Checkpoint ($filter+'-saved');$epoch=(Model).state.document_file.epoch
   & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'File';Invoke-Id 'close_document'
   Wait-Until {(Model).state.document_file.epoch -ne $epoch} 'The saved Distort drawing did not close'
-  Open-Project $saved.path;Idle;Fit-Canvas;Idle
+  Open-Project $saved.path;Idle;Footprint-View
   $reopened=Footprint-Checkpoint ($filter+'-reopened')
   if($reopened.authored -cne $painted.authored -or $reopened.raster -cne $painted.raster -or (Wait-StablePixels {Footprint-Pixels}) -cne $paintedPixels){throw 'Save/reopen changed exact Distort and subsequent paint artwork or pixels'}
   $report.completed=$true;Capture ($filter+'-reopened') -WithModel -Composed

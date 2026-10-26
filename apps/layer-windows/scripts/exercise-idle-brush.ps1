@@ -1,5 +1,9 @@
-param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme='dark',[int[]]$PresetIds=@(),[switch]$LiquifyOnly,[switch]$SessionsOnly)
+param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme='dark',[int[]]$PresetIds=@(),[switch]$LiquifyOnly,[switch]$SessionsOnly,[switch]$WetRoundOnly)
 $ErrorActionPreference='Stop'
+if($WetRoundOnly){
+ if($PresetIds.Count -or $LiquifyOnly -or $SessionsOnly){throw 'WetRoundOnly cannot be combined with other preset scopes'}
+ $PresetIds=@(11)
+}
 if($LiquifyOnly -and $PresetIds.Count){throw 'LiquifyOnly cannot be combined with PresetIds'}
 if($SessionsOnly -and ($PresetIds.Count -or $LiquifyOnly)){throw 'SessionsOnly cannot be combined with PresetIds or LiquifyOnly'}
 $repo=(Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
@@ -9,7 +13,7 @@ Add-Type -Path (Join-Path $scripts 'RowPointerDriver.cs')
 Add-Type -AssemblyName System.Drawing
 $CapyFind='prefer-visible';$CapyPopups=$true;$CapyWaitSeconds=30
 [CapyRowPointer]::VerifyPrivateDesktop($env:CAPY_PRIVATE_DESKTOP)
-if($env:CAPY_WAIT_SCALE){throw 'Readiness checks require default functional deadlines'}
+if($env:CAPY_WAIT_SCALE -and !$WetRoundOnly){throw 'Readiness checks require default functional deadlines'}
 $Executable=(Resolve-Path -LiteralPath $Executable).Path
 $run=Join-Path $repo ('artifacts/windows/idle-brush/'+$Theme+'-'+[Guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($run)|Out-Null
@@ -336,7 +340,7 @@ function Liquify-Sessions([string]$SeedPixels){
  $checks.liquify_sessions=@($records)
 }
 try{
- Enter-CapyEnvironment @('CAPY_TRACE_SHADER_JOBS')
+ Enter-CapyEnvironment @('CAPY_TRACE_SHADER_JOBS','CAPY_WAIT_SCALE')
  $env:CAPY_TRACE_UI='1';$env:CAPY_TRACE_SHADER_JOBS='1'
  Start-Review 'functional'
  $checks.first_ready=$firstReady
@@ -479,7 +483,7 @@ try{
   }
  }
  }
- $checks.scope=if($SessionsOnly){'Liquify tool sessions only'}elseif($LiquifyOnly){'Liquify only'}elseif($PresetIds.Count){'selected presets'}else{'all presets'}
+ $checks.scope=if($SessionsOnly){'Liquify tool sessions only'}elseif($LiquifyOnly){'Liquify only'}elseif($WetRoundOnly){'Wet Round only'}elseif($PresetIds.Count){'selected presets'}else{'all presets'}
  $checks.brush_cases=if($SessionsOnly){'outside session run'}else{'passed'};$checks.preset_ids=@($cases.preset);$checks.liquify_adjust_scope=if($SessionsOnly){'tool sessions'}elseif($PresetIds.Count){'outside selected preset run'}else{'passed'};Close-Review -Discard
  Start-Review 'close-pending'
  $pending=Observe 'before-close' $null

@@ -298,7 +298,14 @@ function Slot-Park{
     $box=(Control 'color-readout' -Arranged).Current.BoundingRectangle
     [CapyRowPointer]::Hover([int]($box.X+$box.Width/2),[int]($box.Y+$box.Height/2))
 }
-function Slot-Pixels{Screen-Pixels $script:slotPixelPoint[0] $script:slotPixelPoint[1]}
+function Slot-Pixels([string]$Name=''){
+    $path=if($Name){Join-Path $run ($Name+'.png')}else{''}
+    Screen-Pixels $script:slotPixelPoint[0] $script:slotPixelPoint[1] $path
+}
+function Slot-Receipt([string]$Name,[string]$Expected,[string]$Observed){
+    $captured=Slot-Pixels $Name
+    [ordered]@{expected_pixels=$Expected;observed_pixels=$Observed;captured_pixels=$captured;point=$script:slotPixelPoint;checkpoint=(Slot-Checkpoint);colors=(Slot-Colors);camera=(Model).state.camera}|ConvertTo-Json -Depth 12|Set-Content (Join-Path $run ($Name+'.json'))
+}
 function Slot-ColorPanel{
     if(!(Find 'color-foreground' -Visible)){
         Invoke $(if(Find 'column-icon-color' -Visible){'column-icon-color'}elseif(Find 'drawer-tab-color' -Visible){'drawer-tab-color'}else{'panel-tab-color'})
@@ -330,7 +337,12 @@ function Slot-OpenMenu([string]$Device,[string]$Slot){
     if(!$point){throw "No exposed native point targets the $Slot swatch"}
     if($Device -eq 'mouse'){[CapyRowPointer]::RightClick($point[0],$point[1])}
     elseif($Device -eq 'keyboard'){$button.SetFocus();Wait-Until {$button.Current.HasKeyboardFocus} 'The swatch did not take keyboard focus';[CapyRowPointer]::Key([uint32]$review.Id,0x5D)}
-    else{[CapyRowPointer]::Down($Device,$point[0],$point[1]);try{Start-Sleep -Milliseconds 1100}finally{[CapyRowPointer]::Up()}}
+    else{
+        [CapyRowPointer]::Down($Device,$point[0],$point[1])
+        try{Start-Sleep -Milliseconds 1100;$trace.menu_before_release=[bool](Find 'color-swatch-edit' -Visible);$trace.colors_before_release=Slot-Colors}finally{[CapyRowPointer]::Up()}
+        $trace.menu_after_release=[bool](Find 'color-swatch-edit' -Visible);$trace.colors_after_release=Slot-Colors
+        [IO.File]::WriteAllText((Join-Path $run ("slot-hit-$($script:slotMenuCases.Count)-$Device-$Slot.json")),($trace|ConvertTo-Json -Depth 12))
+    }
     $messages=[ordered]@{edit=@('common.ftl','native-color-edit-menu');palettes=@('common.ftl','native-color-palettes');swap=@('commands.ftl','commands-swap-foreground-and-background')}
     $items=@()
     foreach($action in $messages.Keys){
@@ -367,7 +379,9 @@ function Slot-Editor([string]$Slot){
 function Slot-Intact([string]$Name,[string]$Checkpoint,[string]$Pixels){
     if((Slot-Checkpoint) -ne $Checkpoint){throw "$Name changed artwork or Undo/Redo history"}
     Slot-Park
-    if((Wait-StablePixels {Slot-Pixels}) -ne $Pixels){throw "$Name changed exact composed artwork pixels"}
+    $observed=Wait-StablePixels {Slot-Pixels}
+    Slot-Receipt ('slot-intact-'+$Name.Replace(' ','-')) $Pixels $observed
+    if($observed -ne $Pixels){throw "$Name changed exact composed artwork pixels"}
 }
 function Slot-MenuJourney{
     $script:slotMenuCases=[Collections.Generic.List[object]]::new()
@@ -380,6 +394,7 @@ function Slot-MenuJourney{
     Slot-Park
     Wait-Until {(Slot-Checkpoint) -ne $before -and ((Model).state.commands|Where-Object id -eq 'undo').enabled -and (Slot-Pixels) -ne $empty} 'The native slot-menu seed did not establish artwork and Undo history' 45
     $artwork=Wait-StablePixels {Slot-Pixels};$checkpoint=Slot-Checkpoint
+    Slot-Receipt 'slot-seed' $artwork $artwork
     foreach($device in @('mouse','keyboard','pen','touch')){
         $active=if($device -in @('mouse','pen')){'transparent'}else{'foreground'}
         Invoke 'color-foreground';Wait-Until {(Model).state.colors.slot -eq 'foreground'} 'Foreground did not select before the slot context'

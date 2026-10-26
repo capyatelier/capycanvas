@@ -1651,6 +1651,10 @@ for the native bubble layout to settle after preset reselection before reset.
 The VM cases `tool-bubbles:blender-controls-dark` and `blender-controls-light`
 stop after those controls; `blenders-dark/light` retain painting and persistence,
 and `sliders-dark/light` also run the global slider preference and fan checks.
+Use `slider-preference-dark/light` to check the global preference, workspace
+history and SQLite restart without repeating the independent fan and Blender
+checks. `exercise-idle-brush.ps1 -WetRoundOnly` retains the single Wet Round
+stroke, pixel, history and close checks with the normal functional deadlines.
 Use `effects:visibility-dark` and `visibility-light` for the focused Properties
 visibility journey on the VM.
 
