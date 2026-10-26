@@ -1,4 +1,5 @@
-param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme='dark',[ValidateSet('all','baseline','cold-controls','first-curve','deferred','deferred-prior-edit','response','overlays')][string]$Journey='all')
+param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme='dark',[ValidateSet('all','baseline','cold-controls','first-curve','deferred','deferred-prior-edit','response','overlays','baseline-light','cold-controls-light','first-curve-light','deferred-light','deferred-prior-edit-light','response-light','overlays-light')][string]$Journey='all')
+if($Journey.EndsWith('-light')){$Journey=$Journey.Substring(0,$Journey.Length-6);$Theme='light'}
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
