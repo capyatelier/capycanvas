@@ -50,6 +50,9 @@ pub(crate) struct NativeEdit {
     preview_scalars: Vec<wgpu::Buffer>,
 }
 impl NativeEdit {
+    fn color_cache_budget(display_allowance:u64,retained:Option<u64>)->u64 {
+        retained.unwrap_or_else(||display_allowance.max(256*1024*1024))
+    }
     fn new(r: &WgpuRasterizer, transfer: NativeTransfer, admission:Option<&Self>) -> Self {
         let in_place = !crate::native_tiles::native_in_place_features(&r.adapter).is_empty()
             && r.device
@@ -74,7 +77,7 @@ impl NativeEdit {
         let recipes = Recipes::shared(&r.device, in_place);
         Self {
             backing: BTreeMap::new(),
-            color_cache_bytes: 256 * 1024 * 1024,
+            color_cache_bytes: Self::color_cache_budget(display_complete_bytes,admission.map(|source|source.color_cache_bytes)),
             display_complete_bytes,
             composition_bytes: {
                 #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows", target_vendor = "apple"))]
@@ -249,6 +252,7 @@ impl WgpuRasterizer {
                 || native.composition_bytes != bytes.saturating_add(crate::scene::windows::DEFAULT_IMAGE_PIXEL_BYTES))
         {
             native.display_complete_bytes = bytes;
+            native.color_cache_bytes = NativeEdit::color_cache_budget(bytes,None);
             native.composition_bytes = bytes.saturating_add(crate::scene::windows::DEFAULT_IMAGE_PIXEL_BYTES);
             self.scale_display = None;
             self.admit_sources();

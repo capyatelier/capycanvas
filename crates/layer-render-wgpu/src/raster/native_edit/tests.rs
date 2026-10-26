@@ -110,6 +110,18 @@ fn engine(
 }
 
 #[test]
+fn native_color_cache_budget_preserves_fallback_and_retained_admission() {
+    for (allowance,expected) in [(0,256),(128,256),(256,256),(768,768),(2048,2048)] {
+        assert_eq!(NativeEdit::color_cache_budget(allowance<<20,None),expected<<20);
+    }
+    for retained in [0,64<<20,256<<20,768<<20] {
+        for allowance in [0,128<<20,2048<<20] {
+            assert_eq!(NativeEdit::color_cache_budget(allowance,Some(retained)),retained);
+        }
+    }
+}
+
+#[test]
 fn native_half_float_multiply_brush_saturates_finite_output() {
     let mut document=paint_document([256;2],"Half float Multiply");
     set_color(&mut document,DocumentColor {space:RgbSpace::Srgb,depth:SampleDepth::F16});

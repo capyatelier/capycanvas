@@ -475,6 +475,7 @@ fn a_later_display_allowance_admits_matching_source_residency() {
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     for (allowance, slots) in [(3 << 29, 384), (0, 64)] {
         r.set_complete_display_allowance(allowance);
+        assert_eq!(r.native_edit.as_ref().unwrap().color_cache_bytes, allowance.max(256<<20));
         assert_eq!(r.source_tiles.borrow().admitted_bytes()[0], slots * FLOAT_TILE_BYTES);
         let encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
         let budget = r.source_tiles.borrow().mip_budget();
