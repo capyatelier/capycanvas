@@ -148,11 +148,12 @@ impl PaintTransforms {
         for state in &mut self.0 {state.preparing=None;}
     }
     pub fn prepare_preview(&mut self,r:&mut WgpuRasterizer,encoder:&mut submission::CommandEncoder,
-        next:&layer_render::TransformPreview,scene:SceneView<'_>,level:u32)->Result<(),GpuRasterError> {
+        next:&layer_render::TransformPreview,scene:SceneView<'_>,level:u32,fine:bool)->Result<(),GpuRasterError> {
+        let local=|next:&layer_render::TransformPreview,extent| if fine {1} else {input_level(level,next,extent)};
         let previews=[Some(next.clone()),next.companion(scene)];
         let projected=previews.iter().flatten().filter(|next|!next.target.is_coverage()).try_fold(0u64,|bytes,next| {
             let extent=scene.target_extent(next.target);let phase=crate::scene::page_phase(scene.target_offset(next.target));
-            let plan=display_mips::Plan::at([extent[0]+phase[0],extent[1]+phase[1]],input_level(level,next,extent));
+            let plan=display_mips::Plan::at([extent[0]+phase[0],extent[1]+phase[1]],local(next,extent));
             bytes.checked_add(plan.pixel_bytes_through(display_mips::MAX_LEVEL)*if next.selection.is_some() {2}else {1}).ok_or(GpuRasterError::SourceWorkingSetExceeded)
         })?;
         let restore=r.projected_restore_bytes().checked_add(projected).ok_or(GpuRasterError::SourceWorkingSetExceeded)?;
@@ -173,7 +174,7 @@ impl PaintTransforms {
                 }
                 state.preparing.as_mut().unwrap()
             };
-            source.prepare_reduced(r,encoder,next.selection.as_ref(),Some((scene,next.target)),extent,input_level(level,&next,extent))?;
+            source.prepare_reduced(r,encoder,next.selection.as_ref(),Some((scene,next.target)),extent,local(&next,extent))?;
         }
         Ok(())
     }
