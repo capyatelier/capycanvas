@@ -9,6 +9,11 @@ private final class MetalLayerLease: @unchecked Sendable {
     init(_ value: CAMetalLayer) { self.value = value }
 }
 
+private struct NativeOwnerCleanup: @unchecked Sendable {
+    let handle: UInt64?
+    let layer: CAMetalLayer?
+}
+
 private final class LanguageJob: @unchecked Sendable {
     let handle: UInt64
     init(_ handle: UInt64) { self.handle = handle }
@@ -238,12 +243,12 @@ final class NativeOwner: @unchecked Sendable {
         gpuHealth?.cancel()
         persistence.unsubscribe(observerID)
         trace?.finish()
-        let handle = handle, retainedLayer = layer
+        let cleanup = NativeOwnerCleanup(handle: handle, layer: layer)
         queue.finish {
-            (retainedLayer as? ObservedMetalLayer)?.frameRate = nil
-            capy_apple_detach(nativeValue(handle))
-            capy_apple_destroy(nativeValue(handle))
-            withExtendedLifetime(retainedLayer) {}
+            (cleanup.layer as? ObservedMetalLayer)?.frameRate = nil
+            capy_apple_detach(nativeValue(cleanup.handle))
+            capy_apple_destroy(nativeValue(cleanup.handle))
+            withExtendedLifetime(cleanup.layer) {}
         }
     }
     private func check(_ result: Int32) throws {
