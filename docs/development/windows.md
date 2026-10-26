@@ -47,9 +47,10 @@ storage support for both RGBA and coverage float textures. Windows uses the
 shared renderer capability check when requesting device features.
 
 Painting needs a hardware D3D12 GPU. On Linux, [Windows VMs](windows-vm.md) build
-the client and run the GPU-free tests and the UI fixtures on the software
-adapter; they do not replace a hardware GPU. [Devices](devices.md#windows) lists
-the Windows hardware.
+the client and run tests and UI fixtures on the software adapter by default.
+The optional [hardware GPU pool](windows-vm.md#hardware-gpu-pool) assigns a real
+card for renderer tests and hardware UI journeys. [Devices](devices.md#windows)
+lists the physical Windows hardware.
 
 ## Build and run
 

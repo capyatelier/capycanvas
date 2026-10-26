@@ -3,8 +3,9 @@
 [Windows development](windows.md) · [Developer guide](README.md)
 
 `tools/windows-vm/windows-vm.py` runs Windows 11 Enterprise evaluation VMs under
-QEMU/KVM. They have no hardware GPU, so they run the Windows tests on Windows'
-software D3D12 adapter (WARP):
+QEMU/KVM. The default VMs use Windows' software D3D12 adapter (WARP). An optional
+[GPU pool](#hardware-gpu-pool) gives each running hardware VM one exclusive card.
+The table below describes the default WARP configuration:
 
 | Runs in a VM | Needs a hardware GPU |
 | --- | --- |
@@ -89,6 +90,106 @@ directory for diagnosis.
 Windows Update is disabled so the VMs keep the ISO's build. The evaluation
 licence expires 90 days after `create`; stop every VM, then run `destroy` and
 `create` to renew it.
+
+## Hardware GPU pool
+
+An agent claims one free GPU when its VM starts and releases it when the VM shuts
+down. Cards stay bound to VFIO between guests. Assignment happens at boot;
+hot-attach is not implemented. Ordinary `start`, `check` and `fixtures` keep their
+software-adapter behaviour unless hardware mode is requested.
+Keep a native GPU outside the pool for the desktop and Linux applications to
+share. A passed-through card belongs exclusively to its guest until shutdown.
+
+```sh
+tools/windows-vm/windows-vm.py gpus
+tools/windows-vm/windows-vm.py --vm renderer-review start --gpu
+tools/windows-vm/windows-vm.py --vm renderer-review sync
+tools/windows-vm/windows-vm.py --vm renderer-review ssh 'Get-PnpDevice -Class Display'
+tools/windows-vm/windows-vm.py --vm renderer-review gpu-check
+tools/windows-vm/windows-vm.py --vm renderer-review fixtures --hardware-gpu canvas-editing documents:default layers:default
+tools/windows-vm/windows-vm.py --vm renderer-review stop
+```
+
+Use your worktree's VM or an explicitly owned name. `start --gpu PCI_ADDRESS`
+requests a particular pool card; without an address it chooses any free card.
+`gpus` shows free, reserved, externally used and unavailable cards. QEMU holds the
+reservation lock itself, so closing a terminal does not release a running VM's
+card. The pool also respects VMs launched outside this helper. A full pool fails
+with a diagnostic instead of switching to WARP.
+
+GPU VMs run as user systemd services with unlimited locked memory. The VM remains
+available for SSH and screenshots if a startup check fails. `stop` requests a
+clean guest shutdown; a GPU shutdown timeout leaves the VM and reservation
+running for diagnosis. Do not kill QEMU or reset PCI devices to free a card.
+Some GPUs have reset faults that require host recovery after an unclean teardown.
+
+`gpu-check` builds the normal Release app and runs the shared renderer suite and
+the Windows D3D12 document suite against an actual hardware D3D12 adapter. It
+rejects empty test selections. `fixtures --hardware-gpu` runs the normal app with
+software adapters disabled and requires actual hardware-adapter evidence in each
+selected rendered journey. Use explicit render fixtures; intentional GPU-startup
+failure journeys belong in the ordinary fixture matrix. Both commands accept
+`--no-build` only when synced build inputs and executable/DLL hashes match. These
+checks do not qualify physical pens, HDR output, display combinations or frame
+rate targets.
+
+### Prepare a host
+
+The host needs an IOMMU, isolated PCI groups, QEMU VFIO support, `fuser` (the
+`psmisc` package), `acl` (`setfacl`), `driverctl` and a systemd user manager. Install Windows and its
+toolchain with the normal setup first. Keep the base image and VM overlays on a
+local SSD. Set `CAPYCANVAS_VM_DIR` before `setup` when choosing a different state
+directory; `/mnt/localssd` is suitable scratch storage when available. Never move
+or copy a running VM's disk.
+
+Choose spare GPU addresses from `lspci -nnk`. Preserve the host's boot/display GPU.
+The setup refuses boot GPUs, connected displays and IOMMU groups containing
+other devices. Close graphics clients and release the selected GPU's audio
+device first; this can require ending the desktop session and temporarily
+stopping the host sound-state service. Run from an independent SSH or console
+session when the desktop must stop. Detaching a terminal is not sufficient when
+its server still belongs to a graphical-session systemd scope.
+
+The host script prints a read-only plan by default. Supply your own user, state
+path and PCI addresses:
+
+```sh
+python3 tools/windows-vm/gpu-host.py PCI_ADDRESS ... \
+  --user "$USER" --state-dir "$HOME/.local/share/capycanvas/windows-vm" \
+  --artifacts /path/on/local-ssd/windows-vm-results \
+  --guest-driver /path/on/local-ssd/windows-driver-bundle
+```
+
+After reviewing the plan and making the devices idle, run the same command with
+`sudo` and `--apply`. The script makes per-device driver overrides persistent,
+sets permissions for the selected user's VFIO groups, and raises the user
+manager's locked-memory limit without restarting it. Already bound VFIO cards
+are left running; persistence is written without reprobe or unbind. It never
+stops a desktop, kills a graphics client or changes boot-loader settings.
+
+Provide a vendor-signed Windows INF bundle for the pool's GPUs. A Windows
+administrator can export an installed package with
+`pnputil /export-driver oemNUMBER.inf OUTPUT_DIRECTORY`. The helper imports that
+bundle on each VM's first hardware start and reuses its driver store thereafter.
+An already installed or newer driver is accepted only when a present display
+device has a healthy, signed vendor driver.
+Without a bundle, install the guest's vendor driver manually before GPU tests.
+Driver binaries and PCI addresses stay in local state, not the repository.
+
+The generated `gpu-pool.json` lives in the VM state directory. It records the
+cards, driver bundle, artifact path and host-sized resource defaults. Defaults
+reserve a host share and divide CPU/RAM among the pool's possible concurrent
+guests, capped at 32 vCPUs and 64 GiB per VM. Each guest uses one CPU socket.
+`--cpus` and `--memory` on host setup, or the existing `CAPYCANVAS_VM_CPUS` and
+`CAPYCANVAS_VM_MEMORY` environment variables, override them. Keep successful VMs
+warm during iteration to reuse Cargo, NuGet and native build caches; stop them
+when the task releases its GPU.
+
+Large evidence is copied to the configured artifact directory;
+`CAPYCANVAS_VM_ARTIFACTS` overrides it. `CAPYCANVAS_VM_RUNTIME` optionally selects
+another directory for small PID/socket files. Keep runtime paths short enough
+for Unix sockets. Images, build caches, captures and test logs belong on disk,
+not a RAM-backed `/tmp`.
 
 ## UI fixtures on the software adapter
 

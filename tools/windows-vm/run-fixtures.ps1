@@ -3,7 +3,8 @@ param(
     [Parameter(Mandatory)][string]$Output,
     [string]$Name,
     [string]$DebuggerPath,
-    [ValidateRange(1,1440)][int]$TimeoutMinutes = 20
+    [ValidateRange(1,1440)][int]$TimeoutMinutes = 20,
+    [switch]$HardwareGpu
 )
 $ErrorActionPreference = 'Stop'
 trap {
@@ -68,7 +69,10 @@ function Stop-Review {
     $owned | Wait-Process -Timeout 30 -ErrorAction SilentlyContinue
 }
 function Save-Evidence([string]$Log) {
-    if (!(Test-Path "$Log-context.json")) { return }
+    if (!(Test-Path "$Log-context.json")) {
+        if ($HardwareGpu) { throw "Missing fixture context: $Log-context.json" }
+        return
+    }
     $context = Get-Content "$Log-context.json" -Raw | ConvertFrom-Json
     $evidence = "$Log-evidence"
     New-Item -ItemType Directory -Force $evidence | Out-Null
@@ -85,6 +89,10 @@ function Save-Evidence([string]$Log) {
     if ($context.run -and (Test-Path -LiteralPath $context.run)) {
         & robocopy.exe $context.run $evidence /E /R:0 /W:0 /NFL /NDL /NJH /NJS | Out-Null
         if ($LASTEXITCODE -ge 8) { throw "Could not preserve fixture evidence: $($context.run)" }
+    }
+    if ($HardwareGpu) {
+        . (Join-Path $PSScriptRoot 'test-hardware-traces.ps1')
+        Assert-HardwareTraces -Directory $evidence -Output "$Log-adapters.json"
     }
 }
 
@@ -107,8 +115,13 @@ function Start-Shortcuts {
 
 New-Item -ItemType Directory -Force $Output | Out-Null
 "$($area.Width)x$($area.Height) work area at $([CapyVm.Native]::GetDpiForSystem()) dpi" | Set-Content (Join-Path $Output 'display.txt')
-$env:LAYER_TEST_SOFTWARE_GPU = '1'
-$env:CAPY_WAIT_SCALE = '3'
+if ($HardwareGpu) {
+    $env:LAYER_TEST_SOFTWARE_GPU = $null
+    $env:CAPY_WAIT_SCALE = $null
+} else {
+    $env:LAYER_TEST_SOFTWARE_GPU = '1'
+    $env:CAPY_WAIT_SCALE = '3'
+}
 $env:NO_COLOR = '1'
 function Select-Fixtures([string[]]$Available,[string[]]$Requested) {
     $defaults = @($Requested | Where-Object { $_ -match '^[^:]+:default$' } | ForEach-Object { ($_ -split ':')[0] })
@@ -123,7 +136,7 @@ function Select-Fixtures([string[]]$Available,[string[]]$Requested) {
 $selected = if ($Name) { $Name -split ',' } else { @() }
 $planned = @(Select-Fixtures $runs.Keys $selected)
 if (!$planned.Count) { throw 'No fixtures selected.' }
-@{runs=$planned;timeout_minutes=$TimeoutMinutes}|ConvertTo-Json|Set-Content (Join-Path $Output 'plan.json')
+@{runs=$planned;timeout_minutes=$TimeoutMinutes;hardware_gpu=[bool]$HardwareGpu}|ConvertTo-Json|Set-Content (Join-Path $Output 'plan.json')
 $results = Join-Path $Output 'results.jsonl'
 foreach ($run in $runs.GetEnumerator()) {
     $fixture = ($run.Key -split ':')[0]

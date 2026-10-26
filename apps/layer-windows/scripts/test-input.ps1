@@ -19,13 +19,13 @@ if($LASTEXITCODE -ne 0){throw 'Canvas queue test failed.'}
  if($errors.Count){throw 'Build script parse failed'}
  $selection=$ast.FindAll({param($node) $node -is [Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -in '$installation','$toolset'},$true)
  if($selection.Count -ne 2){throw 'Expected installation and toolset selection'}
+ $expectedBuild=[pscustomobject]@{architecture='x64';hostArchitecture='x64';component='Microsoft.VisualStudio.Component.VC.Tools.x86.x64'}
+ $build=$expectedBuild
+ function Enter-WindowsDeveloperShell($Build) {
+  if($Build -ne $expectedBuild){throw 'Toolset lookup used another architecture'}
+  [pscustomobject]@{installationPath='C:\Visual Studio\C++';installationVersion=$case.version}
+ }
  foreach($case in @(@{version='17.14.0';toolset='v143'},@{version='18.11.0';toolset='v145'})){
-  $vswhere={
-   if($args -contains '-format'){
-    ConvertTo-Json -InputObject @(@{installationPath='C:\Visual Studio\C++';installationVersion=$case.version}) -Compress
-   }elseif($args[-1] -eq 'installationPath'){'C:\Visual Studio\C++'}
-   else{'19.0.0'}
-  }
   foreach($statement in $selection){Invoke-Expression $statement.Extent.Text}
   if($toolset -ne $case.toolset){throw 'Toolset came from another Visual Studio installation'}
  }

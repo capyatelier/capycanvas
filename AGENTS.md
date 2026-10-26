@@ -119,6 +119,7 @@ specific tasks.
 | --- | --- |
 | Start a task | [Developer guide](docs/development/README.md), [environment](docs/development/environment.md) |
 | Build, run or test a client | [Linux](docs/development/linux.md), [Web](docs/development/web.md), [Android](docs/development/android.md), [Apple](docs/development/apple.md), [Windows](docs/development/windows.md), [Windows VM](docs/development/windows-vm.md) |
+| Reserve or test a Windows VM or GPU | [Windows VM skill](skills/windows-vm/SKILL.md) |
 | Choose the checks for a change | [Testing](docs/development/testing.md) |
 | Use a tablet, VM, Mac or iPad | [Devices](docs/development/devices.md) |
 | Commit, rebase or push | [Commit guide](docs/COMMIT_GUIDE.md) |

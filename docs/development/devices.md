@@ -104,8 +104,10 @@ apps alone, and requires no reservation because it only reads shared files.
 
 - **VMs.** [`tools/windows-vm/windows-vm.py`](windows-vm.md) runs one Windows 11
   VM per worktree, named after the worktree. Commands that use a VM lock it; pass
-  `--vm` to use another. VMs render with WARP, so they check builds and UI
-  fixtures, never performance.
+  `--vm` to use another. Default VMs render with WARP. An optional
+  [hardware GPU pool](windows-vm.md#hardware-gpu-pool) reserves one card per VM
+  for renderer tests and hardware UI journeys. Performance qualification still
+  requires the specified reference hardware and measurement rules.
 - **Physical PCs.** The Windows 11 Home laptop has an Intel Core i7-1255U,
   Iris Xe and a 60 Hz panel. The Surface Pro, 11th Edition has a Snapdragon X
   Plus X1P64100, Adreno X1-85 and 16 GB RAM for native ARM64/D3D12 checks.

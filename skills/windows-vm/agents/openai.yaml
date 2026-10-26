@@ -1,0 +1,3 @@
+interface:
+  display_name: "Windows VMs"
+  short_description: "Reserve GPU VMs and test Windows rendering"

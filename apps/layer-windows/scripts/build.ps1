@@ -20,12 +20,7 @@ if (!$OutputDirectory) { $OutputDirectory = Get-WindowsBuildDirectory $repo $bui
 $OutputDirectory = [IO.Path]::GetFullPath($OutputDirectory)
 if (!$IntermediateDirectory) { $IntermediateDirectory = $OutputDirectory.TrimEnd('\','/') + '.obj' }
 $IntermediateDirectory = [IO.Path]::GetFullPath($IntermediateDirectory)
-$vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
-if (!(Test-Path -LiteralPath $vswhere)) { throw 'Install Visual Studio Build Tools with Desktop development with C++ and Windows SDK 10.0.26100.0.' }
-$installation = & $vswhere -latest -products '*' -requires $build.component -format json | ConvertFrom-Json
-if (!$installation) { throw "Install Visual Studio C++ tools for $($build.architecture) ($($build.component))." }
-Import-Module (Join-Path $installation.installationPath 'Common7/Tools/Microsoft.VisualStudio.DevShell.dll')
-Enter-VsDevShell -VsInstallPath $installation.installationPath -SkipAutomaticLocation -DevCmdArguments "-arch=$($build.architecture) -host_arch=$($build.hostArchitecture)"
+$installation = Enter-WindowsDeveloperShell $build
 $toolset = if (([version]$installation.installationVersion).Major -ge 18) { 'v145' } else { 'v143' }
 if (!$SkipRestore) {
     $nuget = Get-Command nuget -ErrorAction SilentlyContinue

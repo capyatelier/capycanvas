@@ -9,6 +9,16 @@ function Resolve-WindowsArchitecture([ValidateSet('native','x64','arm64')][strin
     [pscustomobject]@{architecture=$Architecture;platform=$platform;target=$target;hostArchitecture=$hostArchitecture;component=$component}
 }
 
+function Enter-WindowsDeveloperShell($Build) {
+    $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+    if (!(Test-Path -LiteralPath $vswhere)) { throw 'Install Visual Studio Build Tools with Desktop development with C++ and Windows SDK 10.0.26100.0.' }
+    $installation = & $vswhere -latest -products '*' -requires $Build.component -format json | ConvertFrom-Json
+    if (!$installation) { throw "Install Visual Studio C++ tools for $($Build.architecture) ($($Build.component))." }
+    Import-Module (Join-Path $installation.installationPath 'Common7/Tools/Microsoft.VisualStudio.DevShell.dll') | Out-Null
+    Enter-VsDevShell -VsInstallPath $installation.installationPath -SkipAutomaticLocation -DevCmdArguments "-arch=$($Build.architecture) -host_arch=$($Build.hostArchitecture)" | Out-Null
+    $installation
+}
+
 function Get-WindowsBuildDirectory([string]$Repo,$Build,[string]$Configuration) {
     if ($Build.architecture -eq 'arm64') { Join-Path $Repo "artifacts/windows/arm64/$Configuration" }
     else { Join-Path $Repo "artifacts/windows/$Configuration" }

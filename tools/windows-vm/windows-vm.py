@@ -6,6 +6,7 @@ See docs/development/windows-vm.md.
 
 import argparse
 import base64
+from contextlib import nullcontext
 import fcntl
 import getpass
 import hashlib
@@ -13,6 +14,7 @@ import json
 import os
 from pathlib import Path
 import re
+import resource
 import secrets
 import shlex
 import shutil
@@ -24,6 +26,9 @@ import tempfile
 import time
 from urllib.parse import unquote, urlparse
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import gpu_pool
+
 
 ROOT = Path(__file__).resolve().parents[2]
 GUEST_FILES = Path(__file__).resolve().parent
@@ -31,10 +36,13 @@ PROGRAM = sys.argv[0]
 ISO_URL = "https://aka.ms/Win11E-ISO-25H2-en-us"
 STATE = Path(os.environ.get("CAPYCANVAS_VM_DIR") or Path(
     os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "capycanvas/windows-vm")
-RUNTIME = Path(os.environ.get("XDG_RUNTIME_DIR") or tempfile.gettempdir()) / (
+RUNTIME = Path(os.environ["CAPYCANVAS_VM_RUNTIME"]) if os.environ.get("CAPYCANVAS_VM_RUNTIME") else (
+    Path(os.environ.get("XDG_RUNTIME_DIR") or tempfile.gettempdir()) /
     f"capycanvas-vm-{os.getuid()}-{hashlib.sha256(bytes(STATE)).hexdigest()[:8]}")
-CPUS = os.environ.get("CAPYCANVAS_VM_CPUS") or str(min(8, os.cpu_count() or 1))
-MEMORY = os.environ.get("CAPYCANVAS_VM_MEMORY") or "16G"
+SETTINGS = gpu_pool.configuration(STATE)
+CPUS = os.environ.get("CAPYCANVAS_VM_CPUS") or str(SETTINGS.get("cpus", min(8, os.cpu_count() or 1)))
+MEMORY = os.environ.get("CAPYCANVAS_VM_MEMORY") or SETTINGS.get("memory", "16G")
+ARTIFACTS = Path(os.environ.get("CAPYCANVAS_VM_ARTIFACTS") or SETTINGS.get("artifacts") or ROOT / "artifacts/windows-vm")
 DISPLAY = os.environ.get("CAPYCANVAS_VM_DISPLAY") or "2560x1600"
 VGA = "VGA,xres={},yres={},vgamem_mb=64".format(*DISPLAY.split("x"))
 DISK_SIZE = "128G"
@@ -44,6 +52,7 @@ GUEST_REPO = "C:\\capycanvas"
 GUEST_PWSH = "C:\\Program Files\\PowerShell\\7\\pwsh.exe"
 DESKTOP_TASK = "capycanvas-desktop"
 SOFTWARE_BUILD = f"{GUEST_REPO}\\artifacts\\windows\\SoftwareAdapter"
+HARDWARE_BUILD = f"{GUEST_REPO}\\artifacts\\windows\\Release"
 ISO_RECORD = STATE / "iso"
 FIRMWARE = STATE / "firmware.json"
 KEY = STATE / "id_ed25519"
@@ -83,6 +92,7 @@ class Machine:
         self.tpm_pid = self.runtime / "swtpm.pid"
         self.ssh_port = self.runtime / "ssh-port"
         self.prepared = directory / "prepared"
+        self.gpu = directory / "gpu"
 
 
 def installer():
@@ -219,7 +229,9 @@ def setup(args):
 def process(pidfile, name):
     try:
         pid = int(pidfile.read_text())
-        return pid if Path(f"/proc/{pid}/comm").read_text().strip() == name else None
+        command = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
+        owned = str(pidfile).encode() in command or f"file={pidfile}".encode() in command
+        return pid if owned and Path(f"/proc/{pid}/comm").read_text().strip() == name else None
     except (FileNotFoundError, ValueError):
         return None
 
@@ -273,7 +285,7 @@ def free_port():
         return probe.getsockname()[1]
 
 
-def launch(machine, cdroms=(), gui=False):
+def launch(machine, cdroms=(), gui=False, gpu=None, reservation=None):
     for directory in (RUNTIME, machine.runtime):
         directory.mkdir(mode=0o700, exist_ok=True)
     terminate(machine.tpm_pid, "swtpm")
@@ -286,7 +298,8 @@ def launch(machine, cdroms=(), gui=False):
     command = [
         "qemu-system-x86_64", "-name", f"capycanvas-windows-{machine.name.lstrip('.')}", "-nodefaults",
         "-machine", "q35,accel=kvm,smm=on", "-global", "driver=cfi.pflash01,property=secure,value=on",
-        "-cpu", f"host,{HYPERV}", "-smp", CPUS, "-m", MEMORY, "-rtc", "base=utc",
+        "-cpu", f"host,{HYPERV}", "-smp", f"cpus={CPUS},sockets=1,cores={CPUS},threads=1",
+        "-m", MEMORY, "-rtc", "base=utc",
         "-drive", f"if=pflash,unit=0,readonly=on,format={selected_firmware['code_format']},"
                   f"file={selected_firmware['code']}",
         "-drive", f"if=pflash,unit=1,format={selected_firmware['vars_format']},file={machine.directory / 'efivars'}",
@@ -302,8 +315,19 @@ def launch(machine, cdroms=(), gui=False):
     for index, image in enumerate(cdroms):
         command += ["-drive", f"if=none,id=cd{index},media=cdrom,readonly=on,file={image}",
                     "-device", f"ide-cd,drive=cd{index},bus=ide.{index},bootindex={index + 1}"]
+    if gpu:
+        command += ["-global", "q35-pcihost.pci-hole64-size=256G",
+                    "-fw_cfg", "name=opt/ovmf/X-PciMmio64Mb,string=262144",
+                    "-device", "pcie-root-port,id=gpuroot,bus=pcie.0,addr=0x10,chassis=1",
+                    "-add-fd", f"fd={reservation.fileno()},set=99,opaque=capycanvas-gpu-{machine.name}"]
+        for function in gpu.functions:
+            slot = function.rsplit(".", 1)[1]
+            command += ["-device", f"vfio-pci,host={function},bus=gpuroot,addr=0x0.{slot},multifunction=on"]
+        machine.gpu.write_text(gpu.address + "\n")
+    else:
+        machine.gpu.unlink(missing_ok=True)
     try:
-        run(*command)
+        run(*command, **({"pass_fds": (reservation.fileno(),)} if gpu else {}))
     except subprocess.CalledProcessError:
         terminate(machine.tpm_pid, "swtpm")
         raise
@@ -410,27 +434,135 @@ def prepare(machine):
     machine.prepared.write_text(f"{digest}\n")
 
 
-def boot(machine, gui):
+def boot(machine, gui, gpu=None):
+    machine.runtime.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with open(machine.runtime / "boot-lock", "a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            sys.exit(f"The {machine.name} VM is already starting.")
+        boot_locked(machine, gui, gpu)
+
+
+def boot_locked(machine, gui, gpu):
     if running(machine):
+        if gpu and not machine.gpu.exists():
+            sys.exit(f"The {machine.name} VM is running without a reserved GPU; stop it before using --gpu.")
+        if gpu and gpu != "auto" and machine.gpu.read_text().strip() != gpu:
+            sys.exit(f"The {machine.name} VM already has another GPU; stop it before changing cards.")
         return
     if not (BASE / "disk.qcow2").exists():
         sys.exit(f"The base image does not exist; run `{PROGRAM} create`.")
-    if not machine.directory.exists():
-        fresh = machine.directory.with_name(f"{machine.name}.partial")
-        remove(fresh)
-        shutil.copytree(BASE, fresh, ignore=shutil.ignore_patterns("disk.qcow2"))
-        run("qemu-img", "create", "-q", "-f", "qcow2", "-F", "qcow2", "-b", BASE / "disk.qcow2",
-            fresh / "disk.qcow2")
-        fresh.rename(machine.directory)
-    launch(machine, gui=gui)
+    if gpu and resource.getrlimit(resource.RLIMIT_MEMLOCK)[0] != resource.RLIM_INFINITY:
+        sys.exit("GPU VMs require unlimited locked memory; use start --gpu after the host GPU setup.")
+    with gpu_pool.reserve(STATE, machine.name, gpu) if gpu else nullcontext((None, None)) as (device, reservation):
+        if not machine.directory.exists():
+            fresh = machine.directory.with_name(f"{machine.name}.partial")
+            remove(fresh)
+            shutil.copytree(BASE, fresh, ignore=shutil.ignore_patterns("disk.qcow2"))
+            run("qemu-img", "create", "-q", "-f", "qcow2", "-F", "qcow2", "-b", BASE / "disk.qcow2",
+                fresh / "disk.qcow2")
+            fresh.rename(machine.directory)
+        launch(machine, gui=gui, gpu=device, reservation=reservation)
     wait_for_ssh(machine, 10 * 60)
     prepare(machine)
+    if gpu:
+        prepare_gpu_driver(machine)
+
+
+def prepare_gpu_driver(machine):
+    driver = gpu_pool.configuration(STATE).get("guest_driver")
+    if not driver:
+        print("Install the vendor's Windows GPU driver in this VM before hardware tests.")
+        return
+    driver = Path(driver)
+    manifests = sorted(path for path in driver.rglob("*") if path.suffix.lower() in (".inf", ".cat"))
+    if not manifests or not any(path.suffix.lower() == ".inf" for path in manifests):
+        sys.exit(f"The configured Windows GPU driver bundle is unavailable: {driver}")
+    digest = hashlib.sha256()
+    for path in manifests:
+        digest.update(str(path.relative_to(driver)).encode())
+        digest.update(path.read_bytes())
+    version = digest.hexdigest()
+    stamp = machine.directory / "gpu-driver"
+    if stamp.exists() and stamp.read_text().strip() == version:
+        return
+    destination = f"C:\\capycanvas-gpu-driver\\{version}"
+    guest(machine, f"New-Item -ItemType Directory -Force '{destination}' | Out-Null")
+    archive = subprocess.Popen(["tar", "-cf", "-", "-C", str(driver), "."], stdout=subprocess.PIPE)
+    try:
+        status = guest(machine, f"tar -xf - -C {destination}", stdin=archive.stdout, check=False)
+    finally:
+        archive.stdout.close()
+        archive_status = archive.wait()
+    if archive_status or status.returncode:
+        sys.exit("Could not stage the Windows GPU driver bundle")
+    guest_script(machine, "$ErrorActionPreference='Stop'\n" + (GUEST_FILES / "guest-gpu.ps1").read_text() +
+                 f"\nInstall-WindowsGpuDriver '{destination}'\n")
+    guest(machine, f"Remove-Item -LiteralPath '{destination}' -Recurse -Force")
+    restart(machine)
+    stamp.write_text(version + "\n")
 
 
 def start(args):
     machine = selected(args)
-    boot(machine, args.gui)
+    gpu = getattr(args, "gpu", None)
+    if gpu and not running(machine) and not os.environ.get("CAPYCANVAS_VM_GPU_SERVICE"):
+        start_gpu_service(machine, args)
+        return
+    try:
+        boot(machine, args.gui, gpu)
+    except (Exception, SystemExit) as error:
+        if not gpu or not os.environ.get("CAPYCANVAS_VM_GPU_SERVICE"):
+            raise
+        (machine.runtime / "startup-error").write_text(str(error))
+        if not running(machine):
+            raise
+        print(f"GPU VM startup check failed: {error}; the VM remains running for diagnosis.", file=sys.stderr)
+        return
     print(f"The {machine.name} VM is running. Connect with `{PROGRAM} --vm {machine.name} ssh`.")
+
+
+def gpu_unit(machine):
+    return f"capy-vm-{hashlib.sha256(bytes(STATE)).hexdigest()[:8]}-{machine.name}"
+
+
+def start_gpu_service(machine, args):
+    machine.runtime.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with open(machine.runtime / "service-lock", "a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            sys.exit(f"The {machine.name} GPU VM is already starting.")
+        if running(machine):
+            sys.exit(f"The {machine.name} VM started in another process; inspect it before retrying.")
+        start_gpu_service_locked(machine, args)
+
+
+def start_gpu_service_locked(machine, args):
+    error = machine.runtime / "startup-error"
+    error.unlink(missing_ok=True)
+    unit = gpu_unit(machine)
+    run("systemctl", "--user", "stop", unit, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    program = [sys.executable, str(Path(__file__).resolve()), "--vm", machine.name]
+    command = ["systemd-run", "--user", f"--unit={unit}", "--collect",
+               "--property=Type=oneshot", "--property=RemainAfterExit=yes",
+               "--property=KillMode=process", "--property=LimitMEMLOCK=infinity",
+               "--property=TimeoutStartSec=45min",
+               "--property=TimeoutStopSec=6min",
+               f"--property=ExecStop={shlex.join([item.replace('$', '$$') for item in [*program, 'stop']])}"]
+    environment = {"CAPYCANVAS_VM_GPU_SERVICE": "1", "CAPYCANVAS_VM_DIR": str(STATE),
+                   "CAPYCANVAS_VM_RUNTIME": str(RUNTIME), "CAPYCANVAS_VM_CPUS": CPUS,
+                   "CAPYCANVAS_VM_MEMORY": MEMORY, "CAPYCANVAS_VM_DISPLAY": DISPLAY}
+    command += [f"--setenv={key}={value}" for key, value in environment.items()]
+    command += [*[item.replace("$", "$$") for item in program], "start", "--gpu", args.gpu]
+    if args.gui:
+        command.append("--gui")
+    status = run(*command, check=False)
+    if error.exists():
+        sys.exit(error.read_text())
+    if status.returncode:
+        sys.exit(f"The {machine.name} GPU VM did not start; see `journalctl --user -u {unit}`.")
 
 
 def stop_machine(machine):
@@ -439,12 +571,28 @@ def stop_machine(machine):
         return
     qmp(machine, "system_powerdown")
     if not wait_for_exit(pid, 5 * 60):
+        if machine.gpu.exists():
+            sys.exit("The GPU VM did not shut down cleanly; it and its GPU reservation remain running.")
         qmp(machine, "quit")
         wait_for_exit(pid, 30)
 
 
 def stop(args):
-    stop_machine(selected(args))
+    machine = selected(args)
+    stop_machine(machine)
+    if not os.environ.get("CAPYCANVAS_VM_GPU_SERVICE"):
+        run("systemctl", "--user", "stop", gpu_unit(machine), check=False,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def gpus(args):
+    rows = gpu_pool.describe(STATE)
+    if not rows:
+        print("No GPU pool configured; see docs/development/windows-vm.md.")
+    for row in rows:
+        owner = row["owner"]
+        detail = f" ({owner['vm']} in {owner['state']})" if owner else ""
+        print(f"{row['address']}\t{row['status']}{detail}")
 
 
 def ssh(args):
@@ -501,7 +649,7 @@ def check(args):
     lock = claim(machine)
     sync_machine(machine)
     configuration = "Debug" if args.debug else "Release"
-    guest(machine, f"& '{GUEST_REPO}\\apps\\layer-windows\\scripts\\test-without-gpu.ps1' "
+    guest(machine, f"& '{GUEST_PWSH}' -NoProfile -File '{GUEST_REPO}\\apps\\layer-windows\\scripts\\test-without-gpu.ps1' "
                    f"-Configuration {configuration}")
 
 
@@ -528,18 +676,19 @@ def desktop_running(machine):
 
 
 def build_inputs(hashes):
-    scripts = {"apps/layer-windows/scripts/build.ps1", "apps/layer-windows/scripts/stage-assets.ps1"}
+    scripts = {"apps/layer-windows/scripts/build.ps1", "apps/layer-windows/scripts/stage-assets.ps1",
+               "apps/layer-windows/scripts/WindowsArchitecture.ps1"}
     return {name: digest for name, digest in hashes.items()
             if name in ("Cargo.toml", "Cargo.lock", "rust-toolchain.toml") or name in scripts
             or name.startswith(("crates/", "vendor/", ".cargo/")) and not name.endswith(".md")
             or name.startswith(("apps/layer-web/icons/", "apps/layer-web/brush-previews/",
                                 "apps/layer-web/filter-previews/", "assets/locales/"))
-            or name.startswith("apps/layer-windows/") and not name.endswith(".md")
+            or name.startswith("apps/layer-windows/") and not name.endswith((".md", ".ps1"))
             and not name.startswith("apps/layer-windows/scripts/")}
 
 
-def build_files(machine):
-    result = guest(machine, f"$ErrorActionPreference='Stop'; $build='{SOFTWARE_BUILD}'; "
+def build_files(machine, directory=SOFTWARE_BUILD):
+    result = guest(machine, f"$ErrorActionPreference='Stop'; $build='{directory}'; "
                    "ConvertTo-Json -Compress -InputObject @(Get-ChildItem $build -Recurse -File | "
                    "Where-Object { $_.Extension -In '.exe','.dll' -or $_.FullName.StartsWith($build+'\\Assets\\') } | "
                    "ForEach-Object { @{name=$_.FullName.Substring($build.Length+1);"
@@ -550,7 +699,53 @@ def build_files(machine):
 
 def validate_build(record, inputs, files):
     if not record or record["inputs"] != inputs or record["files"] != files:
-        sys.exit("The software-adapter build does not match the synced source or binaries; rerun without --no-build.")
+        sys.exit("The build does not match the synced source or binaries; rerun without --no-build.")
+
+
+def fixture_build(machine, hashes, no_build, hardware):
+    inputs = build_inputs(hashes)
+    directory = HARDWARE_BUILD if hardware else SOFTWARE_BUILD
+    build_record = machine.directory / ("hardware-build.json" if hardware else "software-build.json")
+    if no_build:
+        record = json.loads(build_record.read_text()) if build_record.exists() else None
+        validate_build(record, inputs, build_files(machine, directory))
+    else:
+        build_record.unlink(missing_ok=True)
+        feature = "" if hardware else "-SoftwareAdapterTests "
+        guest(machine, f"& '{GUEST_PWSH}' -NoProfile -File '{GUEST_REPO}\\apps\\layer-windows\\scripts\\build.ps1' -Configuration Release "
+                       f"{feature}-OutputDirectory '{directory}'")
+        record = {"inputs": inputs, "files": build_files(machine, directory)}
+        build_record.write_text(json.dumps(record))
+    return directory, record
+
+
+def retrieve(machine, root, name):
+    local = ARTIFACTS / machine.name
+    local.mkdir(parents=True, exist_ok=True)
+    fetch = subprocess.Popen(ssh_command(machine, f"tar -cf - -C {root} {name}"), stdout=subprocess.PIPE)
+    run("tar", "-xf", "-", "-C", local, stdin=fetch.stdout)
+    fetch.stdout.close()
+    if fetch.wait():
+        sys.exit("Could not retrieve the VM test evidence.")
+    return local / name
+
+
+def gpu_check(args):
+    start(argparse.Namespace(vm=args.vm, gui=False, gpu="auto"))
+    machine = selected(args)
+    with claim(machine):
+        revision = run("git", "rev-parse", "HEAD", cwd=ROOT, capture_output=True, text=True).stdout.strip()
+        hashes = sync_machine(machine)
+        directory, record = fixture_build(machine, hashes, args.no_build, True)
+        name = "gpu-" + time.strftime("%Y%m%d-%H%M%S")
+        root = f"{GUEST_REPO}\\artifacts\\windows\\vm-gpu-tests"
+        status = guest(machine, f"& '{GUEST_PWSH}' -NoProfile -File '{GUEST_REPO}\\tools\\windows-vm\\test-with-gpu.ps1' "
+                       f"-Configuration Release -Output '{root}\\{name}' -BuildDirectory '{directory}'", check=False)
+        local = retrieve(machine, root, name)
+        (local / "provenance.json").write_text(json.dumps({"revision": revision, "source": hashes, "build": record}, indent=2))
+        print(f"Hardware GPU test evidence: {local}")
+        if status.returncode:
+            sys.exit(f"Hardware GPU tests failed (exit {status.returncode}); see {local}")
 
 
 def validate_results(plan, results):
@@ -600,44 +795,33 @@ def wait_for_fixtures(machine, output):
 
 def fixtures(args):
     machine = selected(args)
-    boot(machine, gui=False)
+    hardware = getattr(args, "hardware_gpu", False)
+    if hardware:
+        start(argparse.Namespace(vm=args.vm, gui=False, gpu="auto"))
+    else:
+        boot(machine, gui=False)
     lock = claim(machine)
     revision = run("git", "rev-parse", "HEAD", cwd=ROOT, capture_output=True, text=True).stdout.strip()
     hashes = sync_machine(machine)
-    inputs = build_inputs(hashes)
-    build_record = machine.directory / "software-build.json"
-    if args.no_build:
-        record = json.loads(build_record.read_text()) if build_record.exists() else None
-        validate_build(record, inputs, build_files(machine))
-    else:
-        build_record.unlink(missing_ok=True)
-        guest(machine, f"& '{GUEST_REPO}\\apps\\layer-windows\\scripts\\build.ps1' -Configuration Release "
-                       f"-SoftwareAdapterTests -OutputDirectory '{SOFTWARE_BUILD}'")
-        record = {"inputs": inputs, "files": build_files(machine)}
-        build_record.write_text(json.dumps(record))
+    directory, record = fixture_build(machine, hashes, args.no_build, hardware)
     name = time.strftime("%Y%m%d-%H%M%S")
     output = f"{GUEST_REPO}\\artifacts\\windows\\vm-fixtures\\{name}"
     if any(not re.fullmatch(r"[a-zA-Z0-9:-]+", item) for item in args.names):
         sys.exit("Fixture names use letters, numbers, hyphens and a variant colon.")
     selection = f" -Name {','.join(args.names)}" if args.names else ""
+    mode = " -HardwareGpu" if hardware else ""
     desktop(machine, f"-File {GUEST_REPO}\\tools\\windows-vm\\run-fixtures.ps1 "
-                     f"-Executable {SOFTWARE_BUILD}\\CapyCanvas.exe -Output {output} "
-                     f"-TimeoutMinutes {args.timeout_minutes}{selection}")
+                     f"-Executable {directory}\\CapyCanvas.exe -Output {output} "
+                     f"-TimeoutMinutes {args.timeout_minutes}{selection}{mode}")
     results, plan, failure = wait_for_fixtures(machine, output)
-    local = ROOT / "artifacts" / "windows-vm" / machine.name
-    local.mkdir(parents=True, exist_ok=True)
-    fetch = subprocess.Popen(ssh_command(machine, f"tar -cf - -C {GUEST_REPO}\\artifacts\\windows\\vm-fixtures {name}"),
-                             stdout=subprocess.PIPE)
-    run("tar", "-xf", "-", "-C", local, stdin=fetch.stdout)
-    if fetch.wait():
-        sys.exit("Could not retrieve the fixture evidence.")
-    provenance = {"revision": revision, "source": hashes, "build": record}
-    (local / name / "provenance.json").write_text(json.dumps(provenance, indent=2))
+    local = retrieve(machine, f"{GUEST_REPO}\\artifacts\\windows\\vm-fixtures", name)
+    provenance = {"revision": revision, "source": hashes, "build": record, "hardware_gpu": hardware}
+    (local / "provenance.json").write_text(json.dumps(provenance, indent=2))
     failed = [result["name"] for result in results if result["exit"] != 0]
-    print(f"{len(results) - len(failed)} passed, {len(failed)} failed. Logs: {local / name}")
+    print(f"{len(results) - len(failed)} passed, {len(failed)} failed. Logs: {local}")
     if failure:
         sys.exit(failure)
-    if not (local / name / "complete").exists():
+    if not (local / "complete").exists():
         sys.exit("The fixture runner stopped before finishing.")
     validate_results(plan, results)
     if failed:
@@ -660,6 +844,8 @@ def reset(args):
 def list_machines(args):
     for machine in machines():
         state = f"running, ssh port {machine.ssh_port.read_text().strip()}" if running(machine) else "stopped"
+        if state != "stopped" and machine.gpu.exists():
+            state += f", GPU {machine.gpu.read_text().strip()}"
         print(f"{machine.name}\t{state}")
     if process(LEGACY_PID, "qemu-system-x86"):
         print("(unnamed VM from an older windows-vm.py)\trunning")
@@ -696,8 +882,12 @@ def main():
         "--iso", type=Path, help="use this ISO instead of downloading one")
     command("create", create, "install Windows and the build tools into the base image").add_argument(
         "--gui", action="store_true", help="show the installer display in a window")
-    command("start", start, "boot the VM, creating it from the base image if needed").add_argument(
-        "--gui", action="store_true", help="show the VM display in a window")
+    start_command = command("start", start, "boot the VM, creating it from the base image if needed")
+    start_command.add_argument("--gui", action="store_true", help="show the VM display in a window")
+    start_command.add_argument("--gpu", nargs="?", const="auto", help="claim one free GPU, or the specified pool PCI address")
+    command("gpus", gpus, "show the hardware GPU pool and its reservations")
+    command("gpu-check", gpu_check, "run the hardware renderer and Windows D3D12 tests").add_argument(
+        "--no-build", action="store_true", help="reuse a validated hardware app build")
     command("stop", stop, "shut the VM down")
     command("list", list_machines, "list the VMs made from the base image")
     command("ssh", ssh, "open a PowerShell session or run a command in the VM").add_argument(
@@ -705,9 +895,10 @@ def main():
     command("sync", sync, f"copy the working tree to {GUEST_REPO}, keeping build outputs")
     command("check", check, "sync, build and run the tests that need no GPU").add_argument(
         "--debug", action="store_true", help="use unoptimized Debug builds and tests (default: Release)")
-    fixture = command("fixtures", fixtures, "sync, build and run the UI fixtures on the software adapter")
+    fixture = command("fixtures", fixtures, "sync, build and run the UI fixtures")
     fixture.add_argument("names", nargs="*", help="fixtures to run, e.g. layers or header:pen (default: all)")
-    fixture.add_argument("--no-build", action="store_true", help="reuse the last software-adapter build")
+    fixture.add_argument("--no-build", action="store_true", help="reuse a validated build for the selected adapter mode")
+    fixture.add_argument("--hardware-gpu", action="store_true", help="claim a GPU and test a hardware-only app build")
     fixture.add_argument("--timeout-minutes", type=fixture_timeout, default=20,
                          help="deadline for each fixture, 1–1440 minutes (default: 20)")
     command("screenshot", screenshot, "save the VM display as a PNG").add_argument("file", type=Path)
@@ -716,6 +907,8 @@ def main():
     args = parser.parse_args()
     try:
         args.handler(args)
+    except (OSError, ValueError, RuntimeError) as error:
+        sys.exit(str(error))
     except subprocess.CalledProcessError as error:
         sys.exit(f"Exit status {error.returncode}: {shlex.join(map(str, error.cmd))}")
 
