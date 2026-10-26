@@ -241,8 +241,15 @@ struct CurveEditor: View {
         }
     }
     private func press(_ press: KeyPress) -> KeyPress.Result {
-        guard let name = keyName(press.key), !NativeTextContext.composing else { return .ignored }
+        guard !NativeTextContext.composing else { return .ignored }
         let pressed = press.phase != .up
+        guard let name = keyName(press.key) else {
+            guard press.key.character != "\t" else { return .ignored }
+            store.input(["type": "key", "key": String(press.key.character), "pressed": pressed, "repeat": press.phase == .repeat,
+                "modifiers": ["command": !press.modifiers.isDisjoint(with: [.command, .control]),
+                    "shift": press.modifiers.contains(.shift), "alt": press.modifiers.contains(.option)]])
+            return .handled
+        }
         if pressed && !press.modifiers.isDisjoint(with: [.command, .option, .control]) { return .ignored }
         let target = held?.key == name ? held!.owner : owner
         if pressed { held = (name, target) }

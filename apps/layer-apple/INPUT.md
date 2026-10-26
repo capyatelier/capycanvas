@@ -8,6 +8,15 @@ pressure, x/y tilt in radians, barrel rotation in radians, distance, monotonic
 nanoseconds and phase. The camera revision at capture travels with each batch.
 No native event object, device serial or vendor identifier crosses the queue.
 
+Native control focus records how it arrived. Readouts use the shared
+`control_takes_key` rule: Enter activates, while Space activates only after
+keyboard arrival. Pointer presses clear that arrival state, including on an
+already focused control. Unhandled control keys go to the canvas in the same
+window; curves forward unhandled keys through the editor input route. Touching
+the iPad canvas restores its first responder. The `property-slider-input.swift`
+fixture checks pointer and keyboard readout activation; the editor keyboard-focus
+journey covers returning from text entry to canvas shortcuts.
+
 ## Prediction
 
 Mac uses the shared engine predictor when Enable stroke prediction is on; the

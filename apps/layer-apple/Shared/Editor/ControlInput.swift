@@ -41,6 +41,7 @@ struct ControlInput: NSViewRepresentable {
         var doublePress: ((CGPoint, CGSize) -> Void)?
         private var inactive: NSObjectProtocol?
         private var keyActive = false
+        fileprivate var keyboardFocus = false
         private var active = false
         private var source = "mouse"
         private var point = CGPoint.zero
@@ -54,7 +55,7 @@ struct ControlInput: NSViewRepresentable {
         }
         override func mouseDown(with event: NSEvent) {
             guard enabled, contact != nil else { super.mouseDown(with: event); return }
-            if key != nil { window?.makeFirstResponder(self) }
+            if key != nil { window?.makeFirstResponder(self) }; keyboardFocus = false
             if event.clickCount == 2, let doublePress { doublePress(convert(event.locationInWindow, from: nil), bounds.size); return }
             active = true; source = event.subtype == .tabletPoint || event.type == .tabletPoint ? "pen" : "mouse"
             send("down", event)
@@ -72,13 +73,13 @@ struct ControlInput: NSViewRepresentable {
         override func keyDown(with event: NSEvent) {
             guard !NativeTextContext.composing else { super.keyDown(with: event); return }
             if event.keyCode == 53, active { cancel(); return }
-            if let name = Self.keyName(event.keyCode), key?(name, true, modifiers(event)) == true { keyActive = name != "Escape"; return }
-            super.keyDown(with: event)
+            if let name = Self.keyName(event.keyCode), takes(name, event.modifierFlags), key?(name, true, modifiers(event)) == true { keyActive = name != "Escape"; return }
+            if let canvas = canvas(window?.contentView) { canvas.keyDown(with: event) } else { super.keyDown(with: event) }
         }
         override func keyUp(with event: NSEvent) {
             guard !NativeTextContext.composing else { super.keyUp(with: event); return }
-            if let name = Self.keyName(event.keyCode), key?(name, false, modifiers(event)) == true { keyActive = false; return }
-            super.keyUp(with: event)
+            if let name = Self.keyName(event.keyCode), takes(name, event.modifierFlags), key?(name, false, modifiers(event)) == true { keyActive = false; return }
+            if let canvas = canvas(window?.contentView) { canvas.keyUp(with: event) } else { super.keyUp(with: event) }
         }
         override func cancelOperation(_ sender: Any?) {
             guard !NativeTextContext.composing, active || keyActive else {
@@ -86,7 +87,8 @@ struct ControlInput: NSViewRepresentable {
             }
             cancel()
         }
-        override func resignFirstResponder() -> Bool { cancel(); return true }
+        override func becomeFirstResponder() -> Bool { keyboardFocus = true; return super.becomeFirstResponder() }
+        override func resignFirstResponder() -> Bool { keyboardFocus = false; cancel(); return true }
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow(); detach()
             if let window { inactive = NotificationCenter.default.addObserver(forName: NSWindow.didResignKeyNotification, object: window, queue: .main) { [weak self] _ in
@@ -101,6 +103,15 @@ struct ControlInput: NSViewRepresentable {
         func cancel() {
             if active { active = false; contact?(ControlContact(phase: "cancel", point: point, surfacePoint: point, source: source, inside: false, modifiers: ControlModifiers())) }
             if keyActive { keyActive = false; _ = key?("Escape", true, ControlModifiers()) }
+        }
+        private func canvas(_ view: NSView?) -> MacCanvasView? {
+            if let canvas = view as? MacCanvasView { return canvas }
+            return view?.subviews.lazy.compactMap { self.canvas($0) }.first
+        }
+        private func takes(_ name: String, _ flags: NSEvent.ModifierFlags) -> Bool {
+            !["Enter", "Space"].contains(name) || name.withCString {
+                capy_apple_control_takes_key($0, !flags.intersection([.command, .control]).isEmpty, flags.contains(.option), keyboardFocus)
+            }
         }
         private static func keyName(_ code: UInt16) -> String? {
             switch code {
@@ -147,6 +158,7 @@ struct ControlInput: UIViewRepresentable {
         var doublePress: ((CGPoint, CGSize) -> Void)?
         private var inactive: NSObjectProtocol?
         private var keyActive = false
+        fileprivate var keyboardFocus = false
         private let pointer = Pointer()
         private var scroll: UIPanGestureRecognizer!
         override var canBecomeFirstResponder: Bool { key != nil }
@@ -165,7 +177,8 @@ struct ControlInput: UIViewRepresentable {
             } }
         }
         func detach() { if let inactive { NotificationCenter.default.removeObserver(inactive); self.inactive = nil }; cancel() }
-        override func resignFirstResponder() -> Bool { cancel(); return super.resignFirstResponder() }
+        override func becomeFirstResponder() -> Bool { keyboardFocus = true; return super.becomeFirstResponder() }
+        override func resignFirstResponder() -> Bool { keyboardFocus = false; cancel(); return super.resignFirstResponder() }
         @objc private func scrolled(_ gesture: UIPanGestureRecognizer) {
             guard wheel != nil, gesture.state == .began || gesture.state == .changed else { return }
             let delta = gesture.translation(in: self).y
@@ -175,26 +188,42 @@ struct ControlInput: UIViewRepresentable {
             guard !NativeTextContext.composing else { super.pressesBegan(presses, with: event); return }
             var pending = Set<UIPress>()
             for press in presses {
-                guard let native = press.key, let name = Self.keyName(native.keyCode),
+                guard let native = press.key, let name = Self.keyName(native.keyCode), takes(name, native.modifierFlags),
                     key?(name, true, Self.modifiers(native.modifierFlags)) == true else { pending.insert(press); continue }
                 keyActive = name != "Escape"
             }
-            if !pending.isEmpty { super.pressesBegan(pending, with: event) }
+            if !pending.isEmpty {
+                if let canvas = canvas(window) { canvas.pressesBegan(pending, with: event) } else { super.pressesBegan(pending, with: event) }
+            }
         }
         override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
             guard !NativeTextContext.composing else { super.pressesEnded(presses, with: event); return }
             var pending = Set<UIPress>()
             for press in presses {
-                guard let native = press.key, let name = Self.keyName(native.keyCode),
+                guard let native = press.key, let name = Self.keyName(native.keyCode), takes(name, native.modifierFlags),
                     key?(name, false, Self.modifiers(native.modifierFlags)) == true else { pending.insert(press); continue }
                 keyActive = false
             }
-            if !pending.isEmpty { super.pressesEnded(pending, with: event) }
+            if !pending.isEmpty {
+                if let canvas = canvas(window) { canvas.pressesEnded(pending, with: event) } else { super.pressesEnded(pending, with: event) }
+            }
         }
-        override func pressesCancelled(_ presses: Set<UIPress>, with event: UIPressesEvent?) { cancel(); super.pressesCancelled(presses, with: event) }
+        override func pressesCancelled(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+            cancel()
+            if let canvas = canvas(window) { canvas.pressesCancelled(presses, with: event) } else { super.pressesCancelled(presses, with: event) }
+        }
         func cancel() { pointer.cancel(); if keyActive { keyActive = false; _ = key?("Escape", true, ControlModifiers()) } }
         static func modifiers(_ flags: UIKeyModifierFlags) -> ControlModifiers {
             ControlModifiers(shift: flags.contains(.shift), fine: !flags.intersection([.alternate, .control]).isEmpty)
+        }
+        private func canvas(_ view: UIView?) -> CanvasView? {
+            if let canvas = view as? CanvasView { return canvas }
+            return view?.subviews.lazy.compactMap { self.canvas($0) }.first
+        }
+        private func takes(_ name: String, _ flags: UIKeyModifierFlags) -> Bool {
+            !["Enter", "Space"].contains(name) || name.withCString {
+                capy_apple_control_takes_key($0, !flags.intersection([.command, .control]).isEmpty, flags.contains(.alternate), keyboardFocus)
+            }
         }
         private static func keyName(_ code: UIKeyboardHIDUsage) -> String? {
             switch code {
@@ -219,14 +248,14 @@ struct ControlInput: UIViewRepresentable {
         private var source = "touch"
         override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
             guard touch == nil, let native = touches.first, let view = view as? InputView else { return }
-            point = native.location(in: view)
+            point = native.location(in: view); view.keyboardFocus = false
             if event.buttonMask.contains(.secondary), let secondary = view.secondary {
                 secondary(point, view.bounds.size); state = .recognized; return
             }
             if native.tapCount == 2, let doublePress = view.doublePress { doublePress(point, view.bounds.size); state = .recognized; return }
             guard view.contact != nil else { state = .failed; return }
             touch = native; source = native.type == .pencil ? "pen" : native.type == .indirectPointer ? "mouse" : "touch"
-            if view.key != nil { view.becomeFirstResponder() }
+            if view.key != nil { view.becomeFirstResponder() }; view.keyboardFocus = false
             state = .began; send("down")
         }
         override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {

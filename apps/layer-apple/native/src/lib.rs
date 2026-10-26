@@ -287,6 +287,13 @@ pub unsafe extern "C" fn capy_apple_numeric(json: *const c_char) -> u64 {
         serde_json::to_value(request.resolve().map_err(|reason| reason.message(&localization))?).map_err(|e| e.to_string())
     }) }
 }
+/// # Safety
+/// `key` is readable NUL-terminated UTF-8 for this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_apple_control_takes_key(key: *const c_char, command: bool, alt: bool, keyboard_focus: bool) -> bool {
+    let key = unsafe { std::ffi::CStr::from_ptr(key) }.to_str().unwrap_or("");
+    layer_ui::control_takes_key(key, layer_ui::Modifiers { command, alt, shift: false }, keyboard_focus)
+}
 /// Shared tagged color forms, display previews and sampled gradient ramps.
 /// # Safety
 /// `json` is a NUL-terminated UTF-8 color request, valid for this call.

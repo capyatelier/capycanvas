@@ -10,7 +10,45 @@ import QuartzCore
 /// Native slider contacts through the real property views and serial owner.
 /// Temporary windows and in-memory documents; no artist storage.
 @main final class PropertySliderChecks: NativeWorkspaceInputFixture {
+    @MainActor private static func keyboardArrival() throws {
+        let window = NSWindow(contentRect: CGRect(x: 100, y: 100, width: 80, height: 80),
+            styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil; window.close() }
+        let input = ControlInput.InputView(frame: CGRect(x: 0, y: 0, width: 80, height: 80))
+        var activations = [String]()
+        input.contact = { _ in }
+        input.key = { name, pressed, _ in
+            guard ["Space", "Enter"].contains(name) else { return false }
+            if !pressed { activations.append(name) }
+            return true
+        }
+        window.contentView = input
+        func key(_ text: String, _ code: UInt16) throws {
+            for type: NSEvent.EventType in [.keyDown, .keyUp] {
+                guard let event = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: [], timestamp: 0,
+                    windowNumber: window.windowNumber, context: nil, characters: text,
+                    charactersIgnoringModifiers: text, isARepeat: false, keyCode: code) else {
+                    throw HostFailure(message: "Missing focus regression key")
+                }
+                if type == .keyDown { input.keyDown(with: event) } else { input.keyUp(with: event) }
+            }
+        }
+        guard let down = NSEvent.mouseEvent(with: .leftMouseDown, location: CGPoint(x: 20, y: 20), modifierFlags: [],
+            timestamp: 0, windowNumber: window.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 1) else {
+            throw HostFailure(message: "Missing focus regression contact")
+        }
+        input.mouseDown(with: down)
+        try key(" ", 49)
+        try require(activations.isEmpty, "Pointer arrival must leave Space for the canvas")
+        try key("\r", 36)
+        try require(activations == ["Enter"], "Enter activates a pointer-focused readout")
+        window.makeFirstResponder(nil); window.makeFirstResponder(input)
+        try key(" ", 49)
+        try require(activations == ["Enter", "Space"], "Keyboard arrival enables Space activation")
+    }
     @MainActor static func run() async throws {
+        try keyboardArrival()
         let filter = ProcessInfo.processInfo.environment["CAPY_PROPERTY_CASE"] ?? ""
         let cases = [("", "brush-size"), ("", "brush-opacity"), ("", "tool-document"),
             ("curves", "point"), ("", "opacity"), ("", "layer-opacity"),
