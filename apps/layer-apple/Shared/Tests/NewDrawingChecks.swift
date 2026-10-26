@@ -291,6 +291,7 @@ extension XCTestCase {
         revealHex()
         editColorValue("hex", "#E07080", in: app)
         let add = app.buttons["new-drawing-add-paper-color"]
+        _ = reveal("new-drawing-add-paper-color")
         expectation(for: NSPredicate(format: "enabled == YES"), evaluatedWith: add)
         waitForExpectations(timeout: 10)
         revealHex()
