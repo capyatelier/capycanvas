@@ -1950,6 +1950,9 @@ range endpoints and panel metrics. Use a fresh model directory after changing
 that contract. Every numeric report requires its visible formatted readout,
 including the disabled 12 px spin row. Panel sliders retain their track without
 step buttons; spin rows retain both buttons and their bound and opacity checks.
+Keep the value host alive while constructing spin and value-only rows. The
+formatted readout supplies the visible ink; the idle native editor stays
+transparent in both enabled and disabled rows.
 Reviews compare the actual caption text bounds and require visible value pixels
 in enabled and disabled spin rows:
 

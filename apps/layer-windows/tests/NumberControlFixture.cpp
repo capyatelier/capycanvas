@@ -47,6 +47,10 @@ struct Fixture : std::enable_shared_from_this<Fixture> {
             auto readout=border?border.Child().try_as<TextBlock>():TextBlock{nullptr};
             if(!value||!readout||value.Visibility()!=Visibility::Visible||readout.Visibility()!=Visibility::Visible||value.IsEnabled()!=enabled||readout.Text()!=str(formatted,L"text")||std::abs(readout.Opacity()-(enabled?1.:.36))>.001)
                 throw hresult_error(E_FAIL,L"Numeric visible readout differs from the shared model at "+item.key);
+            auto editorInk=entry.Foreground().try_as<SolidColorBrush>();
+            auto disabledInk=entry.Resources().Lookup(box_value(L"TextControlForegroundDisabled")).try_as<SolidColorBrush>();
+            if(!editorInk||!disabledInk||editorInk.Color().A||disabledInk.Color().A)
+                throw hresult_error(E_FAIL,L"Numeric editor paints behind its formatted readout at "+item.key);
             if(str(spec,L"kind")==L"slider"){
                 if(minus||plus)throw hresult_error(E_FAIL,L"Panel slider retained step buttons at "+item.key);
                 auto track=findElement(item.root,item.key+L"-slider").try_as<Slider>();

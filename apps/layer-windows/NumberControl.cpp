@@ -122,15 +122,13 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
     inheritLanguage(entry,data);entry.FontSize(data->textSize());entry.FontFamily(FontFamily(L"Segoe UI"));entry.Foreground(data->brush(L"text"));
     entry.Background(data->brush(L"input"));entry.BorderThickness(Thickness{0});entry.CornerRadius(data->controlCorner());
     entry.Resources().Insert(box_value(L"TextControlBackgroundDisabled"),clear());
-    auto disabledText=clear(),hiddenText=clear();
-    entry.Resources().Insert(box_value(L"TextControlForegroundDisabled"),disabledText);
-    bindings.emplace_back([data,ranged,disabledText]{
-        auto ink=color(str(object(data->state,L"palette"),L"text"));if(ranged)ink.A=92;disabledText.Color(ink);
-    });
+    auto hiddenText=clear();
+    entry.Resources().Insert(box_value(L"TextControlForegroundDisabled"),hiddenText);
     entry.TextAlignment(TextAlignment::Right);Grid::SetColumn(entry,1);
     weak_ref<TextBlock> readout;
     weak_ref<Grid> panelValueBox;
     ContentControl valueSurface{nullptr};
+    Grid valueBox;
     {
         // Read mode has the same text extent as the shared plain value. Keep
         // native text editing/accessibility while avoiding a hidden caret gutter.
@@ -139,8 +137,7 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
         display.Margin({preference?9.:6.,0,preference?9.:6.,0});display.IsHitTestVisible(false);
         AutomationProperties::SetAccessibilityView(display,Automation::Peers::AccessibilityView::Raw);
         readout=make_weak(display);
-        if(inlineTrack||(!valueOnly&&ranged))entry.Resources().Insert(box_value(L"TextControlForegroundDisabled"),hiddenText);
-        Grid valueBox;valueBox.UseLayoutRounding(false);Grid::SetColumn(valueBox,1);Grid::SetColumn(entry,0);
+        valueBox.UseLayoutRounding(false);Grid::SetColumn(valueBox,1);Grid::SetColumn(entry,0);
         valueBox.Children().Append(entry);
         if(panel){
             valueBox.Width(68);valueBox.Height(valueHeight);
@@ -586,10 +583,9 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
         slider.MinWidth(0);root.Children().Append(header);return root;
     }
     if(valueOnly){
-        auto valueHost=entry.Parent().as<Grid>();
         header.Children().RemoveAt(1);entry.ClearValue(FrameworkElement::WidthProperty());entry.MinWidth(0);
         entry.HorizontalAlignment(HorizontalAlignment::Stretch);entry.TextAlignment(TextAlignment::Center);
-        root.Children().Append(valueHost);return root;
+        root.Children().Append(valueBox);return root;
     }
     if(panel){
         sliderHost.Margin({36,0,76,0});sliderHost.VerticalAlignment(VerticalAlignment::Bottom);Grid::SetColumnSpan(sliderHost,2);Grid::SetRow(sliderHost,1);
@@ -606,8 +602,7 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
             for(auto& ch:measure)if(ch>=L'0'&&ch<=L'9')ch=L'8';
             entry.Width(std::max(24.,measureText(hstring(measure)))+2*data->panelMetric(L"field_padding"));
         }
-        auto valueHost=entry.Parent().as<Grid>();
-        header.Children().RemoveAt(1);spin.Children().Append(valueHost);
+        header.Children().RemoveAt(1);spin.Children().Append(valueBox);
         Border frame;frame.Child(spin);frame.Background(data->brush(L"input"));frame.CornerRadius(data->controlCorner());
         Grid::SetColumn(frame,1);header.Children().Append(frame);
     }
