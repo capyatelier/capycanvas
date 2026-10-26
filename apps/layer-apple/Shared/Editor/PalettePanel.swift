@@ -221,7 +221,6 @@ private struct PaletteRecentTile: View {
 
 private struct PaletteFooter: View {
     @State private var chooseCaption = ""
-    @State private var width: CGFloat = 264
     @ObservedObject var controller: PaletteController
     let view: JSON
     let control: CGFloat
@@ -232,14 +231,13 @@ private struct PaletteFooter: View {
     var body: some View {
         let selection = controller.selection(view)
         let name = selection?["name"].string ?? view["color_name"].string
-        HStack(spacing: 4) {
+        PropertyChoiceRow(labelFraction: 0.55) {
             Button { controller.focused = true; controller.toggleChooser() } label: {
                 HStack(spacing: 4) {
                     Text(view["name"].string).lineLimit(1).truncationMode(.tail)
                     SharedIcon(name: "chevron-down", size: 12).rotationEffect(.degrees(180))
                 }.padding(.horizontal, 6).frame(minHeight: control).contentShape(Rectangle())
-            }.buttonStyle(EditorControlButtonStyle()).frame(maxWidth: width * 0.55, alignment: .leading)
-                .fixedSize(horizontal: false, vertical: true).layoutPriority(1)
+            }.buttonStyle(EditorControlButtonStyle()).fixedSize(horizontal: false, vertical: true)
                 .help(chooseCaption).accessibilityLabel(controller.copy["choose"].string)
                 .accessibilityValue(view["name"].string).accessibilityIdentifier("palette-chooser")
             VStack(alignment: .trailing, spacing: 0) {
@@ -267,8 +265,7 @@ private struct PaletteFooter: View {
                     .help(controller.copy["hex_help"].string)
                     .accessibilityIdentifier("palette-color-detail")
             }.frame(maxWidth: .infinity, alignment: .trailing)
-        }.onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
-            .accessibilityElement(children: .contain).accessibilityIdentifier("palette-footer").onAppear { refreshCaption() }.onChange(of: view["name"].string) { _, _ in refreshCaption() }.onChange(of: controller.interfaceLanguage) { _, _ in refreshCaption() }
+        }.accessibilityElement(children: .contain).accessibilityIdentifier("palette-footer").onAppear { refreshCaption() }.onChange(of: view["name"].string) { _, _ in refreshCaption() }.onChange(of: controller.interfaceLanguage) { _, _ in refreshCaption() }
     }
 }
 

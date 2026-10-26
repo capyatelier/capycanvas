@@ -339,6 +339,9 @@ mutation or release.
   `EditorScrollView`; tabs and footer grips stay outside that viewport. Intersect
   Navigator placements with the body viewport so scrolling clips its native image
   before the header and grip.
+- **Palette footer.** Allocate at most 55% of the proposed row width to the
+  chooser. Measure the color details at the remaining width and centre both
+  controls in the resulting row. Footer sizing must not publish view state.
 - **Visibility queries.** Attach queries such as `canvas_bar_layout` to an always
   present container; `.task` and `.onAppear` do not run on an empty SwiftUI `Group`.
 - **Layer relationships.** Draw shared endpoints over measured row and content
