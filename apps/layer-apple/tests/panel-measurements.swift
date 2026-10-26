@@ -12,10 +12,9 @@ import Darwin
         NSApp.setActivationPolicy(.accessory)
         Task { @MainActor in
             do {
-                var completed = 0
-                FileHandle.standardError.write(Data("PANEL_MEASUREMENTS_BEGIN policies=2\n".utf8))
-                for platform: UInt32 in [0, 1] { try await check(platform); completed += 1 }
-                FileHandle.standardError.write(Data("PANEL_MEASUREMENTS_COMPLETE policies=\(completed) scope_matrices=\(completed * 4)\n".utf8))
+                FileHandle.standardError.write(Data("PANEL_MEASUREMENTS_BEGIN\n".utf8))
+                for platform: UInt32 in [0, 1] { try await check(platform) }
+                FileHandle.standardError.write(Data("PANEL_MEASUREMENTS_COMPLETE\n".utf8))
                 exit(0)
             } catch {
                 FileHandle.standardError.write(Data("FAIL: \(error)\n".utf8)); exit(1)
@@ -331,6 +330,7 @@ import Darwin
         try await wait("One Undo restores the docked panel") { store.state["workspace"]["layout"].stableKey == beforeDrag }
         try await store.apply(["type": "invoke", "command": "redo_workspace"])
         try await wait("One Redo restores the fitted float") { store.state["workspace"]["layout"].stableKey == afterDrag }
+        guard CommandLine.arguments.contains("--gpu") else { return }
         guard let path = ProcessInfo.processInfo.environment["CAPY_STORAGE_DIR"], path.hasPrefix("/") else {
             throw NSError(domain: "The Photo scope phase requires an absolute owned CAPY_STORAGE_DIR", code: 1)
         }

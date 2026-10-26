@@ -333,6 +333,8 @@ mutation or release.
 - **Scopes.** Measure the toolbar, axes, Log row and footer independently. Give
   the graph the remaining allocated height while keeping its natural workspace
   measurement independent of the current allocation.
+  Run the retained `panel-measurements` binary with `--gpu` for mounted scope
+  allocation checks; its default run stays in `test-without-gpu.sh`.
 - **Independent publications.** Handle small `layer-host` packets such as
   `{command_search, revision}` in `EditorSnapshotState.receive` without promoting
   the content revision or refreshing retained panels and thumbnails.
