@@ -705,6 +705,63 @@ mod tests {
         PreparedSession::prepare(&capture, json!({"marker": marker}), &AtomicBool::new(false)).unwrap()
     }
     #[test]
+    fn v1_0_14_paint_session_preserves_resources_history_and_identities() {
+        let fixture=Path::new(env!("CARGO_MANIFEST_DIR")).join("src/package/codec/fixtures/v1.0.14-paint-session");
+        let directory=Directory::new();let cancel=AtomicBool::new(false);
+        fs::create_dir_all(&directory.0).unwrap();
+        fs::copy(fixture.join("head.json"),directory.0.join("head.json")).unwrap();
+        for name in ["generations","resources"] {
+            fs::create_dir_all(directory.0.join(name)).unwrap();
+            for entry in fs::read_dir(fixture.join(name)).unwrap() {
+                let entry=entry.unwrap();fs::copy(entry.path(),directory.0.join(name).join(entry.file_name())).unwrap();
+            }
+        }
+        let head:Head=serde_json::from_slice(&fs::read(directory.0.join("head.json")).unwrap()).unwrap();
+        let metadata:serde_json::Value=serde_json::from_slice(&fs::read(directory.0.join("generations").join(format!("{}.json",head.current.id))).unwrap()).unwrap();
+        assert!(metadata["layout"].get("vectors").is_none());
+        let mut store=SessionStore::open(&directory.0).unwrap();
+        let mut restored=store.load(ProjectLimits::default(),&cancel).unwrap().unwrap();
+        assert_eq!(store.loaded_generation(),Some(head.current.id));assert!(!store.recovered_previous());
+        let document=restored.editor.document();
+        assert_eq!(document.artwork.id.to_string(),"cb36dabee8e7459b89932a0dc0ebe7a7");
+        assert_eq!(document.composition().size,[1024,1024]);assert!(document.artwork.vectors.is_empty());
+        assert_eq!(document.artwork.occurrences.iter().map(|(h,id,o)|(h.index(),id.to_string(),o.name.as_ref())).collect::<Vec<_>>(),vec![
+            (0,"be8351c98c2540a48d9307ab0108bebb".into(),"Upgrade source"),
+            (1,"a9335685506d4224bee788264243dff8".into(),"Paper")]);
+        let paint=match document.working.target.unwrap() {crate::SourceTarget::Paint(handle)=>handle,_=>panic!("Expected editable Paint layer")};
+        assert_eq!(paint.index(),0);
+        assert_eq!(document.artwork.paint.id(paint).unwrap().to_string(),"c7640099209e4fee9080371060ec828a");
+        let image=document.artwork.paint.get(paint).unwrap().base.as_ref().unwrap().image.clone();
+        assert_eq!(image.id().to_string(),"983fa80a28bd4dea8fa20d29713b49fa");assert_eq!(image.extent,[1024,1024]);
+        let resource_ids=fs::read_dir(fixture.join("resources")).unwrap().map(|entry|entry.unwrap().path().file_stem().unwrap().to_str().unwrap().parse::<PortableId>().unwrap()).collect::<BTreeSet<_>>();
+        assert_eq!(image.tiles.values().map(|tile|tile.resource_id()).collect::<BTreeSet<_>>(),resource_ids);assert_eq!(resource_ids.len(),16);
+        let samples=|image:&crate::Image| {
+            let mut rows=image.rows();let mut row=vec![0;image.row_bytes()];
+            rows.read(0,&mut row).unwrap();assert_eq!(&row[..3],&[118,118,118]);
+            rows.read(512,&mut row).unwrap();assert_eq!(&row[512*3..513*3],&[246,245,244]);
+        };
+        samples(&image);
+        let artwork=document.artwork.clone();let working=document.working.clone();
+        assert_eq!(restored.editor.checkpoint(),1);assert!(restored.editor.can_undo());assert!(!restored.editor.can_redo());
+        restored.editor.undo().unwrap();assert_eq!(restored.editor.checkpoint(),0);assert!(!restored.editor.can_undo());assert!(restored.editor.can_redo());
+        restored.editor.redo().unwrap();assert_eq!(restored.editor.checkpoint(),1);assert_eq!(restored.editor.document().artwork,artwork);
+        assert_eq!(restored.editor.document().working,working);
+        assert_eq!(restored.metadata.value["saved_checkpoint"],1);
+        assert_eq!(restored.metadata.value["location"]["uri"],"fixtures/v1.0.14/Upgrade drawing.capy");
+        let metadata=restored.metadata.value.clone();
+        let capture=restored.editor.capture_session(restored.editor.capture(2,Default::default()).unwrap()).unwrap();
+        let prepared=PreparedSession::prepare(&capture,restored.metadata,&cancel).unwrap();
+        let current:serde_json::Value=serde_json::from_slice(prepared.metadata()).unwrap();assert_eq!(current["layout"]["vectors"],json!([]));
+        let generation=store.commit(&prepared,&cancel).unwrap();assert_ne!(generation,head.current.id);drop(store);
+        let mut reopened=SessionStore::open(&directory.0).unwrap();
+        let mut restored=reopened.load(ProjectLimits::default(),&cancel).unwrap().unwrap();
+        assert_eq!(reopened.loaded_generation(),Some(generation));assert_eq!(restored.metadata.value,metadata);
+        assert_eq!(restored.editor.document().artwork,artwork);assert_eq!(restored.editor.document().working,working);
+        samples(&restored.editor.document().artwork.paint.get(paint).unwrap().base.as_ref().unwrap().image);
+        restored.editor.undo().unwrap();assert_eq!(restored.editor.checkpoint(),0);
+        restored.editor.redo().unwrap();assert_eq!(restored.editor.checkpoint(),1);assert_eq!(restored.editor.document().artwork,artwork);
+    }
+    #[test]
     fn custom_authority_is_local_to_committed_generations_and_survives_fallback() {
         let root=Directory::new();let cancel=AtomicBool::new(false);
         let mut editor=Editor::new(Document::new(PortableId::random(),19,11,DocumentNames {paint:"ink".into(),paper:"paper".into()}));

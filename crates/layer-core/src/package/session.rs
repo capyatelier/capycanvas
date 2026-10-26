@@ -93,7 +93,7 @@ const INDEX_CHUNK:usize=64;
 const INDEX_BOUNDARY:u32=8;
 #[derive(Clone,Debug,Serialize,Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct ObjectVersion {pub(crate) record:Value,index:Option<Vec<usize>>,}
+pub(crate) struct ObjectVersion {pub(crate) record:Value,#[serde(alias="tiles")] index:Option<Vec<usize>>,}
 fn indexed_field(record:&Value)->Option<&'static str> {
     match record["type"].as_str().and_then(registry::descriptor)?.kind {
         RecordKind::PaintSource|RecordKind::CoverageSource|RecordKind::Image=>Some("tiles"),
@@ -154,7 +154,7 @@ struct StateRecord {objects:Vec<usize>,outputs:Vec<Value>,working:WorkingRecord,
 struct SessionRecord {
     format:String,version:u32,checkpoint:CaptureCheckpoint,next_checkpoint:u64,next_stroke_id:u64,
     layout:TransferLayout,root:Value,default_output:Value,artwork_metadata:Option<Value>,
-    metadata:Value,metadata_profiles:Vec<Value>,objects:Vec<ObjectVersion>,index_chunks:Vec<Vec<Value>>,resources:Vec<Value>,extension_records:BTreeMap<PortableId,Value>,extension_resources:Vec<PortableId>,current:StateRecord,undo:Vec<StateRecord>,redo:Vec<StateRecord>,
+    metadata:Value,metadata_profiles:Vec<Value>,objects:Vec<ObjectVersion>,#[serde(alias="tile_chunks")] index_chunks:Vec<Vec<Value>>,resources:Vec<Value>,extension_records:BTreeMap<PortableId,Value>,extension_resources:Vec<PortableId>,current:StateRecord,undo:Vec<StateRecord>,redo:Vec<StateRecord>,
 }
 impl SessionRecord {
     fn manifest(&self,state:&StateRecord,directory:&Directory,limits:ProjectLimits)->Result<Manifest,OpenFailure> {

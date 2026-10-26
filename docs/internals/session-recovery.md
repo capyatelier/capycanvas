@@ -53,6 +53,10 @@ portable artwork record and resource adapters. It retains typed record identitie
 tombstones and checkpoint identities across history. Object versions, raster-tile
 and vector-chunk index groups and immutable resource payloads are shared across
 historical states.
+Sessions written by v1.0.14 omit the vector handle slots and restore an empty
+vector store. Their raster `tiles` and `tile_chunks` references load through the
+current index fields. Artwork, resources, editing targets and history still pass
+the ordinary session validation.
 Immutable images are interned by portable ID across all states. Changed-record
 transfers carry each value’s image dependency closure, including images retained
 only by undo. Conflicting descriptors for one image ID reject the session;

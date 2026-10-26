@@ -9,7 +9,7 @@ use std::{collections::{BTreeMap, BTreeSet}, mem::MaybeUninit, sync::{Arc, atomi
 pub struct TransferLayout {
     compositions: Vec<PortableId>, stacks: Vec<PortableId>, occurrences: Vec<PortableId>,
     paint: Vec<PortableId>, coverage: Vec<PortableId>, effects: Vec<PortableId>,
-    objects:Vec<PortableId>, vectors:Vec<PortableId>, selections: Vec<PortableId>, guides: Vec<PortableId>, outputs: Vec<PortableId>,
+    objects:Vec<PortableId>, #[serde(default)] vectors:Vec<PortableId>, selections: Vec<PortableId>, guides: Vec<PortableId>, outputs: Vec<PortableId>,
 }
 impl TransferLayout {
     pub(crate) fn capture(art: &Artwork)->Self {
