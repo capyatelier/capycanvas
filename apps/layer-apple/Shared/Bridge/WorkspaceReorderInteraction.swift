@@ -26,7 +26,6 @@ import SwiftUI
             && store.state["customization"]["control"].isNull
     }
     var menuAnchor: CGRect {
-        if let menuSource, let bounds = workspace?.sourceInstances[menuSource]?.bounds { return bounds }
         return CGRect(origin: menuPoint, size: CGSize(width: 1, height: 1))
     }
     func validate() {
@@ -101,7 +100,7 @@ struct WorkspaceContactMenu: View {
         Color.clear.frame(width: anchor.width, height: anchor.height)
             .editorPopover(isPresented: Binding(get: { !interaction.menu.isNull }, set: {
                 if !$0 { interaction.closeMenu() }
-            }), placement: .inward, owner: interaction.popup) {
+            }), placement: .below, owner: interaction.popup) {
                 WorkspaceMenu(store: store, menu: interaction.menu) { interaction.closeMenu() }
             }
             .offset(x: anchor.minX, y: anchor.minY).allowsHitTesting(false)

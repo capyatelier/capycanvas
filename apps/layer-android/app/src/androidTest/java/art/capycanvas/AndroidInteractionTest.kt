@@ -25,6 +25,11 @@ import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import java.io.File
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 /** Native mouse/finger/pen MotionEvents on the tablet, including popup focus and CANCEL.
  * Keep the real frame clock: a held contact must survive opening a native popup. */
@@ -680,13 +685,200 @@ class AndroidInteractionTest {
     }
 
     private fun savedWorkspace() = JSONObject(workspace()).apply { getJSONObject("layout").remove("header_presentation") }.toString()
-    private fun emptyPoint(area: Rect, occupied: List<Rect>): Offset {
+    private fun emptyPoint(area: Rect, occupied: List<Rect>, near: Offset? = null): Offset {
+        var closest: Offset? = null
         val candidates = listOf(area.center.y) + (1..20).map { area.top + area.height * it / 21 }
         for (y in candidates) for (step in 1..200) {
             val point = Offset(area.left + area.width * step / 201, y)
-            if (occupied.none { it.inflate(density).contains(point) }) return point
+            if (occupied.none { it.inflate(density).contains(point) }) {
+                if (near == null) return point
+                if (closest == null || (point - near).getDistanceSquared() < (closest - near).getDistanceSquared()) closest = point
+            }
         }
+        closest?.let { return it }
         error("No empty background in $area outside $occupied")
+    }
+
+    private fun assertMenuAtContact(label: String, press: Offset): Rect {
+        val menu = bounds("workspace-menu")
+        val viewport = bounds("workspace")
+        val tolerance = 8 * density
+        assertTrue("$label menu fits horizontally: $menu in $viewport", menu.left >= viewport.left - tolerance && menu.right <= viewport.right + tolerance)
+        assertTrue("$label menu fits vertically: $menu in $viewport", menu.top >= viewport.top - tolerance && menu.bottom <= viewport.bottom + tolerance)
+        if (press.x - viewport.left >= menu.width || viewport.right - press.x >= menu.width)
+            assertTrue("$label horizontal menu edge follows $press, actual $menu", minOf(kotlin.math.abs(menu.left - press.x), kotlin.math.abs(menu.right - press.x)) <= tolerance)
+        val safeTop = viewport.top + 48 * density
+        val safeBottom = viewport.bottom - 48 * density
+        if (press.y < safeTop) assertEquals("$label clamps to the native top margin", safeTop, menu.top, tolerance)
+        else if (press.y > safeBottom) assertEquals("$label clamps to the native bottom margin", safeBottom, menu.bottom, tolerance)
+        else if (press.y - safeTop >= menu.height || safeBottom - press.y >= menu.height)
+            assertTrue("$label vertical menu edge follows $press, actual $menu", minOf(kotlin.math.abs(menu.top - press.y), kotlin.math.abs(menu.bottom - press.y)) <= tolerance)
+        return menu
+    }
+
+    @Test fun contextMenusFollowNativeContactsAcrossTheWindow() {
+        for (portrait in listOf(false, true)) {
+            if (portrait) device.portrait(scenario) else device.landscape(scenario)
+            for (theme in listOf("light", "dark")) for (pointer in pointerTools) {
+                tool = pointer
+                restore()
+                action(obj("type" to "set_theme", "theme" to theme))
+                val toolbar = snapshot().array("panels").objects().first { it.getString("id") == "toolbar" }
+                val tiles = toolbar.array("tiles").objects().mapNotNull {
+                    val tag = "tile-toolbar-${it.getInt("id")}"; if (exists(tag)) bounds(tag) else null
+                }
+                val area = bounds("panel-body-toolbar")
+                val occupied = tiles + listOfNotNull(if (exists("ribbon-grip-toolbar")) bounds("ribbon-grip-toolbar") else null)
+                val tile = toolbar.array("tiles").objects().first { it.getBoolean("enabled") && !it.has("component") }
+                val tileBounds = bounds("tile-toolbar-${tile.getInt("id")}")
+                action(obj("type" to "select_panel_tab", "group" to 41, "panel" to "sizes"))
+                val panel = bounds("panel-body-sizes")
+                val header = bounds("title-bar")
+                val headerItems = snapshot().getJSONObject("header").getJSONObject("model").array("zones").values()
+                    .flatMap { (it as JSONArray).objects() }.mapNotNull {
+                        val tag = "header-item-${it.getInt("id")}"; if (exists(tag)) bounds(tag) else null
+                    } + listOfNotNull(if (exists("zen-button")) bounds("zen-button") else null)
+                val contacts = listOf("tile" to Offset(tileBounds.left + tileBounds.width * .8f, tileBounds.center.y),
+                    "toolbar-left" to emptyPoint(area, occupied, Offset(area.left + area.width * .3f, area.center.y)),
+                    "toolbar-right" to emptyPoint(area, occupied, Offset(area.left + area.width * .7f, area.center.y)),
+                    "panel" to Offset(panel.center.x, panel.bottom - 12 * density),
+                    "header" to emptyPoint(header, headerItems, header.center),
+                    "zen" to bounds("zen-button").center)
+                for ((source, press) in contacts) {
+                    val label = "$portrait/$theme/$pointer/$source"
+                    mouseButton = if (pointer == MotionEvent.TOOL_TYPE_MOUSE) MotionEvent.BUTTON_SECONDARY else MotionEvent.BUTTON_PRIMARY
+                    event(MotionEvent.ACTION_DOWN, press)
+                    if (pointer != MotionEvent.TOOL_TYPE_MOUSE) SystemClock.sleep(700)
+                    waitFor("$label opens menu") { popupCount() == 1 }; settle()
+                    screenshot("validation/menu-contact/$portrait-$theme-$pointer-$source-held.png")
+                    val held = assertMenuAtContact(label, press)
+                    event(MotionEvent.ACTION_UP); settle()
+                    val released = assertMenuAtContact("$label release", press)
+                    assertEquals("Release keeps the menu in place", held.left, released.left, 2 * density)
+                    assertEquals("Release keeps the menu in place", held.top, released.top, 2 * density)
+                    back()
+                }
+                mouseButton = MotionEvent.BUTTON_PRIMARY
+            }
+        }
+    }
+
+    @Test fun contextRequestsKeepTheirSourceAndRetireLateReplies() {
+        val dock = DockInteraction(host)
+        val first = Any(); val second = Any()
+        val targetA = obj("kind" to "panel", "panel" to "brushes")
+        val targetB = obj("kind" to "panel", "panel" to "sizes")
+        val firstBounds = Rect(20f, 30f, 200f, 300f)
+        val secondBounds = Rect(240f, 60f, 480f, 360f)
+        fun reset() = instrumentation.runOnMainSync {
+            dock.closeContext(); dock.windowFocus(true); dock.anchors.clear()
+            dock.anchors[first] = DockInteraction.Anchor(dock.anchorKey(targetA), firstBounds)
+            dock.anchors[second] = DockInteraction.Anchor(dock.anchorKey(targetB), secondBounds)
+            dock.contactSource = first; dock.contactPosition = Offset(70f, 90f)
+        }
+        fun blockedReply(change: () -> Unit, pending: () -> Unit) {
+            val entered = CountDownLatch(1); val release = CountDownLatch(1)
+            try {
+                instrumentation.runOnMainSync {
+                    dock.context(targetA)
+                    CoroutineScope(Dispatchers.Main.immediate).launch {
+                        host.withNative { entered.countDown(); release.await(10, TimeUnit.SECONDS) }
+                    }
+                    assertTrue("Native reply barrier", entered.await(5, TimeUnit.SECONDS))
+                    change()
+                }
+                instrumentation.runOnMainSync { pending() }
+            } finally { release.countDown(); host.drain() }
+        }
+        try {
+            reset()
+            blockedReply({ dock.contactSource = second; dock.contactPosition = Offset(300f, 150f); dock.context(targetB) },
+                { assertNull("A superseded reply cannot open the old menu", dock.contextMenu) })
+            instrumentation.runOnMainSync {
+                assertEquals(targetB.toString(), dock.contextRequest!!.getJSONObject("target").toString())
+                assertEquals(Rect(Offset(300f, 150f), Offset(300f, 150f)), dock.contextAnchor)
+            }
+            for (retire in listOf<() -> Unit>(
+                { dock.beginContact(Offset(400f, 250f), androidx.compose.ui.input.pointer.PointerType.Touch) },
+                { dock.windowFocus(false) }, { dock.removeAnchor(first) })) {
+                reset()
+                blockedReply(retire) { assertNull("Retired source cannot receive a late reply", dock.contextMenu) }
+                instrumentation.runOnMainSync { assertNull(dock.contextMenu) }
+            }
+            reset()
+            instrumentation.runOnMainSync {
+                dock.anchors[second] = DockInteraction.Anchor(dock.anchorKey(targetA), secondBounds)
+                dock.context(targetA)
+            }
+            host.drain()
+            instrumentation.runOnMainSync {
+                assertNotNull(dock.contextMenu)
+                dock.removeAnchor(second)
+                assertNotNull("Removing a duplicate target keeps its real owner's menu", dock.contextMenu)
+                dock.removeAnchor(first)
+                assertNull("Removing the actual owner closes a released menu", dock.contextMenu)
+                dock.anchors[second] = DockInteraction.Anchor(dock.anchorKey(targetA), secondBounds)
+                dock.contactPosition = null; dock.contactSource = null
+                dock.context(targetA)
+            }
+            host.drain()
+            instrumentation.runOnMainSync { assertEquals("Keyboard/programmatic context keeps its measured anchor", secondBounds, dock.contextAnchor) }
+        } finally { instrumentation.runOnMainSync { dock.closeContext() }; host.drain() }
+    }
+
+    @Test fun headerMenusUseContactPointsAndRetireTheirOwner() {
+        val header = HeaderInteraction(host, DockInteraction(host))
+        val entry = snapshot().getJSONObject("header").getJSONObject("model").array("zones").values()
+            .flatMap { (it as JSONArray).objects() }.first { it.getJSONObject("item").getString("kind") == "settings" }
+        val source = HeaderInteraction.Source(Any(), obj("kind" to "item", "value" to entry.getInt("id")), "", Rect(10f, 20f, 180f, 60f), 1, null)
+        instrumentation.runOnMainSync {
+            header.enabled = true; header.sources[source.token] = source
+            header.menu(entry.getInt("id"), source, Offset(130f, 45f))
+        }
+        host.drain()
+        instrumentation.runOnMainSync {
+            assertNotNull(header.context)
+            assertEquals(Rect(Offset(130f, 45f), Offset(130f, 45f)), header.contextBounds)
+            header.closeMenu(); header.menu(entry.getInt("id"), source)
+        }
+        host.drain()
+        instrumentation.runOnMainSync {
+            assertEquals(source.bounds, header.contextBounds)
+            header.removeSource(source.token)
+            assertNull("A removed header item retires its menu", header.context)
+        }
+    }
+
+    @Test fun secondContactCancelsWorkspaceAndHeaderMenus() {
+        fun send(action: Int, points: List<Offset>) {
+            val properties = Array(points.size) { index -> MotionEvent.PointerProperties().apply { id = index; toolType = MotionEvent.TOOL_TYPE_FINGER } }
+            val coords = Array(points.size) { index -> MotionEvent.PointerCoords().apply { x = points[index].x; y = points[index].y; pressure = .7f } }
+            val motion = MotionEvent.obtain(downAt, SystemClock.uptimeMillis(), action, points.size, properties, coords, 0, 0, 1f, 1f, 0, 0, InputDevice.SOURCE_TOUCHSCREEN, 0)
+            try { instrumentation.runOnMainSync { owner.view.dispatchTouchEvent(motion) } } finally { motion.recycle() }
+        }
+        tool = MotionEvent.TOOL_TYPE_FINGER
+        for (theme in listOf("light", "dark")) for (header in listOf(false, true)) for (held in listOf(false, true)) {
+            restore(); action(obj("type" to "set_theme", "theme" to theme))
+            val press = if (header) {
+                val occupied = snapshot().getJSONObject("header").getJSONObject("model").array("zones").values()
+                    .flatMap { (it as JSONArray).objects() }.mapNotNull { val tag = "header-item-${it.getInt("id")}"; if (exists(tag)) bounds(tag) else null } + bounds("zen-button")
+                emptyPoint(bounds("title-bar"), occupied)
+            } else {
+                val occupied = snapshot().array("panels").objects().first { it.getString("id") == "toolbar" }.array("tiles").objects()
+                    .mapNotNull { val tag = "tile-toolbar-${it.getInt("id")}"; if (exists(tag)) bounds(tag) else null } + bounds("ribbon-grip-toolbar")
+                emptyPoint(bounds("panel-body-toolbar"), occupied)
+            }
+            val before = savedWorkspace()
+            event(MotionEvent.ACTION_DOWN, press)
+            if (held) { SystemClock.sleep(700); waitFor("First contact opens menu") { popupCount() == 1 } }
+            val pair = listOf(press, press + Offset(20 * density, 0f))
+            send(MotionEvent.ACTION_POINTER_DOWN or (1 shl MotionEvent.ACTION_POINTER_INDEX_SHIFT), pair)
+            SystemClock.sleep(700)
+            assertEquals("$theme/header=$header/held=$held second contact retires the menu", 0, popupCount())
+            send(MotionEvent.ACTION_POINTER_UP or (1 shl MotionEvent.ACTION_POINTER_INDEX_SHIFT), pair)
+            event(MotionEvent.ACTION_UP, press); settle()
+            assertEquals(before, savedWorkspace())
+        }
     }
 
     @Test fun emptyWorkspaceBackgroundsOpenMenusWithoutDragging() {
@@ -801,25 +993,32 @@ class AndroidInteractionTest {
                     "ribbon" -> "ribbon-grip-toolbar"
                     else -> "column-grip-41"
                 }
-                val before = workspace()
                 val press = bounds(tag).center
                 event(MotionEvent.ACTION_DOWN, press)
+                host.drain()
+                val before = savedWorkspace()
                 SystemClock.sleep(700)
                 assertEquals("$pointer/$kind only touch/pen holds open menus", holdMenuCount, popupCount())
+                if (holdMenuCount > 0) assertMenuAtContact("$pointer/$kind", press)
                 instrumentation.runOnMainSync { assertTrue("Held menu preserves the original window contact", owner.view.hasWindowFocus()) }
                 event(MotionEvent.ACTION_UP)
                 settle()
                 assertEquals("$pointer/$kind release retains touch/pen menu", holdMenuCount, popupCount())
                 if(holdMenuCount>0)back()
                 assertEquals(0, popupCount())
-                event(MotionEvent.ACTION_DOWN, press)
+                val nextPress = bounds(tag).center
+                event(MotionEvent.ACTION_DOWN, nextPress)
                 SystemClock.sleep(700)
                 assertEquals("$pointer/$kind second hold", holdMenuCount, popupCount())
-                event(MotionEvent.ACTION_MOVE, bounds("workspace").center)
+                val destination = if (kind in listOf("tile", "drawer-tile")) snapshot().array("panels").objects()
+                    .first { it.getString("id") == "toolbar" }.array("tiles").objects()
+                    .map { bounds("tile-toolbar-${it.getInt("id")}").center }.first { (it - nextPress).getDistance() > 30 * density }
+                    else bounds("workspace").center
+                event(MotionEvent.ACTION_MOVE, destination)
                 waitFor("$pointer/$kind continues original drag") { surface.pointerIcon == PointerIcon.getSystemIcon(surface.context, PointerIcon.TYPE_GRABBING) }
                 waitFor("$pointer/$kind drag closes menu") { popupCount() == 0 }
                 event(MotionEvent.ACTION_CANCEL)
-                waitFor("$pointer/$kind cancel") { workspace() == before && surface.pointerIcon != PointerIcon.getSystemIcon(surface.context, PointerIcon.TYPE_GRABBING) }
+                waitFor("$pointer/$kind cancel") { savedWorkspace() == before && surface.pointerIcon != PointerIcon.getSystemIcon(surface.context, PointerIcon.TYPE_GRABBING) }
             }
         }
     }

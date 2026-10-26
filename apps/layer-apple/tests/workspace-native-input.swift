@@ -74,13 +74,16 @@ import SwiftUI
                 try await send(.leftMouseDown, background, pen: pen)
                 try await drain(hold)
                 try require(!input.contact.dragging && input.menu.isNull != pen, "Only pen holds open the toolbar background menu")
+                if pen { try require(input.menuAnchor.origin == background && input.menuAnchor.size == CGSize(width: 1, height: 1), "The background menu must anchor to the native contact") }
                 try await send(.leftMouseUp, background, pen: pen)
                 try require(input.menu.isNull != pen, "Background release retains the pen menu")
+                if pen { try require(input.menuAnchor.origin == background, "Release must retain the contact anchor") }
                 if pen { try key("\u{1b}", code: 53, window: window); try await drain() }
                 try require(store.state["workspace"].stableKey == before, "A background hold must not change the workspace")
             }
             try await send(.rightMouseDown, background); try await send(.rightMouseUp, background)
             try await wait("Toolbar background secondary menu") { !input.menu.isNull }
+            try require(input.menuAnchor.origin == background && input.menuAnchor.size == CGSize(width: 1, height: 1), "Secondary click must use its native point")
             try key("\u{1b}", code: 53, window: window); try await drain()
         }
         var start = try await center(item)
@@ -114,6 +117,7 @@ import SwiftUI
                 try require(input.contact.held && !input.contact.dragging, "A native stationary hold must only arm the tile: platform=\(platform), \(label), pen=\(pen), "
                     + "held=\(input.contact.held), dragging=\(input.contact.dragging), key=\(window.isKeyWindow), active=\(NSApp.isActive)")
                 try require(input.menu.isNull != pen, "Only the pen hold may open the tile menu")
+                if pen { try require(input.menuAnchor.origin == start && input.menuAnchor.size == CGSize(width: 1, height: 1), "A tile menu must use its contact, not the tile bounds") }
                 try await send(.leftMouseUp, start, pen: pen)
                 try require(store.state["workspace"].stableKey == before, "A held release must not activate or reorder the tile")
                 try require(input.menu.isNull != pen, "Pen release must retain the menu; mouse holds have none")

@@ -155,7 +155,7 @@ private fun formatted(language: String, control: JSONObject, value: Float, units
                     if (currentEvent.buttons.isSecondaryPressed) { down.consume(); dock.context(item) }
                 }
             }) {
-                Box(Modifier.placed(geometry.getJSONObject(0), density).contextAnchor(dock, item).dragSource(dock, item, holdToDrag = true)
+                Box(Modifier.placed(geometry.getJSONObject(0), density).dragSource(dock, item, holdToDrag = true)
                     .clickable(enabled = field != null) { preview = true }.testTag("slider-cap-$id"), contentAlignment = Alignment.Center) {
                     if (sliderStyle.getBoolean("show_value")) {
                         val readout = toolbarUi(host.languageTag, obj("type" to "slider_readout", "style" to style,
@@ -213,7 +213,7 @@ private fun formatted(language: String, control: JSONObject, value: Float, units
                     }
                 }
                 val source = dock.tileDrawerSource(panel.getString("id"), id)
-                Box(Modifier.placed(layout.getJSONObject("more"), density).contextAnchor(dock, item).dragSource(dock, item, holdToDrag = true)
+                Box(Modifier.placed(layout.getJSONObject("more"), density).dragSource(dock, item, holdToDrag = true)
                     .clip(drawerButtonShape(source?.direction))
                     .testTag("toolbar-more-$id").clickable { host.dispatch(obj("type" to "activate_tile", "panel" to panel.getString("id"), "tile" to id)) }, contentAlignment = Alignment.Center) {
                     SharedIcon("more", "More tool options", Modifier.size(iconSize.dp))

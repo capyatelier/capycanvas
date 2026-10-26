@@ -125,7 +125,7 @@ import SwiftUI
                     .placed(header.preview["held"]).allowsHitTesting(false).accessibilityHidden(true)
             }
             Color.clear.frame(width: header.menuAnchor.width, height: header.menuAnchor.height)
-                .editorPopover(isPresented: Binding(get: { !header.menu.isNull }, set: { if !$0 { header.closeMenu() } }), placement: .inward, owner: header.popup) {
+                .editorPopover(isPresented: Binding(get: { !header.menu.isNull }, set: { if !$0 { header.closeMenu() } }), placement: .below, owner: header.popup) {
                     WorkspaceMenu(store: store, menu: header.menu) { header.closeMenu() }
                 }.offset(x: header.menuAnchor.minX, y: header.menuAnchor.minY).allowsHitTesting(false)
         }

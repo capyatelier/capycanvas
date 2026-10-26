@@ -79,7 +79,7 @@ import SwiftUI
                 guard let self, self.enabled, self.layoutKey == key else { return false }
                 return dragging || self.sources[id] == source || self.overflowSources[id] == source
             },
-            openContext: { [weak self] in self?.showMenu(source) },
+            openContext: { [weak self] in self?.showMenu(source, at: point) },
             closeContext: { [weak self] in self?.closeMenu() },
             begin: { [weak self] in self?.begin(source, at: $0) },
             move: { [weak self] in self?.move($0) },
@@ -91,12 +91,12 @@ import SwiftUI
     }
     func context(at point: CGPoint) {
         guard acceptsContext(at: point), let source = sources.values.first(where: { $0.bounds.contains(point) }) else { return }
-        showMenu(source)
+        showMenu(source, at: point)
     }
-    func showMenu(_ source: HeaderSource) {
+    func showMenu(_ source: HeaderSource, at point: CGPoint? = nil) {
         guard source.value["kind"].string == "item", let store else { return }
         let id = source.value["value"].uint
-        selected = id; menuAnchor = source.bounds
+        selected = id; menuAnchor = point.map { CGRect(origin: $0, size: CGSize(width: 1, height: 1)) } ?? source.bounds
         let token = UUID(); menuRequest = token
         store.query(["type":"context", "target":["kind":"header", "id":id]]) { [weak self] value in
             guard let self, self.menuRequest == token, self.enabled else { return }

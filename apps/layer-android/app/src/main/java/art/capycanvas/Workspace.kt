@@ -551,19 +551,16 @@ private fun expandedShape(expansion: JSONObject, density: Float) = GenericShape 
     lineTo(left, radius); squircleTo(Offset(left + radius, radius), Offset(-radius, 0f), Offset(0f, -radius)); close()
 }
 
-@Composable internal fun ZenButton(host: CanvasHost, snapshot: JSONObject, dock: DockInteraction, bounds: JSONObject?, size: JSONObject) {
+@Composable internal fun ZenButton(host: CanvasHost, snapshot: JSONObject, input: HeaderInteraction, bounds: JSONObject?, size: JSONObject) {
+    val dock = input.dock
     val command = snapshot.getJSONObject("header").getJSONObject("capy")
     val target = remember { obj("kind" to "zen_mode") }
-    val anchor = dock.anchorKey(target)
-    DisposableEffect(dock) { onDispose { dock.anchors.remove(anchor) } }
-    SideEffect { if (bounds == null) dock.anchors.remove(anchor) }
     Layout(modifier = Modifier.fillMaxSize().zIndex(1000f), content = {
     HeaderButton(command.getString("tooltip"), false, bounds != null && command.optBoolean("enabled"), false,
         Modifier.size(size.number("tile").dp).alpha(if (command.optBoolean("enabled")) 1f else .4f).testTag("zen-button")
             .chromeRegion(dock, header = !snapshot.optBoolean("chrome_hidden"), active = bounds != null)
-            .onGloballyPositioned {
-                if (bounds != null) dock.anchors[anchor] = it.boundsInRoot().translate(-dock.origin)
-            }
+            .then(if (bounds != null) Modifier.contextAnchor(dock, target)
+                .headerSource(input, obj("kind" to "control"), command.getString("tooltip"), 2) else Modifier)
             .pointerInput(dock) {
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)

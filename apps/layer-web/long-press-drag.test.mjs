@@ -58,17 +58,21 @@ export async function checkLongPressDragging({call, evaluate, settle}) {
       const scope = drawer ? '.content-drawer[data-drawer="43"]' : '.dock-group[data-group="43"]';
       const selector = tile ? '.toolbar-controls [data-drag-pickup="hold"]' : mode === "toolbar-grip" ? '.toolbar-controls > .panel-grip' : ["grip","floating-group"].includes(mode) ? `${scope} .dock-tabs > .panel-grip` : `${scope} .dock-tab[data-panel="properties"]`;
       const start = center(await rect(selector)), before = await snapshot();
+      if (!tile && !["grip", "floating-group", "toolbar-grip"].includes(mode)) {
+        const group = mode === "floating-tab" ? before.layout.floating[0].root : before.layout.bands[1].root;
+        group.active = "properties";
+      }
       pen = mode === "pen" || mode === "tool-pen";
       await press(start);
       await evaluate("new Promise(r=>setTimeout(r,650))");
       assert.equal(await menu(),true,`${mode}: hold opens the menu`);
-      assert.deepEqual(await snapshot(),before,`${mode}: hold does not move or select the tab`);
+      assert.deepEqual(await snapshot(),before,`${mode}: hold preserves the layout after press selects its tab`);
       await move({x:start.x+2,y:start.y});
       assert.equal(await menu(),true,"Small movements keep the menu open");
       if (mode === "release") {
         await release(); await clean();
         assert.equal(await menu(),true,"Releasing a hold keeps its menu available");
-        assert.deepEqual(await snapshot(),before,"Releasing a hold must not select the inactive tab");
+        assert.deepEqual(await snapshot(),before,"Releasing a hold keeps the tab selected on press");
         const button = await evaluate("(()=>{const n=[...document.querySelectorAll('.panel-context-menu button')].find(n=>n.textContent.includes('Hide Properties'));const r=n.getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()");
         await press(button); await release();
         assert.equal(await menu(),false,"A subsequent contact can choose a menu action");

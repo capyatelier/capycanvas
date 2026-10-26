@@ -14,15 +14,22 @@ private struct EditorContextSource: ViewModifier {
     let visibility: (Bool) -> Void
     @State private var menu: AppleContextMenu?
     @State private var request = UUID()
+    @State private var point = CGPoint.zero
     func body(content: Content) -> some View {
         NativeContextMenuHost(content: content, open: open, cancel: close)
-            .editorPopover(isPresented: Binding(get: { menu != nil }, set: { if !$0 { close() } }), placement: .inward) {
-                if let menu { EditorActionMenu(model: menu, dismiss: close) }
+            .overlay {
+                GeometryReader { _ in
+                    Color.clear.frame(width: 1, height: 1)
+                        .editorPopover(isPresented: Binding(get: { menu != nil }, set: { if !$0 { close() } }), placement: .below) {
+                            if let menu { EditorActionMenu(model: menu, dismiss: close) }
+                        }.position(x: point.x + 0.5, y: point.y + 0.5)
+                }.allowsHitTesting(false)
             }
             .onChange(of: identity) { _, _ in close() }
             .onDisappear { close() }
     }
-    private func open() {
+    private func open(_ location: CGPoint) {
+        point = location
         let ticket = UUID(); request = ticket
         load { result in
             guard request == ticket else { return }
@@ -48,7 +55,7 @@ private struct NativeMenuContent<Content: View>: View {
 /// recognition. The shared SwiftUI helper owns all menu layout and actions.
 private struct NativeContextMenuHost<Content: View>: UIViewControllerRepresentable {
     let content: Content
-    let open: () -> Void
+    let open: (CGPoint) -> Void
     let cancel: () -> Void
     func makeUIViewController(context: Context) -> NativeContextMenuController<Content> {
         NativeContextMenuController(rootView: NativeMenuContent(content: content, values: context.environment))
@@ -64,7 +71,7 @@ private struct NativeContextMenuHost<Content: View>: UIViewControllerRepresentab
 }
 
 private final class NativeContextMenuController<Content: View>: UIHostingController<NativeMenuContent<Content>>, UIGestureRecognizerDelegate {
-    var open: () -> Void = {}
+    var open: (CGPoint) -> Void = { _ in }
     var cancel: () -> Void = {}
     private lazy var hold = UILongPressGestureRecognizer(target: self, action: #selector(held))
     private lazy var secondary = UITapGestureRecognizer(target: self, action: #selector(clicked))
@@ -76,10 +83,10 @@ private final class NativeContextMenuController<Content: View>: UIHostingControl
         view.addGestureRecognizer(hold); view.addGestureRecognizer(secondary)
     }
     @objc private func held(_ recognizer: UILongPressGestureRecognizer) {
-        if recognizer.state == .began { open() }
+        if recognizer.state == .began { open(recognizer.location(in: view)) }
         else if recognizer.state == .cancelled { cancel() }
     }
-    @objc private func clicked(_ recognizer: UITapGestureRecognizer) { open() }
+    @objc private func clicked(_ recognizer: UITapGestureRecognizer) { open(recognizer.location(in: view)) }
     func gestureRecognizer(_ recognizer: UIGestureRecognizer, shouldReceive event: UIEvent) -> Bool {
         recognizer === secondary ? event.buttonMask.contains(.secondary) : !event.buttonMask.contains(.secondary)
     }

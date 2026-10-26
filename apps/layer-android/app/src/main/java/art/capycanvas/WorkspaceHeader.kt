@@ -135,7 +135,7 @@ private fun CanvasHost.primaryMenu(open: (JSONObject?) -> Unit) =
         }
         val hidden = snapshot.optBoolean("chrome_hidden")
         val capyVisible = snapshot.objectOrNull("preferences") == null && (snapshot.optBoolean("keep_zen_button") || (!hidden && !editing && geometry?.isNull("capy_item") == false))
-        ZenButton(host, snapshot, input.dock, geometry?.objectOrNull("zen_button")?.takeIf { capyVisible }, size)
+        ZenButton(host, snapshot, input, geometry?.objectOrNull("zen_button")?.takeIf { capyVisible }, size)
         CompositionLocalProvider(LocalWorkspaceVisible provides !hidden) {
         ZenChrome(!hidden,Modifier.fillMaxSize()) {
         Box(Modifier.fillMaxWidth().height(height.dp).testTag("title-bar").chromeRegion(input.dock, header = true)
@@ -304,7 +304,7 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
                 if (key.action == KeyEvent.ACTION_DOWN) menu = null
                 true
             } else if (kind == "workspaces" && (key.keyCode == KeyEvent.KEYCODE_MENU || key.isShiftPressed && key.keyCode == KeyEvent.KEYCODE_F10)) {
-                if (key.action == KeyEvent.ACTION_DOWN) input.menu(id, input.sources.values.firstOrNull { it.source.optInt("value", -1) == id }?.bounds ?: Rect.Zero)
+                if (key.action == KeyEvent.ACTION_DOWN) input.sources.values.firstOrNull { it.source.optInt("value", -1) == id }?.let { input.menu(id, it) }
                 true
             } else false
         }
@@ -347,9 +347,9 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
                     }
                 }
                 kind == "workspaces" && !compact -> WorkspaceSwitcher(host, Modifier.fillMaxWidth(), interactive = !editing) {
-                    input.menu(id, input.sources.values.firstOrNull { it.source.optInt("value", -1) == id }?.bounds ?: Rect.Zero)
+                    input.sources.values.firstOrNull { it.source.optInt("value", -1) == id }?.let { input.menu(id, it) }
                 }
-                kind == "document_title" -> DrawingHeader(host, title, editing, size.number("tile"), size.number("gap")) { headerSource(input, obj("kind" to "item", "value" to id), label, 2, hold = false) }
+                kind == "document_title" -> DrawingHeader(host, title, editing, size.number("tile"), size.number("gap")) { headerSource(input, obj("kind" to "control"), label, 2) }
                 kind == "clock" -> SystemStatus(showBattery = false)
                 kind == "battery" -> SystemStatus(clock = false)
                 kind == "space" -> if (editing) Text("·", color = colors.secondary)

@@ -677,10 +677,16 @@ Preserve user names and document contents across language changes. Follow the
   Empty workspace backgrounds use Android
   `AndroidInteractionTest#emptyWorkspaceBackgroundsOpenMenusWithoutDragging`,
   `#workspaceBackgroundMenusPreserveControlsAndColumnDoubleTap`,
+  `#contextMenusFollowNativeContactsAcrossTheWindow`,
+  `#contextRequestsKeepTheirSourceAndRetireLateReplies`,
+  `#headerMenusUseContactPointsAndRetireTheirOwner`,
+  `#secondContactCancelsWorkspaceAndHeaderMenus`,
   Apple's mounted `workspace-native-input.swift`, and Windows `toolbars:dark`,
   `toolbars:light`, `header:options` and `header:options-light` fixtures. Check
   held release, cancellation, movement before the hold, secondary clicks and
   child-control ownership without changing the workspace.
+  Check actual popup bounds against off-center contacts across both orientations
+  and themes, and reject stale replies after replacement, blur or source removal.
 - **Parity.** Web is compared with GTK, and each native port with Web, at the
   same document, workspace, theme, viewport and scale. For GTK and Web, run
   `cargo test --locked --release -p layer-linux native_web_parity_reference -- --ignored --test-threads=1`,

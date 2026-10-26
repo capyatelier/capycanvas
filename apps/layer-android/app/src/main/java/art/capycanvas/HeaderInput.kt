@@ -34,7 +34,7 @@ internal fun Modifier.headerChrome(): Modifier = pointerInput(Unit) {
 /** The stable workspace owns capture, so compacting/reparenting a child cannot
  * lose a contact. Only Rust resolves destinations, live slides and final edits. */
 internal class HeaderInteraction(val host: CanvasHost, val dock: DockInteraction) {
-    data class Source(val token: Any, val source: JSONObject, val label: String, val bounds: Rect, val priority: Int, val hold: Boolean, val context: (() -> JSONObject?)?)
+    data class Source(val token: Any, val source: JSONObject, val label: String, val bounds: Rect, val priority: Int, val context: (() -> JSONObject?)?)
     val sources = mutableMapOf<Any, Source>()
     var editing = false
     var enabled = false
@@ -51,11 +51,12 @@ internal class HeaderInteraction(val host: CanvasHost, val dock: DockInteraction
     var contextBounds = Rect.Zero
     var contact by mutableStateOf(false)
     private var generation = 0
+    private var menuOwner: Any? = null
     private var last = Offset.Zero
     fun begin(source: Source, press: Offset) {
         val request = measurement ?: return
-        generation++
-        held = source; last = press; context = null; contextRequest = null; contextProvider = null; overflow = null
+        closeMenu()
+        held = source; last = press; overflow = null
         host.headerQuery(JSONObject(request.toString()).put("op", "begin").put("source", source.source)
             .put("press", press.headerPoint()).put("grab", source.bounds.headerBounds()))
     }
@@ -72,22 +73,28 @@ internal class HeaderInteraction(val host: CanvasHost, val dock: DockInteraction
         held = null; preview = null
         host.headerAction(obj("op" to "finish", "position" to last.headerPoint(), "cancel" to cancel))
     }
-    fun menu(id: Int?, bounds: Rect) {
-        contextBounds = bounds
+    fun current(source: Source) = sources[source.token]?.source?.toString() == source.source.toString()
+    fun removeSource(token: Any) {
+        sources.remove(token)
+        if (menuOwner == token) closeMenu()
+    }
+    fun menu(id: Int?, source: Source, point: Offset? = null) {
+        if (!enabled || !current(source)) return
+        contextBounds = point?.let { Rect(it, it) } ?: source.bounds
+        menuOwner = source.token
         val ticket = ++generation
-        val source = sources.values.filter { it.source.optInt("value", -1) == id && it.context != null }.maxByOrNull { it.priority }
-        contextProvider = source?.context
+        contextProvider = source.context
         contextRequest = null
-        if (source != null) context = contextProvider?.invoke()
+        if (contextProvider != null) context = contextProvider?.invoke()
         else {
             val query = obj("type" to "context", "target" to obj("kind" to "header", "id" to id))
             contextRequest = query
             host.query(query) {
-                if (ticket == generation) context = it as? JSONObject
+                if (ticket == generation && enabled && current(source)) context = it as? JSONObject
             }
         }
     }
-    fun closeMenu() { generation++; context = null; contextRequest = null; contextProvider = null }
+    fun closeMenu() { generation++; menuOwner = null; context = null; contextRequest = null; contextProvider = null }
     fun key(event: KeyEvent): Boolean {
         if (!host.editingText && context != null && event.keyCode == KeyEvent.KEYCODE_ESCAPE) {
             if (event.action == KeyEvent.ACTION_DOWN) closeMenu()
@@ -108,36 +115,40 @@ internal class HeaderInteraction(val host: CanvasHost, val dock: DockInteraction
             KeyEvent.KEYCODE_DEL, KeyEvent.KEYCODE_FORWARD_DEL -> host.headerEdit(obj("type" to "remove", "id" to id))
             KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> host.headerAction(obj("op" to "step", "id" to id,
                 "forward" to (event.keyCode == KeyEvent.KEYCODE_DPAD_RIGHT)))
-            else -> menu(id, sources.values.firstOrNull { it.source.optInt("value", -1) == id }?.bounds ?: Rect.Zero)
+            else -> sources.values.firstOrNull { it.source.optString("kind") == "item" && it.source.optInt("value", -1) == id }?.let { menu(id, it) }
         }
         return true
     }
 }
 
-@Composable internal fun Modifier.headerSource(input: HeaderInteraction, source: JSONObject, label: String, priority: Int = 0, hold: Boolean = true, context: (() -> JSONObject?)? = null): Modifier {
+@Composable internal fun Modifier.headerSource(input: HeaderInteraction, source: JSONObject, label: String, priority: Int = 0, context: (() -> JSONObject?)? = null): Modifier {
     val token = remember { Any() }
-    DisposableEffect(input, token) { onDispose { input.sources.remove(token) } }
+    DisposableEffect(input, token) { onDispose { input.removeSource(token) } }
     return onGloballyPositioned {
         val bounds = it.boundsInRoot().translate(-input.dock.origin)
         input.sources[token] = HeaderInteraction.Source(token, source, label,
-            Rect(bounds.topLeft / input.dock.density, bounds.bottomRight / input.dock.density), priority, hold, context)
+            Rect(bounds.topLeft / input.dock.density, bounds.bottomRight / input.dock.density), priority, context)
     }
 }
 
 private suspend fun AwaitPointerEventScope.holdMenu(input: HeaderInteraction, down: PointerInputChange, id: Int?, source: HeaderInteraction.Source) {
     val early = withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) {
         while (true) {
-            val change = awaitPointerEvent(PointerEventPass.Initial).changes.firstOrNull { it.id == down.id }
+            val event = awaitPointerEvent(PointerEventPass.Initial)
+            if (event.changes.any { it.id != down.id && it.pressed }) return@withTimeoutOrNull true
+            val change = event.changes.firstOrNull { it.id == down.id }
             if (change == null || !change.pressed || (change.position - down.position).getDistance() > viewConfiguration.touchSlop) return@withTimeoutOrNull true
         }
     }
-    if (early != null) return
+    if (early != null || !input.enabled || !input.current(source)) return
     input.contact = true
-    input.menu(id, source.bounds)
+    input.menu(id, source, down.position / input.dock.density)
     var released = false
     try {
         while (!released) {
-            val change = awaitPointerEvent(PointerEventPass.Initial).changes.firstOrNull { it.id == down.id } ?: break
+            val event = awaitPointerEvent(PointerEventPass.Initial)
+            if (event.changes.any { it.id != down.id && it.pressed }) { event.changes.forEach { it.consume() }; break }
+            val change = event.changes.firstOrNull { it.id == down.id } ?: break
             if (!change.pressed && change.isConsumed) break
             change.consume()
             released = !change.pressed
@@ -151,20 +162,21 @@ private suspend fun AwaitPointerEventScope.holdMenu(input: HeaderInteraction, do
 @Composable internal fun Modifier.headerGestures(input: HeaderInteraction): Modifier {
     val focused = LocalWindowInfo.current.isWindowFocused
     return pointerInput(input, focused) {
-        if (!focused) { input.finish(true); return@pointerInput }
+        if (!focused) { input.finish(true); if (input.context == null) input.closeMenu(); return@pointerInput }
         awaitEachGesture {
             val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+            if (input.context == null && input.contextRequest != null) input.closeMenu()
             if (down.isConsumed) return@awaitEachGesture
             val press = down.position / input.dock.density
             val source = input.sources.values.filter { it.bounds.contains(press) }.maxByOrNull { it.priority }
-            if (source == null || !input.enabled) return@awaitEachGesture
+            if (source == null || !input.enabled || source.source.optString("kind") == "control") return@awaitEachGesture
             val id = source.source.takeIf { it.optString("kind") == "item" }?.optInt("value")
             if (currentEvent.buttons.isSecondaryPressed) {
-                down.consume(); input.selected = id; input.menu(id, source.bounds)
+                down.consume(); input.selected = id; input.menu(id, source, press)
                 return@awaitEachGesture
             }
             if (!input.editing) {
-                if (source.hold && down.type != PointerType.Mouse) holdMenu(input, down, id, source)
+                if (down.type != PointerType.Mouse) holdMenu(input, down, id, source)
                 return@awaitEachGesture
             }
             if (source.source.optString("kind") == "background") {
@@ -183,7 +195,11 @@ private suspend fun AwaitPointerEventScope.holdMenu(input: HeaderInteraction, do
                     val event = if (!held && !started && id != null && down.type != PointerType.Mouse)
                         withTimeoutOrNull(remaining) { awaitPointerEvent(PointerEventPass.Initial) }
                         else awaitPointerEvent(PointerEventPass.Initial)
-                    if (event == null) { held = true; input.menu(id, source.bounds); continue }
+                    if (event == null) {
+                        if (!input.current(source) || !input.enabled) break
+                        held = true; input.menu(id, source, press); continue
+                    }
+                    if (event.changes.any { it.id != down.id && it.pressed }) { event.changes.forEach { it.consume() }; break }
                     val change = event.changes.firstOrNull { it.id == down.id } ?: break
                     remaining = (remaining - (change.uptimeMillis - eventTime)).coerceAtLeast(1)
                     eventTime = change.uptimeMillis

@@ -79,7 +79,8 @@ internal class DockInteraction(val host: CanvasHost) {
         drawerSources["tool"]?.takeIf { it.anchor?.optString("panel") == panel && it.anchor.optInt("tile") == tile }
     private val drawerTiles = mutableMapOf<String, JSONObject>()
     private val columnDrawers = mutableMapOf<Int, JSONObject>()
-    val anchors = mutableMapOf<String, Rect>()
+    data class Anchor(val target: String, val bounds: Rect)
+    val anchors = mutableMapOf<Any, Anchor>()
     val tabs = mutableMapOf<String, JSONObject>()
     val tabSlots = mutableMapOf<String, JSONObject>()
     val tabClips = mutableMapOf<Int, Rect>()
@@ -107,6 +108,7 @@ internal class DockInteraction(val host: CanvasHost) {
     var headerHeld = false
     var contactHeld by mutableStateOf(false)
     var contactType: PointerType? = null
+    var contactPosition: Offset? = null
     var contactSource: Any? = null
     var retiredContext: String? = null
     var contextAnchor = Rect.Zero
@@ -122,6 +124,7 @@ internal class DockInteraction(val host: CanvasHost) {
     private var position = Offset.Zero
     private var generation = 0
     private var contextTarget: String? = null
+    private var contextOwner: Any? = null
     private val measurements = mutableMapOf<String, PanelMeasurement>()
 
     fun measureColumnDrawer(column: Int, group: Int?, bounds: Rect?) {
@@ -174,24 +177,44 @@ internal class DockInteraction(val host: CanvasHost) {
         "popup_open" to (popupOpen || contextMenu != null), "expanded_panel" to expansion, "content_drawer" to drawer?.optJSONObject("placement")?.optJSONObject("bounds"),
         "drawer_connection" to drawer?.optJSONObject("connection")?.optJSONObject("bounds"))
     fun refresh() = host.chrome(obj("kind" to "refresh"), facts())
-    fun anchorKey(item: JSONObject) = "${item.optString("kind").replace("ribbon", "panel")}:${item.optString("column")}:${item.optString("group")}:${item.optString("panel")}:${item.optString("tile")}"
+    fun anchorKey(item: JSONObject) = "${item.optString("kind")}:${item.optString("column")}:${item.optString("group")}:${item.optString("panel")}:${item.optString("tile")}"
+    fun removeAnchor(owner: Any) {
+        anchors.remove(owner)
+        if (contextOwner == owner) closeContext()
+    }
+    fun beginContact(point: Offset, type: PointerType) {
+        cancelPendingContext()
+        contactPosition = point
+        contactType = type
+    }
+    fun cancelPendingContext() { if (contextMenu == null && contextTarget != null) closeContext() }
+    fun windowFocus(value: Boolean) {
+        if (focused == value) return
+        focused = value
+        if (!value && contextMenu == null) closeContext()
+    }
     fun context(target: JSONObject) {
-        if (dragging || !focused) return
+        if (dragging || !focused || !enabled) return
         val key = anchorKey(target)
         if (contactHeld && retiredContext == key) return
-        val anchor = anchors[key] ?: return
+        val owner = contactSource?.takeIf { anchors[it]?.target == key }
+            ?: anchors.entries.filter { it.value.target == key }.minByOrNull { it.value.bounds.width * it.value.bounds.height }?.key ?: return
+        val anchor = contactPosition?.let { Rect(it, it) } ?: anchors.getValue(owner).bounds
         if (contextTarget == key) return
         contextTarget = key
-        val request = generation
+        contextOwner = owner
+        val request = ++generation
         val query = obj("type" to "context", "target" to target)
         host.query(query) {
-            if (!dragging && request == generation) { contextRequest = query; contextAnchor = anchor; contextMenu = it as? JSONObject; refresh() }
+            if (request != generation) return@query
+            if (dragging || !focused || !enabled || anchors[owner]?.target != key) { closeContext(); return@query }
+            contextRequest = query; contextAnchor = anchor; contextMenu = it as? JSONObject; refresh()
         }
     }
     fun holdContext(target: JSONObject) {
         if (contactType != PointerType.Mouse) context(target)
     }
-    fun closeContext() { generation++; contextTarget = null; contextMenu = null; contextRequest = null; refresh() }
+    fun closeContext() { generation++; contextTarget = null; contextOwner = null; contextMenu = null; contextRequest = null; refresh() }
     fun doubleClickHandle(item: JSONObject) {
         host.query(obj("type" to "panel_handle_target", "item" to item)) { group ->
             if (group is Number) host.dispatch(obj("type" to "double_click_panel_handle", "group" to group, "viewport" to viewport))
@@ -238,8 +261,7 @@ internal class DockInteraction(val host: CanvasHost) {
         "position" to JSONArray(listOf(position.x, position.y)), "tabs" to JSONArray(tabHits()), "expansion" to expansion)
     fun start(action: JSONObject, point: Offset, cursor: Int) {
         host.beginWorkspaceGesture()
-        active = action; position = point; dragging = true; generation++
-        contextMenu = null; contextTarget = null
+        active = action; position = point; dragging = true
         val panel = action.optJSONObject("item")?.takeIf { it.optString("kind") == "panel" }?.optString("panel")
         // An open drawer also publishes tabs for its collapsed icons. Freeze
         // slots only when the actual press came from the tab, not the icon/grip.
@@ -249,7 +271,7 @@ internal class DockInteraction(val host: CanvasHost) {
         frozenTabs = tabSlots.values.filter { it.optInt("group") == frozenTabGroup }.map { JSONObject(it.toString()) }
         frozenTabClip = frozenTabGroup?.let { tabClips[it] }?.let { Rect(it.left / density, it.top / density, it.right / density, it.bottom / density) }
         dragCursor = if (action.optJSONObject("item") != null) AndroidPointerIcon.TYPE_GRABBING else cursor
-        refresh(); send("down")
+        closeContext(); send("down")
     }
     fun move(point: Offset) {
         position = point; send("move", preview = true)
@@ -293,7 +315,7 @@ internal class DockInteraction(val host: CanvasHost) {
     DisposableEffect(dock, token, key) {
         onDispose {
             dock.regions.remove(token)
-            if (key != null) dock.anchors.remove(key)
+            dock.removeAnchor(token)
             if (dock.contactSource == token && !dock.dragging) {
                 dock.retiredContext = key
                 dock.pickupCursor(false)
@@ -312,7 +334,7 @@ internal class DockInteraction(val host: CanvasHost) {
     return feedback.onGloballyPositioned {
         val bounds = it.boundsInRoot().translate(-dock.origin)
         dock.regions[token] = DockInteraction.Region(token, action, bounds, z, priority, anchor, cursor, holdToDrag)
-        if (key != null) dock.anchors[key] = bounds
+        if (key != null) dock.anchors[token] = DockInteraction.Anchor(key, bounds)
     }
 }
 
@@ -334,7 +356,7 @@ internal class DockInteraction(val host: CanvasHost) {
  * position, including grips without a child click handler. */
 @Composable internal fun Modifier.workspaceGestures(dock: DockInteraction): Modifier {
     val focused = LocalWindowInfo.current.isWindowFocused
-    SideEffect { dock.focused = focused }
+    SideEffect { dock.windowFocus(focused) }
     return workspaceGestureCapture(dock, focused)
 }
 
@@ -344,13 +366,15 @@ private fun Modifier.workspaceGestureCapture(dock: DockInteraction, focused: Boo
     var chromeTap: Tap? = null
     awaitEachGesture {
         val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+        dock.cancelPendingContext()
         if (dock.bubbleCaptured || down.isConsumed) return@awaitEachGesture
-        dock.contactType = down.type
+        dock.beginContact(down.position, down.type)
         try {
             val previousTap = chromeTap
             chromeTap = null
             val chrome = dock.chromeRegions.values.filter { it.bounds.contains(down.position) }.maxByOrNull { it.z }
             val source = dock.hit(down.position)
+            dock.contactSource = source?.token
             val tab = dock.tabs.values.firstOrNull { it.optString("panel") == source?.action?.objectOrNull("item")?.optString("panel") && it.getJSONObject("bounds").let { b ->
                 Rect(b.number("x"), b.number("y"), b.number("x") + b.number("width"), b.number("y") + b.number("height")).contains(down.position / dock.density)
             } }
@@ -410,6 +434,7 @@ private fun Modifier.workspaceGestureCapture(dock: DockInteraction, focused: Boo
                             source.context?.let(dock::holdContext)
                             continue
                         }
+                        if (event.changes.any { it.id != down.id && it.pressed }) { event.changes.forEach { it.consume() }; break }
                         val change = event.changes.firstOrNull { it.id == down.id } ?: break
                         remaining = (remaining - (change.uptimeMillis - eventTime)).coerceAtLeast(1)
                         eventTime = change.uptimeMillis
@@ -459,7 +484,7 @@ private fun Modifier.workspaceGestureCapture(dock: DockInteraction, focused: Boo
             // Non-draggable chrome still needs the original device when a
             // child delivers its native long-click callback.
             while (currentEvent.changes.any { it.pressed }) awaitPointerEvent(PointerEventPass.Final)
-        } finally { dock.headerHeld = false; dock.refresh(); dock.contactType = null }
+        } finally { dock.headerHeld = false; dock.refresh(); dock.contactType = null; dock.contactPosition = null; dock.contactSource = null }
     }
 }
 
@@ -479,8 +504,9 @@ private fun Modifier.workspaceGestureCapture(dock: DockInteraction, focused: Boo
 @Composable internal fun Modifier.contextAnchor(dock: DockInteraction, target: JSONObject): Modifier {
     if(!LocalWorkspaceVisible.current) return this
     val key = dock.anchorKey(target)
-    DisposableEffect(dock, key) { onDispose { dock.anchors.remove(key) } }
-    return onGloballyPositioned { dock.anchors[key] = it.boundsInRoot().translate(-dock.origin) }
+    val token = remember { Any() }
+    DisposableEffect(dock, token, key) { onDispose { dock.removeAnchor(token) } }
+    return onGloballyPositioned { dock.anchors[token] = DockInteraction.Anchor(key, it.boundsInRoot().translate(-dock.origin)) }
 }
 internal val LocalDrawerColumn = staticCompositionLocalOf<Int?> { null }
 internal val LocalDrawerClip = staticCompositionLocalOf { Rect.Zero }
