@@ -1563,6 +1563,10 @@ at horizontal, diagonal and vertical angles, cancellation and locked-layer refus
 Each clear preserves the camera and has one exact Undo and Redo. Fresh two-finger
 navigation and pen painting must still work. Repeat with `-Theme light`.
 
+Touch history compares authored checkpoints and layer order; thumbnail revisions
+are cache invalidation tokens and may change when Undo or Redo restores a layer.
+Bubble control journeys use the enabled settings in the shared control profile.
+
 Run `exercise-workspace-pickup.ps1 -Executable <exe> -Device <mouse|pen|touch>`
 in both `-Theme dark` and `-Theme light` on the private test display. Run
 `exercise-workspace-layout.ps1 -Executable <exe>` in both themes too. These
@@ -1636,6 +1640,8 @@ fast tear-off, canvas gaps, cancellation, persistent options, wheel drag-out,
 two-finger movement and pinch, Layers pages, dab previews and exact artwork
 Undo/Redo. The retained presenter shares the ordinary wheel, swatches, brush
 previews, thumbnail cache, numeric controls and Layers inspector.
+A second finger cancels an active native control edit before moving the card;
+contacts starting on layer rows retain their native layer gestures.
 HDR color bubbles use the shared plate contour and glass mask while retaining
 the wheel's size and center. The native intensity arc presents the shared ramp,
 marker and dynamic range, including temporary eyedropper previews. Its accessible

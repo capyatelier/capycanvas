@@ -270,19 +270,13 @@ function Slider-Toggle([long]$Id,[bool]$Expected){
 }
 function Slider-Medium([string]$Group,[double]$X,[double]$Y){
     & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Window'
-    $item=Control 'Brush sets' -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)
+    $window=@((Model).application_menus|Where-Object id -eq 'window')[0].model
+    $choice=@($window.sections|ForEach-Object {$_}|Where-Object {$_.action.type -eq 'customize' -and $_.action.action.type -eq 'set_panel_visible' -and $_.action.action.panel -eq 'brush_sets'})
+    if($choice.Count -ne 1){throw 'The shared Window menu did not offer the brush sets panel'}
+    $item=Control $choice[0].label -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)
     $toggle=$item.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)
     if($toggle.Current.ToggleState -eq [System.Windows.Automation.ToggleState]::Off){$toggle.Toggle()}else{Escape}
-    $tileId='brush-set-'+$Group;$tile=Control $tileId;$scroll=Control 'panel-scroll-brush_sets';$pattern=Scroll-Pattern $scroll
-    for($step=0;$step -lt 40;$step++){
-        $bounds=$tile.Current.BoundingRectangle;$clip=$scroll.Current.BoundingRectangle
-        if(!$tile.Current.IsOffscreen -and !$bounds.IsEmpty -and $clip.Contains($bounds)){break}
-        $before=$pattern.Current.VerticalScrollPercent
-        $amount=if($bounds.Bottom -le $clip.Top){[System.Windows.Automation.ScrollAmount]::SmallDecrement}else{[System.Windows.Automation.ScrollAmount]::SmallIncrement}
-        $pattern.Scroll([System.Windows.Automation.ScrollAmount]::NoAmount,$amount)
-        Wait-Until {[Math]::Abs($pattern.Current.VerticalScrollPercent-$before) -gt .01} "$Group source did not scroll into view"
-    }
-    if(!$scroll.Current.BoundingRectangle.Contains($tile.Current.BoundingRectangle)){throw "$Group source stayed outside its native viewport"}
+    $tileId='brush-set-'+$Group;$tile=Reveal $tileId
     $ids=@(Packets|ForEach-Object {$_.view.id});$from=At $tileId;Drag $from (Screen $X $Y)
     Wait-Until {@(Packets|Where-Object {$_.view.id -notin $ids}).Count -eq 1} "Native $Group source did not tear out"
     $id=@(Packets|Where-Object {$_.view.id -notin $ids})[0].view.id
@@ -948,23 +942,24 @@ function Native-CurveContacts([long]$Id){
 }
 
 function Controls([long]$Id){
-    $ring=@((View $Id).rings|Where-Object setting -eq 'size')[0]
-    if(!$ring){throw 'Size halo is missing'}
-    $start=(Model).state.brush.diameter;$from=Ring-Point $Id $ring .2;$to=Ring-Point $Id $ring .8
+    $ring=@((View $Id).rings|Where-Object enabled)[0]
+    if(!$ring){throw 'The default profile has no enabled halo'}
+    $setting=$ring.setting;$value={@((Model).state.tool_settings|Where-Object id -eq $setting)[0].value}
+    $start=& $value;$from=Ring-Point $Id $ring .2;$to=Ring-Point $Id $ring .8
     [CapyRowPointer]::Down($Device,$from.x,$from.y);[CapyRowPointer]::Move($to.x,$to.y)
-    Wait-Until {$null -ne (View $Id).stamp -and (Model).state.brush.diameter -ne $start} 'Held Size arc did not update value/dab'
+    Wait-Until {$null -ne (View $Id).stamp -and (& $value) -ne $start} "Held $setting arc did not update value/dab"
     $stamp=(View $Id).stamp;$sample=Relative $Id @(($stamp.center[0]+$stamp.diameter*.3),$stamp.center[1])
     $held=Wait-StablePixels {Patch-Pixels $sample}
-    Capture 'held-size-dab' -Composed -WithModel
-    Cancel-Contact;Wait-Until {$null -eq (View $Id).stamp -and [Math]::Abs((Model).state.brush.diameter-$start) -lt .001} 'Arc cancellation did not restore size and retire dab'
+    Capture 'held-profile-dab' -Composed -WithModel
+    Cancel-Contact;Wait-Until {$null -eq (View $Id).stamp -and [Math]::Abs((& $value)-$start) -lt .001} 'Arc cancellation did not restore its value and retire dab'
     Wait-Until {(Patch-Pixels $sample) -ne $held} 'Dab model changed but actual preview pixels were blank'
-    Drag $from $to;Wait-Until {(Model).state.brush.diameter -ne $start} 'Size arc did not commit'
+    Drag $from $to;Wait-Until {(& $value) -ne $start} "$setting arc did not commit"
     [CapyRowPointer]::DoubleClick($Device,$to.x,$to.y)|Out-Null
-    Wait-Until {[Math]::Abs((Model).state.brush.diameter-$start) -lt .001} 'Double contact did not restore Size default'
+    Wait-Until {[Math]::Abs((& $value)-$start) -lt .001} "Double contact did not restore the $setting default"
     if($Device -eq 'touch'){
         $first=Ring-Point $Id $ring .8;$second=Center $Id
         Touch-Pair $first.x $first.y $second.x $second.y ([int](25*$scale)) ([int](15*$scale)) 1
-        Wait-Until {$null -eq (View $Id).stamp -and [Math]::Abs((Model).state.brush.diameter-$start) -lt .001} 'Second finger did not cancel the first arc edit/dab'
+        Wait-Until {$null -eq (View $Id).stamp -and [Math]::Abs((& $value)-$start) -lt .001} 'Second finger did not cancel the first arc edit/dab'
         $checks.Add('pair-cancels-native-arc-contact')
     }
     $checks.Add('arc-dab-cancel-reset')

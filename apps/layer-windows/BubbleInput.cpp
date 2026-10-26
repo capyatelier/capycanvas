@@ -99,7 +99,7 @@ bool WorkspaceBubbles::Impl::join(PointerRoutedEventArgs const& e){
     auto c=contact;if(!c)return false;
     auto p=e.GetCurrentPoint(workspace);auto at=p.Position();
     if(p.Properties().IsCanceled()){cancel();e.Handled(true);return true;}
-    if(c->mode==L"native"&&c->nativeDrags&&kind(hit(*c->record,at))==L"card")return false;
+    if(c->mode==L"native"&&c->nativePairs&&kind(hit(*c->record,at))==L"card")return false;
     if(c->fingers.contains(p.PointerId())){if(c->paired)e.Handled(true);return c->paired;}
     if(c->device!=NativeInput::PointerDeviceType::Touch||p.PointerDeviceType()!=c->device||distance(at,c->record->center)>num(c->record->packet,L"reach")+90)return false;
     std::vector<weak_ref<UIElement>> path;
@@ -132,10 +132,11 @@ void WorkspaceBubbles::Impl::down(PointerRoutedEventArgs const& e){
             if(auto element=node.try_as<UIElement>())c->path.push_back(make_weak(element));
             if(auto element=node.try_as<FrameworkElement>()){
                 auto id=AutomationProperties::GetAutomationId(element);bool button=bool(element.try_as<Primitives::ButtonBase>());
+                bool pairs=prefix(id,L"layer-row-")||id==L"layer-list";
                 bool edits=element.try_as<Primitives::RangeBase>()||element.try_as<TextBox>()||element.try_as<ComboBox>()||element.try_as<ToggleSwitch>()||
-                    prefix(id,L"number-root-")||prefix(id,L"layer-row-")||id==L"layer-list";
+                    prefix(id,L"number-root-")||pairs;
                 if(auto focus=element.try_as<ContentControl>();focus&&!button)edits=edits||focus.IsTabStop();
-                c->nativeDrags=c->nativeDrags||edits;nativeControl=nativeControl||edits||button;
+                c->nativeDrags=c->nativeDrags||edits;c->nativePairs=c->nativePairs||pairs;nativeControl=nativeControl||edits||button;
             }if(node==inputRoot)break;
         }
         bool native=kind(h)==L"card";
