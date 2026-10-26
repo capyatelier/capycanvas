@@ -8,7 +8,10 @@ public:
     ~CollapsedColumns();
     void Apply();
     void Reset();
-    void AppendGlass(CapyUi::A& regions,CapyUi::A& connections,winrt::Microsoft::UI::Xaml::UIElement const& reference)const;
+    CapyUi::A Measure(winrt::Microsoft::UI::Xaml::UIElement const& reference)const;
+    void PresentBridges(CapyUi::J const& frame,bool ready);
+    double Opacity(uint32_t column)const;
+    void AppendGlass(CapyUi::A& regions,winrt::Microsoft::UI::Xaml::UIElement const& reference)const;
 private:
     struct Impl;
     std::shared_ptr<Impl> impl;

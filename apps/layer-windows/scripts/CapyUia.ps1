@@ -264,6 +264,31 @@ function Control([string]$Value,[switch]$Name,$Within=$root,$Type,[int]$Seconds=
     } "Missing control: $Value" $Seconds
     $hit.item
 }
+function Read-ControlSnapshot([string[]]$Ids){
+    $conditions=@(foreach($id in $Ids){[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,$id)})
+    if(!$conditions.Count){return}
+    $idsCondition=if($conditions.Count -eq 1){$conditions[0]}else{[System.Windows.Automation.OrCondition]::new([System.Windows.Automation.Condition[]]$conditions)}
+    $condition=[System.Windows.Automation.AndCondition]::new($idsCondition,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ProcessIdProperty,$review.Id))
+    $cache=[System.Windows.Automation.CacheRequest]::new();$cache.TreeScope=[System.Windows.Automation.TreeScope]::Element
+    $cache.TreeFilter=[System.Windows.Automation.Automation]::RawViewCondition;$cache.AutomationElementMode=[System.Windows.Automation.AutomationElementMode]::None
+    foreach($property in @([System.Windows.Automation.AutomationElement]::AutomationIdProperty,[System.Windows.Automation.AutomationElement]::NameProperty,[System.Windows.Automation.AutomationElement]::IsEnabledProperty,[System.Windows.Automation.AutomationElement]::ItemStatusProperty,[System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.AutomationElement]::IsOffscreenProperty,[System.Windows.Automation.AutomationElement]::ProcessIdProperty)){$cache.Add($property)}
+    $active=$cache.Activate()
+    try{
+        foreach($element in $root.FindAll([System.Windows.Automation.TreeScope]::Descendants,$condition)){
+            $info=$element.Cached
+            if($info.ProcessId -eq $review.Id){[pscustomobject]@{AutomationId=$info.AutomationId;Name=$info.Name;IsEnabled=$info.IsEnabled;ItemStatus=$info.ItemStatus;ControlType=$info.ControlType;IsOffscreen=$info.IsOffscreen;ProcessId=$info.ProcessId}}
+        }
+    }finally{$active.Dispose()}
+}
+function Snapshot-Control($Snapshot,[string]$Id,$Type){
+    $first=$null
+    foreach($item in $Snapshot){
+        if($item.AutomationId -cne $Id -or ($Type -and $item.ControlType -ne $Type)){continue}
+        if($script:CapyFind -eq 'first' -or !$item.IsOffscreen){return $item}
+        if(!$first){$first=$item}
+    }
+    if($script:CapyFind -eq 'prefer-visible'){$first}
+}
 function Scroll-Pattern($Control,[switch]$Focus){
     $provider=$Control;$pattern=$null
     if(!$provider.TryGetCurrentPattern([System.Windows.Automation.ScrollPattern]::Pattern,[ref]$pattern)){

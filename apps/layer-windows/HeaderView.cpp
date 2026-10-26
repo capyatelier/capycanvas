@@ -527,14 +527,14 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
                 AutomationProperties::SetAutomationId(native.editor,L"header-select-"+to_hstring(id));
                 canvas.Children().Append(native.frame);Canvas::SetZIndex(native.frame,5);
             }
-            native.entry=entry;auto spec=findId(array(view,L"items"),id);auto label=str(spec,L"label");
+            native.entry=entry;auto spec=findId(array(view,L"items"),id);auto label=str(spec,L"label"),reason=editing?hstring():str(spec,L"disabled_reason");
             if(native.variants)native.variants.Visibility(!editing&&flag(spec,L"has_variants")?Visibility::Visible:Visibility::Collapsed);
             if(kind!=L"capy"||editing)input->Source(native.frame,O({{L"kind",S(L"item")},{L"value",N(id)}}),label);
             else native.frame.Tag(nullptr);
             if(kind==L"capy")setIcon(native.view.as<Image>(),str(object(view,L"capy"),L"icon"),data->theme(),num(size,L"capy_icon"));
             AutomationProperties::SetName(native.editor,label);
-            auto reason=editing?hstring():str(spec,L"disabled_reason");
             tooltip(native.frame,!reason.empty()?reason:kind==L"tool"&&pickerControl(object(item,L"control"))&&!editing?pickerTooltip(label):label);
+            AutomationProperties::SetHelpText(native.frame,reason);
             native.content.ColumnDefinitions().GetAt(0).Width({editing?20.:0.,GridUnitType::Pixel});
             native.grip.Visibility(editing?Visibility::Visible:Visibility::Collapsed);native.editor.Visibility(editing?Visibility::Visible:Visibility::Collapsed);
             native.view.IsHitTestVisible(!editing);native.editor.IsTabStop(editing);

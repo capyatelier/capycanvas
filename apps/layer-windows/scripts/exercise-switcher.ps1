@@ -20,7 +20,21 @@ function Settled {
     if((Storage).switcher_error){throw (Storage).switcher_error}
 }
 function Closed {
-    Wait-Until {$null -eq (Manager) -and $null -eq (Find 'workspace-manager')} 'Manager did not close'
+    Wait-Until {$canvas=Find 'drawing-canvas' -Visible;$null -eq (Manager) -and $null -eq (Find 'workspace-manager') -and $canvas -and $canvas.Current.IsEnabled} 'Manager did not close'
+}
+function Wait-WorkspaceReady([string]$Id){
+    $ready=@{key='';stable=0}
+    Wait-Until {
+        $storage=Storage;$canvas=Find 'drawing-canvas' -Visible
+        $pill=Find ('workspace-switch-'+$Id) -Visible;$options=Find 'workspace-switcher-options' -Visible
+        if($storage.id -ne $Id -or $storage.busy -or !$storage.can_switch -or !$canvas -or !$canvas.Current.IsEnabled -or !$pill -or !$pill.Current.IsEnabled -or !$options -or !$options.Current.IsEnabled){$ready.key='';$ready.stable=0;return $false}
+        $checked=$pill.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Current.ToggleState -eq [System.Windows.Automation.ToggleState]::On
+        $bounds=$options.Current.BoundingRectangle
+        if(!$checked -or $bounds.IsEmpty -or $bounds.Width -le 0 -or $bounds.Height -le 0){$ready.key='';$ready.stable=0;return $false}
+        $key=($options.GetRuntimeId() -join ':')+'|'+$bounds.ToString()
+        if($key -eq $ready.key){$ready.stable++}else{$ready.key=$key;$ready.stable=0}
+        $ready.stable -ge 2
+    } 'Short switcher tap did not switch normally'
 }
 function Open-Manager {
     Closed
@@ -78,7 +92,7 @@ function Check-Options {
     }
     foreach($id in @($inactive,$active)){
         $at=At ('workspace-switch-'+$id);[CapyRowPointer]::Down($Device,$at.x,$at.y);[CapyRowPointer]::Up()
-        Wait-Until {(Storage).id -eq $id -and !(Storage).busy} 'Short switcher tap did not switch normally'
+        Wait-WorkspaceReady $id
     }
     Invoke 'workspace-switcher-options';Options
     $at=At ('workspace-switch-'+$active);[CapyRowPointer]::Down($Device,$at.x,$at.y);[CapyRowPointer]::Up()

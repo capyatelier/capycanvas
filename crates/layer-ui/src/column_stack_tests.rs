@@ -697,6 +697,51 @@ fn panel_bridge_receivers_keep_identity_and_only_own_the_facing_groups() {
 }
 
 #[test]
+fn measured_panel_bridges_use_only_current_allocations_and_preserve_receiver_identity() {
+    for edge in [Edge::Left,Edge::Right] {
+        let resolved=column_bridge_fixture(edge);
+        let measure=crate::PanelBridgeMeasure {
+            groups:resolved.groups.iter().map(|g|(g.id,g.bounds)).collect(),
+            columns:resolved.collapsed.iter().map(|c|crate::PanelColumnMeasure {
+                column:c.id,bounds:c.bounds,content:c.content,
+                icons:c.groups.iter().flat_map(|g|&g.icons).map(|i|(i.panel,i.bounds)).collect(),
+            }).collect(),
+        };
+        let expected=resolved.clone().with_panel_bridges().panel_bridges();
+        let actual=resolved.clone().measured_panel_bridges(measure.clone()).unwrap();
+        assert_eq!(actual.bridges,expected);
+        assert!(!actual.bridges.is_empty());
+        let json=serde_json::to_value(&actual).unwrap();
+        let decoded:Vec<(u32,Panel,crate::PanelBridge)>=serde_json::from_value(json["bridges"].clone()).unwrap();
+        assert_eq!(decoded,expected);
+        for (_,_,bridge) in &actual.bridges {for receiver in &bridge.receivers {
+            let native=actual.groups.iter().find(|g|g.group==receiver.group).unwrap();
+            assert_eq!(receiver,native);
+            assert_eq!(receiver.radii.len(),4);
+        }}
+        let mut partial=measure.clone();partial.groups.clear();
+        let missing=resolved.clone().measured_panel_bridges(partial).unwrap();
+        assert!(missing.groups.is_empty());assert!(missing.bridges.is_empty());
+        let mut missing_icon=measure.clone();missing_icon.columns[0].icons.clear();
+        assert!(resolved.clone().measured_panel_bridges(missing_icon).unwrap().bridges.is_empty());
+        let mut moved=measure.clone();moved.groups[0].1.y+=0.5;
+        let moved_frame=resolved.clone().measured_panel_bridges(moved.clone()).unwrap();
+        assert_eq!(moved_frame.groups[0].bounds,moved.groups[0].1);
+        for mutation in 0..5 {
+            let mut invalid=measure.clone();
+            match mutation {
+                0=>invalid.groups.push(invalid.groups[0]),
+                1=>invalid.groups[0].0=u32::MAX,
+                2=>invalid.groups[0].1.x=f32::NAN,
+                3=>invalid.columns[0].content.width=-1.,
+                _=>invalid.columns[0].icons.push((Panel::CustomToolbar(u32::MAX),Bounds::default())),
+            }
+            assert!(resolved.clone().measured_panel_bridges(invalid).is_err(),"{edge:?} case {mutation}");
+        }
+    }
+}
+
+#[test]
 fn flush_column_connections_keep_the_receiving_radius_and_join_the_source_corner() {
     for platform in Platform::ALL {
         for edge in [Edge::Left, Edge::Right] {

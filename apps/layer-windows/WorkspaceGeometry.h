@@ -39,6 +39,10 @@ inline Rect visibleBounds(FrameworkElement const& element,FrameworkElement const
     }
     return {};
 }
+inline Rect allocatedBounds(FrameworkElement const& element,UIElement const& reference){
+    if(!element||!element.IsLoaded()||element.Visibility()!=Visibility::Visible||element.ActualWidth()<=0||element.ActualHeight()<=0)return {};
+    return element.TransformToVisual(reference).TransformBounds({0,0,float(element.ActualWidth()),float(element.ActualHeight())});
+}
 inline int visualOrder(Canvas const& root,FrameworkElement const& element){
     uint32_t index=0;root.Children().IndexOf(element,index);
     return Canvas::GetZIndex(element)*16384+int(index);

@@ -44,8 +44,8 @@ is drawn above the first group; separators only appear between groups within
 a member. The first tile starts at the member's top edge. Dropping a panel or
 group in the workspace gap immediately above it prepends a group within that
 member while its first group remains unscrolled. Whole-column drags retain the
-gap's stack insertion target. GTK presents this placement and the GPU joins
-below. Web, Android, Apple and Windows still need their native alignment and
+gap's stack insertion target. GTK and Windows present this placement and the GPU joins
+below. Web, Android and Apple still need their native alignment and
 bridge-rendering adapters updated to consume the shared geometry.
 
 An open member uses the full available workspace height, aligned with the
@@ -63,6 +63,16 @@ bridges share one coverage calculation and one shadow. GTK retains the controls,
 input targets, hover feedback and tab-bar content clip. The tab bar keeps its
 own rounded upper outline. Corner backing belongs to an actual GPU attachment;
 an unconnected native tab bar only clips its content and adds no corner filler.
+
+Windows measures its retained native groups, strip viewport and tiles in logical
+points and resolves them through the same shared bridge projection. The existing
+glass transport carries receiver IDs, four corner radii and native tab bounds to
+the render worker. It applies the surface offset and display scale once, prepares
+the existing GPU chrome pipelines, and acknowledges the revision after presenting.
+Only that matching revision suppresses the native backing and shadow; controls,
+focus, scrolling and input targets remain native. Missing or retired allocations
+clear the join rather than borrowing another group's bounds. Ordinary individual
+panel drawers retain their shared drawer connection.
 
 GTK rounds absolute layout edges once to integer logical pixels, then derives
 native sizes from those edges. A divider step grows one neighboring panel by
@@ -209,6 +219,11 @@ bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/colum
 bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/column-stack-persistence.swift
 ./apps/layer-windows/scripts/exercise-column-stacks.ps1 -Executable artifacts/windows/Release/CapyCanvas.exe -Device mouse
 ```
+
+The Windows journey covers both themes, native panel/tile bounds, all four
+receiver radii and the presented GPU bridge revision, plus the existing drag,
+resize, Undo/Redo, persistence and Zen checks. Repeat with `-Device pen` and
+`-Device touch`; inspect the captured joined surfaces in both themes.
 
 The panel-bridge journey checks GPU background pixels, partial curves, gap caps,
 first/last physical tile rows, selected-tile seam pixels, tab-bar corner colors

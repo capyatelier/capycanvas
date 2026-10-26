@@ -52,6 +52,53 @@ function Wheel([int]$Modifier=0){
  }finally{if($Modifier){[CapyRowPointer]::Hold($Modifier,$false)}}
 }
 function Preference([string]$Id){@((Model).preferences.pages.groups.rows|Where-Object id -eq $Id)[0]}
+function Open-CanvasPreferences{
+ if(!(Model).preferences){if(Find 'settings-button' -Visible){Invoke-Id 'settings-button'}else{Menu-Command 'edit' 'settings'}}
+ Invoke-Id 'preference-page-canvas'
+ Wait-Until {(Model).preferences.page -eq 'canvas'} 'Canvas preferences did not open'
+}
+function Preference-Switch([string]$Id){
+ $row=Preference $Id;if(!$row -or $row.kind.type -ne 'switch'){throw "Missing shared switch preference: $Id"}
+ $hit=@{element=$null;pattern=$null}
+ Wait-Until {
+  foreach($element in $root.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,$row.title))){
+   $pattern=$null
+   if($element.Current.ProcessId -eq $review.Id -and $element.Current.IsEnabled -and $element.TryGetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern,[ref]$pattern)){$hit.element=$element;$hit.pattern=$pattern;return $true}
+  };$false
+ } "Native preference switch did not appear: $Id"
+ $walker=[System.Windows.Automation.TreeWalker]::ControlViewWalker;$scroller=$walker.GetParent($hit.element);$scroll=$null
+ while($scroller -and !$scroller.TryGetCurrentPattern([System.Windows.Automation.ScrollPattern]::Pattern,[ref]$scroll)){$scroller=$walker.GetParent($scroller)}
+ if(!$scroll -or $scroller.Current.ProcessId -ne $review.Id){throw 'Preference switch has no owned native scroll provider'}
+ Wait-Until {
+  $bounds=$hit.element.Current.BoundingRectangle;$viewport=$scroller.Current.BoundingRectangle
+  if(!$hit.element.Current.IsOffscreen -and $bounds.Width -gt 0 -and $bounds.Height -gt 0 -and $viewport.Contains($bounds)){return $true}
+  $amount=if($bounds.Top -lt $viewport.Top){[System.Windows.Automation.ScrollAmount]::SmallDecrement}else{[System.Windows.Automation.ScrollAmount]::SmallIncrement}
+  $scroll.Scroll([System.Windows.Automation.ScrollAmount]::NoAmount,$amount);$false
+ } "Native preference switch did not scroll into view: $Id"
+ [pscustomobject]$hit
+}
+function Set-PinchPreferences([bool]$Fit,[bool]$Restore){
+ Open-CanvasPreferences
+ foreach($pair in @(@('quick_pinch_fit',$Fit),@('quick_pinch_restore',$Restore))){
+  $id=$pair[0];$value=$pair[1];$switch=Preference-Switch $id
+  if((Model).state.settings.$id -ne $value){$switch.pattern.Toggle()}
+  $expected=if($value){[System.Windows.Automation.ToggleState]::On}else{[System.Windows.Automation.ToggleState]::Off}
+  Wait-Until {(Model).state.settings.$id -eq $value -and (Preference $id).kind.active -eq $value -and $switch.pattern.Current.ToggleState -eq $expected} "Native pinch preference did not acknowledge its value: $id"
+ }
+ Invoke-Id 'CloseButton';Wait-Until {$canvas=Find 'drawing-canvas' -Visible;!(Model).preferences -and !(Find 'CloseButton' -Visible) -and $canvas -and $canvas.Current.ProcessId -eq $review.Id -and $canvas.Current.IsEnabled} 'Pinch preferences did not close and reenable the owned native canvas'
+}
+function Reset-PinchPreference([ValidateSet('quick_pinch_fit','quick_pinch_restore')][string]$Id){
+ $other=if($Id -eq 'quick_pinch_fit'){'quick_pinch_restore'}else{'quick_pinch_fit'};$before=(Model).state.settings.$other
+ $row=Preference $Id;$switch=Preference-Switch $Id
+ if(!$row.reset.enabled){throw 'Changed pinch preference has no enabled shared Reset action'}
+ $switch.element.SetFocus();Wait-Until {$switch.element.Current.HasKeyboardFocus} 'Pinch preference did not receive native focus'
+ [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x10),0x79)
+ $reset=Control $row.reset.label -Name -Type ([System.Windows.Automation.ControlType]::MenuItem) -Arranged
+ if($reset.Current.ProcessId -ne $review.Id -or !$reset.Current.IsEnabled){throw 'Pinch Reset menu is not enabled and owned'}
+ $reset.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+ Wait-Until {(Model).state.settings.$Id -eq $true -and (Preference $Id).kind.active -eq $true -and !(Preference $Id).reset.enabled -and $switch.pattern.Current.ToggleState -eq [System.Windows.Automation.ToggleState]::On} 'Native pinch Reset did not restore its default'
+ if((Model).state.settings.$other -ne $before){throw 'Reset changed the other independent pinch preference'}
+}
 try{
  Enter-CapyEnvironment
  $env:CAPY_STORAGE_DIR=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1'
@@ -192,10 +239,23 @@ try{
  $before=(Model).state.camera.zoom;Wheel 0x11
  Wait-Until {(Model).state.camera.zoom -gt $before} 'Ctrl+wheel did not zoom with Wheel Pan selected'
  $checks.navigation_preferences='passed'
+ if((Model).state.settings.quick_pinch_fit -ne $true -or (Model).state.settings.quick_pinch_restore -ne $true){throw 'Quick pinch preferences did not default to enabled'}
+ Set-PinchPreferences $false $false
+ Open-CanvasPreferences;Reset-PinchPreference 'quick_pinch_fit'
+ if((Model).state.settings.quick_pinch_restore -ne $false){throw 'Fit Reset changed the disabled Restore preference'}
+ Capture "pinch-fit-reset-$Theme" -WithModel -Composed
+ Invoke-Id 'CloseButton';Wait-Until {!(Model).preferences} 'Fit Reset preferences did not close'
+ Set-PinchPreferences $false $false
+ Open-CanvasPreferences;Reset-PinchPreference 'quick_pinch_restore'
+ if((Model).state.settings.quick_pinch_fit -ne $false){throw 'Restore Reset changed the disabled Fit preference'}
+ Capture "pinch-restore-reset-$Theme" -WithModel -Composed
+ Invoke-Id 'CloseButton';Wait-Until {!(Model).preferences} 'Restore Reset preferences did not close'
+ $checks.quick_pinch_native_defaults_edit_independent_reset='passed'
  [CapyRowPointer]::Dispose()
  & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Close -DiscardUnsaved -StateDirectory $run
  $saved=Get-Content (Settings-File) -Raw|ConvertFrom-Json
  if(!$saved.zoom_tool.center_clicked_point -or $saved.wheel_zoom -or $saved.rotate_with_two_fingers){throw 'Navigation settings did not persist'}
+ if($saved.quick_pinch_fit -ne $false -or $saved.quick_pinch_restore -ne $true){throw 'Independent quick pinch preferences did not persist'}
  $checks.persistence='passed';$checks.theme=$Theme;$checks.evidence=$run
  [pscustomobject]$checks|ConvertTo-Json|Tee-Object -FilePath (Join-Path $run 'results.json')
 }catch{

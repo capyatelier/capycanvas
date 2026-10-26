@@ -8,6 +8,7 @@ $watch=[Diagnostics.Stopwatch]::StartNew()
 do {$app.Refresh();if($app.HasExited){throw 'Review app exited'};if($app.MainWindowHandle -ne [IntPtr]::Zero){break};Start-Sleep -Milliseconds 100} while($watch.Elapsed.TotalSeconds -lt 30)
 $root=[System.Windows.Automation.AutomationElement]::FromHandle($app.MainWindowHandle)
 $script:settingsScope=$root
+$script:swatchAllocations=[Collections.Generic.List[object]]::new()
 function Read-Model {
     try {
         $snapshot=Get-Content -LiteralPath $StateFile -Raw | ConvertFrom-Json
@@ -54,6 +55,77 @@ function Edit-Text([string]$Name,[string]$Value) {
 function Custom-Swatch([string]$Theme) {
     Wait-Until {$script:swatch=@($script:settingsScope.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,'Custom'))|Where-Object {$_.Current.AutomationId -like "setting-$($Theme)_base-swatch-*"})[0];$script:swatch} "Missing custom $Theme base color"
     $script:swatch
+}
+function Swatch-Row([string]$Id) {
+    @((Read-Model).preferences.pages|ForEach-Object groups|ForEach-Object rows|Where-Object id -eq $Id)[0]
+}
+function Swatch-Button([string]$Id,[int]$Index) {
+    $found=@{element=$null}
+    Wait-Until {$found.element=$script:settingsScope.FindFirst([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,"setting-$Id-swatch-$Index"));$found.element} "Missing native swatch $Id/$Index"
+    $found.element
+}
+function Swatch-Frames([string]$Id,$Row) {
+    $walker=[System.Windows.Automation.TreeWalker]::RawViewWalker;$strip=$null;$scope=$script:settingsScope.GetRuntimeId()-join ':'
+    for($node=$walker.GetParent((Swatch-Button $Id 0));$node -and ($node.GetRuntimeId()-join ':') -ne $scope;$node=$walker.GetParent($node)){
+        $children=@($node.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition))
+        $swatches=@($children|Where-Object {$_.Current.AutomationId -like 'setting-*-swatch-*'})
+        if($swatches.Count -ne $Row.kind.swatches.Count -or @($swatches|Where-Object {$_.Current.AutomationId -notlike "setting-$Id-swatch-*"}).Count){continue}
+        $heading=@($children|Where-Object {$_.Current.ControlType -eq [System.Windows.Automation.ControlType]::Text -and $_.Current.Name -eq $Row.title})
+        if($heading.Count){if(!$strip){throw "Native swatch strip allocation is unavailable for $Id"};return @{row=$node;strip=$strip}}
+        if(!$strip){$strip=$node}
+    }
+    throw "Native enclosing swatch allocation is unavailable for $Id"
+}
+function Swatch-Bounds($Element) {
+    $b=$Element.Current.BoundingRectangle
+    @{x=$b.X;top=$b.Top;bottom=$b.Bottom;width=$b.Width;height=$b.Height}
+}
+function Wait-SwatchAllocation([string]$Id,$Row,$Frames,[bool]$Open) {
+    $stable=@{key='';value=$null;watch=[Diagnostics.Stopwatch]::StartNew()}
+    Wait-Until {
+        $entry=Find-Control $Row.title ([System.Windows.Automation.ControlType]::Edit)
+        $visible=$entry -and !$entry.Current.IsOffscreen -and $entry.Current.BoundingRectangle.Height -gt 0
+        if([bool]$visible -ne $Open){return $false}
+        $value=@{row=(Swatch-Bounds $Frames.row);strip=(Swatch-Bounds $Frames.strip);entry=$null;entry_in_strip=$false}
+        if($Open){$value.entry=Swatch-Bounds $entry;$value.entry_in_strip=$null -ne $Frames.strip.FindFirst([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,"setting-text-$Id"))}
+        if($value.row.height -le 0 -or $value.strip.height -le 0 -or $Frames.strip.Current.IsOffscreen){return $false}
+        $key=$value|ConvertTo-Json -Depth 5 -Compress
+        if($key -ne $stable.key){$stable.key=$key;$stable.watch.Restart()};$stable.value=$value
+        $stable.watch.ElapsedMilliseconds -ge 250
+    } "Native $Id allocation did not settle with its editor open=$Open"
+    $stable.value
+}
+function Assert-SwatchAllocation($Closed,$Open,$ClosedAgain,[double]$Gap,[double]$Scale) {
+    if([double]::IsNaN($Scale) -or [double]::IsInfinity($Scale) -or $Scale -le 0 -or !$Open.entry -or $Open.entry_in_strip){throw 'Native swatch allocation does not isolate its revealed entry'}
+    $inset=$Open.row.bottom-$Open.entry.bottom
+    $metrics=[ordered]@{gap=($Open.entry.top-$Open.strip.bottom)/$Scale;growth=($Open.row.height-$Closed.row.height-$Open.entry.height)/$Scale;closed_excess=($Closed.row.bottom-$Closed.strip.bottom-$inset)/$Scale;closed_again_excess=($ClosedAgain.row.bottom-$ClosedAgain.strip.bottom-$inset)/$Scale;closed_height_change=($ClosedAgain.row.height-$Closed.row.height)/$Scale;strip_height_change=($Open.strip.height-$Closed.strip.height)/$Scale;row_width_change=($Open.row.width-$Closed.row.width)/$Scale}
+    foreach($name in $metrics.Keys){$expected=if($name -in @('gap','growth')){$Gap}else{0};if([double]::IsNaN($metrics[$name]) -or [double]::IsInfinity($metrics[$name]) -or [Math]::Abs($metrics[$name]-$expected) -gt 1./$Scale){throw "Native custom-color allocation differs at ${name}: $($metrics|ConvertTo-Json -Compress)"}}
+    $metrics
+}
+function Check-SwatchAllocation([string]$Id) {
+    $row=Swatch-Row $Id;if(!$row -or $row.kind.type -ne 'swatches'){throw "Shared swatch row is missing for $Id"}
+    $saved=$row.kind.value;$selected=[int]$row.kind.selected;$custom=$row.kind.swatches.Count-1
+    if(!$row.kind.swatches[$custom].custom){throw 'Shared custom swatch is not the final native choice'}
+    $record=[ordered]@{theme=(Read-Model).state.theme;id=$Id;scale=([CapyRowPointer]::GetDpiForWindow($app.MainWindowHandle)/96.);closed=$null;open=$null;closed_again=$null;metrics=$null}
+    $script:swatchAllocations.Add($record)
+    try{
+        $preset=Swatch-Button $Id 0;$scroll=$null;if($preset.TryGetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern,[ref]$scroll)){$scroll.ScrollIntoView()}
+        $preset.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+        $frames=Swatch-Frames $Id $row;$record.row_runtime_id=$frames.row.GetRuntimeId()-join ':';$record.strip_runtime_id=$frames.strip.GetRuntimeId()-join ':'
+        $record.closed=Wait-SwatchAllocation $Id $row $frames $false
+        (Swatch-Button $Id $custom).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+        $record.open=Wait-SwatchAllocation $Id $row $frames $true
+        if(!(Control $row.title ([System.Windows.Automation.ControlType]::Edit)).Current.HasKeyboardFocus){throw 'Opening Custom did not focus the retained native field'}
+        (Swatch-Button $Id 0).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+        $record.closed_again=Wait-SwatchAllocation $Id $row $frames $false
+        $gap=if($row.kind.inline){8.}else{12.};$record.metrics=Assert-SwatchAllocation $record.closed $record.open $record.closed_again $gap $record.scale
+    }finally{
+        try{
+            (Swatch-Button $Id $selected).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+            if($row.kind.swatches[$selected].custom){Edit-Text $row.title $saved;Focus-Control (Control 'Color theme' ([System.Windows.Automation.ControlType]::ComboBox))}
+            Wait-Until {(Swatch-Row $Id).kind.value -eq $saved} "Native $Id swatch did not restore its original shared value"
+        }finally{[IO.File]::WriteAllText((Join-Path (Split-Path -Parent $StateFile) 'header-settings-custom-colors.json'),(@($script:swatchAllocations.ToArray())|ConvertTo-Json -Depth 12),[Text.UTF8Encoding]::new($false))}
+    }
 }
 function Open-Preferences {
     $script:settingsScope=$root
@@ -103,6 +175,8 @@ foreach($choice in @('Light','Dark',$restoreTheme)){
     if(((Control 'Color theme' ([System.Windows.Automation.ControlType]::ComboBox)).GetRuntimeId() -join ':') -ne $themeIdentity){throw 'Theme selection replaced its native control'}
     $selected=(Control 'Color theme' ([System.Windows.Automation.ControlType]::ComboBox)).GetCurrentPattern([System.Windows.Automation.SelectionPattern]::Pattern).Current.GetSelection()
     if($selected.Count -ne 1 -or $selected[0].Current.Name -ne $choice){throw 'Collapsed theme selector has no readable selected value'}
+    Check-SwatchAllocation ((Read-Model).state.theme+'_base')
+    Check-SwatchAllocation 'accent'
 }
 (Custom-Swatch 'dark').GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
 Wait-Until {Find-Control 'Dark theme base color' ([System.Windows.Automation.ControlType]::Edit)} 'Custom dark base color did not open its field'
@@ -183,6 +257,7 @@ Close-Preferences
     preferences_theme_accessible_value='passed'
     settings_color_validation='passed'
     retained_settings_field='passed'
+    custom_color_allocations=@($script:swatchAllocations.ToArray())
     exclusive_icon_tiles='passed'
     shared_settings_search='passed'
     dependent_settings_controls='passed'

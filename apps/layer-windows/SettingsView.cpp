@@ -76,7 +76,6 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
             std::pair{L"ContentDialogMaxHeight",DialogHeight},std::pair{L"ContentDialogMinHeight",0.}})
             dialog.Resources().Insert(box_value(resource),box_value(value));
         dialog.Resources().Insert(box_value(L"ContentDialogPadding"),box_value(Thickness{0,0,0,0}));
-        dialog.Resources().Insert(box_value(L"ContentDialogTopOverlay"),clear());
         AutomationProperties::SetName(dialog,data->caption(L"shortcuts",L"preferences"));
         dialog.Closing([weak=weak_from_this()](auto&&,ContentDialogClosingEventArgs const& e){
             if(auto self=weak.lock()){
@@ -336,7 +335,8 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
             else{VariableSizedWrapGrid grid;grid.Orientation(Orientation::Horizontal);grid.ItemWidth(side+10);grid.ItemHeight(side+10);grid.HorizontalAlignment(HorizontalAlignment::Center);circles=grid;}
             TextBox entry;entry.Width(96);entry.MaxLength(7);entry.PlaceholderText(str(kind,L"placeholder"));entry.VerticalAlignment(VerticalAlignment::Center);
             AutomationProperties::SetAutomationId(entry,L"setting-text-"+id);AutomationProperties::SetName(entry,titleText);
-            auto entryPages=std::make_shared<WorkflowPages>();Border emptyEntry;entryPages->append(emptyEntry);entryPages->append(entry);
+            Border entryPage;entryPage.Padding({0,inlineRow?8.:12.,0,0});entryPage.Child(entry);
+            auto entryPages=std::make_shared<WorkflowPages>();Border emptyEntry;entryPages->append(emptyEntry);entryPages->append(entryPage);
             struct Draft{hstring text,key,saved;bool changed=false,editing=false;std::vector<Button> buttons;};
             auto draft=std::make_shared<Draft>();
             entry.TextChanging([data=data,draft](auto&& sender,auto&&){
@@ -390,7 +390,7 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
                 }
             };
             bindings.emplace_back([refresh]{(*refresh)();});(*refresh)();
-            StackPanel host;host.Spacing(8);host.Children().Append(circles);host.Children().Append(entryPages->root);
+            StackPanel host;host.Children().Append(circles);host.Children().Append(entryPages->root);
             if(inlineRow){text.Spacing(10);text.Children().Append(host);Grid::SetColumnSpan(text,2);}
             else{host.HorizontalAlignment(HorizontalAlignment::Center);text.Spacing(10);text.Children().Append(host);Grid::SetColumnSpan(text,2);}
         }else if(type==L"link"){
@@ -461,8 +461,8 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
         // Retain native controls and their automation peers across theme changes.
         bool restyle=!built||theme!=data->theme();theme=data->theme();
         if(!built)build(model);
-        dialog.RequestedTheme(theme==L"dark"?ElementTheme::Dark:ElementTheme::Light);
-        dialog.Background(data->brush(L"settings"));sidebarSurface.Background(data->brush(L"sidebar"));sidebarSurface.BorderBrush(data->line(L"sidebar_border"));
+        dialogSurface(data,dialog);
+        sidebarSurface.Background(data->brush(L"sidebar"));sidebarSurface.BorderBrush(data->line(L"sidebar_border"));
         auto size=xamlRoot.Size();frame.Width(std::max(320.,std::min(DialogWidth,double(size.Width)-60)));
         auto insets=array(snapshot,L"titlebar_insets");
         auto captionHeight=insets.Size()==3?insets.GetAt(2).GetNumber():0.;

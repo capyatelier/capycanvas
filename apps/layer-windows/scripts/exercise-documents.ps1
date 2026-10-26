@@ -1,8 +1,9 @@
-﻿param([Parameter(Mandatory)][string]$Executable,[switch]$RecoverGpu,[switch]$FailGpu,[ValidateSet('full','new-drawing','color-workflows','color-workflows-light')][string]$Journey='full')
+﻿param([Parameter(Mandatory)][string]$Executable,[switch]$RecoverGpu,[switch]$FailGpu,[ValidateSet('full','new-drawing','color-workflows','color-workflows-light','native-writeback','native-writeback-light')][string]$Journey='full')
 if($RecoverGpu -and $FailGpu){throw "Choose successful recovery or exhausted recovery, not both"}
 if($Journey -ne 'full' -and ($RecoverGpu -or $FailGpu)){throw 'GPU recovery requires the full document journey'}
 $ErrorActionPreference='Stop'
 $focusedColor=$Journey.StartsWith('color-workflows')
+$nativeWriteback=$Journey.StartsWith('native-writeback')
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
 Add-Type -Path (Join-Path $PSScriptRoot 'PackageFixture.cs') -ReferencedAssemblies @(
@@ -68,7 +69,7 @@ $env:CAPY_SMOKE_TEST='1'
 $env:CAPY_TEST_DISPLAY='1'
 $env:CAPY_TEST_PRIMARY='1'
 $stderr=Join-Path $run 'stderr.log'
-if($focusedColor){[IO.File]::WriteAllText((Settings-File),(@{language=@{Explicit='en'};theme=$(if($Journey.EndsWith('-light')){'light'}else{'dark'})}|ConvertTo-Json -Depth 4))}
+if($focusedColor -or $nativeWriteback){[IO.File]::WriteAllText((Settings-File),(@{language=@{Explicit='en'};theme=$(if($Journey.EndsWith('-light')){'light'}else{'dark'})}|ConvertTo-Json -Depth 4))}
 $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError $stderr
 $null=$review.Handle
 [IO.File]::WriteAllText((Join-Path $repo 'artifacts/windows/document-ui-review.pid'),[string]$review.Id)
@@ -574,6 +575,12 @@ function Draw {
     if((Model).state.layer_tools.mask_editing -or (Model).state.layer_tools.quick_mask -or (Model).state.layer_tools.editing_layer.mask_selected){throw 'Controlled stroke is editing a mask'}
     $script:drawIndex++
     $channel=(.02+.02*$script:drawIndex).ToString('R',[Globalization.CultureInfo]::InvariantCulture)
+    Set-InkColor @('.03',$channel,'.025')
+    $revision=(Model).state.document_file.revision
+    Invoke-Control 'Test pen'
+    Wait-Until {(Model).state.document_file.modified -and (Model).state.document_file.revision -gt $revision} 'Controlled stroke did not modify the drawing'
+}
+function Set-InkColor([string[]]$Channels) {
     $colorTile=((Model).panels|Where-Object id -eq 'toolbar').tiles|Where-Object {$_.control.kind -eq 'color'}|Select-Object -First 1
     if(!$colorTile){throw 'Controlled stroke has no color toolbar tile'}
     (Control "tile-toolbar-$($colorTile.id)" -Arranged).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
@@ -584,7 +591,6 @@ function Draw {
     (Control 'edit-color-form-0').GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
     Choose-Item (Control 'edit-color-form-0-linear_rgb')
     Wait-Until {(Find-Id 'edit-color-form-0').Current.Name -eq 'Linear RGB'} 'Controlled ink did not switch to Linear RGB'
-    $channels=@('.03',$channel,'.025')
     for($i=0;$i -lt 3;$i++){
         (Control "edit-color-0-$i").GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
         $entry=Control "edit-color-0-$i-entry";$entry.SetFocus()
@@ -593,13 +599,10 @@ function Draw {
         Wait-Until {!(Find-Id "edit-color-0-$i-entry")} 'Controlled ink value did not commit'
     }
     (Control 'edit-color-apply').GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
-    Wait-Until {$definition=(Model).paint_pair.definition;$definition.linear_rgb -and [Math]::Abs($definition.linear_rgb[1]-[double]$channel) -lt .000001 -and $definition.rgba[3] -eq 1} 'Controlled ink color did not publish'
+    Wait-Until {$definition=(Model).paint_pair.definition;$definition.linear_rgb -and $definition.rgba[3] -eq 1 -and @((0..2)|Where-Object {[Math]::Abs($definition.linear_rgb[$_]-[double]$Channels[$_]) -ge .000001}).Count -eq 0} 'Controlled ink color did not publish'
     Wait-Until {!(Find-Id 'edit-color-apply')} 'Controlled ink editor did not close'
     (Control "tile-toolbar-$($colorTile.id)" -Arranged).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
     Wait-Until {!(Find-Id 'tool-drawer')} 'Controlled ink drawer did not close'
-    $revision=(Model).state.document_file.revision
-    Invoke-Control 'Test pen'
-    Wait-Until {(Model).state.document_file.modified -and (Model).state.document_file.revision -gt $revision} 'Controlled stroke did not modify the drawing'
 }
 function Draw-Below {
     $script:scope=$root
@@ -647,7 +650,7 @@ if($focusedColor){
     Wait-Until {(Drawing).name -eq 'Workflow study' -and (Drawing).values[0] -eq 128 -and (Drawing).values[1] -eq 96} 'Focused drawing setup did not acknowledge its values'
     $count=@((Model).windows_tabs.tabs).Count;Press 'new-drawing-create'
     Wait-Until {$model=Model;!$model.state.new_drawing -and @($model.windows_tabs.tabs).Count -eq $count+1 -and !$model.state.document_file.busy} 'Focused drawing did not open' 60
-}else{New-Journey 'dark' -Full}
+}elseif(!$nativeWriteback){New-Journey 'dark' -Full}
 if($Journey -eq 'new-drawing'){
     Request-Close;Wait-Closed 'New drawing review close did not finish'
     if((Get-Item -LiteralPath $stderr).Length){throw 'New drawing native review reported stderr'}
@@ -710,6 +713,169 @@ function Color-Workflows {
     $appearance.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
     Wait-Until {(Model).windows_document.kind -eq 'proof' -and (Find-Id 'proof-profile')} 'Properties Appearance did not open proof setup'
     Invoke-Control 'Cancel';Wait-Until {!(Model).windows_document -and !@((Model).state.requests).Count} 'Appearance cancellation did not close'
+}
+function Writeback-Tiles([string]$Path,[string]$Mode) {
+    $members=[CapyPackageFixture]::Read($Path)
+    $manifest=[Text.Encoding]::UTF8.GetString(@($members|Where-Object Key -eq 'manifest.json')[0].Value)|ConvertFrom-Json
+    $paint=@($manifest.objects|Where-Object {$_.type -eq 'capy.paint-source/2' -and $_.data.tiles -and @($_.data.tiles).Count})
+    if($paint.Count -ne 1 -or $paint[0].data.color_mode -ne $Mode -or ($paint[0].data.domain.size -join ',') -ne '768,256'){throw 'Saved native paint source has the wrong mode or domain'}
+    $tiles=@($paint[0].data.tiles|Sort-Object {$_.coordinate[0]})
+    if($tiles.Count -ne 3 -or (($tiles|ForEach-Object {$_.coordinate -join ','}) -join ';') -ne '0,0;1,0;2,0'){throw 'Native stroke did not publish all three tile columns'}
+    @($tiles|ForEach-Object {
+        $tile=$_;$resources=@($manifest.resources|Where-Object id -eq $tile.resource.ref)
+        if($resources.Count -ne 1){throw 'Native tile resource is missing or ambiguous'}
+        $resource=$resources[0];$data=$resource.data
+        if($tile.plane -ne 'color' -or $resource.type -ne 'capy.raster-tile/1' -or $resource.encoding -ne 'capy.lz4-tile/1' -or $data.channels -ne 'gray_alpha' -or $data.depth -ne 'u8' -or $data.alpha -ne 'straight' -or $data.transfer -ne 'profile'){throw 'Saved native tile has the wrong sample descriptor'}
+        $packs=@($members|Where-Object Key -eq $resource.location.pack)
+        if($packs.Count -ne 1){throw 'Native tile pack is missing or ambiguous'}
+        $offset=[long]$resource.location.offset;$length=[long]$resource.bytes;$bytes=$packs[0].Value
+        if($offset -lt 0 -or $length -le 0 -or $offset -gt $bytes.LongLength -or $length -gt $bytes.LongLength-$offset){throw 'Native tile byte range leaves its pack'}
+        $hash=[Security.Cryptography.SHA256]::Create()
+        try{$digest=[BitConverter]::ToString($hash.ComputeHash($bytes,[int]$offset,[int]$length)).Replace('-','')}finally{$hash.Dispose()}
+        [ordered]@{coordinate=@($tile.coordinate);plane=$tile.plane;descriptor=$data;encoding=$resource.encoding;bytes=$length;sha256=$digest}
+    })
+}
+function Writeback-Command([string]$Menu,[string]$Id) {
+    $script:scope=$root
+    Wait-Until {((Model).state.commands|Where-Object id -eq $Id).enabled} "Writeback command stayed disabled: $Id" 45
+    & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name $Menu
+    Press $Id
+}
+function Writeback-Panel([string]$Id) {
+    if(!@((Model).layout.groups|Where-Object {$_.panels -contains $Id}).Count){
+        & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Window'
+        $menu=@((Model).application_menus|Where-Object id -eq 'window')[0].model.sections|ForEach-Object {$_}|Where-Object {$_.action.type -eq 'customize' -and $_.action.action.panel -eq $Id}
+        if(@($menu).Count -ne 1){throw "Shared Window menu has no unique panel action: $Id"}
+        (Control $menu.label -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)).GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
+        Wait-Until {@((Model).layout.groups|Where-Object {$_.panels -contains $Id}).Count} "Native writeback panel did not open: $Id"
+    }
+    if(!@((Model).layout.groups|Where-Object active -eq $Id).Count){Press "panel-tab-$Id"}
+    Wait-Until {@((Model).layout.groups|Where-Object active -eq $Id).Count -eq 1} "Native writeback panel did not activate: $Id"
+}
+function Writeback-Ready {
+    Wait-Until {$view=Model;$canvas=Find-Id 'drawing-canvas';$view.canvas_ready -and $view.brush_ready -and !$view.state.document_file.busy -and $canvas -and $canvas.Current.IsEnabled -and !$canvas.Current.IsOffscreen} 'Native writeback drawing did not become ready' 60
+    $view=Model
+    if($view.error -or $view.state.host_error -or $view.windows_gpu_generation -ne $script:writebackGpu){throw 'Native writeback changed the GPU owner or reported an editor error'}
+}
+function Writeback-State {
+    $view=Model
+    [ordered]@{file=$view.state.document_file;layers=$view.state.layers;editing_layer=$view.state.layer_tools.editing_layer.id;mode=@($view.state.layer_properties.controls|Where-Object key -eq 'color_mode')[0].value.value;history=@($view.state.commands|Where-Object {$_.id -in @('undo','redo')}|Select-Object id,enabled);gpu_generation=$view.windows_gpu_generation}
+}
+function Writeback-Projection {
+    if($root.Current.ProcessId -ne $review.Id -or [long]$root.Current.NativeWindowHandle -ne $drawing.Handle.ToInt64()){throw 'Native writeback projection does not belong to the owned drawing'}
+    $camera=(Model).state.camera;$bounds=(Control 'drawing-canvas' -Arranged).Current.BoundingRectangle
+    if($camera.rotation -ne 0 -or $camera.flipped[0] -or $camera.flipped[1] -or $camera.viewport[0] -le 0 -or $camera.viewport[1] -le 0){throw 'Native writeback requires an unrotated canvas projection'}
+    [ordered]@{bounds=@($bounds.X,$bounds.Y,$bounds.Width,$bounds.Height);zoom=$camera.zoom;translation=@($camera.translation);viewport=@($camera.viewport);work_area=@($camera.work_area);process_id=$review.Id;hwnd=$drawing.Handle.ToInt64();camera=$camera}
+}
+function Writeback-Geometry($Projection) {[ordered]@{bounds=$Projection['bounds'];zoom=$Projection['zoom'];translation=$Projection['translation'];viewport=$Projection['viewport'];work_area=$Projection['work_area']}}
+function Writeback-Point([double]$X,[double]$Y,$p) {
+    @([int]($p.bounds[0]+($p.translation[0]+$p.zoom*$X)*$p.bounds[2]/$p.viewport[0]),[int]($p.bounds[1]+($p.translation[1]+$p.zoom*$Y)*$p.bounds[3]/$p.viewport[1]))
+}
+function Writeback-Checked([scriptblock]$Action) {
+    Foreground
+    $window=$root.Current.BoundingRectangle;[CapyRowPointer]::Hover([int]($window.X+20),[int]($window.Y+20))
+    $projection=Writeback-Projection
+    if((Writeback-Geometry $projection|ConvertTo-Json -Depth 8 -Compress) -cne $script:writebackProjection){throw 'Native writeback pixel projection changed'}
+    $signature=$projection|ConvertTo-Json -Depth 20 -Compress
+    try{& $Action $projection}finally{
+        if((Writeback-Projection|ConvertTo-Json -Depth 20 -Compress) -cne $signature){throw 'Native writeback owned projection changed during sampling or input'}
+    }
+}
+function Writeback-Pixels([string]$Name,$Projection) {
+    (@(foreach($x in @(128,384,640)){
+        $point=Writeback-Point $x 128 $Projection;$path=if($Name){Join-Path $run "$Name-$x.png"}else{''}
+        Screen-Pixels $point[0] $point[1] $path
+    }) -join ',')
+}
+function Stable-WritebackPixels([string]$Name='') {Writeback-Checked {param($p) Wait-StablePixels {Writeback-Pixels $Name $p}}}
+function Writeback-Stroke([string]$Device) {
+    Writeback-Checked {param($p)
+        $context=[CapyDocumentControls]::SetThreadDpiAwarenessContext([IntPtr](-4))
+        try{
+            [CapyRowPointer]::Initialize([uint32]$review.Id)
+            try{
+                $point=Writeback-Point 96 128 $p;[CapyRowPointer]::Down($Device,$point[0],$point[1])
+                try{foreach($x in 1..32){$point=Writeback-Point (96+18*$x) 128 $p;[CapyRowPointer]::Move($point[0],$point[1]);Start-Sleep -Milliseconds 8}}finally{[CapyRowPointer]::Up()}
+                [CapyRowPointer]::Verify()
+            }finally{[CapyRowPointer]::Dispose()}
+        }finally{[CapyDocumentControls]::SetThreadDpiAwarenessContext($context)|Out-Null}
+    }
+}
+function Native-Writeback {
+    $script:writebackGpu=(Model).windows_gpu_generation
+    $cases=@(foreach($choice in @(@('Grayscale',1,'grayscale'),@('Two-tone (black & white)',2,'two_tone'))){foreach($device in @('mouse','pen')){
+        $name="$($choice[2])-$device";$file=Join-Path $run "$name 日本語.capy";$resaved=Join-Path $run "$name-reopened.capy"
+        Open-NewDrawing
+        Pick-Choice 'new-drawing-unit' (Value-Index (Drawing).units 'px')
+        if((Drawing).linked){Press 'new-drawing-link';Wait-Until {!(Drawing).linked} 'Writeback drawing did not unlink its dimensions'}
+        Type-Text 'document-width' '768' -Commit;Type-Text 'document-height' '256' -Commit
+        Pick-Choice 'document-depth' (Value-Index (Drawing).depths 'U8')
+        Type-Text 'new-drawing-name' $name
+        Wait-Until {(Drawing).name -eq $name -and (Drawing).values[0] -eq 768 -and (Drawing).values[1] -eq 256} 'Writeback drawing setup did not acknowledge its values'
+        $count=@((Model).windows_tabs.tabs).Count;Press 'new-drawing-create'
+        Wait-Until {! (Drawing) -and @((Model).windows_tabs.tabs).Count -eq $count+1} 'Writeback drawing did not open' 60
+        Writeback-Ready
+        Press (Tool-Tile 'pen')
+        Writeback-Panel 'tool_settings'
+        $subtools=@((Model).state.tool_set.subtools);$gpen=@(0..($subtools.Count-1)|Where-Object {$subtools[$_].preview -eq 1})
+        if($gpen.Count -ne 1){throw 'The native Pen group has no unique G-Pen'}
+        Press "tool-subtool-$($gpen[0])"
+        Wait-Until {(Model).state.brush.preset -eq 1 -and (Model).brush_ready} 'G-Pen did not prepare for native writeback' 60
+        Type-Text 'tool-setting-size' '160' -Commit
+        Wait-Until {[Math]::Abs((Model).state.brush.diameter-160) -lt .001} 'Native writeback brush size did not commit'
+        Set-InkColor @('0','0','0')
+        Writeback-Panel 'properties'
+        Combo-Select (Owned 'property-color_mode') {$_.Current.Name -eq $choice[0]}
+        Wait-Until {@((Model).state.layer_properties.controls|Where-Object key -eq 'color_mode')[0].value.value -eq $choice[1]} 'Native writeback color mode did not apply'
+        Writeback-Command 'View' 'fit_canvas';Writeback-Ready
+        $projection=Writeback-Projection;$script:writebackProjection=Writeback-Geometry $projection|ConvertTo-Json -Depth 8 -Compress
+        $area=[Windows.Rect]::new(($projection.bounds[0]+$projection.work_area[0]*$projection.bounds[2]/$projection.viewport[0]),($projection.bounds[1]+$projection.work_area[1]*$projection.bounds[3]/$projection.viewport[1]),($projection.work_area[2]*$projection.bounds[2]/$projection.viewport[0]),($projection.work_area[3]*$projection.bounds[3]/$projection.viewport[1]))
+        foreach($x in @(128,384,640)){$point=Writeback-Point $x 128 $projection;if(!$area.Contains([Windows.Rect]::new($point[0]-48,$point[1]-48,96,96))){throw 'Native writeback tile sample leaves the clear canvas work area'}}
+        $before=Writeback-State;$baseline=Stable-WritebackPixels
+        Writeback-Stroke $device
+        Wait-Until {$view=Model;$view.state.document_file.revision -gt $before.file.revision -and $view.state.document_file.modified -and @($view.state.layers|Where-Object id -eq $before.editing_layer)[0].paint_revision -ne @($before.layers|Where-Object id -eq $before.editing_layer)[0].paint_revision} 'Native continuous stroke did not commit' 45
+        Writeback-Ready;$painted=Stable-WritebackPixels;$after=Writeback-State
+        for($i=0;$i -lt 3;$i++){if($painted.Split(',')[$i] -eq $baseline.Split(',')[$i]){throw "Native $name stroke did not change tile column $i"}}
+        Capture $name -WithModel -Composed
+        Writeback-Command 'Edit' 'undo'
+        Writeback-Checked {param($p) Wait-Until {(Model).state.document_file.revision -gt $after.file.revision -and (Model).state.document_file.modified -eq $before.file.modified -and (Writeback-Pixels '' $p) -eq $baseline} 'One Undo did not restore all native writeback baseline pixels' 45}
+        $undone=Writeback-State
+        Writeback-Command 'Edit' 'redo'
+        Writeback-Checked {param($p) Wait-Until {(Model).state.document_file.revision -gt $undone.file.revision -and (Writeback-Pixels '' $p) -eq $painted} 'One Redo did not restore all native writeback stroke pixels' 45}
+        $redone=Writeback-State
+        File-Command 'save_document';Picker 'Save As';Choose-Path $file;Idle
+        Wait-Until {(Test-Path -LiteralPath $file) -and (Model).state.document_file.location.uri -eq $file -and !(Model).state.document_file.modified} 'Native writeback Save did not establish a clean checkpoint' 60
+        $saved=Writeback-State;$tiles=@(Writeback-Tiles $file $choice[2]);$fingerprint=$tiles|ConvertTo-Json -Depth 12 -Compress
+        if($saved.file.revision -ne $redone.file.revision -or (Writeback-Checked {param($p) Writeback-Pixels '' $p}) -ne $painted){throw 'Saving native writeback changed its history or canvas pixels'}
+        File-Command 'close_document';Idle
+        Wait-Until {@((Model).windows_tabs.tabs).Count -eq $count} 'Saved native writeback drawing did not close' 45
+        $epoch=[Math]::Max((Model).state.document_file.epoch,$saved.file.epoch)
+        File-Command 'open_document';Picker 'Open';Choose-Path $file;Idle
+        Wait-Until {(Model).state.document_file.epoch -gt $epoch -and (Model).state.document_file.location.uri -eq $file -and !(Model).state.document_file.modified} 'Native writeback Open did not admit a fresh clean drawing' 60
+        Writeback-Ready
+        Writeback-Panel 'properties'
+        Wait-Until {@((Model).state.layer_properties.controls|Where-Object key -eq 'color_mode')[0].value.value -eq $choice[1]} 'Reopened native writeback lost its color mode'
+        Writeback-Command 'View' 'fit_canvas';Writeback-Ready
+        if((Stable-WritebackPixels "$name-reopened") -ne $painted){throw 'Saved native writeback did not reopen with exact canvas pixels'}
+        $reopened=Writeback-State
+        File-Command 'save_document_as';Picker 'Save As';Choose-Path $resaved;Idle
+        Wait-Until {(Model).state.document_file.location.uri -eq $resaved -and !(Model).state.document_file.modified -and (Test-Path -LiteralPath $resaved)} 'Reopened native writeback did not save cleanly' 60
+        if((@(Writeback-Tiles $resaved $choice[2])|ConvertTo-Json -Depth 12 -Compress) -cne $fingerprint){throw 'Native writeback reopening changed authored tile descriptors or encoded ranges'}
+        Capture "$name-reopened" -WithModel -Composed
+        File-Command 'close_document';Idle
+        Wait-Until {@((Model).windows_tabs.tabs).Count -eq $count} 'Reopened native writeback drawing did not close'
+        [ordered]@{name=$name;device=$device;mode=$choice[2];projection=$projection;before=$before;painted=$after;undone=$undone;redone=$redone;saved=$saved;reopened=$reopened;baseline_pixels=$baseline;painted_pixels=$painted;tiles=$tiles;file=$file;file_sha256=(Get-FileHash -LiteralPath $file).Hash;reopened_file=$resaved;reopened_file_sha256=(Get-FileHash -LiteralPath $resaved).Hash}
+    }})
+    $result=[ordered]@{journey=$Journey;theme=(Model).state.theme;executable_sha256=(Get-FileHash -LiteralPath $Executable).Hash;dll_sha256=(Get-FileHash -LiteralPath (Join-Path $directory 'layer_windows.dll')).Hash;fixture_sha256=(Get-FileHash -LiteralPath $PSCommandPath).Hash;cases=$cases;evidence=$run}
+    [IO.File]::WriteAllText((Join-Path $run 'native-writeback.json'),($result|ConvertTo-Json -Depth 80),[Text.UTF8Encoding]::new($false))
+    Request-Close;Wait-Closed 'Native writeback review did not close'
+    if((Get-Item -LiteralPath $stderr).Length){throw 'Native writeback review reported stderr'}
+    $result|ConvertTo-Json -Depth 80
+}
+if($nativeWriteback){
+    $context=[CapyDocumentControls]::SetThreadDpiAwarenessContext([IntPtr](-4))
+    try{Native-Writeback}finally{[CapyDocumentControls]::SetThreadDpiAwarenessContext($context)|Out-Null}
+    return
 }
 if(!$FailGpu){Color-Workflows}
 if($focusedColor){

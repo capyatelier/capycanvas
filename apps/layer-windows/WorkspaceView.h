@@ -24,7 +24,7 @@ public:
     void AttachOverlays(winrt::Microsoft::UI::Xaml::UIElement const&,std::function<void()>);
     winrt::Windows::Data::Json::JsonArray DrawerSources() const;
     winrt::Windows::Data::Json::JsonArray OverlayInputRegions(winrt::Microsoft::UI::Xaml::UIElement const&)const;
-    winrt::Windows::Data::Json::JsonArray Glass(winrt::Microsoft::UI::Xaml::UIElement const& reference,winrt::Windows::Data::Json::JsonArray& connections,winrt::Windows::Data::Json::JsonArray& arcs,winrt::Windows::Data::Json::JsonArray& colors) const;
+    winrt::Windows::Data::Json::JsonArray Glass(winrt::Microsoft::UI::Xaml::UIElement const& reference,winrt::Windows::Data::Json::JsonArray& connections,winrt::Windows::Data::Json::JsonArray& arcs,winrt::Windows::Data::Json::JsonArray& colors,winrt::Windows::Data::Json::JsonArray& panels,uint64_t& panelRevision) const;
 private:
     struct Impl;
     std::shared_ptr<Impl> impl;

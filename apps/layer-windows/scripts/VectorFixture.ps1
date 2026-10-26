@@ -145,7 +145,37 @@ function Tool-Item([string]$List,[scriptblock]$Match,[string]$Wanted){
  $native=@{name=$null}
  try{Wait-Until {$button=Find $id;$native.name=if($button){$button.Current.Name};$native.name -eq $hit.item.label} "The Tools list button $id is not labelled $($hit.item.label)"}
  catch{throw "The Tools list button $id is labelled '$($native.name)' where Rust offers '$($hit.item.label)'"}
- [pscustomobject]@{id=$id;list=$List;index=$hit.index;label=$hit.item.label;selected=[bool]$hit.item.selected}
+ [pscustomobject]@{id=$id;list=$List;index=$hit.index;label=$hit.item.label;selected=[bool]$hit.item.selected;enabled=[bool]$hit.item.enabled;reason=[string]$hit.item.disabled_reason;action=$hit.item.action}
+}
+function Reason-Hover($Button,[string]$Reason){
+  if(!$Reason -or $Button.Current.HelpText-cne$Reason){throw 'The native hover target has no current shared reason'}
+  $at=Center $Button;[CapyRowPointer]::Hover($at[0],$at[1]);$tip=@{node=$null}
+  $condition=[System.Windows.Automation.AndCondition]::new([System.Windows.Automation.Condition[]]@([System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::ToolTip),[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ProcessIdProperty,$review.Id),[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::IsOffscreenProperty,$false)))
+  Wait-Until {$tip.node=[System.Windows.Automation.AutomationElement]::RootElement.FindFirst([System.Windows.Automation.TreeScope]::Descendants,$condition);$tip.node -and $tip.node.Current.Name -ceq $Reason} 'The tool hover did not expose its shared reason'
+  Start-Sleep -Milliseconds 200
+  if($tip.node.Current.Name -cne $Reason -or $Button.Current.HelpText -cne $Reason){throw 'A delayed shortcut reply replaced the current tool reason'}
+  Park
+}
+function Tool-Availability($Choice,[switch]$Hover){
+ $button=Reveal $Choice.id;$spec=@((Snapshot).state.tool_set.($Choice.list))[$Choice.index]
+ if($button.Current.Name -cne $spec.label -or $button.Current.IsEnabled -ne [bool]$spec.enabled -or $button.Current.HelpText -cne [string]$spec.disabled_reason){throw 'The native tool availability differs from the shared choice'}
+ if($Hover){if(!$spec.enabled){throw 'The reason-bearing tool choice is not still enabled'};Reason-Hover $button $spec.disabled_reason}
+ $button
+}
+function Tool-TextPixels($Choice,[string]$Name){
+ $button=Tool-Availability $Choice;Park
+ $text=Control $Choice.label -Name -Within $button -Type ([System.Windows.Automation.ControlType]::Text) -Arranged
+ $box=$button.Current.BoundingRectangle;$glyph=$text.Current.BoundingRectangle;$window=$root.Current.BoundingRectangle
+ if(!$box.Contains($glyph)){throw 'The tool text leaves its owned button'}
+ $bitmap=Grab;$origin=@([Math]::Max(0,[int]$window.X),[Math]::Max(0,[int]$window.Y));$contrast=0
+ try{
+  $background=$bitmap.GetPixel([int]($box.Right-2-$origin[0]),[int]($box.Y+$box.Height/2-$origin[1]))
+  for($y=[int][Math]::Ceiling($glyph.Top);$y-lt[Math]::Floor($glyph.Bottom);$y++){for($x=[int][Math]::Ceiling($glyph.Left);$x-lt[Math]::Floor($glyph.Right);$x++){
+   $pixel=$bitmap.GetPixel($x-$origin[0],$y-$origin[1]);$contrast=[Math]::Max($contrast,([Math]::Abs([int]$pixel.R-$background.R)+[Math]::Abs([int]$pixel.G-$background.G)+[Math]::Abs([int]$pixel.B-$background.B)))
+  }}
+  $bitmap.Save((Join-Path $run ($Name+'.png')),[Drawing.Imaging.ImageFormat]::Png)
+ }finally{$bitmap.Dispose()}
+ [pscustomobject]@{identity=($button.GetRuntimeId()-join':');bounds=@($box.X,$box.Y,$box.Width,$box.Height);background=$background.ToArgb();contrast=$contrast;reason=$button.Current.HelpText;enabled=$button.Current.IsEnabled}
 }
 function Reveal([string]$Id){
  $item=Control $Id
@@ -196,13 +226,21 @@ function New-VectorLayer{
 function Footer-Check([string]$Name){
  $scale=[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96
  $frame=(Control 'layer-footer' -Arranged).Current.BoundingRectangle;$inside=$frame;$inside.Inflate(1,1)
- $record=[ordered]@{scale=$scale;footer=@($frame.X,$frame.Y,$frame.Width,$frame.Height);buttons=@()}
+ $allocated=Native-Bounds 'layer-footer' $scale;$width=$allocated.Width/$scale
+ $ids=[ordered]@{new_layer='layer-new';new_vector_layer='layer-new-vector';new_group='layer-new-group';new_selection_layer='layer-new-selection';add_mask='layer-add-mask';add_filter='layer-add-filter';import_image='layer-import';delete='layer-delete'}
+ $slots=@((Snapshot).state.layer_tools.footer)
+ if(($slots.button -join ',') -ne ($ids.Keys -join ',')){throw 'The shared Layers footer slots differ from the native fixture controls'}
+ $hidden=@($slots|Where-Object {$width+.5 -lt $_.min_width})
+ $record=[ordered]@{scale=$scale;allocated_width=$width;footer=@($frame.X,$frame.Y,$frame.Width,$frame.Height);allocated=@($allocated.X,$allocated.Y,$allocated.Width,$allocated.Height);buttons=@();overflow=@()}
  $previous=$null
- foreach($id in 'layer-new','layer-new-vector','layer-new-group','layer-new-selection','layer-add-mask','layer-add-filter','layer-import','layer-delete','layer-actions'){
+ foreach($slot in @($slots)+@([pscustomobject]@{button='actions';min_width=0})){
+  $id=if($slot.button -eq 'actions'){'layer-actions'}else{$ids[$slot.button]}
+  $expected=$width+.5 -ge $slot.min_width
   $button=Find $id -Visible
-  if(!$button){$findings.Add("The Layers footer does not show $id");$record.buttons+=[ordered]@{id=$id;shown=$false};continue}
+  if([bool]$button -ne $expected){$findings.Add("The Layers footer shows $id=$([bool]$button), expected $expected at $width DIP with minimum $($slot.min_width)")}
+  if(!$button){$record.buttons+=[ordered]@{id=$id;shown=$false;expected=$expected;min_width=$slot.min_width};continue}
   $b=$button.Current.BoundingRectangle
-  $record.buttons+=[ordered]@{id=$id;shown=$true;name=$button.Current.Name;enabled=$button.Current.IsEnabled;bounds=@($b.X,$b.Y,$b.Width,$b.Height)}
+  $record.buttons+=[ordered]@{id=$id;shown=$true;expected=$expected;min_width=$slot.min_width;name=$button.Current.Name;enabled=$button.Current.IsEnabled;bounds=@($b.X,$b.Y,$b.Width,$b.Height)}
   if(!$button.Current.Name){$findings.Add("The Layers footer button $id has no accessible name")}
   if(!$inside.Contains($b) -or [Math]::Abs($b.Width-26*$scale) -gt 2 -or [Math]::Abs($b.Height-26*$scale) -gt 2){
    $findings.Add("The Layers footer clips $id at $([Math]::Round($b.X)),$([Math]::Round($b.Y)) $([Math]::Round($b.Width))x$([Math]::Round($b.Height)) within $([Math]::Round($frame.X)),$([Math]::Round($frame.Y)) $([Math]::Round($frame.Width))x$([Math]::Round($frame.Height))")
@@ -210,7 +248,33 @@ function Footer-Check([string]$Name){
   if($previous -and $b.Left -lt $previous.Right-1){$findings.Add("The Layers footer overlaps $id with the button before it")}
   $previous=$b
  }
- $record|ConvertTo-Json -Depth 6|Set-Content -LiteralPath (Join-Path $run "layers-footer-$Name.json")
+ try{
+  if($hidden.Count){
+   $before=(Snapshot).state.document_file|Select-Object epoch,revision,modified|ConvertTo-Json -Compress
+   $selected=@((Rows|Where-Object selected).id) -join ','
+   $peers=[Collections.Generic.List[object]]::new();$popups=$script:CapyPopups
+   try{
+    $script:CapyPopups=$true;Invoke 'layer-actions'
+    foreach($slot in $hidden){
+     $hit=@{item=$null}
+     Wait-Until {$hit.item=Find $slot.item.label -Name -Visible -Type ([System.Windows.Automation.ControlType]::MenuItem);$null -ne $hit.item} "The Layers overflow does not show $($slot.item.label)"
+     $item=$hit.item;$peers.Add($item);$b=$item.Current.BoundingRectangle
+     $record.overflow+=[ordered]@{button=$slot.button;name=$item.Current.Name;expected_label=$slot.item.label;enabled=$item.Current.IsEnabled;expected_enabled=[bool]$slot.item.enabled;bounds=@($b.X,$b.Y,$b.Width,$b.Height)}
+     if($item.Current.Name -ne $slot.item.label -or $item.Current.IsEnabled -ne [bool]$slot.item.enabled){throw "The Layers overflow mislabels or mis-enables $($slot.button)"}
+     if($b.IsEmpty -or $b.Width -le 0 -or $b.Height -le 0){throw "The Layers overflow did not arrange $($slot.item.label)"}
+    }
+    Capture "footer-overflow-$Name-$Theme" -WithModel -Composed
+   }finally{
+    try{
+     Key 0x1B
+     foreach($peer in $peers){Wait-Until {try{$bounds=$peer.Current.BoundingRectangle;$peer.Current.IsOffscreen -or $bounds.IsEmpty -or $bounds.Width -le 0 -or $bounds.Height -le 0}catch [System.Windows.Automation.ElementNotAvailableException]{$true}} 'The Layers overflow did not close'}
+    }finally{$script:CapyPopups=$popups}
+   }
+   Park
+   $after=(Snapshot).state.document_file|Select-Object epoch,revision,modified|ConvertTo-Json -Compress
+   if($after -ne $before -or (@((Rows|Where-Object selected).id) -join ',') -ne $selected){throw 'Inspecting the Layers overflow changed the drawing or selected layers'}
+  }
+ }finally{$record|ConvertTo-Json -Depth 6|Set-Content -LiteralPath (Join-Path $run "layers-footer-$Name.json")}
 }
 function Notice-Parts{
  if(!$script:noticeFrame){
@@ -218,12 +282,26 @@ function Notice-Parts{
   if(!$script:noticeFrame){return [ordered]@{}}
  }
  $request=[System.Windows.Automation.CacheRequest]::new()
- foreach($property in [System.Windows.Automation.AutomationElement]::AutomationIdProperty,[System.Windows.Automation.AutomationElement]::NameProperty,[System.Windows.Automation.AutomationElement]::BoundingRectangleProperty,[System.Windows.Automation.AutomationElement]::IsOffscreenProperty,[System.Windows.Automation.AutomationElement]::IsKeyboardFocusableProperty){$request.Add($property)}
+ foreach($property in [System.Windows.Automation.AutomationElement]::AutomationIdProperty,[System.Windows.Automation.AutomationElement]::NameProperty,[System.Windows.Automation.AutomationElement]::BoundingRectangleProperty,[System.Windows.Automation.AutomationElement]::IsOffscreenProperty,[System.Windows.Automation.AutomationElement]::IsKeyboardFocusableProperty,[System.Windows.Automation.AutomationElement]::IsEnabledProperty,[System.Windows.Automation.AutomationElement]::HelpTextProperty){$request.Add($property)}
  $active=$request.Activate()
  try{$items=$script:noticeFrame.FindAll([System.Windows.Automation.TreeScope]::Subtree,[System.Windows.Automation.Condition]::TrueCondition)}finally{$active.Dispose()}
  $parts=[ordered]@{}
- foreach($item in $items){$c=$item.Cached;if($c.AutomationId -like 'canvas-notice*' -and !$c.IsOffscreen){$parts[$c.AutomationId]=[pscustomobject]@{name=$c.Name;bounds=$c.BoundingRectangle;focusable=$c.IsKeyboardFocusable}}}
+ foreach($item in $items){$c=$item.Cached;if($c.AutomationId -like 'canvas-notice*' -and !$c.IsOffscreen){$parts[$c.AutomationId]=[pscustomobject]@{name=$c.Name;bounds=$c.BoundingRectangle;focusable=$c.IsKeyboardFocusable;enabled=$c.IsEnabled;reason=$c.HelpText}}}
  $parts
+}
+function Notice-Presentation($Parts,$View,$Bitmap){
+ $notice=$View.state.notice;$offers=@($notice.actions);$window=$root.Current.BoundingRectangle;$scale=[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.
+ if(!$offers.Count -or !$offers[0].accent -or @($offers|Where-Object accent).Count-ne1){throw 'The shared notice does not identify exactly its first suggested action'}
+ $record=@(foreach($offer in $offers){
+  $native=$Parts['canvas-notice-action-'+$offer.id]
+  if(!$native -or $native.name-cne$offer.label -or $native.enabled-ne[bool]$offer.enabled -or $native.reason-cne[string]$offer.reason){throw 'The native notice action differs from its shared label, availability or reason'}
+  $role=if($offer.accent -and $offer.enabled){'accent'}else{'panel'};$expected=[Drawing.ColorTranslator]::FromHtml($View.state.palette.$role)
+  $at=@([int]($native.bounds.Left+6*$scale),[int]($native.bounds.Y+$native.bounds.Height/2))
+  $pixel=$Bitmap.GetPixel($at[0]-[Math]::Max(0,[int]$window.X),$at[1]-[Math]::Max(0,[int]$window.Y))
+  if($pixel.ToArgb()-ne$expected.ToArgb()){throw "The $($offer.id) notice action does not render its shared $role fill"}
+  [ordered]@{id=$offer.id;accent=[bool]$offer.accent;palette_role=$role;point=$at;pixel=$pixel.ToArgb();expected=$expected.ToArgb()}
+ })
+ $record
 }
 function Accept-Notice([string]$Action,[string[]]$Offers,[string]$Name,[string]$Label){
  $hit=@{parts=$null;polls=[Collections.Generic.List[long]]::new()}
@@ -235,14 +313,15 @@ function Accept-Notice([string]$Action,[string[]]$Offers,[string]$Name,[string]$
    $null -ne $hit.parts
   } "No notice offered $Label" 30
  }catch{throw "No notice offered $Label ($($contact.ElapsedMilliseconds) ms after the contact; native frame found: $([bool]$script:noticeFrame); slowest notice query $(($hit.polls|Measure-Object -Maximum).Maximum) ms): $($_.Exception.Message)"}
- $picture=Grab
+ $view=Snapshot;$picture=Grab
  $clicked=$contact.ElapsedMilliseconds
  $parts=$hit.parts;$target=$parts[$key].bounds
  [CapyRowPointer]::Down('mouse',[int]($target.X+$target.Width/2),[int]($target.Y+$target.Height/2));Start-Sleep -Milliseconds 40;[CapyRowPointer]::Up()
- Save-Grab $picture "$Name-notice-$Theme";Park
+ try{$styles=Notice-Presentation $hit.parts $view $picture}finally{Save-Grab $picture "$Name-notice-$Theme"}
+ Park
  $frame=$parts['canvas-notice'].bounds;$contained=$frame;$contained.Inflate(1,1)
  $actions=@($parts.Keys|Where-Object {$_ -like 'canvas-notice-action-*'})
- $presented=[ordered]@{name=$Name;text=$(if($parts.Contains('canvas-notice-text')){$parts['canvas-notice-text'].name});frame=@($frame.X,$frame.Y,$frame.Width,$frame.Height);native_ms=$hit.native_ms;clicked_ms=$clicked;slowest_query_ms=($hit.polls|Measure-Object -Maximum).Maximum;actions=@()}
+ $presented=[ordered]@{name=$Name;text=$(if($parts.Contains('canvas-notice-text')){$parts['canvas-notice-text'].name});frame=@($frame.X,$frame.Y,$frame.Width,$frame.Height);native_ms=$hit.native_ms;clicked_ms=$clicked;slowest_query_ms=($hit.polls|Measure-Object -Maximum).Maximum;actions=@();native_styles=$styles}
  foreach($id in $actions){
   $button=$parts[$id]
   $presented.actions+=[ordered]@{id=($id -replace '^canvas-notice-action-');name=$button.name;bounds=@($button.bounds.X,$button.bounds.Y,$button.bounds.Width,$button.bounds.Height)}

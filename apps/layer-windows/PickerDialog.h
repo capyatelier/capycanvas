@@ -6,13 +6,12 @@ namespace CapyUi {
 inline constexpr double PickerPadding=20,PickerDialogHeight=486.67;
 inline ContentDialog pickerDialog(std::shared_ptr<WorkspaceData> const& data,XamlRoot const& xaml,Grid const& root,FrameworkElement const& page,Grid const& footer,hstring const& id){
     ContentDialog dialog;dialog.XamlRoot(xaml);
-    dialog.RequestedTheme(data->theme()==L"dark"?ElementTheme::Dark:ElementTheme::Light);
+    dialogSurface(data,dialog);
     dialog.Resources().Insert(box_value(L"ContentDialogMaxWidth"),box_value(760.));
     dialog.Resources().Insert(box_value(L"ContentDialogMinWidth"),box_value(300.));
     dialog.Resources().Insert(box_value(L"ContentDialogMaxHeight"),box_value(100000.));
     dialog.Resources().Insert(box_value(L"ContentDialogPadding"),box_value(Thickness{0,0,0,0}));
-    dialog.Resources().Insert(box_value(L"ContentDialogTopOverlay"),clear());
-    dialog.Background(data->brush(L"settings"));dialog.Content(root);
+    dialog.Content(root);
     AutomationProperties::SetAutomationId(dialog,id);
     AutomationProperties::SetAutomationId(root,id+L"-frame");
     inheritLanguage(root,data);

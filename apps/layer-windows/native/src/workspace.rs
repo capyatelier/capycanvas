@@ -4,13 +4,17 @@ use layer_host::NativeHost;
 use serde_json::{Value, json};
 
 fn request(json: &str) -> Result<Value, String> {
-    if json.len() > 8192 {
+    if json.len() > 256 * 1024 {
         return Err("Workspace query is too large".into());
     }
     let value: Value = serde_json::from_str(json).map_err(|e| e.to_string())?;
+    if json.len()>8192 && value.get("type").and_then(Value::as_str)!=Some("panel_bridges") {
+        return Err("Workspace query is too large".into());
+    }
     match value.get("type").and_then(Value::as_str) {
         Some(
             "context"
+            | "panel_bridges"
             | "panel_handle_target"
             | "drop"
             | "workspace_drag_preview"
@@ -92,6 +96,31 @@ mod tests {
         let result=crate::previews::copied_metadata(owned);
         assert_eq!(crate::previews::capy_preview_length(owned),0);
         crate::previews::capy_preview_free(owned);result
+    }
+
+    #[test]
+    fn windows_panel_bridge_query_uses_live_ids_and_actual_native_allocations_without_edits() {
+        let mut host=NativeHost::new(layer_ui::Platform::Windows).unwrap();
+        let revision=host.session.engine().document().revision;
+        let layout=host.session.layout([1400.,900.]);
+        let groups:Vec<_>=layout.groups.iter().map(|g|json!([g.id,g.bounds])).collect();
+        let columns:Vec<_>=layout.collapsed.iter().map(|c|json!({"column":c.id,"bounds":c.bounds,"content":c.content,
+            "icons":c.groups.iter().flat_map(|g|&g.icons).map(|i|json!([i.panel,i.bounds])).collect::<Vec<_>>()})).collect();
+        let query=json!({"type":"panel_bridges","viewport":[1400,900],"measure":{"groups":groups,"columns":columns}});
+        let result=metadata(super::query(&mut host,&query.to_string()).unwrap());
+        assert!(result["error"].is_null());
+        let actual=result["result"]["groups"].as_array().unwrap();
+        assert_eq!(actual.len(),layout.groups.len());
+        for group in &layout.groups {
+            let projected=actual.iter().find(|g|g["group"]==group.id).unwrap();
+            assert_eq!(projected["bounds"],json!(group.bounds));
+            assert_eq!(projected["radii"].as_array().unwrap().len(),4);
+        }
+        let mut invalid=query;invalid["measure"]["groups"]=json!([[u32::MAX,{"x":0,"y":0,"width":1,"height":1}]]);
+        let rejected=metadata(super::query(&mut host,&invalid.to_string()).unwrap());
+        assert!(rejected["result"].is_null());assert!(rejected["error"].is_string());
+        assert_eq!(revision,host.session.engine().document().revision);
+        assert!(host.error.is_none());
     }
 
     #[test]

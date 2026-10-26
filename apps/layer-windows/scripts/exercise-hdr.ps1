@@ -33,20 +33,32 @@ public static class CapyHdrPicker {
  [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true)] static extern IntPtr LoadLibraryEx(string path,IntPtr file,uint flags);
  [DllImport("kernel32.dll")] static extern IntPtr GetProcAddress(IntPtr module,string name);
  [DllImport("kernel32.dll")] static extern bool FreeLibrary(IntPtr module);
- [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate IntPtr Localize([MarshalAs(UnmanagedType.LPStr)]string tag);
- [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate IntPtr ColorUi(IntPtr context,[MarshalAs(UnmanagedType.LPStr)]string json);
- [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate void Free(IntPtr value);
+ [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate ulong Localize([MarshalAs(UnmanagedType.LPUTF8Str)]string tag);
+ [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate ulong ColorUi(ulong context,[MarshalAs(UnmanagedType.LPUTF8Str)]string json);
+ [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate void Free(ulong value);
+ [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate UIntPtr Length(ulong value);
+ [UnmanagedFunctionPointer(CallingConvention.Cdecl)] [return:MarshalAs(UnmanagedType.I1)] delegate bool Copy(ulong value,UIntPtr offset,IntPtr output,UIntPtr length);
  static T Export<T>(IntPtr module,string name) {var address=GetProcAddress(module,name);if(address==IntPtr.Zero)throw new Exception("Missing "+name);return (T)(object)Marshal.GetDelegateForFunctionPointer(address,typeof(T));}
  public static string Arc(string path,string json) {
-  IntPtr module=LoadLibraryEx(path,IntPtr.Zero,0x1100),context=IntPtr.Zero,value=IntPtr.Zero;
+  IntPtr module=LoadLibraryEx(path,IntPtr.Zero,0x1100);ulong context=0,value=0;
   if(module==IntPtr.Zero)throw new Exception("Cannot load color geometry DLL: "+Marshal.GetLastWin32Error());
   Free freeContext=null,freeString=null;
   try {
    freeContext=Export<Free>(module,"capy_localization_free");freeString=Export<Free>(module,"capy_string_free");
-   context=Export<Localize>(module,"capy_localization_for_tag")("en");if(context==IntPtr.Zero)throw new Exception("Cannot create color localization");
-   value=Export<ColorUi>(module,"capy_color_ui")(context,json);if(value==IntPtr.Zero)throw new Exception("Missing color geometry");
-   int length=0;while(Marshal.ReadByte(value,length)!=0)length++;var bytes=new byte[length];Marshal.Copy(value,bytes,0,length);return Encoding.UTF8.GetString(bytes);
-  } finally {if(value!=IntPtr.Zero)freeString(value);if(context!=IntPtr.Zero)freeContext(context);FreeLibrary(module);}
+   context=Export<Localize>(module,"capy_localization_for_tag")("en");if(context==0)throw new Exception("Cannot create color localization");
+   value=Export<ColorUi>(module,"capy_color_ui")(context,json);if(value==0)throw new Exception("Missing color geometry");
+   var bytes=new byte[checked((int)Export<Length>(module,"capy_string_length")(value).ToUInt64())];
+   var copy=Export<Copy>(module,"capy_string_copy");var pinned=GCHandle.Alloc(bytes,GCHandleType.Pinned);
+   try {
+    for(int offset=0;offset<bytes.Length;){
+     int count=Math.Min(8*1024*1024,bytes.Length-offset);
+     if(!copy(value,new UIntPtr((uint)offset),IntPtr.Add(pinned.AddrOfPinnedObject(),offset),new UIntPtr((uint)count)))throw new Exception("Color geometry text copy failed");
+     offset+=count;
+    }
+    if(!copy(value,new UIntPtr((uint)bytes.Length),IntPtr.Zero,UIntPtr.Zero))throw new Exception("Color geometry text expired");
+   }finally{pinned.Free();}
+   return Encoding.UTF8.GetString(bytes);
+  } finally {if(value!=0)freeString(value);if(context!=0)freeContext(context);FreeLibrary(module);}
  }
  [DllImport("user32.dll",CharSet=CharSet.Unicode,SetLastError=true)] static extern IntPtr SendMessageTimeout(IntPtr h,uint m,UIntPtr w,IntPtr l,uint f,uint t,out UIntPtr r);
  [DllImport("user32.dll",SetLastError=true)] public static extern bool PostMessage(IntPtr h,uint m,UIntPtr w,IntPtr l);

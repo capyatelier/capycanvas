@@ -560,6 +560,7 @@ struct Editor:std::enable_shared_from_this<Editor>{
         all.push_back(intensity);return all;
     }
     void render(){
+        if(dialog)dialogSurface(data,dialog);
         updating=true;
         auto choices=array(view,L"shapes");
         for(uint32_t i=0;i<3&&i<choices.Size();++i){

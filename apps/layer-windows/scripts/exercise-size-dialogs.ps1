@@ -1,4 +1,4 @@
-param([Parameter(Mandatory)][string]$Executable)
+param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme)
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 $CapyWaitSeconds=20
@@ -40,6 +40,7 @@ function Pixels([string]$Id){[int]((Field $Id) -replace '[^0-9.-]','')}
 try {
     Enter-CapyEnvironment
     $env:CAPY_STORAGE_DIR=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1'
+    if($PSBoundParameters.ContainsKey('Theme')){[IO.File]::WriteAllText((Settings-File),(@{theme=$Theme}|ConvertTo-Json),[Text.UTF8Encoding]::new($false))}
     $review=Start-Process -FilePath $Executable -WorkingDirectory $run -PassThru -RedirectStandardError (Join-Path $run 'stderr.log')
     $null=$review.Handle
     Write-Output "Owned size dialog review $($review.Id): $run"
@@ -47,6 +48,8 @@ try {
     do{$review.Refresh();if($review.HasExited){throw 'Review exited at startup'};Start-Sleep -Milliseconds 100}while($review.MainWindowHandle -eq [IntPtr]::Zero -and $watch.Elapsed.TotalSeconds -lt 45)
     $root=[System.Windows.Automation.AutomationElement]::FromHandle($review.MainWindowHandle)
     Wait-Until {(Model).brush_ready -and (Model).windows_workspace.ready -and !(Model).windows_workspace.busy} 'Size dialog review did not start' 45
+    $checks.theme=(Model).state.theme
+    if($PSBoundParameters.ContainsKey('Theme') -and $checks.theme -ne $Theme){throw 'Size dialog did not adopt its explicit isolated theme'}
     $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)
     [CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
     [CapyRowPointer]::SetForegroundWindow($review.MainWindowHandle)|Out-Null
@@ -56,7 +59,7 @@ try {
     Open-CanvasSize
     if((Pixels 'canvas-size-width') -ne $original[0] -or (Pixels 'canvas-size-height') -ne $original[1]){throw 'Canvas Size did not start at the current size'}
     if((Desktop-Button 'Apply').Current.IsEnabled){throw 'Apply was enabled before the size changed'}
-    Capture 'open'
+    Capture 'open' -WithModel -Composed
     $checks.opens_from_edit_image='passed'
 
     $width=Control 'canvas-size-width' -Type $ControlType::Edit
@@ -130,7 +133,7 @@ try {
     Wait-Until {[Math]::Abs((Pixels 'image-size-height')-$halfHeight) -le 1} 'The height field did not follow the constrained width'
     Wait-Until {(Control 'image-size-message').Current.Name -match "$half"} 'The Image Size message did not show the new size'
     if((Image-Draft).resample -ne $resampleValue){throw 'Typing a width lost the resampling choice'}
-    Capture 'image-size-edited'
+    Capture 'image-size-edited' -WithModel -Composed
     $checks.image_size_constrains_and_resamples='passed'
 
     (Desktop-Button ((Image-Draft).apply_label)).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()

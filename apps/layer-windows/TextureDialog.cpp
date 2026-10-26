@@ -298,6 +298,7 @@ struct TextureDialog : std::enable_shared_from_this<TextureDialog> {
     }
     void update(){
         if(finished)return;
+        dialogSurface(data,dialog);
         auto picker=texturePicker(data->state,layer,epoch);if(!picker)return;
         if(auto key=picker->paper.Stringify();key!=shown){
             shown=key;paper=picker->paper;tiles->rebuild(array(paper,L"tiles"));
@@ -321,7 +322,7 @@ struct TextureDialog : std::enable_shared_from_this<TextureDialog> {
         auto lifetime=shared_from_this();
         ContentDialog prompt;prompt.XamlRoot(dialog.XamlRoot());prompt.Title(box_value(data->caption(L"paper",L"rename_title")));
         prompt.PrimaryButtonText(data->common(L"save"));prompt.CloseButtonText(data->common(L"cancel"));prompt.DefaultButton(ContentDialogButton::Primary);
-        prompt.RequestedTheme(data->theme()==L"light"?ElementTheme::Light:ElementTheme::Dark);
+        dialogSurface(data,prompt);
         AutomationProperties::SetAutomationId(prompt,L"paper-rename-dialog");
         TextBox input;input.Header(box_value(data->common(L"name")));input.Text(str(action,L"name"));input.MaxLength(64);AutomationProperties::SetAutomationId(input,L"paper-rename-name");
         auto validate=[source=data,prompt=make_weak(prompt),input=make_weak(input)]{auto view=prompt.get();auto entry=input.get();if(view&&entry)view.IsPrimaryButtonEnabled(source->caption(O({{L"type",S(L"paper_name_error")},{L"name",S(entry.Text())}})).empty());};

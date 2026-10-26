@@ -1,9 +1,10 @@
-param([Parameter(Mandatory)][string]$Executable)
+param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme='dark',[switch]$ScrubOnly)
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 $CapyEach={[CapyCanvasTouch]::Verify()}
 Add-Type -Path (Join-Path $PSScriptRoot 'CanvasTouchDriver.cs')
 Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
+Add-Type -AssemblyName System.Drawing
 [CapyCanvasTouch]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
 $repo=(Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
 $Executable=(Resolve-Path -LiteralPath $Executable).Path;$directory=Split-Path -Parent $Executable
@@ -38,10 +39,119 @@ function Signature {$m=$null;for($i=0;$i -lt 40 -and !$m;$i++){$m=Model;if(!$m){
 $checks=[Collections.Generic.List[object]]::new()
 function Check([string]$Name,[scriptblock]$Condition){Wait-Until $Condition $Name;if((Signature) -ne $drawing){throw "Touch changed the drawing: $Name"};$checks.Add(@{name=$Name;camera=Camera});Write-Output "$Name passed"}
 function Stable([string]$Name,$Expected){Start-Sleep -Milliseconds 160;Check $Name {(Same-Camera (Camera) $Expected)}}
+function Camera-Pose{$c=Camera;@($c.viewport,$c.translation,$c.zoom,$c.rotation,$c.flipped)|ConvertTo-Json -Depth 6 -Compress}
+function Paint-Checkpoint{@((Model).state.layers|Select-Object id,paint_revision,mask_revision,locked,alpha_locked,visible)|ConvertTo-Json -Depth 6 -Compress}
+function Scrub-Park{
+ $box=(Control 'column-icon-layers' -Arranged).Current.BoundingRectangle
+ [CapyRowPointer]::Hover([int]($box.X+$box.Width/2),[int]($box.Y+$box.Height/2))
+}
+function Scrub-Pixels{
+ if((Camera-Pose) -ne $scrubCamera -or (Control 'drawing-canvas').Current.BoundingRectangle -ne $scrubBounds){throw 'The scrub moved the camera or canvas during exact pixel comparisons'}
+ @($scrubSamples|ForEach-Object {Screen-Pixels $_[0] $_[1]}) -join ':'
+}
+function Scrub-Key([uint16]$Key){
+ (Control 'drawing-canvas').SetFocus()
+ [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),$Key)
+ Scrub-Park
+}
+function Scrub-Touch([double[]]$Direction,[switch]$Cancel){
+ $scale=[CapyRowPointer]::GetDpiForWindow($handle)/96.
+ $origins=@(@([int]($cx-48*$scale),$cy),@($cx,$cy),@([int]($cx+48*$scale),$cy))
+ foreach($id in 1..3){[CapyCanvasTouch]::Down($id,$origins[$id-1][0],$origins[$id-1][1])}
+ $clock=[Diagnostics.Stopwatch]::StartNew();$from=0.
+ try{
+  $legs=if($Cancel){@(64.,0.)}else{@(64.,0.,64.,0.,64.)}
+  foreach($to in $legs){
+   for($step=1;$step -le 8;$step++){
+    $distance=($from+($to-$from)*$step/8)*$scale
+    foreach($id in 1..3){[CapyCanvasTouch]::Move($id,[int]($origins[$id-1][0]+$Direction[0]*$distance),[int]($origins[$id-1][1]+$Direction[1]*$distance))}
+    Start-Sleep -Milliseconds 12
+   }
+   $from=$to
+  }
+  if(!$Cancel){
+   [CapyCanvasTouch]::Up(1)
+   [CapyCanvasTouch]::Move(2,[int]($origins[1][0]+$Direction[0]*64*$scale+20*$scale),[int]($origins[1][1]+$Direction[1]*64*$scale+20*$scale))
+   [CapyCanvasTouch]::Up(2);[CapyCanvasTouch]::Up(3)
+  }
+ }finally{[CapyCanvasTouch]::CancelAll()}
+ $checks.Add(@{name='native scrub contacts';direction=$Direction;cancelled=[bool]$Cancel;elapsed_ms=$clock.Elapsed.TotalMilliseconds})
+ Scrub-Park
+}
+function Scrub-Lock{
+ Invoke 'column-icon-layers'
+ Wait-Until {@((Model).layout.groups|Where-Object active -eq 'layers').Count -eq 1} 'Layers did not open for its native lock menu'
+ Invoke 'layer-actions'
+ (Control 'menu-layer-settings').GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
+ Invoke 'layer-menu-lock'
+ Wait-Until {(Model).state.layer_tools.editing_layer.locked -and !(Find 'layer-menu-lock' -Visible)} 'The native Layer Settings menu did not lock editing'
+ Invoke 'column-icon-layers'
+ Wait-Until {@((Model).layout.groups|Where-Object active -eq 'layers').Count -eq 0} 'Layers did not close after locking'
+ Scrub-Park
+}
+function Check-Scrubs{
+ $painted=Wait-StablePixels {Scrub-Pixels};$paint=Paint-Checkpoint
+ if($painted -eq $scrubEmpty){throw 'The real mouse seed did not change its composed pixel samples'}
+ Capture 'scrub-seed' -WithModel -Composed
+ [CapyCanvasTouch]::Initialize([uint32]$review.Id)
+ $before=Signature
+ Scrub-Touch @(1.,0.) -Cancel
+ if((Signature) -ne $before -or (Wait-StablePixels {Scrub-Pixels}) -ne $painted){throw 'A cancelled three-finger scrub changed artwork or history'}
+ $checks.Add(@{name='scrub cancellation before admission';pixels='exact';history='unchanged'})
+ foreach($degrees in 0,45,90){
+  $angle=$degrees*[Math]::PI/180
+  Scrub-Touch @([Math]::Cos($angle),[Math]::Sin($angle))
+  Wait-Until {(Paint-Checkpoint) -ne $paint -and (Scrub-Pixels) -eq $scrubEmpty} "The $degrees-degree scrub did not clear the active paint layer"
+  $cleared=Paint-Checkpoint
+  if((Wait-StablePixels {Scrub-Pixels}) -ne $scrubEmpty){throw "The $degrees-degree clear did not retain exact empty-layer pixels"}
+  Capture ("scrub-clear-"+$degrees) -WithModel -Composed
+  Scrub-Key 0x5A
+  Wait-Until {(Paint-Checkpoint) -eq $paint -and (Scrub-Pixels) -eq $painted} "One Undo did not restore the exact $degrees-degree scrub artwork"
+  Scrub-Key 0x59
+  Wait-Until {(Paint-Checkpoint) -eq $cleared -and (Scrub-Pixels) -eq $scrubEmpty} "One Redo did not restore the exact $degrees-degree scrub clear"
+  Scrub-Key 0x5A
+  Wait-Until {(Paint-Checkpoint) -eq $paint -and (Scrub-Pixels) -eq $painted} "The $degrees-degree scrub did not restore the seed for the next contact group"
+  $checks.Add(@{name="scrub $degrees degrees";camera='exact';pixels='exact';undo_redo='one step';painted=$painted;cleared=$scrubEmpty})
+ }
+ Scrub-Lock
+ $locked=Signature;$lockedPaint=Paint-Checkpoint
+ Scrub-Touch @(1.,0.)
+ if((Signature) -ne $locked -or (Paint-Checkpoint) -ne $lockedPaint -or (Wait-StablePixels {Scrub-Pixels}) -ne $painted){throw 'A scrub changed the locked layer, history or exact pixels'}
+ Scrub-Key 0x5A
+ Wait-Until {!(Model).state.layer_tools.editing_layer.locked -and (Paint-Checkpoint) -eq $paint -and (Scrub-Pixels) -eq $painted} 'A refused scrub added history after Lock editing'
+ Scrub-Key 0x59
+ Wait-Until {(Model).state.layer_tools.editing_layer.locked -and (Paint-Checkpoint) -eq $lockedPaint -and (Scrub-Pixels) -eq $painted} 'One Redo did not restore the exact locked layer'
+ Scrub-Key 0x5A
+ Wait-Until {!(Model).state.layer_tools.editing_layer.locked -and (Paint-Checkpoint) -eq $paint} 'The layer did not unlock for continued native contacts'
+ $checks.Add(@{name='locked-layer scrub refusal';camera='exact';pixels='exact';history='one Undo unlocks'})
+ $before=Camera
+ [CapyCanvasTouch]::Down(1,($cx-80),$cy);[CapyCanvasTouch]::Down(2,($cx+80),$cy)
+ [CapyCanvasTouch]::Pair(($cx-40),($cy+20),($cx+120),($cy+20))
+ $expected=$before|ConvertTo-Json -Depth 8|ConvertFrom-Json;$expected.translation[0]+=40;$expected.translation[1]+=20
+ Wait-Until {Matches-Gesture (Camera) $expected} 'Fresh native contacts did not pan after the scrub releases'
+ [CapyCanvasTouch]::Up(2);[CapyCanvasTouch]::Up(1)
+ Fit-Canvas;Scrub-Park
+ Wait-Until {(Camera-Pose) -eq $scrubCamera -and (Paint-Checkpoint) -eq $paint -and (Scrub-Pixels) -eq $painted} 'Navigation after scrubbing did not preserve the exact artwork'
+ [CapyCanvasTouch]::Dispose()
+ [CapyRowPointer]::Down('pen',($cx-60),($cy-25))
+ try{for($i=1;$i -le 24;$i++){[CapyRowPointer]::Move(($cx-60+$i*5),($cy-25));Start-Sleep -Milliseconds 8}}finally{[CapyRowPointer]::Up()}
+ Scrub-Park
+ Wait-Until {(Paint-Checkpoint) -ne $paint -and (Scrub-Pixels) -ne $painted} 'A pen did not paint after the scrub releases'
+ Scrub-Key 0x5A
+ Wait-Until {(Paint-Checkpoint) -eq $paint -and (Scrub-Pixels) -eq $painted} 'One Undo did not restore exact artwork after the continued pen contact'
+ Capture 'scrub-continued-input' -WithModel -Composed
+ [CapyRowPointer]::Verify();[CapyRowPointer]::Dispose()
+ & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $handle.ToInt64() -Action Close -DiscardUnsaved
+ if((Get-Item -LiteralPath (Join-Path $run 'stderr.log')).Length){throw 'Touch runtime stderr requires inspection'}
+ @{theme=$Theme;scrub_only=$true;checks=$checks;continued_input='two-finger navigation and pen';scope='OS-injected native contacts; physical digitizers and presentation timing remain separate'}|ConvertTo-Json -Depth 12|Set-Content -LiteralPath (Join-Path $run 'result.json')
+ Write-Output "Canvas scrub acceptance passed: $run"
+}
 $fixtureFailed=$false
 try{
  Enter-CapyEnvironment
  $env:CAPY_STORAGE_DIR=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1';$env:CAPY_SMOKE_TEST='1';$env:CAPY_TEST_DISPLAY='1';$env:CAPY_TEST_PRIMARY='1'
+ [IO.File]::WriteAllText((Settings-File),(@{language=@{Explicit='en'};theme=$Theme}|ConvertTo-Json -Depth 4))
+ if($ScrubOnly){$CapyFind='prefer-visible';$CapyPopups=$true}
  $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError (Join-Path $run 'stderr.log') -RedirectStandardOutput (Join-Path $run 'stdout.log');$null=$review.Handle
  @{process_id=$review.Id;executable=$Executable;sha256=(Get-FileHash -LiteralPath $Executable).Hash}|ConvertTo-Json|Set-Content -LiteralPath (Join-Path $run 'owner.json')
  Write-Output "Owned touch review $($review.Id): $run"
@@ -60,10 +170,15 @@ try{
  if($area[2] -lt 600 -or $area[3] -lt 500){throw 'Available canvas is too small for multi-touch acceptance'}
  [CapyCanvasTouch]::SetForegroundWindow($handle)|Out-Null
  [CapyRowPointer]::Initialize([uint32]$review.Id)
+ if($ScrubOnly){
+  $scrubBounds=$bounds;$scrubCamera=Camera-Pose;$scrubSamples=@(@(($cx-48),($cy-50)),@($cx,($cy-50)),@(($cx+48),($cy-50)))
+  Scrub-Park;$scrubEmpty=Wait-StablePixels {Scrub-Pixels}
+ }
  [CapyRowPointer]::Down('mouse',($cx-60),($cy-50))
  try{for($i=1;$i -le 24;$i++){[CapyRowPointer]::Move(($cx-60+$i*5),($cy-50+[int](10*[Math]::Sin($i/4))));Start-Sleep -Milliseconds 8}}finally{[CapyRowPointer]::Up()}
  Wait-Until {(Model).state.document_file.modified} 'Visible mouse seed stroke did not finish'
  $settled=@{value=''};Wait-Until {$now=Signature;$same=$now -eq $settled.value;$settled.value=$now;Start-Sleep -Milliseconds 150;$same} 'Seed stroke did not settle'
+ if($ScrubOnly){Scrub-Park;Check-Scrubs;return}
  $seeded=$settled.value;$unpanned=Camera
  [CapyRowPointer]::RightDrag(($cx+40),($cy+40),($cx+100),($cy+70))
  Wait-Until {[Math]::Abs((Camera).translation[0]-$unpanned.translation[0]) -gt 20} 'Mouse right-drag did not pan'

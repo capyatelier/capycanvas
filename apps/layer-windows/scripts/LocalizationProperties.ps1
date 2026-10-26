@@ -635,6 +635,14 @@ function Notice-Surface{
  Invoke-Id "layer-$layer-name"
  Focus-Canvas;Key 66
  Wait-Until {((Model).state.commands|Where-Object id -eq 'brush').selected} 'The brush did not activate for the image refusal'
+ Wait-Until {(Model).state.notice -and (Find 'canvas-notice-action-add_mask' -Visible)} 'Choosing Brush on the image did not explain before any pen contact'
+ $move=@((Model).state.commands|Where-Object id -eq 'move')[0];$binding=@($move.bindings|Where-Object {$_.key.Length-eq1})[0]
+ if(!$binding){throw 'Move has no native shortcut for the image notice'}
+ $modifiers=[uint16[]]@($(if($binding.command){0x11}),$(if($binding.shift){0x10}),$(if($binding.alt){0x12})|Where-Object {$_})
+ [CapyRowPointer]::Chord([uint32]$review.Id,$modifiers,[uint16][char]$binding.key.ToUpperInvariant())
+ Wait-Until {((Model).state.commands|Where-Object id -eq 'move').selected -and !(Model).state.notice} 'The working Move tool did not clear the immediate image explanation'
+ Focus-Canvas;Key 66
+ Wait-Until {((Model).state.commands|Where-Object id -eq 'brush').selected -and (Model).state.notice} 'Brush did not restore the immediate image notice'
  $caseIndex=0;$wide=@{height=$null;copy=$null}
  foreach($locked in @($false,$true,$false)){
   $caseIndex++;$caseName=('{0:D2}-{1}' -f $caseIndex,$(if($locked){'narrow-locked'}else{'wide-unlocked'}))
@@ -691,7 +699,7 @@ function Notice-Surface{
   Wait-Until {
    $view=Model $first
    if($view.windows_active_tag -ne 'ja' -or !$view.state.notice -or $view.state.notice.id -ne $before.id -or $view.state.notice.text -eq $before.text){return $false}
-   $notice.updated=$view.state.notice;$true
+   $notice.updated=$view.state.notice;$notice.palette=$view.state.palette;$true
   } 'Language publication did not retain and relabel the shared notice' 3
   Use-Window $first
   $updated=$notice.updated
@@ -744,6 +752,18 @@ function Notice-Surface{
    $bitmap=[Drawing.Bitmap]::new([int]$windowBounds.Width,[int]$windowBounds.Height);$graphics=[Drawing.Graphics]::FromImage($bitmap)
    $graphics.CopyFromScreen([int]$windowBounds.X,[int]$windowBounds.Y,0,0,$bitmap.Size)
    $timing.capture_copy_completed_ms=$clock.Elapsed.TotalMilliseconds
+   if(!$updated.actions[0].accent -or @($updated.actions|Where-Object accent).Count-ne1){throw 'The localized notice did not mark its first suggested action'}
+   $density=[CapyRowPointer]::GetDpiForWindow([IntPtr]$first.hwnd)/96.
+   $palette=$notice.palette;$nativeColors=@()
+   foreach($offer in $updated.actions){
+    $box=@($notice.layout.actions|Where-Object id -eq $offer.id)[0].bounds
+    $role=if($offer.accent -and $offer.enabled){'accent'}else{'panel'};$expected=[Drawing.ColorTranslator]::FromHtml($palette.$role)
+    $point=@([int]($box.Left+6*$density),[int]($box.Y+$box.Height/2))
+    $pixel=$bitmap.GetPixel($point[0]-[int]$windowBounds.X,$point[1]-[int]$windowBounds.Y)
+    if($pixel.ToArgb()-ne$expected.ToArgb()){throw 'The retained localized notice action did not render its shared accent or ordinary fill'}
+    $nativeColors+=@{id=$offer.id;accent=$offer.accent;point=$point;pixel=$pixel.ToArgb();expected=$expected.ToArgb()}
+   }
+   $timing.native_action_colors=$nativeColors
    if(!(Find 'canvas-notice' -Visible)){throw 'The notice expired before its composed capture completed'}
    Wait-Until {$view=Model;$view -and !$view.state.notice} 'Relabeling restarted the original notice deadline' 4
    if($clock.Elapsed.TotalSeconds -gt 4.8){throw "Relabeling extended the notice deadline to $($clock.Elapsed.TotalSeconds) seconds"}

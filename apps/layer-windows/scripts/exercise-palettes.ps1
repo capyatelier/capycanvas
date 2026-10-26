@@ -59,6 +59,58 @@ function Menu-Invoke([string]$Id){
     $item=@{value=$null};Wait-Until {$item.value=@(Menu-Items)|Where-Object {$_.Current.AutomationId -eq $Id}|Select-Object -First 1;$item.value} "Menu lacks $Id"
     $item.value.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
 }
+function Palette-EntryMenu($Id,[string]$Name){
+    if(!(Find 'palette-search')){Invoke 'palette-selector'}
+    (Control 'palette-search').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($Name)
+    $row=Control ('palette-choice-'+$Id) -Arranged
+    if($row.Current.ProcessId -ne $review.Id){throw 'Palette menu row belongs to another process'}
+    $at=Center $row;[CapyRowPointer]::RightClick($at.x,$at.y)
+}
+function Palette-DialogChecks{
+    $original=(Panel).palette;$ids=@((Panel).palettes.id)
+    $document=(Model).state.document_file|ConvertTo-Json -Depth 20 -Compress
+    $color=(Model).color_panel.definition|ConvertTo-Json -Depth 20 -Compress
+    if(@((Panel).palettes|Where-Object {$_.name -in @('DG1 fixture palette','DG1 renamed palette')}).Count){throw 'Palette dialog fixture requires fresh isolated names'}
+    if(!(Find 'palette-search')){Invoke 'palette-selector'}
+    Invoke 'palette-library-add';Menu-Invoke 'palette-command-new_palette'
+    $input=Control 'palette-name-input' -Arranged
+    if($input.Current.ProcessId -ne $review.Id){throw 'New Palette input belongs to another process'}
+    Capture 'palette-new-dialog' -WithModel -Composed
+    $input.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('DG1 fixture palette')
+    Wait-Until {(Control 'PrimaryButton').Current.IsEnabled} 'Valid isolated palette name did not enable Save'
+    Invoke 'PrimaryButton'
+    Wait-Until {!(Find 'palette-name-input') -and @((Panel).palettes|Where-Object name -eq 'DG1 fixture palette').Count -eq 1 -and !(Model).windows_palettes.busy} 'New Palette did not close and add exactly its named palette'
+    $created=@((Panel).palettes|Where-Object name -eq 'DG1 fixture palette')[0].id
+    if(@((Panel).palettes).Count -ne $ids.Count+1){throw 'New Palette changed more than one palette'}
+    Palette-EntryMenu $created 'DG1 fixture palette';Menu-Invoke 'palette-command-rename_palette'
+    $input=Control 'palette-name-input' -Arranged
+    if($input.Current.ProcessId -ne $review.Id){throw 'Rename Palette input belongs to another process'}
+    if($input.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value -cne 'DG1 fixture palette'){throw 'Rename Palette lost the owned palette name'}
+    Capture 'palette-rename-dialog' -WithModel -Composed
+    $input.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('DG1 renamed palette')
+    Wait-Until {(Control 'PrimaryButton').Current.IsEnabled} 'Palette rename did not enable Save'
+    Invoke 'PrimaryButton'
+    Wait-Until {!(Find 'palette-name-input') -and @((Panel).palettes|Where-Object id -eq $created)[0].name -ceq 'DG1 renamed palette' -and !(Model).windows_palettes.busy} 'Rename Palette did not preserve its exact identity and new name'
+    $beforeCancel=[ordered]@{palettes=@(foreach($p in (Panel).palettes){[ordered]@{id=$p.id;name=$p.name}})}|ConvertTo-Json -Depth 8 -Compress
+    Palette-EntryMenu $created 'DG1 renamed palette';Menu-Invoke 'palette-command-remove_palette'
+    Control 'PrimaryButton' -Arranged|Out-Null
+    Capture 'palette-remove-cancel-dialog' -WithModel -Composed
+    Invoke 'CloseButton'
+    Wait-Until {!(Find 'PrimaryButton' -Visible) -and (Control 'drawing-canvas').Current.IsEnabled} 'Remove Palette Cancel did not release its native dialog'
+    $afterCancel=[ordered]@{palettes=@(foreach($p in (Panel).palettes){[ordered]@{id=$p.id;name=$p.name}})}|ConvertTo-Json -Depth 8 -Compress
+    if($afterCancel -cne $beforeCancel){throw 'Remove Palette Cancel changed palette identities, names or order'}
+    Palette-EntryMenu $created 'DG1 renamed palette';Menu-Invoke 'palette-command-remove_palette'
+    Control 'PrimaryButton' -Arranged|Out-Null
+    Capture 'palette-remove-confirm-dialog' -WithModel -Composed
+    Invoke 'PrimaryButton'
+    Wait-Until {!(Find 'PrimaryButton' -Visible) -and !@((Panel).palettes|Where-Object id -eq $created).Count -and !(Model).windows_palettes.busy} 'Remove Palette did not delete exactly its owned palette'
+    if((@((Panel).palettes.id) -join ',') -cne ($ids -join ',')){throw 'Palette prompt workflow changed another palette or its order'}
+    if(!(Find 'palette-search')){Invoke 'palette-selector'}
+    (Control 'palette-search').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('')
+    Invoke ('palette-choice-'+$original)
+    Wait-Until {(Panel).palette -eq $original -and !(Find 'palette-search')} 'Palette prompt workflow did not restore the original active palette'
+    if(((Model).state.document_file|ConvertTo-Json -Depth 20 -Compress) -cne $document -or ((Model).color_panel.definition|ConvertTo-Json -Depth 20 -Compress) -cne $color){throw 'Palette prompts changed artwork history or the current paint'}
+}
 function Picker([string]$Title,[string]$Path){
     $dialog=@{value=(Control $Title -Name -Type $ControlType::Window)}
     if($dialog.value.Current.ClassName -ne '#32770' -or $dialog.value.Current.ProcessId -ne $review.Id){throw "$Title picker is outside the owned review"}
@@ -299,6 +351,7 @@ try {
     Picker 'Open' $export
     Wait-Until {@((Panel).palettes).Count -eq $palettes+1 -and !(Model).windows_palettes.busy} 'GPL import did not add a palette' 20
     Capture 'imported'
+    Palette-DialogChecks
 
     $overflow=Join-Path $run 'scroll fixture.gpl'
     $gpl=@('GIMP Palette','Name: Scroll fixture','Columns: 6','#')

@@ -27,7 +27,7 @@ inline void actionTooltip(std::shared_ptr<WorkspaceData> const& data,FrameworkEl
         auto name=AutomationProperties::GetName(target);
         QueryWorkspace(data->query,O({{L"type",S(L"action_tooltip")},{L"label",S(name)},{L"action",request}}),[tip,named,name](J reply){
             auto owner=tip.get();auto target=named.get();auto text=str(reply,L"result");
-            if(owner&&target&&!text.empty()&&AutomationProperties::GetName(target)==name)tooltip(owner,text);
+            if(owner&&target&&!text.empty()&&AutomationProperties::GetName(target)==name){auto reason=AutomationProperties::GetHelpText(target);tooltip(owner,reason.empty()?text:reason);}
         });
     });
 }

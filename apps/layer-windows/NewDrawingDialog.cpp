@@ -208,7 +208,7 @@ struct NewDrawingDialog::Impl:std::enable_shared_from_this<Impl>{
         auto lifetime=shared_from_this();
         if(!built)build();
         showing=true;programmatic=false;shown=J{};copyKey=L"";
-        dialog.RequestedTheme(data->theme()==L"dark"?ElementTheme::Dark:ElementTheme::Light);
+        dialogSurface(data,dialog);
         data->popup(true);
         try{co_await dialog.ShowAsync();}catch(hresult_error const&){}
         data->popup(false);
@@ -720,6 +720,7 @@ struct NewDrawingDialog::Impl:std::enable_shared_from_this<Impl>{
         }
     }
     void render(J const& view){
+        dialogSurface(data,dialog);
         if(view.Stringify()==shown.Stringify())return;
         shown=view;
         data->updating=true;

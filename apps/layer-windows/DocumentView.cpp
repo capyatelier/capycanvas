@@ -127,9 +127,8 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
             }
             auto options=object(model,L"document_options");
             if(type==L"confirm_close") {
-                dialog=ContentDialog();dialog.XamlRoot(window.Content().XamlRoot());
+                dialog=ContentDialog();dialog.XamlRoot(window.Content().XamlRoot());dialogSurface(data,dialog);
                 AutomationProperties::SetAutomationId(dialog,L"document-dialog");
-                dialog.RequestedTheme(str(object(model,L"state"),L"theme")==L"dark"?ElementTheme::Dark:ElementTheme::Light);
                 dialog.CloseButtonText(str(options,L"cancel_label"));
                 dialog.DefaultButton(ContentDialogButton::Primary);
                 auto size=window.Content().XamlRoot().Size();
@@ -209,7 +208,7 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
         auto lifetime=shared_from_this();showing=true;changed();auto id=num(request,L"id");
         J profile;bool accepted=false;
         try {
-            dialog=ContentDialog();dialog.XamlRoot(window.Content().XamlRoot());dialog.Title(box_value(str(object(request,L"copy"),L"interpret_title")));
+            dialog=ContentDialog();dialog.XamlRoot(window.Content().XamlRoot());dialogSurface(data,dialog);dialog.Title(box_value(str(object(request,L"copy"),L"interpret_title")));
             dialog.PrimaryButtonText(recovery(L"open"));dialog.CloseButtonText(common(L"cancel"));
             StackPanel body;body.Spacing(12);auto info=label(data,interpretationText(L"interpret_help"));info.TextWrapping(TextWrapping::Wrap);body.Children().Append(info);
             ComboBox space;AutomationProperties::SetAutomationId(space,L"document-interpret-profile");copyHeader(space,interpretationText(L"interpret_as"));auto spaces=array(request,L"spaces");
@@ -316,7 +315,7 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
     fire_and_forget package(J request){
         auto lifetime=shared_from_this();showing=true;changed();auto id=uint32_t(num(request,L"id"));auto summary=object(request,L"summary");hstring destination,action=L"close";
         try{
-            dialog=ContentDialog();dialog.XamlRoot(window.Content().XamlRoot());dialog.RequestedTheme(str(object(model,L"state"),L"theme")==L"dark"?ElementTheme::Dark:ElementTheme::Light);
+            dialog=ContentDialog();dialog.XamlRoot(window.Content().XamlRoot());dialogSurface(data,dialog);
             AutomationProperties::SetAutomationId(dialog,L"package-view");dialog.Title(box_value(str(summary,L"status")));dialog.PrimaryButtonText(str(summary,L"copy_original"));dialog.SecondaryButtonText(flag(object(summary,L"capabilities"),L"export")?str(summary,L"export_preview"):L"");dialog.CloseButtonText(str(summary,L"close"));
             StackPanel body;body.Spacing(12);body.MaxWidth(640);
             auto text=[body](hstring value){TextBlock label;label.Text(value);label.TextWrapping(TextWrapping::Wrap);body.Children().Append(label);};text(str(summary,L"reason"));
@@ -349,8 +348,8 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
         auto details=object(request,L"details");auto spaces=array(request,L"spaces");A profiles;
         J response=O({{L"op",S(L"cancel")}});
         try{
-            dialog=ContentDialog();dialog.XamlRoot(window.Content().XamlRoot());dialog.CloseButtonText(common(L"cancel"));dialog.PrimaryButtonText(common(L"apply"));dialog.IsPrimaryButtonEnabled(false);
-            dialog.RequestedTheme(str(object(model,L"state"),L"theme")==L"dark"?ElementTheme::Dark:ElementTheme::Light);AutomationProperties::SetAutomationId(dialog,L"document-workflow");
+            dialog=ContentDialog();dialog.XamlRoot(window.Content().XamlRoot());dialogSurface(data,dialog);dialog.CloseButtonText(common(L"cancel"));dialog.PrimaryButtonText(common(L"apply"));dialog.IsPrimaryButtonEnabled(false);
+            AutomationProperties::SetAutomationId(dialog,L"document-workflow");
             StackPanel body;body.Spacing(10);body.Width(std::max(200.,std::min(540.,double(window.Content().XamlRoot().Size().Width)-120)));
             ComboBox space,depth,intent;CheckBox copy,dither;TextBlock status;status.TextWrapping(TextWrapping::Wrap);
             auto text=[&](LocalizedCopy const& value){auto label=CapyUi::label(data,value);label.TextWrapping(TextWrapping::Wrap);body.Children().Append(label);return label;};
@@ -440,8 +439,7 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
         auto exportText=[&](wchar_t const* key){return str(exportCopy,key);};
         auto profileText=[&](wchar_t const* key){return str(profileCopy,key);};
         try{
-            dialog=ContentDialog();dialog.XamlRoot(window.Content().XamlRoot());dialog.CloseButtonText(common(L"cancel"));
-            dialog.RequestedTheme(str(object(model,L"state"),L"theme")==L"dark"?ElementTheme::Dark:ElementTheme::Light);
+            dialog=ContentDialog();dialog.XamlRoot(window.Content().XamlRoot());dialogSurface(data,dialog);dialog.CloseButtonText(common(L"cancel"));
             AutomationProperties::SetAutomationId(dialog,L"document-workflow");
             auto title=library?profileText(L"library_title"):kind==L"proof"?str(proofCopy,L"title"):kind==L"export"?exportText(L"title"):kind==L"assign"?colorText(L"assign_title"):kind==L"convert"?colorText(L"convert_title"):kind==L"depth"?colorText(L"depth_title"):
                 kind==L"place"||kind==L"paste"?profileText(L"interpret_title"):kind==L"repair"?colorText(L"repair_title"):kind==L"rasterize"?colorText(L"rasterize_title"):str(details,L"title");
@@ -618,7 +616,7 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
     fire_and_forget recovering(J state){
         auto lifetime=shared_from_this();showing=true;changed();hstring action=L"keep_open";
         try{
-            dialog=ContentDialog();dialog.XamlRoot(window.Content().XamlRoot());dialog.Title(box_value(recovery(L"attention")));
+            dialog=ContentDialog();dialog.XamlRoot(window.Content().XamlRoot());dialogSurface(data,dialog);dialog.Title(box_value(recovery(L"attention")));
             dialog.PrimaryButtonText(recovery(L"retry"));dialog.CloseButtonText(common(L"keep_open"));
             TextBlock text;text.MaxWidth(420);text.TextWrapping(TextWrapping::Wrap);text.Text(str(state,L"error"));dialog.Content(text);
             presentationChanged=[this,text]{dialog.Title(box_value(recovery(L"attention")));dialog.PrimaryButtonText(recovery(L"retry"));dialog.CloseButtonText(common(L"keep_open"));text.Text(str(object(model,L"windows_recovery"),L"error"));};
@@ -629,7 +627,7 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
     fire_and_forget recoverDrawing(double id){
         auto lifetime=shared_from_this();showing=true;changed();hstring action=L"later";
         try{
-            dialog=ContentDialog();dialog.XamlRoot(window.Content().XamlRoot());
+            dialog=ContentDialog();dialog.XamlRoot(window.Content().XamlRoot());dialogSurface(data,dialog);
             TextBlock text;text.MaxWidth(420);text.TextWrapping(TextWrapping::Wrap);dialog.Content(text);
             presentationChanged=[this,text]{dialog.Title(box_value(recovery(L"title")));dialog.PrimaryButtonText(recovery(L"retry"));dialog.SecondaryButtonText(recovery(L"discard"));dialog.CloseButtonText(recovery(L"later"));text.Text(recovery(L"explanation"));};
             presentationChanged();dialog.DefaultButton(ContentDialogButton::Close);
@@ -642,7 +640,7 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
     fire_and_forget working(J state){
         auto lifetime=shared_from_this();showing=true;busyDialog=true;busyCompleted=false;changed();
         try{
-            dialog=ContentDialog();dialog.XamlRoot(window.Content().XamlRoot());dialog.Title(box_value(busyTitle(state)));dialog.CloseButtonText(common(L"cancel"));
+            dialog=ContentDialog();dialog.XamlRoot(window.Content().XamlRoot());dialogSurface(data,dialog);dialog.Title(box_value(busyTitle(state)));dialog.CloseButtonText(common(L"cancel"));
             ProgressRing progress;progress.IsActive(true);progress.Width(48);progress.Height(48);dialog.Content(progress);co_await dialog.ShowAsync();
         }catch(hresult_error const& error){if(!stopping)report(to_string(error.message()));}
         clearPreviews();dialog=nullptr;presentationChanged={};
@@ -656,6 +654,7 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
         bool relocalize=data->adoptLocalization(snapshot);
         if(relocalize){catalog=data->catalog;localization=data->localization;}
         model=snapshot;data->state=object(snapshot,L"state");data->refreshPalette();
+        if(dialog)dialogSurface(data,dialog);
         if(newDrawing)newDrawing->Apply();
         if(workflowChanged)workflowChanged();
         if(relocalize&&presentationChanged)presentationChanged();

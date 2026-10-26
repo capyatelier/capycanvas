@@ -89,9 +89,9 @@ function Reveal([string]$Id){
  } "$Id did not scroll into view" 10
 }
 function Touch([string]$Device,[int[]]$At){[CapyRowPointer]::Down($Device,$At[0],$At[1]);Start-Sleep -Milliseconds 40;[CapyRowPointer]::Up();Start-Sleep -Milliseconds 150}
-function Drag([string]$Device,[int[]]$From,[int[]]$To){
+function Drag([string]$Device,[int[]]$From,[int[]]$To,[scriptblock]$BeforeLast){
  [CapyRowPointer]::Down($Device,$From[0],$From[1])
- for($step=1;$step -le 12;$step++){[CapyRowPointer]::Move([int]($From[0]+($To[0]-$From[0])*$step/12),[int]($From[1]+($To[1]-$From[1])*$step/12));Start-Sleep -Milliseconds 12}
+ for($step=1;$step -le 12;$step++){[CapyRowPointer]::Move([int]($From[0]+($To[0]-$From[0])*$step/12),[int]($From[1]+($To[1]-$From[1])*$step/12));Start-Sleep -Milliseconds 12;if($step -eq 11 -and $BeforeLast){& $BeforeLast}}
  [CapyRowPointer]::Up();Start-Sleep -Milliseconds 150
 }
 function Tool([string]$Command){
@@ -126,6 +126,115 @@ function Check-Mixing{
  Capture ('mixing-'+$Theme) -WithModel
  $checks.color_mixing_tool_settings='passed'
 }
+function Footprint-Corners{
+ $corners=@()
+ foreach($index in @(0,2,8,6)){
+  Invoke-Id ("tool-choice-transform-reference-$index")
+  Wait-Until {@((Model).state.tool_extra|Where-Object {$_.Choice.id -eq 'transform-reference'})[0].Choice.items[$index].selected} 'The native position anchor did not select'
+  $corners+=,@([double](Value 'transform_x'),[double](Value 'transform_y'))
+ }
+ return ,$corners
+}
+function Footprint-Pixels{
+ $at=Center (Control 'settings-button' -Arranged);[CapyRowPointer]::Hover($at[0],$at[1]);Start-Sleep -Milliseconds 150
+ $bounds=(Control 'drawing-canvas' -Arranged).Current.BoundingRectangle
+ $points=@(foreach($point in @(@(100,100),@(1540,1230))){,(Screen-Point $point)})
+ foreach($point in $points){if(!$bounds.Contains([Windows.Point]::new($point[0],$point[1]))){throw 'A Distort sample lies outside the arranged canvas'}}
+ Sample-ObjectArtwork $bounds $points
+}
+function Footprint-Checkpoint([string]$Name){
+ Idle
+ $path=Join-Path $run ("distort-$Name.capy");Save-ProjectAs $path
+ $manifest=Package $path
+ [pscustomobject]@{path=$path;authored=(Json @($manifest.objects|Sort-Object id));raster=(Json @($manifest.objects|Where-Object type -in @('capy.paint-source/2','capy.coverage-source/2')|Sort-Object id))}
+}
+function Footprint-History([uint16]$Key,$Expected,[string]$Pixels,[string]$Name){
+ Shortcut @(0x11) $Key;Idle
+ $restored=Footprint-Checkpoint $Name
+ if($restored.authored -cne $Expected.authored -or $restored.raster -cne $Expected.raster){throw "$Name did not restore exact authored and raster identities"}
+ if((Wait-StablePixels {Footprint-Pixels}) -cne $Pixels){throw "$Name did not restore the exact composed pixels"}
+}
+function Footprint-Endpoint{
+ $camera=(Model).state.camera;$bounds=(Control 'drawing-canvas' -Arranged).Current.BoundingRectangle
+ if($camera.rotation -ne 0 -or $camera.flipped[0] -or $camera.flipped[1]){throw 'Near-line Distort requires the fitted unrotated view'}
+ $scale=$camera.zoom*$bounds.Width/$camera.viewport[0]
+ if($scale -lt .5){throw 'Near-line Distort needs at least one physical pixel for two source pixels'}
+ $requested=@(1022.9555,1022.9555);$center=Screen-Point $requested;$candidates=@()
+ foreach($dx in -1..1){foreach($dy in -1..1){
+  $screen=@(($center[0]+$dx),($center[1]+$dy))
+  $source=@((($screen[0]-$bounds.X)*$camera.viewport[0]/$bounds.Width-$camera.translation[0])/$camera.zoom,(($screen[1]-$bounds.Y)*$camera.viewport[1]/$bounds.Height-$camera.translation[1])/$camera.zoom)
+  $sum=$source[0]+$source[1]
+  if($sum -gt 2043.1 -and $sum -lt 2047.9 -and [Math]::Abs($source[0]-$requested[0]) -lt 3 -and [Math]::Abs($source[1]-$requested[1]) -lt 3 -and $bounds.Contains([Windows.Point]::new($screen[0],$screen[1]))){
+   $candidates+=@{screen=$screen;source=$source;distance=([Math]::Pow($source[0]-$requested[0],2)+[Math]::Pow($source[1]-$requested[1],2))}
+  }
+ }}
+ if(!$candidates.Count){throw 'The native pixel grid has no nonfolding near-line Distort endpoint'}
+ $chosen=@($candidates|Sort-Object { $_.distance })[0]
+ [pscustomobject]@{requested=$requested;screen=$chosen.screen;actual_source=$chosen.source;camera=$camera;canvas=@($bounds.X,$bounds.Y,$bounds.Width,$bounds.Height);physical_pixels_per_source_pixel=$scale}
+}
+function Check-TransformFootprint{
+ Add-Type -AssemblyName System.Drawing
+ Add-Type -Path (Join-Path $PSScriptRoot 'PackageFixture.cs') -ReferencedAssemblies @(
+  'System.IO.Compression.dll','System.IO.Compression.FileSystem.dll'
+  if($PSVersionTable.PSEdition -eq 'Core'){'System.Collections.dll';'System.IO.Compression.ZipFile.dll'}
+ )
+ . (Join-Path $PSScriptRoot 'ObjectFixture.ps1')
+ $source=Join-Path $run 'Dense Distort 2048.png';$bitmap=[Drawing.Bitmap]::new(2048,2048,[Drawing.Imaging.PixelFormat]::Format32bppArgb)
+ try{
+  $graphics=[Drawing.Graphics]::FromImage($bitmap)
+  try{foreach($y in 0..31){foreach($x in 0..31){
+   $brush=[Drawing.SolidBrush]::new([Drawing.Color]::FromArgb(255,(32+(($x*37+$y*17)%192)),(32+(($x*19+$y*53)%192)),(32+(($x*71+$y*11)%192))))
+   try{$graphics.FillRectangle($brush,$x*64,$y*64,64,64)}finally{$brush.Dispose()}
+  }}}finally{$graphics.Dispose()}
+  $bitmap.Save($source,[Drawing.Imaging.ImageFormat]::Png)
+ }finally{$bitmap.Dispose()}
+ $reports=@()
+ try{foreach($filter in @('transform_bilinear','transform_bicubic')){
+  Open-Project $source;Idle;Fit-Canvas;Idle
+  if((Width) -ne 2048 -or [int]@((Model).state.tabs|Where-Object active)[0].height -ne 2048){throw 'The dense Distort source did not open at its exact extent'}
+  $original=Footprint-Checkpoint ($filter+'-original');$originalPixels=Wait-StablePixels {Footprint-Pixels}
+  foreach($value in $originalPixels.Split(',')){$color=[Drawing.Color]::FromArgb([int]$value);if($color.A -ne 255 -or $color.R -lt 25 -or $color.R -gt 230 -or $color.G -lt 25 -or $color.G -gt 230 -or $color.B -lt 25 -or $color.B -gt 230){throw 'Actual canvas samples did not display the dense opaque photo'}}
+  Run (Command 'scale_rotate').label;Wait-Until {(Kind) -eq 'transform'} 'Transform did not start for the dense photo'
+  Run (Command 'transform_distort').label;Run (Command $filter).label
+  if((Command 'transform_snapping').selected){Run (Command 'transform_snapping').label}
+  $initial=Footprint-Corners
+  $expected=@(@(0,0),@(2048,0),@(2048,2048),@(0,2048))
+  foreach($corner in 0..3){foreach($axis in 0..1){if($initial[$corner][$axis] -ne $expected[$corner][$axis]){throw 'The dense source did not start at all four exact corners'}}}
+  $endpoint=Footprint-Endpoint;$last=@{corners=$null}
+  Drag 'pen' (Screen-Point @(0,0)) $endpoint.screen {$last.corners=Footprint-Corners}
+  $notice=(Model).state.notice;$accepted=Footprint-Corners
+  $report=[ordered]@{filter=$filter;endpoint=$endpoint;initial=$initial;last_valid=$last.corners;accepted=$accepted;notice=$notice;completed=$false};$reports+=$report
+  if((Model).state.host_error -or (Kind) -ne 'transform' -or !(Control 'drawing-canvas').Current.IsEnabled){throw 'The near-line drag stopped the native canvas'}
+  if((Json $accepted) -cne (Json $last.corners)){throw 'The refused near-line pose did not retain all four exact last-valid corners'}
+  if($notice.text -cne "The pixels can't be squeezed this far"){throw 'The near-line drag did not publish the shared squeeze refusal'}
+  Capture ($filter+'-refused') -WithModel -Composed
+  Drag 'pen' (Screen-Point $accepted[0]) (Screen-Point @(512,512));Idle
+  $back=Footprint-Corners;$report.backed_out=$back
+  $tolerance=1.5/$endpoint.physical_pixels_per_source_pixel
+  if([Math]::Abs($back[0][0]-512) -gt $tolerance -or [Math]::Abs($back[0][1]-512) -gt $tolerance){throw 'A native pointer drag did not back out to the valid corner'}
+  Tap 'canvas-bar-apply_transform' 'touch';Wait-Until {(Kind) -ne 'transform'} 'The backed-out Distort did not Apply';Idle
+  $applied=Footprint-Checkpoint ($filter+'-applied');$appliedPixels=Wait-StablePixels {Footprint-Pixels}
+  if($applied.authored -ceq $original.authored -or $appliedPixels -ceq $originalPixels){throw 'Applying the backed-out Distort did not change artwork and canvas pixels'}
+  Footprint-History 0x5A $original $originalPixels ($filter+'-undo')
+  Footprint-History 0x59 $applied $appliedPixels ($filter+'-redo')
+  Run 'Pencil';Reveal 'tool-setting-size';(Control 'tool-setting-size').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('24');(Control 'drawing-canvas').SetFocus()
+  Wait-Until {(Value 'size') -eq 24} 'The follow-up Pencil size did not commit'
+  Drag 'pen' (Screen-Point @(1500,1200)) (Screen-Point @(1580,1260));Idle
+  $painted=Footprint-Checkpoint ($filter+'-painted');$paintedPixels=Wait-StablePixels {Footprint-Pixels}
+  if($painted.raster -ceq $applied.raster -or $paintedPixels -ceq $appliedPixels){throw 'The next native paint stroke did not publish changed raster pixels'}
+  Footprint-History 0x5A $applied $appliedPixels ($filter+'-paint-undo')
+  Footprint-History 0x59 $painted $paintedPixels ($filter+'-paint-redo')
+  $saved=Footprint-Checkpoint ($filter+'-saved');$epoch=(Model).state.document_file.epoch
+  & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'File';Invoke-Id 'close_document'
+  Wait-Until {(Model).state.document_file.epoch -ne $epoch} 'The saved Distort drawing did not close'
+  Open-Project $saved.path;Idle;Fit-Canvas;Idle
+  $reopened=Footprint-Checkpoint ($filter+'-reopened')
+  if($reopened.authored -cne $painted.authored -or $reopened.raster -cne $painted.raster -or (Wait-StablePixels {Footprint-Pixels}) -cne $paintedPixels){throw 'Save/reopen changed exact Distort and subsequent paint artwork or pixels'}
+  $report.completed=$true;Capture ($filter+'-reopened') -WithModel -Composed
+ }}finally{[IO.File]::WriteAllText((Join-Path $run 'transform-footprint.json'),([pscustomobject]@{theme=$Theme;source=$source;source_sha256=(Get-FileHash -LiteralPath $source).Hash;reports=$reports}|ConvertTo-Json -Depth 30),[Text.UTF8Encoding]::new($false))}
+ $checks.distort_near_line_last_valid_backout_apply_paint_history_reopen='passed'
+}
+
 try {
  Enter-CapyEnvironment
  $env:CAPY_STORAGE_DIR=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1';$env:CAPY_SMOKE_TEST='1'
@@ -301,6 +410,8 @@ try {
  Undo
  Wait-Until {((@(Layers)|ForEach-Object id) -join ',') -eq $order} 'One Undo did not restore the flattened layers'
  $checks.merge_down_stamp_visible_and_flatten_notice='passed'
+
+ Check-TransformFootprint
 
  [CapyRowPointer]::Dispose()
  & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Close -DiscardUnsaved -StateDirectory $run

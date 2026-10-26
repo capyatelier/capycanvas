@@ -709,8 +709,8 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
                 auto current=array(spec,L"items");
                 for(uint32_t i=0;i<std::min<uint32_t>(current.Size(),uint32_t(buttons.size()));++i){
 
-                    bool chosen=flag(current.GetObjectAt(i),L"selected");
-                    buttons[i].Background(chosen?selected(data):clear());AutomationProperties::SetName(buttons[i],str(current.GetObjectAt(i),L"label"));tooltip(buttons[i],str(current.GetObjectAt(i),L"disabled_reason",str(current.GetObjectAt(i),L"label")));AutomationProperties::SetItemStatus(buttons[i],chosen?data->caption(L"search",L"selected"):L"");
+                    auto item=current.GetObjectAt(i);bool chosen=flag(item,L"selected");auto title=str(item,L"label"),reason=str(item,L"disabled_reason");
+                    buttons[i].Background(chosen?selected(data):clear());AutomationProperties::SetName(buttons[i],title);tooltip(buttons[i],reason.empty()?title:reason);AutomationProperties::SetHelpText(buttons[i],reason);AutomationProperties::SetItemStatus(buttons[i],chosen?data->caption(L"search",L"selected"):L"");
                 }
             };
             result.orient=[weak,row,buttons,glyphs,labeled,choiceSize,choiceStyle]{
@@ -735,7 +735,6 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
         auto pick=button(data,str(choice,L"label"),[]{});
         pick.Background(data->brush(L"input"));pick.HorizontalContentAlignment(HorizontalAlignment::Stretch);
         pick.Padding({6,0,6,0});AutomationProperties::SetAutomationId(pick,L"toolbar-choice-"+id);
-        tooltip(pick,str(choice,L"label"));
         auto labelText=std::make_shared<J>(choice);auto shown=std::make_shared<hstring>();
         Grid content;content.ColumnSpacing(6);
         for(auto columnWidth:{GridLength{1,GridUnitType::Auto},GridLength{1,GridUnitType::Star},GridLength{1,GridUnitType::Auto}}){
@@ -751,7 +750,8 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
             MenuFlyout menu;TrackPopup(menu,self->data);
             for(auto value:array(*labelText,L"items")){
                 auto entry=value.GetObject();auto action=object(entry,L"action");
-                RadioMenuFlyoutItem option;option.Text(str(entry,L"label"));option.IsChecked(flag(entry,L"selected"));
+                auto title=str(entry,L"label"),reason=str(entry,L"disabled_reason");
+                RadioMenuFlyoutItem option;option.Text(title);option.IsChecked(flag(entry,L"selected"));tooltip(option,reason.empty()?title:reason);AutomationProperties::SetHelpText(option,reason);
                 option.GroupName(L"toolbar-choice");
                 option.Click([weak,action](auto&&,auto&&){if(auto self=weak.lock())self->send(action);});
                 menu.Items().Append(option);
@@ -764,7 +764,7 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
             *labelText=object(option,L"Choice");auto current=array(*labelText,L"items");
             J chosen=current.Size()?current.GetObjectAt(0):J{};
             for(auto value:current)if(flag(value.GetObject(),L"selected"))chosen=value.GetObject();
-            auto title=str(*labelText,L"label");AutomationProperties::SetName(pick,title);tooltip(pick,title);
+            auto title=str(*labelText,L"label"),reason=str(chosen,L"disabled_reason");AutomationProperties::SetName(pick,title);tooltip(pick,reason.empty()?title:reason);AutomationProperties::SetHelpText(pick,reason);
             name.Text(str(chosen,L"label"));AutomationProperties::SetItemStatus(pick,str(chosen,L"label"));
             auto key=str(chosen,L"icon")+L"|"+self->data->theme();
             if(key!=*shown){*shown=key;glyph.Source(icon(str(chosen,L"icon"),self->data->theme()).Source());}

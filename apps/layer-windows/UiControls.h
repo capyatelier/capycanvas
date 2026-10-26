@@ -368,6 +368,13 @@ inline J displayColors(J const& state){
     return masked.Size()?masked:object(state,L"colors");
 }
 inline SolidColorBrush accent(std::shared_ptr<WorkspaceData> const& data){return data->brush(L"accent");}
+inline void dialogSurface(std::shared_ptr<WorkspaceData> const& data,ContentDialog const& dialog){
+    auto theme=data->theme()==L"dark"?ElementTheme::Dark:ElementTheme::Light;
+    if(dialog.RequestedTheme()!=theme)dialog.RequestedTheme(theme);
+    auto background=data->brush(L"settings");if(dialog.Background()!=background)dialog.Background(background);
+    static thread_local auto overlay=box_value(L"ContentDialogTopOverlay");
+    if(!dialog.Resources().HasKey(overlay))dialog.Resources().Insert(overlay,clear());
+}
 inline TextBlock label(std::shared_ptr<WorkspaceData> const& data,hstring const& text,bool bold=false,bool retained=true){
     TextBlock result;result.Text(text);result.FontSize(data->textSize());
     if(retained)inheritLanguage(result,data);else result.Language(data->language());result.FontFamily(FontFamily(L"Segoe UI"));result.Foreground(data->brush(L"text"));

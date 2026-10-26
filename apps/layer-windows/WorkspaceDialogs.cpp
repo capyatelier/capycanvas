@@ -225,7 +225,7 @@ struct WorkspaceDialogs::Impl:std::enable_shared_from_this<Impl>{
         auto model=view();bool picker=kind==L"picker",manager=kind==L"toolbar_manager";
         dialog.Title(box_value(str(model,L"title")));
         AutomationProperties::SetAutomationId(dialog,picker?L"tool-picker":manager?L"toolbar-manager":L"toolbar-prompt");
-        dialog.RequestedTheme(data->theme()==L"dark"?ElementTheme::Dark:ElementTheme::Light);
+        dialogSurface(data,dialog);
         dialog.CloseButtonText(manager?str(model,L"close_label"):str(model,L"cancel_label",L"Cancel"));
         dialog.PrimaryButtonText(manager?str(model,L"delete_label"):str(model,L"confirm_label"));
         auto size=xamlRoot.Size();body.Width(std::max(240.,std::min(480.,double(size.Width)-96)));

@@ -99,7 +99,9 @@ See the [WinUI release notes](https://github.com/microsoft/microsoft-ui-xaml/rel
 For a Debug build, pass `-Configuration Debug`; `Debug` replaces `Release` in
 the architecture's output path.
 `-OutputDirectory` builds elsewhere and keeps native objects and precompiled headers
-in `<OutputDirectory>.obj`, so separate outputs never share native intermediates.
+in `<OutputDirectory>.obj`. Pass `-IntermediateDirectory` to reuse an owned native
+build cache across serial builds with separate outputs. Keep its architecture and
+configuration the same, and let MSBuild track changed inputs.
 `-PackagesDirectory` reuses another restore
 and `-SkipRestore` skips it. `-ControlFixture` and `-SoftwareAdapterTests` build
 the [control reviews](#control-reviews) and the [VM fixture build](windows-vm.md#ui-fixtures-on-the-software-adapter).
@@ -202,6 +204,13 @@ long buttons overflow. Run `exercise-localization.ps1 -NoticeOnly` in each theme
 for the focused image-notice journey, including a narrow canvas and returning to
 the original width.
 
+Tool lists keep enabled choices clickable when their shared projection includes a
+reason. Only their content dims; the selected background stays visible. The same
+reason supplies native tooltips and HelpText, and wins over delayed shortcut copy.
+Header and choice controls read the shared reason; notice actions read the shared
+accent flag and keep native disabled colors. Renew the vector-layer, vector-edge
+and image-notice journeys in both themes when changing these presenters.
+
 Top-level application menus retain their buttons and flyouts when the language
 changes. Captions and natural widths refresh once per localization generation;
 unchanged publications skip menu text reads and measurements. Clock widths include
@@ -263,6 +272,10 @@ document import, export, save, reopen and close workflows; GPU recovery switches
 require that full journey.
 Preferences reserves the measured titlebar height when fitting its centered
 dialog; its narrow-window check dismisses it with an actual pointer click.
+
+Apply `dialogSurface` to native dialogs for the shared `settings` background and
+clear top overlay. Retained dialogs refresh it through their apply or render
+hooks; embedded Edit Color inherits its parent surface.
 
 `exercise-localization.ps1 -Executable <path> -Theme dark` checks every shipped
 language, retained numeric and Unicode drafts and selections, Properties,
@@ -347,6 +360,9 @@ rectangle inside the canvas and visible paper, outside the utility, including
 fractional edges and the complete requested pointer path.
 Run `./apps/layer-windows/tests/uia-owned-search.ps1` for current-drawing canvas
 lookup and ordinary context-menu popup lookup.
+`tests/uia-projection-snapshot.ps1` checks fresh cached control projections and
+the idle fixture's per-review canvas peer with live bounds, camera and foreground
+checks for every pixel sample.
 
 Activating Preferences deliberately sends shared Blur, restoring the tool used
 before temporary eyedropping. The sampler journey checks that restoration, then
@@ -560,8 +576,8 @@ Portable packaging and both converters reject the development-only WARP runtime.
 It assembles the archive twice and requires identical hashes. Output stays under
 ignored `artifacts/windows/distribution`. `-SkipRestore` reuses restored packages;
 uncommitted changes need `-AllowDirty`, which marks the package as a development
-build. `-SignArguments` passes its values to `signtool sign` for `CapyCanvas.exe`
-and `layer_windows.dll` before the payload is inventoried, for example
+build. `-SignArguments` passes its values to `signtool sign` for `CapyCanvas.exe`,
+`layer_windows.dll` and `capy-photo-reader.exe` before the payload is inventoried, for example
 `-SignArguments /sha1,<thumbprint>,/fd,SHA256,/tr,<timestamp URL>,/td,SHA256`
 from a Visual Studio developer shell. The exercise extracts to a path with spaces and launches with an unrelated
 working directory and an isolated profile.
@@ -644,6 +660,14 @@ been verified.
 
 ## Test
 
+Run `exercise-stroke-recording.ps1 -Executable <path> -Theme dark` and `-Theme light`
+through `test-desktop.ps1`. Each existing recording journey captures the docked
+Start, Stop and Save control states and checks their allocated height against the
+owned drawing's shared panel metric and window DPI. It also checks CAPYPEN4/gzip,
+cancel retaining the recording, delivery releasing it and a zero exit. Omitting
+`-Theme` preserves the default appearance. These checks do not cover floating or
+drawer placement, or measure background and border colors.
+
 Service shutdown joins every independent worker even when recovery shutdown
 fails. Successful render-owner `capy_finish_services` makes stored callback
 contexts quiescent. Callers retain callback code and context until that success;
@@ -712,6 +736,14 @@ invalid layouts preserve the publication cache. The window-free
 `glass_updates_publish_host_metadata_without_document_edits` regression checks
 this contract; run `exercise-canvas-bar.ps1` with `-Theme dark` and `-Theme light`
 to check the selection bar's native glass registration and menu actions.
+The same journey checks Adjust attaching Curves to the editing layer with the
+selection as its mask, then verifies that one Undo restores the layer, selection
+and composed pixels. It also checks Keep proportions across Scale and Distort,
+and switches between the wide mode row and narrow mode menu.
+The full journey also attaches selection-masked Invert, merges visible layers,
+checks exact interior and exterior pixels through Undo and Redo, and forces a
+fresh baked-paint redraw by hiding and showing it. Run both themes after changing
+native private-bake preparation; layer counts alone do not qualify capture pixels.
 
 | Where | Checks |
 | --- | --- |
@@ -766,7 +798,9 @@ key tests include nested message timestamps, release before the confirming key,
 unrelated releases and clock wraparound. Real
 IME checks must distinguish candidate Enter/Escape from the next ordinary press,
 and include selected names, numeric refusal, pointer confirmation and focus
-changes. The `d3d12_` tests that write app storage need `CAPY_STORAGE_DIR` set
+changes. Workspace manager uses the composition guard for its inline name field,
+parent list, row F2 action, dialog Escape and primary confirmation.
+The `d3d12_` tests that write app storage need `CAPY_STORAGE_DIR` set
 to a fresh absolute folder. In Debug builds the HDR and native color tests need
 `RUST_MIN_STACK=8388608`, the native document worker's stack size.
 The test script adds its build folder to the child process DLL search path so
@@ -805,7 +839,9 @@ exposes localized open/closed accessibility status after the native popup events
 text segments, Center clicked point, separate Zoom toolbar placement, canvas
 wheel/touch preferences and settings persistence. Run
 `fixtures navigation-controls navigation-controls:light` through the VM runner
-for both themes.
+for both themes. The native Canvas switches for Quick pinch to fit and Reverse
+pinch to restore view start enabled; this fixture changes and independently
+resets them, then checks their saved values after closing.
 
 `exercise-zoom-readout.ps1` checks each caption's full text and visible character
 rectangles, containment and shortcut separation, and waits for popup acknowledgment.
@@ -962,10 +998,30 @@ verification.
 preserved utility placement, live circle, header and blank body sensing without canvas or
 document-history changes, all eight independent axis combinations, mouse/touch/pen
 curve edits, cancellation, Apply/Reset and persisted profiles after restart.
+Pen-contact cases maximize the owned drawing and use Fit after arranging the
+workspace so a full paper sample remains visible beside the utility. The
+separate short-window case checks scrolling
+and the footer at reduced height.
 Repeat with `-Theme light`, or run
 `tools/windows-vm/windows-vm.py fixtures tilt pressure` for both themes on WARP.
 Synthetic native input verifies routing and editor behavior, not physical sensors
 or frame performance.
+
+The same tilt journey checks cold curve, axis and Reset drafts; a first pen
+contact directly on the graph; and first pen sensing while a separate native
+touch contact retains the curve. Cancellation restores the prior edit intent,
+editor epoch, placement and exact artwork sample. It also checks live
+pressure/tilt replacement, matching geometry, native clicks and opaque pixels
+above an expanded column and connector, title dragging over the native header,
+and body scrolling with an accessible footer in a short window. It reveals
+body controls through their native scroll provider before input
+and checks dragged placement against the shared viewport limits in both logical
+and native coordinates. It never scrolls while a contact holds the curve.
+Use the freshly verified scroll ancestor for `Control -Arranged -Within`
+when re-querying a body target. Keep `-NoPopups`, runtime identity, process
+ownership, finite viewport containment and stable-bounds acknowledgements.
+The guarded drivers support concurrent touch and pen; concurrent mouse and pen is
+not exercised. Repeat the complete journey in both themes.
 
 Histogram, Waveform and the input statistics in Levels and Curves
 (`ScopesView.cpp`) draw the shared plots. The snapshot's `windows_scopes` revision
@@ -1051,6 +1107,26 @@ disposable profile (see [diagnosis](#diagnose-a-running-app)). Device-specific
 fixtures take `-Device mouse|pen|touch`. Results, captures and profiles stay under
 ignored `artifacts/windows`.
 
+The `exercise-touch-gestures.ps1 -ThreeFinger` theme pair also runs the complete
+docked Layers body; `-Simple` runs it on the simple Layers card. Keep their
+effective seed and merge pixel/Undo/Redo checks without a duplicate default-body
+pair. CancelAll checks the next real Redo and exact recovery; it does not prove
+absence after a cancellation acknowledgement. Two-finger row swipes leave
+selection, opacity, Alpha Lock, history and camera unchanged at the pair boundary;
+the next effective one-finger Alpha Lock and its Undo check exact recovery.
+The full docked route also edits the two pinch preferences through native
+Preferences and checks ordinary zoom in each disabled direction, enabled fitting
+and unchanged authored history. Keep this in the existing `-ThreeFinger` theme
+pair rather than adding another default-body pair. `-SlidersOnly` checks Dither
+and Scatter's primary controls and effective strokes in each theme after its
+independent global-slider persistence proof. It checks their logarithmic whole-pixel
+Cell Size, retained overrides and reset, plus Scatter's Spread/Cell Size/Grit ring
+order. Each saves the painted drawing, keeps it open for an app/session restart,
+and checks restored Cell Size12, source, pixels and history.
+`exercise-workspace-layout.ps1` checks Paint/Photo group allocation,
+retained tab bounds and saved-tab reload. These functional scopes do not establish
+OS Blur/drawing retirement, physical input or performance measurements.
+
 Routine fixture captures use `inspect-window.ps1 -CaptureOnly` for the image,
 window title and responsiveness. They retain separate model and layout evidence. Failure captures keep the full
 control-name inventory. Run the inspector without that switch to request it directly.
@@ -1086,6 +1162,17 @@ visible flyout's lifetime. A background window cannot admit a source owned by
 another window. A request begun inside a native routed press survives that press
 and cancels on the next untagged native press. Normal
 menu selection and held-release behavior remain in the native device matrix.
+The same fixture checks that replacing hidden chrome retains its collapsed,
+transparent, noninteractive state, then restores it when Zen ends. Decorative
+replacements retain their own input exclusion.
+The workspace phase starts a real TSF composition in an owned TextBox and
+requires the production composition observer to acknowledge it. The fixture
+retains a real `ITfCompositionSink` until composition ends and
+releases the composition before deactivating its TSF client. It checks
+inline Enter, Escape and F2, dialog Escape and primary confirmation, then the
+next ordinary action. All 11 popup cases and five workspace cases must pass
+within the existing 30-second process deadline. Candidate lists from actual
+language services still need their own IME journeys.
 
 Run native input fixtures on a private desktop with `test-desktop.ps1`; it
 restores the original desktop and closes its own process tree on completion or
@@ -1126,6 +1213,16 @@ Run `exercise-tab-drag.ps1` in both themes after changing
 tab capture or preview behavior.
 Run `exercise-switcher-drag.ps1` with each device in both themes for workspace
 rows, including ordinary scrolling with `-Overflow`.
+The middle-button cases first prove each exact point with an ordinary native tap
+and a fresh row release, then restore the preview before middle-button motion.
+Native window ownership, visibility and bounds checks remain required.
+Pen and touch reveal Delete by swiping and check that an outside press still
+activates its target. The mouse journey holds pin, Apply and row contacts across
+both Rename acknowledgement orders. Its private SQLite gate rolls back within
+four seconds; native target and ancestor identities, claims, preview and the next
+ordinary click must survive. The gate opens only the fixture's own profile.
+Inline-name saves keep the dialog's geometry stable while controls remain
+interactive; loading and blocking saves retain their status row.
 Run `exercise-hdr.ps1 -DrawingTabsOnly` in both themes for drawing tabs and their
 compact list; this mode uses ordinary documents and does not test HDR. These
 fixtures check native row activation and outside releases as well as held and
@@ -1143,7 +1240,18 @@ release inside an action button did nothing.
 
 `exercise-documents.ps1 -Journey color-workflows` isolates automatic comparisons,
 Properties Appearance and conversion into a separate unsaved drawing. Repeat
-with `-Journey color-workflows-light`. `exercise-hdr.ps1 -ControlsOnly` isolates
+with `-Journey color-workflows-light`.
+Run `exercise-documents.ps1 -Journey native-writeback` and then
+`-Journey native-writeback-light` through the private desktop harness for native
+Grayscale and Two-tone painting. Each mode and device uses one continuous mouse
+or pen stroke across three tile columns, exact canvas pixels for one Undo/Redo,
+native Save and fresh Open, retained mode and identical encoded tile ranges after
+saving the reopened drawing. The fixture records its script and binary hashes;
+pixel comparisons and strokes prepare the owned window bounds and camera once,
+then verify the full projection afterward. Pixel polls and stroke points avoid
+UI Automation and model discovery during sampling and pointer contact. Together,
+these functional checks do not establish pointer cadence or performance targets.
+`exercise-hdr.ps1 -ControlsOnly` isolates
 HDR arc, intensity, proof and screen-status controls in both themes; choose
 `-Depth F16` or `-Depth F32` explicitly. These focused selections reuse the full
 journeys' assertions and disposable profiles. Software-adapter checks establish
@@ -1151,6 +1259,8 @@ functional behavior; HDR output and presentation timing require hardware.
 The HDR geometry helper matches the reviewed executable and Rust DLL: native
 Windows PowerShell and .NET Framework on ARM64, a compiled x64 helper on x64.
 Both check the loaded CLR architecture before calling the current Rust geometry export.
+HDR and bubble geometry readers use the bridge's owned text handles and checked
+byte copies, with at most 8 MiB in each copy.
 Use `manager:default` for the full dark manager journey and
 `manager:workflow-light` for the light name, search and toolbar-description checks.
 The full `manager:both` selection can use `--timeout-minutes 60` on the software
@@ -1378,6 +1488,34 @@ filled below it, Erase up to intersection from the Tools list, and Merge Down's
 notice after the Gradient refusal's New Paint Layer Below. Each step checks
 composed canvas pixels; the run fails if a Layers footer or notice button is
 clipped or unlabelled.
+The default journey also checks Sketch's path choices, locked header reasons,
+clickable dimmed tool rows and immediate brush/Sculpt explanations. It compares
+the same selected row's composed text contrast before and after its reason clears,
+checks suggested-action fills against the shared palette and follows Back to Layer
+after an outside fill. The German narrow notice must stack actions below text.
+
+`exercise-vector-layers.ps1 -ToolsOnly` draws Figure and Path shapes, edits a
+path anchor, restyles its width through Properties and scales a Move frame.
+Both themes require exact composed artwork samples after one Undo and Redo.
+`exercise-vector-edges.ps1` also checks saved tool choices across a language
+restart, row interactions and ordered keyboard cancellation during path drags.
+
+`exercise-idle-brush.ps1` walks all three Blender sets, Mixing Brush, Pencil,
+Charcoal and Pastel Block through native categories, preset choices and settings.
+Each paints the seeded drawing and restores exact composed samples through Undo
+and Redo before the next preset.
+It retains the selected-brush startup and Liquify Adjust/Reset checks.
+The composed signature includes the original 768 grid samples and an exact ARGB
+SHA256 of every whole pixel inside the projected document. Every preset starts
+from the same seed signature. Accepted before, after, Undo, Redo and final Undo
+states save document crops from the sampled bitmap with camera and document
+metadata. Run `tests/uia-projection-snapshot.ps1` in PowerShell 5 and 7 for the
+cached native projection, live canvas guards and dense pixel regression.
+
+`exercise-canvas-touch.ps1 -ScrubOnly -Theme dark` checks three-finger clearing
+at horizontal, diagonal and vertical angles, cancellation and locked-layer refusal.
+Each clear preserves the camera and has one exact Undo and Redo. Fresh two-finger
+navigation and pen painting must still work. Repeat with `-Theme light`.
 
 Run `exercise-workspace-pickup.ps1 -Executable <exe> -Device <mouse|pen|touch>`
 in both `-Theme dark` and `-Theme light` on the private test display. Run

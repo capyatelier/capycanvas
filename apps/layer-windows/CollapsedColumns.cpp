@@ -21,8 +21,7 @@ struct Column:std::enable_shared_from_this<Column>{
     std::map<std::wstring,Button> buttons;
     std::map<std::wstring,Bindings> paintIcons;
     std::map<uint32_t,Border> dividers;
-    struct Connection {Shapes::Path path;hstring geometry;};
-    std::map<std::wstring,Connection> connections;
+    bool gpu=false;
     double reported=0;
     bool applying=false;
     std::array<float,4> corners{SurfaceRadius,SurfaceRadius,SurfaceRadius,SurfaceRadius};
@@ -60,14 +59,7 @@ struct Column:std::enable_shared_from_this<Column>{
             if(str(anchor,L"kind")==L"column"&&num(anchor,L"column",-1)==id)source=value.GetObject();}
         corners={SurfaceRadius,SurfaceRadius,SurfaceRadius,SurfaceRadius};
         if(source.Size()){auto square=sourceCorners(data,source,bounds);for(int i=0;i<4;++i)if(square[i])corners[i]=0;}
-        auto open=object(geometry,L"open");auto openDirection=str(open,L"direction");
-        std::set<std::wstring> openSources;
-        for(auto value:array(open,L"connections"))openSources.insert(std::wstring(value.GetArray().GetStringAt(0)));
-        if(!openDirection.empty())for(auto value:array(geometry,L"groups"))for(auto iconValue:array(value.GetObject(),L"icons")){
-            auto tile=iconValue.GetObject();if(!openSources.contains(std::wstring(str(tile,L"panel"))))continue;
-            auto square=sourceCorners(data,O({{L"bounds",object(tile,L"bounds")},{L"direction",S(openDirection)}}),bounds);
-            for(int i=0;i<4;++i)if(square[i])corners[i]=0;
-        }
+        auto open=object(geometry,L"open");
         auto facing=str(source,L"direction"),joined=str(object(source,L"anchor"),L"origin");
         surface.Data(squircleRectangle(float(num(bounds,L"width")),float(num(bounds,L"height")),corners));
         background.CornerRadius({corners[0]*CornerFit,corners[1]*CornerFit,corners[2]*CornerFit,corners[3]*CornerFit});
@@ -121,7 +113,7 @@ struct Column:std::enable_shared_from_this<Column>{
                 AutomationProperties::SetName(pick,str(panel,L"title"));tooltip(pick,str(panel,L"title"));
                 bool active=(open.Size()&&str(group,L"active")==panelId)||origin==panelId;
                 pick.Background(active?selected(data):clear());
-                auto sourceFacing=!facing.empty()&&joined==panelId?facing:openSources.contains(key)?openDirection:hstring{};
+                auto sourceFacing=!facing.empty()&&joined==panelId?facing:hstring{};
                 pick.CornerRadius(facingCorners(SurfaceRadius*CornerFit,sourceFacing));
                 AutomationProperties::SetItemStatus(pick,active?data->caption(L"search",L"selected"):L"");
             }
@@ -133,35 +125,35 @@ struct Column:std::enable_shared_from_this<Column>{
         for(auto it=dividers.begin();it!=dividers.end();)if(!currentDividers.contains(it->first)){
             uint32_t index;if(icons.Children().IndexOf(it->second,index))icons.Children().RemoveAt(index);it=dividers.erase(it);
         }else ++it;
-        std::set<std::wstring> currentConnections;
-        for(auto value:array(open,L"connections")){
-            auto pair=value.GetArray();auto panel=pair.GetStringAt(0);auto link=pair.GetObjectAt(1);
-            std::wstring key(panel);currentConnections.insert(key);
-            auto [it,added]=connections.try_emplace(key);auto& connection=it->second;
-            if(added){
-                connection.path.Fill(data->glass(L"panel"));connection.path.IsHitTestVisible(false);
-                Canvas::SetZIndex(connection.path,159);workspace.Children().Append(connection.path);
-                AutomationProperties::SetAutomationId(connection.path,L"column-connection-"+to_hstring(id)+L"-"+panel);
-            }
-            auto encoded=link.Stringify();
-            if(encoded!=connection.geometry){connection.geometry=encoded;place(connection.path,object(link,L"bounds"));connection.path.Data(drawerBridge(link));}
-        }
-        for(auto it=connections.begin();it!=connections.end();)if(!currentConnections.contains(it->first)){
-            uint32_t index;if(workspace.Children().IndexOf(it->second.path,index))workspace.Children().RemoveAt(index);it=connections.erase(it);
-        }else ++it;
         icons.Width(num(content,L"width"));icons.Height(bottom);
         reported=offset;
         if(std::abs(scroll.VerticalOffset()-offset)>.25)scroll.ChangeView(nullptr,offset,nullptr,true);
         applying=false;
     }
-    void visible(bool shown){fade->apply(background,shown,[weak=weak_from_this()]{if(auto self=weak.lock()){for(auto const& [id,connection]:self->connections)connection.path.Opacity(self->background.Opacity());if(self->changed)self->changed();}});for(auto const& [id,connection]:connections){connection.path.IsHitTestVisible(false);connection.path.Opacity(background.Opacity());connection.path.Visibility(background.Visibility());}}
-    void collectGlass(A& regions,A& links,UIElement const& reference)const{
-        if(!appendGlass(regions,background,reference,{corners[0],corners[1],corners[2],corners[3]},true))return;
-        for(auto value:array(object(geometry,L"open"),L"connections"))appendConnection(links,value.GetArray().GetObjectAt(1),workspace,reference);
+    void visible(bool shown){fade->apply(background,shown,[weak=weak_from_this()]{if(auto self=weak.lock();self&&self->changed)self->changed();});}
+    J measure(UIElement const& reference)const{
+        auto box=allocatedBounds(background,reference);if(box.Width<=0||box.Height<=0||background.Opacity()<=0)return J{};
+        A measured;
+        for(auto const& [panel,button]:buttons){auto bounds=allocatedBounds(button,reference);if(bounds.Width<=0||bounds.Height<=0)continue;
+            A pair;pair.Append(S(hstring(panel)));pair.Append(rectangle(bounds));measured.Append(pair);}
+        return O({{L"column",N(id)},{L"bounds",rectangle(box)},{L"content",rectangle(allocatedBounds(scroll,reference))},{L"icons",measured}});
+    }
+    void present(J const& frame,bool ready){
+        J column;for(auto value:array(frame,L"columns"))if(num(value.GetObject(),L"column")==id){column=value.GetObject();break;}
+        auto radii=array(column,L"radii");
+        if(radii.Size()==4)for(uint32_t i=0;i<4;++i)corners[i]=float(radii.GetNumberAt(i));
+        for(auto value:array(column,L"icons")){auto pair=value.GetArray();auto found=buttons.find(std::wstring(pair.GetStringAt(0)));if(found==buttons.end())continue;
+            auto r=pair.GetArrayAt(1);found->second.CornerRadius({r.GetNumberAt(0)*CornerFit,r.GetNumberAt(1)*CornerFit,r.GetNumberAt(2)*CornerFit,r.GetNumberAt(3)*CornerFit});}
+        gpu=false;for(auto value:array(frame,L"bridges"))if(value.GetArray().GetNumberAt(0)==id)gpu=ready;
+        surface.Opacity(gpu?0:1);
+        surface.Data(squircleRectangle(float(background.ActualWidth()),float(background.ActualHeight()),corners));
+        background.CornerRadius({corners[0]*CornerFit,corners[1]*CornerFit,corners[2]*CornerFit,corners[3]*CornerFit});
+    }
+    void collectGlass(A& regions,UIElement const& reference)const{
+        if(!gpu)appendGlass(regions,background,reference,{corners[0],corners[1],corners[2],corners[3]},true);
     }
     void remove(){
         uint32_t index;if(workspace.Children().IndexOf(background,index))workspace.Children().RemoveAt(index);
-        for(auto const& [key,connection]:connections)if(workspace.Children().IndexOf(connection.path,index))workspace.Children().RemoveAt(index);
     }
 };
 }
@@ -188,4 +180,7 @@ CollapsedColumns::CollapsedColumns(std::shared_ptr<WorkspaceData> data,Canvas ro
 CollapsedColumns::~CollapsedColumns(){impl->reset();}
 void CollapsedColumns::Apply(){impl->apply();}
 void CollapsedColumns::Reset(){impl->reset();}
-void CollapsedColumns::AppendGlass(A& regions,A& connections,UIElement const& reference)const{for(auto const& [id,column]:impl->columns)column->collectGlass(regions,connections,reference);}
+A CollapsedColumns::Measure(UIElement const& reference)const{A result;for(auto const& [id,column]:impl->columns){auto value=column->measure(reference);if(value.Size())result.Append(value);}return result;}
+void CollapsedColumns::PresentBridges(J const& frame,bool ready){for(auto const& [id,column]:impl->columns)column->present(frame,ready);}
+double CollapsedColumns::Opacity(uint32_t column)const{auto found=impl->columns.find(column);return found==impl->columns.end()?0:found->second->background.Opacity();}
+void CollapsedColumns::AppendGlass(A& regions,UIElement const& reference)const{for(auto const& [id,column]:impl->columns)column->collectGlass(regions,reference);}

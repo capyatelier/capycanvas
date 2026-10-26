@@ -10,6 +10,7 @@ namespace Pickers=winrt::Microsoft::Windows::Storage::Pickers;
 
 struct WorkspaceStorageView::Impl : std::enable_shared_from_this<Impl> {
     Dispatch send;
+    std::shared_ptr<WorkspaceData> data=std::make_shared<WorkspaceData>();
     std::function<void()> changed;
     Window window{nullptr};
     J model,copy;
@@ -60,7 +61,7 @@ struct WorkspaceStorageView::Impl : std::enable_shared_from_this<Impl> {
         try {
             restore();
             dialog=ContentDialog();dialog.XamlRoot(window.Content().XamlRoot());
-            dialog.RequestedTheme(str(object(model,L"state"),L"theme")==L"dark"?ElementTheme::Dark:ElementTheme::Light);
+            dialogSurface(data,dialog);
             dialog.DefaultButton(ContentDialogButton::Close);
             StackPanel body;body.Spacing(12);body.MaxWidth(460);
             TextBlock explanation;explanation.TextWrapping(TextWrapping::Wrap);
@@ -103,7 +104,8 @@ struct WorkspaceStorageView::Impl : std::enable_shared_from_this<Impl> {
         picker=nullptr;showing=false;changed();
     }
     void apply(J const& snapshot,J const& bootstrap,bool blocked) {
-        model=snapshot;copy=bootstrap;
+        model=snapshot;copy=bootstrap;data->state=object(snapshot,L"state");data->refreshPalette();
+        if(dialog)dialogSurface(data,dialog);
         retry.Content(box_value(text(L"retry")));saveNew.Content(box_value(text(L"save_as_new_workspace")));backup.Content(box_value(text(L"export_backup")));
         auto storage=object(model,L"windows_workspace");
         if(!storage.Size())return;

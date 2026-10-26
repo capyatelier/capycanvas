@@ -173,7 +173,7 @@ struct SizeDialog::Impl:std::enable_shared_from_this<Impl>{
         auto size=view();
         if(!size.Size()){hide();return;}
         if(!showing&&blocked)return;
-        dialog.RequestedTheme(data->theme()==L"light"?ElementTheme::Light:ElementTheme::Dark);
+        dialogSurface(data,dialog);
         dialog.Title(box_value(str(size,L"title")));
         dialog.PrimaryButtonText(str(size,L"apply_label"));dialog.CloseButtonText(str(size,L"cancel_label"));
         data->updating=true;

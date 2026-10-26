@@ -71,6 +71,8 @@ pub struct CapyHost {
     chrome_facts: layer_ui::ChromeFacts,
     navigators: Navigators,
     glass: Glass,
+    presented_panel_revision: Option<u64>,
+    published_panel_revision: Option<u64>,
     scale: f32,
     blank_presented: bool,
     prediction_frames: Option<[u64; 2]>, // opt-in, accumulated across document switches
@@ -162,6 +164,8 @@ impl CapyHost {
             chrome_facts: layer_ui::ChromeFacts::default(),
             navigators: Default::default(),
             glass: Default::default(),
+            presented_panel_revision: None,
+            published_panel_revision: None,
             scale,
             blank_presented: false,
             prediction_frames: std::env::var_os("CAPY_LATENCY_TRACE").map(|_| [0; 2]),
@@ -324,8 +328,7 @@ impl CapyHost {
         let encoding = self.display.encoding(config.format);
         let mut presenter = ViewportPresenter::for_surface(&renderer, config.format, encoding).map_err(err)?;
         self.presenter_key = Some((renderer.document_color(), encoding));
-        // Prepare the optional overview pipeline during GPU startup, before input is live.
-        presenter.prepare_overviews(&renderer);
+        presenter.prepare_chrome(&renderer);
         presenter.pipelines_ready(&renderer);
         gpu_state.check()?;
         let retired = self.native.replace_renderer(layer_host::Renderer(Some(renderer)))?;
@@ -339,6 +342,7 @@ impl CapyHost {
         self.native.invalidate_snapshot();
         self.native.startup = Default::default();
         self.presenter = Some(presenter);
+        self.presented_panel_revision = None;
         self.config = Some(config);
         self.native.reset_canvas_frame_rate();
         // Surface::configure calls SetSwapChain. Only capy_resize may do that,
@@ -383,15 +387,21 @@ impl CapyHost {
         let key = (gpu.document_color(), encoding);
         if self.presenter_key != Some(key) {
             let mut presenter = ViewportPresenter::for_surface(gpu, config.format, encoding).map_err(err)?;
-            presenter.prepare_overviews(gpu);
+            presenter.prepare_chrome(gpu);
             presenter.pipelines_ready(gpu);
             self.presenter = Some(presenter);
             self.presenter_key = Some(key);
+            self.presented_panel_revision = None;
         }
         let presenter = self
             .presenter
             .as_mut()
             .ok_or("Viewport presenter is not prepared")?;
+        presenter.set_panel_surfaces(gpu,self.glass.panels(self.scale));
+        if !presenter.prepare_chrome(gpu) {
+            self.native.dirty=true;
+            return Ok(1);
+        }
         let tone = self.documents.as_ref().and_then(|s| s.tone.current(&self.native));
         let display = SceneDisplay {
             scale: self.scale,
@@ -424,6 +434,10 @@ impl CapyHost {
         self.blank_presented = true;
         gpu.device().poll(wgpu::PollType::Poll).map_err(err)?;
         self.gpu.check()?;
+        let panel_revision=Some(self.glass.panel_revision());
+        if self.presented_panel_revision!=panel_revision {
+            self.presented_panel_revision=panel_revision;
+        }
         self.poll_services()?;
         Ok(i32::from(self.native.dirty))
     }
@@ -1080,6 +1094,7 @@ pub unsafe extern "C" fn capy_snapshot(host: u64, info: *mut CapySnapshotInfo) -
             },
             windows_glass: serde_json::json!({
                 "regions": host.glass.count(),
+                "panel_revision": host.presented_panel_revision,
                 "frames": host.presenter.as_ref().map_or([0; 2], |p| p.backdrop_frames()),
             }),
             windows_document: host.documents.as_ref().and_then(|service| service.status()),
@@ -1108,9 +1123,19 @@ pub unsafe extern "C" fn capy_snapshot(host: u64, info: *mut CapySnapshotInfo) -
             }),
         };
         let extension = serde_json::to_vec(&metadata).map_err(err)?;
-        if let Some(bytes) = host.native.take_update_bytes().map_err(err)? {
+        let update=host.native.take_update_bytes().map_err(err)?;
+        let bytes=match update {
+            Some(bytes)=>Some(layer_host::extend_update(bytes,&extension)),
+            None if host.published_panel_revision!=host.presented_panel_revision=>Some(serde_json::to_vec(&serde_json::json!({
+                "workspace_update":host.native.session.workspace_update(),
+                "windows_glass":{"regions":host.glass.count(),"frames":host.presenter.as_ref().map_or([0;2],|p|p.backdrop_frames()),
+                    "panel_revision":host.presented_panel_revision},
+            })).map_err(err)?),
+            None=>None,
+        };
+        if let Some(bytes) = bytes {
             host.localization_generation = Some(generation);
-            let bytes = layer_host::extend_update(bytes, &extension);
+            host.published_panel_revision=host.presented_panel_revision;
             let routing = if info.is_null() { None } else { Some(CapySnapshotInfo::read(&bytes).map_err(err)?) };
             let snapshot = CString::new(bytes).map_err(err)?;
             if let Some(routing) = routing { unsafe { *info = routing; } }

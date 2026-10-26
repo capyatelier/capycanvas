@@ -102,6 +102,12 @@ function Draft([string]$Id,[string]$Text){
     $entry.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($Text)
     Wait-Until {$entry.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value -eq $Text} 'Draft was not retained'
 }
+function Select-Preset([int]$Preset){
+    $items=@((Model).state.tool_set.subtools);$indices=@(for($i=0;$i -lt $items.Count;$i++){if($items[$i].action.type -eq 'select_brush' -and $items[$i].action.id -eq $Preset){$i}})
+    if($indices.Count -ne 1){throw "Preset $Preset has no unique native Tool Set choice"}
+    Invoke-Id ('tool-subtool-'+$indices[0])
+    Wait-Until {(Model).state.brush.preset -eq $Preset -and (Model).brush_ready} "Preset $Preset did not activate"
+}
 function Select-Tool([string]$Id,[switch]$Cancel){
     $target=@{id=$null}
     Wait-Until {
@@ -271,19 +277,15 @@ Wait-Until {[Math]::Abs((Value 'flow')-.42) -lt .0001} 'Flow did not restore aft
 # Native focus can leave the field before an accessibility invocation runs.
 # That may commit to the old brush; the detached draft must never overwrite
 # the newly selected brush, including when focus moves again afterwards.
-Invoke-Id 'tool-group-1'
-Wait-Until {(Model).state.tool_set.groups[1].selected} 'Marker group did not activate'
+Select-Preset 7
 $markerFlow=Value 'flow'
-Invoke-Id 'tool-group-0'
-Wait-Until {(Model).state.tool_set.groups[0].selected} 'Pen group did not restore'
+Select-Preset 1
 Draft 'flow' '77'
-Invoke-Id 'tool-group-1'
-Wait-Until {(Model).state.tool_set.groups[1].selected} 'Marker group did not activate'
+Select-Preset 7
 Check-Projection
 Focus (Field 'opacity')
 Wait-Until {[Math]::Abs((Value 'flow')-$markerFlow) -lt .0001} 'Detached draft overwrote the new brush'
-Invoke-Id 'tool-group-0'
-Wait-Until {(Model).state.tool_set.groups[0].selected} 'Pen group did not restore'
+Select-Preset 1
 if(((Field 'flow').GetRuntimeId() -join ':') -eq $original){throw 'Changing tools retained an old draft context'}
 if(!@((Model).layout.groups|Where-Object active -eq 'layers').Count){
     Invoke-Id 'column-icon-layers'
@@ -306,7 +308,7 @@ Focus (Field 'opacity')
 Wait-Until {[Math]::Abs((Value 'flow')-$acknowledged) -lt .0001} 'Detached tool field overwrote the new target'
 Invoke-Control 'Undo'
 # All catalog tools must be reachable and project the actual shared schema.
-$tools=@('pen','pencil','brush','eraser','airbrush','decoration','blend','liquify','lasso','move','hand','eyedropper','gradient','figure','ruler','auto_select','fill')
+$tools=@('pen','pencil','brush','eraser','airbrush','blend','liquify','lasso','move','hand','eyedropper','gradient','figure','ruler','auto_select','fill')
 foreach($tool in $tools){
     Select-Tool $tool;Check-Projection
     Check-Geometry $tool

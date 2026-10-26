@@ -7,6 +7,10 @@
 #include <algorithm>
 #include <map>
 #include <optional>
+#include <limits>
+#include <winrt/Microsoft.UI.Text.h>
+#include <winrt/Microsoft.UI.Xaml.Documents.h>
+#include <winrt/Microsoft.UI.Xaml.Automation.Peers.h>
 
 using namespace CapyUi;
 struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
@@ -38,7 +42,7 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
     TextBox search,name,description;
     ComboBox choices;
     ListView list;
-    Grid listSurface;
+    Grid listSurface;RichEditBox nameLine;TextBlock nameText;bool nameAlignmentPending=true;
     std::unique_ptr<WorkspaceRowDrag> rowDrag;
     uint64_t selectionSerial=0;
     struct Row {
@@ -134,13 +138,12 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
     }
     void select(hstring const& id){
         if(id==selectionDraft.value_or(str(model,L"selected")))return;
-        // Reflect the accepted UI request immediately. A subsequent accessibility
-        // selection must not disappear while Rust still publishes the old preview.
-        selectionDraft=id;++selectionSerial;restoreSelection();
+        if(inlineRename())selectionDraft.reset();else selectionDraft=id;
+        ++selectionSerial;restoreSelection();
         dispatch(O({{L"type",S(L"select")},{L"id",id.empty()?JsonValue::CreateNullValue():S(id)}}));
     }
     void cancel() {
-        if(stopping||!showing||cancelPending)return;
+        if(stopping||!showing||cancelPending||focusedTextComposing(root))return;
         rowDrag->Cancel();cancelPending=true;
         dispatch(O({{L"type",S(prompt()&&!inlineRename()&&page()!=L"prompt"?L"cancel":L"dismiss")}}));
     }
@@ -187,6 +190,17 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
         retry.Content(box_value(copy(L"header",L"retry")));retry.HorizontalAlignment(HorizontalAlignment::Left);
         AutomationProperties::SetAutomationId(retry,L"workspace-manager-retry");
         listSurface.Children().Append(list);
+        for(auto const& metric:{nameLine.as<FrameworkElement>(),nameText.as<FrameworkElement>()}){
+            metric.Opacity(0);metric.IsHitTestVisible(false);metric.MaxWidth(0);metric.HorizontalAlignment(HorizontalAlignment::Left);metric.VerticalAlignment(VerticalAlignment::Top);
+            AutomationProperties::SetAccessibilityView(metric,Automation::Peers::AccessibilityView::Raw);listSurface.Children().Append(metric);
+        }
+        nameLine.IsTabStop(false);nameLine.MinWidth(0);nameLine.MinHeight(0);nameLine.BorderThickness({0,0,0,0});nameLine.Padding({0,0,0,0});
+        nameLine.AcceptsReturn(false);nameLine.TextWrapping(TextWrapping::NoWrap);nameLine.Height(copyData->controlHeight());
+        nameLine.LayoutUpdated([weak=weak_from_this()](auto&&,auto&&){
+            if(auto self=weak.lock();self&&self->showing&&self->nameAlignmentPending&&self->nameLine.IsLoaded()&&self->nameLine.ActualHeight()>0){
+                self->nameAlignmentPending=false;try{self->alignNames();}catch(...){self->fail();}
+            }
+        });
         listSurface.SizeChanged([source=std::weak_ptr<WorkspaceData>(copyData)](auto const& sender,SizeChangedEventArgs const& e){if(auto data=source.lock()){auto size=e.NewSize();float radius=float(data->panelMetric(L"control_radius"));ClipSurface(sender.template as<UIElement>(),size.Width,size.Height,{radius,radius,radius,radius},true);}});
         rowDrag=std::make_unique<WorkspaceRowDrag>(list,listSurface,
             [weak=weak_from_this()]{auto self=weak.lock();return self&&self->canReorder();},
@@ -229,7 +243,7 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
             }
         });
         list.KeyDown([weak=weak_from_this()](auto&&,Input::KeyRoutedEventArgs const& e){
-            if(e.Key()!=Windows::System::VirtualKey::Enter)return;
+            if(e.Key()!=Windows::System::VirtualKey::Enter||composingKey(e))return;
             for(auto node=e.OriginalSource().try_as<DependencyObject>();node;node=VisualTreeHelper::GetParent(node)){
                 if(node.try_as<Primitives::ButtonBase>())return;
                 if(node.try_as<ListView>())break;
@@ -240,6 +254,39 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
                 if(item)self->select(unbox_value<hstring>(item.Tag()));
             }
         });
+    }
+    void alignNames(){
+        using namespace winrt::Microsoft::UI::Text;
+        auto font=[](auto const& target,auto const& source){
+            target.FontFamily(source.FontFamily());target.FontSize(source.FontSize());target.FontWeight(source.FontWeight());
+            target.FontStyle(source.FontStyle());target.FontStretch(source.FontStretch());target.CharacterSpacing(source.CharacterSpacing());
+            target.Language(source.Language());target.FlowDirection(source.FlowDirection());target.IsTextScaleFactorEnabled(source.IsTextScaleFactorEnabled());
+            target.UseLayoutRounding(source.UseLayoutRounding());
+        };
+        auto available=winrt::Windows::Foundation::Size{std::numeric_limits<float>::infinity(),std::numeric_limits<float>::infinity()};
+        for(auto& [id,row]:rows){
+            auto slot=row.entry.Parent().try_as<Grid>();if(!slot||!slot.IsLoaded()||slot.ActualWidth()<=0)continue;
+            nameLine.MaxWidth(slot.ActualWidth());nameText.MaxWidth(slot.ActualWidth());
+            font(nameLine,row.entry);font(nameText,row.title);nameText.LineHeight(row.title.LineHeight());
+            nameText.LineStackingStrategy(row.title.LineStackingStrategy());nameText.TextLineBounds(row.title.TextLineBounds());
+            nameText.Text(row.title.Text().empty()?hstring(L"0"):row.title.Text());nameText.Measure(available);auto title=nameText.DesiredSize();
+            nameText.Arrange({0,0,title.Width,title.Height});
+            auto character=nameText.ContentStart().GetCharacterRect(winrt::Microsoft::UI::Xaml::Documents::LogicalDirection::Forward);
+            auto text=row.entry.Visibility()==Visibility::Visible?row.entry.Text():row.title.Text();
+            nameLine.Height(copyData->controlHeight());nameLine.Document().SetText(TextSetOptions::None,text.empty()?hstring(L"0"):text);
+            nameLine.Measure(available);auto native=nameLine.DesiredSize();nameLine.Arrange({0,0,native.Width,native.Height});
+            auto range=nameLine.Document().GetRange(0,1);winrt::Windows::Foundation::Point top,baseline,bottom;
+            auto options=PointOptions::Start|PointOptions::ClientCoordinates|PointOptions::AllowOffClient;
+            range.GetPoint(HorizontalCharacterAlignment::Left,VerticalCharacterAlignment::Top,options,top);
+            range.GetPoint(HorizontalCharacterAlignment::Left,VerticalCharacterAlignment::Baseline,options,baseline);
+            range.GetPoint(HorizontalCharacterAlignment::Left,VerticalCharacterAlignment::Bottom,options,bottom);
+            double lineHeight=bottom.Y-top.Y,ascent=baseline.Y-top.Y;
+            double shift=character.Y+nameText.BaselineOffset()-title.Height/2-(ascent-lineHeight/2);
+            if(title.Height<=0||lineHeight<=0||!std::isfinite(shift))throw hresult_error(E_FAIL);
+            auto height=std::max({copyData->controlHeight(),double(title.Height),lineHeight+2*std::abs(shift)});
+            auto padding=(height-lineHeight)/2,fieldPadding=copyData->panelMetric(L"field_padding");
+            slot.MinHeight(height);row.entry.Height(height);row.entry.Padding({fieldPadding,padding+shift,fieldPadding,padding-shift});
+        }
     }
     void fitRows() {
         double height=0;
@@ -269,15 +316,13 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
         row.entry.Visibility(Visibility::Collapsed);row.entry.MinWidth(0);row.entry.MinHeight(0);row.entry.Height(copyData->controlHeight());row.entry.Padding({fieldPadding,0,fieldPadding,0});row.entry.Background(copyData->brush(L"input"));row.entry.BorderThickness({0,0,0,0});row.entry.CornerRadius(copyData->controlCorner());row.entry.VerticalContentAlignment(VerticalAlignment::Center);
         row.entry.FontSize(copyData->textSize());row.title.FontSize(copyData->textSize());
         auto nameFont=FontFamily(L"Segoe UI");row.title.FontFamily(nameFont);row.entry.FontFamily(nameFont);
-        row.title.SizeChanged([entry=make_weak(row.entry),slot=make_weak(nameSlot),source=std::weak_ptr<WorkspaceData>(copyData),fieldPadding](auto&&,SizeChangedEventArgs const& e){
-            auto input=entry.get();auto name=slot.get();auto data=source.lock();double lineHeight=e.NewSize().Height;
-            if(!input||!name||!data||lineHeight<=0)return;
-            auto height=std::max(data->controlHeight(),lineHeight);auto inset=(height-lineHeight)/2;
-            name.MinHeight(height);input.Height(height);input.Padding({fieldPadding,inset,fieldPadding,inset});
+        row.title.SizeChanged([weak=weak_from_this()](auto&&,SizeChangedEventArgs const& e){
+            if(e.NewSize().Height>0)if(auto self=weak.lock())self->nameAlignmentPending=true;
         });
         for(auto state:{L"",L"PointerOver",L"Focused"})row.entry.Resources().Insert(box_value(hstring(L"TextControlBackground")+state),copyData->brush(L"input"));
         AutomationProperties::SetAutomationId(row.entry,L"workspace-manager-rename-"+id);AutomationProperties::SetName(row.entry,common(L"name"));
-        row.entry.KeyDown([weak=weak_from_this()](auto&&,KeyRoutedEventArgs const& e){if(auto self=weak.lock()){
+        row.entry.TextChanged([weak=weak_from_this(),id](auto&&,auto&&){if(auto self=weak.lock();self&&!self->updating&&self->editingId==id){self->submittedName=false;self->nameAlignmentPending=true;}});
+        row.entry.KeyDown([weak=weak_from_this()](auto&&,KeyRoutedEventArgs const& e){if(!composingKey(e))if(auto self=weak.lock()){
             if(e.Key()==Windows::System::VirtualKey::Enter){e.Handled(true);self->finishName();}
             else if(e.Key()==Windows::System::VirtualKey::Escape){e.Handled(true);self->dispatch(O({{L"type",S(L"cancel")}}));}
         }});
@@ -285,7 +330,7 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
         row.title.DoubleTapped([weak=weak_from_this(),id](auto&&,DoubleTappedRoutedEventArgs const& e){if(auto self=weak.lock();self&&!self->rowDrag->SuppressClick()){
             auto found=self->rows.find(std::wstring(id));if(found!=self->rows.end()&&found->second.rename.IsEnabled()){e.Handled(true);self->dispatch(form(L"rename",S(id)));}
         }});
-        row.item.KeyDown([weak=weak_from_this(),id](auto&&,KeyRoutedEventArgs const& e){if(e.Key()==Windows::System::VirtualKey::F2)if(auto self=weak.lock()){
+        row.item.KeyDown([weak=weak_from_this(),id](auto&&,KeyRoutedEventArgs const& e){if(e.Key()==Windows::System::VirtualKey::F2&&!composingKey(e))if(auto self=weak.lock()){
             auto found=self->rows.find(std::wstring(id));if(found!=self->rows.end()&&found->second.rename.IsEnabled()){e.Handled(true);self->dispatch(form(L"rename",S(id)));}
         }});
         nameSlot.Children().Append(row.title);nameSlot.Children().Append(row.entry);text.Children().Append(nameSlot);text.Children().Append(row.subtitle);content.Children().Append(text);
@@ -345,7 +390,7 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
             auto found=rows.find(key);
             if(found==rows.end())found=rows.emplace(key,makeRow(id)).first;
             auto& row=found->second;auto label=str(data,L"title"),detail=str(data,L"subtitle");
-            row.title.Text(label);row.subtitle.Text(detail);row.subtitle.Visibility(detail.empty()?Visibility::Collapsed:Visibility::Visible);
+            if(row.title.Text()!=label)nameAlignmentPending=true;row.title.Text(label);row.subtitle.Text(detail);row.subtitle.Visibility(detail.empty()?Visibility::Collapsed:Visibility::Visible);
             auto pin=object(data,L"pin");
             uint32_t position=saved.Size();for(uint32_t i=0;i<saved.Size();++i)if(saved.GetStringAt(i)==id)position=i;
             row.pin.Visibility(configurable?Visibility::Visible:Visibility::Collapsed);
@@ -422,7 +467,7 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
         if(key!=promptKey){promptKey=key;nameDraft.reset();descriptionDraft.reset();validationName=L"";++validationSerial;validationQueued=true;nameValid=false;validationError=L"";choicesKey=L"";}
         title.Text(naming?str(details,L"title"):str(model,L"title"));
         auto theme=str(object(snapshot,L"state"),L"theme",L"dark");
-        dialog.RequestedTheme(theme==L"dark"?ElementTheme::Dark:ElementTheme::Light);
+        dialogSurface(copyData,dialog);
         body.Width(std::max(200.,std::min(412.,double(root.Size().Width)-80.)));
         heading.Width(body.Width());
         intro.Text(str(model,L"intro"));intro.Visibility(page==L"workspaces"||naming||intro.Text().empty()?Visibility::Collapsed:Visibility::Visible);
@@ -468,7 +513,7 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
         }
         auto message=validationError;if(message.empty())message=str(model,L"error");if(message.empty())message=str(model,L"switcher_error");error.Text(message);error.Visibility(message.empty()?Visibility::Collapsed:Visibility::Visible);
         error.Foreground(fill(color(theme==L"dark"?L"#ffb4ab":L"#b3261e")));
-        progress.Text(busy?recovery(L"saving"):recovery(L"loading"));progress.Visibility(busy||flag(model,L"loading")?Visibility::Visible:Visibility::Collapsed);
+        progress.Text(busy?recovery(L"saving"):recovery(L"loading"));progress.Visibility((busy&&!inlineName)||flag(model,L"loading")?Visibility::Visible:Visibility::Collapsed);
         retry.Visibility(flag(model,L"retry")?Visibility::Visible:Visibility::Collapsed);retry.IsEnabled(!busy);
         bool workspacePage=page==L"workspaces"&&!naming;
         auto palette=object(object(snapshot,L"state"),L"palette");
@@ -497,10 +542,10 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
             auto tag=str(object(catalog,L"bootstrap"),L"active_tag");if(!tag.empty())dialog.Language(tag);
             AutomationProperties::SetAutomationId(dialog,L"workspace-manager");
             dialog.KeyDown([weak=weak_from_this()](auto&&,KeyRoutedEventArgs const& e){
-                if(e.Key()==Windows::System::VirtualKey::Escape)if(auto self=weak.lock()){e.Handled(true);if(!self->rowDrag->Escape())self->cancel();}
+                if(e.Key()==Windows::System::VirtualKey::Escape&&!composingKey(e))if(auto self=weak.lock()){e.Handled(true);if(!self->rowDrag->Escape())self->cancel();}
             });
             dialog.PrimaryButtonClick([weak=weak_from_this()](auto&&,ContentDialogButtonClickEventArgs const& e){
-                e.Cancel(true);if(auto self=weak.lock()){
+                e.Cancel(true);if(auto self=weak.lock();self&&!focusedTextComposing(self->root)){
                     if(self->prompt()&&!self->inlineRename()){
                         auto selected=self->choices.SelectedItem().try_as<ComboBoxItem>();
                         auto option=selected?S(unbox_value<hstring>(selected.Tag())):Windows::Data::Json::JsonValue::CreateNullValue();
@@ -538,7 +583,7 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
     }
     void apply(J const& value,bool unavailable) {
         copyData->model=value;copyData->state=object(value,L"state");copyData->refreshPalette();
-        if(copyData->adoptLocalization(value)){
+        if(copyData->adoptLocalization(value)){nameAlignmentPending=true;
             catalog=copyData->catalog;localization=copyData->localization;
             thisWorkspace.Content(box_value(copy(L"header",L"this_workspace")));savedToolbars.Content(box_value(copy(L"header",L"saved_toolbars")));
             toolbarActions.Content(box_value(copy(L"header",L"toolbar_actions")));retry.Content(box_value(copy(L"header",L"retry")));

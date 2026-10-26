@@ -101,10 +101,10 @@ function Check-DockTargets {
 }
 function Check-Open([int]$Id){
     Wait-Until {
-        $column=Column $Id;if(!$column.open){return $false}
+        $snapshot=Model;$column=$snapshot.layout.collapsed|Where-Object id -eq $Id|Select-Object -First 1;if(!$column.open){return $false}
         $presentation=Presentation;if(!$presentation){return $false}
         foreach($group in $column.groups){
-            $expected=(Model).layout.groups|Where-Object id -eq $group.group|Select-Object -First 1
+            $expected=$snapshot.layout.groups|Where-Object id -eq $group.group|Select-Object -First 1
             $native=$presentation.groups|Where-Object id -eq $group.group|Select-Object -First 1
             if(!(Same-Bounds $native.bounds $expected.bounds)){return $false}
             foreach($icon in $group.icons){
@@ -112,9 +112,33 @@ function Check-Open([int]$Id){
                 if(!$button -or (($button.Current.ItemStatus -eq 'Selected') -ne ($icon.panel -eq $group.active))){return $false}
             }
         }
-        foreach($pair in $column.open.connections){
-            $native=$presentation.elements|Where-Object id -eq ('column-connection-'+$Id+'-'+$pair[0])|Select-Object -First 1
-            if(!(Same-Bounds $native.actual_bounds $pair[1].bounds)){return $false}
+        if(!$presentation.panel_revision -or $presentation.presented_panel_revision -ne $presentation.panel_revision){return $false}
+        $frame=$presentation.panel_bridge_frame
+        $bridges=@($frame.bridges|Where-Object {$_[0] -eq $Id})
+        if(!$bridges.Count){return $false}
+        $nativeColumn=$frame.columns|Where-Object column -eq $Id|Select-Object -First 1
+        if(!(Same-Bounds $nativeColumn.bounds $column.bounds)){return $false}
+        $members=@($column.groups.group)
+        foreach($bridge in $bridges){
+            $geometry=$bridge[2]
+            if($geometry.direction -ne $column.open.direction){return $false}
+            $source=$column.groups|Where-Object active -eq $bridge[1]|Select-Object -First 1
+            if(!$source){return $false}
+            $icon=$source.icons|Where-Object panel -eq $source.active|Select-Object -First 1
+            $left=[Math]::Max($icon.bounds.x,$column.content.x);$top=[Math]::Max($icon.bounds.y,$column.content.y)
+            $right=[Math]::Min($icon.bounds.x+$icon.bounds.width,$column.content.x+$column.content.width)
+            $bottom=[Math]::Min($icon.bounds.y+$icon.bounds.height,$column.content.y+$column.content.height)
+            if(!(Same-Bounds $geometry.anchor ([pscustomobject]@{x=$left;y=$top;width=$right-$left;height=$bottom-$top}))){return $false}
+            foreach($receiver in $geometry.receivers){
+                if($members -notcontains $receiver.group){return $false}
+                $expected=$snapshot.layout.groups|Where-Object id -eq $receiver.group|Select-Object -First 1
+                $native=$presentation.groups|Where-Object id -eq $receiver.group|Select-Object -First 1
+                if(!$native.gpu_background -or !(Same-Bounds $receiver.bounds $expected.bounds)){return $false}
+                if(@($receiver.radii).Count -ne 4 -or @($native.radii).Count -ne 4){return $false}
+                for($i=0;$i -lt 4;$i++){if($receiver.radii[$i] -ne $native.radii[$i]){return $false}}
+                $plane=if($geometry.direction -eq 'right'){$expected.bounds.x}else{$expected.bounds.x+$expected.bounds.width}
+                if([Math]::Abs($geometry.plane-$plane) -gt .6){return $false}
+            }
         }
         $true
     } "Open column $Id did not match native panels, selected tiles and connector geometry"

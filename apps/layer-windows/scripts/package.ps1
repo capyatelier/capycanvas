@@ -61,7 +61,7 @@ try {
     $signed=[bool]$SignArguments
     Assert-WindowsDistributionRuntime $payload $Architecture
     if($signed){
-        & signtool sign @SignArguments (Join-Path $payload 'CapyCanvas.exe') (Join-Path $payload 'layer_windows.dll')
+        & signtool sign @SignArguments (Join-Path $payload 'CapyCanvas.exe') (Join-Path $payload 'layer_windows.dll') (Join-Path $payload 'capy-photo-reader.exe')
         if($LASTEXITCODE -ne 0){throw 'Signing the application executables failed.'}
     }
     & (Join-Path $PSScriptRoot 'collect-package-notices.ps1') -Architecture $Architecture -Destination (Join-Path $payload 'Notices') -PackagesDirectory (Join-Path $repo 'artifacts/windows/packages') -VisualStudio $installation

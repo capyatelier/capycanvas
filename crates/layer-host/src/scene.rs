@@ -112,6 +112,67 @@ pub struct GlassLayout {
     arcs: Vec<[f32; 7]>,
     #[serde(default)]
     color_bubbles: Vec<[f32; 7]>,
+    #[serde(default)]
+    panels: Vec<GlassPanel>,
+    #[serde(default)]
+    panel_revision: u64,
+}
+
+#[derive(PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GlassPanelGroup {
+    group: u32,
+    tab_bar: [f32; 4],
+    active_tab: [f32; 4],
+    tab_clip: [f32; 4],
+    color: [f32; 4],
+    strip_color: [f32; 4],
+}
+
+#[derive(PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GlassPanel {
+    offset: [f32; 2],
+    sidebar: [f32; 4],
+    radii: [f32; 4],
+    color: [f32; 4],
+    bridges: Vec<layer_ui::PanelBridge>,
+    groups: Vec<GlassPanelGroup>,
+}
+
+impl GlassPanel {
+    fn surface(&self) -> Option<layer_render_wgpu::PanelSurface> {
+        let bridge=self.bridges.first()?;
+        let rect=|mut b:[f32;4]|{b[0]+=self.offset[0];b[1]+=self.offset[1];b};
+        Some(layer_render_wgpu::PanelSurface {
+            sidebar:rect(self.sidebar),sidebar_radii:self.radii,color:self.color,scale:1.,plane:bridge.plane+self.offset[0],
+            bridge_width:bridge.width(),direction:if bridge.direction==layer_ui::Edge::Right {1.} else {-1.},
+            anchors:self.bridges.iter().map(|b|rect([b.anchor.x,b.anchor.y,b.anchor.width,b.anchor.height])).collect(),
+            groups:bridge.receivers.iter().filter_map(|receiver| {
+                let native=self.groups.iter().find(|g|g.group==receiver.group)?;
+                let b=receiver.bounds;
+                Some(layer_render_wgpu::PanelSurfaceGroup {
+                    bounds:rect([b.x,b.y,b.width,b.height]),radii:receiver.radii,tab_bar:rect(native.tab_bar),
+                    active_tab:rect(native.active_tab),tab_clip:rect(native.tab_clip),color:native.color,strip_color:native.strip_color,
+                })
+            }).collect(),
+        })
+    }
+    fn valid(&self) -> bool {
+        let rect=|b:[f32;4]|b.into_iter().all(f32::is_finite) && b[2]>=0. && b[3]>=0.;
+        let radii=|r:[f32;4]|r.into_iter().all(|v|v.is_finite() && v>=0.);
+        let color=|c:[f32;4]|c.into_iter().all(|v|v.is_finite() && (0.0..=1.).contains(&v));
+        let Some(first)=self.bridges.first() else {return false;};
+        let mut groups=std::collections::HashSet::new();
+        self.offset.into_iter().all(f32::is_finite) && rect(self.sidebar) && radii(self.radii) && color(self.color)
+            && self.groups.iter().all(|g|groups.insert(g.group) && rect(g.tab_bar) && rect(g.active_tab) && rect(g.tab_clip) && color(g.color) && color(g.strip_color))
+            && !first.receivers.is_empty() && first.receivers.len()==self.groups.len()
+            && {let mut receivers=std::collections::HashSet::new();first.receivers.iter().all(|r|receivers.insert(r.group) && groups.contains(&r.group)
+                && rect([r.bounds.x,r.bounds.y,r.bounds.width,r.bounds.height]) && r.bounds.width>0. && r.bounds.height>0. && radii(r.radii))}
+            && self.bridges.iter().all(|b| b.plane.is_finite() && matches!(b.direction,layer_ui::Edge::Left|layer_ui::Edge::Right)
+                && b.direction==first.direction && b.plane==first.plane && b.receivers==first.receivers
+                && rect([b.anchor.x,b.anchor.y,b.anchor.width,b.anchor.height]) && b.anchor.width>0. && b.anchor.height>0. && b.width()>0.)
+    }
 }
 
 #[derive(PartialEq, Deserialize)]
@@ -127,6 +188,7 @@ pub struct Glass {
     layout: GlassLayout,
     scaled: Vec<BackdropRegion>,
     scale: f32,
+    panels: Vec<layer_render_wgpu::PanelSurface>,
 }
 impl Glass {
     pub fn set(&mut self, layout: GlassLayout) -> Result<bool, String> {
@@ -151,7 +213,9 @@ impl Glass {
             .chain(&c.radii)
             .all(|v| v.is_finite())
         });
-        if layout.regions.len() + layout.connections.len() + layout.arcs.len() + layout.color_bubbles.len() > MAX_GLASS || !regions || !connections || !arcs || !color_bubbles {
+        let panels=layout.panels.iter().all(GlassPanel::valid);
+        let panel_slots:usize=layout.panels.iter().map(|p|1+p.groups.len()+p.bridges.len()).sum();
+        if layout.regions.len() + layout.connections.len() + layout.arcs.len() + layout.color_bubbles.len() + panel_slots > MAX_GLASS || !regions || !connections || !arcs || !color_bubbles || !panels {
             return Err("Invalid glass geometry".into());
         }
         let changed = self.layout != layout;
@@ -191,14 +255,18 @@ impl Glass {
             let color_bubbles = self.layout.color_bubbles.iter().map(|c| BackdropRegion::color_bubble(
                 [c[0] * scale, c[1] * scale], c[2] * scale, c[3] * scale, c[4] * scale, c[5],
             ).with_strength(c[6]));
-            self.scaled = boxes.chain(connections).chain(arcs).chain(color_bubbles).collect();
+            self.panels=self.layout.panels.iter().filter_map(GlassPanel::surface).map(|p|p.scaled(scale)).collect();
+            let panels=self.panels.iter().map(|p|BackdropRegion::rounded(p.bounds(),[0.;4],BackdropRegion::SQUIRCLE).with_strength(0.));
+            self.scaled = boxes.chain(connections).chain(arcs).chain(color_bubbles).chain(panels).collect();
         }
         &self.scaled
     }
 
     pub fn count(&self) -> usize {
-        self.layout.regions.len() + self.layout.connections.len() + self.layout.arcs.len() + self.layout.color_bubbles.len()
+        self.layout.regions.len() + self.layout.connections.len() + self.layout.arcs.len() + self.layout.color_bubbles.len() + self.layout.panels.len()
     }
+    pub fn panels(&mut self,scale:f32) -> &[layer_render_wgpu::PanelSurface] {self.regions(scale);&self.panels}
+    pub fn panel_revision(&self) -> u64 {self.layout.panel_revision}
 }
 
 pub struct SceneDisplay {
@@ -307,6 +375,48 @@ mod tests {
 
     fn glass(value: serde_json::Value) -> Result<GlassLayout, serde_json::Error> {
         serde_json::from_value(value)
+    }
+
+    #[test]
+    fn joined_panel_glass_keeps_receiver_corners_and_scales_allocated_geometry_once() {
+        let packet=serde_json::json!({"regions":[],"connections":[],"panel_revision":7,"panels":[{
+            "offset":[-2.,3.],"sidebar":[10.,20.,36.,200.],"radii":[18.,0.,6.,12.],"color":[0.2,0.3,0.4,0.8],
+            "bridges":[{"anchor":{"x":10.,"y":20.,"width":36.,"height":36.},"plane":52.,"direction":"right",
+                "receivers":[{"group":5,"bounds":{"x":52.,"y":20.,"width":200.,"height":160.},"radii":[18.,12.,6.,0.]}]}],
+            "groups":[{"group":5,"tab_bar":[52.,20.,200.,36.],"active_tab":[58.,20.,80.,36.],
+                "tab_clip":[58.,20.,188.,36.],"color":[0.2,0.3,0.4,0.8],"strip_color":[0.1,0.2,0.3,0.8]}]
+        }]});
+        let mut layer=Glass::default();assert!(layer.set(glass(packet.clone()).unwrap()).unwrap());
+        assert_eq!(layer.panel_revision(),7);
+        let expected=layer.panels(1.5).to_vec();let surface=&expected[0];
+        assert_eq!(surface.sidebar,[12.,34.5,54.,300.]);
+        assert_eq!(surface.sidebar_radii,[27.,0.,9.,18.]);
+        assert_eq!(surface.plane,75.);assert_eq!(surface.bridge_width,9.);assert_eq!(surface.direction,1.);
+        assert_eq!(surface.anchors,vec![[12.,34.5,54.,54.]]);
+        assert_eq!(surface.groups[0].bounds,[75.,34.5,300.,240.]);
+        assert_eq!(surface.groups[0].radii,[27.,18.,9.,0.]);
+        assert_eq!(surface.groups[0].tab_bar,[75.,34.5,300.,54.]);
+        assert_eq!(surface.groups[0].active_tab,[84.,34.5,120.,54.]);
+        assert_eq!(surface.groups[0].tab_clip,[84.,34.5,282.,54.]);
+        assert_eq!(surface.color,[0.2,0.3,0.4,0.8]);
+        assert_eq!(layer.panels(1.5),expected);
+        assert!(!layer.set(glass(packet.clone()).unwrap()).unwrap());
+        for case in 0..6 {
+            let mut invalid=packet.clone();
+            match case {
+                0=>invalid["panels"][0]["groups"][0]["group"]=999.into(),
+                1=>invalid["panels"][0]["bridges"][0]["receivers"][0]["radii"][2]=(-1).into(),
+                2=>invalid["panels"][0]["groups"][0]["tab_clip"][2]=(-1).into(),
+                3=>invalid["panels"][0]["bridges"][0]["direction"]="top".into(),
+                4=>invalid["panels"][0]["groups"]=serde_json::json!([invalid["panels"][0]["groups"][0].clone(),invalid["panels"][0]["groups"][0].clone()]),
+                _=>invalid["panels"]=serde_json::Value::Array(vec![packet["panels"][0].clone();MAX_GLASS]),
+            }
+            assert!(layer.set(glass(invalid).unwrap()).is_err(),"case {case}");
+            assert_eq!(layer.panels(1.5),expected,"invalid panel frame replaced live geometry");
+            assert_eq!(layer.panel_revision(),7);
+        }
+        layer.set(glass(serde_json::json!({"regions":[],"connections":[],"panel_revision":8})).unwrap()).unwrap();
+        assert!(layer.panels(1.5).is_empty());assert_eq!(layer.panel_revision(),8);
     }
 
     #[test]

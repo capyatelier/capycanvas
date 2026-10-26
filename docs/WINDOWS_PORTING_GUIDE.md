@@ -65,6 +65,9 @@ including older gaps; a port does not require an unrestricted historical audit.
   toolbar tiles, gaps and icons from the `style` toolbar query, and dividers with
   `dividerLine`. A shared metric change then reaches Windows without a port;
   window chrome keeps its own sizes.
+- Keep custom-color field spacing inside its animated page. Verify closed,
+  open and closed-again Preferences allocations in both themes: the collapsed
+  field takes no space, and Accent's 12-unit gap clips with the field.
 - Enable platform gates with their native presentation and shared platform tests.
   Do not hide a feature to claim parity. Follow the
   [drag convention](ui/drag-and-reorder.md) for mouse, touch and pen, including

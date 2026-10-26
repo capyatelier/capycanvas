@@ -211,7 +211,7 @@ struct PalettesView:std::enable_shared_from_this<PalettesView>{
     fire_and_forget nameDialog(hstring title,hstring value,std::function<J(hstring)> action){
         auto lifetime=shared_from_this();
         ContentDialog dialog;dialog.XamlRoot(root.XamlRoot());dialog.Title(box_value(title));dialog.PrimaryButtonText(data->common(L"save"));dialog.CloseButtonText(data->common(L"cancel"));
-        dialog.DefaultButton(ContentDialogButton::Primary);dialog.RequestedTheme(data->theme()==L"light"?ElementTheme::Light:ElementTheme::Dark);
+        dialog.DefaultButton(ContentDialogButton::Primary);dialogSurface(data,dialog);
         StackPanel content;content.Spacing(8);TextBox input;input.Header(box_value(data->common(L"name")));input.MaxLength(64);input.Text(value);AutomationProperties::SetAutomationId(input,L"palette-name-input");
         TextBlock error;error.Foreground(SolidColorBrush(winrt::Windows::UI::Color{255,0xee,0x55,0x55}));error.TextWrapping(TextWrapping::Wrap);
         content.Children().Append(input);content.Children().Append(error);dialog.Content(content);
@@ -240,7 +240,7 @@ struct PalettesView:std::enable_shared_from_this<PalettesView>{
         auto lifetime=shared_from_this();auto title=paletteName(id);if(title.empty())co_return;
         ContentDialog dialog;dialog.XamlRoot(root.XamlRoot());dialog.Title(box_value(data->caption(L"palettes",L"remove_title")));
         dialog.Content(box_value(data->caption(O({{L"type",S(L"remove_palette")},{L"name",S(title)}}))));dialog.PrimaryButtonText(data->common(L"remove"));dialog.CloseButtonText(data->common(L"cancel"));
-        dialog.DefaultButton(ContentDialogButton::Close);dialog.RequestedTheme(data->theme()==L"light"?ElementTheme::Light:ElementTheme::Dark);
+        dialog.DefaultButton(ContentDialogButton::Close);dialogSurface(data,dialog);
         data->popup(true);ContentDialogResult result=ContentDialogResult::None;
         try{result=co_await dialog.ShowAsync();}catch(hresult_error const&){}
         data->popup(false);

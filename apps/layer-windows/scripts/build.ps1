@@ -3,6 +3,7 @@ param(
     [ValidateSet('native','x64','arm64')][string]$Architecture = 'native',
     [string]$PackagesDirectory,
     [string]$OutputDirectory,
+    [string]$IntermediateDirectory,
     [switch]$SkipRust,
     [ValidateSet('None','Number','Color','Bitmap','Popup')][string]$ControlFixture = 'None',
     [switch]$SkipRestore,
@@ -17,7 +18,8 @@ $build = Resolve-WindowsArchitecture $Architecture
 if (!$PackagesDirectory) { $PackagesDirectory = Join-Path $repo 'artifacts/windows/packages' }
 if (!$OutputDirectory) { $OutputDirectory = Get-WindowsBuildDirectory $repo $build $Configuration }
 $OutputDirectory = [IO.Path]::GetFullPath($OutputDirectory)
-$intermediateDirectory = $OutputDirectory.TrimEnd('\','/') + '.obj'
+if (!$IntermediateDirectory) { $IntermediateDirectory = $OutputDirectory.TrimEnd('\','/') + '.obj' }
+$IntermediateDirectory = [IO.Path]::GetFullPath($IntermediateDirectory)
 $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
 if (!(Test-Path -LiteralPath $vswhere)) { throw 'Install Visual Studio Build Tools with Desktop development with C++ and Windows SDK 10.0.26100.0.' }
 $installation = & $vswhere -latest -products '*' -requires $build.component -format json | ConvertFrom-Json

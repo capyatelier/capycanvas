@@ -1,5 +1,5 @@
 param([Parameter(Mandatory)][string]$Executable,
-    [ValidateSet('dark-mouse','dark-touch','dark-pen','light-mouse','light-touch','light-pen')][string]$Variant='dark-mouse',[switch]$RapidOnly,[switch]$HistoryOnly,[switch]$HistoryLightOnly,[switch]$NativeControlsOnly,[switch]$ScrollEpochOnly,[switch]$NumericOnly,[switch]$CurveOnly,[switch]$MenuOnly,[switch]$ObserverOnly,[switch]$VisualOnly,[switch]$BeadTransitionsOnly,[switch]$HdrOnly,[switch]$HdrRetirementOnly,[ValidateSet('F16','F32')][string]$HdrDepth='F16')
+    [ValidateSet('dark-mouse','dark-touch','dark-pen','light-mouse','light-touch','light-pen')][string]$Variant='dark-mouse',[switch]$RapidOnly,[switch]$SlidersOnly,[switch]$HistoryOnly,[switch]$HistoryLightOnly,[switch]$NativeControlsOnly,[switch]$ScrollEpochOnly,[switch]$NumericOnly,[switch]$CurveOnly,[switch]$MenuOnly,[switch]$ObserverOnly,[switch]$VisualOnly,[switch]$BeadTransitionsOnly,[switch]$HdrOnly,[switch]$HdrRetirementOnly,[ValidateSet('F16','F32')][string]$HdrDepth='F16')
 $ErrorActionPreference='Stop'
 if($HdrRetirementOnly){$HdrOnly=$true}
 if($NumericOnly -and !$PSBoundParameters.ContainsKey('Variant')){
@@ -213,7 +213,7 @@ function Menu-Item([string]$Name){Control $Name -Name -Type ([System.Windows.Aut
 function Hold-Bubble([long]$Id){$p=Center $Id;[CapyRowPointer]::Down($Device,$p.x,$p.y);Wait-Until {$null -ne (Find 'Put back' -Name -Type ([System.Windows.Automation.ControlType]::MenuItem))} 'Hold did not open bubble options';[CapyRowPointer]::Up()}
 function Header-Entries {@((Model).header.model.zones|ForEach-Object {$_})}
 function Header-Source([string]$Kind,[string]$Value){
-    @(Header-Entries|Where-Object {$_.item.kind -eq 'tool' -and $_.item.control.kind -eq $Kind -and (!$Value -or $_.item.control.command -eq $Value -or $_.item.control.panel -eq $Value)}|Where-Object {Find ('header-item-'+$_.id) -Visible})[0]
+    @(Header-Entries|Where-Object {$_.item.kind -eq 'tool' -and $_.item.control.kind -eq $Kind -and (!$Value -or $_.item.control.command -eq $Value -or $_.item.control.panel -eq $Value -or $_.item.control.slot -eq $Value -or [string]$_.item.control.id -eq $Value)}|Where-Object {Find ('header-item-'+$_.id) -Visible})[0]
 }
 function Ensure-Sources{
     & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Window'
@@ -221,10 +221,12 @@ function Ensure-Sources{
     $from=At 'header-component-tools';$p=(Control 'title-bar').Current.ItemStatus|ConvertFrom-Json;$z=$p.geometry.zones[1]
     $to=Screen ($z.x+$z.width*.5) ($z.y+$z.height*.5)
     Drag $from $to;Wait-Until {(Model).picker} 'Native tool component did not open picker'
-    foreach($wanted in @(@('command','drawing_brush'),@('color',''),@('color_picker',''),@('command','undo'),@('panel','layers'),@('command','next_drawing'))){
+    $wantedSources=@(@('command','drawing_brush'),@('color',''),@('color_picker',''),@('command','undo'),@('panel','layers'),@('command','next_drawing'))
+    if($SlidersOnly){$wantedSources+=@(@('brush','25'),@('brush','51'),@('brush','55'),@('brush','49'),@('tool_slot','drawing'),@('command','lasso'))}
+    foreach($wanted in $wantedSources){
         (Control 'tool-picker-search').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('')
         Wait-Until {(Model).picker.query -eq ''} 'Picker did not clear search'
-        $spec=@((Model).picker.choices|Where-Object {$_.control.kind -eq $wanted[0] -and (!$wanted[1] -or $_.control.command -eq $wanted[1] -or $_.control.panel -eq $wanted[1])})[0]
+        $spec=@((Model).picker.choices|Where-Object {$_.control.kind -eq $wanted[0] -and (!$wanted[1] -or $_.control.command -eq $wanted[1] -or $_.control.panel -eq $wanted[1] -or $_.control.slot -eq $wanted[1] -or [string]$_.control.id -eq $wanted[1])})[0]
         if(!$spec){throw "Shared picker lacks $($wanted -join '/')"}
         $control=$spec.control;$value=if($control.slot){$control.slot}elseif($control.command){$control.command}elseif($control.panel){$control.panel}elseif($control.id){$control.id}elseif($control.tenths){$control.tenths}else{'0'}
         $id='picker-choice-'+$control.kind+'-'+$value
@@ -249,6 +251,282 @@ function Take([string]$Kind,[string]$Value,[double]$X,[double]$Y){
     $settle=@{last='';same=0}
     Wait-Until {$p=Center $id;$key="$($p.x),$($p.y)";if($key -eq $settle.last){$settle.same++}else{$settle.last=$key;$settle.same=0};$settle.same -ge 5} 'Released bubble did not settle'
     return [long]$id
+}
+function Slider-Layout{(Model).state.workspace.layout.bubbles|ConvertTo-Json -Depth 70 -Compress}
+function Slider-Menu([long]$Id,[bool]$Expected){
+    $point=Center $Id;[CapyRowPointer]::RightClick($point.x,$point.y)
+    $row=Control 'menu-show-sliders' -Arranged -Type ([System.Windows.Automation.ControlType]::MenuItem)
+    $toggle=$row.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)
+    if(!$row.Current.IsEnabled -or $row.Current.Name -ne 'Show Sliders' -or ($toggle.Current.ToggleState -eq [System.Windows.Automation.ToggleState]::On) -ne $Expected){throw 'Native global slider menu differs from the workspace setting'}
+    $toggle
+}
+function Slider-Menus([long[]]$Ids,[bool]$Expected){foreach($id in $Ids){$null=Slider-Menu $id $Expected;Escape;Wait-Until {!(Find 'menu-show-sliders' -Visible)} 'Slider context did not dismiss'}}
+function Slider-Toggle([long]$Id,[bool]$Expected){
+    $toggle=Slider-Menu $Id (!$Expected);$toggle.Toggle()
+    Wait-Until {(Model).state.workspace.layout.bubbles.show_sliders -eq $Expected} 'Global slider preference did not publish'
+    $row=Control 'menu-show-sliders' -Arranged -Type ([System.Windows.Automation.ControlType]::MenuItem)
+    if(($row.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Current.ToggleState -eq [System.Windows.Automation.ToggleState]::On) -ne $Expected -or !(Find 'Put back' -Name -Visible)){throw 'Global slider toggle did not keep and refresh its native menu'}
+    Escape;Wait-Until {!(Find 'menu-show-sliders' -Visible)} 'Retained slider menu did not dismiss'
+}
+function Slider-Medium([string]$Group,[double]$X,[double]$Y){
+    & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Window'
+    $item=Control 'Brush sets' -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)
+    $toggle=$item.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)
+    if($toggle.Current.ToggleState -eq [System.Windows.Automation.ToggleState]::Off){$toggle.Toggle()}else{Escape}
+    $tileId='brush-set-'+$Group;$tile=Control $tileId;$scroll=Control 'panel-scroll-brush_sets';$pattern=Scroll-Pattern $scroll
+    for($step=0;$step -lt 40;$step++){
+        $bounds=$tile.Current.BoundingRectangle;$clip=$scroll.Current.BoundingRectangle
+        if(!$tile.Current.IsOffscreen -and !$bounds.IsEmpty -and $clip.Contains($bounds)){break}
+        $before=$pattern.Current.VerticalScrollPercent
+        $amount=if($bounds.Bottom -le $clip.Top){[System.Windows.Automation.ScrollAmount]::SmallDecrement}else{[System.Windows.Automation.ScrollAmount]::SmallIncrement}
+        $pattern.Scroll([System.Windows.Automation.ScrollAmount]::NoAmount,$amount)
+        Wait-Until {[Math]::Abs($pattern.Current.VerticalScrollPercent-$before) -gt .01} "$Group source did not scroll into view"
+    }
+    if(!$scroll.Current.BoundingRectangle.Contains($tile.Current.BoundingRectangle)){throw "$Group source stayed outside its native viewport"}
+    $ids=@(Packets|ForEach-Object {$_.view.id});$from=At $tileId;Drag $from (Screen $X $Y)
+    Wait-Until {@(Packets|Where-Object {$_.view.id -notin $ids}).Count -eq 1} "Native $Group source did not tear out"
+    $id=@(Packets|Where-Object {$_.view.id -notin $ids})[0].view.id
+    Wait-Until {$null -ne (Find "tool-bubble-$id" -Visible)} "$Group bubble has no arranged native face"
+    if((View $id).source.kind -ne 'medium' -or (View $id).source.group -ne $Group){throw "Native $Group tear-out used a different source"}
+    Settle-Bubbles;[long]$id
+}
+function Slider-Hit([long]$Id,[double[]]$Point){
+    $request=@{type='hit';view=(View $Id);point=$Point}|ConvertTo-Json -Depth 80 -Compress
+    [CapyBubbleFixtureNative]::Query((Join-Path $directory 'layer_windows.dll'),$request)|ConvertFrom-Json
+}
+function Short-FanOpen([long]$Id){
+    if(!(View $Id).selected){Tap (Center $Id);Wait-Until {(View $Id).selected -and @((View $Id).rings).Count -gt 0} 'Medium first selection did not open its halo'}
+    if(!@((View $Id).chooser).Count){Tap (Center $Id)}
+    Wait-Until {@((View $Id).chooser).Count -gt 0} 'Short medium did not open its brush fan'
+}
+function Short-FanDocumentKey{
+    $m=Model
+    [ordered]@{file=$m.state.document_file;checkpoint=@($m.windows_tabs.session_stamps|Where-Object {$_.id -eq $m.windows_tabs.selected})[0].stamp.checkpoint}|ConvertTo-Json -Depth 25 -Compress
+}
+function Invoke-ShortFanChecks{
+    $document=Short-FanDocumentKey;$evidence=[Collections.Generic.List[object]]::new()
+    foreach($spec in @(@{group='watercolor';presets=@(20,21)},@{group='pencil';presets=@(2,25,26)})){
+        $area=(Model).layout.work_area;$id=Slider-Medium $spec.group ($area.x+$area.width*.5) ($area.y+$area.height*.5)
+        foreach($pose in @(@{name='center';x=.5;y=.5},@{name='corner';x=.96;y=.96})){
+            $area=(Model).layout.work_area;Move-BubbleVisual $id ($area.x+$area.width*$pose.x) ($area.y+$area.height*$pose.y)
+            foreach($preset in $spec.presets){
+                Short-FanOpen $id;$view=View $id;$items=@($view.chooser)
+                if(($items.preview -join ',') -ne ($spec.presets -join ',') -or @($items|Where-Object {$_.kind -ne 'brush' -or !$_.enabled}).Count){throw 'Short fan differs from its exact available preset identities'}
+                $null=Assert-BubbleVisualGeometry $id ('short-fan-'+$spec.group+'-'+$pose.name)
+                $index=0;while($items[$index].preview -ne $preset){$index++};$item=$items[$index];$hit=Slider-Hit $id $item.center
+                if(!$hit -or !($hit.PSObject.Properties.Name -contains 'item') -or $hit.item -ne $index){throw 'Visible short-fan preset point hits a different shared target'}
+                $point=Relative $id $item.center;$input=Input-Trace $point.x $point.y
+                Tap $point
+                Wait-Until {(Model).state.brush.preset -eq $preset -and !@((View $id).chooser).Count -and @((View $id).rings).Count -gt 0} 'Native short-fan preset did not select itself and immediately open its halo'
+                if((Short-FanDocumentKey) -cne $document){throw 'Short-fan preset contact changed the document'}
+                $evidence.Add(@{group=$spec.group;pose=$pose.name;preset=$preset;index=$index;point=$point;hit=$hit;input=$input;view=$view;selected=(View $id)})
+            }
+            Short-FanOpen $id;$view=View $id;$face=@(([Math]::Sign($view.chooser[0].center[0])*24.),12.)
+            if((Slider-Hit $id $face) -ne 'face'){throw 'Short fan overlaps the material face contact'}
+            $preset=(Model).state.brush.preset;Settled-Capture ('short-fan-'+$spec.group+'-'+$pose.name)
+            Tap (Relative $id $face)
+            Wait-Until {!@((View $id).chooser).Count -and !@((View $id).rings).Count} 'Native material-face contact did not dismiss the fan'
+            if((Model).state.brush.preset -ne $preset -or (Short-FanDocumentKey) -cne $document){throw 'Material-face contact selected an overlapping pill or changed the document'}
+        }
+        $point=Center $id;[CapyRowPointer]::RightClick($point.x,$point.y);(Menu-Item 'Put back').GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+        Wait-Until {$null -eq (Packet $id)} 'Short-fan fixture did not put its medium back'
+    }
+    [IO.File]::WriteAllText((Join-Path $run 'short-fans.json'),($evidence.ToArray()|ConvertTo-Json -Depth 80),[Text.UTF8Encoding]::new($false))
+    $checks.Add('Watercolor-two-and-Pencil-three-native-preset-hit-face-dismissal-and-immediate-halo')
+}
+function Restart-BubbleReview([string]$LogName='restart-stderr.log'){
+    & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Close -DiscardUnsaved|Out-Null
+    if((Get-Item -LiteralPath $stderr).Length){throw 'Initial slider fixture stderr requires inspection'}
+    [CapyRowPointer]::Dispose();$script:stderr=Join-Path $run $LogName
+    $script:review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError $stderr
+    $null=$review.Handle;$owned=@{window=$null}
+    Wait-Until {$owned.window=Owned-DrawingWindow $review;$owned.window -and (Model).brush_ready -and (Model).canvas_ready -and (Model).windows_workspace.ready -and !(Model).windows_workspace.busy} 'Owned slider persistence restart did not become ready' 60
+    $script:root=$owned.window.Root;$script:drawingWindow=$owned.window.Handle
+    [CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null;[CapyRowPointer]::SetForegroundWindow($drawingWindow)|Out-Null;[CapyRowPointer]::Initialize([uint32]$review.Id)
+    [CapyWindowApi]::ShowWindow($drawingWindow,3)|Out-Null
+    Wait-Until {(Model).layout.viewport[0] -gt 1000} 'Restarted slider fixture did not maximize'
+}
+function Invoke-SliderChecks{
+    if((Model).state.workspace.layout.bubbles.show_sliders -ne $true){throw 'Fresh workspace slider preference did not default to true'}
+    Invoke-ShortFanChecks
+    $area=(Model).layout.work_area
+    $medium=Slider-Medium 'pastel' ($area.x+$area.width*.25) ($area.y+$area.height*.7)
+    $area=(Model).layout.work_area
+    $brush=Take 'brush' '25' ($area.x+$area.width*.25) ($area.y+$area.height*.3)
+    $group=Take 'tool_slot' 'drawing' ($area.x+$area.width*.7) ($area.y+$area.height*.3)
+    $controls=Take 'color_picker' '' ($area.x+$area.width*.7) ($area.y+$area.height*.7)
+    $ids=@($brush,$group,$medium,$controls)
+    if((View $brush).source.control.id -ne 25 -or (View $group).source.control.slot -ne 'drawing' -or (View $controls).source.control.kind -ne 'color_picker'){throw 'Native slider fixture did not retain its four distinct sources'}
+    Tap (Center $brush);Wait-Until {(View $brush).selected -and @((View $brush).rings).Count -gt 0} 'Individual brush did not select with sliders'
+    Slider-Menus $ids $true;Slider-Toggle $group $false;Slider-Menus $ids $false
+    foreach($id in $ids){if(@((View $id).rings).Count -or (View $id).stamp){throw 'Global slider off retained a halo or stamp'};$null=Assert-BubbleVisualGeometry $id 'global-sliders-off'}
+    if((View $controls).diameter -ne 56){throw 'Hidden controls did not return to ordinary face extent'}
+    $added=Take 'command' 'drawing_brush' ($area.x+$area.width*.5) ($area.y+$area.height*.5)
+    if(@((View $added).rings).Count){throw 'A new real tear-out ignored the global off preference'}
+    $point=Center $added;[CapyRowPointer]::RightClick($point.x,$point.y);(Menu-Item 'Put back').GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+    Wait-Until {$null -eq (Packet $added)} 'New slider fixture bubble did not put back'
+    foreach($swap in 1..2){$null=Slider-Menu $controls $false;(Menu-Item 'Swap sliders').GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle();Wait-Until {(View $controls).options.swap -eq ($swap -eq 1)} 'Independent native swap option did not publish';if((Model).state.workspace.layout.bubbles.show_sliders -ne $false){throw 'Per-source swap reset the global slider preference'};Escape}
+    $source=Header-Source 'command' 'lasso';Tap (At ('header-item-'+$source.id));Wait-Until {(Model).state.layer_tools.tool -eq 'lasso'} 'Native Lasso header source did not activate'
+    Tap (Center $brush);Wait-Until {(View $brush).selected} 'Hidden-slider contact did not select its brush'
+    if(@((View $brush).rings).Count -or (View $medium).selected){throw 'Hidden-slider selection reopened sliders or selected the other menu source'}
+    $disabled=Slider-Layout;Slider-Toggle $medium $true;Slider-Menus $ids $true
+    Wait-Until {@((View $brush).rings).Count -gt 0 -and @((View $controls).rings).Count -eq 2} 'Global enable from another tool did not reopen the selected brush and controls'
+    if((View $controls).diameter -ne 134){throw 'Global enable did not restore the controls extent'}
+    $null=Assert-BubbleVisualGeometry $brush 'global-sliders-on';$null=Assert-BubbleVisualGeometry $controls 'global-sliders-on';Controls $brush
+    $enabled=Slider-Layout
+    & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Window';Invoke 'undo_workspace'
+    Wait-Until {(Slider-Layout) -ceq $disabled -and @((View $controls).rings).Count -eq 0} 'Workspace Undo did not restore the exact disabled layout'
+    & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Window';Invoke 'redo_workspace'
+    Wait-Until {(Slider-Layout) -ceq $enabled -and @((View $controls).rings).Count -eq 2} 'Workspace Redo did not restore the exact enabled layout'
+    Slider-Toggle $controls $false
+    & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Window';Invoke 'put_back_bubbles'
+    Wait-Until {$b=(Model).state.workspace.layout.bubbles;!@(Packets).Count -and !$b.show_sliders -and !@($b.bubbles).Count -and !@($b.rings).Count -and !@($b.kept).Count -and !(Model).windows_workspace.dirty -and !(Model).windows_workspace.saving} 'Empty bubble workspace did not autosave its global off preference'
+    $empty=Slider-Layout;Check-Artwork 'global-slider-and-workspace-history' $revision
+    Settled-Capture 'global-sliders-empty'
+    Restart-BubbleReview
+    if((Slider-Layout) -cne $empty){throw 'Native SQLite restart lost the serialized empty-layout global preference'}
+    $script:w=(Control 'drawing-canvas' -Arranged).Current.BoundingRectangle;$area=(Model).layout.work_area
+    $restored=Take 'command' 'drawing_brush' ($area.x+$area.width*.5) ($area.y+$area.height*.5)
+    if((Model).state.workspace.layout.bubbles.show_sliders -ne $false -or @((View $restored).rings).Count){throw 'Restored workspace did not keep new tear-out sliders hidden'}
+    $null=Slider-Menu $restored $false;Escape;$null=Assert-BubbleVisualGeometry $restored 'global-sliders-restored'
+    Settled-Capture 'global-sliders-restored';Check-Artwork 'restored-slider-preference' $revision
+    $checks.Add('global-sliders-four-native-sources-history-empty-SQLite-restart')
+    [IO.File]::WriteAllText((Join-Path $run 'global-sliders.json'),(@{disabled=$disabled;enabled=$enabled;empty=$empty;restored=(Slider-Layout);sources=$ids}|ConvertTo-Json -Depth 80),[Text.UTF8Encoding]::new($false))
+}
+
+function Assert-BlenderCellSettings($Settings,[string]$CellId,[string[]]$Primary){
+    $all=@($Settings);$cell=@($all|Where-Object id -eq $CellId);$spread=@($all|Where-Object id -eq 'spread')
+    if($cell.Count -ne 1 -or $spread.Count -ne 1){throw 'Blender did not publish its unique Cell Size and Spread controls'}
+    $cell=$cell[0];$spread=$spread[0];$n=$cell.numeric
+    if([array]::IndexOf(@($all.id),$cell.id) -ne [array]::IndexOf(@($all.id),$spread.id)+1 -or $cell.group_id -or $spread.group_id -or !$cell.label -or !$spread.label){throw 'Blender setting labels, order or ungrouped primary placement differ from the shared contract'}
+    $primarySettings=@($all|Where-Object {!$_.group_id -and $_.id -notin @('size','flow','strength','smoothing_strength')})
+    if(($primarySettings.id -join ',') -cne ($Primary -join ',') -or @($primarySettings|Where-Object {!$_.label}).Count){throw 'Blender primary setting order or labels differ from its profile'}
+    if($n.kind -ne 'slider' -or $n.mapping -ne 'log' -or $n.min -ne 1 -or $n.max -ne 50 -or $n.resolution -ne 1 -or $n.step -ne 1 -or $n.digits -ne 0 -or $n.unit -ne 'px' -or $spread.numeric.mapping -ne 'log'){throw 'Blender Cell Size or Spread lost its whole-pixel logarithmic schema'}
+    if($Primary -contains 'grit'){
+        $grit=@($primarySettings|Where-Object id -eq 'grit')[0].numeric
+        if($grit.kind -ne 'slider' -or $grit.mapping -ne 'linear' -or $grit.min -ne 0 -or $grit.max -ne 1 -or $grit.unit -ne '%'){throw 'Scatter Grit lost its native percentage slider schema'}
+    }
+    foreach($value in @($n.log_offset,$spread.numeric.log_offset)){if($null -eq $value -or [double]::IsNaN($value) -or [double]::IsInfinity($value)){throw 'Blender logarithmic metadata is not finite'}}
+}
+function Blender-Select([int]$Preset){
+    $source=Header-Source 'brush' ([string]$Preset);if(!$source){throw 'Blender fixture lost its authored native brush source'}
+    Tap (At ('header-item-'+$source.id))
+    Wait-Until {(Model).state.brush.preset -eq $Preset -and (Model).brush_ready} 'Native brush source did not prepare its requested preset'
+}
+function Blender-Field([string]$Id){
+    $field=Control ('tool-setting-'+$Id);$field.SetFocus()
+    if($field.Current.IsOffscreen){Scroll-Position $field 100}
+    Control ('tool-setting-'+$Id) -Arranged
+}
+function Blender-Value([string]$Id,[string]$Value,[Nullable[double]]$Expected=$null){
+    if($null -eq $Expected){$Expected=[double]$Value}
+    $field=Blender-Field $Id;$field.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($Value)
+    [CapyRowPointer]::Key([uint32]$review.Id,13);(Control 'drawing-canvas').SetFocus()
+    Wait-Until {@((Model).state.tool_settings|Where-Object id -eq $Id)[0].value -eq [double]$Expected -and (Model).brush_ready} 'Native Blender numeric field did not commit and prepare its exact value'
+}
+function Blender-SavedState{
+    $m=Model;$stamp=@($m.windows_tabs.session_stamps|Where-Object id -eq $m.windows_tabs.selected)
+    if($stamp.Count -ne 1 -or $null -eq $stamp[0].stamp.checkpoint){throw 'Blender persistence has no unique current document checkpoint'}
+    $c=$m.state.camera;$box=(Control 'drawing-canvas' -Arranged).Current.BoundingRectangle
+    [ordered]@{location=$m.state.document_file.location.uri;modified=$m.state.document_file.modified;checkpoint=$stamp[0].stamp.checkpoint;preset=$m.state.brush.preset;
+        layers=@(foreach($layer in $m.state.layers){[ordered]@{id=$layer.id;paint_revision=$layer.paint_revision;mask_revision=$layer.mask_revision}});
+        settings=@(foreach($setting in $m.state.tool_settings){[ordered]@{id=$setting.id;value=$setting.value}});
+        history=@(foreach($command in $m.state.commands){if($command.id -in @('undo','redo')){[ordered]@{id=$command.id;enabled=$command.enabled}}});
+        camera=[ordered]@{viewport=$c.viewport;work_area=$c.work_area;translation=$c.translation;zoom=$c.zoom;rotation=$c.rotation;flipped=$c.flipped};native_canvas=@($box.X,$box.Y,$box.Width,$box.Height)}|ConvertTo-Json -Depth 30 -Compress
+}
+function Invoke-BlenderCellChecks([int]$Preset,[string]$CellId,[double]$DefaultCell,[double]$DefaultSpread,[string[]]$Primary,[string]$Tag){
+    $before=Revision;$area=(Model).layout.work_area
+    & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Window';Invoke 'put_back_bubbles'
+    Wait-Until {!@(Packets).Count -and !(Model).windows_workspace.dirty -and !(Model).windows_workspace.saving} 'Blender phase did not retire the completed slider fixture bubbles'
+    $id=Take 'brush' ([string]$Preset) ($area.x+$area.width*.25) ($area.y+$area.height*.3)
+    if(!(View $id).selected){Tap (Center $id)}
+    Slider-Toggle $id $true
+    Wait-Until {(Model).state.brush.preset -eq $Preset -and (Model).brush_ready -and @((View $id).rings).Count -eq $Primary.Count} 'Blender did not prepare its profile primary rings'
+    Assert-BlenderCellSettings (Model).state.tool_settings $CellId $Primary
+    if(@((Model).state.tool_settings|Where-Object id -eq $CellId)[0].value -ne $DefaultCell -or (@((View $id).rings.setting) -join ',') -cne ($Primary -join ',') -or [Math]::Abs(@((Model).state.tool_settings|Where-Object id -eq 'spread')[0].value-$DefaultSpread) -gt .000001){throw 'Blender default Cell Size or native ring order differs'}
+    & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Window'
+    $menu=@((Model).application_menus|Where-Object id -eq 'window')[0]
+    $tool=@($menu.model.sections|ForEach-Object {$_}|Where-Object {$_.action.type -eq 'customize' -and $_.action.action.type -eq 'set_panel_visible' -and $_.action.action.panel -eq 'tool_settings'})[0]
+    if(!$tool){throw 'Shared Window menu has no Tool settings panel'}
+    if(!$tool.selected){Invoke $tool.label -Name}else{Escape}
+    if(Find 'panel-tab-tool_settings' -Visible){Invoke 'panel-tab-tool_settings'}
+    $cell=Blender-Field $CellId;$cellValue=$cell.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value
+    if([double]$cellValue -ne $DefaultCell){throw 'Native Blender Cell Size does not show its shared default'}
+    $observations=@()
+    foreach($setting in $Primary){
+        $ring=@((View $id).rings|Where-Object setting -eq $setting)[0]
+        if($Primary.Count -eq 2 -and (($setting -eq 'spread' -and [Math]::Cos(($ring.arc.start+$ring.arc.sweep*.5)*[Math]::PI/180) -ge 0) -or ($setting -eq $CellId -and [Math]::Cos(($ring.arc.start+$ring.arc.sweep*.5)*[Math]::PI/180) -le 0))){throw 'Blender rings are on the wrong sides of the native face'}
+        foreach($fraction in 0.,.5,1.){
+            $point=Ring-Point $id $ring $fraction;$hit=Slider-Hit $id @((($point.x-(Center $id).x)/$scale),(($point.y-(Center $id).y)/$scale))
+            if($hit -ne 'ring'){throw 'Published Blender ring point does not hit a ring in the actual native runtime'}
+            Tap $point
+            Wait-Until {
+                $field=@((Model).state.tool_settings|Where-Object id -eq $setting)[0];if(!$field -or (View $id).stamp){return $false};$value=$field.value
+                if($setting -eq $CellId){return $value -eq [Math]::Floor($value) -and $value -ge 1 -and $value -le 50 -and ($fraction -ne 0 -or $value -eq 1) -and ($fraction -ne 1 -or $value -eq 50) -and ($fraction -ne .5 -or $value -lt 8)}
+                [Math]::Abs($value-$(if($fraction -eq 0){0}elseif($fraction -eq 1){1}elseif($setting -eq 'spread'){.09}else{.5})) -lt .011
+            } 'Blender native ring did not acknowledge its exact endpoint or small-cell logarithmic midpoint'
+            $value=@((Model).state.tool_settings|Where-Object id -eq $setting)[0].value
+            $observations+=@{setting=$setting;arc=$ring.arc;fraction=$fraction;point=$point;hit=$hit;value=$value}
+        }
+    }
+    Blender-Value $CellId '12';Blender-Value 'spread' '23 %' .23
+    if($Primary -contains 'grit'){Blender-Value 'grit' '65 %' .65}
+    $overrides=@((Model).state.tool_settings|Where-Object {$_.id -in $Primary}|Select-Object id,value)|ConvertTo-Json -Compress
+    $ring=@((View $id).rings|Where-Object setting -eq $CellId)[0];$from=Ring-Point $id $ring .8;$to=Ring-Point $id $ring .5
+    Drag $from $to -Cancel
+    Wait-Until {@((Model).state.tool_settings|Where-Object id -eq $CellId)[0].value -eq 12 -and !(View $id).stamp} 'Blender ring cancellation did not restore12'
+    $cancelled=@((Model).state.tool_settings|Where-Object {$_.id -in $Primary}|Select-Object id,value)|ConvertTo-Json -Compress
+    if($cancelled -cne $overrides){throw 'Cancelled native ring changed another primary override'}
+    Blender-Select 51
+    if(@((Model).state.tool_settings|Where-Object id -eq $CellId).Count -or @((Model).state.tool_settings|Where-Object id -eq 'spread')[0].numeric.mapping -ne 'linear'){throw 'Blender-only Cell Size or logarithmic Spread leaked into Crystal'}
+    Blender-Select $Preset
+    $retained=@((Model).state.tool_settings|Where-Object {$_.id -in $Primary}|Select-Object id,value)|ConvertTo-Json -Compress
+    if($retained -cne $overrides){throw 'Native preset reselection lost Blender primary overrides'}
+    if(!@((View $id).rings).Count){Tap (Center $id)}
+    $ring=@((View $id).rings|Where-Object setting -eq $CellId)[0];$point=Ring-Point $id $ring .5
+    [CapyRowPointer]::DoubleClick($Device,$point.x,$point.y)|Out-Null
+    Wait-Until {@((Model).state.tool_settings|Where-Object id -eq $CellId)[0].value -eq $DefaultCell} 'Native Blender Cell Size reset did not restore its shared default'
+    Blender-Value 'spread' (([string]($DefaultSpread*100))+' %') $DefaultSpread
+    if($Primary -contains 'grit'){Blender-Value 'grit' '100 %' 1}
+    $controlState=@((Model).state.tool_settings|Where-Object {$_.id -in $Primary}|Select-Object id,value,numeric,group_id)
+    Check-Artwork ($Tag+'-setting-controls') $before
+    Blender-Select 25;Blender-Value 'size' '64'
+    $clear=Clear-CanvasPoint ('tool-bubble-'+$id) 128 0;$sample=@{x=$clear[0]+64;y=$clear[1]}
+    [CapyRowPointer]::Hover($w.X+4,$w.Y+4);$blank=Wait-StablePixels {Screen-Pixels $sample.x $sample.y}
+    $blankLayers=@((Model).state.layers|Select-Object id,paint_revision,mask_revision)|ConvertTo-Json -Depth 8 -Compress
+    [CapyRowPointer]::Down('pen',$sample.x,($sample.y-16));[CapyRowPointer]::Move($sample.x,($sample.y+16));[CapyRowPointer]::Up()
+    Wait-Until {(Revision) -gt $before} 'Blender seed stroke did not commit'
+    [CapyRowPointer]::Hover($w.X+4,$w.Y+4);$seed=Wait-StablePixels {Screen-Pixels $sample.x $sample.y}
+    $seedLayers=@((Model).state.layers|Select-Object id,paint_revision,mask_revision)|ConvertTo-Json -Depth 8 -Compress
+    if($seed -ceq $blank){throw 'Blender fixture seed did not create effective artwork'}
+    Blender-Select $Preset;Blender-Value 'size' '64';$seedRevision=Revision
+    [CapyRowPointer]::Down('pen',$clear[0],$clear[1]);for($step=1;$step -le 16;$step++){[CapyRowPointer]::Move(($clear[0]+8*$step),$clear[1]);Start-Sleep -Milliseconds 15};[CapyRowPointer]::Up()
+    Wait-Until {(Revision) -gt $seedRevision} 'Blender stroke did not commit'
+    [CapyRowPointer]::Hover($w.X+4,$w.Y+4);$painted=Wait-StablePixels {Screen-Pixels $sample.x $sample.y}
+    $paintedLayers=@((Model).state.layers|Select-Object id,paint_revision,mask_revision)|ConvertTo-Json -Depth 8 -Compress
+    if($painted -ceq $seed){throw 'Blender stroke did not change its seeded artwork'}
+    Blender-Value $CellId '12'
+    $file=Join-Path $run ($Tag+' editing-state.capy');Save-ProjectAs $file
+    Wait-Until {!(Model).windows_workspace.dirty -and !(Model).windows_workspace.saving -and !(Model).state.document_file.busy} 'Blender editing state did not finish its native autosave'
+    $savedState=Blender-SavedState;$savedFile=(Get-FileHash -LiteralPath $file).Hash
+    if((Wait-StablePixels {Screen-Pixels $sample.x $sample.y}) -cne $painted){throw 'Saving Blender editing state changed authored pixels'}
+    Capture ($Tag+'-session-before-restart') -WithModel -Composed
+    Restart-BubbleReview ($Tag+'-restart-stderr.log')
+    Wait-Until {(Model).state.document_file.location.uri -eq $file -and !(Model).windows_recovery.busy -and !(Model).windows_recovery.restoring} 'Native Blender session did not reopen its saved drawing'
+    $script:w=(Control 'drawing-canvas' -Arranged).Current.BoundingRectangle
+    if((Blender-SavedState) -cne $savedState -or @((Model).state.tool_settings|Where-Object id -eq $CellId)[0].value -ne 12){throw 'Native session restart lost Blender12, its source, document checkpoint, history or pixel projection'}
+    $nativeCell=(Blender-Field $CellId).GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value
+    if((View $id).source.control.id -ne $Preset -or !(View $id).selected -or [double]$nativeCell -ne 12){throw 'Restored Blender source and native Cell Size did not show the saved12'}
+    [CapyRowPointer]::Hover($w.X+4,$w.Y+4)
+    if((Wait-StablePixels {Screen-Pixels $sample.x $sample.y}) -cne $painted -or (Get-FileHash -LiteralPath $file).Hash -cne $savedFile){throw 'Native Blender session restart changed authored pixels or its saved file'}
+    Capture ($Tag+'-session-restored') -WithModel -Composed
+    foreach($history in @(@{action='Undo';pixels=$seed;layers=$seedLayers},@{action='Redo';pixels=$painted;layers=$paintedLayers},@{action='Undo';pixels=$seed;layers=$seedLayers},@{action='Undo';pixels=$blank;layers=$blankLayers})){
+        & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action $history.action
+        Wait-Until {(Screen-Pixels $sample.x $sample.y) -ceq $history.pixels} 'Blender native history did not restore the exact composed pixels'
+        if((@((Model).state.layers|Select-Object id,paint_revision,mask_revision)|ConvertTo-Json -Depth 8 -Compress) -cne $history.layers){throw 'Blender Undo or Redo did not restore the exact layer paint checkpoint'}
+    }
+    [IO.File]::WriteAllText((Join-Path $run ($Tag+'-controls.json')),(@{preset=$Preset;primary=$Primary;defaults=@{spread=$DefaultSpread;cell=$DefaultCell};controls=$controlState;overrides=$overrides;cancelled=$cancelled;retained=$retained;schema=(Model).state.tool_settings;rings=$observations;blank=$blank;seed=$seed;painted=$painted;persistence='native saved open drawing and serialized editing-state session restart';saved_state=$savedState;file=$file;file_sha256=$savedFile;physical_input_and_performance='unverified'}|ConvertTo-Json -Depth 30),[Text.UTF8Encoding]::new($false))
+    $checks.Add($Tag+'-native-schema-rings-numeric-cancel-reset-retained-overrides-session-persistence-effective-paint-Undo-Redo')
 }
 function Touch-Pair([int]$AX,[int]$AY,[int]$BX,[int]$BY,[int]$DX,[int]$DY,[double]$Spread,[int]$SecondDelay=16,[string]$Tag='pair'){
     [CapyCanvasTouch]::Initialize([uint32]$review.Id)
@@ -795,7 +1073,8 @@ function Rapid-Reopen([long]$Id){
 try{
     Enter-CapyEnvironment @('CAPY_LATENCY_TRACE')
     $env:CAPY_STORAGE_DIR=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1';$env:CAPY_LATENCY_TRACE='1';$env:CAPY_SMOKE_TEST='1';$env:CAPY_TEST_DISPLAY='1';$env:CAPY_TEST_PRIMARY='1'
-    [IO.File]::WriteAllText((Settings-File),(@{theme=$Theme}|ConvertTo-Json))
+    $settings=@{theme=$Theme};if($SlidersOnly){$settings.language=@{Explicit='en'}}
+    [IO.File]::WriteAllText((Settings-File),($settings|ConvertTo-Json -Depth 4))
     $stderr=Join-Path $run 'stderr.log'
     $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -PassThru -RedirectStandardError $stderr
     $null=$review.Handle;$owned=@{window=$null}
@@ -835,6 +1114,15 @@ try{
         @{variant=$Variant;depth=$HdrDepth;checks=@($checks);scope=($scope+'; physical digitizers and HDR display luminance unverified')}|ConvertTo-Json -Depth 12|Set-Content (Join-Path $run 'results.json')
         return
     }
+    if($SlidersOnly){
+        Invoke-SliderChecks
+        Invoke-BlenderCellChecks 55 'dither_cell_size' 4 .08 @('spread','dither_cell_size') 'dither55'
+        Invoke-BlenderCellChecks 49 'scatter_cell_size' 3 .2 @('spread','scatter_cell_size','grit') 'scatter49'
+        & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Close -DiscardUnsaved|Out-Null
+        if((Get-Item -LiteralPath $stderr).Length){throw 'Restarted slider fixture stderr requires inspection'}
+        [IO.File]::WriteAllText((Join-Path $run 'results.json'),(@{variant=$Variant;checks=@($checks);scope='Native global slider menus, history and SQLite persistence; physical input and performance separate'}|ConvertTo-Json -Depth 12),[Text.UTF8Encoding]::new($false))
+        return
+    }
     if(!$NumericOnly -and !$CurveOnly){
     $dial=Take 'command' 'drawing_brush' (($camera.translation[0]+$document.width*.35*$camera.zoom)/$scale) (($camera.translation[1]+$document.height*.35*$camera.zoom)/$scale)
     Check-Artwork 'tear-out' $revision
@@ -850,6 +1138,8 @@ try{
     Check-Artwork 'choose-medium' $revision
     $brush=@((View $dial).chooser|Where-Object kind -eq 'brush')[0]
     Tap (Relative $dial $brush.center);Wait-Until {@((View $dial).chooser).Count -eq 0} 'Brush choice did not close chooser'
+    Wait-Until {@((View $dial).rings).Count -gt 0} 'Chooser brush choice did not immediately open sliders'
+    Controls $dial
     Check-Artwork 'choose-brush' $revision
     $checks.Add('dial-medium-brush-chooser')
     Hold-Bubble $dial;Settled-Capture 'hold-menu';Escape

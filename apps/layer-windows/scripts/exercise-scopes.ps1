@@ -265,6 +265,16 @@ try{
     $settled=@{area=$null};Wait-Until {$area=(Model).state.camera.work_area|ConvertTo-Json -Compress;$same=$area -eq $settled.area;$settled.area=$area;Start-Sleep -Milliseconds 150;$same} 'The fitted view did not settle'
     Invoke (Tool-Tile 'gradient')
     Wait-Until {((Model).state.commands|Where-Object id -eq 'gradient').selected} 'Gradient tool did not activate'
+    if(!$layoutOnly){foreach($stop in @(@{position=0;color='#404040';value=64/255.},@{position=1;color='#BFBFBF';value=191/255.})){
+        $strip=(Control 'tool-gradient-gradient' -Arranged).Current.BoundingRectangle;$dpi=[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.
+        $at=@([int]($strip.X+6*$dpi+($strip.Width-12*$dpi)*$stop.position),[int]($strip.Y+39*$dpi))
+        [CapyRowPointer]::Down('mouse',$at[0],$at[1]);[CapyRowPointer]::Up()
+        Invoke 'tool-gradient-color';Edit 'edit-color-hex' $stop.color;Invoke 'edit-color-apply'
+        Wait-Until {
+            $gradient=@((Model).state.tool_extra|Where-Object Gradient)[0].Gradient.value.value
+            !(Find 'edit-color-apply') -and [Math]::Abs($gradient.stops[$stop.position].color.rgba[0]-$stop.value) -lt .002
+        } 'The limited-range gradient seed did not apply'
+    }}
     Drag-Canvas 'mouse' (Canvas-Point .1 .5) (Canvas-Point .9 .5)
     Wait-Until {(Model).state.document_file.modified} 'The gradient did not reach the drawing'
     Wait-Until {$h=View 'histogram';$null -ne $h.data -and $h.status -and (Model).windows_scopes -gt 0} 'Histogram did not publish counts'
@@ -325,13 +335,26 @@ try{
     Select-Filter 'levels' 'Levels'
     Wait-Until {(Model).state.layer_properties.histogram -and $null -ne (View 'tonal_histogram').data} 'Levels did not publish input statistics'
     Wait-Until {(Chart-Shades 'tonal-chart') -gt 3} 'Levels did not draw its input statistics'
-    $before=Properties-Json
+    Fit-Canvas
+    $before=Properties-Json;$pixels=Canvas-Hash
+    $autoProjection=(Model).state.camera|Select-Object viewport,zoom,rotation,translation,work_area|ConvertTo-Json -Depth 8 -Compress
     Tap-Id 'property-action-auto_levels' 'mouse'
     $notice=@{text=$null}
     Wait-Until {$text=(Model).state.notice.text;if($text){$notice.text=$text};(Properties-Json) -ne $before -or $notice.text} 'Auto did not finish' 60
     if((Properties-Json) -eq $before){throw "Auto finished without adjusting Levels: $($notice.text)"}
+    $autoProperties=Properties-Json;$autoPixels=Canvas-Hash
+    if($autoPixels -eq $pixels){throw 'Auto changed parameters without changing the limited-range gradient pixels'}
+    Capture ('levels-auto-'+$Theme) -Composed -WithModel
     Undo-To $before 'Auto'
-    $pixels=Canvas-Hash
+    if((Canvas-Hash) -ne $pixels){throw 'One Auto Undo did not restore the exact baseline pixels'}
+    Invoke 'Redo' -Name;Wait-Until {(Properties-Json) -eq $autoProperties} 'One Redo did not restore Auto Levels'
+    if((Canvas-Hash) -ne $autoPixels){throw 'One Auto Redo did not restore the exact adjusted pixels'}
+    $autoFile=Join-Path $run 'Auto Levels.capy';$autoRevision=(Model).state.document_file.revision
+    Save-ProjectAs $autoFile
+    if((Model).state.document_file.revision -ne $autoRevision -or (Canvas-Hash) -ne $autoPixels){throw 'Saving Auto changed its history or adjusted pixels'}
+    Undo-To $before 'Saved Auto'
+    if((Canvas-Hash) -ne $pixels){throw 'Undo after saving Auto did not restore the exact baseline pixels'}
+    $checks.auto_levels=@{pixel_change='passed';one_step_undo_redo='passed';file=$autoFile;sha256=(Get-FileHash -LiteralPath $autoFile).Hash}
     foreach($device in @('mouse','touch','pen')){
         $revision=(Model).state.document_file.revision
         Tap-Id 'property-action-group-calibration' $device
@@ -380,6 +403,20 @@ try{
     $null=Control 'histogram-source' -Arranged
     Wait-Until {$null -ne (View 'histogram').data} 'Reopened Histogram did not publish counts'
     $checks.window_show='passed'
+
+    Window-Panel 'Histogram';Wait-Until {!(Shown 'histogram')} 'Histogram did not restore the Auto pixel projection'
+    $autoEpoch=(Model).state.document_file.epoch
+    & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'File';Invoke 'close_document'
+    Invoke 'Discard Changes' -Name
+    Wait-Until {!(Model).state.document_file.busy -and !(Find 'document-dialog')} 'The modified scopes drawing did not close'
+    Open-Project $autoFile
+    Wait-Until {(Model).state.document_file.epoch -gt $autoEpoch -and (Model).state.document_file.location.uri -eq $autoFile -and !(Model).state.document_file.busy -and !(Model).state.document_file.modified -and (Model).brush_ready} 'Auto Levels did not reopen as a fresh clean drawing' 60
+    Select-Panel 'properties';Fit-Canvas
+    Wait-Until {((Model).state.camera|Select-Object viewport,zoom,rotation,translation,work_area|ConvertTo-Json -Depth 8 -Compress) -eq $autoProjection} 'Reopened Auto did not restore the same fitted pixel projection'
+    Wait-Until {(Properties-Json) -eq $autoProperties} 'Reopening lost the saved Auto Levels parameters'
+    if((Canvas-Hash) -ne $autoPixels){throw 'Reopening Auto did not restore the exact adjusted pixels'}
+    Capture ('levels-auto-reopened-'+$Theme) -Composed -WithModel
+    $checks.auto_levels.reopened_exact_pixels='passed'
 
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Close -DiscardUnsaved
     [pscustomobject]@{theme=$Theme;checks=$checks;devices=@('mouse','pen','touch');evidence=$run}|ConvertTo-Json -Depth 4

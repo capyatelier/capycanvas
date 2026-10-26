@@ -1,4 +1,4 @@
-﻿param([Parameter(Mandatory)][string]$Executable)
+﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme)
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 if(!('CapyRowPointer' -as [type])){Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')}
@@ -40,12 +40,14 @@ try{
     Enter-CapyEnvironment
     $env:CAPY_STORAGE_DIR=Join-Path $run 'profile'
     $env:CAPY_TRACE_UI='1';$env:CAPY_SMOKE_TEST='1';$env:CAPY_TEST_DISPLAY='1';$env:CAPY_TEST_PRIMARY='1'
+    if($PSBoundParameters.ContainsKey('Theme')){[IO.File]::WriteAllText((Settings-File),(@{theme=$Theme}|ConvertTo-Json),[Text.UTF8Encoding]::new($false))}
     $stderr=Join-Path $run 'stderr.log'
     $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError $stderr
     $null=$review.Handle
     [IO.File]::WriteAllText((Join-Path $repo 'artifacts/windows/toolbars-review.json'),(@{process_id=$review.Id;run=$run}|ConvertTo-Json))
     Write-Output "Owned toolbar review $($review.Id)"
     Wait-Until {$review.Refresh();$review.MainWindowHandle -ne [IntPtr]::Zero -and (Model).brush_ready -and (Model).windows_workspace.ready} 'Review did not start' 45
+    if($PSBoundParameters.ContainsKey('Theme') -and (Model).state.theme -ne $Theme){throw 'Toolbar fixture did not adopt its explicit isolated theme'}
     $root=[System.Windows.Automation.AutomationElement]::FromHandle($review.MainWindowHandle)
     $initial=@((Model).state.workspace.layout.panels).Count
     WindowCommand 'new_toolbar'
@@ -92,6 +94,7 @@ try{
     ToolbarContext $gripId;Invoke 'Rename Windows tools review toolbar…' -Name
     $null=Control 'toolbar-prompt'
     if((Model).toolbar_prompt.name -ne 'Windows tools review'){throw 'Rename prompt lost its source name'}
+    Capture 'toolbar-rename-dialog' -WithModel -Composed
     Edit 'toolbar-name' 'Windows renamed review'
     Wait-Until {(Model).toolbar_prompt.name -eq 'Windows renamed review'} 'Rename draft did not reach Core'
     InvokeDialog 'toolbar-prompt' 'Rename'
@@ -128,6 +131,7 @@ try{
     WindowCommand 'manage_toolbars'
     $null=Control 'workspace-manager'
     Wait-Until {!(Model).windows_workspace.loading} 'Toolbar manager did not load'
+    Capture 'toolbar-manager-dialog' -WithModel -Composed
     $row=(Model).windows_workspace.rows|Where-Object title -eq 'Windows tools review'
     (Control ('workspace-manager-row-'+$row.id)).GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
     Wait-Until {(Model).windows_workspace.selected -eq $row.id} 'Native manager did not select the owned toolbar'
@@ -144,7 +148,7 @@ try{
     Wait-Until {(Model).windows_workspace.selected -eq $row.id} 'Native manager did not restore selection'
     Invoke 'workspace-toolbar-actions';Invoke 'workspace-toolbar-delete_toolbar'
     $null=Control 'toolbar-prompt'
-    Capture 'delete-prompt'
+    Capture 'delete-prompt' -WithModel -Composed
     InvokeDialog 'toolbar-prompt' 'Delete Toolbar'
     Wait-Until {$null -eq (Model).toolbar_prompt -and @((Model).state.workspace.layout.panels).Count -eq $initial} 'Delete did not remove exactly the owned toolbar'
     Wait-Until {$null -eq (Find 'toolbar-prompt')} 'Toolbar prompt did not close'

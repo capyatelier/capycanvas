@@ -2,6 +2,7 @@ param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][st
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 $CapyWaitSeconds=45
+Add-Type -AssemblyName System.Drawing
 Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
 $repo=(Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
 $Executable=(Resolve-Path -LiteralPath $Executable).Path
@@ -9,10 +10,11 @@ $run=Join-Path $repo ('artifacts/windows/canvas-bar/'+[Guid]::NewGuid().ToString
 [IO.Directory]::CreateDirectory($run)|Out-Null
 $CapyTraceDirectory=$run
 $checks=[ordered]@{}
-function Owned([string]$Id,[switch]$Name){
+function Owned([string]$Id,[switch]$Name,$Type){
  $property=if($Name){[System.Windows.Automation.AutomationElement]::NameProperty}else{[System.Windows.Automation.AutomationElement]::AutomationIdProperty}
  $condition=[System.Windows.Automation.AndCondition]::new([System.Windows.Automation.PropertyCondition]::new($property,$Id),
   [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ProcessIdProperty,$review.Id))
+ if($Type){$condition=[System.Windows.Automation.AndCondition]::new($condition,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,$Type))}
  [System.Windows.Automation.AutomationElement]::RootElement.FindFirst([System.Windows.Automation.TreeScope]::Descendants,$condition)
 }
 function Bar {$bar=Find 'canvas-action-bar';if($bar -and !$bar.Current.IsOffscreen){$bar}}
@@ -52,6 +54,33 @@ function Check-BarGeometry([string]$Context){
   if(!$item.icon_only -and ([Math]::Abs(($r.Top-$bar.Top)/$scale-5) -gt 1 -or [Math]::Abs(($bar.Bottom-$r.Bottom)/$scale-5) -gt 1)){throw "$id in the $Context bar does not keep five points clear"}
  }
  $checks["${Context}_bar_geometry"]='passed'
+}
+function Assert-AdjustProjection($Before,$After){
+ $owner=@($Before.state.layers|Where-Object editing)
+ $ids=@($Before.state.layers|ForEach-Object id)
+ $added=@($After.state.layers|Where-Object {$_.id -notin $ids})
+ if($owner.Count -ne 1 -or !$Before.state.layer_tools.has_selection -or @($After.state.layers).Count -ne $ids.Count+1 -or $added.Count -ne 1){throw 'Adjust did not add exactly one effect for the selected editing layer'}
+ $effect=$added[0]
+ if(!$effect.adjustment_effect -or !$effect.has_mask -or $null -eq $effect.mask_id -or !$effect.editing -or $effect.relationship.kind -ne 'effect' -or $effect.relationship.target -ne $owner[0].id -or $After.state.layer_tools.has_selection -or !@($After.state.commands|Where-Object id -eq 'undo')[0].enabled -or @($After.state.commands|Where-Object id -eq 'redo')[0].enabled){throw 'Adjust did not attach the selection-masked effect to its editing owner in one new history step'}
+ foreach($id in $ids){if(@($After.state.layers|Where-Object id -eq $id).Count -ne 1){throw 'Adjust replaced an existing layer'}}
+ $effect
+}
+function Bake-Layers($Snapshot){ConvertTo-Json -InputObject @($Snapshot.state.layers|Select-Object * -ExcludeProperty paint_revision,mask_revision) -Depth 20 -Compress}
+function Assert-LockProjection($Model,[bool]$Expected,[int]$NativeState,[bool]$NativeEnabled){
+ $command=@($Model.state.commands|Where-Object id -eq 'transform_uniform')
+ $item=@($Model.state.canvas_bar.items|Where-Object {$_.option.Action.state.id -eq 'transform_uniform'})
+ if($command.Count -ne 1 -or $item.Count -ne 1 -or !$command[0].enabled -or !$item[0].option.Action.checkable -or [bool]$command[0].selected -ne $Expected -or [bool]$item[0].option.Action.state.selected -ne $Expected -or !$NativeEnabled -or $NativeState -ne [int]$Expected){throw 'Keep proportions differs between the shared command, bar and native toggle'}
+}
+function Assert-ModeProjection($Model,[bool]$Segmented,[int]$Selected){
+ $modes=@($Model.state.canvas_bar.items|Where-Object {$_.option.Choice.id -eq 'transform-mode'})
+ if($modes.Count -ne 1){throw 'Transform did not publish one mode choice'}
+ $mode=$modes[0].option.Choice;$items=@($mode.items)
+ if([bool]$mode.segmented -ne $Segmented -or ($items.label -join '|') -cne 'Scale|Distort|Warp' -or @($items|Where-Object selected).Count -ne 1 -or !$items[$Selected].selected){throw 'The shared transform mode projection differs'}
+ $mode
+}
+function Check-Lock([bool]$Expected){
+ $native=Control 'canvas-bar-transform_uniform' -Arranged
+ Assert-LockProjection (Model) $Expected ([int]$native.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Current.ToggleState) $native.Current.IsEnabled
 }
 function Drag([string]$Device,[int[]]$From,[int[]]$To){
  [CapyRowPointer]::Down($Device,$From[0],$From[1])
@@ -125,6 +154,84 @@ try {
  $checks.selection_menus_copy_to_layer_one_undo_step='passed'
  Check-BarGeometry 'selection'
 
+ $adjustBefore=Model;$selectionAnchor=$adjustBefore.state.canvas_bar.anchor -join ','
+ $adjustLayers=$adjustBefore.state.layers|ConvertTo-Json -Depth 20 -Compress
+ $adjustUndo=[bool]@($adjustBefore.state.commands|Where-Object id -eq 'undo')[0].enabled
+ $away=Center (Control $selectionTile -Arranged);[CapyRowPointer]::Hover($away[0],$away[1])
+ $sampleY=$cy-25
+ $adjustPixels=Wait-StablePixels {((Screen-Pixels $cx $sampleY)+':'+(Screen-Pixels ($cx+240) $sampleY))}
+ Tap 'canvas-bar-menu-adjust' 'mouse'
+ Wait-Until {$null -ne (Owned 'Tone' -Name -Type ([System.Windows.Automation.ControlType]::MenuItem))} 'Adjust did not offer Tone' 5
+ (Owned 'Tone' -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)).GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
+ Wait-Until {$null -ne (Owned 'Curves' -Name -Type ([System.Windows.Automation.ControlType]::MenuItem))} 'Adjust did not offer Curves' 5
+ (Owned 'Curves' -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+ Wait-Until {@((Model).state.layers).Count -eq @($adjustBefore.state.layers).Count+1 -and !(MenuOpen) -and !(Model).state.layer_tools.has_selection} 'Adjust did not consume the selection into one new effect' 10
+ $adjusted=Model;$adjustment=Assert-AdjustProjection $adjustBefore $adjusted
+ $effectLayers=$adjusted.state.layers|ConvertTo-Json -Depth 20 -Compress
+ $mask=Control ("layer-$($adjustment.id)-mask") -Arranged
+ $at=Center $mask;[CapyRowPointer]::Hover($at[0],$at[1]);[CapyRowPointer]::Hold(0x11,$true)
+ try{Tap ("layer-$($adjustment.id)-mask") 'mouse'}finally{[CapyRowPointer]::Hold(0x11,$false)}
+ Wait-Until {(Model).state.layer_tools.has_selection -and (Kind) -eq 'selection' -and ((Model).state.canvas_bar.anchor -join ',') -ceq $selectionAnchor} 'The new effect mask did not reload the original rectangle selection' 10
+ (Find 'drawing-canvas').SetFocus()
+ [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),[uint16]0x5A)
+ Wait-Until {$m=Model;!$m.state.layer_tools.has_selection -and ($m.state.layers|ConvertTo-Json -Depth 20 -Compress) -ceq $effectLayers -and @($m.state.commands|Where-Object id -eq 'undo')[0].enabled -and @($m.state.commands|Where-Object id -eq 'redo')[0].enabled} 'One Undo did not remove only the loaded mask selection and preserve the effect history' 5
+ [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),[uint16]0x5A)
+ Wait-Until {$m=Model;($m.state.layers|ConvertTo-Json -Depth 20 -Compress) -ceq $adjustLayers -and (Paint) -eq $paint -and $m.state.layer_tools.has_selection -and ($m.state.canvas_bar.anchor -join ',') -ceq $selectionAnchor -and [bool]@($m.state.commands|Where-Object id -eq 'undo')[0].enabled -eq $adjustUndo -and @($m.state.commands|Where-Object id -eq 'redo')[0].enabled} 'One Adjust Undo did not restore the exact layers, editing owner, selection and history availability' 5
+ [CapyRowPointer]::Hover($away[0],$away[1])
+ if((Wait-StablePixels {((Screen-Pixels $cx $sampleY)+':'+(Screen-Pixels ($cx+240) $sampleY))}) -cne $adjustPixels){throw 'One Adjust Undo did not restore the exact composed interior and exterior pixels'}
+ Capture ('selection-adjust-undo-'+$Theme) -WithModel -Composed
+ $checks.adjust_attached_selection_mask_one_undo='passed'
+ $bakeBefore=Model;$bakeLayers=Bake-Layers $bakeBefore
+ $bakeUndo=[bool]@($bakeBefore.state.commands|Where-Object id -eq 'undo')[0].enabled
+ $bakePixels=Wait-StablePixels {((Screen-Pixels $cx $sampleY)+':'+(Screen-Pixels ($cx+240) $sampleY))}
+ Tap 'canvas-bar-menu-adjust' 'mouse'
+ Wait-Until {$null -ne (Owned 'Color' -Name -Type ([System.Windows.Automation.ControlType]::MenuItem))} 'Adjust did not offer Color' 5
+ (Owned 'Color' -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)).GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
+ Wait-Until {$null -ne (Owned 'Invert' -Name -Type ([System.Windows.Automation.ControlType]::MenuItem))} 'Adjust did not offer Invert' 5
+ (Owned 'Invert' -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+ Wait-Until {$m=Model;@($m.state.layers).Count -eq @($bakeBefore.state.layers).Count+1 -and !$m.state.layer_tools.has_selection -and $m.brush_ready} 'Selection-masked Invert did not settle'
+ $bakeEffect=Model;$null=Assert-AdjustProjection $bakeBefore $bakeEffect
+ $bakeEffectLayers=Bake-Layers $bakeEffect
+ [CapyRowPointer]::Hover($away[0],$away[1])
+ $bakeEffectPixels=Wait-StablePixels {((Screen-Pixels $cx $sampleY)+':'+(Screen-Pixels ($cx+240) $sampleY))}
+ if($bakeEffectPixels.Split(':')[0] -ceq $bakePixels.Split(':')[0] -or $bakeEffectPixels.Split(':')[1] -cne $bakePixels.Split(':')[1]){throw 'Selection-masked Invert did not change only the composed interior sample'}
+ $merge=@($bakeEffect.state.commands|Where-Object id -eq 'merge_visible')
+ if($merge.Count -ne 1 -or !$merge[0].enabled){throw 'The masked effect does not offer Merge Visible'}
+ $bakeOwner=@($bakeEffect.state.layers|Where-Object editing)[0].id
+ (Control ("layer-$bakeOwner-name") -Arranged).SetFocus();[CapyRowPointer]::Key([uint32]$review.Id,0x5D)
+ Wait-Until {$null -ne (Owned $merge[0].label -Name -Type ([System.Windows.Automation.ControlType]::MenuItem))} 'Layer menu did not expose Merge Visible' 5
+ (Owned $merge[0].label -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+ Wait-Until {$m=Model;$m.brush_ready -and !$m.state.document_file.busy -and !@($m.state.requests).Count -and !(MenuOpen) -and @($m.state.layers).Count -lt @($bakeEffect.state.layers).Count -and !@($m.state.layers|Where-Object adjustment_effect).Count} 'Merge Visible did not settle the masked effect into paint' 60
+ if(((Model).state.camera|ConvertTo-Json -Compress) -cne ($bakeEffect.state.camera|ConvertTo-Json -Compress)){throw 'Merge Visible changed the sampled camera'}
+ if((Wait-StablePixels {((Screen-Pixels $cx $sampleY)+':'+(Screen-Pixels ($cx+240) $sampleY))}) -cne $bakeEffectPixels){throw 'Merge Visible changed exact composed masked-effect pixels'}
+ $bakedOrder=@((Model).state.layers|ForEach-Object id) -join ','
+ (Control 'drawing-canvas').SetFocus();[CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),0x5A)
+ Wait-Until {$m=Model;$m.brush_ready -and (Bake-Layers $m) -ceq $bakeEffectLayers -and @($m.state.commands|Where-Object id -eq 'undo')[0].enabled -and @($m.state.commands|Where-Object id -eq 'redo')[0].enabled} 'One Merge Undo did not restore exact effect/mask layers and history'
+ if((Wait-StablePixels {((Screen-Pixels $cx $sampleY)+':'+(Screen-Pixels ($cx+240) $sampleY))}) -cne $bakeEffectPixels){throw 'Merge Undo changed exact masked-effect pixels'}
+ [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11,0x10),0x5A)
+ Wait-Until {$m=Model;$m.brush_ready -and ((@($m.state.layers)|ForEach-Object id) -join ',') -ceq $bakedOrder -and @($m.state.commands|Where-Object id -eq 'undo')[0].enabled -and !@($m.state.commands|Where-Object id -eq 'redo')[0].enabled} 'Merge Redo did not restore the baked layer identities and history'
+ if((Wait-StablePixels {((Screen-Pixels $cx $sampleY)+':'+(Screen-Pixels ($cx+240) $sampleY))}) -cne $bakeEffectPixels){throw 'Merge Redo changed exact masked-effect pixels'}
+ $bakedOwner=@((Model).state.layers|Where-Object editing)
+ if($bakedOwner.Count -ne 1 -or $bakedOwner[0].adjustment_effect -or !$bakedOwner[0].visible){throw 'Merge did not select one visible paint owner'}
+ $bakedVisibility="layer-$($bakedOwner[0].id)-visibility"
+ Tap $bakedVisibility 'mouse';[CapyRowPointer]::Hover($away[0],$away[1])
+ Wait-Until {!@((Model).state.layers|Where-Object {$_.id -eq $bakedOwner[0].id})[0].visible} 'Baked paint did not hide'
+ if((Wait-StablePixels {((Screen-Pixels $cx $sampleY)+':'+(Screen-Pixels ($cx+240) $sampleY))}) -ceq $bakeEffectPixels){throw 'Hiding baked paint did not replace its composed pixels'}
+ Tap $bakedVisibility 'mouse';[CapyRowPointer]::Hover($away[0],$away[1])
+ Wait-Until {@((Model).state.layers|Where-Object {$_.id -eq $bakedOwner[0].id})[0].visible -and (Model).brush_ready} 'Baked paint did not show'
+ if((Wait-StablePixels {((Screen-Pixels $cx $sampleY)+':'+(Screen-Pixels ($cx+240) $sampleY))}) -cne $bakeEffectPixels){throw 'Fresh baked paint redraw did not restore exact masked-effect pixels'}
+ (Control 'drawing-canvas').SetFocus();[CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),0x5A)
+ Wait-Until {!@((Model).state.layers|Where-Object {$_.id -eq $bakedOwner[0].id})[0].visible} 'One visibility Undo did not hide baked paint'
+ [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),0x5A)
+ Wait-Until {@((Model).state.layers|Where-Object {$_.id -eq $bakedOwner[0].id})[0].visible} 'Second visibility Undo did not restore baked paint'
+ [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),0x5A)
+ Wait-Until {(Bake-Layers (Model)) -ceq $bakeEffectLayers} 'Merge cleanup Undo did not restore the effect'
+ [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),0x5A)
+ Wait-Until {$m=Model;(Bake-Layers $m) -ceq $bakeLayers -and $m.state.layer_tools.has_selection -and ($m.state.canvas_bar.anchor -join ',') -ceq $selectionAnchor -and [bool]@($m.state.commands|Where-Object id -eq 'undo')[0].enabled -eq $bakeUndo -and @($m.state.commands|Where-Object id -eq 'redo')[0].enabled} 'Masked-bake cleanup did not restore selection, owner and history'
+ if((Wait-StablePixels {((Screen-Pixels $cx $sampleY)+':'+(Screen-Pixels ($cx+240) $sampleY))}) -cne $bakePixels){throw 'Masked-bake cleanup changed original pixels'}
+ Capture ('selection-masked-bake-undo-redo-'+$Theme) -WithModel -Composed
+ $checks.selection_masked_invert_merge_visible_pixels_undo_redo='passed'
+ $paint=Paint
  Tap 'canvas-bar-scale_rotate' 'mouse'
  Wait-Until {(Kind) -eq 'transform' -and (Bar) -and (Find 'canvas-bar-apply_transform') -and (Find 'canvas-bar-cancel_transform')} 'Transform from the bar did not open the transform bar' 10
  $width=Value 'transform_width'
@@ -137,6 +244,41 @@ try {
  $choices=@((Model).state.canvas_bar.items|Where-Object {$_.option.Choice}|ForEach-Object {$_.option.Choice})
  $mode=@($choices|Where-Object segmented)[0]
  if(!$mode){throw 'The transform bar has no segmented mode choice'}
+ $null=Assert-ModeProjection (Model) $true 0
+ $lockBefore=[bool]@((Model).state.commands|Where-Object id -eq 'transform_uniform')[0].selected
+ if(!$lockBefore){Tap 'canvas-bar-transform_uniform' 'mouse';Wait-Until {@((Model).state.commands|Where-Object id -eq 'transform_uniform')[0].selected} 'Keep proportions did not turn on' 5}
+ Check-Lock $true
+ Tap ("canvas-bar-choice-"+$mode.id+"-1") 'touch'
+ Wait-Until {@((Choice $mode.id).items)[1].selected -and !(Find 'canvas-bar-transform_uniform')} 'Distort did not hide the Scale lock' 5
+ Tap ("canvas-bar-choice-"+$mode.id+"-0") 'pen'
+ Wait-Until {@((Choice $mode.id).items)[0].selected -and (Find 'canvas-bar-transform_uniform')} 'Scale did not restore its lock' 5
+ Check-Lock $true
+ Tap 'canvas-bar-transform_uniform' 'touch'
+ Wait-Until {!@((Model).state.commands|Where-Object id -eq 'transform_uniform')[0].selected} 'Keep proportions did not turn off' 5
+ Check-Lock $false
+ if($lockBefore){Tap 'canvas-bar-transform_uniform' 'pen';Wait-Until {@((Model).state.commands|Where-Object id -eq 'transform_uniform')[0].selected} 'Keep proportions did not restore its original value' 5;Check-Lock $true}
+ $checks.keep_proportions_independent_lock='passed'
+
+ $wideBounds=(Find 'drawing-canvas').Current.BoundingRectangle
+ $scale=[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.
+ $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Normal)
+ & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -StateDirectory $run -Action Resize -Width ([int](700*$scale)) -Height ([int](800*$scale))
+ Wait-Until {(Choice $mode.id) -and !(Choice $mode.id).segmented -and (Bar)} 'The narrow transform did not publish its mode dropdown' 10
+ $narrow=Assert-ModeProjection (Model) $false 0
+ Tap ("canvas-bar-choice-"+$narrow.id) 'mouse'
+ Wait-Until {$null -ne (Owned $narrow.items[1].label -Name -Type ([System.Windows.Automation.ControlType]::MenuItem))} 'The narrow mode menu has no Distort' 5
+ (Owned $narrow.items[1].label -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+ Wait-Until {@((Choice $mode.id).items)[1].selected -and !(MenuOpen)} 'The narrow menu did not select Distort' 5
+ $null=Assert-ModeProjection (Model) $false 1
+ Capture ('transform-narrow-'+$Theme) -WithModel -Composed
+ $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)
+ Wait-Until {(Choice $mode.id).segmented -and (Find 'drawing-canvas').Current.BoundingRectangle -eq $wideBounds -and (Bar)} 'The restored window did not retain its wide transform bar and canvas bounds' 10
+ $null=Assert-ModeProjection (Model) $true 1
+ Tap ("canvas-bar-choice-"+$mode.id+"-0") 'pen'
+ Wait-Until {@((Choice $mode.id).items)[0].selected} 'The wide mode row did not restore Scale' 5
+ Check-Lock $lockBefore
+ if((Paint) -ne $paint){throw 'Lock and narrow mode controls changed paint revisions'}
+ $checks.narrow_mode_dropdown_and_wide_restore='passed'
  Tap ("canvas-bar-choice-"+$mode.id+"-1") 'touch'
  Wait-Until {@((Choice $mode.id).items)[1].selected} 'Touch did not select the second transform mode' 5
  Tap ("canvas-bar-choice-"+$mode.id+"-0") 'pen'

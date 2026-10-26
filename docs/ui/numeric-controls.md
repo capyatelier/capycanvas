@@ -35,7 +35,7 @@ entry without changing the effect application.
   dial's radius it snaps to 15° steps; farther out it turns freely, and a press
   at its center keeps the value. Values wrap at 360°. Double-clicking the label
   or the dial restores the default. Arrow keys and the scroll wheel step a
-  focused dial; Shift multiplies arrow steps by ten. Native accessibility
+  focused angle dial; Shift multiplies arrow steps by fifteen. Native accessibility
   adjustment uses the same shared numeric operation. Paper's Light is a dial.
 - In Preferences the complete name/description/value header is above the
   slider. Rows expand for descriptions; the numeric content is capped at

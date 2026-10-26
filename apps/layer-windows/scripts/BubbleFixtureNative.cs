@@ -31,7 +31,7 @@ public static class CapyBubbleFixtureNative {
    if(context==0)throw new InvalidOperationException("Fixture localization unavailable.");
    result=capy_bubble_ui(context,json);
    if(result==0)throw new InvalidOperationException("Shared bubble geometry query failed.");
-   byte[] bytes=new byte[(int)capy_string_length(result).ToUInt64()];
+   byte[] bytes=new byte[checked((int)capy_string_length(result).ToUInt64())];
    if(!capy_string_copy(result,UIntPtr.Zero,bytes,new UIntPtr((uint)bytes.Length)))throw new InvalidOperationException("Shared bubble geometry text expired.");
    return Encoding.UTF8.GetString(bytes);
   }finally{if(result!=0)capy_string_free(result);if(context!=0)capy_localization_free(context);}

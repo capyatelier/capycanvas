@@ -43,6 +43,16 @@ function Invoke([string]$Value,[switch]$Name){
     } "Missing action: $Value"
     $hit.item.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
 }
+function Open-Preferences{
+    if(Find 'settings-button' -Visible){Invoke 'settings-button'}else{
+        $caption=@((Model).application_menus|Where-Object id -eq 'edit')[0].label
+        if(!$caption){throw 'Current shared application menu is missing: edit'}
+        & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'edit' -Caption $caption
+        Invoke 'settings'
+    }
+    Wait-Until {(Model).state.settings_open} 'Preferences action was not acknowledged'
+    Control 'Preferences' -Name -Type ([System.Windows.Automation.ControlType]::Window) -Arranged|Out-Null
+}
 function Edit([string]$Id,[string]$Text){
     $entry=Control $Id;$entry.SetFocus();Wait-Until {$entry.Current.HasKeyboardFocus} "Numeric editor did not receive focus: $Id"
     $entry.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($Text)
@@ -284,7 +294,7 @@ function Property-Typed([string]$Key,[string]$Text,[double]$Expected){
 }
 function Property-Theme {
     $before=(Model).state.theme
-    Invoke 'settings-button'
+    Open-Preferences
     (Control 'Color theme' -Name -Type ([System.Windows.Automation.ControlType]::ComboBox)).GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
     $choice=if($before -eq 'dark'){'Light'}else{'Dark'}
     (Control $choice -Name -Type ([System.Windows.Automation.ControlType]::ListItem)).GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
@@ -497,6 +507,11 @@ function Check-CurveGestures {
     }
     Pointer-Session {
         if((Field 'input').Current.IsEnabled -or (Field 'output').Current.IsEnabled){throw 'Input and Output were enabled without a selected point'}
+        $unselected=(Property 'rgb').curve
+        if(!$unselected -or $null -ne $unselected.selected -or $null -ne $unselected.input -or $null -ne $unselected.output){throw 'Unselected curve did not project null Input and Output'}
+        foreach($axis in @('input','output')){
+            if((Field $axis).GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value -cne ''){throw "Unselected curve $axis readout is not empty"}
+        }
         $endpoints=Curve-Json
         # Seed a visible handle instead of resizing or scrolling the workspace.
         $at=Curve-At .5 .85
@@ -513,9 +528,14 @@ function Check-CurveGestures {
             Start-Sleep -Milliseconds 150
             if((Curve-Json) -ne $original){throw "$device click moved the handle"}
             Check-Redo "$device unchanged click"
+            $escaped=@{graph=$null}
             Move-Curve $device;[CapyRowPointer]::Key(0x1B)
-            Wait-Until {(Curve-Json) -eq $original} "$device Escape kept the curve preview"
-            if(!(Find 'property-rgb-curve')){throw "$device Escape dismissed the curve drawer"}
+            Wait-Until {
+                $escaped.graph=Find 'property-rgb-curve' -Visible
+                if((Curve-Json) -ne $original -or !$escaped.graph){return $false}
+                $native=$escaped.graph.Current;$bounds=$native.BoundingRectangle
+                $native.ProcessId-eq$review.Id -and $native.IsEnabled -and !$native.IsOffscreen -and !$bounds.IsEmpty -and $bounds.Width-gt0 -and $bounds.Height-gt0
+            } "$device Escape did not restore the curve preview and visible native graph"
             [CapyRowPointer]::Up();Check-Redo "$device Escape"
             if($device -ne 'mouse'){
                 Move-Curve $device;[CapyRowPointer]::Cancel()
@@ -743,7 +763,7 @@ try {
     if([Math]::Abs((Rgba (Property 'shadows').value.value)[1]-.33) -gt .000001){throw 'Scalar channel edit changed another channel'}
     Capture 'color'
     $theme=(Model).state.theme
-    Invoke 'settings-button'
+    Open-Preferences
     (Control 'Color theme' -Name -Type ([System.Windows.Automation.ControlType]::ComboBox)).GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
     $choice=if($theme -eq 'dark'){'Light'}else{'Dark'}
     (Control $choice -Name -Type ([System.Windows.Automation.ControlType]::ListItem)).GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()

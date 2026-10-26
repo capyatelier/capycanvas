@@ -1,6 +1,8 @@
 param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme='dark')
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
+Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
+[CapyRowPointer]::VerifyPrivateDesktop($env:CAPY_PRIVATE_DESKTOP)
 Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
@@ -21,6 +23,111 @@ function Panel-Menu([string]$Id){
     }}
     throw "Shared panel menu is missing: $Id"
 }
+function Drawing-Frames{[uint64](Control 'renderer-stat-3').Current.Name}
+function Idle-Fps{
+    Wait-Until {(Control 'renderer-stat-2').Current.Name -eq '0'} 'Diagnostics did not show zero FPS after canvas activity stopped' 15
+    $frames=Drawing-Frames
+    Start-Sleep -Milliseconds 1500
+    if((Control 'renderer-stat-2').Current.Name -ne '0' -or (Drawing-Frames) -ne $frames){throw 'Idle Diagnostics created canvas drawing updates or reported active FPS'}
+    $frames
+}
+function Fps-Copy([string]$Tag){
+    $catalog=Get-Content -LiteralPath (Join-Path $repo "assets/locales/$Tag/workspace.ftl") -Encoding UTF8
+    foreach($key in 'diagnostics-submitted-fps','diagnostics-submitted-fps-description'){
+        $line=@($catalog|Where-Object {$_.StartsWith($key+' = ')})
+        if($line.Count -ne 1){throw "Missing shared Diagnostics copy: $Tag $key"}
+        $line[0].Substring($key.Length+3).Trim()
+    }
+}
+function Diagnostics-Language([string]$Tag){
+    Invoke 'settings-button';Invoke 'preference-page-appearance'
+    Wait-Until {Find 'preference-choice-language'} 'Language preference did not open'
+    $state=State-File
+    $bootstrap=Join-Path (Split-Path -Parent $state) ((Split-Path -Leaf $state) -replace '^ui-state-','bootstrap-')
+    $index=[array]::IndexOf(@((Read-Snapshot $bootstrap).shipped_tags),$Tag)+1
+    if($index -lt 1){throw "Missing registered language: $Tag"}
+    $row=@((Model).preferences.pages.groups.rows|Where-Object id -eq 'language')[0]
+    (Control 'preference-choice-language').GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
+    (Control $row.kind.options[$index] -Name -Type ([System.Windows.Automation.ControlType]::ListItem)).GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
+    Wait-Until {(Model).windows_active_tag -eq $Tag} "Language $Tag did not apply" 30
+    Invoke 'CloseButton';Wait-Until {!(Model).preferences} 'Language preferences did not close'
+    $copy=@(Fps-Copy $Tag)
+    Wait-Until {(Control 'renderer-stat-2').Current.HelpText -eq $copy[1] -and (Find $copy[0] -Name -Type ([System.Windows.Automation.ControlType]::Text))} "Diagnostics retained stale source labels for $Tag"
+}
+function Preset-Workspace([string]$Name,[string]$Id){
+    if((Model).windows_workspace.id -ne $Id){
+        $entry=Find ('workspace-switch-'+$Id) -Visible
+        if(!$entry){Invoke 'header-workspace-menu';$entry=Control $Name -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)}
+        $entry.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
+    }
+    Wait-Until {(Model).windows_workspace.id -eq $Id -and (Model).windows_workspace.ready -and !(Model).windows_workspace.busy -and !(Model).windows_workspace.saving -and (Model).brush_ready -and (Model).canvas_ready} "$Name workspace did not settle"
+    if(Find 'workspace-manager' -Visible){(Control 'workspace-manager').SetFocus();[CapyRowPointer]::Key([uint32]$review.Id,27)}
+    Wait-Until {!(Find 'workspace-manager' -Visible) -and (Control 'drawing-canvas').Current.IsEnabled} 'Workspace selector did not release the drawing'
+}
+function Preset-Groups([string]$Top){
+    $groups=@((Model).layout.groups)
+    $layers=@($groups|Where-Object {$_.panels -contains 'layers'})
+    $properties=@($groups|Where-Object {$_.panels -contains 'properties'})
+    $upper=@($groups|Where-Object {$_.panels -contains $Top})
+    if($layers.Count -ne 1 -or $properties.Count -ne 1 -or $upper.Count -ne 1 -or $layers[0].panels -notcontains 'adjustments' -or $layers[0].id -eq $properties[0].id -or $layers[0].panels -contains 'properties'){throw 'Preset did not group Layers and Filters separately from Properties'}
+    return @($upper[0],$properties[0],$layers[0])
+}
+function Preset-Geometry([string]$Top){
+    $groups=@(Preset-Groups $Top);$records=@();$origin=$null
+    foreach($group in $groups){
+        $node=Control ('workspace-group-'+$group.id) -Arranged
+        $group=@((Model).layout.groups|Where-Object id -eq $group.id)[0]
+        if(!$group){throw 'Arranged preset group lost its current shared identity'}
+        $box=$node.Current.BoundingRectangle;$shared=$group.bounds
+        if($node.Current.ProcessId -ne $review.Id -or !$root.Current.BoundingRectangle.Contains($box)){throw 'Preset group left its owned visible window'}
+        if(!$origin){$origin=@(($box.X-$shared.x*$scale),($box.Y-$shared.y*$scale))}
+        foreach($pair in @(@($box.X,($origin[0]+$shared.x*$scale)),@($box.Y,($origin[1]+$shared.y*$scale)),@($box.Width,($shared.width*$scale)),@($box.Height,($shared.height*$scale)))){
+            if([Math]::Abs($pair[0]-$pair[1]) -gt 1){throw 'Native preset allocation differs from the current shared group bounds'}
+        }
+        $bodyNode=Control ('panel-body-scroll-'+$group.id) -Within $node -Arranged;$body=$bodyNode.Current.BoundingRectangle
+        $view=(Scroll-Pattern $bodyNode).Current.VerticalViewSize
+        if($view -le 0 -or $view -gt 100 -or [double]::IsNaN($view) -or $body.Height*100/$view+1 -lt $group.min_body_height*$scale){throw 'Preset lost its finite scroll viewport or published minimum body extent'}
+        $records+=@{id=$group.id;panels=$group.panels;shared=$shared;native=@($box.X,$box.Y,$box.Width,$box.Height);minimum_body=$group.min_body_height;native_body_height=$body.Height;native_vertical_view_size=$view}
+    }
+    if($records[0].native[1]+$records[0].native[3] -ge $records[1].native[1] -or $records[1].native[1]+$records[1].native[3] -ge $records[2].native[1]){throw 'Preset primary groups overlap or have the wrong vertical order'}
+    return $records
+}
+function Check-PresetGroups{
+    $initial=(Model).windows_workspace.id;$document=(Model).state.document_file|ConvertTo-Json -Depth 20 -Compress
+    $records=@()
+    foreach($preset in @(@{name='Paint';id='builtin:workspace:illustrator';top='navigator'},@{name='Photo';id='builtin:workspace:photographer';top='histogram'})){
+        Preset-Workspace $preset.name $preset.id
+        foreach($width in 1200,744){
+            & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawing.Handle.ToInt64() -Action Resize -Width ([int]($width*$scale)) -Height ([int](700*$scale))
+            $before=@(Preset-Geometry $preset.top);$layerGroup=@(Preset-Groups $preset.top)[2];$active=$layerGroup.active
+            foreach($tab in 'adjustments','layers'){
+                Invoke ('panel-tab-'+$tab)
+                Wait-Until {@((Model).layout.groups|Where-Object id -eq $layerGroup.id)[0].active -eq $tab} 'Preset tab did not acknowledge its active panel'
+                $after=@(Preset-Geometry $preset.top)
+                for($i=0;$i -lt $before.Count;$i++){
+                    if(($before[$i].shared|ConvertTo-Json -Compress) -cne ($after[$i].shared|ConvertTo-Json -Compress)){throw 'Switching Layers and Filters changed the shared group allocation'}
+                    for($axis=0;$axis -lt 4;$axis++){if([Math]::Abs($before[$i].native[$axis]-$after[$i].native[$axis]) -gt 1){throw 'Switching Layers and Filters moved the native group frame'}}
+                }
+            }
+            Invoke ('panel-tab-'+$active);Wait-Until {@((Model).layout.groups|Where-Object id -eq $layerGroup.id)[0].active -eq $active} 'Preset tab did not restore its original selection'
+            $records+=@{workspace=$preset.id;width=$width;groups=$before;tab_bounds_retained=$true}
+        }
+        Invoke 'panel-tab-adjustments'
+        Wait-Until {@((Model).layout.groups|Where-Object id -eq $layerGroup.id)[0].active -eq 'adjustments' -and !(Model).windows_workspace.dirty -and !(Model).windows_workspace.saving} 'Filters tab did not finish autosaving'
+        $saved=(Model).state.workspace.layout|ConvertTo-Json -Depth 80 -Compress
+        $other=if($preset.name -eq 'Paint'){@('Photo','builtin:workspace:photographer')}else{@('Paint','builtin:workspace:illustrator')}
+        Preset-Workspace $other[0] $other[1];Preset-Workspace $preset.name $preset.id
+        if(((Model).state.workspace.layout|ConvertTo-Json -Depth 80 -Compress) -cne $saved){throw 'Workspace reload lost its exact saved Filters tab and group layout'}
+        $null=Preset-Geometry $preset.top
+        Invoke ('panel-tab-'+$active)
+        Wait-Until {@((Model).layout.groups|Where-Object id -eq $layerGroup.id)[0].active -eq $active -and !(Model).windows_workspace.dirty -and !(Model).windows_workspace.saving} 'Reloaded preset did not restore and save its original active tab'
+    }
+    $names=@{'builtin:workspace:illustrator'='Paint';'builtin:workspace:photographer'='Photo';'builtin:workspace:painter'='Sketch'}
+    if(!$names.ContainsKey($initial)){throw 'Preset fixture cannot restore an unknown initial workspace'}
+    Preset-Workspace $names[$initial] $initial
+    if(((Model).state.document_file|ConvertTo-Json -Depth 20 -Compress) -cne $document){throw 'Preset grouping review edited the document or history'}
+    [IO.File]::WriteAllText((Join-Path $run 'preset-grouping.json'),($records|ConvertTo-Json -Depth 20),[Text.UTF8Encoding]::new($false))
+}
 try{
     Enter-CapyEnvironment
     $env:CAPY_STORAGE_DIR=Join-Path $run 'profile'
@@ -34,8 +141,12 @@ try{
     Write-Output "Owned workspace review $($review.Id)"
     Wait-Until {$script:drawing=Owned-DrawingWindow $review;$null -ne $drawing -and (Model).brush_ready -and (Model).state.theme -eq $Theme} 'Review did not start' 45
     $root=$drawing.Root
+    [CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
+    [CapyRowPointer]::SetForegroundWindow($drawing.Handle)|Out-Null
+    [CapyRowPointer]::Initialize([uint32]$review.Id)
     $ids=@('file','edit','image','layer','select','filter','view','window')
     $scale=[CapyWorkspaceHeader]::GetDpiForWindow($drawing.Handle)/96.
+    Check-PresetGroups
     foreach($size in @(@{width=744;compact=$true},@{width=1200;compact=$false},@{width=744;compact=$true})){
         $entry=& (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'File' -Inspect
         $entry.SetFocus();Wait-Until {$entry.Current.HasKeyboardFocus} 'Could not focus the visible menu entry'
@@ -89,28 +200,60 @@ try{
     }
     (Control $stats.label -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)).GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
     Wait-Until {@((Model).layout.groups|Where-Object active -eq 'stats').Count -gt 0} 'Diagnostics panel did not appear'
-    Wait-Until {$null -ne (Find 'renderer-stat-6')} 'Diagnostics query did not populate all shared rows'
+    Wait-Until {$null -ne (Find 'renderer-stat-7')} 'Diagnostics query did not populate all shared rows'
     $cpu=Control 'renderer-stat-0'
     if($cpu.Current.HelpText -notmatch 'Not GPU completion or input latency'){throw 'Diagnostics lost measurement scope'}
     $cpuIdentity=$cpu.GetRuntimeId() -join ':'
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action 'Test stroke'
-    Wait-Until {[uint64](Control 'renderer-stat-2').Current.Name -gt 0} 'Visible Diagnostics did not collect drawing submissions'
-    if(((Control 'renderer-stat-0').GetRuntimeId() -join ':') -ne $cpuIdentity){throw 'Stats updates replaced native metric rows'}
+    Wait-Until {(Drawing-Frames) -gt 0} 'Visible Diagnostics did not collect drawing submissions'
+    $rateIdentity=(Control 'renderer-stat-2').GetRuntimeId() -join ':'
+    $copy=@(Fps-Copy 'en')
+    Wait-Until {(Control 'renderer-stat-2').Current.HelpText -eq $copy[1] -and (Find $copy[0] -Name -Type ([System.Windows.Automation.ControlType]::Text))} 'Windows Diagnostics did not identify submitted canvas frames'
+    $idleFrames=Idle-Fps
+    $document=(Model).state.document_file|ConvertTo-Json -Depth 12 -Compress
+    $cameraRevision=(Model).state.camera.revision
+    $bounds=(Control 'drawing-canvas' -Arranged).Current.BoundingRectangle
+    $area=(Model).state.camera.work_area;$viewport=(Model).state.camera.viewport;$factor=$bounds.Width/$viewport[0]
+    $x=[int]($bounds.X+($area[0]+$area[2]*.5)*$factor);$y=[int]($bounds.Y+($area[1]+$area[3]*.5)*$factor)
+    [CapyRowPointer]::SetForegroundWindow($drawing.Handle)|Out-Null
+    [CapyRowPointer]::Down('mouse',$x,$y,'middle')
+    try{for($step=1;$step -le 30;$step++){[CapyRowPointer]::Move(($x+[int](24*[Math]::Sin($step/5.))),$y);Start-Sleep -Milliseconds 20}}finally{[CapyRowPointer]::Up()}
+    Wait-Until {(Model).state.camera.revision -gt $cameraRevision -and (Control 'renderer-stat-2').Current.Name -match '^[1-9][0-9]*$'} 'Cached native pan did not publish positive submitted FPS'
+    if((Drawing-Frames) -ne $idleFrames -or ((Model).state.document_file|ConvertTo-Json -Depth 12 -Compress) -ne $document){throw 'Cached pan changed drawing updates or the document'}
+    if((Idle-Fps) -ne $idleFrames){throw 'Stopping cached pan created drawing updates'}
+    foreach($tag in 'ja','en'){
+        Diagnostics-Language $tag
+        if(((Control 'renderer-stat-2').GetRuntimeId() -join ':') -ne $rateIdentity){throw 'Changing language replaced the native FPS row'}
+    }
+    $generation=(Model).windows_gpu_generation
+    $camera=(Model).state.camera|ConvertTo-Json -Depth 12 -Compress
+    $recovery=@{unavailable_observed=$false}
+    Invoke 'Test GPU loss' -Name
+    Wait-Until {
+        $rate=Find 'renderer-stat-2';if($rate -and $rate.Current.Name -eq [string][char]0x2014){$recovery.unavailable_observed=$true}
+        (Model).windows_gpu_generation -eq $generation+1 -and (Model).brush_ready
+    } 'Diagnostics GPU recovery did not replace its renderer' 60
+    $copy=@(Fps-Copy 'en')
+    Wait-Until {(Control 'renderer-stat-2').Current.Name -match '^[0-9]+$' -and (Control 'renderer-stat-2').Current.HelpText -eq $copy[1] -and (Find $copy[0] -Name -Type ([System.Windows.Automation.ControlType]::Text))} 'Recovered Diagnostics did not resume submitted FPS'
+    $null=Idle-Fps
+    if(((Model).state.document_file|ConvertTo-Json -Depth 12 -Compress) -ne $document -or ((Model).state.camera|ConvertTo-Json -Depth 12 -Compress) -ne $camera){throw 'Diagnostics GPU recovery changed the document or camera'}
+    if(((Control 'renderer-stat-0').GetRuntimeId() -join ':') -ne $cpuIdentity -or ((Control 'renderer-stat-2').GetRuntimeId() -join ':') -ne $rateIdentity){throw 'Stats updates replaced native metric rows'}
+    [IO.File]::WriteAllText((Join-Path $run 'diagnostics-fps.json'),(@{cached_pan='passed';idle_without_drawing_updates='passed';retained_localized_source='passed';gpu_generation_before=$generation;gpu_generation_after=(Model).windows_gpu_generation;unavailable_observed=$recovery.unavailable_observed;unavailable_scope='200 ms native polling can miss the reset interval; windowless renderer_stats_distinguish_submissions_and_retire_surface_feedback asserts unavailable deterministically'}|ConvertTo-Json -Depth 4))
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawing.Handle.ToInt64() -Action Resize -Width 1500 -Height 1000
-    Wait-Until {$null -ne (Find 'renderer-stat-6')} 'Resize removed Diagnostics content'
+    Wait-Until {$null -ne (Find 'renderer-stat-7')} 'Resize removed Diagnostics content'
     Assert-RendererHealthy $review.Id $drawing
     & (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $review.Id -WindowHandle $drawing.Handle.ToInt64() -Output (Join-Path $run 'diagnostics.png') -ClientOnly *> (Join-Path $run 'diagnostics.json')
     & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'window'
     (Control (Panel-Menu 'stats').label -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)).GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
     Wait-Until {$null -eq (Find 'renderer-stat-0')} 'Hidden Diagnostics retained visible widgets'
     & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'window';Invoke 'undo_workspace'
-    Wait-Until {$null -ne (Find 'renderer-stat-6')} 'Workspace Undo did not restore Diagnostics'
+    Wait-Until {$null -ne (Find 'renderer-stat-7')} 'Workspace Undo did not restore Diagnostics'
     Assert-RendererHealthy $review.Id $drawing
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close -DiscardUnsaved
     if((Get-Item -LiteralPath $stderr).Length){throw 'Native stderr requires inspection'}
-    [pscustomobject]@{shared_menus='passed';compact_and_expanded_header='passed';responsive_menu_focus='passed';selection_commands='passed';about_page='passed';diagnostics_query_and_row_retention='passed';diagnostics_visibility_and_workspace_undo='passed';native_resize='passed';zero_exit='passed';scope='native UI Automation; physical docking, drawers, full layout parity and presentation remain separate'}|ConvertTo-Json
+    [pscustomobject]@{preset_grouping_native_bounds_tabs_and_reload='passed';shared_menus='passed';compact_and_expanded_header='passed';responsive_menu_focus='passed';selection_commands='passed';about_page='passed';diagnostics_query_and_row_retention='passed';diagnostics_visibility_and_workspace_undo='passed';native_resize='passed';zero_exit='passed';scope='native UI Automation; physical docking, drawers, full layout parity and presentation remain separate'}|ConvertTo-Json
 }catch{
     [IO.File]::WriteAllText((Join-Path $run 'failure.txt'),($_|Out-String)+$_.ScriptStackTrace);throw
 }finally{
-    Exit-CapyEnvironment
+    [CapyRowPointer]::Dispose();Exit-CapyEnvironment
 }

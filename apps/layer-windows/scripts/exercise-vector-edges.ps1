@@ -35,7 +35,8 @@ $review=$null;$projection=$null;$noticeFrame=$null;$actionWidths=@{}
 $control=[uint16]0x11
 function Start-Review([string]$Language){
  $file=Settings-File
- $settings=if(Test-Path -LiteralPath $file){Get-Content -LiteralPath $file -Raw|ConvertFrom-Json -AsHashtable}else{@{}}
+ $settings=@{}
+ if(Test-Path -LiteralPath $file){foreach($property in (Get-Content -LiteralPath $file -Raw|ConvertFrom-Json).PSObject.Properties){$settings[$property.Name]=$property.Value}}
  $settings.language=@{Explicit=$Language};$settings.theme=$Theme
  [IO.File]::WriteAllText($file,($settings|ConvertTo-Json -Depth 20))
  $script:review=Start-Process -FilePath $Executable -WorkingDirectory $run -WindowStyle Hidden -PassThru -RedirectStandardError (Join-Path $run "stderr-$Language.log")
@@ -112,6 +113,12 @@ function Notice-Fits([string]$Place){
   }
  }
  if(!@($parts.Keys|Where-Object {$_ -like 'canvas-notice-action-*'}).Count){$findings.Add("$Place notice shows no actions")}
+ $view=Snapshot;$picture=Grab
+ try{$checks["$Place notice styles"]=Notice-Presentation $parts $view $picture}finally{Save-Grab $picture ("notice-palette-"+($Place-replace' ','-')+"-$Theme")}
+ if($Place-eq'German narrow'){
+  $text=$parts['canvas-notice-text'].bounds
+  foreach($id in @($parts.Keys|Where-Object {$_-like'canvas-notice-action-*'})){if($parts[$id].bounds.Top+1-lt$text.Bottom){throw 'The narrow German notice did not put its actions below the long text'}}
+ }
 }
 function Footer-Fits([string]$Place){
  $footer=Find 'layer-footer' -Visible
