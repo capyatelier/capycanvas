@@ -363,13 +363,16 @@ private struct HeaderItemControl: View {
     }
     private func tile(_ icon: String, action: @escaping () -> Void) -> some View {
         let selected = description["selected"].bool, enabled = editing || description["enabled"].bool
+        let reason = enabled ? nil : description.disabledReason
         return Button(action: action) {
             PanelIcon(name: icon, size: size["icon"].number)
                 .frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle())
         }.buttonStyle(HeaderButtonStyle(selected: selected, hovering: hovering, inBar: inBar, drawerOpen: drawerOpen, radius: radius))
             .disabled(!enabled).opacity(enabled ? 1 : 0.36)
-            .accessibilityLabel(description["label"].string).help((enabled ? nil : description.disabledReason) ?? description["label"].string)
+            .accessibilityLabel(description["label"].string).help(reason ?? description["label"].string)
+            .accessibilityHint(reason ?? "")
             .accessibilityAddTraits(selected ? .isSelected : [])
+            .modifier(DisabledExplanation(reason: reason, identifier: "header-reason-\(entry["id"].uint)"))
     }
 }
 

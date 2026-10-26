@@ -153,7 +153,8 @@ private struct WorkspacePanelGroupContent: View {
             let strip = SquircleShape(topLeading: square[0] ? 0 : radius, topTrailing: square[1] ? 0 : radius)
             let body = SquircleShape(bottomTrailing: square[2] ? 0 : radius, bottomLeading: square[3] ? 0 : radius)
             VStack(spacing: 0) {
-                WorkspaceTabStrip(shape: strip, tab: tab, strip: palette.glassStrip, panel: palette.glassPanel).frame(height: 36)
+                WorkspaceTabStrip(shape: strip, tab: tab, strip: palette.glassStrip, panel: palette.glassPanel,
+                    slide: store.workspace.tabSlide, group: group["id"].uint, active: group["active"].string).frame(height: 36)
                 body.fill(palette.glassPanel)
             }
         } else {

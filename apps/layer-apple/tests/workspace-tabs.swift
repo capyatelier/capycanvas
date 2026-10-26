@@ -29,7 +29,8 @@ import SwiftUI
         let bounds = CGRect(x: 54 + offset, y: 0, width: 80.5, height: 36)
         let tab = WorkspaceTabFrame(bounds: bounds, clip: CGRect(x: 0, y: 0, width: 200, height: 36))
         let host = NSHostingView(rootView: VStack(spacing: 0) {
-            WorkspaceTabStrip(shape: .surface, tab: tab, strip: strip, panel: panel).frame(width: 200, height: 36)
+            WorkspaceTabStrip(shape: .surface, tab: tab, strip: strip, panel: panel,
+                slide: WorkspaceTabSlide(motion: WorkspaceMotion()), group: 0, active: "toolbar").frame(width: 200, height: 36)
             HStack(spacing: 0) { strip; panel }.frame(width: 200, height: 12)
         }.coordinateSpace(name: "editor-workspace")
             .background(Color(.sRGB, red: 0.95, green: 0.05, blue: 0.75, opacity: 1)))
@@ -232,13 +233,22 @@ import SwiftUI
         store.workspace.cancel(item)
         try await wait("Cancellation retires the preview") { store.workspace.tabSlide.grab == nil }
         precondition(store.state["workspace"].stableKey == before)
-        store.workspace.start(item, point: restartPress)
-        store.workspace.move(item, point: restartBeyond)
-        try await wait("Preview before late selection") { !store.workspace.tabSlide.preview.isNull }
         let liveGroups = store.snapshot["layout"]["groups"].array
             + store.state["customization"]["column_drawers"].array.map { $0["tabs"].replacing("id", with: $0["tabs"]["group"]) }
         let previousActive = liveGroups.first { $0["id"].uint == group }!["active"].string
         let nextActive = previousActive == "toolbar" ? "brushes" : "toolbar"
+        let comparisonActive = nextActive == "toolbar" ? "brushes" : "toolbar"
+        if previousActive != comparisonActive {
+            try await store.apply(["type": "select_panel_tab", "group": group, "panel": comparisonActive])
+        }
+        try await wait("Late-selection comparison panel") {
+            let groups = store.snapshot["layout"]["groups"].array
+                + store.state["customization"]["column_drawers"].array.map { $0["tabs"].replacing("id", with: $0["tabs"]["group"]) }
+            return groups.first { $0["id"].uint == group }?["active"].string == comparisonActive
+        }
+        store.workspace.start(item, point: restartPress)
+        store.workspace.move(item, point: restartBeyond)
+        try await wait("Preview before late selection") { !store.workspace.tabSlide.preview.isNull }
         func previewShade() async throws -> [CGFloat] {
             for _ in 0..<35 {
                 window.contentView?.layoutSubtreeIfNeeded()
@@ -258,9 +268,9 @@ import SwiftUI
         precondition(zip(previousShade, selectedShade).contains { abs($0 - $1) > 1 / 255 },
             "A late selection publication must update the retained preview's selected surface")
         precondition(store.workspace.tabSlide.grab!.id == previewID && store.workspace.tabSlide.grab!.frames == restarted)
-        try await store.apply(["type": "select_panel_tab", "group": group, "panel": previousActive])
         store.workspace.cancel(item)
         try await wait("Late-selection preview retires") { store.workspace.tabSlide.grab == nil }
+        try await store.apply(["type": "select_panel_tab", "group": group, "panel": previousActive])
         precondition(store.state["workspace"].stableKey == before)
         try await store.apply(["type": "customize", "action": ["type": "set_tab_style", "group": group, "style": "icon"]])
         try await wait("Shared icon-only tab widths") { frames().count == 3 && frames().allSatisfy { $0.bounds.width == 36 } }

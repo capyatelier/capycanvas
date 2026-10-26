@@ -16,6 +16,9 @@ struct ToolbarTileButton: View {
             drawerBackground: drawerOpen ? .clear : nil, corner: .half))
             .foregroundStyle(palette["text"])
             .disabled(!tile["enabled"].bool).opacity(tile["enabled"].bool ? 1 : 0.36)
+            .accessibilityHint(tile.disabledReason ?? "")
+            .modifier(DisabledExplanation(reason: tile.disabledReason,
+                identifier: "toolbar-reason-\(panel["id"].string)-\(tile["id"].uint)"))
     }
 }
 

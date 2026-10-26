@@ -10,8 +10,9 @@ struct WorkspaceTabSlideOverlay: View {
             let groups = store.snapshot["layout"]["groups"].array
                 + store.state["customization"]["column_drawers"].array.map { $0["tabs"].replacing("id", with: $0["tabs"]["group"]) }
             let active = groups.first { $0["id"].uint == grab.group }?["active"].string ?? ""
+            let drawer = store.state["customization"]["column_drawers"].array.contains { $0["tabs"]["group"].uint == grab.group }
             let panels = store.workspace.presentedTabs(group: grab.group, panels: grab.panels.map { store.panel($0) })
-            WorkspaceTabSlideContent(slide: slide, grab: grab, panels: panels, active: active, palette: EditorPalette(source: store.state["palette"]))
+            WorkspaceTabSlideContent(slide: slide, grab: grab, panels: panels, active: active, drawer: drawer, palette: EditorPalette(source: store.state["palette"]))
                 .id(grab.id)
         }
     }
@@ -22,6 +23,7 @@ private struct WorkspaceTabSlideContent: View {
     let grab: WorkspaceTabSlide.Grab
     let panels: [JSON]
     let active: String
+    let drawer: Bool
     let palette: EditorPalette
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var appeared = false
@@ -34,10 +36,8 @@ private struct WorkspaceTabSlideContent: View {
                 // Establish the neighbors' original positions even when
                 // down and the first preview arrive in one SwiftUI update.
                 let offset = source || appeared ? slide.offset(group: grab.group, index: index) : 0
-                WorkspaceTabLabel(tab: tab, selected: selected, palette: palette)
+                WorkspaceTabLabel(tab: tab, selected: selected, palette: palette, fill: .some(drawer ? palette.glassPanel : nil))
                     .frame(width: frame.width, height: frame.height)
-                    .background(SquircleShape(topLeading: SquircleShape.surfaceRadius, topTrailing: SquircleShape.surfaceRadius)
-                        .fill(palette["tabbar"]))
                     .offset(x: frame.minX - grab.clip.minX + offset, y: frame.minY - grab.clip.minY)
                     .animation(source || reduceMotion ? nil : .timingCurve(0, 0, 0.58, 1, duration: 0.12), value: offset)
                     .zIndex(source ? 2 : selected ? 1 : 0)

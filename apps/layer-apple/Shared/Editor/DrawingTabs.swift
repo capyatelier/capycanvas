@@ -314,7 +314,7 @@ private struct DrawingTabList: View {
             tabs.select(id) { if $0 && vertical { tabs.presented = false } }
         } label: {
             VStack(alignment: .leading, spacing: 2) {
-                Text(row["title"].string + (row["modified"].bool ? " •" : "")).lineLimit(1)
+                Text(row["title"].string + (row["modified"].bool ? " •" : "")).fontWeight(.bold).lineLimit(1)
                 if vertical { Text(row["location"].string).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
             }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: alignment).contentShape(Rectangle())
         }.buttonStyle(.plain).help(row["location"].string)
@@ -323,7 +323,7 @@ private struct DrawingTabList: View {
     }
     private func close(_ row: JSON) -> some View {
         let id = row["id"].uint
-        return Button { tabs.close(id) } label: { Image(systemName: "xmark").font(.caption).frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle()) }
+        return Button { tabs.close(id) } label: { SharedIcon(name: "close-document", size: 16).frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle()) }
             .accessibilityLabel(tabs.closeCaption(id)).accessibilityIdentifier("drawing-close-\(id)")
             .modifier(DrawingMeasure(id: id, part: \.close))
     }

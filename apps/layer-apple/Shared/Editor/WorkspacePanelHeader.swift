@@ -153,13 +153,38 @@ struct WorkspaceTabStrip: View {
     let tab: WorkspaceTabFrame?
     let strip: Color
     let panel: Color
+    let slide: WorkspaceTabSlide
+    let group: UInt64
+    let active: String
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    var body: some View {
+        let moving = slide.grab.flatMap { grab -> (frame: WorkspaceTabFrame, offset: CGFloat, source: Bool)? in
+            guard grab.group == group, !slide.preview.isNull,
+                let index = grab.panels.firstIndex(of: active), grab.frames.indices.contains(index) else { return nil }
+            return (grab.frames[index], slide.offset(group: group, index: index), index == grab.source)
+        }
+        WorkspaceTabStripFill(shape: shape, tab: moving?.frame ?? tab, strip: strip, panel: panel, offset: moving?.offset ?? 0)
+            .animation(moving?.source != false || reduceMotion ? nil : .timingCurve(0, 0, 0.58, 1, duration: 0.12), value: moving?.offset ?? 0)
+    }
+}
+
+private struct WorkspaceTabStripFill: View, Animatable {
+    let shape: SquircleShape
+    let tab: WorkspaceTabFrame?
+    let strip: Color
+    let panel: Color
+    var offset: CGFloat
+    var animatableData: CGFloat {
+        get { offset }
+        set { offset = newValue }
+    }
     var body: some View {
         GeometryReader { allocation in
             let origin = allocation.frame(in: .named("editor-workspace")).origin
             let cut = tab.flatMap { active -> Path? in
                 let clip = active.clip.offsetBy(dx: -origin.x, dy: -origin.y)
                 guard !clip.isNull, !clip.isEmpty else { return nil }
-                return WorkspaceTabShape().path(in: active.bounds.offsetBy(dx: -origin.x, dy: -origin.y))
+                return WorkspaceTabShape().path(in: active.bounds.offsetBy(dx: offset - origin.x, dy: -origin.y))
                     .intersection(Path(clip))
             } ?? Path()
             Canvas { context, size in
@@ -178,7 +203,7 @@ struct WorkspaceGroupGrip: View {
     var vertical = false
     var body: some View {
         PanelGrip(vertical: vertical).frame(maxWidth: .infinity, maxHeight: .infinity)
-            .contentShape(Rectangle()).accessibilityElement().accessibilityLabel("Panel group options")
+            .contentShape(Rectangle()).accessibilityElement().accessibilityLabel(store.catalog["native_copy"]["tool_controls"]["more_options"].string)
             .accessibilityIdentifier((drawer ? "drawer-group-options-" : "group-options-") + String(group.uint))
             .accessibilityHidden(false)
             .modifier(WorkspaceDrag(workspace: store.workspace, item: JSON(["kind": "group", "group": group.raw]),
