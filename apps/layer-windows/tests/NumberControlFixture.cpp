@@ -40,18 +40,18 @@ struct Fixture : std::enable_shared_from_this<Fixture> {
             auto spec=object(item.row,L"control"),formatted=object(item.row,L"formatted"),labels=object(item.row,L"labels");bool enabled=flag(item.row,L"enabled");
             if(!entry||entry.Text()!=str(formatted,L"text")||entry.IsEnabled()!=enabled||AutomationProperties::GetName(entry)!=str(labels,L"edit"))
                 throw hresult_error(E_FAIL,L"Numeric display or enabled state differs from the shared model");
+            auto box=entry.Parent().try_as<Grid>();
+            if(!box||box.Children().Size()!=2)throw hresult_error(E_FAIL,L"Numeric value host is missing at "+item.key);
+            auto value=box.Children().GetAt(1).try_as<ContentControl>();
+            auto border=value?value.Content().try_as<Border>():Border{nullptr};
+            auto readout=border?border.Child().try_as<TextBlock>():TextBlock{nullptr};
+            if(!value||!readout||value.Visibility()!=Visibility::Visible||readout.Visibility()!=Visibility::Visible||value.IsEnabled()!=enabled||readout.Text()!=str(formatted,L"text")||std::abs(readout.Opacity()-(enabled?1.:.36))>.001)
+                throw hresult_error(E_FAIL,L"Numeric visible readout differs from the shared model at "+item.key);
             if(str(spec,L"kind")==L"slider"){
                 if(minus||plus)throw hresult_error(E_FAIL,L"Panel slider retained step buttons at "+item.key);
                 auto track=findElement(item.root,item.key+L"-slider").try_as<Slider>();
                 if(!track||track.IsEnabled()!=enabled||track.Minimum()!=0||track.Maximum()!=1||track.Value()!=num(formatted,L"fill"))
                     throw hresult_error(E_FAIL,L"Numeric slider state differs from the shared model at "+item.key);
-                auto box=entry.Parent().try_as<Grid>();
-                if(!box||box.Children().Size()!=2)throw hresult_error(E_FAIL,L"Numeric value host is missing at "+item.key);
-                auto value=box.Children().GetAt(1).try_as<ContentControl>();
-                auto border=value?value.Content().try_as<Border>():Border{nullptr};
-                auto readout=border?border.Child().try_as<TextBlock>():TextBlock{nullptr};
-                if(!value||!readout||value.Visibility()!=Visibility::Visible||readout.Visibility()!=Visibility::Visible||value.IsEnabled()!=enabled||readout.Text()!=str(formatted,L"text"))
-                    throw hresult_error(E_FAIL,L"Numeric visible readout differs from the shared model at "+item.key);
                 frames.Insert(item.key+L":value",frame(value));frames.Insert(item.key+L":track",frame(track));
             }else{
                 if(!minus||!plus||AutomationProperties::GetName(minus)!=str(labels,L"decrease")||AutomationProperties::GetName(plus)!=str(labels,L"increase")||minus.IsEnabled()!=(enabled&&num(item.row,L"value")>num(spec,L"min"))||

@@ -135,7 +135,7 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
         // Read mode has the same text extent as the shared plain value. Keep
         // native text editing/accessibility while avoiding a hidden caret gutter.
         auto display=label(data,L"");display.UseLayoutRounding(false);display.LineHeight(20);
-        display.TextAlignment(TextAlignment::Right);display.VerticalAlignment(VerticalAlignment::Center);
+        display.TextAlignment(valueOnly?TextAlignment::Center:TextAlignment::Right);display.VerticalAlignment(VerticalAlignment::Center);
         display.Margin({preference?9.:6.,0,preference?9.:6.,0});display.IsHitTestVisible(false);
         AutomationProperties::SetAccessibilityView(display,Automation::Peers::AccessibilityView::Raw);
         readout=make_weak(display);
@@ -586,9 +586,10 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
         slider.MinWidth(0);root.Children().Append(header);return root;
     }
     if(valueOnly){
+        auto valueHost=entry.Parent().as<Grid>();
         header.Children().RemoveAt(1);entry.ClearValue(FrameworkElement::WidthProperty());entry.MinWidth(0);
         entry.HorizontalAlignment(HorizontalAlignment::Stretch);entry.TextAlignment(TextAlignment::Center);
-        root.Children().Append(entry);return root;
+        root.Children().Append(valueHost);return root;
     }
     if(panel){
         sliderHost.Margin({36,0,76,0});sliderHost.VerticalAlignment(VerticalAlignment::Bottom);Grid::SetColumnSpan(sliderHost,2);Grid::SetRow(sliderHost,1);
@@ -605,7 +606,8 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
             for(auto& ch:measure)if(ch>=L'0'&&ch<=L'9')ch=L'8';
             entry.Width(std::max(24.,measureText(hstring(measure)))+2*data->panelMetric(L"field_padding"));
         }
-        header.Children().RemoveAt(1);spin.Children().Append(entry);
+        auto valueHost=entry.Parent().as<Grid>();
+        header.Children().RemoveAt(1);spin.Children().Append(valueHost);
         Border frame;frame.Child(spin);frame.Background(data->brush(L"input"));frame.CornerRadius(data->controlCorner());
         Grid::SetColumn(frame,1);header.Children().Append(frame);
     }

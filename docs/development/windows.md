@@ -1947,8 +1947,9 @@ localization bootstrap before constructing controls.
 Generate those models at the display's actual scale,
 then build and capture. Number models include shared captions, both formatted
 range endpoints and panel metrics. Use a fresh model directory after changing
-that contract. Panel slider reports require the visible readout and track with
-no step buttons; spin rows retain both buttons and their bound and opacity checks.
+that contract. Every numeric report requires its visible formatted readout,
+including the disabled 12 px spin row. Panel sliders retain their track without
+step buttons; spin rows retain both buttons and their bound and opacity checks.
 Reviews compare the actual caption text bounds and require visible value pixels
 in enabled and disabled spin rows:
 
