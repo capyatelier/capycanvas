@@ -403,6 +403,75 @@ fn apple_closing_new_work_keeps_unrestored_session_copies() {
 }
 
 #[test]
+fn apple_explicit_failed_entry_discard_preserves_live_history_and_other_failed_copy() {
+    for platform in [0, 1] {
+        let path = std::env::temp_dir().join(format!("capy-apple-failed-discard-{}", layer_core::PortableId::random()));
+        let app = launch(platform, &path);
+        let blank = app.pixels();
+        app.stroke(); app.draw_until_idle();
+        let painted = app.pixels();
+        assert_ne!(painted, blank);
+        let document = app.borrow().host.session.engine().document().clone();
+        checkpoint(&app, 0, true);
+        drop(app);
+        let index = path.join("window.json");
+        let saved = layer_ui::SessionManifest::read(&index).unwrap().unwrap();
+        let live = saved.active;
+        let discarded = saved.drawings.iter().map(|drawing| drawing.id).max().unwrap() + 1;
+        let retained = discarded + 1;
+        let failed = vec![
+            layer_ui::SessionDrawing { id: discarded, key: "discarded-failed".into() },
+            layer_ui::SessionDrawing { id: retained, key: "retained-failed".into() },
+        ];
+        for drawing in &failed {
+            std::fs::create_dir_all(path.join(&drawing.key)).unwrap();
+            std::fs::write(path.join(&drawing.key).join("head.json"), b"{}").unwrap();
+            std::fs::write(path.join(&drawing.key).join("preserved.bin"), drawing.key.as_bytes()).unwrap();
+        }
+        saved.stage(failed, live).unwrap().publish(&index).unwrap();
+        let (app, warning, failures) = launch_with_failures(platform, &path, None, false);
+        assert!(warning.is_some());
+        assert_eq!(failures.iter().map(|failure| failure["id"].as_u64().unwrap()).collect::<Vec<_>>(), vec![discarded, retained]);
+        let retained_failure = failures.iter().find(|failure| failure["id"] == retained).unwrap().clone();
+        let failed = layer_ui::SessionManifest::read(&index).unwrap().unwrap();
+        assert_eq!(failed.blocked, vec![discarded, retained]);
+        assert_eq!(app.borrow().window.documents.order(), &[live]);
+        let retained_files = stored_files(&path.join("retained-failed"));
+        checkpoint(&app, discarded, true);
+        let committed = layer_ui::SessionManifest::read(&index).unwrap().unwrap();
+        assert_eq!(committed.active, live);
+        assert_eq!(committed.blocked, vec![retained]);
+        assert_eq!(committed.drawings.iter().map(|drawing| drawing.id).collect::<Vec<_>>(), vec![live, retained]);
+        assert_eq!(stored_files(&path.join("retained-failed")), retained_files);
+        assert_saved_document(app.borrow().host.session.engine().document(), &document);
+        assert_eq!(app.pixels(), painted);
+        app.invoke("undo"); app.draw_until_idle();
+        assert_eq!(app.pixels(), blank);
+        app.invoke("redo"); app.draw_until_idle();
+        assert_eq!(app.pixels(), painted);
+        assert_saved_document(app.borrow().host.session.engine().document(), &document);
+        drop(app);
+        let (reopened, warning, failures) = launch_with_failures(platform, &path, None, false);
+        assert!(warning.is_some());
+        assert_eq!(failures.iter().map(|failure| failure["id"].as_u64().unwrap()).collect::<Vec<_>>(), vec![retained]);
+        assert_eq!(failures, vec![retained_failure]);
+        let reopened_manifest = layer_ui::SessionManifest::read(&index).unwrap().unwrap();
+        assert_eq!(reopened_manifest.drawings, committed.drawings);
+        assert_eq!(reopened_manifest.blocked, vec![retained]);
+        assert_eq!(reopened_manifest.active, live);
+        assert_eq!(stored_files(&path.join("retained-failed")), retained_files);
+        assert_eq!(reopened.pixels(), painted);
+        assert_saved_document(reopened.borrow().host.session.engine().document(), &document);
+        reopened.invoke("undo"); reopened.draw_until_idle();
+        assert_eq!(reopened.pixels(), blank);
+        reopened.invoke("redo"); reopened.draw_until_idle();
+        assert_eq!(reopened.pixels(), painted);
+        drop(reopened);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+}
+
+#[test]
 fn apple_shared_image_objects_keep_f64_poses_pixels_and_history_across_workers_and_restart() {
     use std::io::Seek;
     let packages: [(&str, &[u8]); 3] = [

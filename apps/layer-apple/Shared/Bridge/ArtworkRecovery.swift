@@ -97,6 +97,7 @@ import UIKit
     }
     func flush(cleanExit: Bool = false, _ completion: @escaping (Bool) -> Void) {
         scheduled?.cancel(); scheduled = nil
+        if closed && !saving { completion(error == nil); return }
         if restoring {
             completion(store?.native?.sessions == nil); return
         }
@@ -113,12 +114,28 @@ import UIKit
         waiters.append(completion)
         write(exclusion: id)
     }
+    func discard(_ id: UInt64) {
+        guard !restoring, !saving, failedDrawings.contains(where: { $0["id"].uint == id }) else { return }
+        removeDrawing(id) { [self] committed in
+            guard committed else { return }
+            failedDrawings.removeAll { $0["id"].uint == id }
+            restoreError = failedDrawings.isEmpty ? nil : failedDrawings.map { $0["error"].string }.joined(separator: "\n\n")
+            dismissedError = nil
+            schedule()
+        }
+    }
     func close(_ completion: @escaping (Bool) -> Void = { _ in }) {
+        flush(cleanExit: true) { [self] saved in
+            if saved { closed = true; scheduled?.cancel(); scheduled = nil }
+            completion(saved)
+        }
+    }
+    func retire(_ completion: @escaping (Bool) -> Void) {
         scheduled?.cancel(); scheduled = nil
-        if saving { flush { [self] saved in if saved { close(completion) } else { completion(false) } }; return }
+        if saving { flush { [self] saved in if saved { retire(completion) } else { completion(false) } }; return }
         closed = true
         waiters.append(completion)
-        write(exclusion: UInt64.max)
+        write(exclusion: UInt64.max, cleanExit: true)
     }
     func resume() { closed = false; durable = ""; schedule() }
     /// A scene the system still holds may reconnect to its own session.

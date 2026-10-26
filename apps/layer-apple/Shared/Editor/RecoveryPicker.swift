@@ -33,10 +33,17 @@ struct RecoveryPresentation: ViewModifier {
                         if let workspaces = store.workspaces { WorkspaceStartupNotice(workspaces: workspaces) }
                         ProjectProgressNotice(files: store.projectFiles, copy: recovery.copy)
                         if let error = recovery.visibleError {
-                            EditorNotice(message: error, working: recovery.restoring || recovery.saving) {
-                                Button(recovery.copy["retry"].string) { recovery.retry() }
-                                    .disabled(recovery.restoring || recovery.saving).accessibilityIdentifier("recovery-retry")
-                                Button(recovery.copy["later"].string) { recovery.later() }.accessibilityIdentifier("recovery-later")
+                            if recovery.error == nil && !recovery.failedDrawings.isEmpty {
+                                ForEach(recovery.failedDrawings, id: \.failedDrawingID) { drawing in
+                                    EditorNotice(message: drawing["error"].string, working: recovery.restoring || recovery.saving) {
+                                        recoveryActions
+                                        Button(recovery.copy["discard"].string, role: .destructive) { recovery.discard(drawing["id"].uint) }
+                                            .disabled(recovery.restoring || recovery.saving)
+                                            .accessibilityIdentifier("recovery-discard-\(drawing["id"].uint)")
+                                    }
+                                }
+                            } else {
+                                EditorNotice(message: error, working: recovery.restoring || recovery.saving) { recoveryActions }
                             }
                         }
                     }
@@ -47,7 +54,16 @@ struct RecoveryPresentation: ViewModifier {
                 }
             }
     }
+    private var recoveryActions: some View {
+        Group {
+            Button(recovery.copy["retry"].string) { recovery.retry() }
+                .disabled(recovery.restoring || recovery.saving).accessibilityIdentifier("recovery-retry")
+            Button(recovery.copy["later"].string) { recovery.later() }.accessibilityIdentifier("recovery-later")
+        }
+    }
 }
+
+private extension JSON { var failedDrawingID: UInt64 { self["id"].uint } }
 
 struct EditorNotice<Actions: View>: View {
     let message: String

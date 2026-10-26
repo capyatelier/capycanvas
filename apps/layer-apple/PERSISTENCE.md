@@ -5,8 +5,9 @@
 Settings use the versioned Rust model and atomic JSON files; workspaces use the
 shared SQLite library. Both apps expose New, Open, Save and Save As with the
 shared [Capy package](../../docs/reference/capy-package.md), profiled image
-export, and private checkpoints for open drawing sessions. Explicit window close uses the
-shared unsaved-change decision. App termination preserves the open session.
+export, and private checkpoints for open drawing sessions. Closing a drawing
+uses the shared unsaved-change decision. Window close and app termination
+preserve the open session.
 
 **File → New Window** opens another editor on both platforms. Each scene owns its
 document, camera and Undo history, and closing one leaves the others open. An
@@ -129,8 +130,8 @@ iPad without multiple-window support reports that limitation.
   commit. New membership is registered before the first drawing checkpoint, so
   a crash cannot strand a durable drawing outside the index. The final index
   acknowledgement follows all drawing checkpoints. Explicit removal publishes
-  first; drawing storage is retired after accepted close. A window manifest is never replaced by an
-  older manifest when it is unreadable.
+  first; drawing storage is retired after accepted drawing close. A window manifest is
+  never replaced by an older manifest when it is unreadable.
 - The native two-second timer coalesces changes without restarting the timer for
   every edit. One window write runs at a time. While a drawing change such as a
   transform is in progress, the timed checkpoint waits for the next tick instead
@@ -146,9 +147,13 @@ iPad without multiple-window support reports that limitation.
   title until a manual save. Input arriving during preparation cannot overwrite
   the live drawing through stale adoption.
 - Restore attempts are recorded before decoding each drawing. An interrupted or
-  failed attempt preserves its data and exposes Retry. Markers remain pending
-  until actual owner adoption, including the worker-to-owner transfer. Retry uses the retained
-  original session; a failed restore never publishes a blank session over it.
+  failed attempt preserves its data and exposes Retry, Later and per-drawing
+  Discard. Discard publishes removal of that failed identity before cleaning
+  unused recovery files; other drawings and failed copies remain intact. Markers
+  remain pending until actual owner adoption, including the worker-to-owner
+  transfer. Retry uses the retained original session; a failed restore never
+  publishes a blank session over it. An unreadable whole index is preserved
+  separately because it cannot identify individual drawings to discard.
 - Before adoption, the file worker resolves the original's saved grant, attempts
   a security-scoped, coordinated read of each original and passes its fingerprint
   to shared Rust.
@@ -167,15 +172,20 @@ release keeps the close pending. Sleep and iPad backgrounding suspend input and
 flush; activation revalidates ownership before editing resumes. Discarded iPad
 scenes attempt a final workspace close and preserve their drawing session for
 the next new window. macOS
-Quit flushes open drawings and releases workspace owners without prompting to
-save or retiring drawing membership. Explicit drawing/window close retains
-Save/Discard/Cancel and publishes removal before native destruction.
+Quit and window close flush open drawings and release workspace owners without
+prompting to save or retiring drawing membership. Closing a drawing retains
+Save/Discard/Cancel and publishes removal before native destruction. Closing the
+last drawing retires it before closing its window; the window checkpoint cannot
+register that retired drawing again. A failed close restores editing and keeps
+the window open.
 
 ## Checks
 
 ```sh
 bash apps/layer-apple/scripts/test-persistence.sh
 bash apps/layer-apple/scripts/test-project-files.sh
+bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/drawing-tabs.swift
+bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/startup-owner.swift
 bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/workspace-coordinator.swift
 bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/workspace-manager.swift
 python3 apps/layer-apple/scripts/test-project-access.py
@@ -190,8 +200,10 @@ cargo test -p layer-apple -p layer-workspace -p layer-ui -p layer-host --feature
 The portable `tests::session` bridge journeys cover both Apple policies, exact
 pixels, selection, Undo/Redo after restart, orderly restart, explicit removal,
 failed peer checkpoint publication, stale adoption and new windows adopting
-unrestored sessions. Tab checks cover cancelling
-a prepared close before membership changes. The XCTest `testArtworkRecoveryAfterRestart` journey expects
+unrestored sessions. Per-entry discard checks retain other failed copies and
+the live drawing's exact pixels and history. Native tab checks cover window-close
+approval, veto, failed publication, retry and restart, plus explicitly closing the
+last drawing without resurrecting its retired membership. The XCTest `testArtworkRecoveryAfterRestart` journey expects
 immediate restored editing without a chooser. macOS/iPadOS builds, light/dark UI,
 system scene restoration, background-task expiration and provider delivery still
 require Apple hardware validation; Linux bridge checks do not qualify them.

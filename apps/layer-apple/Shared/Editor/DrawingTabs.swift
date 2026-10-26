@@ -88,7 +88,18 @@ import UniformTypeIdentifiers
     }
     func closeApproved() {
         guard let store, !busy else { return }
-        if rows.count <= 1 { store.projectFiles.closeWindow?(); return }
+        if rows.count <= 1 {
+            busy = true
+            store.recovery.retire { [weak self] saved in
+                self?.busy = false
+                if saved { store.projectFiles.closeWindow?() }
+                else {
+                    store.cancelPreparedClose()
+                    store.projectFiles.error = store.recovery.failure ?? store.bootstrap["recovery"]["close_save_failed"].string
+                }
+            }
+            return
+        }
         busy = true
         let id = selected, recovery = store.recovery
         store.native?.switchDocument(0, closing: true, removing: { done in DispatchQueue.main.async {

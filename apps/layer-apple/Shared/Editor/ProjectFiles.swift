@@ -223,8 +223,12 @@ import UIKit
         }
     }
     func confirmClose(_ completion: @escaping (Bool) -> Void) {
-        guard let store else { completion(false); return }
-        store.query(["type": "document_tabs", "op": "session_close"]) { completion($0.bool) }
+        guard !busy, externalOpen == nil, closeCompletion == nil, let store else { completion(false); return }
+        busy = true; blocksEditor = true; closeCompletion = completion
+        store.query(["type": "document_tabs", "op": "session_close"]) { [weak self] result in
+            guard let self, closeCompletion != nil else { return }
+            finishClose(result.bool)
+        }
     }
     func confirmCurrentClose(_ completion: @escaping (Bool) -> Void) {
         guard !busy, externalOpen == nil, let native = store?.native else { completion(false); return }
