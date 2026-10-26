@@ -28,11 +28,9 @@ fn fixture(hidden_separator: bool) -> (Document, Vec<OccurrenceHandle>, Vec<Occu
         for key in ["red", "green", "blue"] {
             curves.set(key, EffectValue::Curve(vec![[0., 1.], [1., 0.]])).unwrap();
         }
-        let c = insert_effect(&mut doc, curves, 0);
-        let application = doc.scene().effect_handle(c).unwrap();
-        let program = &mut doc.artwork.effects.get_mut(application).unwrap().program;
-        let program = Arc::make_mut(program);
+        let program = Arc::make_mut(&mut curves.program);
         program.entry = format!("{}_channels", program.entry).into();
+        let c = insert_effect(&mut doc, curves, 0);
         (doc, vec![a, b, c], vec![a, b])
     }
 }
@@ -130,4 +128,135 @@ fn ordered_cold_fusion_retains_all_jobs_and_source_ranges_until_prepared() {
     r.uploads.finish(&encoder);
     encoder.submit(&r.queue);
     assert_pixels(&r, &texture, [0., 0., 0., 1.]);
+}
+
+#[cfg(not(target_arch="wasm32"))]
+#[test]
+fn native_bake_defers_cold_effects_to_its_parent_compiler_and_preserves_history() {
+    use layer_render::CanvasRenderer;
+    use std::{sync::mpsc, time::{Duration, Instant}};
+    let (document, _, _) = fixture(false);
+    let reference = WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
+    assert_ne!(reference.adapter().get_info().device_type, wgpu::DeviceType::Cpu);
+    let renderer = staged_renderer(&reference, document.composition().color);
+    let compiler = renderer.startup.as_ref().unwrap().compiler.clone();
+    let mut engine = layer_engine::CanvasEngine::new(renderer, document, layer_engine::input_queue(8).1,
+        crate::test_support::view(EXTENT), layer_engine::ViewTransform::IDENTITY).unwrap();
+    let before = engine.checkpoint();
+    let plan = engine.document().merge_plan(layer_core::MergeKind::Visible).unwrap();
+    let target = plan.target;
+    engine.insert_with_operations(plan.edits, vec![(target, plan.operation)], None).unwrap();
+    let merged = engine.checkpoint();
+    assert_ne!(before, merged);
+    let document = engine.document().clone();
+    let batch = layer_render::DabBatch {kind:layer_render::DabBatchKind::RasterOperation(0), dab_count:0,
+        ..crate::test_support::dab_batch(target,crate::tests::test_style(layer_core::BrushExecution::Dry),layer_core::Rect::from_extent(EXTENT))};
+    let batches = [batch];
+    let frame = FramePacket {dab_batches:&batches,..packet(document.scene(),EXTENT)};
+    engine.backend_mut().ensure_document_metadata(EXTENT,document.scene()).unwrap();
+    assert!(!engine.backend_mut().prepare_bakes(frame));
+    let deadline=Instant::now()+Duration::from_secs(30);
+    while compiler.pending()!=0 {
+        compiler.check().unwrap();assert!(Instant::now()<deadline,"private capture recipes did not prepare");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let (entered, entry) = mpsc::channel();
+    let (release, held) = mpsc::channel();
+    compiler.enqueue(startup::DOCUMENT,move || {let _=entered.send(());let _=held.recv();Ok(())});
+    compiler.start();
+    entry.recv_timeout(Duration::from_secs(5)).unwrap();
+    let pending = compiler.pending();
+    assert!(!engine.backend_mut().prepare_bakes(frame));
+    assert!(compiler.pending()>pending,"cold bake recipes were not admitted to the held parent compiler");
+    assert!(engine.backend().prepared_bake(target,0,[0;2]).is_none(),"cold bake published pixels while its parent compiler was held");
+    assert_eq!(engine.checkpoint(),merged);
+    release.send(()).unwrap();
+    let settle = |engine:&mut layer_engine::CanvasEngine<WgpuRasterizer>| {
+        let deadline=Instant::now()+Duration::from_secs(30);
+        loop {
+            engine.render_frame_at(0).unwrap();engine.backend_mut().wait_idle().unwrap();
+            if !engine.has_pending_document_edits() && !engine.raster_backing_pending() && !engine.backend().has_pending_work() {break;}
+            assert!(Instant::now()<deadline,"native bake did not settle after compiler release");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    };
+    settle(&mut engine);
+    let pixels=float_pixels(engine.backend(),crate::test_support::document_texture(engine.backend()));
+    assert_eq!(pixels.len(),(EXTENT[0]*EXTENT[1]) as usize);
+    assert!(pixels.iter().all(|pixel|pixel.iter().zip([1.;4]).all(|(actual,expected)|(actual-expected).abs()<3e-5)));
+    assert_eq!(engine.checkpoint(),merged);
+    assert!(engine.undo().unwrap());settle(&mut engine);assert_eq!(engine.checkpoint(),before);
+    assert_eq!(float_pixels(engine.backend(),crate::test_support::document_texture(engine.backend())),pixels);
+    assert!(engine.redo().unwrap());settle(&mut engine);assert_eq!(engine.checkpoint(),merged);
+    assert_eq!(float_pixels(engine.backend(),crate::test_support::document_texture(engine.backend())),pixels);
+}
+
+#[cfg(not(target_arch="wasm32"))]
+#[test]
+fn native_bake_defers_cold_mask_restoration_to_its_parent_compiler() {
+    use layer_core::raster::{RasterData,RasterPlane,RasterRevision,RasterTile,TileBlob,TileKey};
+    use crate::layer_tests::placement::{paint_document,paint_mut,set_mask,reveal_all};
+    use layer_render::CanvasRenderer;
+    use std::{sync::mpsc,time::{Duration,Instant}};
+    let mut document=paint_document(EXTENT,"Masked red");
+    let color=document.composition().color;
+    let pixels=[255,0,0,255].repeat(PAGE_SIZE.pow(2) as usize);
+    paint_mut(&mut document).raster=RasterRevision::backed(RasterData {tiles:[(TileKey {plane:RasterPlane::Color,coordinate:[0;2]},
+        RasterTile::backed(TileBlob::encode(color.paint_descriptor(),&pixels).unwrap()))].into(),..Default::default()});
+    let mut mask=reveal_all(EXTENT,[0;2]);
+    let pixels:Vec<_>=(0..PAGE_SIZE).flat_map(|_|(0..PAGE_SIZE).map(|x|if x<EXTENT[0]/2 {0}else{255})).collect();
+    mask.source.raster=RasterRevision::backed(RasterData {tiles:[(TileKey {plane:RasterPlane::Mask,coordinate:[0;2]},
+        RasterTile::backed(TileBlob::encode(RasterPlane::Mask.descriptor(color),&pixels).unwrap()))].into(),..Default::default()});
+    set_mask(&mut document,mask);
+    crate::test_support::add_paint(&mut document.artwork,"Empty",EXTENT);refresh(&mut document);
+    assert!(document.scene().order().iter().all(|&owner|document.scene().effect(owner).is_none()));
+    let reference=WgpuRasterizer::new_native_headless(color).unwrap();
+    assert_ne!(reference.adapter().get_info().device_type,wgpu::DeviceType::Cpu);
+    let renderer=staged_renderer(&reference,color);
+    let compiler=renderer.startup.as_ref().unwrap().compiler.clone();
+    assert!(!renderer.scene_pipelines.source.required()[1].ready());
+    let mut engine=layer_engine::CanvasEngine::new(renderer,document,layer_engine::input_queue(8).1,
+        crate::test_support::view(EXTENT),layer_engine::ViewTransform::IDENTITY).unwrap();
+    let before=engine.checkpoint();let plan=engine.document().merge_plan(layer_core::MergeKind::Visible).unwrap();let target=plan.target;
+    engine.insert_with_operations(plan.edits,vec![(target,plan.operation)],None).unwrap();let merged=engine.checkpoint();
+    let document=engine.document().clone();
+    let batches=[layer_render::DabBatch {kind:layer_render::DabBatchKind::RasterOperation(0),dab_count:0,
+        ..crate::test_support::dab_batch(target,crate::tests::test_style(layer_core::BrushExecution::Dry),layer_core::Rect::from_extent(EXTENT))}];
+    let frame=FramePacket {dab_batches:&batches,..packet(document.scene(),EXTENT)};
+    engine.backend_mut().ensure_document_metadata(EXTENT,document.scene()).unwrap();
+    assert!(!engine.backend_mut().prepare_bakes(frame));
+    let deadline=Instant::now()+Duration::from_secs(30);
+    while compiler.pending()!=0 {
+        compiler.check().unwrap();assert!(Instant::now()<deadline,"private capture recipes did not prepare");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert!(!engine.backend().scene_pipelines.source.required()[1].ready());
+    let (entered,entry)=mpsc::channel();let (release,held)=mpsc::channel();
+    compiler.enqueue(startup::DOCUMENT,move || {let _=entered.send(());let _=held.recv();Ok(())});compiler.start();
+    entry.recv_timeout(Duration::from_secs(5)).unwrap();let pending=compiler.pending();
+    assert!(!engine.backend_mut().prepare_bakes(frame));
+    assert!(compiler.pending()>pending,"mask restore recipes bypassed the held parent compiler");
+    assert!(!engine.backend().scene_pipelines.source.required()[1].ready());
+    assert!(engine.backend().prepared_bake(target,0,[0;2]).is_none());assert_eq!(engine.checkpoint(),merged);
+    release.send(()).unwrap();
+    let settle=|engine:&mut layer_engine::CanvasEngine<WgpuRasterizer>| {
+        let deadline=Instant::now()+Duration::from_secs(30);
+        loop {
+            engine.render_frame_at(0).unwrap();engine.backend_mut().wait_idle().unwrap();
+            if !engine.has_pending_document_edits() && !engine.raster_backing_pending() && !engine.backend().has_pending_work() {break;}
+            assert!(Instant::now()<deadline,"masked bake did not settle");std::thread::sleep(Duration::from_millis(1));
+        }
+    };
+    settle(&mut engine);assert!(engine.backend().scene_pipelines.source.required()[1].ready());
+    let pixels=float_pixels(engine.backend(),crate::test_support::document_texture(engine.backend()));
+    assert_eq!(pixels.len(),(EXTENT[0]*EXTENT[1]) as usize);
+    for (i,pixel) in pixels.iter().enumerate() {
+        let expected=if (i as u32)%EXTENT[0]<EXTENT[0]/2 {[0.;4]}else{[1.,0.,0.,1.]};
+        assert!(pixel.iter().zip(expected).all(|(actual,expected)|(actual-expected).abs()<3e-5),"pixel {i}: {pixel:?}");
+    }
+    assert_eq!(engine.checkpoint(),merged);
+    assert!(engine.undo().unwrap());settle(&mut engine);assert_eq!(engine.checkpoint(),before);
+    assert_eq!(float_pixels(engine.backend(),crate::test_support::document_texture(engine.backend())),pixels);
+    assert!(engine.redo().unwrap());settle(&mut engine);assert_eq!(engine.checkpoint(),merged);
+    assert_eq!(float_pixels(engine.backend(),crate::test_support::document_texture(engine.backend())),pixels);
 }

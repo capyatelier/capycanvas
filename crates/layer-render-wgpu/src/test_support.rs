@@ -1,6 +1,22 @@
 use super::*;
 use layer_render::{DabBatchKind, DabStyle, FramePacket, ViewState};
 
+pub(crate) fn prepare_raster<T>(r:&mut WgpuRasterizer,mut operation:impl FnMut(&mut WgpuRasterizer)->Result<T,GpuRasterError>)->Result<T,GpuRasterError> {
+    let retained=|r:&WgpuRasterizer|r.paint_layers.iter().flat_map(|layer|layer.pages.iter().map(|page|page.active().texture.clone())
+        .chain(layer.watercolor_wetness_pages.iter().map(|page|page.active().texture.clone())))
+        .chain(r.layer_masks.pages.values().map(|page|page.texture.clone())).collect::<Vec<_>>();
+    let original=retained(r);let deadline=std::time::Instant::now()+std::time::Duration::from_secs(20);
+    loop {
+        match operation(r) {
+            Err(GpuRasterError::DeferredObjectWork)=> {
+                assert_eq!(retained(r),original,"pending preparation published live pages");
+                assert!(std::time::Instant::now()<deadline,"raster preparation did not complete");
+                r.wait_idle().unwrap();std::thread::sleep(std::time::Duration::from_millis(1));
+            },result=>return result,
+        }
+    }
+}
+
 pub(crate) fn add_paint(artwork: &mut layer_core::authored::Artwork, name: impl Into<Arc<str>>, domain: [u32; 2]) -> (OccurrenceHandle, SourceTarget) {
     use layer_core::authored::*;
     let source = artwork.paint.insert(PortableId::random(), PaintSource { color_mode: Default::default(),

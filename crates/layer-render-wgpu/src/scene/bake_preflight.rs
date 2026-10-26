@@ -8,7 +8,7 @@ struct Key {
 struct Input {key:Key,snapshot:Arc<layer_core::SceneSnapshot>}
 pub(crate) struct BakePreflight {
     color:layer_core::color::DocumentColor,owner:u64,revision:u64,inputs:Vec<Input>,next:usize,
-    renderer:Option<Box<WgpuRasterizer>>,scene:Option<Box<Scene>>,source:Option<Arc<layer_core::SceneSnapshot>>,initialized:bool,
+    renderer:Option<Box<WgpuRasterizer>>,pipelines:Option<startup::Requirements>,scene:Option<Box<Scene>>,source:Option<Arc<layer_core::SceneSnapshot>>,initialized:bool,
     coordinate:usize,output:Option<Image>,output_recorded:bool,planning:bool,
     pages:Vec<(usize,[u32;2],Image)>,failure:Option<GpuRasterError>,projected_bytes:u64,
 }
@@ -53,10 +53,16 @@ impl BakePreflight {
             let mut renderer=parent.native_preparation()?;
             renderer.effect_analyses=parent.bake_analysis_entries(&input.snapshot,&input.key.scope,input.key.offset,input.key.extent)?.unwrap_or_default();
             renderer.ensure_document_metadata(input.key.extent,scene)?;
+            let watercolor=scene.targets().any(|target|scene.raster(target).and_then(|root|root.try_data()).is_some_and(|data|data.is_ok_and(|data|data.watercolor.is_some())));
+            self.pipelines=Some(startup::Requirements::capture_scene(&renderer,scene,watercolor));
             self.renderer=Some(Box::new(renderer));
         }
         let r=self.renderer.as_mut().unwrap();
         if !self.initialized {
+            if let Some(required)=&self.pipelines
+                && let Some(compiler)=r.startup.as_ref().map(|startup|&startup.compiler).or(r.preparation_compiler.as_ref())
+                && !required.require(compiler,startup::DOCUMENT) {return Ok(());}
+            self.pipelines=None;
             if !r.prepare_raster_restores(source) {return Ok(());}
             r.reconcile_rasters(source,true,&[])?;
             let mut encoder=submission::CommandEncoder::new(&r.device,&Default::default());
@@ -129,7 +135,7 @@ impl WgpuRasterizer {
                 .and_then(|added|bytes.checked_add(added)).ok_or(GpuRasterError::SourceWorkingSetExceeded)
         }).and_then(|bytes|self.admit_preparation_bytes(self.projected_restore_bytes(),bytes).map(|()|bytes));
         let mut state=self.bake_preflight.take().filter(|old|old.color==self.document_color() && old.inputs.iter().map(|input|&input.key).eq(inputs.iter().map(|input|&input.key)))
-            .unwrap_or(BakePreflight {color:self.document_color(),owner:packet.scene.owner(),revision:packet.scene.revision(),inputs,next:0,renderer:None,scene:None,source:None,initialized:false,coordinate:0,
+            .unwrap_or(BakePreflight {color:self.document_color(),owner:packet.scene.owner(),revision:packet.scene.revision(),inputs,next:0,renderer:None,pipelines:None,scene:None,source:None,initialized:false,coordinate:0,
                 output:None,output_recorded:false,planning:false,pages:Vec::new(),failure:None,projected_bytes:0});
         match projected {Ok(bytes)=>state.projected_bytes=bytes,Err(error)=>state.failure=Some(error)}
         if let Err(error)=state.advance(self,packet) {state.failure=Some(error);}

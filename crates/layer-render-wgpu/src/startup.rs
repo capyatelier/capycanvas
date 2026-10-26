@@ -121,6 +121,26 @@ pub(super) struct Requirements {
     styles: Vec<layer_render::DabStyle>,
 }
 impl Requirements {
+    pub(super) fn capture_scene(r:&WgpuRasterizer,view:SceneView<'_>,watercolor:bool)->Self {
+        let mut required = Self::default();
+        required.render.extend(r.scene_pipelines.pipeline.iter().cloned());
+        required.compute.push(r.scene_pipelines.constant.2.clone());
+        required.compute.extend(r.scene_pipelines.scale_pipelines().into_iter().cloned());
+        required.compute.extend(r.transforms.as_ref().unwrap().placement_pipelines());
+        if r.device.portable_blend() { required.compute.extend(r.portable_blend.pipelines.iter().cloned()); }
+        if watercolor {
+            required.compute.push(r.pipelines.watercolor_compute.1.clone());
+            required.render.push(r.pipelines.watercolor_composite.clone());
+        }
+        if view.order().iter().any(|&h| view.object_layer(h).is_some()) {
+            required.compute.extend(r.scene_pipelines.objects.pipelines().into_iter().cloned());
+            required.render.extend(r.scene_pipelines.source.required().into_iter().cloned());
+        }
+        if view.order().iter().any(|&h| view.vector_layer(h).is_some()) {
+            required.compute.push(r.scene_pipelines.vector.pipeline().clone());
+        }
+        required
+    }
     pub async fn prepare(&self) -> Result<(), String> {
         for pipelines in self.render.chunks(4) {
             Deferred::prepare_all(pipelines.iter()).await?;
@@ -198,8 +218,13 @@ impl Requirements {
         }
     }
 }
+#[cfg(not(target_arch="wasm32"))]
+pub(crate) type CompilerHandle = Arc<Compiler>;
+#[cfg(target_arch="wasm32")]
+pub(crate) type CompilerHandle = Compiler;
+
 pub(super) struct Startup {
-    pub compiler: Compiler,
+    pub compiler: CompilerHandle,
     pub(super) masks: builtin_masks::Masks,
     document_key: Option<ShaderDocument>,
     brush: Option<ShaderBrushKey>,
@@ -261,7 +286,7 @@ impl Startup {
         #[cfg(not(target_arch = "wasm32"))]
         let compiler = {
             let _ = device;
-            Compiler::new()?
+            Arc::new(Compiler::new()?)
         };
         #[cfg(target_arch = "wasm32")]
         let compiler = Compiler::new(device)?;
@@ -606,6 +631,43 @@ fn object_document(icc:bool)->Document {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn backdrop_submission_defers_display_recipes_to_the_compiler() {
+        use layer_render::CanvasRenderer;
+        let reference = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        let mut renderer = crate::test_support::staged_renderer(&reference, Default::default());
+        renderer.resize_surface(64, 64).unwrap();
+        let document = Document::new(layer_core::PortableId::random(), 64, 64, layer_core::DocumentNames { paint: "Ink".into(), paper: "Paper".into() });
+        let snapshot = document.snapshot().as_ref().clone().with_scope(layer_core::authored::SceneScope::Members(document.scene().constant_backdrop().to_vec().into()));
+        let (entered, entry) = mpsc::channel();
+        let (release, held) = mpsc::channel();
+        let compiler = &renderer.startup.as_ref().unwrap().compiler;
+        compiler.enqueue(DOCUMENT, move || { let _ = entered.send(()); let _ = held.recv(); Ok(()) });
+        compiler.start();
+        entry.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(renderer.scene_pipelines.scale_pipelines().iter().all(|pipeline| !pipeline.ready()));
+        let packet = FramePacket { reset_layers: true, ..crate::test_support::packet(snapshot.view(), [64; 2]) };
+        let submitted = renderer.submitted_updates();
+        renderer.submit(packet).unwrap();
+        assert_eq!(renderer.submitted_updates(), submitted + 1);
+        assert!(renderer.object_deferred);
+        assert!(renderer.presentation_views().is_none());
+        assert!(renderer.scene_pipelines.scale_pipelines().iter().all(|pipeline| !pipeline.ready()));
+        release.send(()).unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        while renderer.scene_pipelines.scale_pipelines().iter().any(|pipeline| !pipeline.ready()) {
+            renderer.startup.as_ref().unwrap().compiler.check().unwrap();
+            assert!(std::time::Instant::now() < deadline, "Backdrop display recipes did not prepare");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        renderer.submit(packet).unwrap();
+        assert!(!renderer.object_deferred);
+        assert!(renderer.presentation_views().is_some());
+        let pixels = crate::test_support::float_pixels(&renderer, crate::test_support::document_texture(&renderer));
+        assert_eq!(pixels.len(), 64 * 64);
+        assert!(pixels.iter().all(|pixel| *pixel == [1.; 4]));
+    }
     #[test]
     fn shader_document_tracks_object_dependencies_without_tracking_geometry_or_profiles() {
         let mut document=object_document(false);

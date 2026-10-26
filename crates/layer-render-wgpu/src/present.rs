@@ -457,7 +457,7 @@ impl ViewportPresenter {
             ["fs_main", "fs_placed", "fs_mapped"].map(|entry| surface_pipeline(device, "viewport presentation with paper lighting", layout, &shader, ["vs_main", entry], None, format, None))
         });
         let Some(startup) = &renderer.startup else { return true };
-        let ready = startup.compiler.require(paper.iter(), crate::startup::DOCUMENT);
+        let ready = startup.compiler.require(paper.iter(), crate::startup::OTHER);
         startup.compiler.start();
         ready
     }

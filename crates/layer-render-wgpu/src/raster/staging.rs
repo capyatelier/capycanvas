@@ -191,8 +191,8 @@ impl WgpuRasterizer {
         std::mem::swap(&mut self.uploads,&mut self.restore_uploads);result
     }
     fn restore_pipelines_ready(&self)->bool {
-        self.startup.as_ref().is_none_or(|startup| {
-            let ready=startup.compiler.require(self.scene_pipelines.source.required(),startup::VALIDATION);startup.compiler.start();ready
+        self.startup.as_ref().map(|startup|&startup.compiler).or(self.preparation_compiler.as_ref()).is_none_or(|compiler| {
+            let ready=compiler.require(self.scene_pipelines.source.required(),startup::VALIDATION);compiler.start();ready
         })
     }
     pub(crate) fn prepare_raster_uploads(&mut self,requests:&[(Arc<TileBlob>,layer_core::color::RgbSpace,layer_core::color::RgbSpace)])->Result<(),GpuRasterError> {

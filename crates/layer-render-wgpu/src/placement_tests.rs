@@ -409,6 +409,47 @@ fn watercolor_prediction_and_commit_at_reduced_zoom() {
     watercolor_prediction_and_commit_with_canvas(256, true);
 }
 
+#[test]
+fn wet_edge_full_coverage_stays_finite_at_clamped_edge_width() {
+    for edge_width in [1., 16.] {
+        let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        let mut document = paint_document([128; 2], "full coverage wet edge");
+        super::submit(&mut r, document.scene(), &[], &[], true);
+        let original = r.readback_srgb_rgba8().unwrap();
+        let mut ink = dab([1., 0., 0., 1.]);
+        ink.radii = [32.; 2];
+        let mut stroke = batch(target(&document));
+        stroke.style = crate::tests::test_style(BrushExecution::Dry);
+        stroke.style.rendering.wet_edge = 1.;
+        stroke.style.rendering.burnt_edge = 1.;
+        stroke.style.rendering.edge_width = edge_width;
+        stroke.damage = ink.bounds();
+        let plan = crate::BrushPassPlan::for_device(&stroke.style, &r.device);
+        assert!(matches!(plan.direct, Some(crate::DirectPipelineKind::TexturedPaint)));
+        assert!(!plan.requires_destination());
+        assert!(stroke.style.contact.is_none() && stroke.style.grain.is_none());
+        assert!(matches!(stroke.style.tip, BrushTip::AnalyticEllipse));
+        let mut preview = stroke.clone(); preview.kind = DabBatchKind::Preview;
+        super::submit(&mut r, document.scene(), &[ink], &[preview], false);
+        let prediction = r.readback_srgb_rgba8().unwrap();
+        for y in 63..=65 { for x in 63..=65 {
+            assert_eq!(&prediction[(y * 128 + x) * 4..][..4], &[255, 0, 0, 255]);
+        } }
+        assert_eq!(&prediction[..4], &[0; 4]);
+        assert!(paint(&document).raster.is_empty());
+        super::submit(&mut r, document.scene(), &[], &[], false);
+        assert_eq!(r.readback_srgb_rgba8().unwrap(), original);
+        paint_mut(&mut document).raster = layer_core::raster::RasterRevision::pending();
+        super::submit(&mut r, document.scene(), &[ink], &[stroke], false);
+        let committed = r.readback_srgb_rgba8().unwrap();
+        for y in 63..=65 { for x in 63..=65 {
+            assert_eq!(&committed[(y * 128 + x) * 4..][..4], &[255, 0, 0, 255]);
+        } }
+        assert!(!paint(&document).raster.wait_data().unwrap().tiles.is_empty());
+        super::submit(&mut r, document.scene(), &[], &[], true);
+        assert_eq!(r.readback_srgb_rgba8().unwrap(), committed);
+    }
+}
 fn watercolor_prediction_and_commit_with_canvas(canvas: u32, reduced: bool) {
     watercolor_prediction_and_commit_with_renderer(WgpuRasterizer::new_native_headless(Default::default()).unwrap(), canvas, reduced);
 }
@@ -425,8 +466,12 @@ pub(crate) fn watercolor_prediction_and_commit_with_renderer(mut r: WgpuRasteriz
             frame.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
             frame.view.width_px = canvas / 8; frame.view.height_px = canvas / 8;
         }
-        r.submit(FramePacket { dabs, dab_batches: batches, reset_layers: reset,
-            ..frame }).unwrap();
+        let frame = FramePacket { dabs, dab_batches: batches, reset_layers: reset, ..frame };
+        if reduced && reset && dabs.is_empty() {
+            crate::test_support::submit_settled(r, frame);
+        } else {
+            crate::test_support::submit_ready(r, frame).unwrap();
+        }
     };
     let read = |r: &mut WgpuRasterizer| {
         if reduced {

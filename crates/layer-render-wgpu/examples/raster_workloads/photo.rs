@@ -212,7 +212,8 @@ fn sliders(canvas: &mut Canvas, observations: &mut Observations, exposure: Effec
     canvas.engine.backend_mut().wait_idle()?;
     Ok(())
 }
-fn native_roots(canvas: &Canvas) -> Result<Vec<(SourceTarget, Vec<([u8; 32], TileKey)>)>> {
+type NativeRoots = Vec<(SourceTarget, Vec<([u8; 32], TileKey)>)>;
+fn native_roots(canvas: &Canvas) -> Result<NativeRoots> {
     let scene = canvas.engine.document().scene();
     scene.targets().filter_map(|target| scene.raster(target).map(|raster| (target, raster)))
         .map(|(target, raster)| {

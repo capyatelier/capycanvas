@@ -1,5 +1,5 @@
 use super::*;
-use crate::test_support::{page_texture as texture, upload_page as upload};
+use crate::test_support::{page_texture as texture, upload_page as upload, prepare_raster};
 use crate::{WgpuRasterizer, layer_tests::page_bytes};
 use layer_core::color::RgbSpace;
 
@@ -595,12 +595,12 @@ fn native_restore_writeback_capture_round_trip_preserves_committed_codes() {
                     } else {
                         first = Some(bytes);
                     }
-                    r.restore_native_tiles(&[NativeTileRestore {
+                    prepare_raster(&mut r,|r|r.restore_native_tiles(&[NativeTileRestore {
                         blob: &backing,
                         space,
                         destination: space,
                         working: &working,
-                    }])
+                    }]))
                     .unwrap();
                     let restored = page_bytes(&r, &working);
                     let canonical_bytes = page_bytes(&r, &canonical);

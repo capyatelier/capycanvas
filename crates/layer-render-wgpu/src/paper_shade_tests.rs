@@ -62,6 +62,81 @@ fn paper_lighting_waiting_for_optional_shaders_does_not_keep_frames_busy() {
 }
 
 #[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn viewport_paper_compilation_stays_optional_after_startup() {
+    use std::{sync::mpsc, time::{Duration, Instant}};
+    let mut document = rough_gray_paper();
+    set_paper(&mut document, &[(paper::RELIEF, EffectValue::Number(150.))]);
+    let mut reference = WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
+    reference.submit(packet(document.scene(), [128; 2])).unwrap();
+    assert!(reference.paper_shade().is_some());
+    let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+    for overview in [false, true] {
+        let mut r = crate::test_support::staged_renderer(&reference, document.composition().color);
+        let mut presenter = if overview { ViewportPresenter::for_overview_surface } else { ViewportPresenter::for_surface }(
+            &r, format, SdrSurfaceColor::Srgb).unwrap();
+        let mut expected = if overview { ViewportPresenter::for_overview_surface } else { ViewportPresenter::for_surface }(
+            &reference, format, SdrSurfaceColor::Srgb).unwrap();
+        if overview {
+            let placement = crate::OverviewPlacement {
+                bounds: [0., 0., 128., 128.], clip: None, work_area: [[-1000.; 2]; 4],
+                outline_linear: [0.; 3], scale: 1., opacity: 1.,
+            };
+            presenter.set_overviews(&r, &[placement]);
+            expected.set_overviews(&reference, &[placement]);
+        }
+        let draw = |presenter: &mut ViewportPresenter, renderer: &WgpuRasterizer, target: &wgpu::TextureView| {
+            if overview { presenter.present_overviews(renderer, target, [128; 2]) }
+            else { presenter.present(renderer, target, view(), [0.2, 0.3, 0.4, 1.]) }.unwrap();
+        };
+        r.prepare_startup(&document, &layer_core::default_brush(layer_core::DefaultBrushPreset::GPen), false).unwrap();
+        presenter.pipelines_ready(&r);
+        r.ui_readback_ready();
+        r.update_paper_lighting(document.scene()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(60);
+        crate::test_support::wait_startup(&mut r, deadline, |progress| progress.complete,
+            format_args!("viewport dependencies, overview={overview}"));
+        while r.paper_shade().is_none() {
+            r.poll_startup().unwrap();
+            assert!(Instant::now() < deadline, "paper slope prepares, overview={overview}");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        r.submit(packet(document.scene(), [128; 2])).unwrap();
+        r.wait_idle().unwrap();
+        let composited = r.metrics.composited_pixels;
+        let (texture, target) = crate::create_target(&r.device, [128; 2], format, "optional viewport lighting");
+        r.shader_idle(false, false);
+        draw(&mut presenter, &r, &target);
+        let (finished, completion) = mpsc::channel();
+        r.startup.as_ref().unwrap().compiler.enqueue(crate::startup::BRUSH, move || {
+            let _ = finished.send(());
+            Ok(())
+        });
+        completion.recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .unwrap_or_else(|error| panic!("required work drains before optional lighting, overview={overview}: {error}"));
+        draw(&mut presenter, &r, &target);
+        assert!(!presenter.paper_lighting_drawn(), "active input parks optional viewport lighting, overview={overview}");
+        let plain = page_bytes(&r, &texture);
+        let progress = r.poll_startup().unwrap();
+        assert!(progress.canvas_ready && progress.brush_ready, "{progress:?}, overview={overview}");
+        assert!(r.ui_readback_ready());
+        assert!(!r.has_pending_work());
+        r.shader_idle(true, false);
+        crate::test_support::wait_startup(&mut r, deadline, |progress| progress.complete,
+            format_args!("optional viewport lighting completes, overview={overview}"));
+        draw(&mut presenter, &r, &target);
+        assert!(presenter.paper_lighting_drawn(), "idle admits viewport lighting, overview={overview}");
+        let lit = page_bytes(&r, &texture);
+        draw(&mut expected, &reference, &target);
+        assert!(expected.paper_lighting_drawn());
+        assert_eq!(lit, page_bytes(&reference, &texture), "staged and eager presentation agree, overview={overview}");
+        if overview { assert_eq!(lit, plain, "Navigator pixels remain unchanged"); }
+        else { assert_ne!(lit, plain, "prepared relief changes visible canvas pixels"); }
+        assert_eq!(r.metrics.composited_pixels, composited, "viewport lighting changes no composite, overview={overview}");
+    }
+}
+
+#[test]
 fn paper_relief_lights_the_canvas_keeps_its_tone_and_turns_with_the_light() {
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let mut document = rough_gray_paper();

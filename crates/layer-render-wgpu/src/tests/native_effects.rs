@@ -107,7 +107,7 @@ fn source(rgb: [f32;3], alpha: f32) -> EffectInstance {
 }
 fn frame_document(r: &mut WgpuRasterizer, document: &Document) -> [f32;4] {
     let document = Document::from_artwork(document.artwork.clone()).unwrap();
-    r.submit(packet(document.scene().with_owner(0,0),document.composition().size)).unwrap();
+    crate::test_support::submit_settled(r, packet(document.scene().with_owner(0,0),document.composition().size));
     let bytes = crate::layer_tests::page_bytes(r,crate::test_support::document_texture(r));
     std::array::from_fn(|c| f32::from_le_bytes(bytes[c*4..c*4+4].try_into().unwrap()))
 }
@@ -182,6 +182,38 @@ fn native_white_balance_and_encoded_tone_helpers_use_document_primaries_and_tran
             depth: SampleDepth::U16,
         })
         .unwrap();
+        assert_eq!(r.device.working_space(), space);
+        let below_white = f32::from_bits(1f32.to_bits() - 1);
+        let above_white = f32::from_bits(1f32.to_bits() + 1);
+        let inputs = [-16., -2., -above_white, -1., -below_white, below_white, 1., above_white, 2., 16.];
+        let image = crate::test_support::depth_source([256; 2], SampleDepth::F32, space, 4 * 1024 * 1024, |x, _| {
+            let value = inputs[x as usize % inputs.len()]; [value, value, value, 1.]
+        });
+        let mut transfer = effect(2, "exposure", true);
+        let program = Arc::make_mut(&mut transfer.program);
+        assert_eq!(program.space, layer_core::EffectSpace::Linear);
+        program.wgsl = format!("fn {}(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{{return vec4<f32>(sdr_encode(c.rgb,FX_SPACE),c.a);}}", program.entry).into();
+        let mut document = effect_document(&[transfer], [256; 2], r.document_color());
+        insert_source(&mut document, "direct working transfer", image);
+        crate::test_support::submit_settled(&mut r, FramePacket { blend_space: layer_core::BlendSpace::Linear,
+            ..packet(document.scene().with_owner(0, 0), [256; 2]) });
+        let pixels = crate::test_support::float_pixels(&r, crate::test_support::document_texture(&r));
+        let mut encoded = Vec::with_capacity(inputs.len());
+        for (index, &input) in inputs.iter().enumerate() {
+            let actual = pixels[index];
+            assert!(actual.iter().all(|value| value.is_finite()), "{space:?} input {input}: {actual:?}");
+            close(actual, [space.encode(f64::from(input)) as f32; 3], 1., &format!("{space:?} direct transfer {input}"));
+            if input.abs() == 1. { assert_eq!(actual, [input, input, input, 1.], "{space:?} signed white"); }
+            for &component in &actual[..3] {
+                assert_eq!(component.is_sign_negative(), input.is_sign_negative());
+                assert!(if input.abs() >= 1. { component.abs() >= 1. } else { component.abs() <= 1. }, "{space:?} input {input}: {actual:?}");
+            }
+            encoded.push([actual[0], actual[1], actual[2]]);
+        }
+        for pair in encoded.windows(2) { assert!(pair[0].iter().zip(pair[1]).all(|(a, b)| *a <= b), "{space:?}: {pair:?}"); }
+        for (negative, positive) in encoded.iter().zip(encoded.iter().rev()).take(inputs.len() / 2) {
+            assert_eq!(*negative, positive.map(|value| -value), "{space:?} signed transfer symmetry");
+        }
         for image in [false, true] {
             let alpha = 0.00000008;
             let rgb = [0.75, 0.2, 0.05];

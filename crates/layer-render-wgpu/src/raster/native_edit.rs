@@ -338,10 +338,10 @@ impl WgpuRasterizer {
         renderer.transforms=Some(paint_transform::PaintTransforms::from_recipes(&self.transforms.as_ref().unwrap().recipes()));
         renderer.source_tiles=std::cell::RefCell::new(crate::scene::sources::DecodedTiles::new(self.document_color().space));
         if let Some(native)=&mut renderer.native_edit {native.color_cache_bytes=0;}
+        renderer.preparation_compiler=self.startup.as_ref().map(|startup|startup.compiler.clone())
+            .or_else(||self.preparation_compiler.clone());
         #[cfg(target_arch="wasm32")]
         {
-            renderer.preparation_compiler=self.startup.as_ref().map(|startup|startup.compiler.clone())
-                .or_else(||self.preparation_compiler.clone());
             if renderer.preparation_compiler.is_none() {return Err(GpuRasterError::Effect("Shader compiler is unavailable".into()));}
             renderer.browser_image_decoder=self.browser_image_decoder.clone();
             renderer.browser_raster_decoder=self.browser_raster_decoder.clone();

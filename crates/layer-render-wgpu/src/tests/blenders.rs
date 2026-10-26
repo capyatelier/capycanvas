@@ -877,9 +877,9 @@ fn dither_cells_synthetic_completion_observations() {
             canvas.stroke(100+repetition,&brush,&[dab;8],8,false);
             let submit=start.elapsed();
             let output=canvas.composite();
-            if repetition==0 { if let Ok(directory)=std::env::var("DITHER_CELLS_ARTIFACTS") {
+            if repetition==0 && let Ok(directory)=std::env::var("DITHER_CELLS_ARTIFACTS") {
                 dither_cell_observation_png(&directory,&format!("cell-{size}"),&output);
-            }}
+            }
             eprintln!("DITHER_CELLS_OBSERVATION size={size} repetition={repetition} first={} submit_us={} completed_with_readback_us={} pixels={}",
                 repetition==0,submit.as_micros(),start.elapsed().as_micros(),output.len());
         }
@@ -1015,7 +1015,9 @@ fn scatter_cells_synthetic_completion_observations() {
         for repetition in 0..4 {
             let start=std::time::Instant::now();canvas.stroke(100+repetition,&brush,&[dab;8],8,false);
             let submit=start.elapsed();let output=canvas.composite();let completed=start.elapsed();
-            if repetition==0 {if let Ok(directory)=std::env::var("SCATTER_CELLS_ARTIFACTS") {dither_cell_observation_png(&directory,&format!("cell-{size}"),&output);}}
+            if repetition==0 && let Ok(directory)=std::env::var("SCATTER_CELLS_ARTIFACTS") {
+                dither_cell_observation_png(&directory,&format!("cell-{size}"),&output);
+            }
             eprintln!("SCATTER_CELLS_OBSERVATION size={size} repetition={repetition} first={} submit_us={} completed_with_readback_us={} pixels={}",
                 repetition==0,submit.as_micros(),completed.as_micros(),output.len());
         }

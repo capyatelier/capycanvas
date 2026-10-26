@@ -48,8 +48,7 @@ fn paint_mut(document: &mut Document) -> &mut PaintSource {
 fn frame(r: &mut WgpuRasterizer, layer: &mut Document) {
     let root = layer.artwork.root;
     layer.artwork.compositions.get_mut(root).unwrap().color = r.document_color;
-    crate::test_support::submit_ready(r, FramePacket { reset_layers: true, ..packet(layer.scene(), [256; 2]) })
-    .unwrap();
+    crate::test_support::submit_settled(r, FramePacket { reset_layers: true, ..packet(layer.scene(), [256; 2]) });
 }
 fn linear(space: RgbSpace, codes: [u16; 4], target: RgbSpace) -> [f64; 3] {
     rgb::apply(
@@ -969,7 +968,7 @@ fn surface_quantization_matches_every_code_with_independent_spatial_noise() {
     insert_source(&mut document,"all quantized codes",image);
     let mut r=WgpuRasterizer::new_native_headless(color).unwrap();
     let camera=crate::test_support::view(size);
-    r.submit(FramePacket {view:camera,..crate::test_support::packet(document.scene(),size)}).unwrap();
+    crate::test_support::submit_settled(&mut r, FramePacket {view:camera,..crate::test_support::packet(document.scene(),size)});
     let hash=|mut v:u32| {
         v=(v^(v>>16)).wrapping_mul(0x7feb352d);
         v=(v^(v>>15)).wrapping_mul(0x846ca68b);
@@ -998,11 +997,14 @@ fn surface_triangular_quantization_is_phase_stable_and_format_aware() {
     use layer_core::color::{ColorProfile,DocumentColor,SampleDepth,RgbSpace,source::{SourceBuilder,SourceInterpretation,SourceChannels}};
     use crate::tests::native_effects::{empty_document,insert_source};
     let mut r=crate::WgpuRasterizer::new_native_headless(DocumentColor {space:RgbSpace::Srgb,depth:SampleDepth::U16}).unwrap();
+    let above_white = f32::from_bits(1f32.to_bits() + 1);
+    let above_white_code = RgbSpace::Srgb.encode(f64::from(above_white)) * 255.;
+    assert_eq!(RgbSpace::Srgb.decode(above_white_code / 255.) as f32, above_white);
     for format in [wgpu::TextureFormat::Rgba8UnormSrgb,wgpu::TextureFormat::Bgra8UnormSrgb,wgpu::TextureFormat::Rgba8Unorm,wgpu::TextureFormat::Bgra8Unorm,wgpu::TextureFormat::Rgba16Float] {
         for scale in [1.,0.25,0.125,2.] {
             let size=[(512.*scale) as u32,(256.*scale) as u32];
             let camera=layer_render::ViewState {width_px:size[0],height_px:size[1],document_to_surface:[scale,0.,0.,scale,0.,0.]};
-            for (code,alpha) in [(255.,1.),(0.,1.),(100.,1.),(100.25,1.),(100.5,1.),(100.75,1.),(100.25,0.5),(100.25,0.),(-100.,1.),(510.,1.),(255.*1e10,1.)] {
+            for (code,alpha) in [(255.,1.),(above_white_code,1.),(0.,1.),(100.,1.),(100.25,1.),(100.5,1.),(100.75,1.),(100.25,0.5),(100.25,0.),(-100.,1.),(510.,1.),(255.*1e10,1.)] {
                 let encoded=code/255.;let linear=RgbSpace::Srgb.decode(encoded) as f32;
                 let interpretation=SourceInterpretation {channels:SourceChannels::Rgba,depth:SampleDepth::F32,profile:ColorProfile::Builtin(RgbSpace::Srgb),profile_assumed:false};
                 let mut builder=SourceBuilder::new([512,256],interpretation,16*1024*1024).unwrap();
@@ -1010,7 +1012,7 @@ fn surface_triangular_quantization_is_phase_stable_and_format_aware() {
                 for _ in 0..256 {builder.push_row(&row).unwrap();}
                 let mut document=empty_document([512,256],r.document_color());
                 insert_source(&mut document,"continuous gray",std::sync::Arc::new(builder.finish().unwrap()));
-                r.submit(crate::FramePacket {view:camera,..crate::test_support::packet(document.scene(),[512,256])}).unwrap();
+                crate::test_support::submit_settled(&mut r, crate::FramePacket {view:camera,..crate::test_support::packet(document.scene(),[512,256])});
                 let target=crate::create_target(r.device(),size,format,"quantization oracle surface").0;
                 let mut presenter=crate::ViewportPresenter::for_surface(&r,format,crate::SdrSurfaceColor::Srgb).unwrap();
                 presenter.present(&r,&target.create_view(&Default::default()),camera,[0.,0.,0.,1.]).unwrap();

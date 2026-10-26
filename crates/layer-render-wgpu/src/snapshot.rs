@@ -282,21 +282,7 @@ impl SnapshotRenderer {
         if self.scene_pipelines_ready { return Ok(()); }
         let r = &mut self.renderer;
         let view = self.scene.view().with_scope(&self.scope).with_offset(self.offset);
-        let mut required = startup::Requirements::default();
-        required.render.extend(r.scene_pipelines.pipeline.iter().cloned());
-        required.compute.push(r.scene_pipelines.constant.2.clone());
-        required.compute.extend(r.scene_pipelines.scale_pipelines().into_iter().cloned());
-        required.compute.extend(r.transforms.as_ref().unwrap().placement_pipelines());
-        if r.device.portable_blend() { required.compute.extend(r.portable_blend.pipelines.iter().cloned()); }
-        if self.backing.values().any(|data| data.watercolor.is_some()) {
-            required.compute.push(r.pipelines.watercolor_compute.1.clone());
-        }
-        if view.order().iter().any(|&h| view.object_layer(h).is_some()) {
-            required.compute.extend(r.scene_pipelines.objects.pipelines().into_iter().cloned());
-        }
-        if view.order().iter().any(|&h| view.vector_layer(h).is_some()) {
-            required.compute.push(r.scene_pipelines.vector.pipeline().clone());
-        }
+        let required = startup::Requirements::capture_scene(r,view,self.backing.values().any(|data|data.watercolor.is_some()));
         let mut scene = r.scene.take().map(Ok).unwrap_or_else(|| scene::Scene::new(r))?;
         let prepared = (|| {
             if !matches!(self.scope, SceneScope::Raw(_)) {

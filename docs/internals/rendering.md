@@ -197,9 +197,9 @@ computes the surround color alone (`the_surround_skips_the_artwork_shader`).
 The artwork pipelines leave out the paper lighting code; a second set with it
 compiles the first time paper lighting shows, in the background where a startup
 compiler runs, and the plain set draws until it is ready.
-Waiting for optional paper shaders requests no canvas frames and does not block
-layer thumbnail readbacks. Prepared bake steps resume when the compiler wakes
-the host.
+Waiting for optional paper shaders does not mark renderer work pending, keeps
+canvas and brush readiness, and does not block layer thumbnail readbacks.
+Prepared bake steps resume when the compiler wakes the host.
 
 Viewport and backdrop uniforms are encoded into the frame that consumes them.
 An unchanged layer-style table reuses its uploaded bytes; buffer replacement or
@@ -219,6 +219,9 @@ Scene encoding also checks each actual effect job and pending lookup dispatch.
 A missing recipe queues compilation and defers encoding; capture workers prepare
 the discovered recipes before retrying. Startup enumeration prefetches recipes
 and does not establish readiness for a different effect chain or capture output.
+Private native bake preparation shares the active parent's shader compiler.
+Retained preparation keeps worker ownership alive without joining shader threads
+on render or input teardown; cold bake jobs defer until those workers publish.
 
 Persistent source levels record each successfully encoded reduction batch before
 attempting the next. A deferred decode resumes after that prefix; transient

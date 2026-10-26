@@ -186,7 +186,7 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 
 | Operation | Target | Measured | Source |
 | --- | --- | --- | --- |
-| Native startup and first-use shader preparation | [Latency limits](responsiveness.md) | Full startup unmeasured; first dry selection Pencil 35.53 s, Pointy 35.04 s, Chalk 13.82 s after photo startup | [Dry preparation](#dry-shader-preparation); cold first use remains slow |
+| Native startup and first-use shader preparation | [Latency limits](responsiveness.md) | Full startup and optional paper-lighting admission unmeasured; first dry selection Pencil 35.53 s, Pointy 35.04 s, Chalk 13.82 s after photo startup | [Dry preparation](#dry-shader-preparation); cold first use remains slow |
 | Web startup, fresh origins | [Latency limits](responsiveness.md) | Brush readiness median 26.806 → 22.211 s; complete 29.360 → 24.785 s. First canvas essentially unchanged | [Shared shader preparation](#shared-shader-preparation); default-canvas latency diagnostic |
 | Exact histogram, Web, 12 MP | [Latency limits](responsiveness.md) | First request 24.288 → 21.362 s; repeated median 14.717 → 12.103 s. Exact counts match | [Shared shader preparation](#shared-shader-preparation); latency only |
 | Levels Auto, Web, 12 MP | [Latency limits](responsiveness.md) | Median 13.229 → 10.861 s; all controls and resulting exact histograms match | [Shared shader preparation](#shared-shader-preparation); latency only |

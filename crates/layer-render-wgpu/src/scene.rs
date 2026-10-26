@@ -1846,6 +1846,13 @@ impl Scene {
         encoder: &mut crate::submission::CommandEncoder,
         tiles: Option<&std::collections::BTreeSet<[u32; 2]>>,
     ) -> Result<PixelRect, GpuRasterError> {
+        if let Some(startup) = &r.startup {
+            startup.compiler.check()?;
+            if !startup.compiler.require(r.scene_pipelines.scale_pipelines(), crate::startup::DOCUMENT) {
+                startup.compiler.start();
+                return Err(GpuRasterError::DeferredObjectWork);
+            }
+        }
         let write = self.begin_write(r)?;
         self.object_results.retain(packet.scene,packet.blend_space,r.device.working_space());
         self.object_spatial.prepare(packet.scene);
@@ -1956,9 +1963,7 @@ impl Scene {
     fn effect_jobs_ready(&self,r:&WgpuRasterizer)->bool {
         if self.effects.preparation_ready() && self.jobs.iter().all(|job|!matches!(job,
             Job::Effect {prepared,..} if !prepared.pipeline.ready())) {return true;}
-        let compiler=r.startup.as_ref().map(|startup|&startup.compiler);
-        #[cfg(target_arch="wasm32")]
-        let compiler=compiler.or(r.preparation_compiler.as_ref());
+        let compiler=r.startup.as_ref().map(|startup|&startup.compiler).or(r.preparation_compiler.as_ref());
         if let Some(compiler)=compiler {
             self.effects.enqueue(compiler,startup::DOCUMENT);
             compiler.start();

@@ -497,6 +497,51 @@ fn native_filters_beyond_the_display_budget_at_a_zoom_present_a_coarser_level() 
 }
 
 #[test]
+fn native_filters_beyond_the_display_budget_render_and_settle_at_a_coarser_level() {
+    let extent = [9504, 6336];
+    let mut doc = Document::new(PortableId::random(), extent[0], extent[1], layer_core::DocumentNames { paint: "Ink".into(), paper: "Paper".into() });
+    let blur = effect(&mut doc, "gaussian_blur");
+    set_effect_value(&mut doc, blur, "sigma", EffectValue::Number(3.));
+    insert_occurrence(&mut doc, blur, 0);
+    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    let mut frame = packet(doc.scene(), extent);
+    frame.view.width_px = 3840;
+    frame.view.height_px = 2160;
+    frame.view.document_to_surface = [0.54, 0., 0., 0.54, -400., -300.];
+    assert!(matches!(request_at(&r, frame, 0), Err(GpuRasterError::ExtentUnsupported)));
+    let chosen = request(&r, frame).unwrap();
+    assert!(chosen.plan.level >= 1);
+    r.submit(frame).unwrap();
+    assert_eq!(r.scale_display.as_ref().unwrap().plan.level, chosen.plan.level);
+    let revision = r.artwork_revision;
+    let idle = FramePacket { composite_all: false, reset_layers: false, ..frame };
+    let pages = page_coordinates(PixelRect::full(extent)).count();
+    for step in 0..=pages {
+        if !r.has_pending_work() { break; }
+        assert!(step < pages, "coarser display did not settle within one visit per native page");
+        r.wait_idle().unwrap();
+        r.submit(idle).unwrap();
+        assert_eq!(r.artwork_revision, revision);
+    }
+    assert!(!r.has_pending_work());
+    let source_plan = r.scale_display.as_ref().unwrap().plan;
+    let source = display_pixels(&r);
+    assert_eq!(source.len(), source_plan.size[0] as usize * source_plan.size[1] as usize);
+    assert!(source.iter().flatten().all(|value| value.is_finite()));
+    drop(source);
+    let (texture, target) = create_target(&r.device, [3840, 2160], wgpu::TextureFormat::Rgba8UnormSrgb, "coarser budget frame");
+    let mut presenter = ViewportPresenter::for_surface(&r, wgpu::TextureFormat::Rgba8UnormSrgb, crate::SdrSurfaceColor::Srgb).unwrap();
+    presenter.present(&r, &target, frame.view, [1., 0., 1., 1.]).unwrap();
+    let shown = crate::layer_tests::page_bytes(&r, &texture);
+    assert_eq!(shown.len(), 3840 * 2160 * 4);
+    assert!(shown.as_chunks::<4>().0.iter().all(|pixel| *pixel == [255; 4]), "the complete view shows the opaque white field through the blur, not the magenta surround");
+    let composed = r.metrics.composited_pixels;
+    r.submit(idle).unwrap();
+    assert_eq!(r.metrics.composited_pixels, composed);
+    assert!(!r.has_pending_work());
+}
+
+#[test]
 fn finite_radius_effects_admit_large_reduced_windows_and_global_effects_keep_full_bounds() {
     let mut doc = document_at([65, 33]);
     let paint = primary_paint(&doc);
@@ -576,8 +621,8 @@ fn finite_radius_windows_match_full_chains_through_navigation_damage_and_support
             frame.view.document_to_surface = [scale, 0., 0., scale, -origin[0] * scale, -origin[1] * scale];
             let whole = FramePacket { view: layer_render::ViewState { width_px: extent[0], height_px: extent[1],
                 document_to_surface: [scale, 0., 0., scale, 0., 0.] }, ..frame };
-            window.submit(frame).unwrap();
-            full.submit(whole).unwrap();
+            crate::test_support::submit_settled(&mut window, frame);
+            crate::test_support::submit_settled(&mut full, whole);
             let plan = window.scale_display.as_ref().unwrap().plan;
             assert_eq!(plan.level, level);
             assert!(plan.bounds.min_x() > 0 && plan.bounds.min_y() > 0);
@@ -590,8 +635,8 @@ fn finite_radius_windows_match_full_chains_through_navigation_damage_and_support
                     let mut dab = crate::tests::test_dab(center, [0.9, 0.1, 0.2, 1.], 1.);
                     dab.radii = [11.; 2];
                     let batch = dab_batch(paint, crate::layer_tests::preset_style(DefaultBrushPreset::GPen), dab.bounds());
-                    window.submit(FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&batch), ..frame }).unwrap();
-                    full.submit(FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&batch), ..whole }).unwrap();
+                    crate::test_support::submit_settled(&mut window, FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&batch), ..frame });
+                    crate::test_support::submit_settled(&mut full, FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&batch), ..whole });
                     assert_window_matches_full(&window, &full, (space, step, center));
                     assert_spatial_storage_reserved(&window, frame);
                 }
@@ -600,21 +645,21 @@ fn finite_radius_windows_match_full_chains_through_navigation_damage_and_support
         }
         assert_eq!(exact_pixels(&mut window), exact_pixels(&mut full));
         full.test.reference = true;
-        full.submit(FramePacket { blend_space: space, ..packet(doc.scene(), extent) }).unwrap();
+        crate::test_support::submit_settled(&mut full, FramePacket { blend_space: space, ..packet(doc.scene(), extent) });
         let reference = pixels(&full, crate::test_support::document_texture(&full));
         let mut frame = packet(doc.scene(), extent);
         frame.blend_space = space;
         frame.view.width_px = 192;
         frame.view.height_px = 128;
         frame.view.document_to_surface = [0.25, 0., 0., 0.25, -152.5, -152.5];
-        window.submit(frame).unwrap();
+        crate::test_support::submit_ready(&mut window, frame).unwrap();
         assert!(window.has_pending_work());
         let mut scene = window.scene.take().unwrap();
         let mut encoder = crate::submission::CommandEncoder::new(&window.device, &Default::default());
         scene.refine_display(&mut window, frame, &mut encoder).unwrap();
         drop(encoder);
         window.scene = Some(scene);
-        window.submit(FramePacket { composite_all: false, ..frame }).unwrap();
+        crate::test_support::submit_ready(&mut window, FramePacket { composite_all: false, ..frame }).unwrap();
         assert_settled(&mut window, frame, &reference);
     }
 }

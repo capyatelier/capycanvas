@@ -994,8 +994,7 @@ pub struct WgpuRasterizer {
     #[cfg(target_arch = "wasm32")]
     snapshot_decode_wake: Option<Arc<std::sync::Mutex<Option<std::task::Waker>>>>,
     transforms: Option<paint_transform::PaintTransforms>,
-    #[cfg(target_arch="wasm32")]
-    preparation_compiler: Option<startup::Compiler>,
+    preparation_compiler: Option<startup::CompilerHandle>,
     transform_preview: Option<layer_render::TransformPreview>,
     refused_transform: Option<layer_render::TransformPreview>,
     transform_sources_pending: bool,
@@ -1399,7 +1398,6 @@ impl WgpuRasterizer {
             #[cfg(target_arch = "wasm32")]
             snapshot_decode_wake: None,
             transforms,
-            #[cfg(target_arch="wasm32")]
             preparation_compiler: None,
             transform_preview: None,
             refused_transform: None,
@@ -1743,7 +1741,7 @@ impl WgpuRasterizer {
 
     fn prepare_paper(&mut self, style: &layer_render::DabStyle, priority: u8) -> Result<(), GpuRasterError> {
         let (Some(_), Some(binding)) = (style.grain, &style.paper) else { return Ok(()) };
-        let compiler = self.startup.as_ref().map(|startup| &startup.compiler);
+        let compiler = self.startup.as_ref().map(|startup| -> &startup::Compiler { &startup.compiler });
         self.papers.require(&self.device, compiler, binding, priority)?;
         if self.startup.is_none() {
             self.papers.advance(&self.device, &self.queue, true, None)?;
@@ -1781,7 +1779,7 @@ impl WgpuRasterizer {
     }
 
     fn require_paper_slope(&mut self, binding: &layer_core::paper::PaperBinding, priority: u8) -> Result<(), GpuRasterError> {
-        let compiler = self.startup.as_ref().map(|startup| &startup.compiler);
+        let compiler = self.startup.as_ref().map(|startup| -> &startup::Compiler { &startup.compiler });
         let id = self.papers.require(&self.device, compiler, binding, priority)?;
         self.papers.require_slope(&self.device, compiler, &id, priority);
         if self.startup.is_none() {

@@ -156,7 +156,7 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 
 | Operation | Target | Measured | Source |
 | --- | --- | --- | --- |
-| Startup and first-use shader preparation | [Latency limits](responsiveness.md) | Unmeasured with required-only startup on this reference device | [Apple diagnostic](responsiveness.md#demand-driven-startup); no tier qualification |
+| Startup and first-use shader preparation | [Latency limits](responsiveness.md) | Unmeasured with required-only startup and optional paper-lighting admission on this reference device | [Apple diagnostic](responsiveness.md#demand-driven-startup); no tier qualification |
 | Tool cursor hover, with and without brush size | 120 | Renderer 119.3–119.6 submissions/s; submission interval p99 15.0–15.6 ms. Presentation unqualified. | [Tool cursors](#tool-cursors) |
 | Pan: Hand tool, one or two fingers | 120 | **Met for two-finger pan.** 118.87–119.50 presented fps, worst p99 8.336 ms, 61 MP photo, Navigator open | [Navigation presentation](#navigation-presentation), 2026-10-24 |
 | Pinch zoom | 120 | **Touch gesture revision unmeasured (2026-10-25).** Earlier: **Not met.** 111.73–112.09 presented fps, p99 up to 16.668 ms, 61 MP photo, Navigator open; default paper 118.74–119.00 fps | [Navigation presentation](#navigation-presentation), 2026-10-24 |

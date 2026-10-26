@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_support::prepare_raster as prepare;
 use crate::layer_tests::placement::{paint_document,target,set_mask,reveal_all};
 fn restore_document(color: DocumentColor) -> layer_core::Document {
     let mut document = paint_document([9504,6336],"native restore");
@@ -35,22 +36,6 @@ fn live_pixels(r: &WgpuRasterizer) -> Vec<(RasterPlane, [u32; 2], Vec<u8>)> {
         crate::layer_tests::page_bytes(r, &p.primary.texture)))
         .chain(layer.watercolor_wetness_pages.iter().map(|p| (RasterPlane::WatercolorWetness, p.coordinate,
             crate::layer_tests::page_bytes(r, &p.active().texture)))).collect()
-}
-
-fn prepare<T>(r:&mut WgpuRasterizer,mut operation:impl FnMut(&mut WgpuRasterizer)->Result<T,GpuRasterError>)->Result<T,GpuRasterError> {
-    let retained=|r:&WgpuRasterizer|r.paint_layers.iter().flat_map(|layer|layer.pages.iter().map(|page|page.active().texture.clone())
-        .chain(layer.watercolor_wetness_pages.iter().map(|page|page.active().texture.clone())))
-        .chain(r.layer_masks.pages.values().map(|page|page.texture.clone())).collect::<Vec<_>>();
-    let original=retained(r);let deadline=std::time::Instant::now()+std::time::Duration::from_secs(20);
-    loop {
-        match operation(r) {
-            Err(GpuRasterError::DeferredObjectWork)=> {
-                assert_eq!(retained(r),original,"pending preparation published live pages");
-                assert!(std::time::Instant::now()<deadline,"raster preparation did not complete");
-                r.wait_idle().unwrap();std::thread::sleep(std::time::Duration::from_millis(1));
-            },result=>return result,
-        }
-    }
 }
 
 #[test]
