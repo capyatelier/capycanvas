@@ -490,7 +490,7 @@ impl Default for CanvasInfoLayout {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct HeaderPresentation {
     /// Zero until the host implements this header projection.
     pub height: f32,

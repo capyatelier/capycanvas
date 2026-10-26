@@ -804,6 +804,7 @@ mod tests {
                 assert_eq!(packet["layout"], full["layout"]);
                 assert_eq!(packet["camera"], full["state"]["camera"]);
                 assert_eq!(initial["header"], full["header"]);
+                assert_eq!(packet["workspace_layout"]["header_presentation"], serde_json::to_value(&host.session.state().workspace.layout.header_presentation).unwrap());
             }
             host.dispatch(measurement(160., 60.)).unwrap();
             let taller = layout_update(&mut host);

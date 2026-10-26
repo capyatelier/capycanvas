@@ -88,6 +88,7 @@ impl Workspace {
             // reflows them at the new allocation in this same frame.
             let source = &gpu.session.state().workspace.layout;
             let mut layout = self.surface.imp().layout.borrow_mut();
+            layout.header_presentation.clone_from(&source.header_presentation);
             layout.bands.clone_from(&source.bands);
             layout.floating.clone_from(&source.floating);
             layout.collapsed.clone_from(&source.collapsed);

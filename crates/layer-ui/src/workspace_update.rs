@@ -20,8 +20,8 @@
 //! against matching content_revision before advancing model_revision.
 //! `workspace_layout` replaces
 //! bands, floating groups, collapsed columns, column_stacks, fit_tab_groups and
-//! fit_height_groups in the retained workspace; it is live gesture state, not a
-//! persistence request. Collapse/expand, content edits, completion and
+//! fit_height_groups and measured header presentation in the retained workspace;
+//! it is live gesture state, not a persistence request. Collapse/expand, content edits, completion and
 //! cancellation still publish full models. Consumers of take_update_bytes
 //! refresh all models at each model_revision.
 //!
@@ -60,6 +60,7 @@ pub struct WorkspaceLayoutUpdate<'a> {
 
 #[derive(Serialize)]
 pub struct WorkspaceLayoutState<'a> {
+    pub header_presentation: &'a crate::HeaderPresentation,
     pub bands: &'a [crate::DockBand],
     pub floating: &'a [crate::FloatingGroup],
     pub collapsed: &'a [crate::CollapsedColumn],

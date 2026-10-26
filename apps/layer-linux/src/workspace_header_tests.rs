@@ -1081,10 +1081,12 @@ impl Driver {
     }
     pub(super) fn new(name: &str) -> Self {
         let app = native_test_app(name);
-        let w = fixture_workspace(&app);
+        let w = Workspace::new(&app);
+        apply_fixture_theme(&w);
         w.window.maximize();
         w.window.present();
         wait_workspaces(&w);
+        new_photo::ready(&w);
         w.dispatch(UiAction::RestoreWorkspace {
             workspace: Box::new(WorkspaceState {
                 layout: WorkspacePreset::Painter.layout(Platform::Gtk),
