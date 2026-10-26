@@ -834,7 +834,8 @@ The same pattern pairs `json-lookup`, `reorder-contact`, `estimated-input`,
 retained source identity through native mouse and pen reordering.
 `tests/column-stacks.swift` covers inside-edge resizing with mouse and pen in both
 themes. `testColumnWidthReset` and `testColumnWidthResetDark` cover native
-handle resizing and double-press reset, plus inside-edge reach on macOS.
+handle resizing and double-press reset, plus inside-edge reach on macOS and
+canvas-side touch reach on iPadOS.
 `tests/workspace-tabs.swift` checks that a late selection publication updates the
 retained preview's panel shade while its identity and geometry stay fixed.
 It also mounts `WorkspaceTabStrip` over a contrasting backdrop and checks its

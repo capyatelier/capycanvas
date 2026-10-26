@@ -28,7 +28,7 @@ real endpoint. The cursor tracks real input, so predicted ink can run ahead of i
 
 ## Contacts, cursor and navigation
 
-- **Edge reach on Mac.** Workspace markers classify native controls and forward eligible
+- **Edge reach.** Workspace markers classify native controls and forward eligible
   contacts through `EdgeReachCoordinator`. Rust decides admission, recognition,
   ownership and catch-up. A claim cancels the canvas contact without blurring
   the editor; pending vertical reaches withhold motion while preserving taps.

@@ -589,14 +589,14 @@ synchronously whether it lies in an edge's reach and may resize vertically, so
 a touch or pen scroller that must not or cannot scroll keeps the contact and a
 pressed tab waits for its click. Canvas touches reach the session from
 `capy_pointer`, which cancels the stroke when the edge claims the contact.
-AppKit classifies measured workspace sources and native controls, and asks
+Apple classifies measured workspace sources and native controls, and asks
 `capy_apple_edge_reach` for admission before native scrolling or pickup begins.
-It forwards contacts through `EdgeReachCoordinator` to the serial
+AppKit and UIKit forward contacts through `EdgeReachCoordinator` to the serial
 Rust owner. Replies defer tab selection, withhold motion and cancel other input
-owners when the edge claims the contact. The pointer shows the resize direction.
-`tests/column-stacks.swift` covers native
+owners when the edge claims the contact. Pointer and Pencil hover show the resize
+direction. `tests/column-stacks.swift` covers native
 mouse and pen reach; `testColumnWidthReset` and its Dark variant cover
-inside-edge resizing and double-press reset on macOS. UIKit still uses the thin handles.
+inside-edge resizing on macOS, canvas-side reach on iPadOS and double-press reset.
 
 [Stacked columns](stacked-columns.md) replace the former Group panel mode. Each
 stack contains complete collapsed columns and owns “Open individual panels” and

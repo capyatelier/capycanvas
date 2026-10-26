@@ -3,10 +3,9 @@
 [Apple development](apple.md) · [Apple porting guide](../APPLE_PORTING_GUIDE.md) ·
 [Edge reach](../ui/panel-customization.md#edge-reach)
 
-Finish edge reach on iPadOS and validate it on an iPad, then fetch, rebase and
-push to `origin/main`. macOS now forwards edge contacts through the shared owner;
-UIKit still uses the thin resize handles. Delete this handoff in the commit
-that completes the iPad port.
+Validate edge reach on a physical iPad. AppKit and UIKit now forward contacts
+through the shared owner; Mac and Simulator resize/reset journeys cover both
+themes. Delete this handoff when the iPad check completes.
 
 ## What edge reach is
 

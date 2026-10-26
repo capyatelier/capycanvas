@@ -17,7 +17,7 @@ private struct ReorderInputHost: UIViewRepresentable {
 }
 
 /// Window recognizers share this marker's coordinates and control-key focus.
-final class ReorderInputView: UIView, UIGestureRecognizerDelegate {
+final class ReorderInputView: UIView, UIGestureRecognizerDelegate, UIPointerInteractionDelegate {
     weak var model: (any NativeReorderModel)?
     private weak var attached: UIWindow?
     private weak var touch: UITouch?
@@ -28,11 +28,18 @@ final class ReorderInputView: UIView, UIGestureRecognizerDelegate {
     private var pan: UIPanGestureRecognizer!
     private var press: UILongPressGestureRecognizer!
     private var secondary: UITapGestureRecognizer!
+    private var edgeDoublePress: UITapGestureRecognizer?
+    private var edgeDoubleDevice = ReorderDevice.touch
     private var layerTouches: LayerTouchRecognizer?
     private var link: CADisplayLink?
     private var lastTrack: CFTimeInterval?
     private var observer: NSObjectProtocol?
     private var bubbles: BubbleRecognizer?
+    private var edge: EdgeReachRecognizer?
+    private var edgePointer: UIPointerInteraction?
+    private var edgeHover: UIHoverGestureRecognizer?
+    private let edgeCursorLayer = CAShapeLayer()
+    private var activeEdgeCursor: String?
     private var bubbleHover: UIHoverGestureRecognizer?
     private var handledKeys: Set<UIKeyboardHIDUsage> = []
     private var keyRepeat: KeyRepeat?
@@ -75,7 +82,7 @@ final class ReorderInputView: UIView, UIGestureRecognizerDelegate {
             layerTouches = recognizer; attached?.addGestureRecognizer(recognizer)
         }
         attached?.addGestureRecognizer(pan); attached?.addGestureRecognizer(press); attached?.addGestureRecognizer(secondary)
-        attachBubbles()
+        attachEdges(); attachBubbles()
         updateViewport()
     }
     override func layoutSubviews() { super.layoutSubviews(); validate() }
@@ -87,6 +94,11 @@ final class ReorderInputView: UIView, UIGestureRecognizerDelegate {
         attached?.removeGestureRecognizer(secondary); attached = nil
         if let layerTouches { layerTouches.isEnabled = false; layerTouches.view?.removeGestureRecognizer(layerTouches); self.layerTouches = nil }
         if let bubbles { bubbles.view?.removeGestureRecognizer(bubbles); self.bubbles = nil }
+        if let edge { edge.cancel(); edge.view?.removeGestureRecognizer(edge); self.edge = nil }
+        if let edgePointer { edgePointer.view?.removeInteraction(edgePointer); self.edgePointer = nil }
+        if let edgeHover { edgeHover.view?.removeGestureRecognizer(edgeHover); self.edgeHover = nil }
+        activeEdgeCursor = nil; edgeCursorLayer.removeFromSuperlayer()
+        if let edgeDoublePress { edgeDoublePress.view?.removeGestureRecognizer(edgeDoublePress); self.edgeDoublePress = nil }
         model?.bubbleInput?.hover(nil)
         if let bubbleHover { bubbleHover.view?.removeGestureRecognizer(bubbleHover); self.bubbleHover = nil }
     }
@@ -95,8 +107,26 @@ final class ReorderInputView: UIView, UIGestureRecognizerDelegate {
             let recognizer = LayerTouchRecognizer(marker: self, model: layer)
             layerTouches = recognizer; attached?.addGestureRecognizer(recognizer)
         }
-        updateViewport(); attachBubbles()
+        updateViewport(); attachEdges(); attachBubbles()
         if isFirstResponder, model?.bubbleInput?.acceptsIntensityKeys != true { releaseKeyboard() }
+    }
+    private func attachEdges() {
+        guard edge == nil, let attached, let workspace = model as? WorkspaceReorderInteraction else { return }
+        let edge = EdgeReachRecognizer(marker: self, interaction: workspace)
+        self.edge = edge; attached.addGestureRecognizer(edge)
+        let pointer = UIPointerInteraction(delegate: self)
+        edgePointer = pointer; attached.addInteraction(pointer)
+        let hover = UIHoverGestureRecognizer(target: self, action: #selector(hoveredEdge))
+        hover.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.pencil.rawValue)]
+        edgeHover = hover; attached.addGestureRecognizer(hover)
+        edgeCursorLayer.bounds = CGRect(x: -12, y: -12, width: 24, height: 24)
+        edgeCursorLayer.zPosition = 1000
+        attached.layer.addSublayer(edgeCursorLayer)
+        edgeCursorLayer.isHidden = true
+        let doublePress = UITapGestureRecognizer(target: self, action: #selector(doublePressed))
+        doublePress.numberOfTapsRequired = 2; doublePress.delegate = self
+        doublePress.allowedTouchTypes = [UITouch.TouchType.direct, .pencil, .indirectPointer].map { NSNumber(value: $0.rawValue) }
+        edgeDoublePress = doublePress; attached.addGestureRecognizer(doublePress)
     }
     func focusBubbleKeyboard() {
         if model?.bubbleInput?.acceptsIntensityKeys == true, !NativeTextContext.composing { becomeFirstResponder() }
@@ -165,13 +195,51 @@ final class ReorderInputView: UIView, UIGestureRecognizerDelegate {
         input.hover(window != nil && input.enabled && bounds.contains(point)
             && (recognizer.state == .began || recognizer.state == .changed) ? point : nil)
     }
+    func pointerInteraction(_ interaction: UIPointerInteraction, regionFor request: UIPointerRegionRequest,
+        defaultRegion: UIPointerRegion) -> UIPointerRegion? {
+        guard let window, let edge else { return nil }
+        let point = convert(request.location, from: window)
+        let cursor = activeEdgeCursor ?? edge.candidate(at: point, hitView: window.hitTest(request.location, with: nil),
+            device: .mouse).map { $0.vertical ? "row-resize" : "col-resize" }
+        guard let cursor else { return nil }
+        return UIPointerRegion(rect: CGRect(origin: request.location, size: CGSize(width: 1, height: 1)), identifier: cursor)
+    }
+    func pointerInteraction(_ interaction: UIPointerInteraction, styleFor region: UIPointerRegion) -> UIPointerStyle? {
+        guard let cursor = region.identifier?.base as? String else { return nil }
+        return UIPointerStyle(shape: .path(EdgeResizeCursor.path(cursor)))
+    }
+    @objc private func hoveredEdge(_ recognizer: UIHoverGestureRecognizer) {
+        guard activeEdgeCursor == nil, let window else { return }
+        guard recognizer.state == .began || recognizer.state == .changed, let edge else {
+            showEdgeCursor(nil, at: .zero); return
+        }
+        let point = recognizer.location(in: self)
+        let hit = window.hitTest(convert(point, to: window), with: nil)
+        let cursor = edge.candidate(at: point, hitView: hit, device: .pen).map {
+            $0.vertical ? "row-resize" : "col-resize"
+        }
+        showEdgeCursor(cursor, at: point)
+    }
+    fileprivate func showEdgeCursor(_ cursor: String?, at point: CGPoint) {
+        guard let window, let cursor else { edgeCursorLayer.isHidden = true; return }
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        edgeCursorLayer.path = EdgeResizeCursor.path(cursor).cgPath
+        edgeCursorLayer.fillColor = UIColor.label.resolvedColor(with: window.traitCollection).cgColor
+        edgeCursorLayer.position = convert(point, to: window)
+        edgeCursorLayer.isHidden = false
+        CATransaction.commit()
+    }
+    fileprivate func clearEdgeCursor() {
+        activeEdgeCursor = nil; edgeCursorLayer.isHidden = true
+        edgePointer?.invalidate()
+    }
     private func cancel(detaching: Bool = false, all: Bool = true) {
         endKeyRepeat()
         guard !cancelling else { return }; cancelling = true
         defer { cancelling = false }
         if all, let layerTouches { layerTouches.isEnabled = false; layerTouches.isEnabled = true }
         if detaching { model?.nativeInputDetached() } else if all { model?.cancel() } else { model?.cancelReorder() }
-        if all { bubbles?.cancel() }
+        if all { bubbles?.cancel(); edge?.cancel() }
         if all { model?.bubbleInput?.hover(nil) }
         touch = nil; link?.invalidate(); link = nil
         pan.isEnabled = false; press.isEnabled = false
@@ -189,13 +257,26 @@ final class ReorderInputView: UIView, UIGestureRecognizerDelegate {
         let point = incoming.location(in: self)
         return model.touchRow(at: point).map { (point, $0) }
     }
-    private func scrollAt(_ point: CGPoint) -> UIScrollView? {
+    fileprivate func scrollAt(_ point: CGPoint) -> UIScrollView? {
         var node = window?.hitTest(convert(point, to: window), with: nil)
         while let view = node {
             if let scroll = view as? UIScrollView { return scroll }
             node = view.superview
         }
         return nil
+    }
+    fileprivate func claimEdge(_ touch: UITouch, cursor: String) {
+        activeEdgeCursor = cursor; edgePointer?.invalidate()
+        if touch.type == .pencil { showEdgeCursor(cursor, at: touch.location(in: self)) }
+        model?.contact.transfer()
+        model?.bubbleInput?.cancel()
+        bubbles?.cancel()
+        if let layerTouches { layerTouches.isEnabled = false; layerTouches.isEnabled = true }
+        var node = touch.view
+        while let view = node {
+            if let canvas = view as? CanvasView { canvas.cancelEdgeContact(touch); break }
+            node = view.superview
+        }
     }
     @discardableResult func moveReorder(_ point: CGPoint, force: Bool = false) -> Bool {
         guard let model else { return false }
@@ -216,13 +297,20 @@ final class ReorderInputView: UIView, UIGestureRecognizerDelegate {
             let point = incoming.location(in: self)
             return model.acceptsContext(at: point)
         }
+        if gestureRecognizer === edgeDoublePress {
+            guard let edge, let source = edge.candidate(for: incoming) else { return false }
+            edgeDoubleDevice = incoming.type == .pencil ? .pen : incoming.type == .indirectPointer ? .mouse : .touch
+            return source.contact == .free
+        }
         if touch !== incoming || touchStart != incoming.timestamp {
             guard touch == nil || touch?.phase == .ended || touch?.phase == .cancelled || model.contact.target == nil else { cancel(); return false }
             updateViewport()
             let point = incoming.location(in: self)
             guard let target = model.source(at: point) else { return false }
             let device: ReorderDevice = incoming.type == .pencil ? .pen : incoming.type == .indirectPointer ? .mouse : .touch
-            model.contact.prepare(target, device: device, origin: point); touch = incoming; touchStart = incoming.timestamp
+            model.contact.prepare(target, device: device, origin: point,
+                activate: edge?.candidate(for: incoming) == nil)
+            touch = incoming; touchStart = incoming.timestamp
             contactScroll = scroll ?? scrollAt(point); lastPoint = nil
         }
         return gestureRecognizer !== press || model.contact.requiresHold || model.contact.device != .mouse
@@ -232,6 +320,7 @@ final class ReorderInputView: UIView, UIGestureRecognizerDelegate {
     }
     override func gestureRecognizerShouldBegin(_ recognizer: UIGestureRecognizer) -> Bool {
         if recognizer === secondary { return model?.enabled == true }
+        if recognizer === edgeDoublePress { return model?.enabled == true }
         guard let model, model.contact.validate() else { return false }
         if recognizer === pan && model.contact.requiresHold && !model.contact.held {
             if model.beginSwipe(at: touch?.location(in: self) ?? recognizer.location(in: self)) { return true }
@@ -240,6 +329,13 @@ final class ReorderInputView: UIView, UIGestureRecognizerDelegate {
         return true
     }
     @objc private func context(_ recognizer: UITapGestureRecognizer) { model?.context(at: recognizer.location(in: self)) }
+    @objc private func doublePressed(_ recognizer: UITapGestureRecognizer) {
+        guard recognizer.state == .ended, let workspace = model as? WorkspaceReorderInteraction,
+            let edgeReach = workspace.edgeReach else { return }
+        let point = recognizer.location(in: self)
+        guard workspace.edgeReachSource(at: point, device: edgeDoubleDevice)?.contact ?? .free == .free else { return }
+        edgeReach.doublePress(device: edgeDoubleDevice, contact: .free, at: point)
+    }
     func gestureRecognizer(_ recognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
         if (recognizer === pan && other === press) || (recognizer === press && other === pan) { return true }
         // Retain pickup beside SwiftUI's early button recognition, while native
@@ -250,13 +346,16 @@ final class ReorderInputView: UIView, UIGestureRecognizerDelegate {
     func gestureRecognizer(_ recognizer: UIGestureRecognizer, shouldBeRequiredToFailBy other: UIGestureRecognizer) -> Bool {
         // A grip or mouse row gets the first chance at movement. Touch/pen row
         // bodies still fail early pans so the list can scroll before a hold.
-        recognizer === pan && other === contactScroll?.panGestureRecognizer
+        return recognizer === pan && other === contactScroll?.panGestureRecognizer
             && model?.contact.target != nil && (model?.contact.requiresHold == false || model?.contact.held == true
                 || model?.contact.target?.surface == .row)
     }
+    func gestureRecognizer(_ recognizer: UIGestureRecognizer, shouldRequireFailureOf other: UIGestureRecognizer) -> Bool {
+        recognizer === pan && other === edge
+    }
     @objc private func pressed(_ recognizer: UILongPressGestureRecognizer) {
         switch recognizer.state {
-        case .began: model?.recognizeHold()
+        case .began: edge?.cancel(activate: true); model?.recognizeHold()
         case .ended: finish()
         case .cancelled: if model?.swiping != true { cancel(all: false) }
         default: break
@@ -265,8 +364,10 @@ final class ReorderInputView: UIView, UIGestureRecognizerDelegate {
     @objc private func panned(_ recognizer: UIPanGestureRecognizer) {
         switch recognizer.state {
         case .began, .changed:
-            if model?.swiping == true { model?.moveSwipe(to: recognizer.location(in: self)); return }
-            if moveReorder(recognizer.location(in: self)) && link == nil {
+            if model?.swiping == true { edge?.cancel(activate: true); model?.moveSwipe(to: recognizer.location(in: self)); return }
+            if moveReorder(recognizer.location(in: self)) {
+                edge?.cancel()
+                guard link == nil else { return }
                 lastTrack = nil
                 let link = CADisplayLink(target: self, selector: #selector(track)); link.add(to: .main, forMode: .common); self.link = link
             }
@@ -315,6 +416,162 @@ final class ReorderInputView: UIView, UIGestureRecognizerDelegate {
         let next = CGPoint(x: scroll.contentOffset.x, y: max(top, min(bottom, scroll.contentOffset.y + delta)))
         return next == scroll.contentOffset ? nil : (scroll, next)
     }
+}
+
+private enum EdgeResizeCursor {
+    static func path(_ name: String) -> UIBezierPath {
+        let path = UIBezierPath(rect: CGRect(x: -6, y: -1, width: 12, height: 2))
+        path.move(to: CGPoint(x: -10, y: 0))
+        path.addLine(to: CGPoint(x: -4, y: -4))
+        path.addLine(to: CGPoint(x: -4, y: 4))
+        path.close()
+        path.move(to: CGPoint(x: 10, y: 0))
+        path.addLine(to: CGPoint(x: 4, y: -4))
+        path.addLine(to: CGPoint(x: 4, y: 4))
+        path.close()
+        let angle: CGFloat = switch name {
+        case "row-resize": .pi / 2
+        case "nwse-resize": .pi / 4
+        case "nesw-resize": -.pi / 4
+        default: 0
+        }
+        path.apply(CGAffineTransform(rotationAngle: angle))
+        return path
+    }
+}
+
+private struct EdgeReachCandidate {
+    let contact: EdgeReachContact
+    let select: (() -> Void)?
+    let admission: EdgeReachAdmission
+    var vertical: Bool { admission.vertical }
+}
+
+final class EdgeReachRecognizer: UIGestureRecognizer {
+    private weak var marker: ReorderInputView?
+    private weak var interaction: WorkspaceReorderInteraction?
+    private struct Contact {
+        let touch: UITouch
+        let id: UInt64
+        let device: ReorderDevice
+        let source: EdgeReachCandidate
+        let origin: CGPoint
+        var claimed = false
+    }
+    private var contact: Contact?
+    private var nextID: UInt64 = 0
+    func defersMotion(for touch: UITouch) -> Bool {
+        guard let contact, contact.touch === touch, !contact.claimed, contact.source.vertical,
+            let marker, let state = interaction?.edgeReach?.state(for: contact.id), state.pending && state.hold else { return false }
+        let point = touch.location(in: marker)
+        return hypot(point.x - contact.origin.x, point.y - contact.origin.y) > 10
+    }
+    init(marker: ReorderInputView, interaction: WorkspaceReorderInteraction) {
+        self.marker = marker; self.interaction = interaction
+        super.init(target: nil, action: nil)
+        allowedTouchTypes = [UITouch.TouchType.direct, .pencil, .indirectPointer].map { NSNumber(value: $0.rawValue) }
+        cancelsTouchesInView = true; delaysTouchesBegan = false; delaysTouchesEnded = false
+    }
+    fileprivate func candidate(for touch: UITouch) -> EdgeReachCandidate? {
+        guard let marker else { return nil }
+        let device: ReorderDevice = touch.type == .pencil ? .pen : touch.type == .indirectPointer ? .mouse : .touch
+        return candidate(at: touch.location(in: marker), hitView: touch.view, device: device)
+    }
+    fileprivate func candidate(at point: CGPoint, hitView: UIView?, device: ReorderDevice) -> EdgeReachCandidate? {
+        guard let marker, let interaction, let edgeReach = interaction.edgeReach else { return nil }
+        guard marker.bounds.contains(point), interaction.enabled else { return nil }
+        var node = hitView
+        var canvas = false
+        var nativeInput = false
+        var textInput = false
+        var horizontalScroll = false
+        while let view = node {
+            if view is CanvasView { canvas = true }
+            if view is UITextInput { textInput = true }
+            if view is UIControl || view is UITextInput || view is ControlInput.InputView
+                || view is ColorWheelInput.ContactView || view is ParameterInput.ContactView
+                || view.accessibilityTraits.contains(.button)
+                || view.accessibilityTraits.contains(.adjustable) { nativeInput = true }
+            if let scroll = view as? UIScrollView, scroll.contentSize.width > scroll.bounds.width + 1 {
+                horizontalScroll = true
+            }
+            node = view.superview
+        }
+        if canvas && device != .touch { return nil }
+        if marker.model?.bubbleInput?.hit(point) == true { return nil }
+        let source = interaction.edgeReachSource(at: point, device: device)
+        let contact: EdgeReachContact
+        if let source {
+            contact = textInput || source.contact == .free && nativeInput ? .input
+                : source.contact == .free && horizontalScroll ? .pickup : source.contact
+        } else { contact = nativeInput ? .input : horizontalScroll ? .pickup : .free }
+        guard let admission = edgeReach.admission(at: point, device: device, contact: contact) else { return nil }
+        return EdgeReachCandidate(contact: contact, select: source?.select, admission: admission)
+    }
+    override func canPrevent(_ preventedGestureRecognizer: UIGestureRecognizer) -> Bool { contact?.claimed == true }
+    override func canBePrevented(by preventingGestureRecognizer: UIGestureRecognizer) -> Bool { false }
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        guard contact == nil, touches.count == 1, let touch = touches.first, let marker, let interaction,
+            let edgeReach = interaction.edgeReach, let source = candidate(for: touch) else {
+            cancel(); return
+        }
+        nextID &+= 1
+        let id = nextID
+        let point = touch.location(in: marker)
+        contact = Contact(touch: touch, id: id, device: touch.type == .pencil ? .pen : touch.type == .indirectPointer ? .mouse : .touch,
+            source: source, origin: point)
+        if source.vertical { marker.scrollAt(point)?.panGestureRecognizer.require(toFail: self) }
+        let state = edgeReach.begin(id: id, admission: source.admission, device: contact!.device,
+            contact: source.contact, at: point,
+            timeNs: UInt64(touch.timestamp * 1_000_000_000), select: source.select,
+            update: { [weak self] state in
+                guard let self, self.contact?.id == id, self.contact?.claimed != true else { return }
+                if state == nil || (state?.pending == false && state?.claimed == false) {
+                    self.marker?.model?.contact.activate()
+                    self.state = .failed
+                }
+            }, claim: { [weak self, weak marker] cursor in
+                guard let self, let marker, var current = self.contact, current.id == id, !current.claimed else { return }
+                current.claimed = true; self.contact = current
+                marker.claimEdge(touch, cursor: cursor)
+                self.state = self.state == .possible ? .began : .changed
+            })
+        if !state.pending && !state.claimed { marker.model?.contact.activate(); self.state = .failed }
+    }
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
+        guard let contact, touches.contains(contact.touch), let marker, let edgeReach = interaction?.edgeReach else { return }
+        let point = contact.touch.location(in: marker)
+        let state = edgeReach.move(id: contact.id, to: point, timeNs: UInt64(contact.touch.timestamp * 1_000_000_000))
+        if contact.claimed {
+            if contact.device == .pen, let cursor = state?.cursor { marker.showEdgeCursor(cursor, at: point) }
+            self.state = .changed
+        }
+        else if state == nil || (state?.pending == false && state?.claimed == false) {
+            marker.model?.contact.activate()
+            self.state = .failed
+        }
+    }
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
+        guard let contact, touches.contains(contact.touch), let marker else { return }
+        self.contact = nil
+        interaction?.edgeReach?.end(id: contact.id, at: contact.touch.location(in: marker),
+            timeNs: UInt64(contact.touch.timestamp * 1_000_000_000), cancelled: false)
+        if contact.claimed { marker.clearEdgeCursor() }
+        state = contact.claimed ? .ended : .failed
+    }
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) { cancel() }
+    fileprivate func cancel(activate: Bool = false) {
+        let previous = contact
+        contact = nil
+        if let previous {
+            interaction?.edgeReach?.cancel(id: previous.id)
+            if activate && !previous.claimed { marker?.model?.contact.activate() }
+            if previous.claimed { marker?.clearEdgeCursor() }
+        }
+        if state == .began || state == .changed { state = .cancelled }
+        else if state == .possible { state = .failed }
+    }
+    override func reset() { cancel(); super.reset() }
 }
 
 private final class LayerTouchRecognizer: UIGestureRecognizer {

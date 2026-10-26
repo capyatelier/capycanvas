@@ -124,6 +124,12 @@ extension CanvasView {
                 if phase >= 3 { ignoredContacts.remove(key) }
                 continue
             }
+            if phase == 2, window?.gestureRecognizers?.contains(where: {
+                ($0 as? EdgeReachRecognizer)?.defersMotion(for: touch) == true
+            }) == true {
+                cancelPickerHold()
+                continue
+            }
             if phase == 1 {
                 let tool: UInt32 = touch.type == .pencil ? 0 : touch.type == .direct ? 3 : 1
                 if tool == 3 && contacts.values.contains(where: { $0.tool == 0 }) {
@@ -253,6 +259,18 @@ extension CanvasView {
             predicted: false, revision: sample.revision, updates: sample.metadata, correction: true, deviceFlags: sample.deviceFlags)
     }
     func finishEstimates() { for sample in estimates.finish() { sendCorrection(sample) } }
+    func cancelEdgeContact(_ touch: UITouch) {
+        let key = ObjectIdentifier(touch)
+        guard let contact = contacts.removeValue(forKey: key) else { return }
+        var terminal = contact.last.count == 9 ? contact.last : pack(touch, phase: 4)
+        terminal[7] = max(contact.lastTimestamp, touch.timestamp) * 1_000_000_000
+        terminal[8] = 4
+        send(contact, records: terminal, predicted: false)
+        estimates.cancel(contact: contact.id)
+        ignoredContacts.insert(key)
+        cancelPickerHold()
+        wake()
+    }
     private func armPickerHold(_ key: ObjectIdentifier, id: UInt64, at start: CGPoint) {
         let work = DispatchWorkItem { [weak self] in
             guard let self, pickerHold?.key == key, let contact = contacts[key], contact.last.count == 9 else { return }
