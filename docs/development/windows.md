@@ -763,11 +763,13 @@ Run `pwsh -NoProfile -File ./apps/layer-windows/tests/model-snapshot-reader.ps1`
 to check the UI fixture model reader during concurrent atomic snapshot publication.
 This windowless test needs no GPU and writes its results under `artifacts/windows`.
 It validates 100 reads and zero writer failures during concurrent publication
-without a throughput target, plus six presentation-barrier cases covering stale
-acknowledgements, unused reservations, displayed frames and process ownership.
+without a throughput target.
 Reports retain read durations and exception details; the reader closes each file
 before parsing its JSON. Release checks run script regressions before compiling
 the native client and retain their failure reports.
+`tests/presented-frame-wait.ps1` checks fourteen presentation-barrier cases,
+including stale acknowledgements, retired reservations, displayed frames,
+process ownership and sampling only after the display acknowledgement.
 Trace publication uses `FileRenameInfoEx` with replace-existing and POSIX semantics
 so readers retain complete old snapshots while subsequent opens see the replacement.
 The native input regression holds both old and pending handles open while publishing.

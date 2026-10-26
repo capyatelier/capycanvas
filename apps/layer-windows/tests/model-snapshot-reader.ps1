@@ -78,28 +78,3 @@ $pass=$reads-eq100-and$nulls-eq0-and$errors-eq0-and$misclassified-eq0-and$publis
 @{pass=$pass;reads=$reads;nulls=$nulls;read_errors=$errors;read_failures=$readFailures.ToArray();read_durations_ms=$readDurations.ToArray();elapsed_ms=$watch.Elapsed.TotalMilliseconds;false_rotation_preconditions=$misclassified;published=$publisher.Published;replace_errors=$publisher.Errors;last_replace_error=$publisher.LastError;last_writer_exception=$publisher.LastException;invalid_owner_rejected=$invalidOwnerRejected;malformed_rejected=$malformedRejected;missing_rejected=$missingRejected;writer_joined=$true;pid=$PID}|ConvertTo-Json -Depth 6|Set-Content -LiteralPath (Join-Path $out 'result.json')
 Get-Content -LiteralPath (Join-Path $out 'result.json')
 if(!$pass){throw 'Atomic snapshot model reader regression failed'}
-
-Import-Function (Join-Path $repo 'apps/layer-windows/scripts/CapyUia.ps1') 'Wait-PresentedFrame' 'Wait-PresentedFrame'
-function State-File {$StateFile}
-function Wait-Until([scriptblock]$Condition,[string]$Message) {if(!(& $Condition)){throw $Message}}
-$review=@{Id=$PID};$StateFile=Join-Path $out 'ui-state-frame.json'
-$frameState=@{process_id=$PID;presented=11;presentation_epoch=42}|ConvertTo-Json -Compress
-[IO.File]::WriteAllText($StateFile,$frameState)
-[IO.File]::WriteAllText((Join-Path $out 'camera-state-frame.json'),$frameState)
-$frameCases=@(
- @{name='retired no-op reservation';epoch=43;required=10;displayed=10;owner=$PID;accept=$true},
- @{name='undisplayed required frame';epoch=43;required=11;displayed=10;owner=$PID;accept=$false},
- @{name='older acknowledgement';epoch=41;required=11;displayed=11;owner=$PID;accept=$false},
- @{name='displayed required frame';epoch=43;required=11;displayed=11;owner=$PID;accept=$true},
- @{name='foreign acknowledgement';epoch=43;required=11;displayed=11;owner=($PID+1);accept=$false},
- @{name='unsupported display statistics';epoch=43;required=11;displayed=$null;owner=$PID;accept=$true}
-)
-foreach($frameCase in $frameCases){
- $display=@{process_id=$frameCase.owner;presentation_epoch=$frameCase.epoch;required=$frameCase.required;displayed=$frameCase.displayed}|ConvertTo-Json -Compress
- [IO.File]::WriteAllText((Join-Path $out 'presentation-state-frame.json'),$display)
- $accepted=$false
- try{Wait-PresentedFrame;$accepted=$true}catch{if($_.Exception.Message -ne 'The display did not show the latest canvas frame'){throw}}
- if($accepted -ne $frameCase.accept){throw "Presented-frame barrier failed: $($frameCase.name)"}
-}
-$frameCases|ConvertTo-Json|Set-Content -LiteralPath (Join-Path $out 'frame-result.json')
-Write-Output 'Presented-frame barrier: six regressions passed'

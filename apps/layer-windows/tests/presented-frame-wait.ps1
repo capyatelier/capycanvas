@@ -52,5 +52,18 @@ try{
     try{Wait-StablePixels {$script:sampled=$true;'pixels'}|Out-Null}catch{if($_.Exception.Message -ne 'The display did not show the latest canvas frame'){throw}}
     if($sampled){throw 'Pixels were sampled before the latest frame was displayed'}
     $checks++
+    Write-Trace 'ui-state' @{process_id=$PID;window_id=7;presented=11;presentation_epoch=42;model=@{}}
+    Write-Trace 'camera-state' @{process_id=$PID;window_id=7;presented=11;presentation_epoch=42;camera=@{}}
+    foreach($case in @(
+        @{name='a retired no-op reservation';epoch=43;required=10;displayed=10;owner=$PID;refused=$false},
+        @{name='an undisplayed required frame';epoch=43;required=11;displayed=10;owner=$PID;refused=$true},
+        @{name='an older acknowledgement';epoch=41;required=11;displayed=11;owner=$PID;refused=$true},
+        @{name='the displayed required frame';epoch=43;required=11;displayed=11;owner=$PID;refused=$false},
+        @{name='a foreign acknowledgement';epoch=43;required=11;displayed=11;owner=($PID+1);refused=$true},
+        @{name='unsupported display statistics';epoch=43;required=11;displayed=$null;owner=$PID;refused=$false}
+    )){
+        Write-Trace 'presentation-state' @{process_id=$case.owner;window_id=7;presentation_epoch=$case.epoch;required=$case.required;displayed=$case.displayed}
+        Expect $case.name $case.refused
+    }
     "Presented frame wait: $checks passed"
 }finally{Remove-Item -LiteralPath $out -Recurse -Force}
