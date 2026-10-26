@@ -41,6 +41,13 @@ private final class Scroll: UIPanGestureRecognizer {
     override func setTranslation(_ translation: CGPoint, in view: UIView?) { delta = translation }
 }
 
+private final class BubbleHover: UIHoverGestureRecognizer {
+    var phase: UIGestureRecognizer.State = .began
+    var point = CGPoint.zero
+    override var state: UIGestureRecognizer.State { get { phase } set { phase = newValue } }
+    override func location(in view: UIView?) -> CGPoint { point }
+}
+
 private final class NativePinch: UIPinchGestureRecognizer {
     var phase: UIGestureRecognizer.State = .possible
     override var state: UIGestureRecognizer.State { get { phase } set { phase = newValue } }
@@ -74,7 +81,9 @@ private final class NativeRotation: UIRotationGestureRecognizer {
         }
         return true
     }
-    private func passed(_ message: String) { completedGroups += 1; print(message) }
+    private func passed(_ message: String) {
+        completedGroups += 1; FileHandle.standardError.write(Data((message + "\n").utf8))
+    }
     private func report(_ failure: String?) throws {
         // Device console delivery is optional; bind the durable result to this
         // launch so an earlier successful run cannot satisfy a later check.
@@ -127,6 +136,36 @@ private final class NativeRotation: UIRotationGestureRecognizer {
         }
         func action(_ value: [String: Any]) async throws {
             store.dispatch(value); try await flush()
+        }
+        do {
+            let input = ReorderInputView(frame: CGRect(x: 0, y: 0, width: 1200, height: 900))
+            input.model = store.workspace.input
+            let window = UIWindow(frame: input.frame)
+            window.addSubview(input); input.validate()
+            defer { input.detach(); input.removeFromSuperview(); withExtendedLifetime(window) {} }
+            let types = [UITouch.TouchType.pencil, .indirectPointer].map { NSNumber(value: $0.rawValue) }
+            try require(window.gestureRecognizers?.contains { $0.name == "bubble-hover" && $0.allowedTouchTypes == types } == true,
+                "Bubble hover accepts both Pencil and trackpad pointer records")
+            let grab: [String: Any] = ["kind": "variant", "variant": ["type": "brush_preset", "id": 1]]
+            for phase in ["down", "up"] {
+                try await action(["type": "bubble", "action": ["type": "drag", "grab": grab,
+                    "phase": phase, "position": [500, 400], "viewport": [1200, 900]]])
+            }
+            guard let bubble = store.bubbles.items.first else { throw HostFailure(message: "Hover needs its real shared brush bubble") }
+            try await wait("Positioned native hover bubble", seconds: 5, failure: { store.failure }, step: {
+                await frame(native); store.bubbles.tick(CACurrentMediaTime()); try await flush()
+            }) { bubble.placement.positioned }
+            let hover = BubbleHover(); hover.point = bubble.placement.center
+            input.hoveredBubbles(hover)
+            try require(!bubble.hover.isNull, "Native hover highlights the shared bubble hit")
+            hover.phase = .changed; hover.point.x = -10; input.hoveredBubbles(hover)
+            try require(bubble.hover.isNull, "Leaving the editor clears bubble hover")
+            hover.point = bubble.placement.center; input.hoveredBubbles(hover)
+            try require(!bubble.hover.isNull, "Returning hover restores the highlight")
+            hover.phase = .ended; input.hoveredBubbles(hover)
+            try require(bubble.hover.isNull, "Native hover end clears the highlight")
+            try await action(["type": "bubble", "action": ["type": "put_back_all"]])
+            passed("PASS: UIKit bubble hover highlights and clears with Pencil and trackpad pointer records")
         }
         func rulers() async throws -> JSON {
             let prepared = await withCheckedContinuation { done in native.flushPersistence { done.resume(returning: $0) } }

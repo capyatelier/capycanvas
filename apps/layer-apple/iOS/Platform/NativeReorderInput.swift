@@ -33,6 +33,7 @@ final class ReorderInputView: UIView, UIGestureRecognizerDelegate {
     private var lastTrack: CFTimeInterval?
     private var observer: NSObjectProtocol?
     private var bubbles: BubbleRecognizer?
+    private var bubbleHover: UIHoverGestureRecognizer?
     private var handledKeys: Set<UIKeyboardHIDUsage> = []
     private var keyRepeat: KeyRepeat?
     override var canBecomeFirstResponder: Bool { true }
@@ -86,6 +87,8 @@ final class ReorderInputView: UIView, UIGestureRecognizerDelegate {
         attached?.removeGestureRecognizer(secondary); attached = nil
         if let layerTouches { layerTouches.isEnabled = false; layerTouches.view?.removeGestureRecognizer(layerTouches); self.layerTouches = nil }
         if let bubbles { bubbles.view?.removeGestureRecognizer(bubbles); self.bubbles = nil }
+        model?.bubbleInput?.hover(nil)
+        if let bubbleHover { bubbleHover.view?.removeGestureRecognizer(bubbleHover); self.bubbleHover = nil }
     }
     func validate() {
         if layerTouches == nil, let layer = model?.layerTouchModel, attached != nil {
@@ -150,6 +153,17 @@ final class ReorderInputView: UIView, UIGestureRecognizerDelegate {
     private func attachBubbles() {
         guard bubbles == nil, model?.bubbleInput != nil, let window else { return }
         let bubbles = BubbleRecognizer(marker: self); self.bubbles = bubbles; window.addGestureRecognizer(bubbles)
+        let hover = UIHoverGestureRecognizer(target: self, action: #selector(hoveredBubbles))
+        hover.allowedTouchTypes = [UITouch.TouchType.pencil, .indirectPointer].map { NSNumber(value: $0.rawValue) }
+        hover.name = "bubble-hover"
+        bubbleHover = hover; window.addGestureRecognizer(hover)
+    }
+    @objc func hoveredBubbles(_ recognizer: UIHoverGestureRecognizer) {
+        guard let input = model?.bubbleInput else { return }
+        input.viewport = bounds.size
+        let point = recognizer.location(in: self)
+        input.hover(window != nil && input.enabled && bounds.contains(point)
+            && (recognizer.state == .began || recognizer.state == .changed) ? point : nil)
     }
     private func cancel(detaching: Bool = false, all: Bool = true) {
         endKeyRepeat()
@@ -158,6 +172,7 @@ final class ReorderInputView: UIView, UIGestureRecognizerDelegate {
         if all, let layerTouches { layerTouches.isEnabled = false; layerTouches.isEnabled = true }
         if detaching { model?.nativeInputDetached() } else if all { model?.cancel() } else { model?.cancelReorder() }
         if all { bubbles?.cancel() }
+        if all { model?.bubbleInput?.hover(nil) }
         touch = nil; link?.invalidate(); link = nil
         pan.isEnabled = false; press.isEnabled = false
         pan.isEnabled = true; press.isEnabled = true

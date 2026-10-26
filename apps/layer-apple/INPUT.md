@@ -45,7 +45,8 @@ real endpoint. The cursor tracks real input, so predicted ink can run ahead of i
   direction before camera transforms, brush evaluation and cursor geometry.
 - **Hover.** Pencil hover ends on recognizer exit and on cancellation; both send
   the shared cancel phase to clear the cursor. An active Pencil contact
-  suppresses hover updates.
+  suppresses hover updates. Pencil and trackpad pointer hover highlight bubble
+  items, halves and faces; exit and cancellation clear the highlight.
 - **Trackpad and wheel.** UIKit uses standard pan, pinch and rotation
   recognizers with indirect-input support; AppKit uses the canvas view's wheel,
   magnify and rotate callbacks. Scrolling pans, Shift-scroll pans horizontally
