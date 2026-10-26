@@ -404,7 +404,7 @@ pub struct ToolPreviewMetrics {
 pub const TOOL_PREVIEW_METRICS: ToolPreviewMetrics = ToolPreviewMetrics {
     minimum_height: 54.,
     preview_height: 40.,
-    caption_opacity: 0.8,
+    caption_opacity: 0.2,
 };
 impl ToolPreviewMetrics {
     pub fn heights(self, caption_height: f32) -> [f32; 2] {

@@ -68,7 +68,9 @@ the vector Eraser also retains its erase-mode choices.
 
 Tool Set category buttons fill their grid cells, so hover, selection and input
 cover the whole category. GTK categories use the same 26-pixel height and squircle
-corners as panel buttons and dropdowns. Tool rows keep the icon at the leading edge and
+corners as panel buttons and dropdowns. Their columns follow the names' natural
+widths, allowing short and long categories to share a row without clipping.
+Tool rows keep the icon at the leading edge and
 right-align the name, as brush rows do; only the Color Picker and Eyedropper
 styles keep the name beside the icon. A thin horizontal divider separates
 categories from tools when both are shown, using the toolbar's inset separator
@@ -76,7 +78,7 @@ style.
 GTK tool preview rows have a 54-pixel minimum and a 66-pixel natural height at
 the default text size. Their 40-pixel stroke previews retain their height as the
 panel shrinks. The icon and name occupy separate 26-pixel squircle surfaces,
-using the row's background color at 80% opacity with opaque text and icons.
+using the row's background color at 20% opacity (80% transparent), with opaque text and icons.
 The row and caption surfaces share a 200 ms background-color transition for
 hover, press and selection changes. Selected preview rows retain the opaque
 selection color at every panel transparency level.

@@ -559,6 +559,69 @@ fn native_paint_toolbar_dividers_input() {
     d.finish();
 }
 
+fn assert_blend_category_cells(d: &mut Driver, buttons: &[gtk::Button], wide: bool, context: &str) {
+    assert_eq!(buttons.len(), 3);
+    let flow = buttons[0].parent().unwrap().parent().unwrap();
+    let bounds = buttons.iter().map(|button| button.compute_bounds(&flow).unwrap()).collect::<Vec<_>>();
+    assert_eq!(descendant::<gtk::Label>(&buttons[0]).unwrap().text(), layer_ui::ToolGroup::Blend.label().as_ref());
+    assert_eq!(descendant::<gtk::Label>(&buttons[1]).unwrap().text(), layer_ui::ToolGroup::WetPaint.label().as_ref());
+    if wide {
+        assert!((bounds[0].y() - bounds[1].y()).abs() < 1., "Blend and Paint mixing share the default row");
+    } else {
+        assert!(bounds.iter().any(|bounds| bounds.y() > 1.), "narrow categories wrap without a fixed column count");
+    }
+    for (index, button) in buttons.iter().enumerate() {
+        assert_eq!(button.height(), 26);
+        let label = descendant::<gtk::Label>(button).unwrap();
+        assert_eq!(label.layout().line_count(), 1);
+        if wide { assert!(!label.layout().is_ellipsized(), "default width retains full category captions"); }
+        let cell = button.parent().unwrap();
+        let native = button.compute_bounds(&cell).unwrap();
+        assert!(native.x().abs() < 1. && (native.width() - cell.width() as f32).abs() < 1.);
+        for previous in &bounds[..index] {
+            let current = bounds[index];
+            assert!(current.x() >= previous.x() + previous.width() - 1.
+                || current.y() >= previous.y() + previous.height() - 1., "category cells do not overlap");
+        }
+        for at in [[0.05,0.5], [0.95,0.5]] {
+            let mut point = screen_point(&cell, &d.w.window, at);
+            let mut hit = d.w.window.pick(point[0] as f64, point[1] as f64, gtk::PickFlags::DEFAULT).unwrap();
+            if hit != *button && !hit.is_ancestor(button) {
+                let scrollbar = if hit.is::<gtk::Scrollbar>() { Some(hit.clone()) }
+                    else { hit.ancestor(gtk::Scrollbar::static_type()) };
+                if let Some(scrollbar) = scrollbar {
+                    let blocker = hit.compute_bounds(&d.w.window).unwrap();
+                    let exposed = cell.compute_bounds(&d.w.window).unwrap();
+                    let vertical = scrollbar.downcast_ref::<gtk::Scrollbar>().unwrap().orientation() == gtk::Orientation::Vertical;
+                    if vertical {
+                        point[0] = if blocker.x() > exposed.x() + exposed.width() * 0.5 { blocker.x() - 1. }
+                            else { blocker.x() + blocker.width() + 1. };
+                    } else {
+                        point[1] = if blocker.y() > exposed.y() + exposed.height() * 0.5 { blocker.y() - 1. }
+                            else { blocker.y() + blocker.height() + 1. };
+                    }
+                    assert!(point[0] >= exposed.x() && point[0] < exposed.x() + exposed.width()
+                        && point[1] >= exposed.y() && point[1] < exposed.y() + exposed.height());
+                    eprintln!("category native scrollbar {context}/index{index}: blocker={blocker:?}, exposedpoint={point:?}");
+                    hit = d.w.window.pick(point[0] as f64, point[1] as f64, gtk::PickFlags::DEFAULT).unwrap();
+                }
+            }
+            if hit != *button && !hit.is_ancestor(button) {
+                let mut ancestry = Vec::new();
+                let mut current = Some(hit.clone());
+                while let Some(widget) = current {
+                    ancestry.push(format!("{}:{}:{:?}:{:?}", widget.type_().name(), widget.widget_name(), widget.css_classes(), widget.compute_bounds(&d.w.window)));
+                    current = widget.parent();
+                }
+                eprintln!("category hit failure {context}/index{index}: button={:?}, cell={:?}, flow={:?}, point={point:?}, picked={ancestry:?}",
+                    button.compute_bounds(&d.w.window), cell.compute_bounds(&d.w.window), flow.compute_bounds(&d.w.window));
+                d.capture_canvas(&format!("category-hit-failure-{index}.png"));
+            }
+            assert!(hit == *button || hit.is_ancestor(button), "the whole category cell targets its button: {context}/index{index}");
+        }
+    }
+}
+
 #[test]
 #[ignore = "isolated native-input.js --native-test=native_tool_set_category_input"]
 fn native_tool_set_category_input() {
@@ -579,7 +642,12 @@ fn native_tool_set_category_input() {
                 pump(250);
                 let buttons = d.w.tool_set.group_buttons.borrow().clone();
                 assert!(!buttons.is_empty());
-                for button in buttons {
+                if command == CommandId::Blend {
+                    let group = d.w.resolved().groups.into_iter().find(|group| group.active == Panel::Brushes).unwrap();
+                    assert_eq!(group.bounds.width, 280.);
+                    assert_blend_category_cells(&mut d, &buttons, true, &format!("{theme:?}/floating{floating}/width280"));
+                }
+                for button in &buttons {
                     assert_eq!(button.height(), 26, "{command:?}/{theme:?}/{floating}: category height");
                     let cell = button.parent().unwrap();
                     let bounds = button.compute_bounds(&cell).unwrap();
@@ -587,7 +655,7 @@ fn native_tool_set_category_input() {
                         "category fills its cell: {command:?}/{theme:?}/{floating}: {bounds:?}, cell {}", cell.width());
                     let point = screen_point(&cell, &d.w.window, [0.85, 0.5]);
                     let hit = d.w.window.pick(point[0] as f64, point[1] as f64, gtk::PickFlags::DEFAULT).unwrap();
-                    assert!(hit == button || hit.is_ancestor(&button), "category edge belongs to its button");
+                    assert!(hit == *button || hit.is_ancestor(button), "category edge belongs to its button");
                     d.input.perform(serde_json::json!([{"point": point}]));
                     d.capture_canvas(&format!("tool-set-hover-{command:?}-{theme:?}-{floating}.png"));
                     assert!(button.state_flags().contains(gtk::StateFlags::PRELIGHT));
@@ -595,6 +663,22 @@ fn native_tool_set_category_input() {
                     assert!(button.has_css_class("selected-tool"));
                 }
                 d.capture_canvas(&format!("tool-set-{command:?}-{theme:?}-{floating}.png"));
+                if command == CommandId::Blend && floating {
+                    for width in [128., 280.] {
+                        let group = d.w.resolved().groups.into_iter().find(|group| group.active == Panel::Brushes).unwrap();
+                        let start = [group.bounds.x + group.bounds.width, group.bounds.y + group.bounds.height * 0.5];
+                        for (phase, position) in [(ContactPhase::Down, start),
+                            (ContactPhase::Up, [group.bounds.x + width, start[1]])] {
+                            d.w.dispatch(UiAction::ResizeFloating { group: group.id, edge: layer_ui::ResizeEdge::Right,
+                                phase, position, viewport: [1600., 1000.] });
+                        }
+                        pump(250);
+                        assert_eq!(d.w.resolved().groups.into_iter().find(|view| view.id == group.id).unwrap().bounds.width, width);
+                        assert_eq!(*d.w.tool_set.group_buttons.borrow(), buttons, "width changes retain category buttons");
+                        d.capture_canvas(&format!("blend-category-{theme:?}-{width}.png"));
+                        assert_blend_category_cells(&mut d, &buttons, width == 280., &format!("{theme:?}/floating{floating}/width{width}"));
+                    }
+                }
             }
         }
     }
@@ -637,7 +721,7 @@ fn assert_preview_caption_paint(widget: &gtk::Widget) {
     let mut pixels = vec![0; texture.width() as usize * texture.height() as usize * 4];
     texture.download(&mut pixels, texture.width() as usize * 4);
     let alpha = pixels.as_chunks::<4>().0.iter().map(|pixel| pixel[3]).collect::<Vec<_>>();
-    assert!(alpha.iter().any(|value| (202..=206).contains(value)), "caption background uses80%opacity");
+    assert!(alpha.iter().any(|value| (49..=53).contains(value)), "caption background uses20%opacity");
     assert!(alpha.iter().any(|value| *value == 255), "caption glyphs retain opaque paint");
 }
 
@@ -801,7 +885,7 @@ fn native_tool_caption_hover_input() {
                         for frame in &frames {
                             for color in &frame.colors[1..] {
                                 for channel in 0..3 { case_rgb = case_rgb.max((frame.colors[0][channel] - color[channel]).abs()); }
-                                case_alpha = case_alpha.max((color[3] - 0.8).abs());
+                                case_alpha = case_alpha.max((color[3] - 0.2).abs());
                             }
                             case_alpha = case_alpha.max((frame.colors[0][3] - 1.).abs());
                         }
@@ -859,7 +943,7 @@ fn native_tool_caption_hover_input() {
     assert!(reports.iter().all(|report| report["moving_frames"].as_u64().unwrap() >= 4), "native hover records actual transient color motion");
     assert!(max_pixels <= 3, "settled visible row/caption colors differ by{max_pixels}levels");
     assert!(max_role <= 3. / 255., "idle/hover/pressed backgrounds differ from their palette roles:{max_role}");
-    assert!(max_alpha <= 0.005, "opaque row/caption0.8alpha mismatch:{max_alpha}");
+    assert!(max_alpha <= 0.005, "opaque row/caption0.2alpha mismatch:{max_alpha}");
     assert_preview_caption_paint(&icon); assert_preview_caption_paint(&name);
     d.finish();
 }

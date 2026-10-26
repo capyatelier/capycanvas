@@ -242,7 +242,7 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 | Android palette pill opening at the work-area edge | 120 | **FPS unqualified.** Instant clamp; two actual presents per opening, all neighbors stationary in the diagnostic | [Native palette opening](#native-palette-opening), 2026-10-23 |
 | Android tool bubble drag through four neighbours | 120 | **Unqualified after the bubble release fixes.** Previous parity build: 115.00–116.55 actual app-window presents/s; p99 ≤16.667447 ms, default glass, 61 MP photo at Fit | [Native tool bubbles](#native-tool-bubbles), 2026-10-24 |
 | Web tool bubble drag through four neighbours | 120 | Unmeasured after the bubble release fixes; desktop browser journeys do not qualify the reference tablet | [Web checks](../development/web.md#tests), 2026-10-24 |
-| GTK Tool Set hover and press animation | 120 | Desktop diagnostic: **117.70 changing-color presents/s**, 115.78–118.06 per case; worst case gap p99 16.761 ms. Reference hardware unmeasured | [GTK tool caption hover](#gtk-tool-caption-hover), 2026-10-26 |
+| GTK Tool Set hover and press animation | 120 | Desktop diagnostic: **117.93 changing-color presents/s**, 117.38–118.14 per case; worst case gap p99 16.715 ms. Reference hardware unmeasured | [GTK tool caption hover](#gtk-tool-caption-hover), 2026-10-26 |
 | Panel or column resize | 120 | Expanding GTK divider desktop diagnostic: **54.49/s**, p99 41.689 ms; misses the 114 Hz floor. **Desktop diagnostic misses.** GTK GPU joins: 81.59–112.27 changing-geometry presents/s at 1×; 38.96–92.31 at 2×, worst p99 74.986 ms. Reference-tier qualification remains unset. Web Navigator: 30.00–30.64 Chrome surface presents/s; p99 50.00–58.34 ms | [Web Navigator layout](#web-navigator-layout), 2026-10-19; [GTK Color resize](#gtk-color-panel-resize), 2026-10-10; [GTK column bridge diagnostic](#gtk-column-bridge-diagnostic), 2026-10-25; [GTK Tool Set density](#gtk-tool-set-density), 2026-10-26; [GTK toolbar dividers](#gtk-toolbar-divider-resize), 2026-10-26 |
 | Pen pressure utility and curve drag | 120 | **Unqualified.** Current GTK desktop panel 119.20–119.40 presents/s, p99 up to 9.207 ms; curve 120.00, p99 up to 8.470 ms; reference tablet unmeasured | [GTK pen pressure utility](#gtk-pen-pressure-utility), 2026-10-10 UTC |
 | Windows tool bubble drag through four neighbours | 120 | Unmeasured on reference hardware; Surface Pro / Adreno X1-85 functional checks do not qualify timing (PresentMon ETW access denied) | [Windows tool bubbles](../development/windows.md#tool-bubbles) |
@@ -4395,7 +4395,7 @@ in `artifacts/ipados17/comparison/codegen-control/`.
 
 ## GTK tool caption hover
 
-The 2026-10-26 UTC release diagnostic includes synchronized preview-row and
+The initial 2026-10-26 UTC release diagnostic includes synchronized preview-row and
 caption colors and 80% caption opacity on `3170d1f58`. The private 1600 × 1000,
 120 Hz compositor uses NVIDIA RTX PRO 6000 Blackwell Max-Q, Vulkan 615.71.09.
 Twenty native cases cover both themes, all four panel transparency levels,
@@ -4424,6 +4424,20 @@ qualify reference tablets or their canvas workloads.
 [source and executable provenance](../../artifacts/tool-caption-hover/fixed-verified-provenance.json)
 identify the measured build. [Baseline traces](../../artifacts/tool-caption-hover/baseline-traces.json)
 retain the original transition and selected-glass failures.
+
+A followup on `1436c0b10` sets caption opacity to 0.2 and uses natural category
+column widths. Native input verifies full Blend and Paint mixing captions on
+the same row at 280 pixels, wrapping at 128 pixels and restoring the original
+widgets and 26-pixel row height. The 20 hover cases retain matching colors,
+opaque glyphs and exact 0.2 caption alpha, with no settled pixel difference.
+Moving feedback gives **117.93/s**, 117.38–118.14/s per case, over 2,421 intervals
+from 2,565 unique presentations. Gap p99 is 16.643 ms, worst per-case p99 is
+16.715 ms, and CPU sampling p95 is 0.019 ms. This remains a short desktop
+diagnostic, not reference-tier qualification.
+[Raw traces](../../artifacts/tool-caption-transparency/hover-traces.json),
+[presentation summary](../../artifacts/tool-caption-transparency/hover-summary.json) and
+[build provenance](../../artifacts/tool-caption-transparency/final-provenance.json)
+identify the followup build.
 
 ## GTK toolbar divider resize
 

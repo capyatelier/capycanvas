@@ -33,7 +33,7 @@ impl ToolSet {
     pub fn for_panel(panel: layer_ui::Panel) -> Self {
         let root = gtk::Box::new(gtk::Orientation::Vertical, 6);
         let groups = gtk::FlowBox::builder()
-            .homogeneous(true)
+            .homogeneous(false)
             .min_children_per_line(1)
             .max_children_per_line(if matches!(panel, layer_ui::Panel::BrushSets | layer_ui::Panel::SculptSets) { 1 } else { 16 })
             .selection_mode(gtk::SelectionMode::None)
@@ -91,7 +91,7 @@ impl ToolSet {
                 let media = matches!(self.panel, layer_ui::Panel::BrushSets | layer_ui::Panel::SculptSets);
                 if media { button.set_widget_name(&format!("{}-{}", if self.panel == layer_ui::Panel::SculptSets { "sculpt-set" } else { "brush-set" }, item.icon)); }
                 button.set_size_request(
-                    ((if media { layer_ui::BRUSH_SETS_MIN_WIDTH } else { layer_ui::TOOL_PANEL_MIN_WIDTH }) - 2.0 * layer_ui::PANEL_CONTENT_INSET) as i32,
+                    if media { (layer_ui::BRUSH_SETS_MIN_WIDTH - 2.0 * layer_ui::PANEL_CONTENT_INSET) as i32 } else { -1 },
                     if media { TOOL_ROW_HEIGHT } else { layer_ui::PANEL_CONTROL_METRICS.control_height as i32 },
                 );
                 let content = aligned_icon_label(&item.label, item.icon, if media { 0.0 } else { 1.0 });
