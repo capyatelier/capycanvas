@@ -39,11 +39,12 @@ final class ObservedMetalLayer: CAMetalLayer {
                 b: start, c: FrameTrace.now(), d: drawable.map { UInt64($0.drawableID) } ?? 0, e: drawable == nil ? 0 : 1))
         }
         drawable?.addPresentedHandler { drawable in
+            let received = observation == nil ? 0 : FrameTrace.now()
             frameRate?.presented(at: drawable.presentedTime)
             if let observation {
                 observation.trace.record(FrameTraceEvent(kind: .presented, a: observation.frame,
                     b: FrameTrace.timestamp(drawable.presentedTime * 1_000_000_000),
-                    c: FrameTrace.now(), d: UInt64(drawable.drawableID)))
+                    c: received, d: UInt64(drawable.drawableID)))
             }
         }
         return drawable

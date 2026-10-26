@@ -220,7 +220,10 @@ the Mac fixture's Apple policy selection does not establish UIKit delivery.
   startup actions. `consumedPaint.e` is zero without a valid frame result, one
   for an idle or finished native frame and two when more work remains. Join the
   frame ID to an actual drawable presentation; a valid result alone does not prove
-  presentation.
+  presentation. `capy_apple_camera_revision` reads shared camera state. The Metal
+  frame captures that state after frame preparation and does not change it during
+  encoding, so the immediate post-frame sample identifies the encoded view only
+  when joined to that frame's drawable.
   A revision identifies encoded camera state. Compare its geometry with a
   timestamped camera witness to establish movement, since identity transforms
   can also advance the revision. This does not measure SwiftUI overlay motion.

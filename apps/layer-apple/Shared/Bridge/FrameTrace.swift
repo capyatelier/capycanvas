@@ -123,6 +123,7 @@ final class FrameTrace: @unchecked Sendable {
                 "process_identifier": ProcessInfo.processInfo.processIdentifier,
                 "gpu_timing_requested": recordsGpuTiming,
                 "raster_update_counter": true,
+                "encoded_camera_revision": true,
                 "capacity": capacity, "dropped_records": snapshot.dropped, "record_stride_bytes": MemoryLayout<FrameTraceEvent>.stride,
                 "input_source": workload == nil ? "platform" : "synthetic", "workload": workload as Any? ?? NSNull(),
                 "input_association": "received by owner before frame; pixel inclusion is not established"]

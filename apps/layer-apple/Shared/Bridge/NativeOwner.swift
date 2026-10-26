@@ -1047,6 +1047,7 @@ final class NativeOwner: @unchecked Sendable {
             var costs = [UInt64](repeating: 0, count: 5)
             guard handle != nil else { completion(false, 0, costs); return }
             let start = observation == nil ? 0 : FrameTrace.now()
+            var encodedCameraRevision: UInt64 = 0, frameOutcome: UInt64 = 0
             (layer as? ObservedMetalLayer)?.observation = observation.map { ($0, now) }
             defer {
                 (layer as? ObservedMetalLayer)?.observation = nil
@@ -1054,7 +1055,8 @@ final class NativeOwner: @unchecked Sendable {
                     e: costs[0], f: costs[1], g: costs[2], h: costs[3], i: costs[4], j: latestTracedInput))
                 if let observation {
                     observation.record(FrameTraceEvent(kind: .consumedPaint, a: now,
-                        b: capy_apple_consumed_paint_ns(nativeValue(handle)), c: capy_apple_submitted_canvas_updates(nativeValue(handle))))
+                        b: capy_apple_consumed_paint_ns(nativeValue(handle)), c: capy_apple_submitted_canvas_updates(nativeValue(handle)),
+                        d: encodedCameraRevision, e: frameOutcome))
                 }
                 if let trace { collectGpuTiming(trace) }
             }
@@ -1066,6 +1068,10 @@ final class NativeOwner: @unchecked Sendable {
                 }
                 if wantsGpuTiming, let observation { sampleGpuClock(observation) }
                 let result = capy_apple_frame(nativeValue(handle), now, max(now, target), &costs)
+                if observation != nil && (result == 0 || result == 1) {
+                    encodedCameraRevision = capy_apple_camera_revision(nativeValue(handle))
+                    frameOutcome = UInt64(result) + 1
+                }
                 try check(result)
                 syncCanvasBarHold()
                 // Always flush the final state before the display link sleeps.
