@@ -116,6 +116,11 @@ __declspec(dllimport) int32_t capy_action(CapyHost, const char* json);
 __declspec(dllimport) int32_t capy_document_action(CapyHost, const char* json);
 __declspec(dllimport) int32_t capy_native_prediction(CapyHost host, bool available);
 int32_t capy_input(CapyHost, const char* json);
+/* Bits: 1 handled, 2 hold, 4 select a pressed tab on release, 8 still pending;
+   resize cursor << 4: 1 col, 2 row, 3 ew, 4 ns, 5 nwse, 6 nesw. */
+__declspec(dllimport) int32_t capy_edge_contact(CapyHost, const char* json);
+/* Pressed contact on the presented layout: 1 within an edge's reach, 2 that edge may resize vertically. */
+__declspec(dllimport) uint32_t capy_edge_reach(char const* json);
 /* Physical anchor, logical wheel deltas, current composition density. */
 __declspec(dllimport) int32_t capy_scroll(CapyHost, float x, float y, float dx, float dy, float density, bool zoom, bool horizontal);
 /* 0=refresh, 1=motion, 2=contact, 3=leave. Returns handled/dismiss bits. */

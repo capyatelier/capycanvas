@@ -437,7 +437,7 @@ LayerRowDrag::LayerRowDrag(std::shared_ptr<LayersView> const& view):impl(std::ma
 }
 LayerRowDrag::~LayerRowDrag(){impl->cancelTouches();impl->clear(true);}
 void LayerRowDrag::Attach(std::shared_ptr<LayerRow> const& row){
-    PointerGesture::OwnHolding(row->root);
+    PointerGesture::OwnHolding(row->root);edgeTag(row->root,L"edge_contact",S(L"input"));
     row->root.AddHandler(UIElement::PointerPressedEvent(),box_value(PointerEventHandler(
         [weak=std::weak_ptr(impl)](auto&&,auto&& e){if(auto self=weak.lock())self->down(e);})),true);
 }

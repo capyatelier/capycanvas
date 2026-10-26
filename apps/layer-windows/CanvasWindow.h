@@ -186,7 +186,7 @@ private:
     void Finish();
     void CloseViews();
     void Fail(std::string message);
-    void Send(std::string json, CanvasCommandKind kind=CanvasCommandKind::Action);
+    void Send(std::string json, CanvasCommandKind kind=CanvasCommandKind::Action, std::function<void(int32_t)> reply={});
     bool SendIndependent(CanvasWork item);
     void Key(winrt::Microsoft::UI::Xaml::Input::KeyRoutedEventArgs const&, bool pressed);
     bool CancelGesture();

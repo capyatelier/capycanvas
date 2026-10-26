@@ -130,8 +130,8 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     std::shared_ptr<ZoomReadout> zoom=std::make_shared<ZoomReadout>();
     Grid cameraSlot;
     Border cameraSurface;std::function<void()> glassChanged;std::map<std::wstring,double> tabWidths;
-    Impl(Dispatch send,J catalog,NativeLocalization localization,Dispatch report,PreviewTransport previews,std::function<void(bool)> popupChanged,Dispatch document,Dispatch input):overviews(std::move(report)){
-        data->input=std::move(input);gestures=std::make_shared<WorkspaceGestures>(data,root);
+    Impl(Dispatch send,J catalog,NativeLocalization localization,Dispatch report,PreviewTransport previews,std::function<void(bool)> popupChanged,Dispatch document,Dispatch input,EdgeTransport edges):overviews(std::move(report)){
+        data->input=std::move(input);data->edges=std::move(edges);gestures=std::make_shared<WorkspaceGestures>(data,root);
         data->document=std::move(document);
         data->popupChanged=std::move(popupChanged);
         data->thumbnails=CreateLayerThumbnailCache(previews);
@@ -438,6 +438,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
                 group.configurationFrame.Background(clear());group.content.Children().Append(group.configurationFrame);
                 root.Children().Append(group.shadow.Root());root.Children().Append(group.frame);
                 AutomationProperties::SetAutomationId(group.frame,L"workspace-group-"+to_hstring(id));
+                edgeTag(group.frame,L"edge_surface",B(true));
             }
             AutomationProperties::SetName(group.frame,str(panel,L"title"));
             group.geometry=geometry;group.offset={};
@@ -1010,7 +1011,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         zoom->Update(view);
     }
 };
-WorkspaceView::WorkspaceView(Dispatch send,Json catalog,NativeLocalization localization,Dispatch overviews,PreviewTransport previews,std::function<void(bool)> popupChanged,Dispatch document,Dispatch input):impl(std::make_shared<Impl>(std::move(send),catalog,localization,std::move(overviews),std::move(previews),std::move(popupChanged),std::move(document),std::move(input))){impl->init();}
+WorkspaceView::WorkspaceView(Dispatch send,Json catalog,NativeLocalization localization,Dispatch overviews,PreviewTransport previews,std::function<void(bool)> popupChanged,Dispatch document,Dispatch input,EdgeTransport edges):impl(std::make_shared<Impl>(std::move(send),catalog,localization,std::move(overviews),std::move(previews),std::move(popupChanged),std::move(document),std::move(input),std::move(edges))){impl->init();}
 WorkspaceView::~WorkspaceView()=default;
 Canvas WorkspaceView::Root()const{return impl->root;}
 bool WorkspaceView::Apply(Json const& snapshot){return impl->apply(snapshot);}

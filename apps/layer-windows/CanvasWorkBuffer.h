@@ -2,6 +2,7 @@
 #include "native/include/capy_windows.h"
 #include <cstddef>
 #include <deque>
+#include <functional>
 #include <string>
 #include <utility>
 #include <variant>
@@ -9,8 +10,8 @@
 
 // Protected by CanvasWindow's mutex. Both item count and payload storage are
 // bounded. Callers must split pointer histories into small, ordered batches.
-enum class CanvasCommandKind { Action, Input, Document, Workspace, Overviews, Glass, Filters, Prediction, DeviceLoss, TestDisplay, LocalizationInput };
-struct CanvasCommand { CanvasCommandKind kind=CanvasCommandKind::Action; std::string json; };
+enum class CanvasCommandKind { Action, Input, EdgeContact, Document, Workspace, Overviews, Glass, Filters, Prediction, DeviceLoss, TestDisplay, LocalizationInput };
+struct CanvasCommand { CanvasCommandKind kind=CanvasCommandKind::Action; std::string json; std::function<void(int32_t)> reply; };
 struct CanvasScroll {
     float x, y, dx, dy, density;
     bool zoom, horizontal;

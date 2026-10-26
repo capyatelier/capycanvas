@@ -10,7 +10,8 @@ class WorkspaceView {
 public:
     using Json = winrt::Windows::Data::Json::JsonObject;
     using Dispatch = std::function<void(std::string)>;
-    WorkspaceView(Dispatch dispatch, Json catalog,NativeLocalization localization, Dispatch overviews, PreviewTransport previews,std::function<void(bool)> popupChanged, Dispatch document, Dispatch input);
+    using EdgeTransport = std::function<void(std::string,std::function<void(int32_t)>)>;
+    WorkspaceView(Dispatch dispatch, Json catalog,NativeLocalization localization, Dispatch overviews, PreviewTransport previews,std::function<void(bool)> popupChanged, Dispatch document, Dispatch input, EdgeTransport edges);
     ~WorkspaceView();
     winrt::Microsoft::UI::Xaml::Controls::Canvas Root() const;
     bool Apply(Json const& snapshot);

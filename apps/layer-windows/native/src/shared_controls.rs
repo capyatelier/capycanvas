@@ -35,6 +35,28 @@ pub unsafe extern "C" fn capy_control_takes_key(key: *const c_char, command: boo
 /// # Safety
 /// Input is readable NUL-terminated UTF-8 JSON for the duration of this call.
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_edge_reach(input: *const c_char) -> u32 {
+    #[derive(serde::Deserialize)]
+    struct Request {
+        layout: layer_ui::ResolvedLayout,
+        position: [f32; 2],
+        kind: layer_ui::PointerKind,
+        contact: layer_ui::EdgeContact,
+    }
+    if input.is_null() {
+        return 0;
+    }
+    std::panic::catch_unwind(|| {
+        let request: Request = serde_json::from_str(unsafe { CStr::from_ptr(input) }.to_str().ok()?).ok()?;
+        request.layout.edge_grab_at(request.position, request.kind, request.contact)
+    })
+    .ok()
+    .flatten()
+    .map_or(0, |grab| 1 | u32::from(grab.resizes(layer_ui::Axis::Vertical)) << 1)
+}
+/// # Safety
+/// Input is readable NUL-terminated UTF-8 JSON for the duration of this call.
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_proof_dial(input: *const c_char) -> u64 {
     if input.is_null() {
         return 0;
@@ -201,6 +223,19 @@ mod tests {
         let key = |name: &str, keyboard| unsafe { capy_control_takes_key(CString::new(name).unwrap().as_ptr(), false, false, keyboard) };
         assert!(key(" ", true) && !key(" ", false) && key("enter", false));
         assert!(!unsafe { capy_control_takes_key(std::ptr::null(), false, false, true) });
+    }
+    #[test]
+    fn edge_reach_names_a_vertical_gap_and_leaves_swipe_controls_alone() {
+        let layout = layer_ui::WorkspacePreset::Illustrator.layout(layer_ui::Platform::Windows).resolve(1600., 1000.);
+        let gap = layout.dividers.iter().find(|d| d.axis == layer_ui::Axis::Vertical && !d.band && !d.fixed).unwrap();
+        let reach = |position: [f32; 2], contact: &str| {
+            let request = serde_json::json!({"layout": layout, "position": position, "kind": "touch", "contact": contact}).to_string();
+            unsafe { capy_edge_reach(CString::new(request).unwrap().as_ptr()) }
+        };
+        let above = [gap.bounds.x + 30., gap.bounds.y - 10.];
+        assert_eq!(reach(above, "free") & 3, 3);
+        assert_eq!(reach(above, "input"), 0);
+        assert_eq!(unsafe { capy_edge_reach(std::ptr::null()) }, 0);
     }
     fn slide(point: [f32; 2], order: [u64; 3]) -> serde_json::Value {
         let hits: Vec<_> = [1u64, 2, 3]

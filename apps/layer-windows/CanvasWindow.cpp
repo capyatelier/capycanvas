@@ -55,6 +55,11 @@ static int DispatchCanvasCommand(CapyHost  host,CanvasCommand const& command) {
     auto json=command.json.c_str();
     switch(command.kind){
         case CanvasCommandKind::Input:return capy_input(host,json);
+        case CanvasCommandKind::EdgeContact:{
+            auto result=capy_edge_contact(host,json);
+            if(result>=0&&command.reply)command.reply(result);
+            return std::min(result,0);
+        }
         case CanvasCommandKind::LocalizationInput:return capy_localization_input(host,command.json=="true");
         case CanvasCommandKind::Prediction:return capy_native_prediction(host,command.json=="true");
         case CanvasCommandKind::Document:return capy_document_action(host,json);
@@ -461,7 +466,11 @@ bool CanvasWindow::StartPrepared(CapyLaunch  prepared) {
     [weak=weak_from_this()](std::string json){if(auto self=weak.lock()){
         self->canvasFocus.Focus(FocusState::Programmatic);
         self->Send(std::move(json),CanvasCommandKind::Document);
-    }},[weak=weak_from_this()](std::string json){if(auto self=weak.lock())self->Send(std::move(json),CanvasCommandKind::Input);});
+    }},[weak=weak_from_this()](std::string json){if(auto self=weak.lock())self->Send(std::move(json),CanvasCommandKind::Input);},
+    [weak=weak_from_this()](std::string json,std::function<void(int32_t)> reply){if(auto self=weak.lock())
+        self->Send(std::move(json),CanvasCommandKind::EdgeContact,[dispatcher=self->dispatcher,reply=std::move(reply)](int32_t bits){
+            dispatcher.TryEnqueue([reply,bits]{reply(bits);});
+        });});
     workspace->SetWindowId(windowId);
     workspace->SetGlassChanged([weak=weak_from_this()]{if(auto self=weak.lock())self->PublishGlass();});
     root.Children().InsertAt(1,workspace->Root());
@@ -561,12 +570,12 @@ bool CanvasWindow::RequestPreviews(CanvasQueryKind kind,std::string json,Preview
     }
     wake.notify_one();return true;
 }
-void CanvasWindow::Send(std::string json, CanvasCommandKind kind) {
+void CanvasWindow::Send(std::string json, CanvasCommandKind kind, std::function<void(int32_t)> reply) {
     bool overflow=false;
     {
         std::lock_guard lock(mutex);
         if(closing||!host||rendererDone.load()||transportFailed)return;
-        if(!work.Push(CanvasCommand{kind,std::move(json)}))overflow=transportFailed=true;
+        if(!work.Push(CanvasCommand{kind,std::move(json),std::move(reply)}))overflow=transportFailed=true;
     }
     // UI callbacks never wait for the render worker. An exhausted command
     // channel fails explicitly, drains accepted work and cancels active input.

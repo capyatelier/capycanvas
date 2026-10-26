@@ -87,6 +87,7 @@ pub struct CapyHost {
     workspaces: Option<crate::workspace_owner::WorkspaceOwner>,
     blocked_contacts: std::collections::BTreeSet<u64>,
     live_contacts: std::collections::BTreeMap<u64, CapyPointer>,
+    edge_touches: std::collections::BTreeMap<u64, bool>,
     scopes: crate::scopes::Scopes,
 }
 fn pointer_button(sample: &CapyPointer) -> PointerButton {
@@ -117,6 +118,7 @@ impl CapyHost {
         Ok((surface, handle))
     }
     fn cancel_contacts(&mut self) -> Result<(), String> {
+        self.blocked_contacts.extend(std::mem::take(&mut self.edge_touches).into_iter().filter_map(|(id, claimed)| claimed.then_some(id)));
         for (id, mut sample) in std::mem::take(&mut self.live_contacts) {
             sample.phase = 4;
             sample.flags &= !1;
@@ -124,6 +126,53 @@ impl CapyHost {
             self.native.pointer_event(sample.event(), pointer_button(&sample))?;
         }
         Ok(())
+    }
+    fn edge_touch(&mut self, sample: &CapyPointer) -> Result<bool, String> {
+        use layer_ui::{ContactPhase, EdgeContact, PointerKind, UiInput};
+        if sample.tool() != layer_engine::ToolKind::Finger || sample.flags & 1 != 0 {
+            return Ok(false);
+        }
+        let phase = match sample.phase {
+            1 => ContactPhase::Down,
+            2 => ContactPhase::Move,
+            3 => ContactPhase::Up,
+            4 => ContactPhase::Cancel,
+            _ => return Ok(false),
+        };
+        let claimed = match self.edge_touches.get(&sample.id) {
+            Some(claimed) => *claimed,
+            None if phase == ContactPhase::Down => false,
+            None => return Ok(false),
+        };
+        let reply = self.native.input(UiInput::EdgeContact {
+            id: sample.id,
+            phase,
+            kind: PointerKind::Touch,
+            contact: EdgeContact::Free,
+            position: [sample.x / self.scale, sample.y / self.scale],
+            viewport: self.native.logical,
+            time_ns: sample.timestamp_ns,
+        })?;
+        if matches!(phase, ContactPhase::Up | ContactPhase::Cancel) {
+            return Ok(self.edge_touches.remove(&sample.id).unwrap_or(false));
+        }
+        if claimed {
+            return Ok(true);
+        }
+        if reply.edge_cursor.is_none() {
+            if reply.edge_pending {
+                self.edge_touches.insert(sample.id, false);
+            } else {
+                self.edge_touches.remove(&sample.id);
+            }
+            return Ok(false);
+        }
+        let mut cancel = *sample;
+        cancel.phase = 4;
+        self.native.pointer_event(cancel.event(), pointer_button(&cancel))?;
+        self.live_contacts.remove(&sample.id);
+        self.edge_touches.insert(sample.id, true);
+        Ok(true)
     }
     fn track_contact(&mut self, sample: &CapyPointer) {
         if sample.phase == 0 {
@@ -192,6 +241,7 @@ impl CapyHost {
             workspaces: None,
             blocked_contacts: Default::default(),
             live_contacts: Default::default(),
+            edge_touches: Default::default(),
             scopes: Default::default(),
         })
     }
@@ -760,6 +810,9 @@ pub unsafe extern "C" fn capy_pointer(
                     if !(terminal && host.live_contacts.contains_key(&sample.id)) {
                         continue;
                     }
+                } else if host.edge_touch(sample)? {
+                    delivered = delivered.filter(|previous: &CapyPointer| previous.id != sample.id);
+                    continue;
                 }
                 let event=sample.event();
                 host.native.pointer_event(event, pointer_button(sample))?;
@@ -911,6 +964,28 @@ pub unsafe extern "C" fn capy_input(host: u64, json: *const c_char) -> i32 {
         host.native.input(input)?;
         host.poll_services()?;
         Ok(0)
+    })
+}
+/// # Safety
+/// Exclusive access to a live host; json is a readable NUL-terminated buffer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_edge_contact(host: u64, json: *const c_char) -> i32 {
+    guard(host, |host| {
+        let input = unsafe { read_json(json) }?;
+        let layer_ui::UiInput::EdgeContact { phase, .. } = input else {
+            return Err("Expected an edge contact".into());
+        };
+        host.poll_services()?;
+        if !host.accepts_workspace_input()? && !matches!(phase, layer_ui::ContactPhase::Up | layer_ui::ContactPhase::Cancel) {
+            return Ok(0);
+        }
+        let reply = host.native.input(input)?;
+        let cursor = ["col-resize", "row-resize", "ew-resize", "ns-resize", "nwse-resize", "nesw-resize"]
+            .iter()
+            .position(|cursor| Some(*cursor) == reply.edge_cursor)
+            .map_or(0, |index| index as i32 + 1);
+        Ok(i32::from(reply.handled) | i32::from(reply.edge_hold) << 1 | i32::from(reply.edge_select_on_release) << 2
+            | i32::from(reply.edge_pending) << 3 | cursor << 4)
     })
 }
 /// # Safety

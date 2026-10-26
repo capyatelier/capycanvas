@@ -477,6 +477,7 @@ cargo test --locked -p layer-ui --lib edge_grab
 bash tools/performance/workspace-motion.sh gtk --native-test=native_edge_grab_columns_input --tablet
 bash tools/performance/workspace-motion.sh gtk --native-test=native_edge_grab_panels_input --tablet
 bash tools/performance/workspace-motion.sh web --edge-reach
+tools/windows-vm/windows-vm.py fixtures edge-reach edge-reach:pen edge-reach:touch
 cargo test -p layer-linux native_group_tab_styles -- --ignored --test-threads=1
 cargo test --release -p layer-linux native_panel_customization -- --ignored --test-threads=1
 cargo test --release -p layer-linux native_panel_expansion -- --ignored --test-threads=1
@@ -569,8 +570,8 @@ tab on release (`edge_select_on_release`), or to capture the contact and show a
 resize pointer (`edge_cursor`); the session then drives the handle's drag and
 advances the catch-up in `frame`. Replies also say whether the contact is
 still pending (`edge_pending`), so a host can stop forwarding it. A native
-double press in the reach sends `UiInput::EdgeDoublePress`. GTK, Web and
-Android implement this. Web treats text fields,
+double press in the reach sends `UiInput::EdgeDoublePress`. GTK, Web, Android
+and Windows implement this. Web treats text fields,
 layer rows, held tiles and `touch-action: none` controls as inputs, and
 immediate drag sources, sideways swipe owners and horizontal scrollers as
 pickups. Panel surfaces use `touch-action: pan-y` so horizontal touch reaches
@@ -580,8 +581,16 @@ surfaces (`edgeSurface`) and swipe controls (`edgeControl`) mark the press, and
 the workspace reads the marks at the press's final pass. Its session runs on
 the native owner thread, so that thread also decides when a pressed tab is
 selected; the workspace withholds or consumes motion from the latest reply.
-Apple and Windows still use only the thin handles, but share the ownership,
-collapse and stack rules.
+Windows classifies like Web, reading `ManipulationMode::None` and controls that
+capture their press as inputs, and tags panel frames, closed strips, tabs,
+grips and layer rows. Its session runs on the render thread, so replies arrive
+through the ordered command queue. A press asks `capy_edge_reach`
+synchronously whether it lies in an edge's reach and may resize vertically, so
+a touch or pen scroller that must not or cannot scroll keeps the contact and a
+pressed tab waits for its click. Canvas touches reach the session from
+`capy_pointer`, which cancels the stroke when the edge claims the contact.
+Apple still uses only the thin handles, but shares the ownership, collapse and
+stack rules.
 
 [Stacked columns](stacked-columns.md) replace the former Group panel mode. Each
 stack contains complete collapsed columns and owns “Open individual panels” and

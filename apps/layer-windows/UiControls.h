@@ -155,6 +155,10 @@ inline void dragCursor(UIElement const& element,bool touch,bool dragging,bool he
     if(touch||(!dragging&&!held)){target.ProtectedCursor(nullptr);return;}
     target.ProtectedCursor(InputSystemCursor::Create(dragging?InputSystemCursorShape::SizeAll:InputSystemCursorShape::Hand));
 }
+inline void edgeTag(FrameworkElement const& element,wchar_t const* key,V const& value){
+    auto previous=element.Tag().try_as<J>();auto tag=previous?J::Parse(previous.Stringify()):J{};
+    tag.Insert(key,value);element.Tag(tag);
+}
 inline void setIcon(Image const& result,hstring name,hstring theme,double size=16){
     std::wstring file=name.c_str();
     if(!file.starts_with(L"layer-"))file=L"layer-"+file;
@@ -238,6 +242,7 @@ struct WorkspaceData : std::enable_shared_from_this<WorkspaceData> {
     int popupCount=0;
     void popup(bool open){popupCount=std::max(0,popupCount+(open?1:-1));if(popupChanged)popupChanged(popupCount>0);}
     std::function<void(std::string)> send,document,input;
+    std::function<void(std::string,std::function<void(int32_t)>)> edges;
     J chrome=O({{L"held",B(false)},{L"dragging",B(false)},{L"popup_open",B(false)}});
     bool externalPopup=false;
     bool updating=false;

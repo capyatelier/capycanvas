@@ -50,7 +50,7 @@ struct Column:std::enable_shared_from_this<Column>{
         frame.Children().Append(scroll);
         grip.Background(clear());grip.Child(panelGrip(data->theme(),true));
         auto item=O({{L"kind",S(L"column")},{L"column",N(id)}});
-        gestures->Source(background,{},item,true);
+        gestures->Source(background,{},item,true);edgeTag(background,L"edge_surface",B(true));
         gestures->Source(grip,O({{L"type",S(L"drag_workspace")},{L"item",item}}),item);
         AutomationProperties::SetAutomationId(grip,L"column-grip-"+to_hstring(id));
         copyName(data,grip,data->copyDelivery(L"move_column"));frame.Children().Append(grip);workspace.Children().Append(background);
