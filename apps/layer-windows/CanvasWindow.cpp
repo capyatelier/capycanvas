@@ -994,18 +994,15 @@ int CanvasWindow::DispatchWork(CanvasWork const& item,bool retiring) {
         if(retiring||points->empty())return 0;
         auto const& first=points->front();auto const& last=points->back();
         if(dialogOpen.load()){
-            consumedContacts.insert(first.id);
-            if(last.phase==3||last.phase==4)consumedContacts.erase(first.id);
+            canvasContacts.Block(first.id,first.phase,last.phase);
             return 0;
         }
         auto result=capy_chrome(host,first.phase==1?2:first.phase==4?0:1,
             first.phase==1?first.x:last.x,first.phase==1?first.y:last.y,true,menuOpen.load());
         if(result>=0){
-            if(first.phase==1&&(result&1))consumedContacts.insert(first.id);
-            bool accepted=!consumedContacts.contains(first.id);
+            bool accepted=canvasContacts.Admit(first.id,first.phase,last.phase,(result&1)!=0);
             result=accepted?capy_pointer(host,points->data(),points->size()):0;
             if(accepted&&result==0)latencyTrace.Consume(*points);
-            if(last.phase==3||last.phase==4)consumedContacts.erase(first.id);
         }
         return result;
     }

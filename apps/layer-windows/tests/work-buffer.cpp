@@ -3,6 +3,7 @@
 #include "../NativeKeyRepeats.h"
 #include "../CanvasPointerSample.h"
 #include "../PenSourceCache.h"
+#include "../CanvasContactGate.h"
 #include "../PointerCompletion.h"
 #include "../ThumbnailOwners.h"
 #include "../PointerScrub.h"
@@ -38,6 +39,17 @@ int main() {
     penSources.Forget(7);assert(!penSources.Describe(8,false));
     assert(penSources.Update(7,"physical-pen"));assert(!penSources.Describe(7,false));
     std::cout<<"Pen sources register again when drawing sessions or epochs change\n";
+    {
+        CanvasContactGate gate;
+        gate.Block(1,0,0);
+        assert(gate.Admit(1,1,1,false));assert(gate.Admit(1,2,2,false));assert(gate.Admit(1,3,3,false));
+        gate.Block(1,1,1);
+        assert(!gate.Admit(1,2,2,false));assert(!gate.Admit(1,3,3,false));assert(gate.Admit(1,1,1,false));
+        gate.Block(2,2,2);
+        assert(!gate.Admit(2,2,2,false));assert(gate.Admit(2,1,1,false));
+        assert(!gate.Admit(3,1,1,true));assert(!gate.Admit(3,2,3,false));assert(gate.Admit(3,1,3,false));
+        std::cout<<"Dialog-blocked hover leaves the next canvas press admitted; consumed contacts end at release or the next press\n";
+    }
     static_assert(offsetof(CapySnapshotInfo,camera)==((4*sizeof(uint32_t)+alignof(size_t)-1)&~(alignof(size_t)-1)));
     static_assert(offsetof(CapySnapshotInfo,brush_ready)==offsetof(CapySnapshotInfo,camera)+6*sizeof(size_t));
     static_assert(offsetof(CapySnapshotInfo,glass)==offsetof(CapySnapshotInfo,camera)+8*sizeof(size_t));

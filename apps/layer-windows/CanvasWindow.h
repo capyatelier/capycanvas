@@ -9,6 +9,7 @@
 #include "WorkspaceStorageView.h"
 #include "WorkspaceManagerView.h"
 #include "CanvasWorkBuffer.h"
+#include "CanvasContactGate.h"
 #include "CanvasLatencyTrace.h"
 #include "CanvasSnapshotMailbox.h"
 #include "FilterPreviews.h"
@@ -122,7 +123,7 @@ private:
     std::atomic<bool> menuOpen{false},dialogOpen{false};
     std::atomic<uint32_t> sentModifiers{0};
     std::optional<bool> pendingHover;
-    std::unordered_set<uint64_t> consumedContacts; // render thread
+    CanvasContactGate canvasContacts; // render thread
     winrt::Microsoft::UI::Xaml::Controls::StackPanel toolbar;
     winrt::Microsoft::UI::Xaml::Controls::Grid root;
     struct SnapshotState {
