@@ -133,18 +133,16 @@ static winrt::fire_and_forget PublishPanelMetrics(std::filesystem::path name,std
 void CanvasWindow::TraceState(char const* kind,std::string const& value)const {
     WriteTraceFile(std::string(kind)+"-"+std::to_string(GetCurrentProcessId())+"-"+std::to_string(windowId)+".json",value);
 }
-void CanvasWindow::TracePresentation(bool frame,bool dirty) {
+void CanvasWindow::TracePresentation(bool frame,bool dirty,bool repeat) {
     auto& trace=presentationTrace;
     if(!trace.enabled)return;
     uint64_t stats[6]{};
-    if(capy_presentation_stats(host,stats)==0)trace.displayed=std::to_string(stats[1]);
-    bool presented=stats[0]!=trace.presented;
-    trace.presented=stats[0];
-    trace.required=stats[0]+(dirty&&!(frame&&presented)?1:0);
-    ++trace.epoch;
+    auto shown=capy_presentation_stats(host,stats)==0?std::optional<uint64_t>(stats[1]):std::nullopt;
+    trace.Observe(frame,dirty,repeat,stats[0],shown,std::chrono::steady_clock::now());
     if(frame)return;
     auto value="{\"process_id\":"+std::to_string(GetCurrentProcessId())+",\"window_id\":"+std::to_string(windowId)+
-        ",\"presentation_epoch\":"+std::to_string(trace.epoch)+",\"required\":"+std::to_string(trace.required)+",\"displayed\":"+trace.displayed+"}";
+        ",\"presentation_epoch\":"+std::to_string(trace.epoch)+",\"required\":"+std::to_string(trace.required)+
+        ",\"displayed\":"+(trace.displayed?std::to_string(*trace.displayed):std::string("null"))+"}";
     TraceState("presentation-state",value);
 }
 std::string CanvasWindow::SystemTheme(){
@@ -1052,10 +1050,22 @@ void CanvasWindow::Run() {
             if(requested<0)throw std::runtime_error(NativeString(capy_error()).get());
             dirty|=requested!=0;
         };
+        auto answer=[&](CanvasQuery& query){
+            auto request=query.kind==CanvasQueryKind::Filters?capy_filter_previews:
+                query.kind==CanvasQueryKind::Papers?capy_paper_previews:
+                query.kind==CanvasQueryKind::Thumbnails?capy_layer_thumbnails:
+                query.kind==CanvasQueryKind::LayerMenu?capy_layer_menu:
+                query.kind==CanvasQueryKind::Document?capy_document_preview:capy_workspace_query;
+            PreviewPacket packet(request(host,query.json.c_str()),capy_preview_free);
+            if(!packet&&!capy_device_lost(host))Fail(NativeString(capy_error()).get());
+            refreshFrameDemand();
+            query.reply(std::move(packet));
+        };
         bool inputStarted=false;
         bool brushReady=false;
         bool probeReady=false;
         unsigned recoveryAttempts=0;
+        bool repeat=false;
         std::optional<std::chrono::steady_clock::time_point> lastFrame;
         auto nextServices=std::chrono::steady_clock::now()+std::chrono::milliseconds(250);
         for(;prepared;) {
@@ -1090,6 +1100,7 @@ void CanvasWindow::Run() {
                 nextServices=std::chrono::steady_clock::now()+std::chrono::milliseconds(250);
                 dirty|=serviceResult!=0;
                 TracePresentation(false,dirty);
+                if(!dirty&&presentationTrace.Withheld(std::chrono::steady_clock::now())){presentationTrace.Repeat();repeat=dirty=true;}
                 CapySnapshotInfo routing{};
                 if(auto snapshot=capy_snapshot(host,&routing)){
                     NativeString owned(snapshot,capy_string_free);
@@ -1098,19 +1109,14 @@ void CanvasWindow::Run() {
             }
             std::optional<CanvasQuery> idleQuery;
             {std::lock_guard lock(mutex);
-                bool canvasPending=dirty||transportFailed||!work.Empty()||pendingHover.has_value()||recoveryAttempts;
-                if(!canvasPending)idleQuery=previewWork.Take(CanvasQueryKind::Workspace);
-                if(!idleQuery&&!canvasPending&&previewWork.Empty())continue;
+                auto step=NextCanvasRenderStep(dirty||transportFailed||!work.Empty()||pendingHover.has_value()||recoveryAttempts,previewWork);
+                if(step==CanvasRenderStep::Wait)continue;
+                if(step==CanvasRenderStep::Answer)idleQuery=previewWork.Take();
             }
-            if(idleQuery){
-                PreviewPacket packet(capy_workspace_query(host,idleQuery->json.c_str()),capy_preview_free);
-                if(!packet&&!capy_device_lost(host))Fail(NativeString(capy_error()).get());
-                refreshFrameDemand();
-                idleQuery->reply(std::move(packet));continue;
-            }
+            if(idleQuery){answer(*idleQuery);continue;}
             if(lastFrame){
                 std::unique_lock lock(mutex);
-                auto input=[&]{return closing||resize||transportFailed||!work.Empty()||pendingHover.has_value()||!previewWork.Empty();};
+                auto input=[&]{return closing||resize||transportFailed||!work.Empty()||pendingHover.has_value();};
                 if(!input())wake.wait_until(lock,*lastFrame+RefreshPeriod(nativeWindow),input);
                 if(closing)break;
                 if(resize&&!resized)continue;
@@ -1152,7 +1158,7 @@ void CanvasWindow::Run() {
             }
             if(result<0){if(capy_device_lost(host))continue;Fail(NativeString(capy_error()).get());break;}
             dirty=result!=0;
-            TracePresentation(true,dirty);
+            TracePresentation(true,dirty,std::exchange(repeat,false)&&pending.empty()&&!hover);
             if(!inputStarted){
                 inputStarted=true;inputDispatcher.TryEnqueue([weak=weak_from_this(),zoomIn,zoomOut]{
                     if(auto self=weak.lock()){self->zoomInCursor=zoomIn;self->zoomOutCursor=zoomOut;self->StartInput();}
@@ -1184,17 +1190,7 @@ void CanvasWindow::Run() {
             // The GPU poll never waits; CPU conversion belongs to another worker.
             std::optional<CanvasQuery> preview;
             {std::lock_guard lock(mutex);if(!closing&&work.Empty())preview=previewWork.Take();}
-            if(preview){
-                auto request=preview->kind==CanvasQueryKind::Filters?capy_filter_previews:
-                    preview->kind==CanvasQueryKind::Papers?capy_paper_previews:
-                    preview->kind==CanvasQueryKind::Thumbnails?capy_layer_thumbnails:
-                    preview->kind==CanvasQueryKind::LayerMenu?capy_layer_menu:
-                    preview->kind==CanvasQueryKind::Document?capy_document_preview:capy_workspace_query;
-                PreviewPacket packet(request(host,preview->json.c_str()),capy_preview_free);
-                if(!packet&&!capy_device_lost(host))Fail(NativeString(capy_error()).get());
-                refreshFrameDemand();
-                preview->reply(std::move(packet));
-            }
+            if(preview)answer(*preview);
             if(overflow)break;
         }
     } catch(hresult_error const& error) {Fail(to_string(error.message()));}

@@ -1580,6 +1580,10 @@ the focused header journeys also check placement cancellation and keyboard input
   `Wait-StablePixels` samples. Completed no-op frames retire unused reservations,
   while DXGI supplies the actual displayed count. This barrier is needed
   because the desktop compositor can show canvas frames more than a second late.
+  On the GPU-pool VMs DXGI can also withhold the count for an idle window's
+  final present until it presents again. A traced window then repeats that
+  unchanged frame once after a second without progress; the repeat never
+  becomes `required`. Untraced windows never repeat frames.
   For restoration, compare with the original pixels; a fixed dark-panel
   threshold cannot verify the same journey in the light theme. Keep the sample
   grid, camera and canvas bounds from one checked projection. Move the owned

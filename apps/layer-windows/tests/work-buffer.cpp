@@ -598,6 +598,33 @@ int main() {
     assert(queries.Take(CanvasQueryKind::Workspace)->json=="second");
     assert(!queries.Take(CanvasQueryKind::Workspace));
     assert(queries.Take()->json=="menu");assert(queries.Take()->json=="thumbnail");assert(queries.Empty());
+    assert(NextCanvasRenderStep(false,queries)==CanvasRenderStep::Wait&&NextCanvasRenderStep(true,queries)==CanvasRenderStep::Frame);
+    for(auto kind:{CanvasQueryKind::Filters,CanvasQueryKind::Thumbnails,CanvasQueryKind::LayerMenu,CanvasQueryKind::Workspace,CanvasQueryKind::Document,CanvasQueryKind::Papers}){
+        assert(queries.Push({kind,"retry",{}}));
+        assert(NextCanvasRenderStep(false,queries)==CanvasRenderStep::Answer);
+        assert(NextCanvasRenderStep(true,queries)==CanvasRenderStep::Frame);
+        queries.Clear();
+    }
+    std::cout<<"Canvas queries: an idle canvas answers every query kind without acquiring or presenting a frame\n";
+    {
+        auto origin=PresentationTrace::Clock::time_point{}+std::chrono::hours(1);
+        auto at=[&](int ms){return origin+std::chrono::milliseconds(ms);};
+        PresentationTrace presentation(true);
+        presentation.Observe(true,true,false,4,3,at(0));assert(presentation.required==4);
+        presentation.Observe(false,true,false,4,3,at(100));assert(presentation.required==5);
+        presentation.Observe(true,false,false,5,3,at(500));assert(presentation.required==5);
+        presentation.Observe(false,false,false,5,4,at(800));
+        assert(!presentation.Withheld(at(1500))&&presentation.Withheld(at(1800)));
+        presentation.Repeat();assert(!presentation.Withheld(at(5000)));
+        presentation.Observe(true,false,true,6,4,at(5000));assert(presentation.required==5&&presentation.epoch==5);
+        presentation.Observe(false,false,false,6,5,at(5100));assert(presentation.required==5&&*presentation.displayed==5&&!presentation.Withheld(at(9000)));
+        presentation.Observe(true,false,false,7,5,at(9000));assert(presentation.required==7);
+        presentation.Observe(false,false,false,7,7,at(9500));assert(!presentation.Withheld(at(20000)));
+        presentation.Observe(true,false,false,8,std::nullopt,at(20000));assert(*presentation.displayed==7&&presentation.Withheld(at(21000)));
+        PresentationTrace untraced(false);
+        untraced.Observe(true,false,false,2,1,at(0));assert(!untraced.Withheld(at(60000)));
+    }
+    std::cout<<"Presentation trace: a withheld final acknowledgement asks for one unchanged repeat that never raises the requirement\n";
     CanvasQuerySlots slots;
     std::vector<std::shared_ptr<void>> held;
     std::deque<std::function<void()>> deferred;

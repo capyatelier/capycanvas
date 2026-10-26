@@ -1,9 +1,36 @@
 #pragma once
 #include "native/include/capy_windows.h"
+#include <chrono>
 #include <cstdint>
 #include <fstream>
+#include <optional>
 #include <string>
 #include <vector>
+
+class PresentationTrace {
+public:
+    using Clock=std::chrono::steady_clock;
+    static constexpr Clock::duration Patience=std::chrono::seconds(1);
+    explicit PresentationTrace(bool active):enabled(active) {}
+    bool const enabled;
+    uint64_t required=0,epoch=0;
+    std::optional<uint64_t> displayed;
+    void Observe(bool frame,bool dirty,bool repeat,uint64_t last,std::optional<uint64_t> shown,Clock::time_point now) {
+        bool presented=last!=presentations;
+        presentations=last;
+        if(presented){presentedAt=now;if(!repeat)content=last;}
+        if(shown&&shown!=displayed){displayed=shown;displayedAt=now;}
+        required=dirty?last+(frame&&presented?0:1):content;
+        ++epoch;
+    }
+    bool Withheld(Clock::time_point now) const {
+        return enabled&&displayed&&*displayed<content&&repeated!=content&&now-presentedAt>=Patience&&now-displayedAt>=Patience;
+    }
+    void Repeat() { repeated=content; }
+private:
+    uint64_t presentations=0,content=0,repeated=0;
+    Clock::time_point presentedAt{},displayedAt{};
+};
 
 // Opt-in measurement only. Each vector has one owner thread, reserves once,
 // and stops at its bound. Dump runs after both owners have stopped. No per-frame

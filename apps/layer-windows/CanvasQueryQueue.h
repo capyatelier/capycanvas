@@ -43,6 +43,11 @@ private:
     std::deque<CanvasQuery> items;
 };
 
+enum class CanvasRenderStep { Wait, Answer, Frame };
+inline CanvasRenderStep NextCanvasRenderStep(bool canvasPending,CanvasQueryQueue const& queries){
+    return canvasPending?CanvasRenderStep::Frame:queries.Empty()?CanvasRenderStep::Wait:CanvasRenderStep::Answer;
+}
+
 class CanvasQuerySlots {
     struct Slot {
         std::shared_ptr<std::atomic<size_t>> count;

@@ -63,7 +63,10 @@ whole client area, including behind the custom title bar.
   and forwards `cursor_leave`, clearing brush outlines and picker previews.
 - **Bounded queues.** Input and commands travel in one ordered, bounded queue; a
   full queue reports an error and cancels active input instead of dropping
-  records. Optional queries have their own queue. Published models go through a
+  records. Optional queries have their own queue. The render thread answers them
+  without acquiring or presenting a frame while the canvas has nothing to draw,
+  and after the next frame otherwise; they never shorten frame spacing.
+  Published models go through a
   mailbox with separate full-model, motion and camera slots. Motion packets
   (`workspace_update`) move native presentation only; stale revisions are
   rejected.
