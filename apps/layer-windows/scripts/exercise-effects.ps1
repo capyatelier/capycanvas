@@ -79,6 +79,14 @@ function Select-Panel([string]$Id){
     if(@((Model).layout.groups|Where-Object {$_.active -eq $Id}).Count -eq 0){Invoke $(if(Find ('drawer-tab-'+$Id)){'drawer-tab-'+$Id}else{'panel-tab-'+$Id})}
     Wait-Until {@((Model).layout.groups|Where-Object {$_.active -eq $Id}).Count -gt 0} "Panel $Id did not become active"
 }
+function Properties-Visibility([bool]$Visible){
+    $window=@((Model).application_menus|Where-Object id -eq 'window')[0]
+    $item=@($window.model.sections|ForEach-Object {$_}|Where-Object {$_.action.type -eq 'customize' -and $_.action.action.type -eq 'set_panel_visible' -and $_.action.action.panel -eq 'properties'})[0]
+    if(!$item -or [bool]$item.selected -eq $Visible){throw 'Properties visibility did not start in the expected state'}
+    & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'window' -Caption $window.label
+    Invoke $item.label -Name
+    Wait-Until {$shown=Find 'property-rgb-curve' -Visible;[bool]$shown -eq $Visible} 'Properties did not reach the requested native visibility'
+}
 function Select-Filter([string]$Id,[string]$Label){
     Select-Panel 'adjustments'
     Wait-Until {@((Model).layout.groups|Where-Object {$_.active -eq 'adjustments'}).Count -gt 0} 'Filters tab did not open'
@@ -542,9 +550,9 @@ function Check-CurveGestures {
                 Wait-Until {(Curve-Json) -eq $original} "$device native cancellation kept the curve preview"
                 Check-Redo "$device native cancellation"
             }
-            Move-Curve $device;Select-Panel 'adjustments'
+            Move-Curve $device;Properties-Visibility $false
             Wait-Until {(Curve-Json) -eq $original} "$device hidden curve kept the preview"
-            [CapyRowPointer]::Up();Select-Panel 'properties'
+            [CapyRowPointer]::Up();Properties-Visibility $true
             Wait-Until {$null -ne (Find 'property-rgb-curve')} 'Curve did not reopen'
             Check-Redo "$device source hide"
             # A canceled insertion must also remove its provisional handle.
