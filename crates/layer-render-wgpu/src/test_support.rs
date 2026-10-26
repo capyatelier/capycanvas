@@ -379,12 +379,7 @@ fn canonical_pixels(r: &mut WgpuRasterizer) -> Vec<[f32; 4]> {
     for coordinate in page_coordinates(PixelRect::full(extent)) {
         let region = page_rect(coordinate).intersect(PixelRect::full(extent));
         let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-        let tile = loop {
-            match capture.region(r, frame.packet(extent), region, [PAGE_SIZE; 2], &mut encoder) {
-                Err(GpuRasterError::DeferredObjectWork) => scene::Scene::submit_chunk(r, &mut encoder, "canonical test capture").unwrap(),
-                result => break result.unwrap(),
-            }
-        };
+        let tile = query_ready(r, &mut encoder, |r, encoder| capture.region(r, frame.packet(extent), region, [PAGE_SIZE; 2], encoder));
         r.uploads.finish(&encoder);
         encoder.submit(&r.queue);
         let samples = float_pixels(r, &tile.texture);

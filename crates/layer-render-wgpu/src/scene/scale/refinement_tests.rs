@@ -399,10 +399,16 @@ fn settled_composition_reuses_every_zoom_and_refines_only_changed_pages() {
         assert_presentation_mip(&r);
     }
     let drawing_target = r.scale_display.as_ref().unwrap().texture().clone();
+    let target = source_at(&doc, 0);
     let dab = crate::tests::test_dab([90., 80.], [0.9, 0.1, 0.3, 1.], 0.8);
-    let batch = dab_batch(source_at(&doc, 0), crate::layer_tests::preset_style(DefaultBrushPreset::GPen), dab.bounds());
-    let stroke = FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&batch), ..frame };
-    crate::test_support::submit_ready(&mut r, stroke).unwrap(); crate::test_support::submit_ready(&mut exact, stroke).unwrap();
+    let batch = dab_batch(target, crate::layer_tests::preset_style(DefaultBrushPreset::GPen), dab.bounds());
+    let view = frame.view;
+    doc.apply(layer_core::Edit::SetRaster { target, revision: layer_core::raster::RasterRevision::pending() }).unwrap();
+    frame = FramePacket { view, composite_all: false, ..packet(doc.scene(), extent) };
+    crate::test_support::submit_ready(&mut r, FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&batch), ..frame }).unwrap();
+    exact = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    exact.test.reference = true;
+    submit_published(&mut exact, frame);
     assert_eq!(r.scale_display.as_ref().unwrap().texture(), &drawing_target, "drawing updates the resident level");
     let retained = r.scale_display.as_ref().unwrap().hierarchy.as_ref().unwrap();
     assert_eq!(retained.missing(), Some([0, 0]));
@@ -428,8 +434,13 @@ fn settled_composition_reuses_every_zoom_and_refines_only_changed_pages() {
     frame.view.height_px = 96;
     frame.view.document_to_surface = [1., 0., 0., 1., -40., -20.];
     for renderer in [&mut r, &mut exact] { crate::test_support::submit_ready(renderer, frame).unwrap(); }
-    let stroke = FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&batch), ..frame };
-    for renderer in [&mut r, &mut exact] { crate::test_support::submit_ready(renderer, stroke).unwrap(); }
+    let view = frame.view;
+    doc.apply(layer_core::Edit::SetRaster { target, revision: layer_core::raster::RasterRevision::pending() }).unwrap();
+    frame = FramePacket { view, composite_all: false, ..packet(doc.scene(), extent) };
+    crate::test_support::submit_ready(&mut r, FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&batch), ..frame }).unwrap();
+    exact = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    exact.test.reference = true;
+    submit_published(&mut exact, frame);
     assert_settled(&mut r, frame, &pixels(&exact, crate::test_support::document_texture(&exact)));
     let mut program = (*crate::tests::fixture("gaussian_blur").program()).clone();
     program.resolution = layer_core::EffectResolution::Native;
