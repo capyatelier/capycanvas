@@ -14,9 +14,9 @@ import Foundation
     }
     static func route(_ action: JSON) -> String? {
         if action["type"].string == "workspace_manager" { return action["command"]["type"].string }
-        // The application's Toolbars item uses a command alias; its result
-        // must still enter the workspace service and acknowledge the request.
-        if action["type"].string == "invoke", action["command"].string == "manage_toolbars" { return "manage_toolbars" }
+        if action["type"].string == "invoke", ["manage_toolbars", "reset_layout"].contains(action["command"].string) {
+            return action["command"].string
+        }
         return nil
     }
     @MainActor static func menuActions(_ store: EditorStore) async -> [String: [JSON]] {
@@ -52,6 +52,7 @@ import Foundation
             let editor = EditorStore(platform: platform, persistence: EditorPersistence(root: root))
             let workspaces = editor.workspaces!
             try await workspaces.started()
+            try await workspaces.perform(["type": "switch", "id": "builtin:workspace:illustrator"])
             // Give reset/history something to operate on and retain across
             // cancellation. This changes the workspace, not the document.
             try await editor.apply(["type": "set_brush_size", "value": 31])
