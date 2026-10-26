@@ -33,8 +33,6 @@ private struct PlacedCanvasBar: View {
     @ObservedObject var store: EditorStore
     let view: JSON
     @State private var placed = JSON()
-    @State private var menu = JSON()
-    @State private var menus: [String: JSON] = [:]
     private static let captionOpacity = 0.8, textGap: CGFloat = 6, chevron: CGFloat = 12
     private static let preferences = JSON(["sliders": false, "text": true])
     private var palette: EditorPalette { EditorPalette(source: store.state["palette"]).glassy }
@@ -75,29 +73,32 @@ private struct PlacedCanvasBar: View {
             .onChange(of: placed.stableKey, initial: true) { store.canvasBar.bounds = placed.isNull ? nil : placed["bounds"].rect }
             .onDisappear { store.canvasBar.bounds = nil }
             .task(id: key) {
-            store.query(["type": "canvas_bar_layout", "measure": measure]) { result in
-                placed = result
-                store.query(["type": "canvas_bar_menu", "context": context.raw, "shown": result["items"].uint]) { menu = $0 }
-            }
-            for id in items.map({ $0["menu"] }).filter({ !$0.isNull }) {
-                store.query(["type": "canvas_bar_choice_menu", "context": context.raw, "id": id.raw]) { menus[id.string] = $0 }
-            }
+            store.query(["type": "canvas_bar_layout", "measure": measure]) { placed = $0 }
         }
     }
     private func bar(shown: Int) -> some View {
-        HStack(spacing: metrics.gap) {
-            if !view["label"].isNull {
+        let hasLabel = !view["label"].isNull
+        return HStack(spacing: 0) {
+            if hasLabel {
                 Text(view["label"].string).lineLimit(1).foregroundStyle(palette["text"].opacity(Self.captionOpacity))
                     .padding(.leading, BarMetrics.captionLeading).padding(.trailing, BarMetrics.captionTrailing)
                     .frame(width: labelWidth, alignment: .leading).accessibilityIdentifier("canvas-bar-label")
+                    .overlay { blank(labelWidth) }
             }
-            ForEach(Array(items.prefix(shown).enumerated()), id: \.offset) { _, item in field(item) }
-            EditorMenuButton(menu: { [menu] in AppleContextMenu(menu) { store.dispatch($0) } }, identifier: "canvas-bar-menu",
+            ForEach(Array(items.prefix(shown).enumerated()), id: \.offset) { index, item in
+                field(item, leading: index > 0 || hasLabel)
+            }
+            if shown > 0 || hasLabel { blank(metrics.gap) }
+            EditorMenuButton(menu: { completion in
+                store.query(["type": "canvas_bar_menu", "context": context.raw, "shown": shown]) { result in
+                    completion(AppleContextMenu(result) { store.dispatch($0) })
+                }
+            }, identifier: "canvas-bar-menu",
                 rootFocusesSelection: false) {
                 SharedIcon(name: "more", size: metrics.icon).frame(width: metrics.tile, height: metrics.tile)
             }.buttonStyle(EditorControlButtonStyle(selected: false, corner: .half))
                 .accessibilityLabel(store.bootstrap["common"]["more"].string).help(store.bootstrap["common"]["more"].string).accessibilityIdentifier("canvas-bar-more")
-            ForEach(Array(completion.enumerated()), id: \.offset) { _, item in field(item) }
+            ForEach(Array(completion.enumerated()), id: \.offset) { _, item in field(item, leading: true) }
         }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
             .foregroundStyle(palette["text"])
             .environment(\.editorPalette, palette)
@@ -105,13 +106,25 @@ private struct PlacedCanvasBar: View {
             .accessibilityElement(children: .contain).accessibilityIdentifier("canvas-action-bar")
             .background { OutsideShadow(shape: SquircleShape.surface, opacity: 0.16, radius: 4, y: 2).accessibilityHidden(true) }
     }
-    private func field(_ item: JSON) -> some View {
-        HStack(spacing: metrics.gap) {
+    private func field(_ item: JSON, leading: Bool) -> some View {
+        let gap = leading ? metrics.gap : 0
+        return HStack(spacing: 0) {
             if item["separated"].bool {
-                ToolbarDivider(vertical: false, length: metrics.dividerLength, color: palette["text"].opacity(0.3))
-                    .frame(width: BarMetrics.dividerSlot, height: metrics.tile).accessibilityHidden(true)
-            }
+                blank(gap + BarMetrics.dividerSlot + metrics.gap, dividerInset: gap)
+            } else if leading { blank(gap) }
             content(item).frame(width: fieldWidth(item), height: metrics.tile)
+        }
+    }
+    @ViewBuilder private func blank(_ width: CGFloat, dividerInset: CGFloat? = nil) -> some View {
+        if width > 0 {
+            ControlInput(contact: { _ in }).frame(width: width, height: metrics.tile)
+                .overlay(alignment: .leading) {
+                    if let dividerInset {
+                        ToolbarDivider(vertical: false, length: metrics.dividerLength, color: palette["text"].opacity(0.3))
+                            .frame(width: BarMetrics.dividerSlot, height: metrics.tile)
+                            .offset(x: dividerInset).allowsHitTesting(false)
+                    }
+                }.accessibilityHidden(true)
         }
     }
     @ViewBuilder private func content(_ item: JSON) -> some View {
@@ -129,7 +142,11 @@ private struct PlacedCanvasBar: View {
     private func menuField(_ item: JSON, command: JSON) -> some View {
         let id = item["menu"].string, label = item["label"].string, tile = item["icon_only"].bool
         let disabled = !command.isNull && !command["enabled"].bool, reason = command.disabledReason
-        return EditorMenuButton(menu: { [model = menus[id] ?? JSON()] in AppleContextMenu(model) { store.dispatch($0) } },
+        return EditorMenuButton(menu: { completion in
+            store.query(["type": "canvas_bar_choice_menu", "context": context.raw, "id": id]) { result in
+                completion(AppleContextMenu(result) { store.dispatch($0) })
+            }
+        },
             identifier: "canvas-bar-menu-items-" + id, rootFocusesSelection: false) {
             Group {
                 if tile {

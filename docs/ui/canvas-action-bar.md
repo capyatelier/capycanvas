@@ -6,6 +6,9 @@ The canvas action bar shows the next steps for the object being edited, beside i
 
 Every host presents the bar. Bar item menus open on GTK, Web, Android, Windows, macOS and iPadOS. Every host draws the bar as toolbar tiles with dividers and corner triangles. The mode and guide bars need no host code of their own. Transform Outline and the Refine dialog's label and live preview are implemented in the shared model, GTK, Web and Android; the macOS and iPadOS Refine dialogs still label the value "Distance".
 
+
+Apple fetches More and choice menus when they open so selected states follow the current shared session. Cancelled requests and replies from retired controls cannot reopen a menu.
+
 ## Contexts
 
 | Context | Shown when | Items | Placement |
@@ -73,7 +76,7 @@ Every host presents the bar. Bar item menus open on GTK, Web, Android, Windows, 
   - Every bar hides while a floating panel group is dragged.
   - It returns 180 ms after input settles, at its new place.
   - The session decides: `canvas_bar_hold()` changes whenever the bar must hide and is odd while it must stay hidden. Hosts read it after input and changes, so no state is published at pen-down, and keep only the reappear timer.
-- **Input:** taps on the bar are chrome contacts and never paint.
+- **Input:** taps on the bar are chrome contacts and never paint. Labels, gaps and divider slots own their non-action area and do not activate adjacent controls.
 - **Focus:** its controls do not take keyboard focus, and it never opens a window of its own. Losing window focus leaves an open transform intact.
 - **Availability:** item availability holds its previous value while the canvas is busy, as Tool Options does. Polygon construction commands follow the path live. While queued edits such as a fill wait to land, an unavailable Transform reads "Wait for the current edit".
 - **Toggle:** **View → Show canvas action bar** is a workspace layout preference. While it is off, crops, transforms, placements and polygons keep their completion items at the bottom edge; mode, guide and selection bars hide.

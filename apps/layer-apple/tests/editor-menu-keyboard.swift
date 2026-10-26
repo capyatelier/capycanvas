@@ -72,6 +72,47 @@ private struct MenuFixtureView: View {
     }
 }
 
+@MainActor private final class MenuSourceFixture: ObservableObject {
+    @Published var presented = false
+    @Published var selected = "First"
+    @Published var mounted = true
+    @Published var asynchronous = true
+    var restrictEnabled = false
+    var actions: [String] = []
+    var reply: (@MainActor (AppleContextMenu) -> Void)?
+    weak var source: NSView?
+    var menu: AppleContextMenu {
+        AppleContextMenu(JSON(["sections": [["First", "Second"].map { name in
+            ["label": name, "enabled": !restrictEnabled || name == selected, "selected": name == selected, "action": ["id": name]]
+        }]])) { self.actions.append($0["id"].string) }
+    }
+    func complete() { let pending = reply; reply = nil; pending?(menu) }
+}
+
+private struct MenuSourceAnchor: NSViewRepresentable {
+    let fixture: MenuSourceFixture
+    func makeNSView(context: Context) -> NSView { let view = NSView(); fixture.source = view; return view }
+    func updateNSView(_ view: NSView, context: Context) {}
+}
+
+private struct MenuSourceView: View {
+    @ObservedObject var fixture: MenuSourceFixture
+    var body: some View {
+        VStack(alignment: .leading) {
+            if fixture.mounted {
+                Group {
+                    if fixture.asynchronous {
+                        EditorMenuButton(menu: { fixture.reply = $0 }, isPresented: $fixture.presented) { Text("Open menu") }
+                    } else {
+                        EditorMenuButton(menu: { fixture.menu }, isPresented: $fixture.presented) { Text("Open menu") }
+                    }
+                }.frame(width: 120, height: 36).background(MenuSourceAnchor(fixture: fixture))
+            }
+            Spacer()
+        }.frame(width: 500, height: 400, alignment: .topLeading).modifier(EditorPopoverHost())
+    }
+}
+
 /// Deliver native keys only to this fixture's window. No system menu automation.
 @main final class EditorMenuKeyboardChecks: NativeWorkspaceInputFixture {
     @MainActor static func run() async throws {
@@ -204,6 +245,50 @@ private struct MenuFixtureView: View {
         try await checkWindowFit()
         try await checkPopupOwnership()
         try await checkClipboardKeys()
+        try await checkMenuLoading()
+    }
+    @MainActor static func checkMenuLoading() async throws {
+        let fixture = MenuSourceFixture()
+        let window = NSWindow(contentRect: CGRect(x: 100, y: 100, width: 500, height: 400),
+            styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil; window.close() }
+        window.contentView = NSHostingView(rootView: MenuSourceView(fixture: fixture))
+        window.makeKeyAndOrderFront(nil)
+        try await drain(0.3)
+        func clickSource() async throws {
+            try await wait("Mounted menu source") { fixture.source?.window === window && fixture.source!.bounds.width > 0 }
+            let source = fixture.source!, point = CGPoint(x: source.bounds.midX, y: source.bounds.midY)
+            try event(.leftMouseDown, at: point, marker: source, number: 1)
+            try event(.leftMouseUp, at: point, marker: source, number: 2)
+            try await drain()
+        }
+        for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+            window.appearance = NSAppearance(named: appearance)
+            for selected in ["Second", "First"] {
+                try await clickSource()
+                try require(fixture.reply != nil && !fixture.presented, "Async menus wait for their requested model")
+                fixture.selected = selected; fixture.complete(); try await drain()
+                try require(fixture.presented, "A completed request presents its menu")
+                try key("\r", code: 36, window: window); try await drain()
+                try require(!fixture.presented && fixture.actions.last == selected, "Every opening uses the current selected item")
+            }
+            try await clickSource(); try await clickSource(); fixture.complete(); try await drain()
+            try require(!fixture.presented, "A cancelled menu request cannot reopen its popup")
+            try await clickSource(); fixture.mounted = false; try await drain()
+            fixture.complete(); try await drain()
+            try require(!fixture.presented, "A retired menu source rejects its late reply")
+            fixture.mounted = true; try await drain()
+        }
+        fixture.asynchronous = false; fixture.restrictEnabled = true; fixture.selected = "First"
+        fixture.presented = true; try await drain()
+        fixture.selected = "Second"; try await drain()
+        let previous = fixture.actions.count
+        try key("\r", code: 36, window: window); try await drain()
+        try require(fixture.presented && fixture.actions.count == previous, "An externally opened sync menu keeps live availability")
+        try key("\u{F701}", code: 125, window: window); try key("\r", code: 36, window: window); try await drain()
+        try require(!fixture.presented && fixture.actions.last == "Second", "Sync menus retain live suppliers and external dismissal")
+        print("PASS: async menu opening freshness, delayed/cancelled/retired replies and live sync external binding")
     }
     @MainActor static func checkClipboardKeys() async throws {
         let fixture = MenuFixture(); fixture.clipboard = true

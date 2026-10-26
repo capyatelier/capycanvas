@@ -45,6 +45,13 @@ extension XCTestCase {
             target.tap()
             #endif
         }
+        func historyState() -> [Bool] {
+            ["Undo", "Redo"].map { label in
+                let buttons = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "toolbar-tile-", label))
+                XCTAssertTrue(buttons.firstMatch.waitForExistence(timeout: 5)); XCTAssertEqual(buttons.count, 1)
+                return buttons.firstMatch.isEnabled
+            }
+        }
         var moreFrame = CGRect.zero
         func openMore() {
             XCTAssertTrue(more.waitForExistence(timeout: 10)); moreFrame = more.frame
@@ -133,8 +140,22 @@ extension XCTestCase {
             let pixel = self.editorPixels(in: app); return Int(pixel[2]) > Int(pixel[0]) + 50
         }, evaluatedWith: app)
         waitForExpectations(timeout: 15)
+        let filledPixels = editorPixels(in: app), filledCamera = app.buttons["camera-status"].label
+        let filledHistory = historyState()
         press(CGPoint(x: action("deselect").frame.minX - 6, y: bar.frame.midY))
         expect(action("deselect"), "exists == YES", "A tap on the divider before Deselect keeps the selection")
+        let divider = window.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(
+            dx: action("deselect").frame.minX - 6 - window.frame.minX, dy: bar.frame.midY - window.frame.minY))
+        #if os(macOS)
+        divider.click(forDuration: 0.8, thenDragTo: divider)
+        #else
+        divider.press(forDuration: 0.8)
+        #endif
+        expect(action("deselect"), "exists == YES AND enabled == YES", "Holding the mounted divider keeps the selection")
+        XCTAssertFalse(menu.exists)
+        XCTAssertEqual(app.buttons["camera-status"].label, filledCamera)
+        XCTAssertEqual(editorPixels(in: app), filledPixels)
+        XCTAssertEqual(historyState(), filledHistory)
         #if os(macOS)
         let selectionActions = ["scale_rotate", "fill_selection", "clear_selected", "invert_selection", "deselect"]
         func onBar() -> Int { selectionActions.filter { action($0).exists }.count }

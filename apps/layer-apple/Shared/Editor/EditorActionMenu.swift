@@ -1,22 +1,50 @@
 import SwiftUI
 
 struct EditorMenuButton<Label: View>: View {
-    let menu: () -> AppleContextMenu
+    let menu: (@escaping @MainActor (AppleContextMenu) -> Void) -> Void
     var identifier = "editor-action-menu"
     var rootFocusesSelection = true
     var isPresented: Binding<Bool>? = nil
     @ViewBuilder let label: () -> Label
+    private var liveMenu: (() -> AppleContextMenu)?
     @State private var localActive = false
+    @State private var model: AppleContextMenu?
+    @State private var pending: UUID?
     private var active: Binding<Bool> { isPresented ?? $localActive }
+    init(menu: @escaping () -> AppleContextMenu, identifier: String = "editor-action-menu",
+        rootFocusesSelection: Bool = true, isPresented: Binding<Bool>? = nil, @ViewBuilder label: @escaping () -> Label) {
+        self.init(menu: { $0(menu()) }, identifier: identifier, rootFocusesSelection: rootFocusesSelection,
+            isPresented: isPresented, label: label)
+        liveMenu = menu
+    }
+    init(menu: @escaping (@escaping @MainActor (AppleContextMenu) -> Void) -> Void, identifier: String = "editor-action-menu",
+        rootFocusesSelection: Bool = true, isPresented: Binding<Bool>? = nil, @ViewBuilder label: @escaping () -> Label) {
+        self.menu = menu; self.identifier = identifier; self.rootFocusesSelection = rootFocusesSelection
+        self.isPresented = isPresented; self.label = label
+    }
     var body: some View {
-        Button { active.wrappedValue.toggle() } label: { label().contentShape(Rectangle()) }
+        Button {
+            if active.wrappedValue || pending != nil {
+                pending = nil; active.wrappedValue = false
+            } else if liveMenu != nil {
+                active.wrappedValue = true
+            } else {
+                let request = UUID(); pending = request
+                menu { result in
+                    guard pending == request else { return }
+                    pending = nil; model = result; active.wrappedValue = true
+                }
+            }
+        } label: { label().contentShape(Rectangle()) }
             .accessibilityValue(active.wrappedValue ? "Expanded" : "Collapsed")
             .editorPopover(isPresented: active) {
-                if active.wrappedValue {
-                    EditorActionMenu(model: menu(), identifier: identifier,
+                if active.wrappedValue, let model = liveMenu?() ?? model {
+                    EditorActionMenu(model: model, identifier: identifier,
                         rootFocusesSelection: rootFocusesSelection) { active.wrappedValue = false }
                 }
             }
+            .onChange(of: active.wrappedValue) { _, shown in if !shown { pending = nil; model = nil } }
+            .onDisappear { pending = nil; model = nil }
     }
 }
 
