@@ -785,7 +785,9 @@ extension XCTestCase {
         revealEditorControl(value("smoothing_strength"), in: toolScroll)
         XCTAssertEqual(value("smoothing_strength").label, "Smoothing")
         let smoothingTrack = app.descendants(matching: .any)["number-track-tool-smoothing_strength"].firstMatch
-        XCTAssertTrue(smoothingTrack.isHittable)
+        revealEditorControl(smoothingTrack, in: toolScroll)
+        let track = smoothingTrack.frame
+        XCTAssertTrue(track.width > 0 && track.height > 0 && toolScroll.frame.contains(track))
         smoothingTrack.coordinate(withNormalizedOffset: CGVector(dx: 0.75, dy: 0.5)).clickOrTap()
         expect("smoothing_strength", "30")
         selectPaintPreset("Pencil", group: "Pencil", preset: "Pencil", in: app)
