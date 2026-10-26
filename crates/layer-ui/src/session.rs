@@ -2629,6 +2629,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                     && !self.layer_interaction.path.is_empty()
             }
             CommandId::FinishPath | CommandId::CancelPath => self.vector_paths.drafting(),
+            CommandId::JoinPaths | CommandId::ClosePath | CommandId::SplitPath | CommandId::ReversePath
+            | CommandId::MakeCompoundPath | CommandId::ReleaseCompoundPath => false,
             CommandId::MaskSelection => {
                 idle && document.working.selection.is_some()
                     && self.selection_masks.target().is_none()

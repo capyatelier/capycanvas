@@ -1078,6 +1078,60 @@ fn edit_transform_shows_the_move_frame_and_outline_widths_can_stay() {
 }
 
 #[test]
+fn path_commands_are_disabled_on_paint_layers() {
+    let commands = [CommandId::JoinPaths, CommandId::ClosePath, CommandId::SplitPath,
+        CommandId::ReversePath, CommandId::MakeCompoundPath, CommandId::ReleaseCompoundPath];
+    for platform in Platform::ALL {
+        let mut s = session(platform);
+        let checkpoint = s.engine.checkpoint();
+        assert_eq!(commands.map(|command| s.command(command).enabled), [false; 6], "{platform:?}");
+        let reason = s.localization().text(MessageId::COMMANDS_SELECT_PATHS_ON_A_VECTOR_LAYER).to_string();
+        for command in commands {
+            assert_eq!(s.command(command).disabled_reason.as_deref(), Some(reason.as_str()), "{platform:?}: {command:?}");
+            assert_eq!(s.dispatch(UiAction::Invoke { command }).err(), Some(reason.clone()), "{platform:?}: {command:?}");
+            assert_eq!(s.engine.checkpoint(), checkpoint, "{platform:?}: {command:?}");
+        }
+    }
+}
+
+#[test]
+fn path_command_eligibility_keeps_open_closed_and_compound_selections() {
+    use layer_core::authored::vector::PathItem;
+    let commands = [CommandId::JoinPaths, CommandId::ClosePath, CommandId::SplitPath,
+        CommandId::ReversePath, CommandId::MakeCompoundPath, CommandId::ReleaseCompoundPath];
+    for platform in Platform::ALL {
+        let (mut s, handle) = vector_session_on(platform);
+        let open = straight(1, &[[100., 300.], [300., 300.], [500., 300.]], false);
+        let other_open = straight(2, &[[600., 300.], [700., 300.], [700., 500.]], false);
+        let closed = straight(3, &[[100., 500.], [300., 500.], [200., 650.]], true);
+        let other_closed = straight(4, &[[600., 600.], [800., 600.], [700., 750.]], true);
+        let cases = [
+            ("empty", vec![], [false; 6]),
+            ("one open", vec![open.clone()], [true, true, false, true, false, false]),
+            ("one closed", vec![closed.clone()], [false, false, false, true, false, false]),
+            ("two open", vec![open.clone(), other_open.clone()], [true, true, false, true, true, false]),
+            ("two closed", vec![closed.clone(), other_closed.clone()], [false, false, false, true, true, false]),
+            ("mixed", vec![open.clone(), closed.clone()], [false, true, false, true, true, false]),
+            ("three paths", vec![open.clone(), other_open.clone(), closed.clone()], [false, true, false, true, true, false]),
+            ("open compound", vec![PathItem::compound(&[open.clone(), other_open]).unwrap()], [true, true, false, true, false, true]),
+            ("closed compound", vec![PathItem::compound(&[closed, other_closed]).unwrap()], [false, false, false, true, false, true]),
+        ];
+        for (name, paths, expected) in cases {
+            put_paths(&mut s, handle, paths);
+            let items = path_ids(&s, handle).into_iter().collect();
+            s.select_vector_items(handle, items).unwrap();
+            assert_eq!(commands.map(|command| s.command(command).enabled), expected, "{platform:?}: {name}");
+        }
+        put_paths(&mut s, handle, vec![open]);
+        s.select_vector_items(handle, path_ids(&s, handle).into_iter().collect()).unwrap();
+        invoke(&mut s, CommandId::EditPoints);
+        let middle = surface_at(&s, [300., 300.]);
+        press(&mut s, 100, &[middle, middle]);
+        assert_eq!(commands.map(|command| s.command(command).enabled), [true, true, true, true, false, false], "{platform:?}: selected interior anchor");
+    }
+}
+
+#[test]
 fn path_commands_join_split_close_reverse_and_compound_selected_paths() {
     let (mut s, handle) = vector_session();
     draw_line(&mut s, 1, 30);
