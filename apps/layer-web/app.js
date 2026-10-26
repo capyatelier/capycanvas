@@ -1228,13 +1228,16 @@ workspace.addEventListener("pointerdown", e => {
   const contact = e.isPrimary ? edgeContactClass(e.target, canvas) : null;
   if (!contact) return;
   edgeContact = { id: ++edgeContacts, pointerId: e.pointerId, canvas: e.target === canvas, claimed: false, hold: false };
-  edgeContact.selectOnRelease = edgeContact.hold = !!edgeInput("down", e, contact).edge_select_on_release;
+  const reply = edgeInput("down", e, contact);
+  edgeContact.selectOnRelease = edgeContact.hold = !!reply.edge_select_on_release;
+  if (!reply.edge_pending) edgeContact = null;
 }, { capture: true });
 workspace.addEventListener("pointermove", e => {
   const edge = edgeContact;
   if (!edge || !e.isTrusted || edge.pointerId !== e.pointerId) return;
-  if (!edge.claimed && workspaceGesture?.started) { edgeInput("cancel", e); edgeContact = null; return; }
+  if (!edge.claimed && (workspaceGesture?.started || workspaceGesture?.held)) { edgeInput("cancel", e); edgeContact = null; return; }
   const reply = edgeInput("move", e);
+  if (!reply.edge_cursor && !reply.edge_pending) { edgeContact = null; return; }
   edge.hold = !!reply.edge_hold;
   if (reply.edge_cursor) {
     if (!edge.claimed) {

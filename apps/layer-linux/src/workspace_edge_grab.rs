@@ -43,7 +43,9 @@ impl Workspace {
         self.edge_grabs.next.set(id);
         let reply = self.edge_input(id, ContactPhase::Down, crate::input::pointer_kind(event), contact, point);
         self.edge_grabs.select_on_release.set(reply.edge_select_on_release);
-        *self.edge_grabs.pending.borrow_mut() = Some(PendingEdge { id, origin: point, sequence, canvas });
+        if reply.edge_pending {
+            *self.edge_grabs.pending.borrow_mut() = Some(PendingEdge { id, origin: point, sequence, canvas });
+        }
     }
 
     pub(super) fn edge_grab_motion(self: &Rc<Self>, event: &gdk::Event, point: [f32; 2], sequence: Option<gdk::EventSequence>) -> bool {
@@ -57,7 +59,12 @@ impl Workspace {
             return false;
         }
         let reply = self.edge_input(pending.id, ContactPhase::Move, kind, EdgeContact::Free, point);
-        let Some(cursor) = reply.edge_cursor else { return reply.edge_hold };
+        let Some(cursor) = reply.edge_cursor else {
+            if !reply.edge_pending {
+                self.edge_grabs.pending.take();
+            }
+            return reply.edge_hold;
+        };
         self.edge_grabs.pending.take();
         let held = self.workspace_drag.borrow_mut().take();
         if let Some(held) = held {

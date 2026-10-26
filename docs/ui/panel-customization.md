@@ -566,8 +566,10 @@ sideways swipes, or a swipe control (`EdgeContact`). The reply asks them to
 withhold motion from the controls beneath (`edge_hold`), to select a pressed
 tab on release (`edge_select_on_release`), or to capture the contact and show a
 resize pointer (`edge_cursor`); the session then drives the handle's drag and
-advances the catch-up in `frame`. A native double press in the reach sends
-`UiInput::EdgeDoublePress`. GTK and Web implement this. Web treats text fields,
+advances the catch-up in `frame`. Replies also say whether the contact is
+still pending (`edge_pending`), so a host can stop forwarding it. A native
+double press in the reach sends `UiInput::EdgeDoublePress`. GTK and Web
+implement this. Web treats text fields,
 layer rows, held tiles and `touch-action: none` controls as inputs, and
 immediate drag sources, sideways swipe owners and horizontal scrollers as
 pickups. Panel surfaces use `touch-action: pan-y` so horizontal touch reaches

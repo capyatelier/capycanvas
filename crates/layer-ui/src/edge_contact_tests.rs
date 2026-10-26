@@ -27,11 +27,12 @@ fn a_claimed_contact_drives_its_edge_and_catches_up_on_frames() {
     let d = column_edge(&s);
     let start = [d.bounds.x + d.bounds.width + 20., 500.];
     let down = edge(&mut s, 1, ContactPhase::Down, PointerKind::Touch, start, 0);
-    assert!(!down.handled && down.edge_cursor.is_none() && !down.edge_select_on_release);
+    assert!(!down.handled && down.edge_cursor.is_none() && !down.edge_select_on_release && down.edge_pending);
     let pending = edge(&mut s, 1, ContactPhase::Move, PointerKind::Touch, [start[0] + 6., start[1]], 10);
-    assert!(pending.edge_cursor.is_none() && !pending.handled && !pending.edge_hold, "sideways reach never holds motion back");
+    assert!(pending.edge_cursor.is_none() && !pending.handled && !pending.edge_hold && pending.edge_pending, "sideways reach never holds motion back");
     let claim = edge(&mut s, 1, ContactPhase::Move, PointerKind::Touch, [start[0] + 13., start[1]], 20);
     assert_eq!(claim.edge_cursor, Some("col-resize"));
+    assert!(!claim.edge_pending);
     assert!(claim.handled && claim.change.canvas_wake && s.wants_continuous_frames());
     let line = |s: &UiSession<Recorder>| column_edge(s).bounds.x;
     assert_eq!(line(&s), d.bounds.x, "the edge starts where it was");
@@ -48,6 +49,7 @@ fn a_claimed_contact_drives_its_edge_and_catches_up_on_frames() {
     edge(&mut s, 1, ContactPhase::Up, PointerKind::Touch, [start[0] + 40., start[1]], 310);
     assert!(s.command(CommandId::UndoWorkspace).enabled, "one workspace step");
     assert!(!edge(&mut s, 1, ContactPhase::Move, PointerKind::Touch, start, 320).handled);
+    assert!(!edge(&mut s, 4, ContactPhase::Down, PointerKind::Pen, start, 400).edge_pending, "the canvas keeps the pen");
 }
 
 #[test]
@@ -60,7 +62,7 @@ fn a_gap_contact_holds_motion_back_and_selects_tabs_on_release_until_it_decides(
     assert!(edge(&mut s, 2, ContactPhase::Down, PointerKind::Touch, start, 0).edge_select_on_release);
     assert!(edge(&mut s, 2, ContactPhase::Move, PointerKind::Touch, [start[0], start[1] + 5.], 10).edge_hold);
     let abandoned = edge(&mut s, 2, ContactPhase::Move, PointerKind::Touch, [start[0] + 13., start[1] + 5.], 20);
-    assert!(!abandoned.edge_hold && abandoned.edge_cursor.is_none(), "a sideways first movement leaves the contact to the tabs");
+    assert!(!abandoned.edge_hold && abandoned.edge_cursor.is_none() && !abandoned.edge_pending, "a sideways first movement leaves the contact to the tabs");
     edge(&mut s, 2, ContactPhase::Up, PointerKind::Touch, [start[0] + 13., start[1] + 5.], 30);
     edge(&mut s, 3, ContactPhase::Down, PointerKind::Touch, start, 40);
     assert_eq!(edge(&mut s, 3, ContactPhase::Move, PointerKind::Touch, [start[0], start[1] + 13.], 50).edge_cursor, Some("row-resize"));

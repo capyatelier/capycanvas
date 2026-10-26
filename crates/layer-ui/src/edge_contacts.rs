@@ -65,7 +65,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                 if pending.is_none() && self.edge_contacts.active.is_none() {
                     self.edge_contacts.pending = self.layout(viewport).edge_grab_at(position, kind, contact).map(|grab| (id, grab));
                 }
-                reply.edge_select_on_release = self.edge_contacts.pending.is_some_and(|(_, grab)| grab.resizes(Axis::Vertical));
+                reply.edge_pending = self.edge_contacts.pending.is_some_and(|(pending_id, _)| pending_id == id);
+                reply.edge_select_on_release = reply.edge_pending && self.edge_contacts.pending.is_some_and(|(_, grab)| grab.resizes(Axis::Vertical));
             }
             ContactPhase::Move => {
                 let Some((pending_id, mut grab)) = pending.filter(|(pending_id, _)| *pending_id == id) else {
@@ -74,6 +75,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 };
                 match grab.track(position) {
                     EdgeGrabProgress::Pending => {
+                        reply.edge_pending = true;
                         reply.edge_hold = grab.resizes(Axis::Vertical);
                         self.edge_contacts.pending = Some((pending_id, grab));
                     }
