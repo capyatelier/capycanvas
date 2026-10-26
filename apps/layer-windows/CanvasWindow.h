@@ -52,6 +52,7 @@ private:
     struct Size { uint32_t width=1, height=1; float scale=1; };
     winrt::Microsoft::UI::Xaml::Window window;
     uint64_t const windowId;
+    HWND nativeWindow=nullptr;
     std::function<void()> createWindow,testDeviceLoss;
     std::function<void(uint64_t)> onClosed,workspacePreferencesChanged;
     std::optional<uint64_t> workspacePreferencesRevision;
@@ -113,6 +114,7 @@ private:
     std::unique_ptr<WorkspaceStorageView> workspaceStorage;
     std::unique_ptr<WorkspaceManagerView> workspaceManager;
     winrt::Windows::Data::Json::JsonObject lastModel;
+    winrt::Windows::Data::Json::JsonObject tracedModel;
     std::string lastGlass;
     std::wstring workspaceOwnerProperty;
     HWND workspaceOwnerWindow=nullptr;
@@ -161,7 +163,6 @@ private:
     winrt::Windows::Data::Json::JsonObject bootstrap;
     void Resize();
     void PublishGlass();
-    void ApplyResize();
     bool RecoverGpu();
     void SaveAfterGpuFailure(std::string const& reason);
     void ResetSurface();

@@ -16,6 +16,7 @@ $directory=Split-Path -Parent $Executable
 $run=Join-Path $repo ('artifacts/windows/workspace/'+[Guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($run)|Out-Null
 function Command([string]$Id){(Model).state.commands|Where-Object id -eq $Id}
+
 function Panel-Menu([string]$Id){
     $window=(Model).application_menus|Where-Object id -eq 'window'
     foreach($section in $window.model.sections){foreach($item in $section){
@@ -23,7 +24,12 @@ function Panel-Menu([string]$Id){
     }}
     throw "Shared panel menu is missing: $Id"
 }
-function Drawing-Frames{[uint64](Control 'renderer-stat-3').Current.Name}
+function Drawing-Frames {
+    $caption=Control 'Frames' -Name -Type ([System.Windows.Automation.ControlType]::Text)
+    $reading=[System.Windows.Automation.TreeWalker]::RawViewWalker.GetNextSibling($caption)
+    if(!$reading -or $reading.Current.AutomationId -notlike 'renderer-stat-*'){throw 'Diagnostics Frames caption has no adjacent row reading'}
+    [uint64]$reading.Current.Name
+}
 function Idle-Fps{
     Wait-Until {(Control 'renderer-stat-2').Current.Name -eq '0'} 'Diagnostics did not show zero FPS after canvas activity stopped' 15
     $frames=Drawing-Frames
@@ -204,8 +210,9 @@ try{
     $cpu=Control 'renderer-stat-0'
     if($cpu.Current.HelpText -notmatch 'Not GPU completion or input latency'){throw 'Diagnostics lost measurement scope'}
     $cpuIdentity=$cpu.GetRuntimeId() -join ':'
+    $framesBefore=Drawing-Frames
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action 'Test stroke'
-    Wait-Until {(Drawing-Frames) -gt 0} 'Visible Diagnostics did not collect drawing submissions'
+    Wait-Until {(Drawing-Frames) -gt $framesBefore} 'Visible Diagnostics did not collect drawing submissions'
     $rateIdentity=(Control 'renderer-stat-2').GetRuntimeId() -join ':'
     $copy=@(Fps-Copy 'en')
     Wait-Until {(Control 'renderer-stat-2').Current.HelpText -eq $copy[1] -and (Find $copy[0] -Name -Type ([System.Windows.Automation.ControlType]::Text))} 'Windows Diagnostics did not identify submitted canvas frames'

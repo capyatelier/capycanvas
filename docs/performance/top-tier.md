@@ -244,6 +244,7 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 | Web tool bubble drag through four neighbours | 120 | Unmeasured after the bubble release fixes; desktop browser journeys do not qualify the reference tablet | [Web checks](../development/web.md#tests), 2026-10-24 |
 | GTK Tool Set hover and press animation | 120 | Desktop diagnostic: **117.93 changing-color presents/s**, 117.38–118.14 per case; worst case gap p99 16.715 ms. Reference hardware unmeasured | [GTK tool caption hover](#gtk-tool-caption-hover), 2026-10-26 |
 | Panel or column resize | 120 | Expanding GTK divider desktop diagnostic: **54.49/s**, p99 41.689 ms; misses the 114 Hz floor. **Desktop diagnostic misses.** GTK GPU joins: 81.59–112.27 changing-geometry presents/s at 1×; 38.96–92.31 at 2×, worst p99 74.986 ms. Reference-tier qualification remains unset. Web Navigator: 30.00–30.64 Chrome surface presents/s; p99 50.00–58.34 ms | [Web Navigator layout](#web-navigator-layout), 2026-10-19; [GTK Color resize](#gtk-color-panel-resize), 2026-10-10; [GTK column bridge diagnostic](#gtk-column-bridge-diagnostic), 2026-10-25; [GTK Tool Set density](#gtk-tool-set-density), 2026-10-26; [GTK toolbar dividers](#gtk-toolbar-divider-resize), 2026-10-26 |
+| Windows window resize | 120 | Unqualified; local 60 Hz desktop diagnostic reduces Paint UI publication from 36–40 ms to 6.7–7.1 ms; presented-frame timing and reference hardware unmeasured | [Windows window resize](#windows-window-resize), 2026-10-26 UTC |
 | Pen pressure utility and curve drag | 120 | **Unqualified.** Current GTK desktop panel 119.20–119.40 presents/s, p99 up to 9.207 ms; curve 120.00, p99 up to 8.470 ms; reference tablet unmeasured | [GTK pen pressure utility](#gtk-pen-pressure-utility), 2026-10-10 UTC |
 | Windows tool bubble drag through four neighbours | 120 | Unmeasured on reference hardware; Surface Pro / Adreno X1-85 functional checks do not qualify timing (PresentMon ETW access denied) | [Windows tool bubbles](../development/windows.md#tool-bubbles) |
 | Windows HDR color bubble drag and intensity scrub | 120 | Unmeasured on reference hardware; native input and pixel checks do not qualify presentation timing (PresentMon ETW access denied) | [Windows tool bubbles](../development/windows.md#tool-bubbles) |
@@ -5177,3 +5178,38 @@ is 0.348 s; warm canvas motion does not enter this transport. Reproduce with the
 `--measure-isolated PATH` modes under private disk-backed `TMPDIR`.
 Raw commands, source hashes and limits are retained under
 `artifacts/input-safety-next/m4-linux-photo-reader-verification.txt`.
+
+## Windows window resize
+
+Measured 2026-10-25–26 UTC on Windows 11 build 26200, Intel Core i7-1255U,
+Iris Xe driver 32.0.101.7085, a 2256 × 1504 display at 60 Hz and 150% scale.
+The x64 Release working tree at `f8ea80e142` uses a fresh 2005 × 1504 drawing,
+a 1700 × 1150 window and private test desktops. Paint has three six-second
+native edge drags in each theme; Photo has one dark-theme drag. Each run also
+has a six-second programmatic resize. Full UI snapshot tracing is disabled;
+temporary bounded timing probes record UI publication, buffer work and canvas
+frame calls. Builds and other GPU tests are stopped during these runs.
+
+| Work during native edge motion | Before | After |
+| --- | --- | --- |
+| Paint UI publication, mean per gesture | 36.3–39.6 ms | 6.7–7.1 ms |
+| Warm buffer resize, mean | 19–27 ms on the UI thread | 0.086–0.091 ms on the render owner |
+| Paint canvas frame calls, warm gestures | 36.1–36.9/s | 58.0–58.7/s |
+| Paint canvas frame-call gap p99, warm gestures | 61.9–65.1 ms | 32.0–39.3 ms |
+| Photo UI publication, mean | Unmeasured | 8.6 ms |
+
+Native controls retain their UI Automation identities across resizing. Buffer
+capacity is retained and source rectangles follow the viewport. The current
+candidate uses a bounded two-frame queue; an earlier one-frame candidate showed
+half-refresh acquisition cadence. Queue depth and the matrix correction changed
+together, so the corrected one-frame case remains unmeasured.
+Capacity growth still reallocates buffers on the render owner; the warm resize
+numbers do not measure those growth stalls. The pixel comparison covers artwork,
+crop shading and cursors in oversized targets at four rotations.
+
+Frame calls are not displayed-frame timestamps. These small-canvas desktop
+diagnostics do not qualify 120 Hz or any reference tier. UI publication still
+needs a smaller budget, particularly in Photo; WinUI layout and composition
+costs also remain outside the measured publication scope. Exact binary hashes,
+raw samples, captures, retained-control checks and comparison scripts remain
+under `artifacts/windows/resize-investigation/`.

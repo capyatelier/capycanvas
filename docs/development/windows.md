@@ -246,6 +246,22 @@ UI traces. Presentation and overview pipelines are prepared on the shader worker
 an acquired frame remains owned until presentation is ready. Cursor and brush
 readiness keep their original publication boundaries.
 
+Viewport and panel resizing use shared layout packets while their content
+revision remains unchanged. Native controls retain focus, capture and scroll;
+new content, collapse and completed gestures retain full model publication.
+Header item measurements at an unchanged bar height also retain content;
+height changes publish the complete model and its new clearance.
+The presentation mailbox applies the latest required layout before later motion.
+WinUI attaches a composition-surface handle during creation and recovery.
+Buffer configuration and resize stay on the render owner, outside the UI thread.
+Buffer capacity grows in 128-pixel blocks; source rectangles and presentation
+viewports follow the window without reallocating buffers within that capacity.
+Surface loss forces reconfiguration even when the viewport fits existing buffers.
+Three buffers permit a bounded two-frame queue while input is drained after
+acquisition. The source-to-buffer ratio and DPI determine the composition matrix.
+Continuous frame deadlines start at acquisition rather than after rendering and
+follow the window's monitor refresh rate.
+
 `QueryWorkspace` uses the native workspace packet allowlist in
 `native/src/workspace.rs`. Admit each shared query there and cover its serialized
 result/error packet in the native tests, including name validation and saved-profile
@@ -744,6 +760,9 @@ The full journey also attaches selection-masked Invert, merges visible layers,
 checks exact interior and exterior pixels through Undo and Redo, and forces a
 fresh baked-paint redraw by hiding and showing it. Run both themes after changing
 native private-bake preparation; layer counts alone do not qualify capture pixels.
+The fixture prepares two-dimensional ink and checks that its transform-body
+target clears the shared handle and pivot hit regions before injecting a finger
+drag. Thin ink can leave no unambiguous body target at Fit.
 
 | Where | Checks |
 | --- | --- |

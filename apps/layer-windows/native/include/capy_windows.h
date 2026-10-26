@@ -36,8 +36,7 @@ typedef struct CapyPointer {
 } CapyPointer;
 
 /* Prepare on the startup worker; view returns an owned text handle.
-   Create on XAML with ISwapChainPanelNative, then transfer exclusive canvas
-   ownership to the render worker. A launch is adopted at most once. */
+   A launch is adopted at most once. */
 __declspec(dllimport) CapyLaunch capy_launch(const char* tags,const char* screen);
 __declspec(dllimport) CapyString capy_launch_view(CapyLaunch);
 __declspec(dllimport) void capy_launch_free(CapyLaunch);
@@ -45,9 +44,10 @@ __declspec(dllimport) CapyLocalization capy_launch_localization(CapyLaunch);
 __declspec(dllimport) void capy_localization_free(CapyLocalization);
 __declspec(dllimport) CapyLocalization capy_localization_for_tag(char const*);
 __declspec(dllimport) int32_t capy_localization_input(CapyHost,bool);
-__declspec(dllimport) CapyHost capy_create(void* panel, uint32_t width, uint32_t height, float scale, CapyLaunch);
-/* Prepare on the render worker, then park it for the first UI-thread capy_resize.
-   Every subsequent resize also requires exclusive ownership on the UI thread. */
+__declspec(dllimport) CapyHost capy_create(uint32_t width, uint32_t height, float scale, CapyLaunch);
+/* Borrow while the render owner is parked. Attach on XAML with SetSwapChainHandle. */
+__declspec(dllimport) void* capy_surface_handle(CapyHost);
+/* GPU preparation and buffer resizing belong to the render owner. */
 __declspec(dllimport) int32_t capy_prepare_gpu(CapyHost);
 __declspec(dllimport) int32_t capy_test_display(CapyHost, bool hdr);
 __declspec(dllimport) int32_t capy_set_window(CapyHost, void* hwnd);
@@ -55,8 +55,8 @@ __declspec(dllimport) int32_t capy_set_window(CapyHost, void* hwnd);
 __declspec(dllimport) bool capy_device_lost(CapyHost);
 /* CPU retirement after input admission stops; keep document services alive. */
 __declspec(dllimport) int32_t capy_suspend_renderer(CapyHost);
-/* UI-thread replacement: worker parked, no acquired image, old swap chain detached. */
-__declspec(dllimport) int32_t capy_reset_surface(CapyHost, void* panel);
+/* Render-owner replacement with no acquired image; attach the new handle on XAML. */
+__declspec(dllimport) int32_t capy_reset_surface(CapyHost);
 /* Isolated CAPY_SMOKE_TEST only; removes the process's D3D12 device, never the adapter. */
 __declspec(dllimport) int32_t capy_test_device_loss(CapyHost,char const*);
 /* Start/load on the render owner before queued user actions. Wake runs on the
@@ -122,7 +122,7 @@ __declspec(dllimport) int32_t capy_scroll(CapyHost, float x, float y, float dx, 
 __declspec(dllimport) int32_t capy_chrome(CapyHost, uint32_t kind, float x, float y, bool canvas, bool popup_open);
 __declspec(dllimport) int32_t capy_suspend(CapyHost);
 __declspec(dllimport) uint64_t capy_view_revision(CapyHost);
-/* Acquisition: 0=wait, 1=image, 2=UI-thread reconfiguration, 3=commands only while a drawing renderer is unavailable. Can wait for DXGI. Drain newly arrived input after this call. */
+/* Acquisition: 0=wait, 1=image, 2=surface reconfiguration, 3=commands only while a drawing renderer is unavailable. Can wait for DXGI. Drain newly arrived input after this call. */
 __declspec(dllimport) int32_t capy_acquire(CapyHost);
 __declspec(dllimport) int32_t capy_frame(CapyHost, uint64_t now_ns, uint64_t presentation_ns);
 /* Returned text handle owns UTF-8 in Rust; release with capy_string_free. Zero=no change/error.
@@ -130,7 +130,7 @@ __declspec(dllimport) int32_t capy_frame(CapyHost, uint64_t now_ns, uint64_t pre
    Ranges address the exact bytes copied through capy_string_copy. */
 typedef struct CapySnapshotRange { size_t offset, length; } CapySnapshotRange;
 typedef struct CapySnapshotInfo {
-    uint32_t full, workspace, search;
+    uint32_t full, workspace, search, layout;
     CapySnapshotRange camera, localization, navigation_cursor, brush_ready;
 } CapySnapshotInfo;
 __declspec(dllimport) CapyString capy_snapshot(CapyHost, CapySnapshotInfo*);

@@ -74,11 +74,23 @@ static uint64_t Now() {
     return uint64_t(ticks.QuadPart / frequency.QuadPart) * 1000000000ULL
         + uint64_t(ticks.QuadPart % frequency.QuadPart) * 1000000000ULL / uint64_t(frequency.QuadPart);
 }
-static std::chrono::nanoseconds RefreshPeriod() {
+static std::chrono::nanoseconds RefreshPeriod(HWND window) {
+    struct Clock {HMONITOR monitor=nullptr;std::chrono::steady_clock::time_point checked{};std::chrono::nanoseconds period{16666667};};
+    thread_local Clock clock;
+    auto now=std::chrono::steady_clock::now();auto monitor=MonitorFromWindow(window,MONITOR_DEFAULTTONEAREST);
+    if(monitor==clock.monitor&&now-clock.checked<std::chrono::seconds(1))return clock.period;
+    clock.monitor=monitor;clock.checked=now;
+    MONITORINFOEXW output{};output.cbSize=sizeof(output);
+    DEVMODEW mode{};mode.dmSize=sizeof(mode);
+    if(GetMonitorInfoW(monitor,reinterpret_cast<MONITORINFO*>(&output))
+        &&EnumDisplaySettingsW(output.szDevice,ENUM_CURRENT_SETTINGS,&mode)&&mode.dmDisplayFrequency>1){
+        clock.period=std::chrono::nanoseconds(1000000000LL/mode.dmDisplayFrequency);
+        if(!(output.dwFlags&MONITORINFOF_PRIMARY))return clock.period;
+    }
     DWM_TIMING_INFO info{};info.cbSize=sizeof(info);LARGE_INTEGER frequency;
     if(SUCCEEDED(DwmGetCompositionTimingInfo(nullptr,&info))&&info.qpcRefreshPeriod&&QueryPerformanceFrequency(&frequency))
-        return std::chrono::nanoseconds(int64_t(double(info.qpcRefreshPeriod)*1e9/double(frequency.QuadPart)));
-    return std::chrono::microseconds(16667);
+        clock.period=std::chrono::nanoseconds(int64_t(double(info.qpcRefreshPeriod)*1e9/double(frequency.QuadPart)));
+    return clock.period;
 }
 void CapyLifecycle(char const* event) {
     if(!GetEnvironmentVariableW(L"CAPY_TRACE_UI",nullptr,0))return;
@@ -407,10 +419,10 @@ bool CanvasWindow::StartPrepared(CapyLaunch  prepared) {
     Automation::AutomationProperties::SetName(root,CapyUi::str(bootstrap,L"drawing_workspace"));
     status.Text(CapyUi::str(bootstrap,L"preparing_canvas"));
     Resize();
-    auto native=panel.as<ISwapChainPanelNative>();
-    host=capy_create(native.get(),desired.width,desired.height,desired.scale,prepared);
+    host=capy_create(desired.width,desired.height,desired.scale,prepared);
     if(!host) {OutputDebugStringA(NativeString(capy_error()).get());status.Text(CapyUi::str(bootstrap,L"canvas_init_failed"));return false;}
-    capy_set_window(host,Handle());
+    check_hresult(panel.as<ISwapChainPanelNative2>()->SetSwapChainHandle(capy_surface_handle(host)));
+    nativeWindow=Handle();capy_set_window(host,nativeWindow);
     SetWindowSubclass(Handle(),AltKeyMenuFilter,1,0);
     auto dark=panel.ActualTheme()==ElementTheme::Dark;
     capy_action(host,SystemTheme().c_str());
@@ -973,8 +985,6 @@ void CanvasWindow::Run() {
         check_bool(length>0&&length<32768);hstring module(executable,length);
         auto zoomIn=Microsoft::UI::Input::InputDesktopResourceCursor::CreateFromModule(module,CAPY_CURSOR_ZOOM_IN);
         auto zoomOut=Microsoft::UI::Input::InputDesktopResourceCursor::CreateFromModule(module,CAPY_CURSOR_ZOOM_OUT);
-        // Device/shader preparation must not hold the UI thread. The existing resize
-        // handshake performs the first SetSwapChain only after preparation finishes.
         bool prepared=capy_start_services(host,this,[](void* context) noexcept {
             auto self=static_cast<CanvasWindow*>(context);
             {std::lock_guard lock(self->mutex);self->servicesReady=true;}
@@ -1000,7 +1010,7 @@ void CanvasWindow::Run() {
         bool brushReady=false;
         bool probeReady=false;
         unsigned recoveryAttempts=0;
-        std::optional<std::chrono::steady_clock::time_point> lastPresent;
+        std::optional<std::chrono::steady_clock::time_point> lastFrame;
         auto nextServices=std::chrono::steady_clock::now()+std::chrono::milliseconds(250);
         for(;prepared;) {
             if(capy_device_lost(host)){
@@ -1012,17 +1022,19 @@ void CanvasWindow::Run() {
                     SaveAfterGpuFailure(error.what());break;
                 }
             }
-            bool pollServices=false;
+            bool pollServices=false,resized=false;
             {
                 std::unique_lock lock(mutex);
                 wake.wait_until(lock,nextServices,[&]{return closing||resize||dirty||servicesReady||transportFailed||!work.Empty()||pendingHover.has_value()||!previewWork.Empty();});
                 if(closing) break;
                 if(resize) {
-                    paused=true;resize=false;probeReady=false;
-                    capy_suspend(host);
-                    dispatcher.TryEnqueue([weak=weak_from_this()]{if(auto self=weak.lock())self->ApplyResize();});
-                    wake.wait(lock,[&]{return !paused||closing;});
-                    dirty=true;continue;
+                    auto next=desired;resize=false;probeReady=false;
+                    lock.unlock();
+                    auto result=capy_resize(host,next.width,next.height,next.scale);
+                    if(result<0){if(capy_device_lost(host))continue;throw std::runtime_error(NativeString(capy_error()).get());}
+                    {std::lock_guard geometryLock(mutex);revision=capy_view_revision(host);inputScale=next.scale;}
+                    dirty=true;resized=true;lock.lock();
+                    if(closing)break;
                 }
                 pollServices=std::exchange(servicesReady,false)||std::chrono::steady_clock::now()>=nextServices;
             }
@@ -1049,13 +1061,14 @@ void CanvasWindow::Run() {
                 refreshFrameDemand();
                 idleQuery->reply(std::move(packet));continue;
             }
-            if(lastPresent){
+            if(lastFrame){
                 std::unique_lock lock(mutex);
                 auto input=[&]{return closing||resize||transportFailed||!work.Empty()||pendingHover.has_value()||!previewWork.Empty();};
-                if(!input())wake.wait_until(lock,*lastPresent+RefreshPeriod(),input);
+                if(!input())wake.wait_until(lock,*lastFrame+RefreshPeriod(nativeWindow),input);
                 if(closing)break;
-                if(resize)continue;
+                if(resize&&!resized)continue;
             }
+            lastFrame=std::chrono::steady_clock::now();
             // DXGI waits before draining input so a frame uses the freshest arrived samples.
             auto acquireStart=latencyTrace.enabled?Now():0;
             auto acquired=capy_acquire(host);
@@ -1092,7 +1105,6 @@ void CanvasWindow::Run() {
             }
             if(result<0){if(capy_device_lost(host))continue;Fail(NativeString(capy_error()).get());break;}
             dirty=result!=0;
-            lastPresent=std::chrono::steady_clock::now();
             if(!inputStarted){
                 inputStarted=true;inputDispatcher.TryEnqueue([weak=weak_from_this(),zoomIn,zoomOut]{
                     if(auto self=weak.lock()){self->zoomInCursor=zoomIn;self->zoomOutCursor=zoomOut;self->StartInput();}
@@ -1165,6 +1177,7 @@ void CanvasWindow::Run() {
 bool CanvasWindow::RecoverGpu() {
     CapyLifecycle("gpu_recovery_started");
     if(capy_suspend(host)<0)throw std::runtime_error(NativeString(capy_error()).get());
+    if(capy_reset_surface(host)<0)throw std::runtime_error(NativeString(capy_error()).get());
     {
         std::lock_guard lock(mutex);
         if(closing)return false;
@@ -1188,7 +1201,6 @@ bool CanvasWindow::RecoverGpu() {
         std::unique_lock lock(mutex);
         if(wake.wait_for(lock,std::chrono::milliseconds(250),[&]{return closing;}))return false;
     }
-    // The normal resize handshake attaches the new swap chain on XAML's thread.
     {std::lock_guard lock(mutex);resize=true;}
     CapyLifecycle("gpu_recovery_prepared");
     return true;
@@ -1217,11 +1229,9 @@ void CanvasWindow::SaveAfterGpuFailure(std::string const& reason) {
             if(closing)return;
             servicesReady=false;
             if(resize){
-                paused=true;resize=false;
-                if(!dispatcher.TryEnqueue([weak=weak_from_this()]{if(auto self=weak.lock())self->ApplyResize();}))
-                    throw std::runtime_error("Could not resize the suspended canvas");
-                wake.wait(lock,[&]{return !paused||closing;});
-                if(closing)return;
+                auto next=desired;resize=false;lock.unlock();
+                if(capy_resize(host,next.width,next.height,next.scale)<0)throw std::runtime_error(NativeString(capy_error()).get());
+                lock.lock();revision=capy_view_revision(host);inputScale=next.scale;
             }
             pending=work.Take();query=previewWork.Take();
         }
@@ -1246,22 +1256,15 @@ void CanvasWindow::ResetSurface() {
     {std::lock_guard lock(mutex);if(closing)return;}
     auto native=panel.as<ISwapChainPanelNative>();
     auto detached=native->SetSwapChain(nullptr);
-    if(FAILED(detached)||capy_reset_surface(host,native.get())<0){
+    auto attached=SUCCEEDED(detached)?panel.as<ISwapChainPanelNative2>()->SetSwapChainHandle(capy_surface_handle(host)):detached;
+    if(FAILED(attached)){
         std::lock_guard lock(mutex);
-        surfaceError=FAILED(detached)?"Could not detach the lost GPU surface":NativeString(capy_error()).get();
+        surfaceError="Could not attach the recovered GPU surface";
     }
     {std::lock_guard lock(mutex);paused=false;}
     wake.notify_one();
 }
 
-void CanvasWindow::ApplyResize() {
-    Size next;
-    {std::lock_guard lock(mutex);if(closing)return;next=desired;resize=false;}
-    int result=capy_resize(host,next.width,next.height,next.scale);
-    if(result<0&&!capy_device_lost(host)) {status.Text(to_hstring(NativeString(capy_error()).get()));Stop();return;}
-    {std::lock_guard lock(mutex);revision=capy_view_revision(host);inputScale=next.scale;paused=false;}
-    wake.notify_one();
-}
 void CanvasWindow::Fail(std::string message) {
     dispatcher.TryEnqueue([weak=weak_from_this(),message=std::move(message)] {
         if(auto self=weak.lock();self&&!self->closed&&self->status){self->statusFailed=true;self->status.Text(to_hstring(message));self->status.Visibility(Visibility::Visible);}
@@ -1392,7 +1395,9 @@ void CanvasWindow::Publish(std::string snapshot,CapySnapshotInfo const& info) {
         auto model=Windows::Data::Json::JsonObject::Parse(to_hstring(snapshot));
         auto identity="{\"process_id\":"+std::to_string(GetCurrentProcessId())+
             ",\"window_id\":"+std::to_string(windowId);
-        if(full)TraceState("ui-state",identity+",\"model\":"+snapshot+"}");
+        if(full)tracedModel=model;
+        else if(info.layout&&tracedModel.HasKey(L"state"))WorkspaceView::MergeLayout(tracedModel,model);
+        if(full||info.layout)TraceState("ui-state",identity+",\"model\":"+to_string(tracedModel.Stringify())+"}");
         if(full||model.HasKey(L"command_search")){
             auto search=full?CapyUi::object(model,L"state").GetNamedValue(L"command_search",Windows::Data::Json::JsonValue::CreateNullValue()):model.GetNamedValue(L"command_search");
             TraceState("search-state",identity+",\"search\":"+to_string(search.Stringify())+"}");
@@ -1412,7 +1417,7 @@ void CanvasWindow::Publish(std::string snapshot,CapySnapshotInfo const& info) {
     bool post;
     {
         std::lock_guard lock(mutex);if(closing)return;
-        snapshots.Push(std::move(snapshot),full,info.workspace!=0,std::move(camera),info.search!=0,std::move(localizationBytes));
+        snapshots.Push(std::move(snapshot),full,info.workspace!=0,std::move(camera),info.search!=0,std::move(localizationBytes),info.layout!=0);
         post=!snapshotPosted;snapshotPosted=true;
     }
     if(post)dispatcher.TryEnqueue([weak=weak_from_this()]{if(auto self=weak.lock())self->ApplyPending();});
@@ -1430,6 +1435,7 @@ void CanvasWindow::ApplyPending() {
             if(!batch.localization.empty())model.Insert(L"localization",Windows::Data::Json::JsonObject::Parse(to_hstring(batch.localization)));
             ApplyModel(model);
         }
+        if(!closing&&!batch.layout.empty())workspace->Apply(Windows::Data::Json::JsonObject::Parse(to_hstring(batch.layout)));
         if(!closing&&!batch.workspace.empty())workspace->Apply(Windows::Data::Json::JsonObject::Parse(to_hstring(batch.workspace)));
         if(!closing&&!batch.camera.empty())workspace->Apply(Windows::Data::Json::JsonObject::Parse(to_hstring(batch.camera)));
         if(!closing&&!batch.search.empty())workspace->Apply(Windows::Data::Json::JsonObject::Parse(to_hstring(batch.search)));

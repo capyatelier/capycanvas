@@ -74,8 +74,8 @@ impl NativeHost {
     }
 
     /// Opt-in live reflow: retain controls at content_revision while applying a
-    /// complete resolved layout and current camera/measurements. Consumers of
-    /// take_update_bytes refresh all models for dimension changes.
+    /// complete resolved layout and current camera/measurements, including viewport changes.
+    /// Consumers of take_update_bytes refresh all models for dimension changes.
     pub fn take_layout_update_bytes(&mut self) -> Result<Option<Vec<u8>>, serde_json::Error> {
         self.model_transport = false;
         self.last_model_snapshot = None;
@@ -188,6 +188,7 @@ impl NativeHost {
             && self.last_snapshot.as_ref().is_some_and(|previous| {
                 SnapshotKey {
                     revision: key.revision,
+                    logical: key.logical,
                     ..previous.clone()
                 } == key
             })
@@ -646,6 +647,7 @@ mod tests {
                 assert_eq!(packet["layout"], full["layout"]);
                 assert_eq!(packet["camera"], full["state"]["camera"]);
                 assert_eq!(packet["panel_measurements"], full["panel_measurements"]);
+                assert!(packet.to_string().len() < full.to_string().len() / 4);
                 for field in ["bands", "floating", "collapsed", "fit_tab_groups", "fit_height_groups"] {
                     assert_eq!(
                         packet["workspace_layout"][field],
@@ -754,6 +756,63 @@ mod tests {
     }
 
     #[test]
+    fn viewport_reflow_retains_content_and_matches_full_models() {
+        for platform in [Platform::Android, Platform::Mac, Platform::Ios, Platform::Windows] {
+            let mut host = host(platform);
+            workspace_fixture(&mut host);
+            let initial = layout_update(&mut host);
+            for (width, height, density) in [(900, 700, 1.), (1800, 1400, 1.5), (720, 1080, 2.)] {
+                host.resize(width, height, density).unwrap();
+                let packet = layout_update(&mut host);
+                let full = host.snapshot();
+                assert!(packet.get("state").is_none());
+                assert_eq!(packet["workspace_update"]["content_revision"], initial["workspace_update"]["content_revision"]);
+                assert_eq!(packet["layout"], full["layout"]);
+                assert_eq!(packet["camera"], full["state"]["camera"]);
+                assert_eq!(packet["panel_measurements"], full["panel_measurements"]);
+                for field in ["panels", "application_menus", "preferences"] {
+                    assert_eq!(initial[field], full[field], "Retained {field}");
+                }
+                assert!(host.take_layout_update_bytes().unwrap().is_none());
+            }
+            host.resize(1000, 800, 1.).unwrap();
+            assert!(update(&mut host).get("state").is_some());
+            host.resize(1100, 850, 1.).unwrap();
+            host.dispatch(UiAction::SetBrushSize { value: 37. }).unwrap();
+            assert_eq!(layout_update(&mut host)["state"]["brush"]["diameter"], 37.);
+        }
+    }
+
+    #[test]
+    fn viewport_header_bounds_reflow_without_republishing_content() {
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Mac, Platform::Ios, Platform::Windows] {
+            let mut host = host(platform);
+            workspace_fixture(&mut host);
+            let id = host.session.state().workspace.layout.header.entries().next().unwrap().id;
+            let measurement = |x, height| UiAction::MeasureHeader { height, items: vec![layer_ui::HeaderItemBounds {
+                id, bounds: layer_ui::Bounds { x, y: 0., width: 80., height },
+            }] };
+            host.dispatch(measurement(100., 48.)).unwrap();
+            let initial = layout_update(&mut host);
+            for x in [120., 140., 160.] {
+                host.resize(1000 + x as u32, 800, 1.).unwrap();
+                host.dispatch(measurement(x, 48.)).unwrap();
+                let packet = layout_update(&mut host);
+                let full = host.snapshot();
+                assert!(packet.get("state").is_none());
+                assert_eq!(packet["workspace_update"]["content_revision"], initial["workspace_update"]["content_revision"]);
+                assert_eq!(packet["layout"], full["layout"]);
+                assert_eq!(packet["camera"], full["state"]["camera"]);
+                assert_eq!(initial["header"], full["header"]);
+            }
+            host.dispatch(measurement(160., 60.)).unwrap();
+            let taller = layout_update(&mut host);
+            assert!(taller.get("state").is_some());
+            assert_eq!(taller["header_presentation_height"], 60.);
+        }
+    }
+
+    #[test]
     fn reflow_measurements_and_failed_layout_serialization_preserve_revisions() {
         use layer_ui::ContactPhase::*;
         let mut host = host(Platform::Android);
@@ -785,7 +844,10 @@ mod tests {
         assert_eq!(packet["layout"], host.snapshot()["layout"]);
         assert_eq!(packet["camera"], host.snapshot()["state"]["camera"]);
         host.resize(2200, 1800, 2.).unwrap();
-        assert!(layout_update(&mut host).get("state").is_some());
+        let resized = layout_update(&mut host);
+        assert!(resized.get("state").is_none());
+        assert_eq!(resized["layout"], host.snapshot()["layout"]);
+        assert_eq!(resized["camera"], host.snapshot()["state"]["camera"]);
     }
 
     #[test]

@@ -31,7 +31,13 @@ function MenuOpen{
  $null -ne [System.Windows.Automation.AutomationElement]::RootElement.FindFirst([System.Windows.Automation.TreeScope]::Descendants,$condition)
 }
 function AnchorQuadrant{$m=Model;$a=$m.state.canvas_bar.anchor;$c=$m.state.camera;$r=(Find 'drawing-canvas').Current.BoundingRectangle
- @([int]($r.X+$c.translation[0]+$c.zoom*($a[0]+3*$a[2])/4),[int]($r.Y+$c.translation[1]+$c.zoom*($a[1]+3*$a[3])/4))}
+ $point=@([int]($r.X+$c.translation[0]+$c.zoom*($a[0]+3*$a[2])/4),[int]($r.Y+$c.translation[1]+$c.zoom*($a[1]+3*$a[3])/4))
+ $reach=12*[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.
+ foreach($u in @(0.,.5,1.)){foreach($v in @(0.,.5,1.)){
+  $x=$r.X+$c.translation[0]+$c.zoom*($a[0]+$u*($a[2]-$a[0]));$y=$r.Y+$c.translation[1]+$c.zoom*($a[1]+$v*($a[3]-$a[1]))
+  if([Math]::Sqrt([Math]::Pow($point[0]-$x,2)+[Math]::Pow($point[1]-$y,2)) -le $reach){throw 'Transform body target intersects a handle hit region'}
+ }}
+ $point}
 function Center($Element){$r=$Element.Current.BoundingRectangle;@([int]($r.X+$r.Width/2),[int]($r.Y+$r.Height/2))}
 function Tap([string]$Id,[string]$Device){
  $item=@{value=$null};Wait-Until {$item.value=Find $Id;$item.value -and !$item.value.Current.IsOffscreen -and $item.value.Current.IsEnabled} "Missing bar control $Id" 10
@@ -112,6 +118,9 @@ try {
  $canvas=$settled.rect
  $cx=[int]($canvas.X+$canvas.Width*.5);$cy=[int]($canvas.Y+$canvas.Height*.45)
  if(Bar){throw 'The bar showed before any selection or transform'}
+ $preparedPaint=Paint
+ Drag 'mouse' @(($cx-110),($cy-75)) @(($cx+110),($cy+45))
+ Wait-Until {(Paint) -ne $preparedPaint} 'Controlled two-dimensional drawing did not finish'
 
  $selectionTile=Tool-Tile 'lasso';Invoke-Id $selectionTile;Subtool 'rectangle_select'
  $glass=@{count=-1;stable=0}

@@ -276,18 +276,33 @@ int main() {
     assert(PrepareCanvasPrediction(actual)&&actual.pressure==1.1f); // real validation remains in Rust
     std::cout<<"Canvas predictions: extrapolated pressure bounded, invalid predictions rejected, real input preserved\n";
     WorkspacePublication publication;
-    assert(!publication.Accept(false,10,4)); // Motion cannot establish models.
-    assert(publication.Accept(true,10,4));
-    assert(publication.Accept(false,12,4));
-    assert(!publication.Accept(false,11,4)); // An older queued placement is stale.
-    assert(!publication.Accept(false,13,5)); // A new model is required first.
+    assert(!publication.Accept(false,10,4,40));
+    assert(!publication.Accept(false,10,4,40,true));
+    assert(publication.Accept(true,10,4,40));
+    assert(publication.Accept(false,12,4,40));
+    assert(!publication.Accept(false,11,4,40));
+    assert(!publication.Accept(false,13,5,50));
     assert(publication.Revision()==12&&publication.ModelRevision()==4);
-    assert(!publication.Accept(true,11,4)); // Nor can an old full snapshot rewind it.
-    assert(publication.Accept(true,13,5));
-    assert(!publication.Accept(false,14,4)); // Old content must never be moved.
-    assert(publication.Accept(true,13,5)); // Host visibility/size refresh.
-    assert(publication.Accept(false,14,5));
-    std::cout<<"Workspace publication: matching models, ordered motion and host refresh passed\n";
+    assert(!publication.Accept(true,11,4,40));
+    assert(publication.Accept(true,13,5,50));
+    assert(!publication.Accept(false,14,4,40));
+    assert(publication.Accept(true,13,5,50));
+    assert(publication.Accept(false,14,5,50));
+    assert(publication.Accept(false,15,6,50,true));
+    assert(publication.Revision()==15&&publication.ModelRevision()==6);
+    assert(publication.Accept(false,16,6,50));
+    assert(!publication.Accept(false,17,5,50));
+    assert(!publication.Accept(false,15,7,50,true));
+    assert(!publication.Accept(false,17,5,50,true));
+    assert(!publication.Accept(false,17,7,60,true));
+    assert(publication.Revision()==16&&publication.ModelRevision()==6);
+    assert(publication.Accept(false,17,6,50,true));
+    assert(publication.Accept(true,18,7,70));
+    assert(!publication.Accept(false,19,8,50,true));
+    assert(!publication.Accept(false,19,6,70,true));
+    assert(publication.Accept(false,19,8,70,true));
+    assert(publication.Accept(false,20,8,70));
+    std::cout<<"Workspace publication: ordered motion, retained content reflow and full replacement passed\n";
     CanvasSnapshotMailbox snapshots;
     snapshots.Push("models A",true,true);
     snapshots.Push("motion A + camera 1",false,true,"camera 1");
@@ -339,6 +354,32 @@ int main() {
     assert(snapshots.Take().localization.empty());
     snapshots.Push("complete translated model",true,true);
     shown=snapshots.Take();assert(shown.full=="complete translated model"&&shown.localization=="Thai context");
+    snapshots.Push("layout B + camera 6",false,true,"camera 6",false,{},true);
+    snapshots.Push("motion B",false,true);
+    shown=snapshots.Take();
+    assert(shown.full.empty()&&shown.layout=="layout B + camera 6"&&shown.workspace=="motion B"&&shown.camera=="camera 6");
+    snapshots.Push("layout B",false,true,{},false,{},true);
+    snapshots.Push("motion B",false,true);
+    snapshots.Push("layout C",false,true,{},false,{},true);
+    snapshots.Push("camera 7",false,false,"camera 7");
+    snapshots.Push("search retained",false,false,{},true);
+    shown=snapshots.Take();
+    assert(shown.layout=="layout C"&&shown.workspace.empty()&&shown.camera=="camera 7"&&shown.search=="search retained");
+    snapshots.Push("layout D",false,true,"camera 8",false,"German context",true);
+    snapshots.Push("motion D",false,true);
+    snapshots.Push("search cleared",false,false,{},true);
+    snapshots.Push("models G",true,true);
+    shown=snapshots.Take();
+    assert(shown.full=="models G"&&shown.layout.empty()&&shown.workspace.empty()&&shown.camera.empty()&&shown.search.empty()&&shown.localization=="German context");
+    snapshots.Push("models H",true,true);
+    snapshots.Push("layout H",false,true,{},false,{},true);
+    snapshots.Push("motion H",false,true);
+    snapshots.Push("camera 9",false,false,"camera 9");
+    shown=snapshots.Take();
+    assert(shown.full=="models H"&&shown.layout=="layout H"&&shown.workspace=="motion H"&&shown.camera=="camera 9");
+    shown=snapshots.Take();
+    assert(shown.full.empty()&&shown.layout.empty()&&shown.workspace.empty()&&shown.camera.empty()&&shown.search.empty()&&shown.localization.empty());
+    std::cout<<"Canvas layout publications survive later motion and retire superseded geometry passed\n";
     CanvasWorkBuffer queue;
     // Saturation must not consume the caller's rejected command. Every
     // accepted boundary and command remains in the original order.

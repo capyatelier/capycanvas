@@ -14,6 +14,7 @@ public:
     ~WorkspaceView();
     winrt::Microsoft::UI::Xaml::Controls::Canvas Root() const;
     bool Apply(Json const& snapshot);
+    static void MergeLayout(Json const& model,Json const& patch);
     Json ChromeFacts(bool popupOpen);
     bool CancelGesture();
     void CancelPreviews();

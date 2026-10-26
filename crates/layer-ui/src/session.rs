@@ -2946,8 +2946,10 @@ impl<R: CanvasRenderer> UiSession<R> {
         // Only a dimension/measurement change with no open customization UI can
         // retain content. Collapse/expand transitions still require full models.
         let layout_only = (!self.state.customization.is_open())
-            && matches!(&action, UiAction::DragDivider { phase: ContactPhase::Move, .. }
-                | UiAction::ResizeFloating { phase: ContactPhase::Move, .. } | UiAction::MeasurePanels { .. });
+            && (matches!(&action, UiAction::DragDivider { phase: ContactPhase::Move, .. }
+                | UiAction::ResizeFloating { phase: ContactPhase::Move, .. } | UiAction::MeasurePanels { .. })
+                || matches!(&action, UiAction::MeasureHeader { height, .. }
+                    if *height == self.state.workspace.layout.header_presentation.height));
         let collapsed_before = layout_only.then(|| self.state.workspace.layout.collapsed.iter().map(|c| c.root).collect::<Vec<_>>());
         let drag_before = self.workspace_drag;
         let changing_slot_layout = !action.is_host_report() && !matches!(&action,
@@ -4252,7 +4254,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.workspace_content_revision = content_revision;
         }
         if layout_only
-            && changed == (LAYOUT | CUSTOMIZATION)
+            && changed & !(LAYOUT | CUSTOMIZATION) == 0
             && collapsed_before.as_ref() == Some(&self.state.workspace.layout.collapsed.iter().map(|c| c.root).collect::<Vec<_>>())
             && !self.state.customization.is_open()
         {

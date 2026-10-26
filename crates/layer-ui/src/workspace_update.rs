@@ -8,16 +8,17 @@
 //!
 //! `revision` orders presentations; `model_revision` identifies all retained UI
 //! models, including content and settings, not just docking topology. Apply a
-//! presentation only against its matching model revision. Host visibility and
-//! viewport changes also require a model refresh (NativeHost handles these).
+//! presentation only against its matching model revision. Host visibility changes
+//! require a model refresh; layout-aware consumers may retain viewport content.
 //! Native transports include this object as `workspace_update` in both full
 //! snapshots and geometry-only packets; camera data can accompany either.
 //!
 //! Layout-aware consumers may additionally retain controls at `content_revision`.
 //! NativeHost::take_layout_update_bytes opts into packets containing `layout`,
-//! `workspace_layout`, `camera`, and `panel_measurements` when only dimensions or
-//! reflow measurements changed. Replace those absolute fields against matching
-//! content_revision before advancing model_revision. `workspace_layout` replaces
+//! `workspace_layout`, `camera`, and `panel_measurements` when only viewport
+//! dimensions or reflow measurements changed. Replace those absolute fields
+//! against matching content_revision before advancing model_revision.
+//! `workspace_layout` replaces
 //! bands, floating groups, collapsed columns, column_stacks, fit_tab_groups and
 //! fit_height_groups in the retained workspace; it is live gesture state, not a
 //! persistence request. Collapse/expand, content edits, completion and

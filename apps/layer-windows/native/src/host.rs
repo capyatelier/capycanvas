@@ -13,6 +13,7 @@ use std::{
     cell::RefCell,
     ffi::{CString, c_char, c_void},
     panic::{AssertUnwindSafe, catch_unwind},
+    os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle},
 };
 
 thread_local! { static ERROR: RefCell<CString> = RefCell::new(CString::default()); }
@@ -63,7 +64,9 @@ pub struct CapyHost {
     target: Option<wgpu::SurfaceTexture>,
     pacing: crate::frame_pacing::FramePacing,
     surface: wgpu::Surface<'static>,
+    surface_handle: OwnedHandle,
     config: Option<wgpu::SurfaceConfiguration>,
+    surface_invalid: bool,
     presenter: Option<ViewportPresenter>,
     native: NativeHost,
     instance: wgpu::Instance,
@@ -95,11 +98,23 @@ fn pointer_button(sample: &CapyPointer) -> PointerButton {
 fn take_prepared_target<T>(presenter: &ViewportPresenter, renderer: &layer_render_wgpu::WgpuRasterizer, target: &mut Option<T>) -> Option<T> {
     presenter.pipelines_ready(renderer).then(|| target.take()).flatten()
 }
+fn surface_extent(allocated: [u32; 2], viewport: [u32; 2], limit: u32) -> Result<[u32; 2], String> {
+    if viewport.contains(&0) || viewport.into_iter().chain(allocated).any(|v| v > limit) {
+        return Err("Invalid surface extent".into());
+    }
+    Ok(std::array::from_fn(|i| allocated[i].max(viewport[i].div_ceil(128).saturating_mul(128).min(limit))))
+}
 
 impl AsMut<NativeHost> for CapyHost {
     fn as_mut(&mut self) -> &mut NativeHost { &mut self.native }
 }
 impl CapyHost {
+    fn composition_surface(instance: &wgpu::Instance) -> Result<(wgpu::Surface<'static>, OwnedHandle), String> {
+        let raw = unsafe { windows::Win32::Graphics::DirectComposition::DCompositionCreateSurfaceHandle(3, None) }.map_err(err)?;
+        let handle = unsafe { OwnedHandle::from_raw_handle(raw.0) };
+        let surface = unsafe { instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::SurfaceHandle(handle.as_raw_handle())) }.map_err(err)?;
+        Ok((surface, handle))
+    }
     fn cancel_contacts(&mut self) -> Result<(), String> {
         for (id, mut sample) in std::mem::take(&mut self.live_contacts) {
             sample.phase = 4;
@@ -119,8 +134,8 @@ impl CapyHost {
             self.live_contacts.insert(sample.id, *sample);
         }
     }
-    unsafe fn new(panel: *mut c_void, width: u32, height: u32, scale: f32, launch: &mut CapyLaunch) -> Result<Self, String> {
-        if panel.is_null() || width == 0 || height == 0 || !scale.is_finite() || scale <= 0.0 {
+    unsafe fn new(width: u32, height: u32, scale: f32, launch: &mut CapyLaunch) -> Result<Self, String> {
+        if width == 0 || height == 0 || !scale.is_finite() || scale <= 0.0 {
             return Err("Invalid Windows canvas surface".into());
         }
         let mut native = launch.native.take().ok_or("Windows launch was already adopted")?;
@@ -135,10 +150,7 @@ impl CapyHost {
         // validation while using the same optimized shaders as Release.
         descriptor.flags.remove(wgpu::InstanceFlags::DEBUG);
         let instance = wgpu::Instance::new(descriptor);
-        let surface = unsafe {
-            instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::SwapChainPanel(panel))
-        }
-        .map_err(err)?;
+        let (surface, surface_handle) = Self::composition_surface(&instance)?;
         // GPU allocation and shader work happen after ownership moves to the
         // render worker. No swap chain is attached during CPU/UI initialization.
         Ok(Self {
@@ -156,7 +168,9 @@ impl CapyHost {
             target: None,
             pacing: Default::default(),
             surface,
+            surface_handle,
             config: None,
+            surface_invalid: false,
             presenter: None,
             native,
             instance,
@@ -307,13 +321,11 @@ impl CapyHost {
             .surface
             .get_default_config(&adapter, width, height)
             .ok_or("D3D12 surface unsupported")?;
-        // Present completed ink without waiting for vblank when DXGI supports
-        // tearing. Keep the one-frame queue and acquire-before-input ordering.
         config.present_mode = if self.surface.get_capabilities(&adapter).present_modes
             .contains(&wgpu::PresentMode::Immediate) {
             wgpu::PresentMode::Immediate
         } else { wgpu::PresentMode::Fifo };
-        config.desired_maximum_frame_latency = 1;
+        config.desired_maximum_frame_latency = 2;
         config.alpha_mode = wgpu::CompositeAlphaMode::Opaque;
         // Keep scRGB across monitor moves; only viewing changes, never artwork.
         if self.surface.get_capabilities(&adapter).format_capabilities.iter().any(|f|
@@ -345,8 +357,6 @@ impl CapyHost {
         self.presented_panel_revision = None;
         self.config = Some(config);
         self.native.reset_canvas_frame_rate();
-        // Surface::configure calls SetSwapChain. Only capy_resize may do that,
-        // on the UI thread while this worker is parked.
         Ok(())
     }
 
@@ -478,13 +488,9 @@ pub unsafe extern "C" fn capy_launch_free(launch: u64) {
     let _=Handle::from_raw(launch).and_then(handles::release::<CapyLaunch>);
 }
 /// # Safety
-/// Call on the panel's XAML thread. `panel` must point to a live
-/// ISwapChainPanelNative interface. Keep the panel alive until the swap chain
-/// is detached on that thread and the returned host is destroyed. `launch` must
-/// be live, exclusively owned, and not previously adopted.
+/// `launch` must be live, exclusively owned, and not previously adopted.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_create(
-    panel: *mut c_void,
     width: u32,
     height: u32,
     scale: f32,
@@ -492,7 +498,7 @@ pub unsafe extern "C" fn capy_create(
 ) -> u64 {
     match catch_unwind(AssertUnwindSafe(|| unsafe {
         let mut launch=borrow::<CapyLaunch>(launch)?;
-        CapyHost::new(panel,width,height,scale,&mut launch)
+        CapyHost::new(width,height,scale,&mut launch)
     })) {
         Ok(Ok(host)) => match handles::insert(host) {Ok(handle)=>handle.raw(),Err(error)=> {fail(error);0}},
         Ok(Err(e)) => {
@@ -504,6 +510,12 @@ pub unsafe extern "C" fn capy_create(
             0
         }
     }
+}
+/// # Safety
+/// Exclusive access to a live host; the returned handle is borrowed until surface replacement or host destruction.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_surface_handle(host: u64) -> *mut c_void {
+    borrow::<CapyHost>(host).map_or(std::ptr::null_mut(), |host| host.surface_handle.as_raw_handle())
 }
 /// Associate the HWND before transferring ownership to the render worker.
 /// # Safety
@@ -669,8 +681,7 @@ pub unsafe extern "C" fn capy_prepare_gpu(host: u64) -> i32 {
 }
 /// # Safety
 /// `host` must be null or a live host exclusively accessed by this caller.
-/// Call on the panel's XAML thread with the canvas owner paused and no acquired
-/// image; surface configuration attaches the swap chain to that panel.
+/// Exclusive access on the render owner, with no acquired image.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_resize(
     host: u64,
@@ -686,8 +697,6 @@ pub unsafe extern "C" fn capy_resize(
         host.scale = scale;
         host.native.resize(width, height, scale)?;
         if let Some(config) = &mut host.config {
-            config.width = width;
-            config.height = height;
             let device = host.native
                 .session
                 .engine()
@@ -697,12 +706,19 @@ pub unsafe extern "C" fn capy_resize(
                 .or_else(|| host.documents.as_ref().and_then(|d| d.tab_device()))
                 .ok_or("GPU is not prepared")?
                 .clone();
-            let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
-            host.surface.configure(&device, config);
-            if pollster::block_on(scope.pop()).is_some() {
+            let configured = unsafe { host.surface.as_hal::<wgpu::hal::api::Dx12>() }.and_then(|surface| surface.swap_chain()).is_some();
+            let allocated = if configured { [config.width, config.height] } else { [0; 2] };
+            let extent = surface_extent(allocated, [width, height], device.limits().max_texture_dimension_2d)?;
+            if host.surface_invalid || !configured || extent != allocated {
+                [config.width, config.height] = extent;
+                let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
                 host.surface.configure(&device, config);
+                if pollster::block_on(scope.pop()).is_some() {
+                    host.surface.configure(&device, config);
+                }
             }
-            set_composition_scale(&host.surface, scale)?;
+        set_composition_viewport(&host.surface, [width, height], scale)?;
+        host.surface_invalid = false;
         }
         Ok(0)
     })
@@ -974,6 +990,7 @@ pub unsafe extern "C" fn capy_acquire(host: u64) -> i32 {
                 return Ok(0);
             }
             wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
+                host.surface_invalid = true;
                 return Ok(2);
             }
             wgpu::CurrentSurfaceTexture::Validation => {
@@ -1013,6 +1030,7 @@ pub struct CapySnapshotInfo {
     full: u32,
     workspace: u32,
     search: u32,
+    layout: u32,
     camera: CapySnapshotRange,
     localization: CapySnapshotRange,
     navigation_cursor: CapySnapshotRange,
@@ -1026,6 +1044,7 @@ impl CapySnapshotInfo {
             full: u32::from(full),
             workspace: u32::from(fields.contains("workspace_update")),
             search: u32::from(fields.contains("command_search")),
+            layout: u32::from(!full && fields.contains("layout")),
             camera: (!full).then(|| fields.range("camera")).flatten().into(),
             localization: fields.nonempty_object_range("localization")?.into(),
             navigation_cursor: fields.range("navigation_cursor").into(),
@@ -1123,7 +1142,7 @@ pub unsafe extern "C" fn capy_snapshot(host: u64, info: *mut CapySnapshotInfo) -
             }),
         };
         let extension = serde_json::to_vec(&metadata).map_err(err)?;
-        let update=host.native.take_update_bytes().map_err(err)?;
+        let update=host.native.take_layout_update_bytes().map_err(err)?;
         let bytes=match update {
             Some(bytes)=>Some(layer_host::extend_update(bytes,&extension)),
             None if host.published_panel_revision!=host.presented_panel_revision=>Some(serde_json::to_vec(&serde_json::json!({
@@ -1187,7 +1206,8 @@ pub unsafe extern "C" fn capy_surface_info(host: u64) -> u64 {
                 format!("{:#x}", base.as_raw() as usize),
                 format!("{:#x}", swapchain.as_raw() as usize)
             ],
-            "viewport": [config.width, config.height],
+            "viewport": host.native.session.state().camera.viewport,
+            "buffer_extent": [config.width, config.height],
             "density": host.scale,
             "present_mode": format!("{:?}", config.present_mode),
             "format": format!("{:?}", config.format),
@@ -1262,18 +1282,22 @@ pub unsafe extern "C" fn capy_view_revision(host: u64) -> u64 {
 
 // The backbuffer is sized in physical pixels. SwapChainPanel otherwise scales
 // it again by the XAML composition scale, displacing both the image and input.
-fn set_composition_scale(surface: &wgpu::Surface<'_>, scale: f32) -> Result<(), String> {
+fn set_composition_viewport(surface: &wgpu::Surface<'_>, viewport: [u32; 2], scale: f32) -> Result<(), String> {
     let native = unsafe { surface.as_hal::<wgpu::hal::api::Dx12>() }
         .ok_or("The Windows surface has no D3D12 backend")?;
     let swapchain = native
         .swap_chain()
         .ok_or("The Windows swap chain is not configured")?;
+    let extent = unsafe { swapchain.GetDesc1() }.map_err(err)?;
     let transform = windows::Win32::Graphics::Dxgi::DXGI_MATRIX_3X2_F {
-        _11: 1.0 / scale,
-        _22: 1.0 / scale,
+        _11: viewport[0] as f32 / extent.Width as f32 / scale,
+        _22: viewport[1] as f32 / extent.Height as f32 / scale,
         ..Default::default()
     };
-    unsafe { swapchain.SetMatrixTransform(&transform) }.map_err(err)
+    unsafe {
+        swapchain.SetSourceSize(viewport[0], viewport[1]).map_err(err)?;
+        swapchain.SetMatrixTransform(&transform)
+    }.map_err(err)
 }
 
 fn bundled_shader_compiler() -> wgpu::Dx12Compiler {
@@ -1296,20 +1320,16 @@ pub unsafe extern "C" fn capy_device_lost(host: u64) -> bool {
 }
 
 /// # Safety
-/// Call on the XAML thread after detaching the old swap chain, with the render
-/// worker parked. Keep the same panel alive through the replacement surface.
+/// Exclusive render-owner access, with no acquired image.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn capy_reset_surface(host: u64, panel: *mut c_void) -> i32 {
+pub unsafe extern "C" fn capy_reset_surface(host: u64) -> i32 {
     guard(host, |host| {
-        if panel.is_null() || host.target.is_some() {
-            return Err("Surface replacement requires a live panel and no acquired image".into());
+        if host.target.is_some() {
+            return Err("Surface replacement requires no acquired image".into());
         }
-        let surface = unsafe {
-            host.instance
-                .create_surface_unsafe(wgpu::SurfaceTargetUnsafe::SwapChainPanel(panel))
-        }
-        .map_err(err)?;
+        let (surface, handle) = CapyHost::composition_surface(&host.instance)?;
         host.surface = surface;
+        host.surface_handle = handle;
         host.native.reset_canvas_frame_rate();
         host.config = None;
         host.blank_presented = false;
@@ -1654,6 +1674,25 @@ mod presentation_readiness_tests {
 }
 
 #[cfg(test)]
+mod surface_extent_tests {
+    use super::surface_extent;
+
+    #[test]
+    fn live_resize_retains_capacity_and_admits_new_viewports() {
+        let initial = surface_extent([0; 2], [1700, 1150], 8192).unwrap();
+        assert_eq!(initial, [1792, 1152]);
+        for width in 1340..=1792 {
+            assert_eq!(surface_extent(initial, [width, 1100], 8192).unwrap(), initial);
+        }
+        assert_eq!(surface_extent(initial, [1793, 1153], 8192).unwrap(), [1920, 1280]);
+        assert_eq!(surface_extent([0; 2], [1000, 900], 1000).unwrap(), [1000, 1000]);
+        for viewport in [[0, 100], [100, 0], [8193, 100], [100, 8193]] {
+            assert!(surface_extent(initial, viewport, 8192).is_err());
+        }
+    }
+}
+
+#[cfg(test)]
 mod snapshot_routing_tests {
     use super::*;
     #[test]
@@ -1669,11 +1708,15 @@ mod snapshot_routing_tests {
         assert_eq!(serde_json::from_slice::<serde_json::Value>(camera).unwrap(),serde_json::json!({"zoom":2}));
         assert_eq!(info.localization.length,0);
         assert_eq!(info.brush_ready.length,0);
+        assert_eq!(info.layout,0);
+        let info=CapySnapshotInfo::read(br#"{"workspace_update":{},"layout":{},"camera":{"zoom":2}}"#).unwrap();
+        assert_eq!((info.full,info.workspace,info.layout),(0,1,1));
+        assert_eq!(CapySnapshotInfo::read(br#"{"state":{},"layout":{}}"#).unwrap().layout,0);
         for bytes in [b"{}".as_slice(),b"{\"localization\":{}}",b"{\"localization\":null}"] {
             assert_eq!(CapySnapshotInfo::read(bytes).unwrap().localization.length,0);
         }
         let a=std::mem::align_of::<usize>();
-        let first=(3*std::mem::size_of::<u32>()+a-1)&!(a-1);
+        let first=(4*std::mem::size_of::<u32>()+a-1)&!(a-1);
         assert_eq!(std::mem::offset_of!(CapySnapshotInfo,camera),first);
         assert_eq!(std::mem::offset_of!(CapySnapshotInfo,brush_ready),first+6*std::mem::size_of::<usize>());
         assert_eq!(std::mem::size_of::<CapySnapshotInfo>(),first+8*std::mem::size_of::<usize>());
@@ -1682,7 +1725,8 @@ mod snapshot_routing_tests {
     fn snapshot_error_resets_descriptor_without_a_host() {
         let mut info=CapySnapshotInfo::read(br#"{"state":{},"brush_ready":true,"localization":{"text":"x"}}"#).unwrap();
         assert_eq!(unsafe { capy_snapshot(0,&mut info) },0);
-        assert_eq!((info.full,info.workspace,info.search),(0,0,0));
+        assert_eq!((info.full,info.workspace,info.search,info.layout),(0,0,0,0));
+        assert!(unsafe { capy_surface_handle(0) }.is_null());
         for range in [info.camera,info.localization,info.navigation_cursor,info.brush_ready] {
             assert_eq!((range.offset,range.length),(0,0));
         }
@@ -1749,7 +1793,7 @@ mod handle_tests {
                 assert_eq!(capy_query(raw,std::ptr::null()),0);
                 assert_eq!(capy_launch_view(raw),0);
                 assert_eq!(capy_launch_localization(raw),0);
-                assert_eq!(capy_create(std::ptr::null_mut(),0,0,1.,raw),0);
+                assert_eq!(capy_create(0,0,1.,raw),0);
                 capy_destroy(raw);capy_launch_free(raw);
             }
         }

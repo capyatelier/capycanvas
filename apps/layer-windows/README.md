@@ -72,12 +72,20 @@ whole client area, including behind the custom title bar.
   start carries its own modifiers and the host queues a modifier change ahead of
   it. The window drops Alt-only `SC_KEYMENU`, because menu mode stalls
   presentation until the next click.
-- **Surface.** `SetSwapChain` runs on the UI thread while the render thread is
-  parked; otherwise the render thread never waits on the UI dispatcher. The swap
-  chain uses flip-discard buffers and maximum frame latency one. The render
-  thread waits on the frame-latency object before draining the newest input, and
-  presents immediately with tearing where supported, FIFO otherwise. It uses
-  scRGB `Rgba16Float` when the output offers it.
+- **Surface.** WinUI attaches an owned composition-surface handle on the UI
+  thread. The render owner configures and resizes its swap-chain buffers without
+  a UI handshake. Recovery parks the owner while WinUI attaches its replacement
+  handle. The swap chain uses three flip-discard buffers and maximum frame latency
+  two. The render thread waits on the frame-latency object before draining the
+  newest input. It presents immediately with tearing where supported, FIFO
+  otherwise, and uses scRGB `Rgba16Float` when the output offers it.
+  Buffer capacity grows in 128-pixel blocks up to the device limit and remains
+  with that surface. Live resize changes the DXGI source rectangle; the shared
+  presenter renders the current viewport inside the retained allocation.
+- **Resize publication.** Shared Rust publishes resolved layout and camera
+  changes against retained content revisions. Windows updates native geometry
+  without parsing panel content or refreshing unrelated controls. Its mailbox
+  retains the latest layout before any subsequent motion and camera updates.
 - **Workers.** File, clipboard, profile, settings and SQLite work runs on workers;
   the render thread polls completions without blocking. Replaced GPU resources
   retire off the render thread.

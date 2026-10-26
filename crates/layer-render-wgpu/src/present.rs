@@ -1403,6 +1403,7 @@ impl ViewportPresenter {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
+            pass.set_viewport(0., 0., extent[0] as f32, extent[1] as f32, 0., 1.);
             pass.set_scissor_rect(
                 repaint.min_x(),
                 repaint.min_y(),

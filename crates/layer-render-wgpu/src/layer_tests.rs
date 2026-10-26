@@ -144,6 +144,51 @@ fn retained_scene_viewport_preserves_pixels_outside_local_paint_and_preview_dama
     assert_eq!(page_bytes(&r, &shared_again), page_bytes(&r, &reference), "new shared image");
 }
 
+#[test]
+fn oversized_surface_preserves_viewport_pixels_and_overlays_at_every_rotation() {
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let document = paint_document([128; 2], "viewport artwork");
+    submit(&mut r, document.scene(), &[dab([0.8, 0.1, 0.2, 1.])], &[batch(placement::target(&document))], true);
+    let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+    let camera = ViewState { width_px: 173, height_px: 117,
+        document_to_surface: [0.65, 0., 0., 0.65, 23., 17.] };
+    let crop = layer_core::Affine([78., 0., 0., 86., 10., 4.]);
+    let cursor = [layer_render::CursorSegment { from: [14., 80.], to: [150., 100.],
+        distance: 0., marker: 2., scale: 1. }];
+    for turns in 0u32..4 {
+        let extent = if turns.is_multiple_of(2) { [camera.width_px, camera.height_px] }
+            else { [camera.height_px, camera.width_px] };
+        let capacity = [extent[0] + 95, extent[1] + 139];
+        let exact = crate::create_target(&r.device, extent, format, "exact viewport target").0;
+        let oversized = crate::create_target(&r.device, capacity, format, "oversized viewport target").0;
+        let mut presenters = std::array::from_fn::<_, 2, _>(|_| {
+            let mut presenter = crate::ViewportPresenter::for_surface(&r, format, crate::SdrSurfaceColor::Srgb).unwrap();
+            presenter.set_surface_rotation(turns);
+            presenter
+        });
+        let mut previous = None;
+        for overlays in 0..3 {
+            r.set_crop_overlay((overlays > 0).then(|| layer_render::CropOverlay {
+                to_crop: crop.inverse().unwrap(), dim: 0.5,
+            }));
+            for (presenter, target) in presenters.iter_mut().zip([&exact, &oversized]) {
+                presenter.set_cursor(r.device(), if overlays == 2 { &cursor } else { &[] }, 1.);
+                presenter.present(&r, &target.create_view(&Default::default()), camera, [0.2, 0.3, 0.4, 1.]).unwrap();
+            }
+            let expected = page_bytes(&r, &exact);
+            let actual = page_bytes(&r, &oversized);
+            let row = extent[0] as usize * 4;
+            let mismatch = expected.chunks_exact(row).zip(actual.chunks_exact(capacity[0] as usize * 4))
+                .enumerate().find_map(|(y, (a, b))| a.iter().zip(b).position(|(a, b)| a != b).map(|x| (x / 4, y)));
+            assert!(mismatch.is_none(), "rotation {turns}, overlay stage {overlays}: different pixel at {mismatch:?}");
+            if let Some(before) = previous {
+                assert!(expected != before, "rotation {turns}, overlay stage {overlays}: the overlay must be visible");
+            }
+            previous = Some(expected);
+        }
+    }
+}
+
 // Inspect persistent pigment/wetness independently of layer-level effects.
 // This is test-only readback, never a drawing or selection raster path.
 pub(super) fn page_bytes(r: &WgpuRasterizer, texture: &wgpu::Texture) -> Vec<u8> {
