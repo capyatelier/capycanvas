@@ -4,12 +4,15 @@ extension XCTestCase {
     @MainActor func checkVectorLayers(in app: XCUIApplication, theme: String) {
         app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"\#(theme)"},{"type":"set_color","rgba":[0.15,0.7,0.25,1]},{"type":"color","action":{"op":"swap"}},{"type":"set_color","rgba":[0.1,0.1,0.12,1]}]"#
         app.launch(); capturePaintEditor(in: app, theme: theme)
+        #if os(macOS)
+        createWhitePaperDrawing(in: app)
+        #endif
         let layers = app.buttons["panel-tab-layers"]
         XCTAssertTrue(layers.waitForExistence(timeout: 10))
         if !layers.isSelected { workspaceActivate(layers) }
         let rows = artworkRows(in: app)
         let vectors = rows.matching(NSPredicate(format: "label BEGINSWITH %@", "Vector "))
-        let activeVector = vectors.matching(NSPredicate(format: "value == %@", "Selected"))
+        let activeVector = vectors.containing(NSPredicate(format: "identifier == %@ AND selected == YES", "layer-Select layer without changing drawing target"))
         func expectCount(_ query: XCUIElementQuery, _ expected: Int) {
             expectation(for: NSPredicate(format: "count == %d", expected), evaluatedWith: query)
             waitForExpectations(timeout: 20)
@@ -40,7 +43,8 @@ extension XCTestCase {
         #if os(macOS)
         let viewport = workspaceViewport(in: app), paper = editorPaper(in: app)
         let lift = CGVector(dx: 6 / viewport.frame.width, dy: 6 / viewport.frame.height)
-        let drawingTarget = rows.matching(NSPredicate(format: "value == %@", "Drawing target"))
+        let selectedContent = NSPredicate(format: "identifier BEGINSWITH %@ AND identifier ENDSWITH %@ AND selected == YES", "layer-thumbnail-", "-content")
+        let drawingTarget = rows.containing(selectedContent)
         func coordinate(_ point: (CGFloat, CGFloat)) -> XCUICoordinate {
             viewport.coordinate(withNormalizedOffset: paper.offset(point.0, point.1))
         }
@@ -138,7 +142,7 @@ extension XCTestCase {
         let belowRow = rows[order[index + 1]]
         workspaceActivate(belowRow.buttons["Edit layer content"])
         expectCount(activeVector, 0)
-        expectation(for: NSPredicate(format: "value == %@", "Drawing target"), evaluatedWith: belowRow)
+        expectation(for: NSPredicate(format: "selected == YES"), evaluatedWith: belowRow.buttons["Edit layer content"])
         waitForExpectations(timeout: 10)
         workspaceActivate(rows[vectorRow].buttons["Edit layer content"])
         expectCount(activeVector, 1)
