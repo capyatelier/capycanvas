@@ -570,10 +570,9 @@ function Invoke-BlenderCellChecks([int]$Preset,[string]$CellId,[double]$DefaultC
         return
     }
     $camera=(Model).state.camera
-    Invoke-Id 'canvas-view-info';$zoom=@{item=$null}
-    Wait-Until {$zoom.item=Zoom-Item 'zoom-actual_pixels';$zoom.item -and !$zoom.item.Current.IsOffscreen -and $zoom.item.Current.IsEnabled} 'Native Actual Pixels view setup did not open'
-    $zoom.item.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
-    Wait-Until {$c=(Model).state.camera;$c.zoom -eq 1 -and $c.rotation -eq $camera.rotation -and ($c.flipped -join ',') -ceq ($camera.flipped -join ',') -and $c.translation[0] -eq [Math]::Round($c.translation[0]) -and $c.translation[1] -eq [Math]::Round($c.translation[1]) -and !(Zoom-Item 'zoom-actual_pixels')} 'Native Actual Pixels view did not acknowledge its pixel-aligned projection'
+    & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'View'
+    Invoke 'actual_pixels'
+    Wait-Until {$c=(Model).state.camera;$c.zoom -eq 1 -and $c.rotation -eq $camera.rotation -and ($c.flipped -join ',') -ceq ($camera.flipped -join ',') -and $c.translation[0] -eq [Math]::Round($c.translation[0]) -and $c.translation[1] -eq [Math]::Round($c.translation[1]) -and !(Find 'actual_pixels' -Visible)} 'Native Actual Pixels view did not acknowledge its pixel-aligned projection'
     Blender-Select 25;Blender-Value 'size' '64'
     $clear=Clear-CanvasPoint ('tool-bubble-'+$id) 128 0;$sample=@{x=$clear[0]+64;y=$clear[1]}
     [CapyRowPointer]::Hover($w.X+4,$w.Y+4);$blank=Wait-StablePixels {Screen-Pixels $sample.x $sample.y}
@@ -621,7 +620,7 @@ function Invoke-BlenderCellChecks([int]$Preset,[string]$CellId,[double]$DefaultC
     if((Wait-StablePixels {Screen-Pixels $sample.x $sample.y}) -cne $painted -or (Get-FileHash -LiteralPath $file).Hash -cne $savedFile){throw 'Native Blender session restart changed authored pixels or its saved file'}
     Capture ($Tag+'-session-restored') -WithModel -Composed
     foreach($history in @(@{action='Undo';pixels=$seed;checkpoint=$seedCheckpoint},@{action='Redo';pixels=$painted;checkpoint=$paintedCheckpoint},@{action='Undo';pixels=$seed;checkpoint=$seedCheckpoint},@{action='Undo';pixels=$blank;checkpoint=$blankCheckpoint})){
-        & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action $history.action
+        & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action $history.action
         Wait-Until {(Screen-Pixels $sample.x $sample.y) -ceq $history.pixels} 'Blender native history did not restore the exact composed pixels'
         if((Drawing-Checkpoint) -cne $history.checkpoint){throw 'Blender Undo or Redo did not restore the exact authored checkpoint and layer order'}
     }
