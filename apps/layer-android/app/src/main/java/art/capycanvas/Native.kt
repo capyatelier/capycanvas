@@ -48,6 +48,7 @@ internal object Native {
     @JvmStatic external fun frameCost(handle: Long, output: LongArray)
     @JvmStatic external fun snapshot(handle: Long): String?
     @JvmStatic external fun modelUpdate(handle: Long): String?
+    @JvmStatic external fun panelVectors(handle: Long): IntArray
     @JvmStatic external fun strokeRecordingData(handle: Long): ByteArray
     @JvmStatic external fun paperPreview(handle: Long, id: String): ByteArray?
     @JvmStatic external fun query(handle: Long, query: String): String
@@ -55,7 +56,7 @@ internal object Native {
     @JvmStatic external fun colorUi(request: String, language: String = ""): String
     @JvmStatic external fun workspace(handle: Long, request: String): String
     @JvmStatic external fun navigatorPlacements(handle: Long, placements: String)
-    @JvmStatic external fun glassRegions(handle: Long, glass: String)
+    @JvmStatic external fun glassRegions(handle: Long, glass: String, triangles: FloatArray)
     @JvmStatic external fun takeFilterPreviews(handle: Long): Array<Any>?
     @JvmStatic external fun takeScopes(handle: Long): Array<Any>?
     @JvmStatic external fun documentTabs(handle: Long, request: String): String

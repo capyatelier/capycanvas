@@ -1300,6 +1300,8 @@ pub struct Divider {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ResolvedLayout {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub vector_surfaces: Vec<crate::PanelVectorSurface>,
     pub viewport: [f32; 2],
     pub tab_bar_height: f32,
     /// Unobstructed document fitting area, not the GPU widget allocation.
@@ -3303,6 +3305,7 @@ impl DockLayout {
             height: finite_extent(height),
         };
         let mut result = ResolvedLayout {
+            vector_surfaces: Vec::new(),
             viewport: [width, height],
             tab_bar_height: TAB_BAR_HEIGHT,
             work_area: remaining,

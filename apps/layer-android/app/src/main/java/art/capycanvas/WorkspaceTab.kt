@@ -47,8 +47,9 @@ private fun JSONObject.tabStyle(group: Int): String? {
 }
 
 @Composable internal fun automaticTabNames(host: CanvasHost, group: Int, panels: List<JSONObject?>, available: Float): List<Boolean>? {
-    val layout = host.snapshot?.optJSONObject("state")?.optJSONObject("workspace")?.optJSONObject("layout")
-    val automatic = remember(layout, group) { layout?.tabStyle(group) == "automatic" }
+    val automatic by remember(host, group) { derivedStateOf(structuralEqualityPolicy()) {
+        host.snapshot?.optJSONObject("state")?.optJSONObject("workspace")?.optJSONObject("layout")?.tabStyle(group) == "automatic"
+    } }
     val measurer = rememberTextMeasurer()
     val style = LocalTextStyle.current.copy(fontWeight = FontWeight.Bold)
     val density = LocalDensity.current.density
@@ -77,29 +78,30 @@ internal class TabStrip {
     fun moved() { area?.invalidateDraw() }
 }
 
-internal fun Modifier.tabStrip(strip: TabStrip, color: Color, panel: Color) = this then StripElement(strip, color, panel)
+@Composable internal fun Modifier.tabStrip(strip: TabStrip, color: Color, panel: Color) = this then StripElement(strip, color, panel, LocalVectorPanel.current)
 
-private data class StripElement(val strip: TabStrip, val color: Color, val panel: Color) : ModifierNodeElement<StripNode>() {
-    override fun create() = StripNode(strip, color, panel)
-    override fun update(node: StripNode) = node.update(strip, color, panel)
+private data class StripElement(val strip: TabStrip, val color: Color, val panel: Color, val replace: Boolean) : ModifierNodeElement<StripNode>() {
+    override fun create() = StripNode(strip, color, panel, replace)
+    override fun update(node: StripNode) = node.update(strip, color, panel, replace)
     override fun InspectorInfo.inspectableProperties() { name = "tabStrip" }
 }
 
-internal class StripNode(private var strip: TabStrip, private var color: Color, private var panel: Color) : Modifier.Node(), DrawModifierNode {
+internal class StripNode(private var strip: TabStrip, private var color: Color, private var panel: Color, private var replace: Boolean) : Modifier.Node(), DrawModifierNode {
     private val face = Path(); private val hole = Path()
     private val paint = Paint()
     private var faceSize = IntSize.Zero
     override fun onAttach() { strip.area = this }
     override fun onDetach() { if (strip.area === this) strip.area = null }
-    fun update(strip: TabStrip, color: Color, panel: Color) {
+    fun update(strip: TabStrip, color: Color, panel: Color, replace: Boolean) {
         if (strip !== this.strip) { onDetach(); this.strip = strip; onAttach() }
         this.color = color
         this.panel = panel
+        this.replace = replace
         invalidateDraw()
     }
     override fun ContentDrawScope.draw() {
-        drawContext.canvas.saveLayer(Rect(Offset.Zero, size), paint)
-        drawRect(color)
+        if (!replace) drawContext.canvas.saveLayer(Rect(Offset.Zero, size), paint)
+        drawRect(color, blendMode = if (replace) BlendMode.Src else BlendMode.SrcOver)
         val tab = strip.tab
         if (tab != null) {
             val placed = tab.requireLayoutCoordinates()
@@ -110,7 +112,7 @@ internal class StripNode(private var strip: TabStrip, private var color: Color, 
             hole.reset(); hole.addPath(face, requireLayoutCoordinates().localPositionOf(placed, Offset.Zero) + Offset(tab.slide(), 0f))
             drawPath(hole, panel, blendMode = BlendMode.Src)
         }
-        drawContext.canvas.restore()
+        if (!replace) drawContext.canvas.restore()
         drawContent()
     }
 }

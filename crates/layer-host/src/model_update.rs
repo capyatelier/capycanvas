@@ -126,6 +126,69 @@ mod tests {
     use super::*;
     use serde_json::{Value, json};
 
+    type PanelGeometry=std::collections::BTreeMap<u32,(Vec<[i32;7]>,Vec<[i32;7]>)>;
+    fn panel_geometry(mut words: &[i32]) -> PanelGeometry {
+        let mut result=PanelGeometry::new();
+        while !words.is_empty() {
+            assert!(words.len()>=5,"truncated vector header");
+            let group=words[0] as u32;
+            let commands=usize::try_from(words[3]).unwrap();let triangles=usize::try_from(words[4]).unwrap();
+            let end=5+(commands+triangles)*7;assert!(words.len()>=end,"truncated vector geometry");
+            let decode=|slice: &[i32]|slice.chunks_exact(7).map(|chunk|chunk.try_into().unwrap()).collect();
+            assert!(result.insert(group,(decode(&words[5..5+commands*7]),decode(&words[5+commands*7..end]))).is_none());
+            words=&words[end..];
+        }
+        result
+    }
+
+    #[test]
+    fn density_only_resize_republishes_current_panel_vectors() {
+        use layer_ui::{CustomizationAction, Panel, Platform, UiAction};
+        let mut host=NativeHost::new(Platform::Android).unwrap();
+        host.resize(1800,1100,1.).unwrap();
+        let mut workspace=host.session.state().workspace.clone();
+        workspace.layout.bands[0].extent+=0.25;
+        host.dispatch(UiAction::RestoreWorkspace {workspace:Box::new(workspace)}).unwrap();
+        host.dispatch(UiAction::MeasureHeader {height:40.25,items:Vec::new()}).unwrap();
+        let group=host.session.state().workspace.layout.panel_group(Panel::Brushes).unwrap();
+        host.dispatch(UiAction::Customize {action:CustomizationAction::SetColumnCollapsed {group,collapsed:true}}).unwrap();
+        let column=host.session.state().workspace.layout.collapsed_column_for_group(group).unwrap();
+        for action in [CustomizationAction::SetColumnDrawers {column,drawers:false},
+            CustomizationAction::ToggleColumnDrawer {group,panel:Panel::Brushes}] {
+            host.dispatch(UiAction::Customize {action}).unwrap();
+        }
+        let mut retained=read(&mut host);
+        let initial=retained["layout"]["vector_surfaces"].clone();
+        assert!(!initial.as_array().unwrap().is_empty());
+        for header in initial.as_array().unwrap() {assert_eq!(header.as_object().unwrap().len(),2,"model stream must carry only group and column");}
+        let initial_geometry=panel_geometry(&host.panel_vector_data());
+        assert!(!initial_geometry.is_empty());
+        assert!(host.take_model_update_bytes().unwrap().is_none());
+        let logical=host.logical;
+        host.resize(3600,2200,2.).unwrap();
+        assert_eq!(host.logical,logical);
+        let packed=host.panel_vector_data();
+        let baseline=host.last_model_snapshot.as_ref().unwrap().text.clone();
+        assert_eq!(host.snapshot_bytes().unwrap(),host.snapshot_bytes().unwrap());
+        assert!(host.model_transport);
+        assert_eq!(host.panel_vector_data(),packed,"a query cannot replace the published geometry cache");
+        assert_eq!(host.last_model_snapshot.as_ref().unwrap().text,baseline);
+        let packet=host.take_model_update_bytes().unwrap().expect("density change must publish even when logical extent is unchanged");
+        apply(&mut retained,serde_json::from_slice(&packet).unwrap());
+        let mut fresh=host.session.layout(logical).with_panel_bridges();
+        layer_ui::PanelVectorCache::default().resolve(&mut fresh,2.);
+        let expected=Value::Array(fresh.vector_surfaces.iter().map(|surface|json!({"group":surface.group,"column":surface.column})).collect());
+        assert_eq!(initial,expected,"density keeps the same surface owners");
+        assert_eq!(retained["layout"]["vector_surfaces"],expected);
+        let expected_geometry: PanelGeometry=fresh.vector_surfaces.iter().map(|surface|
+            (surface.group,(surface.commands.clone(),surface.triangles.clone()))).collect();
+        let actual_geometry=panel_geometry(&host.panel_vector_data());
+        assert_ne!(initial_geometry,actual_geometry,"fractional native bounds must use the new physical grid");
+        assert_eq!(actual_geometry,expected_geometry,"bulk geometry must match a fresh rich UI projection independently of generation");
+        assert!(serde_json::to_value(&fresh.vector_surfaces[0]).unwrap()["commands"].is_array(),"canonical UI serialization remains rich");
+        assert!(host.take_model_update_bytes().unwrap().is_none());
+    }
+
     #[test]
     fn outside_bubble_contact_publishes_retained_model_without_painting() {
         use layer_ui::{BubbleAction, BubbleGrab, ChromeEvent, ChromeFacts, ContactPhase,

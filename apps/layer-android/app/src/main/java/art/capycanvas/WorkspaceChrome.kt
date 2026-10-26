@@ -71,23 +71,25 @@ internal fun DockInteraction.drawerContainerShape(bounds: JSONObject, radius: Fl
         bottomStart = if (square[3]) 0.dp else radius.dp)
 }
 
-@Composable internal fun CollapsedColumns(host: CanvasHost, snapshot: JSONObject, panels: Map<String, JSONObject>, dock: DockInteraction) {
-    val drawers = snapshot.getJSONObject("state").getJSONObject("customization").array("column_drawers").objects()
-    snapshot.getJSONObject("layout").array("collapsed").objects().forEach { column ->
+@Composable internal fun CollapsedColumns(host: CanvasHost, columns: JSONArray, drawerModels: JSONArray, vectorGroups: Set<Int>, panels: Map<String, JSONObject>, dock: DockInteraction) {
+    val drawers = remember(drawerModels) { drawerModels.objects() }
+    columns.objects().forEach { column ->
         val id = column.getInt("id")
         key(id) {
             val bounds = column.getJSONObject("bounds")
             val opened = column.objectOrNull("open")
+            val members = remember(column) { column.array("groups").objects().map { it.getInt("group") } }
+            val vector = members.any(vectorGroups::contains)
             val sources = if (opened == null) emptyList() else column.array("groups").objects().flatMap { group ->
                 group.array("icons").objects().filter { it.getString("panel") == group.getString("active") }.map {
                     DockInteraction.DrawerSource(opened.getString("direction"), it.getJSONObject("bounds").rect())
                 }
             }
-            val shape = dock.drawerContainerShape(bounds, sources = dock.drawerSources.values + sources)
+            val shape = if (vector) column.panelCornerShape() else dock.drawerContainerShape(bounds, sources = dock.drawerSources.values + sources)
             opened?.array("connections")?.values()?.forEach { pair ->
                 pair as JSONArray
                 key(pair.getString(0)) {
-                    DrawerBridge(pair.getJSONObject(1), dock, 159f, Modifier.testTag("column-connection-$id-${pair.getString(0)}"))
+                    if (!vector) DrawerBridge(pair.getJSONObject(1), dock, 159f, Modifier.testTag("column-connection-$id-${pair.getString(0)}"))
                 }
             }
             val content = column.getJSONObject("content")
@@ -105,7 +107,8 @@ internal fun DockInteraction.drawerContainerShape(bounds: JSONObject, radius: Fl
             }
             CompositionLocalProvider(LocalWorkspaceZ provides 160, LocalPalette provides LocalPalette.current.onGlass) {
                 Box(Modifier.placed(bounds, dock.density).zIndex(160f).testTag("collapsed-column-$id")
-                    .chromeRegion(dock).edgeSurface(dock).contextSource(dock, obj("kind" to "column", "column" to id)).panelSurface(6.dp, shape).glass(shape, LocalPalette.current.panelFill)) {
+                    .chromeRegion(dock).edgeSurface(dock).contextSource(dock, obj("kind" to "column", "column" to id))
+                    .panelSurface(if (vector) 0.dp else 6.dp, shape).glass(shape, if (vector) Color.Transparent else LocalPalette.current.panelFill)) {
                     Box(Modifier.placed(content.relativeTo(bounds), dock.density).clipToBounds().scrollable(scroll, Orientation.Vertical)) {
                         val groups = column.array("groups").objects()
                         groups.forEachIndexed { index, group ->
@@ -122,8 +125,8 @@ internal fun DockInteraction.drawerContainerShape(bounds: JSONObject, radius: Fl
                                 val selected = if (opened != null) group.getString("active") == panel else drawers.any { it.getJSONObject("anchor").let { anchor ->
                                     anchor.getInt("column") == id && anchor.getString("origin") == panel
                                 } }
-                                val source = dock.drawerSources[id.toString()]?.takeIf { it.anchor?.optString("origin") == panel }
-                                val shape = drawerButtonShape(if (opened != null) opened.getString("direction").takeIf { selected } else source?.direction)
+                                val source = if (vector) null else dock.drawerSources[id.toString()]?.takeIf { it.anchor?.optString("origin") == panel }
+                                val shape = if (vector) icon.panelCornerShape() else drawerButtonShape(if (opened != null) opened.getString("direction").takeIf { selected } else source?.direction)
                                 HoverTip(view.getString("title"), Modifier.placed(icon.getJSONObject("bounds").relativeTo(content), dock.density)
                                     .dragSource(dock, target, holdToDrag = true)) {
                                     Box(Modifier.fillMaxSize().testTag("column-icon-$panel").semantics { this.selected = selected }
@@ -381,8 +384,7 @@ internal fun DockInteraction.drawerContainerShape(bounds: JSONObject, radius: Fl
     }
 }
 
-@Composable private fun DrawerBridge(connection: JSONObject, dock: DockInteraction, z: Float, modifier: Modifier = Modifier) {
-    val color = LocalPalette.current.onGlass.panelFill
+@Composable private fun BridgeGlass(connection: JSONObject, dock: DockInteraction) {
     val host = LocalCanvasHost.current
     val key = remember { Any() }
     DisposableEffect(host, key) { onDispose { host.glassConnection(key, null, 0f) } }
@@ -393,6 +395,11 @@ internal fun DockInteraction.drawerContainerShape(bounds: JSONObject, radius: Fl
             host.glassConnection(key,JSONObject(value),dock.density,strength)
         }
     }
+}
+
+@Composable private fun DrawerBridge(connection: JSONObject, dock: DockInteraction, z: Float, modifier: Modifier = Modifier) {
+    val color = LocalPalette.current.onGlass.panelFill
+    BridgeGlass(connection, dock)
     Canvas(Modifier.placed(connection.getJSONObject("bounds"), dock.density).then(modifier).zIndex(z).chromeRegion(dock)) {
         val t = connection.array("transform")
         fun point(x: Float, y: Float) = Offset((t.getDouble(0).toFloat() * x + t.getDouble(2).toFloat() * y + t.getDouble(4).toFloat()) * dock.density,

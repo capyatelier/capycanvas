@@ -60,11 +60,8 @@ impl PanelSurface {
 pub(crate) struct PanelSurfaces {
     pub pipeline: Deferred<wgpu::RenderPipeline>,
     pub mask_pipeline: Deferred<wgpu::RenderPipeline>,
-    pub profile_pipeline: Deferred<wgpu::ComputePipeline>,
     layout: wgpu::BindGroupLayout,
-    profile_group: wgpu::BindGroup,
     profile: wgpu::Buffer,
-    profile_ready: Arc<AtomicBool>,
     surfaces: Vec<PanelSurface>,
     data: Vec<[f32; 4]>,
     uploaded: Arc<AtomicBool>,
@@ -120,26 +117,16 @@ impl PanelSurfaces {
         });
         let mask_pipeline=crate::present::surface_pipeline(device,"panel coverage",&mask_pipeline_layout,shader,
             ["panel_mask_vertex","panel_mask_fragment"],None,wgpu::TextureFormat::Rg16Float,None);
-        let profile_layout = crate::bindings::layout(device,"panel boundary profiles",&[storage(0,wgpu::ShaderStages::COMPUTE,false)]);
-        let profile = device.create_buffer(&wgpu::BufferDescriptor { label:Some("panel boundary profiles"),
-            size:512*257*8, usage:wgpu::BufferUsages::STORAGE, mapped_at_creation:false });
-        let profile_group = crate::bindings::group(device,"panel boundary profiles",&profile_layout,[profile.as_entire_binding()]);
-        let profile_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor { label:Some("panel boundary profiles"),
-            source:wgpu::ShaderSource::Wgsl(include_str!("panel_profile.wgsl").into()) });
-        let profile_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label:Some("panel boundary profiles"),bind_group_layouts:&[Some(&profile_layout)],immediate_size:0,
-        });
-        let compiler = device.clone();
-        let profile_pipeline = Deferred::pipeline(move |mode| mode.compute(&compiler,&wgpu::ComputePipelineDescriptor {
-            label:Some("panel boundary profiles"),layout:Some(&profile_pipeline_layout),module:&profile_shader,
-            entry_point:Some("panel_profile"),compilation_options:Default::default(),cache:None,
-        }));
+        let bytes=layer_render::panel_geometry::PANEL_PROFILE_BYTES;
+        let profile=device.create_buffer(&wgpu::BufferDescriptor {label:Some("panel boundary profiles"),
+            size:bytes.len() as u64,usage:wgpu::BufferUsages::STORAGE,mapped_at_creation:true});
+        profile.slice(..).get_mapped_range_mut().expect("new panel profile buffer is mapped").copy_from_slice(bytes);
+        profile.unmap();
         let empty = device.create_texture(&wgpu::TextureDescriptor { label:Some("opaque panel backdrop"),
             size:wgpu::Extent3d {width:1,height:1,depth_or_array_layers:1},mip_level_count:1,sample_count:1,
             dimension:wgpu::TextureDimension::D2,format:wgpu::TextureFormat::Rgba16Float,
             usage:wgpu::TextureUsages::TEXTURE_BINDING,view_formats:&[], });
-        Self { pipeline,mask_pipeline,profile_pipeline,layout,profile_group,profile,
-            profile_ready:Arc::new(AtomicBool::new(false)),surfaces:Vec::new(),data:Vec::new(),
+        Self { pipeline,mask_pipeline,layout,profile,surfaces:Vec::new(),data:Vec::new(),
             uploaded:Arc::new(AtomicBool::new(false)),
             buffer:device.create_buffer(&wgpu::BufferDescriptor {label:Some("panel surface parameters"),size:64,
                 usage:wgpu::BufferUsages::STORAGE|wgpu::BufferUsages::COPY_DST,mapped_at_creation:false}),
@@ -175,38 +162,15 @@ impl PanelSurfaces {
     }
 
     pub fn ready(&self) -> bool {
-        self.pipeline.ready() && self.mask_pipeline.ready() && self.profile_pipeline.ready() && self.profile_ready.load(Ordering::Acquire)
+        self.pipeline.ready() && self.mask_pipeline.ready()
     }
 
     pub fn needs_refresh(&self) -> bool {
         !self.surfaces.is_empty() && !self.mask_valid.load(Ordering::Acquire)
     }
 
-    pub fn warm_profile(&self,device: &wgpu::Device,queue: &wgpu::Queue) -> bool {
-        if !self.pipeline.ready() || !self.mask_pipeline.ready() || !self.profile_pipeline.ready() {return false;}
-        if !self.profile_ready.load(Ordering::Acquire) {
-            let mut encoder=device.create_command_encoder(&wgpu::CommandEncoderDescriptor {label:Some("prepare panel boundary profiles")});
-            self.encode_profile(&mut encoder);
-            queue.submit([encoder.finish()]);
-        }
-        true
-    }
-
-    fn encode_profile(&self,encoder: &mut wgpu::CommandEncoder) {
-        if !self.profile_ready.load(Ordering::Acquire) {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {label:Some("panel boundary profiles"),timestamp_writes:None});
-            pass.set_pipeline(&self.profile_pipeline);
-            pass.set_bind_group(0,&self.profile_group,&[]);
-            pass.dispatch_workgroups(64,33,1);
-            drop(pass);
-            self.profile_ready.store(true,Ordering::Release);
-            crate::submission::CacheWrite::shared(self.profile_ready.clone()).track(encoder);
-        }
-    }
-
     pub fn prepare(&mut self, device: &wgpu::Device, uploads: &mut Uploads, encoder: &mut wgpu::CommandEncoder,
         blur: Option<(&wgpu::Texture,layer_core::Affine)>, extent: [u32; 2], turns: u32) -> Result<(),GpuRasterError> {
-        self.encode_profile(encoder);
         if self.surfaces.is_empty() { self.masks.clear();return Ok(()); }
         if self.mask_view!=Some((extent,turns)) {
             self.mask_view=Some((extent,turns));self.mask_valid.store(false,Ordering::Release);

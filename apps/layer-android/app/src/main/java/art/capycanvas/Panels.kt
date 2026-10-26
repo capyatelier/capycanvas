@@ -139,9 +139,8 @@ internal val DividerLength = 18.dp
         AdjustmentPanel(host, state, modifier.controlSource(), splitFilters) { onContent(it); onHeight(it.height) }
         return
     }
-    BoxWithConstraints(modifier) {
-        val availableHeight = maxHeight
-        val controls = panel.array("controls").objects().filter { it.getBoolean("visible_in_panel") }
+    val controls = panel.array("controls").objects().filter { it.getBoolean("visible_in_panel") }
+    PanelBodyHeight(modifier,controls.any { it.getString("control") in listOf("color_wheel","navigator") }) { availableHeight ->
         var contentHeight by remember { mutableFloatStateOf(0f) }
         var naturalHeight by remember { mutableFloatStateOf(0f) }
         val deficits = remember { FloatArray(2) }
@@ -205,6 +204,11 @@ internal val DividerLength = 18.dp
         }
     }
 }
+@Composable private fun PanelBodyHeight(modifier: Modifier, bounded: Boolean, content: @Composable (Dp) -> Unit) {
+    if (bounded) BoxWithConstraints(modifier) { content(maxHeight) }
+    else Box(modifier) { content(Dp.Infinity) }
+}
+
 @Composable private fun SizePresets(host: CanvasHost, current: Float) {
     val colors = LocalPalette.current
     val style = toolbarUi(host.languageTag, obj("type" to "style", "style" to "small"))

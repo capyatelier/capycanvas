@@ -440,7 +440,6 @@ impl ViewportPresenter {
             .await.map_err(GpuRasterError::Effect)?;
         if let Some(panels) = &self.panels {
             crate::Deferred::prepare_all([&panels.pipeline,&panels.mask_pipeline]).await.map_err(GpuRasterError::Effect)?;
-            crate::Deferred::prepare_all([&panels.profile_pipeline]).await.map_err(GpuRasterError::Effect)?;
         }
         crate::Deferred::prepare_all(renderer.scene_pipelines.scale_pipelines())
             .await.map_err(GpuRasterError::Effect)?;
@@ -468,7 +467,6 @@ impl ViewportPresenter {
         if let Some(backdrop) = &self.backdrop { ready &= startup.compiler.require(backdrop.pipelines(), crate::startup::DOCUMENT); }
         if let Some(panels) = &self.panels {
             ready &= startup.compiler.require([&panels.pipeline,&panels.mask_pipeline],crate::startup::DOCUMENT);
-            ready &= startup.compiler.require([&panels.profile_pipeline],crate::startup::DOCUMENT);
         }
         startup.compiler.start();
         ready
@@ -834,7 +832,7 @@ impl ViewportPresenter {
         self.backdrop.get_or_insert_with(||crate::backdrop_blur::BackdropBlur::new(&renderer.device,self.format));
         self.panels.get_or_insert_with(||crate::panel_surface::PanelSurfaces::new(&renderer.device,&self.uniform,&self.shader,self.format));
         if !self.pipelines_ready(renderer) {return false;}
-        self.panels.as_ref().unwrap().warm_profile(renderer.device(),renderer.queue()) && self.chrome_ready()
+        self.chrome_ready()
     }
 
     pub fn chrome_ready(&self) -> bool {

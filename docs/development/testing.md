@@ -42,18 +42,28 @@ that chrome prepares before the first nonempty panel/glass parameters arrive.
 GTK's bridge journeys capture the GPU background and the composed
 native controls; rendering a GTK widget alone omits the GPU underlay.
 
+Renderer `panel_geometry::tests` compares native vector fill with the shared
+field through both corner-entry directions, zero-level plateaus, short panes,
+multiple anchors and gap partitions. The actual GPU differential tests compare
+those vectors and their backdrop triangles with the GTK field at multiple
+scales and both reflections. UI vector-cache tests check complete geometry
+keys, stable facing receiver membership through anchor entry/exit and the packed
+transport; host tests check density-only changes at an unchanged logical viewport
+and content-revision subscriptions through proof edits and geometry-only motion.
+Android's `columnBridgeGapFrameTiming` captures real compositor keyframes
+through both tile edges. It checks every physical row along the bridge face and
+the selected source color, including the split-gap case. Ordinary opening,
+resizing and tab-drop journeys still run with mouse, touch and pen in both
+themes. `AndroidWorkspacePresentationTest` checks that nested layout updates
+retain ancestor and sibling reader scopes while changed fields invalidate their
+readers, including removing and restoring JSON-null keys.
 Windowless retained-Navigator tests check placement and image changes, inherited
 proof samples, viewing options, empty placement lists and target replacement.
 Source-pixel assertions require the final Navigator image to follow a refined
 composition, then become idle without another input event.
-
 Host snapshot-query tests preserve pending UI and host-service publications in
 both transport modes, including the model baseline and prepared geometry across
 a density change. Complete snapshot reads do not acknowledge streamed updates.
-
-`AndroidWorkspacePresentationTest` checks that nested layout updates retain
-ancestor and sibling reader scopes while changed fields invalidate their
-readers, including removing and restoring JSON-null keys.
 
 GTK `squircle::tests` checks corner and shadow conversion beneath bridge masks
 and effect wrappers without a window. `render_thread::tests::chrome_` checks

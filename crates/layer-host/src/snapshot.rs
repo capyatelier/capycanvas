@@ -59,11 +59,20 @@ impl<'a> SnapshotFields<'a> {
 }
 
 impl NativeHost {
+    pub fn panel_vector_data(&self) -> Vec<i32> {self.panel_vectors.borrow().packed()}
+
     pub fn snapshot_bytes(&self) -> Result<Vec<u8>,serde_json::Error> {
         let mut bytes=Vec::new();
         let mut serializer=serde_json::Serializer::with_formatter(&mut bytes,SnapshotFormatter);
         self.serialize_snapshot(&mut serializer,&self.session.workspace_update(),false)?;
         Ok(bytes)
+    }
+
+    fn vector_layout(&self,layout: layer_ui::ResolvedLayout) -> layer_ui::ResolvedLayout {
+        let mut layout=layout.with_panel_bridges();
+        self.panel_vectors.borrow_mut().resolve(&mut layout,self.pixel_scale);
+        for surface in &mut layout.vector_surfaces {surface.commands.clear();surface.triangles.clear();}
+        layout
     }
 
     /// Shared incremental publication: a full snapshot establishes model_revision;
@@ -119,6 +128,7 @@ impl NativeHost {
             localization_generation: self.localization_generation(),
             command_search_revision: self.session.command_search_revision(),
             logical: self.logical,
+            pixel_scale: self.pixel_scale,
             chrome_hidden: self.chrome_hidden,
             keep_zen_button: self.keep_zen_button,
             navigation_cursor: self.session.navigation_mode(),
@@ -200,10 +210,11 @@ impl NativeHost {
                 } == key
             })
         {
-            let snapshot = self
-                .session
-                .workspace_layout_update(self.logical)
-                .serialize(serializer)?;
+            let mut packet=self.session.workspace_layout_update(self.logical);
+            if self.model_transport {
+                packet.layout=self.vector_layout(packet.layout);
+            }
+            let snapshot = packet.serialize(serializer)?;
             self.last_snapshot = Some(key);
             self.last_workspace_model_revision = Some(update.model_revision);
             self.last_camera_revision = Some(camera.revision);
@@ -256,7 +267,10 @@ impl NativeHost {
         update: &layer_ui::WorkspaceUpdate,
         model_transport: bool,
     ) -> Result<S::Ok, S::Error> {
-        let layout = self.session.layout(self.logical);
+        let mut layout = self.session.layout(self.logical);
+        if model_transport {
+            layout=self.vector_layout(layout);
+        }
         let state = self.session.state();
         let bubbles = self.session.bubble_presentations();
         let mut panel_ids: Vec<_> = layout

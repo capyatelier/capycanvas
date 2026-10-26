@@ -41,9 +41,23 @@ a real Japanese, Chinese or Korean input method.
 JNI result handling lives in `native/src/android.rs`: `or_throw` reports
 `IllegalStateException` and keeps the return sentinel; `argb_array` packs RGBA
 pixels for Kotlin.
-Proof copy observes the shared workspace content revision, so geometry-only
-publications retain subscribed controls without restarting their queries.
-
+Column bridges use shared Rust vector projection on the render worker.
+`modelUpdate` publishes receiver IDs, and the immediately following `panelVectors`
+call copies their packed commands and blur triangles through one JNI integer
+array. Geometry generations identify complete projection keys; removing a
+receiver removes it from the current packet even when its geometry remains cached.
+`PanelVectorCache` prepares immutable native paths and their merged column
+surface before the matching UI snapshot is applied. Native drawing owns fill,
+clipping and shadow rendering; the UI thread does not trace the shape field.
+Nested `ObservedModel` objects retain layout identity and invalidate readers of
+changed fields. Panel placement, dividers and panel content have separate
+composition scopes. Derived column membership and bounds retain their identity
+while bridge paths change; each column surface and receiving group observes its
+own geometry. Group keys enclose membership conditions, so configuring
+another column retains remembered panel content. Proof copy observes the shared
+content revision, so geometry-only publication does not restart proof queries. The existing GPU
+backdrop pass receives triangle coordinates, edge flags and opacity in a packed
+JNI float array, avoiding per-coordinate JSON formatting and parsing.
 JNI `Long` handles are typed generational tokens in `layer_host::handles`.
 Lookup validates the token before accessing an App or task. Apps remain in the
 creating render thread's local table; another thread cannot borrow or destroy
@@ -1089,6 +1103,12 @@ Where to look:
   24 MP photo.
 - Panel rendering: `panelSurface` in [`PanelShadow.kt`](../../apps/layer-android/app/src/main/java/art/capycanvas/PanelShadow.kt);
   `AndroidPanelShadowTest` compares panels with and without shadows.
+  Connected columns use `PanelVectors.kt` to prepare their merged native paths
+  on the canvas owner, retaining authored allocation bounds. Their
+  `panelConnectionShadow` uses a small native GPU blur mask on Android 12 and
+  later, with full-resolution fill and control clips. Older versions retain the
+  existing native shadow path. No shadow pixels are rasterized or copied by the
+  input or UI thread.
 
 If the canvas stops updating while menus still respond, keep the app running.
 Record a Perfetto trace with the SurfaceFlinger frame timeline during the

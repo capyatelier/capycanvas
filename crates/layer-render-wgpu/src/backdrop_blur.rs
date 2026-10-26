@@ -14,6 +14,11 @@ pub struct BackdropRegion {
 }
 
 impl BackdropRegion {
+    pub fn triangle(points: [f32;6], exterior: u32) -> Self {
+        let x=points[0].min(points[2]).min(points[4]);let y=points[1].min(points[3]).min(points[5]);
+        Self {bounds:[x,y,points[0].max(points[2]).max(points[4])-x,points[1].max(points[3]).max(points[5])-y],
+            radii:[points[0],points[1],points[2],points[3]],shape:[-2.-exterior.min(7) as f32/8.,1.,points[4],points[5]]}
+    }
     pub const CIRCULAR: [f32; 4] = [2., 1., 0., 0.];
     pub const SQUIRCLE: [f32; 4] = [4., 1., 0., 0.];
 
@@ -54,6 +59,11 @@ impl BackdropRegion {
     }
 
     fn rotated(self, turns: u32, [width, height]: [f32; 2]) -> Self {
+        if self.shape[0]<= -2. {
+            let rotate=|x,y|match turns {1=>[height-y,x],2=>[width-x,height-y],3=>[y,width-x],_=>[x,y]};
+            let a=rotate(self.radii[0],self.radii[1]);let b=rotate(self.radii[2],self.radii[3]);let c=rotate(self.shape[2],self.shape[3]);
+            return Self::triangle([a[0],a[1],b[0],b[1],c[0],c[1]],((-self.shape[0]-2.)*8.).round() as u32).with_strength(self.shape[1]);
+        }
         let [x, y, w, h] = self.bounds;
         let bounds = match turns {
             1 => [height - y - h, x, h, w],

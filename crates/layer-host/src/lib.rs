@@ -36,6 +36,7 @@ struct SnapshotKey {
     localization_generation: u64,
     command_search_revision: u64,
     logical: [f32; 2],
+    pixel_scale: f32,
     chrome_hidden: bool,
     keep_zen_button: bool,
     navigation_cursor: Option<layer_ui::NavigationMode>,
@@ -131,6 +132,8 @@ pub struct NativeHost {
     last_snapshot: Option<SnapshotKey>,
     last_model_snapshot: Option<model_update::ModelBaseline>,
     model_transport: bool,
+    panel_vectors: std::cell::RefCell<layer_ui::PanelVectorCache>,
+    pixel_scale: f32,
     last_workspace_model_revision: Option<u64>,
     last_workspace_content_revision: Option<u64>,
     last_camera_revision: Option<u64>,
@@ -275,6 +278,8 @@ impl NativeHost {
             last_snapshot: None,
             last_model_snapshot: None,
             model_transport: false,
+            panel_vectors: Default::default(),
+            pixel_scale: 1.,
             last_workspace_model_revision: None,
             last_workspace_content_revision: None,
             last_camera_revision: None,
@@ -322,6 +327,7 @@ impl NativeHost {
             self.header_drag = None;
         }
         self.logical = logical;
+        self.pixel_scale = density;
         self.session.set_viewport(self.logical, [width, height])?;
         self.dirty = true;
         Ok(())

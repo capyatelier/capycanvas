@@ -5,6 +5,9 @@ use layer_core::authored::{Artwork, SceneIndex, SceneView};
 use layer_render::{CanvasRenderer, FramePacket, ViewState};
 use std::sync::Arc;
 
+#[path = "panel_geometry_differential.rs"]
+mod vector_geometry;
+
 const SIZE: [u32; 2] = [256, 224];
 const PLANE: f32 = 96.;
 const WHITE: [f32; 4] = [1.; 4];
@@ -617,7 +620,6 @@ fn gpu_panel_shape_cache_keeps_reprojection_and_recovers_discarded_geometry() {
     let shader=crate::present::viewport_shader(&renderer.device,wgpu::TextureFormat::Rgba8Unorm,crate::SdrSurfaceColor::Srgb,false);
     let mut panels=super::PanelSurfaces::new(&renderer.device,&uniform,&shader,wgpu::TextureFormat::Rgba8Unorm);
     pollster::block_on(crate::Deferred::prepare_all([&panels.pipeline,&panels.mask_pipeline])).unwrap();
-    pollster::block_on(crate::Deferred::prepare_all([&panels.profile_pipeline])).unwrap();
     let blur=crate::create_target(device,[64,56],wgpu::TextureFormat::Rgba16Float,"panel cached blur").0;
     let frame=|panels:&mut super::PanelSurfaces,affine| {
         let mut encoder=device.create_command_encoder(&Default::default());

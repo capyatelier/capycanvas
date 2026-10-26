@@ -136,7 +136,21 @@ fn region_fragment(in: Region) -> @location(0) vec4<f32> {
     let b = in.bounds;
     let n = in.shape.x;
     var coverage: f32;
-    if n == -1. {
+    if n <= -2. {
+        let points=array<vec2<f32>,3>(in.radii.xy,in.radii.zw,in.shape.zw);
+        let flags=u32(round((-n-2.)*8.));
+        coverage=1.;
+        for (var i=0u;i<3u;i++) {
+            let a=points[i];let edge=points[(i+1u)%3u]-a;let v=p-a;
+            let distance=(edge.x*v.y-edge.y*v.x)/max(length(edge),0.0001);
+            if (flags&(1u<<i))==0u {if distance< -0.0001 {coverage=0.;}}
+            else {
+                let along=clamp(dot(v,edge)/max(dot(edge,edge),0.00000001),0.,1.);
+                let boundary=length(v-along*edge)*select(-1.,1.,distance>=0.);
+                coverage=min(coverage,clamp(.5+boundary,0.,1.));
+            }
+        }
+    } else if n == -1. {
         coverage = color_bubble_coverage(p, b, in.radii, in.shape.zw);
     } else if n == 0. {
         coverage = arc_coverage(p, in.radii, in.shape);

@@ -696,6 +696,201 @@ fn panel_bridge_receivers_keep_identity_and_only_own_the_facing_groups() {
     }
 }
 
+struct PanelVectorPayload {
+    group: u32,
+    generation: u64,
+    commands: Vec<[i32;7]>,
+    triangles: Vec<[i32;7]>,
+}
+
+fn panel_vector_payload(mut words: &[i32]) -> Vec<PanelVectorPayload> {
+    let mut result=Vec::new();let mut groups=std::collections::BTreeSet::new();
+    while !words.is_empty() {
+        assert!(words.len()>=5,"truncated vector header");
+        let group=words[0] as u32;assert!(groups.insert(group),"duplicate vector owner");
+        let generation=words[1] as u32 as u64|((words[2] as u32 as u64)<<32);
+        let commands=usize::try_from(words[3]).unwrap();let triangles=usize::try_from(words[4]).unwrap();
+        let end=5+(commands+triangles)*7;assert!(words.len()>=end,"truncated vector geometry");
+        let decode=|slice: &[i32]|slice.chunks_exact(7).map(|chunk|chunk.try_into().unwrap()).collect();
+        result.push(PanelVectorPayload {group,generation,commands:decode(&words[5..5+commands*7]),triangles:decode(&words[5+commands*7..end])});
+        words=&words[end..];
+    }
+    result
+}
+
+fn panel_vector_generations(cache: &crate::PanelVectorCache) -> std::collections::BTreeMap<u32,u64> {
+    panel_vector_payload(&cache.packed()).into_iter().map(|entry|(entry.group,entry.generation)).collect()
+}
+
+fn panel_vector_cache_resolve(cache: &mut crate::PanelVectorCache, layout: ResolvedLayout, scale: f32) -> ResolvedLayout {
+    let mut retained=layout.clone();let mut fresh=layout;
+    cache.resolve(&mut retained,scale);
+    crate::PanelVectorCache::default().resolve(&mut fresh,scale);
+    assert_eq!(retained.vector_surfaces,fresh.vector_surfaces,"retained cache differs from current geometry");
+    let payload=panel_vector_payload(&cache.packed());
+    assert_eq!(payload.len(),retained.vector_surfaces.len());
+    for surface in &retained.vector_surfaces {
+        let column=retained.collapsed.iter().find(|column|column.id==surface.column).unwrap();
+        let open=column.open.as_ref().expect("vector surface outlived its open column");
+        let group=retained.groups.iter().find(|group|group.id==surface.group).expect("vector surface outlived its receiving group");
+        let distance=if open.direction==Edge::Right {group.bounds.x-open.bounds.x}
+            else {group.bounds.x+group.bounds.width-open.bounds.x-open.bounds.width};
+        assert!(distance.abs()<0.5,"vector surface outlived its facing attachment");
+        assert!(column.groups.iter().any(|member|member.group==surface.group));
+        assert!(!surface.commands.is_empty());
+        let entry=payload.iter().find(|entry|entry.group==surface.group).unwrap();
+        assert_eq!(entry.commands,surface.commands);assert_eq!(entry.triangles,surface.triangles);
+    }
+    retained
+}
+
+#[test]
+fn panel_vector_cache_relocates_identical_groups_between_both_sides() {
+    let mut cache=crate::PanelVectorCache::default();let mut previous: Option<ResolvedLayout>=None;
+    let mut previous_generations=std::collections::BTreeMap::new();
+    let mut side_generations=std::collections::BTreeMap::new();
+    for edge in [Edge::Left,Edge::Right,Edge::Left,Edge::Right] {
+        let mut layout=column_bridge_fixture(edge).with_panel_bridges();
+        let open=layout.collapsed[0].open.as_ref().unwrap();
+        let right=open.direction==Edge::Right;
+        let plane=if right {open.bounds.x} else {open.bounds.x+open.bounds.width};
+        for group in &mut layout.groups {group.bounds.width=240.;group.bounds.x=if right {plane} else {plane-240.};}
+        let current=panel_vector_cache_resolve(&mut cache,layout,0.);
+        let generations=panel_vector_generations(&cache);
+        if let Some(prior)=side_generations.insert(right,generations.clone()) {
+            assert_eq!(generations,prior,"returning to the same side must reuse its geometry generation");
+        }
+        assert_eq!(panel_vector_cache_resolve(&mut cache,current.clone(),0.).vector_surfaces,current.vector_surfaces);
+        assert_eq!(panel_vector_generations(&cache),generations,"identical geometry must retain its packed generation");
+        assert!(!current.vector_surfaces.is_empty());
+        if let Some(previous)=previous {
+            for surface in &current.vector_surfaces {
+                let old=previous.vector_surfaces.iter().find(|old|old.group==surface.group).unwrap();
+                assert_ne!(generations[&surface.group],previous_generations[&surface.group],"mirror relocation selects another geometry generation");
+                assert_eq!(surface.commands.len(),old.commands.len());
+                for (a,b) in surface.commands.iter().zip(&old.commands) {
+                    assert_eq!(a[0],b[0]);
+                    let points=match a[0] {0|1=>1,2=>3,_=>0};
+                    for i in (1..=points*2).step_by(2) {
+                        assert_eq!(a[i]+b[i],240*1024,"same group must mirror around its current receiving pane");
+                        assert_eq!(a[i+1],b[i+1]);
+                    }
+                }
+            }
+        }
+        previous=Some(current);
+        previous_generations=generations;
+    }
+}
+
+#[test]
+fn panel_vector_cache_refreshes_source_radii_and_bounds_without_changing_paths() {
+    for edge in [Edge::Left,Edge::Right] {
+        let mut cache=crate::PanelVectorCache::default();
+        let mut layout=column_bridge_fixture(edge).with_panel_bridges();
+        layout.collapsed[0].content.height=TILE_SIZE*0.5;
+        let squared=panel_vector_cache_resolve(&mut cache,layout.clone(),0.);
+        let squared_generations=panel_vector_generations(&cache);
+        let mut rounded=layout;
+        rounded.collapsed[0].corner_radii=[SURFACE_RADIUS;4];
+        let rounded=panel_vector_cache_resolve(&mut cache,rounded,0.);
+        let rounded_generations=panel_vector_generations(&cache);
+        for (group,generation) in &rounded_generations {assert_ne!(*generation,squared_generations[group],"source radius change selects another geometry generation");}
+        assert_eq!(squared.vector_surfaces.len(),rounded.vector_surfaces.len());
+        assert!(!squared.vector_surfaces.is_empty());
+        assert!(squared.vector_surfaces.iter().zip(&rounded.vector_surfaces).any(|(a,b)|a.triangles!=b.triangles),"source corner coverage must refresh exterior edge flags");
+        for (a,b) in squared.vector_surfaces.iter().zip(&rounded.vector_surfaces) {assert_eq!(a.commands,b.commands);}
+        let mut taller=rounded.clone();
+        taller.collapsed[0].bounds.y-=24.;taller.collapsed[0].bounds.height+=24.;
+        let taller=panel_vector_cache_resolve(&mut cache,taller,0.);
+        for (group,generation) in panel_vector_generations(&cache) {assert_ne!(generation,rounded_generations[&group],"source bounds change selects another geometry generation");}
+        assert!(rounded.vector_surfaces.iter().zip(&taller.vector_surfaces).any(|(a,b)|a.triangles!=b.triangles),"moving source background past its corner must refresh coverage");
+        for (a,b) in rounded.vector_surfaces.iter().zip(&taller.vector_surfaces) {assert_eq!(a.commands,b.commands);}
+        assert_eq!(panel_vector_cache_resolve(&mut cache,squared.clone(),0.).vector_surfaces,squared.vector_surfaces);
+    }
+}
+
+#[test]
+fn panel_vector_cache_projects_fractional_physical_grids_from_current_layout() {
+    for edge in [Edge::Left,Edge::Right] {
+        let mut layout=column_bridge_fixture(edge).with_panel_bridges();
+        let right=layout.collapsed[0].open.as_ref().unwrap().direction==Edge::Right;
+        let shift=|bounds: &mut Bounds| {bounds.x+=0.23;bounds.y+=0.37;};
+        for group in &mut layout.groups {
+            shift(&mut group.bounds);group.bounds.width+=0.27;group.bounds.height+=0.31;
+            if !right {group.bounds.x-=0.27;}
+        }
+        for column in &mut layout.collapsed {
+            shift(&mut column.bounds);shift(&mut column.content);
+            shift(&mut column.open.as_mut().unwrap().bounds);
+            for icon in column.groups.iter_mut().flat_map(|group|&mut group.icons) {shift(&mut icon.bounds);}
+        }
+        let mut cache=crate::PanelVectorCache::default();let mut previous=None;
+        for scale in [1.5,2.,1.5] {
+            let current=panel_vector_cache_resolve(&mut cache,layout.clone(),scale);
+            assert!(!current.vector_surfaces.is_empty());
+            assert_ne!(current.groups[0].bounds.y,layout.groups[0].bounds.y);
+            let on_grid=|bounds: Bounds| {for value in [bounds.x,bounds.y,bounds.x+bounds.width,bounds.y+bounds.height] {
+                assert!((value*scale-(value*scale).round()).abs()<0.001,"edge is off physical grid at scale {scale}: {bounds:?}");
+            }};
+            for group in &current.groups {on_grid(group.bounds);}
+            for column in &current.collapsed {
+                on_grid(column.bounds);on_grid(column.content);on_grid(column.open.as_ref().unwrap().bounds);
+                for icon in column.groups.iter().flat_map(|group|&group.icons) {on_grid(icon.bounds);}
+            }
+            if let Some(previous)=previous {assert_ne!(current.vector_surfaces,previous,"different snapped pane sizes must change the projection");}
+            previous=Some(current.vector_surfaces);
+        }
+    }
+}
+
+#[test]
+fn panel_vector_cache_retires_closed_removed_and_unattached_receivers() {
+    let mut s=three_member_target();let mut cache=crate::PanelVectorCache::default();
+    click_column(&mut s,Panel::Brushes);
+    let opened=panel_vector_cache_resolve(&mut cache,s.layout(STACK_VIEW).with_panel_bridges(),0.);
+    assert!(!opened.vector_surfaces.is_empty());
+    click_column(&mut s,Panel::Brushes);
+    let mut closed=s.layout(STACK_VIEW).with_panel_bridges();
+    closed.vector_surfaces=opened.vector_surfaces.clone();
+    assert!(panel_vector_cache_resolve(&mut cache,closed,0.).vector_surfaces.is_empty());
+    assert!(cache.packed().is_empty(),"closed columns must retire the bulk geometry too");
+    click_column(&mut s,Panel::Brushes);
+    let reopened=panel_vector_cache_resolve(&mut cache,s.layout(STACK_VIEW).with_panel_bridges(),0.);
+    assert_eq!(reopened.vector_surfaces,opened.vector_surfaces);
+    let ids: Vec<_>=reopened.vector_surfaces.iter().map(|surface|surface.group).collect();
+    let mut removed=reopened.clone();removed.groups.retain(|group|!ids.contains(&group.id));
+    assert!(panel_vector_cache_resolve(&mut cache,removed,0.).vector_surfaces.is_empty());
+    assert_eq!(panel_vector_cache_resolve(&mut cache,reopened.clone(),0.).vector_surfaces,reopened.vector_surfaces);
+    let mut unattached=reopened.clone();
+    for group in &mut unattached.groups {if ids.contains(&group.id) {group.bounds.x+=100.;}}
+    assert!(panel_vector_cache_resolve(&mut cache,unattached,0.).vector_surfaces.is_empty());
+    assert_eq!(panel_vector_cache_resolve(&mut cache,reopened.clone(),0.).vector_surfaces,reopened.vector_surfaces);
+}
+
+#[test]
+fn panel_vector_cache_revisits_geometry_without_publishing_history() {
+    let mut cache=crate::PanelVectorCache::default();
+    let original=column_bridge_fixture(Edge::Left).with_panel_bridges();
+    let a=panel_vector_cache_resolve(&mut cache,original.clone(),0.);
+    let a_generations=panel_vector_generations(&cache);
+    assert!(!a_generations.is_empty());
+    let mut changed=original.clone();
+    let id=a.vector_surfaces[0].group;
+    changed.groups.iter_mut().find(|group|group.id==id).unwrap().bounds.height-=12.;
+    let b=panel_vector_cache_resolve(&mut cache,changed,0.);
+    let b_generations=panel_vector_generations(&cache);
+    assert_ne!(a.vector_surfaces,b.vector_surfaces,"the intermediate pose must have different geometry");
+    assert_ne!(a_generations[&id],b_generations[&id]);
+    assert_eq!(panel_vector_cache_resolve(&mut cache,original.clone(),0.).vector_surfaces,a.vector_surfaces);
+    assert_eq!(panel_vector_generations(&cache),a_generations,"A to B to A must reuse A's identity without publishing B");
+    let mut closed=original.clone();closed.collapsed[0].open=None;
+    assert!(panel_vector_cache_resolve(&mut cache,closed,0.).vector_surfaces.is_empty());
+    assert!(cache.packed().is_empty(),"prepared history must not appear in a closed layout's payload");
+    assert_eq!(panel_vector_cache_resolve(&mut cache,original,0.).vector_surfaces,a.vector_surfaces);
+    assert_eq!(panel_vector_generations(&cache),a_generations,"reopening an identical pose may reuse its prepared identity");
+}
+
 #[test]
 fn measured_panel_bridges_use_only_current_allocations_and_preserve_receiver_identity() {
     for edge in [Edge::Left,Edge::Right] {
@@ -1778,5 +1973,36 @@ fn a_column_of_toolbars_shrinks_to_one_tile_without_collapsing() {
     assert!(!s.state.workspace.layout.is_collapsed(band.root.id()));
     for g in s.layout(STACK_VIEW).groups.iter().filter(|g| g.panels.iter().all(|p| p.kind() == PanelKind::Tiles) && g.bounds.x < 20.) {
         assert_eq!(g.bounds.width, TILE_SIZE, "{:?} keeps one lane", g.panels);
+    }
+}
+
+#[test]
+fn panel_vector_cache_keeps_original_bodies_through_anchor_eligibility_keyframes() {
+    for edge in [Edge::Left,Edge::Right] {
+        let mut cache=crate::PanelVectorCache::default();
+        let original=column_bridge_fixture(edge).with_panel_bridges();
+        let mut ids=None;
+        let mut connected=false;let mut body_only=false;
+        for y in [100.,246.,253.,259.,260.,261.,266.,270.,300.,270.,260.,253.,100.] {
+            let mut layout=original.clone();
+            layout.collapsed[0].groups[0].icons[0].bounds.y=y;
+            let current=panel_vector_cache_resolve(&mut cache,layout,0.);
+            let current_ids=current.vector_surfaces.iter().map(|s|s.group).collect::<Vec<_>>();
+            if let Some(ids)=&ids {assert_eq!(&current_ids,ids);} else {ids=Some(current_ids);}
+            let receiver=current.vector_surfaces.iter().find(|s|s.group==5).unwrap();
+            let bodies=receiver.commands.iter().filter(|c|c[0]==0).count();
+            if bodies==1 {
+                body_only=true;assert!(receiver.triangles.is_empty(),"original body must not supply backdrop filler at anchor y={y}");
+            } else {connected=true;}
+        }
+        assert!(connected && body_only,"keyframes must cross the attachment eligibility boundary");
+        let mut remote=original.clone();
+        remote.collapsed[0].groups[0].icons[0].bounds.y=-10000.;
+        let remote=panel_vector_cache_resolve(&mut cache,remote,0.);
+        assert_eq!(remote.vector_surfaces.iter().map(|s|s.group).collect::<Vec<_>>(),ids.unwrap());
+        for receiver in &remote.vector_surfaces {
+            assert_eq!(receiver.commands.iter().filter(|c|c[0]==0).count(),1);
+            assert!(receiver.triangles.is_empty(),"remote sources must leave only the original rounded body");
+        }
     }
 }

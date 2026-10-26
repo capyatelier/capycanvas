@@ -74,8 +74,35 @@ class AndroidInteractionTest {
     private fun workspace() = state().getJSONObject("workspace").toString()
     private fun group(panel: String) = snapshot().getJSONObject("layout").array("groups").objects()
         .first { panel in it.array("panels").values() }
-    private fun waitFor(label: String, timeout: Long = 10_000, condition: () -> Boolean) =
-        host.awaitMain(label, timeout, { "workspace manager: ${host.workspaceManager}" }, condition)
+    private fun waitFor(label: String, timeout: Long = 10_000, condition: () -> Boolean) {
+        try { host.awaitMain(label, timeout, { "workspace manager: ${host.workspaceManager}" }, condition) }
+        catch (error: AssertionError) {
+            if (error.message?.startsWith("Timed out:") == true) runCatching { captureWorkspace(label) }
+                .exceptionOrNull()?.let(error::addSuppressed)
+            throw error
+        }
+    }
+    private fun captureWorkspace(label: String, directory: String = "interaction-failures"): File {
+        val name = "validation/$directory/${label.replace(Regex("[^a-zA-Z0-9_-]+"), "-").take(80)}-${SystemClock.uptimeMillis()}"
+        lateinit var report: JSONObject
+        instrumentation.runOnMainSync {
+            report = obj("label" to label, "snapshot" to host.snapshot?.let { JSONObject(it.toString()) },
+                "workspace_manager" to host.workspaceManager, "host_failure" to host.failure, "action_error" to host.actionError,
+                "density" to density, "tool" to tool, "contact" to contact, "system_input" to systemInput,
+                "point" to JSONArray(listOf(point.x, point.y)), "window_focus" to owner.view.hasWindowFocus(),
+                "workspace_geometry" to host.workspaceGeometry?.let { g ->
+                    obj("revision" to g.revision, "model_revision" to g.modelRevision, "group" to g.group,
+                        "bounds" to g.bounds?.let { b -> obj("x" to b.left, "y" to b.top, "width" to b.width, "height" to b.height) },
+                        "tab" to g.tab?.let { t -> obj("group" to t.group, "panel" to t.panel, "source_offset" to t.sourceOffset, "offsets" to JSONObject(t.offsets.mapKeys { it.key.toString() })) },
+                        "hint" to g.hint)
+                })
+        }
+        File(instrumentation.targetContext.getExternalFilesDir(null), "$name.json").apply {
+            parentFile!!.mkdirs(); writeText(report.toString(2))
+        }
+        screenshot("$name.png")
+        return File(instrumentation.targetContext.getExternalFilesDir(null), "$name.png")
+    }
     // A held contact at a scroll edge can keep native overscroll animation
     // alive. Drain main-thread work without waiting forever for global idleness.
     private fun settle() { SystemClock.sleep(180); instrumentation.runOnMainSync { assertNull(host.failure); assertNull(host.actionError) } }
@@ -1466,10 +1493,64 @@ class AndroidInteractionTest {
     }
     private fun openTile(panel: String) {
         tap(bounds("column-icon-$panel").center)
-        waitFor("open column for $panel") { columnFor(panel).objectOrNull("open") != null }; settle()
+        waitFor("open column for $panel") {
+            columnFor(panel).objectOrNull("open") != null && group(panel).getString("active") == panel
+        }; settle()
     }
     @Test fun stackedColumnsOpenAndResizeOrdinaryGroups() {
         stackFixture()
+        fun assertConnection(panel: String, image: File) {
+            val layout = snapshot().getJSONObject("layout")
+            if (layout.array("vector_surfaces").length() == 0) { assertTrue(exists("column-connection-42-$panel")); return }
+            val column = columnFor(panel)
+            val members = column.array("groups").objects().map { it.getInt("group") }
+            val receivers = layout.array("groups").objects().filter { it.getInt("id") in members }
+            val vectors = layout.array("vector_surfaces").objects().filter { it.getInt("column") == column.getInt("id") }
+            assertTrue("Prepared vector surfaces for column ${column.getInt("id")}", vectors.isNotEmpty())
+            assertTrue("Prepared vectors belong to opened receivers $members", vectors.all { v -> receivers.any { it.getInt("id") == v.getInt("group") } })
+            for (surface in vectors) {
+                val commands = surface.optJSONArray("commands")
+                if (commands != null) {
+                    assertTrue("Prepared vector contour is nonempty", commands.length() > 3)
+                    val operations = (0 until commands.length()).map { commands.getJSONArray(it) }
+                    assertEquals(0, operations.first().getInt(0)); assertEquals(3, operations.last().getInt(0))
+                    assertTrue("Prepared vector contour has curved corners", operations.any { it.getInt(0) == 2 })
+                    for (command in operations) {
+                        assertTrue("Known vector command $command", command.getInt(0) in 0..3)
+                        assertEquals(7, command.length())
+                        for (i in 1 until command.length()) command.getInt(i)
+                    }
+                } else instrumentation.runOnMainSync {
+                    val getter = host.javaClass.getMethod("getPanelVectorSurfaces\$app")
+                    val prepared = getter.invoke(host) as Map<*, *>
+                    val shape = prepared[surface.getInt("group")] as? androidx.compose.ui.graphics.Shape
+                    assertNotNull("Native prepared shape for receiver ${surface.getInt("group")}", shape)
+                    val outline = shape!!.createOutline(androidx.compose.ui.geometry.Size.Zero,
+                        androidx.compose.ui.unit.LayoutDirection.Ltr, androidx.compose.ui.unit.Density(density))
+                    assertTrue("Native prepared contour is a vector path", outline is androidx.compose.ui.graphics.Outline.Generic)
+                    val path = (outline as androidx.compose.ui.graphics.Outline.Generic).path
+                    val bounds = path.getBounds()
+                    assertFalse("Native prepared vector path is nonempty", path.isEmpty)
+                    assertTrue("Native prepared vector bounds are finite and nonempty: $bounds",
+                        listOf(bounds.left, bounds.top, bounds.right, bounds.bottom).all { it.isFinite() } && bounds.width > 0f && bounds.height > 0f)
+                }
+            }
+            val tile = column.array("groups").objects().flatMap { it.array("icons").objects() }
+                .single { it.getString("panel") == panel }.getJSONObject("bounds").rect()
+            val opened = column.getJSONObject("open").getJSONObject("bounds").rect()
+            val point = Offset(if (opened.center.x > tile.center.x) tile.right + 1 / density else tile.left - 1 / density, tile.center.y)
+            val overlapping = receivers.filter { point.y >= it.getJSONObject("bounds").rect().top && point.y <= it.getJSONObject("bounds").rect().bottom }
+            val eligible = overlapping.ifEmpty { receivers.filter { point.y >= it.getJSONObject("bounds").rect().top - 6 && point.y <= it.getJSONObject("bounds").rect().bottom + 6 } }
+            assertTrue("Source $panel has an eligible receiving panel at $point", eligible.isNotEmpty())
+            for (receiver in eligible) assertTrue("Source $panel connects to actual receiver ${receiver.getInt("id")}", vectors.any { it.getInt("group") == receiver.getInt("id") })
+            val bitmap = android.graphics.BitmapFactory.decodeFile(image.absolutePath)
+            val origin = IntArray(2); instrumentation.runOnMainSync { owner.view.getLocationOnScreen(origin) }
+            try {
+                val color = bitmap.getPixel((point.x * density + origin[0]).toInt(), (point.y * density + origin[1]).toInt())
+                assertNotEquals("Source $panel bridge core is filled", android.graphics.Color.parseColor(state().getJSONObject("palette").getString("bg")), color)
+                assertTrue("Source $panel bridge core is not black", listOf(0, 8, 16).all { (color shr it and 255) > 8 })
+            } finally { bitmap.recycle() }
+        }
         for (pointer in pointerTools) {
             tool = pointer; restore()
             val columns = collapsed()
@@ -1487,12 +1568,13 @@ class AndroidInteractionTest {
             instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
             waitFor("Back closes the dragged member") { collapsed().all { it.objectOrNull("open") == null } }
             openTile("brushes")
+            var image = captureWorkspace("ordinary-open-${state().getJSONObject("settings").opt("theme")}-${tool}", "ordinary-columns")
             val opened = columnFor("brushes").getJSONObject("open").getJSONObject("bounds").rect()
             assertEquals(bounds("collapsed-column-42").top / density, opened.top, 1f)
             assertEquals(bounds("collapsed-column-50").bottom / density, opened.bottom, 1f)
             assertTrue(exists("group-43") && exists("group-44"))
             for (panel in listOf("brushes", "navigator")) {
-                assertTrue(exists("column-connection-42-$panel"))
+                assertConnection(panel, image)
                 instrumentation.runOnMainSync {
                     assertEquals(true, find("column-icon-$panel")!!.config.getOrNull(SemanticsProperties.Selected))
                 }
@@ -1501,8 +1583,13 @@ class AndroidInteractionTest {
             val edge = bounds("divider-40").center
             event(MotionEvent.ACTION_DOWN, edge); event(MotionEvent.ACTION_MOVE, edge + Offset(80 * density, 0f)); settle()
             assertTrue(columnFor("brushes").getJSONObject("open").getJSONObject("bounds").number("width") > opened.width + 60f)
-            val c = columnFor("brushes").getJSONObject("open").array("connections").getJSONArray(0).getJSONObject(1).getJSONObject("bounds").rect()
-            assertEquals(c.left * density, bounds("column-connection-42-brushes").left, 1f)
+            if (snapshot().getJSONObject("layout").array("vector_surfaces").length() == 0) {
+                val c = columnFor("brushes").getJSONObject("open").array("connections").getJSONArray(0).getJSONObject(1).getJSONObject("bounds").rect()
+                assertEquals(c.left * density, bounds("column-connection-42-brushes").left, 1f)
+            } else {
+                image = captureWorkspace("ordinary-resize-${state().getJSONObject("settings").opt("theme")}-${tool}", "ordinary-columns")
+                for (panel in listOf("brushes", "navigator")) assertConnection(panel, image)
+            }
             event(MotionEvent.ACTION_UP); settle()
             action(obj("type" to "invoke", "command" to "undo_workspace")); assertEquals(beforeResize, workspace())
             openTile("sizes"); assertEquals("sizes", group("sizes").getString("active"))

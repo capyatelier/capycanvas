@@ -276,6 +276,14 @@ class CanvasHost @JvmOverloads constructor(application: Application, screen: JSO
         post { Native.navigatorPlacements(handle, payload); wake() }
     }
     private val glassBoxes = linkedMapOf<Any, FloatArray>()
+    private data class GlassVector(val shape: PanelVectorShape, val origin: androidx.compose.ui.geometry.Offset, val strength: Float)
+    private val glassVectors = linkedMapOf<Any,GlassVector>()
+    internal fun glassVector(key: Any, shape: PanelVectorShape?, origin: androidx.compose.ui.geometry.Offset, strength: Float) {
+        val next=shape?.takeIf { strength>0f }?.let { GlassVector(it,origin,strength) }
+        if (glassVectors[key]==next) return
+        if (next==null) glassVectors.remove(key) else glassVectors[key]=next
+        queueGlass()
+    }
     internal val glassBoxesForTest get() = glassBoxes.values.toList()
     private val glassConnections = linkedMapOf<Any, String>()
     internal val glassConnectionsForTest get() = glassConnections.values.map(::JSONObject)
@@ -306,12 +314,18 @@ class CanvasHost @JvmOverloads constructor(application: Application, screen: JSO
         main.post {
             glassQueued = false
             val boxes = glassBoxes.values.toList(); val connections = glassConnections.values.toList()
+            val vectors = glassVectors.values.toList()
             val bubbleBoxes = bubbleGlassBoxes; val bubbleArcs = bubbleGlassArcs; val bubbleColors = bubbleGlassColors
             post {
                 fun rows(values: List<FloatArray>) = JSONArray(values.map { JSONArray(it.toList()) })
+                val triangles=FloatArray(vectors.sumOf { it.shape.triangles.size }*8)
+                var index=0
+                for (v in vectors) for (t in v.shape.triangles) for (i in 0..7) {
+                    triangles[index++]=when { i==7->v.strength; i==6->t[i]; else->t[i]+if(i%2==0)v.origin.x else v.origin.y }
+                }
                 val payload = obj("boxes" to rows(boxes), "connections" to JSONArray(connections.map(::JSONObject)),
                     "bubble_boxes" to rows(bubbleBoxes), "bubble_arcs" to rows(bubbleArcs), "bubble_colors" to rows(bubbleColors)).toString()
-                Native.glassRegions(handle, payload); wake()
+                Native.glassRegions(handle, payload, triangles); wake()
             }
         }
     }
@@ -655,6 +669,16 @@ class CanvasHost @JvmOverloads constructor(application: Application, screen: JSO
     private var logicalWidth = 1f
     private var logicalHeight = 1f
     private var surfaceDensity = 1f
+    private val panelVectorCache = PanelVectorCache()
+    private var publishedWorkspaceLayout: JSONObject? = null
+    internal var panelVectorSurfaces by mutableStateOf<Map<Int, PanelVectorShape>>(emptyMap())
+        private set
+    internal var panelVectorColumns by mutableStateOf<List<PanelVectorColumn>>(emptyList())
+        private set
+    private fun applyPanelVectors(geometry: PanelVectorGeometry) {
+        panelVectorSurfaces = geometry.surfaces
+        panelVectorColumns = geometry.columns
+    }
     fun chrome(event: JSONObject, facts: JSONObject? = null, reply: ((JSONObject) -> Unit)? = null) = post {
         if (facts != null) chromeFacts = facts
         val result = JSONObject(Native.input(handle, chromeInput(event).toString()))
@@ -928,6 +952,11 @@ class CanvasHost @JvmOverloads constructor(application: Application, screen: JSO
         } finally { if (tracing) android.os.Trace.endSection() }
         if (next.has("state")) modelSnapshot = next
         val parsedEnd = if (measuredPublications != null) System.nanoTime() else 0L
+        next.objectOrNull("layout")?.let { layout ->
+            val retained = shareModel(publishedWorkspaceLayout, layout) as JSONObject
+            publishedWorkspaceLayout = retained
+            next.put("layout", retained)
+        }
         fun recordPublication() {
             if (measuredPublications != null && publicationCount < 8192) {
                 val offset = publicationCount++ * 4
@@ -948,6 +977,7 @@ class CanvasHost @JvmOverloads constructor(application: Application, screen: JSO
             return
         }
         val geometry = next.objectOrNull("workspace_update")?.let(WorkspaceGeometry::read)
+        val vectorSurfaces = next.objectOrNull("layout")?.let { panelVectorCache.prepare(it, surfaceDensity, Native.panelVectors(handle), handle) }
         if (geometry != null) lastWorkspaceUpdate = geometry
         if (!next.has("state") && next.has("layout") && geometry != null) {
             workspaceUpdatesPublished++
@@ -956,6 +986,8 @@ class CanvasHost @JvmOverloads constructor(application: Application, screen: JSO
             main.post {
                 val model = snapshot ?: return@post
                 if (contentRevision != workspaceContentRevision || geometry.revision < (workspaceGeometry?.revision ?: -1L)) return@post
+                androidx.compose.runtime.snapshots.Snapshot.withMutableSnapshot {
+                vectorSurfaces?.let(::applyPanelVectors)
                 model.put("layout", next.getJSONObject("layout"))
                 model.put("panel_measurements", next.getJSONArray("panel_measurements"))
                 model.put("workspace_update", next.getJSONObject("workspace_update"))
@@ -971,6 +1003,7 @@ class CanvasHost @JvmOverloads constructor(application: Application, screen: JSO
                 workspaceModelRevision = geometry.modelRevision
                 applyWorkspaceGeometry(geometry)
                 updateCameraReadout(camera)
+                }
             }
             return
         }
@@ -1033,12 +1066,13 @@ class CanvasHost @JvmOverloads constructor(application: Application, screen: JSO
         if (measuredPublications != null && contentChanged(previousModel, next)) panelContentChanges++
         recordPublication()
         main.post { androidx.compose.runtime.snapshots.Snapshot.withMutableSnapshot {
+            vectorSurfaces?.let(::applyPanelVectors)
             plots?.let { scopes = it }
             localization?.let { bootstrap = it }
             next.objectOrNull("catalog")?.let { catalog = it }
             colorPreview = next.objectOrNull("color_preview")
             commandSearch = state.objectOrNull("command_search")
-            (snapshot as? ObservedModel ?: ObservedModel(listOf("state", "state.document_file", "state.layer_tools", "state.brush",
+            (snapshot as? ObservedModel ?: ObservedModel(listOf("layout", "state", "state.workspace", "state.workspace.layout", "state.document_file", "state.layer_tools", "state.brush",
                 "state.tool_set", "state.tool_panels.brush_sets", "state.tool_panels.sculpt_sets", "state.tool_panels.tools")).also { snapshot = it }).assign(next)
             publishNotice(state.optJSONObject("notice"))
             publishHostError(state.optString("host_error").takeUnless { state.isNull("host_error") })

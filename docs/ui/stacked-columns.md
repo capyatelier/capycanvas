@@ -44,8 +44,8 @@ is drawn above the first group; separators only appear between groups within
 a member. The first tile starts at the member's top edge. Dropping a panel or
 group in the workspace gap immediately above it prepends a group within that
 member while its first group remains unscrolled. Whole-column drags retain the
-gap's stack insertion target. GTK, Windows and Apple present this placement and
-the GPU joins below. Web and Android still need their native alignment and
+gap's stack insertion target. GTK, Android, Windows and Apple present this placement and
+the joins below. Web still needs its native alignment and
 bridge-rendering adapters updated to consume the shared geometry.
 
 An open member uses the full available workspace height, aligned with the
@@ -115,7 +115,9 @@ tile has these attachment keyframes:
 A gap just below the tile bottom cannot fade the upper panel's existing bridge.
 Aligned panel/tile tops and aligned bottoms retain their flat outer boundaries.
 
-The GPU builds the normalized outer-curve profiles once. A positive symmetric
+Shared Rust generates the normalized outer-curve profiles at build time. GTK
+uploads those bytes with its panel resources; native vector projection reads
+the same table. A positive symmetric
 smoothing kernel preserves an exactly straight boundary when the panel and tile
 tops align; bottom alignment is its vertical reflection. Offset boundaries join
 with continuous curvature. The panel and sidebar keep their separate corner
@@ -130,7 +132,7 @@ of connected bridge. The cap never widens the gap and meets its flat edges with
 zero curvature. Facing background corners fill as their attachments form; the
 tab bar's own rounding is independent of that backing.
 
-Dragging updates compact GPU parameters. It does not sample a CPU shape field,
+GTK dragging updates compact GPU parameters. It does not sample a CPU shape field,
 trace contours, rasterize bridge masks or generate glass bands. Tint, glass and
 shadow use the same GPU shape, and unchanged artwork retains the existing blur
 cache. Unchanged scenes retain their packed geometry; viewport and cached-blur
@@ -140,11 +142,41 @@ the input thread never waits for GPU completion. The worker retains the matching
 published buffer until GTK releases its revision, with the existing 100 ms
 recovery limit.
 
-GTK's common presenter factory schedules bridge, profile and glass pipelines
+GTK's common presenter factory schedules bridge and glass pipelines
 on the background shader compiler at startup and for HDR/color replacements.
-The profile table is generated before chrome becomes ready. Presentation waits
+The profile table is uploaded before chrome becomes ready. Presentation waits
 for that readiness without compiling pipelines or waiting for GPU completion in
 the drag path; color candidates prepare before adoption.
+
+Android projects the same field into cubic paths on its render worker. The
+projection splits disconnected components and fits their boundaries to 0.025
+logical pixels, with coordinates stored at 1/1024 pixel precision. Its bounded
+cache retains at most 512 previous projections within 4 MiB. Only the current
+receivers are published. Bulk JNI arrays carry the prepared geometry; unchanged
+geometry retains its identity across publications.
+
+Android fills each connected sidebar and its receiving panels as one native
+path with one shadow. Separately antialiased pieces would
+leave a faint line where they meet inside a gap. Native controls retain their
+own panel clips, tab-bar rounding and input targets. The worker prepares
+immutable paths before publishing matching layout and geometry together. Shared
+corner arrays name physical sides; Android retains those sides under RTL layouts.
+The merged path uses the authored source/receiver allocation as its origin;
+cubic control-point bounds can extend slightly beyond the visible contour.
+On Android 12 and later, a quarter-size native GPU blur mask supplies the shadow,
+while the fill and control clips keep their original resolution. Earlier Android
+versions use the existing native shadow renderer.
+Only panel dimensions invalidate control measurement; unchanged content and
+stationary columns retain their models.
+
+Every facing panel remains in its column's native surface while the column is
+open. A panel without an eligible anchor contributes only its original outline.
+Corner entry and exit therefore change the fill without replacing the panel's
+native parent or remembered controls.
+
+The existing GPU backdrop renderer consumes the projection's patch triangles.
+Only exterior edges receive antialiasing; shared edges stay fully covered.
+The normal panel and sidebar masks remain part of that same blur pass.
 
 Vertical groups retain saved proportions when their measured scroll targets fit.
 A scroll target includes fixed controls and four measured rows, or four tile

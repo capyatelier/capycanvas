@@ -9,9 +9,14 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshots.Snapshot
+import androidx.compose.runtime.snapshots.SnapshotStateObserver
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.MotionDurationScale
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asAndroidPath
+import androidx.compose.ui.graphics.Outline
 import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.captureToImage
@@ -20,18 +25,13 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.click
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.asAndroidPath
-import androidx.compose.ui.graphics.Outline
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.LayoutDirection
-import androidx.compose.runtime.snapshots.Snapshot
-import androidx.compose.runtime.snapshots.SnapshotStateObserver
-import org.json.JSONArray
-import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
+import org.json.JSONArray
+import org.json.JSONObject
 
 class AndroidWorkspacePresentationTest {
     private val motion=object:MotionDurationScale { override var scaleFactor=1f }
@@ -73,6 +73,73 @@ class AndroidWorkspacePresentationTest {
             assertFalse("Legacy start/end corners must continue to mirror",original.contentEquals(legacyRtl))
             assertArrayEquals(points(mirrored,LayoutDirection.Ltr),legacyRtl,0f)
         }
+    }
+
+    @Test fun vectorCachesReusePreparedPathsAndColumnsWithoutPublishingRetiredGeometry() {
+        fun bounds(x:Int,y:Int,width:Int,height:Int)=obj("x" to x,"y" to y,"width" to width,"height" to height)
+        fun layout(height:Int=36,secondY:Int=42,open:Boolean=true)=obj(
+            "groups" to JSONArray().put(obj("id" to 5,"bounds" to bounds(42,0,100,height)))
+                .put(obj("id" to 6,"bounds" to bounds(42,secondY,100,36))),
+            "collapsed" to JSONArray().put(obj("id" to 4,"bounds" to bounds(0,0,36,100),"corner_radii" to JSONArray(listOf(0,0,0,0)),
+                "open" to if(open) obj("bounds" to bounds(42,0,100,100)) else JSONObject.NULL)),
+            "vector_surfaces" to if(open) JSONArray().put(obj("group" to 5,"column" to 4)).put(obj("group" to 6,"column" to 4)) else JSONArray())
+        fun payload(height:Int,generation:Long):IntArray {
+            val words=mutableListOf<Int>()
+            fun receiver(group:Int,version:Long,h:Int) {
+                val commands=listOf(intArrayOf(0,-6*1024,0,0,0,0,0),intArrayOf(1,0,0,0,0,0,0),
+                    intArrayOf(1,0,h*1024,0,0,0,0),intArrayOf(1,-6*1024,h*1024,0,0,0,0),intArrayOf(3,0,0,0,0,0,0),
+                    intArrayOf(0,0,0,0,0,0,0),intArrayOf(1,100*1024,0,0,0,0,0),
+                    intArrayOf(1,100*1024,h*1024,0,0,0,0),intArrayOf(1,0,h*1024,0,0,0,0),intArrayOf(3,0,0,0,0,0,0))
+                words.addAll(listOf(group,version.toInt(),(version ushr 32).toInt(),commands.size,0))
+                commands.forEach { words.addAll(it.asList()) }
+            }
+            receiver(5,generation,height);receiver(6,22L,36)
+            return words.toIntArray()
+        }
+        fun pathBounds(shape:PanelVectorShape,scale:Float)=
+            (shape.createOutline(Size.Zero,LayoutDirection.Ltr,Density(scale)) as Outline.Generic).path.getBounds()
+        val cache=PanelVectorCache()
+        val aLayout=layout();val aPayload=payload(36,0x18000000bL)
+        val a=cache.prepare(aLayout,1f,aPayload,101L)
+        assertEquals(setOf(5,6),a.surfaces.keys)
+        val aColumn=a.columns.single()
+        assertEquals(4,aColumn.id);assertEquals(setOf(5,6),aColumn.groups)
+        assertEquals(36f,pathBounds(a.surfaces.getValue(5),1f).height,0f)
+        val body=(a.surfaces.getValue(5).body.createOutline(Size.Zero,LayoutDirection.Rtl,Density(1f)) as Outline.Generic).path.getBounds()
+        assertEquals(0f,body.left,0f);assertEquals(100f,body.right,0f);assertEquals(36f,body.height,0f)
+        val b=cache.prepare(layout(48,54),1f,payload(48,0x28000000bL),101L)
+        assertNotSame(a.surfaces.getValue(5),b.surfaces.getValue(5))
+        assertSame("Unchanged member path stays prepared",a.surfaces.getValue(6),b.surfaces.getValue(6))
+        assertEquals(48f,pathBounds(b.surfaces.getValue(5),1f).height,0f)
+        assertNotSame(aColumn,b.columns.single());assertNotSame(aColumn.shape,b.columns.single().shape)
+        fun assertRestored(current:PanelVectorGeometry) {
+            assertEquals(setOf(5,6),current.surfaces.keys)
+            for(id in listOf(5,6)) assertSame(a.surfaces.getValue(id),current.surfaces.getValue(id))
+            assertSame(aColumn,current.columns.single());assertSame(aColumn.shape,current.columns.single().shape)
+            assertEquals(setOf(5,6),current.columns.single().groups)
+            assertEquals(36f,pathBounds(current.surfaces.getValue(5),1f).height,0f)
+        }
+        assertRestored(cache.prepare(layout(),1f,aPayload.copyOf(),101L))
+        val closed=cache.prepare(layout(open=false),1f,intArrayOf(),101L)
+        assertTrue(closed.surfaces.isEmpty());assertTrue(closed.columns.isEmpty())
+        assertRestored(cache.prepare(layout(),1f,aPayload.copyOf(),101L))
+        val moved=cache.prepare(layout(secondY=54),1f,aPayload,101L)
+        for(id in listOf(5,6)) assertSame(a.surfaces.getValue(id),moved.surfaces.getValue(id))
+        assertNotSame("Member placement changes the merged path despite unchanged path identities",aColumn,moved.columns.single())
+        for(key in listOf("x","y","width","height")) assertEquals(aColumn.bounds.number(key),moved.columns.single().bounds.number(key),0f)
+        assertRestored(cache.prepare(layout(),1f,aPayload.copyOf(),101L))
+        val newOwner=cache.prepare(aLayout,1f,aPayload,202L)
+        for(id in listOf(5,6)) assertNotSame(a.surfaces.getValue(id),newOwner.surfaces.getValue(id))
+        assertNotSame(aColumn,newOwner.columns.single());assertNotSame(aColumn.shape,newOwner.columns.single().shape)
+        val scaled=cache.prepare(aLayout,2f,aPayload,101L)
+        for(id in listOf(5,6)) assertNotSame(a.surfaces.getValue(id),scaled.surfaces.getValue(id))
+        assertNotSame(aColumn,scaled.columns.single());assertNotSame(aColumn.shape,scaled.columns.single().shape)
+        assertEquals(72f,pathBounds(scaled.surfaces.getValue(5),2f).height,0f)
+        assertEquals(200f,pathBounds(scaled.surfaces.getValue(5),2f).right,0f)
+        assertEquals(-12f,pathBounds(scaled.surfaces.getValue(5),2f).left,0f)
+        val scaledBody=(scaled.surfaces.getValue(5).body.createOutline(Size.Zero,LayoutDirection.Rtl,Density(2f)) as Outline.Generic).path.getBounds()
+        assertEquals(0f,scaledBody.left,0f);assertEquals(200f,scaledBody.right,0f);assertEquals(72f,scaledBody.height,0f)
+        assertRestored(cache.prepare(layout(),1f,aPayload.copyOf(),101L))
     }
 
     @Test fun layoutPublicationInvalidatesOnlyChangedLayoutReaders() = observedModelReads { observer,invalidated,changed ->

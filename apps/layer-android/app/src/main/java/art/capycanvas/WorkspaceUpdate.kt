@@ -45,7 +45,7 @@ internal fun JSONObject.rect() = Rect(number("x"), number("y"), number("x") + nu
 @Composable internal fun Modifier.workspacePlaced(host: CanvasHost, group: Int, rect: JSONObject,
     base: JSONObject, density: Float, edge: String? = null): Modifier {
     val baseWidth = base.number("width"); val baseHeight = base.number("height")
-    val size by remember(host, group, baseWidth, baseHeight) { derivedStateOf {
+    val size by remember(host, group, baseWidth, baseHeight) { derivedStateOf(structuralEqualityPolicy()) {
         host.workspaceGeometry?.takeIf { it.group == group }?.bounds?.size ?: Size(baseWidth, baseHeight)
     } }
     val dw = size.width - baseWidth; val dh = size.height - baseHeight

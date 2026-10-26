@@ -3,7 +3,7 @@
 use crate::app::App;
 use jni::{
     JNIEnv,
-    objects::{JClass, JDoubleArray, JIntArray, JObject, JObjectArray, JString},
+    objects::{JClass, JDoubleArray, JFloatArray, JIntArray, JObject, JObjectArray, JString},
     sys::{jboolean, jfloat, jint, jintArray, jlong, jstring},
 };
 use layer_host::scene::SceneDisplay;
@@ -1305,6 +1305,21 @@ pub extern "system" fn Java_art_capycanvas_Native_modelUpdate(
     })
 }
 #[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_panelVectors(
+    mut env: JNIEnv, _: JClass, handle: jlong,
+) -> jintArray {
+    crate::jni_entry!(env, handle, capy_app, {
+        let result=(|| {
+            let values=capy_app.host.panel_vector_data();
+            let array=env.new_int_array(values.len() as i32).map_err(error)?;
+            env.set_int_array_region(&array,0,&values).map_err(error)?;
+            Ok(array.into_raw())
+        })();
+        or_throw(&mut env,result,std::ptr::null_mut())
+    })
+}
+
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_query(
     mut env: JNIEnv,
     _: JClass,
@@ -1366,16 +1381,24 @@ pub extern "system" fn Java_art_capycanvas_Native_glassRegions(
     _: JClass,
     handle: jlong,
     value: JString,
+    triangles: JFloatArray,
 ) {
     crate::jni_entry!(env, handle, capy_app, {
     let result = (|| {
         let glass: Glass = serde_json::from_str(&read(&mut env, &value)?).map_err(error)?;
+        let count=env.get_array_length(&triangles).map_err(error)? as usize;
+        if count>8192*8 || !count.is_multiple_of(8) {return Err("Invalid glass triangles".into());}
+        let mut values=vec![0.;count];
+        env.get_float_array_region(&triangles,0,&mut values).map_err(error)?;
+        if values.chunks_exact(8).any(|t|t.iter().any(|v|!v.is_finite())
+            || !(0. ..=7.).contains(&t[6]) || t[6].fract()!=0. || !(0. ..=1.).contains(&t[7])) {return Err("Invalid glass triangles".into());}
         let squircle = layer_render_wgpu::BackdropRegion::SQUIRCLE;
         if glass.boxes.iter().any(|b| !(0.0..=1.0).contains(&b[8])) || glass.connections.iter().any(|c| !(0.0..=1.0).contains(&c.strength)) { return Err("Invalid glass strength".into()); }
         let regions: Vec<_> = glass
             .boxes
             .iter()
             .map(|b| layer_render_wgpu::BackdropRegion::rounded([b[0], b[1], b[2], b[3]], [b[4], b[5], b[6], b[7]], squircle).with_strength(b[8]))
+            .chain(values.chunks_exact(8).map(|t| layer_render_wgpu::BackdropRegion::triangle(t[..6].try_into().unwrap(),t[6] as u32).with_strength(t[7])))
             .chain(glass.bubble_boxes.iter().map(|b| layer_render_wgpu::BackdropRegion::rounded(
                 [b[0], b[1], b[2], b[3]], [b[4], b[5], b[6], b[7]], if b[8] > 0. { squircle } else { layer_render_wgpu::BackdropRegion::CIRCULAR }).with_strength(b[9])))
             .chain(glass.bubble_colors.iter().map(|c| layer_render_wgpu::BackdropRegion::color_bubble([c[0], c[1]], c[2], c[3], c[4], c[5]).with_strength(c[6])))
