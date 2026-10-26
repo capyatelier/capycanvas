@@ -24,6 +24,9 @@ Follow [AGENTS.md](../AGENTS.md) and the [commit guide](COMMIT_GUIDE.md).
 4. Use current shared behavior as the semantic authority and Web as the visual
    reference; GTK and Android help explain integration. Resolve disagreements
    from code and tests. Link superseded commits to the final behavior to port.
+   For collapsed-column joins, follow the [native bridge integration](ui/stacked-columns.md#native-bridge-integration)
+   entry points and acceptance checks; Windows already has an adapter for the
+   shared GPU renderer.
 
 ## 2. Keep a working ledger
 

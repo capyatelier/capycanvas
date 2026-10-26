@@ -233,8 +233,10 @@ The shared model does not serialize an open member; saved stacks start closed,
 except that Paint opens its right stack on load. Photo and Paint's stacks are
 described in [default workspaces](default-workspaces.md#arrangements).
 
-Apple uses the ordinary SwiftUI dock groups, dividers and drawer connector shape
-for full-column opening. Column grips expose the shared stack preferences.
+Apple uses ordinary SwiftUI dock groups and dividers for full-column controls;
+the shared GPU renderer supplies their joined backing through Metal. Individual
+panel drawers retain their drawer connector. Column grips expose the shared
+stack preferences.
 Every host omits the resize source of a divider that Rust publishes as `fixed`.
 
 On GTK, Web and Android, dropping a panel, toolbar, tab group or column in the menu/title bar
@@ -256,7 +258,50 @@ The history comparison includes collapsed member boundaries. Moving the last
 member into the preceding column can preserve the panel order while changing
 the grouping; that remains a real move with one undo step.
 
+## Native bridge integration
+
+Apple and Windows already have GPU bridge adapters. Audit their native allocation,
+transport and presentation against the current shared contracts. Reuse shared
+Rust geometry and GPU coverage through these adapters. Native visual and
+performance parity require the checks below.
+
+| Entry point | Responsibility |
+| --- | --- |
+| [UI bridge projection](../../crates/layer-ui/src/panel_bridges.rs) | `ResolvedLayout::measured_panel_bridges` validates `PanelBridgeMeasure` and resolves current native allocations into receiver IDs, radii and anchors. The host query is `panel_bridges`. |
+| [Outer profiles](../../crates/layer-render/src/panel_profile.rs) and [panel geometry](../../crates/layer-render/src/panel_geometry.rs) | Shared profile generation, attachment fields and vector projection. GPU and vector rendering use the same build-time profile table. |
+| [GPU surfaces](../../crates/layer-render-wgpu/src/panel_surface.rs) and [shader](../../crates/layer-render-wgpu/src/panel_surface.wgsl) | Shared fill, coverage and shadow preparation. Preserve background pipeline preparation and matching geometry revisions; dragging must not compile shaders or wait for GPU completion on the UI or input thread. |
+| [Apple registry](../../apps/layer-apple/Shared/Editor/GlassSurface.swift) and [Metal presenter](../../apps/layer-apple/native/src/metal.rs) | Native measurements, stale-result rejection and presented-revision acknowledgement for macOS and iPadOS. |
+| [Windows workspace](../../apps/layer-windows/WorkspaceView.cpp) and [presenter](../../apps/layer-windows/native/src/host.rs) | Native measurements, coalesced bridge queries and presented-revision acknowledgement. |
+
+Shared regressions live in [column-stack tests](../../crates/layer-ui/src/column_stack_tests.rs)
+and [GPU surface tests](../../crates/layer-render-wgpu/src/panel_surface_tests.rs).
+The [testing guide](../development/testing.md) describes vector/GPU comparisons
+and publication, allocation and Navigator coverage.
+
 ## Checks
+
+Native acceptance covers both sides and themes through every attachment keyframe
+above, including a gap just below the tile bottom. Aligned top and bottom edges
+stay flat; partial corner overlaps and gaps retain smooth curves without seams,
+flashes or changes to the tab bar's own rounded outline. Verify the first tile
+has no top padding and its prepend target lives in the gap above it.
+
+Move panels into and out of tab groups, switch open members, scroll, close and
+reopen, and enter and leave panel configuration. Missing or retired allocations
+must clear their joins, unrelated corners must keep their original shape, and
+every remaining divider must stay draggable. Repeat after GPU recovery; native
+backing visibility must follow the matching presented revision.
+
+Compare each host with its own optimized pre-port baseline on the same device
+and workload. The port must not regress that baseline; an existing frame-rate
+miss does not require a new optimization project. Report fresh native geometry
+updates/s beside actual presented fps, including cold first contact separately
+from warmed contacts. Keep pre-existing gaps explicit in the
+[tier tables](../PERFORMANCE_TARGETS.md); a no-regression comparison does not
+qualify a target. The low-tier results record the
+[Android](../performance/low-tier.md#native-column-bridges) and
+[Web](../performance/low-tier.md#web-svg-column-bridges) measurements and deferred
+investigations.
 
 ```sh
 cargo test --locked --release -p layer-linux --lib workspace::allocation_tests
