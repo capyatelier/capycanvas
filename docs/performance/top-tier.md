@@ -3427,8 +3427,8 @@ measurements remain required.
 | --- | --- | --- | --- |
 | M2 Pro Mac mini, 90 Hz: drawing profiles | Not measured | Not measured | Unqualified; current optimized comparison required |
 | M4 iPad Pro, 120 Hz: drawing profiles | Not measured | Not measured | Unqualified; current optimized comparison required |
-| M4 iPad Pro, 120 Hz: reference-photo G-Pen, 2048 px, light / dark | 117.915 / 118.138 completed updates/s; 117.860 / 118.138 input-update lower bounds | 16.667 / 16.667 ms completion gaps | **Not met:** below 120 completed updates/s; `artifacts/apple-current-performance-20261026/gpen-{light,dark}/report.json` |
-| M4 iPad Pro, 120 Hz: reference-photo Wet Watercolor, 512 px, light / dark | 119.472 / 119.305 completed updates/s; input-update lower bounds are the same | 8.334 / 8.334 ms completion gaps | **Not met:** below 120 completed updates/s; `artifacts/apple-current-performance-20261026/watercolor-{light,dark}/report.json` |
+| M4 iPad Pro, 120 Hz: reference-photo G-Pen, 2048 px, light / dark | 117.915 / 118.138 → 117.748 / 118.249 completed updates/s; latest input-update lower bounds 117.693 / 118.193 | Latest completion gaps 16.667 / 8.334 ms | **Not met:** below 120 completed updates/s; `artifacts/apple-panel-coverage-performance-20261026/gpen-{light,dark}/report.json` |
+| M4 iPad Pro, 120 Hz: reference-photo Wet Watercolor, 512 px, light / dark | 119.472 / 119.305 → 119.249 / 119.416 completed updates/s; latest input-update lower bounds 119.083 / 119.416 | Latest completion gaps 8.334 / 8.334 ms | **Not met:** below 120 completed updates/s; `artifacts/apple-panel-coverage-performance-20261026/watercolor-{light,dark}/report.json` |
 | Mac: Palette resize, light and dark | Not measured | Not measured | Unqualified; current optimized measurement required |
 | Mac and iPad: layer scrolling and drawer transitions, light and dark | Not measured | Not measured | Unqualified; current motion measurements required |
 | M2 Pro Mac: brush-size stamp preview, light | Longest unchanged or unsampled interval: 92.44 ms; prior 1,244.49 ms | Not measured | Four original six-second continuity checks pass; presentation rate unqualified |
@@ -3441,11 +3441,13 @@ frames and renderer submissions; a shared geometry poll is not a native frame.
 Synthetic documents and renderer-only rates do not qualify the reference tier
 or physical input latency.
 
-The current M4 measurements use the private Release build from `15db9dd80`.
-Each run contains three six-second contacts after an undone priming contact;
-input, thermal and presentation callback checks pass. G-Pen stalls remain
-concentrated in drawable acquisition, with p99 waits of 6.95 ms light and
-6.82 ms dark. Each report directory contains its raw traces in `Performance/`.
+The latest M4 measurements use the private Release build from `cdd21b8ae`, with
+the shared panel coverage and shadow cache from `6c7b753a3`; the earlier rates
+use `15db9dd80`. Each run contains three six-second contacts after an undone
+priming contact; input, thermal and presentation callback checks pass. The
+changes move completed-update rates by less than 0.3/s in either direction and
+do not close the target gap. The latest raw traces are in
+`artifacts/apple-panel-coverage-performance-20261026/Performance/`.
 
 The 2026-10-25 M4 run uses the normal Release build with the residency fix
 `20dfdae69` and Apple UI work around `6c9cb48ca`. The 9504 × 6336 reference photo
