@@ -285,6 +285,7 @@ extension XCTestCase {
 
     @MainActor func checkNumericToolControls(in app: XCUIApplication, theme: String) {
         capturePaintEditor(in: app, theme: theme)
+        selectPaintPreset("Pen", group: "Pen", preset: "G-Pen", in: app)
         let value = app.buttons["number-value-tool-size"]
         let entry = app.textFields["number-entry-tool-size"]
         let track = app.descendants(matching: .any)["number-track-tool-size"].firstMatch
@@ -306,7 +307,7 @@ extension XCTestCase {
         entry.typeText("20 + 20\n")
         expectation(for: NSPredicate(format: "value BEGINSWITH %@", "40"), evaluatedWith: value)
         waitForExpectations(timeout: 5)
-        let preset = app.buttons["size-40"], sizePanel = app.buttons["number-value-Brush size"]
+        let preset = app.buttons["size-40"]
         // Tool and Brush size share one tab group in the current default layout.
         workspaceActivate(app.buttons["panel-tab-sizes"])
         XCTAssertTrue(preset.waitForExistence(timeout: 5))
@@ -355,25 +356,22 @@ extension XCTestCase {
         expectation(for: NSPredicate(format: "value == %@", "1203 px"), evaluatedWith: value)
         waitForExpectations(timeout: 5)
         let remembered = value.value as? String
-        workspaceActivate(app.buttons["tool-group-1"])
-        workspaceActivate(app.buttons["brush-7"])
+        selectPaintPreset("Pen", group: "Pen", preset: "Marker", in: app)
         XCTAssertTrue(app.buttons["brush-7"].isSelected, "The Marker brush must become selected")
         let markerSize = value.value as? String
-        workspaceActivate(app.buttons["tool-group-0"])
-        XCTAssertTrue(app.buttons["brush-1"].isSelected, "Returning to Pen must restore its selected subtool")
-        XCTAssertEqual(value.value as? String, remembered, "Changing groups must preserve each brush's edited size")
-        workspaceActivate(app.buttons["panel-tab-sizes"])
-        let sizeEntry = app.textFields["number-entry-Brush size"]
+        selectPaintPreset("Pen", group: "Pen", preset: "G-Pen", in: app)
+        XCTAssertTrue(app.buttons["brush-1"].isSelected, "The G-Pen brush must become selected")
+        XCTAssertEqual(value.value as? String, remembered, "Switching presets must preserve each brush's edited size")
         for draft in ["37", "2 * ("] {
-            workspaceActivate(sizePanel)
-            XCTAssertTrue(sizeEntry.waitForExistence(timeout: 5))
-            sizeEntry.typeText(draft)
-            workspaceActivate(app.buttons["tool-group-1"])
+            workspaceActivate(value)
+            XCTAssertTrue(entry.waitForExistence(timeout: 5))
+            entry.typeText(draft)
+            selectPaintPreset("Pen", group: "Pen", preset: "Marker", in: app)
             XCTAssertTrue(app.buttons["brush-7"].isSelected)
-            XCTAssertTrue(sizeEntry.waitForNonExistence(timeout: 5), "The draft must not follow a brush switch")
-            XCTAssertEqual(sizePanel.value as? String, markerSize, "The old size draft must not edit Marker")
-            XCTAssertFalse(app.staticTexts["number-error-Brush size"].exists)
-            workspaceActivate(app.buttons["tool-group-0"])
+            XCTAssertTrue(entry.waitForNonExistence(timeout: 5), "The draft must not follow a brush switch")
+            XCTAssertEqual(value.value as? String, markerSize, "The old size draft must not edit Marker")
+            XCTAssertFalse(app.staticTexts["number-error-tool-size"].exists)
+            selectPaintPreset("Pen", group: "Pen", preset: "G-Pen", in: app)
         }
         attachEditor(in: app, name: "brush-size-draft-switch")
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)

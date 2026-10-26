@@ -426,7 +426,7 @@ final class EditorLaunchTests: XCTestCase {
         #if os(macOS)
         app.launchArguments += ["-AppleInterfaceStyle", theme == "dark" ? "Dark" : "Light"]
         #endif
-        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = "[{\"type\":\"set_theme\",\"theme\":\"\(theme)\"},{\"type\":\"customize\",\"action\":{\"type\":\"set_control_visible\",\"panel\":\"sizes\",\"control\":\"brush_size\",\"visible\":true}}]"
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = "[{\"type\":\"set_theme\",\"theme\":\"\(theme)\"}]"
         app.launch()
         checkNumericToolControls(in: app, theme: theme)
         #if os(macOS)
