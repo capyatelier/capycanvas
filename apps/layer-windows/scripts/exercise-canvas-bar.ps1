@@ -158,11 +158,22 @@ try {
  $checks.selection_below_object_with_glass='passed'
 
  $paint=Paint
+ $invertAnchor=(Model).state.canvas_bar.anchor -join ',';$invertCheckpoint=Drawing-Checkpoint
+ $invertBounds=(Control 'canvas-action-bar' -Arranged).Current.BoundingRectangle
+ $invertPixels=Wait-StablePixels {((Screen-Pixels $cx ($cy-25))+':'+(Screen-Pixels ($cx+240) ($cy-25)))}
  foreach($device in @('mouse','touch','pen')){
+  Wait-Until {$b=Bar;$b -and $b.Current.BoundingRectangle.Top -eq $invertBounds.Top} "$device selection bar did not arrange at its original anchor" 5
+  $invertRevision=(Model).state.document_file.revision
   Tap 'canvas-bar-invert_selection' $device
-  Wait-Until {(Model).state.canvas_bar.placement -eq 'bottom_edge'} "$device Invert did not move the bar to the bottom edge" 5
+  Wait-Until {$m=Model;$b=Bar;$m.state.document_file.revision -eq $invertRevision+1 -and $m.state.canvas_bar.placement -eq 'bottom_edge' -and $b -and $b.Current.BoundingRectangle.Top -gt $invertBounds.Bottom} "$device Invert did not arrange the bar at the bottom edge" 5
   Tap 'canvas-bar-invert_selection' $device
-  Wait-Until {(Model).state.canvas_bar.placement -eq 'near_object'} "$device second Invert did not restore the selection" 5
+  Wait-Until {$m=Model;$m.state.document_file.revision -eq $invertRevision+2 -and $m.state.layer_tools.has_selection -and $m.state.canvas_bar.placement -eq 'near_object' -and ($m.state.canvas_bar.anchor -join ',') -ceq $invertAnchor} "$device second Invert did not restore the exact selection anchor" 5
+  (Find 'drawing-canvas').SetFocus()
+  [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),[uint16]0x5A)
+  Wait-Until {$m=Model;$m.state.canvas_bar.placement -eq 'bottom_edge' -and $null -eq $m.state.canvas_bar.anchor -and @($m.state.commands|Where-Object id -eq 'redo')[0].enabled} "$device Invert Undo did not restore the inverted selection" 5
+  [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),[uint16]0x59)
+  Wait-Until {$m=Model;$m.state.layer_tools.has_selection -and $m.state.canvas_bar.placement -eq 'near_object' -and ($m.state.canvas_bar.anchor -join ',') -ceq $invertAnchor -and !@($m.state.commands|Where-Object id -eq 'redo')[0].enabled} "$device Invert Redo did not restore the exact selection and history" 5
+  if((Drawing-Checkpoint) -cne $invertCheckpoint -or (Paint) -cne $paint -or (Wait-StablePixels {((Screen-Pixels $cx ($cy-25))+':'+(Screen-Pixels ($cx+240) ($cy-25)))}) -cne $invertPixels){throw "$device Invert history changed authored artwork or exact composed pixels"}
  }
  if((Paint) -ne $paint){throw 'Bar taps painted on the canvas'}
  $checks.mouse_touch_pen_taps_do_not_paint='passed'

@@ -450,11 +450,14 @@ function Invoke-BlenderCellChecks([int]$Preset,[string]$CellId,[double]$DefaultC
     Wait-Until {(Model).state.brush.preset -eq $Preset -and (Model).brush_ready -and @((View $id).rings).Count -eq $Primary.Count} 'Blender did not prepare its profile primary rings'
     Assert-BlenderCellSettings (Model).state.tool_settings $CellId $Primary
     if(@((Model).state.tool_settings|Where-Object id -eq $CellId)[0].value -ne $DefaultCell -or (@((View $id).rings.setting) -join ',') -cne ($Primary -join ',') -or [Math]::Abs(@((Model).state.tool_settings|Where-Object id -eq 'spread')[0].value-$DefaultSpread) -gt .000001){throw 'Blender default Cell Size or native ring order differs'}
-    & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Window'
     $menu=@((Model).application_menus|Where-Object id -eq 'window')[0]
     $tool=@($menu.model.sections|ForEach-Object {$_}|Where-Object {$_.action.type -eq 'customize' -and $_.action.action.type -eq 'set_panel_visible' -and $_.action.action.panel -eq 'tool_settings'})[0]
     if(!$tool){throw 'Shared Window menu has no Tool settings panel'}
-    if(!$tool.selected){Invoke $tool.label -Name}else{Escape}
+    if(!$tool.selected){
+        & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Window'
+        Invoke $tool.label -Name
+    }
+    Wait-Until {!(Find $tool.label -Name -Type ([System.Windows.Automation.ControlType]::MenuItem) -Visible)} 'Tool settings menu did not dismiss before Blender ring input'
     if(Find 'panel-tab-tool_settings' -Visible){Invoke 'panel-tab-tool_settings'}
     $cell=Blender-Field $CellId;$cellValue=$cell.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value
     if([double]$cellValue -ne $DefaultCell){throw 'Native Blender Cell Size does not show its shared default'}
@@ -465,6 +468,7 @@ function Invoke-BlenderCellChecks([int]$Preset,[string]$CellId,[double]$DefaultC
         foreach($fraction in 0.,.5,1.){
             $point=Ring-Point $id $ring $fraction;$hit=Slider-Hit $id @((($point.x-(Center $id).x)/$scale),(($point.y-(Center $id).y)/$scale))
             if($hit -ne 'ring'){throw 'Published Blender ring point does not hit a ring in the actual native runtime'}
+            @{preset=$Preset;setting=$setting;fraction=$fraction;point=$point;arc=$ring.arc;value=@((Model).state.tool_settings|Where-Object id -eq $setting)[0].value;window_menu_visible=[bool](Find $tool.label -Name -Type ([System.Windows.Automation.ControlType]::MenuItem) -Visible);native_chrome=(Find 'title-bar').Current.HelpText}|ConvertTo-Json -Depth 5 -Compress|Add-Content -LiteralPath (Join-Path $run 'blender-ring-contacts.jsonl') -Encoding UTF8
             Tap $point
             Wait-Until {
                 $field=@((Model).state.tool_settings|Where-Object id -eq $setting)[0];if(!$field -or (View $id).stamp){return $false};$value=$field.value

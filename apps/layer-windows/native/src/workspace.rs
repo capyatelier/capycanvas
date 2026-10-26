@@ -116,9 +116,23 @@ mod tests {
             assert_eq!(projected["bounds"],json!(group.bounds));
             assert_eq!(projected["radii"].as_array().unwrap().len(),4);
         }
-        let mut invalid=query;invalid["measure"]["groups"]=json!([[u32::MAX,{"x":0,"y":0,"width":1,"height":1}]]);
-        let rejected=metadata(super::query(&mut host,&invalid.to_string()).unwrap());
-        assert!(rejected["result"].is_null());assert!(rejected["error"].is_string());
+        let mut retired=query.clone();
+        retired["measure"]["groups"].as_array_mut().unwrap()
+            .push(json!([u32::MAX,{"x":0,"y":0,"width":1,"height":1}]));
+        assert_eq!(metadata(super::query(&mut host,&retired.to_string()).unwrap()),result);
+        assert!(!layout.groups.is_empty());
+        for mutation in 0..2 {
+            let mut invalid=query.clone();
+            if mutation==0 {
+                let duplicate=invalid["measure"]["groups"][0].clone();
+                invalid["measure"]["groups"].as_array_mut().unwrap().push(duplicate);
+            } else {
+                invalid["measure"]["groups"][0][1]["width"]=json!(-1);
+            }
+            let rejected=metadata(super::query(&mut host,&invalid.to_string()).unwrap());
+            assert!(rejected["result"].is_null());
+            assert_eq!(rejected["error"],"Invalid panel measurements");
+        }
         assert_eq!(revision,host.session.engine().document().revision);
         assert!(host.error.is_none());
     }

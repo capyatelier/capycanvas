@@ -100,13 +100,26 @@ function Preset-Geometry([string]$Top){
         foreach($pair in @(@($box.X,($origin[0]+$shared.x*$scale)),@($box.Y,($origin[1]+$shared.y*$scale)),@($box.Width,($shared.width*$scale)),@($box.Height,($shared.height*$scale)))){
             if([Math]::Abs($pair[0]-$pair[1]) -gt 1){throw 'Native preset allocation differs from the current shared group bounds'}
         }
-        try{$bodyNode=Control ('panel-body-scroll-'+$group.id) -Within $node -Arranged}
-        catch{try{Capture 'preset-scroll-failure' -WithModel -Composed}catch{};throw}
-        @(Control-Trace $bodyNode)|ConvertTo-Json -Depth 12|Set-Content (Join-Path $run ('preset-scroll-'+$group.id+'.json'))
-        $body=$bodyNode.Current.BoundingRectangle
-        $view=(Scroll-Pattern $bodyNode).Current.VerticalViewSize
-        if($view -le 0 -or $view -gt 100 -or [double]::IsNaN($view) -or $body.Height*100/$view+1 -lt $group.min_body_height*$scale){throw 'Preset lost its finite scroll viewport or published minimum body extent'}
-        $records+=@{id=$group.id;panels=$group.panels;shared=$shared;native=@($box.X,$box.Y,$box.Width,$box.Height);minimum_body=$group.min_body_height;native_body_height=$body.Height;native_vertical_view_size=$view}
+        $receipt=[ordered]@{group=$group.id;control=@(Control-Trace $node)}
+        try{
+            $body=Native-Bounds ('panel-body-scroll-'+$group.id) $scale
+            $presentation=(Workspace-Root).Current.ItemStatus|ConvertFrom-Json
+            $scroll=@($presentation.groups|Where-Object id -eq $group.id)[0].body_scroll
+            $receipt.native_body=$body;$receipt.body_scroll=$scroll
+            if(!$scroll -or !$box.Contains($body) -or !$root.Current.BoundingRectangle.Contains($body)){throw 'Preset body viewport left its owned group allocation'}
+            $viewport=[double]$scroll.viewport_height;$extent=[double]$scroll.extent_height;$offset=[double]$scroll.vertical_offset
+            foreach($value in @($viewport,$extent,$offset)){if([double]::IsNaN($value) -or [double]::IsInfinity($value)){throw 'Preset body scroll geometry is not finite'}}
+            if($viewport -le 0 -or [Math]::Abs($body.Height-$viewport*$scale) -gt 1 -or $extent*$scale+1 -lt $group.min_body_height*$scale -or $offset -lt 0 -or $offset*$scale -gt [Math]::Max(0,$extent-$viewport)*$scale+1){throw 'Preset lost its finite scroll viewport or published minimum body extent'}
+            $view=$null
+            if(($extent-$viewport)*$scale -gt 1){
+                $pattern=Scroll-Pattern $node
+                $view=$pattern.Current.VerticalViewSize
+                $receipt.provider=@{vertical=$pattern.Current.VerticallyScrollable;view_size=$view;percent=$pattern.Current.VerticalScrollPercent}
+                if(!$pattern.Current.VerticallyScrollable -or $view -le 0 -or $view -gt 100 -or [double]::IsNaN($view) -or [Math]::Abs($extent*$scale*$view/100-$body.Height) -gt 1){throw 'Overflowing preset body has no matching native scroll provider'}
+            }
+        }catch{try{Capture 'preset-scroll-failure' -WithModel -Composed}catch{};throw}
+        finally{$receipt|ConvertTo-Json -Depth 12|Set-Content (Join-Path $run ('preset-scroll-'+$group.id+'.json'))}
+        $records+=@{id=$group.id;panels=$group.panels;shared=$shared;native=@($box.X,$box.Y,$box.Width,$box.Height);minimum_body=$group.min_body_height;native_body_height=$body.Height;native_extent_height=$extent*$scale;native_vertical_offset=$offset*$scale;native_vertical_view_size=$view}
     }
     if($records[0].native[1]+$records[0].native[3] -ge $records[1].native[1] -or $records[1].native[1]+$records[1].native[3] -ge $records[2].native[1]){throw 'Preset primary groups overlap or have the wrong vertical order'}
     return $records
