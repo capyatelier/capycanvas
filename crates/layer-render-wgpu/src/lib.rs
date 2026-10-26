@@ -4226,6 +4226,7 @@ impl WgpuRasterizer {
         let unchanged = !preview_changed && !motion_changed && !prepared_changed && same_artwork && !self.transform_sources_pending;
         let motion_held = self.vector_motion_split.is_some();
         let navigator_unchanged = !preview_changed && (!motion_changed || motion_held) && same_artwork;
+        if !navigator_unchanged { self.navigator.invalidate(); }
         if packet.commit_rasters && (!unchanged || packet.composite_all || packet.reset_layers || self.object_deferred
             || self.scene.as_ref().is_some_and(|scene|scene.objects_pending())
             || self.artwork_frame.as_ref().is_none_or(|frame|frame.view!=packet.view)) {

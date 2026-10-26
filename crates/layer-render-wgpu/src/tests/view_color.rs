@@ -204,6 +204,28 @@ fn presentation_wakes_for_visible_changes_and_skips_unchanged_frames() {
     draw(&mut p, &r, v);
 }
 
+fn overview_base(layer: &mut Document, base: Option<layer_core::authored::PaintBase>) {
+    let SourceTarget::Paint(target)=layer.scene().source_target(owner(layer)).unwrap() else {unreachable!()};
+    let mut paint=layer.artwork.paint.get(target).unwrap().clone();
+    paint.base=base;
+    layer.apply(layer_core::Edit::Paint(layer_core::authored::RecordChange::replace(&layer.artwork.paint,target,Some(paint)).unwrap())).unwrap();
+}
+
+fn overview_source(space: RgbSpace, codes: [u16;4]) -> Document {
+    Document::from_artwork(source(space,codes).artwork).unwrap()
+}
+
+fn overview_frame(r: &mut WgpuRasterizer, layer: &mut Document, time_seconds: f32) {
+    let root=layer.artwork.root;
+    if layer.composition().color!=r.document_color {
+        let mut composition=layer.composition().clone();
+        composition.color=r.document_color;
+        layer.apply(layer_core::Edit::Composition(layer_core::authored::RecordChange::replace(&layer.artwork.compositions,root,Some(composition)).unwrap())).unwrap();
+    }
+    crate::test_support::submit_settled(r,FramePacket {reset_layers:true,time_seconds,..packet(layer.scene(),[256;2])});
+    assert!(r.has_presentable_frame());
+}
+
 #[test]
 fn navigator_shows_transparency_without_a_paper_or_fill_layer() {
     let mut layer = document("Ink on transparency");
@@ -212,15 +234,18 @@ fn navigator_shows_transparency_without_a_paper_or_fill_layer() {
         SdrSurfaceColor::ExtendedLinearSrgb).unwrap();
     let (texture, target) = crate::create_target(r.device(), [256; 2],
         wgpu::TextureFormat::Rgba32Float, "transparent Navigator");
-    for alpha in [None, Some(0), Some(128), Some(255)] {
-        paint_mut(&mut layer).base = alpha.map(|alpha| layer_core::authored::PaintBase::new(rgba8_source([256; 2],
-            |x, _| if x < 128 { [255, 0, 0, alpha] } else { [0; 4] }).into()));
-        frame(&mut r, &mut layer);
+    for (index,alpha) in [None, Some(0), Some(128), Some(255)].into_iter().enumerate() {
+        overview_base(&mut layer,alpha.map(|alpha| layer_core::authored::PaintBase::new(rgba8_source([256; 2],
+            |x, _| if x < 128 { [255, 0, 0, alpha] } else { [0; 4] }).into())));
+        overview_frame(&mut r, &mut layer,index as f32*0.1);
         p.set_overviews(&r, &[crate::OverviewPlacement {
             bounds: [0., 0., 256., 256.], clip: None, work_area: [[-1000.; 2]; 4],
             outline_linear: [0.; 3], scale: 1., opacity: 1.,
         }]);
+        assert!(p.needs_overview_present(&r,[256;2]));
         p.present_overviews(&r, &target, [256; 2]).unwrap();
+        assert!(!p.needs_overview_present(&r,[256;2]));
+        assert!(p.needs_overview_present(&r,[257,256]));
         let actual = crate::test_support::float_pixels(&r, &texture);
         for (x, checker) in [(32, 1.), (40, 0.60382734), (160, 1.), (168, 0.60382734)] {
             let a = if x < 128 { f32::from(alpha.unwrap_or(0)) / 255. } else { 0. };
@@ -230,6 +255,130 @@ fn navigator_shows_transparency_without_a_paper_or_fill_layer() {
                 "alpha={alpha:?} x={x}: {pixel:?} != {expected:?}");
         }
     }
+    p.set_target_retention(false);
+    assert!(p.needs_overview_present(&r,[256;2]));
+}
+
+#[test]
+fn retained_navigator_invalidates_changed_placements_and_targets() {
+    let mut r=WgpuRasterizer::new_native_headless(DocumentColor {space:RgbSpace::Srgb,depth:SampleDepth::U16}).unwrap();
+    let mut layer=overview_source(RgbSpace::Srgb,[60000,5000,12000,65535]);
+    overview_frame(&mut r,&mut layer,0.);
+    let mut p=ViewportPresenter::for_overview_surface(&r,wgpu::TextureFormat::Rgba8UnormSrgb,SdrSurfaceColor::Srgb).unwrap();
+    let (texture,target)=crate::create_target(r.device(),[256;2],wgpu::TextureFormat::Rgba8UnormSrgb,"retained Navigator");
+    let mut placement=crate::OverviewPlacement {bounds:[0.,0.,256.,256.],clip:None,
+        work_area:[[40.,40.],[100.,40.],[100.,100.],[40.,100.]],outline_linear:[0.;3],scale:1.,opacity:1.};
+    let commit=|p:&mut ViewportPresenter,r:&WgpuRasterizer| {
+        assert!(p.needs_overview_present(r,[256;2]));
+        p.present_overviews(r,&target,[256;2]).unwrap();
+        assert!(!p.needs_overview_present(r,[256;2]));
+        crate::layer_tests::page_bytes(r,&texture)
+    };
+    p.set_overviews(&r,&[placement]);
+    let mut previous=commit(&mut p,&r);
+    p.set_overviews(&r,&[placement]);
+    assert!(!p.needs_overview_present(&r,[256;2]));
+    for change in 0..6 {
+        match change {
+            0=>placement.bounds=[12.,8.,220.,232.],
+            1=>placement.clip=Some([24.,16.,180.,192.]),
+            2=>placement.work_area=[[60.,60.],[120.,60.],[120.,120.],[60.,120.]],
+            3=>placement.outline_linear=[0.,0.,1.],
+            4=>placement.opacity=0.5,
+            _=>placement.scale=2.,
+        }
+        p.set_overviews(&r,&[placement]);
+        let next=commit(&mut p,&r);
+        assert!(previous!=next,"placement change {change} must reach retained pixels");
+        previous=next;
+        p.set_overviews(&r,&[placement]);
+        assert!(!p.needs_overview_present(&r,[256;2]));
+    }
+    p.set_surface_rotation(2);commit(&mut p,&r);
+    p.set_corner_radius(12.);commit(&mut p,&r);
+    p.set_overviews(&r,&[]);
+    commit(&mut p,&r);
+    assert!(crate::layer_tests::page_bytes(&r,&texture).chunks_exact(4).all(|pixel|pixel==[0;4]));
+    p.set_overviews(&r,&[]);
+    assert!(!p.needs_overview_present(&r,[256;2]));
+    let (_,resized)=crate::create_target(r.device(),[128,256],wgpu::TextureFormat::Rgba8UnormSrgb,"resized Navigator");
+    assert!(p.needs_overview_present(&r,[128,256]));
+    p.present_overviews(&r,&resized,[128,256]).unwrap();
+    assert!(!p.needs_overview_present(&r,[128,256]));
+    p.set_target_retention(false);
+    assert!(p.needs_overview_present(&r,[128,256]));
+    p.present_overviews(&r,&resized,[128,256]).unwrap();
+    assert!(!p.needs_overview_present(&r,[128,256]));
+}
+
+#[test]
+fn retained_navigator_invalidates_a_legally_replaced_source_image() {
+    let mut r=WgpuRasterizer::new_native_headless(DocumentColor {space:RgbSpace::Srgb,depth:SampleDepth::U16}).unwrap();
+    let mut layer=overview_source(RgbSpace::Srgb,[60000,5000,12000,65535]);
+    overview_frame(&mut r,&mut layer,0.);
+    let mut p=ViewportPresenter::for_overview_surface(&r,wgpu::TextureFormat::Rgba8UnormSrgb,SdrSurfaceColor::Srgb).unwrap();
+    let (texture,target)=crate::create_target(r.device(),[256;2],wgpu::TextureFormat::Rgba8UnormSrgb,"changed Navigator source");
+    p.set_overviews(&r,&[crate::OverviewPlacement {bounds:[0.,0.,256.,256.],clip:None,
+        work_area:[[-1000.;2];4],outline_linear:[0.;3],scale:1.,opacity:1.}]);
+    p.present_overviews(&r,&target,[256;2]).unwrap();
+    assert!(!p.needs_overview_present(&r,[256;2]));
+    let previous=crate::layer_tests::page_bytes(&r,&texture);
+    let main_before=crate::layer_tests::page_bytes(&r,r.presentation_views().unwrap()[0].texture());
+    let replacement=paint_mut(&mut overview_source(RgbSpace::Srgb,[5000,60000,12000,65535])).base.clone();
+    overview_base(&mut layer,replacement);
+    overview_frame(&mut r,&mut layer,1.);
+    assert!(!r.navigator.pending());
+    let navigator_revision=r.navigator.revision;
+    crate::test_support::submit_settled(&mut r,FramePacket {time_seconds:1.1,composite_all:false,..packet(layer.scene(),[256;2])});
+    assert_eq!(r.navigator.revision,navigator_revision,"settled Navigator must not redraw on idle frames");
+    let main_after=crate::layer_tests::page_bytes(&r,r.presentation_views().unwrap()[0].texture());
+    assert!(main_before!=main_after,"legal source edit must update the display source");
+    assert!(p.needs_overview_present(&r,[256;2]));
+    p.present_overviews(&r,&target,[256;2]).unwrap();
+    assert!(!p.needs_overview_present(&r,[256;2]));
+    assert!(previous!=crate::layer_tests::page_bytes(&r,&texture),"new Navigator image must replace retained pixels");
+}
+
+#[test]
+fn retained_navigator_invalidates_inherited_proof_buffers_and_viewing_options() {
+    use layer_core::color::{ProofRecipe,hdr::SdrRendition};
+    let mut r=WgpuRasterizer::new_native_headless(DocumentColor {space:RgbSpace::DisplayP3,depth:SampleDepth::F32}).unwrap();
+    overview_frame(&mut r,&mut overview_source(RgbSpace::DisplayP3,[5000,60000,12000,65535]),0.);
+    let format=wgpu::TextureFormat::Rgba32Float;
+    let mut parent=ViewportPresenter::for_surface(&r,format,SdrSurfaceColor::ExtendedLinearSrgb).unwrap();
+    let mut p=ViewportPresenter::for_overview_surface(&r,format,SdrSurfaceColor::ExtendedLinearSrgb).unwrap();
+    let (texture,target)=crate::create_target(r.device(),[256;2],format,"proofed retained Navigator");
+    p.set_overviews(&r,&[crate::OverviewPlacement {bounds:[0.,0.,256.,256.],clip:None,
+        work_area:[[-1000.;2];4],outline_linear:[0.;3],scale:1.,opacity:1.}]);
+    let commit=|p:&mut ViewportPresenter| {
+        assert!(p.needs_overview_present(&r,[256;2]));
+        p.present_overviews(&r,&target,[256;2]).unwrap();
+        assert!(!p.needs_overview_present(&r,[256;2]));
+        crate::test_support::float_pixels(&r,&texture)
+    };
+    let unproofed=commit(&mut p);
+    let luts=[RgbSpace::Srgb,RgbSpace::DisplayP3].map(|space|Arc::new(layer_color::ProofLut::build(
+        RgbSpace::DisplayP3,&ProofRecipe::new("retained proof".into(),ColorProfile::Builtin(space)),||false).unwrap()));
+    assert_eq!((luts[0].edge(),luts[0].space(),luts[0].dark_grid()),(luts[1].edge(),luts[1].space(),luts[1].dark_grid()));
+    parent.set_proof(&r,Some(luts[0].clone()),true,false).unwrap();
+    p.inherit_proof(&r,&parent);
+    let first=commit(&mut p);
+    assert!(unproofed!=first,"proof must change retained Navigator pixels");
+    p.inherit_proof(&r,&parent);
+    assert!(!p.needs_overview_present(&r,[256;2]));
+    parent.set_proof(&r,Some(luts[1].clone()),true,false).unwrap();
+    p.inherit_proof(&r,&parent);
+    let second=commit(&mut p);
+    assert!(first!=second,"equal proof option words must not hide replacement LUT samples");
+    parent.set_proof(&r,Some(luts[1].clone()),false,false).unwrap();
+    p.inherit_proof(&r,&parent);commit(&mut p);
+    parent.set_hdr_view(&r,Some(SdrRendition {exposure:1.,..Default::default()}),1.).unwrap();
+    p.inherit_proof(&r,&parent);commit(&mut p);
+    let check=crate::ScreenCheck {from_view:None,surface_clips:true,bounded:true,mark:true};
+    p.set_screen_check(&r,Some(check));commit(&mut p);
+    p.set_screen_check(&r,Some(check));
+    assert!(!p.needs_overview_present(&r,[256;2]));
+    p.set_screen_check(&r,None);commit(&mut p);
 }
 
 #[test]

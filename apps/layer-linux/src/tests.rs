@@ -3421,10 +3421,16 @@ fn native_navigator() {
     let mut pixels = vec![0; texture.width() as usize * texture.height() as usize * 4];
     texture.download(&mut pixels, texture.width() as usize * 4);
     let offset = (sample[1] as usize * texture.width() as usize + sample[0] as usize) * 4;
+    let paper_bgr = {
+        let session = ui_session(&w);
+        let document = session.engine().document();
+        let paper = document.scene().effect(document.bottom_paper().unwrap()).unwrap().constant_color().unwrap();
+        [paper.rgba[2], paper.rgba[1], paper.rgba[0]].map(|value| (value * 255.).round() as u8)
+    };
     assert!(
-        pixels[offset..offset + 3].iter().all(|v| *v > 240),
-        "the floating overview's white paper must cover the native panel below: {:?}",
-        &pixels[offset..offset + 4]
+        pixels[offset..offset + 3].iter().zip(paper_bgr).all(|(actual, expected)| actual.abs_diff(expected) <= 2),
+        "the floating overview's authored paper must cover the native panel below: {:?} vs {paper_bgr:?}",
+        &pixels[offset..offset + 4],
     );
     capture_reference(&w, &format!("{dir}/navigator-over-panel.png"), 1.0);
     // Reversing the overlap must preserve native controls above the image.

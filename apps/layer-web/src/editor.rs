@@ -314,6 +314,7 @@ impl WebApp {
                 slot.canvas.set_width(width);
                 slot.canvas.set_height(height);
                 surface.configure(gpu.device(), config);
+                presenter.set_target_retention(false);
             }
             presenter.set_overviews(
                 gpu,
@@ -332,6 +333,7 @@ impl WebApp {
                 }],
             );
             if !presenter.pipelines_ready(gpu) { retry = true; continue; }
+            if !presenter.needs_overview_present(gpu,[width,height]) { continue; }
             let target = match surface.get_current_texture() {
                 wgpu::CurrentSurfaceTexture::Success(target)
                 | wgpu::CurrentSurfaceTexture::Suboptimal(target) => target,
@@ -342,6 +344,7 @@ impl WebApp {
                 }
                 wgpu::CurrentSurfaceTexture::Outdated => {
                     surface.configure(gpu.device(), config);
+                    presenter.set_target_retention(false);
                     retry = true;
                     continue;
                 }

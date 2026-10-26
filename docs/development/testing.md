@@ -42,6 +42,11 @@ that chrome prepares before the first nonempty panel/glass parameters arrive.
 GTK's bridge journeys capture the GPU background and the composed
 native controls; rendering a GTK widget alone omits the GPU underlay.
 
+Windowless retained-Navigator tests check placement and image changes, inherited
+proof samples, viewing options, empty placement lists and target replacement.
+Source-pixel assertions require the final Navigator image to follow a refined
+composition, then become idle without another input event.
+
 GTK `squircle::tests` checks corner and shadow conversion beneath bridge masks
 and effect wrappers without a window. `render_thread::tests::chrome_` checks
 unpublished requests, coalescing behind a held buffer, stale releases and idle

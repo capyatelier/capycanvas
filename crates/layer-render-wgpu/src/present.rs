@@ -964,6 +964,21 @@ impl ViewportPresenter {
         self.encode_content(renderer, encoder, target, view, surround_linear, false)
     }
 
+    fn overview_view(extent: [u32;2]) -> ViewState {
+        ViewState {width_px:extent[0],height_px:extent[1],document_to_surface:[1.,0.,0.,1.,0.,0.]}
+    }
+
+    pub fn needs_overview_present(&self, renderer: &WgpuRasterizer, extent: [u32;2]) -> bool {
+        assert!(self.standalone_overview);
+        let previous=&self.history;
+        let navigator=renderer.navigator.view().unwrap_or(&renderer.empty_view);
+        renderer.presentation_views().is_some() && (!previous.valid
+            || self.presented_view!=Some((Self::overview_view(extent),[0.;4],self.quarter_turns,self.corner_radius))
+            || previous.navigator_revision!=renderer.navigator.revision
+            || previous.hdr!=self.hdr_options || previous.proof!=self.proof_options || previous.screen!=self.screen_options
+            || self.overviews_changed || self.bind_group.is_none() || self.navigator_view.as_ref()!=Some(navigator))
+    }
+
     /// Render a retained native Navigator surface from the current GPU image.
     /// Native placement and clipping can then move it without another GPU pass.
     pub fn present_overviews(
@@ -981,11 +996,7 @@ impl ViewportPresenter {
             renderer,
             &mut encoder,
             target,
-            ViewState {
-                width_px: extent[0],
-                height_px: extent[1],
-                document_to_surface: [1., 0., 0., 1., 0., 0.],
-            },
+            Self::overview_view(extent),
             [0.; 4],
             true,
         )?;
@@ -1189,8 +1200,8 @@ impl ViewportPresenter {
                 self.overview_buffer.as_ref().unwrap(),
                 bytes,
             )?;
-            self.overviews_changed = false;
         }
+        self.overviews_changed = false;
         let extent = if self.quarter_turns.is_multiple_of(2) {
             [view.width_px, view.height_px]
         } else {
@@ -1458,6 +1469,13 @@ impl ViewportPresenter {
         self.presented_selection_overlay = renderer.selection_overlay;
         self.presented_paper = Some(lit);
         self.overlays_changed = false;
+        if overview_only {
+            self.history.valid=true;
+            self.history.navigator_revision=renderer.navigator.revision;
+            self.history.hdr=self.hdr_options;
+            self.history.proof=self.proof_options;
+            self.history.screen=self.screen_options;
+        }
         if !overview_only { self.panel_surfaces_changed = false; }
         Ok(())
     }

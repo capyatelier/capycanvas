@@ -4,13 +4,16 @@ use super::*;
 pub(crate) struct Navigator {
     cache: Option<Cache>,
     pending: bool,
+    awaiting_source: bool,
     refreshed: f32,
     pub revision: u64,
 }
 
 impl Navigator {
+    pub fn invalidate(&mut self) { self.pending=true; }
+
     pub fn pending(&self) -> bool {
-        self.pending || self.cache.as_ref().is_some_and(|c| c.submission_valid.as_ref()
+        self.pending || self.awaiting_source || self.cache.as_ref().is_some_and(|c| c.submission_valid.as_ref()
             .is_some_and(|v| !v.load(std::sync::atomic::Ordering::Acquire)))
     }
     pub fn view(&self) -> Option<&wgpu::TextureView> {
@@ -27,10 +30,12 @@ impl Navigator {
         crate::performance_trace::counter(c"Capy Navigator age us", ((packet.time_seconds - self.refreshed).max(0.) * 1e6) as u64);
         crate::performance_trace::counter(c"Capy Navigator pending", u64::from(self.pending()));
         crate::performance_trace::counter(c"Capy Navigator bytes", self.storage_bytes());
-        if reset { self.cache = None; }
-        self.pending |= changed;
+        if reset { self.cache = None; self.awaiting_source=false; }
+        let source_pending=r.scale_display.as_ref().is_some_and(|c|c.has_pending_work(r));
+        self.pending |= changed || (self.awaiting_source && !source_pending);
+        self.awaiting_source &= source_pending;
         let missing = self.view().is_none();
-        if !missing && (held || !self.pending() || (changed && packet.time_seconds >= self.refreshed
+        if !missing && (held || !self.pending || (changed && packet.time_seconds >= self.refreshed
             && packet.time_seconds - self.refreshed < 0.05)) { return Ok(()); }
         let Some(display) = r.scale_display.as_ref() else { return Ok(()); };
         let base = display_mips::Plan::new(packet.document_extent)?;
@@ -81,6 +86,7 @@ impl Navigator {
         write.track(encoder);
         scene_write.track(encoder);
         self.pending = false;
+        self.awaiting_source=source_pending;
         self.refreshed = packet.time_seconds;
         self.revision = self.revision.wrapping_add(1);
         crate::performance_trace::counter(c"Capy Navigator refreshes", self.revision);
@@ -92,7 +98,7 @@ impl Navigator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{float_pixels, packet};
+    use crate::test_support::{float_pixels, packet, submit_settled};
     use layer_core::{Affine, Document, ImageTransform, Point};
 
     fn document() -> Document {
@@ -119,7 +125,7 @@ mod tests {
         let mut frame = packet(doc.scene(), doc.composition().size);
         frame.composite_all = false;
         frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
-        super::super::tests::submit_published(&mut r, frame);
+        submit_settled(&mut r, frame);
         let original = pixels(&r);
         let revision = r.navigator.revision;
         for step in 1..=4 {
@@ -162,6 +168,7 @@ mod tests {
         r.set_transform_preview(None).unwrap();
         crate::test_support::submit_ready(&mut r, frame).unwrap();
         crate::test_support::submit_ready(&mut r, frame).unwrap();
+        submit_settled(&mut r, frame);
         assert_eq!(pixels(&r), original);
     }
 
@@ -172,7 +179,7 @@ mod tests {
         let mut frame = packet(doc.scene(), doc.composition().size);
         frame.composite_all = false;
         frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
-        super::super::tests::submit_published(&mut r, frame);
+        submit_settled(&mut r, frame);
         let original = pixels(&r);
         let mut edited = doc.clone();
         edited.artwork.occurrences.get_mut(doc.working.occurrence.unwrap()).unwrap().opacity = 0.3;
@@ -180,17 +187,22 @@ mod tests {
         for (step, document) in [&edited, &doc, &edited, &doc].into_iter().enumerate() {
             frame.time_seconds += 0.01;
             let edit = FramePacket { scene: document.scene(), ..frame };
+            let previous = pixels(&r);
             r.submit(edit).unwrap();
             assert!(r.navigator.pending());
             r.background_ready = Arc::new(std::sync::atomic::AtomicBool::new(false));
             r.submit(edit).unwrap();
+            assert!(pixels(&r) != previous, "logical edits must reach Navigator while native refinement is held");
+            r.background_ready.store(true, std::sync::atomic::Ordering::Release);
+            submit_settled(&mut r, edit);
             assert!(!r.navigator.pending());
             let actual = pixels(&r);
             if step == 0 { assert_ne!(actual, original); alternate = Some(actual); }
             else { assert_eq!(actual, if step % 2 == 0 { alternate.clone().unwrap() } else { original.clone() }); }
         }
         frame.blend_space = layer_core::BlendSpace::Perceptual;
-        r.submit(frame).unwrap();
+        crate::test_support::submit_ready(&mut r, frame).unwrap();
+        submit_settled(&mut r, frame);
         assert!(!r.navigator.pending());
         assert_ne!(pixels(&r), original);
     }
@@ -202,7 +214,7 @@ mod tests {
         let mut frame = packet(doc.scene(), doc.composition().size);
         frame.composite_all = false;
         frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
-        super::super::tests::submit_published(&mut r, frame);
+        submit_settled(&mut r, frame);
         let original = pixels(&r);
         let mut dab = crate::tests::test_dab([100., 100.], [0.9, 0.02, 0.1, 1.], 1.);
         dab.radii = [45.; 2];
@@ -218,6 +230,7 @@ mod tests {
         crate::test_support::submit_ready(&mut r, frame).unwrap();
         assert!(r.navigator.pending());
         crate::test_support::submit_ready(&mut r, frame).unwrap();
+        submit_settled(&mut r, frame);
         assert!(!r.navigator.pending());
         assert_eq!(pixels(&r), original);
     }
@@ -229,7 +242,7 @@ mod tests {
         let mut frame = packet(doc.scene(), doc.composition().size);
         frame.composite_all = false;
         frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
-        super::super::tests::submit_published(&mut r, frame);
+        submit_settled(&mut r, frame);
         let original = pixels(&r);
         let mut navigator = std::mem::take(&mut r.navigator);
         {
@@ -240,17 +253,18 @@ mod tests {
         assert!(navigator.view().is_none());
         r.navigator = navigator;
         crate::test_support::submit_ready(&mut r, frame).unwrap();
+        submit_settled(&mut r, frame);
         assert!(!r.navigator.pending());
         assert_eq!(pixels(&r), original);
         let mut replacement_doc = doc.clone();
         let SourceTarget::Paint(paint) = replacement_doc.working.target.unwrap() else { unreachable!() };
         replacement_doc.artwork.paint.get_mut(paint).unwrap().base = Some(layer_core::authored::PaintBase::new((layer_core::color::source::rgba8_source([1025, 513], |_, _| [0, 0, 255, 255])).into()));
         let replacement = FramePacket { reset_layers: true, scene: replacement_doc.scene(), ..frame };
-        crate::test_support::submit_settled(&mut r, replacement);
+        submit_settled(&mut r, replacement);
         let changed = pixels(&r);
         assert!(changed.iter().all(|c| c[0] == 0. && c[1] == 0. && c[2] > 0.99 && c[3] == 1.));
         let mut recovered = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
-        crate::test_support::submit_settled(&mut recovered, replacement);
+        submit_settled(&mut recovered, replacement);
         assert_eq!(pixels(&recovered), changed);
     }
 }

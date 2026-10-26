@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {mkdir,writeFile} from 'node:fs/promises';
 export async function checkWorkspaceRendering({call,evaluate,settle}) {
- const dir='artifacts/workspace-motion';await mkdir(dir,{recursive:true});
+ const dir=process.env.LAYER_TEST_ARTIFACTS||'artifacts/workspace-motion';await mkdir(dir,{recursive:true});
  const send=async a=>{await evaluate(`layerApp.dispatch(${JSON.stringify(a)})`);await settle();await evaluate('new Promise(r=>setTimeout(r,250))');};
  const saved=await evaluate('layerApp.state().workspace'),fixture=structuredClone(saved);
  const transparency=['off','low','medium','high'].indexOf(await evaluate('layerApp.state().settings.transparency'));
@@ -44,7 +44,9 @@ export async function checkWorkspaceRendering({call,evaluate,settle}) {
   const nav=structuredClone(fixture);nav.layout.bands[1].root.panels.push('navigator');nav.layout.bands[1].root.active='navigator';
   await send({type:'restore_workspace',workspace:nav});
   await send({type:'move_group',group:43,target:{kind:'float',position:[550,220]}});
-  await evaluate('new Promise(resolve=>{const poll=()=>layerApp.startupTimes.complete?resolve():setTimeout(poll,50);poll();})');
+  await send({type:'invoke',command:'fit_canvas'});
+  await evaluate(`new Promise((resolve,reject)=>{const end=performance.now()+30000;function ready(){if(layerApp.app.brush_ready()&&layerApp.startupTimes.complete!==null)resolve(true);else if(performance.now()>end)reject(Error('Navigator fixture canvas did not become ready'));else setTimeout(ready,50)}ready()})`);
+  await evaluate('layerApp.app.wait_for_canvas()');
   const compare=async(a,b)=>evaluate(`(async()=>{const load=async s=>{const i=new Image();i.src='data:image/png;base64,'+s;await i.decode();const c=document.createElement('canvas');c.width=i.width;c.height=i.height;const x=c.getContext('2d',{willReadFrequently:true});x.drawImage(i,0,0);return x.getImageData(0,0,c.width,c.height).data;};const a=await load(${JSON.stringify(a)}),b=await load(${JSON.stringify(b)});return a.reduce((n,v,i)=>n+(v!==b[i]),0);})()`);
   const native=await evaluate(`(()=>{const c=document.querySelector('.dock-group[data-group="43"] .navigator-surface'),r=c.getBoundingClientRect();window.retainedNavigator=c;return{width:c.width,height:c.height,expected:[Math.round(r.width*devicePixelRatio),Math.round(r.height*devicePixelRatio)]};})()`);
   assert.deepEqual([native.width,native.height],native.expected,'Navigator GPU canvas uses native resolution');
@@ -60,7 +62,8 @@ export async function checkWorkspaceRendering({call,evaluate,settle}) {
   await call('Input.dispatchMouseEvent',{type:'mouseMoved',x:grip.x+100,y:grip.y+100,button:'left',buttons:1});await settle();
   const navDuring=await navCrop();
   assert.equal(await compare(navBefore,navDuring),0,'Navigator pixels remain sharp and attached while dragging');
-  assert.ok(await evaluate(`(async()=>{const i=new Image();i.src='data:image/png;base64,'+${JSON.stringify(navDuring)};await i.decode();const c=document.createElement('canvas');c.width=i.width;c.height=i.height;const x=c.getContext('2d',{willReadFrequently:true});x.drawImage(i,0,0);const a=x.getImageData(0,0,c.width,c.height).data;let white=0;for(let n=0;n<a.length;n+=4)if(a[n]>245&&a[n+1]>245&&a[n+2]>245)white++;return white>c.width*c.height*.9;})()`),'Native GPU canvas displays the white document against a dark panel');
+  const documentPixel=await evaluate(`(async()=>{const c=layerApp.app.camera(),r=layerApp.canvas.getBoundingClientRect(),points=[150,500,900,1200].flatMap(x=>[200,500,750].map(y=>({x:r.x+(c.translation[0]+x*c.zoom)*r.width/c.viewport[0],y:r.y+(c.translation[1]+y*c.zoom)*r.height/c.viewport[1]}))),p=points.find(p=>document.elementFromPoint(p.x,p.y)===layerApp.canvas);if(!p)throw Error('All Navigator source paper samples are obscured');const im=new Image();im.src='data:image/png;base64,'+${JSON.stringify((await call('Page.captureScreenshot',{format:'png'})).data)};await im.decode();const scale=im.width/innerWidth,canvas=document.createElement('canvas');canvas.width=im.width;canvas.height=im.height;const context=canvas.getContext('2d',{willReadFrequently:true});context.drawImage(im,0,0);const pixels=context.getImageData(Math.floor(p.x*scale)-16,Math.floor(p.y*scale)-16,32,32).data;return [0,1,2].map(k=>Math.round(pixels.reduce((sum,v,i)=>sum+(i%4===k?v:0),0)/1024));})()`);
+  assert.ok(await evaluate(`(async()=>{const i=new Image();i.src='data:image/png;base64,'+${JSON.stringify(navDuring)};await i.decode();const c=document.createElement('canvas');c.width=i.width;c.height=i.height;const x=c.getContext('2d',{willReadFrequently:true});x.drawImage(i,0,0);const a=x.getImageData(0,0,c.width,c.height).data,expected=${JSON.stringify(documentPixel)};let matching=0;for(let n=0;n<a.length;n+=4)if(expected.every((v,k)=>Math.abs(v-a[n+k])<=3))matching++;return matching>c.width*c.height*.9;})()`),'Native GPU Navigator pixels match the displayed document paper');
   assert.ok(await evaluate('retainedNavigator===document.querySelector(\'.dock-group[data-group="43"] .navigator-surface\')'),'retain the same Navigator canvas');
   await call('Input.dispatchMouseEvent',{type:'mouseReleased',x:grip.x+100,y:grip.y+100,button:'left',buttons:0,clickCount:1});await settle();
   await send({type:'invoke',command:'fit_canvas'});const cameraBefore=await navCrop();for(let i=0;i<3;i++)await send({type:'invoke',command:'zoom_in'});
@@ -81,7 +84,7 @@ export async function checkWorkspaceRendering({call,evaluate,settle}) {
   };
   const stroke=async(y,rgba,key)=>{
     await send({type:'set_color',rgba});
-    const p=await evaluate(`(()=>{const c=layerApp.state().camera,r=layerApp.canvas.getBoundingClientRect();return{x:r.x+(c.translation[0]+700*c.zoom)/devicePixelRatio,y:r.y+(c.translation[1]+${y}*c.zoom)/devicePixelRatio,dx:450*c.zoom/devicePixelRatio};})()`);
+    const p=await evaluate(`(()=>{const c=layerApp.app.camera(),r=layerApp.canvas.getBoundingClientRect();return{x:r.x+(c.translation[0]+700*c.zoom)*r.width/c.viewport[0],y:r.y+(c.translation[1]+${y}*c.zoom)*r.height/c.viewport[1],dx:450*c.zoom*r.width/c.viewport[0]};})()`);
     for(const [type,dx] of [['mousePressed',0],['mouseMoved',p.dx/2]]){
       await call('Input.dispatchMouseEvent',{type,x:p.x+dx,y:p.y,button:'left',buttons:1,pointerType:'pen',force:1});await settle();
     }
@@ -96,9 +99,16 @@ export async function checkWorkspaceRendering({call,evaluate,settle}) {
     const artwork=await call('Page.captureScreenshot',{format:'png'});await writeFile(`${dir}/web-navigator-artwork-${theme}-${dpr}x.png`,Buffer.from(artwork.data,'base64'));
     await send({type:'invoke',command:'undo'});await awaitColors(c=>c.red>20&&c.blue===0);
     await send({type:'invoke',command:'redo'});await awaitColors(c=>c.red>20&&c.blue>20);
+    await send({type:'select_panel_tab',group:43,panel:'layers'});
+    await send({type:'invoke',command:'undo'});
+    await send({type:'select_panel_tab',group:43,panel:'navigator'});await awaitColors(c=>c.red>20&&c.blue===0);
+    await send({type:'invoke',command:'redo'});await awaitColors(c=>c.red>20&&c.blue>20);
   }
+  await evaluate('layerApp.restartGpu()');
+  await evaluate(`new Promise((resolve,reject)=>{const end=performance.now()+30000;function ready(){if(layerApp.app.brush_ready()&&layerApp.startupTimes.complete!==null)resolve(true);else if(performance.now()>end)reject(Error('GPU restart did not become ready'));else setTimeout(ready,50)}ready()})`);
+  await awaitColors(c=>c.red>20&&c.blue>20);
   await send({type:'invoke',command:'undo'});await send({type:'invoke',command:'undo'});await awaitColors(c=>c.red===0&&c.blue===0);
-  console.log(JSON.stringify({dpr,navigatorArtwork:true,brushUpConvergence:true,artworkUndoRedo:true,themes:['light','dark']}));
+  console.log(JSON.stringify({dpr,navigatorArtwork:true,brushUpConvergence:true,artworkUndoRedo:true,inactiveSourceChange:true,gpuRestart:true,themes:['light','dark']}));
   // Use real host measurements and all pointer types for the clipped-preview
   // path, alongside the existing retained-pixel and cancellation checks.
   for (const device of ["mouse", "touch", "pen"]) for (const scenario of [
@@ -154,8 +164,9 @@ export async function checkWorkspaceRendering({call,evaluate,settle}) {
     await input("up"); await send({type:"set_theme",theme:"dark"});
     const final = await evaluate(`layerApp.app.layout(innerWidth,innerHeight).groups.find(g=>g.panels.includes(${JSON.stringify(panel)}))`);
     const natural = measurement.content_height+chrome;
-    const preferred = established ? source.height : measurement.scroll && natural>400 ?
-      (source.height>=minimum && source.height<=400 ? source.height : 400) : natural;
+    const budget = Math.max(400,minimum);
+    const preferred = established ? source.height : measurement.scroll && natural>budget ?
+      (source.height>=minimum && source.height<=budget ? source.height : budget) : natural;
     const expected = Math.min(preferred,Math.max(room,minimum));
     assert.ok(Math.abs(final.bounds.height-expected)<1, `${device} ${panel}: ${final.bounds.height} versus ${expected}, ${JSON.stringify(measurement)}`);
     assert.ok(final.bounds.y+final.bounds.height<=994.01);
