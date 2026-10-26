@@ -153,8 +153,9 @@ private struct RecordingButton: View {
     let height: CGFloat
     var body: some View {
         Button { recording.activate() } label: {
-            Text(recording.label).fontWeight(.bold).frame(maxWidth: .infinity, minHeight: height).contentShape(Rectangle())
-        }.buttonStyle(EditorControlButtonStyle(background: Color.primary.opacity(0.05))).disabled(recording.busy)
+            Text(recording.label).fontWeight(.bold).lineLimit(1).padding(.horizontal, 6)
+                .frame(maxWidth: .infinity, minHeight: height).contentShape(Rectangle())
+        }.buttonStyle(EditorControlButtonStyle()).disabled(recording.busy)
             .help(nativeCopy["color"]["record_tablet"].string).accessibilityIdentifier("stroke-recording")
     }
 }

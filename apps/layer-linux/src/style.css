@@ -183,8 +183,8 @@ button.flat.unavailable-tool > * { filter: opacity(30%); }
 .dock-panel .heading { font-size: inherit; }
 .selected-tool { background: var(--selection-bg); box-shadow: none; }
 .dock-tabs button, .collapsed-column .tile-button, .toolbar-controls button, .window-bar .header-tool { transition-property: opacity, outline-color, outline-width, outline-offset; }
-.dock-panel button, .dock-panel entry { border-radius: var(--control-radius); }
-.dock-panel button { min-height: var(--panel-control-height); padding: 0 var(--panel-field-padding); }
+.dock-panel button, .dock-panel entry, .renderer-stats > button { border-radius: var(--control-radius); }
+.dock-panel button, .renderer-stats > button { min-height: var(--panel-control-height); padding: 0 var(--panel-field-padding); }
 .dock-panel toggle-group.flat { min-height: var(--panel-control-height); padding: 0; }
 .dock-panel toggle-group.flat toggle { min-height: var(--panel-control-height); padding: 0 var(--panel-field-padding); border-radius: var(--control-radius); }
 .dock-panel image { -gtk-icon-size: 14px; }

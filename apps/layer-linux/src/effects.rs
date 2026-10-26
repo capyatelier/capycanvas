@@ -216,6 +216,7 @@ impl EffectPanels {
         let stats = gtk::Box::new(gtk::Orientation::Vertical, 6);
         stats.add_css_class("renderer-stats");
         let recording_button = gtk::Button::with_label("Start stroke recording");
+        recording_button.add_css_class("flat");
         recording_button.set_widget_name("stroke-recording");
         stats.append(&recording_button);
         let stats_plot = gtk::DrawingArea::builder()

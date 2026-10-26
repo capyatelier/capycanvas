@@ -505,7 +505,9 @@ private data class CurveTap(val position: Offset, val time: Long, val epoch: Lon
                 }
             }
         }
-        Button(onClick = host.strokeRecording::click, enabled = !host.strokeRecording.busy, modifier = Modifier.testTag("stroke-recording")) {
+        TextButton(onClick = host.strokeRecording::click, enabled = !host.strokeRecording.busy,
+            modifier = Modifier.height(panelMetrics().height).testTag("stroke-recording"), shape = ControlShape,
+            colors = ButtonDefaults.textButtonColors(contentColor = colors.text), contentPadding = PaddingValues(horizontal = panelMetrics().padding)) {
             Text(host.strokeRecording.status?.optString("label") ?: host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("record_tablet"))
         }
     }

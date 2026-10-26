@@ -9,6 +9,8 @@ the button becomes **Save stroke recording**. Recording stops automatically at
 ten minutes or the 32 MiB capture budget, including when Diagnostics is hidden.
 An automatic web stop offers a Save button because browser file pickers require
 a user gesture. Recordings remain in memory until saved or the window is closed.
+The recording button uses the standard flat 26-unit panel control style in docks,
+floating panels and drawers on every platform, including its Stop and Save states.
 
 Capture follows the window across document switches. It records canvas input
 delivered by the platform adapter, including coalesced/history samples, hover,
