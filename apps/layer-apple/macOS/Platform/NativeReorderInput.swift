@@ -24,6 +24,7 @@ final class ReorderInputView: NSView, NSGestureRecognizerDelegate {
     private var lastTrack: TimeInterval?
     private var observers: [NSObjectProtocol] = []
     private lazy var bubbles = BubbleInputCapture(marker: self)
+    private lazy var edge = MacEdgeReachCapture(marker: self)
     override var isFlipped: Bool { true }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
     override init(frame frameRect: NSRect) {
@@ -60,12 +61,13 @@ final class ReorderInputView: NSView, NSGestureRecognizerDelegate {
         }
         for gesture in [pan!, press!, secondary!] { attached?.addGestureRecognizer(gesture) }
         bubbles.attach()
+        edge.attach()
         updateViewport()
     }
     override func layout() { super.layout(); attach(); updateViewport() }
     func detach() {
         guard attached != nil else { return }
-        bubbles.detach(); cancel(detaching: true); for gesture in [pan!, press!, secondary!] { attached?.removeGestureRecognizer(gesture) }
+        edge.detach(); bubbles.detach(); cancel(detaching: true); for gesture in [pan!, press!, secondary!] { attached?.removeGestureRecognizer(gesture) }
         layerTouches?.stop(); layerTouches = nil
         attached = nil
     }
@@ -76,10 +78,12 @@ final class ReorderInputView: NSView, NSGestureRecognizerDelegate {
             layerTouches = LayerTouchInput(marker: self, model: layer, view: attached)
         }
         bubbles.attach()
+        edge.attach()
     }
     private func cancel(detaching: Bool = false, all: Bool = true) {
         guard !cancelling else { return }; cancelling = true
         defer { cancelling = false }
+        if all { edge.cancel() }
         if all { layerTouches?.cancel() }
         if detaching { model?.nativeInputDetached() } else if all { model?.cancel() } else { model?.cancelReorder() }
         timer?.invalidate(); timer = nil; downEvent = nil
@@ -129,7 +133,7 @@ final class ReorderInputView: NSView, NSGestureRecognizerDelegate {
                 return false
             }
             let device: ReorderDevice = event.subtype == .tabletPoint ? .pen : .mouse
-            model.contact.prepare(target, device: device, origin: point); downEvent = event
+            model.contact.prepare(target, device: device, origin: point, activate: !edge.defersSelection); downEvent = event
             lastPoint = nil
         }
         return recognizer !== press || model.contact.requiresHold || model.contact.device != .mouse
@@ -137,6 +141,7 @@ final class ReorderInputView: NSView, NSGestureRecognizerDelegate {
     func gestureRecognizerShouldBegin(_ recognizer: NSGestureRecognizer) -> Bool {
         if recognizer === secondary { return model?.enabled == true }
         guard let model, model.contact.validate() else { return false }
+        if recognizer === pan && edge.holdsMotion { return true }
         if recognizer === pan && model.contact.requiresHold && !model.contact.held {
             let point = NSApp.currentEvent.map { convert($0.locationInWindow, from: nil) } ?? recognizer.location(in: self)
             if model.beginSwipe(at: point) { return true }
@@ -158,7 +163,7 @@ final class ReorderInputView: NSView, NSGestureRecognizerDelegate {
     }
     @objc private func pressed(_ recognizer: NSPressGestureRecognizer) {
         switch recognizer.state {
-        case .began: model?.recognizeHold()
+        case .began: MacEdgeReachCapture.cancel(in: window, activate: true); model?.recognizeHold()
         case .ended: finish()
         case .cancelled: if model?.swiping != true { cancel(all: false) }
         default: break
@@ -167,6 +172,8 @@ final class ReorderInputView: NSView, NSGestureRecognizerDelegate {
     @objc private func panned(_ recognizer: NSPanGestureRecognizer) {
         switch recognizer.state {
         case .began, .changed:
+            if edge.holdsMotion { model?.contact.suppressActivation(); return }
+            MacEdgeReachCapture.cancel(in: window, activate: true)
             if model?.swiping == true { model?.moveSwipe(to: recognizer.location(in: self)); return }
             if move(recognizer.location(in: self)) && timer == nil {
                 lastTrack = nil
@@ -177,6 +184,12 @@ final class ReorderInputView: NSView, NSGestureRecognizerDelegate {
         case .cancelled: cancel(all: false)
         default: break
         }
+    }
+    fileprivate func claimEdge() {
+        layerTouches?.cancel()
+        model?.bubbleInput?.cancel()
+        cancel(all: false)
+        model?.contact.suppressActivation()
     }
     private func finish() {
         model?.finishSwipe(cancelled: false)
@@ -209,6 +222,185 @@ final class ReorderInputView: NSView, NSGestureRecognizerDelegate {
             }
         }
         _ = move(pan.location(in: self), force: scrolled)
+    }
+}
+
+@MainActor final class MacEdgeReachCapture {
+    private static let owners = NSMapTable<NSWindow, MacEdgeReachCapture>.weakToWeakObjects()
+    private weak var marker: ReorderInputView?
+    private weak var window: NSWindow?
+    private var monitor: Any?
+    private var nextID: UInt64 = 0
+    private struct Contact {
+        let id: UInt64
+        let device: ReorderDevice
+        var claimed = false
+    }
+    private var contact: Contact?
+    private var hoverGeneration: UInt64 = 0
+    private var pointerCursor: NSCursor?
+    private var interaction: WorkspaceReorderInteraction? { marker?.model as? WorkspaceReorderInteraction }
+    private var coordinator: EdgeReachCoordinator? { interaction?.edgeReach }
+    init(marker: ReorderInputView) { self.marker = marker }
+    deinit { if let monitor { NSEvent.removeMonitor(monitor) } }
+
+    var holdsMotion: Bool {
+        guard let contact, let state = coordinator?.state(for: contact.id) else { return false }
+        return state.pending && state.hold && !state.claimed
+    }
+    var defersSelection: Bool {
+        guard let contact, let state = coordinator?.state(for: contact.id) else { return false }
+        return state.pending
+    }
+    static func cursor(in window: NSWindow?) -> NSCursor? {
+        window.flatMap { owners.object(forKey: $0)?.pointerCursor }
+    }
+    static func cancel(in window: NSWindow?, activate: Bool) {
+        guard let window else { return }
+        owners.object(forKey: window)?.cancel(activate: activate)
+    }
+    func attach() {
+        guard let marker, let window = marker.window, coordinator != nil else { detach(); return }
+        guard self.window !== window || monitor == nil else { return }
+        detach(); self.window = window
+        Self.owners.setObject(self, forKey: window)
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp,
+            .mouseMoved, .tabletPoint, .rightMouseDown, .otherMouseDown, .keyDown]) { [weak self] event in
+            guard let self else { return event }
+            return self.handle(event)
+        }
+    }
+    func detach() {
+        cancel()
+        if let monitor { NSEvent.removeMonitor(monitor); self.monitor = nil }
+        if let window, Self.owners.object(forKey: window) === self { Self.owners.removeObject(forKey: window) }
+        window = nil
+    }
+    func cancel(activate: Bool = false) {
+        let previous = contact
+        contact = nil; hoverGeneration &+= 1
+        if let previous { coordinator?.cancel(id: previous.id) }
+        if activate && previous?.claimed == false { marker?.model?.contact.activate() }
+        clearCursor()
+    }
+    private func handle(_ event: NSEvent) -> NSEvent? {
+        guard let marker, event.window === window, let coordinator else { return event }
+        let point = marker.convert(event.locationInWindow, from: nil)
+        let time = UInt64(max(0, event.timestamp) * 1_000_000_000)
+        let pen = event.type == .tabletPoint || event.subtype == .tabletPoint
+        let phase: NSEvent.EventType
+        if event.type == .tabletPoint {
+            if let contact, contact.device != .pen { return event }
+            let down = event.pressure > 0 || event.buttonMask.contains(.penTip)
+            phase = down ? (contact == nil ? .leftMouseDown : .leftMouseDragged)
+                : contact == nil ? .mouseMoved : .leftMouseUp
+        } else { phase = event.type }
+        switch phase {
+        case .keyDown:
+            guard event.keyCode == 53, contact != nil else { return event }
+            cancel(); return nil
+        case .rightMouseDown, .otherMouseDown:
+            cancel(); return event
+        case .leftMouseDown:
+            if pen && contact?.device == .pen { return event }
+            cancel()
+            let device: ReorderDevice = pen ? .pen : .mouse
+            guard let source = source(at: point, event: event, device: device),
+                let admission = coordinator.admission(at: point, device: device, contact: source.contact) else { return event }
+            if event.type == .leftMouseDown && event.clickCount == 2 && source.contact == .free {
+                coordinator.doublePress(device: device, contact: .free, at: point); return event
+            }
+            nextID &+= 1
+            let id = nextID
+            contact = Contact(id: id, device: device)
+            coordinator.begin(id: id, admission: admission, device: device, contact: source.contact,
+                at: point, timeNs: time, select: source.select, update: { [weak self] state in
+                    guard let self, self.contact?.id == id, self.contact?.claimed != true else { return }
+                    if state == nil || state?.pending == false && state?.claimed == false {
+                        self.marker?.model?.contact.activate()
+                    }
+                }, claim: { [weak self] cursor in
+                    guard let self, self.contact?.id == id else { return }
+                    self.contact?.claimed = true
+                    if let root = self.window?.contentView { self.claim(in: root) }
+                    self.pointerCursor = Self.cursor(cursor); self.pointerCursor?.set()
+                })
+        case .leftMouseDragged:
+            guard let contact else { return event }
+            coordinator.move(id: contact.id, to: point, timeNs: time)
+            if contact.claimed { pointerCursor?.set(); return nil }
+        case .leftMouseUp:
+            guard let previous = contact else { return event }
+            contact = nil
+            coordinator.end(id: previous.id, at: point, timeNs: time)
+            clearCursor()
+            return previous.claimed ? nil : event
+        case .mouseMoved:
+            guard contact == nil else { return event }
+            hoverGeneration &+= 1
+            let generation = hoverGeneration
+            let device: ReorderDevice = pen ? .pen : .mouse
+            let admission = source(at: point, event: event, device: device).flatMap {
+                coordinator.admission(at: point, device: device, contact: $0.contact)
+            }
+            if let admission {
+                pointerCursor = admission.vertical ? NSCursor.resizeUpDown : NSCursor.resizeLeftRight
+                DispatchQueue.main.async { [weak self] in
+                guard let self, self.hoverGeneration == generation else { return }
+                self.pointerCursor?.set()
+                }
+            } else { clearCursor() }
+        default: break
+        }
+        return event
+    }
+    private func source(at point: CGPoint, event: NSEvent, device: ReorderDevice) -> EdgeReachSource? {
+        guard let marker, let interaction, interaction.enabled, marker.bounds.contains(point),
+            marker.model?.bubbleInput?.hit(point) != true, let root = window?.contentView else { return nil }
+        let source = interaction.edgeReachSource(at: point, device: device)
+        var view = root.hitTest(root.superview?.convert(event.locationInWindow, from: nil) ?? event.locationInWindow)
+        var input = false, textInput = false, horizontal = false
+        while let current = view {
+            if current is NSText || current is NSTextField { textInput = true }
+            if current is ControlInput.InputView
+                || current is ColorWheelInput.ContactView || current is ParameterInput.ContactView { input = true }
+            if current is NSControl { input = true }
+            if let scroll = current as? NSScrollView,
+                (scroll.documentView?.bounds.width ?? 0) > scroll.contentView.bounds.width + 1 { horizontal = true }
+            view = current.superview
+        }
+        if source?.containsControls == true {
+            let screen = window?.convertPoint(toScreen: event.locationInWindow) ?? event.locationInWindow
+            if let element = root.accessibilityHitTest(screen) as? any NSAccessibilityProtocol,
+                let role = element.accessibilityRole(), [.button, .checkBox, .radioButton, .textField,
+                    .textArea, .slider, .popUpButton, .comboBox, .incrementor, .colorWell].contains(role) { input = true }
+            input = input || rowHit(in: root, at: event.locationInWindow)
+        }
+        let kind = textInput || ((source?.containsControls ?? true) && input) ? EdgeReachContact.input
+            : (source?.contact ?? .free) == .free && horizontal ? .pickup : source?.contact ?? .free
+        return EdgeReachSource(contact: kind, select: source?.select)
+    }
+    private func rowHit(in view: NSView, at point: CGPoint) -> Bool {
+        if let marker = view as? ReorderInputView, let model = marker.model?.layerTouchModel,
+            model.touchRow(at: marker.convert(point, from: nil)) != nil { return true }
+        return view.subviews.contains { rowHit(in: $0, at: point) }
+    }
+    private func claim(in view: NSView) {
+        if let marker = view as? ReorderInputView { marker.claimEdge() }
+        if let canvas = view as? MacCanvasView { canvas.cancelEdgeContact() }
+        for child in view.subviews { claim(in: child) }
+    }
+    private func clearCursor() {
+        if pointerCursor != nil { pointerCursor = nil; NSCursor.arrow.set() }
+    }
+    private static func cursor(_ value: String) -> NSCursor {
+        switch value {
+        case "col-resize", "ew-resize": .resizeLeftRight
+        case "row-resize", "ns-resize": .resizeUpDown
+        case "nwse-resize": .frameResize(position: .bottomRight, directions: .all)
+        case "nesw-resize": .frameResize(position: .bottomLeft, directions: .all)
+        default: .arrow
+        }
     }
 }
 

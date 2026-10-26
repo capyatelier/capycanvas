@@ -28,6 +28,7 @@ import SwiftUI
     }
     private var drag: Drag?
     init(store: EditorStore) { self.store = store }
+    var edgeReach: EdgeReachCoordinator? { store?.edgeReach }
     var enabled: Bool {
         guard let store else { return false }
         return store.snapshot["header"]["editing"].bool && !store.snapshot["chrome_hidden"].bool && store.failure == nil
@@ -85,6 +86,11 @@ import SwiftUI
             move: { [weak self] in self?.move($0) },
             finish: { [weak self] in self?.finish($0) },
             cancel: { [weak self] in self?.cancelDrag() })
+    }
+    func edgeReachSource(at point: CGPoint, device: ReorderDevice) -> EdgeReachSource? {
+        guard enabled, viewport.contains(point), menu.isNull,
+              (overflowZone == nil ? sources : overflowSources).values.contains(where: { $0.bounds.contains(point) }) else { return nil }
+        return EdgeReachSource(contact: .pickup)
     }
     func acceptsContext(at point: CGPoint) -> Bool {
         enabled && menu.isNull && sources.values.contains { $0.bounds.contains(point) && $0.value["kind"].string == "item" }

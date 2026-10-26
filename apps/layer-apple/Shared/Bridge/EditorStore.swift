@@ -81,6 +81,7 @@ import Darwin
     lazy var filterPreviews = FilterPreviews(store: self)
     lazy var rendererStats = RendererStats(store: self)
     lazy var workspace = WorkspacePresentation(store: self)
+    lazy var edgeReach = EdgeReachCoordinator(store: self)
     lazy var header = HeaderPresentation(store: self)
     lazy var panelMeasurements = PanelMeasurements(store: self)
     lazy var contentDrawers = ContentDrawersPresentation(store: self)
@@ -373,7 +374,13 @@ import Darwin
         }
         if value["type"] as? String == "key", value["pressed"] as? Bool == true,
            (value["modifiers"] as? [String: Any])?["command"] as? Bool == true { reportCommandFocus() }
-        native?.submit(1, JSON(value))
+        semanticInput(JSON(value))
+    }
+    func semanticInput(_ value: JSON, completion: (@MainActor (JSON) -> Void)? = nil) {
+        guard let native else { completion?(JSON()); return }
+        native.input(value) { result in
+            DispatchQueue.main.async { completion?(result ?? JSON()) }
+        }
         wake?()
     }
     /// A captured chord is a complete input pair; closing its sheet cannot leave

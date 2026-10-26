@@ -780,6 +780,9 @@ final class NativeOwner: @unchecked Sendable {
             }
         }
     }
+    func input(_ value: JSON, completion: (@Sendable (JSON?) -> Void)? = nil) {
+        submit(1, value, completion: completion)
+    }
     /// Editable controls own validation feedback. Publish the resulting state
     /// before acknowledging the edit, including when semantic validation fails.
     func edit(_ action: JSON, completion: @escaping @Sendable (String?) -> Void) {

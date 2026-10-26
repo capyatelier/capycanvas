@@ -3,6 +3,27 @@ use super::*;
 use layer_render::FilterPreviewImage;
 
 /// # Safety
+/// Stateless geometry on any thread. Input is a readable NUL-terminated JSON
+/// object containing a published ResolvedLayout, point, pointer kind and contact.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_apple_edge_reach(json: *const c_char) -> u32 {
+    #[derive(serde::Deserialize)]
+    struct Request {
+        layout: layer_ui::ResolvedLayout,
+        position: [f32; 2],
+        kind: layer_ui::PointerKind,
+        contact: layer_ui::EdgeContact,
+    }
+    if json.is_null() { return 0 }
+    std::panic::catch_unwind(|| {
+        let request: Request = serde_json::from_str(unsafe { CStr::from_ptr(json) }.to_str().ok()?).ok()?;
+        request.layout.edge_grab_at(request.position, request.kind, request.contact)
+    }).ok().flatten().map_or(0, |grab| {
+        1 | u32::from(grab.resizes(layer_ui::Axis::Vertical)) << 1
+    })
+}
+
+/// # Safety
 /// Serial owner call; JSON is an array of logical bounds/clip/order records.
 /// The layout is immutable until the next call. No preview pixels cross the ABI.
 #[unsafe(no_mangle)]

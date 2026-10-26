@@ -306,6 +306,7 @@ import SwiftUI
     func recognizeHold() {
         validate()
         guard let c = contact, canHold else { return }
+        store?.edgeReach.cancelPending()
         lastRing = nil; restore(c); c.held = true; bubbles?.showMenu(c.item, at: c.origin)
     }
     @discardableResult func context(at point: CGPoint) -> Bool {

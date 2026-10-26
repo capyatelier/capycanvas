@@ -104,6 +104,16 @@ extension XCTestCase {
         #endif
         expectation(for: NSPredicate { _, _ in abs(group.frame.width - originalWidth) <= 1 }, evaluatedWith: app)
         waitForExpectations(timeout: 10)
+        #if os(macOS)
+        let reach = group.coordinate(withNormalizedOffset: CGVector(dx: 1, dy: 0.5)).withOffset(CGVector(dx: -3, dy: 0))
+        reach.press(forDuration: 0.05, thenDragTo: reach.withOffset(CGVector(dx: 60, dy: 0)))
+        expectation(for: NSPredicate { _, _ in group.frame.width > originalWidth + 25 }, evaluatedWith: app)
+        waitForExpectations(timeout: 10)
+        let reset = group.coordinate(withNormalizedOffset: CGVector(dx: 1, dy: 0.5)).withOffset(CGVector(dx: -3, dy: 0))
+        reset.doubleClick()
+        expectation(for: NSPredicate { _, _ in abs(group.frame.width - originalWidth) <= 1 }, evaluatedWith: app)
+        waitForExpectations(timeout: 10)
+        #endif
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)
     }
 

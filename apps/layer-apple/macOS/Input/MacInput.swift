@@ -124,7 +124,8 @@ import QuartzCore
         } else if touching {
             // Some drivers deliver standalone tablet events instead of mouse
             // subtypes, including pressure changes before the first drag.
-            guard let view, view.bounds.contains(view.convert(event.locationInWindow, from: nil)) else { return }
+            guard let view, let root = view.window?.contentView,
+                root.hitTest(root.superview?.convert(event.locationInWindow, from: nil) ?? event.locationInWindow) === view else { return }
             view.window?.makeFirstResponder(view)
             store.workspace.dismissTransients(at: nil)
             nextContact &+= 1
@@ -180,6 +181,7 @@ import QuartzCore
     private var canvasCursor = false
     private static let hiddenCursor = NSCursor(image: NSImage(size: NSSize(width: 1, height: 1)), hotSpot: .zero)
     func applyCursor() {
+        if let cursor = MacEdgeReachCapture.cursor(in: view?.window) { cursor.set(); return }
         guard canvasCursor else { return }
         let cursor: NSCursor
         switch store.navigationCursor {
@@ -193,7 +195,7 @@ import QuartzCore
     }
     func leaveCanvasCursor() {
         guard canvasCursor, contact == nil else { return }
-        canvasCursor = false; NSCursor.arrow.set()
+        canvasCursor = false; (MacEdgeReachCapture.cursor(in: view?.window) ?? NSCursor.arrow).set()
     }
     func clearHover() {
         guard contact == nil else { return } // Pointer capture survives view exit.
@@ -204,6 +206,15 @@ import QuartzCore
         // Focus loss is an explicit shared interruption policy. Native hover
         // and proximity exit above are normal lift, never cancellation.
         contact = nil; sensorDevice = nil; modifiers = []; gestures.removeAll(); touches.removeAll()
+    }
+    func cancelForEdge() {
+        if let value = contact {
+            var terminal = value.last
+            terminal[7] = max(terminal[7], ProcessInfo.processInfo.systemUptime * 1_000_000_000)
+            terminal[8] = 4
+            contact = nil; send(value, terminal)
+        }
+        interrupt()
     }
     func touch(_ event: NSEvent, phase: NSTouch.Phase, name: String) {
         guard let view else { return }

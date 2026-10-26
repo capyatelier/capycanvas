@@ -16,6 +16,7 @@ import SwiftUI
     init(workspace: WorkspacePresentation, store: EditorStore?) {
         self.workspace = workspace; self.store = store
     }
+    var edgeReach: EdgeReachCoordinator? { store?.edgeReach }
     var bubbleInput: BubbleInteraction? { store?.bubbles.input }
     func relinquishToBubble() { contact.transfer(); closeMenu(); workspace?.refreshChrome() }
     var enabled: Bool {
@@ -40,6 +41,7 @@ import SwiftUI
         closeMenu()
         guard let workspace, let (id, source) = workspace.hitSource(at: point), source.surface != .control,
               let item = try? JSON.decode(source.item) else { return nil }
+        let select = tabSelection(item: item, at: point, workspace: workspace, store: store)
         return ReorderTarget(id: id, surface: source.surface, canDrag: source.canDrag,
             valid: { [weak self, weak workspace] dragging in
                 guard let self, let workspace, self.enabled else { return false }
@@ -49,21 +51,45 @@ import SwiftUI
             },
             openContext: { [weak self] in self?.showMenu(source.context, source: id, at: point) },
             closeContext: { [weak self] in self?.closeMenu() },
-            press: { [weak workspace, weak store] in
-                guard item["kind"].string == "panel", let workspace, let store else { return }
-                let groups = store.snapshot["layout"]["groups"].array
-                    + store.state["customization"]["column_drawers"].array.map { $0["tabs"].replacing("id", with: $0["tabs"]["group"]) }
-                guard let tab = workspace.tabs.first(where: { tab in
-                    tab["bounds"].rect.contains(point) && groups.contains {
-                        $0["id"].uint == tab["group"].uint && $0["panels"][Int(tab["index"].uint)].string == item["panel"].string
-                    }
-                }) else { return }
-                store.dispatch(["type": "select_panel_tab", "group": tab["group"].raw, "panel": item["panel"].raw])
-            },
+            press: select,
             begin: { [weak workspace] in workspace?.start(item, point: $0) },
             move: { [weak workspace] in workspace?.move(item, point: $0) },
             finish: { [weak workspace] in workspace?.move(item, point: $0, released: true) },
             cancel: { [weak workspace] in workspace?.cancel(item) })
+    }
+    func edgeReachSource(at point: CGPoint, device: ReorderDevice) -> EdgeReachSource? {
+        guard enabled, viewport.contains(point), menu.isNull,
+              let workspace, let (_, source) = workspace.hitSource(at: point) else { return nil }
+        let item = try? JSON.decode(source.item)
+        let contact: EdgeReachContact
+        switch source.surface {
+        case .handle: contact = .pickup
+        case .tile:
+            switch item?["kind"].string {
+            case "panel": contact = source.canDrag ? .pickup : .free
+            case "column": contact = .free
+            default: contact = .input
+            }
+        case .headerEditor: contact = .pickup
+        case .control: contact = source.controlContainer ? .free : .input
+        case .row, .swatch: contact = .input
+        }
+        let select = item.flatMap { tabSelection(item: $0, at: point, workspace: workspace, store: store) }
+        return EdgeReachSource(contact: contact, select: select, containsControls: source.controlContainer)
+    }
+    private func tabSelection(item: JSON, at point: CGPoint, workspace: WorkspacePresentation?, store: EditorStore?) -> (() -> Void)? {
+        guard item["kind"].string == "panel", let workspace, let store else { return nil }
+        let groups = store.snapshot["layout"]["groups"].array
+            + store.state["customization"]["column_drawers"].array.map { $0["tabs"].replacing("id", with: $0["tabs"]["group"]) }
+        guard let tab = workspace.tabs.first(where: { tab in
+            tab["bounds"].rect.contains(point) && groups.contains {
+                $0["id"].uint == tab["group"].uint && $0["panels"][Int(tab["index"].uint)].string == item["panel"].string
+            }
+        }) else { return nil }
+        let group = tab["group"], panel = item["panel"]
+        return { [weak store] in
+            store?.dispatch(["type": "select_panel_tab", "group": group.raw, "panel": panel.raw])
+        }
     }
     func acceptsContext(at point: CGPoint) -> Bool {
         enabled && viewport.contains(point) && menu.isNull

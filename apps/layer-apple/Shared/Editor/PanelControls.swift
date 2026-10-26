@@ -41,18 +41,18 @@ struct PanelControls: View {
             }
     }
     @ViewBuilder private var contents: some View {
-        if panel["id"].string == "proof" { ProofPanel(store: store, controller: store.proof).modifier(WorkspaceControlSurface(workspace: store.workspace)) }
-        else if panel["id"].string == "layers" { LayerPanel(store: store, panel: panel).modifier(WorkspaceControlSurface(workspace: store.workspace)) }
-        else if panel["id"].string == "palettes" { PalettePanel(store: store, controller: store.palettes, docked: scrollable).modifier(WorkspaceControlSurface(workspace: store.workspace)) }
-        else if panel["id"].string == "filter_types" { FilterTypesPanel(store: store).modifier(WorkspaceControlSurface(workspace: store.workspace)) }
+        if panel["id"].string == "proof" { ProofPanel(store: store, controller: store.proof).modifier(WorkspaceControlSurface(workspace: store.workspace, container: true)) }
+        else if panel["id"].string == "layers" { LayerPanel(store: store, panel: panel).modifier(WorkspaceControlSurface(workspace: store.workspace, container: true)) }
+        else if panel["id"].string == "palettes" { PalettePanel(store: store, controller: store.palettes, docked: scrollable).modifier(WorkspaceControlSurface(workspace: store.workspace, container: true)) }
+        else if panel["id"].string == "filter_types" { FilterTypesPanel(store: store).modifier(WorkspaceControlSurface(workspace: store.workspace, container: true)) }
         else if panel["id"].string == "adjustments" {
             if panel["controls"].array.contains(where: { $0["control"].string == "adjustments" && $0["visible_in_panel"].bool }) {
-                AdjustmentPanel(store: store, splitPicker: splitFilters).modifier(WorkspaceControlSurface(workspace: store.workspace))
+                AdjustmentPanel(store: store, splitPicker: splitFilters).modifier(WorkspaceControlSurface(workspace: store.workspace, container: true))
             }
         }
         else if panel["id"].string == "navigator" {
             if panel["controls"].array.contains(where: { $0["control"].string == "navigator" && $0["visible_in_panel"].bool }) {
-                NavigatorPanel(store: store).modifier(WorkspaceControlSurface(workspace: store.workspace))
+                NavigatorPanel(store: store).modifier(WorkspaceControlSurface(workspace: store.workspace, container: true))
             }
         }
         else { controls }

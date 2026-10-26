@@ -318,9 +318,11 @@ struct WorkspaceSource: Equatable {
     let context: String?
     var canDrag = true
     var priority = 0
+    var controlContainer = false
 }
 struct WorkspaceControlSurface: ViewModifier {
     let workspace: WorkspacePresentation
+    var container = false
     @State private var sourceID = UUID().uuidString
     @Environment(\.workspaceGesturesEnabled) private var enabled
     @Environment(\.workspaceLayer) private var layer
@@ -329,7 +331,8 @@ struct WorkspaceControlSurface: ViewModifier {
         content.background(GeometryReader { allocation in
             Color.clear.preference(key: WorkspaceSources.self,
                 value: enabled ? [sourceID: WorkspaceSource(bounds: allocation.frame(in: .named("editor-workspace")).intersection(clip),
-                    layer: layer, item: "control:" + sourceID, surface: .control, context: nil, canDrag: false)] : [:])
+                    layer: layer, item: "control:" + sourceID, surface: .control, context: nil, canDrag: false,
+                    controlContainer: container)] : [:])
         })
     }
 }

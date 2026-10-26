@@ -193,6 +193,7 @@ final class MacCanvasView: NSView {
     override func mouseExited(with event: NSEvent) { input.leaveCanvasCursor(); input.clearHover() }
     override func cursorUpdate(with event: NSEvent) { input.applyCursor() }
     override func tabletPoint(with event: NSEvent) { input.tabletPoint(event) }
+    func cancelEdgeContact() { input.cancelForEdge() }
     override func tabletProximity(with event: NSEvent) { input.proximity(event) }
     override func scrollWheel(with event: NSEvent) { input.scroll(event) }
     override func magnify(with event: NSEvent) { input.gesture(event, rotate: false) }

@@ -165,6 +165,9 @@ uint32_t capy_apple_color_hit(float x, float y, float size, uint32_t shape);
 bool capy_apple_hdr_field(uint32_t side, const char *request, float *pixels, size_t count, uint32_t operation);
 uint32_t capy_apple_parameter_hit(float x, float y, float size, bool hdr);
 bool capy_apple_proof_texture(uint32_t edge, uint8_t *bytes, size_t count);
+/* Stateless shared edge admission against an immutable published layout.
+   Result bit 0 admits the contact; bit 1 identifies a vertical resize. */
+uint32_t capy_apple_edge_reach(const char *json);
 /* Stateless cached field or hue guide: square, straight Display P3 RGBA8.
    Caller owns side*side*4 writable bytes. Returns 1 on success, 0 invalid.
    No session access or retained pointers; safe on the UI thread. */

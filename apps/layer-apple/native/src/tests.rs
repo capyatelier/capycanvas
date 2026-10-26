@@ -19,6 +19,27 @@ fn localized_stateless(call: unsafe extern "C" fn(*const c_char) -> u64, request
     stateless(call, request)
 }
 
+#[test]
+fn stateless_edge_reach_projects_the_published_mac_layout() {
+    let layout = layer_ui::WorkspacePreset::Illustrator.layout(layer_ui::Platform::Mac).resolve(1600., 1000.);
+    let reach = |position: [f32; 2], kind: &str, contact: &str| {
+        let request = CString::new(json!({"layout": layout, "position": position,
+            "kind": kind, "contact": contact}).to_string()).unwrap();
+        unsafe { capy_apple_edge_reach(request.as_ptr()) }
+    };
+    let gap = layout.dividers.iter()
+        .find(|divider| divider.axis == layer_ui::Axis::Vertical && !divider.band && !divider.fixed).unwrap();
+    let above = [gap.bounds.x + 30., gap.bounds.y - 10.];
+    assert_eq!(reach(above, "touch", "free") & 3, 3);
+    assert_eq!(reach(above, "touch", "input"), 0);
+
+    let band = layout.dividers.iter().find(|divider| divider.axis == layer_ui::Axis::Vertical && divider.band).unwrap();
+    let canvas = [band.bounds.x + band.bounds.width * 0.5, band.bounds.y + band.bounds.height + 20.];
+    assert!(layout.work_area.contains(canvas[0], canvas[1]));
+    assert_eq!(reach(canvas, "touch", "free") & 3, 3);
+    assert_eq!(reach(canvas, "pen", "free"), 0);
+}
+
 unsafe fn launch_json(platform: u32, json: *const c_char, bootstrap: *mut u64, error: *mut u64) -> u64 {
     if !bootstrap.is_null() { unsafe { *bootstrap = 0 }; }
     let prepared = unsafe { capy_apple_prepare_launch(json, error) };

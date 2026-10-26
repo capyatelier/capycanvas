@@ -28,6 +28,11 @@ real endpoint. The cursor tracks real input, so predicted ink can run ahead of i
 
 ## Contacts, cursor and navigation
 
+- **Edge reach on Mac.** Workspace markers classify native controls and forward eligible
+  contacts through `EdgeReachCoordinator`. Rust decides admission, recognition,
+  ownership and catch-up. A claim cancels the canvas contact without blurring
+  the editor; pending vertical reaches withhold motion while preserving taps.
+  Resize cursors take precedence over the canvas cursor until release.
 - **Interruption.** Both canvas adapters register the shared input-interruption
   callback. It clears the captured contact and modifier state before lifecycle
   blur or renderer restart, so a missing mouse-up cannot block the next press.

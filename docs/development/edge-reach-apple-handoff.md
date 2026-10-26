@@ -3,10 +3,10 @@
 [Apple development](apple.md) · [Apple porting guide](../APPLE_PORTING_GUIDE.md) ·
 [Edge reach](../ui/panel-customization.md#edge-reach)
 
-Port edge reach to macOS and iPadOS, validate both clients on an Apple Silicon
-Mac and an iPad, then fetch, rebase and push to `origin/main`. GTK, Web, Android
-and Windows ship it; Apple still only has the thin resize handles. Delete this
-handoff in the commit that completes the port.
+Finish edge reach on iPadOS and validate it on an iPad, then fetch, rebase and
+push to `origin/main`. macOS now forwards edge contacts through the shared owner;
+UIKit still uses the thin resize handles. Delete this handoff in the commit
+that completes the iPad port.
 
 ## What edge reach is
 

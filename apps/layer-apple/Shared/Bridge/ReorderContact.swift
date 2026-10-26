@@ -40,6 +40,7 @@ enum ReorderSurface: Equatable {
     private(set) var held = false
     private(set) var dragging = false
     private(set) var suppressClick = false
+    private var activated = false
     private(set) var generation: UInt64 = 0
     func consumeClick() -> Bool {
         let suppressed = suppressClick; suppressClick = false; return suppressed
@@ -48,11 +49,15 @@ enum ReorderSurface: Equatable {
 
     func suppressActivation() { suppressClick = true }
     func transfer() { cancel(); suppressActivation() }
-    func prepare(_ target: ReorderTarget, device: ReorderDevice, origin: CGPoint) {
+    func prepare(_ target: ReorderTarget, device: ReorderDevice, origin: CGPoint, activate: Bool = true) {
         cancel(); suppressClick = false
         generation &+= 1
         self.target = target; self.device = device; self.origin = origin
-        target.press?()
+        if activate { self.activate() }
+    }
+    func activate() {
+        guard !activated else { return }
+        activated = true; target?.press?()
     }
     @discardableResult func validate() -> Bool {
         guard let target, target.valid(dragging) else { cancel(); return false }
@@ -89,5 +94,5 @@ enum ReorderSurface: Equatable {
         if close { previous?.closeContext?() }
         if rollback { previous?.cancel() }
     }
-    private func clear() { target = nil; held = false; dragging = false }
+    private func clear() { target = nil; held = false; dragging = false; activated = false }
 }
