@@ -763,6 +763,42 @@ fn clicking_a_tool_bubble_selects_and_opens_its_sliders_on_every_platform() {
 }
 
 #[test]
+fn every_paint_tool_command_creates_and_restores_a_selectable_bubble_with_rings() {
+    for platform in Platform::ALL {
+        for tool in Tool::ALL {
+            let mut s = session(platform);
+            s.set_viewport(VIEW, [1200, 900]).unwrap();
+            let control = ToolbarControl::Command { command: tool.command() };
+            let (panel, tile) = toolbar_tile(&mut s, control);
+            let grab = BubbleGrab::Tile { panel, tile };
+            assert_eq!(s.bubble_grab(grab, false), Some(grab), "{platform:?}/{tool:?}");
+            assert!(s.can_take_bubble(grab, FAR, VIEW), "{platform:?}/{tool:?}");
+            let id = take(&mut s, grab, FAR);
+            let source = BubbleSource::Control { control };
+            assert_eq!(s.state.workspace.layout.bubbles.get(id).unwrap().source, source);
+            source.validate().unwrap();
+            let capture = serde_json::from_str(&serde_json::to_string(&s.capture_workspace().unwrap()).unwrap()).unwrap();
+            let mut restored = session(platform);
+            restored.set_viewport(VIEW, [1200, 900]).unwrap();
+            restored.restore_editing(s.editing_state()).unwrap();
+            restored.adopt_workspace(PreparedWorkspace::new(capture).unwrap()).unwrap();
+            assert_eq!(restored.state.workspace.layout.bubbles.get(id).unwrap().source, source);
+            let artwork = restored.engine.document().artwork.clone();
+            invoke(&mut restored, CommandId::Lasso);
+            assert!(!view(&restored, id).selected);
+            tap(&mut restored, id);
+            assert!(restored.command(tool.command()).selected);
+            let selected = view(&restored, id);
+            let defaults = tool_settings::ring_defaults(restored.state.brush.preset, restored.engine.configured_brush(), &restored.state.tool_settings);
+            assert!(selected.selected && selected.chooser.is_empty(), "{platform:?}/{tool:?}");
+            assert!(!defaults.is_empty(), "{platform:?}/{tool:?}");
+            assert_eq!(selected.rings.iter().map(|ring| ring.setting).collect::<Vec<_>>(), defaults, "{platform:?}/{tool:?}");
+            assert_eq!(restored.engine.document().artwork, artwork);
+        }
+    }
+}
+
+#[test]
 fn the_media_ring_shows_a_mediums_brushes_and_a_choice_closes_it() {
     let mut s = desk();
     let id = take_control(&mut s, ToolbarControl::Command { command: CommandId::DrawingBrush }, [480., 520.]);
@@ -784,6 +820,24 @@ fn the_media_ring_shows_a_mediums_brushes_and_a_choice_closes_it() {
     choose(&mut s, id, ContactPhase::Up, pick.center);
     assert_eq!(tools::brush_label_localized(s.state.brush.preset, s.localization()).unwrap().to_string(), pick.label);
     assert!(view(&s, id).chooser.is_empty(), "picking a brush closes the ring");
+}
+
+#[test]
+fn a_medium_with_one_brush_still_fans_it() {
+    for platform in Platform::ALL {
+        let mut s = session(platform);
+        s.set_viewport(VIEW, [1200, 900]).unwrap();
+        let id = take_source(&mut s, BubbleSource::Medium { group: ToolGroup::Eraser });
+        open_ring(&mut s, id);
+        let brushes = items(&view(&s, id), ChooserKind::Brush);
+        assert_eq!(brushes.len(), 1);
+        assert_eq!(brushes[0].preview, Some(DefaultBrushPreset::Eraser as u32));
+        assert!(!view(&s, id).chooser.is_empty(), "its one brush remains available until chosen");
+        choose(&mut s, id, ContactPhase::Down, brushes[0].center);
+        choose(&mut s, id, ContactPhase::Up, brushes[0].center);
+        assert_eq!(s.state.brush.preset, DefaultBrushPreset::Eraser as u32);
+        assert!(view(&s, id).chooser.is_empty());
+    }
 }
 
 #[test]

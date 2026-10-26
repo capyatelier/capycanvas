@@ -37,6 +37,9 @@ their toolbars. `BubbleSource::for_control` decides; Redo is stored as Undo, so
 both make the same bubble. There is one bubble per source: taking a tool again
 moves the existing bubble.
 
+Single-preset tools retain their bubbles, settings halos and saved sources.
+The variation marker describes the choices shown by the tool's menu.
+
 ## Taking and putting back
 
 - **Title bar and drawer rows:** drag without a hold. The contact keeps scrolling

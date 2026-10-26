@@ -595,6 +595,23 @@ fn sources_normalize_toolbar_controls() {
 }
 
 #[test]
+fn every_paint_tool_command_is_a_valid_bubble_source_without_requiring_variants() {
+    for tool in Tool::ALL {
+        let control = ToolbarControl::Command { command: tool.command() };
+        let source = BubbleSource::Control { control };
+        assert_eq!(BubbleSource::for_control(control), Some(source), "{tool:?}");
+        assert!(BubbleSource::tears_without_hold(control), "{tool:?}");
+        source.validate().unwrap();
+        let restored: BubbleSource = serde_json::from_str(&serde_json::to_string(&source).unwrap()).unwrap();
+        assert_eq!(restored, source);
+        restored.validate().unwrap();
+    }
+    for command in [CommandId::Eraser, CommandId::Clone, CommandId::Heal, CommandId::SpotHeal] {
+        assert!(!ToolbarControl::Command { command }.has_variants());
+    }
+}
+
+#[test]
 fn medium_labels_sit_outward_clear_of_the_ring_and_their_brushes() {
     let overlap = |a: Bounds, b: Bounds| a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
     let around = |c: [f32; 2], [w, h]: [f32; 2]| Bounds { x: c[0] - w * 0.5, y: c[1] - h * 0.5, width: w, height: h };

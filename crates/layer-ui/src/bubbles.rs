@@ -61,7 +61,7 @@ impl BubbleSource {
             | ToolbarControl::ColorPicker
             | ToolbarControl::Brush { .. }
             | ToolbarControl::Panel { panel: Panel::Layers } => control,
-            control if control.has_variants() => control,
+            control if control.tool_group().is_some() => control,
             _ => return None,
         };
         Some(Self::Control { control })
