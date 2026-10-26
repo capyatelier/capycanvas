@@ -125,7 +125,10 @@ Some GPUs have reset faults that require host recovery after an unclean teardown
 
 `gpu-check` builds the normal Release app and runs the shared renderer suite and
 the Windows D3D12 document suite against an actual hardware D3D12 adapter. It
-rejects empty test selections. `fixtures --hardware-gpu` runs the normal app with
+rejects empty test selections. The renderer suite runs eight test threads (about
+20 minutes instead of 80); tests that fail under that load run again alone, the
+suite passes only if each passes alone, and `results.json` lists them as
+`parallel_failures`. `fixtures --hardware-gpu` runs the normal app with
 software adapters disabled and requires actual hardware-adapter evidence in each
 selected rendered journey. Use explicit render fixtures; intentional GPU-startup
 failure journeys belong in the ordinary fixture matrix. The guest desktop stays

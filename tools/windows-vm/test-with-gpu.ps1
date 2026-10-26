@@ -94,7 +94,18 @@ try {
     @($binaries.Keys | Sort-Object | ForEach-Object {
         @{name=$_;path=$binaries[$_];working_directory=$testDirectories[$binaries[$_]];sha256=(Get-FileHash -LiteralPath $binaries[$_]).Hash}
     }) | ConvertTo-Json | Set-Content (Join-Path $Output 'test-binaries.json')
-    Run-Tests 'renderer' $binaries.layer_render_wgpu @('--test-threads=1','--nocapture')
+    Run-Tests 'renderer' $binaries.layer_render_wgpu @('--test-threads=8','--nocapture')
+    $renderer = $results[-1]
+    if ($renderer.exit -ne 0) {
+        $lines = @(Get-Content -LiteralPath (Join-Path $Output 'renderer.log'))
+        $start = [array]::LastIndexOf($lines, 'failures:')
+        $failed = @(if ($start -ge 0) { $lines[($start + 1)..($lines.Count - 1)] | ForEach-Object { if ($_ -match '^    (\S+)$') { $Matches[1] } } })
+        if ($failed.Count -and $failed.Count -le 50) {
+            $renderer.parallel_failures = $failed
+            Run-Tests 'renderer-alone' $binaries.layer_render_wgpu (@('--exact') + $failed + @('--test-threads=1','--nocapture'))
+            if ($results[-1].exit -eq 0) { $renderer.exit = 0 }
+        }
+    }
     Run-Tests 'direct-contact' $binaries.layer_render_wgpu @('direct_contact_paint_and_erase_match_destination_deposition','--ignored','--test-threads=1','--nocapture')
     Run-Tests 'fine-aggregate' $binaries.layer_render_wgpu @('fine_aggregate_pencil_color_pipeline_prepares_on_hardware','--ignored','--test-threads=1','--nocapture')
     Run-Tests 'renderer-d3d12' $binaries.layer_render_wgpu @('d3d12_','--ignored','--test-threads=1','--nocapture')
