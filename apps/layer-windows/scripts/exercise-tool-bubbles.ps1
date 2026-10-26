@@ -1,6 +1,8 @@
 param([Parameter(Mandatory)][string]$Executable,
-    [ValidateSet('dark-mouse','dark-touch','dark-pen','light-mouse','light-touch','light-pen')][string]$Variant='dark-mouse',[switch]$RapidOnly,[switch]$SlidersOnly,[switch]$BlendersOnly,[switch]$EraserOnly,[switch]$EraserLightOnly,[switch]$HistoryOnly,[switch]$HistoryLightOnly,[switch]$NativeControlsOnly,[switch]$ScrollEpochOnly,[switch]$NumericOnly,[switch]$CurveOnly,[switch]$MenuOnly,[switch]$ObserverOnly,[switch]$VisualOnly,[switch]$BeadTransitionsOnly,[switch]$HdrOnly,[switch]$HdrRetirementOnly,[ValidateSet('F16','F32')][string]$HdrDepth='F16')
+    [ValidateSet('dark-mouse','dark-touch','dark-pen','light-mouse','light-touch','light-pen','blenders-dark','blenders-light','sliders-dark','sliders-light','blender-controls-dark','blender-controls-light')][string]$Variant='dark-mouse',[switch]$RapidOnly,[switch]$SlidersOnly,[switch]$BlendersOnly,[switch]$EraserOnly,[switch]$EraserLightOnly,[switch]$HistoryOnly,[switch]$HistoryLightOnly,[switch]$NativeControlsOnly,[switch]$ScrollEpochOnly,[switch]$NumericOnly,[switch]$CurveOnly,[switch]$MenuOnly,[switch]$ObserverOnly,[switch]$VisualOnly,[switch]$BeadTransitionsOnly,[switch]$HdrOnly,[switch]$HdrRetirementOnly,[ValidateSet('F16','F32')][string]$HdrDepth='F16')
 $ErrorActionPreference='Stop'
+$blenderControlsOnly=$Variant.StartsWith('blender-controls-')
+if($Variant -match '^(blenders|sliders|blender-controls)-(dark|light)$'){$BlendersOnly=$Matches[1] -ne 'sliders';$SlidersOnly=$true;$Variant=$Matches[2]+'-mouse'}
 if($EraserLightOnly){$EraserOnly=$true;$Variant='light-mouse'}
 if($HdrRetirementOnly){$HdrOnly=$true}
 if($BlendersOnly){$SlidersOnly=$true}
@@ -490,6 +492,11 @@ function Invoke-BlenderCellChecks([int]$Preset,[string]$CellId,[double]$DefaultC
     if($Primary -contains 'grit'){Blender-Value 'grit' '100 %' 1}
     $controlState=@((Model).state.tool_settings|Where-Object {$_.id -in $Primary}|Select-Object id,value,numeric,group_id)
     Check-Artwork ($Tag+'-setting-controls') $before
+    if($blenderControlsOnly){
+        @{preset=$Preset;defaults=@{spread=$DefaultSpread;cell=$DefaultCell};controls=$controlState;rings=$observations;overrides=$overrides;cancelled=$cancelled;retained=$retained}|ConvertTo-Json -Depth 20|Set-Content (Join-Path $run ($Tag+'-controls-only.json'))
+        $checks.Add($Tag+'-native-schema-rings-numeric-cancel-reset-retained-overrides')
+        return
+    }
     Blender-Select 25;Blender-Value 'size' '64'
     $clear=Clear-CanvasPoint ('tool-bubble-'+$id) 128 0;$sample=@{x=$clear[0]+64;y=$clear[1]}
     [CapyRowPointer]::Hover($w.X+4,$w.Y+4);$blank=Wait-StablePixels {Screen-Pixels $sample.x $sample.y}
@@ -1194,7 +1201,7 @@ try{
         Invoke-BlenderCellChecks 49 'scatter_cell_size' 3 .2 @('spread','scatter_cell_size','grit') 'scatter49'
         & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Close -DiscardUnsaved|Out-Null
         if((Get-Item -LiteralPath $stderr).Length){throw 'Restarted slider fixture stderr requires inspection'}
-        $scope=if($BlendersOnly){'Native Blender panel controls, rings, painting and editing-state persistence'}else{'Native global slider menus, history and SQLite persistence'}
+        $scope=if($blenderControlsOnly){'Native Blender panel controls, rings, numeric cancellation, defaults, reset and retained overrides'}elseif($BlendersOnly){'Native Blender panel controls, rings, painting and editing-state persistence'}else{'Native global slider menus, history and SQLite persistence'}
         [IO.File]::WriteAllText((Join-Path $run 'results.json'),(@{variant=$Variant;blenders_only=[bool]$BlendersOnly;checks=@($checks);scope=($scope+'; physical input and performance separate')}|ConvertTo-Json -Depth 12),[Text.UTF8Encoding]::new($false))
         return
     }

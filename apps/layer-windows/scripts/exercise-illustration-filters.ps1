@@ -104,8 +104,8 @@ try{
     Open-Project $source
     Wait-Until {$tab=@((Model).state.tabs|Where-Object active)[0];$tab.width -eq 320 -and $tab.height -eq 192 -and (Model).brush_ready} 'The source image did not open' 90
     Fit-Canvas;Park
+    Wait-Until {$sample=Pixel 40;$sample[0]-$sample[1] -gt 100} 'The source red patch was not visible'
     $original=Pixel 40;$partial=Pixel 200
-    if($original[0]-$original[1] -lt 100){throw 'The source red patch was not visible'}
     $sourceLayer=@((Model).state.layers|Where-Object editing)[0].id
     Invoke ('layer-'+$sourceLayer+'-visibility')
     Wait-Until {!@((Model).state.layers|Where-Object id -eq $sourceLayer)[0].visible} 'Source visibility did not change'
@@ -162,7 +162,7 @@ try{
     Open-Project $gradient
     Wait-Until {
         $view=Model;$tab=@($view.state.tabs|Where-Object active)[0];$file=$view.state.document_file
-        $file.epoch -ne $gradientEpoch -and $file.unpublished -and !$file.location -and $tab.title -eq 'Artistic gradient' -and $tab.width -eq 320 -and $tab.height -eq 192 -and !$file.busy -and $view.brush_ready
+        $file.epoch -ne $gradientEpoch -and $file.modified -and $file.unsaved_name -eq 'Artistic gradient' -and !$file.location -and $tab.title -eq 'Artistic gradient' -and $tab.width -eq 320 -and $tab.height -eq 192 -and !$file.busy -and $view.brush_ready
     } 'Artistic gradient did not open' 90
     Fit-Canvas;Park
     $artistic=@(

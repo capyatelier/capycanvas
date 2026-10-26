@@ -378,24 +378,26 @@ function Utility-Overlays{
     $curve=Curve;Native-Click 'pen-tilt-lighter';Wait-Until {(Curve) -ne $curve} 'The utility did not receive the native click above the expanded column'
     if(!(Column).open){throw 'The utility click fell through and closed the expanded column'}
     Native-Click 'pen-tilt-reset';Wait-Until {(Curve) -eq $curve} 'Reset did not settle before the opaque-pixel checkpoint'
+    Capture 'utility-over-column' -WithModel -Composed
     $x=[int]([Math]::Max($frame.Left+60,$column.Left+48));$y=[int]([Math]::Max($frame.Top+60,$column.Top+48))
     $sample=[Windows.Rect]::new($x-48,$y-48,96,96)
     if(!$frame.Contains($sample) -or !$column.Contains($sample)){throw 'The opaque pixel sample does not fit inside both utility and expanded column'}
-    $samples=@([pscustomobject]@{kind='column';x=$x;y=$y;pixels=(Wait-StablePixels {Screen-Pixels $x $y})});$bounds=(Tilt).bounds;$connections=(Column).open.connections
+    $samples=@([pscustomobject]@{kind='column';x=$x;y=$y;pixels=(Wait-StablePixels {Screen-Pixels $x $y (Join-Path $run 'utility-column-before.png')});after_pixels=$null});$bounds=(Tilt).bounds;$connections=(Column).open.connections
     foreach($connection in $connections){
         $link=Screen-Bounds $connection[1].bounds
         if(!$frame.IntersectsWith($link)){continue}
         $cx=[int][Math]::Max($frame.Left+60,[Math]::Min($frame.Right-60,$link.Left+$link.Width/2));$cy=[int][Math]::Max($frame.Top+60,[Math]::Min($frame.Bottom-60,$link.Top+$link.Height/2))
         $crop=[Windows.Rect]::new($cx-48,$cy-48,96,96)
         if(!$frame.Contains($crop) -or !$crop.IntersectsWith($link)){continue}
-        $samples+=[pscustomobject]@{kind=('connector-'+$connection[0]);x=$cx;y=$cy;bounds=$link.ToString();pixels=(Wait-StablePixels {Screen-Pixels $cx $cy})}
+        $kind='connector-'+$connection[0]
+        $samples+=[pscustomobject]@{kind=$kind;x=$cx;y=$cy;bounds=$link.ToString();pixels=(Wait-StablePixels {Screen-Pixels $cx $cy (Join-Path $run ("utility-$kind-before.png"))});after_pixels=$null}
     }
     if($samples.Count -lt 2){throw 'The utility interior does not overlap an expanded column connector sample'}
-    Capture 'utility-over-column' -WithModel -Composed
     Invoke-Id 'column-icon-layers';Wait-Until {!(Column).open} 'The reference column did not close'
     if(!(Same-Bounds (Tilt).bounds $bounds)){throw 'Closing the column moved the manually placed utility'}
-    foreach($sample in $samples){if((Wait-StablePixels {Screen-Pixels $sample.x $sample.y}) -ne $sample.pixels){throw "$($sample.kind) paints through the opaque utility interior"}}
+    foreach($sample in $samples){$sample.after_pixels=Wait-StablePixels {Screen-Pixels $sample.x $sample.y (Join-Path $run ("utility-$($sample.kind)-after.png"))}}
     Evidence 'utility-over-column' @{default_bounds=$initial;work_area=$work;drawer=$drawer;overlap=$bounds;connections=$connections;samples=$samples}
+    foreach($sample in $samples){if($sample.after_pixels -ne $sample.pixels){throw "$($sample.kind) paints through the opaque utility interior"}}
     $window=$root.Current.BoundingRectangle;$frame=(Control 'pen-tilt-dialog' -Arranged).Current.BoundingRectangle
     Move-Utility $frame.Left ($view.Top+4*$scale)
     $at=Center 'pen-tilt-title';$header=(Screen-Bounds @{x=0;y=0;width=(Model).layout.viewport[0];height=$work.y})

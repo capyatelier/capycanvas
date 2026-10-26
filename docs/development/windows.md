@@ -782,6 +782,10 @@ preservation and relative notice paths without a window, including PowerShell 5.
 and optional preserved linear channels; black need not store `linear_rgb`.
 `tests/document-invoke.ps1` checks a paper drawer action whose UIA peer retires
 after committing: observe the shared acknowledgement without repeating the action.
+Document fixtures activate the owner before focusing a native text field, wait
+for focus before Enter, and edit controlled ink through the visible Color panel.
+Focused GPU and writeback checks maximize the owned workspace first. File menu
+actions use the focused native menu item and Enter.
 Use `exercise-documents.ps1 -Journey gpu-recovery` for just the imported-image
 checkpoint, two GPU replacements, queued/active pen input, exact exported pixels
 and retained history. Native writeback initializes its pointer driver before
@@ -1628,6 +1632,11 @@ cached native projection, live canvas guards and dense pixel regression.
 Use `exercise-tool-bubbles.ps1 -BlendersOnly` with `-Variant dark-mouse` and
 `light-mouse` for independent Blender panel, ring and saved-state checks. Wait
 for the native bubble layout to settle after preset reselection before reset.
+The VM cases `tool-bubbles:blender-controls-dark` and `blender-controls-light`
+stop after those controls; `blenders-dark/light` retain painting and persistence,
+and `sliders-dark/light` also run the global slider preference and fan checks.
+Use `effects:visibility-dark` and `visibility-light` for the focused Properties
+visibility journey on the VM.
 
 `exercise-canvas-touch.ps1 -ScrubOnly -Theme dark` checks three-finger clearing
 at horizontal, diagonal and vertical angles, cancellation and locked-layer refusal.

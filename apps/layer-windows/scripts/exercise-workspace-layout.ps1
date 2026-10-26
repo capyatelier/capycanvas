@@ -1,4 +1,5 @@
-param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme='dark',[ValidateSet('all','diagnostics-fps')][string]$Journey='all')
+param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme='dark',[ValidateSet('all','diagnostics-fps','diagnostics-fps-light')][string]$Journey='all')
+if($Journey -eq 'diagnostics-fps-light'){$Journey='diagnostics-fps';$Theme='light'}
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
@@ -36,6 +37,15 @@ function Idle-Fps{
     Start-Sleep -Milliseconds 1500
     if((Control 'renderer-stat-2').Current.Name -ne '0' -or (Drawing-Frames) -ne $frames){throw 'Idle Diagnostics created canvas drawing updates or reported active FPS'}
     $frames
+}
+function Diagnostics-Identity([string]$Stage){
+    $cpu=Control 'renderer-stat-0' -Arranged;$rate=Control 'renderer-stat-2' -Arranged
+    $identity=[ordered]@{cpu=($cpu.GetRuntimeId() -join ':');rate=($rate.GetRuntimeId() -join ':')}
+    [ordered]@{stage=$Stage;generation=(Model).windows_gpu_generation;identity=$identity}|ConvertTo-Json -Depth 4 -Compress|Add-Content -LiteralPath (Join-Path $run 'diagnostics-identities.jsonl')
+    $identity|ConvertTo-Json -Compress
+}
+function Assert-DiagnosticsIdentity([string]$Stage,[string]$Expected){
+    if((Diagnostics-Identity $Stage) -cne $Expected){throw "$Stage replaced native metric rows"}
 }
 function Fps-Copy([string]$Tag){
     $catalog=Get-Content -LiteralPath (Join-Path $repo "assets/locales/$Tag/workspace.ftl") -Encoding UTF8
@@ -211,14 +221,13 @@ try{
     Wait-Until {$null -ne (Find 'renderer-stat-7')} 'Diagnostics query did not populate all shared rows'
     $cpu=Control 'renderer-stat-0'
     if($cpu.Current.HelpText -notmatch 'Not GPU completion or input latency'){throw 'Diagnostics lost measurement scope'}
-    $cpuIdentity=$cpu.GetRuntimeId() -join ':'
     $framesBefore=Drawing-Frames
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action 'Test stroke'
     Wait-Until {(Drawing-Frames) -gt $framesBefore} 'Visible Diagnostics did not collect drawing submissions'
-    $rateIdentity=(Control 'renderer-stat-2').GetRuntimeId() -join ':'
     $copy=@(Fps-Copy 'en')
     Wait-Until {(Control 'renderer-stat-2').Current.HelpText -eq $copy[1] -and (Find $copy[0] -Name -Type ([System.Windows.Automation.ControlType]::Text))} 'Windows Diagnostics did not identify submitted canvas frames'
     $idleFrames=Idle-Fps
+    $metricIdentity=Diagnostics-Identity 'after-stroke'
     $document=(Model).state.document_file|ConvertTo-Json -Depth 12 -Compress
     $cameraRevision=(Model).state.camera.revision
     $bounds=(Control 'drawing-canvas' -Arranged).Current.BoundingRectangle
@@ -230,10 +239,12 @@ try{
     Wait-Until {(Model).state.camera.revision -gt $cameraRevision -and (Control 'renderer-stat-2').Current.Name -match '^[1-9][0-9]*$'} 'Cached native pan did not publish positive submitted FPS'
     if(((Model).state.document_file|ConvertTo-Json -Depth 12 -Compress) -ne $document){throw 'Native pan changed the document'}
     if((Idle-Fps) -lt $idleFrames){throw 'Native pan reset the cumulative drawing submissions'}
+    Assert-DiagnosticsIdentity 'after-pan' $metricIdentity
     foreach($tag in 'ja','en'){
         Diagnostics-Language $tag
-        if(((Control 'renderer-stat-2').GetRuntimeId() -join ':') -ne $rateIdentity){throw 'Changing language replaced the native FPS row'}
+        Assert-DiagnosticsIdentity "after-language-$tag" $metricIdentity
     }
+    Assert-DiagnosticsIdentity 'before-gpu-recovery' $metricIdentity
     $generation=(Model).windows_gpu_generation
     $camera=(Model).state.camera|ConvertTo-Json -Depth 12 -Compress
     $recovery=@{unavailable_observed=$false}
@@ -246,7 +257,7 @@ try{
     Wait-Until {(Control 'renderer-stat-2').Current.Name -match '^[0-9]+$' -and (Control 'renderer-stat-2').Current.HelpText -eq $copy[1] -and (Find $copy[0] -Name -Type ([System.Windows.Automation.ControlType]::Text))} 'Recovered Diagnostics did not resume submitted FPS'
     $null=Idle-Fps
     if(((Model).state.document_file|ConvertTo-Json -Depth 12 -Compress) -ne $document -or ((Model).state.camera|ConvertTo-Json -Depth 12 -Compress) -ne $camera){throw 'Diagnostics GPU recovery changed the document or camera'}
-    if(((Control 'renderer-stat-0').GetRuntimeId() -join ':') -ne $cpuIdentity -or ((Control 'renderer-stat-2').GetRuntimeId() -join ':') -ne $rateIdentity){throw 'Stats updates replaced native metric rows'}
+    Assert-DiagnosticsIdentity 'after-gpu-recovery' $metricIdentity
     [IO.File]::WriteAllText((Join-Path $run 'diagnostics-fps.json'),(@{cached_pan='passed';idle_without_drawing_updates='passed';retained_localized_source='passed';gpu_generation_before=$generation;gpu_generation_after=(Model).windows_gpu_generation;unavailable_observed=$recovery.unavailable_observed;unavailable_scope='200 ms native polling can miss the reset interval; windowless renderer_stats_distinguish_submissions_and_retire_surface_feedback asserts unavailable deterministically'}|ConvertTo-Json -Depth 4))
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawing.Handle.ToInt64() -Action Resize -Width 1500 -Height 1000
     Wait-Until {$null -ne (Find 'renderer-stat-7')} 'Resize removed Diagnostics content'

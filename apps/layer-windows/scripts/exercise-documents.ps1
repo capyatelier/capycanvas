@@ -144,10 +144,13 @@ function Invoke-Control([string]$Name) {
 }
 function File-Command([string]$Id,[scriptblock]$Options) {
     $script:scope=$root
+    Foreground
     Wait-Until {((Model).state.commands|Where-Object id -eq $Id).enabled} "Document command stayed disabled: $Id" 45
     & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'File'
     Wait-Until {$item=Find-Id $Id;$item -and $item.Current.IsEnabled -and !$item.Current.IsOffscreen -and $item.Current.BoundingRectangle.Width -gt 0 -and $item.Current.BoundingRectangle.Height -gt 0} "Enabled file command not found: $Id"
-    Click-Center $Id
+    $entry=Control $Id -Arranged;$entry.SetFocus()
+    Wait-Until {$entry.Current.HasKeyboardFocus} "The file command did not receive keyboard focus: $Id"
+    [CapyRowPointer]::Key([uint32]$review.Id,0x0D)
     if($Id -eq 'export_document') {
         Wait-Until {(Model).windows_document.stage -eq 'options'} 'Export options did not open' 45
         if($Options){& $Options}
@@ -168,8 +171,14 @@ function Press([string]$Id,[scriptblock]$Acknowledged,[string]$Message) {
 }
 function Foreground {[CapyRowPointer]::SetForegroundWindow($drawing.Handle)|Out-Null;Wait-Until {[CapyRowPointer]::GetForegroundWindow() -eq $drawing.Handle} 'The review did not take foreground input'}
 function Type-Text([string]$Id,[string]$Text,[switch]$Commit) {
-    $entry=Owned $Id;$entry.SetFocus();$entry.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($Text)
-    if($Commit){Foreground;[CapyRowPointer]::Key([uint32]$review.Id,0x0D)}
+    Foreground
+    $entry=Control $Id -Arranged;$entry.SetFocus()
+    Wait-Until {$entry.Current.HasKeyboardFocus} "The text field did not receive focus: $Id"
+    $entry.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($Text)
+    if($Commit){
+        Wait-Until {$entry.Current.HasKeyboardFocus} "The text field lost focus before Enter: $Id"
+        [CapyRowPointer]::Key([uint32]$review.Id,0x0D)
+    }
 }
 function Pick-Choice([string]$Id,[int]$Index) {
     $box=Owned $Id;$box.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
@@ -208,7 +217,10 @@ function Context-Item([string]$Target,[string]$Item) {
 function New-Capture([string]$Name) {Start-Sleep -Milliseconds 800;Capture "new-drawing-$Name-$($script:newTheme)" -WithModel}
 function Open-NewDrawing {
     File-Command 'new_document'
-    Wait-Until {(Drawing) -and (Find 'new-drawing-dialog' -Within $root) -and (Find 'document-width' -Within $root)} 'New drawing did not open' 45
+    Wait-Until {
+        $name=Find 'new-drawing-name' -Within $root
+        (Drawing) -and (Find 'new-drawing-dialog' -Within $root) -and (Find 'document-width' -Within $root) -and $name -and !$name.Current.IsOffscreen -and $name.Current.HasKeyboardFocus
+    } 'New drawing did not open with its native name field focused' 45
     if((Drawing).untitled -ne (Model).windows_tabs.upcoming_untitled){throw 'New drawing did not offer the next untitled name'}
 }
 function Close-NewDrawing([string]$Id) {
@@ -613,13 +625,12 @@ function Ink-ColorMatches($Definition,[double[]]$Channels) {
     $true
 }
 function Set-InkColor([string[]]$Channels) {
-    $colorTile=((Model).panels|Where-Object id -eq 'toolbar').tiles|Where-Object {$_.control.kind -eq 'color'}|Select-Object -First 1
-    if(!$colorTile){throw 'Controlled stroke has no color toolbar tile'}
-    (Control "tile-toolbar-$($colorTile.id)" -Arranged).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
-    Wait-Until {Find-Id 'tool-drawer'} 'Controlled ink drawer did not open'
-    (Control 'color-foreground' -Arranged).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+    Document-Panel 'color'
+    $group=@((Model).layout.groups|Where-Object active -eq 'color')[0]
+    $colors=Control "workspace-group-$($group.id)" -Arranged
+    (Control 'color-foreground' -Within $colors -Arranged).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
     Wait-Until {(Model).state.colors.slot -eq 'foreground'} 'Foreground paint did not select'
-    (Control 'color-edit' -Arranged).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+    (Control 'color-edit' -Within $colors -Arranged).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
     (Control 'edit-color-form-0').GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
     Choose-Item (Control 'edit-color-form-0-linear_rgb')
     Wait-Until {(Find-Id 'edit-color-form-0').Current.Name -eq 'Linear RGB'} 'Controlled ink did not switch to Linear RGB'
@@ -633,8 +644,6 @@ function Set-InkColor([string[]]$Channels) {
     (Control 'edit-color-apply').GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
     Wait-Until {Ink-ColorMatches (Model).paint_pair.definition $Channels} 'Controlled ink color did not publish'
     Wait-Until {!(Find-Id 'edit-color-apply')} 'Controlled ink editor did not close'
-    (Control "tile-toolbar-$($colorTile.id)" -Arranged).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
-    Wait-Until {!(Find-Id 'tool-drawer')} 'Controlled ink drawer did not close'
 }
 function Draw-Below {
     $script:scope=$root
@@ -749,6 +758,10 @@ function Test-LightNewDrawing {
 Bind-ReviewWindow 'No review window'
 Wait-Until {(Model).brush_ready} 'Canvas startup did not finish' 45
 if(!(Model).windows_isolated_settings){throw 'Review must use an isolated profile'}
+if($gpuRecovery -or $nativeWriteback){
+    $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)
+    Wait-Until {$bounds=(Control 'drawing-canvas' -Arranged).Current.BoundingRectangle;$camera=(Model).state.camera;[Math]::Abs($bounds.Width-$camera.viewport[0]) -lt 2 -and [Math]::Abs($bounds.Height-$camera.viewport[1]) -lt 2 -and !(Model).windows_workspace.busy} 'Focused native workspace did not finish maximizing'
+}
 if($Journey -eq 'paper-color'){Test-PaperColorReopen}
 elseif($focusedColor -or $gpuRecovery){
     Open-NewDrawing
@@ -850,7 +863,7 @@ function Writeback-Command([string]$Menu,[string]$Id) {
     & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name $Menu
     Press $Id
 }
-function Writeback-Panel([string]$Id) {
+function Document-Panel([string]$Id) {
     if(!@((Model).layout.groups|Where-Object {$_.panels -contains $Id}).Count){
         & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Window'
         $menu=@((Model).application_menus|Where-Object id -eq 'window')[0].model.sections|ForEach-Object {$_}|Where-Object {$_.action.type -eq 'customize' -and $_.action.action.panel -eq $Id}
@@ -925,7 +938,7 @@ function Native-Writeback {
         Wait-Until {! (Drawing) -and @((Model).windows_tabs.tabs).Count -eq $count+1} 'Writeback drawing did not open' 60
         Writeback-Ready
         Press (Tool-Tile 'pen')
-        Writeback-Panel 'tool_settings'
+        Document-Panel 'tool_settings'
         $gpen=@{index=$null}
         Wait-Until {
             $subtools=@((Model).state.tool_set.subtools);$indices=@(0..($subtools.Count-1)|Where-Object {$subtools[$_].preview -eq 1})
@@ -936,7 +949,7 @@ function Native-Writeback {
         Type-Text 'tool-setting-size' '160' -Commit
         Wait-Until {[Math]::Abs((Model).state.brush.diameter-160) -lt .001} 'Native writeback brush size did not commit'
         Set-InkColor @('0','0','0')
-        Writeback-Panel 'properties'
+        Document-Panel 'properties'
         Combo-Select (Owned 'property-color_mode') {$_.Current.Name -eq $choice[0]}
         Wait-Until {@((Model).state.layer_properties.controls|Where-Object key -eq 'color_mode')[0].value.value -eq $choice[1]} 'Native writeback color mode did not apply'
         Writeback-Command 'View' 'fit_canvas';Writeback-Ready
@@ -965,7 +978,7 @@ function Native-Writeback {
         File-Command 'open_document';Picker 'Open';Choose-Path $file;Idle
         Wait-Until {(Model).state.document_file.epoch -gt $epoch -and (Model).state.document_file.location.uri -eq $file -and !(Model).state.document_file.modified} 'Native writeback Open did not admit a fresh clean drawing' 60
         Writeback-Ready
-        Writeback-Panel 'properties'
+        Document-Panel 'properties'
         Wait-Until {@((Model).state.layer_properties.controls|Where-Object key -eq 'color_mode')[0].value.value -eq $choice[1]} 'Reopened native writeback lost its color mode'
         Writeback-Command 'View' 'fit_canvas';Writeback-Ready
         if((Stable-WritebackPixels "$name-reopened") -ne $painted){throw 'Saved native writeback did not reopen with exact canvas pixels'}
@@ -1027,7 +1040,10 @@ if($gpuRecovery){
     Wait-Until {(Test-Path -LiteralPath $first) -and (Model).state.document_file.location.uri -eq $first -and !(Model).state.document_file.modified} 'GPU recovery seed did not save cleanly'
     Draw
     Test-GpuRecovery
+    $closedEpoch=(Model).state.document_file.epoch
     File-Command 'close_document';Confirm-Dialog;Invoke-Control 'Discard Changes'
+    Wait-Until {(Model).state.document_file.epoch -ne $closedEpoch -and !(Model).windows_document} 'GPU recovery drawing did not close'
+    Request-Close
     Wait-Closed 'GPU recovery review close did not finish'
     if((Get-Item -LiteralPath $stderr).Length){throw 'GPU recovery native review reported stderr'}
     @{journey=$Journey;gpu_recovery='two replacements, queued and active pen strokes, identical exported pixels, thumbnails and Undo/Redo passed';evidence=$run}|ConvertTo-Json

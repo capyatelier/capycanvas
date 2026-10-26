@@ -1,4 +1,5 @@
-param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme='dark',[switch]$ToolsOnly,[ValidateSet('all','editing')][string]$Journey='all')
+param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme='dark',[switch]$ToolsOnly,[ValidateSet('all','editing','editing-light')][string]$Journey='all')
+if($Journey -eq 'editing-light'){$Journey='editing';$Theme='light'}
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 $CapyFind='prefer-visible';$CapyWaitSeconds=20;$CapyEach={[CapyRowPointer]::Verify()}
@@ -138,17 +139,17 @@ function Editing-NudgeEdge([bool]$Wanted){
 }
 function Editing-History([string]$Name,$Points,[scriptblock]$Action,[scriptblock]$Assert){
  Park;$before=Drawing-Checkpoint;$pixels=Tool-Samples $Points
- $record=[ordered]@{name=$Name;before=$before;after=$null;undo=$null;redo=$null}
+ $record=[ordered]@{name=$Name;points=$Points;before=$before;before_pixels=$pixels;after=$null;after_pixels=$null;undo=$null;undo_pixels=$null;redo=$null;redo_pixels=$null}
  try{
   & $Action
   Editing-Settled
   Wait-Until {(Drawing-Checkpoint) -cne $before} "$Name did not author a change"
   Park;& $Assert
-  $after=Drawing-Checkpoint;$afterPixels=Tool-Samples $Points;$record.after=$after
+  $after=Drawing-Checkpoint;$afterPixels=Tool-Samples $Points;$record.after=$after;$record.after_pixels=$afterPixels
   Shortcut-Command 'undo';Park
-  Wait-Until {$record.undo=Drawing-Checkpoint;$record.undo -ceq $before -and (Tool-Samples $Points) -ceq $pixels} "$Name Undo did not restore its exact checkpoint and pixels" 30
+  Wait-Until {$record.undo=Drawing-Checkpoint;$record.undo_pixels=Tool-Samples $Points;$record.undo -ceq $before -and $record.undo_pixels -ceq $pixels} "$Name Undo did not restore its exact checkpoint and pixels" 30
   Shortcut-Command 'redo';Park
-  Wait-Until {$record.redo=Drawing-Checkpoint;$record.redo -ceq $after -and (Tool-Samples $Points) -ceq $afterPixels} "$Name Redo did not restore its exact checkpoint and pixels" 30
+  Wait-Until {$record.redo=Drawing-Checkpoint;$record.redo_pixels=Tool-Samples $Points;$record.redo -ceq $after -and $record.redo_pixels -ceq $afterPixels} "$Name Redo did not restore its exact checkpoint and pixels" 30
   $checks[$Name]=[ordered]@{checkpoint_undo='exact';checkpoint_redo='exact';sample_pixels=$Points.Count*81}
   Capture ("editing-$Name-$Theme") -WithModel -Composed
  }finally{$record|ConvertTo-Json -Depth 6|Set-Content -LiteralPath (Join-Path $run ("editing-$Name-history.json"))}
@@ -161,12 +162,13 @@ function Vector-Editing{
  $null=Choose-Tool-Item (Tool-Item 'subtools' {param($item) $item.action.action.tool.figure.shape -eq 'rectangle' -and $item.action.action.tool.figure.paint -eq 'fill'} 'a filled rectangle') -Acknowledged
  Stroke (Line @(400,400) @(700,620))
  Shortcut-Command 'move';Stroke (Line @(550,510) @(550,510) 1)
- $points=@(@(400,500),@(410,500),@(550,510),@(600,510),@(750,510),@(900,510))
- Editing-History 'nudge' $points {Key 0x27} {if((Tool-Samples $points) -ceq $pixels){throw 'The one-pixel nudge did not move the sampled edge'}}
+ $edgePoints=@(@(400,500),@(410,500),@(550,510),@(600,510),@(750,510),@(900,510))
+ Editing-History 'nudge' $edgePoints {Key 0x27} {if((Tool-Samples $edgePoints) -ceq $pixels){throw 'The one-pixel nudge did not move the sampled edge'}}
  Shortcut-Command 'undo';Park
  Editing-NudgeEdge $true
- Editing-History 'shift-nudge' $points {[CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x10),0x27)} {Editing-NudgeEdge $false;Expect 'Shift nudge keeps the shifted interior' @(415,450) 'ink'}
+ Editing-History 'shift-nudge' $edgePoints {[CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x10),0x27)} {Editing-NudgeEdge $false;Expect 'Shift nudge keeps the shifted interior' @(415,450) 'ink'}
  Shortcut-Command 'undo';Park
+ $points=@(@(500,480),@(600,480),@(850,480),@(950,480))
  Editing-History 'alt-drag' $points {
   [CapyRowPointer]::Hold(0x12,$true)
   try{Stroke (Line @(550,510) @(900,510))}finally{[CapyRowPointer]::Hold(0x12,$false)}
@@ -188,6 +190,7 @@ function Vector-Editing{
  Stroke (Line @(500,450) @(800,670))
  Expect 'Second rectangle covers the first' @(600,510) 'green'
  Shortcut-Command 'move';Stroke (Line @(450,510) @(450,510) 1)
+ $points=@(@(450,480),@(550,480),@(650,480),@(750,480))
  Editing-History 'arrange-front' $points {Editing-Command 'bring_to_front'} {Expect 'Bring to Front changes the overlapping paths' @(600,510) 'ink'}
  Editing-History 'arrange-back' $points {Editing-Command 'send_to_back'} {Expect 'Send to Back restores the green overlap' @(600,510) 'green'}
  Tool-Panel 'layers';Invoke 'layer-add-mask'

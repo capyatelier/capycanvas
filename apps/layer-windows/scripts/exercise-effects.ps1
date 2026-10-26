@@ -1,5 +1,6 @@
-﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light','curve-dark','curve-light')][string]$Theme='dark',[switch]$PropertyLayout,[switch]$VisibilityOnly)
+﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light','curve-dark','curve-light','visibility-dark','visibility-light')][string]$Theme='dark',[switch]$PropertyLayout,[switch]$VisibilityOnly)
 $ErrorActionPreference='Stop'
+if($Theme.StartsWith('visibility-')){$VisibilityOnly=$true;$Theme=$Theme.Substring(11)}
 $curveOnly=$Theme.StartsWith('curve-');if($curveOnly){$Theme=$Theme.Substring(6)}
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 $CapyCacheModel=$true;$CapyCaptureDelay=250
