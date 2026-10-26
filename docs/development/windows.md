@@ -350,6 +350,7 @@ enabled state and expansion checks remain.
 
 `exercise-header.ps1` compares the Clock caption before and after moving it from
 the component bank into the title bar, including its visible width.
+Use `-Journey background` for only mouse, touch and pen background-hold menus.
 In Paint, it also checks the full workspace group, caption padding and options
 containment at 1200 DIP, then the compact selector at 960 DIP. The switcher journey
 adopts Paint and removes its center drawing title through customization before
@@ -759,6 +760,8 @@ check saved failure details, stale restore completions, identity remapping,
 publication failures and cleanup warnings after committed checkpoints.
 `tests/recovery-fixture.ps1 -Output <fresh-directory>` checks failed-source byte
 preservation and relative notice paths without a window, including PowerShell 5.
+`tests/ink-color.ps1` checks document-fixture color comparisons with encoded RGB
+and optional preserved linear channels; black need not store `linear_rgb`.
 Shared filesystem and SQLite calls resolve existing paths before native publication,
 including when private storage or backup directories exceed the legacy Windows path
 length. Window-free core and native workspace regressions check long-path recovery
@@ -1656,6 +1659,8 @@ hidden alpha threshold and Artistic parameters. Artistic controls and loaded
 previews follow the shared schema; Crystallize exposes only Cell size and Stretch. Repeat
 with `-Theme light`; the VM runner names are `illustration-filters` and
 `illustration-filters:light`.
+After reopening, select Layers before invoking a layer row; Filters can remain
+the active tab in their shared panel group.
 
 `exercise-image-objects.ps1 -Executable <path> -Theme dark` opens the fixed shared
 image packages with built-in and ICC profiles, including Nearest sampling with

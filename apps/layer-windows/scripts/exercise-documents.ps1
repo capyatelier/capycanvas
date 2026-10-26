@@ -581,6 +581,27 @@ function Draw {
     Invoke-Control 'Test pen'
     Wait-Until {(Model).state.document_file.modified -and (Model).state.document_file.revision -gt $revision} 'Controlled stroke did not modify the drawing'
 }
+function Ink-ColorMatches($Definition,[double[]]$Channels) {
+    if($Definition.rgba.Count -ne 4 -or $Channels.Count -ne 3 -or $Definition.rgba[3] -ne 1){return $false}
+    $linear=$Definition.linear_rgb
+    if($null -eq $linear){
+        $linear=@(foreach($value in $Definition.rgba[0..2]){
+            $magnitude=[Math]::Abs([double]$value)
+            if($Definition.space -in @('Srgb','DisplayP3')){
+                $decoded=if($magnitude -le .04045){$magnitude/12.92}else{[Math]::Pow(($magnitude+.055)/1.055,2.4)}
+            }elseif($Definition.space -eq 'AdobeRgb'){$decoded=[Math]::Pow($magnitude,563./256.)}
+            elseif($Definition.space -eq 'ProPhoto'){$decoded=if($magnitude -le 1./32.){$magnitude/16.}else{[Math]::Pow($magnitude,1.8)}}
+            else{throw 'Unknown ink RGB space'}
+            if($value -lt 0){-$decoded}else{$decoded}
+        })
+    }
+    if($linear.Count -ne 3){return $false}
+    for($i=0;$i -lt 3;$i++){
+        $difference=[Math]::Abs([double]$linear[$i]-$Channels[$i])
+        if([double]::IsNaN($difference) -or $difference -ge .000001){return $false}
+    }
+    $true
+}
 function Set-InkColor([string[]]$Channels) {
     $colorTile=((Model).panels|Where-Object id -eq 'toolbar').tiles|Where-Object {$_.control.kind -eq 'color'}|Select-Object -First 1
     if(!$colorTile){throw 'Controlled stroke has no color toolbar tile'}
@@ -600,7 +621,7 @@ function Set-InkColor([string[]]$Channels) {
         Wait-Until {!(Find-Id "edit-color-0-$i-entry")} 'Controlled ink value did not commit'
     }
     (Control 'edit-color-apply').GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
-    Wait-Until {$definition=(Model).paint_pair.definition;$definition.linear_rgb -and $definition.rgba[3] -eq 1 -and @((0..2)|Where-Object {[Math]::Abs($definition.linear_rgb[$_]-[double]$Channels[$_]) -ge .000001}).Count -eq 0} 'Controlled ink color did not publish'
+    Wait-Until {Ink-ColorMatches (Model).paint_pair.definition $Channels} 'Controlled ink color did not publish'
     Wait-Until {!(Find-Id 'edit-color-apply')} 'Controlled ink editor did not close'
     (Control "tile-toolbar-$($colorTile.id)" -Arranged).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
     Wait-Until {!(Find-Id 'tool-drawer')} 'Controlled ink drawer did not close'

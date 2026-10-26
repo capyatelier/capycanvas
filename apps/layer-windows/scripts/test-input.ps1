@@ -146,4 +146,5 @@ if($LASTEXITCODE -ne 0){throw 'Canvas queue test failed.'}
 }
 
 & (Join-Path $PSScriptRoot '../tests/numeric-readout.ps1')
+& (Join-Path $PSScriptRoot '../tests/ink-color.ps1')
 & (Join-Path $PSScriptRoot '../tests/recovery-fixture.ps1') -Output (Join-Path $OutputDirectory ('recovery-paths-'+[guid]::NewGuid().ToString('N')))

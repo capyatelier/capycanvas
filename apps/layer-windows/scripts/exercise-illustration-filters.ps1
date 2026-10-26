@@ -150,7 +150,7 @@ try{
     Capture "threshold-white-$Theme" -WithModel -Composed
     Save-Reopen $project
     $filter=@((Model).state.layers|Where-Object label -eq 'Threshold')[0]
-    Invoke ('layer-'+$filter.id+'-name');Panel 'properties';Fit-Canvas;Park
+    Panel 'layers';Invoke ('layer-'+$filter.id+'-name');Panel 'properties';Fit-Canvas;Park
     Wait-Until {(Property 'colors').value.value -eq 2 -and (Property 'transparency').value.value -eq 0 -and [Math]::Abs((Property 'threshold').value.value-.378) -lt .000001} 'Reopen lost Threshold choices'
     Wait-Until {Transparent 40} 'Reopen changed the filtered artwork'
     Choice 'transparency' 1
@@ -197,7 +197,7 @@ try{
     foreach($case in $artistic){
         $layers=@((Model).state.layers|Where-Object label -eq $case.label)
         if($layers.Count -ne 1){throw "$($case.label) was not retained exactly once"}
-        Invoke ('layer-'+$layers[0].id+'-name');Panel 'properties'
+        Panel 'layers';Invoke ('layer-'+$layers[0].id+'-name');Panel 'properties'
         Wait-Until {(Model).state.layer_properties.description -eq $case.label} "$($case.label) did not select after reopen"
         if((@((Model).state.layer_properties.controls.key) -join ',') -cne ($case.edits.Keys -join ',')){throw "$($case.label) reopened with a different schema"}
         foreach($key in $case.edits.Keys){if((Property $key).value.value -ne $case.edits[$key]){throw "$($case.label) lost $key on save/reopen"}}

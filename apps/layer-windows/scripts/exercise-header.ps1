@@ -1,4 +1,4 @@
-﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('mouse','pen','touch')][string]$Device='mouse',[ValidateSet('paint','sketch','photo')][string]$Workspace='paint',[switch]$Catalog,[ValidateSet('dark','light')][string]$Theme='dark',[ValidateSet('full','options','options-light','options-pen','options-touch','menus','menus-light','zen','zen-workspace')][string]$Journey='full')
+﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('mouse','pen','touch')][string]$Device='mouse',[ValidateSet('paint','sketch','photo')][string]$Workspace='paint',[switch]$Catalog,[ValidateSet('dark','light')][string]$Theme='dark',[ValidateSet('full','background','options','options-light','options-pen','options-touch','menus','menus-light','zen','zen-workspace')][string]$Journey='full')
 $ErrorActionPreference='Stop'
 if($Journey -eq 'options-light'){$Theme='light'}
 if($Journey -eq 'menus-light'){$Theme='light'}
@@ -713,6 +713,12 @@ try {
     [IO.File]::WriteAllText((Settings-File),(@{theme=$Theme}|ConvertTo-Json))
     Start-Review 'initial';Capture 'normal'
     Check-BackgroundContext
+    if($Journey -eq 'background'){
+        & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Close -DiscardUnsaved
+        if((Get-Item -LiteralPath $stderr).Length){throw 'Native stderr requires inspection'}
+        @{theme=$Theme;journey=$Journey;mouse_touch_pen_background_context='passed';run=$run}|ConvertTo-Json
+        return
+    }
     if($Journey -in @('zen','zen-workspace')){
         if($Journey -eq 'zen'){Check-ZenMatrix}
         else{foreach($theme in @('Dark','Light')){Set-ZenTheme $theme;foreach($workspaceKind in @('painter','photographer','illustrator')){Use-ZenWorkspace $workspaceKind};Check-ZenToolbar $theme}}
