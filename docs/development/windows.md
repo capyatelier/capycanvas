@@ -1746,6 +1746,23 @@ An actual layer row must keep a sideways swipe and yield a vertical contact to
 row resizing; one workspace Undo restores the exact layout.
 `-ClosedStripOnly -Device pen -Theme dark` isolates the default Paint open
 column's close-and-outward-swipe sequence without repeating the other checks.
+`-LayerRowOnly -Device touch` isolates the real layer-row arbitration case.
+`-CancelOnly -Device pen|touch` checks native pointer cancellation during
+pending and claimed edge contacts, including exact rollback and released capture.
+Use `exercise-expansion.ps1 -ResizeOnly -Device mouse|pen|touch -Theme dark|light`
+for floating left/right/bottom/corner reach, native mouse hover and drag cursors,
+toolbar-band lanes, column and stack collapse/reversal, adjacent toolbar widths
+and exact workspace Undo. An inactive native tab's top six units must yield a
+vertical gap resize without selecting the tab; tapping selects it on release.
+The fixture grows Stats through its native bottom
+handle before probing the body, waits for native frame/tab geometry, and hovers
+the published six-unit handles rather than the wider interior reach.
+`-ResizeTailOnly` runs the toolbar-band and column/stack cases without repeating
+the floating-panel and tab-strip checks. Mouse reach probes cancel with Escape
+before releasing the button, so probing a toolbar command cannot activate it.
+`-ResizeStackOnly` creates two members through a native column-header drop and checks
+transient member opening and close/reversal without repeating the other cases.
+It compares the exact durable layout and Undo availability after physical release.
 Use `exercise-header.ps1 -FullscreenOnly -Theme dark|light` for F11 entry and
 exit from normal and maximized windows. It checks restored native bounds and
 the fullscreen edge-gesture property, and retains window, monitor and DWM state.

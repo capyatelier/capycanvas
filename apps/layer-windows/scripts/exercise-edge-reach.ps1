@@ -1,4 +1,4 @@
-﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('mouse','pen','touch')][string]$Device='mouse',[switch]$ColumnResetOnly,[switch]$CanvasResetOnly,[switch]$ClosedStripOnly,[ValidateSet('dark','light')][string]$Theme)
+﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('mouse','pen','touch')][string]$Device='mouse',[switch]$ColumnResetOnly,[switch]$CanvasResetOnly,[switch]$ClosedStripOnly,[switch]$LayerRowOnly,[switch]$CancelOnly,[ValidateSet('dark','light')][string]$Theme)
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 $CapyPopups=$true
@@ -273,8 +273,12 @@ function Check-LayerRowEdge([string]$Theme){
     Invoke (((Model).panels|Where-Object id -eq 'layers').configuration_title+'…') -Name
     Wait-Until {(Model).state.customization.expanded -eq 'layers'} 'Layer configuration did not open'
     (Control 'configure-show-layer_actions').GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
-    (Control 'panel-tab-layers').SetFocus();[CapyRowPointer]::Key(0x1b)
-    Wait-Until {$null -eq (Model).state.customization.expanded} 'Layer configuration did not close';Settled
+    Wait-Until {$control=@(((Model).panels|Where-Object id -eq 'layers').controls|Where-Object control -eq 'layer_actions');$control.Count -eq 1 -and !$control[0].visible_in_panel} 'Layer action footer did not become hidden'
+    $dismiss=Control 'panel-tab-layers';$dismiss.SetFocus()
+    Wait-Until {$dismiss.Current.HasKeyboardFocus} 'Layer tab did not receive keyboard focus before Escape'
+    [CapyRowPointer]::Key([uint32]$review.Id,0x1b)
+    Wait-Until {$null -eq (Model).state.customization.expanded} 'Layer configuration did not close'
+    Settled
     $group=(Layout).groups|Where-Object {$_.panels -contains 'layers'}|Select-Object -First 1
     $gap=(Layout).dividers|Where-Object {$_.axis -eq 'vertical' -and !$_.fixed -and [Math]::Abs($_.bounds.y-$group.bounds.y-$group.bounds.height) -lt 1}|Select-Object -First 1
     if(!$gap){throw 'The docked Layers group has no lower row-resize gap'}
@@ -292,6 +296,24 @@ function Check-LayerRowEdge([string]$Theme){
     @{row=$row.Current.AutomationId;point=$point;contact=$contact;terminal=(Gesture).last_edge;before=$before;after=(Model).state.workspace.layout}|ConvertTo-Json -Depth 95|Set-Content (Join-Path $run ('layer-row-edge-'+$Theme+'.json'))
     WindowCommand 'undo_workspace';Settled
     if(((Model).state.workspace.layout|ConvertTo-Json -Depth 90 -Compress) -cne $before){throw 'LayerRow resize Undo did not restore the exact workspace'}
+}
+function Check-NativeEdgeCancel([string]$Theme){
+    if($Device -eq 'mouse'){throw 'CancelOnly requires pen or touch native cancellation'}
+    $edge=(Layout).dividers|Where-Object {$_.axis -eq 'horizontal' -and $_.owner_side -eq 'left' -and !$_.fixed}|Sort-Object {$_.bounds.x}|Select-Object -Last 1
+    $groups=@((Layout).groups|Where-Object {!$_.floating -and [Math]::Abs($_.bounds.x+$_.bounds.width-$edge.bounds.x) -lt 1})
+    $from=Reach-Point @(foreach($g in $groups){for($y=$g.bounds.y+$g.bounds.height-24;$y -gt $g.bounds.y+48;$y-=24){@{x=$edge.bounds.x-20;y=$y}}}) {param($contact)$contact.contact -eq 'free'}
+    $before=(Model).state.workspace.layout|ConvertTo-Json -Depth 90 -Compress
+    $records=[Collections.Generic.List[object]]::new()
+    foreach($claimed in $false,$true){
+        try{
+            if($claimed){Swipe $from @{x=$from.x+64;y=$from.y} -During {Wait-Until {(Gesture).edge.claimed} 'Native edge did not claim before cancellation';[CapyRowPointer]::Cancel()}}
+            else{$at=Screen $from.x $from.y;[CapyRowPointer]::Down($Device,$at.x,$at.y);Wait-Until {$null -ne (Gesture).edge -and !(Gesture).edge.claimed} 'Pending native edge was not published';[CapyRowPointer]::Cancel();Settled}
+            $terminal=Gesture
+            $records.Add(@{claimed=$claimed;gesture=$terminal;layout=(Model).state.workspace.layout})
+            $records|ConvertTo-Json -Depth 95|Set-Content (Join-Path $run ('native-edge-cancel-'+$Theme+'.json'))
+            if(((Model).state.workspace.layout|ConvertTo-Json -Depth 90 -Compress) -cne $before -or $terminal.edge -or $terminal.captured){throw 'Native pointer cancellation did not restore layout and release edge capture'}
+        }finally{if([CapyRowPointer]::Active){[CapyRowPointer]::Cancel()}}
+    }
 }
 function Check-ClosedStrip([string]$Theme){
     $strip=(Layout).collapsed|Where-Object open|Select-Object -First 1
@@ -313,7 +335,7 @@ try {
     foreach($theme in $themes){
         Start-Review $theme
         Settled
-        if($ClosedStripOnly){Check-ClosedStrip $theme}elseif($CanvasResetOnly){Check-CanvasReset $theme}elseif($ColumnResetOnly){Check-ColumnHandleReset $theme}else{
+        if($CancelOnly){Check-NativeEdgeCancel $theme}elseif($LayerRowOnly){Check-LayerRowEdge $theme}elseif($ClosedStripOnly){Check-ClosedStrip $theme}elseif($CanvasResetOnly){Check-CanvasReset $theme}elseif($ColumnResetOnly){Check-ColumnHandleReset $theme}else{
             Check-ColumnEdge $theme
             Check-GroupGap $theme
             Check-ClosedStrip $theme
@@ -324,7 +346,9 @@ try {
         if((Get-Item -LiteralPath $stderr).Length){throw "Native stderr requires inspection ($theme)"}
         [CapyRowPointer]::Dispose()
     }
-    if($ClosedStripOnly){[pscustomobject]@{device=$Device;themes=($themes -join ',');closed_strip='passed';evidence=$run;scope='Native closed-column outward swipe only'}|ConvertTo-Json}
+    if($CancelOnly){[pscustomobject]@{device=$Device;themes=($themes -join ',');native_edge_cancel='passed';evidence=$run;scope='Pending and claimed native edge cancellation only'}|ConvertTo-Json}
+    elseif($LayerRowOnly){[pscustomobject]@{device=$Device;themes=($themes -join ',');layer_row_edge_handoff='passed';evidence=$run;scope='Actual LayerRow Pickup edge arbitration only'}|ConvertTo-Json}
+    elseif($ClosedStripOnly){[pscustomobject]@{device=$Device;themes=($themes -join ',');closed_strip='passed';evidence=$run;scope='Native closed-column outward swipe only'}|ConvertTo-Json}
     elseif($CanvasResetOnly){[pscustomobject]@{device=$Device;themes=($themes -join ',');canvas_side_reset='passed';preferred_width='exact';workspace_undo_redo='exact';evidence=$run;scope='Native touch canvas-side double taps only; physical shell gestures remain separate'}|ConvertTo-Json}
     elseif($ColumnResetOnly){[pscustomobject]@{device=$Device;themes=($themes -join ',');actual_nested_divider_reset='passed';owner_side='left';preferred_width='exact';other_owner='unchanged';workspace_undo_redo='exact';evidence=$run;scope='Actual native nested divider contacts only; physical devices and timing remain separate'}|ConvertTo-Json}
     else{[pscustomobject]@{device=$Device;column_edge_from_inside='passed';resize_pointer=($Device -eq 'mouse');double_press_reset='passed';canvas_contact=$(if($Device -eq 'touch'){'grabs'}else{'kept'});vertical_swipe_kept='passed';group_gap='passed';closed_strip='passed';themes=($themes -join ',');scope='OS-delivered synthetic input; physical devices and timing remain separate'}|ConvertTo-Json}

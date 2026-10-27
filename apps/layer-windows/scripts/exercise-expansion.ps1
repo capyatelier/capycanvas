@@ -1,5 +1,6 @@
-﻿param([Parameter(Mandatory)][string]$Executable,[switch]$ResizeOnly,[ValidateSet('mouse','touch')][string]$Device='mouse',[ValidateSet('dark','light')][string]$Theme='dark')
+﻿param([Parameter(Mandatory)][string]$Executable,[switch]$ResizeOnly,[switch]$ResizeTailOnly,[switch]$ResizeStackOnly,[ValidateSet('mouse','pen','touch')][string]$Device='mouse',[ValidateSet('dark','light')][string]$Theme='dark')
 $ErrorActionPreference='Stop'
+$ResizeOnly=$ResizeOnly -or $ResizeTailOnly -or $ResizeStackOnly
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 $CapyCacheModel=$true
 Add-Type -AssemblyName System.Drawing
@@ -23,25 +24,39 @@ function Resize-Screen($Point){
     @{x=[int]($origin.x+$Point.x*$scale);y=[int]($origin.y+$Point.y*$scale)}
 }
 function Resize-Point([double]$X,[double]$Y){@{x=$X;y=$Y}}
-function Resize-Reach([object[]]$Candidates){
+function Resize-Reach([object[]]$Candidates,[scriptblock]$Accept,[switch]$DoubleEscape){
+    $probes=[Collections.Generic.List[object]]::new()
     foreach($point in $Candidates){
         $at=Resize-Screen $point
+        $trace=Input-Trace $at.x $at.y
+        if(@($trace.hit|Where-Object type -eq 'ControlType.ScrollBar').Count){$probes.Add(@{point=$point;input=$trace;excluded='native-scrollbar'});continue}
         if($Device -eq 'mouse'){[CapyRowPointer]::Hover($at.x,$at.y)}
         [CapyRowPointer]::Down($Device,$at.x,$at.y);Start-Sleep -Milliseconds 80
         $edge=(Resize-Gesture).edge
-        [CapyRowPointer]::Cancel();Resize-Settled
-        if($edge){return $point}
+        if($Device -eq 'mouse'){
+            [CapyRowPointer]::Key([uint32]$review.Id,0x1B)
+            Wait-Until {!((Resize-Gesture).edge)} 'Mouse probe Escape did not clear its pending edge'
+            if($DoubleEscape){[CapyRowPointer]::Key([uint32]$review.Id,0x1B)}
+        }
+        [CapyRowPointer]::Cancel()
+        Wait-Until {$g=Resize-Gesture;$g.phase -eq 'idle' -and !$g.edge -and !$g.captured -and !$g.ignore_click} 'Resize probe left an active gesture or suppressed click'
+        Resize-Settled
+        $accepted=$edge -and (!$Accept -or (& $Accept $edge))
+        $probes.Add(@{point=$point;input=$trace;edge=$edge;accepted=[bool]$accepted})
+        $probes|ConvertTo-Json -Depth 12|Set-Content (Join-Path $run 'resize-reach-probes.json')
+        if($accepted){return $point}
     }
     throw 'No native contact in the expected resize reach'
 }
 function Resize-Cursor([int]$Stock){
     if($Device -eq 'mouse'){Wait-Until {[CapyRowPointer]::Cursor().cursor -eq [CapyRowPointer]::StockCursor($Stock)} "Native resize cursor is not stock $Stock"}
 }
-function Resize-Drag($From,[object[]]$To,[scriptblock]$During,[int]$Cursor=0){
+function Resize-Drag($From,[object[]]$To,[scriptblock]$During,[int]$Cursor=0,[scriptblock]$Contact){
     $a=Resize-Screen $From
     if($Device -eq 'mouse'){[CapyRowPointer]::Hover($a.x,$a.y)}
     [CapyRowPointer]::Down($Device,$a.x,$a.y)
     try{
+        if($Contact){& $Contact}
         for($n=0;$n -lt $To.Count;$n++){
             $b=Resize-Screen $To[$n]
             for($i=1;$i -le 8;$i++){[CapyRowPointer]::Move([int]($a.x+($b.x-$a.x)*$i/8),[int]($a.y+($b.y-$a.y)*$i/8));Start-Sleep -Milliseconds 16}
@@ -55,6 +70,21 @@ function Resize-Drag($From,[object[]]$To,[scriptblock]$During,[int]$Cursor=0){
     }finally{if([CapyRowPointer]::Active){[CapyRowPointer]::Cancel()}}
 }
 function Resize-Undo([string]$Before){WindowCommand 'undo_workspace';Wait-Until {(Resize-State) -ceq $Before} 'Resize was not one exact workspace Undo step';Resize-Settled}
+function Resize-FloatingReady([int]$Id){
+    Wait-Until {
+        $g=(Resize-Layout).groups|Where-Object id -eq $Id|Select-Object -First 1
+        if(!$g){return $false}
+        foreach($edge in @('left','bottom')){
+            $h=$g.resize_handles|Where-Object edge -eq $edge|Select-Object -First 1
+            $at=Resize-Screen (Resize-Point $h.bounds.x $h.bounds.y)
+            $native=(Control "floating-$Id-$edge" -Arranged).Current.BoundingRectangle
+            $scale=[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.
+            if([Math]::Abs($native.X-$at.x) -gt 2 -or [Math]::Abs($native.Y-$at.y) -gt 2 -or [Math]::Abs($native.Width-$h.bounds.width*$scale) -gt 2 -or [Math]::Abs($native.Height-$h.bounds.height*$scale) -gt 2){return $false}
+        }
+        (Control 'panel-tab-stats' -Arranged).Current.BoundingRectangle.Height -gt 0
+    } 'Floating native frame/tab geometry did not reach its shared bounds'
+    Wait-PresentedFrame
+}
 function Resize-Floating {
     Invoke-Id 'panel-tab-stats';Resize-Settled
     $beforeFloat=Resize-State
@@ -67,18 +97,33 @@ function Resize-Floating {
     [CapyRowPointer]::Up();Resize-Settled
     $floating={@((Resize-Layout).groups|Where-Object {$_.floating -and $_.panels -contains 'stats'})[0]}
     Wait-Until {$null -ne (& $floating)} 'Stats did not float on the native canvas'
+    Resize-FloatingReady (& $floating).id
+    $beforeHeight=Resize-State
+    $handle=(& $floating).resize_handles|Where-Object edge -eq 'bottom'|Select-Object -First 1
+    $at=Resize-Screen (Resize-Point ($handle.bounds.x+$handle.bounds.width*.5) ($handle.bounds.y+$handle.bounds.height*.5))
+    [CapyRowPointer]::Down('mouse',$at.x,$at.y)
+    $to=Resize-Screen (Resize-Point ($handle.bounds.x+$handle.bounds.width*.5) ((& $floating).bounds.y+263))
+    for($i=1;$i -le 8;$i++){[CapyRowPointer]::Move([int]($at.x+($to.x-$at.x)*$i/8),[int]($at.y+($to.y-$at.y)*$i/8));Start-Sleep -Milliseconds 16}
+    [CapyRowPointer]::Up();Resize-Settled
+    Wait-Until {(& $floating).bounds.height -ge 240} 'Native bottom handle did not prepare a tall floating panel'
+    Resize-FloatingReady (& $floating).id
     $before=Resize-State
     $sides=@('left','right','bottom','bottom-left','bottom-right')
     if($Device -eq 'touch'){$sides+='right-canvas'}
     foreach($side in $sides){
+        Resize-FloatingReady (& $floating).id
         $b=(& $floating).bounds
         $left=$side -match 'left';$right=$side -match 'right';$bottom=$side -match 'bottom'
-        $x=if($side -eq 'right-canvas'){$b.x+$b.width+20}elseif($left){$b.x+12}elseif($right){$b.x+$b.width-12}else{$b.x+$b.width*.5}
         $y=if($bottom){$b.y+$b.height-12}else{$b.y+$b.height*.65}
-        $from=Resize-Reach @((Resize-Point $x $y),(Resize-Point $x ($y-8)),(Resize-Point $x ($y-16)))
+        $candidates=@(foreach($distance in 12,20,28){
+            $x=if($side -eq 'right-canvas'){$b.x+$b.width+20}elseif($left){$b.x+$distance}elseif($right){$b.x+$b.width-$distance}else{$b.x+$b.width*.5}
+            foreach($dy in 0,8,16){Resize-Point $x ($y-$dy)}
+        })
+        $from=Resize-Reach $candidates {param($edge)$edge.contact -eq 'free' -and [bool]$edge.vertical -eq $bottom}
         $cursor=if($left -and $bottom){32643}elseif($right -and $bottom){32642}elseif($bottom){32645}else{32644}
         if($Device -eq 'mouse'){
-            $hover=Resize-Screen (Resize-Point $(if($left){$b.x+1}elseif($right){$b.x+$b.width-1}else{$from.x}) $(if($bottom){$b.y+$b.height-1}else{$from.y}))
+            $handle=(& $floating).resize_handles|Where-Object edge -eq $side.Replace('-','_')|Select-Object -First 1
+            $hover=Resize-Screen (Resize-Point ($handle.bounds.x+$handle.bounds.width*.5) ($handle.bounds.y+$handle.bounds.height*.5))
             [CapyRowPointer]::Hover($hover.x,$hover.y);Resize-Cursor $cursor
         }
         $dx=if($left){-48}elseif($right){48}else{0};$dy=if($bottom){48}else{0}
@@ -88,15 +133,61 @@ function Resize-Floating {
         Resize-Undo $before
         Write-Output "RESIZE_PASS floating-$side $Device $Theme cursor=$cursor"
     }
+    Resize-Undo $beforeHeight
     Resize-Undo $beforeFloat
+}
+function Resize-TabStrip {
+    $layout=Resize-Layout;$fitted=@((Model).state.workspace.layout.fit_height_groups)
+    $pair=@{gap=$null;group=$null;panel=$null}
+    foreach($gap in @($layout.dividers|Where-Object {$_.axis -eq 'vertical' -and !$_.band -and !$_.fixed})){
+        $above=$layout.groups|Where-Object {!$_.floating -and [Math]::Abs($_.bounds.x-$gap.bounds.x) -lt 1 -and [Math]::Abs($_.bounds.y+$_.bounds.height-$gap.bounds.y) -lt 1}|Select-Object -First 1
+        $below=$layout.groups|Where-Object {!$_.floating -and $_.tabs_visible -and $_.panels.Count -gt 1 -and [Math]::Abs($_.bounds.x-$gap.bounds.x) -lt 1 -and [Math]::Abs($_.bounds.y-$gap.bounds.y-$gap.bounds.height) -lt 1}|Select-Object -First 1
+        if($above -and $below -and $fitted -notcontains $above.id -and $fitted -notcontains $below.id){$pair.gap=$gap;$pair.group=$below;$pair.panel=@($below.panels|Where-Object {$_ -ne $below.active})[0];break}
+    }
+    if(!$pair.gap){throw 'Paint has no inactive native tab immediately below a flexible group gap'}
+    $tab=Control ('panel-tab-'+$pair.panel) -Arranged
+    $native=$tab.Current.BoundingRectangle;$origin=Resize-Screen (Resize-Point 0 0)
+    $scale=[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.
+    $x=($native.X+$native.Width*.5-$origin.x)/$scale
+    $from=Resize-Point $x ($pair.group.bounds.y+3);$at=Resize-Screen $from
+    if(!$native.Contains([Windows.Point]::new($at.x,$at.y)) -or $x -ge $pair.group.bounds.x+$pair.group.bounds.width-36){throw 'The top-six-unit contact is not inside the inactive native tab away from its grip'}
+    $before=Resize-State;$active=$pair.group.active
+    Resize-Drag $from @((Resize-Point $from.x ($from.y-50))) -Cursor 32645 -Contact {
+        Wait-Until {$e=(Resize-Gesture).edge;$e.contact -eq 'pickup' -and $e.vertical} 'Actual tab sliver did not expose vertical pickup edge reach'
+        if(((Resize-Layout).groups|Where-Object id -eq $pair.group.id).active -ne $active){throw 'Tab activated before the pending vertical contact decided'}
+    } -During {
+        if(((Resize-Layout).groups|Where-Object id -eq $pair.group.id).active -ne $active){throw 'Tab-strip resize activated the inactive tab'}
+    }
+    $after=(Resize-Layout).dividers|Where-Object id -eq $pair.gap.id|Select-Object -First 1
+    if($pair.gap.bounds.y-$after.bounds.y -lt 20){throw 'Actual tab-strip vertical reach did not move its group gap'}
+    Resize-Undo $before
+    Wait-Until {[Math]::Abs($tab.Current.BoundingRectangle.Y-$native.Y) -lt 2} 'Native tab did not return after gap Undo'
+    [CapyRowPointer]::Down($Device,$at.x,$at.y)
+    try{
+        Wait-Until {(Resize-Gesture).edge.contact -eq 'pickup'} 'Fresh tab-sliver tap did not begin pending pickup'
+        if(((Resize-Layout).groups|Where-Object id -eq $pair.group.id).active -ne $active){throw 'Tab-sliver tap selected its tab before release'}
+        [CapyRowPointer]::Up()
+    }finally{if([CapyRowPointer]::Active){[CapyRowPointer]::Cancel()}}
+    Wait-Until {((Resize-Layout).groups|Where-Object id -eq $pair.group.id).active -eq $pair.panel} 'Tab-sliver tap did not select its inactive tab on release'
+    Resize-Settled
+    Write-Output "RESIZE_PASS actual-tab-top-six pickup vertical-gap unchanged-active exact-undo release-select $Device $Theme"
 }
 function Resize-Band {
     $layout=Resize-Layout;$band=$layout.dividers|Where-Object {$_.band -and $_.axis -eq 'vertical'}|Select-Object -First 1
     if(!$band){throw 'Paint has no toolbar-band resize edge'}
     $bar=$layout.groups|Where-Object {$_.panels -contains 'commands'}|Select-Object -First 1
     if(!$bar){throw 'Paint has no Commands toolbar band'}
+    $open=$layout.collapsed|Where-Object open|Select-Object -First 1
+    $openPanel=if($open){@($open.groups.icons.panel|Where-Object {(Control ('column-icon-'+$_)).Current.ItemStatus -eq 'Selected'})[0]}
     $before=Resize-State;$height=$bar.bounds.height
-    $from=Resize-Reach @(foreach($x in 18,54,90,126,162,198){Resize-Point ($bar.bounds.x+$x) ($band.bounds.y-14)})
+    $from=Resize-Reach @(foreach($x in 18,54,90,126,162,198){Resize-Point ($bar.bounds.x+$x) ($band.bounds.y-14)}) -DoubleEscape
+    if(Find 'new-drawing-dialog'){throw 'Canceled native toolbar probe activated New drawing on release'}
+    if($open -and !@((Resize-Layout).collapsed|Where-Object {$_.id -eq $open.id -and $_.open}).Count){
+        if(!$openPanel){throw 'Band setup had no selected native stack icon'}
+        Invoke-Id ('column-icon-'+$openPanel)
+        Wait-Until {@((Resize-Layout).collapsed|Where-Object {$_.id -eq $open.id -and $_.open}).Count -eq 1} 'The native stack icon did not restore the band prerequisite'
+        Resize-Settled
+    }
     Resize-Drag $from @((Resize-Point $from.x ($from.y+72))) -Cursor 32645
     $after=(Resize-Layout).groups|Where-Object id -eq $bar.id|Select-Object -First 1
     if($after.bounds.height -lt $height+36){throw 'Toolbar-band reach did not add a tile lane'}
@@ -130,31 +221,61 @@ function Resize-Columns {
     if($now.bounds.x -ne $adjacent[0] -or $now.bounds.width -ne $adjacent[1]){throw 'Opening the closed column changed the adjacent toolbar'}
     Resize-Undo $closedState
     Resize-Undo $before
-    $strip=(Resize-Layout).collapsed|Where-Object open|Select-Object -First 1
-    if(!$strip){throw 'Paint has no open stack member'}
-    $panel=@($strip.groups.icons.panel|Where-Object {(Control ('column-icon-'+$_)).Current.ItemStatus -eq 'Selected'})[0]
-    if(!$panel){throw 'The open stack member has no selected icon'}
-    Invoke-Id ('column-icon-'+$panel);Resize-Settled
+    Write-Output "RESIZE_PASS column-collapse-reversal fresh-closed-column-open adjacent-width exact-undo $Device $Theme"
+}
+function Resize-Stack {
+    $destination=(Resize-Layout).collapsed|Sort-Object {$_.bounds.x}|Select-Object -Last 1
+    if(!$destination){throw 'Paint has no collapsed column for the native stack setup'}
+    $tab=(Control 'panel-tab-stats' -Arranged).Current.BoundingRectangle
+    $to=Resize-Screen (Resize-Point ($destination.bounds.x+$destination.bounds.width*.5) ($destination.bounds.y*.5))
+    [CapyRowPointer]::Down('mouse',[int]($tab.X+$tab.Width*.5),[int]($tab.Y+$tab.Height*.5))
+    try{
+        [CapyRowPointer]::Move($to.x,$to.y)
+        Wait-Until {$hint=((Workspace-Root).Current.ItemStatus|ConvertFrom-Json).workspace_update.drag.drop_hint.target;(Resize-Gesture).phase -eq 'dragging' -and $hint.kind -eq 'stack_column' -and $hint.column -eq $destination.id} 'Stats tab did not preview a native stack-column drop'
+        [CapyRowPointer]::Up();Resize-Settled
+    }finally{if([CapyRowPointer]::Active){[CapyRowPointer]::Cancel()}}
+    $member=@{column=$null}
+    Wait-Until {$member.column=(Resize-Layout).collapsed|Where-Object {$_.groups.icons.panel -contains 'stats'}|Select-Object -First 1;$member.column -and @((Resize-Layout).collapsed|Where-Object stack -eq $member.column.stack).Count -eq 2} 'Native drop did not create an actual two-member column stack'
+    $strip=$member.column;$panel='stats'
+    foreach($opened in @((Resize-Layout).collapsed|Where-Object {$_.stack -eq $strip.stack -and $_.open})){
+        $selected=@($opened.groups.icons.panel|Where-Object {(Control ('column-icon-'+$_)).Current.ItemStatus -eq 'Selected'})[0]
+        if(!$selected){throw 'An open native stack member has no selected icon'}
+        Invoke-Id ('column-icon-'+$selected);Resize-Settled
+    }
+    Wait-Until {!@((Resize-Layout).collapsed|Where-Object {$_.stack -eq $strip.stack -and $_.open}).Count} 'The native stack did not close every member before the edge test'
     $before=Resize-State
+    $historyBefore=[bool]@((Model).state.commands|Where-Object {$_.id -eq 'undo_workspace' -and $_.enabled}).Count
+    $receipt=@{before=($before|ConvertFrom-Json);undo_available_before=$historyBefore}
     $closed=(Resize-Layout).collapsed|Where-Object id -eq $strip.id|Select-Object -First 1
     $icon=$closed.groups.icons|Where-Object panel -eq $panel|Select-Object -First 1
     $from=Resize-Point ($icon.bounds.x+$icon.bounds.width*.5) ($icon.bounds.y+$icon.bounds.height*.5)
+    $expected=Resize-Screen $from
+    Wait-Until {$box=(Control ('column-icon-'+$panel) -Arranged).Current.BoundingRectangle;[Math]::Abs($box.X+$box.Width*.5-$expected.x) -le 2 -and [Math]::Abs($box.Y+$box.Height*.5-$expected.y) -le 2} 'The closed native stack icon did not reach its shared position'
     $out=if($closed.bounds.x -gt (Resize-Layout).viewport[0]*.5){-90}else{90}
     Resize-Drag $from @((Resize-Point ($from.x+$out) $from.y)) -Cursor 32644
     Wait-Until {@((Resize-Layout).collapsed|Where-Object {$_.id -eq $strip.id -and $_.open}).Count -eq 1} 'A closed stack member did not open from its native icon reach'
+    $receipt.after_open=(Model).state.workspace.layout
     if((Resize-State) -cne $before){throw 'Opening a stack member changed durable layout'}
     $open=((Resize-Layout).collapsed|Where-Object id -eq $strip.id|Select-Object -First 1).open
     $inward=if($closed.bounds.x -gt (Resize-Layout).viewport[0]*.5){1}else{-1}
     $line=if($inward -eq 1){$open.bounds.x}else{$open.bounds.x+$open.bounds.width}
     $from=Resize-Reach @(foreach($dy in 60,92,124,156,188){Resize-Point ($line+$inward*20) ($open.bounds.y+$dy)})
+    $receipt.after_probe=(Model).state.workspace.layout
+    $receipt|ConvertTo-Json -Depth 90|Set-Content (Join-Path $run 'resize-stack.json')
     $far=Resize-Point ($line+$inward*$open.bounds.width) $from.y
-    Resize-Drag $from @($far,$from) -Cursor 32644 -During {
+    Resize-Drag $from @($far,$from,$far) -Cursor 32644 -During {
         param($step)
         $isOpen=@((Resize-Layout).collapsed|Where-Object {$_.id -eq $strip.id -and $_.open}).Count -eq 1
-        if(($step -eq 0 -and $isOpen) -or ($step -eq 1 -and !$isOpen)){throw "Stack close/reversal failed at step $step"}
-        if((Resize-State) -cne $before){throw 'Stack close/reversal changed durable layout'}
+        $receipt.step=$step;$receipt.after_close=(Model).state.workspace.layout
+        $receipt|ConvertTo-Json -Depth 90|Set-Content (Join-Path $run 'resize-stack.json')
+        if(($step -ne 1 -and $isOpen) -or ($step -eq 1 -and !$isOpen)){throw "Stack close/reversal failed at step $step"}
     }
-    Write-Output "RESIZE_PASS column-collapse-reversal adjacent-width stack-open-close-reversal $Device $Theme"
+    $receipt.after_release=(Model).state.workspace.layout
+    $receipt.undo_available_after=[bool]@((Model).state.commands|Where-Object {$_.id -eq 'undo_workspace' -and $_.enabled}).Count
+    $receipt|ConvertTo-Json -Depth 90|Set-Content (Join-Path $run 'resize-stack.json')
+    if((Resize-State) -cne $before){throw 'Stack close/reversal changed durable layout after release'}
+    if($receipt.undo_available_after -ne $historyBefore){throw 'Transient stack close/reversal changed workspace Undo availability'}
+    Write-Output "RESIZE_PASS actual-two-member-stack native-drop closed-open-close-reversal durable-unchanged $Device $Theme"
 }
 function WindowCommand([string]$Id){
     Wait-Until {$root.FindAll([System.Windows.Automation.TreeScope]::Descendants,
@@ -301,14 +422,19 @@ try{
     $root=[System.Windows.Automation.AutomationElement]::FromHandle($review.MainWindowHandle)
     [CapyRowPointer]::SetForegroundWindow($review.MainWindowHandle)|Out-Null;[CapyRowPointer]::Initialize([uint32]$review.Id)
     if($ResizeOnly){
-        $drawingWindow=$review.MainWindowHandle
-        Wait-Until {(Model).state.theme -eq $Theme} 'Resize theme did not become ready'
+        $owned=@{drawing=$null}
+        Wait-Until {$owned.drawing=Owned-DrawingWindow $review;$owned.drawing -and (Model).state.workspace_ready -and (Model).windows_workspace.ready -and !(Model).windows_workspace.busy -and (Model).state.theme -eq $Theme} 'Resize drawing did not become ready'
+        $root=$owned.drawing.Root;$drawingWindow=$owned.drawing.Handle
         Maximize-DrawingWindow;Use-PaintWorkspace;Resize-Settled
-        Resize-Floating;Resize-Band;Resize-Columns
+        if(!$ResizeStackOnly){
+            if(!$ResizeTailOnly){Resize-Floating;Resize-TabStrip}
+            Resize-Band;Resize-Columns
+        }
+        Resize-Stack
         Capture 'resize'
         & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close
         if((Get-Item -LiteralPath $stderr).Length){throw 'Native resize stderr requires inspection'}
-        [pscustomobject]@{scope='native workspace resize';device=$Device;theme=$Theme;floating_edges='passed';toolbar_lanes='passed';column_stack_reversal='passed';adjacent_width='unchanged';workspace_undo='exact';cursor=$(if($Device -eq 'mouse'){'hover-and-drag-passed'}else{'not-applicable'});evidence=$run}|ConvertTo-Json|Set-Content (Join-Path $run 'results.json')
+        [pscustomobject]@{scope=$(if($ResizeStackOnly){'native two-member stack edge'}elseif($ResizeTailOnly){'native workspace resize tail'}else{'native workspace resize'});device=$Device;theme=$Theme;floating_edges=$(if($ResizeTailOnly -or $ResizeStackOnly){'not-run'}else{'passed'});actual_tab_top_six=$(if($ResizeTailOnly -or $ResizeStackOnly){'not-run'}else{'pickup-vertical-resize-and-release-selection-passed'});toolbar_lanes=$(if($ResizeStackOnly){'not-run'}else{'passed'});column_reversal=$(if($ResizeStackOnly){'not-run'}else{'passed'});actual_two_member_stack='closed-open-close-reversal-passed';adjacent_width=$(if($ResizeStackOnly){'not-run'}else{'unchanged'});workspace_undo=$(if($ResizeStackOnly){'not-run'}else{'exact'});cursor=$(if($Device -eq 'mouse'){if($ResizeTailOnly -or $ResizeStackOnly){'claimed-drag-passed'}else{'hover-and-drag-passed'}}else{'not-applicable'});evidence=$run}|ConvertTo-Json|Set-Content (Join-Path $run 'results.json')
         Get-Content (Join-Path $run 'results.json');return
     }
     if(Shown 'sizes' 'brush_size'){throw 'Sizes shows the Brush Size slider by default'}

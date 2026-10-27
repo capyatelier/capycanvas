@@ -262,7 +262,9 @@ function Ensure-Sources{
         Wait-Until {(Model).picker.query -eq $spec.label} 'Picker did not acknowledge source search'
         $choice=Control $id
         $choice.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
+        Wait-Until {@((Model).picker.choices|Where-Object {$_.control.kind -eq $control.kind -and ($_.control|ConvertTo-Json -Compress) -ceq ($control|ConvertTo-Json -Compress)}|Where-Object selected).Count -eq 1} 'Picker source selection did not publish'
     }
+    Wait-Until {(Control 'Add Tools' -Name -Within (Control 'tool-picker')).Current.IsEnabled} 'Native Add Tools did not enable for the selected sources'
     Invoke 'Add Tools' -Name -Within (Control 'tool-picker');Wait-Until {!(Model).picker} 'Native picker did not add sources'
     Invoke 'header-edit-done';Wait-Until {!(Model).header.editing -and !(Model).windows_workspace.saving} 'Authored fixture header did not settle'
     (Model).state.workspace|ConvertTo-Json -Depth 90|Set-Content (Join-Path $run 'authored-workspace.json')
