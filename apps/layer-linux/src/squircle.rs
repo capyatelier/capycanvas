@@ -130,13 +130,6 @@ impl PixelGrid {
     fn key(self) -> [u32; 4] {
         [self.scale[0], self.scale[1], self.offset[0].rem_euclid(1.), self.offset[1].rem_euclid(1.)].map(f32::to_bits)
     }
-
-    fn bounds_aligned(self, bounds: &graphene::Rect) -> bool {
-        self.scale.into_iter().all(|scale| scale != 0.)
-            && [(0, bounds.x()), (0, bounds.x() + bounds.width()),
-                (1, bounds.y()), (1, bounds.y() + bounds.height())].into_iter()
-                .all(|(axis, value)| (value * self.scale[axis] + self.offset[axis]).fract() == 0.)
-    }
 }
 
 impl Default for PixelGrid { fn default() -> Self { Self::new(1.) } }
@@ -328,15 +321,13 @@ fn gaussian_blur(values: &mut [f32], size: usize, sigma: f64) {
 struct Converter {
     scale: f64,
     aligned: bool,
-    legacy_mask: bool,
     grid: PixelGrid,
-    nodes: HashMap<(usize, bool, bool, [u32; 4]), (gsk::RenderNode, gsk::RenderNode)>,
-    previous: HashMap<(usize, bool, bool, [u32; 4]), (gsk::RenderNode, gsk::RenderNode)>,
+    nodes: HashMap<(usize, bool, [u32; 4]), (gsk::RenderNode, gsk::RenderNode)>,
+    previous: HashMap<(usize, bool, [u32; 4]), (gsk::RenderNode, gsk::RenderNode)>,
     masks: HashMap<MaskKey, glib::WeakRef<gdk::Texture>>,
     shadows: HashMap<[u32; 22], [gdk::Texture; 8]>,
     corners: HashMap<[u32; 5], gsk::Path>,
     compact_shadows: HashMap<[u32; 31], gsk::RenderNode>,
-    solid_mask: Option<gdk::Texture>,
 }
 
 impl Converter {
@@ -345,7 +336,6 @@ impl Converter {
             *self = Self { scale, ..Self::default() };
         }
         self.aligned = scale.fract() == 0.;
-        self.legacy_mask = false;
         self.grid = PixelGrid::new(scale);
         self.previous = std::mem::take(&mut self.nodes);
         if self.masks.len() > MASK_PRUNE_THRESHOLD {
@@ -362,7 +352,7 @@ impl Converter {
     }
 
     fn convert(&mut self, node: &gsk::RenderNode) -> gsk::RenderNode {
-        let key = (node.as_ptr() as usize, self.aligned, self.legacy_mask, self.grid.key());
+        let key = (node.as_ptr() as usize, self.aligned, self.grid.key());
         if let Some((_, converted)) = self.nodes.get(&key) {
             return converted.clone();
         }
@@ -405,28 +395,12 @@ impl Converter {
     fn rewrite(&mut self, node: &gsk::RenderNode) -> gsk::RenderNode {
         if let Some(container) = node.downcast_ref::<gsk::ContainerNode>() {
             let children: Vec<_> = (0..container.n_children()).map(|i| container.child(i)).collect();
-            let mut union = None::<graphene::Rect>;
-            let overlaps = children.iter().any(|child| {
-                let bounds = child.bounds();
-                let intersects = union.is_some_and(|previous| previous.intersection(&bounds)
-                    .is_some_and(|rect| rect.width() > 0. && rect.height() > 0.));
-                union = Some(union.map_or(bounds, |previous| previous.union(&bounds)));
-                intersects
-            });
-            let legacy_mask = self.legacy_mask;
-            let offscreen = legacy_mask && overlaps;
-            if offscreen { self.legacy_mask = false; }
             let converted: Vec<_> = children.iter().map(|child| self.convert(child)).collect();
-            self.legacy_mask = legacy_mask;
-            let converted = if children.iter().zip(&converted).all(|(a, b)| a.as_ptr() == b.as_ptr()) {
+            return if children.iter().zip(&converted).all(|(a, b)| a.as_ptr() == b.as_ptr()) {
                 node.clone()
             } else {
                 gsk::ContainerNode::new(&converted).upcast()
             };
-            if offscreen && !self.grid.bounds_aligned(&node.bounds()) {
-                return self.group_bounds(&converted);
-            }
-            return converted;
         }
         if let Some(transform) = node.downcast_ref::<gsk::TransformNode>() {
             let matrix = transform.transform();
@@ -501,10 +475,6 @@ impl Converter {
             let clip = rounded.clip();
             let aligned = self.aligned;
             self.aligned &= grid_bounds(clip.bounds(), self.scale);
-            let legacy_mask = self.legacy_mask;
-            if !clip.is_rectilinear() {
-                self.legacy_mask = self.rounded_parts(&squircle_rect(&clip)).is_some();
-            }
             let converted = if clip.is_rectilinear() {
                 self.rebuild(node, &rounded.child(), |child| gsk::RoundedClipNode::new(child, &clip).upcast())
             } else {
@@ -512,7 +482,6 @@ impl Converter {
                 self.rounded(&child, &squircle_rect(&clip))
             };
             self.aligned = aligned;
-            self.legacy_mask = legacy_mask;
             return converted;
         }
         if let Some(border) = node.downcast_ref::<gsk::BorderNode>() {
@@ -556,41 +525,6 @@ impl Converter {
             return self.ring(&outer, &inner, &shadow.color());
         }
         node.clone()
-    }
-
-    fn group_bounds(&mut self, node: &gsk::RenderNode) -> gsk::RenderNode {
-        let texture = self.solid_mask.get_or_insert_with(|| gdk::MemoryTexture::new(1, 1,
-            gdk::MemoryFormat::R8g8b8a8Premultiplied, &glib::Bytes::from_static(&[255; 4]), 4).upcast());
-        let bounds = node.bounds();
-        let padding = 1. / self.scale as f32;
-        let dx = bounds.width().max(padding);
-        let dy = bounds.height().max(padding);
-        let area = graphene::Rect::new(bounds.x() - dx, bounds.y() - dy,
-            bounds.width() + 2. * dx, bounds.height() + 2. * dy);
-        let masked: gsk::RenderNode = gsk::MaskNode::new(node,
-            gsk::TextureNode::new(texture, &area), gsk::MaskMode::Alpha).upcast();
-        if self.grid.scale.into_iter().any(|scale| scale == 0.)
-            || bounds.width() * bounds.height() * (self.grid.scale[0] * self.grid.scale[1]).abs() <= 128. * 128. {
-            return masked;
-        }
-        let [left, top, right, bottom] = [self.grid.ceil(0, bounds.x()), self.grid.ceil(1, bounds.y()),
-            self.grid.floor(0, bounds.x() + bounds.width()), self.grid.floor(1, bounds.y() + bounds.height())];
-        if right <= left || bottom <= top { return masked; }
-        let [x0, y0, x1, y1] = [self.grid.floor(0, bounds.x()), self.grid.floor(1, bounds.y()),
-            self.grid.ceil(0, bounds.x() + bounds.width()), self.grid.ceil(1, bounds.y() + bounds.height())];
-        let mut pieces: Vec<gsk::RenderNode> = vec![gsk::ClipNode::new(node,
-            &graphene::Rect::new(left, top, right - left, bottom - top)).upcast()];
-        for edge in [
-            graphene::Rect::new(x0, y0, left - x0, y1 - y0),
-            graphene::Rect::new(right, y0, x1 - right, y1 - y0),
-            graphene::Rect::new(left, y0, right - left, top - y0),
-            graphene::Rect::new(left, bottom, right - left, y1 - bottom),
-        ] {
-            if edge.width() > 0. && edge.height() > 0. {
-                pieces.push(gsk::ClipNode::new(&masked, &edge).upcast());
-            }
-        }
-        gsk::ContainerNode::new(&pieces).upcast()
     }
 
     fn rounded_parts(&self, shape: &gsk::RoundedRect) -> Option<[f32; 4]> {
@@ -849,20 +783,28 @@ mod tests {
     }
 
     #[test]
-    fn removed_mask_group_does_not_isolate_its_fractional_descendants_again() {
-        let bounds = graphene::Rect::new(0., 0., 242., 170.);
-        let glyph_bounds = graphene::Rect::new(8.25, 8.5, 16., 14.);
-        let glyph = gsk::ContainerNode::new(&[
-            gsk::ColorNode::new(&gdk::RGBA::WHITE, &glyph_bounds).upcast(),
-            gsk::ColorNode::new(&gdk::RGBA::BLACK, &glyph_bounds).upcast(),
-        ]);
-        let content = gsk::ContainerNode::new(&[
-            gsk::ColorNode::new(&gdk::RGBA::WHITE, &bounds).upcast(), glyph.upcast(),
-        ]);
-        let node = gsk::RoundedClipNode::new(content, &gsk::RoundedRect::from_rect(bounds, 9.72));
-        let mut converter = Converter::default();
-        converter.frame(node.upcast_ref(), 1.);
-        assert!(converter.solid_mask.is_none());
+    fn fractional_panel_groups_do_not_add_masks() {
+        fn check(node: &gsk::RenderNode) {
+            assert!(!node.is::<gsk::MaskNode>(), "fractional groups retain native fills");
+            for child in node.children() { check(&child); }
+        }
+        for scale in [1., 1.25, 2.] {
+            let bounds = graphene::Rect::new(0.25, 0.5, 242., 170.);
+            let glyph_bounds = graphene::Rect::new(8.25, 8.5, 16., 14.);
+            let glyph = gsk::ContainerNode::new(&[
+                gsk::ColorNode::new(&gdk::RGBA::WHITE, &glyph_bounds).upcast(),
+                gsk::ColorNode::new(&gdk::RGBA::BLACK, &glyph_bounds).upcast(),
+            ]);
+            let content = gsk::ContainerNode::new(&[
+                gsk::ColorNode::new(&gdk::RGBA::WHITE, &bounds).upcast(), glyph.upcast(),
+            ]);
+            let node = gsk::RoundedClipNode::new(content, &gsk::RoundedRect::from_rect(bounds, 9.72));
+            let mut converter = Converter::default();
+            let converted = converter.frame(node.upcast_ref(), scale);
+            check(&converted);
+            assert!(converter.masks.is_empty());
+            assert_eq!(converter.frame(node.upcast_ref(), scale).as_ptr(), converted.as_ptr());
+        }
     }
 
     #[test]

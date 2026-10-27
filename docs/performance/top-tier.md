@@ -5338,8 +5338,78 @@ complete, with none missing.
 The size/node inventory attributes the remaining 51 small images to 41 glyph
 and header-mask images plus ten native compact-shadow images. The saved
 normal and named resize snapshots contain no `group_bounds` white masks.
-That legacy coverage machinery only preserves former fractional pixel
-sampling; removing it is a simplification proposal, without a measured FPS gain.
+The converter omits the legacy fractional group-bounds masks and their
+cache-key state. Pixel comparisons retain their existing tolerances.
+
+### CPU profile and legacy-mask removal
+
+Measured against `3529d1c05` on the same workstation and runtime. Probe-free
+499 Hz `perf record` captures cover the UI thread during native SDR 1× drags
+in both themes. Exact monotonic paint/contact bounds separate paint from
+between-paint work. Kernel sampling is unavailable; these are disjoint sampled
+**userspace** estimates per changed frame, not complete CPU timers.
+
+| CPU component | Dark ms/frame | Light ms/frame |
+| --- | ---: | ---: |
+| GTK layout | 0.139 | 0.125 |
+| GTK snapshot | 0.103 | 0.117 |
+| GSK render-node replay/copy-paste | 1.081 | 1.043 |
+| GSK root color-conversion traversal | 0.38 | 0.36 |
+| Nested offscreen parent stacks | 0.05 | 0.04 |
+| Remaining GSK processing | 0.419 | 0.442 |
+| Vulkan image construction/allocation/free, userspace only | 0.186 | 0.186 |
+
+No squircle-converter samples resolve during contacts; this does not establish
+zero cost. Shared submission/driver work and unavailable stacks prevent a
+complete CPU split by each of the 51 small images. The nested-offscreen row
+is not their total cost. Paint OS-thread CPU means are 6.316/6.046 ms;
+sampled userspace categories must not be scaled to those totals.
+
+Separate probe-on diagnostic captures attribute GTK Vulkan entrypoint CPU:
+allocation/free 1.355/1.361 ms per frame in dark and 1.254/0.899 ms in light;
+swapchain creation/destruction 0.795/0.005 and 0.890/0.005 ms respectively.
+These timers include kernel CPU. Each frame still creates 52 images and makes
+one allocation; resource counts remain unchanged. They are not FPS runs.
+Validated `/proc/<pid>/task/<ui-tid>/stat` contact counters in separate slow
+baseline runs give 4.05–4.43 ms user plus 3.66–4.02 ms system CPU per changed
+frame (7.71–8.21 ms total), including work outside paint. The 10 ms counters
+are aggregated over each six-second contact; process totals are excluded.
+
+The first legacy-removal bracket and a repeat retain all three warmed six-second
+gestures per row, with the probe and profiler disabled. Controls use immutable
+`3529d1c05`; the candidate changes only the converter's legacy machinery and
+test diagnostics. Values are pooled changing-window presents/s and worst-gesture
+p99 gaps.
+
+| Theme / bracket | Control before fps / p99 ms | Legacy removal fps / p99 ms | Control after fps / p99 ms |
+| --- | ---: | ---: | ---: |
+| Dark | 79.41 / 16.997 | 67.42 / 25.138 | 76.14 / 25.025 |
+| Light | 66.34 / 24.998 | 86.42 / 16.940 | 64.93 / 25.097 |
+| Dark repeat | 68.42 / 25.041 | 70.49 / 25.033 | 85.86 / 24.981 |
+
+No consistent FPS gain or regression is established. Fast and slow gestures
+occur in both builds/themes: slow canvas resize/acquire medians are about
+3.5–3.7 ms versus 0.9–1.1 ms in faster gestures. Reversing theme order also
+reverses the apparent light/dark penalty. Both targets remain open.
+
+The named tree has 38,930 expanded occurrences but 2,960 unique node pointers.
+Whole panel subtrees recur through each corner and band, and GTK traverses
+those references during replay before clipping. This is the largest identified
+Capy-related userspace cost; image counts alone do not identify it.
+
+The physical HDR hitches correlate with timed GNOME Shell GJS/SpiderMonkey
+collection on the compositor main thread. Two reproduced 66.737/58.409 ms
+changing-window gaps contain 28/26 compositor samples in GC marking/tracing
+and sweeping, including `GjsContextPrivate::trigger_gc_if_needed`. Capy's
+preceding paint is about 4 ms and its UI thread waits for the late compositor
+frame callback. These diagnostic captures establish the hitch cause, not an
+unprofiled HDR FPS result. No compositor or GTK setting is changed.
+
+Source hashes, pixel results, full brackets, perf stacks, Vulkan CPU timers
+and matched compositor-hitch traces are in
+`artifacts/gtk-resize-profile-20261027/`. Window-free GTK tests and the confined
+photo reader pass, as do whole-window and squircle pixels in both themes at
+1×/2× and the 1,296-case compact-shadow matrix.
 
 ## Windows window resize
 
