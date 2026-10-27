@@ -1846,6 +1846,10 @@ toolbar-band lanes, column and stack collapse/reversal, adjacent toolbar widths
 and exact workspace Undo, while the artwork revision stays unchanged.
 Each move must acknowledge the matching native pointer position within two
 seconds before geometry assertions; an existing claimed flag is insufficient.
+Reach probes check native scrollbar bounds before the press and again after
+canceling the probe. Input-device feedback can reveal a scrollbar during cleanup,
+so the next drag cannot reuse a point that now belongs to that control. Match
+cancellation records to the current contact; a previous probe's cancel is stale.
 An inactive native tab's top six units must yield a
 vertical gap resize without selecting the tab; tapping selects it on release.
 The fixture grows Stats through its native bottom

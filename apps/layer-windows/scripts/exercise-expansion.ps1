@@ -26,13 +26,22 @@ function Resize-Screen($Point){
     @{x=[int]($origin.x+$Point.x*$scale);y=[int]($origin.y+$Point.y*$scale)}
 }
 function Resize-Point([double]$X,[double]$Y){@{x=$X;y=$Y}}
+function Resize-ScrollbarAt($At){
+    $condition=[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::ScrollBar)
+    $point=[Windows.Point]::new($At.x,$At.y)
+    foreach($bar in $root.FindAll([System.Windows.Automation.TreeScope]::Descendants,$condition)){
+        $current=$bar.Current
+        if($current.IsEnabled -and !$current.IsOffscreen -and $current.BoundingRectangle.Contains($point)){return $true}
+    }
+    $false
+}
 function Resize-Reach([object[]]$Candidates,[scriptblock]$Accept,[switch]$DoubleEscape){
     $probes=[Collections.Generic.List[object]]::new()
     foreach($point in $Candidates){
         $at=Resize-Screen $point
-        $trace=Input-Trace $at.x $at.y
-        if(@($trace.hit|Where-Object type -eq 'ControlType.ScrollBar').Count){$probes.Add(@{point=$point;input=$trace;excluded='native-scrollbar'});continue}
         if($Device -eq 'mouse'){[CapyRowPointer]::Hover($at.x,$at.y)}
+        $trace=Input-Trace $at.x $at.y
+        if((Resize-ScrollbarAt $at) -or @($trace.hit|Where-Object type -eq 'ControlType.ScrollBar').Count){$probes.Add(@{point=$point;input=$trace;excluded='native-scrollbar'});continue}
         [CapyRowPointer]::Down($Device,$at.x,$at.y);Start-Sleep -Milliseconds 80
         $edge=(Resize-Gesture).edge
         if($Device -eq 'mouse'){
@@ -43,8 +52,9 @@ function Resize-Reach([object[]]$Candidates,[scriptblock]$Accept,[switch]$Double
         [CapyRowPointer]::Cancel()
         Wait-Until {$g=Resize-Gesture;$g.phase -eq 'idle' -and !$g.edge -and !$g.captured -and !$g.ignore_click} 'Resize probe left an active gesture or suppressed click'
         Resize-Settled
-        $accepted=$edge -and (!$Accept -or (& $Accept $edge))
-        $probes.Add(@{point=$point;input=$trace;edge=$edge;accepted=[bool]$accepted})
+        $scrollbar=Resize-ScrollbarAt $at
+        $accepted=$edge -and (!$Accept -or (& $Accept $edge)) -and !$scrollbar
+        $probes.Add(@{point=$point;input=$trace;edge=$edge;accepted=[bool]$accepted;scrollbar_after_probe=$scrollbar})
         $probes|ConvertTo-Json -Depth 12|Set-Content (Join-Path $run 'resize-reach-probes.json')
         if($accepted){return $point}
     }
