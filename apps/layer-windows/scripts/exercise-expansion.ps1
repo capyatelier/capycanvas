@@ -1,4 +1,4 @@
-﻿param([Parameter(Mandatory)][string]$Executable)
+﻿param([Parameter(Mandatory)][string]$Executable,[switch]$ResizeOnly,[ValidateSet('mouse','touch')][string]$Device='mouse',[ValidateSet('dark','light')][string]$Theme='dark')
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 $CapyCacheModel=$true
@@ -9,6 +9,153 @@ $Executable=(Resolve-Path -LiteralPath $Executable).Path
 $directory=Split-Path -Parent $Executable
 $run=Join-Path $repo ('artifacts/windows/expansion/'+[Guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($run)|Out-Null
+function Resize-Layout {(Model).layout}
+function Resize-Gesture {try{(Workspace-Root).Current.HelpText|ConvertFrom-Json}catch{}}
+function Resize-State {(Model).state.workspace.layout|ConvertTo-Json -Depth 90 -Compress}
+function Resize-Settled {
+    $last=@{value='';count=0}
+    Wait-Until {$next=Resize-State;if($next -eq $last.value){$last.count++}else{$last.value=$next;$last.count=0};$last.count -ge 3} 'Resize layout did not settle'
+}
+function Resize-Screen($Point){
+    $origin=[CapyRowPointer+Point]::new()
+    if(![CapyRowPointer]::ClientToScreen($drawingWindow,[ref]$origin)){throw 'Resize client origin is unavailable'}
+    $scale=[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.
+    @{x=[int]($origin.x+$Point.x*$scale);y=[int]($origin.y+$Point.y*$scale)}
+}
+function Resize-Point([double]$X,[double]$Y){@{x=$X;y=$Y}}
+function Resize-Reach([object[]]$Candidates){
+    foreach($point in $Candidates){
+        $at=Resize-Screen $point
+        if($Device -eq 'mouse'){[CapyRowPointer]::Hover($at.x,$at.y)}
+        [CapyRowPointer]::Down($Device,$at.x,$at.y);Start-Sleep -Milliseconds 80
+        $edge=(Resize-Gesture).edge
+        [CapyRowPointer]::Cancel();Resize-Settled
+        if($edge){return $point}
+    }
+    throw 'No native contact in the expected resize reach'
+}
+function Resize-Cursor([int]$Stock){
+    if($Device -eq 'mouse'){Wait-Until {[CapyRowPointer]::Cursor().cursor -eq [CapyRowPointer]::StockCursor($Stock)} "Native resize cursor is not stock $Stock"}
+}
+function Resize-Drag($From,[object[]]$To,[scriptblock]$During,[int]$Cursor=0){
+    $a=Resize-Screen $From
+    if($Device -eq 'mouse'){[CapyRowPointer]::Hover($a.x,$a.y)}
+    [CapyRowPointer]::Down($Device,$a.x,$a.y)
+    try{
+        for($n=0;$n -lt $To.Count;$n++){
+            $b=Resize-Screen $To[$n]
+            for($i=1;$i -le 8;$i++){[CapyRowPointer]::Move([int]($a.x+($b.x-$a.x)*$i/8),[int]($a.y+($b.y-$a.y)*$i/8));Start-Sleep -Milliseconds 16}
+            Wait-Until {(Resize-Gesture).edge.claimed} 'Native resize reach did not claim the gesture'
+            Start-Sleep -Milliseconds 200
+            if($Cursor){Resize-Cursor $Cursor}
+            if($During){& $During $n}
+            $a=$b
+        }
+        [CapyRowPointer]::Up();Resize-Settled
+    }finally{if([CapyRowPointer]::Active){[CapyRowPointer]::Cancel()}}
+}
+function Resize-Undo([string]$Before){WindowCommand 'undo_workspace';Wait-Until {(Resize-State) -ceq $Before} 'Resize was not one exact workspace Undo step';Resize-Settled}
+function Resize-Floating {
+    Invoke-Id 'panel-tab-stats';Resize-Settled
+    $beforeFloat=Resize-State
+    $tab=(Control 'panel-tab-stats' -Arranged).Current.BoundingRectangle
+    $work=(Resize-Layout).work_area
+    $to=Resize-Screen (Resize-Point ($work.x+$work.width*.5) ($work.y+$work.height*.4))
+    [CapyRowPointer]::Down('mouse',[int]($tab.X+$tab.Width*.5),[int]($tab.Y+$tab.Height*.5))
+    [CapyRowPointer]::Move($to.x,$to.y)
+    Wait-Until {(Resize-Gesture).phase -eq 'dragging'} 'Stats tab did not start a native tear-off'
+    [CapyRowPointer]::Up();Resize-Settled
+    $floating={@((Resize-Layout).groups|Where-Object {$_.floating -and $_.panels -contains 'stats'})[0]}
+    Wait-Until {$null -ne (& $floating)} 'Stats did not float on the native canvas'
+    $before=Resize-State
+    $sides=@('left','right','bottom','bottom-left','bottom-right')
+    if($Device -eq 'touch'){$sides+='right-canvas'}
+    foreach($side in $sides){
+        $b=(& $floating).bounds
+        $left=$side -match 'left';$right=$side -match 'right';$bottom=$side -match 'bottom'
+        $x=if($side -eq 'right-canvas'){$b.x+$b.width+20}elseif($left){$b.x+12}elseif($right){$b.x+$b.width-12}else{$b.x+$b.width*.5}
+        $y=if($bottom){$b.y+$b.height-12}else{$b.y+$b.height*.65}
+        $from=Resize-Reach @((Resize-Point $x $y),(Resize-Point $x ($y-8)),(Resize-Point $x ($y-16)))
+        $cursor=if($left -and $bottom){32643}elseif($right -and $bottom){32642}elseif($bottom){32645}else{32644}
+        if($Device -eq 'mouse'){
+            $hover=Resize-Screen (Resize-Point $(if($left){$b.x+1}elseif($right){$b.x+$b.width-1}else{$from.x}) $(if($bottom){$b.y+$b.height-1}else{$from.y}))
+            [CapyRowPointer]::Hover($hover.x,$hover.y);Resize-Cursor $cursor
+        }
+        $dx=if($left){-48}elseif($right){48}else{0};$dy=if($bottom){48}else{0}
+        Resize-Drag $from @((Resize-Point ($from.x+$dx) ($from.y+$dy))) -Cursor $cursor
+        $after=(& $floating).bounds
+        if((($left -or $right) -and $after.width -le $b.width+20) -or ($left -and $after.x -ge $b.x-20) -or ($bottom -and $after.height -le $b.height+20)){throw "Floating $side reach did not grow its owner: $($b|ConvertTo-Json -Compress) -> $($after|ConvertTo-Json -Compress)"}
+        Resize-Undo $before
+        Write-Output "RESIZE_PASS floating-$side $Device $Theme cursor=$cursor"
+    }
+    Resize-Undo $beforeFloat
+}
+function Resize-Band {
+    $layout=Resize-Layout;$band=$layout.dividers|Where-Object {$_.band -and $_.axis -eq 'vertical'}|Select-Object -First 1
+    if(!$band){throw 'Paint has no toolbar-band resize edge'}
+    $bar=$layout.groups|Where-Object {$_.panels -contains 'commands'}|Select-Object -First 1
+    if(!$bar){throw 'Paint has no Commands toolbar band'}
+    $before=Resize-State;$height=$bar.bounds.height
+    $from=Resize-Reach @(foreach($x in 18,54,90,126,162,198){Resize-Point ($bar.bounds.x+$x) ($band.bounds.y-14)})
+    Resize-Drag $from @((Resize-Point $from.x ($from.y+72))) -Cursor 32645
+    $after=(Resize-Layout).groups|Where-Object id -eq $bar.id|Select-Object -First 1
+    if($after.bounds.height -lt $height+36){throw 'Toolbar-band reach did not add a tile lane'}
+    Resize-Undo $before
+    Write-Output "RESIZE_PASS commands-band-adds-lanes $Device $Theme"
+}
+function Resize-Columns {
+    $layout=Resize-Layout;$toolbar=$layout.groups|Where-Object {$_.panels -contains 'toolbar'}|Select-Object -First 1
+    $adjacent=@($toolbar.bounds.x,$toolbar.bounds.width)
+    $edge=$layout.dividers|Where-Object {$_.axis -eq 'horizontal' -and $_.owner_side -eq 'left' -and !$_.fixed}|Sort-Object {$_.bounds.x}|Select-Object -Last 1
+    $groups=@($layout.groups|Where-Object {!$_.floating -and [Math]::Abs($_.bounds.x+$_.bounds.width-$edge.bounds.x) -lt 1})
+    $owner=$groups|Sort-Object {$_.bounds.height}|Select-Object -Last 1
+    if(!$owner){throw 'Paint has no content column beside the toolbar'}
+    $before=Resize-State
+    $from=Resize-Reach @(foreach($g in $groups){foreach($dy in 24,48,72,96,120){if($dy+36 -lt $g.bounds.height){Resize-Point ($edge.bounds.x-20) ($g.bounds.y+$g.bounds.height-$dy)}}})
+    $far=Resize-Point ($owner.bounds.x+12) $from.y
+    Resize-Drag $from @($far,$from,$far) -Cursor 32644 -During {
+        param($step)
+        $collapsed=@((Resize-Layout).collapsed|Where-Object {$_.groups.icons.panel -contains $owner.active}).Count -gt 0
+        if(($step -ne 1 -and !$collapsed) -or ($step -eq 1 -and $collapsed)){throw "Column collapse/reversal failed at step $step"}
+        $now=(Resize-Layout).groups|Where-Object id -eq $toolbar.id|Select-Object -First 1
+        if($now.bounds.x -ne $adjacent[0] -or $now.bounds.width -ne $adjacent[1]){throw 'Resizing the adjacent column changed the toolbar width or position'}
+    }
+    $closedState=Resize-State
+    $column=(Resize-Layout).collapsed|Where-Object {$_.groups.icons.panel -contains $owner.active}|Select-Object -First 1
+    $icon=$column.groups.icons|Where-Object panel -eq $owner.active|Select-Object -First 1
+    $from=Resize-Point ($icon.bounds.x+$icon.bounds.width*.5) ($icon.bounds.y+$icon.bounds.height*.5)
+    Resize-Drag $from @((Resize-Point ($from.x+90) $from.y)) -Cursor 32644
+    Wait-Until {!@((Resize-Layout).collapsed|Where-Object {$_.id -eq $column.id -and !$_.open}).Count} 'A fresh outward swipe did not open the closed column'
+    $now=(Resize-Layout).groups|Where-Object id -eq $toolbar.id|Select-Object -First 1
+    if($now.bounds.x -ne $adjacent[0] -or $now.bounds.width -ne $adjacent[1]){throw 'Opening the closed column changed the adjacent toolbar'}
+    Resize-Undo $closedState
+    Resize-Undo $before
+    $strip=(Resize-Layout).collapsed|Where-Object open|Select-Object -First 1
+    if(!$strip){throw 'Paint has no open stack member'}
+    $panel=@($strip.groups.icons.panel|Where-Object {(Control ('column-icon-'+$_)).Current.ItemStatus -eq 'Selected'})[0]
+    if(!$panel){throw 'The open stack member has no selected icon'}
+    Invoke-Id ('column-icon-'+$panel);Resize-Settled
+    $before=Resize-State
+    $closed=(Resize-Layout).collapsed|Where-Object id -eq $strip.id|Select-Object -First 1
+    $icon=$closed.groups.icons|Where-Object panel -eq $panel|Select-Object -First 1
+    $from=Resize-Point ($icon.bounds.x+$icon.bounds.width*.5) ($icon.bounds.y+$icon.bounds.height*.5)
+    $out=if($closed.bounds.x -gt (Resize-Layout).viewport[0]*.5){-90}else{90}
+    Resize-Drag $from @((Resize-Point ($from.x+$out) $from.y)) -Cursor 32644
+    Wait-Until {@((Resize-Layout).collapsed|Where-Object {$_.id -eq $strip.id -and $_.open}).Count -eq 1} 'A closed stack member did not open from its native icon reach'
+    if((Resize-State) -cne $before){throw 'Opening a stack member changed durable layout'}
+    $open=((Resize-Layout).collapsed|Where-Object id -eq $strip.id|Select-Object -First 1).open
+    $inward=if($closed.bounds.x -gt (Resize-Layout).viewport[0]*.5){1}else{-1}
+    $line=if($inward -eq 1){$open.bounds.x}else{$open.bounds.x+$open.bounds.width}
+    $from=Resize-Reach @(foreach($dy in 60,92,124,156,188){Resize-Point ($line+$inward*20) ($open.bounds.y+$dy)})
+    $far=Resize-Point ($line+$inward*$open.bounds.width) $from.y
+    Resize-Drag $from @($far,$from) -Cursor 32644 -During {
+        param($step)
+        $isOpen=@((Resize-Layout).collapsed|Where-Object {$_.id -eq $strip.id -and $_.open}).Count -eq 1
+        if(($step -eq 0 -and $isOpen) -or ($step -eq 1 -and !$isOpen)){throw "Stack close/reversal failed at step $step"}
+        if((Resize-State) -cne $before){throw 'Stack close/reversal changed durable layout'}
+    }
+    Write-Output "RESIZE_PASS column-collapse-reversal adjacent-width stack-open-close-reversal $Device $Theme"
+}
 function WindowCommand([string]$Id){
     Wait-Until {$root.FindAll([System.Windows.Automation.TreeScope]::Descendants,
         [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,
@@ -142,6 +289,7 @@ function Check-SizeGrid($Within,[string]$Device,[string]$Label){
 try{
     Enter-CapyEnvironment
     $env:CAPY_STORAGE_DIR=Join-Path $run 'profile'
+    if($ResizeOnly){[IO.Directory]::CreateDirectory($env:CAPY_STORAGE_DIR)|Out-Null;[IO.File]::WriteAllText((Settings-File),(@{language=@{Explicit='en'};theme=$Theme}|ConvertTo-Json -Depth 4))}
     $env:CAPY_TRACE_UI='1';$env:CAPY_SMOKE_TEST='1';$env:CAPY_TEST_DISPLAY='1';$env:CAPY_TEST_PRIMARY='1'
     $stderr=Join-Path $run 'stderr.log'
     $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError $stderr
@@ -152,6 +300,17 @@ try{
     [CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
     $root=[System.Windows.Automation.AutomationElement]::FromHandle($review.MainWindowHandle)
     [CapyRowPointer]::SetForegroundWindow($review.MainWindowHandle)|Out-Null;[CapyRowPointer]::Initialize([uint32]$review.Id)
+    if($ResizeOnly){
+        $drawingWindow=$review.MainWindowHandle
+        Wait-Until {(Model).state.theme -eq $Theme} 'Resize theme did not become ready'
+        Maximize-DrawingWindow;Use-PaintWorkspace;Resize-Settled
+        Resize-Floating;Resize-Band;Resize-Columns
+        Capture 'resize'
+        & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close
+        if((Get-Item -LiteralPath $stderr).Length){throw 'Native resize stderr requires inspection'}
+        [pscustomobject]@{scope='native workspace resize';device=$Device;theme=$Theme;floating_edges='passed';toolbar_lanes='passed';column_stack_reversal='passed';adjacent_width='unchanged';workspace_undo='exact';cursor=$(if($Device -eq 'mouse'){'hover-and-drag-passed'}else{'not-applicable'});evidence=$run}|ConvertTo-Json|Set-Content (Join-Path $run 'results.json')
+        Get-Content (Join-Path $run 'results.json');return
+    }
     if(Shown 'sizes' 'brush_size'){throw 'Sizes shows the Brush Size slider by default'}
     if((Model).state.customization.drawer -or !@((Model).layout.groups|Where-Object active -eq 'sizes').Count){Invoke-Id 'panel-tab-sizes'}
     $docked=Check-SizeGrid $root 'mouse' '1.5'
@@ -254,9 +413,13 @@ try{
     if((Get-Item -LiteralPath $stderr).Length){throw 'Native stderr requires inspection'}
     [pscustomobject]@{size_grid=@($docked)+$configured;shared_expansion_width='passed';live_brush_size='passed';control_visibility='passed';retained_configuration='passed';resize='passed';escape_close='passed';layers='passed';editing_layer_selection='passed';targeted_opacity='passed';navigator_configuration='passed';gpu_preview_occlusion_and_restore='passed';theme='passed';toolbar_add_tools='passed';zero_exit='passed';scope='native configuration projection; full visual parity, physical input and presentation are separate'}|ConvertTo-Json
 }catch{
+    if($ResizeOnly -and $review -and !$review.HasExited){try{@{model=(Model);gesture=(Resize-Gesture)}|ConvertTo-Json -Depth 90|Set-Content (Join-Path $run 'resize-failure.json')}catch{}}
     if($review -and !$review.HasExited){try{Capture 'failure'}catch{}}
     [IO.File]::WriteAllText((Join-Path $run 'failure.txt'),($_|Out-String)+$_.ScriptStackTrace);throw
 }finally{
     [CapyRowPointer]::Dispose()
+    if($ResizeOnly -and $review -and !$review.HasExited){
+        try{& (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close -DiscardUnsaved -StateDirectory $directory}catch{if(!$review.HasExited){Stop-Process -Id $review.Id -Force}}
+    }
     Exit-CapyEnvironment
 }

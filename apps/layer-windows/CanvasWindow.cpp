@@ -186,7 +186,13 @@ void CanvasWindow::Open() {
     canvasFocus.IsTabStop(true);
     root.Children().Append(canvasFocus);
     panel.as<IUIElementProtected>().ProtectedCursor(nullptr);
-    StartPickerHold(xamlPickerHold);
+    StartCanvasTouch(xamlCanvasTouch);
+    root.AddHandler(UIElement::PointerPressedEvent(),box_value(PointerEventHandler([weak=weak_from_this()](auto&&,PointerRoutedEventArgs const& e){
+        if(auto self=weak.lock();self&&e.OriginalSource()!=self->panel){
+            self->CancelCanvasTouch(self->xamlCanvasTouch);
+            if(self->inputDispatcher)self->inputDispatcher.TryEnqueue([weak]{if(auto self=weak.lock())self->CancelCanvasTouch(self->canvasTouch);});
+        }
+    })),true);
     panel.PointerPressed([weak=weak_from_this()](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock())self->XamlPointer(e,1);});
     panel.PointerMoved([weak=weak_from_this()](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock())self->XamlPointer(e,e.GetCurrentPoint(self->panel).IsInContact()?2u:0u);});
     CapyUi::PointerGesture::OnCompleted(panel,[weak=weak_from_this()](PointerRoutedEventArgs const& e,bool cancelled){if(auto self=weak.lock())self->XamlPointer(e,cancelled?4u:3u);},CapyUi::PointerCaptureLoss::CompleteLift);
@@ -699,24 +705,24 @@ void CanvasWindow::StartInput() {
             uninit_apartment();
         }).detach();
         orderedKeys=target.get();
-        StartPickerHold(pickerHold);
+        StartCanvasTouch(canvasTouch);
         inputSource.PointerPressed([weak=weak_from_this()](auto&&,PointerEventArgs const& e){
-            if(auto self=weak.lock()){self->Pointer(e,1);self->PickerHold(e,1);}
+            if(auto self=weak.lock()){self->Pointer(e,1);self->CanvasTouch(e,1);}
         });
         inputSource.PointerMoved([weak=weak_from_this()](auto&&,PointerEventArgs const& e){
-            if(auto self=weak.lock()){auto phase=e.CurrentPoint().IsInContact()?2u:0u;self->Pointer(e,phase);self->PickerHold(e,phase);}
+            if(auto self=weak.lock()){auto phase=e.CurrentPoint().IsInContact()?2u:0u;self->Pointer(e,phase);self->CanvasTouch(e,phase);}
         });
         inputSource.PointerReleased([weak=weak_from_this()](auto&&,PointerEventArgs const& e){
-            if(auto self=weak.lock()){self->Pointer(e,3);self->PickerHold(e,3);}
+            if(auto self=weak.lock()){self->Pointer(e,3);self->CanvasTouch(e,3);}
         });
         inputSource.PointerCaptureLost([weak=weak_from_this()](auto&&,PointerEventArgs const& e){
-            if(auto self=weak.lock()){self->Pointer(e,4);self->PickerHold(e,4);}
+            if(auto self=weak.lock()){self->Pointer(e,4);self->CanvasTouch(e,4);}
         });
         inputSource.PointerRoutedAway([weak=weak_from_this()](auto&&,PointerEventArgs const& e){
-            if(auto self=weak.lock()){self->Pointer(e,4);self->PickerHold(e,4);self->SendIndependent(CanvasCommand{CanvasCommandKind::Input,R"({"type":"cursor_leave"})"});}
+            if(auto self=weak.lock()){self->Pointer(e,4);self->CanvasTouch(e,4);self->SendIndependent(CanvasCommand{CanvasCommandKind::Input,R"({"type":"cursor_leave"})"});}
         });
         inputSource.PointerRoutedReleased([weak=weak_from_this()](auto&&,PointerEventArgs const& e){
-            if(auto self=weak.lock()){self->Pointer(e,4);self->PickerHold(e,4);self->SendIndependent(CanvasCommand{CanvasCommandKind::Input,R"({"type":"cursor_leave"})"});}
+            if(auto self=weak.lock()){self->Pointer(e,4);self->CanvasTouch(e,4);self->SendIndependent(CanvasCommand{CanvasCommandKind::Input,R"({"type":"cursor_leave"})"});}
         });
         inputSource.PointerWheelChanged([weak=weak_from_this()](auto&&,PointerEventArgs const& e){
             if(auto self=weak.lock())self->Wheel(e);
@@ -739,9 +745,18 @@ float CanvasWindow::PickerOffset(float scale)const{
         logical=std::clamp(float(dpiY)*10.f/25.4f/std::max(scale,.01f),36.f,64.f);
     return logical*scale;
 }
-void CanvasWindow::StartPickerHold(PickerGesture& gesture){
+void CanvasWindow::StartCanvasTouch(CanvasTouchGesture& gesture){
     using namespace Microsoft::UI::Input;
-    gesture.recognizer=GestureRecognizer();gesture.recognizer.GestureSettings(GestureSettings::Hold);
+    gesture.recognizer=GestureRecognizer();gesture.recognizer.GestureSettings(GestureSettings::Hold|GestureSettings::Tap|GestureSettings::DoubleTap);
+    gesture.recognizer.Tapped([weak=weak_from_this()](auto&&,TappedEventArgs const& e){
+        auto self=weak.lock();if(!self||self->closing||!self->inputDispatcher||e.TapCount()!=2)return;
+        auto at=e.Position();Size size;{std::lock_guard lock(self->mutex);size=self->desired;}
+        char json[256];
+        std::snprintf(json,sizeof json,R"({"type":"edge_double_press","kind":"touch","contact":"free","position":[%.3f,%.3f],"viewport":[%.3f,%.3f]})",
+            at.X,at.Y,double(size.width)/size.scale,double(size.height)/size.scale);
+        self->inputDispatcher.TryEnqueue([weak,text=std::string(json)]{if(auto self=weak.lock();self&&!self->closing)
+            self->SendIndependent(CanvasCommand{CanvasCommandKind::Input,text});});
+    });
     gesture.recognizer.Holding([weak=weak_from_this(),state=&gesture](auto&&,HoldingEventArgs const& e){
         auto self=weak.lock();if(!self||self->closing||!self->inputDispatcher||e.HoldingState()!=HoldingState::Started||!state->contact)return;
         auto id=*state->contact;auto at=e.Position();float scale;{std::lock_guard lock(self->mutex);scale=self->inputScale;}
@@ -755,8 +770,8 @@ void CanvasWindow::StartPickerHold(PickerGesture& gesture){
         });
     });
 }
-void CanvasWindow::CancelPickerHold(PickerGesture& gesture){
-    if(gesture.contact&&gesture.recognizer)gesture.recognizer.CompleteGesture();
+void CanvasWindow::CancelCanvasTouch(CanvasTouchGesture& gesture){
+    if(gesture.recognizer)gesture.recognizer.CompleteGesture();
     gesture.contact.reset();
 }
 void CanvasWindow::TrackContact(uint32_t id,uint32_t phase,bool touch){
@@ -772,20 +787,21 @@ void CanvasWindow::TrackContact(uint32_t id,uint32_t phase,bool touch){
         }
     }
 }
-void CanvasWindow::PickerHold(Microsoft::UI::Input::PointerEventArgs const& e,uint32_t phase){
-    PickerHold(pickerHold,e.CurrentPoint(),e.GetIntermediatePoints(),phase);
+void CanvasWindow::CanvasTouch(Microsoft::UI::Input::PointerEventArgs const& e,uint32_t phase){
+    CanvasTouch(canvasTouch,e.CurrentPoint(),e.GetIntermediatePoints(),phase);
 }
-void CanvasWindow::PickerHold(PickerGesture& gesture,Microsoft::UI::Input::PointerPoint const& point,PointerPoints const& points,uint32_t phase){
+void CanvasWindow::CanvasTouch(CanvasTouchGesture& gesture,Microsoft::UI::Input::PointerPoint const& point,PointerPoints const& points,uint32_t phase){
     phase=CanvasPointerPhase(phase,point.Properties().IsCanceled());
     auto id=point.PointerId();bool touch=point.PointerDeviceType()==Microsoft::UI::Input::PointerDeviceType::Touch;
     if(phase==1){
-        bool first=gesture.contacts.empty();gesture.contacts.insert(id);CancelPickerHold(gesture);
-        if(touch&&first){gesture.contact=id;gesture.recognizer.ProcessDownEvent(point);}
+        bool first=gesture.contacts.empty();gesture.contacts.insert(id);
+        if(touch&&first&&!gesture.contact){gesture.contact=id;gesture.recognizer.ProcessDownEvent(point);}
+        else CancelCanvasTouch(gesture);
     }else if(phase==2){
         if(gesture.contact==id)gesture.recognizer.ProcessMoveEvents(CanvasPointerHistoryCount(points,phase)?points:single_threaded_vector<Microsoft::UI::Input::PointerPoint>({point}));
     }else if(phase==3||phase==4){
         gesture.contacts.erase(id);
-        if(gesture.contact==id){if(phase==3)gesture.recognizer.ProcessUpEvent(point);CancelPickerHold(gesture);}
+        if(gesture.contact==id){if(phase==3){gesture.recognizer.ProcessUpEvent(point);gesture.contact.reset();}else CancelCanvasTouch(gesture);}
     }
 }
 void CanvasWindow::Pointer(Microsoft::UI::Input::PointerEventArgs const& e,uint32_t phase){
@@ -809,7 +825,7 @@ void CanvasWindow::XamlPointer(PointerRoutedEventArgs const& e,uint32_t phase){
     inputDispatcher.TryEnqueue([weak=weak_from_this(),samples=std::move(samples),modifiers,pen,barrel,arrival]() mutable {
         if(auto self=weak.lock();self&&!self->closing)self->Pointer(std::move(samples),modifiers,pen,barrel,arrival);
     });
-    PickerHold(xamlPickerHold,current,history,phase);e.Handled(true);
+    CanvasTouch(xamlCanvasTouch,current,history,phase);e.Handled(true);
     if(phase==3||phase==4){xamlContacts.erase(id);panel.ReleasePointerCapture(e.Pointer());}
 }
 std::vector<CapyPointer> CanvasWindow::PointerSamples(Microsoft::UI::Input::PointerPoint const& current,PointerPoints const& points,uint32_t phase,bool predict){
@@ -888,6 +904,8 @@ CanvasScroll CanvasWindow::ScrollSample(Point position,int32_t deltaUnits,bool h
         !horizontal&&(modifiers&Mod::Shift)!=Mod::None};
 }
 bool CanvasWindow::CancelGesture(){
+    CancelCanvasTouch(xamlCanvasTouch);
+    if(inputDispatcher)inputDispatcher.TryEnqueue([weak=weak_from_this()]{if(auto self=weak.lock())self->CancelCanvasTouch(self->canvasTouch);});
     bool headerClosed=header&&header->CancelGesture();return (workspace&&workspace->CancelGesture())||headerClosed;
 }
 void CanvasWindow::Key(KeyRoutedEventArgs const& e,bool pressed) {
@@ -1343,7 +1361,7 @@ void CanvasWindow::Stop() {
     if(settings)settings->CommitEdits();
     {std::lock_guard lock(mutex);closing=true;}
     {std::lock_guard lock(snapshots->mutex);snapshots->Close();}
-    CancelPickerHold(xamlPickerHold);xamlPickerHold.recognizer=nullptr;xamlPickerHold.contacts.clear();xamlContacts.clear();
+    CancelCanvasTouch(xamlCanvasTouch);xamlCanvasTouch.recognizer=nullptr;xamlCanvasTouch.contacts.clear();xamlContacts.clear();
     CapyLifecycle("close_authorized");
     if(settings)settings->Hide();
     if(documents)documents->Hide();
@@ -1355,7 +1373,7 @@ void CanvasWindow::Stop() {
     if(inputController) {
         inputDispatcher.TryEnqueue([weak=weak_from_this()]{
             if(auto self=weak.lock()) {
-                self->CancelPickerHold(self->pickerHold);self->pickerHold.recognizer=nullptr;self->pickerHold.contacts.clear();self->holdContact.reset();self->contacts.clear();
+                self->CancelCanvasTouch(self->canvasTouch);self->canvasTouch.recognizer=nullptr;self->canvasTouch.contacts.clear();self->holdContact.reset();self->contacts.clear();
                 if(self->pointerPredictor){self->pointerPredictor.Close();self->pointerPredictor=nullptr;}
                 self->OrderKeys(false);
                 if(self->orderedKeys){PostMessageW(self->orderedKeys,WM_CLOSE,0,0);self->orderedKeys=nullptr;}

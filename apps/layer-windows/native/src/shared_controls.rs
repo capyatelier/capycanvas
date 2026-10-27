@@ -42,17 +42,25 @@ pub unsafe extern "C" fn capy_edge_reach(input: *const c_char) -> u32 {
         position: [f32; 2],
         kind: layer_ui::PointerKind,
         contact: layer_ui::EdgeContact,
+        #[serde(default)]
+        reset: bool,
     }
     if input.is_null() {
         return 0;
     }
     std::panic::catch_unwind(|| {
         let request: Request = serde_json::from_str(unsafe { CStr::from_ptr(input) }.to_str().ok()?).ok()?;
-        request.layout.edge_grab_at(request.position, request.kind, request.contact)
+        Some(if request.reset {
+            u32::from(request.contact == layer_ui::EdgeContact::Free
+                && request.layout.edge_reset_at(request.position, request.kind).is_some())
+        } else {
+            request.layout.edge_grab_at(request.position, request.kind, request.contact)
+                .map_or(0, |grab| 1 | u32::from(grab.resizes(layer_ui::Axis::Vertical)) << 1)
+        })
     })
     .ok()
     .flatten()
-    .map_or(0, |grab| 1 | u32::from(grab.resizes(layer_ui::Axis::Vertical)) << 1)
+    .unwrap_or(0)
 }
 /// # Safety
 /// Input is readable NUL-terminated UTF-8 JSON for the duration of this call.
@@ -236,6 +244,18 @@ mod tests {
         assert_eq!(reach(above, "free") & 3, 3);
         assert_eq!(reach(above, "input"), 0);
         assert_eq!(unsafe { capy_edge_reach(std::ptr::null()) }, 0);
+    }
+    #[test]
+    fn edge_reset_admission_uses_shared_column_ownership_and_contact_class() {
+        let layout = layer_ui::WorkspacePreset::Illustrator.layout(layer_ui::Platform::Windows).resolve(1600., 1000.);
+        let column = layout.dividers.iter().find(|d| d.axis == layer_ui::Axis::Horizontal
+            && d.owner_side == Some(layer_ui::Edge::Left) && !d.fixed
+            && layout.work_area.contains(d.bounds.x + d.bounds.width + 20., d.bounds.y + d.bounds.height * 0.5)).unwrap();
+        let point = [column.bounds.x + column.bounds.width + 20., column.bounds.y + column.bounds.height * 0.5];
+        for (kind, contact, expected) in [("touch", "free", 1), ("mouse", "free", 0), ("touch", "input", 0), ("touch", "pickup", 0)] {
+            let request = serde_json::json!({"layout": layout, "position": point, "kind": kind, "contact": contact, "reset": true}).to_string();
+            assert_eq!(unsafe { capy_edge_reach(CString::new(request).unwrap().as_ptr()) }, expected);
+        }
     }
     fn slide(point: [f32; 2], order: [u64; 3]) -> serde_json::Value {
         let hits: Vec<_> = [1u64, 2, 3]

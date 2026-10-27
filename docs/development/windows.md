@@ -1729,8 +1729,17 @@ actual six-unit column dividers; `-Theme dark|light` selects one theme. A native
 whole-column move creates a nested left owner beside the toolbar. The scope
 checks a no-op single tap, outward resizing, exact preferred-width restoration
 on double press, the untouched adjacent owner, and one-step workspace Undo/Redo.
-The ordinary edge-reach journey also checks
-contacts inside the wider free reach; it does not replace the divider check.
+Use `-CanvasResetOnly -Device touch` for finger double taps on the canvas side
+of the outside column edge. It checks exact preferred-width reset at 20 and
+35 units, exclusion beyond the 36-unit reach, a canceled first contact followed
+by one fresh tap, and exact workspace Undo/Redo without assuming a default width.
+The ordinary edge-reach journey checks contacts inside the wider free reach;
+it does not replace the divider check. It also checks that Escape during pending
+and claimed edge contacts restores the workspace and clears the contact.
+Its touch case docks Layers beside a group
+gap, fills the native list and hides its action footer through configuration.
+An actual layer row must keep a sideways swipe and yield a vertical contact to
+row resizing; one workspace Undo restores the exact layout.
 Use `exercise-header.ps1 -FullscreenOnly -Theme dark|light` for F11 entry and
 exit from normal and maximized windows. It checks restored native bounds and
 the fullscreen edge-gesture property, and retains window, monitor and DWM state.

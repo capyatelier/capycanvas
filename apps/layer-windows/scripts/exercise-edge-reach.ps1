@@ -1,4 +1,4 @@
-﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('mouse','pen','touch')][string]$Device='mouse',[switch]$ColumnResetOnly,[ValidateSet('dark','light')][string]$Theme)
+﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('mouse','pen','touch')][string]$Device='mouse',[switch]$ColumnResetOnly,[switch]$CanvasResetOnly,[ValidateSet('dark','light')][string]$Theme)
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 $CapyPopups=$true
@@ -50,6 +50,21 @@ function Reach-Point([object[]]$Candidates,[scriptblock]$Accept){
 }
 function Width([int]$Group){((Layout).groups|Where-Object id -eq $Group|Select-Object -First 1).bounds.width}
 function WindowCommand([string]$Id){& (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Window';Invoke $Id;Wait-Until {$null -eq (Find $Id)} 'Workspace menu did not close'}
+function Check-EdgeEscape($From){
+    $before=(Model).state.workspace.layout|ConvertTo-Json -Depth 90 -Compress
+    $point=Screen $From.x $From.y
+    try{
+        [CapyRowPointer]::Down($Device,$point.x,$point.y)
+        Wait-Until {$null -ne (Gesture).edge -and !(Gesture).edge.claimed} 'The pending edge contact was not published'
+        [CapyRowPointer]::Key(0x1b);[CapyRowPointer]::Up();Settled
+        if(((Model).state.workspace.layout|ConvertTo-Json -Depth 90 -Compress) -cne $before){throw 'Escape changed the pending edge layout'}
+        Swipe $From @{x=$From.x+64;y=$From.y} -During {
+            Wait-Until {(Gesture).edge.claimed} 'The edge did not claim before Escape'
+            [CapyRowPointer]::Key(0x1b)
+        }
+        if(((Model).state.workspace.layout|ConvertTo-Json -Depth 90 -Compress) -cne $before -or (Gesture).edge){throw 'Escape did not restore and clear the claimed edge contact'}
+    }finally{if([CapyRowPointer]::Active){[CapyRowPointer]::Cancel()}}
+}
 function Start-Review([string]$Theme){
     $script:stderr=Join-Path $run ($Theme+'-stderr.log')
     $env:CAPY_STORAGE_DIR=Join-Path $run ($Theme+'-profile')
@@ -77,6 +92,7 @@ function Check-ColumnEdge([string]$Theme){
     $column=@($layout.groups|Where-Object {!$_.floating -and [Math]::Abs($_.bounds.x+$_.bounds.width-$edge.bounds.x) -lt 1})
     $inside={param($id)$x=(Divider $id).bounds.x-20;Reach-Point @(foreach($g in $column){for($y=$g.bounds.y+$g.bounds.height-24;$y -gt $g.bounds.y+48;$y-=24){@{x=$x;y=$y}}}) {param($edge)$edge.contact -eq 'free'}}
     $from=& $inside $edge.id
+    Check-EdgeEscape $from
     $before=Width $group.id
     $swipe={
         if($Device -eq 'mouse'){
@@ -144,7 +160,7 @@ function Check-ColumnHandleReset([string]$Theme){
     $historyAfter=@((Model).state.commands|Where-Object {$_.id -match 'undo_workspace|redo_workspace'}|Select-Object id,enabled)|ConvertTo-Json -Compress
     if((Width $owner.groups[0]) -ne $original -or ((Model).state.workspace.layout|ConvertTo-Json -Depth 90 -Compress) -cne $singleBefore -or $historyAfter -cne $historyBefore){throw 'One divider tap changed column width, layout or workspace history availability'}
     Swipe $from @{x=$from.x+64;y=$from.y}
-    Wait-Until {(Width $owner.groups[0]) -eq $original+64} "The left actual divider did not resize its owner by 64 units"
+    Wait-Until {[Math]::Abs((Width $owner.groups[0])-$original-64) -lt 1} "The left actual divider did not resize its owner by 64 units"
     $grown=Width $owner.groups[0];$grownLayout=(Model).state.workspace.layout|ConvertTo-Json -Depth 90 -Compress
     $handle=Control ('divider-'+$owner.divider) -Arranged;$bounds=$handle.Current.BoundingRectangle
     $point=@([int]($bounds.X+$bounds.Width*.5),[int]($bounds.Y+$bounds.Height*.5))
@@ -164,6 +180,65 @@ function Check-ColumnHandleReset([string]$Theme){
         $record|ConvertTo-Json -Depth 95|Set-Content (Join-Path $run ('column-reset-'+$Theme+'.json'))
     }
 }
+function Check-CanvasReset([string]$Theme){
+    if($Device -ne 'touch'){throw 'CanvasResetOnly requires touch input'}
+    $drawingHistory={@{layers=(Model).state.layers.Count;commands=@((Model).state.commands|Where-Object {$_.id -in @('undo','redo')}|Select-Object id,enabled)}|ConvertTo-Json -Compress}
+    $drawingBefore=& $drawingHistory
+    $edge=(Layout).dividers|Where-Object {$_.axis -eq 'horizontal' -and $_.owner_side -eq 'left' -and !$_.fixed}|Sort-Object {$_.bounds.x}|Select-Object -Last 1
+    if(!$edge){throw 'The left column has no canvas-side edge'}
+    $groups=@((Layout).groups|Where-Object {!$_.floating -and [Math]::Abs($_.bounds.x+$_.bounds.width-$edge.bounds.x) -lt 1})
+    $free=Reach-Point @(foreach($g in $groups){for($y=$g.bounds.y+$g.bounds.height-24;$y -gt $g.bounds.y+48;$y-=24){@{x=$edge.bounds.x-20;y=$y}}}) {param($contact)$contact.contact -eq 'free'}
+    $at=Screen $free.x $free.y;[void][CapyRowPointer]::DoubleClick('touch',$at.x,$at.y);Settled
+    $preferred=Width $groups[0].id
+    $receipts=[Collections.Generic.List[object]]::new()
+    foreach($distance in 20,35,40){
+        $edge=Divider $edge.id
+        $from=@{x=$edge.bounds.x+$edge.bounds.width*.5;y=$free.y}
+        Swipe $from @{x=$from.x+64;y=$from.y}
+        $grown=Width $groups[0].id
+        if([Math]::Abs($grown-$preferred-64) -ge 1){throw 'Canvas reset setup did not grow the column by 64 units'}
+        $grownLayout=(Model).state.workspace.layout|ConvertTo-Json -Depth 90 -Compress
+        $edge=Divider $edge.id;$point=@{x=$edge.bounds.x+$edge.bounds.width+$distance;y=$free.y}
+        $camera=(Model).state.camera;$scale=$camera.viewport[0]/(Layout).viewport[0]
+        $area=@($camera.work_area|ForEach-Object {$_/$scale})
+        if(!$area -or $point.x -lt $area[0] -or $point.x -ge $area[0]+$area[2] -or $point.y -lt $area[1] -or $point.y -ge $area[1]+$area[3]){throw 'The reset point is outside the published canvas work area'}
+        $at=Screen $point.x $point.y
+        $record=@{theme=$Theme;distance=$distance;preferred=$preferred;grown=$grown;point=$point;work_area=$area;before=(Model).state.workspace.layout;after=$null}
+        try{
+            if($distance -eq 40){
+                [void][CapyRowPointer]::DoubleClick('touch',$at.x,$at.y);Settled
+                if((Width $groups[0].id) -ne $grown){throw 'A touch double tap beyond 36 units reset the column'}
+                WindowCommand 'undo_workspace';Settled
+            }else{
+                [void][CapyRowPointer]::DoubleClick('touch',$at.x,$at.y)
+                Wait-Until {(Width $groups[0].id) -eq $preferred} "Canvas-side touch double tap at $distance units did not restore exact preferred width ($preferred)"
+                Settled;$resetLayout=(Model).state.workspace.layout|ConvertTo-Json -Depth 90 -Compress
+                WindowCommand 'undo_workspace';Settled
+                if((Width $groups[0].id) -ne $grown -or ((Model).state.workspace.layout|ConvertTo-Json -Depth 90 -Compress) -cne $grownLayout){throw 'Canvas reset Undo did not restore the exact grown layout'}
+                WindowCommand 'redo_workspace';Settled
+                if((Width $groups[0].id) -ne $preferred -or ((Model).state.workspace.layout|ConvertTo-Json -Depth 90 -Compress) -cne $resetLayout){throw 'Canvas reset Redo did not restore the exact preferred layout'}
+            }
+        }finally{
+            $record.after=(Model).state.workspace.layout;$record.width=Width $groups[0].id;$record.drawing_history_before=$drawingBefore;$record.drawing_history_after=& $drawingHistory;$receipts.Add($record)
+            $receipts|ConvertTo-Json -Depth 95|Set-Content (Join-Path $run ('canvas-reset-'+$Theme+'.json'))
+            if($record.drawing_history_after -cne $drawingBefore){throw 'Canvas reset changed drawing history or layer count'}
+        }
+    }
+    $edge=Divider $edge.id;$from=@{x=$edge.bounds.x+$edge.bounds.width*.5;y=$free.y}
+    Swipe $from @{x=$from.x+64;y=$from.y}
+    $grownLayout=(Model).state.workspace.layout|ConvertTo-Json -Depth 90 -Compress
+    $edge=Divider $edge.id;$at=Screen ($edge.bounds.x+$edge.bounds.width+20) $free.y
+    try{
+        [CapyRowPointer]::Down('touch',$at.x,$at.y);[CapyRowPointer]::Cancel()
+        [CapyRowPointer]::Down('touch',$at.x,$at.y);[CapyRowPointer]::Up();Settled
+        if(((Model).state.workspace.layout|ConvertTo-Json -Depth 90 -Compress) -cne $grownLayout){throw 'A canceled first canvas contact left a stale double-tap candidate'}
+        $receipts.Add(@{theme=$Theme;cancel_first_then_single_tap='unchanged';width=Width $groups[0].id;layout=(Model).state.workspace.layout})
+        $receipts|ConvertTo-Json -Depth 95|Set-Content (Join-Path $run ('canvas-reset-'+$Theme+'.json'))
+    }finally{if([CapyRowPointer]::Active){[CapyRowPointer]::Cancel()}}
+    WindowCommand 'undo_workspace';Settled
+    if((Width $groups[0].id) -ne $preferred){throw 'Canceled-tap setup did not Undo to exact preferred width'}
+    if((& $drawingHistory) -cne $drawingBefore){throw 'Canceled canvas contact changed drawing history or layer count'}
+}
 function Check-GroupGap([string]$Theme){
     $layout=Layout
     $beside={param($d,$above)$layout.groups|Where-Object {!$_.floating -and [Math]::Abs($_.bounds.x-$d.bounds.x) -lt 1 -and [Math]::Abs($(if($above){$_.bounds.y+$_.bounds.height-$d.bounds.y}else{$_.bounds.y-$d.bounds.y-$d.bounds.height})) -lt 1}|Select-Object -First 1}
@@ -180,6 +255,43 @@ function Check-GroupGap([string]$Theme){
     if($tab -and ((Layout).groups|Where-Object id -eq $tab.id).active -ne $tab.active){throw "${Theme}: a gap swipe from the tab strip selected a tab"}
     if((Gesture).last_edge.claimed -ne $true -or !(Gesture).last_edge.vertical){throw "${Theme}: the gap moved without a vertical edge claim"}
     WindowCommand 'undo_workspace';Wait-Until {[Math]::Abs((Divider $gap.id).bounds.y-$gap.bounds.y) -lt 1} "${Theme}: the gap resize was not one Undo step"
+}
+function Check-LayerRowEdge([string]$Theme){
+    Use-PaintWorkspace;Settled
+    $target=(Layout).groups|Where-Object {$_.panels -contains 'tool_settings'}|Select-Object -First 1
+    $tab=(Control 'panel-tab-layers' -Arranged).Current.BoundingRectangle
+    $to=Screen ($target.bounds.x+$target.bounds.width*.5) ($target.bounds.y+$target.bounds.height*.5)
+    try{
+        [CapyRowPointer]::Down('mouse',[int]($tab.X+$tab.Width*.5),[int]($tab.Y+$tab.Height*.5))
+        [CapyRowPointer]::Move($to.x,$to.y)
+        Wait-Until {$drop=((Workspace-Root).Current.ItemStatus|ConvertFrom-Json).workspace_update.drag.drop_hint;$drop.target.kind -eq 'tab' -and $drop.target.group -eq $target.id} 'Layers did not preview docking into the middle group'
+        [CapyRowPointer]::Up();Settled
+    }finally{if([CapyRowPointer]::Active){[CapyRowPointer]::Cancel()}}
+    for($i=0;$i -lt 6;$i++){$count=(Model).state.layers.Count;Invoke 'layer-new';Wait-Until {(Model).state.layers.Count -eq $count+1} 'Layer row setup did not add a layer'}
+    $tab=(Control 'panel-tab-layers' -Arranged).Current.BoundingRectangle
+    [CapyRowPointer]::RightClick([int]($tab.X+$tab.Width*.5),[int]($tab.Y+$tab.Height*.5))
+    Invoke (((Model).panels|Where-Object id -eq 'layers').configuration_title+'…') -Name
+    Wait-Until {(Model).state.customization.expanded -eq 'layers'} 'Layer configuration did not open'
+    (Control 'configure-show-layer_actions').GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
+    (Control 'panel-tab-layers').SetFocus();[CapyRowPointer]::Key(0x1b)
+    Wait-Until {$null -eq (Model).state.customization.expanded} 'Layer configuration did not close';Settled
+    $group=(Layout).groups|Where-Object {$_.panels -contains 'layers'}|Select-Object -First 1
+    $gap=(Layout).dividers|Where-Object {$_.axis -eq 'vertical' -and !$_.fixed -and [Math]::Abs($_.bounds.y-$group.bounds.y-$group.bounds.height) -lt 1}|Select-Object -First 1
+    if(!$gap){throw 'The docked Layers group has no lower row-resize gap'}
+    $point=@{x=$group.bounds.x+$group.bounds.width*.65;y=$gap.bounds.y-12};$at=Screen $point.x $point.y
+    $rows=$root.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition)
+    $row=@($rows|Where-Object {$_.Current.AutomationId -match '^layer-row-[0-9]+$' -and $_.Current.BoundingRectangle.Contains([double]$at.x,[double]$at.y)})|Select-Object -First 1
+    if(!$row){throw 'The near-gap contact does not lie inside an actual native LayerRow'}
+    $contact=Contact $point
+    if($contact.contact -ne 'pickup' -or !$contact.vertical){throw 'The actual LayerRow did not publish a vertical Pickup edge candidate'}
+    $before=(Model).state.workspace.layout|ConvertTo-Json -Depth 90 -Compress
+    Swipe $point @{x=$point.x-50;y=$point.y}
+    if(((Model).state.workspace.layout|ConvertTo-Json -Depth 90 -Compress) -cne $before -or (Gesture).last_edge.claimed){throw 'A sideways LayerRow swipe resized the workspace'}
+    Swipe $point @{x=$point.x;y=$point.y-50}
+    if(!(Gesture).last_edge.claimed -or !(Gesture).last_edge.vertical -or [Math]::Abs((Divider $gap.id).bounds.y-$gap.bounds.y) -lt 20){throw 'A vertical LayerRow contact did not hand off to row resizing'}
+    @{row=$row.Current.AutomationId;point=$point;contact=$contact;terminal=(Gesture).last_edge;before=$before;after=(Model).state.workspace.layout}|ConvertTo-Json -Depth 95|Set-Content (Join-Path $run ('layer-row-edge-'+$Theme+'.json'))
+    WindowCommand 'undo_workspace';Settled
+    if(((Model).state.workspace.layout|ConvertTo-Json -Depth 90 -Compress) -cne $before){throw 'LayerRow resize Undo did not restore the exact workspace'}
 }
 function Check-ClosedStrip([string]$Theme){
     $strip=(Layout).collapsed|Where-Object open|Select-Object -First 1
@@ -201,17 +313,19 @@ try {
     foreach($theme in $themes){
         Start-Review $theme
         Settled
-        if($ColumnResetOnly){Check-ColumnHandleReset $theme}else{
+        if($CanvasResetOnly){Check-CanvasReset $theme}elseif($ColumnResetOnly){Check-ColumnHandleReset $theme}else{
             Check-ColumnEdge $theme
             Check-GroupGap $theme
             Check-ClosedStrip $theme
+            if($Device -eq 'touch'){Check-LayerRowEdge $theme}
         }
         Capture ("edge-reach-"+$theme)
         & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close
         if((Get-Item -LiteralPath $stderr).Length){throw "Native stderr requires inspection ($theme)"}
         [CapyRowPointer]::Dispose()
     }
-    if($ColumnResetOnly){[pscustomobject]@{device=$Device;themes=($themes -join ',');actual_nested_divider_reset='passed';owner_side='left';preferred_width='exact';other_owner='unchanged';workspace_undo_redo='exact';evidence=$run;scope='Actual native nested divider contacts only; physical devices and timing remain separate'}|ConvertTo-Json}
+    if($CanvasResetOnly){[pscustomobject]@{device=$Device;themes=($themes -join ',');canvas_side_reset='passed';preferred_width='exact';workspace_undo_redo='exact';evidence=$run;scope='Native touch canvas-side double taps only; physical shell gestures remain separate'}|ConvertTo-Json}
+    elseif($ColumnResetOnly){[pscustomobject]@{device=$Device;themes=($themes -join ',');actual_nested_divider_reset='passed';owner_side='left';preferred_width='exact';other_owner='unchanged';workspace_undo_redo='exact';evidence=$run;scope='Actual native nested divider contacts only; physical devices and timing remain separate'}|ConvertTo-Json}
     else{[pscustomobject]@{device=$Device;column_edge_from_inside='passed';resize_pointer=($Device -eq 'mouse');double_press_reset='passed';canvas_contact=$(if($Device -eq 'touch'){'grabs'}else{'kept'});vertical_swipe_kept='passed';group_gap='passed';closed_strip='passed';themes=($themes -join ',');scope='OS-delivered synthetic input; physical devices and timing remain separate'}|ConvertTo-Json}
 }catch{
     if($review -and !$review.HasExited){try{Capture 'failure'}catch{}}

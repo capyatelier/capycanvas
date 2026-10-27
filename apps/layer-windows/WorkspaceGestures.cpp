@@ -154,7 +154,17 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
         hstring swipes;
         for(auto node=original.try_as<DependencyObject>();node&&node!=root;node=VisualTreeHelper::GetParent(node)){
             J tag{nullptr};if(auto element=node.try_as<FrameworkElement>())tag=element.Tag().try_as<J>();
-            if(swipes.empty())swipes=swipeOwner(node,tag,id);
+            if(tag&&str(tag,L"edge_contact")==L"input")return L"input";
+            if(swipes.empty()){
+                swipes=swipeOwner(node,tag,id);
+                if(swipes==L"free"&&tag&&flag(tag,L"workspace_hold")){
+                    auto item=object(object(tag,L"workspace_action"),L"item");
+                    if(str(item,L"kind")==L"tile"){
+                        auto panel=find(array(data->model,L"panels"),L"id",str(item,L"panel"));
+                        if(flag(findId(array(panel,L"tiles"),num(item,L"tile")),L"tears_bubble"))swipes=L"input";
+                    }
+                }
+            }
             if(tag&&flag(tag,L"edge_surface"))return swipes.empty()?hstring(L"free"):swipes;
         }
         return {};
@@ -178,11 +188,12 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
         edge->claimed=true;edge->hold=false;
         if(pointer||dragging)cancel(L"edge_contact");
         ignoreClick=true;
-        data->pointerCancels.Cancel(edge->pointer);
         releasing=true;
+        data->pointerCancels.Cancel(edge->pointer);
         for(auto const& weak:edge->path)if(auto element=weak.get();element&&PointerGesture::Captured(element,edge->pointer))element.ReleasePointerCapture(edge->contact);
-        root.CapturePointer(edge->contact);
+        bool captured=root.CapturePointer(edge->contact);
         releasing=false;
+        if(!captured){edgeEnd(L"cancel");return;}
         if(edge->device==L"touch")return;
         using Shape=NativeInput::InputSystemCursorShape;
         static constexpr Shape shapes[]{Shape::SizeWestEast,Shape::SizeNorthSouth,Shape::SizeWestEast,Shape::SizeNorthSouth,Shape::SizeNorthwestSoutheast,Shape::SizeNortheastSouthwest};
@@ -249,12 +260,18 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
         evidence();
     }
     void edgeDoublePress(DoubleTappedRoutedEventArgs const& e){
-        if(!data->input)return;
+        if(!data->input||data->externalPopup||data->popupCount)return;
         auto swipes=edgeContact(e.OriginalSource(),0);if(swipes.empty())return;
         if(swipes==L"free")for(auto node=e.OriginalSource().try_as<DependencyObject>();node&&node!=root;node=VisualTreeHelper::GetParent(node))
             if(node.try_as<Primitives::ButtonBase>()){swipes=L"pickup";break;}
+        auto at=e.GetPosition(root);
+        auto request=O({{L"layout",object(data->model,L"layout")},{L"position",point(at)},
+            {L"kind",S(deviceName(e.PointerDeviceType()))},{L"contact",S(swipes)},{L"reset",B(true)}});
+        if(!capy_edge_reach(to_string(request.Stringify()).c_str()))return;
+        cancelAll(L"edge_reset");
         data->input(to_string(O({{L"type",S(L"edge_double_press")},{L"kind",S(deviceName(e.PointerDeviceType()))},{L"contact",S(swipes)},
-            {L"position",point(e.GetPosition(root))},{L"viewport",viewport()}}).Stringify()));
+            {L"position",point(at)},{L"viewport",viewport()}}).Stringify()));
+        e.Handled(true);
     }
     A tabHits(){
         A result;
@@ -302,7 +319,11 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
                 content.ManipulationMode(mode&~ManipulationModes::System);
             }
     }
-    void cursor(){dragCursor(root,device==NativeInput::PointerDeviceType::Touch,dragging,held);}
+    void cursor(){
+        if(auto shape=resizeCursor(action,object(data->model,L"layout"));shape&&dragging&&device!=NativeInput::PointerDeviceType::Touch)
+            root.as<IUIElementProtected>().ProtectedCursor(NativeInput::InputSystemCursor::Create(*shape));
+        else dragCursor(root,device==NativeInput::PointerDeviceType::Touch,dragging,held);
+    }
     void clear(bool closeMenu=true){
         contactToken=0;
         ++generation;pointer.reset();contact=nullptr;held=false;dragging=false;finishing=false;dirty=false;
@@ -322,6 +343,11 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
         if(pointer||dragging)ignoreClick=suppressClick;
         if(dragging)send(L"cancel");
         clear();return true;
+    }
+    bool cancelAll(hstring reason=L"cancel"){
+        bool canceled=cancel(reason);
+        if(edge){edgeEnd(L"cancel");canceled=true;}
+        return canceled;
     }
     void dropQuery(){
         if(!dragging||busy||!dirty||str(action,L"type")!=L"tile_drag"||!object(action,L"item").Size())return;
@@ -620,14 +646,23 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
         })),true);
         root.SizeChanged([weak](auto&&,auto&&){if(auto self=weak.lock())self->chrome(O({{L"kind",S(L"refresh")}}));});
         ShortcutKeys(root,[weak](auto&&,KeyRoutedEventArgs const& e){if(auto self=weak.lock()){
-            if(e.Key()==Windows::System::VirtualKey::Escape&&self->cancel(L"escape"))e.Handled(true);
+            if(e.Key()==Windows::System::VirtualKey::Escape&&self->cancelAll(L"escape"))e.Handled(true);
             else if(!self->pointer){self->ignoreClick=false;self->rejectedPointer.reset();}
         }});
-        root.Unloaded([weak](auto&&,auto&&){if(auto self=weak.lock()){self->cancel();self->edgeEnd(L"cancel");}});
+        root.Unloaded([weak](auto&&,auto&&){if(auto self=weak.lock())self->cancelAll();});
     }
 };
 WorkspaceGestures::WorkspaceGestures(std::shared_ptr<WorkspaceData> data,Canvas root):impl(std::make_shared<Impl>()){
     impl->data=std::move(data);impl->root=root;impl->init();
+    impl->data->edgeHolding=[weak=std::weak_ptr(impl)](uint32_t id){auto self=weak.lock();
+        return self&&self->edge&&self->edge->pointer==id&&(self->edge->hold||self->edge->claimed);};
+    impl->data->cancelEdge=[weak=std::weak_ptr(impl)](uint32_t id){
+        if(auto self=weak.lock();self&&self->edge&&self->edge->pointer==id){
+            if(self->edge->claimed)return false;
+            self->edgeEnd(L"cancel");
+        }
+        return true;
+    };
 }
 WorkspaceGestures::~WorkspaceGestures()=default;
 void WorkspaceGestures::Source(FrameworkElement const& element,J const& action,J const& context,bool doubleClick,J const& tab,Pickup pickup){
@@ -639,7 +674,7 @@ void WorkspaceGestures::Source(FrameworkElement const& element,J const& action,J
     tag.Insert(L"workspace_action",action);tag.Insert(L"workspace_context",context);tag.Insert(L"workspace_double",B(doubleClick));
     tag.Insert(L"workspace_tab",tab);tag.Insert(L"workspace_hold",B(pickup==Pickup::Hold));tag.Insert(L"workspace_control",B(pickup==Pickup::Control));
     auto kind=str(action,L"type");
-    auto contact=tab.Size()||element.try_as<ScrollView>()?L"pickup":pickup==Pickup::Hold?(str(object(action,L"item"),L"kind")==L"tile"?L"input":L"free")
+    auto contact=tab.Size()||element.try_as<ScrollView>()?L"pickup":pickup==Pickup::Hold?L"free"
         :pickup==Pickup::Control||kind==L"drag_workspace"?L"input":L"";
     if(*contact)tag.Insert(L"edge_contact",S(contact));
     element.Tag(tag);
@@ -648,5 +683,5 @@ void WorkspaceGestures::Source(FrameworkElement const& element,J const& action,J
 void WorkspaceGestures::Refresh(){impl->refresh();}
 void WorkspaceGestures::Present(J const& drag){impl->present(drag);}
 void WorkspaceGestures::ChromeChanged(){impl->chrome(O({{L"kind",S(L"refresh")}}));}
-bool WorkspaceGestures::Cancel(){return impl->cancel();}
+bool WorkspaceGestures::Cancel(){return impl->cancelAll();}
 bool WorkspaceGestures::SuppressClick()const{return impl->ignoreClick;}

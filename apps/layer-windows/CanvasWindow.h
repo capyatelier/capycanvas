@@ -85,11 +85,11 @@ private:
     std::atomic<NavigationCursor> navigationCursor{NavigationCursor::None};
     winrt::Microsoft::UI::Input::InputCursor zoomInCursor{nullptr},zoomOutCursor{nullptr};
     winrt::Microsoft::UI::Input::PointerPredictor pointerPredictor{nullptr}; // input thread only
-    struct PickerGesture {
+    struct CanvasTouchGesture {
         winrt::Microsoft::UI::Input::GestureRecognizer recognizer{nullptr};
         std::optional<uint32_t> contact;
         std::set<uint32_t> contacts;
-    } pickerHold,xamlPickerHold;
+    } canvasTouch,xamlCanvasTouch;
     std::optional<uint32_t> holdContact;
     std::set<uint32_t> contacts;
     std::set<uint32_t> xamlContacts;
@@ -215,10 +215,10 @@ private:
     std::vector<CapyPointer> PointerSamples(winrt::Microsoft::UI::Input::PointerPoint const&,PointerPoints const&,uint32_t phase,bool predict);
     void Pointer(std::vector<CapyPointer>,winrt::Windows::System::VirtualKeyModifiers,bool pen,bool barrel,uint64_t arrival);
     void XamlPointer(winrt::Microsoft::UI::Xaml::Input::PointerRoutedEventArgs const&,uint32_t phase);
-    void PickerHold(winrt::Microsoft::UI::Input::PointerEventArgs const&, uint32_t phase);
-    void PickerHold(PickerGesture&,winrt::Microsoft::UI::Input::PointerPoint const&,PointerPoints const&,uint32_t phase);
-    void StartPickerHold(PickerGesture&);
-    void CancelPickerHold(PickerGesture&);
+    void CanvasTouch(winrt::Microsoft::UI::Input::PointerEventArgs const&, uint32_t phase);
+    void CanvasTouch(CanvasTouchGesture&,winrt::Microsoft::UI::Input::PointerPoint const&,PointerPoints const&,uint32_t phase);
+    void StartCanvasTouch(CanvasTouchGesture&);
+    void CancelCanvasTouch(CanvasTouchGesture&);
     void TrackContact(uint32_t id,uint32_t phase,bool touch);
     float PickerOffset(float scale)const;
 };

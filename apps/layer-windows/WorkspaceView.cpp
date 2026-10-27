@@ -690,7 +690,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
                     auto inert=std::make_shared<WorkspaceData>(*data);
                     inert->send=[](std::string){};inert->document=[](std::string){};inert->input=[](std::string){};
                     inert->query=nullptr;inert->previews.reset();inert->thumbnails.reset();inert->scopes.reset();
-                    inert->popupChanged=nullptr;inert->takeBubble=nullptr;inert->bubbleContact=nullptr;inert->pointerCancels.Clear();inert->transients.clear();inert->colorViews.clear();inert->copyViews.clear();
+                    inert->popupChanged=nullptr;inert->takeBubble=nullptr;inert->bubbleContact=nullptr;inert->edgeHolding=nullptr;inert->cancelEdge=nullptr;inert->pointerCancels.Clear();inert->transients.clear();inert->colorViews.clear();inert->copyViews.clear();
                     auto body=std::make_unique<PanelBody>(inert,panel,O({{L"bounds",O({{L"width",N(width)}})}}),[]{},nullptr,false);
                     body->Root().Width(width);body->Apply(true);measureHost.Children().Append(body->Root());
                     if(copy.body){uint32_t at=0;if(measureHost.Children().IndexOf(copy.body->Root(),at))measureHost.Children().RemoveAt(at);}
@@ -960,11 +960,9 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         }
         auto transform=handle.RenderTransform().as<TranslateTransform>();transform.X(0);transform.Y(0);
         place(handle,bounds);Canvas::SetZIndex(handle,z);gestures->Source(handle,action,{},resetColumn);
-        if(str(action,L"type")==L"drag_divider"){
+        if(auto shape=resizeCursor(action,object(data->model,L"layout"))){
             using namespace winrt::Microsoft::UI::Input;
-            auto shape=num(bounds,L"width")<num(bounds,L"height")?
-                InputSystemCursorShape::SizeWestEast:InputSystemCursorShape::SizeNorthSouth;
-            handle.as<IUIElementProtected>().ProtectedCursor(InputSystemCursor::Create(shape));
+            handle.as<IUIElementProtected>().ProtectedCursor(InputSystemCursor::Create(*shape));
         }
         AutomationProperties::SetAutomationId(handle,hstring(key));
         AutomationProperties::SetAutomationControlType(handle,Automation::Peers::AutomationControlType::Thumb);

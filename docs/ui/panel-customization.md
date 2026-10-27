@@ -593,6 +593,15 @@ pressed tab waits for its click. Canvas touches reach the session from
 `capy_pointer`, which cancels the stroke when the edge claims the contact.
 Windows uses shared column ownership to enable double-click and double-tap
 reset on both outer and nested column resize handles.
+Chrome double presses use the reset admission mode of `capy_edge_reach` before
+claiming the native event and canceling its pending resize contact.
+Canvas touch uses native double-tap timing and distance, forwarding the reset
+to the same shared action. Cancellation and intervening chrome contacts retire
+its tap candidate. Escape and blur retire pending and captured edge gestures.
+Layer rows wait for the asynchronous edge decision before their own scrolling,
+swipe or reorder can claim the contact; an admitted row hold retires the pending
+edge first. Held tiles use the shared `tears_bubble` flag to retain immediate
+bubble pulls and let other tiles yield until their hold arms.
 Apple classifies measured workspace sources and native controls, and asks
 `capy_apple_edge_reach` for admission before native scrolling or pickup begins.
 AppKit and UIKit forward contacts through `EdgeReachCoordinator` to the serial

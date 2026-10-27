@@ -155,6 +155,21 @@ inline void dragCursor(UIElement const& element,bool touch,bool dragging,bool he
     if(touch||(!dragging&&!held)){target.ProtectedCursor(nullptr);return;}
     target.ProtectedCursor(InputSystemCursor::Create(dragging?InputSystemCursorShape::SizeAll:InputSystemCursorShape::Hand));
 }
+inline std::optional<Microsoft::UI::Input::InputSystemCursorShape> resizeCursor(J const& action,J const& layout){
+    using Shape=Microsoft::UI::Input::InputSystemCursorShape;
+    auto type=str(action,L"type");
+    if(type==L"drag_divider"){
+        auto divider=findId(array(layout,L"dividers"),num(action,L"id"));
+        if(divider.Size())return str(divider,L"axis")==L"horizontal"?Shape::SizeWestEast:Shape::SizeNorthSouth;
+    }else if(type==L"resize_floating"){
+        auto edge=str(action,L"edge");
+        if(edge==L"left"||edge==L"right")return Shape::SizeWestEast;
+        if(edge==L"top"||edge==L"bottom")return Shape::SizeNorthSouth;
+        if(edge==L"top_left"||edge==L"bottom_right")return Shape::SizeNorthwestSoutheast;
+        if(edge==L"top_right"||edge==L"bottom_left")return Shape::SizeNortheastSouthwest;
+    }
+    return {};
+}
 inline void edgeTag(FrameworkElement const& element,wchar_t const* key,V const& value){
     auto previous=element.Tag().try_as<J>();auto tag=previous?J::Parse(previous.Stringify()):J{};
     tag.Insert(key,value);element.Tag(tag);
@@ -243,6 +258,7 @@ struct WorkspaceData : std::enable_shared_from_this<WorkspaceData> {
     void popup(bool open){popupCount=std::max(0,popupCount+(open?1:-1));if(popupChanged)popupChanged(popupCount>0);}
     std::function<void(std::string)> send,document,input;
     std::function<void(std::string,std::function<void(int32_t)>)> edges;
+    std::function<bool(uint32_t)> edgeHolding,cancelEdge;
     J chrome=O({{L"held",B(false)},{L"dragging",B(false)},{L"popup_open",B(false)}});
     bool externalPopup=false;
     bool updating=false;
