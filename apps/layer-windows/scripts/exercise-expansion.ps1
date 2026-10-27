@@ -63,11 +63,21 @@ function Resize-Drag($From,[object[]]$To,[scriptblock]$During,[int]$Cursor=0,[sc
             $b=Resize-Screen $To[$n]
             for($i=1;$i -le 8;$i++){[CapyRowPointer]::Move([int]($a.x+($b.x-$a.x)*$i/8),[int]($a.y+($b.y-$a.y)*$i/8));Start-Sleep -Milliseconds 16}
             [CapyRowPointer]::Verify()
-            if($Claim){Wait-Until $Claim 'Shared canvas-side resize did not claim the gesture'}
-            else{Wait-Until {(Resize-Gesture).edge.claimed} 'Native resize reach did not claim the gesture'}
-            Start-Sleep -Milliseconds 200
+            if($Claim){Wait-Until $Claim 'Shared canvas-side resize did not claim the gesture';$moveAck=$null}
+            else{
+                $ackWatch=[Diagnostics.Stopwatch]::StartNew();$acknowledged=$false
+                do{
+                    $ackGesture=Resize-Gesture;$ackPosition=$ackGesture.edge.position
+                    $acknowledged=$ackGesture.edge.claimed -and $ackPosition.Count -eq 2 -and [Math]::Abs($ackPosition[0]-$To[$n].x) -le 1 -and [Math]::Abs($ackPosition[1]-$To[$n].y) -le 1
+                    if(!$acknowledged){Start-Sleep -Milliseconds 20}
+                }while(!$acknowledged -and $ackWatch.ElapsedMilliseconds -lt 2000)
+                $moveAck=@{step=$n;logical=$To[$n];screen=$b;acknowledged=$acknowledged;elapsed_ms=$ackWatch.ElapsedMilliseconds;gesture=$ackGesture}
+                $moveAck|ConvertTo-Json -Depth 20|Set-Content (Join-Path $run 'resize-move-ack.json')
+                if(!$acknowledged){throw "Native resize target $n was not acknowledged within two seconds"}
+            }
+            Start-Sleep -Milliseconds 150
             if($Cursor){Resize-Cursor $Cursor}
-            if($During){& $During $n}
+            if($During){& $During $n $moveAck}
             $a=$b
         }
         [CapyRowPointer]::Up();Resize-Settled
@@ -285,8 +295,8 @@ function Resize-Columns {
     $columnReceipt=@{before=($before|ConvertFrom-Json);before_gesture=(Resize-Gesture);from=$from;far=$far;requested=@(foreach($target in $columnTargets){@{logical=$target;screen=(Resize-Screen $target)}});groups_before=@((Resize-Layout).groups);steps=[Collections.Generic.List[object]]::new()}
     $columnReceipt|ConvertTo-Json -Depth 90|Set-Content (Join-Path $run 'resize-column.json')
     Resize-Drag $from $columnTargets -Cursor 32644 -During {
-        param($step)
-        $columnReceipt.steps.Add(@{step=$step;requested=$columnReceipt.requested[$step];gesture=(Resize-Gesture);collapsed=@((Resize-Layout).collapsed);layout=(Model).state.workspace.layout})
+        param($step,$ack)
+        $columnReceipt.steps.Add(@{step=$step;requested=$columnReceipt.requested[$step];ack_elapsed_ms=$ack.elapsed_ms;gesture=(Resize-Gesture);collapsed=@((Resize-Layout).collapsed);layout=(Model).state.workspace.layout})
         $columnReceipt|ConvertTo-Json -Depth 90|Set-Content (Join-Path $run 'resize-column.json')
         $collapsed=@((Resize-Layout).collapsed|Where-Object {$_.groups.icons.panel -contains $owner.active}).Count -gt 0
         if(($step -ne 1 -and !$collapsed) -or ($step -eq 1 -and $collapsed)){throw "Column collapse/reversal failed at step $step"}

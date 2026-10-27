@@ -1799,6 +1799,8 @@ Use `exercise-expansion.ps1 -ResizeOnly -Device mouse|pen|touch -Theme dark|ligh
 for floating left/right/bottom/corner reach, native mouse hover and drag cursors,
 toolbar-band lanes, column and stack collapse/reversal, adjacent toolbar widths
 and exact workspace Undo, while the artwork revision stays unchanged.
+Each move must acknowledge the matching native pointer position within two
+seconds before geometry assertions; an existing claimed flag is insufficient.
 An inactive native tab's top six units must yield a
 vertical gap resize without selecting the tab; tapping selects it on release.
 The fixture grows Stats through its native bottom
