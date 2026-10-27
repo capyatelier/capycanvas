@@ -88,6 +88,15 @@ The canvas needs a Wayland session and a hardware Vulkan driver with mailbox
 presentation and premultiplied-alpha surfaces. There is no X11, GLES or CPU
 canvas fallback. GTK chooses its own renderer for the controls.
 
+Selected-tab masks prepare immutable textures on a worker and retain the original
+Cairo nodes for fractional placements and scales. Their colors and translucent
+compositing remain native GTK nodes. Preserve squircle and shadow pixels when
+changing these paths: removing a parent mask can also change descendant group
+coverage at fractional bounds. GSK can upload a large Fill mask again when it
+exceeds the fill atlas limit, even if the path object is retained. Measure image
+creation and memory allocation alongside presentation feedback when optimizing
+these controls.
+
 ## Build and run
 
 ```bash
@@ -524,6 +533,17 @@ Named modes such as `--drag-pickup`, `--workspace-motion`, `--color-panel` or
 `--icons` select a fixed test; the mode list is in
 [`native-input.js`](../../apps/layer-linux/bench/native-input.js). Test-specific
 instructions live with the feature's guide under [`docs/ui/`](../ui/README.md).
+
+`native_window_resize_presentations` measures three warmed six-second native
+corner drags of the outer window. Set `LAYER_NATIVE_EVENT_MS=4`,
+`LAYER_NATIVE_INPUT_TRACE=1` and `LAYER_TEST_ARTIFACTS` to a private output folder.
+Its reports pair changed window dimensions with completed GDK presentation
+timestamps and include full-contact canvas presentations. Run both themes and
+keep baseline and candidate builds separate from timed motion.
+`GTK_DEBUG=snapshot` with `native_window_resize_inventory` saves named render
+trees and node bounds during changing window dimensions. Run that diagnostic
+separately from timing measurements.
+
 For a tab-only motion diagnostic, preserve the motion mode's input pacing:
 
 ```sh

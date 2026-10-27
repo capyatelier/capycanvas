@@ -155,7 +155,7 @@ button.flat.status-bubble:active { background-image: image(alpha(var(--window-fg
 .canvas-notice.canvas-action-bar .canvas-action-bar-label { padding-top: 6px; padding-bottom: 6px; opacity: 1; }
 .canvas-notice.text-only.canvas-action-bar .canvas-action-bar-label { padding-right: 12px; }
 .canvas-notice.stacked.canvas-action-bar .canvas-action-bar-label { padding: 10px 12px 2px; }
-button.flat.unavailable-tool > * { filter: opacity(30%); }
+button.flat.unavailable-tool > * { opacity: .3; }
 .dock-panel.join-nw { border-top-left-radius: 0; }
 .dock-panel.join-ne { border-top-right-radius: 0; }
 .dock-panel.join-se { border-bottom-right-radius: 0; }

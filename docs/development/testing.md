@@ -76,6 +76,10 @@ and effect wrappers without a window. `render_thread::tests::chrome_` checks
 unpublished requests, coalescing behind a held buffer, stale releases and idle
 expiry with supplied timestamps. `native_squircle_corners` also downloads float
 pixels for masked shadows with zero, partial and full connected-corner radii.
+`native_panel_tab_alpha_pixels` compares cached tab masks with Cairo coverage
+through the native compositing pipeline, including fractional positions, color
+states and float targets. `native_window_scene_pixels` compares the same retained
+workspace tree with cached masks and the original Cairo masks in both themes.
 For scaled-display edge checks, render in physical pixels and round the cropped
 viewport outward to that grid. A fractional crop origin can introduce edge
 coverage absent from the displayed frame; compare suspected flashes or seams

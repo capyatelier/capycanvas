@@ -4,6 +4,7 @@ use gtk::{glib, prelude::*, subclass::prelude::*};
 use layer_ui::TabStyle;
 use std::cell::{Cell, RefCell};
 pub(crate) const TAB_RADIUS: f32 = layer_ui::SURFACE_RADIUS * crate::squircle::CORNER_FIT;
+type MaskKey = [u32; 10];
 mod imp {
     use super::*;
     #[derive(Default)]
@@ -13,6 +14,9 @@ mod imp {
         pub hover_bottom: RefCell<Vec<[i8; 2]>>,
         pub tints: RefCell<Option<[gtk::Box; 2]>>,
         pub gpu_background: Cell<bool>,
+        pub(super) mask: RefCell<Option<(MaskKey, crate::squircle::CachedMask)>>,
+        pub(super) raster: crate::color_preview_raster::PreviewRaster<MaskKey, MaskKey>,
+        pub extent: Cell<[i32; 2]>,
     }
     #[glib::object_subclass]
     impl ObjectSubclass for Strip {
@@ -22,6 +26,7 @@ mod imp {
     }
     impl ObjectImpl for Strip {
         fn dispose(&self) {
+            self.raster.cancel();
             for button in self.buttons.take() {
                 button.unparent();
             }
@@ -56,6 +61,10 @@ mod imp {
             (min, natural, -1, -1)
         }
         fn size_allocate(&self, width: i32, height: i32, _: i32) {
+            if self.extent.replace([width, height]) != [width, height] {
+                self.mask.borrow_mut().take();
+                self.raster.cancel();
+            }
             let widths = self.obj().widths();
             let automatic = self.style.get() == TabStyle::Automatic;
             let names = TabStyle::automatic_names(width as f32, &widths);
@@ -105,8 +114,8 @@ mod imp {
                 if button.is_sensitive() && button.opacity() > 0. && !button.has_css_class("selected-tool")
                     && button.state_flags().contains(gtk::StateFlags::PRELIGHT)
                     && let Some(tab) = button.compute_bounds(&*obj) {
-                        let cr = background.append_cairo(&bounds);
                         let color = button.color();
+                        let cr = background.append_cairo(&bounds);
                         cr.set_source_rgba(color.red().into(), color.green().into(), color.blue().into(), f64::from(color.alpha()) * 0.08 * button.opacity());
                         super::hover(&cr, &tab, corners.get(i).copied().unwrap_or_default());
                         let _ = cr.fill();
@@ -114,19 +123,9 @@ mod imp {
             }
             let mut node = background.to_node().unwrap_or_else(||gtk::gsk::ColorNode::new(&gtk::gdk::RGBA::TRANSPARENT,&bounds).upcast());
             if let Some(tab) = active.filter(|_|!gpu) {
-                let mask = gtk::Snapshot::new();
-                let cr = mask.append_cairo(&bounds);
-                let radius = gtk::graphene::Size::new(layer_ui::SURFACE_RADIUS, layer_ui::SURFACE_RADIUS);
-                let square = gtk::graphene::Size::new(0., 0.);
-                let mut shape = gtk::gsk::RoundedRect::new(tab, radius, radius, square, square);
-                shape.normalize();
-                crate::squircle::rounded_rect(&cr, &shape);
-                super::feet(&cr, &tab, bounds.height());
-                cr.set_source_rgba(1., 1., 1., 1.);
-                let _ = cr.fill();
-                drop(cr);
-                let mask = mask.to_node().unwrap();
-                node = super::masked_fill(node, gtk::gsk::ColorNode::new(&foot.color(), &bounds).upcast(), mask);
+                let fill = gtk::gsk::ColorNode::new(&foot.color(), &bounds);
+                let mask = obj.selected_mask(&tab, bounds.height(), &bounds);
+                node = masked_fill(node, fill.upcast(), mask);
             }
             snapshot.append_node(if strip.color().alpha() < 1. || foot.color().alpha() < 1. {
                 crate::glass::surface(node)
@@ -207,6 +206,27 @@ glib::wrapper! {
         @extends gtk::Widget, @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
 }
 impl PanelTabs {
+    fn selected_mask(&self, tab: &gtk::graphene::Rect, bottom: f32, bounds: &gtk::graphene::Rect) -> gtk::gsk::RenderNode {
+        let scale = self.native().and_then(|native| native.surface())
+            .map_or(self.scale_factor() as f64, |surface| surface.scale()) as f32;
+        let key = [tab.x(), tab.y(), tab.width(), tab.height(), bounds.x(), bounds.y(),
+            bounds.width(), bounds.height(), bottom, scale].map(f32::to_bits);
+        let (node, ready) = {
+            let mut cached = self.imp().mask.borrow_mut();
+            if cached.as_ref().is_none_or(|(previous, _)| *previous != key) {
+                *cached = Some((key, crate::squircle::CachedMask::new(bounds,
+                    |cr| selected_outline(cr, tab, bottom))));
+            }
+            let mask = &cached.as_ref().unwrap().1;
+            (mask.node(), mask.ready())
+        };
+        self.imp().raster.request(self, key, || (!ready && scale.fract() == 0.).then_some(key),
+            raster_mask, |tabs, key, texture| {
+                if let Some((current, mask)) = tabs.imp().mask.borrow().as_ref()
+                    && *current == key { mask.set_texture(texture); }
+            }, |wanted, ready| wanted == ready);
+        node
+    }
     pub fn set_gpu_background(&self,enabled: bool) {
         if self.imp().gpu_background.replace(enabled)!=enabled {self.queue_draw();}
     }
@@ -279,6 +299,34 @@ impl PanelTabs {
     }
 }
 
+fn raster_mask(key: MaskKey) -> gtk::gdk::Texture {
+    let [x, y, width, height, bx, by, bw, bh, bottom, scale] = key.map(f32::from_bits);
+    let mut surface = gtk::cairo::ImageSurface::create(gtk::cairo::Format::ARgb32,
+        (bw * scale).ceil() as i32, (bh * scale).ceil() as i32).unwrap();
+    let sx = surface.width() as f32 / bw;
+    let sy = surface.height() as f32 / bh;
+    surface.set_device_scale(sx.into(), sy.into());
+    surface.set_device_offset((-sx * bx).into(), (-sy * by).into());
+    let cr = gtk::cairo::Context::new(&surface).unwrap();
+    crate::squircle::CachedMask::new(&gtk::graphene::Rect::new(bx, by, bw, bh), |cr|
+        selected_outline(cr, &gtk::graphene::Rect::new(x, y, width, height), bottom)).node().draw(&cr);
+    drop(cr);
+    let stride = surface.stride() as usize;
+    let bytes = glib::Bytes::from_owned(surface.data().unwrap().to_vec());
+    let format = if cfg!(target_endian = "little") { gtk::gdk::MemoryFormat::B8g8r8a8Premultiplied }
+        else { gtk::gdk::MemoryFormat::A8r8g8b8Premultiplied };
+    gtk::gdk::MemoryTexture::new(surface.width(), surface.height(), format, &bytes, stride).upcast()
+}
+
+fn selected_outline(cr: &gtk::cairo::Context, tab: &gtk::graphene::Rect, bottom: f32) {
+    let radius = gtk::graphene::Size::new(layer_ui::SURFACE_RADIUS, layer_ui::SURFACE_RADIUS);
+    let square = gtk::graphene::Size::new(0., 0.);
+    let mut shape = gtk::gsk::RoundedRect::new(*tab, radius, radius, square, square);
+    shape.normalize();
+    crate::squircle::rounded_rect(cr, &shape);
+    feet(cr, tab, bottom);
+}
+
 pub(crate) fn hover(cr: &gtk::cairo::Context, tab: &gtk::graphene::Rect, corners: [i8; 2]) {
     let [left, right] = corners.map(f32::from);
     let radius = gtk::graphene::Size::new(layer_ui::SURFACE_RADIUS, layer_ui::SURFACE_RADIUS);
@@ -327,3 +375,7 @@ mod tests {
         assert_eq!([alpha(50,0),alpha(0,29),alpha(99,29)],[255,255,255]);
     }
 }
+
+#[cfg(test)]
+#[path = "native_panel_tab_pixel_tests.rs"]
+mod native_rgba_pixels;

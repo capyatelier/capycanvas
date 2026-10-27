@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::f64::consts::FRAC_PI_2;
 
 pub(crate) const KEEP_ROUND: &str = "capy-keep-round";
+const CACHED_MASK: &str = "capy-cached-mask";
 const CORNER_SEGMENTS: u32 = 24;
 const MASK_PRUNE_THRESHOLD: usize = 512;
 pub const CORNER_FIT: f32 = 0.54;
@@ -56,6 +57,52 @@ pub fn rounded_rect(cr: &cairo::Context, rect: &gsk::RoundedRect) {
     cr.line_to(left, top + top_left[1]);
     corner(cr, [left + top_left[0], top + top_left[1]], [-top_left[0], 0.], [0., -top_left[1]]);
     cr.close_path();
+}
+
+pub(crate) struct CachedMask {
+    bounds: graphene::Rect,
+    raster: gsk::RenderNode,
+    texture: RefCell<Option<gdk::Texture>>,
+    node: RefCell<Option<gsk::RenderNode>>,
+}
+
+impl CachedMask {
+    pub fn new(bounds: &graphene::Rect, draw: impl FnOnce(&cairo::Context)) -> Self {
+        let raster = gsk::CairoNode::new(bounds);
+        let cr = raster.draw_context();
+        draw(&cr);
+        cr.set_source_rgba(1., 1., 1., 1.);
+        cr.fill().unwrap();
+        drop(cr);
+        Self { bounds: *bounds, raster: raster.upcast(), texture: RefCell::default(), node: RefCell::default() }
+    }
+
+    pub fn ready(&self) -> bool { self.texture.borrow().is_some() }
+
+    pub fn set_texture(&self, texture: gdk::Texture) {
+        *self.texture.borrow_mut() = Some(texture);
+        self.node.borrow_mut().take();
+    }
+
+    pub fn node(&self) -> gsk::RenderNode {
+        let Some(texture) = self.texture.borrow().clone() else { return self.raster.clone(); };
+        self.node.borrow_mut().get_or_insert_with(|| gsk::DebugNode::new(
+            gsk::CrossFadeNode::new(&self.raster, gsk::TextureNode::new(&texture, &self.bounds), 0.),
+            CACHED_MASK.into()).upcast()).clone()
+    }
+}
+
+fn grid_transform(transform: &gsk::Transform) -> bool {
+    if !matches!(transform.category(), gsk::TransformCategory::Identity | gsk::TransformCategory::_2dTranslate
+        | gsk::TransformCategory::_2dAffine | gsk::TransformCategory::_2d) { return false; }
+    let (xx, yx, xy, yy, dx, dy) = transform.to_2d();
+    [xx, yx, xy, yy, dx, dy].into_iter().all(|value| value.fract() == 0.)
+        && xx.abs() + yx.abs() == 1. && xy.abs() + yy.abs() == 1. && xx * xy + yx * yy == 0.
+}
+
+fn grid_bounds(bounds: &graphene::Rect, scale: f64) -> bool {
+    [bounds.x(), bounds.y(), bounds.width(), bounds.height()].into_iter()
+        .all(|value| (f64::from(value) * scale).fract() == 0.)
 }
 
 fn squircle_rect(circular: &gsk::RoundedRect) -> gsk::RoundedRect {
@@ -244,8 +291,9 @@ fn gaussian_blur(values: &mut [f32], size: usize, sigma: f64) {
 #[derive(Default)]
 struct Converter {
     scale: f64,
-    nodes: HashMap<usize, (gsk::RenderNode, gsk::RenderNode)>,
-    previous: HashMap<usize, (gsk::RenderNode, gsk::RenderNode)>,
+    aligned: bool,
+    nodes: HashMap<(usize, bool), (gsk::RenderNode, gsk::RenderNode)>,
+    previous: HashMap<(usize, bool), (gsk::RenderNode, gsk::RenderNode)>,
     masks: HashMap<MaskKey, glib::WeakRef<gdk::Texture>>,
     shadows: HashMap<[u32; 22], [gdk::Texture; 8]>,
 }
@@ -255,6 +303,7 @@ impl Converter {
         if self.scale != scale {
             *self = Self { scale, ..Self::default() };
         }
+        self.aligned = scale.fract() == 0.;
         self.previous = std::mem::take(&mut self.nodes);
         if self.masks.len() > MASK_PRUNE_THRESHOLD {
             self.masks.retain(|_, mask| mask.upgrade().is_some());
@@ -268,7 +317,7 @@ impl Converter {
     }
 
     fn convert(&mut self, node: &gsk::RenderNode) -> gsk::RenderNode {
-        let key = node.as_ptr() as usize;
+        let key = (node.as_ptr() as usize, self.aligned);
         if let Some((_, converted)) = self.nodes.get(&key) {
             return converted.clone();
         }
@@ -320,22 +369,34 @@ impl Converter {
         }
         if let Some(transform) = node.downcast_ref::<gsk::TransformNode>() {
             let matrix = transform.transform();
-            return self.rebuild(node, &transform.child(), |child| {
+            let aligned = self.aligned;
+            self.aligned &= grid_transform(&matrix);
+            let converted = self.rebuild(node, &transform.child(), |child| {
                 gsk::TransformNode::new(child, Some(&matrix)).upcast()
             });
+            self.aligned = aligned;
+            return converted;
         }
         if let Some(clip) = node.downcast_ref::<gsk::ClipNode>() {
             let rect = clip.clip();
-            return self.rebuild(node, &clip.child(), |child| gsk::ClipNode::new(child, &rect).upcast());
+            let aligned = self.aligned;
+            self.aligned &= grid_bounds(&rect, self.scale);
+            let converted = self.rebuild(node, &clip.child(), |child| gsk::ClipNode::new(child, &rect).upcast());
+            self.aligned = aligned;
+            return converted;
         }
         if let Some(opacity) = node.downcast_ref::<gsk::OpacityNode>() {
             let alpha = opacity.opacity();
             return self.rebuild(node, &opacity.child(), |child| gsk::OpacityNode::new(child, alpha).upcast());
         }
         if let Some(mask) = node.downcast_ref::<gsk::MaskNode>() {
-            return self.rebuild_pair(node, &mask.source(), &mask.mask(), |source, child| {
+            let aligned = self.aligned;
+            self.aligned &= grid_bounds(&node.bounds(), self.scale);
+            let converted = self.rebuild_pair(node, &mask.source(), &mask.mask(), |source, child| {
                 gsk::MaskNode::new(source, child, mask.mask_mode()).upcast()
             });
+            self.aligned = aligned;
+            return converted;
         }
         if let Some(color) = node.downcast_ref::<gsk::ColorMatrixNode>() {
             return self.rebuild(node, &color.child(), |child| {
@@ -367,6 +428,17 @@ impl Converter {
         }
         if let Some(debug) = node.downcast_ref::<gsk::DebugNode>() {
             let message = debug.message();
+            if message == CACHED_MASK {
+                let child = debug.child();
+                let alternatives = child.downcast_ref::<gsk::CrossFadeNode>().unwrap();
+                let end = alternatives.end_child();
+                let matched = end.downcast_ref::<gsk::TextureNode>().is_some_and(|node| {
+                    let bounds = node.bounds();
+                    node.texture().width() == (f64::from(bounds.width()) * self.scale).ceil() as i32
+                        && node.texture().height() == (f64::from(bounds.height()) * self.scale).ceil() as i32
+                });
+                return if self.aligned && matched { end } else { alternatives.start_child() };
+            }
             if message == KEEP_ROUND {
                 return node.clone();
             }
@@ -374,13 +446,16 @@ impl Converter {
         }
         if let Some(rounded) = node.downcast_ref::<gsk::RoundedClipNode>() {
             let clip = rounded.clip();
-            if clip.is_rectilinear() {
-                return self.rebuild(node, &rounded.child(), |child| {
-                    gsk::RoundedClipNode::new(child, &clip).upcast()
-                });
-            }
-            let child = self.convert(&rounded.child());
-            return gsk::MaskNode::new(child, self.mask(&squircle_rect(&clip), None), gsk::MaskMode::Alpha).upcast();
+            let aligned = self.aligned;
+            self.aligned &= grid_bounds(clip.bounds(), self.scale);
+            let converted = if clip.is_rectilinear() {
+                self.rebuild(node, &rounded.child(), |child| gsk::RoundedClipNode::new(child, &clip).upcast())
+            } else {
+                let child = self.convert(&rounded.child());
+                gsk::MaskNode::new(child, self.mask(&squircle_rect(&clip), None), gsk::MaskMode::Alpha).upcast()
+            };
+            self.aligned = aligned;
+            return converted;
         }
         if let Some(border) = node.downcast_ref::<gsk::BorderNode>() {
             let outline = border.outline();
@@ -670,3 +745,7 @@ impl Popover {
         glib::Object::new()
     }
 }
+
+#[cfg(test)]
+#[path = "native_window_reference.rs"]
+pub(crate) mod native_window_reference;

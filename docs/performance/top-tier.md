@@ -245,6 +245,7 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 | GTK Tool Set hover and press animation | 120 | Desktop diagnostic: **117.76 changing-color presents/s**, 116.67–118.08 per case; pooled gap p99 16.646 ms. Reference hardware unmeasured | [GTK tool caption hover](#gtk-tool-caption-hover), 2026-10-26 |
 | Panel or column resize | 120 | Android shared vectors and Web SVG projection are unmeasured on this reference tier. Expanding GTK divider desktop diagnostic: **54.49/s**, p99 41.689 ms; misses the 114 Hz floor. **Desktop diagnostic misses.** GTK GPU joins: 81.59–112.27 changing-geometry presents/s at 1×; 38.96–92.31 at 2×, worst p99 74.986 ms. Reference-tier qualification remains unset. Web Navigator: 30.00–30.64 Chrome surface presents/s; p99 50.00–58.34 ms. Windows GPU desktop diagnostic: 33.82–34.89 observed bounds changes/s beside 166.28–183.76 renderer submissions/s after display correction; fresh displayed FPS and gap-transition performance unqualified | [Web Navigator layout](#web-navigator-layout), 2026-10-19; [GTK Color resize](#gtk-color-panel-resize), 2026-10-10; [GTK column bridge diagnostic](#gtk-column-bridge-diagnostic), 2026-10-25; [GTK Tool Set density](#gtk-tool-set-density), 2026-10-26; [GTK toolbar dividers](#gtk-toolbar-divider-resize), 2026-10-26; [Windows GPU VM column resize](#windows-gpu-vm-column-resize), 2026-10-26 |
 | Windows window resize | 120 | Unqualified; local 60 Hz allocation/startup candidate: 55.97 observed native changes/s and 15.755 ms UI CPU/change, versus baseline brackets of 55.90–57.05/s and 15.662–15.771 ms. Combined-code comparison; displayed motion and reference hardware remain unmeasured | [Windows window resize](#windows-window-resize), [allocation comparison](#windows-allocation-comparison), 2026-10-27 |
+| GTK window resize | 120 | Reference hardware unmeasured. Desktop diagnostic misses: about 54 changing-window presents/s, worst gesture p99 33.48 ms. Cached tabs reduce GSK images by 23% and allocations by 22–25%; no consistent FPS speedup established | [GTK window resize](#gtk-window-resize), 2026-10-27 |
 | Pen pressure utility and curve drag | 120 | **Unqualified.** Current GTK desktop panel 119.20–119.40 presents/s, p99 up to 9.207 ms; curve 120.00, p99 up to 8.470 ms; reference tablet unmeasured | [GTK pen pressure utility](#gtk-pen-pressure-utility), 2026-10-10 UTC |
 | Windows tool bubble drag through four neighbours | 120 | Unmeasured on reference hardware; Surface Pro / Adreno X1-85 functional checks do not qualify timing (PresentMon ETW access denied) | [Windows tool bubbles](../development/windows.md#tool-bubbles) |
 | Windows HDR color bubble drag and intensity scrub | 120 | Unmeasured on reference hardware; native input and pixel checks do not qualify presentation timing (PresentMon ETW access denied) | [Windows tool bubbles](../development/windows.md#tool-bubbles) |
@@ -5231,6 +5232,59 @@ is 0.348 s; warm canvas motion does not enter this transport. Reproduce with the
 `--measure-isolated PATH` modes under private disk-backed `TMPDIR`.
 Raw commands, source hashes and limits are retained under
 `artifacts/input-safety-next/m4-linux-photo-reader-verification.txt`.
+
+## GTK window resize
+
+The 2026-10-27 desktop diagnostic uses an RTX PRO 6000 Blackwell Max-Q,
+Vulkan driver 615.71.09, GTK 4.24.1 with GSK Vulkan and private Mutter 50.5
+at 1600 × 1000, 120 Hz, scale 1. Both release builds use the default workspace
+and a 1333 × 1000 drawing. Three warmed six-second native corner drags vary
+the window from 1020 × 710 to 1180 × 810. The control is `cdfccb3c4`; the
+candidate is based on `92361972c`, whose intervening GTK change affects a
+different tool's caption. Color management remains enabled.
+
+Separate Vulkan probes count complete present-to-present groups during each
+contact. The table gives frame-weighted means. Allocation and free times are
+CPU time inside `vkAllocateMemory` and `vkFreeMemory`.
+
+| Theme and build | Images/frame | Allocations/frame | Allocate ms/frame | Free ms/frame | Other image MiB/frame |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Dark control | 111.97 | 8.45 | 4.21 | 4.69 | 8.97 |
+| Dark cached tabs | 86.66 | 6.61 | 3.67 | 4.24 | 7.66 |
+| Light control | 112.23 | 8.77 | 4.37 | 5.41 | 9.00 |
+| Light cached tabs | 86.66 | 6.56 | 3.58 | 3.99 | 7.65 |
+
+Every frame includes one whole-window float16 SDR color-conversion image;
+only that image's bytes are excluded from the last column. New 222 × 36 BGRA8
+images fall from twelve to zero per frame, and float16 images of that size
+fall from 36 to 24. The largest remaining other image is 650.375 KiB in both
+builds. Capy images remain about 85.7/frame, total other images exceed 1 MiB
+and individual images exceed 512 KiB. These resource budgets remain unmet.
+
+Both themes' compositor and window captures match the control byte for byte.
+The tab-mask matrix passes 1,296 comparisons across fractional placements,
+scales, transparency, SDR/PQ/linear color states and float targets.
+
+Presentation runs disable the probe and bracket each candidate with controls.
+Rates below pool the three moving-only gestures; p99 is the worst gesture's
+presentation interval. Full-contact counts, onset and longest gaps remain in
+the raw reports.
+
+| Theme and run | Control before fps | Cached tabs fps | Control after fps | Cached tabs p99 ms |
+| --- | ---: | ---: | ---: | ---: |
+| Dark | 55.49 | 54.17 | 37.26 | 33.26 |
+| Dark repeat | 50.73 | 53.59 | 33.79 | 33.33 |
+| Light | 43.46 | 54.60 | 45.06 | 33.48 |
+
+Resource counts and allocation CPU time improve consistently. The dark runs
+do not establish a consistent FPS gain, and the controls show substantial
+order-dependent variation on the shared GPU. Resize still misses both the
+114 fps floor and the 16.7 ms p99 limit. Pan remains about 120 fps in both
+themes. Raw captures, per-frame
+probe records, source hashes and comparisons are under
+`artifacts/gtk-window-resize-inventory/` and
+`artifacts/gtk-window-resize-optimization/`. This desktop fixture does not
+qualify reference-tablet performance.
 
 ## Windows window resize
 

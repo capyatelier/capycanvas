@@ -31,6 +31,7 @@ mod imp {
         fn snapshot(&self, snapshot: &gtk::Snapshot) {
             let widget = self.obj();
             let state = self.state.borrow();
+            if state.connections.is_empty() { return; }
             let Some(rows) = &state.rows else { return; };
             let bounds = gtk::graphene::Rect::new(0., 0., widget.width() as f32, widget.height() as f32);
             let geometry: HashMap<_, _> = rows.borrow().values()

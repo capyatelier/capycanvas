@@ -118,6 +118,8 @@ mod workspace_drop_size;
 mod workspace_motion;
 #[path = "workspace_resize_tests.rs"]
 mod workspace_resize;
+#[path = "native_window_resize_tests.rs"]
+mod native_window_resize;
 #[path = "workspace_edge_grab_tests.rs"]
 mod workspace_edge_grab;
 #[path = "fullscreen_tests.rs"]
