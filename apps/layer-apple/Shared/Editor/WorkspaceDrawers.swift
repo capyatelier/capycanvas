@@ -142,6 +142,11 @@ private struct WorkspaceContentDrawer: View {
     private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
     var body: some View {
         let placement = drawer.geometry["placement"], connection = drawer.geometry["connection"], tabs = drawer.model["tabs"]
+#if os(macOS)
+        let shadowCuts = connection.isNull ? [] : [connection["bounds"].rect, placement["anchor"].rect]
+#else
+        let shadowCuts = connection.isNull ? [] : [connection["bounds"].rect]
+#endif
         let panels = tabs["panels"].array.map { drawer.panel($0) }
         if !placement.isNull {
             ZStack(alignment: .topLeading) {
@@ -180,7 +185,7 @@ private struct WorkspaceContentDrawer: View {
                 }.frame(width: placement["bounds"].rect.width, height: placement["bounds"].rect.height, alignment: .topLeading)
                     .environment(\.editorPalette, palette.glassy)
                     .modifier(DrawerContainerSurface(drawers: store.contentDrawers, bounds: placement["bounds"].rect,
-                        cuts: connection.isNull ? [] : [connection["bounds"].rect],
+                        cuts: shadowCuts,
                         fill: palette.glassPanel, shadow: 12, joined: connection["square_corners"], excluding: drawer.id,
                         identifier: drawer.id == "tool" ? "tool-drawer" : "column-drawer-" + drawer.id))
                     .modifier(NavigatorReveal())

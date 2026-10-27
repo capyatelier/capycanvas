@@ -219,9 +219,9 @@ tables, such as [low tier](../performance/low-tier.md).
 - The blur reach is in device pixels, so on a 2× display it covers half the
   distance it does at 1×. Scaling it to logical pixels would roughly double the
   refreshed area and add pen latency on tablets.
-- Drawer shadows are cut only beneath connectors. Beneath a translucent source
-  toolbar or column they can darken it by about one level; drawer-style tests
-  therefore run at Off, as on GTK.
+- Drawer shadows are cut beneath connectors. macOS also cuts the shadow beneath
+  the opening tile so its title-bar bridge stays continuous; beneath other
+  translucent source surfaces shadows can darken them by about one level.
 - Web Zen glass follows the chosen visibility, not the fade animation.
 - On macOS and iPadOS SwiftUI commits and Metal presentation are not
   synchronized, so glass can trail a moving panel by a frame. Implicit SwiftUI
