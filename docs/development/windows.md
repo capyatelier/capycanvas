@@ -874,6 +874,9 @@ and optional preserved linear channels; black need not store `linear_rgb`.
 after committing: observe the shared acknowledgement without repeating the action.
 Document fixtures activate the owner before focusing a native text field, wait
 for focus before Enter, and edit controlled ink through the visible Color panel.
+Native workflow presenters retain request identities through busy and preview
+updates. An acknowledged empty request retires its identity before modal blocking
+is applied.
 Focused GPU and writeback checks maximize the owned workspace first. File menu
 actions use the focused native menu item and Enter.
 Use `exercise-documents.ps1 -Journey gpu-recovery` for just the imported-image

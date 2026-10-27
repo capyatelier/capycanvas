@@ -664,6 +664,8 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
             dialog.Language(data->language());
             if(busyDialog){dialog.Title(box_value(busyTitle(object(model,L"windows_document"))));dialog.CloseButtonText(common(L"cancel"));}
         }
+        auto document=object(model,L"windows_document");
+        if(!document.Size())workflowStamp=L"";
         if(busyDialog&&str(object(model,L"windows_document"),L"type")!=L"workflow_busy"&&str(object(model,L"windows_document"),L"type")!=L"opening_busy"&&str(object(model,L"windows_document"),L"type")!=L"package_busy"){busyCompleted=true;if(dialog)dialog.Hide();}
         if(stopping||blocked||showing||(newDrawing&&newDrawing->IsOpen()))return;
         auto recovery=object(model,L"windows_recovery");auto failure=str(recovery,L"error");
@@ -676,7 +678,6 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
         else if(!flag(recovery,L"busy")&&failure.empty()){
             auto stamp=to_hstring(uint64_t(drawing.GetNumber()));if(stamp!=drawingStamp){drawingStamp=stamp;recoverDrawing(drawing.GetNumber());return;}
         }
-        auto document=object(model,L"windows_document");
         if(str(document,L"type")==L"workflow_busy"||str(document,L"type")==L"opening_busy"||str(document,L"type")==L"package_busy"){handled=uint32_t(num(document,L"id"));working(document);return;}
         if(str(document,L"type")==L"package"){
             auto stamp=to_hstring(uint32_t(num(document,L"id")))+L"/"+to_hstring(uint32_t(num(document,L"serial")));if(stamp!=packageStamp){packageStamp=stamp;package(document);}return;
