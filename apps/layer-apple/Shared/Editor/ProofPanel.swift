@@ -6,9 +6,13 @@ struct ProofPanel: View {
     @ObservedObject var controller: ProofController
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var forward = true
-    @State private var displayedMode = "off"
+    @State private var displayedMode: String
     private var model: JSON { store.snapshot["proof_panel"] }
     private var copy: JSON { store.catalog["proof_copy"] }
+    init(store: EditorStore, controller: ProofController) {
+        self.store = store; self.controller = controller
+        _displayedMode = State(initialValue: store.snapshot["proof_panel"]["mode"].string)
+    }
     var body: some View {
         VStack(spacing: store.panelMetrics.spacing) {
             HStack(spacing: store.panelMetrics.spacing) {
@@ -35,7 +39,7 @@ struct ProofPanel: View {
                     .transition(.asymmetric(insertion: .move(edge: forward ? .trailing : .leading),
                         removal: .move(edge: forward ? .leading : .trailing)))
             }.clipped()
-                .onChange(of: model["mode"].string, initial: true) { _, next in
+                .onChange(of: model["mode"].string) { _, next in
                     let modes = ["off", "sdr", "print"]
                     forward = (modes.firstIndex(of: next) ?? 0) > (modes.firstIndex(of: displayedMode) ?? 0)
                     withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) { displayedMode = next }

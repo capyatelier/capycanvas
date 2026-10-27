@@ -272,6 +272,24 @@ import Darwin
         try await store.apply(["type": "invoke", "command": "undo_workspace"])
         try await wait("Undo resize restores the natural body and height") { fitted("sizes") && abs(measured("sizes")["content_height"].number - sizes) < 0.02 }
 
+        try await store.apply(["type": "customize", "action": ["type": "set_column_collapsed", "group": 16, "collapsed": true]])
+        try await store.apply(["type": "customize", "action": ["type": "toggle_column_drawer", "group": 16, "panel": "layers"]])
+        func glass() -> JSON {
+            let sent = Mirror(reflecting: store.glass).descendant("sent") as? String ?? "null"
+            return (try? JSON.decode(sent)) ?? JSON()
+        }
+        try await wait("Connected column glass settles") { !glass()["panels"].array.isEmpty }
+        let retainedGlass = glass()
+        guard let allocations = Mirror(reflecting: store.glass).descendant("panelAllocations") as? [String: PanelBridgeAllocation] else {
+            throw HostFailure(message: "Mounted panel allocations must remain available")
+        }
+        store.glass.panelMeasurements(allocations, layout: store.snapshot["layout"].replacing("glass_query_probe", with: JSON(1)))
+        let pendingGlass = glass()
+        precondition(!pendingGlass["panels"].array.isEmpty && pendingGlass["panel_revision"].uint == retainedGlass["panel_revision"].uint,
+            "A pending panel bridge query must retain the published glass")
+        try await store.apply(["type": "customize", "action": ["type": "toggle_column_drawer", "group": 16, "panel": "layers"]])
+        try await store.apply(["type": "customize", "action": ["type": "set_column_collapsed", "group": 16, "collapsed": false]])
+
         try await float("layers", x: 640)
         let layers = measured("layers")["content_height"].number
         try await store.apply(["type": "invoke", "command": "add_layer"])

@@ -119,7 +119,7 @@ private struct WorkspacePanelGroup: View {
             WorkspacePanelGroupContent(store: store, group: group, expansion: expansion,
                 panels: group["panels"].array.map { store.panel($0.string) })
                 .environment(\.workspaceGesturesEnabled, (!store.snapshot["chrome_hidden"].bool || group["floating"].bool || group["zen_kept"].bool) && (workspace.expansion.isNull || !expansion.isNull))
-                .modifier(PanelBridgeMeasurement(key: "group:\(id)", active: expansion.isNull))
+                .modifier(PanelBridgeMeasurement(key: "group:\(id)", active: expansion.isNull && !group["floating"].bool))
                 .modifier(WorkspacePlacement(motion: store.workspaceMotion, group: group,
                     bounds: expansion.isNull ? group["bounds"] : expansion["bounds"], clipsGroup: true))
                 .allowsHitTesting(workspace.expansion.isNull || !expansion.isNull)

@@ -7,6 +7,7 @@ import SwiftUI
     private var arcs: [UUID: [CGFloat]] = [:]
     private var colorBubbles: [UUID: [CGFloat]] = [:]
     private var panelAllocations: [String: PanelBridgeAllocation] = [:]
+    private var panelLayout = JSON()
     private var panelFrame = JSON()
     private var panelQueryKey = ""
     private var panelRevision: UInt64 = 0
@@ -53,12 +54,11 @@ import SwiftUI
         let key = JSON([request.raw, layout.raw, store.state["document_file"]["epoch"].raw]).stableKey
         guard key != panelQueryKey else { flush(); return }
         panelQueryKey = key
-        setPanelFrame(JSON())
         flush()
-        DispatchQueue.main.async { [weak store = store] in store?.objectWillChange.send() }
         store.query(request.object) { [weak self] frame in
             guard let self, self.panelQueryKey == key else { return }
             guard !frame.isNull else { self.panelQueryKey = ""; return }
+            self.panelLayout = layout
             self.setPanelFrame(frame)
             self.flush()
             self.store?.objectWillChange.send()
@@ -121,14 +121,16 @@ import SwiftUI
         return panelFrame["columns"].array.compactMap { column in
             let id = column["column"].uint
             let bridges = panelFrame["bridges"].array.filter { $0[0].uint == id }.map { $0[2] }
-            guard let first = bridges.first,
-                let columnAllocation = panelAllocations["column:\(id)"], !bridges.isEmpty else { return nil }
+            guard let first = bridges.first else { return nil }
+            let columnOpacity = panelAllocations["column:\(id)"]?.opacity ?? 0
             let receivers: [[String: Any]] = first["receivers"].array.compactMap { receiver in
                 let group = receiver["group"].uint
-                guard let allocation = panelAllocations["group:\(group)"], !allocation.bounds.isEmpty else { return nil }
-                let tabbed = store.snapshot["layout"]["groups"].array.first { $0["id"].uint == group }?["tabs_visible"].bool == true
-                let active = store.snapshot["layout"]["groups"].array.first { $0["id"].uint == group }?["active"].string ?? ""
-                let panels = store.snapshot["layout"]["groups"].array.first { $0["id"].uint == group }?["panels"].array.map(\.string) ?? []
+                let bounds = panelFrame["groups"].array.first { $0["group"].uint == group }?["bounds"].rect ?? .zero
+                guard !bounds.isEmpty else { return nil }
+                let opacity = panelAllocations["group:\(group)"]?.opacity ?? 0
+                let tabbed = panelLayout["groups"].array.first { $0["id"].uint == group }?["tabs_visible"].bool == true
+                let active = panelLayout["groups"].array.first { $0["id"].uint == group }?["active"].string ?? ""
+                let panels = panelLayout["groups"].array.first { $0["id"].uint == group }?["panels"].array.map(\.string) ?? []
                 let index = panels.firstIndex(of: active)
                 let tab = index.flatMap { store.workspace.tabFrames["\(group):\($0)"] }
                 let moving = store.workspace.tabSlide.grab.flatMap { grab -> (WorkspaceTabFrame, CGFloat)? in
@@ -136,19 +138,19 @@ import SwiftUI
                         let index = grab.panels.firstIndex(of: active), grab.frames.indices.contains(index) else { return nil }
                     return (grab.frames[index], CGFloat(store.workspace.tabSlide.offset(group: group, index: index)))
                 }
-                let tabBar = tabbed ? CGRect(x: allocation.bounds.minX, y: allocation.bounds.minY,
-                    width: allocation.bounds.width, height: min(36, allocation.bounds.height)) : .zero
+                let tabBar = tabbed ? CGRect(x: bounds.minX, y: bounds.minY,
+                    width: bounds.width, height: min(36, bounds.height)) : .zero
                 return ["group": group, "tab_bar": tabBar.values,
                     "active_tab": (tabbed ? moving.map { $0.0.bounds.offsetBy(dx: $0.1, dy: 0) }
                         ?? tab?.bounds : nil)?.values ?? CGRect.zero.values,
                     "tab_clip": (tabbed ? tabBar.intersection(moving?.0.clip ?? tab?.clip ?? tabBar) : .zero).values,
-                    "color": panel.withOpacity(allocation.opacity), "strip_color": strip.withOpacity(allocation.opacity)]
+                    "color": panel.withOpacity(opacity), "strip_color": strip.withOpacity(opacity)]
             }
             guard receivers.count == first["receivers"].array.count else { return nil }
             panelSurfaceColumns.insert(id)
             panelSurfaceGroups.formUnion(first["receivers"].array.map { $0["group"].uint })
             return ["offset": [0, 0], "sidebar": column["bounds"].rect.values,
-                "radii": column["radii"].raw, "color": panel.withOpacity(columnAllocation.opacity),
+                "radii": column["radii"].raw, "color": panel.withOpacity(columnOpacity),
                 "bridges": bridges.map(\.raw), "groups": receivers]
         }
     }
