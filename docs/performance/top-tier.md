@@ -5724,6 +5724,37 @@ controller parsing failure/pause stay under
 `artifacts/windows/visual-glitches/navigator-layout/resize-cpu/`. That failure
 occurs after the valid first baseline; no contacts are discarded or repeated.
 
+#### Snapshot-bound bridge geometry
+
+The 2026-10-27 exact-layout bridge fix compares a fresh native baseline at
+`4cffde83c` with the candidate on the same 60 Hz i7-1255U laptop. Each phase has
+three warmed five-second native growth/reversal contacts. The closed private
+Paint seed, input driver, extents and initial control bounds match; tracing,
+capture, UI Automation polling and compilation are absent during contacts.
+
+| Build order | Observed native changes/s | UI CPU | UI CPU ms/observed change |
+| --- | ---: | ---: | ---: |
+| Current-main baseline first | 56.37 | 89.74% | 15.9205 |
+| Snapshot-bound bridge candidate | 56.84 | 89.64% | 15.7715 |
+| Current-main baseline last | 55.29 | 89.83% | 16.2462 |
+
+Pooled baseline cost is 16.0818 ms/change. The candidate is 1.93% lower, within
+the 2.05% baseline drift and overlapping contact spread: no regression signal
+or distinct CPU improvement is established. All nine contacts cover the same
+1100 × 750 to 2099 × 1349 bounds and close normally with empty status/stderr.
+Native bounds changes are not displayed frames; these results do not qualify
+110–120 Hz or the reference-tier photo workload.
+
+Baseline executable/DLL SHA-256 prefixes are `60D1CE8437A0` / `C565864C5E50`;
+candidate prefixes are `492FC60BCD6C` / `26B1A55CEAD2`. Both native code and
+Rust change in this final comparison. A separate same-DLL, one-file control
+reduces cost from 16.8063 to 15.5139 ms/change when the rejected metadata-only
+retention is removed; it supports that diagnosis without establishing final
+main performance. The synchronous projection prototype also regresses and is
+not shipped. Exact identities, raw samples, drift and scope remain under
+`artifacts/windows/visual-glitches/snapshot-bridges-v22/resize-cpu/` and
+`retention-control/`.
+
 ### Windows startup background
 
 Fresh private profiles on the same laptop compare the preceding button build

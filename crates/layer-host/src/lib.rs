@@ -713,7 +713,7 @@ impl NativeHost {
             ExportValidation { recipe: layer_ui::ExportRecipe },
             ExportDraft { recipe: layer_ui::ExportRecipe, action: layer_ui::ExportDraftAction },
             Header { request: header::HeaderRequest },
-            PanelBridges { viewport: [f32; 2], measure: layer_ui::PanelBridgeMeasure },
+            PanelBridges { layout: layer_ui::ResolvedLayout, measure: layer_ui::PanelBridgeMeasure },
             Catalog,
             NativeCaption { caption: layer_ui::NativeCaption },
             DocumentDeliveryMessage { message: layer_ui::DocumentDeliveryMessage },
@@ -854,10 +854,7 @@ impl NativeHost {
         }
         let result = match serde_json::from_value(query).map_err(|e| e.to_string())? {
             Query::Header { request } => self.header_request(request),
-            Query::PanelBridges { viewport, measure } => {
-                if !viewport.into_iter().all(|v|v.is_finite() && v>0.) {return Err("Invalid panel viewport".into());}
-                json!(self.session.layout(viewport).measured_panel_bridges(measure)?)
-            }
+            Query::PanelBridges { layout, measure } => json!(layout.measured_panel_bridges(measure)?),
             Query::Catalog => json!(self.catalog),
             Query::NativeCaption { caption } => json!(caption.message(self.session.localization())),
             Query::DocumentDeliveryMessage { message } => json!(message.message(self.session.localization())),

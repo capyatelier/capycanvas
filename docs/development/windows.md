@@ -45,6 +45,14 @@ completion latch publishes surface readiness once per GPU generation; the UI
 attaches the cached handle without waiting for the GPU. Replacement renderers
 get a new latch, so retired callbacks cannot reveal an uninitialized surface.
 
+Panel bridge queries carry the measured snapshot's layout and native allocations.
+The snapshot decoder retains encoded layout bytes off the UI thread; queries
+reuse those bytes and decode their projection replies in the background. Replies
+must match both the layout generation and allocation key. GPU background adoption
+still requires its matching presentation revision. The optional-query queue holds
+at most eight requests of 256 KiB each, matching the native bridge's layout-query
+limit; it remains separate from input and command admission.
+
 Binary WebP preview calls reject invalid slice lengths and overlapping dimension
 outputs before borrowing input. They write dimensions only after the decoded
 preview handle is stored. Input and output allocations remain valid for the call.

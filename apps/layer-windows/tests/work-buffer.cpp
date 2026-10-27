@@ -607,6 +607,16 @@ int main() {
     assert(queries.Take()->json=="3");
     for(auto expected:{"0","1","2","4","5","6","7"})assert(queries.Take()->json==expected);
     assert(queries.Empty()&&!queries.Take()&&lifetime.expired());
+    std::string measuredLayout="{\"type\":\"panel_bridges\",\"layout\":{\"groups\":[";
+    for(int i=0;i<128;++i){
+        if(i)measuredLayout+=',';
+        measuredLayout+="{\"id\":"+std::to_string(i)+",\"bounds\":{\"x\":123.333333333333,\"y\":456.666666666667,\"width\":240,\"height\":320}}";
+    }
+    measuredLayout+="]},\"measure\":{\"groups\":[],\"columns\":[]}}";
+    assert(measuredLayout.size()>8192);
+    auto expectedLayout=measuredLayout;
+    assert(queries.Push({CanvasQueryKind::Workspace,std::move(measuredLayout),{}}));
+    assert(queries.Take()->json==expectedLayout&&queries.Empty());
     extra.json.reserve(CanvasQueryQueue::MaxPayload+1);
     assert(!queries.Push(std::move(extra)));assert(extra.json=="retry");
     assert(queries.Push({CanvasQueryKind::Filters,"discard",{}}));queries.Clear();

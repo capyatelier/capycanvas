@@ -49,7 +49,7 @@ import SwiftUI
             guard icons.count == column["groups"].array.flatMap({ $0["icons"].array }).count else { return nil }
             return ["column": id, "bounds": bounds.json, "content": content.json, "icons": icons]
         }
-        let request = JSON(["type": "panel_bridges", "viewport": layout["viewport"].raw,
+        let request = JSON(["type": "panel_bridges", "layout": layout.raw,
             "measure": ["groups": groups, "columns": columns]])
         let key = JSON([request.raw, layout.raw, store.state["document_file"]["epoch"].raw]).stableKey
         guard key != panelQueryKey else { flush(); return }

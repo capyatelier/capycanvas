@@ -83,10 +83,44 @@ The pushed panel milestone is `f09f45b0d`. Its normal Release x64 rebuild with
 current-main Rust and the focused native tests pass. The timings above retain
 their frozen baseline Rust identity; they do not measure the newly rebuilt DLL.
 
-Navigator cutouts also observe native size changes through a coalesced callback.
-This removes a stale surround exposed by configuration resizing. Check the live
-visible overview bounds against the published slot intersected with its clip;
+Navigator now measures and arranges its image and fixed action row together in
+its first native layout (`19d51c3c3`), including finite, minimum and fractional
+allocations. A numeric geometry key suppresses unchanged global notifications.
+Check the visible overview against the published slot intersected with its clip;
 the tracked expansion journey waits for that agreement after resizing.
+
+The subsequent Windows UI milestones must also be present:
+
+```powershell
+foreach ($milestone in @('04fd2e228','a9262291a','650d36a26','e27fda7a8','52e6dc961','7f3a7bfab','435c52fdf','19d51c3c3')) {
+    git merge-base --is-ancestor $milestone HEAD
+    if ($LASTEXITCODE -ne 0) { throw "Missing Windows UI milestone $milestone" }
+}
+```
+
+These repair contact integer serialization and render-owner liveness; admit
+new tool bubbles only on canvas; retain model button fills during drawing;
+correct drawer height-for-width and source corners; show a defined first image;
+apply palette feedback to actual SDK dropdown/dialog buttons; reserve the whole
+numeric component from slide resize; and fit Navigator without deferred sizing.
+The current snapshot-bound bridge query also projects the measured layout rather
+than a later live workspace. Use the normal Rust build: its query contract changed.
+
+The focused bridge journey checks column open/close, receiver geometry/radii and GPU acknowledgement,
+retained controls across resize, and workspace returns. Settled acknowledgements
+do not prove complete intermediate frames. Whole-column/workspace/tab transitions
+still have independent native-control and GPU-background adoption; this remains
+an open structural bug. Physical release can also precede adopted workspace tint,
+as it does in the current GTK sequence. Do not report either issue fixed from
+these geometry assertions.
+
+The final capture-free 60 Hz bridge bracket measures 15.77 ms of UI CPU per
+observed native resize change versus 16.08 ms for main. The difference is within
+drift and contact variance; this remains roughly twice the 8.33 ms budget.
+A synchronous bridge
+prototype increased this to 17.96 ms and was rejected. Shared split-UI rendering
+and native drawing-surface probes are local experiments, not shipped application
+transactions or 120 Hz evidence. Test the checked-in app and report fresh numbers.
 
 This remains above the 8.33 ms CPU budget. Next measurements should separate
 header placement from restyling and convert and diff decoded packets off the UI
@@ -134,6 +168,16 @@ git rev-parse HEAD | Set-Content (Join-Path $results 'commit.txt')
 $exe = Join-Path $results 'build/CapyCanvas.exe'
 Get-FileHash $exe, (Join-Path $results 'build/layer_windows.dll') |
     Format-List | Out-File (Join-Path $results 'binary-hashes.txt')
+```
+
+Run the focused bridge geometry journey in each theme before timing:
+
+```powershell
+foreach ($theme in @('light','dark')) {
+    ./apps/layer-windows/scripts/test-desktop.ps1 `
+        -Script ./apps/layer-windows/scripts/exercise-panel-bridge-layout.ps1 `
+        -Parameters @{Executable=$exe;Theme=$theme} -TimeoutSeconds 300
+}
 ```
 
 Stop only builds and test processes owned by this run before measuring. Use a

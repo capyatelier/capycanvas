@@ -1522,6 +1522,8 @@ winrt::fire_and_forget CanvasWindow::DecodeSnapshots(std::shared_ptr<SnapshotSta
             return value;
         };
         batch={parse(raw.full),parse(raw.layout,true),parse(raw.workspace,true),parse(raw.camera,true),parse(raw.search,true),parse(raw.localization),parse(raw.glass)};
+        if(batch.full)batch.fullLayoutBytes=to_string(CapyUi::object(batch.full,L"layout").Stringify());
+        if(batch.layout)batch.layoutBytes=to_string(CapyUi::object(batch.layout,L"layout").Stringify());
     }catch(hresult_error const& error){failure=to_string(error.message());}
      catch(std::exception const& error){failure=error.what();}
     raw={};
@@ -1567,9 +1569,10 @@ void CanvasWindow::ApplyPending(PreparedSnapshots batch) {
     try {
         if(batch.full){
             if(batch.localization)batch.full.Insert(L"localization",batch.localization);
-            ApplyModel(batch.full);
+            ApplyModel(batch.full,std::move(batch.fullLayoutBytes));
         }
-        for(auto const& patch:{batch.layout,batch.workspace,batch.camera,batch.search,batch.glass})
+        if(!closing&&batch.layout)workspace->Apply(batch.layout,std::move(batch.layoutBytes));
+        for(auto const& patch:{batch.workspace,batch.camera,batch.search,batch.glass})
             if(!closing&&patch)workspace->Apply(patch);
     } catch(hresult_error const& error) {
         char code[16];std::snprintf(code,sizeof code," [0x%08X]",uint32_t(error.code().value));
@@ -1682,7 +1685,7 @@ void CanvasWindow::SendLaunchFiles(Windows::Data::Json::JsonObject const& model)
 void CanvasWindow::RefreshWorkspaceSwitcher() {
     if(!closing&&!closed)Send(R"({"operation":"input","input":{"type":"refresh_switcher"}})",CanvasCommandKind::Workspace);
 }
-void CanvasWindow::ApplyModel(Windows::Data::Json::JsonObject const& model) {
+void CanvasWindow::ApplyModel(Windows::Data::Json::JsonObject const& model,std::string layoutBytes) {
     using namespace CapyUi;
     auto presentation=object(model,L"localization");
     if(presentation.Size()){
@@ -1695,7 +1698,7 @@ void CanvasWindow::ApplyModel(Windows::Data::Json::JsonObject const& model) {
     }
     auto focus=settings&&settings->IsOpen()?FocusManager::GetFocusedElement(root.XamlRoot()).try_as<Control>():nullptr;
     if(focus)if(auto owner=ItemsControl::ItemsControlFromItemContainer(focus))focus=owner;
-    if(!workspace->Apply(model))return;
+    if(!workspace->Apply(model,std::move(layoutBytes)))return;
     lastModel=model;
     auto suspended=flag(model,L"windows_rendering_suspended");
     auto workspaceReady=flag(object(model,L"state"),L"workspace_ready");

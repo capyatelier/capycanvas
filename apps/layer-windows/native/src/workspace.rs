@@ -99,14 +99,14 @@ mod tests {
     }
 
     #[test]
-    fn windows_panel_bridge_query_uses_live_ids_and_actual_native_allocations_without_edits() {
+    fn windows_panel_bridge_query_uses_the_measured_snapshot_after_workspace_adoption() {
         let mut host=NativeHost::new(layer_ui::Platform::Windows).unwrap();
         let revision=host.session.engine().document().revision;
         let layout=host.session.layout([1400.,900.]);
         let groups:Vec<_>=layout.groups.iter().map(|g|json!([g.id,g.bounds])).collect();
         let columns:Vec<_>=layout.collapsed.iter().map(|c|json!({"column":c.id,"bounds":c.bounds,"content":c.content,
             "icons":c.groups.iter().flat_map(|g|&g.icons).map(|i|json!([i.panel,i.bounds])).collect::<Vec<_>>()})).collect();
-        let query=json!({"type":"panel_bridges","viewport":[1400,900],"measure":{"groups":groups,"columns":columns}});
+        let query=json!({"type":"panel_bridges","layout":layout,"measure":{"groups":groups,"columns":columns}});
         let result=metadata(super::query(&mut host,&query.to_string()).unwrap());
         assert!(result["error"].is_null());
         let actual=result["result"]["groups"].as_array().unwrap();
@@ -116,6 +116,12 @@ mod tests {
             assert_eq!(projected["bounds"],json!(group.bounds));
             assert_eq!(projected["radii"].as_array().unwrap().len(),4);
         }
+        let prepared=layer_ui::PreparedWorkspace::new(layer_ui::WorkspaceCapture::from_template(
+            &layer_ui::WorkspacePreset::Painter.layout(layer_ui::Platform::Windows)).unwrap()).unwrap();
+        host.session.adopt_workspace(prepared).unwrap();
+        host.resize(720,1200,1.5).unwrap();
+        assert_ne!(json!(host.session.layout([1400.,900.])),json!(layout));
+        assert_eq!(metadata(super::query(&mut host,&query.to_string()).unwrap()),result);
         let mut retired=query.clone();
         retired["measure"]["groups"].as_array_mut().unwrap()
             .push(json!([u32::MAX,{"x":0,"y":0,"width":1,"height":1}]));

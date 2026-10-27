@@ -19,7 +19,7 @@ struct CanvasQuery {CanvasQueryKind kind;std::string json;PreviewReply reply;};
 // when multiple panels or native menus request work together.
 class CanvasQueryQueue {
 public:
-    static constexpr size_t MaxItems=8,MaxPayload=8192;
+    static constexpr size_t MaxItems=8,MaxPayload=256*1024;
     bool Empty() const{return items.empty();}
     bool Push(CanvasQuery&& item){
         if(item.json.capacity()>MaxPayload)return false;

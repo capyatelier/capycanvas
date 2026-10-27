@@ -4,17 +4,20 @@
 namespace CapyUi {
 // Reply runs on the requesting UI thread. Capture weak view owners in reply;
 // the canvas owner may discard the callback during shutdown.
-inline bool QueryWorkspace(PreviewTransport const& transport,J const& request,
+inline bool QueryWorkspace(PreviewTransport const& transport,std::string request,
     std::function<void(J)> reply){
     auto dispatcher=Microsoft::UI::Dispatching::DispatcherQueue::GetForCurrentThread();
     if(!transport||!dispatcher)return false;
-    return transport(CanvasQueryKind::Workspace,to_string(request.Stringify()),
+    return transport(CanvasQueryKind::Workspace,std::move(request),
         [dispatcher,reply=std::move(reply)](PreviewPacket packet){
             J result;
             if(packet)try{result=J::Parse(to_hstring(NativeString(capy_preview_metadata(packet.get())).get()));}
                 catch(hresult_error const& error){OutputDebugStringW(error.message().c_str());}
             dispatcher.TryEnqueue([reply,result=std::move(result)]{reply(result);});
         });
+}
+inline bool QueryWorkspace(PreviewTransport const& transport,J const& request,std::function<void(J)> reply){
+    return QueryWorkspace(transport,to_string(request.Stringify()),std::move(reply));
 }
 inline void actionTooltip(std::shared_ptr<WorkspaceData> const& data,FrameworkElement const& owner,Control const& target,std::function<J()> action){
     tooltip(owner,AutomationProperties::GetName(target));

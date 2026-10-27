@@ -113,7 +113,9 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         int order=0;
     };
     std::map<uint32_t,Group> groups;
-    hstring panelBridgeKey,panelBridgeContext,lastPanelSurfaces;
+    hstring panelBridgeKey,lastPanelSurfaces;
+    std::string panelBridgeLayout;
+    uint64_t panelLayoutRevision=0,panelQueryLayoutRevision=0;
     J panelBridgeFrame;
     uint64_t panelBridgeRevision=0;
     std::shared_ptr<CommandSearchPopup> commandSearch=std::make_shared<CommandSearchPopup>();
@@ -360,7 +362,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             throw hresult_invalid_argument(L"Invalid workspace publication revision");
         return uint64_t(value);
     }
-    bool apply(J const& snapshot){
+    bool apply(J const& snapshot,std::string layoutBytes){
         auto previousGpu=num(data->model,L"windows_gpu_generation");
         bool relocalize=data->adoptLocalization(snapshot);
         if(relocalize){measureHost.Children().Clear();offscreen.clear();AutomationProperties::SetName(root,str(object(data->catalog,L"bootstrap"),L"drawing_workspace"));}
@@ -401,9 +403,10 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         struct Reset {bool& value;~Reset(){value=false;}} reset{data->updating};
         if(reflow)WorkspaceView::MergeLayout(data->model,snapshot);
         auto model=reflow?data->model:snapshot;
-        auto bridgeContext=object(model,L"layout").Stringify()+object(full?object(model,L"state"):data->state,L"document_file").GetNamedValue(L"epoch",JsonValue::CreateNullValue()).Stringify();
-        if(bridgeContext!=panelBridgeContext){
-            panelBridgeContext=bridgeContext;panelBridgeKey=L"";panelBridgeFrame=J{};++panelBridgeRevision;
+        if(layoutBytes.empty())layoutBytes=to_string(object(model,L"layout").Stringify());
+        if(layoutBytes!=panelBridgeLayout){
+            panelBridgeLayout=std::move(layoutBytes);++panelLayoutRevision;
+            panelBridgeKey=L"";panelBridgeFrame=J{};++panelBridgeRevision;
         }
         if(full){
         if(previousGpu>0&&num(model,L"windows_gpu_generation")!=previousGpu){
@@ -832,15 +835,14 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             auto bounds=allocatedBounds(group.frame,root);if(bounds.Width<=0||bounds.Height<=0)continue;
             A pair;pair.Append(N(id));pair.Append(rectangle(bounds));allocated.Append(pair);
         }
-        A viewport;viewport.Append(N(root.ActualWidth()));viewport.Append(N(root.ActualHeight()));
-        auto request=O({{L"type",S(L"panel_bridges")},{L"viewport",viewport},
-            {L"measure",O({{L"groups",allocated},{L"columns",collapsed->Measure(root)}})}});
-        auto key=request.Stringify()+panelBridgeContext;
-        if(key==panelBridgeKey)return;
-        panelBridgeKey=key;panelBridgeFrame=J{};++panelBridgeRevision;
-        if(!QueryWorkspace(data->query,request,[weak=weak_from_this(),key](J reply){
-            auto self=weak.lock();if(!self||self->panelBridgeKey!=key)return;
-            self->panelBridgeFrame=object(reply,L"result");++self->panelBridgeRevision;
+        auto key=O({{L"groups",allocated},{L"columns",collapsed->Measure(root)}}).Stringify();
+        if(key==panelBridgeKey&&panelQueryLayoutRevision==panelLayoutRevision)return;
+        panelBridgeKey=key;panelQueryLayoutRevision=panelLayoutRevision;panelBridgeFrame=J{};++panelBridgeRevision;
+        auto request="{\"type\":\"panel_bridges\",\"layout\":"+panelBridgeLayout+",\"measure\":"+to_string(key)+"}";
+        if(!QueryWorkspace(data->query,std::move(request),[weak=weak_from_this(),key,generation=panelLayoutRevision](J reply){
+            auto self=weak.lock();if(!self||self->panelBridgeKey!=key||self->panelLayoutRevision!=generation)return;
+            auto frame=object(reply,L"result");if(!frame.Size()){self->panelBridgeKey=L"";return;}
+            self->panelBridgeFrame=frame;++self->panelBridgeRevision;
             self->queueMeasurements();self->tracePresentation();if(self->glassChanged)self->glassChanged();
         }))panelBridgeKey=L"";
     }
@@ -1019,7 +1021,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
 WorkspaceView::WorkspaceView(Dispatch send,Json catalog,NativeLocalization localization,Dispatch overviews,PreviewTransport previews,std::function<void(bool)> popupChanged,Dispatch document,Dispatch input,EdgeTransport edges):impl(std::make_shared<Impl>(std::move(send),catalog,localization,std::move(overviews),std::move(previews),std::move(popupChanged),std::move(document),std::move(input),std::move(edges))){impl->init();}
 WorkspaceView::~WorkspaceView()=default;
 Canvas WorkspaceView::Root()const{return impl->root;}
-bool WorkspaceView::Apply(Json const& snapshot){return impl->apply(snapshot);}
+bool WorkspaceView::Apply(Json const& snapshot,std::string layoutBytes){return impl->apply(snapshot,std::move(layoutBytes));}
 WorkspaceView::Json WorkspaceView::ChromeFacts(bool popupOpen){impl->data->externalPopup=popupOpen;return J::Parse(impl->data->chrome.Stringify());}
 void WorkspaceView::CancelPreviews(){for(auto const& panel:impl->previewPanels)panel->Cancel();}
 bool WorkspaceView::CancelGesture(){

@@ -140,6 +140,7 @@ private:
     };
     struct PreparedSnapshots {
         winrt::Windows::Data::Json::JsonObject full{nullptr},layout{nullptr},workspace{nullptr},camera{nullptr},search{nullptr},localization{nullptr},glass{nullptr};
+        std::string fullLayoutBytes,layoutBytes;
     };
     std::shared_ptr<SnapshotState> snapshots=std::make_shared<SnapshotState>();
     bool glassPosted=false;
@@ -150,7 +151,7 @@ private:
         winrt::Microsoft::UI::Dispatching::DispatcherQueue,std::weak_ptr<CanvasWindow>,CanvasSnapshotMailbox::Batch);
     void ApplyPending(PreparedSnapshots);
     void FailPresentation(std::string);
-    void ApplyModel(winrt::Windows::Data::Json::JsonObject const&);
+    void ApplyModel(winrt::Windows::Data::Json::JsonObject const&,std::string layoutBytes={});
     void Popup(bool open);
     void UpdatePopup();
     void ApplyDialogs();

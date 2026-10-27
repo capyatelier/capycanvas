@@ -14,7 +14,7 @@ public:
     WorkspaceView(Dispatch dispatch, Json catalog,NativeLocalization localization, Dispatch overviews, PreviewTransport previews,std::function<void(bool)> popupChanged, Dispatch document, Dispatch input, EdgeTransport edges);
     ~WorkspaceView();
     winrt::Microsoft::UI::Xaml::Controls::Canvas Root() const;
-    bool Apply(Json const& snapshot);
+    bool Apply(Json const& snapshot,std::string layoutBytes={});
     static void MergeLayout(Json const& model,Json const& patch);
     Json ChromeFacts(bool popupOpen);
     bool CancelGesture();
