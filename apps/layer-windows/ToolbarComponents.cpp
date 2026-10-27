@@ -778,7 +778,7 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
         auto glyph=icon(L"settings",data->theme());content.Children().Append(glyph);
         auto name=label(data,L"");name.TextTrimming(TextTrimming::CharacterEllipsis);
         name.VerticalAlignment(VerticalAlignment::Center);Grid::SetColumn(name,1);content.Children().Append(name);
-        auto chevron=icon(L"chevron-down",data->theme(),12);Grid::SetColumn(chevron,2);content.Children().Append(chevron);
+        auto chevron=icon(L"chevron-down",data->theme(),16);Grid::SetColumn(chevron,2);content.Children().Append(chevron);
         pick.Content(content);
         pick.Click([weak,labelText](winrt::Windows::Foundation::IInspectable const& sender,auto&&){
             auto self=weak.lock();if(!self)return;
@@ -815,9 +815,10 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
             pick.Background(self->vertical?clear():self->data->brush(L"control_fill"));
             pick.HorizontalContentAlignment(compact?HorizontalAlignment::Center:HorizontalAlignment::Stretch);
         };
-        result.natural=[data=data,labelText]{
-            double width=0;for(auto value:array(*labelText,L"items"))width=std::max(width,textWidth(data,str(value.GetObject(),L"label")));
-            return winrt::Windows::Foundation::Size{float(width+16+12+2*6+2*6),float(data->controlHeight())};
+        result.natural=[pick,data=data]{
+            pick.Visibility(Visibility::Visible);auto assigned=pick.Width();pick.Width(std::numeric_limits<double>::quiet_NaN());
+            pick.Measure({std::numeric_limits<float>::infinity(),float(data->controlHeight())});auto desired=pick.DesiredSize();pick.Width(assigned);
+            return desired;
         };
         return result;
     }

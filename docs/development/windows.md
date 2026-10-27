@@ -1441,7 +1441,8 @@ release pen and touch scrubs, then activate with mouse, keyboard and accessibili
 The journey also hides and restores inline tracks with Show Sliders and verifies
 native pointer input after restoring them.
 Toolbar choice faces use the shared `control_fill` RGBA overlay, refreshed with
-the palette. Horizontal dropdowns fit their widest localized item, icon and arrow.
+the palette. Horizontal dropdowns measure their current label, icon and arrow
+in the rendered control's font.
 Use `-Journey numeric` and `-Journey numeric-light` for these track checks in both
 themes without the gradient, Zoom and compact-face journeys.
 Tool Options retain the complete numeric track and input host when changing slider
