@@ -25,6 +25,7 @@ import AppKit
         window?.delegate = self
         fullscreenTransition = false
         if let window {
+            window.tabbingMode = .disallowed
             store?.projectFiles.presentationWindow = window
             store?.projectFiles.closeWindow = { [weak window] in window?.performClose(nil) }
             store?.focusWindow = { [weak window] in

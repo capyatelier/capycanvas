@@ -6,6 +6,7 @@ import SwiftUI
     init() {
         // AppKit otherwise discards intermediate mouse/drag/tablet samples.
         NSEvent.isMouseCoalescingEnabled = false
+        NSWindow.allowsAutomaticWindowTabbing = false
     }
     var body: some Scene {
         WindowGroup(id: "editor") { EditorSessionScene { MacEditorScene(scene: $0) } }

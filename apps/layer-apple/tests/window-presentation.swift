@@ -88,7 +88,9 @@ private struct LifetimeEditor: View {
         window.isReleasedWhenClosed = false
         let downstream = Downstream(), adapter = DocumentWindowDelegate(store: mac)
         window.delegate = downstream
+        window.tabbingMode = .preferred
         adapter.attach(window)
+        precondition(window.tabbingMode == .disallowed, "Native tabs must not cover the shared editor header")
         defer { adapter.attach(nil); window.close() }
         func settled(_ mode: Bool) async throws {
             try await wait("Fullscreen request acknowledgement") {

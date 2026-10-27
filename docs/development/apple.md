@@ -306,8 +306,9 @@ mutation or release.
   controls receive touches without delay, cancellation or gesture prevention.
   Admitted contacts feed workspace outside-contact handling, preserving popup
   ownership and the slider preview's exemptions for its own bounds and anchor.
-- **Window ownership.** The root native window bridge owns the document delegate,
-  file-picker presenter, close callback and fullscreen binding. Canvas replacement
+- **Window ownership.** Native window tabbing is disabled; the shared editor owns
+  document tabs and the custom header. The root native window bridge owns the
+  document delegate, file-picker presenter, close callback and fullscreen binding. Canvas replacement
   keeps those bindings. Retire them only while the retiring delegate still owns
   that window, and restore the original downstream delegate.
 - **OS presentation.** macOS top-level menus use the OS menu bar; the header keeps
