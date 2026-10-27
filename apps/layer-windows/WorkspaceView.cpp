@@ -431,7 +431,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             auto panel=find(array(model,L"panels"),L"id",str(geometry,L"active"));
             auto [it,added]=groups.try_emplace(id);auto& group=it->second;
             if(added){
-                group.frame.Child(group.content);group.frame.Background(clear());group.frame.CornerRadius({SurfaceRadius*CornerFit,SurfaceRadius*CornerFit,SurfaceRadius*CornerFit,SurfaceRadius*CornerFit});
+                group.frame.UseLayoutRounding(false);group.frame.Child(group.content);group.frame.Background(clear());group.frame.CornerRadius({SurfaceRadius*CornerFit,SurfaceRadius*CornerFit,SurfaceRadius*CornerFit,SurfaceRadius*CornerFit});
                 group.frame.RenderTransform(group.translation);group.shadow.Root().RenderTransform(TranslateTransform());
                 group.content.Clip(group.clip);
                 group.content.Children().Append(group.background.Root());group.content.Children().Append(group.strip.Root());group.content.Children().Append(group.border);

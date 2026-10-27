@@ -2261,6 +2261,8 @@ Scope status and scale labels, including Curves axes, use the secondary text
 role at 55% opacity.
 Tool Set rows use the defined text line height and preserve fractional layout coordinates
 so native pixel rounding does not accumulate into larger rows.
+Workspace group frames preserve the shared fractional allocation through their
+native subtree so display scaling cannot change Tool Set wrapping.
 
 Compare every image pair and look at the screenshots as well as the geometry
 reports. Use [visual acceptance](../../tools/visual/README.md#comparing-images): fix
