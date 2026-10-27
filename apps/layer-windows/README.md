@@ -100,11 +100,6 @@ whole client area, including behind the custom title bar.
   sources change with style, display density or a short dimension where opposing
   corners or shadows interact. Expanded joined outlines retain their exact paths.
   Navigator cutouts follow native size changes through a coalesced UI callback.
-  Connected paths come from shared Rust geometry at current native allocations.
-  During a native window resize gesture, opaque native contours and union shadows
-  follow the controls. After the gesture, the matching presented GPU revision
-  restores transparent panel surfaces. Single-step window sizing uses the usual
-  GPU presentation path.
 - **Workers.** File, clipboard, profile, settings and SQLite work runs on workers;
   the render thread polls completions without blocking. Replaced GPU resources
   retire off the render thread.
