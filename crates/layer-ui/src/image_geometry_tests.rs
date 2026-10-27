@@ -433,7 +433,7 @@ fn enabled_snapping_prepares_after_pending_input_drains_without_idle_resubmissio
     s.dispatch(UiAction::Invoke { command: CommandId::TransformSnapping }).unwrap();
     s.cancel_content_bounds();
     let calls = s.engine.backend().bounds_attempts;
-    s.input_pending = true;
+    s.pen.push(event(&s, 1, PenPhase::Hover, 0.)).unwrap();
     s.refresh_tools();
     assert!(s.operation.snapping && s.operation.transforming());
     assert_eq!(s.engine.backend().bounds_attempts, calls);

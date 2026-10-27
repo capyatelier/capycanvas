@@ -27,6 +27,11 @@ UI callbacks. A host may run it on its event loop or move the whole session to
 a worker and transport actions/snapshots at that boundary. Threading does not
 change application semantics. No UI binding serializes canvas pixels.
 
+Canvas idle guards inspect queued pen samples, active strokes and tool contacts.
+A completed synchronous tool contact permits its next command before another
+frame; requesting a repaint does not keep that contact active. Queued painting
+still waits for its samples to be consumed, and deferred edits retain their order.
+
 ## Module layout
 
 ```text

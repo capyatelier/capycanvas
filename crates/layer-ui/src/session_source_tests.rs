@@ -11,6 +11,73 @@ use layer_core::color::source::rgba8_source;
 use std::sync::Arc;
 
 #[test]
+fn released_transform_can_apply_before_the_next_frame() {
+    for frame_after_release in [true, false] {
+        let mut s = session(Platform::Windows);
+        let selection = rectangle([100., 100., 300., 300.]);
+        s.fill_selection(selection.clone()).unwrap();
+        let mut working = s.engine.document().working.clone();
+        working.selection = Some(selection);
+        s.layer_edit(layer_core::Edit::Working(working)).unwrap();
+        s.frame(1, 1).unwrap();
+        let original = s.engine.document().clone();
+        invoke(&mut s, CommandId::ScaleRotate);
+        for (sequence, phase, point) in [
+            (1, PenPhase::Down, Point { x: 220., y: 220. }),
+            (2, PenPhase::Move, Point { x: 420., y: 220. }),
+            (3, PenPhase::Up, Point { x: 420., y: 220. }),
+        ] {
+            let mut sample = event(&s, sequence, phase, 1.);
+            sample.surface_position = layer_core::Affine(s.state.camera.document_to_surface()).map(point);
+            sample.tool = ToolKind::Mouse;
+            s.pen(sample);
+            if phase != PenPhase::Up {
+                assert!(!s.canvas_idle());
+                assert!(s.operation.dragging());
+            }
+        }
+        assert!(s.layer_interaction.path.is_empty());
+        assert!(!s.operation.dragging());
+        assert!(!s.pen_contact);
+        assert!(!s.holding_input());
+        if frame_after_release { s.frame(40_000_000, 40_000_000).unwrap(); }
+        let revision = s.engine.document().revision;
+        let result = s.dispatch(UiAction::Invoke { command: CommandId::ApplyTransform });
+        assert!(result.is_ok(), "frame_after_release={frame_after_release}, input_pending={}, idle={}, error={:?}",
+            s.input_pending, s.canvas_idle(), result.err());
+        assert!(!s.operation.active());
+        assert!(s.engine.document().revision > revision);
+        s.frame(50_000_000, 50_000_000).unwrap();
+        let applied = s.engine.document().clone();
+        invoke(&mut s, CommandId::Undo);
+        s.frame(60_000_000, 60_000_000).unwrap();
+        assert_live_artwork_eq(s.engine.document(), &original);
+        assert_eq!(s.engine.document().working.selection, original.working.selection);
+        invoke(&mut s, CommandId::Redo);
+        s.frame(70_000_000, 70_000_000).unwrap();
+        assert_live_artwork_eq(s.engine.document(), &applied);
+        assert_eq!(s.engine.document().working.selection, applied.working.selection);
+    }
+}
+
+#[test]
+fn completed_brush_contact_stays_busy_until_its_samples_render() {
+    let mut s = session(Platform::Windows);
+    s.frame(1, 1).unwrap();
+    for (sequence, phase) in [(1, PenPhase::Down), (2, PenPhase::Move), (3, PenPhase::Up)] {
+        s.pen(event(&s, sequence, phase, 1.));
+    }
+    assert!(!s.pen_contact);
+    assert!(s.input_pending);
+    assert!(s.engine.has_pending_input());
+    assert!(!s.canvas_idle());
+    assert!(s.require_workspace_idle().is_err());
+    assert!(s.dispatch(UiAction::Invoke { command: CommandId::ScaleRotate }).is_err());
+    s.frame(40_000_000, 40_000_000).unwrap();
+    assert!(s.canvas_idle());
+}
+
+#[test]
 fn image_placement_touch_claims_photo_handles_but_preserves_camera_contacts_outside() {
     let source = Arc::unwrap_or_clone(rgba8_source([20, 10], |_, _| [255; 4]));
     let mut session = UiSession::new(Recorder { tiled_sources: true, ..Default::default() },

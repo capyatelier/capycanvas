@@ -6044,7 +6044,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             || self.vector_move_touch_target(point) || self.vector_points_touch_target(point)
     }
     fn paint_contact_busy(&self) -> bool {
-        self.pen_contact || (!self.engine.backend().has_pending_submission() && (self.input_pending || self.engine.has_active_stroke()))
+        self.pen_contact || (!self.engine.backend().has_pending_submission()
+            && (self.engine.has_pending_input() || self.engine.has_active_stroke()))
     }
     fn canvas_idle(&self) -> bool {
         !self.paint_contact_busy() && self.canvas_contact_idle()
@@ -10146,7 +10147,7 @@ mod tests {
             request_id: request.request_id,
             result: Ok(()),
         });
-        s.input_pending = true;
+        s.pen.push(event(&s, 1, PenPhase::Hover, 0.)).unwrap();
         assert!(s.frame(2, 2).unwrap().canvas_wake);
         assert!(
             s.state.filter_load.pending,
@@ -10280,7 +10281,7 @@ mod tests {
                     assert!(s.request_document_open(false).is_err());
                     assert!(s.request_document_open(true).is_err());
                     let checkpoint = s.engine.checkpoint();
-                    s.input_pending = interaction;
+                    if interaction { s.pen.push(event(&s, 1, PenPhase::Hover, 0.)).unwrap(); }
                     assert_eq!(s.require_workspace_idle().is_ok(), !interaction);
                     let accepted = !interaction;
                     let can_close = accepted && !dirty;
@@ -10295,7 +10296,7 @@ mod tests {
                     assert_eq!(s.state.document_file.close_ready, can_close);
                     assert_eq!(s.engine.checkpoint(), checkpoint);
                     assert!(s.state.filter_load.pending);
-                    s.input_pending = false;
+                    s.frame(0, 0).unwrap();
                     // If application termination is cancelled, completion remains
                     // valid and a later unsaved prompt still preserves edits.
                     if can_close {
@@ -12826,7 +12827,7 @@ mod tests {
         let row = serialize(app.layer_menu(occurrence_token(doc.working.occurrence.unwrap()), true).unwrap());
         assert_eq!(menu[0][0]["label"], app.localization().text(MessageId::RESOURCES_LAYER_MENU_NEW).as_ref(), "New stays while a mask is edited");
         assert_eq!(menu.as_array().unwrap()[1..], row.as_array().unwrap()[..]);
-        app.input_pending = true;
+        app.pen.push(event(&app, 1, PenPhase::Hover, 0.)).unwrap();
         assert!(!app.command(CommandId::SelectAll).enabled);
         assert!(
             app.application_menu(ApplicationMenu::Filter)

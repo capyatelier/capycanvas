@@ -214,7 +214,7 @@ fn liquify_busy_command_reports_canvas_interaction_with_live_session() {
     s.cursor_input(Some(hover));
     assert!(s.command_flags(CommandId::LiquifyAdjust).0);
 
-    s.input_pending = true;
+    s.pen(event(&s, 2, PenPhase::Down, 1.));
     assert!(s.engine.liquify_context().is_some());
     assert!(!s.command_flags(CommandId::LiquifyAdjust).0);
     assert_eq!(
@@ -224,7 +224,8 @@ fn liquify_busy_command_reports_canvas_interaction_with_live_session() {
     assert_eq!(s.engine.document().target_raster(target).unwrap().identity(), revision);
     assert!(s.operation.liquify.is_none());
 
-    s.input_pending = false;
+    s.pen(event(&s, 3, PenPhase::Cancel, 0.));
+    s.frame(40_000_000, 40_000_000).unwrap();
     s.dispatch(UiAction::Invoke { command: CommandId::LiquifyAdjust }).unwrap();
     assert!(s.operation.liquify.is_some());
 }
