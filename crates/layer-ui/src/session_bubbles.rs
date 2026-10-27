@@ -50,6 +50,7 @@ pub(crate) struct Bubbles {
     desk: Desk,
     bounds: Option<(BoundsKey, Bounds)>,
     drag: Option<BubbleDrag>,
+    pending_drag: Option<BubbleGrab>,
     drag_desk: Option<Desk>,
     halo: Option<(u32, u32)>,
     ring: Option<RingContact>,
@@ -64,6 +65,10 @@ pub(crate) struct Bubbles {
     stroke: bool,
     dirty: bool,
     color_geometry: std::cell::RefCell<Option<(ColorBubbleGeometry, ColorBubbleParts)>>,
+}
+
+impl Bubbles {
+    pub(super) fn moving(&self)->bool {self.drag.is_some()||self.pending_drag.is_some()}
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -207,6 +212,7 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     pub fn can_take_bubble(&mut self, grab: BubbleGrab, position: [f32; 2], viewport: [f32; 2]) -> bool {
         valid_viewport(viewport).is_ok() && position.into_iter().all(f32::is_finite)
+            && self.bubble_canvas(viewport).contains(position[0], position[1])
             && self.grab_source(grab, viewport).is_ok_and(|(_, bounds)| !self.bubble_homing(viewport, position, bounds))
     }
 
@@ -243,10 +249,14 @@ impl<R: CanvasRenderer> UiSession<R> {
         {
             return bounds;
         }
-        let area = if self.interaction.hidden { self.state.workspace.layout.free_area(viewport) } else { self.layout(viewport).work_area };
+        let area = self.bubble_canvas(viewport);
         let bounds = inset(area, 8.);
         self.bubble_state.bounds = Some((key, bounds));
         bounds
+    }
+
+    fn bubble_canvas(&mut self, viewport: [f32; 2]) -> Bounds {
+        if self.interaction.hidden { self.state.workspace.layout.free_area(viewport) } else { self.layout(viewport).work_area }
     }
 
     fn bubble_center(&self, bubble: &ToolBubble) -> [f32; 2] {
@@ -824,7 +834,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     fn edit_bubbles(&mut self, description: LayoutChange, edit: impl FnOnce(&mut DockLayout) -> Result<(), String>) -> Result<UiChange, String> {
-        if self.bubble_state.drag.is_some() {
+        if self.bubble_state.moving() {
             return Err("Finish moving the bubble first".into());
         }
         let mut before = self.state.workspace.clone();
@@ -1159,6 +1169,10 @@ impl<R: CanvasRenderer> UiSession<R> {
         let hidden = self.interaction.hidden;
         let header = self.state.workspace.layout.header_presentation.height.max(HEADER_HEIGHT);
         (!hidden && point[1] < header)
+            || self.interaction.facts.content_drawer.is_some_and(|b|b.contains(point[0],point[1]))
+            || self.interaction.facts.drawer_connection.is_some_and(|b|b.contains(point[0],point[1]))
+            || self.interaction.facts.expanded_panel.is_some_and(|p|p.bounds.contains(point[0],point[1]))
+            || self.state.customization.column_drawer_bounds.iter().any(|m|m.bounds.contains(point[0],point[1]))
             || self.layout(viewport).groups.iter().any(|g| {
                 (!hidden || g.floating || self.state.workspace.layout.shows_in_zen(g.id)) && g.bounds.contains(point[0], point[1])
             })
@@ -1192,7 +1206,25 @@ impl<R: CanvasRenderer> UiSession<R> {
             return Err("Invalid drag position".into());
         }
         if phase == ContactPhase::Down {
+            if self.bubble_state.moving() || self.workspace_drag.is_some() {
+                return Err("Another item is already moving".into());
+            }
+            if !matches!(grab, BubbleGrab::Bubble { .. } | BubbleGrab::Rim { .. }) && !self.can_take_bubble(grab, position, viewport) {
+                self.grab_source(grab, viewport)?;
+                self.bubble_state.pending_drag=Some(grab);
+                return Ok(UiChange::default());
+            }
             return self.lift_bubble(grab, position, viewport);
+        }
+        if let Some(pending)=self.bubble_state.pending_drag {
+            if pending!=grab{return Ok(UiChange::default());}
+            if matches!(phase,ContactPhase::Move|ContactPhase::Up) && self.can_take_bubble(pending,position,viewport) {
+                self.bubble_state.pending_drag=None;
+                self.lift_bubble(pending,position,viewport)?;
+            } else {
+                if matches!(phase,ContactPhase::Up|ContactPhase::Cancel){self.bubble_state.pending_drag=None;}
+                return Ok(UiChange::default());
+            }
         }
         let Some(drag) = self.bubble_state.drag else { return Ok(UiChange::default()) };
         let center = [position[0] + drag.offset[0], position[1] + drag.offset[1]];
@@ -1209,7 +1241,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.bubble_state.drag = None;
                 self.bubble_state.drag_desk = None;
                 self.bubble_state.desk.home(false);
-                if self.bubble_homing(viewport, position, drag.source) {
+                if self.bubble_homing(viewport, position, drag.source)
+                    || drag.pulled && !self.bubble_canvas(viewport).contains(position[0],position[1]) {
                     let source = self.bubble(drag.id)?.source;
                     let before = self.workspace_history.gesture_start().cloned();
                     self.workspace_history.cancel(&mut self.state.workspace);

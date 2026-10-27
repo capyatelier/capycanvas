@@ -186,6 +186,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub fn require_workspace_idle(&self) -> Result<(), String> {
         self.require_document_snapshot_idle()?;
         if self.workspace_history.gesture_start().is_some()
+            || self.bubble_state.moving()
             || self.workspace_drag.is_some()
             || self.divider_drag.is_some()
             || self.floating_resize.is_some()

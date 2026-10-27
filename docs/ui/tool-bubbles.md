@@ -43,9 +43,11 @@ The variation marker describes the choices shown by the tool's menu.
 ## Taking and putting back
 
 - **Title bar and drawer rows:** drag without a hold. The contact keeps scrolling
-  its list or toolbar until it leaves the bar, drawer or panel; from then on the
-  bubble follows it. Releasing within 80 px (`WORKSPACE_PROXIMITY`) of where it
-  came from takes nothing.
+  its list or toolbar until it reaches the canvas beyond the source clearance.
+  Crossing other panels or drawers creates nothing. Entering the canvas starts
+  one bubble; subsequent motion moves that same bubble. Releasing within 80 px
+  (`WORKSPACE_PROXIMITY`) of where it came from or dropping a new take off the
+  canvas takes nothing.
 - **Toolbar tiles:** a plain drag takes a bubble the same way. Hold, then drag
   still rearranges toolbars; releasing such a drag on the canvas past the 80 px
   line takes a bubble.

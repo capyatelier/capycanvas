@@ -18,6 +18,68 @@ fn contact(s: &mut UiSession<Recorder>, grab: BubbleGrab, phase: ContactPhase, p
     act(s, BubbleAction::Drag { grab, phase, position, viewport: VIEW })
 }
 
+#[test]
+fn bubble_pickup_waits_for_canvas_and_repeated_moves_keep_one_owner() {
+    for platform in [Platform::Gtk,Platform::Web,Platform::Windows,Platform::Android,Platform::Mac,Platform::Ios] {
+        let mut s=session(platform);s.set_viewport(VIEW,[1200,900]).unwrap();
+        let grab=brush(DefaultBrushPreset::PointyPencil);
+        let before=serde_json::to_value(&s.state.workspace).unwrap();
+        for finish in [ContactPhase::Up,ContactPhase::Cancel] {
+            contact(&mut s,grab,ContactPhase::Down,[100.,20.]).unwrap();
+            for x in 100..132 {
+                contact(&mut s,grab,ContactPhase::Move,[x as f32,20.]).unwrap();
+                assert!(s.state.workspace.layout.bubbles.bubbles.is_empty(),"{platform:?}: source-only motion creates nothing");
+            }
+            contact(&mut s,grab,finish,[131.,20.]).unwrap();
+            assert_eq!(serde_json::to_value(&s.state.workspace).unwrap(),before);
+        }
+        for finish in [ContactPhase::Cancel,ContactPhase::Up] {
+            contact(&mut s,grab,ContactPhase::Down,[100.,20.]).unwrap();
+            contact(&mut s,grab,ContactPhase::Move,FAR).unwrap();
+            assert_eq!(s.state.workspace.layout.bubbles.bubbles.len(),1,"{platform:?}");
+            let id=s.state.workspace.layout.bubbles.bubbles[0].id;
+            for step in 0..32 {
+                contact(&mut s,grab,ContactPhase::Move,[FAR[0]+step as f32,FAR[1]]).unwrap();
+                assert_eq!(s.state.workspace.layout.bubbles.bubbles.iter().map(|b|b.id).collect::<Vec<_>>(),[id]);
+            }
+            contact(&mut s,grab,finish,FAR).unwrap();
+            assert_eq!(s.state.workspace.layout.bubbles.bubbles.len(),usize::from(finish==ContactPhase::Up));
+        }
+    }
+}
+
+#[test]
+fn bubble_pickup_rejects_off_canvas_drops_and_unrelated_move_events() {
+    let mut s=desk();let grab=brush(DefaultBrushPreset::PointyPencil);
+    let before=serde_json::to_value(&s.state.workspace).unwrap();
+    contact(&mut s,grab,ContactPhase::Down,[100.,20.]).unwrap();
+    contact(&mut s,brush(DefaultBrushPreset::GPen),ContactPhase::Move,FAR).unwrap();
+    assert!(s.state.workspace.layout.bubbles.bubbles.is_empty());
+    contact(&mut s,grab,ContactPhase::Move,FAR).unwrap();
+    assert_eq!(s.state.workspace.layout.bubbles.bubbles.len(),1);
+    contact(&mut s,grab,ContactPhase::Up,[VIEW[0]+20.,VIEW[1]+20.]).unwrap();
+    assert_eq!(serde_json::to_value(&s.state.workspace).unwrap(),before);
+    for point in [[-1.,FAR[1]],[VIEW[0]+1.,FAR[1]],[FAR[0],VIEW[1]+1.],[100.,20.]] {
+        assert!(!s.can_take_bubble(grab,point,VIEW));
+    }
+}
+
+#[test]
+fn bubble_pickup_keeps_drawer_surfaces_and_pending_contacts_out_of_canvas() {
+    let mut s=desk();let grab=brush(DefaultBrushPreset::PointyPencil);
+    s.interaction.facts.content_drawer=Some(Bounds{x:FAR[0]-20.,y:FAR[1]-20.,width:40.,height:40.});
+    assert!(!s.can_take_bubble(grab,FAR,VIEW));
+    contact(&mut s,grab,ContactPhase::Down,FAR).unwrap();
+    assert!(s.state.workspace.layout.bubbles.bubbles.is_empty());
+    assert!(s.require_workspace_idle().is_err());
+    s.interaction.facts.content_drawer=None;
+    contact(&mut s,grab,ContactPhase::Move,FAR).unwrap();
+    assert_eq!(s.state.workspace.layout.bubbles.bubbles.len(),1);
+    contact(&mut s,grab,ContactPhase::Cancel,FAR).unwrap();
+    assert!(s.state.workspace.layout.bubbles.bubbles.is_empty());
+    assert!(s.require_workspace_idle().is_ok());
+}
+
 fn drag(s: &mut UiSession<Recorder>, grab: BubbleGrab, from: [f32; 2], to: [f32; 2]) {
     contact(s, grab, ContactPhase::Down, from).unwrap();
     contact(s, grab, ContactPhase::Move, to).unwrap();
