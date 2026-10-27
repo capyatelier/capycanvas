@@ -342,6 +342,7 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
         // Dismissing a menu alone has no pointer click to suppress. In
         // particular, a menu action may be followed immediately by UIA Invoke.
         if(pointer||dragging)ignoreClick=suppressClick;
+        if(pointer&&suppressClick)rejectedPointer=pointer;
         if(dragging)send(L"cancel");
         clear();return true;
     }
@@ -493,9 +494,9 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
     void up(PointerRoutedEventArgs const& e){
         if(rejectedPointer==e.Pointer().PointerId()){rejectedPointer.reset();deferClick();return;}
         if(!pointer||*pointer!=e.Pointer().PointerId())return;
-        if(!ownsFocus()){cancel(L"focus_lost");e.Handled(true);return;}
+        if(!ownsFocus()){cancel(L"focus_lost");rejectedPointer.reset();deferClick();e.Handled(true);return;}
         auto p=e.GetCurrentPoint(root);
-        if(p.Properties().IsCanceled()){cancel(L"pointer_canceled");e.Handled(true);return;}
+        if(p.Properties().IsCanceled()){cancel(L"pointer_canceled");rejectedPointer.reset();deferClick();e.Handled(true);return;}
         if(needsHold&&!held&&!dragging&&crossed()){cancel(L"motion_before_hold",false);return;}
         if(recognizing){recognizing=false;recognizer.ProcessUpEvent(p);}
         if(trace)lastRelease=O({{L"generation",N(double(generation))},{L"source",object(action,L"item")},
@@ -650,7 +651,7 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
         root.SizeChanged([weak](auto&&,auto&&){if(auto self=weak.lock())self->chrome(O({{L"kind",S(L"refresh")}}));});
         ShortcutKeys(root,[weak](auto&&,KeyRoutedEventArgs const& e){if(auto self=weak.lock()){
             if(e.Key()==Windows::System::VirtualKey::Escape&&self->cancelAll(L"escape"))e.Handled(true);
-            else if(!self->pointer){self->ignoreClick=false;self->rejectedPointer.reset();}
+            else if(!self->pointer&&!self->rejectedPointer)self->ignoreClick=false;
         }});
         root.Unloaded([weak](auto&&,auto&&){if(auto self=weak.lock())self->cancelAll();});
     }
@@ -677,7 +678,7 @@ void WorkspaceGestures::Source(FrameworkElement const& element,J const& action,J
     tag.Insert(L"workspace_action",action);tag.Insert(L"workspace_context",context);tag.Insert(L"workspace_double",B(doubleClick));
     tag.Insert(L"workspace_tab",tab);tag.Insert(L"workspace_hold",B(pickup==Pickup::Hold));tag.Insert(L"workspace_control",B(pickup==Pickup::Control));
     auto kind=str(action,L"type");
-    auto contact=tab.Size()||element.try_as<ScrollView>()?L"pickup":pickup==Pickup::Hold?L"free"
+    auto contact=tab.Size()||pickup==Pickup::Sideways?L"pickup":pickup==Pickup::Hold?L"free"
         :pickup==Pickup::Control||kind==L"drag_workspace"?L"input":L"";
     if(*contact)tag.Insert(L"edge_contact",S(contact));
     element.Tag(tag);

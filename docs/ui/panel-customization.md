@@ -585,7 +585,9 @@ the native owner thread, so that thread also decides when a pressed tab is
 selected; the workspace withholds or consumes motion from the latest reply.
 Windows classifies like Web, reading `ManipulationMode::None` and controls that
 capture their press as inputs, and tags panel frames, closed strips, tabs,
-grips and layer rows. Its session runs on the render thread, so replies arrive
+grips and layer rows. Horizontal scrollers retain sideways swipes; vertical-only
+scrollers leave their free surfaces available for horizontal edge resizing.
+Its session runs on the render thread, so replies arrive
 through the ordered command queue. A press asks `capy_edge_reach`
 synchronously whether it lies in an edge's reach and may resize vertically, so
 a touch or pen scroller that must not or cannot scroll keeps the contact and a
@@ -598,6 +600,7 @@ claiming the native event and canceling its pending resize contact.
 Canvas touch uses native double-tap timing and distance, forwarding the reset
 to the same shared action. Cancellation and intervening chrome contacts retire
 its tap candidate. Escape and blur retire pending and captured edge gestures.
+Canceled source presses suppress native clicks through release.
 Cancellation from a retired child cannot end the workspace's current capture.
 Layer rows wait for the asynchronous edge decision before their own scrolling,
 swipe or reorder can claim the contact; an admitted row hold retires the pending

@@ -6,7 +6,7 @@ public:
     WorkspaceGestures(std::shared_ptr<CapyUi::WorkspaceData> data,
         winrt::Microsoft::UI::Xaml::Controls::Canvas root);
     ~WorkspaceGestures();
-    enum class Pickup { Immediate, Hold, Control };
+    enum class Pickup { Immediate, Hold, Control, Sideways };
     // Classify the visible source independently of its Rust payload.
     // Action is DragWorkspace, a native tile_drag, DragDivider, ResizeFloating
     // actions. Resize handles always use immediate pickup.
