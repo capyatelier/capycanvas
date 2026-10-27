@@ -86,9 +86,8 @@ window, label, text { font-size: var(--ui-text-size); }
 .choice-well, .window-bar .header-menu-labels { border: 0; border-radius: calc(18px * var(--corner-fit)); padding: 5px; }
 .choice-well button { min-height: 26px; min-width: 0; padding: 0 8px; border-radius: calc(13px * var(--corner-fit)); background: transparent; box-shadow: none; font-weight: 500; }
 .window-bar .header-menu-labels menubutton.chrome-control > button { min-height: 26px; min-width: 0; padding: 0 8px; border-radius: calc(13px * var(--corner-fit)); font-weight: 500; }
-.choice-well button:hover { background: alpha(var(--window-fg-color), .08); }
 .choice-well button:checked { background: var(--header-selection); color: var(--window-fg-color); }
-.choice-well button:checked:hover { background: var(--header-selection-hover); }
+.choice-well button:checked:hover:not(:active):not(:disabled) { background: var(--header-selection-hover); }
 .workspace-switcher .workspace-options > button { min-width: 20px; min-height: 26px; padding: 0; color: alpha(var(--window-fg-color), .7); }
 .workspace-manager-row menubutton.workspace-reorder-handle > button { padding: 0; min-width: 16px; background: transparent; box-shadow: none; }
 .workspace-manager-row { padding: 0; }
@@ -214,7 +213,6 @@ button.flat.unavailable-tool > * { filter: opacity(30%); }
 .layer-type-symbol { padding: 1px; border-radius: 2px; background: var(--input-bg); color: var(--window-fg-color); }
 .layers-panel button.layer-effect { background: transparent; }
 .layers-panel button.layer-folder { background: transparent; }
-.layers-panel button.layer-folder:hover { background: alpha(var(--window-fg-color), .08); }
 .layer-folder image { -gtk-icon-size: 28px; }
 .layer-connection-gutter { min-width: 3px; }
 .layer-connections { color: var(--capy-relationship); }
@@ -255,7 +253,6 @@ button.flat.unavailable-tool > * { filter: opacity(30%); }
 .number-preference { padding: 12px 14px; }
 .image-preference { padding: 12px 14px; }
 .image-selector button { min-width: 48px; min-height: 48px; padding: 8px; border-radius: calc(32px * var(--corner-fit)); background: alpha(var(--window-fg-color), .04); }
-.image-selector button:hover { background: alpha(var(--window-fg-color), .08); }
 .image-selector button:checked { background: var(--selection-bg); box-shadow: inset 0 0 0 2px var(--accent-bg-color); }
 .paper-preview { border-radius: calc(14px * var(--corner-fit)); }
 .texture-grid flowboxchild { padding: 0; border-radius: var(--control-radius); background: none; color: inherit; }
@@ -462,7 +459,7 @@ window.capy-workspace.glass .tab-strip-end { background: var(--glass-strip); }
 window.capy-workspace.glass .tab-foot-tint { color: var(--glass-panel); }
 window.capy-workspace.glass .dock-tabs button.selected-tool { background: transparent; }
 window.capy-workspace.glass .drawer-connection { color: var(--glass-panel); }
-window.capy-workspace.glass .selected-tool:not(.color-swatch), window.capy-workspace.glass .layer-row.selected, window.capy-workspace.glass .selection-modes button:checked, window.capy-workspace.glass .toolbar-component .option-action button:checked { background: var(--glass-selection); }
+window.capy-workspace.glass .selected-tool:not(.color-swatch), window.capy-workspace.glass .layer-row.selected, window.capy-workspace.glass .selection-modes button:checked, window.capy-workspace.glass .toolbar-component .option-action button:checked { background-color: var(--glass-selection); }
 window.capy-workspace.glass .toolbar-controls.drawer-source { background: var(--glass-source); }
 window.capy-workspace.glass .toolbar-controls button.drawer-open:not(.selected-tool) { background: var(--glass-open-tile); }
 window.capy-workspace.glass .window-bar .header-tool.selected-tool { background-color: var(--header-control-bg); background-image: image(var(--glass-header-selection)); }
@@ -472,7 +469,7 @@ window.capy-workspace.glass .tool-bubble, window.capy-workspace.glass .bubble-gl
 window.capy-workspace.glass .tool-bubble.selected-tool, window.capy-workspace.glass .bubble-glass.selected-tool { background-color: var(--glass-panel); background-image: image(var(--glass-selection)); }
 window.capy-workspace.glass .tool-bubble.selected-tool.hovered { background-image: linear-gradient(alpha(var(--window-fg-color), .07), alpha(var(--window-fg-color), .07)), image(var(--glass-selection)); }
 window.capy-workspace.glass .tool-bubble.selected-tool.pressed { background-image: linear-gradient(alpha(var(--window-fg-color), .14), alpha(var(--window-fg-color), .14)), image(var(--glass-selection)); }
-window.capy-workspace.glass .workspace-switcher button:checked { background: var(--glass-switcher-selection); }
+window.capy-workspace.glass .workspace-switcher button:checked { background-color: var(--glass-switcher-selection); }
 window.capy-workspace.glass .document-tab.selected { background-color: var(--glass-document-tab); }
 window.capy-workspace.glass .palette-cover { background: transparent; }
 .palette-panel { padding: 8px; }
@@ -484,7 +481,6 @@ button.flat.layer-properties-disclosure { padding: 0 var(--layer-edge-inset); fo
 .palette-panel button.palette-tile, .picker-dialog button.palette-tile { padding: 3px; min-width: 0; min-height: 0; border-radius: var(--control-radius); background: transparent; box-shadow: none; }
 .palette-tile > * { border-radius: var(--control-radius); }
 .palette-tile.selected { outline: 2px solid var(--accent-color); outline-offset: -2px; }
-.palette-panel button.palette-tile:hover, .picker-dialog button.palette-tile:hover { background: alpha(currentColor, .10); }
 .palette-empty { margin: 3px; border-radius: var(--control-radius); background: alpha(currentColor, .05); }
 .palette-panel button.palette-add { border: 0; border-radius: calc(var(--control-radius) + 3px); background: var(--input-bg); background-clip: content-box; padding: 3px; min-width: 0; min-height: 0; }
 .palette-panel button.palette-selector, .palette-panel button.palette-name { min-width: 0; min-height: var(--panel-control-height); padding: 0 6px; border-radius: var(--control-radius); font-weight: 400; }
@@ -539,7 +535,6 @@ button.edit-color-more.open image { -gtk-icon-transform: none; }
 .new-drawing-drawer-head { padding: 18px 20px 0; }
 .new-drawing-drawer-body { padding: 10px 20px 16px; }
 button.new-drawing-preview { padding: 0; border-radius: calc(22px * var(--corner-fit)); background: var(--view-bg-color); box-shadow: none; }
-button.new-drawing-preview:hover { background: mix(var(--view-bg-color), var(--window-fg-color), .05); }
 .new-drawing-sheet { box-shadow: 0 1px 2px alpha(black, .18), 0 4px 14px alpha(black, .14); }
 .new-drawing-sheet.mini { box-shadow: 0 0 0 1px alpha(black, .10), 0 1px 3px alpha(black, .16); }
 .new-drawing-small { font-size: .9em; }
@@ -555,17 +550,13 @@ button.new-drawing-preview:hover { background: mix(var(--view-bg-color), var(--w
 .new-drawing-combo > .new-drawing-affix:last-child { padding-right: 10px; }
 .new-drawing-combo menubutton > button { min-width: 26px; min-height: 26px; padding: 0; border-radius: calc(var(--control-radius) - 2px); }
 button.new-drawing-link { min-width: 26px; min-height: 34px; padding: 0; border-radius: var(--control-radius); background: none; box-shadow: none; color: alpha(currentColor, .62); }
-button.new-drawing-link:hover { background: alpha(currentColor, .08); }
 button.new-drawing-link:checked { background: none; color: var(--accent-color); }
-button.new-drawing-link:checked:hover { background: alpha(currentColor, .08); }
 button.new-drawing-link image { -gtk-icon-size: 12px; }
 .new-drawing-dialog dropdown > button { min-height: 34px; padding: 0 10px; border-radius: var(--control-radius); background: alpha(var(--window-fg-color), .07); box-shadow: none; font-weight: 700; }
-.new-drawing-dialog dropdown > button:hover { background: alpha(var(--window-fg-color), .11); }
 .picker-dialog .choice-well.new-drawing-joined { padding: 3px; border-radius: calc(var(--control-radius) + 3px); }
 .choice-well.new-drawing-joined button { min-height: 28px; padding: 0 9px; border-radius: var(--control-radius); font-weight: 400; }
 .choice-well.new-drawing-icons button { min-width: 30px; padding: 0; }
 button.new-drawing-paper-tile { min-height: 36px; padding: 4px 12px 4px 4px; border-radius: var(--control-radius); background: alpha(var(--window-fg-color), .07); box-shadow: none; }
-button.new-drawing-paper-tile:hover { background: alpha(var(--window-fg-color), .11); }
 button.new-drawing-paper-tile .paper-preview { border-radius: calc(var(--control-radius) - 1px); }
 image.new-drawing-up { -gtk-icon-transform: rotate(180deg); }
 button.new-drawing-pill { min-height: 28px; padding: 0 11px; border-radius: 99px; font-weight: 400; }
@@ -578,6 +569,67 @@ button.new-drawing-pill:checked { background: var(--header-selection); color: va
 .new-drawing-actions > button { min-height: 34px; padding: 0 16px; border-radius: var(--control-radius); font-weight: 500; }
 .new-drawing-dialog popover button.selected { background: alpha(currentColor, .10); }
 .edit-color-hex label.new-drawing-transparent { font-size: calc(var(--ui-text-size) * 1.3); }
+
+.choice-well button:hover:not(:checked):not(:active):not(:disabled),
+.canvas-action-bar button:hover:not(:active):not(:disabled),
+.selection-modes button:hover:not(:active):not(:disabled),
+.toolbar-component .option-action button:hover:not(:active):not(:disabled),
+.layers-panel button.layer-reference:hover:not(:active):not(:disabled),
+button.new-drawing-pill:hover:not(:active):not(:disabled),
+.new-drawing-dialog popover button.selected:hover:not(:active):not(:disabled),
+.workspace-manager-row menubutton.workspace-reorder-handle > button:hover:not(:active):not(:disabled),
+.workspace-manager-row button.workspace-pin:hover:not(:active):not(:disabled),
+.layers-panel button.layer-thumbnail:hover:not(:active):not(:disabled),
+.layers-panel button.layer-folder:hover:not(:active):not(:disabled),
+.layers-panel button.layer-effect:hover:not(:active):not(:disabled),
+.layer-swipe-actions button:hover:not(:active):not(:disabled),
+.image-selector button:hover:not(:active):not(:disabled),
+.choice-grid button:hover:not(:active):not(:disabled),
+.transparency-choice button:hover:not(:active):not(:disabled),
+.palette-panel button.palette-tile:hover:not(:active):not(:disabled),
+.picker-dialog button.palette-tile:hover:not(:active):not(:disabled),
+.palette-panel button.palette-add:hover:not(:active):not(:disabled),
+.picker-dialog button.palette-add:hover:not(:active):not(:disabled),
+.edit-color-pair button.edit-color-revert:hover:not(:active):not(:disabled),
+button.new-drawing-preview:hover:not(:active):not(:disabled),
+button.new-drawing-link:hover:not(:active):not(:disabled),
+button.new-drawing-paper-tile:hover:not(:active):not(:disabled),
+.new-drawing-dialog dropdown > button:hover:not(:active):not(:disabled),
+.dock-panel dropdown > button:hover:not(:active):not(:disabled),
+.dock-panel menubutton.panel-choice > button:hover:not(:active):not(:disabled),
+.toolbar-component.vertical-component dropdown > button:hover:not(:active):not(:disabled),
+.new-drawing-dialog .new-drawing-field button.number-value:hover:not(:active):not(:disabled),
+.swatch-selector button:hover:not(:active):not(:disabled) { background-image: image(alpha(var(--window-fg-color), .08)); }
+.choice-well button:active:not(:disabled),
+.canvas-action-bar button:active:not(:disabled),
+.selection-modes button:active:not(:disabled),
+.toolbar-component .option-action button:active:not(:disabled),
+.layers-panel button.layer-reference:active:not(:disabled),
+button.new-drawing-pill:active:not(:disabled),
+.new-drawing-dialog popover button.selected:active:not(:disabled),
+.workspace-manager-row menubutton.workspace-reorder-handle > button:active:not(:disabled),
+.workspace-manager-row button.workspace-pin:active:not(:disabled),
+.layers-panel button.layer-thumbnail:active:not(:disabled),
+.layers-panel button.layer-folder:active:not(:disabled),
+.layers-panel button.layer-effect:active:not(:disabled),
+.layer-swipe-actions button:active:not(:disabled),
+.image-selector button:active:not(:disabled),
+.choice-grid button:active:not(:disabled),
+.transparency-choice button:active:not(:disabled),
+.palette-panel button.palette-tile:active:not(:disabled),
+.picker-dialog button.palette-tile:active:not(:disabled),
+.palette-panel button.palette-add:active:not(:disabled),
+.picker-dialog button.palette-add:active:not(:disabled),
+.edit-color-pair button.edit-color-revert:active:not(:disabled),
+button.new-drawing-preview:active:not(:disabled),
+button.new-drawing-link:active:not(:disabled),
+button.new-drawing-paper-tile:active:not(:disabled),
+.new-drawing-dialog dropdown > button:active:not(:disabled),
+.dock-panel dropdown > button:active:not(:disabled),
+.dock-panel menubutton.panel-choice > button:active:not(:disabled),
+.toolbar-component.vertical-component dropdown > button:active:not(:disabled),
+.new-drawing-dialog .new-drawing-field button.number-value:active:not(:disabled),
+.swatch-selector button:active:not(:disabled) { background-image: image(alpha(var(--window-fg-color), .16)); }
 
 window.capy-workspace.glass .utility-panel { background: var(--panel-bg); }
 .utility-title { font-weight: 700; }

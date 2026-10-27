@@ -331,6 +331,12 @@ them through the private-compositor runner:
 bash tools/performance/workspace-motion.sh gtk --native-test=native_canvas_bar_modes
 ```
 
+`native_button_feedback_styles` renders the custom button families in both
+themes and distinguishes idle, hover and pressed fills.
+`native_workspace_switcher_press_feedback --native-storage` checks held mouse
+and touch contacts, adopted selection and release-outside cancellation. Run it
+again with `--tablet` for native pen delivery on the private display.
+
 Standalone workspace motion tests use the same 4 ms input cadence as their
 dedicated runner flags. `LAYER_NATIVE_EVENT_MS` overrides it when measuring a
 different input rate.

@@ -374,7 +374,7 @@ internal class BubbleInteraction(val host: CanvasHost, val dock: DockInteraction
         contact?.let { it.hold?.cancel(); it.record.pinch = 1f }
         contact = null; candidate = null; dock.bubbleCaptured = false; dismiss()
     }
-    fun cancel() { refresh(); up(null, true); cancelColorTouches() }
+    fun cancel() { refresh(); up(null, true); cancelColorTouches(); clearHover() }
     fun key(event: KeyEvent): Boolean {
         if (event.keyCode != KeyEvent.KEYCODE_ESCAPE || contact == null && candidate?.moving != true) return false
         if (event.action == KeyEvent.ACTION_DOWN) cancel()
@@ -390,6 +390,11 @@ internal class BubbleInteraction(val host: CanvasHost, val dock: DockInteraction
             if (it.hovered?.toString() != next?.toString()) { it.hovered = next; wake() }
         }
         return target != null && target.hit(at) !in listOf("card", "pill")
+    }
+    fun clearHover(): Boolean {
+        hovering = false
+        records.values.forEach { if (it.hovered != null) { it.hovered = null; wake() } }
+        return false
     }
     fun takeTile(item: JSONObject, position: Offset, valid: () -> Boolean, done: () -> Unit) {
         val source = sourceControl(item)
@@ -429,6 +434,7 @@ internal class BubbleInteraction(val host: CanvasHost, val dock: DockInteraction
                             change.changedToDownIgnoreConsumed() -> input.down(change, event.buttons.isSecondaryPressed)
                             change.changedToUpIgnoreConsumed() -> input.up(change, change.isConsumed)
                             change.pressed -> input.move(change)
+                            event.type == PointerEventType.Exit || change.type == PointerType.Touch -> input.clearHover()
                             else -> input.hover(change.position)
                         }
                         if (captured) change.consume()

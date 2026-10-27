@@ -241,6 +241,20 @@ class AndroidColorPanelTest {
         waitFor("color editor closed") { findTag("color-use") == null }; settle()
         action(obj("type" to "customize", "action" to obj("type" to "close_control")))
     }
+    @Test fun colorButtonsShowTouchAndPenContactAndCancelAcrossThemes() {
+        for (theme in listOf("light", "dark")) {
+            action(obj("type" to "set_theme", "theme" to theme))
+            for (pointer in listOf(MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_STYLUS)) {
+                tool = pointer
+                val target = bounds("color-swap")
+                tap(target.center); tap(target.center)
+                val before = jsonValue(colors())
+                assertButtonContactFeedback(owner, target, "$theme tool=$pointer color swap") { event(it, target.center) }
+                assertEquals("Cancelled color action preserves colors", before, jsonValue(colors()))
+            }
+        }
+    }
+
     @Test fun editColorRowsSheetAndCanvasPick() {
         fun click(tag: String) = instrumentation.runOnMainSync { assertTrue(tag, findTag(tag)!!.second.config[SemanticsActions.OnClick].action!!.invoke()) }
         fun description(tag: String): String { var text = ""; instrumentation.runOnMainSync { text = findTag(tag)!!.second.config[SemanticsProperties.ContentDescription].single() }; return text }

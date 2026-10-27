@@ -147,6 +147,21 @@ class AndroidPaletteTest {
         finally { if (::scenario.isInitialized) scenario.close() }
     }
 
+    @Test fun savedSwatchesShowTouchAndPenContactAndCancelAcrossThemes() {
+        showPalettes()
+        for (theme in listOf("light", "dark")) {
+            action(obj("type" to "set_theme", "theme" to theme))
+            for (pointer in listOf(MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_STYLUS)) {
+                tool = pointer
+                val target = bounds(swatch(0))
+                tap(target.center)
+                val before = jsonValue(state().getJSONObject("colors"))
+                assertButtonContactFeedback(owner, target, "$theme tool=$pointer saved swatch") { event(it, target.center) }
+                assertEquals("Cancelled swatch preserves color", before, jsonValue(state().getJSONObject("colors")))
+            }
+        }
+    }
+
     @Test fun defaultsPlacePalettesAfterColorAndInSketchDrawer() {
         for (id in listOf("builtin:workspace:illustrator", "builtin:workspace:photographer")) {
             switchWorkspace(id)

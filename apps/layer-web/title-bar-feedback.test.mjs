@@ -15,8 +15,8 @@ export async function checkTitleBarFeedback({call, evaluate, settle}) {
   const pointer = async (type, p = point) => {
     point = p;
     if (device === 'touch') await call('Input.dispatchTouchEvent', {
-      type: {down:'touchStart',move:'touchMove',up:'touchEnd'}[type],
-      touchPoints: type === 'up' ? [] : [{id:1,...p}],
+      type: {down:'touchStart',move:'touchMove',up:'touchEnd',cancel:'touchCancel'}[type],
+      touchPoints: ['up','cancel'].includes(type) ? [] : [{id:1,...p}],
     });
     else await call('Input.dispatchMouseEvent', {
       type: {down:'mousePressed',move:'mouseMoved',up:'mouseReleased'}[type],
@@ -31,7 +31,9 @@ export async function checkTitleBarFeedback({call, evaluate, settle}) {
   const blue = async selector => {
     const value = await paint(selector), [r,g,b] = value.rgba;
     assert.equal(value.selected,'true',`${device}: ${JSON.stringify(value)}`); assert.ok(b > g + 18 && g > r + 14,JSON.stringify(value));
-    assert.equal(value.css,await evaluate(`(()=>{const c=layerApp.state().palette.glass.header_selection,p=document.body.appendChild(document.createElement('i'));p.style.background='rgb('+c.slice(0,3).map(v=>v*255).join(' ')+' / '+c[3]+')';const css=getComputedStyle(p).backgroundColor;p.remove();return css})()`),`Selected bar tool uses the shared header selection: ${JSON.stringify(value)}`);
+    const expected=await evaluate(`(()=>{const color=layerApp.state().palette.glass.header_selection,p=document.body.appendChild(document.createElement('i'));p.style.background='rgb('+color.slice(0,3).map(v=>v*255).join(' ')+' / '+color[3]+')';const css=getComputedStyle(p).backgroundColor;p.remove();return css})()`);
+    const channels=css=>{const values=css.match(/[\d.]+/g).map(Number);return [...values.slice(0,3),(values[3]??1)*255];};
+    assert.ok(channels(value.css).every((channel,i)=>Math.abs(channel-channels(expected)[i])<=1),`Selected bar tool uses the shared header selection: ${JSON.stringify({value,expected})}`);
   };
   const grey = async (selector, alpha) => {
     const value = await paint(selector), [r,g,b,a] = value.rgba;
@@ -54,6 +56,71 @@ export async function checkTitleBarFeedback({call, evaluate, settle}) {
   const color = `[data-header-item="${entries.find(e=>e.item.control?.kind==='color').id}"] .header-tool`;
   const brush = tool('drawing_brush'), erase = tool('eraser');
   try {
+    for (const theme of ['dark','light']) {
+      await send({type:'set_theme',theme});
+      const selected='.workspace-switcher button[data-workspace-id][aria-pressed="true"]';
+      const other='.workspace-switcher button[data-workspace-id]:not([aria-pressed="true"])';
+      const workspaceId=await evaluate('JSON.parse(layerApp.app.workspace_view()).id');
+      for(const selector of [selected,other,'.workspace-switcher-options']) {
+        await pointer('move',await center(selector));
+        const hover=(await paint(selector)).css;
+        await pointer('down');
+        assert.notEqual((await paint(selector)).css,hover,`${theme}: workspace control distinguishes hover and held press`);
+        assert.equal(await evaluate('JSON.parse(layerApp.app.workspace_view()).id'),workspaceId,'Workspace selection waits for release');
+        await pointer('move',{x:10,y:2});await pointer('up');
+        assert.equal(await evaluate('JSON.parse(layerApp.app.workspace_view()).id'),workspaceId,'Dragging out cancels workspace activation');
+      }
+      await pointer('move',await center(selected));const hover=(await paint(selected)).css;
+      await pointer('down');await pointer('up');
+      assert.equal((await paint(selected)).css,hover,'Release restores selected workspace hover');
+      await evaluate(`document.querySelector(${JSON.stringify(selected)}).disabled=true`);
+      await pointer('move',{x:10,y:2});const disabled=(await paint(selected)).css;
+      await pointer('move',await center(selected));await pointer('down');
+      assert.equal((await paint(selected)).css,disabled,'Disabled workspace control has no pointer feedback');
+      await pointer('up');await evaluate(`document.querySelector(${JSON.stringify(selected)}).disabled=false`);
+      const originalId=workspaceId;
+      for(device of ['mouse','pen','touch']) {
+        console.log('Workspace press and release',theme,device);
+        const targetId=await evaluate(`document.querySelector(${JSON.stringify(other)}).dataset.workspaceId`);
+        for(const id of [targetId,originalId]) {
+          const target=`.workspace-switcher button[data-workspace-id=${JSON.stringify(id)}]`;
+          if(device!=='touch')await pointer('move',{x:10,y:2});
+          if(device!=='touch')await pointer('move',await center(target));
+          const before=(await paint(target)).css;
+          await pointer('down',await center(target));
+          const held=await paint(target);
+          assert.equal(held.selected,'false',`${theme}/${device}: workspace stays unselected until release`);
+          assert.notEqual(held.css,before,`${theme}/${device}: unselected workspace shows held feedback`);
+          assert.equal(await evaluate('JSON.parse(layerApp.app.workspace_view()).id'),id===originalId?targetId:originalId);
+          await pointer('up');
+          await wait(`!JSON.parse(layerApp.app.workspace_view()).busy&&JSON.parse(layerApp.app.workspace_view()).id===${JSON.stringify(id)}`);
+          assert.equal((await paint(target)).selected,'true',`${theme}/${device}: release selects destination workspace`);
+          if(device==='touch') {
+            await pointer('down',await center(target));await pointer('cancel');
+            assert.equal(await evaluate("document.documentElement.hasAttribute('data-touch')"),true);
+            assert.notEqual((await paint(target)).css,held.css,'Touch cancellation removes held feedback');
+          }
+        }
+      }
+      device='mouse';
+      await send({type:'invoke',command:'new_document'});
+      await wait('!!document.querySelector("#new-drawing-create")&&!document.querySelector("#new-drawing-create").disabled');
+      const create='#new-drawing-create';
+      for(device of ['mouse','pen','touch']) {
+        console.log('Suggested action press and cancellation',theme,device);
+        if(device!=='touch')await pointer('move',await center(create));
+        const before=(await paint(create)).css;
+        await pointer('down',await center(create));
+        assert.notEqual((await paint(create)).css,before,`${theme}/${device}: suggested dialog action distinguishes idle/hover and press`);
+        if(device==='touch')await pointer('cancel');
+        else {await pointer('move',{x:10,y:2});await pointer('up');}
+        assert.equal(await evaluate("document.querySelectorAll('[data-pressed]').length"),0,'Canceled contact clears visual feedback');
+        assert.ok(await evaluate('!!layerApp.state().new_drawing'),'Canceled contact preserves New Drawing');
+      }
+      device='mouse';
+      for(const type of ['keyDown','keyUp'])await call('Input.dispatchKeyEvent',{type,key:'Escape',code:'Escape',windowsVirtualKeyCode:27});
+      await wait('!layerApp.state().new_drawing');
+    }
     for (const theme of ['dark','light']) for (const size of ['small','large','medium']) {
       await send({type:'set_theme',theme});
       await send({type:'customize',action:{type:'header',action:{type:'edit',editing:true}}});
@@ -108,10 +175,10 @@ export async function checkTitleBarFeedback({call, evaluate, settle}) {
       console.log('Action press',device);
       await pointer('down',await center(selector)); await grey(selector,41); await pointer('up');
       assert.equal((await paint(selector)).selected,'false');
-      assert.equal(await evaluate("document.querySelectorAll('[data-header-pressed]').length"),0,'Release clears contact feedback');
+      assert.equal(await evaluate("document.querySelectorAll('[data-pressed]').length"),0,'Release clears contact feedback');
     }
     assert.ok(await evaluate('layerApp.state().camera.zoom') > zoom);
     await send({type:'invoke',command:'undo_workspace'});
-    console.log('PASS: minimal Sketch, constant centered pill at every size, opaque selected-tool blue through mouse/touch/pen press and hover, matching neutral tile/drawer backgrounds, 10% neutral hover, 16% neutral action press, both themes');
+    console.log('PASS: workspace hover/held/release/switch/cancel/disabled feedback and suggested-action cancellation in both themes with mouse/pen/touch; minimal Sketch, constant centered pill at every size, selected-tool blue through mouse/touch/pen press and hover, matching neutral tile/drawer backgrounds, 10% neutral hover, 16% neutral action press, both themes');
   } finally { if (pressed) await pointer('up'); }
 }

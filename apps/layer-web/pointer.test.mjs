@@ -1,11 +1,45 @@
 import {nativeScreenEvents} from './native-input-fixture.mjs';
 import {observePenInput} from './pen-input.js';
+import {observeButtonFeedback} from './button-feedback.js';
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import test from "node:test";
 
 const source = readFileSync(new URL("app.js", import.meta.url), "utf8");
+
+test('button contacts clear on cancellation, removal, disabled state and pointer takeover', () => {
+  const listeners = new Map(); let mutation;
+  const root = {document:{documentElement:{}}, addEventListener(type, handler) { listeners.set(type, handler); },
+    MutationObserver:class { constructor(callback) { mutation = callback; } observe() {} disconnect() {} }};
+  const attributes = new Set(), parent = {};
+  const button = {isConnected:true, parentNode:parent, disabled:false, hidden:false,
+    matches() { return this.disabled; }, closest(selector) { return selector === 'button,summary' ? this : this.hidden ? {} : null; },
+    setAttribute(name) { attributes.add(name); }, removeAttribute(name) { attributes.delete(name); },
+    toggleAttribute(name, on) { if (on) attributes.add(name); else attributes.delete(name); },
+    getBoundingClientRect() { return {left:10, top:10, right:50, bottom:50}; }};
+  observeButtonFeedback(root);
+  const emit = (type, options = {}) => listeners.get(type)({target:button, pointerId:1, pointerType:'touch', button:0, isPrimary:true, clientX:20, clientY:20, ...options});
+  const held = () => attributes.has('data-pressed');
+  for (const pointerType of ['mouse','pen','touch']) {
+    emit('pointerdown',{pointerType}); assert.ok(held());
+    emit('pointermove',{clientX:100}); assert.ok(!held());
+    emit('pointermove'); assert.ok(held());
+    emit('pointerup',{pointerId:2}); assert.ok(held());
+    emit('pointercancel'); assert.ok(!held());
+  }
+  for (const event of ['pointerup','lostpointercapture','blur','resize','scroll','dragstart']) {
+    emit('pointerdown'); assert.ok(held()); emit(event); assert.ok(!held(), event);
+  }
+  emit('pointerdown'); emit('pointerdown',{pointerId:2,isPrimary:false}); assert.ok(!held());
+  emit('pointerdown'); emit('keydown',{key:'Escape'}); assert.ok(!held());
+  for (const property of ['disabled','hidden']) {
+    emit('pointerdown'); button[property] = true; mutation(); assert.ok(!held(), property);
+    emit('pointerdown'); assert.ok(!held(), property); button[property] = false;
+  }
+  emit('pointerdown'); button.parentNode = {}; mutation(); assert.ok(!held());
+  emit('pointerdown'); button.isConnected = false; mutation(); assert.ok(!held());
+});
 
 function penObserver() {
   const listeners=new Map(),actions=[],canvas={};let owner=0;

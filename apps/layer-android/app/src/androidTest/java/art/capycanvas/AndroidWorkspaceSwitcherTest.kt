@@ -624,6 +624,56 @@ class AndroidWorkspaceSwitcherTest {
             }
         }
     }
+    @Test fun choicesShowHeldFeedbackAndSelectOnlyOnReleaseAcrossThemes() {
+        val feedbackFailures = mutableListOf<String>()
+        val choices = listOf(newWorkspace("Feedback one"), newWorkspace("Feedback two"))
+        open()
+        view().array("rows").objects().filter { it.getString("id") !in choices && it.getJSONObject("pin").getBoolean("selected") }.forEach {
+            send(obj("type" to "edit_switcher", "edit" to it.getJSONObject("pin").getJSONObject("edit")))
+        }
+        send(obj("type" to "dismiss"))
+        for (theme in listOf("light", "dark")) {
+            host.drain(obj("type" to "set_theme", "theme" to theme)); idle()
+            for (pointer in listOf(MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_STYLUS)) {
+                tool = pointer
+                header()
+                val current = view().getString("id")
+                val inactive = choices.first { it != current }
+                for (id in listOf(current, inactive)) {
+                    val tag = "workspace-switch-$id"
+                    val owner = checkNotNull(node(tag)).first
+                    assertNull("Workspace choice must be enabled: ${view()}", node(tag)!!.second.config.getOrNull(SemanticsProperties.Disabled))
+                    try { assertButtonContactFeedback(owner, bounds(tag), "$theme tool=$pointer selected=${id == current}",
+                        minimumChangedFraction = if (id == current) .005f else .02f) { phase ->
+                        if (phase == MotionEvent.ACTION_DOWN) down(tag) else event(phase)
+                        assertEquals("Held or cancelled contact preserves the workspace", current, view().getString("id"))
+                    } } catch (failure: AssertionError) {
+                        feedbackFailures.add(failure.message ?: failure.toString())
+                        instrumentation.sendStatus(0, android.os.Bundle().apply { putString("stream", "${feedbackFailures.last()}\n") })
+                    }
+                }
+            }
+        }
+        for (theme in listOf("light", "dark")) {
+            host.drain(obj("type" to "set_theme", "theme" to theme)); idle()
+            for (pointer in listOf(MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_STYLUS)) {
+                tool = pointer
+                header()
+                val current = view().getString("id")
+                val inactive = choices.first { it != current }
+                val tag = "workspace-switch-$inactive"
+                down(tag)
+                assertEquals("A workspace press waits for release", current, view().getString("id"))
+                event(MotionEvent.ACTION_UP); idle()
+                assertEquals("Release adopts the workspace", inactive, view().getString("id"))
+                waitFor("Released workspace is visibly selected") {
+                    node(tag)?.second?.config?.getOrNull(SemanticsProperties.Selected) == true
+                }
+            }
+        }
+        assertTrue(feedbackFailures.joinToString("\n"), feedbackFailures.isEmpty())
+    }
+
     @Test fun scrollingChoicesKeepsOptionsFixedAndDoesNotSwitch() {
         device.landscape(scenario)
         idle()

@@ -554,6 +554,68 @@ class AndroidToolBubblesTest {
         assertEquals("$part fits its measured text width", expected.second.x * density, surface!!.width, 2f)
         assertEquals("$part fits its measured text height", expected.second.y * density, surface!!.height, 2f)
     }
+    @Test fun bubbleHoverExitClearsFaceFeedback() {
+        for (theme in listOf("light", "dark")) {
+            action(obj("type" to "restore_workspace", "workspace" to JSONObject(fixture.toString())))
+            action(obj("type" to "set_theme", "theme" to theme))
+            tool = MotionEvent.TOOL_TYPE_MOUSE
+            val id = take(2, workspace().center)
+            val target = bounds("tool-bubble-$id")
+            val owner = checkNotNull(root)
+            fun hover(phase: Int, position: Offset) {
+                val e = motion(tool, phase, position, SystemClock.uptimeMillis(), button = 0)
+                try { instrumentation.runOnMainSync { owner.view.dispatchGenericMotionEvent(e) } } finally { e.recycle() }
+                SystemClock.sleep(120)
+            }
+            val origin = IntArray(2)
+            instrumentation.runOnMainSync { owner.view.getLocationOnScreen(origin) }
+            var frame = 0
+            fun pixels(): IntArray {
+                val shot = instrumentation.uiAutomation.takeScreenshot()
+                val width = target.width.toInt(); val height = target.height.toInt()
+                val crop = android.graphics.Bitmap.createBitmap(shot, origin[0] + target.left.toInt(), origin[1] + target.top.toInt(), width, height)
+                val file = java.io.File(instrumentation.targetContext.getExternalFilesDir(null), "validation/bubble-feedback/$theme-${frame++}.png")
+                file.parentFile!!.mkdirs()
+                file.outputStream().use { crop.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+                crop.recycle()
+                return IntArray(width * height).also {
+                    shot.getPixels(it, 0, width, origin[0] + target.left.toInt(), origin[1] + target.top.toInt(), width, height)
+                    shot.recycle()
+                }
+            }
+            fun changed(a: IntArray, b: IntArray) = a.indices.count { i ->
+                listOf(0, 8, 16).any { shift -> kotlin.math.abs((a[i] shr shift and 255) - (b[i] shr shift and 255)) > 8 }
+            }
+            hover(MotionEvent.ACTION_HOVER_ENTER, workspace().topLeft + Offset(10f, 100f))
+            val idle = pixels()
+            hover(MotionEvent.ACTION_HOVER_MOVE, target.center)
+            val active = pixels()
+            hover(MotionEvent.ACTION_HOVER_EXIT, target.center)
+            val exited = pixels()
+            assertTrue("Bubble face shows mouse hover", changed(idle, active) > idle.size / 50)
+            assertTrue("$theme native hover exit clears bubble face: ${changed(idle, exited)}/${idle.size} pixels", changed(idle, exited) < idle.size / 50)
+            hover(MotionEvent.ACTION_HOVER_ENTER, target.center)
+            assertTrue("Bubble face shows hover before losing focus", changed(idle, pixels()) > idle.size / 50)
+            var dialog: android.app.Dialog? = null
+            try {
+                scenario.onActivity { activity ->
+                    dialog = android.app.Dialog(activity).apply {
+                        setContentView(android.widget.TextView(activity).apply { text = "Focus fixture" })
+                        show()
+                        window!!.setGravity(android.view.Gravity.TOP or android.view.Gravity.START)
+                        window!!.setLayout(120, 80)
+                        window!!.clearFlags(android.view.WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+                        window!!.setDimAmount(0f)
+                    }
+                }
+                waitFor("Native dialog takes bubble window focus") { !owner.view.hasWindowFocus() }
+                SystemClock.sleep(120)
+                assertTrue("$theme focus loss clears bubble face", changed(idle, pixels()) < idle.size / 50)
+            } finally { instrumentation.runOnMainSync { dialog?.dismiss() } }
+            waitFor("Bubble window regains native focus") { owner.view.hasWindowFocus() }
+        }
+    }
+
     @Test fun haloAndFaceShareTheCoreCenter() {
         for (theme in listOf("light", "dark")) {
             case = "$theme-geometry"

@@ -1,4 +1,5 @@
 import { addScrollbar } from "./scrollbars.js";
+import { observeButtonFeedback } from "./button-feedback.js";
 import { edgeContactClass, edgeResetClass } from "./edge-reach.js";
 import { brushSizeGrid } from "./brush-sizes.js";
 import init, { WebApp, WebGpu, configure_raster_worker, configure_gpu_diagnostics, automatic_tab_names } from "./pkg/layer_web.js";
@@ -80,6 +81,7 @@ let app,
 let penResponse, refreshPreferences, customization, layerPanel, effectPanels, palettes, editor, selectionUi, frequencySeparationUi, canvasSizeUi, imageSizeUi, workspaceChrome, panelVectors, glass, documents, systemStatus, header, canvasBar, notice, zoomReadout, screenStatus;
 let commandBar, paintPairView;
 let bubbles;
+observeButtonFeedback(window);
 const compilerContacts = new Set();
 for (const type of ['pointerdown', 'pointermove', 'pointerup', 'pointercancel', 'keydown', 'wheel']) {
   window.addEventListener(type, event => {

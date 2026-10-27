@@ -81,6 +81,16 @@ Joined bars and Menu Labels share one surface behind their members; standalone
 controls carry their own. Hover, press and selection feedback composite over
 this surface. Header text has no outline; no host adds a toolkit backdrop blur.
 
+Buttons show feedback throughout a mouse, pen or touch press, including contacts
+without hover. Custom fills retain the stronger pressed overlay. An unselected
+workspace choice stays neutral while held and takes the selection tint after
+the workspace is adopted. Release, cancellation, scrolling, focus loss and
+removing the control retire its contact feedback; disabled controls do not
+acquire it. Web tracks native pointer contacts alongside CSS `:active`, since
+touch can defer the browser's mouse compatibility events until release.
+Selected title-bar tools retain their blue fill; joined panel tabs retain their
+panel fill. Paint swatches use their rim so feedback does not tint the paint.
+
 ## Lines
 
 libadwaita draws dividers and outlines at fixed opacities tuned for its own

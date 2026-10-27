@@ -156,7 +156,7 @@ test("display estimate adapts after moving to a 60 Hz screen and excludes idle g
 test('shared chrome replies retain the same Capy control and contact state', t => {
   const {doc,element}=colorDialogDom(t),workspace=element('div'),capy=element('button');
   capy.id='zen-capy';workspace.append(capy);doc.body.append(workspace);capy.focus();
-  capy.setAttribute('data-header-pressed','');
+  capy.setAttribute('data-pressed','');
   let geometry={capy_item:0,size:'medium'},editing=false,reply,hidden=false;
   const writes=[];
   Object.defineProperty(capy,'hidden',{get:()=>hidden,set:value=>{writes.push(value);hidden=value;}});
@@ -169,7 +169,7 @@ test('shared chrome replies retain the same Capy control and contact state', t =
     assert.equal(workspace.firstChild,capy);
     assert.equal(capy.parentNode,workspace);
     assert.equal(capy.id,'zen-capy');
-    assert.ok(capy.hasAttribute('data-header-pressed'));
+    assert.ok(capy.hasAttribute('data-pressed'));
   };
   for(const [chrome_hidden,keep_zen_button] of [[false,false],[true,true],[false,false],[true,true],[false,false]]){
     reply={chrome_hidden,keep_zen_button,change:{}};

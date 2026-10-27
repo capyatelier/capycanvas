@@ -58,20 +58,20 @@ body .workspace-manager::backdrop { background:rgb(0 0 0 / 12%); }
 .workspace-manager .workspace-pin { background:transparent; border:0; box-shadow:none; }
 .workspace-pin[aria-pressed="true"] { color:var(--accent); }
 .workspace-pin[aria-disabled="true"] { opacity:.5; }
-.workspace-manager .workspace-pin:active:not([aria-disabled="true"]) { opacity:.65; }
+.workspace-manager .workspace-pin:is(:active,[data-pressed]):not([aria-disabled="true"]) { opacity:.65; }
 /* Row bodies and grips share one hover surface. */
 :where(:root:not([data-touch])) .workspace-row:has(.workspace-choice:not(:disabled)):hover { background:color-mix(in srgb,var(--workspace-shade) 3%,transparent); }
 :where(:root:not([data-touch])) .workspace-row[data-selected="true"]:has(.workspace-choice:not(:disabled)):hover { background:color-mix(in srgb,var(--text) 8%,var(--selection)); }
 :where(:root:not([data-touch])) .workspace-manager :is(.workspace-add,.workspace-delete):hover:not(:disabled) { background:color-mix(in srgb,var(--workspace-shade) 7%,transparent); }
 :where(:root:not([data-touch])) .workspace-manager .dialog-close:hover::before { background:color-mix(in srgb,var(--workspace-shade) 15%,transparent); }
-.workspace-manager :is(.workspace-add,.workspace-delete):active:not(:disabled) { background:color-mix(in srgb,var(--workspace-shade) 16%,transparent); }
-.workspace-manager .dialog-close:active::before { background:color-mix(in srgb,var(--workspace-shade) 20%,transparent); }
-.workspace-row:has(.workspace-choice:active:not(:disabled)) { background:color-mix(in srgb,var(--workspace-shade) 8%,transparent); }
-.workspace-row[data-selected="true"]:has(.workspace-choice:active:not(:disabled)) { background:color-mix(in srgb,var(--text) 16%,var(--selection)); }
+.workspace-manager :is(.workspace-add,.workspace-delete):is(:active,[data-pressed]):not(:disabled) { background:color-mix(in srgb,var(--workspace-shade) 16%,transparent); }
+.workspace-manager .dialog-close:is(:active,[data-pressed])::before { background:color-mix(in srgb,var(--workspace-shade) 20%,transparent); }
+.workspace-row:has(.workspace-choice:is(:active,[data-pressed]):not(:disabled)) { background:color-mix(in srgb,var(--workspace-shade) 8%,transparent); }
+.workspace-row[data-selected="true"]:has(.workspace-choice:is(:active,[data-pressed]):not(:disabled)) { background:color-mix(in srgb,var(--text) 16%,var(--selection)); }
 .workspace-row-menu { position:fixed; inset:auto; margin:0; display:none; flex-direction:column; min-width:180px; padding:6px; border:0; color:var(--text); background:var(--popover); box-shadow:0 4px 16px #0005; border-radius:var(--surface-radius); }
 .workspace-row-menu:popover-open { display:flex; }
 .workspace-row-menu button { display:flex; align-items:center; gap:8px; text-align:left; font-weight:400; padding:4px 8px; }
-:where(:root:not([data-touch])) .workspace-row-menu button:hover:not(:disabled), .workspace-row-menu button:active:not(:disabled) { background:color-mix(in srgb,var(--text) 8%,transparent); }
+:where(:root:not([data-touch])) .workspace-row-menu button:hover:not(:disabled), .workspace-row-menu button:is(:active,[data-pressed]):not(:disabled) { background:color-mix(in srgb,var(--text) 8%,transparent); }
 .workspace-row-menu hr { width:100%; border:0; height:1px; background:var(--menu-divider); margin:5px 0; }
 .workspace-row-dragging { opacity:.45; }
 .workspace-drop-before { box-shadow:inset 0 2px var(--accent); }
@@ -86,12 +86,12 @@ body .workspace-manager::backdrop { background:rgb(0 0 0 / 12%); }
 .workspace-manager button:disabled { opacity:.5; }
 :where(:root:not([data-touch])) .workspace-manager footer button:hover:not(:disabled) { background:var(--workspace-button-hover); }
 :where(:root:not([data-touch])) :is(.workspace-manager,.workspace-form) .suggested-action:hover:not(:disabled) { background:color-mix(in srgb,white 10%,var(--accent)); }
-.workspace-manager footer button:active:not(:disabled) { background:color-mix(in srgb,var(--workspace-shade) 20%,transparent); }
-:is(.workspace-manager,.workspace-form) .suggested-action:active:not(:disabled) { background:color-mix(in srgb,black 10%,var(--accent)); }
+.workspace-manager footer button:is(:active,[data-pressed]):not(:disabled) { background:color-mix(in srgb,var(--workspace-shade) 20%,transparent); }
+:is(.workspace-manager,.workspace-form) .suggested-action:is(:active,[data-pressed]):not(:disabled) { background:color-mix(in srgb,black 10%,var(--accent)); }
 :where(:root:not([data-touch])) .workspace-form .destructive-action:hover:not(:disabled) { background:#c44; }
-.workspace-form .destructive-action:active:not(:disabled) { background:#a22; }
+.workspace-form .destructive-action:is(:active,[data-pressed]):not(:disabled) { background:#a22; }
 :where(:root:not([data-touch])) .workspace-form footer button:not(.suggested-action):hover:not(:disabled) { background:color-mix(in srgb,var(--text) 12%,transparent); }
-.workspace-form footer button:not(.suggested-action):active:not(:disabled) { background:color-mix(in srgb,var(--text) 16%,transparent); }
+.workspace-form footer button:not(.suggested-action):is(:active,[data-pressed]):not(:disabled) { background:color-mix(in srgb,var(--text) 16%,transparent); }
 .workspace-form { width:420px; padding:22px; box-sizing:border-box; }
 .workspace-form label { display:flex; flex-direction:column; gap:7px; margin:16px 0; }
 .workspace-form footer { margin:18px 0 0; flex-wrap:wrap; }
@@ -112,8 +112,8 @@ body { margin: 0; overflow: hidden; background: var(--bg); color: var(--text); }
 button, input, select, summary { font: inherit; accent-color: var(--accent); }
 button, select, input[type="color"], summary { min-height: 34px; border: 0; border-radius: var(--control-radius); background: transparent; color: var(--text); padding: 5px 17px; }
 button, summary { cursor: default; font-weight: 700; line-height: 24px; }
-:where(:root:not([data-touch])) button:hover:not(:disabled):not(.panel-grip):not(.dock-tab):not(:where(.workspace-manager *, .workspace-form *, .color-readout, .color-shape, .shortcut-choose, .texture-tile)), :where(:root:not([data-touch])) summary:hover, :where(:root:not([data-touch])) select:hover { background: color-mix(in srgb, var(--text) 8%, transparent); }
-button:active:not(:disabled):not(.panel-grip):not(.dock-tab):not(:where(.workspace-manager *, .workspace-form *, .color-readout, .color-shape, .shortcut-choose, .texture-tile)), summary:active { background: color-mix(in srgb, var(--text) 16%, transparent); }
+:where(:root:not([data-touch])) button:hover:not(:disabled):not(.panel-grip):not(.dock-tab):not(:where(.workspace-manager *, .workspace-form *, .color-readout, .color-shape, .shortcut-choose, .texture-tile)), :where(:root:not([data-touch])) summary:hover, :where(:root:not([data-touch])) select:hover:not(:disabled) { background: color-mix(in srgb, var(--text) 8%, transparent); }
+button:is(:active,[data-pressed]):not(:disabled):not(.panel-grip):not(.dock-tab):not(:where(.workspace-manager *, .workspace-form *, .color-readout, .color-shape, .shortcut-choose, .texture-tile)), summary:is(:active,[data-pressed]) { background: color-mix(in srgb, var(--text) 16%, transparent); }
 button:disabled { opacity: .36; cursor: default; }
 button[aria-pressed="true"], button[aria-selected="true"] { background: var(--selection); }
 :focus-visible { outline: none; }
@@ -167,11 +167,12 @@ body:not([data-workspace-ready]) #workspace > :not(#gpu-notice) { opacity: 0 !im
 #header { --header-item-gap:6px; --header-text-padding:6px; position: absolute; inset: 0 0 auto; height: 48px; padding: 0; display: block; background: transparent; z-index: 1000; }
 #header nav > button, .header-menu > summary, #document-title { background: var(--bg); border-radius: var(--header-radius); }
 :where(:root:not([data-touch])) #header nav > button:hover, :where(:root:not([data-touch])) .header-menu > summary:hover { background: color-mix(in srgb, var(--bg), var(--text) 8%); }
-#header nav > button:active, .header-menu > summary:active { background: color-mix(in srgb, var(--bg), var(--text) 16%); }
+#header nav > button:is(:active,[data-pressed]), .header-menu > summary:is(:active,[data-pressed]) { background: color-mix(in srgb, var(--bg), var(--text) 16%); }
 #header-start > button[aria-pressed="true"] { background: var(--selection); }
 #zen-capy { touch-action: manipulation; position: absolute; z-index: 1001; padding: 0; border-radius: calc(var(--header-tile) / 2 * var(--corner-fit)); background: var(--chrome-surface); }
 #zen-capy > svg { width: var(--header-capy-icon); height: var(--header-capy-icon); }
 :where(:root:not([data-touch])) :is(#canvas-status button.proof-status, #view-info):hover { background: color-mix(in srgb, var(--text) 8%, var(--chrome-surface)); }
+:is(#canvas-status button.proof-status, #view-info):is(:active,[data-pressed]):not(:disabled) { background: color-mix(in srgb, var(--text) 16%, var(--chrome-surface)); }
 #header nav { display: flex; align-items: center; gap:var(--header-item-gap); z-index: 1; }
 .header-menu-labels { flex:none; width:max-content; }
 .header-menu-labels[inert] { position:absolute; visibility:hidden; pointer-events:none; }
@@ -337,7 +338,7 @@ svg { width: 16px; height: 16px; flex: none; display: block; }
 :root[data-mouse] .scroll-thumb { visibility: visible; pointer-events: auto; }
 .scroll-thumb::after { content: ""; display: block; height: 100%; border-radius: 8px; background: color-mix(in srgb, var(--text) 35%, transparent); }
 :root[data-mouse] :is(.panel-frame, .layer-list, .texture-dialog .dialog-content):is(:hover, :focus-within) > .scroll-thumb { opacity: 1; }
-:root[data-mouse] .scroll-thumb:is(:hover, :active) { padding: 1px; }
+:root[data-mouse] .scroll-thumb:is(:hover,:active,[data-pressed]) { padding: 1px; }
 .panel.tile-panel { padding: 0; position: relative; overflow: clip; touch-action: none; }
 .toolbar-controls { position: relative; width: 100%; height: 100%; }
 .toolbar-controls > button, .toolbar-controls > .tool-tile { position: absolute; min-height: 0; padding: 0; }
@@ -612,13 +613,13 @@ body[data-theme="light"] .preferences-error { color: #c01c28; }
 .shortcut-filters { display: flex; align-items: center; gap: 6px; margin-bottom: 12px; }
 .shortcut-filters .preference-choice summary { height: 34px; padding: 0 10px; gap: 6px; font-weight: 700; background: color-mix(in srgb, var(--text) 10%, transparent); }
 :where(:root:not([data-touch])) .shortcut-filters .preference-choice summary:hover { background: color-mix(in srgb, var(--text) 15%, transparent); }
-.shortcut-filters .preference-choice summary:active, .shortcut-filters .preference-choice[open] > summary { background: color-mix(in srgb, var(--text) 30%, transparent); }
+.shortcut-filters .preference-choice summary:is(:active,[data-pressed]), .shortcut-filters .preference-choice[open] > summary { background: color-mix(in srgb, var(--text) 30%, transparent); }
 .shortcut-row { padding: 0; gap: 6px; }
 .shortcut-choose { flex: 1; display: flex; align-items: center; text-align: left; min-width: 0; min-height: 54px; padding: 8px 14px; gap: 6px; border-radius: 0; }
 .shortcut-row.modified .shortcut-choose { padding-inline-end: 0; }
 .shortcut-row > .icon-button { margin-inline-end: 14px; }
 :where(:root:not([data-touch])) .shortcut-row:hover { background: color-mix(in srgb, var(--text) 8%, transparent); }
-.shortcut-row:has(> .shortcut-choose:active) { background: color-mix(in srgb, var(--text) 16%, transparent); }
+.shortcut-row:has(> .shortcut-choose:is(:active,[data-pressed])) { background: color-mix(in srgb, var(--text) 16%, transparent); }
 .nav-row, .button-row, .picker-row { width: 100%; text-align: left; font-weight: 400; border-radius: 0; }
 .nav-row .row-chevron { flex: none; width: 16px; height: 16px; }
 .button-row { justify-content: center; gap: 8px; font-weight: 700; }
@@ -883,7 +884,7 @@ body[data-theme="dark"] .toolbar-manager .destructive-action { color: #ff7b63; }
 .color-wheel-control .color-swatch > span { pointer-events:none; display:block; width:100%; height:100%; border-radius:50%; }
 .color-wheel-control .color-swatch[aria-pressed="true"]::after { box-shadow:inset 0 0 0 2px var(--text); }
 :where(:root:not([data-touch])) .color-wheel-control .color-swatch:hover::after { box-shadow:inset 0 0 0 2px var(--text); }
-.color-wheel-control button.color-swatch:is(:hover,:active):not(:disabled) { background:var(--panel); }
+.color-wheel-control button.color-swatch:is(:hover,:active,[data-pressed]):not(:disabled) { background:var(--panel); }
 .color-wheel-control .color-utility { padding:2px; background:transparent; }
 :where(:root:not([data-touch])) .color-wheel-control .color-utility:hover { background:color-mix(in srgb,var(--text) 12%,transparent); }
 .color-wheel-control :is(.color-shape,.color-utility) svg { pointer-events:none; width:16px; height:16px; }
@@ -910,7 +911,7 @@ body[data-theme="dark"] .toolbar-manager .destructive-action { color: #ff7b63; }
 .column-tab { display:grid; place-items:center; padding:4px; }
 .column-tab[aria-selected="true"] { background:var(--selection); }
 :where(:root:not([data-touch])) .column-tab:hover:not([aria-selected="true"]) { background:color-mix(in srgb, var(--text) 8%, transparent); }
-.column-tab:active { background:var(--selection); }
+.column-tab:is(:active,[data-pressed]) { background:var(--selection); }
 .toolbar-controls .tool-tile > button[data-drawer-facing]:not([aria-pressed="true"]) { background:transparent; }
 [data-drawer-facing="top"] { border-top-left-radius:0 !important; border-top-right-radius:0 !important; }
 [data-drawer-facing="right"] { border-top-right-radius:0 !important; border-bottom-right-radius:0 !important; }
@@ -1020,10 +1021,11 @@ body[data-theme="light"] #header { text-shadow:none; }
 #header .drawing-selector { height:100%; border-radius:var(--header-radius); background:var(--header-surface); }
 :where(:root:not([data-touch])) :is(#zen-capy:hover:not(:disabled), #header :is(.header-tool,.header-menu > summary):hover:not(:disabled):not([aria-pressed="true"]):not([data-drawer-facing])) { background-color:color-mix(in srgb,var(--text) 10%,var(--header-feedback-bg,var(--chrome-surface))); }
 #header .header-tool[data-drawer-facing]:not([aria-pressed="true"]) { background-color:var(--glass-panel); }
-:is(#zen-capy:is(:active,[data-header-pressed]):not(:disabled), #header :is(.header-tool,.header-menu > summary):is(:active,[data-header-pressed]):not(:disabled):not([aria-pressed="true"]):not([data-drawer-facing])) { background-color:color-mix(in srgb,var(--text) 16%,var(--header-feedback-bg,var(--chrome-surface))); }
+:is(#zen-capy:is(:active,[data-pressed]):not(:disabled), #header :is(.header-tool,.header-menu > summary):is(:active,[data-pressed]):not(:disabled):not([aria-pressed="true"]):not([data-drawer-facing])) { background-color:color-mix(in srgb,var(--text) 16%,var(--header-feedback-bg,var(--chrome-surface))); }
 #header .header-tool[aria-pressed="true"] { background-image:linear-gradient(var(--glass-header-selection),var(--glass-header-selection)); }
 :where(:root:not([data-touch])) #header .workspace-switcher button:hover:not(:disabled) { background:color-mix(in srgb,var(--text) 8%,transparent); }
-:where(:root:not([data-touch])) #header .workspace-switcher button[aria-pressed="true"]:hover:not(:disabled) { background:var(--header-selection-hover); }
+:where(:root:not([data-touch])) #header .workspace-switcher button[aria-pressed="true"]:hover:not(:is(:active,[data-pressed])):not(:disabled) { background:var(--header-selection-hover); }
+#header .workspace-switcher button:is(:active,[data-pressed]):not(:disabled) { background:color-mix(in srgb,var(--text) 16%,transparent); }
 #header .header-tool[data-drawer-facing="bottom"] { border-bottom-left-radius:0; border-bottom-right-radius:0; }
 .header-bar { position:absolute; border-radius:var(--header-radius); background:var(--header-surface); pointer-events:none; }
 #header :is(.header-item,.header-overflow).in-bar { --header-control-bg:transparent; --header-feedback-bg:transparent; }
@@ -1076,6 +1078,7 @@ body[data-theme="light"] #header { text-shadow:none; }
 .dialog-footer > :is(.dialog-button,.suggested-action), .new-drawing-actions > :is(.dialog-button,.suggested-action) { flex-shrink:0; white-space:nowrap; min-height:34px; padding:0 16px; border-radius:var(--control-radius); background:var(--button); font-weight:500; }
 .dialog-footer .suggested-action { background:var(--accent); color:var(--accent-foreground); }
 :where(:root:not([data-touch])) .dialog-footer button.suggested-action:hover:not(:disabled) { background:color-mix(in srgb,white 10%,var(--accent)); }
+.dialog-footer button.suggested-action:is(:active,[data-pressed]):not(:disabled) { background:color-mix(in srgb,var(--accent-foreground) 16%,var(--accent)); }
 .dialog-footer button.suggested-action:disabled { opacity:.5; }
 .dialog-gap { flex:1; }
 .texture-dialog { height:min(556px,calc(100dvh - 24px)); }
@@ -1084,7 +1087,7 @@ body[data-theme="light"] #header { text-shadow:none; }
 .texture-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(102px,1fr)); gap:14px 12px; }
 .texture-tile { display:flex; flex-direction:column; align-items:center; gap:6px; min-width:0; min-height:0; padding:0; background:transparent; color:inherit; font-weight:400; line-height:normal; }
 .texture-frame { display:block; box-sizing:border-box; width:102px; height:102px; padding:3px; border-radius:calc(51px * var(--corner-fit)); }
-:where(:root:not([data-touch])) .texture-tile:hover .texture-frame, .texture-tile:active .texture-frame { background:color-mix(in srgb,var(--text) 10%,transparent); }
+:where(:root:not([data-touch])) .texture-tile:hover .texture-frame, .texture-tile:is(:active,[data-pressed]) .texture-frame { background:color-mix(in srgb,var(--text) 10%,transparent); }
 .texture-tile[aria-checked=true] .texture-frame { outline:2px solid var(--accent); outline-offset:-2px; }
 .texture-frame .paper-preview { width:96px; height:96px; border-radius:calc(48px * var(--corner-fit)); background:color-mix(in srgb,var(--text) 6%,transparent); }
 .texture-frame .paper-preview svg { width:48px; height:48px; }
@@ -1109,7 +1112,8 @@ body[data-theme="light"] #header { text-shadow:none; }
 .color-shapes { display:flex; gap:2px; padding:4px; border-radius:999px; background:color-mix(in srgb,var(--text) 6%,transparent); }
 .color-shapes button { display:flex; align-items:center; gap:4px; height:26px; min-height:26px; padding:0 8px; border:0; border-radius:999px; background:transparent; color:inherit; font:inherit; font-weight:500; }
 .color-shapes button.selected { background:var(--header-selection); color:var(--text); }
-:where(:root:not([data-touch])) .color-shapes button.selected:hover:not(:disabled) { background:var(--header-selection-hover); }
+:where(:root:not([data-touch])) .color-shapes button.selected:hover:not(:is(:active,[data-pressed])):not(:disabled) { background:var(--header-selection-hover); }
+.color-shapes button:is(:active,[data-pressed]):not(:disabled) { background:color-mix(in srgb,var(--text) 16%,transparent); }
 .color-shapes svg { width:16px; height:16px; flex:none; }
 .color-editor-head { grid-area:head; display:grid; grid-template-columns:auto auto minmax(0,1fr); grid-template-areas:"pair pick hex" "captions . ."; align-items:center; gap:2px 12px; min-width:0; }
 .color-editor-head > .color-pair { grid-area:pair; }
@@ -1279,7 +1283,7 @@ button.new-drawing-pill:disabled { opacity:.5; }
 button.new-drawing-preset { display:flex; flex-direction:column; align-items:center; gap:1px; min-width:0; min-height:0; padding:0; background:transparent; font-weight:400; line-height:1.25; text-align:center; }
 button.new-drawing-preset.disabled { opacity:.4; }
 .new-drawing-preset-frame { display:block; margin-bottom:3px; padding:3px; border-radius:calc(26px * var(--corner-fit)); }
-:where(:root:not([data-touch])) .new-drawing-preset:hover .new-drawing-preset-frame, .new-drawing-preset:active .new-drawing-preset-frame { background:color-mix(in srgb,var(--text) 10%,transparent); }
+:where(:root:not([data-touch])) .new-drawing-preset:hover .new-drawing-preset-frame, .new-drawing-preset:is(:active,[data-pressed]) .new-drawing-preset-frame { background:color-mix(in srgb,var(--text) 10%,transparent); }
 .new-drawing-preset.selected .new-drawing-preset-frame { outline:2px solid var(--accent); outline-offset:-2px; }
 .new-drawing-preset > :not(.new-drawing-preset-frame) { max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .new-drawing-tile-name { font-size:.93em; }
@@ -1498,10 +1502,10 @@ button.new-drawing-preset.disabled { opacity:.4; }
 .tool-position-numbers .number-control { flex:1; min-width:0; }
 #workspace > :is(.canvas-action-bar, .canvas-notice) .suggested-action { background: var(--accent); color: var(--accent-foreground); }
 :where(:root:not([data-touch])) #workspace > :is(.canvas-action-bar, .canvas-notice) .suggested-action:hover { background: color-mix(in srgb, white 10%, var(--accent)); }
-#workspace > :is(.canvas-action-bar, .canvas-notice) .suggested-action:active { background: color-mix(in srgb, black 10%, var(--accent)); }
+#workspace > :is(.canvas-action-bar, .canvas-notice) .suggested-action:is(:active,[data-pressed]) { background: color-mix(in srgb, black 10%, var(--accent)); }
 #workspace > .canvas-action-bar button[aria-disabled="true"] { opacity: .36; }
-#workspace > .canvas-action-bar button[aria-disabled="true"]:is(:hover, :active) { background: transparent; }
-#workspace > :is(.canvas-action-bar, .canvas-notice) .suggested-action:is([aria-disabled="true"], :disabled):is(:hover, :active) { background: var(--accent); }
+#workspace > .canvas-action-bar button[aria-disabled="true"]:is(:hover,:active,[data-pressed]) { background: transparent; }
+#workspace > :is(.canvas-action-bar, .canvas-notice) .suggested-action:is([aria-disabled="true"], :disabled):is(:hover,:active,[data-pressed]) { background: var(--accent); }
 /* Standalone brush tracks keep their value in the transient stamp preview. */
 .toolbar-slider { width: 100%; height: 100%; position: relative; }
 .toolbar-slider .toolbar-slider-cap { position: absolute; min-width: 0; min-height: 0; padding: 0; background: transparent; }

@@ -310,6 +310,12 @@ the body extent when a group needs scrolling below its fixed tab strip.
 `AndroidPaletteTest#defaultsPlacePalettesAfterColorAndInSketchDrawer` compares
 the palette's reported row pitch with its arranged swatches. Palettes reports
 its fixed controls separately so shared sizing can reserve two swatch rows.
+`AndroidColorPanelTest#colorButtonsShowTouchAndPenContactAndCancelAcrossThemes`
+and `AndroidPaletteTest#savedSwatchesShowTouchAndPenContactAndCancelAcrossThemes`
+compare held and cancelled native contacts with their idle pixels in both themes.
+`AndroidWorkspaceSwitcherTest#choicesShowHeldFeedbackAndSelectOnlyOnReleaseAcrossThemes`
+checks selected and unselected choices with touch and pen, cancellation and
+adoption only after release, using two workspaces with the same layout.
 
 `AndroidHostTest#penPressureCalibrationUsesNativeCurveAndPersistsAppliedResponse`
 checks the modeless pressure utility in both themes: opening from Preferences,
@@ -340,6 +346,8 @@ Layers/Properties cards and workspace undo/redo. Escape must dismiss a held
 menu before the next canvas contact. Replacing the workspace during a captured
 ring contact must leave no stale action or notice on release. Run it on both reference
 tablets after changing the presenter or capture path.
+`AndroidToolBubblesTest#bubbleHoverExitClearsFaceFeedback` checks native hover
+exit and loss of focus to a dialog in both themes, without a pressed contact.
 `sketchEraserBubbleKeepsItsHaloChooserAndSettingsAcrossThemesAndDevices` checks
 Sketch's Eraser tear-out, slider halo, sole preset chooser, remembered settings
 and return to the header in both themes with all three input types. Use

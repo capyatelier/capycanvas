@@ -534,6 +534,7 @@ private fun DrawScope.checker(colors: Palette) {
     var origin by remember { mutableStateOf(Offset.Zero) }
     val interactions = remember { MutableInteractionSource() }
     val hovered by interactions.collectIsHoveredAsState()
+    var pressed by remember { mutableStateOf(false) }
     val focused by interactions.collectIsFocusedAsState()
     val latestView by rememberUpdatedState(view)
     val latestOrder by rememberUpdatedState(order)
@@ -561,6 +562,7 @@ private fun DrawScope.checker(colors: Palette) {
                     val drag = PaletteDrag(id, latestView.getLong("palette"), down.position, size, latestColor, latestOrder, geometry, latestSelected)
                     drag.point = origin + down.position
                     controller.begin(drag)
+                    pressed = true
                     var held = false; var released = false
                     var remaining = viewConfiguration.longPressTimeoutMillis
                     var time = down.uptimeMillis
@@ -588,11 +590,16 @@ private fun DrawScope.checker(colors: Palette) {
                             }
                         }
                     } finally {
+                        pressed = false
                         if (!released) { controller.end(drag); controller.closeMenu() }
                         controller.contactHeld = false
                     }
                 }
-            }.clip(ControlShape).background(if (hovered && controller.drag?.started != true) colors.text.copy(alpha = .10f) else Color.Transparent)
+            }.clip(ControlShape).background(if (!covered && controller.drag?.started != true) when {
+                pressed -> colors.text.copy(alpha = .16f)
+                hovered -> colors.text.copy(alpha = .10f)
+                else -> Color.Transparent
+            } else Color.Transparent)
             .then(if (selected || (focused && controller.keyboard)) Modifier.border(2.dp, if (selected) colors.accent else colors.accent.copy(alpha = .6f), ControlShape) else Modifier)
             .padding(3.dp)) {
             PaletteFace(color, Modifier.fillMaxSize())

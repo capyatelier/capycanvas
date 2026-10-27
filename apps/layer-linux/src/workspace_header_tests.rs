@@ -13,6 +13,8 @@ mod accent_preferences_tests;
 mod palette_tests;
 #[path = "callback_boundary_tests.rs"]
 mod callback_boundary_tests;
+#[path = "button_feedback_tests.rs"]
+mod button_feedback;
 
 fn wait_for_drawer_close(w: &Workspace) {
     let deadline = Instant::now() + Duration::from_secs(2);

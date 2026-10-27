@@ -12,6 +12,7 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.DropdownMenu
@@ -178,10 +179,11 @@ private class ReadoutCorner(private val radius: Float) : Shape {
 }
 
 @Composable private fun ColorButton(label: String, modifier: Modifier, shape: Shape = CircleShape,
-    showFocusRing: Boolean = true, onClick: () -> Unit, content: @Composable BoxScope.(Boolean, Boolean) -> Unit) {
+    showFocusRing: Boolean = true, pressFeedback: Boolean = true, onClick: () -> Unit, content: @Composable BoxScope.(Boolean, Boolean) -> Unit) {
     val interactions = remember { MutableInteractionSource() }
     val focused by interactions.collectIsFocusedAsState()
     val hovered by interactions.collectIsHoveredAsState()
+    val pressed by interactions.collectIsPressedAsState()
     val colors = LocalPalette.current
     val host = LocalCanvasHost.current
     val focusToken = remember { Any() }
@@ -190,6 +192,7 @@ private class ReadoutCorner(private val radius: Float) : Shape {
         .onFocusChanged { if (it.isFocused) host.colorControlFocus = focusToken else if (host.colorControlFocus === focusToken) host.colorControlFocus = null }
         .clickable(interactionSource = interactions, indication = null, role = Role.Button, onClick = onClick), contentAlignment = Alignment.Center) {
         content(focused, hovered)
+        if (pressed && pressFeedback) Canvas(Modifier.matchParentSize()) { drawRect(colors.text.copy(alpha = .16f)) }
         if (focused && showFocusRing) Canvas(Modifier.matchParentSize()) {
             drawCircle(colors.accent, size.minDimension / 2 - 2.dp.toPx(), style = Stroke(1.5.dp.toPx()))
         }
@@ -273,7 +276,7 @@ private class ReadoutCorner(private val radius: Float) : Shape {
                         } while (change.pressed)
                     }
                 }
-            }), onClick = { select() }) { _, hovered ->
+            }), pressFeedback = false, onClick = { select() }) { _, hovered ->
         ColorSwatchFace(swatch.array("rgba").color(), slot, selected, hovered, Modifier.fillMaxSize())
         DropdownMenu(menu, onDismissRequest = { menu = false }) {
             DropdownMenuItem(text = { Text(host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("edit_menu")) }, onClick = { menu = false;color(obj("op" to "select","slot" to slot)); editSlot(host, if (slot == "background") "background" else "foreground", windowed) })
