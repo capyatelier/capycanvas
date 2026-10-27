@@ -177,7 +177,6 @@ struct Editor:std::enable_shared_from_this<Editor>{
         framePair(pair,54);
         current=button(data,L"",[weak]{if(auto self=weak.lock())self->act(O({{L"op",S(L"revert")}}));});
         current.Height(48);current.HorizontalAlignment(HorizontalAlignment::Stretch);current.CornerRadius({0,0,0,0});
-        current.Resources().Insert(box_value(L"ButtonBackgroundPointerOver"),nullptr);current.Resources().Insert(box_value(L"ButtonBackgroundPressed"),nullptr);
         AutomationProperties::SetAutomationId(current,L"edit-color-current");
         fresh.Height(48);Grid::SetColumn(fresh,1);AutomationProperties::SetAutomationId(fresh,L"edit-color-new");
         pair.Children().Append(current);pair.Children().Append(fresh);

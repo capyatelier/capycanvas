@@ -4,6 +4,7 @@
 #include "FilterPreviews.h"
 #include "LayerThumbnails.h"
 #include "PointerGesture.h"
+#include "ButtonFeedback.h"
 #include "NativeHandles.h"
 #include <winrt/Microsoft.UI.Xaml.Automation.h>
 #include <winrt/Microsoft.UI.Xaml.Media.Imaging.h>
@@ -438,21 +439,8 @@ inline void comboOptionText(ComboBox const& control,uint32_t index,hstring const
 }
 template<typename T>
 inline void buttonColors(std::shared_ptr<WorkspaceData> const& data,T const& result,uint8_t hover=20){
-    hstring prefix=std::is_same_v<T,Primitives::ToggleButton>?L"ToggleButton":L"Button";
-    result.Resources().Insert(box_value(prefix+L"BackgroundPointerOver"),data->tint(L"text",hover));
-    result.Resources().Insert(box_value(prefix+L"BackgroundPressed"),data->tint(L"text",41));
-    result.Resources().Insert(box_value(prefix+L"BackgroundDisabled"),clear());
-    result.Resources().Insert(box_value(prefix+L"ForegroundDisabled"),data->tint(L"text",92));
-    if constexpr(std::is_same_v<T,Primitives::ToggleButton>)
-        for(auto role:{L"ToggleButtonBackgroundChecked",L"ToggleButtonBackgroundCheckedPointerOver",L"ToggleButtonBackgroundCheckedPressed"})
-            result.Resources().Insert(box_value(role),selected(data));
-}
-inline void headerButtonColors(std::shared_ptr<WorkspaceData> const& data,Button const& item){
-    item.UseLayoutRounding(false);
-    item.Background(clear());item.BorderBrush(clear());item.BackgroundSizing(BackgroundSizing::InnerBorderEdge);
-    for(auto role:{L"ButtonBorderBrush",L"ButtonBorderBrushPointerOver",L"ButtonBorderBrushPressed",L"ButtonBorderBrushDisabled"})
-        item.Resources().Insert(box_value(role),clear());
-    buttonColors(data,item,26);
+    Brush checked{nullptr};if constexpr(std::is_same_v<T,Primitives::ToggleButton>)checked=selected(data);
+    buttonFeedback(result,data->brush(L"text"),hover,41,nullptr,false,checked);
 }
 template<typename T=Button>
 inline T button(std::shared_ptr<WorkspaceData> const& data,hstring const& text,std::function<void()> action){

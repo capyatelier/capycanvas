@@ -6,9 +6,9 @@
 namespace CapyUi {
 struct SwatchFace {
     Grid root;
-    Shapes::Ellipse back,checker,paint,edge;
+    Shapes::Ellipse back,feedback,checker,paint,edge;
     hstring checkerKey;
-    SwatchFace(){root.IsHitTestVisible(false);root.Children().Append(back);root.Children().Append(checker);root.Children().Append(paint);root.Children().Append(edge);}
+    SwatchFace(){root.IsHitTestVisible(false);root.Children().Append(back);root.Children().Append(feedback);root.Children().Append(checker);root.Children().Append(paint);root.Children().Append(edge);}
     void Update(std::shared_ptr<WorkspaceData> const& data,A const& rgba,double size,double scale,bool selected,bool foreground,bool hovered){
         root.Width(size);root.Height(size);double pad=foreground?3:1;
         checker.Margin({pad,pad,pad,pad});paint.Margin({pad,pad,pad,pad});

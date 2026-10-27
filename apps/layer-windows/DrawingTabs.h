@@ -151,11 +151,10 @@ struct DrawingTabs:std::enable_shared_from_this<DrawingTabs>{
         t.box.CornerRadius({corner(),corner(),corner(),corner()});t.select.CornerRadius({corner(),corner(),corner(),corner()});t.close.CornerRadius({12*CornerFit,12*CornerFit,12*CornerFit,12*CornerFit});
         for(auto const& part:{t.select,t.close}){
             part.Background(clear());
-            part.Resources().Insert(box_value(L"ButtonBackgroundPointerOver"),data->tint(L"text",18));
-            part.Resources().Insert(box_value(L"ButtonBackgroundPressed"),data->tint(L"text",41));
+            buttonFeedback(part,data->brush(L"text"),18,41);
         }
     }
-    void paintTab(Tab& t,bool chosen){t.box.Background(chosen?data->glass(L"document_tab"):clear());}
+    void paintTab(Tab& t,bool chosen){t.box.Background(chosen?data->glass(L"document_tab"):clear());for(auto const& part:{t.select,t.close})buttonFeedback(part,data->brush(L"text"),chosen?8:18,chosen?23:41);}
     void layout(){auto count=array(model(),L"tabs").Size();bool one=count<2,compact=!one&&capy_document_tabs_compact(float(root.ActualWidth()),count);
         plain.Visibility(one?Visibility::Visible:Visibility::Collapsed);
         strip.Visibility(one||compact?Visibility::Collapsed:Visibility::Visible);selector.Visibility(!one&&compact?Visibility::Visible:Visibility::Collapsed);
@@ -200,6 +199,7 @@ struct DrawingTabs:std::enable_shared_from_this<DrawingTabs>{
         AutomationProperties::SetHelpText(root,error);if(plain.Text()!=plainTitle())plain.Text(plainTitle());plain.Foreground(data->brush(L"text"));layout();updating=false;
     }
     void init(){
+        buttonColors(data,selector);
         auto weak=weak_from_this();root.Tag(O({{L"header_source",O({{L"kind",S(L"native")}})},{L"native_keys",B(true)}}));root.Background(clear());strip.Orientation(Orientation::Horizontal);
         plain.FontWeight(Windows::UI::Text::FontWeights::SemiBold());plain.FontSize(data->textSize());plain.TextTrimming(TextTrimming::CharacterEllipsis);plain.TextWrapping(TextWrapping::NoWrap);
         plain.TextAlignment(TextAlignment::Center);plain.VerticalAlignment(VerticalAlignment::Center);plain.Padding({8,0,8,0});plain.IsHitTestVisible(false);AutomationProperties::SetAutomationId(plain,L"drawing-title");

@@ -241,6 +241,8 @@ void WorkspaceBubbles::Impl::up(PointerRoutedEventArgs const& e,bool cancelled){
 }
 bool WorkspaceBubbles::Impl::cancel(bool abandon){
     bool had=contact||candidate||menuOwner.Active();dismiss();auto c=std::exchange(contact,{});auto source=std::exchange(candidate,{});
+    for(auto const& [id,record]:records){had|=record->pressed||record->hovered&&record->hovered.ValueType()!=JsonValueType::Null;record->pressed=false;record->hovered=nullptr;}
+    hovering=false;
     if(c){releasing=true;data->pointerCancels.Cancel(c->pointer.PointerId());for(auto weak:c->path)if(auto element=weak.get();element&&PointerGesture::Captured(element,c->pointer.PointerId()))element.ReleasePointerCapture(c->pointer);releasing=false;}
     if(c){stop(c);if(!abandon){if(c->paired&&!c->pairEnded){if(c->lifted)drag(c->grab,L"cancel",c->midpoint);}else restore(c);}c->record->pinch=1;c->record->pressed=false;c->record->hovered=nullptr;}
     colorTouches.cancel(*data,layer);
@@ -280,6 +282,10 @@ void WorkspaceBubbles::Impl::attach(UIElement const& root,std::function<void()> 
     AutomationProperties::SetAutomationId(layer,L"tool-bubble-desk");
     auto bind=[&](RoutedEvent const& event,auto handler){root.AddHandler(event,box_value(PointerEventHandler([weak,handler](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock())(self.get()->*handler)(e);})),true);};
     bind(UIElement::PointerPressedEvent(),&Impl::down);bind(UIElement::PointerMovedEvent(),&Impl::move);
+    root.PointerExited([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock();self&&!self->contact&&!self->candidate){
+        auto view=self->inputRoot.as<FrameworkElement>();auto at=e.GetCurrentPoint(view).Position();
+        if(!contains({0,0,float(view.ActualWidth()),float(view.ActualHeight())},at))self->cancel();
+    }});
     root.AddHandler(UIElement::PointerReleasedEvent(),box_value(PointerEventHandler([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock())self->up(e,false);})),true);
     root.AddHandler(UIElement::PointerCanceledEvent(),box_value(PointerEventHandler([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock();self&&!self->releasing)self->up(e,true);})),true);
     root.AddHandler(UIElement::PointerCaptureLostEvent(),box_value(PointerEventHandler([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock()){

@@ -278,8 +278,7 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
             for(uint32_t i=0;i<options.Size();++i){
                 Primitives::ToggleButton choice;choice.Width(64);choice.Height(64);choice.Padding({8});choice.CornerRadius({32*CornerFit,32*CornerFit,32*CornerFit,32*CornerFit});
                 choice.BorderThickness({0});AutomationProperties::SetName(choice,options.GetStringAt(i));
-                for(auto role:{L"ToggleButtonBackgroundChecked",L"ToggleButtonBackgroundCheckedPointerOver",L"ToggleButtonBackgroundCheckedPressed"})
-                    choice.Resources().Insert(box_value(role),selected(data));
+                buttonColors(data,choice);
                 tooltip(choice,options.GetStringAt(i));
                 if(i<icons.Size())themeBindings.emplace_back([data=data,choice,id=icons.GetStringAt(i)]{
                     choice.Content(icon(id,data->theme(),48));
@@ -298,6 +297,7 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
             for(uint32_t i=0;i<options.Size();++i){
                 Button choice;choice.Width(28);choice.Height(28);choice.MinWidth(0);choice.MinHeight(0);choice.Padding({0});
                 choice.CornerRadius({14,14,14,14});choice.BorderThickness({0});choice.Background(clear());
+                buttonColors(data,choice);
                 AutomationProperties::SetName(choice,options.GetStringAt(i));tooltip(choice,options.GetStringAt(i));
                 AutomationProperties::SetAutomationId(choice,L"preference-"+id+L"-"+to_hstring(i));
                 choice.Click([data=data,id,i](auto&&,auto&&){if(!data->updating)edit(data,id,N(i));});
@@ -321,6 +321,7 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
                         mark.Stroke(fill(grey(value,opacity)));mark.StrokeThickness(width);mark.StrokeStartLineCap(PenLineCap::Round);mark.StrokeEndLineCap(PenLineCap::Round);
                         mark.StrokeLineJoin(PenLineJoin::Round);disc.Children().Append(mark);
                     }
+                    Shapes::Ellipse feedback;feedback.Fill(buttonFeedbackBrush(choice,data->brush(L"text")));disc.Children().Append(feedback);
                     choice.Content(disc);AutomationProperties::SetItemStatus(choice,checked?data->caption(L"search",L"selected"):L"");
                 };
                 bindings.emplace_back(paint);themeBindings.emplace_back(paint);strip.Children().Append(choice);
@@ -382,6 +383,7 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
                     auto swatch=swatches.GetObjectAt(i);bool active=i==chosen;
                     Button circle;circle.Width(side);circle.Height(side);circle.Padding({0});circle.MinWidth(0);circle.MinHeight(0);
                     circle.CornerRadius({side/2,side/2,side/2,side/2});
+                    buttonColors(data,circle);
                     auto paint=swatch.GetNamedValue(L"color",JsonValue::CreateNullValue());
                     if(paint.ValueType()==JsonValueType::String){circle.Background(fill(color(paint.GetString())));circle.BorderThickness({0});}
                     else{circle.Background(clear());circle.BorderThickness({1,1,1,1});circle.BorderBrush(data->tint(L"text",64));}

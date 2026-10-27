@@ -133,7 +133,7 @@ struct CommandSearchPopup : std::enable_shared_from_this<CommandSearchPopup> {
             if(flag(command,L"selected")){auto check=icon(L"check",data->theme(),16);check.VerticalAlignment(VerticalAlignment::Center);Grid::SetColumn(check,1);content.Children().Append(check);}
             auto shortcut=label(data,str(command,L"shortcut"));shortcut.FontSize(12);shortcut.Opacity(.6);shortcut.VerticalAlignment(VerticalAlignment::Center);
             Grid::SetColumn(shortcut,2);content.Children().Append(shortcut);
-            Button row;row.Content(content);row.Height(height);row.HorizontalAlignment(HorizontalAlignment::Stretch);
+            Button row;buttonColors(data,row);row.Content(content);row.Height(height);row.HorizontalAlignment(HorizontalAlignment::Stretch);
             row.HorizontalContentAlignment(HorizontalAlignment::Stretch);row.Padding({inset,0,inset,0});row.BorderThickness({0,0,0,0});
             row.CornerRadius({8,8,8,8});row.IsTabStop(false);
             AutomationProperties::SetAutomationId(row,L"command-result-"+to_hstring(i));AutomationProperties::SetName(row,str(command,L"label"));

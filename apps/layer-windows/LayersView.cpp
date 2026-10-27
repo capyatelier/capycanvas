@@ -95,8 +95,7 @@ void LayersView::init(){
     }});
     auto reference=button<Primitives::ToggleButton>(data,L"",[weak]{if(auto self=weak.lock())self->action(O({{L"op",S(L"reference_selection")}}));});
     reference.Width(iconSlot);reference.Height(iconSlot);reference.Content(icon(L"reference",data->theme()));
-    for(auto role:{L"ToggleButtonBackgroundChecked",L"ToggleButtonBackgroundCheckedPointerOver",L"ToggleButtonBackgroundCheckedPressed"})
-        reference.Resources().Insert(box_value(role),data->tint(L"text",31));
+    buttonFeedback(reference,data->brush(L"text"),20,41,nullptr,false,data->tint(L"text",31));
     AutomationProperties::SetAutomationId(reference,L"layer-reference");actionTooltip(data,reference,[]{return O({{L"type",S(L"layer")},{L"action",O({{L"op",S(L"reference_selection")}})}});});tools.Children().Append(reference);
     controls.emplace_back([weak,reference](J,J){if(auto self=weak.lock()){
         auto view=self->view();reference.IsEnabled(flag(view,L"can_reference"));reference.Opacity(reference.IsEnabled()?1.:.36);

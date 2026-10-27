@@ -79,7 +79,6 @@ struct CanvasNotice:std::enable_shared_from_this<CanvasNotice>{
                 choice.AllowFocusOnInteraction(false);
                 if(flag(offer,L"accent")){
                     choice.Background(accent(data));caption.Foreground(data->brush(L"accent_foreground"));
-                    for(auto role:{L"ButtonBackgroundPointerOver",L"ButtonBackgroundPressed",L"ButtonBackgroundDisabled"})choice.Resources().Insert(box_value(role),accent(data));
                 }
                 AutomationProperties::SetAutomationId(choice,L"canvas-notice-action-"+token);
                 auto shell=explainable(choice);shell.VerticalAlignment(VerticalAlignment::Center);

@@ -1567,7 +1567,10 @@ void CanvasWindow::ApplyPending(PreparedSnapshots batch) {
         }
         for(auto const& patch:{batch.layout,batch.workspace,batch.camera,batch.search,batch.glass})
             if(!closing&&patch)workspace->Apply(patch);
-    } catch(hresult_error const& error) {Fail(to_string(error.message()));}
+    } catch(hresult_error const& error) {
+        char code[16];std::snprintf(code,sizeof code," [0x%08X]",uint32_t(error.code().value));
+        Fail(to_string(error.message())+code);
+    }
 }
 
 void CanvasWindow::ApplyDialogs() {

@@ -265,8 +265,6 @@ struct NewDrawingDialog::Impl:std::enable_shared_from_this<Impl>{
     }
     Button primary(hstring const& id,int column,std::function<void()> action){
         auto result=pickerButton(data,id,column,true,std::move(action));
-        result.Resources().Insert(box_value(L"ButtonBackgroundDisabled"),accent(data));
-        result.Resources().Insert(box_value(L"ButtonForegroundDisabled"),data->brush(L"accent_foreground"));
         result.IsEnabledChanged([](winrt::Windows::Foundation::IInspectable const& sender,DependencyPropertyChangedEventArgs const& args){sender.as<Button>().Opacity(unbox_value<bool>(args.NewValue())?1.:.5);});
         return result;
     }
@@ -862,15 +860,13 @@ struct NewDrawingDialog::Impl:std::enable_shared_from_this<Impl>{
             };
             StackPanel content;content.Width(PresetTile);content.Spacing(4);content.Children().Append(frame);
             StackPanel words;words.Spacing(1);words.Children().Append(line(str(tile,L"name"),false,2));words.Children().Append(line(str(tile,L"dimensions"),true,1));words.Children().Append(line(str(tile,L"details"),true,2));
-            content.Children().Append(words);if(!flag(tile,L"enabled"))content.Opacity(.4);
+            content.Children().Append(words);
             auto node=button(data,str(tile,L"name"),[weak,index]{if(auto self=weak.lock())self->send(O({{L"op",S(L"pick_preset")},{L"index",N(index)}}));});
+            node.IsEnabled(flag(tile,L"enabled"));
             node.Padding({0,0,0,0});node.VerticalAlignment(VerticalAlignment::Top);node.HorizontalAlignment(HorizontalAlignment::Center);node.FontWeight(winrt::Windows::UI::Text::FontWeights::Normal());
-            for(auto state:{L"ButtonBackgroundPointerOver",L"ButtonBackgroundPressed"})node.Resources().Insert(box_value(hstring(state)),clear());
             node.Content(content);AutomationProperties::SetAutomationId(node,L"new-drawing-preset-"+to_hstring(index));
             tooltip(node,str(tile,L"name")+L"\n"+str(tile,L"dimensions")+L" · "+str(tile,L"details"));
-            node.PointerEntered([frame,data=data](auto&&,auto&&){frame.Background(data->tint(L"text",26));});
-            auto leave=[frame](auto&&,auto&&){frame.Background(clear());};
-            node.PointerExited(leave);node.PointerCanceled(leave);node.PointerCaptureLost(leave);
+            frame.Background(buttonFeedbackBrush(node,data->brush(L"text")));
             node.DoubleTapped([weak](auto&&,DoubleTappedRoutedEventArgs const& e){if(auto self=weak.lock()){e.Handled(true);self->send(op(L"use_preset"));}});
             if(flag(tile,L"own")){
                 MenuFlyout menu;AutomationProperties::SetAutomationId(menu,L"new-drawing-preset-menu");

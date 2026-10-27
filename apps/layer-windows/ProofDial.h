@@ -76,6 +76,7 @@ struct ProofDial:std::enable_shared_from_this<ProofDial>{
         marker.IsHitTestVisible(false);canvas.Children().Append(marker);
         for(uint32_t i=0;i<4;++i){texts[i].IsHitTestVisible(false);icons[i].IsHitTestVisible(false);canvas.Children().Append(texts[i]);canvas.Children().Append(icons[i]);}
         reset.Padding({0});reset.MinWidth(0);reset.MinHeight(0);reset.Background(clear());reset.BorderThickness({0});AutomationProperties::SetAutomationId(reset,L"proof-dial-reset");
+        buttonColors(data,reset);
         reset.Click([weak](auto&&,auto&&){if(auto self=weak.lock())self->control(3,O({{L"type",S(L"reset")}}));});canvas.Children().Append(reset);
         root.PointerPressed([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock()){
             auto p=e.GetCurrentPoint(self->canvas);if(self->pointer||!PointerGesture::PrimaryContact(p))return;

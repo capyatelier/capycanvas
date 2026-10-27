@@ -20,6 +20,15 @@ Rejected input JSON reports a recoverable error before touching the session, so
 the render owner can process subsequent events. Invalid handles, poisoned owners
 and processing failures retain their fatal result.
 
+Native buttons use `ButtonFeedback.h` to draw feedback between the model-owned
+base fill and the retained content. Native pressed state takes precedence over
+hover, including contacts without hover. Checked choices retain their fill;
+selected header tools and joined panel tabs keep their established exceptions.
+Authored previews and paint swatches use the same feedback brush on their rim.
+Workspace pills retain their enabled appearance while the shared owner
+temporarily gates switching during drawing or adoption. Their selection tint
+follows adoption; holding a different workspace keeps its neutral base.
+
 Binary WebP preview calls reject invalid slice lengths and overlapping dimension
 outputs before borrowing input. They write dimensions only after the decoded
 preview handle is stored. Input and output allocations remain valid for the call.
@@ -2125,6 +2134,17 @@ A process can own an input overlay as well as its review window; its reported
 main window is not a control-surface identity. Keep the 45-second discovery bounds.
 Read fixture and native report JSON with `Read-Snapshot` so UTF-8 captions survive
 both supported PowerShell versions.
+
+Build `Feedback` to check button feedback in the main root, a ContentDialog and
+a Flyout. Popup terminal events do not reach the main root; both local and root
+observers retire contacts through the same completion rule. The focused journey
+checks mouse, pen and touch release/cancel feedback and exact click counts in
+both themes:
+
+```powershell
+./apps/layer-windows/scripts/build.ps1 -ControlFixture Feedback -OutputDirectory artifacts/windows/FeedbackReview
+./apps/layer-windows/scripts/test-desktop.ps1 -Script apps/layer-windows/scripts/exercise-button-feedback.ps1 -Parameters @{Executable='artifacts/windows/FeedbackReview/CapyCanvas.exe'}
+```
 
 Build `Bitmap` to check the common native uploader with owned pixel buffers and
 the same private context setup as the other control reviews:

@@ -34,10 +34,6 @@ inline Button pickerButton(std::shared_ptr<WorkspaceData> const& data,hstring co
     AutomationProperties::SetAutomationId(result,id);Grid::SetColumn(result,column);
     if(!primary){result.Background(buttonBackground(data));return result;}
     result.Background(accent(data));result.Foreground(data->brush(L"accent_foreground"));
-    for(hstring state:{L"PointerOver",L"Pressed"}){
-        result.Resources().Insert(box_value(L"ButtonBackground"+state),accent(data));
-        result.Resources().Insert(box_value(L"ButtonForeground"+state),data->brush(L"accent_foreground"));
-    }
     return result;
 }
 inline void pickerLabel(Button const& target,hstring const& text){target.Content(box_value(text));AutomationProperties::SetName(target,text);}

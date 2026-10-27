@@ -11,7 +11,7 @@ struct ColorStrip:std::enable_shared_from_this<ColorStrip>{
     Canvas host{nullptr};
     Button root{nullptr};
     Grid frame;
-    Shapes::Path surface;
+    Shapes::Path surface,feedbackSurface;
     Border original,sample;
     TextBlock hex,intensity,space,values;
     WorkspaceShadow shadow;
@@ -23,7 +23,6 @@ struct ColorStrip:std::enable_shared_from_this<ColorStrip>{
         host=canvas;auto weak=weak_from_this();
         root=button(data,L"",[weak]{if(auto self=weak.lock())self->tapped();});
         root.Padding({0,0,0,0});root.Width(Width);root.HorizontalContentAlignment(HorizontalAlignment::Stretch);root.VerticalContentAlignment(VerticalAlignment::Stretch);
-        root.Resources().Insert(box_value(L"ButtonBackgroundPointerOver"),clear());root.Resources().Insert(box_value(L"ButtonBackgroundPressed"),clear());
         AutomationProperties::SetAutomationId(root,L"edit-color-strip");
         Grid pair;pair.CornerRadius({6,6,6,6});
         for(int column=0;column<2;++column){ColumnDefinition definition;definition.Width({20,GridUnitType::Pixel});pair.ColumnDefinitions().Append(definition);}
@@ -40,7 +39,8 @@ struct ColorStrip:std::enable_shared_from_this<ColorStrip>{
         Grid content;content.ColumnSpacing(10);content.Padding({8,8,12,8});
         for(auto width:{GridLength{1,GridUnitType::Auto},GridLength{1,GridUnitType::Star}}){ColumnDefinition definition;definition.Width(width);content.ColumnDefinitions().Append(definition);}
         Grid::SetColumn(text,1);content.Children().Append(pair);content.Children().Append(text);
-        surface.IsHitTestVisible(false);frame.Children().Append(surface);frame.Children().Append(content);root.Content(frame);
+        surface.IsHitTestVisible(false);feedbackSurface.IsHitTestVisible(false);frame.Children().Append(surface);frame.Children().Append(feedbackSurface);frame.Children().Append(content);root.Content(frame);
+        feedbackSurface.Fill(buttonFeedbackBrush(root,data->brush(L"text"),26,41));
         root.PointerMoved([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock())self->hovered(e);});
         root.PointerEntered([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock())self->hovered(e);});
         root.PointerExited([weak](auto&&,auto&&){if(auto self=weak.lock()){self->hover.reset();}});
@@ -91,7 +91,7 @@ struct ColorStrip:std::enable_shared_from_this<ColorStrip>{
         double left=std::round(origin.GetNumberAt(0)/scale),top=std::round(origin.GetNumberAt(1)/scale);
         Canvas::SetLeft(root,left);Canvas::SetTop(root,top);root.Height(height);
         std::array<float,4> radii{12,12,12,12};
-        surface.Data(squircleRectangle(width,height,radii));
+        surface.Data(squircleRectangle(width,height,radii));feedbackSurface.Data(surface.Data());
         shadow.Shape(squircleRectangle(width,height,radii),width,height,8,2,.27f);shadow.Cut(radii);
         shadow.Layout({float(left),float(top),width,height},949,true);
         root.Opacity(1);root.IsHitTestVisible(true);

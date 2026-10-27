@@ -144,7 +144,7 @@ struct View:std::enable_shared_from_this<View>{
     std::array<SlotHold,2> slotHolds;
     std::array<SwatchFace,3> swatchFaces;
     std::array<bool,3> hovered{};
-    Button edit;Shapes::Ellipse editFill;bool editHovered=false;
+    Button edit;Shapes::Ellipse editFill;
     Canvas arc;Shapes::Path arcTrack;std::vector<Shapes::Line> ramp;Shapes::Ellipse markerShadow,marker;TextBlock caption;
     Slider intensity;bool syncingIntensity=false;
     std::optional<uint32_t> arcPointer;hstring arcKey,arcContext;
@@ -154,7 +154,7 @@ struct View:std::enable_shared_from_this<View>{
     std::array<Button,2> shapes;
     std::array<Canvas,2> shapeGlyphs{nullptr,nullptr};
     std::array<bool,2> shapeHovered{};
-    Shapes::Ellipse swapFill;Image swapGlyph;bool swapHovered=false;
+    Shapes::Ellipse swapFill;Image swapGlyph;
     Button swap,readout;
     Shapes::Path readoutHit;
     TextBlock labelMetrics;
@@ -260,8 +260,6 @@ struct View:std::enable_shared_from_this<View>{
     }
     Button control(hstring const& name,std::function<void()> action){
         auto result=button(data,name,std::move(action));result.Background(nullptr);result.UseSystemFocusVisuals(false);
-        for(auto resource:{L"ButtonBackground",L"ButtonBackgroundPointerOver",L"ButtonBackgroundPressed",L"ButtonBackgroundDisabled"})
-            result.Resources().Insert(box_value(resource),nullptr);
         result.HorizontalContentAlignment(HorizontalAlignment::Stretch);result.VerticalContentAlignment(VerticalAlignment::Stretch);
         return result;
     }
@@ -323,8 +321,6 @@ struct View:std::enable_shared_from_this<View>{
         Grid editContent;auto pencil=icon(L"pencil",data->theme());pencil.HorizontalAlignment(HorizontalAlignment::Center);pencil.VerticalAlignment(VerticalAlignment::Center);
         editContent.Children().Append(editFill);editContent.Children().Append(pencil);edit.Content(editContent);
         copyName(data,edit,data->copyCaption(L"color",L"edit"),true);AutomationProperties::SetAutomationId(edit,L"color-edit");
-        edit.PointerEntered([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock()){self->editHovered=e.Pointer().PointerDeviceType()==Microsoft::UI::Input::PointerDeviceType::Mouse;self->refresh();}});
-        edit.PointerExited([weak](auto&&,auto&&){if(auto self=weak.lock()){self->editHovered=false;self->refresh();}});
         stage.Children().Append(edit);
         const std::array<hstring,3> slots{L"background",L"foreground",L"transparent"};
         for(int i=0;i<3;i++){
@@ -339,6 +335,7 @@ struct View:std::enable_shared_from_this<View>{
             Shapes::Ellipse hit;hit.Fill(clear());sample.Children().Append(hit);
             sample.Children().Append(swatchFaces[i].root);
             pick.Content(sample);swatches[i]=pick;stage.Children().Append(pick);
+            swatchFaces[i].feedback.Fill(buttonFeedbackBrush(pick,data->brush(L"text")));
             if(i<2){
                 slotClicks[i]=PointerGesture::Clicks(pick,[](uint32_t,bool){});
                 PointerGesture::OwnHolding(pick);
@@ -383,6 +380,7 @@ struct View:std::enable_shared_from_this<View>{
         }
         for(int i=0;i<2;i++){
             shapes[i]=control(data->caption(L"color",L"shape"),[weak,i]{if(auto self=weak.lock())self->send(O({{L"op",S(L"shape")},{L"shape",array(self->model(),L"other_shapes").GetAt(i)}}));});
+            buttonFeedback(shapes[i],nullptr,0,0,nullptr,true);
             stage.Children().Append(shapes[i]);AutomationProperties::SetAutomationId(shapes[i],L"color-shape-"+to_hstring(i));
             shapes[i].PointerEntered([weak,i](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock()){self->shapeHovered[i]=e.Pointer().PointerDeviceType()==Microsoft::UI::Input::PointerDeviceType::Mouse;self->refresh();}});
             shapes[i].PointerExited([weak,i](auto&&,auto&&){if(auto self=weak.lock()){self->shapeHovered[i]=false;self->refresh();}});
@@ -392,8 +390,6 @@ struct View:std::enable_shared_from_this<View>{
         stage.Children().Append(swap);AutomationProperties::SetAutomationId(swap,L"color-swap");
         Grid swapContent;swapGlyph=icon(L"color-swap",data->theme());swapGlyph.HorizontalAlignment(HorizontalAlignment::Center);swapGlyph.VerticalAlignment(VerticalAlignment::Center);
         swapContent.Children().Append(swapFill);swapContent.Children().Append(swapGlyph);swap.Content(swapContent);
-        swap.PointerEntered([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock()){self->swapHovered=e.Pointer().PointerDeviceType()==Microsoft::UI::Input::PointerDeviceType::Mouse;self->refresh();}});
-        swap.PointerExited([weak](auto&&,auto&&){if(auto self=weak.lock()){self->swapHovered=false;self->refresh();}});
         arc.Background(nullptr);arc.Visibility(Visibility::Collapsed);
         arcTrack.Stroke(clear());arcTrack.StrokeStartLineCap(PenLineCap::Round);arcTrack.StrokeEndLineCap(PenLineCap::Round);
         arc.Children().Append(arcTrack);
@@ -421,6 +417,7 @@ struct View:std::enable_shared_from_this<View>{
         intensity.PreviewKeyDown([weak](auto&&,KeyRoutedEventArgs const& e){if(auto self=weak.lock();self&&e.Key()==winrt::Windows::System::VirtualKey::Home){self->setIntensity(0);e.Handled(true);}});
         stage.Children().Append(arc);stage.Children().Append(intensity);
         readout=control(data->caption(L"color",L"switch_readout"),[weak]{if(auto self=weak.lock())self->send(O({{L"op",S(L"toggle_readout")}}));});
+        buttonFeedback(readout,nullptr,0,0,nullptr,true);
         MenuFlyout editMenu;MenuFlyoutItem editItem;editItem.Text(data->caption(L"color",L"edit_menu"));
         data->copyView([target=make_weak(editItem),resolve=data->copyCaption(L"color",L"edit_menu").current]{if(auto item=target.get()){item.Text(resolve());return true;}return false;});
         AutomationProperties::SetAutomationId(editItem,L"edit-color");editItem.Click([weak](auto&&,auto&&){if(auto self=weak.lock();self&&!self->transparentSlot())self->editColor();});
@@ -617,9 +614,9 @@ struct View:std::enable_shared_from_this<View>{
             }
         }
         for(int i=0;i<2;i++)for(auto child:shapeGlyphs[i].Children())child.as<Shapes::Path>().Stroke(shapeHovered[i]?accent(data):data->brush(L"text"));
-        auto swapInk=color(str(object(data->state,L"palette"),L"text"));swapInk.A=swapHovered?31:0;swapFill.Fill(fill(swapInk));
+        swapFill.Fill(buttonFeedbackBrush(swap,data->brush(L"text"),31,41));
         bool editable=!transparentSlot();edit.IsEnabled(editable);edit.Opacity(editable?1.:.36);
-        auto editInk=color(str(object(data->state,L"palette"),L"text"));editInk.A=editHovered&&editable?31:0;editFill.Fill(fill(editInk));
+        editFill.Fill(buttonFeedbackBrush(edit,data->brush(L"text"),31,41));
         updateArc(view);
         const std::array<hstring,3> slots{L"background",L"foreground",L"transparent"};
         auto front=str(view,L"front_swatch");
@@ -628,6 +625,7 @@ struct View:std::enable_shared_from_this<View>{
             int z=slots[i]==front?1:0;
             if(Canvas::GetZIndex(swatches[i])!=z)Canvas::SetZIndex(swatches[i],z);
             bool selected=flag(swatch,L"selected");
+            swatchFaces[i].feedback.Fill(buttonFeedbackBrush(swatches[i],data->brush(L"text")));
             swatchFaces[i].Update(data,array(swatch,L"rgba"),array(layout,slots[i].c_str()).GetNumberAt(2),scale,selected,i==1,hovered[i]);
             AutomationProperties::SetName(swatches[i],str(swatch,L"label"));AutomationProperties::SetItemStatus(swatches[i],selected?data->caption(L"search",L"selected"):L"");
         }

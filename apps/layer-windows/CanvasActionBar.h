@@ -136,7 +136,6 @@ struct CanvasActionBar:std::enable_shared_from_this<CanvasActionBar>{
         }
         if(accented){
             result.Background(accent(data));
-            for(auto role:{L"ButtonBackgroundPointerOver",L"ButtonBackgroundPressed",L"ButtonBackgroundDisabled"})result.Resources().Insert(box_value(role),accent(data));
         }
         AutomationProperties::SetAutomationId(result,L"canvas-bar-"+id);AutomationProperties::SetName(result,str(state,L"label"));
         auto shell=explainable(result);

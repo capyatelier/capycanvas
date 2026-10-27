@@ -161,7 +161,6 @@ TextureGrid::Tile TextureGrid::make(V const& id,hstring const& text,hstring cons
     result.node=button(data,text,std::move(click));
     result.node.HorizontalAlignment(HorizontalAlignment::Stretch);result.node.VerticalAlignment(VerticalAlignment::Top);
     result.node.HorizontalContentAlignment(HorizontalAlignment::Stretch);result.node.Padding({0,0,0,0});
-    for(auto state:{L"ButtonBackgroundPointerOver",L"ButtonBackgroundPressed"})result.node.Resources().Insert(box_value(hstring(state)),clear());
     Grid frame;frame.Width(TileFrame);frame.Height(TileFrame);frame.HorizontalAlignment(HorizontalAlignment::Center);
     result.hover=squircle(TileFrame);result.hover.Fill(clear());
     result.picture=PaperThumbnail::Create(data,TilePreview,48,true);result.picture->placeholder=glyph;result.picture->show(id,text);
@@ -175,10 +174,7 @@ TextureGrid::Tile TextureGrid::make(V const& id,hstring const& text,hstring cons
     result.caption.TextWrapping(TextWrapping::Wrap);result.caption.TextTrimming(TextTrimming::CharacterEllipsis);result.caption.MaxLines(2);
     StackPanel content;content.Spacing(6);content.Children().Append(frame);content.Children().Append(result.caption);result.node.Content(content);
     AutomationProperties::SetAutomationId(result.node,prefix+L"-tile-"+suffix);tooltip(result.node,text);
-    auto hover=result.hover;
-    result.node.PointerEntered([hover,data=data](auto&&,auto&&){hover.Fill(data->tint(L"text",26));});
-    auto leave=[hover](auto&&,auto&&){hover.Fill(clear());};
-    result.node.PointerExited(leave);result.node.PointerCanceled(leave);result.node.PointerCaptureLost(leave);
+    result.hover.Fill(buttonFeedbackBrush(result.node,data->brush(L"text")));
     return result;
 }
 void TextureGrid::trail(hstring const& suffix,hstring const& glyph,std::function<void()> click){

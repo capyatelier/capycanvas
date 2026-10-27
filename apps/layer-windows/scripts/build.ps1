@@ -6,7 +6,7 @@ param(
     [string]$OutputDirectory,
     [string]$IntermediateDirectory,
     [switch]$SkipRust,
-    [ValidateSet('None','Number','Color','Bitmap','Popup')][string]$ControlFixture = 'None',
+    [ValidateSet('None','Number','Color','Bitmap','Popup','Feedback')][string]$ControlFixture = 'None',
     [switch]$SkipRestore,
     [switch]$SoftwareAdapterTests,
     [switch]$ReleaseIdentity,
@@ -49,7 +49,7 @@ try {
         & cargo @cargoArgs
         if ($LASTEXITCODE -ne 0) { throw 'Rust build failed.' }
     }
-    $fixture = switch ($ControlFixture) { Number {'true'} Color {'Color'} Bitmap {'Bitmap'} Popup {'Popup'} default {'false'} }
+    $fixture = switch ($ControlFixture) { Number {'true'} Color {'Color'} Bitmap {'Bitmap'} Popup {'Popup'} Feedback {'Feedback'} default {'false'} }
     & msbuild apps/layer-windows/CapyCanvas.vcxproj /m "/p:Configuration=$Configuration" "/p:Platform=$($build.platform)" "/p:CapyRustDirectory=$rustDirectory" "/p:CapyControlFixture=$fixture" "/p:PlatformToolset=$toolset" "/p:CapyPackages=$PackagesDirectory" "/p:OutDir=$OutputDirectory/" "/p:IntDir=$intermediateDirectory/" /v:minimal /nologo
     if ($LASTEXITCODE -ne 0) { throw 'WinUI build failed.' }
     Assert-WindowsBinaryArchitecture $OutputDirectory $build.architecture

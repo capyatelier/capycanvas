@@ -157,6 +157,7 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
         thisWorkspace.Click([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock();self&&!self->updating)self->dispatch(O({{L"type",S(L"open")},{L"page",S(L"this_workspace")}}));});
         savedToolbars.Click([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock();self&&!self->updating)self->dispatch(O({{L"type",S(L"open")},{L"page",S(L"toolbar_library")}}));});
         toolbarActions.Content(box_value(copy(L"header",L"toolbar_actions")));toolbarActions.HorizontalAlignment(HorizontalAlignment::Left);
+        buttonColors(copyData,thisWorkspace);buttonColors(copyData,savedToolbars);buttonColors(copyData,toolbarActions);buttonColors(copyData,retry);
         AutomationProperties::SetAutomationId(toolbarActions,L"workspace-toolbar-actions");toolbarActions.Flyout(toolbarMenu);
         title.TextWrapping(TextWrapping::Wrap);heading.Children().Append(title);
         for(auto control:{create,removeSelected,workspaceCancel,workspaceApply}){
@@ -359,10 +360,7 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
         metadata.Items().Append(row.contextUp);metadata.Items().Append(row.contextDown);
         row.pin.Content(row.pinIcon);row.pin.Width(34);row.pin.Height(34);row.pin.Padding({0,0,0,0});
         row.pin.Background(clear());row.pin.BorderBrush(clear());row.pin.BorderThickness({0,0,0,0});
-        for(auto state:{L"",L"PointerOver",L"Pressed",L"Disabled",L"Checked",L"CheckedPointerOver",L"CheckedPressed",L"CheckedDisabled"}){
-            row.pin.Resources().Insert(box_value(hstring(L"ToggleButtonBackground")+state),clear());
-            row.pin.Resources().Insert(box_value(hstring(L"ToggleButtonBorderBrush")+state),clear());
-        }
+        buttonFeedback(row.pin,copyData->brush(L"text"));
         row.pin.VerticalAlignment(VerticalAlignment::Center);Grid::SetColumn(row.pin,2);content.Children().Append(row.pin);
         AutomationProperties::SetAutomationId(row.pin,L"workspace-manager-pin-"+id);
         row.current.Width(14);row.current.Height(14);row.current.Margin({0,0,8,0});
@@ -371,6 +369,7 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
         AutomationProperties::SetName(row.current,copy(L"header",L"current_workspace"));tooltip(row.current,copy(L"header",L"current_workspace"));
         row.grip.Width(16);row.grip.MinWidth(16);row.grip.Height(34);row.grip.Margin({4,0,0,0});row.grip.Padding({0,0,0,0});
         row.grip.Background(clear());row.grip.BorderThickness({0,0,0,0});
+        buttonFeedback(row.grip,copyData->brush(L"text"));
         row.grip.VerticalAlignment(VerticalAlignment::Center);Grid::SetColumn(row.grip,3);
         AutomationProperties::SetAutomationId(row.grip,L"workspace-manager-grip-"+id);
         AutomationProperties::SetHelpText(row.grip,copy(L"header",L"drag_to_reorder"));
@@ -523,10 +522,6 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
         workspaceCancel.Background(copyData->tint(L"text",26));
         workspaceApply.Background(fill(color(str(palette,L"accent"))));workspaceApply.Foreground(fill(color(str(palette,L"accent_foreground"))));
         workspaceApply.IsEnabled((!busy||inlineName)&&flag(model,L"enabled")&&!flag(model,L"loading"));workspaceApply.Opacity(workspaceApply.IsEnabled()?1:.5);
-        for(auto state:{L"PointerOver",L"Pressed",L"Disabled"}){
-            workspaceApply.Resources().Insert(box_value(hstring(L"ButtonBackground")+state),workspaceApply.Background());
-            workspaceApply.Resources().Insert(box_value(hstring(L"ButtonForeground")+state),workspaceApply.Foreground());
-        }
         dialog.PrimaryButtonText(workspacePage?L"":naming?str(details,L"confirm"):str(model,L"primary"));
         dialog.IsPrimaryButtonEnabled((!busy||inlineName)&&!flag(model,L"loading")&&(naming?(name.Visibility()!=Visibility::Visible||nameValid):flag(model,L"enabled")));
         dialog.CloseButtonText(workspacePage?L"":common(L"cancel"));

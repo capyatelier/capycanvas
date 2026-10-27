@@ -200,8 +200,7 @@ inline void selectPanelTabShell(Grid const& shell,bool selected,Brush const& fil
     if(width>0&&height>0){shape.Width(width-std::min(0.f,bottom[0])-std::min(0.f,bottom[1]));shape.Height(height);shape.Data(polygon(panelTabOutline(width,height,bottom)));}
 }
 inline Grid panelTabShell(FrameworkElement const& content,Brush const& fill,Brush const& hover=nullptr){
-    if(auto tab=content.try_as<Button>())for(auto state:{L"ButtonBackgroundPointerOver",L"ButtonBackgroundPressed"})
-        tab.Resources().Insert(box_value(hstring(state)),clear());
+    if(auto tab=content.try_as<Button>())buttonFeedback(tab,nullptr,0,0,nullptr,true);
     Grid shell;shell.Tag(box_value(fill?L"active-panel-tab-shell":L"panel-tab-shell"));
     Canvas background;shell.Children().Append(background);
     Microsoft::UI::Xaml::Shapes::Path shape;shape.Tag(hover);shape.Fill(fill);shape.IsHitTestVisible(false);

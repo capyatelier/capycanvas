@@ -19,21 +19,13 @@ using namespace CapyUi;
 namespace {
 J invoke(hstring const& command){return O({{L"type",S(L"invoke")},{L"command",S(command)}});}
 J edit(J const& action){return O({{L"type",S(L"customize")},{L"action",O({{L"type",S(L"header")},{L"action",action}})}});}
-winrt::Windows::UI::Color blend(winrt::Windows::UI::Color bg,winrt::Windows::UI::Color ink,float amount){
-    float alpha=bg.A*(1-amount)+ink.A*amount;
-    auto channel=[&](uint8_t a,uint8_t b){return uint8_t(alpha>0?std::lround((a*bg.A*(1-amount)+b*ink.A*amount)/alpha):0);};
-    return {uint8_t(std::lround(alpha)),channel(bg.R,ink.R),channel(bg.G,ink.G),channel(bg.B,ink.B)};
-}
 void style(Button const& item,std::shared_ptr<WorkspaceData> const& data,bool surface=true){
     item.Height(36);item.Padding({6,0,6,0});item.UseLayoutRounding(false);
     if(surface){
-        auto bg=headerSurface(data).Color();auto ink=color(str(object(data->state,L"palette"),L"text",L"#fafafb"));
-        item.Background(headerSurface(data));
-        item.Resources().Insert(box_value(L"ButtonBackgroundPointerOver"),fill(blend(bg,ink,.10f)));
-        item.Resources().Insert(box_value(L"ButtonBackgroundPressed"),fill(blend(bg,ink,.16f)));
-        item.Resources().Insert(box_value(L"ButtonBackgroundDisabled"),headerSurface(data));
+        item.Background(headerSurface(data));buttonFeedback(item,data->brush(L"text"),26,41);
     }else{
-        headerButtonColors(data,item);
+        item.BorderBrush(clear());item.BackgroundSizing(BackgroundSizing::InnerBorderEdge);
+        item.Background(clear());buttonFeedback(item,data->brush(L"text"),26,41);
     }
 }
 }
@@ -139,7 +131,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
         auto values=array(storage,L"switcher_display");auto active=str(storage,L"id");
         auto previousFirst=workspaces.empty()?hstring{}:workspaces.front().second;
         std::vector<std::pair<Primitives::ToggleButton,hstring>> next;
-        auto chosen=data->glass(L"switcher_selection"),hover=data->brush(L"header_selection_hover");
+        auto chosen=data->glass(L"switcher_selection");
         for(auto value:values){
             auto choice=value.GetObject();auto id=str(choice,L"id");
             auto found=std::find_if(workspaces.begin(),workspaces.end(),[&](auto const& p){return p.second==id;});
@@ -149,12 +141,6 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
                 // Chrome resolves the shared CSS medium weight to Segoe UI Semibold.
                 item.FontFamily(FontFamily(L"Segoe UI"));item.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
                 item.Foreground(data->brush(L"text"));item.Background(fill({0,0,0,0}));
-                item.Resources().Insert(box_value(L"ToggleButtonBackgroundPointerOver"),data->tint(L"text",20));
-                item.Resources().Insert(box_value(L"ToggleButtonBackgroundPressed"),data->tint(L"text",41));
-                item.Resources().Insert(box_value(L"ToggleButtonBackgroundChecked"),chosen);
-                item.Resources().Insert(box_value(L"ToggleButtonBackgroundCheckedPointerOver"),hover);
-                item.Resources().Insert(box_value(L"ToggleButtonBackgroundCheckedPressed"),hover);
-                item.Resources().Insert(box_value(L"ToggleButtonForegroundChecked"),data->brush(L"text"));
                 AutomationProperties::SetAutomationId(item,L"workspace-switch-"+id);
                 auto label=CapyUi::label(data,L"");label.UseLayoutRounding(false);label.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
                 label.TextTrimming(TextTrimming::CharacterEllipsis);item.Content(label);
@@ -162,6 +148,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
                     if(auto self=weak.lock()){
                         // Toggle state always reflects adoption, including focus-only and failed switches.
                         self->applyWorkspaces();
+                        if(!flag(object(self->data->model,L"windows_workspace"),L"can_switch"))return;
                         self->data->dispatch(O({{L"type",S(L"workspace_manager")},
                             {L"command",O({{L"type",S(L"switch")},{L"id",S(id)}})}}));
                     }
@@ -179,8 +166,9 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
                 tooltip(item,data->caption(O({{L"type",S(L"switch_workspace")},{L"title",S(name)}})));
             }
             next.emplace_back(item,id);
-            content.Foreground(data->brush(L"text"));item.IsChecked(id==active);item.IsEnabled(flag(storage,L"can_switch"));
+            content.Foreground(data->brush(L"text"));item.IsChecked(id==active);item.IsEnabled(flag(storage,L"ready"));
             item.Background(id==active?chosen:clear());
+            buttonFeedback(item,data->brush(L"text"),id==active?0:20,41,id==active?data->brush(L"header_selection_hover"):Brush(nullptr));
             item.Foreground(data->brush(L"text"));
             AutomationProperties::SetName(item,name);
         }
@@ -555,7 +543,8 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
                 }
                 pick.IsTabStop(!editing);pick.Width(tile);pick.Height(tile);pick.IsEnabled(editing||flag(spec,L"enabled",true));pick.Opacity(editing||flag(spec,L"enabled",true)?1.:.36);
                 bool open=!drawerFacing(data,O({{L"kind",S(L"header")},{L"id",N(id)}})).empty();
-                pick.Background(flag(spec,L"selected")?data->glass(L"header_selection"):open?data->glass(L"panel"):clear());
+                auto background=flag(spec,L"selected")?data->glass(L"header_selection"):open?data->glass(L"panel"):clear();
+                pick.Background(background);buttonFeedback(pick,data->brush(L"text"),26,41,nullptr,flag(spec,L"selected"));
                 double r=corner();pick.CornerRadius(open?CornerRadius{r,r,0,0}:CornerRadius{r,r,r,r});
                 AutomationProperties::SetItemStatus(pick,open?data->caption(L"header",L"open"):flag(spec,L"selected")?data->caption(L"header",L"on"):data->caption(L"header",L"off"));
                 AutomationProperties::SetName(pick,label);AutomationProperties::SetHelpText(pick,reason);
@@ -693,7 +682,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
         auto size=find(array(view,L"sizes"),L"id",str(geometry,L"size"));
         auto command=object(view,L"capy"),capyBounds=object(geometry,L"zen_button");
         bool capyVisible=flag(data->model,L"keep_zen_button")||(!hidden&&!editing&&geometry.GetNamedValue(L"capy_item",JsonValue::CreateNullValue()).ValueType()==JsonValueType::Number);
-        capy.Width(tile);capy.Height(tile);capy.IsEnabled(capyVisible&&capyBounds.Size()&&flag(command,L"enabled"));capy.Opacity(flag(command,L"enabled")?1:.36);headerButtonColors(data,capy);
+        style(capy,data,false);capy.Width(tile);capy.Height(tile);capy.IsEnabled(capyVisible&&capyBounds.Size()&&flag(command,L"enabled"));capy.Opacity(flag(command,L"enabled")?1:.36);
         capySurface.Background(headerSurface(data));capySurface.CornerRadius({corner(),corner(),corner(),corner()});capy.CornerRadius(capySurface.CornerRadius());
         setIcon(capy.Content().as<Image>(),str(command,L"icon",L"capy"),data->theme(),num(size,L"capy_icon"));
         AutomationProperties::SetName(capy,str(command,L"label"));tooltip(capy,str(command,L"tooltip"));
@@ -793,8 +782,9 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
         switchWidth=32+2*std::max(0,int(workspaces.size())-1);
         for(auto const& [item,id]:workspaces){item.Width(unbox_value<double>(item.Tag()));switchWidth+=item.Width();}
         switchWidth=std::clamp(switchWidth,tile,480.);
-        for(auto const& item:overflow)item.Content(icon(L"menu",theme,iconSize));
-        for(auto item:{menuOverflow,recovery}){item.Content(icon(L"menu",theme,iconSize));item.Width(tile);}
+        auto menuIcon=[&](Button const& item){auto glyph=item.Content().try_as<Image>();if(!glyph){glyph=Image();item.Content(glyph);}setIcon(glyph,L"menu",theme,iconSize);};
+        for(auto const& item:overflow)menuIcon(item);
+        for(auto item:{menuOverflow,recovery}){menuIcon(item);item.Width(tile);}
         workspaceOverflow.Height(tile);
         if(num(snapshot,L"header_presentation_height",-1)!=totalHeight)lastMeasurement=L"";
         applyItems();reflow();requests();publish();
