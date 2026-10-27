@@ -205,8 +205,12 @@ function Resize-Floating {
             Resize-Drag $from @((Resize-Point ($from.x+24) $from.y)) -During {[CapyRowPointer]::Cancel()}
             Wait-Until {(Resize-State) -ceq $mixedExpectedLayout} 'Canceled touch resize did not restore the mixed-input frame'
             Resize-FloatingReady (& $floating).id
-            $mixedAt=Resize-Screen $from
-            [CapyRowPointer]::Hover($mixedAt.x,$mixedAt.y);[CapyRowPointer]::Down('mouse',$mixedAt.x,$mixedAt.y)
+            $mixedBounds=(& $floating).bounds
+            $mixedFrom=Resize-Point ($mixedBounds.x+$mixedBounds.width-28) $from.y
+            $mixedAt=Resize-Screen $mixedFrom
+            [CapyRowPointer]::Hover($mixedAt.x,$mixedAt.y)
+            Resize-FloatingReady (& $floating).id
+            [CapyRowPointer]::Down('mouse',$mixedAt.x,$mixedAt.y)
             try{
                 Wait-Until {$mixedEdge=(Resize-Gesture).edge;$mixedEdge.contact -eq 'free' -and !$mixedEdge.vertical} 'Mouse did not retain free horizontal reach after touch cancellation'
                 $mixedPending=Resize-Gesture
@@ -215,7 +219,7 @@ function Resize-Floating {
                 [CapyRowPointer]::Cancel()
             }finally{if([CapyRowPointer]::Active){[CapyRowPointer]::Cancel()}}
             Wait-Until {$mixedState=Resize-Gesture;$mixedState.phase -eq 'idle' -and !$mixedState.ignore_click -and (Resize-State) -ceq $mixedExpectedLayout} 'Mixed-input mouse release changed its frame or left a contact'
-            @{point=$from;mouse_pending=$mixedPending;after=(Resize-Gesture);layout=(Model).state.workspace.layout}|ConvertTo-Json -Depth 90|Set-Content (Join-Path $run 'floating-mixed-input.json')
+            @{point=$mixedFrom;touch_point=$from;mouse_pending=$mixedPending;after=(Resize-Gesture);layout=(Model).state.workspace.layout}|ConvertTo-Json -Depth 90|Set-Content (Join-Path $run 'floating-mixed-input.json')
             $script:ResizeMixedInputStatus='passed'
             Write-Output 'RESIZE_PASS touch-cancel-then-mouse-free-edge escape-release-exact-frame'
         }

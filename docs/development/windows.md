@@ -1834,6 +1834,8 @@ It compares the exact durable layout and Undo availability after physical releas
 Touch and pen first scroll floating Stats vertically through native input and
 check its actual ScrollView offset without changing the frame width. Its native
 scroll pattern restores the offset before the horizontal edge checks.
+The mixed-input case uses a fresh mouse point 28 units inside the panel edge:
+mouse input reveals a native scrollbar over the touch point 12 units inside.
 Use `exercise-header.ps1 -FullscreenOnly -Theme dark|light` for F11 entry and
 exit from normal and maximized windows. It checks restored native bounds and
 the fullscreen edge-gesture property, and retains window, monitor and DWM state.
