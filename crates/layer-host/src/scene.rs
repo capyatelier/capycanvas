@@ -250,7 +250,7 @@ impl Glass {
                         shape: BackdropRegion::SQUIRCLE,
                     }.with_strength(c.strength)));
             let arcs = self.layout.arcs.iter().map(|a| BackdropRegion::arc(
-                [a[0] * scale, a[1] * scale], a[2] * scale, a[3] * scale, a[4], a[5],
+                [a[0] * scale, a[1] * scale], a[2] * scale, a[3] * scale, a[4].to_radians(), a[5].to_radians(),
             ).with_strength(a[6]));
             let color_bubbles = self.layout.color_bubbles.iter().map(|c| BackdropRegion::color_bubble(
                 [c[0] * scale, c[1] * scale], c[2] * scale, c[3] * scale, c[4] * scale, c[5],
@@ -492,17 +492,17 @@ mod tests {
     #[test]
     fn glass_arcs_scale_geometry_once_without_scaling_angles_or_fade() {
         let mut layer = Glass::default();
-        let layout = |strength| serde_json::json!({"regions":[[10,20,100,50,4,5,6,7,1,strength]],"connections":[],"arcs":[[30,40,20,6,0.25,-1.5,strength]]});
+        let layout = |strength| serde_json::json!({"regions":[[10,20,100,50,4,5,6,7,1,strength]],"connections":[],"arcs":[[30,40,20,6,15.,-90.,strength]]});
         assert!(layer.set(glass(layout(0.375)).unwrap()).unwrap());
         for scale in [2., 1.5, 2.] {
             let regions = layer.regions(scale);
             assert_eq!(regions[0].bounds, [10.,20.,100.,50.].map(|v| v*scale));
             assert_eq!(regions[0].radii, [4.,5.,6.,7.].map(|v| v*scale));
             assert_eq!(regions[0].shape, [4.,0.375,0.,0.]);
-            let arc = BackdropRegion::arc([30.*scale,40.*scale],20.*scale,6.*scale,0.25,-1.5).with_strength(0.375);
+            let arc = BackdropRegion::arc([30.*scale,40.*scale],20.*scale,6.*scale,15f32.to_radians(),(-90f32).to_radians()).with_strength(0.375);
             assert_eq!(regions[1], arc);
             assert_eq!(regions[1].radii, [30.*scale,40.*scale,20.*scale,3.*scale]);
-            assert_eq!(regions[1].shape, [0.,0.375,-1.25,1.5]);
+            assert_eq!(regions[1].shape, [0.,0.375,(-75f32).to_radians(),90f32.to_radians()]);
         }
         let before = layer.regions(2.).to_vec();
         assert!(layer.set(glass(layout(0.125)).unwrap()).unwrap());
