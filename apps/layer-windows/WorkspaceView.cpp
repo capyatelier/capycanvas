@@ -488,7 +488,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         if(!flag(model,L"chrome_hidden"))for(auto value:array(layout,L"dividers")){
             auto divider=value.GetObject();if(flag(divider,L"fixed"))continue;auto key=L"divider-"+std::to_wstring(uint32_t(num(divider,L"id")));
             resizeHandle(key,object(divider,L"bounds"),O({{L"type",S(L"drag_divider")},{L"id",N(num(divider,L"id"))}}),10,
-                flag(divider,L"band")&&str(divider,L"axis")==L"horizontal");
+                str(divider,L"axis")==L"horizontal"&&!str(divider,L"owner_side").empty());
             handleIds.push_back(key);
         }
         for(auto it=handles.begin();it!=handles.end();){

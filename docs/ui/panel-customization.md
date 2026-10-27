@@ -591,6 +591,8 @@ synchronously whether it lies in an edge's reach and may resize vertically, so
 a touch or pen scroller that must not or cannot scroll keeps the contact and a
 pressed tab waits for its click. Canvas touches reach the session from
 `capy_pointer`, which cancels the stroke when the edge claims the contact.
+Windows uses shared column ownership to enable double-click and double-tap
+reset on both outer and nested column resize handles.
 Apple classifies measured workspace sources and native controls, and asks
 `capy_apple_edge_reach` for admission before native scrolling or pickup begins.
 AppKit and UIKit forward contacts through `EdgeReachCoordinator` to the serial

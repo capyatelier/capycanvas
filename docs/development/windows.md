@@ -1724,6 +1724,13 @@ visibility journey on the VM.
 Use `header:catalog-only` and `header:catalog-only-light` for categories, Pen
 order, shortcut tooltips and the header catalog. The legacy `header:Catalog`
 switch still runs the full header journey.
+Use `exercise-edge-reach.ps1 -ColumnResetOnly -Device mouse|pen|touch` for the
+actual six-unit column dividers; `-Theme dark|light` selects one theme. A native
+whole-column move creates a nested left owner beside the toolbar. The scope
+checks a no-op single tap, outward resizing, exact preferred-width restoration
+on double press, the untouched adjacent owner, and one-step workspace Undo/Redo.
+The ordinary edge-reach journey also checks
+contacts inside the wider free reach; it does not replace the divider check.
 Use `exercise-header.ps1 -FullscreenOnly -Theme dark|light` for F11 entry and
 exit from normal and maximized windows. It checks restored native bounds and
 the fullscreen edge-gesture property, and retains window, monitor and DWM state.
