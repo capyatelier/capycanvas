@@ -337,6 +337,10 @@ themes and distinguishes idle, hover and pressed fills.
 and touch contacts, adopted selection and release-outside cancellation. Run it
 again with `--tablet` for native pen delivery on the private display.
 
+`native_tool_controls_compact` checks panel captions, allocated control sizes and
+spacing at 242 and 320 pixels in both themes. Labeled choices use their complete
+row for spacing; captions wrap to at most two lines beside the control.
+
 Standalone workspace motion tests use the same 4 ms input cadence as their
 dedicated runner flags. `LAYER_NATIVE_EVENT_MS` overrides it when measuring a
 different input rate.

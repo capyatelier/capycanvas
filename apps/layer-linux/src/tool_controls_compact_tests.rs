@@ -12,10 +12,14 @@ fn select_group(w: &Rc<Workspace>, id: &str, index: u32) {
 }
 
 fn assert_gap(panel: &gtk::Widget, before: &str, after: &str, gap: f32, horizontal: bool) {
-    let a = named::<gtk::Widget>(panel, before).compute_bounds(panel).unwrap();
-    let b = named::<gtk::Widget>(panel, after).compute_bounds(panel).unwrap();
+    assert_widget_gap(panel, &named::<gtk::Widget>(panel, before), &named::<gtk::Widget>(panel, after), gap, horizontal);
+}
+
+fn assert_widget_gap(panel: &gtk::Widget, before: &gtk::Widget, after: &gtk::Widget, gap: f32, horizontal: bool) {
+    let a = before.compute_bounds(panel).unwrap();
+    let b = after.compute_bounds(panel).unwrap();
     let actual = if horizontal { b.x() - a.x() - a.width() } else { b.y() - a.y() - a.height() };
-    assert_eq!(actual, gap, "{before} → {after}: allocated gap");
+    assert_eq!(actual, gap, "{} → {}: allocated gap", before.widget_name(), after.widget_name());
 }
 
 fn primary_fields(context: &str) -> Option<&'static [&'static str]> {
@@ -88,9 +92,12 @@ fn assert_spacing(panel: &gtk::Widget, context: &str) {
             assert_gap(panel, "tool-setting-expansion", "tool-setting-smoothing", 4., false);
         }
         "tonal-presets" | "tonal-custom" => {
-            assert_gap(panel, "selection-mode-row", "tool-choice-bar-tonal-tones", 6., false);
+            let tones = named::<gtk::Widget>(panel, "tool-choice-bar-tonal-tones").parent().unwrap();
+            let caption = tones.first_child().and_downcast::<gtk::Label>().unwrap();
+            assert!(caption.layout().line_count() <= 2, "{context}: tone caption stays within two lines");
+            assert_widget_gap(panel, &named::<gtk::Widget>(panel, "selection-mode-row"), &tones, 6., false);
             let first = if context == "tonal-custom" { "tool-range-tonal" } else { "tool-setting-tonal_softness" };
-            assert_gap(panel, "tool-choice-bar-tonal-tones", first, 4., false);
+            assert_widget_gap(panel, &tones, &named::<gtk::Widget>(panel, first), 4., false);
             if context == "tonal-custom" { assert_gap(panel, first, "tool-setting-tonal_softness", 4., false); }
             assert_gap(panel, "tool-setting-tonal_softness", "tool-setting-selection_feather", 4., false);
         }
@@ -213,7 +220,8 @@ fn capture(w: &Rc<Workspace>, output: &std::path::Path, context: &str, theme: Th
     capture_reference(w, output.join(format!("{context}-{theme:?}-{width}.png")).to_str().unwrap(), 1.);
     assert_spacing(&panel, context);
     assert_margins(&panel, context);
-    assert!(panel.measure(gtk::Orientation::Horizontal, -1).0 <= width, "{context}: minimum width fits {width}");
+    let minimum_width = panel.measure(gtk::Orientation::Horizontal, -1).0;
+    assert!(minimum_width <= width, "{context}: minimum width {minimum_width} fits {width}");
     for widget in widgets(&panel).filter(|widget| widget.is_mapped() && (widget.is::<gtk::Scrollbar>() || widget.ancestor(gtk::Scrollbar::static_type()).is_none())) {
         let bounds = widget.compute_bounds(&panel).unwrap();
         let allocated_height = bounds.height();
@@ -229,7 +237,7 @@ fn capture(w: &Rc<Workspace>, output: &std::path::Path, context: &str, theme: Th
         if let Ok(number) = widget.clone().downcast::<crate::number_control::NumberControl>() {
             let slider = !number.has_css_class("number-inline") && descendant::<gtk::Scale>(&number).is_some_and(|scale| scale.is_mapped());
             let interval = number.parent().is_some_and(|parent| parent.widget_name().starts_with("tool-range-"));
-            let height = if slider { layer_ui::PANEL_CONTROL_METRICS.slider_height } else if interval { layer_ui::PANEL_CONTROL_METRICS.control_height + 4. } else { layer_ui::PANEL_CONTROL_METRICS.control_height };
+            let height = if slider { layer_ui::PANEL_CONTROL_METRICS.slider_height } else if interval { number.parent().unwrap().height() as f32 } else { layer_ui::PANEL_CONTROL_METRICS.control_height };
             assert_eq!(allocated_height, height, "{context}: {}", widget.widget_name());
         }
     }
