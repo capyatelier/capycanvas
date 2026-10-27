@@ -2,19 +2,37 @@
 use crate::previews::CapyPreview;
 use layer_host::NativeHost;
 use serde_json::{Value, json};
+use std::ffi::{CString, c_char};
+
+/// # Safety
+/// Input is readable NUL-terminated UTF-8 JSON for the duration of this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_panel_bridges(input: *const c_char) -> u64 {
+    let result=std::panic::catch_unwind(|| {
+        unsafe {crate::input::with_text(input, |text| {
+            #[derive(serde::Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Request {layout:layer_ui::ResolvedLayout,measure:layer_ui::PanelBridgeMeasure}
+            if text.len()>256*1024 {return Err("Panel geometry request is too large".into());}
+            let request:Request=serde_json::from_str(text).map_err(|error|error.to_string())?;
+            request.layout.measured_panel_bridges(request.measure).map(|frame|json!(frame))
+        })}
+    }).unwrap_or_else(|_|Err("Panel geometry failed".into()));
+    let packet=match result {
+        Ok(result)=>json!({"result":result,"error":null}),
+        Err(error)=>json!({"result":null,"error":error}),
+    };
+    CString::new(packet.to_string()).map_or(0,crate::owned::text)
+}
 
 fn request(json: &str) -> Result<Value, String> {
-    if json.len() > 256 * 1024 {
+    if json.len() > 8192 {
         return Err("Workspace query is too large".into());
     }
     let value: Value = serde_json::from_str(json).map_err(|e| e.to_string())?;
-    if json.len()>8192 && value.get("type").and_then(Value::as_str)!=Some("panel_bridges") {
-        return Err("Workspace query is too large".into());
-    }
     match value.get("type").and_then(Value::as_str) {
         Some(
             "context"
-            | "panel_bridges"
             | "panel_handle_target"
             | "drop"
             | "workspace_drag_preview"
@@ -99,15 +117,21 @@ mod tests {
     }
 
     #[test]
-    fn windows_panel_bridge_query_uses_the_measured_snapshot_after_workspace_adoption() {
+    fn windows_panel_bridges_project_current_measurements_without_a_host() {
         let mut host=NativeHost::new(layer_ui::Platform::Windows).unwrap();
         let revision=host.session.engine().document().revision;
         let layout=host.session.layout([1400.,900.]);
         let groups:Vec<_>=layout.groups.iter().map(|g|json!([g.id,g.bounds])).collect();
         let columns:Vec<_>=layout.collapsed.iter().map(|c|json!({"column":c.id,"bounds":c.bounds,"content":c.content,
             "icons":c.groups.iter().flat_map(|g|&g.icons).map(|i|json!([i.panel,i.bounds])).collect::<Vec<_>>()})).collect();
-        let query=json!({"type":"panel_bridges","layout":layout,"measure":{"groups":groups,"columns":columns}});
-        let result=metadata(super::query(&mut host,&query.to_string()).unwrap());
+        let query=json!({"layout":layout,"measure":{"groups":groups,"columns":columns}});
+        let project=|request:&Value| {
+            let input=CString::new(request.to_string()).unwrap();
+            let packet=unsafe {capy_panel_bridges(input.as_ptr())};
+            assert_ne!(packet,0);
+            serde_json::from_str::<Value>(crate::owned::take_text(packet).to_str().unwrap()).unwrap()
+        };
+        let result=project(&query);
         assert!(result["error"].is_null());
         let actual=result["result"]["groups"].as_array().unwrap();
         assert_eq!(actual.len(),layout.groups.len());
@@ -121,11 +145,11 @@ mod tests {
         host.session.adopt_workspace(prepared).unwrap();
         host.resize(720,1200,1.5).unwrap();
         assert_ne!(json!(host.session.layout([1400.,900.])),json!(layout));
-        assert_eq!(metadata(super::query(&mut host,&query.to_string()).unwrap()),result);
+        assert_eq!(project(&query),result);
         let mut retired=query.clone();
         retired["measure"]["groups"].as_array_mut().unwrap()
             .push(json!([u32::MAX,{"x":0,"y":0,"width":1,"height":1}]));
-        assert_eq!(metadata(super::query(&mut host,&retired.to_string()).unwrap()),result);
+        assert_eq!(project(&retired),result);
         assert!(!layout.groups.is_empty());
         for mutation in 0..2 {
             let mut invalid=query.clone();
@@ -135,10 +159,23 @@ mod tests {
             } else {
                 invalid["measure"]["groups"][0][1]["width"]=json!(-1);
             }
-            let rejected=metadata(super::query(&mut host,&invalid.to_string()).unwrap());
+            let rejected=project(&invalid);
             assert!(rejected["result"].is_null());
             assert_eq!(rejected["error"],"Invalid panel measurements");
         }
+        let mut moved=query.clone();
+        moved["measure"]["groups"][0][1]["x"]=json!(123.);
+        let moved_result=project(&moved);
+        assert!(moved_result["error"].is_null());
+        assert_ne!(moved_result,result);
+        assert_eq!(project(&query),result);
+        for invalid in [json!({}),json!({"layout":null,"measure":{}})] {
+            assert!(project(&invalid)["result"].is_null());
+            assert!(project(&invalid)["error"].is_string());
+        }
+        let null=unsafe {capy_panel_bridges(std::ptr::null())};
+        assert!(serde_json::from_str::<Value>(crate::owned::take_text(null).to_str().unwrap()).unwrap()["error"].is_string());
+        assert!(request(&json!({"type":"panel_bridges"}).to_string()).is_err());
         assert_eq!(revision,host.session.engine().document().revision);
         assert!(host.error.is_none());
     }

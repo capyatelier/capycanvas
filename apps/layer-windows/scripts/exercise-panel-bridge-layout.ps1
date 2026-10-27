@@ -15,6 +15,29 @@ foreach($name in @('Presentation','Column','Screen','At','Tap','Same-Bounds','Ch
     if(!$function){throw "Missing shared column oracle $name"}
     Invoke-Expression $function.Extent.Text
 }
+Add-Type -TypeDefinition @'
+using System;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+using System.Threading;
+using System.Threading.Tasks;
+public static class CapyBridgeResize {
+    [DllImport("user32.dll",SetLastError=true)] static extern bool MoveWindow(IntPtr window,int x,int y,int width,int height,bool repaint);
+    [DllImport("user32.dll")] static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
+    [DllImport("user32.dll")] static extern IntPtr SendMessage(IntPtr window,uint message,IntPtr wparam,IntPtr lparam);
+    public static void Begin(IntPtr window){SendMessage(window,0x0231,IntPtr.Zero,IntPtr.Zero);}
+    public static void End(IntPtr window){SendMessage(window,0x0232,IntPtr.Zero,IntPtr.Zero);}
+    public static Task Run(IntPtr window){return Task.Run(()=>{
+        SetThreadDpiAwarenessContext(new IntPtr(-4));var timer=Stopwatch.StartNew();
+        while(timer.ElapsedMilliseconds<3000){
+            double phase=(timer.ElapsedMilliseconds%1500)/750.0;
+            int width=1500+(int)(300*(phase<=1?phase:2-phase));
+            if(!MoveWindow(window,40,40,width,1000,true))throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+            Thread.Sleep(16);
+        }
+    });}
+}
+'@
 $Device='mouse';$review=$null;$window=[IntPtr]::Zero
 $checks=[Collections.Generic.List[object]]::new();$stderr=Join-Path $run 'stderr.log'
 function Check($condition,[string]$name,$data){
@@ -70,6 +93,32 @@ try{
     Check ((Model).windows_workspace.id-eq'builtin:workspace:illustrator') 'Explicit fresh Paint workspace' $null
     for($cycle=1;$cycle-le3;$cycle++){Open-Column ('cycle-'+$cycle+'-open');Close-Column ('cycle-'+$cycle+'-closed')}
     Open-Column 'before-resize';$retained=Retained-Controls
+    $continuing=@((Presentation).groups|Where-Object gpu_background|ForEach-Object id)
+    Check ($continuing.Count -gt 0) 'Continuous resize starts with presented receivers' $continuing
+    [CapyBridgeResize]::Begin($window)
+    Wait-Until {
+        $native=Presentation
+        $native.window_resizing -and $native.gpu_panels_suppressed -and $native.panel_revision -eq $native.presented_panel_revision -and
+            @($native.groups|Where-Object {$_.id -in $continuing -and (!$_.native_bridge_background -or $_.gpu_background)}).Count -eq 0
+    } 'Resize did not adopt native surfaces before motion'
+    Save-State 'continuous-resize-enter'
+    $samples=[Collections.Generic.List[object]]::new();$motion=[CapyBridgeResize]::Run($window)
+    try{
+        while(!$motion.IsCompleted){
+            $native=Presentation
+            if($motion.IsCompleted){break}
+            $receivers=@($native.groups|Where-Object {$_.id -in $continuing})
+            $projected=@($native.panel_bridge_frame.bridges|ForEach-Object {$_[2].receivers}|ForEach-Object group|Sort-Object -Unique)
+            $samples.Add(@{qpc=[Diagnostics.Stopwatch]::GetTimestamp();window_resizing=$native.window_resizing;gpu_panels_suppressed=$native.gpu_panels_suppressed;panel_revision=$native.panel_revision;presented_panel_revision=$native.presented_panel_revision;receivers=$receivers;frame=$native.panel_bridge_frame})
+            Check ($native.window_resizing -and $native.gpu_panels_suppressed -and @($receivers|Where-Object {!$_.native_bridge_background -or $_.gpu_background}).Count -eq 0) 'Continuous resize keeps native ownership' $receivers
+            Check (@($continuing|Where-Object {$_ -notin $projected}).Count -eq 0) 'Continuous resize retains measured receivers' $projected
+            Check (@($native.panel_bridge_frame.bridges).Count -gt 0) 'Continuous window resize retains panel scene' $native.panel_bridge_frame
+        }
+    }finally{$motion.GetAwaiter().GetResult();[CapyBridgeResize]::End($window);$samples|ConvertTo-Json -Depth 30|Set-Content (Join-Path $run 'continuous-resize.json')}
+    Check ($samples.Count -gt 0) 'Continuous resize sampled actual motion' $samples.Count
+    Wait-Until {$native=Presentation;!$native.window_resizing -and !$native.native_resize_pending} 'Resize did not return surfaces to the GPU'
+    Open-Column 'continuous-resize-settled'
+
     foreach($size in @(@(1800,1100),@(1600,1000))){
         $phase='resize-'+$size[0]
         [CapyWindowExercise]::MoveWindow($window,40,40,$size[0],$size[1],$true)|Out-Null
@@ -91,7 +140,7 @@ try{
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $window.ToInt64() -Action Close
     Check ($review.WaitForExit(8000)-and$review.ExitCode-eq0) 'Normal owned process exit' $null
     Check ((Get-Item -LiteralPath $stderr).Length-eq0) 'Empty native stderr' $null
-    @{passed=$true;theme=$Theme;checks=$checks.Count;tabbed_fixture=$tabbed;exe_sha256=(Get-FileHash $Executable).Hash;dll_sha256=(Get-FileHash (Join-Path $directory 'layer_windows.dll')).Hash;exit_code=$review.ExitCode;scope='Settled geometry and acknowledgment only; intermediate mixed frames and performance unqualified'}|
+    @{passed=$true;theme=$Theme;checks=$checks.Count;tabbed_fixture=$tabbed;exe_sha256=(Get-FileHash $Executable).Hash;dll_sha256=(Get-FileHash (Join-Path $directory 'layer_windows.dll')).Hash;exit_code=$review.ExitCode;scope='Settled geometry plus sampled continuous measured receivers and nonempty scene; composed captures retained; unsampled intermediate frames and performance unqualified'}|
         ConvertTo-Json -Depth 20|Set-Content (Join-Path $run 'result.json')
     Write-Output "Panel bridge layout PASS $Theme $run"
 }catch{

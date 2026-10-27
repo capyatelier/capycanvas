@@ -186,6 +186,8 @@ private:
     winrt::Windows::Data::Json::JsonObject bootstrap;
     void Resize();
     void PublishGlass();
+    void CollectGlass();
+    static LRESULT CALLBACK WindowMessage(HWND window,UINT message,WPARAM wparam,LPARAM lparam,UINT_PTR id,DWORD_PTR data);
     bool RecoverGpu();
     void SaveAfterGpuFailure(std::string const& reason);
     void ResetSurface();

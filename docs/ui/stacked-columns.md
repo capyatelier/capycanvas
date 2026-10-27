@@ -69,7 +69,12 @@ glass transport carries receiver IDs, four corner radii and native tab bounds to
 the render worker. It applies the surface offset and display scale once, prepares
 the existing GPU chrome pipelines, and acknowledges the revision after presenting.
 Only that matching revision suppresses the native backing and shadow; controls,
-focus, scrolling and input targets remain native. Retired allocation IDs are ignored; duplicate, nonfinite or negative measurements
+focus, scrolling and input targets remain native. `WM_ENTERSIZEMOVE` gives opaque
+native contours and shadows ownership for the whole window resize gesture and
+suppresses GPU panel surfaces. `WM_EXITSIZEMOVE` restores the GPU scene through
+the matching presented-revision handshake. Glass turns off and on at these
+boundaries; single-step window sizing retains the usual GPU path.
+Retired allocation IDs are ignored; duplicate, nonfinite or negative measurements
 are rejected. Missing current allocations clear the join. Ordinary individual
 panel drawers retain their shared drawer connection.
 
@@ -267,11 +272,11 @@ performance parity require the checks below.
 
 | Entry point | Responsibility |
 | --- | --- |
-| [UI bridge projection](../../crates/layer-ui/src/panel_bridges.rs) | `ResolvedLayout::measured_panel_bridges` validates `PanelBridgeMeasure` and resolves native allocations into receiver IDs, radii and anchors. The `panel_bridges` host query takes the measured snapshot's complete `layout` and `measure`; it never resolves a newer live workspace. |
+| [UI bridge projection](../../crates/layer-ui/src/panel_bridges.rs) | `ResolvedLayout::measured_panel_bridges` validates `PanelBridgeMeasure` and resolves native allocations into receiver IDs, radii, anchors and contour paths. Windows calls stateless `capy_panel_bridges` synchronously with the measured snapshot's complete `layout` and `measure`; it never resolves a newer live workspace. |
 | [Outer profiles](../../crates/layer-render/src/panel_profile.rs) and [panel geometry](../../crates/layer-render/src/panel_geometry.rs) | Shared profile generation, attachment fields and vector projection. GPU and vector rendering use the same build-time profile table. |
 | [GPU surfaces](../../crates/layer-render-wgpu/src/panel_surface.rs) and [shader](../../crates/layer-render-wgpu/src/panel_surface.wgsl) | Shared fill, coverage and shadow preparation. Preserve background pipeline preparation and matching geometry revisions; dragging must not compile shaders or wait for GPU completion on the UI or input thread. |
 | [Apple registry](../../apps/layer-apple/Shared/Editor/GlassSurface.swift) and [Metal presenter](../../apps/layer-apple/native/src/metal.rs) | Native measurements, stale-result rejection and presented-revision acknowledgement for macOS and iPadOS. |
-| [Windows workspace](../../apps/layer-windows/WorkspaceView.cpp) and [presenter](../../apps/layer-windows/native/src/host.rs) | Native measurements, snapshot-bound bridge queries using encoded layout bytes retained by the background decoder, and presented-revision acknowledgement. Replies must match layout and allocation generations. |
+| [Windows workspace](../../apps/layer-windows/WorkspaceView.cpp) and [presenter](../../apps/layer-windows/native/src/host.rs) | Native measurements, synchronous snapshot-bound projection using encoded layout bytes retained by the background decoder, and presented-revision acknowledgement. Native resize ownership ends only after the final GPU scene is presented. |
 
 Shared regressions live in [column-stack tests](../../crates/layer-ui/src/column_stack_tests.rs)
 and [GPU surface tests](../../crates/layer-render-wgpu/src/panel_surface_tests.rs).

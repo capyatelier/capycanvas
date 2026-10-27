@@ -17,6 +17,7 @@ public:
     bool Apply(Json const& snapshot,std::string layoutBytes={});
     static void MergeLayout(Json const& model,Json const& patch);
     Json ChromeFacts(bool popupOpen);
+    void SetWindowResizing(bool value);
     bool CancelGesture();
     void CancelNativeContacts();
     void CancelPreviews();

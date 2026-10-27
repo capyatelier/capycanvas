@@ -110,7 +110,8 @@ class WorkspaceSurface {
         std::array<float,4> radii{},pathRadii{};
         Windows::UI::Color color{};
         std::vector<Windows::Foundation::Rect> holes,pathHoles;
-        bool rounded=true;
+        ContourCommands commands,pathCommands;
+        bool rounded=true,contour=false;
         bool sameHoles()const{
             if(pathHoles.size()!=holes.size())return false;
             for(size_t i=0;i<holes.size();++i){auto a=holes[i],b=pathHoles[i];if(a.X!=b.X||a.Y!=b.Y||a.Width!=b.Width||a.Height!=b.Height)return false;}
@@ -118,6 +119,16 @@ class WorkspaceSurface {
         }
         void apply(){
             if(!visual||!rounded)return;
+            auto current=ink.Color();if(current.A!=color.A||current.R!=color.R||current.G!=color.G||current.B!=color.B)ink.Color(color);
+            if(contour){
+                using namespace Microsoft::UI::Composition;
+                auto bounds=ContourBounds(width,height,commands,1/rasterizationScale);
+                visual.IsVisible(!commands.empty());visual.Offset({bounds.X,bounds.Y,0});visual.Size({bounds.Width,bounds.Height});
+                shape.Offset({-bounds.X,-bounds.Y});
+                if(pathCommands!=commands||!sameHoles()||pathWidth<0){path.Path(CompositionPathFromCommands(commands,holes));pathCommands=commands;pathHoles=holes;pathWidth=width;}
+                shape.FillBrush(ink);renderScale=0;return;
+            }
+            shape.FillBrush(ink);
             visual.IsVisible(width>0&&height>0);
             if(renderScale!=rasterizationScale){
                 float padding=1/rasterizationScale;visual.Offset({-padding,-padding,0});shape.Offset({padding,padding});renderScale=rasterizationScale;
@@ -129,7 +140,6 @@ class WorkspaceSurface {
                 for(auto hole:holes)if(hole.Width>0&&hole.Height>0)contours.push_back({{hole.X,hole.Y},{hole.X+hole.Width,hole.Y},{hole.X+hole.Width,hole.Y+hole.Height},{hole.X,hole.Y+hole.Height}});
                 path.Path(CompositionPathFromContours(contours));pathWidth=width;pathHeight=height;pathRadii=radii;pathHoles=holes;
             }
-            auto current=ink.Color();if(current.A!=color.A||current.R!=color.R||current.G!=color.G||current.B!=color.B)ink.Color(color);
         }
         void scale(){
             if(auto hostCanvas=host.get())if(auto xaml=hostCanvas.XamlRoot()){
@@ -168,7 +178,13 @@ public:
         if(!std::isfinite(width)||!std::isfinite(height)||width<0||height<0
             ||std::any_of(radii.begin(),radii.end(),[](float radius){return !std::isfinite(radius)||radius<0;}))throw winrt::hresult_invalid_argument();
         if(state->irregular){root.Children().Clear();state->irregular=nullptr;root.ClearValue(FrameworkElement::WidthProperty());root.ClearValue(FrameworkElement::HeightProperty());}
+        if(state->contour)state->pathWidth=-1;state->contour=false;
         state->width=width;state->height=height;state->radii=radii;state->color=color;state->holes=std::move(holes);state->rounded=true;state->attach();
+    }
+    void Contour(float width,float height,ContourCommands commands,Windows::UI::Color color,std::vector<Windows::Foundation::Rect> holes={}){
+        if(!std::isfinite(width)||!std::isfinite(height)||width<0||height<0)throw winrt::hresult_invalid_argument();
+        if(state->irregular){root.Children().Clear();state->irregular=nullptr;root.ClearValue(FrameworkElement::WidthProperty());root.ClearValue(FrameworkElement::HeightProperty());}
+        if(!state->contour)state->pathWidth=-1;state->contour=true;state->rounded=true;state->width=width;state->height=height;state->commands=std::move(commands);state->holes=std::move(holes);state->color=color;state->attach();
     }
     void Shape(Geometry const& geometry,Windows::UI::Color color){
         using Microsoft::UI::Xaml::Hosting::ElementCompositionPreview;

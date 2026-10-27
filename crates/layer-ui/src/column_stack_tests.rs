@@ -988,6 +988,21 @@ fn measured_panel_bridges_use_only_current_allocations_and_preserve_receiver_ide
         let actual=resolved.clone().measured_panel_bridges(measure.clone()).unwrap();
         assert_eq!(actual.bridges,expected);
         assert!(!actual.bridges.is_empty());
+        let mut vectors=resolved.clone().with_panel_bridges();
+        crate::PanelVectorCache::default().resolve(&mut vectors,0.);
+        assert_eq!(actual.paths.len(),vectors.vector_surfaces.len());
+        assert!(actual.paths.len()>1);
+        for path in &actual.paths {
+            let vector=vectors.vector_surfaces.iter().find(|v|v.group==path.group && v.column==path.column).unwrap();
+            assert_eq!(path.commands.len(),vector.commands.len());
+            for (command,packed) in path.commands.iter().zip(&vector.commands) {
+                assert_eq!(command[0],packed[0] as f32);
+                for i in 1..7 {assert!((command[i]-packed[i] as f32/1024.).abs()<=1./1024.);}
+            }
+            assert!(path.commands.iter().flatten().all(|value|value.is_finite()));
+        }
+        let mut closed=resolved.clone();closed.collapsed[0].open=None;
+        assert!(closed.measured_panel_bridges(measure.clone()).unwrap().paths.is_empty());
         let json=serde_json::to_value(&actual).unwrap();
         let decoded:Vec<(u32,Panel,crate::PanelBridge)>=serde_json::from_value(json["bridges"].clone()).unwrap();
         assert_eq!(decoded,expected);
@@ -998,9 +1013,11 @@ fn measured_panel_bridges_use_only_current_allocations_and_preserve_receiver_ide
         }}
         let mut partial=measure.clone();partial.groups.clear();
         let missing=resolved.clone().measured_panel_bridges(partial).unwrap();
-        assert!(missing.groups.is_empty());assert!(missing.bridges.is_empty());
+        assert!(missing.groups.is_empty());assert!(missing.bridges.is_empty());assert!(missing.paths.is_empty());
         let mut missing_icon=measure.clone();missing_icon.columns[0].icons.clear();
-        assert!(resolved.clone().measured_panel_bridges(missing_icon).unwrap().bridges.is_empty());
+        let missing_icon=resolved.clone().measured_panel_bridges(missing_icon).unwrap();
+        assert!(missing_icon.bridges.is_empty());
+        assert!(missing_icon.paths.iter().all(|path|path.commands.iter().filter(|c|c[0]==0.).count()==1));
         let mut moved=measure.clone();moved.groups[0].1.y+=0.5;
         let moved_frame=resolved.clone().measured_panel_bridges(moved.clone()).unwrap();
         assert_eq!(moved_frame.groups[0].bounds,moved.groups[0].1);
@@ -1017,7 +1034,7 @@ fn measured_panel_bridges_use_only_current_allocations_and_preserve_receiver_ide
             match mutation {
                 0=>invalid.groups.push(invalid.groups[0]),
                 1=>invalid.groups[0].1.x=f32::NAN,
-                2=>invalid.columns[0].content.width=-1.,
+                2=>invalid.columns[0].content.width= -1.,
                 3=>invalid.columns.push(invalid.columns[0].clone()),
                 4=>{let icon=invalid.columns[0].icons[0];invalid.columns[0].icons.push(icon);},
                 _=>invalid.groups.push((u32::MAX,Bounds{x:f32::NAN,..Bounds::default()})),
@@ -2079,7 +2096,7 @@ fn panel_vector_cache_keeps_original_bodies_through_anchor_eligibility_keyframes
         }
         assert!(connected && body_only,"keyframes must cross the attachment eligibility boundary");
         let mut remote=original.clone();
-        remote.collapsed[0].groups[0].icons[0].bounds.y=-10000.;
+        remote.collapsed[0].groups[0].icons[0].bounds.y= -10000.;
         let remote=panel_vector_cache_resolve(&mut cache,remote,0.);
         assert_eq!(remote.vector_surfaces.iter().map(|s|s.group).collect::<Vec<_>>(),ids.unwrap());
         for receiver in &remote.vector_surfaces {

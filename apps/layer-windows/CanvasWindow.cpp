@@ -115,12 +115,18 @@ CanvasWindow::CanvasWindow(std::function<void()> create,std::function<void(uint6
     // its old diagnostic model before publishing the new live-window manifest.
     if(GetEnvironmentVariableW(L"CAPY_TRACE_UI",nullptr,0))for(auto kind:{"ui-state","camera-state","presentation-state"})TraceState(kind,"{}");
 }
-namespace {
-LRESULT CALLBACK AltKeyMenuFilter(HWND window,UINT message,WPARAM wparam,LPARAM lparam,UINT_PTR id,DWORD_PTR){
+LRESULT CALLBACK CanvasWindow::WindowMessage(HWND window,UINT message,WPARAM wparam,LPARAM lparam,UINT_PTR id,DWORD_PTR data){
     if(message==WM_SYSCOMMAND&&(wparam&0xFFF0)==SC_KEYMENU&&lparam==0)return 0;
-    if(message==WM_NCDESTROY)RemoveWindowSubclass(window,AltKeyMenuFilter,id);
+    if(message==WM_ENTERSIZEMOVE||message==WM_EXITSIZEMOVE){
+        auto self=reinterpret_cast<CanvasWindow*>(data);
+        if(self&&!self->closing&&!self->closed&&self->workspace){
+            try{self->workspace->SetWindowResizing(message==WM_ENTERSIZEMOVE);self->CollectGlass();}
+            catch(hresult_error const& error){self->Fail(to_string(error.message()));}
+            catch(std::exception const& error){self->Fail(error.what());}
+        }
+    }
+    if(message==WM_NCDESTROY)RemoveWindowSubclass(window,WindowMessage,id);
     return DefSubclassProc(window,message,wparam,lparam);
-}
 }
 HWND CanvasWindow::Handle()const {
     HWND handle=nullptr;
@@ -392,8 +398,11 @@ void CanvasWindow::PublishGlass(){
     if(glassPosted)return;
     glassPosted=true;
     if(!dispatcher.TryEnqueue([weak=weak_from_this()]{
-    auto self=weak.lock();if(!self)return;
-    self->glassPosted=false;
+        if(auto self=weak.lock()){self->glassPosted=false;self->CollectGlass();}
+    }))glassPosted=false;
+}
+void CanvasWindow::CollectGlass(){
+    auto self=this;
     if(self->closing||self->closed||!self->panel||!self->workspace)return;
     if(self->captionRegionsValid){
         auto bubbles=self->workspace->OverlayInputRegions(self->panel);auto scale=self->root.XamlRoot().RasterizationScale();auto input=self->captionInputRegions;
@@ -413,7 +422,6 @@ void CanvasWindow::PublishGlass(){
     request.Insert(L"panels",panels);request.Insert(L"panel_revision",CapyUi::N(double(panelRevision)));
     auto json=to_string(request.Stringify());
     if(json==self->lastGlass)return;self->lastGlass=json;self->Send(json,CanvasCommandKind::Glass);
-    }))glassPosted=false;
 }
 void CanvasWindow::Start() {
     if(renderer.joinable()||closing)return;
@@ -466,7 +474,7 @@ bool CanvasWindow::StartPrepared(CapyLaunch  prepared) {
     surfaceHandle=capy_surface_handle(host);if(!surfaceHandle)throw hresult_error(E_FAIL);
     surfaceState.Reset(capy_surface_generation(host));
     nativeWindow=Handle();capy_set_window(host,nativeWindow);
-    SetWindowSubclass(Handle(),AltKeyMenuFilter,1,0);
+    check_bool(SetWindowSubclass(Handle(),WindowMessage,1,reinterpret_cast<DWORD_PTR>(this)));
     auto dark=panel.ActualTheme()==ElementTheme::Dark;
     capy_action(host,SystemTheme().c_str());
     colorValues=uiSettings.ColorValuesChanged([weak=weak_from_this()](auto&&,auto&&){

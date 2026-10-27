@@ -22,6 +22,37 @@ ID2D1Factory* factory(){
     static winrt::com_ptr<ID2D1Factory> value=[]{winrt::com_ptr<ID2D1Factory> created;winrt::check_hresult(D2D1CreateFactory(D2D1_FACTORY_TYPE_MULTI_THREADED,created.put()));return created;}();
     return value.get();
 }
+winrt::com_ptr<ID2D1Geometry> combine(ID2D1Geometry* first,ID2D1Geometry* second,D2D1_COMBINE_MODE mode){
+    winrt::com_ptr<ID2D1PathGeometry> result;winrt::check_hresult(factory()->CreatePathGeometry(result.put()));
+    winrt::com_ptr<ID2D1GeometrySink> sink;winrt::check_hresult(result->Open(sink.put()));
+    winrt::check_hresult(first->CombineWithGeometry(second,mode,nullptr,.05f,sink.get()));winrt::check_hresult(sink->Close());return result;
+}
+winrt::com_ptr<ID2D1Geometry> commandGeometry(ContourCommands const& commands,std::vector<Windows::Foundation::Rect> const& holes={}){
+    winrt::com_ptr<ID2D1Geometry> result;
+    winrt::com_ptr<ID2D1PathGeometry> figure;
+    winrt::com_ptr<ID2D1GeometrySink> sink;
+    for(auto const& c:commands){
+        if(std::any_of(c.begin(),c.end(),[](float v){return !std::isfinite(v);}))throw winrt::hresult_invalid_argument();
+        if(c[0]==0){
+            if(sink)throw winrt::hresult_invalid_argument();
+            winrt::check_hresult(factory()->CreatePathGeometry(figure.put()));winrt::check_hresult(figure->Open(sink.put()));
+            sink->SetFillMode(D2D1_FILL_MODE_WINDING);sink->BeginFigure({c[1],c[2]},D2D1_FIGURE_BEGIN_FILLED);
+        }else if(!sink)throw winrt::hresult_invalid_argument();
+        else if(c[0]==1)sink->AddLine({c[1],c[2]});
+        else if(c[0]==2)sink->AddBezier({{c[1],c[2]},{c[3],c[4]},{c[5],c[6]}});
+        else if(c[0]==3){
+            sink->EndFigure(D2D1_FIGURE_END_CLOSED);winrt::check_hresult(sink->Close());sink=nullptr;
+            result=result?combine(result.get(),figure.get(),D2D1_COMBINE_MODE_UNION):figure.as<ID2D1Geometry>();figure=nullptr;
+        }else throw winrt::hresult_invalid_argument();
+    }
+    if(sink)throw winrt::hresult_invalid_argument();
+    if(!result){winrt::com_ptr<ID2D1RectangleGeometry> empty;winrt::check_hresult(factory()->CreateRectangleGeometry({0,0,0,0},empty.put()));result=empty;}
+    for(auto const& hole:holes)if(hole.Width>0&&hole.Height>0){
+        winrt::com_ptr<ID2D1RectangleGeometry> rectangle;winrt::check_hresult(factory()->CreateRectangleGeometry({hole.X,hole.Y,hole.X+hole.Width,hole.Y+hole.Height},rectangle.put()));
+        result=combine(result.get(),rectangle.get(),D2D1_COMBINE_MODE_EXCLUDE);
+    }
+    return result;
+}
 struct ShadowCut{std::array<float,4> radii{};std::vector<winrt::Windows::Foundation::Rect> extra;bool squircle=true;std::vector<winrt::Windows::Foundation::Point> contour;};
 winrt::com_ptr<ID2D1Geometry> outside(float width,float height,ShadowCut const& cut,bool exclude=true){
     winrt::com_ptr<ID2D1PathGeometry> path;winrt::check_hresult(factory()->CreatePathGeometry(path.put()));
@@ -51,6 +82,17 @@ winrt::com_ptr<ID2D1Geometry> outside(float width,float height,ShadowCut const& 
     winrt::check_hresult(sink->Close());return path;
 }
 }
+CompositionPath CompositionPathFromCommands(ContourCommands const& commands,std::vector<Windows::Foundation::Rect> const& holes){
+    return CompositionPath(winrt::make<GeometrySource>(commandGeometry(commands,holes)));
+}
+Windows::Foundation::Rect ContourBounds(float width,float height,ContourCommands const& commands,float padding){
+    float left=0,top=0,right=width,bottom=height;
+    for(auto const& c:commands){
+        size_t count=c[0]==2?3:c[0]==0||c[0]==1?1:0;
+        for(size_t i=0;i<count;++i){left=std::min(left,c[1+2*i]);right=std::max(right,c[1+2*i]);top=std::min(top,c[2+2*i]);bottom=std::max(bottom,c[2+2*i]);}
+    }
+    return {left-padding,top-padding,right-left+2*padding,bottom-top+2*padding};
+}
 CompositionPath CompositionPathFromContours(std::vector<std::vector<Windows::Foundation::Point>> const& contours){
     winrt::com_ptr<ID2D1PathGeometry> path;winrt::check_hresult(factory()->CreatePathGeometry(path.put()));
     winrt::com_ptr<ID2D1GeometrySink> sink;winrt::check_hresult(path->Open(sink.put()));sink->SetFillMode(D2D1_FILL_MODE_ALTERNATE);
@@ -75,11 +117,41 @@ struct WorkspaceShadow::State {
     DropShadow shadow{nullptr};
     RetainedShadow retained;
     XamlRoot::Changed_revoker scaleChanged;
-    bool rounded=false;
+    bool rounded=false,contoured=false;
+    ContourCommands commands,cachedCommands;
+    ShapeVisual contourMask{nullptr};
+    CompositionPathGeometry contourPath{nullptr};
+    CompositionSpriteShape contourShape{nullptr};
+    CompositionVisualSurface contourSurface{nullptr};
+    CompositionSurfaceBrush contourAlpha{nullptr};
+    CompositionGeometricClip contourClip{nullptr};
+    float cachedWidth=-1,cachedHeight=-1,cachedBlur=-1,cachedOffset=0;
     float width=0,height=0,blur=8,offset=2,opacity=.16f;
     std::optional<ShadowCut> cut;
     void apply(){
         if(!visual||rounded)return;
+        if(contoured){
+            auto compositor=visual.Compositor();
+            if(!contourPath||contourPath.Compositor()!=compositor){
+                contourPath=compositor.CreatePathGeometry();contourShape=compositor.CreateSpriteShape(contourPath);contourShape.FillBrush(compositor.CreateColorBrush({255,255,255,255}));
+                contourMask=compositor.CreateShapeVisual();contourMask.BorderMode(CompositionBorderMode::Soft);contourMask.Shapes().Append(contourShape);
+                contourSurface=compositor.CreateVisualSurface();contourSurface.SourceVisual(contourMask);contourAlpha=compositor.CreateSurfaceBrush(contourSurface);contourAlpha.Stretch(CompositionStretch::Fill);cachedWidth=-1;
+            }
+            auto bounds=ContourBounds(width,height,commands);
+            visual.Size({bounds.Width,bounds.Height});visual.Offset({padding+bounds.X,padding+bounds.Y,0});
+            contourMask.Size(visual.Size());contourSurface.SourceSize(visual.Size());contourShape.Offset({-bounds.X,-bounds.Y});
+            if(cachedCommands!=commands||cachedWidth!=width||cachedHeight!=height||cachedBlur!=blur||cachedOffset!=offset){
+                auto interior=commandGeometry(commands);contourPath.Path(CompositionPath(winrt::make<GeometrySource>(interior)));
+                float reach=std::max(padding,3*blur+std::abs(offset));winrt::com_ptr<ID2D1RectangleGeometry> outer;
+                winrt::check_hresult(factory()->CreateRectangleGeometry({bounds.X-reach,bounds.Y-reach,bounds.X+bounds.Width+reach,bounds.Y+bounds.Height+reach},outer.put()));
+                auto exterior=combine(outer.get(),interior.get(),D2D1_COMBINE_MODE_EXCLUDE);
+                contourClip=compositor.CreateGeometricClip(compositor.CreatePathGeometry(CompositionPath(winrt::make<GeometrySource>(exterior))));
+                contourClip.TransformMatrix({1,0,0,1,-bounds.X,-bounds.Y});
+                cachedCommands=commands;cachedWidth=width;cachedHeight=height;cachedBlur=blur;cachedOffset=offset;
+            }
+            shadow.Mask(contourAlpha);visual.Clip(contourClip);
+            shadow.BlurRadius(blur);shadow.Offset({0,offset,0});shadow.Opacity(opacity);return;
+        }
         visual.Size({width,height});visual.Offset({padding,padding,0});
         if(cut&&width>0&&height>0){
             auto compositor=visual.Compositor();
@@ -124,13 +196,20 @@ void WorkspaceShadow::Cut(std::vector<Windows::Foundation::Point> contour){
 }
 void WorkspaceShadow::Uncut(){state->cut.reset();state->apply();}
 void WorkspaceShadow::Shape(Geometry const& geometry,float width,float height,float blur,float offset,float opacity){
-    bool rounded=std::exchange(state->rounded,false);maskHost.Visibility(Visibility::Visible);
+    bool rounded=std::exchange(state->rounded,false);state->contoured=false;maskHost.Visibility(Visibility::Visible);
+    if(state->shadow)state->shadow.Mask(mask.GetAlphaMask());
     mask.Data(geometry);mask.Width(width);mask.Height(height);
     state->width=width;state->height=height;state->blur=blur;state->offset=offset;state->opacity=opacity;state->apply();
     if(rounded&&state->visual)ElementCompositionPreview::SetElementChildVisual(root,state->visual);
 }
+void WorkspaceShadow::Contour(ContourCommands const& commands,float width,float height,float blur,float offset,float opacity){
+    if(!std::isfinite(width)||!std::isfinite(height)||width<0||height<0||!std::isfinite(blur)||blur<0||!std::isfinite(offset)||!std::isfinite(opacity)||opacity<0||opacity>1)throw winrt::hresult_invalid_argument();
+    bool rounded=std::exchange(state->rounded,false);state->contoured=true;maskHost.Visibility(Visibility::Collapsed);
+    state->commands=commands;state->width=width;state->height=height;state->blur=blur;state->offset=offset;state->opacity=opacity;state->apply();
+    if(rounded&&state->visual)ElementCompositionPreview::SetElementChildVisual(root,state->visual);
+}
 void WorkspaceShadow::Rounded(float width,float height,std::array<float,4> radii,float blur,float offset,float opacity){
-    bool rounded=std::exchange(state->rounded,true);maskHost.Visibility(Visibility::Collapsed);
+    bool rounded=std::exchange(state->rounded,true);state->contoured=false;maskHost.Visibility(Visibility::Collapsed);
     state->retained.Present(width,height,radii,blur,offset,opacity);
     if(!state->retained.visual&&root.IsLoaded())state->retained.Create(ElementCompositionPreview::GetElementVisual(root).Compositor());
     if(!rounded&&state->retained.visual)ElementCompositionPreview::SetElementChildVisual(root,state->retained.visual);

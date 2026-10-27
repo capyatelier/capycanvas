@@ -21,7 +21,7 @@ struct Column:std::enable_shared_from_this<Column>{
     std::map<std::wstring,Button> buttons;
     std::map<std::wstring,Bindings> paintIcons;
     std::map<uint32_t,Border> dividers;
-    bool gpu=false;
+    bool gpu=false,nativeResize=false;
     double reported=0;
     bool applying=false;
     std::array<float,4> corners{SurfaceRadius,SurfaceRadius,SurfaceRadius,SurfaceRadius};
@@ -144,7 +144,11 @@ struct Column:std::enable_shared_from_this<Column>{
             A pair;pair.Append(S(hstring(panel)));pair.Append(rectangle(bounds));measured.Append(pair);}
         return O({{L"column",N(id)},{L"bounds",rectangle(box)},{L"content",rectangle(allocatedBounds(scroll,reference))},{L"icons",measured}});
     }
-    void present(J const& frame,bool ready){
+    void present(J const& frame,bool ready,bool resizing){
+        if(nativeResize!=resizing){nativeResize=resizing;
+            if(nativeResize){auto color=data->brush(L"panel").Color();color.A=255;surface.Fill(fill(color));}
+            else surface.Fill(data->glass(L"panel"));
+        }
         J column;for(auto value:array(frame,L"columns"))if(num(value.GetObject(),L"column")==id){column=value.GetObject();break;}
         auto radii=array(column,L"radii");
         if(radii.Size()==4)for(uint32_t i=0;i<4;++i)corners[i]=float(radii.GetNumberAt(i));
@@ -186,6 +190,6 @@ CollapsedColumns::~CollapsedColumns(){impl->reset();}
 void CollapsedColumns::Apply(){impl->apply();}
 void CollapsedColumns::Reset(){impl->reset();}
 A CollapsedColumns::Measure(UIElement const& reference)const{A result;for(auto const& [id,column]:impl->columns){auto value=column->measure(reference);if(value.Size())result.Append(value);}return result;}
-void CollapsedColumns::PresentBridges(J const& frame,bool ready){for(auto const& [id,column]:impl->columns)column->present(frame,ready);}
+void CollapsedColumns::PresentBridges(J const& frame,bool ready,bool resizing){for(auto const& [id,column]:impl->columns)column->present(frame,ready,resizing);}
 double CollapsedColumns::Opacity(uint32_t column)const{auto found=impl->columns.find(column);return found==impl->columns.end()?0:found->second->background.Opacity();}
 void CollapsedColumns::AppendGlass(A& regions,UIElement const& reference)const{for(auto const& [id,column]:impl->columns)column->collectGlass(regions,reference);}

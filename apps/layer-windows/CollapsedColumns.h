@@ -9,7 +9,7 @@ public:
     void Apply();
     void Reset();
     CapyUi::A Measure(winrt::Microsoft::UI::Xaml::UIElement const& reference)const;
-    void PresentBridges(CapyUi::J const& frame,bool ready);
+    void PresentBridges(CapyUi::J const& frame,bool ready,bool resizing=false);
     double Opacity(uint32_t column)const;
     void AppendGlass(CapyUi::A& regions,winrt::Microsoft::UI::Xaml::UIElement const& reference)const;
 private:

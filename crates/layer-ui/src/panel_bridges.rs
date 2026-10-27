@@ -26,12 +26,68 @@ struct PanelVectorKey {
     source_radii: [f32;4],
 }
 
+impl PanelVectorKey {
+    fn commands(&self) -> Vec<[f32;7]> {
+        self.contour.commands(0.025).into_iter().map(|mut c| {
+            let points=match c[0] as u32 {0|1=>1,2=>3,_=>0};
+            for i in (1..=points*2).step_by(2) {if !self.right {c[i]=self.contour.bounds[2]-c[i];}}
+            c
+        }).collect()
+    }
+}
+
 struct PanelVectorEntry {
     group: u32,
     generation: u64,
     key: PanelVectorKey,
     commands: Vec<[i32;7]>,
     triangles: Vec<[i32;7]>,
+}
+
+fn panel_vector_keys(layout: &ResolvedLayout) -> Vec<(u32,u32,PanelVectorKey)> {
+    let bridges=layout.panel_bridges();
+    let mut result=Vec::new();
+    for column in &layout.collapsed {
+        let Some(open)=&column.open else {continue;};
+        let Some(plane)=bridge_plane(open.direction,open.bounds) else {continue;};
+        let targets=layout.panel_bridge_receivers(column,plane,open.direction);
+        let (Some(top),Some(bottom))=(targets.first(),targets.last()) else {continue;};
+        let direction=if open.direction==Edge::Right {1.} else {-1.};
+        let width=if direction>0. {plane-column.bounds.x-column.bounds.width} else {column.bounds.x-plane};
+        let facing=if direction>0. {[0,3]} else {[1,2]};
+        for (index,receiver) in targets.iter().enumerate() {
+            let b=receiver.bounds;
+            let anchors=bridges.iter().filter(|(id,..)|*id==column.id).map(|(_,_,bridge)|
+                [bridge.anchor.y-b.y,bridge.anchor.y+bridge.anchor.height-b.y])
+                .filter(|a|a[0]<b.height+WORKSPACE_SPACING && a[1]> -WORKSPACE_SPACING).collect::<Vec<_>>();
+            let mut gaps=targets.windows(2).map(|w|[w[0].bounds.y+w[0].bounds.height-b.y,w[1].bounds.y-b.y])
+                .filter(|g|g[1]>g[0]).collect::<Vec<_>>();
+            if anchors.iter().any(|a|a[0]<top.bounds.y-b.y) {gaps.push([top.bounds.y-b.y-WORKSPACE_SPACING,top.bounds.y-b.y]);}
+            if anchors.iter().any(|a|a[1]>bottom.bounds.y+bottom.bounds.height-b.y) {
+                gaps.push([bottom.bounds.y+bottom.bounds.height-b.y,bottom.bounds.y+bottom.bounds.height-b.y+WORKSPACE_SPACING]);
+            }
+            let mut radii=receiver.radii;
+            if direction<0. {radii=[radii[1],radii[0],radii[3],radii[2]];}
+            let spec=layer_render::panel_geometry::PanelContour {bounds:[0.,0.,b.width,b.height],radii,anchors,
+                neighbors:targets.iter().filter(|r|r.group!=receiver.group).map(|r| {
+                    let radii=if direction>0. {r.radii} else {[r.radii[1],r.radii[0],r.radii[3],r.radii[2]]};
+                    ([0.,r.bounds.y-b.y,r.bounds.width,r.bounds.height],radii)
+                }).collect(),
+                width:width.max(0.),gaps,envelope:[top.bounds.y-b.y,bottom.bounds.y+bottom.bounds.height-b.y,
+                    layer_render::panel_geometry::panel_radii([0.,0.,top.bounds.width,top.bounds.height],top.radii)[facing[0]],
+                    layer_render::panel_geometry::panel_radii([0.,0.,bottom.bounds.width,bottom.bounds.height],bottom.radii)[facing[1]]],
+                clip:[if index==0 {-1e6} else {(targets[index-1].bounds.y+targets[index-1].bounds.height+b.y)/2.-b.y},
+                    if index+1==targets.len() {1e6} else {(b.y+b.height+targets[index+1].bounds.y)/2.-b.y}],
+            };
+            let source=[if direction>0. {column.bounds.x-plane} else {plane-column.bounds.x-column.bounds.width},
+                column.bounds.y-b.y,column.bounds.width,column.bounds.height];
+            let source_radii=if direction>0. {column.corner_radii} else {
+                let r=column.corner_radii;[r[1],r[0],r[3],r[2]]
+            };
+            result.push((receiver.group,column.id,PanelVectorKey {contour:spec,right:direction>0.,source,source_radii}));
+        }
+    }
+    result
 }
 
 impl PanelVectorCache {
@@ -59,67 +115,28 @@ impl PanelVectorCache {
                 for icon in column.groups.iter_mut().flat_map(|g|&mut g.icons) {snap(&mut icon.bounds);}
             }
         }
-        let bridges=layout.panel_bridges();
         let mut live=Vec::new();
         layout.vector_surfaces.clear();
-        for column in &layout.collapsed {
-            let Some(open)=&column.open else {continue;};
-            let Some(plane)=bridge_plane(open.direction,open.bounds) else {continue;};
-            let targets=layout.panel_bridge_receivers(column,plane,open.direction);
-            let (Some(top),Some(bottom))=(targets.first(),targets.last()) else {continue;};
-            let direction=if open.direction==Edge::Right {1.} else {-1.};
-            let width=if direction>0. {plane-column.bounds.x-column.bounds.width} else {column.bounds.x-plane};
-            let facing=if direction>0. {[0,3]} else {[1,2]};
-            for (index,receiver) in targets.iter().enumerate() {
-                let b=receiver.bounds;
-                let anchors=bridges.iter().filter(|(id,..)|*id==column.id).map(|(_,_,bridge)|
-                    [bridge.anchor.y-b.y,bridge.anchor.y+bridge.anchor.height-b.y])
-                    .filter(|a|a[0]<b.height+WORKSPACE_SPACING && a[1]> -WORKSPACE_SPACING).collect::<Vec<_>>();
-                let mut gaps=targets.windows(2).map(|w|[w[0].bounds.y+w[0].bounds.height-b.y,w[1].bounds.y-b.y])
-                    .filter(|g|g[1]>g[0]).collect::<Vec<_>>();
-                if anchors.iter().any(|a|a[0]<top.bounds.y-b.y) {gaps.push([top.bounds.y-b.y-WORKSPACE_SPACING,top.bounds.y-b.y]);}
-                if anchors.iter().any(|a|a[1]>bottom.bounds.y+bottom.bounds.height-b.y) {
-                    gaps.push([bottom.bounds.y+bottom.bounds.height-b.y,bottom.bounds.y+bottom.bounds.height-b.y+WORKSPACE_SPACING]);
-                }
-                let mut radii=receiver.radii;
-                if direction<0. {radii=[radii[1],radii[0],radii[3],radii[2]];}
-                let spec=layer_render::panel_geometry::PanelContour {bounds:[0.,0.,b.width,b.height],radii,anchors,
-                    neighbors:targets.iter().filter(|r|r.group!=receiver.group).map(|r| {
-                        let radii=if direction>0. {r.radii} else {[r.radii[1],r.radii[0],r.radii[3],r.radii[2]]};
-                        ([0.,r.bounds.y-b.y,r.bounds.width,r.bounds.height],radii)
-                    }).collect(),
-                    width:width.max(0.),gaps,envelope:[top.bounds.y-b.y,bottom.bounds.y+bottom.bounds.height-b.y,
-                        layer_render::panel_geometry::panel_radii([0.,0.,top.bounds.width,top.bounds.height],top.radii)[facing[0]],
-                        layer_render::panel_geometry::panel_radii([0.,0.,bottom.bounds.width,bottom.bounds.height],bottom.radii)[facing[1]]],
-                    clip:[if index==0 {-1e6} else {(targets[index-1].bounds.y+targets[index-1].bounds.height+b.y)/2.-b.y},
-                        if index+1==targets.len() {1e6} else {(b.y+b.height+targets[index+1].bounds.y)/2.-b.y}],
-                };
-                let source=[if direction>0. {column.bounds.x-plane} else {plane-column.bounds.x-column.bounds.width},
-                    column.bounds.y-b.y,column.bounds.width,column.bounds.height];
-                let source_radii=if direction>0. {column.corner_radii} else {
-                    let r=column.corner_radii;[r[1],r[0],r[3],r[2]]
-                };
-                let key=PanelVectorKey {contour:spec,right:direction>0.,source,source_radii};
-                let (generation,commands,triangles)=if let Some(entry)=self.entries.iter().chain(self.prepared.iter()).find(|entry|entry.group==receiver.group && entry.key==key) {
-                    (entry.generation,entry.commands.clone(),entry.triangles.clone())
-                } else {
-                    let commands=key.contour.commands(0.025).into_iter().map(|mut c| {
-                        let points=match c[0] as u32 {0|1=>1,2=>3,_=>0};
-                        for i in (1..=points*2).step_by(2) {c[i]=if direction>0. {c[i]} else {b.width-c[i]};}
-                        std::array::from_fn(|i|if i==0 {c[i] as i32} else {(c[i]*1024.).round() as i32})
-                    }).collect::<Vec<_>>();
-                    let mut global=key.contour.clone();global.clip=[-1e6,1e6];
-                    let field=global.prepare();
-                    let triangles=layer_render::panel_mesh_with_coverage(&commands,|p| {
-                        let p=[if direction>0. {p[0]} else {b.width-p[0]},p[1]];
-                        field.field(p).min(layer_render::panel_geometry::panel_rect(p,source,source_radii))<=0.
-                    });
-                    self.generation+=1;
-                    (self.generation,commands,triangles)
-                };
-                live.push(PanelVectorEntry {group:receiver.group,generation,key,commands:commands.clone(),triangles:triangles.clone()});
-                layout.vector_surfaces.push(PanelVectorSurface {group:receiver.group,column:column.id,commands,triangles});
-            }
+        for (group,column,key) in panel_vector_keys(layout) {
+            let width=key.contour.bounds[2];
+            let source=key.source;let source_radii=key.source_radii;
+            let (generation,commands,triangles)=if let Some(entry)=self.entries.iter().chain(self.prepared.iter()).find(|entry|entry.group==group && entry.key==key) {
+                (entry.generation,entry.commands.clone(),entry.triangles.clone())
+            } else {
+                let commands=key.commands().into_iter().map(|c|
+                    std::array::from_fn(|i|if i==0 {c[i] as i32} else {(c[i]*1024.).round() as i32})
+                ).collect::<Vec<_>>();
+                let mut global=key.contour.clone();global.clip=[-1e6,1e6];
+                let field=global.prepare();
+                let triangles=layer_render::panel_mesh_with_coverage(&commands,|p| {
+                    let p=[if key.right {p[0]} else {width-p[0]},p[1]];
+                    field.field(p).min(layer_render::panel_geometry::panel_rect(p,source,source_radii))<=0.
+                });
+                self.generation+=1;
+                (self.generation,commands,triangles)
+            };
+            live.push(PanelVectorEntry {group,generation,key,commands:commands.clone(),triangles:triangles.clone()});
+            layout.vector_surfaces.push(PanelVectorSurface {group,column,commands,triangles});
         }
         for entry in std::mem::replace(&mut self.entries,live) {
             if self.entries.iter().any(|current|current.group==entry.group && current.key==entry.key) {continue;}
@@ -177,7 +194,15 @@ pub struct PanelColumnGeometry {
 }
 
 #[derive(Clone, Debug, Serialize)]
+pub struct PanelBridgePath {
+    pub group: u32,
+    pub column: u32,
+    pub commands: Vec<[f32;7]>,
+}
+
+#[derive(Clone, Debug, Serialize)]
 pub struct PanelBridgeFrame {
+    pub paths: Vec<PanelBridgePath>,
     pub groups: Vec<PanelBridgeReceiver>,
     pub columns: Vec<PanelColumnGeometry>,
     pub bridges: Vec<(u32, Panel, PanelBridge)>,
@@ -226,6 +251,7 @@ impl ResolvedLayout {
         });
         let layout=self.with_panel_bridges();
         Ok(PanelBridgeFrame {
+            paths:panel_vector_keys(&layout).into_iter().map(|(group,column,key)|PanelBridgePath {group,column,commands:key.commands()}).collect(),
             bridges:layout.panel_bridges(),
             groups:layout.groups.iter().map(|g|PanelBridgeReceiver{group:g.id,bounds:g.bounds,radii:g.corner_radii}).collect(),
             columns:layout.collapsed.iter().map(|c|PanelColumnGeometry{column:c.id,bounds:c.bounds,radii:c.corner_radii,
