@@ -255,6 +255,9 @@ mutation or release.
   is zero and an absent rename owner does not start name editing.
   Enable Apple gates with the presentation and shared platform tests. Compare
   `WorkspacePreset::layout(platform)` before and after for every preset/platform.
+- **Dialogs.** Keep common sizing, footer margins and Mac button faces in
+  `EditorPopupSurface.swift`. Mac Color and Texture dialogs fit a 720-point
+  content width; individual controls can retain their explicit button styles.
 - **New drawings and Paper.** `NewDrawingDialog.swift` presents the shared
   [New drawing](../ui/new-drawing.md) view as a sheet. It opens with the
   window's screen and `upcoming_untitled`, sends `new_drawing` actions, reuses

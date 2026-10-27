@@ -15,9 +15,20 @@ struct EditorFittedPresentation: ViewModifier {
 
 struct EditorDialogPresentation: ViewModifier {
     let identifier: String
+    #if os(macOS)
+    var idealHeight: CGFloat = 420
+    #else
     var idealHeight: CGFloat = 500
+    #endif
+    private var widths: (ideal: CGFloat, max: CGFloat) {
+        #if os(macOS)
+        return (720, 720)
+        #else
+        return (800, 860)
+        #endif
+    }
     func body(content: Content) -> some View {
-        content.frame(minWidth: 380, idealWidth: 800, maxWidth: 860, minHeight: 420, idealHeight: idealHeight, maxHeight: 620)
+        content.frame(minWidth: 380, idealWidth: widths.ideal, maxWidth: widths.max, minHeight: 420, idealHeight: idealHeight, maxHeight: 620)
             .accessibilityElement(children: .contain).accessibilityIdentifier(identifier)
             .modifier(EditorFittedPresentation()).modifier(EditorPopupPresentation())
     }
@@ -49,7 +60,12 @@ struct EditorDialogFooter<Leading: View>: View {
                 Button(label, action: apply)
                     .buttonStyle(.borderedProminent).tint(palette.accent)
                     .disabled(blocked).keyboardShortcut(.defaultAction).accessibilityIdentifier(identifiers.apply)
-            }.padding(.horizontal, 20).padding(.vertical, 12)
+            }.padding(.horizontal, 20)
+            #if os(macOS)
+            .padding(.top, 16).padding(.bottom, 20)
+            #else
+            .padding(.vertical, 12)
+            #endif
         }
     }
 }
@@ -97,6 +113,9 @@ struct EditorPopupPresentation: ViewModifier {
                 content.modifier(EditorPopoverHost()).foregroundStyle(.primary).presentationBackground(.background)
             }
         }
+        #if os(macOS)
+        .buttonStyle(.bordered)
+        #endif
         .onAppear { store?.workspace.popover(popup, open: true, defersLanguage: false) }
         .onDisappear { store?.workspace.popover(popup, open: false) }
     }

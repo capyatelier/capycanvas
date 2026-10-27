@@ -107,7 +107,7 @@ private struct AdjustmentRow: View {
 struct FilterTypesPanel: View {
     @ObservedObject var store: EditorStore
     var body: some View {
-        VStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: 6) {
             EditorScrollView {
                 VStack(spacing: 2) {
                     ForEach(store.state["filter_categories"].array.indices, id: \.self) { index in
@@ -123,7 +123,9 @@ struct FilterTypesPanel: View {
                     }
                 }.modifier(PanelBodyMeasurement(panel: "filter_types", part: "choices", kind: .scroll))
             }
-            Button(store.bootstrap["common"]["cancel"].string) { store.dispatch(["type": "effect", "action": ["op": "cancel_filter"]]) }
+            Button { store.dispatch(["type": "effect", "action": ["op": "cancel_filter"]]) } label: {
+                Text(store.bootstrap["common"]["cancel"].string).padding(.horizontal, 6).frame(height: store.panelMetrics.height)
+            }.buttonStyle(EditorControlButtonStyle(background: EditorPalette(source: store.state["palette"]).controlFill))
                 .accessibilityIdentifier("cancel-filter")
                 .modifier(PanelBodyMeasurement(panel: "filter_types", part: "footer"))
         }.padding(8).modifier(PanelBodyMeasurement(panel: "filter_types", part: "insets", intrinsicHeight: 22))
