@@ -33,6 +33,7 @@ import SwiftUI
         let id: UInt64
         var last: CGPoint
         var moving = false
+        var admissionPending = false
     }
     private var contact: Contact?
     private var candidate: Candidate?
@@ -40,6 +41,7 @@ import SwiftUI
     private var lastRing: (id: UInt64, kind: String, point: CGPoint, time: TimeInterval)?
     private var suppressClick = false
     var hold: (() -> Void)?
+    var claim: (@MainActor (UInt64) -> Void)?
     let colorTouches = ColorTouchSurface()
     private(set) var generation: UInt64 = 0
     var viewport = CGSize.zero
@@ -224,9 +226,9 @@ import SwiftUI
         if var s = candidate, s.id == id {
             s.last = point
             if !s.moving && !s.bounds.contains(point) && store?.workspace.input.contact.held != true {
-                store?.workspace.input.relinquishToBubble(); store?.header.cancel()
-                suppressClick = true
-                s.moving = true; drag(s.grab, "down", point)
+                candidate = s
+                requestAdmission()
+                return false
             }
             if s.moving { drag(s.grab, "move", point) }
             candidate = s; return s.moving
@@ -272,6 +274,28 @@ import SwiftUI
         else if ["ring", "intensity", "choose", "beads"].contains(c.mode) { send(c, c.mode, "move", point) }
         c.item.hover = c.item.hit(point)
         return true
+    }
+    private func requestAdmission() {
+        guard var s = candidate, !s.moving, !s.admissionPending, let store else { return }
+        s.admissionPending = true
+        candidate = s
+        let point = s.last, id = s.id, token = generation, queryViewport = viewport
+        store.query(["type": "can_take_bubble", "grab": s.grab.raw, "position": [point.x, point.y],
+            "viewport": [queryViewport.width, queryViewport.height]]) { [weak self] reply in
+            guard let self, self.generation == token, var current = self.candidate, current.id == id else { return }
+            current.admissionPending = false
+            self.candidate = current
+            self.validate()
+            guard let candidate = self.candidate, candidate.id == id, !candidate.moving,
+                !candidate.bounds.contains(candidate.last), self.store?.workspace.input.contact.held != true else { return }
+            if candidate.last != point || self.viewport != queryViewport { self.requestAdmission(); return }
+            guard reply.bool else { return }
+            current = candidate; current.moving = true; self.candidate = current
+            self.store?.workspace.input.relinquishToBubble(); self.store?.header.cancel()
+            self.suppressClick = true
+            self.claim?(id)
+            self.drag(current.grab, "down", point)
+        }
     }
     func up(_ point: CGPoint, id: UInt64, cancelled: Bool) -> Bool {
         validate(); hold?()

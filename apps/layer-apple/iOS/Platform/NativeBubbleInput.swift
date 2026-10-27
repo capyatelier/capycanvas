@@ -18,6 +18,14 @@ final class BubbleRecognizer: UIGestureRecognizer {
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
         guard let marker, let model else { state = .failed; return }
         model.viewport = marker.bounds.size
+        model.claim = { [weak self] id in
+            guard let self, self.contacts.values.contains(id) else { return }
+            switch self.state {
+            case .possible: self.state = .began
+            case .began, .changed: self.state = .changed
+            default: break
+            }
+        }
         for touch in touches {
             let point = touch.location(in: marker)
             if touch.type == .direct, model.colorTouch(at: point) {
