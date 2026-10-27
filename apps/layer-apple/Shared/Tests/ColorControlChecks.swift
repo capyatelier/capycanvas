@@ -98,6 +98,7 @@ extension XCTestCase {
         case "color-readout": CGVector(dx: 0.2, dy: 0.06)
         case "color-background": CGVector(dx: 0.85, dy: 0.5)
         case "color-foreground": CGVector(dx: 0.3, dy: 0.3)
+        case "color-wheel": CGVector(dx: 0.95, dy: 0.5)
         default: CGVector(dx: 0.5, dy: 0.5)
         }
         return control.coordinate(withNormalizedOffset: offset)
@@ -144,6 +145,17 @@ extension XCTestCase {
         expect([1, 0, 0, 1], selected: foreground, "The foreground paint starts selected")
         choose(foreground, "Swap foreground and background", capture: "paint-color-menu-\(theme)")
         expect([0, 0, 1, 1], selected: foreground, "Swap exchanges the paint colors and keeps the selection")
+        colorControlPoint(wheel, in: app).clickOrTap()
+        guard let encoded = wheel.value as? String,
+              let state = try? JSONSerialization.jsonObject(with: Data(encoded.utf8)) as? [String: Any],
+              let picked = state["rgba"] as? [Double] else { XCTFail("The wheel reports its accepted paint"); return }
+        XCTAssertNotEqual(picked, [0, 0, 1, 1], "A real wheel contact changes the foreground paint")
+        choose(wheel, "Undo color change")
+        expect([0, 0, 1, 1], selected: foreground, "Color Undo restores the exact foreground paint")
+        choose(wheel, "Redo color change")
+        expect(picked, selected: foreground, "Color Redo restores the exact wheel paint")
+        choose(wheel, "Undo color change")
+        expect([0, 0, 1, 1], selected: foreground, "The existing paint menu continues with blue foreground")
         choose(background, "Edit Color…")
         cancelEditor("#FF0000", "Edit Color… opens the requested background color")
         expect([0, 0, 1, 1], selected: foreground, "Opening and cancelling background Edit Color… preserves foreground paint")

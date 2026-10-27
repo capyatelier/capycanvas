@@ -86,7 +86,11 @@ private final class NativeContextMenuController<Content: View>: UIHostingControl
         view.addGestureRecognizer(hold); view.addGestureRecognizer(secondary)
     }
     @objc private func held(_ recognizer: UILongPressGestureRecognizer) {
-        if recognizer.state == .began { open(recognizer.location(in: view)) }
+        if recognizer.state == .began {
+            let point = recognizer.location(in: view)
+            (view.hitTest(point, with: nil) as? ColorWheelInput.ContactView)?.contact.cancel()
+            open(point)
+        }
         else if recognizer.state == .cancelled { cancel() }
     }
     @objc private func clicked(_ recognizer: UITapGestureRecognizer) { open(recognizer.location(in: view)) }
@@ -95,6 +99,9 @@ private final class NativeContextMenuController<Content: View>: UIHostingControl
     }
     func gestureRecognizer(_ recognizer: UIGestureRecognizer, shouldReceive event: UIEvent) -> Bool {
         recognizer === secondary ? event.buttonMask.contains(.secondary) : !event.buttonMask.contains(.secondary)
+    }
+    func gestureRecognizer(_ recognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
+        recognizer === hold && other is ColorWheelInput.Contact
     }
     func gestureRecognizer(_ recognizer: UIGestureRecognizer, shouldBeRequiredToFailBy other: UIGestureRecognizer) -> Bool {
         recognizer === hold && other.view === recognizer.view
