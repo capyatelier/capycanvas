@@ -697,24 +697,27 @@ def build_files(machine, directory=SOFTWARE_BUILD):
     return {item["name"]: item["sha256"] for item in json.loads(result.stdout)}
 
 
-def validate_build(record, inputs, files):
-    if not record or record["inputs"] != inputs or record["files"] != files:
+def validate_build(record, inputs, files, profile="release"):
+    if not record or record.get("profile") != profile or record["inputs"] != inputs or record["files"] != files:
         sys.exit("The build does not match the synced source or binaries; rerun without --no-build.")
 
 
-def fixture_build(machine, hashes, no_build, hardware):
+def fixture_build(machine, hashes, no_build, hardware, profile="release"):
     inputs = build_inputs(hashes)
     directory = HARDWARE_BUILD if hardware else SOFTWARE_BUILD
-    build_record = machine.directory / ("hardware-build.json" if hardware else "software-build.json")
+    intermediate = directory + ".obj"
+    suffix = "" if profile == "release" else f"-{profile}"
+    directory += suffix
+    build_record = machine.directory / f"{'hardware' if hardware else 'software'}-build{suffix}.json"
     if no_build:
         record = json.loads(build_record.read_text()) if build_record.exists() else None
-        validate_build(record, inputs, build_files(machine, directory))
+        validate_build(record, inputs, build_files(machine, directory), profile)
     else:
         build_record.unlink(missing_ok=True)
         feature = "" if hardware else "-SoftwareAdapterTests "
         guest(machine, f"& '{GUEST_PWSH}' -NoProfile -File '{GUEST_REPO}\\apps\\layer-windows\\scripts\\build.ps1' -Configuration Release "
-                       f"{feature}-OutputDirectory '{directory}'")
-        record = {"inputs": inputs, "files": build_files(machine, directory)}
+                       f"-RustProfile {profile} {feature}-OutputDirectory '{directory}' -IntermediateDirectory '{intermediate}'")
+        record = {"profile": profile, "inputs": inputs, "files": build_files(machine, directory)}
         build_record.write_text(json.dumps(record))
     return directory, record
 
@@ -803,7 +806,7 @@ def fixtures(args):
     lock = claim(machine)
     revision = run("git", "rev-parse", "HEAD", cwd=ROOT, capture_output=True, text=True).stdout.strip()
     hashes = sync_machine(machine)
-    directory, record = fixture_build(machine, hashes, args.no_build, hardware)
+    directory, record = fixture_build(machine, hashes, args.no_build, hardware, args.profile)
     name = time.strftime("%Y%m%d-%H%M%S")
     output = f"{GUEST_REPO}\\artifacts\\windows\\vm-fixtures\\{name}"
     if any(not re.fullmatch(r"[a-zA-Z0-9:-]+", item) for item in args.names):
@@ -898,6 +901,8 @@ def main():
     fixture = command("fixtures", fixtures, "sync, build and run the UI fixtures")
     fixture.add_argument("names", nargs="*", help="fixtures to run, e.g. layers or header:pen (default: all)")
     fixture.add_argument("--no-build", action="store_true", help="reuse a validated build for the selected adapter mode")
+    fixture.add_argument("--profile", choices=("release", "dev-perf"), default="release",
+                         help="Rust build profile (default: release; dev-perf enables incremental development builds)")
     fixture.add_argument("--hardware-gpu", action="store_true", help="claim a GPU and test a hardware-only app build")
     fixture.add_argument("--timeout-minutes", type=fixture_timeout, default=20,
                          help="deadline for each fixture, 1–1440 minutes (default: 20)")

@@ -44,7 +44,9 @@ repeated edit/run builds.
 | Web package (`apps/layer-web/package.mjs`) | `web-release`: ThinLTO, one codegen unit |
 
 `CAPY_RUST_PROFILE` overrides the GTK and Web scripts; Android also accepts
-`-PcapyRustProfile`. Compare performance only between builds of the same profile.
+`-PcapyRustProfile`. Windows `run.cmd` and `build.ps1` accept `-RustProfile dev-perf`,
+and VM fixtures accept `--profile dev-perf`, without changing their Release defaults.
+Compare performance only between builds of the same profile.
 `dev-perf` keeps release optimization and 16 codegen units while caching
 incremental workspace compilation. A shared crate edit still recompiles its
 consumers. `cargo check --locked -p layer-linux` avoids code generation and linking

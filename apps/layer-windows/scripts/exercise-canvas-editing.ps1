@@ -1,5 +1,8 @@
-param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme='dark')
+param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme='dark',
+ [ValidateSet('full','smoke','smoke-light','preview','preview-light','controls','controls-light')][string]$Journey='full')
 $ErrorActionPreference='Stop'
+$Journey=$Journey.ToLowerInvariant();$Theme=$Theme.ToLowerInvariant()
+if($Journey.EndsWith('-light')){$Journey=$Journey.Substring(0,$Journey.Length-6);$Theme='light'}
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 $CapyWaitSeconds=10;$CapyEach={[CapyRowPointer]::Verify()}
 Add-Type -AssemblyName System.Drawing
@@ -167,7 +170,7 @@ try{
  $env:CAPY_STORAGE_DIR=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1';$env:CAPY_TEST_DISPLAY='1';$env:CAPY_TEST_PRIMARY='1'
  [IO.File]::WriteAllText((Settings-File),(@{language=@{Explicit='en'};theme=$Theme}|ConvertTo-Json -Depth 4))
  $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError (Join-Path $run 'stderr.log') -RedirectStandardOutput (Join-Path $run 'stdout.log');$null=$review.Handle
- @{process_id=$review.Id;executable=$Executable;theme=$Theme;sha256=(Get-FileHash -LiteralPath $Executable).Hash}|ConvertTo-Json|Set-Content -LiteralPath (Join-Path $run 'owner.json')
+ @{process_id=$review.Id;executable=$Executable;theme=$Theme;journey=$Journey;sha256=(Get-FileHash -LiteralPath $Executable).Hash}|ConvertTo-Json|Set-Content -LiteralPath (Join-Path $run 'owner.json')
  Write-Output "Owned canvas editing review $($review.Id): $run"
  $native=@{window=$null}
  Wait-Until {$native.window=Owned-DrawingWindow $review;$m=Model;$null -ne $native.window -and $m.brush_ready -and $m.state.theme -eq $Theme} 'Isolated editing canvas did not start' 45
@@ -185,117 +188,133 @@ try{
  # Sample inside the artwork and away from drag endpoints/cursor overlays.
  $sx=$cx-60;$sampleCenters=@(@($sx,($cy+25)),@(($sx+300),($cy+25)),@(($cx+70),($cy+25)))
  [CapyRowPointer]::SetForegroundWindow($handle)|Out-Null;[CapyRowPointer]::Initialize([uint32]$review.Id)
- foreach($device in @('mouse','pen')){
-  if((Model).state.document_file.modified){throw 'Editing journey requires a clean document'}
-  $empty=Stable-Pixels
-  Select-Tool 'figure';Invoke 'tool-group-1';Wait-Until {(Model).state.tool_set.groups[1].selected} 'Rectangle did not activate'
-  Invoke 'tool-subtool-1';Wait-Until {(Model).state.tool_set.subtools[1].selected} 'Filled rectangle did not activate'
+ if($Journey -ne 'controls') {
+  foreach($device in @('mouse','pen')){
+   if($Journey -eq 'smoke' -and $device -eq 'pen'){continue}
+   if((Model).state.document_file.modified){throw 'Editing journey requires a clean document'}
+   $empty=Stable-Pixels
+   Select-Tool 'figure';Invoke 'tool-group-1';Wait-Until {(Model).state.tool_set.groups[1].selected} 'Rectangle did not activate'
+   Invoke 'tool-subtool-1';Wait-Until {(Model).state.tool_set.subtools[1].selected} 'Filled rectangle did not activate'
+   Drag $device @(@(($cx-120),($cy-80)),@(($cx+120),($cy+80)))
+   Wait-Until {(Model).state.document_file.modified -and (Pixels) -ne $empty} 'Filled rectangle did not appear'
+   $rectangle=Stable-Pixels;Pass 'immediate filled-rectangle drag'
+   Select-Tool 'lasso'
+   Drag $device @(@(($cx-100),($cy-60)),@(($cx-20),($cy-60)),@(($cx-20),($cy+60)),@(($cx-100),($cy+60)),@(($cx-100),($cy-60)))
+   Wait-Until {(Model).state.layer_tools.has_selection} 'Lasso did not select artwork'
+   $selected=Signature;$baseline=Stable-Pixels
+   if($Journey -eq 'full'){$baselinePng=Export-Png ($device+'-selected-raster')}
+   if($baseline -ne $rectangle){throw 'Selection changed sampled artwork'};Pass 'lasso selects without painting'
+   Select-Tool 'scale_rotate';Origin;$from=Body-Point
+   Drag $device @($from,@(($from[0]+300),$from[1]))
+   Wait-Until {[Math]::Abs((Value 'transform_x')-$x0-300/$camera.zoom) -lt 2 -and [Math]::Abs((Value 'transform_y')-$y0) -lt 2} 'Transform body did not move immediately'
+   Wait-Until {(Pixels) -ne $baseline} 'Move preview left the sampled pixels unchanged'
+   $previewSignature=Signature;$previewPixels=Stable-Pixels
+   @{before=$selected;after=$previewSignature;baseline=$baseline;preview=$previewPixels;centers=$sampleCenters}|ConvertTo-Json -Depth 25|Set-Content (Join-Path $run 'move-preview-state.json')
+   if($previewSignature -ne $selected){throw 'Move preview changed the document signature before Apply'}
+   if($previewPixels -eq $baseline){throw 'Move preview left the sampled pixels unchanged'}
+   Capture ($device+'-move-preview');Cancel-Preview 'move preview and cancel'
+   if($Journey -ne 'smoke') {
+    Select-Tool 'scale_rotate'
+    Drag $device @(@(($cx-20),($cy+60)),@(($cx+20),($cy+120)))
+    Wait-Until {[Math]::Abs((Value 'transform_width')-1.5) -lt .02 -and [Math]::Abs((Value 'transform_height')-1.5) -lt .02} 'Corner handle did not scale selection'
+    if((Signature) -ne $selected){throw 'Scale preview committed early'}
+    Capture ($device+'-scale-preview');Cancel-Preview 'scale handle and cancel'
+    Select-Tool 'scale_rotate'
+    # Shared rotation handle is 2.5 times the 12-DIP hit reach above the top edge.
+    $radius=60+30*[CapyEditingCapture]::GetDpiForWindow($handle)/96
+    Drag $device @(@($sx,([int]($cy-$radius))),@(([int]($sx+$radius)),$cy))
+    Wait-Until {[Math]::Abs((Value 'transform_angle')-[Math]::PI/2) -lt .02} 'Rotation handle did not turn selection'
+    if((Signature) -ne $selected){throw 'Rotation preview committed early'}
+    Capture ($device+'-rotate-preview');Cancel-Preview 'rotation handle and cancel'
+   }
+   if($Journey -eq 'full') {
+    foreach($mode in @('scale','rotate')){
+     Select-Tool 'scale_rotate'
+     if($mode -eq 'scale'){
+      Drag $device @(@(($cx-20),($cy+60)),@(($cx+20),($cy+120)))
+      Wait-Until {[Math]::Abs((Value 'transform_width')-1.5) -lt .02 -and [Math]::Abs((Value 'transform_height')-1.5) -lt .02} 'Applied scale preview did not settle'
+     }else{
+      Drag $device @(@($sx,([int]($cy-$radius))),@(([int]($sx+$radius)),$cy))
+      Wait-Until {[Math]::Abs((Value 'transform_angle')-[Math]::PI/2) -lt .02} 'Applied rotation preview did not settle'
+     }
+     Apply-Preview $mode -AcceptWithBrush:($mode -eq 'rotate')
+     $selected=Signature
+    }
+    Select-Tool 'scale_rotate';Origin;$from=Body-Point;Drag $device @($from,@(($from[0]+300),$from[1]))
+    Wait-Until {[Math]::Abs((Value 'transform_x')-$x0-300/$camera.zoom) -lt 2} 'Final move preview did not settle'
+    Apply-Preview 'move' -Translated
+   }
+   Invoke 'Undo' -Name;Wait-Until {!(Model).state.layer_tools.has_selection} 'Selection Undo did not clear the lasso'
+   Invoke 'Undo' -Name;Wait-Until {!(Model).state.document_file.modified -and (Pixels) -eq $empty} 'Figure Undo did not return to a clean drawing';Pass 'selection and seed Undo return clean'
+  }
+ }
+ if($Journey -in @('full','controls')) {
+  $device='mouse';$empty=Stable-Pixels
+  Select-Tool 'figure';Invoke 'tool-group-1';Invoke 'tool-subtool-1'
   Drag $device @(@(($cx-120),($cy-80)),@(($cx+120),($cy+80)))
   Wait-Until {(Model).state.document_file.modified -and (Pixels) -ne $empty} 'Filled rectangle did not appear'
-  $rectangle=Stable-Pixels;Pass 'immediate filled-rectangle drag'
-  Select-Tool 'lasso'
-  Drag $device @(@(($cx-100),($cy-60)),@(($cx-20),($cy-60)),@(($cx-20),($cy+60)),@(($cx-100),($cy+60)),@(($cx-100),($cy-60)))
-  Wait-Until {(Model).state.layer_tools.has_selection} 'Lasso did not select artwork'
-  $selected=Signature;$baseline=Stable-Pixels
-  $baselinePng=Export-Png ($device+'-selected-raster')
-  if($baseline -ne $rectangle){throw 'Selection changed sampled artwork'};Pass 'lasso selects without painting'
-  Select-Tool 'scale_rotate';Origin;$from=Body-Point
-  Drag $device @($from,@(($from[0]+300),$from[1]))
-  Wait-Until {[Math]::Abs((Value 'transform_x')-$x0-300/$camera.zoom) -lt 2 -and [Math]::Abs((Value 'transform_y')-$y0) -lt 2} 'Transform body did not move immediately'
-  Wait-Until {(Pixels) -ne $baseline} 'Move preview left the sampled pixels unchanged'
-  $previewSignature=Signature;$previewPixels=Stable-Pixels
-  @{before=$selected;after=$previewSignature;baseline=$baseline;preview=$previewPixels;centers=$sampleCenters}|ConvertTo-Json -Depth 25|Set-Content (Join-Path $run 'move-preview-state.json')
-  if($previewSignature -ne $selected){throw 'Move preview changed the document signature before Apply'}
-  if($previewPixels -eq $baseline){throw 'Move preview left the sampled pixels unchanged'}
-  Capture ($device+'-move-preview');Cancel-Preview 'move preview and cancel'
-  Select-Tool 'scale_rotate'
-  Drag $device @(@(($cx-20),($cy+60)),@(($cx+20),($cy+120)))
-  Wait-Until {[Math]::Abs((Value 'transform_width')-1.5) -lt .02 -and [Math]::Abs((Value 'transform_height')-1.5) -lt .02} 'Corner handle did not scale selection'
-  if((Signature) -ne $selected){throw 'Scale preview committed early'}
-  Capture ($device+'-scale-preview');Cancel-Preview 'scale handle and cancel'
-  Select-Tool 'scale_rotate'
-  # Shared rotation handle is 2.5 times the 12-DIP hit reach above the top edge.
-  $radius=60+30*[CapyEditingCapture]::GetDpiForWindow($handle)/96
-  Drag $device @(@($sx,([int]($cy-$radius))),@(([int]($sx+$radius)),$cy))
-  Wait-Until {[Math]::Abs((Value 'transform_angle')-[Math]::PI/2) -lt .02} 'Rotation handle did not turn selection'
-  if((Signature) -ne $selected){throw 'Rotation preview committed early'}
-  Capture ($device+'-rotate-preview');Cancel-Preview 'rotation handle and cancel'
-  foreach($mode in @('scale','rotate')){
-   Select-Tool 'scale_rotate'
-   if($mode -eq 'scale'){
-    Drag $device @(@(($cx-20),($cy+60)),@(($cx+20),($cy+120)))
-    Wait-Until {[Math]::Abs((Value 'transform_width')-1.5) -lt .02 -and [Math]::Abs((Value 'transform_height')-1.5) -lt .02} 'Applied scale preview did not settle'
-   }else{
-    Drag $device @(@($sx,([int]($cy-$radius))),@(([int]($sx+$radius)),$cy))
-    Wait-Until {[Math]::Abs((Value 'transform_angle')-[Math]::PI/2) -lt .02} 'Applied rotation preview did not settle'
-   }
-   Apply-Preview $mode -AcceptWithBrush:($mode -eq 'rotate')
-   $selected=Signature
+  Select-Tool 'scale_rotate';Origin;Wait-Until {$a=(Model).state.canvas_bar.anchor;$a -and [Math]::Abs((Value 'transform_x')-($a[0]+$a[2])/2) -lt .5} 'The transform bounds did not match the centred position';$bounds=(Model).state.canvas_bar.anchor
+  $scale=[CapyEditingCapture]::GetDpiForWindow($handle)/96;$grid=Control 'tool-choice-transform-reference'
+  $cells=@(0..8|ForEach-Object {Control "tool-choice-transform-reference-$_"})
+  if(@($cells|Where-Object {[Math]::Abs($_.Current.BoundingRectangle.Width-18*$scale) -gt 1.5}).Count){throw 'Position anchor cells are not 18 pixels'}
+  $field=(Control 'tool-setting-transform_x').Current.BoundingRectangle;$area=$grid.Current.BoundingRectangle
+  if($field.Left -le $area.Right -or $field.Top -gt $area.Bottom -or $field.Bottom -lt $area.Top){throw 'X is not beside the position anchor'}
+  foreach($corner in @(@(0,0,1),@(8,2,3))){
+   Invoke "tool-choice-transform-reference-$($corner[0])"
+   Wait-Until {[Math]::Abs((Value 'transform_x')-$bounds[$corner[1]]) -lt .5 -and [Math]::Abs((Value 'transform_y')-$bounds[$corner[2]]) -lt .5 -and $cells[$corner[0]].Current.ItemStatus} "Anchor $($corner[0]) did not report its corner"
+   if(((Model).state.canvas_bar.anchor -join ',') -ne ($bounds -join ',')){throw 'Choosing an anchor moved the transform'}
   }
-  Select-Tool 'scale_rotate';Origin;$from=Body-Point;Drag $device @($from,@(($from[0]+300),$from[1]))
-  Wait-Until {[Math]::Abs((Value 'transform_x')-$x0-300/$camera.zoom) -lt 2} 'Final move preview did not settle'
-  Apply-Preview 'move' -Translated
-  Invoke 'Undo' -Name;Wait-Until {!(Model).state.layer_tools.has_selection} 'Selection Undo did not clear the lasso'
-  Invoke 'Undo' -Name;Wait-Until {!(Model).state.document_file.modified -and (Pixels) -eq $empty} 'Figure Undo did not return to a clean drawing';Pass 'selection and seed Undo return clean'
+  $target=[Math]::Round($bounds[2]+300/$camera.zoom);$x=Control 'tool-setting-transform_x';$x.SetFocus();$x.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue([string]$target);(Control 'tool-setting-transform_y').SetFocus()
+  Wait-Until {[Math]::Abs((Value 'transform_x')-$target) -lt .01 -and [Math]::Abs((Model).state.canvas_bar.anchor[2]-$target) -lt .5} 'Typed X did not move the anchor point exactly'
+  Pass 'position anchor and exact X'
+  Invoke 'canvas-bar-transform_snapping';Wait-Until {((Model).state.commands|Where-Object id -eq 'transform_snapping').selected} 'Snap did not turn on'
+  Invoke 'canvas-bar-transform_snapping';Wait-Until {!((Model).state.commands|Where-Object id -eq 'transform_snapping').selected} 'Snap did not turn off'
+  $moved=(Model).state.canvas_bar.anchor;$c=(Model).state.camera;$r=(Control 'drawing-canvas').Current.BoundingRectangle
+  $pivot=@([int]($r.X+$c.translation[0]+$c.zoom*($moved[0]+$moved[2])/2),[int]($r.Y+$c.translation[1]+$c.zoom*($moved[1]+$moved[3])/2));$x1=Value 'transform_x'
+  Drag $device @($pivot,@(($pivot[0]+60),($pivot[1]+30)))
+  Start-Sleep -Milliseconds 300
+  if(((Model).state.canvas_bar.anchor -join ',') -ne ($moved -join ',') -or [Math]::Abs((Value 'transform_x')-$x1) -gt .01){throw 'Dragging the pivot moved the artwork'}
+  Pass 'snap toggle and pivot drag'
+  Capture ('transform-controls-'+(Model).state.theme)
+  $revision=(Model).state.document_file.revision;Invoke 'canvas-bar-apply_transform'
+  Wait-Until {(Model).state.layer_tools.tool -ne 'transform' -and (Model).state.document_file.revision -gt $revision} 'The anchored move did not apply'
+  $once=Stable-Pixels;$revision=(Model).state.document_file.revision
+  Wait-Until {((Model).state.commands|Where-Object id -eq 'transform_again').enabled} 'Transform Again stayed disabled after a transform'
+  & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Edit';Invoke 'transform_again'
+  Wait-Until {(Model).state.document_file.revision -gt $revision -and (Pixels) -ne $once} 'Transform Again did not repeat the move'
+  Invoke 'Undo' -Name;Wait-Until {(Pixels) -eq $once} 'Transform Again was not one Undo'
+  Pass 'Transform Again'
+  $beforeTheme=(Model).state.theme;Invoke 'settings-button'
+  (Control 'Color theme' -Name -Type ([System.Windows.Automation.ControlType]::ComboBox)).GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
+  (Control $(if($beforeTheme -eq 'dark'){'Light'}else{'Dark'}) -Name -Type ([System.Windows.Automation.ControlType]::ListItem)).GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
+  Wait-Until {(Model).state.theme -ne $beforeTheme} 'Theme change not acknowledged'
+  Invoke 'CloseButton';Wait-Until {!(Find 'Preferences' -Name -Type ([System.Windows.Automation.ControlType]::Window))} 'Preferences did not close'
+  Select-Tool 'scale_rotate';Wait-Until {Find 'tool-choice-transform-reference'} 'The position anchor did not return'
+  Capture ('transform-controls-'+(Model).state.theme);Invoke 'canvas-bar-cancel_transform';Wait-Until {(Model).state.layer_tools.tool -ne 'transform'} 'Transform cancel did not finish'
+  $switch=@{item=$null};Wait-Until {$switch.item=Find 'workspace-switch-builtin:workspace:photographer';$switch.item} 'No Photo workspace switch'
+  $switch.item.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
+  Wait-Until {(Model).windows_workspace.id -eq 'builtin:workspace:photographer' -and !(Model).windows_workspace.busy} 'Photo did not open' 20
+  Select-Tool 'scale_rotate';Origin
+  $options=@{tile=$null};Wait-Until {$options.tile=@((Model).panels|ForEach-Object {$_.tiles}|Where-Object {@($_.component.options|Where-Object {$_.Choice.id -eq 'transform-reference'}).Count})[0];$options.tile} 'Tool Options did not offer the position anchor'
+  if(!(Find 'toolbar-segment-transform-reference')){Invoke "toolbar-more-$($options.tile.id)"}
+  $cell=@{id=$null};Wait-Until {$cell.id=@('toolbar-segment-transform-reference-0','tool-choice-transform-reference-0')|Where-Object {Find $_}|Select-Object -First 1;$cell.id} 'Tool Options did not present the position anchor'
+  Write-Output "Tool Options anchor cell=$($cell.id)";Invoke $cell.id
+  Wait-Until {$a=(Model).state.canvas_bar.anchor;[Math]::Abs((Value 'transform_x')-$a[0]) -lt .5 -and [Math]::Abs((Value 'transform_y')-$a[1]) -lt .5} 'The Tool Options anchor did not set the reference'
+  Capture 'transform-tool-options';Pass 'Tool Options position anchor'
+  Invoke 'canvas-bar-cancel_transform';Wait-Until {(Model).state.layer_tools.tool -ne 'transform'} 'Transform cancel did not finish'
+  Invoke 'Undo' -Name;Invoke 'Undo' -Name;Wait-Until {!(Model).state.document_file.modified -and (Pixels) -eq $empty} 'The transform journey did not undo to a clean drawing'
  }
- $device='mouse'
- Select-Tool 'figure';Invoke 'tool-group-1';Invoke 'tool-subtool-1'
- Drag $device @(@(($cx-120),($cy-80)),@(($cx+120),($cy+80)))
- Wait-Until {(Model).state.document_file.modified -and (Pixels) -ne $empty} 'Filled rectangle did not appear'
- Select-Tool 'scale_rotate';Origin;Wait-Until {$a=(Model).state.canvas_bar.anchor;$a -and [Math]::Abs((Value 'transform_x')-($a[0]+$a[2])/2) -lt .5} 'The transform bounds did not match the centred position';$bounds=(Model).state.canvas_bar.anchor
- $scale=[CapyEditingCapture]::GetDpiForWindow($handle)/96;$grid=Control 'tool-choice-transform-reference'
- $cells=@(0..8|ForEach-Object {Control "tool-choice-transform-reference-$_"})
- if(@($cells|Where-Object {[Math]::Abs($_.Current.BoundingRectangle.Width-18*$scale) -gt 1.5}).Count){throw 'Position anchor cells are not 18 pixels'}
- $field=(Control 'tool-setting-transform_x').Current.BoundingRectangle;$area=$grid.Current.BoundingRectangle
- if($field.Left -le $area.Right -or $field.Top -gt $area.Bottom -or $field.Bottom -lt $area.Top){throw 'X is not beside the position anchor'}
- foreach($corner in @(@(0,0,1),@(8,2,3))){
-  Invoke "tool-choice-transform-reference-$($corner[0])"
-  Wait-Until {[Math]::Abs((Value 'transform_x')-$bounds[$corner[1]]) -lt .5 -and [Math]::Abs((Value 'transform_y')-$bounds[$corner[2]]) -lt .5 -and $cells[$corner[0]].Current.ItemStatus} "Anchor $($corner[0]) did not report its corner"
-  if(((Model).state.canvas_bar.anchor -join ',') -ne ($bounds -join ',')){throw 'Choosing an anchor moved the transform'}
- }
- $target=[Math]::Round($bounds[2]+300/$camera.zoom);$x=Control 'tool-setting-transform_x';$x.SetFocus();$x.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue([string]$target);(Control 'tool-setting-transform_y').SetFocus()
- Wait-Until {[Math]::Abs((Value 'transform_x')-$target) -lt .01 -and [Math]::Abs((Model).state.canvas_bar.anchor[2]-$target) -lt .5} 'Typed X did not move the anchor point exactly'
- Pass 'position anchor and exact X'
- Invoke 'canvas-bar-transform_snapping';Wait-Until {((Model).state.commands|Where-Object id -eq 'transform_snapping').selected} 'Snap did not turn on'
- Invoke 'canvas-bar-transform_snapping';Wait-Until {!((Model).state.commands|Where-Object id -eq 'transform_snapping').selected} 'Snap did not turn off'
- $moved=(Model).state.canvas_bar.anchor;$c=(Model).state.camera;$r=(Control 'drawing-canvas').Current.BoundingRectangle
- $pivot=@([int]($r.X+$c.translation[0]+$c.zoom*($moved[0]+$moved[2])/2),[int]($r.Y+$c.translation[1]+$c.zoom*($moved[1]+$moved[3])/2));$x1=Value 'transform_x'
- Drag $device @($pivot,@(($pivot[0]+60),($pivot[1]+30)))
- Start-Sleep -Milliseconds 300
- if(((Model).state.canvas_bar.anchor -join ',') -ne ($moved -join ',') -or [Math]::Abs((Value 'transform_x')-$x1) -gt .01){throw 'Dragging the pivot moved the artwork'}
- Pass 'snap toggle and pivot drag'
- Capture ('transform-controls-'+(Model).state.theme)
- $revision=(Model).state.document_file.revision;Invoke 'canvas-bar-apply_transform'
- Wait-Until {(Model).state.layer_tools.tool -ne 'transform' -and (Model).state.document_file.revision -gt $revision} 'The anchored move did not apply'
- $once=Stable-Pixels;$revision=(Model).state.document_file.revision
- Wait-Until {((Model).state.commands|Where-Object id -eq 'transform_again').enabled} 'Transform Again stayed disabled after a transform'
- & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Edit';Invoke 'transform_again'
- Wait-Until {(Model).state.document_file.revision -gt $revision -and (Pixels) -ne $once} 'Transform Again did not repeat the move'
- Invoke 'Undo' -Name;Wait-Until {(Pixels) -eq $once} 'Transform Again was not one Undo'
- Pass 'Transform Again'
- $beforeTheme=(Model).state.theme;Invoke 'settings-button'
- (Control 'Color theme' -Name -Type ([System.Windows.Automation.ControlType]::ComboBox)).GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
- (Control $(if($beforeTheme -eq 'dark'){'Light'}else{'Dark'}) -Name -Type ([System.Windows.Automation.ControlType]::ListItem)).GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
- Wait-Until {(Model).state.theme -ne $beforeTheme} 'Theme change not acknowledged'
- Invoke 'CloseButton';Wait-Until {!(Find 'Preferences' -Name -Type ([System.Windows.Automation.ControlType]::Window))} 'Preferences did not close'
- Select-Tool 'scale_rotate';Wait-Until {Find 'tool-choice-transform-reference'} 'The position anchor did not return'
- Capture ('transform-controls-'+(Model).state.theme);Invoke 'canvas-bar-cancel_transform';Wait-Until {(Model).state.layer_tools.tool -ne 'transform'} 'Transform cancel did not finish'
- $switch=@{item=$null};Wait-Until {$switch.item=Find 'workspace-switch-builtin:workspace:photographer';$switch.item} 'No Photo workspace switch'
- $switch.item.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
- Wait-Until {(Model).windows_workspace.id -eq 'builtin:workspace:photographer' -and !(Model).windows_workspace.busy} 'Photo did not open' 20
- Select-Tool 'scale_rotate';Origin
- $options=@{tile=$null};Wait-Until {$options.tile=@((Model).panels|ForEach-Object {$_.tiles}|Where-Object {@($_.component.options|Where-Object {$_.Choice.id -eq 'transform-reference'}).Count})[0];$options.tile} 'Tool Options did not offer the position anchor'
- if(!(Find 'toolbar-segment-transform-reference')){Invoke "toolbar-more-$($options.tile.id)"}
- $cell=@{id=$null};Wait-Until {$cell.id=@('toolbar-segment-transform-reference-0','tool-choice-transform-reference-0')|Where-Object {Find $_}|Select-Object -First 1;$cell.id} 'Tool Options did not present the position anchor'
- Write-Output "Tool Options anchor cell=$($cell.id)";Invoke $cell.id
- Wait-Until {$a=(Model).state.canvas_bar.anchor;[Math]::Abs((Value 'transform_x')-$a[0]) -lt .5 -and [Math]::Abs((Value 'transform_y')-$a[1]) -lt .5} 'The Tool Options anchor did not set the reference'
- Capture 'transform-tool-options';Pass 'Tool Options position anchor'
- Invoke 'canvas-bar-cancel_transform';Wait-Until {(Model).state.layer_tools.tool -ne 'transform'} 'Transform cancel did not finish'
- Invoke 'Undo' -Name;Invoke 'Undo' -Name;Wait-Until {!(Model).state.document_file.modified -and (Pixels) -eq $empty} 'The transform journey did not undo to a clean drawing'
+ if((Model).state.document_file.modified){throw 'Editing journey did not restore a clean drawing'}
  [CapyRowPointer]::Dispose();$root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).Close()
  if(!$review.WaitForExit(5000) -or $review.ExitCode -ne 0){throw 'Editing review did not close within five seconds'}
  if((Get-Item -LiteralPath (Join-Path $run 'stderr.log')).Length){throw 'Native editing stderr needs inspection'}
- @{theme=$Theme;checks=$checks;exports=$exports;close='zero exit within five seconds';pixel_scope='selection move/scale/rotation: exact full exported PNG Undo/Redo/restore; selection translation: same-position 16x16 source, destination and unselected samples; full captures retained';scope='guarded OS mouse and synthetic pen; physical devices and complete visual/performance acceptance remain separate'}|ConvertTo-Json -Depth 10|Set-Content -LiteralPath (Join-Path $run 'result.json')
+ $pixelScope=switch($Journey){
+  smoke {'mouse selection translation preview: unchanged authored signature and restored source/destination/unselected samples after cancel; full captures retained'}
+  preview {'selection move/scale/rotation: unchanged authored signature and restored source/destination/unselected samples after cancel; full captures retained'}
+  controls {'position anchor, exact X, snap, pivot, Transform Again, theme and workspace controls; full captures retained'}
+  full {'selection move/scale/rotation: exact full exported PNG Undo/Redo/restore; selection translation: same-position 16x16 source, destination and unselected samples; full captures retained'}
+ }
+ @{theme=$Theme;journey=$Journey;checks=$checks;exports=$exports;close='zero exit within five seconds';pixel_scope=$pixelScope;scope='guarded OS mouse and synthetic pen; physical devices and complete visual/performance acceptance remain separate'}|ConvertTo-Json -Depth 10|Set-Content -LiteralPath (Join-Path $run 'result.json')
  Write-Output "Canvas editing acceptance passed: $run"
 }catch{
  if($review -and !$review.HasExited -and $root){try{Capture 'failure';@{model=Model;checks=$checks}|ConvertTo-Json -Depth 80|Set-Content -LiteralPath (Join-Path $run 'failure-state.json')}catch{}}

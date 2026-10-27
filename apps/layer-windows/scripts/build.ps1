@@ -1,5 +1,6 @@
 param(
     [ValidateSet('Debug','Release')][string]$Configuration = 'Release',
+    [ValidateSet('dev','dev-perf','release')][string]$RustProfile,
     [ValidateSet('native','x64','arm64')][string]$Architecture = 'native',
     [string]$PackagesDirectory,
     [string]$OutputDirectory,
@@ -15,8 +16,14 @@ $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
 . (Join-Path $PSScriptRoot 'WindowsArchitecture.ps1')
 $build = Resolve-WindowsArchitecture $Architecture
+$defaultProfile = if ($Configuration -eq 'Release') { 'release' } else { 'dev' }
+if (!$RustProfile) { $RustProfile = $defaultProfile }
+$RustProfile = $RustProfile.ToLowerInvariant()
 if (!$PackagesDirectory) { $PackagesDirectory = Join-Path $repo 'artifacts/windows/packages' }
-if (!$OutputDirectory) { $OutputDirectory = Get-WindowsBuildDirectory $repo $build $Configuration }
+if (!$OutputDirectory) {
+    $OutputDirectory = Get-WindowsBuildDirectory $repo $build $Configuration
+    if ($RustProfile -ne $defaultProfile) { $OutputDirectory += "-$RustProfile" }
+}
 $OutputDirectory = [IO.Path]::GetFullPath($OutputDirectory)
 if (!$IntermediateDirectory) { $IntermediateDirectory = $OutputDirectory.TrimEnd('\','/') + '.obj' }
 $IntermediateDirectory = [IO.Path]::GetFullPath($IntermediateDirectory)
@@ -33,11 +40,10 @@ Push-Location $repo
 try {
     $metadata = & cargo metadata --locked --no-deps --format-version 1 | ConvertFrom-Json
     if ($LASTEXITCODE -ne 0) { throw 'Cannot resolve the Cargo target directory.' }
-    $rustProfile = if ($Configuration -eq 'Release') { 'release' } else { 'debug' }
-    $rustDirectory = Join-Path $metadata.target_directory "$($build.target)/$rustProfile"
+    $profileDirectory = if ($RustProfile -eq 'dev') { 'debug' } else { $RustProfile }
+    $rustDirectory = Join-Path $metadata.target_directory "$($build.target)/$profileDirectory"
     if (!$SkipRust) {
-        $cargoArgs = @('build','--locked','--target',$build.target,'-p','layer-windows-link')
-        if ($Configuration -eq 'Release') { $cargoArgs += '--release' }
+        $cargoArgs = @('build','--locked','--profile',$RustProfile,'--target',$build.target,'-p','layer-windows-link')
         $features = @(if ($SoftwareAdapterTests) { 'software-adapter-tests' }) + @(if ($ReleaseIdentity) { 'release-identity' })
         if ($features) { $cargoArgs += '--features', ($features -join ',') }
         & cargo @cargoArgs

@@ -72,6 +72,14 @@ your settings intact. Use Release for everyday development, drawing and performa
 checks. Reserve `-Configuration Debug` for stepping through code, inspecting
 variables or running debug assertions; unoptimized painting can lag.
 
+Pass `-RustProfile dev-perf` to `run.cmd` or `build.ps1` for optimized incremental
+Rust compilation while developing. This uses the shared `dev-perf` Cargo profile
+and separate `Release-dev-perf` output and native intermediates by default.
+Its first build prepares another cache; measure edited builds after that cache
+is warm. `-RustProfile release` uses the normal release profile, and Debug defaults
+to `dev`. Compare frame measurements within the same profile; the development
+profile does not establish release performance.
+
 To build without launching, allow local scripts in this terminal and call the
 build script directly:
 
@@ -1024,6 +1032,13 @@ translation retain explicit Apply. Exact exported PNG comparisons check the
 changed result and one-step Undo, Redo and restoration. The fixture uses an
 isolated English profile and the owned drawing window. Repeat with `-Theme light`
 and review the captures, including the transform controls after changing theme.
+
+Use `-Journey smoke` for mouse selection, move preview/cancel and clean Undo;
+`-Journey preview` for mouse and pen move/scale/rotation cancellation without
+PNG export, or `-Journey controls` for anchors, typed position, snapping, Transform Again
+and workspace controls. Each reuses the full journey's assertions and cleanup.
+Add `-Theme light` or use the matching `smoke-light`, `preview-light` or
+`controls-light` journey. The default remains `full`.
 
 Open header menus follow shared command state while document operations finish.
 Their native items retain focus and identity; unchanged menu models skip updates.

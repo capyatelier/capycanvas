@@ -212,6 +212,22 @@ adapter. The document fixture uses that bound for process cleanup and checks tha
 the window continues answering native messages while the GPU queue drains.
 Software-adapter shutdown timing does not establish hardware performance.
 
+For repeated code edits, `fixtures --profile dev-perf` selects optimized
+incremental Rust compilation. Its first build prepares a separate Cargo cache.
+App outputs and build records are separate for each profile and adapter mode;
+`--no-build` validates the selected profile as well as source and binary hashes.
+The per-VM lock serializes profile switches, which reuse the same adapter mode's
+native Release intermediates. Ordinary `fixtures`, `check` and `gpu-check` retain
+their Release defaults.
+
+```sh
+tools/windows-vm/windows-vm.py fixtures --profile dev-perf --hardware-gpu canvas-editing:smoke canvas-editing:smoke-light
+```
+
+Focused canvas selections are `smoke`, `preview` and `controls`, each with a
+`-light` variant. Use `canvas-editing:default canvas-editing:light` for just the
+full dark/light pair. A bare `canvas-editing` includes the focused variants too.
+
 Name fixtures (`layers`) or single variants (`header:pen`). A bare name includes all its variants;
 `localization:default` selects only the default dark, normal-text run. Split long
 matrices across separate owned VMs with `localization:default localization:LargeText`

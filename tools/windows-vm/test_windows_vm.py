@@ -431,19 +431,24 @@ class FixtureBuildTests(unittest.TestCase):
         self.files = {"CapyCanvas.exe": "executable", "layer_windows.dll": "core"}
 
     def test_build_modes_keep_separate_outputs_and_provenance(self):
-        for hardware, output, filename in ((False, vm.SOFTWARE_BUILD, "software-build.json"),
-                                           (True, vm.HARDWARE_BUILD, "hardware-build.json")):
-            with self.subTest(hardware=hardware), patch.object(vm, "guest") as guest, \
-                    patch.object(vm, "build_files", return_value=self.files) as files:
-                directory, record = vm.fixture_build(self.machine, self.hashes, False, hardware)
-            self.assertEqual(directory, output)
-            command = guest.call_args.args[1]
-            self.assertIn("-Configuration Release", command)
-            self.assertIn(f"-OutputDirectory '{output}'", command)
-            self.assertEqual("-SoftwareAdapterTests" in command, not hardware)
-            self.assertEqual(record, {"inputs": self.hashes, "files": self.files})
-            self.assertEqual(json.loads((self.machine.directory / filename).read_text()), record)
-            files.assert_called_once_with(self.machine, output)
+        for profile in ("release", "dev-perf"):
+            suffix = "" if profile == "release" else f"-{profile}"
+            for hardware, output, mode in ((False, vm.SOFTWARE_BUILD, "software"),
+                                           (True, vm.HARDWARE_BUILD, "hardware")):
+                intermediate = output + ".obj"
+                output += suffix
+                with self.subTest(hardware=hardware, profile=profile), patch.object(vm, "guest") as guest, \
+                        patch.object(vm, "build_files", return_value=self.files) as files:
+                    directory, record = vm.fixture_build(self.machine, self.hashes, False, hardware, profile)
+                self.assertEqual(directory, output)
+                command = guest.call_args.args[1]
+                self.assertIn(f"-Configuration Release -RustProfile {profile}", command)
+                self.assertIn(f"-OutputDirectory '{output}'", command)
+                self.assertIn(f"-IntermediateDirectory '{intermediate}'", command)
+                self.assertEqual("-SoftwareAdapterTests" in command, not hardware)
+                self.assertEqual(record, {"profile": profile, "inputs": self.hashes, "files": self.files})
+                self.assertEqual(json.loads((self.machine.directory / f"{mode}-build{suffix}.json").read_text()), record)
+                files.assert_called_once_with(self.machine, output)
 
     def test_failed_rebuild_invalidates_old_record_before_launching_build(self):
         for hardware, filename in ((False, "software-build.json"), (True, "hardware-build.json")):
@@ -467,7 +472,7 @@ class FixtureBuildTests(unittest.TestCase):
         guest.assert_not_called()
 
     def test_no_build_requires_matching_synced_inputs_and_current_guest_binaries(self):
-        record = {"inputs": self.hashes, "files": self.files}
+        record = {"profile": "release", "inputs": self.hashes, "files": self.files}
         path = self.machine.directory / "hardware-build.json"
         path.write_text(json.dumps(record))
         with patch.object(vm, "guest") as guest, patch.object(vm, "build_files", return_value=self.files):
@@ -479,6 +484,15 @@ class FixtureBuildTests(unittest.TestCase):
             vm.fixture_build(self.machine, self.hashes, True, True)
         guest.assert_not_called()
         self.assertEqual(json.loads(path.read_text()), record)
+
+    def test_no_build_rejects_another_profile_even_with_identical_sources_and_binaries(self):
+        record = {"profile": "release", "inputs": self.hashes, "files": self.files}
+        (self.machine.directory / "hardware-build.json").write_text(json.dumps(record))
+        with patch.object(vm, "build_files", return_value=self.files), self.assertRaises(SystemExit):
+            vm.fixture_build(self.machine, self.hashes, True, True, "dev-perf")
+        (self.machine.directory / "hardware-build-dev-perf.json").write_text(json.dumps(record))
+        with patch.object(vm, "build_files", return_value=self.files), self.assertRaises(SystemExit):
+            vm.fixture_build(self.machine, self.hashes, True, True, "dev-perf")
 
 
 class GpuCheckTests(unittest.TestCase):
@@ -539,6 +553,18 @@ class GpuCheckTests(unittest.TestCase):
 
 
 class FixtureRunnerTests(unittest.TestCase):
+    def test_cli_profile_defaults_and_incremental_override(self):
+        for arguments, profile in (([], "release"), (["--profile", "dev-perf"], "dev-perf")):
+            with patch.object(sys, "argv", ["windows-vm.py", "fixtures", *arguments]), \
+                    patch.object(vm, "fixtures") as fixtures:
+                vm.main()
+            self.assertEqual(fixtures.call_args.args[0].profile, profile)
+        with patch.object(sys, "argv", ["windows-vm.py", "fixtures", "--profile", "debug"]), \
+                patch.object(vm, "fixtures") as fixtures, patch.object(sys, "stderr"), \
+                self.assertRaises(SystemExit):
+            vm.main()
+        fixtures.assert_not_called()
+
     def test_cli_timeout_defaults_and_bounded_override(self):
         for arguments, minutes in (([], 20), (["--timeout-minutes", "90"], 90)):
             with patch.object(sys, "argv", ["windows-vm.py", "fixtures", "localization", *arguments]), \
@@ -558,7 +584,7 @@ class FixtureRunnerTests(unittest.TestCase):
         inputs = vm.build_inputs({"apps/layer-windows/CanvasWindow.cpp": "original",
                                   "assets/locales/ja/commands.ftl": "original-catalog"})
         files = {"CapyCanvas.exe": "exe", "layer_windows.dll": "rust"}
-        record = {"inputs": inputs, "files": files}
+        record = {"profile": "release", "inputs": inputs, "files": files}
         vm.validate_build(record, inputs, files)
         for candidate, artifacts in (({**inputs, "Cargo.lock": "new"}, files),
                                      (vm.build_inputs({**inputs, "assets/locales/ja/commands.ftl": "edited-catalog"}), files),
