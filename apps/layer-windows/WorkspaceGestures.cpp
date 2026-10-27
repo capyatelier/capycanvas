@@ -205,7 +205,7 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
         releasing=true;
         data->pointerCancels.Cancel(edge->pointer);
         releaseCaptures(edge->path,edge->contact);
-        edge->background=root.Background();root.Background(clear());
+        edge->background=root.Background();root.Background(CapyUi::clear());
         bool captured=root.CapturePointer(edge->contact);
         releasing=false;
         if(!captured){edgeEnd(L"cancel",L"capture_failed");return;}
