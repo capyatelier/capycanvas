@@ -1,16 +1,6 @@
 # Linux development
 
-[Developer guide](README.md)
-
-External photo import requires seccomp and `/proc`. Missing confinement refuses
-that import. The GTK package
-ships `capy-photo-reader` beside the application; `run.sh` builds it automatically.
-When copying a native test executable to private scratch, copy the helper beside
-it too. `cargo test -p layer-linux` builds the integration-test helper; a standalone
-`--lib` invocation needs `cargo build --locked -p layer-linux --bin capy-photo-reader`
-first, using the same profile. Run `cargo test --locked -p layer-linux --test
-photo_reader` for actual confined decoding, output validation and cancellation.
- · [Platform integration](../platforms/README.md)
+[Developer guide](README.md) · [Platform integration](../platforms/README.md)
 
 Linux with Wayland is the primary development target. New editor features land
 here first, then move to Web and the native ports, as the
@@ -28,12 +18,9 @@ GTK 4.22+, libadwaita 1.9 and Wayland development packages. Enabled API features
 are declared in [`apps/layer-linux/Cargo.toml`](../../apps/layer-linux/Cargo.toml).
 The launcher builds its own [GTK 4.24.1, GLib 2.90.1 and Pango 1.58.2 runtime](../../tools/build/gtk-runtime/README.md),
 which needs Meson 1.8+, Ninja, `patchelf`, `glslc`, `xz`, Wayland's scanner and protocol files,
-DRM headers and GTK's development dependencies. Its TIFF and JPEG libraries build from
-checksum-pinned sources and link statically; their system development packages
-are unnecessary. The first build downloads those sources; later builds use the cache.
-The bundled libraries supply GTK's newer GLib and Pango requirements; the system
-SDK supplies their remaining dependencies. The builder checks tools, package
-versions, native headers and the resource compiler before downloading or compiling.
+DRM headers and GTK's development dependencies. The first build downloads
+checksum-pinned sources, including TIFF and JPEG libraries that link statically,
+so their system development packages are unnecessary; later builds use the cache.
 The main SDK minimums are:
 
 | Dependency | Minimum version |
@@ -71,14 +58,11 @@ bash tools/build/arch-setup.sh
 This updates the system and installs the package recipe's complete dependencies,
 plus the private-display test and Arch packaging tools. Pacman shows the transaction
 before installing. Keep the system on one coherent repository snapshot; partial
-upgrades and extracted SDK overlays are unsupported. The runtime builder compiles
-a header probe and runs GLib's resource compiler before building GTK or GLib.
+upgrades and extracted SDK overlays are unsupported.
 
-GTK still requires its native toolkit libraries, fonts and Wayland/Vulkan
-interfaces. These are Linux host requirements, separate from the portable
-Rust core. Fedora splits development headers into `-devel` packages; Arch
-includes them with the libraries. `glslc` is provided by Fedora's `glslc`
-package and Arch's `shaderc` package.
+Fedora splits development headers into `-devel` packages; Arch includes them
+with the libraries. `glslc` is provided by Fedora's `glslc` package and Arch's
+`shaderc` package. Check the installed versions with:
 
 ```bash
 pkg-config --modversion gtk4 libadwaita-1 wayland-client
@@ -87,15 +71,6 @@ pkg-config --modversion gtk4 libadwaita-1 wayland-client
 The canvas needs a Wayland session and a hardware Vulkan driver with mailbox
 presentation and premultiplied-alpha surfaces. There is no X11, GLES or CPU
 canvas fallback. GTK chooses its own renderer for the controls.
-
-Selected-tab masks prepare immutable textures on a worker and retain the original
-Cairo nodes for fractional placements and scales. Their colors and translucent
-compositing remain native GTK nodes. Preserve squircle and shadow pixels when
-changing these paths: removing a parent mask can also change descendant group
-coverage at fractional bounds. GSK can upload a large Fill mask again when it
-exceeds the fill atlas limit, even if the path object is retained. Measure image
-creation and memory allocation alongside presentation feedback when optimizing
-these controls.
 
 ## Build and run
 
@@ -114,98 +89,43 @@ directly with no local GTK override in `LD_LIBRARY_PATH`:
 cargo run --locked --profile dev-perf -p layer-linux
 ```
 
-This needs the GTK/libadwaita/Wayland development packages, but none of the
-additional GTK source-build tools. System GTK can serve setups without the
-affected tablet-pad input, or a distribution build containing the crash fix.
-The [runtime guide](../../tools/build/gtk-runtime/README.md#using-system-gtk)
-explains the upstream bug and the limits of application workarounds.
+This needs only the GTK/libadwaita/Wayland development packages. Use it
+without tablet-pad input or with a distribution GTK containing the crash fix;
+the [runtime guide](../../tools/build/gtk-runtime/README.md#using-system-gtk)
+explains the upstream bug.
+
+External photo import decodes in `capy-photo-reader`, a confined helper that
+requires seccomp and `/proc`; without confinement the import is refused. The
+package ships the helper beside the application, and `run.sh` builds it.
 
 Where to look in [`apps/layer-linux/src`](../../apps/layer-linux/src):
 `main.rs` calls the library's `run`; `lib.rs` creates the application and handles
-file launches. `canvas.rs` adapts
-the shared session and schedules frames against Wayland presentation timing,
-`render_thread.rs` owns canvas GPU work, `wayland.rs` presents into an app-owned
-subsurface beneath the GTK controls ([design record](../history/wayland-subsurface-feasibility.md)),
-and `files.rs` supplies native dialogs and project/photo transport.
+file launches. `canvas.rs` adapts the shared session and schedules frames against
+Wayland presentation timing, `render_thread.rs` owns canvas GPU work, `wayland.rs`
+presents into an app-owned subsurface beneath the GTK controls
+([design record](../history/wayland-subsurface-feasibility.md)), and `files.rs`
+supplies native dialogs and project/photo transport.
 
-GTK setters and host callbacks can synchronously dispatch an edit and refresh
-widgets. Release `RefCell` guards before those calls by taking owned values or
-cloning handles; keep each collection borrow inside the state operation.
-Release `RefCell` borrows of workflows, sessions and GPU state before awaiting
-dialogs or worker results. Reborrow and validate the current operation identity
-when committing a prepared result.
+### Changing the host
 
-Navigator measures its controls, spacing and insets separately from the continuous
-overview; Palettes reports its fixed controls and arranged swatch-row pitch.
-Group bodies use the shared `min_body_height` when their dock allocation
-is smaller, with scrolling below the fixed tab strip. Ordinary panel scrollers
-retain their finite viewport and continue to own their content scrolling.
-
-Queued frames retain immutable typed scene snapshots and shared source roots.
-Save, recovery, export, clipboard and color/source comparisons enqueue a capture
-barrier beside those roots. File workers wait for the preceding successful GPU
-submission and use its integrated effect phases; the GTK input thread keeps
-processing events. Native saves write source-only packages without a preview.
-
-The clock reads GNOME's time-format preference asynchronously through the
-Settings portal and follows live changes and service restarts. When unavailable,
-it uses GSettings and the locale. Check the portal and fallback paths on the
-private display with
-`GSETTINGS_BACKEND=memory bash tools/performance/workspace-motion.sh gtk --native-test=native_clock_portal_preferences`.
-
-Imported packages retain their original backing through tab admission, embedded
-effect validation and asynchronous GPU startup. A failed preparation restores the
-current drawing and presents the shared `PackageView`; cancellation stays a
-cancelled open. Unsupported and recovered packages also retain their original
-backing in that view. GTK presents the bounded preview and shared reason in a read-only
-dialog. Copy Original File writes the retained package bytes atomically on a
-worker. Export Preview Image writes the verified PNG to a separate destination
-and rejects the original path and filesystem aliases before publication. Closing
-the dialog leaves the editable drawing and recovery source intact.
+- **Release `RefCell` borrows before callbacks.** GTK setters and host callbacks
+  can synchronously dispatch an edit and refresh widgets. Take owned values or
+  clone handles before those calls, and keep each collection borrow inside the
+  state operation. Release borrows of workflows, sessions and GPU state before
+  awaiting dialogs or worker results; when committing a prepared result,
+  reborrow and check that its operation is still current.
+- **Await alerts with `alert::choose`.** `choose_future` in libadwaita-rs 0.9.2
+  keeps an `adw::AlertDialog` alive after it closes.
 
 ## Session restart
 
-Quitting preserves every open drawing without a save prompt. The next launch
-restores the active drawing first, then the other tabs in their saved order,
-including clean and untitled drawings. Camera, selection, editing targets,
-modified state and bounded Undo/Redo history come from the shared private
-session codec. An ordinary restart retains the normal title. Drawings restored after an
-interrupted exit or from a previous complete checkpoint carry the shared
-recovered caption until Save succeeds. Closing a tab still uses Save/Discard/Cancel and removes its
-membership durably before retiring the private copy.
-
+Quitting keeps every open drawing without a save prompt, and the next launch
+restores them, as [session recovery](../internals/session-recovery.md) describes.
 `recovery.rs` supplies the GTK timing and worker transport around shared
-`SessionCapture`, `SessionManifest` and `SessionStore`. Private checkpoints run
-at a two-second observation interval, skip unchanged state and reuse immutable
-resource files. File encoding, validation, publication and cleanup run on
-workers. The window stops accepting new edits during an orderly exit and waits
-asynchronously for drawing and workspace publication. Storage failure keeps the
-window open and preserves the previous complete checkpoint.
-
-Saved sessions live in `$XDG_STATE_HOME/capycanvas/sessions` for a packaged
-build and `capycanvas-devel` for any other build; the
-[storage guide](../internals/storage.md) lists every folder. Window and drawing
-locks protect live owners;
-unfinished restoration attempts are retained and skipped on subsequent launch.
-Saving to a restored destination verifies its original immutable bytes before
-replacement; an unavailable or externally changed destination opens Save As.
-Save also opens the destination chooser when the retained file is no longer
-writable, including read-only document-portal grants from file transfers.
-Restoring a saved drawing also checks that original on a worker. A missing or
-changed original keeps the private copy unsaved until Save or explicit Discard.
-The private checkpoint never overwrites the artist's project file.
-
-`native_session_restart` checks automatic multi-tab restart, order, active tab,
-camera, modified state, retained Undo/Redo and explicit close cancellation and
-discard. `native_session_restart_saved_origins` checks that intact saved originals
-remain clean, missing or changed originals require an explicit close decision,
-and Save As preserves the restored drawing. It also changes Selection Layer
-overlay opacity and visibility through native controls, checks the displayed pixels
-and clean artwork state, and verifies that private restart retains the display
-settings while portable files omit them. `native_document_files` checks saved
-project pixels and preservation of the clean drawing's private copy. Run each
-through the private-display runner with `--native-recovery`, and set `CAPY_NATIVE_TEST_THEME=light`
-or `dark` for both presentations.
+`SessionCapture`, `SessionManifest` and `SessionStore`. Saved sessions live in
+`$XDG_STATE_HOME/capycanvas/sessions` for a packaged build and `capycanvas-devel`
+for any other build; the [storage guide](../internals/storage.md) lists every
+folder. Session journeys run with `--native-recovery` ([tests](#journeys-with-extra-settings)).
 
 ## Native text input
 
@@ -219,302 +139,51 @@ unmapping retire it.
 
 ## Language changes
 
-The GTK window prepares language catalogs on a worker, then adopts the shared
-localization snapshot between canvas interactions, menu selections and native
-composition key sequences. Existing numeric editors, layer rename fields and command search
-entries retain their widgets and drafts. Each window has its own published
-snapshot; the application's settings action delivers the current preference to
-other windows before persistence completes. Mapped and future widgets use the
-window's current Pango language. Shared search queries are forwarded from the
-native editable change signal so a projection cannot overwrite an edit while
-GTK's delayed search signal is pending.
-Open drawer tabs retain their widgets and refresh their shared titles, tooltips
-and accessibility labels when the window publishes a language. Authored toolbar
-names stay literal.
+Each window prepares language catalogs on a worker and publishes them between
+interactions, following the [shared text rules](../ui/localization.md#shared-text).
+Widgets that show shared text register with `Workspace::on_localization`; the
+callback runs at once with the current `Localizer` and again on each
+publication, and returns `false` to unsubscribe. Relabel text, tooltips and
+accessible labels in place rather than replacing widgets, so drafts, selection
+and focus survive.
 
-`native_live_language_switching` exercises the Language preference in both
-themes and verifies retained editors, document revisions and numeric refusals.
-It checks built-in and authored drawer tab titles without replacing tab widgets.
-Its fixture enables the numeric Brush size control before opening that drawer;
-the default Brush size panel shows presets.
-Run it on the private display with the same command used for other native tests.
-
-Numeric controls retain the shared refusal from the last edit. Language changes
-refresh that caption without parsing a draft or changing its selection, focus,
-value or input signals. `native_numeric_error_live_language` checks spin and slider
-editors in every shipped language and both themes; its preedit signals are synthetic.
-
-`native_live_language_documents_light` and
-`native_live_language_documents_dark` cover every shipped language through
-drawing, undo/redo and Unicode project save/reopen/export. `native_text_language` checks
-glyph fallback and actual allocated Thai paragraph wrapping, including narrow
-windows and larger text. Compact workspace captions retain their complete
-accessible label while ellipsizing inside the shared header allocation.
-Shared context menus use nested native popovers so legitimate repeated submenu
-labels do not become toolkit page identities. `native_localized_nested_menus`
-checks the actual Edit and Layer → Organize actions in every shipped language
-and both themes, including identical Turkish captions.
-Canvas-bar menu journeys follow each mapped nested popover and use
-`screen_point` for its rows; popup surfaces have their own native origins.
-
-`native_localization_callback_registration` checks subscriptions added during
-language publication. Existing subscribers keep their order; new subscribers
-receive the current language immediately and join later publications.
-`native_proof_dial_callback_registration` checks the same registration boundary
-for Proof dial input in both themes. Dial emission retains an immutable callback
-snapshot without copying the list on ordinary motion.
-
-`native_preferences_text_menu_live_language` checks localized text-edit actions,
-native selection and deferred publication while the Preferences menu is open.
-
-Standalone import and profile windows receive prepared contexts and retain
-their own shared transition. `native_bare_profile_language_transition` checks
-late registration, cancellation, future windows and independent input boundaries.
-`native_profile_picker_live_language` and `native_profile_library_live_language`
-check raw ICC names, localized absence, search and retained controls without
-rereading files. `native_white_balance_live_language` checks retained calibration
-buttons and notices. Run each through `--native-test=<name>` on the private display.
-
-Edit Color keeps its widgets, an open refused value, its selection and its
-message across language changes; the shared editor relabels its rows and
-re-reads the refusal in the new language without changing the draft.
-Color and gradient buttons, including effect buttons that use the selected
-color, refresh their current shared captions through weak workspace callbacks.
-A stale document refuses color acceptance through the
-shared message notice, so its failure caption also follows language changes.
-The wrapped status and error label stays outside the scrollable fields so
-narrow dialogs reserve space for its complete text.
-`native_color_editor_live_language` checks SDR and HDR drafts, warnings,
-range-refused exposure, Unicode text and selection, retained controls and
-document history in every shipped language and both themes. It also checks
-French/German with narrow windows, larger text and actual status bounds,
-gradient captions and stale document acceptance. Its preedit signals are synthetic; genuine engine
-composition remains a separate private-display acceptance check.
-
-`native_histogram_live_language` checks both Histogram presentations and the
-retained Properties page, numeric focus, selection and targeted adjustment
-buttons in every shipped language and both themes. It preserves the statistics
-data and query time while changing copy, exercises source and channel choices,
-and defers publication while the native channel popup is open.
-`native_localized_photo_histogram_bounds` checks the default Photo workspace's
-Histogram and Waveform plots, controls and translated labels against their
-visible dock bounds in every language and both themes. Their logarithmic-count
-checkbox uses the shared native wrapping control on its own row, keeping the
-plot's edge bins and precision status visible when translated labels are long.
-Properties action and clipping captions wrap inside the native viewport and keep
-complete tooltips. Selected choices use the compact dropdown helper, retaining
-full tooltip and popup text when the closed caption ellipsizes. The same fixture
-checks inner control and glyph bounds,
-including narrow French/German layouts with larger text.
-Use `LAYER_MOTION_VIEWPORT=1100x800` for its normal run or `640x1000` for
-the small viewport run; it verifies the actual window allocation.
-
-`native_proof_live_language` checks preparing, prepared and unavailable captions
-in every shipped language and both themes. It retains the LUT identity and raw
-profile names while changing copy, and preserves the literal ICC diagnostic.
-Preparing is checked with work paused; language changes must not start a worker.
-
-`native_genuine_language_composition` supplies a private application identity for
-IBus acceptance runners. It requires isolated storage and native compositor keys;
-engine traffic and captures establish Telex/Anthy preedit, commit and deferred
-publication. The Image Size width journey checks the same dirty numeric editor,
-accepted value and typed refusal through native Enter and Escape. Engine traffic
-distinguishes cancellation from an engine committing preedit on Escape.
-Thai Kesmanee commits directly and does not establish active preedit.
+`git grep -n 'fn native_.*language' apps/layer-linux/src` lists the language
+journeys. `native_genuine_language_composition` gives an IBus acceptance runner
+a private application identity; it needs workspace and session storage and
+native compositor keys.
 
 ## Tests
 
-The private runner uses isolated memory-backed compositor preferences and
-disables Mutter’s Alt+Space window menu there so navigation keys reach the app.
-On a desktop that reserves Alt+Space, Ctrl+Alt+Space remains the Zoom out chord.
-
-Model tests run with `cargo test --locked -p layer-linux`. Tests that call file
-readers directly first initialize `crate::storage::roots()` so anonymous files
-use the test's temporary folder, including a private `CAPY_STORAGE_DIR` override.
+Model tests run with `cargo test --locked -p layer-linux`, which also builds
+`capy-photo-reader` for the confined `photo_reader` integration test. A
+standalone `--lib` run needs `cargo build --locked -p layer-linux --bin capy-photo-reader`
+first, with the same profile. When copying a test executable elsewhere, copy the
+helper beside it. Tests that call file readers directly first initialize
+`crate::storage::roots()` so anonymous files use the test's temporary folder,
+including a private `CAPY_STORAGE_DIR` override.
 
 Native tests are `#[ignore]`d GTK journeys in `tests.rs` and the `*_tests.rs`
-modules. They need a real Wayland display, a Vulkan GPU and injected input, so run
-them through the private-compositor runner:
+modules, which are named for the area they cover. They need a real Wayland
+display, a Vulkan GPU and injected input, so run them through the
+private-compositor runner:
 
 ```bash
 bash tools/performance/workspace-motion.sh gtk --native-test=native_canvas_bar_modes
 ```
 
-`native_button_feedback_styles` renders the custom button families in both
-themes and distinguishes idle, hover and pressed fills.
-`native_workspace_switcher_press_feedback --native-storage` checks held mouse
-and touch contacts, adopted selection and release-outside cancellation. Run it
-again with `--tablet` for native pen delivery on the private display.
-
-`native_tool_controls_compact` checks panel captions, allocated control sizes and
-spacing at 242 and 320 pixels in both themes. Labeled choices use their complete
-row for spacing; captions wrap to at most two lines beside the control.
-
-Standalone workspace motion tests use the same 4 ms input cadence as their
-dedicated runner flags. `LAYER_NATIVE_EVENT_MS` overrides it when measuring a
-different input rate.
-
-`native_startup_latency` observes asynchronous session creation before sending
-contacts and records readiness from window construction. The bounded SDR canvas
-check compares its live color sample with an authored snapshot, including the
-selected brush's material response. Tab lifecycle fixtures supply their header
-layout explicitly so shipped workspace changes do not remove the controls under test.
-
-`native_application_file_launch` checks cold and warm file activation, retention
-of edited and explicitly created blank drawings, and cancellation during
-preparation. Initial admission captures the shared startup revision after the
-session exists while authored input is held. Closing a modal progress dialog
-cancels its batch; a subsequent window close retires the drawing. Run the fixture
-with `CAPY_NATIVE_TEST_THEME=light` and again with `dark`.
-
-`native_jpeg_open_import_and_paste` uses the JPEG reference directory from
-`tools/validation/jpeg_interchange.py` as `LAYER_RASTER_FIXTURES`. It checks
-CMYK/YCCK, progressive RGB/gray and orientation through Open, Import, clipboard
-paste and retained save/history in the requested fixture theme.
-
-`native_tiff_open_import_and_paste` uses `LAYER_RASTER_FIXTURES` containing the
-independent libtiff reference set. It covers CMYK/RGB edge tiles, straight RGBA
-strips and WhiteIsZero through the same native journeys.
-
-`native_heif_avif_open_import_and_paste` embeds the committed synthetic HEIC,
-P3 AVIF and ICC AVIF fixtures. It needs no `LAYER_RASTER_FIXTURES` directory and
-checks those same Open, Import, clipboard and history paths in the requested
-`CAPY_NATIVE_TEST_THEME`.
-
-Accessibility assertions need GTK's test backend at process startup. Run
-`native_layers_control_copy`, `native_zoom_settings_and_canvas_preferences` and
-`native_live_language_switching` with `GTK_A11Y=test` before the runner command.
-Both private-display runners preserve this variable; other runs default to
-`GTK_A11Y=none`. Tests never mutate the process environment after startup.
-
-`native_dialog_lines_match_the_palette` opens Preferences, Workspaces, Export,
-New Drawing, the color editor and an alert at four base colors in each theme
-(`--native-storage`), saves the captures, and checks each dialog's background,
-the sidebar edge and row dividers against the palette
-([theme colors](../ui/theme-colors.md#lines)).
-
-`native_three_finger_scrub --tablet` sends three native touch contacts horizontally,
-vertically and diagonally in both themes. It checks clearing before release,
-one clear per scrub, unchanged camera and exact document pixels through Undo/Redo:
-
-```bash
-bash tools/performance/workspace-motion.sh gtk --native-test=native_three_finger_scrub --tablet
-```
-
-`native_scroll_wheel_input` exercises wheel pan, Shift-wheel horizontal pan and
-Ctrl-wheel zoom with the middle or right mouse button held and with neither
-held, in both themes. It also checks release and active-stroke exclusion through
-the private compositor's native mouse and keyboard delivery. Scroll callbacks
-without an event position use the native surface's pointer position and modifier
-state before converting to canvas coordinates.
-
-`native_layer_hold_input` checks mouse row pickup, immediate touch handle pickup,
-context menus without touch body reordering, swipe displacement and list
-scrolling in docked and floating panels in both themes. Scrollbar device changes
-are applied before GTK picks the contact target, so the first touch after mouse
-use can reach a handle.
-The pen branch of `native_layer_relationship_review` checks body scrolling,
-swipes and held context menus; run it with `LAYER_RELATIONSHIP_PEN=1` and `--tablet`.
-
-GTK has one battery source: the Linux kernel's power-supply files.
-`system_status::power::tests` cover its file parsing, device symlinks, live changes
-and peripheral exclusion without a window. Shared `layer-ui` tests cover the same
-reader's percentage validation, low warnings and energy-weighted system batteries.
-`native_fullscreen_header_clock_and_battery`
-checks visibility, charging and low-battery presentation; run it in both themes.
-For sandbox acceptance, mount private power-supply fixtures read-only over the
-kernel paths in an isolated namespace and exercise the packaged reader's live
-polling. Do not add Flatpak permissions or override the real system's files.
-
-`native_tool_controls_compact` captures Tool Settings at 242- and 320-pixel
-widths in both themes, including numeric drafts and grouped choices.
-`native_workspace_panel_controls` covers Properties, gradients, curve and scope
-controls, Color, Sizes, Filters and Proof, including visible search entry. The
-fixtures check allocated control geometry, common caption columns, 4-pixel peer
-gaps, 8-pixel content edges and fitted squircle outlines. Run them through the
-private-display runner and keep measurements and original captures in `artifacts/`.
-
-Photo binding changes use `native_multiple_photo_import_chooser` for native
-multi-select import, retained samples, paint above and below photos, save/reopen
-and undo. `native_photo_file_drops` checks canvas and layer destinations and
-opens project drops in document tabs. Pair these with the source rasterization,
-source profile repair and document color journeys, setting
-`CAPY_NATIVE_TEST_THEME=light` and `dark` for each.
-
-`native_object_only_shared_images` opens the fixed built-in, ICC and Nearest
-fixtures after removing their hidden paint and paper layers. It waits for native
-presentations without input before checking pixels, shared image ownership and
-F64 placement, then checks visibility Undo/Redo, native save/reopen, surface
-replacement and private recovery. Run in both themes with `--native-recovery`.
-
-`native_palette_entry_composition` checks editable submission, the real GTK
-default-button action and candidate-key retirement in both themes. Genuine
-engine composition is a separate acceptance check in a private display.
-
-Pen pressure changes use `native_pressure_calibration --tablet` in both themes,
-then `native_curve_graph_numbers_pages_and_history` for the shared widget.
-See [pen pressure](../ui/pen-pressure.md) for sustained-motion measurement.
-The tablet proxy reserves its injected object IDs and translates compositor
-object IDs using the installed Wayland protocol XML. Pen input follows the active
-toplevel, retires destroyed surfaces and reenters when a journey changes windows.
-Deleted protocol IDs lose their old type before GTK reuses them, including for
-private interfaces absent from the installed XML.
-It also announces an eraser
-tool; a pen contact with `"tool":"eraser"` uses it, so journeys can draw with the
-pen's eraser end. Run its clipboard/offer and window-target
-regressions with `python3 -m unittest discover -s apps/layer-linux/bench -p 'test_*.py'`.
-
-Numeric widget changes use `native_number_controls`, `native_slider_feedback`
-and the toolbar component mouse/touch, pen and value-control journeys. They cover
-both themes, editing, slider feedback, popovers and toolbar allocation.
-Tool-settings journeys share `tool_settings_workspace` for toolbar commands and
-panel placement; restore actions, waits and interaction assertions stay in callers.
-Selection journeys locate published variant choices by their localized labels
-inside the mapped Tools or slot Brushes panel, then send native contacts to the
-containing button.
-`native_enclose_fill_pointer_workflow` checks Enclose and Fill with native mouse
-contacts in both themes: two fully enclosed reference holes fill a separate paint
-layer, a hole crossed by the lasso stays empty, and the reference stays exact.
-It also checks the shared Fill controls, one-step Undo/Redo and Escape cancellation.
-Artifact helpers preserve literal paths and each capture's warm-up wait; held
-warm textures and theme loops remain in their callers.
-Docking and ink checks retain pressure editing, native wrapping and GPU pixels.
-Drop rules and tile/grip bounds belong to `native_layout_drop_input`,
-`native_toolbar_sizing` and `native_ribbon_allocation`.
-`native_panel_tab_feedback_preserves_join` checks tab hover, held mouse and touch
-contacts, and selection in both directions, themes and every transparency level.
-It requires visible inactive hover without painting over the active shoulders,
-selection before release, retained tab controls and the regular tab cursor.
-`native_panel_tab_lower_contours` checks every active/hovered pair in a four-tab
-strip, docked and drawer presentations, both themes and all transparency levels.
-It compares the full lower contour, active feet, strip ends and scrolled clips;
-run at 1x and 2x with `LAYER_NATIVE_TEST_TIMEOUT_MS=300000` to allow the complete
-matrix. Other native tests retain the default 180-second watchdog.
-`native_tab_slide_input` checks the selected preview shade after pressing an
-inactive tab, including Active name layouts where selection moves the tab beyond
-the original pointer position. Capture uses the retained source at pickup.
-`native_spatial_filter_windows` checks a 24 MP photo with chained Gaussian blurs
-at 50% zoom, panning and radius changes in both themes.
-`native_hue_ranges_colorize_retains_values` and
-`native_pointwise_filters_controls_and_persistence` cover Hue range pages,
-Colorize, Threshold and Photo Filter controls, direct Invert/Desaturate insertion,
-atomic slider history and save/reopen. Run at 640 and 1100 pixels wide; both
-journeys exercise light and dark themes.
-`native_hue_colorize_keyboard_focus_and_common_draft` checks native activation
-and retained common fields. `native_property_draft_is_retired_when_document_changes_with_reused_layer_ids`
-checks that opening another document cannot carry a pending number into it.
-`native_colorize_threshold_visible_artwork` is a focused check of Colorize and
-Threshold controls and rendered artwork pixels in both themes. Run it at 1100
-pixels wide after renderer changes; it does not measure motion.
-`native_animated_filter_moves` checks at 1100 pixels wide, in both themes, that
-Ripple's canvas pixels keep changing, hold still with Animate off and move again
-when it is turned back on, including at 25% zoom on the reduced display grid.
+Run pen journeys with `--tablet`; a journey's `#[ignore]` reason often names
+the other settings it needs. Journeys check the app's behaviour with injected input: the tablet proxy never
+stands in for a physical pen, and synthetic preedit never stands in for an input
+method engine.
 
 [`workspace-motion.sh`](../../tools/performance/workspace-motion.sh) builds the
 release tests, starts a private D-Bus session, headless Mutter and PipeWire, and
 prints the run directory that holds its logs, input records and fresh storage.
 It needs Mutter with headless support, GJS and PipeWire besides the build
-prerequisites. Useful settings:
+prerequisites. It uses isolated memory-backed compositor preferences and
+disables Mutter's Alt+Space window menu so navigation keys reach the app; on a
+desktop that reserves Alt+Space, Ctrl+Alt+Space remains the Zoom out chord.
+Useful settings:
 
 | Setting | Effect |
 | --- | --- |
@@ -523,69 +192,85 @@ prerequisites. Useful settings:
 | `--native-storage` | Gives the test the run's SQLite workspace directory instead of in-memory workspaces. |
 | `--native-recovery` | Gives the test the run's session directory, so drawings are checkpointed and restored. |
 | `LAYER_NATIVE_TEST_EXECUTABLE` | Absolute path of an already built test executable; skips the rebuild. |
-| `LAYER_NATIVE_EVENT_MS` | Interval between injected events; scoped motion tests need `4`. |
+| `LAYER_NATIVE_EVENT_MS` | Interval between injected events: 4 for workspace motion tests, 60 otherwise. Scoped motion tests need `4`. |
+| `LAYER_NATIVE_TEST_TIMEOUT_MS` | Watchdog for one test, 180000 by default. |
 | `LAYER_MOTION_MIN_HZ` | Presentation floor for scoped motion tests; use `114` on the 120 Hz monitor. |
 | `CAPY_NATIVE_TEST_THEME` | Sets fixture windows to `light` or `dark`; run affected journeys once with each. |
 | `LAYER_MOTION_VIEWPORT`, `LAYER_MOTION_SCALE` | Private monitor size (default `1600x1000`) and scale, for example `3200x2000` and `2`. |
 | `LAYER_TEST_ARTIFACTS` | Absolute directory for captures and reports, where a test writes them. |
+| `GTK_A11Y=test` | GTK's accessibility test backend at startup, for journeys that assert accessible names; otherwise `none`. |
 
 Named modes such as `--drag-pickup`, `--workspace-motion`, `--color-panel` or
 `--icons` select a fixed test; the mode list is in
 [`native-input.js`](../../apps/layer-linux/bench/native-input.js). Test-specific
 instructions live with the feature's guide under [`docs/ui/`](../ui/README.md).
 
-`native_window_resize_presentations` measures three warmed six-second native
-corner drags of the outer window. Set `LAYER_NATIVE_EVENT_MS=4`,
-`LAYER_NATIVE_INPUT_TRACE=1` and `LAYER_TEST_ARTIFACTS` to a private output folder.
-Its reports pair changed window dimensions with completed GDK presentation
-timestamps and include full-contact canvas presentations. Run both themes and
-keep baseline and candidate builds separate from timed motion.
-`GTK_DEBUG=snapshot` with `native_window_resize_inventory` saves named render
-trees and node bounds during changing window dimensions. Run that diagnostic
-separately from timing measurements.
-
-For a tab-only motion diagnostic, preserve the motion mode's input pacing:
-
-```sh
-LAYER_NATIVE_EVENT_MS=4 LAYER_MOTION_MIN_HZ=114 bash tools/performance/workspace-motion.sh gtk --native-test=native_workspace_tab_motion_input
-```
-
 [`tools/performance/gtk-raster.sh`](../../tools/performance/gtk-raster.sh) runs an
 already built test executable on the same kind of private display, for tests
 that need no injected input, such as `native_application_file_launch`.
 
-Rules and pitfalls:
+After changing the tablet proxy, run its tests with
+`python3 -m unittest discover -s apps/layer-linux/bench -p 'test_*.py'`.
+
+### Journeys with extra settings
+
+| Journey | Needs |
+| --- | --- |
+| `native_session_restart`, `native_session_restart_saved_origins`, `native_document_files`, `native_object_only_shared_images` | `--native-recovery` |
+| `native_dialog_lines_match_the_palette` | `--native-storage` |
+| `native_workspace_switcher_press_feedback` | `--native-storage`, then again with `--tablet` |
+| `native_three_finger_scrub`, `native_pressure_calibration` | `--tablet` |
+| `native_layer_relationship_review`, pen branch | `LAYER_RELATIONSHIP_PEN=1` and `--tablet` |
+| `native_layers_control_copy`, `native_zoom_settings_and_canvas_preferences`, `native_live_language_switching` | `GTK_A11Y=test` |
+| `native_clock_portal_preferences` | `GSETTINGS_BACKEND=memory` |
+| `native_jpeg_open_import_and_paste` | `LAYER_RASTER_FIXTURES` set to the JPEG reference directory from `tools/validation/jpeg_interchange.py` |
+| `native_tiff_open_import_and_paste` | `LAYER_RASTER_FIXTURES` containing the libtiff reference set |
+| `native_localized_photo_histogram_bounds`, `native_hue_ranges_colorize_retains_values`, `native_pointwise_filters_controls_and_persistence` | Viewports 1100 and 640 pixels wide, such as `LAYER_MOTION_VIEWPORT=1100x800` and `640x1000` |
+| `native_colorize_threshold_visible_artwork`, `native_animated_filter_moves` | A viewport 1100 pixels wide |
+| `native_panel_tab_lower_contours` | `LAYER_NATIVE_TEST_TIMEOUT_MS=300000`, at `LAYER_MOTION_SCALE` 1 and 2 |
+| `native_window_resize_presentations` | `LAYER_NATIVE_EVENT_MS=4`, `LAYER_NATIVE_INPUT_TRACE=1` and `LAYER_TEST_ARTIFACTS` |
+| `native_window_resize_inventory` | `GTK_DEBUG=snapshot`, apart from timing runs |
+| `native_workspace_tab_motion_input` | `LAYER_NATIVE_EVENT_MS=4 LAYER_MOTION_MIN_HZ=114` |
+
+### Writing a journey
 
 - **One test per process, isolated storage.** GTK runs on one thread, and each
   native test owns the display, input protocol and storage for its run. Pass one
   exact name with `--exact --test-threads=1`; Cargo's filter is a substring match
-  and can start a second journey in the same process. Test builds never fall
-  back to your own settings, workspaces or recovery files. A test stores files
-  only under a fresh `CAPY_STORAGE_DIR`, and uses its workspaces and sessions
-  only when `data/workspaces` or `state/sessions` exist there; the runners
-  create the folder and those subfolders. They also give GTK a private
-  `XDG_DATA_HOME`, so the file chooser neither lists nor records your recent
-  files, and `native_test_app` refuses to start without one.
+  and can start a second journey in the same process. A test stores files only
+  under a fresh `CAPY_STORAGE_DIR`, and uses workspaces and sessions only when
+  `data/workspaces` or `state/sessions` exist there. The runners create these
+  and a private `XDG_DATA_HOME`, which `native_test_app` requires so the file
+  chooser never lists or records your recent files.
 - **Inject input only on the private display.** `native-input.js` drives
   Mutter's RemoteDesktop API and refuses any display not named `layer-bench-*`.
   Never point it at a desktop session.
 - **`GDK_DEBUG=no-portals:color-mgmt`.** GTK 4.22 binds the Wayland
-  color-management protocol only with `color-mgmt` and has no public API for it.
-  The app adds it in `main()` before GTK starts, but tests do not run `main()`.
-  `no-portals` makes file dialogs use GTK's in-process chooser, which tests can
-  drive, instead of the desktop portal. Without the portal GTK also loses the
-  desktop's font and window settings and falls back to fontconfig's `Sans`, so
-  the runners give GTK GNOME's defaults from
+  color-management protocol only with `color-mgmt`; the app sets it in `main()`,
+  which tests do not run. `no-portals` gives file dialogs GTK's in-process
+  chooser, which tests can drive, and the runners replace the lost desktop font
+  and window settings with GNOME's defaults from
   [`gtk-config`](../../tools/performance/gtk-config/gtk-4.0/settings.ini)
   through `XDG_CONFIG_DIRS`. `gtk-raster.sh` and `workspace-motion.sh gtk` set
   all of this; plain `cargo test` sets none of it.
+- **Reuse the harness.** Drive real GTK dialogs with `native_test_app`,
+  `named::<T>`, `widgets`, `descendant`, `ui_session`, `ui_session_mut` and
+  `pump`. Tool-settings journeys share `tool_settings_workspace` for toolbar
+  commands and panel placement.
+- **Set up the layout under test.** A fixture supplies the workspace, header and
+  panel controls it needs, so changes to shipped workspaces don't remove them.
+- **Wait, then assert.** Wait for workspace readiness and for operations to finish
+  before asserting, and check persistence by reopening, not only by reading rows.
+- **Target what is mapped.** Find a published choice by its localized label
+  inside the mapped panel, then send native contacts to its containing button.
+  Popovers have their own native origins; use `screen_point` for their rows.
 - **Tablet proxy limits.** `--tablet` pen serials cannot authorize compositor
   drag-and-drop; use mouse and touch for those journeys. The proxy also drops its
   connection when Quick Mask or Selection Layer rows change, so journeys through
-  those modes run without `--tablet`. It never stands in for a physical pen.
-- **Alerts.** Await `adw::AlertDialog` with `alert::choose`, not
-  `choose_future`, which in libadwaita-rs 0.9.2 keeps the dialog alive after it
-  closes.
+  those modes run without `--tablet`. A pen contact with `"tool":"eraser"` uses
+  the pen's eraser end.
+
+### Run a journey without the runner
 
 A focused test can also run without the runner inside an existing Wayland
 session, for example to attach a debugger. Give it fresh storage:
@@ -599,10 +284,6 @@ GDK_BACKEND=wayland GSK_RENDERER=vulkan G_DEBUG=fatal-criticals RUST_BACKTRACE=1
   workspace::tests::workspace_switcher_tests::native_active_workspace_delete \
   -- --ignored --exact --test-threads=1 --nocapture
 ```
-
-Reuse `native_test_app`, `named::<T>`, `widgets`, `descendant`, `ui_session`, `ui_session_mut` and `pump`
-to drive real GTK dialogs. Wait for workspace readiness and for operations to finish before
-asserting, and check persistence by reopening, not only by reading rows.
 
 ## Troubleshooting
 
@@ -640,28 +321,17 @@ The packager builds a release binary with the `release-identity` feature, which
 gives it the application ID `art.capycanvas.CapyCanvas` and the `capycanvas`
 folders; every other build runs as `art.capycanvas.CapyCanvas.Devel` with
 `capycanvas-devel` folders, so it never shares a running instance or files with
-an installed package ([storage](../internals/storage.md)). It also builds a
-pinned GTK 4.24.1 with the [tablet patches](../../tools/build/gtk-runtime/README.md),
-GLib 2.90.1 and Pango 1.58.2, cached in
-`target/gtk-runtime` (`CAPY_GTK_BUILD_DIR` overrides it). The `bin/capycanvas`
-executable finds the bundled `libgtk-4.so.1` through its embedded library path.
-System GTK, GLib and Pango are never replaced; libadwaita and the remaining dependencies
-stay system requirements, so this is a native bundle for compatible distributions. The
-[Flatpak](releasing.md#linux-flatpak) uses the GNOME runtime for those dependencies.
-`share/doc/capycanvas-gtk` carries the GTK, GLib and Pango sources,
-patches, licenses, checksums and a rebuild script.
+an installed package ([storage](../internals/storage.md)). It bundles the
+[patched GTK runtime](../../tools/build/gtk-runtime/README.md) with its sources
+and rebuild script in `share/doc/capycanvas-gtk`; libadwaita and the remaining
+dependencies stay system requirements.
 
 The output holds the executable, desktop entry, AppStream metainfo, `.capy` MIME
-definition, icon, runtime filters, GTK runtime and notices. The app icon uses a
-single SVG viewport so Qt launchers render the shared capybara mark. Photo codecs
-are compiled in, so a moved package needs no codec path. Staging replaces only a
-directory carrying the generated `.capy-package` marker. The GTK and Web packagers share
-`tools/build/about.toml`, need original license texts including vendored
-dependencies, and accept `LAYER_CARGO_ABOUT` for the notice generator.
-
-Staging does not install anything. An installer must register the desktop entry
-and refresh the desktop and MIME databases; the [publication guide](publication.md)
-covers distribution.
+definition, icon, runtime filters, GTK runtime and notices. Staging replaces only
+a directory carrying the generated `.capy-package` marker and installs nothing;
+the [publication guide](publication.md) covers distribution. The GTK and Web
+packagers share `tools/build/about.toml`, need original license texts including
+vendored dependencies, and accept `LAYER_CARGO_ABOUT` for the notice generator.
 
 To check that a relocated package opens photos with its bundled GTK, on a
 private compositor with isolated settings:
@@ -677,28 +347,21 @@ python3 tools/validation/gtk_package_photo.py \
 
 The [AppStream metainfo](../../apps/layer-linux/art.capycanvas.CapyCanvas.metainfo.xml)
 declares desktop and tablet support with a minimum shortest display edge of 600
-logical pixels. Small tablets may need landscape orientation to fit the GTK
-workspace; phone layouts are unsupported. Keyboard, mouse or trackpad, touch and
-graphics tablet input are supported. Validate changes with
+logical pixels; phone layouts are unsupported. Validate changes with
 `appstreamcli validate --no-net apps/layer-linux/art.capycanvas.CapyCanvas.metainfo.xml`
 and `appstreamcli check-syscompat --details apps/layer-linux/art.capycanvas.CapyCanvas.metainfo.xml`.
+GNOME Software can label the app Adaptive or warn about display compatibility on
+a desktop without checking the declared limits; the AppStream check is the
+reference.
 
-The listing declares offline use, links to help, bug reports and contributing,
-and supplies light and dark branding colors. Its translated text comes from
-the shared [Fluent catalogs](../ui/localization.md#application-names). After
-composition, `tools/build/app_names.py catalog` adds every shipped language to
-the compressed catalog; the shared catalog checks require complete translations.
-Check the generator with
-`python3 -m unittest discover -s tools/build -p 'test_app_names.py'`.
-
-GNOME Software 50 labels apps supporting keyboard, pointing and touch as Adaptive
-without checking their display limits. Its hardware dialog can also warn on a
-desktop because mobile displays are unsupported. The AppStream compatibility
-check distinguishes supported tablets from unsupported phones.
-
-AppStream catalog generation runs with temporary `.Devel` build metadata so the
-SDK's Glycin icon loader can run without a desktop portal during builds. The
-exported application keeps `art.capycanvas.CapyCanvas` as its identity.
+The listing's translated text comes from the shared
+[Fluent catalogs](../ui/localization.md#application-names);
+`tools/build/app_names.py catalog` adds every shipped language to the compressed
+catalog. Check the generator with
+`python3 -m unittest discover -s tools/build -p 'test_app_names.py'`. Catalog
+generation uses temporary `.Devel` build metadata so the SDK's Glycin icon
+loader runs without a desktop portal; the exported application keeps
+`art.capycanvas.CapyCanvas` as its identity.
 
 With Flatpak and its host SVG image loader installed (`librsvg2-common` on
 Debian or Ubuntu), build and export a local unsigned bundle:
@@ -713,23 +376,20 @@ Unsigned builds do not produce the reference or repository archive and do not
 configure the published update source. Native distribution builds can also use
 the [Arch recipe](../../packaging/arch/README.md).
 
-Users need their distribution's Flatpak package, a Wayland session and hardware
-Vulkan support. The Flatpak runtime supplies toolkit dependencies; it does not
-remove the [canvas requirements](#prerequisites).
-
+Users need Flatpak, a Wayland session and hardware Vulkan; the runtime
+supplies toolkit dependencies, not the [canvas requirements](#prerequisites).
 The sandbox grants the Wayland socket for windows, clipboard and input, and GPU
 devices for rendering. The battery indicator reads the kernel's
-`/sys/class/power_supply` data on a worker at startup and every 30 seconds;
-Flatpak exposes these files and their device targets read-only. System batteries
-are combined by their energy capacities; peripheral batteries are excluded.
-Unavailable or incomplete readings hide the indicator.
+`/sys/class/power_supply` files, which Flatpak exposes read-only. To test it in
+the sandbox, mount private power-supply fixtures read-only over the kernel paths
+in an isolated namespace; do not add Flatpak permissions or change the real
+system's files.
 
 GTK uses the default portals for file dialogs, selected-file access and opening
 links; the clock observes GNOME's time format through the Settings portal.
 Settings, workspace libraries, recovery files and caches use Flatpak's private
 application directories. The exported desktop entry forwards files through the
-document portal when launched from a file manager. Software's permission summary
-does not list these per-file portal grants as access to the user's folders.
+document portal when launched from a file manager.
 
 If opening a selected file fails with `Transport endpoint is not connected`,
 check the document portal's FUSE mount with
