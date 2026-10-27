@@ -5,17 +5,18 @@ namespace CapyUi {
 inline void panelScrolling(ScrollView const& scroll,UIElement const& content,std::shared_ptr<WorkspaceData> const& data){
     struct Contact {std::optional<uint32_t> pointer;uint64_t epoch=0;double offset=0;bool running=false,canceled=false;std::function<void()> complete;};
     auto state=std::make_shared<Contact>();auto context=std::weak_ptr(data);auto weak=make_weak(scroll);auto surface=make_weak(content);
+    edgeTag(content.as<FrameworkElement>(),L"edge_contact",S(L"free"));
     auto forget=[context,state]{if(auto data=context.lock();data&&state->pointer)data->pointerCancels.Forget(*state->pointer,state.get());state->pointer.reset();};
     auto cancel=[state,forget,surface]{state->canceled=true;state->running=false;forget();if(auto content=surface.get())content.ManipulationMode(ManipulationModes::None);if(auto complete=std::exchange(state->complete,{}))complete();};
     scroll.IgnoredInputKinds(ScrollingInputKinds::Touch|ScrollingInputKinds::Pen);scroll.ContentOrientation(ScrollingContentOrientation::Vertical);
     scroll.Background(nullptr);scroll.Loaded([weak](auto&&,auto&&){if(auto scroll=weak.get())if(auto presenter=scroll.ScrollPresenter())presenter.Background(nullptr);});
-    content.ManipulationMode(ManipulationModes::TranslateY|ManipulationModes::TranslateInertia);
+    content.ManipulationMode(ManipulationModes::TranslateRailsY|ManipulationModes::TranslateInertia);
     content.AddHandler(UIElement::PointerPressedEvent(),box_value(PointerEventHandler([context,state,cancel,surface](auto&&,PointerRoutedEventArgs const& e){
         if(auto data=context.lock();data&&data->claimBubbleContact(e))return;
         auto point=e.GetCurrentPoint(nullptr);
         if(state->pointer||point.PointerDeviceType()==Microsoft::UI::Input::PointerDeviceType::Mouse||!PointerGesture::PrimaryContact(point))return;
         if(state->complete)cancel();
-        if(auto content=surface.get())content.ManipulationMode(ManipulationModes::TranslateY|ManipulationModes::TranslateInertia);
+        if(auto content=surface.get())content.ManipulationMode(ManipulationModes::TranslateRailsY|ManipulationModes::TranslateInertia);
         state->pointer=point.PointerId();state->canceled=false;
         if(auto data=context.lock()){state->epoch=uint64_t(num(object(data->state,L"document_file"),L"epoch"));data->pointerCancels.Observe(*state->pointer,state.get(),cancel);}
     })),true);

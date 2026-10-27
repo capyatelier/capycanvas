@@ -1,6 +1,8 @@
 ﻿param([Parameter(Mandatory)][string]$Executable,[switch]$ResizeOnly,[switch]$ResizeTailOnly,[switch]$ResizeStackOnly,[ValidateSet('mouse','pen','touch')][string]$Device='mouse',[ValidateSet('dark','light')][string]$Theme='dark')
 $ErrorActionPreference='Stop'
 $ResizeOnly=$ResizeOnly -or $ResizeTailOnly -or $ResizeStackOnly
+$script:ResizeVerticalScrollStatus='not-run'
+$script:ResizeMixedInputStatus='not-run'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 $CapyCacheModel=$true
 Add-Type -AssemblyName System.Drawing
@@ -51,7 +53,7 @@ function Resize-Reach([object[]]$Candidates,[scriptblock]$Accept,[switch]$Double
 function Resize-Cursor([int]$Stock){
     if($Device -eq 'mouse'){Wait-Until {[CapyRowPointer]::Cursor().cursor -eq [CapyRowPointer]::StockCursor($Stock)} "Native resize cursor is not stock $Stock"}
 }
-function Resize-Drag($From,[object[]]$To,[scriptblock]$During,[int]$Cursor=0,[scriptblock]$Contact){
+function Resize-Drag($From,[object[]]$To,[scriptblock]$During,[int]$Cursor=0,[scriptblock]$Contact,[scriptblock]$Claim){
     $a=Resize-Screen $From
     if($Device -eq 'mouse'){[CapyRowPointer]::Hover($a.x,$a.y)}
     [CapyRowPointer]::Down($Device,$a.x,$a.y)
@@ -60,7 +62,9 @@ function Resize-Drag($From,[object[]]$To,[scriptblock]$During,[int]$Cursor=0,[sc
         for($n=0;$n -lt $To.Count;$n++){
             $b=Resize-Screen $To[$n]
             for($i=1;$i -le 8;$i++){[CapyRowPointer]::Move([int]($a.x+($b.x-$a.x)*$i/8),[int]($a.y+($b.y-$a.y)*$i/8));Start-Sleep -Milliseconds 16}
-            Wait-Until {(Resize-Gesture).edge.claimed} 'Native resize reach did not claim the gesture'
+            [CapyRowPointer]::Verify()
+            if($Claim){Wait-Until $Claim 'Shared canvas-side resize did not claim the gesture'}
+            else{Wait-Until {(Resize-Gesture).edge.claimed} 'Native resize reach did not claim the gesture'}
             Start-Sleep -Milliseconds 200
             if($Cursor){Resize-Cursor $Cursor}
             if($During){& $During $n}
@@ -85,6 +89,47 @@ function Resize-FloatingReady([int]$Id){
     } 'Floating native frame/tab geometry did not reach its shared bounds'
     Wait-PresentedFrame
 }
+function Resize-VerticalScroll([int]$Id){
+    if($Device -eq 'mouse'){$script:ResizeVerticalScrollStatus='not-applicable-mouse';return}
+    $metrics={@(((Workspace-Root).Current.ItemStatus|ConvertFrom-Json).groups|Where-Object id -eq $Id)[0].body_scroll}
+    $provider=@{element=$null;pattern=$null}
+    $node=Control "workspace-group-$Id" -Arranged
+    $scrollPredicate=[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::IsScrollPatternAvailableProperty,$true)
+    Wait-Until {
+        foreach($element in $node.FindAll([System.Windows.Automation.TreeScope]::Descendants,$scrollPredicate)){
+            $pattern=$element.GetCurrentPattern([System.Windows.Automation.ScrollPattern]::Pattern)
+            if($pattern.Current.VerticallyScrollable){$provider.element=$element;$provider.pattern=$pattern;return $true}
+        }
+        $false
+    } 'Floating Stats exposes no native vertical scroll provider'
+    $nativeScroll=$provider.pattern
+    Wait-Until {$m=& $metrics;$nativeScroll.Current.VerticallyScrollable -and $m.extent_height -gt $m.viewport_height} 'Floating Stats has no real native vertical scroll range'
+    $nativeScroll.SetScrollPercent([System.Windows.Automation.ScrollPattern]::NoScroll,0)
+    Wait-Until {(& $metrics).vertical_offset -eq 0} 'Native Stats did not start at its top offset'
+    $b=((Resize-Layout).groups|Where-Object id -eq $Id|Select-Object -First 1).bounds
+    $from=Resize-Point ($b.x+$b.width-20) ($b.y+$b.height*.65)
+    $to=Resize-Point $from.x ($from.y-80)
+    $a=Resize-Screen $from;$z=Resize-Screen $to
+    $receipt=@{device=$Device;from=$from;to=$to;before=(& $metrics);frame_before=$b;native_provider=@(Control-Trace $provider.element)}
+    [CapyRowPointer]::Down($Device,$a.x,$a.y)
+    try{
+        for($i=1;$i -le 8;$i++){[CapyRowPointer]::Move($a.x,[int]($a.y+($z.y-$a.y)*$i/8));Start-Sleep -Milliseconds 16}
+        Start-Sleep -Milliseconds 200
+        [CapyRowPointer]::Up()
+        Wait-Until {(& $metrics).vertical_offset -gt 1} 'A real vertical Stats swipe did not change native ScrollView.VerticalOffset'
+        $after=((Resize-Layout).groups|Where-Object id -eq $Id|Select-Object -First 1).bounds
+        if($after.width -ne $b.width -or $after.x -ne $b.x){throw 'The vertical Stats scroll resized or moved its floating frame'}
+    }finally{
+        if([CapyRowPointer]::Active){[CapyRowPointer]::Cancel()}
+        $receipt.after=& $metrics;$receipt.frame_after=((Resize-Layout).groups|Where-Object id -eq $Id|Select-Object -First 1).bounds
+        $receipt|ConvertTo-Json -Depth 12|Set-Content (Join-Path $run 'floating-vertical-scroll.json')
+    }
+    $nativeScroll.SetScrollPercent([System.Windows.Automation.ScrollPattern]::NoScroll,0)
+    Wait-Until {(& $metrics).vertical_offset -eq 0} 'Native Stats scroll offset did not restore after the gesture'
+    Resize-FloatingReady $Id
+    $script:ResizeVerticalScrollStatus='passed'
+    Write-Output "RESIZE_PASS actual-native-vertical-scroll frame-width-unchanged offset-restored $Device $Theme"
+}
 function Resize-Floating {
     Invoke-Id 'panel-tab-stats';Resize-Settled
     $beforeFloat=Resize-State
@@ -107,6 +152,7 @@ function Resize-Floating {
     [CapyRowPointer]::Up();Resize-Settled
     Wait-Until {(& $floating).bounds.height -ge 240} 'Native bottom handle did not prepare a tall floating panel'
     Resize-FloatingReady (& $floating).id
+    Resize-VerticalScroll (& $floating).id
     $before=Resize-State
     $sides=@('left','right','bottom','bottom-left','bottom-right')
     if($Device -eq 'touch'){$sides+='right-canvas'}
@@ -116,10 +162,18 @@ function Resize-Floating {
         $left=$side -match 'left';$right=$side -match 'right';$bottom=$side -match 'bottom'
         $y=if($bottom){$b.y+$b.height-12}else{$b.y+$b.height*.65}
         $candidates=@(foreach($distance in 12,20,28){
-            $x=if($side -eq 'right-canvas'){$b.x+$b.width+20}elseif($left){$b.x+$distance}elseif($right){$b.x+$b.width-$distance}else{$b.x+$b.width*.5}
+            $x=if($left){$b.x+$distance}elseif($right){$b.x+$b.width-$distance}else{$b.x+$b.width*.5}
             foreach($dy in 0,8,16){Resize-Point $x ($y-$dy)}
         })
-        $from=Resize-Reach $candidates {param($edge)$edge.contact -eq 'free' -and [bool]$edge.vertical -eq $bottom}
+        $canvasClaim=$null
+        if($side -eq 'right-canvas'){
+            $canvasOriginalRight=$b.x+$b.width
+            $from=Resize-Point ($canvasOriginalRight+20) $y
+            $canvasExpectedRight=$from.x+48
+            $canvasAt=Resize-Screen $from
+            Input-Trace $canvasAt.x $canvasAt.y|ConvertTo-Json -Depth 12|Set-Content (Join-Path $run 'floating-canvas-hit.json')
+            $canvasClaim={$canvasCurrent=(& $floating).bounds;$canvasCurrent.x+$canvasCurrent.width -gt $canvasOriginalRight}
+        }else{$from=Resize-Reach $candidates {param($edge)$edge.contact -eq 'free' -and [bool]$edge.vertical -eq $bottom}}
         $cursor=if($left -and $bottom){32643}elseif($right -and $bottom){32642}elseif($bottom){32645}else{32644}
         if($Device -eq 'mouse'){
             $handle=(& $floating).resize_handles|Where-Object edge -eq $side.Replace('-','_')|Select-Object -First 1
@@ -127,11 +181,34 @@ function Resize-Floating {
             [CapyRowPointer]::Hover($hover.x,$hover.y);Resize-Cursor $cursor
         }
         $dx=if($left){-48}elseif($right){48}else{0};$dy=if($bottom){48}else{0}
-        Resize-Drag $from @((Resize-Point ($from.x+$dx) ($from.y+$dy))) -Cursor $cursor
+        Resize-Drag $from @((Resize-Point ($from.x+$dx) ($from.y+$dy))) -Cursor $cursor -Claim $canvasClaim
         $after=(& $floating).bounds
+        if($side -eq 'right-canvas'){
+            $canvasTolerance=((& $floating).resize_handles|Where-Object edge -eq 'right'|Select-Object -First 1).bounds.width
+            if([Math]::Abs($after.x+$after.width-$canvasExpectedRight) -gt $canvasTolerance){throw 'The touch canvas-side floating edge did not catch its contact within its native handle'}
+        }
         if((($left -or $right) -and $after.width -le $b.width+20) -or ($left -and $after.x -ge $b.x-20) -or ($bottom -and $after.height -le $b.height+20)){throw "Floating $side reach did not grow its owner: $($b|ConvertTo-Json -Compress) -> $($after|ConvertTo-Json -Compress)"}
         Resize-Undo $before
         Write-Output "RESIZE_PASS floating-$side $Device $Theme cursor=$cursor"
+        if($Device -eq 'touch' -and $Theme -eq 'light' -and $side -eq 'right'){
+            $mixedExpectedLayout=Resize-State
+            Resize-Drag $from @((Resize-Point ($from.x+24) $from.y)) -During {[CapyRowPointer]::Cancel()}
+            Wait-Until {(Resize-State) -ceq $mixedExpectedLayout} 'Canceled touch resize did not restore the mixed-input frame'
+            Resize-FloatingReady (& $floating).id
+            $mixedAt=Resize-Screen $from
+            [CapyRowPointer]::Hover($mixedAt.x,$mixedAt.y);[CapyRowPointer]::Down('mouse',$mixedAt.x,$mixedAt.y)
+            try{
+                Wait-Until {$mixedEdge=(Resize-Gesture).edge;$mixedEdge.contact -eq 'free' -and !$mixedEdge.vertical} 'Mouse did not retain free horizontal reach after touch cancellation'
+                $mixedPending=Resize-Gesture
+                [CapyRowPointer]::Key([uint32]$review.Id,0x1B)
+                Wait-Until {!((Resize-Gesture).edge)} 'Mixed-input mouse Escape did not clear its edge'
+                [CapyRowPointer]::Cancel()
+            }finally{if([CapyRowPointer]::Active){[CapyRowPointer]::Cancel()}}
+            Wait-Until {$mixedState=Resize-Gesture;$mixedState.phase -eq 'idle' -and !$mixedState.ignore_click -and (Resize-State) -ceq $mixedExpectedLayout} 'Mixed-input mouse release changed its frame or left a contact'
+            @{point=$from;mouse_pending=$mixedPending;after=(Resize-Gesture);layout=(Model).state.workspace.layout}|ConvertTo-Json -Depth 90|Set-Content (Join-Path $run 'floating-mixed-input.json')
+            $script:ResizeMixedInputStatus='passed'
+            Write-Output 'RESIZE_PASS touch-cancel-then-mouse-free-edge escape-release-exact-frame'
+        }
     }
     Resize-Undo $beforeHeight
     Resize-Undo $beforeFloat
@@ -204,8 +281,13 @@ function Resize-Columns {
     $before=Resize-State
     $from=Resize-Reach @(foreach($g in $groups){foreach($dy in 24,48,72,96,120){if($dy+36 -lt $g.bounds.height){Resize-Point ($edge.bounds.x-20) ($g.bounds.y+$g.bounds.height-$dy)}}})
     $far=Resize-Point ($owner.bounds.x+12) $from.y
-    Resize-Drag $from @($far,$from,$far) -Cursor 32644 -During {
+    $columnTargets=@($far,$from,$far)
+    $columnReceipt=@{before=($before|ConvertFrom-Json);before_gesture=(Resize-Gesture);from=$from;far=$far;requested=@(foreach($target in $columnTargets){@{logical=$target;screen=(Resize-Screen $target)}});groups_before=@((Resize-Layout).groups);steps=[Collections.Generic.List[object]]::new()}
+    $columnReceipt|ConvertTo-Json -Depth 90|Set-Content (Join-Path $run 'resize-column.json')
+    Resize-Drag $from $columnTargets -Cursor 32644 -During {
         param($step)
+        $columnReceipt.steps.Add(@{step=$step;requested=$columnReceipt.requested[$step];gesture=(Resize-Gesture);collapsed=@((Resize-Layout).collapsed);layout=(Model).state.workspace.layout})
+        $columnReceipt|ConvertTo-Json -Depth 90|Set-Content (Join-Path $run 'resize-column.json')
         $collapsed=@((Resize-Layout).collapsed|Where-Object {$_.groups.icons.panel -contains $owner.active}).Count -gt 0
         if(($step -ne 1 -and !$collapsed) -or ($step -eq 1 -and $collapsed)){throw "Column collapse/reversal failed at step $step"}
         $now=(Resize-Layout).groups|Where-Object id -eq $toolbar.id|Select-Object -First 1
@@ -426,15 +508,20 @@ try{
         Wait-Until {$owned.drawing=Owned-DrawingWindow $review;$owned.drawing -and (Model).state.workspace_ready -and (Model).windows_workspace.ready -and !(Model).windows_workspace.busy -and (Model).state.theme -eq $Theme} 'Resize drawing did not become ready'
         $root=$owned.drawing.Root;$drawingWindow=$owned.drawing.Handle
         Maximize-DrawingWindow;Use-PaintWorkspace;Resize-Settled
+        $resizeArtwork=@{before=(Model).state.document_file.revision}
+        $resizeArtwork|ConvertTo-Json|Set-Content (Join-Path $run 'resize-artwork.json')
         if(!$ResizeStackOnly){
             if(!$ResizeTailOnly){Resize-Floating;Resize-TabStrip}
             Resize-Band;Resize-Columns
         }
         Resize-Stack
+        $resizeArtwork.after=(Model).state.document_file.revision
+        $resizeArtwork|ConvertTo-Json|Set-Content (Join-Path $run 'resize-artwork.json')
+        if($resizeArtwork.after -cne $resizeArtwork.before){throw "Workspace resizing changed artwork revision from $($resizeArtwork.before) to $($resizeArtwork.after)"}
         Capture 'resize'
         & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close
         if((Get-Item -LiteralPath $stderr).Length){throw 'Native resize stderr requires inspection'}
-        [pscustomobject]@{scope=$(if($ResizeStackOnly){'native two-member stack edge'}elseif($ResizeTailOnly){'native workspace resize tail'}else{'native workspace resize'});device=$Device;theme=$Theme;floating_edges=$(if($ResizeTailOnly -or $ResizeStackOnly){'not-run'}else{'passed'});actual_tab_top_six=$(if($ResizeTailOnly -or $ResizeStackOnly){'not-run'}else{'pickup-vertical-resize-and-release-selection-passed'});toolbar_lanes=$(if($ResizeStackOnly){'not-run'}else{'passed'});column_reversal=$(if($ResizeStackOnly){'not-run'}else{'passed'});actual_two_member_stack='closed-open-close-reversal-passed';adjacent_width=$(if($ResizeStackOnly){'not-run'}else{'unchanged'});workspace_undo=$(if($ResizeStackOnly){'not-run'}else{'exact'});cursor=$(if($Device -eq 'mouse'){if($ResizeTailOnly -or $ResizeStackOnly){'claimed-drag-passed'}else{'hover-and-drag-passed'}}else{'not-applicable'});evidence=$run}|ConvertTo-Json|Set-Content (Join-Path $run 'results.json')
+        [pscustomobject]@{scope=$(if($ResizeStackOnly){'native two-member stack edge'}elseif($ResizeTailOnly){'native workspace resize tail'}else{'native workspace resize'});device=$Device;theme=$Theme;floating_edges=$(if($ResizeTailOnly -or $ResizeStackOnly){'not-run'}else{'passed'});actual_tab_top_six=$(if($ResizeTailOnly -or $ResizeStackOnly){'not-run'}else{'pickup-vertical-resize-and-release-selection-passed'});toolbar_lanes=$(if($ResizeStackOnly){'not-run'}else{'passed'});column_reversal=$(if($ResizeStackOnly){'not-run'}else{'passed'});actual_two_member_stack='closed-open-close-reversal-passed';adjacent_width=$(if($ResizeStackOnly){'not-run'}else{'unchanged'});workspace_undo=$(if($ResizeStackOnly){'not-run'}else{'exact'});cursor=$(if($Device -eq 'mouse'){if($ResizeTailOnly -or $ResizeStackOnly){'claimed-drag-passed'}else{'hover-and-drag-passed'}}else{'not-applicable'});artwork_revision_before=$resizeArtwork.before;artwork_revision_after=$resizeArtwork.after;native_vertical_scroll=$script:ResizeVerticalScrollStatus;mixed_input_after_cancel=$script:ResizeMixedInputStatus;evidence=$run}|ConvertTo-Json|Set-Content (Join-Path $run 'results.json')
         Get-Content (Join-Path $run 'results.json');return
     }
     if(Shown 'sizes' 'brush_size'){throw 'Sizes shows the Brush Size slider by default'}
@@ -539,6 +626,7 @@ try{
     if((Get-Item -LiteralPath $stderr).Length){throw 'Native stderr requires inspection'}
     [pscustomobject]@{size_grid=@($docked)+$configured;shared_expansion_width='passed';live_brush_size='passed';control_visibility='passed';retained_configuration='passed';resize='passed';escape_close='passed';layers='passed';editing_layer_selection='passed';targeted_opacity='passed';navigator_configuration='passed';gpu_preview_occlusion_and_restore='passed';theme='passed';toolbar_add_tools='passed';zero_exit='passed';scope='native configuration projection; full visual parity, physical input and presentation are separate'}|ConvertTo-Json
 }catch{
+    [IO.File]::WriteAllText((Join-Path $run 'failure-exception.txt'),$_.Exception.ToString())
     if($ResizeOnly -and $review -and !$review.HasExited){try{@{model=(Model);gesture=(Resize-Gesture)}|ConvertTo-Json -Depth 90|Set-Content (Join-Path $run 'resize-failure.json')}catch{}}
     if($review -and !$review.HasExited){try{Capture 'failure'}catch{}}
     [IO.File]::WriteAllText((Join-Path $run 'failure.txt'),($_|Out-String)+$_.ScriptStackTrace);throw

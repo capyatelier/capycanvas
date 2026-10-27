@@ -587,6 +587,9 @@ Windows classifies like Web, reading `ManipulationMode::None` and controls that
 capture their press as inputs, and tags panel frames, closed strips, tabs,
 grips and layer rows. Horizontal scrollers retain sideways swipes; vertical-only
 scrollers leave their free surfaces available for horizontal edge resizing.
+Vertical scrolling uses directional rails to preserve horizontal edge contacts.
+Pending edges also observe the island's pointer stream while native manipulation
+owns the routed events. Both streams forward to the same shared gesture.
 Its session runs on the render thread, so replies arrive
 through the ordered command queue. A press asks `capy_edge_reach`
 synchronously whether it lies in an edge's reach and may resize vertically, so

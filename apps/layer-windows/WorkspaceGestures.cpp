@@ -43,15 +43,19 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
     uint64_t generation=0,motion=0;
     J lastRelease,lastCancel,lastCaptureLoss,lastDown;
     uint64_t contactVersion=0,contactToken=0;
+    NativeInput::InputPointerSource inputSource{nullptr};
+    NativeInput::PointerPoint inputDown{nullptr};
+    event_token inputPressed{},inputMoved{};
     struct Edge{
         uint32_t pointer=0;Input::Pointer contact{nullptr};hstring device,contactClass;
         bool vertical=false,hold=false,claimed=false;Point at{};uint64_t time=0;
+        std::optional<Point> inputOffset;
         std::vector<weak_ref<UIElement>> path;
         std::vector<std::pair<weak_ref<UIElement>,ManipulationModes>> scrolls;
     };
     std::optional<Edge> edge;
     uint64_t edgeSerial=0;
-    J lastEdge;
+    J lastEdge,lastEdgeReply,lastEdgeInput;
     static hstring deviceName(NativeInput::PointerDeviceType type){
         return type==NativeInput::PointerDeviceType::Mouse?L"mouse":type==NativeInput::PointerDeviceType::Pen?L"pen":L"touch";
     }
@@ -75,8 +79,11 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
         if(lastCancel.Size())value.Insert(L"last_cancel",lastCancel);
         if(lastCaptureLoss.Size())value.Insert(L"last_capture_loss",lastCaptureLoss);
         if(edge)value.Insert(L"edge",O({{L"contact",S(edge->contactClass)},{L"device",S(edge->device)},{L"vertical",B(edge->vertical)},
+            {L"position",point(edge->at)},{L"input_mapped",B(edge->inputOffset.has_value())},
             {L"hold",B(edge->hold)},{L"claimed",B(edge->claimed)},{L"captured",B(PointerGesture::Captured(root,edge->pointer))}}));
         if(lastEdge.Size())value.Insert(L"last_edge",lastEdge);
+        if(lastEdgeReply.Size())value.Insert(L"edge_reply",lastEdgeReply);
+        if(lastEdgeInput.Size())value.Insert(L"edge_input",lastEdgeInput);
         AutomationProperties::SetHelpText(root,value.Stringify());
     }
     bool current()const{
@@ -107,7 +114,7 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
         root.DispatcherQueue().TryEnqueue(Microsoft::UI::Dispatching::DispatcherQueuePriority::Low,
             [weak=weak_from_this(),epoch]{if(auto self=weak.lock();self&&self->generation==epoch&&!self->pointer){self->ignoreClick=false;self->evidence();}});
     }
-    ~Impl(){if(timer)timer.Stop();if(menu)menu.Hide();}
+    ~Impl(){stopInput();if(timer)timer.Stop();if(menu)menu.Hide();}
     A viewport()const{return point({float(root.ActualWidth()),float(root.ActualHeight())});}
     void chrome(J const& event){
         if(!data->input)return;
@@ -176,8 +183,11 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
         auto text=to_string(O({{L"type",S(L"edge_contact")},{L"phase",S(phase)},{L"kind",S(edge->device)},
             {L"contact",S(edge->contactClass)},{L"position",point(edge->at)},{L"viewport",viewport()}}).Stringify());
         text=JsonUnsignedFields(std::move(text),{{"id",edge->pointer},{"time_ns",edge->time}});
-        data->edges(std::move(text),[weak=weak_from_this(),serial=edgeSerial,phase=std::wstring(phase)](int32_t bits){
-            if(auto self=weak.lock())self->edgeReply(serial,phase,bits);
+        data->edges(std::move(text),[weak=weak_from_this(),serial=edgeSerial,phase=std::wstring(phase),time=edge->time](int32_t bits){
+            if(auto self=weak.lock()){
+                if(self->trace)self->lastEdgeReply=O({{L"phase",S(phase.c_str())},{L"bits",N(bits)},{L"time",N(double(time))}});
+                self->edgeReply(serial,phase,bits);self->evidence();
+            }
         });
     }
     void edgeReply(uint64_t serial,std::wstring const& phase,int32_t bits){
@@ -215,6 +225,40 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
             edge->scrolls.emplace_back(weak,element.ManipulationMode());element.ManipulationMode(ManipulationModes::None);
         }
     }
+    void mapInput(){
+        if(edge&&inputDown&&edge->pointer==inputDown.PointerId()&&edge->time==inputDown.Timestamp()*1000){
+            auto at=inputDown.Position();edge->inputOffset=Point{edge->at.X-at.X,edge->at.Y-at.Y};
+        }
+    }
+    void startInput(){
+        if(inputSource||!root.XamlRoot())return;
+        inputSource=NativeInput::InputPointerSource::GetForIsland(root.XamlRoot().ContentIsland());
+        if(inputSource)inputPressed=inputSource.PointerPressed([weak=weak_from_this()](auto&&,NativeInput::PointerEventArgs const& e){
+            if(auto self=weak.lock()){self->inputDown=e.CurrentPoint();self->mapInput();}
+        });
+    }
+    void stopInputMoves(){if(inputSource&&inputMoved.value){inputSource.PointerMoved(inputMoved);inputMoved={};}}
+    void stopInput(){
+        stopInputMoves();if(inputSource){inputSource.PointerPressed(inputPressed);inputSource=nullptr;}inputDown=nullptr;
+    }
+    void startInputMoves(){
+        if(!inputSource||inputMoved.value)return;
+        inputMoved=inputSource.PointerMoved([weak=weak_from_this()](auto&&,NativeInput::PointerEventArgs const& e){
+            if(auto self=weak.lock();self&&self->edge&&self->edge->inputOffset){
+                auto p=e.CurrentPoint();if(p.PointerId()!=self->edge->pointer)return;
+                if(self->trace){self->lastEdgeInput=O({{L"position",point(p.Position())},{L"time",N(double(p.Timestamp()*1000))},
+                    {L"in_contact",B(p.IsInContact())},{L"canceled",B(p.Properties().IsCanceled())}});self->evidence();}
+                if(!p.IsInContact()||p.Properties().IsCanceled())return;
+                auto at=p.Position(),offset=*self->edge->inputOffset;
+                self->edgeMotion(p,{at.X+offset.X,at.Y+offset.Y});
+            }
+        });
+    }
+    void edgeMotion(NativeInput::PointerPoint const& p,Point at){
+        auto time=p.Timestamp()*1000;if(edge->time>=time)return;
+        edge->at=at;edge->time=time;edgeSend(L"move");
+        evidence();
+    }
     void edgeDown(PointerRoutedEventArgs const& e){
         auto p=e.GetCurrentPoint(root);
         if(edge&&edge->pointer==p.PointerId())edgeEnd(L"cancel");
@@ -229,14 +273,14 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
         request.insert(request.size()-1,",\"layout\":"+to_string(object(data->model,L"layout").Stringify()));
         auto reach=capy_edge_reach(request.c_str());if(!reach)return;
         next.vertical=next.hold=(reach&2)!=0;
-        edge=std::move(next);++edgeSerial;
+        edge=std::move(next);++edgeSerial;mapInput();startInputMoves();
         if(edge->device!=L"mouse")holdEdgeScrolling();
         edgeSend(L"down");evidence();
     }
     void edgeMove(PointerRoutedEventArgs const& e){
         if(!edge||edge->pointer!=e.Pointer().PointerId())return;
         auto p=e.GetCurrentPoint(root);if(!p.IsInContact())return;
-        edge->at=p.Position();edge->time=p.Timestamp()*1000;edgeSend(L"move");
+        edgeMotion(p,p.Position());
         if(edge->claimed)e.Handled(true);
     }
     void edgeUp(PointerRoutedEventArgs const& e){
@@ -251,6 +295,7 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
         settleEdge(phase,reason);
     }
     void settleEdge(wchar_t const* phase=L"settled",wchar_t const* reason=L""){
+        stopInputMoves();
         for(auto const& [weak,mode]:edge->scrolls)if(auto element=weak.get()){
             auto owned=std::find_if(scrollModes.begin(),scrollModes.end(),[&](auto const& entry){return entry.first.get()==element;});
             if(owned!=scrollModes.end())owned->second=mode;
@@ -659,7 +704,9 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
             if(e.Key()==Windows::System::VirtualKey::Escape&&self->cancelAll(L"escape"))e.Handled(true);
             else if(!self->pointer){self->ignoreClick=false;self->rejectedPointer.reset();}
         }});
-        root.Unloaded([weak](auto&&,auto&&){if(auto self=weak.lock())self->cancelAll();});
+        root.Loaded([weak](auto&&,auto&&){if(auto self=weak.lock())self->startInput();});
+        root.Unloaded([weak](auto&&,auto&&){if(auto self=weak.lock()){self->cancelAll();self->stopInput();}});
+        if(root.IsLoaded())startInput();
     }
 };
 WorkspaceGestures::WorkspaceGestures(std::shared_ptr<WorkspaceData> data,Canvas root):impl(std::make_shared<Impl>()){
