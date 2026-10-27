@@ -2370,6 +2370,7 @@ so native pixel rounding does not accumulate into larger rows.
 Workspace group frames preserve the shared fractional allocation through their
 native subtree so display scaling cannot change Tool Set wrapping.
 Add Filter and the Layers blend control use the shared control fill.
+Add Filter and Layers blend arrows use the panel icon size.
 Tool Set uses the shared centered divider between categories and presets.
 Layer selection buttons show the shared selected face.
 Compact panel choices use bold text, including Properties and scopes.

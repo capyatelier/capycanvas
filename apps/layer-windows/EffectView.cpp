@@ -314,7 +314,7 @@ struct PropertiesView : std::enable_shared_from_this<PropertiesView> {
         addFilter=button(data,L"",[]{});addFilter.Background(data->brush(L"control_fill"));addFilter.MinHeight(data->controlHeight());addFilter.Height(data->controlHeight());addFilter.Padding({6,0,6,0});
         {StackPanel content;content.Orientation(Orientation::Horizontal);content.Spacing(data->panelMetric(L"control_spacing"));
             addFilterLabel=label(data,L"");addFilterLabel.VerticalAlignment(VerticalAlignment::Center);
-            addFilterIcon.Width(16);addFilterIcon.Height(16);content.Children().Append(addFilterIcon);content.Children().Append(addFilterLabel);addFilterArrow.Width(12);addFilterArrow.Height(12);content.Children().Append(addFilterArrow);addFilter.Content(content);}
+            addFilterIcon.Width(16);addFilterIcon.Height(16);content.Children().Append(addFilterIcon);content.Children().Append(addFilterLabel);addFilterArrow.Width(16);addFilterArrow.Height(16);content.Children().Append(addFilterArrow);addFilter.Content(content);}
         addFilter.Click([data=data,weak=make_weak(addFilter)](auto&&,auto&&){
             auto anchor=weak.get();auto model=object(object(data->state,L"layer_properties"),L"add_filter");
             if(data->updating||!anchor||!anchor.XamlRoot()||!model.Size())return;
