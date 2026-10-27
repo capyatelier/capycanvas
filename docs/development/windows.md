@@ -906,7 +906,11 @@ Failed rendering waits report pending bounds, capture and edit jobs alongside th
 shared notice, so completed work can be distinguished from a stalled operation.
 
 `scripts/test-input.ps1` compiles the C++ input queue and composition-key tests
-with `cl` and needs a Visual Studio developer shell. `TextInput.cpp` observes the
+with `cl` and needs a Visual Studio developer shell. Native numeric contacts in
+the header and workspace restore their checkpoints when the window loses focus
+or becomes blocked by a dialog. The cancellation registry retires every current
+owner before controls are disabled; ordinary pointer handoffs stay scoped to
+their pointer. `TextInput.cpp` observes the
 focused TextBox's public TSF edit notifications so overlapping syllables and a
 composition ending before routed KeyDown keep the same native key owner. The
 key tests include nested message timestamps, release before the confirming key,

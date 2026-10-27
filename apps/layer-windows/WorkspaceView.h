@@ -18,6 +18,7 @@ public:
     static void MergeLayout(Json const& model,Json const& patch);
     Json ChromeFacts(bool popupOpen);
     bool CancelGesture();
+    void CancelNativeContacts();
     void CancelPreviews();
     void SetTitlebarInsets(float left,float right,float height);
     void SetWindowId(uint64_t id);

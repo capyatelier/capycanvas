@@ -286,6 +286,8 @@ void CanvasWindow::Open() {
                     // presenting another application. Preserve the idle placement
                     // across those transitions; visible app switches still blur.
                     if(IsIconic(owner)||(IsWindowVisible(foreground)&&GetAncestor(foreground,GA_ROOTOWNER)!=owner)){
+                        if(self->header)self->header->CancelNativeContacts();
+                        if(self->workspace)self->workspace->CancelNativeContacts();
                         self->CancelGesture();self->heldKeys.clear();self->sentModifiers.store(0);
                         self->Send(R"({"type":"blur"})",CanvasCommandKind::Input);
                     }
@@ -1600,10 +1602,15 @@ void CanvasWindow::UpdatePopup() {
     bool unavailable=storage.Size()&&(!CapyUi::flag(storage,L"ready")||CapyUi::flag(storage,L"busy")||CapyUi::flag(storage,L"owner_lost")||CapyUi::flag(storage,L"closing"));
     unavailable|=CapyUi::flag(CapyUi::object(lastModel,L"windows_settings_close"),L"requested");
     bool blocked=unavailable||ModalOpen();
+    bool retire=dialogOpen.exchange(blocked)!=blocked&&blocked;
+    if(retire){
+        if(header)header->CancelNativeContacts();
+        if(workspace)workspace->CancelNativeContacts();
+    }
     canvasFocus.IsEnabled(!blocked);
     if(workspace)workspace->Root().IsHitTestVisible(!unavailable);
     if(header){header->Root().IsHitTestVisible(!unavailable);header->SetBlocked(blocked);}
-    if(dialogOpen.exchange(blocked)!=blocked&&blocked){
+    if(retire){
         heldKeys.clear();sentModifiers.store(0);Send(R"({"type":"blur"})",CanvasCommandKind::Input);
     }
     bool open=headerPopupOpen||workspacePopupOpen||screenPopupOpen||blocked;

@@ -191,6 +191,21 @@ int main() {
     std::cout<<"Capture transfer cancels every native owner once while preserving reentrant and unrelated contacts\n";
 
     {
+        PointerCancelRegistry header,workspace;int scrub=0,dial=0,slider=0,next=0;
+        int scrubValue=18,dialValue=12,sliderValue=24,cancels=0;
+        header.Observe(1,&scrub,[&]{scrubValue=9;++cancels;header.Forget(1,&scrub);header.Cancel(2);
+            header.Observe(1,&next,[&]{++cancels;});});
+        header.Observe(2,&dial,[&]{dialValue=18;++cancels;header.Forget(1,&scrub);});
+        workspace.Observe(1,&slider,[&]{sliderValue=20;++cancels;workspace.Cancel(1);});
+        assert(header.CancelAll()&&workspace.CancelAll());
+        assert(scrubValue==9&&dialValue==18&&sliderValue==20&&cancels==3);
+        assert(!workspace.CancelAll());
+        header.Cancel(1);assert(cancels==4);
+        assert(!header.CancelAll());
+    }
+    std::cout<<"Native lifecycle retirement restores every presenter contact and preserves future ownership\n";
+
+    {
         ThumbnailOwners<std::string,std::string> thumbnails;int list,face,card;
         thumbnails.Update(&list,{{"a","paint:1"}});
         thumbnails.Update(&face,{{"b","paint:2"}});

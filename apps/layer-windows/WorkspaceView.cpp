@@ -1022,6 +1022,7 @@ bool WorkspaceView::CancelGesture(){
     closed=impl->bubbles->Cancel()||closed;
     return impl->gestures->Cancel()||closed;
 }
+void WorkspaceView::CancelNativeContacts(){impl->data->pointerCancels.CancelAll();}
 void WorkspaceView::SetWindowId(uint64_t id){impl->data->windowId=id;}
 void WorkspaceView::SetGlassChanged(std::function<void()> changed){impl->glassChanged=std::move(changed);}
 void WorkspaceView::CanvasContact(bool active){impl->canvasBar->Contact(active);impl->bubbles->Wake();if(active){impl->notice->Hide();hideRevealedTooltip();}}

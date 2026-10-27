@@ -12,6 +12,7 @@ public:
     void Observe(uint32_t id,void const* owner,std::function<void()> cancel){owners[id][owner]=std::move(cancel);}
     void Forget(uint32_t id,void const* owner){auto entry=owners.find(id);if(entry!=owners.end()){entry->second.erase(owner);if(entry->second.empty())owners.erase(entry);}}
     void Cancel(uint32_t id){auto entry=owners.extract(id);if(!entry.empty())for(auto& [owner,cancel]:entry.mapped())cancel();}
+    bool CancelAll(){auto current=std::exchange(owners,{});for(auto& [id,callbacks]:current)for(auto& [owner,cancel]:callbacks)cancel();return !current.empty();}
     void Clear(){owners.clear();}
 };
 enum class PointerCompletion { Released, Canceled, CaptureLost };
