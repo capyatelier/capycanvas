@@ -1085,7 +1085,7 @@ void WorkspaceView::SetWindowResizing(bool value){
     impl->windowResizing=value;impl->resizeHandback=!value;
     ++impl->panelBridgeRevision;impl->lastPanelSurfaces=L"";
     for(auto& [id,group]:impl->groups)group.backgroundKey=L"";
-    impl->presentBackgrounds();impl->queueMeasurements();
+    impl->presentBackgrounds();impl->tracePresentation();impl->queueMeasurements();
     if(impl->glassChanged)impl->glassChanged();
 }
 WorkspaceView::Json WorkspaceView::ChromeFacts(bool popupOpen){impl->data->externalPopup=popupOpen;return J::Parse(impl->data->chrome.Stringify());}
