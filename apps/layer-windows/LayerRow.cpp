@@ -333,6 +333,7 @@ void LayerRow::refresh(){
     body.ColumnDefinitions().GetAt(5).Width({full&&selectionLayer?32.:0.,GridUnitType::Pixel});
     if(selectionLayer){auto tip=str(layer,L"load_selection_tooltip");AutomationProperties::SetName(load,tip);CapyUi::tooltip(load,tip);}
     AutomationProperties::SetItemStatus(check,flag(layer,L"selected")?data->caption(L"search",L"selected"):data->caption(L"layers",L"unselected"));
+    check.Background(flag(layer,L"selected")?selected(data):clear());
     bool hasMask=full&&flag(layer,L"has_mask");
     content.Background(clear());mask.Background(clear());
     contentEdge.update(data,flag(layer,L"content_selected"));maskEdge.update(data,flag(layer,L"mask_selected"));
