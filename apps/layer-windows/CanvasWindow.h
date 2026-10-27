@@ -174,7 +174,7 @@ private:
     bool statusFailed=false; // UI thread: readiness must not hide a reported error.
     Size desired;
     std::vector<winrt::Windows::Graphics::RectInt32> captionRegions,captionInputRegions,bubbleInputRegions;
-    bool captionRegionsValid=false;
+    bool captionRegionsValid=false,nativeSizing=false;
     winrt::Microsoft::UI::Dispatching::DispatcherQueueTimer captionRetry{nullptr};
     bool closing=false, closed=false, finishing=false, resize=false, paused=false, servicesReady=false;
     std::atomic<bool> rendererDone{false};

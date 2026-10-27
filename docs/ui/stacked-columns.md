@@ -69,11 +69,11 @@ glass transport carries receiver IDs, four corner radii and native tab bounds to
 the render worker. It applies the surface offset and display scale once, prepares
 the existing GPU chrome pipelines, and acknowledges the revision after presenting.
 Only that matching revision suppresses the native backing and shadow; controls,
-focus, scrolling and input targets remain native. `WM_ENTERSIZEMOVE` gives opaque
+focus, scrolling and input targets remain native. The first `WM_SIZING` in a native size/move loop gives opaque
 native contours and shadows ownership for the whole window resize gesture and
 suppresses GPU panel surfaces. `WM_EXITSIZEMOVE` restores the GPU scene through
 the matching presented-revision handshake. Glass turns off and on at these
-boundaries; single-step window sizing retains the usual GPU path.
+boundaries; title-bar movement and single-step window sizing retain the usual GPU path.
 Retired allocation IDs are ignored; duplicate, nonfinite or negative measurements
 are rejected. Missing current allocations clear the join. Ordinary individual
 panel drawers retain their shared drawer connection.

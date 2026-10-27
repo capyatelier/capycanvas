@@ -25,7 +25,17 @@ public static class CapyBridgeResize {
     [DllImport("user32.dll",SetLastError=true)] static extern bool MoveWindow(IntPtr window,int x,int y,int width,int height,bool repaint);
     [DllImport("user32.dll")] static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
     [DllImport("user32.dll")] static extern IntPtr SendMessage(IntPtr window,uint message,IntPtr wparam,IntPtr lparam);
-    public static void Begin(IntPtr window){SendMessage(window,0x0231,IntPtr.Zero,IntPtr.Zero);}
+    [StructLayout(LayoutKind.Sequential)] struct Rect {public int left,top,right,bottom;}
+    [DllImport("user32.dll",SetLastError=true)] static extern bool GetWindowRect(IntPtr window,out Rect rectangle);
+    public static int[] Bounds(IntPtr window){Rect r;if(!GetWindowRect(window,out r))throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());return new[]{r.left,r.top,r.right-r.left,r.bottom-r.top};}
+    public static bool Caption(IntPtr window,int x,int y){return SendMessage(window,0x84,IntPtr.Zero,new IntPtr(((long)(y&65535)<<16)|(uint)(x&65535))).ToInt64()==2;}
+    public static void Begin(IntPtr window){
+        SendMessage(window,0x0231,IntPtr.Zero,IntPtr.Zero);
+        Rect r;if(!GetWindowRect(window,out r))throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+        IntPtr rectangle=Marshal.AllocHGlobal(Marshal.SizeOf(typeof(Rect)));
+        try{Marshal.StructureToPtr(r,rectangle,false);SendMessage(window,0x0214,new IntPtr(2),rectangle);}
+        finally{Marshal.FreeHGlobal(rectangle);}
+    }
     public static void End(IntPtr window){SendMessage(window,0x0232,IntPtr.Zero,IntPtr.Zero);}
     public static Task Run(IntPtr window){return Task.Run(()=>{
         SetThreadDpiAwarenessContext(new IntPtr(-4));var timer=Stopwatch.StartNew();
@@ -95,6 +105,27 @@ try{
     Open-Column 'before-resize';$retained=Retained-Controls
     $continuing=@((Presentation).groups|Where-Object gpu_background|ForEach-Object id)
     Check ($continuing.Count -gt 0) 'Continuous resize starts with presented receivers' $continuing
+    $moveStart=[CapyBridgeResize]::Bounds($window);$caption=$null
+    $captionY=[int]($root.Current.BoundingRectangle.Top+(Model).titlebar_insets[2]*([CapyRowPointer]::GetDpiForWindow($window)/96.)*.5)
+    for($x=$moveStart[0]+100;$x-lt$moveStart[0]+$moveStart[2]-200;$x+=8){
+        if([CapyBridgeResize]::Caption($window,$x,$captionY)){$caption=@($x,$captionY);break}
+    }
+    Check ($null-ne$caption) 'Titlebar move uses measured native caption hit region' $caption
+    $moveSamples=[Collections.Generic.List[object]]::new()
+    [CapyRowPointer]::Down('mouse',$caption[0],$caption[1])
+    try{
+        for($step=1;$step-le6;$step++){
+            [CapyRowPointer]::Move($caption[0]+12*$step,$caption[1]+6*$step)
+            Wait-Until {$box=[CapyBridgeResize]::Bounds($window);$box[0]-ge$moveStart[0]+8*$step} 'SendInput titlebar drag did not move owned window'
+            $native=Presentation;$receivers=@($native.groups|Where-Object {$_.id -in $continuing})
+            $moveSamples.Add(@{qpc=[Diagnostics.Stopwatch]::GetTimestamp();step=$step;bounds=[CapyBridgeResize]::Bounds($window);window_resizing=$native.window_resizing;native_resize_pending=$native.native_resize_pending;gpu_panels_suppressed=$native.gpu_panels_suppressed;panel_revision=$native.panel_revision;presented_panel_revision=$native.presented_panel_revision;receivers=$receivers})
+            Check (!$native.window_resizing -and !$native.native_resize_pending -and !$native.gpu_panels_suppressed -and $native.panel_revision -eq $native.presented_panel_revision -and $receivers.Count -eq $continuing.Count -and @($receivers|Where-Object {!$_.gpu_background -or $_.native_bridge_background}).Count -eq 0) 'Titlebar movement retains presented GPU receivers' $moveSamples[$moveSamples.Count-1]
+        }
+    }finally{[CapyRowPointer]::Up();$moveSamples|ConvertTo-Json -Depth 30|Set-Content (Join-Path $run 'titlebar-move-samples.json')}
+    $moveEnd=[CapyBridgeResize]::Bounds($window)
+    Check ($moveEnd[0] -gt $moveStart[0]+30 -and $moveEnd[2] -eq $moveStart[2] -and $moveEnd[3] -eq $moveStart[3]) 'Real titlebar drag changes position without resizing' $moveEnd
+    Save-State 'titlebar-move-settled';Capture 'titlebar-move' -Composed -WithModel
+    [CapyWindowExercise]::MoveWindow($window,40,40,1500,1000,$true)|Out-Null
     [CapyBridgeResize]::Begin($window)
     Wait-Until {
         $native=Presentation

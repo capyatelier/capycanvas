@@ -117,12 +117,16 @@ CanvasWindow::CanvasWindow(std::function<void()> create,std::function<void(uint6
 }
 LRESULT CALLBACK CanvasWindow::WindowMessage(HWND window,UINT message,WPARAM wparam,LPARAM lparam,UINT_PTR id,DWORD_PTR data){
     if(message==WM_SYSCOMMAND&&(wparam&0xFFF0)==SC_KEYMENU&&lparam==0)return 0;
-    if(message==WM_ENTERSIZEMOVE||message==WM_EXITSIZEMOVE){
+    if(message==WM_ENTERSIZEMOVE||message==WM_SIZING||message==WM_EXITSIZEMOVE){
         auto self=reinterpret_cast<CanvasWindow*>(data);
         if(self&&!self->closing&&!self->closed&&self->workspace){
-            try{self->workspace->SetWindowResizing(message==WM_ENTERSIZEMOVE);self->CollectGlass();}
-            catch(hresult_error const& error){self->Fail(to_string(error.message()));}
-            catch(std::exception const& error){self->Fail(error.what());}
+            if(message==WM_ENTERSIZEMOVE)self->nativeSizing=false;
+            else if((message==WM_SIZING&&!self->nativeSizing)||(message==WM_EXITSIZEMOVE&&self->nativeSizing)){
+                self->nativeSizing=message==WM_SIZING;
+                try{self->workspace->SetWindowResizing(self->nativeSizing);self->CollectGlass();}
+                catch(hresult_error const& error){self->Fail(to_string(error.message()));}
+                catch(std::exception const& error){self->Fail(error.what());}
+            }
         }
     }
     if(message==WM_NCDESTROY)RemoveWindowSubclass(window,WindowMessage,id);
