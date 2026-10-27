@@ -57,7 +57,7 @@ struct ControlInput: NSViewRepresentable {
             guard enabled, contact != nil else { super.mouseDown(with: event); return }
             if key != nil { window?.makeFirstResponder(self) }; keyboardFocus = false
             if event.clickCount == 2, let doublePress { doublePress(convert(event.locationInWindow, from: nil), bounds.size); return }
-            active = true; source = event.subtype == .tabletPoint || event.type == .tabletPoint ? "pen" : "mouse"
+            active = true; source = event.pointerSubtype == .tabletPoint ? "pen" : "mouse"
             send("down", event)
         }
         override func mouseDragged(with event: NSEvent) { if active { send("move", event) } }

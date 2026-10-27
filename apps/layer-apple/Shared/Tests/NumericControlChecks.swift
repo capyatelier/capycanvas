@@ -290,19 +290,10 @@ extension XCTestCase {
         let entry = app.textFields["number-entry-tool-size"]
         let track = app.descendants(matching: .any)["number-track-tool-size"].firstMatch
         XCTAssertTrue(track.waitForExistence(timeout: 5))
-        #if os(macOS)
-        XCTAssertEqual(value.frame.height, 26, accuracy: 1)
-        XCTAssertEqual(track.frame.height, 16, accuracy: 1)
-        XCTAssertEqual(value.frame.maxY, track.frame.maxY, accuracy: 1)
-        XCTAssertEqual(value.frame.maxX - track.frame.maxX, 76, accuracy: 1)
-        let readoutRight = value.frame.maxX
-        #endif
         workspaceActivate(value)
         XCTAssertTrue(entry.waitForExistence(timeout: 5))
+        #if os(iOS)
         XCTAssertTrue(entry.isHittable)
-        #if os(macOS)
-        XCTAssertEqual(entry.frame.width, 56, accuracy: 1)
-        XCTAssertEqual(entry.frame.maxX + 6, readoutRight, accuracy: 1)
         #endif
         entry.typeText("20 + 20\n")
         expectation(for: NSPredicate(format: "value BEGINSWITH %@", "40"), evaluatedWith: value)

@@ -35,7 +35,7 @@ import UIKit
     private static var pointerActivation: (source: String, time: TimeInterval)? {
         #if canImport(AppKit)
         guard let event = NSApp.currentEvent, [.leftMouseUp, .leftMouseDown, .tabletPoint].contains(event.type) else { return nil }
-        return (event.subtype == .tabletPoint || event.type == .tabletPoint ? "pen" : "mouse", event.timestamp)
+        return (event.pointerSubtype == .tabletPoint ? "pen" : "mouse", event.timestamp)
         #else
         defer { pointer = nil }
         return pointer.map { ($0.source, $0.time) }

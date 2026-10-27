@@ -33,7 +33,7 @@ private final class ScrollPointerInput {
     init() {
         monitor = NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved, .leftMouseDown, .rightMouseDown, .scrollWheel, .tabletPoint, .tabletProximity]) { [weak self] event in
             guard let self else { return event }
-            let next = event.type != .tabletPoint && event.type != .tabletProximity && event.subtype != .tabletPoint
+            let next = event.pointerSubtype != .tabletPoint && event.pointerSubtype != .tabletProximity
             if mouse != next { mouse = next; for controller in controllers.allObjects { controller.indicators() } }
             return event
         }
@@ -71,7 +71,7 @@ private final class PenScrollController: NSObject, NSGestureRecognizerDelegate {
         if scroll.hasVerticalScroller != vertical { scroll.hasVerticalScroller = vertical }
     }
     func gestureRecognizer(_ recognizer: NSGestureRecognizer, shouldAttemptToRecognizeWith event: NSEvent) -> Bool {
-        guard event.type == .leftMouseDown, event.subtype == .tabletPoint, let scroll,
+        guard event.type == .leftMouseDown, event.pointerSubtype == .tabletPoint, let scroll,
               let hit = scroll.hitTest(scroll.superview?.convert(event.locationInWindow, from: nil) ?? event.locationInWindow),
               hit.enclosingScrollView === scroll, !(hit is NSTextView), !(hit is NSControl) else { return false }
         origin = scroll.contentView.bounds.origin

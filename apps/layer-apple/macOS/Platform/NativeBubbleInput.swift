@@ -30,7 +30,7 @@ import AppKit
         default: break
         }
         let point = marker.convert(event.locationInWindow, from: nil)
-        let device: ReorderDevice = event.subtype == .tabletPoint ? .pen : .mouse
+        let device: ReorderDevice = event.pointerSubtype == .tabletPoint ? .pen : .mouse
         defer { NSCursor.setHiddenUntilMouseMoves(model.hidesPointer(at: point, pen: device == .pen)) }
         model.hold = { [weak self] in self?.timer?.invalidate(); self?.timer = nil }
         switch event.type {

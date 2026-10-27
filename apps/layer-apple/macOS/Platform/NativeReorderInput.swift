@@ -132,7 +132,7 @@ final class ReorderInputView: NSView, NSGestureRecognizerDelegate {
             guard let target = model.source(at: point) else {
                 return false
             }
-            let device: ReorderDevice = event.subtype == .tabletPoint ? .pen : .mouse
+            let device: ReorderDevice = event.pointerSubtype == .tabletPoint ? .pen : .mouse
             model.contact.prepare(target, device: device, origin: point, activate: !edge.defersSelection); downEvent = event
             lastPoint = nil
         }
@@ -287,7 +287,7 @@ final class ReorderInputView: NSView, NSGestureRecognizerDelegate {
         guard let marker, event.window === window, let coordinator else { return event }
         let point = marker.convert(event.locationInWindow, from: nil)
         let time = UInt64(max(0, event.timestamp) * 1_000_000_000)
-        let pen = event.type == .tabletPoint || event.subtype == .tabletPoint
+        let pen = event.pointerSubtype == .tabletPoint
         let phase: NSEvent.EventType
         if event.type == .tabletPoint {
             if let contact, contact.device != .pen { return event }

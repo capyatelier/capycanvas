@@ -91,6 +91,10 @@ roll, as Apple documents in
 
 ## Keyboard and system gestures
 
+AppKit classifies standalone tablet events by type and reads `subtype` only on
+mouse events. Keyboard, wheel and gesture events pass through window monitors
+without accessing tablet-only event properties.
+
 AppKit forwards the system's key repeats. UIKit reports one press per key, so the
 iPad canvas repeats a held non-modifier key itself after 0.4 s and then every
 0.1 s while it keeps key focus; release, a modifier change, focus loss and scene

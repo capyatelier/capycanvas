@@ -2,6 +2,20 @@ import AppKit
 import IOKit.hidsystem
 import QuartzCore
 
+extension NSEvent {
+    var pointerSubtype: EventSubtype? {
+        switch type {
+        case .tabletPoint: return .tabletPoint
+        case .tabletProximity: return .tabletProximity
+        case .leftMouseDown, .leftMouseUp, .leftMouseDragged,
+             .rightMouseDown, .rightMouseUp, .rightMouseDragged,
+             .otherMouseDown, .otherMouseUp, .otherMouseDragged, .mouseMoved:
+            return subtype
+        default: return nil
+        }
+    }
+}
+
 @MainActor final class MacInput {
     private weak var view: MacCanvasView?
     private let store: EditorStore
@@ -27,7 +41,7 @@ import QuartzCore
 
     init(view: MacCanvasView, store: EditorStore) { self.view = view; self.store = store }
     private func tablet(_ event: NSEvent) -> Bool {
-        event.type == .tabletPoint || event.subtype == .tabletPoint
+        event.pointerSubtype == .tabletPoint
     }
     private func position(_ event: NSEvent) -> CGPoint {
         guard let view else { return .zero }
@@ -53,7 +67,7 @@ import QuartzCore
         NativePenDevice(id: id, key: sources[event.deviceID] ?? "appkit:pen")
     }
     func observeCalibration(_ event: NSEvent) {
-        if event.type == .tabletProximity || event.subtype == .tabletProximity { proximity(event); return }
+        if event.pointerSubtype == .tabletProximity { proximity(event); return }
         guard tablet(event), contact == nil else { return }
         let terminal = event.type == .leftMouseUp || event.type == .tabletPoint && event.pressure == 0 && !event.buttonMask.contains(.penTip)
         guard let bounds = store.penResponseBounds else {
@@ -78,7 +92,7 @@ import QuartzCore
         view?.wake()
     }
     func mouse(_ event: NSEvent, phase: Double) {
-        if event.subtype == .tabletProximity { proximity(event); return }
+        if event.pointerSubtype == .tabletProximity { proximity(event); return }
         if tablet(event), sensorDevice == event.deviceID { return }
         // Tablet side buttons arrive as right/other mouse events. They must
         // neither start navigation nor disturb the tip's captured contact.
@@ -150,7 +164,7 @@ import QuartzCore
         }
     }
     func hover(_ event: NSEvent) {
-        if event.subtype == .tabletProximity { proximity(event); return }
+        if event.pointerSubtype == .tabletProximity { proximity(event); return }
         if contact != nil {
             if tablet(event), event.deviceID == contact?.device, event.pressure == 0,
                 !event.buttonMask.contains(.penTip) {
