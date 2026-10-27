@@ -1,3 +1,4 @@
+from contextlib import nullcontext
 import importlib.util
 import fcntl
 import io
@@ -180,11 +181,59 @@ class GpuLifecycleTests(unittest.TestCase):
 
     def test_running_gpu_vm_cannot_silently_change_an_explicit_card_request(self):
         self.machine.gpu.write_text("0000:03:00.0\n")
-        with patch.object(vm, "running", return_value=True):
+        with patch.object(vm, "running", return_value=True), patch.object(vm, "prepare_gpu_display") as display:
             vm.boot_locked(self.machine, False, "auto")
             vm.boot_locked(self.machine, False, "0000:03:00.0")
+            vm.boot_locked(self.machine, False, None)
+            self.assertEqual(display.call_count, 3)
             with self.assertRaises(SystemExit):
                 vm.boot_locked(self.machine, False, "0000:04:00.0")
+
+    def test_fresh_gpu_boot_prepares_display_after_driver_restart(self):
+        order = []
+        with patch.object(vm, "running", return_value=False), \
+                patch.object(vm.resource, "getrlimit", return_value=(vm.resource.RLIM_INFINITY,) * 2), \
+                patch.object(vm.gpu_pool, "reserve", return_value=nullcontext(("card", None))), \
+                patch.object(vm, "launch"), patch.object(vm, "wait_for_ssh"), patch.object(vm, "prepare"), \
+                patch.object(vm, "prepare_gpu_driver", side_effect=lambda machine: order.append("driver")), \
+                patch.object(vm, "prepare_gpu_display", side_effect=lambda machine: order.append("display")):
+            vm.boot_locked(self.machine, False, "auto")
+        self.assertEqual(order, ["driver", "display"])
+
+    def test_software_boot_does_not_install_a_hardware_display_task(self):
+        with patch.object(vm, "running", return_value=False), patch.object(vm, "launch"), \
+                patch.object(vm, "wait_for_ssh"), patch.object(vm, "prepare"), \
+                patch.object(vm, "prepare_gpu_display") as display:
+            vm.boot_locked(self.machine, False, None)
+        display.assert_not_called()
+
+    def test_display_task_restores_at_logon_and_stages_outside_synced_tree(self):
+        record = {"success": True, "display": {"adapter": "NVIDIA assigned card", "primary": True,
+                   "width": 1920, "height": 1200, "refreshHz": 120}}
+        with patch.object(vm, "DISPLAY", "1920x1200"), \
+                patch.object(vm, "guest", return_value=SimpleNamespace(stdout=json.dumps(record))) as guest, \
+                patch.object(vm, "guest_script") as script:
+            vm.prepare_gpu_display(self.machine)
+        self.assertEqual(json.loads((self.machine.directory / "display.json").read_text()), record)
+        self.assertEqual(sum("input" in call.kwargs for call in guest.call_args_list), 2)
+        command = script.call_args.args[1]
+        self.assertIn("C:\\capycanvas-vm-display", command)
+        self.assertIn("-AtLogOn -User capy", command)
+        self.assertIn("-RunLevel Highest", command)
+        self.assertIn("-Width 1920 -Height 1200", command)
+        self.assertIn("Remove-Item -LiteralPath $receipt", command)
+
+    def test_display_receipt_rejects_software_primary_wrong_size_and_refresh(self):
+        display = {"adapter": "NVIDIA assigned card", "primary": True,
+                   "width": 2560, "height": 1600, "refreshHz": 120}
+        for change in ({"adapter": "Microsoft Basic Display"}, {"primary": False},
+                       {"width": 1920}, {"refreshHz": 60}):
+            with self.subTest(change=change), patch.object(vm, "DISPLAY", "2560x1600"), \
+                    patch.object(vm, "guest", return_value=SimpleNamespace(stdout=json.dumps(
+                        {"success": True, "display": {**display, **change}}))), \
+                    patch.object(vm, "guest_script"), self.assertRaises(SystemExit):
+                vm.prepare_gpu_display(self.machine)
+        self.assertFalse((self.machine.directory / "display.json").exists())
 
     def test_insufficient_locked_memory_fails_before_claiming_a_card_or_launching(self):
         with patch.object(vm, "running", return_value=False), \

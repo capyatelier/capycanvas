@@ -131,29 +131,53 @@ suite passes only if each passes alone, and `results.json` lists them as
 `parallel_failures`. `fixtures --hardware-gpu` runs the normal app with
 software adapters disabled and requires actual hardware-adapter evidence in each
 selected rendered journey. Use explicit render fixtures; intentional GPU-startup
-failure journeys belong in the ordinary fixture matrix. The guest desktop stays
-on the emulated display adapter, so the compositor copies each canvas frame from
-the passed-through card and can display it more than a second after the app
-presents it; pixel checks wait for the displayed frame. Both commands accept
+failure journeys belong in the ordinary fixture matrix. Hardware startup
+configures the assigned NVIDIA card as the primary desktop
+at the configured display size and 120 Hz. The emulated adapter remains a
+secondary management display. The helper verifies the actual adapter, primary
+flag, size, refresh and monitor scale; a renderer adapter alone is insufficient.
+Both commands accept
 `--no-build` only when synced build inputs and executable/DLL hashes match. These
 checks do not qualify physical pens, HDR output, display combinations or frame
 rate targets.
 
+### Hardware desktop
+
+Headless NVIDIA workstation cards use the installed signed driver's NVAPI EDID
+[emulation](https://www.nvidia.com/content/Control-Panel-Help/vLatest/en-us/mergedProjects/nvwks/To_force_an_EDID_at_a_display_connection.htm).
+Hardware startup selects one connector on the single assigned GPU,
+sets the configured `CAPYCANVAS_VM_DISPLAY` size at 120 Hz and makes it primary.
+It reuses an exact helper EDID and refuses unrelated displays or EDIDs rather
+than replacing them. Only helper-owned EDIDs can be updated when the configured
+size changes. Unsupported timings fail before changing the display. Other GPU
+vendors need a supported desktop setup before using this hardware workflow.
+
+The EDID override lasts for one boot session. The helper installs
+`capycanvas-hardware-display`, an elevated interactive logon task, under the
+private `capy` account. It stores the script and connector ownership under
+`C:\capycanvas-vm-display`, outside the synced source tree. Every hardware start,
+including an already-running VM, restores and verifies the desktop under the
+VM lock; the logon task restores it after a guest restart. No GPU reset, driver
+replacement or guest reboot is required for desktop configuration.
+
+`receipt.json` in that guest directory and `display.json` in the VM's host state
+record the adapter, Windows display device, primary flag, origin, dimensions,
+refresh, effective scale/DPI, driver and boot time. Configuration preserves the
+monitor's Windows scale and reports its actual value; a newly attached monitor
+can choose a different scale from the emulated display. QEMU screenshots still
+show the secondary emulated output. Use composed app captures on the hardware
+monitor when validating visible rendering.
+
+A 120 Hz desktop is a display configuration, not evidence that the app produces
+120 changing frames per second. Performance and physical input still require
+their normal measurements. Software VMs keep their existing display path.
+
 ### Desktop presentation for performance
 
-A hardware rendering adapter does not establish a hardware desktop. The default
-guest keeps QEMU's Microsoft Basic Display Adapter as its desktop output even
-when the app renders on the passed-through GPU. Cross-adapter presentation can
-then dominate buffer acquisition. Check the active desktop adapter and the
-monitor containing the app before interpreting window motion rates.
-
-For headless NVIDIA workstation boards, the driver supports
-[EDID emulation](https://www.nvidia.com/content/Control-Panel-Help/vLatest/en-us/mergedProjects/nvwks/To_force_an_EDID_at_a_display_connection.htm).
-Attach a validated EDID to an unused connector and activate that monitor at the
-required resolution and refresh rate. Make it primary and keep the emulated
-adapter as a secondary management display. Never replace an existing connected
-display or change another guest's GPU. NVAPI's `NvAPI_GPU_SetEDID` override lasts
-for the boot session; verify and restore it after a guest restart.
+A hardware rendering adapter alone does not establish a hardware desktop.
+Cross-adapter presentation through the emulated output can dominate buffer
+acquisition. Verify the monitor containing the app before interpreting window
+motion rates.
 
 Run `apps/layer-windows/scripts/probe-displays.ps1` in the guest's interactive test
 desktop to verify the adapter, primary flag, coordinates, resolution and refresh.

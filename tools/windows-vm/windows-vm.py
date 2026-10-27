@@ -450,6 +450,8 @@ def boot_locked(machine, gui, gpu):
             sys.exit(f"The {machine.name} VM is running without a reserved GPU; stop it before using --gpu.")
         if gpu and gpu != "auto" and machine.gpu.read_text().strip() != gpu:
             sys.exit(f"The {machine.name} VM already has another GPU; stop it before changing cards.")
+        if machine.gpu.exists():
+            prepare_gpu_display(machine)
         return
     if not (BASE / "disk.qcow2").exists():
         sys.exit(f"The base image does not exist; run `{PROGRAM} create`.")
@@ -468,6 +470,7 @@ def boot_locked(machine, gui, gpu):
     prepare(machine)
     if gpu:
         prepare_gpu_driver(machine)
+        prepare_gpu_display(machine)
 
 
 def prepare_gpu_driver(machine):
@@ -502,6 +505,58 @@ def prepare_gpu_driver(machine):
     guest(machine, f"Remove-Item -LiteralPath '{destination}' -Recurse -Force")
     restart(machine)
     stamp.write_text(version + "\n")
+
+
+def prepare_gpu_display(machine):
+    width, height = map(int, DISPLAY.split("x"))
+    directory = r"C:\capycanvas-vm-display"
+    receipt = directory + r"\receipt.json"
+    with claim(machine):
+        guest_script(machine, f"""$ErrorActionPreference='Stop'
+$ProgressPreference='SilentlyContinue'
+$task='capycanvas-hardware-display'
+$receipt='{receipt}'
+$deadline=(Get-Date).AddSeconds(120)
+while (!(Get-Process explorer -IncludeUserName -ErrorAction SilentlyContinue | Where-Object UserName -Like '*\\{USER}')) {{
+    if ((Get-Date) -ge $deadline) {{ throw 'The interactive desktop did not start' }}
+    Start-Sleep 1
+}}
+while ((Get-ScheduledTask $task -ErrorAction SilentlyContinue).State -eq 'Running') {{
+    if ((Get-Date) -ge $deadline) {{ throw 'Hardware display task is still running' }}
+    Start-Sleep 1
+}}
+""", timeout=180)
+        guest(machine, f"New-Item -ItemType Directory -Force '{directory}' | Out-Null")
+        for name in ("hardware-display.cs", "hardware-display.ps1"):
+            guest(machine, f"[IO.File]::WriteAllText('{directory}\\{name}', [Console]::In.ReadToEnd())",
+                  input=(GUEST_FILES / name).read_text(), text=True)
+        guest_script(machine, f"""$ErrorActionPreference='Stop'
+$ProgressPreference='SilentlyContinue'
+$task='capycanvas-hardware-display'
+$receipt='{receipt}'
+$deadline=(Get-Date).AddSeconds(120)
+Remove-Item -LiteralPath $receipt -Force -ErrorAction SilentlyContinue
+$action=New-ScheduledTaskAction -Execute '{GUEST_PWSH}' -Argument '-NoProfile -WindowStyle Hidden -File {directory}\\hardware-display.ps1 -Width {width} -Height {height} -Receipt {receipt}'
+$principal=New-ScheduledTaskPrincipal -UserId {USER} -LogonType Interactive -RunLevel Highest
+$trigger=New-ScheduledTaskTrigger -AtLogOn -User {USER}
+$settings=New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 3) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
+Register-ScheduledTask $task -Action $action -Principal $principal -Trigger $trigger -Settings $settings -Force | Out-Null
+Start-ScheduledTask $task
+while (!(Test-Path -LiteralPath $receipt)) {{
+    if ((Get-Date) -ge $deadline) {{ throw 'Hardware display receipt timed out' }}
+    Start-Sleep 1
+}}
+$result=Get-Content -LiteralPath $receipt -Raw|ConvertFrom-Json
+if (!$result.success) {{ throw $result.error }}
+$result|ConvertTo-Json -Depth 5
+""", timeout=180)
+        result = guest(machine, f"Get-Content -LiteralPath '{receipt}' -Raw", capture_output=True, text=True)
+        record = json.loads(result.stdout)
+        display = record.get("display", {})
+        if not record.get("success") or not display.get("primary") or "NVIDIA" not in display.get("adapter", "") or (
+                display.get("width"), display.get("height"), display.get("refreshHz")) != (width, height, 120):
+            sys.exit("Hardware desktop receipt does not match the requested NVIDIA primary mode.")
+        (machine.directory / "display.json").write_text(json.dumps(record, indent=2))
 
 
 def start(args):
