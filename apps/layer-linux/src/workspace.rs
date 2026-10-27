@@ -1084,12 +1084,12 @@ impl Workspace {
             gtk::IconTheme::for_display(&gdk::Display::default().unwrap())
                 .add_resource_path("/dev/layer/icons");
         });
-        let window = adw::ApplicationWindow::builder()
-            .application(app)
-            .title(localization.language().app_name())
-            .default_width(1200)
-            .default_height(900)
-            .build();
+        let window: adw::ApplicationWindow = glib::Object::builder::<crate::window::Window>()
+            .property("application", app)
+            .property("title", localization.language().app_name())
+            .property("default-width", 1200)
+            .property("default-height", 900)
+            .build().upcast();
         window.set_icon_name(Some("art.capycanvas.CapyCanvas"));
         static NEXT_WINDOW: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
         window.add_css_class("capy-workspace");
@@ -1651,6 +1651,17 @@ impl Workspace {
         );
     }
     fn install_chrome(self: &Rc<Self>) {
+        self.window.connect_local("outline-changed", false, glib::clone!(
+            #[weak(rename_to = this)] self,
+            #[upgrade_or] None,
+            move |_| {
+                if this.area.is_realized() {
+                    this.update_backdrop();
+                    this.wake();
+                }
+                None
+            }
+        ));
         self.window.connect_fullscreened_notify(glib::clone!(
             #[weak(rename_to = this)]
             self,

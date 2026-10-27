@@ -311,7 +311,7 @@ pub fn request_parent_commit(area: &gtk::Picture) {
 pub struct Geometry {
     pub position: [i32; 2],
     pub scale: i32,
-    pub rounded: bool,
+    pub corner_radius: f32,
 }
 
 impl Geometry {
@@ -320,16 +320,15 @@ impl Geometry {
         let (dx, dy) = native.surface_transform();
         let root = native.dynamic_cast::<gtk::Widget>().expect("native widget");
         let bounds = area.compute_bounds(&root).expect("canvas in native window");
-        let rounded = !root
-            .downcast_ref::<gtk::Window>()
-            .is_some_and(|w| w.is_maximized() || w.is_fullscreen());
+        let corner_radius = root.downcast_ref::<crate::window::Window>()
+            .map_or(0., crate::window::Window::corner_radius);
         Self {
             position: [
                 (bounds.x() as f64 + dx).round() as i32,
                 (bounds.y() as f64 + dy).round() as i32,
             ],
             scale: area.scale_factor(),
-            rounded,
+            corner_radius,
         }
     }
 }

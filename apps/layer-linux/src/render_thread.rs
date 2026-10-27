@@ -1932,6 +1932,7 @@ impl Worker {
         Ok(())
     }
     fn set_view(&mut self, view: ViewState, geometry: Geometry, surround: [f32; 4]) {
+        self.presenter.set_corner_radius(geometry.corner_radius * geometry.scale as f32);
         self.last_view = Some((view, surround));
         self.geometry_changed |= self.geometry != Some(geometry);
         self.geometry = Some(geometry);
@@ -1996,11 +1997,6 @@ impl Worker {
         self.cursor_scale = frame.geometry.scale as f32;
         self.presenter
             .set_cursor(self.renderer.device(), &self.cursor, self.cursor_scale);
-        self.presenter.set_corner_radius(if frame.geometry.rounded {
-            12.0 * self.cursor_scale
-        } else {
-            0.0
-        });
         self.pending_present = self.chrome.changed() || self.geometry_changed
             || self.presenter.needs_present(&self.renderer, frame.view, frame.surround);
         let target = if self.pending_present {

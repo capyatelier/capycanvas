@@ -68,14 +68,25 @@ mapped lifetime. Startup, parking, failed rendering, and renderer replacement
 therefore show the theme background instead of exposing other windows. GTK starts
 opaque and becomes transparent only after that background has been installed;
 synchronized subsurfaces publish its pixels and geometry with GTK's parent commit.
-Nine slices retain the 12px window corners while stretching a tiny immutable
-shared-memory sample (2,500 bytes at scale 1, bounded below 150 KiB), independent of
-window area and tab count. Resizing reuses the sample; palette, scale, and corner
-changes replace it. No old drawing image or inactive GPU worker is kept for this.
+Nine slices retain GTK's window corners while stretching a tiny immutable
+shared-memory sample (3,844 bytes at scale 1 with libadwaita's default 15px radius),
+independent of window area and tab count. The native window caches its resolved
+GTK frame radius and supplies it to both the surround and GPU canvas, including
+fractional radii. CSS changes invalidate the cache and update both surfaces;
+maximized, fullscreen and tiled states follow the toolkit's square frame.
+Resizing reuses the sample; palette, scale, and corner changes replace it.
+No old drawing image or inactive GPU worker is kept for this.
 This requires the stable Wayland viewporter interface in addition to the existing
 subcompositor/shm support. If background initialization fails, keep GTK opaque
 and report the startup failure. A later update failure uses the same opaque
 fallback; successful updates or canvas restart restore the live drawing view.
+
+The GTK frame owns the client-side outline on every Wayland desktop. Desktop
+names do not select a radius. Compositor effects can apply additional rounding;
+those effects remain compositor-owned. `native_window_corner_geometry` checks
+live frame changes, fractional radii, shadowless outlines and window states in
+both themes. `native_canvas_background_during_startup_and_tab_switch` checks the
+composed corners through startup, tab changes and renderer restart at 1x and 2x.
 
 Keep one Workspace/native window and its retained controls. Store the active
 GpuCanvas in its existing slot and inactive GpuCanvas sessions in a tab owner.

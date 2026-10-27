@@ -25,7 +25,9 @@ fn native_canvas_background_during_startup_and_tab_switch() {
         .build();
     behind.set_widget_name("transparency-sentinel");
     let css = gtk::CssProvider::new();
-    css.load_from_string("#transparency-sentinel { background: #ff00ff; }");
+    let corner = std::cell::Cell::new(26u32);
+    let window_style = |radius| format!("#transparency-sentinel {{ background: #ff00ff; }} window.capy-workspace:not(.maximized):not(.fullscreen) {{ --window-radius: {radius}px; }}");
+    css.load_from_string(&window_style(corner.get()));
     gtk::style_context_add_provider_for_display(
         &gtk::prelude::WidgetExt::display(&behind),
         &css,
@@ -60,7 +62,7 @@ fn native_canvas_background_during_startup_and_tab_switch() {
                 );
             }
         }
-        if name == "switch-resized" {
+        if matches!(name, "switch-resized" | "switch-light" | "switch-ready" | "radius-changed" | "restart-ready") {
             // Mutter restores this window centered at the requested logical
             // extent. Check the slice joins and transparent outer corners in
             // the actual composite, including the separate scale-2 run.
@@ -72,35 +74,42 @@ fn native_canvas_background_during_startup_and_tab_switch() {
             let top = (info.height - 750 * scale) / 2;
             let right = left + 1100 * scale;
             let bottom = top + 750 * scale;
-            let r = 12 * scale;
+            let r = corner.get() * scale;
+            let cut = corner.get() / 4 * scale;
             let pixel = |x, y| {
                 let i = ((y * info.width + x) * 3) as usize;
                 &pixels[i..i + 3]
             };
-            for (x, y) in [
-                (left + r, top + 2 * scale),
-                (right - r - 1, top + 2 * scale),
-                (left + r, bottom - 2 * scale - 1),
-                (right - r - 1, bottom - 2 * scale - 1),
-                (left + 2 * scale, top + r),
-                (left + 2 * scale, bottom - r - 1),
-                (right - 2 * scale - 1, top + r),
-                (right - 2 * scale - 1, bottom - r - 1),
-            ] {
-                assert!(
-                    pixel(x, y)
-                        .iter()
-                        .zip(expected)
-                        .all(|(a, b)| a.abs_diff(b) <= 2),
-                    "background slice join at {x},{y}: {:?}",
-                    pixel(x, y)
-                );
+            if name == "switch-resized" {
+                for (x, y) in [
+                    (left + r, top + scale),
+                    (right - r - 1, top + scale),
+                    (left + r, bottom - scale - 1),
+                    (right - r - 1, bottom - scale - 1),
+                    (left + scale, top + r),
+                    (left + scale, bottom - r - 1),
+                    (right - scale - 1, top + r),
+                    (right - scale - 1, bottom - r - 1),
+                ] {
+                    assert!(
+                        pixel(x, y)
+                            .iter()
+                            .zip(expected)
+                            .all(|(a, b)| a.abs_diff(b) <= 2),
+                        "background slice join at {x},{y}: {:?}",
+                        pixel(x, y)
+                    );
+                }
             }
             for (x, y) in [
                 (left, top),
                 (right - 1, top),
                 (left, bottom - 1),
                 (right - 1, bottom - 1),
+                (left + cut, top + cut),
+                (right - cut - 1, top + cut),
+                (left + cut, bottom - cut - 1),
+                (right - cut - 1, bottom - cut - 1),
             ] {
                 let p = pixel(x, y);
                 assert!(
@@ -170,6 +179,9 @@ fn native_canvas_background_during_startup_and_tab_switch() {
     pause.store(false, Ordering::Release);
     new_photo::ready(&w);
     capture("switch-ready", Some([255; 3]));
+    corner.set(36);
+    css.load_from_string(&window_style(corner.get()));
+    capture("radius-changed", Some([255; 3]));
 
     ui_session(&w)
         .engine()

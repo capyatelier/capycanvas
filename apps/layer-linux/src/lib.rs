@@ -59,6 +59,7 @@ mod tooltips;
 mod text_language;
 mod transparency_choice;
 mod wayland;
+mod window;
 mod workspace;
 mod zoom_readout;
 

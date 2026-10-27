@@ -4918,6 +4918,25 @@ private-socket setup failures remain in the logs. Raw joined frame IDs, pointer
 cadence, CPU/GPU distributions, variance, snap-hold reconstruction limits and
 provenance are under `artifacts/nav-rebase-qualification-20261025/gtk/`.
 
+### GTK window corner geometry diagnostic
+
+Measured 2026-10-26 on the same RTX PRO 6000, GTK 4.22.5 and Mutter 50.5,
+with a private 1600 × 1000/120 Hz display at scale 1. Baseline `730a79a5a`
+and the window corner fix run `native_large_photo_navigation` in release mode,
+using the same generated 6000 × 4000 ProPhoto U16 photo and dark theme.
+
+| Diagnostic | Baseline | Window corner fix |
+| --- | ---: | ---: |
+| Changed-frame presentation cadence, Hz | 91.29 | 92.00 |
+| Presentation gap p99, ms | 26.214 | 26.099 |
+| Request to presentation p99, ms | 23.604 | 23.403 |
+
+These single desktop runs indicate no navigation regression and do not qualify
+the reference tablet or sustained moving-only targets. Existing native window
+resize and workspace drag benchmarks fail before measurement in the baseline
+at window activation and drag recognition respectively. Raw reports and build
+provenance are under `artifacts/window-corners.local/`.
+
 ## Web navigation comparison
 
 Measured 2026-10-25 in Chrome 155 on the MovinkPad Pro 14, using hardware

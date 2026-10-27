@@ -39,7 +39,7 @@ pub(crate) struct Backdrop {
     events: EventQueue<Events>,
     state: Events,
     previous: Option<(Geometry, [i32; 2], [u8; 3])>,
-    sample: Option<(i32, [u8; 3])>,
+    sample: Option<(i32, u32, [u8; 3])>,
     // Our borrowed Wayland parent must outlive all child protocol objects.
     _parent: gdk::Surface,
 }
@@ -110,17 +110,15 @@ impl Backdrop {
         if self.previous == Some(state) {
             return Ok(());
         }
-        let radius = if geometry.rounded {
-            12.min(size[0] / 2).min(size[1] / 2)
-        } else {
-            0
-        };
+        let radius = (geometry.corner_radius.ceil() as i32).min(size[0] / 2).min(size[1] / 2);
         // The sample stays bounded even on an unusually high-scale output.
         let scale = geometry.scale.clamp(1, 8);
         let r = radius * scale;
+        let coverage_radius = geometry.corner_radius * scale as f32;
         let side = 2 * r + 1;
-        if self.sample != Some((r, color)) {
-            let pixels = rounded_sample(r, color);
+        let sample = (r, coverage_radius.to_bits(), color);
+        if self.sample != Some(sample) {
+            let pixels = rounded_sample(r, coverage_radius, color);
             let raw = unsafe {
                 libc::memfd_create(c"capy-window-background".as_ptr(), libc::MFD_CLOEXEC)
             };
@@ -141,7 +139,7 @@ impl Backdrop {
             if let Some(old) = self.buffer.replace(buffer) {
                 old.destroy();
             }
-            self.sample = Some((r, color));
+            self.sample = Some(sample);
         }
         let buffer = self.buffer.as_ref().unwrap();
         let xs = slices(size[0], radius);
@@ -191,17 +189,17 @@ fn slices(length: i32, radius: i32) -> [(i32, i32); 3] {
         (length - radius, radius),
     ]
 }
-fn rounded_sample(radius: i32, color: [u8; 3]) -> Vec<u8> {
-    let side = 2 * radius + 1;
+fn rounded_sample(inset: i32, radius: f32, color: [u8; 3]) -> Vec<u8> {
+    let side = 2 * inset + 1;
     let mut pixels = Vec::with_capacity((side * side * 4) as usize);
     for y in 0..side {
         for x in 0..side {
-            let dx = (radius as f32 - (x as f32 + 0.5).min((side - x) as f32 - 0.5)).max(0.);
-            let dy = (radius as f32 - (y as f32 + 0.5).min((side - y) as f32 - 0.5)).max(0.);
-            let alpha = if radius == 0 {
+            let dx = (radius - (x as f32 + 0.5).min((side - x) as f32 - 0.5)).max(0.);
+            let dy = (radius - (y as f32 + 0.5).min((side - y) as f32 - 0.5)).max(0.);
+            let alpha = if radius == 0. {
                 255
             } else {
-                ((radius as f32 + 0.5 - dx.hypot(dy)).clamp(0., 1.) * 255.).round() as u32
+                ((radius + 0.5 - dx.hypot(dy)).clamp(0., 1.) * 255.).round() as u32
             };
             let [r, g, b] = color.map(|c| (c as u32 * alpha + 127) / 255);
             pixels.extend_from_slice(&((alpha << 24) | (r << 16) | (g << 8) | b).to_ne_bytes());
@@ -239,8 +237,8 @@ mod tests {
 
     #[test]
     fn background_is_opaque_except_for_rounded_outer_corners() {
-        for radius in [0, 1, 12, 24, 96] {
-            let bytes = rounded_sample(radius, [51, 90, 120]);
+        for radius in [0, 1, 15, 30, 120] {
+            let bytes = rounded_sample(radius, radius as f32, [51, 90, 120]);
             let side = (2 * radius + 1) as usize;
             assert_eq!(bytes.len(), side * side * 4);
             let pixel =
@@ -263,14 +261,18 @@ mod tests {
             if radius >= 12 {
                 assert_eq!(pixel(0, 0), 0);
             }
-            assert!(bytes.len() <= 150_000);
+            assert!(bytes.len() <= 233_000);
         }
+        let fractional = rounded_sample(16, 15.5, [51, 90, 120]);
+        let pixel = |x: usize, y: usize| u32::from_ne_bytes(fractional[(y * 33 + x) * 4..][..4].try_into().unwrap());
+        assert_eq!(pixel(4, 4) >> 24, 113);
+        assert_eq!(pixel(4, 5), 0xff335a78);
     }
 
     #[test]
     fn background_slices_cover_small_and_large_windows_without_gaps() {
         for length in [1, 2, 23, 24, 25, 800, 1600, 7680] {
-            for radius in [0, 12.min(length / 2)] {
+            for radius in [0, 15.min(length / 2)] {
                 let parts = slices(length, radius);
                 let mut end = 0;
                 for (start, size) in parts {
