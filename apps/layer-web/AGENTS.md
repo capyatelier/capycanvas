@@ -2,13 +2,8 @@
 
 Start with the [Web guide](../../docs/development/web.md).
 
-- Only `run`, `package`, `frame`, `pointer`, `workspace-client`, `canvas-bar`,
-  `notice`, `zoom-readout`, `export-controls`, `size-dialog`, `text-input`,
-  `localization`, `numeric`, `histogram`, `workspace-manager-copy`,
-  `toolbar-components-copy`, `color-controls-copy`, `document-color-copy` and
-  `color-button-lifecycle`, `gpu-diagnostics`, `raster-worker-client`,
-  `pipeline-wait`, `panel-vector-paths`, `panel-vector-queue`, `editor-panels` `.test.mjs` files run under
-  `node --test`. The other `.test.mjs` files are browser journeys that
+- The pure `.test.mjs` suites listed in the [Web guide](../../docs/development/web.md#tests)
+  run under `node --test`. The other `.test.mjs` files are browser journeys that
   `test.mjs` and `device.test.mjs` import.
 - `icons/`, `brush-previews/` and `filter-previews/` are shared by every client.
 - Tablet Chrome sessions follow the [device rules](../../docs/development/devices.md).
