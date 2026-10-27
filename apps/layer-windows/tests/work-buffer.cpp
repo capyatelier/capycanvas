@@ -13,6 +13,7 @@
 #include "../CanvasSnapshotMailbox.h"
 #include "../WorkspacePublication.h"
 #include "../WorkspaceSurfaceGeometry.h"
+#include "../NativeJson.h"
 #include "../GamepadState.h"
 #include <algorithm>
 #include <string>
@@ -27,6 +28,13 @@
 #endif
 
 int main() {
+    {
+        auto input=CapyUi::JsonUnsignedFields("{\"type\":\"color_touch\",\"position\":[1.5,2.5]}",
+            {{"surface",9007199254740993ULL},{"id",4294967295ULL},{"time_ns",1101152828577000ULL}});
+        assert(input=="{\"type\":\"color_touch\",\"position\":[1.5,2.5],\"surface\":9007199254740993,\"id\":4294967295,\"time_ns\":1101152828577000}");
+        assert(CapyUi::JsonUnsignedFields("{}",{{"time_ns",UINT64_MAX}})=="{\"time_ns\":18446744073709551615}");
+    }
+    std::cout<<"Native JSON preserves unsigned contact identities and long-uptime timestamps\n";
     for(float scale:{1.f,1.5f,2.f}){
         std::array<float,4> radii{18,0,12,6};
         auto shadow=CapyUi::shadowRaster(242,400,radii,scale,12,2);

@@ -1,5 +1,6 @@
 #pragma once
 #include "UiControls.h"
+#include "NativeJson.h"
 #include <map>
 #include <winrt/Microsoft.UI.Input.h>
 
@@ -15,7 +16,7 @@ struct ColorTouches {
         if(phase==L"down"){if(!inside||contacts.contains(id))return claimed();contacts[id]=point.Position();}
         auto found=contacts.find(id);if(found==contacts.end())return false;
         found->second=point.Position();
-        send(data,surface,id,phase,found->second,double(point.Timestamp())*1000);
+        send(data,surface,id,phase,found->second,point.Timestamp()*1000);
         bool result=claimed();
         if(phase==L"up"||phase==L"cancel")contacts.erase(found);
         return result;
@@ -23,12 +24,12 @@ struct ColorTouches {
     void cancel(WorkspaceData& data,UIElement const& surface){
         for(auto const& [id,at]:std::exchange(contacts,{}))send(data,surface,id,L"cancel",at,0);
     }
-    static void send(WorkspaceData& data,UIElement const& surface,uint32_t id,hstring const& phase,Point at,double time){
+    static void send(WorkspaceData& data,UIElement const& surface,uint32_t id,hstring const& phase,Point at,uint64_t time){
         if(!data.input)return;
         double scale=surface.XamlRoot()?surface.XamlRoot().RasterizationScale():1.;
         A position;position.Append(N(at.X*scale));position.Append(N(at.Y*scale));
-        data.input(to_string(O({{L"type",S(L"color_touch")},{L"surface",N(double(reinterpret_cast<uintptr_t>(get_abi(surface))))},
-            {L"id",N(id)},{L"phase",S(phase)},{L"position",position},{L"time_ns",N(time)}}).Stringify()));
+        data.input(JsonUnsignedFields(to_string(O({{L"type",S(L"color_touch")},{L"phase",S(phase)},{L"position",position}}).Stringify()),
+            {{"surface",reinterpret_cast<uintptr_t>(get_abi(surface))},{"id",id},{"time_ns",time}}));
     }
 };
 }

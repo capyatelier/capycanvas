@@ -1,4 +1,5 @@
 #include "pch.h"
+#include "NativeJson.h"
 #include "LayerRowDrag.h"
 #include "LayersView.h"
 #include "WorkspaceQuery.h"
@@ -62,8 +63,10 @@ struct LayerRowDrag::Impl:std::enable_shared_from_this<Impl>{
         auto owner=view.lock();if(!owner||!owner->data->input)return;
         double scale=surface.XamlRoot()?surface.XamlRoot().RasterizationScale():1.;A coordinates;
         coordinates.Append(N(value.point.X*scale));coordinates.Append(N(value.point.Y*scale));
-        owner->data->input(to_string(O({{L"type",S(L"layer_touch")},{L"surface",N(double(reinterpret_cast<uintptr_t>(get_abi(surface))))},
-            {L"id",N(contact)},{L"phase",S(phase)},{L"position",coordinates},{L"row",N(value.row)},{L"time_ns",N(double(touchTimestamp))}}).Stringify()));
+        owner->data->input(CapyUi::JsonUnsignedFields(to_string(O({{L"type",S(L"layer_touch")},
+            {L"phase",S(phase)},{L"position",coordinates}}).Stringify()),
+            {{"surface",reinterpret_cast<uintptr_t>(get_abi(surface))},{"id",contact},
+                {"row",uint64_t(value.row)},{"time_ns",touchTimestamp}}));
     }
     bool cancelTouches(hstring reason=L"touch_cancel"){
         if(touches.empty())return false;

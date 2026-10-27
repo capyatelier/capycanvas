@@ -14,6 +14,12 @@ deserializes into owned values; text-only transports use a scoped callback.
 The boundary tests run on Linux too, and compile-fail doctests reject escaping
 string borrows.
 
+Native JSON contacts emit unsigned identifiers and nanosecond timestamps as
+integer tokens through `NativeJson.h`; the WinRT JSON number type stores doubles.
+Rejected input JSON reports a recoverable error before touching the session, so
+the render owner can process subsequent events. Invalid handles, poisoned owners
+and processing failures retain their fatal result.
+
 Binary WebP preview calls reject invalid slice lengths and overlapping dimension
 outputs before borrowing input. They write dimensions only after the decoded
 preview handle is stored. Input and output allocations remain valid for the call.

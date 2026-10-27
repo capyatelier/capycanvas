@@ -57,4 +57,23 @@ mod tests {
         // SAFETY: bytes remains live through the callback.
         assert_eq!(unsafe { with_text::<()>(bytes.as_ptr(), |_| Err("transport".into())) }.unwrap_err(), "transport");
     }
+
+    #[test]
+    fn touch_contact_json_preserves_full_unsigned_fields() {
+        for timestamp in [0, 1_101_152_828_577_000, (1_u64 << 53) - 1, (1_u64 << 53) + 1, u64::MAX] {
+            let surface = (1_u64 << 53) + 1;
+            let bytes = CString::new(format!(r#"{{"type":"color_touch","phase":"down","position":[1.5,2.5],"surface":{surface},"id":4294967295,"time_ns":{timestamp}}}"#)).unwrap();
+            let input: layer_ui::UiInput = unsafe { read_json(bytes.as_ptr()) }.unwrap();
+            let layer_ui::UiInput::ColorTouch { surface: actual_surface, id, time_ns, .. } = input else { panic!("Wrong contact type"); };
+            assert_eq!((actual_surface, id, time_ns), (surface, u64::from(u32::MAX), timestamp));
+            let bytes = CString::new(format!(r#"{{"type":"layer_touch","phase":"up","position":[1.5,2.5],"surface":{surface},"id":7,"row":{surface},"time_ns":{timestamp}}}"#)).unwrap();
+            let input: layer_ui::UiInput = unsafe { read_json(bytes.as_ptr()) }.unwrap();
+            let layer_ui::UiInput::LayerTouch { row, time_ns, .. } = input else { panic!("Wrong contact type"); };
+            assert_eq!((row, time_ns), (Some(surface), timestamp));
+        }
+        let malformed = CString::new(r#"{"type":"color_touch","phase":"down","position":[1.5,2.5],"surface":7,"id":1,"time_ns":1101152828577000.0}"#).unwrap();
+        assert!(unsafe { read_json::<layer_ui::UiInput>(malformed.as_ptr()) }.is_err());
+        let next = CString::new(r#"{"type":"blur"}"#).unwrap();
+        assert!(matches!(unsafe { read_json::<layer_ui::UiInput>(next.as_ptr()) }.unwrap(), layer_ui::UiInput::Blur));
+    }
 }

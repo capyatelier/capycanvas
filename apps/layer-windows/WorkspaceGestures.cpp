@@ -1,4 +1,5 @@
 #include "pch.h"
+#include "NativeJson.h"
 #include "WorkspaceGestures.h"
 #include "WorkspaceQuery.h"
 #include "WorkspaceTabDrag.h"
@@ -161,7 +162,7 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
     void edgeSend(wchar_t const* phase){
         auto text=to_string(O({{L"type",S(L"edge_contact")},{L"phase",S(phase)},{L"kind",S(edge->device)},
             {L"contact",S(edge->contactClass)},{L"position",point(edge->at)},{L"viewport",viewport()}}).Stringify());
-        text.insert(text.size()-1,",\"id\":"+std::to_string(edge->pointer)+",\"time_ns\":"+std::to_string(edge->time));
+        text=JsonUnsignedFields(std::move(text),{{"id",edge->pointer},{"time_ns",edge->time}});
         data->edges(std::move(text),[weak=weak_from_this(),serial=edgeSerial,phase=std::wstring(phase)](int32_t bits){
             if(auto self=weak.lock())self->edgeReply(serial,phase,bits);
         });

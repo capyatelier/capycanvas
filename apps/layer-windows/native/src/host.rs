@@ -946,7 +946,10 @@ pub unsafe extern "C" fn capy_native_prediction(host: u64, available: bool) -> i
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_input(host: u64, json: *const c_char) -> i32 {
     guard(host, |host| {
-        let input = unsafe { read_json(json) }?;
+        let input = match unsafe { read_json(json) } {
+            Ok(input) => input,
+            Err(error) => { fail(error); return Ok(1); }
+        };
         host.poll_services()?;
         if !host.accepts_workspace_input()?
             && !matches!(
@@ -1864,6 +1867,35 @@ const _:fn()=|| {fn send<T:Send>(){}send::<CapyHost>();send::<CapyLaunch>();};
 #[cfg(test)]
 mod handle_tests {
     use super::*;
+
+    #[test]
+    fn rejected_touch_json_keeps_a_windowless_owner_alive() {
+        struct Owner(u64);
+        impl Drop for Owner { fn drop(&mut self) { unsafe {capy_destroy(self.0);} } }
+        let native=NativeHost::new(layer_ui::Platform::Windows).unwrap();
+        let mut launch=CapyLaunch {native:Some(native),settings:None,bootstrap:CString::default()};
+        let host=unsafe {CapyHost::new(640,480,1.,&mut launch)}.unwrap();
+        let owner=Owner(handles::insert(host).unwrap().raw());
+        let malformed=CString::new(r#"{"type":"color_touch","phase":"down","position":[1.5,2.5],"surface":7,"id":1,"time_ns":1101152828577000.0}"#).unwrap();
+        let valid=CString::new(r#"{"type":"blur"}"#).unwrap();
+        let revision=borrow::<CapyHost>(owner.0).unwrap().native.session.state().revision;
+        assert_eq!(unsafe {capy_input(owner.0,malformed.as_ptr())},1);
+        {
+            let host=borrow::<CapyHost>(owner.0).unwrap();
+            assert!(host.native.poisoned().is_none());
+            assert_eq!(host.native.session.state().revision,revision);
+            assert!(host.live_contacts.is_empty());
+        }
+        assert_eq!(unsafe {capy_input(owner.0,valid.as_ptr())},0);
+        assert!(borrow::<CapyHost>(owner.0).unwrap().native.poisoned().is_none());
+        assert_eq!(unsafe {capy_input(0,valid.as_ptr())},-1);
+        {
+            let mut host=borrow::<CapyHost>(owner.0).unwrap();
+            host.native.poison(&"fixture failure");
+        }
+        assert_eq!(unsafe {capy_input(owner.0,valid.as_ptr())},-1);
+        assert_eq!(unsafe {capy_input(owner.0,malformed.as_ptr())},-1);
+    }
 
     #[test]
     fn invalid_file_buffers_are_rejected_before_accessing_path_or_bytes() {
