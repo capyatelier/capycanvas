@@ -206,6 +206,7 @@ impl NativeHost {
                 SnapshotKey {
                     revision: key.revision,
                     logical: key.logical,
+                    pixel_scale: key.pixel_scale,
                     ..previous.clone()
                 } == key
             })

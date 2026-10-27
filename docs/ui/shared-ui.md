@@ -80,6 +80,8 @@ snapshots publish the same field beside `state`; measurements never enter
 `state.workspace.layout`. Shared layout uses these positions to keep header
 drawers at their current opener. GTK retains the same measurements in its typed
 layout when applying panel geometry.
+Opt-in native layout updates retain unchanged controls across viewport and density
+changes while publishing geometry and panel vectors at the current scale.
 Reusable panel views contain controls and have no panel background or shadow.
 Dock groups, drawers and standalone workspace chrome own their surfaces. GTK
 assigns `dock-panel` only to those containers. Configuration expansion makes
