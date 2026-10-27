@@ -141,7 +141,21 @@ impl DrawerConnection {
             let max = [0, 1].map(|i| points.iter().map(|p| p[i]).fold(f32::NEG_INFINITY, f32::max));
             [min[0], min[1], max[0] - min[0], max[1] - min[1]]
         };
+        let corner = |center: [f32; 2], bounds: [f32; 4]| match (
+            (center[0] - bounds[0]).abs() < 0.5,
+            (center[1] - bounds[1]).abs() < 0.5,
+        ) {
+            (true, true) => 0, (false, true) => 1, (false, false) => 2, (true, false) => 3,
+        };
         let [length, depth] = [self.length, self.depth];
+        if length > 0. && depth > 0. && self.radii.into_iter().all(|r| r <= 0. || r == depth) {
+            let bounds = square(-self.radii[0], 0., length + self.radii[1], depth);
+            let mut radii = [0.; 4];
+            for (edge, r, direction) in [(0., self.radii[0], -1.), (length, self.radii[1], 1.)] {
+                if r > 0. { radii[corner(map(edge + direction * r, depth - r), bounds)] = -r; }
+            }
+            return vec![(bounds, radii)];
+        }
         let mut shapes = Vec::new();
         if length > 0. && depth > 0. { shapes.push((square(0., 0., length, depth), [0.; 4])); }
         for (edge, r, direction) in [(0., self.radii[0], -1.), (length, self.radii[1], 1.)] {
@@ -151,14 +165,8 @@ impl DrawerConnection {
             let far = edge + direction * r;
             let bounds = square(edge.min(far), depth - r, edge.max(far), depth);
             let center = map(far, depth - r);
-            let corner = match ((center[0] - bounds[0]).abs() < 0.5, (center[1] - bounds[1]).abs() < 0.5) {
-                (true, true) => 0,
-                (false, true) => 1,
-                (false, false) => 2,
-                (true, false) => 3,
-            };
             let mut radii = [0.; 4];
-            radii[corner] = -r;
+            radii[corner(center, bounds)] = -r;
             shapes.push((bounds, radii));
         }
         shapes
@@ -1102,6 +1110,17 @@ mod tests {
                 assert_eq!(join.radii, [inset.min(6.0), 6.0]);
                 assert_eq!(join.square_corners.iter().filter(|v| **v).count(), 2);
                 assert!(join.bounds.intersection(attached.bounds).is_none());
+                if inset != 4.0 {
+                    let corners = match direction {
+                        Edge::Bottom => [0, 1], Edge::Top => [3, 2],
+                        Edge::Right => [0, 3], Edge::Left => [1, 2],
+                    };
+                    let mut radii = [0.; 4];
+                    for i in 0..2 { radii[corners[i]] = -join.radii[i]; }
+                    assert_eq!(join.glass(), vec![([
+                        join.bounds.x, join.bounds.y, join.bounds.width, join.bounds.height,
+                    ], radii)], "{direction:?}/{inset}: an attached connector has no internal alpha seams");
+                } else { assert_eq!(join.glass().len(), 3, "partial shoulders keep their exact geometry"); }
                 let [xx, yx, xy, yy, tx, ty] = join.transform;
                 let far = [
                     join.bounds.x + xx * 18.0 + xy * join.depth + tx,
