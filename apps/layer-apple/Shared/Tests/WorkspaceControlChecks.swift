@@ -44,6 +44,12 @@ extension XCTestCase {
     @MainActor func workspaceActivate(_ element: XCUIElement) {
         XCTAssertTrue(element.waitForExistence(timeout: 10))
         if element.isHittable {
+            #if os(macOS)
+            if element.elementType == .button {
+                element.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).clickOrTap()
+                return
+            }
+            #endif
             element.clickOrTap()
         } else {
             // SwiftUI's offset controls inside a scroll view can have a valid

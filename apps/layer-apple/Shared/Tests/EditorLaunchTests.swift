@@ -145,10 +145,10 @@ final class EditorLaunchTests: XCTestCase {
     @MainActor func testTransformToolAcceptance() { checkTransformToolAcceptance(in: editorCaptureApplication(), theme: "light") }
     @MainActor func testTransformToolAcceptanceDark() { checkTransformToolAcceptance(in: editorCaptureApplication(), theme: "dark") }
 
-    @MainActor func testCanvasSize() { checkCanvasSize(in: editorCaptureApplication()) }
-    @MainActor func testCanvasSizeLight() { checkCanvasSize(in: editorCaptureApplication(), theme: "light") }
-    @MainActor func testImageSize() { checkImageSize(in: editorCaptureApplication()) }
-    @MainActor func testImageSizeLight() { checkImageSize(in: editorCaptureApplication(), theme: "light") }
+    @MainActor func testCanvasSize() { checkCanvasSize(in: ignoringSavedWindows(editorCaptureApplication())) }
+    @MainActor func testCanvasSizeLight() { checkCanvasSize(in: ignoringSavedWindows(editorCaptureApplication()), theme: "light") }
+    @MainActor func testImageSize() { checkImageSize(in: ignoringSavedWindows(editorCaptureApplication())) }
+    @MainActor func testImageSizeLight() { checkImageSize(in: ignoringSavedWindows(editorCaptureApplication()), theme: "light") }
     @MainActor func testFrequencySeparation() { checkFrequencySeparation(in: editorCaptureApplication()) }
     @MainActor func testPixelClipboard() throws { try checkPixelClipboard(in: editorCaptureApplication(), theme: "light") }
     @MainActor func testPixelClipboardDark() throws { try checkPixelClipboard(in: editorCaptureApplication(), theme: "dark") }
@@ -194,8 +194,8 @@ final class EditorLaunchTests: XCTestCase {
     @MainActor func testLayerColorModesDark() { checkLayerColorModesAndFilters(in: editorCaptureApplication(), theme: "dark") }
     @MainActor func testAlphaConversionFilters() { checkAlphaConversionFilters(in: editorCaptureApplication(), theme: "light") }
     @MainActor func testAlphaConversionFiltersDark() { checkAlphaConversionFilters(in: editorCaptureApplication(), theme: "dark") }
-    @MainActor func testEditColor() { checkEditColor(in: editorCaptureApplication(), theme: "light") }
-    @MainActor func testEditColorDark() { checkEditColor(in: editorCaptureApplication(), theme: "dark") }
+    @MainActor func testEditColor() { checkEditColor(in: ignoringSavedWindows(editorCaptureApplication()), theme: "light") }
+    @MainActor func testEditColorDark() { checkEditColor(in: ignoringSavedWindows(editorCaptureApplication()), theme: "dark") }
     @MainActor func testFillThumbnailColor() { checkFillThumbnailColor(in: editorCaptureApplication(), theme: "light") }
     @MainActor func testFillThumbnailColorDark() { checkFillThumbnailColor(in: editorCaptureApplication(), theme: "dark") }
     @MainActor func testSwitcherVisibility() { checkSwitcherVisibility(in: editorTestApplication()) }
@@ -221,8 +221,8 @@ final class EditorLaunchTests: XCTestCase {
 
     @MainActor func testTitleBarCustomization() { checkTitleBarCustomization(in: editorTestApplication()) }
 
-    @MainActor func testTitleBarToolDrawers() { checkTitleBarToolDrawers(in: editorCaptureApplication()) }
-    @MainActor func testTitleBarToolDrawersDark() { checkTitleBarToolDrawers(in: editorCaptureApplication(), theme: "dark") }
+    @MainActor func testTitleBarToolDrawers() { checkTitleBarToolDrawers(in: ignoringSavedWindows(editorCaptureApplication())) }
+    @MainActor func testTitleBarToolDrawersDark() { checkTitleBarToolDrawers(in: ignoringSavedWindows(editorCaptureApplication()), theme: "dark") }
 
     @MainActor func testOrdinaryPaperLibrary() async throws {
         try await checkOrdinaryPaperLibrary(in:editorCaptureApplication(),theme:"light")
