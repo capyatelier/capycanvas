@@ -8,14 +8,17 @@
 | --- | --- | --- |
 | Rules for all work | [`AGENTS.md`](../../AGENTS.md) | Permanent; short |
 | Setup, build, test and measurement how-tos | `docs/development/` | Current |
+| What a test or fixture checks | Its code and failure messages; a guide names it in one line | Current |
 | How the code works, contracts and formats | `docs/architecture.md`, `internals/`, `reference/`, `ui/` | Current |
 | Performance targets and results | [`PERFORMANCE_TARGETS.md`](../PERFORMANCE_TARGETS.md) and the tier tables in `performance/` | Current numbers only |
 | A plan for work in progress | `docs/development/<plan>.md` | Deleted when the work lands |
 | Research and design decisions | `docs/history/` | Kept; claims apply to when written |
 | Progress, handoffs, validation reports, investigations, logs, measurement dumps, port inventories | Not committed: `artifacts/` or `*.local.md` | Local |
 
-- Update the current guide in the same commit as the behaviour it describes.
-  A guide that disagrees with the code is a bug; the code wins.
+- Edit a guide in the same commit when your change makes it wrong or changes how
+  someone builds, tests or extends the code. Don't add a sentence per fix; the
+  commit message and tests record it. A guide that disagrees with the code is a
+  bug; the code wins.
 - When a plan's work lands, move its lasting decisions into the guides and delete
   the plan. Results go in commit messages and, for performance, the tier tables.
 - A history record describes the design when it was written. Check the code
@@ -27,9 +30,9 @@
 - Plain, concise, present tense. Explain what happens and why.
 - Start a guide with a link to its parent index on line 3.
 - Use tables for inventories and bold lead-ins for rule lists.
-- Scope every claim to its evidence: name the device, build and date for a
-  measurement, and say what was not verified. Keep measurements out of guides
-  except the tier tables.
+- Name the device, build and date for a measurement, and keep measurements out
+  of guides except the tier tables. Guides state what the code does, not what was
+  or wasn't verified.
 - Name devices by brand and model, such as Wacom MovinkPad 11, never by serial
   number.
 - No session narration ("the user asked", "this session"), local paths, dates

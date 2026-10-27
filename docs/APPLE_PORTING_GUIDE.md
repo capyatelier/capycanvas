@@ -102,6 +102,9 @@ including older gaps; a port does not require an unrestricted historical audit.
   local regressions; record results and limits in the affected tier tables.
   Fix reproducible port-caused regressions. Qualify [targets](PERFORMANCE_TARGETS.md)
   only with current reference-hardware measurements, not a no-regression comparison.
+- Look beyond the existing fixtures. Compare with Web, and drive what the host
+  owns: losing pointer capture or focus mid-gesture, minimize, maximize and snap,
+  display scale and theme changes, IME, clipboard, drag-and-drop and file pickers.
 - Reuse passing evidence while its code and build remain applicable. Rerun
   checks invalidated by your changes, conflicts or upstream changes to the same
   code; unrelated upstream commits don't invalidate them. Investigate failures

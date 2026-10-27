@@ -31,12 +31,9 @@ specific tasks.
 - Fetch and rebase onto `origin/main` before pushing. Never force-push `main`,
   `git reset --hard` or bare `git stash` in a shared checkout, or delete another
   session's worktree, branch, build, install or files.
-- Commit complete milestones that build and pass, not steps. When your task says
-  to push, push each milestone as soon as its relevant checks pass; `origin/main`
-  changes faster than heavy suites run. After a rebase, rerun only the checks for
-  conflicted files or code that upstream also changed, never heavy validation
-  because unrelated changes landed. When in doubt, push first, then validate
-  further and fix what you find in a separate commit.
+- A milestone is one fix or feature with its tests. When your task says to push,
+  push each one as soon as its own checks pass; never hold finished commits for
+  later work. The [commit guide](docs/COMMIT_GUIDE.md) covers rebasing and rechecks.
 - Install the hooks with `sh tools/git/install-hooks.sh` and never bypass them.
   No `Co-Authored-By` trailers for AI assistants or agents; human coauthors are
   fine. Follow the [commit guide](docs/COMMIT_GUIDE.md).
@@ -78,8 +75,8 @@ specific tasks.
   where something moves count. See [performance targets](docs/PERFORMANCE_TARGETS.md).
 - Check every change that can affect how frames are produced against the targets,
   measure the affected rows by [its rules](docs/performance/measuring.md), and
-  record the results in the tier tables. Report a target as met only from current
-  measurements on that tier's reference hardware.
+  record the results in the tier tables. Frame-rate work starts from a target row
+  and runs on that tier's reference device; VMs and emulators can't measure it.
 - Don't chase a target that `origin/main` already misses. Fix any regression
   against a matched `origin/main` control, record the shared miss, and finish
   the task; closing that gap is separate work
@@ -91,7 +88,8 @@ specific tasks.
   Decide how you will know the task is done, and stop when that check passes.
 - Done means you walked the real user journeys on every affected host, in light
   and dark themes for UI, and ran the [checks for your change](docs/development/testing.md).
-  Report anything you did not verify and every failure.
+  Report each failure with its repro and list what you couldn't run. Reproduce a
+  suspected bug or drop it; fix harness faults that block you instead of listing them.
 - Plans, handoffs and history docs are not evidence that something works. Check
   the code.
 
@@ -109,9 +107,9 @@ specific tasks.
 
 ### Docs and text
 
-- Update the guide a change affects in the same commit. Commit only docs that
-  stay useful; logs, measurements, inventories and handoffs stay in `artifacts/`
-  or `*.local.md` ([writing](docs/development/writing.md)).
+- Edit a guide only when your change makes it wrong or changes how someone builds,
+  tests or extends the code. Fixes belong in commit messages and tests; logs,
+  measurements and handoffs stay in `artifacts/` or `*.local.md` ([writing](docs/development/writing.md)).
 - UI text uses plain words a painter knows. Don't add settings, menu items or
   explanatory text where better behaviour would do.
 - Update every registered Fluent catalog when adding UI text; run the

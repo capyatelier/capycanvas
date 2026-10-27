@@ -99,6 +99,9 @@ including older gaps; a port does not require an unrestricted historical audit.
   only with current reference-hardware measurements, not a no-regression comparison.
   [VMs](development/devices.md#windows) check builds and fixtures, not hardware
   performance or physical pen behavior. Record unavailable checks explicitly.
+- Look beyond the existing fixtures. Compare with Web, and drive what the host
+  owns: losing pointer capture or focus mid-gesture, minimize, maximize and snap,
+  display scale and theme changes, IME, clipboard, drag-and-drop and file pickers.
 - Reuse passing evidence while its code and build remain applicable. Rerun
   checks invalidated by your changes, conflicts or upstream changes to the same
   code; unrelated upstream commits don't invalidate them. Investigate failures

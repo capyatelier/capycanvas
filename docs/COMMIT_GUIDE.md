@@ -43,7 +43,8 @@ work. There are no long-lived port or feature branches.
   keeping both sides' intent. Rerun the checks for conflicted files or code that
   upstream also changed; don't restart heavy validation for unrelated upstream
   changes.
-- Push each milestone as soon as its relevant checks pass. When in doubt, push
+- A milestone is one fix or feature with its tests. Push each one as soon as its
+  own checks pass; never hold finished commits for later work. When in doubt, push
   first, then validate further and fix what you find in a separate commit.
 - Never force-push `main`, reset another session's branch, or drop commits you
   did not write. Never use a bare `git stash`; the stash is shared by every
@@ -82,8 +83,7 @@ work. There are no long-lived port or feature branches.
   - test-only switches in production types;
   - explanatory or narrative comments;
   - dead code, unused parameters and leftovers from earlier attempts.
-- **Keep documentation durable.** Update the guides the change affects and follow
-  [writing](development/writing.md): no work logs, dumps or generated output.
+- **Keep documentation durable.** Follow [writing](development/writing.md).
 - **Validate the final diff.** Run the checks in [testing](development/testing.md)
   for every affected area, and exercise affected UI and input on each affected
   host. Review every changed file for scope and accidental edits. Report what
