@@ -15,173 +15,12 @@ verifies this while retaining the signing identity for updates.
 The native Gradle build tracks shared Rust, filter assets and Fluent catalogs as
 inputs. Catalog-only changes rebuild the embedded native UI text.
 
-The render worker supplies saved settings and the ordered application resource
-locales before shared launch creates the first localization context or GPU.
-Language changes prepare the shared context on a separate worker, then publish
-bootstrap, catalog and editor views together on the render owner. Publication
-waits for active text composition and canvas or workspace contact. The Activity,
-Compose context, native text fields and canvas surface retain their identities.
-Open menus project current shared copy and retain submenu paths by section and
-item position in the current shared model. Refreshes resolve those paths again
-and truncate removed pages; mutable checkbox commands do not identify navigation
-pages. Language publication keeps the popup and its owner; document
-replacement retires layer-owned menus. Recreated and resumed owners adopt the
-application's latest choice. Size panel units use a full-width row, with the
-checkbox below, so translated captions have room at larger system text sizes.
-Numeric input starts at the visible edge of its horizontal scroll viewport; check
-the glyphs against the visible field bounds as well as the paragraph bounds.
-Stateless control helpers use
-the owning view's language tag; system fonts retain Android's
-native fallback. `locales_config.xml` advertises only shared shipped languages,
-and the Rust launch test rejects inventory drift. Text fields retain native
-composition ranges; editor key captures yield while preedit or IME key events own
-input. InputConnection fixtures check that boundary, independently of checks with
-a real Japanese, Chinese or Korean input method.
-
-JNI result handling lives in `native/src/android.rs`: `or_throw` reports
-`IllegalStateException` and keeps the return sentinel; `argb_array` packs RGBA
-pixels for Kotlin.
-Column bridges use shared Rust vector projection on the render worker.
-`modelUpdate` publishes receiver IDs, and the immediately following `panelVectors`
-call copies their packed commands and blur triangles through one JNI integer
-array. Geometry generations identify complete projection keys; removing a
-receiver removes it from the current packet even when its geometry remains cached.
-`PanelVectorCache` prepares immutable native paths and their merged column
-surface before the matching UI snapshot is applied. Native drawing owns fill,
-clipping and shadow rendering; the UI thread does not trace the shape field.
-Nested `ObservedModel` objects retain layout identity and invalidate readers of
-changed fields. Panel placement, dividers and panel content have separate
-composition scopes. Derived column membership and bounds retain their identity
-while bridge paths change; each column surface and receiving group observes its
-own geometry. Group keys enclose membership conditions, so configuring
-another column retains remembered panel content. Proof copy observes the shared
-content revision, so geometry-only publication does not restart proof queries. The existing GPU
-backdrop pass receives triangle coordinates, edge flags and opacity in a packed
-JNI float array, avoiding per-coordinate JSON formatting and parsing.
-JNI `Long` handles are typed generational tokens in `layer_host::handles`.
-Lookup validates the token before accessing an App or task. Apps remain in the
-creating render thread's local table; another thread cannot borrow or destroy
-them. Worker operations hold an owned task lease for the complete call, including
-scoped file work. Free invalidates the token while an active lease retains its
-value. Terminal consumers take once. Cancellation controls and paper jobs retain
-separate shared owners, so cancellation does not wait for mutable file work.
-Malformed, stale, wrong-kind and busy handles report normal JNI errors; panic
-containment and App poisoning use the shared native host boundary.
-Known numeric and color refusals retain their shared typed reason across JNI;
-unexpected diagnostics stay literal. Color, profile, proof and export controls
-relabel retained scalar copy without revalidating dirty input, reading profile
-storage, decoding ICC data or restarting image jobs.
-
-Canvas startup failures show the native cause beneath the shared title.
-Before creating the device, `layer_host::unsupported_adapter` refuses a missing
-Vulkan adapter, a software renderer or limits below the renderer's request; the
-message then leads with the shared plain-language reason. Diagnostic text is
-selectable and scrolls within a bounded height, leaving Restart canvas reachable.
-`AndroidFirstUiTest#unsupportedGpuExplainsTheDeviceInTheCanvasArea` opts in
-with `-e unsupportedGpu true`; run it on an emulator started with
-`-gpu host -feature -Vulkan`. Action failures keep their cause in the existing
-dismissible notice.
-
-File and conversion jobs use `inspection::on_worker` for named threads with an
-8 MiB stack; call it from an IO worker. Task cancellation owns a separate
-`CaptureControl` and never borrows a running job.
-JNI file, image-import and clipboard tasks use `UiSession::document_request`
-to look up the pending request before validating its kind.
-Photo profile prompts retain `ImportedDocument` and use its shared `interpret`
-method on the file worker before preparing the candidate session.
-
-Drawing-tab lifecycle UI fixtures pin a header containing Main Menu and the
-drawing selector. They create documents through File and the tagged Create
-control, so shipped workspace choices do not prevent the close/recreation journey.
-Fixture edits use the shared Add Layer command; close and confirmation still
-use native input.
-
-Artwork files use shared immutable capture and the final package reader/writer.
-The render owner supplies captured effect phases before file work starts. Provider
-input can be non-seekable; package parsing uses private spooled backing.
-`AndroidRasterTest#exactSnapshotsSurviveFilesGpuReplacementAndRecovery` reopens
-a saved drawing through a real pipe and compares its pixels and resource records. Saves
-finish the private package before opening the provider destination for replacement,
-so encoding failure cannot truncate the previous file. Provider publication still
-has the provider's durability guarantees. Shared completion checks reject stale
-owners and preserve painting performed after capture. Imported native backing
-stays alive until renderer admission succeeds; unsupported preparation presents
-the original package, while cancellation leaves the current drawing intact.
-Unsupported artwork opens
-the shared package presentation with an optional preview, Copy Original File and
-Export Preview Image, without adopting a partial editable document. Presentation
-creates its bitmap from the shared decoder's pixels without native PNG decoding. Preview
-export writes the retained PNG through a private spool to a new provider
-destination; source URI, document identity and file identity checks prevent it
-from replacing the original package.
-
-Histogram and RGB Waveform are shared dockable panels in the Photo workspace.
-Their selectors, status and clipping controls come from the shared views. The
-render owner projects changed statistics into normalized paths and a bounded
-waveform image; Compose presents those prepared values. Camera-only updates do
-not rebuild plots. Hiding the scopes retires their shared query and data.
-Levels and Curves embed their adjustment-input statistics and use compact fields
-beside the channel selector and calibration actions. White Balance, Auto and
-targeted Curves forward shared actions through the existing native contact and
-loupe path. Unfinished numeric text keeps its native focus and selection through
-statistics updates. Ending an edit retires its late native text callbacks.
-
-Restart restores the selected drawing first, then hydrates the other tabs without
-changing the selected canvas. It then applies the saved tab order through the
-shared `restore_order` tab request, which, unlike a user reorder, is accepted
-while the editor is busy and records no tab-order history. The shared private session format retains tab order,
-camera, working state, manual save checkpoint and bounded undo/redo history for
-both saved and unsaved drawings. Common restart has no dialog. A drawing restored
-after an interrupted exit shows the shared recovered suffix until its next save.
-A drawing that fails to restore keeps its copy and offers Restore, Later or
-Discard. Discard retires the copies that no open drawing uses, including every
-copy of a session whose index cannot be read.
-
-`Recovery.kt` owns native timing, window leases and provider access. Shared Rust
-validates the window manifest, restore attempt tickets and incremental resource
-stores. Membership is durable before a new drawing's first checkpoint. A two-second
-poll coalesces changes and writes only changed session stamps; background and Quit
-wait for a durable checkpoint. Polling stops in the background; returning to the
-canvas marks the session active again without blocking input. Explicit tab close prepares the native transaction
-and retirement intent, removes membership durably, then commits the prepared close.
-Resource collection respects restored readers. Save preserves this private history
-and updates the manual save checkpoint rather than retiring the session.
-Activity teardown completes accepted restores and settles pending edits on the
-native owner without a presentation surface before its final checkpoint. Storage
-leases and the native editor stay alive until that work completes.
-Drawing replacement and tab switching await an accepted checkpoint before changing
-membership. Each checkpoint assigns storage owners from its captured tab list.
-`AndroidRasterTest#acceptedRecoveryCheckpointDrainsBeforeAdoption` holds native
-owner work while checking that an accepted checkpoint drains before replacement.
-
-Persisted provider permissions permit reopening saved destinations after process
-restart. Restore observes the saved destination on an I/O worker without opening
-a permission dialog. Missing, unreadable or changed originals retain their private
-copy and require Save, Discard or Cancel when closing. A shared fingerprint check
-compares the destination immediately before replacement; an externally changed
-or unreadable destination refuses direct Save.
-Save As remains available. Save must durably checkpoint the current drawing
-before opening a provider destination for replacement. A failed checkpoint leaves
-the original untouched. Provider replacement retains the provider's own durability
-guarantees.
-
 ## Storage
 
 External photos decode in `PhotoReaderService`, an isolated process with no
 storage, network or permissions. `PhotoReader` binds it from the import worker
 thread and passes descriptors for an input copy, the output package and
 diagnostics; a disconnected or failed service fails the import.
-
-Prepared drawing-close jobs remain allocated until
-`documentReleasePreparedClose`. Commit validates the shared close fence before
-taking the payload; release cancels a remaining payload or frees an already
-committed job. The controller releases the job in its non-cancellable cleanup,
-including after JNI errors. Release still frees the allocation for a poisoned
-host without dispatching another document action.
-`AndroidNativeHandlesTest` exercises wrong-kind and stale task tokens, slot reuse,
-single-use metadata jobs and App thread ownership without creating a GPU surface.
-The shared registry tests cover concurrent release, consumption and cancellation
-with deterministic barriers and run under Miri independently of JNI.
 
 `AppStorage` passes the platform folders to shared Rust, and
 `layer_host::StorageRoots` names each store within them:
@@ -282,95 +121,26 @@ instrumentation package is `<id>.test`. On a shared tablet use your own ID:
 exports it as `$CAPY_APPLICATION_ID`. The commands below write
 `art.capycanvas.dev` for the single-user case.
 
+### Changing the host
+
+- **JNI results.** `or_throw` in `native/src/android.rs` reports
+  `IllegalStateException` and keeps the return sentinel; `argb_array` packs RGBA
+  pixels for Kotlin.
+- **JNI handles.** JNI `Long` handles are typed generational tokens from
+  `layer_host::handles`. Apps stay in the creating render thread's table, and
+  worker operations hold a task lease for the whole call. Malformed, stale,
+  wrong-kind and busy handles report ordinary JNI errors.
+- **File work.** Run file and conversion jobs through `inspection::on_worker`
+  from an IO worker; it names the thread and gives it an 8 MiB stack. JNI file,
+  image-import and clipboard tasks look up their pending request with
+  `UiSession::document_request` before validating its kind. A prepared
+  drawing-close job stays allocated until `documentReleasePreparedClose`, which
+  the controller calls in its non-cancellable cleanup.
+- **Languages.** `res/xml/locales_config.xml` advertises only the shared shipped
+  languages; `native/src/launch_tests.rs` fails when they drift. Follow the
+  [localization guide](../ui/localization.md) to add one.
+
 ## Device tests
-
-`AndroidHostTest#rotationSnappingAcrossThemesAndNativeContacts` checks the
-footer menu's Snap rotation checkbox, settings restoration, live menu refresh,
-and native two-finger and Rotate View contacts in both themes. It covers the
-3° hold, escape beyond the 10° attraction range, and exact explicit angles.
-
-`AndroidSurfaceTeardownTest` backgrounds the app while a worker task outlasts the
-10 s surface teardown wait. Teardown stops frames at once and returns without
-crashing; the canvas presents again after resuming.
-
-`AndroidInteractionTest#zoomReadoutMenuAndFieldAcrossDevices` checks rotation
-slider snapping with mouse, touch and pen in both themes, including the displayed
-angle during a stationary hold, exact typed angles, keyboard steps and configured button steps.
-
-`AndroidHostTest#threeFingerDiagonalScrubClearsOnlyTheSelectedLayer` sends native
-three-finger diagonal motion in both themes. It checks clearing before release,
-exact pixel restoration with one Undo, an unchanged lower layer and camera,
-one clear per contact group, and rejection of taps and small jitter.
-
-`AndroidTitleBarTest#paintColorAndNavigatorFitTheirContent` checks Paint's natural
-panel fit and Navigator's continuous-content measurement against the displayed
-overview and controls. Compose reports Navigator's fixed controls, gap and insets
-without choosing its minimum preview height. Shared `min_body_height` controls
-the body extent when a group needs scrolling below its fixed tab strip.
-`AndroidPaletteTest#defaultsPlacePalettesAfterColorAndInSketchDrawer` compares
-the palette's reported row pitch with its arranged swatches. Palettes reports
-its fixed controls separately so shared sizing can reserve two swatch rows.
-`AndroidColorPanelTest#colorButtonsShowTouchAndPenContactAndCancelAcrossThemes`
-and `AndroidPaletteTest#savedSwatchesShowTouchAndPenContactAndCancelAcrossThemes`
-compare held and cancelled native contacts with their idle pixels in both themes.
-`AndroidWorkspaceSwitcherTest#choicesShowHeldFeedbackAndSelectOnlyOnReleaseAcrossThemes`
-checks selected and unselected choices with touch and pen, cancellation and
-adoption only after release, using two workspaces with the same layout.
-
-`AndroidHostTest#penPressureCalibrationUsesNativeCurveAndPersistsAppliedResponse`
-checks the modeless pressure utility in both themes: opening from Preferences,
-touch, mouse and stylus graph input, drag-out removal, the live marker, painting
-and Apply/Cancel persistence. Pair it with the numeric settings fixtures after
-changing the shared curve widget or Preferences row presentations.
-
-`AndroidHostTest#penTiltCalibrationUsesNativeSensorsAndPersistsLight` and its
-`Dark` counterpart check first pen input with Lasso, live sensors over the title
-and direction circle, independent axis corrections, unchanged artwork during
-preview, Apply/Cancel/Reset, saved settings in a new native session and corrections
-across display rotation. Pressure and tilt share one modeless native utility.
-The first non-hovering pen contact in a fresh drawing also edits the curve
-without losing its contact when the utility binds to that pen.
-The Activity captures real pen metadata before child input; only utility contacts
-forward sensor-only `pen_input` samples. Canvas input keeps its numeric batch
-route. Device descriptors identify saved corrections, while Android display
-rotation maps their natural device frame into the current surface frame.
-Utility sensor views coalesce on the render owner's display callback without
-waking the canvas. Pressed utility contacts and pen hover request the display's
-highest supported rate through the workspace's existing motion refresh lease.
-
-`AndroidToolBubblesTest#nativeBubblesAcrossThemesAndDevices` checks tool bubbles
-with native mouse, touch and stylus events in both themes. It covers source
-scrolling and tear-out, painting through halo gaps, arc edits, chooser selection,
-held menus, independent options, two-finger movement and resizing, retained
-Layers/Properties cards and workspace undo/redo. Escape must dismiss a held
-menu before the next canvas contact. Replacing the workspace during a captured
-ring contact must leave no stale action or notice on release. Run it on both reference
-tablets after changing the presenter or capture path.
-`AndroidToolBubblesTest#bubbleHoverExitClearsFaceFeedback` checks native hover
-exit and loss of focus to a dialog in both themes, without a pressed contact.
-`sketchEraserBubbleKeepsItsHaloChooserAndSettingsAcrossThemesAndDevices` checks
-Sketch's Eraser tear-out, slider halo, sole preset chooser, remembered settings
-and return to the header in both themes with all three input types. Use
-`-e bubbleTheme light|dark -e bubbleInput mouse|touch|pen` for independent runs.
-`haloAndFaceShareTheCoreCenter` additionally checks measured face and arc-icon
-positions with swapped controls and a 220 × 420 dp private window.
-`countBadgesKeepTheirAnchorWhenTextWidens` checks one- and two-digit counts in
-both themes. The main journey verifies intrinsic readout sizing and the simple
-Layers footer's geometry.
-`hdrBubbleAcrossThemesSizesAndDevices` checks the HDR color bubble at 136, 216
-and 344 dp in both themes, including the shared arc caps, native mouse, touch and
-pen edits, cancellation, double-contact reset, wheel edits, rim dragging, pinch
-and Quick Mask transitions. `nativeBubblePickupClosesOpenDrawers` checks that
-tearing Color, Layers or Drawing out closes its open drawer during the captured
-contact and permits that contact to continue.
-
-The optimized `AndroidBubbleBenchmarkTest#fiveBubbleMotion` also accepts
-`workload=hdr-drag` and `workload=hdr-intensity`. Both use the tier photo imported
-into an F16 drawing, with the color bubble and four neighbours; the latter
-measures a constant-speed native touch sweep of the EV arc. Run them through
-`tools/performance/android-bubbles.py --workload hdr-drag|hdr-intensity` with the
-tier photo, extent and target refresh rate. The collector retains actual
-app-window SurfaceFlinger presents separately from FrameMetrics and drawn poses.
 
 Without a device, build both APKs and run lint:
 
@@ -404,192 +174,62 @@ with an isolated application ID on a tablet.
 Read the instrumentation result: `OK (N tests)` or `FAILURES!!!`. `am instrument`
 can exit 0 when tests fail, so the exit status proves nothing. Opt-in tests skip
 through JUnit assumptions when their `-e` argument is missing, so confirm that
-the test ran. History restoration may finish after a command publication fence;
-wait for the expected published document state before asserting Undo or Redo.
-[Testing](testing.md#known-failures-on-main) lists the tests that fail on `main`.
+the test ran. [Testing](testing.md#known-failures-on-main) lists the tests that
+fail on `main`.
 
 Emulator runs check logic and layout. Physical stylus accuracy, thermal
 behavior and high-refresh presentation need a real tablet.
 
 ### Where to start
 
-`AndroidSessionRestartTest#processRestartRetainsSavedAndUnsavedHistory` is a
-paired process-crash fixture. Run first with `-e restartPhase prepare
--e restartFixture UNIQUE -e theme light|dark`, then with `-e restartPhase verify
--e restartFixture UNIQUE`. Preparation deliberately kills its isolated test
-process and reports `Process crashed`; verification must report `OK (1 test)`.
-It preserves only that named test directory between invocations and removes it
-after verification. It checks saved and dirty tabs, camera, recovered labels,
-manual save checkpoints and undo/redo after an actual process death.
+Test classes live in `app/src/androidTest/java/art/capycanvas/` and are named
+for their area, such as `AndroidColorPanelTest` or `AndroidVectorLayerTest`.
+The broad ones:
 
-- `AndroidHostTest#panelTabsHighlightOnHoverAndSelectOnPress` and its
-  `InDarkTheme` variant check docked, floating and drawer tabs: visible inactive
-  hover, preserved
-  active shoulders, selection before release and unchanged configuration.
-- `AndroidHostTest#panelHoverCornersFollowEveryActiveTab` and its `InDarkTheme`
-  variant check all active/hovered pairings in four-tab docked and drawer strips,
-  including reverse feet outside inactive slots, convex corners beside the active
-  tab, straight ends and unchanged active shoulders.
-- `AndroidHostTest#activeTabContoursCompositeTheirBackgroundOnce` checks absolute
-  colors along selected-tab contours in both themes, with opaque and translucent
-  panels, docked and drawer headers, and first, middle and last selected tabs.
-- `AndroidHostTest#compactPanelSpacingAndAlignmentAcrossContexts` captures Tools
-  and Properties at 242/320 dp in both themes. It checks 26 dp controls, 36 dp
-  slider rows, 8 dp content edges, common caption columns and 4 dp gaps on both
-  axes; it also exercises numeric expressions and refusals through native input.
-- `AndroidHostTest#nativeGradientStopContactsAndCompactControlsRetainDefinition`
-  checks native stop contacts, precise positions, interpolation, color and
-  history, with archive reopening and Activity recreation.
-  `gradientToolPanelAndToolbarUseNativeGeometryContacts` exercises the tool
-  panel, toolbar popup and canvas shapes. Run both in narrow and wide layouts;
-  each covers light and dark themes.
-- `AndroidStylusTest` checks projected tilt packing for current and historical
-  samples, including combined stylus sources.
-  `AndroidHostTest#physicalTiltControlsDryBrushCursorAndPigment` drives physical
-  0°/40°/60° poses through `MotionEvent`, JNI and the GPU in both themes. It checks
-  Pencil and Charcoal cursor and pigment axes, writing-to-side contact growth,
-  and records native samples for comparison with the supplied API poses.
-- `AndroidLanguageTest`: every shipped language through Preferences in both
-  themes, retained popup routes, typed numeric refusals, raw color and export
-  drafts, profile metadata and prepared comparisons, saved Unicode drawings,
-  and stable Activity/host/surface ownership and drawing history.
-  InputConnection cases cover deferred composition and selection.
-  `#genuineKeyboardCompositionDefersLanguagePublication -e genuineIme true`
-  requires an installed keyboard to produce actual preedit before requesting a
-  language change in both themes, then commits it through that keyboard. Set
-  `genuineImeKeys`, `genuineImePreedit` and `genuineImeCandidate` to the engine's
-  key sequence, composing text and visible candidate. For Japanese Gboard
-  QWERTY, use `nihonn`, `にほん` and `日本`. Missing preedit fails the prerequisite
-  and does not count as IME evidence. Record and restore keyboard languages,
-  layout and the selected system subtype after device setup.
-- [`AndroidInteractionTest`](../../apps/layer-android/app/src/androidTest/java/art/capycanvas/AndroidInteractionTest.kt):
-  drawers, drag geometry, panels, the canvas action bar, notices, the zoom
-  readout, effects and retouching, each with mouse, finger and stylus. It
-  dispatches typed `MotionEvent`s through the native views;
-  `-e systemInput true` uses OS injection where the device allows it.
-  `#missingPaperRowSharesLayerScrollingAndNativeActivation` checks Add paper
-  against ordinary row geometry, hover and cancelled presses, activation,
-  history, scrolling and an empty stack in both themes. With a finger it then
-  walks Choose Texture from the Paper row and Properties: its size against Edit
-  Color, Cancel, Use Texture with one Undo, Escape and a locked Paper.
-  `#selectingFillRowsKeepsPropertiesAndDrawingTargets` checks fill selection,
-  painting on the layer above, fill masks and Paper's disabled mask controls.
-- `AndroidFeatureParityTest#dockedToolbarStaysInZenAndEdgeSwipePeeksUntilOutsideContact`
-  checks Show in Zen mode, native toolbar activation, an edge swipe and outside
-  dismissal in both themes. It checks the shared `zen_kept` projection and the
-  actual native controls.
-- `AndroidFeatureParityTest#paperLibraryImportsRenamesAndDeletesWithoutChangingTheDrawing`
-  imports through Import… in Choose Texture, renames and deletes through the
-  open dialog's tile menu and adds the drawing's own paper back with Add to
-  Library; pass
-  `-e theme light` or `dark`.
-- `AndroidRasterTest#paperTextureChangesRetainImmediatePencilContacts` changes
-  built-in Paper textures and immediately sends whole Pencil contacts while
-  preparation is pending. It checks painted pixels and exact Undo/Redo in both
-  themes through the native Vulkan/JNI path.
-- [`AndroidWorkspaceManagerTest`](../../apps/layer-android/app/src/androidTest/java/art/capycanvas/AndroidWorkspaceManagerTest.kt)
-  and [`AndroidWorkspaceSwitcherTest`](../../apps/layer-android/app/src/androidTest/java/art/capycanvas/AndroidWorkspaceSwitcherTest.kt):
-  persistence, menus and window lifecycle. `AndroidWorkspaceOwnershipTest`
-  checks that a second native session cannot take an active workspace, identifies
-  its owning window and can claim it after that window closes.
-  `#builtinWorkspacesSwitchWithoutLayoutErrors` uses the manager's Preview/Apply
-  path; `#builtinWorkspacesSwitchAfterHeaderReplacementWithoutLayoutErrors` uses
-  the expanded switcher after editing its header fixture. Both switch every
-  built-in workspace with touch and pen in both themes.
-- [`AndroidTitleBarTest`](../../apps/layer-android/app/src/androidTest/java/art/capycanvas/AndroidTitleBarTest.kt):
-  the title-bar editor, compact menus, keyboard focus, Sketch drawers and
-  persistence. `#toolVariantCornersAndContextMenusShareRememberedChoices` checks
-  toolbar and title-bar variant corners, mouse context menus, touch and pen holds,
-  full drawer sibling choices, retained openers and workspace switching in both
-  themes. `#commandGroupsProjectTheirOwnChoicesIconsAndSelectionScope` checks
-  inactive Paint and Sketch group corners, remembered media icons in headers,
-  pinned preset leaves, selection family scope and Sketch drawer columns in both
-  themes. Native drag capture respects panel stacking: a drawer blocks covered
-  resize handles while its own controls remain interactive.
-  `#configuringAnotherColumnRetainsNavigatorIdentity` checks remembered Navigator
-  ownership while another column opens and closes configuration in both themes.
-  `#layerPropertiesDrawerUsesNativeSizingAndActions` checks the combined
-  Layers/Properties drawer from the header and a custom toolbar, immediate growth,
-  compact Properties, footer alignment, rows and icons 6 dp from both edges and
-  swipe action history in both themes.
-- `AndroidPortParityTest` checks color-scrub modifiers, standalone numeric input,
-  advanced toolbar prompts, automatic conversion-copy admission, profile search,
-  custom preference swatches and direct dial input. `AndroidWorkspacePresentationTest`
-  checks retained Zen drawing, immediate pointer fallthrough and disabled-motion
-  paths with a controlled native frame clock.
-- `AndroidRasterTest`: document, file and GPU lifecycle.
-  - `#encloseFillNativeContactsControlsAndHistory` uses Android stylus events
-    with Reference source in both themes. It chooses the remembered Enclose
-    and Fill subtool in the Lasso fill category and switches the Source control.
-    It checks the edge controls, fills
-    two enclosed transparent areas, leaves open and partly enclosed areas
-    intact, and verifies cancellation and exact undo/redo.
-  - `#sharedImageObjectsKeepPosePixelsAndIdentityAcrossFilesAndRecovery` takes
-    `-e objectArchive /data/local/tmp/capy-object-ga-functional.capy`, made by
-    `object_fixture` from a small photo. Run with `-e theme light` and `dark`.
-    It verifies shared paint/object image identity, exact affine undo/redo,
-    save/open, private history recovery and pixels after replacing the GPU.
-  - `#imageObjectsCancelPasteIntoConversionsAndRecovery` cancels placement and
-    a transform without history, pastes an external image into a selection,
-    moves it behind the fixed mask, rasterizes the masked half-opacity Object
-    layer and converts painted ink to an Object layer with unchanged pixels and
-    one-step undo, then checks save/reopen, private recovery, recovered Redo and
-    GPU replacement in both themes, and that ordinary Object layer previews
-    arrive before and after the GPU is replaced. `#imageObjectClipboardCopyCutPasteNonceAndOtherDocument`
-    copies, cuts and pastes images through the system clipboard, pastes another
-    app's image when the nonce does not match and pastes the copy into a new
-    drawing. `AndroidSessionRestartTest#processRestartRetainsImageObjectsAndHistory`
-    takes the same `restartFixture`/`restartPhase` arguments as the other
-    restart case and checks binary64 poses and recovered Undo/Redo after the
-    process is killed. `AndroidInteractionTest#imageRowsTouchPickingMenusAndRefusalActions`
-    drives ordinary Object layer rows, their menu and drag order, finger picking, two-finger
-    navigation and the image paint refusal.
-  - `#drawingTabsRestoreMultipleInactiveDrawingsWithoutPrompt` restores order,
-    active tab, camera, saved checkpoints and independent undo/redo history.
-    `#failedInactiveSessionRetriesWithoutLosingNewDrawing` preserves a failed
-    checkpoint while another drawing is edited, then retries and restarts.
-  - `#navigationBuffersAndPenReturnsToInkPresentation` and
-    `#frontBufferSurfaceLifecycle` cover the switch between buffered navigation
-    and ink presentation (front-buffer, or FIFO where the driver lacks shared
-    presentation), rotation, surface recreation and GPU recovery,
-    including capture, detach and device loss with an unpresented FIFO image.
-  - `#hdrDisplayNegotiation` takes `-e hdrFile <device path of a PQ PNG>`;
-    `-e requireHdr true` fails instead of passing on an SDR-only display.
-  - `#portablePhotoGainmapDelivery` takes
-    `-e photoDirectory /data/local/tmp/capy-portable-photo`. Push the shared
-    `p3-grid-8bit.heic`, `p3-gray-10bit.heic` and `p3-12bit.avif` fixtures, plus
-    `web-hdr.jpg` and `web-hdr.avif` produced by Web's `--portable-photo` test,
-    into that directory.
-  - `#attachedFilterPreviewsReferenceAndRecoveryKeepOwnerInput` opens the Filters
-    drawer for a clipped owner and its attached Motion Blur in both
-    themes, and checks exact Histogram Reference statistics, hidden-owner animation idle,
-    and captured-session undo/redo. It generates private translucent fixtures
-    and writes screenshots and `attached-filter-owner-journey.json` to the
-    app's external-files directory.
-  - `#largePhotoFilterPreviews` opts in
-    with `-e filterPhoto true`, `#largePhotoFilterPreviewDrawing` with
-    `-e filterDrawing true`. They read the app's private
-    `files/filter-memory-test.jpg` and write reports to its external-files
-    directory.
-- `AndroidHostTest#curvesPagesNativeContactsAndExactCoordinates` covers shared
-  Properties pages, native graph contacts, keyboard editing and precise HDR
-  fields. `AndroidTextCompositionTest#curveCoordinatesKeepNativeCompositionAndUnchangedPrecision`
-  checks composition ownership and unchanged numeric commits through the native
-  InputConnection. `AndroidRasterTest#imagePlacementBatchHistoryAndStaleRequests`
-  places a batch of images as image objects, then covers Position anchor,
-  pivot, held nudges, Transform Again and committed paint transforms of a
-  watercolor layer.
-- `AndroidHostTest#pointwiseColorPagesUseNativeControlsAndRetainHiddenValues`
-  checks Hue range pages, Colorize, Brightness to Opacity, Threshold and Photo Filter controls and
-  slider history in both themes. Run with and without `-e presentationNarrow true`.
-  `AndroidRasterTest#pointwiseColorEffectsPersistAllParametersAndOriginalSource`
-  covers all Hue parameters, tagged filter colors, source identity and Activity
-  recreation across integer and floating document profiles.
-  `AndroidRasterTest#illustrationConversionsKeepPaintMaskHistoryAndNativeValues`
-  exercises Brightness to Opacity and Threshold with native U16 ProPhoto paint
-  in both blending spaces. Stylus contacts cross tile seams and source edges,
-  paint separated marks and a mask, and erase with Undo/Redo. It checks partial
-  alpha, unchanged filter input and native paint, and exact save/reopen results.
+| Class | Covers |
+| --- | --- |
+| `AndroidHostTest` | Panels and tabs, Properties pages, gradients, pen calibration, multi-finger gestures |
+| `AndroidInteractionTest` | Drawers, drag geometry, the canvas action bar, notices, the zoom readout, effects and retouching, each with mouse, finger and stylus |
+| `AndroidTitleBarTest` | The title-bar editor, compact menus, keyboard focus, Sketch drawers, the Layers/Properties drawer |
+| `AndroidRasterTest` | Document, file and GPU lifecycle: saving, recovery, image objects, presentation modes, HDR, filters |
+| `AndroidToolBubblesTest` | Tool bubbles with native mouse, touch and stylus; run it on both reference tablets after changing the presenter or capture path |
+| `AndroidWorkspaceManagerTest`, `AndroidWorkspaceSwitcherTest`, `AndroidWorkspaceOwnershipTest` | Workspace persistence, menus, switching and window ownership |
+| `AndroidLanguageTest`, `AndroidTextCompositionTest` | Language changes and native text composition |
+| `AndroidFeatureParityTest`, `AndroidPortParityTest` | Features shared with the other hosts |
+| `AndroidNativeHandlesTest` | JNI handle validation, without a GPU surface |
+
+`AndroidHostTest`, `AndroidRasterTest` and `AndroidTextCompositionTest` accept
+`-e presentationNarrow true` (portrait, at most 640 dp) or
+`-e presentationWide true` (landscape); run layout-dependent tests in both.
+These tests need other arguments:
+
+| Test | Arguments |
+| --- | --- |
+| `AndroidFirstUiTest#unsupportedGpuExplainsTheDeviceInTheCanvasArea` | `-e unsupportedGpu true`, on an emulator started with `-gpu host -feature -Vulkan` |
+| `AndroidToolBubblesTest#sketchEraserBubbleKeepsItsHaloChooserAndSettingsAcrossThemesAndDevices` | `-e bubbleTheme light\|dark -e bubbleInput mouse\|touch\|pen` for one variant |
+| `AndroidInteractionTest`, `AndroidColorPanelTest` | `-e systemInput true` uses OS input injection where the device allows it |
+| `AndroidFeatureParityTest#paperLibraryImportsRenamesAndDeletesWithoutChangingTheDrawing` | `-e theme light` or `dark` |
+| `AndroidRasterTest#sharedImageObjectsKeepPosePixelsAndIdentityAcrossFilesAndRecovery` | `-e objectArchive /data/local/tmp/capy-object-ga-functional.capy`, made from a small photo by `object_fixture` ([brush benchmark](#brush-workload-benchmark)); `-e theme light` and `dark` |
+| `AndroidRasterTest#hdrDisplayNegotiation` | `-e hdrFile <device path of a PQ PNG>`; `-e requireHdr true` fails instead of passing on an SDR-only display |
+| `AndroidRasterTest#portablePhotoGainmapDelivery` | `-e photoDirectory /data/local/tmp/capy-portable-photo`, holding the shared `p3-grid-8bit.heic`, `p3-gray-10bit.heic` and `p3-12bit.avif` fixtures and the `web-hdr.jpg` and `web-hdr.avif` that Web's `--portable-photo` test produces |
+| `AndroidRasterTest#largePhotoFilterPreviews`, `#largePhotoFilterPreviewDrawing` | `-e filterPhoto true` or `-e filterDrawing true`; they read the app's private `files/filter-memory-test.jpg` and write reports to its external-files directory |
+| `AndroidRasterTest#spatialFilterWindowsKeepPaintAndHistory` | `-e spatialPhoto /data/local/tmp/capy-tier-24mp.jpg` |
+
+`AndroidSessionRestartTest` kills its own process. Run
+`#processRestartRetainsSavedAndUnsavedHistory` or
+`#processRestartRetainsImageObjectsAndHistory` first with
+`-e restartPhase prepare -e restartFixture UNIQUE -e theme light|dark`, which
+reports `Process crashed`, then with `-e restartPhase verify -e restartFixture UNIQUE`,
+which must report `OK (1 test)`. Only that named test directory survives between
+the two runs; verification removes it.
+
+`AndroidLanguageTest#genuineKeyboardCompositionDefersLanguagePublication` takes
+`-e genuineIme true` and needs an installed keyboard that produces actual
+preedit. Set `genuineImeKeys`, `genuineImePreedit` and `genuineImeCandidate` to
+the engine's key sequence, composing text and visible candidate; for Japanese
+Gboard QWERTY, use `nihonn`, `にほん` and `日本`. Missing preedit fails the
+prerequisite. Record and restore the keyboard languages, layout and selected
+system subtype after device setup.
 
 ### Test data
 
@@ -606,34 +246,39 @@ also save images under `Pictures/` through MediaStore.
 
 ### Writing device tests
 
-- Poll with `CanvasHost.awaitMain`, which checks a condition in `runOnMainSync`
-  until a timeout, and `CanvasHost.drain`, which waits for native publication.
-  Pass the test's Compose rule when it owns the frame clock. Global idle waits
-  can hang while a gesture is held.
-- Copy retained `CanvasHost.snapshot` JSON on the main thread before reading or
-  editing it in a fixture. Native publication updates those objects in place.
-- Drawing checks wait for shared canvas/brush readiness and no
-  `Native.renderingPending` work, including queued surface presentation.
-  `Native.frame` can still request optional shader warmup after the drawing is
-  complete. Keep separate completion checks for asynchronous UI operations,
-  statistics, readbacks, file workers and recovery.
-- Between consecutive popup or held-contact journeys, wait for native window
-  focus to settle.
-- Popup contacts choose the topmost touchable window containing the screen
-  point, send outside contacts in that window's coordinates, and retain the
-  chosen window through release. Tooltips can coexist with the active menu.
-- Test focus loss with a real window. Send keyboard events through system
-  dispatch so Android leaves touch mode correctly.
-- `PixelCopy` cannot read the canvas: its shared front-buffer image stays
-  acquired. Debug and benchmark builds give the swapchain copy usage, so tests
-  read the retained image directly or take a compositor screenshot. Release
-  builds cannot be read back.
-- `CanvasHost.createDrawing` in `CapyDeviceTest.kt` (with `orderDrawing`) makes a
-  pixel-sized drawing through the shared [New drawing](../ui/new-drawing.md)
-  actions and waits for its New request to finish. Use it when a journey only
-  needs a canvas; `newDrawingDialogJourneyInBothThemes` walks the dialog itself.
-- `awaitMain` defaults to a 10 s timeout. A cold shader cache on a slow tablet
-  can take longer to start; see [Devices](devices.md).
+- **Poll for conditions.** Use `CanvasHost.awaitMain`, which checks a condition
+  in `runOnMainSync` until a timeout (10 s by default), and `CanvasHost.drain`,
+  which waits for native publication. Pass the test's Compose rule when it owns
+  the frame clock. Global idle waits can hang while a gesture is held. A cold
+  shader cache on a slow tablet can outlast the default timeout; see
+  [Devices](devices.md).
+- **Copy snapshots.** Copy retained `CanvasHost.snapshot` JSON on the main thread
+  before reading or editing it; native publication updates those objects in place.
+- **Wait for the work you started.** Drawing checks wait for shared canvas/brush
+  readiness and no `Native.renderingPending` work, including queued surface
+  presentation. `Native.frame` can still request optional shader warmup after the
+  drawing is complete. Keep separate completion checks for asynchronous UI
+  operations, statistics, readbacks, file workers and recovery. History
+  restoration can finish after a command publication fence; wait for the
+  expected published document state before asserting Undo or Redo.
+- **Settle focus and windows.** Between consecutive popup or held-contact
+  journeys, wait for native window focus to settle. Popup contacts choose the
+  topmost touchable window containing the screen point, send outside contacts in
+  that window's coordinates, and keep the chosen window through release.
+  Tooltips can coexist with the active menu.
+- **Use real focus and keys.** Test focus loss with a real window. Send keyboard
+  events through system dispatch so Android leaves touch mode correctly.
+- **Read canvas pixels directly.** `PixelCopy` cannot read the canvas: its shared
+  front-buffer image stays acquired. Debug and benchmark builds give the
+  swapchain copy usage, so tests read the retained image directly or take a
+  compositor screenshot. Release builds cannot be read back.
+- **Create drawings with the shared actions.** `CanvasHost.createDrawing` in
+  `CapyDeviceTest.kt` (with `orderDrawing`) makes a pixel-sized drawing through
+  the shared [New drawing](../ui/new-drawing.md) actions and waits for its New
+  request to finish. Use it when a journey only needs a canvas;
+  `newDrawingDialogJourneyInBothThemes` walks the dialog itself.
+
+### Rust GPU tests on a device
 
 To isolate a driver shader-compiler failure, build the renderer's
 `shader_compile` example with `cargo ndk -t arm64-v8a --platform 29 build
@@ -652,20 +297,11 @@ most magnified transform pose.
 
 ## Benchmarks
 
-`AndroidViewportBenchmarkTest` accepts `motion=hover` and `cursor=tool` or
-`cursor=tool_brush_size` to measure moving tool cursors without depositing ink.
-Use the tier photo, release or benchmark build, and three five-second gestures
-under the [measurement rules](../performance/measuring.md).
-
 The `benchmark` build type inherits `release`, is not debuggable, uses the
 development application ID and is signed with the debug key. `-PcapyBenchmark`
 makes it the build type of the test APK. Make performance decisions with it,
 never with a debug build. Reinstall the debug APK afterwards for ordinary
 development.
-
-On the MovinkPad 11, installing, force-stopping or starting instrumentation clears
-the test app's Display › Adaptive switch. The bubble benchmark's ready/go barrier
-lets its `--adaptive-script` helper enable 90 Hz after private fixture setup.
 
 ```bash
 (cd apps/layer-android && ./gradlew :app:assembleBenchmark :app:assembleBenchmarkAndroidTest "-PcapyAbi=$CAPY_TEST_ABI" -PcapyBenchmark)
@@ -678,234 +314,101 @@ self-instrumenting runners in `app/src/benchmark` (`BrushBenchmarkInstrumentatio
 and `UiStartupInstrumentation`). R8 can remove methods that only a separate test
 APK calls, so test-APK benchmarks use the unminified build.
 
-- **Tool bubbles.** `AndroidBubbleBenchmarkTest#fiveBubbleMotion` primes a
-  five-bubble contact and records three six-second native drags through the
-  other four bubbles on the tier photo at Fit. It checks that every neighbor
-  moves. Run `tools/performance/android-bubbles.py OUTPUT --photo DEVICE_PHOTO
-  --width WIDTH --height HEIGHT` through `devices.py run` after installing the
-  benchmark and test APKs under the worktree's application ID. The collector
-  samples the app window's actual SurfaceFlinger presents; canvas surface
-  submissions, `FrameMetrics` and observed widget positions are attribution.
-  `--workload palette-opening` repeats native palette-bead taps near the bottom-right
-  edge. The three-transition diagnostic retains production frame-loop active
-  boundaries, individual drawn positions and actual presentations. Opening can
-  clamp in one step, so this mode reports no sustained-motion FPS.
-  `--palette-transitions 1`–`10` changes the diagnostic count.
-  `--report-only` rebuilds a report from captured data. The drag result labels each
-  `FrameMetrics` column, including input, animation, layout, draw, synchronization,
-  command issue, swap and GPU durations; these do not replace actual presents.
+Each benchmark skips unless its opt-in argument is set. Use the tier photo and
+follow the [measurement rules](../performance/measuring.md) for gesture counts
+and recording results. Renderer submissions, GPU completions, draw
+callbacks and `FrameMetrics` attribute work; only the app window's actual
+SurfaceFlinger presents measure display cadence. Record diagnostic options that
+add work, such as renderer profiling, tracing or memory sampling, separately
+from rate runs.
+
+On the MovinkPad 11, installing, force-stopping or starting instrumentation clears
+the test app's Display › Adaptive switch. The bubble benchmark's ready/go barrier
+lets its `--adaptive-script` helper enable 90 Hz after private fixture setup.
+
+- **Tool bubbles.** `AndroidBubbleBenchmarkTest#fiveBubbleMotion` drags one
+  bubble through four others on the tier photo at Fit. Run
+  `tools/performance/android-bubbles.py OUTPUT --photo DEVICE_PHOTO --width WIDTH --height HEIGHT`
+  through `devices.py run` after installing the benchmark and test APKs under
+  the worktree's application ID. `--workload hdr-drag` and `hdr-intensity` use
+  the tier photo in an F16 drawing with the color bubble; the latter sweeps the
+  EV arc. `--workload palette-opening` repeats palette-bead taps
+  (`--palette-transitions 1`–`10`) and reports no sustained-motion rate.
+  `--report-only` rebuilds a report from captured data.
 - **Workspace motion.** `AndroidWorkspacePerformanceTest` runs with
-  `-e workspaceBenchmark true`. `#colorPanelOverlapFrameTiming`,
+  `-e workspaceBenchmark true`: `#colorPanelOverlapFrameTiming`,
   `#colorWheelFrameTiming`, `#editColorWheelFrameTiming` (the Edit Color
   dialog's wheel), `#continuousDragFrameTiming` and
-  `#continuousResizeFrameTiming` use the real display clock and `FrameMetrics`.
-  `-e workspaceTransparency 0`–`3` sets panel transparency (off to high) and
-  restores it afterwards. Results appear in logcat under `CapyDragPerf` and
-  `CapyResizePerf`.
-  The gap and panel column benchmarks can also run inside the app with
-  `android-viewport-presents.py --workspace-workload gap --workspace-runner self`.
-  This uses `UiStartupInstrumentation` and supports `-PcapyOptimize=true` without
-  a separate JUnit APK. Both entry points share `WorkspaceFrameTiming`, including
-  the fixture, input, pixel checks and report format. Its source directory is
-  compiled into the benchmark app and debug AndroidTest APK only; ordinary app
-  builds exclude it. Compare optimization settings with the same self runner,
-  document and display conditions, and retain each APK's compilation status.
-  Normal workspace captures leave app ATrace disabled and use explicit boot-clock
-  contact timestamps for the SurfaceFlinger join. Monotonic read brackets validate
-  the clock offset. `--profile` enables app tracing and uses the async trace window;
-  its GPU query polling changes the workload. Reports retain raw host frame/input
-  rows and their field names under `host_metrics`, including rows that settle after
-  the contact. Filter those rows to the recorded monotonic input bounds.
-- **Workspace switcher scrolling.**
-  `AndroidWorkspacePerformanceTest#workspaceSwitcherScrollFrameTiming` runs with
-  `-e switcherBenchmark true -e photo <readable-tier-photo.jpg>`. It scrolls the
-  workspace choices and visibility checklist on the 12 MP photo with an empty
-  paint layer, Fit zoom and a long workspace list.
-- **Layer reorder.** `AndroidTitleBarTest#layerSwipeFrameTiming` runs with
-  `-e layerReorderBenchmark true -e photo <readable-tier-photo.jpg>` and
-  `-e width`/`-e height` matching that photo. It moves the native row preview
-  with mouse contacts after immediate pickup, with one priming gesture and
-  three five-second gestures. The `layer-reorder-<run>.json` external files
-  retain moving-window `FrameMetrics` timestamps, camera and layer state.
-  Add `-e layerRelationshipBenchmark true` to drag an attached filter through
-  owner-chain gaps with clipping connectors and attachment feedback visible.
-- **Layer thumbnail selection.** `AndroidTitleBarTest#layerSwipeFrameTiming`
-  also accepts `-e layerSelectionBenchmark true`, with the same photo and
-  dimensions. It switches between the empty paint layer's content and mask
-  every 150 ms, including the resulting tool and canvas action bar changes.
-  The theme defaults to dark; `-e layerBenchmarkTheme light` changes it.
-  `-e layerSelectionIntervalMs 400` allows each transition to finish before
-  the next selection for separate settled-transition diagnostics.
-  After one second of priming, three five-second runs record native
-  `FrameMetrics` in `layer-selection-<run>.json`. The records include observed
-  selection-change timestamps and retain frames within their 200 ms animation
-  windows, alongside all received reports, dropped-report counts and named
-  timing components. Vsync timestamps measure window-frame cadence, not actual
-  screen-presentation times. Check dropped reports before comparing rates and
-  exclude gaps between separate animation windows.
-- **Layers/Properties drawer and left swipe.** The same method accepts
-  `-e layerPropertiesBenchmark true` for repeated native footer transitions and
-  `-e layerSwipeDirection left` for the three-action strip. Supply the tier photo,
-  matching width/height and `-e layerBenchmarkTheme light|dark`. Each path primes
-  the controls and records three five-second moving windows.
-- **Grouped tool drawer scrolling.**
-  `AndroidWorkspacePerformanceTest#groupedDrawerScrollFrameTiming` runs with
-  `-e groupedToolBenchmark true -e photo <readable-tier-photo.jpg>`. It uses the
-  default Photo workspace and scrolls the grouped Drawing drawer on the 12 MP
-  photo with an empty paint layer and Fit zoom. It does not measure drawer
-  opening, sibling switching or tile dragging.
-  Both scrolling fixtures use native contacts, one warm-up and three six-second
-  gestures per surface. Their `workspace-switcher-benchmark` and
-  `grouped-drawer-benchmark` external-file directories contain draw samples where
-  the scroll offset changes and raw `FrameMetrics`. The draw timestamps and frame
-  vsyncs use Android's monotonic clock; match them to retain moving frames and
-  count each vsync once. A 200 ms callback drain retains late frame metrics
-  without extending the recorded motion window. Draw callbacks alone do not
-  establish presentation performance.
-- **Canvas action bar.** `AndroidCanvasBarBenchmarkTest` runs with
-  `-e canvasBarBenchmark true`. `-e scenarios ui,paint,photo,composed_transform,scaled,move,selection,menus,canvas_size,refine,crop,merge,dodge_burn,frequency_separation,effects,curves,spatial-effects`,
-  `durationMs`, `width`, `height`, `blending` (`perceptual` or `linear`) and
-  `transparency` (`off` to `high`) narrow or
-  resize the run. `-e photo <readable-file>` uses a JPEG matching `width` and
-  `height`; otherwise the fixture generates an image. `-e zoomOut false` keeps
-  Fit zoom. `-e project <readable-current-format.capy>` opens a prepared native
-  project through the ordinary loader instead of creating a canvas.
-  `-e scenarios pen-response -e responseRepeats 3` measures pressure and tilt
-  utility drags, curve drags and live sensor previews on the tier photo. It saves
-  each repeated motion separately, verifies changing view data and records
-  Activity hover-dispatch CPU time separately from native owner execution.
-  For paired
-  retained-photo translation, use `-e acceptedPhoto true`,
-  `-e labels photo-translate-drag`, and add `-e materialWatercolor true` to paint
-  a sparse wet-watercolor stroke on the rasterized photo before Transform. That
-  run verifies and saves the photo base and native watercolor planes alongside
-  its motion report.
-  `-e translationRepeats 4` saves the first translation and three more gestures
-  in the same session, keeping cold-start and warm results separate.
-  `-e transformSnapping true` enables snapping for the translation measurement.
-  `-e labels photo-retained-distort-drag` or
-  `-e labels photo-retained-warp-drag` measures the paint transform's corner or
-  mesh-node preview on the same input and repeats it in the same session.
-  `-e saveRetainedDiagnostic true` uses a one-way drag, commits it and saves
-  `retained-diagnostic.capy` and its manifest for reproduction. This changes
-  the motion path; keep it separate from qualification runs.
-  `-e finalBake true` commits a seven-degree rotation of the watercolor photo
-  layer, samples job memory, and verifies native backing after save/reopen.
-  `-e memory true` records tracked renderer allocation; `-e rendererProfile true`
-  records CPU submission and GPU observations. These rates exclude presented
-  input latency. Each scenario records the initial camera and its input window in
-  monotonic and boot clocks, separately from terminal completion polling,
-  logs a `CapyBarPerf` line and writes
-  `canvas-bar-benchmark/<label>.json` in external files; `ui_hz` and
-  `ui_interval_ms` count the distinct vsyncs the UI drew until the gestures end.
-  `effects` scrubs Exposure alone and after Levels/Vibrance, and
-  `-e labels paper-scale-drag` scrubs Paper Scale with its relief preview; `spatial-effects`
-  scrubs Gaussian Blur at small and large radii. Both prime the actual slider,
-  wait for shader readiness and verify changing parameter values during motion.
-  `curves` with `-e labels effect-curves-drag` drags the native Curves graph over
-  the photo and verifies changing points. `-e translationRepeats 4` retains the
-  first contact and three subsequent contacts separately.
-  `-e effectZoom 0.5` sets the filter camera after Fit; omit it for the Fit control.
-  `-e captureFilters true` captures the resulting filter canvas in both themes
-  after timing finishes.
-  `AndroidRasterTest#spatialFilterWindowsKeepPaintAndHistory` with
-  `-e spatialPhoto /data/local/tmp/capy-tier-24mp.jpg` exercises Gaussian Blur
-  at 50% zoom, touch navigation, stylus painting and exact undo/redo in both themes.
-  `refine` drags the Refine panel's Feather slider with the stylus on a
-  2048 × 1536 document and at `width` × `height`, and logs the values sent and
-  previews drawn. `-e refine grow` (or `shrink`, `border`) picks another
-  operation, `-e refineSpan` the fraction of the track, and `-e refineBar off`
-  hides the canvas action bar. `crop` drags a crop handle over a placed photo.
-  Scenarios that edit a placed photo's pixels rasterize its Object layer first.
-  `move` drags the selected pixels of a placed `width` × `height` photo with
-  Move: all of it, the middle half, and the middle half with Leave Copy.
-  `merge` paints eight layers over a placed photo and times Merge Visible and
-  Flatten Image; its `after_mark` has the dispatch time and the GPU completions
-  that follow. `dodge_burn` and `frequency_separation` time New Dodge & Burn
-  Layer and Frequency Separation (radius 8) on a placed photo the same way.
-  Their completion latency is `drained_ns - motion.begin_ns`: a new layer can
-  appear before its pixels finish. These scenarios add no fixed delay after
-  the command. Measure latency without `rendererProfile` or PSS sampling;
-  collect memory separately. Use `-e photo` for the reference photo and
-  `-e zoomOut false` to retain Fit zoom.
-  `photo` separates body translation, corner resizing, distortion and a warp
-  node drag. `-e tierPhoto true` uses the reference photo beneath one empty paint
-  layer at Fit zoom for its retained Transform journeys. Priming gestures
-  validate their geometry, then reset the transform
-  and restore the intended mode before measurement. Commands query the owner
-  for the current shared `command_reason` after injected gestures. Published
-  command state stays stable during contact; Android input delivery can finish before
-  the renderer owner consumes the terminal sample. These waits occur outside the
-  motion measurement window. The output directory is
-  cleared at the beginning of each invocation, so omitted scenarios cannot
-  contribute results from an earlier run.
-  `-e labels <comma-separated labels>` limits the measured operations while
-  preserving fixture setup and priming. `composed_transform` resizes and distorts
-  a translucent photo over another photo, retaining a composed root.
-  `gpu_completed_hz` counts completions inside the gesture window, including
-  thumbnail-only refreshes. Raw `measurements` and `completions` permit matching
-  submissions to the latest completed host input call, excluding updates with no
-  newly consumed input. These counts do not establish distinct transform poses
-  or display cadence; use a SurfaceFlinger trace for the latter.
-  Photo drags are marked by `capy-drag` trace sections; `capy.publish.native` and `capy.publish.parse`
-  time each model publication; `-e composeTrace true` adds a section per
-  composable, which slows the frames it attributes.
-  `-e rendererProfile true` opens the Stats panel to collect renderer GPU phase
-  timestamps. Use these runs for attribution; the panel changes the workload,
-  so compare motion rates with the ordinary runs separately.
-  `-e panel navigator` opens the Navigator for a separate drag qualification;
-  record this workload separately from runs with the panel closed. The harness
-  sets Stats/Navigator visibility explicitly and asserts the overview count.
-  Combining it with `rendererProfile` keeps both panels open.
+  `#continuousResizeFrameTiming`. `-e workspaceTransparency 0`–`3` sets panel
+  transparency (off to high) and restores it afterwards. Results appear in
+  logcat under `CapyDragPerf` and `CapyResizePerf`. The gap and panel column
+  benchmarks also run inside the optimized app with
+  `android-viewport-presents.py --workspace-workload gap --workspace-runner self`
+  ([workspace columns](../performance/measuring.md)); both entry points share
+  `WorkspaceFrameTiming`. Compare optimization settings with the same runner.
+- **Scrolling.** `AndroidWorkspacePerformanceTest#workspaceSwitcherScrollFrameTiming`
+  with `-e switcherBenchmark true` scrolls the workspace choices and visibility
+  checklist; `#groupedDrawerScrollFrameTiming` with `-e groupedToolBenchmark true`
+  scrolls the Photo workspace's grouped Drawing drawer. Both take
+  `-e photo <readable-tier-photo.jpg>` and write draw samples and raw
+  `FrameMetrics` to the `workspace-switcher-benchmark` and
+  `grouped-drawer-benchmark` external-files directories. Keep frames whose
+  vsync matches a draw where the scroll offset changed, counting each vsync once.
+- **Layers.** `AndroidTitleBarTest#layerSwipeFrameTiming` takes
+  `-e photo <readable-tier-photo.jpg>`, `-e width`/`-e height` matching it, and
+  `-e layerBenchmarkTheme light|dark` (dark by default), plus one workload:
+  - `-e layerSwipeBenchmark true` swipes a row; add `-e layerSwipeDirection left`
+    for the left action strip.
+  - `-e layerReorderBenchmark true` drags a row preview with the mouse. Add
+    `-e layerRelationshipBenchmark true` to drag an attached filter through
+    clipping connectors.
+  - `-e layerSelectionBenchmark true` switches between the empty layer's content
+    and mask every 150 ms; `-e layerSelectionIntervalMs 400` lets each transition
+    finish first.
+  - `-e layerPropertiesBenchmark true` repeats the Layers/Properties footer
+    transition.
+
+  Each run writes `layer-swipe`, `layer-reorder`, `layer-selection` or
+  `layer-properties` `-<run>.json` to external files with moving-window
+  `FrameMetrics`. Check dropped reports before comparing rates, and exclude gaps
+  between animation windows.
 - **Canvas navigation and drawing.** `AndroidViewportBenchmarkTest` runs with
-  `-e viewportBenchmark true`. `-e width 4248 -e height 2832` selects the low-tier
-  canvas; `-e canvasSize` supplies both dimensions when they are omitted.
-  `-e photo /data/local/tmp/FILE.jpg` places that photo before drawing and navigation;
-  `-e openQueryPhoto true` opens its original dimensions directly for photos
-  larger than New drawing accepts on the device.
-  `-e passThrough true` adds a Pass Through group with a Black & White adjustment
-  above a Solid Color fill. Warmup waits for the active brush and canvas, primes
-  painting and a matching navigation gesture, then restores the camera.
-  The timed interval ends with the gesture, before draining frames.
-  `-e motion pan|pinch|rotate` measures touch navigation;
-  `-e motion smooth_zoom -e zoomDirection horizontal|vertical` measures the Zoom
-  tool through native stylus input. The latter records changing zoom percentages
-  and checks that navigation preserves the drawing revision;
-  the default `stroke` draws, with `osInput`, `canvasSize`, `brushSize`,
-  `intervalMs`, `durationMs`, `repeats`, `blending` and `label`.
-  `contactMs` with `pauseMs` runs repeated short contacts as a checkpoint/history
-  diagnostic. Pauses remain in the reported interval; this does not qualify a
-  continuous stroke target. `session_samples` records process-wide kernel write
-  counters, disk footprint and newest checkpoint age on a separate IO sampler.
-  `-e languageSwitches ja,zh-Hans,zh-Hant` requests a language halfway through
-  each stroke and records the deferred publication and first resumed completion
-  separately from the moving-frame window. Photo runs move the empty paint layer above
-  the photo and undo the priming stroke. Set `radiusX`, `radiusY` in surface
-  pixels for a contained tier workload. `navigator false` is a separate
-  diagnostic; tier measurements retain the default workspace. Pull
-  `files/viewport-benchmark/` from the app's external storage and summarize it
-  with `python3 tools/performance/android-viewport-report.py DIRECTORY`.
+  `-e viewportBenchmark true`; [navigation](../performance/measuring.md) has the
+  SurfaceFlinger runner.
+  - `-e width 4248 -e height 2832` selects the low-tier canvas; `-e canvasSize`
+    supplies both dimensions when they are omitted. `-e photo
+    /data/local/tmp/FILE.jpg` places that photo; `-e openQueryPhoto true` opens it
+    at its original dimensions when it is larger than New drawing accepts.
+    `-e passThrough true` adds a Pass Through group with a Black & White
+    adjustment above a Solid Color fill.
+  - `-e motion pan|pinch|rotate` measures touch navigation;
+    `-e motion smooth_zoom -e zoomDirection horizontal|vertical` measures the
+    Zoom tool with stylus input; `-e motion hover -e cursor tool` or
+    `tool_brush_size` moves tool cursors without ink. The default `stroke` draws,
+    with `osInput`, `canvasSize`, `brushSize`, `intervalMs`, `durationMs`,
+    `repeats`, `blending` and `label`. Set `radiusX`, `radiusY` in surface pixels
+    for a contained tier workload.
+  - `contactMs` with `pauseMs` runs repeated short contacts as a
+    checkpoint/history diagnostic; it does not qualify a continuous stroke.
+    `-e languageSwitches ja,zh-Hans,zh-Hant` requests a language halfway through
+    each stroke. `-e navigator false` is a separate diagnostic; tier
+    measurements keep the default workspace.
+  - Pull `files/viewport-benchmark/` from the app's external storage and
+    summarize it with `python3 tools/performance/android-viewport-report.py DIRECTORY`.
 - **Artwork query workers.** `AndroidArtworkQueryBenchmarkTest#exactSamples`
   runs with `-e artworkQueryBenchmark true`; `#artworkStatistics` uses
   `-e artworkStatisticsBenchmark true -e statisticsMode preview|exact|auto`.
   `-e photo /data/local/tmp/FILE.jpg` opens the original photo at its native
-  dimensions. The Auto statistics fixture inserts a Levels adjustment and
-  queries its shared EffectChannels source; it does not measure UI adoption.
-  Results and cancellation latency appear in `files/artwork-query-benchmark/`
-  or `files/artwork-statistics-benchmark/`. For navigation interference, use
-  `AndroidViewportBenchmarkTest` with `-e openQueryPhoto true`,
-  `-e artworkQueries true -e queryCount N`, and `-e statisticsPreview true`,
-  `-e statisticsExact true` or `-e levelsStatistics true`. Levels controls also
-  use `levelsStatistics true` with `artworkQueries false` to retain the same
-  fixture. Query timestamps and owner capture costs are separate from the input
-  window; choose enough requests to cover that window and report later drain
-  separately. Actual presentation requires the owned SurfaceView's timestamps,
-  not renderer submission counts. Use FrameTimeline without graphics tracing
-  for rate collection; graphics tracing consumes renderer timing samples.
-  `-e clippingPreview true` enables both shared clipping flags without query
-  workers, records the applied state and photo frame, and checks a known
-  clipped solid-color frame after motion. Use `-e repeats 0` for that
-  presentation check alone; it does not provide motion qualification.
+  dimensions. Results and cancellation latency appear in
+  `files/artwork-query-benchmark/` or `files/artwork-statistics-benchmark/`. For
+  navigation interference, use `AndroidViewportBenchmarkTest` with
+  `-e openQueryPhoto true`, `-e artworkQueries true -e queryCount N`, and
+  `-e statisticsPreview true`, `-e statisticsExact true` or
+  `-e levelsStatistics true`; choose enough requests to cover the input window.
+  Use FrameTimeline without graphics tracing for rates; graphics tracing
+  consumes renderer timing samples. `-e clippingPreview true` enables both
+  shared clipping flags without query workers and checks a clipped frame after
+  motion; `-e repeats 0` runs that check alone.
 - **UI startup.** With an `-PcapyOptimize` build under an isolated ID, run
   `adb shell am instrument -w -e uiStartupAudit true -e auditLabel LABEL <id>/art.capycanvas.UiStartupInstrumentation`.
   It records first draw, Settings responses, UI frame intervals and publication
@@ -917,6 +420,41 @@ APK calls, so test-APK benchmarks use the unminified build.
   `CLASSPATH=<dex> app_process / AndroidPenMotion CX CY RX RY workflow [turns/s] [seconds]`
   while Perfetto records. `tools/performance/android-pen-report.py TRACE MARKERS --processor TRACE_PROCESSOR`
   reports CPU scopes, GPU observations and canvas latches per action.
+
+### Canvas action bar benchmark
+
+`AndroidCanvasBarBenchmarkTest` runs with `-e canvasBarBenchmark true`
+([canvas bar rules](../performance/measuring.md)). Each scenario logs a
+`CapyBarPerf` line and writes `canvas-bar-benchmark/<label>.json` in external
+files; the directory is cleared at the start of each invocation. `ui_hz` and
+`ui_interval_ms` count distinct UI vsyncs until the gestures end;
+`gpu_completed_hz` counts completions inside the gesture, including
+thumbnail-only refreshes, not distinct poses.
+
+| Argument | Effect |
+| --- | --- |
+| `-e scenarios ui,paint,photo,composed_transform,scaled,move,selection,menus,canvas_size,refine,crop,merge,dodge_burn,frequency_separation,effects,curves,spatial-effects` | Chooses scenarios |
+| `-e labels <comma-separated labels>` | Limits the measured operations, keeping setup and priming |
+| `durationMs`, `width`, `height`, `blending` (`perceptual` or `linear`), `transparency` (`off` to `high`) | Resize the run |
+| `-e photo <readable-file>` | Uses a JPEG matching `width` and `height`; otherwise the fixture generates an image |
+| `-e tierPhoto true` | Puts the reference photo beneath one empty paint layer at Fit for the `photo` journeys |
+| `-e zoomOut false` | Keeps Fit zoom |
+| `-e project <readable-current-format.capy>` | Opens a prepared project through the ordinary loader |
+| `-e memory true`, `-e rendererProfile true` | Record renderer allocation, or open Stats for GPU phase timestamps |
+| `-e composeTrace true` | Adds a trace section per composable, beside the `capy-drag`, `capy.publish.native` and `capy.publish.parse` sections |
+| `-e panel navigator` | Opens the Navigator; record it separately from runs with the panel closed |
+
+| Scenario | Measures | Options |
+| --- | --- | --- |
+| `photo` | Body translation, corner resizing, distortion and a warp node drag | `-e acceptedPhoto true -e labels photo-translate-drag` for retained-photo translation, with `-e materialWatercolor true` to paint a wet stroke first; `-e labels photo-retained-distort-drag` or `photo-retained-warp-drag`; `-e translationRepeats 4` keeps the first contact and three more separately; `-e transformSnapping true`; `-e finalBake true` commits a rotation and checks native backing after save/reopen; `-e saveRetainedDiagnostic true` saves `retained-diagnostic.capy` but changes the motion path |
+| `composed_transform` | Resizing and distorting a translucent photo over another photo | |
+| `effects`, `spatial-effects` | Exposure alone and after Levels/Vibrance; Gaussian Blur at small and large radii | `-e labels paper-scale-drag` scrubs Paper Scale; `-e effectZoom 0.5` sets the filter camera after Fit; `-e captureFilters true` captures the result in both themes after timing |
+| `curves` | Dragging the Curves graph | `-e labels effect-curves-drag` |
+| `refine` | Refine's Feather slider, dragged with the stylus | `-e refine grow`, `shrink` or `border`; `-e refineSpan` sets the fraction of the track; `-e refineBar off` hides the bar |
+| `crop` | A crop handle over a placed photo | |
+| `move` | A placed photo's selected pixels: all of it, the middle half, and the middle half with Leave Copy | |
+| `merge`, `dodge_burn`, `frequency_separation` | Merge Visible and Flatten Image, New Dodge & Burn Layer, Frequency Separation; latency is `drained_ns - motion.begin_ns` | Measure latency without `rendererProfile` or memory sampling |
+| `pen-response` | Pressure and tilt utility drags and live sensor previews | `-e responseRepeats 3` |
 
 ### Brush workload benchmark
 
@@ -930,130 +468,71 @@ size. Then
 `python3 tools/performance/android-brush-benchmark.py OUT --serial "$CAPY_ANDROID_SERIAL" --presets 1 --size 1000`
 passes `-e preset`, `-e brushSize` and `-e mode` (`constant`, `pressure`, `tilt`,
 `straight`, `zigzag`, `stationary`, `lifts`, `pauses`, `settle`, `visual` or `pinch`); `--trace` and `--profile` add
-Perfetto and simpleperf captures. Strokes must present in the display status's
-`ink_present_mode`: `SharedDemandRefresh`, or `Fifo` on drivers without shared
-presentation. The default preset list is the dry brushes;
-the default workspace keeps Stats closed. `--stats` opens Stats and enables GPU
-timing; use `--trace --stats` for GPU phase diagnostics. Report these runs
-separately because Stats changes the workspace and adds measurement work.
-
-`straight` traverses the horizontal diameter once per contact. `zigzag` moves
-back and forth horizontally at one cycle per second while progressing vertically;
-both use the existing radius controls. Instrumentation arguments
-`-e visualBackground true -e theme light|dark` show Paper, hide the photo and cursor,
-and select the theme for matching brush captures. Keep the photo visible for
-ordinary performance comparisons.
-
-To ink on a crowded vector layer, generate a fixture with
-`cargo run --release -p layer-core --example crowded_vector_fixture -- OUT.capy 4248 2832 10000`
-(add `--paint` for the raster control, an empty paint layer over the same
-hatching), push it under `/data/local/tmp`, and pass `--photo` with it,
-`--canvas-width 4248 --canvas-height 2832`, `--paint-layer-name Ink` and
-`--fixture-layers 4` (5 for the control). A named layer keeps its place under the
-translucent Tones layer, so the run paints below another layer.
-`Capy GPU native capture ns` measures GPU validation, native encoding and
-canonical promotion after paint and before prediction. It excludes CPU
-preparation and backing-worker readback. A scope that cannot fit the current
-command encoder or obtain a timer slot records its renderer frame ID in
-`Capy GPU native capture omitted`; treat those frames as missing phase data.
-`--warmup-idle-ms 0` starts photo setup after the selected brush is ready, then
-measures brush preparation without waiting for the remaining shader catalogue.
-Use `--probe-presets 1,9,11,10,12,41` to record representative preparation times
-in `-info.json`; repeat with `--warmup-idle-ms 30000` for idle preparation.
-Each probe, the selected preset and the following `--size` change record
-`ready_ms`, the largest gaps between UI-thread frame callbacks and the slowest
-render-owner round trip while preparation runs. `--size-idle-ms` waits that long
-after the selection before changing the size. The app does not persist driver
-pipeline caches. A new process may still reuse the driver's own caches; clearing
-only the benchmark application's data does not establish a shader-cold run.
-These diagnostic runs also retain the first unprimed stroke in `-prime.json`.
-For a matched fully warm control, use `--wait-for-warmup`: it adopts the photo
-after current-brush readiness, then waits for the catalogue once in that context.
-Setup has a ten-minute bound for slow reference-driver compilation.
-
-`--presets` accepts every built-in preset, including wet, smudge, Liquify, and
-Clone Stamp, Healing Brush and Spot Healing Brush, which read the photo as a
-reference layer.
-`--workload clipped` clips the empty paint layer to the photo.
-`--live-filter threshold --live-filter-values '{"colors":{"kind":"choice","value":1},"transparency":{"kind":"choice","value":1},"alpha_threshold":{"kind":"number","value":50}}'`
-attaches the selected effect to the changing paint layer. The values object uses
-the existing typed effect values. `--live-filter-disabled` retains the same
-graph with that effect hidden for the matched baseline. Setup checks the owner,
-attachment, enabled state and requested values before motion. These options
-require the ordinary workload and a brush gesture. Completion observations cover
-the submitted canvas work, including synchronous filter evaluation; separately
-attribute derived revisions before using them for asynchronous filters.
-The report samples latest-input age every millisecond during active contact and
-records input-to-GPU-completion latency. These are completion proxies, not scanout
-measurements. Use at least 20 separate contacts for response and settling
-percentiles, for example `--duration 1000 --repeats 20`; report these separately
-from sustained five-second strokes.
-`--workload blurred-base --effect-radius 8` also attaches Gaussian Blur to the
-photo, then paints its clipped layer. The radius argument is the Gaussian sigma
-in document pixels; sigma 8 has 24 px sampling support along each axis in the
-two separable blur passes. These fixtures require one photo and the paint layer
-at index zero. Their reports retain the paint, base and effect handles, actual
-sigma and initial layer state; setup validation checks row order, attachment,
-selected paint and parameters before collecting motion. Ordinary photo-plus-paint
-remains the default. The opaque tier photo measures ownership and cache cost;
-shared GPU fixtures cover expanded fractional alpha.
-`--mode pauses --contact-ms 100 --pause-ms 100` resumes during refinement.
-Increase only the gap to measure the same contacts after settling, or increase
-contact duration to test finalization after a broad stroke. The runner checks
-both durations in the observed setup; older APKs that ignore them are rejected.
-`--mode settle` injects a one-second pinch immediately after a broad stroke,
-then changes tools and queues a short paint contact. The first 100 ms of input
-has no synchronous state query; the probe observes pending work at its first
-camera sample. Use `--settle-delay-ms` for a matched control after settling.
-The raw `settle_probe` records action times and camera revisions. Use
-`--presentation-trace` for screen cadence; completed artwork updates do not
-count camera-only frames. Brush and filter preview WebP files load off the UI
-thread and share a bounded cache across panel lifetimes.
-`--radius-x` and `--radius-y` set the ellipse radii in surface pixels;
-`--photo-layers` creates 1–32 photos with translucent duplicates. The runner
-places paint at the top by default. `--paint-layer-index` moves it to the given
-zero-based position from the top, above the opaque base photo so strokes remain
-visible. Compare top, middle and lower edits when changing composition reuse.
-The runner checks the observed trajectory, layer count, selected layer position, brush, prediction and requested
-zoom before starting the timed window, including when reusing completed output.
-`--blending linear` or `--blending perceptual` selects the document's blend space
-and verifies the selected shared command; omitting it keeps the imported default.
-Comparisons across blend-space defaults must explicitly select the same space.
-Use the same instrumentation source in comparison APKs: older runners can ignore
-arguments they do not recognize. Each build and configuration needs its own
-output directory. The private benchmark restores its prediction settings
-atomically, independently of which preference controls the device enables.
+Perfetto and simpleperf captures.
 `python3 tools/performance/android-brush-report.py OUT` summarizes completed
 canvas updates per second, the rate the performance targets use for brushes.
-Run directly, the instrumentation also accepts `-e navigationBetweenStrokes true`
-and `-e navigationSettleMs` to measure the handoff from navigation back to ink.
-The Python runner exposes these as `--navigation-between-strokes` and
-`--navigation-settle-ms`. `--photo` also accepts an authored `.capy` fixture under
-`/data/local/tmp`; supply `--canvas-width` and `--canvas-height` to verify its
-active canvas before collecting input. Its Photo row and paint-layer setup must
-match the requested workload.
-`cargo run --locked --release -p layer-color --example object_fixture -- PHOTO.jpg
-OUTPUT.capy 4 shared` creates a photo with four image objects above it. Use
-`unshared` for separate decoded sources. Run it with `--workload objects
---photo-layers 2 --image-count 4 --image-sources shared|unshared`; paint index zero
-is above the object layer and index one is below it. `objects-effects` attaches
-Gaussian Blur to the object layer. `--mode object-affine` applies committed
-shared affine edits on the render owner and records call times separately from
-pen input. The completion observer records the document revision actually
-composed for each object frame. The report counts each new pose once, only when
-its GPU completion falls inside the motion interval, and records edit-to-GPU
-completion separately from JNI adoption. These observations do not establish
-scanout or physical input-to-present latency. This measures atomic-edit cost;
-it does not qualify a host transform
-gesture or physical input latency. The moving-layer boundary uses the renderer's
-ordinary interactive sampling and resumes exact refinement on release. Memory
-diagnostics retain process PSS alongside GPU allocation and system memory fields.
-Object runs also retain `-cold-setup.json` and `-prime.json`: package adoption,
-pending composition at the first stroke, and the priming motion before exact
-settling. These startup diagnostics remain separate from the warmed rate runs.
-`-e colorBeforeStrokes true` changes the quick paint color before each stroke
-and checks that the prepared brush remains ready.
-[Measuring performance](../performance/measuring.md) has the tier rules.
+[Measuring performance](../performance/measuring.md) has the tier commands and
+the rules for the workloads, `pauses`, `settle` and memory runs.
+
+Strokes must present in the display status's `ink_present_mode`:
+`SharedDemandRefresh`, or `Fifo` on drivers without shared presentation. Use the
+same instrumentation source in comparison APKs, because older runners can
+ignore arguments they do not recognize, and give each build and configuration
+its own output directory. Comparisons across blend-space defaults must select
+the same space with `--blending linear` or `--blending perceptual`.
+
+- **Presets.** The default preset list is the dry brushes. `--presets` accepts
+  every built-in preset, including wet, smudge, Liquify, and Clone Stamp,
+  Healing Brush and Spot Healing Brush, which read the photo as a reference
+  layer.
+- **Stats.** The default workspace keeps Stats closed. `--stats` opens Stats and
+  enables GPU timing; use `--trace --stats` for GPU phase diagnostics.
+- **Paths.** `straight` traverses the horizontal diameter once per contact.
+  `zigzag` moves back and forth horizontally at one cycle per second while
+  progressing vertically. `--radius-x` and `--radius-y` set the ellipse radii in
+  surface pixels.
+- **Layers.** `--photo-layers` creates 1–32 photos with translucent duplicates.
+  Paint is at the top by default; `--paint-layer-index` moves it to the given
+  zero-based position from the top, above the opaque base photo. Compare top,
+  middle and lower edits when changing composition reuse.
+- **Effects.** `--workload clipped` clips the empty paint layer to the photo;
+  `--workload blurred-base --effect-radius 8` also attaches Gaussian Blur (sigma
+  in document pixels) to the photo.
+  `--live-filter threshold --live-filter-values '{"colors":{"kind":"choice","value":1},"transparency":{"kind":"choice","value":1},"alpha_threshold":{"kind":"number","value":50}}'`
+  attaches an effect to the changing paint layer using the typed effect values;
+  `--live-filter-disabled` keeps the same graph with the effect hidden for the
+  matched baseline.
+- **Shader preparation.** `--warmup-idle-ms 0` starts photo setup once the
+  selected brush is ready and measures brush preparation without waiting for the
+  remaining shader catalogue. `--probe-presets 1,9,11,10,12,41` records
+  representative preparation times in `-info.json`; repeat with
+  `--warmup-idle-ms 30000` for idle preparation. `--size-idle-ms` waits after the
+  selection before changing the size. `--wait-for-warmup` gives a matched, fully
+  warm control. Clearing the benchmark app's data does not clear the driver's
+  own shader caches.
+- **Navigation.** `--navigation-between-strokes` and `--navigation-settle-ms`
+  measure the handoff from navigation back to ink.
+- **Direct arguments.** Run directly, the instrumentation also accepts
+  `-e visualBackground true -e theme light|dark`, which shows Paper, hides the
+  photo and cursor, and selects the theme for matching brush captures; keep the
+  photo visible for performance comparisons. `-e colorBeforeStrokes true`
+  changes the quick paint color before each stroke.
+- **Fixtures.** `--photo` also accepts an authored `.capy` fixture under
+  `/data/local/tmp`; supply `--canvas-width` and `--canvas-height` to verify its
+  canvas. To ink on a crowded vector layer, generate one with
+  `cargo run --release -p layer-core --example crowded_vector_fixture -- OUT.capy 4248 2832 10000`
+  (add `--paint` for the raster control), push it, and pass it with
+  `--canvas-width 4248 --canvas-height 2832`, `--paint-layer-name Ink` and
+  `--fixture-layers 4` (5 for the control).
+- **Image objects.** `cargo run --locked --release -p layer-color --example object_fixture -- PHOTO.jpg OUTPUT.capy 4 shared`
+  creates a photo with four image objects above it; use `unshared` for separate
+  decoded sources. Run it with `--workload objects --photo-layers 2 --image-count 4
+  --image-sources shared|unshared`; paint index zero is above the object layer and
+  index one below it. `objects-effects` attaches Gaussian Blur to the object
+  layer. `--mode object-affine` applies committed affine edits on the render
+  owner; it measures atomic-edit cost, not a host transform gesture. Object
+  runs also write `-cold-setup.json` and `-prime.json`, separate from the warmed
+  rate runs.
 
 ## Debugging
 
@@ -1078,12 +557,11 @@ Where to look:
   change invalidates size readers without rebuilding opacity or group readers.
   Add nested observation only for objects whose consumers read their fields;
   consumers that remember a whole JSON object need its replacement identity.
-  Each action publishes before the owner's next task, except moving Properties
-  gestures (`dispatch(action, moving = true)`): their moves render every frame
-  and publish at most every 33 ms, always after the last move, because a full
-  publication costs about 9 ms on a mid-tier tablet and would starve the canvas.
-  `CanvasHost.actionError` holds the open error dialog's text or the refusal
-  being shown; tests check it.
+  Each action publishes before the owner's next task, except moving gestures
+  (`dispatch(action, moving = true)`): their moves render every frame and
+  publish at most every 33 ms, always after the last move, so publication does
+  not starve the canvas. `CanvasHost.actionError` holds the open error dialog's
+  text or the refusal being shown; tests check it.
 - Presentation: [`native/src/android.rs`](../../apps/layer-android/native/src/android.rs)
   owns the Vulkan surface and its present-mode switches. `Native.displayStatus`
   reports the present mode, frame latency, surface format and color space, and
@@ -1091,7 +569,11 @@ Where to look:
   displayed it.
 - Files: [`Documents.kt`](../../apps/layer-android/app/src/main/java/art/capycanvas/Documents.kt)
   uses the Storage Access Framework. Providers control their own destination
-  behavior, so atomic replacement cannot be assumed for every URI.
+  behavior, so atomic replacement cannot be assumed for every URI; saves finish
+  the private package and checkpoint before opening the destination.
+  [`Recovery.kt`](../../apps/layer-android/app/src/main/java/art/capycanvas/Recovery.kt)
+  owns native timing, window leases and provider access; shared Rust validates
+  the window manifest, restore tickets and resource stores.
 - Workspaces: `crates/layer-workspace` stores them. Android takes the
   workspace liveness lock with Bionic `flock`, because `std::fs::File::try_lock`
   is unsupported on this target.
@@ -1099,46 +581,19 @@ Where to look:
   retains the shared presentations and animates native layers;
   [`BubbleInput.kt`](../../apps/layer-android/app/src/main/java/art/capycanvas/BubbleInput.kt)
   captures contacts at the workspace and calls the stateless Rust hit test.
-  The wheel, swatches, brush previews, Layers inspector and thumbnail queue are
-  shared with ordinary panels. Placement frames read only `bubble_motion`;
-  source eligibility, values, options, collisions and history remain in Rust.
-  Captures and menus retain their source identity, and two-finger pickup
-  cancels native child gestures. A closing card keeps a native display list
-  for its fade after retiring its controls and accessibility nodes.
-  Motion replies belong to the set of bubbles that requested them. Older
-  replies cannot place replacement owners or consume newer input wakes.
-  See the [host contract](../ui/tool-bubbles.md#host-contract).
-- Layers: The combined Layers/Properties disclosure aligns its icon slots with
-  New Layer and Actions, including both panel and control insets.
-  `AndroidTitleBarTest#layerPropertiesDrawerUsesNativeSizingAndActions` checks
-  these positions and the label gap in both themes.
-  `Layers.kt` draws shared clipping rails and FX connections over measured
-  content thumbnails, using the relationship palette role for clipping and native
-  text ink for the canonical FX glyph. Connector geometry cancels the row face
-  translation while drop hit testing keeps the moved thumbnail bounds. Saved
-  Selection uses the ordinary button helper with a 16 dp icon in a 30 dp slot.
-  Group badges, contextual attachment, inherited visibility and optional
-  right-swipe actions come from shared state.
-  `LayerThumbnails` owns one request queue per canvas host, shared by visible
-  lists and bubble faces. Requests carry the document epoch and paint revision;
-  replies for retired owners are ignored and pixels are decoded off the UI thread.
-  Thumbnail press and hover feedback clips to the squircle. The animated
-  selection border is a sibling outside that clip so it can expand beyond the
-  thumbnail without cutting off its corners.
-  Native row and thumbnail hit testing supplies the contact surface to the
-  `layer_drop` query; its normalized target and position drive feedback before
-  the shared action commits a drop. `AndroidTitleBarTest#layerRelationships`
-  covers the focused light/dark journey. Add `-e layerRelationshipBenchmark true`
-  to `#layerSwipeFrameTiming` to measure moving relationship indicators over the
-  24 MP photo.
-- Panel rendering: `panelSurface` in [`PanelShadow.kt`](../../apps/layer-android/app/src/main/java/art/capycanvas/PanelShadow.kt);
-  `AndroidPanelShadowTest` compares panels with and without shadows.
-  Connected columns use `PanelVectors.kt` to prepare their merged native paths
-  on the canvas owner, retaining authored allocation bounds. Their
-  `panelConnectionShadow` uses a small native GPU blur mask on Android 12 and
-  later, with full-resolution fill and control clips. Older versions retain the
-  existing native shadow path. No shadow pixels are rasterized or copied by the
-  input or UI thread.
+  Placement frames read only `bubble_motion`; source eligibility, values,
+  options, collisions and history remain in Rust. See the
+  [host contract](../ui/tool-bubbles.md#host-contract).
+- Layers: `Layers.kt` draws the shared clipping rails and FX connections.
+  `LayerThumbnails` owns one request queue per canvas host, shared by lists and
+  bubble faces, and decodes off the UI thread. Native row hit testing feeds the
+  shared `layer_drop` query, whose target drives drop feedback.
+- Panel rendering: `panelSurface` in [`PanelShadow.kt`](../../apps/layer-android/app/src/main/java/art/capycanvas/PanelShadow.kt).
+  Column bridges come from shared Rust: `Native.modelUpdate` publishes receiver
+  IDs and the following `Native.panelVectors` call copies their packed commands.
+  `PanelVectors.kt` prepares the merged native paths on the canvas owner before
+  the matching UI snapshot applies; the input and UI threads never rasterize or
+  copy shadow pixels.
 
 If the canvas stops updating while menus still respond, keep the app running.
 Record a Perfetto trace with the SurfaceFlinger frame timeline during the
