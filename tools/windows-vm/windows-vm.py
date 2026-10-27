@@ -346,8 +346,12 @@ def guest(machine, command, **options):
 
 def guest_script(machine, script, **options):
     encoded = base64.b64encode(script.encode("utf-16-le")).decode()
-    status = guest(machine, f"powershell -NoProfile -NonInteractive -OutputFormat Text -EncodedCommand {encoded}",
-                   check=False, **options).returncode
+    payload = "\n".join(encoded[index:index + 1024] for index in range(0, len(encoded), 1024)) + "\n\n"
+    loader = "$data=[Text.StringBuilder]::new(); while($line=[Console]::In.ReadLine()){$null=$data.Append($line)}; & ([ScriptBlock]::Create([Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($data.ToString()))))"
+    command = base64.b64encode(loader.encode("utf-16-le")).decode()
+    text = options.get("text") or options.get("universal_newlines") or options.get("encoding") or options.get("errors")
+    status = guest(machine, f"$input | powershell -NoProfile -NonInteractive -OutputFormat Text -EncodedCommand {command}; exit $LASTEXITCODE",
+                   input=payload if text else payload.encode("ascii"), check=False, **options).returncode
     if status:
         sys.exit(f"A PowerShell script in the {machine.name} VM exited with status {status}.")
 

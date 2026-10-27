@@ -76,6 +76,9 @@ tools/windows-vm/windows-vm.py ssh 'cd C:\capycanvas; cargo clippy --locked -p l
 | `reset` | Delete the VM; the next `start` makes a fresh one. |
 | `destroy` | Delete the base image and every VM; the ISO stays. Stop the VMs first. |
 
+Guest PowerShell scripts stream over SSH stdin through a fixed-size loader, so
+multiline Unicode scripts do not depend on the Windows command-line length limit.
+
 State lives in `~/.local/share/capycanvas/windows-vm` (`CAPYCANVAS_VM_DIR`): the
 base image in `base` and the VMs in `vms`. `CAPYCANVAS_VM_CPUS` (default up to 8),
 `CAPYCANVAS_VM_MEMORY` (default `16G`) and `CAPYCANVAS_VM_DISPLAY` (default
