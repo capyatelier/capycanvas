@@ -1853,7 +1853,7 @@ mod presentation_readiness_tests {
                     let value=if padding{0.25}else{1.};
                     if format==wgpu::TextureFormat::Rgba16Float {
                         let expected=layer_core::color::f16::from_f32(value).to_bits().to_le_bytes();
-                        assert!(rgba[..6].chunks_exact(2).all(|channel|channel==expected),"{format:?} {color:?} at {x},{y}, padding={padding}, actual={rgba:?}, expected={expected:?}, view={view:?}");assert_eq!(&rgba[6..],&[0,60]);
+                        assert!(rgba[..6].as_chunks::<2>().0.iter().all(|channel|*channel==expected),"{format:?} {color:?} at {x},{y}, padding={padding}, actual={rgba:?}, expected={expected:?}, view={view:?}");assert_eq!(&rgba[6..],&[0,60]);
                     }else{
                         let expected=(layer_core::color::RgbSpace::Srgb.encode(f64::from(value))*255.).round() as u8;
                         assert!(rgba[..3].iter().all(|channel|channel.abs_diff(expected)<=1),"{format:?} {color:?} at {x},{y}, padding={padding}, actual={rgba:?}, expected={expected}, view={view:?}");assert_eq!(rgba[3],255);
