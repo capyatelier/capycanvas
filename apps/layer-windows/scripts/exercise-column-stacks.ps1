@@ -114,6 +114,7 @@ function Check-Open([int]$Id){
         }
         if(!$presentation.panel_revision -or $presentation.presented_panel_revision -ne $presentation.panel_revision){return $false}
         $frame=$presentation.panel_bridge_frame
+        if(!$frame -or !$frame.bridges){return $false}
         $bridges=@($frame.bridges|Where-Object {$_[0] -eq $Id})
         if(!$bridges.Count){return $false}
         $nativeColumn=$frame.columns|Where-Object column -eq $Id|Select-Object -First 1
