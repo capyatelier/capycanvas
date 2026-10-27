@@ -47,6 +47,7 @@ __declspec(dllimport) int32_t capy_localization_input(CapyHost,bool);
 __declspec(dllimport) CapyHost capy_create(uint32_t width, uint32_t height, float scale, CapyLaunch);
 /* Borrow while the render owner is parked. Attach on XAML with SetSwapChainHandle. */
 __declspec(dllimport) void* capy_surface_handle(CapyHost);
+__declspec(dllimport) uint64_t capy_surface_generation(CapyHost);
 /* GPU preparation and buffer resizing belong to the render owner. */
 __declspec(dllimport) int32_t capy_prepare_gpu(CapyHost);
 __declspec(dllimport) int32_t capy_test_display(CapyHost, bool hdr);

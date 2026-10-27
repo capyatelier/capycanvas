@@ -208,6 +208,15 @@ composed image into the platform's target. Panning the view does not, by itself,
 require repainting committed raster tiles. Only the artwork's bounding box on
 screen runs the artwork shader; the surround around it draws with a shader that
 computes the surround color alone (`the_surround_skips_the_artwork_shader`).
+Presentations that initialize a target clear its entire capacity to the shared
+surround, including space outside the current viewport. Enlarging the source
+rectangle therefore exposes defined background pixels while the next frame is
+prepared. Retained targets preserve their previous pixels until drawing replaces
+them.
+`SdrSurfaceColor::clear_color` applies the attachment's transfer, primaries and
+reference white; a raw linear clear is incorrect for an encoded UNORM target.
+Standalone transparent overview targets retain their transparent clear.
+
 The artwork pipelines leave out the paper lighting code; a second set with it
 compiles the first time paper lighting shows, in the background where a startup
 compiler runs, and the plain set draws until it is ready.

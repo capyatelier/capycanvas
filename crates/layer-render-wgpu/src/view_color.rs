@@ -23,6 +23,19 @@ pub enum SdrSurfaceColor {
     Bt2100Pq,
 }
 impl SdrSurfaceColor {
+    pub fn clear_color(self, format: wgpu::TextureFormat, linear_srgb: [f32;4]) -> Result<wgpu::Color, crate::GpuRasterError> {
+        use layer_core::color::{RgbSpace,hdr};
+        let encode=self.shader_encoding(format)?;
+        let matrix=if self==Self::Bt2100Pq{hdr::srgb_to_bt2020()}else{RgbSpace::Srgb.linear_transform(self.primaries())};
+        let rgb=matrix.map(|row|row.into_iter().zip(linear_srgb).map(|(weight,value)|weight*f64::from(value)).sum::<f64>());
+        let [r,g,b]=rgb.map(|value|match self {
+            Self::Bt2100Pq=>hdr::pq_encode(value.clamp(0.,10000./f64::from(hdr::REFERENCE_WHITE_NITS))*f64::from(hdr::REFERENCE_WHITE_NITS)),
+            Self::WindowsScrgb=>value*2.5375,
+            _ if encode=>RgbSpace::Srgb.encode(value),
+            _=>value,
+        });
+        let a=f64::from(linear_srgb[3]);Ok(wgpu::Color{r:r*a,g:g*a,b:b*a,a})
+    }
     pub fn surface_color_space(self) -> wgpu::SurfaceColorSpace {
         match self {
             Self::Srgb => wgpu::SurfaceColorSpace::Srgb,

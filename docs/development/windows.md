@@ -29,6 +29,14 @@ Workspace pills retain their enabled appearance while the shared owner
 temporarily gates switching during drawing or adoption. Their selection tint
 follows adoption; holding a different workspace keeps its neutral base.
 
+Startup leaves the composition surface detached while the native root shows the
+shared surround. The render owner submits a defined surround while the first
+constant background prepares, then admits document and brush work after that
+background is drawable. Optional chrome follows the first paper frame. A queue
+completion latch publishes surface readiness once per GPU generation; the UI
+attaches the cached handle without waiting for the GPU. Replacement renderers
+get a new latch, so retired callbacks cannot reveal an uninitialized surface.
+
 Binary WebP preview calls reject invalid slice lengths and overlapping dimension
 outputs before borrowing input. They write dimensions only after the decoded
 preview handle is stored. Input and output allocations remain valid for the call.

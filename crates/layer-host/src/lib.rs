@@ -340,9 +340,7 @@ impl NativeHost {
         presentation: u64,
         has_presented: bool,
     ) -> Result<(), String> {
-        if has_presented || self.session.renderer_mut().0.as_mut()
-            .ok_or("Missing native renderer")?.poll_startup().map_err(|e| e.to_string())?.canvas_ready
-        {
+        if has_presented {
             let engine = self.session.engine();
             let gpu = engine
                 .backend()
@@ -375,6 +373,8 @@ impl NativeHost {
                 self.apply_change(previous, change);
             }
         } else {
+            self.startup=self.session.renderer_mut().0.as_mut()
+                .ok_or("Missing native renderer")?.poll_startup().map_err(|e|e.to_string())?;
             self.session.submit_backdrop_frame()?;
         }
         self.dirty |= !self.startup.complete || self.session.holding_input();

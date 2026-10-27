@@ -1,4 +1,5 @@
 #include "../CanvasWorkBuffer.h"
+#include "../CanvasSurfaceState.h"
 #include "../TextCompositionKeys.h"
 #include "../NativeKeyRepeats.h"
 #include "../CanvasPointerSample.h"
@@ -28,6 +29,16 @@
 #endif
 
 int main() {
+    CanvasSurfaceState surface;
+    surface.Reset(0);
+    assert(!surface.CanAttach(0,true)&&!surface.CanAttach(1,false));
+    assert(surface.CanAttach(1,true));surface.DidAttach();
+    assert(surface.Attached()&&!surface.CanAttach(1,false)&&!surface.CanAttach(1,true));
+    surface.Reset(4);
+    assert(!surface.Attached()&&!surface.CanAttach(4,true)&&!surface.CanAttach(5,false));
+    assert(surface.CanAttach(5,true)&&surface.CanAttach(6,true));surface.DidAttach();
+    assert(surface.Attached()&&!surface.CanAttach(4,true)&&!surface.CanAttach(5,false));
+    std::cout<<"Surface readiness: stale generations rejected and attachment retained until explicit reset passed\n";
     {
         auto input=CapyUi::JsonUnsignedFields("{\"type\":\"color_touch\",\"position\":[1.5,2.5]}",
             {{"surface",9007199254740993ULL},{"id",4294967295ULL},{"time_ns",1101152828577000ULL}});

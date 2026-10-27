@@ -1387,7 +1387,7 @@ impl ViewportPresenter {
                         load: if preserve_target {
                             wgpu::LoadOp::Load
                         } else {
-                            wgpu::LoadOp::Clear(if overview_only { wgpu::Color::TRANSPARENT } else { wgpu::Color::BLACK })
+                            wgpu::LoadOp::Clear(if overview_only { wgpu::Color::TRANSPARENT } else { self.color.clear_color(self.format,surround_linear)? })
                         },
                         store: wgpu::StoreOp::Store,
                     },

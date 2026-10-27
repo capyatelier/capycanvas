@@ -9,6 +9,7 @@
 #include "WorkspaceStorageView.h"
 #include "WorkspaceManagerView.h"
 #include "CanvasWorkBuffer.h"
+#include "CanvasSurfaceState.h"
 #include "CanvasContactGate.h"
 #include "CanvasLatencyTrace.h"
 #include "CanvasSnapshotMailbox.h"
@@ -62,6 +63,8 @@ private:
     bool sessionWindowsOpened=false;
     void TraceState(char const* kind,std::string const& value)const;
     winrt::Microsoft::UI::Xaml::Controls::SwapChainPanel panel;
+    void* surfaceHandle=nullptr;
+    CanvasSurfaceState surfaceState;
     winrt::Microsoft::UI::Xaml::Controls::ContentControl canvasFocus;
     winrt::Microsoft::UI::Xaml::Controls::TextBlock status;
     winrt::Microsoft::UI::Xaml::Controls::Button screenChip;

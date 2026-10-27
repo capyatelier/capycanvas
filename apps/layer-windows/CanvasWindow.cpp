@@ -462,7 +462,8 @@ bool CanvasWindow::StartPrepared(CapyLaunch  prepared) {
     Resize();
     host=capy_create(desired.width,desired.height,desired.scale,prepared);
     if(!host) {OutputDebugStringA(NativeString(capy_error()).get());status.Text(CapyUi::str(bootstrap,L"canvas_init_failed"));return false;}
-    check_hresult(panel.as<ISwapChainPanelNative2>()->SetSwapChainHandle(capy_surface_handle(host)));
+    surfaceHandle=capy_surface_handle(host);if(!surfaceHandle)throw hresult_error(E_FAIL);
+    surfaceState.Reset(capy_surface_generation(host));
     nativeWindow=Handle();capy_set_window(host,nativeWindow);
     SetWindowSubclass(Handle(),AltKeyMenuFilter,1,0);
     auto dark=panel.ActualTheme()==ElementTheme::Dark;
@@ -1328,8 +1329,10 @@ void CanvasWindow::SaveAfterGpuFailure(std::string const& reason) {
 void CanvasWindow::ResetSurface() {
     {std::lock_guard lock(mutex);if(closing)return;}
     auto native=panel.as<ISwapChainPanelNative>();
+    root.Background(SolidColorBrush(CapyUi::color(CapyUi::str(CapyUi::object(CapyUi::object(lastModel,L"state"),L"palette"),L"bg",L"#323232"))));
     auto detached=native->SetSwapChain(nullptr);
-    auto attached=SUCCEEDED(detached)?panel.as<ISwapChainPanelNative2>()->SetSwapChainHandle(capy_surface_handle(host)):detached;
+    surfaceState.Reset(capy_surface_generation(host));surfaceHandle=capy_surface_handle(host);
+    auto attached=SUCCEEDED(detached)&&surfaceHandle?S_OK:FAILED(detached)?detached:E_FAIL;
     if(FAILED(attached)){
         std::lock_guard lock(mutex);
         surfaceError="Could not attach the recovered GPU surface";
@@ -1700,7 +1703,10 @@ void CanvasWindow::ApplyModel(Windows::Data::Json::JsonObject const& model) {
     panel.Visibility(suspended?Visibility::Collapsed:Visibility::Visible);
     auto state=object(model,L"state");auto theme=str(state,L"theme",L"dark");
     {std::lock_guard lock(mutex);penSources.Select(to_string(object(model,L"windows_tabs").GetNamedValue(L"selected",JsonValue::CreateNullValue()).Stringify()+L"/"+object(state,L"document_file").GetNamedValue(L"epoch",JsonValue::CreateNullValue()).Stringify()));}
-    if(suspended)root.Background(SolidColorBrush(color(str(object(state,L"palette"),L"bg",L"#323232"))));
+    if(surfaceState.CanAttach(uint64_t(num(model,L"windows_gpu_generation")),flag(model,L"windows_surface_ready"))){
+        check_hresult(panel.as<ISwapChainPanelNative2>()->SetSwapChainHandle(surfaceHandle));surfaceState.DidAttach();
+    }
+    if(suspended||!surfaceState.Attached())root.Background(SolidColorBrush(color(str(object(state,L"palette"),L"bg",L"#323232"))));
     else root.Background(nullptr);
     status.VerticalAlignment(suspended?VerticalAlignment::Center:VerticalAlignment::Bottom);
     status.TextAlignment(suspended?TextAlignment::Center:TextAlignment::Left);

@@ -47,6 +47,23 @@ pub struct CapyLaunch {
     settings: Option<crate::settings::PreparedSettings>,
     bootstrap: CString,
 }
+#[derive(Default)]
+struct SurfaceReadiness {
+    queued: bool,
+    ready: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    published: bool,
+}
+impl SurfaceReadiness {
+    fn submitted(&mut self, queue: &wgpu::Queue) {
+        if self.queued { return; }
+        self.queued=true;let ready=self.ready.clone();
+        queue.on_submitted_work_done(move||ready.store(true,std::sync::atomic::Ordering::Release));
+    }
+    fn ready(&self)->bool { self.ready.load(std::sync::atomic::Ordering::Acquire) }
+    fn changed(&mut self)->bool {
+        let ready=self.ready();let changed=self.published!=ready;self.published=ready;changed
+    }
+}
 pub struct CapyHost {
     // An acquired image drops before its surface; the panel is detached on the
     // UI thread before destruction. The surface retains its native COM reference.
@@ -79,6 +96,7 @@ pub struct CapyHost {
     published_glass_count: usize,
     scale: f32,
     blank_presented: bool,
+    surface_ready: SurfaceReadiness,
     prediction_frames: Option<[u64; 2]>, // opt-in, accumulated across document switches
     services: Option<crate::settings::SettingsService>,
     launch_settings: Option<crate::settings::PreparedSettings>,
@@ -98,7 +116,7 @@ fn pointer_button(sample: &CapyPointer) -> PointerButton {
     }
 }
 fn take_prepared_target<T>(presenter: &ViewportPresenter, renderer: &layer_render_wgpu::WgpuRasterizer, target: &mut Option<T>) -> Option<T> {
-    presenter.pipelines_ready(renderer).then(|| target.take()).flatten()
+    (renderer.has_presentable_frame()&&presenter.pipelines_ready(renderer)).then(|| target.take()).flatten()
 }
 fn surface_extent(allocated: [u32; 2], viewport: [u32; 2], limit: u32) -> Result<[u32; 2], String> {
     if viewport.contains(&0) || viewport.into_iter().chain(allocated).any(|v| v > limit) {
@@ -233,6 +251,7 @@ impl CapyHost {
             published_glass_count: 0,
             scale,
             blank_presented: false,
+            surface_ready: Default::default(),
             prediction_frames: std::env::var_os("CAPY_LATENCY_TRACE").map(|_| [0; 2]),
             services: None,
             launch_settings: launch.settings.take(),
@@ -390,9 +409,8 @@ impl CapyHost {
         let renderer = layer_host::GpuContext { adapter, device, queue }.rasterizer(
             self.native.session.engine().document().composition().color, &self.native.renderer_options(), false)?;
         let encoding = self.display.encoding(config.format);
-        let mut presenter = ViewportPresenter::for_surface(&renderer, config.format, encoding).map_err(err)?;
+        let presenter = ViewportPresenter::for_surface(&renderer, config.format, encoding).map_err(err)?;
         self.presenter_key = Some((renderer.document_color(), encoding));
-        presenter.prepare_chrome(&renderer);
         presenter.pipelines_ready(&renderer);
         gpu_state.check()?;
         let retired = self.native.replace_renderer(layer_host::Renderer(Some(renderer)))?;
@@ -403,6 +421,7 @@ impl CapyHost {
         self.gpu = gpu_state;
         self.gpu_generation = self.gpu_generation.saturating_add(1);
         self.pacing = Default::default();
+        self.surface_ready = Default::default();
         self.native.invalidate_snapshot();
         self.native.startup = Default::default();
         self.presenter = Some(presenter);
@@ -423,12 +442,8 @@ impl CapyHost {
             return Ok(0);
         }
         if self.target.is_none() { return Ok(1); }
-        let gpu = self.native.session.engine().backend().0.as_ref().unwrap();
-        if self.presenter.as_ref().is_some_and(|presenter| !presenter.pipelines_ready(gpu)) {
-            self.native.session.renderer_mut().0.as_mut().unwrap().poll_startup().map_err(err)?;
-            self.native.dirty = true;
-            self.poll_services()?;
-            return Ok(1);
+        if !self.surface_ready.ready() {
+            self.native.session.engine().backend().0.as_ref().unwrap().device().poll(wgpu::PollType::Poll).map_err(err)?;
         }
         let prediction_before = self.prediction_frames.map(|_| self.native.session.engine().metrics());
         self.native
@@ -448,8 +463,7 @@ impl CapyHost {
         let headroom = self.display.available_headroom(config.format);
         let key = (gpu.document_color(), encoding);
         if self.presenter_key != Some(key) {
-            let mut presenter = ViewportPresenter::for_surface(gpu, config.format, encoding).map_err(err)?;
-            presenter.prepare_chrome(gpu);
+            let presenter = ViewportPresenter::for_surface(gpu, config.format, encoding).map_err(err)?;
             presenter.pipelines_ready(gpu);
             self.presenter = Some(presenter);
             self.presenter_key = Some(key);
@@ -459,10 +473,13 @@ impl CapyHost {
             .presenter
             .as_mut()
             .ok_or("Viewport presenter is not prepared")?;
-        presenter.set_panel_surfaces(gpu,self.glass.panels(self.scale));
-        if !presenter.prepare_chrome(gpu) {
-            self.native.dirty=true;
-            return Ok(1);
+        let chrome=self.blank_presented;
+        if chrome {
+            presenter.set_panel_surfaces(gpu,self.glass.panels(self.scale));
+            if !presenter.prepare_chrome(gpu) {
+                self.native.dirty=true;
+                return Ok(1);
+            }
         }
         let tone = self.documents.as_ref().and_then(|s| s.tone.current(&self.native));
         let display = SceneDisplay {
@@ -481,7 +498,23 @@ impl CapyHost {
         )?;
         let gpu = self.native.session.engine().backend().0.as_ref().unwrap();
         let Some(target) = take_prepared_target(presenter, gpu, &mut self.target) else {
+            if !self.surface_ready.queued && let Some(target)=self.target.take() {
+                let view=target.texture.create_view(&Default::default());
+                let mut encoder=gpu.device().create_command_encoder(&wgpu::CommandEncoderDescriptor{label:Some("startup surround")});
+                {
+                    let _pass=encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label:Some("startup surround"),color_attachments:&[Some(wgpu::RenderPassColorAttachment {
+                            view:&view,depth_slice:None,resolve_target:None,
+                            ops:wgpu::Operations{load:wgpu::LoadOp::Clear(encoding.clear_color(config.format,surround).map_err(err)?),store:wgpu::StoreOp::Store},
+                        })],..Default::default()
+                    });
+                }
+                gpu.queue().submit_for_present([encoder.finish()]);gpu.queue().present(target);
+                self.native.canvas_frame_rate.submitted();self.pacing.submitted(gpu.queue());
+                self.surface_ready.submitted(gpu.queue());
+            }
             self.native.dirty = true;
+            self.poll_services()?;
             return Ok(1);
         };
         presenter.present(
@@ -493,12 +526,12 @@ impl CapyHost {
         gpu.queue().present(target);
         self.native.canvas_frame_rate.submitted();
         self.pacing.submitted(gpu.queue());
+        self.surface_ready.submitted(gpu.queue());
         self.blank_presented = true;
         gpu.device().poll(wgpu::PollType::Poll).map_err(err)?;
         self.gpu.check()?;
-        let panel_revision=Some(self.glass.panel_revision());
-        if self.presented_panel_revision!=panel_revision {
-            self.presented_panel_revision=panel_revision;
+        if chrome {
+            self.presented_panel_revision=Some(self.glass.panel_revision());
         }
         self.poll_services()?;
         Ok(i32::from(self.native.dirty))
@@ -568,6 +601,12 @@ pub unsafe extern "C" fn capy_create(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_surface_handle(host: u64) -> *mut c_void {
     borrow::<CapyHost>(host).map_or(std::ptr::null_mut(), |host| host.surface_handle.as_raw_handle())
+}
+/// # Safety
+/// Exclusive host access, or the UI owner while the render worker is parked.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_surface_generation(host: u64) -> u64 {
+    borrow::<CapyHost>(host).map_or(0,|host|host.gpu_generation)
 }
 /// Associate the HWND before transferring ownership to the render worker.
 /// # Safety
@@ -1145,6 +1184,7 @@ struct WindowsMetadata {
     windows_active_tag: &'static str,
     windows_display: serde_json::Value,
     windows_rendering_suspended: bool,
+    windows_surface_ready: bool,
     windows_filter_load: Option<crate::filter_packages::Status>,
     windows_document: Option<serde_json::Value>,
     windows_proof: Option<layer_ui::proof_workflow::ProofStatus>,
@@ -1173,6 +1213,7 @@ pub unsafe extern "C" fn capy_snapshot(host: u64, info: *mut CapySnapshotInfo) -
     if let Some(info) = unsafe { info.as_mut() } { *info = CapySnapshotInfo::default(); }
     let mut result = 0;
     guard(host, |host| {
+        if host.surface_ready.changed() { host.native.invalidate_snapshot(); }
         let generation = host.native.localization_generation();
         let localization = if host.localization_generation != Some(generation) {
             Some(crate::settings::localization_presentation(&mut host.native)?)
@@ -1183,6 +1224,7 @@ pub unsafe extern "C" fn capy_snapshot(host: u64, info: *mut CapySnapshotInfo) -
             windows_active_tag: host.native.session.localization().language().tag(),
             windows_display: serde_json::json!({"output": host.display, "format": host.config.as_ref().map(|c| format!("{:?}", c.format)), "headroom": host.config.as_ref().map_or(1., |c| host.display.available_headroom(c.format)), "analysis": host.documents.as_ref().map(|s| s.tone.status())}),
             windows_rendering_suspended: host.native.session.rendering_suspended(),
+            windows_surface_ready: host.surface_ready.ready(),
             windows_recovery: host.documents.as_ref().and_then(|d| d.recovery.as_ref()).map(|service| service.status(host.native.session.localization())),
             windows_tabs: host.documents.as_ref().map(|d| d.tabs_view(&host.native)),
             windows_palettes: host.documents.as_ref().map(|d| d.palettes.status()),
@@ -1416,6 +1458,7 @@ pub unsafe extern "C" fn capy_reset_surface(host: u64) -> i32 {
         let (surface, handle) = CapyHost::composition_surface(&host.instance)?;
         host.surface = surface;
         host.surface_handle = handle;
+        host.surface_ready=Default::default();
         host.native.reset_canvas_frame_rate();
         host.config = None;
         host.blank_presented = false;
@@ -1732,29 +1775,94 @@ mod presentation_readiness_tests {
 
     #[test]
     #[ignore = "Requires hardware D3D12"]
-    fn acquired_target_survives_cold_presenter_and_rebuild_until_background_ready() {
+    fn acquired_target_waits_for_drawable_background_without_optional_chrome() {
         use std::time::{Duration, Instant};
-        for format in [wgpu::TextureFormat::Bgra8UnormSrgb, wgpu::TextureFormat::Rgba16Float] {
+        let viewport=[1024,768];let extent=[1088,832];
+        for (format,color) in [(wgpu::TextureFormat::Bgra8UnormSrgb,layer_render_wgpu::SdrSurfaceColor::Srgb),
+            (wgpu::TextureFormat::Bgra8Unorm,layer_render_wgpu::SdrSurfaceColor::Srgb),
+            (wgpu::TextureFormat::Rgba16Float,layer_render_wgpu::SdrSurfaceColor::ExtendedLinearSrgb)] {
             let mut renderer = crate::test_support::d3d12_renderer();
-            let mut presenter = ViewportPresenter::for_surface(&renderer, format, layer_render_wgpu::SdrSurfaceColor::Srgb).unwrap();
-            presenter.prepare_overviews(&renderer);
+            let mut presenter = ViewportPresenter::for_surface(&renderer, format, color).unwrap();
             let mut target = Some(format);
             assert_eq!(take_prepared_target(&presenter, &renderer, &mut target), None);
             assert_eq!(target, Some(format));
             let deadline = Instant::now() + Duration::from_secs(30);
-            loop {
+            while !presenter.pipelines_ready(&renderer) {
                 renderer.poll_startup().unwrap();
-                if let Some(acquired) = take_prepared_target(&presenter, &renderer, &mut target) {
-                    assert_eq!(acquired, format);
-                    break;
-                }
                 assert_eq!(target, Some(format));
                 assert!(Instant::now() < deadline, "presenter pipelines did not finish");
                 std::thread::yield_now();
             }
-            assert!(presenter.pipelines_ready(&renderer));
+            assert_eq!(take_prepared_target(&presenter,&renderer,&mut target),None);
+            assert_eq!(target,Some(format));
+            let mut native=NativeHost::new(layer_ui::Platform::Windows).unwrap();
+            let document=layer_core::Document::new(layer_core::authored::PortableId::random(),96,96,
+                layer_core::DocumentNames{paint:"Current ink".into(),paper:"Paper".into()});
+            *native.session=layer_ui::UiSession::new(layer_host::Renderer::default(),document,viewport,layer_ui::Platform::Windows).unwrap();
+            native.resize(viewport[0],viewport[1],1.).unwrap();
+            native.replace_renderer(layer_host::Renderer(Some(renderer.into()))).unwrap();
+            native.startup=Default::default();
+            let deadline=Instant::now()+Duration::from_secs(30);
+            loop {
+                native.prepare_canvas_frame(0,0,false).unwrap();
+                let gpu=native.session.engine().backend().0.as_ref().unwrap();
+                if let Some(acquired)=take_prepared_target(&presenter,gpu,&mut target){assert_eq!(acquired,format);break;}
+                assert_eq!(target,Some(format));
+                assert!(Instant::now()<deadline,"first constant background did not become drawable");
+                std::thread::yield_now();
+            }
+            assert!(!presenter.chrome_ready());
+            assert!(!native.startup.brush_ready);
+            let mut readiness=SurfaceReadiness::default();
+            assert!(!readiness.ready());assert!(!readiness.changed());
+            let gpu=native.session.engine().backend().0.as_ref().unwrap();
+            let output=gpu.device().create_texture(&wgpu::TextureDescriptor {
+                label:Some("first drawable background"),size:wgpu::Extent3d{width:extent[0],height:extent[1],depth_or_array_layers:1},
+                mip_level_count:1,sample_count:1,dimension:wgpu::TextureDimension::D2,format,
+                usage:wgpu::TextureUsages::RENDER_ATTACHMENT|wgpu::TextureUsages::COPY_SRC,view_formats:&[],
+            });
+            let view=native.session.state().camera.view();let [a,b,c,d,tx,ty]=view.document_to_surface;
+            let paper=[(a*48.+c*48.+tx).floor() as usize,(b*48.+d*48.+ty).floor() as usize];
+            assert!(paper[0]<viewport[0] as usize&&paper[1]<viewport[1] as usize,"paper center outside fixture viewport: {view:?}");
+            presenter.present(gpu,&output.create_view(&Default::default()),view,[0.25,0.25,0.25,1.]).unwrap();
+            readiness.submitted(gpu.queue());assert!(readiness.queued);
+            let pixel:u32=if format==wgpu::TextureFormat::Rgba16Float{8}else{4};
+            let row=extent[0]*pixel;
+            let stride=row.div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)*wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+            let buffer=gpu.device().create_buffer(&wgpu::BufferDescriptor {
+                label:Some("first background pixels"),size:u64::from(stride)*u64::from(extent[1]),
+                usage:wgpu::BufferUsages::COPY_DST|wgpu::BufferUsages::MAP_READ,mapped_at_creation:false,
+            });
+            let mut encoder=gpu.device().create_command_encoder(&Default::default());
+            encoder.copy_texture_to_buffer(output.as_image_copy(),wgpu::TexelCopyBufferInfo {
+                buffer:&buffer,layout:wgpu::TexelCopyBufferLayout{offset:0,bytes_per_row:Some(stride),rows_per_image:Some(extent[1])},
+            },output.size());
+            gpu.queue().submit([encoder.finish()]);
+            let (send,receive)=std::sync::mpsc::sync_channel(1);
+            buffer.slice(..).map_async(wgpu::MapMode::Read,move|result|send.send(result).unwrap());
+            gpu.device().poll(wgpu::PollType::Wait{timeout:Some(Duration::from_secs(30)),submission_index:None}).unwrap();
+            receive.recv_timeout(Duration::from_secs(30)).unwrap().unwrap();
+            assert!(readiness.ready());assert!(readiness.changed());assert!(!readiness.changed());
+            let retired=std::mem::take(&mut readiness);retired.ready.store(true,std::sync::atomic::Ordering::Release);
+            assert!(!readiness.ready());assert!(!readiness.changed());
+            let pixels=buffer.slice(..).get_mapped_range().unwrap();
+            for (y,row) in pixels.chunks_exact(stride as usize).enumerate(){
+                for (x,rgba) in row[..extent[0] as usize*pixel as usize].chunks_exact(pixel as usize).enumerate(){
+                    let padding=x>=viewport[0] as usize||y>=viewport[1] as usize;
+                    if !padding&&[x,y]!=paper{continue;}
+                    let value=if padding{0.25}else{1.};
+                    if format==wgpu::TextureFormat::Rgba16Float {
+                        let expected=layer_core::color::f16::from_f32(value).to_bits().to_le_bytes();
+                        assert!(rgba[..6].chunks_exact(2).all(|channel|channel==expected),"{format:?} {color:?} at {x},{y}, padding={padding}, actual={rgba:?}, expected={expected:?}, view={view:?}");assert_eq!(&rgba[6..],&[0,60]);
+                    }else{
+                        let expected=(layer_core::color::RgbSpace::Srgb.encode(f64::from(value))*255.).round() as u8;
+                        assert!(rgba[..3].iter().all(|channel|channel.abs_diff(expected)<=1),"{format:?} {color:?} at {x},{y}, padding={padding}, actual={rgba:?}, expected={expected}, view={view:?}");assert_eq!(rgba[3],255);
+                    }
+                }
+            }
+            drop(pixels);buffer.unmap();
             assert_eq!(target, None);
-            assert_eq!(take_prepared_target(&presenter, &renderer, &mut target), None);
+            assert_eq!(take_prepared_target(&presenter,native.session.engine().backend().0.as_ref().unwrap(),&mut target),None);
         }
     }
 }

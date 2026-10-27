@@ -5634,6 +5634,33 @@ Frozen baseline executable/DLL SHA-256 prefixes are `21A3F7A5FCF2` /
 Samples, matched native extents, source identities and health checks stay under
 `artifacts/windows/visual-glitches/startup-padding/resize-cpu/`.
 
+### Windows startup background
+
+Fresh private profiles on the same laptop compare the preceding button build
+with the startup/allocation candidate. These are instrumented launch diagnostics,
+with unknown/warm driver and operating-system caches. Composed ROI samples check
+actual palette and paper RGB; readiness metadata alone is insufficient. All apps
+close normally. The first window appears later in the dark baseline, so the
+process-relative times include launch variability.
+
+| Observation from process launch | Baseline dark / light | Final candidate dark / light |
+| --- | ---: | ---: |
+| Last exact-black canvas sample | 11.50 / 9.72 s | 0.597 / 0.338 s |
+| First shared surround sample | Not observed before paper | 0.663 / 0.410 s |
+| First actual paper sample | 11.58 / 9.80 s | 3.678 / 3.322 s |
+
+Two early black samples remain in each final run before the native background
+appears. The candidate does not eliminate every startup black frame. Its first
+surface-ready observations are 1.259 / 1.017 s, polling upper bounds rather than
+GPU fence or display timestamps. The earlier paired candidate still reports
+brush readiness near 10 s while paper is already visible. None of these values
+qualifies a cold-launch target, reference hardware or moving-frame rate.
+
+The final executable/DLL SHA-256 prefixes are `24DD271A9320` / `C565864C5E50`.
+ROI samples, captures, hashes, startup health and the two-replacement GPU recovery
+journey remain under `artifacts/windows/visual-glitches/startup-generation/`;
+the matched baseline is under `startup-padding/` beside it.
+
 ### Windows GPU VM column resize
 
 The normal x64 Release build at `67001fd5c` uses a passed-through NVIDIA RTX PRO
