@@ -93,6 +93,12 @@ then check held-out workloads. These serialized kernel measurements exclude
 source preparation, UI scheduling and presentation; they are not frame rates.
 Record thermal state and repeat when clock changes affect the fitted range.
 
+Display resampling uses the production sampling and mapped-source WGSL with the
+device's Float32 filtering capability. Projective sampling runs as a fragment
+pass; affine area sampling runs as compute. The windowless calibration test
+validates both sampling variants, entrypoint stages and the reflected uniform
+size before the hardware run.
+
 ```sh
 cargo build --locked --release -p layer-render-wgpu --example raster_workloads
 target/release/examples/raster_workloads --calibrate --output-dir artifacts/calibration

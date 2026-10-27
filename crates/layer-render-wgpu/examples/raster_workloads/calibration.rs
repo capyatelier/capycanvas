@@ -243,17 +243,50 @@ impl<'a> Timing<'a> {
     }
 }
 
+#[derive(Default)]
+struct ResampleUniform {
+    moved: [[f32; 4]; 3],
+    kept: [[f32; 4]; 3],
+    clip: [[f32; 4]; 2],
+    extent: [f32; 4],
+    texels: [u32; 4],
+    backdrop: [f32; 4],
+    options: [f32; 4],
+    source_extent: [f32; 4],
+    target_extent: [f32; 4],
+    affine_taps: [u32; 4],
+    encoding: [f32; 4],
+}
+impl ResampleUniform {
+    fn bytes(self) -> Vec<u8> {
+        self.moved.into_iter().chain(self.kept).chain(self.clip).chain([self.extent])
+            .flatten().map(f32::to_bits).chain(self.texels)
+            .chain([self.backdrop, self.options, self.source_extent, self.target_extent].into_iter().flatten().map(f32::to_bits))
+            .chain(self.affine_taps).chain(self.encoding.map(f32::to_bits))
+            .flat_map(u32::to_le_bytes).collect()
+    }
+}
+
+fn resample_source(filterable: bool) -> std::borrow::Cow<'static, str> {
+    [
+            "const WORKING_SPACE:u32=0u; fn working_to_srgb(v:vec3<f32>)->vec3<f32>{return v;} fn working_from_srgb(v:vec3<f32>)->vec3<f32>{return v;}",
+            include_str!("../../src/sdr_color.wgsl"), include_str!("../../src/working_color.wgsl"),
+            if filterable {
+                include_str!("../../src/float_sample_filtered.wgsl")
+            } else { include_str!("../../src/float_sample_texels.wgsl") },
+            include_str!("../../src/area_sample.wgsl"), include_str!("../../src/mapped_sample.wgsl"),
+            include_str!("../../src/display_resample.wgsl"),
+        ].join("\n").into()
+}
+
 fn resample(device: &wgpu::Device, queue: &wgpu::Queue, initialize: &wgpu::ComputePipeline, timing: &Timing<'_>, csv: &mut impl Write) -> Result<()> {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("display resample calibration"),
-        source: wgpu::ShaderSource::Wgsl([
-            "const WORKING_SPACE:u32=0u; fn working_to_srgb(v:vec3<f32>)->vec3<f32>{return v;} fn working_from_srgb(v:vec3<f32>)->vec3<f32>{return v;}",
-            include_str!("../../src/sdr_color.wgsl"), include_str!("../../src/working_color.wgsl"),
-            include_str!("../../src/area_sample.wgsl"), include_str!("../../src/display_resample.wgsl"),
-        ].join("\n").into()),
+        source: wgpu::ShaderSource::Wgsl(resample_source(device.features().contains(wgpu::Features::FLOAT32_FILTERABLE))),
     });
     let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-        min_filter: wgpu::FilterMode::Linear, mag_filter: wgpu::FilterMode::Linear, ..Default::default()
+        min_filter: wgpu::FilterMode::Linear, mag_filter: wgpu::FilterMode::Linear,
+        mipmap_filter: wgpu::MipmapFilterMode::Linear, ..Default::default()
     });
     for size in [[256, 256], [1062, 708], [2048, 2048]] {
         let source_size = size.map(|n| n * 2);
@@ -272,43 +305,93 @@ fn resample(device: &wgpu::Device, queue: &wgpu::Queue, initialize: &wgpu::Compu
         }
         queue.submit([encoder.finish()]);
         device.poll(wgpu::PollType::wait_indefinitely())?;
-        let mut values = [0u32; 64];
-        for (i, value) in [(0, 2.), (5, 2.), (10, 1.), (12, 2.), (17, 2.), (22, 1.),
-            (24, 1.), (29, 1.), (32, size[0] as f32), (33, size[1] as f32), (44, 1.),
-            (48, source_size[0] as f32), (49, source_size[1] as f32), (52, size[0] as f32), (53, size[1] as f32)] {
-            values[i] = f32::to_bits(value);
-        }
-        values[38] = size[0]; values[39] = size[1];
-        values[56] = 2;
+        let moved = [[2., 0., 0., 0.], [0., 2., 0., 0.], [0., 0., 1., 0.]];
+        let values = ResampleUniform {
+            moved, kept: moved,
+            clip: [[1., 0., 0., 0.], [0., 1., 0., 0.]],
+            extent: [size[0] as f32, size[1] as f32, 0., 0.],
+            texels: [0, 0, size[0], size[1]], backdrop: [0.; 4], options: [1., 0., 0., 0.],
+            source_extent: [source_size[0] as f32, source_size[1] as f32, 0., 0.],
+            target_extent: [size[0] as f32, size[1] as f32, 0., 0.],
+            affine_taps: [2, 0, 0, 0], encoding: [0.; 4],
+        };
         let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("resample calibration settings"),
-            contents: &values.into_iter().flat_map(u32::to_le_bytes).collect::<Vec<_>>(),
+            contents: &values.bytes(),
             usage: wgpu::BufferUsages::UNIFORM,
         });
         for entry in ["resample_projective", "resample_affine_area"] {
-            let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some(entry), layout: None, module: &shader, entry_point: Some(entry),
-                compilation_options: Default::default(), cache: None,
+            let projective = entry == "resample_projective";
+            let stage = if projective { wgpu::ShaderStages::FRAGMENT } else { wgpu::ShaderStages::COMPUTE };
+            let mut bindings = vec![
+                wgpu::BindGroupLayoutEntry { binding: 0, visibility: stage, count: None,
+                    ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float {
+                        filterable: device.features().contains(wgpu::Features::FLOAT32_FILTERABLE),
+                    }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false } },
+                wgpu::BindGroupLayoutEntry { binding: 2, visibility: if projective { wgpu::ShaderStages::VERTEX_FRAGMENT } else { stage }, count: None,
+                    ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false, min_binding_size: wgpu::BufferSize::new(256) } },
+                wgpu::BindGroupLayoutEntry { binding: 4, visibility: stage, count: None,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering) },
+            ];
+            bindings.push(wgpu::BindGroupLayoutEntry { binding: 3, ..bindings[0] });
+            if !projective {
+                bindings.push(wgpu::BindGroupLayoutEntry { binding: 1, visibility: stage, count: None,
+                    ty: wgpu::BindingType::StorageTexture { access: wgpu::StorageTextureAccess::WriteOnly,
+                        format: wgpu::TextureFormat::Rgba32Float, view_dimension: wgpu::TextureViewDimension::D2 } });
+            }
+            let group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some(entry), entries: &bindings });
+            let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some(entry), bind_group_layouts: &[Some(&group_layout)], immediate_size: 0,
             });
+            let compute = (!projective).then(|| device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some(entry), layout: Some(&pipeline_layout), module: &shader, entry_point: Some(entry),
+                compilation_options: Default::default(), cache: None,
+            }));
+            let render = projective.then(|| device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(entry), layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState { module: &shader, entry_point: Some("background_vertex"),
+                    compilation_options: Default::default(), buffers: &[] },
+                fragment: Some(wgpu::FragmentState { module: &shader, entry_point: Some(entry),
+                    compilation_options: Default::default(), targets: &[Some(wgpu::ColorTargetState {
+                        format: wgpu::TextureFormat::Rgba32Float, blend: None, write_mask: wgpu::ColorWrites::ALL,
+                    })] }),
+                primitive: Default::default(), depth_stencil: None, multisample: Default::default(),
+                multiview_mask: None, cache: None,
+            }));
             let mut entries = vec![
                 wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&source) },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&target) },
                 wgpu::BindGroupEntry { binding: 2, resource: uniform.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&source) },
                 wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&sampler) },
             ];
-            if entry == "resample_projective" {
-                entries.push(wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&source) });
-            }
+            if !projective { entries.push(wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&target) }); }
             let binding = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some(entry), layout: &pipeline.get_bind_group_layout(0), entries: &entries,
+                label: Some(entry), layout: &group_layout, entries: &entries,
             });
             let pixels = u64::from(size[0]) * u64::from(size[1]);
             for repeat in 0..34 {
                 let (cpu, completed, gpu) = timing.measure(|encoder, timestamp_writes| {
-                    let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some(entry), timestamp_writes });
-                    pass.set_pipeline(&pipeline);
-                    pass.set_bind_group(0, &binding, &[]);
-                    pass.dispatch_workgroups(size[0].div_ceil(8), size[1].div_ceil(8), 1);
+                    if let Some(render) = &render {
+                        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            label: Some(entry), color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                view: &target, depth_slice: None, resolve_target: None,
+                                ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                            })], depth_stencil_attachment: None,
+                            timestamp_writes: timestamp_writes.map(|t| wgpu::RenderPassTimestampWrites {
+                                query_set: t.query_set, beginning_of_pass_write_index: t.beginning_of_pass_write_index,
+                                end_of_pass_write_index: t.end_of_pass_write_index,
+                            }), occlusion_query_set: None, multiview_mask: None,
+                        });
+                        pass.set_pipeline(render);
+                        pass.set_bind_group(0, &binding, &[]);
+                        pass.draw(0..3, 0..1);
+                    } else {
+                        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some(entry), timestamp_writes });
+                        pass.set_pipeline(compute.as_ref().unwrap());
+                        pass.set_bind_group(0, &binding, &[]);
+                        pass.dispatch_workgroups(size[0].div_ceil(8), size[1].div_ceil(8), 1);
+                    }
                 })?;
                 if repeat >= 4 {
                     let samples = pixels * if entry == "resample_affine_area" { 4 } else { 1 };
@@ -320,4 +403,30 @@ fn resample(device: &wgpu::Device, queue: &wgpu::Queue, initialize: &wgpu::Compu
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resample_programs_match_pipeline_stages_and_uniform_size() {
+        for filterable in [false, true] {
+            let source = resample_source(filterable);
+            let module = naga::front::wgsl::parse_str(&source)
+                .unwrap_or_else(|error| panic!("{}", error.emit_to_string(&source)));
+            naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
+                .validate(&module).unwrap();
+            for (name, stage) in [("resample_projective", naga::ShaderStage::Fragment),
+                ("resample_affine_area", naga::ShaderStage::Compute)] {
+                assert_eq!(module.entry_points.iter().find(|entry| entry.name == name).unwrap().stage, stage);
+            }
+            let uniform = module.global_variables.iter().find_map(|(_, variable)| {
+                (variable.space == naga::AddressSpace::Uniform && variable.binding.as_ref().is_some_and(|binding|
+                    binding.group == 0 && binding.binding == 2)).then_some(variable.ty)
+            }).unwrap();
+            let naga::TypeInner::Struct { span, .. } = &module.types[uniform].inner else { panic!("Resample must be a uniform struct") };
+            assert_eq!(ResampleUniform::default().bytes().len(), *span as usize);
+        }
+    }
 }
