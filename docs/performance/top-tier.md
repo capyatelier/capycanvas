@@ -5784,6 +5784,40 @@ source difference. Raw samples, exact pooled arithmetic and source guards remain
 under `artifacts/windows/visual-glitches/header-placement-v2/resize-cpu/`; native
 correctness evidence is `header-placement/gui-report.md`.
 
+#### Scroll indicator ownership
+
+The next 2026-10-27 bracket replaces automatic scroller indicator transitions
+and the unreliable Win32 modality hook with retained native indicators and
+routed/canvas pointer tracking. The same 60 Hz i7-1255U laptop, frozen Rust DLL,
+private Paint seed and capture-free protocol run Header → scrollbar → Header,
+with three warmed five-second growth/reversal contacts per build.
+
+| Build order | Observed native changes/s | UI CPU | UI CPU ms/observed change |
+| --- | ---: | ---: | ---: |
+| Header first | 57.39 | 86.96% | 15.1532 |
+| Scrollbar candidate | 55.65 | 88.20% | 15.8496 |
+| Header last | 57.57 | 90.05% | 15.6431 |
+
+Pooled baseline cost is 15.3986 ms/change. The candidate is 2.93% higher, within
+3.23% endpoint drift and overlapping contact ranges: this bracket establishes
+neither a speedup nor a distinct regression. All nine contacts match extents and
+initial control bounds, with empty status/stderr and normal exits. Native bounds
+changes are not displayed frames; the 120 Hz target remains unqualified.
+
+Both themes pass 48 native fixture checks and 54 normal-app checks in total.
+Actual viewport/range changes retain controllers and indicator mode; wheel,
+thumb, keyboard and native touch scrolling remain available. Mouse/pen/touch
+admission and timestamp ordering pass. The isolated old helper produces 15/30
+mixed composed frames during range changes; its replacement produces 105/105
+exact frames. Valid runtime template replacement remains unverified. Whole
+column/workspace adoption is a separate open issue.
+
+Header/candidate executable SHA-256 prefixes are `C84A4B40CF13` /
+`054A23BE01DF`; both use DLL `26B1A55CEAD2`. Identities, raw contacts and normal
+journeys remain under `artifacts/windows/visual-glitches/scroll-indicators/`;
+the CPU report is `resize-cpu/report.md`. The durable fixture report is
+`artifacts/windows/visual-glitches/scroll-indicators-fixture/final-report.md`.
+
 ### Windows startup background
 
 Fresh private profiles on the same laptop compare the preceding button build

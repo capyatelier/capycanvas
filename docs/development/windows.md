@@ -178,6 +178,20 @@ Its allocation key includes its position in the window; changed coordinates
 cancel an active Navigator contact before publishing the new placement.
 Unchanged layout notifications do not republish its geometry.
 
+Mouse-only scrollbars retain their native controllers, thumbs and range bindings.
+`ScrollIndicators` removes the parent scroller's automatic indicator-state group
+from the actual template and keeps its existing bars in mouse indicator mode.
+The input-modality helper owns visibility from actual routed pointer events;
+mouse restores the configured policy and pen/touch hide bars while retaining
+scrolling. Canvas input shares the same timestamped tracker across its input
+thread, posting to UI only when the device kind changes. UI reads the latest
+kind, so a delayed callback cannot restore an older mode. The former Win32
+message hook did not reliably observe XAML pen delivery and is removed.
+A viewport or extent clamp
+therefore cannot start a separate indicator fade. Native scrollbar hover and
+pressed feedback remain. Template changes reattach the owner synchronously;
+ordinary resize does not replace controls or reapply their templates.
+
 Drawer height providers take the proposed column width before placement. A new
 drawer stays hidden until its measured placement is ready. Its source publishes
 one accepted anchor, direction and bounds tuple; header buttons and their bars
@@ -2236,6 +2250,14 @@ foreach ($theme in 'light','dark') {
     ./apps/layer-windows/scripts/test-desktop.ps1 -Script apps/layer-windows/scripts/exercise-sdk-feedback.ps1 -Parameters @{Executable='artifacts/windows/FeedbackReview/CapyCanvas.exe';Theme=$theme}
 }
 ```
+
+`exercise-scroll-indicators.ps1` uses the same Feedback build for both native
+scroller families. Run it through `test-desktop.ps1` with `Theme='light'` and
+`Theme='dark'`. It checks actual mouse/pen/touch admission, retained native
+controllers, viewport/range changes, wheel/thumb/PageDown scrolling and absent
+bars when content fits. Native controls can clamp at different intermediate
+offsets; the check requires each valid native result and its retention during
+subsequent growth. Valid runtime template replacement remains unverified.
 
 `exercise-navigator-allocation.ps1` uses that build for the actual Navigator's
 first native allocation. It checks natural height under an infinite parent,

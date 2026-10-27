@@ -2,6 +2,7 @@
 #include "ButtonFeedback.h"
 #include "SdkFeedbackFixture.h"
 #include "NavigatorLayoutFixture.h"
+#include "ScrollIndicatorsFixture.h"
 #include <winrt/Microsoft.UI.Xaml.Automation.h>
 #include <chrono>
 #include <string_view>
@@ -17,6 +18,7 @@ struct App:ApplicationT<App,Markup::IXamlMetadataProvider>{
     Window window{nullptr};Grid root;ContentDialog dialog{nullptr};Flyout flyout;
     std::vector<Button> probes;unsigned clicks=0;
     std::shared_ptr<SdkFeedbackFixture> sdk;
+    std::shared_ptr<ScrollIndicatorsFixture> indicators;
     Microsoft::UI::Dispatching::DispatcherQueueTimer timer{nullptr};
     SolidColorBrush ink{Windows::UI::Color{255,30,30,30}};
     ControlContext context;
@@ -44,6 +46,7 @@ struct App:ApplicationT<App,Markup::IXamlMetadataProvider>{
     }
     void OnLaunched(LaunchActivatedEventArgs const&){
         Resources().MergedDictionaries().Append(XamlControlsResources());
+        if(GetEnvironmentVariableW(L"CAPY_SCROLL_INDICATORS",nullptr,0)){indicators=std::make_shared<ScrollIndicatorsFixture>();indicators->open();return;}
         if(GetEnvironmentVariableW(L"CAPY_NAVIGATOR_LAYOUT",nullptr,0)){navigatorFixture=std::make_shared<NavigatorLayoutFixture>(context);navigatorFixture->open();return;}
         if(GetEnvironmentVariableW(L"CAPY_FEEDBACK_SDK",nullptr,0)){sdk=std::make_shared<SdkFeedbackFixture>();sdk->open();return;}
         wchar_t theme[16]{};GetEnvironmentVariableW(L"CAPY_FEEDBACK_THEME",theme,16);

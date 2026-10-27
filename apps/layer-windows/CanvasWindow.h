@@ -17,6 +17,7 @@
 #include "GamepadInput.h"
 #include "NativeHandles.h"
 #include "PenSourceCache.h"
+#include "PointerModality.h"
 #include <atomic>
 #include <condition_variable>
 #include <deque>
@@ -126,6 +127,7 @@ private:
     HWND workspaceOwnerWindow=nullptr;
     bool applyingDialogs=false,headerPopupOpen=false,workspacePopupOpen=false;
     std::atomic<bool> menuOpen{false},dialogOpen{false};
+    std::shared_ptr<CapyUi::PointerModality> scrollbarInput;
     std::atomic<uint32_t> sentModifiers{0};
     std::optional<bool> pendingHover;
     CanvasContactGate canvasContacts; // render thread
@@ -208,6 +210,7 @@ private:
     bool PenButtons(winrt::Microsoft::UI::Input::PointerPoint const& point,uint32_t phase);
     bool PenButtons(uint32_t id,bool primary);
     void Wheel(winrt::Microsoft::UI::Input::PointerEventArgs const&);
+    void ObservePointerModality(winrt::Microsoft::UI::Input::PointerPoint const&);
     CanvasScroll ScrollSample(winrt::Windows::Foundation::Point,int32_t,bool,winrt::Windows::System::VirtualKeyModifiers);
     // Explicit smoke fixtures; only the input dispatcher touches replayTime.
     enum class ReplayKind { Stroke, Pan, Backlog, Pen, PenBegin, PenEnd };

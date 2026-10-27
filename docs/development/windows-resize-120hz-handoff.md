@@ -131,6 +131,16 @@ compact-focus and live outgoing-overflow fade remain unverified. Use
 `exercise-header-placement.ps1` through the private desktop wrapper for those
 bounded header checks; it reports unmet fixture preconditions as coverage gaps.
 
+The scroll-indicator fix removes the parent SDK indicator animations while
+retaining native controllers and hover feedback. Actual routed/canvas pointer
+events replace the Win32 hook, so pen/touch hide mouse-only bars reliably.
+Use `exercise-scroll-indicators.ps1` with the Feedback fixture in both themes;
+48 fixture and 54 normal-app assertions pass. Valid runtime template replacement
+remains unverified. Its capture-free bracket costs 15.85 ms/native change versus
+pooled Header 15.40 ms (+2.93%, within 3.23% endpoint drift and overlapping
+ranges). No speedup or distinct regression is established; this does not qualify
+120 Hz or fix the separate whole-column/workspace adoption issue.
+
 This remains above the 8.33 ms CPU budget. Next work must adopt matching native
 controls and rendered UI pixels together and reduce packet/layout work. Keep
 the remaining native title-bar feature in the profile; changing

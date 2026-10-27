@@ -6,6 +6,8 @@
 #include "PointerGesture.h"
 #include "ButtonFeedback.h"
 #include "ChoiceFeedback.h"
+#include "ScrollIndicators.h"
+#include "PointerModality.h"
 #include "NativeHandles.h"
 #include <winrt/Microsoft.UI.Xaml.Automation.h>
 #include <winrt/Microsoft.UI.Xaml.Media.Imaging.h>
@@ -107,30 +109,40 @@ inline Microsoft::UI::Xaml::Media::ImageSource bundledImage(std::wstring const& 
 struct MouseScrollbars {
     struct Entry { weak_ref<DependencyObject> node; std::function<void(bool)> show; };
     std::vector<Entry> entries;
+    std::vector<weak_ref<UIElement>> roots;
+    std::shared_ptr<PointerModality> source=std::make_shared<PointerModality>();
     bool mouse=false;
-    HHOOK hook=nullptr;
     static MouseScrollbars& current(){static thread_local MouseScrollbars value;return value;}
-    void input(bool next){
+    void apply(){
+        bool next=source->Mouse();
         if(mouse==next)return;mouse=next;
         std::erase_if(entries,[](auto const& entry){return !entry.node.get();});
         for(auto const& entry:entries)entry.show(mouse);
     }
-    static LRESULT CALLBACK message(int code,WPARAM action,LPARAM payload){
-        auto& self=current();
-        if(code>=0&&action==PM_REMOVE){
-            auto event=reinterpret_cast<MSG*>(payload);
-            if(event->message==WM_POINTERDOWN||event->message==WM_POINTERUPDATE||event->message==WM_POINTERENTER){
-                POINTER_INPUT_TYPE type;
-                if(GetPointerType(GET_POINTERID_WPARAM(event->wParam),&type))self.input(type==PT_MOUSE);
-            }else if(event->message==WM_MOUSEMOVE||event->message==WM_LBUTTONDOWN||event->message==WM_MOUSEWHEEL)
-                self.input((ULONG_PTR(GetMessageExtraInfo())&0xFFFFFF00)!=0xFF515700);
-        }
-        return CallNextHookEx(self.hook,code,action,payload);
+    void observe(UIElement const& root){
+        if(!root)return;
+        std::erase_if(roots,[](auto const& weak){return !weak.get();});
+        for(auto const& weak:roots)if(weak.get()==root)return;
+        roots.push_back(make_weak(root));
+        auto input=PointerEventHandler([tracker=source](auto&&,PointerRoutedEventArgs const& event){
+            auto point=event.GetCurrentPoint(nullptr);
+            tracker->Observe(point.PointerDeviceType()==Microsoft::UI::Input::PointerDeviceType::Mouse,point.Timestamp());
+            current().apply();
+        });
+        for(auto event:{UIElement::PointerPressedEvent(),UIElement::PointerMovedEvent(),UIElement::PointerWheelChangedEvent()})root.AddHandler(event,box_value(input),true);
     }
-    MouseScrollbars(){hook=SetWindowsHookExW(WH_GETMESSAGE,message,nullptr,GetCurrentThreadId());}
-    ~MouseScrollbars(){if(hook)UnhookWindowsHookEx(hook);}
 };
+inline void observeScrollbarInput(FrameworkElement const& scroll){
+    auto attach=[weak=make_weak(scroll)]{
+        auto item=weak.get();if(!item||!item.IsLoaded())return;
+        auto root=item.as<DependencyObject>();while(auto parent=VisualTreeHelper::GetParent(root))root=parent;
+        MouseScrollbars::current().observe(root.try_as<UIElement>());
+    };
+    scroll.Loaded([attach](auto&&,auto&&){attach();});attach();
+}
 inline void mouseScrollbars(ScrollView const& scroll){
+    retainScrollIndicators(scroll);
+    observeScrollbarInput(scroll);
     auto horizontal=scroll.HorizontalScrollBarVisibility(),vertical=scroll.VerticalScrollBarVisibility();
     auto& mode=MouseScrollbars::current();auto weak=make_weak(scroll);
     auto show=[weak,horizontal,vertical](bool mouse){if(auto value=weak.get()){
@@ -140,6 +152,8 @@ inline void mouseScrollbars(ScrollView const& scroll){
     mode.entries.push_back({make_weak(scroll.as<DependencyObject>()),show});show(mode.mouse);
 }
 inline void mouseScrollbars(ScrollViewer const& scroll){
+    retainScrollIndicators(scroll);
+    observeScrollbarInput(scroll);
     auto horizontal=scroll.HorizontalScrollBarVisibility(),vertical=scroll.VerticalScrollBarVisibility();
     auto& mode=MouseScrollbars::current();auto weak=make_weak(scroll);
     auto show=[weak,horizontal,vertical](bool mouse){if(auto value=weak.get()){

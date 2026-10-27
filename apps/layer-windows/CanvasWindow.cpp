@@ -179,6 +179,7 @@ void CanvasWindow::Open() {
     titlebar.ButtonForegroundColor(Windows::UI::Color{255,225,225,229});
     titlebar.PreferredHeightOption(TitleBarHeightOption::Tall);
     root.RequestedTheme(ElementTheme::Default);
+    auto& pointerMode=CapyUi::MouseScrollbars::current();scrollbarInput=pointerMode.source;pointerMode.observe(root);
 
     canvasFocus.Content(panel);
     canvasFocus.HorizontalContentAlignment(HorizontalAlignment::Stretch);
@@ -808,8 +809,13 @@ void CanvasWindow::CanvasTouch(CanvasTouchGesture& gesture,Microsoft::UI::Input:
         if(gesture.contact==id){if(phase==3){gesture.recognizer.ProcessUpEvent(point);gesture.contact.reset();}else CancelCanvasTouch(gesture);}
     }
 }
+void CanvasWindow::ObservePointerModality(Microsoft::UI::Input::PointerPoint const& point){
+    if(scrollbarInput&&scrollbarInput->Observe(point.PointerDeviceType()==Microsoft::UI::Input::PointerDeviceType::Mouse,point.Timestamp()))
+        dispatcher.TryEnqueue([source=scrollbarInput]{auto& state=CapyUi::MouseScrollbars::current();if(state.source==source)state.apply();});
+}
 void CanvasWindow::Pointer(Microsoft::UI::Input::PointerEventArgs const& e,uint32_t phase){
     auto current=e.CurrentPoint();
+    if(phase<=2)ObservePointerModality(current);
     Pointer(PointerSamples(current,e.GetIntermediatePoints(),phase,true),e.KeyModifiers(),
         current.PointerDeviceType()==Microsoft::UI::Input::PointerDeviceType::Pen,current.Properties().IsBarrelButtonPressed(),latencyTrace.enabled?Now():0);
     e.Handled(true);
@@ -893,6 +899,7 @@ void CanvasWindow::Pointer(std::vector<CapyPointer> samples,Windows::System::Vir
     TrackContact(id,first.phase,first.tool==3);
 }
 void CanvasWindow::Wheel(Microsoft::UI::Input::PointerEventArgs const& e){
+    ObservePointerModality(e.CurrentPoint());
     auto point=e.CurrentPoint();auto props=point.Properties();
     SendIndependent(ScrollSample(point.Position(),props.MouseWheelDelta(),props.IsHorizontalMouseWheel(),e.KeyModifiers()));e.Handled(true);
 }

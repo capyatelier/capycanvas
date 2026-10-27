@@ -6,6 +6,7 @@
 #include "../PenSourceCache.h"
 #include "../CanvasContactGate.h"
 #include "../PointerCompletion.h"
+#include "../PointerModality.h"
 #include "../ThumbnailOwners.h"
 #include "../PointerScrub.h"
 #include <limits>
@@ -29,6 +30,19 @@
 #endif
 
 int main() {
+    CapyUi::PointerModality modality;
+    assert(!modality.Mouse());
+    assert(modality.Observe(true,100)&&modality.Mouse());
+    assert(!modality.Observe(true,200));
+    assert(!modality.Observe(false,150)&&modality.Mouse());
+    assert(modality.Observe(false,300)&&!modality.Mouse());
+    assert(modality.Observe(true,400)&&modality.Mouse());
+    assert(!modality.Observe(false,350)&&modality.Mouse());
+    assert(modality.Observe(false,500)&&!modality.Mouse());
+    std::thread older([&]{for(uint64_t i=600;i<700;++i)modality.Observe(true,i);});
+    std::thread newer([&]{for(uint64_t i=700;i<800;++i)modality.Observe(false,i);});
+    older.join();newer.join();assert(!modality.Mouse());
+    std::cout<<"Pointer modality: ordered native/routed contacts, coalesced latest kind and stale callbacks passed\n";
     CanvasSurfaceState surface;
     surface.Reset(0);
     assert(!surface.CanAttach(0,true)&&!surface.CanAttach(1,false));
