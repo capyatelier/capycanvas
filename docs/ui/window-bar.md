@@ -122,6 +122,8 @@ Fullscreen is a Web-only title-bar component. GTK keeps F11 and View → Full sc
 but excludes the tile from its bar, overflow menus and palette, including when
 loading a saved arrangement containing it. Other default controls stay aligned
 across hosts without replacing each workspace's distinct tools/panels.
+Windows suppresses DWM window transitions while using the fullscreen presenter
+and restores normal window animations after leaving fullscreen.
 
 Removing all navigation items exposes a recovery menu; native close is always
 outside customization. Outside editing, unused caption space and informational

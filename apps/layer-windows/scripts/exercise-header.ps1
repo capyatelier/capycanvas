@@ -1,5 +1,6 @@
-﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('mouse','pen','touch')][string]$Device='mouse',[ValidateSet('paint','sketch','photo')][string]$Workspace='paint',[switch]$Catalog,[ValidateSet('dark','light')][string]$Theme='dark',[ValidateSet('full','catalog-only','catalog-only-light','background','options','options-light','options-pen','options-touch','menus','menus-light','zen','zen-workspace')][string]$Journey='full')
+﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('mouse','pen','touch')][string]$Device='mouse',[ValidateSet('paint','sketch','photo')][string]$Workspace='paint',[switch]$Catalog,[ValidateSet('dark','light')][string]$Theme='dark',[ValidateSet('full','catalog-only','catalog-only-light','background','options','options-light','options-pen','options-touch','menus','menus-light','zen','zen-workspace')][string]$Journey='full',[switch]$FullscreenOnly,[switch]$FullscreenBaseline)
 $ErrorActionPreference='Stop'
+if($FullscreenBaseline){$FullscreenOnly=$true}
 $catalogJourney=$Journey -in @('catalog-only','catalog-only-light')
 if($Journey -eq 'catalog-only-light'){$Theme='light'}
 if($Journey -eq 'options-light'){$Theme='light'}
@@ -459,15 +460,102 @@ function Check-ResizeCancel {
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Resize -Width ([int]$size.Width) -Height ([int]$size.Height)
     Check-Geometry
 }
-function Check-Fullscreen {
+function Check-Fullscreen([switch]$WindowOnly) {
     foreach($active in @($true,$false)){
-        $at=At 'header-item-1'
-        [CapyRowPointer]::KeyAt(0x7a,$at.x,$at.y)
+        $at=At $(if($WindowOnly){'title-bar'}else{'header-item-1'})
+        $restoredTrace=Join-Path $directory ("fullscreen-restored-$($review.Id)-$($drawingWindow.ToInt64()).json")
+        if($WindowOnly -and !$FullscreenBaseline -and !$active){Remove-Item -LiteralPath $restoredTrace -ErrorAction SilentlyContinue}
+        if($WindowOnly){[CapyFullscreenProbe]::StartFrames($drawingWindow)}
+        try{[CapyRowPointer]::KeyAt(0x7a,$at.x,$at.y)}finally{if($WindowOnly){[CapyFullscreenProbe]::SaveFrames((Join-Path $run ('desktop-'+$script:fullscreenMode+'-'+$active)))}}
         Wait-Until {(Model).state.fullscreen -eq $active} 'Native F11 did not report the actual fullscreen state'
         Check-Geometry
-        $clock=Entries|Where-Object {$_.item.kind -eq 'clock'}|Select-Object -First 1
-        Wait-Until {(@((Presentation).geometry.items|Where-Object id -eq $clock.id).Count -gt 0) -eq $active} 'Clock did not follow fullscreen visibility'
+        if(!$WindowOnly){
+            $clock=Entries|Where-Object {$_.item.kind -eq 'clock'}|Select-Object -First 1
+            Wait-Until {(@((Presentation).geometry.items|Where-Object id -eq $clock.id).Count -gt 0) -eq $active} 'Clock did not follow fullscreen visibility'
+        }
         if((Model).header.editing){throw 'Fullscreen opened titlebar editing'}
+        if($WindowOnly){
+            $transition=@{value=$null;restored=$null}
+            if(!$FullscreenBaseline){
+                $trace=Join-Path $directory ("fullscreen-transition-$($review.Id)-$($drawingWindow.ToInt64()).json")
+                Wait-Until {$transition.value=Read-Snapshot $trace;$transition.value -and $transition.value.fullscreen -eq $active -and $null -ne $transition.value.disable_hresult -and $transition.value.disable_hresult -ge 0} 'The presenter change did not successfully disable DWM transitions'
+                if(!$active){Wait-Until {$transition.restored=Read-Snapshot $restoredTrace;$transition.restored -and $null -ne $transition.restored.enable_hresult -and $transition.restored.enable_hresult -ge 0} 'Windowed DWM transitions did not successfully re-enable'}
+            }
+            $state=[CapyFullscreenProbe]::Read($drawingWindow)
+            $script:fullscreenReceipts.Add(@{mode=$script:fullscreenMode;fullscreen=$active;native=$state;presenter_change=$transition.value;windowed_restore=$transition.restored;model_fullscreen=(Model).state.fullscreen})
+            $script:fullscreenReceipts|ConvertTo-Json -Depth 8|Set-Content (Join-Path $run 'fullscreen-state.json')
+            if(!$FullscreenBaseline -and ($state.edge_boolean_hresult -lt 0 -or !$state.edge_disabled)){throw 'The owned window does not disable fullscreen edge gestures'}
+            if($active -and ($state.window -join ',') -ne ($state.monitor -join ',')){throw 'Fullscreen does not cover its owned monitor'}
+            Capture ('fullscreen-'+$script:fullscreenMode+'-'+$active)
+        }
+    }
+}
+function Check-FullscreenWindow {
+    Add-Type -AssemblyName System.Drawing
+    Add-Type -ReferencedAssemblies System.Drawing -TypeDefinition @'
+using System;using System.Runtime.InteropServices;using System.Drawing;using System.Threading;using System.Collections.Generic;using System.Diagnostics;using System.IO;
+public static class CapyFullscreenProbe {
+ [StructLayout(LayoutKind.Sequential)] public struct Rect {public int left,top,right,bottom;public int[] Values(){return new[]{left,top,right,bottom};}}
+ [StructLayout(LayoutKind.Sequential)] struct Monitor {public int size;public Rect monitor,work;public uint flags;}
+ [StructLayout(LayoutKind.Sequential)] struct PropertyKey {public Guid format;public uint id;}
+ [StructLayout(LayoutKind.Explicit,Size=24)] struct Variant {[FieldOffset(0)]public ushort type;[FieldOffset(8)]public short value;[FieldOffset(8)]public IntPtr text;}
+ [ComImport,Guid("886D8EEB-8CF2-4446-8D02-CDBA1DBDCF99"),InterfaceType(ComInterfaceType.InterfaceIsIUnknown)] interface Store {
+  void GetCount(out uint count);void GetAt(uint index,out PropertyKey key);void GetValue(ref PropertyKey key,out Variant value);void SetValue(ref PropertyKey key,ref Variant value);void Commit();
+ }
+ [DllImport("shell32.dll")] static extern int SHGetPropertyStoreForWindow(IntPtr window,ref Guid iid,[MarshalAs(UnmanagedType.Interface)]out Store store);
+ [DllImport("ole32.dll")] static extern int PropVariantClear(ref Variant value);
+ [DllImport("propsys.dll")] static extern int PropVariantToBoolean(ref Variant value,[MarshalAs(UnmanagedType.Bool)]out bool result);
+ [DllImport("dwmapi.dll")] static extern int DwmGetWindowAttribute(IntPtr window,int attribute,out Rect value,int size);
+ [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr window,out Rect value);
+ [DllImport("user32.dll")] static extern bool IsZoomed(IntPtr window);
+ [DllImport("user32.dll")] static extern IntPtr MonitorFromWindow(IntPtr window,uint flags);
+ [DllImport("user32.dll")] static extern bool GetMonitorInfo(IntPtr monitor,ref Monitor value);
+ [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
+ [DllImport("user32.dll")] static extern IntPtr GetThreadDesktop(uint thread);
+ [DllImport("user32.dll")] static extern bool SetThreadDesktop(IntPtr desktop);
+ [DllImport("user32.dll")] static extern IntPtr GetDC(IntPtr window);
+ [DllImport("user32.dll")] static extern int ReleaseDC(IntPtr window,IntPtr dc);
+ [DllImport("gdi32.dll")] static extern bool StretchBlt(IntPtr target,int x,int y,int width,int height,IntPtr source,int sx,int sy,int sw,int sh,uint op);
+ static Thread capture;static ManualResetEvent captureStarted;static Exception captureError;static readonly List<Bitmap> frames=new List<Bitmap>();static readonly List<double> times=new List<double>();
+ public static void StartFrames(IntPtr window){
+  var state=Read(window);var bounds=state.monitor;var desktop=GetThreadDesktop(GetCurrentThreadId());var started=new ManualResetEvent(false);captureStarted=started;captureError=null;frames.Clear();times.Clear();
+  capture=new Thread(()=>{try{
+   if(!SetThreadDesktop(desktop))throw new Exception("Frame capture could not enter its private desktop");
+   var clock=Stopwatch.StartNew();var screen=GetDC(IntPtr.Zero);if(screen==IntPtr.Zero)throw new Exception("Private desktop DC unavailable");
+   try{for(int i=0;i<12;i++){
+    var bitmap=new Bitmap(1024,Math.Max(1,1024*(bounds[3]-bounds[1])/(bounds[2]-bounds[0])));
+    using(var graphics=Graphics.FromImage(bitmap)){var dc=graphics.GetHdc();try{if(!StretchBlt(dc,0,0,bitmap.Width,bitmap.Height,screen,bounds[0],bounds[1],bounds[2]-bounds[0],bounds[3]-bounds[1],0x00CC0020))throw new Exception("Private desktop frame capture failed");}finally{graphics.ReleaseHdc(dc);}}
+    frames.Add(bitmap);times.Add(clock.Elapsed.TotalMilliseconds);if(i==0)started.Set();Thread.Sleep(33);
+   }}finally{ReleaseDC(IntPtr.Zero,screen);}
+  }catch(Exception error){captureError=error;}finally{started.Set();}});capture.Start();started.WaitOne();if(captureError!=null){capture.Join();started.Dispose();throw captureError;}
+ }
+ public static void SaveFrames(string prefix){capture.Join();captureStarted.Dispose();try{if(captureError!=null)throw captureError;for(int i=0;i<frames.Count;i++)frames[i].Save(prefix+"-"+i.ToString("D2")+".png");File.WriteAllText(prefix+"-times.json","["+String.Join(",",times.ConvertAll(value=>value.ToString("R",System.Globalization.CultureInfo.InvariantCulture)).ToArray())+"]");}finally{foreach(var frame in frames)frame.Dispose();frames.Clear();}}
+ public class State {public int[] window,frame,monitor;public bool maximized,edge_disabled;public int edge_boolean_hresult;public ushort edge_type;public string edge_text;}
+ public static State Read(IntPtr window){
+  Rect bounds,frame;var monitor=new Monitor{size=Marshal.SizeOf(typeof(Monitor))};
+  if(!GetWindowRect(window,out bounds)||!GetMonitorInfo(MonitorFromWindow(window,2),ref monitor))throw new Exception("Owned window geometry unavailable");
+  Marshal.ThrowExceptionForHR(DwmGetWindowAttribute(window,9,out frame,16));
+  var iid=typeof(Store).GUID;Store store;Marshal.ThrowExceptionForHR(SHGetPropertyStoreForWindow(window,ref iid,out store));
+  var key=new PropertyKey{format=new Guid("32CE38B2-2C9A-41B1-9BC5-B3784394AA44"),id=2};Variant value;
+  try{store.GetValue(ref key,out value);}finally{Marshal.ReleaseComObject(store);}
+  try{bool edge;var converted=PropVariantToBoolean(ref value,out edge);return new State{window=bounds.Values(),frame=frame.Values(),monitor=monitor.monitor.Values(),maximized=IsZoomed(window),edge_type=value.type,edge_text=value.type==31?Marshal.PtrToStringUni(value.text):null,edge_boolean_hresult=converted,edge_disabled=edge};}finally{PropVariantClear(ref value);}
+ }
+}
+'@
+    $script:fullscreenReceipts=[Collections.Generic.List[object]]::new()
+    foreach($mode in 'normal','maximized'){
+        $script:fullscreenMode=$mode
+        $pattern=$root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern)
+        $pattern.SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Normal)
+        if($mode -eq 'normal'){
+            & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Resize -Width 1200 -Height 800
+        }else{$pattern.SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)}
+        Wait-Until {$pattern.Current.WindowVisualState -eq [System.Windows.Automation.WindowVisualState]::$mode} 'The owned window did not enter its initial presentation state'
+        $before=[CapyFullscreenProbe]::Read($drawingWindow)
+        $script:fullscreenReceipts.Add(@{mode=$mode;stage='before';native=$before})
+        Check-Fullscreen -WindowOnly
+        $after=[CapyFullscreenProbe]::Read($drawingWindow)
+        if(!$FullscreenBaseline -and (($before.window -join ',') -ne ($after.window -join ',') -or $before.maximized -ne $after.maximized)){throw 'Leaving fullscreen did not restore the prior window bounds and maximized state'}
     }
 }
 
@@ -803,6 +891,13 @@ try {
     $env:CAPY_STORAGE_DIR=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1'
     [IO.File]::WriteAllText((Settings-File),(@{theme=$Theme}|ConvertTo-Json))
     Start-Review 'initial';Capture 'normal'
+    if($FullscreenOnly){
+        Check-FullscreenWindow
+        & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Close -DiscardUnsaved
+        if((Get-Item -LiteralPath $stderr).Length){throw 'Native fullscreen stderr requires inspection'}
+        @{theme=$Theme;baseline=[bool]$FullscreenBaseline;normal_and_maximized_fullscreen_restore=$(if($FullscreenBaseline){'recorded only'}else{'passed'});edge_gesture_property=$(if($FullscreenBaseline){'recorded only'}else{'Boolean true'});evidence=$run;scope='F11, native/DWM state and timed private desktop captures; physical Shell edge swipes remain unverified'}|ConvertTo-Json
+        return
+    }
     if($catalogJourney){
         Maximize-DrawingWindow
         Check-CompactWorkspace;Check-PenOrder;Check-Catalog

@@ -14,6 +14,9 @@
 #include <ShellScalingApi.h>
 #include <CommCtrl.h>
 #include <dwmapi.h>
+#include <shellapi.h>
+#include <propsys.h>
+#include <propkey.h>
 #include <winrt/Windows.Graphics.h>
 #include <winrt/Microsoft.UI.Content.h>
 #include <winrt/Microsoft.UI.Xaml.Automation.h>
@@ -164,6 +167,11 @@ void CanvasWindow::Open() {
     dispatcher=Microsoft::UI::Dispatching::DispatcherQueue::GetForCurrentThread();
     window.Title(L"Capy Canvas");
     window.ExtendsContentIntoTitleBar(true);
+    com_ptr<IPropertyStore> properties;
+    if(SUCCEEDED(SHGetPropertyStoreForWindow(Handle(),IID_PPV_ARGS(properties.put())))){
+        PROPVARIANT value{};value.vt=VT_BOOL;value.boolVal=VARIANT_TRUE;
+        properties->SetValue(PKEY_EdgeGesture_DisableTouchWhenFullscreen,value);
+    }
     auto titlebar=window.AppWindow().TitleBar();
     Windows::UI::Color transparent{0,0,0,0};
     titlebar.ButtonBackgroundColor(transparent);
@@ -1609,9 +1617,20 @@ void CanvasWindow::ChromeMotion(PointerRoutedEventArgs const& e,bool leave) {
 void CanvasWindow::Fullscreen() {
     if(closing||closed)return;
     auto app=window.AppWindow();
-    app.SetPresenter(app.Presenter().Kind()==AppWindowPresenterKind::FullScreen?
-        AppWindowPresenterKind::Overlapped:AppWindowPresenterKind::FullScreen);
-    Resize();
+    bool entering=app.Presenter().Kind()!=AppWindowPresenterKind::FullScreen;
+    BOOL disabled=TRUE;auto result=DwmSetWindowAttribute(Handle(),DWMWA_TRANSITIONS_FORCEDISABLED,&disabled,sizeof(disabled));
+    TraceState("fullscreen-transition",std::string("{\"fullscreen\":")+(entering?"true":"false")+
+        ",\"disable_hresult\":"+std::to_string(result)+"}");
+    auto restore=[weak=weak_from_this()]{if(auto self=weak.lock();self&&!self->closing&&!self->closed&&
+        self->window.AppWindow().Presenter().Kind()!=AppWindowPresenterKind::FullScreen){
+        BOOL disabled=FALSE;auto result=DwmSetWindowAttribute(self->Handle(),DWMWA_TRANSITIONS_FORCEDISABLED,&disabled,sizeof(disabled));
+        self->TraceState("fullscreen-restored","{\"enable_hresult\":"+std::to_string(result)+"}");
+    }};
+    try{
+        app.SetPresenter(entering?AppWindowPresenterKind::FullScreen:AppWindowPresenterKind::Overlapped);
+        Resize();
+    }catch(...){restore();throw;}
+    if(!entering&&!dispatcher.TryEnqueue(Microsoft::UI::Dispatching::DispatcherQueuePriority::Low,restore))restore();
 }
 void CanvasWindow::OpenFiles(std::vector<std::wstring> paths) {
     launchFiles.insert(launchFiles.end(),std::make_move_iterator(paths.begin()),std::make_move_iterator(paths.end()));

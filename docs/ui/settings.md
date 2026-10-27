@@ -330,6 +330,12 @@ tap rows; macOS trackpad contacts recognize scrubs, quick pinches and history
 holds, and list no taps. Windows keeps
 three- and four-finger contacts for its own touch gestures while those are on
 in Windows Settings, so only two-finger taps reach the app by default.
+Windows drawing windows request the shell's screen-edge gesture opt-out while
+active and fullscreen, including when an owned dialog is active. This request
+does not disable system gestures in ordinary windowed mode or change Windows
+Touch settings. Three- and four-finger system gestures remain user-controlled.
+Windows' [Touch settings](https://support.microsoft.com/en-gb/windows/hardware/input-devices/touch-gestures-for-windows)
+also let users turn off left- and right-edge swipes for windowed use.
 
 An Apple Pencil double-tap or squeeze follows the iPad's Apple Pencil setting.
 iPadOS sends it as `stylus_action` input when that setting switches between the

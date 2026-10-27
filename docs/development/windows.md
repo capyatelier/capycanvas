@@ -1718,6 +1718,15 @@ visibility journey on the VM.
 Use `header:catalog-only` and `header:catalog-only-light` for categories, Pen
 order, shortcut tooltips and the header catalog. The legacy `header:Catalog`
 switch still runs the full header journey.
+Use `exercise-header.ps1 -FullscreenOnly -Theme dark|light` for F11 entry and
+exit from normal and maximized windows. It checks restored native bounds and
+the fullscreen edge-gesture property, and retains window, monitor and DWM state.
+The presenter-change trace must report successful DWM transition suppression
+on entry and exit, followed by successful re-enabling in windowed state.
+`DWMWA_TRANSITIONS_FORCEDISABLED` is a setter-only attribute. Timed private-desktop frames
+record each transition for visual review. `-FullscreenBaseline` records an older
+executable's policy and frames without requiring the new property or trace.
+These checks do not qualify physical Shell edge swipes.
 With `CAPY_TRACE_UI`, the `settings-title` peer publishes actual Preferences row,
 swatch-strip and custom-field allocations in one native coordinate space.
 `exercise-header-settings.ps1` uses these measurements for closed, open and
