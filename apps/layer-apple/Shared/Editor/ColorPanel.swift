@@ -170,7 +170,7 @@ private struct ColorPanelButtonStyle: ButtonStyle {
         @State private var hovered = false
         var body: some View {
             configuration.label
-                .foregroundStyle(kind == .shape && hovered ? palette.accent : palette["text"])
+                .foregroundStyle(kind == .shape && (hovered || configuration.isPressed) ? palette.accent : palette["text"])
                 .overlay {
                     if case .paint(let selected) = kind {
                         Circle().strokeBorder(palette["text"].opacity(selected || hovered ? 1 : 0.25),
@@ -184,7 +184,8 @@ private struct ColorPanelButtonStyle: ButtonStyle {
                             : hovered ? palette["text"].opacity(0.08) : palette["panel"])
                     case .swap:
                         Circle().fill(palette["text"].opacity(configuration.isPressed ? 0.16 : hovered ? 0.12 : 0))
-                    case .shape: EmptyView()
+                    case .shape:
+                        Circle().fill(palette["text"].opacity(configuration.isPressed ? 0.16 : 0))
                     }
                 }
                 .onHover { hovered = $0 }

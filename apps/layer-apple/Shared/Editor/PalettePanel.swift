@@ -121,6 +121,19 @@ enum PaletteSlide {
     }
 }
 
+private struct PaletteTileButtonStyle: ButtonStyle {
+    let hovering: Bool
+    let available: Bool
+    let palette: EditorPalette
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label.background {
+            if available && (configuration.isPressed || hovering) {
+                SquircleShape.control.fill(palette["text"].opacity(configuration.isPressed ? 0.16 : 0.1))
+            }
+        }
+    }
+}
+
 private struct PaletteSwatchTile: View {
     let swatch: JSON
     let selected: Bool
@@ -136,10 +149,9 @@ private struct PaletteSwatchTile: View {
         Button(action: use) {
             PaletteFace(rgba: swatch["rgba"], color: swatch["color"], hdr: hdr, viewing: viewing)
                 .padding(3).frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background { if hovering && !dragging { SquircleShape.control.fill(palette["text"].opacity(0.1)) } }
                 .overlay { if selected { SquircleShape.control.strokeBorder(palette.accent, lineWidth: 2) } }
                 .contentShape(Rectangle())
-        }.buttonStyle(.plain).opacity(lifted ? 0 : 1)
+        }.buttonStyle(PaletteTileButtonStyle(hovering: hovering, available: !dragging, palette: palette)).opacity(lifted ? 0 : 1)
             .onHover { hovering = $0 }
             .help(dragging ? "" : detail).accessibilityLabel(detail)
             .accessibilityAddTraits(selected ? .isSelected : [])
@@ -212,9 +224,9 @@ private struct PaletteRecentTile: View {
         Button { controller.useRecent(tile["color"]) } label: {
             PaletteFace(rgba: tile["rgba"], color: tile["color"], hdr: hdr, viewing: viewing)
                 .padding(3).frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background { if hovering && controller.lift == nil { SquircleShape.control.fill(palette["text"].opacity(0.1)) } }
                 .contentShape(Rectangle())
-        }.buttonStyle(.plain).disabled(!enabled).onHover { hovering = $0 }
+        }.buttonStyle(PaletteTileButtonStyle(hovering: hovering, available: enabled && controller.lift == nil, palette: palette))
+            .disabled(!enabled).onHover { hovering = $0 }
             .help(detail).accessibilityLabel(detail).accessibilityIdentifier("palette-recent-color")
     }
 }
