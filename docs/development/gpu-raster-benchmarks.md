@@ -151,6 +151,13 @@ artwork revision, and the run verifies unchanged native paint/mask roots. The
 first navigation frame and cache misses stay in the results. `multiple` uses the
 existing `--photo` worker fixture instead.
 
+Shared workload setup drains pending renderer work and requires a presentable
+frame before timing begins. Raster readiness alone does not establish that the
+scene has been published. Every navigation sample requires a presentable frame
+and preserves both authored document and renderer composition revisions; an
+empty presentation submission cannot count as fast navigation. This setup does
+not warm the navigation trajectory or discard its first-frame cost.
+
 The native counterpart is the ignored GTK test
 `workspace::tests::native_navigation::native_large_photo_navigation`. Build the
 release test executable first, then run it alone with `gtk-raster.sh` and

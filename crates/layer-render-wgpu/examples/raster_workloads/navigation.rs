@@ -58,7 +58,8 @@ pub(crate) fn run(selected: &str, color: DocumentColor, output: &Path) -> Result
         adjustments(&mut canvas, &mut Observations::default())?;
         canvas.settle()?;
         let roots = native_roots(&canvas)?;
-        let revision = canvas.engine.backend().canvas_preview_revision();
+        let revision = canvas.engine.document().revision;
+        let preview_revision = canvas.engine.backend().canvas_preview_revision();
         let format = wgpu::TextureFormat::Rgba16Float;
         let target = canvas
             .engine
@@ -118,6 +119,7 @@ pub(crate) fn run(selected: &str, color: DocumentColor, output: &Path) -> Result
                     canvas.engine.set_view(view, inverse);
                     canvas.engine.render_frame()?;
                     let frame_cpu = ms(start);
+                    assert!(canvas.engine.backend().has_presentable_frame(), "Navigation produced no presentable frame");
                     presenter.present(
                         canvas.engine.backend(),
                         &target,
@@ -148,9 +150,14 @@ pub(crate) fn run(selected: &str, color: DocumentColor, output: &Path) -> Result
                     cpu.push(total_cpu);
                     completed.push(complete);
                     assert_eq!(
-                        canvas.engine.backend().canvas_preview_revision(),
+                        canvas.engine.document().revision,
                         revision,
                         "Navigation changed artwork revision"
+                    );
+                    assert_eq!(
+                        canvas.engine.backend().canvas_preview_revision(),
+                        preview_revision,
+                        "Navigation changed canvas composition revision"
                     );
                 }
                 let misses = completed.iter().filter(|&&v| v > 1000. / 120.).count();

@@ -153,10 +153,14 @@ impl Canvas {
         let until = Instant::now() + Duration::from_secs(30);
         loop {
             self.engine.backend_mut().wait_idle()?;
-            if self.engine.has_pending_document_edits() || self.engine.has_pending_input() {
+            if self.engine.has_pending_document_edits() || self.engine.has_pending_input()
+                || self.engine.backend().has_pending_work() || !self.engine.backend().has_presentable_frame()
+            {
                 self.engine.render_frame()?;
             }
             if self.engine.backend().raster_ready()
+                && !self.engine.backend().has_pending_work()
+                && self.engine.backend().has_presentable_frame()
                 && !self.engine.has_pending_document_edits()
                 && !self.engine.has_pending_input()
             {
