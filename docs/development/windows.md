@@ -1800,6 +1800,11 @@ column's close-and-outward-swipe sequence without repeating the other checks.
 `-LayerRowOnly -Device touch` isolates the real layer-row arbitration case.
 `-CancelOnly -Device pen|touch` checks native pointer cancellation during
 pending and claimed edge contacts, including exact rollback and released capture.
+`-NumericOnly -Device mouse|pen|touch -Theme dark|light` checks that the numeric
+caption, readout, slider and gaps inside the component remain reserved for input
+even within a panel resize edge's reach. The whole NumberControl root has a
+transparent hit surface and `edge_contact=input`, matching GTK's component
+ownership. Ordinary brush-size buttons keep their normal edge handoff.
 `-EdgeEscapeOnly -Device touch -Theme dark|light` checks that an actual selected
 Tool Set subtool within the column reach keeps its immediate bubble contact.
 Escape during pending and claimed edge contacts must preserve the brush, tool
@@ -2192,6 +2197,16 @@ both themes:
 ```powershell
 ./apps/layer-windows/scripts/build.ps1 -ControlFixture Feedback -OutputDirectory artifacts/windows/FeedbackReview
 ./apps/layer-windows/scripts/test-desktop.ps1 -Script apps/layer-windows/scripts/exercise-button-feedback.ps1 -Parameters @{Executable='artifacts/windows/FeedbackReview/CapyCanvas.exe'}
+```
+
+The same build runs `exercise-sdk-feedback.ps1` for actual ComboBox templates
+and ContentDialog footer buttons. It checks native pointer and keyboard
+completion, disabled appearance, retained resources and default-action changes:
+
+```powershell
+foreach ($theme in 'light','dark') {
+    ./apps/layer-windows/scripts/test-desktop.ps1 -Script apps/layer-windows/scripts/exercise-sdk-feedback.ps1 -Parameters @{Executable='artifacts/windows/FeedbackReview/CapyCanvas.exe';Theme=$theme}
+}
 ```
 
 Build `Bitmap` to check the common native uploader with owned pixel buffers and

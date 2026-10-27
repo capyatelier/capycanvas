@@ -1,4 +1,4 @@
-﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('mouse','pen','touch')][string]$Device='mouse',[switch]$ColumnResetOnly,[switch]$CanvasResetOnly,[switch]$ClosedStripOnly,[switch]$LayerRowOnly,[switch]$CancelOnly,[switch]$EdgeEscapeOnly,[ValidateSet('dark','light')][string]$Theme)
+﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('mouse','pen','touch')][string]$Device='mouse',[switch]$ColumnResetOnly,[switch]$CanvasResetOnly,[switch]$ClosedStripOnly,[switch]$LayerRowOnly,[switch]$CancelOnly,[switch]$EdgeEscapeOnly,[switch]$NumericOnly,[ValidateSet('dark','light')][string]$Theme)
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 $CapyPopups=$true
@@ -140,6 +140,29 @@ function Check-ColumnEdge([string]$Theme){
     }elseif([Math]::Abs((Width $group.id)-$before) -gt .5){throw "${Theme}: the canvas did not keep the $Device contact"}
     Swipe $from @{x=$from.x;y=$from.y-60}
     if([Math]::Abs((Width $group.id)-$before) -gt .5){throw "${Theme}: a vertical swipe grabbed a column edge"}
+}
+function Check-NumericEdge([string]$Theme){
+    Use-PaintWorkspace;Settled
+    $before=(Model).state.workspace.layout|ConvertTo-Json -Depth 90 -Compress
+    $records=[Collections.Generic.List[object]]::new()
+    foreach($id in @('number-caption-tool-setting-angle','tool-setting-angle','tool-setting-angle-slider','number-root-tool-setting-angle')){
+        $bounds=(Control $id -Arranged).Current.BoundingRectangle
+        $x=if($id -eq 'number-root-tool-setting-angle'){$bounds.Left+10}else{$bounds.Right-3}
+        $y=if($id -eq 'number-root-tool-setting-angle'){$bounds.Bottom-8}else{$bounds.Bottom-3}
+        try{
+            [CapyRowPointer]::Down($Device,[int]$x,[int]$y);Start-Sleep -Milliseconds 160
+            $down=Gesture
+            for($i=1;$i -le 6;$i++){[CapyRowPointer]::Move([int]$x,[int]($y+90*$i/6));Start-Sleep -Milliseconds 20}
+            Start-Sleep -Milliseconds 120;$moved=Gesture
+            $changed=((Model).state.workspace.layout|ConvertTo-Json -Depth 90 -Compress) -cne $before
+            if($Device -eq 'mouse'){[CapyRowPointer]::Key(0x1b);[CapyRowPointer]::Up()}else{[CapyRowPointer]::Cancel()}
+            Settled
+            $records.Add(@{id=$id;bounds=$bounds;point=@($x,$y);down=$down;moved=$moved;layout_changed=$changed;after=Gesture})
+            $records|ConvertTo-Json -Depth 95|Set-Content (Join-Path $run ('numeric-edge-'+$Theme+'.json'))
+            if($down.edge -or $moved.edge -or $changed){throw "$Theme $Device numeric component $id yielded to workspace resizing"}
+            if(((Model).state.workspace.layout|ConvertTo-Json -Depth 90 -Compress) -cne $before){throw 'Numeric contact cancellation changed the workspace'}
+        }finally{if([CapyRowPointer]::Active){[CapyRowPointer]::Cancel()}}
+    }
 }
 function Check-ColumnHandleReset([string]$Theme){
     Use-PaintWorkspace;Settled
@@ -365,7 +388,7 @@ try {
     foreach($theme in $themes){
         Start-Review $theme
         Settled
-        if($EdgeEscapeOnly){Check-ColumnEdge $theme}elseif($CancelOnly){Check-NativeEdgeCancel $theme}elseif($LayerRowOnly){Check-LayerRowEdge $theme}elseif($ClosedStripOnly){Check-ClosedStrip $theme}elseif($CanvasResetOnly){Check-CanvasReset $theme}elseif($ColumnResetOnly){Check-ColumnHandleReset $theme}else{
+        if($NumericOnly){Check-NumericEdge $theme}elseif($EdgeEscapeOnly){Check-ColumnEdge $theme}elseif($CancelOnly){Check-NativeEdgeCancel $theme}elseif($LayerRowOnly){Check-LayerRowEdge $theme}elseif($ClosedStripOnly){Check-ClosedStrip $theme}elseif($CanvasResetOnly){Check-CanvasReset $theme}elseif($ColumnResetOnly){Check-ColumnHandleReset $theme}else{
             Check-ColumnEdge $theme
             Check-GroupGap $theme
             Check-ClosedStrip $theme
@@ -376,7 +399,8 @@ try {
         if((Get-Item -LiteralPath $stderr).Length){throw "Native stderr requires inspection ($theme)"}
         [CapyRowPointer]::Dispose()
     }
-    if($EdgeEscapeOnly){[pscustomobject]@{device=$Device;themes=($themes -join ',');edge_escape='passed';evidence=$run;scope='Pending and claimed edge Escape only'}|ConvertTo-Json}
+    if($NumericOnly){[pscustomobject]@{device=$Device;themes=($themes -join ',');numeric_edge_reservation='passed';evidence=$run;scope='Native NumberControl caption, readout, slider and component gap only'}|ConvertTo-Json}
+    elseif($EdgeEscapeOnly){[pscustomobject]@{device=$Device;themes=($themes -join ',');edge_escape='passed';evidence=$run;scope='Pending and claimed edge Escape only'}|ConvertTo-Json}
     elseif($CancelOnly){[pscustomobject]@{device=$Device;themes=($themes -join ',');native_edge_cancel='passed';evidence=$run;scope='Pending and claimed native edge cancellation only'}|ConvertTo-Json}
     elseif($LayerRowOnly){[pscustomobject]@{device=$Device;themes=($themes -join ',');layer_row_edge_handoff='passed';evidence=$run;scope='Actual LayerRow Pickup edge arbitration only'}|ConvertTo-Json}
     elseif($ClosedStripOnly){[pscustomobject]@{device=$Device;themes=($themes -join ',');closed_strip='passed';evidence=$run;scope='Native closed-column outward swipe only'}|ConvertTo-Json}
@@ -389,5 +413,6 @@ try {
     [IO.File]::WriteAllText((Join-Path $run 'failure.txt'),($_|Out-String)+$_.ScriptStackTrace);throw
 }finally{
     [CapyRowPointer]::Dispose()
+    if($NumericOnly -and $review -and !$review.HasExited){& (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close}
     Exit-CapyEnvironment
 }

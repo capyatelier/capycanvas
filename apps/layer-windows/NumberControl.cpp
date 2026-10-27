@@ -91,7 +91,7 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
     bool dial=str(spec,L"kind")==L"dial"&&!preference&&!valueOnly&&!inlineTrack,ranged=str(spec,L"kind")==L"slider"||dial;
     bool panel=ranged&&!preference&&!valueOnly&&!inlineTrack;
     double valueHeight=compact?data->controlHeight():preference?34.:(ranged?24.:32.),stepSize=panel?16.:compact?data->panelMetric(L"control_height"):ranged&&!preference?24.:32.;
-    StackPanel root;root.Spacing(0);
+    StackPanel root;root.Spacing(0);root.Background(clear());edgeTag(root,L"edge_contact",S(L"input"));
     auto numberId=identifier.empty()?title:identifier;
     AutomationProperties::SetAutomationId(root,L"number-root-"+numberId);
     AutomationProperties::SetName(root,title);
