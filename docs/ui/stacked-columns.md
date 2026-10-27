@@ -275,8 +275,6 @@ performance parity require the checks below.
 
 Shared regressions live in [column-stack tests](../../crates/layer-ui/src/column_stack_tests.rs)
 and [GPU surface tests](../../crates/layer-render-wgpu/src/panel_surface_tests.rs).
-The [testing guide](../development/testing.md) describes vector/GPU comparisons
-and publication, allocation and Navigator coverage.
 
 ## Checks
 
