@@ -312,7 +312,7 @@ struct PropertiesView : std::enable_shared_from_this<PropertiesView> {
             data->dispatchDocument(O({{L"type",S(L"effect")},{L"action",O({{L"op",S(L"select_page")},{L"layer",N(num(view,L"layer"))},{L"page",S(id)}})}}),
                 to_hstring(uint64_t(num(object(data->state,L"document_file"),L"epoch"))));
         });
-        addFilter=button(data,L"",[]{});addFilter.MinHeight(data->controlHeight());addFilter.Height(data->controlHeight());addFilter.Padding({6,0,6,0});
+        addFilter=button(data,L"",[]{});addFilter.Background(data->brush(L"control_fill"));addFilter.MinHeight(data->controlHeight());addFilter.Height(data->controlHeight());addFilter.Padding({6,0,6,0});
         {StackPanel content;content.Orientation(Orientation::Horizontal);content.Spacing(data->panelMetric(L"control_spacing"));
             addFilterLabel=label(data,L"");addFilterLabel.VerticalAlignment(VerticalAlignment::Center);
             addFilterIcon.Width(16);addFilterIcon.Height(16);content.Children().Append(addFilterIcon);content.Children().Append(addFilterLabel);addFilterArrow.Width(12);addFilterArrow.Height(12);content.Children().Append(addFilterArrow);addFilter.Content(content);}

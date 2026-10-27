@@ -60,7 +60,7 @@ void LayersView::init(){
     AutomationProperties::SetAutomationId(tools,L"layer-flags");
     AutomationProperties::SetAutomationId(footerFrame,L"layer-footer");
     blend.FontSize(data->textSize());blend.FontWeight(Windows::UI::Text::FontWeights::Bold());
-    blend.Background(data->brush(L"input"));blend.BorderThickness({0,0,0,0});blend.CornerRadius(data->controlCorner());
+    blend.Background(data->brush(L"control_fill"));blend.BorderThickness({0,0,0,0});blend.CornerRadius(data->controlCorner());
     blend.HorizontalAlignment(HorizontalAlignment::Stretch);
     copyName(data,blend,data->copyCaption(L"layers",L"blend"));AutomationProperties::SetAutomationId(blend,L"layer-blend");
     opacityGate.HorizontalContentAlignment(HorizontalAlignment::Stretch);

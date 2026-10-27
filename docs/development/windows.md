@@ -2269,6 +2269,7 @@ Tool Set rows use the defined text line height and preserve fractional layout co
 so native pixel rounding does not accumulate into larger rows.
 Workspace group frames preserve the shared fractional allocation through their
 native subtree so display scaling cannot change Tool Set wrapping.
+Add Filter and the Layers blend control use the shared control fill.
 
 Compare every image pair and look at the screenshots as well as the geometry
 reports. Use [visual acceptance](../../tools/visual/README.md#comparing-images): fix
