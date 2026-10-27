@@ -154,6 +154,7 @@ struct IconTile: View {
     var enabled = true
     var size: CGFloat = 16
     var active = false
+    var pendingPress = false
     var joinedEdge: String?
     var background: Color?
     var keepsBackground = false
@@ -162,7 +163,7 @@ struct IconTile: View {
     let action: () -> Void
     var body: some View {
         Button(action: action) { PanelIcon(name: icon, size: size).frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle()) }
-            .buttonStyle(EditorControlButtonStyle(selected: selected, active: active, joinedEdge: joinedEdge,
+            .buttonStyle(EditorControlButtonStyle(selected: selected, active: active, pendingPress: pendingPress, joinedEdge: joinedEdge,
                 background: background, keepsBackground: keepsBackground, drawerBackground: drawerBackground, corner: corner))
             .disabled(!enabled).opacity(enabled ? 1 : 0.36)
             .accessibilityLabel(label).help(label)
@@ -175,6 +176,7 @@ struct IconTile: View {
 struct EditorControlButtonStyle: PrimitiveButtonStyle {
     var selected = false
     var active = false
+    var pendingPress = false
     var joinedEdge: String?
     var background: Color?
     var keepsBackground = false
@@ -205,15 +207,15 @@ struct EditorControlButtonStyle: PrimitiveButtonStyle {
         var body: some View {
             configuration.label.background {
                 ZStack {
-                    if let background = style.background, style.keepsBackground || !(style.selected || configuration.isPressed || style.active) {
+                    if let background = style.background, style.keepsBackground || !(style.selected || configuration.isPressed || style.pendingPress || style.active) {
                         style.shape.fill(background)
                     }
                     if style.selected {
                         style.shape.fill(palette.active)
                     } else if let drawerBackground = style.drawerBackground {
                         style.shape.fill(drawerBackground)
-                    } else if configuration.isPressed || style.active {
-                        style.shape.fill(.foreground).opacity(configuration.isPressed ? 0.16 : 0.10)
+                    } else if configuration.isPressed || style.pendingPress || style.active {
+                        style.shape.fill(.foreground).opacity(configuration.isPressed || style.pendingPress ? 0.16 : 0.10)
                     }
                 }
             }.modifier(BubbleNativeControl(drags: false))

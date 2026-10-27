@@ -34,6 +34,8 @@ private struct WorkspaceCollapsedColumnContent: View {
     let column: JSON
     let panels: [[JSON]]
     @StateObject private var scrollPosition: EditorScrollPosition
+    @State private var pendingPresses: [String: UInt64] = [:]
+    @State private var pressSequence: UInt64 = 0
     init(store: EditorStore, column: JSON, panels: [[JSON]]) {
         self.store = store; self.column = column; self.panels = panels
         let position = EditorScrollPosition()
@@ -70,14 +72,26 @@ private struct WorkspaceCollapsedColumnContent: View {
                         ForEach(group["icons"].array.indices, id: \.self) { index in
                             let icon = group["icons"][index]
                             let panel = panels[index]
-                            let source = store.contentDrawers.sources[String(column["id"].uint)]
-                            let presented = source?.anchor["origin"].string == panel["id"].string
-                            let selected = !column["open"].isNull ? group["active"].string == panel["id"].string : presented
+                            let panelID = panel["id"].string
+                            let columnID = column["id"].uint
+                            let source = store.contentDrawers.sources[String(columnID)]
+                            let presented = store.state["customization"]["column_drawers"].array.contains { drawer in
+                                drawer["anchor"]["column"].uint == columnID && drawer["anchor"]["origin"].string == panelID
+                            }
+                            let selected = !column["open"].isNull ? group["active"].string == panelID : presented
                             let direction = !column["open"].isNull ? column["open"]["direction"].string : presented ? source?.direction : nil
                             IconTile(icon: panel["icon"].string, label: panel["title"].string, selected: selected,
+                                pendingPress: pendingPresses[panelID] != nil,
                                 joinedEdge: selected ? direction : nil, corner: .half) {
                                 guard !store.workspace.input.contact.consumeClick() else { return }
-                                store.customize(["type": "toggle_column_drawer", "group": group["group"].raw, "panel": panel["id"].raw])
+                                pressSequence &+= 1
+                                let sequence = pressSequence
+                                pendingPresses[panelID] = sequence
+                                store.edit(["type": "customize", "action": ["type": "toggle_column_drawer",
+                                    "group": group["group"].raw, "panel": panel["id"].raw]]) { error in
+                                    if let error { store.failure = error }
+                                    if pendingPresses[panelID] == sequence { pendingPresses.removeValue(forKey: panelID) }
+                                }
                             }.modifier(WorkspaceDrag(workspace: store.workspace, item: JSON(["kind": "panel", "panel": panel["id"].raw]),
                                 surface: .tile, context: JSON(["kind": "panel", "panel": panel["id"].raw])))
                                 .modifier(PanelBridgeMeasurement(key: "column-icon:\(column["id"].uint):\(panel["id"].string)"))
