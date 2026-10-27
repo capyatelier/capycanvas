@@ -107,50 +107,6 @@ including older gaps; a port does not require an unrestricted historical audit.
   code; unrelated upstream commits don't invalidate them. Investigate failures
   with evidence and a specific hypothesis before retrying; reuse existing
   automation.
-- Run `exercise-vector-layers.ps1 -Journey editing` for native vector arrow and
-  Shift-arrow nudges, Alt-drag copying, rotation, clipboard, front/back arrangement
-  and mask painting. Each authored edit must restore its exact drawing checkpoint
-  and sampled artwork pixels with one Undo and one Redo. Run this scope in both
-  themes through `test-desktop.ps1`; retain its per-edit history JSON and composed
-  captures. The default and `-ToolsOnly` scopes retain their existing journeys.
-- Run `exercise-liquify-pixels.ps1` for the focused Liquify seed, deformation,
-  history, Adjust and Reset checks; it reuses an existing private desktop
-  and otherwise creates one with a 900-second deadline. The idle-brush fixture's
-  `-LiquifyOnly` scope selects the same checks. Add `-SessionsOnly` for live
-  G-Pen and Hand round trips with exact committed pixels and history, retained
-  Adjust amount, and Adjust/Reset Undo/Redo. Repeat in both themes;
-  `-Theme sessions-light` selects the light session scope for fixture discovery.
-  Split Tilt runs with
-  `exercise-tilt.ps1 -Journey baseline|cold-controls|first-curve|deferred|deferred-prior-edit|response|overlays`
-  under `test-desktop.ps1` with a 600-second deadline per journey and repeat each
-  in both themes. Omitting `-Journey` retains the full suite; a focused result
-  reports only its completed journeys.
-- Use `exercise-workspace-layout.ps1 -Journey diagnostics-fps` under the private
-  desktop runner to check Diagnostics independently of preset grouping and menu
-  layout. It retains submitted-frame counts, cached pan, idle zero FPS, localized
-  row identity, GPU recovery, resize and visibility/Undo assertions. The default
-  `all` journey still runs the complete workspace suite; repeat either scope in
-  light and dark themes.
-- Run `exercise-manager.ps1 -PinsOnly` and `-Theme pins-light` for native pin
-  toggles, rapid consecutive activations, unchanged workspace/layout and restart
-  persistence. The result records the actual activation interval; it does not
-  qualify a hardware performance target.
-- Run `exercise-documents.ps1 -Journey gpu-unavailable` with a 900-second
-  private-desktop deadline for saving after exhausted GPU recovery, queued
-  contact cancellation, durable reopen, exact exported pixels and Cancel/Discard.
-- Run `exercise-photo-memory.ps1` through `test-desktop.ps1` with a 600-second
-  deadline to generate and open a streamed 12000 by 8000 PNG in a private profile.
-  It checks the four colored quadrants and observes only the owned app and its
-  `capy-photo-reader.exe` children. `results.json` records the decoder's actual
-  source/codec admission arguments, observed process peaks and sampled combined
-  private memory. Sampling can miss exit-time growth; these measurements do not
-  qualify a hardware target or impose a whole-editor cap. Shared photo budgets
-  bound codec admission and compressed source ownership. The generated PNG is
-  removed after the run; smaller `-Width` and `-Height` values support smoke checks.
-- Use `exercise-tool-bubbles.ps1 -Variant hdr-f16-dark` and `hdr-f16-light`
-  for the focused HDR paper picker preview, live intensity and ramp pixels,
-  and exact cancellation. Failure receipts retain the live picker state before
-  Escape closes it; the full HDR journey remains available with `-HdrOnly`.
 
 ## 5. Close and commit
 
