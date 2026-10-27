@@ -243,7 +243,7 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 | Android tool bubble drag through four neighbours | 120 | **Unqualified after the bubble release fixes.** Previous parity build: 115.00–116.55 actual app-window presents/s; p99 ≤16.667447 ms, default glass, 61 MP photo at Fit | [Native tool bubbles](#native-tool-bubbles), 2026-10-24 |
 | Web tool bubble drag through four neighbours | 120 | Unmeasured after the bubble release fixes; desktop browser journeys do not qualify the reference tablet | [Web checks](../development/web.md#tests), 2026-10-24 |
 | GTK Tool Set hover and press animation | 120 | Desktop diagnostic: **117.76 changing-color presents/s**, 116.67–118.08 per case; pooled gap p99 16.646 ms. Reference hardware unmeasured | [GTK tool caption hover](#gtk-tool-caption-hover), 2026-10-26 |
-| Panel or column resize | 120 | Android shared vectors and Web SVG projection are unmeasured on this reference tier. Expanding GTK divider desktop diagnostic: **54.49/s**, p99 41.689 ms; misses the 114 Hz floor. **Desktop diagnostic misses.** GTK GPU joins: 81.59–112.27 changing-geometry presents/s at 1×; 38.96–92.31 at 2×, worst p99 74.986 ms. Reference-tier qualification remains unset. Web Navigator: 30.00–30.64 Chrome surface presents/s; p99 50.00–58.34 ms. Windows GPU VM width resize: 6.63–7.30 observed bounds changes/s beside 4.64–4.98 renderer submissions/s; displayed FPS and gap-transition performance unqualified | [Web Navigator layout](#web-navigator-layout), 2026-10-19; [GTK Color resize](#gtk-color-panel-resize), 2026-10-10; [GTK column bridge diagnostic](#gtk-column-bridge-diagnostic), 2026-10-25; [GTK Tool Set density](#gtk-tool-set-density), 2026-10-26; [GTK toolbar dividers](#gtk-toolbar-divider-resize), 2026-10-26; [Windows GPU VM column resize](#windows-gpu-vm-column-resize), 2026-10-26 |
+| Panel or column resize | 120 | Android shared vectors and Web SVG projection are unmeasured on this reference tier. Expanding GTK divider desktop diagnostic: **54.49/s**, p99 41.689 ms; misses the 114 Hz floor. **Desktop diagnostic misses.** GTK GPU joins: 81.59–112.27 changing-geometry presents/s at 1×; 38.96–92.31 at 2×, worst p99 74.986 ms. Reference-tier qualification remains unset. Web Navigator: 30.00–30.64 Chrome surface presents/s; p99 50.00–58.34 ms. Windows GPU desktop diagnostic: 33.82–34.89 observed bounds changes/s beside 166.28–183.76 renderer submissions/s after display correction; fresh displayed FPS and gap-transition performance unqualified | [Web Navigator layout](#web-navigator-layout), 2026-10-19; [GTK Color resize](#gtk-color-panel-resize), 2026-10-10; [GTK column bridge diagnostic](#gtk-column-bridge-diagnostic), 2026-10-25; [GTK Tool Set density](#gtk-tool-set-density), 2026-10-26; [GTK toolbar dividers](#gtk-toolbar-divider-resize), 2026-10-26; [Windows GPU VM column resize](#windows-gpu-vm-column-resize), 2026-10-26 |
 | Windows window resize | 120 | Unqualified; retained-panel diagnostic on the local 60 Hz laptop: 53.8–55.7 native changes/s, 89.3–91.4% UI CPU, pooled 16.48/16.58 ms per observed change for growth/reversal. Frozen-Rust host comparison; displayed motion and reference hardware remain unmeasured | [Windows window resize](#windows-window-resize), 2026-10-26 |
 | Pen pressure utility and curve drag | 120 | **Unqualified.** Current GTK desktop panel 119.20–119.40 presents/s, p99 up to 9.207 ms; curve 120.00, p99 up to 8.470 ms; reference tablet unmeasured | [GTK pen pressure utility](#gtk-pen-pressure-utility), 2026-10-10 UTC |
 | Windows tool bubble drag through four neighbours | 120 | Unmeasured on reference hardware; Surface Pro / Adreno X1-85 functional checks do not qualify timing (PresentMon ETW access denied) | [Windows tool bubbles](../development/windows.md#tool-bubbles) |
@@ -5595,6 +5595,28 @@ timestamps, source/binary provenance and the diagnostic report are retained in
 `artifacts/windows-bridge-audit/performance/` and the VM's
 `bridge-resize-diagnostic` evidence.
 
+After NVIDIA EDID emulation supplies a 2560 × 1600, 120 Hz primary monitor, the
+Basic Display Adapter remains secondary. The same width trajectory and app
+binaries give the following diagnostic. Windows chooses 125% scale instead of
+the earlier 150%; native ranges and viewport size differ. These checkpoints
+identify the acquisition bottleneck, not an isolated app-renderer speedup.
+
+| Contact | Observed bounds changes/s | Renderer submissions/s | Acquisition wait median, ms | Render-call median, ms |
+| --- | ---: | ---: | ---: | ---: |
+| 1 | 34.32 | 183.76 | 0.0272 | 0.8130 |
+| 2 | 34.89 | 182.59 | 0.0294 | 0.7953 |
+| 3 | 33.82 | 166.28 | 0.0285 | 0.8026 |
+
+The input producer supplies about 63 moves/s and UIA sampling is slower. Some
+width extrema stop changing; whole-contact bounds interval p99 is 303–317 ms.
+Submissions can repeat a pose. Neither submission counts above monitor refresh
+nor sampled bounds establish 120 fresh displayed frames/s. The corrected display
+removes the approximately 200 ms acquisition wait; full native motion remains
+unqualified. Evidence is in the VM's `nvidia-desktop-resize-diagnostic` capture and
+`artifacts/windows-bridge-audit/performance/nvidia-desktop/`. The
+[VM guide](../development/windows-vm.md#desktop-presentation-for-performance)
+describes the display setup and its boot-session lifetime.
+
 ### Exposed-area color probes
 
 On the same 2.5.1 runtime and minimal blue-Grid window, an opaque magenta
@@ -5620,3 +5642,70 @@ eager construction without the system dispatcher; corrected variants initialize
 it first and reach the verified setters. Sources, runtime/PDB snapshots, stage
 logs, brush-handle checks and captures remain under
 `artifacts/windows/resize-followup/minimal-winui/`.
+
+
+## Windows offscreen GPU workloads
+
+The 2026-10-26 Release workload run uses the passed-through NVIDIA RTX PRO 6000
+Blackwell Max-Q Workstation Edition, driver 597.30, 96 GiB VRAM and the verified
+D3D12 adapter. Under load the GPU reaches P0, PCIe Gen5 ×16, 2280 MHz graphics and
+14001 MHz memory clocks. Eight phases run serially, with no simultaneous builds
+or other tests on the card. These are workstation offscreen completion and GPU
+timestamp diagnostics, not displayed FPS or reference-tier qualification.
+
+The 29 brush/sculpt scenarios run three repetitions on 4096 × 4096 canvases with
+at least 32 visible paint layers, yielding 11,529 measured frames. Calibration
+retains 30 samples in each of 86 cases after four warmups. Navigation retains
+960 frames at each of 24, 45 and 60 MP, rendered to 1600 × 1000. Photo cases use
+ProPhoto U16 at those sizes and in the multiple-document case. Exact workload
+boundaries are in the [benchmark guide](../development/gpu-raster-benchmarks.md).
+
+| Measurement | Result | Boundary |
+| --- | ---: | --- |
+| G-Pen move p50 / p99 | 0.515 / 0.888 ms | CPU through completed GPU work |
+| Pencil move p50 / p99 | 0.501 / 0.938 ms | CPU through completed GPU work |
+| Slowest moving brush p99, Liquify Twirl | 15.552 ms | CPU through completed GPU work |
+| 4248 × 2832 RGBA32Float copy median | 0.248 ms | GPU timestamps |
+| Same-size source-over blend median | 0.361 ms | GPU timestamps |
+| 1062 × 708 projective resample median | 0.0149 ms | GPU timestamps |
+| 24 / 45 / 60 MP navigation p99 | 0.495 / 1.133 / 1.163 ms | CPU through completed presentation work, offscreen |
+| Cold first navigation, 24 / 45 / 60 MP | 596 / 651 / 638 ms | Included first-response samples |
+
+All final phases pass their functional invariants: brush history, unchanged
+navigation artwork/composition and native roots, large-document drawing,
+adjustment/mask edits, concurrent painting/save/export, exact archive reopening,
+histograms and Undo/Redo. This is an execution and correctness pass, not a claim
+that every path meets a frame or response target.
+
+| Photo workload | 24 MP | 45 MP | 60 MP |
+| --- | ---: | ---: | ---: |
+| Slider completion median, ms | 12.66 | 24.57 | 28.76 |
+| Paint during save/export completion p99, ms | 4.62 | 7.28 | 7.36 |
+| Warm full-resolution Gaussian blur median, ms | 94.60 | 297.50 | 511.51 |
+| Save job, ms | 203 | 354 | 408 |
+| Profiled U16 PNG export job, s | 6.24 | 10.57 | 11.26 |
+| Full histogram job, s | 4.07–4.16 | 7.46–7.72 | 9.68–9.72 |
+
+Warm blur has only 16 samples and jobs have few repetitions; no well-sampled
+job-tail or sustained frame claim follows. Multiple-document painting retains
+24/45/60 MP documents while editing 60 MP and saving/exporting: completion
+p50/p99 is 2.35/7.27 ms. Its slider p99 reaches 66.92 ms. Cold navigation, initial
+filter/blur work, image-wide operations and occasional painting outliers remain
+in the raw results.
+
+The initial calibration fails while assembling an obsolete resampler shader.
+The initial navigation run can time a missing scene because raster readiness
+alone permits deferred composition. The repaired calibration passes its
+windowless shader-stage/uniform regression and all 2,580 hardware samples.
+Shared workload setup now drains renderer work and requires a presentable
+frame; navigation checks presentability on every sample and preserves both
+revision invariants. All six phases using that shared setup are rerun. Earlier
+failed and prematurely accepted navigation runs remain separate evidence.
+
+Core sources are `67001fd5c`; only the benchmark harness changes for the repaired
+runs. Raw CSVs, source/binary/runtime hashes, original failures and resource
+observations remain in the VM's `performance-20261026-203533`,
+`recheck-20261026-204635` and `settled-20261026-205212` captures. The consolidated
+report and display comparison are retained under
+`artifacts/windows-bridge-audit/performance/`. This run has no matched code
+baseline and does not resolve native panel-gap, physical pen or HDR qualification.

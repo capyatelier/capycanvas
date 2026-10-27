@@ -139,6 +139,42 @@ presents it; pixel checks wait for the displayed frame. Both commands accept
 checks do not qualify physical pens, HDR output, display combinations or frame
 rate targets.
 
+### Desktop presentation for performance
+
+A hardware rendering adapter does not establish a hardware desktop. The default
+guest keeps QEMU's Microsoft Basic Display Adapter as its desktop output even
+when the app renders on the passed-through GPU. Cross-adapter presentation can
+then dominate buffer acquisition. Check the active desktop adapter and the
+monitor containing the app before interpreting window motion rates.
+
+For headless NVIDIA workstation boards, the driver supports
+[EDID emulation](https://www.nvidia.com/content/Control-Panel-Help/vLatest/en-us/mergedProjects/nvwks/To_force_an_EDID_at_a_display_connection.htm).
+Attach a validated EDID to an unused connector and activate that monitor at the
+required resolution and refresh rate. Make it primary and keep the emulated
+adapter as a secondary management display. Never replace an existing connected
+display or change another guest's GPU. NVAPI's `NvAPI_GPU_SetEDID` override lasts
+for the boot session; verify and restore it after a guest restart.
+
+Run `apps/layer-windows/scripts/probe-displays.ps1` in the guest's interactive test
+desktop to verify the adapter, primary flag, coordinates, resolution and refresh.
+Check the app is wholly on that GPU's monitor. QEMU screenshots still show the
+emulated output; use the owned app's composed capture on the hardware monitor.
+Do not enable `-ConfigureVmDisplay` when it would replace the selected GPU mode
+with the ordinary fixture mode.
+
+Measure buffer-acquisition waits separately from render calls and GPU execution.
+Keep displayed frames, renderer submissions and changing native bounds separate.
+The [column-resize diagnostic](../performance/top-tier.md#windows-gpu-vm-column-resize)
+records both desktop configurations. These remain workstation diagnostics, not
+reference-device or physical-input qualification.
+
+Offscreen `layer-bench` and `raster_workloads` bypass desktop presentation. Use the
+[GPU benchmark guide](gpu-raster-benchmarks.md), select the actual hardware D3D12
+adapter through `LAYER_GPU_INDEX`, and retain adapter/backend and binary hashes.
+Serialize benchmarks, builds and correctness suites. An idle low-power GPU state
+is normal; record clocks, power and PCIe link under load. Use vendor GPU memory
+reporting rather than the truncated `Win32_VideoController.AdapterRAM` field.
+
 ### Prepare a host
 
 The host needs an IOMMU, isolated PCI groups, QEMU VFIO support, `fuser` (the

@@ -45,6 +45,8 @@ reservation until that job finishes, so the capture counter is conservative.
 
 The report names the GPU adapter, backend and device type. PNG output uses the
 renderer's explicit sRGB readback buffer directly.
+The [Windows GPU workload diagnostic](../performance/top-tier.md#windows-offscreen-gpu-workloads)
+records the current D3D12 run and its separation from desktop presentation.
 
 Normal scenario reports also write a sibling `*.frames.csv` containing every
 measured frame: scenario, color-space code (0 sRGB, 1 P3, 2 Adobe RGB, 3 ProPhoto),
