@@ -590,6 +590,8 @@ scrollers leave their free surfaces available for horizontal edge resizing.
 Vertical scrolling uses directional rails to preserve horizontal edge contacts.
 Pending edges also observe the island's pointer stream while native manipulation
 owns the routed events. Both streams forward to the same shared gesture.
+Claimed edges keep a transparent native hit-test surface above the independently
+routed canvas until capture ends, then restore the previous background.
 Its session runs on the render thread, so replies arrive
 through the ordered command queue. A press asks `capy_edge_reach`
 synchronously whether it lies in an edge's reach and may resize vertically, so

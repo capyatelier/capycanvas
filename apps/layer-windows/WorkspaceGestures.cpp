@@ -49,6 +49,7 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
     struct Edge{
         uint32_t pointer=0;Input::Pointer contact{nullptr};hstring device,contactClass;
         bool vertical=false,hold=false,claimed=false;Point at{};uint64_t time=0;
+        Microsoft::UI::Xaml::Media::Brush background{nullptr};
         std::optional<Point> inputOffset;
         std::vector<weak_ref<UIElement>> path;
         std::vector<std::pair<weak_ref<UIElement>,ManipulationModes>> scrolls;
@@ -204,6 +205,7 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
         releasing=true;
         data->pointerCancels.Cancel(edge->pointer);
         releaseCaptures(edge->path,edge->contact);
+        edge->background=root.Background();root.Background(clear());
         bool captured=root.CapturePointer(edge->contact);
         releasing=false;
         if(!captured){edgeEnd(L"cancel",L"capture_failed");return;}
@@ -303,9 +305,9 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
         }
         if(trace)lastEdge=O({{L"phase",S(phase)},{L"reason",S(reason)},{L"contact",S(edge->contactClass)},{L"device",S(edge->device)},{L"vertical",B(edge->vertical)},{L"claimed",B(edge->claimed)},
             {L"captured",B(PointerGesture::Captured(root,edge->pointer))}});
-        bool claimed=edge->claimed;auto released=edge->contact;
+        bool claimed=edge->claimed;auto released=edge->contact;auto background=edge->background;
         edge.reset();++edgeSerial;
-        if(claimed){releasing=true;root.ReleasePointerCapture(released);releasing=false;cursor();deferClick();}
+        if(claimed){releasing=true;root.ReleasePointerCapture(released);root.Background(background);releasing=false;cursor();deferClick();}
         evidence();
     }
     void edgeDoublePress(DoubleTappedRoutedEventArgs const& e){
