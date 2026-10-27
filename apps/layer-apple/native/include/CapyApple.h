@@ -118,7 +118,7 @@ int32_t capy_project_compare(CapyProjectTask task); /* worker after candidate */
 CapyText capy_profile_library(const char *request_json, const uint8_t *bytes, size_t count); /* worker; bounded ICC, owned JSON */
 CapyText capy_export_draft(const char *recipe_json, const char *action_json); /* worker; owned shared draft JSON */
 CapyText capy_palette_file(const char *request_json, const uint8_t *bytes, size_t count, int32_t output_fd); /* worker; owned metadata JSON, export bytes to output_fd */
-int32_t capy_apple_glass_regions(CapyApple app, const char *json); /* owner; logical regions [x,y,w,h,tl,tr,br,bl,shape,strength], arcs [cx,cy,radius,band,start,sweep,strength], color_bubbles [cx,cy,wheel_radius,arc_radius,cap,end_radians,strength], connections */
+int32_t capy_apple_glass_regions(CapyApple app, const char *json); /* owner; logical regions [x,y,w,h,tl,tr,br,bl,shape,strength], arcs [cx,cy,radius,band,start_radians,sweep_radians,strength], color_bubbles [cx,cy,wheel_radius,arc_radius,cap,end_radians,strength], connections */
 CapyBytes capy_apple_stroke_recording_data(CapyApple app); /* owner; raw capture copy or NULL with error */
 void capy_bytes_free(CapyBytes bytes);
 size_t capy_bytes_length(CapyBytes bytes);

@@ -15,6 +15,17 @@ import SwiftUI
         return points
     }
     @MainActor static func main() {
+        for sweep in [-90.0, 90.0] {
+            let arc = GlassArcRegistration(arc: JSON(["radius": 100, "band": 6, "start": 15, "sweep": sweep]), strength: 0.5)
+            for scale: CGFloat in [1, 2] {
+                let region = arc.region(in: CGRect(x: 10, y: 20, width: 200, height: 200), scale: scale, opacity: 0.75)
+                let direction = sweep < 0 ? -1.0 : 1.0
+                precondition(close(region[2], 100 * scale) && close(region[3], 6 * scale))
+                precondition(close(region[4], CGFloat(15 * .pi / 180 - direction * 0.21), 0.00001))
+                precondition(close(region[5], CGFloat(sweep * .pi / 180 + direction * 0.21), 0.00001))
+                precondition(close(region[6], 0.375))
+            }
+        }
         precondition(SquircleShape.surfaceRadius == CGFloat(ToolbarUI.metrics["surface_radius"].number))
         precondition(SquircleShape.controlRadius == CGFloat(ToolbarUI.metrics["panel"]["control_radius"].number))
         precondition(layerEdgeInset == CGFloat(ToolbarUI.metrics["layer_edge_inset"].number))

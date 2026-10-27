@@ -238,12 +238,15 @@ struct GlassArcRegistration: ViewModifier {
     @State private var id = UUID()
     @State private var geometry = GlassGeometry()
     private var region: [CGFloat] {
-        let bounds = geometry.bounds
+        region(in: geometry.bounds, scale: geometry.scale, opacity: opacity)
+    }
+    func region(in bounds: CGRect, scale: CGFloat, opacity: Double) -> [CGFloat] {
         guard opacity > 0, strength > 0, !bounds.isEmpty, arc["radius"].number > 0 else { return [] }
-        let radius = arc["radius"].number, scale = geometry.scale
+        let radius = arc["radius"].number
         let extra = 21 / radius * 180 / .pi, direction = arc["sweep"].number < 0 ? -1.0 : 1.0
         return [bounds.midX, bounds.midY, radius * scale, arc["band"].number * scale,
-            arc["start"].number - direction * extra, arc["sweep"].number + direction * extra, strength * opacity]
+            (arc["start"].number - direction * extra) * .pi / 180,
+            (arc["sweep"].number + direction * extra) * .pi / 180, strength * opacity]
     }
     func body(content: Content) -> some View {
         content.onGeometryChange(for: GlassGeometry.self) { GlassGeometry($0) } action: { geometry = $0 }
