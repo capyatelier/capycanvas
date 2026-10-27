@@ -293,7 +293,10 @@ height changes publish the complete model and its new clearance.
 The presentation mailbox applies the latest required layout before later motion.
 Inactive panel measurement uses the live body's allocated width and reapplies
 bindings on an accepted full publication; width changes update and measure the
-retained body. Filter preview heights follow their stretched content width,
+retained body. A disabled native control contains the inactive measurement tree.
+Color-picking strips accept focus only while shown. Dialog focus restoration and
+Tab navigation use visible controls.
+Filter preview heights follow their stretched content width,
 keeping cached and visible tab measurements consistent after resizing. Collapsed columns
 retain their path while its size and corner radii are unchanged. GPU readiness
 updates independently of that geometry cache. Layout observers must not replace

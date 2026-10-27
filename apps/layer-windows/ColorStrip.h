@@ -75,7 +75,7 @@ struct ColorStrip:std::enable_shared_from_this<ColorStrip>{
     void present(){
         auto camera=object(data->state,L"camera");auto area=array(camera,L"work_area"),viewport=array(camera,L"viewport");
         if(!visible||area.Size()!=4||viewport.Size()<1||host.ActualWidth()<=0){
-            Canvas::SetLeft(root,Offscreen);root.Opacity(0);root.IsHitTestVisible(false);
+            Canvas::SetLeft(root,Offscreen);root.Opacity(0);root.IsHitTestVisible(false);root.IsEnabled(false);
             shadow.Layout({float(Offscreen),0,1,1},949,false);
             return;
         }
@@ -94,7 +94,7 @@ struct ColorStrip:std::enable_shared_from_this<ColorStrip>{
         surface.Data(squircleRectangle(width,height,radii));feedbackSurface.Data(surface.Data());
         shadow.Shape(squircleRectangle(width,height,radii),width,height,8,2,.27f);shadow.Cut(radii);
         shadow.Layout({float(left),float(top),width,height},949,true);
-        root.Opacity(1);root.IsHitTestVisible(true);
+        root.Opacity(1);root.IsHitTestVisible(true);root.IsEnabled(true);
     }
 };
 }

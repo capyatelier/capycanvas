@@ -66,6 +66,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     struct Offscreen {std::wstring key;std::shared_ptr<WorkspaceData> data;std::unique_ptr<PanelBody> body;uint64_t publication=0;};
     std::map<std::wstring,Offscreen> offscreen;
     Canvas measureHost;
+    ContentControl measureGate;
     hstring lastMeasurements;
     CompositionTarget::Rendering_revoker measurementFrame;
     std::array<float,3> titlebar{};
@@ -164,7 +165,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         drawers=std::make_unique<WorkspaceDrawers>(data,root,gestures,[weak=weak_from_this()]{if(auto self=weak.lock())self->queueMeasurements();});
         expansion=std::make_unique<WorkspaceExpansion>(data,root,gestures,[weak=weak_from_this()]{if(auto self=weak.lock())self->present();});
         bubbles=std::make_unique<WorkspaceBubbles>(data,root,[weak=weak_from_this()]{if(auto self=weak.lock();self&&self->glassChanged)self->glassChanged();});
-        measureHost.IsHitTestVisible(false);measureHost.Opacity(0);Canvas::SetLeft(measureHost,-100000);root.Children().Append(measureHost);
+        measureGate.Content(measureHost);measureGate.IsEnabled(false);measureGate.IsTabStop(false);measureGate.IsHitTestVisible(false);measureGate.Opacity(0);Canvas::SetLeft(measureGate,-100000);root.Children().Append(measureGate);
         root.LayoutUpdated([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->measured();});
     }
     void colorRequests(){
@@ -419,7 +420,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         if(theme!=previousTheme||palette!=previousPalette){
             panelBridgeKey=L"";panelBridgeFrame=J{};++panelBridgeRevision;
             expansion->Reset();drawers->Reset();collapsed->Reset();root.Children().Clear();groups.clear();handles.clear();previousTheme=theme;previousPalette=palette;root.Children().Append(cameraSlot);canvasBar->attach();notice->attach();colorStrip->attach();for(auto const& panel:previewPanels)panel->attach();
-            measureHost.Children().Clear();offscreen.clear();root.Children().Append(measureHost);
+            measureHost.Children().Clear();offscreen.clear();root.Children().Append(measureGate);
         }
         root.RequestedTheme(theme==L"dark"?ElementTheme::Dark:ElementTheme::Light);
         }
