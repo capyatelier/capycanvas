@@ -15,7 +15,7 @@ public:
     winrt::Microsoft::UI::Xaml::FrameworkElement Root()const{return root;}
     void Apply(bool visible);
     void Layout(CapyUi::J const& geometry);
-    double ContentHeight()const;
+    double ContentHeight(double width=0)const;
     CapyUi::J ScrollMetrics()const{return scrollMetrics?scrollMetrics():CapyUi::J{};}
     std::unique_ptr<NavigatorView> navigator;
     std::shared_ptr<CapyLayers::LayersView> layers;
@@ -26,7 +26,7 @@ private:
     std::shared_ptr<CapyUi::WorkspaceData> data;
     winrt::Microsoft::UI::Xaml::FrameworkElement root{nullptr};
     CapyUi::Bindings bindings;
-    std::function<double()> contentHeight;
+    std::function<double(double)> contentHeight;
     std::function<CapyUi::J()> scrollMetrics;
     std::vector<uint32_t> tileOrder;
     std::map<uint32_t,winrt::Microsoft::UI::Xaml::Controls::Border> dividers;

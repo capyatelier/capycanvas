@@ -162,7 +162,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         }
         collapsed=std::make_unique<CollapsedColumns>(data,root,gestures,[weak=weak_from_this()]{if(auto self=weak.lock();self&&self->glassChanged)self->glassChanged();});
         commandSearch->data=data;commandSearch->changed=[weak=weak_from_this()]{if(auto self=weak.lock();self&&self->glassChanged)self->glassChanged();};commandSearch->init(root);
-        drawers=std::make_unique<WorkspaceDrawers>(data,root,gestures,[weak=weak_from_this()]{if(auto self=weak.lock())self->queueMeasurements();});
+        drawers=std::make_unique<WorkspaceDrawers>(data,root,gestures,[weak=weak_from_this()]{if(auto self=weak.lock()){self->publishDrawerSources();self->queueMeasurements();}});
         expansion=std::make_unique<WorkspaceExpansion>(data,root,gestures,[weak=weak_from_this()]{if(auto self=weak.lock())self->present();});
         bubbles=std::make_unique<WorkspaceBubbles>(data,root,[weak=weak_from_this()]{if(auto self=weak.lock();self&&self->glassChanged)self->glassChanged();});
         measureGate.Content(measureHost);measureGate.IsEnabled(false);measureGate.IsTabStop(false);measureGate.IsHitTestVisible(false);measureGate.Opacity(0);Canvas::SetLeft(measureGate,-100000);root.Children().Append(measureGate);
@@ -289,7 +289,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             group.bodyScroll=body.try_as<ScrollView>();
             if(!group.bodyScroll){
                 group.bodyViewport=Grid();group.bodyViewport.Children().Append(body);
-                group.bodyScroll=ScrollView();group.bodyScroll.Content(group.bodyViewport);group.bodyScroll.HorizontalScrollMode(ScrollingScrollMode::Disabled);
+                group.bodyScroll=ScrollView();group.bodyScroll.Content(group.bodyViewport);group.bodyScroll.ContentOrientation(ScrollingContentOrientation::None);group.bodyScroll.HorizontalScrollMode(ScrollingScrollMode::Disabled);
                 group.bodyScroll.HorizontalScrollBarVisibility(ScrollingScrollBarVisibility::Hidden);
                 group.bodyScroll.VerticalScrollBarVisibility(ScrollingScrollBarVisibility::Auto);mouseScrollbars(group.bodyScroll);
                 group.bodyScroll.ViewChanged([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->measured();});
@@ -765,7 +765,6 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             double bodyHeight=std::max(0.,double(previewBox.Height)-(flag(geometry,L"tabs_visible")?36.:0.)
                 -num(object(geometry,L"footer_grip"),L"height"));
             double minimum=object(geometry,L"tiles").Size()?0.:num(geometry,L"min_body_height");
-            if(group.bodyViewport)group.bodyViewport.Height(std::max(bodyHeight,minimum));
             if(group.bodyScroll){
                 group.bodyScroll.Height(bodyHeight);
                 if(auto content=group.bodyScroll.Content().try_as<FrameworkElement>())content.MinHeight(minimum);
@@ -969,18 +968,22 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         AutomationProperties::SetAutomationControlType(handle,Automation::Peers::AutomationControlType::Thumb);
     }
     void fitTabs(uint32_t id){if(auto found=groups.find(id);found!=groups.end()&&found->second.tabScroll)fitAutomaticTabs(data,found->second.automatic,found->second.tabScroll.ActualWidth(),tabWidths);}
-    void publishOverviews(){
-        A slots;
-        for(auto const& [id,group]:groups)appendGroupOverviews(slots,group);
-        if(drawers)drawers->AppendOverviews(slots);
+    void publishDrawerSources(){
         if(drawers){
             auto sources=drawers->Sources();
             if(sources.Stringify()!=data->drawerSources.Stringify()){
                 data->drawerSources=sources;
                 for(auto& [id,group]:groups){group.backgroundKey=L"";if(group.body)group.body->Apply(!group.hidden);}
                 collapsed->Apply();
+                if(glassChanged)glassChanged();
             }
         }
+    }
+    void publishOverviews(){
+        A slots;
+        for(auto const& [id,group]:groups)appendGroupOverviews(slots,group);
+        if(drawers)drawers->AppendOverviews(slots);
+        publishDrawerSources();
         auto tabs=array(data->state,L"tabs");overviewOcclusion.Apply(root,slots,tabs.Size()?tabs.GetObjectAt(0):J{});
         auto json=slots.Stringify();
         if(json!=lastOverviews){lastOverviews=json;overviews(to_string(json));}

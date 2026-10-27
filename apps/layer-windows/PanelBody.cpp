@@ -154,10 +154,10 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
             StackPanel content;content.Background(clear());content.Spacing(data->panelMetric(L"group_spacing"));auto panelId=str(panel,L"id");
             bool scope=panelId==L"histogram"||panelId==L"waveform";
             double inset=data->panelMetric(L"inset");
-            contentHeight=[content]{content.Measure({float(content.ActualWidth()),INFINITY});return content.DesiredSize().Height;};
+            contentHeight=[content](double width){content.Measure({float(width),INFINITY});return content.DesiredSize().Height;};
             content.Padding(Thickness{inset,inset,inset,inset});
             if(panelId==L"proof"){content.VerticalAlignment(VerticalAlignment::Top);content.Children().Append(ProofPanel(data,bindings));}
-            FrameworkElement fittedControl{nullptr};std::function<double()> fittedHeight;size_t visibleControls=0;
+            FrameworkElement fittedControl{nullptr};std::function<double(double)> fittedHeight;size_t visibleControls=0;
             for(auto value:array(panel,L"controls"))if(flag(value.GetObject(),L"visible_in_panel"))visibleControls++;
             auto brushValue=[data=data](wchar_t const* key){return num(object(data->state,L"brush"),key);};
             for(auto value:array(panel,L"controls")){
@@ -168,7 +168,7 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
                 else if(kind==L"tool_settings")content.Children().Append(ToolSettingsPanel(data,bindings));
                 else if(kind==L"color_wheel"){
                     auto picker=ColorPanel(data,bindings,visibleControls==1);
-                    if(visibleControls==1){fittedControl=picker;fittedHeight=[data=data,picker]{auto root=picker.XamlRoot();return ColorPanelNaturalHeight(data,picker.ActualWidth(),root?root.RasterizationScale():1.);};}
+                    if(visibleControls==1){fittedControl=picker;fittedHeight=[data=data,picker](double width){auto root=picker.XamlRoot();return ColorPanelNaturalHeight(data,width,root?root.RasterizationScale():1.);};}
                     else content.Children().Append(picker);
                 }
                 else if(kind==L"properties")content.Children().Append(PropertiesPanel(data,bindings));
@@ -202,7 +202,7 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
             }
             if(fittedControl){
                 Grid fitted;fitted.Padding({inset,inset,inset,inset});fitted.Children().Append(fittedControl);root=fitted;
-                contentHeight=[fittedHeight,inset]{return fittedHeight()+2*inset;};
+                contentHeight=[fittedHeight,inset](double width){return fittedHeight(std::max(0.,width-2*inset))+2*inset;};
             }else if(!scrollable)root=content;
             else if(scope||str(panel,L"id")==L"proof"){StackPanel natural;natural.Children().Append(content);root=natural;}
             else{
@@ -245,10 +245,14 @@ void PanelBody::Layout(J const& geometry){
         if(grip.Size()){place(tileGrip,grip);orientGrip(tileGripMark,num(grip,L"width")>num(grip,L"height"));}
     }
 }
-double PanelBody::ContentHeight()const{
-    if(!root.IsLoaded()||root.Visibility()!=Visibility::Visible||root.ActualWidth()<=0)return -1;
-    if(navigator)return navigator->NaturalHeight(root.ActualWidth());
-    return contentHeight?contentHeight():-1;
+double PanelBody::ContentHeight(double width)const{
+    if(width<=0){
+        if(!root.IsLoaded()||root.Visibility()!=Visibility::Visible)return -1;
+        width=root.ActualWidth();
+    }
+    if(!std::isfinite(width)||width<=0)return -1;
+    if(navigator)return navigator->NaturalHeight(width);
+    return contentHeight?contentHeight(width):-1;
 }
 void PanelBody::Apply(bool visible){
     if(navigator)navigator->Apply(visible);

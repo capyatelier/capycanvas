@@ -159,7 +159,7 @@ struct FiltersView : std::enable_shared_from_this<FiltersView> {
     }
 };
 }
-FrameworkElement FiltersPanel(std::shared_ptr<WorkspaceData> const& data,Bindings& bindings,std::function<double()>* contentHeight,std::function<J()>* scrollMetrics,bool split){
+FrameworkElement FiltersPanel(std::shared_ptr<WorkspaceData> const& data,Bindings& bindings,std::function<double(double)>* contentHeight,std::function<J()>* scrollMetrics,bool split){
     auto view=std::make_shared<FiltersView>();view->data=data;view->split=split;view->init();bindings.emplace_back([view]{view->refresh();});
     if(scrollMetrics)*scrollMetrics=[weak=std::weak_ptr(view)]{
         if(auto view=weak.lock()){
@@ -167,7 +167,7 @@ FrameworkElement FiltersPanel(std::shared_ptr<WorkspaceData> const& data,Binding
             auto padding=view->root.Padding();return O({{L"fixed_height",N(padding.Top+padding.Bottom+(view->split?0:view->header.ActualHeight()))},{L"unit_height",N(unit)}});
         }return J{};
     };
-    if(contentHeight)*contentHeight=[weak=std::weak_ptr(view)]{
+    if(contentHeight)*contentHeight=[weak=std::weak_ptr(view)](double){
         if(auto view=weak.lock()){auto padding=view->root.Padding();return padding.Top+padding.Bottom+(view->split?0:view->header.ActualHeight())+view->list.ExtentHeight();}
         return -1.;
     };

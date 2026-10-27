@@ -30,7 +30,7 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
     std::shared_ptr<WorkspaceGestures> gestures;
     std::function<void()> changed,closed;
     std::wstring id;
-    J model,geometry,from;
+    J model,geometry,from,presentedSource;
     hstring modelKey,layoutKey,columnsKey,backgroundKey,tabsKey;
     std::map<std::wstring,J> panels;
     struct Body {hstring key;bool splitFilters=false;std::unique_ptr<PanelBody> view;};
@@ -55,7 +55,7 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
     }
     void init(){
         auto weak=weak_from_this();
-        frame.Background(clear());frame.Child(content);
+        frame.Background(clear());frame.Visibility(Visibility::Collapsed);frame.Child(content);
         background.Fill(data->glass(L"panel"));background.IsHitTestVisible(false);content.Children().Append(background);
         bridge.Fill(data->glass(L"panel"));bridge.Visibility(Visibility::Collapsed);
         Canvas::SetZIndex(frame,order());Canvas::SetZIndex(bridge,order());
@@ -172,7 +172,7 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
             geometry=J::Parse(to_hstring(raw.get()));inspector->position=pagePosition;
             if(pageComplete)inspector->animating=false;
             if(progress>=1)animating=false;
-            dirty=false;draw();rebuild();changed();
+            dirty=false;rebuild();draw();changed();
             if(closing&&progress>=1){timer.Stop();closed();}
             return;
         }
@@ -186,7 +186,9 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
                 self->geometry=object(reply,L"result");
                 if(self->inspector){self->inspector->position=pagePosition;if(pageComplete)self->inspector->animating=false;}
                 if(progress>=1)self->animating=false;
-                self->draw();self->rebuild();self->changed();
+                self->rebuild();
+                if(!self->closing&&self->measureHeights()){self->wake();return;}
+                self->draw();self->changed();
                 if(self->closing&&progress>=1){self->timer.Stop();self->closed();}
             }
         })){busy=false;dirty=true;}
@@ -334,6 +336,9 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
                     body.view->Root().Height(std::max(36.,num(toolbar->second,L"content_height")));
                 }else if(panelId==L"layers"||panelId==L"adjustments"||body.view->navigator){
                     body.view->Root().Height(body.view->navigator?272.:480.);
+                }else{
+                    auto height=body.view->ContentHeight(width);
+                    if(height>=0)body.view->Root().Height(height);
                 }
                 if(panelId==L"layers"){
                     auto inset=model.HasKey(L"layer_properties")?0.:data->panelMetric(L"inset");
@@ -350,7 +355,7 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
         auto placement=object(geometry,L"placement");auto bounds=object(placement,L"bounds");
         frame.Visibility(bounds.Size()?Visibility::Visible:Visibility::Collapsed);
         shadow.Layout(rectangle(bounds),order(),bounds.Size()!=0);
-        if(!bounds.Size()){bridge.Visibility(Visibility::Collapsed);return;}
+        if(!bounds.Size()){presentedSource=J{};bridge.Visibility(Visibility::Collapsed);return;}
         place(frame,bounds);
         RectangleGeometry clip;clip.Rect({0,0,float(num(bounds,L"width")),float(num(bounds,L"height"))});content.Clip(clip);
         auto connection=object(geometry,L"connection");
@@ -359,6 +364,24 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
         // A local, inspectable geometry record; no documents or profile paths.
         AutomationProperties::SetItemStatus(frame,geometry.Stringify());
         paintBackground();
+        auto anchor=object(model,L"anchor");
+        presentedSource=anchor.Size()&&connection.Size()?O({{L"anchor",anchor},{L"direction",S(str(placement,L"direction"))},{L"bounds",object(placement,L"anchor")}}):J{};
+    }
+    bool measureHeights(){
+        auto placements=array(object(geometry,L"placement"),L"columns");
+        if(columns.empty()||columns.size()!=placements.Size()||columns.size()!=array(model,L"columns").Size()||inspector)return false;
+        double tabHeight=object(model,L"tabs").Size()?36.:0.;
+        std::vector<double> next;
+        for(uint32_t i=0;i<columns.size();++i){
+            auto width=num(placements.GetObjectAt(i),L"width");
+            if(width<=0)return false;
+            columns[i].stack.Measure({float(width),INFINITY});
+            next.push_back(columns[i].stack.DesiredSize().Height+tabHeight);
+        }
+        bool differs=next.size()!=heights.size();
+        if(!differs)for(size_t i=0;i<next.size();++i)if(std::abs(next[i]-heights[i])>.5){differs=true;break;}
+        if(differs)heights=std::move(next);
+        return differs;
     }
     void measured(){
         // A mode switch can await its first placement with old native slots
@@ -370,11 +393,7 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
             if(inspectorSizingKey()!=inspector->sizingKey)wake();
             paintBackground();changed();layingOut=false;return;
         }
-        double tabHeight=object(model,L"tabs").Size()?36.:0.;
-        std::vector<double> next;for(auto const& column:columns)next.push_back(column.stack.ActualHeight()+tabHeight);
-        bool differs=next.size()!=heights.size();
-        if(!differs)for(size_t i=0;i<next.size();++i)if(std::abs(next[i]-heights[i])>.5){differs=true;break;}
-        if(differs){heights=std::move(next);wake();}
+        if(measureHeights())wake();
         paintBackground();changed();layingOut=false;
     }
     void initInspector(){
@@ -464,6 +483,7 @@ struct WorkspaceDrawers::Impl:std::enable_shared_from_this<Impl>{
     std::function<void()> changed;
     std::map<std::wstring,std::shared_ptr<Drawer>> drawers;
     hstring lastTiles=L"[]",lastBounds=L"[]",lastFacts;
+    std::optional<uint64_t> context;
     bool publishing=false,resetting=false;
     void publish(){
         if(publishing||resetting)return;publishing=true;
@@ -489,6 +509,8 @@ struct WorkspaceDrawers::Impl:std::enable_shared_from_this<Impl>{
         changed();publishing=false;
     }
     void apply(){
+        auto next=uint64_t(num(data->state,L"toolbar_context_generation"));
+        if(context!=next){context=next;reset();}
         auto customization=object(data->state,L"customization");std::map<std::wstring,J> models;
         if(!flag(data->model,L"chrome_hidden"))for(auto value:array(customization,L"column_drawers")){
             auto model=value.GetObject();models[std::to_wstring(uint32_t(num(object(model,L"anchor"),L"column")))]=model;
@@ -524,9 +546,7 @@ void WorkspaceDrawers::AppendOverviews(A& slots)const{for(auto const& [id,drawer
 A WorkspaceDrawers::Sources()const{
     A result;
     for(auto const& [id,drawer]:impl->drawers){
-        auto placement=object(drawer->geometry,L"placement");auto anchor=object(drawer->model,L"anchor");
-        if(drawer->disposed||!anchor.Size()||!placement.Size())continue;
-        result.Append(O({{L"anchor",anchor},{L"direction",S(str(placement,L"direction"))},{L"bounds",object(placement,L"anchor")}}));
+        if(!drawer->disposed&&drawer->presentedSource.Size())result.Append(drawer->presentedSource);
     }
     return result;
 }

@@ -542,10 +542,10 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
                     if(native.iconKey!=iconKey){pick.Content(icon(iconName,data->theme(),glyphSize));native.iconKey=iconKey;}
                 }
                 pick.IsTabStop(!editing);pick.Width(tile);pick.Height(tile);pick.IsEnabled(editing||flag(spec,L"enabled",true));pick.Opacity(editing||flag(spec,L"enabled",true)?1.:.36);
-                bool open=!drawerFacing(data,O({{L"kind",S(L"header")},{L"id",N(id)}})).empty();
+                auto facing=drawerFacing(data,O({{L"kind",S(L"header")},{L"id",N(id)}}));bool open=!facing.empty();
                 auto background=flag(spec,L"selected")?data->glass(L"header_selection"):open?data->glass(L"panel"):clear();
                 pick.Background(background);buttonFeedback(pick,data->brush(L"text"),26,41,nullptr,flag(spec,L"selected"));
-                double r=corner();pick.CornerRadius(open?CornerRadius{r,r,0,0}:CornerRadius{r,r,r,r});
+                pick.CornerRadius(facingCorners(corner(),facing));
                 AutomationProperties::SetItemStatus(pick,open?data->caption(L"header",L"open"):flag(spec,L"selected")?data->caption(L"header",L"on"):data->caption(L"header",L"off"));
                 AutomationProperties::SetName(pick,label);AutomationProperties::SetHelpText(pick,reason);
             }
@@ -675,6 +675,15 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
         auto action=O({{L"type",S(L"measure_header")},{L"height",N(totalHeight)},{L"items",bounds}});
         auto key=action.Stringify();if(key!=lastMeasurement){lastMeasurement=key;data->dispatch(action);}
     }
+    CornerRadius joinedCorners(J const& bounds,A const& members)const{
+        std::array<double,4> radii{corner(),corner(),corner(),corner()};
+        for(auto value:data->drawerSources){
+            auto source=value.GetObject(),anchor=object(source,L"anchor");
+            if(str(anchor,L"kind")!=L"header"||!std::any_of(members.begin(),members.end(),[&](auto const& member){return member.GetNumber()==num(anchor,L"id");}))continue;
+            auto square=sourceCorners(data,source,bounds);for(size_t i=0;i<radii.size();++i)if(square[i])radii[i]=0;
+        }
+        return {radii[0],radii[1],radii[2],radii[3]};
+    }
     void present(){
         if(!built)return;
         auto preview=input->Preview();auto resolved=object(preview,L"geometry");if(!resolved.Size())resolved=geometry;
@@ -698,7 +707,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
         for(size_t i=0;i<bars.size();++i){
             if(barFades.size()<=i)barFades.push_back(std::make_shared<ChromeVisibility>());
             bool shown=i<barList.Size()&&!hidden;barFades[i]->apply(bars[i],shown,changed);
-            if(shown){place(bars[i],object(barList.GetObjectAt(uint32_t(i)),L"bounds"));bars[i].CornerRadius({corner(),corner(),corner(),corner()});}
+            if(shown){auto bar=barList.GetObjectAt(uint32_t(i)),bounds=object(bar,L"bounds");place(bars[i],bounds);bars[i].CornerRadius(joinedCorners(bounds,array(bar,L"items")));}
         }
         for(auto& [id,native]:items){
             auto bounds=id==dragged?object(preview,L"held"):object(findId(placed,id),L"bounds");
@@ -719,7 +728,8 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
             bool inBar=joined.contains(id);
             bool open=!drawerFacing(data,O({{L"kind",S(L"header")},{L"id",N(id)}})).empty()&&!flag(findId(array(view,L"items"),id),L"selected");
             bool ownSurface=kind==L"document_title"||kind==L"clock"||kind==L"battery"||kind==L"space"||(!compact&&(kind==L"menu_labels"||kind==L"workspaces"));
-            native.frame.Background(inBar||ownSurface||open?clear():headerSurface(data));native.frame.CornerRadius({corner(),corner(),corner(),corner()});native.outline.CornerRadius({corner(),corner(),corner(),corner()});
+            A members;members.Append(N(id));auto corners=joinedCorners(bounds,members);
+            native.frame.Background(inBar||ownSurface||open?clear():headerSurface(data));native.frame.CornerRadius(corners);native.outline.CornerRadius(corners);
             if(kind==L"workspaces"){
                 bool focused=holdsFocus(switcherWell)||holdsFocus(workspaceOverflow),switching=(workspaceOverflow.Visibility()==Visibility::Visible)!=compact;
                 switcherWell.Visibility(compact?Visibility::Collapsed:Visibility::Visible);workspaceOverflow.Visibility(compact?Visibility::Visible:Visibility::Collapsed);
@@ -853,7 +863,7 @@ bool HeaderView::CancelGesture(){
 void HeaderView::CancelNativeContacts(){impl->data->pointerCancels.CancelAll();}
 void HeaderView::SetDrawerSources(A const& sources){
     if(sources.Stringify()==impl->data->drawerSources.Stringify())return;
-    impl->data->drawerSources=A::Parse(sources.Stringify());if(impl->built)impl->applyItems();
+    impl->data->drawerSources=A::Parse(sources.Stringify());if(impl->built){impl->applyItems();impl->present();}
 }
 void HeaderView::AppendGlass(A& regions,UIElement const& reference)const{if(impl->built)impl->glass(regions,impl->editing?impl->capySurface.as<DependencyObject>():impl->root.as<DependencyObject>(),reference);}
 std::vector<winrt::Windows::Graphics::RectInt32> HeaderView::DragRegions(float scale,uint32_t width)const{return impl->built?impl->drag(scale,width):std::vector<winrt::Windows::Graphics::RectInt32>{};}

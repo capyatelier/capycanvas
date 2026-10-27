@@ -11,7 +11,7 @@
 namespace CapyLayers { struct LayersView; }
 
 winrt::Microsoft::UI::Xaml::FrameworkElement LayersPanel(
-    std::shared_ptr<CapyUi::WorkspaceData> const&,CapyUi::Bindings&,std::function<double()>* contentHeight=nullptr,std::function<CapyUi::J()>* scrollMetrics=nullptr,
+    std::shared_ptr<CapyUi::WorkspaceData> const&,CapyUi::Bindings&,std::function<double(double)>* contentHeight=nullptr,std::function<CapyUi::J()>* scrollMetrics=nullptr,
     std::shared_ptr<CapyLayers::LayersView>* layerView=nullptr);
 namespace CapyLayers {
 using namespace CapyUi;

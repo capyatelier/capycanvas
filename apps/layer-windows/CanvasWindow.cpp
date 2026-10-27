@@ -386,13 +386,14 @@ void CanvasWindow::Resize() {
     PublishGlass();
 }
 void CanvasWindow::PublishGlass(){
-    if(glassPosted||closing||closed||!panel||!workspace)return;
+    if(closing||closed||!panel||!workspace)return;
+    if(header)header->SetDrawerSources(workspace->DrawerSources());
+    if(glassPosted)return;
     glassPosted=true;
     if(!dispatcher.TryEnqueue([weak=weak_from_this()]{
     auto self=weak.lock();if(!self)return;
     self->glassPosted=false;
     if(self->closing||self->closed||!self->panel||!self->workspace)return;
-    if(self->header)self->header->SetDrawerSources(self->workspace->DrawerSources());
     if(self->captionRegionsValid){
         auto bubbles=self->workspace->OverlayInputRegions(self->panel);auto scale=self->root.XamlRoot().RasterizationScale();auto input=self->captionInputRegions;
         for(auto value:bubbles){auto bounds=value.GetObject();

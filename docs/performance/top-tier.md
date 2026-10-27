@@ -244,7 +244,7 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 | Web tool bubble drag through four neighbours | 120 | Unmeasured after the bubble release fixes; desktop browser journeys do not qualify the reference tablet | [Web checks](../development/web.md#tests), 2026-10-24 |
 | GTK Tool Set hover and press animation | 120 | Desktop diagnostic: **117.76 changing-color presents/s**, 116.67–118.08 per case; pooled gap p99 16.646 ms. Reference hardware unmeasured | [GTK tool caption hover](#gtk-tool-caption-hover), 2026-10-26 |
 | Panel or column resize | 120 | Android shared vectors and Web SVG projection are unmeasured on this reference tier. Expanding GTK divider desktop diagnostic: **54.49/s**, p99 41.689 ms; misses the 114 Hz floor. **Desktop diagnostic misses.** GTK GPU joins: 81.59–112.27 changing-geometry presents/s at 1×; 38.96–92.31 at 2×, worst p99 74.986 ms. Reference-tier qualification remains unset. Web Navigator: 30.00–30.64 Chrome surface presents/s; p99 50.00–58.34 ms. Windows GPU desktop diagnostic: 33.82–34.89 observed bounds changes/s beside 166.28–183.76 renderer submissions/s after display correction; fresh displayed FPS and gap-transition performance unqualified | [Web Navigator layout](#web-navigator-layout), 2026-10-19; [GTK Color resize](#gtk-color-panel-resize), 2026-10-10; [GTK column bridge diagnostic](#gtk-column-bridge-diagnostic), 2026-10-25; [GTK Tool Set density](#gtk-tool-set-density), 2026-10-26; [GTK toolbar dividers](#gtk-toolbar-divider-resize), 2026-10-26; [Windows GPU VM column resize](#windows-gpu-vm-column-resize), 2026-10-26 |
-| Windows window resize | 120 | Unqualified; local 60 Hz button-feedback diagnostic: 57.37 observed native changes/s and 15.75 ms UI CPU/change, versus baseline brackets of 53.32–54.29/s and 16.16–16.41 ms. Frozen-Rust comparison; displayed motion and reference hardware remain unmeasured | [Windows window resize](#windows-window-resize), [button feedback comparison](#windows-button-feedback-comparison), 2026-10-26 |
+| Windows window resize | 120 | Unqualified; local 60 Hz allocation/startup candidate: 55.97 observed native changes/s and 15.755 ms UI CPU/change, versus baseline brackets of 55.90–57.05/s and 15.662–15.771 ms. Combined-code comparison; displayed motion and reference hardware remain unmeasured | [Windows window resize](#windows-window-resize), [allocation comparison](#windows-allocation-comparison), 2026-10-27 |
 | Pen pressure utility and curve drag | 120 | **Unqualified.** Current GTK desktop panel 119.20–119.40 presents/s, p99 up to 9.207 ms; curve 120.00, p99 up to 8.470 ms; reference tablet unmeasured | [GTK pen pressure utility](#gtk-pen-pressure-utility), 2026-10-10 UTC |
 | Windows tool bubble drag through four neighbours | 120 | Unmeasured on reference hardware; Surface Pro / Adreno X1-85 functional checks do not qualify timing (PresentMon ETW access denied) | [Windows tool bubbles](../development/windows.md#tool-bubbles) |
 | Windows HDR color bubble drag and intensity scrub | 120 | Unmeasured on reference hardware; native input and pixel checks do not qualify presentation timing (PresentMon ETW access denied) | [Windows tool bubbles](../development/windows.md#tool-bubbles) |
@@ -5605,6 +5605,34 @@ comparison isolates button feedback. Frozen executable SHA-256 prefixes are
 Raw contacts, source/binary identities and excluded fixture attempts stay under
 `artifacts/windows/visual-glitches/resize-cpu/`. The 120 Hz resize row remains
 unqualified.
+
+### Windows allocation comparison
+
+On 2026-10-27 the same i7-1255U laptop repeats three five-second growth/reversal
+contacts per build in baseline/candidate/baseline order. The candidate includes
+drawer measurement, fitted viewport allocation and pending first-frame rendering
+changes; this measures their combined moving path. Both use the same private
+Paint seed, window extents, drawing and runtime. Initial native control bounds
+match. No tracing, capture, UI Automation polling or compilation runs during the
+timed contacts.
+
+| Build order | Observed native changes/s | UI CPU | UI CPU ms/observed change |
+| --- | ---: | ---: | ---: |
+| Baseline first | 55.90 | 87.56% | 15.6622 |
+| Candidate | 55.97 | 88.18% | 15.7552 |
+| Baseline last | 57.05 | 89.97% | 15.7710 |
+
+The candidate is within the baseline bracket. Its normalized CPU cost is 0.24%
+above the pooled baseline; this short sample cannot distinguish a small
+regression from normal variability. These are observed bounds changes, not
+displayed frames or 120 Hz qualification. All nine contacts cover the same
+growth and reversal range and finish normally. Reference-tier drawer and panel
+motion timing remains unmeasured.
+
+Frozen baseline executable/DLL SHA-256 prefixes are `21A3F7A5FCF2` /
+`563E12E0130E`; candidate prefixes are `6DC4F0CE3B6F` / `5DE9D47E11F2`.
+Samples, matched native extents, source identities and health checks stay under
+`artifacts/windows/visual-glitches/startup-padding/resize-cpu/`.
 
 ### Windows GPU VM column resize
 

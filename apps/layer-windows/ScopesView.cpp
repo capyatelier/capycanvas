@@ -273,9 +273,9 @@ FrameworkElement CapyScopes::ScopeFooter(std::shared_ptr<WorkspaceData> const& d
     });
     return footer;
 }
-FrameworkElement CapyScopes::ScopePanel(std::shared_ptr<WorkspaceData> const& data,Bindings& bindings,bool waveform,std::function<double()>* naturalHeight){
+FrameworkElement CapyScopes::ScopePanel(std::shared_ptr<WorkspaceData> const& data,Bindings& bindings,bool waveform,std::function<double(double)>* naturalHeight){
     auto view=std::make_shared<ScopeView>();view->data=data;view->waveform=waveform;view->flexible=naturalHeight!=nullptr;view->prefix=waveform?L"waveform":L"histogram";
-    view->init(bindings);if(naturalHeight)*naturalHeight=[weak=std::weak_ptr(view)]{if(auto view=weak.lock())return view->naturalHeight();return -1.;};return view->root;
+    view->init(bindings);if(naturalHeight)*naturalHeight=[weak=std::weak_ptr(view)](double width){if(auto view=weak.lock()){view->root.Measure({float(width),INFINITY});return view->naturalHeight();}return -1.;};return view->root;
 }
 FrameworkElement CapyScopes::TonalScope(std::shared_ptr<WorkspaceData> const& data,Bindings& bindings){
     auto view=std::make_shared<ScopeView>();view->data=data;view->tonal=true;view->prefix=L"tonal";

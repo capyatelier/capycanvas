@@ -572,11 +572,11 @@ struct PalettesView:std::enable_shared_from_this<PalettesView>{
     bool openerTouch=false;
 };
 }
-FrameworkElement PalettesPanel(std::shared_ptr<WorkspaceData> const& data,Bindings& bindings,std::function<double()>* contentHeight,std::function<J()>* scrollMetrics){
+FrameworkElement PalettesPanel(std::shared_ptr<WorkspaceData> const& data,Bindings& bindings,std::function<double(double)>* contentHeight,std::function<J()>* scrollMetrics){
     auto view=std::make_shared<PalettesView>();view->data=data;view->init();
     bindings.emplace_back([view]{view->refresh();});
-    if(contentHeight)*contentHeight=[view]{
-        view->root.Measure({float(view->root.ActualWidth()),std::numeric_limits<float>::infinity()});
+    if(contentHeight)*contentHeight=[view](double width){
+        view->root.Measure({float(width),std::numeric_limits<float>::infinity()});
         return double(view->root.DesiredSize().Height);
     };
     if(scrollMetrics)*scrollMetrics=[view]{

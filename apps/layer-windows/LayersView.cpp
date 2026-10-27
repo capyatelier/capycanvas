@@ -445,7 +445,7 @@ bool LayersView::restoreAnchor(J const& anchor){
     return true;
 }
 }
-FrameworkElement LayersPanel(std::shared_ptr<WorkspaceData> const& data,Bindings& bindings,std::function<double()>* contentHeight,std::function<J()>* scrollMetrics,std::shared_ptr<LayersView>* layerView){
+FrameworkElement LayersPanel(std::shared_ptr<WorkspaceData> const& data,Bindings& bindings,std::function<double(double)>* contentHeight,std::function<J()>* scrollMetrics,std::shared_ptr<LayersView>* layerView){
     auto view=std::make_shared<LayersView>();view->data=data;view->init();bindings.emplace_back([view]{view->refresh();});
     if(layerView)*layerView=view;
     if(scrollMetrics)*scrollMetrics=[weak=std::weak_ptr(view)]{
@@ -455,7 +455,7 @@ FrameworkElement LayersPanel(std::shared_ptr<WorkspaceData> const& data,Bindings
             return O({{L"fixed_height",N(height(view->header)+height(view->footerFrame))},{L"unit_height",N(std::max(unit,height(view->addPaper)))}});
         }return J{};
     };
-    if(contentHeight)*contentHeight=[weak=std::weak_ptr(view)]{
+    if(contentHeight)*contentHeight=[weak=std::weak_ptr(view)](double){
         if(auto view=weak.lock()){
             auto height=[](FrameworkElement const& item){return item.Visibility()==Visibility::Visible?item.ActualHeight():0.;};
             return height(view->header)+height(view->footerFrame)+

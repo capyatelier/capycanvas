@@ -145,6 +145,15 @@ the continuous overview. Each group body has one finite scroll viewport between
 the fixed tab strip and the trailing drag grip. Existing panel scrollers own that
 viewport; other panel roots receive a group scroller. Shared `min_body_height`
 sets the minimum content extent without enlarging the viewport.
+Fitted roots take the ScrollPresenter's finite allocation, including its native
+pixel rounding. Assigning a separately rounded content height can create false
+overflow; existing panel scrollers still measure their genuine content extent.
+
+Drawer height providers take the proposed column width before placement. A new
+drawer stays hidden until its measured placement is ready. Its source publishes
+one accepted anchor, direction and bounds tuple; header buttons and their bars
+apply the shared facing and source-corner rules in the same native update.
+Changing the toolbar context retires the previous drawers.
 
 The build copies `dxcompiler.dll` from the pinned `Microsoft.Direct3D.DXC` package
 for the selected architecture beside the executable. The host compiles D3D12 shaders with it; it uses its
@@ -537,6 +546,19 @@ row sizing, pointer cancellation and keyboard activation. Adding Paper opens its
 properties; shared Rust owns creation, bottom placement and history. The VM
 fixture is `layer-drawer`. The overflow check retains arranged controls and reads
 their live bounds and placement within its existing stability deadline.
+
+`exercise-drawer-layout.ps1` checks Sketch Color against the shared color layout's
+height-for-width and wheel geometry, Layers drawer containment, header source and
+bridge continuity, and drawer removal on a workspace-context change. It also checks
+that a fitting Navigator has no scroll range while Brushes and Tool Settings keep
+their genuine overflow scrolling, including a fractional-DIP window size. Run the
+focused journey in both themes on a private desktop:
+
+```powershell
+foreach ($theme in 'light','dark') {
+    ./apps/layer-windows/scripts/test-desktop.ps1 -Script apps/layer-windows/scripts/exercise-drawer-layout.ps1 -Parameters @{Executable='artifacts/windows/build/CapyCanvas.exe';Theme=$theme}
+}
+```
 
 Each imported image has one ordinary Object layer row. Its shared layer ID owns
 the thumbnail, selection, visibility, masks, locks, context menu and reordering.
