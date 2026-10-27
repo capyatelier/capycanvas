@@ -243,7 +243,7 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 | Android tool bubble drag through four neighbours | 120 | **Unqualified after the bubble release fixes.** Previous parity build: 115.00–116.55 actual app-window presents/s; p99 ≤16.667447 ms, default glass, 61 MP photo at Fit | [Native tool bubbles](#native-tool-bubbles), 2026-10-24 |
 | Web tool bubble drag through four neighbours | 120 | Unmeasured after the bubble release fixes; desktop browser journeys do not qualify the reference tablet | [Web checks](../development/web.md#tests), 2026-10-24 |
 | GTK Tool Set hover and press animation | 120 | Desktop diagnostic: **117.76 changing-color presents/s**, 116.67–118.08 per case; pooled gap p99 16.646 ms. Reference hardware unmeasured | [GTK tool caption hover](#gtk-tool-caption-hover), 2026-10-26 |
-| Panel or column resize | 120 | Android shared vectors and Web SVG projection are unmeasured on this reference tier. Expanding GTK divider desktop diagnostic: **54.49/s**, p99 41.689 ms; misses the 114 Hz floor. **Desktop diagnostic misses.** GTK GPU joins: 81.59–112.27 changing-geometry presents/s at 1×; 38.96–92.31 at 2×, worst p99 74.986 ms. Reference-tier qualification remains unset. Web Navigator: 30.00–30.64 Chrome surface presents/s; p99 50.00–58.34 ms | [Web Navigator layout](#web-navigator-layout), 2026-10-19; [GTK Color resize](#gtk-color-panel-resize), 2026-10-10; [GTK column bridge diagnostic](#gtk-column-bridge-diagnostic), 2026-10-25; [GTK Tool Set density](#gtk-tool-set-density), 2026-10-26; [GTK toolbar dividers](#gtk-toolbar-divider-resize), 2026-10-26 |
+| Panel or column resize | 120 | Android shared vectors and Web SVG projection are unmeasured on this reference tier. Expanding GTK divider desktop diagnostic: **54.49/s**, p99 41.689 ms; misses the 114 Hz floor. **Desktop diagnostic misses.** GTK GPU joins: 81.59–112.27 changing-geometry presents/s at 1×; 38.96–92.31 at 2×, worst p99 74.986 ms. Reference-tier qualification remains unset. Web Navigator: 30.00–30.64 Chrome surface presents/s; p99 50.00–58.34 ms. Windows GPU VM width resize: 6.63–7.30 observed bounds changes/s beside 4.64–4.98 renderer submissions/s; displayed FPS and gap-transition performance unqualified | [Web Navigator layout](#web-navigator-layout), 2026-10-19; [GTK Color resize](#gtk-color-panel-resize), 2026-10-10; [GTK column bridge diagnostic](#gtk-column-bridge-diagnostic), 2026-10-25; [GTK Tool Set density](#gtk-tool-set-density), 2026-10-26; [GTK toolbar dividers](#gtk-toolbar-divider-resize), 2026-10-26; [Windows GPU VM column resize](#windows-gpu-vm-column-resize), 2026-10-26 |
 | Windows window resize | 120 | Unqualified; retained-panel diagnostic on the local 60 Hz laptop: 53.8–55.7 native changes/s, 89.3–91.4% UI CPU, pooled 16.48/16.58 ms per observed change for growth/reversal. Frozen-Rust host comparison; displayed motion and reference hardware remain unmeasured | [Windows window resize](#windows-window-resize), 2026-10-26 |
 | Pen pressure utility and curve drag | 120 | **Unqualified.** Current GTK desktop panel 119.20–119.40 presents/s, p99 up to 9.207 ms; curve 120.00, p99 up to 8.470 ms; reference tablet unmeasured | [GTK pen pressure utility](#gtk-pen-pressure-utility), 2026-10-10 UTC |
 | Windows tool bubble drag through four neighbours | 120 | Unmeasured on reference hardware; Surface Pro / Adreno X1-85 functional checks do not qualify timing (PresentMon ETW access denied) | [Windows tool bubbles](../development/windows.md#tool-bubbles) |
@@ -5561,6 +5561,39 @@ restore, retained controls, panel acknowledgement convergence, Navigator
 configuration expansion/resizing/dismissal and normal close. Hardware pixels
 and input are checked at 150% scale; other display densities and 120 Hz
 presentation remain unverified.
+
+### Windows GPU VM column resize
+
+The normal x64 Release build at `67001fd5c` uses a passed-through NVIDIA RTX PRO
+6000 Blackwell Max-Q Workstation Edition in a Windows VM. The desktop remains on
+Microsoft Basic Display Adapter at 2560 × 1600 and 150% scale; the NVIDIA GPU has
+no desktop output. These measurements do not qualify physical displayed FPS,
+reference hardware or a no-regression comparison.
+
+The light Paint workspace contains the default 2133 × 1600 drawing, default glass
+and an open right column. A primer and three six-second mouse contacts resize
+its width through ±60 physical pixels with a two-second sinusoidal period.
+Each measured contact injects 379 moves over 6.02–6.03 seconds. An independent UIA
+observer samples the retained Layers group's bounds with a 5 ms sleep plus
+provider overhead, reaching about 60 reads/s. These observed bounds changes
+are sampled native placements, not counts of fresh displayed bridge geometry.
+Buffered `CAPY_LATENCY_TRACE` records all canvas submissions; `CAPY_TRACE_UI`
+and its full native-tree traversal are disabled.
+
+| Contact | Observed bounds changes/s | Bounds interval p99, ms | Renderer submissions/s | Acquisition wait median, ms | Render-call median, ms |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 1 | 6.63 | 232.82 | 4.64 | 203.08 | 1.28 |
+| 2 | 7.30 | 227.91 | 4.81 | 198.92 | 1.28 |
+| 3 | 6.64 | 227.41 | 4.98 | 196.20 | 1.21 |
+
+Submission interval p99 is 212.74–214.93 ms. Buffer acquisition dominates the
+observed renderer cadence; render-call elapsed time is not GPU execution time.
+UIA observation and the VM's cross-adapter desktop composition limit attribution.
+Gap-divider attempts do not sustain observed geometry changes and are excluded;
+they do not establish bridge-transition performance. Raw bounds, submission
+timestamps, source/binary provenance and the diagnostic report are retained in
+`artifacts/windows-bridge-audit/performance/` and the VM's
+`bridge-resize-diagnostic` evidence.
 
 ### Exposed-area color probes
 
