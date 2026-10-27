@@ -219,9 +219,9 @@ struct NumberControl: View {
             }.frame(height: 4).clipShape(Capsule()).frame(maxHeight: .infinity)
                 .contentShape(Rectangle())
                 // Preserve vertical scrolling through long tool-settings lists.
-                .simultaneousGesture(DragGesture(minimumDistance: 6).updating($contact) { _, active, _ in active = true }.onChanged { event in
+                .simultaneousGesture(DragGesture(minimumDistance: 0).updating($contact) { _, active, _ in active = true }.onChanged { event in
                     guard enabled else { cancelDrag(); return }
-                    if horizontalDrag == nil {
+                    if horizontalDrag == nil && max(abs(event.translation.width), abs(event.translation.height)) >= 6 {
                         horizontalDrag = abs(event.translation.width) > abs(event.translation.height)
                         if horizontalDrag == true { gestureChange?("down", field.value) { field.error = $0 } }
                     }
@@ -231,8 +231,9 @@ struct NumberControl: View {
                 }.onEnded { event in
                     guard enabled else { cancelDrag(); return }
                     if horizontalDrag == true { position(event.location.x / max(1, geometry.size.width), phase: "up") }
+                    else if horizontalDrag == nil { position(event.location.x / max(1, geometry.size.width)) }
                     horizontalDrag = nil
-                }.exclusively(before: SpatialTapGesture().onEnded { tap in position(tap.location.x / max(1, geometry.size.width)) }))
+                })
         }.frame(height: compactPanel ? 16 : store.panelMetrics.height).modifier(NumberControlMeasurement(id: key + ":track"))
             .accessibilityElement().accessibilityLabel(label)
             .accessibilityValue(formatted["text"].string)

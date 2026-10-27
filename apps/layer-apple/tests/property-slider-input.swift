@@ -120,7 +120,7 @@ import QuartzCore
                     if toolControl { ToolSettingsControls(store: store) }
                     else if brushControl {
                         PanelControls(store: store, panel: brushPanel.replacing("controls", with: JSON(brushItems.map(\.raw))),
-                            scrollable: false, measureForWorkspace: false)
+                            scrollable: true, measureForWorkspace: false)
                     } else if mode == "layer-opacity" { LayerOpacityField(store: store) }
                     else { LayerPropertiesPanel(store: store) }
                 }.padding(6).frame(width: 300, height: 500, alignment: .topLeading)
@@ -215,6 +215,25 @@ import QuartzCore
                 }
                 if brushControl {
                     if mode == "brush-size" {
+                        guard let readout = geometry.frames[identifier + ":value"],
+                            let track = geometry.frames[identifier + ":track"] else {
+                            throw HostFailure(message: "Missing pen-scroll number controls")
+                        }
+                        let beforePen = value()
+                        let trackPoint = CGPoint(x: track.midX, y: track.midY)
+                        try event(.leftMouseDown, at: trackPoint, marker: host, number: 1020, tablet: true); try await drain(0.02)
+                        let trackLift = CGPoint(x: trackPoint.x + 4, y: trackPoint.y + 4)
+                        try event(.leftMouseDragged, at: trackLift, marker: host, number: 1021, tablet: true); try await drain(0.02)
+                        try event(.leftMouseUp, at: trackLift, marker: host, number: 1022, tablet: true); try await drain()
+                        let sliderChanged = abs(value() - beforePen) > 0.0001
+                        let readoutPoint = CGPoint(x: readout.midX, y: readout.midY)
+                        let readoutLift = CGPoint(x: readoutPoint.x + 4, y: readoutPoint.y + 4)
+                        try event(.leftMouseDown, at: readoutPoint, marker: host, number: 1023, tablet: true); try await drain(0.02)
+                        try event(.leftMouseDragged, at: readoutLift, marker: host, number: 1024, tablet: true); try await drain(0.02)
+                        try event(.leftMouseUp, at: readoutLift, marker: host, number: 1025, tablet: true); try await drain()
+                        try require(sliderChanged && geometry.frames[identifier + ":entry"] != nil,
+                            "A pen slider contact and readout tap must edit the brush number")
+                        try NativeWorkspaceInputFixture.key("\u{1B}", code: 53, window: window); try await drain()
                         try await action(["type": "set_brush_size", "value": 1200.5])
                         guard let readout = geometry.frames[identifier + ":value"] else {
                             throw HostFailure(message: "Missing mounted brush readout")
