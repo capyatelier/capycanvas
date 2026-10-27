@@ -5,7 +5,6 @@ use std::collections::HashMap;
 use std::f64::consts::FRAC_PI_2;
 
 pub(crate) const KEEP_ROUND: &str = "capy-keep-round";
-const CACHED_MASK: &str = "capy-cached-mask";
 const CORNER_SEGMENTS: u32 = 24;
 const MASK_PRUNE_THRESHOLD: usize = 512;
 pub const CORNER_FIT: f32 = 0.54;
@@ -17,7 +16,7 @@ pub fn append_round(snapshot: &gtk::Snapshot, round: gtk::Snapshot) {
     }
 }
 
-fn corner(cr: &cairo::Context, center: [f64; 2], start: [f64; 2], end: [f64; 2]) {
+pub(crate) fn corner(cr: &cairo::Context, center: [f64; 2], start: [f64; 2], end: [f64; 2]) {
     for step in 1..=CORNER_SEGMENTS {
         let angle = f64::from(step) / f64::from(CORNER_SEGMENTS) * FRAC_PI_2;
         let (along_start, along_end) = (angle.cos().sqrt(), angle.sin().sqrt());
@@ -59,37 +58,13 @@ pub fn rounded_rect(cr: &cairo::Context, rect: &gsk::RoundedRect) {
     cr.close_path();
 }
 
-pub(crate) struct CachedMask {
-    bounds: graphene::Rect,
-    raster: gsk::RenderNode,
-    texture: RefCell<Option<gdk::Texture>>,
-    node: RefCell<Option<gsk::RenderNode>>,
-}
-
-impl CachedMask {
-    pub fn new(bounds: &graphene::Rect, draw: impl FnOnce(&cairo::Context)) -> Self {
-        let raster = gsk::CairoNode::new(bounds);
-        let cr = raster.draw_context();
-        draw(&cr);
-        cr.set_source_rgba(1., 1., 1., 1.);
-        cr.fill().unwrap();
-        drop(cr);
-        Self { bounds: *bounds, raster: raster.upcast(), texture: RefCell::default(), node: RefCell::default() }
-    }
-
-    pub fn ready(&self) -> bool { self.texture.borrow().is_some() }
-
-    pub fn set_texture(&self, texture: gdk::Texture) {
-        *self.texture.borrow_mut() = Some(texture);
-        self.node.borrow_mut().take();
-    }
-
-    pub fn node(&self) -> gsk::RenderNode {
-        let Some(texture) = self.texture.borrow().clone() else { return self.raster.clone(); };
-        self.node.borrow_mut().get_or_insert_with(|| gsk::DebugNode::new(
-            gsk::CrossFadeNode::new(&self.raster, gsk::TextureNode::new(&texture, &self.bounds), 0.),
-            CACHED_MASK.into()).upcast()).clone()
-    }
+pub(crate) fn path(draw: impl FnOnce(&cairo::Context)) -> gsk::Path {
+    let surface = cairo::RecordingSurface::create(cairo::Content::Alpha, None).unwrap();
+    let cr = cairo::Context::new(&surface).unwrap();
+    draw(&cr);
+    let builder = gsk::PathBuilder::new();
+    builder.add_cairo_path(&cr.copy_path().unwrap());
+    builder.to_path()
 }
 
 fn grid_transform(transform: &gsk::Transform) -> bool {
@@ -104,6 +79,67 @@ fn grid_bounds(bounds: &graphene::Rect, scale: f64) -> bool {
     [bounds.x(), bounds.y(), bounds.width(), bounds.height()].into_iter()
         .all(|value| (f64::from(value) * scale).fract() == 0.)
 }
+
+#[derive(Clone, Copy)]
+pub(crate) struct PixelGrid {
+    pub scale: [f32; 2],
+    pub offset: [f32; 2],
+}
+
+impl PixelGrid {
+    fn new(scale: f64) -> Self { Self { scale: [scale as f32; 2], offset: [0.; 2] } }
+
+    pub fn for_widget(widget: &gtk::Widget) -> Self {
+        let scale = widget.native().and_then(|native| native.surface())
+            .map_or(widget.scale_factor() as f64, |surface| surface.scale());
+        let grid = Self::new(scale);
+        widget.root().and_then(|root| root.dynamic_cast::<gtk::Widget>().ok())
+            .and_then(|root| widget.compute_transform(&root))
+            .map_or(grid, |matrix| grid.transform(&gsk::Transform::new().matrix(&matrix)))
+    }
+
+    fn transform(self, transform: &gsk::Transform) -> Self {
+        if !matches!(transform.category(), gsk::TransformCategory::Identity | gsk::TransformCategory::_2dTranslate
+            | gsk::TransformCategory::_2dAffine | gsk::TransformCategory::_2d) {
+            return Self { scale: [0.; 2], offset: [0.; 2] };
+        }
+        let (xx, yx, xy, yy, dx, dy) = transform.to_2d();
+        if xy == 0. && yx == 0. && xx != 0. && yy != 0. {
+            Self { scale: [self.scale[0] * xx, self.scale[1] * yy],
+                offset: [self.offset[0] + self.scale[0] * dx, self.offset[1] + self.scale[1] * dy] }
+        } else if xx == 0. && yy == 0. && xy != 0. && yx != 0. {
+            Self { scale: [self.scale[1] * yx, self.scale[0] * xy],
+                offset: [self.offset[1] + self.scale[1] * dy, self.offset[0] + self.scale[0] * dx] }
+        } else { Self { scale: [0.; 2], offset: [0.; 2] } }
+    }
+
+    pub fn floor(self, axis: usize, value: f32) -> f32 {
+        if self.scale[axis] == 0. { return value; }
+        let pixel = value * self.scale[axis] + self.offset[axis];
+        let edge = if self.scale[axis] > 0. { pixel.floor() } else { pixel.ceil() };
+        (edge - self.offset[axis]) / self.scale[axis]
+    }
+
+    pub fn ceil(self, axis: usize, value: f32) -> f32 {
+        if self.scale[axis] == 0. { return value; }
+        let pixel = value * self.scale[axis] + self.offset[axis];
+        let edge = if self.scale[axis] > 0. { pixel.ceil() } else { pixel.floor() };
+        (edge - self.offset[axis]) / self.scale[axis]
+    }
+
+    fn key(self) -> [u32; 4] {
+        [self.scale[0], self.scale[1], self.offset[0].rem_euclid(1.), self.offset[1].rem_euclid(1.)].map(f32::to_bits)
+    }
+
+    fn bounds_aligned(self, bounds: &graphene::Rect) -> bool {
+        self.scale.into_iter().all(|scale| scale != 0.)
+            && [(0, bounds.x()), (0, bounds.x() + bounds.width()),
+                (1, bounds.y()), (1, bounds.y() + bounds.height())].into_iter()
+                .all(|(axis, value)| (value * self.scale[axis] + self.offset[axis]).fract() == 0.)
+    }
+}
+
+impl Default for PixelGrid { fn default() -> Self { Self::new(1.) } }
 
 fn squircle_rect(circular: &gsk::RoundedRect) -> gsk::RoundedRect {
     let [top_left, top_right, bottom_right, bottom_left] = circular
@@ -292,10 +328,15 @@ fn gaussian_blur(values: &mut [f32], size: usize, sigma: f64) {
 struct Converter {
     scale: f64,
     aligned: bool,
-    nodes: HashMap<(usize, bool), (gsk::RenderNode, gsk::RenderNode)>,
-    previous: HashMap<(usize, bool), (gsk::RenderNode, gsk::RenderNode)>,
+    legacy_mask: bool,
+    grid: PixelGrid,
+    nodes: HashMap<(usize, bool, bool, [u32; 4]), (gsk::RenderNode, gsk::RenderNode)>,
+    previous: HashMap<(usize, bool, bool, [u32; 4]), (gsk::RenderNode, gsk::RenderNode)>,
     masks: HashMap<MaskKey, glib::WeakRef<gdk::Texture>>,
     shadows: HashMap<[u32; 22], [gdk::Texture; 8]>,
+    corners: HashMap<[u32; 5], gsk::Path>,
+    compact_shadows: HashMap<[u32; 31], gsk::RenderNode>,
+    solid_mask: Option<gdk::Texture>,
 }
 
 impl Converter {
@@ -304,6 +345,8 @@ impl Converter {
             *self = Self { scale, ..Self::default() };
         }
         self.aligned = scale.fract() == 0.;
+        self.legacy_mask = false;
+        self.grid = PixelGrid::new(scale);
         self.previous = std::mem::take(&mut self.nodes);
         if self.masks.len() > MASK_PRUNE_THRESHOLD {
             self.masks.retain(|_, mask| mask.upgrade().is_some());
@@ -311,13 +354,15 @@ impl Converter {
         if self.shadows.len() > MASK_PRUNE_THRESHOLD {
             self.shadows.clear();
         }
+        if self.corners.len() > MASK_PRUNE_THRESHOLD { self.corners.clear(); }
+        if self.compact_shadows.len() > MASK_PRUNE_THRESHOLD { self.compact_shadows.clear(); }
         let converted = self.convert(node);
         self.previous.clear();
         converted
     }
 
     fn convert(&mut self, node: &gsk::RenderNode) -> gsk::RenderNode {
-        let key = (node.as_ptr() as usize, self.aligned);
+        let key = (node.as_ptr() as usize, self.aligned, self.legacy_mask, self.grid.key());
         if let Some((_, converted)) = self.nodes.get(&key) {
             return converted.clone();
         }
@@ -360,21 +405,40 @@ impl Converter {
     fn rewrite(&mut self, node: &gsk::RenderNode) -> gsk::RenderNode {
         if let Some(container) = node.downcast_ref::<gsk::ContainerNode>() {
             let children: Vec<_> = (0..container.n_children()).map(|i| container.child(i)).collect();
+            let mut union = None::<graphene::Rect>;
+            let overlaps = children.iter().any(|child| {
+                let bounds = child.bounds();
+                let intersects = union.is_some_and(|previous| previous.intersection(&bounds)
+                    .is_some_and(|rect| rect.width() > 0. && rect.height() > 0.));
+                union = Some(union.map_or(bounds, |previous| previous.union(&bounds)));
+                intersects
+            });
+            let legacy_mask = self.legacy_mask;
+            let offscreen = legacy_mask && overlaps;
+            if offscreen { self.legacy_mask = false; }
             let converted: Vec<_> = children.iter().map(|child| self.convert(child)).collect();
-            return if children.iter().zip(&converted).all(|(a, b)| a.as_ptr() == b.as_ptr()) {
+            self.legacy_mask = legacy_mask;
+            let converted = if children.iter().zip(&converted).all(|(a, b)| a.as_ptr() == b.as_ptr()) {
                 node.clone()
             } else {
                 gsk::ContainerNode::new(&converted).upcast()
             };
+            if offscreen && !self.grid.bounds_aligned(&node.bounds()) {
+                return self.group_bounds(&converted);
+            }
+            return converted;
         }
         if let Some(transform) = node.downcast_ref::<gsk::TransformNode>() {
             let matrix = transform.transform();
             let aligned = self.aligned;
+            let grid = self.grid;
+            self.grid = grid.transform(&matrix);
             self.aligned &= grid_transform(&matrix);
             let converted = self.rebuild(node, &transform.child(), |child| {
                 gsk::TransformNode::new(child, Some(&matrix)).upcast()
             });
             self.aligned = aligned;
+            self.grid = grid;
             return converted;
         }
         if let Some(clip) = node.downcast_ref::<gsk::ClipNode>() {
@@ -428,17 +492,6 @@ impl Converter {
         }
         if let Some(debug) = node.downcast_ref::<gsk::DebugNode>() {
             let message = debug.message();
-            if message == CACHED_MASK {
-                let child = debug.child();
-                let alternatives = child.downcast_ref::<gsk::CrossFadeNode>().unwrap();
-                let end = alternatives.end_child();
-                let matched = end.downcast_ref::<gsk::TextureNode>().is_some_and(|node| {
-                    let bounds = node.bounds();
-                    node.texture().width() == (f64::from(bounds.width()) * self.scale).ceil() as i32
-                        && node.texture().height() == (f64::from(bounds.height()) * self.scale).ceil() as i32
-                });
-                return if self.aligned && matched { end } else { alternatives.start_child() };
-            }
             if message == KEEP_ROUND {
                 return node.clone();
             }
@@ -448,13 +501,18 @@ impl Converter {
             let clip = rounded.clip();
             let aligned = self.aligned;
             self.aligned &= grid_bounds(clip.bounds(), self.scale);
+            let legacy_mask = self.legacy_mask;
+            if !clip.is_rectilinear() {
+                self.legacy_mask = self.rounded_parts(&squircle_rect(&clip)).is_some();
+            }
             let converted = if clip.is_rectilinear() {
                 self.rebuild(node, &rounded.child(), |child| gsk::RoundedClipNode::new(child, &clip).upcast())
             } else {
                 let child = self.convert(&rounded.child());
-                gsk::MaskNode::new(child, self.mask(&squircle_rect(&clip), None), gsk::MaskMode::Alpha).upcast()
+                self.rounded(&child, &squircle_rect(&clip))
             };
             self.aligned = aligned;
+            self.legacy_mask = legacy_mask;
             return converted;
         }
         if let Some(border) = node.downcast_ref::<gsk::BorderNode>() {
@@ -500,6 +558,102 @@ impl Converter {
         node.clone()
     }
 
+    fn group_bounds(&mut self, node: &gsk::RenderNode) -> gsk::RenderNode {
+        let texture = self.solid_mask.get_or_insert_with(|| gdk::MemoryTexture::new(1, 1,
+            gdk::MemoryFormat::R8g8b8a8Premultiplied, &glib::Bytes::from_static(&[255; 4]), 4).upcast());
+        let bounds = node.bounds();
+        let padding = 1. / self.scale as f32;
+        let dx = bounds.width().max(padding);
+        let dy = bounds.height().max(padding);
+        let area = graphene::Rect::new(bounds.x() - dx, bounds.y() - dy,
+            bounds.width() + 2. * dx, bounds.height() + 2. * dy);
+        let masked: gsk::RenderNode = gsk::MaskNode::new(node,
+            gsk::TextureNode::new(texture, &area), gsk::MaskMode::Alpha).upcast();
+        if self.grid.scale.into_iter().any(|scale| scale == 0.)
+            || bounds.width() * bounds.height() * (self.grid.scale[0] * self.grid.scale[1]).abs() <= 128. * 128. {
+            return masked;
+        }
+        let [left, top, right, bottom] = [self.grid.ceil(0, bounds.x()), self.grid.ceil(1, bounds.y()),
+            self.grid.floor(0, bounds.x() + bounds.width()), self.grid.floor(1, bounds.y() + bounds.height())];
+        if right <= left || bottom <= top { return masked; }
+        let [x0, y0, x1, y1] = [self.grid.floor(0, bounds.x()), self.grid.floor(1, bounds.y()),
+            self.grid.ceil(0, bounds.x() + bounds.width()), self.grid.ceil(1, bounds.y() + bounds.height())];
+        let mut pieces: Vec<gsk::RenderNode> = vec![gsk::ClipNode::new(node,
+            &graphene::Rect::new(left, top, right - left, bottom - top)).upcast()];
+        for edge in [
+            graphene::Rect::new(x0, y0, left - x0, y1 - y0),
+            graphene::Rect::new(right, y0, x1 - right, y1 - y0),
+            graphene::Rect::new(left, y0, right - left, top - y0),
+            graphene::Rect::new(left, bottom, right - left, y1 - bottom),
+        ] {
+            if edge.width() > 0. && edge.height() > 0. {
+                pieces.push(gsk::ClipNode::new(&masked, &edge).upcast());
+            }
+        }
+        gsk::ContainerNode::new(&pieces).upcast()
+    }
+
+    fn rounded_parts(&self, shape: &gsk::RoundedRect) -> Option<[f32; 4]> {
+        let bounds = shape.bounds();
+        if self.grid.scale.into_iter().any(|scale| scale == 0.)
+            || f64::from(bounds.width().max(bounds.height())) * self.scale <= 128. { return None; }
+        let [tl, tr, br, bl] = *shape.corner();
+        let left = self.grid.ceil(0, bounds.x() + tl.width().max(bl.width())) - bounds.x();
+        let right = bounds.x() + bounds.width() - self.grid.floor(0, bounds.x() + bounds.width() - tr.width().max(br.width()));
+        let top = self.grid.ceil(1, bounds.y() + tl.height().max(tr.height())) - bounds.y();
+        let bottom = bounds.y() + bounds.height() - self.grid.floor(1, bounds.y() + bounds.height() - bl.height().max(br.height()));
+        if left + right > bounds.width() || top + bottom > bounds.height() { None }
+        else { Some([left, right, top, bottom]) }
+    }
+
+    fn rounded(&mut self, child: &gsk::RenderNode, shape: &gsk::RoundedRect) -> gsk::RenderNode {
+        let bounds = shape.bounds();
+        let Some([left, right, top, bottom]) = self.rounded_parts(shape) else {
+            return gsk::MaskNode::new(child, self.mask(shape, None), gsk::MaskMode::Alpha).upcast();
+        };
+        let [tl, tr, br, bl] = *shape.corner();
+        let [x, y, width, height] = [bounds.x(), bounds.y(), bounds.width(), bounds.height()];
+        let mut pieces = Vec::with_capacity(7);
+        let mut rectangle = |rect: graphene::Rect| {
+            if let Some(rect) = rect.intersection(&child.bounds()) {
+                pieces.push(gsk::ClipNode::new(child, &rect).upcast());
+            }
+        };
+        rectangle(graphene::Rect::new(x, y + top, width, height - top - bottom));
+        rectangle(graphene::Rect::new(x + left, y, width - left - right, top));
+        rectangle(graphene::Rect::new(x + left, y + height - bottom, width - left - right, bottom));
+        for (index, origin, size, radius) in [
+            (0, [x, y], [left, top], tl),
+            (1, [x + width - right, y], [right, top], tr),
+            (2, [x + width - right, y + height - bottom], [right, bottom], br),
+            (3, [x, y + height - bottom], [left, bottom], bl),
+        ] {
+            if size[0] <= 0. || size[1] <= 0. { continue; }
+            let key = [size[0].to_bits(), size[1].to_bits(), radius.width().to_bits(),
+                radius.height().to_bits(), index as u32];
+            let path = self.corners.entry(key).or_insert_with(|| {
+                let mut radii = [graphene::Size::new(0., 0.); 4];
+                radii[index] = radius;
+                let corner = gsk::RoundedRect::new(graphene::Rect::new(0., 0., size[0], size[1]),
+                    radii[0], radii[1], radii[2], radii[3]);
+                path(|cr| rounded_rect(cr, &corner))
+            });
+            let local = if child.is::<gsk::ColorNode>()
+                && child.bounds().contains_rect(&graphene::Rect::new(origin[0], origin[1], size[0], size[1]))
+                && child.bounds().contains_rect(&graphene::Rect::new(0., 0., size[0], size[1])) {
+                child.clone()
+            } else {
+                gsk::TransformNode::new(child, Some(&gsk::Transform::new()
+                    .translate(&graphene::Point::new(-origin[0], -origin[1])))).upcast()
+            };
+            let fill = gsk::FillNode::new(local, path, gsk::FillRule::Winding);
+            let tile = gsk::ClipNode::new(fill, &graphene::Rect::new(0., 0., size[0], size[1]));
+            pieces.push(gsk::TransformNode::new(tile, Some(&gsk::Transform::new()
+                .translate(&graphene::Point::new(origin[0], origin[1])))).upcast());
+        }
+        gsk::ContainerNode::new(&pieces).upcast()
+    }
+
     fn ring(&mut self, outer: &gsk::RoundedRect, inner: &gsk::RoundedRect, color: &gdk::RGBA) -> gsk::RenderNode {
         let fill = gsk::ColorNode::new(color, outer.bounds());
         gsk::MaskNode::new(fill, self.mask(outer, Some(inner)), gsk::MaskMode::Alpha).upcast()
@@ -517,6 +671,11 @@ impl Converter {
         let scale = self.scale as f32;
         let minimum = (2 * geometry.inset + 1) as f32 / scale;
         if bounds.width() < minimum || bounds.height() < minimum {
+            if bounds.width().max(bounds.height()) >= minimum {
+                if let Some(shadow) = self.compact_shadow(shape, outline, color, blur, &geometry) {
+                    return shadow;
+                }
+            }
             let fill = gsk::ColorNode::new(color, bounds);
             let shadow = gsk::MaskNode::new(fill, self.mask(shape, None), gsk::MaskMode::Alpha);
             let blurred = gsk::BlurNode::new(shadow, blur);
@@ -545,6 +704,72 @@ impl Converter {
             })
             .collect();
         gsk::ContainerNode::new(&slices).upcast()
+    }
+
+    fn compact_shadow(&mut self, shape: &gsk::RoundedRect, outline: &gsk::RoundedRect,
+        color: &gdk::RGBA, blur: f32, geometry: &ShadowGeometry) -> Option<gsk::RenderNode> {
+        let bounds = shape.bounds();
+        let scale = self.scale as f32;
+        let minimum = (2 * geometry.inset + 1) as f32 / scale;
+        let vertical = bounds.width() < minimum;
+        let [short, length] = if vertical { [bounds.width(), bounds.height()] }
+            else { [bounds.height(), bounds.width()] };
+        let period = (1..=120).find(|period| {
+            let pixels = self.scale * f64::from(*period);
+            (pixels - pixels.round()).abs() < 1e-9
+        })? as f32;
+        let reduction = ((length - minimum) / period).floor() * period;
+        let minimum = length - reduction;
+        let original = outline.bounds();
+        let inner_size = if vertical { [original.width(), original.height() - reduction] }
+            else { [original.width() - reduction, original.height()] };
+        let insets = [original.x() - bounds.x(), original.y() - bounds.y(),
+            bounds.x() + bounds.width() - original.x() - original.width(),
+            bounds.y() + bounds.height() - original.y() - original.height()];
+        let mut key = [0; 31];
+        key[..22].copy_from_slice(&geometry.key);
+        key[18..22].copy_from_slice(&insets.map(f32::to_bits));
+        key[22] = u32::from(vertical);
+        key[23] = short.to_bits();
+        key[24..28].copy_from_slice(&[color.red(), color.green(), color.blue(), color.alpha()].map(f32::to_bits));
+        key[28] = minimum.to_bits();
+        key[29..31].copy_from_slice(&inner_size.map(f32::to_bits));
+        let canonical = if let Some(node) = self.compact_shadows.get(&key) { node.clone() } else {
+            let [width, height] = if vertical { [short, minimum] } else { [minimum, short] };
+            let make = |bounds, corners: &[graphene::Size; 4]| gsk::RoundedRect::new(bounds,
+                corners[0], corners[1], corners[2], corners[3]);
+            let outer = make(graphene::Rect::new(0., 0., width, height), shape.corner());
+            let inner = make(graphene::Rect::new(insets[0], insets[1],
+                inner_size[0], inner_size[1]), outline.corner());
+            let fill = gsk::ColorNode::new(color, outer.bounds());
+            let source = gsk::MaskNode::new(fill, self.mask(&outer, None), gsk::MaskMode::Alpha);
+            let blurred = gsk::BlurNode::new(source, blur);
+            let node = gsk::MaskNode::new(blurred, self.mask(&inner, None), gsk::MaskMode::InvertedAlpha).upcast();
+            self.compact_shadows.insert(key, node.clone());
+            node
+        };
+        let edge = geometry.edge as f32 / scale;
+        let inset = geometry.inset as f32 / scale;
+        let pixel = 1. / scale;
+        let region = |start, length| if vertical {
+            graphene::Rect::new(-edge, start, short + 2. * edge, length)
+        } else { graphene::Rect::new(start, -edge, length, short + 2. * edge) };
+        let place = |node: gsk::RenderNode, distance| {
+            let [dx, dy] = if vertical { [0., distance] } else { [distance, 0.] };
+            gsk::TransformNode::new(node, Some(&gsk::Transform::new().translate(
+                &graphene::Point::new(bounds.x() + dx, bounds.y() + dy)))).upcast()
+        };
+        let axis = usize::from(vertical);
+        let origin = if vertical { bounds.y() } else { bounds.x() };
+        let first_end = self.grid.ceil(axis, origin + inset) - origin;
+        let last_start = self.grid.floor(axis, origin + length - inset) - origin;
+        let last_source_start = last_start - (length - minimum);
+        let first = gsk::ClipNode::new(&canonical, &region(-edge, first_end + edge));
+        let middle = gsk::RepeatNode::new(&region(first_end, last_start - first_end), &canonical,
+            Some(&region(inset, pixel)));
+        let last = gsk::ClipNode::new(&canonical, &region(last_source_start, minimum + edge - last_source_start));
+        Some(gsk::ContainerNode::new(&[place(first.upcast(), 0.), place(middle.upcast(), 0.),
+            place(last.upcast(), reduction)]).upcast())
     }
 
     fn mask(&mut self, outer: &gsk::RoundedRect, inner: Option<&gsk::RoundedRect>) -> gsk::RenderNode {
@@ -594,8 +819,66 @@ mod tests {
 
     fn assert_converted_panel(node: &gsk::RenderNode) {
         let panel = node.downcast_ref::<gsk::ContainerNode>().unwrap();
-        assert!(panel.child(0).is::<gsk::MaskNode>(), "rounded panel must retain its squircle mask");
+        assert!(panel.child(0).is::<gsk::ContainerNode>() || panel.child(0).is::<gsk::MaskNode>(), "rounded panel must retain its contour");
+        assert_eq!(panel.child(0).bounds(), graphene::Rect::new(0., 0., 80., 120.));
         assert!(!panel.child(1).is::<gsk::OutsetShadowNode>(), "native shadow must be converted inside wrappers");
+    }
+
+    #[test]
+    fn panel_resize_reuses_fixed_corner_paths_without_full_panel_masks() {
+        for scale in [1., 2.] {
+            let mut converter = Converter::default();
+            let mut first = None;
+            for height in [170., 220., 320., 170.] {
+                let bounds = graphene::Rect::new(0., 0., 242., height);
+                let node = gsk::RoundedClipNode::new(gsk::ColorNode::new(&gdk::RGBA::WHITE, &bounds),
+                    &gsk::RoundedRect::from_rect(bounds, 9.72));
+                let result = converter.frame(node.upcast_ref(), scale);
+                assert_eq!(result.bounds(), bounds);
+                assert!(converter.masks.is_empty());
+                assert_eq!(converter.corners.len(), 4);
+                let mut paths: Vec<_> = converter.corners.iter().map(|(key, path)| {
+                    let bounds = path.bounds().unwrap();
+                    assert!(f64::from(bounds.width().max(bounds.height())) * scale <= 256.);
+                    (*key, path.as_ptr() as usize)
+                }).collect();
+                paths.sort_unstable();
+                if let Some(first) = &first { assert_eq!(&paths, first); } else { first = Some(paths); }
+            }
+        }
+    }
+
+    #[test]
+    fn removed_mask_group_does_not_isolate_its_fractional_descendants_again() {
+        let bounds = graphene::Rect::new(0., 0., 242., 170.);
+        let glyph_bounds = graphene::Rect::new(8.25, 8.5, 16., 14.);
+        let glyph = gsk::ContainerNode::new(&[
+            gsk::ColorNode::new(&gdk::RGBA::WHITE, &glyph_bounds).upcast(),
+            gsk::ColorNode::new(&gdk::RGBA::BLACK, &glyph_bounds).upcast(),
+        ]);
+        let content = gsk::ContainerNode::new(&[
+            gsk::ColorNode::new(&gdk::RGBA::WHITE, &bounds).upcast(), glyph.upcast(),
+        ]);
+        let node = gsk::RoundedClipNode::new(content, &gsk::RoundedRect::from_rect(bounds, 9.72));
+        let mut converter = Converter::default();
+        converter.frame(node.upcast_ref(), 1.);
+        assert!(converter.solid_mask.is_none());
+    }
+
+    #[test]
+    fn long_toolbar_shadows_reuse_their_fixed_source() {
+        for vertical in [false, true] {
+            let mut converter = Converter::default();
+            for length in [512., 640., 900.] {
+                let bounds = if vertical { graphene::Rect::new(0., 0., 36., length) }
+                    else { graphene::Rect::new(0., 0., length, 36.) };
+                let outline = gsk::RoundedRect::from_rect(bounds, 9.72);
+                let shadow = gsk::OutsetShadowNode::new(&outline, &gdk::RGBA::new(0., 0., 0., 0.16), 0., 2., 0., 8.);
+                let node = converter.frame(shadow.upcast_ref(), 2.);
+                assert!(node.is::<gsk::ContainerNode>());
+                assert_eq!(converter.compact_shadows.len(), 1);
+            }
+        }
     }
 
     #[test]

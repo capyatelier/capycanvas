@@ -48,6 +48,17 @@ fn contour_pixels(texture: &gdk::Texture) -> Vec<u8> {
     pixels
 }
 
+fn selected_reference_edges(tab:&gtk::graphene::Rect,width:i32,height:i32,scale:f64)->Vec<bool> {
+    let width=(f64::from(width)*scale).ceil() as i32;let height=(f64::from(height)*scale).ceil() as i32;
+    let mut surface=gtk::cairo::ImageSurface::create(gtk::cairo::Format::A8,width,height).unwrap();
+    let cr=gtk::cairo::Context::new(&surface).unwrap();cr.scale(scale,scale);cr.set_source_rgba(1.,1.,1.,1.);
+    let radius=gtk::graphene::Size::new(layer_ui::SURFACE_RADIUS,layer_ui::SURFACE_RADIUS);let square=gtk::graphene::Size::new(0.,0.);
+    let mut shape=gtk::gsk::RoundedRect::new(*tab,radius,radius,square,square);shape.normalize();crate::squircle::rounded_rect(&cr,&shape);
+    for(x,direction)in[(tab.x(),-1.),(tab.x()+tab.width(),1.)]{crate::squircle::concave_foot(&cr,f64::from(x),f64::from(height)/scale,6.,direction);}
+    cr.fill().unwrap();drop(cr);let stride=surface.stride() as usize;let coverage=surface.data().unwrap();let mut edges=vec![false;width as usize*height as usize];
+    for y in 0..height as usize{for x in 0..width as usize{let alpha=coverage[y*stride+x];edges[y*width as usize+x]=!((alpha==0||alpha==255)&&(y.saturating_sub(2)..=(y+2).min(height as usize-1)).all(|yy|(x.saturating_sub(2)..=(x+2).min(width as usize-1)).all(|xx|coverage[yy*stride+xx]==alpha)));}}edges
+}
+
 #[test]
 #[ignore = "isolated Mutter native-input.js --native-test=native_panel_tab_contours_are_continuous"]
 fn native_panel_tab_contours_are_continuous() {
@@ -63,7 +74,7 @@ fn native_panel_tab_contours_are_continuous() {
     let viewport = [w.surface.width() as f32, w.surface.height() as f32];
     let input = RemoteInput::new();
     input.ready();
-    let mut gaps = Vec::new();
+    let mut gaps = Vec::new();let mut coverage_reports=Vec::new();
     for drawer in [false, true] {
         w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(fixture.clone()) });
         if drawer {
@@ -101,20 +112,23 @@ fn native_panel_tab_contours_are_continuous() {
                         let node = crate::squircle::converted(&node, scale.into());
                         let texture = w.window.renderer().unwrap().render_texture(&node, Some(&gtk::graphene::Rect::new(0., 0., strip.width() as f32 * scale, strip.height() as f32 * scale)));
                         let pixels = contour_pixels(&texture);
-                        let gap = pixels.as_chunks::<4>().0.iter().enumerate().find(|(_, pixel)| f32::from(pixel[3]) + 2. < floor);
+                        let edges=selected_reference_edges(&bounds,strip.width(),strip.height(),scale.into());assert_eq!(edges.len(),pixels.len()/4);
+                        let mut gap=None;let(mut edge_count,mut interior_count)=(0,0);let(mut edge_min,mut interior_min)=(255u8,255u8);
+                        for(i,pixel)in pixels.as_chunks::<4>().0.iter().enumerate(){let edge=edges[i];if edge{edge_count+=1;edge_min=edge_min.min(pixel[3]);}else{interior_count+=1;interior_min=interior_min.min(pixel[3]);}let allowed=if edge{floor*0.75}else{floor};if f32::from(pixel[3])+2.<allowed&&gap.is_none(){gap=Some((i,pixel[3],edge,allowed));}}
+
                         let name = format!("{}-{theme:?}-{level:?}-{style:?}-{panel:?}", if drawer { "drawer" } else { "docked" }).to_lowercase();
                         if gap.is_some() || panel == Panel::Adjustments {
                             texture.save_to_png(output.join(format!("{name}.png"))).unwrap();
                         }
-                        if let Some((i, pixel)) = gap {
-                            gaps.push(format!("{name}: alpha {} below {floor:.1} at ({}, {})", pixel[3], i % texture.width() as usize, i / texture.width() as usize));
-                        }
+                        coverage_reports.push(serde_json::json!({"case":name,"reference":"original Cairo selected outline plus feet;2physical-pixel band","floor":floor,"edge_floor":floor*0.75,"tolerance":2,"edge_pixels":edge_count,"interior_pixels":interior_count,"edge_min_alpha":edge_min,"interior_min_alpha":interior_min,"first_gap":gap}));
+                        if let Some((i,alpha,edge,allowed))=gap{gaps.push(format!("{name}: alpha {alpha} below {allowed:.1} at ({}, {}),reference_edge{edge}",i%texture.width() as usize,i/texture.width() as usize));}
                     }
                 }
             }
         }
     }
     input.finish();
+    std::fs::write(output.join("continuity-reference-edges.json"),serde_json::to_vec_pretty(&coverage_reports).unwrap()).unwrap();
     assert!(gaps.is_empty(), "tab contours expose the backdrop:\n{}", gaps.join("\n"));
 }
 
@@ -239,22 +253,24 @@ fn native_panel_tab_lower_contours() {
                                 if in_clip && foot == 1. && ((x as f64 + 0.5) / scale < active_tab.x() as f64
                                     || (x as f64 + 0.5) / scale > (active_tab.x() + active_tab.width()) as f64) {
                                     foot_pixels += 1;
-                                    let face_x = (((x as f64 + 0.5) / scale).clamp(active_tab.x() as f64 + 2., (active_tab.x() + active_tab.width()) as f64 - 2.) * scale).floor() as usize;
-                                    let face_offset = y * stride + face_x * 4;
-                                    for c in 0..4 {
-                                        if before[i + c].abs_diff(before[face_offset + c]) > 2 && mismatches.len() < 24 {
-                                            mismatches.push(serde_json::json!({"kind":"active foot matches face","pixel":[x,y],"channel":c,"observed":before[i+c],"expected":before[face_offset+c]}));
+                                    if !foot_boundary {
+                                        let face_x = (((x as f64 + 0.5) / scale).clamp(active_tab.x() as f64 + 2., (active_tab.x() + active_tab.width()) as f64 - 2.) * scale).floor() as usize;
+                                        let face_offset = y * stride + face_x * 4;
+                                        for c in 0..4 {
+                                            if before[i + c].abs_diff(before[face_offset + c]) > 2 && mismatches.len() < 24 {
+                                                mismatches.push(serde_json::json!({"kind":"active foot matches face","pixel":[x,y],"channel":c,"observed":before[i+c],"expected":before[face_offset+c]}));
+                                            }
                                         }
-                                    }
-                                    let body_x = (((x as f64 + 0.5) / scale - body_bounds.x() as f64)
-                                        .clamp(18., (body_widget.width() - 18).max(18) as f64) * body_scale as f64).floor() as usize;
-                                    let body_offset = body_y * body_scale * body_texture.width() as usize * 4 + body_x * 4;
-                                    let straight = |pixels: &[u8], offset: usize, c: usize| (f64::from(pixels[offset + c]) * 255. / f64::from(pixels[offset + 3].max(1))).round() as u8;
-                                    for c in 0..3 {
-                                        let (foot_rgb, body_rgb) = (straight(&before, i, c), straight(&body_pixels, body_offset, c));
-                                        if level != layer_ui::Transparency::Off { transparent_body_delta = transparent_body_delta.max(foot_rgb.abs_diff(body_rgb)); }
-                                        if level == layer_ui::Transparency::Off && foot_rgb.abs_diff(body_rgb) > 2 && mismatches.len() < 24 {
-                                            mismatches.push(serde_json::json!({"kind":"active foot matches body","pixel":[x,y],"channel":c,"observed":foot_rgb,"expected":body_rgb}));
+                                        let body_x = (((x as f64 + 0.5) / scale - body_bounds.x() as f64)
+                                            .clamp(18., (body_widget.width() - 18).max(18) as f64) * body_scale as f64).floor() as usize;
+                                        let body_offset = body_y * body_scale * body_texture.width() as usize * 4 + body_x * 4;
+                                        let straight = |pixels: &[u8], offset: usize, c: usize| (f64::from(pixels[offset + c]) * 255. / f64::from(pixels[offset + 3].max(1))).round() as u8;
+                                        for c in 0..3 {
+                                            let (foot_rgb, body_rgb) = (straight(&before, i, c), straight(&body_pixels, body_offset, c));
+                                            if level != layer_ui::Transparency::Off { transparent_body_delta = transparent_body_delta.max(foot_rgb.abs_diff(body_rgb)); }
+                                            if level == layer_ui::Transparency::Off && foot_rgb.abs_diff(body_rgb) > 2 && mismatches.len() < 24 {
+                                                mismatches.push(serde_json::json!({"kind":"active foot matches body","pixel":[x,y],"channel":c,"observed":foot_rgb,"expected":body_rgb}));
+                                            }
                                         }
                                     }
                                 }

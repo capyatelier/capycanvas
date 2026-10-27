@@ -245,7 +245,7 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 | GTK Tool Set hover and press animation | 120 | Desktop diagnostic: **117.76 changing-color presents/s**, 116.67–118.08 per case; pooled gap p99 16.646 ms. Reference hardware unmeasured | [GTK tool caption hover](#gtk-tool-caption-hover), 2026-10-26 |
 | Panel or column resize | 120 | Android shared vectors and Web SVG projection are unmeasured on this reference tier. Expanding GTK divider desktop diagnostic: **54.49/s**, p99 41.689 ms; misses the 114 Hz floor. **Desktop diagnostic misses.** GTK GPU joins: 81.59–112.27 changing-geometry presents/s at 1×; 38.96–92.31 at 2×, worst p99 74.986 ms. Reference-tier qualification remains unset. Web Navigator: 30.00–30.64 Chrome surface presents/s; p99 50.00–58.34 ms. Windows GPU desktop diagnostic: 33.82–34.89 observed bounds changes/s beside 166.28–183.76 renderer submissions/s after display correction; fresh displayed FPS and gap-transition performance unqualified | [Web Navigator layout](#web-navigator-layout), 2026-10-19; [GTK Color resize](#gtk-color-panel-resize), 2026-10-10; [GTK column bridge diagnostic](#gtk-column-bridge-diagnostic), 2026-10-25; [GTK Tool Set density](#gtk-tool-set-density), 2026-10-26; [GTK toolbar dividers](#gtk-toolbar-divider-resize), 2026-10-26; [Windows GPU VM column resize](#windows-gpu-vm-column-resize), 2026-10-26 |
 | Windows window resize | 120 | Unqualified; local 60 Hz allocation/startup candidate: 55.97 observed native changes/s and 15.755 ms UI CPU/change, versus baseline brackets of 55.90–57.05/s and 15.662–15.771 ms. Combined-code comparison; displayed motion and reference hardware remain unmeasured | [Windows window resize](#windows-window-resize), [allocation comparison](#windows-allocation-comparison), 2026-10-27 |
-| GTK window resize | 120 | Reference hardware unmeasured. Desktop diagnostic misses: about 54 changing-window presents/s, worst gesture p99 33.48 ms. Cached tabs reduce GSK images by 23% and allocations by 22–25%; no consistent FPS speedup established | [GTK window resize](#gtk-window-resize), 2026-10-27 |
+| GTK window resize | 120 | **Desktop diagnostic misses.** Probe-free SDR 1×: dark 78.41 and light 64.27 changing-window presents/s; worst-gesture p99 25.044 ms. Allocation/size budgets pass in both themes at SDR 1× and physical Cintiq HDR 2×; reference-tier qualification remains open | [GTK window resize](#gtk-window-resize), 2026-10-27 |
 | Pen pressure utility and curve drag | 120 | **Unqualified.** Current GTK desktop panel 119.20–119.40 presents/s, p99 up to 9.207 ms; curve 120.00, p99 up to 8.470 ms; reference tablet unmeasured | [GTK pen pressure utility](#gtk-pen-pressure-utility), 2026-10-10 UTC |
 | Windows tool bubble drag through four neighbours | 120 | Unmeasured on reference hardware; Surface Pro / Adreno X1-85 functional checks do not qualify timing (PresentMon ETW access denied) | [Windows tool bubbles](../development/windows.md#tool-bubbles) |
 | Windows HDR color bubble drag and intensity scrub | 120 | Unmeasured on reference hardware; native input and pixel checks do not qualify presentation timing (PresentMon ETW access denied) | [Windows tool bubbles](../development/windows.md#tool-bubbles) |
@@ -5235,56 +5235,111 @@ Raw commands, source hashes and limits are retained under
 
 ## GTK window resize
 
-The 2026-10-27 desktop diagnostic uses an RTX PRO 6000 Blackwell Max-Q,
-Vulkan driver 615.71.09, GTK 4.24.1 with GSK Vulkan and private Mutter 50.5
-at 1600 × 1000, 120 Hz, scale 1. Both release builds use the default workspace
-and a 1333 × 1000 drawing. Three warmed six-second native corner drags vary
-the window from 1020 × 710 to 1180 × 810. The control is `cdfccb3c4`; the
-candidate is based on `92361972c`, whose intervening GTK change affects a
-different tool's caption. Color management remains enabled.
+Measured 2026-10-27 against `fb691247f` on the RTX PRO 6000 Blackwell
+Max-Q, driver 615.71.09, bundled GTK 4.24.1 with GSK Vulkan and Mutter 50.5.
+GTK color management remains enabled. Each baseline and candidate condition
+has three warmed six-second spans; warmup is excluded. The default workspace
+uses a 1333 × 1000 drawing rather than the tier canvas.
 
-Separate Vulkan probes count complete present-to-present groups during each
-contact. The table gives frame-weighted means. Allocation and free times are
-CPU time inside `vkAllocateMemory` and `vkFreeMemory`.
+SDR uses native corner drags in a private 1600 × 1000 compositor at 120 Hz,
+scale 1. HDR uses the physical Cintiq Pro 27 at 3840 × 2160, 119.880 Hz,
+native scale 2 and BT.2100 mode. The HDR fixture changes only its own isolated
+window's size after paint, without input injection. Monitor metadata, Wayland
+BT.2020/PQ feedback and the actual float16/PASS_THROUGH swapchain verify the
+HDR path. These methods compare resource and paint costs; they do not qualify
+presented frame rates or the reference tier's 120 Hz resize target.
 
-| Theme and build | Images/frame | Allocations/frame | Allocate ms/frame | Free ms/frame | Other image MiB/frame |
+Counts are frame-weighted complete GTK Vulkan present-to-present groups.
+Allocate and free columns give CPU time inside `vkAllocateMemory` and
+`vkFreeMemory`. Counts cover GTK's direct Vulkan calls; the canvas's dynamic
+wgpu entrypoints can bypass the probe. Images include R8 masks. Capy bytes
+exclude only GTK's full-window float16 SDR conversion image; HDR has none.
+
+| Mode / theme | Images/frame, baseline → candidate | Allocations/frame | Allocate CPU ms/frame | Free CPU ms/frame | Capy KiB/frame |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Dark control | 111.97 | 8.45 | 4.21 | 4.69 | 8.97 |
-| Dark cached tabs | 86.66 | 6.61 | 3.67 | 4.24 | 7.66 |
-| Light control | 112.23 | 8.77 | 4.37 | 5.41 | 9.00 |
-| Light cached tabs | 86.66 | 6.56 | 3.58 | 3.99 | 7.65 |
+| SDR 1× dark | 85.98 → 52.00 | 6.43 → 1.00 | 3.30 → 1.37 | 3.25 → 1.28 | 7702.41 → 155.98 |
+| SDR 1× light | 85.78 → 52.00 | 6.35 → 1.00 | 3.44 → 1.34 | 3.35 → 1.04 | 7634.60 → 155.98 |
+| HDR 2× dark | 88.06 → 51.00 | 29.55 → 0.00 | 12.62 → 0.00 | 12.84 → 0.00 | 32792.93 → 615.84 |
+| HDR 2× light | 88.26 → 51.00 | 29.64 → 0.00 | 12.70 → 0.00 | 13.81 → 0.00 | 32908.91 → 615.84 |
 
-Every frame includes one whole-window float16 SDR color-conversion image;
-only that image's bytes are excluded from the last column. New 222 × 36 BGRA8
-images fall from twelve to zero per frame, and float16 images of that size
-fall from 36 to 24. The largest remaining other image is 650.375 KiB in both
-builds. Capy images remain about 85.7/frame, total other images exceed 1 MiB
-and individual images exceed 512 KiB. These resource budgets remain unmet.
+Paint quantiles pool changed-dimension frames across the three spans. Wall
+and UI-thread CPU time bracket GTK's before/after-paint phase. The shared
+machine and Vulkan probe contribute timing variation.
 
-Both themes' compositor and window captures match the control byte for byte.
-The tab-mask matrix passes 1,296 comparisons across fractional placements,
-scales, transparency, SDR/PQ/linear color states and float targets.
-
-Presentation runs disable the probe and bracket each candidate with controls.
-Rates below pool the three moving-only gestures; p99 is the worst gesture's
-presentation interval. Full-contact counts, onset and longest gaps remain in
-the raw reports.
-
-| Theme and run | Control before fps | Cached tabs fps | Control after fps | Cached tabs p99 ms |
+| Mode / theme | Paint wall p50 ms, baseline → candidate | Wall p95 ms | Thread CPU p50 ms | CPU p95 ms |
 | --- | ---: | ---: | ---: | ---: |
-| Dark | 55.49 | 54.17 | 37.26 | 33.26 |
-| Dark repeat | 50.73 | 53.59 | 33.79 | 33.33 |
-| Light | 43.46 | 54.60 | 45.06 | 33.48 |
+| SDR 1× dark | 10.34 → 6.68 | 14.14 → 8.48 | 10.13 → 6.52 | 13.75 → 8.31 |
+| SDR 1× light | 10.50 → 6.49 | 14.33 → 8.23 | 10.26 → 6.32 | 13.94 → 8.03 |
+| HDR 2× dark | 30.99 → 3.94 | 37.33 → 4.72 | 30.34 → 3.85 | 36.59 → 4.61 |
+| HDR 2× light | 32.02 → 4.00 | 37.11 → 4.64 | 31.38 → 3.91 | 36.27 → 4.52 |
 
-Resource counts and allocation CPU time improve consistently. The dark runs
-do not establish a consistent FPS gain, and the controls show substantial
-order-dependent variation on the shared GPU. Resize still misses both the
-114 fps floor and the 16.7 ms p99 limit. Pan remains about 120 fps in both
-themes. Raw captures, per-frame
-probe records, source hashes and comparisons are under
-`artifacts/gtk-window-resize-inventory/` and
-`artifacts/gtk-window-resize-optimization/`. This desktop fixture does not
-qualify reference-tablet performance.
+Every measured candidate frame meets the allocation budget: one in SDR, solely
+the full-window conversion, and zero allocations or frees in HDR. Largest Capy
+images are 19.94 KiB in SDR and
+78.84 KiB in HDR. Total Capy images peak at
+155.98 KiB/frame and 615.84 KiB/frame respectively.
+No Capy image reaches 512 KiB and totals remain below 1 MiB. About 51 small
+Capy images/frame remain, above the earlier 0–2 image goal. Fixed corner paths,
+size-independent narrow-shadow sources and native tab color fills eliminate
+the panel-sized working images. Four cached corner orientations retain their
+identity through resize; rotation would save storage without reducing warm
+frame draws or allocations.
+
+Whole-workspace pixel checks pass in both themes at scales 1 and 2: flat
+interiors differ by at most one byte, independently identified narrow edges
+by at most 15 bytes, and linear float samples remain finite. The tab matrix
+passes 2,592 comparisons across color states, fractional placement and float
+targets; 1,296 independent native shadow comparisons retain the one-byte
+tolerance. Small contour antialiasing differences are accepted.
+
+Independent scale-2 light-theme monitor captures differ by 17–20 bytes on 17 pixels in two one-pixel-high
+contour runs; exactly flat reference neighborhoods stay within one byte and
+alpha is unchanged.
+
+Source/executable hashes, commands, full-frame samples, allocation wall time,
+physical HDR verification and pixel comparisons are under
+`artifacts/gtk-resource-budget-20261027/`. Probe-free presentation results follow.
+
+### Probe-free presentations
+
+SDR runs bracket the candidate with the immutable `fb691247f` control in each
+theme: control, candidate, control. The Vulkan probe is disabled throughout.
+Each row pools three warmed six-second native corner drags, counting only
+completed GTK presentations whose window dimensions changed. Rate pools the
+intervals between those presentations; p99 is the worst gesture's gap.
+
+| SDR 1× theme / bracket | Changing-window presents/s | Gesture range | Worst-gesture p99 ms |
+| --- | ---: | ---: | ---: |
+| Dark control before | 52.20 | 40.77–58.59 | 33.437 |
+| Dark candidate | 78.41 | 77.15–80.06 | 25.001 |
+| Dark control after | 51.89 | 39.73–58.19 | 33.393 |
+| Light control before | 57.11 | 54.88–58.93 | 33.298 |
+| Light candidate | 64.27 | 59.84–69.52 | 25.044 |
+| Light control after | 57.05 | 55.20–58.60 | 33.344 |
+
+Both themes improve against both brackets, but miss the 114 presents/s floor
+and 16.7 ms p99 limit. Controls also miss. These workstation motions use the
+default drawing and do not qualify the reference-tier canvas.
+
+HDR uses three warmed six-second spans on the physical Cintiq, probe off.
+This is programmatic resizing after paint, **not an interactive drag**.
+Completed changing-window timings are retained until presentation feedback
+completes; rare maximum gaps remain in the report.
+
+| HDR 2× candidate theme | Changing-window presents/s | Gesture range | Worst-gesture p99 ms | Maximum gap ms |
+| --- | ---: | ---: | ---: | ---: |
+| Dark | 118.76 | 118.37–119.38 | 8.387 | 58.401 |
+| Light | 115.28 | 110.86–117.54 | 16.701 | 61.988 |
+
+HDR light has one gesture at 110.86 presents/s and a worst p99 of 16.701 ms;
+it does not pass the strict all-gesture limits. All retained timing records
+complete, with none missing.
+
+The size/node inventory attributes the remaining 51 small images to 41 glyph
+and header-mask images plus ten native compact-shadow images. The saved
+normal and named resize snapshots contain no `group_bounds` white masks.
+That legacy coverage machinery only preserves former fractional pixel
+sampling; removing it is a simplification proposal, without a measured FPS gain.
 
 ## Windows window resize
 

@@ -120,9 +120,11 @@ overflow picking therefore cover every painted pixel.
 `squircle::Squircles` wraps the workspace window content and redraws each
 circular rounded clip, uniform border or outline, and outset shadow as a
 squircle with the circle radius divided by the fit. Undesigned toolkit radii
-keep their former visual rounding the same way. Masks are rasterized once per
-device-pixel geometry and reused as GPU textures; unchanged render nodes,
-including shadow-wrapped subtrees, are reused between frames. Conversion descends
+keep their former visual rounding the same way. Large panel clips use four
+fixed corner paths and rectangular body/edge bands. Corner paths retain their
+identity as panel height changes; internal boundaries meet on the device-pixel
+grid. Small controls and SVG details retain cached masks. Native color nodes
+keep their original color states. Conversion descends
 through bridge masks, color matrices, crossfades, blends and blur nodes. Both
 children of a mask or transition retain the same corner and shadow conversion
 as an unwrapped panel, including when a connected corner reaches zero radius.
@@ -130,9 +132,18 @@ Blurred outset shadows never reach GTK's analytic box-shadow shader. In GTK
 4.22 it returns NaN near rounded corners for some radius-to-blur ratios on
 NVIDIA, including the 9.72px drawer radius with its 24px blur. HDR windows
 render in float, so Mutter shows those pixels as black boxes; SDR loses the
-shadow there. Each shadow style (corner radii, blur, offset and scale) is
-instead blurred once on the CPU and drawn as nine cached slices. Shapes too small for the slices use a GSK blur
-node.
+shadow there. Each large shadow style (corner radii, blur, offset and scale) is
+blurred once on the CPU and drawn as nine cached slices. Long narrow toolbars
+use GTK's blur on a fixed short source: two end caps and a repeating one-pixel
+middle strip cover the changing long dimension. Their joins also follow the
+device-pixel grid. Shapes too small for either decomposition use a GSK blur node.
+
+Native tab surfaces paint the selected region and its even-odd background
+complement with color fills. Four bounded contour pieces cover the upper corners
+and concave feet; adjacent upper corners share one piece when their device-pixel
+bounds meet. Hover stays within the background regions. Color and HDR values
+remain native GTK inputs; antialiased contour pixels may differ from a masked
+color interpolation.
 `squircle::Popover` applies the same conversion to the brush-size preview.
 Subtrees that must stay round are drawn through `squircle::append_round`.
 Rust-drawn rounded rectangles in the workspace multiply design radii by
