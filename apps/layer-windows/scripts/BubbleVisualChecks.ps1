@@ -132,6 +132,7 @@ function Invoke-BubbleHdrChecks {
         Assert-BubbleHdrState "$pointer-intensity-outside-clamp" $before -Paint
     }
     $checks.Add('hdr-mouse-pen-touch-commit-cancel-hold-double-tap-reset')
+    if($HdrContactsOnly){return}
     Set-BubbleHdrValue $id 0;$before=Bubble-HdrState
     $element=Control "bubble-intensity-$id";Focus-Keyboard $element
     [CapyRowPointer]::Key([uint32]$review.Id,0x27);Wait-Until {[Math]::Abs((Packet $id).color.intensity.stops-.1) -lt .005} 'HDR keyboard increment was not0.1EV'

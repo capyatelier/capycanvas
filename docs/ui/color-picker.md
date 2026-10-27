@@ -47,7 +47,9 @@ the intensity arc follow the canvas tap bindings: by default two fingers undo
 and three redo. Hosts forward these touches through `UiInput::ColorTouch`;
 shared Rust recognizes the tap with the canvas tap rules, and its second finger
 cancels a pick the first finger started. Hosts bracket each press with
-`UiAction::ColorContact`. A secondary press or the keyboard menu key in the same
+`UiAction::ColorContact`. Losing a wheel's pointer capture cancels its pick;
+only a release commits it. Native child controls retain their own completion rules.
+A secondary press or the keyboard menu key in the same
 area opens **Undo color change** and **Redo color change**
 (`ContextTarget::ColorWheel`); outside it, the panel keeps its customization
 menu. Shared code lives in [`color/history.rs`](../../crates/layer-ui/src/color/history.rs)

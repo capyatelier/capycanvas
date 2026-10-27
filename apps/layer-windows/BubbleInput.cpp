@@ -284,13 +284,14 @@ void WorkspaceBubbles::Impl::attach(UIElement const& root,std::function<void()> 
     root.AddHandler(UIElement::PointerCanceledEvent(),box_value(PointerEventHandler([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock();self&&!self->releasing)self->up(e,true);})),true);
     root.AddHandler(UIElement::PointerCaptureLostEvent(),box_value(PointerEventHandler([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock()){
         if(self->releasing)return;
-        auto p=e.GetCurrentPoint(nullptr);if(p.Properties().IsCanceled())self->up(e,true);
-        else if(!p.IsInContact())self->up(e,false);
-        else if(e.OriginalSource()==self->inputRoot){
+        auto p=e.GetCurrentPoint(nullptr);
+        if(e.OriginalSource()==self->inputRoot){
             bool contact=self->contact&&self->contact->fingers.contains(p.PointerId())&&self->contact->mode!=L"native";
             bool candidate=self->candidate&&self->candidate->moving&&self->candidate->pointer.PointerId()==p.PointerId();
-            if(contact||candidate)self->cancel();
+            if(contact||candidate){self->cancel();return;}
         }
+        if(p.Properties().IsCanceled())self->up(e,true);
+        else if(!p.IsInContact())self->up(e,false);
     }})),true);
     root.as<FrameworkElement>().Unloaded([weak](auto&&,auto&&){if(auto self=weak.lock())self->cancel();});
     data->takeBubble=[weak](J item,Point at,std::function<bool()> valid,std::function<void()> done){auto self=weak.lock();if(!self){done();return;}

@@ -1810,6 +1810,11 @@ with dark and light variants, for intensity input, cancellation, color-context
 changes and composed plate, ramp, bead and palette checks. The fixture also checks
 that repeated input keeps an expanded range and that triangle fields stay inside
 their shared shape in both the docked Color panel and the bubble.
+Use `-HdrContactsOnly` with an explicit dark or light variant for the existing
+mouse, pen and touch intensity and wheel commit/cancel checks, hold rollback,
+double-tap reset and outside clamp cancellation. This scope stops before the
+keyboard focus and composed-pixel checks and preserves exact color and history
+assertions.
 Use `-HdrRetirementOnly` with either depth and theme for the focused slot, mask
 and drawing-switch checks. Drawing activation must clear the native status;
 both the SDR destination and returning HDR drawing must paint and undo to their

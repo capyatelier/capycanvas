@@ -293,11 +293,9 @@ struct View:std::enable_shared_from_this<View>{
         root.PointerMoved([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock()){
             if(self->pointer==e.Pointer().PointerId()){self->pick(e.GetCurrentPoint(self->wheel).Position());e.Handled(true);}
         }});
-        root.PointerReleased([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock()){
-            if(self->pointer==e.Pointer().PointerId()){self->cancel();e.Handled(true);}
+        PointerGesture::OnCompleted(root,[weak](PointerRoutedEventArgs const& e,bool cancel){if(auto self=weak.lock();self&&self->pointer==e.Pointer().PointerId()){
+            self->finishPick(cancel?L"cancel":L"up");self->root.ReleasePointerCaptures();e.Handled(true);
         }});
-        root.PointerCanceled([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock())if(self->pointer==e.Pointer().PointerId()){self->finishPick(L"cancel");self->root.ReleasePointerCaptures();}});
-        root.PointerCaptureLost([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock())if(self->pointer==e.Pointer().PointerId())self->finishPick(L"up");});
         for(auto const& entry:{std::pair{UIElement::PointerPressedEvent(),L"down"},{UIElement::PointerMovedEvent(),L"move"},{UIElement::PointerReleasedEvent(),L"up"},
             {UIElement::PointerCanceledEvent(),L"cancel"},{UIElement::PointerCaptureLostEvent(),L"capture_lost"}}){
             auto phase=entry.second;
