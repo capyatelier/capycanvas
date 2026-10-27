@@ -184,8 +184,8 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             data->dispatch(O({{L"type",S(L"complete_request")},{L"id",N(id)},{L"error",JsonValue::CreateNullValue()}}));
         }
     }
-    void removeGroup(Group const& group){
-        uint32_t index;if(root.Children().IndexOf(group.frame,index))root.Children().RemoveAt(index);
+    void removeGroup(Group const& group,std::shared_ptr<void> owner={}){
+        uint32_t index=0;if(!gestures->DeferRemoval(group.frame,std::move(owner))&&root.Children().IndexOf(group.frame,index))root.Children().RemoveAt(index);
         if(root.Children().IndexOf(group.shadow.Root(),index))root.Children().RemoveAt(index);
     }
     void build(Group& group,J const& geometry,J const& panel){
@@ -482,8 +482,9 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         }
         for(auto it=groups.begin();it!=groups.end();){
             if(std::find(visible.begin(),visible.end(),it->first)==visible.end()){
-                removeGroup(it->second);
-                it=groups.erase(it);
+                auto current=it++;
+                auto retired=std::make_shared<decltype(groups)::node_type>(groups.extract(current));
+                removeGroup(retired->mapped(),retired);
             }else ++it;
         }
         if(!flag(model,L"chrome_hidden"))for(auto value:array(layout,L"dividers")){
@@ -494,7 +495,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         }
         for(auto it=handles.begin();it!=handles.end();){
             if(std::find(handleIds.begin(),handleIds.end(),it->first)==handleIds.end()){
-                uint32_t index;if(root.Children().IndexOf(it->second,index))root.Children().RemoveAt(index);
+                uint32_t index=0;if(!gestures->DeferRemoval(it->second)&&root.Children().IndexOf(it->second,index))root.Children().RemoveAt(index);
                 it=handles.erase(it);
             }else ++it;
         }

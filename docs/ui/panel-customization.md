@@ -605,6 +605,11 @@ to the same shared action. Cancellation and intervening chrome contacts retire
 its tap candidate. Escape and blur retire pending and captured edge gestures.
 Cancellation releases child captures so canceled presses cannot activate controls.
 Cancellation from a retired child cannot end the workspace's current capture.
+When resizing removes the original native panel or closed strip, Windows keeps
+its controls and their owners attached until the contact ends. Only their
+composition visuals are hidden; changing XAML visibility or opacity can retire
+the native contact. A temporary focus surface keeps the hidden controls out of
+navigation. Release, cancellation and unload remove these retained controls.
 Layer rows wait for the asynchronous edge decision before their own scrolling,
 swipe or reorder can claim the contact; an admitted row hold retires the pending
 edge first. Held tiles use the shared `tears_bubble` flag to retain immediate

@@ -125,11 +125,11 @@ struct Column:std::enable_shared_from_this<Column>{
             }
         }
         for(auto it=buttons.begin();it!=buttons.end();)if(!current.contains(it->first)){
-            uint32_t index;if(icons.Children().IndexOf(it->second,index))icons.Children().RemoveAt(index);paintIcons.erase(it->first);it=buttons.erase(it);
+            uint32_t index=0;if(!gestures->DeferRemoval(it->second,shared_from_this())&&icons.Children().IndexOf(it->second,index))icons.Children().RemoveAt(index);paintIcons.erase(it->first);it=buttons.erase(it);
         }else ++it;
         for(auto const& [key,updates]:paintIcons)for(auto const& update:updates)update();
         for(auto it=dividers.begin();it!=dividers.end();)if(!currentDividers.contains(it->first)){
-            uint32_t index;if(icons.Children().IndexOf(it->second,index))icons.Children().RemoveAt(index);it=dividers.erase(it);
+            uint32_t index=0;if(!gestures->DeferRemoval(it->second,shared_from_this())&&icons.Children().IndexOf(it->second,index))icons.Children().RemoveAt(index);it=dividers.erase(it);
         }else ++it;
         icons.Width(num(content,L"width"));icons.Height(bottom);
         reported=offset;
@@ -158,7 +158,7 @@ struct Column:std::enable_shared_from_this<Column>{
         if(!gpu)appendGlass(regions,background,reference,{corners[0],corners[1],corners[2],corners[3]},true);
     }
     void remove(){
-        uint32_t index;if(workspace.Children().IndexOf(background,index))workspace.Children().RemoveAt(index);
+        uint32_t index=0;if(!gestures->DeferRemoval(background,shared_from_this())&&workspace.Children().IndexOf(background,index))workspace.Children().RemoveAt(index);
     }
 };
 }

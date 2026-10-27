@@ -5,6 +5,8 @@
 #include "WorkspaceTabDrag.h"
 #include "WorkspaceGeometry.h"
 #include "NativeMenus.h"
+#include <winrt/Microsoft.UI.Composition.h>
+#include <winrt/Microsoft.UI.Xaml.Hosting.h>
 #include <chrono>
 #include <optional>
 
@@ -52,6 +54,9 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
         std::optional<Point> inputOffset;
         std::vector<weak_ref<UIElement>> path;
         std::vector<std::pair<weak_ref<UIElement>,ManipulationModes>> scrolls;
+        std::vector<std::pair<weak_ref<Panel>,UIElement>> retired;
+        std::vector<std::shared_ptr<void>> owners;
+        ContentControl shield{nullptr};
     };
     std::optional<Edge> edge;
     uint64_t edgeSerial=0;
@@ -78,9 +83,13 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
         if(lastRelease.Size())value.Insert(L"last_release",lastRelease);
         if(lastCancel.Size())value.Insert(L"last_cancel",lastCancel);
         if(lastCaptureLoss.Size())value.Insert(L"last_capture_loss",lastCaptureLoss);
-        if(edge)value.Insert(L"edge",O({{L"contact",S(edge->contactClass)},{L"device",S(edge->device)},{L"vertical",B(edge->vertical)},
+        if(edge){
+            auto edgeSource=edge->path.empty()?FrameworkElement{nullptr}:edge->path.front().get().try_as<FrameworkElement>();
+            value.Insert(L"edge",O({{L"contact",S(edge->contactClass)},{L"device",S(edge->device)},{L"vertical",B(edge->vertical)},
+            {L"source_loaded",B(edgeSource&&edgeSource.IsLoaded())},{L"retired",N(double(edge->retired.size()))},
             {L"position",point(edge->at)},{L"input_mapped",B(edge->inputOffset.has_value())},
             {L"hold",B(edge->hold)},{L"claimed",B(edge->claimed)},{L"captured",B(PointerGesture::Captured(root,edge->pointer))}}));
+        }
         if(lastEdge.Size())value.Insert(L"last_edge",lastEdge);
         if(lastEdgeReply.Size())value.Insert(L"edge_reply",lastEdgeReply);
         if(lastEdgeInput.Size())value.Insert(L"edge_input",lastEdgeInput);
@@ -245,10 +254,11 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
         if(!inputSource||inputMoved.value)return;
         inputMoved=inputSource.PointerMoved([weak=weak_from_this()](auto&&,NativeInput::PointerEventArgs const& e){
             if(auto self=weak.lock();self&&self->edge&&self->edge->inputOffset){
-                auto p=e.CurrentPoint();if(p.PointerId()!=self->edge->pointer)return;
-                if(self->trace){self->lastEdgeInput=O({{L"position",point(p.Position())},{L"time",N(double(p.Timestamp()*1000))},
+                auto p=e.CurrentPoint();
+                if(self->trace){self->lastEdgeInput=O({{L"pointer",N(p.PointerId())},{L"device",S(deviceName(p.PointerDeviceType()))},
+                    {L"position",point(p.Position())},{L"time",N(double(p.Timestamp()*1000))},
                     {L"in_contact",B(p.IsInContact())},{L"canceled",B(p.Properties().IsCanceled())}});self->evidence();}
-                if(!p.IsInContact()||p.Properties().IsCanceled())return;
+                if(p.PointerId()!=self->edge->pointer||!p.IsInContact()||p.Properties().IsCanceled())return;
                 auto at=p.Position(),offset=*self->edge->inputOffset;
                 self->edgeMotion(p,{at.X+offset.X,at.Y+offset.Y});
             }
@@ -258,6 +268,26 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
         auto time=p.Timestamp()*1000;if(edge->time>=time)return;
         edge->at=at;edge->time=time;edgeSend(L"move");
         evidence();
+    }
+    bool deferRemoval(UIElement const& element,std::shared_ptr<void> retainedOwner){
+        if(!edge||std::none_of(edge->path.begin(),edge->path.end(),[&](auto const& weak){return weak.get()==element;}))return false;
+        auto parent=VisualTreeHelper::GetParent(element).try_as<Panel>();if(!parent)return false;
+        if(!edge->shield){
+            ContentControl shield;Grid hit;hit.Background(CapyUi::clear());shield.Content(hit);
+            shield.HorizontalContentAlignment(HorizontalAlignment::Stretch);shield.VerticalContentAlignment(VerticalAlignment::Stretch);
+            shield.Width(root.ActualWidth());shield.Height(root.ActualHeight());
+            shield.IsTabStop(true);shield.UseSystemFocusVisuals(false);Canvas::SetZIndex(shield,20000);
+            AutomationProperties::SetAccessibilityView(shield,Microsoft::UI::Xaml::Automation::Peers::AccessibilityView::Raw);
+            root.Children().Append(shield);edge->shield=shield;AutomationProperties::SetName(shield,AutomationProperties::GetName(root));shield.Focus(FocusState::Programmatic);
+        }
+        std::function<void(DependencyObject const&)> hideFromNavigation=[&](DependencyObject const& node){
+            if(auto control=node.try_as<Control>())control.IsTabStop(false);
+            AutomationProperties::SetAccessibilityView(node,Microsoft::UI::Xaml::Automation::Peers::AccessibilityView::Raw);
+            for(int n=0;n<VisualTreeHelper::GetChildrenCount(node);++n)hideFromNavigation(VisualTreeHelper::GetChild(node,n));
+        };
+        hideFromNavigation(element);auto visual=Microsoft::UI::Xaml::Hosting::ElementCompositionPreview::GetElementVisual(element);
+        visual.StartAnimation(L"Opacity",visual.Compositor().CreateExpressionAnimation(L"0"));edge->retired.emplace_back(make_weak(parent),element);
+        if(retainedOwner)edge->owners.push_back(std::move(retainedOwner));return true;
     }
     void edgeDown(PointerRoutedEventArgs const& e){
         auto p=e.GetCurrentPoint(root);
@@ -304,8 +334,11 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
         if(trace)lastEdge=O({{L"phase",S(phase)},{L"reason",S(reason)},{L"contact",S(edge->contactClass)},{L"device",S(edge->device)},{L"vertical",B(edge->vertical)},{L"claimed",B(edge->claimed)},
             {L"captured",B(PointerGesture::Captured(root,edge->pointer))}});
         bool claimed=edge->claimed;auto released=edge->contact;
-        edge.reset();++edgeSerial;
+        auto retired=std::move(edge->retired);auto owners=std::move(edge->owners);auto shield=edge->shield;edge.reset();++edgeSerial;
         if(claimed){releasing=true;root.ReleasePointerCapture(released);releasing=false;cursor();deferClick();}
+        for(auto const& [weak,element]:retired)if(auto parent=weak.get()){uint32_t at=0;if(parent.Children().IndexOf(element,at))parent.Children().RemoveAt(at);}
+        uint32_t at=0;if(shield&&root.Children().IndexOf(shield,at))root.Children().RemoveAt(at);
+        owners.clear();
         evidence();
     }
     void edgeDoublePress(DoubleTappedRoutedEventArgs const& e){
@@ -467,6 +500,7 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
         if(device!=NativeInput::PointerDeviceType::Mouse)context(object(sourceTag,L"workspace_context"),position,true);
     }
     void down(PointerRoutedEventArgs const& e){
+        if(edge&&(edge->claimed||edge->shield))return;
         if(pointer){if(*pointer!=e.Pointer().PointerId())cancel(L"additional_contact");return;}
         if(dragging||data->externalPopup||data->popupCount)return;
         ignoreClick=false;rejectedPointer.reset();
@@ -742,3 +776,4 @@ void WorkspaceGestures::Present(J const& drag){impl->present(drag);}
 void WorkspaceGestures::ChromeChanged(){impl->chrome(O({{L"kind",S(L"refresh")}}));}
 bool WorkspaceGestures::Cancel(){return impl->cancelAll();}
 bool WorkspaceGestures::SuppressClick()const{return impl->ignoreClick;}
+bool WorkspaceGestures::DeferRemoval(UIElement const& element,std::shared_ptr<void> owner){return impl->deferRemoval(element,std::move(owner));}
