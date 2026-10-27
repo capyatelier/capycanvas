@@ -600,12 +600,13 @@ claiming the native event and canceling its pending resize contact.
 Canvas touch uses native double-tap timing and distance, forwarding the reset
 to the same shared action. Cancellation and intervening chrome contacts retire
 its tap candidate. Escape and blur retire pending and captured edge gestures.
-Canceled source presses suppress native clicks through release.
+Cancellation releases child captures so canceled presses cannot activate controls.
 Cancellation from a retired child cannot end the workspace's current capture.
 Layer rows wait for the asynchronous edge decision before their own scrolling,
 swipe or reorder can claim the contact; an admitted row hold retires the pending
 edge first. Held tiles use the shared `tears_bubble` flag to retain immediate
 bubble pulls and let other tiles yield until their hold arms.
+Tool Set choices use the shared bubble-source query to retain immediate pulls.
 Apple classifies measured workspace sources and native controls, and asks
 `capy_apple_edge_reach` for admission before native scrolling or pickup begins.
 AppKit and UIKit forward contacts through `EdgeReachCoordinator` to the serial

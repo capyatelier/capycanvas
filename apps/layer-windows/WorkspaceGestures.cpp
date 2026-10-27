@@ -140,6 +140,9 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
         auto parent=VisualTreeHelper::GetParent(node);
         return parent&&(parent.try_as<Primitives::ScrollPresenter>()||parent.try_as<ScrollContentPresenter>());
     }
+    static void releaseCaptures(std::vector<weak_ref<UIElement>> const& path,Input::Pointer const& contact){
+        for(auto const& weak:path)if(auto element=weak.get();element&&PointerGesture::Captured(element,contact.PointerId()))element.ReleasePointerCapture(contact);
+    }
     static hstring swipeOwner(DependencyObject const& node,J const& tag,uint32_t id){
         if(tag&&tag.HasKey(L"edge_contact"))return str(tag,L"edge_contact");
         if(node.try_as<TextBox>()||node.try_as<RichEditBox>()||node.try_as<PasswordBox>()||node.try_as<Primitives::RangeBase>()||node.try_as<Primitives::Thumb>())return L"input";
@@ -190,7 +193,7 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
         ignoreClick=true;
         releasing=true;
         data->pointerCancels.Cancel(edge->pointer);
-        for(auto const& weak:edge->path)if(auto element=weak.get();element&&PointerGesture::Captured(element,edge->pointer))element.ReleasePointerCapture(edge->contact);
+        releaseCaptures(edge->path,edge->contact);
         bool captured=root.CapturePointer(edge->contact);
         releasing=false;
         if(!captured){edgeEnd(L"cancel",L"capture_failed");return;}
@@ -342,13 +345,16 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
         // Dismissing a menu alone has no pointer click to suppress. In
         // particular, a menu action may be followed immediately by UIA Invoke.
         if(pointer||dragging)ignoreClick=suppressClick;
-        if(pointer&&suppressClick)rejectedPointer=pointer;
+        if(contact&&suppressClick){releasing=true;releaseCaptures(pressedPath,contact);releasing=false;}
         if(dragging)send(L"cancel");
         clear();return true;
     }
     bool cancelAll(hstring reason=L"cancel"){
         bool canceled=cancel(reason);
-        if(edge){edgeEnd(L"cancel");canceled=true;}
+        if(edge){
+            releasing=true;releaseCaptures(edge->path,edge->contact);releasing=false;
+            edgeEnd(L"cancel",reason.c_str());canceled=true;
+        }
         return canceled;
     }
     void dropQuery(){
@@ -387,7 +393,7 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
         // a child Button's capture to the stable Canvas before reparenting.
         releasing=true;
         if(auto element=source.get())element.CancelDirectManipulations();
-        for(auto const& weak:pressedPath)if(auto element=weak.get();element&&owns(element))element.ReleasePointerCapture(contact);
+        releaseCaptures(pressedPath,contact);
         claimScrolling();
         bool captured=root.CapturePointer(contact);
         releasing=false;
@@ -494,9 +500,9 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
     void up(PointerRoutedEventArgs const& e){
         if(rejectedPointer==e.Pointer().PointerId()){rejectedPointer.reset();deferClick();return;}
         if(!pointer||*pointer!=e.Pointer().PointerId())return;
-        if(!ownsFocus()){cancel(L"focus_lost");rejectedPointer.reset();deferClick();e.Handled(true);return;}
+        if(!ownsFocus()){cancel(L"focus_lost");e.Handled(true);return;}
         auto p=e.GetCurrentPoint(root);
-        if(p.Properties().IsCanceled()){cancel(L"pointer_canceled");rejectedPointer.reset();deferClick();e.Handled(true);return;}
+        if(p.Properties().IsCanceled()){cancel(L"pointer_canceled");e.Handled(true);return;}
         if(needsHold&&!held&&!dragging&&crossed()){cancel(L"motion_before_hold",false);return;}
         if(recognizing){recognizing=false;recognizer.ProcessUpEvent(p);}
         if(trace)lastRelease=O({{L"generation",N(double(generation))},{L"source",object(action,L"item")},
@@ -651,7 +657,7 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
         root.SizeChanged([weak](auto&&,auto&&){if(auto self=weak.lock())self->chrome(O({{L"kind",S(L"refresh")}}));});
         ShortcutKeys(root,[weak](auto&&,KeyRoutedEventArgs const& e){if(auto self=weak.lock()){
             if(e.Key()==Windows::System::VirtualKey::Escape&&self->cancelAll(L"escape"))e.Handled(true);
-            else if(!self->pointer&&!self->rejectedPointer)self->ignoreClick=false;
+            else if(!self->pointer){self->ignoreClick=false;self->rejectedPointer.reset();}
         }});
         root.Unloaded([weak](auto&&,auto&&){if(auto self=weak.lock())self->cancelAll();});
     }

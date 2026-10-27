@@ -82,7 +82,11 @@ struct ToolSetView : std::enable_shared_from_this<ToolSetView> {
         for(uint32_t i=0;i<items.Size();i++){
             auto item=items.GetObjectAt(i);auto action=object(item,L"action");TextBlock title;
             auto pick=button(data,str(item,L"label"),[weak,action]{if(auto self=weak.lock())self->data->dispatch(action);});
-            pick.Tag(O({{L"bubble_choice",action}}));auto shell=explainable(pick);pick.HorizontalContentAlignment(HorizontalAlignment::Stretch);
+            auto tag=O({{L"bubble_choice",action}});
+            auto request=to_string(O({{L"type",S(L"choice")},{L"action",action}}).Stringify());
+            NativeString grab(capy_bubble_ui(data->localization.get(),request.c_str()),capy_string_free);
+            if(grab){auto value=JsonValue::Parse(to_hstring(grab.get()));if(value.ValueType()==JsonValueType::Object&&str(value.GetObject(),L"kind")==L"variant")tag.Insert(L"edge_contact",S(L"input"));}
+            pick.Tag(tag);auto shell=explainable(pick);pick.HorizontalContentAlignment(HorizontalAlignment::Stretch);
             pick.Padding({17,5,17,5});
             actionTooltip(data,shell,pick,[action,owner=make_weak(pick)]{auto pick=owner.get();return pick&&AutomationProperties::GetHelpText(pick).empty()?action:J{};});
             AutomationProperties::SetAutomationId(pick,(group?L"tool-group-":L"tool-subtool-")+to_hstring(i));

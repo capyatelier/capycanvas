@@ -1749,6 +1749,10 @@ column's close-and-outward-swipe sequence without repeating the other checks.
 `-LayerRowOnly -Device touch` isolates the real layer-row arbitration case.
 `-CancelOnly -Device pen|touch` checks native pointer cancellation during
 pending and claimed edge contacts, including exact rollback and released capture.
+`-EdgeEscapeOnly -Device touch -Theme dark|light` checks that an actual selected
+Tool Set subtool within the column reach keeps its immediate bubble contact.
+Escape during pending and claimed edge contacts must preserve the brush, tool
+and layout after release, and a subsequent contact must still claim the edge.
 Use `exercise-expansion.ps1 -ResizeOnly -Device mouse|pen|touch -Theme dark|light`
 for floating left/right/bottom/corner reach, native mouse hover and drag cursors,
 toolbar-band lanes, column and stack collapse/reversal, adjacent toolbar widths

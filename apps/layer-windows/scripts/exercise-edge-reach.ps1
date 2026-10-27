@@ -1,4 +1,4 @@
-﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('mouse','pen','touch')][string]$Device='mouse',[switch]$ColumnResetOnly,[switch]$CanvasResetOnly,[switch]$ClosedStripOnly,[switch]$LayerRowOnly,[switch]$CancelOnly,[ValidateSet('dark','light')][string]$Theme)
+﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('mouse','pen','touch')][string]$Device='mouse',[switch]$ColumnResetOnly,[switch]$CanvasResetOnly,[switch]$ClosedStripOnly,[switch]$LayerRowOnly,[switch]$CancelOnly,[switch]$EdgeEscapeOnly,[ValidateSet('dark','light')][string]$Theme)
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 $CapyPopups=$true
@@ -51,19 +51,31 @@ function Reach-Point([object[]]$Candidates,[scriptblock]$Accept){
 function Width([int]$Group){((Layout).groups|Where-Object id -eq $Group|Select-Object -First 1).bounds.width}
 function WindowCommand([string]$Id){& (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Window';Invoke $Id;Wait-Until {$null -eq (Find $Id)} 'Workspace menu did not close'}
 function Check-EdgeEscape($From){
-    $before=(Model).state.workspace.layout|ConvertTo-Json -Depth 90 -Compress
+    $state={ $m=Model;@{brush=$m.state.brush;tool_set=$m.state.tool_set;workspace=$m.state.workspace.layout}|ConvertTo-Json -Depth 95 -Compress }
+    $beforeState=& $state
     $point=Screen $From.x $From.y
+    $records=[Collections.Generic.List[object]]::new()
+    $observe={param($stage)$m=Model;$input=Input-Trace $point.x $point.y;$records.Add(@{stage=$stage;gesture=Gesture;input=@{point=$input.point;foreground=$input.foreground;owned_window=$input.owned_window;hit=@($input.hit|Select-Object id,name,type,process);focus=@($input.focus|Select-Object id,name,type,process)};brush=$m.state.brush;tool_set=$m.state.tool_set;workspace=$m.state.workspace.layout})}
     try{
+        & $observe 'before'
         [CapyRowPointer]::Down($Device,$point.x,$point.y)
         Wait-Until {$null -ne (Gesture).edge -and !(Gesture).edge.claimed} 'The pending edge contact was not published'
-        [CapyRowPointer]::Key(0x1b);[CapyRowPointer]::Up();Settled
-        if(((Model).state.workspace.layout|ConvertTo-Json -Depth 90 -Compress) -cne $before){throw 'Escape changed the pending edge layout'}
+        & $observe 'down'
+        [CapyRowPointer]::Key(0x1b);& $observe 'after-escape'
+        [CapyRowPointer]::Up();Settled;& $observe 'after-up'
+        if((& $state) -cne $beforeState){throw 'Escape changed the pending edge brush, tool or layout after release'}
+        & $observe 'pre-swipe'
         Swipe $From @{x=$From.x+64;y=$From.y} -During {
             Wait-Until {(Gesture).edge.claimed} 'The edge did not claim before Escape'
+            & $observe 'claimed-swipe'
             [CapyRowPointer]::Key(0x1b)
         }
-        if(((Model).state.workspace.layout|ConvertTo-Json -Depth 90 -Compress) -cne $before -or (Gesture).edge){throw 'Escape did not restore and clear the claimed edge contact'}
-    }finally{if([CapyRowPointer]::Active){[CapyRowPointer]::Cancel()}}
+        & $observe 'after-claimed-escape'
+        if((& $state) -cne $beforeState -or (Gesture).edge){throw 'Escape did not restore the claimed edge brush, tool and layout after release'}
+    }catch{& $observe 'failed-swipe';throw}finally{
+        $records|ConvertTo-Json -Depth 95|Set-Content (Join-Path $run ('edge-escape-'+$Theme+'.json'))
+        if([CapyRowPointer]::Active){[CapyRowPointer]::Cancel()}
+    }
 }
 function Start-Review([string]$Theme){
     $script:stderr=Join-Path $run ($Theme+'-stderr.log')
@@ -90,9 +102,20 @@ function Check-ColumnEdge([string]$Theme){
     $group=$layout.groups|Where-Object {!$_.floating -and [Math]::Abs($_.bounds.x+$_.bounds.width-$edge.bounds.x) -lt 1}|Sort-Object {$_.bounds.height}|Select-Object -Last 1
     if(!$group){throw 'No docked group meets the left column edge'}
     $column=@($layout.groups|Where-Object {!$_.floating -and [Math]::Abs($_.bounds.x+$_.bounds.width-$edge.bounds.x) -lt 1})
+    $subtools=@((Model).state.tool_set.subtools);$selected=$null
+    for($i=0;$i -lt $subtools.Count;$i++){if($subtools[$i].selected){$selected=Find ('tool-subtool-'+$i);break}}
+    $origin=Screen 0 0;$density=[CapyRowPointer]::GetDpiForWindow($window)/96.
+    if(!$selected -or $selected.Current.IsOffscreen){throw 'SETUP: no arranged selected ToolSet subtool is available for the column-reach probe'}
+    $bounds=$selected.Current.BoundingRectangle
+    $selectedPoint=@{x=$edge.bounds.x-20;y=($bounds.Y+$bounds.Height*.5-$origin.y)/$density};$selectedScreen=Screen $selectedPoint.x $selectedPoint.y
+    if(!$bounds.Contains([double]$selectedScreen.x,[double]$selectedScreen.y)){throw 'SETUP: the selected ToolSet subtool has no native point within the column reach'}
+    $contact=Contact $selectedPoint
+    @{id=$selected.Current.AutomationId;name=$selected.Current.Name;bounds=@($bounds.X,$bounds.Y,$bounds.Width,$bounds.Height);point=$selectedPoint;screen=$selectedScreen;edge=$contact}|ConvertTo-Json -Depth 8|Set-Content (Join-Path $run ('selected-subtool-edge-'+$Theme+'.json'))
+    if($contact){throw 'The selected immediate-bubble ToolSet subtool yielded its contact to column resizing'}
     $inside={param($id)$x=(Divider $id).bounds.x-20;Reach-Point @(foreach($g in $column){for($y=$g.bounds.y+$g.bounds.height-24;$y -gt $g.bounds.y+48;$y-=24){@{x=$x;y=$y}}}) {param($edge)$edge.contact -eq 'free'}}
     $from=& $inside $edge.id
     Check-EdgeEscape $from
+    if($EdgeEscapeOnly){return}
     $before=Width $group.id
     $swipe={
         if($Device -eq 'mouse'){
@@ -335,7 +358,7 @@ try {
     foreach($theme in $themes){
         Start-Review $theme
         Settled
-        if($CancelOnly){Check-NativeEdgeCancel $theme}elseif($LayerRowOnly){Check-LayerRowEdge $theme}elseif($ClosedStripOnly){Check-ClosedStrip $theme}elseif($CanvasResetOnly){Check-CanvasReset $theme}elseif($ColumnResetOnly){Check-ColumnHandleReset $theme}else{
+        if($EdgeEscapeOnly){Check-ColumnEdge $theme}elseif($CancelOnly){Check-NativeEdgeCancel $theme}elseif($LayerRowOnly){Check-LayerRowEdge $theme}elseif($ClosedStripOnly){Check-ClosedStrip $theme}elseif($CanvasResetOnly){Check-CanvasReset $theme}elseif($ColumnResetOnly){Check-ColumnHandleReset $theme}else{
             Check-ColumnEdge $theme
             Check-GroupGap $theme
             Check-ClosedStrip $theme
@@ -346,13 +369,15 @@ try {
         if((Get-Item -LiteralPath $stderr).Length){throw "Native stderr requires inspection ($theme)"}
         [CapyRowPointer]::Dispose()
     }
-    if($CancelOnly){[pscustomobject]@{device=$Device;themes=($themes -join ',');native_edge_cancel='passed';evidence=$run;scope='Pending and claimed native edge cancellation only'}|ConvertTo-Json}
+    if($EdgeEscapeOnly){[pscustomobject]@{device=$Device;themes=($themes -join ',');edge_escape='passed';evidence=$run;scope='Pending and claimed edge Escape only'}|ConvertTo-Json}
+    elseif($CancelOnly){[pscustomobject]@{device=$Device;themes=($themes -join ',');native_edge_cancel='passed';evidence=$run;scope='Pending and claimed native edge cancellation only'}|ConvertTo-Json}
     elseif($LayerRowOnly){[pscustomobject]@{device=$Device;themes=($themes -join ',');layer_row_edge_handoff='passed';evidence=$run;scope='Actual LayerRow Pickup edge arbitration only'}|ConvertTo-Json}
     elseif($ClosedStripOnly){[pscustomobject]@{device=$Device;themes=($themes -join ',');closed_strip='passed';evidence=$run;scope='Native closed-column outward swipe only'}|ConvertTo-Json}
     elseif($CanvasResetOnly){[pscustomobject]@{device=$Device;themes=($themes -join ',');canvas_side_reset='passed';preferred_width='exact';workspace_undo_redo='exact';evidence=$run;scope='Native touch canvas-side double taps only; physical shell gestures remain separate'}|ConvertTo-Json}
     elseif($ColumnResetOnly){[pscustomobject]@{device=$Device;themes=($themes -join ',');actual_nested_divider_reset='passed';owner_side='left';preferred_width='exact';other_owner='unchanged';workspace_undo_redo='exact';evidence=$run;scope='Actual native nested divider contacts only; physical devices and timing remain separate'}|ConvertTo-Json}
     else{[pscustomobject]@{device=$Device;column_edge_from_inside='passed';resize_pointer=($Device -eq 'mouse');double_press_reset='passed';canvas_contact=$(if($Device -eq 'touch'){'grabs'}else{'kept'});vertical_swipe_kept='passed';group_gap='passed';closed_strip='passed';themes=($themes -join ',');scope='OS-delivered synthetic input; physical devices and timing remain separate'}|ConvertTo-Json}
 }catch{
+    try{@{gesture=Gesture;brush=(Model).state.brush;tool_set=(Model).state.tool_set;workspace=(Model).state.workspace.layout}|ConvertTo-Json -Depth 95|Set-Content (Join-Path $run 'failure-native.json')}catch{}
     if($review -and !$review.HasExited){try{Capture 'failure'}catch{}}
     [IO.File]::WriteAllText((Join-Path $run 'failure.txt'),($_|Out-String)+$_.ScriptStackTrace);throw
 }finally{
