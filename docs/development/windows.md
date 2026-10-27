@@ -2226,6 +2226,9 @@ the native effective accent through the shared `system_theme_changed` action
 and asserts that the resulting accent matches. Preserve earlier captures when
 correcting unmatched inputs.
 
+The Web collector waits for submitted GPU work after layout settles before
+capturing the canvas.
+
 Before each capture, the fixture searches every fresh `layer-list` peer for
 visible rows and requires each row to exist in shared state with its required
 previews `Ready`. It retains the camera and readiness checks and allows 45 seconds

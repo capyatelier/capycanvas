@@ -76,6 +76,7 @@ export async function captureWindowsEditor({manifest,output,evaluate,call}) {
       },'Editor layout did not settle');
       await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
     })()`);
+    await evaluate('layerApp.app.wait_for_canvas()');
     const metrics=await evaluate(`(async()=>{
       const adapter=await navigator.gpu.requestAdapter();
       const rect=node=>{const b=node.getBoundingClientRect();return {x:b.x,y:b.y,width:b.width,height:b.height}};
@@ -101,6 +102,7 @@ export async function captureWindowsEditor({manifest,output,evaluate,call}) {
           if(n.matches('.layer-grip'))return prefix+'drag';
           const thumbnail=n.closest('.layer-thumbnail');
           if(thumbnail){
+            if(thumbnail.classList.contains('layer-texture'))return 'layer-texture-'+row.dataset.layer+(n.matches('canvas')?'-preview':'');
             const mask=[...row.querySelectorAll('.layer-thumbnail')].indexOf(thumbnail)===1;
             return prefix+(n.matches('canvas')?(mask?'mask-thumbnail':'thumbnail'):(mask?'mask':'content'));
           }
