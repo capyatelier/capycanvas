@@ -530,7 +530,8 @@ class AndroidWorkspaceSwitcherTest {
     }
 
     private fun header(compact: Boolean = false) {
-        val workspace = JSONObject(host.snapshot!!.getJSONObject("state").getJSONObject("workspace").toString())
+        lateinit var workspace: JSONObject
+        instrumentation.runOnMainSync { workspace = JSONObject(host.snapshot!!.getJSONObject("state").getJSONObject("workspace").toString()) }
         var next = 1
         fun entry(kind: String) = obj("id" to next++, "item" to obj("kind" to kind))
         val left = if (compact) JSONArray(listOf(entry("capy"), entry("menu")) + List(40) { entry("space") }) else JSONArray()
@@ -672,6 +673,55 @@ class AndroidWorkspaceSwitcherTest {
             }
         }
         assertTrue(feedbackFailures.joinToString("\n"), feedbackFailures.isEmpty())
+    }
+
+    @Test fun builtinWorkspacesSwitchWithoutLayoutErrors() = switchBuiltinWorkspaces(false)
+
+    @Test fun builtinWorkspacesSwitchAfterHeaderReplacementWithoutLayoutErrors() = switchBuiltinWorkspaces(true)
+
+    private fun switchBuiltinWorkspaces(replaceHeader: Boolean) {
+        for (theme in listOf("light", "dark")) {
+            host.drain(obj("type" to "set_theme", "theme" to theme)); idle()
+            for (pointer in listOf(MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_STYLUS)) {
+                tool = pointer
+                for (id in defaults) {
+                    if (view().getString("id") == id) continue
+                    val label = "$replaceHeader-$theme-$pointer-${id.substringAfterLast(':')}"
+                    fun record(phase: String) {
+                        val file = java.io.File(instrumentation.targetContext.getExternalFilesDir(null), "validation/builtin-workspaces/$label-$phase.json")
+                        file.parentFile!!.mkdirs()
+                        var text = ""
+                        instrumentation.runOnMainSync { text = obj("target" to id, "replace_header" to replaceHeader, "failure" to host.failure,
+                            "action_error" to host.actionError, "workspace" to host.snapshot!!.getJSONObject("state").getJSONObject("workspace"),
+                            "projection" to host.snapshot!!.getJSONObject("layout"), "manager" to view()).toString(2) }
+                        file.writeText(text)
+                    }
+                    record("before")
+                    try {
+                        if (replaceHeader) header()
+                        record("before-switch")
+                        if (replaceHeader) {
+                            val tag = "workspace-switch-$id"
+                            val choices = bounds("workspace-switcher-choices")
+                            if (!choices.contains(bounds(tag).center)) {
+                                val delta = bounds(tag).center.x - choices.center.x
+                                instrumentation.runOnMainSync { node("workspace-switcher-choices")!!.second.config[SemanticsActions.ScrollBy].action!!.invoke(delta, 0f) }
+                                SystemClock.sleep(250)
+                            }
+                            assertTrue("Builtin choice is visible before native contact", bounds("workspace-switcher-choices").contains(bounds(tag).center))
+                            down(tag); event(MotionEvent.ACTION_UP); idle()
+                        } else {
+                            open(); tap("workspace-row-$id"); record("preview"); tap("workspace-confirm")
+                        }
+                        assertEquals(id, view().getString("id"))
+                        record("after")
+                    } catch (failure: Throwable) {
+                        record("failed")
+                        throw failure
+                    }
+                }
+            }
+        }
     }
 
     @Test fun scrollingChoicesKeepsOptionsFixedAndDoesNotSwitch() {

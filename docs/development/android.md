@@ -492,6 +492,10 @@ manual save checkpoints and undo/redo after an actual process death.
   persistence, menus and window lifecycle. `AndroidWorkspaceOwnershipTest`
   checks that a second native session cannot take an active workspace, identifies
   its owning window and can claim it after that window closes.
+  `#builtinWorkspacesSwitchWithoutLayoutErrors` uses the manager's Preview/Apply
+  path; `#builtinWorkspacesSwitchAfterHeaderReplacementWithoutLayoutErrors` uses
+  the expanded switcher after editing its header fixture. Both switch every
+  built-in workspace with touch and pen in both themes.
 - [`AndroidTitleBarTest`](../../apps/layer-android/app/src/androidTest/java/art/capycanvas/AndroidTitleBarTest.kt):
   the title-bar editor, compact menus, keyboard focus, Sketch drawers and
   persistence. `#toolVariantCornersAndContextMenusShareRememberedChoices` checks
@@ -606,6 +610,8 @@ also save images under `Pictures/` through MediaStore.
   until a timeout, and `CanvasHost.drain`, which waits for native publication.
   Pass the test's Compose rule when it owns the frame clock. Global idle waits
   can hang while a gesture is held.
+- Copy retained `CanvasHost.snapshot` JSON on the main thread before reading or
+  editing it in a fixture. Native publication updates those objects in place.
 - Drawing checks wait for shared canvas/brush readiness and no
   `Native.renderingPending` work, including queued surface presentation.
   `Native.frame` can still request optional shader warmup after the drawing is
