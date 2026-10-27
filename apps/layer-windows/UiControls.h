@@ -5,6 +5,7 @@
 #include "LayerThumbnails.h"
 #include "PointerGesture.h"
 #include "ButtonFeedback.h"
+#include "ChoiceFeedback.h"
 #include "NativeHandles.h"
 #include <winrt/Microsoft.UI.Xaml.Automation.h>
 #include <winrt/Microsoft.UI.Xaml.Media.Imaging.h>
@@ -400,6 +401,7 @@ inline void dialogSurface(std::shared_ptr<WorkspaceData> const& data,ContentDial
     auto background=data->brush(L"settings");if(dialog.Background()!=background)dialog.Background(background);
     static thread_local auto overlay=box_value(L"ContentDialogTopOverlay");
     if(!dialog.Resources().HasKey(overlay))dialog.Resources().Insert(overlay,clear());
+    dialogButtonColors(data,dialog);
 }
 inline TextBlock label(std::shared_ptr<WorkspaceData> const& data,hstring const& text,bool bold=false,bool retained=true){
     TextBlock result;result.Text(text);result.FontSize(data->textSize());

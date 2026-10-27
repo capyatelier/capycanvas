@@ -52,7 +52,7 @@ struct FiltersView : std::enable_shared_from_this<FiltersView> {
         RowDefinition b;b.Height({1,GridUnitType::Star});root.RowDefinitions().Append(b);
         ColumnDefinition content;content.Width({1,GridUnitType::Star});header.ColumnDefinitions().Append(content);
         ColumnDefinition action;action.Width({data->panelMetric(L"control_height"),GridUnitType::Pixel});header.ColumnDefinitions().Append(action);header.ColumnSpacing(data->panelMetric(L"control_spacing"));
-        category.MinWidth(0);category.MinHeight(data->controlHeight());category.Height(data->controlHeight());category.Padding({6,0,0,0});category.FontSize(data->textSize());category.Background(data->brush(L"input"));category.BorderThickness({0});category.CornerRadius(data->controlCorner());
+        category.MinWidth(0);category.MinHeight(data->controlHeight());category.Height(data->controlHeight());category.Padding({6,0,0,0});category.FontSize(data->textSize());choiceColors(data,category);
         category.HorizontalAlignment(HorizontalAlignment::Stretch);
         copyName(data,category,data->copyCaption(L"color",L"category"));AutomationProperties::SetAutomationId(category,L"filter-category");
         category.SelectionChanged([weak](auto&&,auto&&){if(auto self=weak.lock();self&&!self->data->updating){

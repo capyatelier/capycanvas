@@ -101,7 +101,7 @@ struct EditorView:std::enable_shared_from_this<EditorView> {
     void init(){
         auto weak=weak_from_this();root.Spacing(data->panelMetric(L"control_spacing"));
         top.ColumnSpacing(data->panelMetric(L"control_spacing"));column(top,{1,GridUnitType::Star});column(top,{1,GridUnitType::Auto});column(top,{1,GridUnitType::Auto});
-        interpolation.HorizontalAlignment(HorizontalAlignment::Stretch);interpolation.MinWidth(0);interpolation.MinHeight(data->controlHeight());interpolation.Height(data->controlHeight());
+        choiceColors(data,interpolation);interpolation.HorizontalAlignment(HorizontalAlignment::Stretch);interpolation.MinWidth(0);interpolation.MinHeight(data->controlHeight());interpolation.Height(data->controlHeight());
         interpolation.FontSize(data->textSize());interpolation.Padding({6,0,0,0});AutomationProperties::SetAutomationId(interpolation,source.id+L"-interpolation");
         interpolation.SelectionChanged([weak](auto&&,auto&&){if(auto self=weak.lock();self&&!self->syncing&&!self->data->updating){
             auto modes=array(self->gradient(),L"interpolations");auto index=self->interpolation.SelectedIndex();

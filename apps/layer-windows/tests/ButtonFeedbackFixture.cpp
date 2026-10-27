@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "ButtonFeedback.h"
+#include "SdkFeedbackFixture.h"
 #include <winrt/Microsoft.UI.Xaml.Automation.h>
 #include <chrono>
 #include <string_view>
@@ -13,6 +14,7 @@ struct App:ApplicationT<App,Markup::IXamlMetadataProvider>{
     XamlTypeInfo::XamlControlsXamlMetaDataProvider metadata;
     Window window{nullptr};Grid root;ContentDialog dialog{nullptr};Flyout flyout;
     std::vector<Button> probes;unsigned clicks=0;
+    std::shared_ptr<SdkFeedbackFixture> sdk;
     Microsoft::UI::Dispatching::DispatcherQueueTimer timer{nullptr};
     SolidColorBrush ink{Windows::UI::Color{255,30,30,30}};
     Markup::IXamlType GetXamlType(Windows::UI::Xaml::Interop::TypeName const& type){return metadata.GetXamlType(type);}
@@ -38,6 +40,7 @@ struct App:ApplicationT<App,Markup::IXamlMetadataProvider>{
     }
     void OnLaunched(LaunchActivatedEventArgs const&){
         Resources().MergedDictionaries().Append(XamlControlsResources());
+        if(GetEnvironmentVariableW(L"CAPY_FEEDBACK_SDK",nullptr,0)){sdk=std::make_shared<SdkFeedbackFixture>();sdk->open();return;}
         wchar_t theme[16]{};GetEnvironmentVariableW(L"CAPY_FEEDBACK_THEME",theme,16);
         root.RequestedTheme(std::wstring_view(theme)==L"dark"?ElementTheme::Dark:ElementTheme::Light);
         root.Background(SolidColorBrush(Windows::UI::Color{255,237,237,237}));

@@ -43,7 +43,7 @@ struct SizeDialog::Impl:std::enable_shared_from_this<Impl>{
         return index<2?array(size,L"values").GetNumberAt(uint32_t(index)):num(size,L"resolution");
     }
     void choiceBox(ComboBox Impl::* member,hstring const& automation,wchar_t const* key,wchar_t const* list){
-        auto box=this->*member;box.HorizontalAlignment(HorizontalAlignment::Stretch);box.MinWidth(0);
+        auto box=this->*member;choiceColors(data,box);box.HorizontalAlignment(HorizontalAlignment::Stretch);box.MinWidth(0);
         AutomationProperties::SetAutomationId(box,automation);
         box.SelectionChanged([weak=weak_from_this(),member,key,list](auto&&,auto&&){if(auto self=weak.lock()){
             auto choices=array(self->view(),list);auto index=(self.get()->*member).SelectedIndex();

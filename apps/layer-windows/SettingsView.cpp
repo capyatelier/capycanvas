@@ -328,7 +328,7 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
             }
             widget=strip;
         }else if(type==L"choice"){
-            ComboBox control;AutomationProperties::SetAutomationId(control,L"preference-choice-"+id);control.MinWidth(132);control.MaxWidth(220);
+            ComboBox control;choiceColors(data,control);AutomationProperties::SetAutomationId(control,L"preference-choice-"+id);control.MinWidth(132);control.MaxWidth(220);
             auto options=array(kind,L"options"),icons=array(kind,L"icons");
             for(uint32_t i=0;i<options.Size();++i){
                 StackPanel option;option.Orientation(Orientation::Horizontal);option.Spacing(8);

@@ -186,7 +186,7 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
         AutomationProperties::SetAutomationId(name,L"workspace-manager-name");
         description.Header(box_value(copy(L"header",L"description")));description.AcceptsReturn(true);description.TextWrapping(TextWrapping::Wrap);description.MinHeight(72);
         AutomationProperties::SetAutomationId(description,L"workspace-manager-description");
-        choices.HorizontalAlignment(HorizontalAlignment::Stretch);
+        choiceColors(copyData,choices);choices.HorizontalAlignment(HorizontalAlignment::Stretch);
         AutomationProperties::SetAutomationId(choices,L"workspace-manager-choice");
         retry.Content(box_value(copy(L"header",L"retry")));retry.HorizontalAlignment(HorizontalAlignment::Left);
         AutomationProperties::SetAutomationId(retry,L"workspace-manager-retry");

@@ -211,7 +211,7 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
             dialog=ContentDialog();dialog.XamlRoot(window.Content().XamlRoot());dialogSurface(data,dialog);dialog.Title(box_value(str(object(request,L"copy"),L"interpret_title")));
             dialog.PrimaryButtonText(recovery(L"open"));dialog.CloseButtonText(common(L"cancel"));
             StackPanel body;body.Spacing(12);auto info=label(data,interpretationText(L"interpret_help"));info.TextWrapping(TextWrapping::Wrap);body.Children().Append(info);
-            ComboBox space;AutomationProperties::SetAutomationId(space,L"document-interpret-profile");copyHeader(space,interpretationText(L"interpret_as"));auto spaces=array(request,L"spaces");
+            ComboBox space;choiceColors(data,space);AutomationProperties::SetAutomationId(space,L"document-interpret-profile");copyHeader(space,interpretationText(L"interpret_as"));auto spaces=array(request,L"spaces");
             A choices;for(auto value:spaces){comboOption(space,value.GetArray().GetStringAt(1));choices.Append(O({{L"Builtin",value.GetArray().GetAt(0)}}));}
             for(auto item:array(request,L"profiles")){auto entry=item.GetObject();if(entry.HasKey(L"issue"))continue;comboOption(space,str(entry,L"name"),L"document-interpret-profile-"+str(entry,L"id"));choices.Append(O({{L"library",S(str(entry,L"id"))}}));}
             space.SelectedIndex(0);body.Children().Append(space);dialog.Content(body);
@@ -351,7 +351,7 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
             dialog=ContentDialog();dialog.XamlRoot(window.Content().XamlRoot());dialogSurface(data,dialog);dialog.CloseButtonText(common(L"cancel"));dialog.PrimaryButtonText(common(L"apply"));dialog.IsPrimaryButtonEnabled(false);
             AutomationProperties::SetAutomationId(dialog,L"document-workflow");
             StackPanel body;body.Spacing(10);body.Width(std::max(200.,std::min(540.,double(window.Content().XamlRoot().Size().Width)-120)));
-            ComboBox space,depth,intent;CheckBox copy,dither;TextBlock status;status.TextWrapping(TextWrapping::Wrap);
+            ComboBox space,depth,intent;for(auto box:{space,depth,intent})choiceColors(data,box);CheckBox copy,dither;TextBlock status;status.TextWrapping(TextWrapping::Wrap);
             auto text=[&](LocalizedCopy const& value){auto label=CapyUi::label(data,value);label.TextWrapping(TextWrapping::Wrap);body.Children().Append(label);return label;};
             if(kind==L"depth"){
                 copyHeader(depth,featureText(L"color",L"depth"));for(auto key:{L"depth_8",L"depth_16",L"depth_float16",L"depth_float32"})comboOption(depth,str(object(object(details,L"feature_copy"),L"color"),key));depth.SelectedIndex(depthIndex(str(object(details,L"color"),L"depth")));body.Children().Append(depth);
@@ -431,7 +431,7 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
             showing=false;changed();co_return;
         }
         J action=O({{L"op",S(L"cancel")}});
-        auto scripted=std::make_shared<J>();std::shared_ptr<ExportFormView> exportForm;std::shared_ptr<ProofFormView> proofForm;ComboBox profileList;TextBox profileSearch;A profileChoices;std::function<void()> updateProfileVisibility,filterProfiles;
+        auto scripted=std::make_shared<J>();std::shared_ptr<ExportFormView> exportForm;std::shared_ptr<ProofFormView> proofForm;ComboBox profileList;choiceColors(data,profileList);TextBox profileSearch;A profileChoices;std::function<void()> updateProfileVisibility,filterProfiles;
         if(kind==L"proof"&&proofRequest!=id){proofRequest=id;proofDraft=J();proofProfileId=L"";proofManaging=false;}
         bool library=kind==L"profiles"||(kind==L"proof"&&proofManaging);
         auto feature=object(details,L"feature_copy"),colorCopy=object(feature,L"color"),exportCopy=object(feature,L"export"),profileCopy=object(feature,L"profile"),proofCopy=object(feature,L"proof");
@@ -446,7 +446,7 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
             dialog.Title(box_value(title));
             StackPanel body;body.Spacing(10);body.Width(std::max(200.,std::min(540.,double(window.Content().XamlRoot().Size().Width)-120)));
             auto text=[&](auto const& value){auto item=label(data,value);item.TextWrapping(TextWrapping::Wrap);body.Children().Append(item);return item;};
-            ComboBox space;
+            ComboBox space;choiceColors(data,space);
             auto spaces=array(request,L"spaces");
             if(!str(request,L"error").empty()){auto error=text(documentText(L"error",false));AutomationProperties::SetAutomationId(error,L"document-workflow-error");}
             if(stage==L"error"&&kind!=L"proof"){
@@ -493,6 +493,7 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
                 dialog.PrimaryButtonText(profileText(L"add_profile_dialog"));dialog.SecondaryButtonText(profileText(L"remove"));dialog.IsSecondaryButtonEnabled(entries.Size()!=0);dialog.CloseButtonText(common(L"done"));
             }else if(kind==L"proof"){
                 proofForm=std::make_shared<ProofFormView>(localization);proofForm->root.Language(data->language());proofForm->init(details,proofDraft,proofProfileId);body.Children().Append(proofForm->root);
+                for(auto box:{proofForm->profile,proofForm->intent,proofForm->simulation})choiceColors(data,box);
                 presentationChanged=[this,proofForm]{
                     auto details=object(object(model,L"windows_document"),L"details"),copy=object(object(details,L"feature_copy"),L"proof");
                     proofForm->relocalize(localization,details,data->language());dialog.Title(box_value(str(copy,L"title")));dialog.PrimaryButtonText(common(L"apply"));dialog.CloseButtonText(common(L"cancel"));
@@ -509,13 +510,14 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
                 dialog.PrimaryButtonText(common(L"apply"));
             }else if(kind==L"export"&&stage==L"options"){
                 exportForm=std::make_shared<ExportFormView>(localization);exportForm->root.Language(data->language());exportForm->init(details);
+                for(auto box:{exportForm->format,exportForm->profile,exportForm->depth,exportForm->background,exportForm->dither,exportForm->intent,exportForm->resolution,exportForm->metadata})choiceColors(data,box);
                 presentationChanged=[this,exportForm]{
                     auto details=object(object(model,L"windows_document"),L"details"),copy=object(object(details,L"feature_copy"),L"export");
                     exportForm->relocalize(localization,details,data->language());
                     dialog.Title(box_value(str(copy,L"title")));dialog.PrimaryButtonText(str(copy,L"preview"));dialog.CloseButtonText(common(L"cancel"));
                 };
                 auto presetUpdating=std::make_shared<bool>(false);
-                auto presets=object(details,L"presets");ComboBox preset;copyHeader(preset,featureText(L"export",L"preset"));preset.HorizontalAlignment(HorizontalAlignment::Stretch);
+                auto presets=object(details,L"presets");ComboBox preset;choiceColors(data,preset);copyHeader(preset,featureText(L"export",L"preset"));preset.HorizontalAlignment(HorizontalAlignment::Stretch);
                 for(auto name:array(presets,L"names"))comboOption(preset,name.GetString());auto selectedPreset=presets.GetNamedValue(L"index",JsonValue::CreateNullValue());preset.SelectedIndex(selectedPreset.ValueType()==JsonValueType::Number?int(selectedPreset.GetNumber()):0);body.Children().Append(preset);
                 body.Children().Append(exportForm->root);TextBox name;AutomationProperties::SetAutomationId(name,L"export-preset-name");copyHeader(name,featureText(L"export",L"preset_name"));name.MaxLength(64);body.Children().Append(name);
                 auto operate=[this,scripted,exportForm](J operation){

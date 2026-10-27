@@ -29,6 +29,14 @@ Workspace pills retain their enabled appearance while the shared owner
 temporarily gates switching during drawing or adoption. Their selection tint
 follows adoption; holding a different workspace keeps its neutral base.
 
+Dropdowns use `choiceColors` from `ChoiceFeedback.h`. Their native ComboBox
+template retains selection, keyboard and popup handling; each instance owns its
+state brushes and updates their colors when its palette brushes change. Feedback
+composes over the input fill. Disabled content has one opacity owner, including
+explicitly colored child content. `dialogSurface` applies the same button feedback
+to the actual ContentDialog footer buttons and follows changes to the default
+action. Keep native focus, activation and dialog enablement on those controls.
+
 Startup leaves the composition surface detached while the native root shows the
 shared surround. The render owner submits a defined surround while the first
 constant background prepares, then admits document and brush work after that

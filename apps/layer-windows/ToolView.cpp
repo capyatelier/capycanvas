@@ -155,9 +155,8 @@ struct SettingsView : std::enable_shared_from_this<SettingsView> {
         ColumnDefinition value;value.Width({1,GridUnitType::Star});row.ColumnDefinitions().Append(value);
         auto text=label(data,title());text.FontSize(data->textSize());text.VerticalAlignment(VerticalAlignment::Center);
         text.TextWrapping(TextWrapping::NoWrap);row.Children().Append(text);
-        ComboBox choices;choices.MinWidth(0);choices.MinHeight(data->controlHeight());choices.Height(data->controlHeight());choices.FontSize(data->textSize());choices.Padding({6,0,0,0});
+        ComboBox choices;choiceColors(data,choices);choices.MinWidth(0);choices.MinHeight(data->controlHeight());choices.Height(data->controlHeight());choices.FontSize(data->textSize());choices.Padding({6,0,0,0});
         choices.HorizontalAlignment(HorizontalAlignment::Stretch);choices.VerticalAlignment(VerticalAlignment::Center);
-        choices.Background(data->brush(L"input"));choices.BorderThickness({0,0,0,0});choices.CornerRadius(data->controlCorner());
         for(auto const& name:names())comboOption(choices,name);
         AutomationProperties::SetName(choices,title());AutomationProperties::SetAutomationId(choices,id);
         auto syncing=std::make_shared<bool>(false);
@@ -220,8 +219,8 @@ struct SettingsView : std::enable_shared_from_this<SettingsView> {
         ColumnDefinition caption;caption.Width({actionLabelWidth(),GridUnitType::Pixel});row.ColumnDefinitions().Append(caption);
         ColumnDefinition field;field.Width({1,GridUnitType::Star});row.ColumnDefinitions().Append(field);
         auto title=label(data,actionGroupLabel(group));title.VerticalAlignment(VerticalAlignment::Center);title.TextTrimming(TextTrimming::CharacterEllipsis);row.Children().Append(title);
-        ComboBox choices;choices.MinWidth(0);choices.MinHeight(data->controlHeight());choices.Height(data->controlHeight());choices.Padding({6,0,0,0});choices.FontSize(data->textSize());
-        choices.Background(data->brush(L"input"));choices.BorderThickness({0});choices.CornerRadius(data->controlCorner());choices.HorizontalAlignment(HorizontalAlignment::Stretch);
+        ComboBox choices;choiceColors(data,choices);choices.MinWidth(0);choices.MinHeight(data->controlHeight());choices.Height(data->controlHeight());choices.Padding({6,0,0,0});choices.FontSize(data->textSize());
+        choices.HorizontalAlignment(HorizontalAlignment::Stretch);
         AutomationProperties::SetAutomationId(choices,L"tool-action-group-"+group);
         std::vector<hstring> commands;for(auto value:array(data->state,L"tool_actions"))if(auto item=value.GetObject();str(item,L"group")==group){auto id=str(item,L"command");commands.push_back(id);comboOption(choices,str(find(array(data->state,L"commands"),L"id",id),L"label"),L"tool-action-"+id);}
         auto weak=weak_from_this();auto syncing=std::make_shared<bool>(false);

@@ -192,7 +192,7 @@ struct ShortcutPage::Impl:std::enable_shared_from_this<Impl>{
         return result;
     }
     ComboBox dropdown(hstring const& name,hstring const& id,std::function<void(int32_t)> choose){
-        ComboBox result;result.MinWidth(120);result.MaxWidth(220);AutomationProperties::SetName(result,name);AutomationProperties::SetAutomationId(result,id);tooltip(result,name);
+        ComboBox result;choiceColors(data,result);result.MinWidth(120);result.MaxWidth(220);AutomationProperties::SetName(result,name);AutomationProperties::SetAutomationId(result,id);tooltip(result,name);
         result.SelectionChanged([data=data,choose=std::move(choose)](auto&& sender,auto&&){
             auto index=sender.template as<ComboBox>().SelectedIndex();if(!data->updating&&index>=0)choose(index);
         });

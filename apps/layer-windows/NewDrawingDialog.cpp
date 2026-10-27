@@ -255,7 +255,7 @@ struct NewDrawingDialog::Impl:std::enable_shared_from_this<Impl>{
         control.VerticalContentAlignment(VerticalAlignment::Center);
     }
     ComboBox choice(hstring const& id){
-        ComboBox result;input(result);result.HorizontalAlignment(HorizontalAlignment::Stretch);AutomationProperties::SetAutomationId(result,id);
+        ComboBox result;input(result);choiceColors(data,result,true);result.HorizontalAlignment(HorizontalAlignment::Stretch);AutomationProperties::SetAutomationId(result,id);
         return result;
     }
     Button toggle(hstring const& id,double width,double height){
@@ -467,7 +467,7 @@ struct NewDrawingDialog::Impl:std::enable_shared_from_this<Impl>{
         input(saveName);saveName.Width(150);saveName.MaxLength(64);saveName.Padding({10,7,10,0});AutomationProperties::SetAutomationId(saveName,L"new-drawing-save-name");inheritLanguage(saveName,data);
         saveName.TextChanged([weak](auto&&,auto&&){if(auto self=weak.lock();self&&!self->data->updating&&self->saveName.Text()!=str(object(self->drawerView(),L"save"),L"name"))self->send(O({{L"op",S(L"preset_name")},{L"text",S(self->saveName.Text())}}));});
         saveName.KeyDown([weak](auto&&,KeyRoutedEventArgs const& e){if(auto self=weak.lock();self&&!composingKey(e)&&e.Key()==winrt::Windows::System::VirtualKey::Enter){e.Handled(true);self->send(op(L"save_preset"));}});
-        input(saveGroup);saveGroup.Width(150);AutomationProperties::SetAutomationId(saveGroup,L"new-drawing-save-group");
+        input(saveGroup);choiceColors(data,saveGroup,true);saveGroup.Width(150);AutomationProperties::SetAutomationId(saveGroup,L"new-drawing-save-group");
         saveGroup.SelectionChanged([weak](auto&&,auto&&){if(auto self=weak.lock()){
             auto groups=array(object(self->drawerView(),L"save"),L"groups");auto index=self->saveGroup.SelectedIndex();
             if(self->data->updating||index<0||uint32_t(index)>=groups.Size())return;

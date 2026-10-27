@@ -171,10 +171,9 @@ struct PropertiesView : std::enable_shared_from_this<PropertiesView> {
             return propertyRow(property,texture->pick,bindings);
         }
         if(type==L"choice"){
-            ComboBox choices;choices.MinWidth(0);choices.MinHeight(data->controlHeight());choices.Height(data->controlHeight());
+            ComboBox choices;choiceColors(data,choices);choices.MinWidth(0);choices.MinHeight(data->controlHeight());choices.Height(data->controlHeight());
             choices.HorizontalAlignment(HorizontalAlignment::Stretch);choices.Padding({6,0,0,0});
             choices.FontSize(data->textSize());
-            choices.Background(data->brush(L"input"));choices.BorderThickness({0,0,0,0});choices.CornerRadius(data->controlCorner());
             for(auto option:array(kind,L"options"))comboOption(choices,option.GetString());
             AutomationProperties::SetName(choices,name);AutomationProperties::SetAutomationId(choices,property->id());
             choices.SelectionChanged([property,weak=make_weak(choices)](auto&&,auto&&){if(auto choices=weak.get();choices&&choices.SelectedIndex()>=0)property->set(N(choices.SelectedIndex()));});
@@ -285,7 +284,7 @@ struct PropertiesView : std::enable_shared_from_this<PropertiesView> {
     }
     void styleChoice(ComboBox const& box,hstring const& id){
         box.MinWidth(0);box.MinHeight(data->controlHeight());box.Height(data->controlHeight());box.Padding({6,0,0,0});box.HorizontalAlignment(HorizontalAlignment::Stretch);box.FontSize(data->textSize());
-        box.Background(data->brush(L"input"));box.BorderThickness({0,0,0,0});box.CornerRadius(data->controlCorner());
+        choiceColors(data,box);
         AutomationProperties::SetAutomationId(box,id);box.Visibility(Visibility::Collapsed);
     }
     explicit PropertiesView(std::shared_ptr<WorkspaceData> source):data(std::move(source)){

@@ -37,7 +37,7 @@ struct PanelConfiguration::Impl:std::enable_shared_from_this<Impl>{
     ~Impl(){if(menu)menu.Hide();}
     void customize(J const& action){data->dispatch(O({{L"type",S(L"customize")},{L"action",action}}));}
     FrameworkElement layerSelector(){
-        ComboBox choice;choice.HorizontalAlignment(HorizontalAlignment::Stretch);
+        ComboBox choice;choiceColors(data,choice);choice.HorizontalAlignment(HorizontalAlignment::Stretch);
         choice.FontSize(data->textSize());choice.MinHeight(34);
         AutomationProperties::SetAutomationId(choice,L"configure-layer-selection");
         auto weak=weak_from_this();

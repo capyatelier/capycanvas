@@ -144,7 +144,7 @@ struct WaveformView : std::enable_shared_from_this<WaveformView> {
 };
 ComboBox selector(std::shared_ptr<WorkspaceData> const& data,hstring const& id){
     ComboBox box;box.MinWidth(0);box.MinHeight(data->controlHeight());box.Height(data->controlHeight());box.Padding({6,0,0,0});box.HorizontalAlignment(HorizontalAlignment::Stretch);
-    box.FontSize(data->textSize());box.Background(data->brush(L"input"));box.BorderThickness({0,0,0,0});box.CornerRadius(data->controlCorner());
+    box.FontSize(data->textSize());choiceColors(data,box);
     AutomationProperties::SetAutomationId(box,id);
     auto open=std::make_shared<bool>(false);
     box.DropDownOpened([data,open](auto&&,auto&&){if(!std::exchange(*open,true))data->popup(true);});
