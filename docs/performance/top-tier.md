@@ -5755,6 +5755,35 @@ not shipped. Exact identities, raw samples, drift and scope remain under
 `artifacts/windows/visual-glitches/snapshot-bridges-v22/resize-cpu/` and
 `retention-control/`.
 
+#### Header placement work
+
+The next 2026-10-27 bracket compares the same frozen bridge build with a native
+header replacement on the same 60 Hz i7-1255U laptop. Capy styling follows model
+and accepted size changes; caption exclusions reuse placed outer rectangles;
+header measurements copy array members without a JSON round trip. Each phase
+uses the same private Paint seed and three warmed five-second growth/reversal
+contacts, without tracing, capture, UI Automation polling or competing builds.
+
+| Build order | Observed native changes/s | UI CPU | UI CPU ms/observed change |
+| --- | ---: | ---: | ---: |
+| Bridge baseline first | 59.11 | 89.76% | 15.1846 |
+| Header candidate | 59.57 | 89.53% | 15.0308 |
+| Bridge baseline last | 56.49 | 89.00% | 15.7540 |
+
+Pooled baseline cost is 15.4629 ms/change. The candidate is 2.79% lower, within
+the 3.75% endpoint drift and overlapping contact ranges: no distinct improvement
+or regression signal is established. All nine contacts match extents and initial
+control bounds, with empty status/stderr and normal exits. This still exceeds
+8.33 ms; native changes are not displayed frames or a 120 Hz qualification.
+Ninety focused native assertions pass across both themes. Workspace compact-focus
+and the live outgoing-overflow fade interval remain unverified by that fixture.
+
+Baseline/candidate executable SHA-256 prefixes are `492FC60BCD6C` /
+`C84A4B40CF13`; both use DLL `26B1A55CEAD2`. HeaderView.cpp is the only native
+source difference. Raw samples, exact pooled arithmetic and source guards remain
+under `artifacts/windows/visual-glitches/header-placement-v2/resize-cpu/`; native
+correctness evidence is `header-placement/gui-report.md`.
+
 ### Windows startup background
 
 Fresh private profiles on the same laptop compare the preceding button build

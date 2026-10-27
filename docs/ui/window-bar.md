@@ -151,6 +151,15 @@ customized regions and native-control clearance. A shared fallback rectangle
 keeps it available when removed or overflowed. Hosts retain one interactive
 control across both presentations; editable slots show a thumbnail and grip.
 
+Windows styles the retained Capy when its model or accepted size changes.
+Placement keeps visibility and command admission current without loading the
+same glyph or replacing its feedback during each resize. Caption exclusions use
+the last placed outer rectangles, including outgoing controls until their fade
+collapses them. They retain the native visibility and positive-width gates;
+editing still has no caption regions. The placement canvas has no offset or
+normal-mode reposition transition, so these rectangles share the caption root's
+coordinates.
+
 ## Checks
 
 Trace each control's state writers, toolkit feedback transitions, contact ownership

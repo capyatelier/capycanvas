@@ -92,7 +92,7 @@ the tracked expansion journey waits for that agreement after resizing.
 The subsequent Windows UI milestones must also be present:
 
 ```powershell
-foreach ($milestone in @('04fd2e228','a9262291a','650d36a26','e27fda7a8','52e6dc961','7f3a7bfab','435c52fdf','19d51c3c3')) {
+foreach ($milestone in @('04fd2e228','a9262291a','650d36a26','e27fda7a8','52e6dc961','7f3a7bfab','435c52fdf','19d51c3c3','b2375bd23')) {
     git merge-base --is-ancestor $milestone HEAD
     if ($LASTEXITCODE -ne 0) { throw "Missing Windows UI milestone $milestone" }
 }
@@ -122,9 +122,18 @@ prototype increased this to 17.96 ms and was rejected. Shared split-UI rendering
 and native drawing-surface probes are local experiments, not shipped application
 transactions or 120 Hz evidence. Test the checked-in app and report fresh numbers.
 
-This remains above the 8.33 ms CPU budget. Next measurements should separate
-header placement from restyling and convert and diff decoded packets off the UI
-thread. Keep the remaining native title-bar feature in the profile; changing
+The subsequent header change moves Capy styling to model/accepted-size updates,
+reuses placed caption rectangles and removes a measurement JSON round trip.
+Ninety focused light/dark native checks pass. Its same-DLL capture-free bracket is
+15.03 ms/change versus pooled bridge baseline 15.46 ms, within 3.75% endpoint
+drift and overlapping ranges: no distinct speedup is established. Workspace
+compact-focus and live outgoing-overflow fade remain unverified. Use
+`exercise-header-placement.ps1` through the private desktop wrapper for those
+bounded header checks; it reports unmet fixture preconditions as coverage gaps.
+
+This remains above the 8.33 ms CPU budget. Next work must adopt matching native
+controls and rendered UI pixels together and reduce packet/layout work. Keep
+the remaining native title-bar feature in the profile; changing
 the extension flag alone does not eliminate it. Preserve the current chrome
 until a custom-frame feasibility check and decision are complete.
 

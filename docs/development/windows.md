@@ -1853,6 +1853,15 @@ on entry and exit, followed by successful re-enabling in windowed state.
 record each transition for visual review. `-FullscreenBaseline` records an older
 executable's policy and frames without requiring the new property or trace.
 These checks do not qualify physical Shell edge swipes.
+Use `exercise-header-placement.ps1 -Executable <path> -Theme dark|light` through
+`test-desktop.ps1` for the retained header's placement and caption checks. It
+compares physical caption intervals with independently measured outer controls,
+checks accepted Small/Medium/Large Capy sizes, editing, menu compaction focus,
+retained identities and mouse/pen/touch Zen and caption actions. Client bounds
+come from the owned HWND because UI Automation can shrink a Canvas's bounds to
+its descendants in Zen. The trace and model must stay unchanged across each
+sample. Workspace compact-focus and live outgoing-fade checks report a coverage
+gap when the arrangement or sampling does not reach their required state.
 With `CAPY_TRACE_UI`, the `settings-title` peer publishes actual Preferences row,
 swatch-strip and custom-field allocations in one native coordinate space.
 `exercise-header-settings.ps1` uses these measurements for closed, open and

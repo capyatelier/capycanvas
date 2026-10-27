@@ -42,7 +42,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
     struct Item{
         std::shared_ptr<ChromeVisibility> fade=std::make_shared<ChromeVisibility>();
         Border frame,outline;Grid content;Button editor{nullptr};Image variants{nullptr};FrameworkElement view{nullptr};
-        Image grip{nullptr};J entry;hstring key,iconKey;std::shared_ptr<CapyUi::ColorPair> colors;
+        Image grip{nullptr};J entry,placed;hstring key,iconKey;std::shared_ptr<CapyUi::ColorPair> colors;
     };
     std::map<uint32_t,Item> items;std::vector<Border> bars;
     std::vector<std::shared_ptr<ChromeVisibility>> barFades;
@@ -60,7 +60,8 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
     std::shared_ptr<DrawingTabs> drawings;
     std::vector<std::pair<Primitives::ToggleButton,hstring>> workspaces;
     hstring switchActive,theme,palette,bankKey,geometryKey,desiredKey,lastMeasurement,traceKey;
-    J geometry,view,configuration;
+    J geometry,view,configuration,recoveryBounds;
+    std::array<J,3> overflowBounds;
     std::vector<Button> overflow;
     std::vector<Border> zones;
     bool built=false,editing=false,hidden=false,fullscreenActive=false,applying=false,resolvingLink=false,queryBusy=false;
@@ -312,7 +313,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
     void build(){
         auto popup=std::exchange(activeMenu,nullptr);menuPopulate={};menuSource=L"";if(popup)popup.Hide();
         if(str(input->Source(),L"kind")!=L"capy")input->Cancel();for(uint32_t i=canvas.Children().Size();i>0;--i)if(canvas.Children().GetAt(i-1)!=capySurface)canvas.Children().RemoveAt(i-1);items.clear();bars.clear();bankParts.clear();workspaces.clear();menus.clear();sizes.clear();overflow.clear();zones.clear();
-        bankKey=geometryKey=desiredKey=lastMeasurement=L"";systemStatus.reset();menuGeneration.reset();
+        bankKey=geometryKey=desiredKey=lastMeasurement=L"";systemStatus.reset();menuGeneration.reset();overflowBounds={};recoveryBounds=J{};
         background=Border();background.Background(clear());canvas.Children().Append(background);
         menuLabels=StackPanel();menuLabels.Orientation(Orientation::Horizontal);menuLabels.Spacing(2);
         menuLabels.UseLayoutRounding(false);
@@ -480,6 +481,11 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
     void applyItems(){
         auto size=find(array(view,L"sizes"),L"id",str(geometry,L"size",str(object(view,L"model"),L"size")));
         tile=num(size,L"tile",36);iconSize=num(size,L"icon",20);itemGap=num(size,L"item_gap");height=num(size,L"height",48);
+        auto capyCommand=object(view,L"capy");
+        style(capy,data,false);capy.Width(tile);capy.Height(tile);capy.Opacity(flag(capyCommand,L"enabled")?1:.36);
+        capySurface.Background(headerSurface(data));capySurface.CornerRadius({corner(),corner(),corner(),corner()});capy.CornerRadius(capySurface.CornerRadius());
+        setIcon(capy.Content().as<Image>(),str(capyCommand,L"icon",L"capy"),data->theme(),num(size,L"capy_icon"));
+        AutomationProperties::SetName(capy,str(capyCommand,L"label"));tooltip(capy,str(capyCommand,L"tooltip"));
         std::map<uint32_t,hstring> incoming;
         for(auto zone:array(object(view,L"model"),L"zones"))for(auto value:zone.GetArray()){
             auto entry=value.GetObject();incoming.emplace(uint32_t(num(entry,L"id")),object(entry,L"item").Stringify());
@@ -666,7 +672,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
     }
     void publish(){
         if(!geometry.Size()||geometryKey!=desiredKey||input->Busy())return;
-        auto measured=array(geometry,L"items");A bounds=A::Parse(measured.Stringify());
+        A bounds;for(auto item:array(geometry,L"items"))bounds.Append(item);
         auto hiddenItems=array(geometry,L"hidden"),more=array(geometry,L"overflow");
         for(uint32_t zone=0;zone<std::min(hiddenItems.Size(),more.Size());++zone){
             if(more.GetAt(zone).ValueType()!=JsonValueType::Object)continue;
@@ -688,13 +694,9 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
         if(!built)return;
         auto preview=input->Preview();auto resolved=object(preview,L"geometry");if(!resolved.Size())resolved=geometry;
         auto source=input->Source();uint32_t dragged=preview.Size()&&str(source,L"kind")==L"item"?uint32_t(num(source,L"value")):0;
-        auto size=find(array(view,L"sizes"),L"id",str(geometry,L"size"));
         auto command=object(view,L"capy"),capyBounds=object(geometry,L"zen_button");
         bool capyVisible=flag(data->model,L"keep_zen_button")||(!hidden&&!editing&&geometry.GetNamedValue(L"capy_item",JsonValue::CreateNullValue()).ValueType()==JsonValueType::Number);
-        style(capy,data,false);capy.Width(tile);capy.Height(tile);capy.IsEnabled(capyVisible&&capyBounds.Size()&&flag(command,L"enabled"));capy.Opacity(flag(command,L"enabled")?1:.36);
-        capySurface.Background(headerSurface(data));capySurface.CornerRadius({corner(),corner(),corner(),corner()});capy.CornerRadius(capySurface.CornerRadius());
-        setIcon(capy.Content().as<Image>(),str(command,L"icon",L"capy"),data->theme(),num(size,L"capy_icon"));
-        AutomationProperties::SetName(capy,str(command,L"label"));tooltip(capy,str(command,L"tooltip"));
+        capy.IsEnabled(capyVisible&&capyBounds.Size()&&flag(command,L"enabled"));
         if(capyBounds.Size())place(capySurface,capyBounds);capySurface.Visibility(capyVisible&&capyBounds.Size()?Visibility::Visible:Visibility::Collapsed);
         auto placed=array(resolved,L"items");auto metrics=array(configuration,L"metrics");
         auto barList=array(resolved,L"bars");std::set<uint32_t> joined;std::array<bool,3> overflowJoined{};
@@ -717,7 +719,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
             // hit regions must adopt a completed layout together.
             if(!preview.Size()||id==dragged)native.frame.Transitions().Clear();
             else if(!native.frame.Transitions().Size())native.frame.Transitions().Append(Media::Animation::RepositionThemeTransition());
-            place(native.frame,bounds);Canvas::SetZIndex(native.frame,id==dragged?30:5);
+            native.placed=bounds;place(native.frame,bounds);Canvas::SetZIndex(native.frame,id==dragged?30:5);
             bool compact=num(bounds,L"width")<num(findId(metrics,id),L"width")-.5;
             auto kind=str(object(native.entry,L"item"),L"kind");
             if(kind==L"menu_labels"){
@@ -747,7 +749,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
             zones[i].Visibility(editing&&!hidden&&i<zoneBounds.Size()?Visibility::Visible:Visibility::Collapsed);
             if(i<zoneBounds.Size())place(zones[i],zoneBounds.GetObjectAt(i));zones[i].BorderBrush(data->brush(L"tabbar"));
             bool show=!hidden&&i<more.Size()&&more.GetAt(i).ValueType()==JsonValueType::Object;
-            overflowFades[i]->apply(overflow[i],show,changed);if(show)place(overflow[i],more.GetObjectAt(i));
+            overflowFades[i]->apply(overflow[i],show,changed);if(show){overflowBounds[i]=more.GetObjectAt(i);place(overflow[i],overflowBounds[i]);}
             overflow[i].Background(overflowJoined[i]?clear():headerSurface(data));overflow[i].CornerRadius({corner(),corner(),corner(),corner()});
         }
         ghost.Visibility(preview.Size()&&!dragged?Visibility::Visible:Visibility::Collapsed);
@@ -759,7 +761,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
         }
         bool navigation=false;for(auto const& [id,native]:items){auto k=str(object(native.entry,L"item"),L"kind");navigation|=k==L"capy"||k==L"menu"||k==L"menu_labels";}
         recoveryFade->apply(recovery,!hidden&&!navigation&&!editing,changed);
-        place(recovery,O({{L"x",N(leftInset+itemGap)},{L"y",N(itemGap)},{L"width",N(tile)},{L"height",N(tile)}}));
+        recoveryBounds=O({{L"x",N(leftInset+itemGap)},{L"y",N(itemGap)},{L"width",N(tile)},{L"height",N(tile)}});place(recovery,recoveryBounds);
         bank.Visibility(editing&&!hidden?Visibility::Visible:Visibility::Collapsed);
         if(editing&&input->Selected()!=focusedItem){
             focusedItem=input->Selected();if(auto it=items.find(focusedItem);it!=items.end()&&it->second.frame.Visibility()==Visibility::Visible)it->second.editor.Focus(FocusState::Programmatic);
@@ -770,8 +772,11 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
         if(!trace||!built||!canvas.IsLoaded())return;A actual;
         for(auto const& [id,native]:items)if(native.frame.Visibility()==Visibility::Visible)
             actual.Append(O({{L"id",N(id)},{L"bounds",rectangle(visibleBounds(native.frame,canvas))}}));
+        A caption;float scale=float(root.XamlRoot().RasterizationScale());
+        for(auto r:drag(scale,uint32_t(std::lround(root.ActualWidth()*scale))))
+            caption.Append(O({{L"x",N(r.X)},{L"y",N(r.Y)},{L"width",N(r.Width)},{L"height",N(r.Height)}}));
         auto value=O({{L"geometry",geometry},{L"metrics",array(configuration,L"metrics")},{L"actual_items",actual},
-            {L"height",N(height)},{L"total_height",N(totalHeight)},{L"editing",B(editing)}});
+            {L"height",N(height)},{L"total_height",N(totalHeight)},{L"editing",B(editing)},{L"caption_regions",caption}});
         auto key=value.Stringify();if(key!=traceKey){traceKey=key;AutomationProperties::SetItemStatus(canvas,key);}
     }
     void apply(J const& snapshot){
@@ -813,15 +818,15 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
     std::vector<winrt::Windows::Graphics::RectInt32> drag(float scale,uint32_t width)const{
         if(editing)return {};
         std::vector<std::pair<float,float>> controls;
-        auto take=[&](FrameworkElement item){
-            if(item.Visibility()!=Visibility::Visible||item.ActualWidth()<=0)return;
-            auto box=item.TransformToVisual(root).TransformBounds({0,0,float(item.ActualWidth()),float(item.ActualHeight())});controls.emplace_back(box.X,box.X+box.Width);
+        auto take=[&](FrameworkElement const& item,J const& bounds){
+            if(item.Visibility()!=Visibility::Visible||item.ActualWidth()<=0||num(bounds,L"width")<=0)return;
+            float x=float(num(bounds,L"x"));controls.emplace_back(x,x+float(num(bounds,L"width")));
         };
         for(auto const& [id,item]:items){
             auto kind=str(object(item.entry,L"item"),L"kind");
-            if(kind!=L"clock"&&kind!=L"battery"&&kind!=L"space"&&!(kind==L"document_title"&&drawings->single()))take(item.frame);
+            if(kind!=L"clock"&&kind!=L"battery"&&kind!=L"space"&&!(kind==L"document_title"&&drawings->single()))take(item.frame,item.placed);
         }
-        for(auto item:overflow)take(item);take(recovery);
+        for(size_t i=0;i<overflow.size();++i)take(overflow[i],overflowBounds[i]);take(recovery,recoveryBounds);
         if(flag(data->model,L"keep_zen_button")||(!hidden&&geometry.GetNamedValue(L"capy_item",JsonValue::CreateNullValue()).ValueType()==JsonValueType::Number)){
             auto bounds=object(geometry,L"zen_button");
             if(bounds.Size())controls.emplace_back(float(num(bounds,L"x")),float(num(bounds,L"x")+num(bounds,L"width")));
