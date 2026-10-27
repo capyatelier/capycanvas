@@ -173,7 +173,7 @@ struct PropertiesView : std::enable_shared_from_this<PropertiesView> {
         if(type==L"choice"){
             ComboBox choices;choiceColors(data,choices);choices.MinWidth(0);choices.MinHeight(data->controlHeight());choices.Height(data->controlHeight());
             choices.HorizontalAlignment(HorizontalAlignment::Stretch);choices.Padding({6,0,0,0});
-            choices.FontSize(data->textSize());
+            choices.FontSize(data->textSize());choices.FontWeight(Windows::UI::Text::FontWeights::Bold());
             for(auto option:array(kind,L"options"))comboOption(choices,option.GetString());
             AutomationProperties::SetName(choices,name);AutomationProperties::SetAutomationId(choices,property->id());
             choices.SelectionChanged([property,weak=make_weak(choices)](auto&&,auto&&){if(auto choices=weak.get();choices&&choices.SelectedIndex()>=0)property->set(N(choices.SelectedIndex()));});
@@ -283,7 +283,7 @@ struct PropertiesView : std::enable_shared_from_this<PropertiesView> {
         if(statistics)for(auto const& bind:tonalBindings)bind();
     }
     void styleChoice(ComboBox const& box,hstring const& id){
-        box.MinWidth(0);box.MinHeight(data->controlHeight());box.Height(data->controlHeight());box.Padding({6,0,0,0});box.HorizontalAlignment(HorizontalAlignment::Stretch);box.FontSize(data->textSize());
+        box.MinWidth(0);box.MinHeight(data->controlHeight());box.Height(data->controlHeight());box.Padding({6,0,0,0});box.HorizontalAlignment(HorizontalAlignment::Stretch);box.FontSize(data->textSize());box.FontWeight(Windows::UI::Text::FontWeights::Bold());
         choiceColors(data,box);
         AutomationProperties::SetAutomationId(box,id);box.Visibility(Visibility::Collapsed);
     }
