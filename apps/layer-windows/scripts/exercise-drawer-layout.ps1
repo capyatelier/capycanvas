@@ -4,6 +4,11 @@ $repo=(Resolve-Path(Join-Path $PSScriptRoot '../../..')).Path;$scripts=$PSScript
 . (Join-Path $scripts 'CapyUia.ps1')
 Add-Type -Path (Join-Path $scripts 'RowPointerDriver.cs')
 Add-Type -Path (Join-Path $scripts 'BubbleFixtureNative.cs')
+$projectionTokens=$null;$projectionErrors=$null
+$projectionAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $scripts 'exercise-expansion.ps1'),[ref]$projectionTokens,[ref]$projectionErrors)
+if($projectionErrors.Count){throw 'Overview projection helper parse failed'}
+$projection=$projectionAst.Find({param($node)$node-is[Management.Automation.Language.FunctionDefinitionAst]-and$node.Name-eq'Wait-OverviewProjection'},$true)
+if(!$projection){throw 'Overview projection helper missing'};Invoke-Expression $projection.Extent.Text
 [CapyRowPointer]::VerifyPrivateDesktop($env:CAPY_PRIVATE_DESKTOP)
 $run=Join-Path $repo ('artifacts/windows/drawer-layout/'+$Theme+'-'+[guid]::NewGuid().ToString('N'));[IO.Directory]::CreateDirectory($run)|Out-Null
 $review=$null;$window=[IntPtr]::Zero;$checks=[Collections.Generic.List[object]]::new()
@@ -68,7 +73,48 @@ function Scroll-Check([string]$phase){
    else{Check ($panel-ne'brushes') ($phase+' Brushes expected genuine overflow') @{outer=$actual;scroll=$scroll.Current}}
   }
  }
+ Wait-OverviewProjection
+ $overview=(Control 'navigator-overview' -Arranged).Current.BoundingRectangle
+ $parent=Control 'navigator-overview' -Arranged;$pattern=$null
+ while($parent-and!$parent.TryGetCurrentPattern([System.Windows.Automation.ScrollPattern]::Pattern,[ref]$pattern)){$parent=[System.Windows.Automation.TreeWalker]::RawViewWalker.GetParent($parent)}
+ if(!$parent){throw 'Navigator allocation has no viewport provider'}
+ $viewport=$parent.Current.BoundingRectangle
+ $actions=@(foreach($id in @('zoom_out','zoom_in','rotate_left','rotate_right','flip_horizontal','flip_vertical')){(Control ('navigator-'+$id) -Arranged).Current.BoundingRectangle})
+ $valid=$true;foreach($box in $actions){$valid=$valid-and$box.Top-ge$overview.Bottom-2-and$box.Bottom-le$viewport.Bottom+2-and$box.Left-ge$viewport.Left-2-and$box.Right-le$viewport.Right+2-and[math]::Abs($box.Top-$actions[0].Top)-le2}
+ Check $valid ($phase+' Navigator image/actions fit actual allocation') @{overview=$overview;viewport=$viewport;actions=$actions}
  Snapshot $phase
+}
+function Camera-Pose{@((Model).state.camera.zoom,(Model).state.camera.rotation,(Model).state.camera.flipped,(Model).state.camera.translation)|ConvertTo-Json -Depth 4 -Compress}
+function Navigator-Points{
+ $box=(Control 'navigator-overview' -Arranged).Current.BoundingRectangle;$document=@((Model).state.tabs|Where-Object active)[0];$scale=[CapyRowPointer]::GetDpiForWindow($window)/96.
+ $fit=[math]::Min(($box.Width-8*$scale)/$document.width,($box.Height-8*$scale)/$document.height);$width=$document.width*$fit
+ @([int]($box.Left+($box.Width-$width)/2+$width*.35),[int]($box.Left+($box.Width-$width)/2+$width*.65),[int]($box.Top+$box.Height/2))
+}
+function Navigator-Pan([string]$device){
+ $points=Navigator-Points;$before=(Model).state.camera.revision
+ try{[CapyRowPointer]::Down($device,$points[0],$points[2]);Wait-Until {(Model).state.camera.revision-gt$before} "$device Navigator Down not acknowledged";$down=Camera-Pose
+  foreach($step in 1..3){[CapyRowPointer]::Move([int]($points[0]+($points[1]-$points[0])*$step/3),$points[2]);Start-Sleep -Milliseconds 25}
+  Wait-Until {(Camera-Pose)-cne$down} "$device Navigator did not pan";$live=Camera-Pose
+ }finally{if([CapyRowPointer]::Active){[CapyRowPointer]::Up()}}
+ Start-Sleep -Milliseconds 150;Check ((Camera-Pose)-ceq$live) ($device+' Navigator Up preserves pan') @{pose=$live}
+}
+function Navigator-Contacts{
+ $document=(Model).state.document_file|Select-Object epoch,revision,modified|ConvertTo-Json -Compress
+ Navigator-Pan 'mouse'
+ $group=@((Model).layout.groups|Where-Object active -eq 'navigator')[0];$before=@((Presentation).groups|Where-Object id -eq $group.id)[0].body_scroll
+ $points=Navigator-Points;$revision=(Model).state.camera.revision
+ try{[CapyRowPointer]::Down('touch',$points[0],$points[2]);Wait-Until {(Model).state.camera.revision-gt$revision} 'Navigator touch Down not acknowledged'
+  $rect=[CapyWindowExercise+Rect]::new();[CapyWindowExercise]::GetWindowRect($window,[ref]$rect)|Out-Null
+  [CapyWindowExercise]::MoveWindow($window,$rect.left,$rect.top,$rect.right-$rect.left+80,$rect.bottom-$rect.top,$true)|Out-Null
+  Start-Sleep -Milliseconds 700;Wait-OverviewProjection;$after=@((Presentation).groups|Where-Object id -eq $group.id)[0].body_scroll
+  Check ([math]::Abs($after.bounds.x-$before.bounds.x)-gt1-and[math]::Abs($after.bounds.width-$before.bounds.width)-le.6-and[math]::Abs($after.viewport_height-$before.viewport_height)-le.6) 'Navigator global position changes with local allocation retained' @{before=$before;after=$after}
+  $canceled=Camera-Pose;[CapyRowPointer]::Move($points[1],$points[2]);Start-Sleep -Milliseconds 150
+ }finally{if([CapyRowPointer]::Active){[CapyRowPointer]::Up()}}
+ Start-Sleep -Milliseconds 150;Check ((Camera-Pose)-ceq$canceled) 'Geometry-canceled Navigator contact cannot keep panning' @{pose=$canceled}
+ Navigator-Pan 'touch'
+ $zoom=(Model).state.camera.zoom;Invoke 'navigator-zoom_in';Wait-Until {(Model).state.camera.zoom-gt$zoom} 'Navigator command did not advance zoom'
+ Check (((Model).state.document_file|Select-Object epoch,revision,modified|ConvertTo-Json -Compress)-ceq$document) 'Navigator interaction leaves authored document unchanged' $null
+ Snapshot 'navigator-contacts'
 }
 try{
  Enter-CapyEnvironment;$env:CAPY_STORAGE_DIR=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1';$env:CAPY_TEST_DISPLAY='1';$env:CAPY_TEST_PRIMARY='1'
@@ -101,6 +147,7 @@ try{
  Wait-Until {Find 'navigator-overview' -Visible} 'Expanded Navigator overview did not arrange'
  Scroll-Check 'paint-scroll'
  [CapyWindowExercise]::MoveWindow($window,40,40,1601,1001,$true)|Out-Null;Start-Sleep -Milliseconds 800;Scroll-Check 'paint-scroll-fractional'
+ Navigator-Contacts
  & (Join-Path $scripts 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $window.ToInt64() -Action Close -DiscardUnsaved
  if(!$review.WaitForExit(8000)-or$review.ExitCode-ne0){throw 'Drawer review failed clean close'}
  if((Get-Item(Join-Path $run 'stderr.log')).Length){throw 'Drawer review stderr requires inspection'}

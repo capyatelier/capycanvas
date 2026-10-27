@@ -1,6 +1,7 @@
 #include "pch.h"
 #include "ButtonFeedback.h"
 #include "SdkFeedbackFixture.h"
+#include "NavigatorLayoutFixture.h"
 #include <winrt/Microsoft.UI.Xaml.Automation.h>
 #include <chrono>
 #include <string_view>
@@ -10,6 +11,7 @@ using namespace Microsoft::UI::Xaml;
 using namespace Microsoft::UI::Xaml::Controls;
 using namespace Microsoft::UI::Xaml::Media;
 namespace {
+std::shared_ptr<NavigatorLayoutFixture> navigatorFixture;
 struct App:ApplicationT<App,Markup::IXamlMetadataProvider>{
     XamlTypeInfo::XamlControlsXamlMetaDataProvider metadata;
     Window window{nullptr};Grid root;ContentDialog dialog{nullptr};Flyout flyout;
@@ -17,6 +19,8 @@ struct App:ApplicationT<App,Markup::IXamlMetadataProvider>{
     std::shared_ptr<SdkFeedbackFixture> sdk;
     Microsoft::UI::Dispatching::DispatcherQueueTimer timer{nullptr};
     SolidColorBrush ink{Windows::UI::Color{255,30,30,30}};
+    ControlContext context;
+    explicit App(ControlContext source):context(std::move(source)){}
     Markup::IXamlType GetXamlType(Windows::UI::Xaml::Interop::TypeName const& type){return metadata.GetXamlType(type);}
     Markup::IXamlType GetXamlType(hstring const& name){return metadata.GetXamlType(name);}
     com_array<Markup::XmlnsDefinition> GetXmlnsDefinitions(){return metadata.GetXmlnsDefinitions();}
@@ -40,6 +44,7 @@ struct App:ApplicationT<App,Markup::IXamlMetadataProvider>{
     }
     void OnLaunched(LaunchActivatedEventArgs const&){
         Resources().MergedDictionaries().Append(XamlControlsResources());
+        if(GetEnvironmentVariableW(L"CAPY_NAVIGATOR_LAYOUT",nullptr,0)){navigatorFixture=std::make_shared<NavigatorLayoutFixture>(context);navigatorFixture->open();return;}
         if(GetEnvironmentVariableW(L"CAPY_FEEDBACK_SDK",nullptr,0)){sdk=std::make_shared<SdkFeedbackFixture>();sdk->open();return;}
         wchar_t theme[16]{};GetEnvironmentVariableW(L"CAPY_FEEDBACK_THEME",theme,16);
         root.RequestedTheme(std::wstring_view(theme)==L"dark"?ElementTheme::Dark:ElementTheme::Light);
@@ -61,5 +66,6 @@ struct App:ApplicationT<App,Markup::IXamlMetadataProvider>{
 };
 }
 int WINAPI wWinMain(HINSTANCE,HINSTANCE,PWSTR,int){
-    init_apartment(apartment_type::single_threaded);Application::Start([](auto&&){make<App>();});return 0;
+    ControlContext context;if(GetEnvironmentVariableW(L"CAPY_NAVIGATOR_LAYOUT",nullptr,0))context=fixtureContext(L"CAPY_NAVIGATOR_LAYOUT");
+    init_apartment(apartment_type::single_threaded);Application::Start([context](auto&&){make<App>(context);});return navigatorFixture?navigatorFixture->write():0;
 }

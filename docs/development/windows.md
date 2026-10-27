@@ -164,6 +164,11 @@ sets the minimum content extent without enlarging the viewport.
 Fitted roots take the ScrollPresenter's finite allocation, including its native
 pixel rounding. Assigning a separately rounded content height can create false
 overflow; existing panel scrollers still measure their genuine content extent.
+Navigator measures and arranges its overview and fixed action row together from
+that allocation. It does not resize the overview in a later dispatcher callback.
+Its allocation key includes its position in the window; changed coordinates
+cancel an active Navigator contact before publishing the new placement.
+Unchanged layout notifications do not republish its geometry.
 
 Drawer height providers take the proposed column width before placement. A new
 drawer stays hidden until its measured placement is ready. Its source publishes
@@ -2208,6 +2213,18 @@ foreach ($theme in 'light','dark') {
     ./apps/layer-windows/scripts/test-desktop.ps1 -Script apps/layer-windows/scripts/exercise-sdk-feedback.ps1 -Parameters @{Executable='artifacts/windows/FeedbackReview/CapyCanvas.exe';Theme=$theme}
 }
 ```
+
+`exercise-navigator-allocation.ps1` uses that build for the actual Navigator's
+first native allocation. It checks natural height under an infinite parent,
+the minimum allocation and fractional dimensions directly from Loaded and
+LayoutUpdated events, before a later dispatcher callback could correct them:
+
+```powershell
+./apps/layer-windows/scripts/test-desktop.ps1 -Script apps/layer-windows/scripts/exercise-navigator-allocation.ps1 -Parameters @{Executable='artifacts/windows/FeedbackReview/CapyCanvas.exe'}
+```
+
+For an old-code negative control, `-ExpectFailure` requires the first allocated
+220-unit overview mismatch.
 
 Build `Bitmap` to check the common native uploader with owned pixel buffers and
 the same private context setup as the other control reviews:

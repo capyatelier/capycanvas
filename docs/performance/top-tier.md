@@ -5688,6 +5688,42 @@ Frozen baseline executable/DLL SHA-256 prefixes are `21A3F7A5FCF2` /
 Samples, matched native extents, source identities and health checks stay under
 `artifacts/windows/visual-glitches/startup-padding/resize-cpu/`.
 
+#### Navigator allocation
+
+A later 2026-10-27 bracket isolates the Navigator layout change against the
+NumericV2 baseline on the same 60 Hz laptop. Both x64 Release bundles use the
+same Rust DLL and closed private Paint seed; their native source manifests
+differ only in `NavigatorView.cpp`. The unchanged capture-free harness performs
+three five-second growth/reversal contacts per build, with tracing, captures,
+UI Automation polling, compilation and other agent GPU work absent during
+contacts.
+
+| Build order | Observed native changes/s | UI CPU | UI CPU ms/observed change |
+| --- | ---: | ---: | ---: |
+| NumericV2 baseline first | 55.64 | 90.37% | 16.2425 |
+| Navigator allocation candidate | 54.23 | 88.27% | 16.2776 |
+| NumericV2 baseline last | 54.90 | 86.92% | 15.8336 |
+
+Pooled baseline cost is 16.0394 ms per observed change; candidate cost is 1.49%
+higher. The baseline drift is larger, so this short bracket establishes neither
+a CPU improvement nor a clear regression. All nine contacts grow and reverse
+through the same observed 1100 × 750 to 2099 × 1349 extents, with matching
+initial native control bounds, empty status/stderr and normal closes.
+The denominator is UI-thread CPU divided by distinct observed window bounds,
+not displayed frames. This 60 Hz blank-Paint diagnostic does not qualify the
+120 Hz reference-tier row or Navigator motion on the tier photo.
+
+The baseline executable is
+`FD67CF891864E39CCB7CBC140A10CC78DC9F573CAAC2D262D659EA505F133AC8`;
+the candidate is
+`2883D2E0065D655131D7CE493698B762C494CA0839988331ACCE4E66051D21C5`.
+Both use Rust DLL
+`C565864C5E50B455745E24926590FD7F62956359AE24E97892F3792B1967471E`.
+Raw contacts, exact pooled arithmetic, identities and the preserved outer
+controller parsing failure/pause stay under
+`artifacts/windows/visual-glitches/navigator-layout/resize-cpu/`. That failure
+occurs after the valid first baseline; no contacts are discarded or repeated.
+
 ### Windows startup background
 
 Fresh private profiles on the same laptop compare the preceding button build
