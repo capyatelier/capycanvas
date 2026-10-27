@@ -330,8 +330,11 @@ svg { width: 16px; height: 16px; flex: none; display: block; }
 .neighbor-tab-preview { transition: transform 120ms ease-out; }
 @media (prefers-reduced-motion: reduce) { .neighbor-tab-preview { transition:none; } }
 .panel-frame { position: relative; flex: 1; min-height: 0; min-width: 0; overflow: hidden; }
-.panel-frame.body-scroll { overflow: hidden auto; overscroll-behavior: contain; }
-.panel-frame.body-scroll > .panel { min-height: var(--panel-min-body-height); }
+.panel-viewport { width: 100%; height: 100%; overflow: hidden auto; scrollbar-width: none; overscroll-behavior: contain; }
+:where(.panel-viewport) > .panel { display: flow-root; overflow: visible; }
+.panel-frame.body-scroll:not(.scrollable) { overflow: hidden auto; overscroll-behavior: contain; }
+.panel-frame.body-scroll > .panel,
+.panel-frame.body-scroll > .panel-viewport > .panel { min-height: var(--panel-min-body-height); }
 .panel { overflow: hidden auto; width: 100%; height: 100%; padding: var(--panel-inset); scrollbar-width: none; font-size: var(--ui-text-size); }
 .panel button, .renderer-stats > button { min-height: var(--panel-control-height); padding: 0 var(--panel-field-padding); line-height: 20px; }
 .scroll-thumb { position: absolute; right: 0; width: 8px; min-height: 28px; padding: 2px; cursor: default; touch-action: none; opacity: 0; visibility: hidden; pointer-events: none; transition: opacity 180ms; }
@@ -1589,7 +1592,7 @@ button.new-drawing-preset.disabled { opacity:.4; }
 @media (max-width: 600px) { #command-bar { top: 16px; max-height: calc(100dvh - 32px); } #command-bar .command-result { min-height: 48px; } #command-bar .command-search-close { width: 48px; min-height: 48px; } .command-search-field { min-height: 48px; box-sizing: border-box; } }
 
 .histogram-panel,.waveform-panel { padding:0; }
-.histogram-control,.waveform-control { height:100%; }
+.histogram-control,.waveform-control { display:flow-root; height:100%; }
 .histogram-control > .scope-control,.waveform-control > .scope-control { height:calc(100% - 2 * var(--panel-inset)); }
 .scope-control { margin:var(--panel-inset); display:flex; flex-direction:column; gap:var(--panel-control-spacing); min-width:0; }
 .scope-toolbar,.scope-footer { display:flex; flex:none; align-items:center; gap:var(--panel-control-spacing); min-width:0; }

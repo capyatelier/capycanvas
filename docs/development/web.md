@@ -50,6 +50,8 @@ DOM; `gpu.js` writes the help shown when WebGPU cannot start;
 `documents.js` connects project requests to browser file access and downloads;
 `workspace-worker.js` and `workspace-store.js` keep the workspace in IndexedDB.
 Rust owns editor behavior; JavaScript owns browser events, controls and services.
+Scrollable panels keep their content viewport separate from scrollbar chrome;
+their inner panels retain the shared minimum height and natural measurement.
 Runtime canvas failures show the browser's message and expandable, copyable
 failure details. The report captures the adapter, browser, canvas and transform
 state, tracked renderer storage, main Wasm heap size and the last 16 GPU events

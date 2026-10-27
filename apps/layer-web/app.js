@@ -198,8 +198,12 @@ function numberField(control, label, onChange, inline = false, valueOnly = false
   return number;
 }
 function panelFrame(panel, scrollable = true) {
-  const frame = element("div", "panel-frame"); frame.append(panel);
-  if (scrollable) addScrollbar(panel, frame);
+  const frame = element("div", "panel-frame");
+  if (scrollable) {
+    frame.classList.add("scrollable");
+    const viewport = element("div", "panel-viewport"); viewport.append(panel); frame.append(viewport);
+    addScrollbar(viewport, frame, panel);
+  } else frame.append(panel);
   return frame;
 }
 function commandButton(id, text) {
@@ -582,7 +586,7 @@ function presentWorkspaceLayout(resolved,layoutOnly) {
   for (const group of layout.groups) {
     live.add(group.id);
     let node = groups.get(group.id);
-    const body = panels.get(group.active).parentElement;
+    const body = panels.get(group.active).closest(".panel-frame");
     if (!layoutOnly || !node) {
       if (!node) {
         node = element("section", "dock-group");
@@ -627,9 +631,9 @@ function presentWorkspaceLayout(resolved,layoutOnly) {
           });
           if (tabStyle === "automatic") automaticTabs(labels);
           tabs.append(labels, grip({ kind: "group", group: group.id }));
-          preview.replaceChildren(tabs, panels.get(group.active).parentElement);
+          preview.replaceChildren(tabs, body);
         } else {
-          preview.replaceChildren(panels.get(group.active).parentElement);
+          preview.replaceChildren(body);
           if (group.footer_grip) {
             const footer = element("div", "panel-footer");
             footer.style.height = `${group.footer_grip.height}px`;

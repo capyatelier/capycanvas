@@ -198,3 +198,51 @@ test('shared chrome replies retain the same Capy control and contact state', t =
   runInNewContext(headerSource.slice(headerSource.indexOf('  function present('),headerSource.indexOf('  function allocate('))+'present(preview,true);',native);
   assert.equal(native.geometry,accepted,'drag presentation preserves the accepted layout for cancellation');
 });
+
+test('panel frames keep one scroll owner through body overflow, scroll movement and thumb dragging', () => {
+  const callbacks=[],resizes=[],mutations=[];
+  class Node {
+    constructor(className='') {
+      this.classes=new Set(className.split(' '));this.classList={add:name=>this.classes.add(name)};
+      this.children=[];this.listeners={};this.top=0;this.clientHeight=100;this.extent=100;
+      this.style=new Proxy({}, {set:(style,key,value)=>{style[key]=value;for(const observer of mutations)if(observer.options.attributes&&observer.options.subtree)observer.callback();return true;}});
+    }
+    get scrollHeight(){return Math.max(this.clientHeight,this.extent,...this.children.filter(child=>child.className==='scroll-thumb'&&!child.hidden).map(child=>(parseFloat(child.style.top)||0)+(parseFloat(child.style.height)||0)));}
+    get scrollTop(){return this.top;}
+    set scrollTop(value){this.top=Math.max(0,Math.min(value,this.scrollHeight-this.clientHeight));}
+    append(child){this.children.push(child);child.parentElement=this;}
+    setAttribute(){}
+    addEventListener(type,listener){this.listeners[type]=listener;}
+    emit(type,event={}){this.listeners[type]?.(event);}
+    setPointerCapture(id){this.captured=id;}
+    hasPointerCapture(id){return this.captured===id;}
+    get offsetHeight(){return parseFloat(this.style.height)||0;}
+  }
+  const context={document:{createElement:()=>new Node()},
+    element:(_,className)=>new Node(className),
+    requestAnimationFrame(callback){callbacks.push(callback);return callbacks.length;},
+    ResizeObserver:class{constructor(callback){this.callback=callback;this.nodes=[];resizes.push(this);}observe(node){this.nodes.push(node);}},
+    MutationObserver:class{constructor(callback){this.callback=callback;mutations.push(this);}observe(node,options){this.node=node;this.options=options;}}};
+  const scrollbar=readFileSync(new URL('scrollbars.js',import.meta.url),'utf8').replace('export function addScrollbar','function addScrollbar');
+  const panelFrame=source.slice(source.indexOf('function panelFrame('),source.indexOf('function commandButton('));
+  runInNewContext(scrollbar+panelFrame+'globalThis.panelFrame=panelFrame;',context);
+  const panel=new Node(),frame=context.panelFrame(panel),thumb=frame.children[1],viewport=[frame,...frame.children].find(node=>node.listeners.scroll);
+  assert.ok(frame.classes.has('scrollable'));
+  assert.notEqual(viewport,frame);assert.equal(thumb.parentElement,frame,'scrollbar chrome stays outside the content viewport');
+  assert.deepEqual(resizes[0].nodes,[viewport,panel],'both viewport and inner minimum-body changes refresh the same scrollbar');
+  const flush=()=>{assert.equal(callbacks.length,1);callbacks.shift()();assert.equal(callbacks.length,0,'thumb style writes do not request another animation frame');};
+  viewport.extent=300;panel.clientHeight=300;resizes[0].callback();flush();
+  assert.equal(thumb.hidden,false);assert.ok(Math.abs(parseFloat(thumb.style.height)-100/3)<1e-8);
+  viewport.scrollTop=60;viewport.emit('scroll');flush();
+  assert.ok(Math.abs(parseFloat(thumb.style.top)-frame.scrollTop-20)<1e-8,'viewport thumb stays visible while its parent scrolls');
+  thumb.emit('pointerdown',{pointerType:'mouse',pointerId:4,clientY:30,preventDefault(){}});
+  thumb.emit('pointermove',{pointerType:'mouse',pointerId:4,clientY:40});
+  assert.ok(Math.abs(viewport.scrollTop-90)<1e-8);assert.equal(panel.scrollTop,0,'the natural-size inner panel never becomes a second scroll owner');
+  viewport.extent=500;panel.clientHeight=500;resizes[0].callback();flush();
+  assert.equal(parseFloat(thumb.style.height),28,'content resize refreshes overflow without resizing the frame');
+  viewport.scrollTop=400;viewport.emit('scroll');flush();
+  viewport.clientHeight=490;viewport.extent=490;viewport.scrollTop=viewport.scrollTop;panel.clientHeight=490;resizes[0].callback();flush();
+  assert.equal(thumb.hidden,true,'after scrolling, fitted content cannot retain overflow from the scrollbar itself');
+  assert.equal(viewport.scrollHeight,viewport.clientHeight,'chrome contributes no extent to the content viewport');
+  const excluded=context.panelFrame(new Node(),false);assert.equal(excluded.children.length,1);assert.ok(!excluded.classes.has('scrollable'),'dedicated layer and toolbar scroll policies remain excluded');
+});

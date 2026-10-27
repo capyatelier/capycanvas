@@ -10,7 +10,7 @@ function queueScrollbar(read) {
     for (const write of writes) write();
   });
 }
-export function addScrollbar(panel, frame) {
+export function addScrollbar(panel, frame, content = panel) {
   const thumb = document.createElement("div"); thumb.className = "scroll-thumb";
   thumb.setAttribute("aria-hidden", "true");
   frame.append(thumb);
@@ -27,7 +27,9 @@ export function addScrollbar(panel, frame) {
   };
   const update = () => queueScrollbar(read);
   panel.addEventListener("scroll", update);
-  new ResizeObserver(update).observe(panel);
+  const resize = new ResizeObserver(update);
+  resize.observe(panel);
+  if (content !== panel) resize.observe(content);
   new MutationObserver(update).observe(panel, {
     childList: true,
     subtree: true,

@@ -379,7 +379,7 @@ export function createCustomization({ app, catalog, state, paintPair, workspace,
     }
     for (const [id, panel] of panels) if (!views.has(id)) {
       const strip = panel.querySelector(".toolbar-controls"); if (strip) tileResize.unobserve(strip);
-      discardFields(panel); panel.parentElement.remove(); panels.delete(id);
+      discardFields(panel); panel.closest(".panel-frame").remove(); panels.delete(id);
     }
   }
 
