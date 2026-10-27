@@ -35,7 +35,7 @@ struct WorkspacePanels: View {
                     let divider = store.snapshot["layout"]["dividers"][index]
                     if !divider["fixed"].bool {
                         WorkspaceResizeHandle(store: store, action: JSON(["type": "drag_divider", "id": divider["id"].raw]),
-                            reset: divider["band"].bool && divider["axis"].string == "horizontal" ? {
+                            reset: divider["axis"].string == "horizontal" && !divider["owner_side"].isNull ? {
                                 store.dispatch(["type": "reset_column_width", "id": divider["id"].raw,
                                     "viewport": store.snapshot["layout"]["viewport"].raw])
                             } : nil)
