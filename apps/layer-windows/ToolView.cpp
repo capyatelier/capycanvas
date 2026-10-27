@@ -50,7 +50,7 @@ struct ToolSetView : std::enable_shared_from_this<ToolSetView> {
     void init(){
         root.UseLayoutRounding(false);root.Spacing(6);list.Spacing(2);
         auto weak=weak_from_this();
-        divider.Height(1);divider.Margin({4,0,4,0});divider.Background(data->brush(L"settings_secondary"));divider.Opacity(.3);
+        divider=dividerLine(data,true);
         AutomationProperties::SetAutomationId(divider,L"tool-set-divider");
         root.Children().Append(groups);root.Children().Append(divider);root.Children().Append(list);
         groups.Visibility(panel==L"tools"?Visibility::Collapsed:Visibility::Visible);
