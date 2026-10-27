@@ -52,6 +52,7 @@ struct WorkspacePanels: View {
             CanvasFloorLayer(store: store, presence: store.notice, bar: store.canvasBar).zIndex(181)
             WorkspaceDropIndicator(workspace: workspace, palette: EditorPalette(source: store.state["palette"])).zIndex(300)
             WorkspaceCollapsedColumns(store: store).modifier(WorkspaceChromeVisibility(hidden: store.snapshot["chrome_hidden"].bool))
+            WorkspaceBubbleLayer(store: store, bubbles: store.bubbles)
             WorkspaceContentDrawers(store: store, drawers: store.contentDrawers)
             WorkspaceTabSlideOverlay(store: store, slide: workspace.tabSlide).zIndex(250)
             ToolbarSliderPreviewOverlay(preview: workspace.sliderPreview, palette: EditorPalette(source: store.state["palette"])).zIndex(350)

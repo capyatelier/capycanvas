@@ -43,7 +43,6 @@ struct EditorView<Canvas: View>: View {
                         .modifier(WorkspaceChromeVisibility(hidden: store.snapshot["chrome_hidden"].bool))
                 }
                 WorkspacePanels(store: store, workspace: store.workspace)
-                WorkspaceBubbleLayer(store: store, bubbles: store.bubbles)
                 PenResponseCalibration(store: store)
             }
             HStack {
