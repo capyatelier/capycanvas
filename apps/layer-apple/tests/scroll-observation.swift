@@ -107,6 +107,10 @@ private struct NestedScrolls: View {
             inner.contentOffset.y = 177 - inner.adjustedContentInset.top
             await settle(window)
             precondition(position.offset == 177, "Native scrolling must track position")
+            inner.bounces = true
+            inner.contentOffset.y = -inner.adjustedContentInset.top - 24
+            await settle(window)
+            precondition(position.offset == 0 && samples.values.last == 0, "Top overscroll must report the content start")
             position.scrollTo(y: .greatestFiniteMagnitude)
             observation.attach()
             await settle(window)
@@ -138,8 +142,9 @@ private struct NestedScrolls: View {
             precondition(replacement.offset == 210, "Remount must apply a pending restoration")
             precondition(samples.values.isEmpty && remounted.values == [210], "Queued events must not publish to a retired owner or duplicate the remount publication")
             let selection = EditorScrollPosition()
+            var publishedOffset: CGFloat?
             @MainActor func positioned() -> UIViewController {
-                UIHostingController(rootView: EditorPositionedScrollView(position: selection) {
+                UIHostingController(rootView: EditorPositionedScrollView(position: selection, offsetChanged: { publishedOffset = $0 }) {
                     VStack(spacing: 0) {
                         ForEach(0..<40, id: \.self) { index in
                             Color.clear.frame(height: 60).id(UInt64(index))
@@ -171,6 +176,12 @@ private struct NestedScrolls: View {
             mountedScroll.setContentOffset(CGPoint(x: 0, y: 180 - mountedScroll.adjustedContentInset.top), animated: false)
             await settle(window)
             precondition(abs(selection.offset - 180) < 1, "Native movement must replace the previously requested offset")
+            mountedScroll.bounces = true
+            mountedScroll.setContentOffset(CGPoint(x: 0, y: -mountedScroll.adjustedContentInset.top - 24), animated: false)
+            await settle(window)
+            precondition(selection.offset == 0 && publishedOffset == 0, "Positioned scroll must report the content start during top overscroll")
+            mountedScroll.setContentOffset(CGPoint(x: 0, y: 180 - mountedScroll.adjustedContentInset.top), animated: false)
+            await settle(window)
             window.rootViewController = UIViewController()
             await settle(window)
             window.rootViewController = positioned()

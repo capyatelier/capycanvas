@@ -70,7 +70,7 @@ private struct PositionedScrollView<Content: View>: View {
     }
     var body: some View {
         EditorScrollView { content() }.scrollPosition($scrollPosition)
-            .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y + $0.contentInsets.top } action: { _, next in position.offset = next; offsetChanged?(next) }
+            .onScrollGeometryChange(for: CGFloat.self) { max(0, $0.contentOffset.y + $0.contentInsets.top) } action: { _, next in position.offset = next; offsetChanged?(next) }
             .onChange(of: position.request, initial: true) { _, request in
                 switch request?.target {
                 case .offset(let y): scrollPosition.scrollTo(y: y)

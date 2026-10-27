@@ -98,7 +98,7 @@ final class ScrollObservationView: UIView {
                 scroll.setContentOffset(CGPoint(x: scroll.contentOffset.x, y: min(maximum, max(minimum, y + minimum))), animated: false)
                 if let request, case .offset = request.target { position?.applied(request) }
             }
-            let offset = scroll.contentOffset.y + scroll.adjustedContentInset.top
+            let offset = max(0, scroll.contentOffset.y + scroll.adjustedContentInset.top)
             position?.offset = offset
             if offset != lastOffset { lastOffset = offset; offsetChanged?(offset) }
             let next = scroll.isTracking || scroll.isDragging || scroll.isDecelerating

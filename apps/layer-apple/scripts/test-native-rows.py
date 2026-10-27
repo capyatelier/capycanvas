@@ -33,7 +33,7 @@ def main():
 
     devices = json.loads(run("destinations", ["xcrun", "simctl", "list", "devices", "available", "--json"]))
     candidates = [d for group in devices["devices"].values() for d in group
-                  if d.get("isAvailable") and d["state"] == "Booted" and "iPad" in d["name"]
+                  if d.get("isAvailable") and d["state"] == "Booted" and "iPad" in d.get("deviceTypeIdentifier", d["name"])
                   and (args.simulator is None or d["udid"] == args.simulator)]
     if len(candidates) != 1:
         parser.error("Boot one iPad simulator in Xcode, or select a booted iPad with --simulator")
