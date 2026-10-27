@@ -36,7 +36,7 @@ private enum Checks {
     static func exercise(_ layer: CheckedMetalLayer, main: Bool, platform: UInt32) async throws {
         layer.configurations.withLock { $0.removeAll() }
         try await withCheckedThrowingContinuation { (done: CheckedContinuation<Void, Error>) in
-            DispatchQueue(label: "art.capycanvas.tests.layer-owner").async {
+            let owner = Thread {
                 do {
                     var bootstrap: UInt64 = 0
                     var error: UInt64 = 0
@@ -57,6 +57,9 @@ private enum Checks {
                     done.resume()
                 } catch { done.resume(throwing: error) }
             }
+            owner.name = "art.capycanvas.tests.layer-owner"
+            owner.stackSize = 8 * 1024 * 1024
+            owner.start()
         }
         let samples = layer.configurations.withLock { $0 }
         guard samples.count >= 2, samples.allSatisfy({ $0.main == main && $0.disabled }) else {

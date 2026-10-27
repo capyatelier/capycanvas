@@ -25,6 +25,7 @@ final class CanvasView: UIView {
     private var sceneActive = false
     private var attached = false
     private var drawableExtent = CGSize.zero
+    private var submittedScale: CGFloat = 0
     private var sceneGeometry: NSKeyValueObservation?
     private var keyboardCoversField = false
     private let shaderActivity = ShaderActivityRecognizer()
@@ -176,8 +177,8 @@ final class CanvasView: UIView {
         metal.frame = bounds
         metal.contentsScale = contentScaleFactor
         CATransaction.commit()
-        guard extent != drawableExtent || !attached else { return }
-        drawableExtent = extent
+        guard extent != drawableExtent || contentScaleFactor != submittedScale || !attached else { return }
+        drawableExtent = extent; submittedScale = contentScaleFactor
         let width = UInt32(extent.width), height = UInt32(extent.height)
         store.native?.observeDisplay(width: width, height: height, scale: Float(contentScaleFactor),
             maximumRefreshRate: window.screen.maximumFramesPerSecond)

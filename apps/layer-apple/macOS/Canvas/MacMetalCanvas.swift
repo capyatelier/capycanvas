@@ -21,6 +21,7 @@ final class MacCanvasView: NSView {
     private var windowObservers: [NSObjectProtocol] = []
     private var shaderInputMonitor: Any?
     private var extent = CGSize.zero
+    private var submittedScale: CGFloat = 0
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
     override var isOpaque: Bool { true }
@@ -144,8 +145,8 @@ final class MacCanvasView: NSView {
         }
         store.native?.observeDisplay(width: UInt32(next.width), height: UInt32(next.height), scale: Float(scale),
             maximumRefreshRate: window.screen?.maximumFramesPerSecond ?? 0)
-        guard next != extent || !attached else { return }
-        extent = next; layer.contentsScale = scale; layer.drawableSize = next
+        guard next != extent || scale != submittedScale || !attached else { return }
+        extent = next; submittedScale = scale; layer.contentsScale = scale; layer.drawableSize = next
         if !attached { store.native?.attach(layer, width: UInt32(next.width), height: UInt32(next.height), scale: Float(scale)); attached = true; frames.activate() }
         else { store.native?.resize(width: UInt32(next.width), height: UInt32(next.height), scale: Float(scale)) }
         wake()
