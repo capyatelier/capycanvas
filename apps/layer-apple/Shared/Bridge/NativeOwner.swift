@@ -156,6 +156,7 @@ final class NativeOwner: @unchecked Sendable {
     private var lastStorageStatus: Data?
     #if DEBUG
     private var initialActions: [JSON] = []
+    private var pendingInitialWorkspaceID: String?
     private var workspaceInitialized = false
     private var surfaceSized = false
     #endif
@@ -893,16 +894,28 @@ final class NativeOwner: @unchecked Sendable {
     private func applyInitialActions() throws {
         #if DEBUG
         guard workspaceInitialized && surfaceSized && canvasReady && !launchSessionPending else { return }
-        if initialActions.contains(where: { $0["type"].string == "workspace_manager" }) {
+        if pendingInitialWorkspaceID != nil || initialActions.contains(where: { $0["type"].string == "workspace_manager" }) {
             // Workspace fixture commands have the same idle requirement as
             // their UI entries.
             guard canvasReady && shadersReady,
-                try request(6, JSON(["type": "tick"]))?["view"]["busy"].bool == false else { return }
+                let view = try request(6, JSON(["type": "tick"]))?["view"], !view["busy"].bool,
+                pendingInitialWorkspaceID.map({ view["id"].string == $0 }) ?? true else { return }
+            pendingInitialWorkspaceID = nil
         }
         // Fixture actions can collapse or resize columns. Apply them once,
         // after restoration and the first real surface size, not at 1×1 startup.
         let actions = initialActions; initialActions = []
-        for action in actions { _ = try request(0, action) }
+        for (index, action) in actions.enumerated() {
+            _ = try request(0, action)
+            if action["type"].string == "workspace_manager", action["command"]["type"].string == "switch" {
+                initialActions = Array(actions.dropFirst(index + 1))
+                if !initialActions.isEmpty {
+                    pendingInitialWorkspaceID = action["command"]["id"].string
+                    try publish()
+                }
+                return
+            }
+        }
         #endif
     }
     func workspaceDidInitialize() {

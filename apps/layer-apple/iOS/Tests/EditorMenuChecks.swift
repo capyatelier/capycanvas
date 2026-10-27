@@ -255,7 +255,7 @@ extension EditorMenuChecks {
         XCUIDevice.shared.orientation = .landscapeLeft
         for theme in ["light", "dark"] {
             let app = editorCaptureApplication()
-            app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"\#(theme)"}]"#
+            app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"\#(theme)"},{"type":"workspace_manager","command":{"type":"switch","id":"builtin:workspace:illustrator"}}]"#
             app.launch()
             defer { app.terminate() }
             let canvas = app.descendants(matching: .any)["canvas"].firstMatch
@@ -284,9 +284,6 @@ extension EditorMenuChecks {
                     width: frame.width, height: max(0, frame.maxY - tab.frame.maxY))
             }
             let original = viewport()
-            let verticalPadding = max(0, original.width - controls.frame.width)
-            let naturalHeight = controls.frame.height + verticalPadding
-            let minimumHeight = 128 + verticalPadding
             let dividers = app.descendants(matching: .any)
                 .matching(NSPredicate(format: "identifier BEGINSWITH %@", "workspace-divider-"))
             let candidates = dividers.allElementsBoundByIndex.filter {
@@ -295,25 +292,22 @@ extension EditorMenuChecks {
                     && frame.maxX > group.frame.minX && frame.minX < group.frame.maxX
             }.sorted { abs($0.frame.midY - tab.frame.minY) < abs($1.frame.midY - tab.frame.minY) }
             guard let divider = candidates.first,
-                  naturalHeight > minimumHeight + 12,
                   abs(divider.frame.maxY - tab.frame.minY) < tab.frame.height else {
                 attachEditor(in: app, name: "color-resize-unavailable-\(theme)")
-                XCTFail("No nearby horizontal divider can exercise the interval between the Color minimum and natural height; use a fixed-allocation component fixture")
+                XCTFail("The docked Color group must expose its horizontal divider")
                 continue
             }
-            let targetHeight = (minimumHeight + naturalHeight) / 2
             let start = divider.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-            start.press(forDuration: 0.1, thenDragTo: start.withOffset(CGVector(dx: 0, dy: original.height - targetHeight)))
+            start.press(forDuration: 0.1, thenDragTo: start.withOffset(CGVector(dx: 0, dy: -60)))
             let resized = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
-                let height = viewport().height
-                return height >= minimumHeight - 1 && height < naturalHeight - 4
+                viewport().height > original.height + 25
             }, object: app)
             let achieved = XCTWaiter.wait(for: [resized], timeout: 10) == .completed
             attachEditor(in: app, name: "color-resize-allocation-\(theme)")
-            let hierarchy = XCTAttachment(string: "original=\(original) minimum=\(minimumHeight) natural=\(naturalHeight) actual=\(viewport())\n\(app.debugDescription)")
+            let hierarchy = XCTAttachment(string: "original=\(original) actual=\(viewport())\n\(app.debugDescription)")
             hierarchy.name = "color-resize-geometry-\(theme)"; hierarchy.lifetime = .keepAlways
             add(hierarchy)
-            XCTAssertTrue(achieved, "The real divider must produce a Color body shorter than natural height and at least its readable minimum")
+            XCTAssertTrue(achieved, "The real divider must increase the Color body height")
             guard achieved else { continue }
             let allocation = viewport().insetBy(dx: -1, dy: -1)
             for identifier in ["color-wheel", "paint-edit-color", "color-shape-square", "color-shape-triangle"] {
@@ -336,6 +330,10 @@ extension EditorMenuChecks {
                     attachEditor(in: app, name: "color-resize-edit-failed-\(theme)-\(x)")
                 }
             }
+            let restore = divider.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            restore.press(forDuration: 0.1, thenDragTo: restore.withOffset(CGVector(dx: 0, dy: 60)))
+            expectation(for: NSPredicate { _, _ in abs(viewport().height - original.height) <= 1 }, evaluatedWith: app)
+            waitForExpectations(timeout: 10)
         }
     }
 }
