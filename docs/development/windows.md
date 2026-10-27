@@ -1779,6 +1779,7 @@ Use `-CanvasResetOnly -Device touch` for finger double taps on the canvas side
 of the outside column edge. It checks exact preferred-width reset at 20 and
 35 units, exclusion beyond the 36-unit reach, a canceled first contact followed
 by one fresh tap, and exact workspace Undo/Redo without assuming a default width.
+The 20-unit case requires the reset while the second contact is still held.
 The ordinary edge-reach journey checks contacts inside the wider free reach;
 it does not replace the divider check. It also checks that Escape during pending
 and claimed edge contacts restores the workspace and clears the contact.

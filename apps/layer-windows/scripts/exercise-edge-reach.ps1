@@ -233,7 +233,14 @@ function Check-CanvasReset([string]$Theme){
                 if((Width $groups[0].id) -ne $grown){throw 'A touch double tap beyond 36 units reset the column'}
                 WindowCommand 'undo_workspace';Settled
             }else{
-                [void][CapyRowPointer]::DoubleClick('touch',$at.x,$at.y)
+                if($distance -eq 20){
+                    try{
+                        [CapyRowPointer]::Down('touch',$at.x,$at.y);[CapyRowPointer]::Up()
+                        [CapyRowPointer]::Down('touch',$at.x,$at.y)
+                        Wait-Until {[CapyRowPointer]::Active -and (Width $groups[0].id) -eq $preferred} 'Canvas-side double tap did not reset on the second press' 2
+                        $record.second_down_width=Width $groups[0].id;$record.second_contact_held=[CapyRowPointer]::Active
+                    }finally{[CapyRowPointer]::Up()}
+                }else{[void][CapyRowPointer]::DoubleClick('touch',$at.x,$at.y)}
                 Wait-Until {(Width $groups[0].id) -eq $preferred} "Canvas-side touch double tap at $distance units did not restore exact preferred width ($preferred)"
                 Settled;$resetLayout=(Model).state.workspace.layout|ConvertTo-Json -Depth 90 -Compress
                 WindowCommand 'undo_workspace';Settled
