@@ -1740,6 +1740,8 @@ Its touch case docks Layers beside a group
 gap, fills the native list and hides its action footer through configuration.
 An actual layer row must keep a sideways swipe and yield a vertical contact to
 row resizing; one workspace Undo restores the exact layout.
+`-ClosedStripOnly -Device pen -Theme dark` isolates the default Paint open
+column's close-and-outward-swipe sequence without repeating the other checks.
 Use `exercise-header.ps1 -FullscreenOnly -Theme dark|light` for F11 entry and
 exit from normal and maximized windows. It checks restored native bounds and
 the fullscreen edge-gesture property, and retains window, monitor and DWM state.

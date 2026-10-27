@@ -1,4 +1,4 @@
-﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('mouse','pen','touch')][string]$Device='mouse',[switch]$ColumnResetOnly,[switch]$CanvasResetOnly,[ValidateSet('dark','light')][string]$Theme)
+﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('mouse','pen','touch')][string]$Device='mouse',[switch]$ColumnResetOnly,[switch]$CanvasResetOnly,[switch]$ClosedStripOnly,[ValidateSet('dark','light')][string]$Theme)
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 $CapyPopups=$true
@@ -313,7 +313,7 @@ try {
     foreach($theme in $themes){
         Start-Review $theme
         Settled
-        if($CanvasResetOnly){Check-CanvasReset $theme}elseif($ColumnResetOnly){Check-ColumnHandleReset $theme}else{
+        if($ClosedStripOnly){Check-ClosedStrip $theme}elseif($CanvasResetOnly){Check-CanvasReset $theme}elseif($ColumnResetOnly){Check-ColumnHandleReset $theme}else{
             Check-ColumnEdge $theme
             Check-GroupGap $theme
             Check-ClosedStrip $theme
@@ -324,7 +324,8 @@ try {
         if((Get-Item -LiteralPath $stderr).Length){throw "Native stderr requires inspection ($theme)"}
         [CapyRowPointer]::Dispose()
     }
-    if($CanvasResetOnly){[pscustomobject]@{device=$Device;themes=($themes -join ',');canvas_side_reset='passed';preferred_width='exact';workspace_undo_redo='exact';evidence=$run;scope='Native touch canvas-side double taps only; physical shell gestures remain separate'}|ConvertTo-Json}
+    if($ClosedStripOnly){[pscustomobject]@{device=$Device;themes=($themes -join ',');closed_strip='passed';evidence=$run;scope='Native closed-column outward swipe only'}|ConvertTo-Json}
+    elseif($CanvasResetOnly){[pscustomobject]@{device=$Device;themes=($themes -join ',');canvas_side_reset='passed';preferred_width='exact';workspace_undo_redo='exact';evidence=$run;scope='Native touch canvas-side double taps only; physical shell gestures remain separate'}|ConvertTo-Json}
     elseif($ColumnResetOnly){[pscustomobject]@{device=$Device;themes=($themes -join ',');actual_nested_divider_reset='passed';owner_side='left';preferred_width='exact';other_owner='unchanged';workspace_undo_redo='exact';evidence=$run;scope='Actual native nested divider contacts only; physical devices and timing remain separate'}|ConvertTo-Json}
     else{[pscustomobject]@{device=$Device;column_edge_from_inside='passed';resize_pointer=($Device -eq 'mouse');double_press_reset='passed';canvas_contact=$(if($Device -eq 'touch'){'grabs'}else{'kept'});vertical_swipe_kept='passed';group_gap='passed';closed_strip='passed';themes=($themes -join ',');scope='OS-delivered synthetic input; physical devices and timing remain separate'}|ConvertTo-Json}
 }catch{

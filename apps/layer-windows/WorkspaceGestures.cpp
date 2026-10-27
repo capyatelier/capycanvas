@@ -193,7 +193,7 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
         for(auto const& weak:edge->path)if(auto element=weak.get();element&&PointerGesture::Captured(element,edge->pointer))element.ReleasePointerCapture(edge->contact);
         bool captured=root.CapturePointer(edge->contact);
         releasing=false;
-        if(!captured){edgeEnd(L"cancel");return;}
+        if(!captured){edgeEnd(L"cancel",L"capture_failed");return;}
         if(edge->device==L"touch")return;
         using Shape=NativeInput::InputSystemCursorShape;
         static constexpr Shape shapes[]{Shape::SizeWestEast,Shape::SizeNorthSouth,Shape::SizeWestEast,Shape::SizeNorthSouth,Shape::SizeNorthwestSoutheast,Shape::SizeNortheastSouthwest};
@@ -242,18 +242,19 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
         if(edge->claimed)e.Handled(true);
         edgeEnd(p.Properties().IsCanceled()?L"cancel":L"up");
     }
-    void edgeEnd(wchar_t const* phase){
+    void edgeEnd(wchar_t const* phase,wchar_t const* reason=L""){
         if(!edge)return;
         edgeSend(phase);
-        settleEdge(phase);
+        settleEdge(phase,reason);
     }
-    void settleEdge(wchar_t const* phase=L"settled"){
+    void settleEdge(wchar_t const* phase=L"settled",wchar_t const* reason=L""){
         for(auto const& [weak,mode]:edge->scrolls)if(auto element=weak.get()){
             auto owned=std::find_if(scrollModes.begin(),scrollModes.end(),[&](auto const& entry){return entry.first.get()==element;});
             if(owned!=scrollModes.end())owned->second=mode;
             else if(element.ManipulationMode()==ManipulationModes::None)element.ManipulationMode(mode);
         }
-        if(trace)lastEdge=O({{L"phase",S(phase)},{L"contact",S(edge->contactClass)},{L"device",S(edge->device)},{L"vertical",B(edge->vertical)},{L"claimed",B(edge->claimed)}});
+        if(trace)lastEdge=O({{L"phase",S(phase)},{L"reason",S(reason)},{L"contact",S(edge->contactClass)},{L"device",S(edge->device)},{L"vertical",B(edge->vertical)},{L"claimed",B(edge->claimed)},
+            {L"captured",B(PointerGesture::Captured(root,edge->pointer))}});
         bool claimed=edge->claimed;auto released=edge->contact;
         edge.reset();++edgeSerial;
         if(claimed){releasing=true;root.ReleasePointerCapture(released);releasing=false;cursor();deferClick();}
@@ -598,14 +599,16 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
         })),true);
         root.AddHandler(UIElement::PointerCanceledEvent(),box_value(PointerEventHandler([weak](auto&&,auto&& e){
             if(auto self=weak.lock();self&&!self->releasing){
+                if(e.OriginalSource().template try_as<UIElement>()!=self->root&&PointerGesture::Captured(self->root,e.Pointer().PointerId()))return;
                 if(self->pointer==e.Pointer().PointerId())self->cancel(L"pointer_canceled");
-                if(self->edge&&self->edge->pointer==e.Pointer().PointerId())self->edgeEnd(L"cancel");
+                if(self->edge&&self->edge->pointer==e.Pointer().PointerId())self->edgeEnd(L"cancel",L"pointer_canceled");
                 if(self->rejectedPointer==e.Pointer().PointerId()){self->rejectedPointer.reset();self->deferClick();}
             }
         })),true);
         root.AddHandler(UIElement::PointerCaptureLostEvent(),box_value(PointerEventHandler([weak](auto&&,auto&& e){
+            if(auto self=weak.lock();self&&!self->releasing&&PointerGesture::Captured(self->root,e.Pointer().PointerId()))return;
             if(auto self=weak.lock();self&&!self->releasing&&self->edge&&self->edge->pointer==e.Pointer().PointerId()&&e.GetCurrentPoint(self->root).IsInContact()
-                &&(!self->edge->claimed||e.OriginalSource().try_as<UIElement>()==self->root))self->edgeEnd(L"cancel");
+                &&(!self->edge->claimed||e.OriginalSource().try_as<UIElement>()==self->root))self->edgeEnd(L"cancel",L"capture_lost");
             if(auto self=weak.lock();self&&!self->releasing&&self->pointer==e.Pointer().PointerId()){
                 if(self->trace){
                     auto source=e.OriginalSource().try_as<UIElement>();

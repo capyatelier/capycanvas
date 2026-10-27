@@ -598,6 +598,7 @@ claiming the native event and canceling its pending resize contact.
 Canvas touch uses native double-tap timing and distance, forwarding the reset
 to the same shared action. Cancellation and intervening chrome contacts retire
 its tap candidate. Escape and blur retire pending and captured edge gestures.
+Cancellation from a retired child cannot end the workspace's current capture.
 Layer rows wait for the asynchronous edge decision before their own scrolling,
 swipe or reorder can claim the contact; an admitted row hold retires the pending
 edge first. Held tiles use the shared `tears_bubble` flag to retain immediate
