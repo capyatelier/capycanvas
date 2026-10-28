@@ -106,7 +106,8 @@ try {
  Invoke-Id 'shortcut-category-Modifier keys'
  Wait-Until {(Page).category -eq 'Modifier keys' -and (Shown 'add-modifier-key')} 'Modifier keys did not open'
  $modifier=@((Page).modifiers|Where-Object visible)[0]
- Invoke-Id ('modifier-'+$modifier.label)
+ $held=$modifier.key
+ Invoke-Id ('modifier-'+$held.key+$(if($held.command){'-command'})+$(if($held.shift){'-shift'})+$(if($held.alt){'-alt'}))
  Wait-Until {(Prefs).modifier_editor.label -eq $modifier.label -and (Shown 'modifier-same')} "Modifier key $($modifier.label) did not open"
  $perTool=(Prefs).modifier_editor.per_tool
  (Control 'modifier-same').GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()

@@ -85,7 +85,10 @@ function Start-App {
         $review.MainWindowHandle -ne [IntPtr]::Zero -and (Model).brush_ready
     } 'Review startup did not complete' 45
     if(!(Model).windows_isolated_settings){throw 'Refusing to change a non-isolated settings profile'}
-    $script:root=[System.Windows.Automation.AutomationElement]::FromHandle($review.MainWindowHandle)
+    [CapyWindowApi]::ShowWindow($review.MainWindowHandle,3)|Out-Null
+    $native=@{window=$null}
+    Wait-Until {$native.window=Owned-DrawingWindow $review;$null -ne $native.window} 'Owned drawing window is unavailable'
+    $script:root=$native.window.Root;$script:drawingHandle=$native.window.Handle
     $script:scope=$root
 }
 function Check-Exit {
@@ -111,7 +114,7 @@ function Wait-CloseError {
 }
 function Request-CloseError {
     $script:scope=$root
-    $review.CloseMainWindow()|Out-Null
+    if(![CapyWindowApi]::PostMessage($drawingHandle,0x10,[UIntPtr]::Zero,[IntPtr]::Zero)){throw 'Owned drawing close request failed'}
     Wait-CloseError
 }
 function Recovery-Choice([string]$Name) {

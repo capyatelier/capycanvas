@@ -57,7 +57,10 @@ function Launch([string]$Label){
     [IO.File]::WriteAllText((Join-Path $repo 'artifacts/windows/manager-review.json'),(@{process_id=$review.Id;run=$run}|ConvertTo-Json))
     Write-Output "Owned manager review $($review.Id) ($Label)"
     Wait-Until {$review.Refresh();$review.MainWindowHandle -ne [IntPtr]::Zero -and (Model).brush_ready -and (Model).windows_workspace.ready} 'Manager review did not start' 45
-    $script:root=[System.Windows.Automation.AutomationElement]::FromHandle($review.MainWindowHandle)
+    [CapyWindowApi]::ShowWindow($review.MainWindowHandle,3)|Out-Null
+    $owned=@{window=$null}
+    Wait-Until {$owned.window=Owned-DrawingWindow $review;$null -ne $owned.window} 'Owned drawing window is unavailable'
+    $script:root=$owned.window.Root
 }
 function Close {
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close
@@ -87,7 +90,7 @@ function Check-Pins([string]$WorkspaceId,[string]$WorkspaceName){
     }finally{$pinRapid|ConvertTo-Json -Depth 4|Set-Content -LiteralPath (Join-Path $run 'pin-rapid.json')}
     if((Layout) -ne $pinLayout -or (Model).windows_workspace.id -ne $pinWorkspace){throw 'Pinning changed workspace selection or layout'}
     if(Find ('workspace-manager-options-'+$WorkspaceId) -Visible){throw 'Included workspace still has a row options button'}
-    Invoke ('workspace-manager-grip-'+$WorkspaceId)
+    Invoke-Id ('workspace-manager-grip-'+$WorkspaceId)
     $null=Control 'workspace-manager-move-up'
     foreach($id in @('workspace-manager-rename','workspace-manager-delete')){
         $action=Find $id
