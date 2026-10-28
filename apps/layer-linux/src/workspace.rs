@@ -259,7 +259,8 @@ mod allocation {
                         // HDR/proof status remains operable when the optional
                         // zoom/rotation HUD is hidden. Measure native buttons.
                         let mut bounds = resolved.status;
-                        let height = child.measure(gtk::Orientation::Vertical, bounds.width as i32).1 as f32;
+                        let minimum_width = child.measure(gtk::Orientation::Horizontal, -1).0;
+                        let height = child.measure(gtk::Orientation::Vertical, (bounds.width as i32).max(minimum_width)).1 as f32;
                         let extra = (height - bounds.height).max(0.);
                         bounds.y -= extra;
                         bounds.height += extra;

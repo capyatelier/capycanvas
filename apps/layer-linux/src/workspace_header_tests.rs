@@ -16,6 +16,22 @@ mod callback_boundary_tests;
 #[path = "button_feedback_tests.rs"]
 mod button_feedback;
 
+#[test]
+#[ignore = "private compositor; GTK warnings must stay fatal"]
+fn native_small_window_status_measurement() {
+    let previous = glib::log_set_always_fatal(glib::LogLevels::LEVEL_WARNING);
+    let app = native_test_app("art.capycanvas.SmallWindowStatus");
+    let w = Workspace::new(&app);
+    apply_fixture_theme(&w);
+    w.window.set_default_size(600, 500);
+    w.window.present();
+    pump(2000);
+    assert!(w.window.width() < 800, "window reaches the narrow layout");
+    w.window.close();
+    pump(100);
+    glib::log_set_always_fatal(previous);
+}
+
 fn wait_for_drawer_close(w: &Workspace) {
     let deadline = Instant::now() + Duration::from_secs(2);
     while !w.drawer.is_closed() {
