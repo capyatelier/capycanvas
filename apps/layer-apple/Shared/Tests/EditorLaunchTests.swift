@@ -154,6 +154,10 @@ final class EditorLaunchTests: XCTestCase {
     @MainActor func testPixelClipboardDark() throws { try checkPixelClipboard(in: editorCaptureApplication(), theme: "dark") }
     @MainActor func testImageObjects() throws { try checkImageObjects(in: editorCaptureApplication(), theme: "light") }
     @MainActor func testImageObjectsDark() throws { try checkImageObjects(in: editorCaptureApplication(), theme: "dark") }
+    #if os(macOS)
+    @MainActor func testVectorKeyboard() throws { try checkVectorKeyboard(in: editorCaptureApplication(), theme: "light") }
+    @MainActor func testVectorKeyboardDark() throws { try checkVectorKeyboard(in: editorCaptureApplication(), theme: "dark") }
+    #endif
     @MainActor func testReleaseEscapeOrder() { checkReleaseEscapeOrder(in: editorCaptureApplication(), theme: "light") }
     @MainActor func testReleaseEscapeOrderDark() { checkReleaseEscapeOrder(in: editorCaptureApplication(), theme: "dark") }
     @MainActor func testReleaseToolbarBubbles() { checkReleaseToolbarBubbles(in: editorCaptureApplication(), theme: "light") }

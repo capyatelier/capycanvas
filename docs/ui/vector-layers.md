@@ -160,7 +160,8 @@ a corner; a press and drag pulls out symmetric handles for a smooth anchor, and
 Alt drags only the outgoing handle. Shift keeps the new anchor at 45° steps from
 the last. Dragging a handle back to its anchor retracts it. The canvas bar's Remove Point (Backspace), Cancel (Escape) and Finish
 (Enter) work as for polygon selections; Undo also removes the last anchor, and
-with none left cancels the draft, without undoing earlier steps. Clicking the
+with none left cancels the draft, without undoing earlier steps. Forward Delete
+keeps its Clear Selected binding and never removes a draft anchor. Clicking the
 first anchor closes the path. The finished path uses Figure's paint mode, line width and colors, with
 sharp corners and flat ends, and is selected, in one undo step. On a paint
 layer the draft shows as an outline and Finish paints it into the layer.

@@ -1,6 +1,156 @@
 import XCTest
+#if os(macOS)
+import AppKit
+#endif
 
 extension XCTestCase {
+    #if os(macOS)
+    @MainActor func checkVectorKeyboard(in app: XCUIApplication, theme: String) throws {
+        let clipboard = try NativePhotoPasteboard()
+        let marker = NSPasteboardItem()
+        marker.setString(UUID().uuidString, forType: .string)
+        try clipboard.replace([marker])
+        defer { clipboard.restore() }
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"\#(theme)"},{"type":"set_color","rgba":[0.1,0.1,0.12,1]}]"#
+        app.launch(); capturePaintEditor(in: app, theme: theme)
+        createWhitePaperDrawing(width: "1440", height: "1080", in: app)
+        workspaceActivate(app.buttons["panel-tab-layers"])
+        workspaceActivate(app.buttons["layer-new-vector"])
+        let viewport = workspaceViewport(in: app), paper = editorPaper(in: app)
+        func coordinate(_ x: CGFloat, _ y: CGFloat) -> XCUICoordinate {
+            viewport.coordinate(withNormalizedOffset: paper.offset(x, y))
+        }
+        func drag(_ from: (CGFloat, CGFloat), _ to: (CGFloat, CGFloat), modifiers: XCUIElement.KeyModifierFlags = []) {
+            XCUIElement.perform(withKeyModifiers: modifiers) {
+                coordinate(from.0, from.1).click(forDuration: 0.05, thenDragTo: coordinate(to.0, to.1))
+            }
+            editorDocumentTitle(in: app).hover()
+        }
+        func tap(_ x: CGFloat, _ y: CGFloat, modifiers: XCUIElement.KeyModifierFlags = []) {
+            XCUIElement.perform(withKeyModifiers: modifiers) { coordinate(x, y).click() }
+            editorDocumentTitle(in: app).hover()
+        }
+        func key(_ value: XCUIKeyboardKey, modifiers: XCUIElement.KeyModifierFlags = []) {
+            app.typeKey(value.rawValue, modifierFlags: modifiers)
+        }
+        func expectInk(_ points: [(CGFloat, CGFloat)], _ wanted: [Bool], _ name: String) {
+            let locations = points.map { point -> CGPoint in
+                let center = paper.point(point.0, point.1)
+                return CGPoint(x: center.x - 2 / viewport.frame.width, y: center.y - 2 / viewport.frame.height)
+            }
+            let match = NSPredicate { _, _ in
+                self.editorPixelSamples(in: app, at: locations, size: 8).map { bytes in
+                    stride(from: 0, to: bytes.count, by: 4).contains { max(bytes[$0], bytes[$0 + 1], bytes[$0 + 2]) < 100 }
+                } == wanted
+            }
+            if XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: match, object: app)], timeout: 10) != .completed {
+                attachEditor(in: app, name: "vector-keyboard-\(name)-\(theme)")
+                XCTFail("Unexpected vector artwork after \(name)")
+            }
+        }
+        editorTool("Line", in: app); editorChoice("Path", group: true, in: app); editorChoice("Outline", in: app)
+        for point: (CGFloat, CGFloat) in [(0.2, 0.82), (0.4, 0.82), (0.5, 0.92)] { tap(point.0, point.1) }
+        key(.forwardDelete)
+        activateCanvasBarAction("finish_path", label: "Finish path", in: app)
+        let finish = app.buttons["canvas-bar-action-finish_path"]
+        XCTAssertTrue(finish.waitForNonExistence(timeout: 10))
+        expectInk([(0.3, 0.82), (0.45, 0.87)], [true, true], "Forward Delete preserves Path draft")
+        editorHistory("Undo", in: app)
+        for point: (CGFloat, CGFloat) in [(0.2, 0.82), (0.4, 0.82), (0.5, 0.92)] { tap(point.0, point.1) }
+        key(.delete); key(.return)
+        XCTAssertTrue(finish.waitForNonExistence(timeout: 10))
+        expectInk([(0.3, 0.82), (0.45, 0.87)], [true, false], "Backspace and Enter Path keys")
+        editorHistory("Undo", in: app)
+        tap(0.2, 0.82); tap(0.4, 0.82); key(.escape)
+        expectInk([(0.3, 0.82)], [false], "Escape cancels Path")
+        editorChoice("Rectangle", group: true, in: app); editorChoice("Outline", in: app)
+        editPaintSize("16", in: app); drag((0.2, 0.2), (0.4, 0.4))
+        editPaintSize("32", in: app); drag((0.6, 0.2), (0.8, 0.4))
+        editorTool("Operation", in: app); editorChoice("Operation", group: true, in: app)
+        drag((0.25, 0.2), (0.25, 0.5))
+        expectInk([(0.3, 0.2), (0.3, 0.5)], [false, true], "Move drag")
+
+        let sample = paper.point(0.25, 0.5)
+        let beforeNudge = editorPixels(in: app, at: sample, size: 24)
+        for modifiers in [XCUIElement.KeyModifierFlags(), .shift] {
+            key(.downArrow, modifiers: modifiers)
+            expectation(for: NSPredicate { _, _ in self.editorPixels(in: app, at: sample, size: 24) != beforeNudge }, evaluatedWith: app)
+            waitForExpectations(timeout: 10)
+            editorHistory("Undo", in: app)
+            expectation(for: NSPredicate { _, _ in self.editorPixels(in: app, at: sample, size: 24) == beforeNudge }, evaluatedWith: app)
+            waitForExpectations(timeout: 10)
+        }
+
+        drag((0.25, 0.5), (0.25, 0.75), modifiers: .option)
+        expectInk([(0.3, 0.5), (0.3, 0.75)], [true, true], "Option-drag copy")
+        key(.delete)
+        expectInk([(0.3, 0.5), (0.3, 0.75)], [true, false], "Delete copied path")
+        tap(0.25, 0.5)
+        let previous = clipboard.board.changeCount
+        app.typeKey("c", modifierFlags: .command)
+        expectation(for: NSPredicate { _, _ in
+            clipboard.board.changeCount != previous && clipboard.board.data(forType: .png).map { NSImage(data: $0) != nil } == true
+        }, evaluatedWith: app)
+        waitForExpectations(timeout: 30)
+        clipboard.changeCount = clipboard.board.changeCount
+        let edit = app.menuBars.menuBarItems["Edit"]
+        let paste = edit.descendants(matching: .menuItem)["Paste"].firstMatch
+        expectation(for: NSPredicate(format: "enabled == YES"), evaluatedWith: paste)
+        waitForExpectations(timeout: 10)
+        app.typeKey("v", modifierFlags: .command)
+        let copy = edit.descendants(matching: .menuItem)["Copy"].firstMatch
+        expectation(for: NSPredicate(format: "enabled == YES"), evaluatedWith: copy)
+        waitForExpectations(timeout: 10)
+        drag((0.25, 0.5), (0.25, 0.75))
+        expectInk([(0.3, 0.5), (0.3, 0.75)], [true, true], "Cmd-C Cmd-V")
+        key(.delete)
+        expectInk([(0.3, 0.5), (0.3, 0.75)], [true, false], "Delete pasted path")
+
+        tap(0.1, 0.1)
+        drag((0.56, 0.16), (0.84, 0.44))
+        tap(0.25, 0.5, modifiers: .shift)
+        key(.delete)
+        expectInk([(0.3, 0.5), (0.7, 0.2)], [false, false], "marquee and Shift selection")
+        editorHistory("Undo", in: app)
+        expectInk([(0.3, 0.5), (0.7, 0.2)], [true, true], "Undo selection delete")
+        tap(0.1, 0.1); tap(0.25, 0.5)
+        drag((0.4 + 8.0 / 1440, 0.7 + 8.0 / 1080), (0.5, 0.8))
+        expectInk([(0.3, 0.7), (0.3, 0.8)], [false, true], "frame scale")
+        editorHistory("Undo", in: app)
+        let top = coordinate(0.3, 0.5 - 8.0 / 1080)
+        let rotation = top.withOffset(CGVector(dx: 0, dy: -30))
+        let center = coordinate(0.3, 0.6).screenPoint
+        let radius = center.y - rotation.screenPoint.y
+        rotation.click(forDuration: 0.05, thenDragTo: rotation.withOffset(CGVector(dx: radius / sqrt(2), dy: radius * (1 - 1 / sqrt(2)))))
+        editorDocumentTitle(in: app).hover()
+        expectInk([(0.3, 0.5), (0.35303, 0.52929)], [false, true], "frame rotate")
+        editorHistory("Undo", in: app)
+
+        tap(0.25, 0.5); tap(0.65, 0.2, modifiers: .shift)
+        let readout = app.buttons["number-value-property-path_width"]
+        if !readout.exists {
+            let tab = app.buttons["panel-tab-properties"]
+            workspaceActivate(tab.exists ? tab : app.buttons["column-icon-properties"])
+        }
+        revealEditorControl(readout, identifier: "number-value-property-path_width", type: .button, in: app.scrollViews.containing(.any, identifier: "layer-properties").firstMatch)
+        XCTAssertTrue(app.staticTexts["Outline width (mixed)"].exists)
+        workspaceActivate(readout)
+        let width = app.textFields["number-entry-property-path_width"]
+        XCTAssertTrue(width.waitForExistence(timeout: 10)); width.typeText("24\n")
+        XCTAssertTrue(width.waitForNonExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["Outline width (mixed)"].waitForNonExistence(timeout: 10))
+        for point: (CGFloat, CGFloat) in [(0.25, 0.5), (0.65, 0.2)] {
+            tap(0.1, 0.1); tap(point.0, point.1)
+            XCTAssertTrue(readout.waitForExistence(timeout: 10))
+            expectation(for: NSPredicate(format: "value BEGINSWITH %@", "24"), evaluatedWith: readout)
+            waitForExpectations(timeout: 5)
+        }
+
+        attachEditor(in: app, name: "vector-keyboard-\(theme)")
+        XCTAssertFalse(app.staticTexts["Canvas error"].exists)
+    }
+    #endif
+
     @MainActor func checkVectorLayers(in app: XCUIApplication, theme: String) {
         app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"\#(theme)"},{"type":"set_color","rgba":[0.15,0.7,0.25,1]},{"type":"color","action":{"op":"swap"}},{"type":"set_color","rgba":[0.1,0.1,0.12,1]}]"#
         app.launch(); capturePaintEditor(in: app, theme: theme)

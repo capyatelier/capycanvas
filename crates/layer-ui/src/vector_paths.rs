@@ -188,7 +188,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         if !self.vector_paths.drafting() { return Ok(false); }
         match key {
             "enter" => self.finish_vector_path(false)?,
-            "backspace" | "delete" => { self.remove_vector_path_point()?; }
+            "backspace" => { self.remove_vector_path_point()?; }
             "escape" => { self.cancel_vector_path(); }
             _ => return Ok(false),
         }

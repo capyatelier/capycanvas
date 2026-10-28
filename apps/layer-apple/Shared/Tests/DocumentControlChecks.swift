@@ -5,7 +5,7 @@ import UniformTypeIdentifiers
 #if os(macOS)
 import AppKit
 
-/// Keep user clipboard data in memory and never overwrite a newer user copy.
+/// Keep available clipboard data in memory and never overwrite a newer user copy.
 @MainActor final class NativePhotoPasteboard {
     let board = NSPasteboard.general
     let saved: [NSPasteboardItem]
@@ -14,14 +14,14 @@ import AppKit
 
     init() throws {
         changeCount = board.changeCount
-        saved = try (board.pasteboardItems ?? []).map { item in
+        saved = (board.pasteboardItems ?? []).map { item in
             let copy = NSPasteboardItem()
             for type in item.types {
-                let data = try XCTUnwrap(item.data(forType: type), "Preserve clipboard before testing")
+                guard let data = item.data(forType: type) else { continue }
                 XCTAssertTrue(copy.setData(data, forType: type))
             }
             return copy
-        }
+        }.filter { !$0.types.isEmpty }
         XCTAssertEqual(board.changeCount, changeCount)
     }
     func replace(_ items: [NSPasteboardItem]) throws {

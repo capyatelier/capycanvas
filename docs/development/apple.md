@@ -388,6 +388,7 @@ xcodebuild -project apps/layer-apple/CapyCanvas.xcodeproj \
   DEVELOPMENT_TEAM=YOUR_TEAM_ID CODE_SIGN_IDENTITY='Apple Development' test
 ```
 
+`testVectorKeyboard` covers macOS vector mouse and modifier input.
 `testReleaseEscapeOrder`, `testReleaseToolbarBubbles` and
 `testReleaseToolbarZen` run on both hosts. Each has a `Dark` counterpart.
 

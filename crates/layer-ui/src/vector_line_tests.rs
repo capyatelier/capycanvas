@@ -614,6 +614,31 @@ fn move_frame_scales_and_rotates_selected_paths_in_one_undo_step() {
 }
 
 #[test]
+fn path_drafts_reserve_backspace_without_swallowing_forward_delete() {
+    for platform in Platform::ALL {
+        for remove in [false, true] {
+            let (mut s, layer) = vector_session_on(platform);
+            s.dispatch(UiAction::Layer { action: LayerAction::Tool {
+                tool: LayerCanvasTool::Figure { shape: FigureShape::Path, paint: FigurePaint::Outline },
+            } }).unwrap();
+            for (i, at) in [[100., 100.], [300., 100.], [300., 300.]].into_iter().enumerate() {
+                let point = surface_at(&s, at);
+                press(&mut s, 10 + i as u64 * 10, &[point, point]);
+            }
+            let keys: &[&str] = if remove { &["delete", "backspace", "enter"] } else { &["delete", "enter"] };
+            for name in keys {
+                key(&mut s, name, true, false, false);
+                key(&mut s, name, false, false, false);
+            }
+            let object = s.engine.document().scene().vector_layer(layer).unwrap();
+            let (_, path) = object.paths().next().unwrap();
+            assert_eq!(path.geometry.subpaths()[0].len(), if remove { 2 } else { 3 },
+                "{platform:?}: only Backspace removes a draft anchor");
+        }
+    }
+}
+
+#[test]
 fn path_tool_builds_open_and_closed_paths_anchor_by_anchor() {
     use layer_core::authored::vector::AnchorKind;
     let (mut s, layer) = vector_session();
