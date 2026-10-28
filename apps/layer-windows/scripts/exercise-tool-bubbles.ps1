@@ -1,7 +1,8 @@
 param([Parameter(Mandatory)][string]$Executable,
-    [ValidateSet('dark-mouse','dark-touch','dark-pen','light-mouse','light-touch','light-pen','edge-dark-mouse','edge-dark-touch','edge-dark-pen','edge-light-mouse','edge-light-touch','edge-light-pen','blenders-dark','blenders-light','sliders-dark','sliders-light','blender-controls-dark','blender-controls-light','hdr-f16-dark','hdr-f16-light','slider-preference-dark','slider-preference-light')][string]$Variant='dark-mouse',[switch]$RapidOnly,[switch]$SlidersOnly,[switch]$BlendersOnly,[switch]$EraserOnly,[switch]$EraserLightOnly,[switch]$HistoryOnly,[switch]$HistoryLightOnly,[switch]$NativeControlsOnly,[switch]$ScrollEpochOnly,[switch]$NumericOnly,[switch]$CurveOnly,[switch]$MenuOnly,[switch]$ObserverOnly,[switch]$VisualOnly,[switch]$BeadTransitionsOnly,[switch]$HdrOnly,[switch]$HdrRetirementOnly,[switch]$HdrPreviewOnly,[switch]$HdrContactsOnly,[switch]$ColorUndoOnly,[ValidateSet('F16','F32')][string]$HdrDepth='F16')
+    [ValidateSet('dark-mouse','dark-touch','dark-pen','light-mouse','light-touch','light-pen','edge-dark-mouse','edge-dark-touch','edge-dark-pen','edge-light-mouse','edge-light-touch','edge-light-pen','row-pair-dark','row-pair-light','blenders-dark','blenders-light','sliders-dark','sliders-light','blender-controls-dark','blender-controls-light','hdr-f16-dark','hdr-f16-light','slider-preference-dark','slider-preference-light')][string]$Variant='dark-mouse',[switch]$RapidOnly,[switch]$SlidersOnly,[switch]$BlendersOnly,[switch]$EraserOnly,[switch]$EraserLightOnly,[switch]$HistoryOnly,[switch]$HistoryLightOnly,[switch]$NativeControlsOnly,[switch]$ScrollEpochOnly,[switch]$NumericOnly,[switch]$CurveOnly,[switch]$MenuOnly,[switch]$ObserverOnly,[switch]$VisualOnly,[switch]$BeadTransitionsOnly,[switch]$HdrOnly,[switch]$HdrRetirementOnly,[switch]$HdrPreviewOnly,[switch]$HdrContactsOnly,[switch]$ColorUndoOnly,[ValidateSet('F16','F32')][string]$HdrDepth='F16')
 $ErrorActionPreference='Stop'
 $edgeOnly=$Variant.StartsWith('edge-');if($edgeOnly){$Variant=$Variant.Substring(5)}
+$rowPairOnly=$Variant.StartsWith('row-pair-');if($rowPairOnly){$NativeControlsOnly=$true;$Variant=$Variant.Substring(9)+'-touch'}
 if($Variant -match '^hdr-f16-(dark|light)$'){$HdrOnly=$true;$HdrPreviewOnly=$true;$HdrDepth='F16';$Variant=$Matches[1]+'-mouse'}
 $sliderPreferenceOnly=$Variant.StartsWith('slider-preference-')
 if($Variant -match '^slider-preference-(dark|light)$'){$SlidersOnly=$true;$Variant=$Matches[1]+'-mouse'}
@@ -795,7 +796,7 @@ function Layer-ListContacts([long]$Id){
     @{wheel_percent=$wheelPercent;page_down_percent=$keyboardPercent;before_revision=$beforeInputs.state.document_file.revision;after_revision=$afterInputs.state.document_file.revision}|ConvertTo-Json|Set-Content (Join-Path $run 'layer-scroll-inputs.json')
     if($afterInputs.state.document_file.revision -ne $beforeInputs.state.document_file.revision -or $afterInputs.state.layer_tools.editing_layer.id -ne $beforeInputs.state.layer_tools.editing_layer.id -or (@($afterInputs.state.layers.id)-join ',') -ne (@($beforeInputs.state.layers.id)-join ',')){throw 'Native wheel or keyboard scrolling changed artwork, selection or layer order'}
     $checks.Add('native-layer-list-wheel-keyboard-and-scroll-automation')
-    $records=@();$pairMovementFailure=$false
+    $records=@()
     foreach($phase in @('single-before','pair-from-scrolling-list','single-after')){
         Settle-LayerScroll $scroll;Settle-Bubbles
         $scroll.SetScrollPercent(-1,0);Wait-Until {$scroll.Current.VerticalScrollPercent -lt .1} 'Layer list did not return to top'
@@ -830,8 +831,10 @@ function Layer-ListContacts([long]$Id){
         $record=@{phase=$phase;first=$at;first_scroll_percent=$scrolled;final_scroll_percent=$scroll.Current.VerticalScrollPercent;before_revision=$revision;after_revision=$after.state.document_file.revision;before_editing=$editing;after_editing=$after.state.layer_tools.editing_layer.id;before_checkpoint=$checkpoint;after_checkpoint=$afterCheckpoint;before_center=$center;after_center=$endCenter;order_unchanged=($order -eq (@($after.state.layers.id)-join ','))}
         $records+=$record;$records|ConvertTo-Json -Depth 10|Set-Content (Join-Path $run 'layer-list-contacts.json')
         if(!$record.order_unchanged -or $record.before_revision -ne $record.after_revision -or $record.before_editing -ne $record.after_editing -or $checkpoint -ne $afterCheckpoint){throw 'Native layer list contact changed artwork, layer order, selection or checkpoint'}
-        if($phase -eq 'pair-from-scrolling-list' -and [Math]::Sqrt([Math]::Pow($endCenter.x-$center.x,2)+[Math]::Pow($endCenter.y-$center.y,2)) -lt 10*$scale){$pairMovementFailure=$true}
+        if($phase -eq 'pair-from-scrolling-list' -and [Math]::Sqrt([Math]::Pow($endCenter.x-$center.x,2)+[Math]::Pow($endCenter.y-$center.y,2)) -lt 10*$scale){throw 'Second finger from actively scrolling list did not move the shared bubble'}
     }
+    $checks.Add('native-list-scroll-pair-and-single-finger-restoration')
+    if($rowPairOnly){return}
     $scroll.SetScrollPercent(-1,0);Wait-Until {$scroll.Current.VerticalScrollPercent -lt .1} 'Inertia list did not return to top'
     $viewport=$list.Current.BoundingRectangle;$fling=@{x=[int]($viewport.X+$viewport.Width*.5);y=[int]($viewport.Y+$viewport.Height*.7)};$revision=Revision
     [CapyCanvasTouch]::Initialize([uint32]$review.Id)
@@ -851,7 +854,6 @@ function Layer-ListContacts([long]$Id){
     Tap @{x=[int]($b.X+$b.Width*.5);y=[int]($b.Y+$b.Height*.5)}
     Wait-Until {(Model).state.layer_tools.editing_layer.id -eq $selected} 'Native row selection did not recover after pair restoration'
     Recycle-NativeLayerRows $Id $card $list $scroll
-    if($pairMovementFailure){throw 'Second finger from actively scrolling list did not move the shared bubble; subsequent native list checks completed'}
     $checks.Add('native-list-scroll-pair-and-row-selection-restoration')
 }
 
@@ -1352,7 +1354,7 @@ try{
         [IO.File]::WriteAllText((Join-Path $run 'results.json'),(@{variant=$Variant;blenders_only=[bool]$BlendersOnly;checks=@($checks);scope=($scope+'; physical input and performance separate')}|ConvertTo-Json -Depth 12),[Text.UTF8Encoding]::new($false))
         return
     }
-    if(!$NumericOnly -and !$CurveOnly){
+    if(!$NumericOnly -and !$CurveOnly -and !$rowPairOnly){
     $dial=Take 'command' 'drawing_brush' (($camera.translation[0]+$document.width*.35*$camera.zoom)/$scale) (($camera.translation[1]+$document.height*.35*$camera.zoom)/$scale)
     Check-Artwork 'tear-out' $revision
     if($edgeOnly){

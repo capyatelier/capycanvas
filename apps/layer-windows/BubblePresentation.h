@@ -123,7 +123,7 @@ struct Contact {
     double started=0,spread=1,scale=1;
     bool held=false,paired=false,lifted=false,pairEnded=false,colorStarted=false,moved=false;
     bool recognizing=false;
-    bool nativeDrags=false,nativePairs=false;
+    bool nativeDrags=false;
     double holdAt=-1;
     PointerGesture recognizer;
     std::vector<weak_ref<UIElement>> path;

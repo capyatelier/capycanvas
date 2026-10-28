@@ -10,6 +10,7 @@ import SwiftUI
         let origin: CGPoint
         var last: CGPoint
         let hit: JSON
+        let device: ReorderDevice
         var mode = "pending"
         var part = JSON()
         var wheelStarted = false
@@ -22,8 +23,8 @@ import SwiftUI
         var scale: CGFloat = 1
         var midpoint = CGPoint.zero
         var nativeDrags = false
-        init(item: BubblePresentation, hit: JSON, point: CGPoint, id: UInt64) {
-            self.item = item; source = item.source; origin = point; last = point; self.hit = hit; fingers = [id: point]
+        init(item: BubblePresentation, hit: JSON, point: CGPoint, id: UInt64, device: ReorderDevice) {
+            self.item = item; source = item.source; origin = point; last = point; self.hit = hit; self.device = device; fingers = [id: point]
         }
     }
     private struct Candidate {
@@ -168,9 +169,8 @@ import SwiftUI
         guard enabled, let bubbles else { return .ignore }
         generation &+= 1
         if let c = contact {
-            if c.mode == "native" && nativeRegions.values.contains(where: { $0.owner == c.item.id && $0.bounds.contains(point) }) { return .ignore }
             let center = c.item.placement.center
-            guard device == .touch, c.fingers.count == 1,
+            guard c.device == .touch, device == .touch, c.fingers.count == 1,
                 hypot(point.x - center.x, point.y - center.y) <= c.item.model["reach"].number + 90 else { return .ignore }
             hold?(); restore(c); bubbles.closeMenu()
             c.fingers[id] = point
@@ -190,7 +190,7 @@ import SwiftUI
             }
             return .ignore
         }
-        let c = Contact(item: item, hit: hit, point: point, id: id); contact = c
+        let c = Contact(item: item, hit: hit, point: point, id: id, device: device); contact = c
         if hit.bubbleHit == "intensity", item.model["color"]["intensity"]["enabled"].bool { keyboardItem = item }
         item.pressed = hit
         if hit.bubbleHit == "card", let region = nativeRegions.values.filter({ $0.owner == item.id && $0.bounds.contains(point) }).max(by: {

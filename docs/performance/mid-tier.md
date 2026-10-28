@@ -286,7 +286,7 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 | Drawing between 16 photo layers, G-Pen 1024 px (17 visible layers) | 90 | **Not met.** BUILD32: 74.733–75.449 fresh updates/s; fresh gap p99 18.465–18.871 ms, Linear | [Current middle-layer comparison](#drawing-in-the-middle-of-sixteen-photo-layers); measured comparison bounds pass, 90/s remains missed |
 | Panel, tab, column or toolbar drag and docking | 90 | **Not met.** Floating panel-group drag frame p50/p95 13.4/15.5 ms; continuous-tab revisions unqualified on this reference device; GTK GPU joins and revised chrome handoff are unmeasured | `cbfad9e5`, 2026-09-26; [Web collector limits](#web-navigator-resize-diagnostic), 2026-10-19; [panel-tab compositing](top-tier.md#panel-tab-compositing) and [GTK column bridge diagnostic](top-tier.md#gtk-column-bridge-diagnostic), 2026-10-25 |
 | Android palette pill opening at the work-area edge | 90 | **FPS unqualified.** Instant clamp/short transition; 3–4 actual presents per opening, all neighbors stationary in the diagnostic | [Native palette opening](#native-palette-opening), 2026-10-23 |
-| Android tool bubble drag through four neighbours | 90 | **Not met.** Edge dismissal: 85.604–88.719 actual app-window presents/s; p99 up to 22.347692 ms exceeds 22.2 ms. Matched `origin/main` also misses the gap limit; default glass, 24 MP photo at Fit | [Native tool bubbles](#native-tool-bubbles), 2026-10-27 |
+| Android tool bubble drag through four neighbours | 90 | **Not met.** Native capture recheck: 86.815–89.063 actual app-window presents/s; p99 up to 22.331693 ms exceeds 22.2 ms. Matched baseline also misses the gap limit; default glass, 24 MP photo at Fit | [Native tool bubbles](#native-tool-bubbles), 2026-10-28 |
 | Web tool bubble drag through four neighbours | 90 | **Unqualified after the bubble release fixes.** Previous parity build missed the target: 60.01–74.59 actual presents/s, p99 33.497–33.525 ms, default Low glass, 24 MP photo at Fit | [Tool bubbles](#web-tool-bubbles), 2026-10-24 |
 | GTK Tool Set hover and press animation | 90 | Unmeasured on reference hardware; the short desktop GTK diagnostic does not qualify this tier | [GTK tool caption hover](top-tier.md#gtk-tool-caption-hover), 2026-10-26 |
 | Panel or column resize | 90 | Android shared vectors and Web SVG projection are unmeasured on this reference tier. GTK compact Tool Set and expanding divider revisions unmeasured on reference hardware. Current Web candidate and GTK GPU column joins unmeasured on reference hardware. Web baseline diagnostic: 18.64–18.72 changing bounds/s, RAF gap p99 67.1–83.8 ms; presented FPS unqualified. Blank-canvas Debug divider diagnostic: 27.22–44.74 changing bounds/s, window-vsync p99 33.50–83.78 ms | [Web Navigator resize](#web-navigator-resize-diagnostic), 2026-10-19; [Divider resize diagnostic](#divider-resize-diagnostic), 2026-10-10; [GTK Color resize](top-tier.md#gtk-color-panel-resize), 2026-10-04; [GTK column bridge diagnostic](top-tier.md#gtk-column-bridge-diagnostic), 2026-10-25; [GTK Tool Set density](top-tier.md#gtk-tool-set-density), 2026-10-26; [GTK toolbar dividers](top-tier.md#gtk-toolbar-divider-resize), 2026-10-26 |
@@ -366,6 +366,29 @@ Raw presentation timestamps, per-transition drawn positions, build hashes and
 both-theme bounds/screenshots are in `artifacts/bubbles/android-palette-growth/`.
 
 ## Native tool bubbles
+
+The native capture comparison measured 2026-10-27–28 uses the 6000 × 4000 tier
+photo, one empty paint layer, Fit view and default glass on the MovinkPad 11.
+Both builds use release Rust and unminified benchmark APKs under a private
+application ID. One six-second native touch contact warms the five-bubble path,
+followed by three measured six-second contacts. All four neighbors visibly
+move. Actual SurfaceFlinger app-window presents exclude 100 ms at each contact
+edge. The exact private Adaptive row enables 90 Hz at the ready/go barrier and
+is restored to Off after capture. Thermal status remains 0 throughout.
+
+| Build | Actual presents/s, three contacts | p99 interval, ms | Result |
+| --- | --- | --- | --- |
+| Baseline `cb7b5b35a` plus renderer lint edits, APK `7bc941ea` | 88.891 / 86.302 / 87.160 | 11.330461 / 22.332923 / 22.332231 | Not met |
+| Startup guard and native capture fix, APK `060b1d33` | 89.063 / 86.815 / 86.820 | 11.276384 / 22.329923 / 22.331693 | Not met |
+
+Every contact clears the 85.5 presents/s floor. Both builds retain the existing
+22.2 ms gap miss in two contacts; the candidate's maximum gap is no larger than
+the control's. The candidate uses `43f581594` plus the Android native-card
+capture change. Frozen APK/test hashes, source patches, thermal records,
+contact windows and actual presents are retained in
+`artifacts/baseline-fixes-20261027/android-mid-motion-baseline/`,
+`artifacts/baseline-fixes-20261027/android-mid-motion-candidate-final/` and
+the adjacent provenance files.
 
 The edge dismissal comparison measured 2026-10-27 uses the 6000 × 4000 tier
 photo, one empty paint layer, Fit view and default workspace glass. Release Rust

@@ -483,6 +483,41 @@ private struct BubbleGlassProbeView: View {
             let size = card.view["card"]["size"].point
             return CGRect(x: card.placement.center.x - size.x / 2, y: card.placement.center.y - size.y / 2, width: size.x, height: size.y)
         }
+        func pairTakesNativeRows() async throws {
+            try await wait("Mounted native rows for pair takeover", failure: { store.failure }, step: tick) {
+                model.nativeRegions.values.contains { $0.owner == card.id && $0.drags && cardBounds().contains($0.bounds) }
+            }
+            let rows = model.nativeRegions.values.filter { $0.owner == card.id && $0.drags && cardBounds().contains($0.bounds) }
+                .max { $0.bounds.width * $0.bounds.height < $1.bounds.width * $1.bounds.height }!
+            let first = CGPoint(x: rows.bounds.midX - 20, y: rows.bounds.minY + 20)
+            let second = CGPoint(x: rows.bounds.midX + 20, y: first.y)
+            try require(rows.bounds.contains(first) && rows.bounds.contains(second), "Both fingers start inside the native rows")
+            let center = card.placement.center, layers = store.state["layers"].stableKey
+            let layout = store.state["workspace"]["layout"].stableKey
+            try require(model.down(first, id: 410, device: .pen, clicks: 1, doubleTime: 0.4, time: 30) == .observe,
+                "A native row observes the pen")
+            try require(model.down(second, id: 411, device: .touch, clicks: 1, doubleTime: 0.4, time: 30.1) == .ignore,
+                "A finger cannot pair with the native row's pen")
+            model.cancel()
+            try require(model.down(first, id: 410, device: .touch, clicks: 1, doubleTime: 0.4, time: 31) == .observe,
+                "A native row observes the first finger")
+            try require(model.down(second, id: 411, device: .touch, clicks: 1, doubleTime: 0.4, time: 31.1) == .capture,
+                "The second finger takes the card from its native rows")
+            for step in 1...6 {
+                _ = model.move(CGPoint(x: first.x + CGFloat(step) * 10, y: first.y + CGFloat(step) * 5), id: 410)
+                _ = model.move(CGPoint(x: second.x + CGFloat(step) * 10, y: second.y + CGFloat(step) * 5), id: 411)
+                try await tick()
+            }
+            try require(hypot(card.placement.center.x - center.x, card.placement.center.y - center.y) > 20,
+                "Paired native-row contacts move the card before release")
+            _ = model.up(first, id: 410, cancelled: false); _ = model.up(second, id: 411, cancelled: false)
+            try await tick(); try await settled("Native row pair release")
+            try require(store.state["layers"].stableKey == layers, "Paired takeover preserves the native layer state")
+            try await store.apply(["type": "invoke", "command": "undo_workspace"])
+            try await tick(); try await settled("Native row pair undo")
+            try require(store.state["workspace"]["layout"].stableKey == layout, "One workspace Undo restores the native-row pair move")
+        }
+        try await pairTakesNativeRows()
         try await wait("Restored native card rows", failure: { store.failure }, step: tick) {
             model.nativeRegions.values.contains { $0.owner == card.id && $0.drags && cardBounds().contains($0.bounds) }
         }
@@ -527,6 +562,7 @@ private struct BubbleGlassProbeView: View {
         try await action(["type": "option", "id": card.id, "option": ["kind": "full", "full": true]])
         try require(card.view["card"]["full"].bool && !store.panel("layers").isNull && !store.panel("properties").isNull,
             "Full card retains both native panel projections")
+        try await pairTakesNativeRows()
         try await capture("layers-full")
         try await action(["type": "close", "id": card.id]); try await drain(0.4)
         try require(card.view["card"].isNull, "Close folds the card")

@@ -64,13 +64,12 @@ export function createBubbleInput({app, workspace, records, send, wake, menu, di
     suppressClick=false;
     if(e.button!==0||e.target.closest?.('[popover]:popover-open,dialog[open],.popover'))return;
     const p=point(e);
-    if(contact?.mode==='native'&&native(e))return;
     if(contact&&e.pointerType==='touch') {
       const c=contact;
       if(distance(local(c.r,p),[0,0])>c.r.packet.reach+90)return;
       c.fingers.set(e.pointerId,p);workspace.setPointerCapture(e.pointerId);
       if(c.fingers.size===2&&!c.pair) {
-        stopHold();lastRing=null;restore(c);dismiss();
+        stopHold();lastRing=null;restore(c);dismiss();workspace.setPointerCapture(c.id);
         const pair=pairPoints(c);c.pair={...pair,origin:pair.mid,start:Math.max(1,pair.distance),scale:1,lifted:false,ended:false};
         c.grab=grab(c.r.view.id);c.mode='pair';
       }

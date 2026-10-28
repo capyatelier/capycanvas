@@ -421,6 +421,15 @@ class AndroidToolBubblesTest {
                 val bounds = workspace()
                 kotlin.math.abs(bounds.width / density - width) < 2 && kotlin.math.abs(bounds.height / density - height) < 2
             }
+            var previous = bounds("header-item-2")
+            var stableAt = SystemClock.uptimeMillis()
+            waitFor("Native header finishes arranging after resize") {
+                val next = bounds("header-item-2")
+                if (next != previous) stableAt = SystemClock.uptimeMillis()
+                previous = next
+                SystemClock.uptimeMillis() - stableAt >= 240
+            }
+            host.drain()
         }
         try {
         val closed = take(2, originalBounds.center)
@@ -433,6 +442,7 @@ class AndroidToolBubblesTest {
         }
         shot("closed-viewport-clamped")
         putBack(closed)
+        resize(900, 420)
         tap(bounds("header-item-2").center)
         waitFor("Brush source drawer completes opening") { findTag("tool-drawer")?.second?.boundsInRoot?.height?.let { it > 120 * density } == true }
         var previousDrawer = bounds("tool-drawer")
@@ -472,8 +482,16 @@ class AndroidToolBubblesTest {
         root = row.first
         val from = row.second.boundsInRoot.center
         val drawer = bounds("tool-drawer"); val area = workspace()
-        val target = listOf(Offset(area.center.x, area.bottom - 2 * density), Offset(area.left + 2 * density, area.center.y), Offset(area.right - 2 * density, area.center.y))
-            .firstOrNull { !drawer.contains(it) } ?: error("Short native drawer must leave a canvas tear-out target: $drawer in $area")
+        val label = row.second.config[SemanticsProperties.TestTag].removePrefix("subtool-")
+        val tools = state().getJSONObject("customization").getJSONObject("drawer").objectOrNull("tool_set")
+            ?: state().getJSONObject("tool_panels").objectOrNull("brushes") ?: state().getJSONObject("tool_set")
+        val grab = bubbleUi(obj("type" to "choice", "action" to tools.array("subtools").objects().single { it.getString("label") == label }.getJSONObject("action"))) as JSONObject
+        lateinit var work: JSONObject
+        instrumentation.runOnMainSync { work = JSONObject(host.snapshot!!.getJSONObject("layout").getJSONObject("work_area").toString()) }
+        val target = listOf(Offset(work.number("width") / 2, work.number("height") - 12), Offset(12f, work.number("height") / 2), Offset(work.number("width") - 12, work.number("height") / 2))
+            .map { area.topLeft + (it + Offset(work.number("x"), work.number("y"))) * density }
+            .firstOrNull { at -> !drawer.contains(at) && query(obj("type" to "can_take_bubble", "grab" to grab, "position" to JSONArray(listOf((at.x - area.left) / density, (at.y - area.top) / density)), "viewport" to JSONArray(listOf(area.width / density, area.height / density)))) == true }
+            ?: error("Short native drawer must leave an admitted canvas tear-out target: $drawer in $work")
         stroke(from, from + Offset(30 * density, 0f), target)
         waitFor("Scrolled brush source tears out") { packets().any { it.getJSONObject("view").getString("kind") == "brush" } }
         root = null
@@ -850,6 +868,22 @@ class AndroidToolBubblesTest {
             putBack(id)
         }
     }
+    @Test fun twoFingersTakeTheLayersCardFromItsNativeRow() {
+        tool = MotionEvent.TOOL_TYPE_FINGER
+        for (theme in listOf("light", "dark")) {
+            root = null; case = "$theme-layers-row-takeover"
+            action(obj("type" to "restore_workspace", "workspace" to JSONObject(fixture.toString())))
+            action(obj("type" to "set_theme", "theme" to theme))
+            val id = take(6, workspace().center)
+            waitFor("Native Layers card reaches its shared size") {
+                val size = view(id).getJSONObject("card").getJSONArray("size")
+                val card = bounds("bubble-card-$id")
+                kotlin.math.abs(card.width - size.getDouble(0) * density) < 2 && kotlin.math.abs(card.height - size.getDouble(1) * density) < 2
+            }
+            secondFingerTakesLayerRow(id)
+        }
+    }
+
     @Test fun nativeBubblePickupClosesOpenDrawers() {
         for (theme in listOf("light", "dark")) for (input in listOf(MotionEvent.TOOL_TYPE_MOUSE, MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_STYLUS)) {
             tool = input; root = null; case = "drawer-$theme-$input"
@@ -859,13 +893,23 @@ class AndroidToolBubblesTest {
                 val from = bounds("header-item-$header").center
                 tap(from)
                 waitFor("Source drawer opens") { findTag("tool-drawer") != null }
+                var previousDrawer = bounds("tool-drawer")
+                var stableAt = SystemClock.uptimeMillis()
+                waitFor("Source drawer finishes its native arrangement") {
+                    val next = bounds("tool-drawer")
+                    if (next != previousDrawer) stableAt = SystemClock.uptimeMillis()
+                    previousDrawer = next
+                    SystemClock.uptimeMillis() - stableAt >= 240
+                }
+                host.drain()
+                val visibleDrawer = bounds("tool-drawer")
                 val before = packets().map { it.getJSONObject("view").getLong("id") }.toSet()
                 val area = workspace()
                 lateinit var work: JSONObject
                 instrumentation.runOnMainSync { work = JSONObject(host.snapshot!!.getJSONObject("layout").getJSONObject("work_area").toString()) }
                 val target = listOf(.5f, .75f, .25f).flatMap { y -> listOf(.5f, .75f, .25f).map { x ->
                     area.topLeft + Offset(work.number("x") + work.number("width") * x, work.number("y") + work.number("height") * y) * density
-                } }.firstOrNull { at -> query(obj("type" to "can_take_bubble", "grab" to obj("kind" to "header", "id" to header), "position" to JSONArray(listOf((at.x - area.left) / density, (at.y - area.top) / density)), "viewport" to JSONArray(listOf(area.width / density, area.height / density)))) == true }
+                } }.firstOrNull { at -> !visibleDrawer.contains(at) && query(obj("type" to "can_take_bubble", "grab" to obj("kind" to "header", "id" to header), "position" to JSONArray(listOf((at.x - area.left) / density, (at.y - area.top) / density)), "viewport" to JSONArray(listOf(area.width / density, area.height / density)))) == true }
                     ?: error("$case header $header has no shared-admissible work-area endpoint: work=$work viewport=$area")
                 instrumentation.runOnMainSync { assertSame("Drawer and source use the same native input coordinates", findTag("workspace")!!.first, findTag("tool-drawer")!!.first) }
                 event(MotionEvent.ACTION_DOWN, from)
@@ -874,10 +918,15 @@ class AndroidToolBubblesTest {
                 event(MotionEvent.ACTION_MOVE, target)
                 waitFor("Pickup closes the source drawer before release") { state().getJSONObject("customization").isNull("drawer") && findTag("tool-drawer") == null }
                 val id = packets().single { it.getJSONObject("view").getLong("id") !in before }.getJSONObject("view").getLong("id")
-                val continued = target + Offset(35 * density, 25 * density)
-                event(MotionEvent.ACTION_MOVE, continued); event(MotionEvent.ACTION_UP); host.drain()
+                val picked = stable(id)
+                val middle = area.topLeft + Offset(work.number("x") + work.number("width") / 2, work.number("y") + work.number("height") / 2) * density
+                val continued = target + Offset(if (picked.x < middle.x) 35f else -35f, if (picked.y < middle.y) 25f else -25f) * density
+                assertEquals("Continued pickup stays clear of return targets", true, query(obj("type" to "can_take_bubble", "grab" to obj("kind" to "bubble", "id" to id), "position" to JSONArray(listOf((continued.x - area.left) / density, (continued.y - area.top) / density)), "viewport" to JSONArray(listOf(area.width / density, area.height / density)))))
+                event(MotionEvent.ACTION_MOVE, continued)
+                waitFor("Pickup continues while its contact is held") { (center(id) - continued).getDistance() < 2 * density }
+                event(MotionEvent.ACTION_UP); host.drain()
                 assertTrue("Captured pickup survives drawer dismissal", packets().any { it.getJSONObject("view").getLong("id") == id })
-                assertTrue("Pickup continues after drawer dismissal", (stable(id) - continued).getDistance() < 30 * density)
+                stable(id)
                 shot("header-$header")
             }
         }
