@@ -1318,7 +1318,7 @@ workspace.addEventListener("pointermove", e => {
       endWorkspaceGesture(e, true); return;
     }
     const distance = Math.hypot(e.clientX - drag.start.clientX, e.clientY - drag.start.clientY);
-    if (distance <= (drag.action.type === "drag_workspace" ? 8 : 0)) return;
+    if (distance <= 8) return;
     if (drag.waitForHold && !drag.held) { endWorkspaceGesture(e, true); return; }
     customization.dismissContext();
     drag.started = true;

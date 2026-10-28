@@ -9,9 +9,9 @@ export async function checkEdgeReach({call,evaluate,settle}) {
   const snapshot=()=>evaluate('layerApp.state().workspace');
   const resolved=()=>evaluate('layerApp.app.layout(innerWidth,innerHeight)');
   let device='mouse';
-  const input=async(type,p)=>{
+  const input=async(type,p,clickCount=1)=>{
     if(device==='touch')await call('Input.dispatchTouchEvent',{type:{down:'touchStart',move:'touchMove',up:'touchEnd'}[type],touchPoints:type==='up'?[]:[{id:1,...p}]});
-    else await call('Input.dispatchMouseEvent',{type:{down:'mousePressed',move:'mouseMoved',up:'mouseReleased'}[type],...p,button:'left',buttons:type==='up'?0:1,clickCount:1,pointerType:device});
+    else await call('Input.dispatchMouseEvent',{type:{down:'mousePressed',move:'mouseMoved',up:'mouseReleased'}[type],...p,button:'left',buttons:type==='up'?0:1,clickCount,pointerType:device});
   };
   const swipe=async(from,to,steps=10)=>{
     if(device!=='touch')await call('Input.dispatchMouseEvent',{type:'mouseMoved',...from,pointerType:device});
@@ -33,6 +33,24 @@ export async function checkEdgeReach({call,evaluate,settle}) {
       await restore([{id:40,edge:'left',extent:320,root:tabs(41,['stats'])}]);
       let layout=await resolved(),edge=layout.dividers.find(d=>d.id===40),group=layout.groups.find(g=>g.id===41);
       const y=group.bounds.y+group.bounds.height-60,before=await extent(40);
+      const contact={x:edge.bounds.x+edge.bounds.width/2,y},jitter={x:contact.x+1,y};
+      const untouched=await snapshot();
+      await input('down',contact);await input('move',jitter);await settle();
+      assert.deepEqual(await snapshot(),untouched,`${theme}/${device}: held tap jitter does not resize the column`);
+      await input('up',jitter);
+      await settle();await wait(180);
+      assert.deepEqual(await snapshot(),untouched,`${theme}/${device}: tap jitter does not resize the column`);
+      await input('down',contact,2);await input('up',contact,2);
+      await settle();await wait(180);
+      assert.equal(await extent(40),0,`${theme}/${device}: a double press with first-tap jitter resets the column`);
+      await send({type:'invoke',command:'undo_workspace'});
+      assert.deepEqual(await snapshot(),untouched,`${theme}/${device}: one undo restores the width after the reset`);
+
+      await input('down',contact);await input('move',{x:contact.x+40,y});await settle();
+      assert.ok(await extent(40)>before+30,`${theme}/${device}: crossing the drag threshold resizes the column`);
+      for(const type of ['keyDown','keyUp'])await call('Input.dispatchKeyEvent',{type,key:'Escape',code:'Escape',windowsVirtualKeyCode:27});
+      await input('up',{x:contact.x+40,y});await settle();await wait(180);
+      assert.deepEqual(await snapshot(),untouched,`${theme}/${device}: Escape cancels a real resize`);
       await swipe({x:edge.bounds.x-20,y},{x:edge.bounds.x+60,y});
       const grown=await extent(40)-before;
       assert.ok(Math.abs(grown-(60-edge.bounds.width/2))<2,`${theme}/${device}: an outward swipe from inside the column grows it to the contact (${grown})`);
