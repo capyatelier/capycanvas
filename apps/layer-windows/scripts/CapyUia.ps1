@@ -441,17 +441,22 @@ function Control-Trace($Element){
     $walker=[System.Windows.Automation.TreeWalker]::RawViewWalker
     $items=@();$node=$Element
     for($i=0;$node -and $i -lt 25;$i++){
+        try {
         $current=$node.Current;$scroll=$null
         $item=[ordered]@{id=$current.AutomationId;name=$current.Name;type=$current.ControlType.ProgrammaticName;process=$current.ProcessId;bounds=$current.BoundingRectangle;offscreen=$current.IsOffscreen;focused=$current.HasKeyboardFocus}
         if($node.TryGetCurrentPattern([System.Windows.Automation.ScrollPattern]::Pattern,[ref]$scroll)){$item.scroll=@{vertical=$scroll.Current.VerticallyScrollable;percent=$scroll.Current.VerticalScrollPercent;view_size=$scroll.Current.VerticalViewSize}}
         $items+=[pscustomobject]$item
         $node=$walker.GetParent($node)
+        } catch [System.Windows.Automation.ElementNotAvailableException] {break}
     }
     $items
 }
 function Input-Trace([int]$X,[int]$Y){
     $point=[System.Windows.Point]::new($X,$Y)
-    @{point=@($X,$Y);foreground=[CapyRowPointer]::GetForegroundWindow().ToInt64();owned_window=[long]$root.Current.NativeWindowHandle;hit=@(Control-Trace ([System.Windows.Automation.AutomationElement]::FromPoint($point)));focus=@(Control-Trace ([System.Windows.Automation.AutomationElement]::FocusedElement))}
+    $trace=@{point=@($X,$Y);foreground=[CapyRowPointer]::GetForegroundWindow().ToInt64();owned_window=[long]$root.Current.NativeWindowHandle;hit=@();focus=@();unavailable=@()}
+    try {$trace.hit=@(Control-Trace ([System.Windows.Automation.AutomationElement]::FromPoint($point)))} catch [System.Windows.Automation.ElementNotAvailableException] {$trace.unavailable+='hit'}
+    try {$trace.focus=@(Control-Trace ([System.Windows.Automation.AutomationElement]::FocusedElement))} catch [System.Windows.Automation.ElementNotAvailableException] {$trace.unavailable+='focus'}
+    $trace
 }
 function Scroll-Position($Control,[ValidateRange(0,100)][double]$Percent){
     $walker=[System.Windows.Automation.TreeWalker]::ControlViewWalker;$scroller=$walker.GetParent($Control);$scroll=$null

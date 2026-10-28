@@ -22,7 +22,7 @@ function Layout {
 function At([string]$Id,[switch]$Name){
     if($Id -match '^collapsed-column-(\d+)$'){return Screen (Column ([int]$Matches[1])).bounds}
     $bounds=(Control $Id -Name:$Name -Arranged).Current.BoundingRectangle
-    @{x=[int]($bounds.X+$bounds.Width*.5);y=[int]($bounds.Y+$bounds.Height*.5)}
+    @{x=[int]($bounds.X+$bounds.Width*.5);y=[int]($bounds.Y+$bounds.Height*.5);id=$Id;name=[bool]$Name}
 }
 function Screen($Bounds){
     $point=[CapyRowPointer+Point]::new()
@@ -168,13 +168,14 @@ function Drag([string]$Id,$To,[switch]$Cancel,[switch]$Hold,[switch]$Stack,[swit
     if((Gesture).menu_open){throw 'Dragging retained the held context menu'}
     if($Stack -or $Expected){
         Wait-Until {
+            if($Stack){$footer=At $To.id -Name:$To.name;[CapyRowPointer]::Move($footer.x,$footer.y)}
             $drag=(Presentation).workspace_update.drag
-            if($drag.tab -and !$drag.group){
+            if(!$Stack -and $Expected.kind -eq 'tab' -and $drag.tab -and !$drag.group){
                 if($drag.drop_hint){throw 'An attached tab slide displayed an insertion hint'}
                 return $true
             }
             $drop=$drag.drop_hint
-            if($Stack){return $drop.target.kind -eq 'stack_column'}
+            if($Stack){return $drop.target.kind -eq 'stack_column' -and $To.id -eq ('column-grip-'+$drop.target.column)}
             if($drop.target.kind -ne $Expected.kind){return $false}
             if($Expected.kind -eq 'tab'){
                 return $drop.target.group -eq $Expected.group -and $drop.target.index -eq 0 -and (($drop.bounds.width -gt 3 -and $drop.bounds.height -gt 3) -eq $Expected.body)
@@ -183,6 +184,7 @@ function Drag([string]$Id,$To,[switch]$Cancel,[switch]$Hold,[switch]$Stack,[swit
         } $(if($Stack){'Footer did not preview a new stack member'}else{'Wrong native drop target: '+$Expected.surface})
         if($Expected -and !$Cancel){Capture ('drop-'+$Expected.surface)}
     }
+    if($Stack){$script:dragProbe.before_release=@{drag=(Presentation).workspace_update.drag;gesture=(Gesture);footer=(At $To.id -Name:$To.name);columns=(Model).layout.collapsed};$script:dragProbe|ConvertTo-Json -Depth 60|Set-Content (Join-Path $run ('stack-release-'+(Gesture).generation+'.json'))}
     if($Cancel){if($Device -eq 'mouse'){[CapyRowPointer]::Key(0x1b);[CapyRowPointer]::Up()}else{[CapyRowPointer]::Cancel()}}
     else{[CapyRowPointer]::Up()}
     Wait-Until {(Gesture).phase -eq 'idle'} 'Handle retained native capture after completion'
@@ -235,6 +237,7 @@ try {
         $before=Layout;$to=At 'column-grip-12'
         Drag $source.id $to -Hold:$source.hold -Captured:$source.captured -Stack -Cancel
         if((Layout) -ne $before){throw 'Canceled member insertion changed the layout'}
+        $to=At 'column-grip-12'
         Drag $source.id $to -Hold:$source.hold -Captured:$source.captured -Stack
         Wait-Until {@((Model).state.workspace.layout.column_stacks|Where-Object {$_.members.Count -eq 3}).Count -eq 1} 'Content drop did not create an independent member'
         $after=Layout;Check-History $before $after
@@ -275,7 +278,8 @@ try {
     Wait-Until {!(Column 12).open} 'Outside canvas contact did not auto-hide the column'
     if((Model).state.document_file.revision -ne $revision){throw 'Auto-hide painted with the consumed contact'}
     Tap 'column-icon-layers';Check-Open 12
-    Invoke 'settings-button'
+    & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'edit'
+    Invoke 'settings'
     $dialog=Control 'Preferences' -Name -Type ([System.Windows.Automation.ControlType]::Window)
     (Control 'Color theme' -Name -Type ([System.Windows.Automation.ControlType]::ComboBox)).GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
     (Control 'Light' -Name -Type ([System.Windows.Automation.ControlType]::ListItem)).GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
