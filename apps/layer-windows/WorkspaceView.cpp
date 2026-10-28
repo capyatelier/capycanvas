@@ -84,6 +84,9 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     std::vector<ResizeBound> resizeBounds;
     uint64_t resizeFrameOverflow=0;
     uint64_t resizeBoundsOverflow=0;
+    uint64_t surfaceFrames=0,surfaceGroups=0,surfaceMismatches=0,tabFrames=0,escapedLabels=0;
+    double maximumSurfaceOffset=0;
+    J firstSurfaceMismatch;
     J workspaceUpdate;
     hstring lastPresentation;
     OverviewOcclusion overviewOcclusion;
@@ -162,7 +165,9 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     }
     void init(){
         if(trace)resizeTraceFrame=CompositionTarget::Rendering(auto_revoke,[weak=weak_from_this()](auto&&,auto&&){
-            if(auto self=weak.lock();self&&self->windowResizing){
+            if(auto self=weak.lock()){
+                self->traceSurfaces();
+                if(!self->windowResizing)return;
                 LARGE_INTEGER now{};QueryPerformanceCounter(&now);
                 auto viewport=array(object(self->data->model,L"layout"),L"viewport");
                 float width=float(self->root.ActualWidth()),height=float(self->root.ActualHeight());
@@ -210,6 +215,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         bubbles=std::make_unique<WorkspaceBubbles>(data,root,[weak=weak_from_this()]{if(auto self=weak.lock();self&&self->glassChanged)self->glassChanged();});
         measureGate.Content(measureHost);measureGate.IsEnabled(false);measureGate.IsTabStop(false);measureGate.IsHitTestVisible(false);measureGate.Opacity(0);Canvas::SetLeft(measureGate,-100000);root.Children().Append(measureGate);
         root.LayoutUpdated([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->measured();});
+        root.Loaded([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->presentBackgrounds();});
     }
     void colorRequests(){
         if(!root.XamlRoot())return;
@@ -576,8 +582,8 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         for(auto const& panel:previewPanels){panel->Place(layout);if(full)panel->Publish(data->state);}
         if(full){pressure->attach();pressure->Publish();}
         notice->Place(layout);if(full){notice->Publish(data->state);data->queueColors();}
-        expansion->Apply(configurationHeight());present();
-        collapsed->Apply();drawers->Apply();bubbles->Apply();gestures->Refresh();
+        collapsed->Apply();expansion->Apply(configurationHeight());present();
+        drawers->Apply();bubbles->Apply();gestures->Refresh();
         auto status=object(layout,L"status");place(cameraSlot,status);
         cameraSlot.Visibility(num(status,L"height")>0?Visibility::Visible:Visibility::Collapsed);
         zoom->text.Foreground(data->brush(L"text"));
@@ -625,6 +631,44 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         }
         gestures->Present(drag);
         if(moved)queueMeasurements();
+    }
+    void traceSurfaces(){
+        if(!root.IsLoaded())return;
+        bool mismatch=false,tabbed=false,escaped=false;
+        double scale=root.XamlRoot()?root.XamlRoot().RasterizationScale():1;
+        ++surfaceFrames;
+        for(auto const& [id,group]:groups){
+            if(group.hidden||!group.frame.IsLoaded()||group.frame.Visibility()!=Visibility::Visible||group.frame.Opacity()<=0)continue;
+            auto bounds=allocatedBounds(group.frame,root);
+            if(bounds.Width<=0||bounds.Height<=0)continue;
+            auto size=group.background.Size();
+            Rect fill{bounds.X,bounds.Y,size.Width,size.Height+float(Canvas::GetTop(group.background.Root()))};
+            if(group.gpu)for(auto value:array(panelBridgeFrame,L"groups"))if(num(value.GetObject(),L"group")==id){fill=rectangle(object(value.GetObject(),L"bounds"));break;}
+            double offset=scale*std::max({std::abs(bounds.X-fill.X),std::abs(bounds.Y-fill.Y),std::abs(bounds.Width-fill.Width),std::abs(bounds.Height-fill.Height)});
+            ++surfaceGroups;maximumSurfaceOffset=std::max(maximumSurfaceOffset,offset);
+            if(offset>.01){
+                mismatch=true;
+                if(!firstSurfaceMismatch.Size())firstSurfaceMismatch=O({{L"group",N(id)},{L"frame",rectangle(bounds)},{L"fill",rectangle(fill)},{L"offset_px",N(offset)}});
+            }
+            for(auto const& [name,shell]:group.tabs){
+                if(!shell.IsLoaded()||shell.Opacity()<=0||shell.Visibility()!=Visibility::Visible)continue;
+                auto tab=shell.Children().GetAt(1).as<Button>();auto box=allocatedBounds(tab,root);
+                if(box.Width<=0||box.Height<=0)continue;
+                tabbed=true;
+                std::function<void(DependencyObject const&)> visit=[&](DependencyObject const& node){
+                    if(auto element=node.try_as<FrameworkElement>();element&&(element.Visibility()!=Visibility::Visible||element.Opacity()<=0))return;
+                    if(auto text=node.try_as<TextBlock>()){
+                        auto label=allocatedBounds(text,root);
+                        escaped|=label.Width>0&&label.Height>0&&(label.X<box.X-.01f||label.Y<box.Y-.01f||label.X+label.Width>box.X+box.Width+.01f||label.Y+label.Height>box.Y+box.Height+.01f);
+                    }
+                    for(int i=0;i<VisualTreeHelper::GetChildrenCount(node);++i)visit(VisualTreeHelper::GetChild(node,i));
+                };
+                visit(tab);
+            }
+        }
+        if(mismatch)++surfaceMismatches;
+        if(tabbed)++tabFrames;
+        if(escaped)++escapedLabels;
     }
     void tracePresentation(){
         if(!trace)return;
@@ -687,6 +731,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         auto value=O({{L"revision",N(double(publication.Revision()))},
             {L"model_revision",N(double(publication.ModelRevision()))},
             {L"full_updates",N(double(fullUpdates))},{L"motion_updates",N(double(motionUpdates))},
+            {L"shaders_ready",B(flag(data->model,L"shaders_ready"))},{L"checkpoint_camera",object(object(data->model,L"windows_recovery"),L"camera")},
             {L"color_field_pixels",N(double(data->colorFieldPixels))},
             {L"color_preview",object(data->colorPreview,L"picker").GetNamedValue(L"preview",JsonValue::CreateNullValue())},
             {L"workspace_update",workspaceUpdate},{L"groups",positions},{L"handles",grips},{L"elements",elements},
@@ -694,6 +739,8 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             {L"snapshot_qpc",N(double(snapshotQpc.QuadPart))},{L"native_sizing_start_qpc",N(double(nativeSizingStartQpc))},{L"native_sizing_end_qpc",N(double(nativeSizingEndQpc))},
             {L"resize_layout_frames",O({{L"count",N(double(resizeFrames.size()+resizeFrameOverflow))},{L"overflow",N(double(resizeFrameOverflow))},{L"tolerance",N(.01)},{L"samples",resizeSamples}})},
             {L"resize_panel_bounds",O({{L"count",N(double(resizeBounds.size()+resizeBoundsOverflow))},{L"overflow",N(double(resizeBoundsOverflow))},{L"samples",boundSamples}})},
+            {L"surface_frames",O({{L"frames",N(double(surfaceFrames))},{L"groups",N(double(surfaceGroups))},{L"mismatched_frames",N(double(surfaceMismatches))},
+                {L"maximum_offset_px",N(maximumSurfaceOffset)},{L"tab_frames",N(double(tabFrames))},{L"escaped_label_frames",N(double(escapedLabels))},{L"first_mismatch",firstSurfaceMismatch}})},
             {L"panel_bridge_frame",panelBridgeFrame},{L"panel_revision",N(double(panelBridgeRevision))},
             {L"presented_panel_revision",object(data->model,L"windows_glass").GetNamedValue(L"panel_revision",JsonValue::CreateNullValue())},
             {L"overviews",lastOverviews.empty()?A{}:A::Parse(lastOverviews)}}).Stringify();
@@ -818,13 +865,13 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
                 self->measurementFrame.revoke();
                 if(!self->root.IsLoaded())return;
                 self->reportTitlebar();self->measurePanels();
-                self->expansion->Apply(self->configurationHeight());self->publishOverviews();self->presentBackgrounds();self->tracePresentation();
+                self->expansion->Apply(self->configurationHeight());self->publishOverviews();self->tracePresentation();
                 if(!self->popup&&!str(object(self->data->state,L"customization"),L"control").empty())self->updatePopup();
             }
         });
     }
     void measured(){
-        if(!presenting&&!data->updating&&root.IsLoaded())queueMeasurements();
+        if(!presenting&&!data->updating&&root.IsLoaded()){presentBackgrounds();queueMeasurements();}
     }
     void present(){
         if(presenting)return;presenting=true;
@@ -885,7 +932,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         if(!expanded.Size()&&str(object(data->state,L"customization"),L"expanded").empty()){
             for(auto& [id,group]:groups){group.configurationFrame.Child(nullptr);group.configuration.reset();}
         }
-        queueMeasurements();
+        presentBackgrounds();queueMeasurements();
     }
     void appendGroupOverviews(A& slots,Group const& group){
         if(!(group.body&&group.body->navigator)&&!(group.presented.Size()&&group.configuration))return;
@@ -914,10 +961,10 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         A allocated;
         for(auto const& [id,group]:groups){
             if(group.hidden||group.presented.Size()||group.frame.Opacity()<=0)continue;
-            auto bounds=allocatedBounds(group.frame,root);if(bounds.Width<=0||bounds.Height<=0)continue;
+            auto bounds=placement(group);if(bounds.Width<=0||bounds.Height<=0)continue;
             A pair;pair.Append(N(id));pair.Append(rectangle(bounds));allocated.Append(pair);
         }
-        auto key=O({{L"groups",allocated},{L"columns",collapsed->Measure(root)}}).Stringify();
+        auto key=O({{L"groups",allocated},{L"columns",collapsed->Geometry()}}).Stringify();
         if(key==panelBridgeKey&&panelQueryLayoutRevision==panelLayoutRevision)return;
         auto request=to_string(key);
         auto result=capy_panel_bridges(layoutInput.get(),viewportWidth,viewportHeight,request.c_str());
@@ -965,11 +1012,11 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         measurePanelBridges();presentPanelBridges();
         auto tabs=array(data->state,L"tabs");auto document=tabs.Size()?tabs.GetObjectAt(0):J{};
         for(auto& [id,group]:groups){
-            if(!group.frame.IsLoaded()||group.hidden)continue;
+            if(group.hidden)continue;
             A slots;appendGroupOverviews(slots,group);
             bool connected=nativeResize()&&!group.bridge.empty();
             bool expanded=group.presented.Size()!=0,tabbed=flag(group.geometry,L"tabs_visible");
-            auto bounds=rectangle(expanded?placement(group):allocatedBounds(group.frame,root));
+            auto bounds=rectangle(placement(group));
             J source;for(auto value:data->drawerSources){auto anchor=object(value.GetObject(),L"anchor");
                 if(str(anchor,L"kind")==L"tile"&&str(anchor,L"panel")==str(group.geometry,L"active"))source=value.GetObject();}
             float radius=groupRadius(group.geometry);
@@ -1069,7 +1116,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     }
     void cutStrip(uint32_t id){if(auto found=groups.find(id);found!=groups.end())cutStrip(found->second);}
     void cutStrip(Group& group){
-        std::vector<Point> band,active;float width=group.frame.IsLoaded()?float(group.frame.ActualWidth()):placement(group).Width;
+        std::vector<Point> band,active;float width=placement(group).Width;
         if(flag(group.geometry,L"tabs_visible")&&!group.presented.Size()&&width>0){
             band=squircleOutline(width,36,{SurfaceRadius,SurfaceRadius,0,0});
             if(auto tab=group.activeTab;tab&&tab.Opacity()>0&&tab.ActualWidth()>0){
@@ -1126,7 +1173,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         if(glassChanged)glassChanged();
     }
     A glass(UIElement const& reference,A& connections,A& arcs,A& colors,A& panels,uint64_t& panelRevision){
-        presentBackgrounds();panels=windowResizing?A{}:panelSurfaces(reference);auto encoded=panels.Stringify();
+        panels=windowResizing?A{}:panelSurfaces(reference);auto encoded=panels.Stringify();
         if(encoded!=lastPanelSurfaces){lastPanelSurfaces=encoded;++panelBridgeRevision;presentPanelBridges();}
         panelRevision=panelBridgeRevision;
         A regions;

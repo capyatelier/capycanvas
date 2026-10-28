@@ -6369,6 +6369,62 @@ logs, brush-handle checks and captures remain under
 `artifacts/windows/resize-followup/minimal-winui/`.
 
 
+## Windows WinUI panel placement, 2026-10-28
+
+Surface Pro 11, Adreno X1-85, ARM64 Release, AC power and Balanced mode,
+2880 × 1920 at verified 120 Hz and 200% scale. The candidate places native
+panel fills from shared geometry in the same pass as their frames. Untouched
+main `43f581594` supplies the control. Three six-second contacts per build run
+without WPR or PresentMon. Medians follow.
+
+| Measurement | Main | Same-pass fills |
+| --- | ---: | ---: |
+| Divider UI CPU per contact, ms | 4719 | 4281 |
+| Resize sampled bounds changes/s | 28.48 | 33.14 |
+| Resize UI CPU per sampled change, ms | 33.35 | 28.74 |
+| Resize sampled bounds gap p99, ms | 66.61 | 62.49 |
+
+Divider CPU falls about 9%; resize CPU per observed change falls about 14%.
+Bounds sampling does not identify changing displayed frames, and the gap ranges
+overlap. These results do not qualify 120 displayed motion frames/s. The
+deferred-fill negative control fails the per-Rendering alignment check in
+82/3282 frames. The candidate passes all 3320 light and 3035 dark frames,
+with maximum native fill/frame difference below 0.000031 physical pixels and
+no escaped tab labels. GPU bridge checks use submitted geometry; they do not
+measure the displayed glass edge.
+
+Pencil uses an identical 2560 × 1920 drawing, 18 px brush, one priming contact
+and three six-second measured contacts at 240 input samples/s. Untouched main
+`43f581594` and the candidate both retain latency 2, Immediate presentation and
+scRGB. Each build consumes and maps all 4323 measured samples to unique displayed
+canvas frames. PresentMon reports Hardware Composed: Independent Flip throughout
+the measured contacts.
+
+| Contact | Main input-to-displayed-frame p99, ms | Same-pass fills, ms |
+| --- | ---: | ---: |
+| 1 | 20.7413 | 19.8813 |
+| 2 | 19.1378 | 19.2371 |
+| 3 | 18.8396 | 20.3860 |
+
+The pooled p99 changes from 19.3717 to 19.8813 ms; contact ranges overlap and
+the candidate's worst contact is below main's worst. This small sample does not
+demonstrate a display-latency regression beyond the recorded contact spread.
+Software timing excludes the digitizer and panel; physical pen latency remains
+unmeasured. The bare D3D12 reference reaches 4.6770/4.9250 ms display p99 in its
+two warm contacts, so the native-path latency gap remains open. Later G-Pen,
+Zen and under-panel candidate contacts have only software/DXGI observations
+because further administrator access is unavailable. Those observation bounds
+are not exact display timings. Source and executable provenance, full joins,
+contact results and captures remain under `artifacts/windows/winui-motion/`.
+
+The final fixture build also waits for the applied camera-checkpoint
+acknowledgment before asserting steady motion. A matched three-contact Pencil
+check without PresentMon compares the earlier candidate with that final build:
+frame-return p99 is 12.2286 → 12.4761 ms, within contact spread, and the DXGI
+observation-bound p99 is 22.6722 → 22.7517 ms. Both consume all 4564 inputs,
+including priming. These bounds confirm no observed software-timing regression;
+they do not replace the earlier exact displayed-frame measurements.
+
 ## Windows offscreen GPU workloads
 
 The 2026-10-26 Release workload run uses the passed-through NVIDIA RTX PRO 6000

@@ -990,6 +990,10 @@ impl DocumentService {
         };
         Self::complete(host, active.id, result)
     }
+    #[cfg_attr(not(target_os = "windows"), expect(dead_code, reason = "Used by the Windows host"))]
+    pub(crate) fn recovery_status(&self, host: &NativeHost) -> Option<serde_json::Value> {
+        self.recovery.as_ref().map(|service|service.status(host.session.localization(),self.window.documents.selected()))
+    }
     fn present_package(&mut self,host:&mut NativeHost,view:layer_ui::PackageView,original:Option<PathBuf>)->Result<(),String> {
         let summary=serde_json::to_value(view.summary(host.session.localization())).map_err(|error|error.to_string())?;
         let name=original.as_ref().and_then(|path|path.file_name()).and_then(|name|name.to_str()).unwrap_or("Drawing.capy").into();

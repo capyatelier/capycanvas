@@ -669,9 +669,10 @@ impl Service {
         not(target_os = "windows"),
         expect(dead_code, reason = "Used by the Windows host")
     )]
-    pub fn status(&self, localization: &layer_ui::Localizer) -> serde_json::Value {
+    pub fn status(&self, localization: &layer_ui::Localizer, selected: u64) -> serde_json::Value {
         let drawing=self.asking.front().and_then(|key|self.manifest.drawings.iter().find(|drawing|drawing.key==*key)).map(|drawing|drawing.id);
         serde_json::json!({"busy":self.busy,"restoring":self.restoring,"closing":self.closing,"ready":self.close_ready(),
+            "camera":self.stamps.get(&selected).map(|stamp|&stamp.state.camera),
             "error":self.error.as_ref().map(|error|layer_ui::document_recovery_unavailable(localization,error)),"drawing":drawing,"retained":self.retained.len(),"windows":self.windows})
     }
     #[cfg_attr(
@@ -737,6 +738,17 @@ mod tests {
     }
     fn capture() -> SessionCapture {
         UiSession::from_project(Renderer(None),layer_ui::new_drawing(32,24,&layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(),None,[32,24],Platform::Windows).unwrap().capture_session().unwrap()
+    }
+    #[test]
+    fn recovery_status_reports_only_the_selected_committed_camera() {
+        let mut service=Service::open(||{}).unwrap();
+        let localization=layer_ui::Localizer::shared(layer_ui::UiLanguage::English);
+        let session=UiSession::from_project(Renderer(None),layer_ui::new_drawing(32,24,&localization).unwrap(),None,[32,24],Platform::Windows).unwrap();
+        let committed=session.session_stamp();let mut pending=committed.clone();pending.state.camera.zoom*=2.;
+        service.stamps.insert(7,committed.clone());service.pending_stamps.insert(7,pending);
+        assert_eq!(service.status(&localization,7)["camera"],serde_json::json!(committed.state.camera));
+        assert!(service.status(&localization,8)["camera"].is_null());
+        service.stop().unwrap();
     }
     #[test]
     fn window_membership_survives_restart_and_live_owners_are_never_claimed() {

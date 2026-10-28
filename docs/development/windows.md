@@ -378,6 +378,9 @@ The same `--target` applies to shared tests, Clippy and renderer examples.
 D3D12-specific fixtures construct an instance with `Backends::DX12`; a generic
 `PRIMARY` headless instance can select Vulkan.
 
+Pass `-OutputDirectory <dir>` to `test-without-gpu.ps1` to keep its application,
+native intermediates and input-test binaries in your own build directory.
+
 Software-adapter runs use WARP. The `software-adapter-tests` feature gives GPU
 readbacks one shared 180-second budget, because WARP's first Levels Auto dispatch
 takes about two minutes; hardware tests and performance runs keep it disabled.
@@ -464,6 +467,9 @@ Follow these rules when writing one:
 - **Wait for the operation you started.** Compare the document revision or the
   requested state before and after input. An already enabled Undo does not prove
   a new stroke committed, and `WaitForInputIdle` does not acknowledge an operation.
+  After zooming, steady-motion checks also wait for the committed
+  `windows_recovery.camera.zoom` and its applied UI revision; a later session
+  checkpoint can publish another full snapshot without changing workspace content.
 - **Prepare the selected tool.** Invoking an already selected grouped tool opens
   its drawer, and the first outside contact dismisses an open drawer.
 - **Capture composed pixels.** GPU pixel assertions use the owned window's screen

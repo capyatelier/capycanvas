@@ -174,6 +174,7 @@ public:
         root.Unloaded([weak](auto&&,auto&&){if(auto self=weak.lock())self->changed.revoke();});
     }
     Canvas Root()const{return root;}
+    Windows::Foundation::Size Size()const{return {state->width,state->height};}
     void Rounded(float width,float height,std::array<float,4> radii,Windows::UI::Color color,std::vector<Windows::Foundation::Rect> holes={}){
         if(!std::isfinite(width)||!std::isfinite(height)||width<0||height<0
             ||std::any_of(radii.begin(),radii.end(),[](float radius){return !std::isfinite(radius)||radius<0;}))throw winrt::hresult_invalid_argument();
@@ -191,6 +192,7 @@ public:
         if(state->rounded){if(state->visual)ElementCompositionPreview::SetElementChildVisual(root,nullptr);state->rounded=false;}
         if(!state->irregular){state->irregular=Microsoft::UI::Xaml::Shapes::Path();state->irregular.IsHitTestVisible(false);root.Children().Append(state->irregular);}
         auto bounds=geometry.Bounds();float width=std::max(0.f,bounds.X+bounds.Width),height=std::max(0.f,bounds.Y+bounds.Height);
+        state->width=width;state->height=height;
         if(root.Width()!=width)root.Width(width);if(root.Height()!=height)root.Height(height);
         state->irregular.Data(geometry);state->irregular.Fill(fill(color));
     }

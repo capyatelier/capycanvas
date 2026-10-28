@@ -137,12 +137,12 @@ struct Column:std::enable_shared_from_this<Column>{
         applying=false;
     }
     void visible(bool shown){fade->apply(background,shown,[weak=weak_from_this()]{if(auto self=weak.lock();self&&self->changed)self->changed();});}
-    J measure(UIElement const& reference)const{
-        auto box=allocatedBounds(background,reference);if(box.Width<=0||box.Height<=0||background.Opacity()<=0)return J{};
+    J geometryMeasure()const{
+        auto box=object(geometry,L"bounds");if(num(box,L"width")<=0||num(box,L"height")<=0||background.Opacity()<=0)return J{};
         A measured;
-        for(auto const& [panel,button]:buttons){auto bounds=allocatedBounds(button,reference);if(bounds.Width<=0||bounds.Height<=0)continue;
-            A pair;pair.Append(S(hstring(panel)));pair.Append(rectangle(bounds));measured.Append(pair);}
-        return O({{L"column",N(id)},{L"bounds",rectangle(box)},{L"content",rectangle(allocatedBounds(scroll,reference))},{L"icons",measured}});
+        for(auto value:array(geometry,L"groups"))for(auto icon:array(value.GetObject(),L"icons")){
+            auto item=icon.GetObject();A pair;pair.Append(S(str(item,L"panel")));pair.Append(object(item,L"bounds"));measured.Append(pair);}
+        return O({{L"column",N(id)},{L"bounds",box},{L"content",object(geometry,L"content")},{L"icons",measured}});
     }
     void present(J const& frame,bool ready,bool resizing){
         if(nativeResize!=resizing){nativeResize=resizing;
@@ -156,7 +156,7 @@ struct Column:std::enable_shared_from_this<Column>{
             auto r=pair.GetArrayAt(1);found->second.CornerRadius({r.GetNumberAt(0)*CornerFit,r.GetNumberAt(1)*CornerFit,r.GetNumberAt(2)*CornerFit,r.GetNumberAt(3)*CornerFit});}
         gpu=false;for(auto value:array(frame,L"bridges"))if(value.GetArray().GetNumberAt(0)==id)gpu=ready;
         surface.Opacity(gpu?0:1);
-        shape(float(background.ActualWidth()),float(background.ActualHeight()));
+        shape(float(num(object(geometry,L"bounds"),L"width")),float(num(object(geometry,L"bounds"),L"height")));
     }
     void collectGlass(A& regions,UIElement const& reference)const{
         if(!gpu)appendGlass(regions,background,reference,{corners[0],corners[1],corners[2],corners[3]},true);
@@ -189,7 +189,7 @@ CollapsedColumns::CollapsedColumns(std::shared_ptr<WorkspaceData> data,Canvas ro
 CollapsedColumns::~CollapsedColumns(){impl->reset();}
 void CollapsedColumns::Apply(){impl->apply();}
 void CollapsedColumns::Reset(){impl->reset();}
-A CollapsedColumns::Measure(UIElement const& reference)const{A result;for(auto const& [id,column]:impl->columns){auto value=column->measure(reference);if(value.Size())result.Append(value);}return result;}
+A CollapsedColumns::Geometry()const{A result;for(auto const& [id,column]:impl->columns){auto value=column->geometryMeasure();if(value.Size())result.Append(value);}return result;}
 void CollapsedColumns::ForEachBounds(UIElement const& reference,std::function<void(uint32_t,Rect)> const& visit)const{
     for(auto const& [id,column]:impl->columns){
         if(!column->background.IsLoaded()||column->background.Visibility()!=Visibility::Visible||column->background.Opacity()<=0)continue;

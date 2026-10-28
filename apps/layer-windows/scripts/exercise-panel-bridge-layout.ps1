@@ -182,7 +182,7 @@ try{
     }
     Capture 'paint-resized' -Composed -WithModel
     for($cycle=1;$cycle-le2;$cycle++){
-        Tap 'workspace-switch-builtin:workspace:painter'
+        Use-Workspace 'builtin:workspace:painter' 'Sketch'
         Wait-Until {(Model).windows_workspace.id-eq'builtin:workspace:painter'-and!(Model).windows_workspace.busy} 'Sketch workspace did not adopt'
         Save-State ('switch-'+$cycle+'-sketch')
         Use-PaintWorkspace
@@ -190,6 +190,11 @@ try{
         Open-Column ('switch-'+$cycle+'-paint-open')
     }
     Capture 'paint-returned' -Composed -WithModel
+    $surfaces=(Presentation).surface_frames
+    Check ($surfaces.frames -gt 0 -and $surfaces.groups -gt 0 -and $surfaces.tab_frames -gt 0) 'Rendering trace observes native fills and tab labels' $surfaces
+    Check ($surfaces.mismatched_frames -eq 0 -and $surfaces.maximum_offset_px -le .01) 'Every Rendering tick keeps panel fill edges with their XAML frame' $surfaces
+    Check ($surfaces.escaped_label_frames -eq 0) 'Every Rendering tick keeps tab labels inside their tabs' $surfaces
+    $surfaces|ConvertTo-Json -Depth 10|Set-Content (Join-Path $run 'surface-frames.json')
     $tabbed=@((Model).layout.groups|Where-Object {$_.panels.Count-gt1}|Select-Object id,active,panels)
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $window.ToInt64() -Action Close
     Check ($review.WaitForExit(8000)-and$review.ExitCode-eq0) 'Normal owned process exit' $null

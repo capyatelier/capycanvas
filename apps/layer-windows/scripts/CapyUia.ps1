@@ -672,15 +672,40 @@ function Save-ProjectAs([string]$Path,[scriptblock]$NativeSaved){
     } 'The drawing did not save' 90
     Wait-Until {!(Find 'Save As' -Name) -and (Control 'drawing-canvas').Current.IsEnabled} 'The Save As dialog did not close'
 }
+function Use-Workspace([string]$Id,[string]$Name){
+    $previousPopups=$script:CapyPopups;$script:CapyPopups=$true
+    try{
+        if((Model).windows_workspace.id -ne $Id){
+            $entry=Find ('workspace-switch-'+$Id) -Visible
+            if(!$entry){
+                $model=Model
+                $choice=@($model.windows_workspace.switcher_menu.sections|ForEach-Object {$_}|Where-Object {$_.action.type -eq 'workspace_manager' -and $_.action.command.type -eq 'switch' -and $_.action.command.id -eq $Id})
+                if($choice.Count -ne 1 -or !$choice[0].enabled){throw "Shared workspace switch is unavailable: $Id"}
+                $sources=@($model.header.model.zones|ForEach-Object {$_}|Where-Object {$_.item.kind -eq 'workspaces'})
+                $presentation=(Control 'title-bar').Current.ItemStatus|ConvertFrom-Json
+                $zones=@(foreach($zone in 0..2){if($sources.Count -eq 1 -and $sources[0].id -in $presentation.geometry.hidden[$zone]){$zone}})
+                if($zones.Count -eq 1){
+                    Invoke-Id ('header-overflow-'+$zones[0]);Invoke-Id ('header-overflow-item-'+$sources[0].id)
+                }elseif(Find 'header-workspace-menu' -Visible){
+                    Invoke-Id 'header-workspace-menu'
+                }else{
+                    $window=$model.application_menus|Where-Object id -eq 'window'
+                    $menus=@($window.model.sections|ForEach-Object {$_}|Where-Object {@($_.sections|ForEach-Object {$_}|Where-Object {$_.action.type -eq 'workspace_manager' -and $_.action.command.type -eq 'switch' -and $_.action.command.id -eq $Id}).Count -eq 1})
+                    if($menus.Count -ne 1){throw "Shared Window menu has no unique workspace route: $Id"}
+                    & (Join-Path $script:CapyScripts 'open-application-menu.ps1') -Root $root -Name 'window'
+                    (Control $menus[0].label -Name -Type ([System.Windows.Automation.ControlType]::MenuItem) -Arranged).GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
+                }
+                $entry=Control $choice[0].label -Name -Type ([System.Windows.Automation.ControlType]::MenuItem) -Arranged
+            }
+            $entry.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
+        }
+        Wait-Until {(Model).windows_workspace.id -eq $Id -and (Model).windows_workspace.ready -and !(Model).windows_workspace.busy -and !(Model).windows_workspace.saving -and (Model).brush_ready -and (Model).canvas_ready} "$Name workspace did not settle" 30
+        if(Find 'workspace-manager' -Visible){(Control 'workspace-manager').SetFocus();[CapyRowPointer]::Key([uint32]$review.Id,27)}
+        Wait-Until {!(Find 'workspace-manager' -Visible) -and (Control 'drawing-canvas').Current.IsEnabled} 'Workspace selector did not release the drawing'
+    }finally{$script:CapyPopups=$previousPopups}
+}
 function Use-PaintWorkspace{
-    $id='builtin:workspace:illustrator'
-    if((Model).windows_workspace.id -eq $id){return}
-    $found=@{switch=$null;menu=$null}
-    Wait-Until {if((Model).windows_workspace.id -eq $id){return $true};$found.switch=Find ('workspace-switch-'+$id) -Visible;$found.menu=Find 'header-workspace-menu' -Visible;$found.switch -or $found.menu} 'No Paint workspace switch' 15
-    if((Model).windows_workspace.id -eq $id){return}
-    if(!$found.switch){Invoke-Id 'header-workspace-menu';$found.switch=Control 'Paint' -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)}
-    Wait-Until {try{$found.switch.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle();$true}catch{$false}} 'The Paint switch stayed unavailable' 20
-    Wait-Until {(Model).windows_workspace.id -eq $id -and !(Model).windows_workspace.busy} 'Paint did not open' 30
+    Use-Workspace 'builtin:workspace:illustrator' 'Paint'
     Wait-Until {Find 'color-edit' -Visible} 'The Paint workspace shows no color control' 20
 }
 function Workspace-Root{

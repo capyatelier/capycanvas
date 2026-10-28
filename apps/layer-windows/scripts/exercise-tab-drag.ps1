@@ -367,6 +367,7 @@ try{
  Wait-Until {(Current-Group).floating -and !(Presentation).workspace_update.drag.drop_hint} 'Detached tab did not leave the dock target'
  Capture 'detached' -Composed
  Start-Sleep -Milliseconds 800
+ Wait-Until {(Presentation).shaders_ready} 'Shader preparation did not settle before retained-control motion' 60
  $floating=Current-Group;$floatingX=$floating.bounds.x
  $before=Presentation
  $retainedTab=(Control 'panel-tab-tool_settings').GetRuntimeId() -join ':'
@@ -404,7 +405,12 @@ try{
  $oldCamera=(Control 'canvas-camera').Current.Name
  Invoke 'navigator-zoom_in'
  Wait-Until {(Control 'canvas-camera').Current.Name -ne $oldCamera -and (Presentation).model_revision -gt $before.model_revision} 'Mixed camera update did not publish its native controls and model'
+ Wait-Until {
+  $m=Model;$p=Presentation
+  $p.shaders_ready -and !$m.windows_recovery.busy -and $p.checkpoint_camera.zoom -eq $m.state.camera.zoom -and $p.revision -ge $m.workspace_update.revision
+ } 'Camera checkpoint did not settle before Navigator motion' 60
  $cameraApplied=Presentation
+ $cameraModel=Model|Select-Object shaders_ready,canvas_ready,brush_ready,windows_gpu_generation,windows_surface_ready,windows_display,windows_workspace,windows_recovery
  Walk $x $y ($x+45*$scale) ($y+12*$scale)
  Wait-Until {
   $p=Presentation;$g=$p.groups|Where-Object id -eq $navigator.id
@@ -412,7 +418,8 @@ try{
   $g.bounds.x -gt $old.bounds.x+30
  } 'Native Navigator stopped moving'
  $after=Presentation
- [IO.File]::WriteAllText((Join-Path $run 'navigator-motion.json'),(@{before=$before;camera_applied=$cameraApplied;after=$after}|ConvertTo-Json -Depth 60))
+ $afterModel=Model|Select-Object shaders_ready,canvas_ready,brush_ready,windows_gpu_generation,windows_surface_ready,windows_display,windows_workspace,windows_recovery
+ [IO.File]::WriteAllText((Join-Path $run 'navigator-motion.json'),(@{before=$before;camera_applied=$cameraApplied;after=$after;camera_model=$cameraModel;after_model=$afterModel}|ConvertTo-Json -Depth 60))
  Check-Motion $cameraApplied $after $navigator.id
  if(((Control 'navigator-zoom_in').GetRuntimeId() -join ':') -ne $retained){throw 'Navigator motion replaced native controls'}
  if($before.overviews.Count -ne 1 -or $after.overviews.Count -ne 1){throw 'Navigator fixture did not retain exactly one GPU overview'}

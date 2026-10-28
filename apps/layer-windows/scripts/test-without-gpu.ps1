@@ -1,9 +1,10 @@
-param([ValidateSet('Debug','Release')][string]$Configuration = 'Release', [ValidateSet('native','x64','arm64')][string]$Architecture = 'native')
+param([ValidateSet('Debug','Release')][string]$Configuration = 'Release', [ValidateSet('native','x64','arm64')][string]$Architecture = 'native', [string]$OutputDirectory)
 $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
 . (Join-Path $PSScriptRoot 'WindowsArchitecture.ps1')
 . (Join-Path $PSScriptRoot 'WindowsTestRuntime.ps1')
 $build = Resolve-WindowsArchitecture $Architecture
+$testBuildDirectory=if($OutputDirectory){[IO.Path]::GetFullPath($OutputDirectory)}else{Get-WindowsBuildDirectory $repo $build $Configuration}
 $packages = 'layer-core','layer-engine','layer-color','layer-render','layer-ui','layer-workspace','layer-host','layer-windows' | ForEach-Object { '-p', $_ }
 $cargoProfileArgs = @(if ($Configuration -eq 'Release') { '--release' })
 & (Join-Path $PSScriptRoot '../tests/script-encoding.ps1')
@@ -16,8 +17,8 @@ if($LASTEXITCODE -ne 0){throw 'Renderer health regression failed.'}
 & (Join-Path $PSScriptRoot '../tests/layers-menu-targeting.ps1')
 & (Join-Path $PSScriptRoot '../tests/presented-frame-wait.ps1')
 & (Join-Path $PSScriptRoot '../tests/software-test-runtime.ps1')
-& (Join-Path $PSScriptRoot 'build.ps1') -Configuration $Configuration -Architecture $build.architecture
-& (Join-Path $PSScriptRoot 'test-input.ps1') -Configuration $Configuration -OutputDirectory (Join-Path $repo "artifacts/windows/tests/$($build.architecture)")
+& (Join-Path $PSScriptRoot 'build.ps1') -Configuration $Configuration -Architecture $build.architecture -OutputDirectory $testBuildDirectory
+& (Join-Path $PSScriptRoot 'test-input.ps1') -Configuration $Configuration -OutputDirectory (Join-Path $testBuildDirectory 'tests')
 & (Join-Path $PSScriptRoot '../tests/architecture.ps1')
 & (Join-Path $PSScriptRoot '../tests/application-menu-query.ps1')
 & (Join-Path $PSScriptRoot '../tests/pen-capture.ps1')
@@ -41,7 +42,7 @@ try {
     $rustProfile=if($Configuration -eq 'Release'){'release'}else{'debug'}
     $testDirectory=Join-Path $metadata.target_directory "$($build.target)/$rustProfile/deps"
     $testRuntime=Install-WindowsSoftwareTestRuntime $testPackages $testDirectory $build.architecture
-    $env:PATH = (Get-WindowsBuildDirectory $repo $build $Configuration)+';'+$previousPath
+    $env:PATH = $testBuildDirectory+';'+$previousPath
     $env:LAYER_TEST_SOFTWARE_GPU = '1'
     $env:WGPU_ADAPTER_NAME = 'Microsoft Basic Render Driver'
     $env:LAYER_GPU_INDEX = $null

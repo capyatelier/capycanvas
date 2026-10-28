@@ -71,34 +71,7 @@ function Diagnostics-Language([string]$Tag){
     $copy=@(Fps-Copy $Tag)
     Wait-Until {(Control 'renderer-stat-2').Current.HelpText -eq $copy[1] -and (Find $copy[0] -Name -Type ([System.Windows.Automation.ControlType]::Text))} "Diagnostics retained stale source labels for $Tag"
 }
-function Preset-Workspace([string]$Name,[string]$Id){
-    if((Model).windows_workspace.id -ne $Id){
-        $entry=Find ('workspace-switch-'+$Id) -Visible
-        if(!$entry){
-            $model=Model
-            $choice=@($model.windows_workspace.switcher_menu.sections|ForEach-Object {$_}|Where-Object {$_.action.type -eq 'workspace_manager' -and $_.action.command.type -eq 'switch' -and $_.action.command.id -eq $Id})
-            if($choice.Count -ne 1 -or !$choice[0].enabled){throw "Shared workspace switch is unavailable: $Id"}
-            $sources=@($model.header.model.zones|ForEach-Object {$_}|Where-Object {$_.item.kind -eq 'workspaces'})
-            $presentation=(Control 'title-bar').Current.ItemStatus|ConvertFrom-Json
-            $zones=@(foreach($zone in 0..2){if($sources.Count -eq 1 -and $sources[0].id -in $presentation.geometry.hidden[$zone]){$zone}})
-            @{workspace=$Id;source=$sources;header=$presentation;hidden_zones=$zones}|ConvertTo-Json -Depth 16|Set-Content (Join-Path $run ('preset-workspace-route-'+[guid]::NewGuid().ToString('N')+'.json'))
-            if($zones.Count -eq 1){
-                Invoke ('header-overflow-'+$zones[0]);Invoke ('header-overflow-item-'+$sources[0].id)
-            }else{
-                $window=$model.application_menus|Where-Object id -eq 'window'
-                $menus=@($window.model.sections|ForEach-Object {$_}|Where-Object {@($_.sections|ForEach-Object {$_}|Where-Object {$_.action.type -eq 'workspace_manager' -and $_.action.command.type -eq 'switch' -and $_.action.command.id -eq $Id}).Count -eq 1})
-                if($menus.Count -ne 1){throw "Shared Window menu has no unique workspace route: $Id"}
-                & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'window'
-                (Control $menus[0].label -Name -Type ([System.Windows.Automation.ControlType]::MenuItem) -Arranged).GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
-            }
-            $entry=Control $choice[0].label -Name -Type ([System.Windows.Automation.ControlType]::MenuItem) -Arranged
-        }
-        $entry.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
-    }
-    Wait-Until {(Model).windows_workspace.id -eq $Id -and (Model).windows_workspace.ready -and !(Model).windows_workspace.busy -and !(Model).windows_workspace.saving -and (Model).brush_ready -and (Model).canvas_ready} "$Name workspace did not settle"
-    if(Find 'workspace-manager' -Visible){(Control 'workspace-manager').SetFocus();[CapyRowPointer]::Key([uint32]$review.Id,27)}
-    Wait-Until {!(Find 'workspace-manager' -Visible) -and (Control 'drawing-canvas').Current.IsEnabled} 'Workspace selector did not release the drawing'
-}
+
 function Preset-Groups([string]$Top,[switch]$IncludeCollapsed,$Layout=(Model).layout){
     $groups=@($Layout.groups)
     if($IncludeCollapsed){foreach($column in $Layout.collapsed){foreach($group in $column.groups){
@@ -160,7 +133,7 @@ function Check-PresetGroups{
     $initial=(Model).windows_workspace.id;$document=(Model).state.document_file|ConvertTo-Json -Depth 20 -Compress
     $records=@()
     foreach($preset in @(@{name='Paint';id='builtin:workspace:illustrator';top='navigator'},@{name='Photo';id='builtin:workspace:photographer';top='histogram'})){
-        Preset-Workspace $preset.name $preset.id
+        Use-Workspace $preset.id $preset.name
         foreach($width in 1200,744){
             & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawing.Handle.ToInt64() -Action Resize -Width ([int]($width*$scale)) -Height ([int](700*$scale))
             $before=@(Preset-Geometry $preset.top);$layerGroup=@(Preset-Groups $preset.top)[2];$active=$layerGroup.active
@@ -181,7 +154,7 @@ function Check-PresetGroups{
         Wait-Until {@((Model).layout.groups|Where-Object id -eq $layerGroup.id)[0].active -eq 'adjustments' -and !(Model).windows_workspace.dirty -and !(Model).windows_workspace.saving} 'Filters tab did not finish autosaving'
         $saved=(Model).state.workspace.layout|ConvertTo-Json -Depth 80 -Compress
         $other=if($preset.name -eq 'Paint'){@('Photo','builtin:workspace:photographer')}else{@('Paint','builtin:workspace:illustrator')}
-        Preset-Workspace $other[0] $other[1];Preset-Workspace $preset.name $preset.id
+        Use-Workspace $other[1] $other[0];Use-Workspace $preset.id $preset.name
         if(((Model).state.workspace.layout|ConvertTo-Json -Depth 80 -Compress) -cne $saved){throw 'Workspace reload lost its exact saved Filters tab and group layout'}
         $restored=Model
         if($restored.windows_workspace.id -ne $preset.id -or !$restored.windows_workspace.ready){throw 'Reloaded preset lost its selected workspace'}
@@ -209,7 +182,7 @@ function Check-PresetGroups{
     }
     $names=@{'builtin:workspace:illustrator'='Paint';'builtin:workspace:photographer'='Photo';'builtin:workspace:painter'='Sketch'}
     if(!$names.ContainsKey($initial)){throw 'Preset fixture cannot restore an unknown initial workspace'}
-    Preset-Workspace $names[$initial] $initial
+    Use-Workspace $initial $names[$initial]
     if(((Model).state.document_file|ConvertTo-Json -Depth 20 -Compress) -cne $document){throw 'Preset grouping review edited the document or history'}
     [IO.File]::WriteAllText((Join-Path $run 'preset-grouping.json'),($records|ConvertTo-Json -Depth 20),[Text.UTF8Encoding]::new($false))
 }

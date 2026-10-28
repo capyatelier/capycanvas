@@ -1231,7 +1231,7 @@ pub unsafe extern "C" fn capy_snapshot(host: u64, info: *mut CapySnapshotInfo) -
             windows_display: serde_json::json!({"output": host.display, "format": host.config.as_ref().map(|c| format!("{:?}", c.format)), "headroom": host.config.as_ref().map_or(1., |c| host.display.available_headroom(c.format)), "analysis": host.documents.as_ref().map(|s| s.tone.status())}),
             windows_rendering_suspended: host.native.session.rendering_suspended(),
             windows_surface_ready: host.surface_ready.ready(),
-            windows_recovery: host.documents.as_ref().and_then(|d| d.recovery.as_ref()).map(|service| service.status(host.native.session.localization())),
+            windows_recovery: host.documents.as_ref().and_then(|service|service.recovery_status(&host.native)),
             windows_tabs: host.documents.as_ref().map(|d| d.tabs_view(&host.native)),
             windows_palettes: host.documents.as_ref().map(|d| d.palettes.status()),
             windows_papers: host.documents.as_ref().map(|d| d.papers.status()),
