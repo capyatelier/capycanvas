@@ -30,14 +30,7 @@ struct ProofDial:std::enable_shared_from_this<ProofDial>{
     void contact(hstring const& phase){A start,point;start.Append(N(origin.X));start.Append(N(origin.Y));point.Append(N(last.X));point.Append(N(last.Y));
         send(O({{L"type",S(L"dial")},{L"phase",S(phase)},{L"size",N(side)},{L"origin",start},{L"point",point}}),epoch);
     }
-    std::vector<std::pair<weak_ref<UIElement>,ManipulationModes>> scrollModes;
-    void releaseScroll(){for(auto const& [weak,mode]:scrollModes)if(auto content=weak.get())content.ManipulationMode(mode);scrollModes.clear();}
-    void claimScroll(){
-        root.CancelDirectManipulations();
-        for(auto node=VisualTreeHelper::GetParent(root);node;node=VisualTreeHelper::GetParent(node))if(auto scroll=node.try_as<ScrollViewer>())
-            if(auto content=scroll.Content().try_as<UIElement>()){auto mode=content.ManipulationMode();scrollModes.emplace_back(make_weak(content),mode);content.ManipulationMode(mode&~ManipulationModes::System);}
-    }
-    void finish(bool cancel){finishKey(cancel);if(!pointer)return;pointer.reset();contact(cancel?L"cancel":L"up");root.ReleasePointerCaptures();releaseScroll();AutomationProperties::SetItemStatus(root,data->caption(L"header",L"ready"));}
+    void finish(bool cancel){finishKey(cancel);if(!pointer)return;pointer.reset();contact(cancel?L"cancel":L"up");root.ReleasePointerCaptures();AutomationProperties::SetItemStatus(root,data->caption(L"header",L"ready"));}
     static void circle(Shapes::Ellipse const& e,A const& point,double radius){e.Width(radius*2);e.Height(radius*2);Canvas::SetLeft(e,point.GetNumberAt(0)-radius);Canvas::SetTop(e,point.GetNumberAt(1)-radius);}
     void refresh(){
         auto copy=object(form(),L"copy");auto title=str(copy,L"balance_contrast");
@@ -85,7 +78,7 @@ struct ProofDial:std::enable_shared_from_this<ProofDial>{
             auto at=p.Position();auto selected=uint8_t(hit.GetNumber());bool repeated=self->pressedAt&&p.Timestamp()-self->pressedAt<=uint64_t(GetDoubleClickTime())*1000&&selected==self->pressedPart&&std::hypot(at.X-self->pressedPoint.X,at.Y-self->pressedPoint.Y)<=8;
             self->pressedAt=repeated?0:p.Timestamp();self->pressedPoint=at;self->pressedPart=selected;
             if(repeated){self->part=selected;self->control(selected,O({{L"type",S(L"reset")}}));e.Handled(true);return;}
-            self->claimScroll();if(!self->root.CapturePointer(e.Pointer())){self->releaseScroll();return;}
+            if(!self->root.CapturePointer(e.Pointer()))return;
             self->pointer=p.PointerId();self->part=uint8_t(hit.GetNumber());self->origin=self->last=p.Position();self->epoch=to_hstring(uint64_t(num(object(self->data->state,L"document_file"),L"epoch")));
             self->contact(L"down");AutomationProperties::SetItemStatus(self->root,self->data->caption(L"header",L"dragging"));e.Handled(true);
         }});

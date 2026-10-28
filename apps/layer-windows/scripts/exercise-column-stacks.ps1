@@ -93,6 +93,9 @@ function Check-DockTargets {
         if((Layout) -ne $before){throw 'Canceled new docking target changed the layout'}
         Drag 'panel-tab-properties' $to -Expected $expected
         Wait-Until {(Layout) -ne $before} 'New docking target did not publish its move'
+        if($expected.kind -eq 'tab'){
+            Wait-Until {$target=(Model).layout.groups|Where-Object id -eq $expected.group|Select-Object -First 1;$target -and @($target.panels).Count -gt 0 -and $target.panels[0] -eq 'properties' -and $target.panels -contains 'layers'} 'The released panel did not enter the expected group at its first tab'
+        }
         $after=Layout;Check-History $before $after
         WindowCommand 'undo_workspace';Wait-Until {(Layout) -eq $before} 'New docking target did not restore its source'
         if(!(Column 12).open){Tap 'column-icon-layers'}
@@ -150,6 +153,7 @@ function Check-Open([int]$Id){
 }
 function Drag([string]$Id,$To,[switch]$Cancel,[switch]$Hold,[switch]$Stack,[switch]$Captured,$Expected){
     $from=At $Id;$generation=(Gesture).generation
+    $script:dragProbe=@{source=$Id;from=$from;to=$To;expected=$Expected;device=$Device}
     [CapyRowPointer]::Down($Device,$from.x,$from.y)
     Wait-Until {(Gesture).generation -gt $generation} 'Native handle did not receive pointer down'
     if((Gesture).requires_hold -ne [bool]$Hold -or (Gesture).device -ne $Device){throw 'Source used the wrong device or pickup policy'}
@@ -162,17 +166,22 @@ function Drag([string]$Id,$To,[switch]$Cancel,[switch]$Hold,[switch]$Stack,[swit
     [CapyRowPointer]::Move($To.x,$To.y)
     Wait-Until {(Gesture).phase -eq 'dragging'} 'Source did not drag after movement slop'
     if((Gesture).menu_open){throw 'Dragging retained the held context menu'}
-    if($Stack){Wait-Until {(Presentation).workspace_update.drag.drop_hint.target.kind -eq 'stack_column'} 'Footer did not preview a new stack member'}
-    if($Expected){
+    if($Stack -or $Expected){
         Wait-Until {
-            $drop=(Presentation).workspace_update.drag.drop_hint
+            $drag=(Presentation).workspace_update.drag
+            if($drag.tab -and !$drag.group){
+                if($drag.drop_hint){throw 'An attached tab slide displayed an insertion hint'}
+                return $true
+            }
+            $drop=$drag.drop_hint
+            if($Stack){return $drop.target.kind -eq 'stack_column'}
             if($drop.target.kind -ne $Expected.kind){return $false}
             if($Expected.kind -eq 'tab'){
                 return $drop.target.group -eq $Expected.group -and $drop.target.index -eq 0 -and (($drop.bounds.width -gt 3 -and $drop.bounds.height -gt 3) -eq $Expected.body)
             }
             $drop.target.column -eq $Expected.column -and $drop.target.before
-        } ('Wrong native drop target: '+$Expected.surface)
-        if(!$Cancel){Capture ('drop-'+$Expected.surface)}
+        } $(if($Stack){'Footer did not preview a new stack member'}else{'Wrong native drop target: '+$Expected.surface})
+        if($Expected -and !$Cancel){Capture ('drop-'+$Expected.surface)}
     }
     if($Cancel){if($Device -eq 'mouse'){[CapyRowPointer]::Key(0x1b);[CapyRowPointer]::Up()}else{[CapyRowPointer]::Cancel()}}
     else{[CapyRowPointer]::Up()}
@@ -295,6 +304,7 @@ try {
     if((Get-Item -LiteralPath $stderr).Length){throw 'Restart stderr requires inspection'}
     [pscustomobject]@{device=$Device;restart_persistence='passed';default_full_column='passed';column_background_menu='passed';native_body_tab_and_header_drops='passed';column_double_click='passed';closed_column_drag_resize='passed';native_geometry_and_connectors='passed';selected_tiles='passed';immediate_handles='passed';stack_cancel_undo_redo='passed';member_switch='passed';panel_group_toolbar_and_held_icon_drops='passed';retained_member_resize='passed';themes_and_zen='passed';fixed_closed_width='passed';individual_panels='passed';auto_hide_consumes_contact='passed';zero_exit='passed';scope='OS-delivered synthetic input; physical devices, performance and complete visual acceptance remain separate'}|ConvertTo-Json
 }catch{
+    try{@{gesture=Gesture;probe=$script:dragProbe;model=Model;presentation=Presentation}|ConvertTo-Json -Depth 95|Set-Content (Join-Path $run 'failure-native.json')}catch{}
     if($review -and !$review.HasExited){try{Capture 'failure'}catch{}}
     [IO.File]::WriteAllText((Join-Path $run 'failure.txt'),($_|Out-String)+$_.ScriptStackTrace);throw
 }finally{

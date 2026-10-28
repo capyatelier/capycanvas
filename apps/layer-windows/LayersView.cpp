@@ -114,7 +114,7 @@ void LayersView::init(){
     addPaper.FontWeight(Windows::UI::Text::FontWeights::Normal());addPaper.HorizontalAlignment(HorizontalAlignment::Stretch);
     AutomationProperties::SetAutomationId(addPaper,L"layer-add-paper");
     list.Content(repeater);list.HorizontalScrollMode(ScrollingScrollMode::Disabled);
-    list.HorizontalScrollBarVisibility(ScrollingScrollBarVisibility::Hidden);list.VerticalScrollBarVisibility(ScrollingScrollBarVisibility::Auto);mouseScrollbars(list);panelScrolling(list,repeater,data);
+    list.HorizontalScrollBarVisibility(ScrollingScrollBarVisibility::Hidden);list.VerticalScrollBarVisibility(ScrollingScrollBarVisibility::Auto);mouseScrollbars(list);list.ContentOrientation(ScrollingContentOrientation::Vertical);panelScrolling(list,repeater,data);
     AutomationProperties::SetAutomationId(list,L"layer-list");copyName(data,list,data->copyCaption(L"layers",L"title"));listFrame.Children().Append(list);
     connectionOverlay.IsHitTestVisible(false);AutomationProperties::SetAccessibilityView(connectionOverlay,Automation::Peers::AccessibilityView::Raw);
     listFrame.Children().Append(connectionOverlay);Grid::SetRow(listFrame,1);root.Children().Append(listFrame);

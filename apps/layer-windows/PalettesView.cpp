@@ -4,6 +4,7 @@
 #include "WorkspaceGeometry.h"
 #include "NativeMenus.h"
 #include "Checker.h"
+#include "PanelScroll.h"
 #include <winrt/Microsoft.UI.Composition.h>
 #include <winrt/Microsoft.UI.Input.h>
 #include <winrt/Microsoft.UI.Xaml.Controls.Primitives.h>
@@ -25,7 +26,7 @@ struct Drag{
 };
 struct PalettesView:std::enable_shared_from_this<PalettesView>{
     std::shared_ptr<WorkspaceData> data;
-    Grid root,body,chooser,footer;StackPanel normal,list,info;Canvas history,grid,expanded,overlays;ScrollViewer scroll,results;
+    Grid root,body,chooser,footer;StackPanel normal,list,info;Canvas history,grid,expanded,overlays;ScrollView scroll,results;
     TextBox search,editor;Button more{nullptr},selector{nullptr},name{nullptr},add{nullptr};TextBlock selectorLabel,nameLabel,detail,note,empty;
     std::map<uint64_t,Tile> tiles;std::vector<uint64_t> order;std::vector<FrameworkElement> historyCells,expandedCells;
     hstring viewKey,historyKey,choicesKey,currentKey,checkerKey;Imaging::WriteableBitmap checker{nullptr};
@@ -374,7 +375,7 @@ struct PalettesView:std::enable_shared_from_this<PalettesView>{
             if(p.Y<clip.Y+20&&p.Y>=clip.Y-12)delta=-240*.016;else if(p.Y>clip.Y+clip.Height-20&&p.Y<=clip.Y+clip.Height+12)delta=240*.016;
         }
         scrollCarry+=delta;auto step=std::trunc(scrollCarry);if(!step)return;scrollCarry-=step;
-        auto before=scroll.VerticalOffset();scroll.ChangeView(nullptr,before+step,nullptr,true);
+        auto before=scroll.VerticalOffset();scrollVertical(scroll,before+step);
         update(true);
     }
     void finish(bool cancel){
@@ -502,8 +503,8 @@ struct PalettesView:std::enable_shared_from_this<PalettesView>{
         normal.Spacing(6);history.Height(Cell);AutomationProperties::SetAutomationId(history,L"palette-history");AutomationProperties::SetName(history,data->caption(L"palettes",L"recent"));
         tooltip(history,data->caption(L"palettes",L"history_help"));
         normal.Children().Append(history);normal.Children().Append(divider());
-        scroll.MinHeight(84);scroll.MaxHeight(172);scroll.HorizontalScrollMode(ScrollMode::Disabled);scroll.HorizontalScrollBarVisibility(ScrollBarVisibility::Disabled);
-        scroll.VerticalScrollBarVisibility(ScrollBarVisibility::Auto);mouseScrollbars(scroll);scroll.Content(grid);AutomationProperties::SetAutomationId(grid,L"palette-swatches");AutomationProperties::SetName(grid,data->caption(L"palettes",L"saved"));
+        scroll.MinHeight(84);scroll.MaxHeight(172);scroll.HorizontalScrollMode(ScrollingScrollMode::Disabled);scroll.HorizontalScrollBarVisibility(ScrollingScrollBarVisibility::Hidden);
+        scroll.VerticalScrollBarVisibility(ScrollingScrollBarVisibility::Auto);mouseScrollbars(scroll);grid.Background(clear());scroll.Content(grid);scroll.ContentOrientation(ScrollingContentOrientation::Vertical);panelScrolling(scroll,grid,data);AutomationProperties::SetAutomationId(grid,L"palette-swatches");AutomationProperties::SetName(grid,data->caption(L"palettes",L"saved"));
         normal.Children().Append(scroll);body.Children().Append(normal);body.Children().Append(overlays);
         expanded.Visibility(Visibility::Collapsed);AutomationProperties::SetAutomationId(expanded,L"palette-history-expanded");overlays.Children().Append(expanded);
         chooser.RowSpacing(6);chooser.Visibility(Visibility::Collapsed);AutomationProperties::SetAutomationId(chooser,L"palette-chooser");
@@ -518,7 +519,7 @@ struct PalettesView:std::enable_shared_from_this<PalettesView>{
         tooltip(more,data->caption(L"palettes",L"new_import"));AutomationProperties::SetAutomationId(more,L"palette-library-add");
         more.Click([weak](auto&&,auto&&){if(auto self=weak.lock())self->menu(O({{L"kind",S(L"library")}}),self->more,self->data->caption(L"palettes",L"title"));});
         Grid::SetColumn(more,1);searchRow.Children().Append(more);chooser.Children().Append(searchRow);
-        Grid resultsHost;list.Spacing(0);results.Content(list);results.HorizontalScrollMode(ScrollMode::Disabled);results.VerticalScrollBarVisibility(ScrollBarVisibility::Auto);mouseScrollbars(results);
+        Grid resultsHost;list.Spacing(0);list.Background(clear());results.Content(list);results.ContentOrientation(ScrollingContentOrientation::Vertical);panelScrolling(results,list,data);results.HorizontalScrollMode(ScrollingScrollMode::Disabled);results.HorizontalScrollBarVisibility(ScrollingScrollBarVisibility::Hidden);results.VerticalScrollBarVisibility(ScrollingScrollBarVisibility::Auto);mouseScrollbars(results);
         AutomationProperties::SetAutomationId(list,L"palette-list");AutomationProperties::SetName(list,data->caption(L"palettes",L"title"));resultsHost.Children().Append(results);
         empty=label(data,data->copyCaption(L"palettes",L"no_matches"));empty.Opacity(.55);empty.HorizontalAlignment(HorizontalAlignment::Center);empty.VerticalAlignment(VerticalAlignment::Center);empty.IsHitTestVisible(false);
         empty.Visibility(Visibility::Collapsed);resultsHost.Children().Append(empty);Grid::SetRow(resultsHost,1);chooser.Children().Append(resultsHost);

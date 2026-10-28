@@ -7,6 +7,7 @@
 #include "ScopesView.h"
 #include "NativeMenus.h"
 #include "WorkspaceGeometry.h"
+#include "PanelScroll.h"
 
 using namespace CapyUi;
 namespace {
@@ -145,7 +146,7 @@ struct PanelConfiguration::Impl:std::enable_shared_from_this<Impl>{
         return Border();
     }
     void init(){
-        content.Padding({12,12,12,12});content.Spacing(12);root.Content(content);
+        content.Padding({12,12,12,12});content.Spacing(12);content.Background(clear());root.Content(content);root.ContentOrientation(ScrollingContentOrientation::Vertical);panelScrolling(root,content,data);
         root.HorizontalScrollMode(ScrollingScrollMode::Disabled);root.HorizontalScrollBarVisibility(ScrollingScrollBarVisibility::Hidden);
         root.VerticalScrollBarVisibility(ScrollingScrollBarVisibility::Auto);mouseScrollbars(root);
         AutomationProperties::SetAutomationId(root,L"panel-configuration-"+panelId);

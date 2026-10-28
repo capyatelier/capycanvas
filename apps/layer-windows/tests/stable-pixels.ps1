@@ -13,3 +13,11 @@ function Capture-CallerPixels{
 }
 if((Capture-CallerPixels) -cne 'column:1640,116:owned-pixels'){throw 'Pixel stability helper shadowed the caller sample'}
 'Pixel stability caller sample: passed'
+$slow=@{captures=0}
+$result=Wait-StablePixels -Composed {$slow.captures++;Start-Sleep -Milliseconds 1750;'owned-composed-pixels'}
+if($result -cne 'owned-composed-pixels' -or $slow.captures -ne 4){throw 'Slow composed capture did not establish three matching comparisons'}
+$changing=@{captures=0};$refused=$false
+try{Wait-StablePixels -Composed {$changing.captures++;"frame:$($changing.captures)"}|Out-Null}
+catch{if(!$_.Exception.Message.StartsWith('Canvas pixels did not settle for comparison')){throw};$refused=$true}
+if(!$refused){throw 'Changing composed pixels were accepted as stable'}
+'Slow and changing composed captures: passed'

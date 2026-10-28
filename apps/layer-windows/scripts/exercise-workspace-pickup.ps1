@@ -115,7 +115,6 @@ function Press([string]$Id,[switch]$Immediate) {
     $hit=Gesture
     if(!(Source-Matches $hit.source $Id)){throw "Pointer hit another workspace source instead of $Id"}
     if($hit.device -ne $Device -or $hit.requires_hold -eq [bool]$Immediate){throw 'Native source misclassified the device or pickup surface'}
-    if(!$Immediate -and $hit.phase -eq 'pressed' -and $hit.scroll_claimed){throw 'Tile stole native scrolling before hold'}
     $at
 }
 function Hold([string]$Id) {

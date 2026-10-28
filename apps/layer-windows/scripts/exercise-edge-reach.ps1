@@ -1,4 +1,4 @@
-﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('mouse','pen','touch')][string]$Device='mouse',[switch]$ColumnResetOnly,[switch]$CanvasResetOnly,[switch]$ClosedStripOnly,[switch]$LayerRowOnly,[switch]$CancelOnly,[switch]$EdgeEscapeOnly,[switch]$NumericOnly,[ValidateSet('dark','light')][string]$Theme)
+﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('mouse','pen','touch')][string]$Device='mouse',[switch]$ColumnResetOnly,[switch]$CanvasResetOnly,[switch]$ClosedStripOnly,[switch]$LayerRowOnly,[switch]$CancelOnly,[switch]$EdgeEscapeOnly,[switch]$NumericOnly,[switch]$SweepOnly,[ValidateSet('photo','photo-open','photo-collapsed','paint')][string[]]$SweepScenarios=@('photo','photo-open','photo-collapsed','paint'),[ValidateSet('dark','light')][string]$Theme)
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 $CapyPopups=$true
@@ -8,7 +8,13 @@ $Executable=(Resolve-Path -LiteralPath $Executable).Path
 $directory=Split-Path -Parent $Executable
 $run=Join-Path $repo ('artifacts/windows/edge-reach/'+[Guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($run)|Out-Null
-function Gesture {try{(Workspace-Root).Current.HelpText|ConvertFrom-Json}catch{}}
+function Gesture {
+    if(!$script:gestureRoot){$script:gestureRoot=Workspace-Root}
+    $trace=$script:gestureRoot.Current.HelpText
+    $gesture=try{$trace|ConvertFrom-Json}catch{}
+    if($gesture -and $gesture.PSObject.Properties.Name -contains 'native_scrollers' -and @($gesture.native_scrollers).Count){throw "Workspace scrollers accept native touch or pen: $($gesture.native_scrollers|ConvertTo-Json -Compress)"}
+    $gesture
+}
 function Layout {(Model).layout}
 function Column([int]$Id){(Layout).collapsed|Where-Object id -eq $Id|Select-Object -First 1}
 function Divider([int]$Id){(Layout).dividers|Where-Object id -eq $Id|Select-Object -First 1}
@@ -77,9 +83,10 @@ function Check-EdgeEscape($From){
         if([CapyRowPointer]::Active){[CapyRowPointer]::Cancel()}
     }
 }
-function Start-Review([string]$Theme){
-    $script:stderr=Join-Path $run ($Theme+'-stderr.log')
-    $env:CAPY_STORAGE_DIR=Join-Path $run ($Theme+'-profile')
+function Start-Review([string]$Theme,[string]$Name=$Theme){
+    $script:gestureRoot=$null
+    $script:stderr=Join-Path $run ($Name+'-stderr.log')
+    $env:CAPY_STORAGE_DIR=Join-Path $run ($Name+'-profile')
     [IO.Directory]::CreateDirectory($env:CAPY_STORAGE_DIR)|Out-Null
     [IO.File]::WriteAllText((Settings-File),(@{language=@{Explicit='en'};theme=$Theme}|ConvertTo-Json -Depth 4))
     $script:review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError $stderr
@@ -93,6 +100,110 @@ function Start-Review([string]$Theme){
     (Control 'drawing-canvas').SetFocus()
     [CapyRowPointer]::Initialize([uint32]$review.Id)
     Maximize-DrawingWindow
+}
+function Reach-Samples {
+    $layout=Layout
+    foreach($divider in @($layout.dividers|Where-Object {!$_.fixed -and $_.owner_side})){
+        $bounds=$divider.bounds
+        if($divider.axis -eq 'horizontal'){
+            $sign=if($divider.owner_side -eq 'right'){1}else{-1}
+            $edge=if($sign -gt 0){$bounds.x+$bounds.width}else{$bounds.x}
+            for($y=$bounds.y+12;$y -le $bounds.y+$bounds.height-12;$y+=48){
+                foreach($depth in 4,18,32){
+                    $x=$edge+$sign*$depth
+                    if($x -gt 1 -and $x -lt $layout.viewport[0]-1){[pscustomobject]@{divider=$divider.id;axis='horizontal';depth=$depth;x=$x;y=$y;dx=-$sign*6;dy=0}}
+                }
+            }
+        }else{
+            for($x=$bounds.x+12;$x -le $bounds.x+$bounds.width-12;$x+=48){
+                foreach($depth in 4,16){foreach($side in -1,1){
+                    $y=if($side -lt 0){$bounds.y-$depth}else{$bounds.y+$bounds.height+$depth}
+                    [pscustomobject]@{divider=$divider.id;axis='vertical';depth=$depth;x=$x;y=$y;dx=0;dy=6}
+                }}
+            }
+        }
+    }
+}
+function Reach-Geometry {(Layout).dividers|ForEach-Object {"{0}:{1:0.0},{2:0.0},{3:0.0},{4:0.0}" -f $_.id,$_.bounds.x,$_.bounds.y,$_.bounds.width,$_.bounds.height}|Out-String}
+function Append-SweepRow($Row){
+    $stream=[IO.FileStream]::new((Join-Path $run 'sweep.jsonl'),[IO.FileMode]::Append,[IO.FileAccess]::Write,[IO.FileShare]::ReadWrite)
+    $writer=[IO.StreamWriter]::new($stream,[Text.UTF8Encoding]::new($false))
+    try{$writer.WriteLine(($Row|ConvertTo-Json -Depth 8 -Compress))}finally{$writer.Dispose()}
+}
+function Check-ReachSweep([string]$Theme){
+    $rows=[Collections.Generic.List[object]]::new()
+    foreach($scenario in $SweepScenarios){
+        Start-Review $Theme ($Theme+'-'+$scenario)
+        if($scenario -like 'photo*'){Use-Workspace 'builtin:workspace:photographer' 'Photo'}else{Use-PaintWorkspace}
+        Settled
+        if($scenario -eq 'photo-open'){
+            $panel=((Layout).collapsed|Select-Object -First 1).groups.icons.panel|Select-Object -First 1
+            Invoke-Id ('column-icon-'+$panel);Settled
+        }
+        if($scenario -eq 'photo-collapsed'){
+            $layout=Layout;$strip=$layout.collapsed|Where-Object {!$_.open}|Select-Object -First 1
+            $interior=$layout.dividers|Where-Object {$_.axis -eq 'horizontal' -and [Math]::Abs($_.bounds.x-$strip.bounds.x-$strip.bounds.width) -lt .5}|Select-Object -First 1
+            if(!$interior){throw 'No interior divider beside the Photo strip'}
+            $y=$strip.bounds.y+$strip.bounds.height*.5
+            Swipe @{x=$interior.bounds.x+$interior.bounds.width*.5;y=$y} @{x=$layout.viewport[0]-2;y=$y} 20
+            if(@((Layout).collapsed).Count -lt 2){throw 'The outer Photo column did not collapse'}
+        }
+        $baseline=(Model).state.workspace.layout|ConvertTo-Json -Depth 90 -Compress
+        $geometry=Reach-Geometry
+        $active=@{};foreach($group in (Layout).groups){$active[$group.id]=$group.active}
+        $null=Gesture
+        (Layout)|ConvertTo-Json -Depth 40|Set-Content (Join-Path $run ("sweep-$Theme-$scenario-layout.json"))
+        $strips=@((Layout).collapsed.bounds)
+        $samples=@(Reach-Samples|Sort-Object { $sample=$_;$inside=@($strips|Where-Object {$sample.x -ge $_.x -and $sample.x -le $_.x+$_.width -and $sample.y -ge $_.y -and $sample.y -le $_.y+$_.height});if($inside.Count){0}else{1} })
+        foreach($sample in $samples){
+            $script:sweepProbe=@{theme=$Theme;device=$Device;scenario=$scenario;sample=$sample;baseline=($baseline|ConvertFrom-Json);geometry=$geometry}
+            @{theme=$Theme;device=$Device;scenario=$scenario;sample=$sample}|ConvertTo-Json -Depth 8|Set-Content (Join-Path $run 'sweep-current.json')
+            $at=Screen $sample.x $sample.y
+            if($Device -eq 'mouse'){[CapyRowPointer]::Hover($at.x,$at.y)}
+            try{
+                [CapyRowPointer]::Down($Device,$at.x,$at.y);Start-Sleep -Milliseconds 60
+                $down=Gesture
+                $eligible=$null -ne $down.edge -and $(if($sample.axis -eq 'horizontal'){$down.edge.contact -eq 'free'}else{[bool]$down.edge.vertical})
+                $claimed=$false
+                if($eligible){
+                    $scale=[CapyRowPointer]::GetDpiForWindow($window)/96.
+                    for($i=1;$i -le 10;$i++){[CapyRowPointer]::Move([int]($at.x+$sample.dx*$i*$scale),[int]($at.y+$sample.dy*$i*$scale));Start-Sleep -Milliseconds 16}
+                    Start-Sleep -Milliseconds 180
+                    $mid=Gesture;$claimed=[bool]$mid.edge.claimed
+                }
+                if($claimed){
+                    [CapyRowPointer]::Key(0x1b)
+                    Wait-Until {$ended=Gesture;!$ended.edge -and $ended.last_edge.phase -eq 'cancel' -and $ended.last_edge.claimed} 'Escape did not finish the claimed edge sweep contact'
+                }
+                if([CapyRowPointer]::Active){[CapyRowPointer]::Cancel()}
+                Settled
+                $after=Gesture
+                if($after.edge){throw 'Canceled edge sweep retained a contact'}
+                if((Reach-Geometry) -cne $geometry){throw 'Canceled edge sweep changed the arranged divider geometry'}
+                if(!$eligible){
+                    foreach($group in (Layout).groups){
+                        if($active.ContainsKey($group.id) -and $group.active -ne $active[$group.id]){
+                            $tab=Control ('panel-tab-'+$active[$group.id]) -Arranged
+                            $tab.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+                        }
+                    }
+                    Settled
+                }
+                $restored=((Model).state.workspace.layout|ConvertTo-Json -Depth 90 -Compress) -ceq $baseline
+                $row=[pscustomobject]@{theme=$Theme;scenario=$scenario;device=$Device;divider=$sample.divider;axis=$sample.axis;depth=$sample.depth;x=$sample.x;y=$sample.y;admitted=($null -ne $down.edge);contact=$down.edge.contact;eligible=$eligible;claimed=$claimed;lost=($eligible -and !$claimed);terminal=$after.last_edge;restored=$restored}
+                $rows.Add($row);Append-SweepRow $row
+                if($row.lost -or !$restored -or $after.edge){throw "Edge sweep lost or retained a contact: $($row|ConvertTo-Json -Depth 8 -Compress)"}
+                if((Reach-Geometry) -cne $geometry){throw 'Canceled edge sweep changed the arranged divider geometry'}
+            }finally{if([CapyRowPointer]::Active){[CapyRowPointer]::Cancel()}}
+        }
+        & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close
+        [CapyRowPointer]::Dispose()
+        if((Get-Item -LiteralPath $stderr).Length){throw "Native stderr requires inspection ($Theme, $scenario)"}
+        $completed=@($rows|Where-Object scenario -eq $scenario)
+        [pscustomobject]@{theme=$Theme;device=$Device;scenario=$scenario;samples=$completed.Count;admitted=@($completed|Where-Object admitted).Count;claimed=@($completed|Where-Object claimed).Count;lost=@($completed|Where-Object lost).Count;evidence=$run}|ConvertTo-Json
+    }
+    $rows|Export-Csv -NoTypeInformation -Path (Join-Path $run ("sweep-$Theme.csv"))
+    [pscustomobject]@{theme=$Theme;device=$Device;scenarios=$SweepScenarios;samples=$rows.Count;admitted=@($rows|Where-Object admitted).Count;claimed=@($rows|Where-Object claimed).Count;lost=@($rows|Where-Object lost).Count;evidence=$run}|ConvertTo-Json
 }
 function Check-ColumnEdge([string]$Theme){
     $layout=Layout
@@ -374,18 +485,31 @@ function Check-ClosedStrip([string]$Theme){
     $panel=@($strip.groups.icons.panel|Where-Object {(Control ('column-icon-'+$_)).Current.ItemStatus -eq 'Selected'})[0]
     if(!$panel){throw 'The open stack member has no selected icon'}
     Invoke-Id ('column-icon-'+$panel);Wait-Until {!(Column $strip.id).open} "${Theme}: the open member did not close"
-    $icon=((Column $strip.id).groups.icons|Where-Object panel -eq $panel|Select-Object -First 1).bounds
-    $from=@{x=$icon.x+$icon.width*.5;y=$icon.y+$icon.height*.5}
+    $closed=Column $strip.id
+    $icon=($closed.groups.icons|Where-Object panel -eq $panel|Select-Object -First 1).bounds
+    $points=@(@{kind='tile';x=$icon.x+$icon.width*.5;y=$icon.y+$icon.height*.5})
+    foreach($gap in @($closed.groups.divider|Where-Object {$_.height -gt 0})){$points+=@{kind='gap';x=$icon.x+$icon.width*.5;y=$gap.y+$gap.height*.5}}
+    $bottom=($closed.groups.icons.bounds|Sort-Object {$_.y+$_.height}|Select-Object -Last 1)
+    if($closed.content.y+$closed.content.height -gt $bottom.y+$bottom.height+12){$points+=@{kind='empty';x=$icon.x+$icon.width*.5;y=$bottom.y+$bottom.height+12}}
+    if(!($points|Where-Object kind -eq 'gap') -or !($points|Where-Object kind -eq 'empty')){throw 'The closed strip fixture needs both a group gap and empty content space'}
     $outward=if($strip.bounds.x -gt (Layout).viewport[0]*.5){-90}else{90}
-    Swipe $from @{x=$from.x+$outward;y=$from.y}
-    try{Wait-Until {$column=Column $strip.id;!$column -or $column.open} "open"}catch{throw "${Theme}: an outward swipe from a closed strip did not open it: $((Gesture)|ConvertTo-Json -Compress -Depth 5)"}
-    if((Gesture).last_edge.claimed -ne $true){throw "${Theme}: the closed strip opened without an edge claim"}
+    $before=(Model).state.workspace.layout|ConvertTo-Json -Depth 90 -Compress
+    foreach($from in $points){
+        Swipe $from @{x=$from.x+$outward;y=$from.y} -During {
+            try{Wait-Until {$column=Column $strip.id;!$column -or $column.open} "open"}catch{throw "${Theme}: an outward swipe from closed-strip $($from.kind) did not open it: $((Gesture)|ConvertTo-Json -Compress -Depth 5)"}
+            if(!(Gesture).edge.claimed){throw "${Theme}: the closed strip opened without an edge claim"}
+            [CapyRowPointer]::Key(0x1b)
+        }
+        if((Gesture).last_edge.claimed -ne $true){throw "${Theme}: the closed strip opened without an edge claim"}
+        if(((Model).state.workspace.layout|ConvertTo-Json -Depth 90 -Compress) -cne $before){throw "${Theme}: canceling the $($from.kind) swipe did not restore the closed strip"}
+    }
 }
 try {
     Enter-CapyEnvironment
     $env:CAPY_TRACE_UI='1'
     $themes=if($Theme){@($Theme)}else{@('dark','light')}
     foreach($theme in $themes){
+        if($SweepOnly){Check-ReachSweep $theme;continue}
         Start-Review $theme
         Settled
         if($NumericOnly){Check-NumericEdge $theme}elseif($EdgeEscapeOnly){Check-ColumnEdge $theme}elseif($CancelOnly){Check-NativeEdgeCancel $theme}elseif($LayerRowOnly){Check-LayerRowEdge $theme}elseif($ClosedStripOnly){Check-ClosedStrip $theme}elseif($CanvasResetOnly){Check-CanvasReset $theme}elseif($ColumnResetOnly){Check-ColumnHandleReset $theme}else{
@@ -399,7 +523,8 @@ try {
         if((Get-Item -LiteralPath $stderr).Length){throw "Native stderr requires inspection ($theme)"}
         [CapyRowPointer]::Dispose()
     }
-    if($NumericOnly){[pscustomobject]@{device=$Device;themes=($themes -join ',');numeric_edge_reservation='passed';evidence=$run;scope='Native NumberControl caption, readout, slider and component gap only'}|ConvertTo-Json}
+    if($SweepOnly){[pscustomobject]@{device=$Device;themes=($themes -join ',');reach_sweep='passed';evidence=$run}|ConvertTo-Json}
+    elseif($NumericOnly){[pscustomobject]@{device=$Device;themes=($themes -join ',');numeric_edge_reservation='passed';evidence=$run;scope='Native NumberControl caption, readout, slider and component gap only'}|ConvertTo-Json}
     elseif($EdgeEscapeOnly){[pscustomobject]@{device=$Device;themes=($themes -join ',');edge_escape='passed';evidence=$run;scope='Pending and claimed edge Escape only'}|ConvertTo-Json}
     elseif($CancelOnly){[pscustomobject]@{device=$Device;themes=($themes -join ',');native_edge_cancel='passed';evidence=$run;scope='Pending and claimed native edge cancellation only'}|ConvertTo-Json}
     elseif($LayerRowOnly){[pscustomobject]@{device=$Device;themes=($themes -join ',');layer_row_edge_handoff='passed';evidence=$run;scope='Actual LayerRow Pickup edge arbitration only'}|ConvertTo-Json}
@@ -408,11 +533,11 @@ try {
     elseif($ColumnResetOnly){[pscustomobject]@{device=$Device;themes=($themes -join ',');actual_nested_divider_reset='passed';owner_side='left';preferred_width='exact';other_owner='unchanged';workspace_undo_redo='exact';evidence=$run;scope='Actual native nested divider contacts only; physical devices and timing remain separate'}|ConvertTo-Json}
     else{[pscustomobject]@{device=$Device;column_edge_from_inside='passed';resize_pointer=($Device -eq 'mouse');double_press_reset='passed';canvas_contact=$(if($Device -eq 'touch'){'grabs'}else{'kept'});vertical_swipe_kept='passed';group_gap='passed';closed_strip='passed';themes=($themes -join ',');scope='OS-delivered synthetic input; physical devices and timing remain separate'}|ConvertTo-Json}
 }catch{
-    try{@{gesture=Gesture;brush=(Model).state.brush;tool_set=(Model).state.tool_set;workspace=(Model).state.workspace.layout}|ConvertTo-Json -Depth 95|Set-Content (Join-Path $run 'failure-native.json')}catch{}
+    try{@{gesture=Gesture;brush=(Model).state.brush;tool_set=(Model).state.tool_set;workspace=(Model).state.workspace.layout;sweep=$script:sweepProbe;geometry=$(if($SweepOnly){Reach-Geometry})}|ConvertTo-Json -Depth 95|Set-Content (Join-Path $run 'failure-native.json')}catch{}
     if($review -and !$review.HasExited){try{Capture 'failure'}catch{}}
     [IO.File]::WriteAllText((Join-Path $run 'failure.txt'),($_|Out-String)+$_.ScriptStackTrace);throw
 }finally{
     [CapyRowPointer]::Dispose()
-    if($NumericOnly -and $review -and !$review.HasExited){& (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close}
+    if($review -and !$review.HasExited){& (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close}
     Exit-CapyEnvironment
 }

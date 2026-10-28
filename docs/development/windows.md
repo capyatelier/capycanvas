@@ -435,6 +435,10 @@ the same scripts: `fixtures <area>` runs every variant of a fixture,
 `ValidateSet` choice, such as `tool-bubbles:light-pen` or `layers:Relationships`.
 Run changed UI in both themes, and input changes with each device.
 
+`exercise-edge-reach.ps1 -SweepOnly` samples edge reach bands, group gaps and
+empty closed-strip space in Photo, Photo with both columns closed, and Paint.
+Run it with each `-Device` and both `-Theme` values.
+
 Run `gh workflow run windows-readiness.yml -f source_ref=<commit-sha>` for x64
 WARP fixtures on hosted Windows VMs; its `fixtures` input takes a JSON array
 such as `["canvas-bar:default","canvas-bar:light"]`. For a document crash,

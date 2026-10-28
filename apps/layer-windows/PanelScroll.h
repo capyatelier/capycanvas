@@ -8,7 +8,7 @@ inline void panelScrolling(ScrollView const& scroll,UIElement const& content,std
     edgeTag(content.as<FrameworkElement>(),L"edge_contact",S(L"free"));
     auto forget=[context,state]{if(auto data=context.lock();data&&state->pointer)data->pointerCancels.Forget(*state->pointer,state.get());state->pointer.reset();};
     auto cancel=[state,forget,surface]{state->canceled=true;state->running=false;forget();if(auto content=surface.get())content.ManipulationMode(ManipulationModes::None);if(auto complete=std::exchange(state->complete,{}))complete();};
-    scroll.IgnoredInputKinds(ScrollingInputKinds::Touch|ScrollingInputKinds::Pen);scroll.ContentOrientation(ScrollingContentOrientation::Vertical);
+    scroll.IgnoredInputKinds(ScrollingInputKinds::Touch|ScrollingInputKinds::Pen);
     scroll.Background(nullptr);scroll.Loaded([weak](auto&&,auto&&){if(auto scroll=weak.get())if(auto presenter=scroll.ScrollPresenter())presenter.Background(nullptr);});
     content.ManipulationMode(ManipulationModes::TranslateRailsY|ManipulationModes::TranslateInertia);
     content.AddHandler(UIElement::PointerPressedEvent(),box_value(PointerEventHandler([context,state,cancel,surface](auto&&,PointerRoutedEventArgs const& e){

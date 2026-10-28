@@ -587,7 +587,12 @@ Windows classifies like Web, reading `ManipulationMode::None` and controls that
 capture their press as inputs, and tags panel frames, closed strips, tabs,
 grips and layer rows. Horizontal scrollers retain sideways swipes; vertical-only
 scrollers leave their free surfaces available for horizontal edge resizing.
-Vertical scrolling uses directional rails to preserve horizontal edge contacts.
+No chrome scroller under the Windows workspace root accepts native touch or pen
+scrolling. Vertical chrome uses `panelScrolling` directional rails so shared
+edge arbitration can withhold or claim the contact, including over gaps and
+empty closed-strip space. Tab strips reserve touch and pen for dragging;
+wheel scrolling and saved offsets remain available. Native text editors keep
+their own gestures, and traces list their template scrollers separately.
 Pending edges also observe the island's pointer stream while native manipulation
 owns the routed events. Both streams forward to the same shared gesture.
 Its session runs on the render thread, so replies arrive

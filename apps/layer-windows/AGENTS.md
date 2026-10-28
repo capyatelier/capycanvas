@@ -42,3 +42,7 @@ Start with the [Windows guide](../../docs/development/windows.md) and the
 - Panel tabs use `ScrollView` with touch and pen scrolling disabled: those
   contacts belong to tab dragging. Keep wheel scrolling and preview clipping
   when changing the strip, and run all `tab-pickup` variants plus `tab-drag`.
+- No chrome scroller under the workspace root accepts native touch or pen scrolling.
+  Use `panelScrolling` for vertical chrome and disable touch and pen on tab
+  strips. Preserve wheel scrolling, hit-testable gaps and saved offsets. Native
+  text editors keep their own input; traces list their template scrollers separately.

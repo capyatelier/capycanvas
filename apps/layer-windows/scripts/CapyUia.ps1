@@ -283,7 +283,7 @@ function Wait-StablePixels([scriptblock]$CapturePixels,[switch]$Composed){
         Start-Sleep -Milliseconds 100;$next=& $CapturePixels;$comparisons++
         if($next -eq $last){$stable++}else{$stable=0};$last=$next
         if($stable -ge 3){return $last}
-    }while($watch.Elapsed.TotalSeconds -lt 5)
+    }while($watch.Elapsed.TotalSeconds -lt 5 -or $comparisons -lt 3)
     throw "Canvas pixels did not settle for comparison ($comparisons comparisons, $stable consecutive matches, $([Math]::Round($watch.Elapsed.TotalSeconds,3)) seconds)"
 }
 function Find([string]$Value,[switch]$Name,$Within=$root,$Type,[switch]$Visible,[switch]$NoPopups){
@@ -728,7 +728,11 @@ function Workspace-Root{
             $status=$workspace.Current.ItemStatus
             if(!$status.StartsWith('{')){continue}
             try{$presentation=$status|ConvertFrom-Json}catch{continue}
-            if($presentation.PSObject.Properties.Name -contains 'groups' -and $presentation.PSObject.Properties.Name -contains 'elements'){return $workspace}
+            if($presentation.PSObject.Properties.Name -contains 'groups' -and $presentation.PSObject.Properties.Name -contains 'elements'){
+                $gesture=try{$workspace.Current.HelpText|ConvertFrom-Json}catch{}
+                if($gesture -and $gesture.PSObject.Properties.Name -contains 'native_scrollers' -and @($gesture.native_scrollers).Count){throw "Workspace scrollers accept native touch or pen: $($gesture.native_scrollers|ConvertTo-Json -Compress)"}
+                return $workspace
+            }
         }
     }
 }

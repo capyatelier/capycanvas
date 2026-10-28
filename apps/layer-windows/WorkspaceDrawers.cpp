@@ -4,6 +4,7 @@
 #include "WorkspaceShadow.h"
 #include "WorkspaceQuery.h"
 #include "LayerInspector.h"
+#include "PanelScroll.h"
 #include <winrt/Microsoft.UI.Xaml.Shapes.h>
 #include <winrt/Windows.UI.ViewManagement.h>
 #include <chrono>
@@ -89,7 +90,7 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
         for(auto value:array(data->model,L"panels")){auto panel=value.GetObject();panels[std::wstring(str(panel,L"id"))]=panel;}
         rebuild();
         if(changedModel&&!closing)for(auto& column:columns)if(column.header){
-            auto strip=column.header.Children().GetAt(0).as<ScrollViewer>();
+            auto strip=column.header.Children().GetAt(0).as<ScrollView>();
             if(orderPanelTabs(strip.Content().as<StackPanel>(),array(object(model,L"tabs"),L"panels"),column.tabs,column.automatic))
                 fitAutomaticTabs(data,column.automatic,strip.ActualWidth(),tabWidths);
         }
@@ -239,6 +240,9 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
             if(!retained){
                 RowDefinition tabRow;tabRow.Height({tabs.Size()?36.:0.,GridUnitType::Pixel});column.frame.RowDefinitions().Append(tabRow);
                 RowDefinition bodyRow;bodyRow.Height({1,GridUnitType::Star});column.frame.RowDefinitions().Append(bodyRow);
+                column.stack.Background(clear());column.scroll.ContentOrientation(ScrollingContentOrientation::Vertical);panelScrolling(column.scroll,column.stack,data);column.scroll.VerticalScrollMode(ScrollingScrollMode::Enabled);
+                column.scroll.HorizontalScrollMode(ScrollingScrollMode::Disabled);column.scroll.HorizontalScrollBarVisibility(ScrollingScrollBarVisibility::Hidden);
+                column.scroll.VerticalScrollBarVisibility(ScrollingScrollBarVisibility::Auto);mouseScrollbars(column.scroll);
             }else column.frame.RowDefinitions().GetAt(0).Height({tabs.Size()?36.:0.,GridUnitType::Pixel});
             if(tabs.Size()&&!column.header){
                 auto group=num(tabs,L"group");
@@ -269,11 +273,12 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
                         O({{L"group",N(group)},{L"index",N(index++)},{L"panel",S(panelId)}}));
                     auto shell=panelTabShell(pick,nullptr,data->tint(L"text",20));column.tabs.emplace(std::wstring(panelId),shell);row.Children().Append(shell);
                 }
-                ScrollViewer strip;strip.Content(row);strip.Background(clear());
-                strip.SizeChanged([weak,index=columns.size()](auto&& sender,auto&&){if(auto self=weak.lock();self&&index<self->columns.size())fitAutomaticTabs(self->data,self->columns[index].automatic,sender.template as<ScrollViewer>().ActualWidth(),self->tabWidths);});
-                strip.HorizontalScrollMode(ScrollMode::Enabled);strip.HorizontalScrollBarVisibility(ScrollBarVisibility::Hidden);
-                strip.VerticalScrollMode(ScrollMode::Disabled);header.Children().Append(strip);
-                gestures->Source(strip,O({{L"type",S(L"drag_workspace")},{L"item",groupItem}}),groupItem);
+                ScrollView strip;strip.Content(row);strip.Background(clear());
+                strip.SizeChanged([weak,index=columns.size()](auto&& sender,auto&&){if(auto self=weak.lock();self&&index<self->columns.size())fitAutomaticTabs(self->data,self->columns[index].automatic,sender.template as<ScrollView>().ActualWidth(),self->tabWidths);});
+                strip.HorizontalScrollMode(ScrollingScrollMode::Enabled);strip.HorizontalScrollBarVisibility(ScrollingScrollBarVisibility::Hidden);
+                strip.VerticalScrollMode(ScrollingScrollMode::Disabled);strip.VerticalScrollBarVisibility(ScrollingScrollBarVisibility::Hidden);
+                strip.ContentOrientation(ScrollingContentOrientation::Horizontal);strip.IgnoredInputKinds(ScrollingInputKinds::Touch|ScrollingInputKinds::Pen);header.Children().Append(strip);
+                gestures->Source(strip,O({{L"type",S(L"drag_workspace")},{L"item",groupItem}}),groupItem,false,{},WorkspaceGestures::Pickup::Sideways);
                 Border grip;grip.Background(clear());grip.Width(20);grip.Height(36);
                 grip.HorizontalAlignment(HorizontalAlignment::Left);grip.Child(panelGrip(data->theme()));
                 gestures->Source(grip,O({{L"type",S(L"drag_workspace")},{L"item",groupItem}}),groupItem);
@@ -311,9 +316,7 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
                 inspector->pages.Children().Append(inspector->properties->Root());
                 Grid::SetRow(inspector->root,1);column.frame.Children().Append(inspector->root);
             }else{
-                column.scroll.Content(column.stack);column.scroll.VerticalScrollMode(ScrollingScrollMode::Enabled);
-                column.scroll.HorizontalScrollMode(ScrollingScrollMode::Disabled);column.scroll.HorizontalScrollBarVisibility(ScrollingScrollBarVisibility::Hidden);
-                column.scroll.VerticalScrollBarVisibility(ScrollingScrollBarVisibility::Auto);mouseScrollbars(column.scroll);
+                column.scroll.Content(column.stack);
                 Grid::SetRow(column.scroll,1);column.frame.Children().Append(column.scroll);
             }
             if(!retained)content.Children().Append(column.frame);columns.push_back(std::move(column));

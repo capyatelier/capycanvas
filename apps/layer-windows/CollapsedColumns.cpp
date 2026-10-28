@@ -2,6 +2,7 @@
 #include "CollapsedColumns.h"
 #include "ChromeVisibility.h"
 #include "WorkspaceGeometry.h"
+#include "PanelScroll.h"
 #include <set>
 #include <winrt/Microsoft.UI.Xaml.Shapes.h>
 
@@ -15,7 +16,7 @@ struct Column:std::enable_shared_from_this<Column>{
     Canvas workspace{nullptr},frame,icons;
     Shapes::Path surface;
     Border background,grip;
-    ScrollViewer scroll;
+    ScrollView scroll;
     uint32_t id=0;
     J geometry;
     std::map<std::wstring,Button> buttons;
@@ -38,9 +39,10 @@ struct Column:std::enable_shared_from_this<Column>{
         surface.Fill(data->glass(L"panel"));surface.IsHitTestVisible(false);frame.Children().Append(surface);
         Canvas::SetZIndex(background,160);
         AutomationProperties::SetAutomationId(background,L"collapsed-column-"+to_hstring(id));
-        scroll.Content(icons);scroll.HorizontalScrollMode(ScrollMode::Disabled);
-        scroll.HorizontalScrollBarVisibility(ScrollBarVisibility::Disabled);
-        scroll.VerticalScrollMode(ScrollMode::Enabled);scroll.VerticalScrollBarVisibility(ScrollBarVisibility::Hidden);
+        icons.Background(clear());scroll.Content(icons);scroll.ContentOrientation(ScrollingContentOrientation::Vertical);panelScrolling(scroll,icons,data);
+        scroll.HorizontalScrollMode(ScrollingScrollMode::Disabled);
+        scroll.HorizontalScrollBarVisibility(ScrollingScrollBarVisibility::Hidden);
+        scroll.VerticalScrollMode(ScrollingScrollMode::Enabled);scroll.VerticalScrollBarVisibility(ScrollingScrollBarVisibility::Hidden);
         scroll.ViewChanged([weak](auto&&,auto&&){if(auto self=weak.lock()){
             auto offset=self->scroll.VerticalOffset();
             if(!self->applying&&std::abs(offset-self->reported)>.25){
@@ -133,7 +135,7 @@ struct Column:std::enable_shared_from_this<Column>{
         }else ++it;
         icons.Width(num(content,L"width"));icons.Height(bottom);
         reported=offset;
-        if(std::abs(scroll.VerticalOffset()-offset)>.25)scroll.ChangeView(nullptr,offset,nullptr,true);
+        if(std::abs(scroll.VerticalOffset()-offset)>.25)scrollVertical(scroll,offset);
         applying=false;
     }
     void visible(bool shown){fade->apply(background,shown,[weak=weak_from_this()]{if(auto self=weak.lock();self&&self->changed)self->changed();});}

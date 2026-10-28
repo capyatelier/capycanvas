@@ -494,7 +494,7 @@ function Check-SizeGrid($Within,[string]$Device,[string]$Label){
         $found.tiles.Count -eq 40
     } "Size grid shows $($found.tiles.Count) of 40 presets"
     $tiles=$found.tiles
-    $scale=[CapyRowPointer]::GetDpiForWindow($review.MainWindowHandle)/96.;$tile=@(36,44)
+    $scale=[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.;$tile=@(36,44)
     $first=$tiles[0].Current.BoundingRectangle
     $row=@($tiles|Where-Object {[Math]::Abs($_.Current.BoundingRectangle.Top-$first.Top) -lt 1})
     foreach($item in $row){$box=$item.Current.BoundingRectangle
@@ -516,22 +516,20 @@ function Check-SizeGrid($Within,[string]$Device,[string]$Label){
 try{
     Enter-CapyEnvironment
     $env:CAPY_STORAGE_DIR=Join-Path $run 'profile'
-    if($ResizeOnly){[IO.Directory]::CreateDirectory($env:CAPY_STORAGE_DIR)|Out-Null;[IO.File]::WriteAllText((Settings-File),(@{language=@{Explicit='en'};theme=$Theme}|ConvertTo-Json -Depth 4))}
+    [IO.File]::WriteAllText((Settings-File),(@{language=@{Explicit='en'};theme=$Theme}|ConvertTo-Json -Depth 4))
     $env:CAPY_TRACE_UI='1';$env:CAPY_SMOKE_TEST='1';$env:CAPY_TEST_DISPLAY='1';$env:CAPY_TEST_PRIMARY='1'
     $stderr=Join-Path $run 'stderr.log'
     $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError $stderr
     $null=$review.Handle
     [IO.File]::WriteAllText((Join-Path $repo 'artifacts/windows/expansion-review.json'),(@{process_id=$review.Id;run=$run}|ConvertTo-Json))
     Write-Output "Owned expansion review $($review.Id)"
-    Wait-Until {$review.Refresh();$review.MainWindowHandle -ne [IntPtr]::Zero -and (Model).brush_ready} 'Review did not start' 45
+    $owned=@{drawing=$null}
+    Wait-Until {$owned.drawing=Owned-DrawingWindow $review;$owned.drawing -and (Model).brush_ready -and (Model).state.workspace_ready -and (Model).windows_workspace.ready -and !(Model).windows_workspace.busy -and (Model).state.theme -eq $Theme} 'Expansion drawing did not become ready' 45
     [CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
-    $root=[System.Windows.Automation.AutomationElement]::FromHandle($review.MainWindowHandle)
-    [CapyRowPointer]::SetForegroundWindow($review.MainWindowHandle)|Out-Null;[CapyRowPointer]::Initialize([uint32]$review.Id)
+    $root=$owned.drawing.Root;$drawingWindow=$owned.drawing.Handle
+    [CapyRowPointer]::SetForegroundWindow($drawingWindow)|Out-Null;[CapyRowPointer]::Initialize([uint32]$review.Id)
+    Maximize-DrawingWindow;Use-PaintWorkspace;Resize-Settled
     if($ResizeOnly){
-        $owned=@{drawing=$null}
-        Wait-Until {$owned.drawing=Owned-DrawingWindow $review;$owned.drawing -and (Model).state.workspace_ready -and (Model).windows_workspace.ready -and !(Model).windows_workspace.busy -and (Model).state.theme -eq $Theme} 'Resize drawing did not become ready'
-        $root=$owned.drawing.Root;$drawingWindow=$owned.drawing.Handle
-        Maximize-DrawingWindow;Use-PaintWorkspace;Resize-Settled
         $resizeArtwork=@{before=(Model).state.document_file.revision}
         $resizeArtwork|ConvertTo-Json|Set-Content (Join-Path $run 'resize-artwork.json')
         if(!$ResizeStackOnly){
@@ -554,7 +552,9 @@ try{
     $configuration=Configure 'sizes'
     $configured=@((Check-SizeGrid $configuration 'pen' '25'),(Check-SizeGrid $configuration 'touch' '0.7'))
     $identity=(Control 'configure-show-brush_size').GetRuntimeId() -join ':'
-    $scale=(Control 'panel-tab-sizes').Current.BoundingRectangle.Height/36
+    $tabHeight=(Control 'panel-tab-sizes').Current.BoundingRectangle.Height
+    $dpi=[CapyRowPointer]::GetDpiForWindow($drawingWindow);$scale=$dpi/96.
+    @{dpi=$dpi;scale=$scale;tab_height=$tabHeight;tab_inferred_scale=$tabHeight/36;configuration_width=$configuration.Current.BoundingRectangle.Width;expected_dip_width=380}|ConvertTo-Json|Set-Content (Join-Path $run 'configuration-width.json')
     if([Math]::Abs($configuration.Current.BoundingRectangle.Width-380*$scale) -gt 2){throw 'Configuration does not use the shared 380 DIP width'}
     $before=(Model).state.brush.diameter
     (Control 'configure-brush_size-slider').GetCurrentPattern([System.Windows.Automation.RangeValuePattern]::Pattern).SetValue(0.35)

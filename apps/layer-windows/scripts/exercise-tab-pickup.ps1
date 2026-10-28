@@ -82,13 +82,14 @@ function Tear-Off([string]$Panel,[switch]$Gradual,[switch]$Cancel) {
             Start-Sleep -Milliseconds 18
         }
     }else{[CapyRowPointer]::Move($to.x,$to.y)}
-    Wait-Until {(Gesture).phase -eq 'dragging' -and (Gesture).captured} "$case did not retain the contact over canvas"
-    $gesture=Gesture
+    $admission=@{value=$null}
+    Wait-Until {$admission.value=Gesture;$admission.value.phase -eq 'dragging' -and $admission.value.captured} "$case did not retain the contact over canvas"
+    $gesture=$admission.value
     if($gesture.device -ne $Device -or $gesture.requires_hold -or $gesture.menu_open){throw "$case used incorrect pickup arbitration"}
     # Continue the same contact after its original tab has been reparented.
     Start-Sleep -Milliseconds 200
     [CapyRowPointer]::Move($to.x+30,$to.y+15)
-    Wait-Until {(Gesture).phase -eq 'dragging' -and (Gesture).captured} "$case lost capture after reparenting"
+    Wait-Until {$gesture=Gesture;$gesture.phase -eq 'dragging' -and $gesture.captured} "$case lost capture after reparenting"
     if($Cancel){
         Cancel-Contact
         Wait-Until {(Gesture).phase -eq 'idle' -and (Layout) -eq $before} "$case did not restore the workspace"

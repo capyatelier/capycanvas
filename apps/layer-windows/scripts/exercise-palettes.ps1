@@ -1,4 +1,4 @@
-param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme='dark')
+﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme='dark')
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 $CapyFind='visible'
@@ -30,6 +30,7 @@ $directory=Split-Path -Parent $Executable
 $run=Join-Path $repo ('artifacts/windows/palettes/'+[Guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($run)|Out-Null
 $ControlType=[System.Windows.Automation.ControlType]
+$menuFocusFailures=[Collections.Generic.List[object]]::new()
 function Center($element){$b=$element.Current.BoundingRectangle;@{x=[int]($b.X+$b.Width/2);y=[int]($b.Y+$b.Height/2)}}
 function Tap($at,[string]$Device='mouse'){[CapyRowPointer]::Down($Device,$at.x,$at.y);Start-Sleep -Milliseconds 30;[CapyRowPointer]::Up()}
 function Switch-Workspace([string]$Name,[string]$Id){
@@ -47,13 +48,23 @@ function Menu-Items{
         [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,$ControlType::MenuItem))
     @($items|Where-Object {$_.Current.ProcessId -eq $review.Id -and !$_.Current.IsOffscreen -and [System.Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($_).Current.ControlType -eq $ControlType::Menu})
 }
-function Close-Menu{
-    Wait-Until {
-        $focused=[System.Windows.Automation.AutomationElement]::FocusedElement
-        $focused.Current.ProcessId -eq $review.Id -and $focused.Current.ControlType -eq $ControlType::MenuItem
-    } 'Palette menu did not acquire keyboard focus'
+function Check-MenuEscape{
+    Wait-Until {@(Menu-Items).Count -gt 0} 'Palette menu did not open before Escape'
     [CapyRowPointer]::Key([uint16]0x1B)
     Wait-Until {!@(Menu-Items).Count} 'Menu did not close'
+}
+function Close-Menu{
+    $focusFailure=$null;$escaped=$false
+    try{
+        Wait-Until {
+            $focused=[System.Windows.Automation.AutomationElement]::FocusedElement
+            $focused.Current.ProcessId -eq $review.Id -and $focused.Current.ControlType -eq $ControlType::MenuItem
+        } 'Palette menu did not acquire keyboard focus'
+    }catch{$focusFailure=$_}
+    try{Check-MenuEscape;$escaped=$true}finally{
+        @{keyboard_focus=($null -eq $focusFailure);escape=$escaped;focus_error=$(if($focusFailure){$focusFailure.Exception.Message})}|ConvertTo-Json -Compress|Add-Content (Join-Path $run 'palette-menu-checks.jsonl')
+    }
+    if($focusFailure){$menuFocusFailures.Add($focusFailure)}
 }
 function Menu-Invoke([string]$Id){
     $item=@{value=$null};Wait-Until {$item.value=@(Menu-Items)|Where-Object {$_.Current.AutomationId -eq $Id}|Select-Object -First 1;$item.value} "Menu lacks $Id"
@@ -106,7 +117,9 @@ function Palette-DialogChecks{
     Wait-Until {!(Find 'PrimaryButton' -Visible) -and !@((Panel).palettes|Where-Object id -eq $created).Count -and !(Model).windows_palettes.busy} 'Remove Palette did not delete exactly its owned palette'
     if((@((Panel).palettes.id) -join ',') -cne ($ids -join ',')){throw 'Palette prompt workflow changed another palette or its order'}
     if(!(Find 'palette-search')){Invoke 'palette-selector'}
-    (Control 'palette-search').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('')
+    $originalName=((Panel).palettes|Where-Object id -eq $original).name
+    (Control 'palette-search').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($originalName)
+    Control ('palette-choice-'+$original) -Arranged|Out-Null
     Invoke ('palette-choice-'+$original)
     Wait-Until {(Panel).palette -eq $original -and !(Find 'palette-search')} 'Palette prompt workflow did not restore the original active palette'
     if(((Model).state.document_file|ConvertTo-Json -Depth 20 -Compress) -cne $document -or ((Model).color_panel.definition|ConvertTo-Json -Depth 20 -Compress) -cne $color){throw 'Palette prompts changed artwork history or the current paint'}
@@ -150,12 +163,28 @@ function Palette-Scroller([string]$Id){
     $node=Control $Id -Arranged;$walker=[System.Windows.Automation.TreeWalker]::ControlViewWalker;$scroll=$null
     while($node -and !$node.TryGetCurrentPattern([System.Windows.Automation.ScrollPattern]::Pattern,[ref]$scroll)){$node=$walker.GetParent($node)}
     if(!$scroll -or !$scroll.Current.VerticallyScrollable){throw "$Id did not expose an overflowing native scroll provider"}
-    @{node=$node;pattern=$scroll}
+    @{container=Control-Trace $node}|ConvertTo-Json -Depth 12|Set-Content (Join-Path $run ($Id+'-scroll-container.json'))
+    $container=$node;$raw=[System.Windows.Automation.TreeWalker]::RawViewWalker
+    while($container -and $container.Current.ClassName -notmatch '(^|\.)Scroll(View|Viewer)$'){$container=$raw.GetParent($container)}
+    if(!$container){Save-PaletteScrollOwnership $Id @{node=$node};throw "$Id has no owning native scroll container"}
+    @{node=$node;pattern=$scroll;container=$container}
+}
+function Save-PaletteScrollOwnership([string]$Id,$Scroller){
+    $ancestry=[Collections.Generic.List[object]]::new();$walker=[System.Windows.Automation.TreeWalker]::RawViewWalker;$node=$Scroller.node;$owner=$null
+    while($node){
+        $info=$node.Current;$b=$info.BoundingRectangle
+        $ancestry.Add(@{id=$info.AutomationId;class=$info.ClassName;name=$info.Name;type=$info.ControlType.ProgrammaticName;bounds=@($b.X,$b.Y,$b.Width,$b.Height);offscreen=$info.IsOffscreen})
+        if(!$owner -and $info.ClassName -match 'Scroll(View|Viewer)'){$owner=$node}
+        $node=$walker.GetParent($node)
+    }
+    $condition=[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,$ControlType::ScrollBar)
+    $bars={param($within)if($within){foreach($bar in $within.FindAll([System.Windows.Automation.TreeScope]::Descendants,$condition)){$info=$bar.Current;$b=$info.BoundingRectangle;@{id=$info.AutomationId;class=$info.ClassName;name=$info.Name;bounds=@($b.X,$b.Y,$b.Width,$b.Height);offscreen=$info.IsOffscreen;vertical=($b.Height -gt $b.Width)}}}}
+    @{ancestors=$ancestry;panel_bars=@(& $bars (Control 'palettes-panel'));owner_bars=@(& $bars $owner)}|ConvertTo-Json -Depth 12|Set-Content (Join-Path $run ($Id+'-scroll-ownership.json'))
 }
 function Palette-Scrollbars($Scroller){
     $viewport=$Scroller.node.Current.BoundingRectangle
     $condition=[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,$ControlType::ScrollBar)
-    @($Scroller.node.FindAll([System.Windows.Automation.TreeScope]::Descendants,$condition)|Where-Object {
+    @($Scroller.container.FindAll([System.Windows.Automation.TreeScope]::Descendants,$condition)|Where-Object {
         $b=$_.Current.BoundingRectangle
         !$_.Current.IsOffscreen -and !$b.IsEmpty -and $b.Height -gt $b.Width -and $b.X -ge $viewport.Right-30 -and $b.X -le $viewport.Right+5 -and $b.Y -ge $viewport.Y-5 -and $b.Bottom -le $viewport.Bottom+5
     })
@@ -175,7 +204,7 @@ function Check-PaletteScrollModes([string]$Id){
     if(!$panel.Contains([double]$safe.x,[double]$safe.y) -or $scroller.node.Current.BoundingRectangle.Contains([double]$safe.x,[double]$safe.y)){throw 'Scrollbar transition point is not inside owned panel padding and outside the scroller'}
     $beforeOrder=(Swatches) -join ',';$beforeColor=(Model).color_panel.definition|ConvertTo-Json -Depth 12 -Compress
     [CapyRowPointer]::Hover($safe.x,$safe.y)
-    Wait-Until {@(Palette-Scrollbars $scroller).Count -eq 1} "$Id mouse mode did not show one native vertical scrollbar"
+    try{Wait-Until {@(Palette-Scrollbars $scroller).Count -eq 1} "$Id mouse mode did not show one native vertical scrollbar"}catch{Save-PaletteScrollOwnership $Id $scroller;throw}
     $baseline=Palette-ScrollState $Id $scroller
     $tracePath=Join-Path $run ($Id+'-scroll-transitions.json')
     $records=[Collections.Generic.List[object]]::new();$records.Add(@{device='mouse';state=($baseline|ConvertFrom-Json)})
@@ -271,11 +300,11 @@ try {
     [CapyRowPointer]::Key([uint16]0x1B)
     Wait-Until {!(Find 'palette-name-editor')} 'Escape did not cancel the name editor'
 
-    $tile=Control ('palette-swatch-'+(Swatches)[0])
+    $tile=Control ('palette-swatch-'+(Swatches)[0]) -Arranged
     [CapyRowPointer]::RightClick((Center $tile).x,(Center $tile).y)
     Wait-Until {@(Menu-Items|Where-Object {$_.Current.AutomationId -eq 'palette-command-rename_color'}).Count} 'Swatch menu lacks Rename Color'
     Close-Menu
-    $tile=Control ('palette-swatch-'+(Swatches)[1])
+    $tile=Control ('palette-swatch-'+(Swatches)[1]) -Arranged
     [CapyRowPointer]::Down('touch',(Center $tile).x,(Center $tile).y);Start-Sleep -Milliseconds 900
     Wait-Until {@(Menu-Items|Where-Object {$_.Current.AutomationId -eq 'palette-command-rename_color'}).Count} 'Touch hold did not open the swatch menu' 4
     [CapyRowPointer]::Up();Close-Menu
@@ -404,6 +433,7 @@ try {
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Close -DiscardUnsaved
     if(!$review.WaitForExit(8000)){throw 'Palettes review did not close'}
     if((Get-Item -LiteralPath $stderr).Length){throw 'Palettes review wrote to stderr'}
+    if($menuFocusFailures.Count){throw $menuFocusFailures[0]}
     Write-Output "Palettes acceptance passed: $run"
 }catch{
     try{Capture 'failure'}catch{}

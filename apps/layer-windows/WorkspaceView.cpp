@@ -8,6 +8,7 @@
 #include "PressureCalibration.h"
 #include "ZoomReadout.h"
 #include "PanelBody.h"
+#include "PanelScroll.h"
 #include "PanelConfiguration.h"
 #include "WorkspaceExpansion.h"
 #include "WorkspaceGeometry.h"
@@ -346,7 +347,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             group.bodyScroll=body.try_as<ScrollView>();
             if(!group.bodyScroll){
                 group.bodyViewport=Grid();group.bodyViewport.Children().Append(body);
-                group.bodyScroll=ScrollView();group.bodyScroll.Content(group.bodyViewport);group.bodyScroll.ContentOrientation(ScrollingContentOrientation::None);group.bodyScroll.HorizontalScrollMode(ScrollingScrollMode::Disabled);
+                group.bodyViewport.Background(clear());group.bodyScroll=ScrollView();group.bodyScroll.Content(group.bodyViewport);group.bodyScroll.ContentOrientation(ScrollingContentOrientation::None);panelScrolling(group.bodyScroll,group.bodyViewport,data);group.bodyScroll.HorizontalScrollMode(ScrollingScrollMode::Disabled);
                 group.bodyScroll.HorizontalScrollBarVisibility(ScrollingScrollBarVisibility::Hidden);
                 group.bodyScroll.VerticalScrollBarVisibility(ScrollingScrollBarVisibility::Auto);mouseScrollbars(group.bodyScroll);
                 group.bodyScroll.ViewChanged([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->measured();});

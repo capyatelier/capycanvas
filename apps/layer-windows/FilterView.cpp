@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "EffectControls.h"
+#include "PanelScroll.h"
 #include <chrono>
 #include <optional>
 using namespace CapyEffects;
@@ -78,7 +79,7 @@ struct FiltersView : std::enable_shared_from_this<FiltersView> {
         toggle=button(data,str(object(data->state,L"filter_picker"),L"search_label"),[weak]{if(auto self=weak.lock())self->send(O({{L"op",S(L"toggle_search")}}));});
         toggle.Content(icon(L"search",data->theme()));toggle.Height(data->panelMetric(L"control_height"));Grid::SetColumn(toggle,1);
         AutomationProperties::SetAutomationId(toggle,L"filter-search-toggle");header.Children().Append(toggle);root.Children().Append(header);
-        list.Content(rows);list.HorizontalScrollMode(ScrollingScrollMode::Disabled);
+        rows.Background(clear());list.Content(rows);list.ContentOrientation(ScrollingContentOrientation::Vertical);panelScrolling(list,rows,data);list.HorizontalScrollMode(ScrollingScrollMode::Disabled);
         list.HorizontalScrollBarVisibility(ScrollingScrollBarVisibility::Hidden);list.VerticalScrollBarVisibility(ScrollingScrollBarVisibility::Auto);mouseScrollbars(list);
         AutomationProperties::SetAutomationId(list,L"filter-list");Grid::SetRow(list,1);root.Children().Append(list);
         timer=root.DispatcherQueue().CreateTimer();timer.Interval(std::chrono::milliseconds(200));
@@ -180,7 +181,7 @@ FrameworkElement FilterTypesPanel(std::shared_ptr<WorkspaceData> const& data,Bin
     RowDefinition rows;rows.Height({1,GridUnitType::Star});root.RowDefinitions().Append(rows);
     RowDefinition footer;footer.Height({1,GridUnitType::Auto});root.RowDefinitions().Append(footer);
     StackPanel choices;choices.Spacing(2);
-    ScrollView scroll;scroll.Content(choices);scroll.HorizontalScrollMode(ScrollingScrollMode::Disabled);
+    choices.Background(clear());ScrollView scroll;scroll.Content(choices);scroll.ContentOrientation(ScrollingContentOrientation::Vertical);panelScrolling(scroll,choices,data);scroll.HorizontalScrollMode(ScrollingScrollMode::Disabled);
     scroll.HorizontalScrollBarVisibility(ScrollingScrollBarVisibility::Hidden);
     scroll.VerticalScrollBarVisibility(ScrollingScrollBarVisibility::Auto);mouseScrollbars(scroll);root.Children().Append(scroll);
     auto cancel=button(data,data->copyCommon(L"cancel"),[data]{data->dispatch(O({{L"type",S(L"effect")},{L"action",O({{L"op",S(L"cancel_filter")}})}}));});

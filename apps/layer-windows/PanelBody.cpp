@@ -209,7 +209,7 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
                 scrollMetrics=[] {return O({{L"fixed_height",N(0)},{L"unit_height",N(0)}});};
                 ScrollView scroll;scroll.Content(content);scroll.HorizontalScrollMode(ScrollingScrollMode::Disabled);
                 scroll.HorizontalScrollBarVisibility(ScrollingScrollBarVisibility::Hidden);
-                scroll.VerticalScrollBarVisibility(ScrollingScrollBarVisibility::Auto);mouseScrollbars(scroll);panelScrolling(scroll,content,data);
+                scroll.VerticalScrollBarVisibility(ScrollingScrollBarVisibility::Auto);mouseScrollbars(scroll);scroll.ContentOrientation(ScrollingContentOrientation::Vertical);panelScrolling(scroll,content,data);
                 scroll.ViewChanged([changed=std::move(layoutChanged)](auto&&,auto&&){if(changed)changed();});
                 AutomationProperties::SetAutomationId(scroll,L"panel-scroll-"+str(panel,L"id"));
                 root=scroll;
