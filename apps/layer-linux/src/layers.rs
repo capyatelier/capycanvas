@@ -412,8 +412,8 @@ impl LayerPanel {
     }
     pub fn sharing(&self, localization: std::sync::Arc<layer_ui::Localizer>) -> Self {
         let view = Self::with_previews(localization, self.previews.clone());
-        view.root.set_margin_top(layer_ui::PANEL_CONTENT_INSET as i32);
-        view.root.set_margin_bottom(layer_ui::PANEL_CONTENT_INSET as i32);
+        view.root.set_margin_top(layer_ui::PANEL_CONTROL_METRICS.compound_spacing as i32);
+        view.root.set_margin_bottom(layer_ui::PANEL_CONTROL_METRICS.compound_spacing as i32);
         view
     }
     fn with_previews(localization: std::sync::Arc<layer_ui::Localizer>, previews: Previews) -> Self {
@@ -1428,6 +1428,9 @@ impl LayerPanel {
             return;
         }
         self.header.set_visible(!simple);
+        let inset = if simple { layer_ui::PANEL_CONTENT_INSET } else { layer_ui::PANEL_CONTROL_METRICS.compound_spacing } as i32;
+        self.root.set_margin_top(inset);
+        self.root.set_margin_bottom(inset);
         for row in self.rows.borrow().values() {
             row.meta.set_visible(!simple && !row.meta.text().is_empty());
         }

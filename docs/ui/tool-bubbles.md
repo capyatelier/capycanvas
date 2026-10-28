@@ -259,7 +259,7 @@ rows show only each layer's eye, thumbnail and name, and one bottom row in the
 drawer footer's style holds the New layer icon on the left and **Properties**
 with an up chevron on the right. The properties slide up over the rows as in the
 drawer. There is no grab bar: dragging anywhere on the open card moves it,
-except on the layer list, whose rows keep their own drag, and on controls that
+except on layer rows, which keep their own drag, and on controls that
 drag. Contacts elsewhere fold the card, which shrinks away before the squircle
 returns; turning off **Fold when not in use** in the hold menu keeps it open
 until **Close**. The folded
@@ -428,7 +428,7 @@ panels are absent from the dock.
   and handled `Card` points wait: a release without moving is `Tap`, moving is
   `Drag` with the `Bubble` grab. `Wheel` and `Pill` go to their own widgets; a
   wheel pick dragged past `color_drag_out` restores the color and becomes a
-  `Rim` drag. In the open card, the layer list and controls that drag
+  `Rim` drag. In the open card, layer rows and controls that drag
   (sliders, number fields, curves, text) keep their contacts.
 - **Two fingers:** the second finger cancels the first contact (restoring its
   color or value) and drags the bubble by the midpoint; on a color ring the
@@ -492,8 +492,9 @@ panels are absent from the dock.
 - **Layers card:** host the Layers drawer's own inspector in the drawer's
   container and styles; report measured page heights with `MeasureCard`.
   Unfold over 200 ms from 60%; fold over 150 ms, then the squircle returns over
-  180 ms. The Layers page retains the inspector's 8 px inset, including its
-  16 px contribution to measured fixed height. The simple footer has a 48 px
+  180 ms. Full Layers uses 2 px vertical page insets alongside its header and
+  footer padding; Simple uses 8 px. Include both insets in measured fixed height.
+  The simple footer has a 48 px
   Add cell with a 16 px icon and a right-aligned Properties label. The folded
   face uses a 20 px squircle radius; its 46 px thumbnail uses a 13 px radius,
   white backing and a 1 px, 28% grey outline. The count is semibold and stays
@@ -524,6 +525,10 @@ panels are absent from the dock.
   adjusts their newly shown sliders, toggles **Show Sliders** in the hold menu
   and checks it after putting back and dragging out again, with mouse and touch
   in both themes.
+- Layers backgrounds: GTK `native_layers_bubble_background` and
+  `native_layers_bubble_background_pen` (with `--tablet`), and Android
+  `AndroidToolBubblesTest#layersBubbleBackgroundAcrossThemesAndDevices` check
+  unused list space in Simple and Full, both themes, and matching header insets.
 - Shared: `cargo test --locked -p layer-ui bubble`, which covers geometry,
   pushing, tear-off and put back, tap states, halos, the chooser and its slides,
   beads, the card, stroke fading, menus, history and workspace round trips

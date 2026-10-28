@@ -317,7 +317,7 @@ internal fun DockInteraction.drawerContainerShape(bounds: JSONObject, radius: Fl
     height: Float, footerHeight: Float, sizingContext: String, full: Boolean = true, labelOverride: String? = null,
     bubbleId: Int? = null, toggle: () -> Unit = { host.customize(obj("type" to "toggle_layer_drawer_properties")) }, onSizes: (JSONObject) -> Unit) {
     val density=androidx.compose.ui.platform.LocalDensity.current.density
-    val inset=panelMetrics().inset
+    val inset=if(full) panelMetrics().compound else panelMetrics().inset
     val view=state.getJSONObject("layer_properties")
     val disclosure=view.getJSONObject("disclosure")
     val list=rememberLazyListState()

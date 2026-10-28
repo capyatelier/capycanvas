@@ -224,14 +224,15 @@ struct LayerInspector<Owner: LayerInspectorOwner>: View {
         let label = drawer.disclosure ?? disclosure[open ? "return_label" : "label"].string
         let summary = open ? "" : disclosure["summary"].string
         let pageHeight = max(0, height - footerHeight), palette = EditorPalette(source: store.state["palette"])
+        let inset = drawer.simple ? store.panelMetrics.inset : store.panelMetrics.compound
         VStack(spacing: 0) {
             ZStack(alignment: .topLeading) {
                 LayerPanel(store: store, panel: drawer.panel(JSON("layers")), drawerPagePosition: drawer.pagePosition, simple: drawer.simple)
                     .environment(\.measuresWorkspacePanel, true)
-                    .frame(width: width, height: max(0, pageHeight - 16, measurement["fixed_height"].number + measurement["unit_height"].number - 16)).padding(.vertical, 8)
+                    .frame(width: width, height: max(0, pageHeight - inset * 2, measurement["fixed_height"].number + measurement["unit_height"].number - inset * 2)).padding(.vertical, inset)
                     .offset(y: -drawer.pagePosition * pageHeight).allowsHitTesting(!open).accessibilityHidden(open)
                     .onPreferenceChange(PanelSizeFacts.self) { facts in
-                        let fixed = facts.filter { $0.key.panel == "layers" && $0.key.kind == .fixed }.values.reduce(16, +)
+                        let fixed = facts.filter { $0.key.panel == "layers" && $0.key.kind == .fixed }.values.reduce(inset * 2, +)
                         let unit = facts.filter { $0.key.panel == "layers" && $0.key.kind == .unit }.values.max() ?? 40
                         let next = JSON(["fixed_height": fixed, "unit_height": unit])
                         if next.stableKey != measurement.stableKey { measurement = next }

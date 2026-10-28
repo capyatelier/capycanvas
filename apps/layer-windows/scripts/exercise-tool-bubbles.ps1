@@ -1360,6 +1360,13 @@ try{
     }
     $layers=Take 'panel' 'layers' ($width*.38) ($height*.56)
     Wait-Until {$null -ne (View $layers).card} 'Layers did not tear out open'
+    $card=Card $layers;$list=(Control 'layer-list' -Within $card -Arranged).Current.BoundingRectangle
+    $lastBottom=(@((Model).state.layers)|ForEach-Object {(Control "layer-row-$($_.id)" -Within $card -Arranged).Current.BoundingRectangle.Bottom}|Measure-Object -Maximum).Maximum
+    $footerTop=(Control "bubble-properties-$layers" -Within $card -Arranged).Current.BoundingRectangle.Top
+    if($footerTop -le $lastBottom+10*$scale){throw 'Layers card has no unused space'}
+    $from=@{x=[int]($list.X+$list.Width/2);y=[int](($lastBottom+$footerTop)/2)};$before=Center $layers
+    Drag $from @{x=$from.x+[int](60*$scale);y=$from.y+[int](15*$scale)}
+    Wait-Until {(Center $layers).x -gt $before.x+30*$scale} 'Unused list space did not move the Layers card'
     $card=Card $layers;$count=@((Model).state.layers).Count
     $add=Find "bubble-new-layer-$layers" -Within $card
     if($add){Invoke "bubble-new-layer-$layers" -Within $card}else{Invoke 'layer-new' -Within $card}

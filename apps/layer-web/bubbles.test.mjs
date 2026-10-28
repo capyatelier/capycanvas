@@ -5,6 +5,23 @@ import test from 'node:test';
 
 const source=readFileSync(new URL('bubbles.js',import.meta.url),'utf8');
 const layers=readFileSync(new URL('layers.js',import.meta.url),'utf8');
+const inputSource=readFileSync(new URL('bubble-input.js',import.meta.url),'utf8');
+
+for(const device of ['mouse','touch','pen'])for(const row of [false,true])test(`${device} drags the card from unused list space while rows retain input: row=${row}`,()=>{
+  const actions=[],handlers={},record={view:{id:1,kind:'layers'},center:[100,100],packet:{reach:200}},workspace={setPointerCapture(){},addEventListener(type,handler){handlers[type]=handler;}};
+  const node={closest(selector){return selector==='.bubble-card .layer-list'||row&&selector.includes('.layer-row')?this:null;}};
+  const context={window:{addEventListener(){}},setTimeout:()=>1,clearTimeout(){}};
+  runInNewContext(inputSource.replace('export function','function')+';this.create=createBubbleInput;',context);
+  const input=context.create({app:{bubble_hit:()=> 'card'},workspace,records:new Map([[1,record]]),send:action=>actions.push(action),wake(){},menu(){},dismiss(){},viewport:()=>[800,600],colorTouch:{route(){}}});
+  let prevented=false;
+  const event=(type,x)=>({type,target:node,button:0,buttons:type==='pointerup'?0:1,pointerType:device,pointerId:1,clientX:x,clientY:150,timeStamp:0,preventDefault(){prevented=true;},stopImmediatePropagation(){}});
+  input.handle(event('pointerdown',100));assert.equal(prevented,!row,'card backgrounds suppress native text drags');
+  if(device==='touch'){prevented=false;handlers.touchstart(event('touchstart',100));assert.equal(prevented,!row,'only card backgrounds suppress native touch scrolling');}
+  input.handle(event('pointermove',140));input.handle(event('pointerup',140));
+  assert.deepEqual(actions.map(a=>a.phase),row?[]:['down','move','up']);
+  assert.ok(actions.every(a=>a.type==='drag'&&a.grab.kind==='bubble'&&a.grab.id===1));
+});
+
 function thumbnails() {
   const requests=[],images=[];
   const context={Uint8ClampedArray,Map,ImageData:class {constructor(bytes,width,height){Object.assign(this,{bytes,width,height});}},

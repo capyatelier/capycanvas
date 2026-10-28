@@ -1388,7 +1388,8 @@ button.new-drawing-preset.disabled { opacity:.4; }
 .layer-inspector { height:100%; display:flex; flex-direction:column; }
 .layer-properties-pages { flex:1; min-height:0; position:relative; overflow:hidden; }
 .layer-properties-pages > .panel { position:absolute; inset:0; height:100%; overflow:auto; }
-.layer-properties-pages > .layers-panel { padding:8px 0; overflow:hidden; }
+.layer-properties-pages > .layers-panel { padding:var(--panel-compound-spacing) 0; overflow:hidden; }
+.simple-layer-inspector .layer-properties-pages > .layers-panel { padding:8px 0; }
 .layer-properties-disclosure { flex:none; width:100%; height:100%; display:flex; align-items:center; gap:6px; padding:0 6px; border:0; border-radius:0 0 var(--control-radius) var(--control-radius); font-weight:normal; }
 .layer-properties-icon-slot { width:var(--panel-control-height); height:var(--panel-control-height); flex:none; display:grid; place-items:center; }
 .layer-properties-icon-slot svg { width:16px; height:16px; }

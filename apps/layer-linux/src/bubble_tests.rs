@@ -165,6 +165,7 @@ fn layers_card(d: &mut Driver, device: &str, name: &str) {
     let drawer = d.named("tool-drawer");
     assert!(drawer.is_mapped(), "{name}: the title bar opens the Layers drawer");
     let drawer_size = [drawer.width(), drawer.height()];
+    layer_header_insets(d, drawer.upcast_ref());
     capture(d, &format!("{name}-layers-drawer"));
     tap(d, device, canvas_spot(d, 0.6, 0.6));
     pump(500);
@@ -206,6 +207,7 @@ fn layers_card(d: &mut Driver, device: &str, name: &str) {
     assert_eq!(card.size[0], Panel::Layers.default_width(d.w.surface.width() as f32), "{name}: the card is the drawer's width");
     assert!((body.height() as f32 - card.size[1]).abs() <= 1., "{name}: and the measured drawer height ({} vs {})", body.height(), card.size[1]);
     capture(d, &format!("{name}-layers-card"));
+    drag_layer_card_gap(d, device, layers.id, name);
     let before = center(d, layers.id);
     let bounds = body.compute_bounds(&d.w.window).unwrap();
     let grip = [bounds.x() + bounds.width() * 0.5, bounds.y() + bounds.height() - 20.];
@@ -235,6 +237,8 @@ fn layers_card(d: &mut Driver, device: &str, name: &str) {
     assert!((full.width() - drawer_size[0]).abs() <= 1 && (full.height() - drawer_size[1]).abs() <= 2, "{name}: Full is the drawer's size ({}x{} vs {drawer_size:?})", full.width(), full.height());
     assert!(d.named("bubble-new-layer").parent().is_none_or(|p| !p.is_mapped()), "{name}: instead of the simple one");
     capture(d, &format!("{name}-layers-full"));
+    layer_header_insets(d, full.upcast_ref());
+    drag_layer_card_gap(d, device, layers.id, name);
     d.w.dispatch(UiAction::Bubble { action: BubbleAction::SetOptions { id: layers.id, options: BubbleOptions { full: false, ..options } } });
     pump(400);
     tap(d, device, canvas_spot(d, 0.85, 0.15));
@@ -257,6 +261,69 @@ fn layers_card(d: &mut Driver, device: &str, name: &str) {
     assert!(find_id(d, layers.id).unwrap().card.is_none(), "{name}: Close folds it");
     d.w.dispatch(UiAction::Invoke { command: CommandId::Undo });
     pump(200);
+}
+
+fn layer_header_insets(d: &Driver, root: &gtk::Widget) {
+    let blend = find_named(root, "layer-blend").unwrap().compute_bounds(&d.w.window).unwrap();
+    let bounds = root.compute_bounds(&d.w.window).unwrap();
+    assert!((blend.y() - bounds.y() - (blend.x() - bounds.x())).abs() <= 1., "Layers header keeps equal top and side insets: {blend:?} in {bounds:?}");
+}
+
+fn drag_layer_card_gap(d: &mut Driver, device: &str, id: u32, name: &str) {
+    let card = d.named("bubble-card");
+    let list = widgets(card.upcast_ref()).find(|w| w.has_css_class("layer-list") && w.is_mapped()).unwrap();
+    let bounds = list.compute_bounds(&d.w.window).unwrap();
+    let rows_bottom = widgets(card.upcast_ref()).filter(|w| w.has_css_class("layer-row") && w.is_mapped())
+        .filter_map(|w| w.compute_bounds(&d.w.window)).map(|b| b.y() + b.height()).fold(bounds.y(), f32::max);
+    assert!(bounds.y() + bounds.height() > rows_bottom + 10., "{name}: the list has unused space below its rows");
+    let from = [bounds.x() + bounds.width() * 0.5, (rows_bottom + bounds.y() + bounds.height()) * 0.5];
+    let before = center(d, id);
+    if device == "pen" { d.input.perform(serde_json::json!([{ "point": [3., 3.] }])); }
+    stroke(d, device, &[from, [from[0] + 12., from[1]], [from[0] + 60., from[1] + 15.]]);
+    assert!((center(d, id)[0] - before[0]).abs() > 30., "{name}: unused list space moves the card");
+    d.w.dispatch(UiAction::Invoke { command: CommandId::UndoWorkspace });
+    pump(400);
+    assert!((center(d, id)[0] - before[0]).abs() < 1., "{name}: one layout undo restores the card");
+}
+
+#[test]
+#[ignore = "private display: workspace-motion.sh gtk --native-test=native_layers_bubble_background"]
+fn native_layers_bubble_background() {
+    layers_bubble_background(&["mouse", "touch"]);
+}
+
+#[test]
+#[ignore = "private display: workspace-motion.sh gtk --native-test=native_layers_bubble_background_pen --tablet"]
+fn native_layers_bubble_background_pen() {
+    layers_bubble_background(&["pen"]);
+}
+
+fn layers_bubble_background(devices: &[&str]) {
+    let mut d = Driver::new("art.capycanvas.LayersBubbleBackground");
+    for theme in [Theme::Light, Theme::Dark] {
+        d.w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        d.w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(WorkspaceState {
+            layout: WorkspacePreset::Painter.layout(Platform::Gtk), ..WorkspaceState::default()
+        }) });
+        pump(300);
+        let item = header_of(&d, ToolbarControl::Panel { panel: Panel::Layers });
+        let id = item.strip_prefix("header-item-").unwrap().parse().unwrap();
+        let from = d.point(&d.named(&item));
+        tap(&mut d, "mouse", from);
+        pump(500);
+        layer_header_insets(&d, &d.named("tool-drawer"));
+        let spot = canvas_spot(&d, 0.4, 0.5);
+        tap(&mut d, "mouse", spot);
+        let id = take(&mut d, BubbleGrab::Header { id }, spot);
+        let bubble = find_id(&d, id).unwrap();
+        for full in [false, true] {
+            d.w.dispatch(UiAction::Bubble { action: BubbleAction::SetOptions { id: bubble.id, options: BubbleOptions { full, ..bubble.options } } });
+            pump(500);
+            if full { layer_header_insets(&d, &d.named("bubble-card")); }
+            for device in devices { drag_layer_card_gap(&mut d, device, bubble.id, &format!("{theme:?}-{device}-{full}")); }
+        }
+    }
+    d.finish();
 }
 
 fn menu_open(d: &Driver) -> bool {

@@ -795,8 +795,7 @@ impl Card {
         self.within(picked, |w| drags(w) || w.is::<gtk::Button>() || w.is::<gtk::DropDown>() || w.is::<gtk::Switch>() || w.is::<gtk::CheckButton>())
     }
     fn handles(&self, picked: Option<&gtk::Widget>) -> bool {
-        let list = self.inspector.layers.list.upcast_ref::<gtk::Widget>();
-        !self.within(picked, |w| w == list || drags(w))
+        !self.within(picked, |w| w.has_css_class("layer-row") || w.is::<gtk::Scrollbar>() || drags(w))
     }
 }
 

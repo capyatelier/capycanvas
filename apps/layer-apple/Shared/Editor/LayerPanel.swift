@@ -28,6 +28,7 @@ struct LayerPanel: View {
             VStack(spacing: 0) {
                 if !simple && visible("layer_opacity") { header.modifier(PanelBodyMeasurement(panel: "layers", part: "header")) }
                 if visible("layers") {
+                    GeometryReader { viewport in
                     EditorPositionedScrollView(position: scrollPosition) {
                         LazyVStack(spacing: 0) {
                             ForEach(rows) { row in
@@ -76,10 +77,11 @@ struct LayerPanel: View {
                             .onPreferenceChange(LayerRowFrames.self) { interaction.frames = $0 }
                             .overlay(alignment: .topLeading) { dragPreview }
                             .modifier(PanelBodyMeasurement(panel: "layers", part: "rows", kind: .scroll))
+                            .modifier(BubbleNativeControl(viewport: viewport.frame(in: .named("editor-workspace")), cancel: { interaction.cancel() }))
                     }.overlayPreferenceValue(LayerRowFrames.self) { frames in
                         LayerConnections(store: store, frames: frames)
                     }.accessibilityIdentifier("layer-rows").modifier(LayerInputCheckOrder(layers: layers))
-                        .modifier(BubbleNativeControl(cancel: { interaction.cancel() }))
+                    }
                 } else { Spacer(minLength: 0) }
                 if !simple && visible("layer_actions") { footer.modifier(PanelBodyMeasurement(panel: "layers", part: "footer")) }
             }

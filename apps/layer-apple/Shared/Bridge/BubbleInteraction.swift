@@ -409,13 +409,18 @@ struct BubbleNativeRegions: PreferenceKey {
 }
 struct BubbleNativeControl: ViewModifier {
     var drags = true
+    var viewport: CGRect? = nil
     var cancel: () -> Void = {}
     @Environment(\.bubbleEdits) private var edits
     @Environment(\.bubbleCardID) private var owner
     @State private var id = UUID().uuidString
     func body(content: Content) -> some View {
-        content.background(GeometryReader { geometry in Color.clear.preference(key: BubbleNativeRegions.self,
-            value: edits == nil ? [:] : [id: BubbleNativeRegion(owner: owner, bounds: geometry.frame(in: .named("editor-workspace")), drags: drags)]) })
+        content.background(GeometryReader { geometry in
+            let bounds = geometry.frame(in: .named("editor-workspace"))
+            let region = viewport.map { CGRect(x: $0.minX, y: bounds.minY, width: $0.width, height: bounds.height).intersection($0) } ?? bounds
+            Color.clear.preference(key: BubbleNativeRegions.self,
+                value: edits == nil ? [:] : [id: BubbleNativeRegion(owner: owner, bounds: region, drags: drags)])
+        })
             .onAppear { edits?.cancellations[id] = cancel }
             .onDisappear { edits?.cancellations.removeValue(forKey: id) }
     }

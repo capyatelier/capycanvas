@@ -489,6 +489,9 @@ private struct BubbleGlassProbeView: View {
         guard let rows = model.nativeRegions.values.first(where: { $0.owner == card.id && $0.drags && cardBounds().contains($0.bounds) }) else {
             throw HostFailure(message: "The card must retain its native rows")
         }
+        let blank = CGPoint(x: rows.bounds.midX, y: rows.bounds.maxY + 20)
+        try require(cardBounds().contains(blank) && !model.nativeRegions.values.contains { $0.owner == card.id && $0.bounds.contains(blank) },
+            "Unused list space must remain available to move the card")
         let rowPoint = CGPoint(x: rows.bounds.midX, y: rows.bounds.minY + 20)
         try require(!model.context(at: rowPoint), "Native card rows retain secondary context input")
         try event(.rightMouseDown, at: rowPoint, marker: input, number: 402)

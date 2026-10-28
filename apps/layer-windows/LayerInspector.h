@@ -65,7 +65,7 @@ struct LayerInspector {
         auto clip=pages.Clip();auto before=clip?clip.Rect():Rect{};
         if(!clip||before.Width!=width||before.Height!=page){if(!clip)clip=RectangleGeometry();clip.Rect({0,0,float(width),float(page)});pages.Clip(clip);}
         auto propertyPage=properties->Root();
-        auto inset=data->panelMetric(L"inset");
+        auto inset=data->panelMetric(add.Visibility()==Visibility::Visible?L"inset":L"compound_spacing");
         layers.Width(std::max(1.,width));layers.Height(std::max(1.,page-inset*2));Canvas::SetLeft(layers,0);Canvas::SetTop(layers,inset-position*page);
         propertyPage.Width(width);propertyPage.Height(std::max(1.,page));Canvas::SetTop(propertyPage,(1.-position)*page);
         layers.IsHitTestVisible(!open);propertyPage.IsHitTestVisible(open);
@@ -73,7 +73,7 @@ struct LayerInspector {
     J sizingRequest(PanelBody const& layers)const{
         auto measurement=layers.ScrollMetrics();
         if(num(measurement,L"unit_height")<=0)measurement.Insert(L"unit_height",N(40));
-        measurement.Insert(L"fixed_height",N(num(measurement,L"fixed_height")+data->panelMetric(L"inset")*2));
+        measurement.Insert(L"fixed_height",N(num(measurement,L"fixed_height")+data->panelMetric(add.Visibility()==Visibility::Visible?L"inset":L"compound_spacing")*2));
         return O({{L"type",S(L"layer_drawer_sizing")},{L"measurement",measurement},{L"properties_height",N(properties->ContentHeight())}});
     }
 };

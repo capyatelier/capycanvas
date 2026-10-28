@@ -138,9 +138,9 @@ void WorkspaceBubbles::Impl::down(PointerRoutedEventArgs const& e){
             if(auto element=node.try_as<UIElement>())c->path.push_back(make_weak(element));
             if(auto element=node.try_as<FrameworkElement>()){
                 auto id=AutomationProperties::GetAutomationId(element);bool button=bool(element.try_as<Primitives::ButtonBase>());
-                bool pairs=prefix(id,L"layer-row-")||id==L"layer-list";
+                bool pairs=prefix(id,L"layer-row-")||id==L"layer-add-paper";
                 bool edits=element.try_as<Primitives::RangeBase>()||element.try_as<TextBox>()||element.try_as<ComboBox>()||element.try_as<ToggleSwitch>()||
-                    prefix(id,L"number-root-")||pairs;
+                    element.try_as<Primitives::ScrollBar>()||prefix(id,L"number-root-")||pairs;
                 if(auto focus=element.try_as<ContentControl>();focus&&!button)edits=edits||focus.IsTabStop();
                 c->nativeDrags=c->nativeDrags||edits;c->nativePairs=c->nativePairs||pairs;nativeControl=nativeControl||edits||button;
             }if(node==inputRoot)break;

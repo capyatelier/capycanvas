@@ -322,6 +322,10 @@ internal class BubbleInteraction(val host: CanvasHost, val dock: DockInteraction
         }
         return false
     }
+    fun cardBackground(change: PointerInputChange) {
+        val c = contact?.takeIf { it.id == change.id && it.mode == "native" } ?: return
+        c.mode = "pending"; hold(c); change.consume()
+    }
     fun up(change: PointerInputChange?, cancelled: Boolean = false): Boolean {
         var captured = false
         candidate?.takeIf { change == null || it.pointer == change.id }?.let { source ->

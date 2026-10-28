@@ -95,6 +95,7 @@ internal class LayerSwipe {
 @Composable internal fun LayerPanel(host: CanvasHost, state: JSONObject, modifier: Modifier = Modifier, listState: LazyListState = rememberLazyListState(), full: Boolean = true, onContent: (PanelContentSize) -> Unit = {}) {
     val colors = LocalPalette.current
     val density = LocalDensity.current
+    val bubbles = LocalDock.current?.bubbles
     val view = state.getJSONObject("layer_tools")
     val active = view.objectOrNull("editing_layer")
     val controls = view.getJSONObject("controls")
@@ -229,6 +230,12 @@ internal class LayerSwipe {
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 LazyColumn(Modifier.fillMaxSize().mouseScrollbar(list).testTag("layer-rows")
                     .onGloballyPositioned { listOrigin = it.boundsInRoot().topLeft }
+                    .pointerInput(bubbles, list) {
+                        awaitEachGesture {
+                            val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                            if (!down.isConsumed && list.layoutInfo.visibleItemsInfo.none { down.position.y >= it.offset && down.position.y < it.offset + it.size }) bubbles?.cardBackground(down)
+                        }
+                    }
                     .layerTouchInput(host,touchSurface,epoch,{listOrigin},bounds) {
                         host.layerSwipe.close();dragGeneration++;drag=null;menuGeneration++;menu=null;menuRequest=null;contactHeld=false
                     },state=list) {

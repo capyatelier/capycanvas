@@ -855,6 +855,37 @@ class AndroidToolBubblesTest {
             assertTrue("Eraser returns to its native Sketch header",packets().isEmpty())
         }
     }
+    private fun dragLayerCardGap(id: Long) {
+        val before = stable(id)
+        fun inCard(tag: String): Rect { var bounds: Rect? = null; instrumentation.runOnMainSync { bounds = findTag("bubble-card-$id")?.second?.find(hasTag(tag))?.boundsInRoot }; return checkNotNull(bounds) }
+        val lastRowBottom = state().getJSONArray("layers").objects().maxOf { inCard("layer-row-${it.getLong("id")}").bottom }
+        val list = inCard("layer-rows")
+        assertTrue("Layers list has unused space", list.bottom > lastRowBottom + 10 * density)
+        val blank = Offset(list.center.x, (lastRowBottom + list.bottom) / 2)
+        stroke(blank, blank + Offset(-30 * density, 0f), blank + Offset(-60 * density, -15 * density))
+        assertTrue("Unused list space moves its owner", (stable(id) - before).getDistance() > 25 * density)
+    }
+    @Test fun layersBubbleBackgroundAcrossThemesAndDevices() {
+        for (theme in listOf("light", "dark")) for (input in listOf(MotionEvent.TOOL_TYPE_MOUSE, MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_STYLUS)) {
+            tool = input; root = null; case = "$theme-$input"
+            action(obj("type" to "restore_workspace", "workspace" to JSONObject(fixture.toString())))
+            action(obj("type" to "set_theme", "theme" to theme))
+            val target = workspace().let { Offset(it.left + it.width * .4f, it.top + it.height * .5f) }
+            val id = take(6, target)
+            for (full in listOf(false, true)) {
+                val options = JSONObject(view(id).getJSONObject("options").toString()).put("full", full)
+                action(obj("type" to "bubble", "action" to obj("type" to "set_options", "id" to id, "options" to options)))
+                stable(id)
+                dragLayerCardGap(id)
+                if (full) {
+                    var blend: Rect? = null
+                    instrumentation.runOnMainSync { blend = findTag("bubble-card-$id")?.second?.find(hasTag("layer-blend"))?.boundsInRoot }
+                    val card = bounds("bubble-card-$id")
+                    assertEquals("Full card keeps equal top and side insets", blend!!.left - card.left, blend!!.top - card.top, density)
+                }
+            }
+        }
+    }
     @Test fun nativeBubblesAcrossThemesAndDevices() {
         val arguments = androidx.test.platform.app.InstrumentationRegistry.getArguments()
         val themes = arguments.getString("bubbleTheme")?.let { listOf(it) } ?: listOf("light", "dark")
@@ -1030,10 +1061,7 @@ class AndroidToolBubblesTest {
             instrumentation.runOnMainSync { assertEquals("Layers card keeps its retained owner", card?.id, findTag("bubble-card-$layers")?.second?.id) }
             invoke("undo")
             waitFor("Card layer addition is one undo") { state().getJSONArray("layers").length() == layerCount }
-            val cardBounds = bounds("bubble-card-$layers")
-            val blank = Offset(cardBounds.right - 3 * density, cardBounds.center.y)
-            stroke(blank, blank + Offset(-30 * density, 0f), blank + Offset(-60 * density, -15 * density))
-            assertTrue("Blank card edge moves its owner", (stable(layers) - cardBounds.center).getDistance() > 25 * density)
+            dragLayerCardGap(layers)
             event(MotionEvent.ACTION_DOWN, Offset(bounds("bubble-card-$layers").right - 3 * density, bounds("bubble-card-$layers").center.y))
             SystemClock.sleep(ViewConfiguration.getLongPressTimeout().toLong() + 250); event(MotionEvent.ACTION_UP)
             waitFor("Held card opens menu") { findTag("workspace-menu") != null }

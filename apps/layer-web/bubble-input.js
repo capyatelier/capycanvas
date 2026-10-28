@@ -80,10 +80,11 @@ export function createBubbleInput({app, workspace, records, send, wake, menu, di
     const r=target(p);
     if(r) {
       if(e.target.closest?.('.bubble-pill'))return;
-      const h=hit(r,p),c={r,hit:h,start:p,last:p,time:e.timeStamp,id:e.pointerId,device:e.pointerType,target:e.target,list:!!e.target.closest('.bubble-card .layer-list'),fingers:new Map([[e.pointerId,p]])};
+      const h=hit(r,p),c={r,hit:h,start:p,last:p,time:e.timeStamp,id:e.pointerId,device:e.pointerType,target:e.target,fingers:new Map([[e.pointerId,p]])};
       if(native(e)) {if(e.pointerType==='touch'){contact=c;c.mode='native';}return;}
+      if(h==='card'&&!e.target.closest('button'))e.preventDefault();
       contact=c;begin(c,p);workspace.setPointerCapture(e.pointerId);
-      if(h!=='card'||!e.target.closest('button'))c.timer=setTimeout(()=>hold(c),c.wheel||h==='intensity'?1000:500);r.mark?.(h,true);if(!c.list)return consume(e);return;
+      if(h!=='card'||!e.target.closest('button'))c.timer=setTimeout(()=>hold(c),c.wheel||h==='intensity'?1000:500);r.mark?.(h,true);return consume(e);
     }
     const node=e.target.closest?.('[data-header-item],[data-workspace-drag],.tool-choice-button');
     if(!node||node.disabled||document.querySelector('#header-editor')?.hidden===false)return;
@@ -148,7 +149,6 @@ export function createBubbleInput({app, workspace, records, send, wake, menu, di
       c.held=false;dismiss();
       if(c.hit!=='wheel')begin(c,p);else c.mode='wheel';
     }
-    if(c.list)return;
     if(c.mode==='intensity')pick(c,p);
     else if(c.mode==='wheel') {
       if(app.bubble_color_drag_out(c.r.view.diameter,...local(c.r,p))) {
@@ -194,6 +194,7 @@ export function createBubbleInput({app, workspace, records, send, wake, menu, di
     suppressClick=true;wake();if(e)return consume(e);
   }
   workspace.addEventListener('workspace-drag-held',()=>{if(source)source.held=true;});
+  workspace.addEventListener('touchstart',e=>{if(contact?.hit==='card'&&contact.mode!=='native')e.preventDefault();},{passive:false});
   workspace.addEventListener('workspace-context-claimed',()=>{if(source)source.held=true;});
   window.addEventListener('blur',()=>end(null,true));
   window.addEventListener('keydown',e=>{if(e.key==='Escape'&&(contact||source)){end(null,true);consume(e);}},true);
