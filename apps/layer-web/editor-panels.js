@@ -231,7 +231,7 @@ export function createEditorPanels({ selectionUi, app, wasmModule, state, elemen
     // Chrome arbitrates touch scrolling on the SVG viewport, not its path.
     arc.classList.add('color-intensity');arc.style.cssText='position:absolute;inset:0;overflow:visible;pointer-events:none;touch-action:none';
     track.setAttribute('fill','none');track.setAttribute('stroke','transparent');track.setAttribute('stroke-linecap','round');track.style.pointerEvents='stroke';track.style.touchAction='none';track.setAttribute('tabindex','0');track.setAttribute('role','slider');bindCopy(track,()=>copy.color.intensity,"ariaLabel");
-    const ramp=document.createElementNS(arc.namespaceURI,'g'),caption=document.createElementNS(arc.namespaceURI,'text');ramp.style.pointerEvents='none';caption.style.pointerEvents='none';caption.setAttribute('fill','currentColor');arc.append(ramp);
+    const ramp=document.createElementNS(arc.namespaceURI,'g'),caption=document.createElementNS(arc.namespaceURI,'g');ramp.style.pointerEvents='none';caption.style.pointerEvents='none';caption.setAttribute('fill','currentColor');caption.setAttribute('opacity','.8');caption.style.fontFamily='"Adwaita Sans",system-ui,sans-serif';arc.append(ramp);
     // Match the wheel marker: the white ring and dark edge stay visible on every ramp color.
     markerShadow.setAttribute('fill','none');markerShadow.setAttribute('stroke','rgba(0,0,0,.5)');markerShadow.setAttribute('stroke-width','4');
     marker.setAttribute('fill','white');marker.setAttribute('stroke','white');marker.setAttribute('stroke-width','2');arc.append(track,markerShadow,marker,caption);stage.append(arc);
@@ -276,7 +276,12 @@ export function createEditorPanels({ selectionUi, app, wasmModule, state, elemen
       arc.hidden=!view.hdr;arc.style.display=view.hdr?'':'none';
       if(view.hdr){const g=app.color_ui({type:'arc',size:width,fraction:(view.intensity+2)/8});const a=g.geometry,start=app.color_ui({type:'arc',size:width,fraction:0}).point,end=app.color_ui({type:'arc',size:width,fraction:1}).point;arc.setAttribute('width',width);arc.setAttribute('height',layout.height);arc.style.width=`${width}px`;arc.style.height=`${layout.height}px`;track.setAttribute('d',`M${start} A${a.radius} ${a.radius} 0 0 0 ${end}`);track.setAttribute('stroke-width',a.width);for(const node of [markerShadow,marker]){node.setAttribute('cx',g.point[0]);node.setAttribute('cy',g.point[1]);node.setAttribute('r',a.marker_radius);}track.setAttribute('aria-valuenow',view.intensity);track.setAttribute('aria-valuetext',`${view.intensity.toFixed(1)} EV`);track.setAttribute('aria-valuemin','-2');track.setAttribute('aria-valuemax','6');
         g.path.slice(1).forEach((p,i)=>{let segment=ramp.children[i];if(!segment){segment=document.createElementNS(arc.namespaceURI,'path');segment.setAttribute('stroke-linecap','round');ramp.append(segment);}segment.setAttribute('d',`M${g.path[i]} L${p}`);segment.setAttribute('stroke',rgba(view.intensity_ramp[i]));segment.setAttribute('stroke-width',a.width);});marker.setAttribute('fill',rgba(view.marker_color));
-        const [x,y,font]=layout.intensity_caption;caption.setAttribute('x',x);caption.setAttribute('y',y);caption.setAttribute('text-anchor','middle');caption.setAttribute('font-size',font);caption.textContent=`${view.intensity>=0?'+':''}${view.intensity.toFixed(2)} EV`;
+        const font=layout.intensity_caption.font_size,text=`${view.intensity>=0?'+':''}${view.intensity.toFixed(2)} EV`,metrics=numbers.getContext('2d',{willReadFrequently:true});
+        metrics.font=`${font}px "Adwaita Sans",system-ui,sans-serif`;
+        const digit=Math.max(...[...'0123456789'].map(c=>metrics.measureText(c).width)),advances=[...text].map(c=>/[0-9 ]/.test(c)?digit:metrics.measureText(c).width);
+        const placements=app.color_ui({type:'intensity_caption',size:width,advances});
+        while(caption.children.length>text.length)caption.lastElementChild.remove();
+        [...text].forEach((c,i)=>{let glyph=caption.children[i];if(!glyph){glyph=document.createElementNS(arc.namespaceURI,'text');glyph.setAttribute('text-anchor','middle');caption.append(glyph);}const [x,y,rotation]=placements[i];glyph.setAttribute('transform',`translate(${x} ${y}) rotate(${rotation})`);glyph.setAttribute('font-size',font);glyph.textContent=c;});
       }
       shapes.forEach((node,i)=>{node.firstElementChild.style.transform=`rotate(${layout.shape_rotations[i]}deg)`;});
       const half=layout.readout[2],r=layout.wheel[2]*view.geometry.outer+2;

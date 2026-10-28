@@ -8,6 +8,7 @@ pub enum ColorUiRequest {
     ProfileEntries { entries: Vec<crate::profile_library::ProfileEntry>, #[serde(default)] query: String },
     IntensityArc { size:f32, stops:f32, #[serde(default)] depth:Option<layer_core::color::SampleDepth>, base:RgbColor, document_space:RgbSpace, recipe:layer_core::color::hdr::SdrRendition, headroom:f32 },
     IntensityPoint {size:f32, point:[f32;2], minimum:f32, maximum:f32},
+    IntensityCaption { size: f32, advances: Vec<f32> },
     PickerLayout { size: f32, #[serde(default)] hdr: bool },
     HdrPreview { color: RgbColor, document_space: RgbSpace, recipe: layer_core::color::hdr::SdrRendition, headroom: f32 },
     Layout { size: f32, #[serde(default)] hdr: bool },
@@ -70,6 +71,13 @@ pub fn color_ui_localized(request: ColorUiRequest, localizer: &crate::localizati
     let value = match request {
         ColorUiRequest::ProfileEntries { entries, query } => return Ok(serde_json::Value::Array(entries.iter()
             .filter(|entry| entry.matches(&query, localizer)).map(|entry| entry.localized_view(localizer)).collect())),
+        ColorUiRequest::IntensityCaption { size, advances } => {
+            if advances.len() > 32 || advances.iter().any(|v| !v.is_finite() || *v < 0.) {
+                return Err("Invalid caption advances".into());
+            }
+            let layout = ColorPanelLayout::with_hdr(size).ok_or("Invalid picker extent")?;
+            return Ok(serde_json::json!(layout.intensity_caption.glyphs(&advances)));
+        },
         ColorUiRequest::IntensityPoint {size,point,minimum,maximum} => {
             if !point.iter().all(|v|v.is_finite()) || !minimum.is_finite() || !maximum.is_finite() || minimum>=maximum || minimum < -149. || maximum>128. {return Err("Invalid intensity range".into());}
             let a=HdrIntensityArc::new(size).ok_or("Invalid picker extent")?;

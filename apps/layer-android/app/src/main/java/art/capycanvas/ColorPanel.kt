@@ -481,6 +481,7 @@ private data class ColorFieldRequest(val shape:String,val hue:Float,val pixels:I
 @Composable internal fun ColorIntensityArc(view:JSONObject,layout:JSONObject,modifier:Modifier,color:(JSONObject)->Unit,caption:Boolean=true,
     presentation:JSONObject?=null,origin:Offset=Offset.Zero) {
     val host=LocalCanvasHost.current
+    val ink=LocalPalette.current.text
     val action by rememberUpdatedState(color)
     val density=LocalDensity.current.density
     val range=presentation?.array("range")?.let { it.getDouble(0).toFloat()..it.getDouble(1).toFloat() } ?: -2f..6f
@@ -520,8 +521,21 @@ private data class ColorFieldRequest(val shape:String,val hue:Float,val pixels:I
             val g=arc.getJSONObject("geometry")
             val path=arc.array("path");val ramp=presentation?.array("ramp") ?: view.array("intensity_ramp")
             for(i in 0 until path.length()-1)drawLine(ramp.getJSONArray(i).color(),path.getJSONArray(i).point(1f)+origin,path.getJSONArray(i+1).point(1f)+origin,g.number("width"),cap=StrokeCap.Round)
-            if(caption){val place=layout.array("intensity_caption");val x=place.getDouble(0).toFloat();val y=place.getDouble(1).toFloat();val font=place.getDouble(2).toFloat()
-            drawIntoCanvas{canvas->canvas.nativeCanvas.drawText("%+.2f EV".format(view.number("intensity")),x,y,Paint(Paint.ANTI_ALIAS_FLAG).apply{this.color=android.graphics.Color.GRAY;textSize=font;textAlign=Paint.Align.CENTER})}}
+            if(caption){
+                val font=layout.getJSONObject("intensity_caption").number("font_size")
+                val text="%+.2f EV".format(java.util.Locale.ROOT,view.number("intensity"))
+                val paint=Paint(Paint.ANTI_ALIAS_FLAG or Paint.SUBPIXEL_TEXT_FLAG).apply{
+                    typeface=Typeface.create("sans-serif",Typeface.NORMAL);textSize=font;textAlign=Paint.Align.CENTER;this.color=ink.copy(alpha=.8f).toArgb()
+                }
+                val digit=('0'..'9').maxOf{paint.measureText(it.toString())}
+                val advances=text.map{if(it in '0'..'9'||it==' ')digit else paint.measureText(it.toString())}
+                val placements=JSONArray(Native.colorUi(obj("type" to "intensity_caption","size" to side,"advances" to JSONArray(advances)).toString(),host.languageTag))
+                drawIntoCanvas{canvas->text.forEachIndexed{i,c->
+                    val p=placements.getJSONArray(i);val native=canvas.nativeCanvas
+                    native.save();native.translate(p.getDouble(0).toFloat(),p.getDouble(1).toFloat());native.rotate(p.getDouble(2).toFloat())
+                    native.drawText(c.toString(),0f,0f,paint);native.restore()
+                }}
+            }
             val p=arc.array("point").point(1f)+origin;val markerRadius=g.number("marker_radius")
             drawCircle((presentation?.array("marker") ?: view.array("marker_color")).color(),markerRadius,p)
             drawCircle(Color.Black.copy(alpha=.5f),markerRadius,p,style=Stroke(4f))

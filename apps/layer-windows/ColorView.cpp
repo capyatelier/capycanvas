@@ -145,7 +145,7 @@ struct View:std::enable_shared_from_this<View>{
     std::array<SwatchFace,3> swatchFaces;
     std::array<bool,3> hovered{};
     Button edit;Shapes::Ellipse editFill;
-    Canvas arc;Shapes::Path arcTrack;std::vector<Shapes::Line> ramp;Shapes::Ellipse markerShadow,marker;TextBlock caption;
+    Canvas arc;Shapes::Path arcTrack;std::vector<Shapes::Line> ramp;Shapes::Ellipse markerShadow,marker;
     Slider intensity;bool syncingIntensity=false;
     std::optional<uint32_t> arcPointer;hstring arcKey,arcContext;
     ColorTouches touches;
@@ -161,7 +161,7 @@ struct View:std::enable_shared_from_this<View>{
     Image labelImage;hstring labelKey;
     Shapes::Path readoutFocus;
     struct Glyph {Image image;MatrixTransform transform;wchar_t scalar=0;std::array<double,9> key{};};
-    std::vector<Glyph> glyphs;
+    std::vector<Glyph> glyphs,captionGlyphs;
     std::array<Border,3> chips;
     std::array<MatrixTransform,3> chipTransforms;
     TextBlock metrics;
@@ -395,7 +395,6 @@ struct View:std::enable_shared_from_this<View>{
         arc.Children().Append(arcTrack);
         markerShadow.IsHitTestVisible(false);marker.IsHitTestVisible(false);
         markerShadow.Stroke(fill({128,0,0,0}));markerShadow.StrokeThickness(4);marker.Stroke(fill({255,255,255,255}));marker.StrokeThickness(2);
-        caption.IsHitTestVisible(false);caption.FontFamily(FontFamily(L"Segoe UI"));
         arcTrack.PointerPressed([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock()){
             auto p=e.GetCurrentPoint(self->stage);
             if(self->arcPointer||self->transparentSlot()||!PointerGesture::PrimaryContact(p)||self->joinsTouches(p))return;
@@ -528,10 +527,26 @@ struct View:std::enable_shared_from_this<View>{
         for(auto const& dot:{markerShadow,marker}){Canvas::SetLeft(dot,x-dot.Width()/2);Canvas::SetTop(dot,y-dot.Height()/2);}
         marker.Fill(fill(rgba(markerColor)));
         wchar_t text[32];swprintf(text,32,L"%s%.2f EV",stops>=0?L"+":L"",stops);
-        caption.Text(text);caption.Foreground(data->brush(L"text"));caption.Measure({1000,1000});
-        auto placement=array(layout,L"intensity_caption");
-        Canvas::SetLeft(caption,placement.GetNumberAt(0)-caption.DesiredSize().Width/2);
-        Canvas::SetTop(caption,placement.GetNumberAt(1)-caption.BaselineOffset());
+        double font=num(object(layout,L"intensity_caption"),L"font_size");
+        if(measuredFont!=font){advances.clear();measuredFont=font;metrics.FontSize(GlyphRasterizer::fontSize(font));}
+        double digit=0;for(wchar_t c=L'0';c<=L'9';c++)digit=std::max(digit,advance(c));
+        A cells;for(auto c:std::wstring_view(text))cells.Append(N((c==L' '||(c>=L'0'&&c<=L'9'))?digit:advance(c)));
+        auto placements=colorUi(data->localization.get(),O({{L"type",S(L"intensity_caption")},{L"size",N(panelSize)},{L"advances",cells}})).GetArray();
+        static thread_local GlyphRasterizer rasterizer;
+        auto ink=data->brush(L"text").as<SolidColorBrush>().Color();size_t index=0;
+        for(auto c:std::wstring_view(text)){
+            if(index==captionGlyphs.size()){
+                Glyph glyph;glyph.image.IsHitTestVisible(false);glyph.image.Stretch(Stretch::Fill);
+                AutomationProperties::SetAccessibilityView(glyph.image,Automation::Peers::AccessibilityView::Raw);
+                arc.Children().Append(glyph.image);captionGlyphs.push_back(glyph);
+            }
+            auto& glyph=captionGlyphs[index];auto glyphPoint=placements.GetArrayAt(uint32_t(index++));
+            double angle=glyphPoint.GetNumberAt(2)*3.141592653589793/180,cs=std::cos(angle),sn=std::sin(angle),glyphX=-advance(c)*.5;
+            Matrix position{cs,sn,-sn,cs,glyphPoint.GetNumberAt(0)+cs*glyphX,glyphPoint.GetNumberAt(1)+sn*glyphX};
+            glyph.image.Visibility(c==L' '?Visibility::Collapsed:Visibility::Visible);
+            if(c!=L' ')rasterizer.draw(glyph.image,std::wstring_view(&c,1),font,false,position,layoutScale,ink,.8f);
+        }
+        for(;index<captionGlyphs.size();index++)captionGlyphs[index].image.Visibility(Visibility::Collapsed);
         syncingIntensity=true;intensity.Value(stops);syncingIntensity=false;
         wchar_t value[32];swprintf(value,32,L"%.1f EV",stops);AutomationProperties::SetItemStatus(intensity,value);
     }
@@ -591,8 +606,6 @@ struct View:std::enable_shared_from_this<View>{
                 markerShadow.Width(markerRadius*2+4);markerShadow.Height(markerRadius*2+4);
                 marker.Width(markerRadius*2+2);marker.Height(markerRadius*2+2);
                 for(auto const& dot:{markerShadow,marker}){uint32_t at;if(!arc.Children().IndexOf(dot,at))arc.Children().Append(dot);}
-                uint32_t at;if(!arc.Children().IndexOf(caption,at))arc.Children().Append(caption);
-                caption.FontSize(array(layout,L"intensity_caption").GetNumberAt(2));
             }
             for(int i=0;i<2;i++)placeBox(shapes[i],array(layout,L"shapes").GetArrayAt(i));
             const std::array<wchar_t const*,3> slots{L"background",L"foreground",L"transparent"};

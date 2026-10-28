@@ -161,12 +161,19 @@ mod imp {
             }
             snapshot.append_stroke(&paths.zero, &gtk::gsk::Stroke::new(1.), &ink);
             if self.caption_hidden.get() { return; }
-            // Retained text stays below the compact swatch groups.
-            let [x, y, font] = layer_ui::ColorPanelLayout::with_hdr(obj.width() as f32)
-                .unwrap().intensity_caption.map(f64::from);
+            let caption = layer_ui::ColorPanelLayout::with_hdr(obj.width() as f32)
+                .unwrap().intensity_caption;
             let text = format!("{:+.2} EV", obj.value());
-            let layout = crate::color_readout::layout(obj.upcast_ref(), font, false, &text);
-            crate::color_readout::append(snapshot, &layout, [x, y], 0., true, ink);
+            let glyphs: Vec<_> = text.chars().map(|c| crate::color_readout::layout(
+                obj.upcast_ref(), caption.font_size as f64, false, &c.to_string())).collect();
+            let digit = ('0'..='9').map(|c| crate::color_readout::advance(&crate::color_readout::layout(
+                obj.upcast_ref(), caption.font_size as f64, false, &c.to_string()))).fold(0., f64::max);
+            let advances: Vec<_> = text.chars().zip(&glyphs).map(|(c, glyph)|
+                if c.is_ascii_digit() || c == ' ' { digit as f32 } else { crate::color_readout::advance(glyph) as f32 }).collect();
+            ink.set_alpha(0.8);
+            for (glyph, [x, y, rotation]) in glyphs.iter().zip(caption.glyphs(&advances)) {
+                crate::color_readout::append(snapshot, glyph, [x as f64, y as f64], rotation as f64, true, ink);
+            }
         }
     }
 }

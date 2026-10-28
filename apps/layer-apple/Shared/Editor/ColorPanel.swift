@@ -56,7 +56,7 @@ struct ColorPanel: View {
                 PaintColorControls(store: store, compact: true).colorPlaced(layout["edit"], id: "edit")
                 if hdr {
                     HDRIntensityArc(model: model, viewing: store.colorViewing, identity: editContext.stableKey,
-                        language: store.interfaceLanguage, geometry: spec["arc"], caption: layout["intensity_caption"], size: side,
+                        language: store.interfaceLanguage, geometry: spec["arc"], caption: layout["intensity_caption"], size: side, ink: palette["text"],
                         contact: contact, touches: touches) {
                         color(["op": "hdr_intensity", "stops": $0], context: editContext)
                     }

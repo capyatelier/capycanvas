@@ -1136,8 +1136,54 @@ pub struct ColorPanelLayout {
     pub shape_rotations: [f32; 2],
     pub readout: [f32; 4],
     pub readout_radius: f32,
-    /// HDR caption center X, baseline Y, and font size; zero in SDR.
-    pub intensity_caption: [f32; 3],
+    pub intensity_caption: ColorArcCaption,
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize)]
+pub struct ColorArcCaption {
+    pub center: [f32; 2],
+    pub radius: f32,
+    pub min_angle: f32,
+    pub max_angle: f32,
+    pub font_size: f32,
+}
+impl ColorArcCaption {
+    fn new(center: [f32; 2], mut radius: f32, font_size: f32, controls: [[f32; 4]; 4]) -> Self {
+        loop {
+            let (mut min_angle, mut max_angle) = (0f32, std::f32::consts::PI);
+            for [x, y, width, height] in controls {
+                let dx = x + width * 0.5 - center[0];
+                let dy = y + height * 0.5 - center[1];
+                let distance = dx.hypot(dy);
+                let clearance = width.max(height) * 0.5 + 4.;
+                let nearest = (distance * distance - clearance * clearance).max(0.).sqrt()
+                    .clamp(radius - font_size, radius + 4.);
+                let cosine = (distance * distance + nearest * nearest - clearance * clearance) / (2. * distance * nearest);
+                if cosine >= 1. { continue; }
+                let angle = dy.atan2(dx);
+                let half = cosine.clamp(-1., 1.).acos();
+                if dx < 0. { max_angle = max_angle.min(angle - half); }
+                else { min_angle = min_angle.max(angle + half); }
+            }
+            if max_angle - min_angle >= font_size * 6.5 / radius {
+                return Self { center, radius, min_angle: min_angle.to_degrees(), max_angle: max_angle.to_degrees(), font_size };
+            }
+            radius += 1.;
+        }
+    }
+    /// Baseline X/Y and clockwise rotation in degrees, in reading order.
+    pub fn glyphs(self, advances: &[f32]) -> Vec<[f32; 3]> {
+        let mut cursor = -advances.iter().sum::<f32>() * 0.5;
+        let min_angle = self.min_angle.to_radians() - cursor / self.radius;
+        let max_angle = self.max_angle.to_radians() + cursor / self.radius;
+        let center_angle = 80f32.to_radians().max(min_angle).min(max_angle);
+        advances.iter().map(|advance| {
+            let angle = center_angle - (cursor + advance * 0.5) / self.radius;
+            cursor += advance;
+            [self.center[0] + self.radius * angle.cos(),
+                self.center[1] + self.radius * angle.sin(), angle.to_degrees() - 90.]
+        }).collect()
+    }
 }
 impl ColorPanelLayout {
     pub fn stage_for_wheel(wheel: f32) -> Option<f32> {
@@ -1169,16 +1215,17 @@ impl ColorPanelLayout {
             b[1] = arc.center[1] + (distance * distance - dx * dx).sqrt() - b[3] * 0.5;
         }
         layout.swap[1] += layout.background[1] - old_background_y;
-        // The caption has its own compact row below the swatches.
         let font = (size * 0.044).clamp(9., 12.);
-        layout.intensity_caption = [size * 0.5, layout.height() + font + 2., font];
+        let radius = arc.radius + arc.width * 0.5 + font + layout.readout_radius - wheel.outer;
+        layout.intensity_caption = ColorArcCaption::new(arc.center, radius, font,
+            [layout.foreground, layout.background, layout.swap, layout.transparent]);
         Some(layout)
     }
     /// Include the swatches and the optional HDR caption.
     pub fn height(&self) -> f32 {
         [self.foreground, self.background, self.transparent, self.swap]
             .into_iter().map(|b| b[1] + b[3]).fold(0., f32::max)
-            .max(self.intensity_caption[1] + 3.)
+            .max(self.intensity_caption.center[1] + self.intensity_caption.radius + 4.)
     }
     pub fn new(size: f32) -> Option<Self> {
         if !size.is_finite() || size < 128. {
@@ -1216,7 +1263,7 @@ impl ColorPanelLayout {
             shape_rotations: angles.map(|a| a + 90.),
             readout: [0., 0., c.round(), c.round()],
             readout_radius: (size - 28.) * 0.49 + 6.,
-            intensity_caption: [0.; 3],
+            intensity_caption: ColorArcCaption::default(),
         })
     }
 }
@@ -1714,6 +1761,43 @@ mod tests {
             assert!((a[0] - b[0]).hypot(a[1] - b[1]) >= a[2] - 0.5);
             assert_eq!(l.background[2], l.transparent[2]);
             assert!(l.foreground[2] > l.background[2]);
+        }
+    }
+
+    #[test]
+    fn hdr_caption_follows_the_lower_edge_and_clears_swap_at_every_panel_width() {
+        for size in 128..=600 {
+            let layout = ColorPanelLayout::with_hdr(size as f32).unwrap();
+            let arc = HdrIntensityArc::new(size as f32).unwrap();
+            let wheel = ColorWheelGeometry::new(layout.wheel[2]).unwrap();
+            let caption = layout.intensity_caption;
+            let outer = arc.radius + arc.width * 0.5;
+            assert_eq!(caption.font_size, (size as f32 * 0.044).clamp(9., 12.));
+            assert!(caption.radius - caption.font_size - outer
+                >= layout.readout_radius - wheel.outer - 1e-4);
+            for text in ["+0.00 EV", "-2.00 EV", "+16.00 EV", "-149.00 EV"] {
+                let advances: Vec<_> = text.chars().map(|c|
+                    caption.font_size * if c == '.' { 0.28 } else { 0.65 }).collect();
+                let glyphs = caption.glyphs(&advances);
+                assert!(glyphs.windows(2).all(|pair| pair[0][0] < pair[1][0] && pair[0][2] > pair[1][2]));
+                for ([x, y, rotation], advance) in glyphs.into_iter().zip(advances) {
+                    assert!(((x - caption.center[0]).hypot(y - caption.center[1]) - caption.radius).abs() < 1e-4);
+                    assert!((rotation - ((y - caption.center[1]).atan2(x - caption.center[0]).to_degrees() - 90.)).abs() < 1e-4);
+                    let angle = rotation.to_radians();
+                    for dx in [-advance * 0.5, advance * 0.5] {
+                        for dy in [-caption.font_size, 3.] {
+                            let p = [x + dx * angle.cos() - dy * angle.sin(), y + dx * angle.sin() + dy * angle.cos()];
+                            for control in [layout.foreground, layout.background, layout.swap, layout.transparent] {
+                                assert!((p[0] - control[0] - control[2] * 0.5).hypot(p[1] - control[1] - control[3] * 0.5)
+                                    >= control[2] * 0.5 + 3., "{size} {text}: {p:?} crowds {control:?}");
+                            }
+                            assert!(p[0] <= size as f32 && p[1] <= layout.height(), "{size} {text}: {p:?}");
+                            assert!((p[0] - arc.center[0]).hypot(p[1] - arc.center[1]) >= outer + 3.,
+                                "{size} {text}: {p:?} covers the intensity arc");
+                        }
+                    }
+                }
+            }
         }
     }
 

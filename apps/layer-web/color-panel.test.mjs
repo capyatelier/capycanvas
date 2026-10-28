@@ -369,6 +369,35 @@ export async function checkColorPanel({call,evaluate,settle}) {
     if(hdrState.depth!=='F16'||!hdrState.ready)await new Promise(resolve=>setTimeout(resolve,100));
   }while(hdrState.depth!=='F16'||!hdrState.ready);
   assert.equal(await evaluate('layerApp.app.color_panel().hdr'),true);
+  const captions=[];
+  for(const theme of ['light','dark'])for(const width of [128,144,280,360])for(const stops of [-2,0,6]) {
+    await send({type:'set_theme',theme});await resizePanel(width,width+100);
+    await send({type:'color',action:{op:'hdr_intensity',stops}});
+    const caption=await evaluate(`(()=>{
+      const root=document.querySelector(${JSON.stringify(root)}),stage=root.querySelector('.color-wheel-square'),svg=root.querySelector('.color-intensity'),group=svg.lastElementChild,box=stage.getBoundingClientRect(),footer=[...root.querySelectorAll('.color-swap,.color-swatch')].map(n=>{const r=n.getBoundingClientRect();return {label:n.dataset.colorSlot||'swap',center:[r.x+r.width/2-box.x,r.y+r.height/2-box.y],radius:r.width/2};}),layout=layerApp.app.color_ui({type:'layout',size:box.width,hdr:true}),arc=layerApp.app.color_ui({type:'arc',size:box.width,fraction:.5}).geometry;
+      const glyphs=[...group.children].map(n=>{const b=n.getBBox(),m=n.getScreenCTM(),points=[[b.x,b.y],[b.x+b.width,b.y],[b.x+b.width,b.y+b.height],[b.x,b.y+b.height]].map(([x,y])=>{const p=new DOMPoint(x,y).matrixTransform(m);return [p.x-box.x,p.y-box.y];});return {text:n.textContent,points,font:getComputedStyle(n).fontSize,rotation:Math.atan2(m.b,m.a)*180/Math.PI};});
+      return {glyphs,text:group.textContent,alpha:getComputedStyle(group).opacity,family:getComputedStyle(group).fontFamily,readoutFont:root.querySelector('.color-readout canvas').getContext('2d').font,stage:[box.width,box.height],footer,arc,layout};
+    })()`);
+    captions.push({theme,width,stops,...caption});
+    await writeFile(`${output}/hdr-captions.json`,JSON.stringify(captions,null,2));
+    if(stops<=0)await capturePanel(`${theme}-${width}-hdr-caption-${stops}`);
+    assert.equal(caption.text,`${stops>=0?'+':''}${stops.toFixed(2)} EV`);
+    assert.deepEqual(caption.footer.map(c=>c.label).sort(),['background','foreground','swap','transparent']);
+    assert.equal(caption.alpha,'0.8');assert.ok(caption.family.includes('Adwaita Sans'));
+    assert.ok(caption.readoutFont.includes('Adwaita Sans'));
+    assert.ok(caption.glyphs[0].rotation-caption.glyphs.at(-1).rotation>10,'Caption follows the lower arc');
+    for(const glyph of caption.glyphs) {
+      assert.ok(Math.abs(parseFloat(glyph.font)-caption.layout.intensity_caption.font_size)<.001,'Caption uses shared readout font size');
+      assert.ok(glyph.points.every(p=>p[1]>caption.arc.center[1]),'Caption stays on the lower arc');
+      if(glyph.text===' ')continue;
+      for(let edge=0;edge<4;edge++)for(let step=0;step<=8;step++) {
+        const a=glyph.points[edge],b=glyph.points[(edge+1)%4],t=step/8,x=a[0]+(b[0]-a[0])*t,y=a[1]+(b[1]-a[1])*t;
+        assert.ok(x>=-.5&&x<=caption.stage[0]+.5&&y>=-.5&&y<=caption.stage[1]+.5,`${theme} ${width}px ${stops}: caption fits stage`);
+        assert.ok(Math.hypot(x-caption.arc.center[0],y-caption.arc.center[1])>caption.arc.radius+caption.arc.width/2,`${theme} ${width}px ${stops}: caption clears painted ramp`);
+        for(const control of caption.footer)assert.ok(Math.hypot(x-control.center[0],y-control.center[1])>control.radius,`${theme} ${width}px ${stops}: caption clears ${control.label}`);
+      }
+    }
+  }
   for(const theme of ['light','dark']) {
     console.log('Paint pair: HDR rendition theme',theme);
     await send({type:'set_theme',theme});

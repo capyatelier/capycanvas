@@ -910,6 +910,54 @@ class AndroidColorPanelTest {
         send(MotionEvent.ACTION_UP, 1)
         host.drain(); settle()
     }
+    @Test fun hdrCaptionFitsNarrowAndNormalPanelsInBothThemes() {
+        host.createDrawing(640, 480, depth = "F16")
+        waitFor("HDR drawing ready") { view().optBoolean("hdr") && host.snapshot?.optBoolean("brush_ready") == true }
+        for (theme in listOf("light", "dark")) for (width in listOf(144, 280)) {
+            resize(width, width + 100)
+            action(obj("type" to "set_theme", "theme" to theme))
+            for (stops in listOf(-2.0, 0.0, 6.0)) {
+                color(obj("op" to "hdr_intensity", "stops" to stops))
+                val panel = bounds("color-panel")
+                val layout = JSONObject(Native.colorUi(obj("type" to "layout", "size" to panel.width / density, "hdr" to true).toString(), host.languageTag))
+                val font = layout.getJSONObject("intensity_caption").number("font_size")
+                val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                    typeface = android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.NORMAL)
+                    textSize = font
+                }
+                val text = "%+.2f EV".format(java.util.Locale.ROOT, stops)
+                val digit = ('0'..'9').maxOf { paint.measureText(it.toString()) }
+                val advances = text.map { if (it in '0'..'9' || it == ' ') digit else paint.measureText(it.toString()) }
+                val glyphs = JSONArray(Native.colorUi(obj("type" to "intensity_caption", "size" to panel.width / density, "advances" to JSONArray(advances)).toString(), host.languageTag))
+                val arc = JSONObject(Native.colorUi(obj("type" to "arc", "size" to panel.width / density, "fraction" to .5).toString(), host.languageTag)).getJSONObject("geometry")
+                val center = arc.getJSONArray("center")
+                val swap = layout.getJSONArray("swap")
+                assertEquals(text.length, glyphs.length())
+                val shot = capture("hdr-caption-$theme-$width-$stops")
+                try {
+                    for (i in text.indices) {
+                        val glyph = glyphs.getJSONArray(i)
+                        if (text[i] == ' ') continue
+                        val ink = android.graphics.Rect()
+                        paint.getTextBounds(text, i, i + 1, ink)
+                        val angle = Math.toRadians(glyph.getDouble(2))
+                        for (dx in listOf(ink.left, ink.right)) for (dy in listOf(ink.top, ink.bottom)) {
+                            val localX = dx - paint.measureText(text[i].toString()) / 2
+                            val px = glyph.getDouble(0) + localX * cos(angle) - dy * sin(angle)
+                            val py = glyph.getDouble(1) + localX * sin(angle) + dy * cos(angle)
+                            assertTrue("$theme/$width/$stops glyph $i fits ${panel.width / density} x ${panel.height / density}, shared height ${layout.number("height")}", px >= 0 && py >= 0 && px * density < shot.width && py * density < shot.height)
+                            assertTrue("$theme/$width/$stops glyph $i clears Swap", px < swap.getDouble(0) || px > swap.getDouble(0) + swap.getDouble(2) || py < swap.getDouble(1) || py > swap.getDouble(1) + swap.getDouble(3))
+                            for (slot in listOf("foreground", "background", "transparent")) {
+                                val swatch = layout.getJSONArray(slot)
+                                assertTrue("$theme/$width/$stops glyph $i clears $slot", hypot(px - swatch.getDouble(0) - swatch.getDouble(2) / 2, py - swatch.getDouble(1) - swatch.getDouble(3) / 2) > swatch.getDouble(2) / 2)
+                            }
+                            assertTrue("$theme/$width/$stops glyph $i clears EV ramp", hypot(px - center.getDouble(0), py - center.getDouble(1)) > arc.getDouble("radius") + arc.getDouble("width") / 2)
+                        }
+                    }
+                } finally { shot.recycle() }
+            }
+        }
+    }
     @Test fun wheelAndArcTapsAndMenuUndoColorChanges() {
         host.createDrawing(640, 480, depth = "F16")
         waitFor("HDR drawing ready") { host.snapshot?.objectOrNull("color_panel")?.optBoolean("hdr") == true && host.snapshot?.optBoolean("brush_ready") == true }

@@ -87,8 +87,9 @@ fn native_hdr_picker_intensity_shape_and_input() {
         assert_eq!(scale.is_visible(), hdr);
         let pencil = named::<gtk::Button>(root.upcast_ref(), "color-edit-button");
         let swap = find_named(root.upcast_ref(), "color-swap").unwrap();
-        assert_eq!([pencil.width(), pencil.height()], [swap.width(), swap.height()]);
         let pencil_bounds = pencil.compute_bounds(root).unwrap();
+        let swap_bounds = swap.compute_bounds(root).unwrap();
+        assert_eq!([pencil_bounds.width(), pencil_bounds.height()], [swap_bounds.width(), swap_bounds.height()]);
         let label_bounds = find_named(root.upcast_ref(), "color-readout").unwrap().compute_bounds(root).unwrap();
         assert_eq!(pencil_bounds.y(), label_bounds.y());
         assert!(pencil_bounds.x() > label_bounds.x() + label_bounds.width());
@@ -353,8 +354,9 @@ fn native_hdr_picker_intensity_shape_and_input() {
             );
             input.perform(serde_json::json!([{"wait_ms":500},{"point":locate(3.)},{"down":true},{"down":false},{"wait_ms":50},{"down":true},{"down":false}]));
             assert_eq!(state(&w).colors.hdr_intensity(), 0., "Double-click resets to 1×, not +1 EV");
-            let [x, y, font] = layer_ui::ColorPanelLayout::with_hdr(scale.width() as f32).unwrap().intensity_caption;
-            let point = scale.compute_point(&w.window, &gtk::graphene::Point::new(x, y - font * 0.5)).unwrap();
+            let caption = layer_ui::ColorPanelLayout::with_hdr(scale.width() as f32).unwrap().intensity_caption;
+            let [x, y, _] = caption.glyphs(&[caption.font_size])[0];
+            let point = scale.compute_point(&w.window, &gtk::graphene::Point::new(x, y - caption.font_size * 0.5)).unwrap();
             let original = state(&w).colors;
             input.perform(serde_json::json!([{"wait_ms":500},{"point":[point.x(),point.y()]},{"down":true},{"down":false}]));
             assert!(w.window.visible_dialog().is_none(), "EV caption is read-only");

@@ -9,12 +9,14 @@ struct HDRIntensityArc: View {
     let geometry: JSON
     let caption: JSON
     let size: CGFloat
+    var ink: Color = .primary
     var contact: ((String) -> Void)? = nil
     var touches: ColorTouchSurface? = nil
     let set: (Double) -> Void
     @State private var original: Double?
     @State private var range: [Double]?
     @StateObject private var resources = ColorUIResourceCache()
+    @StateObject private var captionResources = ColorUIResourceCache()
     var body: some View {
         let arc = resources.resolve(["type": "intensity_arc", "size": size, "stops": model["intensity"].number,
             "base": model["base"].raw, "document_space": viewing["document_space"].raw,
@@ -37,10 +39,21 @@ struct HDRIntensityArc: View {
                 if !value.isNull { set(value.number) }
                 if phase == "up" { original = nil; self.range = nil; contact?("up") }
             }.accessibilityHidden(true)
-            let font = caption[2].number, label = String(format: "%+.2f EV", model["intensity"].number)
-            Text(label).font(.system(size: font)).monospacedDigit().fixedSize().allowsHitTesting(false)
-                .offset(x: caption[0].number - EditorTextMetrics.width(label, size: font, weight: .regular, monospacedDigits: true) / 2,
-                    y: caption[1].number - EditorTextMetrics.ascent(size: font))
+            let font = caption["font_size"].number, label = String(format: "%+.2f EV", model["intensity"].number)
+            let widths = label.map { EditorTextMetrics.width(String($0), size: font, weight: .regular) }
+            let digit = "0123456789".map { EditorTextMetrics.width(String($0), size: font, weight: .regular) }.max() ?? 0
+            let advances = zip(label, widths).map { glyph, width in glyph.isNumber || glyph == " " ? digit : width }
+            let placements = captionResources.resolve(["type": "intensity_caption", "size": size, "advances": advances], language: language)
+            Canvas { graphics, _ in
+                for (index, glyph) in label.enumerated() {
+                    let placement = placements[index]
+                    var local = graphics
+                    local.translateBy(x: placement[0].number, y: placement[1].number)
+                    local.rotate(by: .degrees(placement[2].number))
+                    EditorTextMetrics.draw(String(glyph), size: font, weight: .regular, in: local,
+                        baseline: CGPoint(x: -widths[index] / 2, y: 0), color: ink.opacity(0.8))
+                }
+            }.allowsHitTesting(false)
                 .accessibilityElement().accessibilityLabel(nativeCopy["color"]["intensity"].string).accessibilityValue(label)
                 .accessibilityIdentifier("color-intensity")
                 .accessibilityAdjustableAction { set(model["intensity"].number + ($0 == .increment ? 0.1 : -0.1)) }
