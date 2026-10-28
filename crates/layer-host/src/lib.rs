@@ -332,8 +332,6 @@ impl NativeHost {
         self.dirty = true;
         Ok(())
     }
-    /// Shared staged GPU lifecycle. Presenters submit the first constant-fill frame
-    /// before passing `has_presented = true`; it must not consume document replay.
     pub fn prepare_canvas_frame(
         &mut self,
         now: u64,
@@ -373,9 +371,9 @@ impl NativeHost {
                 self.apply_change(previous, change);
             }
         } else {
-            self.startup=self.session.renderer_mut().0.as_mut()
-                .ok_or("Missing native renderer")?.poll_startup().map_err(|e|e.to_string())?;
-            self.session.submit_backdrop_frame()?;
+            let gpu = self.session.renderer_mut().0.as_mut().ok_or("Missing native renderer")?;
+            self.startup = gpu.poll_startup().map_err(|e| e.to_string())?;
+            if !gpu.has_presentable_frame() { self.session.submit_backdrop_frame()?; }
         }
         self.dirty |= !self.startup.complete || self.session.holding_input();
         Ok(())
@@ -1367,6 +1365,37 @@ mod tests {
             host.session.rendering_diagnostics(),
             host.session.state().commands.iter().find(|command| command.id == layer_ui::CommandId::ScaleRotate).map(|command| command.enabled));
         std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+
+    #[test]
+    fn the_first_surface_frame_preserves_a_prepared_drawing() {
+        for platform in [layer_ui::Platform::Android, layer_ui::Platform::Windows, layer_ui::Platform::Mac, layer_ui::Platform::Ios] {
+            let (_reference, mut host) = gpu_host(platform, [64; 2]);
+            let clock = std::cell::Cell::new(0);
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+            while !host.startup.complete { frame_step(&mut host, &clock, deadline); }
+            host.dispatch(serde_json::from_value(json!({"type":"set_color","rgba":[0.2,0.45,0.8,1]})).unwrap()).unwrap();
+            for command in [layer_ui::CommandId::SelectAll, layer_ui::CommandId::FillSelection, layer_ui::CommandId::Deselect] {
+                host.dispatch(UiAction::Invoke { command }).unwrap();
+            }
+            let points = [Point { x: 32., y: 32. }];
+            let prepared = loop {
+                frame_step(&mut host, &clock, deadline);
+                let pixels = presented(&host, &points);
+                if i32::from(pixels[0][2]) > i32::from(pixels[0][0]) + 50 { break pixels; }
+            };
+            let checkpoint = host.session.engine().checkpoint();
+            let submitted = host.session.engine().backend().0.as_ref().unwrap().submitted_updates();
+            for _ in 0..2 {
+                host.prepare_canvas_frame(clock.get(), clock.get(), false).unwrap();
+                assert_eq!(presented(&host, &points), prepared, "{platform:?}: an unpresented surface keeps the prepared drawing");
+                assert_eq!(host.session.engine().checkpoint(), checkpoint);
+            }
+            assert_eq!(host.session.engine().backend().0.as_ref().unwrap().submitted_updates(), submitted,
+                "{platform:?}: a prepared first frame needs no replacement submission");
+            frame_step(&mut host, &clock, deadline);
+            assert_eq!(presented(&host, &points), prepared, "{platform:?}: normal frame preparation keeps the drawing");
+        }
     }
 
     #[test]
