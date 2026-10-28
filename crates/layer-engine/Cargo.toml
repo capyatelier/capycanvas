@@ -1,6 +1,7 @@
 [package]
 name = "layer-engine"
 version.workspace = true
+rust-version.workspace = true
 edition = "2024"
 description = "Portable input, brush, document orchestration, and render submission for Layer"
 license.workspace = true

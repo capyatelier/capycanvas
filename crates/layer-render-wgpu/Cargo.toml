@@ -1,6 +1,7 @@
 [package]
 name = "layer-render-wgpu"
 version.workspace = true
+rust-version.workspace = true
 edition = "2024"
 description = "GPU-resident wgpu raster backend for Layer"
 license.workspace = true

@@ -2,6 +2,7 @@
 name = "layer-linux"
 default-run = "layer-linux"
 version.workspace = true
+rust-version.workspace = true
 edition.workspace = true
 license.workspace = true
 

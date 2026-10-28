@@ -1,6 +1,7 @@
 [package]
 name = "layer-bench"
 version.workspace = true
+rust-version.workspace = true
 edition = "2024"
 description = "Completed-work wgpu canvas benchmark and brush-preview generator"
 license.workspace = true

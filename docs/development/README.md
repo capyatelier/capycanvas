@@ -23,8 +23,8 @@ and follow the rules in [`AGENTS.md`](../../AGENTS.md) and the
 
 ## Build a client
 
-Run commands from the repository root unless a guide says otherwise. Use a recent
-stable Rust toolchain; the workspace uses Rust 2024. Pass `--locked` and keep
+Run commands from the repository root unless a guide says otherwise. Use Rust
+1.99.0 or newer; the workspace uses Rust 2024. Pass `--locked` and keep
 `Cargo.lock` intact.
 
 | Platform | Guide |

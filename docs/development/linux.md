@@ -13,7 +13,7 @@ For the Flatpak runtime, signed downloads and update repository, see
 
 ## Prerequisites
 
-Install a recent stable Rust toolchain, a C/C++ toolchain, `pkg-config`, and the
+Install Rust 1.99.0 or newer, a C/C++ toolchain, `pkg-config`, and the
 GTK 4.22+, libadwaita 1.9 and Wayland development packages. Enabled API features
 are declared in [`apps/layer-linux/Cargo.toml`](../../apps/layer-linux/Cargo.toml).
 The launcher builds its own [GTK 4.24.1, GLib 2.90.1 and Pango 1.58.2 runtime](../../tools/build/gtk-runtime/README.md),

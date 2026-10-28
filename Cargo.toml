@@ -37,6 +37,7 @@ moxcms = { path = "vendor/moxcms" }
 [workspace.package]
 version = "1.0.15"
 edition = "2024"
+rust-version = "1.99.0"
 license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]

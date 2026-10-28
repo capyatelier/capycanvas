@@ -1,6 +1,7 @@
 [package]
 name = "layer-core"
 version.workspace = true
+rust-version.workspace = true
 edition = "2024"
 description = "Portable document model, edits and project format for Capy Canvas"
 license.workspace = true

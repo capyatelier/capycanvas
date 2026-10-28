@@ -1,6 +1,7 @@
 [package]
 name = "layer-render"
 version.workspace = true
+rust-version.workspace = true
 edition = "2024"
 description = "Minimal backend-neutral render packets for Layer"
 license.workspace = true
