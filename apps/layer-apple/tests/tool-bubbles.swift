@@ -452,7 +452,7 @@ private struct BubbleGlassProbeView: View {
         _ = model.down(firstFinger, id: 220, device: .touch, clicks: 1, doubleTime: 0.4, time: 20.2)
         _ = model.down(secondFinger, id: 221, device: .touch, clicks: 1, doubleTime: 0.4, time: 20.3)
         _ = model.move(CGPoint(x: secondFinger.x - 0.4, y: secondFinger.y), id: 221)
-        try require(color.placement.pinch != 1, "A small pinch has a transient native scale")
+        try require(color.placement.pinch == 1, "Contacts below the drag threshold preserve the native scale")
         _ = model.up(firstFinger, id: 220, cancelled: false); _ = model.up(secondFinger, id: 221, cancelled: false)
         try require(color.placement.pinch == 1, "A sub-threshold pinch clears its transient scale on release")
         try await tick(); try await settled("Small pinch release")
