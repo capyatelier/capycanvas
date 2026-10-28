@@ -31,6 +31,33 @@ export async function checkDragCursors({ call, evaluate, settle }) {
   const release = async () => { await call("Input.dispatchMouseEvent", { type: "mouseReleased", ...last, button: "left", buttons: 0, clickCount: 1 }); held = false; await wait(); };
   try {
     for(const theme of ['light','dark'])for(const drawer of [false,true]){
+      const automatic=structuredClone(fixture);
+      const panels=drawer?['brushes','sizes','layers','adjustments']:['toolbar','tool_settings','color','palettes','layers','adjustments'];
+      const [first,second]=panels;
+      automatic.layout.bands=[{id:42,edge:'right',extent:304,root:{...tabs(43,panels),tab_style:'automatic'}}];
+      await send({type:'restore_workspace',workspace:automatic});await send({type:'set_theme',theme});
+      if(drawer){
+        await send({type:'customize',action:{type:'set_column_collapsed',group:43,collapsed:true}});
+        await send({type:'customize',action:{type:'set_column_drawers',column:43,drawers:true}});
+        await evaluate(`document.querySelector('.collapsed-column[data-column="43"] [data-panel="${first}"]').click()`);await wait();
+      }
+      const strip=drawer?'.drawer-tab-strip':'[data-group="43"] .tab-list';
+      const names=()=>evaluate(`Object.fromEntries([...document.querySelector(${JSON.stringify(strip)}).children].map(tab=>[tab.dataset.panel,!tab.lastElementChild.hidden]))`);
+      const before=await names(),extent=await rect(strip);
+      assert.equal(before[first],true,`${theme} drawer=${drawer}: first automatic tab is named`);
+      assert.equal(before[second],false,`${theme} drawer=${drawer}: next tab starts icon-only`);
+      const source=`${strip} [data-panel="${first}"]`,start=center(await rect(source));
+      const neighbor=await rect(`${strip} [data-panel="${second}"]`);
+      await press(start);await move({x:start.x+neighbor.width/2+2,y:start.y});await release();await clean();
+      const reordered=await names();
+      assert.deepEqual(await evaluate(`[...document.querySelector(${JSON.stringify(strip)}).children].map(tab=>tab.dataset.panel)`),[second,first,...panels.slice(2)]);
+      await send({type:'customize',action:{type:'set_tab_style',group:43,style:'icon'}});
+      await send({type:'customize',action:{type:'set_tab_style',group:43,style:'automatic'}});
+      assert.equal((await rect(strip)).width,extent.width,'The fresh automatic strip has the same extent');
+      assert.notDeepEqual(await names(),before,'Reordering changes automatic name priority');
+      assert.deepEqual(reordered,await names(),`${theme} drawer=${drawer}: post-drop names match a fresh build of the same order`);
+    }
+    for(const theme of ['light','dark'])for(const drawer of [false,true]){
       await send({type:'restore_workspace',workspace:fixture});await send({type:'set_theme',theme});
       if(drawer){
         await send({type:'customize',action:{type:'set_column_collapsed',group:41,collapsed:true}});

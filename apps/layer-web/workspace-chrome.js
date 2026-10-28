@@ -51,7 +51,7 @@ document.addEventListener('scroll',event=>{
 },true);
 export function releaseTabSurfaces(root){for(const node of root.querySelectorAll('.dock-tab,.tab-list,.drawer-tab-strip'))tabSurfaces.unobserve(node);}
 export function orderPanelTabs(strip,panels){
-  if(!strip||panels.every((id,index)=>strip.children[index]?.dataset.panel===id))return;
+  if(!strip||panels.every((id,index)=>strip.children[index]?.dataset.panel===id))return false;
   const tabs=new Map([...strip.children].map(tab=>[tab.dataset.panel,tab]));
   const pinned=!strip.moveBefore&&[...tabs.values()].find(tab=>tab.contains(document.activeElement));
   if(pinned){
@@ -66,6 +66,7 @@ export function orderPanelTabs(strip,panels){
     else strip.insertBefore(tab,strip.children[index]??null);
   });
   for(const tab of strip.children){const size=tabSizes.get(tab);if(size)drawTabSurface(tab,size);}
+  return true;
 }
 export function prepareTabPreview(tab){const surface=tab.querySelector(':scope > .tab-surface');if(surface){const id=`tab-surface-${++tabSurfaceId}`;surface.querySelector('filter').id=id;surface.lastElementChild.setAttribute('filter',`url(#${id})`);const box=surface.viewBox.baseVal;if(box.width>0)tabSizes.set(tab,{width:box.width,height:box.height});}}
 export function tabHover(tab, presentation) {
@@ -243,7 +244,7 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
       record.tabStyle=drawer.tabs?app.group_tab_style(drawer.tabs.group):null;
       const header=record.root.querySelector(':scope > .drawer-tabs');
       if(header&&drawer.tabs&&header.dataset.tabStyle!==record.tabStyle){releaseTabs(header);header.remove();}
-      else if(header&&drawer.tabs)orderPanelTabs(header.firstElementChild,drawer.tabs.panels);
+      else if(header&&drawer.tabs&&orderPanelTabs(header.firstElementChild,drawer.tabs.panels)&&record.tabStyle==='automatic')automaticTabs(header.firstElementChild);
       record.closing=false;
       record.root.inert=false;
       record.inspector?.refresh(layer_properties);

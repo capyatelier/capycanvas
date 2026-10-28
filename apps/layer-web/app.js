@@ -644,7 +644,8 @@ function presentWorkspaceLayout(resolved,layoutOnly) {
         }
       }
       const preview = node.querySelector(".panel-preview");
-      orderPanelTabs(preview.querySelector('.tab-list'),group.panels);
+      const strip=preview.querySelector('.tab-list');
+      if(orderPanelTabs(strip,group.panels)&&strip.dataset.automatic)automaticTabs(strip);
       const previous = preview.querySelector(":scope > .panel-frame");
       if (previous !== body) previous ? previous.replaceWith(body) : preview.append(body);
       node.dataset.panel = group.active;
