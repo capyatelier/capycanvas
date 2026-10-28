@@ -444,16 +444,29 @@ internal class DockInteraction(val host: CanvasHost) {
 private fun Modifier.workspaceGestureCapture(dock: DockInteraction, focused: Boolean): Modifier = pointerInput(dock, focused) {
     if (!focused) return@pointerInput
     data class Tap(val target: String, val time: Long, val position: Offset, val device: PointerType)
-    var chromeTap: Tap? = null
-    var edgeTap: Tap? = null
+    var lastTap: Tap? = null
     awaitEachGesture {
         val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+        val previousTap = lastTap
+        lastTap = null
         dock.cancelPendingContext()
         if (dock.bubbleCaptured || down.isConsumed) return@awaitEachGesture
         dock.beginContact(down.position, down.type)
         try {
-            val previousTap = chromeTap
-            chromeTap = null
+            fun doubleTap(target: String, up: PointerInputChange): Boolean {
+                val tap = Tap(target, up.uptimeMillis, down.position, down.type)
+                lastTap = tap
+                if (previousTap?.target != target || previousTap.device != down.type ||
+                    down.uptimeMillis - previousTap.time !in viewConfiguration.doubleTapMinTimeMillis..viewConfiguration.doubleTapTimeoutMillis) return false
+                if (target == "edge") {
+                    dock.host.input(obj("type" to "edge_double_press", "kind" to pointerKind(down.type), "contact" to "free",
+                        "previous_position" to JSONArray(listOf(previousTap.position.x / dock.density, previousTap.position.y / dock.density)),
+                        "position" to JSONArray(listOf(down.position.x / dock.density, down.position.y / dock.density)), "viewport" to dock.viewport)) {
+                        if (it.optBoolean("handled") && lastTap === tap) lastTap = null
+                    }
+                } else lastTap = null
+                return true
+            }
             val chrome = dock.chromeRegions.values.filter { it.bounds.contains(down.position) }.maxByOrNull { it.z }
             val source = dock.hit(down.position)
             dock.contactSource = source?.token
@@ -497,7 +510,7 @@ private fun Modifier.workspaceGestureCapture(dock: DockInteraction, focused: Boo
                     ?.any { it.getInt("id") == divider && it.optBoolean("band") && it.optString("axis") == "horizontal" } == true
                 // The registered source distinguishes empty header/grip contacts
                 // from tabs, even inside a scrollable tab strip.
-                val tapTarget = if (band) "divider:$divider" else group?.let { "group:${it.getInt("group")}" } ?: column?.let { "column:$it" }
+                val tapTarget = if (band) "edge" else group?.let { "group:${it.getInt("group")}" } ?: column?.let { "column:$it" }
                 dock.contactHeld = true
                 dock.contactSource = source.token
                 dock.retiredContext = null
@@ -560,15 +573,11 @@ private fun Modifier.workspaceGestureCapture(dock: DockInteraction, focused: Boo
                             if (retired) change.consume()
                             if (started) dock.finish(false)
                             else if (tapTarget != null && !held && !retired && change.uptimeMillis - down.uptimeMillis < viewConfiguration.longPressTimeoutMillis) {
-                                val gap = down.uptimeMillis - (previousTap?.time ?: 0)
-                                if (previousTap?.target == tapTarget && previousTap.device == down.type &&
-                                    gap in viewConfiguration.doubleTapMinTimeMillis..viewConfiguration.doubleTapTimeoutMillis &&
-                                    (down.position - previousTap.position).getDistance() <= viewConfiguration.touchSlop * 2) {
+                                if (doubleTap(tapTarget, change)) {
                                     change.consume()
-                                    if (band) dock.host.dispatch(obj("type" to "reset_column_width", "id" to divider, "viewport" to dock.viewport))
-                                    else if (column != null) dock.host.customize(obj("type" to "set_column_collapsed", "group" to column, "collapsed" to false))
-                                    else group?.let(dock::doubleClickHandle)
-                                } else chromeTap = Tap(tapTarget, change.uptimeMillis, change.position, down.type)
+                                    if (column != null) dock.host.customize(obj("type" to "set_column_collapsed", "group" to column, "collapsed" to false))
+                                    else if (!band) group?.let(dock::doubleClickHandle)
+                                }
                             }
                             released = true; break
                         }
@@ -587,16 +596,8 @@ private fun Modifier.workspaceGestureCapture(dock: DockInteraction, focused: Boo
             // child delivers its native long-click callback.
             while (currentEvent.changes.any { it.pressed }) awaitPointerEvent(PointerEventPass.Final)
             val up = tapUp?.takeIf { resettable }?.let { awaitPointerEvent(PointerEventPass.Final).changes.firstOrNull { it.id == down.id } }
-            val previousEdgeTap = edgeTap
-            edgeTap = up?.takeIf { !it.isConsumed && it.uptimeMillis - down.uptimeMillis < viewConfiguration.longPressTimeoutMillis &&
-                (it.position - down.position).getDistance() <= viewConfiguration.touchSlop }?.let { Tap("edge", it.uptimeMillis, it.position, down.type) }
-            if (edgeTap != null && previousEdgeTap?.device == down.type &&
-                down.uptimeMillis - previousEdgeTap.time in viewConfiguration.doubleTapMinTimeMillis..viewConfiguration.doubleTapTimeoutMillis &&
-                (down.position - previousEdgeTap.position).getDistance() <= viewConfiguration.touchSlop * 2) {
-                edgeTap = null
-                dock.host.input(obj("type" to "edge_double_press", "kind" to pointerKind(down.type), "contact" to "free",
-                    "position" to JSONArray(listOf(down.position.x / dock.density, down.position.y / dock.density)), "viewport" to dock.viewport))
-            }
+            up?.takeIf { !it.isConsumed && it.uptimeMillis - down.uptimeMillis < viewConfiguration.longPressTimeoutMillis &&
+                (it.position - down.position).getDistance() <= viewConfiguration.touchSlop }?.let { doubleTap("edge", it) }
         } finally { dock.cancelEdge(); dock.headerHeld = false; dock.refresh(); dock.contactType = null; dock.contactPosition = null; dock.contactSource = null }
     }
 }

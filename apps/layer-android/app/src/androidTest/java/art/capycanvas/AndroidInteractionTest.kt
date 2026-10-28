@@ -1753,6 +1753,61 @@ class AndroidInteractionTest {
         } finally { action(obj("type" to "set_theme", "theme" to originalTheme)) }
     }
 
+    @Test fun columnDoubleTapKeepsNativeTapSpacingAndJitter() {
+        fixture.getJSONObject("layout").apply {
+            put("bands", JSONArray(listOf(
+                obj("id" to 40, "edge" to "left", "extent" to 420, "root" to tabs(41, "stats")),
+                obj("id" to 42, "edge" to "right", "extent" to 330, "root" to tabs(43, "navigator")))))
+            for (key in listOf("floating", "collapsed", "column_stacks", "column_scroll", "fit_tab_groups", "fit_height_groups")) put(key, JSONArray())
+        }
+        val slop = android.view.ViewConfiguration.get(activity).scaledTouchSlop.toFloat()
+        val separation = slop * 2 + 10
+        val jitter = Offset(0f, slop / 2)
+        fun extent() = state().getJSONObject("workspace").getJSONObject("layout").array("bands").objects()
+            .first { it.getInt("id") == 40 }.number("extent")
+        fun position(id: Int, reach: Boolean): Offset {
+            val edge = bounds("divider-$id")
+            return Offset(if (reach) edge.left - 20 * density else edge.center.x, edge.bottom - 100 * density)
+        }
+        fun contact(at: Offset, cancel: Boolean = false) {
+            event(MotionEvent.ACTION_DOWN, at)
+            event(MotionEvent.ACTION_MOVE, at + jitter)
+            SystemClock.sleep(40)
+            event(if (cancel) MotionEvent.ACTION_CANCEL else MotionEvent.ACTION_UP)
+        }
+        for (theme in listOf("light", "dark")) for (pointer in pointerTools) {
+            tool = pointer
+            action(obj("type" to "set_theme", "theme" to theme))
+            for ((firstReach, secondReach) in listOf(false to false, true to true, false to true, true to false)) {
+                restore()
+                val before = workspace()
+                val first = position(40, firstReach)
+                val second = position(40, secondReach) - Offset(0f, separation)
+                val name = "$theme/$pointer/$firstReach/$secondReach"
+                contact(first)
+                SystemClock.sleep(80)
+                contact(second)
+                waitFor("$name separated double tap resets column") { extent() == 0f }
+                action(obj("type" to "invoke", "command" to "undo_workspace"))
+                assertEquals("$name reset is one workspace Undo", before, workspace())
+                action(obj("type" to "invoke", "command" to "redo_workspace"))
+                assertEquals("$name reset is restored by Redo", 0f, extent(), .01f)
+            }
+            for (rejected in listOf("cancel", "device", "target")) {
+                restore()
+                val before = workspace()
+                val first = position(40, false)
+                contact(first, cancel = rejected == "cancel")
+                SystemClock.sleep(80)
+                if (rejected == "device") tool = if (pointer == MotionEvent.TOOL_TYPE_FINGER) MotionEvent.TOOL_TYPE_STYLUS else MotionEvent.TOOL_TYPE_FINGER
+                contact(if (rejected == "target") position(42, false) else first - Offset(0f, separation))
+                settle()
+                assertEquals("$theme/$pointer $rejected never resets a column", before, workspace())
+                tool = pointer
+            }
+        }
+    }
+
     @Test fun stackedColumnDropsKeepFooterAppendTargets() {
         stackFixture()
         for (pointer in pointerTools) for (source in listOf("panel", "group", "toolbar", "tile", "drawer")) {

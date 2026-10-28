@@ -96,8 +96,10 @@ fn a_double_press_in_a_column_reach_resets_it_except_on_controls() {
     s.dispatch(UiAction::DragDivider { id: d.id, phase: ContactPhase::Up, position: [d.bounds.x + 63., 500.], viewport: VIEW }).unwrap();
     assert!(width(&s) > initial + 30.);
     let d = column_edge(&s);
-    let press = |contact| UiInput::EdgeDoublePress { kind: PointerKind::Mouse, contact, position: [d.bounds.x - 20., 500.], viewport: VIEW };
-    assert!(!s.input(press(EdgeContact::Pickup)).unwrap().handled);
-    assert!(s.input(press(EdgeContact::Free)).unwrap().handled);
+    let press = |contact, previous_position| UiInput::EdgeDoublePress { kind: PointerKind::Mouse, contact, previous_position, position: [d.bounds.x - 20., 500.], viewport: VIEW };
+    assert!(!s.input(press(EdgeContact::Pickup, None)).unwrap().handled);
+    assert!(!s.input(press(EdgeContact::Free, Some([800., 500.]))).unwrap().handled);
+    assert!(width(&s) > initial + 30.);
+    assert!(s.input(press(EdgeContact::Free, Some([d.bounds.x + d.bounds.width * 0.5, 400.]))).unwrap().handled);
     assert!((width(&s) - initial).abs() < 0.5);
 }

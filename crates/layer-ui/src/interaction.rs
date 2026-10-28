@@ -358,6 +358,8 @@ pub enum UiInput {
     EdgeDoublePress {
         kind: PointerKind,
         contact: crate::EdgeContact,
+        #[serde(default)]
+        previous_position: Option<[f32; 2]>,
         position: [f32; 2],
         viewport: [f32; 2],
     },

@@ -35,8 +35,10 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     pub(crate) fn edge_contact_input(&mut self, input: UiInput) -> Result<InputReply, String> {
         let mut reply = InputReply::default();
-        if let UiInput::EdgeDoublePress { kind, contact, position, viewport } = input {
-            if contact == EdgeContact::Free && let Some(id) = self.layout(viewport).edge_reset_at(position, kind) {
+        if let UiInput::EdgeDoublePress { kind, contact, previous_position, position, viewport } = input {
+            let layout = self.layout(viewport);
+            if contact == EdgeContact::Free && let Some(id) = layout.edge_reset_at(position, kind)
+                && previous_position.is_none_or(|point| layout.edge_reset_at(point, kind) == Some(id)) {
                 reply.change = self.dispatch(UiAction::ResetColumnWidth { id, viewport })?;
                 reply.handled = true;
             }
