@@ -25,6 +25,7 @@ __declspec(dllimport) CapyPreview capy_layer_menu(CapyHost, const char* json);
 typedef uint64_t CapyLayoutInput;
 __declspec(dllimport) CapyLayoutInput capy_layout_input_prepare(const char* json);
 __declspec(dllimport) void capy_layout_input_free(CapyLayoutInput);
+__declspec(dllimport) CapyLayoutInput capy_layout_input_measure(CapyLayoutInput, const char* measurements);
 __declspec(dllimport) CapyString capy_layout_resolve(CapyLayoutInput, float width, float height);
 __declspec(dllimport) CapyString capy_panel_bridges(CapyLayoutInput, float width, float height, const char* measure);
 /* Read-only workspace geometry/menu queries, on the render owner. Metadata
@@ -149,6 +150,9 @@ typedef struct CapySnapshotInfo {
     CapySnapshotRange camera, localization, navigation_cursor, brush_ready, glass;
 } CapySnapshotInfo;
 __declspec(dllimport) CapyString capy_snapshot(CapyHost, CapySnapshotInfo*);
+__declspec(dllimport) uint64_t capy_model_updates_new(void);
+__declspec(dllimport) void capy_model_updates_free(uint64_t);
+__declspec(dllimport) CapyString capy_model_updates_publish(uint64_t, const char* json);
 __declspec(dllimport) CapyString capy_query(CapyHost, const char* json);
 /* Local-only DXGI identity for correlating a pen latency trace with ETW. */
 __declspec(dllimport) CapyString capy_surface_info(CapyHost);

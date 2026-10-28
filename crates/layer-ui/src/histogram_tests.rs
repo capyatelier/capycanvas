@@ -173,6 +173,64 @@ fn histogram_document_epoch_and_selected_layer_target_reject_stale_completion() 
 }
 
 #[test]
+fn histogram_exact_result_survives_hide_show_until_its_artwork_key_changes() {
+    for changed in 0..3 {
+        let mut s=histogram_session();
+        histogram_reply(&mut s,7,150_000_000);
+        s.frame(350_000_000,350_000_000).unwrap();
+        histogram_reply(&mut s,11,400_000_000);
+        assert!(s.histogram.settled);
+        let sample=s.state.histogram.data.clone().unwrap();
+        let count=s.engine.backend().snapshot_requests.len();
+        customize(&mut s,CustomizationAction::CloseExpanded);
+        customize(&mut s,CustomizationAction::SetPanelVisible {panel:Panel::Histogram,visible:false});
+        s.frame(500_000_000,500_000_000).unwrap();
+        assert!(!s.histogram.demand);
+        assert!(std::sync::Arc::ptr_eq(s.state.histogram.data.as_ref().unwrap(),&sample));
+        if changed==1 {s.state.document_file.epoch+=1;}
+        if changed==2 {
+            let handle=s.engine.document().scene().order()[1];
+            let mut occurrence=s.engine.document().scene().occurrence(handle).unwrap().clone();occurrence.opacity=0.5;
+            let edit=layer_core::authored::RecordChange::replace(&s.engine.document().artwork.occurrences,handle,Some(occurrence)).unwrap();
+            s.engine.apply_edit(layer_core::Edit::Occurrence(edit)).unwrap();
+        }
+        invoke(&mut s,CommandId::Histogram);
+        s.frame(1_000_000_000,1_000_000_000).unwrap();
+        assert!(s.histogram.demand);
+        if changed!=0 {
+            assert_eq!(s.engine.backend().snapshot_requests.len(),count+1);
+            assert!(!s.histogram.settled);
+            if changed==1 {assert!(s.state.histogram.data.is_none());}
+        } else {
+            assert_eq!(s.engine.backend().snapshot_requests.len(),count);
+            assert!(s.histogram.settled);
+            assert!(std::sync::Arc::ptr_eq(s.state.histogram.data.as_ref().unwrap(),&sample));
+        }
+    }
+}
+
+#[test]
+fn hidden_waveform_cache_does_not_wake_unrelated_layout_changes() {
+    let mut s=histogram_session();
+    s.reveal_panel(Panel::Waveform).unwrap();
+    s.frame(200_000_000,200_000_000).unwrap();
+    histogram_reply(&mut s,7,250_000_000);
+    s.frame(450_000_000,450_000_000).unwrap();
+    histogram_reply(&mut s,11,500_000_000);
+    assert!(s.histogram.settled);
+    assert!(matches!(s.engine.backend().snapshot_requests.last(),Some(layer_render::SnapshotRequest::ArtworkStatistics(request)) if request.waveform));
+    customize(&mut s,CustomizationAction::CloseExpanded);
+    for panel in [Panel::Histogram,Panel::Waveform] {
+        customize(&mut s,CustomizationAction::SetPanelVisible {panel,visible:false});
+    }
+    s.frame(600_000_000,600_000_000).unwrap();
+    assert!(!s.histogram.demand && s.histogram.settled);
+    let group=s.state.workspace.layout.panel_group(Panel::Properties).unwrap();
+    let change=s.dispatch(UiAction::Customize {action:CustomizationAction::SetTabStyle {group,style:TabStyle::ALL[1]}}).unwrap();
+    assert!(!change.canvas_wake);
+}
+
+#[test]
 fn histogram_hidden_or_suspended_releases_query_and_retained_data() {
     for suspend in [false, true] {
         let mut s = histogram_session();
@@ -468,7 +526,7 @@ fn targeted_sampling_retains_settled_tonal_statistics_for_unchanged_input() {
 }
 
 #[test]
-fn histogram_settled_tab_hide_and_show_wake_retirement_without_unrelated_layout_wakes() {
+fn histogram_settled_tab_hide_and_show_reuses_data_without_unrelated_layout_wakes() {
     for effect in [None,Some("curves"),Some("levels")] {
     let mut s=session(Platform::Gtk);
     if let Some(effect)=effect {s.dispatch(UiAction::Effect {action:EffectAction::Insert {effect:effect.into()}}).unwrap();}
@@ -481,14 +539,16 @@ fn histogram_settled_tab_hide_and_show_wake_retirement_without_unrelated_layout_
     s.reveal_panel(panel).unwrap();s.frame(100_000_000,100_000_000).unwrap();
     histogram_reply(&mut s,7,150_000_000);s.frame(350_000_000,350_000_000).unwrap();histogram_reply(&mut s,11,400_000_000);
     assert!(if embedded {s.tonal_histogram.settled && s.tonal_histogram.demand}else{s.histogram.settled && s.histogram.demand});
+    let sample=if embedded {s.state.tonal_histogram.data.clone()}else{s.state.histogram.data.clone()}.unwrap();
     assert!(!s.engine.has_pending_document_edits());
     let hidden=s.dispatch(UiAction::SelectPanelTab {group,panel:other}).unwrap();
     assert!(hidden.canvas_wake);
     s.frame(450_000_000,450_000_000).unwrap();
-    assert!(if embedded {!s.tonal_histogram.demand && s.state.tonal_histogram.data.is_none()}else{!s.histogram.demand && s.state.histogram.data.is_none()});
+    assert!(if embedded {!s.tonal_histogram.demand}else{!s.histogram.demand});
     let shown=s.dispatch(UiAction::SelectPanelTab {group,panel}).unwrap();assert!(shown.canvas_wake);
     s.frame(500_000_000,500_000_000).unwrap();assert!(if embedded {s.tonal_histogram.demand}else{s.histogram.demand});
-    histogram_reply(&mut s,7,550_000_000);s.frame(750_000_000,750_000_000).unwrap();histogram_reply(&mut s,11,800_000_000);
+    let retained=if embedded {s.state.tonal_histogram.data.as_ref()}else{s.state.histogram.data.as_ref()}.unwrap();
+    assert!(std::sync::Arc::ptr_eq(&sample,retained));
     assert!(if embedded {s.tonal_histogram.settled}else{s.histogram.settled});
     let unchanged=s.dispatch(UiAction::Customize {action:CustomizationAction::SetTabStyle {group,style:TabStyle::ALL[1]}}).unwrap();
     assert!(!unchanged.canvas_wake);

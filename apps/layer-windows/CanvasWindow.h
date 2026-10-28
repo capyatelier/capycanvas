@@ -1,5 +1,6 @@
 #pragma once
 #include "pch.h"
+#include "CanvasModelUpdate.h"
 #include "WorkspaceView.h"
 #include "HeaderView.h"
 #include "SettingsView.h"
@@ -140,6 +141,10 @@ private:
         std::deque<std::pair<uint64_t,std::function<void()>>> replies;
         std::string layoutInputBytes;
         NativeLayoutInput layoutInput;
+        NativeModelUpdates modelUpdates;
+        CanvasModelUpdate models;
+        uint32_t unappliedSections=0;
+        winrt::Windows::Data::Json::JsonObject pendingLocalization{nullptr};
         void Close(){pending.Close();replies.clear();}
         void Reply(std::function<void()> deliver){
             {
@@ -154,6 +159,7 @@ private:
     struct PreparedSnapshots {
         winrt::Windows::Data::Json::JsonObject full{nullptr},layout{nullptr},workspace{nullptr},camera{nullptr},search{nullptr},localization{nullptr},glass{nullptr};
         NativeLayoutInput fullInput,reflowInput;
+        uint32_t sections=CanvasAllSections;
     };
     std::shared_ptr<SnapshotState> snapshots=std::make_shared<SnapshotState>();
     bool glassPosted=false;
@@ -166,7 +172,7 @@ private:
         winrt::Microsoft::UI::Dispatching::DispatcherQueue,std::weak_ptr<CanvasWindow>,CanvasSnapshotMailbox::Batch);
     void ApplyPending(PreparedSnapshots);
     void FailPresentation(std::string);
-    void ApplyModel(winrt::Windows::Data::Json::JsonObject const&,NativeLayoutInput);
+    void ApplyModel(winrt::Windows::Data::Json::JsonObject const&,NativeLayoutInput,uint32_t sections=CanvasAllSections);
     void Popup(bool open);
     void UpdatePopup();
     void ApplyDialogs();

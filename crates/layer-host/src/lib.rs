@@ -10,6 +10,7 @@ mod frame_rate;
 mod header;
 mod snapshot;
 mod model_update;
+pub use model_update::ModelUpdates;
 pub mod open;
 pub mod papers;
 pub mod photo_reader;

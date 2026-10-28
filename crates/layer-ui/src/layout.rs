@@ -1065,6 +1065,11 @@ impl<'a> LayoutResolveInput<'a> {
         }
         result
     }
+    pub fn with_panel_measurements(&self,measurements:Vec<PanelMeasurement>)->Result<Self,String> {
+        let accepted=self.layout.accept_panel_measurements(measurements)?;
+        let mut input=self.clone();input.layout.to_mut().measurements=accepted;
+        Ok(input)
+    }
 }
 
 impl Serialize for LayoutResolveInput<'_> {
@@ -3486,6 +3491,25 @@ impl DockLayout {
         };
     }
 
+    pub(crate) fn accept_panel_measurements(&self,measurements:Vec<PanelMeasurement>)->Result<Vec<PanelMeasurement>,String> {
+        let measured=|value:f32|value.is_finite()&&(0.0..1_000_000.0).contains(&value);
+        let mut accepted=Vec::new();
+        for measurement in measurements {
+            if ![measurement.tab_width,measurement.content_height].into_iter().all(measured) {
+                return Err("Invalid panel measurement".into());
+            }
+            if measurement.scroll.is_some_and(|m|![m.fixed_height,m.unit_height].into_iter().all(measured)
+                || m.fixed_height>measurement.content_height) {
+                return Err("Invalid panel scroll measurement".into());
+            }
+            if accepted.iter().any(|m:&PanelMeasurement|m.panel==measurement.panel) {
+                return Err("Duplicate panel measurement".into());
+            }
+            if self.panel(measurement.panel).is_ok(){accepted.push(measurement);}
+        }
+        Ok(accepted)
+    }
+
     pub(crate) fn workspace_height(&self, height: f32) -> f32 {
         (height - self.bottom_inset).max(1.0)
     }
@@ -4767,6 +4791,26 @@ fn resolve_node(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn prepared_panel_measurements_resolve_without_mutating_published_layout() {
+        let mut layout=crate::WorkspacePreset::Photographer.layout(crate::Platform::Windows);
+        layout.open_default_columns(crate::Platform::Windows);
+        layout.fit_height_groups=vec![layout.panel_group(Panel::Histogram).unwrap()];
+        let input=LayoutResolveInput::new(&layout,None);
+        let viewport=[2000.,2000.];let before=serde_json::json!(input.resolve(viewport));
+        let measurements=vec![PanelMeasurement {panel:Panel::Histogram,tab_width:110.,content_height:385.,scroll:None}];
+        let prepared=input.with_panel_measurements(measurements.clone()).unwrap();
+        let mut expected=layout.clone();expected.measurements=measurements.clone();
+        assert_eq!(serde_json::json!(prepared.resolve(viewport)),serde_json::json!(LayoutResolveInput::new(&expected,None).resolve(viewport)));
+        assert_ne!(serde_json::json!(prepared.resolve(viewport)),before);
+        assert_eq!(serde_json::json!(input.resolve(viewport)),before);
+        assert_eq!(serde_json::json!(prepared.layout.as_ref()),serde_json::json!(layout));
+        assert!(input.with_panel_measurements(vec![measurements[0],measurements[0]]).is_err());
+        let mut invalid=measurements[0];invalid.content_height=f32::NAN;
+        assert!(input.with_panel_measurements(vec![invalid]).is_err());
+        let mut invalid=measurements[0];invalid.scroll=Some(PanelScrollMeasurement {fixed_height:400.,unit_height:20.});
+        assert!(input.with_panel_measurements(vec![invalid]).is_err());
+    }
 
     #[test]
     fn reopened_panels_have_legal_docks_and_monitors_default_to_right() {

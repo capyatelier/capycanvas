@@ -27,6 +27,10 @@ public:
         decoding=true;return Take();
     }
     void CompleteDecode(){decoding=false;}
+    bool ApplyDecoded(bool model){
+        bool superseded=model&&!pending.full.empty()&&!skippedModel;
+        skippedModel=superseded;return !superseded;
+    }
     void Close(){closed=true;pending={};}
     bool Closed()const{return closed;}
     uint64_t Sequence()const{return sequence;}
@@ -34,6 +38,6 @@ public:
     bool IsPosted(uint64_t value)const{return !closed&&value<=posted;}
 private:
     Batch pending;
-    bool decoding=false,closed=false;
+    bool decoding=false,closed=false,skippedModel=false;
     uint64_t sequence=0,posted=0;
 };

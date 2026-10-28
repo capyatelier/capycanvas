@@ -29,6 +29,18 @@ pub extern "C" fn capy_layout_input_free(layout:u64) {
     let _=Handle::from_raw(layout).and_then(handles::release::<LayoutInput>);
 }
 
+/// # Safety
+/// Input is readable, unchanged NUL-terminated JSON of native panel measurements during this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_layout_input_measure(layout:u64,input:*const c_char)->u64 {
+    std::panic::catch_unwind(|| {
+        let input=unsafe {crate::input::read_json(input)}.ok()?;
+        let source=Handle::from_raw(layout).and_then(handles::shared::<LayoutInput>).ok()?;
+        let input=source.input.with_panel_measurements(input).ok()?;
+        handles::insert_shared(Arc::new(LayoutInput {input,resolved:Mutex::new(None)})).ok().map(Handle::raw)
+    }).ok().flatten().unwrap_or(0)
+}
+
 fn resolve_layout(input:u64,width:f32,height:f32)->Result<Arc<layer_ui::ResolvedLayout>,String> {
     if ![width,height].into_iter().all(|v|v.is_finite() && v>0.) {return Err("Invalid workspace viewport".into());}
     let input=Handle::from_raw(input).and_then(handles::shared::<LayoutInput>).map_err(|error|error.to_string())?;
@@ -151,6 +163,26 @@ fn stamp(host: &mut NativeHost, context: layer_ui::ToolbarContext, known_request
 mod tests {
     use crate::test_support::*;
     use super::*;
+    #[test]
+    fn measured_layout_input_retains_source_and_matches_shared_session() {
+        let mut host=NativeHost::new(layer_ui::Platform::Windows).unwrap();
+        let document_revision=host.session.engine().document().revision;
+        let input=CString::new(json!(host.session.layout_resolve_input()).to_string()).unwrap();
+        let original=unsafe {capy_layout_input_prepare(input.as_ptr())};assert_ne!(original,0);
+        let before=resolve_layout(original,1400.,900.).unwrap();
+        let measurements=vec![layer_ui::PanelMeasurement {panel:layer_ui::Panel::Histogram,tab_width:110.,content_height:385.,scroll:None}];
+        let input=CString::new(json!(measurements).to_string()).unwrap();
+        let prepared=unsafe {capy_layout_input_measure(original,input.as_ptr())};assert_ne!(prepared,0);
+        assert!(host.session.state().workspace.layout.measurements.is_empty());
+        host.session.dispatch(layer_ui::UiAction::MeasurePanels {measurements}).unwrap();
+        assert_eq!(json!(resolve_layout(prepared,1400.,900.).unwrap().as_ref()),json!(host.session.layout([1400.,900.])));
+        assert!(Arc::ptr_eq(&before,&resolve_layout(original,1400.,900.).unwrap()));
+        assert_eq!(host.session.engine().document().revision,document_revision);
+        let invalid=c"[{\"panel\":\"histogram\",\"tab_width\":0,\"content_height\":-1}]";
+        assert_eq!(unsafe {capy_layout_input_measure(original,invalid.as_ptr())},0);
+        assert_eq!(unsafe {capy_layout_input_measure(original,std::ptr::null())},0);
+        capy_layout_input_free(prepared);capy_layout_input_free(original);
+    }
     fn metadata(packet: CapyPreview) -> Value {
         let owned=crate::previews::store(packet).unwrap();
         let result=crate::previews::copied_metadata(owned);

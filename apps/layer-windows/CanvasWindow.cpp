@@ -1553,7 +1553,22 @@ winrt::fire_and_forget CanvasWindow::DecodeSnapshots(std::shared_ptr<SnapshotSta
             if(patch&&value.HasKey(L"windows_glass"))value.Remove(L"windows_glass");
             return value;
         };
-        batch={parse(raw.full),parse(raw.layout,true),parse(raw.workspace,true),parse(raw.camera,true),parse(raw.search,true),parse(raw.localization),parse(raw.glass)};
+        batch.layout=parse(raw.layout,true);batch.workspace=parse(raw.workspace,true);batch.camera=parse(raw.camera,true);
+        batch.search=parse(raw.search,true);batch.glass=parse(raw.glass);
+        if(!raw.localization.empty())state->pendingLocalization=parse(raw.localization);
+        if(!raw.full.empty()){
+            if(!state->modelUpdates)state->modelUpdates=NativeModelUpdates(capy_model_updates_new());
+            NativeString update(capy_model_updates_publish(state->modelUpdates.get(),raw.full.c_str()));
+            if(!update)throw std::invalid_argument("Workspace model update failed");
+            auto model=parse(update.bytes);
+            if(model.HasKey(L"localization"))state->pendingLocalization=CapyUi::object(model,L"localization");
+            state->unappliedSections|=state->models.Read(model);
+        }
+        if(!raw.full.empty()){
+            batch.full=state->models.Model();batch.sections=state->unappliedSections;
+            batch.localization=state->pendingLocalization;
+            if(batch.localization)batch.sections=CanvasAllSections;
+        }
         auto prepareInput=[&](Windows::Data::Json::JsonObject const& model){
             auto bytes=to_string(CapyUi::object(model,L"layout_input").Stringify());
             if(!state->layoutInput||bytes!=state->layoutInputBytes){
@@ -1563,42 +1578,43 @@ winrt::fire_and_forget CanvasWindow::DecodeSnapshots(std::shared_ptr<SnapshotSta
             }
             return state->layoutInput;
         };
-        if(batch.full)batch.fullInput=prepareInput(batch.full);
+        if(batch.full&&(batch.sections&CanvasWorkspace))batch.fullInput=prepareInput(batch.full);
         if(batch.layout)batch.reflowInput=prepareInput(batch.layout);
     }catch(hresult_error const& error){failure=to_string(error.message());}
      catch(std::exception const& error){failure=error.what();}
     raw={};
-    bool failed=!failure.empty();
-    if(failed){std::lock_guard lock(state->mutex);state->Close();}
+    if(!failure.empty()){std::lock_guard lock(state->mutex);state->Close();}
     bool posted=false;
-    try{posted=queue.TryEnqueue([state,owner,batch=std::move(batch),failure=std::move(failure)]()mutable{
+    try{posted=queue.TryEnqueue([state,owner,sequence,batch=std::move(batch),failure=std::move(failure)]()mutable{
         {
             std::lock_guard lock(state->mutex);
-            state->pending.CompleteDecode();
             if(state->pending.Closed()&&failure.empty())return;
         }
         auto self=owner.lock();if(!self||self->closing)return;
         if(!failure.empty()){
             self->FailPresentation(std::move(failure));return;
         }
-        self->QueueSnapshots();self->ApplyPending(std::move(batch));
+        bool superseded=false;
+        {std::lock_guard lock(state->mutex);superseded=!state->pending.ApplyDecoded(bool(batch.full));}
+        if(!superseded)self->ApplyPending(std::move(batch));
+        std::deque<std::function<void()>> replies;
+        {
+            std::lock_guard lock(state->mutex);
+            if(!superseded){
+                state->unappliedSections=0;state->pendingLocalization=nullptr;
+                state->pending.Posted(sequence);
+                while(!state->replies.empty()&&state->pending.IsPosted(state->replies.front().first)){
+                    replies.push_back(std::move(state->replies.front().second));state->replies.pop_front();
+                }
+            }
+            state->pending.CompleteDecode();
+        }
+        self->QueueSnapshots();
+        try{for(auto& reply:replies)reply();}
+        catch(hresult_error const& error){self->FailPresentation(to_string(error.message()));}
+        catch(std::exception const& error){self->FailPresentation(error.what());}
     });}catch(hresult_error const& error){OutputDebugStringW(error.message().c_str());}
     if(!posted){std::lock_guard lock(state->mutex);state->Close();co_return;}
-    if(failed)co_return;
-    std::deque<std::function<void()>> replies;
-    {
-        std::lock_guard lock(state->mutex);
-        state->pending.Posted(sequence);
-        while(!state->replies.empty()&&state->pending.IsPosted(state->replies.front().first)){
-            replies.push_back(std::move(state->replies.front().second));state->replies.pop_front();
-        }
-    }
-    try{for(auto& reply:replies)reply();}
-    catch(hresult_error const& error){failure=to_string(error.message());}
-    catch(std::exception const& error){failure=error.what();}
-    if(!failure.empty())queue.TryEnqueue([owner,failure=std::move(failure)]{
-        if(auto self=owner.lock())self->FailPresentation(failure);
-    });
 }
 void CanvasWindow::FailPresentation(std::string message) {
     {std::lock_guard lock(snapshots->mutex);snapshots->Close();}
@@ -1611,7 +1627,7 @@ void CanvasWindow::ApplyPending(PreparedSnapshots batch) {
         workspace->Resize(float(panel.ActualWidth()),float(panel.ActualHeight()));
         if(batch.full){
             if(batch.localization)batch.full.Insert(L"localization",batch.localization);
-            ApplyModel(batch.full,std::move(batch.fullInput));
+            ApplyModel(batch.full,std::move(batch.fullInput),batch.sections);
         }
         if(!closing&&batch.layout)workspace->Apply(batch.layout,std::move(batch.reflowInput));
         for(auto const& patch:{batch.workspace,batch.camera,batch.search,batch.glass})
@@ -1727,7 +1743,7 @@ void CanvasWindow::SendLaunchFiles(Windows::Data::Json::JsonObject const& model)
 void CanvasWindow::RefreshWorkspaceSwitcher() {
     if(!closing&&!closed)Send(R"({"operation":"input","input":{"type":"refresh_switcher"}})",CanvasCommandKind::Workspace);
 }
-void CanvasWindow::ApplyModel(Windows::Data::Json::JsonObject const& model,NativeLayoutInput input) {
+void CanvasWindow::ApplyModel(Windows::Data::Json::JsonObject const& model,NativeLayoutInput input,uint32_t sections) {
     using namespace CapyUi;
     auto presentation=object(model,L"localization");
     if(presentation.Size()){
@@ -1740,13 +1756,16 @@ void CanvasWindow::ApplyModel(Windows::Data::Json::JsonObject const& model,Nativ
     }
     auto focus=settings&&settings->IsOpen()?FocusManager::GetFocusedElement(root.XamlRoot()).try_as<Control>():nullptr;
     if(focus)if(auto owner=ItemsControl::ItemsControlFromItemContainer(focus))focus=owner;
-    if(!workspace->Apply(model,std::move(input)))return;
+    if(sections&CanvasWorkspace){if(!workspace->Apply(model,std::move(input)))return;}
+    else if(!workspace->ApplyFields(model,(sections&CanvasScopes)!=0))return;
     lastModel=model;
+    bool retheme=false;
+    auto state=object(model,L"state");auto theme=str(state,L"theme",L"dark");
+    auto workspaceReady=flag(state,L"workspace_ready");
+    if(sections&CanvasWindowState){
     auto suspended=flag(model,L"windows_rendering_suspended");
-    auto workspaceReady=flag(object(model,L"state"),L"workspace_ready");
     workspace->Root().Visibility(suspended||!workspaceReady?Visibility::Collapsed:Visibility::Visible);
     panel.Visibility(suspended?Visibility::Collapsed:Visibility::Visible);
-    auto state=object(model,L"state");auto theme=str(state,L"theme",L"dark");
     {std::lock_guard lock(mutex);penSources.Select(to_string(object(model,L"windows_tabs").GetNamedValue(L"selected",JsonValue::CreateNullValue()).Stringify()+L"/"+object(state,L"document_file").GetNamedValue(L"epoch",JsonValue::CreateNullValue()).Stringify()));}
     if(surfaceState.CanAttach(uint64_t(num(model,L"windows_gpu_generation")),flag(model,L"windows_surface_ready"))){
         check_hresult(panel.as<ISwapChainPanelNative2>()->SetSwapChainHandle(surfaceHandle));surfaceState.DidAttach();
@@ -1798,7 +1817,7 @@ void CanvasWindow::ApplyModel(Windows::Data::Json::JsonObject const& model,Nativ
     }
     ApplyScreen(model);
     auto nextTheme=theme==L"dark"?ElementTheme::Dark:ElementTheme::Light;
-    bool retheme=root.RequestedTheme()!=nextTheme;root.RequestedTheme(nextTheme);
+    retheme=root.RequestedTheme()!=nextTheme;root.RequestedTheme(nextTheme);
     // Artwork also reaches the caption area; keep the OS buttons readable on it.
     auto captionBackground=color(str(object(state,L"palette"),L"bg",L"#333333"));
     window.AppWindow().TitleBar().ButtonBackgroundColor(captionBackground);
@@ -1808,7 +1827,9 @@ void CanvasWindow::ApplyModel(Windows::Data::Json::JsonObject const& model,Nativ
     foreground.A=128;window.AppWindow().TitleBar().ButtonInactiveForegroundColor(foreground);
     auto tabs=array(state,L"tabs");
     if(tabs.Size())window.Title((flag(object(state,L"document_file"),L"modified")?hstring(L"• "):hstring())+str(tabs.GetObjectAt(0),L"title")+L" · "+str(bootstrap,L"app_name"));
-    header->Apply(model);ApplyDialogs();
+    }
+    if(sections&CanvasHeader)header->Apply(model);
+    if(sections&CanvasDialogs)ApplyDialogs();
     header->Root().Visibility(workspaceReady?Visibility::Visible:Visibility::Collapsed);
     // Workspace theme replacement must not take focus from retained Preferences.
     if(retheme&&focus)dispatcher.TryEnqueue(Microsoft::UI::Dispatching::DispatcherQueuePriority::Low,

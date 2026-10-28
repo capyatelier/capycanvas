@@ -205,6 +205,7 @@ fn native_composite_histogram_updates_without_changing_the_drawing() {
         pump(200);assert_eq!(super::photo_edit::shown(&w, [8., 8.]), unmarked);
         assert_eq!(super::place_source::snapshot(&w), before, "inspection never edits artwork/history");
         crate::snapshot(&w).save_to_png(std::path::Path::new(&output).join(format!("histogram-{width}-{theme:?}.png"))).unwrap();
+        let retained_exact = completed(&w);
         w.customize(CustomizationAction::SetPanelVisible { panel: Panel::Properties, visible: true });
         w.dispatch(UiAction::Customize { action: CustomizationAction::CloseExpanded });
         let group = state(&w).workspace.layout.panel_group(Panel::Properties).unwrap();
@@ -212,12 +213,14 @@ fn native_composite_histogram_updates_without_changing_the_drawing() {
         pump(200);tab(&w, &mut input, Panel::Properties);
         crate::snapshot(&w).save_to_png(std::path::Path::new(&output).join(format!("tabs-{width}-{theme:?}.png"))).unwrap();
         assert_eq!(state(&w).workspace.layout.active_panel(Panel::Histogram), Some(Panel::Properties), "native Properties tab is selected");
-        until(|| state(&w).histogram.data.is_none(), "inactive histogram tab retires demand");
+        assert!(std::sync::Arc::ptr_eq(state(&w).histogram.data.as_ref().unwrap(), &retained_exact), "inactive histogram retains its exact result");
         tab(&w, &mut input, Panel::Histogram);
+        assert!(std::sync::Arc::ptr_eq(&completed(&w), &retained_exact));
         assert_eq!(*completed(&w), *initial);
         w.dispatch(UiAction::Customize { action: CustomizationAction::SetColumnCollapsed { group, collapsed: true } });
-        until(|| state(&w).histogram.data.is_none(), "closed collapsed histogram retires demand");
+        assert!(std::sync::Arc::ptr_eq(state(&w).histogram.data.as_ref().unwrap(), &retained_exact), "collapsed histogram retains its exact result");
         invoke(&w, CommandId::Histogram);
+        assert!(std::sync::Arc::ptr_eq(&completed(&w), &retained_exact));
         assert_eq!(*completed(&w), *initial);
         choose(&w, &mut input, "histogram-channel", 0);
         crate::snapshot(&w).save_to_png(std::path::Path::new(&output).join(format!("drawer-{width}-{theme:?}.png"))).unwrap();
@@ -231,14 +234,16 @@ fn native_composite_histogram_updates_without_changing_the_drawing() {
         choose(&w, &mut input, "histogram-channel", 4);
         crate::snapshot(&w).save_to_png(std::path::Path::new(&output).join(format!("floating-{width}-{theme:?}.png"))).unwrap();
         w.dispatch(UiAction::Customize { action: CustomizationAction::SetPanelVisible { panel: Panel::Histogram, visible: false } });
-        until(|| state(&w).histogram.data.is_none(), "hidden histogram releases data");
+        assert!(std::sync::Arc::ptr_eq(state(&w).histogram.data.as_ref().unwrap(), &retained_exact), "hidden histogram retains its exact result");
         invoke(&w, CommandId::Histogram);
+        assert!(std::sync::Arc::ptr_eq(&completed(&w), &retained_exact));
         assert_eq!(*completed(&w), *initial);
         w.dispatch(UiAction::Histogram { action: layer_ui::HistogramAction::Logarithmic { enabled: false } });
         w.dispatch(UiAction::Histogram { action: layer_ui::HistogramAction::Channel { index: 0 } });
     }
+    let final_exact = completed(&w);
     w.dispatch(UiAction::Customize { action: CustomizationAction::SetPanelVisible { panel: Panel::Histogram, visible: false } });
-    until(|| state(&w).histogram.data.is_none(), "last consumer closes");
+    assert!(std::sync::Arc::ptr_eq(state(&w).histogram.data.as_ref().unwrap(), &final_exact), "last hidden histogram retains its exact result");
     assert_eq!(super::place_source::snapshot(&w), before);
     input.finish();w.window.close();pump(100);
 }
@@ -354,12 +359,13 @@ fn native_curves_histogram_preserves_numeric_focus() {
         scroll_to(highlights.upcast_ref());input.click(screen_point(highlights.upcast_ref(), &w.window, [0.5, 0.5]));
         assert!(state(&w).histogram.highlights);assert_eq!(super::place_source::snapshot(&w), before);
         input.click(screen_point(highlights.upcast_ref(), &w.window, [0.5, 0.5]));
+        let retained_exact = tonal_completed(&w);
         w.customize(CustomizationAction::SetPanelVisible { panel: Panel::Properties, visible: false });
-        until(|| state(&w).tonal_histogram.data.is_none(), "hidden Properties retires embedded statistics");
+        assert!(std::sync::Arc::ptr_eq(state(&w).tonal_histogram.data.as_ref().unwrap(), &retained_exact), "hidden Properties retains exact embedded statistics");
         assert_eq!(super::place_source::snapshot(&w), before);
         w.customize(CustomizationAction::SetPanelVisible { panel: Panel::Properties, visible: true });
         w.dispatch(UiAction::Customize { action: CustomizationAction::CloseExpanded });
-        tonal_completed(&w);
+        assert!(std::sync::Arc::ptr_eq(&tonal_completed(&w), &retained_exact));
         choose(&w, &mut input, "property-domain", 0);
         set("red", EffectValue::Curve(vec![[0., 0.], [1., 1.]]));tonal_completed(&w);
         crate::snapshot(&w).save_to_png(std::path::Path::new(&output).join(format!("curves-encoded-{width}-{theme:?}.png"))).unwrap();
@@ -466,7 +472,7 @@ fn native_waveform_photo_sources_channels_and_layout() {
         let clipping=histogram_widget::<gtk::ToggleButton>(&w,"waveform-shadows");clipping.grab_focus();let focus=gtk::prelude::RootExt::focus(&w.window);let active=state(&w).histogram.shadows;input.key(0x20);assert_eq!(state(&w).histogram.shadows,!active);assert_eq!(gtk::prelude::RootExt::focus(&w.window),focus);input.key(0x20);assert_eq!(state(&w).histogram.shadows,active);
         invoke(&w,CommandId::Histogram);completed(&w);pump(200);crate::snapshot(&w).save_to_png(output.join(format!("histogram-photo-{width}-{theme:?}.png"))).unwrap();let group=state(&w).workspace.layout.panel_group(Panel::Histogram).unwrap();w.dispatch(UiAction::MovePanel {panel:Panel::Waveform,target:DockTarget::Tab {group,index:None},viewport:[width as f32,800.]});pump(200);tab(&w,&mut input,Panel::Histogram);until(||state(&w).waveform.data.is_none(),"inactive Waveform tab releases its plot");assert!(completed(&w).pixels>0);tab(&w,&mut input,Panel::Waveform);done();w.dispatch(UiAction::Histogram {action:layer_ui::HistogramAction::Channel {index:4}});assert_eq!(state(&w).waveform.channel,0,"monitor channels are independent");
         choose(&w,&mut input,"waveform-source",1);choose(&w,&mut input,"waveform-channel",4);let retained=done();
-        w.customize(CustomizationAction::SetPanelVisible {panel:Panel::Histogram,visible:false});w.customize(CustomizationAction::SetPanelVisible {panel:Panel::Waveform,visible:false});until(||state(&w).waveform.data.is_none(),"hidden Waveform releases demand");assert_eq!(super::place_source::snapshot(&w),before);
+        w.customize(CustomizationAction::SetPanelVisible {panel:Panel::Histogram,visible:false});w.customize(CustomizationAction::SetPanelVisible {panel:Panel::Waveform,visible:false});assert!(std::sync::Arc::ptr_eq(state(&w).waveform.data.as_ref().unwrap(),&retained),"hidden Waveform retains its exact result");assert_eq!(super::place_source::snapshot(&w),before);
         invoke(&w,CommandId::Waveform);assert_eq!(*done(),*retained);pump(200);
         assert_eq!((state(&w).waveform.source,state(&w).waveform.channel),(1,4));
         let group=w.groups.borrow().iter().find(|group|group.panels.contains(&Panel::Waveform) && group.root.is_mapped()).unwrap().root.clone();
@@ -480,7 +486,7 @@ fn native_waveform_photo_sources_channels_and_layout() {
         choose(&w,&mut input,"waveform-channel",2);assert_eq!(state(&w).waveform.channel,2);choose(&w,&mut input,"waveform-channel",4);
         choose(&w,&mut input,"waveform-source",0);assert_eq!(*done(),*initial);choose(&w,&mut input,"waveform-source",1);assert_eq!(*done(),*retained);
         assert_eq!(super::place_source::snapshot(&w),before);
-        w.customize(CustomizationAction::SetPanelVisible {panel:Panel::Waveform,visible:false});until(||state(&w).waveform.data.is_none(),"Waveform closes");
+        let before_close=done();w.customize(CustomizationAction::SetPanelVisible {panel:Panel::Waveform,visible:false});assert!(std::sync::Arc::ptr_eq(state(&w).waveform.data.as_ref().unwrap(),&before_close),"closed Waveform retains its exact result");
         w.dispatch(UiAction::Histogram {action:layer_ui::HistogramAction::Source {index:0}});w.dispatch(UiAction::Histogram {action:layer_ui::HistogramAction::WaveformChannel {index:0}});
         w.dispatch(UiAction::Histogram {action:layer_ui::HistogramAction::WaveformLogarithmic {enabled:true}});
     }

@@ -189,7 +189,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         let tonal=document.working.occurrence.and_then(|handle|document.scene().effect(handle))
             .is_some_and(|effect|matches!(effect.program.id.as_ref(),"curves"|"levels"));
         let waveform=self.panel_is_presented(Panel::Waveform);
-        self.histogram.demand!=(self.panel_is_presented(Panel::Histogram) || waveform) || self.histogram.waveform!=waveform
+        let demand=self.panel_is_presented(Panel::Histogram) || waveform;
+        self.histogram.demand!=demand || (demand && self.histogram.waveform!=waveform)
             || self.tonal_histogram.demand!=(tonal && self.panel_is_presented(Panel::Properties))
     }
     pub(super) fn cancel_histogram(&mut self) {
@@ -265,6 +266,10 @@ impl<R: CanvasRenderer> UiSession<R> {
         if !demand || self.state.host_error.is_some() {
             if task.demand || task.active {
                 if task.active {self.engine.backend_mut().cancel_snapshot();}
+                if self.state.host_error.is_none() && task.settled && view.data.is_some() {
+                    task.demand=false;task.active=false;task.query=None;
+                    return 0;
+                }
                 *task = Statistics::default();view.clear();return regions::HISTOGRAM;
             }
             return 0;

@@ -3371,30 +3371,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 ) }
             }
             UiAction::MeasurePanels { measurements } => {
-                let mut accepted = Vec::new();
-                for measurement in measurements {
-                    if ![measurement.tab_width, measurement.content_height]
-                        .into_iter()
-                        .all(measured)
-                    {
-                        return Err("Invalid panel measurement".into());
-                    }
-                    if measurement.scroll.is_some_and(|m| {
-                        ![m.fixed_height, m.unit_height].into_iter().all(measured)
-                            || m.fixed_height > measurement.content_height
-                    }) {
-                        return Err("Invalid panel scroll measurement".into());
-                    }
-                    if accepted
-                        .iter()
-                        .any(|m: &PanelMeasurement| m.panel == measurement.panel)
-                    {
-                        return Err("Duplicate panel measurement".into());
-                    }
-                    if self.state.workspace.layout.panel(measurement.panel).is_ok() {
-                        accepted.push(measurement);
-                    }
-                }
+                let accepted=self.state.workspace.layout.accept_panel_measurements(measurements)?;
                 if self.state.workspace.layout.measurements == accepted { (0, false) } else if self.floating_auto_fit.is_empty() {
                     self.state.workspace.layout.measurements = accepted;
                     (LAYOUT, false)

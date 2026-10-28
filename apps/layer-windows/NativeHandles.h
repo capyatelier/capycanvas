@@ -28,6 +28,7 @@ public:
 using NativeLaunch=NativeHandle<capy_launch_free>;
 using NativeLocalization=NativeHandle<capy_localization_free>;
 using NativeLayoutInput=NativeHandle<capy_layout_input_free>;
+using NativeModelUpdates=NativeHandle<capy_model_updates_free>;
 
 struct NativeString {
     std::string bytes;

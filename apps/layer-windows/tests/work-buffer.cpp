@@ -13,6 +13,7 @@
 #include "../CanvasQueryQueue.h"
 #include "../CanvasLatencyTrace.h"
 #include "../CanvasSnapshotMailbox.h"
+#include "../CanvasModelSections.h"
 #include "../WorkspacePublication.h"
 #include "../WorkspaceSurfaceGeometry.h"
 #include "../NativeJson.h"
@@ -384,6 +385,26 @@ int main() {
     assert(publication.Accept(false,20,8,70));
     std::cout<<"Workspace publication: ordered motion, retained content reflow and full replacement passed\n";
     CanvasSnapshotMailbox snapshots;
+    assert(CanvasSections({L"state",L"histogram",L"status"})==CanvasScopes);
+    assert(CanvasSections({L"windows_scopes"})==CanvasScopes);
+    assert(CanvasSections({L"state",L"revision"})==0);
+    assert(CanvasSections({L"workspace_update",L"content_revision"})==0);
+    assert(CanvasSections({L"windows_workspace",L"busy"})==(CanvasHeader|CanvasWindowState|CanvasDialogs));
+    assert(CanvasSections({L"layout",L"groups"})==CanvasAllSections);
+    CanvasSnapshotMailbox continuous;
+    continuous.Push("base",true,true);
+    uint64_t lastApplied=0;int applied=0,skipped=0;
+    for(int frame=0;frame<20;++frame){
+        auto decoded=continuous.BeginDecode();assert(decoded);
+        continuous.Push("newer model",true,true);
+        if(continuous.ApplyDecoded(true)){
+            continuous.Posted(decoded->sequence);lastApplied=decoded->sequence;++applied;skipped=0;
+        }else ++skipped;
+        assert(skipped<=1);
+        assert(decoded->sequence-lastApplied<=1);
+        continuous.CompleteDecode();
+    }
+    assert(applied==10&&continuous.IsPosted(lastApplied));
     snapshots.Push("models A",true,true);
     snapshots.Push("motion A + camera 1",false,true,"camera 1");
     snapshots.Push("motion B",false,true);

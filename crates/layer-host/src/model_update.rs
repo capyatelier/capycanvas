@@ -61,6 +61,46 @@ pub(crate) struct ModelBaseline {
     fields: BTreeMap<String, std::ops::Range<usize>>,
 }
 
+/// Field-update encoder for a retained model, including native host extensions.
+#[derive(Default)]
+pub struct ModelUpdates {
+    baseline: Option<ModelBaseline>,
+}
+
+impl ModelUpdates {
+    /// Full models establish the baseline; layout, camera and other packets
+    /// pass through without changing it.
+    pub fn publish(&mut self, next: Vec<u8>) -> Result<Vec<u8>, serde_json::Error> {
+        Self::encode(&mut self.baseline, next)
+    }
+
+    fn encode(baseline: &mut Option<ModelBaseline>, next: Vec<u8>) -> Result<Vec<u8>, serde_json::Error> {
+        let text = String::from_utf8(next).map_err(serde::de::Error::custom)?;
+        let fields: Fields = serde_json::from_str(&text)?;
+        if !fields.contains_key("state") { return Ok(text.into_bytes()); }
+        let ranges = fields.iter().map(|(&key, value)| {
+            let start = value.get().as_ptr() as usize - text.as_ptr() as usize;
+            (key.to_owned(), start..start + value.get().len())
+        }).collect();
+        let bytes = match baseline.as_ref() {
+            Some(previous) if previous.fields.keys().map(String::as_str).eq(fields.keys().copied()) => {
+                let mut update = Update::default();
+                let mut path = Vec::new();
+                for (&key, &value) in &fields {
+                    path.push(key.to_owned());
+                    difference(&previous.text[previous.fields[key].clone()], value, &mut path, &mut update)?;
+                    path.pop();
+                }
+                serde_json::to_vec(&update)?
+            }
+            _ => text.clone().into_bytes(),
+        };
+        drop(fields);
+        *baseline = Some(ModelBaseline { text, fields: ranges });
+        Ok(bytes)
+    }
+}
+
 impl NativeHost {
     /// Same full snapshots and workspace/camera updates as the layout stream;
     /// subsequent full models may use `model_update` (path/value pairs). Apply
@@ -76,48 +116,7 @@ impl NativeHost {
         let Some(next) = self.layout_update_bytes()? else {
             return Ok(None);
         };
-        let text = String::from_utf8(next).map_err(serde::de::Error::custom)?;
-        let fields: Fields = serde_json::from_str(&text)?;
-        if !fields.contains_key("state") {
-            return Ok(Some(text.into_bytes()));
-        }
-        let ranges = fields
-            .iter()
-            .map(|(&key, value)| {
-                let start = value.get().as_ptr() as usize - text.as_ptr() as usize;
-                (key.to_owned(), start..start + value.get().len())
-            })
-            .collect();
-        let bytes = match &self.last_model_snapshot {
-            Some(previous)
-                if previous
-                    .fields
-                    .keys()
-                    .map(String::as_str)
-                    .eq(fields.keys().copied()) =>
-            {
-                let mut update = Update::default();
-                let mut path = Vec::new();
-                for (&key, &value) in &fields {
-                    path.push(key.to_owned());
-                    difference(
-                        &previous.text[previous.fields[key].clone()],
-                        value,
-                        &mut path,
-                        &mut update,
-                    )?;
-                    path.pop();
-                }
-                serde_json::to_vec(&update)?
-            }
-            _ => text.clone().into_bytes(),
-        };
-        drop(fields);
-        self.last_model_snapshot = Some(ModelBaseline {
-            text,
-            fields: ranges,
-        });
-        Ok(Some(bytes))
+        ModelUpdates::encode(&mut self.last_model_snapshot, next).map(Some)
     }
 }
 
@@ -125,6 +124,51 @@ impl NativeHost {
 mod tests {
     use super::*;
     use serde_json::{Value, json};
+
+    #[test]
+    fn extended_metadata_and_scope_changes_publish_replayable_field_updates() {
+        let mut transport=ModelUpdates::default();
+        let mut model=json!({"state":{"revision":1,"histogram":{"status":"","data":null}},
+            "layout":{"groups":[{"id":7}]},"windows_workspace":{"busy":false},"windows_recovery":null});
+        let mut retained:Value=serde_json::from_slice(&transport.publish(serde_json::to_vec(&model).unwrap()).unwrap()).unwrap();
+        for change in 0..5 {
+            model["state"]["revision"]=json!(change+2);
+            match change {
+                0=>model["windows_workspace"]["busy"]=json!(true),
+                1=>model["state"]["histogram"]["status"]=json!("Updating"),
+                2=>{model["state"]["histogram"]["status"]=json!("Preview");model["state"]["histogram"]["data"]=json!([1,2]);},
+                3=>{model["state"]["histogram"]["status"]=json!("Exact");model["state"]["histogram"]["data"]=json!([3,4]);},
+                _=>model["windows_recovery"]=json!({"ready":true}),
+            }
+            let packet:Value=serde_json::from_slice(&transport.publish(serde_json::to_vec(&model).unwrap()).unwrap()).unwrap();
+            assert!(packet.get("state").is_none(),"metadata and scopes must not publish a full model: {packet}");
+            assert!(packet["model_update"].as_array().unwrap().iter().all(|pair|pair[0][0]!="layout"));
+            apply(&mut retained,packet);assert_eq!(retained,model);
+            let camera=br#"{"camera":{"zoom":2}}"#.to_vec();
+            assert_eq!(transport.publish(camera.clone()).unwrap(),camera);
+        }
+    }
+
+    #[test]
+    fn a_new_model_contains_interleaved_layout_camera_search_and_glass_updates() {
+        let mut transport=ModelUpdates::default();
+        let mut model=json!({"state":{"revision":1,"camera":{"zoom":1},"command_search":null,"workspace":{"layout":{"width":240}}},
+            "layout":{"groups":[{"height":200}]},"windows_glass":{"panel_revision":1}});
+        let mut retained:Value=serde_json::from_slice(&transport.publish(serde_json::to_vec(&model).unwrap()).unwrap()).unwrap();
+        for packet in [json!({"layout":{"groups":[{"height":300}]},"workspace_layout":{"width":320}}),
+            json!({"camera":{"zoom":2}}),json!({"command_search":{"query":"paint"}}),json!({"windows_glass":{"panel_revision":2}})] {
+            assert_eq!(serde_json::from_slice::<Value>(&transport.publish(serde_json::to_vec(&packet).unwrap()).unwrap()).unwrap(),packet);
+        }
+        model["state"]["revision"]=json!(2);
+        model["state"]["camera"]["zoom"]=json!(2);
+        model["state"]["command_search"]=json!({"query":"paint"});
+        model["state"]["workspace"]["layout"]["width"]=json!(320);
+        model["layout"]["groups"][0]["height"]=json!(300);
+        model["windows_glass"]["panel_revision"]=json!(2);
+        let next=transport.publish(serde_json::to_vec(&model).unwrap()).unwrap();
+        apply(&mut retained,serde_json::from_slice(&next).unwrap());
+        assert_eq!(retained,model);
+    }
 
     type PanelGeometry=std::collections::BTreeMap<u32,(Vec<[i32;7]>,Vec<[i32;7]>)>;
     fn panel_geometry(mut words: &[i32]) -> PanelGeometry {

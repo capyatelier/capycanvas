@@ -65,6 +65,10 @@ pub use host::*;
 
 mod shared_controls;
 mod owned;
+#[cfg(any(target_os = "windows", test))]
+mod model_updates;
+#[cfg(any(target_os = "windows", test))]
+pub use model_updates::*;
 pub use owned::{capy_string_copy,capy_string_free,capy_string_length};
 pub use shared_controls::*;
 mod color;

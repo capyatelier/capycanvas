@@ -14,6 +14,7 @@ struct ScopeFeed : std::enable_shared_from_this<ScopeFeed> {
     PreviewPacket waveform;int waveformWidth=0,waveformHeight=0;
     std::array<int,2> waveformSize{},requestedSize{},waveformRasterSize{};hstring waveformContext;
     std::vector<std::function<bool()>> views;
+    std::vector<std::weak_ptr<std::function<void()>>> bindings;
     static Plot plot(A const& source){
         Plot result;
         for(auto entry:source){
@@ -77,6 +78,10 @@ using namespace CapyScopes;
 std::shared_ptr<ScopeFeed> feed(std::shared_ptr<WorkspaceData> const& data){
     if(!data->scopes){data->scopes=std::make_shared<ScopeFeed>();data->scopes->owner=data;}
     return data->scopes;
+}
+void bindScope(std::shared_ptr<WorkspaceData> const& data,Bindings& bindings,std::function<void()> update){
+    auto binding=std::make_shared<std::function<void()>>(std::move(update));
+    feed(data)->bindings.push_back(binding);bindings.emplace_back([binding]{(*binding)();});
 }
 void drawPlot(Canvas const& target,Plot const& plot,std::array<winrt::Windows::UI::Color,4> const& colors,double width,double height){
     target.Children().Clear();if(width<=0||height<=0)return;
@@ -218,7 +223,7 @@ struct ScopeView : std::enable_shared_from_this<ScopeView> {
         }
         footer=ScopeFooter(data,prefix,[weak]{if(auto self=weak.lock())return self->view();return J{};},bindings);
         Grid::SetRow(footer,tonal?1:3);root.Children().Append(footer);
-        bindings.emplace_back([self=shared_from_this()]{self->refresh();});
+        bindScope(data,bindings,[self=shared_from_this()]{self->refresh();});
     }
     void refresh(){
         Updating updating(data);auto current=view();
@@ -262,7 +267,7 @@ FrameworkElement CapyScopes::ScopeFooter(std::shared_ptr<WorkspaceData> const& d
         clippingRow.Children().Append(toggle);
     }
     append(clippingRow);if(trailing){trailing.VerticalAlignment(VerticalAlignment::Center);append(trailing);}
-    bindings.emplace_back([data,view,status,clipping]{
+    bindScope(data,bindings,[data,view,status,clipping]{
         auto text=str(view(),L"status");if(status.Text()!=text){status.Text(text);tooltip(status,text);AutomationProperties::SetName(status,text);}
         auto main=object(data->state,L"histogram");auto labels=array(main,L"labels");
         for(uint32_t i=0;i<2;++i){
@@ -283,6 +288,14 @@ FrameworkElement CapyScopes::TonalScope(std::shared_ptr<WorkspaceData> const& da
 }
 FrameworkElement CapyScopes::TonalPlot(std::shared_ptr<WorkspaceData> const& data,Bindings& bindings){
     auto view=plotView(feed(data),true);
-    bindings.emplace_back([data,view]{feed(data)->refresh();view->draw();});
+    bindScope(data,bindings,[data,view]{feed(data)->refresh();view->draw();});
     return view->canvas;
+}
+void CapyScopes::Refresh(std::shared_ptr<WorkspaceData> const& data){
+    if(!data->scopes)return;
+    Updating updating(data);
+    std::erase_if(data->scopes->bindings,[](auto const& weak){
+        auto binding=weak.lock();if(!binding)return true;(*binding)();return false;
+    });
+    data->scopes->refresh();
 }

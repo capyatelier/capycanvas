@@ -13,6 +13,14 @@ if($LASTEXITCODE -ne 0){throw 'Canvas queue test build failed. Run from a Visual
 & $executable
 if($LASTEXITCODE -ne 0){throw 'Canvas queue test failed.'}
 
+$source=Join-Path $PSScriptRoot '../tests/model-update.cpp'
+$object=Join-Path $OutputDirectory 'model-update.obj'
+$executable=Join-Path $OutputDirectory 'model-update-test.exe'
+& cl /nologo /std:c++20 /EHsc /W4 /WX $optimization $source "/Fo$object" "/Fe$executable" windowsapp.lib
+if($LASTEXITCODE -ne 0){throw 'Model update test build failed.'}
+& $executable
+if($LASTEXITCODE -ne 0){throw 'Model update replay failed.'}
+
 & {
  $tokens=$null;$errors=$null
  $ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot 'build.ps1'),[ref]$tokens,[ref]$errors)
