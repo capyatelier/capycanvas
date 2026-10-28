@@ -50,6 +50,23 @@ document.addEventListener('scroll',event=>{
   list.dispatchEvent(new Event('panel-tab-surface',{bubbles:true}));
 },true);
 export function releaseTabSurfaces(root){for(const node of root.querySelectorAll('.dock-tab,.tab-list,.drawer-tab-strip'))tabSurfaces.unobserve(node);}
+export function orderPanelTabs(strip,panels){
+  if(!strip||panels.every((id,index)=>strip.children[index]?.dataset.panel===id))return;
+  const tabs=new Map([...strip.children].map(tab=>[tab.dataset.panel,tab]));
+  const pinned=!strip.moveBefore&&[...tabs.values()].find(tab=>tab.contains(document.activeElement));
+  if(pinned){
+    const index=panels.indexOf(pinned.dataset.panel);
+    for(const id of panels.slice(0,index))strip.insertBefore(tabs.get(id),pinned);
+    for(const id of panels.slice(index+1))strip.append(tabs.get(id));
+  }
+  panels.forEach((id,index)=>{
+    const tab=tabs.get(id);tab.dataset.index=index;
+    if(strip.children[index]===tab)return;
+    if(strip.moveBefore)strip.moveBefore(tab,strip.children[index]??null);
+    else strip.insertBefore(tab,strip.children[index]??null);
+  });
+  for(const tab of strip.children){const size=tabSizes.get(tab);if(size)drawTabSurface(tab,size);}
+}
 export function prepareTabPreview(tab){const surface=tab.querySelector(':scope > .tab-surface');if(surface){const id=`tab-surface-${++tabSurfaceId}`;surface.querySelector('filter').id=id;surface.lastElementChild.setAttribute('filter',`url(#${id})`);const box=surface.viewBox.baseVal;if(box.width>0)tabSizes.set(tab,{width:box.width,height:box.height});}}
 export function tabHover(tab, presentation) {
   if(!tab.classList.contains('column-tab')&&!tab.querySelector(':scope > .tab-surface')){
@@ -192,6 +209,8 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
       const column=drawer.anchor.kind==="column"?drawer.anchor.column:null,id=column??"tool";
       live.add(id);
       const {tool_set,layer_properties,...structure}=drawer;
+      const tabKey=t=>JSON.stringify(t&&[t.group,[...t.panels].sort()]);
+      if(drawer.tabs)structure.tabs=tabKey(drawer.tabs);
       let record=drawers.get(id);const key=JSON.stringify([structure,layer_properties!=null,!!tool_set,drawer.columns.flat().map(id=>state().workspace.layout.panels.find(p=>p.id===id))]);
       if(record?.key!==key) {
         // A new opener must move the body and connector together. Interpolating
@@ -204,7 +223,6 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
         if(!record){workspace.append(shadow,root);root.dataset.drawer=String(id);root.setAttribute("aria-label","Panel drawer");}
         root.classList.toggle("picker-drawer",!!drawer.compact);
         const tabs=root.querySelector(":scope > .drawer-tabs");
-        const tabKey=t=>JSON.stringify(t&&[t.group,t.panels]);
         if(tabs&&tabKey(record.drawer.tabs)!==tabKey(drawer.tabs)){releaseTabs(tabs);tabs.remove();}
         let inspector;
         const bodies=drawer.columns.map(ids=>{
@@ -225,6 +243,7 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
       record.tabStyle=drawer.tabs?app.group_tab_style(drawer.tabs.group):null;
       const header=record.root.querySelector(':scope > .drawer-tabs');
       if(header&&drawer.tabs&&header.dataset.tabStyle!==record.tabStyle){releaseTabs(header);header.remove();}
+      else if(header&&drawer.tabs)orderPanelTabs(header.firstElementChild,drawer.tabs.panels);
       record.closing=false;
       record.root.inert=false;
       record.inspector?.refresh(layer_properties);

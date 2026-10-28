@@ -314,7 +314,7 @@ export async function checkDrawerDragging({call,evaluate,settle}) {
         const tab=["active","inactive"].includes(source)?await rect(`${drawer} .drawer-tabs .dock-tab[data-panel="${source==="active"?"brushes":"sizes"}"]`):null;
         const start=source==="grip"?center(g):source==="empty"?{x:g.x-12,y:g.y+g.height/2}:center(tab);
         const away=await evaluate("({x:innerWidth*.5,y:innerHeight*.55})");
-        await press(start);const before=await snap();await move({x:start.x+10,y:start.y});assert.deepEqual(await snap(),before,`${pointer} ${source}: Moving inside drawer keeps source docked`);
+        await press(start);await wait();const displayed=await rect(drawer),before=await snap();await move({x:start.x+10,y:start.y});assert.deepEqual(await snap(),before,`${pointer} ${source}: Moving inside drawer keeps source docked`);
         assert.equal(await evaluate("document.querySelectorAll('.dragged-tab-preview').length"),["active","inactive"].includes(source)?1:0);
         if(["active","inactive"].includes(source)) {
           const preview=await rect('.dragged-tab-preview');
@@ -322,7 +322,7 @@ export async function checkDrawerDragging({call,evaluate,settle}) {
           assert.ok(Math.abs(preview.y+preview.height/2-start.y)<1);
         }
         const measured=await evaluate("window.__drawerActions.findLast(a=>a.type==='measure_column_drawers').measurements.find(m=>m.group===41).bounds");
-        assert.deepEqual(measured,b,"Rust receives displayed drawer bounds");
+        assert.deepEqual(measured,displayed,"Rust receives displayed drawer bounds");
         await move(away);assert.equal((await snap()).layout.floating.length,1,`${pointer} ${source} live tear-off: ${JSON.stringify(await evaluate("({status:document.querySelector('#status').textContent,drawer:layerApp.state().customization.column_drawers})"))}`);
         assert.equal(await evaluate("document.querySelectorAll('.tab-slide-overlay, .dragged-tab-source').length"),0);
         if (["active", "inactive"].includes(source)) {

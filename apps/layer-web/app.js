@@ -23,7 +23,7 @@ import { createZoomReadout } from "./zoom-readout.js";
 import { createScreenStatus } from "./screen-status.js";
 import { screenInfo } from "./new-drawing.js";
 import { createEditorPanels } from "./editor-panels.js";
-import { createWorkspaceChrome, tabHover, releaseTabSurfaces, prepareTabPreview } from "./workspace-chrome.js";
+import { createWorkspaceChrome, tabHover, releaseTabSurfaces, prepareTabPreview, orderPanelTabs } from "./workspace-chrome.js";
 import { createGlass } from "./glass.js";
 import { createPanelVectors } from "./panel-vectors.js";
 import { createBubbles } from "./bubbles.js";
@@ -567,9 +567,11 @@ function fitTabs() {
 function arrange(nextLayout, layoutOnly = false) {
   if (!app || !panelVectors) return;
   const resolved=layoutOnly?nextLayout:app.layout(...workspaceViewport);
+  const request=++workspaceLayoutRequested;
   panelVectors.schedule(resolved,layoutOnly,(resolved,result,only)=>{
     presentWorkspaceLayout(resolved,only);
     panelVectors.apply(resolved,result);
+    workspaceLayoutFinished=request;finishWorkspaceTabDrop();
     if(workspaceLatestPresentation?.model_revision===workspaceModelRevision) {
       workspacePresentation=workspaceLatestPresentation;flushWorkspacePresentation();
     }
@@ -597,9 +599,7 @@ function presentWorkspaceLayout(resolved,layoutOnly) {
       }
       node.classList.toggle("zen-kept", group.zen_kept);
       const tabStyle = app.group_tab_style(group.id);
-      const key = JSON.stringify([group.panels.map((id) => {
-        const view = customization.view(id); return [id, view.icon];
-      }), group.tabs_visible, !!group.footer_grip, tabStyle]);
+      const key = JSON.stringify([[...group.panels].sort(), group.tabs_visible, !!group.footer_grip, tabStyle]);
       if (node.dataset.key !== key) {
         node.dataset.key = key;
         node.dataset.panel = group.active;
@@ -644,6 +644,7 @@ function presentWorkspaceLayout(resolved,layoutOnly) {
         }
       }
       const preview = node.querySelector(".panel-preview");
+      orderPanelTabs(preview.querySelector('.tab-list'),group.panels);
       const previous = preview.querySelector(":scope > .panel-frame");
       if (previous !== body) previous ? previous.replaceWith(body) : preview.append(body);
       node.dataset.panel = group.active;
@@ -1029,7 +1030,16 @@ function update(regions) {
 
 // Rust owns transient interaction policy. These are only DOM event/capture
 // records; CSS animates the returned visibility without resizing the canvas.
-let workspaceGesture = null;
+let workspaceGesture = null,workspaceTabDrop = null,workspaceLayoutRequested=0,workspaceLayoutFinished=0;
+function workspaceLayoutReady(){return !workspaceLayoutPending&&workspaceLayoutFinished===workspaceLayoutRequested;}
+function clearWorkspaceTabDrop(){
+  if(workspaceTabDrop)clearTabSlide(workspaceTabDrop);
+  workspaceTabDrop=null;
+}
+function finishWorkspaceTabDrop(){
+  if(!workspaceTabDrop||!workspaceLayoutReady())return;
+  clearWorkspaceTabDrop();
+}
 // Watch only until pickup: an invalidated held tile must not leave a grab cursor.
 // Disconnect before dragging, when shared updates may deliberately reparent it.
 const workspaceGestureSourceObserver = new MutationObserver(() => {
@@ -1086,7 +1096,7 @@ function clearTabSlide(drag) {
 }
 function updateTabSlide(drag, presentation) {
   const slide = drag.tabSlide;
-  if (!slide) return;
+  if (!slide || drag.finishing) return;
   const preview = presentation?.preview;
   if (!preview) { clearTabSlide(drag); return; }
   for (const tab of slide.tabs) {
@@ -1160,6 +1170,10 @@ function flushWorkspacePresentation() {
   const update = workspacePresentation;
   workspacePresentation = null;
   if (!update || update.model_revision !== workspaceModelRevision) return false;
+  if(!update.drag){
+    if(!workspaceLayoutReady()){workspacePresentation=update;return false;}
+    finishWorkspaceTabDrop();
+  }
   const drag = update.drag, moving = drag?.group;
   if (moving) {
     const group = layout.groups.find(g => g.id === moving.id), base = group?.bounds;
@@ -1203,6 +1217,7 @@ function endWorkspaceGesture(e, cancel = false) {
   const drag = workspaceGesture;
   if (!drag || (e && drag.id !== e.pointerId)) return;
   workspaceGestureSourceObserver.disconnect();
+  drag.finishing=true;
   if (drag.started) {
     if (drag.tile) {
       const point=e||drag.last;
@@ -1213,7 +1228,9 @@ function endWorkspaceGesture(e, cancel = false) {
   if (cancel && drag.context) customization.dismissContext();
   if (!cancel && !drag.started && drag.selectTab) dispatch(drag.selectTab);
   workspaceGesture = null;
-  clearTabSlide(drag);
+  if(!cancel&&drag.tabSlide){
+    workspaceTabDrop=drag;finishWorkspaceTabDrop();
+  }else clearTabSlide(drag);
   workspaceCursor(null);
   if (workspace.hasPointerCapture(drag.id)) workspace.releasePointerCapture(drag.id);
   dropIndicator.hidden = true;
@@ -1237,6 +1254,7 @@ function endEdgeContact(e, phase) {
 }
 workspace.addEventListener("pointerdown", e => {
   if (!e.isTrusted) return;
+  if(workspaceTabDrop){e.preventDefault();e.stopImmediatePropagation();return;}
   lastPointerKind = e.pointerType || "mouse";
   if (e.button !== 0) return;
   if (edgeContact) {
@@ -1955,7 +1973,7 @@ try {
   bubbles = createBubbles({app,workspace,element,button,icon,state:()=>state,dispatch,applyChange,wake,glassChanged:()=>glass?.queueBubbles(),customization,contentPanel,rasterWorker,asset,cancelWorkspace:()=>endWorkspaceGesture(null,true),viewport:()=>workspaceViewport,leaveCanvas:()=>cursorInput(null)});
   panelVectors=createPanelVectors({workspace,groups,place,
     project:metadata=>rasterWorker({operation:'panel-vectors',metadata,buffers:[]}),
-    changed:()=>glass?.queue(),failed:error=>message(error.message)});
+    changed:()=>glass?.queue(),failed:error=>{workspaceLayoutFinished=workspaceLayoutRequested;clearWorkspaceTabDrop();message(error.message);}});
   glass = createGlass({app,canvas,workspace,connections:()=>workspaceChrome.connections(),vectors:()=>panelVectors.glass(),bubbles:()=>bubbles.glass(),enabled:()=>state.palette?.glass.transparency!=="off",wake});
   documents = createDocuments({app,bootstrap,delivery,state:()=>state,canvas,canvasReady:()=>gpuReady,dispatch,applyChange,wake,element,button,icon,numberField,message,gpuOperation,rasterWorker,resumeCanvas:resumeDocumentCanvas,contentChanged:panelContentChanged,refreshInputContext:()=>chromeInput({kind:"refresh"})});
   documents.mountProof(panels.get("proof"));

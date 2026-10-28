@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 
 export async function checkDragCursors({ call, evaluate, settle }) {
+  await call('Page.bringToFront');
+  await evaluate("new Promise(resolve=>{const ready=()=>{const view=JSON.parse(layerApp.app.workspace_view());if(layerApp.startupTimes.complete&&view.ready&&!view.busy)resolve();else setTimeout(ready,50)};ready()})");
   const wait = async () => {
     await settle(); await evaluate("new Promise(r=>setTimeout(r,180))");
     await evaluate("Promise.all([...document.querySelectorAll('.neighbor-tab-preview')].flatMap(n=>n.getAnimations()).map(a=>a.finished))");
@@ -36,16 +38,92 @@ export async function checkDragCursors({ call, evaluate, settle }) {
         await evaluate(`document.querySelector('.collapsed-column[data-column="41"] [data-panel="brushes"]').click()`);await wait();
       }
       const selector=drawer?'.drawer-tab-strip .dock-tab[data-panel="brushes"]':'.tab-list .dock-tab[data-panel="layers"]';
-      await evaluate(`window.focusedPanelTab=document.querySelector(${JSON.stringify(selector)});window.focusedPanelTab.nextElementSibling.focus()`);
+      await evaluate(`window.focusedPanelTab=document.querySelector(${JSON.stringify(selector)});window.focusedPanelNeighbor=window.focusedPanelTab.nextElementSibling;window.focusedPanelBody=focusedPanelTab.closest('.dock-group,.content-drawer').querySelector('.panel-frame,.drawer-column');window.focusedPanelNeighbor.focus()`);
       for(const type of ['keyDown','keyUp'])await call('Input.dispatchKeyEvent',{type,key:'Tab',code:'Tab',windowsVirtualKeyCode:9,modifiers:8});
       assert.deepEqual(await evaluate("({same:document.activeElement===window.focusedPanelTab,visible:window.focusedPanelTab.matches(':focus-visible'),tag:document.activeElement.tagName,panel:document.activeElement.dataset.panel})"),{same:true,visible:true,tag:'BUTTON',panel:drawer?'brushes':'layers'},`${theme} drawer=${drawer}: native keyboard focus reaches the selected tab`);
-      const start=center(await rect(selector));await press(start);await move({x:start.x+12,y:start.y});
+      const start=center(await rect(selector));
+      const neighbor=await evaluate("window.focusedPanelNeighbor.getBoundingClientRect().width");
+      await press(start);await wait();await move({x:start.x+12,y:start.y});await move({x:start.x+neighbor/2+2,y:start.y});
       assert.equal(await evaluate("!!document.querySelector('.dragged-tab-preview')"),true);
       assert.equal(await evaluate('document.activeElement===window.focusedPanelTab'),true,`${theme} drawer=${drawer}: sliding retains focus on the real tab`);
       await release();await clean();
+      assert.deepEqual(await evaluate("({source:window.focusedPanelTab.isConnected,neighbor:window.focusedPanelNeighbor.isConnected,body:focusedPanelBody.isConnected,order:[...window.focusedPanelTab.parentElement.children].map(tab=>tab.dataset.panel)})"),
+        {source:true,neighbor:true,body:true,order:drawer?['sizes','brushes']:['properties','layers']},`${theme} drawer=${drawer}: committed reorder retains both native tabs and their content`);
       assert.equal(await evaluate('document.activeElement===window.focusedPanelTab'),true,`${theme} drawer=${drawer}: release retains the focused tab`);
+      await evaluate('focusedPanelTab.parentElement.moveBefore=undefined');
+      const reverse=center(await rect(selector));
+      await press(reverse);await wait();await move({x:reverse.x-12,y:reverse.y});await move({x:reverse.x-neighbor/2-2,y:reverse.y});await release();await clean();
+      assert.deepEqual(await evaluate("({source:focusedPanelTab.isConnected,neighbor:focusedPanelNeighbor.isConnected,focused:document.activeElement===focusedPanelTab,order:[...focusedPanelTab.parentElement.children].map(tab=>tab.dataset.panel)})"),
+        {source:true,neighbor:true,focused:true,order:drawer?['brushes','sizes']:['layers','properties']},`${theme} drawer=${drawer}: reverse reorder preserves focus without atomic DOM moves`);
+      await evaluate('delete focusedPanelTab.parentElement.moveBefore');
       console.log(JSON.stringify({theme,drawer,keyboardFocusedTabRetained:true}));
     }
+    await evaluate(`(()=>{
+      const send=Worker.prototype.postMessage,workers=new Map();
+      const gate=window.tabVectorGate={held:false,replies:[],release(){this.held=false;for(const reply of this.replies.splice(0))reply()},restore(){
+        this.release();Worker.prototype.postMessage=send;for(const [worker,record] of workers)worker.onmessage=record.reply;delete window.tabVectorGate;
+      }};
+      Worker.prototype.postMessage=function(message,...args){
+        if(message?.request?.operation==='panel-vectors'){
+          let record=workers.get(this);
+          if(!record){
+            record={ids:new Set(),reply:this.onmessage};workers.set(this,record);const worker=this;
+            this.onmessage=function(event){
+              if(record.ids.delete(event.data?.id)&&gate.held){gate.replies.push(()=>record.reply.call(worker,event));return}
+              return record.reply.call(worker,event);
+            };
+          }
+          record.ids.add(message.id);
+        }
+        return send.call(this,message,...args);
+      };
+    })()`);
+    for(const theme of ['light','dark']){
+      await send({type:'restore_workspace',workspace:fixture});await send({type:'set_theme',theme});
+      await send({type:'customize',action:{type:'set_column_collapsed',group:41,collapsed:true}});
+      await send({type:'customize',action:{type:'set_column_drawers',column:41,drawers:false}});
+      await evaluate(`document.querySelector('.collapsed-column[data-column="41"] [data-panel="brushes"]').click()`);await wait();
+      const selector='.tab-list .dock-tab[data-panel="brushes"]';
+      await evaluate(`window.focusedPanelTab=document.querySelector(${JSON.stringify(selector)});window.focusedPanelNeighbor=focusedPanelTab.nextElementSibling`);
+      const start=center(await rect(selector)),width=await evaluate('focusedPanelNeighbor.getBoundingClientRect().width');
+      await press(start);await wait();await move({x:start.x+12,y:start.y});await move({x:start.x+width/2+2,y:start.y});
+      assert.equal(await evaluate("!!document.querySelector('.dragged-tab-preview')"),true);
+      await evaluate('tabVectorGate.held=true');await release();
+      for(let i=0;i<100&&!await evaluate('tabVectorGate.replies.length');i++)await evaluate('new Promise(r=>setTimeout(r,20))');
+      assert.ok(await evaluate('tabVectorGate.replies.length'),'The real layout worker reply is withheld');
+      assert.deepEqual(await evaluate(`({core:layerApp.state().workspace.layout.bands[0].root.panels,
+        dom:[...focusedPanelTab.parentElement.children].map(t=>t.dataset.panel),source:focusedPanelTab.isConnected,neighbor:focusedPanelNeighbor.isConnected,
+        hidden:focusedPanelTab.classList.contains('dragged-tab-source'),preview:!!document.querySelector('.tab-slide-overlay')})`),
+        {core:['sizes','brushes'],dom:['brushes','sizes'],source:true,neighbor:true,hidden:true,preview:true},`${theme}: the preview covers the old layout until the committed geometry arrives`);
+      await evaluate('tabVectorGate.release()');await wait();await clean();
+      assert.deepEqual(await evaluate(`({dom:[...focusedPanelTab.parentElement.children].map(t=>t.dataset.panel),source:focusedPanelTab.isConnected,neighbor:focusedPanelNeighbor.isConnected})`),
+        {dom:['sizes','brushes'],source:true,neighbor:true},`${theme}: publication hands the preview back to the retained tabs`);
+      await send({type:'set_theme',theme:theme==='light'?'dark':'light'});
+      const unchanged=center(await rect(selector));
+      await press(unchanged);await wait();await move({x:unchanged.x+12,y:unchanged.y});await release();await clean();
+      assert.deepEqual(await evaluate('layerApp.state().workspace.layout.bands[0].root.panels'),['sizes','brushes'],`${theme}: dropping in the same slot also completes the handoff`);
+    }
+    for(const theme of ['light','dark']){
+      await send({type:'restore_workspace',workspace:fixture});await send({type:'set_theme',theme});
+      await send({type:'customize',action:{type:'set_column_collapsed',group:41,collapsed:true}});
+      await send({type:'customize',action:{type:'set_column_drawers',column:41,drawers:false}});
+      await evaluate(`document.querySelector('.collapsed-column[data-column="41"] [data-panel="brushes"]').click()`);await wait();
+      await press(center(await rect('.tab-list .dock-tab[data-panel="properties"]')));await wait();await move(away);
+      const selector='.floating-panel[data-panel="properties"]';
+      await evaluate(`window.floatingDropNode=document.querySelector(${JSON.stringify(selector)})`);
+      assert.equal(await evaluate('!!floatingDropNode'),true,'The tab is torn into a real floating group');
+      await move({x:away.x+120,y:away.y+80});
+      const displayed=await rect(selector);
+      await evaluate('tabVectorGate.held=true');await release();
+      for(let i=0;i<100&&!await evaluate('tabVectorGate.replies.length');i++)await evaluate('new Promise(r=>setTimeout(r,20))');
+      assert.ok(await evaluate('tabVectorGate.replies.length'),'The floating release layout reply is withheld');
+      assert.deepEqual(await rect(selector),displayed,`${theme}: a floating tab keeps its displayed position until the release layout arrives`);
+      await evaluate('tabVectorGate.release()');await wait();await clean();
+      const final=await rect(selector);
+      assert.equal(final.x,displayed.x);assert.equal(final.y,displayed.y);
+      assert.equal(await evaluate('floatingDropNode.isConnected'),true,'The committed floating panel retains its native controls');
+    }
+    await evaluate('tabVectorGate.restore()');
     for (const end of ["release", "cancel", "capture", "blur"]) {
       await send({ type: "restore_workspace", workspace: fixture });
       const selector = '.dock-tab[data-panel="layers"]';
@@ -130,7 +208,8 @@ export async function checkDragCursors({ call, evaluate, settle }) {
     console.log("Web drag feedback: attached tab sliding, insertion, tear-off, cursors, resize, release, cancellation, capture loss, and blur passed.");
   } finally {
     if (held) await release();
+    await evaluate('window.tabVectorGate?.restore()');
     await send({ type: "restore_workspace", workspace: saved });
-    await evaluate('delete window.focusedPanelTab');
+    await evaluate('delete window.focusedPanelTab;delete window.focusedPanelNeighbor;delete window.focusedPanelBody;delete window.floatingDropNode');
   }
 }

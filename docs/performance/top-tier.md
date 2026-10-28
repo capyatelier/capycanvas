@@ -238,7 +238,7 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 | Attached filter drag inside a clipping run | 120 | **Not met.** 93.24–102.71 native UI fps; moving-frame gap p99 25.00–33.33 ms | [Filter attachment feedback](#filter-attachment-feedback), 2026-10-04 |
 | Navigation with 32 visible paint layers | 120 | | |
 | Drawing with 32 visible paint layers, G-Pen 1024 px | 120 | | |
-| Panel, tab, column or toolbar drag and docking | 120 | **Not met on reference hardware.** Toolbar or component drag 103–119 fps. Latest GTK desktop tab-drop comparison: 119.568–120.007 → 119.573–120.007 presents/s; final gap p99 ≤9.434 ms. Windows software-adapter drop checks provide no frame-rate measurement. Reference-tier qualification remains open | `dc27e04d`, 2026-09-23; [GTK tab drops](#gtk-tab-drops), [Windows tab drops](#windows-tab-drops), 2026-10-27; [GTK column bridge diagnostic](#gtk-column-bridge-diagnostic), 2026-10-25 |
+| Panel, tab, column or toolbar drag and docking | 120 | **Not met on reference hardware.** Toolbar or component drag 103–119 fps. Latest GTK desktop tab-drop comparison: 119.568–120.007 → 119.573–120.007 presents/s; final gap p99 ≤9.434 ms. Web reference Chrome-surface median 94.38 Hz lies between baseline brackets 94.58/94.18 Hz; fresh geometry presentation remains unqualified. Windows software-adapter checks provide no frame timing | `dc27e04d`, 2026-09-23; [GTK tab drops](#gtk-tab-drops), [Windows tab drops](#windows-tab-drops), [Web tab drops](#web-tab-drops), 2026-10-27; [GTK column bridge diagnostic](#gtk-column-bridge-diagnostic), 2026-10-25 |
 | Android palette pill opening at the work-area edge | 120 | **FPS unqualified.** Instant clamp; two actual presents per opening, all neighbors stationary in the diagnostic | [Native palette opening](#native-palette-opening), 2026-10-23 |
 | Android tool bubble drag through four neighbours | 120 | **Unqualified after the bubble release fixes.** Previous parity build: 115.00–116.55 actual app-window presents/s; p99 ≤16.667447 ms, default glass, 61 MP photo at Fit | [Native tool bubbles](#native-tool-bubbles), 2026-10-24 |
 | Web tool bubble drag through four neighbours | 120 | Unmeasured after the bubble release fixes; desktop browser journeys do not qualify the reference tablet | [Web checks](../development/web.md#tests), 2026-10-24 |
@@ -4735,6 +4735,55 @@ No hardware timing comparison is available: the Windows GPU pool was reserved
 by other sessions. The 120 Hz target remains unqualified. Frozen build identities,
 baseline failures and per-journey captures are retained in
 `artifacts/windows-tab-drop.local/` and the VM's `20261027-185409` evidence.
+
+## Web tab drops
+
+The 2026-10-27 desktop control compares `1a3c3b429` with the retained-tab
+candidate using the same Wasm (`ad72e41250d341fe`), Chrome, NVIDIA Blackwell
+adapter and fixture. Each theme/input supplies one 2.2-second gesture at
+1440 × 913 CSS pixels, scale 1, Off glass and a blank drawing.
+
+| Theme/input | Baseline / retained callbacks | Baseline / retained dispatch p95, ms |
+| --- | ---: | ---: |
+| Light mouse | 133 / 133 | 0.5 / 0.5 |
+| Light touch | 133 / 133 | 0.4 / 0.4 |
+| Dark mouse | 133 / 133 | 0.5 / 0.5 |
+| Dark touch | 133 / 133 | 0.4 / 0.4 |
+
+All contacts retain the DOM and Rust model, with zero full model or layout
+refreshes. Callback cadence is approximately 60.00 Hz in both builds. These
+short callback and CPU samples do not establish displayed FPS, sustained
+performance or reference-tier qualification.
+[Results and source hashes](../../artifacts/web-tab-drop.local/verification-summary.json)
+also retain the delayed-worker regression and matched baseline pixel failures.
+
+On the MovinkPad Pro 14 reference tablet, the same Wasm and baseline/candidate
+sources run the 9504 × 6336 photo with an empty paint layer at Fit, default Paint
+workspace and Low glass. The optimized `dev-perf` build uses factory display
+size, density 280, font scale 1 and 120 Hz; Chrome has 1646 × 908 CSS pixels at
+DPR 1.75. Thermal status stays 0. Each phase primes the gesture and measures
+three six-second mouse contacts, with 239–241 trusted CDP inputs/s.
+
+| Phase | Chrome surface first–last Hz | Surface gap p99, ms | Full-contact presents / duration, s |
+| --- | ---: | ---: | ---: |
+| Baseline before | 94.51 / 94.58 / 95.00 | 133.34 / 125.00 / 125.00 | 572–575 / 6.110–6.120 |
+| Retained tabs | 94.38 / 93.92 / 95.07 | 125.00 / 133.34 / 125.00 | 570–577 / 6.109–6.122 |
+| Baseline after | 94.05 / 94.21 / 94.18 | 133.34 / 133.34 / 133.34 | 570–571 / 6.107–6.124 |
+
+The candidate median lies between the two baseline medians; this bracket shows
+no repeatable regression. All contacts preserve the model revision, source tab
+and zero state/layout refreshes during motion; drop, Undo and Redo pass. They
+record 557–563 distinct DOM poses, onset 21.19–29.53 ms and longest contact gaps
+133.34–150.00 ms. Chrome PSS includes browser, renderer, sandbox and GPU processes
+and an untouched background tab, with settled totals 1.79–1.82 GiB.
+
+These are SurfaceFlinger actual-present timestamps for Chrome's content surface,
+sampled with overlapping latency histories. They lack geometry-to-buffer
+attribution; repeated poses can be included and the observer can affect cadence.
+The reported first–last rate is not qualified moving-frame FPS. Both builds'
+diagnostics miss the 114 Hz and 16.7 ms gates, so reference-tier qualification
+remains open. [Full contacts, clocks, hashes and excluded fixture attempts](../../artifacts/web-tab-drop.local/reference/report.md)
+retain the matched baseline miss alongside the candidate.
 
 ## Panel-tab compositing
 
