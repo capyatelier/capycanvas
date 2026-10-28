@@ -122,6 +122,14 @@ export async function checkDragCursors({ call, evaluate, settle }) {
         dom:[...focusedPanelTab.parentElement.children].map(t=>t.dataset.panel),source:focusedPanelTab.isConnected,neighbor:focusedPanelNeighbor.isConnected,
         hidden:focusedPanelTab.classList.contains('dragged-tab-source'),preview:!!document.querySelector('.tab-slide-overlay')})`),
         {core:['sizes','brushes'],dom:['brushes','sizes'],source:true,neighbor:true,hidden:true,preview:true},`${theme}: the preview covers the old layout until the committed geometry arrives`);
+      await evaluate(`window.pendingDropCanvasPresses=0;document.querySelector('#canvas').addEventListener('pointerdown',()=>pendingDropCanvasPresses++,{once:true})`);
+      await press(center(await rect('#canvas')));await release();
+      assert.equal(await evaluate('pendingDropCanvasPresses'),1,`${theme}: canvas input arrives while the drop layout is pending`);
+      await press(center(await rect('.layer-blend')));await release();
+      assert.equal(await evaluate("!!document.querySelector('.panel-context-menu:popover-open')"),true,`${theme}: panel controls work while the drop layout is pending`);
+      for(const type of ['keyDown','keyUp'])await call('Input.dispatchKeyEvent',{type,key:'Escape',code:'Escape',windowsVirtualKeyCode:27});
+      await press(center(await rect('.tab-list .dock-tab[data-panel="properties"]')));await release();
+      assert.equal(await evaluate('layerApp.state().workspace.layout.bands.find(b=>b.id===42).root.active'),'properties',`${theme}: tab selection works while the drop layout is pending`);
       await evaluate('tabVectorGate.release()');await wait();await clean();
       assert.deepEqual(await evaluate(`({dom:[...focusedPanelTab.parentElement.children].map(t=>t.dataset.panel),source:focusedPanelTab.isConnected,neighbor:focusedPanelNeighbor.isConnected})`),
         {dom:['sizes','brushes'],source:true,neighbor:true},`${theme}: publication hands the preview back to the retained tabs`);

@@ -1255,7 +1255,6 @@ function endEdgeContact(e, phase) {
 }
 workspace.addEventListener("pointerdown", e => {
   if (!e.isTrusted) return;
-  if(workspaceTabDrop){e.preventDefault();e.stopImmediatePropagation();return;}
   lastPointerKind = e.pointerType || "mouse";
   if (e.button !== 0) return;
   if (edgeContact) {
@@ -1291,7 +1290,7 @@ workspace.addEventListener("pointermove", e => {
 window.addEventListener("pointerup", e => endEdgeContact(e, "up"), { capture: true });
 window.addEventListener("pointercancel", e => endEdgeContact(e, "cancel"), { capture: true });
 workspace.addEventListener("pointerdown", e => {
-  if (e.button !== 0 || !e.isPrimary || workspaceGesture) return;
+  if (e.button !== 0 || !e.isPrimary || workspaceGesture || workspaceTabDrop) return;
   const node = e.target.closest("[data-workspace-drag]");
   if (!node) return;
   workspaceGesture = { id: e.pointerId, action: JSON.parse(node.dataset.workspaceDrag),
