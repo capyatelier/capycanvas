@@ -42,6 +42,7 @@ extension XCTestCase {
             XCTAssertTrue(button.waitForExistence(timeout: 15))
             app.typeKey("g", modifierFlags: [.command, .shift]); app.typeText(url.path + "\n")
             workspaceActivate(button); XCTAssertTrue(button.waitForNonExistence(timeout: 15))
+            waitForEditorInteraction(in: app)
         }
         func pixels() -> Data { editorPixels(in: app) }
         func changed(_ before: Data) -> Data {
@@ -67,8 +68,21 @@ extension XCTestCase {
             }
         }, evaluatedWith: app)
         waitForExpectations(timeout: 30)
-        let rows = app.groups.matching(NSPredicate(format: "identifier BEGINSWITH %@", "layer-row-"))
-        let initialCount = rows.count
+        let layerScroll = app.scrollViews["layer-rows"]
+        let rows = layerScroll.groups.matching(NSPredicate(format: "identifier BEGINSWITH %@", "layer-row-"))
+        let originalRows = rows.allElementsBoundByIndex
+        let originalCaptions = originalRows.map(\.label)
+        XCTAssertFalse(originalCaptions.isEmpty)
+        XCTAssertTrue(originalCaptions.allSatisfy { !$0.isEmpty })
+        var knownRows = Set(originalRows.map(\.identifier)), correctionCaptions = [String]()
+        func row(named caption: String) -> XCUIElement {
+            rows.matching(NSPredicate(format: "label == %@", caption)).firstMatch
+        }
+        func revealRow(_ caption: String) -> XCUIElement {
+            let named = row(named: caption), content = named.buttons["Edit layer content"]
+            revealEditorControl(content, label: caption, type: .group, in: layerScroll)
+            return named
+        }
         let corrections: [(String, String, String, String, Int?)] = [("Exposure", "exposure", "exposure", "0.75", nil),
             ("White Balance", "white_balance", "temperature", "25", nil),
             ("Levels", "levels", "gamma", "0.9", nil), ("Curves", "curves", "", "", nil),
@@ -85,9 +99,12 @@ extension XCTestCase {
             expectation(for: NSPredicate(format: "value == %@", "Preview ready"), evaluatedWith: filter)
             waitForExpectations(timeout: 20); workspaceActivate(filter)
             workspaceActivate(app.buttons["panel-tab-layers"])
-            expectation(for: NSPredicate(format: "count == %d", initialCount + index + 1), evaluatedWith: rows)
+            let row = rows.matching(NSPredicate(format: "NOT (identifier IN %@)", Array(knownRows))).firstMatch
+            expectation(for: NSPredicate { _, _ in row.exists && !row.label.isEmpty }, evaluatedWith: app)
             waitForExpectations(timeout: 10)
-            let row = rows.element(boundBy: 0)
+            let caption = row.label
+            XCTAssertFalse(correctionCaptions.contains(caption))
+            correctionCaptions.append(caption); knownRows.insert(row.identifier)
             expectPixels(before, in: app)
             if key.isEmpty {
                 let curve = app.descendants(matching: .any)["effect-curve"].firstMatch
@@ -136,14 +153,9 @@ extension XCTestCase {
         expectation(for: NSPredicate { _,_ in FileManager.default.fileExists(atPath: project.path) }, evaluatedWith: app)
         waitForExpectations(timeout: 15)
         open(project); expectPixels(corrected, in: app)
-        XCTAssertEqual(rows.count, initialCount + 6)
-        for index in corrections.indices {
-            let row = rows.element(boundBy: corrections.count - 1 - index)
-            let scroll = app.scrollViews.containing(.any, identifier: row.identifier).firstMatch
-            // The first row sits flush against the scroll boundary. Reveal the
-            // inset thumbnail hit target, not the entire row plus scroll inset.
-            let content = row.buttons["Edit layer content"]
-            revealEditorControl(content, in: scroll); workspaceActivate(content)
+        for index in corrections.indices.reversed() {
+            let row = revealRow(correctionCaptions[index])
+            workspaceActivate(row.buttons["Edit layer content"])
             XCTAssertTrue(row.buttons["Edit layer mask"].exists)
             if corrections[index].2.isEmpty {
                 reveal(app.buttons["curve-reset"]); workspaceActivate(app.buttons["curve-reset"])
@@ -156,6 +168,7 @@ extension XCTestCase {
             }
             _ = changed(corrected); editorHistory("Undo", in: app); expectPixels(corrected, in: app)
         }
+        for caption in originalCaptions { XCTAssertTrue(revealRow(caption).exists) }
         XCTAssertEqual(try Data(contentsOf: photo), original)
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)
         attachEditor(in: app, name: "photo-corrections-reopened-and-reedited")

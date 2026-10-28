@@ -62,9 +62,12 @@ extension XCTestCase {
                 return XCTFail("The scroll viewport must contain a visible wheel target inside its editor window: \(scroll.identifier)")
             }
             let bounds = target.frame, targetID = target.identifier
-            window.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(
-                dx: viewport.minX + 2 - windowBounds.minX, dy: viewport.midY - windowBounds.minY))
-                .scroll(byDeltaX: 0, deltaY: upward ? -80 : 80)
+            let wheel = nodes.first { $0.elementType == .staticText && $0.frame.width > 0 && $0.frame.height > 0
+                && viewport.contains($0.frame) && windowBounds.contains($0.frame) }?.frame ?? viewport
+            let point = window.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(
+                dx: wheel.midX - windowBounds.minX, dy: wheel.midY - windowBounds.minY))
+            point.hover()
+            point.scroll(byDeltaX: 0, deltaY: upward ? -80 : 80)
             expectation(for: NSPredicate { _, _ in
                 guard let next = try? scroll.snapshot() else { return false }
                 let nextNodes = descendants(next)
@@ -82,9 +85,10 @@ extension XCTestCase {
         }
         XCTFail("Editor control did not become fully visible: \(identifier)")
     }
-    @MainActor func revealEditorControl(_ element: XCUIElement, identifier: String, type: XCUIElement.ElementType, in scroll: XCUIElement) {
-        guard !identifier.isEmpty, scroll.waitForExistence(timeout: 5) else {
-            return XCTFail("A lazy control needs its stable identifier and native scroll")
+    @MainActor func revealEditorControl(_ element: XCUIElement, identifier: String = "", label: String = "", type: XCUIElement.ElementType, in scroll: XCUIElement) {
+        let identity = identifier.isEmpty ? label : identifier
+        guard !identity.isEmpty, scroll.waitForExistence(timeout: 5) else {
+            return XCTFail("A lazy control needs its stable identity and native scroll")
         }
         func descendants(_ node: XCUIElementSnapshot) -> [XCUIElementSnapshot] {
             node.children.flatMap { [$0] + descendants($0) }
@@ -96,7 +100,7 @@ extension XCTestCase {
         }
         func attach(_ text: String) {
             let proof = XCTAttachment(string: text)
-            proof.name = "native-lazy-reveal-" + identifier
+            proof.name = "native-lazy-reveal-" + identity
             proof.lifetime = .keepAlways
             add(proof)
         }
@@ -106,27 +110,32 @@ extension XCTestCase {
             guard let current = try? scroll.snapshot() else { return XCTFail("The native scroll must remain mounted") }
             let viewport = current.frame.intersection(windowBounds), nodes = descendants(current)
             guard positive(viewport) else { return XCTFail("The native scroll needs a finite viewport inside its window") }
-            let matches = nodes.filter { $0.identifier == identifier && (type == .any || $0.elementType == type) }
-            guard matches.count <= 1 else { return XCTFail("The lazy control must have one semantic identity: \(identifier)") }
-            if let target = matches.first, positive(target.frame) {
-                guard target.frame.width <= viewport.width && target.frame.height <= viewport.height else {
-                    return XCTFail("The requested control must fit its native viewport: \(identifier)")
+            let matches = nodes.filter {
+                (identifier.isEmpty ? $0.label == label : $0.identifier == identifier) && (type == .any || $0.elementType == type)
+            }
+            guard matches.count <= 1 else { return XCTFail("The lazy control must have one semantic identity: \(identity)") }
+            if let anchor = matches.first {
+                let frame = identifier.isEmpty ? (try? element.snapshot())?.frame ?? .zero : anchor.frame
+                guard !positive(frame) || frame.width <= viewport.width && frame.height <= viewport.height else {
+                    return XCTFail("The requested control must fit its native viewport: \(identity)")
                 }
-                if viewport.contains(target.frame) {
-                    guard element.exists else { return XCTFail("The fully contained lazy control must resolve: \(identifier)") }
-                    attach("Step \(step): fully contained \(identifier), type \(type.rawValue), frame \(target.frame), viewport \(viewport), window \(windowBounds)")
+                if positive(frame), viewport.contains(frame) {
+                    guard element.exists else { return XCTFail("The fully contained lazy control must resolve: \(identity)") }
+                    attach("Step \(step): fully contained \(identity), type \(type.rawValue), frame \(frame), viewport \(viewport), window \(windowBounds)")
                     return
                 }
-                towardEnd = target.frame.maxY > viewport.maxY
+                let bounds = positive(frame) ? frame : anchor.frame
+                if positive(bounds) { towardEnd = bounds.maxY > viewport.maxY }
             }
             let visible = nodes.filter { !$0.identifier.isEmpty && positive($0.frame) && viewport.contains($0.frame) }
             let groups = Dictionary(grouping: visible, by: key)
             let anchors = groups.filter { $0.value.count == 1 }.mapValues { $0[0].frame }
             guard !anchors.isEmpty else { return XCTFail("Native lazy scrolling needs visible identified controls to measure progress") }
             #if os(macOS)
-            window.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(
-                dx: viewport.minX + 2 - windowBounds.minX, dy: viewport.midY - windowBounds.minY))
-                .scroll(byDeltaX: 0, deltaY: towardEnd ? -80 : 80)
+            let point = window.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(
+                dx: (identifier.isEmpty ? viewport.midX : viewport.minX + 2) - windowBounds.minX, dy: viewport.midY - windowBounds.minY))
+            point.hover()
+            point.scroll(byDeltaX: 0, deltaY: towardEnd ? -80 : 80)
             #else
             let x = viewport.minX - windowBounds.minX + viewport.width * 0.05
             let start = window.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: x,
@@ -149,11 +158,11 @@ extension XCTestCase {
             let changed = XCTWaiter.wait(for: [progress], timeout: 2) == .completed
             attach("Step \(step): toward end \(towardEnd), viewport \(viewport), measured progress \(changed)\n" + moved.joined(separator: "\n"))
             if !changed {
-                guard !reversed else { return XCTFail("The lazy control was not found across both measured scroll boundaries: \(identifier)") }
+                guard !reversed else { return XCTFail("The lazy control was not found across both measured scroll boundaries: \(identity)") }
                 towardEnd.toggle(); reversed = true
             }
         }
-        XCTFail("The lazy control did not become fully contained within the bounded native search: \(identifier)")
+        XCTFail("The lazy control did not become fully contained within the bounded native search: \(identity)")
     }
     @MainActor func editorTool(_ label: String, in app: XCUIApplication) {
         workspaceActivate(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@",
