@@ -9,6 +9,58 @@ is 4248 × 2832.
 - Geometry measurements use the 12 MP photo at Fit zoom. Older UI-only rows
   name their own canvas sizes.
 
+## Android panel composition
+
+Measured 2026-10-28 on TCL TAB 11 Gen 2 against `176c68cd6`, using
+release Rust, an unminified benchmark host, the 4248 × 2832 reference photo
+at Fit, factory density 320, font scale 1, 60 Hz and thermal status 0.
+The candidate retains panel content outside the changing constraint lambda;
+native libraries are identical. Each recording has three six-second contacts.
+The earlier light comparison uses a one-second primer and
+baseline/candidate/candidate/baseline order; its rates are diagnostic. The dark
+comparison uses a full six-second primer.
+
+| Column-gap resize | Baseline | Retained panel body | Qualification |
+| --- | --- | --- | --- |
+| Light, mean actual window presents/s across both order pairs | 42.127 | 44.680 | Not met; warming/order spread overlaps the gain |
+| Light, mean fresh drawn bounds/s | 35.926 | 38.226 | Not met |
+| Light, worst presentation-gap p99, ms | 66.653 | 66.637 | Not met |
+| Dark, actual window presents/s in three contacts | 41.792 / 48.780 / 50.563 | 44.888 / 52.088 / 55.193 | Not met |
+| Dark, fresh drawn bounds/s | 35.821 / 39.548 / 43.759 | 40.020 / 41.335 / 43.978 | Not met |
+| Diagnostic unchanged `PanelControls` compositions | 290 | 0 | Less repeated UI work; not a presentation rate |
+| Diagnostic mean UI measure/layout, ms | 8.206 | 6.312 | 23.1% lower; trace overhead applies |
+
+The separate composition regression keeps its observer active without Perfetto.
+It fails on the baseline with 442 unchanged control compositions and passes all
+three candidate contacts with zero, while recording 235/262/269 changing bounds
+and no full snapshots. Both builds perform the same native gesture.
+
+The same three-row native panel-change/size-slider/value fixture records
+34.172/37.098/37.316 → 34.731/38.534/41.486 actual presents/s for the slider.
+Its p99 ranges are 149.956–166.608 → 149.944–183.202 ms; the worst increase is
+one display interval, within the control's contact spread. Value scrubs record
+43.195–48.648 → 50.104–50.975 presents/s. Both controls remain below target.
+The candidate's light/dark resize matrices pass all 48 retained-content contacts;
+the matched full-primer light control passes all 24. Native panel-schema and
+displayed-control journeys also pass in both themes.
+
+Light and dark native bridge/source pixel checks pass. Ten chrome crop pairs
+per theme differ at three colour channels by at most one level, all within
+Navigator imagery; chrome text and edges match. The production refactor is
++16/−16 lines. Matched APKs, raw contacts, traces and crops are retained under
+`/mnt/localssd/capycanvas5-android-ui-motion-20261028/{abba-gap,body-acceptance}/`;
+candidate APK SHA-256 is
+`946d04acf4821d234949ce058cf1c77d570c8146bddb888f471a5b0e6b8adcac`.
+
+The matched Navigator-open canvas controls use the same photo and three
+six-second native contacts. Pan and rotation remain 60.023 presents/s in every
+contact. Pinch is a shared miss: 47.468–48.673 → 47.812–48.673 presents/s.
+Fresh input-attributed stroke completions are 39.117–39.681 →
+38.982–39.466 updates/s, within run spread and below the canvas target.
+Exact consumed-input-to-GPU-completion pooled p50/p95/p99 is
+54.323/70.200/78.513 → 53.983/69.598/75.179 ms. These software intervals exclude
+digitizer and panel latency; they do not measure physical pen-to-ink latency.
+
 ## Navigation presentation
 
 Measured 2026-10-24–25 on the reference TCL TAB 11 Gen 2, comparing

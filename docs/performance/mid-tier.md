@@ -25,6 +25,15 @@ canvas is 6000 × 4000.
   Kamvas Pad 12: a MediaTek MT8391 with the same Mali-G57 MC2 GPU and a 90 Hz
   panel. Use them only until the MovinkPad 11 is measured.
 
+## Android panel composition
+
+The 2026-10-28 retained panel-body change is unmeasured on Wacom MovinkPad 11.
+The reference device is excluded while assigned to another worktree. The
+[TCL comparison](low-tier.md#android-panel-composition) establishes lower UI
+measure/layout cost on the low tier; it does not qualify 90 Hz cadence, fresh
+geometry, canvas controls or appearance on this device. Earlier 60 Hz UI rows
+retain their stated limits.
+
 ## Navigation presentation
 
 Measured 2026-10-25 on the reference Wacom MovinkPad 11, comparing `2d7c4d5d7`

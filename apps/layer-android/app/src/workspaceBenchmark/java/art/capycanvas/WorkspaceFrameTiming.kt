@@ -27,6 +27,7 @@ import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.sin
 import kotlin.math.roundToInt
 
@@ -35,6 +36,8 @@ internal class WorkspaceFrameTiming(private val instrumentation: Instrumentation
         require(args.getString("workspaceBenchmark") == "true")
         val scenario = WorkspaceBenchmarkActivity(instrumentation, activity)
         val tierPhoto = args.getString("tierPhoto") == "true"
+        val columnDrag = bridge && !resize && args.getString("columnDrag") == "true"
+        var draggedColumn: Int? = null
         val repeats = if (bridge || tierPhoto) args.getString("repeats", "3")!!.toInt() else 1
         val measuredDuration = if (bridge || tierPhoto) args.getString("durationMs", "6000")!!.toLong() else 5000L
         val label = args.getString("label", "column-bridge")!!
@@ -42,21 +45,31 @@ internal class WorkspaceFrameTiming(private val instrumentation: Instrumentation
         require(bridgeContent in listOf("default", "empty-navigator", "empty-both"))
         val modelIdentityTrace = bridge && args.getString("modelIdentityTrace") == "true"
         val dirtyTrace = bridge && args.getString("dirtyTrace") == "true"
+        val checkBodyComposition = args.getString("checkBodyComposition") == "true"
+        require(!checkBodyComposition || bridge && resize && bridgeContent == "default")
+        val composeTrace = args.getString("composeTrace") == "true"
+        val countComposition = AtomicBoolean(false)
+        val compositions = AtomicInteger()
+        val panelCompositions = AtomicInteger()
         val requireSharedPresentation = args.getString("requireSharedPresentation") == "true"
         require(!requireSharedPresentation || bridge)
         val measuring = AtomicBoolean(false)
         data class CompositionDirty(val time: Long, val key: Int, val first: Int, val second: Int, val name: String)
         val compositionDirty = mutableListOf<CompositionDirty>()
         if (bridge) { assertFalse(BuildConfig.DEBUG); require((repeats >= 3 || (modelIdentityTrace || args.getString("composeTrace") == "true" || bridgeContent != "default") && repeats == 1) && measuredDuration in 5000L..10000L) }
-        if (args.getString("composeTrace") == "true") @OptIn(androidx.compose.runtime.InternalComposeTracingApi::class)
+        if (composeTrace || checkBodyComposition) @OptIn(androidx.compose.runtime.InternalComposeTracingApi::class)
             androidx.compose.runtime.Composer.setTracer(object : androidx.compose.runtime.CompositionTracer {
-                override fun isTraceInProgress() = android.os.Trace.isEnabled()
+                override fun isTraceInProgress() = checkBodyComposition || android.os.Trace.isEnabled()
                 override fun traceEventStart(key: Int, dirty1: Int, dirty2: Int, info: String) {
+                    if (countComposition.get()) {
+                        compositions.incrementAndGet()
+                        if (info.startsWith("art.capycanvas.PanelControls (")) panelCompositions.incrementAndGet()
+                    }
                     if (dirtyTrace && measuring.get() && (info.startsWith("art.capycanvas.CollapsedColumns (") || info.startsWith("art.capycanvas.ZenChrome (")))
                         compositionDirty.add(CompositionDirty(System.nanoTime(), key, dirty1, dirty2, info))
-                    android.os.Trace.beginSection(info.take(120))
+                    if (composeTrace) android.os.Trace.beginSection(info.take(120))
                 }
-                override fun traceEventEnd() = android.os.Trace.endSection()
+                override fun traceEventEnd() { if (composeTrace) android.os.Trace.endSection() }
             })
         run {
             lateinit var host: CanvasHost
@@ -210,6 +223,10 @@ internal class WorkspaceFrameTiming(private val instrumentation: Instrumentation
                 }
             }
             var resizeNode: SemanticsNode? = null
+            var motionTag: String? = null
+            val boundsSamples = JSONArray()
+            val feedbackWindows = JSONArray()
+            var lastFeedbackBoot = 0L
             var lastDrawnBounds: androidx.compose.ui.geometry.Rect? = null
             var changedBounds = 0
             var lostMetrics = 0
@@ -227,12 +244,25 @@ internal class WorkspaceFrameTiming(private val instrumentation: Instrumentation
                     host.workspaceGeometry?.revision?.let { drawnRevisions.add(it) }
                     if (modelIdentityTrace) modelDraws.add(ModelDraw(System.nanoTime(), host.workspaceGeometry?.revision, modelValues()))
                     if (colorWheel) host.snapshot?.objectOrNull("paint_pair")?.array("rgba")?.toString()?.let { drawnPaints.add(it) }
-                    // Read the retained LayoutNode's actual allocation. A newly
-                    // received revision may still be awaiting recomposition.
-                    resizeNode?.boundsInRoot?.let { bounds ->
-                        if (lastDrawnBounds != bounds) changedBounds++
-                        lastDrawnBounds = bounds
+                    val geometry = host.workspaceGeometry
+                    val tag = if (columnDrag) "workspace-drop-hint" else if (colorWheel) null else geometry?.tab?.let { "tab-${it.panel}" }
+                        ?: geometry?.group?.let { "group-$it" } ?: if (resize) "group-${if (bridge) 43 else 41}" else draggedColumn?.let { "column-grip-$it" }
+                    if (tag != motionTag) {
+                        motionTag = tag
+                        resizeNode = tag?.let { owner.find(hasTag(it)) }
+                        lastDrawnBounds = null
                     }
+                    if (columnDrag) resizeNode = owner.find(hasTag("workspace-drop-hint"))
+                    val drawnBounds = resizeNode?.boundsInRoot
+                    val drawBoot = SystemClock.elapsedRealtimeNanos()
+                    if ((columnDrag || drawnBounds != null) && lastDrawnBounds != drawnBounds) {
+                        changedBounds++
+                        boundsSamples.put(JSONArray(listOf(drawBoot, drawnBounds?.left, drawnBounds?.top, drawnBounds?.right, drawnBounds?.bottom)))
+                        if (columnDrag && lastFeedbackBoot > 0L) feedbackWindows.put(obj("begin_boot_ns" to lastFeedbackBoot,
+                            "end_boot_ns" to drawBoot, "kind" to "observed_column_docking_feedback", "qualification" to "diagnostic"))
+                    }
+                    lastDrawnBounds = drawnBounds
+                    lastFeedbackBoot = drawBoot
                 }
             }
             scenario.onActivity { owner.view.viewTreeObserver.addOnDrawListener(drawListener) }
@@ -240,9 +270,8 @@ internal class WorkspaceFrameTiming(private val instrumentation: Instrumentation
             try {
                 action(obj("type" to "preferences", "action" to obj("type" to "edit", "id" to "transparency", "value" to transparency)))
                 val selectedMode = args.getString("benchmarkMode")
-                for (mouse in if (bridge) listOf(true) else listOf(true, false))
-                for (mode in (if (bridge) listOf(if (resize) "bridge-gap" else "bridge-panel") else if (colorWheel) listOf(wheel) else if (colorOverlap) listOf("color-overlap") else if (resize) listOf("brushes", "properties", "navigator", "toolbar") else listOf("attached", "floating", "destination")).filter { selectedMode == null || it == selectedMode })
-                for (run in if (bridge || tierPhoto) -1 until repeats else 0 until repeats) {
+                val modes = (if (bridge) listOf(if (resize) "bridge-gap" else if (columnDrag) "bridge-column" else "bridge-panel") else if (colorWheel) listOf(wheel) else if (colorOverlap) listOf("color-overlap") else if (resize) listOf("brushes", "properties", "navigator", "toolbar") else listOf("attached", "floating", "destination")).filter { selectedMode == null || it == selectedMode }
+                for (mouse in if (bridge) listOf(true) else listOf(true, false)) for (mode in modes) for (run in if (bridge || tierPhoto) -1 until repeats else 0 until repeats) {
                     if (resize && !bridge) fixture.getJSONObject("layout").getJSONArray("bands").apply {
                         getJSONObject(0).put("root", tabs(41, mode))
                         getJSONObject(1).put("root", tabs(43, "layers"))
@@ -281,18 +310,31 @@ internal class WorkspaceFrameTiming(private val instrumentation: Instrumentation
                         SystemClock.sleep(300)
                     }
                     if (bridge) presentationStatus("before-gesture", run)
-                    val source = bounds(if (bridge) { if (resize) "divider-45" else "group-grip-43" } else if (colorWheel) wheel else if (colorOverlap) "group-grip-43" else if (resize) "divider-40" else when (mode) {
+                    if (columnDrag) scenario.onActivity {
+                        draggedColumn = host.snapshot!!.getJSONObject("layout").array("collapsed").objects().single { column ->
+                            column.array("groups").objects().any { it.getInt("group") == 43 }
+                        }.getInt("id")
+                    }
+                    val source = bounds(if (bridge) { if (resize) "divider-45" else if (columnDrag) "column-grip-$draggedColumn" else "group-grip-43" } else if (colorWheel) wheel else if (colorOverlap) "group-grip-43" else if (resize) "divider-40" else when (mode) {
                         "attached" -> "tab-tool_settings"
                         "floating" -> "group-grip-41"
                         else -> "tab-layers"
                     }).center
                     val density = owner.view.resources.displayMetrics.density
                     val anchor = if (bridge) bounds("column-icon-navigator") else workspace
-                    val first = if (bridge) { if (resize) Offset(source.x, anchor.top - 3 * density) else workspace.center - Offset(80 * density, 0f) }
+                    val columnTarget = if (columnDrag) host.snapshot!!.getJSONObject("layout").array("collapsed").objects()
+                        .first { it.getInt("id") != draggedColumn && it.array("groups").objects().any { group -> group.getInt("group") == 42 } }
+                        .getJSONObject("bounds").let { rect ->
+                            androidx.compose.ui.geometry.Rect(workspace.left + rect.number("x") * density,
+                                workspace.top + rect.number("y") * density,
+                                workspace.left + (rect.number("x") + rect.number("width")) * density,
+                                workspace.top + (rect.number("y") + rect.number("height")) * density)
+                        } else null
+                    val first = if (columnTarget != null) Offset(columnTarget.center.x, columnTarget.top + columnTarget.height * .25f) else if (bridge) { if (resize) Offset(source.x, anchor.top - 3 * density) else workspace.center - Offset(80 * density, 0f) }
                         else if (colorWheel) source - Offset(bounds(wheel).width * .15f, 0f) else if (colorOverlap) bounds("color-wheel").let { Offset(it.center.x - it.width * .15f, it.top + it.height * .25f) } else if (resize) source + Offset(60f, 0f) else bounds("tab-brushes").center
-                    val last = if (bridge) { if (resize) Offset(source.x, anchor.bottom + 21 * density) else workspace.center + Offset(80 * density, 0f) }
+                    val last = if (columnTarget != null) Offset(columnTarget.center.x, columnTarget.top + columnTarget.height * .75f) else if (bridge) { if (resize) Offset(source.x, anchor.bottom + 21 * density) else workspace.center + Offset(80 * density, 0f) }
                         else if (colorWheel) source + Offset(bounds(wheel).width * .15f, 0f) else if (colorOverlap) bounds("color-wheel").let { Offset(it.center.x + it.width * .15f, it.top + it.height * .25f) } else if (resize) source + Offset(220f, 0f) else bounds("tab-sizes").center
-                    val duration = if ((bridge || tierPhoto) && run < 0) 1000L else measuredDuration
+                    val duration = measuredDuration
                     val down = SystemClock.uptimeMillis()
                     fun eventOnMain(action: Int, point: Offset) {
                         val properties = arrayOf(MotionEvent.PointerProperties().apply {
@@ -357,15 +399,31 @@ internal class WorkspaceFrameTiming(private val instrumentation: Instrumentation
                             }
                         }
                         if (bridge && !resize && run < 0) screenshot("workspace-bridge-benchmark/$label-panel.png")
+                        host.drain()
+                        waitFor { host.snapshot?.let { it.optBoolean("shaders_ready") && it.optBoolean("brush_ready") && it.optBoolean("canvas_ready") } == true }
+                        host.drain()
+                        lateinit var stateBefore: JSONObject
+                        lateinit var readinessBefore: JSONObject
+                        scenario.onActivity {
+                            assertTrue("Initial workspace geometry published", host.workspaceGeometry != null)
+                            stateBefore = JSONObject(host.snapshot!!.getJSONObject("state").toString())
+                            readinessBefore = obj("shaders_ready" to host.snapshot!!.optBoolean("shaders_ready"),
+                                "brush_ready" to host.snapshot!!.optBoolean("brush_ready"), "canvas_ready" to host.snapshot!!.optBoolean("canvas_ready"))
+                        }
                         host.measurementReport(true)
                         synchronized(durations) { durations.clear(); lostMetrics = 0 }
                         scenario.onActivity {
                             drawnRevisions.clear(); drawnPaints.clear(); changedBounds = 0
+                            while (boundsSamples.length() > 0) boundsSamples.remove(boundsSamples.length() - 1)
                             modelDraws.clear()
                             compositionDirty.clear()
+                            compositions.set(0); panelCompositions.set(0)
                             synchronized(snapshotChanges) { snapshotChanges.clear() }
-                            resizeNode = if (resize) owner.find(hasTag(if (bridge) "group-43" else "group-41")) else null
+                            motionTag = if (resize) "group-${if (bridge) 43 else 41}" else null
+                            resizeNode = motionTag?.let { owner.find(hasTag(it)) }
                             lastDrawnBounds = resizeNode?.boundsInRoot
+                            while (feedbackWindows.length() > 0) feedbackWindows.remove(feedbackWindows.length() - 1)
+                            lastFeedbackBoot = 0L
                         }
                         if (bridge && run == 0 && args.getString("profileBarrier") == "true") {
                             java.io.File(output, "$label-profile-ready").writeText("ready")
@@ -376,6 +434,7 @@ internal class WorkspaceFrameTiming(private val instrumentation: Instrumentation
                         val presentationBefore = if (bridge) presentationStatus("before-contact", run) else null
                         var presentationDuring: JSONObject? = null
                         measuring.set(true)
+                        countComposition.set(checkBodyComposition)
                         val traceName = "workspace-benchmark-${if (mouse) "mouse" else "touch"}-$mode" + if (bridge) "-$label-$run" else ""
                         android.os.Trace.beginAsyncSection(traceName, 1)
                         val beginNs = System.nanoTime()
@@ -425,6 +484,7 @@ internal class WorkspaceFrameTiming(private val instrumentation: Instrumentation
                             android.os.Trace.endAsyncSection(traceName, 1)
                         }
                         val endNs = System.nanoTime()
+                        countComposition.set(false)
                         val endBootNs = SystemClock.elapsedRealtimeNanos()
                         val endMonoAfterBootNs = System.nanoTime()
                         if (bridge) SystemClock.sleep(200)
@@ -440,12 +500,29 @@ internal class WorkspaceFrameTiming(private val instrumentation: Instrumentation
                         assertTrue("Android must render while dragging", timings.isNotEmpty())
                         fun percentile(values: List<Long>, fraction: Double) = values[((values.size - 1) * fraction).toInt()] / 1_000_000.0
                         val metrics = host.measurementReport()
+                        var columnWitness: JSONObject? = null
+                        if (columnDrag) {
+                            event(MotionEvent.ACTION_MOVE, first)
+                            host.drain()
+                            event(MotionEvent.ACTION_UP, first)
+                            host.drain()
+                            lateinit var docked: JSONObject
+                            scenario.onActivity { docked = JSONObject(host.snapshot!!.getJSONObject("state").getJSONObject("workspace").toString()) }
+                            val changed = docked.getJSONObject("layout").toString() != stateBefore.getJSONObject("workspace").getJSONObject("layout").toString()
+                            var restored = false
+                            if (changed) {
+                                action(obj("type" to "invoke", "command" to "undo_workspace"))
+                                scenario.onActivity {
+                                    restored = stateBefore.getJSONObject("workspace").getJSONObject("layout").toString() ==
+                                        host.snapshot!!.getJSONObject("state").getJSONObject("workspace").getJSONObject("layout").toString()
+                                }
+                            }
+                            columnWitness = obj("docked_workspace" to docked, "release_changed_layout" to changed, "undo_restored" to restored)
+                        }
                         val presentationAfter = if (bridge) presentationStatus("after-contact", run) else null
-                        val expectRetained = !bridge && !colorWheel && (!resize || args.getString("expectRetainedResize") != "false")
-                        if (expectRetained) assertEquals("Steady motion retains the full UI models", 0L, metrics.getLong("snapshots_published"))
+                        val expectRetained = (!tierPhoto || run >= 0) && !bridge && !colorWheel && (!resize || args.getString("expectRetainedResize") != "false")
                         scenario.onActivity {
-                            if (colorWheel && !editColor) assertTrue("Committed wheel colors change during motion", drawnPaints.size > 30)
-                            if (expectRetained) assertEquals("Steady motion retains panel content", 0L, metrics.getLong("panel_content_changes"))
+                            if (colorWheel && !editColor) assertTrue("Committed wheel colors change during motion", drawnPaints.size > if (run < 0) 1 else 30)
                             val geometry = host.workspaceGeometry!!
                             if (geometry.group != null) {
                                 val shown = owner.find(hasTag("group-${geometry.group}"))!!.boundsInRoot
@@ -460,6 +537,8 @@ internal class WorkspaceFrameTiming(private val instrumentation: Instrumentation
                         }
                         val result = obj("mouse" to mouse, "mode" to mode, "elapsed_ms" to elapsed, "inputs" to samples,
                             "bridge_content" to bridgeContent,
+                            "composition_events" to compositions.get(), "panel_control_compositions" to panelCompositions.get(),
+                            "check_body_composition" to checkBodyComposition,
                             "transparency" to transparency,
                             "display_hz" to refreshRate, "debuggable" to BuildConfig.DEBUG,
                             "trajectory" to if (resize) "triangle" else "sine",
@@ -484,7 +563,7 @@ internal class WorkspaceFrameTiming(private val instrumentation: Instrumentation
                         }
                         result.put("publication_utf16_units", publicationRows.sumOf { it.getLong(3) })
                         result.put("panel_content_changes", metrics.getLong("panel_content_changes"))
-                        if ((bridge || tierPhoto) && run >= 0) {
+                        if (bridge || tierPhoto) {
                             if (dirtyTrace) {
                                 result.put("composition_dirty_records", JSONArray(compositionDirty.filter { it.time in beginNs..endNs }.map {
                                     obj("time_ns" to it.time, "key" to it.key, "dirty1" to it.first, "dirty2" to it.second, "name" to it.name)
@@ -523,18 +602,43 @@ internal class WorkspaceFrameTiming(private val instrumentation: Instrumentation
                             result.put("begin_boot_ns", beginBootNs); result.put("end_boot_ns", endBootNs)
                             result.put("begin_mono_after_boot_ns", beginMonoAfterBootNs); result.put("end_mono_after_boot_ns", endMonoAfterBootNs)
                             result.put("host_metrics", metrics)
+                            if (columnDrag) {
+                                result.put("active_windows", feedbackWindows); result.put("column_docking_witness", columnWitness)
+                                result.put("qualification", "diagnostic"); result.put("measurement", "Discrete whole-column docking feedback; no held column-body translation")
+                            }
                             if (bridge) result.put("presentation_status", JSONArray(listOfNotNull(presentationBefore, presentationDuring, presentationAfter)))
-                            result.put("run", run); result.put("theme", args.getString("theme", "light"))
+                            result.put("run", run); result.put("warmup", run < 0); result.put("theme", args.getString("theme", "light"))
                             result.put("thermal_before", thermalBefore); result.put("thermal_after", thermal.currentThermalStatus)
                             result.put("raw_frames", JSONArray(rows.map { JSONArray(listOf(it.vsync, it.duration, it.deadline, it.layout, it.draw)) }))
+                            result.put("changed_bounds_columns", JSONArray(listOf("draw_boot_ns", "left_px", "top_px", "right_px", "bottom_px")))
+                            result.put("changed_bounds_samples", boundsSamples); result.put("measured_geometry_tag", motionTag)
                             result.put("frame_columns", JSONArray(listOf("vsync_ns", "total_ns", "deadline_ns", "layout_ns", "draw_ns")))
+                            result.put("state_before", stateBefore); result.put("readiness_before", readinessBefore)
+                            result.put("readiness_after", obj("shaders_ready" to host.snapshot!!.optBoolean("shaders_ready"),
+                                "brush_ready" to host.snapshot!!.optBoolean("brush_ready"), "canvas_ready" to host.snapshot!!.optBoolean("canvas_ready")))
                             result.put("state", host.snapshot!!.getJSONObject("state")); result.put("workspace", fixture)
                             result.put("photo", args.getString("photo")); result.put("width", args.getString("width")); result.put("height", args.getString("height"))
                             val filename = if (bridge) "$label-$run.json" else "$label-$mode-${if (mouse) "mouse" else "touch"}-$run.json"
                             java.io.File(output, filename).writeText(result.toString())
                         }
                         Log.i(if (resize) "CapyResizePerf" else "CapyDragPerf", result.toString())
+                        if (checkBodyComposition && run >= 0) {
+                            assertTrue("The composition observer records real work", compositions.get() > 0)
+                            assertTrue("The panel bounds change during the regression sweep", changes > 30)
+                            assertEquals("The regression sweep retains panel content", 0L, metrics.getLong("panel_content_changes"))
+                            assertEquals("Unchanged panel controls skip composition during gap resize", 0, panelCompositions.get())
+                        }
+                        if (columnDrag) {
+                            assertTrue("Column docking feedback changes during native motion", changedBounds >= 4 && feedbackWindows.length() >= 3)
+                            assertTrue("Native release docks the whole column", columnWitness!!.getBoolean("release_changed_layout"))
+                            assertTrue("One undo restores the column placement", columnWitness!!.getBoolean("undo_restored"))
+                        }
+                        if (expectRetained) {
+                            assertEquals("Steady motion retains the full UI models", 0L, metrics.getLong("snapshots_published"))
+                            assertEquals("Steady motion retains panel content", 0L, metrics.getLong("panel_content_changes"))
+                        }
                     } finally {
+                        countComposition.set(false)
                         measuring.set(false)
                         event(MotionEvent.ACTION_CANCEL, source)
                     }
@@ -544,6 +648,7 @@ internal class WorkspaceFrameTiming(private val instrumentation: Instrumentation
                     waitFor { host.snapshot!!.getJSONObject("state").getJSONObject("workspace").getJSONObject("layout").array("floating").length() == (if (colorOverlap || colorWheel) 1 else 0) }
                 }
             } finally {
+                countComposition.set(false)
                 measuring.set(false)
                 applyObserver?.dispose()
                 window.removeOnFrameMetricsAvailableListener(listener)

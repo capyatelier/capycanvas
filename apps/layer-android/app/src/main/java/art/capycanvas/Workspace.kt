@@ -660,9 +660,6 @@ private class PanelContent(val id: Int, val active: String, val panels: JSONArra
     val active = group.active
     val vector = LocalVectorPanel.current
     val panel = panels[active] ?: return
-    val tabsVisible = group.tabs
-    val minimumBody = group.minimumBody
-    val bodyScroll = rememberScrollState()
     val groupItem = obj("kind" to "group", "group" to group.id)
     val visible = LocalWorkspaceVisible.current
     DisposableEffect(group.id, group.panels, visible) {
@@ -670,20 +667,11 @@ private class PanelContent(val id: Int, val active: String, val panels: JSONArra
         if(!visible) { dock.tabs.keys.removeAll { it.startsWith(prefix) }; dock.tabSlots.keys.removeAll { it.startsWith(prefix) }; dock.tabClips.remove(group.id) }
         onDispose { dock.tabs.keys.removeAll { it.startsWith(prefix) }; dock.tabSlots.keys.removeAll { it.startsWith(prefix) }; dock.tabClips.remove(group.id) }
     }
-    Surface(modifier, color = if (tabsVisible || vector) Color.Transparent else colors.panelFill) {
+    Surface(modifier, color = if (group.tabs || vector) Color.Transparent else colors.panelFill) {
         Column {
-            if (tabsVisible) PanelGroupTabs(host,dock,group.id,group.panels,panels,active,panel.optBoolean("expanded"))
-            BoxWithConstraints(Modifier.weight(1f).testTag("panel-body-$active").then(if (tabsVisible && !vector) Modifier.background(colors.panelFill) else Modifier)) {
-                val constrainedBody = group.tiles == null && maxHeight < minimumBody.dp
-                Box(Modifier.fillMaxSize().then(if (constrainedBody) Modifier.panelScroll(bodyScroll) else Modifier)) {
-                    if (group.tiles != null) ToolRibbon(host, panel, group.tiles, dock, Modifier.fillMaxSize(), group.vertical)
-                    else PanelControls(host, state, panel, Modifier.fillMaxWidth().then(if (constrainedBody) Modifier.height(minimumBody.dp) else Modifier.fillMaxHeight())
-                        .contextSource(dock, obj("kind" to "panel", "panel" to active)), onContent = { dock.measure(active, content = it) })
-                }
-                if (active != "palettes" && group.panels.values().contains("palettes"))
-                    PaletteMeasurement(host) { dock.measure("palettes", content = it) }
-                if (active != "color" && group.panels.values().contains("color"))
-                    ColorMeasurement(host) { dock.measure("color", content = it) }
+            if (group.tabs) PanelGroupTabs(host,dock,group.id,group.panels,panels,active,panel.optBoolean("expanded"))
+            BoxWithConstraints(Modifier.weight(1f).testTag("panel-body-$active").then(if (group.tabs && !vector) Modifier.background(colors.panelFill) else Modifier)) {
+                PanelGroupBody(host, state, group, panel, dock, group.tiles == null && maxHeight < group.minimumBody.dp)
             }
             group.footer?.let { height ->
                 Box(Modifier.fillMaxWidth().height(height.dp).testTag("group-grip-${group.id}").dragSource(dock, groupItem)
@@ -692,6 +680,18 @@ private class PanelContent(val id: Int, val active: String, val panels: JSONArra
             }
         }
     }
+}
+
+@Composable private fun PanelGroupBody(host: CanvasHost, state: JSONObject, group: PanelContent,
+    panel: JSONObject, dock: DockInteraction, constrained: Boolean) {
+    val scroll = rememberScrollState()
+    Box(Modifier.fillMaxSize().then(if (constrained) Modifier.panelScroll(scroll) else Modifier)) {
+        if (group.tiles != null) ToolRibbon(host, panel, group.tiles, dock, Modifier.fillMaxSize(), group.vertical)
+        else PanelControls(host, state, panel, Modifier.fillMaxWidth().then(if (constrained) Modifier.height(group.minimumBody.dp) else Modifier.fillMaxHeight())
+            .contextSource(dock, obj("kind" to "panel", "panel" to group.active)), onContent = { dock.measure(group.active, content = it) })
+    }
+    if (group.active != "palettes" && group.panels.values().contains("palettes")) PaletteMeasurement(host) { dock.measure("palettes", content = it) }
+    if (group.active != "color" && group.panels.values().contains("color")) ColorMeasurement(host) { dock.measure("color", content = it) }
 }
 
 @Composable private fun PanelGroupTabs(host: CanvasHost, dock: DockInteraction, groupId: Int,
