@@ -1,0 +1,144 @@
+diff --git a/gsk/gpu/gskvulkanmemory.c b/gsk/gpu/gskvulkanmemory.c
+--- a/gsk/gpu/gskvulkanmemory.c
++++ b/gsk/gpu/gskvulkanmemory.c
+@@ -118,13 +118,66 @@
+ 
+   GskVulkanAllocation cache;
+   GskVulkanAllocationList free_lists[N_SUBDIVISIONS];
++
++  struct {
++    GskVulkanAllocation allocation;
++    gint64 release_time;
++  } held[4];
++  guint n_held;
++  guint release_source;
+ };
++
++static VkDeviceSize
++round_large_size (VkDeviceSize size)
++{
++  VkDeviceSize step = 1;
++  VkDeviceSize remainder;
++
++  while (size / step > 15)
++    step <<= 1;
++
++  remainder = size % step;
++  if (remainder && size <= G_MAXUINT64 - (step - remainder))
++    size += step - remainder;
++
++  return size;
++}
++
++static void
++gsk_vulkan_buddy_allocator_free_held (GskVulkanBuddyAllocator *self,
++                                     gint64                   before)
++{
++  guint n = 0;
++
++  while (n < self->n_held && self->held[n].release_time <= before)
++    gsk_vulkan_free (self->allocator, &self->held[n++].allocation);
++
++  self->n_held -= n;
++  memmove (&self->held[0], &self->held[n], self->n_held * sizeof (self->held[0]));
++}
++
++static gboolean
++gsk_vulkan_buddy_allocator_release (gpointer data)
++{
++  GskVulkanBuddyAllocator *self = data;
++
++  gsk_vulkan_buddy_allocator_free_held (self, g_get_monotonic_time () - 100 * G_TIME_SPAN_MILLISECOND);
++  if (self->n_held > 0)
++    return G_SOURCE_CONTINUE;
++
++  self->release_source = 0;
++
++  return G_SOURCE_REMOVE;
++}
+ 
+ static void
+ gsk_vulkan_buddy_allocator_free_allocator (GskVulkanAllocator *allocator)
+ {
+   GskVulkanBuddyAllocator *self = (GskVulkanBuddyAllocator *) allocator;
+   gsize i;
++
++  g_clear_handle_id (&self->release_source, g_source_remove);
++  gsk_vulkan_buddy_allocator_free_held (self, G_MAXINT64);
+ 
+   if (self->cache.vk_memory)
+     gsk_vulkan_free (self->allocator, &self->cache);
+@@ -160,13 +213,32 @@
+ 
+   size = MAX (size, align);
+ 
++  if (size > ((VkDeviceSize) 1 << (self->block_size_slot - 1)))
++    {
++      VkDeviceSize allocation_size = round_large_size (size);
++      guint j;
++
++      for (j = 0; j < self->n_held; j++)
++        {
++          if (self->held[j].allocation.size == allocation_size)
++            {
++              *alloc = self->held[j].allocation;
++              self->n_held--;
++              memmove (&self->held[j], &self->held[j + 1],
++                       (self->n_held - j) * sizeof (self->held[0]));
++              if (self->n_held == 0)
++                g_clear_handle_id (&self->release_source, g_source_remove);
++              alloc->size = size;
++              return;
++            }
++        }
++
++      gsk_vulkan_alloc (self->allocator, allocation_size, align, alloc);
++      alloc->size = size;
++      return;
++    }
++
+   slot = find_slot (size);
+-  if (slot >= self->block_size_slot)
+-    {
+-      gsk_vulkan_alloc (self->allocator, size, align, alloc);
+-      return;
+-    }
+-
+   slot = MIN (self->block_size_slot - slot, N_SUBDIVISIONS) - 1;
+   for (i = slot; i >= 0; i--)
+     {
+@@ -215,13 +287,28 @@
+   GskVulkanBuddyAllocator *self = (GskVulkanBuddyAllocator *) allocator;
+   gsize slot, i, n;
+ 
++  if (alloc->size > ((VkDeviceSize) 1 << (self->block_size_slot - 1)))
++    {
++      gint64 now = g_get_monotonic_time ();
++
++      gsk_vulkan_buddy_allocator_free_held (self, now - 100 * G_TIME_SPAN_MILLISECOND);
++      if (self->n_held == G_N_ELEMENTS (self->held))
++        {
++          gsk_vulkan_free (self->allocator, &self->held[0].allocation);
++          self->n_held--;
++          memmove (&self->held[0], &self->held[1],
++                   self->n_held * sizeof (self->held[0]));
++        }
++
++      self->held[self->n_held].allocation = *alloc;
++      self->held[self->n_held].allocation.size = round_large_size (alloc->size);
++      self->held[self->n_held++].release_time = now;
++      if (self->release_source == 0)
++        self->release_source = g_timeout_add (100, gsk_vulkan_buddy_allocator_release, self);
++      return;
++    }
++
+   slot = find_slot (alloc->size);
+-  if (slot >= self->block_size_slot)
+-    {
+-      gsk_vulkan_free (self->allocator, alloc);
+-      return;
+-    }
+-
+   slot = MIN (self->block_size_slot - slot, N_SUBDIVISIONS) - 1;
+ restart:
+   n = gsk_vulkan_allocation_list_get_size (&self->free_lists[slot]);

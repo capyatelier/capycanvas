@@ -21,6 +21,7 @@ needed = subprocess.check_output(['readelf', '-d', str(library)], text=True)
 assert 'Shared library: [libtiff' not in needed, needed
 assert 'Shared library: [libjpeg' not in needed, needed
 manifest = json.loads((prefix / 'manifest.json').read_text())
+assert 'share/doc/capycanvas-gtk/vulkan-memory-pool.patch' in manifest['files']
 for filename, digest in manifest['files'].items():
     assert hashlib.sha256((prefix / filename).read_bytes()).hexdigest() == digest, filename
 for name in ['libtiff', 'libjpeg-turbo']:

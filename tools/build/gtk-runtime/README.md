@@ -20,6 +20,13 @@ cursor using stale coordinates and briefly flash an arrow over the canvas.
 It also suppresses GDK's cached surface cursor during entry, allowing GTK's
 widget pick to install the first visible cursor.
 
+`vulkan-memory-pool.patch` pools up to four large allocations per memory type,
+using eight size classes per power-of-two range and retaining mapped blocks.
+Returned blocks expire after 100 ms, checked on returns and by a timer that stops
+when empty.
+Small buddy allocations and texture-cache cleanup are unchanged. Remove this
+patch when the pinned GTK release provides equivalent bounded reuse.
+
 ## Using system GTK
 
 Capy Canvas uses public GTK APIs and can link to system GTK. Direct Cargo
@@ -49,7 +56,8 @@ Remove the pad patch when the pinned GTK release contains independent pad focus
 and guards every pad-event producer, then run the pad regression below and
 verify pad input while opening and closing windows. The cursor patch addresses
 a separate visual glitch; verify pen entry separately before removing it.
-The bundled runtime can be retired when supported system GTK builds contain both fixes.
+The bundled runtime can be retired when supported system GTK builds contain the
+input fixes and equivalent bounded Vulkan allocation reuse.
 
 ## Build and validate
 
@@ -60,6 +68,7 @@ departure before any motion:
 ```sh
 python3 tools/build/gtk-runtime/test-tablet-entry.py target/gtk-runtime/gtk-4.24.1
 python3 tools/build/gtk-runtime/test-pad-focus.py target/gtk-runtime/gtk-4.24.1
+python3 tools/build/gtk-runtime/test-vulkan-memory.py target/gtk-runtime/gtk-4.24.1
 python3 tools/build/gtk-runtime/test-runtime.py \
   target/gtk-runtime/prefix target/gtk-runtime/gtk-4.24.1/subprojects
 python3 tools/build/gtk-runtime/test-configure.py

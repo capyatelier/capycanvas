@@ -243,9 +243,9 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 | Android tool bubble drag through four neighbours | 120 | **Unqualified after the bubble release fixes.** Previous parity build: 115.00–116.55 actual app-window presents/s; p99 ≤16.667447 ms, default glass, 61 MP photo at Fit | [Native tool bubbles](#native-tool-bubbles), 2026-10-24 |
 | Web tool bubble drag through four neighbours | 120 | Unmeasured after the bubble release fixes; desktop browser journeys do not qualify the reference tablet | [Web checks](../development/web.md#tests), 2026-10-24 |
 | GTK Tool Set hover and press animation | 120 | Desktop diagnostic: **117.76 changing-color presents/s**, 116.67–118.08 per case; pooled gap p99 16.646 ms. Reference hardware unmeasured | [GTK tool caption hover](#gtk-tool-caption-hover), 2026-10-26 |
-| Panel or column resize | 120 | Android shared vectors and Web SVG projection are unmeasured on this reference tier. Expanding GTK divider desktop diagnostic: **54.49/s**, p99 41.689 ms; misses the 114 Hz floor. **Desktop diagnostic misses.** GTK GPU joins: 81.59–112.27 changing-geometry presents/s at 1×; 38.96–92.31 at 2×, worst p99 74.986 ms. Reference-tier qualification remains unset. Web Navigator: 30.00–30.64 Chrome surface presents/s; p99 50.00–58.34 ms. Windows GPU desktop diagnostic: 33.82–34.89 observed bounds changes/s beside 166.28–183.76 renderer submissions/s after display correction; fresh displayed FPS and gap-transition performance unqualified | [Web Navigator layout](#web-navigator-layout), 2026-10-19; [GTK Color resize](#gtk-color-panel-resize), 2026-10-10; [GTK column bridge diagnostic](#gtk-column-bridge-diagnostic), 2026-10-25; [GTK Tool Set density](#gtk-tool-set-density), 2026-10-26; [GTK toolbar dividers](#gtk-toolbar-divider-resize), 2026-10-26; [Windows GPU VM column resize](#windows-gpu-vm-column-resize), 2026-10-26 |
+| Panel or column resize | 120 | Android shared vectors and Web SVG projection are unmeasured on this reference tier. **Desktop GTK pacing target still missed.** Bundled Vulkan memory reuse improves column drags **106.23–106.42 → 117.06–117.24** changing-geometry presents/s at 1× and **61.30 → 110.27** at 2×; worst candidate p99 **25.014 / 28.416 ms**. Panel drags stay near 118 presents/s. Reference-tier qualification remains unset. Web Navigator: 30.00–30.64 Chrome surface presents/s; p99 50.00–58.34 ms. Windows GPU desktop diagnostic: 33.82–34.89 observed bounds changes/s beside 166.28–183.76 renderer submissions/s after display correction; fresh displayed FPS and gap-transition performance unqualified | [GTK Vulkan memory reuse](#gtk-vulkan-memory-reuse), 2026-10-28; [Web Navigator layout](#web-navigator-layout), 2026-10-19; [GTK Color resize](#gtk-color-panel-resize), 2026-10-10; [GTK column bridge diagnostic](#gtk-column-bridge-diagnostic), 2026-10-25; [GTK Tool Set density](#gtk-tool-set-density), 2026-10-26; [GTK toolbar dividers](#gtk-toolbar-divider-resize), 2026-10-26; [Windows GPU VM column resize](#windows-gpu-vm-column-resize), 2026-10-26 |
 | Windows window resize | 120 | Unqualified; local 60 Hz allocation/startup candidate: 55.97 observed native changes/s and 15.755 ms UI CPU/change, versus baseline brackets of 55.90–57.05/s and 15.662–15.771 ms. Combined-code comparison; displayed motion and reference hardware remain unmeasured | [Windows window resize](#windows-window-resize), [allocation comparison](#windows-allocation-comparison), 2026-10-27 |
-| GTK window resize | 120 | **Desktop SDR miss; GTK-limited.** One native content clip and cached shell/shadows improve dark **68.20 → 87.01** and light **73.73 → 86.12** changing-window presents/s against matched main. Worst p99 is **30.776 / 33.274 ms**; light p99 worsens. UI CPU falls **8.073 → 6.908 / 7.701 → 6.943 ms/frame**. One SDR allocation/frame; Capy offscreens stay below 512 KiB each and 1 MiB total. GTK conversion-image and swapchain work consumes about **3.3–3.6 ms of the roughly 4 ms paint budget**. Reference-tier qualification remains open | [GTK window resize](#gtk-window-resize), [one native clip](#one-native-clip-per-panel), 2026-10-28 |
+| GTK window resize | 120 | **Desktop SDR pacing target still missed.** Bundled Vulkan memory reuse improves light 1× **91.73 → 117.79**, dark 1× **77.77 → 116.84** and dark 2× **44.74 → 109.99** changing-window presents/s. Worst candidate p99 is **16.650 / 16.712 / 17.146 ms**. Reference-tier qualification remains open | [GTK Vulkan memory reuse](#gtk-vulkan-memory-reuse), 2026-10-28 |
 | Pen pressure utility and curve drag | 120 | **Unqualified.** Current GTK desktop panel 119.20–119.40 presents/s, p99 up to 9.207 ms; curve 120.00, p99 up to 8.470 ms; reference tablet unmeasured | [GTK pen pressure utility](#gtk-pen-pressure-utility), 2026-10-10 UTC |
 | Windows tool bubble drag through four neighbours | 120 | Unmeasured on reference hardware; Surface Pro / Adreno X1-85 functional checks do not qualify timing (PresentMon ETW access denied) | [Windows tool bubbles](../development/windows.md#tool-bubbles) |
 | Windows HDR color bubble drag and intensity scrub | 120 | Unmeasured on reference hardware; native input and pixel checks do not qualify presentation timing (PresentMon ETW access denied) | [Windows tool bubbles](../development/windows.md#tool-bubbles) |
@@ -5727,6 +5727,47 @@ presentation records, allocation logs and original-depth corner crops are in
 `same-session-v4-1/comparison.json`,
 `same-session-v4-1/aggregate-main-candidate.json`, `resource-v4-gate-summary.json`,
 `gtk-control-source-equivalence.json` and `crop-review-v4/crop-manifest.json`.
+
+### GTK Vulkan memory reuse
+
+Measured 2026-10-28 on the same NVIDIA workstation, using application `5b99e213d`
+and matched GTK 4.24.1 builds differing only in `gskvulkanmemory.c`. Each condition
+uses unpatched/patched/patched/unpatched order in one private 120 Hz Mutter
+session, fresh storage, color management and Vulkan GSK. The default drawing and
+1600 × 1000 / 3200 × 2000 displays do not qualify the reference tier.
+
+The 40-app probe-off matrix uses completed GDK feedback: changing geometry for
+columns/panels/windows, completed presentations during wheel input for layers.
+Worst-gesture p99 never joins contacts. Window throughput improves 28–146%,
+columns 10–80%, panels stay near 118 presents/s, and layer rates change
+−0.37% / −0.17% / +9.33% for light 1× / dark 1× / dark 2×. Candidate worst p99 is
+lower in every row; full pacing targets remain unmet. All 32 column/window/layer
+journeys pass; eight panel processes complete their contacts but retain strict
+presentation-target assertion failures. Results and exact failures are in
+`artifacts/gtk-gsk-pool-20261028/reports/matrix.txt` and `matrix-audit.json`.
+
+Separate probes count classified large GTK allocations on the presenting thread
+through direct symbols, excluding small slabs, imports, swapchain driver memory
+and the canvas worker. Dark 2× window whole-journey peak is **64.403 → 111.804 MB**;
+measured-motion peak is **42.255 → 111.804 MB**. Motion retention proxies reach
+195.738 ms and post-priming idle drain 277.645 ms; startup intervals reach
+908.602 ms. Mixed-theme fixtures share a first-theme idle checkpoint. Per-row
+peaks/hits and temporal scopes are in `resource-matrix-report.json` under the
+same artifact directory.
+
+Cintiq HDR comparisons are programmatic own-window/column changes, not interactive
+drags. Actual float16/PASS_THROUGH swapchains, BT.2020 PQ feedback and HDR mode at
+scale 2 verify the path. Window rates improve in both themes; light columns
+improve and dark columns change −1.72% beside 5.01% control drift. All HDR candidate
+worst p99 gaps are lower. Ordered results are in `hdr-matrix-results.json`.
+
+Ready-state light/dark captures at 1×/2× have 40/40 byte-identical central canvas
+ROI pairs, including held and released views. An earlier 2× startup mismatch
+also reproduces between two unpatched controls; a five-second capture-only idle
+matches readiness without changing input events or pixel tolerances. Reviewed
+corner crops keep smooth edges, flat interiors and shadows without stale bands.
+Original failures, control attribution and warmed checks are preserved in
+`final-crop-review.json` and `warmed-canvas-validation.json`.
 
 ## Windows window resize
 

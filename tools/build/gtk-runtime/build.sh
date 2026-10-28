@@ -31,11 +31,12 @@ assert hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest() == sys
 PY
 done
 # Re-extract the verified archive before applying a changed patch.
-gtk_patch_hash=$(cat "$gtk_build/$gtk_archive" "$gtk_recipe/pad-event-surface.patch" "$gtk_recipe/tablet-proximity-cursor.patch" | sha256sum | cut -d ' ' -f 1)
+gtk_patch_hash=$(cat "$gtk_build/$gtk_archive" "$gtk_recipe/pad-event-surface.patch" "$gtk_recipe/tablet-proximity-cursor.patch" "$gtk_recipe/vulkan-memory-pool.patch" | sha256sum | cut -d ' ' -f 1)
 if [[ ! -f "$gtk_build/patched.sha256" ]] || [[ $(cat "$gtk_build/patched.sha256") != "$gtk_patch_hash" ]]; then
     tar -xf "$gtk_build/$gtk_archive" -C "$gtk_build"
     patch -d "$gtk_build/gtk-4.24.1" -p1 < "$gtk_recipe/pad-event-surface.patch"
     patch -d "$gtk_build/gtk-4.24.1" -p1 < "$gtk_recipe/tablet-proximity-cursor.patch"
+    patch -d "$gtk_build/gtk-4.24.1" -p1 < "$gtk_recipe/vulkan-memory-pool.patch"
     echo "$gtk_patch_hash" > "$gtk_build/patched.sha256"
 fi
 python3 - "$gtk_recipe/sources" "$gtk_build/gtk-4.24.1/subprojects" <<'PY'
@@ -108,7 +109,7 @@ cp "$gtk_build/glib-2.90.1/COPYING" "$gtk_docs/glib/"
 cp "$gtk_build/$pango_archive" "$gtk_docs/sources/"
 mkdir -p "$gtk_docs/pango"
 cp "$gtk_build/pango-1.58.2/COPYING" "$gtk_docs/pango/"
-cp "$gtk_recipe/pad-event-surface.patch" "$gtk_recipe/tablet-proximity-cursor.patch" "$gtk_recipe/build.sh" "$gtk_recipe/configure.py" "$gtk_recipe/check-env.py" "$gtk_docs/"
+cp "$gtk_recipe/pad-event-surface.patch" "$gtk_recipe/tablet-proximity-cursor.patch" "$gtk_recipe/vulkan-memory-pool.patch" "$gtk_recipe/build.sh" "$gtk_recipe/configure.py" "$gtk_recipe/check-env.py" "$gtk_docs/"
 python3 - "$gtk_prefix" "$gtk_build/gtk-4.24.1/subprojects" <<'PY'
 import configparser, hashlib, json, pathlib, shutil, sys
 p = pathlib.Path(sys.argv[1])
@@ -117,7 +118,8 @@ docs = p / 'share/doc/capycanvas-gtk'
 files = ['lib/libgtk-4.so.1', 'share/doc/capycanvas-gtk/COPYING',
          'share/doc/capycanvas-gtk/sources/gtk-4.24.1.tar.xz',
          'share/doc/capycanvas-gtk/pad-event-surface.patch',
-         'share/doc/capycanvas-gtk/tablet-proximity-cursor.patch', 'share/doc/capycanvas-gtk/build.sh',
+         'share/doc/capycanvas-gtk/tablet-proximity-cursor.patch',
+         'share/doc/capycanvas-gtk/vulkan-memory-pool.patch', 'share/doc/capycanvas-gtk/build.sh',
          'share/doc/capycanvas-gtk/configure.py', 'share/doc/capycanvas-gtk/check-env.py',
          'share/doc/capycanvas-gtk/sources/glib-2.90.1.tar.xz',
          'share/doc/capycanvas-gtk/glib/COPYING',

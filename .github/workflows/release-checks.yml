@@ -229,6 +229,7 @@ jobs:
       - run: python3 tools/build/gtk-runtime/test-runtime.py target/gtk-runtime/prefix target/gtk-runtime/gtk-4.24.1/subprojects
       - run: python3 tools/build/gtk-runtime/test-tablet-entry.py target/gtk-runtime/gtk-4.24.1
       - run: python3 tools/build/gtk-runtime/test-pad-focus.py target/gtk-runtime/gtk-4.24.1
+      - run: python3 tools/build/gtk-runtime/test-vulkan-memory.py target/gtk-runtime/gtk-4.24.1
       - run: |
           export LD_LIBRARY_PATH="$PWD/target/gtk-runtime/prefix/lib"
           cargo build --locked -p layer-linux --bin capy-photo-reader
