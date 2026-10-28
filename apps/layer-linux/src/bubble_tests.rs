@@ -187,8 +187,17 @@ fn layers_card(d: &mut Driver, device: &str, name: &str) {
     assert!(!card.full && !card.properties);
     pump(300);
     let body = d.named("bubble-card");
-    let bounds = body.compute_bounds(&d.w.window).unwrap();
-    let inside = [bounds.x() + 3., bounds.y() + bounds.height() * 0.5];
+    let add = d.named("bubble-new-layer").compute_bounds(&d.w.window).unwrap();
+    let properties = d.named("bubble-layer-properties").compute_bounds(&d.w.window).unwrap();
+    assert!(properties.x() > add.x() + add.width(), "{name}: the footer buttons have a measured gap");
+    let inside = [(add.x() + add.width() + properties.x()) * 0.5, properties.y() + properties.height() * 0.5];
+    let bubble = d.named(&format!("bubble-{}", layers.id));
+    let point = d.w.window.compute_point(&bubble, &gtk::graphene::Point::new(inside[0], inside[1])).unwrap();
+    assert_eq!(find_id(d, layers.id).unwrap().hit([point.x() - bubble.width() as f32 * 0.5, point.y() - bubble.height() as f32 * 0.5]), Some(BubbleHit::Card));
+    let picked = d.w.window.pick(inside[0] as f64, inside[1] as f64, gtk::PickFlags::DEFAULT).unwrap();
+    assert!(std::iter::successors(Some(picked), |widget| widget.parent()).take_while(|widget| widget != &bubble)
+        .all(|widget| !widget.has_css_class("layer-row") && !widget.is::<gtk::Button>() && !widget.is::<gtk::Editable>())
+        && super::super::customization::owns_context(&bubble, point.x() as f64, point.y() as f64), "{name}: the footer gap belongs to the bubble, not a native row or control");
     tap(d, device, inside);
     assert!(find_id(d, layers.id).unwrap().card.is_some(), "{name}: a tap inside the open card keeps it");
     d.input.perform(serde_json::json!([contact(device, "down", inside), { "wait_ms": 900 }, contact(device, "up", inside)]));
@@ -652,10 +661,10 @@ fn painting_fades(d: &mut Driver, name: &str, id: u32) {
     assert!(find_id(d, id).unwrap().open, "{name}: an open halo stays while painting");
     let frames = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
     let w = d.w.clone();
-    let tick = widget.add_tick_callback(glib::clone!(#[strong] frames, move |widget, _| {
+    let tick = widget.add_tick_callback(glib::clone!(#[strong] frames, move |widget, clock| {
         let weakest = |regions: &[layer_render_wgpu::BackdropRegion]| regions.iter().map(|r| r.shape[1]).fold(1f32, f32::min);
         let canvas = w.gpu.borrow_mut().as_mut().map_or(1., |g| weakest(&g.session.renderer_mut().backdrops));
-        frames.borrow_mut().push((widget.opacity(), weakest(&w.glass.borrow()), canvas));
+        frames.borrow_mut().push((clock.frame_time(), widget.opacity(), weakest(&w.glass.borrow()), canvas));
         glib::ControlFlow::Continue
     }));
     d.input.perform(serde_json::json!([contact("mouse", "up", [from[0] + 240., from[1]])]));
@@ -664,9 +673,14 @@ fn painting_fades(d: &mut Driver, name: &str, id: u32) {
     assert_eq!(widget.opacity(), 1., "{name}: it comes back after the stroke");
     assert_eq!(faint(d), resting, "{name}: with its full blur");
     let frames = frames.borrow();
-    assert!(frames.iter().any(|f| f.0 > 0.21 && f.0 < 0.999), "{name}: and fades back in: {frames:?}");
-    assert!(frames.windows(2).all(|f| (f[1].0 - f[0].0).abs() <= 0.12), "{name}: in one smooth ramp: {frames:?}");
-    assert!(frames.windows(2).all(|f| f[1].2 == f[1].1 || f[1].2 == f[0].1), "{name}: its blur keeping pace on the canvas: {frames:?}");
+    if let Some(directory) = std::env::var_os("LAYER_TEST_ARTIFACTS") {
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(std::path::PathBuf::from(directory).join(format!("{name}-fade.json")), serde_json::to_vec(&*frames).unwrap()).unwrap();
+    }
+    let max_opacity_rate = (1. - layer_ui::FADED_BUBBLE as f64) * 1.5 / 140_000.;
+    assert!(frames.iter().any(|f| f.1 > 0.21 && f.1 < 0.999), "{name}: and fades back in: {frames:?}");
+    assert!(frames.windows(2).all(|f| f[1].1 >= f[0].1 && f[1].1 - f[0].1 <= max_opacity_rate * (f[1].0 - f[0].0) as f64 + 1. / 255.), "{name}: in one timed smooth ramp: {frames:?}");
+    assert!(frames.windows(2).all(|f| f[1].3 == f[1].2 || f[1].3 == f[0].2), "{name}: its blur keeping pace on the canvas: {frames:?}");
     settings.set_gtk_enable_animations(animations);
     d.w.dispatch(UiAction::SetTheme { theme: Some(state(&d.w).theme) });
     pump(20);
