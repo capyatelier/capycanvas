@@ -1,4 +1,5 @@
 from contextlib import nullcontext
+import base64
 import importlib.util
 import fcntl
 import io
@@ -215,7 +216,11 @@ class GpuLifecycleTests(unittest.TestCase):
                 patch.object(vm, "guest_script") as script:
             vm.prepare_gpu_display(self.machine)
         self.assertEqual(json.loads((self.machine.directory / "display.json").read_text()), record)
-        self.assertEqual(sum("input" in call.kwargs for call in guest.call_args_list), 2)
+        self.assertEqual(sum("input" in call.kwargs for call in guest.call_args_list), 0)
+        for name, call in zip(("hardware-display.cs", "hardware-display.ps1"), script.call_args_list[1:3]):
+            self.assertIn(f"C:\\capycanvas-vm-display\\{name}", call.args[1])
+            encoded = call.args[1].split("FromBase64String('")[1].split("')")[0]
+            self.assertEqual(base64.b64decode(encoded), (vm.GUEST_FILES / name).read_bytes())
         command = script.call_args.args[1]
         self.assertIn("C:\\capycanvas-vm-display", command)
         self.assertIn("-AtLogOn -User capy", command)

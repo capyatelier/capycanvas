@@ -532,8 +532,9 @@ while ((Get-ScheduledTask $task -ErrorAction SilentlyContinue).State -eq 'Runnin
 """, timeout=180)
         guest(machine, f"New-Item -ItemType Directory -Force '{directory}' | Out-Null")
         for name in ("hardware-display.cs", "hardware-display.ps1"):
-            guest(machine, f"[IO.File]::WriteAllText('{directory}\\{name}', [Console]::In.ReadToEnd())",
-                  input=(GUEST_FILES / name).read_text(), text=True)
+            content = base64.b64encode((GUEST_FILES / name).read_bytes()).decode("ascii")
+            guest_script(machine, f"[IO.File]::WriteAllBytes('{directory}\\{name}', "
+                         f"[Convert]::FromBase64String('{content}'))")
         guest_script(machine, f"""$ErrorActionPreference='Stop'
 $ProgressPreference='SilentlyContinue'
 $task='capycanvas-hardware-display'
