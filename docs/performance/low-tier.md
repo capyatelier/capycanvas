@@ -61,6 +61,63 @@ Exact consumed-input-to-GPU-completion pooled p50/p95/p99 is
 54.323/70.200/78.513 → 53.983/69.598/75.179 ms. These software intervals exclude
 digitizer and panel latency; they do not measure physical pen-to-ink latency.
 
+## Android UI compositing trials
+
+Measured 2026-10-28 on TCL against `10f4b7c40`: 4248 × 2832 photo at Fit,
+factory density 320, font scale 1, 60 Hz, thermal status 0, default Low glass,
+light theme. Each condition has three measured six-second contacts after a
+full-duration primer. Both trials use matched ABBA order, identical native
+libraries and test APK `445223341d9beae94f9f67a41c81ec0b7208ea4f3f63458266ecd38a651ee03c`.
+The rates are mean actual target-window SurfaceFlinger presents/s across six
+contacts per variant; p99 is the worst contact presentation-gap p99.
+
+Trial 1 removes the full live-pane offscreen intermediate and retains the
+shadow separately. Trial 2 instead clips a content-only offscreen layer after
+rasterization, with the retained shadow outside. Both are rejected and removed:
+wheel gains accompany lower numeric-control rates. Neither is a production
+frame-rate improvement. Trial 2 reuses the final trial-1 control as its opening
+control; its comparison uses only A2/C1/C2/A3.
+
+| Trial | Row | Control → candidate presents/s | Control → candidate worst p99, ms |
+| --- | --- | --- | --- |
+| 1 | Size slider | 38.584 → 38.043 | 183.181 → 199.882 |
+| 1 | Size value scrub | 47.428 → 45.421 | 183.195 → 183.307 |
+| 1 | Flow slider | 51.242 → 50.265 | 149.962 → 149.954 |
+| 1 | Flow value scrub | 41.766 → 42.657 | 166.622 → 166.588 |
+| 1 | Wheel, mouse | 46.575 → 47.300 | 49.993 → 50.000 |
+| 1 | Wheel, touch | 47.024 → 47.978 | 49.885 → 49.932 |
+| 2 | Size slider | 37.958 → 38.375 | 183.181 → 183.266 |
+| 2 | Size value scrub | 47.781 → 48.241 | 183.195 → 166.614 |
+| 2 | Flow slider | 51.822 → 51.369 | 149.940 → 149.960 |
+| 2 | Flow value scrub | 44.070 → 41.882 | 166.547 → 166.603 |
+| 2 | Wheel, mouse | 46.418 → 47.230 | 49.997 → 49.974 |
+| 2 | Wheel, touch | 46.838 → 48.352 | 49.867 → 50.007 |
+
+Trial-1 Flow slider phase means are 51.297/51.187 control versus 50.249/50.281
+candidate. Trial-2 Flow value means are 45.177/42.963 control versus
+41.809/41.956 candidate. The latter row has substantial contact spread; the 4.96% negative estimate
+does not exceed its 5.02% between-control mean spread. It remains an unresolved
+tradeoff, not proof of a uniquely attributed regression. Both candidate phases are below both control phases. No further
+production candidate was tried under the two-candidate stopping limit.
+
+Separate diagnostic traces establish RenderThread drawing/flush work and
+software clip-mask generation. The wheel has about three large logical
+layer-target repaints per moving frame. A bounded Skia trace records about
+20 software clip-mask tasks and 20 pixel writes per flush. Individual upload
+ownership and physical GPU render-target switches remain unobserved.
+Buffer-stuffed frames have adjusted deadlines unavailable in these captures;
+their original predicted endpoints do not establish the stage causing a miss.
+Dropped buffers are separated from presented frames. The critical-path table,
+queries, unknown shares and next untested investigations are in
+`artifacts/android-ui-motion/plan.local.md` and its linked reports.
+
+Both variants pass benchmark/debug app/test builds and lint; all ABBA JUnit
+runs pass. Final dark-theme/middle-tier matrices, canvas guards and chrome crop
+acceptance were not run for these discarded candidates. The proposed 90 Hz collector
+extension has not been built or validated on Android and is not shipped code. Exact APKs,
+hashes, contacts and p99 samples are retained under
+`/mnt/localssd/capycanvas5-android-ui-motion-20261028/critical-trial{1,2}-abba/`.
+
 ## Android UI motion baseline
 
 Measured 2026-10-28 on the TCL TAB 11 Gen 2, 4248 × 2832 reference photo

@@ -28,8 +28,11 @@ canvas is 6000 × 4000.
 ## Current Android UI motion measurement status
 
 The 2026-10-28 UI harness matrix has fresh TCL low-tier observations, not
-middle-tier qualification. The middle-tier reference tablet was assigned to
-another session and was unavailable for this matrix. No 90 Hz claim is made.
+middle-tier qualification. The final 90 Hz matrix was not run after the two
+[TCL compositing trials](low-tier.md#android-ui-compositing-trials) were rejected
+and the experiment limit was reached. Neither compositing candidate was
+accepted, and no matched middle-tier control/candidate comparison is established.
+No 90 Hz claim is made.
 Panel/tab/column docking, resize, drawer/Zen/dialog transitions, native menus,
 grouped tools and tile drag, brush/layer opacity controls, lists, workspace
 switcher and color wheels all need matched current measurements on this tier.
@@ -44,9 +47,9 @@ transfer to the 90 Hz target.
 ## Android panel composition
 
 The 2026-10-28 retained panel-body change is unmeasured on Wacom MovinkPad 11.
-The reference device is excluded while assigned to another worktree. The
-[TCL comparison](low-tier.md#android-panel-composition) establishes lower UI
-measure/layout cost on the low tier; it does not qualify 90 Hz cadence, fresh
+No matched reference-device comparison was completed before the experiment
+limit. The [TCL comparison](low-tier.md#android-panel-composition) establishes
+lower UI measure/layout cost on the low tier; it does not qualify 90 Hz cadence, fresh
 geometry, canvas controls or appearance on this device. Earlier 60 Hz UI rows
 retain their stated limits.
 
