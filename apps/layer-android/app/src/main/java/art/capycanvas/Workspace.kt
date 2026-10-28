@@ -1,6 +1,8 @@
 package art.capycanvas
 
 import android.view.PointerIcon as AndroidPointerIcon
+import android.os.Build
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.LocalActivity
 import androidx.compose.ui.MotionDurationScale
@@ -302,6 +304,8 @@ private val HiddenChromeShape=object:Shape {
         onDispose { if (requestingMotionFrames && window != null) window.attributes = window.attributes.apply { preferredRefreshRate = previous } }
     }
     dock.density = density
+    val fontWeightAdjustment = if (Build.VERSION.SDK_INT >= 31) LocalConfiguration.current.fontWeightAdjustment else 0
+    dock.panelMetrics(density, LocalDensity.current.fontScale, "compose:${host.languageTag}:${snapshot?.objectOrNull("state")?.optString("theme")}:$fontWeightAdjustment")
     dock.enabled = snapshot?.objectOrNull("preferences") == null && snapshot?.objectOrNull("picker") == null && snapshot?.objectOrNull("toolbar_prompt") == null && snapshot?.objectOrNull("toolbar_manager") == null
     val panelModels = host.snapshot?.optJSONArray("panels")
     val panels = remember(panelModels) { panelModels?.objects()?.associateBy { it.getString("id") } ?: emptyMap() }
@@ -685,13 +689,25 @@ private class PanelContent(val id: Int, val active: String, val panels: JSONArra
 @Composable private fun PanelGroupBody(host: CanvasHost, state: JSONObject, group: PanelContent,
     panel: JSONObject, dock: DockInteraction, constrained: Boolean) {
     val scroll = rememberScrollState()
-    Box(Modifier.fillMaxSize().then(if (constrained) Modifier.panelScroll(scroll) else Modifier)) {
+    val origin = dock.measurementOrigin(group.active)
+    var measuredWidth by remember(origin?.key) { mutableFloatStateOf(0f) }
+    Box(Modifier.fillMaxSize().onGloballyPositioned { measuredWidth = it.size.width / dock.density }
+        .then(if (constrained) Modifier.panelScroll(scroll) else Modifier)) {
         if (group.tiles != null) ToolRibbon(host, panel, group.tiles, dock, Modifier.fillMaxSize(), group.vertical)
-        else PanelControls(host, state, panel, Modifier.fillMaxWidth().then(if (constrained) Modifier.height(group.minimumBody.dp) else Modifier.fillMaxHeight())
-            .contextSource(dock, obj("kind" to "panel", "panel" to group.active)), onContent = { dock.measure(group.active, content = it) })
+        else key(origin?.key) {
+            PanelControls(host, state, panel, Modifier.fillMaxWidth().then(if (constrained) Modifier.height(group.minimumBody.dp) else Modifier.fillMaxHeight())
+                .contextSource(dock, obj("kind" to "panel", "panel" to group.active)),
+                onContent = { dock.measure(group.active, origin, content = it, actualWidth = measuredWidth) })
+        }
     }
-    if (group.active != "palettes" && group.panels.values().contains("palettes")) PaletteMeasurement(host) { dock.measure("palettes", content = it) }
-    if (group.active != "color" && group.panels.values().contains("color")) ColorMeasurement(host) { dock.measure("color", content = it) }
+    if (group.active != "palettes" && group.panels.values().contains("palettes")) {
+        val companion = dock.measurementOrigin("palettes")
+        key(companion?.key) { PaletteMeasurement(host) { dock.measure("palettes", companion, content = it, actualWidth = measuredWidth) } }
+    }
+    if (group.active != "color" && group.panels.values().contains("color")) {
+        val companion = dock.measurementOrigin("color")
+        key(companion?.key) { ColorMeasurement(host) { dock.measure("color", companion, content = it, actualWidth = measuredWidth) } }
+    }
 }
 
 @Composable private fun PanelGroupTabs(host: CanvasHost, dock: DockInteraction, groupId: Int,

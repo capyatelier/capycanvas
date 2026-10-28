@@ -751,6 +751,16 @@ function presentWorkspaceLayout(resolved,layoutOnly) {
 // tab growth and floating sizes; moving a float reuses these cached DOM facts.
 const panelMeasurements = new Map();
 let measuringPanels = false;
+let panelMetricContext, panelFontGeneration = 0, lastPanelReport;
+function panelMetrics() {
+  const scale = devicePixelRatio || 1;
+  const style = `web:${getComputedStyle(workspace).font}:${panelFontGeneration}`;
+  if (!panelMetricContext || panelMetricContext.scale !== scale || panelMetricContext.style !== style) {
+    panelMetricContext = {generation: (panelMetricContext?.generation || 0) + 1, scale, text_scale: 1, style};
+  }
+  return panelMetricContext;
+}
+document.fonts.addEventListener("loadingdone", () => { panelFontGeneration++; queuePanelMeasurements(); });
 const measureBox = element("div", "panel-measure");
 measureBox.hidden = true;
 measureBox.inert = true;
@@ -779,16 +789,19 @@ function queuePanelMeasurements() {
   });
 }
 function measurePanels() {
-  const pending = [];
+  const pending = [], context = panelMetrics();
+  const requests = new Map((layout.measurement_requests || []).map(request => [request.panel, request]));
   // Batch writes before reads. Intrinsic measurement keeps one offscreen DOM
   // copy per intrinsic content change, so width changes reflow it without cloning.
   for (const config of state.workspace.layout.panels) {
     const view = customization.view(config.id);
-    const width = layout.groups.find(g => g.panels.includes(config.id))?.bounds.width || 232;
+    const request = requests.get(config.id);
+    if (!request) continue;
+    const width = request.width;
     // Model publication also advances for numeric values and canvas poses.
     // Intrinsic copies change only with panel structure/copy, appearance or
     // available width; each content widget invalidates its own schema below.
-    const key = JSON.stringify([state.theme, view.title, view.tab.show_icon, view.tab.show_name, view.icon, view.controls, view.tile_style]);
+    const key = JSON.stringify([request.tab, request.body, request.split_filters, context]);
     let cached = panelMeasurements.get(config.id);
     if (cached?.key !== key) {
       invalidatePanelMeasurement(config.id);
@@ -802,7 +815,7 @@ function measurePanels() {
         content.style.height = "auto"; content.style.width = "100%";
         root.append(content);
       }
-      cached = { key, root, tab, content };
+      cached = { key, root, tab, content, request: structuredClone(request), context };
       panelMeasurements.set(config.id, cached); measurementRoot.append(root);
     }
     // Toolbar intrinsic height is fixed at zero and its tab width is
@@ -823,28 +836,24 @@ function measurePanels() {
       // Subtract the list itself to keep headers/footers outside the scroll budget.
       const list = cached.content?.querySelector(".layer-rows, .filter-picker-list, .palette-scroll, .navigator-overview");
       const row = list?.querySelector(".layer-row, .filter-row, .palette-tile");
+      const scroll = cached.content && !["color","proof","histogram","waveform"].includes(id) ? {
+        fixed_height: list ? Math.max(0, content_height - list.getBoundingClientRect().height) : 0,
+        unit_height: row ? row.getBoundingClientRect().height + (row.matches(".palette-tile") ? 4 : 0) : 0,
+      } : null;
       cached.value = {
-        panel: id,
-        tab_width: cached.value?.tab_width ?? cached.tab.getBoundingClientRect().width,
-        content_height,
-        ...(cached.content && !["color","proof","histogram","waveform"].includes(id) ? { scroll: {
-          fixed_height: list ? Math.max(0, content_height - list.getBoundingClientRect().height) : 0,
-          unit_height: row ? row.getBoundingClientRect().height + (row.matches(".palette-tile") ? 4 : 0) : 0,
-        }} : {}),
+        request: {...cached.request, width: cached.width}, context: cached.context,
+        tab_width: cached.tab.getBoundingClientRect().width,
+        body: {actual_width: cached.content?.getBoundingClientRect().width || cached.width, content_height, scroll},
       };
     }
   } finally { measureBox.hidden = true; }
   for (const id of panelMeasurements.keys()) if (!panels.has(id)) invalidatePanelMeasurement(id);
-  const measurements = state.workspace.layout.panels.map(config => panelMeasurements.get(config.id).value);
-  // Compare against the shared publication, not a second authoritative cache.
-  // Measurements are transient and deliberately omitted from saved workspace
-  // state. Read Rust's live values rather than repeatedly publishing because a
-  // freshly serialized full state lacks that field.
-  const current = app.panel_measurements();
-  if (!current || current.length !== measurements.length || measurements.some((m, i) =>
-    m.panel !== current[i].panel || m.tab_width !== current[i].tab_width || m.content_height !== current[i].content_height ||
-    m.scroll?.fixed_height !== current[i].scroll?.fixed_height || m.scroll?.unit_height !== current[i].scroll?.unit_height)) {
-    dispatch({ type: "measure_panels", measurements });
+  const reports = [...requests.keys()].map(id => panelMeasurements.get(id)?.value).filter(Boolean);
+  const measurements = {context, reports};
+  const encoded = JSON.stringify(measurements);
+  if (encoded !== lastPanelReport) {
+    lastPanelReport = encoded;
+    dispatch({type: "measure_panels", measurements});
   }
 }
 function resizeCanvas() {

@@ -148,7 +148,8 @@ internal class HoleNode(private var strip: TabStrip, var slide: () -> Float) : M
     val style = LocalTextStyle.current.copy(fontWeight = FontWeight.Bold)
     val width = if (!showName) 36f else 16f + (if (showIcon) 22f else 0f) +
         measurer.measure(AnnotatedString(panel.getString("title")), style).size.width / dock.density
-    SideEffect { if (enabled) dock.measure(id, tabWidth = width) }
+    val origin = dock.measurementOrigin(id)
+    SideEffect { if (enabled) dock.measure(id, origin, tabWidth = width) }
     val dragged = dock.isDraggedTab(id)
     val interactions = remember { MutableInteractionSource() }
     val hovered by interactions.collectIsHoveredAsState()

@@ -904,6 +904,8 @@ pub struct Workspace {
     edge_grabs: edge_grab::EdgeGrabs,
     publication: workspace_update::Publication,
     measuring_panels: Cell<bool>,
+    panel_metric_context: RefCell<Option<layer_ui::PanelMetricContext>>,
+    panel_measurement_report: RefCell<Option<layer_ui::PanelMeasurementBatch>>,
     drop_hint: RefCell<Option<DropHint>>,
     toolbar: TileStrip,
     panels: Vec<(Panel, gtk::Widget)>,
@@ -1263,6 +1265,8 @@ impl Workspace {
             publication: workspace_update::Publication::default(),
             drop_hint: RefCell::new(None),
             measuring_panels: Cell::new(false),
+            panel_metric_context: RefCell::new(None),
+            panel_measurement_report: RefCell::new(None),
             toolbar: toolbar.clone(),
             groups: RefCell::new(Vec::new()),
             panels: vec![
@@ -3134,10 +3138,9 @@ impl Workspace {
             else {
                 return;
             };
-            let measurements = self.panel_measurements(&layout, [self.surface.width().max(1) as f32, self.surface.height().max(1) as f32]);
-            if measurements == layout.measurements {
-                return;
-            }
+            let (_,measurements)=self.panel_measurements(&layout,[self.surface.width().max(1) as f32,self.surface.height().max(1) as f32]);
+            if self.panel_measurement_report.borrow().as_ref()==Some(&measurements){return;}
+            *self.panel_measurement_report.borrow_mut()=Some(measurements.clone());
             self.dispatch(UiAction::MeasurePanels { measurements });
         }
     }
@@ -3145,11 +3148,11 @@ impl Workspace {
         let mut settled = None;
         for _ in 0..3 {
             let layout = self.surface.imp().layout.borrow().clone();
-            let measurements = self.panel_measurements(&layout, viewport);
-            if measurements == layout.measurements {
+            let (facts,measurements)=self.panel_measurements(&layout,viewport);
+            if facts == layout.measurements {
                 break;
             }
-            self.surface.imp().layout.borrow_mut().measurements.clone_from(&measurements);
+            self.surface.imp().layout.borrow_mut().measurements=facts;
             settled = Some(measurements);
         }
         if let Some(measurements) = settled {
@@ -3159,18 +3162,31 @@ impl Workspace {
             });
         }
     }
-    fn panel_measurements(&self, layout: &DockLayout, viewport: [f32; 2]) -> Vec<PanelMeasurement> {
-        let resolved = layout.workspace(viewport[0], viewport[1], HEADER_HEIGHT, STATUS_HEIGHT);
+    fn panel_metrics(&self)->layer_ui::PanelMetricContext {
+        let scale=self.area.scale_factor().max(1) as f32;
+        let font=self.surface.pango_context().font_description().map(|font|font.to_string().to_string()).unwrap_or_default();
+        let theme=adw::StyleManager::default().is_dark();
+        let style=format!("gtk:{font}:{theme}");
+        let mut current=self.panel_metric_context.borrow_mut();
+        if current.as_ref().is_none_or(|context|context.scale!=scale||context.style!=style) {
+            let generation=current.as_ref().map_or(1,|context|context.generation+1);
+            *current=Some(layer_ui::PanelMetricContext {generation,scale,text_scale:1.,style});
+        }
+        current.as_ref().unwrap().clone()
+    }
+    fn panel_measurements(&self,layout:&DockLayout,viewport:[f32;2])->(Vec<PanelMeasurement>,layer_ui::PanelMeasurementBatch) {
+        let context=self.panel_metrics();
+        let requests=self.gpu.borrow().as_ref().map(|gpu|gpu.session.layout_resolve_input()
+            .with_panel_measurements(layer_ui::PanelMeasurementBatch {context:context.clone(),reports:Vec::new()})
+            .expect("Current GTK panel metrics").resolve(viewport).measurement_requests).unwrap_or_default();
+        let mut reports=Vec::new();
         let groups = self.groups.borrow();
-        layout
+        let facts=layout
             .panels
             .iter()
             .filter_map(|config| {
-                let placed = resolved.groups.iter().find(|g| g.panels.contains(&config.id));
-                let previous = layout.measurements.iter().find(|m| m.panel == config.id).copied();
-                let Some(widget) = self.panel_view(config.id).filter(|_| placed.is_some() || previous.is_none()) else {
-                    return previous;
-                };
+                let request=requests.iter().find(|request|request.identity.panel==config.id)?.clone();
+                let widget=self.panel_view(config.id)?;
                 let tab_width = groups
                     .iter()
                     .flat_map(|g| &g.tabs)
@@ -3178,7 +3194,10 @@ impl Workspace {
                     .map_or(0.0, |(_, tab)| {
                         tab.measure(gtk::Orientation::Horizontal, -1).1 as f32
                     });
-                let width = placed.map_or_else(|| config.id.default_width(viewport[0]), |g| g.bounds.width);
+                let tab_width=if tab_width>0. {tab_width} else if request.tab_measured {
+                    layout.measurements.iter().find(|measurement|measurement.panel==config.id).map_or(0.,|measurement|measurement.tab_width)
+                } else {0.};
+                let width=request.width;
                 let content = widget
                     .downcast_ref::<gtk::ScrolledWindow>()
                     .and_then(|s| s.child())
@@ -3213,6 +3232,8 @@ impl Workspace {
                         }),
                     ),
                 };
+                reports.push(layer_ui::PanelMeasurementReport {request,context:context.clone(),tab_width:(tab_width>0.).then_some(tab_width),
+                    body:Some(layer_ui::PanelBodyMeasurement {actual_width:width as f32,content_height,scroll})});
                 Some(PanelMeasurement {
                     panel: config.id,
                     tab_width,
@@ -3220,7 +3241,8 @@ impl Workspace {
                     scroll,
                 })
             })
-            .collect()
+            .collect();
+        (facts,layer_ui::PanelMeasurementBatch {context,reports})
     }
     fn present_toolbars(self: &Rc<Self>) {
         if !self.customization.presentation_stale(&self.resolved()) {

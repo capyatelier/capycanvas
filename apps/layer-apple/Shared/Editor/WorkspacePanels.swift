@@ -3,6 +3,8 @@ import SwiftUI
 struct WorkspacePanels: View {
     @ObservedObject var store: EditorStore
     @ObservedObject var workspace: WorkspacePresentation
+    @Environment(\.displayScale) private var displayScale
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var panelBridgeAllocations: [String: PanelBridgeAllocation] = [:]
     private var groups: [JSON] {
         store.snapshot["layout"]["groups"].array.sorted {
@@ -49,12 +51,14 @@ struct WorkspacePanels: View {
             WorkspaceDropIndicator(workspace: workspace, palette: EditorPalette(source: store.state["palette"])).zIndex(300)
             WorkspaceCollapsedColumns(store: store).modifier(WorkspaceChromeVisibility(hidden: store.snapshot["chrome_hidden"].bool))
             WorkspaceBubbleLayer(store: store, bubbles: store.bubbles)
-            WorkspaceContentDrawers(store: store, drawers: store.contentDrawers)
+            WorkspaceContentDrawers(store: store, drawers: store.contentDrawers).environment(\.workspacePanelMeasurementOrigins, [:])
             WorkspaceTabSlideOverlay(store: store, slide: workspace.tabSlide).zIndex(250)
             ToolbarSliderPreviewOverlay(preview: workspace.sliderPreview, palette: EditorPalette(source: store.state["palette"])).zIndex(350)
             PaletteDragOverlay(controller: store.palettes, hdr: store.snapshot["color_panel"]["hdr"].bool, viewing: store.colorViewing).zIndex(380)
             WorkspaceContactMenu(interaction: workspace.input, store: store).zIndex(400)
         }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .environment(\.workspacePanelMeasurementOrigins, store.panelMeasurements.origins(scale: displayScale,
+                style: "swiftui:\(dynamicTypeSize):\(store.languageGeneration):\(store.catalog["text_size_pt"].number)"))
             .compositingGroup()
             .modifier(WorkspaceRootDrag(workspace: workspace))
             .onPreferenceChange(NavigatorPlacements.self) { placements in
@@ -217,6 +221,7 @@ private struct WorkspacePanelGroupContent: View {
                 let hdr = store.snapshot["color_panel"]["hdr"].bool
                 Color.clear.frame(maxWidth: .infinity).frame(height: 1)
                     .modifier(PanelBodyMeasurement(panel: "color", naturalHeight: { max(128, $0 - 16) * ColorPanel.aspect(hdr: hdr) + 16 }))
+                    .modifier(PanelMeasurementScope(panel: "color"))
                     .environment(\.measuresWorkspacePanel, true)
             } else if active["id"].string == "color" {
                 PaletteMeasurement(store: store, controller: store.palettes).environment(\.measuresWorkspacePanel, true)

@@ -70,15 +70,16 @@ internal fun resizePointerIcon(edge: String) = when (edge) {
 
 /** Native content facts in logical pixels; Rust chooses the dropped height. */
 internal data class PanelContentSize(val height: Float, val fixedHeight: Float? = null, val unitHeight: Float = 0f)
-private data class PanelMeasurement(val tabWidth: Float = 0f, val content: PanelContentSize = PanelContentSize(0f)) {
-    fun json(panel: String) = obj("panel" to panel, "tab_width" to tabWidth, "content_height" to content.height.coerceAtMost(999_999f)).apply {
-        content.fixedHeight?.let { put("scroll", obj("fixed_height" to it, "unit_height" to content.unitHeight)) }
-    }
-}
+internal data class PanelMeasurementOrigin(val key: String, val request: String, val context: String)
+private data class MeasuredTab(val origin: PanelMeasurementOrigin, val width: Float)
+private data class MeasuredBody(val origin: PanelMeasurementOrigin, val width: Float, val content: PanelContentSize)
+private data class PanelMeasurement(val tab: MeasuredTab? = null, val body: MeasuredBody? = null)
+
 
 /** Native hit geometry and gesture capture only. Rust owns movement, tear-off,
  * docking, sizing, undo transactions and Zen visibility on every platform. */
 internal class DockInteraction(val host: CanvasHost) {
+    private companion object { var panelMetricGeneration = 0L }
     data class DrawerSource(val direction: String, val bounds: Rect, val anchor: JSONObject? = null)
     data class Region(val token: Any, val action: JSONObject?, val bounds: Rect, val z: Int, val priority: Int,
         val context: JSONObject?, val cursor: Int, val holdToDrag: Boolean)
@@ -204,6 +205,19 @@ internal class DockInteraction(val host: CanvasHost) {
     private var contextTarget: String? = null
     private var contextOwner: Any? = null
     private val measurements = mutableMapOf<String, PanelMeasurement>()
+    private var panelMetrics: JSONObject? = null
+    private var lastPanelReport: String? = null
+    fun panelMetrics(scale: Float, textScale: Float, style: String) {
+        val old = panelMetrics
+        if (old == null || old.number("scale") != scale || old.number("text_scale") != textScale || old.getString("style") != style)
+            panelMetrics = obj("generation" to (++panelMetricGeneration), "scale" to scale, "text_scale" to textScale, "style" to style)
+    }
+    fun measurementOrigin(panel: String): PanelMeasurementOrigin? {
+        val request = host.snapshot?.objectOrNull("layout")?.array("measurement_requests")?.objects()?.find { it.getString("panel") == panel } ?: return null
+        val context = panelMetrics?.toString() ?: return null
+        val key = JSONArray(listOf(request.getString("tab"), request.getString("body"), request.number("width"), request.optBoolean("split_filters"), context)).toString()
+        return PanelMeasurementOrigin(key, request.toString(), context)
+    }
 
     fun measureColumnDrawer(column: Int, group: Int?, bounds: Rect?) {
         val next = bounds?.takeIf { group != null && it.width > 0f && it.height > 0f }?.let {
@@ -235,18 +249,36 @@ internal class DockInteraction(val host: CanvasHost) {
         host.dispatch(obj("type" to "measure_drawer_tiles", "measurements" to JSONArray(drawerTiles.values.toList())))
         drawerTileRevision++
     }
-    fun measure(panel: String, tabWidth: Float? = null, content: PanelContentSize? = null) {
+    fun measure(panel: String, origin: PanelMeasurementOrigin?, tabWidth: Float? = null, content: PanelContentSize? = null, actualWidth: Float = 0f) {
+        if (origin == null || (content != null && actualWidth <= 0f)) return
         val old = measurements[panel] ?: PanelMeasurement()
-        val next = PanelMeasurement(tabWidth ?: old.tabWidth, content ?: old.content)
-        val accepted = host.snapshot?.array("panel_measurements")?.objects()?.find { it.getString("panel") == panel }
-        if (next == old && accepted?.number("tab_width") == next.tabWidth && accepted.number("content_height") == next.content.height.coerceAtMost(999_999f) &&
-            accepted.objectOrNull("scroll")?.number("fixed_height") == next.content.fixedHeight &&
-            (next.content.fixedHeight == null || accepted.objectOrNull("scroll")?.number("unit_height") == next.content.unitHeight)) return
+        val next = PanelMeasurement(tabWidth?.let { MeasuredTab(origin, it) } ?: old.tab,
+            content?.let { MeasuredBody(origin, actualWidth, it) } ?: old.body)
+        if (next == old) return
         measurements[panel] = next
         publishMeasurements()
     }
+    private fun measurementBatch(): JSONObject? {
+        val context = panelMetrics ?: return null
+        val encodedContext = context.toString()
+        val reports = measurements.values.mapNotNull { size ->
+            val body = size.body?.takeIf { it.origin.context == encodedContext }
+            val tab = size.tab?.takeIf { it.origin.context == encodedContext }
+            val origin = body?.origin ?: tab?.origin ?: return@mapNotNull null
+            val request = JSONObject(origin.request)
+            val measuredTab = tab?.takeIf { JSONObject(it.origin.request).getString("tab") == request.getString("tab") }
+            obj("request" to request, "context" to JSONObject(origin.context), "tab_width" to measuredTab?.width,
+                "body" to body?.let { measured -> obj("actual_width" to measured.width,
+                    "content_height" to measured.content.height.coerceAtMost(999_999f), "scroll" to measured.content.fixedHeight?.let {
+                        obj("fixed_height" to it, "unit_height" to measured.content.unitHeight) }) })
+        }
+        return obj("context" to context, "reports" to JSONArray(reports))
+    }
     private fun publishMeasurements() {
-        host.dispatch(obj("type" to "measure_panels", "measurements" to JSONArray(measurements.map { (id, size) -> size.json(id) })))
+        val batch = measurementBatch() ?: return
+        if (batch.toString() == lastPanelReport) return
+        lastPanelReport = batch.toString()
+        host.dispatch(obj("type" to "measure_panels", "measurements" to batch))
     }
 
     // Shared workspace gestures have their own Zen state in Rust. Only tile
@@ -309,10 +341,8 @@ internal class DockInteraction(val host: CanvasHost) {
     private fun send(phase: String, preview: Boolean = false) {
         val action = active ?: return
         if (action.getString("type") == "tile_drag") return
-        // Opening another tab can invalidate Rust's transient measurement even
-        // when the displayed rectangle is unchanged.
         val actions = mutableListOf<JSONObject>()
-        if (phase == "up") actions.add(obj("type" to "measure_panels", "measurements" to JSONArray(measurements.map { (id, size) -> size.json(id) })))
+        if (phase == "up") measurementBatch()?.let { actions.add(obj("type" to "measure_panels", "measurements" to it)) }
         if (action.getString("type") == "drag_workspace") actions.add(obj("type" to "measure_column_drawers",
             "measurements" to JSONArray(columnDrawers.values.toList())))
         actions.add(JSONObject(action.toString()).put("phase", phase).put("viewport", viewport)

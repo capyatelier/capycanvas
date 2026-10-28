@@ -170,7 +170,13 @@ mod tests {
         let input=CString::new(json!(host.session.layout_resolve_input()).to_string()).unwrap();
         let original=unsafe {capy_layout_input_prepare(input.as_ptr())};assert_ne!(original,0);
         let before=resolve_layout(original,1400.,900.).unwrap();
-        let measurements=vec![layer_ui::PanelMeasurement {panel:layer_ui::Panel::Histogram,tab_width:110.,content_height:385.,scroll:None}];
+        let request=before.measurement_requests.iter().find(|request|request.identity.panel==layer_ui::Panel::Histogram).unwrap().clone();
+        let context=layer_ui::PanelMetricContext {generation:1,scale:1.,text_scale:1.,style:"native-test".into()};
+        let measurements=layer_ui::PanelMeasurementBatch {context:context.clone(),reports:vec![layer_ui::PanelMeasurementReport {
+            request:request.clone(),context,tab_width:Some(110.),body:Some(layer_ui::PanelBodyMeasurement {
+                actual_width:request.width,content_height:385.,scroll:None,
+            }),
+        }]};
         let input=CString::new(json!(measurements).to_string()).unwrap();
         let prepared=unsafe {capy_layout_input_measure(original,input.as_ptr())};assert_ne!(prepared,0);
         assert!(host.session.state().workspace.layout.measurements.is_empty());

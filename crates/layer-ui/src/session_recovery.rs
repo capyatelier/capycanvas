@@ -185,7 +185,7 @@ impl<R:CanvasRenderer> UiSession<R> {
     pub fn capture_session(&self)->Result<SessionCapture,String> {
         let Self {bubble_state:_,color_history:_,zen_peek:_,pressure_calibration:_,pressure_meter_changed:_,engine,state,files:_,screen_headroom:_,histogram_captions:_,histogram:_,effect_analyses:_,
             tonal_histogram:_,auto_levels:_,targeted_curve:_,localization_generation:_,renderer_generation:_,preferences_revision:_,
-            panel_copy:_,customization_copy:_,command_search:_,last_toolbar_context:_,frame_commands_pending:_,brush_stamps:_,canvas_bar:_,notices:_,
+            panel_measurements:_,panel_copy:_,customization_copy:_,command_search:_,last_toolbar_context:_,frame_commands_pending:_,brush_stamps:_,canvas_bar:_,notices:_,
             pen:_,pen_input:_,input_pending:_,host_requests_changed:_,pen_contact:_,discarded_contacts:_,rendering_suspended:_,touch:_,navigation:_,navigator_drag:_,
             effect_gesture:_,preview_target:_,paper_preview:_,papers:_,object_motion:_,property_editor:_,sdr_gesture:_,last_proof_mode:_,proof_setup_pending:_,filter_previews:_,
             eyedropper:_,region_tools:_,selection_tools:_,tonal_tools:_,painted_selections:_,vector_lines:_,vector_moves:_,vector_paths:_,vector_points:_,figure_options:_,deferred_edits:_,selection_masks:_,

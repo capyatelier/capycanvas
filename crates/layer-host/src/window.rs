@@ -1383,7 +1383,10 @@ mod tests {
             let prepared = window.prepare_close(&mut host, Default::default()).unwrap();
             let stamp = host.session.session_stamp();
             for report in [
-                UiAction::MeasurePanels { measurements: vec![] },
+                UiAction::MeasurePanels { measurements: layer_ui::PanelMeasurementBatch {
+                    context:layer_ui::PanelMetricContext {generation:1,scale:1.,text_scale:1.,style:"window-test".into()},
+                    reports:vec![],
+                } },
                 UiAction::MeasureDrawerTiles { measurements: vec![] },
                 UiAction::SystemThemeChanged { theme: layer_ui::Theme::Light, accent: None },
             ] {

@@ -2273,17 +2273,21 @@ mod tests {
     fn workspace_views_expose_shared_actions_and_transient_measurements() {
         let mut app = NativeHost::new(layer_ui::Platform::Android).unwrap();
         app.resize(2560, 1600, 2.0).unwrap();
+        let request=app.session.layout_resolve_input().resolve([1280.,800.]).measurement_requests.into_iter()
+            .find(|request|request.identity.panel==layer_ui::Panel::Brushes).unwrap();
+        let context=layer_ui::PanelMetricContext {generation:1,scale:2.,text_scale:1.,style:"host-test".into()};
         app.dispatch(UiAction::MeasurePanels {
-            measurements: vec![layer_ui::PanelMeasurement {
-                panel: layer_ui::Panel::Brushes,
-                tab_width: 76.0,
-                content_height: 480.0,
-                scroll: None,
-            }],
+            measurements: layer_ui::PanelMeasurementBatch {context:context.clone(),reports:vec![layer_ui::PanelMeasurementReport {
+                request:request.clone(),context,tab_width:Some(76.),body:Some(layer_ui::PanelBodyMeasurement {
+                    actual_width:request.width,content_height:480.,scroll:None,
+                }),
+            }]},
         })
         .unwrap();
         let snapshot = app.snapshot();
-        assert_eq!(snapshot["panel_measurements"][0]["tab_width"], 76.0);
+        let brushes=snapshot["panel_measurements"].as_array().unwrap().iter()
+            .find(|measurement|measurement["panel"]=="brushes").unwrap();
+        assert_eq!(brushes["tab_width"], 76.0);
         assert!(
             snapshot["state"]["workspace"]["layout"]
                 .get("measurements")

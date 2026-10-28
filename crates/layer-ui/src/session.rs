@@ -261,6 +261,7 @@ pub struct UiSession<R: CanvasRenderer> {
     localization_generation: u64,
     renderer_generation: u64,
     preferences_revision: u64,
+    panel_measurements: crate::panel_measurements::PanelMeasurementCache,
     panel_copy: Vec<(Panel, std::sync::Arc<customization::PanelCopy>)>,
     customization_copy: std::cell::RefCell<CustomizationCopy>,
     command_search: command_catalog::CommandSearch,
@@ -518,6 +519,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             renderer_generation: 0,
             preferences_revision: 0,
             panel_copy: Default::default(),
+            panel_measurements: Default::default(),
             customization_copy: Default::default(),
             command_search: Default::default(),
             engine,
@@ -3375,7 +3377,13 @@ impl<R: CanvasRenderer> UiSession<R> {
                 ) }
             }
             UiAction::MeasurePanels { measurements } => {
-                let accepted=self.state.workspace.layout.accept_panel_measurements(measurements)?;
+                let mut cache=self.panel_measurements.clone();
+                cache.identities=crate::measurement_shape::identities(&self.state);
+                self.panel_measurements=cache.accept(measurements)?;
+                let viewport=self.logical_viewport.or(self.interaction.viewport)
+                    .unwrap_or(self.state.camera.viewport.map(|value|value as f32));
+                let accepted=crate::LayoutResolveInput::new(&self.state.workspace.layout,None)
+                    .with_cache(self.panel_measurements.clone()).measured_layout(viewport).measurements;
                 if self.state.workspace.layout.measurements == accepted { (0, false) } else if self.floating_auto_fit.is_empty() {
                     self.state.workspace.layout.measurements = accepted;
                     (LAYOUT, false)
@@ -6125,6 +6133,13 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .settings
                 .palette(self.state.theme, self.state.platform, self.system_accent);
         }
+        if regions & (regions::LAYOUT|regions::CUSTOMIZATION|regions::SETTINGS) != 0 {
+            let viewport=self.logical_viewport.or(self.interaction.viewport)
+                .unwrap_or(self.state.camera.viewport.map(|value|value as f32));
+            let mut cache=self.panel_measurements.clone();cache.identities=crate::measurement_shape::identities(&self.state);
+            self.state.workspace.layout.measurements=crate::LayoutResolveInput::new(&self.state.workspace.layout,None)
+                .with_cache(cache).measured_layout(viewport).measurements;
+        }
         if regions != 0 {
             self.state.revision += 1;
             if regions & !(regions::CAMERA | regions::COLOR_PREVIEW | regions::COMMAND_SEARCH) != 0 {
@@ -6535,6 +6550,18 @@ mod tests {
     use super::*;
     use layer_core::{AssetId, Point};
     use layer_engine::{SampleFlags, ToolKind};
+
+    fn measured_batch(app:&UiSession<Recorder>,viewport:[f32;2],measurements:Vec<PanelMeasurement>)->PanelMeasurementBatch {
+        let requests=app.layout_resolve_input().resolve(viewport).measurement_requests;
+        let context=PanelMetricContext {generation:1,scale:1.,text_scale:1.,style:"session-test".into()};
+        let reports=measurements.into_iter().map(|measurement| {
+            let request=requests.iter().find(|request|request.identity.panel==measurement.panel).unwrap().clone();
+            PanelMeasurementReport {request:request.clone(),context:context.clone(),tab_width:(measurement.tab_width>0.).then_some(measurement.tab_width),
+                body:Some(PanelBodyMeasurement {actual_width:request.width,
+                    content_height:measurement.content_height,scroll:measurement.scroll})}
+        }).collect();
+        PanelMeasurementBatch {context,reports}
+    }
 
     #[test]
     fn fresh_users_start_with_pencil_and_saved_editing_restores_the_last_brush_and_color() {
@@ -12311,12 +12338,12 @@ mod tests {
         // A late native natural-height measurement must not move the grabbed
         // header or resize the live preview (including its retained handles).
         app.dispatch(UiAction::MeasurePanels {
-            measurements: vec![PanelMeasurement {
+            measurements: measured_batch(&app,viewport,vec![PanelMeasurement {
                 panel: Panel::Brushes,
                 tab_width: 120.,
                 content_height: 1800.,
                 scroll: None,
-            }],
+            }]),
         })
         .unwrap();
         assert_eq!(preview(&app).height, source.height);
@@ -12326,9 +12353,10 @@ mod tests {
             durable_layout(&app.state.workspace.layout),
             durable_layout(&baseline.layout)
         );
-        app.dispatch(UiAction::MeasurePanels {
-            measurements: baseline.layout.measurements.clone(),
-        })
+        let mut reset=measured_batch(&app,viewport,baseline.layout.measurements.clone());
+        reset.context.generation=2;
+        for report in &mut reset.reports {report.context.generation=2;}
+        app.dispatch(UiAction::MeasurePanels {measurements:reset})
         .unwrap();
         assert_eq!(app.state.workspace, baseline);
         assert!(app.workspace_update().drag.is_none());
@@ -12357,10 +12385,10 @@ mod tests {
         app.state.workspace.layout.move_panel(viewport, Panel::Layers, DockTarget::Tab { group, index: None }).unwrap();
         app.state.workspace.layout.move_panel(viewport, Panel::Proof, DockTarget::Tab { group, index: None }).unwrap();
         let measurement = |panel, content_height| PanelMeasurement { panel, tab_width: 100., content_height, scroll: None };
-        app.dispatch(UiAction::MeasurePanels { measurements: vec![
+        app.dispatch(UiAction::MeasurePanels { measurements: measured_batch(&app,viewport,vec![
             measurement(Panel::Histogram, 320.), measurement(Panel::Waveform, 0.),
             measurement(Panel::Layers, 0.), measurement(Panel::Proof, 0.),
-        ] }).unwrap();
+        ]) }).unwrap();
         let source = app.layout(viewport).groups.into_iter().find(|placed| placed.id == group).unwrap().bounds;
         let item = DockItem::Group { group };
         app.drag_workspace(item, ContactPhase::Down, [source.x + 40., source.y + 12.], viewport, &[]).unwrap();
@@ -12368,10 +12396,10 @@ mod tests {
         app.drag_workspace(item, ContactPhase::Up, [600., 400.], viewport, &[]).unwrap();
         let placed = |app: &UiSession<_>| app.layout(viewport).groups.into_iter().find(|placed| placed.id == group).unwrap().bounds;
         let before = placed(&app);
-        app.dispatch(UiAction::MeasurePanels { measurements: vec![
+        app.dispatch(UiAction::MeasurePanels { measurements: measured_batch(&app,viewport,vec![
             measurement(Panel::Histogram, 320.), measurement(Panel::Waveform, 520.),
             measurement(Panel::Layers, 0.), measurement(Panel::Proof, 0.),
-        ] }).unwrap();
+        ]) }).unwrap();
         let fitted = placed(&app);
         assert!(fitted.height > before.height);
         app.dispatch(UiAction::SelectPanelTab { group, panel: Panel::Waveform }).unwrap();
@@ -12384,10 +12412,10 @@ mod tests {
             app.dispatch(UiAction::ResizeFloating { group, edge, phase, position, viewport }).unwrap();
         }
         app.dispatch(UiAction::SelectPanelTab { group, panel: Panel::Layers }).unwrap();
-        app.dispatch(UiAction::MeasurePanels { measurements: vec![
+        app.dispatch(UiAction::MeasurePanels { measurements: measured_batch(&app,viewport,vec![
             measurement(Panel::Histogram, 320.), measurement(Panel::Waveform, 520.),
             measurement(Panel::Layers, 700.), measurement(Panel::Proof, 0.),
-        ] }).unwrap();
+        ]) }).unwrap();
         let first_fit = placed(&app);
         assert!(first_fit.height > fitted.height);
 
@@ -12398,10 +12426,10 @@ mod tests {
         }
         let manual = placed(&app);
         app.dispatch(UiAction::SelectPanelTab { group, panel: Panel::Proof }).unwrap();
-        app.dispatch(UiAction::MeasurePanels { measurements: vec![
+        app.dispatch(UiAction::MeasurePanels { measurements: measured_batch(&app,viewport,vec![
             measurement(Panel::Histogram, 320.), measurement(Panel::Waveform, 520.),
             measurement(Panel::Layers, 700.), measurement(Panel::Proof, 800.),
-        ] }).unwrap();
+        ]) }).unwrap();
         assert_eq!(placed(&app), manual);
     }
 
@@ -12413,12 +12441,12 @@ mod tests {
             let panel = Panel::Brushes;
             let group = app.state.workspace.layout.panel_group(panel).unwrap();
             app.dispatch(UiAction::MeasurePanels {
-                measurements: vec![PanelMeasurement {
+                measurements: measured_batch(&app,viewport,vec![PanelMeasurement {
                     panel,
                     tab_width: 120.,
                     content_height: 1800.,
                     scroll: None,
-                }],
+                }]),
             })
             .unwrap();
             if icon {
@@ -13855,6 +13883,7 @@ mod tests {
         fn new(right: bool, nested: Option<bool>) -> Self {
             let mut session = session(Platform::Gtk);
             let viewport = [1600., 1000.];
+            session.set_viewport(viewport,viewport.map(|value|value as u32)).unwrap();
             let (id, root) = if let Some(second) = nested {
                 let band = &mut session.state.workspace.layout.bands[0];
                 band.extent = 560.;
@@ -14038,20 +14067,16 @@ mod tests {
                     for cycle in 0..3 {
                         t.drag(ContactPhase::Move, 36.);
                         if cycle == 0 {
-                            // Hosts may deliver fresh measurements when panels appear.
-                            before.layout.measurements.push(crate::PanelMeasurement {
+                            let measurements=measured_batch(&t.session,t.viewport,vec![crate::PanelMeasurement {
                                 panel: Panel::Brushes,
                                 tab_width: 120.,
                                 content_height: 200.,
                                 scroll: None,
-                            });
+                            }]);
+                            t.session.dispatch(UiAction::MeasurePanels { measurements }).unwrap();
+                            before.layout.measurements=LayoutResolveInput::new(&before.layout,None)
+                                .with_cache(t.session.panel_measurements.clone()).measured_layout(t.viewport).measurements;
                             before.layout.column_scroll.push((t.root, 12.));
-                            t.session
-                                .state
-                                .workspace
-                                .layout
-                                .measurements
-                                .clone_from(&before.layout.measurements);
                             t.session
                                 .state
                                 .workspace
@@ -14060,6 +14085,8 @@ mod tests {
                                 .clone_from(&before.layout.column_scroll);
                         }
                         assert!(!t.session.state.workspace.layout.is_collapsed(t.root));
+                        assert!(t.session.layout_resolve_input().resolve(t.viewport).measurement_requests.iter()
+                            .find(|request|request.identity.panel==Panel::Brushes).unwrap().body_measured);
                         assert!((t.width() - t.minimum).abs() < 0.01);
                         t.drag(ContactPhase::Move, 35.5);
                         assert_eq!(t.session.state.workspace, before);

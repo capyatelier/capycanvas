@@ -1035,6 +1035,7 @@ pub struct DockLayout {
 pub struct LayoutResolveInput<'a> {
     layout: std::borrow::Cow<'a,DockLayout>,
     zen_peek_edge: Option<Edge>,
+    cache: Option<crate::panel_measurements::PanelMeasurementCache>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -1048,28 +1049,52 @@ struct LayoutResolveWire<'a> {
     titlebar_insets: [f32;3],
     bottom_inset: f32,
     zen_peek_edge: Option<Edge>,
+    cache: Option<crate::panel_measurements::PanelMeasurementCache>,
 }
 
 impl<'a> LayoutResolveInput<'a> {
     pub(crate) fn new(layout:&'a DockLayout,zen_peek_edge:Option<Edge>)->Self {
-        Self {layout:std::borrow::Cow::Borrowed(layout),zen_peek_edge}
+        Self {layout:std::borrow::Cow::Borrowed(layout),zen_peek_edge,cache:None}
     }
     pub(crate) fn keeps(&self,group:u32)->bool {
         self.layout.shows_in_zen(group)
             || self.zen_peek_edge.is_some_and(|edge|self.layout.group_edge(group)==Some(edge))
     }
-    pub fn resolve(&self,viewport:[f32;2])->ResolvedLayout {
-        let mut result=self.layout.resolved(viewport);
-        for group in &mut result.groups {
-            group.zen_kept=self.keeps(group.id);
+    pub(crate) fn with_cache(mut self,cache:crate::panel_measurements::PanelMeasurementCache)->Self {
+        self.cache=Some(cache);self
+    }
+    fn requests(&self,cache:&crate::panel_measurements::PanelMeasurementCache,result:&ResolvedLayout)->Vec<crate::PanelMeasurementRequest> {
+        cache.identities.iter().map(|identity| {
+            let width=result.groups.iter().find(|group|group.panels.contains(&identity.panel))
+                .map_or_else(||identity.panel.default_width(result.viewport[0]),|group|group.bounds.width);
+            cache.request(identity,width,false)
+        }).collect()
+    }
+    pub(crate) fn measured_layout(&self,viewport:[f32;2])->DockLayout {
+        let mut layout=self.layout.as_ref().clone();
+        if let Some(cache)=self.cache.as_ref().filter(|cache|cache.context.is_some()) {
+            layout.measurements=cache.project(&cache.identities.iter().map(|identity|cache.request(identity,0.,false)).collect::<Vec<_>>());
+            for _ in 0..4 {
+                let requests=self.requests(cache,&layout.resolved(viewport));
+                let measurements=cache.project(&requests);
+                if measurements==layout.measurements {break;}
+                layout.measurements=measurements;
+            }
         }
+        layout
+    }
+    pub fn resolve(&self,viewport:[f32;2])->ResolvedLayout {
+        let mut result=if self.cache.is_some(){self.measured_layout(viewport).resolved(viewport)}else{self.layout.resolved(viewport)};
+        if let Some(cache)=&self.cache {result.measurement_requests=self.requests(cache,&result);}
+        for group in &mut result.groups {group.zen_kept=self.keeps(group.id);}
         result
     }
-    pub fn with_panel_measurements(&self,measurements:Vec<PanelMeasurement>)->Result<Self,String> {
-        let accepted=self.layout.accept_panel_measurements(measurements)?;
-        let mut input=self.clone();input.layout.to_mut().measurements=accepted;
+    pub fn with_panel_measurements(&self,batch:crate::PanelMeasurementBatch)->Result<Self,String> {
+        let mut input=self.clone();
+        input.cache=Some(input.cache.unwrap_or_default().accept(batch)?);
         Ok(input)
     }
+
 }
 
 impl Serialize for LayoutResolveInput<'_> {
@@ -1081,7 +1106,7 @@ impl Serialize for LayoutResolveInput<'_> {
             column_scroll:std::borrow::Cow::Borrowed(&layout.column_scroll),
             column_open:layout.column_stacks.iter().map(|stack|(stack.column,stack.open_column)).collect(),
             measurements:std::borrow::Cow::Borrowed(&layout.measurements),
-            titlebar_insets:layout.titlebar_insets,bottom_inset:layout.bottom_inset,zen_peek_edge:self.zen_peek_edge,
+            titlebar_insets:layout.titlebar_insets,bottom_inset:layout.bottom_inset,zen_peek_edge:self.zen_peek_edge,cache:self.cache.clone(),
         }.serialize(serializer)
     }
 }
@@ -1102,7 +1127,7 @@ impl<'de> Deserialize<'de> for LayoutResolveInput<'_> {
         layout.header_presentation=wire.header_presentation.into_owned();
         layout.column_scroll=wire.column_scroll.into_owned();layout.measurements=wire.measurements.into_owned();
         layout.titlebar_insets=wire.titlebar_insets;layout.bottom_inset=wire.bottom_inset;
-        Ok(Self {layout:std::borrow::Cow::Owned(layout),zen_peek_edge:wire.zen_peek_edge})
+        Ok(Self {layout:std::borrow::Cow::Owned(layout),zen_peek_edge:wire.zen_peek_edge,cache:wire.cache})
     }
 }
 
@@ -1377,6 +1402,8 @@ pub struct Divider {
 pub struct ResolvedLayout {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub vector_surfaces: Vec<crate::PanelVectorSurface>,
+    #[serde(default,skip_serializing_if="Vec::is_empty")]
+    pub measurement_requests: Vec<crate::PanelMeasurementRequest>,
     pub viewport: [f32; 2],
     pub tab_bar_height: f32,
     /// Unobstructed document fitting area, not the GPU widget allocation.
@@ -3381,6 +3408,7 @@ impl DockLayout {
         };
         let mut result = ResolvedLayout {
             vector_surfaces: Vec::new(),
+            measurement_requests: Vec::new(),
             viewport: [width, height],
             tab_bar_height: TAB_BAR_HEIGHT,
             work_area: remaining,
@@ -3478,7 +3506,7 @@ impl DockLayout {
     }
 
     pub(crate) fn adopt_runtime(&mut self, from: &DockLayout) {
-        self.measurements.clone_from(&from.measurements);
+        self.measurements.clear();
         self.titlebar_insets = from.titlebar_insets;
         self.bottom_inset = from.bottom_inset;
         self.header_presentation = crate::HeaderPresentation {
@@ -3489,25 +3517,6 @@ impl DockLayout {
             },
             items: if self.header == from.header { from.header_presentation.items.clone() } else { Vec::new() },
         };
-    }
-
-    pub(crate) fn accept_panel_measurements(&self,measurements:Vec<PanelMeasurement>)->Result<Vec<PanelMeasurement>,String> {
-        let measured=|value:f32|value.is_finite()&&(0.0..1_000_000.0).contains(&value);
-        let mut accepted=Vec::new();
-        for measurement in measurements {
-            if ![measurement.tab_width,measurement.content_height].into_iter().all(measured) {
-                return Err("Invalid panel measurement".into());
-            }
-            if measurement.scroll.is_some_and(|m|![m.fixed_height,m.unit_height].into_iter().all(measured)
-                || m.fixed_height>measurement.content_height) {
-                return Err("Invalid panel scroll measurement".into());
-            }
-            if accepted.iter().any(|m:&PanelMeasurement|m.panel==measurement.panel) {
-                return Err("Duplicate panel measurement".into());
-            }
-            if self.panel(measurement.panel).is_ok(){accepted.push(measurement);}
-        }
-        Ok(accepted)
     }
 
     pub(crate) fn workspace_height(&self, height: f32) -> f32 {
@@ -4791,26 +4800,6 @@ fn resolve_node(
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn prepared_panel_measurements_resolve_without_mutating_published_layout() {
-        let mut layout=crate::WorkspacePreset::Photographer.layout(crate::Platform::Windows);
-        layout.open_default_columns(crate::Platform::Windows);
-        layout.fit_height_groups=vec![layout.panel_group(Panel::Histogram).unwrap()];
-        let input=LayoutResolveInput::new(&layout,None);
-        let viewport=[2000.,2000.];let before=serde_json::json!(input.resolve(viewport));
-        let measurements=vec![PanelMeasurement {panel:Panel::Histogram,tab_width:110.,content_height:385.,scroll:None}];
-        let prepared=input.with_panel_measurements(measurements.clone()).unwrap();
-        let mut expected=layout.clone();expected.measurements=measurements.clone();
-        assert_eq!(serde_json::json!(prepared.resolve(viewport)),serde_json::json!(LayoutResolveInput::new(&expected,None).resolve(viewport)));
-        assert_ne!(serde_json::json!(prepared.resolve(viewport)),before);
-        assert_eq!(serde_json::json!(input.resolve(viewport)),before);
-        assert_eq!(serde_json::json!(prepared.layout.as_ref()),serde_json::json!(layout));
-        assert!(input.with_panel_measurements(vec![measurements[0],measurements[0]]).is_err());
-        let mut invalid=measurements[0];invalid.content_height=f32::NAN;
-        assert!(input.with_panel_measurements(vec![invalid]).is_err());
-        let mut invalid=measurements[0];invalid.scroll=Some(PanelScrollMeasurement {fixed_height:400.,unit_height:20.});
-        assert!(input.with_panel_measurements(vec![invalid]).is_err());
-    }
 
     #[test]
     fn reopened_panels_have_legal_docks_and_monitors_default_to_right() {

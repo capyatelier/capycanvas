@@ -64,9 +64,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     std::unique_ptr<WorkspaceBubbles> bubbles;
     std::unique_ptr<CollapsedColumns> collapsed;
     std::unique_ptr<WorkspaceExpansion> expansion;
-    struct Measurement {double tab=36,content=320;J scroll;};
-    std::map<std::wstring,Measurement> measurements;
-    struct Offscreen {std::wstring key;std::shared_ptr<WorkspaceData> data;std::unique_ptr<PanelBody> body;uint64_t publication=0;};
+    struct Offscreen {std::wstring key;std::shared_ptr<WorkspaceData> data;std::unique_ptr<PanelBody> body;};
     std::map<std::wstring,Offscreen> offscreen;
     struct Body {hstring key;std::shared_ptr<PanelBody> view;};
     std::map<std::wstring,Body> bodies;
@@ -132,7 +130,8 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     };
     std::map<uint32_t,Group> groups;
     hstring panelBridgeKey,lastPanelSurfaces;
-    NativeLayoutInput layoutInput,resolvedInput;
+    NativeLayoutInput layoutInput,resolvedInput,metricInput;
+    J panelMetricContext;hstring panelMetricKey;
     J resolvedLayout;
     float viewportWidth=0,viewportHeight=0,resolvedWidth=0,resolvedHeight=0;
     uint64_t panelLayoutRevision=0,panelQueryLayoutRevision=0;
@@ -433,8 +432,27 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             throw hresult_invalid_argument(L"Invalid workspace publication revision");
         return uint64_t(value);
     }
+    J metricContext(){
+        auto scale=root.XamlRoot()?root.XamlRoot().RasterizationScale():1.;
+        auto textScale=Windows::UI::ViewManagement::UISettings().TextScaleFactor();
+        auto style=L"winui:"+data->language()+L":"+data->theme()+L":"+to_hstring(data->textSize());
+        auto key=O({{L"scale",N(scale)},{L"text_scale",N(textScale)},{L"style",S(style)}}).Stringify();
+        if(key!=panelMetricKey){
+            static std::atomic<uint64_t> generation{0};
+            panelMetricKey=key;auto panelMetricGeneration=++generation;
+            panelMetricContext=O({{L"generation",N(double(panelMetricGeneration))},{L"scale",N(scale)},{L"text_scale",N(textScale)},{L"style",S(style)}});
+        }
+        return panelMetricContext;
+    }
     bool resolveLayout(){
         if(!layoutInput||viewportWidth<=0||viewportHeight<=0)return false;
+        auto previous=panelMetricKey;auto context=metricContext();
+        if(layoutInput.get()!=metricInput.get()||previous!=panelMetricKey){
+            auto batch=O({{L"context",context},{L"reports",A{}}});
+            NativeLayoutInput measured(capy_layout_input_measure(layoutInput.get(),to_string(batch.Stringify()).c_str()));
+            if(!measured)throw hresult_invalid_argument(L"Invalid panel metric context");
+            layoutInput=std::move(measured);metricInput=layoutInput;
+        }
         if(layoutInput.get()==resolvedInput.get()&&viewportWidth==resolvedWidth&&viewportHeight==resolvedHeight){
             data->model.Insert(L"layout",resolvedLayout);return false;
         }
@@ -520,8 +538,6 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         }
         data->model=snapshot;data->state=object(model,L"state");data->colorPreview=object(model,L"color_preview");
         RefreshFilterPreviewContext(data->previews,object(data->state,L"document_file").GetNamedValue(L"epoch").Stringify());
-        // Adoption and layout restoration discard transient host measurements.
-        // Reconcile the new model even when retained controls have identical sizes.
         lastMeasurements=L"";
         data->refreshPalette();
         auto textScale=Windows::UI::ViewManagement::UISettings().TextScaleFactor();
@@ -541,7 +557,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             auto viewport=array(object(model,L"layout"),L"viewport");
             if(viewport.Size()==2){viewportWidth=float(viewport.GetNumberAt(0));viewportHeight=float(viewport.GetNumberAt(1));}
         }
-        resolveLayout();auto rebuilt=applyLayout(data->model,full);if(full&&(rebuilt||relocalize))preparePanels();tracePresentation();if(full)colorRequests();return true;
+        resolveLayout();applyLayout(data->model,full);if(full&&needsPanelMeasurements())preparePanels();tracePresentation();if(full)colorRequests();return true;
     }
     bool applyLayout(J const& model,bool full){
         bool rebuilt=false;
@@ -824,117 +840,105 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         auto json=value.Stringify();if(json==lastTitlebar)return;lastTitlebar=json;
         data->dispatch(O({{L"type",S(L"measure_titlebar")},{L"insets",value}}));
     }
+    A measurementRequests()const{return array(object(data->model,L"layout"),L"measurement_requests");}
+    bool needsPanelMeasurements()const{
+        for(auto value:measurementRequests()){
+            auto request=value.GetObject();bool visible=false;
+            for(auto const& [id,group]:groups)if(!group.hidden&&!group.presented.Size())
+                for(auto panel:array(group.geometry,L"panels"))if(panel.GetString()==str(request,L"panel"))visible=true;
+            if(!visible)continue;
+            if(!flag(request,L"tab_measured")||!flag(request,L"body_measured"))return true;
+        }
+        return false;
+    }
     A collectPanelMeasurements(bool preparing=false){
-        if((data->updating&&!preparing)||!root.IsLoaded()||root.ActualWidth()<=0)return A{nullptr};
-        auto accepted=array(data->model,L"panel_measurements");std::vector<std::wstring> live;
-        for(auto value:array(data->model,L"panels")){
-            auto id=str(value.GetObject(),L"id");std::wstring key(id);live.push_back(key);
-            if(!measurements.contains(key)){
-                auto previous=find(accepted,L"panel",id);
-                measurements.emplace(key,Measurement{num(previous,L"tab_width",36),num(previous,L"content_height",320),object(previous,L"scroll")});
-            }
-        }
-        for(auto it=measurements.begin();it!=measurements.end();)
-            if(std::find(live.begin(),live.end(),it->first)==live.end())it=measurements.erase(it);else ++it;
-        auto stable=[](double value){return std::round(std::clamp(value,0.,999999.)*64.)/64.;};
-        for(auto const& [id,group]:groups){
-            if(group.hidden||group.presented.Size()||(!preparing&&!group.frame.IsLoaded()))continue;
-            for(auto const& [panel,shell]:group.tabs){
-                auto tab=shell.Children().GetAt(1).as<Button>();
-                if(preparing)tab.Measure({INFINITY,INFINITY});
-                if((!preparing&&!tab.IsLoaded())||tab.DesiredSize().Width<=0)continue;
-                double width=tab.DesiredSize().Width;
-                for(auto const& automatic:group.automatic)if(automatic.tab==tab)
-                    if(auto cached=tabWidths.find(automatic.key);cached!=tabWidths.end()){width=cached->second;break;}
-                measurements[panel].tab=stable(width);
-            }
-            double width=group.body->Root().ActualWidth();
-            if(preparing&&width<=0)width=num(object(group.geometry,L"bounds"),L"width");
-            double height=group.body->ContentHeight(width);
-            if(std::isfinite(height)&&height>=0){
-                auto& measurement=measurements[std::wstring(str(group.geometry,L"active"))];
-                measurement.content=stable(height);measurement.scroll=group.body->ScrollMetrics();
-            }
-        }
-        std::set<std::wstring> keep;
-        for(auto const& [id,group]:groups){
-            if(group.hidden||group.presented.Size())continue;
-            double width=group.body->Root().ActualWidth();auto active=str(group.geometry,L"active");
-            if(preparing&&width<=0)width=num(object(group.geometry,L"bounds"),L"width");
-            if(!(width>0))continue;
-            for(auto value:array(group.geometry,L"panels")){
-                auto panelId=value.GetString();if(panelId==active)continue;
-                auto panel=find(array(data->model,L"panels"),L"id",panelId);if(!panel.Size()||array(panel,L"tiles").Size())continue;
-                std::wstring name(panelId);keep.insert(name);auto& copy=offscreen[name];
-                if(copy.data){copy.data->state=data->state;copy.data->model=data->model;}
-                if(!copy.body||copy.publication!=fullUpdates){
-                auto key=std::wstring(panelStructure(panel).Stringify());
-                if(copy.key!=key||!copy.body){
-                    auto inert=std::make_shared<WorkspaceData>(*data);
-                    inert->updating=false;
-                    inert->send=[](std::string){};inert->document=[](std::string){};inert->input=[](std::string){};
-                    inert->query=nullptr;inert->previews.reset();inert->thumbnails.reset();inert->scopes.reset();
-                    inert->popupChanged=nullptr;inert->takeBubble=nullptr;inert->bubbleContact=nullptr;inert->edgeHolding=nullptr;inert->cancelEdge=nullptr;inert->pointerCancels.Clear();inert->transients.clear();inert->colorViews.clear();inert->copyViews.clear();
-                    auto body=std::make_unique<PanelBody>(inert,panel,O({{L"bounds",O({{L"width",N(width)}})}}),[]{},nullptr,false);
-                    body->Root().Width(width);body->Apply(true);measureHost.Children().Append(body->Root());
-                    if(copy.body){uint32_t at=0;if(measureHost.Children().IndexOf(copy.body->Root(),at))measureHost.Children().RemoveAt(at);}
-                    copy.data=inert;copy.body=std::move(body);copy.key=key;
-                }else copy.body->Apply(true);
-                copy.publication=fullUpdates;
-                }
-                if(copy.body->Root().Width()!=width)copy.body->Root().Width(width);
-                double height=copy.body->ContentHeight();
-                if(std::isfinite(height)&&height>=0&&measurements.contains(name)){
-                    measurements[name].content=stable(height);measurements[name].scroll=copy.body->ScrollMetrics();
-                }
-            }
-        }
+        A reports;
+        if((data->updating&&!preparing)||!root.IsLoaded()||root.ActualWidth()<=0)return reports;
+        auto requests=measurementRequests();auto context=metricContext();
         for(auto it=offscreen.begin();it!=offscreen.end();){
-            if(keep.contains(it->first)){++it;continue;}
+            if(find(array(data->model,L"panels"),L"id",hstring(it->first)).Size()){++it;continue;}
             uint32_t at=0;if(it->second.body&&measureHost.Children().IndexOf(it->second.body->Root(),at))measureHost.Children().RemoveAt(at);
             it=offscreen.erase(it);
         }
-        if(drawers)for(auto value:drawers->PanelMeasurements()){
-            auto item=value.GetObject();auto panel=std::wstring(str(item,L"panel"));
-            if(measurements.contains(panel)){measurements[panel].content=stable(num(item,L"content_height"));measurements[panel].scroll=object(item,L"scroll");}
+        auto stable=[](double value){return std::round(std::clamp(value,0.,999999.)*64.)/64.;};
+        for(auto const& [id,group]:groups){
+            if(group.hidden||group.presented.Size()||(!preparing&&!group.frame.IsLoaded()))continue;
+            auto active=str(group.geometry,L"active");
+            for(auto value:array(group.geometry,L"panels")){
+                auto panelId=value.GetString();auto request=find(requests,L"panel",panelId);
+                if(!request.Size()||(flag(request,L"tab_measured")&&flag(request,L"body_measured")))continue;
+                auto panel=find(array(data->model,L"panels"),L"id",panelId);if(!panel.Size())continue;
+                V tabWidth=JsonValue::CreateNullValue(),body=JsonValue::CreateNullValue();
+                if(!flag(request,L"tab_measured")){
+                    auto found=group.tabs.find(std::wstring(panelId));
+                    if(found!=group.tabs.end()){
+                        auto tab=found->second.Children().GetAt(1).as<Button>();
+                        tab.Measure({INFINITY,INFINITY});double width=tab.DesiredSize().Width;
+                        for(auto const& automatic:group.automatic)if(automatic.tab==tab)
+                            if(auto cached=tabWidths.find(automatic.key);cached!=tabWidths.end()){width=cached->second;break;}
+                        if(width>0)tabWidth=N(stable(width));
+                    }
+                }
+                if(!flag(request,L"body_measured")){
+                    double width=num(request,L"width"),actualWidth=width;double height=-1;J scroll;
+                    if(array(panel,L"tiles").Size())height=0;
+                    else if(panelId==active){actualWidth=group.body->Root().ActualWidth();if(actualWidth<=0)actualWidth=width;height=group.body->ContentHeight(actualWidth);scroll=group.body->ScrollMetrics();}
+                    else {
+                        auto& copy=offscreen[std::wstring(panelId)];
+                        auto key=std::wstring(str(request,L"body"))+std::wstring(panelMetricKey);
+                        if(!copy.body||copy.key!=key){
+                            if(copy.body){uint32_t at=0;if(measureHost.Children().IndexOf(copy.body->Root(),at))measureHost.Children().RemoveAt(at);}
+                            auto inert=std::make_shared<WorkspaceData>(*data);inert->updating=false;
+                            inert->send=[](std::string){};inert->document=[](std::string){};inert->input=[](std::string){};
+                            inert->query=nullptr;inert->previews.reset();inert->thumbnails.reset();inert->scopes.reset();
+                            inert->popupChanged=nullptr;inert->takeBubble=nullptr;inert->bubbleContact=nullptr;inert->edgeHolding=nullptr;inert->cancelEdge=nullptr;inert->pointerCancels.Clear();inert->transients.clear();inert->colorViews.clear();inert->copyViews.clear();
+                            copy.body=std::make_unique<PanelBody>(inert,panel,O({{L"bounds",O({{L"width",N(width)}})}}),[]{},nullptr,false);
+                            copy.data=inert;copy.key=key;copy.body->Root().Width(width);copy.body->Apply(true);measureHost.Children().Append(copy.body->Root());
+                        }
+                        if(copy.data){copy.data->state=data->state;copy.data->model=data->model;}
+                        if(!flag(request,L"cacheable"))copy.body->Apply(true);
+                        copy.body->Root().Width(width);
+                        copy.body->Root().Measure({float(width),INFINITY});
+                        copy.body->Root().Arrange({0,0,float(width),copy.body->Root().DesiredSize().Height});
+                        actualWidth=copy.body->Root().ActualWidth();if(actualWidth<=0)actualWidth=width;
+                        height=copy.body->ContentHeight(actualWidth);scroll=copy.body->ScrollMetrics();
+                    }
+                    if(std::isfinite(height)&&height>=0)body=O({{L"actual_width",N(stable(actualWidth))},{L"content_height",N(stable(height))},
+                        {L"scroll",scroll.Size()?V(scroll):JsonValue::CreateNullValue()}});
+                }
+                if(tabWidth.ValueType()!=JsonValueType::Null||body.ValueType()!=JsonValueType::Null)
+                    reports.Append(O({{L"request",request},{L"context",context},{L"tab_width",tabWidth},{L"body",body}}));
+            }
         }
-        A report;
-        for(auto const& [panel,size]:measurements)
-            report.Append(O({{L"panel",S(hstring(panel))},{L"tab_width",N(size.tab)},{L"content_height",N(size.content)},{L"scroll",size.scroll.Size()?V(size.scroll):JsonValue::CreateNullValue()}}));
-        return report;
+        return reports;
     }
-    bool acceptsPanelMeasurements(A const& report)const{
-        auto accepted=array(data->model,L"panel_measurements");
-        if(accepted.Size()!=report.Size())return false;
-        for(auto value:report){
-            auto current=value.GetObject();auto previous=find(accepted,L"panel",str(current,L"panel"));
-            if(!previous.Size()||num(previous,L"tab_width")!=num(current,L"tab_width")||num(previous,L"content_height")!=num(current,L"content_height")
-                ||object(previous,L"scroll").Stringify()!=object(current,L"scroll").Stringify())return false;
-        }
-        return true;
-    }
-    void publishPanelMeasurements(A const& report){
-        if(!report)return;
-        if(acceptsPanelMeasurements(report)){lastMeasurements=L"";return;}
-        auto json=report.Stringify();if(json==lastMeasurements)return;lastMeasurements=json;
-        data->dispatch(O({{L"type",S(L"measure_panels")},{L"measurements",report}}));
+    J measurementBatch(A const& reports){return O({{L"context",metricContext()},{L"reports",reports}});}
+    void publishPanelMeasurements(A const& reports){
+        if(!reports.Size())return;
+        auto batch=measurementBatch(reports);auto json=batch.Stringify();if(json==lastMeasurements)return;lastMeasurements=json;
+        data->dispatch(O({{L"type",S(L"measure_panels")},{L"measurements",batch}}));
     }
     void measurePanels(){publishPanelMeasurements(collectPanelMeasurements());}
-    void projectPanelMeasurements(A const& report){
-        NativeLayoutInput measured(capy_layout_input_measure(layoutInput.get(),to_string(report.Stringify()).c_str()));
+    void projectPanelMeasurements(A const& reports){
+        auto batch=measurementBatch(reports);
+        NativeLayoutInput measured(capy_layout_input_measure(layoutInput.get(),to_string(batch.Stringify()).c_str()));
         if(!measured)throw hresult_invalid_argument();
-        layoutInput=std::move(measured);
+        layoutInput=std::move(measured);metricInput=layoutInput;
         resolveLayout();applyLayout(data->model,false);root.UpdateLayout();
     }
     void preparePanels(){
-        if(nativeResize()||object(workspaceUpdate,L"drag").Size()||!root.IsLoaded()||root.ActualWidth()<=0)return;
-        root.UpdateLayout();auto report=collectPanelMeasurements(true);if(!report)return;
-        if(!acceptsPanelMeasurements(report)){
-            projectPanelMeasurements(report);
-            auto final=collectPanelMeasurements(true);
-            if(final&&final.Stringify()!=report.Stringify()){projectPanelMeasurements(final);report=final;}
+        if(nativeResize()||object(workspaceUpdate,L"drag").Size()||!root.IsLoaded()||root.ActualWidth()<=0||!needsPanelMeasurements())return;
+        root.UpdateLayout();A reports;
+        for(int pass=0;pass<2&&needsPanelMeasurements();++pass){
+            auto measured=collectPanelMeasurements(true);if(!measured.Size())break;
+            projectPanelMeasurements(measured);
+            for(auto value:measured){
+                auto report=value.GetObject();uint32_t replace=reports.Size();
+                for(uint32_t at=0;at<reports.Size();++at)if(str(object(reports.GetObjectAt(at),L"request"),L"panel")==str(object(report,L"request"),L"panel")){replace=at;break;}
+                if(replace<reports.Size())reports.SetAt(replace,report);else reports.Append(report);
+            }
         }
-        publishPanelMeasurements(report);
+        publishPanelMeasurements(reports);
     }
     void queueMeasurements(){
         if(measurementFrame)return;

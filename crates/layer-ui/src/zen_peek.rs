@@ -11,7 +11,11 @@ pub(crate) struct ZenPeek {
 
 impl<R: CanvasRenderer> UiSession<R> {
     pub fn layout_resolve_input(&self)->crate::LayoutResolveInput<'_> {
-        crate::LayoutResolveInput::new(&self.state.workspace.layout,self.zen_peek.edge)
+        {
+            let mut cache=self.panel_measurements.clone();
+            cache.identities=crate::measurement_shape::identities(&self.state);
+            crate::LayoutResolveInput::new(&self.state.workspace.layout,self.zen_peek.edge).with_cache(cache.for_publication())
+        }
     }
     pub fn zen_keeps(&self, group: u32) -> bool {
         self.layout_resolve_input().keeps(group)

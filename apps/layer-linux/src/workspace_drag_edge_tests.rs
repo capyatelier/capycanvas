@@ -204,12 +204,20 @@ fn native_workspace_drag_edges() {
                 // saved position before the next input sample arrives.
                 w.surface.queue_allocate();
                 if scenario == "floating" {
-                    let mut measurements = state(&w).workspace.layout.measurements;
-                    measurements
+                    let mut facts = state(&w).workspace.layout.measurements;
+                    let measurement=facts
                         .iter_mut()
                         .find(|m| m.panel == panel)
-                        .unwrap()
-                        .content_height += 300.;
+                        .unwrap();
+                    measurement.content_height += 300.;
+                    let request=w.gpu.borrow().as_ref().unwrap().session.layout(viewport).measurement_requests.into_iter()
+                        .find(|request|request.identity.panel==panel).unwrap();
+                    let context=w.panel_metrics();
+                    let measurements=layer_ui::PanelMeasurementBatch {context:context.clone(),reports:vec![layer_ui::PanelMeasurementReport {
+                        request:request.clone(),context,tab_width:(measurement.tab_width>0.).then_some(measurement.tab_width),
+                        body:Some(layer_ui::PanelBodyMeasurement {actual_width:request.width,
+                            content_height:measurement.content_height,scroll:measurement.scroll}),
+                    }]};
                     w.dispatch(UiAction::MeasurePanels { measurements });
                 }
                 pump(150);

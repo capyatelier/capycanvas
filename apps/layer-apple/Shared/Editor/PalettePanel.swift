@@ -386,7 +386,7 @@ struct PaletteMeasurement: View {
                     PaletteFooter(controller: controller, view: view, control: store.panelMetrics.height, measuring: true)
                 }.fixedSize(horizontal: false, vertical: true).padding(.horizontal, 8)
                     .modifier(PanelBodyMeasurement(panel: "palettes", part: "footer"))
-            }.opacity(0).allowsHitTesting(false).accessibilityHidden(true)
+            }.modifier(PanelMeasurementScope(panel: "palettes")).opacity(0).allowsHitTesting(false).accessibilityHidden(true)
         }
     }
 }

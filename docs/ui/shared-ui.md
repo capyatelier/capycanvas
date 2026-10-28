@@ -128,6 +128,39 @@ hosts with measured chrome use `DockLayout::workspace`.
 `UiSession::drop_hint` validates a proposed target with the same transactional
 move used on drop; hosts do not clone and probe the layout themselves.
 
+Panel sizing uses transient keyed measurements in `UiSession` and
+`LayoutResolveInput`. Resolved layouts publish `measurement_requests`: separate
+Rust-issued identities for a panel's tab and body, the requested logical width,
+and whether matching measurements exist. Tab widths are independent of body
+widths. Body facts are selected by content identity, requested width, split mode
+and host metric context; the report also records the width actually measured.
+Changing workspaces preserves this bounded cache without copying outgoing
+unkeyed heights into the destination. Neither keys nor measurements are saved
+in artwork or authored workspace JSON.
+
+Hosts send `MeasurePanels { measurements: PanelMeasurementBatch }`. Each batch
+contains the current `PanelMetricContext` and reports that retain the request
+and context from the measurement itself. Capture these before storing an
+inactive body's size or queuing a callback. A missing tab or body fact is `None`;
+it does not erase another valid fact. A composed drawer or tool browser must not
+submit its alternate content under a canonical workspace body's identity.
+Advance the host's context generation when
+raster scale, text metrics, native style or loaded fonts change, and keep that
+generation monotonic across view recreation within a session. Old-context and
+old-content reports cannot replace current geometry. Native premeasurement uses
+`LayoutResolveInput::with_panel_measurements` with the same validation; set the
+current context before resolving the first destination layout.
+
+When a panel gains a control, label, row or other size-dependent presentation,
+update its shared identity projection in
+[`measurement_shape.rs`](../../crates/layer-ui/src/measurement_shape.rs) and test
+invalidation. Keep values that only repaint fixed-size controls out of that
+projection, such as scope samples and capture timestamps. Content supplied only
+by a native provider requires fresh verification before reveal; retained sizes
+are hints until that particular width and split mode have been measured in the
+current publication. An atomic workspace reveal requires measuring missing
+destination bodies, including inactive tabs, at their requested widths first.
+
 A `DockLayout` is an ordered list of `DockBand`s, outermost first. Each band
 consumes a strip at an `Edge`: top, bottom, left, or right. Earlier bands own
 shared corners. Multiple bands on the same edge form adjacent rows or columns.

@@ -35,10 +35,7 @@ struct PanelControls: View {
         contents.environment(\.measuresWorkspacePanel, measureForWorkspace).environment(\.compactPanelControls, true)
             .modifier(WorkspaceDrag(workspace: store.workspace, item: JSON(["kind": "panel", "panel": panel["id"].raw]),
                 surface: .tile, context: JSON(["kind": "panel", "panel": panel["id"].raw]), canDrag: false, priority: -1))
-            .background {
-                Color.clear.preference(key: PanelSizeFacts.self, value: measureForWorkspace
-                    ? [PanelSizeKey(panel: panel["id"].string, part: "present"): 0] : [:])
-            }
+            .modifier(PanelMeasurementScope(panel: panel["id"].string, enabled: measureForWorkspace, splitFilters: splitFilters))
     }
     @ViewBuilder private var contents: some View {
         if panel["id"].string == "proof" { ProofPanel(store: store, controller: store.proof).modifier(WorkspaceControlSurface(workspace: store.workspace, container: true)) }

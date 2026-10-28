@@ -894,13 +894,15 @@ mod tests {
         let mut host = host(Platform::Android);
         workspace_fixture(&mut host);
         let initial = layout_update(&mut host);
+        let request=host.session.layout_resolve_input().resolve([1205.,905.]).measurement_requests.into_iter()
+            .find(|request|request.identity.panel==layer_ui::Panel::Brushes).unwrap();
+        let context=layer_ui::PanelMetricContext {generation:1,scale:2.,text_scale:1.,style:"snapshot-test".into()};
         host.dispatch(UiAction::MeasurePanels {
-            measurements: vec![layer_ui::PanelMeasurement {
-                panel: layer_ui::Panel::Brushes,
-                tab_width: 80.,
-                content_height: 500.,
-                scroll: None,
-            }],
+            measurements: layer_ui::PanelMeasurementBatch {context:context.clone(),reports:vec![layer_ui::PanelMeasurementReport {
+                request:request.clone(),context,tab_width:Some(80.),body:Some(layer_ui::PanelBodyMeasurement {
+                    actual_width:request.width,content_height:500.,scroll:None,
+                }),
+            }]},
         })
         .unwrap();
         let measured = layout_update(&mut host);

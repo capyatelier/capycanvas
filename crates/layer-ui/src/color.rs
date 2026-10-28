@@ -229,6 +229,8 @@ impl Default for ColorState {
     fn default() -> Self { Self::new() }
 }
 impl ColorState {
+    pub(crate) fn has_hdr_picker(&self)->bool {self.hdr_picker.is_some()}
+
     pub(crate) fn paint_slot(&self) -> ColorSlot { self.paint_slot }
     #[cfg(test)]
     fn apply_canonical(&mut self, action: ColorAction) -> Result<(), String> {

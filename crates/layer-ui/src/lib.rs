@@ -119,6 +119,9 @@ pub use drawers::{
 };
 mod interaction;
 mod layout;
+mod panel_measurements;
+mod measurement_shape;
+pub use panel_measurements::{PanelMeasurementIdentity,PanelMeasurementRequest,PanelMetricContext,PanelBodyMeasurement,PanelMeasurementReport,PanelMeasurementBatch};
 mod tab_drag;
 pub use tab_drag::{TabDragOffset, TabDragPreview};
 mod numeric;
@@ -1545,7 +1548,7 @@ pub enum UiAction {
         inset: f32,
     },
     MeasurePanels {
-        measurements: Vec<PanelMeasurement>,
+        measurements: PanelMeasurementBatch,
     },
     MeasureDrawerTiles {
         measurements: Vec<DrawerTileMeasurement>,
