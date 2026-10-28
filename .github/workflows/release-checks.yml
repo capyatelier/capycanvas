@@ -93,7 +93,12 @@ jobs:
             destination_material::tests::transport_kernels_declare_the_workgroup_they_are_dispatched_with \
             pixel_transform::program_tests:: attached:: \
             bristle_table::tests:: brush_stamp::tests:: brush_tiles::tests:: builtin_masks:: \
-            display_memory::tests:: effects::tests:: moving_projection::tests:: pixel_rect::tests:: \
+            display_memory::tests::essential_resource_admission_preserves_reported_limits_and_optional_cache_policy \
+            display_memory::tests::metal_admission_respects_existing_allocations_and_process_headroom \
+            display_memory::tests::unreported_metal_recommendation_is_not_an_exhausted_budget \
+            display_memory::tests::retaining_a_pyramid_preserves_its_admission_budget \
+            display_memory::tests::complete_pyramid_admission_scales_with_remaining_headroom \
+            effects::tests:: moving_projection::tests:: pixel_rect::tests:: \
             paint_transform::fine_demand:: paint_transform::region_batches:: \
             paint_transform::sampling::tests:: paint_transform::snapshot::tests:: \
             paint_transform::mesh::tests:: scene::metadata::tests:: scene::object_spatial::tests:: \
@@ -116,6 +121,15 @@ jobs:
             --skip cached_gpu_startup_matches_eager_pixels_and_waits_for_catalog \
             --skip positions_grow_and_keep_their_texture_for_smaller_windows \
             2>&1 | tee artifacts/release-tests/renderer.log
+      - name: Vulkan local-heap reporting with a software adapter
+        if: ${{ !cancelled() }}
+        env:
+          LAYER_TEST_SOFTWARE_GPU: "1"
+        run: |
+          sudo apt-get update && sudo apt-get install -y mesa-vulkan-drivers libvulkan1
+          cargo test --locked --release -p layer-render-wgpu --lib -- \
+            display_memory::tests::the_local_heap_is_reported_without_a_memory_budget --exact \
+            2>&1 | tee artifacts/release-tests/renderer-local-heap.log
       - name: Independent WebP and AVIF grid tests
         if: ${{ !cancelled() }}
         env:

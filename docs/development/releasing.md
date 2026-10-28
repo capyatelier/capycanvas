@@ -388,9 +388,10 @@ CI workflow is also called by release validation.
 
 ### Release validation
 
-`.github/workflows/release-checks.yml` is reusable only; it has no push, schedule
-or manual trigger. Both a manual release dry run and a tag-push release call it
-alongside packaging, exposing test and build failures in the same run. Tag pushes
+`.github/workflows/release-checks.yml` supports reusable calls and manual dispatch.
+Manual dispatch defaults to Windows-only checks; set `windows-only=false` for full
+validation. Both a full release dry run and a tag-push release call it alongside
+packaging, exposing test and build failures in the same run. Tag pushes
 repeat validation on the exact tagged commit. Store uploads and GitHub Release
 creation require successful validation and every platform package.
 
@@ -412,8 +413,9 @@ The macOS job verifies the disk image before signing. Apple failure reports reta
 archive logs and Xcode result bundles; Mac reports also include disk space, image
 size, mounted-image state and disk-image creation and verification output.
 
-The renderer job selects tests that do not create GPU devices. Shader contract
-checks select individual CPU tests from modules that also contain GPU tests.
+The renderer job separates CPU models from Vulkan heap reporting on a Mesa
+software adapter. Shader contract checks select individual CPU tests from modules
+that also contain GPU tests.
 Windows runs the existing native host and document suites on WARP: the system
 runtime on native x64 and the pinned development-only runtime on ARM64. Neither
 runtime enters distribution packages. Renderer
