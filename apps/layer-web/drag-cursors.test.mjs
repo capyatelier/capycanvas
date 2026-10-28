@@ -72,6 +72,7 @@ export async function checkDragCursors({ call, evaluate, settle }) {
       const neighbor=await evaluate("window.focusedPanelNeighbor.getBoundingClientRect().width");
       await press(start);await wait();await move({x:start.x+12,y:start.y});await move({x:start.x+neighbor/2+2,y:start.y});
       assert.equal(await evaluate("!!document.querySelector('.dragged-tab-preview')"),true);
+      assert.equal(await evaluate("document.querySelector('.drop-indicator').hidden"),true,`${theme} drawer=${drawer}: attached slides use the moving tabs as their target indication`);
       assert.equal(await evaluate('document.activeElement===window.focusedPanelTab'),true,`${theme} drawer=${drawer}: sliding retains focus on the real tab`);
       await release();await clean();
       assert.deepEqual(await evaluate("({source:window.focusedPanelTab.isConnected,neighbor:window.focusedPanelNeighbor.isConnected,body:focusedPanelBody.isConnected,order:[...window.focusedPanelTab.parentElement.children].map(tab=>tab.dataset.panel)})"),
@@ -190,6 +191,10 @@ export async function checkDragCursors({ call, evaluate, settle }) {
       }
       await move(away);
       await noSlide();
+      await move(center(await rect('.dock-tab[data-panel="brushes"]')));
+      assert.equal(await evaluate("document.querySelector('.drop-indicator').hidden"),false,'An undocked tab keeps its destination hint');
+      assert.equal(await evaluate("document.querySelector('.drop-indicator').dataset.kind"),'tab');
+      await move(away);
       assert.equal(await cursor(), "grabbing");
       assert.equal(await cursor("#canvas"), "grabbing", "Canvas cannot hide the drag cursor");
       assert.equal(await cursor('.dock-tab[data-panel="brushes"]'), "grabbing");

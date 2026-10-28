@@ -10811,6 +10811,9 @@ fn native_tab_slide_input() {
             let drag = w.workspace_drag.borrow();
             let drag = drag.as_ref().unwrap();
             let slide = drag.tab.as_ref().unwrap();
+            let presentation = w.gpu.borrow().as_ref().unwrap().session.workspace_update().drag.unwrap();
+            assert!(presentation.tab.is_some());
+            assert!(presentation.drop_hint.is_none(), "attached tab slide has no insertion line");
             if dx == 24. {
                 let pixel = preview_backing(slide);
                 let selected = *selected_backing.get_or_insert(pixel);
@@ -10928,6 +10931,10 @@ fn native_tab_slide_input() {
             );
             assert!(w.workspace_drag.borrow().as_ref().unwrap().tab.is_none());
             assert_eq!(tab.opacity(), 1.);
+            input.perform(serde_json::json!([{ "point": [start[0] + 24., start[1]] }]));
+            let presentation = w.gpu.borrow().as_ref().unwrap().session.workspace_update().drag.unwrap();
+            assert!(presentation.tab.is_none());
+            assert!(matches!(presentation.drop_hint.unwrap().target, DockTarget::Tab { group: target, .. } if target == group));
             w.workspace_drag_input(ContactPhase::Cancel, point, None);
         } else if end == "release" {
             point = [target_x, start[1]];
@@ -11011,9 +11018,11 @@ fn native_tab_slide_input() {
             let end = [first.x + 8., start[1]];
             input.perform(serde_json::json!([contact(device, "down", start)]));
             let body = drawer.then(|| find_named(w.surface.upcast_ref(), "drawer-panel-Adjustments").unwrap());
-            input.perform(serde_json::json!([
-                contact(device, "move", end), contact(device, "up", end)
-            ]));
+            input.perform(serde_json::json!([contact(device, "move", end)]));
+            let presentation = w.gpu.borrow().as_ref().unwrap().session.workspace_update().drag.unwrap();
+            assert!(presentation.tab.is_some(), "{device}, drawer={drawer}: tab slides while attached");
+            assert!(presentation.drop_hint.is_none(), "{device}, drawer={drawer}: attached slide has no insertion line");
+            input.perform(serde_json::json!([contact(device, "up", end)]));
             assert_eq!(state(&w).workspace.layout.group_panels(group).unwrap()[0], Panel::Adjustments);
             assert!(tab.is_mapped(), "{device}, drawer={drawer}: drop keeps the original tab mapped");
             assert_eq!(unmapped.get(), 0, "{device}, drawer={drawer}: drop never unmaps its source");

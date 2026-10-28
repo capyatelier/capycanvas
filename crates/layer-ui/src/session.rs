@@ -1906,13 +1906,13 @@ impl<R: CanvasRenderer> UiSession<R> {
                             preview,
                         })
                 }),
-                drop_hint: self.drop_hint(
+                drop_hint: (self.workspace_tab_drag.is_none() || !self.dragging_attached_tab()).then(|| self.drop_hint(
                     drag.viewport,
                     drag.position,
                     &self.workspace_drag_tabs,
                     drag.original,
                     None,
-                ),
+                )).flatten(),
             }),
         }
     }
@@ -14539,6 +14539,45 @@ mod tests {
                 assert_eq!(s.state.workspace, after);
                 invoke(&mut s, CommandId::UndoWorkspace);
                 s.state.customization.column_drawers = vec![drawer.clone()];
+            }
+        }
+    }
+
+    #[test]
+    fn attached_tab_slides_hide_the_hint_and_detached_tabs_keep_it() {
+        let viewport = [1200., 900.];
+        for platform in Platform::ALL {
+            for direction in [-1., 1.] {
+                let mut s = session(platform);
+                let group = s.state.workspace.layout.panel_group(Panel::Adjustments).unwrap();
+                let bounds = find_group(&s, viewport, |g| g.id == group).bounds;
+                let tabs: Vec<_> = (0..3).map(|index| TabHit {
+                    group,
+                    index,
+                    bounds: Bounds {
+                        x: bounds.x + index as f32 * 60.,
+                        width: 60.,
+                        height: TAB_BAR_HEIGHT,
+                        ..bounds
+                    },
+                }).collect();
+                let press = [bounds.x + 90., bounds.y + 18.];
+                let item = DockItem::Panel { panel: Panel::Adjustments };
+                s.drag_workspace(item, ContactPhase::Down, press, viewport, &tabs).unwrap();
+                let point = [press[0] + direction * 70., press[1]];
+                s.drag_workspace(item, ContactPhase::Move, point, viewport, &tabs).unwrap();
+                assert!(s.drop_hint(viewport, point, &tabs, item, None).is_some(), "{platform:?} {direction}");
+                assert!(s.workspace_update().drag.unwrap().drop_hint.is_some(), "{platform:?} {direction}");
+                s.begin_tab_drag(&tabs, bounds);
+                let presentation = s.workspace_update().drag.unwrap();
+                assert!(presentation.tab.is_some());
+                assert!(presentation.drop_hint.is_none(), "{platform:?} {direction}");
+                s.drag_workspace(item, ContactPhase::Move, [600., 450.], viewport, &tabs).unwrap();
+                assert!(!s.dragging_attached_tab());
+                s.drag_workspace(item, ContactPhase::Move, point, viewport, &tabs).unwrap();
+                let presentation = s.workspace_update().drag.unwrap();
+                assert!(presentation.tab.is_none());
+                assert!(matches!(presentation.drop_hint.unwrap().target, DockTarget::Tab { group: target, .. } if target == group));
             }
         }
     }

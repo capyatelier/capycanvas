@@ -84,7 +84,9 @@ function Check-OverviewOverlap([string]$Before,[string]$After) {
  $beforeImage=[Drawing.Bitmap]::new((Join-Path $run ($Before+'.png')))
  $afterImage=[Drawing.Bitmap]::new((Join-Path $run ($After+'.png')))
  try{
-  $tested=0;$white=0;$point=$null
+  $tested=0;$matching=0;$point=$null
+  $referenceX=[int]($left+$width*.95)
+  if($referenceX -le ($lower.x+$lower.width)*$scale+3){throw 'Navigator overview has no unobscured reference pixel'}
   # Sample an area: the legitimate camera outline can cross any one pixel.
   foreach($ix in 0..15){foreach($iy in 0..15){
    $fx=($ix+.5)/16;$fy=($iy+.5)/16
@@ -94,15 +96,16 @@ function Check-OverviewOverlap([string]$Before,[string]$After) {
    $old=$beforeImage.GetPixel($x,$y);$pixel=$afterImage.GetPixel($x,$y)
    if($old.R -gt 245 -and $old.G -gt 245 -and $old.B -gt 245){continue}
    $tested++
-   $expected=@(255,255,255);$h=$hint.bounds
+   $reference=$afterImage.GetPixel($referenceX,$y)
+   $expected=@($reference.R,$reference.G,$reference.B);$h=$hint.bounds
    if($hint.target.kind -eq 'tab' -and $x -gt ($h.x+2)*$scale -and $x -lt ($h.x+$h.width-2)*$scale -and
       $y -gt ($h.y+2)*$scale -and $y -lt ($h.y+$h.height-2)*$scale){$expected=$tinted}
    if([Math]::Abs([int]$pixel.R-$expected[0]) -le 3 -and [Math]::Abs([int]$pixel.G-$expected[1]) -le 3 -and [Math]::Abs([int]$pixel.B-$expected[2]) -le 3){
-    $white++;if(!$point){$point=@{x=$x;y=$y;before=$old.ToArgb()}}
+    $matching++;if(!$point){$point=@{x=$x;y=$y;before=$old.ToArgb()}}
    }
   }}
   if($tested -lt 3){throw 'Navigator motion fixture did not cover enough opaque Tool Set pixels'}
-  if($white -lt [Math]::Ceiling($tested*.8)){throw "GPU Navigator did not move above the lower native panel ($white of $tested samples)"}
+  if($matching -lt [Math]::Ceiling($tested*.8)){throw "GPU Navigator did not move above the lower native panel ($matching of $tested samples)"}
   $point
  }finally{$beforeImage.Dispose();$afterImage.Dispose()}
 }
@@ -121,7 +124,7 @@ function Start-Slide([double]$Grab=8){
   Wait-StablePixels {
    $box=(Control 'panel-tab-tool_settings' -Arranged).Current.BoundingRectangle
    "$box/$(Screen-Pixels ([int]($box.Left+$box.Width/2)) ([int]($box.Top+$box.Height/2)))"
-  }|Set-Content (Join-Path $run 'selected-stable-pixels.txt')
+  } -Composed|Set-Content (Join-Path $run 'selected-stable-pixels.txt')
   Capture 'selected-before-slide' -Composed
  }
  $selectedSource=(Control 'panel-tab-tool_settings' -Arranged).Current.BoundingRectangle
@@ -145,6 +148,7 @@ function Start-Slide([double]$Grab=8){
  $finishX=$startX+$selectedNeighbor.Width/2+10*$scale
  Walk $startX $startY $finishX $startY
  Wait-Until {$null -ne (Preview) -and (Preview).insertion -eq 2} 'Attached native tab preview did not cross the shared insertion threshold'
+ if((Presentation).workspace_update.drag.drop_hint){throw 'Attached tab preview showed an insertion target'}
  $actual=(Control 'panel-tab-tool_settings').Current.BoundingRectangle
  if([Math]::Abs($actual.Left-$source.Left) -gt 1 -or [Math]::Abs($actual.Width-$source.Width) -gt 1){throw 'Tab preview moved the original hit rectangle'}
  if(((Current-Group).panels -join ',') -ne 'tool_settings,sizes'){throw 'Preview prematurely committed tab order'}
@@ -153,7 +157,7 @@ function Start-Slide([double]$Grab=8){
   Wait-StablePixels {
    $box=(Preview).bounds
    Screen-Pixels ([int]($client.x+($box.x+$box.width/2)*$scale)) ([int]($client.y+($box.y+$box.height/2)*$scale))
-  }|Set-Content (Join-Path $run 'preview-stable-pixels.txt')
+  } -Composed|Set-Content (Join-Path $run 'preview-stable-pixels.txt')
   Capture 'inactive-source-preview' -Composed
   $origin=[CapyRowPointer+Point]::new();if(![CapyRowPointer]::ClientToScreen($drawingWindow,[ref]$origin)){throw 'Cannot locate preview capture'}
   $before=[Drawing.Bitmap]::new((Join-Path $run 'selected-before-slide.png'))
@@ -229,9 +233,24 @@ try{
    Capture "after-release-$slideDevice" -Composed
    Undo-Workspace
   }
+  $script:slideDevice='mouse'
+  $position=Start-Slide
+  $canvas=(Control 'drawing-canvas').Current.BoundingRectangle
+  $x=$canvas.Left+$canvas.Width*.55;$y=$canvas.Top+$canvas.Height*.6
+  Walk $position.x $position.y $x $y
+  Wait-Until {(Current-Group).floating -and $null -eq (Find-Preview)} 'Detached mouse tab did not leave its attached preview'
+  $target=(Control 'panel-tab-brushes' -Arranged).Current.BoundingRectangle
+  $targetX=$target.Left+$target.Width/2;$targetY=$target.Top+$target.Height/2
+  Walk $x $y $targetX $targetY
+  Wait-Until {(Presentation).workspace_update.drag.drop_hint} 'Detached mouse tab did not show a target over Tool Set'
+  Capture 'detached-drop-target-mouse' -Composed
+  Walk $targetX $targetY $x $y
+  Wait-Until {(Current-Group).floating -and !(Presentation).workspace_update.drag.drop_hint} 'Detached mouse tab did not leave the target'
+  [CapyRowPointer]::Up()
+  Undo-Workspace
   & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -StateDirectory $run -Action Close -DiscardUnsaved
   if(!$review.WaitForExit(15000) -or $review.ExitCode -ne 0){throw 'Release review did not close cleanly'}
-  @{theme=$Theme;devices=@('mouse','pen','touch');retained_tabs='passed';retained_content='passed';committed_handoff='passed'}|ConvertTo-Json
+  @{theme=$Theme;devices=@('mouse','pen','touch');retained_tabs='passed';retained_content='passed';committed_handoff='passed';attached_hint='hidden';detached_hint='shown'}|ConvertTo-Json
   return
  }
  $position=Start-Slide
@@ -258,6 +277,13 @@ try{
  $x=$canvas.Left+$canvas.Width*.55;$y=$canvas.Top+$canvas.Height*.6
  Walk $position.x $position.y $x $y
  Wait-Until {(Current-Group).floating -and $null -eq (Find-Preview)} 'Tear-off did not release the attached preview'
+ $target=(Control 'panel-tab-brushes' -Arranged).Current.BoundingRectangle
+ $targetX=$target.Left+$target.Width/2;$targetY=$target.Top+$target.Height/2
+ Walk $x $y $targetX $targetY
+ Wait-Until {(Presentation).workspace_update.drag.drop_hint} 'Detached tab drag did not show a drop target over Tool Set'
+ Capture 'detached-drop-target' -Composed
+ Walk $targetX $targetY $x $y
+ Wait-Until {(Current-Group).floating -and !(Presentation).workspace_update.drag.drop_hint} 'Detached tab did not leave the dock target'
  Capture 'detached' -Composed
  Start-Sleep -Milliseconds 800
  $floating=Current-Group;$floatingX=$floating.bounds.x
@@ -280,9 +306,6 @@ try{
  Wait-Until {((Model).state.workspace.layout|ConvertTo-Json -Depth 80 -Compress) -eq $normal} 'Detached cancellation did not restore the workspace'
  if((Model).state.document_file.modified){throw 'Workspace dragging modified the drawing'}
 
- # A GPU overview must follow the same placement as its retained native controls.
- # Place it over an opaque Tool Set region so seeing white cannot be mistaken
- # for the ordinary drawing canvas behind the panel.
  (Control 'drawing-canvas').SetFocus()
  Capture 'navigator-before' -Composed
  $source=(Control 'panel-tab-navigator').Current.BoundingRectangle
@@ -299,16 +322,17 @@ try{
  $firstPixel=Check-OverviewOverlap 'navigator-before' 'navigator-first'
  $oldCamera=(Control 'canvas-camera').Current.Name
  Invoke 'navigator-zoom_in'
+ Wait-Until {(Control 'canvas-camera').Current.Name -ne $oldCamera -and (Presentation).model_revision -gt $before.model_revision} 'Mixed camera update did not publish its native controls and model'
+ $cameraApplied=Presentation
  Walk $x $y ($x+45*$scale) ($y+12*$scale)
- Wait-Until {(Control 'canvas-camera').Current.Name -ne $oldCamera} 'Mixed camera update was lost during workspace motion'
  Wait-Until {
   $p=Presentation;$g=$p.groups|Where-Object id -eq $navigator.id
   $old=$before.groups|Where-Object id -eq $navigator.id
   $g.bounds.x -gt $old.bounds.x+30
  } 'Native Navigator stopped moving'
  $after=Presentation
- [IO.File]::WriteAllText((Join-Path $run 'navigator-motion.json'),(@{before=$before;after=$after}|ConvertTo-Json -Depth 60))
- Check-Motion $before $after $navigator.id
+ [IO.File]::WriteAllText((Join-Path $run 'navigator-motion.json'),(@{before=$before;camera_applied=$cameraApplied;after=$after}|ConvertTo-Json -Depth 60))
+ Check-Motion $cameraApplied $after $navigator.id
  if(((Control 'navigator-zoom_in').GetRuntimeId() -join ':') -ne $retained){throw 'Navigator motion replaced native controls'}
  if($before.overviews.Count -ne 1 -or $after.overviews.Count -ne 1){throw 'Navigator fixture did not retain exactly one GPU overview'}
  $old=$before.groups|Where-Object id -eq $navigator.id;$moved=$after.groups|Where-Object id -eq $navigator.id

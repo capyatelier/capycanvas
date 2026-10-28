@@ -238,7 +238,7 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 | Attached filter drag inside a clipping run | 120 | **Not met.** 93.24–102.71 native UI fps; moving-frame gap p99 25.00–33.33 ms | [Filter attachment feedback](#filter-attachment-feedback), 2026-10-04 |
 | Navigation with 32 visible paint layers | 120 | | |
 | Drawing with 32 visible paint layers, G-Pen 1024 px | 120 | | |
-| Panel, tab, column or toolbar drag and docking | 120 | **Not met on reference hardware.** Toolbar or component drag 103–119 fps. Latest GTK desktop tab-drop comparison: 119.568–120.007 → 119.573–120.007 presents/s; final gap p99 ≤9.434 ms. Web reference Chrome-surface median 94.38 Hz lies between baseline brackets 94.58/94.18 Hz; fresh geometry presentation remains unqualified. Windows software-adapter checks provide no frame timing | `dc27e04d`, 2026-09-23; [GTK tab drops](#gtk-tab-drops), [Windows tab drops](#windows-tab-drops), [Web tab drops](#web-tab-drops), 2026-10-27; [GTK column bridge diagnostic](#gtk-column-bridge-diagnostic), 2026-10-25 |
+| Panel, tab, column or toolbar drag and docking | 120 | **Not met on reference hardware.** Toolbar or component drag 103–119 fps. Android tab review remains unqualified (debug build); median native-update p95 is about halved. Latest GTK desktop tab-drop comparison: 119.568–120.007 → 119.573–120.007 presents/s; final gap p99 ≤9.434 ms. Web review Chrome-surface panel median 94.54 Hz lies between control brackets 95.00/94.52 Hz; drawing median 100.97 Hz has overlapping controls. Fresh geometry presentation remains unqualified. Windows software-adapter checks provide no frame timing | `dc27e04d`, 2026-09-23; [GTK tab drops](#gtk-tab-drops), [Android tab drops](#android-tab-drops), [Windows tab drops](#windows-tab-drops), [Web tab drops](#web-tab-drops), 2026-10-27; [GTK column bridge diagnostic](#gtk-column-bridge-diagnostic), 2026-10-25 |
 | Android palette pill opening at the work-area edge | 120 | **FPS unqualified.** Instant clamp; two actual presents per opening, all neighbors stationary in the diagnostic | [Native palette opening](#native-palette-opening), 2026-10-23 |
 | Android tool bubble drag through four neighbours | 120 | **Unqualified after the bubble release fixes.** Previous parity build: 115.00–116.55 actual app-window presents/s; p99 ≤16.667447 ms, default glass, 61 MP photo at Fit | [Native tool bubbles](#native-tool-bubbles), 2026-10-24 |
 | Web tool bubble drag through four neighbours | 120 | Unmeasured after the bubble release fixes; desktop browser journeys do not qualify the reference tablet | [Web checks](../development/web.md#tests), 2026-10-24 |
@@ -4722,6 +4722,31 @@ preserve the existing frame-rate gate; they do not qualify the reference tier,
 tier photo or sustained-motion target.
 [Metrics, commands and provenance](../../artifacts/gtk-tab-drop.local/verification-summary.json)
 retain the baseline regression and corrected fixture failures too.
+
+## Android tab drops
+
+The 2026-10-27 follow-up compares the panel identity and attached-hint changes
+on MovinkPad Pro 14 at 120 Hz, with the 9504 × 6336 photo and an empty paint
+layer at Fit, Low glass and the Light theme. Both APKs use debug Kotlin and
+`dev-perf` Rust. Each tool has a one-second prime followed by three six-second
+attached-tab contacts. The control omits the panel keys and hint suppression.
+
+| Input | Control / candidate FrameMetrics fps median | Control / candidate native-update p95 median, ms | Control / candidate maximum vsync gap p99, ms |
+| --- | ---: | ---: | ---: |
+| Mouse | 117.011 / 118.342 | 0.166 / 0.081 | 16.667 / 16.667 |
+| Touch | 118.382 / 117.725 | 0.211 / 0.099 | 8.376 / 16.660 |
+
+The native-update column is the median of the three per-contact p95 values.
+All measured contacts publish zero UI snapshots and panel-content changes.
+The candidate range is 117.050–118.362 fps, within the control's
+114.162–118.675 fps range. Native-update cost falls, and both series stay above
+the 114 Hz floor with gap p99 at most 16.7 ms. They do not qualify the release target.
+Candidate thermal status is 0 throughout. Baseline attached records survive
+only as summaries extracted from truncated logcat JSON; their thermal fields
+and full frame arrays are unavailable. The debug builds and incomplete control
+provenance keep these results diagnostic.
+[APK hashes, input counts and raw results](../../artifacts/tab-drop-review.local/android/matched-tab-motion.json)
+retain those limits and the unprimed setup failure, corrected by the prime.
 
 ## Windows tab drops
 

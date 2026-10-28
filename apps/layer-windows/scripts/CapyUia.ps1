@@ -274,8 +274,8 @@ function Wait-PresentedFrame{
         $null -eq $display.displayed -or $display.displayed -ge $frame
     } 'The display did not show the latest canvas frame'
 }
-function Wait-StablePixels([scriptblock]$CapturePixels){
-    Wait-PresentedFrame
+function Wait-StablePixels([scriptblock]$CapturePixels,[switch]$Composed){
+    if(!$Composed){Wait-PresentedFrame}
     $watch=[Diagnostics.Stopwatch]::StartNew();$last=& $CapturePixels;$stable=0;$comparisons=0
     do{
         Start-Sleep -Milliseconds 100;$next=& $CapturePixels;$comparisons++

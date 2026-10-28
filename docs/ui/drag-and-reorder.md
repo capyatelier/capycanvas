@@ -101,6 +101,9 @@ selection so the same contact can become a drag. Capture preview geometry at
 pickup from that retained source. Keep its selected appearance current when
 selection publication arrives after pickup.
 
+While a tab slides within its pane, the moving tabs indicate the destination;
+show no insertion line. Once the tab undocks, show its destination drop hint.
+
 Dragging a title-bar button, a brush or medium row, or a toolbar tool (other
 than slider and Tool Options tiles) out of its bar, panel or drawer takes a
 [tool bubble](tool-bubbles.md) without a hold. Until the contact leaves that
