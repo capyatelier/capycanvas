@@ -4785,6 +4785,28 @@ diagnostics miss the 114 Hz and 16.7 ms gates, so reference-tier qualification
 remains open. [Full contacts, clocks, hashes and excluded fixture attempts](../../artifacts/web-tab-drop.local/reference/report.md)
 retain the matched baseline miss alongside the candidate.
 
+The tab-drop review repeats the reference diagnostic with the exact
+`b2613aeea` control and final candidate Wasm (`9b9c1e846f494779`), factory
+settings, the 61 MP photo at Fit, Low glass and Light theme. Each A–B–A phase
+primes the gesture and records three six-second contacts. The drawing series
+uses four tabs and drags the selected photo tab; its canvas stays 61 MP.
+
+| Motion | Control before / candidate / control after median Chrome-surface Hz | Present-gap p99 range, ms |
+| --- | ---: | ---: |
+| Attached panel tab | 95.00 / 94.54 / 94.52 | 125.00–133.34 |
+| Active drawing tab | 102.49 / 100.97 / 101.51 | 91.67–100.00 |
+
+The panel candidate median lies within the control bracket. The drawing
+candidate median is 0.54 Hz below the lower control median, with overlapping
+per-contact rates and gaps; these small samples do not establish a repeatable
+regression. All 18 contacts retain their source node and pass drop, Undo and
+Redo. Panel motion makes zero shared state/layout queries. The surface-to-pose
+attribution gap still prevents moving-frame qualification; both builds share
+the cadence and p99 miss. Dark-theme correctness passes separately, but its
+reference timing was not measured.
+[Full contacts, onset, clocks and served hashes](../../artifacts/tab-drop-review.local/reference/report.md)
+record the results and fixture details.
+
 ## Panel-tab compositing
 
 The Android, Apple, Web and Windows continuous-tab backgrounds based on

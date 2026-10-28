@@ -320,6 +320,7 @@ svg { width: 16px; height: 16px; flex: none; display: block; }
 .tab-surface-strip { flood-color:var(--glass-strip); }
 .tab-surface-panel { flood-color:var(--glass-panel); }
 .dragged-tab-source { visibility:hidden; }
+.drawing-tab.dragged-tab-source { visibility:visible; opacity:0; }
 .dragged-tab-source[aria-selected="true"] { visibility:visible; }
 .dragged-tab-source[aria-selected="true"] > * { visibility:hidden; }
 .tab-list > .dragged-tab-source[aria-selected="true"] > .tab-surface, .drawer-tab-strip > .dragged-tab-source[aria-selected="true"] > .tab-surface { display:none; }

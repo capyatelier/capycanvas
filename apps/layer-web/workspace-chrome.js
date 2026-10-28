@@ -1,5 +1,6 @@
 import {liveCopy} from "./localization.js";
 import {createLayerInspector} from "./layer-inspector.js";
+import {orderTabChildren} from './tab-order.js';
 // Shared dock projections. The browser supplies widgets and measured body sizes.
 function squircleCorner([cx,cy],[sx,sy],[ex,ey]) {
   return Array.from({length:24},(_,i)=>{
@@ -53,18 +54,7 @@ export function releaseTabSurfaces(root){for(const node of root.querySelectorAll
 export function orderPanelTabs(strip,panels){
   if(!strip||panels.every((id,index)=>strip.children[index]?.dataset.panel===id))return false;
   const tabs=new Map([...strip.children].map(tab=>[tab.dataset.panel,tab]));
-  const pinned=!strip.moveBefore&&[...tabs.values()].find(tab=>tab.contains(document.activeElement));
-  if(pinned){
-    const index=panels.indexOf(pinned.dataset.panel);
-    for(const id of panels.slice(0,index))strip.insertBefore(tabs.get(id),pinned);
-    for(const id of panels.slice(index+1))strip.append(tabs.get(id));
-  }
-  panels.forEach((id,index)=>{
-    const tab=tabs.get(id);tab.dataset.index=index;
-    if(strip.children[index]===tab)return;
-    if(strip.moveBefore)strip.moveBefore(tab,strip.children[index]??null);
-    else strip.insertBefore(tab,strip.children[index]??null);
-  });
+  orderTabChildren(strip,panels.map((id,index)=>{const tab=tabs.get(id);tab.dataset.index=index;return tab;}));
   for(const tab of strip.children){const size=tabSizes.get(tab);if(size)drawTabSurface(tab,size);}
   return true;
 }

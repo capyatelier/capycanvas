@@ -299,6 +299,15 @@ export async function checkDrawingTabs({call,evaluate,settle}) {
   };
   for(const theme of ['light','dark']) {
     await evaluate(`layerApp.dispatch({type:'set_theme',theme:${JSON.stringify(theme)}})`);
+    for(const fallback of [false,true]){
+      await evaluate(`window.focusedDrawingTab=document.querySelector('.drawing-tab[data-drawing-id="${third}"] .drawing-tab-pick');focusedDrawingTab.focus();${fallback?"document.querySelector('.drawing-tabs').moveBefore=undefined":""}`);
+      await press('ArrowLeft','ArrowLeft',37,10);
+      assert.deepEqual((await tabs()).tabs.map(t=>t.id),[first,third,second]);
+      assert.equal(await evaluate('focusedDrawingTab===document.activeElement'),true,`${theme} fallback=${fallback}: moving a drawing earlier with the keyboard keeps focus`);
+      await evaluate('layerApp.app.document_order_history(false);layerApp.documents.refresh()');await settle();
+      assert.deepEqual((await tabs()).tabs.map(t=>t.id),[first,second,third]);
+      await evaluate("delete document.querySelector('.drawing-tabs').moveBefore");
+    }
     for(const [key,code,vk,target] of [['PageUp','PageUp',33,second],['PageDown','PageDown',34,third]]) {
       await invoke('hand');await settle();await evaluate('layerApp.canvas.focus()');
       await press(key,code,vk,1);
@@ -316,7 +325,8 @@ export async function checkDrawingTabs({call,evaluate,settle}) {
   await evaluate("layerApp.dispatch({type:'preferences',action:{type:'reset_shortcut',id:'command.NextDrawing'}});layerApp.dispatch({type:'close_settings'})");await settle();
   const compact=await evaluate('document.querySelector(".drawing-tabs").hidden');
   if(compact){await evaluate('layerApp.documents.showSelector()');await settle();}
-  for(const device of ['mouse','pen','touch']){
+  for(const theme of ['light','dark'])for(const device of ['mouse','pen','touch']){
+    await evaluate(`layerApp.dispatch({type:'set_theme',theme:${JSON.stringify(theme)}})`);await settle();
     const positions=await evaluate(`(()=>{const list=document.querySelector(${JSON.stringify(compact?'.drawing-list-rows':'.drawing-tabs')}),rows=[...list.children];const source=rows[0].querySelector(${JSON.stringify(compact?'.drawing-grip':'.drawing-tab-pick')}).getBoundingClientRect(),target=rows.at(-1).getBoundingClientRect();return{from:[source.x+source.width/2,source.y+source.height/2],to:[target.x+target.width-${compact?'target.width/2':'8'},target.y+target.height-${compact?'8':'target.height/2'}]};})()`);
     const [x,y]=positions.from,[tx,ty]=positions.to;
     const send=async(type,px,py)=>{
@@ -324,7 +334,7 @@ export async function checkDrawingTabs({call,evaluate,settle}) {
       else await call('Input.dispatchMouseEvent',{type:{down:'mousePressed',move:'mouseMoved',up:'mouseReleased'}[type],x:px,y:py,button:'left',buttons:type==='up'?0:1,clickCount:1,pointerType:device,force:type==='up'?0:.7});
       await settle();
     };
-    const slide=()=>evaluate(`(()=>{const o=document.querySelector('.drawing-slide');return o&&{hidden:[...document.querySelectorAll('.drawing-tabs > .drawing-tab')].every(n=>getComputedStyle(n).visibility==='hidden'),offsets:[...o.children].map(n=>parseFloat(n.style.transform.slice(11)))};})()`);
+    const slide=()=>evaluate(`(()=>{const o=document.querySelector('.drawing-slide');return o&&{hidden:[...document.querySelectorAll('.drawing-tabs > .drawing-tab')].every(n=>getComputedStyle(n).opacity==='0'),offsets:[...o.children].map(n=>parseFloat(n.style.transform.slice(11)))};})()`);
     const near=(actual,expected,message)=>assert.ok(actual.length===expected.length&&actual.every((v,i)=>Math.abs(v-expected[i])<1),`${message}: ${actual} vs ${expected}`);
     await send('down',x,y);
     if(!compact){
@@ -344,6 +354,11 @@ export async function checkDrawingTabs({call,evaluate,settle}) {
     await evaluate('layerApp.app.document_order_history(false);layerApp.documents.refresh()');await settle();
     assert.deepEqual((await tabs()).tabs.map(t=>t.id),[first,second,third]);
     if(!compact){
+      const reverse=await evaluate(`(()=>{window.focusedDrawingTab=document.querySelector('.drawing-tab[data-drawing-id="${third}"] .drawing-tab-pick');const a=focusedDrawingTab.getBoundingClientRect(),b=document.querySelector('.drawing-tabs').firstElementChild.getBoundingClientRect();return{x:a.x+a.width/2,y:a.y+a.height/2,to:b.x+8}})()`);
+      await send('down',reverse.x,reverse.y);await send('move',reverse.to,reverse.y);await send('up',reverse.to,reverse.y);
+      assert.deepEqual((await tabs()).tabs.map(t=>t.id),[third,first,second],`${theme}/${device}: leftward drawing drop commits`);
+      assert.equal(await evaluate('focusedDrawingTab===document.activeElement'),true,`${theme}/${device}: leftward drawing drop keeps focus`);
+      await evaluate('layerApp.app.document_order_history(false);layerApp.documents.refresh()');await settle();
       await send('down',x,y);await send('move',tx,ty);await send('move',tx,ty+80);await send('up',tx,ty+80);
       assert.equal(await evaluate('!!document.querySelector(".drawing-slide,.dragged-tab-source")'),false);
       assert.deepEqual((await tabs()).tabs.map(t=>t.id),[first,second,third],`${device} release outside the strip cancels`);

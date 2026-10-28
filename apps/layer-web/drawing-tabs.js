@@ -1,6 +1,5 @@
 import {liveCopy,bindCopy} from './localization.js';
-// DOM input/measurement only. Drawing identity, order, drop validation, width
-// policy and undo belong to Rust; this is separate from docked panel tabs.
+import {orderTabChildren} from './tab-order.js';
 export function createDrawingTabs({app,element,button,icon,applyChange,select,close,openFiles,message,busy}) {
   const copy=liveCopy(app,'catalog').native_copy.header,common=liveCopy(app,'bootstrap_view').common;
   const root=element('div','drawing-title'),plain=document.querySelector('#document-title');
@@ -148,7 +147,7 @@ export function createDrawingTabs({app,element,button,icon,applyChange,select,cl
     const selected=model.tabs.find(t=>same(t.id,model.selected));compact.textContent=`${selected?.modified?'● ':''}${selected?.title??'Drawing'} ▾`;
     root.dataset.count=model.tabs.length;
     for(const [key,row]of rows)if(!model.tabs.some(t=>same(t.id,key))){row.root.remove();rows.delete(key);}
-    for(const [i,tab]of model.tabs.entries()){
+    for(const tab of model.tabs){
       const key=String(tab.id);let row=rows.get(key);
       if(!row){const node=element('div','drawing-tab');node.dataset.drawingId=key;const pick=button('',()=>{}),remove=button('',()=>invoke(()=>close(id(tab.id))));
         pick.setAttribute('role','tab');pick.className='drawing-tab-pick';remove.className='drawing-tab-close';remove.append(icon('close-document'));
@@ -157,15 +156,16 @@ export function createDrawingTabs({app,element,button,icon,applyChange,select,cl
       row.select.textContent=`${tab.modified?'● ':''}${tab.title}`;row.select.title=`${tab.title}\n${tab.location}`;
       row.select.setAttribute('aria-selected',String(same(tab.id,model.selected)));row.select.tabIndex=same(tab.id,model.selected)?0:-1;
       row.close.setAttribute('aria-label',app.native_caption({type:'close_drawing',title:tab.title}));row.close.disabled=busy();
-      if(strip.children[i]!==row.root)strip.insertBefore(row.root,strip.children[i]??null);
     }
+    orderTabChildren(strip,model.tabs.map(tab=>rows.get(String(tab.id)).root));
     if(popup){
       const list=popup.querySelector('.drawing-list-rows');
-      for(const [i,tab]of model.tabs.entries()){
-        const row=[...list.children].find(n=>same(n.dataset.drawingId,tab.id));
+      const popupRows=new Map([...list.children].map(row=>[row.dataset.drawingId,row]));
+      for(const tab of model.tabs){
+        const row=popupRows.get(String(tab.id));
         if(row){row.querySelector('strong').textContent=`${tab.modified?'● ':''}${tab.title}`;row.querySelector('small').textContent=tab.location;}
-        if(row&&list.children[i]!==row)list.insertBefore(row,list.children[i]??null);
       }
+      orderTabChildren(list,model.tabs.map(tab=>popupRows.get(String(tab.id))).filter(Boolean));
       const actions=popup.querySelectorAll('footer button');actions[0].disabled=!model.can_undo;actions[1].disabled=!model.can_redo;
     }
   }
