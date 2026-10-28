@@ -4903,7 +4903,7 @@ fn command(w: &Workspace, id: CommandId) -> gtk::Button {
     panic!("No native control for {id:?}");
 }
 fn double_press_handle(w: &Rc<Workspace>, point: [f32; 2]) -> bool {
-    let Some(action) = w.handle_double_press_action(point) else {
+    let Some((_, action)) = w.handle_double_press_action(point, PointerKind::Mouse) else {
         return false;
     };
     w.workspace_drag_input(ContactPhase::Cancel, point, None);
@@ -11834,10 +11834,10 @@ fn native_collapsed_column_input() {
         let collapsed = state(&w).workspace;
         let gap = [
             column.bounds.x + column.bounds.width * 0.5,
-            column.bounds.y + WORKSPACE_SPACING * 0.5,
+            column.grip.y - WORKSPACE_SPACING * 0.5,
         ];
-        for point in [center(column.empty), gap, center(column.grip)] {
-            assert_eq!(w.columns.background_at(&w, point), Some(column.id));
+        for (name, point) in [("empty", center(column.empty)), ("gap", gap), ("grip", center(column.grip))] {
+            assert_eq!(w.columns.background_at(&w, point), Some(column.id), "{name}: {point:?}; picked {:?}; bounds {:?}", w.surface.pick(point[0] as f64, point[1] as f64, gtk::PickFlags::DEFAULT), column.bounds);
             double_click(point);
             let expanded = state(&w).workspace;
             assert!(!expanded.layout.is_collapsed(column.id));

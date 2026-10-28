@@ -27,7 +27,9 @@ fn edge_grab_journey(name: &str, scenarios: &[Scenario]) {
     until(|| w.window.is_active(), "edge grab window activation");
     for theme in [Theme::Light, Theme::Dark] {
         w.dispatch(UiAction::SetTheme { theme: Some(theme) });
-        for device in ["mouse", "touch", "pen"] {
+        for device in ["mouse", "touch", "pen"].into_iter().filter(|device| {
+            std::env::var("LAYER_EDGE_CONTACT").map_or(true, |selected| selected == *device)
+        }) {
             println!("Checking {theme:?} {device}");
             for scenario in scenarios {
                 scenario(&w, &mut input, device);
@@ -355,26 +357,168 @@ fn floating_panel(w: &Rc<Workspace>, input: &mut RemoteInput, device: &str) {
     assert_eq!(durable(w), before);
 }
 
-fn column_reset(w: &Rc<Workspace>, input: &mut RemoteInput, device: &str) {
+#[test]
+#[ignore = "isolated workspace-motion.sh gtk --native-test=native_column_double_press_input --tablet"]
+fn native_column_double_press_input() {
+    edge_grab_journey("art.capycanvas.ColumnDoublePress", &[column_double_press, column_edge_scroll]);
+}
+
+fn column_width(w: &Workspace) -> f32 {
+    w.resolved().groups.iter().find(|g| g.panels.contains(&Panel::Brushes)).unwrap().bounds.width
+}
+
+fn resized_column(w: &Rc<Workspace>, device: &str) -> (f32, [f32; 2], [f32; 2]) {
     restore(w, WorkspacePreset::Illustrator.layout(Platform::Gtk));
-    let width = |w: &Workspace| w.resolved().groups.iter().find(|g| g.panels.contains(&Panel::Brushes)).unwrap().bounds.width;
-    let initial = width(w);
+    let initial = column_width(w);
     let divider = w.resolved().dividers.into_iter().find(|d| d.band && d.axis == Axis::Horizontal && d.bounds.x > 200.).unwrap();
     drag_divider(w, divider.id, [middle(divider.bounds)[0] + 60., middle(divider.bounds)[1]]);
     pump(250);
-    assert!(width(w) > initial + 30.);
-    let r = w.resolved();
-    let divider = r.dividers.iter().find(|d| d.id == divider.id).unwrap().clone();
-    let point = (6..=32).step_by(2).flat_map(|d| (0..60).map(move |i| [divider.bounds.x - d as f32, 120. + i as f32 * 12.]))
-        .find(|p| w.edge_reset_contact(*p) == Some(EdgeContact::Free) && w.resolved().edge_reset_at(*p, kind(device)) == Some(divider.id))
+    assert!(column_width(w) > initial + 30.);
+    let divider = w.resolved().dividers.into_iter().find(|d| d.id == divider.id).unwrap();
+    let reach = (1..=32).flat_map(|d| (0..60).map(move |i| [divider.bounds.x - d as f32, 120. + i as f32 * 12.]))
+        .find(|p| w.drag_target_at(*p).is_none() && w.edge_reset_contact(*p) == Some(EdgeContact::Free) && w.resolved().edge_reset_at(*p, kind(device)) == Some(divider.id))
         .unwrap_or_else(|| panic!("{device}: no double-press point in the column edge reach"));
-    let tap = |device: &str| vec![contact(device, "down", screen(w, point)), contact(device, "up", screen(w, point))];
-    let mut events = if device == "mouse" { vec![contact(device, "move", screen(w, point))] } else { Vec::new() };
-    events.extend(tap(device));
-    events.extend(tap(device));
+    let direct = [divider.bounds.x + 0.5, reach[1]];
+    assert!(matches!(w.drag_target_at(direct), Some(DragTarget::Divider(id)) if id == divider.id));
+    (initial, direct, reach)
+}
+
+fn tap_events(w: &Workspace, device: &str, from: [f32; 2], to: [f32; 2]) -> Vec<serde_json::Value> {
+    let mut events = Vec::new();
+    if device == "mouse" { events.push(contact(device, "move", screen(w, from))); }
+    events.push(contact(device, "down", screen(w, from)));
+    if from != to { events.push(contact(device, "move", screen(w, to))); }
+    events.push(contact(device, "up", screen(w, to)));
+    events
+}
+
+fn column_reset(w: &Rc<Workspace>, input: &mut RemoteInput, device: &str) {
+    let (initial, _, reach) = resized_column(w, device);
+    let mut events = tap_events(w, device, reach, reach);
+    events.extend(tap_events(w, device, reach, reach));
     input.perform(serde_json::Value::Array(events));
+    assert!((column_width(w) - initial).abs() < 1., "{device}: double press resets the column");
+}
+
+fn trace_clicks(widget: &gtk::Widget, name: &'static str) {
+    if std::env::var_os("LAYER_EDGE_TRACE").is_none() { return; }
+    let controllers = widget.observe_controllers();
+    for index in 0..controllers.n_items() {
+        if let Some(click) = controllers.item(index).and_downcast::<gtk::GestureClick>() {
+            click.connect_pressed(move |gesture, count, x, y| println!("Click {name} count={count} point={x},{y} source={:?}", gesture.current_event().and_then(|event| event.device()).map(|device| device.source())));
+            click.connect_stopped(move |_| println!("Click {name} stopped"));
+        }
+    }
+}
+
+fn numeric_label_double_press(w: &Rc<Workspace>, input: &mut RemoteInput, device: &str, offset: f32) -> bool {
+    let workspace = tool_settings_workspace(w, &[], true, true);
+    w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(workspace) });
     pump(300);
-    assert!((width(w) - initial).abs() < 1., "{device}: a double press in the edge reach resets the column: {initial} vs {}", width(w));
+    let panel = w.panel_widget(Panel::ToolSettings);
+    let size = named::<crate::number_control::NumberControl>(&panel, "tool-setting-size");
+    let title = find_css(size.upcast_ref(), "number-title").unwrap();
+    w.dispatch(UiAction::SetToolSetting { id: "size".into(), value: 123. });
+    pump(300);
+    let mut widget = Some(title.clone());
+    while let Some(node) = widget {
+        trace_clicks(&node, "label");
+        if node == *size.upcast_ref::<gtk::Widget>() { break; }
+        widget = node.parent();
+    }
+    let point = screen_point(&title, &w.window, [0.2, 0.1]);
+    input.perform(serde_json::Value::Array(vec![contact(device, "down", point), contact(device, "up", point), contact(device, "down", [point[0], point[1] + offset]), contact(device, "up", point)]));
+    let reset = size.value() != 123.;
+    println!("Numeric label {device} separation={offset} reset={reset}");
+    reset
+}
+
+fn column_double_press(w: &Rc<Workspace>, input: &mut RemoteInput, device: &str) {
+    trace_clicks(w.surface.upcast_ref(), "workspace");
+    let settings = gtk::Settings::default().unwrap();
+    println!("Double press {device}: distance={} time={} drag={}", settings.gtk_double_click_distance(), settings.gtk_double_click_time(), settings.gtk_dnd_drag_threshold());
+    let separation = if device == "pen" {
+        (settings.gtk_double_click_distance() + 1).min(settings.gtk_dnd_drag_threshold() - 1) as f32
+    } else { settings.gtk_double_click_distance() as f32 + 5. };
+    let separated_reset = if device == "pen" { numeric_label_double_press(w, input, device, separation) } else { device != "mouse" };
+    for (name, in_reach, offset, jitter, crossing) in [
+        ("direct", false, 0., 0., false),
+        ("reach", true, 0., 0., false),
+        ("direct separation", false, separation, 0., false),
+        ("reach separation", true, separation, 0., false),
+        ("direct jitter", false, 0., 1., false),
+        ("reach jitter", true, 0., 1., false),
+        ("direct to reach", false, 0., 0., true),
+        ("reach to direct", true, 0., 0., true),
+    ] {
+        let (initial, direct, reach) = resized_column(w, device);
+        let first = if in_reach { reach } else { direct };
+        let second = if crossing { if in_reach { direct } else { reach } } else { [first[0], first[1] + offset] };
+        let mut events = tap_events(w, device, first, [first[0], first[1] + jitter]);
+        events.extend(tap_events(w, device, second, second));
+        input.perform(serde_json::Value::Array(events));
+        let reset = (column_width(w) - initial).abs() < 1.;
+        let expected = offset == 0. || separated_reset;
+        assert_eq!(reset, expected, "{device} {name}: width {} vs {initial}", column_width(w));
+        pump(settings.gtk_double_click_time() as u64 + 50);
+        let divider = w.resolved().dividers.into_iter().find(|d| d.band && d.axis == Axis::Horizontal && d.bounds.x > 200.).unwrap();
+        let from = middle(divider.bounds);
+        let before = column_width(w);
+        swipe(w, input, device, &[from, [from[0] + 40., from[1]]]);
+        assert!(column_width(w) > before + 20., "{device} {name}: resizing still works after double press");
+    }
+    let (initial, direct, _) = resized_column(w, device);
+    let canvas = middle(w.resolved().work_area);
+    let mut events = tap_events(w, device, direct, direct);
+    events.extend(tap_events(w, device, canvas, canvas));
+    events.extend(tap_events(w, device, direct, direct));
+    input.perform(serde_json::Value::Array(events));
+    assert!(column_width(w) > initial + 30., "{device}: another target breaks the double press");
+    if device == "pen" {
+        let label_reset = numeric_label_double_press(w, input, device, 10.);
+        let (initial, direct, _) = resized_column(w, device);
+        let second = [direct[0], direct[1] + 10.];
+        let mut events = tap_events(w, device, direct, direct);
+        events.extend(tap_events(w, device, second, second));
+        input.perform(serde_json::Value::Array(events));
+        assert_eq!((column_width(w) - initial).abs() < 1., label_reset, "pen hover motion matches numeric labels");
+    }
+    let other = if device == "mouse" { "touch" } else { "mouse" };
+    for (first_device, second_device) in [(device, other), (other, device)] {
+        let (initial, direct, _) = resized_column(w, device);
+        let mut events = tap_events(w, first_device, direct, direct);
+        events.extend(tap_events(w, second_device, direct, direct));
+        input.perform(serde_json::Value::Array(events));
+        assert!(column_width(w) > initial + 30., "{first_device} then {second_device}: device changes break the double press");
+    }
+}
+
+fn column_edge_scroll(w: &Rc<Workspace>, input: &mut RemoteInput, device: &str) {
+    if device != "touch" { return; }
+    restore(w, WorkspacePreset::Illustrator.layout(Platform::Gtk));
+    let workspace = tool_settings_workspace(w, &[], true, true);
+    w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(workspace) });
+    w.dispatch(UiAction::SelectBrush { id: layer_core::DefaultBrushPreset::WetWatercolor as u32 });
+    pump(300);
+    let divider = w.resolved().dividers.into_iter().find(|d| d.axis == Axis::Vertical && d.bounds.x < 100.).unwrap();
+    drag_divider(w, divider.id, [100., w.surface.height() as f32 - 180.]);
+    pump(300);
+    let panel = w.panel_widget(Panel::ToolSettings);
+    let size = named::<crate::number_control::NumberControl>(&panel, "tool-setting-size");
+    let scroller = size.ancestor(gtk::ScrolledWindow::static_type()).unwrap().downcast::<gtk::ScrolledWindow>().unwrap();
+    let adjustment = scroller.vadjustment();
+    assert!(adjustment.upper() > adjustment.page_size() + 60., "settings must overflow for native scrolling");
+    let bounds = scroller.compute_bounds(&w.surface).unwrap();
+    let point = (1..32).flat_map(|x| (0..(bounds.height() as usize / 4 - 25)).map(move |y| [bounds.x() + bounds.width() - x as f32, bounds.y() + bounds.height() - 20. - y as f32 * 4.]))
+        .find(|p| w.drag_target_at(*p).is_none() && w.edge_reset_contact(*p) == Some(EdgeContact::Free)
+            && w.resolved().edge_grab_at(*p, PointerKind::Touch, EdgeContact::Free).is_some_and(|grab| !grab.resizes(Axis::Vertical))
+            && w.resolved().edge_reset_at(*p, PointerKind::Touch).is_some()
+            && std::iter::successors(w.surface.pick(p[0] as f64, p[1] as f64, gtk::PickFlags::DEFAULT), |node| node.parent()).any(|node| node.is::<gtk::Viewport>()))
+        .expect("scrollable free space in the column edge reach");
+    let before = durable(w);
+    swipe(w, input, device, &[point, [point[0], point[1] - 70.]]);
+    assert!(adjustment.value() > 20., "vertical touch in the edge reach scrolls native settings: {}", adjustment.value());
+    assert_eq!(durable(w), before, "vertical native scrolling never resizes the column");
 }
 
 fn toolbar_beside_column(w: &Rc<Workspace>, input: &mut RemoteInput, device: &str) {

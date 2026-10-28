@@ -4076,16 +4076,12 @@ impl Workspace {
                 self.dismiss_context();
                 return false;
             }
-            let recognized = if matches!(drag.target, DragTarget::Dock(_) | DragTarget::Header(_)) {
-                self.surface.drag_check_threshold(
-                    drag.origin[0] as i32,
-                    drag.origin[1] as i32,
-                    point[0] as i32,
-                    point[1] as i32,
-                )
-            } else {
-                point != drag.origin
-            };
+            let recognized = self.surface.drag_check_threshold(
+                drag.origin[0] as i32,
+                drag.origin[1] as i32,
+                point[0] as i32,
+                point[1] as i32,
+            );
             if !recognized {
                 return false;
             }
@@ -4174,7 +4170,7 @@ impl Workspace {
         true
     }
 
-    fn handle_double_press_action(&self, point: [f32; 2]) -> Option<UiAction> {
+    fn handle_double_press_action(&self, point: [f32; 2], kind: PointerKind) -> Option<(DragTarget, UiAction)> {
         let viewport = [self.surface.width() as f32, self.surface.height() as f32];
         if let Some(column) = self.columns.background_at(self, point) {
             return self
@@ -4182,7 +4178,7 @@ impl Workspace {
                 .collapsed
                 .iter()
                 .find(|c| c.id == column)
-                .map(|c| c.expand_action());
+                .map(|c| (DragTarget::Dock(DockItem::Column { column }), c.expand_action()));
         }
         match self.drag_target_at(point) {
             Some(DragTarget::Divider(id))
@@ -4192,7 +4188,7 @@ impl Workspace {
                     .iter()
                     .any(|d| d.id == id && d.owner_side.is_some() && d.axis == layer_ui::Axis::Horizontal) =>
             {
-                Some(UiAction::ResetColumnWidth { id, viewport })
+                Some((DragTarget::Divider(id), UiAction::ResetColumnWidth { id, viewport }))
             }
             Some(DragTarget::Dock(item)) => self
                 .surface
@@ -4200,58 +4196,45 @@ impl Workspace {
                 .layout
                 .borrow()
                 .panel_handle_target(item)
-                .map(|group| UiAction::DoubleClickPanelHandle { group, viewport }),
+                .map(|group| (DragTarget::Dock(DockItem::Group { group }), UiAction::DoubleClickPanelHandle { group, viewport })),
+            None if self.edge_reset_contact(point) == Some(EdgeContact::Free) => {
+                let id = self.resolved().edge_reset_at(point, kind)?;
+                Some((DragTarget::Divider(id), UiAction::ResetColumnWidth { id, viewport }))
+            }
             _ => None,
         }
     }
 
     fn install_workspace_drag(self: &Rc<Self>) {
-        let column_click = Rc::new(Cell::new(None::<(DragTarget, u32, [f32; 2], Option<gdk::InputSource>)>));
+        let column_click = Rc::new(Cell::new(None::<(DragTarget, i32)>));
         let click = gtk::GestureClick::new();
         click.set_name(Some("panel-handle-double-click"));
+        click.set_button(1);
         click.set_propagation_phase(gtk::PropagationPhase::Capture);
+        click.connect_stopped(glib::clone!(#[strong] column_click, move |_| column_click.set(None)));
         click.connect_pressed(glib::clone!(
             #[weak(rename_to = w)]
             self,
             #[strong]
             column_click,
-            move |gesture, _, x, y| {
+            move |gesture, count, x, y| {
                 let point = [x as f32, y as f32];
                 let Some(event) = gesture.current_event() else { return };
                 let kind = crate::input::pointer_kind(&event);
-                let target = w.drag_target_at(point)
-                    .or_else(|| (w.edge_reset_contact(point) == Some(EdgeContact::Free)).then_some(DragTarget::Edge(0, "")));
-                let collapsed_column = w.columns.background_at(&w, point);
-                let source = event.device().map(|device| device.source());
-                let handle = collapsed_column
-                    .map(|column| DragTarget::Dock(DockItem::Column { column }))
-                    .or(target);
-                let previous = column_click.replace(handle.map(|item| (item, event.time(), point, source)));
-                let settings = gtk::Settings::for_display(&w.surface.display());
-                // A workspace GestureClick sees every control. Require the same
-                // handle and device class for touch/pen as well as mouse; a tap
-                // on a tile must not turn the next divider press into a reset.
-                let double = handle.is_some_and(|item| previous.is_some_and(|(id, time, position, device)| {
-                    id == item && device == source
-                        && event.time().wrapping_sub(time) <= settings.gtk_double_click_time().max(0) as u32
-                        && (point[0] - position[0]).abs().max((point[1] - position[1]).abs())
-                            <= settings.gtk_double_click_distance().max(0) as f32
-                }));
-                if !double { return; }
-                column_click.set(None);
-                if handle == Some(DragTarget::Edge(0, "")) {
-                    let viewport = [w.surface.width() as f32, w.surface.height() as f32];
-                    if w.interact(UiInput::EdgeDoublePress { kind, contact: EdgeContact::Free, position: point, viewport }).handled {
-                        gesture.set_state(gtk::EventSequenceState::Claimed);
-                        w.workspace_drag_input(ContactPhase::Cancel, point, None);
-                    }
+                let Some((target, action)) = w.handle_double_press_action(point, kind) else {
+                    column_click.set(None);
                     return;
+                };
+                let previous = column_click.replace(Some((target, count)));
+                if matches!(target, DragTarget::Dock(_)) || w.drag_target_at(point) == Some(target) {
+                    gesture.set_state(gtk::EventSequenceState::Claimed);
                 }
-                let Some(action) = w.handle_double_press_action(point) else { return };
+                if !previous.is_some_and(|(last, presses)| last == target && count > 1 && count == presses + 1) { return; }
                 gesture.set_state(gtk::EventSequenceState::Claimed);
-                // The captured double-click consumes release; retire any
-                // pending press so later motion cannot start a stale drag.
-                w.workspace_drag_input(ContactPhase::Cancel, point, None);
+                column_click.set(None);
+                w.workspace_drag.borrow_mut().take();
+                let sequence = (event.event_type() == gdk::EventType::TouchBegin).then(|| event.event_sequence());
+                w.edge_grab_release(ContactPhase::Cancel, point, &sequence);
                 w.dispatch(action);
             }
         ));
