@@ -10,14 +10,14 @@ pub fn panel_mesh_with_coverage(commands: &[[i32;7]],covered: impl Fn([f32;2])->
             0=>{points=vec![p(1)];point=p(1);},
             1=>{point=p(1);points.push(point);},
             2=>{flatten([point,p(1),p(3),p(5)],0,&mut points);point=p(5);},
-            3=>{if points.len()>2 {loops.push(std::mem::take(&mut points));}},
+            3 if points.len()>2=>{loops.push(std::mem::take(&mut points));},
             _=>{},
         }
     }
     let contains=|p: [f32;2]|loops.iter().any(|polygon| {
         let n=polygon.len();let mut inside=false;
         for i in 0..n {let a=polygon[i];let b=polygon[(i+1)%n];
-            if (a[1]>p[1])!=(b[1]>p[1]) && p[0]<(b[0]-a[0])*(p[1]-a[1])/(b[1]-a[1])+a[0] {inside=!inside;}
+            if (a[1]>p[1])!=(b[1]>p[1]) && p[0]<(b[0]-a[0])*(p[1]-a[1])/(b[1]-a[1])+a[0] {inside = !inside;}
         }
         inside
     });

@@ -1289,7 +1289,7 @@ impl Cache {
             scene.decode_wait = false;
             r.source_tiles.borrow_mut().begin_unit();
             let placed = (|| -> Result<bool, GpuRasterError> {
-                let mut compositor = Evaluator { cache: &mut *self, commands: &mut *commands, scene: &mut *scene, packet, r: &mut *r, encoder: &mut *encoder, region: region.into(), input, tiled, source_plans: &mut source_plans, root_compositions: &mut root_compositions, defer_root: root.required(region.into(), input).bounds() == region };
+                let mut compositor = Evaluator { cache: &mut *self, commands, scene: &mut *scene, packet, r: &mut *r, encoder, region: region.into(), input, tiled, source_plans: &mut source_plans, root_compositions: &mut root_compositions, defer_root: root.required(region.into(), input).bounds() == region };
                 let root = compositor.cache.graph.root.clone().expect("prepared composition graph");
                 let output = compositor.evaluate_root(&root, matches!(destination, Destination::View))?;
                 let presentation = match &output {

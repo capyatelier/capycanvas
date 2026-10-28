@@ -37,7 +37,7 @@ pub const PANEL_PROFILE_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "
 
 pub fn panel_profiles() -> &'static [[f32; 2]] {
     static PROFILES: OnceLock<Vec<[f32; 2]>> = OnceLock::new();
-    PROFILES.get_or_init(|| PANEL_PROFILE_BYTES.chunks_exact(8).map(|c| [
+    PROFILES.get_or_init(|| PANEL_PROFILE_BYTES.as_chunks::<8>().0.iter().map(|c| [
         f32::from_le_bytes(c[..4].try_into().unwrap()),f32::from_le_bytes(c[4..].try_into().unwrap()),
     ]).collect())
 }
