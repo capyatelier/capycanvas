@@ -12,6 +12,8 @@ extension XCTestCase {
         let sketch = app.buttons["workspace-switch-builtin:workspace:painter"]
         expectation(for: NSPredicate(format: "selected == YES"), evaluatedWith: sketch)
         waitForExpectations(timeout: 30)
+        waitForEditorInteraction(in: app)
+        XCTAssertTrue(app.buttons["header-tool-drawing_brush"].waitForExistence(timeout: 10))
         let toolbar = app.descendants(matching: .any)["toolbar-options-toolbar"].firstMatch
         XCTAssertTrue(toolbar.waitForNonExistence(timeout: 10), "Sketch tools belong in the shared title bar")
         let drawer = app.descendants(matching: .any)["tool-drawer"].firstMatch
@@ -39,7 +41,13 @@ extension XCTestCase {
         workspaceActivate(app.buttons["brush-2"])
         let size = app.buttons["number-value-tool-size"]
         workspaceActivate(size)
-        app.textFields["number-entry-tool-size"].typeText("37\n")
+        let entry = app.textFields["number-entry-tool-size"]
+        replaceEditorText(entry, with: "37", in: app)
+        #if os(macOS)
+        entry.typeKey(XCUIKeyboardKey.return.rawValue, modifierFlags: [])
+        #else
+        entry.typeText("\n")
+        #endif
         expectation(for: NSPredicate(format: "value == %@", "37 px"), evaluatedWith: size)
         waitForExpectations(timeout: 10)
         attachEditor(in: app, name: "brush-three-column-drawer")
@@ -102,16 +110,16 @@ extension XCTestCase {
             "Canvas paper", "Rough linen", "Burlap", "Gesso panel", "Gesso across", "Gesso down", "Rough gesso", "Rough across",
             "Rough down", "Matte film", "Chalkboard", "Concrete", "Sand", "Asphalt", "Barn wood", "Dry mud",
             "Crumpled", "Papyrus", "Reeds across", "Reeds down", "Leaf", "Toilet"]
-        XCTAssertTrue(texture.waitForExistence(timeout: 10)); expectPaperValue(texture, "Drawing")
+        XCTAssertTrue(texture.waitForExistence(timeout: 10)); expectPaperValue(texture, "Cold press")
         let textureDialog = app.descendants(matching: .any)["texture-dialog"].firstMatch
         func chooseTexture(_ index: Int) {
-            let option = app.buttons["texture-tile-\(index)"]
-            revealEditorControl(option, in: app.scrollViews.containing(.button, identifier: option.identifier).firstMatch)
+            let id = "texture-tile-\(index)", option = app.buttons["texture-tile-\(index)"]
+            revealEditorControl(option, identifier: id, type: .button, in: textureDialog.scrollViews.firstMatch)
             workspaceActivate(option)
             expectation(for: NSPredicate(format: "selected == YES"), evaluatedWith: option)
             waitForExpectations(timeout: 10)
         }
-        var previousPaper = "Drawing"
+        var previousPaper = "Cold press"
         for (index, name) in papers.enumerated() {
             revealEditorControl(texture, in: propertyScroll); workspaceActivate(texture)
             XCTAssertTrue(textureDialog.waitForExistence(timeout: 10))
@@ -119,14 +127,14 @@ extension XCTestCase {
                 let options = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "texture-tile-"))
                 XCTAssertEqual(options.count, papers.count)
                 for (option, label) in papers.enumerated() { XCTAssertEqual(app.buttons["texture-tile-\(option)"].label, label) }
-                XCTAssertTrue(app.buttons["texture-tile-4"].isSelected, "Choose Texture starts on the current texture")
-                chooseTexture(2)
+                XCTAssertTrue(app.buttons["texture-tile-1"].isSelected, "Choose Texture starts on the current texture")
+                chooseTexture(papers.count - 1)
                 workspaceActivate(app.buttons["texture-cancel"])
                 XCTAssertTrue(textureDialog.waitForNonExistence(timeout: 10))
-                expectPaperValue(texture, "Drawing")
+                expectPaperValue(texture, "Cold press")
                 revealEditorControl(texture, in: propertyScroll); workspaceActivate(texture)
                 XCTAssertTrue(textureDialog.waitForExistence(timeout: 10))
-                XCTAssertTrue(app.buttons["texture-tile-4"].isSelected, "Reopening forgets the cancelled choice")
+                XCTAssertTrue(app.buttons["texture-tile-1"].isSelected, "Reopening forgets the cancelled choice")
                 attachEditor(in: app, name: "texture-dialog-" + theme)
             }
             chooseTexture(index)
@@ -139,7 +147,14 @@ extension XCTestCase {
             previousPaper = name
         }
         revealEditorControl(scale, in: propertyScroll); expectPaperValue(scale, "100 %")
-        workspaceActivate(scale); app.textFields["number-entry-property-scale"].typeText("200\n")
+        workspaceActivate(scale)
+        let scaleEntry = app.textFields["number-entry-property-scale"]
+        replaceEditorText(scaleEntry, with: "200", in: app)
+        #if os(macOS)
+        scaleEntry.typeKey(XCUIKeyboardKey.return.rawValue, modifierFlags: [])
+        #else
+        scaleEntry.typeText("\n")
+        #endif
         expectPaperValue(scale, "200 %")
         editorMenu(in: app, menu: "Edit", id: "undo", label: "Undo"); reopenToolDrawer("Filters panel"); expectPaperValue(scale, "100 %")
         editorMenu(in: app, menu: "Edit", id: "redo", label: "Redo"); reopenToolDrawer("Filters panel"); expectPaperValue(scale, "200 %")
@@ -159,10 +174,17 @@ extension XCTestCase {
         editorMenu(in: app, menu: "Edit", id: "redo", label: "Redo"); reopenToolDrawer("Filters panel"); expectPaperValue(scale, draggedScale)
         let scaleLabel = app.staticTexts["Scale"].firstMatch
         XCTAssertTrue(scaleLabel.waitForExistence(timeout: 5))
+        revealEditorControl(scaleLabel, in: propertyScroll)
+        let window = app.windows.firstMatch, caption = scaleLabel.frame
+        guard caption.width > 0, caption.height > 0, propertyScroll.frame.contains(caption), window.frame.contains(caption) else {
+            return XCTFail("The Scale caption must be visible inside its editor window")
+        }
+        let resetScale = window.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(
+            dx: caption.midX - window.frame.minX, dy: caption.midY - window.frame.minY))
         #if os(macOS)
-        scaleLabel.doubleClick()
+        resetScale.doubleClick()
         #else
-        scaleLabel.doubleTap()
+        resetScale.doubleTap()
         #endif
         expectPaperValue(scale, "100 %")
         attachEditor(in: app, name: "paper-texture-scale-" + theme)
@@ -231,9 +253,12 @@ extension XCTestCase {
         workspaceActivate(app.buttons["Brush color"])
         XCTAssertTrue(drawer.waitForNonExistence(timeout: 10))
         workspaceActivate(app.descendants(matching: .any)["zen-button"].firstMatch)
-        XCTAssertTrue(sketch.waitForNonExistence(timeout: 10))
+        expectation(for: NSPredicate { _, _ in !sketch.exists || !sketch.isEnabled }, evaluatedWith: app)
+        waitForExpectations(timeout: 10)
+        attachEditor(in: app, name: "titlebar-zen-hidden-" + theme)
         workspaceActivate(app.descendants(matching: .any)["zen-button"].firstMatch)
-        XCTAssertTrue(sketch.waitForExistence(timeout: 10))
+        expectation(for: NSPredicate { _, _ in sketch.exists && sketch.isEnabled && sketch.isHittable }, evaluatedWith: app)
+        waitForExpectations(timeout: 10)
         #if os(macOS)
         XCTAssertFalse(app.menuBars.menuBarItems["Help"].exists)
         #endif

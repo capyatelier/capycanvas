@@ -1,8 +1,8 @@
 import XCTest
 
 extension XCTestCase {
-    @MainActor func checkWorkspaceSwitcher(in app: XCUIApplication) {
-        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"workspace_manager","command":{"type":"manage"}}]"#
+    @MainActor func checkWorkspaceSwitcher(in app: XCUIApplication, theme: String = "light") {
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"\#(theme)"},{"type":"workspace_manager","command":{"type":"manage"}}]"#
         app.launch()
         let painter = app.descendants(matching: .any)["workspace-select-builtin:workspace:painter"].firstMatch
         let illustrator = app.descendants(matching: .any)["workspace-select-builtin:workspace:illustrator"].firstMatch

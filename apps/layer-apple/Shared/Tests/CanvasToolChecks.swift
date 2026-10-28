@@ -82,7 +82,6 @@ extension XCTestCase {
         }
         XCTFail("Editor control did not become fully visible: \(identifier)")
     }
-    #if os(iOS)
     @MainActor func revealEditorControl(_ element: XCUIElement, identifier: String, type: XCUIElement.ElementType, in scroll: XCUIElement) {
         guard !identifier.isEmpty, scroll.waitForExistence(timeout: 5) else {
             return XCTFail("A lazy control needs its stable identifier and native scroll")
@@ -124,12 +123,18 @@ extension XCTestCase {
             let groups = Dictionary(grouping: visible, by: key)
             let anchors = groups.filter { $0.value.count == 1 }.mapValues { $0[0].frame }
             guard !anchors.isEmpty else { return XCTFail("Native lazy scrolling needs visible identified controls to measure progress") }
+            #if os(macOS)
+            window.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(
+                dx: viewport.minX + 2 - windowBounds.minX, dy: viewport.midY - windowBounds.minY))
+                .scroll(byDeltaX: 0, deltaY: towardEnd ? -80 : 80)
+            #else
             let x = viewport.minX - windowBounds.minX + viewport.width * 0.05
             let start = window.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: x,
                 dy: viewport.minY - windowBounds.minY + viewport.height * (towardEnd ? 0.8 : 0.2)))
             let end = window.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: x,
                 dy: viewport.minY - windowBounds.minY + viewport.height * (towardEnd ? 0.2 : 0.8)))
             start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.2)
+            #endif
             var moved: [String] = []
             let progress = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
                 guard let next = try? scroll.snapshot() else { return false }
@@ -150,7 +155,6 @@ extension XCTestCase {
         }
         XCTFail("The lazy control did not become fully contained within the bounded native search: \(identifier)")
     }
-    #endif
     @MainActor func editorTool(_ label: String, in app: XCUIApplication) {
         workspaceActivate(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@",
             "toolbar-tile-toolbar-", label)).firstMatch)

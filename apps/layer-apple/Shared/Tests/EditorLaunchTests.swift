@@ -202,6 +202,9 @@ final class EditorLaunchTests: XCTestCase {
     @MainActor func testWorkspaceSwitcher() {
         checkWorkspaceSwitcher(in: editorTestApplication())
     }
+    @MainActor func testWorkspaceSwitcherDark() {
+        checkWorkspaceSwitcher(in: editorTestApplication(), theme: "dark")
+    }
 
     @MainActor func testWorkspaceInlineNameAdmission() {
         checkWorkspaceInlineNameAdmission(in: editorTestApplication(), theme: "light")
@@ -255,10 +258,11 @@ final class EditorLaunchTests: XCTestCase {
 
     @MainActor func testZenHidesChromeAndTabRestoresIt() {
         let app = ignoringSavedWindows(editorTestApplication())
-        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"invoke","command":"zen_mode"}]"#
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"workspace_manager","command":{"type":"switch","id":"builtin:workspace:illustrator"}},{"type":"invoke","command":"zen_mode"}]"#
         app.launch()
         let canvas = app.descendants(matching: .any)["canvas"].firstMatch
-        XCTAssertTrue(canvas.waitForExistence(timeout: 30))
+        expectation(for: NSPredicate(format: "value == %@", "Canvas ready"), evaluatedWith: canvas)
+        waitForExpectations(timeout: 30)
         XCTAssertTrue(app.buttons["panel-tab-sizes"].waitForNonExistence(timeout: 5))
         XCTAssertFalse(editorDocumentTitle(in: app).exists)
         XCTAssertTrue(app.descendants(matching: .any)["zen-button"].firstMatch.waitForExistence(timeout: 5),
@@ -267,6 +271,15 @@ final class EditorLaunchTests: XCTestCase {
         XCTAssertTrue(app.buttons["panel-tab-sizes"].waitForExistence(timeout: 10))
         XCTAssertTrue(editorDocumentTitle(in: app).exists)
         XCTAssertTrue(app.buttons["zen-button"].exists)
+        let paint = app.buttons["workspace-switch-builtin:workspace:illustrator"]
+        XCTAssertTrue(paint.exists && paint.isEnabled && paint.isHittable)
+        workspaceActivate(app.buttons["zen-button"])
+        expectation(for: NSPredicate { _, _ in !paint.exists || !paint.isEnabled }, evaluatedWith: app)
+        waitForExpectations(timeout: 10)
+        attachEditor(in: app, name: "zen-live-hidden")
+        workspaceActivate(app.buttons["zen-button"])
+        expectation(for: NSPredicate { _, _ in paint.exists && paint.isEnabled && paint.isHittable }, evaluatedWith: app)
+        waitForExpectations(timeout: 10)
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)
     }
 

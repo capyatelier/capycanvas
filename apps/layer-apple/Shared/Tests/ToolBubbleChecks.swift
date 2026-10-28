@@ -307,6 +307,7 @@ extension XCTestCase {
 extension EditorLaunchTests {
     #if os(iOS)
     @MainActor func testHDRToolBubbleTextEntry() { checkHDRToolBubbles(in: editorCaptureApplication(), theme: "light", depth: 2, journey: .textEntry) }
+    @MainActor func testHDRToolBubbleTextEntryDark() { checkHDRToolBubbles(in: editorCaptureApplication(), theme: "dark", depth: 2, journey: .textEntry) }
     #endif
     @MainActor func testHDRToolBubbles() { checkHDRToolBubbles(in: editorCaptureApplication(), theme: "light", depth: 2) }
     @MainActor func testHDRToolBubblesDark() { checkHDRToolBubbles(in: editorCaptureApplication(), theme: "dark", depth: 2) }
