@@ -20,7 +20,7 @@ function Layout {
     $settled.value
 }
 function At([string]$Id,[switch]$Name){
-    if($Id -match '^collapsed-column-(\d+)$'){return Screen (Column ([int]$Matches[1])).bounds}
+    if($Id -match '^collapsed-column-(\d+)$'){return Screen (Column ([int]$Matches[1])).empty}
     $bounds=(Control $Id -Name:$Name -Arranged).Current.BoundingRectangle
     @{x=[int]($bounds.X+$bounds.Width*.5);y=[int]($bounds.Y+$bounds.Height*.5);id=$Id;name=[bool]$Name}
 }

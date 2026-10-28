@@ -66,7 +66,12 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     std::unique_ptr<WorkspaceExpansion> expansion;
     struct Offscreen {std::wstring key;std::shared_ptr<WorkspaceData> data;std::unique_ptr<PanelBody> body;};
     std::map<std::wstring,Offscreen> offscreen;
-    struct Body {hstring key;std::shared_ptr<PanelBody> view;};
+    struct Body {
+        hstring key;std::shared_ptr<PanelBody> view;Panel host{nullptr};
+        void Detach(){
+            if(host){uint32_t at;if(host.Children().IndexOf(view->Root(),at))host.Children().RemoveAt(at);host=nullptr;}
+        }
+    };
     std::map<std::wstring,Body> bodies;
     double bodyTextScale=0;
     Canvas measureHost;
@@ -343,17 +348,16 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         while(frame.Children().Size()>1)frame.Children().RemoveAtEnd();
         auto create=[&]{return std::make_shared<PanelBody>(data,panel,geometry,
             [weak=weak_from_this()]{if(auto self=weak.lock())self->measured();},gestures);};
+        Body* retained=nullptr;
         if(object(geometry,L"tiles").Size())group.body=create();
         else{
             auto key=O({{L"panel",panelStructure(panel)},{L"split_filters",B(flag(geometry,L"split_filters"))}}).Stringify();
             auto& cached=bodies[std::wstring(str(panel,L"id"))];
-            if(!cached.view||cached.key!=key||gestures->Retains(cached.view->Root())){cached.view=create();cached.key=key;}
-            group.body=cached.view;
+            if(!cached.view||cached.key!=key||gestures->Retains(cached.view->Root())){cached.view=create();cached.key=key;cached.host=nullptr;}
+            else cached.Detach();
+            group.body=cached.view;retained=&cached;
         }
         auto body=group.body->Root();
-        if(auto parent=VisualTreeHelper::GetParent(body).try_as<Panel>()){
-            uint32_t at;if(parent.Children().IndexOf(body,at))parent.Children().RemoveAt(at);
-        }
         group.bodyScroll=nullptr;group.bodyViewport=nullptr;
         if(object(geometry,L"tiles").Size()){
             Grid::SetRow(body,1);frame.Children().Append(body);
@@ -361,6 +365,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             group.bodyScroll=body.try_as<ScrollView>();
             if(!group.bodyScroll){
                 group.bodyViewport=Grid();group.bodyViewport.Children().Append(body);
+                if(retained)retained->host=group.bodyViewport;
                 group.bodyViewport.Background(clear());group.bodyScroll=ScrollView();group.bodyScroll.Content(group.bodyViewport);group.bodyScroll.ContentOrientation(ScrollingContentOrientation::None);panelScrolling(group.bodyScroll,group.bodyViewport,data);group.bodyScroll.HorizontalScrollMode(ScrollingScrollMode::Disabled);
                 group.bodyScroll.HorizontalScrollBarVisibility(ScrollingScrollBarVisibility::Hidden);
                 group.bodyScroll.VerticalScrollBarVisibility(ScrollingScrollBarVisibility::Auto);mouseScrollbars(group.bodyScroll);
@@ -369,6 +374,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             AutomationProperties::SetAutomationId(group.bodyScroll,L"panel-body-scroll-"+to_hstring(uint32_t(num(geometry,L"id"))));
             AutomationProperties::SetAccessibilityView(group.bodyScroll,Automation::Peers::AccessibilityView::Control);
             Grid::SetRow(group.bodyScroll,1);frame.Children().Append(group.bodyScroll);
+            if(retained&&!group.bodyViewport)retained->host=frame;
         }
         auto grip=object(geometry,L"footer_grip");
         if(grip.Size()){
