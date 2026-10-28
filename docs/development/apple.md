@@ -388,6 +388,9 @@ xcodebuild -project apps/layer-apple/CapyCanvas.xcodeproj \
   DEVELOPMENT_TEAM=YOUR_TEAM_ID CODE_SIGN_IDENTITY='Apple Development' test
 ```
 
+`testReleaseEscapeOrder`, `testReleaseToolbarBubbles` and
+`testReleaseToolbarZen` run on both hosts. Each has a `Dark` counterpart.
+
 Drawing-tab slide and drop queries with `commit: true` validate and reorder on
 the serial owner before later keyboard input; preview queries keep the order.
 

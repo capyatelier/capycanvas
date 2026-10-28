@@ -1,6 +1,50 @@
 import XCTest
 
 extension XCTestCase {
+    @MainActor func checkReleaseEscapeOrder(in app: XCUIApplication, theme: String) {
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"\#(theme)"},{"type":"workspace_manager","command":{"type":"switch","id":"builtin:workspace:illustrator"}},{"type":"customize","action":{"type":"set_column_collapsed","group":16,"collapsed":true}},{"type":"customize","action":{"type":"set_column_drawers","column":12,"drawers":false}},{"type":"customize","action":{"type":"toggle_column_drawer","group":16,"panel":"layers"}}]"#
+        app.launch(); waitForEditorInteraction(in: app)
+        createWhitePaperDrawing(width: "1440", height: "1080", in: app)
+        editorTool("Operation", in: app); editorChoice("Operation", group: true, in: app)
+        editorMenu(in: app, menu: "Select", id: "select_all", label: "Select all pixels")
+        editorMenu(in: app, menu: "Edit", id: "fill_selection", label: "Fill selection")
+        activateCanvasBarAction("scale_rotate", label: "Transform", in: app)
+        let transform = app.buttons["canvas-bar-action-apply_transform"]
+        XCTAssertTrue(transform.waitForExistence(timeout: 10))
+        let layers = app.buttons["panel-tab-layers"]
+        XCTAssertTrue(layers.waitForExistence(timeout: 10))
+        app.typeKey(XCUIKeyboardKey.escape.rawValue, modifierFlags: [])
+        XCTAssertTrue(transform.waitForNonExistence(timeout: 10), "Escape leaves the transform mode")
+        XCTAssertTrue(layers.exists, "Leaving a canvas mode keeps the open column")
+        let deselect = app.buttons["canvas-bar-action-deselect"]
+        XCTAssertTrue(deselect.waitForExistence(timeout: 10))
+
+        activateCanvasBarAction("scale_rotate", label: "Transform", in: app)
+        XCTAssertTrue(transform.waitForExistence(timeout: 10))
+        workspaceActivate(app.buttons["canvas-bar-more"])
+        let menu = app.descendants(matching: .any)["canvas-bar-menu"].firstMatch
+        XCTAssertTrue(menu.waitForExistence(timeout: 10))
+        app.typeKey(XCUIKeyboardKey.escape.rawValue, modifierFlags: [])
+        XCTAssertTrue(menu.waitForNonExistence(timeout: 10), "Escape dismisses More")
+        XCTAssertTrue(transform.exists, "More dismissal keeps the transform mode")
+        app.typeKey(XCUIKeyboardKey.escape.rawValue, modifierFlags: [])
+        XCTAssertTrue(transform.waitForNonExistence(timeout: 10))
+        XCTAssertTrue(deselect.waitForExistence(timeout: 10))
+
+        workspaceActivate(deselect)
+        XCTAssertTrue(layers.exists)
+        app.typeKey(XCUIKeyboardKey.escape.rawValue, modifierFlags: [])
+        XCTAssertTrue(layers.waitForNonExistence(timeout: 10), "Escape closes the open column")
+
+        workspaceActivate(app.descendants(matching: .any)["zen-button"].firstMatch)
+        let camera = app.buttons.matching(identifier: "camera-status").matching(NSPredicate(format: "enabled == YES")).firstMatch
+        XCTAssertTrue(camera.waitForNonExistence(timeout: 10))
+        app.typeKey(XCUIKeyboardKey.escape.rawValue, modifierFlags: [])
+        XCTAssertTrue(camera.waitForExistence(timeout: 10), "Escape leaves Zen after the other owners are closed")
+        attachEditor(in: app, name: "release-escape-order-\(theme)")
+        XCTAssertFalse(app.staticTexts["Canvas error"].exists)
+    }
+
     @MainActor func activateCanvasBarAction(_ id: String, label: String, in app: XCUIApplication) {
         let action = app.buttons["canvas-bar-action-" + id]
         if action.waitForExistence(timeout: 5) { workspaceActivate(action); return }

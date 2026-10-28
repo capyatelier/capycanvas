@@ -157,6 +157,100 @@ extension XCTestCase {
         attachEditor(in: app, name: "bubble-zen-\(theme)")
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)
     }
+
+    @MainActor func checkReleaseToolbarBubbles(in app: XCUIApplication, theme: String) {
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"\#(theme)"},{"type":"workspace_manager","command":{"type":"switch","id":"builtin:workspace:painter"}},{"type":"invoke","command":"add_layer"}]"#
+        app.launch()
+        let canvas = app.descendants(matching: .any)["canvas"].firstMatch
+        expectation(for: NSPredicate(format: "value == %@", "Canvas ready"), evaluatedWith: canvas)
+        waitForExpectations(timeout: 60)
+        let viewport = workspaceViewport(in: app)
+        func take(_ source: XCUIElement, _ x: CGFloat) {
+            XCTAssertTrue(source.waitForExistence(timeout: 10))
+            expectation(for: NSPredicate(format: "enabled == YES"), evaluatedWith: source)
+            waitForExpectations(timeout: 10)
+            source.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.85))
+                .press(forDuration: 0.05, thenDragTo: viewport.coordinate(withNormalizedOffset: CGVector(dx: x, dy: 0.42)),
+                    withVelocity: .slow, thenHoldForDuration: 0.1)
+        }
+        let undo = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "toolbar-tile-", "Undo")).firstMatch
+        take(undo, 0.34)
+        let historyUndo = app.descendants(matching: .any)["bubble-history-0"].firstMatch
+        let historyRedo = app.descendants(matching: .any)["bubble-history-1"].firstMatch
+        XCTAssertTrue(historyUndo.waitForExistence(timeout: 10))
+        XCTAssertEqual(historyUndo.label, "Undo")
+        XCTAssertEqual(historyRedo.label, "Redo")
+        let layers = app.buttons.matching(NSPredicate(format: "identifier == %@ AND label == %@", "header-tool-panel", "Layers panel")).firstMatch
+        workspaceActivate(layers)
+        let rows = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "layer-row-"))
+        let add = app.buttons["layer-New layer"]
+        XCTAssertTrue(add.waitForExistence(timeout: 10))
+        let initial = rows.count
+        workspaceActivate(add)
+        expectation(for: NSPredicate { _, _ in rows.count > initial }, evaluatedWith: app)
+        waitForExpectations(timeout: 10)
+        workspaceActivate(historyUndo)
+        expectation(for: NSPredicate { _, _ in rows.count == initial }, evaluatedWith: app)
+        waitForExpectations(timeout: 10)
+        workspaceActivate(historyRedo)
+        expectation(for: NSPredicate { _, _ in rows.count > initial }, evaluatedWith: app)
+        waitForExpectations(timeout: 10)
+
+        workspaceActivate(layers)
+        XCTAssertTrue(app.descendants(matching: .any)["tool-drawer"].firstMatch.waitForNonExistence(timeout: 10))
+        let sizeCap = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "slider-cap-", "Brush size")).firstMatch
+        func sizeCaption() -> String {
+            workspaceActivate(sizeCap)
+            let caption = app.staticTexts["slider-preview-caption"]
+            XCTAssertTrue(caption.waitForExistence(timeout: 10))
+            let text = editorText(caption)
+            workspaceActivate(app.buttons["workspace-switch-builtin:workspace:painter"])
+            XCTAssertTrue(app.descendants(matching: .any)["brush-slider-preview"].firstMatch.waitForNonExistence(timeout: 10))
+            return text
+        }
+        let before = sizeCaption()
+        let brushControls = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "toolbar-tile-", "Color Picker")).firstMatch
+        take(brushControls, 0.67)
+        let controls = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "bubble-face-", "Color Picker")).firstMatch
+        XCTAssertTrue(controls.waitForExistence(timeout: 10))
+        let bubble = app.descendants(matching: .any)["tool-bubble-" + String(controls.identifier.dropFirst("bubble-face-".count))].firstMatch
+        for label in ["Brush size", "Strength"] {
+            XCTAssertTrue(bubble.descendants(matching: .any).matching(NSPredicate(format: "label == %@", label)).firstMatch.exists,
+                "The Brush controls bubble exposes \(label)")
+        }
+        let point = viewport.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(
+            dx: controls.frame.midX + 53 - viewport.frame.minX, dy: controls.frame.midY - viewport.frame.minY))
+        point.clickOrTap()
+        XCTAssertNotEqual(sizeCaption(), before)
+        attachEditor(in: app, name: "release-toolbar-bubbles-\(theme)")
+        XCTAssertFalse(app.staticTexts["Canvas error"].exists)
+    }
+
+    @MainActor func checkReleaseToolbarZen(in app: XCUIApplication, theme: String) {
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"\#(theme)"},{"type":"workspace_manager","command":{"type":"switch","id":"builtin:workspace:painter"}},{"type":"invoke","command":"add_layer"}]"#
+        app.launch()
+        let canvas = app.descendants(matching: .any)["canvas"].firstMatch
+        expectation(for: NSPredicate(format: "value == %@", "Canvas ready"), evaluatedWith: canvas)
+        waitForExpectations(timeout: 60)
+        let undo = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "toolbar-tile-", "Undo")).firstMatch
+        expectation(for: NSPredicate(format: "enabled == YES"), evaluatedWith: undo)
+        waitForExpectations(timeout: 10)
+        let panel = undo.identifier.dropFirst("toolbar-tile-".count).split(separator: "-").dropLast().joined(separator: "-")
+        XCTAssertFalse(panel.isEmpty)
+        workspaceActivate(app.descendants(matching: .any)["toolbar-options-" + panel].firstMatch)
+        let menu = app.descendants(matching: .any)["workspace-context-menu"].firstMatch
+        let show = menu.buttons["menu-action-Show in Zen mode"]
+        XCTAssertTrue(show.waitForExistence(timeout: 10))
+        XCTAssertFalse(show.isSelected)
+        workspaceActivate(show)
+        XCTAssertTrue(menu.waitForNonExistence(timeout: 10))
+        workspaceActivate(app.descendants(matching: .any)["zen-button"].firstMatch)
+        let camera = app.buttons.matching(identifier: "camera-status").matching(NSPredicate(format: "enabled == YES")).firstMatch
+        XCTAssertTrue(camera.waitForNonExistence(timeout: 10))
+        XCTAssertTrue(undo.isEnabled, "Show in Zen mode keeps the toolbar visible")
+        attachEditor(in: app, name: "release-toolbar-zen-\(theme)")
+        XCTAssertFalse(app.staticTexts["Canvas error"].exists)
+    }
 }
 
 enum HDRBubbleJourney { case controls, textEntry }

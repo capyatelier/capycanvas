@@ -1,8 +1,8 @@
 import XCTest
 
 extension XCTestCase {
-    @MainActor func checkDrawerDragAndDock(in app: XCUIApplication) {
-        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"move_panel","panel":"toolbar","target":{"kind":"tab","group":6},"viewport":[1376,1032]},{"type":"customize","action":{"type":"set_column_collapsed","group":6,"collapsed":true}},{"type":"customize","action":{"type":"set_column_drawers","column":4,"drawers":true}}]"#
+    @MainActor func checkDrawerDragAndDock(in app: XCUIApplication, theme: String = "light") {
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"\#(theme)"},{"type":"move_panel","panel":"toolbar","target":{"kind":"tab","group":6},"viewport":[1376,1032]},{"type":"customize","action":{"type":"set_column_collapsed","group":6,"collapsed":true}},{"type":"customize","action":{"type":"set_column_drawers","column":4,"drawers":true}}]"#
         app.launch()
         let canvas = app.descendants(matching: .any)["canvas"].firstMatch
         expectation(for: NSPredicate(format: "value == %@", "Canvas ready"), evaluatedWith: canvas)
@@ -20,9 +20,18 @@ extension XCTestCase {
         let toolbar = app.buttons["drawer-tab-toolbar"], brushes = app.buttons["drawer-tab-brushes"]
         XCTAssertTrue(toolbar.waitForExistence(timeout: 10)); XCTAssertTrue(brushes.exists)
         XCTAssertGreaterThan(toolbar.frame.midX, brushes.frame.midX)
+        let toolbarWidth = toolbar.frame.width, brushesWidth = brushes.frame.width
+        let toolbarNames = toolbar.staticTexts.count, brushesNames = brushes.staticTexts.count
         drag(toolbar, to: brushes.coordinate(withNormalizedOffset: CGVector(dx: 0.05, dy: 0.5)))
+        workspaceActivate(brushes)
+        expectation(for: NSPredicate(format: "selected == YES"), evaluatedWith: brushes)
+        waitForExpectations(timeout: 10)
         expectation(for: NSPredicate { _, _ in toolbar.exists && brushes.exists && toolbar.frame.midX < brushes.frame.midX }, evaluatedWith: toolbar)
         waitForExpectations(timeout: 10)
+        XCTAssertEqual(toolbar.frame.width, toolbarWidth, accuracy: 1)
+        XCTAssertEqual(brushes.frame.width, brushesWidth, accuracy: 1)
+        XCTAssertEqual(toolbar.staticTexts.count, toolbarNames)
+        XCTAssertEqual(brushes.staticTexts.count, brushesNames)
 
         let viewport = workspaceViewport(in: app)
         let floatingPoint = viewport.coordinate(withNormalizedOffset: CGVector(dx: 0.58, dy: 0.5))
@@ -42,6 +51,12 @@ extension XCTestCase {
         XCTAssertTrue(app.buttons["panel-tab-toolbar"].waitForExistence(timeout: 10))
         XCTAssertTrue(app.buttons["panel-tab-brushes"].waitForExistence(timeout: 10))
         XCTAssertEqual(app.buttons["panel-tab-toolbar"].frame.minY, app.buttons["panel-tab-brushes"].frame.minY, accuracy: 1)
+        for panel in ["toolbar", "brushes"] {
+            let tab = app.buttons["panel-tab-" + panel]
+            workspaceActivate(tab)
+            expectation(for: NSPredicate(format: "selected == YES"), evaluatedWith: tab)
+            waitForExpectations(timeout: 10)
+        }
         XCTAssertTrue(app.descendants(matching: .any)["column-drawer-4"].firstMatch.waitForNonExistence(timeout: 10))
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)
         #if os(macOS)

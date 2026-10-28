@@ -154,6 +154,12 @@ final class EditorLaunchTests: XCTestCase {
     @MainActor func testPixelClipboardDark() throws { try checkPixelClipboard(in: editorCaptureApplication(), theme: "dark") }
     @MainActor func testImageObjects() throws { try checkImageObjects(in: editorCaptureApplication(), theme: "light") }
     @MainActor func testImageObjectsDark() throws { try checkImageObjects(in: editorCaptureApplication(), theme: "dark") }
+    @MainActor func testReleaseEscapeOrder() { checkReleaseEscapeOrder(in: editorCaptureApplication(), theme: "light") }
+    @MainActor func testReleaseEscapeOrderDark() { checkReleaseEscapeOrder(in: editorCaptureApplication(), theme: "dark") }
+    @MainActor func testReleaseToolbarBubbles() { checkReleaseToolbarBubbles(in: editorCaptureApplication(), theme: "light") }
+    @MainActor func testReleaseToolbarBubblesDark() { checkReleaseToolbarBubbles(in: editorCaptureApplication(), theme: "dark") }
+    @MainActor func testReleaseToolbarZen() { checkReleaseToolbarZen(in: editorCaptureApplication(), theme: "light") }
+    @MainActor func testReleaseToolbarZenDark() { checkReleaseToolbarZen(in: editorCaptureApplication(), theme: "dark") }
     @MainActor func testVectorLayers() { checkVectorLayers(in: editorCaptureApplication(), theme: "light") }
     @MainActor func testVectorLayersDark() { checkVectorLayers(in: editorCaptureApplication(), theme: "dark") }
     @MainActor func testLiveInterfaceLanguage() { checkLiveInterfaceLanguage(in: editorCaptureApplication(), theme: "light") }
@@ -219,6 +225,7 @@ final class EditorLaunchTests: XCTestCase {
     }
 
     @MainActor func testDrawerDragAndDock() { checkDrawerDragAndDock(in: ignoringSavedWindows(editorTestApplication())) }
+    @MainActor func testDrawerDragAndDockDark() { checkDrawerDragAndDock(in: ignoringSavedWindows(editorTestApplication()), theme: "dark") }
 
     @MainActor func testToolbarStylesAndActions() { checkToolbarStylesAndActions(in: ignoringSavedWindows(editorTestApplication())) }
 
