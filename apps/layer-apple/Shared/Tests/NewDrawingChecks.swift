@@ -20,7 +20,6 @@ extension XCTestCase {
         #if os(macOS)
         field.typeKey(XCUIKeyboardKey.tab.rawValue, modifierFlags: [])
         #else
-        field.typeText("\n")
         dismissEditorKeyboard(in: app)
         #endif
     }
