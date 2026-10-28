@@ -42,7 +42,7 @@ extension XCTestCase {
         waitForExpectations(timeout: 60)
     }
     @MainActor func workspaceActivate(_ element: XCUIElement) {
-        XCTAssertTrue(element.waitForExistence(timeout: 10))
+        XCTAssertTrue(element.exists || element.waitForExistence(timeout: 10))
         if element.isHittable {
             #if os(macOS)
             if element.elementType == .button {

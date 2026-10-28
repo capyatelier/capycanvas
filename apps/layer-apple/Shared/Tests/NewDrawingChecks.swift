@@ -377,7 +377,8 @@ extension XCTestCase {
         XCTAssertTrue(importTile.waitForExistence(timeout: 10))
         XCTAssertEqual(importTile.label, "Import…")
         XCTAssertEqual(importTile.frame.size, noPaper.frame.size, "Import… is a tile like No paper")
-        revealEditorControl(importTile, in: app.scrollViews.containing(.button, identifier: importTile.identifier).firstMatch)
+        revealEditorControl(importTile, identifier: "new-drawing-paper-import", type: .button,
+            in: newDrawingElement("new-drawing-paper-drawer", in: app).scrollViews.firstMatch)
         XCTAssertEqual(newDrawingElement("new-drawing-papers", in: app).buttons.allElementsBoundByIndex.last?.identifier,
             importTile.identifier, "Import… follows the imported papers")
         attachEditor(in: app, name: "new-drawing-paper-import-" + theme)
