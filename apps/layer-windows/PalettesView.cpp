@@ -130,7 +130,7 @@ struct PalettesView:std::enable_shared_from_this<PalettesView>{
         if(!show){selector.Focus(FocusState::Programmatic);return;}
         filter();
         Control target=search;
-        if(!typing)for(auto child:list.Children())if(auto row=child.try_as<Button>();row&&unbox_value_or<bool>(row.Tag(),false))target=row;
+        if(!typing)for(auto child:list.Children())if(auto row=child.try_as<Button>();row&&flag(row.Tag().try_as<J>(),L"palette_active"))target=row;
         target.Focus(FocusState::Programmatic);
     }
     void filter(){
@@ -284,7 +284,7 @@ struct PalettesView:std::enable_shared_from_this<PalettesView>{
         t.node.ContextRequested([weak,id](auto&&,ContextRequestedEventArgs const& e){e.Handled(true);if(auto self=weak.lock();self&&!(self->drag&&self->drag->started)){
             auto s=self->swatch(id);self->menu(O({{L"kind",S(L"color")},{L"id",N(double(id))}}),self->tiles.at(id).node,s?str(*s,L"name"):L"");
         }});
-        PointerGesture::OwnHolding(t.node);t.node.ManipulationMode(ManipulationModes::None);
+        PointerGesture::OwnHolding(t.node);t.node.ManipulationMode(ManipulationModes::None);edgeTag(t.node,L"edge_contact",S(L"input"));
         t.node.AddHandler(UIElement::PointerPressedEvent(),box_value(PointerEventHandler([weak,id](winrt::Windows::Foundation::IInspectable const&,PointerRoutedEventArgs const& e){
             if(auto self=weak.lock())self->press(e,id);})),true);
         return t;
@@ -434,7 +434,7 @@ struct PalettesView:std::enable_shared_from_this<PalettesView>{
             StackPanel cells;cells.Orientation(Orientation::Horizontal);cells.CornerRadius({3,3,3,3});cells.VerticalAlignment(VerticalAlignment::Center);
             for(auto rgba:array(palette,L"preview")){Border cell;cell.Width(12);cell.Height(18);cell.Background(SolidColorBrush(rgbaColor(rgba.GetArray())));cells.Children().Append(cell);}
             Grid::SetColumn(cells,1);content.Children().Append(cells);row.Content(content);
-            bool active=flag(palette,L"active");row.Background(active?selectionBrush():clear());row.Tag(box_value(active));
+            bool active=flag(palette,L"active");row.Background(active?selectionBrush():clear());edgeTag(row,L"palette_active",B(active));
             AutomationProperties::SetName(row,title);AutomationProperties::SetItemStatus(row,active?data->caption(L"search",L"selected"):L"");AutomationProperties::SetAutomationId(row,L"palette-choice-"+to_hstring(id));
             tooltip(row,title);
             row.ContextRequested([weak,id,title](winrt::Windows::Foundation::IInspectable const& sender,ContextRequestedEventArgs const& e){e.Handled(true);
@@ -466,8 +466,7 @@ struct PalettesView:std::enable_shared_from_this<PalettesView>{
         auto nextHistory=array(v,L"history").Stringify();
         if(nextHistory!=historyKey){historyKey=nextHistory;historyTiles(history,historyCells,false);historyTiles(expanded,expandedCells,true);}
         if(nextChoices!=choicesKey){choicesKey=nextChoices;choices();}
-        if(selectorLabel.Text()!=str(v,L"name"))selectorLabel.Text(str(v,L"name"));
-        auto nextName=str(v,L"name");if(unbox_value_or<hstring>(selector.Tag(),L"\0")!=nextName){selector.Tag(box_value(nextName));tooltip(selector,data->caption(O({{L"type",S(L"choose_palette")},{L"name",S(nextName)}})));}AutomationProperties::SetName(selector,data->caption(L"palettes",L"choose"));
+        auto nextName=str(v,L"name");if(selectorLabel.Text()!=nextName){selectorLabel.Text(nextName);tooltip(selector,data->caption(O({{L"type",S(L"choose_palette")},{L"name",S(nextName)}})));}AutomationProperties::SetName(selector,data->caption(L"palettes",L"choose"));
         if(detail.Text()!=str(v,L"color_detail"))detail.Text(str(v,L"color_detail"));
         sync();arrange();
         auto status=files();auto generation=uint64_t(num(status,L"generation"));
@@ -512,7 +511,7 @@ struct PalettesView:std::enable_shared_from_this<PalettesView>{
         Grid searchRow;searchRow.ColumnSpacing(4);ColumnDefinition field;field.Width({1,GridUnitType::Star});searchRow.ColumnDefinitions().Append(field);
         auto slot=data->panelMetric(L"control_height"),entryHeight=data->controlHeight();
         ColumnDefinition square;square.Width({slot,GridUnitType::Pixel});searchRow.ColumnDefinitions().Append(square);
-        search.PlaceholderText(data->caption(L"palettes",L"find"));search.Height(entryHeight);search.MinHeight(entryHeight);search.Padding({6,2,6,2});search.Background(data->brush(L"input"));search.BorderThickness({0,0,0,0});
+        edgeTag(search,L"edge_contact",S(L"input"));search.PlaceholderText(data->caption(L"palettes",L"find"));search.Height(entryHeight);search.MinHeight(entryHeight);search.Padding({6,2,6,2});search.Background(data->brush(L"input"));search.BorderThickness({0,0,0,0});
         search.FontSize(data->textSize());AutomationProperties::SetName(search,data->caption(L"palettes",L"find"));AutomationProperties::SetAutomationId(search,L"palette-search");
         search.TextChanged([weak](auto&&,auto&&){if(auto self=weak.lock())self->filter();});searchRow.Children().Append(search);
         more=button(data,data->copyCaption(L"palettes",L"new_import"),[]{});more.Width(slot);more.Height(slot);more.Padding({0,0,0,0});more.Content(icon(L"plus",data->theme()));
@@ -539,7 +538,7 @@ struct PalettesView:std::enable_shared_from_this<PalettesView>{
         name=button(data,data->copyCaption(L"palettes",L"name"),[weak]{if(auto self=weak.lock())self->editName();});name.Height(entryHeight);name.MinHeight(entryHeight);name.Padding({6,0,6,0});
         name.HorizontalAlignment(HorizontalAlignment::Right);name.FontWeight(winrt::Windows::UI::Text::FontWeights::Normal());nameLabel=label(data,L"");nameLabel.TextTrimming(TextTrimming::CharacterEllipsis);name.Content(nameLabel);
         AutomationProperties::SetAutomationId(name,L"palette-name");info.Children().Append(name);
-        editor.MaxLength(64);editor.Height(entryHeight);editor.MinHeight(entryHeight);editor.Padding({6,2,6,2});editor.TextAlignment(TextAlignment::Right);editor.Background(data->brush(L"input"));editor.BorderThickness({0,0,0,0});
+        edgeTag(editor,L"edge_contact",S(L"input"));editor.MaxLength(64);editor.Height(entryHeight);editor.MinHeight(entryHeight);editor.Padding({6,2,6,2});editor.TextAlignment(TextAlignment::Right);editor.Background(data->brush(L"input"));editor.BorderThickness({0,0,0,0});
         editor.FontSize(data->textSize());editor.Visibility(Visibility::Collapsed);AutomationProperties::SetName(editor,data->caption(L"palettes",L"name"));AutomationProperties::SetAutomationId(editor,L"palette-name-editor");
         editor.KeyDown([weak](auto&&,KeyRoutedEventArgs const& e){if(composingKey(e))return;if(e.Key()==winrt::Windows::System::VirtualKey::Enter)if(auto self=weak.lock()){e.Handled(true);self->commitName();if(!self->editing)self->name.Focus(FocusState::Programmatic);}});
         editor.LostFocus([weak](auto&&,auto&&){if(auto self=weak.lock();self&&self->editing&&self->editor.Visibility()==Visibility::Visible)self->commitName();});

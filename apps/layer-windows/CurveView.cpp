@@ -120,7 +120,7 @@ struct CurveEditor : std::enable_shared_from_this<CurveEditor> {
     }
     void init(Bindings& bindings){
         auto data=this->data;auto weak=weak_from_this();root.Spacing(data->panelMetric(L"control_spacing"));
-        graph.Background(clear());graph.Children().Append(grid);graph.Children().Append(line);graph.Children().Append(dots);
+        graph.Background(clear());edgeTag(graph,L"edge_contact",S(L"input"));graph.Children().Append(grid);graph.Children().Append(line);graph.Children().Append(dots);
         grid.IsHitTestVisible(false);line.IsHitTestVisible(false);dots.IsHitTestVisible(false);
         graph.ManipulationMode(ManipulationModes::None);
         line.Stroke(data->brush(L"text"));line.StrokeThickness(1.5);

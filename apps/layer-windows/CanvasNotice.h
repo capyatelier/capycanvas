@@ -68,13 +68,13 @@ struct CanvasNotice:std::enable_shared_from_this<CanvasNotice>{
         auto offers=array(notice,L"actions");
         auto key=[](J const& offer){return str(offer,L"id")+(flag(offer,L"accent")?L":accent":L"");};
         bool rebuild=offers.Size()!=choices.size();
-        for(uint32_t i=0;!rebuild&&i<offers.Size();++i)rebuild=key(offers.GetObjectAt(i))!=unbox_value<hstring>(choices[i].Tag());
+        for(uint32_t i=0;!rebuild&&i<offers.Size();++i)rebuild=key(offers.GetObjectAt(i))!=str(choices[i].Tag().as<J>(),L"notice_offer");
         if(rebuild){
             actions.Children().Clear();choices.clear();auto weak=weak_from_this();
             for(auto value:offers){
                 auto offer=value.GetObject();auto token=str(offer,L"id");
                 auto choice=button(data,L"",[weak,token]{if(auto self=weak.lock())self->accept(token);});
-                auto caption=label(data,L"",true);caption.VerticalAlignment(VerticalAlignment::Center);choice.Content(caption);choice.Tag(box_value(key(offer)));
+                auto caption=label(data,L"",true);caption.VerticalAlignment(VerticalAlignment::Center);choice.Content(caption);edgeTag(choice,L"notice_offer",S(key(offer)));
                 choice.Height(data->controlHeight());choice.Padding({10,0,10,0});choice.CornerRadius(data->controlCorner());
                 choice.AllowFocusOnInteraction(false);
                 if(flag(offer,L"accent")){

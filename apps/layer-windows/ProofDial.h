@@ -58,7 +58,7 @@ struct ProofDial:std::enable_shared_from_this<ProofDial>{
         auto box=array(g,L"reset");reset.Width(box.GetNumberAt(2));reset.Height(box.GetNumberAt(3));Canvas::SetLeft(reset,box.GetNumberAt(0));Canvas::SetTop(reset,box.GetNumberAt(1));reset.Content(icon(L"reset",data->theme()));
     }
     void init(){
-        auto weak=weak_from_this();root.IsTabStop(true);root.MinWidth(128);root.MaxWidth(side);root.HorizontalAlignment(HorizontalAlignment::Stretch);
+        auto weak=weak_from_this();root.IsTabStop(true);edgeTag(root,L"edge_contact",S(L"input"));root.MinWidth(128);root.MaxWidth(side);root.HorizontalAlignment(HorizontalAlignment::Stretch);
         AutomationProperties::SetAutomationId(root,L"proof-dial");
         canvas.Width(side);canvas.Height(side);canvas.Background(clear());view.Child(canvas);view.Stretch(Stretch::Uniform);root.Content(view);
         // One shared immutable illustration; native bitmap storage is BGRA.

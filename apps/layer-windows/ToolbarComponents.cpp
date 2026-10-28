@@ -583,7 +583,7 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
         });
         numberView.LostFocus([weak](auto&&,auto&&){if(auto self=weak.lock())self->unwatchEdit();});
         AutomationProperties::SetAutomationId(row,L"toolbar-field-"+id);
-        Button face=button(data,title,[]{});face.Background(clear());face.ManipulationMode(ManipulationModes::None);
+        Button face=button(data,title,[]{});edgeTag(face,L"edge_contact",S(L"input"));face.Background(clear());face.ManipulationMode(ManipulationModes::None);
         face.HorizontalContentAlignment(HorizontalAlignment::Stretch);face.VerticalContentAlignment(VerticalAlignment::Stretch);
         AutomationProperties::SetAutomationId(face,L"toolbar-face-"+id);
         auto faceValue=label(data,L"");faceValue.FontWeight(winrt::Windows::UI::Text::FontWeights::Normal());

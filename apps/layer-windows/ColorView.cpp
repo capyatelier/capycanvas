@@ -265,7 +265,7 @@ struct View:std::enable_shared_from_this<View>{
     }
     void init(){
         auto weak=weak_from_this();
-        root.UseLayoutRounding(false);root.Background(clear());root.MinWidth(128);root.MinHeight(128);copyName(data,root,data->copyCaption(L"color",L"controls"));AutomationProperties::SetAutomationId(root,L"color-controls");AutomationProperties::SetItemStatus(root,data->caption(L"header",L"ready"));
+        root.UseLayoutRounding(false);root.Background(clear());edgeTag(root,L"edge_contact",S(L"input"));root.MinWidth(128);root.MinHeight(128);copyName(data,root,data->copyCaption(L"color",L"controls"));AutomationProperties::SetAutomationId(root,L"color-controls");AutomationProperties::SetItemStatus(root,data->caption(L"header",L"ready"));
         root.Children().Append(stage);stage.HorizontalAlignment(HorizontalAlignment::Center);stage.VerticalAlignment(VerticalAlignment::Center);
         AutomationProperties::SetAutomationId(stage,L"color-panel");copyName(data,stage,data->copyCaption(L"color",L"picker"));
         wheel.Background(clear());copyName(data,image,data->copyCaption(L"color",L"wheel"));

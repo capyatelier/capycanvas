@@ -71,7 +71,7 @@ struct NavigatorView::Impl : std::enable_shared_from_this<Impl> {
         AutomationProperties::SetName(root,data->caption(L"color",L"navigator_panel"));
         surround.Fill(data->brush(L"bg"));surround.IsHitTestVisible(false);
         root.Children().Append(surround);
-        overview.Background(clear());
+        overview.Background(clear());edgeTag(overview,L"edge_contact",S(L"input"));
         overview.HorizontalAlignment(HorizontalAlignment::Stretch);
         AutomationProperties::SetName(overview,data->caption(L"color",L"navigator_overview"));
         AutomationProperties::SetAutomationId(overview,L"navigator-overview");

@@ -18,6 +18,8 @@ public static class CapyBubbleFixtureNative {
  [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr window,out uint process);
  [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern int GetClassName(IntPtr window,StringBuilder name,int count);
  public static string WindowAt(int x,int y){var window=WindowFromPoint(new ScreenPoint{x=x,y=y});uint process;GetWindowThreadProcessId(window,out process);var name=new StringBuilder(256);GetClassName(window,name,name.Capacity);return "hwnd="+window.ToInt64().ToString("X")+";class="+name+";process="+process;}
+ [DllImport("layer_windows.dll",CallingConvention=CallingConvention.Cdecl)] static extern int capy_edge_reach([MarshalAs(UnmanagedType.LPUTF8Str)]string json);
+ public static int EdgeReach(string path,string json) {EnsureLibrary(path);return capy_edge_reach(json);}
  static IntPtr library;
  static void EnsureLibrary(string path) {
   if(library==IntPtr.Zero){library=LoadLibrary(path);if(library==IntPtr.Zero)throw new Win32Exception(Marshal.GetLastWin32Error());}

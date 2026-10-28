@@ -106,6 +106,10 @@ inline Windows::Foundation::Uri asset(std::wstring const& relative){
 inline Microsoft::UI::Xaml::Media::ImageSource bundledImage(std::wstring const& relative,std::function<void()> ready={}){
     return BitmapUpload::Bundled(assetPath(relative),std::move(ready));
 }
+inline void edgeTag(FrameworkElement const& element,wchar_t const* key,V const& value){
+    auto previous=element.Tag().try_as<J>();auto tag=previous?J::Parse(previous.Stringify()):J{};
+    tag.Insert(key,value);element.Tag(tag);
+}
 struct MouseScrollbars {
     struct Entry { weak_ref<DependencyObject> node; std::function<void(bool)> show; };
     std::vector<Entry> entries;
@@ -141,7 +145,7 @@ inline void observeScrollbarInput(FrameworkElement const& scroll){
     scroll.Loaded([attach](auto&&,auto&&){attach();});attach();
 }
 inline void mouseScrollbars(ScrollView const& scroll){
-    retainScrollIndicators(scroll);
+    retainScrollIndicators(scroll,[](auto const& bar){edgeTag(bar,L"edge_contact",S(L"input"));});
     observeScrollbarInput(scroll);
     auto horizontal=scroll.HorizontalScrollBarVisibility(),vertical=scroll.VerticalScrollBarVisibility();
     auto& mode=MouseScrollbars::current();auto weak=make_weak(scroll);
@@ -152,7 +156,7 @@ inline void mouseScrollbars(ScrollView const& scroll){
     mode.entries.push_back({make_weak(scroll.as<DependencyObject>()),show});show(mode.mouse);
 }
 inline void mouseScrollbars(ScrollViewer const& scroll){
-    retainScrollIndicators(scroll);
+    retainScrollIndicators(scroll,[](auto const& bar){edgeTag(bar,L"edge_contact",S(L"input"));});
     observeScrollbarInput(scroll);
     auto horizontal=scroll.HorizontalScrollBarVisibility(),vertical=scroll.VerticalScrollBarVisibility();
     auto& mode=MouseScrollbars::current();auto weak=make_weak(scroll);
@@ -185,10 +189,6 @@ inline std::optional<Microsoft::UI::Input::InputSystemCursorShape> resizeCursor(
         if(edge==L"top_right"||edge==L"bottom_left")return Shape::SizeNortheastSouthwest;
     }
     return {};
-}
-inline void edgeTag(FrameworkElement const& element,wchar_t const* key,V const& value){
-    auto previous=element.Tag().try_as<J>();auto tag=previous?J::Parse(previous.Stringify()):J{};
-    tag.Insert(key,value);element.Tag(tag);
 }
 inline void setIcon(Image const& result,hstring name,hstring theme,double size=16){
     std::wstring file=name.c_str();
@@ -429,7 +429,7 @@ inline TextBlock label(std::shared_ptr<WorkspaceData> const& data,hstring const&
     return result;
 }
 inline CheckBox compactCheck(std::shared_ptr<WorkspaceData> const& data,winrt::Windows::Foundation::IInspectable const& content){
-    CheckBox check;check.Content(content);check.MinWidth(0);check.MinHeight(data->controlHeight());
+    CheckBox check;edgeTag(check,L"edge_reset_contact",S(L"pickup"));check.Content(content);check.MinWidth(0);check.MinHeight(data->controlHeight());
     check.Padding({data->panelMetric(L"control_spacing"),0,0,0});check.VerticalContentAlignment(VerticalAlignment::Center);
     return check;
 }
@@ -464,7 +464,7 @@ inline void buttonColors(std::shared_ptr<WorkspaceData> const& data,T const& res
 }
 template<typename T=Button>
 inline T button(std::shared_ptr<WorkspaceData> const& data,hstring const& text,std::function<void()> action){
-    T result;result.Content(box_value(text));result.FontSize(data->textSize());
+    T result;edgeTag(result,L"edge_reset_contact",S(L"pickup"));result.Content(box_value(text));result.FontSize(data->textSize());
     inheritLanguage(result,data);result.FontFamily(FontFamily(L"Segoe UI"));result.Foreground(data->brush(L"text"));
     result.FontWeight(Windows::UI::Text::FontWeights::Bold());
     result.MinWidth(0);result.MinHeight(0);result.Padding(Thickness{0});

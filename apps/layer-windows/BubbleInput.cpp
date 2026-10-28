@@ -173,14 +173,19 @@ void WorkspaceBubbles::Impl::down(PointerRoutedEventArgs const& e){
     }
     Candidate value;value.pointer=e.Pointer();value.last=at;value.bounds=bounds;value.grab=sourceGrab;value.source=make_weak(element);value.epoch=epoch;
     for(auto node=e.OriginalSource().try_as<DependencyObject>();node;node=VisualTreeHelper::GetParent(node)){if(auto view=node.try_as<UIElement>())value.path.push_back(make_weak(view));if(node==inputRoot)break;}
-    value.identity=str(sourceGrab,L"kind")==L"variant"?object(tag,L"bubble_choice").Stringify():object(source(sourceGrab),L"resolved_control").Stringify();candidate=value;
+    value.identity=str(sourceGrab,L"kind")==L"variant"?object(tag,L"bubble_choice").Stringify():object(source(sourceGrab),L"resolved_control").Stringify();if(candidate)data->pointerCancels.Forget(candidate->pointer.PointerId(),this);candidate=value;
+    data->pointerCancels.Observe(p.PointerId(),this,[weak=weak_from_this(),id=p.PointerId()]{
+        if(auto self=weak.lock();self&&self->candidate&&self->candidate->pointer.PointerId()==id)self->cancel();
+    });
 }
 void WorkspaceBubbles::Impl::move(PointerRoutedEventArgs const& e){
     colorTouch(e,L"move",nullptr);
     auto p=e.GetCurrentPoint(workspace);auto at=p.Position();if(p.Properties().IsCanceled()){cancel();return;}
     if(candidate&&candidate->pointer.PointerId()==p.PointerId()){
         if(!current(*candidate)){cancel(true);return;}candidate->last=at;
+        if(!candidate->moving&&data->edgeHolding&&data->edgeHolding(p.PointerId()))return;
         if(!candidate->moving&&!contains(candidate->bounds,at)&&!data->popupCount&&!flag(data->chrome,L"dragging")){
+            data->pointerCancels.Forget(candidate->pointer.PointerId(),this);
             releasing=true;if(cancelSources)cancelSources();if(auto source=candidate->source.get())source.CancelDirectManipulations();bool captured=capture(candidate->pointer,candidate->path);releasing=false;
             if(!captured){cancel();return;}candidate->moving=true;drag(candidate->grab,L"down",at);
         }
@@ -223,6 +228,7 @@ void WorkspaceBubbles::Impl::up(PointerRoutedEventArgs const& e,bool cancelled){
     auto p=e.GetCurrentPoint(workspace);cancelled=cancelled||p.Properties().IsCanceled();
     colorTouch(e,cancelled?L"cancel":L"up",nullptr);
     if(candidate&&candidate->pointer.PointerId()==p.PointerId()){
+        data->pointerCancels.Forget(p.PointerId(),this);
         if(candidate->moving){drag(candidate->grab,cancelled?L"cancel":L"up",p.Position());e.Handled(true);}candidate.reset();
     }
     auto c=contact;if(!c||!c->fingers.contains(p.PointerId()))return;stop(c);c->last=p.Position();c->record->pressed=false;
@@ -240,6 +246,7 @@ void WorkspaceBubbles::Impl::up(PointerRoutedEventArgs const& e,bool cancelled){
 }
 bool WorkspaceBubbles::Impl::cancel(bool abandon){
     bool had=contact||candidate||menuOwner.Active();dismiss();auto c=std::exchange(contact,{});auto source=std::exchange(candidate,{});
+    if(source)data->pointerCancels.Forget(source->pointer.PointerId(),this);
     for(auto const& [id,record]:records){had|=record->pressed||record->hovered&&record->hovered.ValueType()!=JsonValueType::Null;record->pressed=false;record->hovered=nullptr;}
     hovering=false;
     if(c){releasing=true;data->pointerCancels.Cancel(c->pointer.PointerId());for(auto weak:c->path)if(auto element=weak.get();element&&PointerGesture::Captured(element,c->pointer.PointerId()))element.ReleasePointerCapture(c->pointer);releasing=false;}

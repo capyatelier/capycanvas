@@ -59,7 +59,7 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
     };
     std::optional<Edge> edge;
     uint64_t edgeSerial=0;
-    J lastEdge,lastEdgeReply,lastEdgeInput;
+    J lastEdge,lastEdgeReply,lastEdgeInput,lastEdgeContact;
     static hstring deviceName(NativeInput::PointerDeviceType type){
         return type==NativeInput::PointerDeviceType::Mouse?L"mouse":type==NativeInput::PointerDeviceType::Pen?L"pen":L"touch";
     }
@@ -107,6 +107,7 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
             {L"position",point(edge->at)},{L"input_mapped",B(edge->inputOffset.has_value())},
             {L"hold",B(edge->hold)},{L"claimed",B(edge->claimed)},{L"captured",B(PointerGesture::Captured(root,edge->pointer))}}));
         }
+        if(lastEdgeContact.Size())value.Insert(L"edge_contact",lastEdgeContact);
         if(lastEdge.Size())value.Insert(L"last_edge",lastEdge);
         if(lastEdgeReply.Size())value.Insert(L"edge_reply",lastEdgeReply);
         if(lastEdgeInput.Size())value.Insert(L"edge_input",lastEdgeInput);
@@ -176,32 +177,15 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
     static void releaseCaptures(std::vector<weak_ref<UIElement>> const& path,Input::Pointer const& contact){
         for(auto const& weak:path)if(auto element=weak.get();element&&PointerGesture::Captured(element,contact.PointerId()))element.ReleasePointerCapture(contact);
     }
-    static hstring swipeOwner(DependencyObject const& node,J const& tag,uint32_t id){
-        if(tag&&tag.HasKey(L"edge_contact"))return str(tag,L"edge_contact");
-        if(node.try_as<TextBox>()||node.try_as<RichEditBox>()||node.try_as<PasswordBox>()||node.try_as<Primitives::RangeBase>()||node.try_as<Primitives::Thumb>())return L"input";
-        auto element=node.try_as<UIElement>();if(!element)return {};
-        if(!scrollContent(node)&&element.ManipulationMode()==ManipulationModes::None)return L"input";
-        if(!node.try_as<Primitives::ButtonBase>()&&PointerGesture::Captured(element,id))return L"input";
-        if(auto scroll=node.try_as<ScrollView>();scroll&&scroll.ScrollableWidth()>0)return L"pickup";
-        if(auto scroll=node.try_as<ScrollViewer>();scroll&&scroll.ScrollableWidth()>0)return L"pickup";
-        return {};
-    }
-    hstring edgeContact(Windows::Foundation::IInspectable const& original,uint32_t id)const{
-        hstring swipes;
+    hstring edgeContact(Windows::Foundation::IInspectable const& original,bool reset=false)const{
+        hstring contactRole;
         for(auto node=original.try_as<DependencyObject>();node&&node!=root;node=VisualTreeHelper::GetParent(node)){
             J tag{nullptr};if(auto element=node.try_as<FrameworkElement>())tag=element.Tag().try_as<J>();
-            if(tag&&str(tag,L"edge_contact")==L"input")return L"input";
-            if(swipes.empty()){
-                swipes=swipeOwner(node,tag,id);
-                if(swipes==L"free"&&tag&&flag(tag,L"workspace_hold")){
-                    auto item=object(object(tag,L"workspace_action"),L"item");
-                    if(str(item,L"kind")==L"tile"){
-                        auto panel=find(array(data->model,L"panels"),L"id",str(item,L"panel"));
-                        if(flag(findId(array(panel,L"tiles"),num(item,L"tile")),L"tears_bubble"))swipes=L"input";
-                    }
-                }
-            }
-            if(tag&&flag(tag,L"edge_surface"))return swipes.empty()?hstring(L"free"):swipes;
+            if(!tag)continue;
+            auto role=str(tag,L"edge_contact");
+            if(role==L"input")return role;
+            if(contactRole.empty())contactRole=reset?str(tag,L"edge_reset_contact",role):role;
+            if(flag(tag,L"edge_surface"))return contactRole.empty()?hstring(L"free"):contactRole;
         }
         return {};
     }
@@ -317,9 +301,15 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
     }
     void edgeDown(PointerRoutedEventArgs const& e){
         auto p=e.GetCurrentPoint(root);
+        if(trace){
+            A path;for(auto node=e.OriginalSource().try_as<DependencyObject>();node&&node!=root;node=VisualTreeHelper::GetParent(node))if(auto element=node.try_as<FrameworkElement>()){
+                auto tag=element.Tag().try_as<J>();path.Append(O({{L"id",S(AutomationProperties::GetAutomationId(element))},{L"type",S(get_class_name(element))},{L"role",S(tag?str(tag,L"edge_contact"):hstring{})},{L"reset",S(tag?str(tag,L"edge_reset_contact"):hstring{})},{L"captured",B(PointerGesture::Captured(element,p.PointerId()))}}));
+            }
+            lastEdgeContact=O({{L"pointer",N(p.PointerId())},{L"position",point(p.Position())},{L"contact",S(edgeContact(e.OriginalSource()))},{L"primary",B(PointerGesture::PrimaryContact(p))},{L"previous_claimed",B(edge&&edge->claimed)},{L"path",path}});evidence();
+        }
         if(edge&&edge->pointer==p.PointerId())edgeEnd(L"cancel");
         if(!data->edges||!PointerGesture::PrimaryContact(p))return;
-        auto swipes=edgeContact(e.OriginalSource(),p.PointerId());
+        auto swipes=edgeContact(e.OriginalSource());
         Edge next;next.pointer=p.PointerId();next.contact=e.Pointer();next.device=deviceName(p.PointerDeviceType());next.contactClass=swipes.empty()?hstring(L"input"):swipes;
         next.at=p.Position();next.time=p.Timestamp()*1000;
         if(edge){
@@ -371,9 +361,7 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
     }
     void edgeDoublePress(DoubleTappedRoutedEventArgs const& e){
         if(!data->input||data->externalPopup||data->popupCount)return;
-        auto swipes=edgeContact(e.OriginalSource(),0);if(swipes.empty())return;
-        if(swipes==L"free")for(auto node=e.OriginalSource().try_as<DependencyObject>();node&&node!=root;node=VisualTreeHelper::GetParent(node))
-            if(node.try_as<Primitives::ButtonBase>()){swipes=L"pickup";break;}
+        auto swipes=edgeContact(e.OriginalSource(),true);if(swipes.empty())return;
         auto at=e.GetPosition(root);
         auto request=O({{L"layout",object(data->model,L"layout")},{L"position",point(at)},
             {L"kind",S(deviceName(e.PointerDeviceType()))},{L"contact",S(swipes)},{L"reset",B(true)}});

@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "BubblePresentation.h"
+#include "NativeJson.h"
 #include "ToolView.h"
 #include "Checker.h"
 #include "SwatchFace.h"
@@ -158,7 +159,9 @@ void WorkspaceBubbles::Impl::frame(){
     if(disposed||!workspace.IsLoaded()){frames.revoke();return;}if(busy)return;
     if(!active){frames.revoke();return;}
     auto now=milliseconds();auto reduced=!winrt::Windows::UI::ViewManagement::UISettings().AnimationsEnabled();auto ticket=owners,wake=wakes;busy=true;
-    if(!QueryWorkspace(data->query,O({{L"type",S(L"bubble_motion")},{L"now_ns",N(now*1e6)},{L"reduced",B(reduced)}}),[weak=weak_from_this(),ticket,wake,now,reduced](J reply){if(auto self=weak.lock()){
+    auto request=JsonUnsignedFields(to_string(O({{L"type",S(L"bubble_motion")},{L"reduced",B(reduced)}}).Stringify()),
+        {{"now_ns",uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now().time_since_epoch()).count())}});
+    if(!QueryWorkspace(data->query,std::move(request),[weak=weak_from_this(),ticket,wake,now,reduced](J reply){if(auto self=weak.lock()){
         self->busy=false;if(self->disposed)return;auto motion=object(reply,L"result");if(ticket==self->owners&&motion.Size())self->step(motion,now,reduced,wake);
     }}))busy=false;
 }

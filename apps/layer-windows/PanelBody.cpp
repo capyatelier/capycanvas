@@ -48,6 +48,7 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
                 auto attach=[&](FrameworkElement const& element){
                     tileElements.emplace(uint32_t(id),element);tileOrder.push_back(uint32_t(id));
                     if(gestures)gestures->Source(element,O({{L"type",S(L"tile_drag")},{L"item",item}}),item,false,{},WorkspaceGestures::Pickup::Hold);
+                    edgeTag(element,L"edge_contact",S(flag(tile,L"tears_bubble")?L"input":L"free"));
                 };
                 if(object(tile,L"component").Size()){
                     auto component=std::make_shared<ToolbarComponent>(data,panel,tile,tileGeometry,gestures);
@@ -113,9 +114,11 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
                     bindings.emplace_back([data=data,text,panelId,id]{auto current=findId(array(find(array(data->model,L"panels"),L"id",panelId),L"tiles"),id);text.Text(str(current,L"label"));text.Margin({0,0,flag(current,L"has_variants")?16.:4.,0});});
                     pick.HorizontalContentAlignment(HorizontalAlignment::Stretch);pick.Content(content);
                 }
-                bindings.emplace_back([data=data,pick,tileContent,variants,panelId,id,picker,tileIcon,tileIconName,radius]{
+                bindings.emplace_back([data=data,pick,slot,tileContent,variants,panelId,id,picker,tileIcon,tileIconName,radius]{
                     auto currentPanel=find(array(data->model,L"panels"),L"id",panelId);
                     auto current=findId(array(currentPanel,L"tiles"),id);
+                    auto role=flag(current,L"tears_bubble")?L"input":L"free";
+                    if(str(slot.Tag().as<J>(),L"edge_contact")!=role)edgeTag(slot,L"edge_contact",S(role));
                     if(auto name=str(current,L"icon",L"brush");name!=*tileIconName){
                         *tileIconName=name;tileIcon.Source(icon(name,data->theme()).Source());
                     }

@@ -159,7 +159,7 @@ struct PanelConfiguration::Impl:std::enable_shared_from_this<Impl>{
         for(auto value:array(panel,L"controls")){
             auto spec=value.GetObject();auto kind=str(spec,L"control");
             StackPanel section;section.Spacing(6);
-            CheckBox visible;visible.Content(box_value(str(spec,L"label")));visible.FontSize(data->textSize());
+            CheckBox visible;edgeTag(visible,L"edge_reset_contact",S(L"pickup"));visible.Content(box_value(str(spec,L"label")));visible.FontSize(data->textSize());
             visible.Foreground(data->brush(L"text"));visible.MinHeight(28);
             AutomationProperties::SetAutomationId(visible,L"configure-show-"+kind);
             auto weak=weak_from_this();auto selection=make_weak(visible);

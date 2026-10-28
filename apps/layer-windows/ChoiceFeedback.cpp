@@ -66,6 +66,7 @@ void CapyUi::choiceColors(std::shared_ptr<WorkspaceData> const& data,ComboBox co
     control.Background(drawing?data->tint(L"text",18):data->brush(L"input"));control.Foreground(data->brush(L"text"));
     control.BorderThickness({0});control.CornerRadius(data->controlCorner());
     auto key=box_value(L"CapyChoiceFeedback");if(control.Resources().HasKey(key))return;
+    edgeTag(control,L"edge_reset_contact",S(L"pickup"));
     control.Resources().Insert(key,box_value(true));auto state=std::make_shared<ChoiceState>();state->init(control);
 }
 void CapyUi::dialogButtonColors(std::shared_ptr<WorkspaceData> const& data,ContentDialog const& dialog){

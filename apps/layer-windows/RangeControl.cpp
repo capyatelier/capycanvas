@@ -42,7 +42,7 @@ void RangeControl::init(bool showTrack){
         control.Width(valueWidth(data,spec));control.VerticalAlignment(VerticalAlignment::Center);
         Grid::SetColumn(control,i?2:0);root.Children().Append(control);
     }
-    track.Height(28);track.MinWidth(64);track.Background(clear());track.ManipulationMode(ManipulationModes::None);
+    edgeTag(track,L"edge_contact",S(L"input"));track.Height(28);track.MinWidth(64);track.Background(clear());track.ManipulationMode(ManipulationModes::None);
     track.Visibility(showTrack?Visibility::Visible:Visibility::Collapsed);
     AutomationProperties::SetAutomationId(track,prefix+L"-range-track");AutomationProperties::SetName(track,label);
     for(auto part:{trough,fill}){part.Height(4);Canvas::SetTop(part,12);part.IsHitTestVisible(false);track.Children().Append(part);}

@@ -1,9 +1,10 @@
-﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('mouse','pen','touch')][string]$Device='mouse',[switch]$ColumnResetOnly,[switch]$CanvasResetOnly,[switch]$ClosedStripOnly,[switch]$LayerRowOnly,[switch]$CancelOnly,[switch]$EdgeEscapeOnly,[switch]$NumericOnly,[switch]$SweepOnly,[ValidateSet('photo','photo-open','photo-collapsed','paint')][string[]]$SweepScenarios=@('photo','photo-open','photo-collapsed','paint'),[ValidateSet('dark','light')][string]$Theme)
+﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('mouse','pen','touch')][string]$Device='mouse',[switch]$ColumnResetOnly,[switch]$CanvasResetOnly,[switch]$ClosedStripOnly,[switch]$LayerRowOnly,[switch]$CancelOnly,[switch]$EdgeEscapeOnly,[switch]$NumericOnly,[switch]$ControlRoleOnly,[switch]$SweepOnly,[ValidateSet('photo','photo-open','photo-collapsed','paint')][string[]]$SweepScenarios=@('photo','photo-open','photo-collapsed','paint'),[ValidateSet('dark','light')][string]$Theme)
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 $CapyPopups=$true
 Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
 Add-Type -AssemblyName System.Windows.Forms
+if($ControlRoleOnly){Add-Type -Path (Join-Path $PSScriptRoot 'BubbleFixtureNative.cs')}
 $repo=(Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
 $Executable=(Resolve-Path -LiteralPath $Executable).Path
 $directory=Split-Path -Parent $Executable
@@ -208,6 +209,116 @@ function Check-ReachSweep([string]$Theme){
     $rows|Export-Csv -NoTypeInformation -Path (Join-Path $run ("sweep-$Theme.csv"))
     [pscustomobject]@{theme=$Theme;device=$Device;scenarios=$SweepScenarios;samples=$rows.Count;admitted=@($rows|Where-Object admitted).Count;claimed=@($rows|Where-Object claimed).Count;lost=@($rows|Where-Object lost).Count;evidence=$run}|ConvertTo-Json
 }
+function Check-ToolSetPickup([string]$Theme,$Edge){
+    $group=@((Layout).groups|Where-Object {!$_.floating -and $_.active -eq 'brushes'})
+    if($group.Count -ne 1){throw 'SETUP: expected one active docked Brushes group'}
+    $group=$group[0]
+    $selected=$null;$subtools=@((Model).state.tool_set.subtools)
+    for($i=0;$i -lt $subtools.Count;$i++){if($subtools[$i].selected){$selected=Find ('tool-subtool-'+$i);break}}
+    if(!$selected -or $selected.Current.IsOffscreen){throw 'SETUP: no arranged selected ToolSet subtool is available'}
+    $sourceId=$selected.Current.AutomationId
+    $origin=Screen 0 0;$density=[CapyRowPointer]::GetDpiForWindow($window)/96.
+    $bounds=$selected.Current.BoundingRectangle
+    $point=@{x=($Edge.bounds.x-20);y=(($bounds.Y+$bounds.Height*.5-$origin.y)/$density)}
+    $screen=Screen $point.x $point.y
+    if(!$bounds.Contains([double]$screen.x,[double]$screen.y)){throw 'SETUP: selected ToolSet row has no native point in the column reach'}
+    $workspace=(Model).state.workspace.layout|ConvertTo-Json -Depth 90 -Compress
+    $baselineIds=@((Model).bubbles|ForEach-Object {$_.view.id});$bubbleKey=($baselineIds|Sort-Object) -join ','
+    $selection={ $s=(Model).state;@{brush=$s.brush;tool_set=$s.tool_set}|ConvertTo-Json -Depth 70 -Compress }
+    $selectedBefore=& $selection;$width=Width $group.id
+    $record=@{theme=$Theme;device=$Device;source=$sourceId;initial_width=$width;horizontal_point=$point}
+    $probe={param($at)
+        Separate-MouseContact
+        $screen=Screen $at.x $at.y
+        if($Device -eq 'mouse'){[CapyRowPointer]::Hover($screen.x,$screen.y)}
+        [CapyRowPointer]::Down($Device,$screen.x,$screen.y)
+        $ack=@{}
+        Wait-Until {$g=Gesture;$c=$g.edge_contact;$ack.gesture=$g;$c -and $c.primary -and [Math]::Abs($c.position[0]-$at.x) -le 1 -and [Math]::Abs($c.position[1]-$at.y) -le 1} 'ToolSet Down was not acknowledged at its actual point'
+        $ack.gesture
+    }
+    try{
+        $horizontal=& $probe $point;$record.horizontal=$horizontal
+        if($horizontal.edge_contact.contact -ne 'pickup' -or $horizontal.edge){throw 'ToolSet Pickup must reserve horizontal column swipes'}
+        [CapyRowPointer]::Cancel();Settled
+        $horizontalBubbles=(@((Model).bubbles|ForEach-Object {$_.view.id})|Sort-Object) -join ','
+        if($horizontalBubbles -cne $bubbleKey -or ((Model).state.workspace.layout|ConvertTo-Json -Depth 90 -Compress) -cne $workspace -or (& $selection) -cne $selectedBefore){throw 'Horizontal ToolSet contact changed workspace or selection'}
+        $gap=@((Layout).dividers|Where-Object {$_.axis -eq 'vertical' -and !$_.band -and !$_.fixed -and [Math]::Abs($_.bounds.x-$group.bounds.x) -lt 1 -and [Math]::Abs($_.bounds.y-$group.bounds.y-$group.bounds.height) -lt 1})|Select-Object -First 1
+        if(!$gap){throw 'SETUP: Brushes group has no resizable bottom divider'}
+        $gapId=$gap.id
+        $setupFrom=@{x=($gap.bounds.x+$gap.bounds.width*.65);y=($gap.bounds.y+$gap.bounds.height*.5)}
+        $targetY=($bounds.Bottom-$origin.y)/$density+4
+        if($targetY -ge $gap.bounds.y-20){throw 'SETUP: selected ToolSet row leaves no room to shrink the Brushes group'}
+        Separate-MouseContact
+        Swipe $setupFrom @{x=$setupFrom.x;y=$targetY}
+        Wait-Until {$g=Gesture;!$g.edge -and $g.phase -eq 'idle'} 'ToolSet setup retained its resize contact'
+        $record.setup_terminal=Gesture
+        if([Math]::Abs((Divider $gapId).bounds.y-$targetY) -gt 4){throw 'SETUP: the native divider handle did not arrange the selected row at its foot'}
+        $postSetup=(Model).state.workspace.layout|ConvertTo-Json -Depth 90 -Compress
+        $gap=Divider $gapId;$group=(Layout).groups|Where-Object id -eq $group.id|Select-Object -First 1
+        $bounds=(Control $sourceId -Arranged).Current.BoundingRectangle
+        $point=@{x=($group.bounds.x+$group.bounds.width*.65);y=($gap.bounds.y-12)}
+        $screen=Screen $point.x $point.y
+        $viewport=Native-Bounds ('panel-body-scroll-'+$group.id) $density
+        if(!$bounds.Contains([double]$screen.x,[double]$screen.y) -or !$viewport.Contains([double]$screen.x,[double]$screen.y)){throw 'SETUP: vertical pickup probe is not inside the visible selected ToolSet row and body viewport'}
+        $vertical=& $probe $point;$record.vertical=$vertical
+        if(!$vertical.edge -or !$vertical.edge.vertical -or $vertical.edge.contact -ne 'pickup' -or $vertical.edge_contact.contact -ne 'pickup'){throw 'ToolSet row did not admit a vertical Pickup edge'}
+        [CapyRowPointer]::Cancel();Settled
+        if(((Model).state.workspace.layout|ConvertTo-Json -Depth 90 -Compress) -cne $postSetup){throw 'Vertical ToolSet probe changed workspace'}
+        $gapY=$gap.bounds.y
+        Separate-MouseContact
+        Swipe $point @{x=$point.x;y=($gapY+60)} -During {
+            Wait-Until {$g=Gesture;$g.edge.claimed -and $g.edge.vertical} 'ToolSet vertical edge did not claim'
+            $record.claimed=Gesture
+            if(((@((Model).bubbles|ForEach-Object {$_.view.id})|Sort-Object) -join ',') -cne $bubbleKey){throw 'Vertical edge handoff created a ToolSet bubble'}
+        }
+        $terminal=Gesture;$record.edge_terminal=$terminal;$record.moved_gap=Divider $gapId
+        if(!$terminal.last_edge.claimed -or !$terminal.last_edge.vertical -or $terminal.last_edge.contact -ne 'pickup' -or (Divider $gapId).bounds.y -le $gapY+20){throw 'ToolSet Pickup did not finish a claimed vertical resize'}
+        $bubbleNow=(@((Model).bubbles|ForEach-Object {$_.view.id})|Sort-Object) -join ','
+        if((Width $group.id) -ne $width -or $bubbleNow -cne $bubbleKey -or (& $selection) -cne $selectedBefore){throw 'Vertical ToolSet handoff changed width, bubbles or selection'}
+        WindowCommand 'undo_workspace';Settled
+        if(((Model).state.workspace.layout|ConvertTo-Json -Depth 90 -Compress) -cne $postSetup){throw 'ToolSet handoff Undo did not restore exact post-setup workspace'}
+        WindowCommand 'undo_workspace';Settled
+        if(((Model).state.workspace.layout|ConvertTo-Json -Depth 90 -Compress) -cne $workspace){throw 'ToolSet setup Undo did not restore exact original workspace'}
+        $bounds=(Control $sourceId -Arranged).Current.BoundingRectangle
+        $center=@{x=($bounds.X+$bounds.Width*.5-$origin.x)/$density;y=($bounds.Y+$bounds.Height*.5-$origin.y)/$density}
+        $centerScreen=Screen $center.x $center.y
+        if(!$bounds.Contains([double]$centerScreen.x,[double]$centerScreen.y)){throw 'SETUP: fresh ToolSet center is outside its native row'}
+        Separate-MouseContact
+        $centerGesture=& $probe $center;$record.center_contact=$centerGesture
+        if($centerGesture.edge -or $centerGesture.edge_contact.contact -ne 'pickup'){throw 'SETUP: ToolSet row center is not a Pickup outside edge reach'}
+        [CapyRowPointer]::Cancel();Settled
+        Separate-MouseContact
+        $camera=(Model).state.camera;$scale=$camera.viewport[0]/(Layout).viewport[0]
+        $area=@($camera.work_area|ForEach-Object {$_/$scale})
+        if($area.Count -ne 4 -or $area[2] -lt 100 -or $area[3] -lt 100){throw 'SETUP: canvas work area is unavailable for ToolSet tear-out'}
+        $destination=@{x=($area[0]+$area[2]*.5);y=($area[1]+$area[3]*.5)}
+        $record.fresh_from=$center;$record.fresh_to=$destination
+        $record.fresh_input_from=Input-Trace $centerScreen.x $centerScreen.y
+        $destinationScreen=Screen $destination.x $destination.y
+        $record.fresh_input_to=Input-Trace $destinationScreen.x $destinationScreen.y
+        $record.fresh_before=Gesture
+        Swipe $center $destination
+        $record.fresh_after=Gesture
+        Wait-Until {@((Model).bubbles|Where-Object {$_.view.id -notin $baselineIds}).Count -eq 1} 'Fresh ToolSet pickup did not create exactly one new bubble after edge handoff'
+        $packets=@((Model).bubbles);$added=@($packets|Where-Object {$_.view.id -notin $baselineIds})
+        if($packets.Count -ne $baselineIds.Count+1 -or $added.Count -ne 1){throw 'Fresh ToolSet pickup replaced or duplicated existing bubbles'}
+        $id=$added[0].view.id;$record.bubble=$id
+        $desk=Find 'tool-bubble-desk'
+        $record.native_desk=if($desk){@{help=$desk.Current.HelpText;status=$desk.Current.ItemStatus;bounds=$desk.Current.BoundingRectangle;offscreen=$desk.Current.IsOffscreen}}else{$null}
+        $record.full_model=Model
+        $record|ConvertTo-Json -Depth 95|Set-Content (Join-Path $run ('toolset-packet-model-'+$Theme+'.json'))
+        Capture ('toolset-packet-'+$Theme) -Composed
+        $face=if($added[0].view.card){'bubble-card-'+$id}else{'tool-bubble-'+$id};$null=Control $face -Arranged
+        if((& $selection) -cne $selectedBefore){throw 'Fresh ToolSet tear-out changed brush selection'}
+        WindowCommand 'undo_workspace';Settled
+        Wait-Until {((@((Model).bubbles|ForEach-Object {$_.view.id})|Sort-Object) -join ',') -ceq $bubbleKey} 'ToolSet tear-out Undo retained an extra bubble'
+        if(((Model).state.workspace.layout|ConvertTo-Json -Depth 90 -Compress) -cne $workspace){throw 'ToolSet tear-out Undo did not restore the exact original workspace'}
+        $record.passed=$true
+    }finally{
+        $record|ConvertTo-Json -Depth 95|Set-Content (Join-Path $run ('toolset-pickup-'+$Theme+'.json'))
+        if([CapyRowPointer]::Active){[CapyRowPointer]::Cancel()}
+    }
+}
 function Check-ColumnEdge([string]$Theme){
     $layout=Layout
     $edge=$layout.dividers|Where-Object {$_.axis -eq 'horizontal' -and $_.owner_side -eq 'left' -and !$_.fixed}|Sort-Object {$_.bounds.x}|Select-Object -Last 1
@@ -216,16 +327,7 @@ function Check-ColumnEdge([string]$Theme){
     $group=$layout.groups|Where-Object {!$_.floating -and [Math]::Abs($_.bounds.x+$_.bounds.width-$edge.bounds.x) -lt 1}|Sort-Object {$_.bounds.height}|Select-Object -Last 1
     if(!$group){throw 'No docked group meets the left column edge'}
     $column=@($layout.groups|Where-Object {!$_.floating -and [Math]::Abs($_.bounds.x+$_.bounds.width-$edge.bounds.x) -lt 1})
-    $subtools=@((Model).state.tool_set.subtools);$selected=$null
-    for($i=0;$i -lt $subtools.Count;$i++){if($subtools[$i].selected){$selected=Find ('tool-subtool-'+$i);break}}
-    $origin=Screen 0 0;$density=[CapyRowPointer]::GetDpiForWindow($window)/96.
-    if(!$selected -or $selected.Current.IsOffscreen){throw 'SETUP: no arranged selected ToolSet subtool is available for the column-reach probe'}
-    $bounds=$selected.Current.BoundingRectangle
-    $selectedPoint=@{x=$edge.bounds.x-20;y=($bounds.Y+$bounds.Height*.5-$origin.y)/$density};$selectedScreen=Screen $selectedPoint.x $selectedPoint.y
-    if(!$bounds.Contains([double]$selectedScreen.x,[double]$selectedScreen.y)){throw 'SETUP: the selected ToolSet subtool has no native point within the column reach'}
-    $contact=Contact $selectedPoint
-    @{id=$selected.Current.AutomationId;name=$selected.Current.Name;bounds=@($bounds.X,$bounds.Y,$bounds.Width,$bounds.Height);point=$selectedPoint;screen=$selectedScreen;edge=$contact}|ConvertTo-Json -Depth 8|Set-Content (Join-Path $run ('selected-subtool-edge-'+$Theme+'.json'))
-    if($contact){throw 'The selected immediate-bubble ToolSet subtool yielded its contact to column resizing'}
+    Check-ToolSetPickup $Theme $edge
     $inside={param($id)$x=(Divider $id).bounds.x-20;Reach-Point @(foreach($g in $column){for($y=$g.bounds.y+$g.bounds.height-24;$y -gt $g.bounds.y+48;$y-=24){@{x=$x;y=$y}}}) {param($edge)$edge.contact -eq 'free'}}
     $from=& $inside $edge.id
     Check-EdgeEscape $from
@@ -277,6 +379,71 @@ function Check-NumericEdge([string]$Theme){
             if(((Model).state.workspace.layout|ConvertTo-Json -Depth 90 -Compress) -cne $before){throw 'Numeric contact cancellation changed the workspace'}
         }finally{if([CapyRowPointer]::Active){[CapyRowPointer]::Cancel()}}
     }
+}
+function Check-ControlRoles([string]$Theme){
+    Use-PaintWorkspace;Settled
+    if(!@((Layout).groups|Where-Object active -eq 'navigator').Count){
+        $icon=(Control 'column-icon-navigator' -Arranged).Current.BoundingRectangle
+        [CapyRowPointer]::RightClick([int]($icon.Left+$icon.Width/2),[int]($icon.Top+$icon.Height/2))
+        Invoke 'Expand column' -Name;Settled
+    }
+    $records=[Collections.Generic.List[object]]::new()
+    foreach($case in @(@{id='color-wheel';panel='color'},@{id='navigator-overview';panel='navigator'})){
+        $before=(Model).state.workspace.layout|ConvertTo-Json -Depth 90 -Compress
+        $group=@((Layout).groups|Where-Object active -eq $case.panel)[0]
+        if(!$group){throw "Missing role fixture group $($case.panel)"}
+        $initial=Width $group.id
+        $divider=@((Layout).dividers|Where-Object {
+            $_.axis -eq 'horizontal' -and !$_.fixed -and
+            (($_.owner_side -eq 'left' -and [Math]::Abs($_.bounds.x-$group.bounds.x-$group.bounds.width) -lt .6) -or
+             ($_.owner_side -eq 'right' -and [Math]::Abs($_.bounds.x+$_.bounds.width-$group.bounds.x) -lt .6))
+        })|Select-Object -First 1
+        if(!$divider){throw "Role fixture has no owned divider beside $($case.id)"}
+        $direction=if($divider.owner_side -eq 'left'){1}else{-1}
+        $from=@{x=$divider.bounds.x+$divider.bounds.width/2;y=$group.bounds.y+$group.bounds.height/2}
+        Swipe $from @{x=$from.x+64*$direction;y=$from.y}
+        Wait-Until {!(Gesture).edge} 'Role fixture setup swipe retained its workspace edge'
+        $grown=Width $group.id
+        if($grown -le $initial+20){throw 'Role fixture did not establish a nondefault column width'}
+        $baseline=(Model).state.workspace.layout|ConvertTo-Json -Depth 90 -Compress
+        $bounds=(Control $case.id -Arranged).Current.BoundingRectangle
+        $origin=Screen 0 0;$density=[CapyRowPointer]::GetDpiForWindow($window)/96.
+        $at=$null
+        foreach($x in @(($bounds.Left+3),($bounds.Right-3))){
+            $point=@{x=[int]$x;y=[int]($bounds.Top+$bounds.Height/2)}
+            $logical=@((($point.x-$origin.x)/$density),(($point.y-$origin.y)/$density))
+            $query=@{layout=Layout;position=$logical;kind=$Device;contact='free';reset=$true}|ConvertTo-Json -Depth 90 -Compress
+            if([CapyBubbleFixtureNative]::EdgeReach((Join-Path $directory 'layer_windows.dll'),$query)){$at=$point;break}
+        }
+        if(!$at){throw "Role fixture $($case.id) has no arranged point in a shared column reset reach"}
+        $record=@{id=$case.id;device=$Device;theme=$Theme;point=$at;bounds=$bounds;initial_width=$initial;grown_width=$grown}
+        $record.input_before=Input-Trace $at.x $at.y
+        $record.gesture_before=Gesture
+        $logicalAt=@((($at.x-$origin.x)/$density),(($at.y-$origin.y)/$density))
+        try{
+            [CapyRowPointer]::Down($Device,$at.x,$at.y)
+            $ack=@{}
+            Wait-Until {$g=Gesture;$ack.gesture=$g;$record.down=$g;$contact=$g.edge_contact;$contact -and $contact.primary -and [Math]::Abs($contact.position[0]-$logicalAt[0]) -le 1 -and [Math]::Abs($contact.position[1]-$logicalAt[1]) -le 1} 'Role fixture control Down was not acknowledged at its actual point'
+            $record.down=$ack.gesture
+            for($step=1;$step -le 6;$step++){[CapyRowPointer]::Move([int]($at.x+36*$direction*$density*$step/6),$at.y);Start-Sleep -Milliseconds 20}
+            $record.swipe=Gesture
+            if((Gesture).edge -or ((Model).state.workspace.layout|ConvertTo-Json -Depth 90 -Compress) -cne $baseline){throw "$($case.id) yielded its swipe to a workspace edge"}
+            [CapyRowPointer]::Cancel();Settled
+            [void][CapyRowPointer]::DoubleClick($Device,$at.x,$at.y);Settled
+            $record.after=Gesture;$record.width=Width $group.id
+            if((Width $group.id) -ne $grown -or ((Model).state.workspace.layout|ConvertTo-Json -Depth 90 -Compress) -cne $baseline){throw "$($case.id) double press reset a workspace column"}
+            WindowCommand 'undo_workspace';Settled
+            if(((Model).state.workspace.layout|ConvertTo-Json -Depth 90 -Compress) -cne $before){throw 'Role fixture workspace Undo did not restore exact setup'}
+            $record.passed=$true
+        }finally{
+            $records.Add($record);$records|ConvertTo-Json -Depth 95|Set-Content (Join-Path $run ('control-roles-'+$Theme+'.json'))
+            if([CapyRowPointer]::Active){[CapyRowPointer]::Cancel()}
+        }
+    }
+    $layout=Layout
+    $edge=$layout.dividers|Where-Object {$_.axis -eq 'horizontal' -and $_.owner_side -eq 'left' -and !$_.fixed}|Sort-Object {$_.bounds.x}|Select-Object -Last 1
+    if(!$edge){throw 'ToolSet role setup has no left-column resize edge'}
+    Check-ToolSetPickup $Theme $edge
 }
 function Check-ColumnHandleReset([string]$Theme){
     Use-PaintWorkspace;Settled
@@ -527,7 +694,7 @@ try {
         if($SweepOnly){Check-ReachSweep $theme;continue}
         Start-Review $theme
         Settled
-        if($NumericOnly){Check-NumericEdge $theme}elseif($EdgeEscapeOnly){Check-ColumnEdge $theme}elseif($CancelOnly){Check-NativeEdgeCancel $theme}elseif($LayerRowOnly){Check-LayerRowEdge $theme}elseif($ClosedStripOnly){Check-ClosedStrip $theme}elseif($CanvasResetOnly){Check-CanvasReset $theme}elseif($ColumnResetOnly){Check-ColumnHandleReset $theme}else{
+        if($ControlRoleOnly){Check-ControlRoles $theme}elseif($NumericOnly){Check-NumericEdge $theme}elseif($EdgeEscapeOnly){Check-ColumnEdge $theme}elseif($CancelOnly){Check-NativeEdgeCancel $theme}elseif($LayerRowOnly){Check-LayerRowEdge $theme}elseif($ClosedStripOnly){Check-ClosedStrip $theme}elseif($CanvasResetOnly){Check-CanvasReset $theme}elseif($ColumnResetOnly){Check-ColumnHandleReset $theme}else{
             Check-ColumnEdge $theme
             Check-GroupGap $theme
             Check-ClosedStrip $theme
@@ -539,6 +706,7 @@ try {
         [CapyRowPointer]::Dispose()
     }
     if($SweepOnly){[pscustomobject]@{device=$Device;themes=($themes -join ',');reach_sweep='passed';evidence=$run}|ConvertTo-Json}
+    elseif($ControlRoleOnly){[pscustomobject]@{device=$Device;themes=($themes -join ',');control_edge_roles='passed';evidence=$run;scope='Native Color/Navigator edge reservation and ToolSet pickup edge handoff followed by fresh tear-out and exact workspace Undo'}|ConvertTo-Json}
     elseif($NumericOnly){[pscustomobject]@{device=$Device;themes=($themes -join ',');numeric_edge_reservation='passed';evidence=$run;scope='Native NumberControl caption, readout, slider and component gap only'}|ConvertTo-Json}
     elseif($EdgeEscapeOnly){[pscustomobject]@{device=$Device;themes=($themes -join ',');edge_escape='passed';evidence=$run;scope='Pending and claimed edge Escape only'}|ConvertTo-Json}
     elseif($CancelOnly){[pscustomobject]@{device=$Device;themes=($themes -join ',');native_edge_cancel='passed';evidence=$run;scope='Pending and claimed native edge cancellation only'}|ConvertTo-Json}
