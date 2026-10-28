@@ -266,7 +266,7 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 | GTK Tool Set hover and press animation | 60 | Unmeasured on reference hardware; the short desktop GTK diagnostic does not qualify this tier | [GTK tool caption hover](top-tier.md#gtk-tool-caption-hover), 2026-10-26 |
 | Panel or column resize | 60 | **Pre-existing gap; unqualified.** Android gap: original 27.79 presented fps / 26.07 fresh bounds/s; retained port 53.64–58.47 presented fps / 41.71–42.97 fresh bounds/s. Web: original 8.43–8.63 bounds updates/s; SVG 21.40–23.42 geometry updates/s alongside 21.11–23.14 total Chrome presents/s GTK compact Tool Set and expanding divider revisions remain unmeasured on this tier. | [Native column bridges](#native-column-bridges); [Web SVG column bridges](#web-svg-column-bridges); [GTK Tool Set density](top-tier.md#gtk-tool-set-density), [GTK toolbar dividers](top-tier.md#gtk-toolbar-divider-resize), 2026-10-26 |
 | Pen pressure utility and curve drag | 60 | Unmeasured on reference hardware | [Pen pressure measurement protocol](../ui/pen-pressure.md#validation); GTK desktop measurements do not qualify this tier |
-| Android tool bubble drag through four neighbours | 60 | **Met.** Native capture recheck: 59.507–59.850 actual app-window presents/s; p99 16.917–16.978 ms, default glass, 12 MP photo at Fit | [Native tool bubbles](#native-tool-bubbles), 2026-10-27 |
+| Android tool bubble drag through four neighbours | 60 | **Met.** Cached native shadows: 59.677–60.023 actual app-window presents/s; p99 16.864–17.009 ms, factory display settings, default glass, 12 MP photo at Fit | [Native tool bubbles](#native-tool-bubbles), 2026-10-28 |
 | Web tool bubble drag through four neighbours | 60 | Unmeasured after the bubble release fixes; desktop browser journeys do not qualify the TCL reference tablet | [Web checks](../development/web.md#tests), 2026-10-24 |
 | Windows tool bubble drag through four neighbours | 60 | Unmeasured on reference hardware; Surface Pro / Adreno X1-85 functional checks do not qualify timing (PresentMon ETW access denied) | [Windows tool bubbles](../development/windows.md#tool-bubbles) |
 | Windows HDR color bubble drag and intensity scrub | 60 | Unmeasured on reference hardware; native input and pixel checks do not qualify presentation timing (PresentMon ETW access denied) | [Windows tool bubbles](../development/windows.md#tool-bubbles) |
@@ -288,6 +288,31 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 
 ## Native tool bubbles
 
+The factory-settings comparison measured 2026-10-28 uses the TCL reference
+with its physical 1200 × 1920 display, density 320 and font scale 1. The target
+4248 × 2832 photo has one empty paint layer above it at Fit, with default glass.
+Release Rust and unminified, nondebuggable benchmark APKs run under the same
+private application ID. One six-second contact warms the native five-bubble
+path, followed by three measured six-second contacts. All four neighbors
+visibly move. SurfaceFlinger actual app-window presents exclude 100 ms at each
+contact edge; refresh is 60 Hz and thermal status stays at 0.
+
+| Build | Actual presents/s, three contacts | p99 interval, ms | Result |
+| --- | --- | --- | --- |
+| Control `0ff9b5fc3`, APK `7c6741c7` | 59.506 / 59.850 / 59.850 | 16.973615 / 16.770846 / 16.938461 | Met |
+| Cached native shadows, APK `3a7bf7d7` | 59.677 / 60.023 / 60.020 | 16.864000 / 17.008923 / 17.006077 | Met |
+
+Both pass the unchanged 57 presents/s floor and 33.3 ms p99 limit. The candidate
+uses `fe47fa222` plus the Android shadow cache; it retains the same shadow
+contours and gradients. The collector now records and checks factory display
+settings and applies the actual rate and p99 limits with `--target-hz`.
+Source/APK hashes, matched raw presentations, contact windows and settings are
+in `artifacts/remaining-bubble-failures-20261028/`.
+
+The native capture and edge comparisons below are diagnostic. Their saved
+display dumps show a density override of 272 rather than the physical 320.
+They were reclassified on 2026-10-28 and do not qualify tier performance.
+
 The native capture recheck measured 2026-10-27 uses the same reference TCL,
 4248 × 2832 photo, empty paint layer, Fit view and default glass. Both builds
 use release Rust and unminified benchmark APKs under a private application ID.
@@ -298,10 +323,10 @@ refresh remains 60 Hz and thermal status remains 0.
 
 | Build | Actual presents/s, three contacts | p99 interval, ms | Result |
 | --- | --- | --- | --- |
-| Baseline `cb7b5b35a` plus renderer lint edits, APK `7bc941ea` | 59.679 / 59.849 / 60.022 | 16.954154 / 16.780846 / 16.908923 | Met |
-| Startup guard and native capture fix, APK `060b1d33` | 59.507 / 59.850 / 59.850 | 16.977846 / 16.948923 / 16.916538 | Met |
+| Baseline `cb7b5b35a` plus renderer lint edits, APK `7bc941ea` | 59.679 / 59.849 / 60.022 | 16.954154 / 16.780846 / 16.908923 | Diagnostic |
+| Startup guard and native capture fix, APK `060b1d33` | 59.507 / 59.850 / 59.850 | 16.977846 / 16.948923 / 16.916538 | Diagnostic |
 
-Both builds meet the 57 presents/s floor and 33.3 ms gap limit. The candidate
+At the overridden density, both builds clear the rate and gap limits. The candidate
 uses `43f581594` plus the Android native-card capture change. Frozen APK/test
 hashes, the baseline renderer patch and candidate production patch, contact
 windows and actual presents are retained in
@@ -320,10 +345,10 @@ window presents and excludes 100 ms at each contact edge. Display refresh is
 
 | Build | Actual presents/s, three contacts | p99 interval, ms | Result |
 | --- | --- | --- | --- |
-| `origin/main` `a4068913f`, APK `bfdb8897` | 59.679 / 59.850 / 59.845 | 16.960308 / 16.952231 / 17.015692 | Met |
-| Edge dismissal, APK `8821464e` | 59.505 / 60.023 / 60.023 | 16.829308 / 16.821231 / 16.916539 | Met |
+| `origin/main` `a4068913f`, APK `bfdb8897` | 59.679 / 59.850 / 59.845 | 16.960308 / 16.952231 / 17.015692 | Diagnostic |
+| Edge dismissal, APK `8821464e` | 59.505 / 60.023 / 60.023 | 16.829308 / 16.821231 / 16.916539 | Diagnostic |
 
-Both meet the 57 presents/s floor and 33.3 ms gap limit. Raw contact windows,
+Both clear the rate and gap limits at the overridden density. Raw contact windows,
 presentation timestamps, thermal records and APK hashes are retained in
 `artifacts/bubble-edge/android-low-baseline/`,
 `artifacts/bubble-edge/android-low-candidate/` and the adjacent provenance files.

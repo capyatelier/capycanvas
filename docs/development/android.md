@@ -335,7 +335,11 @@ lets its `--adaptive-script` helper enable 90 Hz after private fixture setup.
   the tier photo in an F16 drawing with the color bubble; the latter sweeps the
   EV arc. `--workload palette-opening` repeats palette-bead taps
   (`--palette-transitions 1`–`10`) and reports no sustained-motion rate.
-  `--report-only` rebuilds a report from captured data.
+  The collector requires factory display size and density and font scale 1.
+  `--target-hz 60`, `90` or `120` also checks actual motion rate and p99 gaps
+  against the tier limits, retaining the report and raw data on failure.
+  `--report-only` rebuilds a report from captured data; missing recorded factory
+  settings make it diagnostic.
 - **Workspace motion.** `AndroidWorkspacePerformanceTest` runs with
   `-e workspaceBenchmark true`: `#colorPanelOverlapFrameTiming`,
   `#colorWheelFrameTiming`, `#editColorWheelFrameTiming` (the Edit Color

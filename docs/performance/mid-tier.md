@@ -286,7 +286,7 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 | Drawing between 16 photo layers, G-Pen 1024 px (17 visible layers) | 90 | **Not met.** BUILD32: 74.733–75.449 fresh updates/s; fresh gap p99 18.465–18.871 ms, Linear | [Current middle-layer comparison](#drawing-in-the-middle-of-sixteen-photo-layers); measured comparison bounds pass, 90/s remains missed |
 | Panel, tab, column or toolbar drag and docking | 90 | **Not met.** Floating panel-group drag frame p50/p95 13.4/15.5 ms; continuous-tab revisions unqualified on this reference device; GTK GPU joins and revised chrome handoff are unmeasured | `cbfad9e5`, 2026-09-26; [Web collector limits](#web-navigator-resize-diagnostic), 2026-10-19; [panel-tab compositing](top-tier.md#panel-tab-compositing) and [GTK column bridge diagnostic](top-tier.md#gtk-column-bridge-diagnostic), 2026-10-25 |
 | Android palette pill opening at the work-area edge | 90 | **FPS unqualified.** Instant clamp/short transition; 3–4 actual presents per opening, all neighbors stationary in the diagnostic | [Native palette opening](#native-palette-opening), 2026-10-23 |
-| Android tool bubble drag through four neighbours | 90 | **Not met.** Native capture recheck: 86.815–89.063 actual app-window presents/s; p99 up to 22.331693 ms exceeds 22.2 ms. Matched baseline also misses the gap limit; default glass, 24 MP photo at Fit | [Native tool bubbles](#native-tool-bubbles), 2026-10-28 |
+| Android tool bubble drag through four neighbours | 90 | **Met.** Cached native shadows: 88.717–89.236 actual app-window presents/s; p99 11.249–11.322 ms, factory display settings, default glass, 24 MP photo at Fit | [Native tool bubbles](#native-tool-bubbles), 2026-10-28 |
 | Web tool bubble drag through four neighbours | 90 | **Unqualified after the bubble release fixes.** Previous parity build missed the target: 60.01–74.59 actual presents/s, p99 33.497–33.525 ms, default Low glass, 24 MP photo at Fit | [Tool bubbles](#web-tool-bubbles), 2026-10-24 |
 | GTK Tool Set hover and press animation | 90 | Unmeasured on reference hardware; the short desktop GTK diagnostic does not qualify this tier | [GTK tool caption hover](top-tier.md#gtk-tool-caption-hover), 2026-10-26 |
 | Panel or column resize | 90 | Android shared vectors and Web SVG projection are unmeasured on this reference tier. GTK compact Tool Set and expanding divider revisions unmeasured on reference hardware. Current Web candidate and GTK GPU column joins unmeasured on reference hardware. Web baseline diagnostic: 18.64–18.72 changing bounds/s, RAF gap p99 67.1–83.8 ms; presented FPS unqualified. Blank-canvas Debug divider diagnostic: 27.22–44.74 changing bounds/s, window-vsync p99 33.50–83.78 ms | [Web Navigator resize](#web-navigator-resize-diagnostic), 2026-10-19; [Divider resize diagnostic](#divider-resize-diagnostic), 2026-10-10; [GTK Color resize](top-tier.md#gtk-color-panel-resize), 2026-10-04; [GTK column bridge diagnostic](top-tier.md#gtk-column-bridge-diagnostic), 2026-10-25; [GTK Tool Set density](top-tier.md#gtk-tool-set-density), 2026-10-26; [GTK toolbar dividers](top-tier.md#gtk-toolbar-divider-resize), 2026-10-26 |
@@ -367,6 +367,42 @@ both-theme bounds/screenshots are in `artifacts/bubbles/android-palette-growth/`
 
 ## Native tool bubbles
 
+The factory-settings comparison measured 2026-10-28 uses the MovinkPad 11
+with its physical 1440 × 2200 display, density 240 and font scale 1. The
+6000 × 4000 target photo has one empty paint layer above it at Fit, with
+default glass. Release Rust and unminified, nondebuggable benchmark APKs run
+under the same private application ID. One six-second native contact warms
+the five-bubble path, followed by three measured six-second contacts. All four
+neighbors visibly move. SurfaceFlinger actual app-window presents exclude
+100 ms at each contact edge. The exact private Adaptive row enables 90 Hz at
+the ready/go barrier. Thermal status stays at 0.
+
+| Build | Actual presents/s, three contacts | p99 interval, ms | Result |
+| --- | --- | --- | --- |
+| Control `0ff9b5fc3`, APK `7c6741c7` | 89.236 / 86.123 / 86.642 | 11.249154 / 22.358231 / 22.328846 | Not met |
+| Cached native shadows, APK `3a7bf7d7` | 89.236 / 88.717 / 89.066 | 11.248923 / 11.321539 / 11.268615 | Met |
+
+The candidate passes the unchanged 85.5 presents/s floor and 22.2 ms p99 limit
+in every contact. The panel's actual single-refresh interval is about 11.163 ms;
+two-refresh gaps remain above 22.2 ms and are not rounded down. Their frequency
+falls from 0.39% / 4.02% / 3.39% in the control to 0.39% / 0.97% / 0.58%.
+FrameMetrics command-issue p99 falls from 8.529 / 12.766 / 13.402 ms to
+7.182 / 7.331 / 8.381 ms. CPU sampling and Perfetto identify HWUI draw-command
+replay and flushing as the affected work; those diagnostics do not qualify FPS.
+The candidate records the existing clipped shadow contours in a retained
+native layer, preserving their gradients while avoiding repeated path replay.
+It uses `fe47fa222` plus the Android shadow cache.
+
+The collector records and checks factory display settings and applies the actual
+rate and p99 limits with `--target-hz`; report-only data without setting evidence
+is marked diagnostic. Source/APK hashes, matched raw presentations, contact
+windows, settings and profiling evidence are in
+`artifacts/remaining-bubble-failures-20261028/`.
+
+The native capture and edge comparisons below are diagnostic. Their saved
+display dumps show a density override of 280 rather than the physical 240.
+They were reclassified on 2026-10-28 and do not qualify tier performance.
+
 The native capture comparison measured 2026-10-27–28 uses the 6000 × 4000 tier
 photo, one empty paint layer, Fit view and default glass on the MovinkPad 11.
 Both builds use release Rust and unminified benchmark APKs under a private
@@ -378,11 +414,11 @@ is restored to Off after capture. Thermal status remains 0 throughout.
 
 | Build | Actual presents/s, three contacts | p99 interval, ms | Result |
 | --- | --- | --- | --- |
-| Baseline `cb7b5b35a` plus renderer lint edits, APK `7bc941ea` | 88.891 / 86.302 / 87.160 | 11.330461 / 22.332923 / 22.332231 | Not met |
-| Startup guard and native capture fix, APK `060b1d33` | 89.063 / 86.815 / 86.820 | 11.276384 / 22.329923 / 22.331693 | Not met |
+| Baseline `cb7b5b35a` plus renderer lint edits, APK `7bc941ea` | 88.891 / 86.302 / 87.160 | 11.330461 / 22.332923 / 22.332231 | Diagnostic |
+| Startup guard and native capture fix, APK `060b1d33` | 89.063 / 86.815 / 86.820 | 11.276384 / 22.329923 / 22.331693 | Diagnostic |
 
-Every contact clears the 85.5 presents/s floor. Both builds retain the existing
-22.2 ms gap miss in two contacts; the candidate's maximum gap is no larger than
+Every contact clears the 85.5 presents/s floor. At the overridden density, both builds exceed the
+22.2 ms gap limit in two contacts; the candidate's maximum gap is no larger than
 the control's. The candidate uses `43f581594` plus the Android native-card
 capture change. Frozen APK/test hashes, source patches, thermal records,
 contact windows and actual presents are retained in
@@ -401,13 +437,13 @@ capture. Thermal status remains 0 throughout.
 
 | Build, alternating groups | Actual presents/s, three contacts | p99 interval, ms | Result |
 | --- | --- | --- | --- |
-| `origin/main` `a4068913f`, APK `bfdb8897` | 85.950 / 89.236 / 89.237 | 22.334230 / 11.311692 / 11.308231 | Not met |
-| Edge dismissal, APK `8821464e` | 86.820 / 86.296 / 88.719 | 22.331077 / 22.332615 / 11.290461 | Not met |
-| Same baseline, repeat | 88.546 / 88.716 / 86.647 | 22.172385 / 11.478462 / 22.331770 | Not met |
-| Same candidate, repeat | 88.717 / 86.475 / 85.604 | 11.319462 / 22.333538 / 22.347692 | Not met |
+| `origin/main` `a4068913f`, APK `bfdb8897` | 85.950 / 89.236 / 89.237 | 22.334230 / 11.311692 / 11.308231 | Diagnostic |
+| Edge dismissal, APK `8821464e` | 86.820 / 86.296 / 88.719 | 22.331077 / 22.332615 / 11.290461 | Diagnostic |
+| Same baseline, repeat | 88.546 / 88.716 / 86.647 | 22.172385 / 11.478462 / 22.331770 | Diagnostic |
+| Same candidate, repeat | 88.717 / 86.475 / 85.604 | 11.319462 / 22.333538 / 22.347692 | Diagnostic |
 
-Every contact clears the 85.5 presents/s floor. Both builds retain the
-pre-existing gap miss; their rate ranges overlap, with lower candidate medians
+Every contact clears the 85.5 presents/s floor. At the overridden density, both builds exceed the
+gap limit; their rate ranges overlap, with lower candidate medians
 in these groups. Raw contact windows, actual presentation timestamps, thermal
 records, Adaptive restoration and APK hashes are retained in
 `artifacts/bubble-edge/android-mid-baseline/`,

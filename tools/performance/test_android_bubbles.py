@@ -104,6 +104,34 @@ class BubblePresentsTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "overrides"):
                 bubbles.report(directory)
 
+    def test_tier_gate_rejects_real_double_vsync_gaps_at_a_passing_rate(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            contacts, _ = self.write_motion_fixture(directory)
+            times = []
+            for contact in contacts:
+                contact["display_hz"] = 89.58
+                timestamp = contact["begin_ns"]
+                for index in range(520):
+                    times.append(timestamp)
+                    timestamp += 22_333_000 if index % 26 == 0 else 11_163_000
+            directory.joinpath("result.json").write_text(json.dumps(dict(contacts=contacts)))
+            capture = dict(surface="owned", samples=[dict(text="11163000\n" + "\n".join(f"1 {timestamp} 3" for timestamp in times))])
+            directory.joinpath("surface-latency.json").write_text(json.dumps(capture))
+            directory.joinpath("instrumentation.log").write_text("OK (1 test)")
+            settings = dict(size="Physical size: 1440x2200", density="Physical density: 240", font_scale="1")
+            for stage in ["before", "after"]:
+                directory.joinpath(f"display-settings-{stage}.json").write_text(json.dumps(settings))
+            result = bubbles.report(directory, 90)
+            self.assertFalse(result["target_met"])
+            self.assertTrue(all(contact["presented_hz"] > 85.5 for contact in result["contacts"]))
+            self.assertTrue(all(contact["gap_p99_ms"] == 22.333 for contact in result["contacts"]))
+            self.assertEqual(result["target"]["maximum_gap_p99_ms"], 22.2)
+            result = bubbles.report(directory, 60)
+            self.assertTrue(result["target_met"])
+            directory.joinpath("display-settings-after.json").unlink()
+            self.assertFalse(bubbles.report(directory, 60)["target_met"])
+
     def test_hdr_intensity_requires_visible_values_instead_of_neighbor_motion(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)

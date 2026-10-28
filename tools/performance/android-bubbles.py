@@ -63,7 +63,7 @@ def summarize(times):
                 gap_p50_ms=quantile(.5), gap_p95_ms=quantile(.95), gap_p99_ms=quantile(.99))
 
 
-def report(directory):
+def report(directory, target_hz=None):
     fixture = json.loads((directory / "result.json").read_text())
     capture = json.loads((directory / "surface-latency.json").read_text())
     settings_stages = []
@@ -127,6 +127,13 @@ def report(directory):
     result = dict(measurement="SurfaceFlinger app-window actual presents; MONOTONIC clock", instrumentation_passed=passed,
                   qualification=qualification,
                   surface=capture["surface"], refresh_period_ns=sorted({period for period, _ in parsed}), contacts=contacts)
+    if target_hz is not None:
+        floor, gap = target_hz * .95, round(2000 / target_hz, 1)
+        result["target"] = dict(hz=target_hz, minimum_presented_hz=floor, maximum_gap_p99_ms=gap)
+        result["target_met"] = bool(settings_verified and passed and all(
+            contact.get("display_hz", 0) >= floor
+            and contact["presented_hz"] >= (floor if contact["display_hz"] <= target_hz * 1.05 else target_hz)
+            and contact["gap_p99_ms"] <= gap for contact in contacts))
     (directory / "presents.json").write_text(json.dumps(result, indent=2) + "\n")
     return result
 
@@ -168,13 +175,18 @@ def main():
     parser.add_argument("--width", type=int)
     parser.add_argument("--height", type=int)
     parser.add_argument("--duration-ms", type=int, default=6000)
-    parser.add_argument("--target-hz", type=float, help="Require this reference display rate before measured contacts")
+    parser.add_argument("--target-hz", type=float, choices=[60, 90, 120], help="Require the reference refresh rate, actual motion rate and p99 gap limit")
     parser.add_argument("--palette-transitions", type=int, choices=range(1, 11), default=3, help="Short diagnostic only; do not calculate FPS")
     parser.add_argument("--workload", choices=["drag", "palette-opening", "hdr-drag", "hdr-intensity"], default="drag")
     parser.add_argument("--repeats", type=int, default=3)
     args = parser.parse_args()
+    def finish_report():
+        result = report(args.output, args.target_hz)
+        print(json.dumps(result, indent=2))
+        if result.get("target_met") is False:
+            raise RuntimeError("Bubble motion misses the tier qualification; raw data and presents.json retained")
     if args.report_only:
-        print(json.dumps(report(args.output), indent=2)); return
+        finish_report(); return
     if not os.environ.get("CAPY_ANDROID_SERIAL") or args.package != os.environ.get("CAPY_APPLICATION_ID"):
         parser.error("Run through devices.py run with the worktree's own application ID")
     if not args.photo or not args.width or not args.height or not 5200 <= args.duration_ms <= 10000 or args.repeats < 3:
@@ -269,7 +281,7 @@ def main():
         raise RuntimeError("Instrumentation failed; see instrumentation.log; raw surface samples retained")
     for name in ["fixture.json", "result.json"]:
         command("pull", f"{remote}/{name}", str(args.output / name))
-    print(json.dumps(report(args.output), indent=2))
+    finish_report()
 
 
 if __name__ == "__main__":

@@ -359,26 +359,34 @@ private class BubbleColorShape(private val diameter: Float, private val bounds: 
     }
 }
 
-private fun Modifier.bubbleShadow(shape: Shape, radius: Float, squircle: Boolean, lifted: Boolean, bead: Boolean, strength: Float) = drawWithCache {
-    val reach = (if (bead) 3f else if (lifted) 12f else 8f) * density
-    val drop = (if (bead) 1f else if (lifted) 4.5f else 2f) * density
-    val opacity = (if (bead) .13f else if (lifted) .16f else .08f) / strength
-    val inner = Path().apply { addOutline(shape.createOutline(size, layoutDirection, this@drawWithCache)) }
-    val steps = ceil(reach * 2).toInt().coerceAtLeast(1)
-    val outlines = (steps downTo 1).map { index ->
-        val distance = index * reach / steps
-        val expanded = Size(size.width + distance * 2, size.height + distance * 2)
-        val expandedShape = if (shape is BubbleColorShape) shape.expanded(distance / density) else if (squircle) SquircleShape((radius + distance / density).dp) else RoundedCornerShape((radius + distance / density).dp)
-        Triple(distance, Path().apply { addOutline(expandedShape.createOutline(expanded, layoutDirection, this@drawWithCache)) }, opacity * (1f - distance / reach).pow(2))
-    }
-    onDrawBehind {
-        clipPath(inner, ClipOp.Difference) {
-            var previous = 0f
-            for ((distance, path, strength) in outlines) {
-                translate(-distance, drop - distance) { drawPath(path, Color.Black.copy(alpha = (strength - previous) / (1f - previous))) }
-                previous = strength
+@Composable private fun Modifier.bubbleShadow(shape: Shape, radius: Float, squircle: Boolean, lifted: Boolean, bead: Boolean, strength: Float): Modifier {
+    val texture = rememberGraphicsLayer()
+    return drawWithCache {
+        val reach = (if (bead) 3f else if (lifted) 12f else 8f) * density
+        val drop = (if (bead) 1f else if (lifted) 4.5f else 2f) * density
+        val opacity = (if (bead) .13f else if (lifted) .16f else .08f) / strength
+        val inner = Path().apply { addOutline(shape.createOutline(size, layoutDirection, this@drawWithCache)) }
+        val steps = ceil(reach * 2).toInt().coerceAtLeast(1)
+        val outlines = (steps downTo 1).map { index ->
+            val distance = index * reach / steps
+            val expanded = Size(size.width + distance * 2, size.height + distance * 2)
+            val expandedShape = if (shape is BubbleColorShape) shape.expanded(distance / density) else if (squircle) SquircleShape((radius + distance / density).dp) else RoundedCornerShape((radius + distance / density).dp)
+            Triple(distance, Path().apply { addOutline(expandedShape.createOutline(expanded, layoutDirection, this@drawWithCache)) }, opacity * (1f - distance / reach).pow(2))
+        }
+        val margin = ceil(reach + drop)
+        texture.compositingStrategy = androidx.compose.ui.graphics.layer.CompositingStrategy.Offscreen
+        texture.record(size = IntSize(ceil(size.width + margin * 2).toInt(), ceil(size.height + margin * 2).toInt())) {
+            translate(margin, margin) {
+                clipPath(inner, ClipOp.Difference) {
+                    var previous = 0f
+                    for ((distance, path, strength) in outlines) {
+                        translate(-distance, drop - distance) { drawPath(path, Color.Black.copy(alpha = (strength - previous) / (1f - previous))) }
+                        previous = strength
+                    }
+                }
             }
         }
+        onDrawBehind { translate(-margin, -margin) { drawLayer(texture) } }
     }
 }
 
