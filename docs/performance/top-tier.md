@@ -4701,6 +4701,28 @@ establish a sustained before/after comparison or qualify reference hardware.
 and [the failed trial log](../../artifacts/tab-gap-candidate/motion/trial-1-test.log)
 identify the measured build and retained failure.
 
+## GTK tab drops
+
+Measured 2026-10-27 on RTX PRO 6000 Blackwell Max-Q, NVIDIA 615.71.09,
+bundled GTK 4.24.1 and Mutter 50.5, at 1600 × 1000, scale 1 and 120 Hz.
+Release baseline `8cf0a0412` and its tab-retention patch use the fixed workspace
+and blank startup drawing. Each input/theme supplies one 2.2-second gesture.
+Baseline/final executable SHA-256 prefixes are `01d2a3853d31` / `a512965ffa85`.
+
+| Theme/input | Baseline presents/s | Retained tabs presents/s | Baseline / retained gap p99, ms |
+| --- | ---: | ---: | ---: |
+| Dark mouse | 120.007 | 120.006 | 8.836 / 9.095 |
+| Dark touch | 120.004 | 120.007 | 8.481 / 8.572 |
+| Light mouse | 120.007 | 119.573 | 8.547 / 9.058 |
+| Light touch | 119.568 | 119.859 | 8.899 / 9.434 |
+
+All contacts pass the 114 Hz and native-input gates, with zero UI model
+refreshes and canvas frames during motion. These short desktop measurements
+preserve the existing frame-rate gate; they do not qualify the reference tier,
+tier photo or sustained-motion target.
+[Metrics, commands and provenance](../../artifacts/gtk-tab-drop.local/verification-summary.json)
+retain the baseline regression and corrected fixture failures too.
+
 ## Panel-tab compositing
 
 The Android, Apple, Web and Windows continuous-tab backgrounds based on

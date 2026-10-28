@@ -10785,6 +10785,11 @@ fn native_tab_slide_input() {
             bounds.y() + bounds.height() * 0.5,
         ];
         let before_hits = w.tab_hits();
+        let retained = {
+            let groups = w.groups.borrow();
+            let view = groups.iter().find(|view| view.id == group).unwrap();
+            (view.root.clone(), view.stack.clone(), view.tab_strip.clone(), view.tabs.clone())
+        };
         input.perform(serde_json::json!([{ "point": start }, { "down": true },
             { "point": [start[0] + 2., start[1]] }]));
         let selected = state(&w).workspace;
@@ -10940,14 +10945,83 @@ fn native_tab_slide_input() {
                 state(&w).workspace.layout.group_panels(group).unwrap()[0],
                 panel
             );
+            let check_retained = || {
+                let groups = w.groups.borrow();
+                let view = groups.iter().find(|view| view.id == group).unwrap();
+                assert_eq!(view.root, retained.0, "tab reorder retains the panel group");
+                assert_eq!(view.stack, retained.1, "tab reorder retains its content stack");
+                assert_eq!(view.tab_strip, retained.2, "tab reorder retains its strip");
+                for (panel, button) in &retained.3 {
+                    assert_eq!(&view.tabs.iter().find(|(p, _)| p == panel).unwrap().1, button,
+                        "tab reorder retains {panel:?}'s native control");
+                }
+                assert!(view.tabs.iter().map(|(panel, _)| *panel).eq(
+                    state(&w).workspace.layout.group_panels(group).unwrap().iter().copied()));
+                let mut child = view.tab_strip.first_child();
+                for (_, button) in &view.tabs {
+                    while child.as_ref().is_some_and(|widget| !widget.is::<gtk::Button>()) {
+                        child = child.unwrap().next_sibling();
+                    }
+                    assert_eq!(child.as_ref(), Some(button.upcast_ref()), "native tab order follows the model");
+                    child = child.unwrap().next_sibling();
+                }
+            };
+            check_retained();
             w.dispatch(UiAction::Invoke {
                 command: CommandId::UndoWorkspace,
             });
+            pump(150);
+            check_retained();
+            w.dispatch(UiAction::Invoke { command: CommandId::RedoWorkspace });
+            pump(150);
+            check_retained();
+            w.dispatch(UiAction::Invoke { command: CommandId::UndoWorkspace });
         }
         assert_eq!(
             serde_json::to_value(state(&w).workspace).unwrap(),
             serde_json::to_value(&selected).unwrap()
         );
+    }
+    for drawer in [false, true] {
+        for device in ["mouse", "touch"] {
+            w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(original.clone()) });
+            let group = original.layout.panel_group(Panel::Adjustments).unwrap();
+            let viewport = [w.surface.width() as f32, w.surface.height() as f32];
+            if drawer {
+                w.dispatch(UiAction::DoubleClickPanelHandle { group, viewport });
+                enable_individual_column_panels(&w, group);
+                w.dispatch(UiAction::Customize { action: CustomizationAction::ToggleColumnDrawer {
+                    group, panel: Panel::Layers,
+                }});
+            } else {
+                w.dispatch(UiAction::MoveGroup { group, target: DockTarget::Float { position: [500., 220.] }, viewport });
+            }
+            pump(350);
+            let tab = if drawer {
+                find_named(w.surface.upcast_ref(), "column-drawer-tab-Adjustments").unwrap()
+            } else {
+                w.groups.borrow().iter().find(|view| view.id == group).unwrap().tabs.iter()
+                    .find(|(panel, _)| *panel == Panel::Adjustments).unwrap().1.clone().upcast()
+            };
+            let unmapped = Rc::new(Cell::new(0));
+            tab.connect_unmap(glib::clone!(#[strong] unmapped, move |_| unmapped.set(unmapped.get() + 1)));
+            let b = tab.compute_bounds(&w.surface).unwrap();
+            let start = [b.x() + b.width() * 0.5, b.y() + b.height() * 0.5];
+            let first = w.tab_hits().into_iter().find(|hit| hit.group == group && hit.index == 0).unwrap().bounds;
+            let end = [first.x + 8., start[1]];
+            input.perform(serde_json::json!([contact(device, "down", start)]));
+            let body = drawer.then(|| find_named(w.surface.upcast_ref(), "drawer-panel-Adjustments").unwrap());
+            input.perform(serde_json::json!([
+                contact(device, "move", end), contact(device, "up", end)
+            ]));
+            assert_eq!(state(&w).workspace.layout.group_panels(group).unwrap()[0], Panel::Adjustments);
+            assert!(tab.is_mapped(), "{device}, drawer={drawer}: drop keeps the original tab mapped");
+            assert_eq!(unmapped.get(), 0, "{device}, drawer={drawer}: drop never unmaps its source");
+            if let Some(body) = body {
+                assert_eq!(find_named(w.surface.upcast_ref(), "drawer-panel-Adjustments").unwrap(), body,
+                    "reordering drawer tabs retains the active content");
+            }
+        }
     }
     w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(original.clone()) });
     let group = original.layout.panel_group(Panel::Adjustments).unwrap();
@@ -11041,7 +11115,6 @@ fn native_column_drawer_drag_input() {
                 },
             });
             pump(400);
-            let before = saved(&w);
             let column = original.layout.column_for_group(group).unwrap();
             let root =
                 find_named(w.surface.upcast_ref(), &format!("column-drawer-{column}")).unwrap();
@@ -11094,9 +11167,9 @@ fn native_column_drawer_drag_input() {
             let away = [[12., 12.], [viewport[0] - 12., 12.], [12., viewport[1] - 12.], [viewport[0] - 12., viewport[1] - 12.]]
                 .into_iter().max_by(|a, b| bounds.distance_to(*a).total_cmp(&bounds.distance_to(*b))).unwrap();
             assert!(!bounds.contains(away[0], away[1]));
-            perform(
-                serde_json::json!([{ "point": start }, { "down": true }, { "point": [start[0] - 12., start[1]] }]),
-            );
+            perform(serde_json::json!([{ "point": start }, { "down": true }]));
+            let before = saved(&w);
+            perform(serde_json::json!([{ "point": [start[0] - 12., start[1]] }]));
             assert!(
                 w.workspace_drag
                     .borrow()

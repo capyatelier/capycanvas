@@ -386,6 +386,18 @@ impl PanelTabs {
         self.imp().buttons.borrow_mut().push(button.clone());
         self.queue_resize();
     }
+    pub fn reorder<'a>(&self, order: impl Iterator<Item = &'a gtk::Button>) {
+        let mut buttons = self.imp().buttons.borrow_mut();
+        for (index, button) in order.enumerate() {
+            let source = buttons.iter().position(|tab| tab == button).unwrap();
+            if source != index {
+                button.insert_after(self, index.checked_sub(1).map(|i| &buttons[i]));
+                let tab = buttons.remove(source);
+                buttons.insert(index, tab);
+            }
+        }
+        self.queue_allocate();
+    }
     fn widths(&self) -> Vec<[f32; 2]> {
         self.imp()
             .buttons

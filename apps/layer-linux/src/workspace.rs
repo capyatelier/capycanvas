@@ -3253,7 +3253,8 @@ impl Workspace {
             let (current, stale) = std::mem::take(&mut *groups).into_iter().partition(|view: &GroupView| {
                 resolved.groups.iter().any(|g| {
                     view.id == g.id
-                        && view.panels == g.panels
+                        && (view.panels == g.panels || view.panels.len() == g.panels.len()
+                            && view.panels.iter().all(|panel| g.panels.contains(panel)))
                         && view.tabs_visible == g.tabs_visible
                 })
             });
@@ -3488,6 +3489,11 @@ impl Workspace {
             self.surface.raise_group(expansion.group);
         }
         for (view, group) in self.groups.borrow_mut().iter_mut().zip(&resolved.groups) {
+            if view.panels != group.panels {
+                view.panels.clone_from(&group.panels);
+                view.tabs.sort_unstable_by_key(|(panel, _)| group.panels.iter().position(|p| p == panel));
+                view.tab_strip.reorder(view.tabs.iter().map(|(_, button)| button));
+            }
             view.floating = group.floating;
             if group.floating {
                 view.root.add_css_class("floating-panel");

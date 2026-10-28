@@ -48,7 +48,7 @@ pub(crate) struct Documents {
     selector: gtk::MenuButton,
     selector_label: gtk::Label,
     pub model: RefCell<DocumentSessions<Parked>>,
-    labels: RefCell<Vec<Label>>,
+    tabs: RefCell<Vec<(Label, gtk::Box)>>,
     pending: RefCell<VecDeque<Queued>>,
     draining: Cell<bool>,
     selecting: Cell<bool>,
@@ -390,7 +390,7 @@ impl Documents {
             selector,
             selector_label,
             model: RefCell::new(DocumentSessions::localized(localization)),
-            labels: Default::default(),
+            tabs: Default::default(),
             pending: Default::default(),
             draining: Cell::new(false),
             selecting: Cell::new(false),
@@ -511,7 +511,9 @@ impl Documents {
             if current.modified { "• " } else { "" },
             current.title
         ));
-        if *self.labels.borrow() == labels && self.strip.first_child().is_some() {
+        let mut tabs = self.tabs.borrow_mut();
+        if tabs.iter().map(|(label, _)| label).eq(&labels) {
+            drop(tabs);
             // Selection can change while two drawings have identical names.
             self.mark_selected();
             return;
@@ -519,86 +521,108 @@ impl Documents {
         if self.dragging.get() {
             return;
         }
-        *self.labels.borrow_mut() = labels.clone();
-        while let Some(child) = self.strip.first_child() {
-            self.strip.remove(&child);
-        }
-        for label in labels {
-            let id = label.id;
-            let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-            row.set_widget_name(&format!("document-tab-{id}"));
-            row.add_css_class("document-tab");
-            row.set_hexpand(true);
-            let title = gtk::Label::new(Some(&format!(
-                "{}{}",
-                if label.modified { "• " } else { "" },
-                label.title
-            )));
-            title.set_ellipsize(gtk::pango::EllipsizeMode::End);
-            title.set_width_chars(1);
-            title.set_hexpand(true);
-            // Balance the close control so the title is centered in the tab.
-            let balance = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-            let content = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-            content.append(&balance);
-            content.append(&title);
-            let select = gtk::Button::builder().child(&content).hexpand(true).build();
-            select.add_css_class("flat");
-            select.add_css_class("document-tab-select");
-            select.set_focus_on_click(false);
-            select.connect_state_flags_changed(glib::clone!(
-                #[weak]
-                row,
-                move |button, _| {
-                    // The fill belongs to the whole tab, including the area
-                    // behind its separate close button.
-                    if button.state_flags().contains(gtk::StateFlags::ACTIVE) {
-                        row.set_state_flags(gtk::StateFlags::ACTIVE, false);
-                    } else {
-                        row.unset_state_flags(gtk::StateFlags::ACTIVE);
-                    }
+        tabs.retain(|(label, row)| {
+            if labels.iter().any(|next| next.id == label.id) {
+                true
+            } else {
+                self.strip.remove(row);
+                false
+            }
+        });
+        for (index, label) in labels.into_iter().enumerate() {
+            if let Some(source) = tabs.iter().position(|(old, _)| old.id == label.id) {
+                if source != index {
+                    let tab = tabs.remove(source);
+                    tabs.insert(index, tab);
                 }
-            ));
-            select.set_tooltip_text(Some(&format!("{}\n{}", label.title, label.location)));
-            select.update_property(&[gtk::accessible::Property::Label(&format!(
-                "Switch to {}",
-                label.title
-            ))]);
-            select.connect_clicked(glib::clone!(
-                #[weak]
-                w,
-                move |_| {
-                    if !w.documents.dragging.get() {
-                        w.documents.select(&w, id, false);
-                    }
+                if tabs[index].0 != label {
+                    Self::label_tab(&tabs[index].1, &label);
+                    tabs[index].0 = label;
                 }
-            ));
-            row.append(&select);
-            let close = gtk::Button::from_icon_name("window-close-symbolic");
-            close.add_css_class("flat");
-            close.add_css_class("document-tab-close");
-            close.set_valign(gtk::Align::Center);
-            // Like AdwTabBar, one keyboard stop per tab; Ctrl+W closes it.
-            close.set_can_focus(false);
-            close.set_tooltip_text(Some(&format!("Close {}", label.title)));
-            close.connect_clicked(glib::clone!(
-                #[weak]
-                w,
-                move |_| w.documents.select(&w, id, true)
-            ));
-            row.append(&close);
-            Self::inset_close(row.upcast_ref(), self.close_inset.get());
-            self.strip.append(&row);
+            } else {
+                let row = self.tab(w, &label);
+                tabs.insert(index, (label, row));
+            }
+            let row = &tabs[index].1;
+            if row.parent().is_none() {
+                self.strip.append(row);
+            }
+            self.strip.reorder_child_after(row, index.checked_sub(1).map(|i| &tabs[i].1));
         }
+        drop(tabs);
         self.mark_selected();
         self.root.queue_resize();
     }
+    fn tab(&self, w: &Rc<Workspace>, label: &Label) -> gtk::Box {
+        let id = label.id;
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        row.set_widget_name(&format!("document-tab-{id}"));
+        row.add_css_class("document-tab");
+        row.set_hexpand(true);
+        let title = gtk::Label::new(None);
+        title.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        title.set_width_chars(1);
+        title.set_hexpand(true);
+        // Balance the close control so the title is centered in the tab.
+        let balance = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        let content = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        content.append(&balance);
+        content.append(&title);
+        let select = gtk::Button::builder().child(&content).hexpand(true).build();
+        select.add_css_class("flat");
+        select.add_css_class("document-tab-select");
+        select.set_focus_on_click(false);
+        select.connect_state_flags_changed(glib::clone!(
+            #[weak]
+            row,
+            move |button, _| {
+                // The fill belongs to the whole tab, including the area
+                // behind its separate close button.
+                if button.state_flags().contains(gtk::StateFlags::ACTIVE) {
+                    row.set_state_flags(gtk::StateFlags::ACTIVE, false);
+                } else {
+                    row.unset_state_flags(gtk::StateFlags::ACTIVE);
+                }
+            }
+        ));
+        select.connect_clicked(glib::clone!(
+            #[weak]
+            w,
+            move |_| {
+                if !w.documents.dragging.get() {
+                    w.documents.select(&w, id, false);
+                }
+            }
+        ));
+        row.append(&select);
+        let close = gtk::Button::from_icon_name("window-close-symbolic");
+        close.add_css_class("flat");
+        close.add_css_class("document-tab-close");
+        close.set_valign(gtk::Align::Center);
+        // Like AdwTabBar, one keyboard stop per tab; Ctrl+W closes it.
+        close.set_can_focus(false);
+        close.connect_clicked(glib::clone!(
+            #[weak]
+            w,
+            move |_| w.documents.select(&w, id, true)
+        ));
+        row.append(&close);
+        Self::inset_close(row.upcast_ref(), self.close_inset.get());
+        Self::label_tab(&row, label);
+        row
+    }
+    fn label_tab(row: &gtk::Box, label: &Label) {
+        let select = row.first_child().and_downcast::<gtk::Button>().unwrap();
+        let title = select.child().unwrap().last_child().and_downcast::<gtk::Label>().unwrap();
+        title.set_label(&format!("{}{}", if label.modified { "• " } else { "" }, label.title));
+        select.set_tooltip_text(Some(&format!("{}\n{}", label.title, label.location)));
+        select.update_property(&[gtk::accessible::Property::Label(&format!("Switch to {}", label.title))]);
+        row.last_child().unwrap().set_tooltip_text(Some(&format!("Close {}", label.title)));
+    }
     fn mark_selected(&self) {
-        let selected = format!("document-tab-{}", self.selected());
-        let mut child = self.strip.first_child();
-        while let Some(row) = child {
-            child = row.next_sibling();
-            if row.widget_name() == selected {
+        let selected = self.selected();
+        for (label, row) in self.tabs.borrow().iter() {
+            if label.id == selected {
                 row.add_css_class("selected");
             } else {
                 row.remove_css_class("selected");
@@ -609,7 +633,7 @@ impl Documents {
         let popover = gtk::Popover::new();
         popover.set_widget_name("drawing-selector-popup");
         let list = gtk::Box::new(gtk::Orientation::Vertical, 4);
-        for label in self.labels.borrow().iter() {
+        for (label, _) in self.tabs.borrow().iter() {
             let row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
             let title = gtk::Label::new(Some(&format!(
                 "{}{}{}\n{}",

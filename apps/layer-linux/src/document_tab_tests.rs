@@ -508,6 +508,13 @@ fn native_document_tab_input() {
         let b = tab.compute_bounds(&w.window).unwrap();
         [b.x() + b.width() * fraction, b.y() + b.height() / 2.]
     };
+    let retained = [tab(1), tab(2), tab(3)];
+    let check_retained = || {
+        for (index, row) in retained.iter().enumerate() {
+            assert_eq!(tab(index as u64 + 1), *row, "drawing tab updates retain native controls");
+            assert_eq!(row.has_css_class("selected"), index as u64 + 1 == w.documents.selected());
+        }
+    };
     for touch in [false, true] {
         let device = if touch { "touch" } else { "mouse" };
         assert_eq!(
@@ -590,11 +597,31 @@ fn native_document_tab_input() {
             "immediate tab reorder, touch={touch}"
         );
         assert_eq!(w.documents.selected(), 3, "drag must not select on release");
+        check_retained();
         w.documents.model.borrow_mut().undo();
         w.documents.refresh(&w);
         pump(150);
         assert_eq!(w.documents.model.borrow().order(), &[1, 2, 3]);
         assert!(w.documents.model.borrow().can_redo());
+        check_retained();
+        w.documents.model.borrow_mut().redo();
+        w.documents.refresh(&w);
+        pump(150);
+        check_retained();
+        w.documents.model.borrow_mut().undo();
+        w.documents.refresh(&w);
+        pump(150);
+        input.perform(serde_json::json!([
+            contact(device, "down", point(3, 0.3)),
+            contact(device, "move", point(1, 0.2)),
+            contact(device, "up", point(1, 0.2))
+        ]));
+        assert_eq!(w.documents.model.borrow().order(), &[3, 1, 2]);
+        assert_eq!(w.documents.selected(), 3);
+        check_retained();
+        w.documents.model.borrow_mut().undo();
+        w.documents.refresh(&w);
+        pump(150);
         let from = point(1, 0.3);
         let to = point(3, 0.8);
         input.perform(serde_json::json!([

@@ -340,7 +340,7 @@ struct View {
     columns: Vec<gtk::Box>,
     clips: Vec<gtk::Widget>,
     bodies: Vec<Body>,
-    tabs: Vec<gtk::Button>,
+    tabs: RefCell<Vec<(Panel, gtk::Button)>>,
     tab_clip: Option<gtk::ScrolledWindow>,
     tab_strip: Option<crate::panel_tabs::PanelTabs>,
 }
@@ -390,7 +390,7 @@ impl View {
         let mut clips = Vec::new();
         let mut bodies = Vec::new();
         let mut effects = None;
-        let mut tab_buttons = previous.map(|view| view.tabs.clone()).unwrap_or_default();
+        let mut tab_buttons = previous.map(|view| view.tabs.borrow().clone()).unwrap_or_default();
         let mut tab_clip = previous.and_then(|view| view.tab_clip.clone());
         let mut tab_strip = previous.and_then(|view| view.tab_strip.clone());
         for panels in &drawer.columns {
@@ -517,7 +517,7 @@ impl View {
                     w.install_panel_drag(&button, DockItem::Panel { panel });
                     w.install_context(&button, layer_ui::ContextTarget::Panel { panel });
                     labels.append(&button);
-                    tab_buttons.push(button);
+                    tab_buttons.push((panel, button));
                 }
                 labels.set_hover_bottom(tabs.panels.iter().map(|panel| layout.tab_presentation(*panel).hover_bottom));
                 let header_clip = crate::input::pen_scroller(gtk::ScrolledWindow::builder()
@@ -557,7 +557,7 @@ impl View {
             columns,
             clips,
             bodies,
-            tabs: tab_buttons,
+            tabs: RefCell::new(tab_buttons),
             tab_clip,
             tab_strip,
         }
@@ -655,9 +655,10 @@ impl Drawer {
             height: clip.height(),
         };
         view.tabs
+            .borrow()
             .iter()
             .enumerate()
-            .filter_map(|(index, tab)| {
+            .filter_map(|(index, (_, tab))| {
                 let b = tab.compute_bounds(&w.surface)?;
                 let bounds = Bounds {
                     x: b.x(),
@@ -1036,17 +1037,23 @@ impl Drawer {
             .borrow()
             .as_ref()
             .is_some_and(|old| old.anchor != next.anchor);
+        let same_tabs = |old: &ContentDrawer| match (&old.tabs, &next.tabs) {
+            (Some(old), Some(next)) => old.group == next.group
+                && (old.panels == next.panels || old.panels.len() == next.panels.len()
+                    && old.panels.iter().all(|panel| next.panels.contains(panel))),
+            (None, None) => true,
+            _ => false,
+        };
         let rebuild = self
             .state
             .borrow()
             .as_ref()
-            .is_none_or(|old| old.columns != next.columns || old.tabs != next.tabs || old.layer_properties.is_some() != next.layer_properties.is_some());
+            .is_none_or(|old| old.columns != next.columns || !same_tabs(old) || old.layer_properties.is_some() != next.layer_properties.is_some());
         if rebuild {
             let previous = self.view.borrow().clone();
             let retain = previous.as_ref().filter(|view| {
                 view.root.imp().children.borrow().len() == next.columns.len()
-                    && self.state.borrow().as_ref().is_some_and(|old| old.tabs.as_ref().zip(next.tabs.as_ref())
-                        .is_some_and(|(old, next)| old.group == next.group && old.panels == next.panels))
+                    && next.tabs.is_some() && self.state.borrow().as_ref().is_some_and(same_tabs)
             });
             if retain.is_none() { w.surface
                 .remove_slots(|slot| matches!(slot, Slot::Drawer(id) | Slot::DrawerConnection(id) | Slot::DrawerShadow(id) if id == self.id));
@@ -1068,7 +1075,14 @@ impl Drawer {
             if let Some(tabs) = &next.tabs {
                 let layout = w.surface.imp().layout.borrow();
                 let style = layout.group_tab_style(tabs.group).unwrap();
-                for (panel, button) in tabs.panels.iter().zip(&view.tabs) {
+                let mut buttons = view.tabs.borrow_mut();
+                if !buttons.iter().map(|(panel, _)| panel).eq(&tabs.panels) {
+                    buttons.sort_unstable_by_key(|(panel, _)| tabs.panels.iter().position(|p| p == panel));
+                    if let Some(strip) = &view.tab_strip {
+                        strip.reorder(buttons.iter().map(|(_, button)| button));
+                    }
+                }
+                for (panel, button) in buttons.iter() {
                     selected(button, *panel == tabs.active);
                     if style != TabStyle::Automatic {
                         let presentation = layout.tab_presentation(*panel);

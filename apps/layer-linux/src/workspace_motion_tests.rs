@@ -132,6 +132,10 @@ fn workspace_motion_input(scenarios: &[&str]) {
                     "move",
                     [start[0] - 14., start[1]]
                 )]));
+                until(
+                    || w.workspace_drag.borrow().as_ref().is_some_and(|drag| drag.started),
+                    "native tab pickup before returning to the press point",
+                );
             }
             input.perform(serde_json::json!([event("move", origin)]));
             pump(350);
