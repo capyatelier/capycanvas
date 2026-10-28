@@ -1824,7 +1824,6 @@ impl<R: CanvasRenderer> UiSession<R> {
         crate::WorkspaceLayoutUpdate {
             workspace_update: self.workspace_update(),
             layout: self.layout(viewport),
-            layout_input:self.layout_resolve_input(),
             workspace_layout: crate::WorkspaceLayoutState {
                 bands: &layout.bands,
                 floating: &layout.floating,

@@ -220,7 +220,7 @@ fn bridge_plane(direction: Edge,bounds: Bounds) -> Option<f32> {
 }
 
 impl ResolvedLayout {
-    pub fn measured_panel_bridges(mut self, measure: PanelBridgeMeasure) -> Result<PanelBridgeFrame, String> {
+    pub fn measured_panel_bridges(&self, measure: PanelBridgeMeasure) -> Result<PanelBridgeFrame, String> {
         let valid = |b: Bounds| [b.x,b.y,b.width,b.height].into_iter().all(f32::is_finite) && b.width>=0. && b.height>=0.;
         let mut groups = std::collections::HashSet::new();
         let mut columns = std::collections::HashSet::new();
@@ -229,18 +229,24 @@ impl ResolvedLayout {
                 || {let mut icons=std::collections::HashSet::new();c.icons.iter().any(|(panel,b)| !icons.insert(*panel) || !valid(*b))}) {
             return Err("Invalid panel measurements".into());
         }
-        self.groups.retain_mut(|group| {
+        let mut layout=Self {
+            groups:self.groups.iter().filter(|g|groups.contains(&g.id)).cloned().collect(),
+            collapsed:self.collapsed.iter().filter(|c|columns.contains(&c.id)).cloned().collect(),
+            vector_surfaces:Vec::new(),dividers:Vec::new(),viewport:self.viewport,
+            tab_bar_height:self.tab_bar_height,work_area:self.work_area,status:self.status,notice:self.notice,
+        };
+        layout.groups.retain_mut(|group| {
             let Some((_,bounds))=measure.groups.iter().find(|(id,_)|*id==group.id) else {return false;};
             group.bounds = *bounds;bounds.width>0. && bounds.height>0.
         });
-        self.collapsed.retain_mut(|column| {
+        layout.collapsed.retain_mut(|column| {
             let Some(allocated)=measure.columns.iter().find(|c|c.column==column.id) else {return false;};
             column.bounds=allocated.bounds;column.content=allocated.content;
             for icon in column.groups.iter_mut().flat_map(|group|&mut group.icons) {
                 icon.bounds=allocated.icons.iter().find(|(panel,_)|*panel==icon.panel).map_or(Bounds::default(),|(_,bounds)|*bounds);
             }
             if let Some(open)=&mut column.open {
-                let receivers=self.groups.iter().filter(|g|column.groups.iter().any(|c|c.group==g.id)).map(|g|g.bounds);
+                let receivers=layout.groups.iter().filter(|g|column.groups.iter().any(|c|c.group==g.id)).map(|g|g.bounds);
                 let Some(bounds)=receivers.reduce(|a,b| {
                     let x=a.x.min(b.x);let y=a.y.min(b.y);
                     Bounds{x,y,width:(a.x+a.width).max(b.x+b.width)-x,height:(a.y+a.height).max(b.y+b.height)-y}
@@ -249,7 +255,7 @@ impl ResolvedLayout {
             }
             true
         });
-        let layout=self.with_panel_bridges();
+        let layout=layout.with_panel_bridges();
         Ok(PanelBridgeFrame {
             paths:panel_vector_keys(&layout).into_iter().map(|(group,column,key)|PanelBridgePath {group,column,commands:key.commands()}).collect(),
             bridges:layout.panel_bridges(),

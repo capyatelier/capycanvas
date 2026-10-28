@@ -20,7 +20,6 @@
 #include "WorkspaceDrawers.h"
 #include "WorkspaceBubbles.h"
 #include <set>
-#include <chrono>
 #include "CollapsedColumns.h"
 #include "WorkspaceGestures.h"
 #include "ColorView.h"
@@ -79,14 +78,6 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     std::optional<uint32_t> movingGroup;
     bool trace=GetEnvironmentVariableW(L"CAPY_TRACE_UI",nullptr,0)!=0;
     uint64_t fullUpdates=0,motionUpdates=0;
-    std::vector<uint64_t> panelBridgeTimes;
-    uint64_t panelBridgeTimeOverflow=0;
-    struct ResolveTime {uint64_t raw,total;};
-    std::vector<ResolveTime> layoutResolveTimes;
-    std::vector<uint64_t> layoutApplyTimes;
-    std::vector<uint64_t> presentationTraceTimes;
-    uint64_t layoutResolveOverflow=0,layoutApplyOverflow=0;
-    uint64_t presentationTraceOverflow=0;
     struct ResizeFrame {int64_t qpc;float width,height,appliedWidth,appliedHeight;bool valid,mismatch;uint32_t panels,columns,outside;};
     struct ResizeBound {int64_t qpc;uint32_t group;Rect bounds;bool outside,column;};
     std::vector<ResizeFrame> resizeFrames;
@@ -424,19 +415,12 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         if(layoutInput.get()==resolvedInput.get()&&viewportWidth==resolvedWidth&&viewportHeight==resolvedHeight){
             data->model.Insert(L"layout",resolvedLayout);return false;
         }
-        bool timed=trace&&windowResizing;
-        auto start=timed?std::chrono::steady_clock::now():std::chrono::steady_clock::time_point{};
         auto result=capy_layout_resolve(layoutInput.get(),viewportWidth,viewportHeight);
-        auto rawEnd=timed?std::chrono::steady_clock::now():std::chrono::steady_clock::time_point{};
         NativeString reply(result,capy_string_free);J packet;
         if(!reply||!J::TryParse(to_hstring(reply.get()),packet)||!object(packet,L"result").Size())
             throw hresult_invalid_argument(L"Workspace layout resolution failed: "+str(packet,L"error"));
         resolvedLayout=object(packet,L"result");resolvedInput=layoutInput;resolvedWidth=viewportWidth;resolvedHeight=viewportHeight;
         data->model.Insert(L"layout",resolvedLayout);++panelLayoutRevision;panelBridgeKey=L"";
-        if(timed){
-            auto end=std::chrono::steady_clock::now();
-            if(layoutResolveTimes.size()<4096)layoutResolveTimes.push_back({uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(rawEnd-start).count()),uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(end-start).count())});else ++layoutResolveOverflow;
-        }
         return true;
     }
     void resize(float width,float height){
@@ -515,8 +499,6 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         resolveLayout();applyLayout(data->model,full);tracePresentation();if(full)colorRequests();return true;
     }
     void applyLayout(J const& model,bool full){
-        bool timed=trace&&windowResizing&&!full;
-        auto started=timed?std::chrono::steady_clock::now():std::chrono::steady_clock::time_point{};
         auto update=workspaceUpdate;
         auto layout=object(model,L"layout");
         std::vector<uint32_t> visible;int order=0;
@@ -602,10 +584,6 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         updateCamera(object(data->state,L"camera"));
         updatePopup();queueMeasurements();
         applyMotion(object(update,L"drag"));
-        if(timed){
-            auto elapsed=std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now()-started).count();
-            if(layoutApplyTimes.size()<4096)layoutApplyTimes.push_back(uint64_t(elapsed));else ++layoutApplyOverflow;
-        }
     }
 
     Rect placement(Group const& group)const{
@@ -650,7 +628,6 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     }
     void tracePresentation(){
         if(!trace)return;
-        bool timed=windowResizing;auto started=timed?std::chrono::steady_clock::now():std::chrono::steady_clock::time_point{};
         A positions;
         for(auto const& [id,group]:groups){
             if(!group.frame.IsLoaded())continue;
@@ -697,24 +674,17 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
                 {0,0,float(handle.ActualWidth()),float(handle.ActualHeight())});
             grips.Append(O({{L"id",S(hstring(id))},{L"bounds",rectangle(bounds)}}));
         }
-        A bridgeTimes;
-        if(!windowResizing)for(auto elapsed:panelBridgeTimes)bridgeTimes.Append(N(double(elapsed)));
         A resizeSamples;
         if(!windowResizing)for(auto const& frame:resizeFrames)resizeSamples.Append(O({
             {L"qpc",N(double(frame.qpc))},{L"width",N(frame.width)},{L"height",N(frame.height)},
             {L"applied_width",N(frame.appliedWidth)},{L"applied_height",N(frame.appliedHeight)},
             {L"valid",B(frame.valid)},{L"mismatch",B(frame.mismatch)},{L"panels",N(frame.panels)},{L"columns",N(frame.columns)},{L"outside",N(frame.outside)}}));
-        A boundSamples,resolveSamples,applySamples,traceSamples;
+        A boundSamples;
         if(!windowResizing){
             for(auto const& bound:resizeBounds)boundSamples.Append(O({{L"qpc",N(double(bound.qpc))},{L"group",N(bound.group)},{L"kind",S(bound.column?L"column":L"group")},{L"bounds",rectangle(bound.bounds)},{L"outside",B(bound.outside)}}));
-            for(auto time:layoutResolveTimes)resolveSamples.Append(O({{L"raw_ns",N(double(time.raw))},{L"total_ns",N(double(time.total))}}));
-            for(auto elapsed:layoutApplyTimes)applySamples.Append(N(double(elapsed)));
-            for(auto elapsed:presentationTraceTimes)traceSamples.Append(N(double(elapsed)));
         }
         LARGE_INTEGER snapshotQpc{};QueryPerformanceCounter(&snapshotQpc);
-        auto value=O({{L"panel_bridge_timing",O({{L"count",N(double(panelBridgeTimes.size()+panelBridgeTimeOverflow))},
-                {L"overflow",N(double(panelBridgeTimeOverflow))},{L"samples_ns",bridgeTimes}})},
-            {L"revision",N(double(publication.Revision()))},
+        auto value=O({{L"revision",N(double(publication.Revision()))},
             {L"model_revision",N(double(publication.ModelRevision()))},
             {L"full_updates",N(double(fullUpdates))},{L"motion_updates",N(double(motionUpdates))},
             {L"color_field_pixels",N(double(data->colorFieldPixels))},
@@ -724,17 +694,10 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             {L"snapshot_qpc",N(double(snapshotQpc.QuadPart))},{L"native_sizing_start_qpc",N(double(nativeSizingStartQpc))},{L"native_sizing_end_qpc",N(double(nativeSizingEndQpc))},
             {L"resize_layout_frames",O({{L"count",N(double(resizeFrames.size()+resizeFrameOverflow))},{L"overflow",N(double(resizeFrameOverflow))},{L"tolerance",N(.01)},{L"samples",resizeSamples}})},
             {L"resize_panel_bounds",O({{L"count",N(double(resizeBounds.size()+resizeBoundsOverflow))},{L"overflow",N(double(resizeBoundsOverflow))},{L"samples",boundSamples}})},
-            {L"layout_resolve_timing",O({{L"count",N(double(layoutResolveTimes.size()+layoutResolveOverflow))},{L"overflow",N(double(layoutResolveOverflow))},{L"samples",resolveSamples}})},
-            {L"layout_apply_timing",O({{L"count",N(double(layoutApplyTimes.size()+layoutApplyOverflow))},{L"overflow",N(double(layoutApplyOverflow))},{L"samples_ns",applySamples}})},
-            {L"presentation_trace_timing",O({{L"count",N(double(presentationTraceTimes.size()+presentationTraceOverflow))},{L"overflow",N(double(presentationTraceOverflow))},{L"samples_ns",traceSamples}})},
             {L"panel_bridge_frame",panelBridgeFrame},{L"panel_revision",N(double(panelBridgeRevision))},
             {L"presented_panel_revision",object(data->model,L"windows_glass").GetNamedValue(L"panel_revision",JsonValue::CreateNullValue())},
             {L"overviews",lastOverviews.empty()?A{}:A::Parse(lastOverviews)}}).Stringify();
         if(value!=lastPresentation){lastPresentation=value;AutomationProperties::SetItemStatus(root,value);}
-        if(timed){
-            auto elapsed=std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now()-started).count();
-            if(presentationTraceTimes.size()<4096)presentationTraceTimes.push_back(uint64_t(elapsed));else ++presentationTraceOverflow;
-        }
     }
 
     double configurationHeight()const{
@@ -957,13 +920,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         auto key=O({{L"groups",allocated},{L"columns",collapsed->Measure(root)}}).Stringify();
         if(key==panelBridgeKey&&panelQueryLayoutRevision==panelLayoutRevision)return;
         auto request=to_string(key);
-        bool timed=trace&&windowResizing;
-        auto started=timed?std::chrono::steady_clock::now():std::chrono::steady_clock::time_point{};
         auto result=capy_panel_bridges(layoutInput.get(),viewportWidth,viewportHeight,request.c_str());
-        if(timed){
-            auto elapsed=std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now()-started).count();
-            if(panelBridgeTimes.size()<4096)panelBridgeTimes.push_back(uint64_t(elapsed));else ++panelBridgeTimeOverflow;
-        }
         NativeString reply(result,capy_string_free);
         J packet;if(reply)J::TryParse(to_hstring(reply.get()),packet);
         auto frame=object(packet,L"result");
@@ -1208,12 +1165,8 @@ void WorkspaceView::SetWindowResizing(bool value){
         else impl->nativeSizingEndQpc=now.QuadPart;
     }
     if(value&&impl->trace){
-        impl->panelBridgeTimes.clear();impl->panelBridgeTimes.reserve(4096);impl->panelBridgeTimeOverflow=0;
         impl->resizeFrames.clear();impl->resizeFrames.reserve(4096);impl->resizeFrameOverflow=0;
         impl->resizeBounds.clear();impl->resizeBounds.reserve(32768);impl->resizeBoundsOverflow=0;
-        impl->layoutResolveTimes.clear();impl->layoutResolveTimes.reserve(4096);impl->layoutResolveOverflow=0;
-        impl->layoutApplyTimes.clear();impl->layoutApplyTimes.reserve(4096);impl->layoutApplyOverflow=0;
-        impl->presentationTraceTimes.clear();impl->presentationTraceTimes.reserve(4096);impl->presentationTraceOverflow=0;
     }
     impl->windowResizing=value;impl->resizeHandback=!value;
     ++impl->panelBridgeRevision;impl->lastPanelSurfaces=L"";

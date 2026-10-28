@@ -4,9 +4,12 @@ use layer_host::NativeHost;
 use serde_json::{Value, json};
 use std::ffi::{CString, c_char};
 use layer_host::handles::{self,Handle};
-use std::sync::Arc;
+use std::sync::{Arc,Mutex};
 
-struct LayoutInput(layer_ui::LayoutResolveInput<'static>);
+struct LayoutInput {
+    input:layer_ui::LayoutResolveInput<'static>,
+    resolved:Mutex<Option<Arc<layer_ui::ResolvedLayout>>>,
+}
 
 /// # Safety
 /// Input is readable NUL-terminated UTF-8 layout JSON during this worker call.
@@ -17,7 +20,7 @@ pub unsafe extern "C" fn capy_layout_input_prepare(input:*const c_char)->u64 {
             if text.len()>256*1024 {return Err("Panel layout is too large".into());}
             serde_json::from_str(text).map_err(|error|error.to_string())
         })}.ok()?;
-        handles::insert_shared(Arc::new(LayoutInput(layout))).ok().map(Handle::raw)
+        handles::insert_shared(Arc::new(LayoutInput {input:layout,resolved:Mutex::new(None)})).ok().map(Handle::raw)
     }).ok().flatten().unwrap_or(0)
 }
 
@@ -26,10 +29,14 @@ pub extern "C" fn capy_layout_input_free(layout:u64) {
     let _=Handle::from_raw(layout).and_then(handles::release::<LayoutInput>);
 }
 
-fn resolve_layout(input:u64,width:f32,height:f32)->Result<layer_ui::ResolvedLayout,String> {
+fn resolve_layout(input:u64,width:f32,height:f32)->Result<Arc<layer_ui::ResolvedLayout>,String> {
     if ![width,height].into_iter().all(|v|v.is_finite() && v>0.) {return Err("Invalid workspace viewport".into());}
     let input=Handle::from_raw(input).and_then(handles::shared::<LayoutInput>).map_err(|error|error.to_string())?;
-    Ok(input.0.resolve([width,height]))
+    let mut cached=input.resolved.lock().map_err(|error|error.to_string())?;
+    if cached.as_ref().is_none_or(|layout|layout.viewport!=[width,height]) {
+        *cached=Some(Arc::new(input.input.resolve([width,height])));
+    }
+    Ok(Arc::clone(cached.as_ref().unwrap()))
 }
 
 fn layout_packet(result:Result<Value,String>)->u64 {
@@ -42,7 +49,7 @@ fn layout_packet(result:Result<Value,String>)->u64 {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn capy_layout_resolve(input:u64,width:f32,height:f32)->u64 {
-    layout_packet(std::panic::catch_unwind(||resolve_layout(input,width,height).map(|layout|json!(layout)))
+    layout_packet(std::panic::catch_unwind(||resolve_layout(input,width,height).map(|layout|json!(layout.as_ref())))
         .unwrap_or_else(|_|Err("Workspace layout failed".into())))
 }
 
@@ -170,24 +177,38 @@ mod tests {
             let packet=capy_layout_resolve(context,viewport[0],viewport[1]);
             serde_json::from_str::<Value>(crate::owned::take_text(packet).to_str().unwrap()).unwrap()
         };
-        for viewport in [[1400.,900.],[640.,480.],[1700.,1100.]] {
-            let projected=resolve(context,viewport);
-            assert!(projected["error"].is_null());
-            assert_eq!(projected["result"],json!(host.session.layout(viewport)));
-        }
-        for viewport in [[0.,900.],[-1.,900.],[f32::NAN,900.],[1400.,f32::INFINITY]] {
-            assert!(resolve(context,viewport)["error"].is_string());
-        }
         let project=|context,request:&Value| {
             let input=CString::new(request.to_string()).unwrap();
             let packet=unsafe {capy_panel_bridges(context,1400.,900.,input.as_ptr())};
             assert_ne!(packet,0);
             serde_json::from_str::<Value>(crate::owned::take_text(packet).to_str().unwrap()).unwrap()
         };
+        let initial=project(context,&query["measure"]);
+        assert!(initial["error"].is_null());
+        for viewport in [[1400.,900.],[640.,480.],[1700.,1100.]] {
+            let projected=resolve(context,viewport);
+            assert!(projected["error"].is_null());
+            assert_eq!(projected["result"],json!(host.session.layout(viewport)));
+        }
+        let previous=resolve_layout(context,1700.,1100.).unwrap();
+        for viewport in [[0.,900.],[-1.,900.],[f32::NAN,900.],[1400.,f32::INFINITY]] {
+            assert!(resolve(context,viewport)["error"].is_string());
+        }
+        assert!(Arc::ptr_eq(&previous,&resolve_layout(context,1700.,1100.).unwrap()));
+        assert_eq!(project(context,&query["measure"]),initial);
+        resolve(context,[1400.,900.]);
+        let cached=resolve_layout(context,1400.,900.).unwrap();
+        resolve(context,[1400.,900.]);
+        assert!(Arc::ptr_eq(&cached,&resolve_layout(context,1400.,900.).unwrap()));
         let result=project(context,&query["measure"]);
         assert!(result["error"].is_null());
         let expected=layout.clone().measured_panel_bridges(serde_json::from_value(query["measure"].clone()).unwrap()).unwrap();
         assert_eq!(result["result"],json!(expected));
+        let mut partial=query["measure"].clone();partial["groups"]=json!([]);
+        assert!(project(context,&partial)["error"].is_null());
+        assert_eq!(project(context,&query["measure"]),result);
+        assert!(Arc::ptr_eq(&cached,&resolve_layout(context,1400.,900.).unwrap()));
+        assert_eq!(json!(cached.as_ref()),resolve(context,[1400.,900.])["result"]);
         let actual=result["result"]["groups"].as_array().unwrap();
         assert_eq!(actual.len(),layout.groups.len());
         for group in &layout.groups {
@@ -235,15 +256,16 @@ mod tests {
         revised["layout"]["column_stacks"]=json!([]);
         revised["column_open"]=json!([]);
         let newer=prepare(&revised);
-        assert_ne!(project(newer,&query["measure"]),result);
         assert_ne!(resolve(newer,[1400.,900.]),resolve(context,[1400.,900.]));
+        assert_ne!(project(newer,&query["measure"]),result);
         assert_eq!(project(context,&query["measure"]),result);
         let retained=Handle::from_raw(context).and_then(handles::shared::<LayoutInput>).unwrap();
         capy_layout_input_free(context);
         assert!(project(context,&query["measure"])["error"].is_string());
         assert!(resolve(context,[1400.,900.])["error"].is_string());
-        assert_eq!(json!(retained.0.resolve([1400.,900.]).measured_panel_bridges(serde_json::from_value(query["measure"].clone()).unwrap()).unwrap()),result["result"]);
+        assert_eq!(json!(retained.input.resolve([1400.,900.]).measured_panel_bridges(serde_json::from_value(query["measure"].clone()).unwrap()).unwrap()),result["result"]);
         let reused=prepare(&query["layout_input"]);
+        resolve(reused,[1400.,900.]);
         assert_ne!(reused,context);
         assert_eq!(project(reused,&query["measure"]),result);
         assert!(project(context,&query["measure"])["error"].is_string());

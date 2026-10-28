@@ -1176,8 +1176,11 @@ impl CapySnapshotInfo {
         })
     }
 }
+fn snapshot_layout_input<'a>(bytes:&[u8],host:&'a NativeHost)->Result<Option<layer_ui::LayoutResolveInput<'a>>,String> {
+    Ok(layer_host::SnapshotFields::parse(bytes).map_err(err)?.contains("layout").then(||host.session.layout_resolve_input()))
+}
 #[derive(serde::Serialize)]
-struct WindowsMetadata {
+struct WindowsMetadata<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     localization: Option<serde_json::Value>,
     windows_gpu_generation: u64,
@@ -1194,6 +1197,8 @@ struct WindowsMetadata {
     windows_palettes: Option<serde_json::Value>,
     windows_papers: Option<serde_json::Value>,
     windows_glass: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    layout_input: Option<layer_ui::LayoutResolveInput<'a>>,
     windows_tab_styles: serde_json::Map<String, serde_json::Value>,
     windows_isolated_settings: bool,
     windows_adapter: Option<String>,
@@ -1218,8 +1223,9 @@ pub unsafe extern "C" fn capy_snapshot(host: u64, info: *mut CapySnapshotInfo) -
         let localization = if host.localization_generation != Some(generation) {
             Some(crate::settings::localization_presentation(&mut host.native)?)
         } else { None };
-        let metadata = WindowsMetadata {
+        let mut metadata = WindowsMetadata {
             localization,
+            layout_input: None,
             windows_gpu_generation: host.gpu_generation,
             windows_active_tag: host.native.session.localization().language().tag(),
             windows_display: serde_json::json!({"output": host.display, "format": host.config.as_ref().map(|c| format!("{:?}", c.format)), "headroom": host.config.as_ref().map_or(1., |c| host.display.available_headroom(c.format)), "analysis": host.documents.as_ref().map(|s| s.tone.status())}),
@@ -1268,11 +1274,14 @@ pub unsafe extern "C" fn capy_snapshot(host: u64, info: *mut CapySnapshotInfo) -
                 format!("{} ({:?})", info.name, info.device_type)
             }),
         };
-        let extension = serde_json::to_vec(&metadata).map_err(err)?;
         let glass_changed=host.published_panel_revision!=host.presented_panel_revision||host.published_glass_count!=host.glass.count();
         let update=host.native.take_layout_update_bytes().map_err(err)?;
         let bytes=match update {
-            Some(bytes)=>Some(layer_host::extend_update(bytes,&extension)),
+            Some(bytes)=>{
+                metadata.layout_input=snapshot_layout_input(&bytes,&host.native)?;
+                let extension=serde_json::to_vec(&metadata).map_err(err)?;
+                Some(layer_host::extend_update(bytes,&extension))
+            },
             None if glass_changed=>Some(serde_json::to_vec(&serde_json::json!({
                 "windows_glass":{"regions":host.glass.count(),"frames":host.presenter.as_ref().map_or([0;2],|p|p.backdrop_frames()),
                     "panel_revision":host.presented_panel_revision},
@@ -1919,6 +1928,17 @@ mod snapshot_routing_tests {
             br#"{"command_search":null,"windows_glass":{"panel_revision":3}}"#] {
             let info=CapySnapshotInfo::read(bytes).unwrap();
             assert_eq!(&bytes[info.glass.offset..info.glass.offset+info.glass.length],br#"{"panel_revision":3}"#);
+        }
+    }
+    #[test]
+    fn snapshot_layout_input_is_windows_geometry_only() {
+        let host=NativeHost::new(layer_ui::Platform::Windows).unwrap();
+        for bytes in [br#"{"state":{},"layout":{}}"#.as_slice(),br#"{"workspace_update":{},"layout":{}}"#] {
+            let input=snapshot_layout_input(bytes,&host).unwrap().unwrap();
+            assert_eq!(serde_json::json!(input.resolve([1400.,900.])),serde_json::json!(host.session.layout([1400.,900.])));
+        }
+        for bytes in [br#"{"workspace_update":{}}"#.as_slice(),br#"{"camera":{}}"#,br#"{"command_search":null}"#,br#"{"windows_glass":{}}"#] {
+            assert!(snapshot_layout_input(bytes,&host).unwrap().is_none());
         }
     }
     #[test]

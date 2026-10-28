@@ -151,16 +151,7 @@ try{
             }
         }
     }
-    $native=Presentation;$timing=$native.panel_bridge_timing
-    Check ($null -ne $timing) 'Real border resize publishes raw projection timing' $timing
-    $durations=@($timing.samples_ns|ForEach-Object {[double]$_})
-    Check ($timing.count -gt 0 -and $timing.overflow -eq 0 -and $durations.Count -eq $timing.count) 'Every resize projection call has one bounded timing sample' $timing
-    $sorted=@($durations|Sort-Object)
-    $p50=$sorted[[int][math]::Ceiling($sorted.Count*0.5)-1]
-    $p99=$sorted[[int][math]::Ceiling($sorted.Count*0.99)-1]
-    $projectionTiming=@{scope='raw capy_panel_bridges call only';excluded=@('request JSON construction','NativeString output copy','reply JSON parsing','XAML layout');theme=$Theme;count=$durations.Count;overflow=$timing.overflow;samples_ns=$durations;p50_ms=$p50/1e6;p99_ms=$p99/1e6;budget_ms=8.3;p50_budget_fraction=$p50/8.3e6;p99_budget_fraction=$p99/8.3e6;optimization_threshold_ms=1;p99_exceeds_1ms=($p99 -gt 1e6);percentile='nearest rank'}
-    $projectionTiming|ConvertTo-Json -Depth 10|Set-Content (Join-Path $motionFolder 'projection-timing.json')
-    Write-Output ('Panel projection timing {0}: N={1} p50={2:F3}ms p99={3:F3}ms ({4:P1} of 8.3 ms)' -f $Theme,$durations.Count,($p50/1e6),($p99/1e6),($p99/8.3e6))
+    $native=Presentation
     $layoutFrames=$native.resize_layout_frames;$frameSamples=@($layoutFrames.samples)
     Check ($layoutFrames.count -gt 0 -and $layoutFrames.overflow -eq 0 -and $frameSamples.Count -eq $layoutFrames.count) 'Every native resize Rendering tick has a bounded layout size record' $layoutFrames
     $mismatches=@($frameSamples|Where-Object mismatch);$invalid=@($frameSamples|Where-Object {!$_.valid})
@@ -179,20 +170,6 @@ try{
     @{theme=$Theme;scope='allocated visible native docked groups and collapsed columns';count=$boundSamples.Count;overflow=$bounds.overflow;outside_count=$outside.Count;first_outside=@($outside|Select-Object -First 1);samples=$boundSamples}|
         ConvertTo-Json -Depth 20|Set-Content (Join-Path $motionFolder 'panel-containment.json')
     Check ($outside.Count -eq 0 -and @($frameSamples|Where-Object {$_.outside -ne 0}).Count -eq 0) 'Every visible docked panel and column remains inside the current viewport on every Rendering tick' $outside
-    foreach($kind in @('layout_resolve_timing','layout_apply_timing','presentation_trace_timing')){
-        $report=$native.$kind;$rawSamples=@($report.samples);$applySamples=@($report.samples_ns)
-        $count=if($kind -eq 'layout_resolve_timing'){$rawSamples.Count}else{$applySamples.Count}
-        Check ($report.count -gt 0 -and $report.overflow -eq 0 -and $count -eq $report.count) ('Complete bounded '+$kind+' records') $report
-        $channels=if($kind -eq 'layout_resolve_timing'){@('raw_ns','total_ns')}elseif($kind -eq 'presentation_trace_timing'){@('trace_ns')}else{@('apply_ns')}
-        $summary=@{}
-        foreach($channel in $channels){
-            $values=if($kind -ne 'layout_resolve_timing'){$applySamples}else{@($rawSamples|ForEach-Object {$_.$channel})}
-            $ordered=@($values|Sort-Object)
-            $summary[$channel]=@{p50_ms=[double]$ordered[[int][math]::Ceiling($count*.5)-1]/1e6;p99_ms=[double]$ordered[[int][math]::Ceiling($count*.99)-1]/1e6;samples=$values}
-        }
-        @{theme=$Theme;count=$count;overflow=$report.overflow;percentile='nearest rank';scope=if($kind -eq 'layout_resolve_timing'){'raw_ns=capy_layout_resolve only; total_ns=FFI plus output copy, JSON parse and local cache adoption'}elseif($kind -eq 'presentation_trace_timing'){'active sizing diagnostic groups/bridges serialization and ItemStatus publication; full visual-tree traversal deferred'}else{'retained geometry placement, excluding diagnostic trace serialization'};channels=$summary}|
-            ConvertTo-Json -Depth 20|Set-Content (Join-Path $motionFolder ($kind.Replace('_','-')+'.json'))
-    }
     Write-Output ('Resize layout {0}: mismatch=0/{1}, outside=0/{2}' -f $Theme,$frameSamples.Count,$boundSamples.Count)
     Open-Column 'continuous-resize-settled'
 

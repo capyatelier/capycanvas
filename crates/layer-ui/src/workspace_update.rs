@@ -53,7 +53,6 @@ pub struct WorkspaceUpdate {
 pub struct WorkspaceLayoutUpdate<'a> {
     pub workspace_update: WorkspaceUpdate,
     pub layout: crate::ResolvedLayout,
-    pub layout_input: crate::LayoutResolveInput<'a>,
     pub workspace_layout: WorkspaceLayoutState<'a>,
     pub header_presentation: &'a crate::HeaderPresentation,
     // Work area changes without a camera navigation revision.
