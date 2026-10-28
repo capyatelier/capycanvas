@@ -56,5 +56,7 @@ Progress notes, validation reports and other work records are not committed
   and steps of the quick wins, foundations and retouching milestones.
 - [Pencil, charcoal and ink brush redesign](dry-media-brush-design.md).
 - [GTK and Wayland canvas subsurface](wayland-subsurface-feasibility.md).
+- [Large Vulkan allocations in bundled GTK](gtk-vulkan-allocation-reuse.md): why the
+  runtime reuses large GSK allocations, the alternatives and upstream GTK's direction.
 - [Vulkan rendering with native Windows presentation](windows-vulkan-presentation.md),
   a deferred candidate.

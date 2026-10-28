@@ -25,7 +25,9 @@ using eight size classes per power-of-two range and retaining mapped blocks.
 Returned blocks expire after 100 ms, checked on returns and by a timer that stops
 when empty.
 Small buddy allocations and texture-cache cleanup are unchanged. Remove this
-patch when the pinned GTK release provides equivalent bounded reuse.
+patch when the pinned GTK release provides equivalent bounded reuse; the
+[allocation record](../../../docs/history/gtk-vulkan-allocation-reuse.md) covers
+the cause, alternatives and upstream status.
 
 ## Using system GTK
 
