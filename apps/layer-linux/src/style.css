@@ -155,7 +155,7 @@ button.flat.status-bubble:active { background-image: image(alpha(var(--window-fg
 .canvas-notice.canvas-action-bar .canvas-action-bar-label { padding-top: 6px; padding-bottom: 6px; opacity: 1; }
 .canvas-notice.text-only.canvas-action-bar .canvas-action-bar-label { padding-right: 12px; }
 .canvas-notice.stacked.canvas-action-bar .canvas-action-bar-label { padding: 10px 12px 2px; }
-button.flat.unavailable-tool > * { opacity: .3; }
+button.flat.unavailable-tool > * { color: alpha(currentColor, .3); }
 .dock-panel.join-nw { border-top-left-radius: 0; }
 .dock-panel.join-ne { border-top-right-radius: 0; }
 .dock-panel.join-se { border-bottom-right-radius: 0; }
@@ -267,7 +267,7 @@ button.flat.unavailable-tool > * { opacity: .3; }
 .dock-panel checkbutton check { min-width: 16px; min-height: 16px; -gtk-icon-size: 16px; padding: 0; border-radius: 4px; }
 .dock-panel checkbutton check:checked { -gtk-icon-source: -gtk-icontheme("layer-check-symbolic"); -gtk-icon-transform: none; }
 .dock-panel checkbutton check:indeterminate { -gtk-icon-source: -gtk-icontheme("layer-minus-symbolic"); }
-.dock-panel .panel-grip { -gtk-icon-size: 16px; opacity: .65; -gtk-icon-transform: translateX(-2px); }
+.dock-panel .panel-grip { -gtk-icon-size: 16px; color: alpha(currentColor, .65); -gtk-icon-transform: translateX(-2px); }
 .toolbar-controls.vertical > .panel-grip, .panel-footer > .panel-grip { -gtk-icon-transform: translateY(-2px) rotate(90deg); }
 .dock-panel .caption { font-size: 1em; }
 .dock-tabs button { background: transparent; border-radius: var(--surface-radius) var(--surface-radius) 0 0; min-height: 28px; padding: 4px 8px; }
@@ -317,8 +317,8 @@ button.flat.unavailable-tool > * { opacity: .3; }
 .selection-modes button:checked, .toolbar-component .option-action button:checked { background: var(--selection-bg); }
 .selection-modes.labeled > button { padding: 0 12px; }
 .choice-grid button { min-width: 0; min-height: 0; padding: 0; border: 0; box-shadow: none; background: transparent; border-radius: var(--control-radius); }
-.choice-grid button image { opacity: .45; }
-.choice-grid button:checked image { opacity: 1; }
+.choice-grid button image { color: alpha(currentColor, .45); }
+.choice-grid button:checked image { color: inherit; }
 .dock-panel .size-preset { padding: 0; min-width: 0; min-height: 0; border: 0; border-radius: calc(var(--tile-radius) * var(--corner-fit)); font-weight: normal; }
 .toolbar-controls button.tile-button { min-width: 0; min-height: 0; padding: 0; margin: 0; }
 .dock-panel.expanded-panel { --glass-panel: var(--panel-bg); --glass-strip: var(--tabbar-bg); --glass-selection: var(--selection-bg); background: transparent; box-shadow: none; }

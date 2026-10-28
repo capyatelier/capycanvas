@@ -120,10 +120,15 @@ overflow picking therefore cover every painted pixel.
 `squircle::Squircles` wraps the workspace window content and redraws each
 circular rounded clip, uniform border or outline, and outset shadow as a
 squircle with the circle radius divided by the fit. Undesigned toolkit radii
-keep their former visual rounding the same way. Large panel clips use four
-fixed corner paths and rectangular body/edge bands. Corner paths retain their
-identity as panel height changes; internal boundaries meet on the device-pixel
-grid. Small controls and SVG details retain cached masks. Native color nodes
+keep their former visual rounding the same way. Solid backgrounds and borders
+use cached corner fills and straight bands. Panel contents have one native
+rounded clip at the fitted radius, without repeating their subtree through the
+corner pieces. Content clips near a window corner use radii that merge with the
+window outline, with cache entries scoped to that corner geometry. The shell
+keeps its exact squircle contour; content clipping can
+change edge antialiasing. Corner paths retain their identity as panel height
+changes; internal boundaries meet on the device-pixel grid. Small image clips
+and SVG details retain cached masks. Native color nodes
 keep their original color states. Conversion descends
 through bridge masks, color matrices, crossfades, blends and blur nodes. Both
 children of a mask or transition retain the same corner and shadow conversion
@@ -134,9 +139,10 @@ NVIDIA, including the 9.72px drawer radius with its 24px blur. HDR windows
 render in float, so Mutter shows those pixels as black boxes; SDR loses the
 shadow there. Each large shadow style (corner radii, blur, offset and scale) is
 blurred once on the CPU and drawn as nine cached slices. Long narrow toolbars
-use GTK's blur on a fixed short source: two end caps and a repeating one-pixel
-middle strip cover the changing long dimension. Their joins also follow the
-device-pixel grid. Shapes too small for either decomposition use a GSK blur node.
+use cached alpha textures for two end caps and a one-pixel middle strip, stretched
+over the changing long dimension. Their joins follow the device-pixel grid.
+Compact shapes use the same CPU coverage and blur as the large shadow slices;
+they do not add a GSK blur or repeat offscreen.
 
 Native tab surfaces paint the selected region and its even-odd background
 complement with color fills. Four bounded contour pieces cover the upper corners

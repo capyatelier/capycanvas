@@ -245,7 +245,7 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 | GTK Tool Set hover and press animation | 120 | Desktop diagnostic: **117.76 changing-color presents/s**, 116.67–118.08 per case; pooled gap p99 16.646 ms. Reference hardware unmeasured | [GTK tool caption hover](#gtk-tool-caption-hover), 2026-10-26 |
 | Panel or column resize | 120 | Android shared vectors and Web SVG projection are unmeasured on this reference tier. Expanding GTK divider desktop diagnostic: **54.49/s**, p99 41.689 ms; misses the 114 Hz floor. **Desktop diagnostic misses.** GTK GPU joins: 81.59–112.27 changing-geometry presents/s at 1×; 38.96–92.31 at 2×, worst p99 74.986 ms. Reference-tier qualification remains unset. Web Navigator: 30.00–30.64 Chrome surface presents/s; p99 50.00–58.34 ms. Windows GPU desktop diagnostic: 33.82–34.89 observed bounds changes/s beside 166.28–183.76 renderer submissions/s after display correction; fresh displayed FPS and gap-transition performance unqualified | [Web Navigator layout](#web-navigator-layout), 2026-10-19; [GTK Color resize](#gtk-color-panel-resize), 2026-10-10; [GTK column bridge diagnostic](#gtk-column-bridge-diagnostic), 2026-10-25; [GTK Tool Set density](#gtk-tool-set-density), 2026-10-26; [GTK toolbar dividers](#gtk-toolbar-divider-resize), 2026-10-26; [Windows GPU VM column resize](#windows-gpu-vm-column-resize), 2026-10-26 |
 | Windows window resize | 120 | Unqualified; local 60 Hz allocation/startup candidate: 55.97 observed native changes/s and 15.755 ms UI CPU/change, versus baseline brackets of 55.90–57.05/s and 15.662–15.771 ms. Combined-code comparison; displayed motion and reference hardware remain unmeasured | [Windows window resize](#windows-window-resize), [allocation comparison](#windows-allocation-comparison), 2026-10-27 |
-| GTK window resize | 120 | **Desktop diagnostic misses.** With the chrome hold and squircle converter bypassed, probe-free SDR 1× reaches only 98.62 dark / 103.36 light changing-window presents/s; worst-gesture p99 24.890 / 16.942 ms. Diagnostic visual mismatches are accepted only for this ceiling test; no experimental rendering changes are retained. Reference-tier qualification remains open | [GTK window resize](#gtk-window-resize), [diagnostic ceiling](#probe-free-diagnostic-ceiling), 2026-10-27 |
+| GTK window resize | 120 | **Desktop SDR miss; GTK-limited.** One native content clip and cached shell/shadows improve dark **68.20 → 87.01** and light **73.73 → 86.12** changing-window presents/s against matched main. Worst p99 is **30.776 / 33.274 ms**; light p99 worsens. UI CPU falls **8.073 → 6.908 / 7.701 → 6.943 ms/frame**. One SDR allocation/frame; Capy offscreens stay below 512 KiB each and 1 MiB total. GTK conversion-image and swapchain work consumes about **3.3–3.6 ms of the roughly 4 ms paint budget**. Reference-tier qualification remains open | [GTK window resize](#gtk-window-resize), [one native clip](#one-native-clip-per-panel), 2026-10-28 |
 | Pen pressure utility and curve drag | 120 | **Unqualified.** Current GTK desktop panel 119.20–119.40 presents/s, p99 up to 9.207 ms; curve 120.00, p99 up to 8.470 ms; reference tablet unmeasured | [GTK pen pressure utility](#gtk-pen-pressure-utility), 2026-10-10 UTC |
 | Windows tool bubble drag through four neighbours | 120 | Unmeasured on reference hardware; Surface Pro / Adreno X1-85 functional checks do not qualify timing (PresentMon ETW access denied) | [Windows tool bubbles](../development/windows.md#tool-bubbles) |
 | Windows HDR color bubble drag and intensity scrub | 120 | Unmeasured on reference hardware; native input and pixel checks do not qualify presentation timing (PresentMon ETW access denied) | [Windows tool bubbles](../development/windows.md#tool-bubbles) |
@@ -5634,6 +5634,99 @@ are retained under `artifacts/gtk-resize-profile-20261027/`, particularly
 `ceiling-comparison.json`, `critical-path-isolated-comparison.json` and
 `fanout-v3-cpu-comparison.json`. These default-drawing workstation diagnostics
 do not qualify the reference-tier canvas.
+
+
+### One native clip per panel
+
+Measured 2026-10-28 UTC at base `a4068913f`, using the same GTK 4.24.1 Vulkan
+runtime, color management and NVIDIA workstation. The candidate binary SHA-256
+prefix is `9abb8addb9a7f3ea`; the retained main control has prefix
+`5b78dd7037e30caa` at `264c9769f`, with all test-only bypasses disabled.
+Every GTK/shared Rust, Cargo and vendored production input is identical between
+that control commit and the candidate base; only other-host code and docs differ.
+The source-equivalence check is retained with the binary manifests. The change
+was rebased onto `d959f4460` before committing; incoming bubble input changes and
+renderer lint fixes do not change this resize path.
+
+Solid shell backgrounds and borders use cached squircle corner fills and straight
+bands. Panel contents use a single native clip at the existing fitted radius,
+allowing compatible header clips to merge without repeating the content through
+seven corner/band pieces. Near a window corner, the native content clip uses the
+minimum radii that merge with the actual window outline, avoiding a panel-sized
+combined mask. Its cache includes the window-corner context so a resize cannot
+reuse stale geometry. Small image/thumbnail masks remain exact. Compact shadows
+use cached alpha end caps and a stretched one-pixel strip with joins on the
+device grid; icon dimming uses foreground color alpha. Canvas rendering,
+swapchain sizing, the chrome handoff, GTK, Vulkan GSK and HDR/color-management
+policy are unchanged.
+
+All ten conditions below ran sequentially in one private Mutter/D-Bus session,
+at SDR 1×, 1600 × 1000 and 120 Hz, with fresh storage per process. Each has one
+excluded warmup and three six-second native corner drags. Vulkan interposition,
+perf, NVML, GPU timestamps and resize-phase tracing are off. This is the default
+1333 × 1000 drawing, not the reference-tier photo. Rates pool changing-window
+presentation intervals; gap p99 is the worst gesture. Paint p95 pools changing
+paints; total UI CPU uses per-contact `RUSAGE_THREAD` endpoints divided by the
+number of changed paints.
+
+| Run | FPS (gesture range) | Worst p99 ms | Paint CPU mean / p95 ms | UI CPU ms/frame |
+| --- | ---: | ---: | ---: | ---: |
+| dark-plain-before | 103.81 (100.44–109.97) | 28.352 | 4.305 / 7.266 | 4.588 |
+| dark-control-before | 71.35 (67.44–73.58) | 30.912 | 6.834 / 8.785 | 7.726 |
+| dark-candidate | 87.01 (77.98–95.36) | 30.776 | 5.919 / 8.231 | 6.908 |
+| dark-control-after | 65.05 (61.65–70.51) | 33.182 | 7.419 / 9.742 | 8.455 |
+| dark-plain-after | 117.13 (115.86–118.35) | 18.157 | 3.289 / 4.227 | 3.565 |
+| light-plain-before | 114.92 (111.83–116.70) | 22.062 | 3.338 / 4.624 | 3.612 |
+| light-candidate-before | 89.97 (86.05–96.23) | 33.274 | 5.709 / 8.285 | 6.706 |
+| light-control | 73.73 (67.18–77.90) | 29.504 | 6.778 / 9.264 | 7.701 |
+| light-candidate-after | 82.28 (77.20–89.67) | 30.511 | 6.252 / 8.731 | 7.200 |
+| light-plain-after | 113.44 (111.33–116.46) | 24.127 | 3.383 / 4.888 | 3.647 |
+
+Pooling the main and candidate contacts within each theme gives dark
+68.20 → 87.01 presents/s (+27.6%) and light 73.73 → 86.12 (+16.8%). Weighted UI
+CPU falls by 1.166 ms/frame in dark (14.4%) and 0.759 ms in light (9.9%).
+Every matched comparison saves 0.501–1.547 ms of UI CPU per changed frame.
+Both light candidate runs have worse gap p99 than main. The plain-GTK brackets
+also vary. These measurements establish less UI CPU and higher pooled
+throughput, not a uniform pacing improvement or a 120 Hz pass.
+
+Separate probe-on resource captures retain one allocation per SDR frame in both
+themes. Main creates 52 images/frame; candidate means are 32.37 dark / 32.43 light
+(median 32, maximum 40). Excluding GTK's full-window conversion, candidate maximum
+image sizes are 452,960 / 455,392 bytes; peak totals are 601,872 / 604,352 bytes.
+Both the 512 KiB single-image and 1 MiB total spare-block limits hold. UI-thread
+API CPU per candidate frame is Allocate + Free 1.487 + 1.184 ms dark and
+1.487 + 1.141 ms light; swapchain creation is another 0.928 / 0.904 ms.
+Main's separate captures total about 3.38 / 3.32 ms for the same three APIs.
+These diagnostic captures establish the resource budget, not a driver-time win;
+the probe does not intercept the canvas worker's dynamically resolved Vulkan.
+
+The remaining SDR target miss is recorded as **GTK-limited** for this milestone:
+GTK creates/frees the full-window conversion image and rebuilds the swapchain on
+each size change. That work costs roughly 3.3–3.6 ms against the roughly 4 ms
+paint budget in these resize contacts, leaving little time for the full Capy
+widget tree. API timers overlap toolkit paint and are not an additive split of
+the probe-free CPU table. Work stops within the unmodified GTK Vulkan renderer's
+limits.
+
+The 1×/2× light/dark corner crops were reviewed and approved, with the final
+window-corner crops posted after the merge fix. All four scene cases have zero
+canvas-pixel differences in both normal and float targets; flat interior
+differences are at most one byte, with no interior violations. Chrome edge
+differences are accepted through visual review. The 56 window-free GTK tests,
+corner checks, thumbnail checks, compact-shadow matrix and both-theme drawer
+journeys pass. The compact-toolbar edge journey fails on both main and candidate
+at `toolbar_component_tests.rs:2070` with
+`mouse: near-edge preview at a usable contact distance`; it is a reproduced
+pre-existing journey failure, not a passing check. No fresh physical-HDR timing
+is claimed by the float-target checks.
+
+Source/binary hashes, the complete same-session table, per-gesture CPU and
+presentation records, allocation logs and original-depth corner crops are in
+`artifacts/gtk-one-clip-20261027/`, particularly
+`same-session-v4-1/comparison.json`,
+`same-session-v4-1/aggregate-main-candidate.json`, `resource-v4-gate-summary.json`,
+`gtk-control-source-equivalence.json` and `crop-review-v4/crop-manifest.json`.
 
 ## Windows window resize
 

@@ -140,7 +140,7 @@ fn native_squircle_corners() {
     let shadow = converted.downcast_ref::<gtk::gsk::ShadowNode>().expect("shadow is preserved");
     assert_eq!(shadow.n_shadows(), 1);
     let contents=shadow.child();
-    assert!(contents.is::<gtk::gsk::MaskNode>() || contents.is::<gtk::gsk::ContainerNode>());
+    assert!(matches!(contents.node_type(), gtk::gsk::RenderNodeType::FillNode | gtk::gsk::RenderNodeType::TransformNode | gtk::gsk::RenderNodeType::ContainerNode));
     assert_eq!(contents.bounds(),rect);
 
     let corner = gtk::graphene::Size::new(9.72, 9.72);
