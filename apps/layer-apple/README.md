@@ -77,6 +77,8 @@ Setup, build, run and test commands are in the
   `CAMetalLayer` manage drawable availability. Presentation callbacks only feed
   diagnostics, so rendering never waits for them. Resume requests a fresh frame,
   and surface generations stop old replies from reaching a replacement view.
+  Prepared drawings retain their composite when opened or resumed; the blank
+  startup frame belongs to surface startup and GPU recovery.
   Shaders are prepared on demand as described in
   [shared shader readiness](../../docs/internals/shared-shader-readiness.md).
 - **Menus and chrome.** macOS top-level menus use the OS menu bar and target the

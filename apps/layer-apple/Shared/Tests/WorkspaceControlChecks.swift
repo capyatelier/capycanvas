@@ -51,20 +51,18 @@ extension XCTestCase {
             }
             #endif
             element.clickOrTap()
-        } else {
-            // SwiftUI's offset controls inside a scroll view can have a valid
-            // visible frame without an XCTest hit point. Use measured editor
-            // bounds for this in-app fallback; resulting state is still checked.
-            let window = XCUIApplication().windows.firstMatch
-            let frame = element.frame
-            guard frame.width > 0, frame.height > 0,
-                frame.midX.isFinite, frame.midY.isFinite, window.frame.contains(frame) else {
-                XCTFail("The workspace control must have finite bounds inside its editor window: control \(frame), window \(window.frame)")
-                return
-            }
-            window.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(
-                dx: frame.midX - window.frame.minX, dy: frame.midY - window.frame.minY)).clickOrTap()
+        } else { workspacePoint(element)?.clickOrTap() }
+    }
+    @MainActor func workspacePoint(_ element: XCUIElement) -> XCUICoordinate? {
+        let window = XCUIApplication().windows.firstMatch
+        let frame = element.frame
+        guard frame.width > 0, frame.height > 0,
+            frame.midX.isFinite, frame.midY.isFinite, window.frame.contains(frame) else {
+            XCTFail("The workspace control must have finite bounds inside its editor window: control \(frame), window \(window.frame)")
+            return nil
         }
+        return window.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(
+            dx: frame.midX - window.frame.minX, dy: frame.midY - window.frame.minY))
     }
     @MainActor private func workspaceText(_ field: XCUIElement, _ value: String) {
         workspaceActivate(field)

@@ -52,7 +52,7 @@ pub(super) fn check_adapter(host: &NativeHost, adapter: &wgpu::Adapter, limits: 
 impl MetalHost {
     pub(crate) fn document_changed(&mut self) {
         self.local_tone.clear();
-        self.cursor=Default::default(); self.blank_presented=false; self.timing=None;
+        self.cursor=Default::default(); self.timing=None;
     }
     pub(crate) fn set_headroom(&mut self,host:&mut NativeHost,headroom:f32)->Result<(),String>{
         if !headroom.is_finite() || !(1. ..=100.).contains(&headroom){return Err("Invalid display headroom".into());}
@@ -118,7 +118,6 @@ impl MetalHost {
         self.local_tone.clear();
         self.watch = watch;
         self.timing = None;
-        self.blank_presented = false;
         self.presented_panel_revision = None;
         self.cursor = Default::default();
         host.startup = Default::default();

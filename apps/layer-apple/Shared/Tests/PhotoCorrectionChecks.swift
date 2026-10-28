@@ -60,6 +60,13 @@ extension XCTestCase {
         }
         open(photo)
         editorMenu(in: app, menu: "View", id: "fit_canvas", label: "Fit canvas")
+        expectation(for: NSPredicate { _, _ in
+            let sample = pixels()
+            return stride(from: 0, to: sample.count, by: 4).allSatisfy {
+                sample[$0 + 2] > max(sample[$0], sample[$0 + 1])
+            }
+        }, evaluatedWith: app)
+        waitForExpectations(timeout: 30)
         let rows = app.groups.matching(NSPredicate(format: "identifier BEGINSWITH %@", "layer-row-"))
         let initialCount = rows.count
         let corrections: [(String, String, String, String, Int?)] = [("Exposure", "exposure", "exposure", "0.75", nil),
@@ -102,7 +109,7 @@ extension XCTestCase {
                     reveal(app.buttons["curve-reset"]); workspaceActivate(app.buttons["curve-reset"])
                 } else {
                     let number = app.buttons["number-value-property-" + key]
-                    reveal(number); number.rightClick(); workspaceActivate(app.menuItems["Reset"].firstMatch)
+                    reveal(number); workspacePoint(number)?.rightClick(); workspaceActivate(app.menuItems["Reset"].firstMatch)
                 }
                 expectPixels(before, in: app); editorHistory("Undo", in: app); expectPixels(edited, in: app)
                 workspaceActivate(row.buttons["Hide layer"]); expectPixels(before, in: app)
@@ -112,7 +119,7 @@ extension XCTestCase {
             let mask = row.buttons["Edit layer mask"]
             XCTAssertTrue(mask.waitForExistence(timeout: 5))
             if index == 0 {
-                mask.rightClick(); workspaceActivate(app.buttons["Invert mask"]); expectPixels(before, in: app)
+                workspacePoint(mask)?.rightClick(); workspaceActivate(app.buttons["Invert mask"]); expectPixels(before, in: app)
                 editorHistory("Undo", in: app); expectPixels(edited, in: app)
             }
             workspaceActivate(row.buttons["Edit layer content"])
