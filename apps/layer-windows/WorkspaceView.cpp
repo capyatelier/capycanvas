@@ -68,6 +68,9 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     std::map<std::wstring,Measurement> measurements;
     struct Offscreen {std::wstring key;std::shared_ptr<WorkspaceData> data;std::unique_ptr<PanelBody> body;uint64_t publication=0;};
     std::map<std::wstring,Offscreen> offscreen;
+    struct Body {hstring key;std::shared_ptr<PanelBody> view;};
+    std::map<std::wstring,Body> bodies;
+    double bodyTextScale=0;
     Canvas measureHost;
     ContentControl measureGate;
     hstring lastMeasurements;
@@ -119,7 +122,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         TranslateTransform translation;
         RectangleGeometry clip;
         hstring backgroundKey;
-        std::unique_ptr<PanelBody> body;
+        std::shared_ptr<PanelBody> body;
         std::map<std::wstring,Grid> tabs;
         std::unique_ptr<PanelConfiguration> configuration;
         bool hidden=false,gpu=false;
@@ -236,7 +239,9 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         }
     }
     void removeGroup(Group const& group,std::shared_ptr<void> owner={}){
-        uint32_t index=0;if(!gestures->DeferRemoval(group.frame,std::move(owner))&&root.Children().IndexOf(group.frame,index))root.Children().RemoveAt(index);
+        uint32_t index=0;
+        if(gestures->DeferRemoval(group.frame,std::move(owner)))std::erase_if(bodies,[&](auto const& entry){return entry.second.view==group.body;});
+        else if(root.Children().IndexOf(group.frame,index))root.Children().RemoveAt(index);
         if(root.Children().IndexOf(group.shadow.Root(),index))root.Children().RemoveAt(index);
     }
     void buildTabs(Group& group,J const& geometry){
@@ -337,9 +342,19 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         buildTabs(group,geometry);
         auto frame=group.layout;
         while(frame.Children().Size()>1)frame.Children().RemoveAtEnd();
-        group.body=std::make_unique<PanelBody>(data,panel,geometry,
-            [weak=weak_from_this()]{if(auto self=weak.lock())self->measured();},gestures);
+        auto create=[&]{return std::make_shared<PanelBody>(data,panel,geometry,
+            [weak=weak_from_this()]{if(auto self=weak.lock())self->measured();},gestures);};
+        if(object(geometry,L"tiles").Size())group.body=create();
+        else{
+            auto key=O({{L"panel",panelStructure(panel)},{L"split_filters",B(flag(geometry,L"split_filters"))}}).Stringify();
+            auto& cached=bodies[std::wstring(str(panel,L"id"))];
+            if(!cached.view||cached.key!=key||gestures->Retains(cached.view->Root())){cached.view=create();cached.key=key;}
+            group.body=cached.view;
+        }
         auto body=group.body->Root();
+        if(auto parent=VisualTreeHelper::GetParent(body).try_as<Panel>()){
+            uint32_t at;if(parent.Children().IndexOf(body,at))parent.Children().RemoveAt(at);
+        }
         group.bodyScroll=nullptr;group.bodyViewport=nullptr;
         if(object(geometry,L"tiles").Size()){
             Grid::SetRow(body,1);frame.Children().Append(body);
@@ -509,10 +524,15 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         // Reconcile the new model even when retained controls have identical sizes.
         lastMeasurements=L"";
         data->refreshPalette();
+        auto textScale=Windows::UI::ViewManagement::UISettings().TextScaleFactor();
+        if(relocalize||textScale!=bodyTextScale){
+            bodies.clear();for(auto& [id,group]:groups)group.key.clear();bodyTextScale=textScale;
+            measureHost.Children().Clear();offscreen.clear();
+        }
         auto theme=data->theme(),palette=object(data->state,L"palette").Stringify();
         if(theme!=previousTheme||palette!=previousPalette){
             panelBridgeKey=L"";
-            expansion->Reset();drawers->Reset();collapsed->Reset();root.Children().Clear();groups.clear();bridgeShadows.clear();handles.clear();previousTheme=theme;previousPalette=palette;root.Children().Append(cameraSlot);canvasBar->attach();notice->attach();colorStrip->attach();for(auto const& panel:previewPanels)panel->attach();
+            expansion->Reset();drawers->Reset();collapsed->Reset();root.Children().Clear();groups.clear();bodies.clear();bridgeShadows.clear();handles.clear();previousTheme=theme;previousPalette=palette;root.Children().Append(cameraSlot);canvasBar->attach();notice->attach();colorStrip->attach();for(auto const& panel:previewPanels)panel->attach();
             measureHost.Children().Clear();offscreen.clear();root.Children().Append(measureGate);
         }
         root.RequestedTheme(theme==L"dark"?ElementTheme::Dark:ElementTheme::Light);

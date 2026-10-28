@@ -19,6 +19,7 @@ public:
     void ChromeChanged();
     bool Cancel();
     bool SuppressClick()const;
+    bool Retains(winrt::Microsoft::UI::Xaml::UIElement const& element)const;
     bool DeferRemoval(winrt::Microsoft::UI::Xaml::UIElement const& element,std::shared_ptr<void> owner={});
 private:
     struct Impl;

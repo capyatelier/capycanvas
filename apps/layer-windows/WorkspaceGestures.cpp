@@ -289,8 +289,14 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
         edge->at=at;edge->time=time;edgeSend(L"move");
         evidence();
     }
+    bool retains(UIElement const& element)const{
+        if(!edge)return false;
+        for(auto node=element.as<DependencyObject>();node&&node!=root;node=VisualTreeHelper::GetParent(node))
+            if(std::any_of(edge->path.begin(),edge->path.end(),[&](auto const& weak){return weak.get()==node;}))return true;
+        return false;
+    }
     bool deferRemoval(UIElement const& element,std::shared_ptr<void> retainedOwner){
-        if(!edge||std::none_of(edge->path.begin(),edge->path.end(),[&](auto const& weak){return weak.get()==element;}))return false;
+        if(!retains(element))return false;
         auto parent=VisualTreeHelper::GetParent(element).try_as<Panel>();if(!parent)return false;
         if(!edge->shield){
             ContentControl shield;Grid hit;hit.Background(CapyUi::clear());shield.Content(hit);
@@ -780,3 +786,4 @@ void WorkspaceGestures::ChromeChanged(){impl->chrome(O({{L"kind",S(L"refresh")}}
 bool WorkspaceGestures::Cancel(){return impl->cancelAll();}
 bool WorkspaceGestures::SuppressClick()const{return impl->ignoreClick;}
 bool WorkspaceGestures::DeferRemoval(UIElement const& element,std::shared_ptr<void> owner){return impl->deferRemoval(element,std::move(owner));}
+bool WorkspaceGestures::Retains(UIElement const& element)const{return impl->retains(element);}

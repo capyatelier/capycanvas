@@ -1,4 +1,4 @@
-param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme='dark',[ValidateSet('all','diagnostics-fps','diagnostics-fps-light','panels','panels-light')][string]$Journey='all')
+param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme='dark',[ValidateSet('all','diagnostics-fps','diagnostics-fps-light','panels','panels-light','body-retention','body-retention-light')][string]$Journey='all')
 if($Journey.EndsWith('-light')){$Journey=$Journey.Substring(0,$Journey.Length-6);$Theme='light'}
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
@@ -186,6 +186,76 @@ function Check-PresetGroups{
     if(((Model).state.document_file|ConvertTo-Json -Depth 20 -Compress) -cne $document){throw 'Preset grouping review edited the document or history'}
     [IO.File]::WriteAllText((Join-Path $run 'preset-grouping.json'),($records|ConvertTo-Json -Depth 20),[Text.UTF8Encoding]::new($false))
 }
+function Body-Identity([string]$Id){
+    $element=Control $Id -Arranged
+    if($element.Current.ProcessId -ne $review.Id){throw "Body control $Id has the wrong owner"}
+    @{element=$element;runtime=($element.GetRuntimeId() -join ':')}
+}
+function Assert-BodyIdentity([string]$Id,[string]$Expected){
+    $actual=Body-Identity $Id
+    if($actual.runtime -cne $Expected){throw "Panel body $Id was reconstructed"}
+    $actual
+}
+function Body-Theme([string]$Next){
+    Invoke 'settings-button';Invoke 'preference-page-appearance'
+    $choice=Control 'preference-choice-theme'
+    $row=@((Model).preferences.pages.groups.rows|Where-Object id -eq 'theme')[0]
+    $index=if($Next -eq 'dark'){2}else{1}
+    if(!$row -or $row.kind.options.Count -le $index){throw 'Shared theme options are unavailable'}
+    $choice.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
+    (Control $row.kind.options[$index] -Name -Type ([System.Windows.Automation.ControlType]::ListItem)).GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
+    Wait-Until {(Model).state.theme -eq $Next} "Theme $Next did not apply" 30
+    Invoke 'CloseButton';Wait-Until {!(Model).preferences} 'Theme preferences did not close'
+}
+function Check-BodyRetention{
+    $initial=(Model).windows_workspace.id
+    $names=@{'builtin:workspace:illustrator'='Paint';'builtin:workspace:photographer'='Photo';'builtin:workspace:painter'='Sketch'}
+    if(!$names.ContainsKey($initial)){throw 'Body retention fixture cannot restore the initial workspace'}
+    $document=(Model).state.document_file|ConvertTo-Json -Depth 20 -Compress
+    $receipt=[ordered]@{theme=$Theme;initial_workspace=$initial;stages=@()}
+    Use-Workspace 'builtin:workspace:photographer' 'Photo'
+    & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawing.Handle.ToInt64() -Action Resize -Width ([int](1200*$scale)) -Height ([int](700*$scale))
+    Wait-Until {@((Model).layout.groups|Where-Object {$_.panels -contains 'histogram'}).Count -eq 1} 'Photo Histogram group did not dock at fixture width'
+    $photoGroup=@(Preset-Groups 'histogram')[2];$photoTab=$photoGroup.active
+    if($photoTab -ne 'layers'){
+        Invoke 'panel-tab-layers'
+        Wait-Until {@((Model).layout.groups|Where-Object id -eq $photoGroup.id)[0].active -eq 'layers'} 'Photo Layers tab did not activate'
+    }
+    $histogram=Body-Identity 'histogram-chart'
+    $properties=Body-Identity 'layer-properties'
+    $layers=Body-Identity 'layer-list'
+    $receipt.stages+=@{stage='photo-before-switch';histogram=$histogram.runtime;properties=$properties.runtime;layers=$layers.runtime}
+    Use-Workspace 'builtin:workspace:painter' 'Sketch'
+    Use-Workspace 'builtin:workspace:photographer' 'Photo'
+    $afterHistogram=Assert-BodyIdentity 'histogram-chart' $histogram.runtime
+    $afterProperties=Assert-BodyIdentity 'layer-properties' $properties.runtime
+    $afterLayers=Assert-BodyIdentity 'layer-list' $layers.runtime
+    $receipt.stages+=@{stage='photo-after-sketch';histogram=$afterHistogram.runtime;properties=$afterProperties.runtime;layers=$afterLayers.runtime}
+    Invoke 'panel-tab-adjustments'
+    Wait-Until {@((Model).layout.groups|Where-Object id -eq $photoGroup.id)[0].active -eq 'adjustments'} 'Photo Filters tab did not activate'
+    Invoke 'panel-tab-layers'
+    Wait-Until {@((Model).layout.groups|Where-Object id -eq $photoGroup.id)[0].active -eq 'layers'} 'Photo Layers tab did not reactivate'
+    $afterLayers=Assert-BodyIdentity 'layer-list' $layers.runtime
+    $receipt.stages+=@{stage='layers-after-tab-hide-show';layers=$afterLayers.runtime}
+    if($photoTab -ne 'layers'){
+        Invoke ('panel-tab-'+$photoTab)
+        Wait-Until {@((Model).layout.groups|Where-Object id -eq $photoGroup.id)[0].active -eq $photoTab} 'Photo original tab did not restore'
+    }
+    Wait-Until {!(Model).windows_workspace.dirty -and !(Model).windows_workspace.saving} 'Photo tab restoration did not save' 30
+    $otherTheme=if($Theme -eq 'dark'){'light'}else{'dark'}
+    Body-Theme $otherTheme
+    Wait-Until {$node=Find 'histogram-chart' -Visible;$node -and (($node.GetRuntimeId() -join ':') -cne $histogram.runtime)} 'Theme change did not rebuild Histogram body' 30
+    $changed=Body-Identity 'histogram-chart'
+    $receipt.stages+=@{stage='other-theme';theme=$otherTheme;histogram=$changed.runtime}
+    Body-Theme $Theme
+    Wait-Until {$node=Find 'histogram-chart' -Visible;$node -and (($node.GetRuntimeId() -join ':') -cne $changed.runtime)} 'Theme restoration did not rebuild Histogram body' 30
+    $restored=Body-Identity 'histogram-chart'
+    $receipt.stages+=@{stage='restored-theme';theme=$Theme;histogram=$restored.runtime}
+    Use-Workspace $initial $names[$initial]
+    if((Model).windows_workspace.id -ne $initial -or (Model).state.theme -ne $Theme -or (Model).windows_workspace.dirty -or (Model).windows_workspace.saving){throw 'Body retention fixture did not restore its workspace or theme'}
+    if(((Model).state.document_file|ConvertTo-Json -Depth 20 -Compress) -cne $document){throw 'Body retention fixture changed the document or history'}
+    [IO.File]::WriteAllText((Join-Path $run 'body-retention.json'),($receipt|ConvertTo-Json -Depth 8),[Text.UTF8Encoding]::new($false))
+}
 try{
     Enter-CapyEnvironment
     $env:CAPY_STORAGE_DIR=Join-Path $run 'profile'
@@ -204,6 +274,14 @@ try{
     [CapyRowPointer]::Initialize([uint32]$review.Id)
     $ids=@('file','edit','image','layer','select','filter','view','window')
     $scale=[CapyWorkspaceHeader]::GetDpiForWindow($drawing.Handle)/96.
+    if($Journey -eq 'body-retention'){
+        Check-BodyRetention
+        Assert-RendererHealthy $review.Id $drawing
+        & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close -DiscardUnsaved
+        if((Get-Item -LiteralPath $stderr).Length){throw 'Native stderr requires inspection'}
+        [pscustomobject]@{theme=$Theme;journey=$Journey;body_identity_workspace_tab_and_theme='passed';document_and_history='unchanged';zero_exit='passed';run=$run}|ConvertTo-Json
+        return
+    }
     if($Journey -eq 'panels'){
         Check-PresetGroups
         Assert-RendererHealthy $review.Id $drawing
