@@ -99,6 +99,7 @@ __declspec(dllimport) CapyString capy_export_draft(CapyLocalization localization
 __declspec(dllimport) bool capy_color_raster(uint32_t side, float hue, uint32_t projection, uint32_t space, bool guide, uint8_t* output, size_t length);
 __declspec(dllimport) CapyString capy_native_caption(CapyLocalization localization, char const* json);
 __declspec(dllimport) CapyString capy_numeric_labels(CapyLocalization localization, char const* json);
+__declspec(dllimport) CapyString capy_header_frame(CapyLocalization localization, char const* json);
 __declspec(dllimport) CapyString capy_drawer_frame(CapyLocalization localization, char const* json);
 __declspec(dllimport) CapyString capy_bubble_ui(CapyLocalization localization, char const* json);
 __declspec(dllimport) CapyString capy_color_ui(CapyLocalization localization, char const* json);

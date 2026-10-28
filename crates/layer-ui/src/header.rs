@@ -186,6 +186,23 @@ pub struct HeaderLayout {
     pub zones: [Vec<HeaderEntry>; 3],
     next_id: u32,
 }
+pub fn header_frame(source:&str)->Result<serde_json::Value,String> {
+    #[derive(Deserialize)]
+    #[serde(tag="op",rename_all="snake_case",deny_unknown_fields)]
+    enum Request {
+        Geometry {model:HeaderLayout,editing:bool,documents:usize,width:f32,insets:[f32;2],metrics:Vec<HeaderMetric>},
+    }
+    let Request::Geometry {model,editing,documents,width,insets,metrics}=serde_json::from_str(source).map_err(|error|error.to_string())?;
+    model.validate()?;
+    let measured=|value:f32|value.is_finite()&&(0.0..1_000_000.0).contains(&value);
+    if !measured(width)||width<=0.||!insets.into_iter().all(measured)||metrics.len()>128
+        ||metrics.iter().enumerate().any(|(index,metric)|!measured(metric.width)||!measured(metric.compact)
+            ||metrics[..index].iter().any(|previous|previous.id==metric.id)) {
+        return Err("Invalid title-bar measurements".into());
+    }
+    serde_json::to_value(model.resolve_documents(width,insets,&metrics,editing,documents)).map_err(|error|error.to_string())
+}
+
 impl Default for HeaderLayout {
     fn default() -> Self {
         Self::from_items(
@@ -1082,6 +1099,35 @@ pub fn header_drag_label(item: &str, localization: &Localizer) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn supplied_header_frame_replaces_geometry_in_one_call_without_session_state() {
+        let mut layout=HeaderLayout::default();
+        let metrics=vec![HeaderMetric {id:layout.zones[1][0].id,width:540.,compact:140.}];
+        let resolve=|layout:&HeaderLayout,width,documents| {
+            header_frame(&serde_json::json!({"op":"geometry","model":layout,"editing":false,"documents":documents,
+                "width":width,"insets":[12.,168.],"metrics":metrics}).to_string()).unwrap()
+        };
+        let first=resolve(&layout,1600.,1);
+        layout.size=HeaderSize::Large;layout.zones[2].reverse();
+        let current=resolve(&layout,960.,3);
+        assert_ne!(first,current);
+        assert_eq!(current,serde_json::to_value(layout.resolve_documents(960.,[12.,168.],&metrics,false,3)).unwrap());
+        assert_eq!(resolve(&layout,960.,3),current);
+    }
+    #[test]
+    fn supplied_header_frame_rejects_ambiguous_or_invalid_native_measurements() {
+        let layout=HeaderLayout::default();let id=layout.zones[1][0].id;
+        let request=serde_json::json!({"op":"geometry","model":layout,"editing":false,"documents":1,
+            "width":960.,"insets":[0.,168.],"metrics":[{"id":id,"width":180.,"compact":80.}]});
+        for field in ["width","insets","metrics"] {
+            let mut invalid=request.clone();
+            invalid[field]=match field {
+                "width"=>serde_json::json!(0.),"insets"=>serde_json::json!([-1.,168.]),
+                _=>serde_json::json!([request["metrics"][0],request["metrics"][0]]),
+            };
+            assert!(header_frame(&invalid.to_string()).is_err(),"{invalid}");
+        }
+    }
     #[test]
     fn zen_button_retains_header_bounds_and_fallback_clears_native_controls() {
         for platform in Platform::ALL {

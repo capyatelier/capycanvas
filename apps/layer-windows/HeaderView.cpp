@@ -59,12 +59,12 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
     Border document;
     std::shared_ptr<DrawingTabs> drawings;
     std::vector<std::pair<Primitives::ToggleButton,hstring>> workspaces;
-    hstring switchActive,theme,palette,bankKey,geometryKey,desiredKey,lastMeasurement,traceKey;
+    hstring switchActive,theme,palette,bankKey,geometryKey,lastMeasurement,traceKey;
     J geometry,view,configuration,recoveryBounds;
     std::array<J,3> overflowBounds;
     std::vector<Button> overflow;
     std::vector<Border> zones;
-    bool built=false,editing=false,hidden=false,fullscreenActive=false,applying=false,resolvingLink=false,queryBusy=false;
+    bool built=false,editing=false,hidden=false,fullscreenActive=false,applying=false,resolvingLink=false;
     using MenuItems=winrt::Windows::Foundation::Collections::IVector<MenuFlyoutItemBase>;
     bool keepMenu=false;
     std::vector<std::pair<uint32_t,uint32_t>> menuPath;
@@ -75,8 +75,8 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
     std::optional<uint64_t> menuGeneration;
     uint32_t focusedItem=0;
     std::set<uint32_t> handledRequests;
-    Microsoft::UI::Dispatching::DispatcherQueueTimer requestTimer{nullptr},geometryTimer{nullptr};
-    ~Impl(){if(requestTimer)requestTimer.Stop();if(geometryTimer)geometryTimer.Stop();}
+    Microsoft::UI::Dispatching::DispatcherQueueTimer requestTimer{nullptr};
+    ~Impl(){if(requestTimer)requestTimer.Stop();}
     hstring recoveryText(wchar_t const* key) const {return str(object(object(data->catalog,L"bootstrap"),L"recovery"),key);}
     void complete(uint32_t id,V error=JsonValue::CreateNullValue()){
         data->dispatch(O({{L"type",S(L"complete_request")},{L"id",N(id)},{L"error",error}}));
@@ -215,11 +215,9 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
         }});
         requestTimer=root.DispatcherQueue().CreateTimer();requestTimer.Interval(std::chrono::milliseconds(200));
         requestTimer.Tick([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->requests();});
-        geometryTimer=root.DispatcherQueue().CreateTimer();geometryTimer.Interval(std::chrono::milliseconds(16));
-        geometryTimer.Tick([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->reflow();});
         root.Loaded([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock()){self->requests();self->schedule();}});
         root.Unloaded([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock()){
-            self->requestTimer.Stop();self->geometryTimer.Stop();
+            self->requestTimer.Stop();
         }});
     }
     void applyMenus(){
@@ -313,7 +311,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
     void build(){
         auto popup=std::exchange(activeMenu,nullptr);menuPopulate={};menuSource=L"";if(popup)popup.Hide();
         if(str(input->Source(),L"kind")!=L"capy")input->Cancel();for(uint32_t i=canvas.Children().Size();i>0;--i)if(canvas.Children().GetAt(i-1)!=capySurface)canvas.Children().RemoveAt(i-1);items.clear();bars.clear();bankParts.clear();workspaces.clear();menus.clear();sizes.clear();overflow.clear();zones.clear();
-        bankKey=geometryKey=desiredKey=lastMeasurement=L"";systemStatus.reset();menuGeneration.reset();overflowBounds={};recoveryBounds=J{};
+        bankKey=geometryKey=lastMeasurement=L"";systemStatus.reset();menuGeneration.reset();overflowBounds={};recoveryBounds=J{};
         background=Border();background.Background(clear());canvas.Children().Append(background);
         menuLabels=StackPanel();menuLabels.Orientation(Orientation::Horizontal);menuLabels.Spacing(2);
         menuLabels.UseLayoutRounding(false);
@@ -618,12 +616,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
         for(auto const& [item,id]:sizes)item.Background(id==str(object(view,L"model"),L"size")?selected(data):clear());
         footer.IsChecked(flag(object(object(object(data->state,L"workspace"),L"layout"),L"canvas_info"),L"visible",true));
     }
-    void reflow(){
-        if(!built||applying||root.ActualWidth()<=0)return;
-        applying=true;struct Reset{bool& value;~Reset(){value=false;}}reset{applying};
-        double width=root.ActualWidth();layoutBank(width);root.Height(totalHeight);
-        place(background,O({{L"x",N(0)},{L"y",N(0)},{L"width",N(width)},{L"height",N(height)}}));
-        backgroundFade->apply(background,!hidden,changed);
+    J geometryRequest(double width){
         A metrics;auto model=object(view,L"model");
         auto requestedSize=find(array(view,L"sizes"),L"id",str(model,L"size"));double requestedTile=num(requestedSize,L"tile");
         for(auto const& [id,native]:items){
@@ -645,33 +638,31 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
         bool navigation=false;
         for(auto const& [id,native]:items){auto kind=str(object(native.entry,L"item"),L"kind");navigation|=kind==L"capy"||kind==L"menu"||kind==L"menu_labels";}
         A insets;insets.Append(N(leftInset+(!editing&&!navigation?requestedTile+num(requestedSize,L"item_gap"):0)));insets.Append(N(rightInset));
-        auto requested=O({{L"op",S(L"geometry")},{L"model",model},{L"editing",B(editing)},{L"documents",N(array(object(data->model,L"windows_tabs"),L"tabs").Size())},{L"width",N(width)},{L"insets",insets},{L"metrics",metrics}});
-        auto key=requested.Stringify();
-        desiredKey=key;
-        if(key!=geometryKey&&!queryBusy){
-            queryBusy=true;
-            bool accepted=QueryWorkspace(data->query,O({{L"type",S(L"header")},{L"request",requested}}),
-                [weak=weak_from_this(),key,requested](J reply){if(auto self=weak.lock()){
-                    self->queryBusy=false;
-                    if(self->desiredKey==key){
-                        auto next=object(reply,L"result");
-                        if(next.Size()){
-                            bool resized=str(next,L"size")!=str(self->geometry,L"size");
-                            self->geometry=next;self->configuration=requested;self->geometryKey=key;
-                            self->input->Configure(object(requested,L"model"),flag(requested,L"editing"),requested);
-                            if(resized){self->applyItems();self->reflow();}
-                            else{self->present();self->publish();}
-                        }
-                    }
-                    self->schedule();
-                }});
-            if(!accepted){queryBusy=false;geometryTimer.Start();}
-            else geometryTimer.Stop();
+        return O({{L"op",S(L"geometry")},{L"model",model},{L"editing",B(editing)},{L"documents",N(array(object(data->model,L"windows_tabs"),L"tabs").Size())},{L"width",N(width)},{L"insets",insets},{L"metrics",metrics}});
+    }
+    void reflow(){
+        if(!built||applying||root.ActualWidth()<=0)return;
+        applying=true;struct Reset{bool& value;~Reset(){value=false;}}reset{applying};
+        double width=root.ActualWidth();
+        for(int pass=0;pass<3;++pass){
+            auto requested=geometryRequest(width);auto key=requested.Stringify();
+            if(key==geometryKey)break;
+            NativeString raw(capy_header_frame(data->localization.get(),to_string(key).c_str()),capy_string_free);
+            J next;if(!raw||!J::TryParse(to_hstring(raw.get()),next)||next.HasKey(L"error"))
+                throw hresult_invalid_argument(L"Title-bar layout resolution failed");
+            bool resized=str(next,L"size")!=str(geometry,L"size");
+            geometry=next;configuration=requested;geometryKey=key;
+            input->Configure(object(requested,L"model"),flag(requested,L"editing"),requested);
+            if(!resized)break;
+            applyItems();
         }
+        layoutBank(width);root.Height(totalHeight);
+        place(background,O({{L"x",N(0)},{L"y",N(0)},{L"width",N(width)},{L"height",N(height)}}));
+        backgroundFade->apply(background,!hidden,changed);
         present();publish();
     }
     void publish(){
-        if(!geometry.Size()||geometryKey!=desiredKey||input->Busy())return;
+        if(!geometry.Size()||input->Busy())return;
         A bounds;for(auto item:array(geometry,L"items"))bounds.Append(item);
         auto hiddenItems=array(geometry,L"hidden"),more=array(geometry,L"overflow");
         for(uint32_t zone=0;zone<std::min(hiddenItems.Size(),more.Size());++zone){
@@ -708,12 +699,13 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
         while(bars.size()<barList.Size()){Border bar;bar.IsHitTestVisible(false);bar.Background(headerSurface(data));canvas.Children().Append(bar);Canvas::SetZIndex(bar,4);bars.push_back(bar);}
         for(size_t i=0;i<bars.size();++i){
             if(barFades.size()<=i)barFades.push_back(std::make_shared<ChromeVisibility>());
-            bool shown=i<barList.Size()&&!hidden;barFades[i]->apply(bars[i],shown,changed);
+            bool shown=i<barList.Size()&&!hidden;barFades[i]->apply(bars[i],shown,changed,i<barList.Size());
             if(shown){auto bar=barList.GetObjectAt(uint32_t(i)),bounds=object(bar,L"bounds");place(bars[i],bounds);bars[i].CornerRadius(joinedCorners(bounds,array(bar,L"items")));}
         }
         for(auto& [id,native]:items){
             auto bounds=id==dragged?object(preview,L"held"):object(findId(placed,id),L"bounds");
-            bool visible=bounds.Size()&&!hidden&&(editing||str(object(native.entry,L"item"),L"kind")!=L"capy");native.fade->apply(native.frame,visible,changed);
+            bool placed=bounds.Size()&&(editing||str(object(native.entry,L"item"),L"kind")!=L"capy");
+            bool visible=placed&&!hidden;native.fade->apply(native.frame,visible,changed,placed);
             if(!visible)continue;
             // Only drag neighbors animate. Normal controls and native caption
             // hit regions must adopt a completed layout together.
@@ -749,7 +741,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
             zones[i].Visibility(editing&&!hidden&&i<zoneBounds.Size()?Visibility::Visible:Visibility::Collapsed);
             if(i<zoneBounds.Size())place(zones[i],zoneBounds.GetObjectAt(i));zones[i].BorderBrush(data->brush(L"tabbar"));
             bool show=!hidden&&i<more.Size()&&more.GetAt(i).ValueType()==JsonValueType::Object;
-            overflowFades[i]->apply(overflow[i],show,changed);if(show){overflowBounds[i]=more.GetObjectAt(i);place(overflow[i],overflowBounds[i]);}
+            overflowFades[i]->apply(overflow[i],show,changed,i<more.Size()&&more.GetAt(i).ValueType()==JsonValueType::Object);if(show){overflowBounds[i]=more.GetObjectAt(i);place(overflow[i],overflowBounds[i]);}
             overflow[i].Background(overflowJoined[i]?clear():headerSurface(data));overflow[i].CornerRadius({corner(),corner(),corner(),corner()});
         }
         ghost.Visibility(preview.Size()&&!dragged?Visibility::Visible:Visibility::Collapsed);
@@ -760,7 +752,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
             ghost.Child(label(data,text));ghost.Padding({6,6,6,6});
         }
         bool navigation=false;for(auto const& [id,native]:items){auto k=str(object(native.entry,L"item"),L"kind");navigation|=k==L"capy"||k==L"menu"||k==L"menu_labels";}
-        recoveryFade->apply(recovery,!hidden&&!navigation&&!editing,changed);
+        recoveryFade->apply(recovery,!hidden&&!navigation&&!editing,changed,!navigation&&!editing);
         recoveryBounds=O({{L"x",N(leftInset+itemGap)},{L"y",N(itemGap)},{L"width",N(tile)},{L"height",N(tile)}});place(recovery,recoveryBounds);
         bank.Visibility(editing&&!hidden?Visibility::Visible:Visibility::Collapsed);
         if(editing&&input->Selected()!=focusedItem){
