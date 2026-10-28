@@ -8,7 +8,8 @@ $source=Join-Path $PSScriptRoot '../tests/work-buffer.cpp'
 $object=Join-Path $OutputDirectory 'work-buffer.obj'
 $executable=Join-Path $OutputDirectory 'work-buffer-test.exe'
 $optimization = if ($Configuration -eq 'Debug') { '/Od' } else { '/O2' }
-& cl /nologo /std:c++20 /EHsc /W4 /WX $optimization $source "/Fo$object" "/Fe$executable"
+$manifest = '/MANIFEST:EMBED',"/MANIFESTUAC:level='asInvoker' uiAccess='false'"
+& cl /nologo /std:c++20 /EHsc /W4 /WX $optimization $source "/Fo$object" "/Fe$executable" /link @manifest
 if($LASTEXITCODE -ne 0){throw 'Canvas queue test build failed. Run from a Visual Studio developer shell.'}
 & $executable
 if($LASTEXITCODE -ne 0){throw 'Canvas queue test failed.'}
@@ -16,7 +17,7 @@ if($LASTEXITCODE -ne 0){throw 'Canvas queue test failed.'}
 $source=Join-Path $PSScriptRoot '../tests/model-update.cpp'
 $object=Join-Path $OutputDirectory 'model-update.obj'
 $executable=Join-Path $OutputDirectory 'model-update-test.exe'
-& cl /nologo /std:c++20 /EHsc /W4 /WX $optimization $source "/Fo$object" "/Fe$executable" windowsapp.lib
+& cl /nologo /std:c++20 /EHsc /W4 /WX $optimization $source "/Fo$object" "/Fe$executable" windowsapp.lib /link @manifest
 if($LASTEXITCODE -ne 0){throw 'Model update test build failed.'}
 & $executable
 if($LASTEXITCODE -ne 0){throw 'Model update replay failed.'}
