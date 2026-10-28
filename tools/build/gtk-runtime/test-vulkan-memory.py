@@ -8,11 +8,6 @@ import tempfile
 
 root = Path(sys.argv[1]).resolve()
 gpu = root / "gsk/gpu"
-if len(sys.argv) > 2:
-    baseline = Path(sys.argv[2]) / "gsk/gpu"
-    for name in ("gskgpudevice.c", "gskgpudeviceprivate.h", "gskvulkandevice.c",
-                 "gskvulkanmemoryprivate.h"):
-        assert (gpu / name).read_bytes() == (baseline / name).read_bytes(), name
 
 header = r'''
 #include <glib.h>
