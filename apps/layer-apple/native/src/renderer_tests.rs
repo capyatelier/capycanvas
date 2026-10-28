@@ -9,6 +9,64 @@ fn install(app: &App) {
 }
 
 #[test]
+fn apple_idle_paper_presentation_notifies_once_and_settles_without_input() {
+    let reference = native_renderer();
+    for platform in [0, 1] {
+        let app = App::new(platform);
+        let paper = layer_ui::occurrence_token(layer_core::paper::paper_occurrence(app.document().scene(), None).unwrap());
+        app.action(json!({"type":"select_layer","id":paper}));
+        app.action(json!({"type":"effect","action":{"op":"set","layer":paper,"key":"texture","value":{"kind":"choice","value":2}}}));
+        app.action(json!({"type":"effect","action":{"op":"set","layer":paper,"key":"relief","value":{"kind":"number","value":150}}}));
+        let gpu = layer_host::GpuContext::of(&reference).rasterizer(Default::default(), &Default::default(), true).unwrap();
+        app.with(|native| native.metal.install_renderer(&mut native.host, gpu).unwrap());
+        assert_eq!(unsafe { capy_apple_resize(app.0, 128, 128, 1.) }, 0);
+        app.draw_until_idle();
+        let mut native = app.borrow();
+        let host = &mut native.host;
+        let gpu = host.session.engine().backend().0.as_ref().unwrap();
+        gpu.shader_idle(false, false);
+        let view = host.session.state().camera.view();
+        let surround = host.session.state().palette.surround_linear;
+        let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+        let texture = gpu.device().create_texture(&wgpu::TextureDescriptor {
+            label: Some("Apple idle paper"),
+            size: wgpu::Extent3d { width: view.width_px, height: view.height_px, depth_or_array_layers: 1 },
+            mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2, format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT, view_formats: &[],
+        });
+        let target = texture.create_view(&Default::default());
+        let mut presenter = layer_render_wgpu::ViewportPresenter::for_surface(gpu, format,
+            layer_render_wgpu::SdrSurfaceColor::Srgb).unwrap();
+        pollster::block_on(presenter.prepare(gpu)).unwrap();
+        presenter.present(gpu, &target, view, surround).unwrap();
+        assert!(!presenter.paper_lighting_drawn());
+        host.dirty = false;
+        crate::metal::MetalHost::poll_presenter(host, &mut presenter).unwrap();
+        assert!(!host.dirty, "parked lighting must not request a frame");
+        assert!(!crate::metal::MetalHost::poll_presenter(host, &mut presenter).unwrap());
+        let revision = host.session.engine().document().revision;
+        host.session.engine().backend().0.as_ref().unwrap().shader_idle(true, false);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        loop {
+            let notify = crate::metal::MetalHost::poll_presenter(host, &mut presenter).unwrap();
+            if host.dirty { assert!(notify, "the idle health poll must wake the Swift frame driver"); break; }
+            assert!(std::time::Instant::now() < deadline, "idle paper lighting did not become ready");
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        assert!(!crate::metal::MetalHost::poll_presenter(host, &mut presenter).unwrap(), "an outstanding frame needs no duplicate notification");
+        let gpu = host.session.engine().backend().0.as_ref().unwrap();
+        presenter.present(gpu, &target, view, surround).unwrap();
+        assert!(presenter.paper_lighting_drawn());
+        host.dirty = false;
+        for _ in 0..4 {
+            assert!(!crate::metal::MetalHost::poll_presenter(host, &mut presenter).unwrap());
+            assert!(!host.dirty, "settled paper must remain idle");
+        }
+        assert_eq!(host.session.engine().document().revision, revision);
+    }
+}
+
+#[test]
 fn canvas_update_counter_observes_paint_without_advancing_it() {
     assert_eq!(unsafe { capy_apple_submitted_canvas_updates(0) }, 0);
     for platform in [0, 1] {

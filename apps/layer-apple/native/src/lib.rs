@@ -729,7 +729,8 @@ pub unsafe extern "C" fn capy_apple_poll_renderer(app: u64) -> i32 {
     app.perform(|a| {
         a.gpu_operation(|a| {
             a.metal.observe_failure(&mut a.host, true);
-            let changed=a.metal.poll_color(&mut a.host)? | a.metal.screen_tick(&mut a.host);
+            let changed=a.metal.poll_color(&mut a.host)? | a.metal.screen_tick(&mut a.host)
+                | a.metal.poll_presentation(&mut a.host)?;
             if changed {a.host.invalidate_snapshot();}
             Ok(i32::from(changed || a.host.session.rendering_suspended()))
         })

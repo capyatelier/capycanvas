@@ -87,6 +87,15 @@ impl MetalHost {
         if changed {host.dirty=true; host.invalidate_snapshot();}
         Ok(changed)
     }
+    pub(crate) fn poll_presentation(&mut self, host: &mut NativeHost) -> Result<bool, String> {
+        let Some(surface) = self.surface.as_mut() else { return Ok(false); };
+        Self::poll_presenter(host, &mut surface.presenter)
+    }
+    pub(super) fn poll_presenter(host: &mut NativeHost, presenter: &mut ViewportPresenter) -> Result<bool, String> {
+        let before = (host.dirty, host.startup);
+        host.poll_canvas_presentation(presenter)?;
+        Ok((!before.0 && host.dirty) || before.1 != host.startup)
+    }
     pub(crate) fn display_status(&self, host: &NativeHost) -> serde_json::Value {
         let s = &host.session;
         let hdr = s.engine().document().composition().color.depth.is_float();
@@ -296,6 +305,7 @@ impl MetalHost {
     ) -> Result<(bool, [u64; 5]), String> {
         self.observe_failure(host, true);
         self.poll_color(host)?;
+        if !host.dirty && host.startup.complete { self.poll_presentation(host)?; }
         if host.session.rendering_suspended() { return Ok((false, [0; 5])); }
         if (!host.dirty && host.startup.complete) || self.surface.is_none() {
             return Ok((false, [0; 5]));
