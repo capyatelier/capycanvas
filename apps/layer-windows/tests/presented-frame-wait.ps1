@@ -65,5 +65,17 @@ try{
         Write-Trace 'presentation-state' @{process_id=$case.owner;window_id=7;presentation_epoch=$case.epoch;required=$case.required;displayed=$case.displayed}
         Expect $case.name $case.refused
     }
+    Write-Trace 'presentation-state' @{process_id=$PID;window_id=7;presentation_epoch=43;required=11;displayed=10}
+    $script:advance={Write-Trace 'presentation-state' @{process_id=$PID;window_id=7;presentation_epoch=43;required=10;displayed=10}}
+    Expect 'a required reservation that retires while waiting' $false
+    if($script:polls -ne 1){throw 'The wait did not acknowledge the retired reservation at its first valid display'}
+    Write-Trace 'presentation-state' @{process_id=$PID;window_id=7;presentation_epoch=43;required=11;displayed=10}
+    $script:required=11;$script:shown=10
+    $script:advance={
+        $script:required++;$script:shown++
+        Write-Trace 'presentation-state' @{process_id=$PID;window_id=7;presentation_epoch=43;required=$script:required;displayed=$script:shown}
+    }
+    Expect 'a requested frame followed by later submissions' $false
+    if($script:polls -ne 1){throw 'The wait followed later submissions after its requested frame was displayed'}
     "Presented frame wait: $checks passed"
 }finally{Remove-Item -LiteralPath $out -Recurse -Force}

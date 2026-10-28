@@ -264,12 +264,14 @@ function Wait-PresentedFrame{
     $epoch=($states|ForEach-Object {$_.presentation_epoch}|Measure-Object -Maximum).Maximum
     if($null -eq $frame){return}
     $presentation=Join-Path $folder ($leaf -replace '^ui-state-','presentation-state-')
+    $presentationTarget=@{required=$null}
     Wait-Until {
         $display=if([IO.File]::Exists($presentation)){Read-Snapshot $presentation}
         if($display.process_id -ne $review.Id){return $false}
         if($null -ne $epoch){
-            return $null -ne $display.presentation_epoch -and $display.presentation_epoch -ge $epoch -and
-                $null -ne $display.required -and ($null -eq $display.displayed -or $display.displayed -ge $display.required)
+            if($null -eq $display.presentation_epoch -or $display.presentation_epoch -lt $epoch -or $null -eq $display.required){return $false}
+            if($null -eq $presentationTarget.required -or $display.required -lt $presentationTarget.required){$presentationTarget.required=$display.required}
+            return $null -eq $display.displayed -or $display.displayed -ge $presentationTarget.required
         }
         $null -eq $display.displayed -or $display.displayed -ge $frame
     } 'The display did not show the latest canvas frame'
