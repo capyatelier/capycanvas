@@ -19,6 +19,8 @@ mod color_storage;
 #[cfg(any(target_os = "windows", test))]
 mod recovery;
 mod events;
+#[cfg(target_os = "windows")]
+mod frame_timing;
 #[cfg(any(target_os = "windows", test))]
 mod device_loss_test;
 #[cfg(any(target_os = "windows", test))]

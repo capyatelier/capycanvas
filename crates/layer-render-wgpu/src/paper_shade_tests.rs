@@ -87,7 +87,7 @@ fn viewport_paper_compilation_stays_optional_after_startup() {
         }
         let draw = |presenter: &mut ViewportPresenter, renderer: &WgpuRasterizer, target: &wgpu::TextureView| {
             if overview { presenter.present_overviews(renderer, target, [128; 2]) }
-            else { presenter.present(renderer, target, view(), [0.2, 0.3, 0.4, 1.]) }.unwrap();
+            else { presenter.present(renderer, target, view(), [0.2, 0.3, 0.4, 1.]).map(|_| ()) }.unwrap();
         };
         r.prepare_startup(&document, &layer_core::default_brush(layer_core::DefaultBrushPreset::GPen), false).unwrap();
         presenter.pipelines_ready(&r);

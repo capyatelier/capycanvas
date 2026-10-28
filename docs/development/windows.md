@@ -217,6 +217,16 @@ the matching file before using its metrics.
 
 Turn tracing off for performance runs.
 
+Latency traces include the input-drain time and the prepare, compose, submit and
+Present boundaries in QPC nanoseconds. `pacing_ns` and `acquisition_ns` are elapsed
+durations for the drawing fence and DXGI acquisition. `submitted_ns` is sampled
+after submission returns and before Present; it is an upper bound on the CPU
+submission boundary, not GPU completion or display time.
+
+`FramePacing::IN_FLIGHT` controls both GPU drawing depth and the DXGI maximum
+frame latency. Pacing tracks the drawing submission returned by the presenter;
+an additional submission after Present would also include unrelated queued work.
+
 ### Runtime filter packages
 
 The filter catalog is embedded. `CAPY_FILTERS_DIR` loads an external package at

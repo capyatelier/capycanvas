@@ -929,18 +929,18 @@ impl ViewportPresenter {
         target: &wgpu::TextureView,
         view: ViewState,
         surround_linear: [f32; 4],
-    ) -> Result<(), GpuRasterError> {
+    ) -> Result<wgpu::SubmissionIndex, GpuRasterError> {
         let mut encoder = renderer
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("viewport presentation"),
             });
         self.encode(renderer, &mut encoder, target, view, surround_linear)?;
-        renderer.queue.submit_for_present([encoder.finish()]);
+        let submitted = renderer.queue.submit_for_present([encoder.finish()]);
         if let Some(timer) = &mut self.timing {
             timer.submitted(renderer.queue());
         }
-        Ok(())
+        Ok(submitted)
     }
 
     /// Rotate the logical viewport into a display's native buffer orientation.

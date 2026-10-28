@@ -6466,6 +6466,50 @@ observation-bound p99 is 22.6722 → 22.7517 ms. Both consume all 4564 inputs,
 including priming. These bounds confirm no observed software-timing regression;
 they do not replace the earlier exact displayed-frame measurements.
 
+## Windows frame latency one, 2026-10-28
+
+The same Surface Pro 11, Adreno X1-85, ARM64 Release, AC/Balanced and verified
+120 Hz output compare `daff223b5` with latency one and pacing against the actual
+drawing submission. Both images include identical opt-in stage instrumentation.
+The control retains latency two and the empty pacing submission after Present.
+Immediate presentation and scRGB remain identical. Each brush has one priming
+contact and three six-second measured contacts on the same 2560 × 1920 drawing.
+
+| Metric | Latency two | Latency one, actual drawing fence |
+| --- | ---: | ---: |
+| Pencil input to frame return p50 / p95 / p99, ms | 4.315 / 7.844 / 12.761 | 4.281 / 7.541 / 12.637 |
+| G-Pen input to frame return p50 / p95 / p99, ms | 4.269 / 7.652 / 12.995 | 4.284 / 7.384 / 12.355 |
+| Pencil DXGI observation-bound p99, ms | 22.916 | 22.387 |
+| G-Pen DXGI observation-bound p99, ms | 22.830 | 22.742 |
+| Divider UI CPU after idle subtraction, median ms/contact | 4109 | 4281 |
+| Resize observed native bounds changes/s, median | 31.311 | 30.645 |
+| Resize UI CPU per observed bounds change, median ms | 29.090 | 30.995 |
+| Resize observed bounds-change gap p99, median ms | 66.549 | 66.540 |
+
+Contact ranges overlap for both brush tails and UI workloads; these runs do not
+demonstrate a latency or throughput change beyond their spread. All four brush
+series consume all 4564 inputs, including priming, with no unmatched inputs.
+The observation bounds do not establish displayed latency or present mode, and
+native bounds sampling does not establish displayed motion FPS. Physical pen
+latency and per-stroke GPU timestamps are unmeasured in this comparison.
+
+An initial latency-one trial appears slower than its control, but a reverse pair
+does not reproduce the control's initial fast state. That trial is retained,
+not used as evidence of a latency gain. Stage timing separates the waits: in the
+final matched pair latency two spends median 3.33–3.45 ms in DXGI acquisition;
+latency one spends median 2.83–2.87 ms waiting for GPU drawing and about 0.60 ms
+in acquisition. Occasional long waits remain. The D3D12 fence regression test
+requires a completed drawing to retire while unrelated later queue work is held.
+
+Raw contacts, stage joins, initial and reverse trials, source hashes and actual
+PE code hashes remain in `artifacts/windows/winui-motion/latency-one/`.
+
+The final diagnostic build clears acquisition durations when reusing an acquired
+image. Its three-contact Pencil guard consumes all 4564 inputs, with frame-return
+p99 12.595 ms and observation-bound p99 22.873 ms, within the matched spread.
+The final build passes both light and dark bridge journeys, 161 Windows library
+tests, five shared presentation tests, eleven backdrop tests and strict clippy.
+
 ## Windows offscreen GPU workloads
 
 The 2026-10-26 Release workload run uses the passed-through NVIDIA RTX PRO 6000

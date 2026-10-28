@@ -11,6 +11,10 @@ typedef uint64_t CapyLaunch;
 typedef uint64_t CapyLocalization;
 typedef uint64_t CapyPreview;
 typedef uint64_t CapyString;
+typedef struct CapyFrameTiming {
+    uint64_t pacing_ns,acquisition_ns,prepared_ns,composed_ns,submitted_ns,presented_ns;
+} CapyFrameTiming;
+__declspec(dllimport) bool capy_frame_timing(CapyHost,CapyFrameTiming*);
 __declspec(dllimport) uint64_t capy_clipboard_publication(void);
 /* Render-owner-only request/poll, nonblocking GPU readback. CPU-only typed packet handles transfer to a worker. Copies validate the
    type, generation and range while retaining the packet for the whole call. */

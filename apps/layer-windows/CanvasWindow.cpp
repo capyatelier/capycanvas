@@ -1196,6 +1196,7 @@ void CanvasWindow::Run() {
             // Samples admitted during reconstruction must wait for replacement
             // brushes; draining sooner would classify their presses as unready.
             {std::lock_guard lock(mutex);pending=recoveryAttempts?work.TakeBeforePointers():work.Take();overflow=transportFailed;hover=std::exchange(pendingHover,std::nullopt);}
+            auto drainedAt=latencyTrace.enabled?Now():0;
             space.notify_all();
             bool failed=false;
             if(hover&&capy_chrome(host,*hover?0:1,0,0,false,menuOpen.load())<0){Fail(NativeString(capy_error()).get());break;}
@@ -1212,7 +1213,8 @@ void CanvasWindow::Run() {
             auto result=capy_frame(host,now,now);
             if(latencyTrace.enabled){
                 auto end=Now();uint64_t stats[6]{};auto error=capy_presentation_stats(host,stats);
-                latencyTrace.Frame(acquireStart,acquiredAt,now,end,stats,error);
+                CapyFrameTiming timing{};capy_frame_timing(host,&timing);
+                latencyTrace.Frame(acquireStart,acquiredAt,now,end,stats,error,drainedAt,timing);
             }
             if(result<0){if(capy_device_lost(host))continue;Fail(NativeString(capy_error()).get());break;}
             dirty=result!=0;

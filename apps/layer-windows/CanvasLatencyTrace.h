@@ -55,16 +55,16 @@ public:
             consumed.push_back({p.sequence,frameNumber+1});
         }
     }
-    void Frame(uint64_t acquireStart,uint64_t acquired,uint64_t renderStart,uint64_t renderEnd,uint64_t const* stats,int32_t error) {
+    void Frame(uint64_t acquireStart,uint64_t acquired,uint64_t renderStart,uint64_t renderEnd,uint64_t const* stats,int32_t error,uint64_t drained=0,CapyFrameTiming timing={}) {
         if(!enabled)return;
         if(presentations.size()==Limit)presentationOverflow=true;
-        else presentations.push_back({uint64_t(presentations.size()+1),acquireStart,acquired,renderStart,renderEnd,stats[0],stats[1],stats[2],stats[3],stats[4],error});
+        else presentations.push_back({uint64_t(presentations.size()+1),acquireStart,acquired,renderStart,renderEnd,stats[0],stats[1],stats[2],stats[3],stats[4],error,drained,timing});
         if(consumed.empty())return;
         auto last=consumed.back().frame-1;
         if(last<frames.size()&&renderStart>frames[last].renderEnd+500000000ULL)return;
         ++frameNumber;
         if(frames.size()==Limit){frameOverflow=true;return;}
-        frames.push_back({frameNumber,acquireStart,acquired,renderStart,renderEnd,stats[0],stats[1],stats[2],stats[3],stats[4],error});
+        frames.push_back({frameNumber,acquireStart,acquired,renderStart,renderEnd,stats[0],stats[1],stats[2],stats[3],stats[4],error,drained,timing});
     }
     void Dump(std::string const& prefix) const {
         if(!enabled)return;
@@ -73,18 +73,20 @@ public:
         for(auto const& p:inputs)input<<p.sequence<<','<<p.sample<<','<<p.arrival<<','<<p.phase<<'\n';
         consume<<"sequence,frame\n";
         for(auto const& p:consumed)consume<<p.sequence<<','<<p.frame<<'\n';
-        frame<<"frame,acquire_start_ns,acquired_ns,render_start_ns,render_end_ns,last_present,displayed_present,present_refresh,sync_refresh,sync_qpc,stats_error\n";
-        for(auto const& f:frames)frame<<f.number<<','<<f.acquireStart<<','<<f.acquired<<','<<f.renderStart<<','<<f.renderEnd<<','<<f.lastPresent<<','<<f.displayed<<','<<f.presentRefresh<<','<<f.syncRefresh<<','<<f.syncQpc<<','<<f.error<<'\n';
+        auto write=[](std::ostream& stream,auto const& rows,char const* index){
+            stream<<index<<",acquire_start_ns,acquired_ns,render_start_ns,render_end_ns,last_present,displayed_present,present_refresh,sync_refresh,sync_qpc,stats_error,drained_ns,pacing_ns,acquisition_ns,prepared_ns,composed_ns,submitted_ns,presented_ns\n";
+            for(auto const& f:rows)stream<<f.number<<','<<f.acquireStart<<','<<f.acquired<<','<<f.renderStart<<','<<f.renderEnd<<','<<f.lastPresent<<','<<f.displayed<<','<<f.presentRefresh<<','<<f.syncRefresh<<','<<f.syncQpc<<','<<f.error<<','<<f.drained<<','<<f.timing.pacing_ns<<','<<f.timing.acquisition_ns<<','<<f.timing.prepared_ns<<','<<f.timing.composed_ns<<','<<f.timing.submitted_ns<<','<<f.timing.presented_ns<<'\n';
+        };
+        write(frame,frames,"frame");
         std::ofstream presentation(prefix+"-presentations.csv");
-        presentation<<"presentation,acquire_start_ns,acquired_ns,render_start_ns,render_end_ns,last_present,displayed_present,present_refresh,sync_refresh,sync_qpc,stats_error\n";
-        for(auto const& f:presentations)presentation<<f.number<<','<<f.acquireStart<<','<<f.acquired<<','<<f.renderStart<<','<<f.renderEnd<<','<<f.lastPresent<<','<<f.displayed<<','<<f.presentRefresh<<','<<f.syncRefresh<<','<<f.syncQpc<<','<<f.error<<'\n';
+        write(presentation,presentations,"presentation");
         std::ofstream(prefix+"-status.json")<<"{\"overflow\":"<<(inputOverflow||consumeOverflow||frameOverflow||presentationOverflow?"true":"false")<<",\"predicted_points\":"<<predictedPoints<<"}";
     }
 private:
     static constexpr size_t Limit=65536;
     struct InputRecord {uint64_t sequence,sample,arrival;uint32_t phase;};
     struct Consumption {uint64_t sequence,frame;};
-    struct FrameRecord {uint64_t number,acquireStart,acquired,renderStart,renderEnd,lastPresent,displayed,presentRefresh,syncRefresh,syncQpc;int32_t error;};
+    struct FrameRecord {uint64_t number,acquireStart,acquired,renderStart,renderEnd,lastPresent,displayed,presentRefresh,syncRefresh,syncQpc;int32_t error;uint64_t drained;CapyFrameTiming timing;};
     std::vector<InputRecord> inputs; // independent input thread
     std::vector<Consumption> consumed; // render owner
     std::vector<FrameRecord> presentations;

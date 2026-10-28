@@ -98,6 +98,7 @@ pub struct CapyHost {
     blank_presented: bool,
     surface_ready: SurfaceReadiness,
     prediction_frames: Option<[u64; 2]>, // opt-in, accumulated across document switches
+    frame_timing: Option<crate::frame_timing::FrameTiming>,
     services: Option<crate::settings::SettingsService>,
     launch_settings: Option<crate::settings::PreparedSettings>,
     filters: Option<crate::filter_packages::FilterService>,
@@ -253,6 +254,7 @@ impl CapyHost {
             blank_presented: false,
             surface_ready: Default::default(),
             prediction_frames: std::env::var_os("CAPY_LATENCY_TRACE").map(|_| [0; 2]),
+            frame_timing: std::env::var_os("CAPY_LATENCY_TRACE").map(|_| Default::default()),
             services: None,
             launch_settings: launch.settings.take(),
             filters: None,
@@ -396,7 +398,7 @@ impl CapyHost {
             .contains(&wgpu::PresentMode::Immediate) {
             wgpu::PresentMode::Immediate
         } else { wgpu::PresentMode::Fifo };
-        config.desired_maximum_frame_latency = 2;
+        config.desired_maximum_frame_latency = crate::frame_pacing::FramePacing::IN_FLIGHT as u32;
         config.alpha_mode = wgpu::CompositeAlphaMode::Opaque;
         // Keep scRGB across monitor moves; only viewing changes, never artwork.
         if self.surface.get_capabilities(&adapter).format_capabilities.iter().any(|f|
@@ -448,6 +450,7 @@ impl CapyHost {
         let prediction_before = self.prediction_frames.map(|_| self.native.session.engine().metrics());
         self.native
             .prepare_canvas_frame(now, presentation, self.blank_presented)?;
+        if let Some(timing) = &mut self.frame_timing { timing.prepared_ns = crate::frame_timing::now(); }
         if let (Some(total), Some(before)) = (&mut self.prediction_frames, prediction_before) {
             let after = self.native.session.engine().metrics();
             total[0] += after.platform_prediction_frames.saturating_sub(before.platform_prediction_frames);
@@ -496,6 +499,7 @@ impl CapyHost {
             tone,
             display,
         )?;
+        if let Some(timing) = &mut self.frame_timing { timing.composed_ns = crate::frame_timing::now(); }
         let gpu = self.native.session.engine().backend().0.as_ref().unwrap();
         let Some(target) = take_prepared_target(presenter, gpu, &mut self.target) else {
             if !self.surface_ready.queued && let Some(target)=self.target.take() {
@@ -509,23 +513,25 @@ impl CapyHost {
                         })],..Default::default()
                     });
                 }
-                gpu.queue().submit_for_present([encoder.finish()]);gpu.queue().present(target);
-                self.native.canvas_frame_rate.submitted();self.pacing.submitted(gpu.queue());
+                let submission=gpu.queue().submit_for_present([encoder.finish()]);gpu.queue().present(target);
+                self.native.canvas_frame_rate.submitted();self.pacing.submitted(submission);
                 self.surface_ready.submitted(gpu.queue());
             }
             self.native.dirty = true;
             self.poll_services()?;
             return Ok(1);
         };
-        presenter.present(
+        let submission = presenter.present(
             gpu,
             &target.texture.create_view(&Default::default()),
             view,
             surround,
         ).map_err(err)?;
+        if let Some(timing) = &mut self.frame_timing { timing.submitted_ns = crate::frame_timing::now(); }
         gpu.queue().present(target);
+        if let Some(timing) = &mut self.frame_timing { timing.presented_ns = crate::frame_timing::now(); }
         self.native.canvas_frame_rate.submitted();
-        self.pacing.submitted(gpu.queue());
+        self.pacing.submitted(submission);
         self.surface_ready.submitted(gpu.queue());
         self.blank_presented = true;
         gpu.device().poll(wgpu::PollType::Poll).map_err(err)?;
@@ -1091,6 +1097,7 @@ pub unsafe extern "C" fn capy_chrome(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_acquire(host: u64) -> i32 {
     guard(host, |host| {
+        if let Some(timing) = &mut host.frame_timing { timing.pacing_ns=0;timing.acquisition_ns=0; }
         if host.device_is_lost() {
             return Err("The GPU device was lost".into());
         }
@@ -1102,9 +1109,13 @@ pub unsafe extern "C" fn capy_acquire(host: u64) -> i32 {
         if host.target.is_some() {
             return Ok(1);
         }
-        if !host.pacing.ready(host.native.session.engine().backend().0.as_ref().unwrap().device()).map_err(err)? {
+        let pacing_start = host.frame_timing.map(|_| crate::frame_timing::now());
+        let ready = host.pacing.ready(host.native.session.engine().backend().0.as_ref().unwrap().device()).map_err(err)?;
+        if let (Some(timing), Some(start)) = (&mut host.frame_timing, pacing_start) { timing.pacing_ns = crate::frame_timing::now() - start; }
+        if !ready {
             return Ok(0);
         }
+        let acquisition_start = host.frame_timing.map(|_| crate::frame_timing::now());
         host.target = match host.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(t)
             | wgpu::CurrentSurfaceTexture::Suboptimal(t) => Some(t),
@@ -1119,6 +1130,7 @@ pub unsafe extern "C" fn capy_acquire(host: u64) -> i32 {
                 return Err("D3D12 surface validation failed".into());
             }
         };
+        if let (Some(timing), Some(start)) = (&mut host.frame_timing, acquisition_start) { timing.acquisition_ns = crate::frame_timing::now() - start; }
         Ok(1)
     })
 }
@@ -1136,7 +1148,20 @@ pub unsafe extern "C" fn capy_localization_input(host: u64, busy: bool) -> i32 {
 /// `host` must be null or a live host exclusively accessed by this caller.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_frame(host: u64, now: u64, presentation: u64) -> i32 {
-    guard(host, |host| host.frame(now, presentation))
+    guard(host, |host| {
+        if let Some(timing) = &mut host.frame_timing { timing.prepared_ns=0;timing.composed_ns=0;timing.submitted_ns=0;timing.presented_ns=0; }
+        host.frame(now, presentation)
+    })
+}
+
+/// # Safety
+/// Exclusive render-owner access; `output` writes one initialized FrameTiming.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_frame_timing(host: u64, output: *mut crate::frame_timing::FrameTiming) -> bool {
+    let Ok(host) = borrow::<CapyHost>(host) else { return false; };
+    if output.is_null() { return false; }
+    unsafe { *output = host.frame_timing.unwrap_or_default(); }
+    host.frame_timing.is_some()
 }
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
