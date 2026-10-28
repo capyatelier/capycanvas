@@ -190,6 +190,37 @@ mod tests {
     }
 
     #[test]
+    fn pending_bubble_pickup_publishes_a_native_model_before_release() {
+        use layer_ui::{BubbleAction, BubbleGrab, ContactPhase, Platform, UiAction};
+        for platform in [Platform::Android, Platform::Windows, Platform::Mac, Platform::Ios] {
+            let mut host = NativeHost::new(platform).unwrap();
+            host.resize(1600, 1000, 1.).unwrap();
+            let mut workspace = host.session.state().workspace.clone();
+            workspace.layout.header = serde_json::from_value(json!({
+                "size":"medium", "next_id":3, "zones":[[], [
+                    {"id":2,"item":{"kind":"tool","control":{"kind":"panel","panel":"layers"}}}
+                ], []]
+            })).unwrap();
+            host.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(workspace) }).unwrap();
+            let mut retained = read(&mut host);
+            for (phase, position) in [(ContactPhase::Down, [800., 20.]), (ContactPhase::Move, [640., 520.])] {
+                host.dispatch(UiAction::Bubble { action: BubbleAction::Drag {
+                    grab: BubbleGrab::Header { id: 2 }, phase, position, viewport: [1600., 1000.],
+                }}).unwrap();
+            }
+            let update = host.take_model_update_bytes().unwrap().expect("canvas entry publishes the new native model");
+            apply(&mut retained, serde_json::from_slice(&update).unwrap());
+            assert_eq!(retained["bubbles"].as_array().unwrap().len(), 1);
+            assert!(retained["bubbles"][0]["view"]["card"].is_object());
+            host.dispatch(UiAction::Bubble { action: BubbleAction::Drag {
+                grab: BubbleGrab::Header { id: 2 }, phase: ContactPhase::Cancel, position: [640., 520.], viewport: [1600., 1000.],
+            }}).unwrap();
+            apply(&mut retained, read(&mut host));
+            assert!(retained["bubbles"].as_array().unwrap().is_empty(), "cancellation retires the published bubble");
+        }
+    }
+
+    #[test]
     fn outside_bubble_contact_publishes_retained_model_without_painting() {
         use layer_ui::{BubbleAction, BubbleGrab, ChromeEvent, ChromeFacts, ContactPhase,
             CustomizationAction, Platform, UiAction, UiInput};

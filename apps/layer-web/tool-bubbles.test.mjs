@@ -32,7 +32,7 @@ export function installBubbleInputTrace() {
   window.bubbleRestoreInputTrace=()=>{abort.abort();for(const [method,original]of originals)Event.prototype[method]=original;};
 }
 
-export async function checkToolBubbles({call,evaluate,settle}) {
+export async function checkToolBubbles({call,evaluate,settle,pickupOnly=false}) {
   const directory=process.env.LAYER_TEST_ARTIFACTS||'artifacts/bubbles';
   await mkdir(directory,{recursive:true});
   const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
@@ -95,7 +95,14 @@ export async function checkToolBubbles({call,evaluate,settle}) {
   const fixture=structuredClone(saved);fixture.layout.bubbles={bubbles:[],rings:[],kept:[]};
   const controls=[{kind:'command',command:'drawing_brush'},{kind:'color'},{kind:'color_picker'},{kind:'command',command:'undo'},{kind:'panel',panel:'layers'}];
   fixture.layout.header={size:'medium',zones:[[{id:1,item:{kind:'capy'}}],controls.map((control,i)=>({id:i+2,item:{kind:'tool',control}})),[]],next_id:7};
-  const take=async(index,spot)=>{const from=await rect(`[data-header-item="${index+2}"] .header-tool`);const before=(await packets()).map(p=>p.view.id);await stroke([from,[from[0],from[1]+8],[from[0],from[1]+75],[spot[0],spot[1]-30],spot]);await wait(`layerApp.app.bubbles().some(p=>!${JSON.stringify(before)}.includes(p.view.id))`);const p=(await packets()).find(p=>!before.includes(p.view.id));await stable(p.view.id);return p.view.id;};
+  const take=async(index,spot)=>{
+    const from=await rect(`[data-header-item="${index+2}"] .header-tool`),before=(await packets()).map(p=>p.view.id);
+    await pointer('down',from);for(const p of [[from[0],from[1]+8],[from[0],from[1]+75],[spot[0],spot[1]-30],spot]){await pointer('move',p);await pause(24);}
+    await wait(`layerApp.app.bubbles().some(p=>!${JSON.stringify(before)}.includes(p.view.id))`);
+    const p=(await packets()).find(p=>!before.includes(p.view.id)),selector=`.tool-bubble[data-bubble="${p.view.id}"] ${p.view.card?'.bubble-card':'.bubble-face'}`;
+    await wait(`(()=>{const r=document.querySelector(${JSON.stringify(selector)})?.getBoundingClientRect();return r?.width>0&&r.height>0})()`);
+    await pointer('up');await settle();await pause(250);await stable(p.view.id);return p.view.id;
+  };
   const putBack=async id=>{const v=await view(id),c=await stable(id),from=v.kind==='color'?[c[0]-v.diameter/2+4,c[1]]:c;await stroke([from,[from[0],from[1]-25],[from[0],12]]);await wait(`!layerApp.app.bubbles().some(p=>p.view.id===${id})`);};
   const sliderThemes=new Set();
   const edgeJourney=async theme=>{
@@ -228,10 +235,17 @@ export async function checkToolBubbles({call,evaluate,settle}) {
     for(const theme of (process.env.LAYER_BUBBLE_THEMES?.split(',')||['light','dark']))for(device of (process.env.LAYER_BUBBLE_DEVICES?.split(',')||['mouse','touch','pen'])) {
       console.log(`Tool bubbles: ${theme}/${device}`);await call('Emulation.setTouchEmulationEnabled',{enabled:device==='touch',maxTouchPoints:5});
       await send({type:'restore_workspace',workspace:fixture});await send({type:'set_theme',theme});await pause(250);
-      await edgeJourney(theme);
-      if(!sliderThemes.has(theme)){await globalSliders(theme);sliderThemes.add(theme);}
+      if(!pickupOnly)await edgeJourney(theme);
+      if(!pickupOnly&&!sliderThemes.has(theme)){await globalSliders(theme);sliderThemes.add(theme);}
       const bounds=await evaluate('(()=>{const r=document.querySelector("#workspace").getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height}})()');
       const spot=[bounds.x+bounds.width*.4,bounds.y+bounds.height*.5];
+      if(pickupOnly) {
+        for(let index=0;index<controls.length;index++) {
+          await take(index,spot);assert.equal((await packets()).length,1,'canvas entry creates one bubble');
+          await send({type:'invoke',command:'undo_workspace'});assert.equal((await packets()).length,0,'pickup and release remain one layout undo step');
+        }
+        console.log(`PASS bubble pickup before release: ${theme}/${device}`);continue;
+      }
       const id=await take(0,spot);let c=await stable(id),v=await view(id);
       assert.ok(v.selected&&v.open&&v.rings.length,'titlebar tear-out selects and opens settings');await primitives(id,`${theme}-taken`);
       assert.equal((await packets()).length,1,'tear-out creates one source');

@@ -450,7 +450,7 @@ try {
       await checkSmoothing({call, evaluate, settle});
       await checkPrediction({call, evaluate, settle});
     }, checkErrors],
-    [process.argv.includes("--tool-bubbles"), () => checkToolBubbles({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--tool-bubbles")||process.argv.includes("--bubble-pickup"), () => checkToolBubbles({call,evaluate,settle,pickupOnly:process.argv.includes("--bubble-pickup")}), checkErrors],
     [process.argv.includes('--eraser-bubbles'), () => checkEraserBubbles({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--hdr-bubbles"), () => checkHdrBubbles({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--smoothing"), () => checkSmoothing({call,evaluate,settle}), checkErrors],

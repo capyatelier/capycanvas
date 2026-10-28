@@ -538,6 +538,9 @@ panels are absent from the dock.
   `native_layers_bubble_background_pen` (with `--tablet`), and Android
   `AndroidToolBubblesTest#layersBubbleBackgroundAcrossThemesAndDevices` check
   unused list space in Simple and Full, both themes, and matching header insets.
+- Pickup before release: GTK `native_bubble_pickup_before_release` and Web
+  `--bubble-pickup` check that native bubble surfaces appear while the source
+  contact is still held, then follow that contact and retain one layout undo step.
 - Shared: `cargo test --locked -p layer-ui bubble`, which covers geometry,
   pushing, tear-off and put back, tap states, halos, the chooser and its slides,
   beads, the card, stroke fading, menus, history and workspace round trips

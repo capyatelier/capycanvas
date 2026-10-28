@@ -1219,11 +1219,12 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             return self.lift_bubble(grab, position, viewport);
         }
+        let mut change = UiChange::default();
         if let Some(pending)=self.bubble_state.pending_drag {
             if pending!=grab{return Ok(UiChange::default());}
             if matches!(phase,ContactPhase::Move|ContactPhase::Up) && self.can_take_bubble(pending,position,viewport) {
                 self.bubble_state.pending_drag=None;
-                self.lift_bubble(pending,position,viewport)?;
+                change = self.lift_bubble(pending,position,viewport)?;
             } else {
                 if matches!(phase,ContactPhase::Up|ContactPhase::Cancel){self.bubble_state.pending_drag=None;}
                 return Ok(UiChange::default());
@@ -1240,13 +1241,12 @@ impl<R: CanvasRenderer> UiSession<R> {
         let phase = if exiting { ContactPhase::Up } else { phase };
         let center = [position[0] + drag.offset[0], position[1] + drag.offset[1]];
         let present = self.state.workspace.layout.bubbles.get(drag.id).is_some();
-        let mut change = UiChange::default();
         match phase {
             ContactPhase::Move if present => {
                 self.bubble_state.desk.drag(center);
                 let homing = self.bubble_homing(viewport, position, drag.source);
                 self.bubble_state.desk.home(homing);
-                return Ok(UiChange::default());
+                return Ok(change);
             }
             ContactPhase::Up if present => {
                 self.bubble_state.drag = None;
@@ -1273,7 +1273,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     self.bubble_state.desk.release();
                     self.workspace_history.finish(&self.state.workspace);
                     if drag.pulled {
-                        change = self.open_pulled(drag.id)?;
+                        change = merge_change(change, self.open_pulled(drag.id)?);
                     }
                 }
             }

@@ -35,11 +35,13 @@ fn bubble_pickup_waits_for_canvas_and_repeated_moves_keep_one_owner() {
         }
         for finish in [ContactPhase::Cancel,ContactPhase::Up] {
             contact(&mut s,grab,ContactPhase::Down,[100.,20.]).unwrap();
-            contact(&mut s,grab,ContactPhase::Move,FAR).unwrap();
+            let change=contact(&mut s,grab,ContactPhase::Move,FAR).unwrap();
+            assert_ne!(change.regions & regions::BUBBLES,0,"{platform:?}: entering the canvas publishes the bubble before release");
             assert_eq!(s.state.workspace.layout.bubbles.bubbles.len(),1,"{platform:?}");
             let id=s.state.workspace.layout.bubbles.bubbles[0].id;
             for step in 0..32 {
-                contact(&mut s,grab,ContactPhase::Move,[FAR[0]+step as f32,FAR[1]]).unwrap();
+                let change=contact(&mut s,grab,ContactPhase::Move,[FAR[0]+step as f32,FAR[1]]).unwrap();
+                assert_eq!(change.regions,0,"{platform:?}: continued motion retains the published bubble");
                 assert_eq!(s.state.workspace.layout.bubbles.bubbles.iter().map(|b|b.id).collect::<Vec<_>>(),[id]);
             }
             contact(&mut s,grab,finish,FAR).unwrap();
@@ -150,6 +152,31 @@ fn pulling_a_toolbar_bubble_closes_its_column_drawer() {
     assert_ne!(change.regions & regions::CUSTOMIZATION, 0);
     contact(&mut s, grab, ContactPhase::Up, FAR).unwrap();
     assert_eq!(s.state.workspace.layout.bubbles.bubbles.len(), 1);
+}
+
+#[test]
+fn pending_bubble_pickup_publishes_the_closed_drawer_with_the_bubble() {
+    for platform in Platform::ALL {
+        for phase in [ContactPhase::Move, ContactPhase::Up] {
+            let mut s = session(platform);
+            s.set_viewport(VIEW, [1200, 900]).unwrap();
+            s.state.workspace.layout = WorkspacePreset::Painter.layout(platform);
+            let control = ToolbarControl::Color;
+            let id = s.state.workspace.layout.header.entries().find(|entry| entry.item == HeaderItem::Tool { control }).unwrap().id;
+            s.dispatch(UiAction::MeasureHeader { height: 60., items: vec![HeaderItemBounds {
+                id, bounds: Bounds { x: 800., y: 0., width: 40., height: 60. },
+            }] }).unwrap();
+            s.dispatch(UiAction::Customize { action: CustomizationAction::ToggleHeaderDrawer { id } }).unwrap();
+            assert!(s.state.customization.drawer.is_some());
+            let grab = BubbleGrab::Header { id };
+            contact(&mut s, grab, ContactPhase::Down, [100., 20.]).unwrap();
+            let change = contact(&mut s, grab, phase, FAR).unwrap();
+            assert_eq!(change.regions & (regions::BUBBLES | regions::CUSTOMIZATION), regions::BUBBLES | regions::CUSTOMIZATION, "{platform:?}/{phase:?}");
+            assert!(s.state.customization.drawer.is_none());
+            assert_eq!(s.bubbles().len(), 1);
+            if phase == ContactPhase::Move { contact(&mut s, grab, ContactPhase::Cancel, FAR).unwrap(); }
+        }
+    }
 }
 
 #[test]

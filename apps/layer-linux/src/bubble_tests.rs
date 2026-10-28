@@ -326,6 +326,49 @@ fn layers_bubble_background(devices: &[&str]) {
     d.finish();
 }
 
+#[test]
+#[ignore = "private display: workspace-motion.sh gtk --native-test=native_bubble_pickup_before_release"]
+fn native_bubble_pickup_before_release() {
+    let mut d = Driver::new("art.capycanvas.LiveBubblePickup");
+    for theme in [Theme::Light, Theme::Dark] {
+        for device in ["mouse", "touch"] {
+            for (control, header) in [(ToolbarControl::Command { command: CommandId::DrawingBrush }, true),
+                (ToolbarControl::Panel { panel: Panel::Layers }, true), (ToolbarControl::ColorPicker, false)] {
+                d.w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+                d.w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(WorkspaceState {
+                    layout: WorkspacePreset::Painter.layout(Platform::Gtk), ..WorkspaceState::default()
+                }) });
+                pump(300);
+                let widget = if header { header_of(&d, control) } else { tile_of(&d, control) };
+                let from = d.point(&d.named(&widget));
+                d.input.perform(serde_json::json!([contact(device, "down", from), contact(device, "move", [from[0], from[1] + 4.])]));
+                assert!(views(&d).is_empty(), "{theme:?}/{device}/{control:?}: the source keeps its contact before canvas entry");
+                let spot = canvas_spot(&d, 0.4, 0.5);
+                d.input.perform(serde_json::json!([contact(device, "move", spot)]));
+                pump(350);
+                let bubble = find(&d, BubbleSource::for_control(control).unwrap()).expect("canvas entry creates the bubble before release");
+                let native = d.named(&format!("bubble-{}", bubble.id));
+                assert!(native.is_mapped() && native.width() > 0 && native.height() > 0, "{theme:?}/{device}/{control:?}: the held bubble is presented");
+                if bubble.card.is_some() { assert!(find_named(&native, "bubble-card").unwrap().is_mapped(), "the Layers card opens during the drag"); }
+                capture(&mut d, &format!("live-{theme:?}-{device}-{header}-{control:?}"));
+                let before = center(&d, bubble.id);
+                let next = [spot[0] + 60., spot[1] + 15.];
+                d.input.perform(serde_json::json!([contact(device, "move", next)]));
+                pump(350);
+                assert_eq!(d.named(&format!("bubble-{}", bubble.id)), native, "motion retains the presented widget");
+                assert!(center(&d, bubble.id)[0] > before[0] + 30., "the bubble follows the held contact");
+                d.input.perform(serde_json::json!([contact(device, "up", next)]));
+                pump(300);
+                assert!(find_id(&d, bubble.id).is_some());
+                d.w.dispatch(UiAction::Invoke { command: CommandId::UndoWorkspace });
+                pump(300);
+                assert!(views(&d).is_empty(), "pickup and release remain one workspace undo step");
+            }
+        }
+    }
+    d.finish();
+}
+
 fn menu_open(d: &Driver) -> bool {
     d.w.popovers.borrow().iter().filter_map(|p| p.upgrade()).any(|p| p.is_visible() && p.has_css_class("panel-context-menu"))
 }
