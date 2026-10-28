@@ -128,7 +128,9 @@ export async function checkDragCursors({ call, evaluate, settle }) {
       await press(center(await rect('.layer-blend')));await release();
       assert.equal(await evaluate("!!document.querySelector('.panel-context-menu:popover-open')"),true,`${theme}: panel controls work while the drop layout is pending`);
       for(const type of ['keyDown','keyUp'])await call('Input.dispatchKeyEvent',{type,key:'Escape',code:'Escape',windowsVirtualKeyCode:27});
-      await press(center(await rect('.tab-list .dock-tab[data-panel="properties"]')));await release();
+      await press(center(await rect('.tab-list .dock-tab[data-panel="properties"]')));
+      assert.equal(await evaluate('layerApp.state().workspace.layout.bands.find(b=>b.id===42).root.active'),'properties',`${theme}: the pending layout preserves immediate tab selection on press`);
+      await release();
       assert.equal(await evaluate('layerApp.state().workspace.layout.bands.find(b=>b.id===42).root.active'),'properties',`${theme}: tab selection works while the drop layout is pending`);
       await evaluate('tabVectorGate.release()');await wait();await clean();
       assert.deepEqual(await evaluate(`({dom:[...focusedPanelTab.parentElement.children].map(t=>t.dataset.panel),source:focusedPanelTab.isConnected,neighbor:focusedPanelNeighbor.isConnected})`),

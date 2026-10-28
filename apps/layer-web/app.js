@@ -1290,17 +1290,18 @@ workspace.addEventListener("pointermove", e => {
 window.addEventListener("pointerup", e => endEdgeContact(e, "up"), { capture: true });
 window.addEventListener("pointercancel", e => endEdgeContact(e, "cancel"), { capture: true });
 workspace.addEventListener("pointerdown", e => {
-  if (e.button !== 0 || !e.isPrimary || workspaceGesture || workspaceTabDrop) return;
+  if (e.button !== 0 || !e.isPrimary || workspaceGesture) return;
   const node = e.target.closest("[data-workspace-drag]");
   if (!node) return;
+  const tab=node.matches('.dock-tab[data-group]')?{type:"select_panel_tab",group:Number(node.dataset.group),panel:node.dataset.panel}:null;
+  if(workspaceTabDrop){if(tab&&!edgeContact?.selectOnRelease)dispatch(tab);return;}
   workspaceGesture = { id: e.pointerId, action: JSON.parse(node.dataset.workspaceDrag),
     start: e, last: e, started: false, node, parent: node.parentNode,
     waitForHold: node.dataset.dragPickup === "hold", cursor: getComputedStyle(node).cursor };
   workspaceGesture.tile = workspaceGesture.action.item?.kind === "tile";
   if (workspaceGesture.waitForHold)
     workspaceGestureSourceObserver.observe(workspace, { childList: true, subtree: true });
-  if (node.matches('.dock-tab[data-group]')) {
-    const tab = {type:"select_panel_tab",group:Number(node.dataset.group),panel:node.dataset.panel};
+  if (tab) {
     if (edgeContact?.selectOnRelease) workspaceGesture.selectTab = tab;
     else dispatch(tab);
   }
