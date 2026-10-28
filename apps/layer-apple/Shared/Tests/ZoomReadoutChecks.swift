@@ -6,7 +6,16 @@ extension XCTestCase {
         app.launch(); capturePaintEditor(in: app)
         let status = app.buttons["camera-status"]
         let menu = app.descendants(matching: .any)["zoom-menu"].firstMatch
-        func readout() -> String { (status.value as? String).flatMap { $0.isEmpty ? nil : $0 } ?? status.label }
+        func readout() -> String {
+            if menu.exists {
+                let controls = ["zoom", "rotation"].map { app.buttons["number-value-" + $0] }
+                guard controls.allSatisfy(\.exists) else { return "" }
+                let values = controls.map { (($0.value as? String) ?? $0.label).filter { !$0.isWhitespace } }
+                return "\(values[0]) · \(values[1])"
+            }
+            guard status.exists else { return "" }
+            return (status.value as? String).flatMap { $0.isEmpty ? nil : $0 } ?? status.label
+        }
         func expectReadout(_ prefix: String) {
             expectation(for: NSPredicate { _, _ in readout().hasPrefix(prefix) }, evaluatedWith: status)
             waitForExpectations(timeout: 10)
@@ -30,6 +39,7 @@ extension XCTestCase {
         workspaceViewport(in: app).coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.12)).clickOrTap()
         XCTAssertTrue(menu.waitForNonExistence(timeout: 5), "A tap outside closes the zoom menu")
         expectReadout("250%")
+        let beforeSnapping = readout()
 
         workspaceActivate(status)
         let rotation = app.buttons["number-value-rotation"], rotate = app.buttons["zoom-rotate_right"]
@@ -44,7 +54,6 @@ extension XCTestCase {
         let snapping = app.buttons["menu-action-Snap rotation"]
         XCTAssertTrue(snapping.waitForExistence(timeout: 10))
         XCTAssertTrue(snapping.isSelected)
-        let beforeSnapping = readout()
         for enabled in [false, true] {
             workspaceActivate(snapping)
             XCTAssertTrue(menu.waitForNonExistence(timeout: 5))
