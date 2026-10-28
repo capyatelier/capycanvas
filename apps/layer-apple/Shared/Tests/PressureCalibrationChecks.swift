@@ -7,7 +7,7 @@ extension XCTestCase {
         let panel = app.descendants(matching: .any)["pen-tilt-dialog"].firstMatch
         func reveal(_ id: String, label: String) {
             let row = app.buttons["preference-" + id]
-            if !row.exists || !row.isHittable {
+            if !row.waitForExistence(timeout: 20) {
                 let search = app.textFields["settings-search"]
                 workspaceActivate(search)
                 search.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: (search.value as? String ?? "").count))
@@ -22,7 +22,11 @@ extension XCTestCase {
             XCTAssertTrue(panel.waitForExistence(timeout: 10))
         }
         func settings() {
+            #if os(macOS)
             workspaceActivate(app.buttons["settings-button"])
+            #else
+            editorMenu(in: app, menu: "Edit", id: "settings", label: "Settings…")
+            #endif
             workspaceActivate(app.staticTexts["settings-page-input"])
         }
         func pointCount(_ count: Int) {
