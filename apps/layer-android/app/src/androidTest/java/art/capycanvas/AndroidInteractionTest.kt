@@ -1143,12 +1143,13 @@ class AndroidInteractionTest {
         systemInput = false // Inspect exact halfway points without OS resampling.
         for (pointer in listOf(MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_STYLUS)) {
             tool = pointer; restore()
-            val before = workspace()
             val source = bounds("tab-sizes")
             val next = bounds("tab-tool_settings")
             val press = Offset(source.left + 7 * density, source.center.y)
             val halfway = next.width / 2
             event(MotionEvent.ACTION_DOWN, press)
+            waitFor("tab press selects source") { group("sizes").getString("active") == "sizes" }
+            val before = workspace()
             event(MotionEvent.ACTION_MOVE, press + Offset(halfway - density, 0f)); settle()
             waitFor("tab slide preview") { host.workspaceGeometry?.tab != null }
             assertEquals(0f, host.workspaceGeometry!!.tab!!.offsets[2]!!, .01f)
@@ -1175,6 +1176,53 @@ class AndroidInteractionTest {
             assertEquals(before, workspace())
             action(obj("type" to "invoke", "command" to "redo_workspace"))
             assertEquals(listOf("brushes", "tool_settings", "sizes"), group("sizes").array("panels").values())
+        }
+    }
+
+    @Test fun panelTabKeepsIdentityAcrossSameGroupReorder() {
+        for (theme in listOf("light", "dark")) for (pointer in pointerTools) {
+            action(obj("type" to "set_theme", "theme" to theme))
+            tool = pointer
+            restore()
+            fun identity(): Map<String, Int> {
+                var ids = emptyMap<String, Int>()
+                onMain { ids = listOf("sizes", "tool_settings").associateWith { find("tab-$it")!!.id } }
+                return ids
+            }
+            fun move(to: String, right: Boolean, expected: List<String>) {
+                val before = identity()
+                val source = bounds("tab-sizes")
+                val target = bounds(to)
+                event(MotionEvent.ACTION_DOWN, source.center)
+                event(MotionEvent.ACTION_MOVE, Offset(if (right) target.right - 4 * density else target.left + 4 * density, target.center.y))
+                waitFor("$theme/$pointer tab drag") { workspaceDragging() }
+                waitFor("$theme/$pointer attached tab has no drop hint") {
+                    host.workspaceGeometry?.tab != null && host.workspaceGeometry?.hint == null
+                }
+                if (pointer == MotionEvent.TOOL_TYPE_MOUSE && right) screenshot("validation/tab-identity/$theme-attached-drag.png")
+                event(MotionEvent.ACTION_UP)
+                waitFor("$theme/$pointer tab order") { group("sizes").array("panels").values() == expected }
+                settle()
+                assertEquals("$theme/$pointer active tab", "sizes", group("sizes").getString("active"))
+                assertEquals("$theme/$pointer tab identity after moving toward $to", before, identity())
+                if (pointer == MotionEvent.TOOL_TYPE_MOUSE) screenshot("validation/tab-identity/$theme-${if (right) "right" else "left"}.png")
+            }
+            if (pointer == MotionEvent.TOOL_TYPE_MOUSE) screenshot("validation/tab-identity/$theme-before.png")
+            move("tab-tool_settings", true, listOf("brushes", "tool_settings", "sizes"))
+            move("tab-tool_settings", false, listOf("sizes", "brushes", "tool_settings"))
+            if (pointer == MotionEvent.TOOL_TYPE_MOUSE) {
+                val before = workspace()
+                event(MotionEvent.ACTION_DOWN, bounds("tab-sizes").center)
+                event(MotionEvent.ACTION_MOVE, bounds("workspace").center)
+                waitFor("$theme tab detaches") { group("sizes").getBoolean("floating") && host.workspaceGeometry?.tab == null }
+                event(MotionEvent.ACTION_MOVE, bounds("tab-tool_settings").center)
+                waitFor("$theme detached tab shows target") {
+                    host.workspaceGeometry?.hint?.objectOrNull("target")?.optString("kind") == "tab"
+                }
+                screenshot("validation/tab-identity/$theme-detached-target.png")
+                event(MotionEvent.ACTION_CANCEL)
+                waitFor("$theme canceled detached tab") { workspace() == before }
+            }
         }
     }
 

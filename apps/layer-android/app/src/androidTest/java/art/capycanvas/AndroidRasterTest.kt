@@ -5260,19 +5260,30 @@ class AndroidRasterTest {
         try{Native.projectWork(task,-1,"");compose.waitUntil(60_000){tick();native{Native.projectParkReady(it,task)}};native{Native.projectAdopt(it,task,"null")}}finally{Native.projectFree(task)}
         val order=ids();val selected=tabs().getLong("selected")
         val workspace=native{state(it).getJSONObject("workspace")}
-        workspace.getJSONObject("layout").put("header",obj("size" to "large","next_id" to 2,"zones" to org.json.JSONArray(listOf(org.json.JSONArray(),org.json.JSONArray(listOf(obj("id" to 1,"item" to obj("kind" to "document_title")))),org.json.JSONArray()))))
+        workspace.getJSONObject("layout").put("header",obj("size" to "large","next_id" to 2,"zones" to org.json.JSONArray(listOf(org.json.JSONArray(listOf(obj("id" to 1,"item" to obj("kind" to "document_title")))),org.json.JSONArray(),org.json.JSONArray()))))
         native{Native.dispatch(it,obj("type" to "restore_workspace","workspace" to workspace).toString())};settled()
+        compose.waitUntil(10_000) { semanticsRoots().any { it.find(hasTag("drawing-tab-${order.first()}")) != null } }
         fun locate(tag:String,within:android.view.View?=null):Pair<android.view.View,androidx.compose.ui.geometry.Rect> {
             var found:Pair<android.view.View,androidx.compose.ui.geometry.Rect>?=null
             instrumentation.runOnMainSync{found=semanticsRoots().filter{within==null||it.view===within}.firstNotNullOfOrNull{root->root.find(hasTag(tag))?.let{root.view to it.boundsInRoot}}}
             return checkNotNull(found){"Missing $tag"}
         }
-        fun drag(tool:Int,handle:Boolean=false,cancel:Boolean=false,vertical:Boolean=handle,hold:Long=0,outside:Boolean=false) {
+        fun drag(tool:Int,handle:Boolean=false,cancel:Boolean=false,vertical:Boolean=handle,hold:Long=0,outside:Boolean=false,reverse:Boolean=false) {
+            if(!vertical){
+                var previous=emptyList<Float>();var stableSince=SystemClock.uptimeMillis()
+                compose.waitUntil(10_000){
+                    val positions=runCatching{ids().map{locate("drawing-tab-$it").second.left}}.getOrNull()?:emptyList()
+                    val aligned=positions.size==order.size&&positions.zipWithNext().all{(a,b)->a+1f<b}
+                    if(!aligned||positions.size!=previous.size||positions.zip(previous).any{(a,b)->kotlin.math.abs(a-b)>1f})stableSince=SystemClock.uptimeMillis()
+                    previous=positions
+                    aligned&&SystemClock.uptimeMillis()-stableSince>=150
+                }
+            }
             val (view,anchor)=locate(if(vertical)"drawing-handle-${order.first()}"else"drawing-tab-${order.first()}")
             val start=if(vertical&&!handle)locate("drawing-tab-${order.first()}",view).second else anchor
             val end=locate("drawing-tab-${order.last()}",view).second
             val from=androidx.compose.ui.geometry.Offset(start.left+start.width*.30f,start.center.y)
-            val to=if(vertical)androidx.compose.ui.geometry.Offset(end.center.x,end.bottom-8f)else androidx.compose.ui.geometry.Offset(end.right-8f,end.center.y)
+            val to=if(vertical)androidx.compose.ui.geometry.Offset(end.center.x,end.bottom-8f)else androidx.compose.ui.geometry.Offset(if(reverse)end.left+8f else end.right-8f,end.center.y)
             val down=SystemClock.uptimeMillis()
             fun event(action:Int,point:androidx.compose.ui.geometry.Offset) {
                 val event=motion(tool,action,point,down)
@@ -5294,12 +5305,26 @@ class AndroidRasterTest {
             }
             event(if(cancel)android.view.MotionEvent.ACTION_CANCEL else android.view.MotionEvent.ACTION_UP,if(outside)away else to)
         }
-        for(tool in listOf(android.view.MotionEvent.TOOL_TYPE_MOUSE,android.view.MotionEvent.TOOL_TYPE_STYLUS,android.view.MotionEvent.TOOL_TYPE_FINGER)) {
-            drag(tool);compose.waitUntil(10_000){ids()==order.reversed()};assertEquals(selected,tabs().getLong("selected"))
-            native{Native.documentTabs(it,obj("op" to "history","redo" to false).toString())};settled();assertEquals(order,ids())
-            drag(tool,cancel=true);settled();assertEquals(order,ids())
-            drag(tool,outside=true);settled();assertEquals("Release outside the strip cancels",order,ids())
+        val theme=InstrumentationRegistry.getArguments().getString("theme", "default")
+        for(activeSource in listOf(false,true)) {
+            val owner=if(activeSource)order.first()else selected
+            if(activeSource){compose.runOnUiThread{host.drawingTabs.select(owner)};settled();assertEquals(owner,tabs().getLong("selected"))}
+            for(tool in listOf(android.view.MotionEvent.TOOL_TYPE_MOUSE,android.view.MotionEvent.TOOL_TYPE_STYLUS,android.view.MotionEvent.TOOL_TYPE_FINGER)) {
+                drag(tool);compose.waitUntil(10_000){ids()==order.reversed()};assertEquals(owner,tabs().getLong("selected"))
+                compose.onNodeWithTag("drawing-tab-$owner").assertIsSelected()
+                screenshot("validation/drawing-tabs-reverse/$theme-${tool}-${if(activeSource)"active-"else""}forward.png")
+                drag(tool,reverse=true);compose.waitUntil(10_000){ids()==order};assertEquals(owner,tabs().getLong("selected"))
+                compose.onNodeWithTag("drawing-tab-$owner").assertIsSelected()
+                screenshot("validation/drawing-tabs-reverse/$theme-${tool}-${if(activeSource)"active-"else""}reverse.png")
+                native{Native.documentTabs(it,obj("op" to "history","redo" to false).toString())};settled();assertEquals(order.reversed(),ids())
+                native{Native.documentTabs(it,obj("op" to "history","redo" to false).toString())};settled();assertEquals(order,ids())
+                if(!activeSource){
+                    drag(tool,cancel=true);settled();assertEquals(order,ids())
+                    drag(tool,outside=true);settled();assertEquals("Release outside the strip cancels",order,ids())
+                }
+            }
         }
+        compose.runOnUiThread{host.drawingTabs.select(selected)};settled();assertEquals(selected,tabs().getLong("selected"))
         compose.runOnUiThread{host.drawingTabs.selector=true};compose.onNodeWithTag("drawing-selector").assertIsDisplayed()
         for(tool in listOf(android.view.MotionEvent.TOOL_TYPE_MOUSE,android.view.MotionEvent.TOOL_TYPE_STYLUS,android.view.MotionEvent.TOOL_TYPE_FINGER)) {
             drag(tool,handle=true);compose.waitUntil(10_000){ids()==order.reversed()};assertEquals(selected,tabs().getLong("selected"))

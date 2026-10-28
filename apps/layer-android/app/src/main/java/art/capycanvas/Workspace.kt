@@ -711,18 +711,20 @@ private class PanelContent(val id: Int, val active: String, val panels: JSONArra
                         .tabStrip(cutout, colors.strip, colors.panelFill).horizontalScroll(rememberScrollState()).clickable(enabled = expanded) { host.customize(obj("type" to "close_expanded")) }) {
                         panelIds.values().forEachIndexed { index, id ->
                             val p = panels[id.toString()] ?: return@forEachIndexed
-                            val tab = Modifier.testTag("tab-$id").dragSource(dock, obj("kind" to "panel", "panel" to id), cursor = AndroidPointerIcon.TYPE_ARROW)
-                                .onGloballyPositioned { coords ->
-                                    if(!visible) return@onGloballyPositioned
-                                    val r = coords.boundsInRoot(); val pos = (r.topLeft - dock.origin) / dock.density
-                                    // Contact handling needs the panel ID as well as the drop-target geometry.
-                                    dock.tabs["${groupId}:$index"] = obj("group" to groupId, "index" to index, "panel" to id,
-                                        "bounds" to obj("x" to pos.x, "y" to pos.y, "width" to r.width / dock.density, "height" to r.height / dock.density))
-                                    val natural = (coords.positionInRoot() - dock.origin) / dock.density
-                                    dock.tabSlots["${groupId}:$index"] = obj("group" to groupId, "index" to index, "panel" to id,
-                                        "bounds" to obj("x" to natural.x, "y" to natural.y, "width" to coords.size.width / dock.density, "height" to coords.size.height / dock.density))
-                                }
-                            WorkspaceTab(host, dock, p, groupId, index, id == active, cutout, tab, fittedName = names?.getOrNull(index))
+                            key(id) {
+                                val tab = Modifier.testTag("tab-$id").dragSource(dock, obj("kind" to "panel", "panel" to id), cursor = AndroidPointerIcon.TYPE_ARROW)
+                                    .onGloballyPositioned { coords ->
+                                        if(!visible) return@onGloballyPositioned
+                                        val r = coords.boundsInRoot(); val pos = (r.topLeft - dock.origin) / dock.density
+                                        // Contact handling needs the panel ID as well as the drop-target geometry.
+                                        dock.tabs["${groupId}:$index"] = obj("group" to groupId, "index" to index, "panel" to id,
+                                            "bounds" to obj("x" to pos.x, "y" to pos.y, "width" to r.width / dock.density, "height" to r.height / dock.density))
+                                        val natural = (coords.positionInRoot() - dock.origin) / dock.density
+                                        dock.tabSlots["${groupId}:$index"] = obj("group" to groupId, "index" to index, "panel" to id,
+                                            "bounds" to obj("x" to natural.x, "y" to natural.y, "width" to coords.size.width / dock.density, "height" to coords.size.height / dock.density))
+                                    }
+                                WorkspaceTab(host, dock, p, groupId, index, id == active, cutout, tab, fittedName = names?.getOrNull(index))
+                            }
                         }
                     }
                     Box(Modifier.width(20.dp).height(36.dp).then(if (vector) Modifier.drawBehind { drawRect(colors.strip,blendMode=androidx.compose.ui.graphics.BlendMode.Src) } else Modifier.background(colors.strip)).testTag("group-grip-${groupId}")

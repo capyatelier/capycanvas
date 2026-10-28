@@ -34,8 +34,9 @@ internal class WorkspaceFrameTiming(private val instrumentation: Instrumentation
     fun run(activity: MainActivity, resize: Boolean, colorOverlap: Boolean = false, colorWheel: Boolean = false, editColor: Boolean = false, bridge: Boolean = false) {
         require(args.getString("workspaceBenchmark") == "true")
         val scenario = WorkspaceBenchmarkActivity(instrumentation, activity)
-        val repeats = if (bridge) args.getString("repeats", "3")!!.toInt() else 1
-        val measuredDuration = if (bridge) args.getString("durationMs", "6000")!!.toLong() else 5000L
+        val tierPhoto = args.getString("tierPhoto") == "true"
+        val repeats = if (bridge || tierPhoto) args.getString("repeats", "3")!!.toInt() else 1
+        val measuredDuration = if (bridge || tierPhoto) args.getString("durationMs", "6000")!!.toLong() else 5000L
         val label = args.getString("label", "column-bridge")!!
         val bridgeContent = args.getString("bridgeContent", "default")!!
         require(bridgeContent in listOf("default", "empty-navigator", "empty-both"))
@@ -86,7 +87,7 @@ internal class WorkspaceFrameTiming(private val instrumentation: Instrumentation
             }
             waitFor { host.snapshot?.optBoolean("shaders_ready") == true }
             waitFor { host.workspaceManager?.let { it.optBoolean("ready") && !it.optBoolean("busy") } == true }
-            if (bridge) {
+            if (bridge || tierPhoto) {
                 action(obj("type" to "set_theme", "theme" to args.getString("theme", "light")))
                 host.openDocument(java.io.File(requireNotNull(args.getString("photo"))))
                 val state = host.snapshot!!.getJSONObject("state")
@@ -133,7 +134,7 @@ internal class WorkspaceFrameTiming(private val instrumentation: Instrumentation
                 put("column_stacks", JSONArray(listOf(obj("column" to 51, "members" to JSONArray(listOf(42, 45, 50)), "drawers" to false, "auto_hide" to false))))
                 put("next_id", maxOf(62, getInt("next_id")))
             }
-            val output = java.io.File(instrumentation.targetContext.getExternalFilesDir(null), "workspace-bridge-benchmark").apply { if (bridge) mkdirs() }
+            val output = java.io.File(instrumentation.targetContext.getExternalFilesDir(null), if (tierPhoto && !bridge) "workspace-tab-benchmark" else "workspace-bridge-benchmark").apply { if (bridge || tierPhoto) mkdirs() }
             val presentationSamples = JSONArray()
             fun presentationStatus(phase: String, run: Int): JSONObject {
                 val status = runBlocking { host.withNative { JSONObject(Native.displayStatus(it)) } }
@@ -238,9 +239,10 @@ internal class WorkspaceFrameTiming(private val instrumentation: Instrumentation
             window.addOnFrameMetricsAvailableListener(listener, Handler(frames.looper))
             try {
                 action(obj("type" to "preferences", "action" to obj("type" to "edit", "id" to "transparency", "value" to transparency)))
+                val selectedMode = args.getString("benchmarkMode")
                 for (mouse in if (bridge) listOf(true) else listOf(true, false))
-                for (mode in if (bridge) listOf(if (resize) "bridge-gap" else "bridge-panel") else if (colorWheel) listOf(wheel) else if (colorOverlap) listOf("color-overlap") else if (resize) listOf("brushes", "properties", "navigator", "toolbar") else listOf("attached", "floating", "destination"))
-                for (run in if (bridge) -1 until repeats else 0..0) {
+                for (mode in (if (bridge) listOf(if (resize) "bridge-gap" else "bridge-panel") else if (colorWheel) listOf(wheel) else if (colorOverlap) listOf("color-overlap") else if (resize) listOf("brushes", "properties", "navigator", "toolbar") else listOf("attached", "floating", "destination")).filter { selectedMode == null || it == selectedMode })
+                for (run in if (bridge || tierPhoto) -1 until repeats else 0 until repeats) {
                     if (resize && !bridge) fixture.getJSONObject("layout").getJSONArray("bands").apply {
                         getJSONObject(0).put("root", tabs(41, mode))
                         getJSONObject(1).put("root", tabs(43, "layers"))
@@ -262,6 +264,7 @@ internal class WorkspaceFrameTiming(private val instrumentation: Instrumentation
                                 zoom * args.getString("height")!!.toInt() <= area.getDouble(3) + 1
                         }
                     }
+                    if (tierPhoto && !bridge) host.drain(obj("type" to "invoke", "command" to "fit_canvas"))
                     if (colorWheel) {
                         action(obj("type" to "color", "action" to obj("op" to "shape", "shape" to "circle")))
                         action(obj("type" to "color", "action" to obj("op" to "select", "slot" to "foreground")))
@@ -289,7 +292,7 @@ internal class WorkspaceFrameTiming(private val instrumentation: Instrumentation
                         else if (colorWheel) source - Offset(bounds(wheel).width * .15f, 0f) else if (colorOverlap) bounds("color-wheel").let { Offset(it.center.x - it.width * .15f, it.top + it.height * .25f) } else if (resize) source + Offset(60f, 0f) else bounds("tab-brushes").center
                     val last = if (bridge) { if (resize) Offset(source.x, anchor.bottom + 21 * density) else workspace.center + Offset(80 * density, 0f) }
                         else if (colorWheel) source + Offset(bounds(wheel).width * .15f, 0f) else if (colorOverlap) bounds("color-wheel").let { Offset(it.center.x + it.width * .15f, it.top + it.height * .25f) } else if (resize) source + Offset(220f, 0f) else bounds("tab-sizes").center
-                    val duration = if (bridge && run < 0) 1000L else measuredDuration
+                    val duration = if ((bridge || tierPhoto) && run < 0) 1000L else measuredDuration
                     val down = SystemClock.uptimeMillis()
                     fun eventOnMain(action: Int, point: Offset) {
                         val properties = arrayOf(MotionEvent.PointerProperties().apply {
@@ -481,7 +484,7 @@ internal class WorkspaceFrameTiming(private val instrumentation: Instrumentation
                         }
                         result.put("publication_utf16_units", publicationRows.sumOf { it.getLong(3) })
                         result.put("panel_content_changes", metrics.getLong("panel_content_changes"))
-                        if (bridge && run >= 0) {
+                        if ((bridge || tierPhoto) && run >= 0) {
                             if (dirtyTrace) {
                                 result.put("composition_dirty_records", JSONArray(compositionDirty.filter { it.time in beginNs..endNs }.map {
                                     obj("time_ns" to it.time, "key" to it.key, "dirty1" to it.first, "dirty2" to it.second, "name" to it.name)
@@ -527,7 +530,8 @@ internal class WorkspaceFrameTiming(private val instrumentation: Instrumentation
                             result.put("frame_columns", JSONArray(listOf("vsync_ns", "total_ns", "deadline_ns", "layout_ns", "draw_ns")))
                             result.put("state", host.snapshot!!.getJSONObject("state")); result.put("workspace", fixture)
                             result.put("photo", args.getString("photo")); result.put("width", args.getString("width")); result.put("height", args.getString("height"))
-                            java.io.File(output, "$label-$run.json").writeText(result.toString())
+                            val filename = if (bridge) "$label-$run.json" else "$label-$mode-${if (mouse) "mouse" else "touch"}-$run.json"
+                            java.io.File(output, filename).writeText(result.toString())
                         }
                         Log.i(if (resize) "CapyResizePerf" else "CapyDragPerf", result.toString())
                     } finally {
