@@ -405,6 +405,9 @@ creation require successful validation and every platform package.
 | Windows x64 and ARM64 | Native Release build, C++ input and script tests, shared color/codec/render math suites, serial Rust/document tests on WARP, isolated profile-menu storage regression, model snapshot reader and native bridge lint |
 | Apple | Simulator app and XCTest bundle build; Swift state/input/persistence, offscreen SwiftUI workspace and header geometry, appearance, window state and sandbox fixtures that do not attach Metal surfaces |
 
+The Arch job builds the photo decoder in the library tests' profile so their
+executable-relative helper lookup uses the matching binary.
+
 The Android package job also builds its debug app and instrumentation APK and
 runs debug/release lint. The instrumentation APK is retained but not executed:
 those tests require hardware Vulkan.
