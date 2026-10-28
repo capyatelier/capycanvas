@@ -10,6 +10,35 @@ spec.loader.exec_module(bubbles)
 
 
 class BubblePresentsTest(unittest.TestCase):
+    def write_motion_fixture(self, directory):
+        contacts = [dict(run=i, warmup=i == 0, begin_ns=i * 10_000_000_000, end_ns=i * 10_000_000_000 + 6_000_000_000,
+                         distinct_centers=[20, 2, 3, 4, 5]) for i in range(4)]
+        directory.joinpath("result.json").write_text(json.dumps(dict(contacts=contacts)))
+        times = [c["begin_ns"] + n * 10_000_000 for c in contacts for n in range(601)]
+        capture = dict(surface="owned.app/MainActivity#1", samples=[dict(text="10000000\n" + "\n".join(f"1 {t} 3" for t in times))])
+        directory.joinpath("surface-latency.json").write_text(json.dumps(capture))
+        return contacts, capture
+
+    def test_factory_display_settings_are_recorded(self):
+        self.assertEqual(bubbles.factory_display_settings("Physical size: 1440x2200\n", "Physical density: 240\n", "1.0\n"),
+                         dict(size=[1440, 2200], density=240, font_scale=1))
+
+    def test_display_overrides_are_rejected_even_when_matching_physical_values(self):
+        for size, density in [("Physical size: 1440x2200\nOverride size: 1440x2200", "Physical density: 240"),
+                              ("Physical size: 1440x2200", "Physical density: 240\nOverride density: 280")]:
+            with self.subTest(size=size, density=density), self.assertRaisesRegex(ValueError, "overrides"):
+                bubbles.factory_display_settings(size, density, "1")
+
+    def test_nonfactory_or_malformed_display_settings_are_rejected(self):
+        for size, density, font in [("", "Physical density: 240", "1"),
+                                    ("Physical size: 1440x0", "Physical density: 240", "1"),
+                                    ("Physical size: 1440x2200", "Physical density: null", "1"),
+                                    ("Physical size: 1440x2200", "Physical density: 240", ".85"),
+                                    ("Physical size: 1440x2200", "Physical density: 240", "null"),
+                                    ("Physical size: 1440x2200", "Physical density: 240", "nan")]:
+            with self.subTest(size=size, density=density, font=font), self.assertRaises(ValueError):
+                bubbles.factory_display_settings(size, density, font)
+
     def test_surface_names_accept_android_16_requested_state_wrappers(self):
         name = "owned.app/art.capycanvas.MainActivity#12"
         self.assertEqual(bubbles.surface_names(name + "\nRequestedLayerState{" + name + " parentId=9 z=1}\n"), [name, name])
@@ -46,12 +75,7 @@ class BubblePresentsTest(unittest.TestCase):
     def test_report_excludes_warmup_and_rejects_ring_rollover(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
-            contacts = [dict(run=i, warmup=i == 0, begin_ns=i * 10_000_000_000, end_ns=i * 10_000_000_000 + 6_000_000_000,
-                             distinct_centers=[20, 2, 3, 4, 5]) for i in range(4)]
-            directory.joinpath("result.json").write_text(json.dumps(dict(contacts=contacts)))
-            times = [c["begin_ns"] + n * 10_000_000 for c in contacts for n in range(601)]
-            capture = dict(surface="owned.app/MainActivity#1", samples=[dict(text="10000000\n" + "\n".join(f"1 {t} 3" for t in times))])
-            directory.joinpath("surface-latency.json").write_text(json.dumps(capture))
+            contacts, capture = self.write_motion_fixture(directory)
             result = bubbles.report(directory)
             self.assertEqual([c["run"] for c in result["contacts"]], [1, 2, 3])
             self.assertEqual(result["contacts"][0]["presented_hz"], 100)
@@ -64,6 +88,20 @@ class BubblePresentsTest(unittest.TestCase):
             capture["samples"] = [dict(text="10000000\n1 11000000000 3\n"), dict(text="10000000\n1 14000000000 3\n")]
             directory.joinpath("surface-latency.json").write_text(json.dumps(capture))
             with self.assertRaisesRegex(ValueError, "ring rollover"):
+                bubbles.report(directory)
+
+    def test_report_requires_recorded_factory_settings_for_qualification(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            self.write_motion_fixture(directory)
+            self.assertTrue(bubbles.report(directory)["qualification"].startswith("Diagnostic:"))
+            settings = dict(size="Physical size: 1440x2200", density="Physical density: 240", font_scale="1")
+            for stage in ["before", "after"]:
+                directory.joinpath(f"display-settings-{stage}.json").write_text(json.dumps(settings))
+            self.assertTrue(bubbles.report(directory)["qualification"].startswith("Factory display settings verified"))
+            settings["density"] += "\nOverride density: 280"
+            directory.joinpath("display-settings-after.json").write_text(json.dumps(settings))
+            with self.assertRaisesRegex(ValueError, "overrides"):
                 bubbles.report(directory)
 
     def test_hdr_intensity_requires_visible_values_instead_of_neighbor_motion(self):

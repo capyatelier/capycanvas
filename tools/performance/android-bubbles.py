@@ -66,6 +66,15 @@ def summarize(times):
 def report(directory):
     fixture = json.loads((directory / "result.json").read_text())
     capture = json.loads((directory / "surface-latency.json").read_text())
+    settings_stages = []
+    for stage in ["before", "before-motion", "after"]:
+        path = directory / f"display-settings-{stage}.json"
+        if path.is_file():
+            settings = json.loads(path.read_text())
+            factory_display_settings(**{key: settings[key] for key in ["size", "density", "font_scale"]})
+            settings_stages.append(stage)
+    settings_verified = all(stage in settings_stages for stage in ["before", "after"])
+    qualification = "Factory display settings verified; apply tier rate and p99 limits" if settings_verified else "Diagnostic: missing recorded factory display settings"
     parsed = [latency(sample["text"]) for sample in capture["samples"]]
     all_times = sorted({t for _, times in parsed for t in times})
     contacts = []
@@ -84,6 +93,7 @@ def report(directory):
                 transitions.append(dict(begin_ns=begin, end_ns=end, production_active_ms=(end - begin) / 1e6,
                                         actual_present_timestamps_ns=presents, drawn_rows=len(draws), distinct_drawn_centers=poses))
             result = dict(measurement="Diagnostic palette opening; production-active windows are not sustained motion; no FPS qualification",
+                          qualification=qualification,
                           surface=capture["surface"], instrumentation_passed="OK (1 test)" in (directory / "instrumentation.log").read_text(),
                           display_hz=contact.get("display_hz"), thermal_before=contact.get("thermal_before"), thermal_after=contact.get("thermal_after"), transitions=transitions)
             (directory / "presents.json").write_text(json.dumps(result, indent=2) + "\n")
@@ -115,6 +125,7 @@ def report(directory):
     log = directory / "instrumentation.log"
     passed = "OK (1 test)" in log.read_text() if log.is_file() else None
     result = dict(measurement="SurfaceFlinger app-window actual presents; MONOTONIC clock", instrumentation_passed=passed,
+                  qualification=qualification,
                   surface=capture["surface"], refresh_period_ns=sorted({period for period, _ in parsed}), contacts=contacts)
     (directory / "presents.json").write_text(json.dumps(result, indent=2) + "\n")
     return result
@@ -128,6 +139,23 @@ def activity_identity(text, package):
     if len(identities) != 1:
         raise ValueError("Expected one resumed private MainActivity identity")
     return identities.pop()
+
+
+def factory_display_settings(size, density, font_scale):
+    def physical(text, label, value):
+        match = re.fullmatch(rf"Physical {label}: ({value})\s*", text.strip())
+        if not match:
+            raise ValueError(f"Factory {label} required; overrides or malformed settings: {text.strip()!r}")
+        return match.group(1)
+    size_value = physical(size, "size", r"[1-9]\d*x[1-9]\d*")
+    density_value = physical(density, "density", r"[1-9]\d*")
+    try:
+        scale = float(font_scale.strip())
+    except ValueError as error:
+        raise ValueError(f"Malformed font scale: {font_scale.strip()!r}") from error
+    if scale != 1:
+        raise ValueError(f"Factory font scale 1 required; got {font_scale.strip()!r}")
+    return dict(size=[int(value) for value in size_value.split("x")], density=int(density_value), font_scale=scale)
 
 
 def main():
@@ -155,6 +183,14 @@ def main():
     def command(*parts, **kwargs):
         return subprocess.run([adb, *parts], check=True, text=True, capture_output=True, **kwargs).stdout
     args.output.mkdir(parents=True, exist_ok=False)
+    def record_display_settings(stage):
+        settings = dict(size=command("shell", "wm", "size"), density=command("shell", "wm", "density"),
+                        font_scale=command("shell", "settings", "get", "system", "font_scale"))
+        path = args.output / f"display-settings-{stage}.json"
+        path.write_text(json.dumps(settings, indent=2) + "\n")
+        settings["factory"] = factory_display_settings(**settings)
+        path.write_text(json.dumps(settings, indent=2) + "\n")
+    record_display_settings("before")
     (args.output / "hardware-before.txt").write_text(command("shell", "dumpsys thermalservice; dumpsys display"))
     running = subprocess.run([adb, "shell", "pidof", args.package], text=True, capture_output=True)
     if running.stdout.strip():
@@ -202,6 +238,7 @@ def main():
                         time.sleep(.1)
                     (args.output / "private-activity.json").write_text(json.dumps(dict(before=before, after=after)))
                     (args.output / "hardware-before-motion.txt").write_text(command("shell", "dumpsys thermalservice; dumpsys display"))
+                    record_display_settings("before-motion")
                     command("shell", "touch", f"{remote}/go")
                     prepared = True
                 if surface is None:
@@ -227,6 +264,7 @@ def main():
                 process.wait(timeout=30)
             (args.output / "surface-latency.json").write_text(json.dumps(dict(surface=surface, samples=samples)))
             (args.output / "hardware-after.txt").write_text(command("shell", "dumpsys thermalservice; dumpsys display"))
+            record_display_settings("after")
     if "OK (1 test)" not in (args.output / "instrumentation.log").read_text():
         raise RuntimeError("Instrumentation failed; see instrumentation.log; raw surface samples retained")
     for name in ["fixture.json", "result.json"]:
