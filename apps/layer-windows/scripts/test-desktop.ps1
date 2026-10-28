@@ -5,6 +5,10 @@ param(
     [switch]$ConfigureVmDisplay
 )
 $ErrorActionPreference='Stop'
+$desktopDirectory=[Environment]::GetFolderPath([Environment+SpecialFolder]::DesktopDirectory)
+if(!$desktopDirectory -or ![IO.Directory]::Exists($desktopDirectory)){
+    throw 'UI fixtures need an interactive Windows account with an available Desktop folder.'
+}
 $Script=(Resolve-Path -LiteralPath $Script).Path
 $repo=(Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
 $run=Join-Path $repo ('artifacts/windows/test-desktop/'+[Guid]::NewGuid().ToString('N'))
