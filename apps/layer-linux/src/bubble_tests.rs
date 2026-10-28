@@ -27,6 +27,7 @@ fn tap(d: &mut Driver, device: &str, at: [f32; 2]) {
 
 fn capture(d: &mut Driver, name: &str) {
     if std::env::var_os("LAYER_NATIVE_CAPTURE_DIR").is_some() {
+        let name: String = name.chars().map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' }).collect();
         d.input.perform(serde_json::json!([{ "wait_ms": 300 }, { "capture": name }]));
     }
 }
