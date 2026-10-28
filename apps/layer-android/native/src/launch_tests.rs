@@ -42,3 +42,34 @@ fn every_jni_function_runs_inside_jni_entry() {
     assert!(functions > 100);
     assert!(unguarded.is_empty(), "{unguarded:?}");
 }
+
+#[test]
+fn jni_entry_returns_load_failure_after_a_panic() {
+    let value = crate::jni_entry!(result => { result.unwrap_or(-1) }; {
+        std::panic::resume_unwind(Box::new("load failed"))
+    });
+    assert_eq!(value, -1);
+}
+
+#[test]
+#[cfg(unix)]
+fn jni_entry_writes_photo_failures_to_the_error_pipe() {
+    use std::io::{Read, Write};
+    for panic in [false, true] {
+        let (mut reader, mut writer) = std::os::unix::net::UnixStream::pair().unwrap();
+        let value = crate::jni_entry!(result => {
+            match result {
+                Ok(()) => 1,
+                Err(error) => { writer.write_all(error.as_bytes()).unwrap(); 0 }
+            }
+        }; {
+            if panic { std::panic::resume_unwind(Box::new("decoder failed")); }
+            Err("decoder refused input".to_owned())
+        });
+        drop(writer);
+        let mut error = String::new();
+        reader.read_to_string(&mut error).unwrap();
+        assert_eq!(value, 0);
+        assert_eq!(error, if panic { "Native operation panicked: decoder failed" } else { "decoder refused input" });
+    }
+}

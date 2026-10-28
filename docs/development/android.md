@@ -125,7 +125,8 @@ exports it as `$CAPY_APPLICATION_ID`. The commands below write
 
 - **JNI results.** `or_throw` in `native/src/android.rs` reports
   `IllegalStateException` and keeps the return sentinel; `argb_array` packs RGBA
-  pixels for Kotlin.
+  pixels for Kotlin. Every JNI export uses `jni_entry!`; VM loading returns
+  `JNI_ERR` on failure, and the photo service writes failures to its error pipe.
 - **JNI handles.** JNI `Long` handles are typed generational tokens from
   `layer_host::handles`. Apps stay in the creating render thread's table, and
   worker operations hold a task lease for the whole call. Malformed, stale,
