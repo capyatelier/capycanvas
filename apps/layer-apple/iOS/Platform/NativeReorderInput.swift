@@ -298,9 +298,12 @@ final class ReorderInputView: UIView, UIGestureRecognizerDelegate, UIPointerInte
             return model.acceptsContext(at: point)
         }
         if gestureRecognizer === edgeDoublePress {
-            guard let edge, let source = edge.candidate(for: incoming) else { return false }
             edgeDoubleDevice = incoming.type == .pencil ? .pen : incoming.type == .indirectPointer ? .mouse : .touch
-            return source.contact == .free
+            let point = incoming.location(in: self)
+            if let workspace = model as? WorkspaceReorderInteraction, workspace.isDividerHandle(at: point) {
+                return workspace.edgeReach?.admission(at: point, device: edgeDoubleDevice, contact: .free) != nil
+            }
+            return edge?.candidate(for: incoming)?.contact == .free
         }
         if touch !== incoming || touchStart != incoming.timestamp {
             guard touch == nil || touch?.phase == .ended || touch?.phase == .cancelled || model.contact.target == nil else { cancel(); return false }
@@ -331,9 +334,10 @@ final class ReorderInputView: UIView, UIGestureRecognizerDelegate, UIPointerInte
     @objc private func context(_ recognizer: UITapGestureRecognizer) { model?.context(at: recognizer.location(in: self)) }
     @objc private func doublePressed(_ recognizer: UITapGestureRecognizer) {
         guard recognizer.state == .ended, let workspace = model as? WorkspaceReorderInteraction,
-            let edgeReach = workspace.edgeReach else { return }
+            workspace.enabled, let edgeReach = workspace.edgeReach else { return }
         let point = recognizer.location(in: self)
-        guard workspace.edgeReachSource(at: point, device: edgeDoubleDevice)?.contact ?? .free == .free else { return }
+        guard workspace.isDividerHandle(at: point)
+            || (workspace.edgeReachSource(at: point, device: edgeDoubleDevice)?.contact ?? .free) == .free else { return }
         edgeReach.doublePress(device: edgeDoubleDevice, contact: .free, at: point)
     }
     func gestureRecognizer(_ recognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {

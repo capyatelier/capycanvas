@@ -42,10 +42,10 @@ class NativeWorkspaceInputFixture {
             NSApp.sendEvent(event)
         }
     }
-    @MainActor static func event(_ type: NSEvent.EventType, at point: CGPoint, marker: NSView, number: Int, tablet: Bool = false) throws {
+    @MainActor static func event(_ type: NSEvent.EventType, at point: CGPoint, marker: NSView, number: Int, tablet: Bool = false, clicks: Int = 1) throws {
         guard let window = marker.window, let event = NSEvent.mouseEvent(with: type,
             location: marker.convert(point, to: nil), modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
-            windowNumber: window.windowNumber, context: nil, eventNumber: number, clickCount: 1, pressure: 0.5) else {
+            windowNumber: window.windowNumber, context: nil, eventNumber: number, clickCount: clicks, pressure: 0.5) else {
             throw HostFailure(message: "No native fixture event")
         }
         // mouseEvent(with:) leaves buttonNumber at zero even for right-down/up.
@@ -63,7 +63,7 @@ class NativeWorkspaceInputFixture {
         guard let delivered = NSEvent(cgEvent: cg) else { throw HostFailure(message: "Invalid fixture CGEvent") }
         // The CGEvent round trip can round fractional points by a few ULPs.
         let location = delivered.locationInWindow
-        try require(delivered.type == type && delivered.buttonNumber == button
+        try require(delivered.type == type && delivered.buttonNumber == button && delivered.clickCount == clicks
             && delivered.eventNumber == number && delivered.windowNumber == window.windowNumber
             && abs(location.x - event.locationInWindow.x) < 1e-6
             && abs(location.y - event.locationInWindow.y) < 1e-6,

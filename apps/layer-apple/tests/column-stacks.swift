@@ -48,9 +48,9 @@ import SwiftUI
         func center(_ value: WorkspaceSource) -> CGPoint { CGPoint(x: value.bounds.midX, y: value.bounds.midY) }
         func layout() -> String { store.state["workspace"]["layout"].stableKey }
         var counter = 1
-        func send(_ type: NSEvent.EventType, _ point: CGPoint, pen: Bool = false) async throws {
+        func send(_ type: NSEvent.EventType, _ point: CGPoint, pen: Bool = false, clicks: Int = 1) async throws {
             counter += 1
-            try event(type, at: point, marker: marker, number: platform == 0 ? counter : 0, tablet: pen)
+            try event(type, at: point, marker: marker, number: platform == 0 ? counter : 0, tablet: pen, clicks: clicks)
             try await drain(type == .leftMouseDown ? 0.02 : 0.08)
         }
         func click(_ panel: String) async throws {
@@ -119,8 +119,33 @@ import SwiftUI
             let resized = layout()
             try await action(["type":"invoke", "command":"undo_workspace"])
             try require(layout() == beforeResize, "Open-member resizing has one undo step")
+            let automaticWidth = member(12)["open"]["bounds"].rect.width
             try await action(["type":"invoke", "command":"redo_workspace"])
             try require(layout() == resized, "Redo restores the member width")
+            for theme in ["light", "dark"] {
+                try await action(["type":"set_theme", "theme":theme])
+                let reset = center(source(resize)!)
+                try require(input.isDividerHandle(at: reset), "The visible resize handle must admit native double presses")
+                for memberID in [UInt64(4), UInt64(12)] {
+                    try require(!input.isDividerHandle(at: center(source(grip(memberID))!)), "Column grips keep their own double-press behavior")
+                }
+                for clicks in [1, 2] {
+                    try await send(.leftMouseDown, reset, pen: pen, clicks: clicks)
+                    try await send(.leftMouseUp, reset, pen: pen, clicks: clicks)
+                }
+                try await wait("Native double press resets the open member width") {
+                    abs(member(12)["open"]["bounds"].rect.width - automaticWidth) < 0.5
+                }
+                let resetLayout = layout()
+                try require(resetLayout != resized, "Width reset changes the authored layout")
+                try require(member(12)["stack"].uint == member(4)["stack"].uint, "Width reset preserves the member stack")
+                try await action(["type":"invoke", "command":"undo_workspace"])
+                try require(layout() == resized, "Native width reset has one undo step")
+                try await action(["type":"invoke", "command":"redo_workspace"])
+                try require(layout() == resetLayout, "Redo restores the native width reset")
+                try await action(["type":"invoke", "command":"undo_workspace"])
+                try require(layout() == resized, "Reset history leaves the resized layout available")
+            }
             let cancelStart = center(source(resize)!)
             try await send(.leftMouseDown, cancelStart, pen: pen)
             try await send(.leftMouseDragged, CGPoint(x: cancelStart.x + 30 * outward, y: cancelStart.y), pen: pen)

@@ -57,6 +57,12 @@ import SwiftUI
             finish: { [weak workspace] in workspace?.move(item, point: $0, released: true) },
             cancel: { [weak workspace] in workspace?.cancel(item) })
     }
+    func isDividerHandle(at point: CGPoint) -> Bool {
+        guard enabled, viewport.contains(point), menu.isNull, bubbleInput?.hit(point) != true,
+              let (_, source) = workspace?.hitSource(at: point), source.surface == .handle,
+              let item = try? JSON.decode(source.item) else { return false }
+        return item["type"].string == "drag_divider"
+    }
     func edgeReachSource(at point: CGPoint, device: ReorderDevice) -> EdgeReachSource? {
         guard enabled, viewport.contains(point), menu.isNull,
               let workspace, let (_, source) = workspace.hitSource(at: point) else { return nil }

@@ -305,6 +305,10 @@ final class ReorderInputView: NSView, NSGestureRecognizerDelegate {
             if pen && contact?.device == .pen { return event }
             cancel()
             let device: ReorderDevice = pen ? .pen : .mouse
+            if event.type == .leftMouseDown && event.clickCount == 2,
+                (marker.model as? WorkspaceReorderInteraction)?.isDividerHandle(at: point) == true {
+                coordinator.doublePress(device: device, contact: .free, at: point); return event
+            }
             guard let source = source(at: point, event: event, device: device),
                 let admission = coordinator.admission(at: point, device: device, contact: source.contact) else { return event }
             if event.type == .leftMouseDown && event.clickCount == 2 && source.contact == .free {

@@ -33,6 +33,8 @@ real endpoint. The cursor tracks real input, so predicted ink can run ahead of i
   ownership and catch-up. A claim cancels the canvas contact without blurring
   the editor; pending vertical reaches withhold motion while preserving taps.
   Resize cursors take precedence over the canvas cursor until release.
+  Native double presses on divider handles and free edge reach use the shared
+  width-reset policy; panel and column grips retain their own behavior.
 - **Bubble pickup.** Source contacts keep native scrolling until shared
   `can_take_bubble` admits the current canvas position. UIKit claims the live
   contact on that reply; retired contacts cannot take a later pointer.

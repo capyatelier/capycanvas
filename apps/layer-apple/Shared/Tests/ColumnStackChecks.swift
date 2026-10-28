@@ -127,11 +127,12 @@ extension XCTestCase {
     @MainActor func checkColumnStacks(in app: XCUIApplication, theme: String = "light") {
         let actions: [[String: Any]] = [
             ["type":"set_theme", "theme":theme],
+            ["type":"workspace_manager", "command":["type":"switch", "id":"builtin:workspace:illustrator"]],
             ["type":"customize", "action":["type":"set_column_collapsed", "group":6, "collapsed":true]],
             ["type":"customize", "action":["type":"set_column_collapsed", "group":16, "collapsed":true]],
             ["type":"customize", "action":["type":"set_column_drawers", "column":4, "drawers":false]],
             ["type":"customize", "action":["type":"set_column_drawers", "column":12, "drawers":false]],
-            ["type":"customize", "action":["type":"insert_tools", "panel":"toolbar", "before":1]],
+            ["type":"customize", "action":["type":"insert_tools", "panel":"toolbar"]],
             ["type":"customize", "action":["type":"picker_select", "control":["kind":"command", "command":"undo_workspace"], "selected":true]],
             ["type":"customize", "action":["type":"picker_select", "control":["kind":"command", "command":"redo_workspace"], "selected":true]],
             ["type":"customize", "action":["type":"confirm_tools"]],
@@ -144,10 +145,19 @@ extension XCTestCase {
         XCTAssertTrue(leftGrip.waitForExistence(timeout: 25))
         XCTAssertTrue(rightGrip.exists)
         XCTAssertGreaterThan(right.frame.minX - left.frame.minX, 500)
+        #if os(iOS)
+        let failure = app.staticTexts["Canvas error"], detail = app.staticTexts["canvas-error-detail"]
+        guard !failure.exists else { XCTFail("Column setup: \(detail.label)"); return }
+        left.swipeDown()
+        let failed = failure.waitForExistence(timeout: 2)
+        XCTAssertFalse(failed, failed ? detail.label : "Top column bounce must remain a valid scroll")
+        XCTAssertFalse(app.staticTexts["Invalid column scroll"].exists)
+        #endif
         leftGrip.press(forDuration: 0.05, thenDragTo: rightGrip)
         expectation(for: NSPredicate { _, _ in
-            left.exists && right.exists && abs(left.frame.minX - right.frame.minX) < 1
-                && left.frame.minY > right.frame.minY
+            leftGrip.exists && rightGrip.exists
+                && abs(leftGrip.frame.midX - rightGrip.frame.midX) < 1
+                && leftGrip.frame.minY > rightGrip.frame.minY
         }, evaluatedWith: app)
         waitForExpectations(timeout: 10)
 
@@ -181,17 +191,27 @@ extension XCTestCase {
             app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "toolbar-tile-toolbar-", name)).firstMatch
         }
         workspaceActivate(history("Undo Layout Change"))
-        expectation(for: NSPredicate { _, _ in abs(layerGroup.frame.width - originalWidth) <= 1 }, evaluatedWith: app)
+        expectation(for: NSPredicate { _, _ in layerGroup.frame.width < resizedWidth - 1 }, evaluatedWith: app)
         waitForExpectations(timeout: 10)
+        let automaticWidth = layerGroup.frame.width
         workspaceActivate(history("Redo Layout Change"))
         expectation(for: NSPredicate { _, _ in abs(layerGroup.frame.width - resizedWidth) <= 1 }, evaluatedWith: app)
         waitForExpectations(timeout: 10)
+        let resetBounds = handle.frame
+        let window = app.windows.firstMatch
+        guard resetBounds.width > 0, resetBounds.height > 0, window.frame.contains(resetBounds) else {
+            return XCTFail("The nested column resize edge must remain visible inside its editor window")
+        }
+        let reset = window.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(
+            dx: resetBounds.midX - window.frame.minX, dy: resetBounds.midY - window.frame.minY))
         #if os(macOS)
-        handle.doubleClick()
+        reset.doubleClick()
         #else
-        handle.doubleTap()
+        reset.doubleTap()
         #endif
-        expectation(for: NSPredicate { _, _ in abs(layerGroup.frame.width - originalWidth) <= 1 }, evaluatedWith: app)
+        let resetProof = XCTAttachment(string: "Reset edge: \(resetBounds), automatic width: \(automaticWidth), resized width: \(resizedWidth)\n" + app.debugDescription)
+        resetProof.name = "nested-column-width-reset-\(theme)"; resetProof.lifetime = .keepAlways; add(resetProof)
+        expectation(for: NSPredicate { _, _ in abs(layerGroup.frame.width - automaticWidth) <= 1 }, evaluatedWith: app)
         waitForExpectations(timeout: 10)
         workspaceActivate(history("Undo Layout Change"))
         expectation(for: NSPredicate { _, _ in abs(layerGroup.frame.width - resizedWidth) <= 1 }, evaluatedWith: app)

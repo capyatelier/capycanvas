@@ -34,11 +34,7 @@ struct WorkspacePanels: View {
                 ForEach(store.snapshot["layout"]["dividers"].array.indices, id: \.self) { index in
                     let divider = store.snapshot["layout"]["dividers"][index]
                     if !divider["fixed"].bool {
-                        WorkspaceResizeHandle(store: store, action: JSON(["type": "drag_divider", "id": divider["id"].raw]),
-                            reset: divider["axis"].string == "horizontal" && !divider["owner_side"].isNull ? {
-                                store.dispatch(["type": "reset_column_width", "id": divider["id"].raw,
-                                    "viewport": store.snapshot["layout"]["viewport"].raw])
-                            } : nil)
+                        WorkspaceResizeHandle(store: store, action: JSON(["type": "drag_divider", "id": divider["id"].raw]))
                             .placed(divider["bounds"])
                             .accessibilityIdentifier("workspace-divider-\(divider["id"].uint)")
                             .accessibilityAdjustableAction { direction in
@@ -86,7 +82,6 @@ struct WorkspacePanels: View {
 struct WorkspaceResizeHandle: View {
     @ObservedObject var store: EditorStore
     let action: JSON
-    var reset: (() -> Void)? = nil
     @State private var hovering = false
     @Environment(\.editorPalette) private var palette
     var body: some View {
@@ -103,10 +98,6 @@ struct WorkspaceResizeHandle: View {
                     "viewport": store.snapshot["layout"]["viewport"].raw])
                 return .handled
             }
-            .simultaneousGesture(TapGesture(count: 2).onEnded {
-                guard !store.workspace.input.contact.consumeClick() else { return }
-                reset?()
-            }, isEnabled: reset != nil)
     }
 }
 
