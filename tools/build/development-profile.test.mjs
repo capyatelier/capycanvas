@@ -38,6 +38,7 @@ require("node:fs").appendFileSync(process.env.COMMAND_LOG,
     assert.equal(result.status, 0, result.stderr);
     const commands = readFileSync(log, "utf8").trim().split("\n").map(JSON.parse);
     if (platform === "linux") {
+      assert.deepEqual(commands.shift(), ["python3", "tools/build/check-rust-version.py"]);
       assert.deepEqual(commands.shift(), ["bash", "tools/build/gtk-runtime/build.sh",
         join(bin, "gtk cache"), join(bin, "gtk cache/prefix")]);
       assert.deepEqual(commands.shift(), ["cargo", "build", "--locked", "--profile", expected,
