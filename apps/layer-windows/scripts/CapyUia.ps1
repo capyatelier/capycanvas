@@ -59,7 +59,7 @@ function Start-CapyDebugger([Diagnostics.Process]$Process,[string]$DebuggerPath,
         ('.symfix "'+$symbols+'"')
         ('.sympath+ "'+(Split-Path -Parent $Process.Path)+'"')
         '.symopt+ 0x10'
-        'sxe -c ".echo FIRST_CHANCE_AV; .exr -1; kv 60; gn" -c2 ".echo SECOND_CHANCE_AV; .exr -1; .ecxr; kv 60; ~*kv; lmv; .dump /m crash.dmp; q" av'
+        'sxe -c ".echo FIRST_CHANCE_AV; .exr -1; r; u @pc-0x20 L20; kv 60; gn" -c2 ".echo SECOND_CHANCE_AV; .exr -1; .ecxr; .dump /ma crash.dmp; r; u @pc-0x20 L20; kv 60; ~*kv; lmv; q" av'
         'sxe -c ".lastevent; q" epr'
         '.echo CAPY_DEBUGGER_READY'
         'g'
@@ -642,12 +642,17 @@ function Zoom-Item([string]$Id){
     [System.Windows.Automation.AutomationElement]::RootElement.FindFirst([System.Windows.Automation.TreeScope]::Descendants,$owned)
 }
 function Fit-Canvas{
-    if(!(Find 'canvas-view-info')){return}
-    Invoke-Id 'canvas-view-info'
-    $hit=@{item=$null}
-    Wait-Until {$hit.item=Zoom-Item 'zoom-fit_canvas';$hit.item -and $hit.item.Current.IsEnabled} 'The zoom menu did not offer Fit'
-    $hit.item.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
-    Wait-Until {!(Zoom-Item 'zoom-fit_canvas')} 'The zoom menu did not close after Fit'
+    Wait-Until {
+        $canvas=Find 'drawing-canvas'
+        if(!$canvas -or !$canvas.Current.IsEnabled -or !$canvas.Current.IsKeyboardFocusable){return $false}
+        $drawing=Owned-DrawingWindow $review
+        if(!$drawing){return $false}
+        $null=[CapyWindowApi]::SetForegroundWindow($drawing.Handle)
+        try{$canvas.SetFocus();$canvas.Current.HasKeyboardFocus}catch [System.InvalidOperationException]{$false}
+    } 'The canvas did not take focus before Fit'
+    $revision=(Model).state.camera.revision
+    [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),0x30)
+    Wait-Until {(Model).state.camera.revision -gt $revision} 'Fit did not advance the camera'
 }
 function Save-ProjectAs([string]$Path,[scriptblock]$NativeSaved){
     & (Join-Path $script:CapyScripts 'open-application-menu.ps1') -Root $root -Name 'File'
