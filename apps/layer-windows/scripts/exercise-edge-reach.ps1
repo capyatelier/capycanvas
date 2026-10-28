@@ -3,6 +3,7 @@ $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 $CapyPopups=$true
 Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
+Add-Type -AssemblyName System.Windows.Forms
 $repo=(Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
 $Executable=(Resolve-Path -LiteralPath $Executable).Path
 $directory=Split-Path -Parent $Executable
@@ -56,6 +57,11 @@ function Reach-Point([object[]]$Candidates,[scriptblock]$Accept){
 }
 function Width([int]$Group){((Layout).groups|Where-Object id -eq $Group|Select-Object -First 1).bounds.width}
 function WindowCommand([string]$Id){& (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Window';Invoke $Id;Wait-Until {$null -eq (Find $Id)} 'Workspace menu did not close'}
+function Escape-Edge {
+    $claimed=[bool](Gesture).edge.claimed
+    [CapyRowPointer]::Key(0x1b)
+    Wait-Until {$ended=Gesture;!$ended.edge -and $ended.last_edge.phase -eq 'cancel' -and [bool]$ended.last_edge.claimed -eq $claimed} 'Escape did not finish the edge contact'
+}
 function Check-EdgeEscape($From){
     $state={ $m=Model;@{brush=$m.state.brush;tool_set=$m.state.tool_set;workspace=$m.state.workspace.layout}|ConvertTo-Json -Depth 95 -Compress }
     $beforeState=& $state
@@ -67,14 +73,14 @@ function Check-EdgeEscape($From){
         [CapyRowPointer]::Down($Device,$point.x,$point.y)
         Wait-Until {$null -ne (Gesture).edge -and !(Gesture).edge.claimed} 'The pending edge contact was not published'
         & $observe 'down'
-        [CapyRowPointer]::Key(0x1b);& $observe 'after-escape'
+        Escape-Edge;& $observe 'after-escape'
         [CapyRowPointer]::Up();Settled;& $observe 'after-up'
         if((& $state) -cne $beforeState){throw 'Escape changed the pending edge brush, tool or layout after release'}
         & $observe 'pre-swipe'
         Swipe $From @{x=$From.x+64;y=$From.y} -During {
             Wait-Until {(Gesture).edge.claimed} 'The edge did not claim before Escape'
             & $observe 'claimed-swipe'
-            [CapyRowPointer]::Key(0x1b)
+            Escape-Edge
         }
         & $observe 'after-claimed-escape'
         if((& $state) -cne $beforeState -or (Gesture).edge){throw 'Escape did not restore the claimed edge brush, tool and layout after release'}
@@ -171,10 +177,7 @@ function Check-ReachSweep([string]$Theme){
                     Start-Sleep -Milliseconds 180
                     $mid=Gesture;$claimed=[bool]$mid.edge.claimed
                 }
-                if($claimed){
-                    [CapyRowPointer]::Key(0x1b)
-                    Wait-Until {$ended=Gesture;!$ended.edge -and $ended.last_edge.phase -eq 'cancel' -and $ended.last_edge.claimed} 'Escape did not finish the claimed edge sweep contact'
-                }
+                if($claimed){Escape-Edge}
                 if([CapyRowPointer]::Active){[CapyRowPointer]::Cancel()}
                 Settled
                 $after=Gesture
@@ -420,16 +423,26 @@ function Check-GroupGap([string]$Theme){
     if((Gesture).last_edge.claimed -ne $true -or !(Gesture).last_edge.vertical){throw "${Theme}: the gap moved without a vertical edge claim"}
     WindowCommand 'undo_workspace';Wait-Until {[Math]::Abs((Divider $gap.id).bounds.y-$gap.bounds.y) -lt 1} "${Theme}: the gap resize was not one Undo step"
 }
+function Separate-MouseContact {
+    if($Device -ne 'mouse'){return}
+    $expiry=[Diagnostics.Stopwatch]::StartNew()
+    Wait-Until {$expiry.Elapsed.TotalMilliseconds -gt [Windows.Forms.SystemInformation]::DoubleClickTime} 'Independent row contact remained inside the native double-click interval'
+    if($null -ne (Model).state.layer_tools.rename_layer){throw 'Independent row contact entered inline rename'}
+}
 function Check-LayerRowEdge([string]$Theme){
     Use-PaintWorkspace;Settled
+    $strip=(Layout).collapsed|Where-Object {$_.groups.icons.panel -contains 'layers'}|Select-Object -First 1
+    if($strip -and !$strip.open){Invoke-Id 'column-icon-layers';Wait-Until {(Column $strip.id).open} 'Layers column did not open';Settled}
+    Wait-Until {@((Layout).groups|Where-Object {$_.panels -contains 'layers'}).Count -eq 1} 'Layers group did not become visible'
     $target=(Layout).groups|Where-Object {$_.panels -contains 'tool_settings'}|Select-Object -First 1
     $tab=(Control 'panel-tab-layers' -Arranged).Current.BoundingRectangle
     $to=Screen ($target.bounds.x+$target.bounds.width*.5) ($target.bounds.y+$target.bounds.height*.5)
     try{
         [CapyRowPointer]::Down('mouse',[int]($tab.X+$tab.Width*.5),[int]($tab.Y+$tab.Height*.5))
         [CapyRowPointer]::Move($to.x,$to.y)
-        Wait-Until {$drop=((Workspace-Root).Current.ItemStatus|ConvertFrom-Json).workspace_update.drag.drop_hint;$drop.target.kind -eq 'tab' -and $drop.target.group -eq $target.id} 'Layers did not preview docking into the middle group'
+        Wait-Until {$drag=((Workspace-Root).Current.ItemStatus|ConvertFrom-Json).workspace_update.drag;($drag.tab -and !$drag.group -and !$drag.drop_hint) -or ($drag.drop_hint.target.kind -eq 'tab' -and $drag.drop_hint.target.group -eq $target.id)} 'Layers did not preview docking into the middle group'
         [CapyRowPointer]::Up();Settled
+        Wait-Until {$group=(Layout).groups|Where-Object {$_.panels -contains 'layers'}|Select-Object -First 1;$group.id -eq $target.id -and $group.panels -contains 'layers'} 'Layers did not commit docking into the middle group'
     }finally{if([CapyRowPointer]::Active){[CapyRowPointer]::Cancel()}}
     for($i=0;$i -lt 6;$i++){$count=(Model).state.layers.Count;Invoke 'layer-new';Wait-Until {(Model).state.layers.Count -eq $count+1} 'Layer row setup did not add a layer'}
     $tab=(Control 'panel-tab-layers' -Arranged).Current.BoundingRectangle
@@ -453,8 +466,10 @@ function Check-LayerRowEdge([string]$Theme){
     $contact=Contact $point
     if($contact.contact -ne 'pickup' -or !$contact.vertical){throw 'The actual LayerRow did not publish a vertical Pickup edge candidate'}
     $before=(Model).state.workspace.layout|ConvertTo-Json -Depth 90 -Compress
+    Separate-MouseContact
     Swipe $point @{x=$point.x-50;y=$point.y}
     if(((Model).state.workspace.layout|ConvertTo-Json -Depth 90 -Compress) -cne $before -or (Gesture).last_edge.claimed){throw 'A sideways LayerRow swipe resized the workspace'}
+    Separate-MouseContact
     Swipe $point @{x=$point.x;y=$point.y-50}
     if(!(Gesture).last_edge.claimed -or !(Gesture).last_edge.vertical -or [Math]::Abs((Divider $gap.id).bounds.y-$gap.bounds.y) -lt 20){throw 'A vertical LayerRow contact did not hand off to row resizing'}
     @{row=$row.Current.AutomationId;point=$point;contact=$contact;terminal=(Gesture).last_edge;before=$before;after=(Model).state.workspace.layout}|ConvertTo-Json -Depth 95|Set-Content (Join-Path $run ('layer-row-edge-'+$Theme+'.json'))
@@ -498,7 +513,7 @@ function Check-ClosedStrip([string]$Theme){
         Swipe $from @{x=$from.x+$outward;y=$from.y} -During {
             try{Wait-Until {$column=Column $strip.id;!$column -or $column.open} "open"}catch{throw "${Theme}: an outward swipe from closed-strip $($from.kind) did not open it: $((Gesture)|ConvertTo-Json -Compress -Depth 5)"}
             if(!(Gesture).edge.claimed){throw "${Theme}: the closed strip opened without an edge claim"}
-            [CapyRowPointer]::Key(0x1b)
+            Escape-Edge
         }
         if((Gesture).last_edge.claimed -ne $true){throw "${Theme}: the closed strip opened without an edge claim"}
         if(((Model).state.workspace.layout|ConvertTo-Json -Depth 90 -Compress) -cne $before){throw "${Theme}: canceling the $($from.kind) swipe did not restore the closed strip"}

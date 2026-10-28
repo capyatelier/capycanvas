@@ -13,8 +13,15 @@ struct ActiveEdge {
 
 #[derive(Default)]
 pub(crate) struct EdgeContacts {
-    pending: Option<(u64, EdgeGrab)>,
+    pending: Option<PendingEdge>,
     active: Option<ActiveEdge>,
+}
+
+#[derive(Clone, Copy)]
+struct PendingEdge {
+    id: u64,
+    kind: PointerKind,
+    grab: EdgeGrab,
 }
 
 fn edge_action(target: EdgeTarget, phase: ContactPhase, position: [f32; 2], viewport: [f32; 2]) -> UiAction {
@@ -35,6 +42,10 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     pub(crate) fn edge_contact_input(&mut self, input: UiInput) -> Result<InputReply, String> {
         let mut reply = InputReply::default();
+        if self.workspace_transition || self.workspace_read_only {
+            reply.change = self.cancel_edge_contact()?;
+            return Ok(reply);
+        }
         if let UiInput::EdgeDoublePress { kind, contact, previous_position, position, viewport } = input {
             let layout = self.layout(viewport);
             if contact == EdgeContact::Free && let Some(id) = layout.edge_reset_at(position, kind)
@@ -47,6 +58,10 @@ impl<R: CanvasRenderer> UiSession<R> {
         let UiInput::EdgeContact { id, phase, kind, contact, position, viewport, time_ns } = input else {
             return Ok(reply);
         };
+        if phase == ContactPhase::Down && let Some(active) = self.edge_contacts.active.filter(|active| active.id == id) {
+            self.edge_contacts.active = None;
+            reply.change = self.dispatch(edge_action(active.target, ContactPhase::Cancel, active.point, active.viewport))?;
+        }
         if let Some(mut active) = self.edge_contacts.active.filter(|active| active.id == id) {
             active.point = position;
             reply.handled = true;
@@ -64,30 +79,35 @@ impl<R: CanvasRenderer> UiSession<R> {
         let pending = self.edge_contacts.pending.take();
         match phase {
             ContactPhase::Down => {
-                if pending.is_none() && self.edge_contacts.active.is_none() {
-                    self.edge_contacts.pending = self.layout(viewport).edge_grab_at(position, kind, contact).map(|grab| (id, grab));
+                if pending.is_some_and(|pending| pending.id != id) {
+                    self.edge_contacts.pending = pending.filter(|_| kind != PointerKind::Touch);
+                    reply.edge_retired = self.edge_contacts.pending.is_none();
+                    return Ok(reply);
                 }
-                reply.edge_pending = self.edge_contacts.pending.is_some_and(|(pending_id, _)| pending_id == id);
-                reply.edge_select_on_release = reply.edge_pending && self.edge_contacts.pending.is_some_and(|(_, grab)| grab.resizes(Axis::Vertical));
+                if self.edge_contacts.active.is_none() {
+                    self.edge_contacts.pending = self.layout(viewport).edge_grab_at(position, kind, contact).map(|grab| PendingEdge { id, kind, grab });
+                }
+                reply.edge_pending = self.edge_contacts.pending.is_some_and(|pending| pending.id == id);
+                reply.edge_select_on_release = reply.edge_pending && self.edge_contacts.pending.is_some_and(|pending| pending.grab.resizes(Axis::Vertical));
             }
             ContactPhase::Move => {
-                let Some((pending_id, mut grab)) = pending.filter(|(pending_id, _)| *pending_id == id) else {
+                let Some(mut pending) = pending.filter(|pending| pending.id == id && pending.kind == kind) else {
                     self.edge_contacts.pending = pending;
                     return Ok(reply);
                 };
-                match grab.track(position) {
+                match pending.grab.track(position) {
                     EdgeGrabProgress::Pending => {
                         reply.edge_pending = true;
-                        reply.edge_hold = grab.resizes(Axis::Vertical);
-                        self.edge_contacts.pending = Some((pending_id, grab));
+                        reply.edge_hold = pending.grab.resizes(Axis::Vertical);
+                        self.edge_contacts.pending = Some(pending);
                     }
                     EdgeGrabProgress::Abandoned => {}
                     EdgeGrabProgress::Claimed(target) => {
-                        reply.change = self.dispatch(edge_action(target, ContactPhase::Down, grab.anchor(position), viewport))?;
+                        reply.change = self.dispatch(edge_action(target, ContactPhase::Down, pending.grab.anchor(position), viewport))?;
                         self.edge_contacts.active = Some(ActiveEdge {
                             id,
                             target,
-                            grab,
+                            grab: pending.grab,
                             viewport,
                             point: position,
                             start_ns: (time_ns > 0).then_some(time_ns),
@@ -100,7 +120,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
             }
             ContactPhase::Up | ContactPhase::Cancel => {
-                self.edge_contacts.pending = pending.filter(|(pending_id, _)| *pending_id != id);
+                self.edge_contacts.pending = pending.filter(|pending| pending.id != id);
             }
         }
         Ok(reply)
@@ -118,12 +138,12 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.dispatch(edge_action(active.target, ContactPhase::Move, point, active.viewport))
     }
 
-    pub(crate) fn cancel_edge_contact(&mut self) -> Result<(), String> {
+    pub(crate) fn cancel_edge_contact(&mut self) -> Result<UiChange, String> {
         self.edge_contacts.pending = None;
         if let Some(active) = self.edge_contacts.active.take() {
-            self.dispatch(edge_action(active.target, ContactPhase::Cancel, active.point, active.viewport))?;
+            return self.dispatch(edge_action(active.target, ContactPhase::Cancel, active.point, active.viewport));
         }
-        Ok(())
+        Ok(UiChange::default())
     }
 }
 

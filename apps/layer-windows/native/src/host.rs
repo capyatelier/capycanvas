@@ -146,8 +146,24 @@ impl CapyHost {
         }
         Ok(())
     }
+    fn canvas_edge(&mut self, sample: &CapyPointer, phase: layer_ui::ContactPhase) -> Result<layer_ui::InputReply, String> {
+        use layer_ui::{EdgeContact, PointerKind, UiInput};
+        self.native.input(UiInput::EdgeContact {
+            id: sample.id,
+            phase,
+            kind: match sample.tool() {
+                layer_engine::ToolKind::Finger => PointerKind::Touch,
+                layer_engine::ToolKind::Mouse => PointerKind::Mouse,
+                _ => PointerKind::Pen,
+            },
+            contact: EdgeContact::Free,
+            position: [sample.x / self.scale, sample.y / self.scale],
+            viewport: self.native.logical,
+            time_ns: sample.timestamp_ns,
+        })
+    }
     fn edge_touch(&mut self, sample: &CapyPointer) -> Result<bool, String> {
-        use layer_ui::{ContactPhase, EdgeContact, PointerKind, UiInput};
+        use layer_ui::ContactPhase;
         if sample.tool() != layer_engine::ToolKind::Finger || sample.flags & 1 != 0 {
             return Ok(false);
         }
@@ -163,15 +179,10 @@ impl CapyHost {
             None if phase == ContactPhase::Down => false,
             None => return Ok(false),
         };
-        let reply = self.native.input(UiInput::EdgeContact {
-            id: sample.id,
-            phase,
-            kind: PointerKind::Touch,
-            contact: EdgeContact::Free,
-            position: [sample.x / self.scale, sample.y / self.scale],
-            viewport: self.native.logical,
-            time_ns: sample.timestamp_ns,
-        })?;
+        let reply = self.canvas_edge(sample, phase)?;
+        if reply.edge_retired {
+            self.edge_touches.retain(|_, claimed| *claimed);
+        }
         if matches!(phase, ContactPhase::Up | ContactPhase::Cancel) {
             return Ok(self.edge_touches.remove(&sample.id).unwrap_or(false));
         }
@@ -192,6 +203,16 @@ impl CapyHost {
         self.live_contacts.remove(&sample.id);
         self.edge_touches.insert(sample.id, true);
         Ok(true)
+    }
+    fn cancel_contact(&mut self, sample: &CapyPointer) -> Result<(), String> {
+        self.edge_touches.remove(&sample.id);
+        self.canvas_edge(sample, layer_ui::ContactPhase::Cancel)?;
+        if let Some(mut live) = self.live_contacts.remove(&sample.id) {
+            live.phase = 4;
+            live.flags &= !1;
+            self.native.pointer_event(live.event(), pointer_button(&live))?;
+        }
+        Ok(())
     }
     fn track_contact(&mut self, sample: &CapyPointer) {
         if sample.phase == 0 {
@@ -280,6 +301,7 @@ impl CapyHost {
     }
 
     fn accepts_workspace_input(&self)->Result<bool,String> {
+        if self.native.session.workspace_read_only(){return Ok(false);}
         if self.services.as_ref().is_some_and(|service|service.close_status().requested){return Ok(false);}
         self.workspaces.as_ref().map(|owner|owner.with(|service|Ok(service.accepts_input(crate::workspace_service::now_ms())))).transpose().map(|accepted|accepted.unwrap_or(true))
     }
@@ -842,34 +864,32 @@ pub unsafe extern "C" fn capy_pointer(
             validate_batch(batch).map_err(err)?;
             host.poll_services()?;
             let blocked = !host.accepts_workspace_input()?;
-            let mut delivered = None;
             for sample in batch {
                 let terminal = matches!(sample.phase, 3 | 4);
-                if !blocked && sample.phase == 1 {
+                let down = sample.phase == 1 && sample.flags & 1 == 0;
+                if !blocked && down {
                     host.blocked_contacts.remove(&sample.id);
                 }
-                if blocked && sample.phase != 0 {
-                    host.blocked_contacts.insert(sample.id);
-                }
                 if blocked || host.blocked_contacts.contains(&sample.id) {
+                    host.cancel_contact(sample)?;
                     if terminal {
                         host.blocked_contacts.remove(&sample.id);
+                    } else if sample.phase != 0 {
+                        host.blocked_contacts.insert(sample.id);
                     }
-                    if !(terminal && host.live_contacts.contains_key(&sample.id)) {
-                        continue;
-                    }
-                } else if host.edge_touch(sample)? {
-                    delivered = delivered.filter(|previous: &CapyPointer| previous.id != sample.id);
+                    continue;
+                }
+                if down {
+                    host.cancel_contact(sample)?;
+                }
+                if host.edge_touch(sample)? {
                     continue;
                 }
                 let event=sample.event();
                 host.native.pointer_event(event, pointer_button(sample))?;
                 if sample.flags & 1 == 0 && (event.is_finite() || terminal) {
-                    delivered = Some(*sample);
+                    host.track_contact(sample);
                 }
-            }
-            if let Some(sample) = delivered {
-                host.track_contact(&sample);
             }
         }
         Ok(0)
@@ -1022,12 +1042,14 @@ pub unsafe extern "C" fn capy_input(host: u64, json: *const c_char) -> i32 {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_edge_contact(host: u64, json: *const c_char) -> i32 {
     guard(host, |host| {
-        let input = unsafe { read_json(json) }?;
-        let layer_ui::UiInput::EdgeContact { phase, .. } = input else {
+        let mut input = unsafe { read_json(json) }?;
+        let layer_ui::UiInput::EdgeContact { phase, .. } = &mut input else {
             return Err("Expected an edge contact".into());
         };
         host.poll_services()?;
-        if !host.accepts_workspace_input()? && !matches!(phase, layer_ui::ContactPhase::Up | layer_ui::ContactPhase::Cancel) {
+        if !host.accepts_workspace_input()? {
+            *phase = layer_ui::ContactPhase::Cancel;
+            host.native.input(input)?;
             return Ok(0);
         }
         let reply = host.native.input(input)?;
@@ -1036,7 +1058,7 @@ pub unsafe extern "C" fn capy_edge_contact(host: u64, json: *const c_char) -> i3
             .position(|cursor| Some(*cursor) == reply.edge_cursor)
             .map_or(0, |index| index as i32 + 1);
         Ok(i32::from(reply.handled) | i32::from(reply.edge_hold) << 1 | i32::from(reply.edge_select_on_release) << 2
-            | i32::from(reply.edge_pending) << 3 | cursor << 4)
+            | i32::from(reply.edge_pending) << 3 | cursor << 4 | i32::from(reply.edge_retired) << 7)
     })
 }
 /// # Safety
@@ -2021,14 +2043,196 @@ const _:fn()=|| {fn send<T:Send>(){}send::<CapyHost>();send::<CapyLaunch>();};
 mod handle_tests {
     use super::*;
 
+    struct Owner(u64);
+    impl Owner {
+        fn new(width: u32, height: u32) -> Self {
+            let native=NativeHost::new(layer_ui::Platform::Windows).unwrap();
+            let mut launch=CapyLaunch {native:Some(native),settings:None,bootstrap:CString::default()};
+            let host=unsafe {CapyHost::new(width,height,1.,&mut launch)}.unwrap();
+            Self(handles::insert(host).unwrap().raw())
+        }
+        fn blocked(&self, blocked: bool) {
+            borrow::<CapyHost>(self.0).unwrap().native.session.set_workspace_read_only(blocked);
+        }
+        fn edge(&self, id: u64, phase: &str, position: [f32; 2], ms: u64) -> i32 {
+            self.edge_as(id,phase,"touch",position,ms)
+        }
+        fn edge_as(&self, id: u64, phase: &str, kind: &str, position: [f32; 2], ms: u64) -> i32 {
+            let input=CString::new(serde_json::json!({"type":"edge_contact","id":id,"phase":phase,"kind":kind,
+                "contact":"free","position":position,"viewport":[1600,1000],"time_ns":ms*1_000_000}).to_string()).unwrap();
+            unsafe {capy_edge_contact(self.0,input.as_ptr())}
+        }
+        fn pointer(&self, samples: &[CapyPointer]) {
+            assert_eq!(unsafe {capy_pointer(self.0,samples.as_ptr(),samples.len())},0);
+        }
+        fn layout(&self) -> layer_ui::DockLayout {
+            borrow::<CapyHost>(self.0).unwrap().native.session.state().workspace.layout.clone()
+        }
+    }
+    impl Drop for Owner { fn drop(&mut self) { unsafe {capy_destroy(self.0);} } }
+
+    fn edge_owner() -> (Owner, [f32; 2]) {
+        let owner=Owner::new(1600,1000);
+        let mut host=borrow::<CapyHost>(owner.0).unwrap();
+        host.native.dispatch(layer_ui::UiAction::RestoreWorkspace {workspace:Box::new(layer_ui::WorkspaceState {
+            layout:layer_ui::WorkspacePreset::Illustrator.layout(layer_ui::Platform::Windows),..Default::default()
+        })}).unwrap();
+        let layout=host.native.session.layout([1600.,1000.]);
+        let column=layout.groups.iter().find(|group|group.panels.contains(&layer_ui::Panel::Brushes)).unwrap().bounds;
+        let divider=layout.dividers.iter().find(|divider|(divider.bounds.x-column.x-column.width).abs()<0.5).unwrap();
+        let start=[divider.bounds.x+divider.bounds.width+20.,500.];
+        drop(host);
+        (owner,start)
+    }
+    fn sample(id: u64, phase: u32, position: [f32; 2], sequence: u64) -> CapyPointer {
+        CapyPointer {id,phase,x:position[0],y:position[1],sequence,timestamp_ns:sequence*200_000_000,
+            view_revision:0,pressure:0.5,tilt_x:0.,tilt_y:0.,twist:0.,distance:0.,tool:3,button:0,flags:2}
+    }
+
+    #[test]
+    fn blocked_edge_abi_samples_cancel_instead_of_committing_or_retaining_contacts() {
+        for claimed in [false,true] {
+            for phase in ["move","up","cancel"] {
+                let (owner,start)=edge_owner();
+                let before=owner.layout();
+                assert_eq!(owner.edge(7,"down",start,0),8);
+                if claimed {
+                    assert_ne!(owner.edge(7,"move",[start[0]+40.,start[1]],10)&0xf0,0);
+                    owner.edge(7,"move",[start[0]+80.,start[1]],300);
+                    assert_ne!(owner.layout(),before);
+                }
+                owner.blocked(true);
+                assert_eq!(owner.edge(7,phase,[start[0]+100.,start[1]],310),0);
+                assert_eq!(owner.layout(),before);
+                owner.blocked(false);
+                assert_eq!(owner.edge(7,"move",[start[0]+20.,start[1]],320),0);
+                assert_eq!(owner.edge(7,"down",start,330),8);
+                assert_ne!(owner.edge(7,"move",[start[0]+20.,start[1]],340)&0xf0,0);
+                owner.edge(7,"cancel",start,350);
+                assert_eq!(owner.layout(),before);
+            }
+        }
+    }
+
+    #[test]
+    fn mixed_edge_down_abi_reports_retirement_only_for_another_touch() {
+        for kind in ["mouse","pen","touch"] {
+            let (owner,start)=edge_owner();
+            assert_eq!(owner.edge(7,"down",start,0),8);
+            assert_eq!(owner.edge_as(8,"down",kind,start,10),if kind=="touch" {128} else {0});
+            assert_eq!(owner.edge(7,"move",[start[0]+40.,start[1]],20)&0x70!=0,kind!="touch");
+            owner.edge(7,"cancel",start,30);
+        }
+    }
+
+    #[test]
+    fn a_canvas_edge_down_reusing_a_claimed_id_starts_a_fresh_contact() {
+        let (owner,start)=edge_owner();
+        let before=owner.layout();
+        owner.pointer(&[sample(7,1,start,1),sample(7,2,[start[0]+40.,start[1]],2),sample(7,2,[start[0]+80.,start[1]],3)]);
+        assert_ne!(owner.layout(),before);
+        owner.pointer(&[sample(7,1,start,4)]);
+        assert_eq!(owner.layout(),before);
+        {
+            let host=borrow::<CapyHost>(owner.0).unwrap();
+            assert_eq!(host.edge_touches.get(&7),Some(&false));
+            assert!(host.live_contacts.contains_key(&7));
+        }
+        owner.pointer(&[sample(7,2,[start[0]+6.,start[1]],5)]);
+        assert_eq!(owner.layout(),before);
+        owner.pointer(&[sample(7,2,[start[0]+40.,start[1]],6),sample(7,2,[start[0]+80.,start[1]],7)]);
+        assert_ne!(owner.layout(),before);
+        owner.pointer(&[sample(7,4,start,8)]);
+        assert_eq!(owner.layout(),before);
+        let host=borrow::<CapyHost>(owner.0).unwrap();
+        assert!(host.edge_touches.is_empty() && host.live_contacts.is_empty());
+    }
+
+    #[test]
+    fn a_canvas_id_reused_by_another_tool_retires_touch_edge_ownership() {
+        for tool in [0,1,2] {
+            for claimed in [false,true] {
+                for via_canvas in [false,true] {
+                    let (owner,start)=edge_owner();
+                    let before=owner.layout();
+                    let contact=|phase,position,sequence| {
+                        if via_canvas {owner.pointer(&[sample(7,phase,position,sequence)]);}
+                        else {owner.edge(7,["hover","down","move","up","cancel"][phase as usize],position,sequence*200);}
+                    };
+                    contact(1,start,1);
+                    if claimed {
+                        contact(2,[start[0]+40.,start[1]],2);contact(2,[start[0]+80.,start[1]],3);
+                        assert_ne!(owner.layout(),before);
+                    }
+                    let mut next=sample(7,1,[800.,500.],4);next.tool=tool;next.button=1;
+                    owner.pointer(&[next]);
+                    assert_eq!(owner.layout(),before);
+                    {
+                        let host=borrow::<CapyHost>(owner.0).unwrap();
+                        assert!(host.edge_touches.is_empty(),"tool {tool}, claimed {claimed}, canvas {via_canvas}");
+                        assert_eq!(host.live_contacts.get(&7).unwrap().tool,tool);
+                    }
+                    next.phase=4;next.sequence=5;next.timestamp_ns=1_000_000_000;
+                    owner.pointer(&[next]);
+                    assert_eq!(owner.edge(7,"move",[start[0]+100.,start[1]],1100),0);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_blocked_canvas_edge_cancels_without_waiting_for_up_and_reuses_its_id() {
+        let (owner,start)=edge_owner();
+        let before=owner.layout();
+        owner.pointer(&[sample(7,1,start,1)]);
+        {
+            let host=borrow::<CapyHost>(owner.0).unwrap();
+            assert_eq!(host.edge_touches.get(&7),Some(&false));
+            assert!(host.live_contacts.contains_key(&7));
+        }
+        owner.pointer(&[sample(7,2,[start[0]+40.,start[1]],2),sample(7,2,[start[0]+80.,start[1]],3)]);
+        {
+            let host=borrow::<CapyHost>(owner.0).unwrap();
+            assert_eq!(host.edge_touches.get(&7),Some(&true));
+            assert!(host.live_contacts.is_empty());
+        }
+        assert_ne!(owner.layout(),before);
+        owner.blocked(true);
+        owner.pointer(&[sample(7,2,[start[0]+100.,start[1]],4)]);
+        assert_eq!(owner.layout(),before);
+        {
+            let host=borrow::<CapyHost>(owner.0).unwrap();
+            assert!(host.edge_touches.is_empty() && host.live_contacts.is_empty());
+            assert!(host.blocked_contacts.contains(&7));
+        }
+        owner.blocked(false);
+        owner.pointer(&[sample(7,2,[start[0]+120.,start[1]],5)]);
+        assert_eq!(owner.layout(),before);
+        owner.pointer(&[sample(7,1,start,6)]);
+        {
+            let host=borrow::<CapyHost>(owner.0).unwrap();
+            assert_eq!(host.edge_touches.get(&7),Some(&false));
+            assert!(host.live_contacts.contains_key(&7) && host.blocked_contacts.is_empty());
+        }
+        owner.pointer(&[sample(7,4,start,7)]);
+        let host=borrow::<CapyHost>(owner.0).unwrap();
+        assert!(host.edge_touches.is_empty() && host.live_contacts.is_empty());
+    }
+
+    #[test]
+    fn blocked_pointer_batches_retire_every_live_contact() {
+        let owner=Owner::new(1600,1000);
+        owner.pointer(&[sample(7,1,[800.,500.],1),sample(8,1,[900.,500.],2)]);
+        assert_eq!(borrow::<CapyHost>(owner.0).unwrap().live_contacts.len(),2);
+        owner.blocked(true);
+        owner.pointer(&[sample(7,3,[800.,500.],3),sample(8,4,[900.,500.],4)]);
+        let host=borrow::<CapyHost>(owner.0).unwrap();
+        assert!(host.live_contacts.is_empty() && host.edge_touches.is_empty() && host.blocked_contacts.is_empty());
+    }
+
     #[test]
     fn rejected_touch_json_keeps_a_windowless_owner_alive() {
-        struct Owner(u64);
-        impl Drop for Owner { fn drop(&mut self) { unsafe {capy_destroy(self.0);} } }
-        let native=NativeHost::new(layer_ui::Platform::Windows).unwrap();
-        let mut launch=CapyLaunch {native:Some(native),settings:None,bootstrap:CString::default()};
-        let host=unsafe {CapyHost::new(640,480,1.,&mut launch)}.unwrap();
-        let owner=Owner(handles::insert(host).unwrap().raw());
+        let owner=Owner::new(640,480);
         let malformed=CString::new(r#"{"type":"color_touch","phase":"down","position":[1.5,2.5],"surface":7,"id":1,"time_ns":1101152828577000.0}"#).unwrap();
         let valid=CString::new(r#"{"type":"blur"}"#).unwrap();
         let revision=borrow::<CapyHost>(owner.0).unwrap().native.session.state().revision;

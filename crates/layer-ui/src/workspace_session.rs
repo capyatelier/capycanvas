@@ -166,6 +166,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         if self.workspace_transition {
             return Err(self.localization().text(MessageId::WORKSPACE_REFUSAL_SESSION_A_WORKSPACE_CHANGE_IS_ALREADY_IN_PROGRESS).to_string());
         }
+        self.cancel_edge_contact()?;
         self.workspace_transition = true;
         Ok(())
     }

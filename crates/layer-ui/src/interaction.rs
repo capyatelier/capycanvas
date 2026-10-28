@@ -397,6 +397,7 @@ pub struct InputReply {
     pub edge_cursor: Option<&'static str>,
     pub edge_select_on_release: bool,
     pub edge_pending: bool,
+    pub edge_retired: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

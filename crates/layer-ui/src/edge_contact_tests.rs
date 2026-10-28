@@ -103,3 +103,105 @@ fn a_double_press_in_a_column_reach_resets_it_except_on_controls() {
     assert!(s.input(press(EdgeContact::Free, Some([d.bounds.x + d.bounds.width * 0.5, 400.]))).unwrap().handled);
     assert!((width(&s) - initial).abs() < 0.5);
 }
+
+#[test]
+fn a_repeated_pending_down_uses_the_new_origin_and_kind() {
+    let mut s = paint();
+    let d = column_edge(&s);
+    let start = [d.bounds.x - 20., 500.];
+    assert!(edge(&mut s, 7, ContactPhase::Down, PointerKind::Touch, start, 0).edge_pending);
+    let replacement = [start[0], start[1] + 80.];
+    assert!(edge(&mut s, 7, ContactPhase::Down, PointerKind::Pen, replacement, 10).edge_pending);
+    let reply = edge(&mut s, 7, ContactPhase::Move, PointerKind::Touch, start, 20);
+    assert!(!reply.handled && !reply.edge_pending);
+    let reply = edge(&mut s, 7, ContactPhase::Move, PointerKind::Pen, [replacement[0] - 6., replacement[1]], 30);
+    assert!(reply.edge_pending && !reply.handled);
+    assert!(edge(&mut s, 7, ContactPhase::Move, PointerKind::Pen, [replacement[0] - 20., replacement[1]], 40).handled);
+}
+
+#[test]
+fn a_reused_active_id_cancels_the_lost_contact_before_starting_again() {
+    for kind in [PointerKind::Mouse, PointerKind::Pen, PointerKind::Touch] {
+        for on_edge in [false, true] {
+            let mut s = paint();
+            let d = column_edge(&s);
+            let start = [d.bounds.x - 20., 500.];
+            let before = crate::durable_layout(&s.state.workspace.layout);
+            edge(&mut s, 7, ContactPhase::Down, kind, start, 0);
+            assert!(edge(&mut s, 7, ContactPhase::Move, kind, [start[0] - 40., start[1]], 10).handled);
+            s.frame(200_000_000, 0).unwrap();
+            assert_ne!(crate::durable_layout(&s.state.workspace.layout), before);
+            let replacement = if on_edge { start } else { [800., 500.] };
+            let reply = edge(&mut s, 7, ContactPhase::Down, kind, replacement, 300);
+            assert!(!reply.handled && reply.edge_cursor.is_none());
+            assert_eq!(reply.edge_pending, on_edge, "{kind:?}");
+            assert_eq!(crate::durable_layout(&s.state.workspace.layout), before);
+            assert!(!s.command(CommandId::UndoWorkspace).enabled);
+            if on_edge {
+                assert!(edge(&mut s, 7, ContactPhase::Move, kind, [start[0] - 6., start[1]], 310).edge_pending);
+                assert!(edge(&mut s, 7, ContactPhase::Move, kind, [start[0] - 20., start[1]], 320).handled);
+                edge(&mut s, 7, ContactPhase::Cancel, kind, start, 330);
+                assert_eq!(crate::durable_layout(&s.state.workspace.layout), before);
+            }
+        }
+    }
+}
+
+#[test]
+fn only_another_touch_retires_a_pending_contact() {
+    for kind in [PointerKind::Mouse, PointerKind::Pen, PointerKind::Touch] {
+        for second in [PointerKind::Mouse, PointerKind::Pen, PointerKind::Touch] {
+            let mut s = paint();
+            let d = column_edge(&s);
+            let start = [d.bounds.x - 20., 500.];
+            assert!(edge(&mut s, 7, ContactPhase::Down, kind, start, 0).edge_pending);
+            let reply = edge(&mut s, 8, ContactPhase::Down, second, start, 10);
+            assert!(!reply.handled && !reply.edge_pending);
+            assert_eq!(reply.edge_retired, second == PointerKind::Touch);
+            assert!(!edge(&mut s, 8, ContactPhase::Move, second, [start[0] - 20., start[1]], 20).handled);
+            edge(&mut s, 8, ContactPhase::Cancel, second, start, 30);
+            assert_eq!(edge(&mut s, 7, ContactPhase::Move, kind, [start[0] - 20., start[1]], 40).handled,
+                second != PointerKind::Touch, "{kind:?} then {second:?}");
+        }
+    }
+}
+
+#[test]
+fn blocked_workspace_samples_cancel_pending_and_active_edges() {
+    for transition in [false, true] {
+        for claimed in [false, true] {
+            let mut s = paint();
+            let d = column_edge(&s);
+            let start = [d.bounds.x - 20., 500.];
+            let before = crate::durable_layout(&s.state.workspace.layout);
+            assert!(edge(&mut s, 7, ContactPhase::Down, PointerKind::Touch, start, 0).edge_pending);
+            if claimed {
+                assert!(edge(&mut s, 7, ContactPhase::Move, PointerKind::Touch, [start[0] - 40., start[1]], 10).handled);
+                s.frame(200_000_000, 0).unwrap();
+                assert_ne!(crate::durable_layout(&s.state.workspace.layout), before);
+            }
+            if transition { s.workspace_transition = true; } else { s.set_workspace_read_only(true); }
+            let reply = edge(&mut s, 7, ContactPhase::Move, PointerKind::Touch, [start[0] - 80., start[1]], 300);
+            assert!(!reply.handled && !reply.edge_pending && reply.edge_cursor.is_none());
+            assert!(s.edge_contacts.active.is_none() && s.edge_contacts.pending.is_none());
+            assert_eq!(crate::durable_layout(&s.state.workspace.layout), before);
+            assert!(!edge(&mut s, 7, ContactPhase::Down, PointerKind::Touch, start, 310).edge_pending);
+            s.workspace_transition = false;
+            s.set_workspace_read_only(false);
+            assert!(!edge(&mut s, 7, ContactPhase::Move, PointerKind::Touch, [start[0] - 20., start[1]], 320).handled);
+            assert!(edge(&mut s, 7, ContactPhase::Down, PointerKind::Touch, start, 330).edge_pending);
+        }
+    }
+}
+
+#[test]
+fn a_pending_contact_cannot_resume_after_a_workspace_transition() {
+    let mut s = paint();
+    let d = column_edge(&s);
+    let start = [d.bounds.x - 20., 500.];
+    assert!(edge(&mut s, 7, ContactPhase::Down, PointerKind::Touch, start, 0).edge_pending);
+    s.begin_workspace_transition().unwrap();
+    s.end_workspace_transition();
+    assert!(!edge(&mut s, 7, ContactPhase::Move, PointerKind::Touch, [start[0] - 20., start[1]], 10).handled);
+    assert!(edge(&mut s, 7, ContactPhase::Down, PointerKind::Touch, start, 20).edge_pending);
+}

@@ -2994,7 +2994,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                 "Workspace ownership needs recovery. Use Save as New Workspace or export a backup."
             }.into());
         }
-        if self.workspace_transition && !continuing_effect_gesture && !action.is_host_report() {
+        let canceling_workspace_gesture = matches!(&action,
+            UiAction::DragWorkspace { phase: ContactPhase::Cancel, .. }
+            | UiAction::DragDivider { phase: ContactPhase::Cancel, .. }
+            | UiAction::ResizeFloating { phase: ContactPhase::Cancel, .. });
+        if self.workspace_transition && !continuing_effect_gesture && !action.is_host_report() && !canceling_workspace_gesture {
             return Err("A workspace change is in progress".into());
         }
         let transforming = self.operation.active() || self.objects.placing();

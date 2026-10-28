@@ -138,7 +138,7 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
         if(rejectedPointer)return;
         auto epoch=generation;
         root.DispatcherQueue().TryEnqueue(Microsoft::UI::Dispatching::DispatcherQueuePriority::Low,
-            [weak=weak_from_this(),epoch]{if(auto self=weak.lock();self&&self->generation==epoch&&!self->pointer){self->ignoreClick=false;self->evidence();}});
+            [weak=weak_from_this(),epoch]{if(auto self=weak.lock();self&&self->generation==epoch&&!self->pointer&&!self->edge&&!self->dragging&&!self->finishing){self->ignoreClick=false;self->evidence();}});
     }
     ~Impl(){stopInput();if(timer)timer.Stop();if(menu)menu.Hide();}
     A viewport()const{return point({float(root.ActualWidth()),float(root.ActualHeight())});}
@@ -205,11 +205,13 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
         }
         return {};
     }
+    std::string edgeRequest(Edge const& sample,wchar_t const* phase)const{
+        auto text=to_string(O({{L"type",S(L"edge_contact")},{L"phase",S(phase)},{L"kind",S(sample.device)},
+            {L"contact",S(sample.contactClass)},{L"position",point(sample.at)},{L"viewport",viewport()}}).Stringify());
+        return JsonUnsignedFields(std::move(text),{{"id",sample.pointer},{"time_ns",sample.time}});
+    }
     void edgeSend(wchar_t const* phase){
-        auto text=to_string(O({{L"type",S(L"edge_contact")},{L"phase",S(phase)},{L"kind",S(edge->device)},
-            {L"contact",S(edge->contactClass)},{L"position",point(edge->at)},{L"viewport",viewport()}}).Stringify());
-        text=JsonUnsignedFields(std::move(text),{{"id",edge->pointer},{"time_ns",edge->time}});
-        data->edges(std::move(text),[weak=weak_from_this(),serial=edgeSerial,phase=std::wstring(phase),time=edge->time](int32_t bits){
+        data->edges(edgeRequest(*edge,phase),[weak=weak_from_this(),serial=edgeSerial,phase=std::wstring(phase),time=edge->time](int32_t bits){
             if(auto self=weak.lock()){
                 if(self->trace)self->lastEdgeReply=O({{L"phase",S(phase.c_str())},{L"bits",N(bits)},{L"time",N(double(time))}});
                 self->edgeReply(serial,phase,bits);self->evidence();
@@ -217,15 +219,17 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
         });
     }
     void edgeReply(uint64_t serial,std::wstring const& phase,int32_t bits){
-        if(!edge||serial!=edgeSerial||edge->claimed||phase==L"up"||phase==L"cancel")return;
-        if(bits>>4)claimEdge(bits>>4);
-        else if(!(bits&8))settleEdge();
+        if(!edge||serial!=edgeSerial||phase==L"up"||phase==L"cancel")return;
+        if(bits<0||!(bits&9)){settleEdge();return;}
+        if(edge->claimed)return;
+        if(auto cursor=(bits>>4)&7)claimEdge(cursor);
         else edge->hold=(bits&(phase==L"down"?4:2))!=0;
         evidence();
     }
     void claimEdge(int shape){
         edge->claimed=true;edge->hold=false;
         if(pointer||dragging)cancel(L"edge_contact");
+        if(rejectedPointer==edge->pointer)rejectedPointer.reset();
         ignoreClick=true;
         releasing=true;
         data->pointerCancels.Cancel(edge->pointer);
@@ -308,11 +312,16 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
     void edgeDown(PointerRoutedEventArgs const& e){
         auto p=e.GetCurrentPoint(root);
         if(edge&&edge->pointer==p.PointerId())edgeEnd(L"cancel");
-        if(edge){if(!edge->claimed)edgeEnd(L"cancel");return;}
-        if(dragging||data->externalPopup||data->popupCount||!data->edges||!PointerGesture::PrimaryContact(p))return;
-        auto swipes=edgeContact(e.OriginalSource(),p.PointerId());if(swipes.empty())return;
-        Edge next;next.pointer=p.PointerId();next.contact=e.Pointer();next.device=deviceName(p.PointerDeviceType());next.contactClass=swipes;
+        if(!data->edges||!PointerGesture::PrimaryContact(p))return;
+        auto swipes=edgeContact(e.OriginalSource(),p.PointerId());
+        Edge next;next.pointer=p.PointerId();next.contact=e.Pointer();next.device=deviceName(p.PointerDeviceType());next.contactClass=swipes.empty()?hstring(L"input"):swipes;
         next.at=p.Position();next.time=p.Timestamp()*1000;
+        if(edge){
+            data->edges(edgeRequest(next,L"down"),[weak=weak_from_this(),serial=edgeSerial](int32_t bits){
+                if(auto self=weak.lock();self&&self->edge&&serial==self->edgeSerial&&(bits&128))self->settleEdge(L"cancel",L"additional_contact");
+            });return;
+        }
+        if(dragging||data->externalPopup||data->popupCount||swipes.empty())return;
         for(auto node=e.OriginalSource().try_as<DependencyObject>();node&&node!=root;node=VisualTreeHelper::GetParent(node))
             if(auto element=node.try_as<UIElement>())next.path.emplace_back(make_weak(element));
         auto request=to_string(O({{L"position",point(next.at)},{L"kind",S(next.device)},{L"contact",S(swipes)}}).Stringify());
@@ -347,7 +356,8 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
             {L"captured",B(PointerGesture::Captured(root,edge->pointer))}});
         bool claimed=edge->claimed;auto released=edge->contact;
         auto retired=std::move(edge->retired);auto owners=std::move(edge->owners);auto shield=edge->shield;edge.reset();++edgeSerial;
-        if(claimed){releasing=true;root.ReleasePointerCapture(released);releasing=false;cursor();deferClick();}
+        if(claimed){releasing=true;root.ReleasePointerCapture(released);releasing=false;cursor();}
+        deferClick();
         for(auto const& [weak,element]:retired)if(auto parent=weak.get()){uint32_t at=0;if(parent.Children().IndexOf(element,at))parent.Children().RemoveAt(at);}
         uint32_t at=0;if(shield&&root.Children().IndexOf(shield,at))root.Children().RemoveAt(at);
         owners.clear();
@@ -533,7 +543,7 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
         // both capture and scroll interception until the native hold starts.
         if(!needsHold){
             bool nativeButton=false;
-            for(auto const& weak:pressedPath)if(auto element=weak.get())nativeButton|=bool(element.try_as<Primitives::ButtonBase>());
+            for(auto const& weak:pressedPath)if(auto element=weak.get())nativeButton|=bool(element.try_as<Primitives::ButtonBase>())&&owns(element);
             if(!nativeButton&&!claim())return;
         }
         recognizing=true;
@@ -685,7 +695,7 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
             }
         })),true);
         root.AddHandler(UIElement::PointerCaptureLostEvent(),box_value(PointerEventHandler([weak](auto&&,auto&& e){
-            if(auto self=weak.lock();self&&!self->releasing&&PointerGesture::Captured(self->root,e.Pointer().PointerId()))return;
+            if(auto self=weak.lock();self&&!self->releasing&&e.OriginalSource().template try_as<UIElement>()!=self->root&&PointerGesture::Captured(self->root,e.Pointer().PointerId()))return;
             if(auto self=weak.lock();self&&!self->releasing&&self->edge&&self->edge->pointer==e.Pointer().PointerId()&&e.GetCurrentPoint(self->root).IsInContact()
                 &&(!self->edge->claimed||e.OriginalSource().try_as<UIElement>()==self->root))self->edgeEnd(L"cancel",L"capture_lost");
             if(auto self=weak.lock();self&&!self->releasing&&self->pointer==e.Pointer().PointerId()){
