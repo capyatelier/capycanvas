@@ -10,9 +10,11 @@ pub(crate) struct ZenPeek {
 }
 
 impl<R: CanvasRenderer> UiSession<R> {
+    pub fn layout_resolve_input(&self)->crate::LayoutResolveInput<'_> {
+        crate::LayoutResolveInput::new(&self.state.workspace.layout,self.zen_peek.edge)
+    }
     pub fn zen_keeps(&self, group: u32) -> bool {
-        let layout = &self.state.workspace.layout;
-        layout.shows_in_zen(group) || self.zen_peek.edge.is_some_and(|edge| layout.group_edge(group) == Some(edge))
+        self.layout_resolve_input().keeps(group)
     }
 
     fn edge_groups(&self, edge: Edge) -> impl Iterator<Item = GroupPlacement> + '_ {

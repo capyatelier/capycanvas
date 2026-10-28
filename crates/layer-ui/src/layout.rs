@@ -1031,6 +1031,76 @@ pub struct DockLayout {
     next_id: u32,
 }
 
+#[derive(Clone, Debug)]
+pub struct LayoutResolveInput<'a> {
+    layout: std::borrow::Cow<'a,DockLayout>,
+    zen_peek_edge: Option<Edge>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LayoutResolveWire<'a> {
+    layout: std::borrow::Cow<'a,DockLayout>,
+    header_presentation: std::borrow::Cow<'a,crate::HeaderPresentation>,
+    column_scroll: std::borrow::Cow<'a,[(u32,f32)]>,
+    column_open: Vec<(u32,Option<u32>)>,
+    measurements: std::borrow::Cow<'a,[PanelMeasurement]>,
+    titlebar_insets: [f32;3],
+    bottom_inset: f32,
+    zen_peek_edge: Option<Edge>,
+}
+
+impl<'a> LayoutResolveInput<'a> {
+    pub(crate) fn new(layout:&'a DockLayout,zen_peek_edge:Option<Edge>)->Self {
+        Self {layout:std::borrow::Cow::Borrowed(layout),zen_peek_edge}
+    }
+    pub(crate) fn keeps(&self,group:u32)->bool {
+        self.layout.shows_in_zen(group)
+            || self.zen_peek_edge.is_some_and(|edge|self.layout.group_edge(group)==Some(edge))
+    }
+    pub fn resolve(&self,viewport:[f32;2])->ResolvedLayout {
+        let mut result=self.layout.resolved(viewport);
+        for group in &mut result.groups {
+            group.zen_kept=self.keeps(group.id);
+        }
+        result
+    }
+}
+
+impl Serialize for LayoutResolveInput<'_> {
+    fn serialize<S:serde::Serializer>(&self,serializer:S)->Result<S::Ok,S::Error> {
+        let layout=self.layout.as_ref();
+        LayoutResolveWire {
+            layout:std::borrow::Cow::Borrowed(layout),
+            header_presentation:std::borrow::Cow::Borrowed(&layout.header_presentation),
+            column_scroll:std::borrow::Cow::Borrowed(&layout.column_scroll),
+            column_open:layout.column_stacks.iter().map(|stack|(stack.column,stack.open_column)).collect(),
+            measurements:std::borrow::Cow::Borrowed(&layout.measurements),
+            titlebar_insets:layout.titlebar_insets,bottom_inset:layout.bottom_inset,zen_peek_edge:self.zen_peek_edge,
+        }.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for LayoutResolveInput<'_> {
+    fn deserialize<D:serde::Deserializer<'de>>(deserializer:D)->Result<Self,D::Error> {
+        let wire=LayoutResolveWire::deserialize(deserializer)?;
+        let mut layout=wire.layout.into_owned();
+        if wire.column_open.len()!=layout.column_stacks.len()
+            || wire.column_open.iter().enumerate().any(|(i,(id,_))|
+                wire.column_open[..i].iter().any(|(previous,_)|previous==id)
+                    || !layout.column_stacks.iter().any(|stack|stack.column==*id)) {
+            return Err(serde::de::Error::custom("Invalid column presentation"));
+        }
+        for stack in &mut layout.column_stacks {
+            stack.open_column=wire.column_open.iter().find(|(id,_)|*id==stack.column).and_then(|(_,open)|*open);
+        }
+        layout.header_presentation=wire.header_presentation.into_owned();
+        layout.column_scroll=wire.column_scroll.into_owned();layout.measurements=wire.measurements.into_owned();
+        layout.titlebar_insets=wire.titlebar_insets;layout.bottom_inset=wire.bottom_inset;
+        Ok(Self {layout:std::borrow::Cow::Owned(layout),zen_peek_edge:wire.zen_peek_edge})
+    }
+}
+
 #[path = "compact_edges.rs"]
 mod compact_edges;
 pub use compact_edges::EdgeAlignment;

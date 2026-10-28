@@ -190,6 +190,12 @@ CollapsedColumns::~CollapsedColumns(){impl->reset();}
 void CollapsedColumns::Apply(){impl->apply();}
 void CollapsedColumns::Reset(){impl->reset();}
 A CollapsedColumns::Measure(UIElement const& reference)const{A result;for(auto const& [id,column]:impl->columns){auto value=column->measure(reference);if(value.Size())result.Append(value);}return result;}
+void CollapsedColumns::ForEachBounds(UIElement const& reference,std::function<void(uint32_t,Rect)> const& visit)const{
+    for(auto const& [id,column]:impl->columns){
+        if(!column->background.IsLoaded()||column->background.Visibility()!=Visibility::Visible||column->background.Opacity()<=0)continue;
+        auto bounds=allocatedBounds(column->background,reference);if(bounds.Width>0&&bounds.Height>0)visit(id,bounds);
+    }
+}
 void CollapsedColumns::PresentBridges(J const& frame,bool ready,bool resizing){for(auto const& [id,column]:impl->columns)column->present(frame,ready,resizing);}
 double CollapsedColumns::Opacity(uint32_t column)const{auto found=impl->columns.find(column);return found==impl->columns.end()?0:found->second->background.Opacity();}
 void CollapsedColumns::AppendGlass(A& regions,UIElement const& reference)const{for(auto const& [id,column]:impl->columns)column->collectGlass(regions,reference);}

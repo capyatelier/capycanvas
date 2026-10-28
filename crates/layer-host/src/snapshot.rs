@@ -319,6 +319,7 @@ impl NativeHost {
         map.serialize_entry("workspace_update", update)?;
         map.serialize_entry("state", state)?;
         map.serialize_entry("layout", &layout)?;
+        map.serialize_entry("layout_input", &self.session.layout_resolve_input())?;
         map.serialize_entry("panels", &panels)?;
         map.serialize_entry("bubbles", &bubbles)?;
         map.serialize_entry(
@@ -636,7 +637,12 @@ mod tests {
         .unwrap();
     }
     fn layout_update(host: &mut NativeHost) -> Value {
-        decoded(host.take_layout_update_bytes().unwrap()).unwrap()
+        let packet=decoded(host.take_layout_update_bytes().unwrap()).unwrap();
+        if packet.get("layout").is_some(){
+            let input:layer_ui::LayoutResolveInput<'static>=serde_json::from_value(packet["layout_input"].clone()).unwrap();
+            assert_eq!(json!(input.resolve(host.logical)),json!(host.session.layout(host.logical)));
+        }
+        packet
     }
 
     #[test]
@@ -669,6 +675,7 @@ mod tests {
                     initial["workspace_update"]["model_revision"]
                 );
                 assert_eq!(packet["layout"], full["layout"]);
+                assert_eq!(packet["layout_input"], full["layout_input"]);
                 assert_eq!(packet["camera"], full["state"]["camera"]);
                 assert_eq!(packet["panel_measurements"], full["panel_measurements"]);
                 assert!(packet.to_string().len() < full.to_string().len() / 4);
@@ -727,6 +734,7 @@ mod tests {
                 begun["workspace_update"]["content_revision"]
             );
             assert_eq!(packet["layout"], full["layout"]);
+            assert_eq!(packet["layout_input"], full["layout_input"]);
             assert_eq!(packet["workspace_layout"]["column_stacks"], full["state"]["workspace"]["layout"]["column_stacks"]);
         }
         resize(&mut host, Cancel, start);
@@ -833,6 +841,7 @@ mod tests {
                 assert!(packet.get("state").is_none());
                 assert_eq!(packet["workspace_update"]["content_revision"], initial["workspace_update"]["content_revision"]);
                 assert_eq!(packet["layout"], full["layout"]);
+                assert_eq!(packet["layout_input"], full["layout_input"]);
                 assert_eq!(packet["camera"], full["state"]["camera"]);
                 assert_eq!(packet["panel_measurements"], full["panel_measurements"]);
                 for field in ["panels", "application_menus", "preferences"] {
@@ -867,6 +876,7 @@ mod tests {
                 assert!(packet.get("state").is_none());
                 assert_eq!(packet["workspace_update"]["content_revision"], initial["workspace_update"]["content_revision"]);
                 assert_eq!(packet["layout"], full["layout"]);
+                assert_eq!(packet["layout_input"], full["layout_input"]);
                 assert_eq!(packet["camera"], full["state"]["camera"]);
                 assert_eq!(initial["header"], full["header"]);
                 let mut retained_layout = initial["state"]["workspace"]["layout"].clone();

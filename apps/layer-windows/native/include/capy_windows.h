@@ -18,10 +18,11 @@ __declspec(dllimport) CapyPreview capy_filter_previews(CapyHost, const char* jso
 __declspec(dllimport) CapyPreview capy_paper_previews(CapyHost, const char* json);
 __declspec(dllimport) CapyPreview capy_layer_thumbnails(CapyHost, const char* json);
 __declspec(dllimport) CapyPreview capy_layer_menu(CapyHost, const char* json);
-typedef uint64_t CapyPanelLayout;
-__declspec(dllimport) CapyPanelLayout capy_panel_layout_prepare(const char* json);
-__declspec(dllimport) void capy_panel_layout_free(CapyPanelLayout);
-__declspec(dllimport) CapyString capy_panel_bridges(CapyPanelLayout, const char* measure);
+typedef uint64_t CapyLayoutInput;
+__declspec(dllimport) CapyLayoutInput capy_layout_input_prepare(const char* json);
+__declspec(dllimport) void capy_layout_input_free(CapyLayoutInput);
+__declspec(dllimport) CapyString capy_layout_resolve(CapyLayoutInput, float width, float height);
+__declspec(dllimport) CapyString capy_panel_bridges(CapyLayoutInput, float width, float height, const char* measure);
 /* Read-only workspace geometry/menu queries, on the render owner. Metadata
    contains result (any JSON type) and error (null or string); no pixel payload. */
 __declspec(dllimport) CapyPreview capy_workspace_query(CapyHost, const char* json);

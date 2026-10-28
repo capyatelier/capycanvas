@@ -1815,9 +1815,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// Measure once in logical workspace units; all hosts use the same chrome
     /// insets, docking topology, and tile allocation rules.
     pub fn layout(&self, viewport: [f32; 2]) -> ResolvedLayout {
-        let mut layout = self.state.workspace.layout.resolved(viewport);
-        for group in &mut layout.groups { group.zen_kept = self.zen_keeps(group.id); }
-        layout
+        self.layout_resolve_input().resolve(viewport)
     }
     /// Layout-aware hosts retain controls at content_revision and apply these
     /// live dimensions on their display clock. Gesture completion remains full.
@@ -1826,6 +1824,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         crate::WorkspaceLayoutUpdate {
             workspace_update: self.workspace_update(),
             layout: self.layout(viewport),
+            layout_input:self.layout_resolve_input(),
             workspace_layout: crate::WorkspaceLayoutState {
                 bands: &layout.bands,
                 floating: &layout.floating,

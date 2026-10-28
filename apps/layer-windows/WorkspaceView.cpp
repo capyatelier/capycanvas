@@ -71,6 +71,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     ContentControl measureGate;
     hstring lastMeasurements;
     CompositionTarget::Rendering_revoker measurementFrame;
+    CompositionTarget::Rendering_revoker resizeTraceFrame;
     std::array<float,3> titlebar{};
     hstring lastTitlebar;
     bool presenting=false;
@@ -80,6 +81,18 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     uint64_t fullUpdates=0,motionUpdates=0;
     std::vector<uint64_t> panelBridgeTimes;
     uint64_t panelBridgeTimeOverflow=0;
+    struct ResolveTime {uint64_t raw,total;};
+    std::vector<ResolveTime> layoutResolveTimes;
+    std::vector<uint64_t> layoutApplyTimes;
+    std::vector<uint64_t> presentationTraceTimes;
+    uint64_t layoutResolveOverflow=0,layoutApplyOverflow=0;
+    uint64_t presentationTraceOverflow=0;
+    struct ResizeFrame {int64_t qpc;float width,height,appliedWidth,appliedHeight;bool valid,mismatch;uint32_t panels,columns,outside;};
+    struct ResizeBound {int64_t qpc;uint32_t group;Rect bounds;bool outside,column;};
+    std::vector<ResizeFrame> resizeFrames;
+    std::vector<ResizeBound> resizeBounds;
+    uint64_t resizeFrameOverflow=0;
+    uint64_t resizeBoundsOverflow=0;
     J workspaceUpdate;
     hstring lastPresentation;
     OverviewOcclusion overviewOcclusion;
@@ -120,7 +133,9 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     };
     std::map<uint32_t,Group> groups;
     hstring panelBridgeKey,lastPanelSurfaces;
-    NativePanelLayout panelBridgeLayout;
+    NativeLayoutInput layoutInput,resolvedInput;
+    J resolvedLayout;
+    float viewportWidth=0,viewportHeight=0,resolvedWidth=0,resolvedHeight=0;
     uint64_t panelLayoutRevision=0,panelQueryLayoutRevision=0;
     J panelBridgeFrame;
     uint64_t panelBridgeRevision=0;
@@ -155,6 +170,30 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         AutomationProperties::SetName(root,str(object(data->catalog,L"bootstrap"),L"drawing_workspace"));
     }
     void init(){
+        if(trace)resizeTraceFrame=CompositionTarget::Rendering(auto_revoke,[weak=weak_from_this()](auto&&,auto&&){
+            if(auto self=weak.lock();self&&self->windowResizing){
+                LARGE_INTEGER now{};QueryPerformanceCounter(&now);
+                auto viewport=array(object(self->data->model,L"layout"),L"viewport");
+                float width=float(self->root.ActualWidth()),height=float(self->root.ActualHeight());
+                bool valid=viewport.Size()==2;
+                float appliedWidth=valid?float(viewport.GetNumberAt(0)):0,appliedHeight=valid?float(viewport.GetNumberAt(1)):0;
+                bool mismatch=!valid||std::abs(width-appliedWidth)>.01f||std::abs(height-appliedHeight)>.01f;
+                uint32_t panels=0,columns=0,outside=0;
+                for(auto const& [id,group]:self->groups){
+                    if(group.hidden||flag(group.geometry,L"floating")||!group.frame.IsLoaded()||group.frame.Visibility()!=Visibility::Visible||group.frame.Opacity()<=0)continue;
+                    auto bounds=allocatedBounds(group.frame,self->root);
+                    bool escaped=bounds.X<-.01f||bounds.Y<-.01f||bounds.X+bounds.Width>width+.01f||bounds.Y+bounds.Height>height+.01f;
+                    ++panels;if(escaped)++outside;
+                    if(self->resizeBounds.size()<32768)self->resizeBounds.push_back({now.QuadPart,id,bounds,escaped,false});else ++self->resizeBoundsOverflow;
+                }
+                self->collapsed->ForEachBounds(self->root,[&](uint32_t id,Rect bounds){
+                    bool escaped=bounds.X<-.01f||bounds.Y<-.01f||bounds.X+bounds.Width>width+.01f||bounds.Y+bounds.Height>height+.01f;
+                    ++columns;if(escaped)++outside;
+                    if(self->resizeBounds.size()<32768)self->resizeBounds.push_back({now.QuadPart,id,bounds,escaped,true});else ++self->resizeBoundsOverflow;
+                });
+                if(self->resizeFrames.size()<4096)self->resizeFrames.push_back({now.QuadPart,width,height,appliedWidth,appliedHeight,valid,mismatch,panels,columns,outside});else ++self->resizeFrameOverflow;
+            }
+        });
         data->strokes=std::make_shared<StrokeRecording>();data->strokes->data=data;data->strokes->start();
         data->colorsPresented=[weak=weak_from_this()]{if(auto self=weak.lock())self->tracePresentation();};
         zoom->data=data;zoom->init();
@@ -373,14 +412,41 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             throw hresult_invalid_argument(L"Invalid workspace publication revision");
         return uint64_t(value);
     }
-    bool apply(J const& snapshot,NativePanelLayout preparedLayout){
+    bool resolveLayout(){
+        if(!layoutInput||viewportWidth<=0||viewportHeight<=0)return false;
+        if(layoutInput.get()==resolvedInput.get()&&viewportWidth==resolvedWidth&&viewportHeight==resolvedHeight){
+            data->model.Insert(L"layout",resolvedLayout);return false;
+        }
+        bool timed=trace&&windowResizing;
+        auto start=timed?std::chrono::steady_clock::now():std::chrono::steady_clock::time_point{};
+        auto result=capy_layout_resolve(layoutInput.get(),viewportWidth,viewportHeight);
+        auto rawEnd=timed?std::chrono::steady_clock::now():std::chrono::steady_clock::time_point{};
+        NativeString reply(result,capy_string_free);J packet;
+        if(!reply||!J::TryParse(to_hstring(reply.get()),packet)||!object(packet,L"result").Size())
+            throw hresult_invalid_argument(L"Workspace layout resolution failed: "+str(packet,L"error"));
+        resolvedLayout=object(packet,L"result");resolvedInput=layoutInput;resolvedWidth=viewportWidth;resolvedHeight=viewportHeight;
+        data->model.Insert(L"layout",resolvedLayout);++panelLayoutRevision;panelBridgeKey=L"";
+        if(timed){
+            auto end=std::chrono::steady_clock::now();
+            if(layoutResolveTimes.size()<4096)layoutResolveTimes.push_back({uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(rawEnd-start).count()),uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(end-start).count())});else ++layoutResolveOverflow;
+        }
+        return true;
+    }
+    void resize(float width,float height){
+        if(!std::isfinite(width)||!std::isfinite(height)||width<=0||height<=0)return;
+        viewportWidth=width;viewportHeight=height;
+        if(!resolveLayout())return;
+        data->updating=true;struct Reset {bool& value;~Reset(){value=false;}} reset{data->updating};
+        applyLayout(data->model,false);
+    }
+    bool apply(J const& snapshot,NativeLayoutInput preparedInput){
         auto previousGpu=num(data->model,L"windows_gpu_generation");
         bool relocalize=data->adoptLocalization(snapshot);
         if(relocalize){measureHost.Children().Clear();offscreen.clear();AutomationProperties::SetName(root,str(object(data->catalog,L"bootstrap"),L"drawing_workspace"));}
         bool full=snapshot.HasKey(L"state");
         auto update=object(snapshot,L"workspace_update");
         bool reflow=!full&&snapshot.HasKey(L"layout");
-        if((full||reflow)&&!preparedLayout)throw hresult_invalid_argument(L"Missing prepared workspace panel layout");
+        if((full||reflow)&&!preparedInput)throw hresult_invalid_argument(L"Missing prepared workspace layout input");
         // Workspace motion can also carry a camera. It is never a camera-only
         // fallback, and it must reference the content already retained here.
         if(full||update.Size()){
@@ -415,10 +481,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         struct Reset {bool& value;~Reset(){value=false;}} reset{data->updating};
         if(reflow)WorkspaceView::MergeLayout(data->model,snapshot);
         auto model=reflow?data->model:snapshot;
-        if(preparedLayout.get()!=panelBridgeLayout.get()){
-            panelBridgeLayout=std::move(preparedLayout);++panelLayoutRevision;
-            panelBridgeKey=L"";
-        }
+        layoutInput=std::move(preparedInput);
         if(full){
         if(previousGpu>0&&num(model,L"windows_gpu_generation")!=previousGpu){
             data->thumbnails=CreateLayerThumbnailCache(data->query);
@@ -438,6 +501,16 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         }
         root.RequestedTheme(theme==L"dark"?ElementTheme::Dark:ElementTheme::Light);
         }
+        if(viewportWidth<=0||viewportHeight<=0){
+            auto viewport=array(object(model,L"layout"),L"viewport");
+            if(viewport.Size()==2){viewportWidth=float(viewport.GetNumberAt(0));viewportHeight=float(viewport.GetNumberAt(1));}
+        }
+        resolveLayout();applyLayout(data->model,full);tracePresentation();if(full)colorRequests();return true;
+    }
+    void applyLayout(J const& model,bool full){
+        bool timed=trace&&windowResizing&&!full;
+        auto started=timed?std::chrono::steady_clock::now():std::chrono::steady_clock::time_point{};
+        auto update=workspaceUpdate;
         auto layout=object(model,L"layout");
         std::vector<uint32_t> visible;int order=0;
         std::vector<std::wstring> handleIds;
@@ -526,7 +599,11 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         zoom->text.Foreground(data->brush(L"text"));
         updateCamera(object(data->state,L"camera"));
         updatePopup();queueMeasurements();
-        applyMotion(object(update,L"drag"));tracePresentation();if(full)colorRequests();return true;
+        applyMotion(object(update,L"drag"));
+        if(timed){
+            auto elapsed=std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now()-started).count();
+            if(layoutApplyTimes.size()<4096)layoutApplyTimes.push_back(uint64_t(elapsed));else ++layoutApplyOverflow;
+        }
     }
 
     Rect placement(Group const& group)const{
@@ -571,6 +648,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     }
     void tracePresentation(){
         if(!trace)return;
+        bool timed=windowResizing;auto started=timed?std::chrono::steady_clock::now():std::chrono::steady_clock::time_point{};
         A positions;
         for(auto const& [id,group]:groups){
             if(!group.frame.IsLoaded())continue;
@@ -609,7 +687,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             }
             for(int i=0;i<VisualTreeHelper::GetChildrenCount(node);i++)visit(VisualTreeHelper::GetChild(node,i));
         };
-        visit(root);
+        if(!windowResizing)visit(root);
         A grips;
         for(auto const& [id,handle]:handles){
             if(!handle.IsLoaded())continue;
@@ -619,6 +697,18 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         }
         A bridgeTimes;
         if(!windowResizing)for(auto elapsed:panelBridgeTimes)bridgeTimes.Append(N(double(elapsed)));
+        A resizeSamples;
+        if(!windowResizing)for(auto const& frame:resizeFrames)resizeSamples.Append(O({
+            {L"qpc",N(double(frame.qpc))},{L"width",N(frame.width)},{L"height",N(frame.height)},
+            {L"applied_width",N(frame.appliedWidth)},{L"applied_height",N(frame.appliedHeight)},
+            {L"valid",B(frame.valid)},{L"mismatch",B(frame.mismatch)},{L"panels",N(frame.panels)},{L"columns",N(frame.columns)},{L"outside",N(frame.outside)}}));
+        A boundSamples,resolveSamples,applySamples,traceSamples;
+        if(!windowResizing){
+            for(auto const& bound:resizeBounds)boundSamples.Append(O({{L"qpc",N(double(bound.qpc))},{L"group",N(bound.group)},{L"kind",S(bound.column?L"column":L"group")},{L"bounds",rectangle(bound.bounds)},{L"outside",B(bound.outside)}}));
+            for(auto time:layoutResolveTimes)resolveSamples.Append(O({{L"raw_ns",N(double(time.raw))},{L"total_ns",N(double(time.total))}}));
+            for(auto elapsed:layoutApplyTimes)applySamples.Append(N(double(elapsed)));
+            for(auto elapsed:presentationTraceTimes)traceSamples.Append(N(double(elapsed)));
+        }
         LARGE_INTEGER snapshotQpc{};QueryPerformanceCounter(&snapshotQpc);
         auto value=O({{L"panel_bridge_timing",O({{L"count",N(double(panelBridgeTimes.size()+panelBridgeTimeOverflow))},
                 {L"overflow",N(double(panelBridgeTimeOverflow))},{L"samples_ns",bridgeTimes}})},
@@ -630,10 +720,19 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             {L"workspace_update",workspaceUpdate},{L"groups",positions},{L"handles",grips},{L"elements",elements},
             {L"window_resizing",B(windowResizing)},{L"native_resize_pending",B(resizeHandback)},{L"gpu_panels_suppressed",B(windowResizing)},
             {L"snapshot_qpc",N(double(snapshotQpc.QuadPart))},{L"native_sizing_start_qpc",N(double(nativeSizingStartQpc))},{L"native_sizing_end_qpc",N(double(nativeSizingEndQpc))},
+            {L"resize_layout_frames",O({{L"count",N(double(resizeFrames.size()+resizeFrameOverflow))},{L"overflow",N(double(resizeFrameOverflow))},{L"tolerance",N(.01)},{L"samples",resizeSamples}})},
+            {L"resize_panel_bounds",O({{L"count",N(double(resizeBounds.size()+resizeBoundsOverflow))},{L"overflow",N(double(resizeBoundsOverflow))},{L"samples",boundSamples}})},
+            {L"layout_resolve_timing",O({{L"count",N(double(layoutResolveTimes.size()+layoutResolveOverflow))},{L"overflow",N(double(layoutResolveOverflow))},{L"samples",resolveSamples}})},
+            {L"layout_apply_timing",O({{L"count",N(double(layoutApplyTimes.size()+layoutApplyOverflow))},{L"overflow",N(double(layoutApplyOverflow))},{L"samples_ns",applySamples}})},
+            {L"presentation_trace_timing",O({{L"count",N(double(presentationTraceTimes.size()+presentationTraceOverflow))},{L"overflow",N(double(presentationTraceOverflow))},{L"samples_ns",traceSamples}})},
             {L"panel_bridge_frame",panelBridgeFrame},{L"panel_revision",N(double(panelBridgeRevision))},
             {L"presented_panel_revision",object(data->model,L"windows_glass").GetNamedValue(L"panel_revision",JsonValue::CreateNullValue())},
             {L"overviews",lastOverviews.empty()?A{}:A::Parse(lastOverviews)}}).Stringify();
         if(value!=lastPresentation){lastPresentation=value;AutomationProperties::SetItemStatus(root,value);}
+        if(timed){
+            auto elapsed=std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now()-started).count();
+            if(presentationTraceTimes.size()<4096)presentationTraceTimes.push_back(uint64_t(elapsed));else ++presentationTraceOverflow;
+        }
     }
 
     double configurationHeight()const{
@@ -846,7 +945,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         return false;
     }
     void measurePanelBridges(){
-        if(!panelBridgeLayout||!root.IsLoaded()||root.ActualWidth()<=0||root.ActualHeight()<=0)return;
+        if(!layoutInput||!root.IsLoaded()||viewportWidth<=0||viewportHeight<=0)return;
         A allocated;
         for(auto const& [id,group]:groups){
             if(group.hidden||group.presented.Size()||group.frame.Opacity()<=0)continue;
@@ -858,7 +957,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         auto request=to_string(key);
         bool timed=trace&&windowResizing;
         auto started=timed?std::chrono::steady_clock::now():std::chrono::steady_clock::time_point{};
-        auto result=capy_panel_bridges(panelBridgeLayout.get(),request.c_str());
+        auto result=capy_panel_bridges(layoutInput.get(),viewportWidth,viewportHeight,request.c_str());
         if(timed){
             auto elapsed=std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now()-started).count();
             if(panelBridgeTimes.size()<4096)panelBridgeTimes.push_back(uint64_t(elapsed));else ++panelBridgeTimeOverflow;
@@ -1096,7 +1195,8 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
 WorkspaceView::WorkspaceView(Dispatch send,Json catalog,NativeLocalization localization,Dispatch overviews,PreviewTransport previews,std::function<void(bool)> popupChanged,Dispatch document,Dispatch input,EdgeTransport edges):impl(std::make_shared<Impl>(std::move(send),catalog,localization,std::move(overviews),std::move(previews),std::move(popupChanged),std::move(document),std::move(input),std::move(edges))){impl->init();}
 WorkspaceView::~WorkspaceView()=default;
 Canvas WorkspaceView::Root()const{return impl->root;}
-bool WorkspaceView::Apply(Json const& snapshot,NativePanelLayout layout){return impl->apply(snapshot,std::move(layout));}
+bool WorkspaceView::Apply(Json const& snapshot,NativeLayoutInput input){return impl->apply(snapshot,std::move(input));}
+void WorkspaceView::Resize(float width,float height){impl->resize(width,height);}
 void WorkspaceView::SetWindowResizing(bool value){
     if(impl->windowResizing==value)return;
     if(impl->trace){
@@ -1104,7 +1204,14 @@ void WorkspaceView::SetWindowResizing(bool value){
         if(value){impl->nativeSizingStartQpc=now.QuadPart;impl->nativeSizingEndQpc=0;}
         else impl->nativeSizingEndQpc=now.QuadPart;
     }
-    if(value&&impl->trace){impl->panelBridgeTimes.clear();impl->panelBridgeTimes.reserve(4096);impl->panelBridgeTimeOverflow=0;}
+    if(value&&impl->trace){
+        impl->panelBridgeTimes.clear();impl->panelBridgeTimes.reserve(4096);impl->panelBridgeTimeOverflow=0;
+        impl->resizeFrames.clear();impl->resizeFrames.reserve(4096);impl->resizeFrameOverflow=0;
+        impl->resizeBounds.clear();impl->resizeBounds.reserve(32768);impl->resizeBoundsOverflow=0;
+        impl->layoutResolveTimes.clear();impl->layoutResolveTimes.reserve(4096);impl->layoutResolveOverflow=0;
+        impl->layoutApplyTimes.clear();impl->layoutApplyTimes.reserve(4096);impl->layoutApplyOverflow=0;
+        impl->presentationTraceTimes.clear();impl->presentationTraceTimes.reserve(4096);impl->presentationTraceOverflow=0;
+    }
     impl->windowResizing=value;impl->resizeHandback=!value;
     ++impl->panelBridgeRevision;impl->lastPanelSurfaces=L"";
     for(auto& [id,group]:impl->groups)group.backgroundKey=L"";
@@ -1138,7 +1245,7 @@ void WorkspaceView::SetTitlebarInsets(float left,float right,float height){
 
 void WorkspaceView::MergeLayout(Json const& model,Json const& patch){
     using namespace CapyUi;
-    for(auto field:{L"layout",L"panel_measurements",L"workspace_update",L"windows_tab_styles",L"windows_glass"})
+    for(auto field:{L"layout",L"layout_input",L"panel_measurements",L"workspace_update",L"windows_tab_styles",L"windows_glass"})
         if(patch.HasKey(field))model.Insert(field,patch.GetNamedValue(field));
     auto state=object(model,L"state"),layout=object(object(state,L"workspace"),L"layout");
     for(auto const& item:object(patch,L"workspace_layout"))layout.Insert(item.Key(),item.Value());

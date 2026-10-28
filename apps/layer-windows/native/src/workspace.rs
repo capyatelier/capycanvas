@@ -6,43 +6,58 @@ use std::ffi::{CString, c_char};
 use layer_host::handles::{self,Handle};
 use std::sync::Arc;
 
-struct PanelLayout(layer_ui::ResolvedLayout);
+struct LayoutInput(layer_ui::LayoutResolveInput<'static>);
 
 /// # Safety
 /// Input is readable NUL-terminated UTF-8 layout JSON during this worker call.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn capy_panel_layout_prepare(input:*const c_char)->u64 {
+pub unsafe extern "C" fn capy_layout_input_prepare(input:*const c_char)->u64 {
     std::panic::catch_unwind(|| {
         let layout=unsafe {crate::input::with_text(input,|text| {
             if text.len()>256*1024 {return Err("Panel layout is too large".into());}
             serde_json::from_str(text).map_err(|error|error.to_string())
         })}.ok()?;
-        handles::insert_shared(Arc::new(PanelLayout(layout))).ok().map(Handle::raw)
+        handles::insert_shared(Arc::new(LayoutInput(layout))).ok().map(Handle::raw)
     }).ok().flatten().unwrap_or(0)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn capy_panel_layout_free(layout:u64) {
-    let _=Handle::from_raw(layout).and_then(handles::release::<PanelLayout>);
+pub extern "C" fn capy_layout_input_free(layout:u64) {
+    let _=Handle::from_raw(layout).and_then(handles::release::<LayoutInput>);
 }
 
-/// # Safety
-/// Input is readable NUL-terminated UTF-8 JSON for the duration of this call.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn capy_panel_bridges(layout:u64,input: *const c_char) -> u64 {
-    let result=std::panic::catch_unwind(|| {
-        unsafe {crate::input::with_text(input, |text| {
-            if text.len()>256*1024 {return Err("Panel geometry request is too large".into());}
-            let layout=Handle::from_raw(layout).and_then(handles::shared::<PanelLayout>).map_err(|error|error.to_string())?;
-            let measure=serde_json::from_str(text).map_err(|error|error.to_string())?;
-            layout.0.clone().measured_panel_bridges(measure).map(|frame|json!(frame))
-        })}
-    }).unwrap_or_else(|_|Err("Panel geometry failed".into()));
+fn resolve_layout(input:u64,width:f32,height:f32)->Result<layer_ui::ResolvedLayout,String> {
+    if ![width,height].into_iter().all(|v|v.is_finite() && v>0.) {return Err("Invalid workspace viewport".into());}
+    let input=Handle::from_raw(input).and_then(handles::shared::<LayoutInput>).map_err(|error|error.to_string())?;
+    Ok(input.0.resolve([width,height]))
+}
+
+fn layout_packet(result:Result<Value,String>)->u64 {
     let packet=match result {
         Ok(result)=>json!({"result":result,"error":null}),
         Err(error)=>json!({"result":null,"error":error}),
     };
     CString::new(packet.to_string()).map_or(0,crate::owned::text)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn capy_layout_resolve(input:u64,width:f32,height:f32)->u64 {
+    layout_packet(std::panic::catch_unwind(||resolve_layout(input,width,height).map(|layout|json!(layout)))
+        .unwrap_or_else(|_|Err("Workspace layout failed".into())))
+}
+
+/// # Safety
+/// Input is readable NUL-terminated UTF-8 JSON for the duration of this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_panel_bridges(layout:u64,width:f32,height:f32,input: *const c_char) -> u64 {
+    let result=std::panic::catch_unwind(|| {
+        unsafe {crate::input::with_text(input, |text| {
+            if text.len()>256*1024 {return Err("Panel geometry request is too large".into());}
+            let measure=serde_json::from_str(text).map_err(|error|error.to_string())?;
+            resolve_layout(layout,width,height)?.measured_panel_bridges(measure).map(|frame|json!(frame))
+        })}
+    }).unwrap_or_else(|_|Err("Panel geometry failed".into()));
+    layout_packet(result)
 }
 
 fn request(json: &str) -> Result<Value, String> {
@@ -144,16 +159,28 @@ mod tests {
         let groups:Vec<_>=layout.groups.iter().map(|g|json!([g.id,g.bounds])).collect();
         let columns:Vec<_>=layout.collapsed.iter().map(|c|json!({"column":c.id,"bounds":c.bounds,"content":c.content,
             "icons":c.groups.iter().flat_map(|g|&g.icons).map(|i|json!([i.panel,i.bounds])).collect::<Vec<_>>()})).collect();
-        let query=json!({"layout":layout,"measure":{"groups":groups,"columns":columns}});
+        let query=json!({"layout_input":host.session.layout_resolve_input(),"measure":{"groups":groups,"columns":columns}});
         let prepare=|layout:&Value| {
             let input=CString::new(layout.to_string()).unwrap();
-            let context=std::thread::spawn(move||unsafe {capy_panel_layout_prepare(input.as_ptr())}).join().unwrap();
+            let context=std::thread::spawn(move||unsafe {capy_layout_input_prepare(input.as_ptr())}).join().unwrap();
             assert_ne!(context,0);context
         };
-        let context=prepare(&query["layout"]);
+        let context=prepare(&query["layout_input"]);
+        let resolve=|context,viewport:[f32;2]| {
+            let packet=capy_layout_resolve(context,viewport[0],viewport[1]);
+            serde_json::from_str::<Value>(crate::owned::take_text(packet).to_str().unwrap()).unwrap()
+        };
+        for viewport in [[1400.,900.],[640.,480.],[1700.,1100.]] {
+            let projected=resolve(context,viewport);
+            assert!(projected["error"].is_null());
+            assert_eq!(projected["result"],json!(host.session.layout(viewport)));
+        }
+        for viewport in [[0.,900.],[-1.,900.],[f32::NAN,900.],[1400.,f32::INFINITY]] {
+            assert!(resolve(context,viewport)["error"].is_string());
+        }
         let project=|context,request:&Value| {
             let input=CString::new(request.to_string()).unwrap();
-            let packet=unsafe {capy_panel_bridges(context,input.as_ptr())};
+            let packet=unsafe {capy_panel_bridges(context,1400.,900.,input.as_ptr())};
             assert_ne!(packet,0);
             serde_json::from_str::<Value>(crate::owned::take_text(packet).to_str().unwrap()).unwrap()
         };
@@ -201,24 +228,29 @@ mod tests {
             assert!(project(context,&invalid)["result"].is_null());
             assert!(project(context,&invalid)["error"].is_string());
         }
-        let null=unsafe {capy_panel_bridges(context,std::ptr::null())};
+        let null=unsafe {capy_panel_bridges(context,1400.,900.,std::ptr::null())};
         assert!(serde_json::from_str::<Value>(crate::owned::take_text(null).to_str().unwrap()).unwrap()["error"].is_string());
-        let mut revised=layout.clone();revised.groups.remove(0);
-        let newer=prepare(&json!(revised));
+        let mut revised=query["layout_input"].clone();
+        revised["layout"]["bands"]=json!([]);revised["layout"]["floating"]=json!([]);
+        revised["layout"]["column_stacks"]=json!([]);
+        revised["column_open"]=json!([]);
+        let newer=prepare(&revised);
         assert_ne!(project(newer,&query["measure"]),result);
+        assert_ne!(resolve(newer,[1400.,900.]),resolve(context,[1400.,900.]));
         assert_eq!(project(context,&query["measure"]),result);
-        let retained=Handle::from_raw(context).and_then(handles::shared::<PanelLayout>).unwrap();
-        capy_panel_layout_free(context);
+        let retained=Handle::from_raw(context).and_then(handles::shared::<LayoutInput>).unwrap();
+        capy_layout_input_free(context);
         assert!(project(context,&query["measure"])["error"].is_string());
-        assert_eq!(json!(retained.0.clone().measured_panel_bridges(serde_json::from_value(query["measure"].clone()).unwrap()).unwrap()),result["result"]);
-        let reused=prepare(&query["layout"]);
+        assert!(resolve(context,[1400.,900.])["error"].is_string());
+        assert_eq!(json!(retained.0.resolve([1400.,900.]).measured_panel_bridges(serde_json::from_value(query["measure"].clone()).unwrap()).unwrap()),result["result"]);
+        let reused=prepare(&query["layout_input"]);
         assert_ne!(reused,context);
         assert_eq!(project(reused,&query["measure"]),result);
         assert!(project(context,&query["measure"])["error"].is_string());
-        capy_panel_layout_free(newer);capy_panel_layout_free(reused);
-        assert_eq!(unsafe {capy_panel_layout_prepare(std::ptr::null())},0);
+        capy_layout_input_free(newer);capy_layout_input_free(reused);
+        assert_eq!(unsafe {capy_layout_input_prepare(std::ptr::null())},0);
         let invalid=CString::new("{}").unwrap();
-        assert_eq!(unsafe {capy_panel_layout_prepare(invalid.as_ptr())},0);
+        assert_eq!(unsafe {capy_layout_input_prepare(invalid.as_ptr())},0);
         assert!(request(&json!({"type":"panel_bridges"}).to_string()).is_err());
         assert_eq!(revision,host.session.engine().document().revision);
         assert!(host.error.is_none());

@@ -338,6 +338,7 @@ void CanvasWindow::Resize() {
     // Retain the surface and caption geometry while minimized. Activation or
     // layout will supply the restored window's dimensions and DPI.
     if(closing||closed||IsIconic(Handle()))return;
+    if(workspace)workspace->Resize(float(panel.ActualWidth()),float(panel.ActualHeight()));
     float scale=panel.CompositionScaleX();
     Size next{uint32_t(std::max(1L, std::lround(panel.ActualWidth()*scale))),
               uint32_t(std::max(1L, std::lround(panel.ActualHeight()*scale))),scale};
@@ -1542,17 +1543,17 @@ winrt::fire_and_forget CanvasWindow::DecodeSnapshots(std::shared_ptr<SnapshotSta
             return value;
         };
         batch={parse(raw.full),parse(raw.layout,true),parse(raw.workspace,true),parse(raw.camera,true),parse(raw.search,true),parse(raw.localization),parse(raw.glass)};
-        auto prepareLayout=[&](Windows::Data::Json::JsonObject const& model){
-            auto bytes=to_string(CapyUi::object(model,L"layout").Stringify());
-            if(!state->panelLayout||bytes!=state->panelLayoutBytes){
-                NativePanelLayout next(capy_panel_layout_prepare(bytes.c_str()),capy_panel_layout_free);
-                if(!next)throw std::invalid_argument("Invalid workspace panel layout");
-                state->panelLayoutBytes=std::move(bytes);state->panelLayout=std::move(next);
+        auto prepareInput=[&](Windows::Data::Json::JsonObject const& model){
+            auto bytes=to_string(CapyUi::object(model,L"layout_input").Stringify());
+            if(!state->layoutInput||bytes!=state->layoutInputBytes){
+                NativeLayoutInput next(capy_layout_input_prepare(bytes.c_str()),capy_layout_input_free);
+                if(!next)throw std::invalid_argument("Invalid workspace layout input");
+                state->layoutInputBytes=std::move(bytes);state->layoutInput=std::move(next);
             }
-            return state->panelLayout;
+            return state->layoutInput;
         };
-        if(batch.full)batch.fullLayout=prepareLayout(batch.full);
-        if(batch.layout)batch.reflowLayout=prepareLayout(batch.layout);
+        if(batch.full)batch.fullInput=prepareInput(batch.full);
+        if(batch.layout)batch.reflowInput=prepareInput(batch.layout);
     }catch(hresult_error const& error){failure=to_string(error.message());}
      catch(std::exception const& error){failure=error.what();}
     raw={};
@@ -1596,11 +1597,12 @@ void CanvasWindow::FailPresentation(std::string message) {
 void CanvasWindow::ApplyPending(PreparedSnapshots batch) {
     if(closing)return;
     try {
+        workspace->Resize(float(panel.ActualWidth()),float(panel.ActualHeight()));
         if(batch.full){
             if(batch.localization)batch.full.Insert(L"localization",batch.localization);
-            ApplyModel(batch.full,std::move(batch.fullLayout));
+            ApplyModel(batch.full,std::move(batch.fullInput));
         }
-        if(!closing&&batch.layout)workspace->Apply(batch.layout,std::move(batch.reflowLayout));
+        if(!closing&&batch.layout)workspace->Apply(batch.layout,std::move(batch.reflowInput));
         for(auto const& patch:{batch.workspace,batch.camera,batch.search,batch.glass})
             if(!closing&&patch)workspace->Apply(patch);
     } catch(hresult_error const& error) {
@@ -1714,7 +1716,7 @@ void CanvasWindow::SendLaunchFiles(Windows::Data::Json::JsonObject const& model)
 void CanvasWindow::RefreshWorkspaceSwitcher() {
     if(!closing&&!closed)Send(R"({"operation":"input","input":{"type":"refresh_switcher"}})",CanvasCommandKind::Workspace);
 }
-void CanvasWindow::ApplyModel(Windows::Data::Json::JsonObject const& model,NativePanelLayout layout) {
+void CanvasWindow::ApplyModel(Windows::Data::Json::JsonObject const& model,NativeLayoutInput input) {
     using namespace CapyUi;
     auto presentation=object(model,L"localization");
     if(presentation.Size()){
@@ -1727,7 +1729,7 @@ void CanvasWindow::ApplyModel(Windows::Data::Json::JsonObject const& model,Nativ
     }
     auto focus=settings&&settings->IsOpen()?FocusManager::GetFocusedElement(root.XamlRoot()).try_as<Control>():nullptr;
     if(focus)if(auto owner=ItemsControl::ItemsControlFromItemContainer(focus))focus=owner;
-    if(!workspace->Apply(model,std::move(layout)))return;
+    if(!workspace->Apply(model,std::move(input)))return;
     lastModel=model;
     auto suspended=flag(model,L"windows_rendering_suspended");
     auto workspaceReady=flag(object(model,L"state"),L"workspace_ready");

@@ -974,6 +974,59 @@ fn panel_vector_cache_revisits_geometry_without_publishing_history() {
 }
 
 #[test]
+fn layout_resolve_input_roundtrips_runtime_geometry_and_zen_across_viewports() {
+    for preset in 0..3 {
+        let mut s=if preset==0 {three_member_target()} else {session(Platform::Windows)};
+        if preset==0 {click_column(&mut s,Panel::Brushes);}
+        if preset==1 {s.state.workspace.layout=WorkspacePreset::Painter.layout(Platform::Windows);}
+        if preset==2 {s.state.workspace.layout=WorkspacePreset::Illustrator.layout(Platform::Windows);}
+        s.state.workspace.layout.set_panel_visible(Panel::Layers,true).unwrap();
+        let group=s.state.workspace.layout.panel_group(Panel::Layers).unwrap();
+        s.state.workspace.layout.add_panel_to_group(Panel::Toolbar,group).unwrap();
+        let ids=s.layout(STACK_VIEW).groups.iter().map(|g|g.id).collect::<Vec<_>>();
+        let layout=&mut s.state.workspace.layout;
+        layout.fit_tab_groups=ids.clone();layout.fit_height_groups=ids;
+        layout.header_presentation=HeaderPresentation {height:HEADER_HEIGHT+18.,items:vec![HeaderItemBounds {
+            id:42,bounds:Bounds{x:30.,y:4.,width:250.,height:32.},
+        }]};
+        layout.column_scroll=vec![(layout.collapsed.first().map_or(group,|c|c.root),17.)];
+        layout.measurements=vec![PanelMeasurement {panel:Panel::Layers,tab_width:173.,content_height:463.,
+            scroll:Some(PanelScrollMeasurement {fixed_height:13.,unit_height:25.})}];
+        layout.titlebar_insets=[41.,117.,32.];layout.bottom_inset=23.;
+        for peek in [false,true] {
+            if peek {
+                s.set_viewport(STACK_VIEW,[1800,1100]).unwrap();invoke(&mut s,CommandId::ZenMode);
+                chrome(&mut s,ChromeEvent::Refresh,ChromeFacts::default());
+                let edge=s.layout(STACK_VIEW).groups.iter().find_map(|g|s.state.workspace.layout.group_edge(g.id)).unwrap();
+                let (start,end)=match edge {
+                    Edge::Left=>([4.,500.],[64.,500.]),Edge::Right=>([1796.,500.],[1736.,500.]),
+                    Edge::Top=>([800.,4.],[800.,64.]),Edge::Bottom=>([800.,1096.],[800.,1036.]),
+                };
+                s.edge_swipe(99,ContactPhase::Down,start);assert!(s.edge_swipe(99,ContactPhase::Move,end));
+            }
+            let wire=serde_json::to_value(s.layout_resolve_input()).unwrap();
+            assert_eq!(wire["header_presentation"],serde_json::json!(s.state.workspace.layout.header_presentation));
+            assert_eq!(wire["column_scroll"],serde_json::json!(s.state.workspace.layout.column_scroll));
+            assert_eq!(wire["column_open"],serde_json::json!(s.state.workspace.layout.column_stacks.iter()
+                .map(|stack|(stack.column,stack.open_column)).collect::<Vec<_>>()));
+            assert_eq!(wire["measurements"],serde_json::json!(s.state.workspace.layout.measurements));
+            assert_eq!(wire["titlebar_insets"],serde_json::json!([41.,117.,32.]));assert_eq!(wire["bottom_inset"],23.);
+            assert_eq!(!wire["zen_peek_edge"].is_null(),peek);
+            for skipped in ["header_presentation","column_scroll","measurements","titlebar_insets","bottom_inset"] {
+                assert!(wire["layout"].get(skipped).is_none());
+            }
+            let input:crate::LayoutResolveInput<'static>=serde_json::from_value(wire).unwrap();
+            for viewport in [[1800.,1100.],[1100.,700.],[640.,480.],[1500.,900.]] {
+                let expected=s.layout(viewport);
+                assert_eq!(serde_json::to_value(input.resolve(viewport)).unwrap(),serde_json::to_value(&expected).unwrap());
+                assert!(expected.groups.iter().any(|g|g.panels.len()>1));
+                for group in &expected.groups {assert_eq!(group.zen_kept,s.zen_keeps(group.id));}
+            }
+        }
+    }
+}
+
+#[test]
 fn measured_panel_bridges_use_only_current_allocations_and_preserve_receiver_identity() {
     for edge in [Edge::Left,Edge::Right] {
         let resolved=column_bridge_fixture(edge);
