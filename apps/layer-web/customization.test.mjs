@@ -1,4 +1,5 @@
 import {checkTabHoverContours} from './tab-hover.test.mjs';
+import {createDrawing} from './new-drawing-fixture.mjs';
 import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
 
@@ -226,7 +227,7 @@ export async function checkWorkspace({ call, evaluate, settle }) {
   const group = panel => evaluate(`layerApp.app.layout(innerWidth,innerHeight).groups.find(g=>g.panels.includes(${JSON.stringify(panel)}))`);
   const config = panel => evaluate(`layerApp.state().workspace.layout.panels.find(p=>p.id===${JSON.stringify(panel)})`);
   const mouse = (type, p, extra = {}) => call("Input.dispatchMouseEvent", { type, ...p, ...extra });
-  const point = selector => evaluate(`(()=>{const n=document.querySelector(${JSON.stringify(selector)});if(!n)throw new Error('Missing '+${JSON.stringify(selector)});const b=n.getBoundingClientRect();return{x:b.x+b.width/2,y:b.y+b.height/2}})()`);
+  const point = selector => evaluate(`(()=>{const n=document.querySelector(${JSON.stringify(selector)});if(!n)throw new Error('Missing '+${JSON.stringify(selector)});const b=n.getBoundingClientRect();if(!b.width||!b.height)throw new Error('Hidden '+${JSON.stringify(selector)});return{x:b.x+b.width/2,y:b.y+b.height/2}})()`);
   const clickAt = async (p, count = 1) => {
     await mouse("mouseMoved", p);
     for (let n = 1; n <= count; n++) {
@@ -274,7 +275,9 @@ export async function checkWorkspace({ call, evaluate, settle }) {
   await call("Emulation.setDeviceMetricsOverride", { width: 1200, height: 900, deviceScaleFactor: 1, mobile: false });
   await wait();
   const original = await snapshot();
-  await send({ type: "restore_workspace", workspace: legacyLayout(original) }); await wait();
+  const fixture = legacyLayout(original), header = fixture.layout.header;
+  header.zones = [[{id:header.next_id++,item:{kind:'menu_labels'}}],[],[]];
+  await send({ type: "restore_workspace", workspace: fixture }); await wait();
   const initial = await snapshot();
   const reset = async () => {
     await evaluate("document.querySelector('.panel-context-menu').hidePopover();document.querySelectorAll('details[open]').forEach(n=>n.open=false)");
@@ -320,16 +323,23 @@ export async function checkWorkspace({ call, evaluate, settle }) {
   for (const theme of process.argv.includes("--gestures") ? [] : ["dark", "light"]) {
     await reset(); await send({ type: "set_theme", theme });
     await workspaceMenu(); await shot(`workspace-menu-${theme}`);
-    assert.equal(await evaluate("document.querySelectorAll('#workspace-menu > hr').length + 1"), 4);
+    const menu = await evaluate("layerApp.app.application_menus().find(menu=>menu.id==='window').model");
+    assert.deepEqual(await evaluate("[...document.querySelectorAll('#workspace-menu > button .menu-label')].map(node=>node.textContent)"), menu.sections.flat().map(item=>item.label));
+    assert.equal(await evaluate("document.querySelectorAll('#workspace-menu > hr').length"), menu.sections.filter(section=>section.length).length-1);
     await choose("Tool Set", "#workspace-menu"); assert.equal(await group("brushes"), undefined);
     await workspaceMenu(); await choose("Tool Set", "#workspace-menu"); assert.ok(await group("brushes"));
     await workspaceMenu(); await choose("Quick Access Toolbars", "#workspace-menu"); await choose("New Toolbar…", "#workspace-menu");
-    await edit("#toolbar-name", `Review ${theme}`);
-    await click(".tool-choice:first-child"); await click("#confirm-tools");
+    assert.equal(await evaluate("document.querySelector('.workspace-form[open]')!==null"), true);
+    await edit("#workspace-item-name", `Review ${theme}`);
+    await click(".workspace-form[open] .suggested-action");
+    await evaluate(`(async()=>{const end=performance.now()+15000;while(!layerApp.state().workspace.layout.panels.some(panel=>panel.content.name==='Review ${theme}')){if(performance.now()>end)throw Error('New toolbar was not installed');await new Promise(resolve=>setTimeout(resolve,20));}})()`);
     let custom = await evaluate(`layerApp.state().workspace.layout.panels.find(p=>p.content.name==='Review ${theme}').id`);
+    await context(grip(custom));await choose("Add Tools…");
+    await edit("#tool-search", "brush size");
+    await click(".tool-choice:first-child");await click("#confirm-tools");
     await context(grip(custom)); await choose(`Rename Review ${theme} toolbar…`);
     assert.equal(await evaluate("document.querySelector('#toolbar-prompt-name').value"), `Review ${theme}`);
-    await edit("#toolbar-prompt-name", "Brushes");
+    await edit("#toolbar-prompt-name", " ");
     assert.equal(await evaluate("document.querySelector('#confirm-toolbar').disabled"), true);
     await shot(`rename-error-${theme}`);
     await edit("#toolbar-prompt-name", `Study ${theme}`); await click("#confirm-toolbar");
@@ -352,7 +362,7 @@ export async function checkWorkspace({ call, evaluate, settle }) {
     await context(grip("sizes")); await choose("Add Toolbar"); await shot(`add-toolbar-${theme}`); await choose("Tools toolbar");
     assert.equal((await group("toolbar")).id, destination);
     await context(tab("toolbar"));
-    assert.deepEqual(await evaluate("[...document.querySelectorAll('.panel-context-menu .menu-label')].map(n=>n.textContent)"), ["Collapse column", "Configure Tools toolbar…", "Hide Tools toolbar"]);
+    assert.deepEqual(await evaluate("[...document.querySelectorAll('.panel-context-menu .menu-label')].map(n=>n.textContent)"), ["Collapse column", "Configure Tools toolbar…", "Hide Tools toolbar", "Save to Toolbar Library…"]);
     await choose("Configure Tools toolbar…");
     await shot(`toolbar-configuration-${theme}`);
     assert.equal(await evaluate("document.querySelectorAll('.panel-configuration .toolbar-options button').length>6"), true);
@@ -377,7 +387,8 @@ export async function checkWorkspace({ call, evaluate, settle }) {
     }
     console.log(`Web workspace menus and all toolbar layouts passed (${theme}).`);
   }
-  await reset();
+  for (const theme of ['dark','light']) {
+  await reset();await send({type:'set_theme',theme});
   // One tab tears off as a group, keeps following after DOM replacement, and
   // undoes as one edit. Pointer capture must live on the stable workspace.
   const beforeDrag = await snapshot();
@@ -531,27 +542,31 @@ export async function checkWorkspace({ call, evaluate, settle }) {
   const tabGroup = (await group("layers")).id;
   for (const panel of ["brushes","sizes","toolbar"])
     await send({type:"move_panel",panel,target:{kind:"tab",group:tabGroup,index:null}});
-  // Layers now enforces a six-tile minimum width; use names to exercise
-  // overflow deliberately rather than relying on an illegally narrow group.
   await customize({type:"set_tab_style",group:tabGroup,style:"name"});
-  await wait();
-  const wide = (await group("toolbar")).bounds;
-  const edgeDivider = await evaluate(`layerApp.app.layout(innerWidth,innerHeight).dividers.find(d=>d.axis==='horizontal'&&Math.abs(d.bounds.x+d.bounds.width-${wide.x})<1)`);
-  const shrinkStart = {x:edgeDivider.bounds.x+edgeDivider.bounds.width/2,y:edgeDivider.bounds.y+edgeDivider.bounds.height/2};
-  await drag(shrinkStart, {x:shrinkStart.x+wide.width-250,y:shrinkStart.y});
+  const overflow = await snapshot();
+  overflow.layout.fit_tab_groups = overflow.layout.fit_tab_groups.filter(group=>group!==tabGroup);
+  overflow.layout.bands.find(band=>band.root.id===tabGroup).extent = initial.layout.bands.find(band=>band.edge==='right').extent;
+  await send({type:"restore_workspace",workspace:overflow});await wait();
   assert.deepEqual((await snapshot()).layout.collapsed, []);
   assert.equal(await evaluate(`(()=>{const n=document.querySelector('[data-group="${tabGroup}"] .tab-list');return n.scrollWidth>n.clientWidth})()`),true);
-  const tight = (await group("toolbar")).bounds;
   const end = await evaluate(`(()=>{const g=document.querySelector('[data-group="${tabGroup}"] .dock-tabs>.panel-grip').getBoundingClientRect();return{x:g.x-2,y:g.y+g.height/2}})()`);
-  const visible = await evaluate(`[...document.querySelectorAll('[data-group="${tabGroup}"] .dock-tab')].filter(n=>n.getBoundingClientRect().x<${end.x}).map(n=>n.dataset.panel)`);
+  const expected = [...(await group("layers")).panels], sourceIndex = expected.indexOf("layers");
   await drag(await point(tab("layers")), end, async () => {
-    const marker = await evaluate(`(()=>{const b=document.querySelector('.drop-indicator').getBoundingClientRect(),g=document.querySelector('[data-group="${tabGroup}"] .dock-tabs>.panel-grip').getBoundingClientRect();return{width:b.width,top:b.y,right:b.right,grip:g.x}})()`);
-    assert.equal(marker.width,3); assert.equal(marker.top,tight.y); assert.ok(Math.abs(marker.right-marker.grip)<1);
+    const tab = await evaluate("JSON.parse(JSON.stringify(layerApp.app.workspace_update().drag.tab,(_,value)=>typeof value==='bigint'?Number(value):value))");
+    const preview = await evaluate("(()=>{const b=document.querySelector('.tab-slide-overlay .dragged-tab-preview').getBoundingClientRect();return{x:b.x,y:b.y,width:b.width,height:b.height}})()");
+    assert.equal(tab.group,tabGroup);assert.equal(tab.panel,"layers");
+    assert.ok(tab.preview.insertion>sourceIndex+1,"Dragging to the clipped strip end moves the tab past a neighbor");
+    for(const field of ['x','y','width','height'])assert.ok(Math.abs(preview[field]-tab.preview.bounds[field])<1,`${theme}: visible tab preview ${field}`);
+    assert.ok(preview.x>=tab.clip.x&&preview.x+preview.width<=tab.clip.x+tab.clip.width+1);
+    assert.equal(await evaluate("document.querySelector('.drop-indicator').hidden"),true);
+    expected.splice(sourceIndex,1);expected.splice(tab.preview.insertion-1,0,"layers");
     await shot("overflow-tab-append");
   });
   const dropped = (await group("layers")).panels;
-  assert.equal(dropped.indexOf("layers"), dropped.indexOf(visible.at(-1)) + 1, "The attached tab drops at its slide preview's slot");
+  assert.deepEqual(dropped,expected,"The attached tab drops at its visible slide preview's slot");
   await reset();
+  console.log(`Web workspace resize, capture and tab gestures passed (${theme}).`);
+  }
   await send({ type: "restore_workspace", workspace: original }); await wait();
   console.log("Web workspace gestures: real tear-off/touch/capture, eight-edge resize, first double-click reset, layout cycles, docking/history and Zen floating-only merges passed.");
 }
@@ -559,6 +574,7 @@ export async function checkWorkspace({ call, evaluate, settle }) {
 export async function checkCustomization({ call, evaluate, settle, canvasPixels }) {
   const dir = "artifacts/ui/workspace-management/web"; await mkdir(dir, { recursive: true });
   const wait = () => evaluate("new Promise(resolve => setTimeout(resolve, 260))");
+  const until = condition => evaluate(`new Promise((resolve,reject)=>{const end=performance.now()+15000;function poll(){if(${condition})resolve();else if(performance.now()>end)reject(Error(${JSON.stringify(condition)}));else setTimeout(poll,40);}poll();})`);
   const send = (action) => evaluate(`layerApp.dispatch(${JSON.stringify(action)})`);
   const customize = (action) => send({ type: "customize", action });
   const rect = (selector) => evaluate(`(()=>{const n=document.querySelector(${JSON.stringify(selector)});n.scrollIntoView({block:"nearest"});const r=n.getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2};})()`);
@@ -574,6 +590,18 @@ export async function checkCustomization({ call, evaluate, settle, canvasPixels 
       .find(n=>(n.querySelector('.menu-label')?.textContent || n.textContent)===${JSON.stringify(label)});
       if(!node)throw new Error('Menu item missing: '+${JSON.stringify(label)}); const b=node.getBoundingClientRect();return{x:b.x+b.width/2,y:b.y+b.height/2};})()`);
     await clickAt(point);
+  };
+  const text = async (selector, value) => {
+    await click(selector);
+    await evaluate(`{const field=document.querySelector(${JSON.stringify(selector)});field.select();}`);
+    await call('Input.insertText',{text:value});await settle();
+  };
+  const toolbarForm = () => until("document.querySelector('.workspace-form[open] #workspace-item-name') && !JSON.parse(layerApp.app.workspace_view()).busy");
+  const formClosed = () => until("!document.querySelector('.workspace-form[open]') && !JSON.parse(layerApp.app.workspace_view()).busy");
+  const createToolbar = async (name, group) => {
+    await send({type:'workspace_manager',command:{type:'new_toolbar',group}});await toolbarForm();
+    await text('#workspace-item-name',name);await click('.workspace-form[open] .suggested-action');await formClosed();
+    return evaluate(`layerApp.state().workspace.layout.panels.find(p=>p.content.name===${JSON.stringify(name)}).id`);
   };
   const context = async (selector) => {
     const { x, y } = await rect(selector);
@@ -592,6 +620,9 @@ export async function checkCustomization({ call, evaluate, settle, canvasPixels 
   const original = await evaluate("layerApp.state().workspace");
   await send({ type: "restore_workspace", workspace: legacyLayout(original) }); await wait();
   const initial = await evaluate("layerApp.state().workspace");
+  await send({type:"invoke",command:"new_document"});
+  await evaluate(createDrawing({width:1333,height:1000}));
+  await evaluate("layerApp.app.wait_for_canvas()");
   await shot("startup");
   const pixels = await canvasPixels();
   assert.ok(pixels.white > pixels.total * .1, `The WebGPU canvas must be visible in the composed application: ${JSON.stringify(pixels)}`);
@@ -626,7 +657,7 @@ export async function checkCustomization({ call, evaluate, settle, canvasPixels 
       await evaluate(`{const input=document.querySelector('.panel-configuration [data-control=${control}] .number-entry');input.value='${text}';input.dispatchEvent(new Event('input',{bubbles:true}));input.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));}`);
       const actual = await evaluate(`layerApp.state().brush.${key}`);
       assert.ok(Math.abs(actual - value) < .001, `${control}: ${actual} expected ${value}`);
-      assert.equal(await evaluate(`document.querySelector('.sizes-panel [data-control=${control}] .number-entry').value`), Number(text).toFixed(1));
+      assert.equal(Number(await evaluate(`document.querySelector('.sizes-panel [data-control=${control}] .number-entry').value`)), Number(text));
     }
     await send({type:"customize",action:{type:"close_expanded"}}); assert.equal(await expanded(), null);
     assert.equal(await evaluate("originalPanel.parentElement===originalParent"), true);
@@ -647,11 +678,16 @@ export async function checkCustomization({ call, evaluate, settle, canvasPixels 
     }
     await send({ type: "restore_workspace", workspace: initial }); await wait();
     assert.deepEqual(await context('[data-panel="layers"] .dock-tabs > .panel-grip'), ["Automatic", "Icons and active tab name", "Icons and names", "Names only", "Icons only", "Collapse column", "Add built-in panel", "Add Toolbar", "New Toolbar…"]);
-    await shot(`group-menu-${theme}`); await click('.panel-context-menu button:last-child');
+    await shot(`group-menu-${theme}`); await menuItem('New Toolbar…');
+    await toolbarForm();await text('#workspace-item-name',' ');
+    assert.equal(await evaluate("document.querySelector('.workspace-form[open] .suggested-action').disabled"), true);
+    await text('#workspace-item-name',`Illustration ${theme}`);
+    await click('.workspace-form[open] .suggested-action');await formClosed();
+    const custom = await evaluate(`layerApp.state().workspace.layout.panels.find(p=>p.content.name==='Illustration ${theme}').id`);
+    assert.equal(await evaluate(`layerApp.state().workspace.layout.panels.find(p=>p.id==='${custom}').content.tiles.length`), 0);
+    await context(`[data-panel="${custom}"] .toolbar-controls`);await menuItem('Add Tools…');
     assert.equal(await evaluate("document.querySelector('#tool-picker').open"), true);
-    await evaluate("{const name=document.querySelector('#toolbar-name');name.value='Layers';name.dispatchEvent(new Event('input',{bubbles:true}));}");
-    assert.equal(await evaluate("document.querySelector('#confirm-tools').disabled"), true);
-    await evaluate(`{const name=document.querySelector('#toolbar-name');name.value='Illustration ${theme}';name.dispatchEvent(new Event('input',{bubbles:true}));const search=document.querySelector('#tool-search');search.value='pencil';search.dispatchEvent(new Event('input',{bubbles:true}));}`);
+    await text('#tool-search','pencil');
     await click('.tool-choice:first-child'); await shot(`picker-${theme}`);
     await customize({ type: "picker_search", query: "opacity" });
     assert.equal(await evaluate("Number(layerApp.app.tool_picker().selected_count)"), 1, "search preserves selection");
@@ -659,8 +695,8 @@ export async function checkCustomization({ call, evaluate, settle, canvasPixels 
     assert.equal(await evaluate("document.querySelector('.tool-choice input').checked"), true);
     await click('#confirm-tools');
     assert.equal(await evaluate("document.querySelector('#tool-picker').open"), false);
-    const custom = await evaluate(`layerApp.state().workspace.layout.panels.find(p=>p.content.name==='Illustration ${theme}').id`);
-    assert.deepEqual(await context(`[data-panel="${custom}"] [data-tile]`), [...await evaluate('layerApp.state().tool_panels.brush_sets.groups.map(g=>g.label)'), 'Remove Tool', 'Insert Tools…']);
+    const tileMenu = await evaluate(`layerApp.app.context_menu(JSON.parse(document.querySelector('[data-panel="${custom}"] [data-tile]').dataset.context)).sections.flat().filter(item=>!item.is_heading).map(item=>item.label)`);
+    assert.deepEqual(await context(`[data-panel="${custom}"] [data-tile]`), tileMenu);
     await shot(`tile-menu-${theme}`);
     await menuItem('Remove Tool');
     assert.equal(await evaluate(`layerApp.state().workspace.layout.panels.find(p=>p.id==='${custom}').content.tiles.length`), 0);
@@ -669,10 +705,13 @@ export async function checkCustomization({ call, evaluate, settle, canvasPixels 
     await click('.tool-choice:first-child'); await click('.tool-choice:nth-child(2)'); await click('#confirm-tools');
     assert.equal(await evaluate(`layerApp.state().workspace.layout.panels.find(p=>p.id==='${custom}').content.tiles.length`), 2);
     const beforeCancel = await evaluate("layerApp.state().workspace");
-    await customize({ type: "new_toolbar", group: 8 });
-    await customize({ type: "picker_name", name: `illustration ${theme}` });
-    assert.equal(await evaluate("document.querySelector('#confirm-tools').disabled"), true, "custom names are case-insensitively unique");
-    await customize({ type: "cancel_tools" });
+    await send({type:'workspace_manager',command:{type:'new_toolbar',group:8}});await toolbarForm();
+    await text('#workspace-item-name',`illustration ${theme}`);
+    await click('.workspace-form[open] .suggested-action');
+    await until("document.querySelector('.workspace-form[open] .workspace-error').textContent && !JSON.parse(layerApp.app.workspace_view()).busy");
+    assert.deepEqual(await evaluate("layerApp.state().workspace"), beforeCancel, "duplicate names leave the workspace unchanged");
+    assert.equal(await evaluate("document.querySelector('#workspace-item-name').value"), `illustration ${theme}`);
+    await click('.workspace-form[open] footer button:first-child');await formClosed();
     assert.deepEqual(await evaluate("layerApp.state().workspace"), beforeCancel, "cancel is transactional");
     const saved = await evaluate("layerApp.state().workspace");
     await send({ type: "restore_workspace", workspace: initial }); await send({ type: "restore_workspace", workspace: saved });
@@ -717,10 +756,10 @@ export async function checkCustomization({ call, evaluate, settle, canvasPixels 
   }
   await send({ type: "restore_workspace", workspace: initial });
   const sizesGroup = await evaluate("layerApp.app.layout(innerWidth,innerHeight).groups.find(g=>g.active==='sizes').id");
-  await customize({ type: "new_toolbar", group: sizesGroup });
+  const many = await createToolbar('All tools', sizesGroup);
+  await customize({type:'insert_tools',panel:many,before:null});
   await evaluate(`{for(const c of layerApp.app.tool_picker().choices) layerApp.dispatch({type:'customize',action:{type:'picker_select',control:c.control,selected:true}});}`);
   await click('#confirm-tools');
-  const many = await evaluate("layerApp.state().workspace.layout.panels.at(-1).id");
   // Every tile remains configured, even when a tabbed ribbon clips later rows.
   const clipped = await evaluate(`(()=>{const p=document.querySelector('[data-panel="${many}"] .tile-panel'),r=p.getBoundingClientRect(),tiles=[...p.querySelectorAll('[data-tile]')];return{overflow:getComputedStyle(p).overflowY,count:tiles.length,hidden:tiles.filter(t=>t.hidden||t.getBoundingClientRect().top>=r.bottom).length};})()`);
   assert.equal(clipped.overflow, "clip"); assert.ok(clipped.count > 25 && clipped.hidden > 0);
@@ -748,9 +787,9 @@ export async function checkCustomization({ call, evaluate, settle, canvasPixels 
   await send({ type: "invoke", command: "zen_mode" });
   assert.equal(await expanded(), "sizes");
   await clickAt({ x: 850, y: 450 }); assert.equal(await expanded(), null);
-  assert.equal(await evaluate("document.querySelector('#workspace').classList.contains('zen-hidden')"), true);
+  assert.equal(await evaluate("document.querySelector('#workspace').classList.contains('zen-hidden')"), false, "dismissing the drawer keeps the workspace visible");
   await clickAt({ x: 850, y: 450 });
-  assert.equal(await evaluate("document.querySelector('#workspace').classList.contains('zen-hidden')"), true);
+  assert.equal(await evaluate("document.querySelector('#workspace').classList.contains('zen-hidden')"), true, "the next canvas contact hides the workspace");
   await send({ type: "restore_settings", settings });
   await send({ type: "restore_workspace", workspace: original }); await wait();
   console.log("Web customization: native pointer menus/tabs, dynamic toolbars, picker validation, live controls, side drawers and restore passed.");
