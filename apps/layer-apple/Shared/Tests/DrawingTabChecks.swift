@@ -19,6 +19,7 @@ extension XCTestCase {
         }
         let stripFirst = app.buttons["drawing-tab-1"].firstMatch, stripSecond = app.buttons["drawing-tab-2"].firstMatch
         if stripFirst.waitForExistence(timeout: 5) && stripSecond.exists {
+            XCTAssertTrue(stripSecond.isSelected)
             func slide(_ source: XCUIElement, onto target: XCUIElement, dx: CGFloat) {
                 let from = source.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
                 let to = target.coordinate(withNormalizedOffset: CGVector(dx: dx, dy: 0.5))
@@ -31,10 +32,14 @@ extension XCTestCase {
             slide(stripSecond, onto: stripFirst, dx: 0.1)
             expectation(for: NSPredicate { _, _ in stripSecond.frame.midX < stripFirst.frame.midX }, evaluatedWith: stripSecond)
             waitForExpectations(timeout: 15)
+            XCTAssertTrue(stripSecond.isSelected)
+            XCTAssertTrue(app.buttons["drawing-close-1"].exists && app.buttons["drawing-close-2"].exists)
             attachEditor(in: app, name: "drawing-strip-reordered")
             slide(stripSecond, onto: stripFirst, dx: 0.9)
             expectation(for: NSPredicate { _, _ in stripFirst.frame.midX < stripSecond.frame.midX }, evaluatedWith: stripFirst)
             waitForExpectations(timeout: 15)
+            XCTAssertTrue(stripSecond.isSelected)
+            XCTAssertTrue(app.buttons["drawing-close-1"].exists && app.buttons["drawing-close-2"].exists)
         }
         drawings()
         let selector = app.descendants(matching: .any)["drawing-selector"].firstMatch
