@@ -1,11 +1,12 @@
-param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme='dark',[ValidateSet('full','preview-dark','preview-light','release-dark','release-light')][string]$Journey='full')
-if($Journey -ne 'full'){$Theme=$Journey -replace '^(preview|release)-',''}
+param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme='dark',[ValidateSet('full','preview-dark','preview-light','release-dark','release-light','drawer-dark','drawer-light')][string]$Journey='full')
+if($Journey -ne 'full'){$Theme=$Journey -replace '^(preview|release|drawer)-',''}
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 $CapyCacheModel=$true;$CapyEach={if($env:CAPY_PRIVATE_DESKTOP){[CapyRowPointer]::VerifyPrivateDesktop($env:CAPY_PRIVATE_DESKTOP)};[CapyCanvasTouch]::Verify()}
 Add-Type -AssemblyName System.Drawing
 Add-Type -Path (Join-Path $PSScriptRoot 'CanvasTouchDriver.cs')
 Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
+$ControlType=[System.Windows.Automation.ControlType]
 if($env:CAPY_PRIVATE_DESKTOP){[CapyRowPointer]::VerifyPrivateDesktop($env:CAPY_PRIVATE_DESKTOP)}
 $repo=(Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
 $Executable=(Resolve-Path -LiteralPath $Executable).Path
@@ -180,6 +181,85 @@ function Undo-Workspace {
  & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'window';Invoke 'undo_workspace'
  Wait-Until {((Current-Group).panels -join ',') -eq 'tool_settings,sizes' -and !(Current-Group).floating} 'Workspace Undo did not restore the source group'
 }
+function Drawer-Group([uint32]$Group){@((Model).state.customization.column_drawers|Where-Object {$_.tabs.group -eq $Group})[0]}
+function Drawer-Widths([string[]]$Panels){
+ $result=[ordered]@{}
+ foreach($panel in $Panels){$result[$panel]=[Math]::Round((Control ('drawer-tab-'+$panel) -Arranged).Current.BoundingRectangle.Width/$scale,2)}
+ $result
+}
+function Drawer-Style([uint32]$Group,[string]$Name,[string]$Value){
+ $previous=(Control 'drawer-tab-brushes' -Arranged).GetRuntimeId() -join ':'
+ $grip=(Control ('drawer-grip-'+$Group) -Arranged).Current.BoundingRectangle
+ [CapyRowPointer]::RightClick([int]($grip.Left+$grip.Width/2),[int]($grip.Top+$grip.Height/2))
+ (Control $Name -Name -Type $ControlType::MenuItem).GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
+ Wait-Until {(Model).windows_tab_styles.$Group -eq $Value -and $null -ne (Find 'drawer-tab-brushes' -Visible) -and ((Control 'drawer-tab-brushes' -Arranged).GetRuntimeId() -join ':') -ne $previous} "Drawer did not rebuild with $Name style"
+ Start-Sleep -Milliseconds 150
+}
+function Drawer-Review {
+ $panels=@('layers','adjustments','brushes','sizes')
+ $group=@((Model).layout.groups|Where-Object {$_.panels -contains 'layers'})[0].id
+ foreach($panel in $panels){
+  if(@((Model).layout.groups|Where-Object {$_.id -eq $group -and $_.panels -contains $panel}).Count){continue}
+  $grip=(Control ('group-grip-'+$group) -Arranged).Current.BoundingRectangle
+  [CapyRowPointer]::RightClick([int]($grip.Left+$grip.Width/2),[int]($grip.Top+$grip.Height/2))
+  (Control 'Add built-in panel' -Name -Type $ControlType::MenuItem).GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
+  $title=@((Model).panels|Where-Object id -eq $panel)[0].configuration_title -replace '^Configure ',''
+  (Control $title -Name -Type $ControlType::MenuItem).GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
+  Wait-Until {@((Model).layout.groups|Where-Object {$_.id -eq $group -and $_.panels -contains $panel}).Count -eq 1} "Drawer setup did not add $panel"
+ }
+ $order=@((Model).layout.groups|Where-Object id -eq $group)[0].panels
+ if(($order -join ',') -ne ($panels -join ',')){throw "Drawer setup has unexpected tab order: $($order -join ',')"}
+ if(@((Model).layout.collapsed|Where-Object {$_.groups.icons.panel -contains 'layers'}).Count){
+  (Control 'column-icon-layers' -Arranged).SetFocus();[CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x10),0x79)
+  Wait-Until {$null -ne (Find 'Expand column' -Name)} 'Drawer setup did not expose Expand column'
+  Invoke 'Expand column' -Name
+  Wait-Until {@((Model).layout.collapsed|Where-Object {$_.groups.icons.panel -contains 'layers'}).Count -eq 0} 'Drawer setup did not expand the right column'
+ }
+ (Control 'panel-tab-layers' -Arranged).SetFocus();[CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x10),0x79)
+ Wait-Until {$null -ne (Find 'Collapse column' -Name)} 'Drawer setup did not expose Collapse column'
+ Invoke 'Collapse column' -Name
+ Wait-Until {$null -ne (Find 'column-icon-layers')} 'Drawer setup did not collapse the right column'
+ (Control 'column-icon-layers' -Arranged).SetFocus();[CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x10),0x79)
+ Wait-Until {$null -ne (Find 'Open individual panels' -Name)} 'Drawer setup did not expose individual panels'
+ $toggle=(Control 'Open individual panels' -Name).GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)
+ if($toggle.Current.ToggleState -eq [System.Windows.Automation.ToggleState]::Off){$toggle.Toggle()}
+ [CapyRowPointer]::Key(0x1b)
+ Invoke 'column-icon-layers'
+ Wait-Until {$null -ne (Find 'drawer-tab-brushes' -Visible) -and (Drawer-Group $group)} 'Drawer setup did not open its individual panel tabs'
+ if((Model).windows_tab_styles.$group -ne 'automatic'){throw 'Drawer setup did not retain Automatic tab style'}
+ $before=Drawer-Widths $panels
+ $before|ConvertTo-Json|Set-Content (Join-Path $run 'drawer-before-widths.json')
+ if(@($before.Values|Where-Object {$_ -gt 45}).Count -eq 0 -or @($before.Values|Where-Object {$_ -le 45}).Count -eq 0){throw 'Drawer setup did not fit a mixture of named and icon tabs'}
+ Capture 'drawer-before-reorder' -Composed
+ $bounds=(Control 'drawer-tab-brushes' -Arranged).Current.BoundingRectangle
+ $first=(Control 'drawer-tab-layers' -Arranged).Current.BoundingRectangle
+ $startX=$bounds.Left+8*$scale;$startY=$bounds.Top+$bounds.Height/2
+ $endX=$first.Left+4*$scale
+ [CapyRowPointer]::Down('mouse',[int]$startX,[int]$startY)
+ try{
+  Walk $startX $startY $endX $startY
+  [CapyRowPointer]::Up()
+ }finally{if([CapyRowPointer]::Active){[CapyRowPointer]::Cancel()}}
+ $committed=@('brushes','layers','adjustments','sizes')
+ Wait-Until {((Drawer-Group $group).tabs.panels -join ',') -eq ($committed -join ',') -and $null -eq (Find-Preview)} 'Drawer reorder did not commit its new order'
+ $after=Drawer-Widths $panels
+ $width=[Math]::Round((Control ('column-drawer-'+(Drawer-Group $group).anchor.column) -Arranged).Current.BoundingRectangle.Width/$scale,2)
+ Capture 'drawer-after-reorder' -Composed
+ Drawer-Style $group 'Icons only' 'icon'
+ Drawer-Style $group 'Automatic' 'automatic'
+ Wait-Until {((Drawer-Group $group).tabs.panels -join ',') -eq ($committed -join ',')} 'Fresh Automatic drawer changed the committed order'
+ $fresh=Drawer-Widths $panels
+ $freshWidth=[Math]::Round((Control ('column-drawer-'+(Drawer-Group $group).anchor.column) -Arranged).Current.BoundingRectangle.Width/$scale,2)
+ $evidence=@{theme=$Theme;group=$group;order=$committed;before=$before;after=$after;fresh=$fresh;drawer_width=$width;fresh_drawer_width=$freshWidth;layout=(Model).state.workspace.layout;fresh_build='Icons only then Automatic reconstructs the native tab strip'}
+ $evidence|ConvertTo-Json -Depth 90|Set-Content (Join-Path $run 'drawer-automatic.json')
+ if([Math]::Abs($width-$freshWidth) -gt 1){throw 'Fresh drawer width differs from the post-drop width'}
+ if(@($panels|Where-Object {[Math]::Abs($before[$_]-$fresh[$_]) -gt 1}).Count -eq 0){throw 'Fresh Automatic names did not change priority after the reorder'}
+ foreach($panel in $panels){if([Math]::Abs($after[$panel]-$fresh[$panel]) -gt 1){throw "Drawer reorder left stale Automatic name width on $panel"}}
+ Capture 'drawer-fresh-order' -Composed
+ & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -StateDirectory $run -Action Close -DiscardUnsaved
+ if(!$review.WaitForExit(15000) -or $review.ExitCode -ne 0){throw 'Drawer review did not close cleanly'}
+ [pscustomobject]@{theme=$Theme;drawer_automatic_reorder='passed';fresh_order_oracle='passed';width=$width;zero_exit='passed'}|ConvertTo-Json
+}
 try{
  Enter-CapyEnvironment
  $env:CAPY_STORAGE_DIR=Join-Path $run 'profile'
@@ -214,6 +294,7 @@ try{
  $baseline=Model
  $normal=$baseline.state.workspace.layout|ConvertTo-Json -Depth 80 -Compress
  $baseline|ConvertTo-Json -Depth 90|Set-Content (Join-Path $run 'before-model.json')
+ if($Journey -like 'drawer-*'){Drawer-Review;return}
  if($Journey -like 'release-*'){
   foreach($script:slideDevice in @('mouse','pen','touch')){
    $position=Start-Slide

@@ -89,8 +89,9 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
         for(auto value:array(data->model,L"panels")){auto panel=value.GetObject();panels[std::wstring(str(panel,L"id"))]=panel;}
         rebuild();
         if(changedModel&&!closing)for(auto& column:columns)if(column.header){
-            auto row=column.header.Children().GetAt(0).as<ScrollViewer>().Content().as<StackPanel>();
-            orderPanelTabs(row,array(object(model,L"tabs"),L"panels"),column.tabs,column.automatic);
+            auto strip=column.header.Children().GetAt(0).as<ScrollViewer>();
+            if(orderPanelTabs(strip.Content().as<StackPanel>(),array(object(model,L"tabs"),L"panels"),column.tabs,column.automatic))
+                fitAutomaticTabs(data,column.automatic,strip.ActualWidth(),tabWidths);
         }
         for(auto const& column:columns)for(auto const& update:column.paintIcons)update();
         for(auto& [panel,body]:bodies)if(body.view)body.view->Apply(active(panel));
