@@ -846,6 +846,7 @@ HeaderView::HeaderView(Dispatch send,Json catalog,NativeLocalization localizatio
     impl->data->popupChanged=std::move(popup);impl->changed=std::move(layout);impl->fullscreen=std::move(fullscreen);impl->newWindow=std::move(newWindow);impl->init();
 }
 HeaderView::~HeaderView()=default;
+void HeaderView::SetCommit(std::function<void(std::string,bool,std::function<void()>)> commit){impl->data->commit=std::move(commit);}
 Grid HeaderView::Root()const{return impl->root;}
 void HeaderView::Apply(Json const& snapshot){impl->apply(snapshot);}
 void HeaderView::SetInsets(float left,float right){if(left!=impl->leftInset||right!=impl->rightInset){impl->leftInset=left;impl->rightInset=right;impl->schedule();}}

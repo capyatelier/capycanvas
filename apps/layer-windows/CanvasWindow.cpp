@@ -516,6 +516,11 @@ bool CanvasWindow::StartPrepared(CapyLaunch  prepared) {
             dispatcher.TryEnqueue([reply,bits]{reply(bits);});
         });});
     workspace->SetWindowId(windowId);
+    auto commit=[weak=weak_from_this()](std::string json,bool document,std::function<void()> ready){
+        if(auto self=weak.lock())self->Send(std::move(json),document?CanvasCommandKind::Document:CanvasCommandKind::Action,
+            [ready=std::move(ready)](int32_t){ready();});
+    };
+    workspace->SetCommit(commit);
     workspace->SetGlassChanged([weak=weak_from_this()]{if(auto self=weak.lock())self->PublishGlass();});
     root.Children().InsertAt(1,workspace->Root());
     auto send=[weak=weak_from_this()](std::string json){if(auto self=weak.lock())self->Send(std::move(json));};
@@ -535,6 +540,7 @@ bool CanvasWindow::StartPrepared(CapyLaunch  prepared) {
             if(auto self=weak.lock())return self->RequestPreviews(kind,std::move(json),std::move(reply));return false;
         },[weak=weak_from_this()](std::string json){if(auto self=weak.lock())self->Send(std::move(json),CanvasCommandKind::Input);},
         [weak=weak_from_this()](std::string json){if(auto self=weak.lock())self->Send(std::move(json),CanvasCommandKind::Document);});
+    header->SetCommit(std::move(commit));
     root.Children().Append(header->Root());
     workspace->AttachOverlays(root,[weak=weak_from_this()]{if(auto self=weak.lock();self&&self->header)self->header->CancelGesture();});
     settings=std::make_unique<SettingsView>(send,model,localization,root.XamlRoot(),
@@ -601,15 +607,7 @@ bool CanvasWindow::RequestPreviews(CanvasQueryKind kind,std::string json,Preview
         auto reservation=state->queries.Acquire();if(!reservation)return false;
         auto ordered=[state,reservation,reply=std::move(reply)](PreviewPacket packet)mutable{
             auto deliver=[reservation,reply=std::move(reply),packet=std::move(packet)]()mutable{reply(std::move(packet));};
-            {
-                std::lock_guard snapshotLock(state->mutex);
-                if(state->pending.Closed())return;
-                auto sequence=state->pending.Sequence();
-                if(!state->pending.IsPosted(sequence)){
-                    state->replies.emplace_back(sequence,std::move(deliver));return;
-                }
-            }
-            deliver();
+            state->Reply(std::move(deliver));
         };
         if(!previewWork.Push(CanvasQuery{kind,std::move(json),std::move(ordered)}))return false;
     }
@@ -1072,7 +1070,16 @@ int CanvasWindow::DispatchWork(CanvasWork const& item,bool retiring) {
     if(auto scroll=std::get_if<CanvasScroll>(&item))
         return retiring||dialogOpen.load()?0:capy_scroll(host,scroll->x,scroll->y,scroll->dx,scroll->dy,scroll->density,scroll->zoom,scroll->horizontal);
     auto const& command=std::get<CanvasCommand>(item);
-    return retiring&&command.kind==CanvasCommandKind::DeviceLoss?0:DispatchCanvasCommand(host,command);
+    auto result=retiring&&command.kind==CanvasCommandKind::DeviceLoss?0:DispatchCanvasCommand(host,command);
+    if(command.reply&&command.kind!=CanvasCommandKind::EdgeContact)completedCommands.emplace_back(command.reply,result);
+    return result;
+}
+void CanvasWindow::CompleteCommands(){
+    if(completedCommands.empty())return;
+    auto deliver=[queue=dispatcher,replies=std::exchange(completedCommands,{})]()mutable{
+        queue.TryEnqueue([replies=std::move(replies)]{for(auto const& [reply,result]:replies)reply(result);});
+    };
+    snapshots->Reply(std::move(deliver));
 }
 void CanvasWindow::Run() {
     try {
@@ -1226,6 +1233,7 @@ void CanvasWindow::Run() {
                 }
                 Publish(std::move(owned.bytes),routing);
             }
+            CompleteCommands();
             if(latencyTrace.enabled&&!probeReady&&result==0&&brushReady) {
                 auto info=capy_surface_info(host);
                 if(!info){Fail(NativeString(capy_error()).get());break;}
@@ -1332,7 +1340,7 @@ void CanvasWindow::SaveAfterGpuFailure(std::string const& reason) {
         }
         space.notify_all();
         for(auto& item:pending)if(auto command=std::get_if<CanvasCommand>(&item)){
-            auto result=DispatchCanvasCommand(host,*command);
+            auto result=DispatchWork(item,true);
             if(result!=0)Fail(NativeString(capy_error()).get());
         }
         if(capy_poll_services(host)<0)throw std::runtime_error(NativeString(capy_error()).get());
@@ -1341,6 +1349,7 @@ void CanvasWindow::SaveAfterGpuFailure(std::string const& reason) {
             NativeString owned(snapshot,capy_string_free);
             Publish(std::move(owned.bytes),routing);
         }
+        CompleteCommands();
         if(query){
             PreviewPacket packet(query->kind==CanvasQueryKind::Workspace?capy_workspace_query(host,query->json.c_str()):0,capy_preview_free);
             query->reply(std::move(packet));

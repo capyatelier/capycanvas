@@ -25,6 +25,7 @@ public:
     void SetTitlebarInsets(float left,float right,float height);
     void SetWindowId(uint64_t id);
     void SetGlassChanged(std::function<void()> changed);
+    void SetCommit(std::function<void(std::string,bool,std::function<void()>)> commit);
     void CanvasContact(bool active);
     void AttachOverlays(winrt::Microsoft::UI::Xaml::UIElement const&,std::function<void()>);
     winrt::Windows::Data::Json::JsonArray DrawerSources() const;

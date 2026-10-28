@@ -1,5 +1,5 @@
-param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme='dark',[ValidateSet('full','preview-dark','preview-light')][string]$Journey='full')
-if($Journey -ne 'full'){$Theme=$Journey -replace '^preview-',''}
+param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme='dark',[ValidateSet('full','preview-dark','preview-light','release-dark','release-light')][string]$Journey='full')
+if($Journey -ne 'full'){$Theme=$Journey -replace '^(preview|release)-',''}
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 $CapyCacheModel=$true;$CapyEach={if($env:CAPY_PRIVATE_DESKTOP){[CapyRowPointer]::VerifyPrivateDesktop($env:CAPY_PRIVATE_DESKTOP)};[CapyCanvasTouch]::Verify()}
@@ -117,9 +117,15 @@ function Start-Slide([double]$Grab=8){
  (Control 'drawing-canvas').SetFocus()
  Invoke 'panel-tab-tool_settings'
  Wait-Until {@((Model).layout.groups|Where-Object {$_.panels -contains 'tool_settings'})[0].active -eq 'tool_settings'} 'Selected preview setup did not select Tool'
+ if($Journey -notlike 'release-*' -and !$script:previewSelectionChecked){
+  Wait-StablePixels {
+   $box=(Control 'panel-tab-tool_settings' -Arranged).Current.BoundingRectangle
+   "$box/$(Screen-Pixels ([int]($box.Left+$box.Width/2)) ([int]($box.Top+$box.Height/2)))"
+  }|Set-Content (Join-Path $run 'selected-stable-pixels.txt')
+  Capture 'selected-before-slide' -Composed
+ }
  $selectedSource=(Control 'panel-tab-tool_settings' -Arranged).Current.BoundingRectangle
  $selectedNeighbor=(Control 'panel-tab-sizes' -Arranged).Current.BoundingRectangle
- if(!$script:previewSelectionChecked){Capture 'selected-before-slide' -Composed}
  Invoke 'panel-tab-sizes'
  Wait-Until {(Current-Group).active -eq 'sizes'} 'Inactive-source setup did not select Brush size'
  $source=(Control 'panel-tab-tool_settings').Current.BoundingRectangle
@@ -128,9 +134,13 @@ function Start-Slide([double]$Grab=8){
   [CapyCanvasTouch]::Down(1,[int]$startX,[int]$startY)
   Start-Sleep -Milliseconds 20
  }else{
-  [CapyRowPointer]::Down('mouse',[int]$startX,[int]$startY)
+  [CapyRowPointer]::Down($(if($script:slideDevice){$script:slideDevice}else{'mouse'}),[int]$startX,[int]$startY)
   Wait-Until {@((Model).layout.groups|Where-Object {$_.panels -contains 'tool_settings'})[0].active -eq 'tool_settings'} 'Mouse down did not select Tool before dragging'
  }
+ Wait-Until {
+  $arranged=(Control 'panel-tab-tool_settings' -Arranged).Current.BoundingRectangle
+  [Math]::Abs($arranged.Left-$selectedSource.Left) -le 1 -and [Math]::Abs($arranged.Width-$selectedSource.Width) -le 1
+ } 'Selected tab did not return to its arranged geometry before pickup'
  $source=$selectedSource
  $finishX=$startX+$selectedNeighbor.Width/2+10*$scale
  Walk $startX $startY $finishX $startY
@@ -138,7 +148,12 @@ function Start-Slide([double]$Grab=8){
  $actual=(Control 'panel-tab-tool_settings').Current.BoundingRectangle
  if([Math]::Abs($actual.Left-$source.Left) -gt 1 -or [Math]::Abs($actual.Width-$source.Width) -gt 1){throw 'Tab preview moved the original hit rectangle'}
  if(((Current-Group).panels -join ',') -ne 'tool_settings,sizes'){throw 'Preview prematurely committed tab order'}
- if(!$script:previewSelectionChecked){
+ if($Journey -notlike 'release-*' -and !$script:previewSelectionChecked){
+  $client=[CapyRowPointer+Point]::new();if(![CapyRowPointer]::ClientToScreen($drawingWindow,[ref]$client)){throw 'Cannot locate preview client'}
+  Wait-StablePixels {
+   $box=(Preview).bounds
+   Screen-Pixels ([int]($client.x+($box.x+$box.width/2)*$scale)) ([int]($client.y+($box.y+$box.height/2)*$scale))
+  }|Set-Content (Join-Path $run 'preview-stable-pixels.txt')
   Capture 'inactive-source-preview' -Composed
   $origin=[CapyRowPointer+Point]::new();if(![CapyRowPointer]::ClientToScreen($drawingWindow,[ref]$origin)){throw 'Cannot locate preview capture'}
   $before=[Drawing.Bitmap]::new((Join-Path $run 'selected-before-slide.png'))
@@ -172,7 +187,7 @@ try{
  [IO.File]::WriteAllText((Join-Path $repo 'artifacts/windows/tab-drag-review.json'),(@{process_id=$review.Id;run=$run}|ConvertTo-Json))
  Write-Output "Owned tab review $($review.Id)"
  $native=@{window=$null}
- Wait-Until {$native.window=Owned-DrawingWindow $review;$native.window -and (Model).brush_ready} 'Review did not start' 75
+ Wait-Until {$native.window=Owned-DrawingWindow $review;$native.window -and (Model).brush_ready -and (Model).windows_workspace.ready -and !(Model).windows_workspace.busy} 'Review did not start' 75
  $drawingWindow=$native.window.Handle;$root=$native.window.Root
  [CapyCanvasTouch]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
  [CapyWindowApi]::ShowWindow($drawingWindow,3)|Out-Null
@@ -181,10 +196,44 @@ try{
  if($Journey -ne 'full'){[CapyRowPointer]::Initialize([uint32]$review.Id)}
  $scale=[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.
  if($scale -le 0 -or [double]::IsNaN($scale) -or [double]::IsInfinity($scale)){throw 'Invalid run: owned window DPI is unavailable'}
+ $viewportProof=@{}
+ try{Wait-Until {
+  $nativeBounds=[CapyRowPointer+Rect]::new()
+  if(![CapyRowPointer]::GetClientRect($drawingWindow,[ref]$nativeBounds)){return $false}
+  $viewport=(Model).layout.viewport
+  $width=($nativeBounds.right-$nativeBounds.left)/$scale;$height=($nativeBounds.bottom-$nativeBounds.top)/$scale
+  $viewportProof.native=@($width,$height);$viewportProof.shared=$viewport;$viewportProof.dpi=96*$scale
+  [Math]::Abs($width-$viewport[0]) -le 1 -and [Math]::Abs($height-$viewport[1]) -le 1
+ } 'Maximized native workspace did not match its shared viewport'}
+ finally{$viewportProof|ConvertTo-Json|Set-Content (Join-Path $run 'maximized-viewport.json')}
  Start-Sleep -Milliseconds 350
  $baseline=Model
  $normal=$baseline.state.workspace.layout|ConvertTo-Json -Depth 80 -Compress
  $baseline|ConvertTo-Json -Depth 90|Set-Content (Join-Path $run 'before-model.json')
+ if($Journey -like 'release-*'){
+  foreach($script:slideDevice in @('mouse','pen','touch')){
+   $position=Start-Slide
+   $retainedSource=(Control 'panel-tab-tool_settings').GetRuntimeId() -join ':'
+   $retainedNeighbor=(Control 'panel-tab-sizes').GetRuntimeId() -join ':'
+   $retainedField=(Control 'Brush size' -Name).GetRuntimeId() -join ':'
+   Capture "before-release-$slideDevice" -Composed
+   [CapyRowPointer]::Up()
+   Wait-Until {$null -eq (Find-Preview)} 'Drop preview did not hand over to the committed layout'
+   $shown=Presentation
+   if($shown.workspace_update.drag){throw 'Drop exposed the original controls before the final workspace publication'}
+   Wait-Until {((Current-Group).panels -join ',') -eq 'sizes,tool_settings'} 'Release did not commit the preview insertion'
+   foreach($target in @(@('panel-tab-tool_settings',$retainedSource),@('panel-tab-sizes',$retainedNeighbor),@('Brush size',$retainedField))){
+    $control=Control $target[0] -Name:($target[0] -eq 'Brush size')
+    if(($control.GetRuntimeId() -join ':') -ne $target[1]){throw "Drop replaced retained control $($target[0])"}
+   }
+   Capture "after-release-$slideDevice" -Composed
+   Undo-Workspace
+  }
+  & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -StateDirectory $run -Action Close -DiscardUnsaved
+  if(!$review.WaitForExit(15000) -or $review.ExitCode -ne 0){throw 'Release review did not close cleanly'}
+  @{theme=$Theme;devices=@('mouse','pen','touch');retained_tabs='passed';retained_content='passed';committed_handoff='passed'}|ConvertTo-Json
+  return
+ }
  $position=Start-Slide
  Capture 'attached' -Composed
  if($Journey -ne 'full'){

@@ -5,6 +5,7 @@
 #include "WorkspaceTabDrag.h"
 #include "WorkspaceGeometry.h"
 #include "NativeMenus.h"
+#include "NativePresentation.h"
 #include <winrt/Microsoft.UI.Composition.h>
 #include <winrt/Microsoft.UI.Xaml.Hosting.h>
 #include <chrono>
@@ -27,6 +28,7 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
     std::vector<weak_ref<FrameworkElement>> tabs;
     std::vector<weak_ref<UIElement>> pressedPath;
     std::unique_ptr<WorkspaceTabDrag> tabSlide;
+    NativePresentation presentation;
     J tabCapture;
     std::vector<std::pair<weak_ref<UIElement>,ManipulationModes>> scrollModes;
     std::vector<std::pair<weak_ref<ScrollViewer>,event_token>> scrollObservers;
@@ -370,13 +372,13 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
         return result;
     }
     // Every input phase remains ordered; only published presentation is replaceable.
-    void send(hstring phase){
+    void send(hstring phase,std::function<void()> ready={}){
         if(str(action,L"type")==L"tile_drag")return;
         auto next=J::Parse(action.Stringify());
         next.Insert(L"phase",S(phase));next.Insert(L"position",point(position));next.Insert(L"viewport",viewport());
         if(str(action,L"type")==L"drag_workspace")next.Insert(L"tabs",tabHits());
         if(phase==L"down"&&tabCapture.Size())next=O({{L"windows_tab_drag",tabCapture},{L"action",next}});
-        data->dispatch(next);
+        data->dispatch(next,std::move(ready));
     }
     void restoreScrolling(){
         for(auto const& [weak,token]:scrollObservers)if(auto scroll=weak.get())scroll.DirectManipulationStarted(token);
@@ -407,6 +409,7 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
         else dragCursor(root,device==NativeInput::PointerDeviceType::Touch,dragging,held);
     }
     void clear(bool closeMenu=true){
+        presentation.Cancel();
         contactToken=0;
         ++generation;pointer.reset();contact=nullptr;held=false;dragging=false;finishing=false;dirty=false;
         stopRecognition();
@@ -424,7 +427,7 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
         // particular, a menu action may be followed immediately by UIA Invoke.
         if(pointer||dragging)ignoreClick=suppressClick;
         if(contact&&suppressClick){releasing=true;releaseCaptures(pressedPath,contact);releasing=false;}
-        if(dragging)send(L"cancel");
+        if(dragging&&!finishing)send(L"cancel");
         clear();return true;
     }
     bool cancelAll(hstring reason=L"cancel"){
@@ -591,6 +594,13 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
         if(str(action,L"type")==L"tile_drag"){
             finishing=true;dirty=true;dropQuery();
             releasing=true;root.ReleasePointerCaptures();releasing=false;pointer.reset();contact=nullptr;
+        }else if(str(action,L"type")==L"drag_workspace"&&tabCapture.Size()){
+            finishing=true;timer.Stop();hint.Visibility(Visibility::Collapsed);
+            auto serial=generation;
+            send(L"up",[weak=weak_from_this(),serial]{if(auto self=weak.lock();self&&self->generation==serial){
+                self->presentation.AfterLayout([weak,serial]{if(auto self=weak.lock();self&&self->generation==serial)self->clear();});
+            }});
+            releasing=true;root.ReleasePointerCaptures();releasing=false;pointer.reset();contact=nullptr;
         }else{send(L"up");clear();}
         e.Handled(true);evidence();
     }
@@ -652,7 +662,7 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
         place(hint,bounds);hint.Visibility(Visibility::Visible);
     }
     void present(J const& drag){
-        if(!dragging||str(action,L"type")!=L"drag_workspace")return;
+        if(!dragging||finishing||str(action,L"type")!=L"drag_workspace")return;
         tabSlide->Update(object(drag,L"tab"));tabSlide->Refresh(tabs);
         showHint(object(drag,L"drop_hint"));
         evidence();

@@ -1,5 +1,7 @@
-﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet("F16","F32")][string]$Depth="F16",[switch]$DrawingTabsOnly,[switch]$ControlsOnly,[ValidateSet('dark','light')][string]$Theme='dark')
+﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet("F16","F32")][string]$Depth="F16",[switch]$DrawingTabsOnly,[switch]$ControlsOnly,[ValidateSet('dark','light')][string]$Theme='dark',[ValidateSet('full','tab-drop-dark','tab-drop-light')][string]$Journey='full')
 $ErrorActionPreference='Stop'
+$tabDropOnly=$Journey -ne 'full'
+if($tabDropOnly){$DrawingTabsOnly=$true;$Theme=$Journey -replace '^tab-drop-',''}
 if($ControlsOnly -and !$PSBoundParameters.ContainsKey('Theme')){
  foreach($theme in @('dark','light')){& $PSCommandPath -Executable $Executable -Depth $Depth -ControlsOnly -Theme $theme}
  return
@@ -389,15 +391,21 @@ try {
  Wait-Until {(Find 'drawing-tab-1') -and (Find 'drawing-tab-2') -and (Model).windows_tabs.available} 'Full native drawing strip did not appear'
  if(!$DrawingTabsOnly -and !$ControlsOnly -and !(Control 'drawing-tab-1').Current.Name.StartsWith('• ')){throw 'Dirty tab lacks the unsaved marker'}
  if(!$ControlsOnly){
+ if(!$tabDropOnly){
  (Control 'drawing-tab-2').SetFocus()
  [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),0x21)
  Wait-Until {(Model).windows_tabs.selected -eq 1 -and (Model).windows_tabs.available} 'Ctrl+PgUp did not select the previous drawing' 60
  [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),0x22)
  Wait-Until {(Model).windows_tabs.selected -eq 2 -and (Model).windows_tabs.available -and (Model).brush_ready -and ($DrawingTabsOnly -or (Model).windows_display.analysis.ready)} 'Ctrl+PgDn did not return to the drawing' 60
+ }
  if($DrawingTabsOnly){
   Command 'new_document' 'File';Set-Text 'document-width' '32';Set-Text 'document-height' '24';Button 'Create';Idle
   Wait-Until {@((Model).windows_tabs.tabs).Count -eq 3 -and (Model).windows_tabs.available -and (Model).brush_ready} 'Third clean drawing did not become ready' 60
  }
+ if(!$tabDropOnly){
+ $keyboardTarget=Find 'drawing-selector'
+ if(!$keyboardTarget -or $keyboardTarget.Current.IsOffscreen){$keyboardTarget=Control ('drawing-tab-'+(Model).windows_tabs.selected) -Arranged}
+ Focus-Keyboard $keyboardTarget
  [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11,0x10),0x41)
  Wait-Until {(Find 'drawing-list') -and (Find 'drawing-row-close-1')} 'Ctrl+Shift+A did not open the drawing selector'
  [CapyRowPointer]::Key([uint32]$review.Id,0x1B);Wait-Until {!(Find 'drawing-list')} 'Drawing selector did not close'
@@ -406,6 +414,7 @@ try {
   Wait-Until {$selector.Current.ItemStatus -eq 'Closed'} 'Initial drawing popup did not acknowledge closure'
   [CapyWindowApi]::ShowWindow($drawingWindow,3)|Out-Null
   $null=Control 'drawing-tab-1' -Arranged
+ }
  }
  $tabWidget=(Control 'drawing-tab-1').GetRuntimeId() -join ':'
  $tabStrip=Control 'drawing-tabs' -Arranged
@@ -416,6 +425,7 @@ try {
   $from=(Control 'drawing-tab-1' -Within $tabStrip).Current.BoundingRectangle;$to=(Control 'drawing-tab-2' -Within $tabStrip).Current.BoundingRectangle
   $dpi=[CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4));[CapyRowPointer]::Initialize([uint32]$review.Id)
   try {
+   if(!$tabDropOnly){
    if($DrawingTabsOnly){
     $scale=[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.
     if($scale -le 0 -or [double]::IsNaN($scale) -or [double]::IsInfinity($scale)){throw 'Invalid run: owned drawing DPI is unavailable'}
@@ -550,9 +560,19 @@ try {
    Wait-Until {$tabStrip.Current.ItemStatus -eq 'Ready'} 'Detached release retained capture'
    Start-Sleep -Milliseconds 300
    if(((Model).windows_tabs.tabs.id -join ',') -ne $beforeOrder){throw 'Releasing outside the strip changed order'}
+   }
    Write-Output "$device phase: committed reorder"
    [CapyRowPointer]::Down($device,[int]($from.X+$from.Width/2),[int]($from.Y+$from.Height/2))
-   [CapyRowPointer]::Move([int]($to.X+$to.Width-8),[int]($to.Y+$to.Height/2));[CapyRowPointer]::Up()
+   [CapyRowPointer]::Move([int]($to.X+$to.Width-8),[int]($to.Y+$to.Height/2))
+   Wait-Until {$tabStrip.Current.ItemStatus -eq 'Dragging'} 'Committed tab drag was not admitted inside the strip'
+   $committedSlide=@{value=$null}
+   Wait-Until {$committedSlide.value=(Control 'drawing-tab-slide' -Within $tabStrip).Current.ItemStatus|ConvertFrom-Json;$committedSlide.value.attached -and $committedSlide.value.offsets[1] -lt 0} 'Committed tab drag did not preview the reordered neighbor'
+   [CapyRowPointer]::Up()
+   Wait-Until {$tabStrip.Current.ItemStatus -eq 'Ready'} 'Drawing-tab drop did not finish its native presentation'
+   $releasedSource=(Control 'drawing-tab-1' -Within $tabStrip).Current.BoundingRectangle
+   $releasedNeighbor=(Control 'drawing-tab-2' -Within $tabStrip).Current.BoundingRectangle
+   @{device=$device;source=$releasedSource.ToString();neighbor=$releasedNeighbor.ToString()}|ConvertTo-Json|Set-Content (Join-Path $run ($device+'-tab-release.json'))
+   if($releasedSource.Left -le $releasedNeighbor.Left){throw 'Drawing-tab release exposed the original order before arranging its committed layout'}
    Wait-Until {((Model).windows_tabs.tabs.id -join ',') -eq $expectedReorder} 'A native tab drag did not produce the expected order on release'
   if(((Control 'drawing-tab-1' -Within $tabStrip).GetRuntimeId() -join ':') -ne $tabWidget){throw 'Reorder rebuilt the native tab'}
   Write-Output "$device phase: order history"
@@ -580,6 +600,10 @@ try {
   if(!$review.WaitForExit(15000)){throw 'Owned drawing-tabs review did not close'}
   if($review.ExitCode -ne 0){throw "Owned drawing-tabs review exited $($review.ExitCode)"}
   if((Get-Item (Join-Path $run 'stderr.log')).Length){throw 'Drawing-tabs stderr requires inspection'}
+  if($tabDropOnly){
+   @{theme=$Theme;devices=@('mouse','touch','pen');arranged_handoff='passed';retained_tabs='passed';reorder_history='passed';zero_exit='passed';scope='Normal-document tab drops; physical input and latency unverified'}|ConvertTo-Json|Tee-Object -FilePath (Join-Path $run 'results.json')
+   return
+  }
   @{theme=$Theme;devices=@('mouse','touch','pen');short_taps='passed';near_edge_outside_release='passed';context_release_and_dismissal='passed';compact_list_taps_context='passed';pen_drift='passed';drag_cancel_outside='passed';fast_leave_and_fresh_tap='passed';reorder_history='passed';zero_exit='passed';scope='Normal-document native input; physical digitizers, HDR and latency unverified'}|ConvertTo-Json|Tee-Object -FilePath (Join-Path $run 'results.json')
   return
  }

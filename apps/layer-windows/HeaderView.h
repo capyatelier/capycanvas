@@ -18,6 +18,7 @@ public:
     void SetInsets(float left,float right);
     void SetFullscreen(bool active);
     void SetBlocked(bool blocked);
+    void SetCommit(std::function<void(std::string,bool,std::function<void()>)> commit);
     bool Key(winrt::Microsoft::UI::Xaml::Input::KeyRoutedEventArgs const& event,bool pressed);
     bool CancelGesture();
     void CancelNativeContacts();

@@ -118,11 +118,10 @@ try {
     $null=[CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4))
     $null=[CapyWindowApi]::ShowWindow($drawingWindow,3)
     $null=[CapyRowPointer]::SetForegroundWindow($drawingWindow)
-    $root.SetFocus()
     [CapyRowPointer]::Initialize([uint32]$review.Id)
     foreach($panel in @('properties','layers')){
         if(@((Model).layout.collapsed|Where-Object {$_.groups.icons.panel -contains $panel}).Count){
-            (Control ('column-icon-'+$panel)).SetFocus();[CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x10),0x79)
+            (Control ('column-icon-'+$panel) -Arranged).SetFocus();[CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x10),0x79)
             Wait-Until {$null -ne (Find 'Expand column' -Name)} 'Initial column setup did not expose Expand column'
             Invoke 'Expand column' -Name
             Wait-Until {@((Model).layout.collapsed|Where-Object {$_.groups.icons.panel -contains $panel}).Count -eq 0} 'Initial column setup did not expand'
@@ -137,26 +136,26 @@ try {
     Drifting-TabTaps 'panel-tab-' @('sizes','tool_settings')
     $before=Tab-Placement
     $script:case='drawer-setup-collapse'
-    (Control 'panel-tab-properties').SetFocus();[CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x10),0x79)
+    (Control 'panel-tab-layers' -Arranged).SetFocus();[CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x10),0x79)
     Wait-Until {$null -ne (Find 'Collapse column' -Name)} 'Column setup menu did not expose Collapse column'
     Invoke 'Collapse column' -Name
-    Wait-Until {$null -ne (Find 'column-icon-properties')} 'Properties column did not collapse'
-    (Control 'column-icon-properties').SetFocus();[CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x10),0x79)
+    Wait-Until {$null -ne (Find 'column-icon-layers')} 'Layers column did not collapse'
+    (Control 'column-icon-layers' -Arranged).SetFocus();[CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x10),0x79)
     Wait-Until {$null -ne (Find 'Open individual panels' -Name)} 'Column setup menu did not expose individual panels'
     $toggle=(Control 'Open individual panels' -Name).GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)
     if($toggle.Current.ToggleState -eq [System.Windows.Automation.ToggleState]::Off){$toggle.Toggle()}
     [CapyRowPointer]::Key(0x1b)
-    Tap 'column-icon-properties'
-    Wait-Until {$null -ne (Find 'drawer-tab-adjustments')} 'Properties drawer did not expose its tabs'
-    Invoke 'drawer-tab-properties'
-    Wait-Until {@((Model).state.customization.column_drawers|Where-Object {$_.tabs.active -eq 'properties'}).Count -eq 1} 'Drawer did not select its initial Properties tab'
-    Drifting-TabTaps 'drawer-tab-' @('adjustments','properties') -Drawer
+    Tap 'column-icon-layers'
+    Wait-Until {$null -ne (Find 'drawer-tab-adjustments')} 'Layers drawer did not expose its tabs'
+    Invoke 'drawer-tab-layers'
+    Wait-Until {@((Model).state.customization.column_drawers|Where-Object {$_.tabs.active -eq 'layers'}).Count -eq 1} 'Drawer did not select its initial Layers tab'
+    Drifting-TabTaps 'drawer-tab-' @('adjustments','layers') -Drawer
     $script:case='drawer-setup-restore'
     for($undo=0;(Tab-Placement) -ne $before -and $undo -lt 16;$undo++){
         $previous=(Model).state.workspace|ConvertTo-Json -Depth 80 -Compress;Workspace-History 'undo_workspace'
         Wait-Until {((Model).state.workspace|ConvertTo-Json -Depth 80 -Compress) -ne $previous} 'Drawer setup Undo did not finish'
     }
-    Wait-Until {(Tab-Placement) -eq $before -and $null -ne (Find 'panel-tab-properties')} 'Drawer tap fixture did not restore the docked column'
+    Wait-Until {(Tab-Placement) -eq $before -and $null -ne (Find 'panel-tab-layers')} 'Drawer tap fixture did not restore the docked column'
     Tear-Off 'layers'
     Tear-Off 'layers' -Cancel
     Tear-Off 'tool_settings' -Gradual

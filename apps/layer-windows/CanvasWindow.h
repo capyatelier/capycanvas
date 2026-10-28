@@ -141,6 +141,15 @@ private:
         std::string layoutInputBytes;
         NativeLayoutInput layoutInput;
         void Close(){pending.Close();replies.clear();}
+        void Reply(std::function<void()> deliver){
+            {
+                std::lock_guard lock(mutex);
+                if(pending.Closed())return;
+                auto publication=pending.Sequence();
+                if(!pending.IsPosted(publication)){replies.emplace_back(publication,std::move(deliver));return;}
+            }
+            deliver();
+        }
     };
     struct PreparedSnapshots {
         winrt::Windows::Data::Json::JsonObject full{nullptr},layout{nullptr},workspace{nullptr},camera{nullptr},search{nullptr},localization{nullptr},glass{nullptr};
@@ -150,6 +159,8 @@ private:
     bool glassPosted=false;
     void UpdateNavigationCursor();
     void Publish(std::string snapshot, CapySnapshotInfo const& info);
+    std::vector<std::pair<std::function<void(int32_t)>,int32_t>> completedCommands;
+    void CompleteCommands();
     void QueueSnapshots();
     static winrt::fire_and_forget DecodeSnapshots(std::shared_ptr<SnapshotState>,
         winrt::Microsoft::UI::Dispatching::DispatcherQueue,std::weak_ptr<CanvasWindow>,CanvasSnapshotMailbox::Batch);

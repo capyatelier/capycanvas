@@ -72,7 +72,8 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
     void apply(J const& current,hstring const& layout){
         if(disposed)return;
         auto next=current.Size()?current.Stringify():hstring{};
-        if(next!=modelKey){
+        bool changedModel=next!=modelKey;
+        if(changedModel){
             bool pageChange=inspector&&current.HasKey(L"layer_properties")&&model.HasKey(L"layer_properties")&&flag(current,L"layer_properties")!=flag(model,L"layer_properties");
             from=object(geometry,L"placement");started=Clock::now();animating=true;
             modelKey=next;closing=!current.Size();if(!closing)model=current;
@@ -87,6 +88,10 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
 
         for(auto value:array(data->model,L"panels")){auto panel=value.GetObject();panels[std::wstring(str(panel,L"id"))]=panel;}
         rebuild();
+        if(changedModel&&!closing)for(auto& column:columns)if(column.header){
+            auto row=column.header.Children().GetAt(0).as<ScrollViewer>().Content().as<StackPanel>();
+            orderPanelTabs(row,array(object(model,L"tabs"),L"panels"),column.tabs,column.automatic);
+        }
         for(auto const& column:columns)for(auto const& update:column.paintIcons)update();
         for(auto& [panel,body]:bodies)if(body.view)body.view->Apply(active(panel));
         if(inspector&&model.HasKey(L"layer_properties")){inspector->properties->Apply(flag(model,L"layer_properties"));refreshInspector();if(inspectorSizingKey()!=inspector->sizingKey)wake();}
@@ -208,17 +213,19 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
             }
             signature.Append(items);
         }
-        A headers;for(auto value:array(object(model,L"tabs"),L"panels")){
-            auto panel=panels.find(std::wstring(value.GetString()));if(panel==panels.end())continue;
+        auto tabs=object(model,L"tabs"),tabStructure=J::Parse(tabs.Stringify());if(tabStructure.HasKey(L"active"))tabStructure.Remove(L"active");
+        A headers,ids;for(auto const& id:panelTabIds(array(tabs,L"panels"))){
+            ids.Append(S(id));
+            auto panel=panels.find(std::wstring(id));if(panel==panels.end())continue;
             headers.Append(O({{L"title",S(str(panel->second,L"title"))},{L"icon",S(str(panel->second,L"icon"))}}));
         }
-        auto key=O({{L"columns",signature},{L"tabs",object(model,L"tabs")},{L"headers",headers}}).Stringify();
+        if(tabStructure.Size())tabStructure.Insert(L"panels",ids);
+        auto nextTabsKey=O({{L"tabs",tabStructure},{L"headers",headers},{L"style",S(str(object(data->model,L"windows_tab_styles"),to_hstring(uint32_t(num(tabs,L"group"))).c_str()))}}).Stringify();
+        auto key=O({{L"columns",signature},{L"tabs",S(nextTabsKey)}}).Stringify();
         if(key==columnsKey){placeColumns();return;}
         columnsKey=key;
         if(inspector)inspector->pages.Children().Clear();
         if(!model.HasKey(L"layer_properties"))inspector.reset();
-        auto tabs=object(model,L"tabs"),tabStructure=J::Parse(tabs.Stringify());if(tabStructure.HasKey(L"active"))tabStructure.Remove(L"active");
-        auto nextTabsKey=O({{L"tabs",tabStructure},{L"headers",headers},{L"style",S(str(object(data->model,L"windows_tab_styles"),to_hstring(uint32_t(num(tabs,L"group"))).c_str()))}}).Stringify();
         auto previous=std::move(columns);columns.clear();
         for(auto& column:previous){
             column.stack.Children().Clear();column.scroll.Content(nullptr);column.panels.clear();

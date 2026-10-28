@@ -238,7 +238,7 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 | Attached filter drag inside a clipping run | 120 | **Not met.** 93.24–102.71 native UI fps; moving-frame gap p99 25.00–33.33 ms | [Filter attachment feedback](#filter-attachment-feedback), 2026-10-04 |
 | Navigation with 32 visible paint layers | 120 | | |
 | Drawing with 32 visible paint layers, G-Pen 1024 px | 120 | | |
-| Panel, tab, column or toolbar drag and docking | 120 | **Not met.** Toolbar or component drag 103–119 fps. Revised GTK chrome handoff: one short desktop group drag gives 120.00 presents/s, p99 9.301 ms; the next tab pickup fails. Short tab probes give 110.79–120.02 presents/s, with one touch trial below the floor. Reference-tier qualification remains open | `dc27e04d`, 2026-09-23; [GTK panel-tab input diagnostic](#gtk-panel-tab-input-diagnostic), [tab-hover diagnostic](#gtk-tab-hover-diagnostic), [panel-tab compositing](#panel-tab-compositing) and [GTK column bridge diagnostic](#gtk-column-bridge-diagnostic), 2026-10-24–25 |
+| Panel, tab, column or toolbar drag and docking | 120 | **Not met on reference hardware.** Toolbar or component drag 103–119 fps. Latest GTK desktop tab-drop comparison: 119.568–120.007 → 119.573–120.007 presents/s; final gap p99 ≤9.434 ms. Windows software-adapter drop checks provide no frame-rate measurement. Reference-tier qualification remains open | `dc27e04d`, 2026-09-23; [GTK tab drops](#gtk-tab-drops), [Windows tab drops](#windows-tab-drops), 2026-10-27; [GTK column bridge diagnostic](#gtk-column-bridge-diagnostic), 2026-10-25 |
 | Android palette pill opening at the work-area edge | 120 | **FPS unqualified.** Instant clamp; two actual presents per opening, all neighbors stationary in the diagnostic | [Native palette opening](#native-palette-opening), 2026-10-23 |
 | Android tool bubble drag through four neighbours | 120 | **Unqualified after the bubble release fixes.** Previous parity build: 115.00–116.55 actual app-window presents/s; p99 ≤16.667447 ms, default glass, 61 MP photo at Fit | [Native tool bubbles](#native-tool-bubbles), 2026-10-24 |
 | Web tool bubble drag through four neighbours | 120 | Unmeasured after the bubble release fixes; desktop browser journeys do not qualify the reference tablet | [Web checks](../development/web.md#tests), 2026-10-24 |
@@ -4722,6 +4722,19 @@ preserve the existing frame-rate gate; they do not qualify the reference tier,
 tier photo or sustained-motion target.
 [Metrics, commands and provenance](../../artifacts/gtk-tab-drop.local/verification-summary.json)
 retain the baseline regression and corrected fixture failures too.
+
+## Windows tab drops
+
+The 2026-10-27 Windows 11 VM uses WARP at 2560 × 1600 and 150% scale.
+The Release candidate on `fed245d94` passes panel and drawing-tab drops with
+mouse, pen and touch in both themes. Native controls survive reordering, and
+the preview remains until the committed layout is arranged. These are injected
+input and native-presentation checks, not physical input or displayed FPS.
+
+No hardware timing comparison is available: the Windows GPU pool was reserved
+by other sessions. The 120 Hz target remains unqualified. Frozen build identities,
+baseline failures and per-journey captures are retained in
+`artifacts/windows-tab-drop.local/` and the VM's `20261027-185409` evidence.
 
 ## Panel-tab compositing
 

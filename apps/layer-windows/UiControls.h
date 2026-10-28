@@ -273,6 +273,7 @@ struct WorkspaceData : std::enable_shared_from_this<WorkspaceData> {
     int popupCount=0;
     void popup(bool open){popupCount=std::max(0,popupCount+(open?1:-1));if(popupChanged)popupChanged(popupCount>0);}
     std::function<void(std::string)> send,document,input;
+    std::function<void(std::string,bool,std::function<void()>)> commit;
     std::function<void(std::string,std::function<void(int32_t)>)> edges;
     std::function<bool(uint32_t)> edgeHolding,cancelEdge;
     J chrome=O({{L"held",B(false)},{L"dragging",B(false)},{L"popup_open",B(false)}});
@@ -362,7 +363,10 @@ struct WorkspaceData : std::enable_shared_from_this<WorkspaceData> {
         auto resolve=[weak=weak_from_this(),key=std::wstring(key)]{if(auto data=weak.lock())return data->delivery(key.c_str());return hstring();};
         return {resolve(),resolve};
     }
-    void dispatch(J const& action) const {send(to_string(action.Stringify()));}
+    void dispatch(J const& action,std::function<void()> ready={}) const {
+        auto json=to_string(action.Stringify());
+        if(ready)commit(std::move(json),false,std::move(ready));else send(std::move(json));
+    }
     void dispatchDocument(J const& action,hstring const& epoch) const {
         dispatch(O({{L"windows_epoch",S(epoch)},{L"action",action}}));
     }

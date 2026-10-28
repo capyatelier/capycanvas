@@ -76,6 +76,7 @@
     <ClInclude Include="NavigationCursors.h" />
     <ClInclude Include="IntensityImage.h" />
     <ClInclude Include="ChromeVisibility.h" />
+    <ClInclude Include="NativePresentation.h" />
     <ClInclude Include="CanvasSurfaceState.h" />
     <ClInclude Include="PanelBridgeSurface.h" />
     <ClInclude Include="ChoiceFeedback.h" />

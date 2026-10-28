@@ -86,6 +86,7 @@ public static class CapyRowPointer {
  [DllImport("user32.dll")] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
  [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr window,ref Point point);
  [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr window);
+ [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr window,out Rect rect);
  static long lastInjection,contactDown;public static double MaxGapMilliseconds {get;private set;}
  public static double ContactDurationMilliseconds {get;private set;}
  static uint owner,kind,penButtons,mouseRelease;static int tiltX,tiltY;static bool active,hovering,eraserEnd;static Point last;static IntPtr pen;

@@ -117,7 +117,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         std::array<float,4> corners{SurfaceRadius,SurfaceRadius,SurfaceRadius,SurfaceRadius};
         Border footer{nullptr};
         std::wstring key;
-        hstring tabKey;
+        hstring tabKey,tabsPresentationKey;
         J geometry,presented;
         Windows::Foundation::Point offset{};
         TranslateTransform translation;
@@ -240,8 +240,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         uint32_t index=0;if(!gestures->DeferRemoval(group.frame,std::move(owner))&&root.Children().IndexOf(group.frame,index))root.Children().RemoveAt(index);
         if(root.Children().IndexOf(group.shadow.Root(),index))root.Children().RemoveAt(index);
     }
-    void build(Group& group,J const& geometry,J const& panel){
-        group.body.reset();group.footer=nullptr;group.backgroundKey=L"";
+    void buildTabs(Group& group,J const& geometry){
         auto groupItem=O({{L"kind",S(L"group")},{L"group",N(num(geometry,L"id"))}});
         float fit=groupRadius(geometry)*CornerFit;group.border.Background(clear());group.border.CornerRadius(CornerRadius{fit,fit,fit,fit});
         if(!group.layout){
@@ -256,10 +255,9 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         auto frame=group.layout;
         frame.RowDefinitions().GetAt(0).Height({flag(geometry,L"tabs_visible")?36.:0.,GridUnitType::Pixel});
         frame.RowDefinitions().GetAt(2).Height({num(object(geometry,L"footer_grip"),L"height"),GridUnitType::Pixel});
-        while(frame.Children().Size()>1)frame.Children().RemoveAtEnd();
-        A members;for(auto value:array(geometry,L"panels")){
-            auto model=find(array(data->model,L"panels"),L"id",value.GetString());
-            members.Append(O({{L"id",value},{L"icon",S(str(model,L"icon"))}}));
+        A members;for(auto const& id:panelTabIds(array(geometry,L"panels"))){
+            auto model=find(array(data->model,L"panels"),L"id",id);
+            members.Append(O({{L"id",S(id)},{L"icon",S(str(model,L"icon"))}}));
         }
         auto tabKey=O({{L"members",members},{L"style",S(str(object(data->model,L"windows_tab_styles"),to_hstring(uint32_t(num(geometry,L"id"))).c_str()))}}).Stringify();
         if(group.tabKey!=tabKey){
@@ -323,14 +321,23 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         for(auto const& [id,shell]:group.tabs){
             auto tab=shell.Children().GetAt(1).as<Button>();
             auto model=find(array(data->model,L"panels"),L"id",hstring(id));auto presentation=object(model,L"tab");
-            auto label=tab.Content().as<StackPanel>();
+            auto title=str(model,L"title");AutomationProperties::SetName(tab,title);tooltip(tab,title);
+            auto label=tab.Content().as<StackPanel>();label.Children().GetAt(1).as<TextBlock>().Text(title);
+            for(auto& automatic:group.automatic)if(automatic.tab==tab)automatic.key=id+L"\n"+std::wstring(title)+L"\n"+std::to_wstring(data->textSize());
             label.Children().GetAt(0).Visibility(fitted||flag(presentation,L"show_icon")?Visibility::Visible:Visibility::Collapsed);
             if(!fitted)label.Children().GetAt(1).Visibility(flag(presentation,L"show_name")?Visibility::Visible:Visibility::Collapsed);
             bool selected=hstring(id)==str(geometry,L"active");
             selectPanelTabShell(shell,selected,nullptr,presentation);
             if(selected)group.activeTab=shell;
         }
+        orderPanelTabs(group.tabLabels,array(geometry,L"panels"),group.tabs,group.automatic);
         if(group.tabScroll&&group.tabScroll.ActualWidth()>0)fitAutomaticTabs(data,group.automatic,group.tabScroll.ActualWidth(),tabWidths);
+    }
+    void build(Group& group,J const& geometry,J const& panel){
+        group.body.reset();group.footer=nullptr;group.backgroundKey=L"";
+        buildTabs(group,geometry);
+        auto frame=group.layout;
+        while(frame.Children().Size()>1)frame.Children().RemoveAtEnd();
         group.body=std::make_unique<PanelBody>(data,panel,geometry,
             [weak=weak_from_this()]{if(auto self=weak.lock())self->measured();},gestures);
         auto body=group.body->Root();
@@ -534,26 +541,21 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             // Geometry-only changes retain controls, focus, capture and scroll.
             if(full||added||!group.body){
             auto structure=J::Parse(geometry.Stringify());
-            for(auto field:{L"bounds",L"resize_handles",L"tiles",L"footer_grip",L"min_body_height",L"zen_kept",L"scrolls"})if(structure.HasKey(field))structure.Remove(field);
+            for(auto field:{L"bounds",L"resize_handles",L"tiles",L"footer_grip",L"min_body_height",L"zen_kept",L"scrolls",L"panels"})if(structure.HasKey(field))structure.Remove(field);
             if(auto tiles=object(geometry,L"tiles");tiles.Size())structure.Insert(L"tile_style",S(str(tiles,L"tile_style")));
             structure.Insert(L"footer",B(object(geometry,L"footer_grip").Size()!=0));
             J signature=O({{L"geometry",structure},{L"panel",panelStructure(panel)}});
             A headers;for(auto member:array(geometry,L"panels")){
-                auto panelModel=find(array(model,L"panels"),L"id",member.GetString());
-                headers.Append(O({{L"id",S(str(panelModel,L"id"))},{L"icon",S(str(panelModel,L"icon"))},{L"tab",object(panelModel,L"tab")}}));
-            }signature.Insert(L"headers",headers);signature.Insert(L"tab_style",S(str(object(model,L"windows_tab_styles"),to_hstring(id).c_str())));
+                auto model=find(array(data->model,L"panels"),L"id",member.GetString());
+                headers.Append(O({{L"id",member},{L"title",S(str(model,L"title"))},{L"icon",S(str(model,L"icon"))},{L"tab",object(model,L"tab")}}));
+            }
+            auto tabsPresentationKey=O({{L"headers",headers},{L"style",S(str(object(data->model,L"windows_tab_styles"),to_hstring(id).c_str()))},
+                {L"text_size",N(data->textSize())}}).Stringify();
             std::wstring key=signature.Stringify().c_str();
             if(group.key!=key||!group.body){
-                try{build(group,geometry,panel);group.key=std::move(key);}
+                try{build(group,geometry,panel);group.key=std::move(key);group.tabsPresentationKey=tabsPresentationKey;}
                 catch(...){removeGroup(group);groups.erase(it);throw;}
-            }
-            for(auto const& [panelId,shell]:group.tabs){
-                auto tab=shell.Children().GetAt(1).as<Button>();
-                auto panelModel=find(array(model,L"panels"),L"id",hstring(panelId));auto title=str(panelModel,L"title");
-                AutomationProperties::SetName(tab,title);tooltip(tab,title);
-                if(auto content=tab.Content().try_as<Panel>())for(auto child:content.Children())if(auto label=child.try_as<TextBlock>())label.Text(title);
-                for(auto& automatic:group.automatic)if(automatic.tab==tab)automatic.key=panelId+L"\n"+std::wstring(title)+L"\n"+std::to_wstring(data->textSize());
-            }
+            }else if(group.tabsPresentationKey!=tabsPresentationKey){buildTabs(group,geometry);group.tabsPresentationKey=tabsPresentationKey;}
             for(auto const& update:group.paintIcons)update();
             }
             bool hidden=flag(model,L"chrome_hidden")&&!flag(geometry,L"floating")&&!flag(geometry,L"zen_kept");
@@ -1194,6 +1196,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
 };
 WorkspaceView::WorkspaceView(Dispatch send,Json catalog,NativeLocalization localization,Dispatch overviews,PreviewTransport previews,std::function<void(bool)> popupChanged,Dispatch document,Dispatch input,EdgeTransport edges):impl(std::make_shared<Impl>(std::move(send),catalog,localization,std::move(overviews),std::move(previews),std::move(popupChanged),std::move(document),std::move(input),std::move(edges))){impl->init();}
 WorkspaceView::~WorkspaceView()=default;
+void WorkspaceView::SetCommit(std::function<void(std::string,bool,std::function<void()>)> commit){impl->data->commit=std::move(commit);}
 Canvas WorkspaceView::Root()const{return impl->root;}
 bool WorkspaceView::Apply(Json const& snapshot,NativeLayoutInput input){return impl->apply(snapshot,std::move(input));}
 void WorkspaceView::Resize(float width,float height){impl->resize(width,height);}

@@ -93,6 +93,28 @@ inline std::array<bool,4> sourceCorners(std::shared_ptr<WorkspaceData> const& da
     return result;
 }
 struct AutomaticTab{Button tab{nullptr};TextBlock name{nullptr};std::wstring key;};
+inline std::vector<hstring> panelTabIds(A const& panels){
+    std::vector<hstring> ids;ids.reserve(panels.Size());
+    for(auto value:panels)ids.push_back(value.GetString());
+    std::sort(ids.begin(),ids.end());return ids;
+}
+inline void orderPanelTabs(StackPanel const& row,A const& order,std::map<std::wstring,Grid> const& tabs,std::vector<AutomaticTab>& automatic){
+    uint32_t index=0,automaticIndex=0;
+    for(auto value:order){
+        auto found=tabs.find(std::wstring(value.GetString()));if(found==tabs.end())continue;
+        auto shell=found->second;auto tab=shell.Children().GetAt(1).as<Button>();
+        auto tag=tab.Tag().as<J>();object(tag,L"workspace_tab").Insert(L"index",N(index));
+        auto children=row.Children();uint32_t previous;
+        if(index>=children.Size()||children.GetAt(index)!=shell){
+            if(children.IndexOf(shell,previous))children.RemoveAt(previous);
+            children.InsertAt(index,shell);
+        }
+        auto start=automatic.begin()+automaticIndex;
+        auto item=std::find_if(start,automatic.end(),[&](auto const& entry){return entry.tab==tab;});
+        if(item!=automatic.end()){std::rotate(start,item,item+1);++automaticIndex;}
+        ++index;
+    }
+}
 inline bool automaticTabs(std::shared_ptr<WorkspaceData> const& data,double group){
     return str(object(data->model,L"windows_tab_styles"),to_hstring(uint32_t(group)).c_str())==L"automatic";
 }
