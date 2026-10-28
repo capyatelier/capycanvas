@@ -190,6 +190,11 @@ void CanvasWindow::Open() {
     titlebar.PreferredHeightOption(TitleBarHeightOption::Tall);
     root.RequestedTheme(ElementTheme::Default);
     auto& pointerMode=CapyUi::MouseScrollbars::current();scrollbarInput=pointerMode.source;pointerMode.observe(root);
+    root.PreviewKeyDown([weak=weak_from_this()](auto&&,KeyRoutedEventArgs const& event){if(auto self=weak.lock();self&&event.Key()==Windows::System::VirtualKey::Escape){
+        bool canceled=self->header&&self->header->CancelNativeContacts();
+        canceled=(self->workspace&&self->workspace->CancelNativeContacts())||canceled;
+        if(canceled){self->CancelGesture();if(!event.KeyStatus().WasKeyDown)self->ReleaseKeyHold();event.Handled(true);}
+    }});
 
     canvasFocus.Content(panel);
     canvasFocus.HorizontalContentAlignment(HorizontalAlignment::Stretch);

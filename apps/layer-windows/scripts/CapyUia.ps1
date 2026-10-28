@@ -19,7 +19,7 @@ public static class CapyWindowApi {
 $CapyScripts=$PSScriptRoot
 $CapyWaitSeconds=8
 $CapyEach=$null
-$CapyFind='first'
+$CapyFind='prefer-visible'
 $CapyPopups=$false
 $CapyTraceDirectory=$null
 $CapyStateFile=$null
@@ -287,6 +287,13 @@ function Wait-StablePixels([scriptblock]$CapturePixels,[switch]$Composed){
     throw "Canvas pixels did not settle for comparison ($comparisons comparisons, $stable consecutive matches, $([Math]::Round($watch.Elapsed.TotalSeconds,3)) seconds)"
 }
 function Find([string]$Value,[switch]$Name,$Within=$root,$Type,[switch]$Visible,[switch]$NoPopups){
+    $shown={param($item)
+        if(!$item -or $item.Current.IsOffscreen){return $false}
+        $bounds=$item.Current.BoundingRectangle;$window=$root.Current.BoundingRectangle
+        !$bounds.IsEmpty -and $bounds.Width -gt 0 -and $bounds.Height -gt 0 -and
+            $bounds.X -lt $window.X+$window.Width -and $bounds.X+$bounds.Width -gt $window.X -and
+            $bounds.Y -lt $window.Y+$window.Height -and $bounds.Y+$bounds.Height -gt $window.Y
+    }
     $property=if($Name){[System.Windows.Automation.AutomationElement]::NameProperty}else{[System.Windows.Automation.AutomationElement]::AutomationIdProperty}
     $condition=[System.Windows.Automation.PropertyCondition]::new($property,$Value)
     if($Type){$condition=[System.Windows.Automation.AndCondition]::new($condition,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,$Type))}
@@ -306,9 +313,9 @@ function Find([string]$Value,[switch]$Name,$Within=$root,$Type,[switch]$Visible,
     if(!$Visible -and 'first' -eq $script:CapyFind){$found=$searchScope.FindFirst([System.Windows.Automation.TreeScope]::Descendants,$condition)}
     else{
         $first=$searchScope.FindFirst([System.Windows.Automation.TreeScope]::Descendants,$condition)
-        if($first -and !$first.Current.IsOffscreen){return $first}
+        if(& $shown $first){return $first}
         $items=@();if($first){$items=$searchScope.FindAll([System.Windows.Automation.TreeScope]::Descendants,$condition)}
-        foreach($item in $items){if(!$item.Current.IsOffscreen){return $item}}
+        foreach($item in $items){if(& $shown $item){return $item}}
         if(!$Visible -and 'prefer-visible' -eq $script:CapyFind -and $items.Count){$found=$items[0]}
     }
     if(!$found -and $script:CapyPopups -and !$NoPopups -and $Within -eq $root){
@@ -316,7 +323,7 @@ function Find([string]$Value,[switch]$Name,$Within=$root,$Type,[switch]$Visible,
         foreach($window in [System.Windows.Automation.AutomationElement]::RootElement.FindAll([System.Windows.Automation.TreeScope]::Children,$owned)){
             if($window -eq $root){continue}
             foreach($item in $window.FindAll([System.Windows.Automation.TreeScope]::Descendants,$condition)){
-                if(!$item.Current.IsOffscreen){return $item}
+                if(& $shown $item){return $item}
             }
         }
     }
@@ -732,6 +739,29 @@ function Use-Workspace([string]$Id,[string]$Name){
         if(Find 'workspace-manager' -Visible){(Control 'workspace-manager').SetFocus();[CapyRowPointer]::Key([uint32]$review.Id,27)}
         Wait-Until {!(Find 'workspace-manager' -Visible) -and (Control 'drawing-canvas').Current.IsEnabled} 'Workspace selector did not release the drawing'
     }finally{$script:CapyPopups=$previousPopups}
+}
+function Expand-PanelColumn([string]$Panel){
+    $id='column-icon-'+$Panel
+    if(Find $id -Visible){
+    $bounds=(Control $id -Arranged).Current.BoundingRectangle
+    $ownsInput=![CapyRowPointer]::Initialized
+    $previousPopups=$script:CapyPopups;$script:CapyPopups=$true
+    try{
+        if($ownsInput){[CapyRowPointer]::Initialize([uint32]$review.Id)}
+        [void][CapyRowPointer]::SetForegroundWindow($drawingWindow)
+        [CapyRowPointer]::RightClick([int]($bounds.Left+$bounds.Width/2),[int]($bounds.Top+$bounds.Height/2))
+        Invoke 'Expand column' -Name
+        Wait-Until {!@((Model).layout.collapsed_columns|Where-Object {@($_.groups.icons.panel) -contains $Panel}).Count} "The $Panel column did not expand"
+    }finally{
+        if($ownsInput){[CapyRowPointer]::Dispose()}
+        $script:CapyPopups=$previousPopups
+    }
+    }
+    $tab='panel-tab-'+$Panel
+    if(Find $tab -Visible){
+        (Control $tab -Arranged).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+        Wait-Until {@((Model).layout.groups|Where-Object active -eq $Panel).Count -gt 0} "The $Panel tab did not become active"
+    }
 }
 function Use-PaintWorkspace{
     Use-Workspace 'builtin:workspace:illustrator' 'Paint'

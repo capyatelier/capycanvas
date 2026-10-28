@@ -21,7 +21,7 @@ public:
     Json ChromeFacts(bool popupOpen);
     void SetWindowResizing(bool value);
     bool CancelGesture();
-    void CancelNativeContacts();
+    bool CancelNativeContacts();
     void CancelPreviews();
     void SetTitlebarInsets(float left,float right,float height);
     void SetWindowId(uint64_t id);

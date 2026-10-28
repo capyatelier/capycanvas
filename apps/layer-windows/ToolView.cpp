@@ -358,8 +358,8 @@ struct SettingsView : std::enable_shared_from_this<SettingsView> {
                 if(compact&&id==L"tonal_lower"){
                     auto upper=find(settings,L"id",L"tonal_upper");
                     range=RangeControl::Create(data,item,upper,data->caption(L"tool_controls",L"range_hint"),L"tool-setting",true,
-                        [weak,context](int index,double value){if(auto self=weak.lock();self&&settingsContext(self->data->state)==context)
-                            self->data->dispatch(O({{L"type",S(L"set_tool_setting")},{L"id",S(index?L"tonal_upper":L"tonal_lower")},{L"value",N(value)}}));});
+                        [weak,context](int index,double value,hstring const& phase){if(auto self=weak.lock();self&&settingsContext(self->data->state)==context)
+                            self->data->dispatch(O({{L"type",S(L"tool_setting_contact")},{L"id",S(index?L"tonal_upper":L"tonal_lower")},{L"value",N(value)},{L"phase",S(phase)}}));});
                     body.Children().Append(range->root);
                     fields.emplace_back([weak]{if(auto self=weak.lock();self&&self->range){
                         auto current=array(self->data->state,L"tool_settings");

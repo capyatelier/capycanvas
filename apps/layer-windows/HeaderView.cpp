@@ -858,7 +858,7 @@ bool HeaderView::CancelGesture(){
     if(impl->drawings)closed=impl->drawings->cancelAll()||closed;
     return impl->input->Cancel()||closed;
 }
-void HeaderView::CancelNativeContacts(){impl->data->pointerCancels.CancelAll();}
+bool HeaderView::CancelNativeContacts(){return impl->data->pointerCancels.CancelAll();}
 void HeaderView::SetDrawerSources(A const& sources){
     if(sources.Stringify()==impl->data->drawerSources.Stringify())return;
     impl->data->drawerSources=A::Parse(sources.Stringify());if(impl->built){impl->applyItems();impl->present();}

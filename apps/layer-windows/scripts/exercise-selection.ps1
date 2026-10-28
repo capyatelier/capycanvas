@@ -170,6 +170,21 @@ try {
             $lower=((Model).state.tool_settings|Where-Object id -eq 'tonal_lower').value
             $track=Control 'tool-setting-range-track'
             $b=$track.Current.BoundingRectangle
+            $upper=((Model).state.tool_settings|Where-Object id -eq 'tonal_upper').value
+            foreach($device in @('mouse','touch','pen')){
+                foreach($ending in $(if($device -eq 'mouse'){@('escape')}else{@('cancel','escape')})){
+                    [CapyRowPointer]::Down($device,[int]($b.X+10),[int]($b.Y+$b.Height/2))
+                    try{
+                        [CapyRowPointer]::Move([int]($b.X+$b.Width*.3),[int]($b.Y+$b.Height/2))
+                        Wait-Until {((Model).state.tool_settings|Where-Object id -eq 'tonal_lower').value -ne $lower} "$device range did not move before $ending"
+                        if($ending -eq 'escape'){
+                            [CapyRowPointer]::Key([uint32]$review.Id,0x1b)
+                            Wait-Until {((Model).state.tool_settings|Where-Object id -eq 'tonal_lower').value -eq $lower} "$device range Escape did not restore before Up"
+                        }
+                    }finally{if($ending -eq 'cancel'){[CapyRowPointer]::Cancel()}else{[CapyRowPointer]::Up()}}
+                    Wait-Until {$settings=(Model).state.tool_settings;($settings|Where-Object id -eq 'tonal_lower').value -eq $lower -and ($settings|Where-Object id -eq 'tonal_upper').value -eq $upper} "$device range $ending did not restore both endpoints"
+                }
+            }
             Drag @{x=[int]($b.X+10);y=[int]($b.Y+$b.Height/2)} @{x=[int]($b.X+$b.Width*.3);y=[int]($b.Y+$b.Height/2)}
             Wait-Until {((Model).state.tool_settings|Where-Object id -eq 'tonal_lower').value -ne $lower} 'Range handle drag did not move the lower endpoint'
             Capture 'tonal-settings' -Composed
@@ -297,6 +312,7 @@ try {
     if(((Model).state.colors.foreground.rgba|ConvertTo-Json -Compress) -ne $artwork){throw 'Leaving Quick Mask changed artwork colors'}
 
     $before=@((Model).state.layers|ForEach-Object {$_.id})
+    Expand-PanelColumn 'layers'
     Invoke 'layer-new-selection'
     $created=@{id=$null}
     Wait-Until {$layer=@((Model).state.layers|Where-Object {$_.selection_layer -and $before -notcontains $_.id})[0];$created.id=$layer.id;$null -ne $layer} 'New Selection Layer did not add a row'

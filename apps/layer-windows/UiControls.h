@@ -398,6 +398,10 @@ struct WorkspaceData : std::enable_shared_from_this<WorkspaceData> {
     double controlHeight()const{return std::max(panelMetric(L"control_height"),std::ceil(textSize()*Windows::UI::ViewManagement::UISettings().TextScaleFactor()*1.3));}
     CornerRadius controlCorner()const{auto r=panelMetric(L"control_radius")*CornerFit;return {r,r,r,r};}
 };
+inline std::shared_ptr<ControlCapture> captureControl(std::shared_ptr<WorkspaceData> const& data,FrameworkElement const& surface,
+    std::function<void(uint32_t,bool,PointerRoutedEventArgs const*)> finish,PointerCaptureLoss loss=PointerCaptureLoss::Cancel){
+    return ControlCapture::Create(surface,std::shared_ptr<PointerCancelRegistry>(data,&data->pointerCancels),std::move(finish),loss);
+}
 inline void inheritLanguage(FrameworkElement const& element,std::shared_ptr<WorkspaceData> const& data) {
     auto language=data->language();if(!language.empty())element.Language(language);
     data->copyView([weak=make_weak(element),source=std::weak_ptr<WorkspaceData>(data)]{

@@ -16,10 +16,10 @@ Rect intersect(Rect a,Rect b){
         std::max(0.f,std::min(a.Y+a.Height,b.Y+b.Height)-y)};
 }
 struct NavigatorLayout:PanelT<NavigatorLayout>{
-    Canvas overview;
+    ContentControl overview;
     Grid actions;
     double inset,spacing,controlHeight,aspect=1;
-    NavigatorLayout(Canvas const& image,Grid const& buttons,double padding,double gap,double height):
+    NavigatorLayout(ContentControl const& image,Grid const& buttons,double padding,double gap,double height):
         overview(image),actions(buttons),inset(padding),spacing(gap),controlHeight(height){
         Children().Append(overview);Children().Append(actions);
     }
@@ -50,10 +50,10 @@ struct NavigatorView::Impl : std::enable_shared_from_this<Impl> {
     std::function<void()> layoutChanged;
     Grid root,actions;
     com_ptr<NavigatorLayout> content;
-    Canvas overview;
+    ContentControl overview;
     Shapes::Path surround;
     Bindings bindings;
-    std::optional<uint32_t> pointer;
+    std::shared_ptr<ControlCapture> capture;
     std::optional<std::array<double,13>> geometry;
     bool visible=true;
     Impl(std::shared_ptr<WorkspaceData> state,std::function<void()> changed):
@@ -64,7 +64,7 @@ struct NavigatorView::Impl : std::enable_shared_from_this<Impl> {
             {L"viewport",coordinates({overview.ActualWidth(),overview.ActualHeight()})}}));
     }
     void cancel(){
-        if(pointer){pointer.reset();send(L"cancel",{});overview.ReleasePointerCaptures();}
+        if(capture)capture->Cancel();
     }
     void init(){
         auto weak=weak_from_this();
@@ -72,6 +72,7 @@ struct NavigatorView::Impl : std::enable_shared_from_this<Impl> {
         surround.Fill(data->brush(L"bg"));surround.IsHitTestVisible(false);
         root.Children().Append(surround);
         overview.Background(clear());edgeTag(overview,L"edge_contact",S(L"input"));
+        overview.IsTabStop(true);overview.UseSystemFocusVisuals(false);
         overview.HorizontalAlignment(HorizontalAlignment::Stretch);
         AutomationProperties::SetName(overview,data->caption(L"color",L"navigator_overview"));
         AutomationProperties::SetAutomationId(overview,L"navigator-overview");
@@ -79,21 +80,20 @@ struct NavigatorView::Impl : std::enable_shared_from_this<Impl> {
         for(auto const& bind:bindings)bind();
         content=make_self<NavigatorLayout>(overview,actions,data->panelMetric(L"inset"),data->panelMetric(L"control_spacing"),data->panelMetric(L"control_height"));
         root.Children().Append(content.as<Panel>());updateAspect();
+        capture=captureControl(data,overview,[weak](uint32_t,bool cancel,PointerRoutedEventArgs const* event){if(auto self=weak.lock()){
+            self->send(cancel?L"cancel":L"up",event&&!cancel?event->GetCurrentPoint(self->overview).Position():Point{});
+            if(event)event->Handled(true);
+        }});
         overview.PointerPressed([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock()){
             auto p=e.GetCurrentPoint(self->overview);
-            if(self->pointer||!PointerGesture::PrimaryContact(p))return;
+            if(self->capture->Active())return;
             if(self->overview.ActualWidth()<=8||self->overview.ActualHeight()<=8)return;
-            if(self->overview.CapturePointer(e.Pointer())){self->pointer=p.PointerId();self->send(L"down",p.Position());e.Handled(true);}
+            if(self->capture->Begin(e)){self->overview.Focus(FocusState::Pointer);self->send(L"down",p.Position());e.Handled(true);}
         }});
         overview.PointerMoved([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock()){
-            if(self->pointer==e.Pointer().PointerId()){self->send(L"move",e.GetCurrentPoint(self->overview).Position());e.Handled(true);}
+            if(self->capture->Owns(e.Pointer().PointerId())){self->send(L"move",e.GetCurrentPoint(self->overview).Position());e.Handled(true);}
         }});
-        PointerGesture::OnCompleted(overview,[weak](PointerRoutedEventArgs const& e,bool cancel){if(auto self=weak.lock();self&&self->pointer==e.Pointer().PointerId()){
-            if(cancel)self->cancel();else{
-                self->pointer.reset();self->send(L"up",e.GetCurrentPoint(self->overview).Position());self->overview.ReleasePointerCapture(e.Pointer());
-            }e.Handled(true);
-        }});
-        root.Unloaded([weak](auto&&,auto&&){if(auto self=weak.lock()){self->cancel();self->layoutChanged();}});
+        root.Unloaded([weak](auto&&,auto&&){if(auto self=weak.lock())self->layoutChanged();});
         root.Loaded([weak](auto&&,auto&&){if(auto self=weak.lock())self->refreshGeometry();});
         root.LayoutUpdated([weak](auto&&,auto&&){if(auto self=weak.lock())self->refreshGeometry();});
     }

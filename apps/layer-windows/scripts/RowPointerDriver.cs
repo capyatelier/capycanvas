@@ -92,6 +92,7 @@ public static class CapyRowPointer {
  static uint owner,kind,penButtons,mouseRelease;static int tiltX,tiltY;static bool active,hovering,eraserEnd;static Point last;static IntPtr pen;
  static readonly object gate=new object();static Timer pulse;static Exception failure;
  public static bool Active {get{lock(gate)return active;}}
+ public static bool Initialized {get{lock(gate)return pulse!=null;}}
  public static void Initialize(uint process) {
   if(active||pulse!=null||pen!=IntPtr.Zero)throw new InvalidOperationException("Dispose the previous pointer review first.");
   failure=null;kind=0;penButtons=0;mouseRelease=0;tiltX=tiltY=0;hovering=false;eraserEnd=false;owner=process;contactDown=0;ContactDurationMilliseconds=double.NaN;

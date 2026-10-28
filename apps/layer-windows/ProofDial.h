@@ -14,7 +14,7 @@ struct ProofDial:std::enable_shared_from_this<ProofDial>{
     ContentControl root;Canvas canvas;Viewbox view;
     Shapes::Ellipse field,marker;std::array<Shapes::Polyline,2> arcs;
     std::array<Shapes::Ellipse,2> handles;std::array<TextBlock,4> texts;std::array<Image,4> icons;
-    Button reset;std::array<MenuFlyoutItem,4> resetItems;std::optional<uint32_t> pointer;winrt::Windows::Foundation::Point origin{},last{};
+    Button reset;std::array<MenuFlyoutItem,4> resetItems;std::shared_ptr<ControlCapture> capture;winrt::Windows::Foundation::Point origin{},last{};
     std::optional<winrt::Windows::System::VirtualKey> heldKey;uint64_t pressedAt=0;winrt::Windows::Foundation::Point pressedPoint{};uint8_t pressedPart=0;
     hstring epoch,identity,key;uint8_t part=0;static constexpr float side=256;
     J form()const{return object(data->model,L"windows_proof_form");}
@@ -30,16 +30,16 @@ struct ProofDial:std::enable_shared_from_this<ProofDial>{
     void contact(hstring const& phase){A start,point;start.Append(N(origin.X));start.Append(N(origin.Y));point.Append(N(last.X));point.Append(N(last.Y));
         send(O({{L"type",S(L"dial")},{L"phase",S(phase)},{L"size",N(side)},{L"origin",start},{L"point",point}}),epoch);
     }
-    void finish(bool cancel){finishKey(cancel);if(!pointer)return;pointer.reset();contact(cancel?L"cancel":L"up");root.ReleasePointerCaptures();AutomationProperties::SetItemStatus(root,data->caption(L"header",L"ready"));}
+    void cancel(){finishKey(true);if(capture)capture->Cancel();}
     static void circle(Shapes::Ellipse const& e,A const& point,double radius){e.Width(radius*2);e.Height(radius*2);Canvas::SetLeft(e,point.GetNumberAt(0)-radius);Canvas::SetTop(e,point.GetNumberAt(1)-radius);}
     void refresh(){
         auto copy=object(form(),L"copy");auto title=str(copy,L"balance_contrast");
         AutomationProperties::SetName(root,title);AutomationProperties::SetHelpText(root,title);root.Language(data->language());
         AutomationProperties::SetName(reset,str(copy,L"reset_sdr"));tooltip(reset,str(copy,L"reset_sdr"));
-        AutomationProperties::SetItemStatus(root,data->caption(L"header",pointer?L"dragging":L"ready"));
+        AutomationProperties::SetItemStatus(root,data->caption(L"header",capture&&capture->Active()?L"dragging":L"ready"));
         std::array<hstring,4> labels{data->caption(L"color",L"reset_balance_contrast"),data->caption(L"color",L"reset_brightness"),data->caption(L"color",L"reset_highlight_color"),str(copy,L"reset_sdr")};
         for(uint32_t i=0;i<labels.size();++i){resetItems[i].Text(labels[i]);AutomationProperties::SetName(resetItems[i],labels[i]);}
-        auto current=array(form(),L"identity").Stringify();if(current!=identity){finish(true);identity=current;}
+        auto current=array(form(),L"identity").Stringify();if(current!=identity){cancel();identity=current;}
         auto next=object(form(),L"rendition").Stringify()+data->theme();if(next==key)return;key=next;
         auto g=geometry();if(!g.Size()||g.HasKey(L"error"))return;
         auto ink=data->brush(L"text");circle(field,array(g,L"center"),num(g,L"radius"));circle(marker,array(g,L"marker"),num(g,L"marker_radius"));
@@ -71,25 +71,28 @@ struct ProofDial:std::enable_shared_from_this<ProofDial>{
         reset.Padding({0});reset.MinWidth(0);reset.MinHeight(0);reset.Background(clear());reset.BorderThickness({0});AutomationProperties::SetAutomationId(reset,L"proof-dial-reset");
         buttonColors(data,reset);
         reset.Click([weak](auto&&,auto&&){if(auto self=weak.lock())self->control(3,O({{L"type",S(L"reset")}}));});canvas.Children().Append(reset);
+        capture=captureControl(data,root,[weak](uint32_t,bool cancel,PointerRoutedEventArgs const* event){if(auto self=weak.lock()){
+            if(event&&!cancel)self->last=event->GetCurrentPoint(self->canvas).Position();
+            if(cancel)self->pressedAt=0;
+            self->contact(cancel?L"cancel":L"up");AutomationProperties::SetItemStatus(self->root,self->data->caption(L"header",L"ready"));
+            if(event)event->Handled(true);
+        }});
         root.PointerPressed([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock()){
-            auto p=e.GetCurrentPoint(self->canvas);if(self->pointer||!PointerGesture::PrimaryContact(p))return;
+            auto p=e.GetCurrentPoint(self->canvas);if(self->capture->Active()||!PointerGesture::PrimaryContact(p))return;
             auto g=self->geometry(p.Position());auto hit=g.GetNamedValue(L"hit",JsonValue::CreateNullValue());if(hit.ValueType()!=JsonValueType::Number||hit.GetNumber()==3)return;
             self->finishKey(true);self->root.Focus(FocusState::Pointer);
             auto at=p.Position();auto selected=uint8_t(hit.GetNumber());bool repeated=self->pressedAt&&p.Timestamp()-self->pressedAt<=uint64_t(GetDoubleClickTime())*1000&&selected==self->pressedPart&&std::hypot(at.X-self->pressedPoint.X,at.Y-self->pressedPoint.Y)<=8;
             self->pressedAt=repeated?0:p.Timestamp();self->pressedPoint=at;self->pressedPart=selected;
             if(repeated){self->part=selected;self->control(selected,O({{L"type",S(L"reset")}}));e.Handled(true);return;}
-            if(!self->root.CapturePointer(e.Pointer()))return;
-            self->pointer=p.PointerId();self->part=uint8_t(hit.GetNumber());self->origin=self->last=p.Position();self->epoch=to_hstring(uint64_t(num(object(self->data->state,L"document_file"),L"epoch")));
+            if(!self->capture->Begin(e))return;
+            self->part=uint8_t(hit.GetNumber());self->origin=self->last=p.Position();self->epoch=to_hstring(uint64_t(num(object(self->data->state,L"document_file"),L"epoch")));
             self->contact(L"down");AutomationProperties::SetItemStatus(self->root,self->data->caption(L"header",L"dragging"));e.Handled(true);
         }});
-        root.PointerMoved([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock())if(self->pointer==e.Pointer().PointerId()){self->last=e.GetCurrentPoint(self->canvas).Position();self->contact(L"move");e.Handled(true);}});
-        root.PointerReleased([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock())if(self->pointer==e.Pointer().PointerId()){self->last=e.GetCurrentPoint(self->canvas).Position();self->finish(e.GetCurrentPoint(self->canvas).Properties().IsCanceled());e.Handled(true);}});
-        auto cancel=[weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock())if(self->pointer==e.Pointer().PointerId())self->finish(true);};
-        root.PointerCanceled(cancel);root.PointerCaptureLost(cancel);
-        root.LostFocus([weak](auto&&,auto&&){if(auto self=weak.lock())self->finish(true);});root.Unloaded([weak](auto&&,auto&&){if(auto self=weak.lock())self->finish(true);});
+        root.PointerMoved([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock();self&&self->capture->Owns(e.Pointer().PointerId())){self->last=e.GetCurrentPoint(self->canvas).Position();self->contact(L"move");e.Handled(true);}});
+        root.LostFocus([weak](auto&&,auto&&){if(auto self=weak.lock())self->cancel();});root.Unloaded([weak](auto&&,auto&&){if(auto self=weak.lock())self->finishKey(true);});
         root.KeyDown([weak](auto&&,KeyRoutedEventArgs const& e){if(auto self=weak.lock()){
-            using winrt::Windows::System::VirtualKey;auto key=e.Key();if(key==VirtualKey::Escape){self->finish(true);e.Handled(true);return;}
-            if(self->pointer)return;
+            using winrt::Windows::System::VirtualKey;auto key=e.Key();if(key==VirtualKey::Escape){self->cancel();e.Handled(true);return;}
+            if(self->capture->Active())return;
             if(key==VirtualKey::Home){self->finishKey(false);self->control(self->part,O({{L"type",S(L"reset")}}));e.Handled(true);}
             else if(key==VirtualKey::Left||key==VirtualKey::Right||key==VirtualKey::Up||key==VirtualKey::Down){if(self->heldKey&&*self->heldKey!=key)self->finishKey(false);
                 bool first=!self->heldKey;if(first){self->heldKey=key;self->epoch=to_hstring(uint64_t(num(object(self->data->state,L"document_file"),L"epoch")));}

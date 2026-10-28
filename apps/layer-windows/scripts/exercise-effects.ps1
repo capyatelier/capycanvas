@@ -1,4 +1,4 @@
-﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light','curve-dark','curve-light','visibility-dark','visibility-light')][string]$Theme='dark',[switch]$PropertyLayout,[switch]$VisibilityOnly)
+﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light','curve-dark','curve-light','visibility-dark','visibility-light')][string]$Theme='dark',[switch]$PropertyLayout,[switch]$VisibilityOnly,[switch]$ControlsOnly)
 $ErrorActionPreference='Stop'
 if($Theme.StartsWith('visibility-')){$VisibilityOnly=$true;$Theme=$Theme.Substring(11)}
 $curveOnly=$Theme.StartsWith('curve-');if($curveOnly){$Theme=$Theme.Substring(6)}
@@ -77,6 +77,7 @@ function Choose([string]$Id,[string]$Option){
     (Control $Option -Name -Type ([System.Windows.Automation.ControlType]::ListItem)).GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
 }
 function Select-Panel([string]$Id){
+    Expand-PanelColumn $Id
     if(@((Model).layout.groups|Where-Object {$_.active -eq $Id}).Count -eq 0){Invoke $(if(Find ('drawer-tab-'+$Id)){'drawer-tab-'+$Id}else{'panel-tab-'+$Id})}
     Wait-Until {@((Model).layout.groups|Where-Object {$_.active -eq $Id}).Count -gt 0} "Panel $Id did not become active"
 }
@@ -126,7 +127,7 @@ function Select-Filter([string]$Id,[string]$Label){
     Wait-Until {@((Model).layout.groups|Where-Object {$_.active -eq 'properties'}).Count -gt 0} 'Properties did not appear'
 }
 function Preview-Hash([string]$Id){
-    $image=Control ('filter-preview-'+$Id)
+    $image=Control ('filter-preview-'+$Id) -Arranged
     if($image.Current.ItemStatus -ne 'Ready'){return ''}
     $r=$image.Current.BoundingRectangle
     $window=[CapyEffectsCapture+Rect]::new()
@@ -676,9 +677,10 @@ try {
     }
     if(!$resized){throw 'Initial resize did not reach the canvas'}
     $root=(Owned-DrawingWindow $review $drawingWindow.ToInt64()).Root
-    if($curveOnly -or $VisibilityOnly){
+    if($curveOnly -or $VisibilityOnly -or $ControlsOnly){
         Select-Filter 'curves' 'Curves'
         $curveGestures=Check-CurveGestures -VisibilityOnly:$VisibilityOnly
+        if($ControlsOnly){Select-Filter 'gradient_map' 'Gradient Map';Check-Gradient}
         & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Close -DiscardUnsaved
         if((Get-Item -LiteralPath $stderr).Length){throw 'Native stderr requires inspection'}
         @{theme=$Theme;visibility_only=[bool]$VisibilityOnly;curve_pointer_transactions=$curveGestures;run=$run}|ConvertTo-Json

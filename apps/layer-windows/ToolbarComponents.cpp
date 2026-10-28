@@ -71,7 +71,7 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
         std::function<void()> dispose;
         int segmented=0;bool action=false,intrinsic=false,worded=false;double across=0;
     };
-    struct Contact {uint32_t id;Point start;bool moved=false;};
+    struct Contact {Point start;double before;bool moved=false;};
     std::shared_ptr<WorkspaceData> data;
     std::weak_ptr<WorkspaceGestures> gestures;
     hstring panelId,tileStyle,tileLabel;double tileId=0,iconSize=16,tileRadius=SurfaceRadius;
@@ -88,6 +88,9 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
     StackPanel readout{nullptr},readoutRow{nullptr};TextBlock readoutValue{nullptr},readoutUnit{nullptr},readoutTitle{nullptr};
     J field,spec;double current=0,level=0;bool enabled=false,opacity=false,settingAccess=false;
     std::optional<Contact> contact;
+    std::shared_ptr<ControlCapture> sliderCapture;
+    std::function<void(J const&)> sliderEdit;
+    std::optional<winrt::Windows::System::VirtualKey> sliderKey;double keyBefore=0;
     std::wstring trackKey;hstring marksKey;
 
     Primitives::Popup preview{nullptr};
@@ -151,6 +154,11 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
     void send(J const& action)const{
         data->dispatch(O({{L"type",S(L"toolbar_edit")},{L"context",object(model,L"context")},{L"action",action}}));
     }
+    auto edit()const{
+        return [data=data,context=copy(object(model,L"context"))](J const& action){
+            data->dispatch(O({{L"type",S(L"toolbar_edit")},{L"context",context},{L"action",action}}));
+        };
+    }
     bool closePopup(){
         bool closed=false;
         if(stampTimer){stampTimer.Stop();stampTimer=nullptr;closed=true;}
@@ -192,12 +200,12 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
     void Update(J const& tile){
         auto value=object(tile,L"component");if(!value.Size())return;
         sliderStyle=object(tile,L"slider_style");
-        auto nextSchema=schemaKey(value)+std::wstring(sliderStyle.Stringify());model=value;
+        auto nextSchema=schemaKey(value)+std::wstring(sliderStyle.Stringify());
         tileLabel=str(tile,L"label");AutomationProperties::SetName(root,tileLabel);
         if(nextSchema!=schema){
             closePopup();
             for(auto& f:fields){if(f.dispose)f.dispose();uint32_t index;if(root.Children().IndexOf(f.row,index))root.Children().RemoveAt(index);}
-            fields.clear();schema=nextSchema;
+            fields.clear();schema=nextSchema;model=value;
             if(standalone)buildSlider(tile);
             else for(auto option:array(model,L"options")){
                 auto entry=option.GetObject();
@@ -210,6 +218,7 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
             }
             measured=false;
         }
+        model=value;
         if(standalone)updateSlider();
         else{
             auto options=array(model,L"options");
@@ -270,7 +279,7 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
 
     void buildSlider(J const& tile){
         auto weak=weak_from_this();
-        field=object(model,L"numeric");
+        sliderEdit=edit();field=object(model,L"numeric");
         opacity=str(control,L"kind")!=L"brush_size_slider";
         if(!field.Size())field=O({{L"id",S(!opacity?L"size":L"strength")},{L"label",S(str(tile,L"label"))},
             {L"numeric",toolbarUi(data->localization.get(),O({{L"type",S(L"slider_spec")},{L"control",control}})).GetObject()},{L"value",N(.5)}});
@@ -314,11 +323,25 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
                 self->change(num(numeric(self->data->localization.get(),self->spec,self->current,O({{L"type",S(L"position")},{L"position",N(e.NewValue())}})),L"value"));
         });
         track.Children().Append(access);
+        sliderCapture=captureControl(data,track,[weak](uint32_t,bool cancel,PointerRoutedEventArgs const* event){if(auto self=weak.lock();self&&self->contact){
+            auto finished=*self->contact;self->contact.reset();
+            if(cancel)self->current=finished.before;
+            self->sliderPhase(cancel?L"cancel":L"up",cancel?finished.before:self->current);
+            if(cancel||finished.moved)self->closePopup();if(event)event->Handled(true);
+        }});
         track.PointerPressed([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock())self->pressed(e);});
         track.PointerMoved([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock())self->moved(e);});
-        track.PointerReleased([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock())self->released(e);});
-        track.PointerCanceled([weak](auto&&,auto&&){if(auto self=weak.lock())self->lost();});
-        track.PointerCaptureLost([weak](auto&&,auto&&){if(auto self=weak.lock())self->lost();});
+        access.AddHandler(UIElement::PreviewKeyDownEvent(),box_value(KeyEventHandler([weak](auto&&,KeyRoutedEventArgs const& e){if(auto self=weak.lock()){
+            using winrt::Windows::System::VirtualKey;auto key=e.Key();
+            if(key==VirtualKey::Escape&&self->sliderKey){self->finishSliderKey(true);e.Handled(true);return;}
+            if(key!=VirtualKey::Left&&key!=VirtualKey::Right&&key!=VirtualKey::Up&&key!=VirtualKey::Down&&key!=VirtualKey::PageUp&&key!=VirtualKey::PageDown&&key!=VirtualKey::Home&&key!=VirtualKey::End)return;
+            if(self->sliderKey&&*self->sliderKey!=key)self->finishSliderKey(false);
+            if(!self->sliderKey){self->sliderKey=key;self->keyBefore=self->current;self->sliderPhase(L"down",self->current);}
+        }})),true);
+        access.KeyUp([weak](auto&&,KeyRoutedEventArgs const& e){if(auto self=weak.lock();self&&self->sliderKey==e.Key())self->finishSliderKey(false);});
+        access.LostFocus([weak](auto&&,auto&&){if(auto self=weak.lock())self->finishSliderKey(false);});
+        result.dispose=[weak,capture=sliderCapture]{capture->Cancel();if(auto self=weak.lock())self->finishSliderKey(true);};
+        track.Unloaded([weak](auto&&,auto&&){if(auto self=weak.lock())self->finishSliderKey(true);});
         sliderRow.Children().Append(cap);sliderRow.Children().Append(track);
         fields.push_back(std::move(result));root.Children().Append(sliderRow);
     }
@@ -330,7 +353,13 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
     }
     void change(double value){
         if(value==current)return;
-        send(O({{L"type",S(L"set_tool_setting")},{L"id",S(str(field,L"id"))},{L"value",N(value)}}));
+        current=value;sliderEdit(O({{L"type",S(L"set_tool_setting")},{L"id",S(str(field,L"id"))},{L"value",N(value)}}));
+    }
+    void sliderPhase(hstring const& phase,double value){
+        sliderEdit(O({{L"type",S(L"tool_setting_contact")},{L"id",S(str(field,L"id"))},{L"phase",S(phase)},{L"value",N(value)}}));
+    }
+    void finishSliderKey(bool cancel){
+        if(!sliderKey)return;sliderKey.reset();if(cancel)current=keyBefore;sliderPhase(cancel?L"cancel":L"up",current);
     }
     void pick(PointerRoutedEventArgs const& e,bool snap){
         double at=position(e);
@@ -343,23 +372,16 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
     void pressed(PointerRoutedEventArgs const& e){
         auto p=e.GetCurrentPoint(track);
         if(!enabled||contact||!PointerGesture::PrimaryContact(p))return;
-        if(!track.CapturePointer(e.Pointer()))return;
-        contact=Contact{p.PointerId(),p.Position()};e.Handled(true);
-        pick(e,true);show();
+        if(!sliderCapture->Begin(e))return;
+        access.Focus(FocusState::Pointer);contact=Contact{p.Position(),current};e.Handled(true);
+        sliderPhase(L"down",current);pick(e,true);show();
     }
     void moved(PointerRoutedEventArgs const& e){
-        if(!contact||contact->id!=e.Pointer().PointerId())return;
+        if(!contact||!sliderCapture->Owns(e.Pointer().PointerId()))return;
         auto p=e.GetCurrentPoint(track).Position();e.Handled(true);
         if(!contact->moved&&std::hypot(p.X-contact->start.X,p.Y-contact->start.Y)<3)return;
         contact->moved=true;pick(e,false);
     }
-    void released(PointerRoutedEventArgs const& e){
-        if(!contact||contact->id!=e.Pointer().PointerId())return;
-        bool dragged=contact->moved;contact.reset();e.Handled(true);
-        track.ReleasePointerCapture(e.Pointer());
-        if(dragged)closePopup();
-    }
-    void lost(){if(contact){contact.reset();closePopup();}}
     void updateSlider(){
         auto next=object(model,L"numeric");enabled=next.Size()!=0;
         if(enabled){field=next;current=num(next,L"value");}
@@ -520,18 +542,18 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
     }
 
     Field gradientField(J const& option){
-        auto weak=weak_from_this();
+        auto weak=weak_from_this();auto send=edit();
         auto shown=std::make_shared<J>(option);auto bindings=std::make_shared<Bindings>();auto popup=std::make_shared<std::shared_ptr<Bindings>>();
         auto face=button(data,str(option,L"label"),[]{});face.Padding({0});face.Background(clear());
         face.HorizontalContentAlignment(HorizontalAlignment::Stretch);face.VerticalContentAlignment(VerticalAlignment::Stretch);
         face.Content(CapyEffects::GradientRamp(data,[shown]{return object(object(*shown,L"value"),L"value");},data->panelMetric(L"control_height"),*bindings));
         AutomationProperties::SetAutomationId(face,L"toolbar-gradient");
-        face.Click([weak,shown,popup](winrt::Windows::Foundation::IInspectable const& sender,auto&&){
+        face.Click([weak,shown,popup,send](winrt::Windows::Foundation::IInspectable const& sender,auto&&){
             auto self=weak.lock();if(!self)return;
             self->closePopup();
             auto editorBindings=std::make_shared<Bindings>();
             auto body=CapyEffects::GradientEditor(self->data,{[shown]{return *shown;},
-                [weak](J action,hstring phase){if(auto self=weak.lock())self->send(O({{L"type",S(L"effect")},{L"action",CapyEffects::effectGesture(action,phase)}}));},
+                [send](J action,hstring phase){send(O({{L"type",S(L"effect")},{L"action",CapyEffects::effectGesture(action,phase)}}));},
                 []{return true;},L"toolbar-gradient-editor"},*editorBindings);
             body.Width(240);for(auto const& bind:*editorBindings)bind();*popup=editorBindings;
             self->editor=Flyout();self->editor.Content(body);TrackPopup(self->editor,self->data);
@@ -553,10 +575,11 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
         auto info=toolbarUi(data->localization.get(),O({{L"type",S(L"numeric_info")},{L"id",S(id)},{L"control",settingSpec},{L"compact",B(true)},{L"units",B(true)}})).GetObject();
         struct State {double value=0;bool units=true;std::optional<Contact> contact;double startFill=0;};
         auto state=std::make_shared<State>();state->value=num(option,L"value");
-        auto set=[weak,id](double value){if(auto self=weak.lock())self->send(O({{L"type",S(L"set_tool_setting")},{L"id",S(id)},{L"value",N(value)}}));};
-        auto reset=[weak,id]{if(auto self=weak.lock())self->send(O({{L"type",S(L"reset_tool_setting")},{L"id",S(id)}}));};
+        auto send=edit();
+        auto set=[send,id,state](double value){state->value=value;send(O({{L"type",S(L"set_tool_setting")},{L"id",S(id)},{L"value",N(value)}}));};
+        auto reset=[send,id]{send(O({{L"type",S(L"reset_tool_setting")},{L"id",S(id)}}));};
         NumberPresentation presentation;
-        if(flag(option,L"preview"))presentation.phase=[weak,id](hstring const& phase,double value){if(auto self=weak.lock())self->send(O({{L"type",S(L"tool_setting_contact")},{L"id",S(id)},{L"phase",S(phase)},{L"value",N(value)}}));};
+        presentation.phase=[send,id](hstring const& phase,double value){send(O({{L"type",S(L"tool_setting_contact")},{L"id",S(id)},{L"phase",S(phase)},{L"value",N(value)}}));};
         presentation.title=[weak,id]{if(auto self=weak.lock())for(auto value:array(self->model,L"options")){
             auto entry=object(value.GetObject(),L"Numeric");if(str(entry,L"id")==id)return str(entry,L"label");
         }return hstring();};
@@ -604,10 +627,12 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
             faceValue.Text(text);
             faceValue.FontSize(self->data->textSize()*(self->tileStyle==L"small"&&text.size()>=4?.9:1.));
         };
-        auto clicks=PointerGesture::Clicks(face,[weak,id,state,preview=bool(presentation.phase)](uint32_t pointer,bool cancel){
-            if(state->contact&&state->contact->id==pointer){auto moved=state->contact->moved;state->contact.reset();
-                if(moved&&preview)if(auto self=weak.lock())self->send(O({{L"type",S(L"tool_setting_contact")},{L"id",S(id)},{L"phase",S(cancel?L"cancel":L"up")}}));}
-        });
+        auto clicks=PointerGesture::Clicks(face,[](uint32_t,bool){});
+        auto capture=captureControl(data,face,[state,clicks,phase=presentation.phase](uint32_t id,bool cancel,PointerRoutedEventArgs const*){
+            if(!state->contact)return;auto finished=*state->contact;state->contact.reset();
+            if(cancel||finished.moved)clicks->Suppress(id);
+            if(finished.moved){state->value=cancel?finished.before:state->value;phase(cancel?L"cancel":L"up",state->value);}
+        },PointerCaptureLoss::CompleteLift);
         face.Click([weak,state,clicks,settingSpec,currentTitle=presentation.title,phase=presentation.phase,set,reset](winrt::Windows::Foundation::IInspectable const& sender,auto&&){
             auto self=weak.lock();if(!self)return;
             if(clicks->SuppressClick())return;
@@ -619,14 +644,15 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
             self->editor=Flyout();self->editor.Content(content);TrackPopup(self->editor,self->data);
             self->editor.ShowAt(sender.as<FrameworkElement>());
         });
-        face.AddHandler(UIElement::PointerPressedEvent(),box_value(PointerEventHandler([state,clicks,settingSpec,data=data](winrt::Windows::Foundation::IInspectable const& sender,PointerRoutedEventArgs const& e){
+        face.AddHandler(UIElement::PointerPressedEvent(),box_value(PointerEventHandler([state,clicks,capture,settingSpec,data=data](winrt::Windows::Foundation::IInspectable const& sender,PointerRoutedEventArgs const& e){
             auto p=e.GetCurrentPoint(sender.as<UIElement>());
             if(state->contact||!clicks->Owns(p.PointerId())||p.PointerDeviceType()==NativeInput::PointerDeviceType::Mouse)return;
-            state->contact=Contact{p.PointerId(),p.Position()};
+            if(!capture->Begin(e,false))return;
+            state->contact=Contact{p.Position(),state->value};
             state->startFill=num(numeric(data->localization.get(),settingSpec,state->value,O({{L"type",S(L"format")}})),L"fill");
         })),true);
-        face.AddHandler(UIElement::PointerMovedEvent(),box_value(PointerEventHandler([state,clicks,settingSpec,set,phase=presentation.phase,data=data](winrt::Windows::Foundation::IInspectable const& sender,PointerRoutedEventArgs const& e){
-            if(!state->contact||state->contact->id!=e.Pointer().PointerId())return;
+        face.AddHandler(UIElement::PointerMovedEvent(),box_value(PointerEventHandler([state,clicks,capture,settingSpec,set,phase=presentation.phase,data=data](winrt::Windows::Foundation::IInspectable const& sender,PointerRoutedEventArgs const& e){
+            if(!state->contact||!capture->Owns(e.Pointer().PointerId()))return;
             auto p=e.GetCurrentPoint(sender.as<UIElement>()).Position();
             if(!state->contact->moved&&std::abs(p.Y-state->contact->start.Y)<8)return;
             if(!state->contact->moved&&phase)phase(L"down",state->value);
@@ -640,7 +666,7 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
             auto next=numeric(data->localization.get(),settingSpec,state->value,O({{L"type",S(L"step")},{L"steps",N(delta>0?1:-1)}}));
             if(num(next,L"value")!=state->value)set(num(next,L"value"));
         });
-        Field result;result.row=cell;result.worded=true;
+        Field result;result.row=cell;result.worded=true;result.dispose=[capture]{capture->Cancel();};
         result.update=[state,updateFace,bindings,name,glyph,face,faceLabel,numberView,data=data](J const& option){
             auto title=str(object(option,L"Numeric"),L"label");name.Text(title);faceLabel.Text(title);tooltip(glyph,title);AutomationProperties::SetName(face,title);
             AutomationProperties::SetName(numberView,title);
@@ -681,11 +707,11 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
         return result;
     }
     Field rangeField(J const& interval){
-        auto weak=weak_from_this();auto bounds=array(interval,L"bounds");
+        auto weak=weak_from_this();auto send=edit();auto bounds=array(interval,L"bounds");
         std::array<hstring,2> ids{str(bounds.GetObjectAt(0),L"id"),str(bounds.GetObjectAt(1),L"id")};
         auto range=RangeControl::Create(data,bounds.GetObjectAt(0),bounds.GetObjectAt(1),str(interval,L"label"),L"toolbar",sliders,
-            [weak,ids](int index,double value){if(auto self=weak.lock())
-                self->send(O({{L"type",S(L"set_tool_setting")},{L"id",S(ids[index])},{L"value",N(value)}}));});
+            [send,ids](int index,double value,hstring const& phase){
+                send(O({{L"type",S(L"tool_setting_contact")},{L"id",S(ids[index])},{L"value",N(value)},{L"phase",S(phase)}}));});
         Field result;result.row=range->root;result.intrinsic=true;result.worded=true;result.across=range->root.Height();
         result.update=[range](J const& option){
             auto interval=object(option,L"Range");auto current=array(interval,L"bounds");

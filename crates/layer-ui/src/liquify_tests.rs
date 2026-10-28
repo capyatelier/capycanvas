@@ -498,3 +498,49 @@ fn liquify_up_replaces_a_preview_held_in_a_pending_frame() {
     assert!(s.engine.undo().unwrap());
     assert_eq!(s.engine.document().artwork, artwork);
 }
+
+#[test]
+fn stale_toolbar_cancel_preserves_a_new_liquify_contact() {
+    let mut s = deformed();
+    let original = s.engine.document().artwork.clone();
+    invoke(&mut s, CommandId::LiquifyAdjust);
+    let old = s.state.toolbar_context();
+    amount_contact(&mut s, ContactPhase::Down, None);
+    amount_contact(&mut s, ContactPhase::Move, Some(0.4));
+    invoke(&mut s, CommandId::Brush);
+    assert!(!s.liquify_preview_active());
+    s.frame(1, 1).unwrap();
+    invoke(&mut s, CommandId::Liquify);
+    if !s.state.tool_settings.iter().any(|setting| setting.id == "liquify_amount") {
+        invoke(&mut s, CommandId::LiquifyAdjust);
+    }
+    let current = s.state.toolbar_context();
+    assert_ne!(old, current);
+    let before = s.engine.document().artwork.clone();
+    let checkpoint = s.engine.checkpoint();
+    amount_contact(&mut s, ContactPhase::Down, None);
+    amount_contact(&mut s, ContactPhase::Move, Some(0.7));
+    let adjustment = s.operation.liquify.as_ref().unwrap();
+    let contact = (adjustment.amount, adjustment.gesture);
+    assert!(contact.1.is_some());
+    assert!(s.dispatch(UiAction::ToolbarEdit {
+        context: old,
+        action: Box::new(UiAction::ToolSettingContact {
+            id: "liquify_amount".into(), phase: ContactPhase::Cancel, value: None,
+        }),
+    }).is_ok());
+    let adjustment = s.operation.liquify.as_ref().unwrap();
+    assert_eq!((adjustment.amount, adjustment.gesture), contact);
+    assert_eq!(s.engine.document().artwork, before);
+    assert_eq!(s.engine.checkpoint(), checkpoint);
+    s.dispatch(UiAction::ToolbarEdit {
+        context: current,
+        action: Box::new(UiAction::ToolSettingContact {
+            id: "liquify_amount".into(), phase: ContactPhase::Up, value: None,
+        }),
+    }).unwrap();
+    assert!(!s.liquify_preview_active());
+    assert_ne!(s.engine.document().artwork, before);
+    assert!(s.engine.undo().unwrap());
+    assert_eq!(s.engine.document().artwork, original);
+}

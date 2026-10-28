@@ -16,7 +16,7 @@ double valueWidth(std::shared_ptr<WorkspaceData> const& data,J const& spec){
 }
 }
 std::shared_ptr<RangeControl> RangeControl::Create(std::shared_ptr<WorkspaceData> const& data,J const& lower,J const& upper,
-    hstring const& label,hstring const& prefix,bool showTrack,std::function<void(int,double)> change){
+    hstring const& label,hstring const& prefix,bool showTrack,std::function<void(int,double,hstring const&)> change){
     auto self=std::make_shared<RangeControl>();
     self->data=data;self->bounds={lower,upper};self->label=label;self->prefix=prefix;self->change=std::move(change);
     self->values={num(lower,L"value"),num(upper,L"value")};
@@ -34,6 +34,7 @@ void RangeControl::init(bool showTrack){
     for(int i=0;i<2;i++){
         auto field=bounds[i];auto spec=object(field,L"numeric");
         NumberPresentation presentation;
+        presentation.phase=[weak,i](hstring const& phase,double value){if(auto self=weak.lock())self->set(i,value,phase);};
         presentation.title=[weak,i]{if(auto self=weak.lock())return str(self->bounds[i],L"label")+L" — "+self->label;return hstring();};
         auto control=number(data,presentation.title(),spec,
             [weak,i]{if(auto self=weak.lock())return self->values[i];return 0.;},
@@ -51,26 +52,26 @@ void RangeControl::init(bool showTrack){
         thumb.Width(6);thumb.Height(14);Canvas::SetTop(thumb,7);thumb.CornerRadius({2,2,2,2});
         thumb.Background(data->brush(L"text"));thumb.IsHitTestVisible(false);track.Children().Append(thumb);
     }
-    Grid::SetColumn(track,1);root.Children().Append(track);
+    focus.Content(track);focus.IsTabStop(true);focus.HorizontalContentAlignment(HorizontalAlignment::Stretch);focus.VerticalContentAlignment(VerticalAlignment::Stretch);
+    AutomationProperties::SetName(focus,label);Grid::SetColumn(focus,1);root.Children().Append(focus);
     track.SizeChanged([weak](auto&&,auto&&){if(auto self=weak.lock())self->paint();});
+    capture=captureControl(data,track,[weak](uint32_t,bool cancel,PointerRoutedEventArgs const* event){if(auto self=weak.lock();self&&self->contact){
+        if(!cancel&&event)self->pick(event->GetCurrentPoint(self->track).Position().X);
+        self->end(cancel);if(event)event->Handled(true);
+    }});
     track.PointerPressed([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock()){
         auto point=e.GetCurrentPoint(self->track);
-        if(self->contact||self->retired||!PointerGesture::PrimaryContact(point))return;
+        if(self->contact||self->retired)return;
         double width=self->track.ActualWidth(),x=point.Position().X;
         std::array<double,2> positions{self->position(self->values[0],width),self->position(self->values[1],width)};
         int index=std::abs(positions[1]-positions[0])<1?int(x>=positions[0]):int(std::abs(x-positions[1])<std::abs(x-positions[0]));
-        if(!self->track.CapturePointer(e.Pointer()))return;
-        self->contact=Contact{point.PointerId(),index,self->values[index],self->domain,std::abs(x-positions[index])<=12?x-positions[index]:0};
-        self->pick(x);e.Handled(true);
+        if(!self->capture->Begin(e))return;
+        self->contact=Contact{index,self->values[index],self->domain,std::abs(x-positions[index])<=12?x-positions[index]:0};
+        self->focus.Focus(FocusState::Pointer);
+        self->change(index,self->values[index],L"down");self->pick(x);e.Handled(true);
     }});
-    track.PointerMoved([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock();self&&self->contact&&self->contact->id==e.Pointer().PointerId()){
+    track.PointerMoved([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock();self&&self->capture->Owns(e.Pointer().PointerId())){
         self->pick(e.GetCurrentPoint(self->track).Position().X);e.Handled(true);
-    }});
-    PointerGesture::OnCompleted(track,[weak](PointerRoutedEventArgs const& e,bool cancel){if(auto self=weak.lock();self&&self->contact&&self->contact->id==e.Pointer().PointerId()){
-        self->end(cancel);e.Handled(true);
-    }});
-    root.KeyDown([weak](auto&&,KeyRoutedEventArgs const& e){if(auto self=weak.lock();self&&self->contact&&e.Key()==winrt::Windows::System::VirtualKey::Escape){
-        self->end(true);e.Handled(true);
     }});
     paint();
 }
@@ -87,14 +88,14 @@ void RangeControl::paint(){
     fill.Width(std::max(0.,upper-lower));Canvas::SetLeft(fill,lower);
     Canvas::SetLeft(thumbs[0],lower-7);Canvas::SetLeft(thumbs[1],upper+1);
 }
-void RangeControl::set(int index,double value){
-    if(retired)return;
+void RangeControl::set(int index,double value,hstring const& phase){
+    if(retired&&phase!=L"cancel")return;
     auto resolved=num(numeric(data->localization.get(),object(bounds[0],L"numeric"),values[index],O({{L"type",S(L"value")},{L"value",N(value)}})),L"value");
     double next=index?std::max(values[0],resolved):std::min(values[1],resolved);
-    if(next==values[index])return;
+    if(next==values[index]&&phase==L"move")return;
     values[index]=next;paint();
     for(auto const& bind:fields)bind();
-    change(index,next);
+    change(index,next,phase);
 }
 void RangeControl::pick(double x){
     if(!contact)return;
@@ -107,15 +108,15 @@ void RangeControl::pick(double x){
 void RangeControl::end(bool cancel){
     if(!contact)return;
     auto finished=*contact;contact.reset();
-    if(cancel)set(finished.index,finished.before);
-    track.ReleasePointerCaptures();paint();
+    set(finished.index,cancel?finished.before:values[finished.index],cancel?L"cancel":L"up");
+    paint();
 }
 void RangeControl::Relabel(J const& lower,J const& upper,hstring const& currentLabel){
     if(retired)return;
     bool changed=label!=currentLabel||str(bounds[0],L"label")!=str(lower,L"label")||str(bounds[1],L"label")!=str(upper,L"label");
     bounds={lower,upper};label=currentLabel;
     if(changed){
-        AutomationProperties::SetName(root,label);AutomationProperties::SetName(track,label);
+        AutomationProperties::SetName(root,label);AutomationProperties::SetName(track,label);AutomationProperties::SetName(focus,label);
         for(auto const& bind:fields)bind();
     }
 }
@@ -124,4 +125,4 @@ void RangeControl::Update(double lower,double upper){
     values={lower,upper};paint();
     for(auto const& bind:fields)bind();
 }
-void RangeControl::Dispose(){retired=true;contact.reset();track.ReleasePointerCaptures();}
+void RangeControl::Dispose(){capture->Cancel();retired=true;}

@@ -291,6 +291,7 @@ function Select-Choice([string]$Id,[string]$Name){
 function Idle {Wait-Until {$m=Model;$m -and !$m.windows_document -and !$m.state.document_file.busy -and !@($m.state.requests).Count} 'HDR/document operation did not finish' 60}
 function Sdr { ProofPanel;if(!(Find 'proof-panel-exposure')){Invoke 'proof-panel-mode-sdr'};$null=Control 'proof-panel-exposure';$null=Control 'proof-panel-contrast' }
 function ProofPanel {
+ Expand-PanelColumn 'proof'
  if(Find 'proof-panel-mode' -Visible){return}
  $entry=@{id=$null}
  Wait-Until {

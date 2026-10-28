@@ -39,7 +39,7 @@ struct CurveEditor : std::enable_shared_from_this<CurveEditor> {
     std::array<std::array<TextBlock,3>,2> axes;
     std::array<TextBlock,2> ev;
     std::array<ContentControl,2> coordinates;
-    std::optional<uint32_t> pointer;
+    std::shared_ptr<ControlCapture> capture;
     std::optional<std::pair<uint64_t,Point>> lastTap;
     std::pair<uint64_t,Point> press{};
     hstring heldKey,drawn,labels;
@@ -67,9 +67,8 @@ struct CurveEditor : std::enable_shared_from_this<CurveEditor> {
     }
     void contact(hstring const& phase,Point at){auto operation=located(L"contact",at);operation.Insert(L"phase",S(phase));send(operation);}
     void cancel(){
-        if(!pointer&&heldKey.empty())return;
-        if(pointer){data->pointerCancels.Forget(*pointer,this);pointer.reset();graph.ReleasePointerCaptures();}else owner=epoch();
-        heldKey=L"";contact(L"cancel",{});
+        bool pointing=capture&&capture->Active();if(capture)capture->Cancel();
+        if(!pointing&&!heldKey.empty()){owner=epoch();heldKey=L"";contact(L"cancel",{});}
     }
     void removeAt(Point at,std::optional<double> count){
         owner=epoch();extent={float(graph.ActualWidth()-2*num(curve(),L"inset")),float(graph.ActualHeight()-2*num(curve(),L"inset"))};
@@ -79,7 +78,7 @@ struct CurveEditor : std::enable_shared_from_this<CurveEditor> {
         auto name=curveKey(e.Key());if(name.empty())return;
         bool control=held(VK_CONTROL),alt=held(VK_MENU);
         if(pressed&&name!=L"Escape"&&(control||alt))return;
-        if(name==L"Escape"&&pointer){data->pointerCancels.Forget(*pointer,this);pointer.reset();graph.ReleasePointerCaptures();}
+        if(name==L"Escape"&&capture->Active()){cancel();e.Handled(true);return;}
         if(name.starts_with(L"Arrow"))heldKey=pressed?name:hstring();
         auto status=e.KeyStatus();auto keyOwner=epoch();
         ForwardKeyRepeats(pressed,status.WasKeyDown,status.RepeatCount,[&](bool repeat){
@@ -169,32 +168,32 @@ struct CurveEditor : std::enable_shared_from_this<CurveEditor> {
             self->graph.Clip().as<RectangleGeometry>().Rect({0,0,float(self->graph.ActualWidth()),float(self->graph.ActualHeight())});
             self->refresh();
         }});
+        capture=captureControl(data,graph,[weak](uint32_t,bool cancel,PointerRoutedEventArgs const* event){if(auto self=weak.lock()){
+            if(cancel){self->heldKey=L"";self->lastTap.reset();self->contact(L"cancel",{});}
+            else if(event){
+                auto at=event->GetCurrentPoint(self->graph).Position();self->contact(L"up",at);
+                bool tap=std::hypot(at.X-self->press.second.X,at.Y-self->press.second.Y)<=4;
+                if(tap&&self->secondTap(self->press.first,self->press.second)){self->lastTap.reset();self->removeAt(at,self->firstCount);}
+                else self->lastTap=tap?std::optional(self->press):std::nullopt;
+            }
+            if(event)event->Handled(true);
+        }});
         graph.PointerPressed([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock()){
             if(self->data->claimBubbleContact(e))return;
             auto raw=e.GetCurrentPoint(self->graph);
-            if(self->pointer||self->graph.ActualWidth()<1||self->graph.ActualHeight()<1
+            if(self->capture->Active()||self->graph.ActualWidth()<1||self->graph.ActualHeight()<1
                 ||!PointerGesture::PrimaryContact(raw))return;
             auto at=raw.Position();if(!self->secondTap(raw.Timestamp(),at))self->firstCount=self->points().Size();
             self->press={raw.Timestamp(),at};
-            if(!self->graph.CapturePointer(e.Pointer()))return;
-            self->pointer=raw.PointerId();self->owner=self->epoch();
-            self->data->pointerCancels.Observe(*self->pointer,self.get(),[weak]{if(auto self=weak.lock())self->cancel();});
+            if(!self->capture->Begin(e))return;
+            self->owner=self->epoch();
             self->extent={float(self->graph.ActualWidth()-2*num(self->curve(),L"inset")),float(self->graph.ActualHeight()-2*num(self->curve(),L"inset"))};
             self->focus.Focus(FocusState::Programmatic);self->contact(L"down",at);e.Handled(true);
         }});
-        graph.PointerMoved([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock();self&&self->pointer==e.Pointer().PointerId()){
+        graph.PointerMoved([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock();self&&self->capture->Owns(e.Pointer().PointerId())){
             self->contact(L"move",e.GetCurrentPoint(self->graph).Position());e.Handled(true);
         }});
-        CapyUi::PointerGesture::OnCompleted(graph,[weak](PointerRoutedEventArgs const& e,bool cancel){if(auto self=weak.lock();self&&self->pointer==e.Pointer().PointerId()){
-            if(cancel){self->cancel();e.Handled(true);return;}
-            auto at=e.GetCurrentPoint(self->graph).Position();self->data->pointerCancels.Forget(*self->pointer,self.get());self->pointer.reset();self->contact(L"up",at);
-            self->graph.ReleasePointerCaptures();e.Handled(true);
-            bool tap=std::hypot(at.X-self->press.second.X,at.Y-self->press.second.Y)<=4;
-            if(tap&&self->secondTap(self->press.first,self->press.second)){self->lastTap.reset();self->removeAt(at,self->firstCount);}
-            else self->lastTap=tap?std::optional(self->press):std::nullopt;
-        }});
-
-        graph.Unloaded([weak](auto&&,auto&&){if(auto self=weak.lock())self->cancel();});
+        graph.Unloaded([weak](auto&&,auto&&){if(auto self=weak.lock();self&&!self->heldKey.empty())self->cancel();});
         graph.RightTapped([weak](auto&&,RightTappedRoutedEventArgs const& e){if(auto self=weak.lock();self&&e.PointerDeviceType()==Microsoft::UI::Input::PointerDeviceType::Mouse){
             self->cancel();self->removeAt(e.GetPosition(self->graph),std::nullopt);e.Handled(true);
         }});
@@ -202,7 +201,7 @@ struct CurveEditor : std::enable_shared_from_this<CurveEditor> {
         focus.KeyUp([weak](auto&&,KeyRoutedEventArgs const& e){if(auto self=weak.lock())self->key(e,false);});
         focus.LostFocus([weak](auto&&,auto&&){if(auto self=weak.lock())self->cancel();});
     }
-    ~CurveEditor(){cancel();}
+    ~CurveEditor(){if(capture&&capture->Active()){capture->Cancel();heldKey=L"";contact(L"cancel",{});}else cancel();}
     void refresh(){
         auto data=this->data;auto model=this->model();auto view=curve();auto p=points();
         if(p.Size()<2||!view.Size())return;

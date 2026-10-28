@@ -2930,6 +2930,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         if let UiAction::ToolbarEdit { context, action } = action {
             if context != self.state.toolbar_context() || !self.state.toolbar_edit_allowed(&action) {
+                if matches!(&*action, UiAction::ToolSettingContact { phase: ContactPhase::Cancel, .. }) {
+                    return Ok(UiChange::default());
+                }
                 return Err("This toolbar control belongs to a previous tool or edit target".into());
             }
             return self.dispatch(*action);

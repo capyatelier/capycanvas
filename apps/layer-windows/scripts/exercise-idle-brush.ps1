@@ -180,6 +180,7 @@ function Shortcut([uint16[]]$Modifiers,[uint16]$Key){
  (Canvas-Peer).SetFocus();[CapyRowPointer]::Chord([uint32]$review.Id,$Modifiers,$Key)
 }
 function Select-Preset([string]$Label,[int]$Id){
+ if((Model).state.brush.preset -ne $Id){
  Shortcut @(0x11) 0x4b
  Wait-Until {Find 'command-search' -Visible} 'Command search did not open'
  (Control 'command-search').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($Label)
@@ -198,6 +199,7 @@ function Select-Preset([string]$Label,[int]$Id){
  $result=Control ('command-result-'+$match.index) -Arranged
  if($result.Current.Name -ne $match.label -or !$result.Current.IsEnabled){throw 'The native brush result differs from the shared search result'}
  $result.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+ }
  Wait-Until {!(Find 'command-search' -Visible) -and (Model).state.brush.preset -eq $Id -and (Model).brush_ready} "The requested brush did not become ready: $Label/$Id" 90
  $size=Control 'tool-setting-size';$size.SetFocus()
  $size.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('64')
@@ -450,6 +452,22 @@ try{
    if($slider.TryGetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern,[ref]$scroll)){$scroll.ScrollIntoView()}
    $bounds=(Control 'tool-setting-liquify_amount-slider' -Arranged).Current.BoundingRectangle
    $startX=[int]($bounds.Left+$bounds.Width*.9);$endX=[int]($bounds.Left+$bounds.Width*.5);$sliderY=[int]($bounds.Top+$bounds.Height*.5)
+   foreach($device in @('mouse','touch','pen')){
+    foreach($ending in $(if($device -eq 'mouse'){@('escape')}else{@('cancel','escape')})){
+     [CapyRowPointer]::Down($device,$startX,$sliderY)
+     try{
+      for($step=1;$step -le 6;$step++){[CapyRowPointer]::Move([int]($startX+($endX-$startX)*$step/6),$sliderY);Start-Sleep -Milliseconds 30}
+      Wait-Until {$setting=@((Model).state.tool_settings|Where-Object id -eq 'liquify_amount');$setting.Count -eq 1 -and $setting[0].value -gt .2 -and $setting[0].value -lt .8} "$device Amount did not preview before $ending"
+      if((Revision) -ne $afterPaint){throw "$device Amount committed before $ending"}
+      if($ending -eq 'escape'){
+       [CapyRowPointer]::Key([uint32]$review.Id,0x1b)
+       Wait-Until {$setting=@((Model).state.tool_settings|Where-Object id -eq 'liquify_amount');$setting.Count -eq 1 -and [Math]::Abs($setting[0].value-1) -lt .001} "$device slider Escape did not restore Amount before Up"
+      }
+     }finally{if($ending -eq 'cancel'){[CapyRowPointer]::Cancel()}else{[CapyRowPointer]::Up()}}
+     Wait-Until {$setting=@((Model).state.tool_settings|Where-Object id -eq 'liquify_amount');$setting.Count -eq 1 -and [Math]::Abs($setting[0].value-1) -lt .001} "$device $ending did not restore Amount"
+     if((Wait-StablePixels {Pixels}) -ne $afterPixels -or (Revision) -ne $afterPaint){throw "$device $ending left a Liquify edit"}
+    }
+   }
    foreach($ending in @('cancel','up')){
     [CapyRowPointer]::Down('touch',$startX,$sliderY)
     try{
@@ -470,6 +488,21 @@ try{
    $adjustedPixels=Wait-StablePixels {Pixels};$adjustedPaint=Revision
    Assert-History 0x5a $afterPixels $afterPaint 'Adjust Undo'
    Assert-History 0x59 $adjustedPixels $adjustedPaint 'Adjust Redo'
+   (Control 'tool-action-liquify_adjust' -Arranged).GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
+   Wait-Until {@((Model).state.tool_settings|Where-Object id -eq 'liquify_amount').Count -eq 1} 'Adjust did not reopen for held-arrow input'
+   $slider=(Control 'tool-setting-liquify_amount-slider' -Arranged)
+   $slider.SetFocus();[CapyRowPointer]::Hover($endX,$sliderY)
+   $keyValue=@((Model).state.tool_settings|Where-Object id -eq 'liquify_amount')[0].value
+   try{
+    for($repeat=0;$repeat -lt 6;$repeat++){[CapyRowPointer]::Hold(0x25,$true);Start-Sleep -Milliseconds 35}
+    Wait-Until {@((Model).state.tool_settings|Where-Object id -eq 'liquify_amount')[0].value -lt $keyValue} 'Held slider arrow did not preview'
+    if((Revision) -ne $adjustedPaint){throw 'Held slider arrow committed before key Up'}
+   }finally{[CapyRowPointer]::Hold(0x25,$false)}
+   Wait-Until {(Revision) -ne $adjustedPaint} 'Held slider arrow did not commit on key Up'
+   $keyPixels=Wait-StablePixels {Pixels};$keyPaint=Revision
+   Assert-History 0x5a $adjustedPixels $adjustedPaint 'Held arrow coalesced Undo'
+   Assert-History 0x59 $keyPixels $keyPaint 'Held arrow single Redo'
+   $adjustedPixels=$keyPixels;$adjustedPaint=$keyPaint
    $reset=Control 'tool-action-liquify_reset'
    $reset.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
    Wait-Until {(Pixels) -eq $seedPixels} 'Reset did not restore the seeded artwork'

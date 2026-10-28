@@ -93,8 +93,9 @@ try {
     if(!(Model).windows_isolated_settings){throw 'Navigator fixture requires an isolated profile'}
     [CapyNavigatorCapture]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
     $root=$native.window.Root;$drawingWindow=$native.window.Handle
-    try{Wait-Until {Find 'navigator-overview'} 'Navigator is hidden by default' 3}catch{Navigator}
-    $overview=Control 'navigator-overview'
+    try{Wait-Until {Find 'navigator-overview' -Visible} 'Navigator is hidden by default' 3}catch{Navigator}
+    Expand-PanelColumn 'navigator'
+    $overview=Control 'navigator-overview' -Arranged
     $identity=$overview.GetRuntimeId() -join ':'
     $scale=[CapyNavigatorCapture]::GetDpiForWindow($drawingWindow)/96.
     if($overview.Current.BoundingRectangle.Height -gt 220*$scale+1){throw 'Overview exceeds the shared 220-unit height cap'}

@@ -64,7 +64,8 @@ struct EditorView:std::enable_shared_from_this<EditorView> {
     StackPanel root;Grid top,strip,bottom;ContentControl focus;Canvas dots;ComboBox interpolation;ContentControl positionGate;
     Button reverse{nullptr},reset{nullptr},remove{nullptr},bucket{nullptr},colorPick{nullptr};
     Bindings fields;
-    struct Contact{uint32_t id;J owner;int index;double x,width,position;};
+    std::shared_ptr<ControlCapture> capture;
+    struct Contact{J owner;int index;double x,width,position;};
     std::optional<Contact> contact;std::optional<std::pair<J,int>> held;
     int selected=0;bool syncing=false;hstring owner,drawn,choices;
     J control()const{return source.control();}
@@ -83,10 +84,8 @@ struct EditorView:std::enable_shared_from_this<EditorView> {
     static J positionEdit(int index,J const& operation){return O({{L"kind",S(L"position")},{L"index",N(index)},{L"operation",operation}});}
     static J settle(){return O({{L"type",S(L"step")},{L"steps",N(0)}});}
     void cancel(){
-        J destination;
-        if(contact){destination=contact->owner;contact.reset();focus.ReleasePointerCaptures();}
-        else if(held){destination=held->first;held.reset();}
-        if(destination.Size())send(O({{L"kind",S(L"reset")}}),L"cancel",destination);
+        if(capture)capture->Cancel();
+        if(held){auto destination=held->first;held.reset();send(O({{L"kind",S(L"reset")}}),L"cancel",destination);}
     }
     void removeSelected(){
         int index=selected,count=int(stops().Size());if(index<=0||index+1>=count)return;
@@ -123,15 +122,18 @@ struct EditorView:std::enable_shared_from_this<EditorView> {
         focus.HorizontalContentAlignment(HorizontalAlignment::Stretch);focus.VerticalContentAlignment(VerticalAlignment::Stretch);
         AutomationProperties::SetAutomationId(focus,source.id+L"-gradient");
         strip.SizeChanged([weak](auto&&,auto&&){if(auto self=weak.lock())self->drawDots();});
+        capture=captureControl(data,focus,[weak](uint32_t,bool cancel,PointerRoutedEventArgs const* event){if(auto self=weak.lock();self&&self->contact){
+            if(!cancel&&event)self->drag(event->GetCurrentPoint(self->focus).Position().X);
+            auto finished=*self->contact;self->contact.reset();
+            self->send(cancel?O({{L"kind",S(L"reset")}}):positionEdit(finished.index,settle()),cancel?L"cancel":L"up",finished.owner);
+            if(event)event->Handled(true);
+        }});
         focus.PointerPressed([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock())self->down(e);});
-        focus.PointerMoved([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock())self->move(e);});
-        focus.PointerReleased([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock())self->up(e);});
-        auto lost=[weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock();self&&self->contact&&self->contact->id==e.Pointer().PointerId())self->cancel();};
-        focus.PointerCanceled(lost);focus.PointerCaptureLost(lost);
+        focus.PointerMoved([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock();self&&self->capture->Owns(e.Pointer().PointerId())){self->drag(e.GetCurrentPoint(self->focus).Position().X);e.Handled(true);}});
         focus.KeyDown([weak](auto&&,KeyRoutedEventArgs const& e){if(auto self=weak.lock())self->key(e,true);});
         focus.KeyUp([weak](auto&&,KeyRoutedEventArgs const& e){if(auto self=weak.lock())self->key(e,false);});
         focus.LostFocus([weak](auto&&,auto&&){if(auto self=weak.lock())self->cancel();});
-        focus.Unloaded([weak](auto&&,auto&&){if(auto self=weak.lock())self->cancel();});
+        focus.Unloaded([weak](auto&&,auto&&){if(auto self=weak.lock();self&&self->held)self->cancel();});
         bottom.ColumnSpacing(data->panelMetric(L"control_spacing"));column(bottom,{1,GridUnitType::Star});for(int i=0;i<3;++i)column(bottom,{1,GridUnitType::Auto});
         NumberPresentation presentation;presentation.title=data->copyCaption(L"color",L"position").current;
         presentation.identity=[weak]{if(auto self=weak.lock())return self->context();return hstring();};
@@ -164,23 +166,15 @@ struct EditorView:std::enable_shared_from_this<EditorView> {
         }
         if(existing<0&&!flag(gradient(),L"can_add"))return;
         focus.Focus(FocusState::Pointer);
-        if(!focus.CapturePointer(e.Pointer()))return;
+        if(!capture->Begin(e))return;
         int index=existing>=0?existing:below;selected=index;
-        contact=Contact{p.PointerId(),target(),index,p.Position().X,width,existing>=0?num(all.GetObjectAt(uint32_t(existing)),L"position"):at};
+        contact=Contact{target(),index,p.Position().X,width,existing>=0?num(all.GetObjectAt(uint32_t(existing)),L"position"):at};
         send(stopEdit(existing>=0?N(existing):JsonValue::CreateNullValue(),contact->position),L"down",contact->owner);
         e.Handled(true);drawDots();
     }
-    void move(PointerRoutedEventArgs const& e){
-        if(!contact||contact->id!=e.Pointer().PointerId())return;
-        double x=e.GetCurrentPoint(focus).Position().X;
-        send(stopEdit(N(contact->index),std::clamp(contact->position+(x-contact->x)/contact->width,0.,1.)),L"move",contact->owner);e.Handled(true);
-    }
-    void up(PointerRoutedEventArgs const& e){
-        if(!contact||contact->id!=e.Pointer().PointerId())return;
-        if(e.GetCurrentPoint(focus).Properties().IsCanceled()){cancel();return;}
-        move(e);auto finished=*contact;contact.reset();
-        send(positionEdit(finished.index,settle()),L"up",finished.owner);
-        focus.ReleasePointerCapture(e.Pointer());e.Handled(true);
+    void drag(double x){
+        if(!contact)return;
+        send(stopEdit(N(contact->index),std::clamp(contact->position+(x-contact->x)/contact->width,0.,1.)),L"move",contact->owner);
     }
     void key(KeyRoutedEventArgs const& e,bool pressed){
         using K=winrt::Windows::System::VirtualKey;auto pressedKey=e.Key();
