@@ -272,11 +272,11 @@ performance parity require the checks below.
 
 | Entry point | Responsibility |
 | --- | --- |
-| [UI bridge projection](../../crates/layer-ui/src/panel_bridges.rs) | `ResolvedLayout::measured_panel_bridges` validates `PanelBridgeMeasure` and resolves native allocations into receiver IDs, radii, anchors and contour paths. Windows calls stateless `capy_panel_bridges` synchronously with the measured snapshot's complete `layout` and `measure`; it never resolves a newer live workspace. |
+| [UI bridge projection](../../crates/layer-ui/src/panel_bridges.rs) | `ResolvedLayout::measured_panel_bridges` validates `PanelBridgeMeasure` and resolves native allocations into receiver IDs, radii, anchors and contour paths. Windows retains the snapshot's immutable Rust layout and passes only current measurements to `capy_panel_bridges`; it never resolves a newer live workspace. |
 | [Outer profiles](../../crates/layer-render/src/panel_profile.rs) and [panel geometry](../../crates/layer-render/src/panel_geometry.rs) | Shared profile generation, attachment fields and vector projection. GPU and vector rendering use the same build-time profile table. |
 | [GPU surfaces](../../crates/layer-render-wgpu/src/panel_surface.rs) and [shader](../../crates/layer-render-wgpu/src/panel_surface.wgsl) | Shared fill, coverage and shadow preparation. Preserve background pipeline preparation and matching geometry revisions; dragging must not compile shaders or wait for GPU completion on the UI or input thread. |
 | [Apple registry](../../apps/layer-apple/Shared/Editor/GlassSurface.swift) and [Metal presenter](../../apps/layer-apple/native/src/metal.rs) | Native measurements, stale-result rejection and presented-revision acknowledgement for macOS and iPadOS. |
-| [Windows workspace](../../apps/layer-windows/WorkspaceView.cpp) and [presenter](../../apps/layer-windows/native/src/host.rs) | Native measurements, synchronous snapshot-bound projection using encoded layout bytes retained by the background decoder, and presented-revision acknowledgement. Native resize ownership ends only after the final GPU scene is presented. |
+| [Windows workspace](../../apps/layer-windows/WorkspaceView.cpp) and [presenter](../../apps/layer-windows/native/src/host.rs) | The background decoder prepares and retains a Rust layout handle per layout revision, including startup. Native views adopt that handle with its accepted snapshot and project measurements synchronously. Native resize ownership ends only after the final GPU scene is presented. |
 
 Shared regressions live in [column-stack tests](../../crates/layer-ui/src/column_stack_tests.rs)
 and [GPU surface tests](../../crates/layer-render-wgpu/src/panel_surface_tests.rs).

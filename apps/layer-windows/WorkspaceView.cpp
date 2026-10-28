@@ -20,6 +20,7 @@
 #include "WorkspaceDrawers.h"
 #include "WorkspaceBubbles.h"
 #include <set>
+#include <chrono>
 #include "CollapsedColumns.h"
 #include "WorkspaceGestures.h"
 #include "ColorView.h"
@@ -77,6 +78,8 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     std::optional<uint32_t> movingGroup;
     bool trace=GetEnvironmentVariableW(L"CAPY_TRACE_UI",nullptr,0)!=0;
     uint64_t fullUpdates=0,motionUpdates=0;
+    std::vector<uint64_t> panelBridgeTimes;
+    uint64_t panelBridgeTimeOverflow=0;
     J workspaceUpdate;
     hstring lastPresentation;
     OverviewOcclusion overviewOcclusion;
@@ -117,11 +120,12 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     };
     std::map<uint32_t,Group> groups;
     hstring panelBridgeKey,lastPanelSurfaces;
-    std::string panelBridgeLayout;
+    NativePanelLayout panelBridgeLayout;
     uint64_t panelLayoutRevision=0,panelQueryLayoutRevision=0;
     J panelBridgeFrame;
     uint64_t panelBridgeRevision=0;
     bool windowResizing=false,resizeHandback=false;
+    int64_t nativeSizingStartQpc=0,nativeSizingEndQpc=0;
     bool nativeResize()const{return windowResizing||resizeHandback;}
     struct BridgeShadow {WorkspaceShadow shadow;uint64_t revision=0;};
     std::map<uint32_t,BridgeShadow> bridgeShadows;
@@ -369,13 +373,14 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             throw hresult_invalid_argument(L"Invalid workspace publication revision");
         return uint64_t(value);
     }
-    bool apply(J const& snapshot,std::string layoutBytes){
+    bool apply(J const& snapshot,NativePanelLayout preparedLayout){
         auto previousGpu=num(data->model,L"windows_gpu_generation");
         bool relocalize=data->adoptLocalization(snapshot);
         if(relocalize){measureHost.Children().Clear();offscreen.clear();AutomationProperties::SetName(root,str(object(data->catalog,L"bootstrap"),L"drawing_workspace"));}
         bool full=snapshot.HasKey(L"state");
         auto update=object(snapshot,L"workspace_update");
         bool reflow=!full&&snapshot.HasKey(L"layout");
+        if((full||reflow)&&!preparedLayout)throw hresult_invalid_argument(L"Missing prepared workspace panel layout");
         // Workspace motion can also carry a camera. It is never a camera-only
         // fallback, and it must reference the content already retained here.
         if(full||update.Size()){
@@ -410,9 +415,8 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         struct Reset {bool& value;~Reset(){value=false;}} reset{data->updating};
         if(reflow)WorkspaceView::MergeLayout(data->model,snapshot);
         auto model=reflow?data->model:snapshot;
-        if(layoutBytes.empty())layoutBytes=to_string(object(model,L"layout").Stringify());
-        if(layoutBytes!=panelBridgeLayout){
-            panelBridgeLayout=std::move(layoutBytes);++panelLayoutRevision;
+        if(preparedLayout.get()!=panelBridgeLayout.get()){
+            panelBridgeLayout=std::move(preparedLayout);++panelLayoutRevision;
             panelBridgeKey=L"";
         }
         if(full){
@@ -613,13 +617,19 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
                 {0,0,float(handle.ActualWidth()),float(handle.ActualHeight())});
             grips.Append(O({{L"id",S(hstring(id))},{L"bounds",rectangle(bounds)}}));
         }
-        auto value=O({{L"revision",N(double(publication.Revision()))},
+        A bridgeTimes;
+        if(!windowResizing)for(auto elapsed:panelBridgeTimes)bridgeTimes.Append(N(double(elapsed)));
+        LARGE_INTEGER snapshotQpc{};QueryPerformanceCounter(&snapshotQpc);
+        auto value=O({{L"panel_bridge_timing",O({{L"count",N(double(panelBridgeTimes.size()+panelBridgeTimeOverflow))},
+                {L"overflow",N(double(panelBridgeTimeOverflow))},{L"samples_ns",bridgeTimes}})},
+            {L"revision",N(double(publication.Revision()))},
             {L"model_revision",N(double(publication.ModelRevision()))},
             {L"full_updates",N(double(fullUpdates))},{L"motion_updates",N(double(motionUpdates))},
             {L"color_field_pixels",N(double(data->colorFieldPixels))},
             {L"color_preview",object(data->colorPreview,L"picker").GetNamedValue(L"preview",JsonValue::CreateNullValue())},
             {L"workspace_update",workspaceUpdate},{L"groups",positions},{L"handles",grips},{L"elements",elements},
             {L"window_resizing",B(windowResizing)},{L"native_resize_pending",B(resizeHandback)},{L"gpu_panels_suppressed",B(windowResizing)},
+            {L"snapshot_qpc",N(double(snapshotQpc.QuadPart))},{L"native_sizing_start_qpc",N(double(nativeSizingStartQpc))},{L"native_sizing_end_qpc",N(double(nativeSizingEndQpc))},
             {L"panel_bridge_frame",panelBridgeFrame},{L"panel_revision",N(double(panelBridgeRevision))},
             {L"presented_panel_revision",object(data->model,L"windows_glass").GetNamedValue(L"panel_revision",JsonValue::CreateNullValue())},
             {L"overviews",lastOverviews.empty()?A{}:A::Parse(lastOverviews)}}).Stringify();
@@ -836,7 +846,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         return false;
     }
     void measurePanelBridges(){
-        if(!root.IsLoaded()||root.ActualWidth()<=0||root.ActualHeight()<=0)return;
+        if(!panelBridgeLayout||!root.IsLoaded()||root.ActualWidth()<=0||root.ActualHeight()<=0)return;
         A allocated;
         for(auto const& [id,group]:groups){
             if(group.hidden||group.presented.Size()||group.frame.Opacity()<=0)continue;
@@ -845,8 +855,15 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         }
         auto key=O({{L"groups",allocated},{L"columns",collapsed->Measure(root)}}).Stringify();
         if(key==panelBridgeKey&&panelQueryLayoutRevision==panelLayoutRevision)return;
-        auto request="{\"layout\":"+panelBridgeLayout+",\"measure\":"+to_string(key)+"}";
-        NativeString reply(capy_panel_bridges(request.c_str()),capy_string_free);
+        auto request=to_string(key);
+        bool timed=trace&&windowResizing;
+        auto started=timed?std::chrono::steady_clock::now():std::chrono::steady_clock::time_point{};
+        auto result=capy_panel_bridges(panelBridgeLayout.get(),request.c_str());
+        if(timed){
+            auto elapsed=std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now()-started).count();
+            if(panelBridgeTimes.size()<4096)panelBridgeTimes.push_back(uint64_t(elapsed));else ++panelBridgeTimeOverflow;
+        }
+        NativeString reply(result,capy_string_free);
         J packet;if(reply)J::TryParse(to_hstring(reply.get()),packet);
         auto frame=object(packet,L"result");
         if(!frame.Size()){
@@ -1079,9 +1096,15 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
 WorkspaceView::WorkspaceView(Dispatch send,Json catalog,NativeLocalization localization,Dispatch overviews,PreviewTransport previews,std::function<void(bool)> popupChanged,Dispatch document,Dispatch input,EdgeTransport edges):impl(std::make_shared<Impl>(std::move(send),catalog,localization,std::move(overviews),std::move(previews),std::move(popupChanged),std::move(document),std::move(input),std::move(edges))){impl->init();}
 WorkspaceView::~WorkspaceView()=default;
 Canvas WorkspaceView::Root()const{return impl->root;}
-bool WorkspaceView::Apply(Json const& snapshot,std::string layoutBytes){return impl->apply(snapshot,std::move(layoutBytes));}
+bool WorkspaceView::Apply(Json const& snapshot,NativePanelLayout layout){return impl->apply(snapshot,std::move(layout));}
 void WorkspaceView::SetWindowResizing(bool value){
     if(impl->windowResizing==value)return;
+    if(impl->trace){
+        LARGE_INTEGER now{};QueryPerformanceCounter(&now);
+        if(value){impl->nativeSizingStartQpc=now.QuadPart;impl->nativeSizingEndQpc=0;}
+        else impl->nativeSizingEndQpc=now.QuadPart;
+    }
+    if(value&&impl->trace){impl->panelBridgeTimes.clear();impl->panelBridgeTimes.reserve(4096);impl->panelBridgeTimeOverflow=0;}
     impl->windowResizing=value;impl->resizeHandback=!value;
     ++impl->panelBridgeRevision;impl->lastPanelSurfaces=L"";
     for(auto& [id,group]:impl->groups)group.backgroundKey=L"";

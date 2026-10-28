@@ -119,17 +119,48 @@ try{
     $boundary|ConvertTo-Json -Depth 10|Set-Content (Join-Path $motionFolder 'boundary-intervals.json')
     $motion=@($samples|Where-Object {$_.begin -ge $observer.DownQpc -and $_.end -le $observer.UpQpc -and $_.width_begin -ne $observer.InitialWidth})
     Check ($motion.Count -gt 0) 'Real border resize has fully observed active motion' $motion.Count
-    @{first_observed=$observed[0];first_fully_active=$motion[0];boundary_intervals=$boundary;input='input.csv';frames='frames.csv';origin='origin.json'}|ConvertTo-Json -Depth 10|Set-Content (Join-Path $motionFolder 'first-motion.json')
-    $checked=@($observed[0])+@($motion|Where-Object {$_.path -ne $observed[0].path})
-    foreach($sample in $checked){
+    Wait-Until {$native=Presentation;!$native.window_resizing -and !$native.native_resize_pending} 'Real border resize did not return surfaces to the GPU'
+    $settled=Presentation;$sizingStart=[long]$settled.native_sizing_start_qpc;$sizingEnd=[long]$settled.native_sizing_end_qpc
+    Check ($sizingStart -ge $observer.DownQpc -and $sizingEnd -ge $sizingStart -and $sizingEnd -ge $observer.UpQpc) 'Native sizing source markers bracket the actual contact' @{start=$sizingStart;end=$sizingEnd;down=$observer.DownQpc;up=$observer.UpQpc}
+    $classified=@(foreach($sample in $samples){
         $native=Get-Content -LiteralPath $sample.path -Raw|ConvertFrom-Json
+        $source=[long]$native.snapshot_qpc
+        $interval=if($source -lt $sizingStart){'pre-sizing'}elseif($source -lt $sizingEnd){'active-sizing'}else{'post-sizing'}
         $receivers=@($native.groups|Where-Object {$_.id -in $continuing})
         $projected=@($native.panel_bridge_frame.bridges|ForEach-Object {$_[2].receivers}|ForEach-Object group|Sort-Object -Unique)
-        Check ($native.window_resizing -and $native.gpu_panels_suppressed -and $receivers.Count -eq 3 -and @($receivers|Where-Object {!$_.native_bridge_background -or $_.gpu_background}).Count -eq 0) 'Real border resize keeps native ownership from first observed motion' @{sample=$sample;receivers=$receivers;native=$native}
-        Check (@($continuing|Where-Object {$_ -notin $projected}).Count -eq 0) 'Real border resize retains three measured receivers' $projected
-        Check (@($native.panel_bridge_frame.bridges).Count -gt 0) 'Real border resize retains its complete bridge scene' $native.panel_bridge_frame
+        @{sample=$sample;source_qpc=$source;interval=$interval;window_resizing=$native.window_resizing;native_resize_pending=$native.native_resize_pending;gpu_panels_suppressed=$native.gpu_panels_suppressed;receivers=$receivers;projected=$projected;bridges=@($native.panel_bridge_frame.bridges).Count}
+    })
+    $classified|ConvertTo-Json -Depth 30|Set-Content (Join-Path $motionFolder 'source-intervals.json')
+    $firstActive=@($classified|Where-Object {$_.source_qpc -ge $sizingStart -and $_.source_qpc -lt $sizingEnd}|Select-Object -First 1)
+    $firstObserved=$classified|Where-Object {$_.sample.path -eq $observed[0].path}|Select-Object -First 1
+    @{first_client_motion_read=$firstObserved;first_source_active=$firstActive;first_fully_active_client_read=$motion[0];sizing_start_qpc=$sizingStart;sizing_end_qpc=$sizingEnd;boundary_intervals=$boundary;input='input.csv';frames='frames.csv';origin='origin.json'}|ConvertTo-Json -Depth 30|Set-Content (Join-Path $motionFolder 'first-motion.json')
+    Check ($firstActive.Count -eq 1) 'Real border resize observes its first active source snapshot' $firstActive
+    foreach($entry in $classified){
+        Check ($entry.source_qpc -gt 0 -and $entry.source_qpc -le $entry.sample.end) 'Every presentation snapshot has an ordered source timestamp' $entry
+        Check ($entry.receivers.Count -eq 3 -and @($continuing|Where-Object {$_ -notin $entry.projected}).Count -eq 0 -and $entry.bridges -gt 0) 'Every source interval retains three measured bridge receivers' $entry
+        if($entry.interval -eq 'active-sizing'){
+            Check ($entry.window_resizing -and $entry.gpu_panels_suppressed -and @($entry.receivers|Where-Object {!$_.native_bridge_background -or $_.gpu_background}).Count -eq 0) 'Every active source snapshot has three native owners and suppressed GPU panels' $entry
+        }elseif($entry.interval -eq 'pre-sizing'){
+            Check (!$entry.window_resizing -and !$entry.native_resize_pending -and !$entry.gpu_panels_suppressed -and @($entry.receivers|Where-Object {!$_.gpu_background -or $_.native_bridge_background}).Count -eq 0) 'Every pre-sizing source snapshot retains three GPU owners' $entry
+        }else{
+            Check (!$entry.window_resizing -and !$entry.gpu_panels_suppressed) 'Every post-sizing source snapshot restores the GPU scene request' $entry
+            if($entry.native_resize_pending){
+                Check (@($entry.receivers|Where-Object {!$_.native_bridge_background -or $_.gpu_background}).Count -eq 0) 'Post-sizing handback keeps three native owners until acknowledgment' $entry
+            }else{
+                Check (@($entry.receivers|Where-Object {!$_.gpu_background -or $_.native_bridge_background}).Count -eq 0) 'Acknowledged post-sizing snapshots restore three GPU owners' $entry
+            }
+        }
     }
-    Wait-Until {$native=Presentation;!$native.window_resizing -and !$native.native_resize_pending} 'Real border resize did not return surfaces to the GPU'
+    $native=Presentation;$timing=$native.panel_bridge_timing
+    Check ($null -ne $timing) 'Real border resize publishes raw projection timing' $timing
+    $durations=@($timing.samples_ns|ForEach-Object {[double]$_})
+    Check ($timing.count -gt 0 -and $timing.overflow -eq 0 -and $durations.Count -eq $timing.count) 'Every resize projection call has one bounded timing sample' $timing
+    $sorted=@($durations|Sort-Object)
+    $p50=$sorted[[int][math]::Ceiling($sorted.Count*0.5)-1]
+    $p99=$sorted[[int][math]::Ceiling($sorted.Count*0.99)-1]
+    $projectionTiming=@{scope='raw capy_panel_bridges call only';excluded=@('request JSON construction','NativeString output copy','reply JSON parsing','XAML layout');theme=$Theme;count=$durations.Count;overflow=$timing.overflow;samples_ns=$durations;p50_ms=$p50/1e6;p99_ms=$p99/1e6;budget_ms=8.3;p50_budget_fraction=$p50/8.3e6;p99_budget_fraction=$p99/8.3e6;optimization_threshold_ms=1;p99_exceeds_1ms=($p99 -gt 1e6);percentile='nearest rank'}
+    $projectionTiming|ConvertTo-Json -Depth 10|Set-Content (Join-Path $motionFolder 'projection-timing.json')
+    Write-Output ('Panel projection timing {0}: N={1} p50={2:F3}ms p99={3:F3}ms ({4:P1} of 8.3 ms)' -f $Theme,$durations.Count,($p50/1e6),($p99/1e6),($p99/8.3e6))
     Open-Column 'continuous-resize-settled'
 
     foreach($size in @(@(1800,1100),@(1600,1000))){

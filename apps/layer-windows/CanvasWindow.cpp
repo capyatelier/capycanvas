@@ -579,7 +579,8 @@ bool CanvasWindow::StartPrepared(CapyLaunch  prepared) {
         [weak=weak_from_this()](CanvasQueryKind kind,std::string json,PreviewReply reply){if(auto self=weak.lock())return self->RequestPreviews(kind,std::move(json),std::move(reply));return false;});
     if(auto snapshot=capy_snapshot(host,nullptr)){
         NativeString owned(snapshot,capy_string_free);
-        ApplyModel(Windows::Data::Json::JsonObject::Parse(to_hstring(owned.get())));
+        {std::lock_guard lock(snapshots->mutex);snapshots->pending.Push(std::move(owned.bytes),true,true);}
+        QueueSnapshots();
     }
     {std::lock_guard lock(mutex);revision=capy_view_revision(host);inputScale=desired.scale;}
     status.Text(CapyUi::str(bootstrap,L"preparing_brush"));
@@ -1541,8 +1542,17 @@ winrt::fire_and_forget CanvasWindow::DecodeSnapshots(std::shared_ptr<SnapshotSta
             return value;
         };
         batch={parse(raw.full),parse(raw.layout,true),parse(raw.workspace,true),parse(raw.camera,true),parse(raw.search,true),parse(raw.localization),parse(raw.glass)};
-        if(batch.full)batch.fullLayoutBytes=to_string(CapyUi::object(batch.full,L"layout").Stringify());
-        if(batch.layout)batch.layoutBytes=to_string(CapyUi::object(batch.layout,L"layout").Stringify());
+        auto prepareLayout=[&](Windows::Data::Json::JsonObject const& model){
+            auto bytes=to_string(CapyUi::object(model,L"layout").Stringify());
+            if(!state->panelLayout||bytes!=state->panelLayoutBytes){
+                NativePanelLayout next(capy_panel_layout_prepare(bytes.c_str()),capy_panel_layout_free);
+                if(!next)throw std::invalid_argument("Invalid workspace panel layout");
+                state->panelLayoutBytes=std::move(bytes);state->panelLayout=std::move(next);
+            }
+            return state->panelLayout;
+        };
+        if(batch.full)batch.fullLayout=prepareLayout(batch.full);
+        if(batch.layout)batch.reflowLayout=prepareLayout(batch.layout);
     }catch(hresult_error const& error){failure=to_string(error.message());}
      catch(std::exception const& error){failure=error.what();}
     raw={};
@@ -1588,9 +1598,9 @@ void CanvasWindow::ApplyPending(PreparedSnapshots batch) {
     try {
         if(batch.full){
             if(batch.localization)batch.full.Insert(L"localization",batch.localization);
-            ApplyModel(batch.full,std::move(batch.fullLayoutBytes));
+            ApplyModel(batch.full,std::move(batch.fullLayout));
         }
-        if(!closing&&batch.layout)workspace->Apply(batch.layout,std::move(batch.layoutBytes));
+        if(!closing&&batch.layout)workspace->Apply(batch.layout,std::move(batch.reflowLayout));
         for(auto const& patch:{batch.workspace,batch.camera,batch.search,batch.glass})
             if(!closing&&patch)workspace->Apply(patch);
     } catch(hresult_error const& error) {
@@ -1704,7 +1714,7 @@ void CanvasWindow::SendLaunchFiles(Windows::Data::Json::JsonObject const& model)
 void CanvasWindow::RefreshWorkspaceSwitcher() {
     if(!closing&&!closed)Send(R"({"operation":"input","input":{"type":"refresh_switcher"}})",CanvasCommandKind::Workspace);
 }
-void CanvasWindow::ApplyModel(Windows::Data::Json::JsonObject const& model,std::string layoutBytes) {
+void CanvasWindow::ApplyModel(Windows::Data::Json::JsonObject const& model,NativePanelLayout layout) {
     using namespace CapyUi;
     auto presentation=object(model,L"localization");
     if(presentation.Size()){
@@ -1717,7 +1727,7 @@ void CanvasWindow::ApplyModel(Windows::Data::Json::JsonObject const& model,std::
     }
     auto focus=settings&&settings->IsOpen()?FocusManager::GetFocusedElement(root.XamlRoot()).try_as<Control>():nullptr;
     if(focus)if(auto owner=ItemsControl::ItemsControlFromItemContainer(focus))focus=owner;
-    if(!workspace->Apply(model,std::move(layoutBytes)))return;
+    if(!workspace->Apply(model,std::move(layout)))return;
     lastModel=model;
     auto suspended=flag(model,L"windows_rendering_suspended");
     auto workspaceReady=flag(object(model,L"state"),L"workspace_ready");

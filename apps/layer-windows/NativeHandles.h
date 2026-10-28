@@ -27,6 +27,7 @@ public:
 };
 using NativeLaunch=NativeHandle<capy_launch_free>;
 using NativeLocalization=NativeHandle<capy_localization_free>;
+using NativePanelLayout=NativeHandle<capy_panel_layout_free>;
 
 struct NativeString {
     std::string bytes;
