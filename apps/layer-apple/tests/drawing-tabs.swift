@@ -150,6 +150,20 @@ import QuartzCore
                 try await store.apply(["type": "restore_settings", "settings": settings])
                 try await wait("shortcut settings") { store.state["requests"].array.isEmpty }
             }
+            drag.vertical = false
+            drag.frames = [1: DrawingFrame(body: CGRect(x: 0, y: 0, width: 140, height: 48)),
+                2: DrawingFrame(body: CGRect(x: 140, y: 0, width: 140, height: 48))]
+            let slidePress = CGPoint(x: 200, y: 20)
+            drag.contact.prepare(drag.source(at: slidePress)!, device: .mouse, origin: slidePress)
+            precondition(drag.contact.move(to: CGPoint(x: 90, y: 20)))
+            try await wait("drawing slide preview") { drag.slide != nil }
+            drag.contact.release(at: CGPoint(x: 90, y: 20))
+            try await key("tab", to: 1, command: true)
+            try await wait("slide reorder survives drawing switch") { store.drawingTabs.rows.first?["id"].uint == 2 }
+            drag.cancel()
+            try await select(2)
+            store.drawingTabs.edit(["op": "step", "id": 2, "forward": true])
+            try await wait("drawing order restored") { store.drawingTabs.rows.first?["id"].uint == 1 }
             for theme in ["light", "dark"] {
                 try await store.apply(["type": "set_theme", "theme": theme])
                 try await wait("cycling theme") { store.state["requests"].array.isEmpty }

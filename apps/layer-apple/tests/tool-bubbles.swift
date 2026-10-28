@@ -331,6 +331,11 @@ private struct BubbleGlassProbeView: View {
                 y: pickup.y + (destination.y - pickup.y) * fraction), marker: input, number: 1)
             try await drain(0.03)
         }
+        try await wait("Native header bubble before release", failure: { store.failure }, step: tick) {
+            bubbles.items.count == 1 && store.snapshot["bubbles"].array.count == 1
+        }
+        try require(bubbles.input.active && bubbles.input.captures,
+            "The published bubble retains its native contact before release")
         try event(.leftMouseUp, at: destination, marker: input, number: 1)
         try await wait("Native header tear-out", failure: { store.failure }) { bubbles.items.count == 1 }
         try await settled("Native tear-out settles")

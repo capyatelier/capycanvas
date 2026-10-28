@@ -71,11 +71,11 @@ import UniformTypeIdentifiers
         guard !busy else { return }
         store?.query(["type": "document_tabs"].merging(value) { _, v in v }) { _ in }
     }
-    func drop(id: UInt64, hits: [[String: Any]], point: CGPoint, vertical: Bool, completion: @escaping (JSON) -> Void) {
-        store?.query(["type": "document_tabs", "op": "drop", "hits": hits, "point": [point.x, point.y], "vertical": vertical], completion: completion)
+    func drop(id: UInt64, hits: [[String: Any]], point: CGPoint, vertical: Bool, commit: Bool = false, completion: @escaping (JSON) -> Void = { _ in }) {
+        store?.query(["type": "document_tabs", "op": "drop", "id": id, "commit": commit, "hits": hits, "point": [point.x, point.y], "vertical": vertical], completion: completion)
     }
-    func slide(id: UInt64, hits: [[String: Any]], clip: CGRect, press: CGPoint, point: CGPoint, completion: @escaping (JSON) -> Void) {
-        store?.query(["type": "document_tabs", "op": "slide", "id": id, "hits": hits,
+    func slide(id: UInt64, hits: [[String: Any]], clip: CGRect, press: CGPoint, point: CGPoint, commit: Bool = false, completion: @escaping (JSON) -> Void) {
+        store?.query(["type": "document_tabs", "op": "slide", "id": id, "commit": commit, "hits": hits,
             "clip": ["x": clip.minX, "y": clip.minY, "width": clip.width, "height": clip.height],
             "press": [press.x, press.y], "point": [point.x, point.y]], completion: completion)
     }
@@ -179,20 +179,17 @@ private struct DrawingMeasure: ViewModifier {
                 guard let self else { return }
                 motion &+= 1
                 if !vertical {
-                    controller?.slide(id: id, hits: orderedHits, clip: strip, press: press, point: p) { [weak self] preview in
+                    controller?.slide(id: id, hits: orderedHits, clip: strip, press: press, point: p, commit: true) { [weak self] preview in
                         guard let self else { return }
                         guard preview["attached"].bool else { dragged = nil; slide = nil; return }
                         slide = preview
-                        controller?.edit(["op": "reorder", "id": id, "before": preview["before"].raw])
                         DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.settle() }
                     }
                     return
                 }
                 dragged = nil; before = nil
                 guard viewport.contains(p) else { return }
-                controller?.drop(id: id, hits: hits, point: p, vertical: vertical) { [weak self] target in
-                    if !target.isNull { self?.controller?.edit(["op": "reorder", "id": id, "before": target["before"].raw]) }
-                }
+                controller?.drop(id: id, hits: hits, point: p, vertical: vertical, commit: true)
             }, cancel: { [weak self] in self?.dragged = nil; self?.before = nil; self?.slide = nil; self?.motion &+= 1 })
     }
     private func move(_ id: UInt64, _ point: CGPoint) {

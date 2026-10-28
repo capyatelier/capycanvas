@@ -388,6 +388,9 @@ xcodebuild -project apps/layer-apple/CapyCanvas.xcodeproj \
   DEVELOPMENT_TEAM=YOUR_TEAM_ID CODE_SIGN_IDENTITY='Apple Development' test
 ```
 
+Drawing-tab slide and drop queries with `commit: true` validate and reorder on
+the serial owner before later keyboard input; preview queries keep the order.
+
 `editorTestApplication()` gives each journey's application a new
 `CAPY_STORAGE_DIR` name, kept across its relaunches, so journeys never touch
 the installation's data. Do not create an `XCUIApplication` for the editor any

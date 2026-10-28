@@ -185,6 +185,7 @@ import SwiftUI
             store.workspace.tabSlide.preview["insertion"].uint == 3
                 && store.workspace.tabSlide.offset(group: group, index: 2) == -frozen[1].bounds.width
         }
+        precondition(store.workspace.dropHint.isNull, "An attached tab slide must hide the shared insertion hint")
         precondition(store.workspace.tabSlide.grab?.frames == frozen)
         for _ in 0..<35 {
             window.contentView?.layoutSubtreeIfNeeded()
@@ -263,7 +264,16 @@ import SwiftUI
             return [color.redComponent, color.greenComponent, color.blueComponent]
         }
         let previousShade = try await previewShade(), previewID = store.workspace.tabSlide.grab!.id
-        try await store.apply(["type": "select_panel_tab", "group": group, "panel": nextActive])
+        let targetIndex = liveGroups.first { $0["id"].uint == group }!["panels"].array.firstIndex { $0.string == nextActive }!
+        let targetFrame = restarted[targetIndex].bounds.intersection(restarted[targetIndex].clip)
+        let targetPoint = CGPoint(x: targetFrame.minX + 3, y: targetFrame.midY)
+        let target = store.workspace.input.source(at: targetPoint)!
+        store.workspace.input.contact.prepare(target, device: .mouse, origin: targetPoint)
+        try await wait("Native tab press selects during slide") {
+            store.snapshot["layout"]["groups"].array.first { $0["id"].uint == group }?["active"].string == nextActive
+                || store.state["customization"]["column_drawers"].array.first { $0["tabs"]["group"].uint == group }?["tabs"]["active"].string == nextActive
+        }
+        store.workspace.input.contact.cancel()
         let selectedShade = try await previewShade()
         precondition(zip(previousShade, selectedShade).contains { abs($0 - $1) > 1 / 255 },
             "A late selection publication must update the retained preview's selected surface")

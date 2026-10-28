@@ -53,12 +53,18 @@ pub enum TabRequest {
         redo: bool,
     },
     Drop {
+        #[serde(default)]
+        id: u64,
+        #[serde(default)]
+        commit: bool,
         hits: Vec<DocumentTabHit>,
         point: [f32; 2],
         vertical: bool,
     },
     Slide {
         id: u64,
+        #[serde(default)]
+        commit: bool,
         hits: Vec<DocumentTabHit>,
         clip: layer_ui::Bounds,
         press: [f32; 2],
@@ -247,26 +253,20 @@ impl<P: Parked> DocumentWindow<P> {
                 json!(document)
             }
             TabRequest::Adjacent { forward } => json!(self.documents.adjacent(forward)),
-            TabRequest::Drop {
-                hits,
-                point,
-                vertical,
-            } => json!(
-                self.documents
-                    .drop_target(&hits, point, vertical)
-                    .map(|before| json!({"before": before}))
-            ),
-            TabRequest::Slide {
-                id,
-                hits,
-                clip,
-                press,
-                point,
-            } => json!(
-                self.documents
-                    .drag(id, press, &hits, clip)
-                    .and_then(|drag| drag.preview(point))
-            ),
+            TabRequest::Drop { id, commit, hits, point, vertical } => {
+                let target = self.documents.drop_target(&hits, point, vertical);
+                if commit && let Some(before) = target {
+                    self.arrange(host, |d| { d.reorder(id, before); })?;
+                }
+                json!(target.map(|before| json!({"before": before})))
+            }
+            TabRequest::Slide { id, commit, hits, clip, press, point } => {
+                let preview = self.documents.drag(id, press, &hits, clip).and_then(|drag| drag.preview(point));
+                if commit && let Some(preview) = preview.as_ref().filter(|p| p.attached) {
+                    self.arrange(host, |d| { d.reorder(id, preview.before); })?;
+                }
+                json!(preview)
+            }
             TabRequest::Storage { error } => {
                 self.documents.storage_completed(error.map_or(Ok(()), Err));
                 Value::Null
@@ -1145,6 +1145,35 @@ mod tests {
         assert_eq!(retired.len(), 3);
         drop(retired);
         finish(host, window);
+    }
+
+    #[test]
+    fn drawing_drop_commits_before_a_following_cycle_request() {
+        for vertical in [false, true] {
+            let mut host = host();
+            let mut window = Window::default();
+            open(&mut window, &mut host);
+            let hits = if vertical {
+                json!([{"id":1,"bounds":{"x":0,"y":0,"width":140,"height":48}},
+                    {"id":2,"bounds":{"x":0,"y":48,"width":140,"height":48}}])
+            } else {
+                json!([{"id":1,"bounds":{"x":0,"y":0,"width":140,"height":48}},
+                    {"id":2,"bounds":{"x":140,"y":0,"width":140,"height":48}}])
+            };
+            let request = if vertical {
+                json!({"op":"drop","id":2,"commit":true,"hits":hits,"point":[70,4],"vertical":true})
+            } else {
+                json!({"op":"slide","id":2,"commit":true,"hits":hits,"clip":{"x":0,"y":0,"width":280,"height":48},
+                    "press":[200,20],"point":[90,20]})
+            };
+            window.request(&mut host, serde_json::from_value(request).unwrap()).unwrap();
+            assert_eq!(window.documents.order(), [2, 1]);
+            assert_eq!(window.documents.selected(), 2);
+            invoke(&mut host, CommandId::NextDrawing);
+            assert!(!host.session.state().requests.is_empty());
+            assert_eq!(window.documents.order(), [2, 1]);
+            finish(host, window);
+        }
     }
 
     #[test]
