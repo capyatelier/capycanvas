@@ -210,7 +210,7 @@ export function createBubbleInput({app, workspace, records, send, wake, menu, di
       if(e.type==='contextmenu') {const r=target(point(e));if(r&&!native(e)){menu(r,point(e));return consume(e);}}
       if(e.type==='dblclick') {const r=target(point(e));if(r){const h=hit(r,point(e));if(h==='intensity'){send({type:'set_intensity',id:r.view.id,stops:0});return consume(e);}if(h==='ring'){send({type:'reset_ring',id:r.view.id,position:local(r,point(e))});return consume(e);}}}
     },
-    validate(){if(contact&&!records.has(contact.r.view.id)){
+    validate(){if(contact&&!records.has(contact.r.view.id)&&contact.mode!=='moving'&&!contact.pair?.lifted){
       const c=contact;stopHold();contact=null;dismiss();
       for(const id of c.fingers.keys())if(workspace.hasPointerCapture(id))workspace.releasePointerCapture(id);
     }},

@@ -1,6 +1,7 @@
 param([Parameter(Mandatory)][string]$Executable,
-    [ValidateSet('dark-mouse','dark-touch','dark-pen','light-mouse','light-touch','light-pen','blenders-dark','blenders-light','sliders-dark','sliders-light','blender-controls-dark','blender-controls-light','hdr-f16-dark','hdr-f16-light','slider-preference-dark','slider-preference-light')][string]$Variant='dark-mouse',[switch]$RapidOnly,[switch]$SlidersOnly,[switch]$BlendersOnly,[switch]$EraserOnly,[switch]$EraserLightOnly,[switch]$HistoryOnly,[switch]$HistoryLightOnly,[switch]$NativeControlsOnly,[switch]$ScrollEpochOnly,[switch]$NumericOnly,[switch]$CurveOnly,[switch]$MenuOnly,[switch]$ObserverOnly,[switch]$VisualOnly,[switch]$BeadTransitionsOnly,[switch]$HdrOnly,[switch]$HdrRetirementOnly,[switch]$HdrPreviewOnly,[switch]$HdrContactsOnly,[switch]$ColorUndoOnly,[ValidateSet('F16','F32')][string]$HdrDepth='F16')
+    [ValidateSet('dark-mouse','dark-touch','dark-pen','light-mouse','light-touch','light-pen','edge-dark-mouse','edge-dark-touch','edge-dark-pen','edge-light-mouse','edge-light-touch','edge-light-pen','blenders-dark','blenders-light','sliders-dark','sliders-light','blender-controls-dark','blender-controls-light','hdr-f16-dark','hdr-f16-light','slider-preference-dark','slider-preference-light')][string]$Variant='dark-mouse',[switch]$RapidOnly,[switch]$SlidersOnly,[switch]$BlendersOnly,[switch]$EraserOnly,[switch]$EraserLightOnly,[switch]$HistoryOnly,[switch]$HistoryLightOnly,[switch]$NativeControlsOnly,[switch]$ScrollEpochOnly,[switch]$NumericOnly,[switch]$CurveOnly,[switch]$MenuOnly,[switch]$ObserverOnly,[switch]$VisualOnly,[switch]$BeadTransitionsOnly,[switch]$HdrOnly,[switch]$HdrRetirementOnly,[switch]$HdrPreviewOnly,[switch]$HdrContactsOnly,[switch]$ColorUndoOnly,[ValidateSet('F16','F32')][string]$HdrDepth='F16')
 $ErrorActionPreference='Stop'
+$edgeOnly=$Variant.StartsWith('edge-');if($edgeOnly){$Variant=$Variant.Substring(5)}
 if($Variant -match '^hdr-f16-(dark|light)$'){$HdrOnly=$true;$HdrPreviewOnly=$true;$HdrDepth='F16';$Variant=$Matches[1]+'-mouse'}
 $sliderPreferenceOnly=$Variant.StartsWith('slider-preference-')
 if($Variant -match '^slider-preference-(dark|light)$'){$SlidersOnly=$true;$Variant=$Matches[1]+'-mouse'}
@@ -222,6 +223,45 @@ function Patch-Pixels($Point){
     finally{$graphics.Dispose();$bitmap.Dispose()}
 }
 function Workspace-Key{(Model).state.workspace.layout|ConvertTo-Json -Depth 90 -Compress}
+function Edge-Dismissal([long]$Id){
+    foreach($boundary in @('left','top','right','bottom')){
+    $canvas=Control 'drawing-canvas';$canvas.SetFocus();[CapyRowPointer]::Key([uint32]$review.Id,0x09)
+    Wait-Until {(Model).state.workspace.zen_mode} 'Edge dismissal did not enter Zen'
+    Settle-Bubbles
+    $before=Workspace-Key;$revision=Revision;$from=Center $Id;$inside=Document-Point .55 .55 $Id
+    $viewport=(Model).layout.viewport
+    $edge=switch($boundary){
+        'left'{Screen 2 ($viewport[1]*.55)}
+        'top'{Screen ($viewport[0]*.55) 2}
+        'right'{Screen ($viewport[0]-2) ($viewport[1]*.55)}
+        'bottom'{Screen ($viewport[0]*.55) ($viewport[1]-2)}
+    }
+    [CapyRowPointer]::Hover($w.X+20,$w.Y+20);$pixels=Wait-StablePixels {Patch-Pixels $inside}
+    try{
+        [CapyRowPointer]::Down($Device,$from.x,$from.y)
+        [CapyRowPointer]::Move([int](($from.x+$edge.x)*.5),[int](($from.y+$edge.y)*.5))
+        [CapyRowPointer]::Move($edge.x,$edge.y)
+        Wait-Until {$null -eq (Packet $Id)} 'Outward edge Move did not put the bubble back before release'
+        [CapyRowPointer]::Move($inside.x,$inside.y)
+        [CapyRowPointer]::Move(($inside.x+[int](20*$scale)),$inside.y)
+        [CapyRowPointer]::Up()
+    }finally{if([CapyRowPointer]::Active){[CapyRowPointer]::Cancel()}}
+    [CapyRowPointer]::Hover($w.X+20,$w.Y+20);Start-Sleep -Milliseconds 450
+    $dismissed=Workspace-Key
+    if($dismissed -eq $before -or (Revision) -ne $revision -or (Wait-StablePixels {Patch-Pixels $inside}) -ne $pixels){throw 'Edge dismissal continuation changed artwork or failed to author the put-back'}
+    $canvas.SetFocus();[CapyRowPointer]::Key([uint32]$review.Id,0x09)
+    Wait-Until {!(Model).state.workspace.zen_mode} 'Edge dismissal did not leave Zen'
+    & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Window';Invoke 'undo_workspace'
+    Wait-Until {(Workspace-Key) -eq $before -and $null -ne (Packet $Id)} 'Undo did not restore the edge-dismissed bubble exactly'
+    & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Window';Invoke 'redo_workspace'
+    Wait-Until {(Workspace-Key) -eq $dismissed -and $null -eq (Packet $Id)} 'Redo did not put the edge-dismissed bubble back'
+    & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Window';Invoke 'undo_workspace'
+    Wait-Until {(Workspace-Key) -eq $before -and $null -ne (Packet $Id)} 'Final Undo did not restore the bubble for the remaining journey'
+    if((Revision) -ne $revision){throw 'Edge dismissal workspace history changed artwork'}
+    @{device=$Device;theme=$Theme;boundary=$boundary;edge=$edge;continuation=$inside;revision=$revision;before=$before;dismissed=$dismissed;restored=(Workspace-Key)}|ConvertTo-Json -Depth 8|Set-Content (Join-Path $run ('edge-dismissal-'+$boundary+'.json'))
+    }
+    $checks.Add('edge-move-dismisses-before-up-retains-contact-without-painting-and-undo-redo')
+}
 function Settled-Capture([string]$Name){Start-Sleep -Milliseconds 450;Capture $Name -Composed -WithModel}
 function Menu-Item([string]$Name){Control $Name -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)}
 function Hold-Bubble([long]$Id){$p=Center $Id;[CapyRowPointer]::Down($Device,$p.x,$p.y);Wait-Until {$null -ne (Find 'Put back' -Name -Type ([System.Windows.Automation.ControlType]::MenuItem))} 'Hold did not open bubble options';[CapyRowPointer]::Up()}
@@ -1315,6 +1355,12 @@ try{
     if(!$NumericOnly -and !$CurveOnly){
     $dial=Take 'command' 'drawing_brush' (($camera.translation[0]+$document.width*.35*$camera.zoom)/$scale) (($camera.translation[1]+$document.height*.35*$camera.zoom)/$scale)
     Check-Artwork 'tear-out' $revision
+    if($edgeOnly){
+        Edge-Dismissal $dial
+        & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Close -DiscardUnsaved|Out-Null
+        @{variant=$Variant;checks=@($checks);scope='Four viewport edge Move dismissals with native contact continuation, exact workspace Undo/Redo and unchanged artwork'}|ConvertTo-Json -Depth 8|Set-Content (Join-Path $run 'results.json')
+        return
+    }
     if($MenuOnly){Document-SwitchMenu $dial;@{checks=@($checks)}|ConvertTo-Json -Depth 8|Set-Content (Join-Path $run 'results.json');& (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close -DiscardUnsaved|Out-Null;return}
     Wait-Until {@((View $dial).rings).Count -gt 0} 'Selected brush did not tear out with halo'
     Assert-BubbleVisualStates $dial
@@ -1341,6 +1387,7 @@ try{
     Drag $position @{x=$position.x+[int](70*$scale);y=$position.y+[int](20*$scale)} -Cancel
     Wait-Until {(Workspace-Key) -eq $before} 'Cancelled bubble drag changed its saved placement'
     $checks.Add('drag-cancel-restores-workspace')
+    Edge-Dismissal $dial
     $controls=Take 'color_picker' '' ($width*.30) ($height*.32)
     Controls $controls
     $history=Take 'command' 'undo' ($width*.52) ($height*.75)

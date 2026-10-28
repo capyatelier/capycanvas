@@ -135,7 +135,7 @@ void WorkspaceBubbles::Impl::apply(){
         if(auto found=records.find(id);found!=records.end()&&found->second->source!=object(view,L"source").Stringify())replaced=true;}
     if(records.size()!=alive.size())replaced=true;
     if(epoch!=nextEpoch){dismiss();for(auto const& [id,record]:records)record->clearStamp();}
-    if(contact&&(epoch!=nextEpoch||!alive.contains(contact->record->id)||[&]{for(auto value:packets){auto v=object(value.GetObject(),L"view");if(num(v,L"id")==contact->record->id)return object(v,L"source").Stringify()!=contact->record->source;}return true;}()))cancel(true);
+    if(contact&&(epoch!=nextEpoch||[&]{for(auto value:packets){auto v=object(value.GetObject(),L"view");if(num(v,L"id")==contact->record->id)return object(v,L"source").Stringify()!=contact->record->source;}return contact->mode!=L"moving"&&!(contact->paired&&contact->lifted);}()))cancel(true);
     if(candidate&&(epoch!=nextEpoch||!current(*candidate)))cancel(true);
     if(replaced){++owners;lastRing.reset();}epoch=nextEpoch;
     for(auto it=records.begin();it!=records.end();)if(!alive.contains(it->first)){remove(layer,it->second->root);remove(stamps,it->second->stampImage);it=records.erase(it);}else ++it;

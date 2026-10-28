@@ -81,7 +81,8 @@ internal class BubbleInteraction(val host: CanvasHost, val dock: DockInteraction
         }) { ownersVersion++; lastRing = null }
         if (menuOwner?.let { (id, source) -> alive[id]?.getJSONObject("view")?.getJSONObject("source")?.toString() != source } == true) dismiss()
         if (epoch != null && epoch != nextEpoch || contact?.let { c ->
-            alive[c.record.id]?.getJSONObject("view")?.getJSONObject("source")?.toString() != c.record.view.getJSONObject("source").toString()
+            alive[c.record.id]?.let { it.getJSONObject("view").getJSONObject("source").toString() != c.record.view.getJSONObject("source").toString() }
+                ?: (c.mode != "moving" && !c.pairLifted)
         } == true) abandon()
         epoch = nextEpoch
         records.keys.removeAll { it !in alive }
@@ -329,11 +330,12 @@ internal class BubbleInteraction(val host: CanvasHost, val dock: DockInteraction
     fun up(change: PointerInputChange?, cancelled: Boolean = false): Boolean {
         var captured = false
         candidate?.takeIf { change == null || it.pointer == change.id }?.let { source ->
-            if (source.moving) { drag(source.grab, if (cancelled) "cancel" else "up", source.last); captured = true }
+            if (source.moving) { drag(source.grab, if (cancelled) "cancel" else "up", change?.let { it.position / dock.density } ?: source.last); captured = true }
             candidate = null; dock.bubbleCaptured = false
         }
         val c = contact ?: return captured
         if (change != null && change.id !in c.fingers) return captured
+        if (change != null && !cancelled) c.last = change.position / dock.density
         c.hold?.cancel()
         if (cancelled) lastRing = null
         if (c.mode == "native") { contact = null; return captured }

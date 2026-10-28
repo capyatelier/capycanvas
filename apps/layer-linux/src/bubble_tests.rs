@@ -920,6 +920,90 @@ fn sketch_eraser_bubble(theme: Theme) {
 }
 
 #[test]
+#[ignore = "private display: workspace-motion.sh gtk --native-test=native_bubble_edge_dismissal; wide and narrow monitors"]
+fn native_bubble_edge_dismissal() {
+    let mut d = Driver::new("art.capycanvas.BubbleEdgeDismissal");
+    let mut workspace = WorkspaceState { layout: WorkspacePreset::Painter.layout(Platform::Gtk), ..WorkspaceState::default() };
+    for zone in &mut workspace.layout.header.zones {
+        zone.retain(|entry| matches!(entry.item, HeaderItem::Capy | HeaderItem::Tool { control: ToolbarControl::Color | ToolbarControl::Command { command: CommandId::DrawingBrush } }));
+    }
+    for panel in workspace.layout.panels.iter().map(|panel| panel.id).collect::<Vec<_>>() {
+        workspace.layout.set_panel_visible(panel, false).unwrap();
+    }
+    let mut checked = 0;
+    for theme in [Theme::Light, Theme::Dark] {
+        d.w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        for device in ["mouse", "touch"] {
+            for control in [ToolbarControl::Command { command: CommandId::DrawingBrush }, ToolbarControl::Color] {
+                for edge in ["left", "right", "top", "bottom"] {
+                    d.w.dispatch(UiAction::RestoreWorkspace {
+                        workspace: Box::new(workspace.clone()),
+                    });
+                    pump(300);
+                    let spot = canvas_spot(&d, 0.5, 0.5);
+                    let source = header_of(&d, control);
+                    tear(&mut d, device, &source, spot);
+                    let bubble = find(&d, BubbleSource::Control { control }).expect("native source drag takes a bubble");
+                    let option = if bubble.kind == BubbleKind::Color { BubbleOption::Recent } else { BubbleOption::Swap };
+                    d.w.dispatch(UiAction::Bubble { action: BubbleAction::Option { id: bubble.id, option } });
+                    d.w.dispatch(UiAction::Invoke { command: CommandId::ZenMode });
+                    pump(300);
+                    assert!(state(&d.w).workspace.zen_mode);
+                    let before = state(&d.w).workspace.layout.bubbles;
+                    let checkpoint = ui_session(&d.w).engine().checkpoint();
+                    let from = if bubble.kind == BubbleKind::Color { rim(&d, &bubble, 180.) } else {
+                        let c = center(&d, bubble.id);
+                        [c[0] + 12., c[1] + 5.]
+                    };
+                    let viewport = [d.w.surface.width() as f32, d.w.surface.height() as f32];
+                    let at = |distance| match edge {
+                        "left" => [distance, from[1]],
+                        "right" => [viewport[0] - distance, from[1]],
+                        "top" => [from[0], distance],
+                        _ => [from[0], viewport[1] - distance],
+                    };
+                    let name = format!("{theme:?}-{device}-{control:?}-{edge}");
+                    d.input.perform(serde_json::json!([contact(device, "down", from), contact(device, "move", at(30.)), contact(device, "move", at(12.))]));
+                    assert!(find_id(&d, bubble.id).is_some(), "{name}: outside the 8px tolerance keeps the bubble");
+                    d.input.perform(serde_json::json!([contact(device, "move", at(4.))]));
+                    assert!(find_id(&d, bubble.id).is_none(), "{name}: outward Move puts it back before release");
+                    d.input.perform(serde_json::json!([contact(device, "move", spot), contact(device, "move", [spot[0] + 50., spot[1] + 20.]), contact(device, "up", spot)]));
+                    pump(200);
+                    assert!(find_id(&d, bubble.id).is_none(), "{name}: late release cannot resurrect it");
+                    assert_eq!(ui_session(&d.w).engine().checkpoint(), checkpoint, "{name}: captured motion after dismissal cannot paint");
+                    let dismissed = state(&d.w).workspace.layout.bubbles;
+                    d.w.dispatch(UiAction::Invoke { command: CommandId::UndoWorkspace });
+                    pump(300);
+                    assert_eq!(state(&d.w).workspace.layout.bubbles, before, "{name}: one workspace Undo restores the same bubble, options and saved place");
+                    assert!(find_id(&d, bubble.id).is_some(), "{name}: Undo presents the restored bubble");
+                    d.w.dispatch(UiAction::Invoke { command: CommandId::RedoWorkspace });
+                    pump(200);
+                    assert_eq!(state(&d.w).workspace.layout.bubbles, dismissed, "{name}: Redo keeps the remembered source options");
+                    assert!(find_id(&d, bubble.id).is_none(), "{name}: one workspace Redo removes it");
+                    if device == "mouse" {
+                        d.w.dispatch(UiAction::Invoke { command: CommandId::UndoWorkspace });
+                        pump(300);
+                        let restored = find_id(&d, bubble.id).unwrap();
+                        let from = if restored.kind == BubbleKind::Color { rim(&d, &restored, 180.) } else { center(&d, bubble.id) };
+                        let widget = d.named(&format!("bubble-{}", bubble.id));
+                        d.input.perform(serde_json::json!([contact(device, "down", from), contact(device, "move", [from[0] + 35., from[1] + 25.])]));
+                        for controller in widget.observe_controllers().iter::<glib::Object>().map(Result::unwrap) {
+                            if let Ok(gesture) = controller.downcast::<gtk::GestureDrag>() { gesture.reset(); }
+                        }
+                        d.input.perform(serde_json::json!([contact(device, "up", from)]));
+                        assert!(find_id(&d, bubble.id).is_some(), "{name}: ordinary native gesture cancellation keeps its bubble");
+                        assert_eq!(state(&d.w).workspace.layout.bubbles, before, "{name}: ordinary native gesture cancellation restores its saved arrangement");
+                    }
+                    checked += 1;
+                }
+            }
+        }
+    }
+    println!("PASS edge dismissal: {checked} native outward contacts at {}x{}", d.w.surface.width(), d.w.surface.height());
+    d.finish();
+}
+
+#[test]
 #[ignore = "private display: workspace-motion.sh gtk --native-test=native_tool_bubbles"]
 fn native_tool_bubbles() {
     let mut d = Driver::new("art.capycanvas.ToolBubbles");

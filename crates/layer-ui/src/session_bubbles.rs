@@ -3,6 +3,7 @@ use crate::bubbles::{Desk, Shape, bead_scroll_limit, bead_travel};
 use layer_core::BrushSnapshot;
 
 const TAP_SLOP: f32 = 8.;
+const EDGE_DISMISS_DISTANCE: f32 = 8.;
 
 #[derive(Clone, Copy, Debug)]
 struct BubbleDrag {
@@ -10,6 +11,8 @@ struct BubbleDrag {
     offset: [f32; 2],
     source: Option<Bounds>,
     pulled: bool,
+    position: [f32; 2],
+    viewport: [f32; 2],
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -795,7 +798,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 })
             }
             BubbleAction::Resize { id, scale } => {
-                let bubble = self.bubble(id)?;
+                let Some(bubble) = self.state.workspace.layout.bubbles.get(id) else { return Ok(UiChange::default()) };
                 if bubble.source.kind() != BubbleKind::Color || !scale.is_finite() || scale <= 0. {
                     return Err("Only the color ring changes size".into());
                 }
@@ -1227,6 +1230,14 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
         }
         let Some(drag) = self.bubble_state.drag else { return Ok(UiChange::default()) };
+        let exiting = matches!(phase, ContactPhase::Move | ContactPhase::Up) && viewport == drag.viewport
+            && (0..2).any(|axis| position[axis] <= EDGE_DISMISS_DISTANCE && position[axis] < drag.position[axis]
+                || position[axis] >= viewport[axis] - EDGE_DISMISS_DISTANCE && position[axis] > drag.position[axis]);
+        if let Some(drag) = self.bubble_state.drag.as_mut() {
+            drag.position = position;
+            drag.viewport = viewport;
+        }
+        let phase = if exiting { ContactPhase::Up } else { phase };
         let center = [position[0] + drag.offset[0], position[1] + drag.offset[1]];
         let present = self.state.workspace.layout.bubbles.get(drag.id).is_some();
         let mut change = UiChange::default();
@@ -1241,7 +1252,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.bubble_state.drag = None;
                 self.bubble_state.drag_desk = None;
                 self.bubble_state.desk.home(false);
-                if self.bubble_homing(viewport, position, drag.source)
+                if exiting || self.bubble_homing(viewport, position, drag.source)
                     || drag.pulled && !self.bubble_canvas(viewport).contains(position[0],position[1]) {
                     let source = self.bubble(drag.id)?.source;
                     let before = self.workspace_history.gesture_start().cloned();
@@ -1342,7 +1353,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.bubble_state.properties = false;
         }
         self.bubble_state.drag_desk = Some(desk);
-        self.bubble_state.drag = Some(BubbleDrag { id, offset: [center[0] - position[0], center[1] - position[1]], source: bounds, pulled });
+        self.bubble_state.drag = Some(BubbleDrag { id, offset: [center[0] - position[0], center[1] - position[1]], source: bounds, pulled, position, viewport });
         self.sync_bubbles();
         self.bubble_state.desk.grab(id);
         if matches!(grab, BubbleGrab::Rim { .. }) {

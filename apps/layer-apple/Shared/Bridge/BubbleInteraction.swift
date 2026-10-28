@@ -101,7 +101,9 @@ import SwiftUI
     func validate() {
         if let contact {
             let current = bubbles?.items.contains { $0 === contact.item && $0.source == contact.source } == true
-            if !enabled || !current {
+            let moving = contact.mode == "moving" || contact.mode == "rim" || contact.mode == "pair" && contact.pairLifted
+            let removed = bubbles?.items.contains { $0.id == contact.item.id } != true
+            if !enabled || !current && !(removed && moving) {
                 retire()
                 if current { restore(contact) }
             }

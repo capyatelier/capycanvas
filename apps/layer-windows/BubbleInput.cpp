@@ -224,7 +224,7 @@ void WorkspaceBubbles::Impl::up(PointerRoutedEventArgs const& e,bool cancelled){
     auto p=e.GetCurrentPoint(workspace);cancelled=cancelled||p.Properties().IsCanceled();
     colorTouch(e,cancelled?L"cancel":L"up",nullptr);
     if(candidate&&candidate->pointer.PointerId()==p.PointerId()){
-        if(candidate->moving){drag(candidate->grab,cancelled?L"cancel":L"up",candidate->last);e.Handled(true);}candidate.reset();
+        if(candidate->moving){drag(candidate->grab,cancelled?L"cancel":L"up",p.Position());e.Handled(true);}candidate.reset();
     }
     auto c=contact;if(!c||!c->fingers.contains(p.PointerId()))return;stop(c);c->last=p.Position();c->record->pressed=false;
     if(c->paired){if(!c->pairEnded){c->pairEnded=true;c->record->pinch=1;if(c->lifted){drag(c->grab,cancelled?L"cancel":L"up",c->midpoint);

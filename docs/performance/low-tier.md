@@ -266,7 +266,7 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 | GTK Tool Set hover and press animation | 60 | Unmeasured on reference hardware; the short desktop GTK diagnostic does not qualify this tier | [GTK tool caption hover](top-tier.md#gtk-tool-caption-hover), 2026-10-26 |
 | Panel or column resize | 60 | **Pre-existing gap; unqualified.** Android gap: original 27.79 presented fps / 26.07 fresh bounds/s; retained port 53.64–58.47 presented fps / 41.71–42.97 fresh bounds/s. Web: original 8.43–8.63 bounds updates/s; SVG 21.40–23.42 geometry updates/s alongside 21.11–23.14 total Chrome presents/s GTK compact Tool Set and expanding divider revisions remain unmeasured on this tier. | [Native column bridges](#native-column-bridges); [Web SVG column bridges](#web-svg-column-bridges); [GTK Tool Set density](top-tier.md#gtk-tool-set-density), [GTK toolbar dividers](top-tier.md#gtk-toolbar-divider-resize), 2026-10-26 |
 | Pen pressure utility and curve drag | 60 | Unmeasured on reference hardware | [Pen pressure measurement protocol](../ui/pen-pressure.md#validation); GTK desktop measurements do not qualify this tier |
-| Android tool bubble drag through four neighbours | 60 | Unmeasured after the bubble release fixes; the 24 MP MovinkPad 11 measurement does not qualify the TCL reference tablet | [Native tool bubbles](mid-tier.md#native-tool-bubbles), 2026-10-24 |
+| Android tool bubble drag through four neighbours | 60 | **Met.** Edge dismissal: 59.505–60.023 actual app-window presents/s; p99 16.821–16.917 ms, default glass, 12 MP photo at Fit | [Native tool bubbles](#native-tool-bubbles), 2026-10-27 |
 | Web tool bubble drag through four neighbours | 60 | Unmeasured after the bubble release fixes; desktop browser journeys do not qualify the TCL reference tablet | [Web checks](../development/web.md#tests), 2026-10-24 |
 | Windows tool bubble drag through four neighbours | 60 | Unmeasured on reference hardware; Surface Pro / Adreno X1-85 functional checks do not qualify timing (PresentMon ETW access denied) | [Windows tool bubbles](../development/windows.md#tool-bubbles) |
 | Windows HDR color bubble drag and intensity scrub | 60 | Unmeasured on reference hardware; native input and pixel checks do not qualify presentation timing (PresentMon ETW access denied) | [Windows tool bubbles](../development/windows.md#tool-bubbles) |
@@ -285,6 +285,27 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 | Workspace visibility checklist: vertical scroll | 60 | Screen 60.02 presents/s, maximum p99 17.03 ms | Workspace switcher scrolling below; long-list fixture |
 | Menu open and close | 60 | Application menu heading switching unmeasured on reference hardware | [Menu interaction](../ui/window-bar.md); functional checks do not qualify presented frame rate |
 | Interface language change | 60 | Current lifecycle binary unmeasured. Earlier German checkpoint: cold publication 169.2–195.5 ms; warm 144.4–194.4 ms; preparation-only maximum 4.095 ms | Matched Web language checkpoint below; no tier qualification |
+
+## Native tool bubbles
+
+Measured 2026-10-27 on the TCL reference tablet with the 4248 × 2832 tier
+photo, one empty paint layer, Fit view and default workspace glass. Both builds
+use release Rust and the unminified benchmark APK under a private application
+ID. `AndroidBubbleBenchmarkTest#fiveBubbleMotion` warms one six-second contact,
+then drags one bubble through four visibly displaced neighbors in three
+six-second native touch contacts. The collector uses actual SurfaceFlinger app
+window presents and excludes 100 ms at each contact edge. Display refresh is
+60 Hz and thermal status remains 0 throughout.
+
+| Build | Actual presents/s, three contacts | p99 interval, ms | Result |
+| --- | --- | --- | --- |
+| `origin/main` `a4068913f`, APK `bfdb8897` | 59.679 / 59.850 / 59.845 | 16.960308 / 16.952231 / 17.015692 | Met |
+| Edge dismissal, APK `8821464e` | 59.505 / 60.023 / 60.023 | 16.829308 / 16.821231 / 16.916539 | Met |
+
+Both meet the 57 presents/s floor and 33.3 ms gap limit. Raw contact windows,
+presentation timestamps, thermal records and APK hashes are retained in
+`artifacts/bubble-edge/android-low-baseline/`,
+`artifacts/bubble-edge/android-low-candidate/` and the adjacent provenance files.
 
 ## Layer action reveal
 

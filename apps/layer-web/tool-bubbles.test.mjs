@@ -98,6 +98,65 @@ export async function checkToolBubbles({call,evaluate,settle}) {
   const take=async(index,spot)=>{const from=await rect(`[data-header-item="${index+2}"] .header-tool`);const before=(await packets()).map(p=>p.view.id);await stroke([from,[from[0],from[1]+8],[from[0],from[1]+75],[spot[0],spot[1]-30],spot]);await wait(`layerApp.app.bubbles().some(p=>!${JSON.stringify(before)}.includes(p.view.id))`);const p=(await packets()).find(p=>!before.includes(p.view.id));await stable(p.view.id);return p.view.id;};
   const putBack=async id=>{const v=await view(id),c=await stable(id),from=v.kind==='color'?[c[0]-v.diameter/2+4,c[1]]:c;await stroke([from,[from[0],from[1]-25],[from[0],12]]);await wait(`!layerApp.app.bubbles().some(p=>p.view.id===${id})`);};
   const sliderThemes=new Set();
+  const edgeJourney=async theme=>{
+    const original=await evaluate('({width:innerWidth,height:innerHeight,deviceScaleFactor:devicePixelRatio,mobile:false})');
+    const workspace=structuredClone(fixture);for(const key of ['bands','floating','collapsed','column_stacks','fit_tab_groups','fit_height_groups'])workspace.layout[key]=[];
+    const documentState=()=>evaluate(`(()=>{const {epoch,revision,checkpoint}=layerApp.app.recovery_document_for(layerApp.app.document_tabs(0).selected).session;return JSON.parse(JSON.stringify({epoch,revision,checkpoint},(_,value)=>typeof value==='bigint'?String(value):value))})()`);
+    const evidence=[];
+    try {
+      for(const width of [1100,560]) {
+        await call('Emulation.setDeviceMetricsOverride',{...original,width,height:800});await settle();
+        for(const source of [0,1])for(const edge of ['left','right','top','bottom']) {
+          await send({type:'restore_workspace',workspace});
+          const id=await take(source,[width*.5,420]);
+          await send({type:'bubble',action:{type:'option',id,option:{kind:source?'recent':'swap'}}});
+          await send({type:'invoke',command:'zen_mode'});await wait(`document.querySelector('#workspace').classList.contains('zen-hidden')`);
+          const before=await evaluate('layerApp.app.workspace_persistence().layout.bubbles'),v=await view(id),c=await stable(id);
+          const artworkBefore=await documentState();
+          const from=source?[c[0]-v.diameter/2+3,c[1]]:[c[0]+12,c[1]+5];
+          const at=distance=>edge==='left'?[distance,from[1]]:edge==='right'?[width-distance,from[1]]:edge==='top'?[from[0],distance]:[from[0],800-distance];
+          await pointer('down',from);await pointer('move',at(30));await settle();
+          await pointer('move',at(12));await settle();assert.ok(await view(id),`${edge}: contact outside the 8px tolerance keeps its bubble`);
+          await pointer('move',at(4));await settle();assert.equal(await view(id),undefined,`${edge}: outward Move puts the bubble back before release`);
+          await pointer('move',[width*.5,420]);await pointer('move',[width*.5+50,440]);
+          if(device==='touch'&&['left','top'].includes(edge))await pointer('cancel');else {await escape();await pointer('up');}
+          await settle();assert.equal(await view(id),undefined,'late cancellation or release cannot resurrect a dismissed bubble');
+          assert.deepEqual(await documentState(),artworkBefore,'captured motion after dismissal cannot paint');
+          const dismissed=await evaluate('layerApp.app.workspace_persistence().layout.bubbles');
+          await send({type:'invoke',command:'undo_workspace'});await stable(id);
+          assert.deepEqual(await evaluate('layerApp.app.workspace_persistence().layout.bubbles'),before,'one workspace Undo restores the same bubble, options and saved place');
+          await send({type:'invoke',command:'redo_workspace'});assert.equal(await view(id),undefined,'one workspace Redo repeats edge dismissal');
+          assert.deepEqual(await evaluate('layerApp.app.workspace_persistence().layout.bubbles'),dismissed,'Redo preserves remembered source options');
+          await send({type:'invoke',command:'undo_workspace'});const interior=await stable(id),saved=await evaluate('layerApp.app.workspace_persistence().layout.bubbles');
+          const grab=source?[interior[0]-v.diameter/2+3,interior[1]]:[interior[0]+12,interior[1]+5];
+          await pointer('down',grab);await pointer('move',[grab[0]+35,grab[1]+25]);await settle();
+          if(device==='touch')await pointer('cancel');else {await escape();await pointer('up');}
+          await settle();assert.ok(await view(id),'ordinary interior cancellation keeps its bubble');
+          assert.deepEqual(await evaluate('layerApp.app.workspace_persistence().layout.bubbles'),saved,'ordinary interior cancellation restores its saved arrangement');
+          evidence.push({width,source:source?'color rim':'off-center tool',edge,id,before,dismissed});
+        }
+        if(device==='touch') {
+          await send({type:'restore_workspace',workspace});const id=await take(1,[width*.5,420]);
+          await send({type:'bubble',action:{type:'option',id,option:{kind:'recent'}}});await send({type:'invoke',command:'zen_mode'});
+          const before=await evaluate('layerApp.app.workspace_persistence().layout.bubbles'),artworkBefore=await documentState(),c=await stable(id),size=(await view(id)).diameter;
+          const fingers=(mid,spread)=>[{id:1,x:mid[0]-spread,y:mid[1]},{id:2,x:mid[0]+spread,y:mid[1]}];
+          await call('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:fingers(c,16).slice(0,1)});await call('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:fingers(c,16)});
+          for(const y of [740,788]){await call('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:fingers([width*.5,y],28)});await settle();}
+          assert.ok(await view(id),'paired contact outside the edge tolerance keeps its ring');
+          await call('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:fingers([width*.5,796],28)});await settle();assert.equal(await view(id),undefined,'paired outward Move dismisses before either finger lifts');
+          await call('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:fingers([width*.5,420],28)});
+          await call('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:fingers([width*.5,420],28).slice(1)});await call('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});await settle();
+          assert.equal(await view(id),undefined,'finishing both fingers cannot resize or resurrect a removed ring');assert.deepEqual(await documentState(),artworkBefore,'retired paired motion does not paint');
+          assert.equal(await evaluate('layerApp.state().host_error??null'),null,'retired paired resize reports no host failure');
+          await send({type:'invoke',command:'undo_workspace'});await stable(id);assert.equal((await view(id)).diameter,size,'one Undo restores the original ring size');
+          assert.deepEqual(await evaluate('layerApp.app.workspace_persistence().layout.bubbles'),before,'one Undo restores original paired size, options and place');
+          evidence.push({width,source:'paired color',edge:'bottom',id,before});
+        }
+      }
+      await writeFile(`${directory}/${theme}-${device}-edge-dismissal.json`,JSON.stringify(evidence,null,2));
+      console.log(`PASS edge dismissal: ${theme}/${device}, ${evidence.length} outward contacts`);
+    } finally {await call('Emulation.setDeviceMetricsOverride',original);await settle();await send({type:'restore_workspace',workspace:fixture});}
+  };
   const globalSliders=async theme=>{
     const workspace=structuredClone(fixture),area=await evaluate('layerApp.app.layout(innerWidth,innerHeight).work_area');
     const sources=[{kind:'control',control:{kind:'brush',id:25}},{kind:'control',control:{kind:'tool_slot',slot:'drawing'}},{kind:'medium',group:'pastel'},{kind:'control',control:{kind:'color_picker'}}];
@@ -149,14 +208,14 @@ export async function checkToolBubbles({call,evaluate,settle}) {
       if(device==='mouse')await call('Input.dispatchMouseEvent',{type:'mouseWheel',x:first.point[0],y:first.point[1],deltaY:150,deltaX:0});
       else {const start=await evaluate(`(()=>{const a=window.bubbleSourceScroll.getBoundingClientRect(),n=[...window.bubbleSourceScroll.querySelectorAll('[data-brush][data-bubble-source]')].filter(n=>{const r=n.getBoundingClientRect();return r.top>=a.top+6&&r.bottom<=a.bottom-6}).at(-1);if(!n)throw Error('No brush row for native list pan');const r=n.getBoundingClientRect();return [r.x+r.width/2,r.y+r.height/2]})()`);await stroke([start,[start[0],start[1]-25],[start[0],Math.max(scroll.y+24,start[1]-110)]]);}
       await wait('window.bubbleSourceScroll.scrollTop>20');assert.equal((await packets()).length,0,'scrolling brush rows does not take a bubble');if(device!=='mouse')assert.equal(await evaluate('layerApp.state().brush.preset'),before,'native list pan does not choose its brush');
-      const row=await visibleSource(),drawer=await evaluate(`(()=>{const r=document.querySelector('.content-drawer[data-drawer="tool"]').getBoundingClientRect();return {left:r.left,right:r.right}})()`),to=[drawer.right+150<1200?drawer.right+110:drawer.left-110,230];assert.ok(to[0]>36&&to[0]<1164,'drawer leaves canvas space for tear-out');
+      const row=await visibleSource(),to=await evaluate(`(()=>{const r=document.querySelector('.content-drawer[data-drawer="tool"]').getBoundingClientRect(),grab=layerApp.app.bubble_grab({type:'choice',action:document.querySelector('[data-bubble-test-source]').bubbleChoice});for(const x of [r.right+55,r.left-55])if(layerApp.app.can_take_bubble(grab,x,230,innerWidth,innerHeight))return [x,230];throw Error('Drawer fixture needs a free canvas tear-out target')})()`);
       await stroke([row.point,[row.point[0]+20,row.point[1]],[to[0],row.point[1]],to]);await wait(`layerApp.app.bubbles().some(p=>p.view.kind==='brush')`);const brush=(await packets()).find(p=>p.view.kind==='brush').view.id;await stable(brush);assert.equal(await evaluate('layerApp.state().brush.preset'),row.brush,'tearing brush row selects that brush');assert.ok((await view(brush)).open,'brush row comes out with its halo');
-      let at=await stable(brush);await stroke([at,[1100,350],[1198,418]]);await stable(brush);
+      let at=await stable(brush);await stroke([at,[1100,350],[1188,408]]);await stable(brush);
       const fits=()=>evaluate(`(()=>{const r=document.querySelector('.tool-bubble[data-bubble="${brush}"] .bubble-face').getBoundingClientRect(),header=document.querySelector('#header').getBoundingClientRect();return {left:r.left,top:r.top,right:r.right,bottom:r.bottom,width:innerWidth,height:innerHeight,header:header.bottom}})()`);
       await primitives(brush,`${theme}-right-bottom-edge`);let box=await fits();assert.ok(box.right<=box.width-7&&box.bottom<=box.height-7,'dragged bubble stays inside right and bottom walls');
       await resize(800,520);await stable(brush);await primitives(brush,`${theme}-resized-edge`);box=await fits();assert.ok(box.left>=7&&box.top>=box.header+7&&box.right<=box.width-7&&box.bottom<=box.height-7,'viewport resize keeps bubble inside canvas walls');await shot(`${theme}-${device}-viewport-edge`);
       await resize(original.width,original.height);at=await stable(brush);
-      const wall=await evaluate('(()=>{const area=layerApp.app.layout(innerWidth,innerHeight).work_area;return [area.x+1,area.y+1]})()');
+      const wall=await evaluate('(()=>{const area=layerApp.app.layout(innerWidth,innerHeight).work_area;return [area.x+12,area.y+12]})()');
       assert.equal(await evaluate(`layerApp.app.can_take_bubble({kind:'bubble',id:${brush}},${wall[0]},${wall[1]},innerWidth,innerHeight)`),true,'wall fixture point must keep the bubble outside return-home targets');
       await stroke([at,wall]);await stable(brush);box=await fits();assert.ok(box.left>=7&&box.top>=box.header+7,'bubble stays inside left and titlebar walls');await putBack(brush);
     } catch(error) {
@@ -169,6 +228,7 @@ export async function checkToolBubbles({call,evaluate,settle}) {
     for(const theme of (process.env.LAYER_BUBBLE_THEMES?.split(',')||['light','dark']))for(device of (process.env.LAYER_BUBBLE_DEVICES?.split(',')||['mouse','touch','pen'])) {
       console.log(`Tool bubbles: ${theme}/${device}`);await call('Emulation.setTouchEmulationEnabled',{enabled:device==='touch',maxTouchPoints:5});
       await send({type:'restore_workspace',workspace:fixture});await send({type:'set_theme',theme});await pause(250);
+      await edgeJourney(theme);
       if(!sliderThemes.has(theme)){await globalSliders(theme);sliderThemes.add(theme);}
       const bounds=await evaluate('(()=>{const r=document.querySelector("#workspace").getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height}})()');
       const spot=[bounds.x+bounds.width*.4,bounds.y+bounds.height*.5];

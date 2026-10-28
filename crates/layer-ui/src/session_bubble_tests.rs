@@ -728,6 +728,89 @@ fn put_back_all_empties_the_desk_in_one_step() {
 }
 
 #[test]
+fn dragging_bubbles_off_each_window_edge_puts_them_back_immediately() {
+    let edges = [[2., FAR[1]], [-20., FAR[1]], [VIEW[0] - 2., FAR[1]], [VIEW[0] + 20., FAR[1]],
+        [FAR[0], 2.], [FAR[0], -20.], [FAR[0], VIEW[1] - 2.], [FAR[0], VIEW[1] + 20.],
+        [2., 2.], [VIEW[0] - 2., VIEW[1] - 2.]];
+    for platform in Platform::ALL {
+        for hidden in [false, true] {
+            for edge in edges {
+                let mut s = session(platform);
+                s.set_viewport(VIEW, [1200, 900]).unwrap();
+                s.interaction.hidden = hidden;
+                let id = take(&mut s, brush(DefaultBrushPreset::PointyPencil), FAR);
+                act(&mut s, BubbleAction::Option { id, option: BubbleOption::Swap }).unwrap();
+                let before = s.state.workspace.clone();
+                let grab = BubbleGrab::Bubble { id };
+                contact(&mut s, grab, ContactPhase::Down, [FAR[0] + 12., FAR[1]]).unwrap();
+                let change = contact(&mut s, grab, ContactPhase::Move, edge).unwrap();
+                assert!(s.bubbles().is_empty() && s.bubble_placements().is_empty(), "{platform:?}/{hidden}/{edge:?}");
+                assert_ne!(change.regions & regions::BUBBLES, 0);
+                for phase in [ContactPhase::Move, ContactPhase::Up, ContactPhase::Cancel] {
+                    assert_eq!(contact(&mut s, grab, phase, FAR).unwrap().regions, 0);
+                }
+                invoke(&mut s, CommandId::UndoWorkspace);
+                assert_eq!(s.state.workspace, before, "{platform:?}/{hidden}/{edge:?}: one undo restores the bubble and options");
+                invoke(&mut s, CommandId::RedoWorkspace);
+                assert!(s.bubbles().is_empty());
+            }
+        }
+    }
+}
+
+#[test]
+fn pulling_a_new_bubble_off_an_edge_creates_no_layout_history() {
+    let mut s = desk();
+    let before = s.state.workspace.clone();
+    let grab = brush(DefaultBrushPreset::PointyPencil);
+    contact(&mut s, grab, ContactPhase::Down, FAR).unwrap();
+    contact(&mut s, grab, ContactPhase::Move, [VIEW[0] - 2., FAR[1]]).unwrap();
+    assert_eq!(s.state.workspace, before);
+    assert!(s.bubble_placements().is_empty());
+    assert!(!s.command(CommandId::UndoWorkspace).enabled);
+    contact(&mut s, grab, ContactPhase::Cancel, FAR).unwrap();
+    assert_eq!(s.state.workspace, before);
+}
+
+#[test]
+fn bubble_edge_dismissal_requires_outward_motion_in_an_unchanged_viewport() {
+    let mut s = desk();
+    s.interaction.hidden = true;
+    let id = take(&mut s, brush(DefaultBrushPreset::PointyPencil), FAR);
+    let before = s.state.workspace.clone();
+    let grab = BubbleGrab::Bubble { id };
+    contact(&mut s, grab, ContactPhase::Down, FAR).unwrap();
+    for point in [[12., FAR[1]], [12., FAR[1] + 40.], [FAR[0], 12.], [FAR[0] + 40., 12.]] {
+        contact(&mut s, grab, ContactPhase::Move, point).unwrap();
+        assert_eq!(s.bubbles().len(), 1, "a bubble overlapping an edge stays out");
+    }
+    contact(&mut s, grab, ContactPhase::Cancel, [0., 0.]).unwrap();
+    assert_eq!(s.state.workspace, before, "cancellation coordinates cannot dismiss a bubble");
+    contact(&mut s, grab, ContactPhase::Down, FAR).unwrap();
+    act(&mut s, BubbleAction::Drag { grab, phase: ContactPhase::Move, position: FAR, viewport: [600., 400.] }).unwrap();
+    assert_eq!(s.bubbles().len(), 1, "resizing the viewport cannot dismiss a stationary contact");
+    act(&mut s, BubbleAction::Drag { grab, phase: ContactPhase::Cancel, position: FAR, viewport: [600., 400.] }).unwrap();
+    assert_eq!(s.state.workspace, before);
+}
+
+#[test]
+fn an_edge_dismissed_color_ring_ignores_the_remaining_pinch_events() {
+    let mut s = desk();
+    let id = take_ring(&mut s, FAR);
+    let before = s.state.workspace.clone();
+    let grab = BubbleGrab::Rim { id };
+    contact(&mut s, grab, ContactPhase::Down, [FAR[0] + 60., FAR[1]]).unwrap();
+    contact(&mut s, grab, ContactPhase::Move, [VIEW[0] - 2., FAR[1]]).unwrap();
+    assert!(s.bubbles().is_empty());
+    contact(&mut s, grab, ContactPhase::Up, FAR).unwrap();
+    assert_eq!(act(&mut s, BubbleAction::Resize { id, scale: 1.5 }).unwrap().regions, 0);
+    invoke(&mut s, CommandId::UndoWorkspace);
+    assert_eq!(s.state.workspace, before);
+    invoke(&mut s, CommandId::RedoWorkspace);
+    assert!(s.bubbles().is_empty());
+}
+
+#[test]
 fn cancelled_and_competing_drags_leave_the_layout_unchanged() {
     let mut s = desk();
     let before = s.state.workspace.layout.clone();
@@ -1626,7 +1709,8 @@ fn dragging_an_open_palette_closes_it_and_reopening_at_the_edge_stays_inside() {
     let drag=|s:&mut UiSession<Recorder>,phase,position| act(s,BubbleAction::Drag {grab,phase,position,viewport}).unwrap();
     drag(&mut s,ContactPhase::Down,from);
     assert!(view(&s,id).pill.is_none(),"Dragging closes the palette; its always-published pill rectangle is not a visible surface");
-    let edge=viewport.map(|v|v-4.);
+    let edge=[work.x+work.width-12.,work.y+work.height-12.];
+    assert!(s.can_take_bubble(grab,edge,viewport),"The wall fixture stays clear of return targets");
     drag(&mut s,ContactPhase::Move,edge);
     drag(&mut s,ContactPhase::Up,edge);
     now=settle(&mut s,now);

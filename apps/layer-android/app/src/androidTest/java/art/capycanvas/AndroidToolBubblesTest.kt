@@ -325,7 +325,10 @@ class AndroidToolBubblesTest {
         waitFor("Palette bead opens pill") { !view(id).isNull("pill") }
         val area = workspace()
         val edgeStart = (center(id) - area.topLeft) / density
-        val edge = Offset(area.width / density - 4, area.height / density - 4)
+        lateinit var work: JSONObject
+        instrumentation.runOnMainSync { work = JSONObject(host.snapshot!!.getJSONObject("layout").getJSONObject("work_area").toString()) }
+        val edge = Offset(work.number("x") + work.number("width") - 12, work.number("y") + work.number("height") - 12)
+        assertEquals("Palette wall fixture stays clear of toolbar return targets", true, query(obj("type" to "can_take_bubble", "grab" to obj("kind" to "bubble", "id" to id), "position" to JSONArray(listOf(edge.x, edge.y)), "viewport" to JSONArray(listOf(area.width / density, area.height / density)))))
         for ((phase, position) in listOf("down" to edgeStart, "move" to edge, "up" to edge)) action(obj("type" to "bubble", "action" to obj("type" to "drag", "grab" to obj("kind" to "bubble", "id" to id), "phase" to phase, "position" to JSONArray(listOf(position.x, position.y)), "viewport" to JSONArray(listOf(area.width / density, area.height / density)))))
         stable(id)
         assertTrue("Dragging closes the palette pill", view(id).isNull("pill"))
@@ -554,6 +557,79 @@ class AndroidToolBubblesTest {
         assertEquals("$part fits its measured text width", expected.second.x * density, surface!!.width, 2f)
         assertEquals("$part fits its measured text height", expected.second.y * density, surface!!.height, 2f)
     }
+    @Test fun draggingBeyondEveryWindowEdgeDismissesBeforeRelease() {
+        for (theme in listOf("light", "dark")) for (input in listOf(MotionEvent.TOOL_TYPE_MOUSE, MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_STYLUS)) {
+            for (edge in 0..3) for (terminal in listOf(MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL)) {
+                tool = input; root = null; case = "$theme-edge-$edge-$input-$terminal"
+                action(obj("type" to "restore_workspace", "workspace" to JSONObject(fixture.toString())))
+                action(obj("type" to "set_theme", "theme" to theme))
+                val id = take(2, workspace().center)
+                invoke("zen_mode")
+                val from = stable(id)
+                event(MotionEvent.ACTION_DOWN, from)
+                event(MotionEvent.ACTION_MOVE, from + Offset(30 * density, 15 * density))
+                host.drain()
+                assertTrue("The native face starts an existing-bubble drag", packets().any { it.getJSONObject("view").getLong("id") == id })
+                val area = workspace()
+                fun edgePoint(inset: Float) = when (edge) {
+                    0 -> Offset(area.left + inset * density, area.center.y)
+                    1 -> Offset(area.right - inset * density, area.center.y)
+                    2 -> Offset(area.center.x, area.top + inset * density)
+                    else -> Offset(area.center.x, area.bottom - inset * density)
+                }
+                event(MotionEvent.ACTION_MOVE, edgePoint(12f))
+                host.drain()
+                assertTrue("$case keeps the bubble outside the edge tolerance", packets().any { it.getJSONObject("view").getLong("id") == id })
+                event(MotionEvent.ACTION_MOVE, edgePoint(if (terminal == MotionEvent.ACTION_UP) 4f else -12f))
+                host.drain()
+                assertTrue("$case removes the bubble during Move", packets().none { it.getJSONObject("view").getLong("id") == id })
+                waitFor("$case retires the native face before release") { findTag("tool-bubble-$id") == null }
+                event(terminal, from)
+                host.drain()
+                assertTrue("$case terminal event keeps the bubble dismissed", packets().isEmpty())
+                invoke("undo_workspace")
+                waitFor("$case dismissal is one undo") { packets().any { it.getJSONObject("view").getLong("id") == id } }
+                invoke("redo_workspace")
+                waitFor("$case redo dismisses the same bubble") { packets().isEmpty() }
+            }
+        }
+    }
+
+    @Test fun cancellingAnInBoundsBubbleDragRestoresItsPosition() {
+        for (theme in listOf("light", "dark")) for (input in listOf(MotionEvent.TOOL_TYPE_MOUSE, MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_STYLUS)) {
+            tool = input; root = null; case = "$theme-cancel-$input"
+            action(obj("type" to "restore_workspace", "workspace" to JSONObject(fixture.toString())))
+            action(obj("type" to "set_theme", "theme" to theme))
+            val id = take(2, workspace().center)
+            invoke("zen_mode")
+            val from = stable(id)
+            event(MotionEvent.ACTION_DOWN, from)
+            event(MotionEvent.ACTION_MOVE, from + Offset(80 * density, 40 * density))
+            host.drain()
+            assertTrue("$case moves before cancellation", (center(id) - from).getDistance() > 30 * density)
+            event(MotionEvent.ACTION_CANCEL)
+            host.drain()
+            assertTrue("$case retains its bubble", packets().any { it.getJSONObject("view").getLong("id") == id })
+            assertTrue("$case restores its original center", (stable(id) - from).getDistance() < 2f)
+        }
+    }
+
+    @Test fun releasingBeyondTheWindowUsesTheReleasePosition() {
+        for (theme in listOf("light", "dark")) for (input in listOf(MotionEvent.TOOL_TYPE_MOUSE, MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_STYLUS)) {
+            tool = input; root = null; case = "$theme-edge-release-$input"
+            action(obj("type" to "restore_workspace", "workspace" to JSONObject(fixture.toString())))
+            action(obj("type" to "set_theme", "theme" to theme))
+            val id = take(2, workspace().center)
+            invoke("zen_mode")
+            val from = stable(id)
+            event(MotionEvent.ACTION_DOWN, from)
+            event(MotionEvent.ACTION_MOVE, from + Offset(30 * density, 15 * density))
+            event(MotionEvent.ACTION_UP, Offset(workspace().right + 12 * density, from.y))
+            host.drain()
+            assertTrue("$case dismisses at the final native coordinate", packets().isEmpty())
+        }
+    }
+
     @Test fun bubbleHoverExitClearsFaceFeedback() {
         for (theme in listOf("light", "dark")) {
             action(obj("type" to "restore_workspace", "workspace" to JSONObject(fixture.toString())))
@@ -784,7 +860,14 @@ class AndroidToolBubblesTest {
                 tap(from)
                 waitFor("Source drawer opens") { findTag("tool-drawer") != null }
                 val before = packets().map { it.getJSONObject("view").getLong("id") }.toSet()
-                val target = workspace().center
+                val area = workspace()
+                lateinit var work: JSONObject
+                instrumentation.runOnMainSync { work = JSONObject(host.snapshot!!.getJSONObject("layout").getJSONObject("work_area").toString()) }
+                val target = listOf(.5f, .75f, .25f).flatMap { y -> listOf(.5f, .75f, .25f).map { x ->
+                    area.topLeft + Offset(work.number("x") + work.number("width") * x, work.number("y") + work.number("height") * y) * density
+                } }.firstOrNull { at -> query(obj("type" to "can_take_bubble", "grab" to obj("kind" to "header", "id" to header), "position" to JSONArray(listOf((at.x - area.left) / density, (at.y - area.top) / density)), "viewport" to JSONArray(listOf(area.width / density, area.height / density)))) == true }
+                    ?: error("$case header $header has no shared-admissible work-area endpoint: work=$work viewport=$area")
+                instrumentation.runOnMainSync { assertSame("Drawer and source use the same native input coordinates", findTag("workspace")!!.first, findTag("tool-drawer")!!.first) }
                 event(MotionEvent.ACTION_DOWN, from)
                 event(MotionEvent.ACTION_MOVE, from + Offset(0f, 8 * density))
                 event(MotionEvent.ACTION_MOVE, from + Offset(0f, 80 * density))

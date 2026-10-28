@@ -4,8 +4,9 @@
 
 Tool bubbles keep tools on the canvas, like brushes laid on a desk. Dragging a
 title-bar button, a toolbar tool or a brush row out onto the canvas takes a
-bubble of it; dropping the bubble back on a toolbar or the title bar puts it
-away. Bubbles stay while painting and in Zen mode, push each other aside and
+bubble of it; dropping the bubble back on a toolbar or the title bar, or dragging
+it off any window edge, puts it away. Bubbles stay while painting and in Zen mode,
+push each other aside and
 return to their places when there is room.
 
 Shared Rust owns everything a host would otherwise decide: `bubbles.rs` holds
@@ -52,7 +53,10 @@ The variation marker describes the choices shown by the tool's menu.
   still rearranges toolbars; releasing such a drag on the canvas past the 80 px
   line takes a bubble.
 - **Putting back:** drop a bubble on a toolbar, a panel or the title bar, or choose
-  **Put back** in its hold menu. While the contact is over a place it would go
+  **Put back** in its hold menu. Dragging outward into the outermost 8 px of any
+  window edge puts it back immediately, including in Zen mode. Moving near an
+  edge, resizing the window or cancelling inside it keeps the bubble. While the
+  contact is over a place it would go
   back to, the bubble shrinks and fades. `BubbleAction::PutBackAll` empties the
   desk in one step.
 - **Coming out:** a brush, medium or group dial comes out selected, with its
@@ -344,6 +348,9 @@ a host only presents it and captures native input. GTK
   `Close`, `MeasureCard`, `Option`, `SetOptions`, `ToggleRingSetting`,
   `PutBack` and `PutBackAll`. Drag positions use workspace coordinates; other
   contact positions are relative to the bubble center.
+  Hosts retain a moving contact and its native capture through Up or Cancel even
+  when its bubble leaves the view model. They forward the final release position;
+  Rust dismisses at window edges and ignores the remaining drag and resize events.
   `Wheel` retains the initial color and pressed wheel part in Rust. Down and
   Move pick; Up keeps the last sampled color, and Cancel restores the initial
   color only in the original document and color context. Removing its owner
@@ -381,6 +388,8 @@ second with `LAYER_NATIVE_EVENT_MS=4` and `LAYER_TEST_ARTIFACTS`.
 `native_bubble_pickup_closes_drawers` checks drawer dismissal during pickup and
 continued mouse/touch dragging in both themes. Shared pickup tests cover every
 platform, including cancellation and tiles pulled from column drawers.
+`native_bubble_edge_dismissal` checks all four window edges, retained contact
+capture, cancellation and layout history in both themes, at wide and narrow widths.
 
 Web captures pointer events before canvas input and retains DOM widgets for the
 wheel, swatches and Layers inspector. Mouse resets use the browser's native
