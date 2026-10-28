@@ -57,12 +57,19 @@ class AndroidWorkspacePerformanceTest {
         launchCapy(120_000).use { scenario ->
             device.landscape(scenario)
             val host = scenario.activity().host
+            host.drain(obj("type" to "set_theme", "theme" to args.getString("theme", "light")))
             fun idle() = host.awaitMain("workspace preferences saved", 60_000, { "${host.workspaceManager}" }) {
                 host.workspaceManager?.let { !it.optBoolean("busy") && !it.optBoolean("switcher_busy") && !it.optBoolean("dirty") } == true
             }
-            fun workspace(value: JSONObject) { instrumentation.runOnMainSync { host.workspaceInput(value) }; host.drain(); idle() }
+            fun workspace(value: JSONObject) {
+                instrumentation.runOnMainSync { host.workspaceInput(value) }
+                host.drain()
+                if (value.optString("type") == "form" && value.getJSONObject("action").optString("type") == "new") {
+                    host.awaitMain("new workspace form") { findTag("workspace-name") != null && host.workspaceManager?.optBoolean("busy") == false }
+                } else idle()
+            }
             workspace(obj("type" to "switch", "id" to if (grouped) "builtin:workspace:photographer" else "builtin:workspace:illustrator"))
-            host.newDocument(4248, 2832)
+            host.newDocument(args.getString("width", "4248")!!.toInt(), args.getString("height", "2832")!!.toInt())
             host.importImage(java.io.File(checkNotNull(args.getString("photo"))))
             host.awaitMain("photo placement") {
                 host.snapshot?.getJSONObject("state")?.objectOrNull("canvas_bar")?.objectOrNull("context")?.optString("kind") == "placement"
@@ -96,19 +103,62 @@ class AndroidWorkspacePerformanceTest {
                 fixture.getJSONObject("layout").put("header", obj("size" to "small", "next_id" to 901,
                     "zones" to JSONArray(listOf(JSONArray(listOf(obj("id" to 900, "item" to obj("kind" to "workspaces")))), JSONArray(), JSONArray()))))
                 host.drain(obj("type" to "restore_workspace", "workspace" to fixture))
-                host.awaitMain("scrolling switcher and settled renderer", 120_000) {
-                    findTag("workspace-switcher-options") != null && host.snapshot?.optBoolean("shaders_ready") == true
+                host.awaitMain("scrolling switcher and settled renderer", 120_000, diagnostics = {
+                    val diagnostics = obj("switcher_visible" to (findTag("workspace-switcher") != null),
+                        "options_visible" to (findTag("workspace-switcher-options") != null),
+                        "compact_visible" to (findTag("header-control-900") != null),
+                        "workspace_manager" to host.workspaceManager, "snapshot" to host.snapshot)
+                    val output = java.io.File(instrumentation.targetContext.getExternalFilesDir(null), "workspace-switcher-benchmark").apply { mkdirs() }
+                    java.io.File(output, "readiness-failure.json").writeText(diagnostics.toString())
+                    diagnostics.toString()
+                }) {
+                    (findTag("workspace-switcher-options") != null || findTag("header-control-900") != null) && host.snapshot?.optBoolean("shaders_ready") == true
                 }
             }
             val output = java.io.File(instrumentation.targetContext.getExternalFilesDir(null),
                 if (grouped) "grouped-drawer-benchmark" else "workspace-switcher-benchmark").apply { mkdirs() }
             output.listFiles()?.forEach { it.delete() }
-            for (mode in if (grouped) listOf("grouped-drawer") else listOf("choices", "options")) {
-                if (mode == "options") instrumentation.runOnMainSync {
-                    val button = findTag("workspace-switcher-options")!!.second.find { it.config.getOrNull(SemanticsActions.OnClick) != null }!!
-                    button.config[SemanticsActions.OnClick].action!!.invoke()
+            var compact = false
+            instrumentation.runOnMainSync { compact = !grouped && findTag("workspace-switcher-options") == null }
+            fun tapNode(owner: ViewRootForTest, node: SemanticsNode) {
+                val point = node.boundsInRoot.center
+                val time = SystemClock.uptimeMillis()
+                for (action in listOf(MotionEvent.ACTION_DOWN, MotionEvent.ACTION_UP)) {
+                    val contact = motion(MotionEvent.TOOL_TYPE_FINGER, action, point, time)
+                    try { owner.view.dispatchTouchEvent(contact) } finally { contact.recycle() }
                 }
-                val surfaceTag = if (grouped) "tool-drawer" else if (mode == "choices") "workspace-switcher-choices" else "workspace-menu"
+            }
+            for (mode in if (grouped) listOf("grouped-drawer") else listOf("choices", "options")) {
+                val horizontal = !compact && mode == "choices"
+                if (compact && mode == "choices") instrumentation.runOnMainSync {
+                    val control = checkNotNull(findTag("header-control-900"))
+                    tapNode(control.first, control.second)
+                }
+                if (mode == "options") {
+                    if (compact) {
+                        host.awaitMain("compact workspace menu") { findTag("workspace-menu") != null }
+                        val label = host.workspaceManager!!.getJSONObject("switcher_menu").array("sections").getJSONArray(1).getJSONObject(0).getString("label")
+                        instrumentation.runOnMainSync {
+                            val popup = checkNotNull(findTag("workspace-menu"))
+                            val scroll = checkNotNull(popup.second.find { it.config.getOrNull(SemanticsProperties.VerticalScrollAxisRange) != null })
+                            scroll.config[SemanticsActions.ScrollBy].action!!.invoke(0f, scroll.config[SemanticsProperties.VerticalScrollAxisRange].maxValue())
+                        }
+                        host.awaitMain("compact workspace options row visible") {
+                            findTag("workspace-menu")?.let { popup ->
+                                val row = popup.second.find { it.config.getOrNull(SemanticsProperties.Text)?.any { text -> text.text == label } == true }
+                                row != null && popup.first.view.hasWindowFocus() && row.boundsInRoot.top >= popup.second.boundsInRoot.top && row.boundsInRoot.bottom <= popup.second.boundsInRoot.bottom
+                            } == true
+                        }
+                        instrumentation.runOnMainSync {
+                            val popup = checkNotNull(findTag("workspace-menu"))
+                            tapNode(popup.first, checkNotNull(popup.second.find { it.config.getOrNull(SemanticsProperties.Text)?.any { text -> text.text == label } == true }))
+                        }
+                    } else instrumentation.runOnMainSync {
+                        val button = findTag("workspace-switcher-options")!!.second.find { it.config.getOrNull(SemanticsActions.OnClick) != null }!!
+                        button.config[SemanticsActions.OnClick].action!!.invoke()
+                    }
+                }
+                val surfaceTag = if (grouped) "tool-drawer" else if (horizontal) "workspace-switcher-choices" else "workspace-menu"
                 host.awaitMain("$mode scroll surface") { findTag(surfaceTag) != null }
                 lateinit var owner: ViewRootForTest
                 lateinit var scroll: SemanticsNode
@@ -117,11 +167,11 @@ class AndroidWorkspacePerformanceTest {
                     val surface = findTag(surfaceTag)!!
                     owner = surface.first
                     scroll = surface.second.find {
-                        (it.config.getOrNull(if (mode == "choices") SemanticsProperties.HorizontalScrollAxisRange else SemanticsProperties.VerticalScrollAxisRange)?.maxValue() ?: 0f) > 0f
+                        (it.config.getOrNull(if (horizontal) SemanticsProperties.HorizontalScrollAxisRange else SemanticsProperties.VerticalScrollAxisRange)?.maxValue() ?: 0f) > 0f
                     }!!
-                    if (!grouped) dots = findTag("workspace-switcher-options")!!.second.boundsInRoot
+                    if (!grouped && !compact) dots = findTag("workspace-switcher-options")!!.second.boundsInRoot
                 }
-                val range = scroll.config[if (mode == "choices") SemanticsProperties.HorizontalScrollAxisRange else SemanticsProperties.VerticalScrollAxisRange]
+                val range = scroll.config[if (horizontal) SemanticsProperties.HorizontalScrollAxisRange else SemanticsProperties.VerticalScrollAxisRange]
                 assertTrue("$mode has overflow", range.maxValue() > 0f)
                 var maximum = -1f
                 var settledAt = SystemClock.uptimeMillis()
@@ -131,7 +181,7 @@ class AndroidWorkspacePerformanceTest {
                     maximum in 1f..999_999f && scroll.boundsInRoot.height > 100f && SystemClock.uptimeMillis() - settledAt >= 300
                 }
                 val bounds = scroll.boundsInRoot
-                val amplitude = minOf((if (mode == "choices") bounds.width else bounds.height) * .2f, range.maxValue() * .2f)
+                val amplitude = minOf((if (horizontal) bounds.width else bounds.height) * .2f, range.maxValue() * .2f)
                 val rows = java.util.Collections.synchronizedList(mutableListOf<LongArray>())
                 val frameRows = java.util.Collections.synchronizedList(mutableListOf<LongArray>())
                 val frameThread = HandlerThread("scroll-frame-metrics").apply { start() }
@@ -155,16 +205,16 @@ class AndroidWorkspacePerformanceTest {
                     for (run in 0..3) {
                         instrumentation.runOnMainSync {
                             val delta = range.maxValue() * .5f - range.value()
-                            scroll.config[SemanticsActions.ScrollBy].action!!.invoke(if (mode == "choices") delta else 0f, if (mode != "choices") delta else 0f)
+                            scroll.config[SemanticsActions.ScrollBy].action!!.invoke(if (horizontal) delta else 0f, if (!horizontal) delta else 0f)
                         }
                         host.awaitMain("$mode centered scroll", diagnostics = {
                             screenshot("${output.name}/failure-center.png")
                             "value=${range.value()}; maximum=${range.maxValue()}; bounds=${scroll.boundsInRoot}"
                         }) { kotlin.math.abs(range.value() - range.maxValue() * .5f) < 2f }
-                        val duration = if (run == 0) 1000L else 6000L
+                        val duration = args.getString("durationMs", "6000")!!.toLong().also { require(it in 5000L..10000L) }
                         val downAt = SystemClock.uptimeMillis()
                         fun event(action: Int, displacement: Float) {
-                            val point = bounds.center + if (mode == "choices") Offset(displacement, 0f) else Offset(0f, displacement)
+                            val point = bounds.center + if (horizontal) Offset(displacement, 0f) else Offset(0f, displacement)
                             val contact = motion(MotionEvent.TOOL_TYPE_FINGER, action, point, downAt)
                             try { owner.view.dispatchTouchEvent(contact) } finally { contact.recycle() }
                         }
@@ -174,7 +224,11 @@ class AndroidWorkspacePerformanceTest {
                         lateinit var callback: Choreographer.FrameCallback
                         rows.clear(); frameRows.clear()
                         instrumentation.runOnMainSync { previous = range.value() }
+                        val thermal = scenario.activity().getSystemService(android.os.PowerManager::class.java)
+                        val thermalBefore = thermal.currentThermalStatus
                         val begin = System.nanoTime()
+                        val beginBoot = SystemClock.elapsedRealtimeNanos()
+                        val beginMonoAfterBoot = System.nanoTime()
                         measuring.set(true)
                         android.os.Trace.beginAsyncSection("workspace-switcher-scroll-$mode-$run", run)
                         instrumentation.runOnMainSync {
@@ -195,12 +249,18 @@ class AndroidWorkspacePerformanceTest {
                         finally { instrumentation.runOnMainSync { Choreographer.getInstance().removeFrameCallback(callback); event(MotionEvent.ACTION_CANCEL, 0f) } }
                         android.os.Trace.endAsyncSection("workspace-switcher-scroll-$mode-$run", run)
                         val end = System.nanoTime()
+                        val endBoot = SystemClock.elapsedRealtimeNanos()
+                        val endMonoAfterBoot = System.nanoTime()
                         val moving = synchronized(rows) { rows.toList() }
                         SystemClock.sleep(200)
                         measuring.set(false)
                         if (run > 0) {
                             assertTrue("$mode scroll visibly moves", moving.size > 100)
-                            val result = obj("mode" to mode, "run" to run, "begin_ns" to begin, "end_ns" to end,
+                            val result = obj("window_title" to (owner.view.rootView.layoutParams as? android.view.WindowManager.LayoutParams)?.title?.toString(), "presentation" to if (compact) "compact-menu" else if (grouped) "grouped-drawer" else "full-switcher", "mode" to mode, "run" to run, "begin_ns" to begin, "end_ns" to end,
+                                "begin_boot_ns" to beginBoot, "end_boot_ns" to endBoot,
+                                "begin_mono_after_boot_ns" to beginMonoAfterBoot, "end_mono_after_boot_ns" to endMonoAfterBoot,
+                                "theme" to args.getString("theme", "light"), "thermal_before" to thermalBefore,
+                                "thermal_after" to thermal.currentThermalStatus,
                                 "duration_ms" to duration, "frame_callback_drain_ms" to 200, "inputs" to inputs, "display_hz" to owner.view.display.refreshRate,
                                 "debuggable" to BuildConfig.DEBUG, "camera" to host.snapshot!!.getJSONObject("state").getJSONObject("camera"),
                                 "tabs" to host.snapshot!!.getJSONObject("state").array("tabs"),
@@ -212,7 +272,7 @@ class AndroidWorkspacePerformanceTest {
                                 "frames" to JSONArray(synchronized(frameRows) { frameRows.map { JSONArray(it.toList()) } }))
                             java.io.File(output, "$mode-$run.json").writeText(result.toString())
                         }
-                        if (!grouped) instrumentation.runOnMainSync {
+                        if (!grouped && !compact) instrumentation.runOnMainSync {
                             assertEquals("Options stay fixed while $mode scrolls", dots, findTag("workspace-switcher-options")!!.second.boundsInRoot)
                         }
                     }

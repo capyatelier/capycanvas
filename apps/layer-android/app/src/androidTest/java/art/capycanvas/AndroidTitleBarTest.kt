@@ -1602,18 +1602,20 @@ class AndroidTitleBarTest {
         scenario.onActivity { window=it.window; window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
         val measureGeometry=properties || (!discrete && !reorder)
         val geometryFrames=mutableListOf<LongArray>()
-        var frameTime=0L
+        val arrangedFrames=mutableListOf<LongArray>()
         var collectGeometry=false
         var geometryContent:SemanticsNode?=null
         var geometryProperties:SemanticsNode?=null
         var geometryInspector:SemanticsNode?=null
         fun geometry():LongArray {
             val position=checkNotNull(geometryContent).positionInRoot
-            return longArrayOf(frameTime,(position.x*1000).toLong(),(position.y*1000).toLong(),
+            return longArrayOf(System.nanoTime(),(position.x*1000).toLong(),(position.y*1000).toLong(),
                 ((geometryProperties?.positionInRoot?.y ?: 0f)*1000).toLong(),
-                ((geometryInspector?.boundsInRoot?.height ?: 0f)*1000).toLong())
+                ((geometryInspector?.boundsInRoot?.height ?: 0f)*1000).toLong(),SystemClock.elapsedRealtimeNanos())
         }
-        val drawListener=android.view.ViewTreeObserver.OnDrawListener { if(measureGeometry && collectGeometry && frameTime!=0L)geometryFrames.add(geometry()) }
+        val drawListener=android.view.ViewTreeObserver.OnDrawListener {
+            if(measureGeometry && collectGeometry)geometryFrames.add(geometry())
+        }
         instrumentation.runOnMainSync {
             if(measureGeometry) {
                 geometryContent=checkNotNull(node(if(properties)"layer-rows" else "layer-content-$id")).second
@@ -1645,9 +1647,13 @@ class AndroidTitleBarTest {
                 if(!discrete)event(MotionEvent.ACTION_MOVE,start+Offset((if(reorder) -24 else 24*swipeDirection)*density,0f))
                 if(reorder)waitFor("moving layer preview") { node("layer-drag-preview")!=null }
                 val done=java.util.concurrent.CountDownLatch(1)
-                val duration=if(run==0)1000L else 5000L
+                val duration=args.getString("durationMs","6000")!!.toLong().also { require(it in 5000L..10000L) }
                 val begin=SystemClock.uptimeMillis()
+                val thermal=scenario.activity().getSystemService(android.os.PowerManager::class.java)
+                val thermalBefore=thermal.currentThermalStatus
                 val beginNs=System.nanoTime()
+                val beginBoot=SystemClock.elapsedRealtimeNanos()
+                val beginMonoAfterBoot=System.nanoTime()
                 frames.clear()
                 lateinit var callback: android.view.Choreographer.FrameCallback
                 var selectedInterval=-1L
@@ -1655,18 +1661,20 @@ class AndroidTitleBarTest {
                     else state().array("layers").objects().first { it.getLong("id")==id }.getBoolean("mask_selected")
                 var observedMask=selectedState()
                 val transitions=mutableListOf<Long>()
+                val transitionObservations=mutableListOf<Long>()
                 instrumentation.runOnMainSync {
                     geometryFrames.clear()
-                    if(measureGeometry) { frameTime=0L; geometryFrames.add(geometry()); collectGeometry=true }
+                    arrangedFrames.clear()
+                    if(measureGeometry) { geometryFrames.add(geometry()); collectGeometry=true }
                     val clock=android.view.Choreographer.getInstance()
-                    callback=android.view.Choreographer.FrameCallback { timestamp ->
-                        frameTime=timestamp
+                    callback=android.view.Choreographer.FrameCallback {
+                        if(measureGeometry)arrangedFrames.add(geometry())
                         val elapsed=SystemClock.uptimeMillis()-begin
                         if(elapsed>=duration) { collectGeometry=false; done.countDown() }
                         else {
                             if(discrete) {
                                 val mask=selectedState()
-                                if(mask!=observedMask) { observedMask=mask;transitions.add(System.nanoTime()) }
+                                if(mask!=observedMask) { observedMask=mask;transitions.add(System.nanoTime());transitionObservations.add(SystemClock.elapsedRealtimeNanos()) }
                                 val interval=elapsed/selectionInterval
                                 if(interval!=selectedInterval) {
                                     selectedInterval=interval
@@ -1695,43 +1703,68 @@ class AndroidTitleBarTest {
                 try { assertTrue(done.await(15,java.util.concurrent.TimeUnit.SECONDS)) }
                 finally { instrumentation.runOnMainSync { android.view.Choreographer.getInstance().removeFrameCallback(callback) } }
                 val endNs=System.nanoTime()
+                val endBoot=SystemClock.elapsedRealtimeNanos()
+                val endMonoAfterBoot=System.nanoTime()
                 SystemClock.sleep(200)
                 val received=synchronized(frames) { frames.toList() }
                 var observedGeometry=listOf<LongArray>()
                 instrumentation.runOnMainSync { observedGeometry=geometryFrames.toList() }
-                val geometryByVsync=observedGeometry.associateBy { it[0] }
-                val samples=geometryByVsync.values.sortedBy { it[0] }
+                val samples=observedGeometry.sortedBy { it[0] }
+                var arranged=listOf<LongArray>()
+                instrumentation.runOnMainSync { arranged=arrangedFrames.toList() }
+                val activeWindows=JSONArray()
+                if(properties)for((index,transition) in transitions.withIndex()) {
+                    val limit=transitions.getOrNull(index+1) ?: endNs
+                    val changes=arranged.indices.filter { current -> current>0 && arranged[current][0]>=transition && arranged[current][0]<limit &&
+                        (1..4).any { arranged[current][it]!=arranged[current-1][it] } }
+                    if(changes.isNotEmpty()) {
+                        val first=arranged[changes.first()-1]
+                        val last=arranged[minOf(changes.last()+1,arranged.lastIndex)]
+                        activeWindows.put(obj("begin_ns" to first[0],"end_ns" to last[0],
+                            "begin_boot_ns" to first[5],"end_boot_ns" to last[5],
+                            "kind" to "arranged_drawer_transition"))
+                    }
+                }
                 var previous:LongArray?=null
                 val moving=mutableSetOf<Long>()
                 for(sample in samples) {
-                    previous?.let { before -> if((1 until sample.size).any { sample[it]!=before[it] })moving.add(sample[0]) }
+                    previous?.let { before -> if((1..4).any { sample[it]!=before[it] })moving.add(sample[0]) }
                     previous=sample
                 }
                 val windowFrames=received.filter { it[0] in beginNs..endNs }.associateBy { it[0] }.values.sortedBy { it[0] }
-                val rows=windowFrames.filter { if(measureGeometry)it[0] in moving else !discrete || transitions.any { start -> it[0] in start..(start+200_000_000L) } }
+                val rows=windowFrames.filter { frame -> !discrete || if(properties)
+                    (0 until activeWindows.length()).any { activeWindows.getJSONObject(it).let { window -> frame[0] in window.getLong("begin_ns")..window.getLong("end_ns") } }
+                    else transitions.any { start -> frame[0] in start..(start+200_000_000L) } }
                 if(!discrete)event(MotionEvent.ACTION_CANCEL)
                 idle()
                 if(discrete)shot("$label-$run")
                 if(run>0) {
                     val result=obj("run" to run,"duration_ms" to duration,"begin_ns" to beginNs,"end_ns" to endNs,
+                        "begin_boot_ns" to beginBoot,"end_boot_ns" to endBoot,
+                        "begin_mono_after_boot_ns" to beginMonoAfterBoot,"end_mono_after_boot_ns" to endMonoAfterBoot,
+                        "thermal_before" to thermalBefore,"thermal_after" to thermal.currentThermalStatus,
                         "width" to width,"height" to height,"photo" to args.getString("photo"),"motion" to label,"theme" to theme,
                         "transparency" to state().getJSONObject("settings").getString("transparency"),
                         "swipe_direction" to (if(swipeDirection<0) "left" else "right"),
                         "transitions_ns" to JSONArray(transitions),"selection_interval_ms" to (if(discrete)selectionInterval else JSONObject.NULL),
-                        "animation_window_ms" to (if(discrete)200 else JSONObject.NULL),
+                        "transition_observations_boot_ns" to JSONArray(transitionObservations),
+                        "animation_window_ms" to (if(selection)200 else JSONObject.NULL),
                         "frame_columns" to JSONArray(listOf("vsync_ns","total_ns","dropped_reports","intended_vsync_ns",
                             "input_ns","animation_ns","layout_ns","draw_ns","sync_ns","command_ns","swap_ns")),
                         "dropped_reports" to received.sumOf { it[2] },
                         "received_frames" to JSONArray(received.map { JSONArray(it.toList()) }),
-                        "draw_geometry_columns" to JSONArray(listOf("vsync_ns","content_x_millipx","content_y_millipx","properties_y_millipx","inspector_height_millipx")),
+                        "draw_geometry_columns" to JSONArray(listOf("draw_mono_ns","content_x_millipx","content_y_millipx","properties_y_millipx","inspector_height_millipx","draw_boot_ns")),
                         "draw_geometry" to JSONArray(observedGeometry.map { JSONArray(it.toList()) }),
-                        "moving_vsync_ns" to JSONArray(moving.sorted()),
+                        "arranged_geometry" to JSONArray(arranged.map { JSONArray(it.toList()) }),
+                        "moving_draw_mono_ns" to JSONArray(moving.sorted()),
                         "camera" to state().getJSONObject("camera"),
                         "layers" to state().array("layers"),"frames" to JSONArray(rows.map { JSONArray(it.toList()) }))
+                    if(properties)result.put("active_windows",activeWindows)
                     java.io.File(instrumentation.targetContext.getExternalFilesDir(null),"$label-$run.json").writeText(result.toString())
                     assertTrue("Moving frames were measured",rows.size>1)
                     if(properties)assertTrue("Native footer contacts changed pages throughout the gesture",transitions.size>=duration/selectionInterval-2)
-                    if(measureGeometry)assertTrue("Draw geometry matches native frame timestamps",windowFrames.count { it[0] in geometryByVsync }>=windowFrames.size*.95)
+                    if(measureGeometry)assertTrue("Drawn geometry changes during native contact",moving.size>1)
+                    if(properties)assertTrue("Native footer transitions move arranged pages",activeWindows.length()>=transitions.size*.95)
                     android.util.Log.i("LayerSwipePerf","$label run $run: ${rows.size} moving frames in $duration ms")
                 }
             }

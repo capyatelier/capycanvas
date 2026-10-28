@@ -350,10 +350,59 @@ lets its `--adaptive-script` helper enable 90 Hz after private fixture setup.
   benchmarks also run inside the optimized app with
   `android-viewport-presents.py --workspace-workload gap --workspace-runner self`
   ([workspace columns](../performance/measuring.md)); both entry points share
-  `WorkspaceFrameTiming`. Compare optimization settings with the same runner.
+  `WorkspaceFrameTiming`. `--workspace-workload column` uses the panel runner
+  with `columnDrag=true` to exercise discrete whole-column docking feedback,
+  native release and one Undo. It retains actual hint geometry and reports
+  separate diagnostic transitions; columns move on release. Bridge report
+  and capture paths remain the same. Compare optimization settings with the same runner.
+  For actual app-window presentations of the other continuous workloads, use
+  `android-viewport-presents.py --workspace-workload resize|drag|wheel|edit-wheel|color-overlap`
+  with the tier photo, matching width/height, label and usual collector arguments.
+  These use the JUnit benchmark APK pair, enable `tierPhoto`, and collect every
+  mouse/touch mode and measured repeat from `workspace-tab-benchmark`.
+  `--extra benchmarkMode=navigator` limits resize to Navigator; drag modes are
+  `attached`, `floating` and `destination`. Profiling and the self runner are
+  supported only for the column gap/panel workloads.
+  The same collector accepts `switcher-scroll`, `grouped-scroll`, `layer-swipe`,
+  `layer-reorder`, `filter-reorder`, `layer-selection` and `layer-properties`.
+  Scroll and layer fixtures produce three measured runs. Instantaneous layer
+  selection reports state observations and the next app-window presentation only,
+  without claiming fresh-selection latency or sustained motion cadence. These require the
+  benchmark APK with explicit boot-clock windows; older recordings fail validation.
+  Canvas bar UI workloads use their label as `--workspace-workload`: `ui-bar-move`,
+  `ui-panel-change`, `ui-brush-size-slider`, `ui-brush-size-value`,
+  `ui-brush-opacity-slider`, `ui-brush-opacity-value`, `ui-brush-flow-slider`,
+  `ui-brush-flow-value`, `ui-layer-opacity-slider`, `ui-layer-opacity-value`,
+  `ui-layers-scroll`, `ui-brushes-scroll`, `ui-filters-scroll` and
+  `ui-layer-row-opacity` (the native layer-row two-finger opacity popup). They select the native
+  UI fixture and require at least three `--repeats` measured contacts.
+  `ui-bar-show-hide`, `ui-bar-show-hide-zen`, `ui-panel-change` and
+  `ui-zen-transition`, `ui-menu-open`, `ui-menu-submenu`, `ui-dialog-transition`,
+  `ui-grouped-tool-menu` and `ui-tile-drag` report diagnostic transition windows. Each active window is
+  reported separately; short transitions report presentation gaps and onset
+  without a sustained frame rate, and idle gaps never join adjacent transitions.
+  Run `--attribution` separately for diagnostic app graphics, view, input,
+  runtime, scheduler and CPU-frequency traces. It enables Compose tracing where
+  the fixture supports it, queries Perfetto for `gpu.renderstages`, and records
+  the capability response; unsupported GPU tracing stays absent. Attribution
+  summaries explicitly disable qualification. Use clean captures for tier rates.
+  `--workspace-workload ui-batch` runs all native UI rows in one fixture, collecting
+  each label and repeat without reopening the photo between rows. Use
+  `--labels ui-menu-open,ui-dialog-transition` to select a subset of batch rows.
+  Native target-window titles restrict popup rows to their own actual presents;
+  reports also retain counts for each owned surface. Failed
+  instrumentation retains expected report files that already exist and switcher
+  readiness and native interaction diagnostics, with qualification disabled in
+  the failure summary. Workspace primer contacts use the same six-second default
+  duration and are retained as raw `--1.json` reports; rate summaries include
+  only measured repeats. Batch trace and instrumentation budgets scale with
+  selected row count, repeats and contact duration; the collector stops its own
+  Perfetto session when instrumentation finishes.
 - **Scrolling.** `AndroidWorkspacePerformanceTest#workspaceSwitcherScrollFrameTiming`
   with `-e switcherBenchmark true` scrolls the workspace choices and visibility
-  checklist; `#groupedDrawerScrollFrameTiming` with `-e groupedToolBenchmark true`
+  checklist. When the factory display presents a compact header, it opens the
+  native workspace menu and scrolls its choices and Visibility submenu vertically;
+  reports retain the actual presentation. `#groupedDrawerScrollFrameTiming` with `-e groupedToolBenchmark true`
   scrolls the Photo workspace's grouped Drawing drawer. Both take
   `-e photo <readable-tier-photo.jpg>` and write draw samples and raw
   `FrameMetrics` to the `workspace-switcher-benchmark` and

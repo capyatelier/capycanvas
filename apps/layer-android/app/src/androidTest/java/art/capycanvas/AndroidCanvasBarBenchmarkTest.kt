@@ -187,19 +187,23 @@ class AndroidCanvasBarBenchmarkTest {
                     (anchor.getDouble(1) + fraction * (anchor.getDouble(3) - anchor.getDouble(1))) * zoom + translation.getDouble(1)
             }
             fun corner() = anchorPoint(1.0)
+            val activeWindows = JSONArray()
+            var contactObserver: (() -> Unit)? = null
+            var boundedContactSampling = false
+            var injectedToolType = MotionEvent.TOOL_TYPE_STYLUS
             var measuring = false
             var lastDownInjectionNs = 0L
             var lastUpInjectionBootNs = 0L
             var firstDownInjectionBootNs = 0L
             fun inject(action: Int, down: Long, x: Double, y: Double, pressure: Float) {
                 if (action == MotionEvent.ACTION_DOWN && measuring && firstDownInjectionBootNs == 0L) firstDownInjectionBootNs = SystemClock.elapsedRealtimeNanos()
-                if (action == MotionEvent.ACTION_UP) lastUpInjectionBootNs = SystemClock.elapsedRealtimeNanos()
+                if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) lastUpInjectionBootNs = SystemClock.elapsedRealtimeNanos()
                 val injectionBegan = System.nanoTime()
-                val properties = arrayOf(MotionEvent.PointerProperties().apply { id = 5; toolType = MotionEvent.TOOL_TYPE_STYLUS })
+                val properties = arrayOf(MotionEvent.PointerProperties().apply { id = 5; toolType = injectedToolType })
                 val coords = arrayOf(MotionEvent.PointerCoords().apply {
                     this.x = x.toFloat() + host.surfaceOrigin.x; this.y = y.toFloat() + host.surfaceOrigin.y; this.pressure = pressure
                 })
-                val event = MotionEvent.obtain(down, SystemClock.uptimeMillis(), action, 1, properties, coords, 0, 0, 1f, 1f, 0, 0, InputDevice.SOURCE_STYLUS, 0)
+                val event = MotionEvent.obtain(down, SystemClock.uptimeMillis(), action, 1, properties, coords, 0, 0, 1f, 1f, 0, 0, if (injectedToolType == MotionEvent.TOOL_TYPE_FINGER) InputDevice.SOURCE_TOUCHSCREEN else InputDevice.SOURCE_STYLUS, 0)
                 try { check(instrumentation.uiAutomation.injectInputEvent(event, action != MotionEvent.ACTION_MOVE) || action == MotionEvent.ACTION_CANCEL) {
                     "Stylus injection failed: $event"
                 } } finally { event.recycle(); if (action == MotionEvent.ACTION_DOWN) lastDownInjectionNs = System.nanoTime() - injectionBegan }
@@ -207,21 +211,38 @@ class AndroidCanvasBarBenchmarkTest {
             var mark = 0L
             var dispatched = 0L
             val gestureDown = java.util.concurrent.atomic.AtomicLong()
-            fun drag(start: Pair<Double, Double>, milliseconds: Int, path: (Double) -> Pair<Double, Double>) {
+            fun contact(start: Pair<Double, Double>, milliseconds: Int, holdMs: Int = 0, cancel: Boolean = false, path: (Double) -> Pair<Double, Double>) {
                 val initial = path(0.0)
                 check(initial.first == 0.0 && initial.second == 0.0) { "The gesture must press its requested handle" }
                 val count = (milliseconds / interval).toInt()
                 val began = System.nanoTime(); val down = SystemClock.uptimeMillis()
-                for (i in 0..count) {
-                    val left = began + (i * interval * 1e6).toLong() - System.nanoTime()
+                var motionBegan = began
+                var motionBeganBoot = SystemClock.elapsedRealtimeNanos()
+                var nextObservation = began
+                var observations = 0
+                var lastPosition = start
+                var released = false
+                try { for (i in 0..count) {
+                    val left = began + (i * interval * 1e6).toLong() + (if (i > 0) holdMs * 1_000_000L else 0L) - System.nanoTime()
                     if (left > 0) java.util.concurrent.locks.LockSupport.parkNanos(left)
                     val (dx, dy) = path(i * interval / 1000.0)
                     if (i == 0 && measuring) { mark = System.nanoTime(); gestureDown.set(mark) }
-                    inject(if (i == 0) MotionEvent.ACTION_DOWN else if (i == count) MotionEvent.ACTION_UP else MotionEvent.ACTION_MOVE,
-                        down, start.first + dx, start.second + dy, if (i == count) 0f else .7f)
+                    if (i == 1 && holdMs > 0) { motionBegan = System.nanoTime(); motionBeganBoot = SystemClock.elapsedRealtimeNanos() }
+                    lastPosition = start.first + dx to start.second + dy
+                    inject(if (i == 0) MotionEvent.ACTION_DOWN else if (i == count) if (cancel) MotionEvent.ACTION_CANCEL else MotionEvent.ACTION_UP else MotionEvent.ACTION_MOVE,
+                        down, lastPosition.first, lastPosition.second, if (i == count) 0f else .7f)
+                    if (i == count) released = true
                     if (i == 0 && measuring) dispatched = System.nanoTime()
-                }
+                    if (contactObserver != null && i > 0 && observations < 64 && (i == count || System.nanoTime() >= nextObservation)) {
+                        contactObserver?.invoke()
+                        observations++
+                        nextObservation = System.nanoTime() + 173_000_000L
+                    }
+                } } finally { if (!released) inject(MotionEvent.ACTION_CANCEL, down, lastPosition.first, lastPosition.second, 0f) }
+                if (measuring) activeWindows.put(obj("begin_ns" to motionBegan, "end_ns" to System.nanoTime(),
+                    "begin_boot_ns" to motionBeganBoot, "end_boot_ns" to lastUpInjectionBootNs))
             }
+            fun drag(start: Pair<Double, Double>, milliseconds: Int, path: (Double) -> Pair<Double, Double>) = contact(start, milliseconds, path = path)
             fun drags(milliseconds: Int) {
                 val began = SystemClock.uptimeMillis()
                 var index = 0
@@ -354,9 +375,11 @@ class AndroidCanvasBarBenchmarkTest {
                     "over_8_33" to sorted.count { it > 8.333 })
             }
             var refreshRate = 0f
+            fun selected(label: String) = args.getString("labels")?.split(',')?.let { label in it } != false
             fun measure(label: String, operation: () -> Unit) {
-                if (args.getString("labels")?.split(',')?.let { label !in it } == true) return
+                if (!selected(label)) return
                 mark = 0L
+                while (activeWindows.length() > 0) activeWindows.remove(0)
                 gestureDown.set(0)
                 firstDownInjectionBootNs = 0L; lastUpInjectionBootNs = 0L
                 SystemClock.sleep(600)
@@ -377,7 +400,7 @@ class AndroidCanvasBarBenchmarkTest {
                 val began = System.nanoTime()
                 val beganBoot = SystemClock.elapsedRealtimeNanos()
                 val sampler = Thread {
-                    while (measuring) {
+                    while (measuring && !boundedContactSampling) {
                         instrumentation.runOnMainSync {
                             bars.add(host.canvasBar != null && host.canvasBarVisible)
                             if (label.startsWith("pen-") && host.calibrationMotionActive) {
@@ -409,8 +432,12 @@ class AndroidCanvasBarBenchmarkTest {
                 val submitted = frames.filter { it.getLong(1) < operated && it.getLong(6) > 0 }
                 val rows = (0 until completions.length()).map { completions.getJSONArray(it) }.filter { it.getLong(1) in began..ended }
                 val completedAt = rows.map { it.getLong(2) }.filter { it < operated }.sorted()
-                val ui = synchronized(uiFrames) { uiFrames.filter { it.vsync < operated } }
+                val ui = synchronized(uiFrames) { uiFrames.filter { frame -> frame.vsync < operated && (!label.startsWith("ui-") || activeWindows.length() == 0 ||
+                    (0 until activeWindows.length()).any { index -> activeWindows.getJSONObject(index).let { frame.vsync in it.getLong("begin_ns")..it.getLong("end_ns") } }) } }
                 val vsyncs = ui.map { it.vsync }.filter { it <= operated }.distinct().sorted()
+                val uiIntervals = vsyncs.zipWithNext().filter { (before, after) -> !label.startsWith("ui-") || activeWindows.length() == 0 ||
+                    (0 until activeWindows.length()).any { index -> activeWindows.getJSONObject(index).let { before >= it.getLong("begin_ns") && after <= it.getLong("end_ns") } }
+                }.map { (before, after) -> after - before }
                 val seconds = (operated - began) / 1e9
                 val result = obj("label" to label, "display_hz" to refreshRate, "seconds" to seconds, "transparency" to transparency,
                     "utility_requested_hz" to JSONArray(requestedRates.toList()), "utility_active_display_hz" to JSONArray(activeRates.toList()),
@@ -419,6 +446,7 @@ class AndroidCanvasBarBenchmarkTest {
                     "snap_neighbor_layer" to snapNeighbor,
                     "visible_layer_ids_before" to JSONArray(visibleLayerIdsBefore), "visible_layer_count_before" to visibleLayerIdsBefore.size,
                     "photo" to (photoPath ?: "synthetic"), "renderer_profile" to (args.getString("rendererProfile") == "true"), "camera_before" to cameraBefore,
+                    "theme" to state().getString("theme"), "active_windows" to activeWindows,
                     "motion" to obj("begin_ns" to began, "end_ns" to operated,
                         "begin_boot_ns" to beganBoot, "end_boot_ns" to operatedBoot,
                         "contact_begin_boot_ns" to (firstDownInjectionBootNs.takeIf { it > 0 } ?: JSONObject.NULL),
@@ -442,8 +470,8 @@ class AndroidCanvasBarBenchmarkTest {
                     "gpu_submit_to_complete_ms" to quantiles(rows.map { (it.getLong(2) - it.getLong(1)) / 1e6 }),
                     "gpu_completion_interval_ms" to quantiles(completedAt.zipWithNext { a, b -> (b - a) / 1e6 }),
                     "ui_frames" to ui.size,
-                    "ui_hz" to if (vsyncs.size < 2) 0.0 else (vsyncs.size - 1) * 1e9 / (vsyncs.last() - vsyncs.first()),
-                    "ui_interval_ms" to quantiles(vsyncs.zipWithNext { a, b -> (b - a) / 1e6 }),
+                    "ui_hz" to if (uiIntervals.isEmpty()) 0.0 else uiIntervals.size * 1e9 / uiIntervals.sum(),
+                    "ui_interval_ms" to quantiles(uiIntervals.map { it / 1e6 }),
                     "ui_frame_ms" to quantiles(ui.map { it.total / 1e6 }),
                     "ui_layout_ms" to quantiles(ui.map { it.layout / 1e6 }),
                     "ui_draw_ms" to quantiles(ui.map { it.draw / 1e6 }),
@@ -490,6 +518,7 @@ class AndroidCanvasBarBenchmarkTest {
                     "screen_bounds" to JSONArray(listOf(r.left + origin[0], r.top + origin[1], r.right + origin[0], r.bottom + origin[1])),
                     "node_size" to JSONArray(listOf(node.size.width, node.size.height)), "root_origin" to JSONArray(origin.toList()),
                     "surface_origin" to JSONArray(listOf(host.surfaceOrigin.x, host.surfaceOrigin.y)),
+                    "window_title" to (pair.first.view.rootView.layoutParams as? WindowManager.LayoutParams)?.title?.toString(),
                     "text" to node.config.getOrNull(SemanticsProperties.Text)?.joinToString { it.text },
                     "focused" to node.config.getOrNull(SemanticsProperties.Focused),
                     "native_click" to (node.config.getOrNull(SemanticsActions.OnClick)?.action != null))
@@ -763,35 +792,694 @@ class AndroidCanvasBarBenchmarkTest {
                 }
             }
             if (wanted("ui")) {
+                var currentUiLabel = "ui-fixture"
+                val uiCleanups = mutableListOf<() -> Unit>()
+                try {
+                require(args.getString("width") != null && args.getString("height") != null && width > 0 && height > 0 && photoPath != null) { "UI rate runs require an explicit reference photo and canvas extent" }
+                check(!BuildConfig.DEBUG) { "UI rate runs require a benchmark build" }
+                fun canvasReady(label: String) {
+                    waitFor(label) { host.snapshot?.let { it.optBoolean("shaders_ready") && it.optBoolean("brush_ready") && it.optBoolean("canvas_ready") } == true }
+                    val deadline = SystemClock.uptimeMillis() + 120_000
+                    while (native { !Native.surfaceReady(it) || Native.renderingPending(it) }) {
+                        check(SystemClock.uptimeMillis() < deadline) { "$label did not finish native canvas preparation" }
+                        SystemClock.sleep(16)
+                    }
+                }
                 val photoLayer = photoDocument()
+                val paintLayer = state().array("layers").objects().single { it.optBoolean("editing") }.getLong("id")
+                invoke("fit_canvas")
+                canvasReady("Reference photo and empty paint ready")
                 action(obj("type" to "select_layer", "id" to photoLayer))
                 invoke("rectangle_select"); invoke("select_all"); invoke("scale_rotate")
                 waitFor("transform bar") { state().optJSONObject("canvas_bar")?.getJSONObject("context")?.getString("kind") == "transform" }
                 SystemClock.sleep(1500)
-                primeTransform()
-                hideAndShow(1200)
-                measure("ui-bar-show-hide") { hideAndShow(duration) }
-                measure("ui-bar-move") {
-                    val began = SystemClock.uptimeMillis()
-                    var step = 0
-                    while (SystemClock.uptimeMillis() - began < duration) {
-                        action(obj("type" to "set_tool_setting", "id" to "transform_x", "value" to if (step++ % 2 == 0) 240f else 0f))
-                        SystemClock.sleep(400)
+                val chromeDuration = args.getString("durationMs", "6000")!!.toInt().also { require(it in 5000..10000) { "UI contacts require 5–10 seconds" } }
+                val chromeRepeats = args.getString("uiRepeats", "3")!!.toInt().also { require(it >= 3) }
+                var chromeFixture = obj("photo_layer" to photoLayer, "paint_layer" to paintLayer, "layer_count" to state().array("layers").length())
+                fun targetWindow(control: () -> Pair<ViewRootForTest, SemanticsNode>?) {
+                    var geometry = JSONObject()
+                    instrumentation.runOnMainSync { geometry = controlGeometry(control()) }
+                    val title = geometry.optString("window_title")
+                    check(!geometry.isNull("window_title") && title.isNotBlank()) { "Native target window has no public title" }
+                    chromeFixture.put("window_title", title)
+                }
+                fun reveal(panel: String) {
+                    action(obj("type" to "customize", "action" to obj("type" to "set_panel_visible", "panel" to panel, "visible" to true)))
+                    val group = host.panelGroup(panel)
+                    action(obj("type" to "customize", "action" to obj("type" to "set_column_collapsed", "group" to group.getInt("id"), "collapsed" to false)))
+                    if (group.optString("active") != panel) action(obj("type" to "select_panel_tab", "group" to group.getInt("id"), "panel" to panel))
+                    invoke("fit_canvas")
+                }
+                fun childControl(parent: String, tag: String) = findTag(parent)?.let { (root, node) ->
+                    node.find(hasTag(tag))?.let { root to it }
+                }
+                fun contactPoint(bounds: android.graphics.RectF, x: Double = .5, y: Double = .5) =
+                    bounds.left + bounds.width() * x - host.surfaceOrigin.x.toDouble() to bounds.top + bounds.height() * y - host.surfaceOrigin.y.toDouble()
+                fun nativeTap(tag: String, holdMs: Long = 0, control: () -> Pair<ViewRootForTest, SemanticsNode>? = { findTag(tag) }) {
+                    val point = contactPoint(settledControl(tag, control))
+                    val down = SystemClock.uptimeMillis()
+                    inject(MotionEvent.ACTION_DOWN, down, point.first, point.second, .7f)
+                    try { if (holdMs > 0) SystemClock.sleep(holdMs) }
+                    finally { inject(MotionEvent.ACTION_UP, down, point.first, point.second, 0f) }
+                }
+                fun nativeHold(tag: String) = nativeTap(tag, android.view.ViewConfiguration.getLongPressTimeout().toLong() + 100)
+                fun nativeBack() = instrumentation.sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_BACK)
+                fun transitions(label: String, journey: () -> Unit) {
+                    if (!selected(label)) return
+                    currentUiLabel = label
+                    chromeFixture.remove("window_title")
+                    canvasReady("$label primer canvas ready")
+                    val priming = SystemClock.uptimeMillis() + chromeDuration
+                    while (SystemClock.uptimeMillis() < priming) journey()
+                    repeat(chromeRepeats) { index ->
+                        measure(label) {
+                            val deadline = SystemClock.uptimeMillis() + chromeDuration
+                            while (SystemClock.uptimeMillis() < deadline) journey()
+                        }
+                        val file = File(output, "$label.json")
+                        file.writeText(JSONObject(file.readText()).put("qualification", "diagnostic").put("fixture", chromeFixture).toString(2))
+                        file.copyTo(File(output, "$label-${index + 1}.json"), overwrite = true)
                     }
+                }
+                primeTransform()
+                fun arrangedTransitions(snapshot: () -> Pair<String, Boolean>, splitVisibility: Boolean = false, diagnostic: Boolean = false, operation: () -> Unit): List<JSONObject> {
+                    val samples = mutableListOf<JSONObject>()
+                    val finished = java.util.concurrent.CountDownLatch(1)
+                    val started = java.util.concurrent.CountDownLatch(1)
+                    val released = java.util.concurrent.atomic.AtomicBoolean(false)
+                    var observerFailure: Throwable? = null
+                    val deadline = SystemClock.uptimeMillis() + 10000
+                    var timedOut = false
+                    var lastDraw = 0L
+                    var lastDrawBoot = 0L
+                    val draw = android.view.ViewTreeObserver.OnDrawListener { lastDraw = System.nanoTime(); lastDrawBoot = SystemClock.elapsedRealtimeNanos() }
+                    val drawingRoots = linkedSetOf<android.view.View>()
+                    fun watch(view: android.view.View) { if (drawingRoots.add(view)) view.viewTreeObserver.addOnDrawListener(draw) }
+                    val observer = object : android.view.Choreographer.FrameCallback {
+                        var previous = ""
+                        var stable = 0
+                        var changes = 0
+                        var previousDraw = 0L
+                        override fun doFrame(frameTimeNanos: Long) {
+                            try {
+                            for (tag in listOf("workspace-menu", "tool-drawer", "new-drawing-dialog")) findTag(tag)?.first?.view?.let(::watch)
+                            val (signature, visible) = snapshot()
+                            val sample = obj("begin_ns" to System.nanoTime(), "begin_boot_ns" to SystemClock.elapsedRealtimeNanos(),
+                                "signature" to signature, "visible" to visible)
+                            samples.add(sample)
+                            started.countDown()
+                            if (previous != "" && signature != previous) { changes++; stable = 0 }
+                            else if (lastDraw != previousDraw) stable = 0 else stable++
+                            previousDraw = lastDraw
+                            previous = signature
+                            timedOut = SystemClock.uptimeMillis() > deadline
+                            if (released.get() && stable >= 4 && changes >= 1 && sample.getBoolean("visible") || timedOut) finished.countDown()
+                            else android.view.Choreographer.getInstance().postFrameCallback(this)
+                            } catch (failure: Throwable) { observerFailure = failure; started.countDown(); finished.countDown() }
+                        }
+                    }
+                    val cleanup = {
+                        instrumentation.runOnMainSync {
+                            android.view.Choreographer.getInstance().removeFrameCallback(observer)
+                            drawingRoots.forEach { if (it.viewTreeObserver.isAlive) it.viewTreeObserver.removeOnDrawListener(draw) }
+                        }
+                    }
+                    uiCleanups.add(cleanup)
+                    var requested = 0L
+                    var requestedBoot = 0L
+                    try {
+                        instrumentation.runOnMainSync {
+                            watch(activity.window.decorView)
+                            android.view.Choreographer.getInstance().postFrameCallback(observer)
+                        }
+                        check(started.await(3, java.util.concurrent.TimeUnit.SECONDS)) { "Canvas action bar observer did not start" }
+                        observerFailure?.let { throw it }
+                        requested = System.nanoTime()
+                        requestedBoot = SystemClock.elapsedRealtimeNanos()
+                        operation()
+                        released.set(true)
+                        check(finished.await(12, java.util.concurrent.TimeUnit.SECONDS)) { "Native transition observer timed out" }
+                        observerFailure?.let { throw it }
+                    } finally { cleanup(); uiCleanups.remove(cleanup) }
+                    check(!timedOut) { "Native UI did not settle before the transition deadline" }
+                    check(samples.map { it.getString("signature") }.distinct().size > 1 && samples.last().getBoolean("visible")) { "Native control did not change arranged geometry" }
+                    if (measuring) {
+                        if (diagnostic) activeWindows.put(obj("begin_ns" to requested, "begin_boot_ns" to requestedBoot,
+                            "end_ns" to maxOf(requested, lastDraw, samples.last().getLong("begin_ns")), "end_boot_ns" to maxOf(requestedBoot, lastDrawBoot, samples.last().getLong("begin_boot_ns")),
+                            "kind" to "request_to_observed_ui_settled", "qualification" to "diagnostic"))
+                        else {
+                            val windows = linkedMapOf<String, JSONObject>()
+                            for (index in 1 until samples.size) {
+                                val before = samples[index - 1]; val after = samples[index]
+                                if (before.getString("signature") == after.getString("signature")) continue
+                                val phase = if (splitVisibility) if (after.getBoolean("visible")) "show" else "hide" else "request"
+                                val window = windows.getOrPut(phase) { obj("begin_ns" to before.getLong("begin_ns"), "begin_boot_ns" to before.getLong("begin_boot_ns"),
+                                    "kind" to "arranged_geometry_transition", "phase" to phase, "qualification" to "diagnostic") }
+                                window.put("end_ns", after.getLong("begin_ns")).put("end_boot_ns", after.getLong("begin_boot_ns"))
+                            }
+                            windows.values.forEach { activeWindows.put(it) }
+                        }
+                    }
+                    return samples
+                }
+                fun barContactTransitions() {
+                    settledControl("Canvas action bar before contact", { findTag("canvas-action-bar") })
+                    val samples = arrangedTransitions({
+                        val geometry = controlGeometry(findTag("canvas-action-bar"))
+                        host.canvasBarVisible.toString() + geometry.opt("screen_bounds").toString() to (host.canvasBarVisible && geometry.optBoolean("visible"))
+                    }, splitVisibility = true) {
+                        val start = anchorPoint(.4)
+                        val down = SystemClock.uptimeMillis()
+                        inject(MotionEvent.ACTION_DOWN, down, start.first, start.second, .7f)
+                        SystemClock.sleep(100)
+                        inject(MotionEvent.ACTION_UP, down, start.first, start.second, 0f)
+                    }
+                    check(samples.any { !it.getBoolean("visible") }) { "Native canvas contact did not hide its bar" }
+                }
+                transitions("ui-bar-show-hide") { barContactTransitions() }
+                var contactDetails: (() -> JSONObject)? = null
+                fun continuous(label: String, sample: () -> String, contact: (Int) -> Unit) {
+                    if (!selected(label)) return
+                    currentUiLabel = label
+                    val variants = mutableSetOf<String>()
+                    boundedContactSampling = true
+                    var samples = JSONArray()
+                    contactObserver = {
+                        var value: String? = null
+                        try { val next = sample(); value = next; variants.add(next) }
+                        finally { samples.put(obj("boot_ns" to SystemClock.elapsedRealtimeNanos(), "state" to value, "details" to contactDetails?.invoke())) }
+                    }
+                    fun runContact(milliseconds: Int, phase: String) {
+                        samples = JSONArray()
+                        val began = SystemClock.elapsedRealtimeNanos()
+                        try { contact(milliseconds) }
+                        finally {
+                            File(output, "$label-$phase-interaction.json").writeText(obj("label" to label, "phase" to phase,
+                                "begin_boot_ns" to began, "end_boot_ns" to SystemClock.elapsedRealtimeNanos(), "fixture" to chromeFixture,
+                                "state_variants" to JSONArray(variants.toList()), "samples" to samples).toString(2))
+                        }
+                    }
+                    try {
+                        canvasReady("$label primer canvas ready")
+                        runContact(chromeDuration, "primer")
+                        check(variants.size > 1) { "$label primer did not change native state" }
+                        repeat(chromeRepeats) { index ->
+                            variants.clear()
+                            measure(label) { runContact(chromeDuration, "contact-${index + 1}") }
+                            check(variants.size > 1) { "$label did not change during native contact" }
+                            val file = File(output, "$label.json")
+                            file.writeText(JSONObject(file.readText()).put("state_variants", variants.size)
+                                .put("contact_index", index + 1).put("primer_ms", chromeDuration).put("fixture", chromeFixture).toString(2))
+                            file.copyTo(File(output, "$label-${index + 1}.json"), overwrite = true)
+                        }
+                    } finally { contactObserver = null; boundedContactSampling = false }
+                }
+                if (selected("ui-bar-move")) {
+                    currentUiLabel = "ui-bar-move"
+                    reveal("tool_settings")
+                    invoke("cancel_transform"); invoke("deselect"); invoke("rectangle_select")
+                    val camera = state().getJSONObject("camera")
+                    val zoom = camera.getDouble("zoom")
+                    val translation = camera.getJSONArray("translation")
+                    val start = width * .25 * zoom + translation.getDouble(0) to height * .25 * zoom + translation.getDouble(1)
+                    drag(start, 600) { t -> width * .5 * zoom * t / .6 to height * .5 * zoom * t / .6 }
+                    waitFor("Native inset rectangular selection") {
+                        state().optJSONObject("canvas_bar")?.optJSONArray("anchor")?.let {
+                            it.getDouble(2) - it.getDouble(0) in width * .25..width * .75 &&
+                                it.getDouble(3) - it.getDouble(1) in height * .25..height * .75
+                        } == true
+                    }
+                    invoke("scale_rotate")
+                    check(state().getJSONObject("camera").getDouble("zoom") == zoom &&
+                        state().getJSONObject("camera").getJSONArray("translation").toString() == translation.toString() &&
+                        state().getJSONObject("camera").getJSONArray("work_area").toString() == camera.getJSONArray("work_area").toString()) { "Inset selection changed Fit or the work area" }
+                    waitFor("Inset transform bar") { state().optJSONObject("canvas_bar")?.getJSONObject("context")?.getString("kind") == "transform" }
+                    nativeTap("tool-segment-transform-reference-0")
+                    val bounds = settledControl("Transform Y", { findTag("number-value-transform_y") })
+                    val from = contactPoint(bounds)
+                    settledControl("Visible canvas action bar", { findTag("canvas-action-bar") })
+                    var details = JSONObject()
+                    chromeFixture.put("native_control", "number-value-transform_y").put("selection_fraction", JSONArray(listOf(.25, .25, .75, .75))).put("transform_reference", "top_left")
+                    contactDetails = { details }
+                    targetWindow { findTag("canvas-action-bar") }
+                    try { continuous("ui-bar-move", {
+                        var geometry = JSONObject()
+                        instrumentation.runOnMainSync {
+                            geometry = controlGeometry(findTag("canvas-action-bar"))
+                            details = obj("native_control" to controlGeometry(findTag("number-value-transform_y")),
+                                "transform_y" to state().array("tool_settings").objects().first { it.getString("id") == "transform_y" }.getDouble("value"),
+                                "transform_control" to state().array("tool_settings").objects().first { it.getString("id") == "transform_y" },
+                                "bar_visible" to host.canvasBarVisible, "bar" to geometry, "anchor" to state().getJSONObject("canvas_bar").getJSONArray("anchor"),
+                                "camera" to state().getJSONObject("camera"))
+                        }
+                        check(details.getBoolean("bar_visible") && geometry.optBoolean("visible")) { "Moving canvas action bar is hidden" }
+                        geometry.getJSONArray("screen_bounds").toString()
+                    }) { milliseconds ->
+                        drag(from, milliseconds) { t -> 0.0 to 18 * activity.resources.displayMetrics.density * sin(2 * PI * t) }
+                    } } finally { contactDetails = null }
+                    invoke("cancel_transform"); invoke("rectangle_select"); invoke("select_all"); invoke("scale_rotate")
+                    waitFor("Full-photo transform bar restored") { state().optJSONObject("canvas_bar")?.getJSONObject("context")?.getString("kind") == "transform" }
+                    chromeFixture.remove("selection_fraction"); chromeFixture.remove("transform_reference")
+
                 }
                 invoke("zen_mode")
                 SystemClock.sleep(1500)
-                measure("ui-bar-show-hide-zen") { hideAndShow(duration) }
+                transitions("ui-bar-show-hide-zen") { barContactTransitions() }
                 invoke("zen_mode")
                 invoke("cancel_transform"); invoke("deselect"); invoke("brush")
+                action(obj("type" to "select_layer", "id" to paintLayer))
                 SystemClock.sleep(1500)
-                measure("ui-panel-change") {
-                    val began = SystemClock.uptimeMillis()
-                    var step = 0
-                    while (SystemClock.uptimeMillis() - began < duration) {
-                        action(obj("type" to "set_brush_size", "value" to if (step++ % 2 == 0) 40f else 18f))
-                        SystemClock.sleep(400)
+                for (id in listOf("size", "opacity", "flow")) {
+                    fun field() = state().array("tool_settings").objects().first { it.getString("id") == id }
+                    for ((kind, label) in listOf("slider" to "ui-brush-$id-slider", "value" to "ui-brush-$id-value")) {
+                        if (!selected(label)) continue
+                        var popup = false
+                        var panel = kind == "value"
+                        if (panel) reveal("tool_settings")
+                        currentUiLabel = label
+                        val component = if (kind == "slider") host.snapshot!!.array("panels").objects().firstOrNull { it.getString("id") == "toolbar" }?.array("tiles")?.objects()
+                            ?.firstOrNull { it.optJSONObject("component")?.optJSONObject("numeric")?.optString("id") == id && findTag("component-slider-${it.getInt("id")}") != null } else null
+                        fun control(): Pair<ViewRootForTest, SemanticsNode>? {
+                            if (component != null) return findTag("component-slider-${component.getInt("id")}")
+                            val caption = field().getString("label")
+                            val tag = if (kind == "slider") "number-slider-$caption" else "number-value-${if (popup) caption else if (panel) id else "toolbar-$id"}"
+                            val parentTag = if (popup) "toolbar-number-menu" else if (panel) "tool-setting-$id" else "toolbar-setting-$id"
+                            return childControl(parentTag, tag)
+                        }
+                        if (control() == null) {
+                            if (findTag("toolbar-setting-$id") != null) { clickControl("toolbar-setting-$id"); popup = true }
+                            else { reveal("tool_settings"); panel = true }
+                        }
+                        if (kind == "value") {
+                            val sliderTag = "number-slider-${field().getString("label")}"
+                            nativeTap("$label native midpoint") {
+                                childControl("tool-setting-$id", sliderTag)
+                            }
+                        }
+                        val bounds = settledControl(label, ::control)
+                        val vertical = kind == "value" || component != null && bounds.height() > bounds.width()
+                        val from = contactPoint(bounds, if (vertical) .5 else .35, if (vertical) .35 else .5)
+                        val span = if (kind == "slider") (if (vertical) bounds.height() else bounds.width()) * .3 else 18.0 * activity.resources.displayMetrics.density
+                        chromeFixture.put("native_control", if (component != null) "component-slider-${component.getInt("id")}" else if (panel) "tool-setting-$id" else if (popup) "toolbar-number-menu" else "toolbar-setting-$id")
+                        interactionSnapshot("$label-before", label, ::control)
+                        targetWindow(::control)
+                        continuous(label, { field().getDouble("value").toString() }) { milliseconds ->
+                            drag(from, milliseconds) { t -> if (vertical) 0.0 to span * sin(2 * PI * t) else span * sin(2 * PI * t) to 0.0 }
+                        }
+                        interactionSnapshot("$label-after", label, ::control)
+                        if (popup) { instrumentation.runOnMainSync { activity.onBackPressedDispatcher.onBackPressed() }; waitFor("numeric popup closed") { findTag("toolbar-number-menu") == null } }
                     }
+                }
+                chromeFixture.remove("native_control")
+                if (selected("ui-panel-change")) {
+                    currentUiLabel = "ui-panel-change"
+                    reveal("tool_settings")
+                    val commands = listOf("select", "drawing_brush")
+                    val entries = host.snapshot!!.getJSONObject("header").getJSONObject("model").array("zones").values().flatMap { (it as JSONArray).objects() }
+                    val controls = commands.map { command ->
+                        val entry = entries.first { entry -> entry.getJSONObject("item").optJSONObject("control")?.let {
+                            it.optString("kind") == "command" && it.optString("command") == command
+                        } == true }
+                        "header-control-${entry.getInt("id")}".also { tag -> settledControl(tag, { findTag(tag) }) }
+                    }
+                    chromeFixture.put("commands", JSONArray(commands)).put("header_controls", JSONArray(controls))
+                    fun active() = commands.indexOfFirst { command -> state().array("commands").objects().any { it.getString("id") == command && it.optBoolean("selected") } }
+                    fun change(index: Int) {
+                        val tag = controls[index % controls.size]
+                        val before = state().array("tool_settings").objects().map { it.getString("id") }
+                        arrangedTransitions({
+                            val fields = state().array("tool_settings").objects()
+                            val geometry = fields.map { field ->
+                                val node = findTag("tool-setting-${field.getString("id")}")
+                                field.getString("id") + controlGeometry(node).opt("screen_bounds").toString()
+                            }.joinToString(";")
+                            geometry to fields.any { findTag("tool-setting-${it.getString("id")}") != null }
+                        }) { nativeTap(tag) }
+                        check(state().array("tool_settings").objects().map { it.getString("id") } != before) { "$tag did not change tool panel content" }
+                    }
+                    var next = if (active() == 0) 1 else 0
+                    transitions("ui-panel-change") { change(next++) }
+                    if (active() != 1) nativeTap(controls[1])
+                    chromeFixture.remove("commands"); chromeFixture.remove("header_controls")
+                }
+                val opacityCaption = host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("opacity")
+                val layerOpacityLabels = listOf("ui-layer-opacity-slider", "ui-layer-opacity-value", "ui-layer-row-opacity")
+                layerOpacityLabels.firstOrNull(::selected)?.let { currentUiLabel = it; reveal("layers") }
+                for (kind in listOf("slider", "value")) {
+                    val opacityLabel = "ui-layer-opacity-$kind"
+                    if (!selected(opacityLabel)) continue
+                    currentUiLabel = opacityLabel
+                    fun opacityControl() = childControl("layer-opacity", "number-$kind-$opacityCaption")
+                    if (kind == "value") nativeTap("Layer opacity native midpoint") {
+                        childControl("layer-opacity", "number-slider-$opacityCaption")
+                    }
+                    val bounds = settledControl(opacityLabel, ::opacityControl)
+                    val from = contactPoint(bounds)
+                    val span = if (kind == "slider") bounds.width() * .25 else 18.0 * activity.resources.displayMetrics.density
+                    targetWindow(::opacityControl)
+                    continuous(opacityLabel, { state().array("layers").objects().first { it.optBoolean("editing") }.getDouble("opacity").toString() }) { milliseconds ->
+                        drag(from, milliseconds) { t -> if (kind == "value") 0.0 to span * sin(2 * PI * t) else span * sin(2 * PI * t) to 0.0 }
+                    }
+                }
+                if (selected("ui-layer-row-opacity")) {
+                    currentUiLabel = "ui-layer-row-opacity"
+                    val previousLayer = state().array("layers").objects().first { it.optBoolean("editing") }.getLong("id")
+                    val target = paintLayer
+                    val rowTag = "layer-row-$target"
+                    if (previousLayer != target) nativeTap(rowTag)
+                    val row = settledControl(rowTag, { findTag(rowTag) })
+                    val down = SystemClock.uptimeMillis()
+                    var touches = 0
+                    fun event(action: Int, count: Int) {
+                        val properties = (0 until count).map { index -> MotionEvent.PointerProperties().apply {
+                            id = index; toolType = MotionEvent.TOOL_TYPE_FINGER
+                        } }.toTypedArray()
+                        val coordinates = (0 until count).map { index -> MotionEvent.PointerCoords().apply {
+                            x = row.centerX() + if (index == 0) -25f else 25f; y = row.centerY(); pressure = 1f; size = .2f
+                        } }.toTypedArray()
+                        val event = MotionEvent.obtain(down, SystemClock.uptimeMillis(), action, count, properties, coordinates,
+                            0, 0, 1f, 1f, 0, 0, InputDevice.SOURCE_TOUCHSCREEN, 0)
+                        try { check(instrumentation.uiAutomation.injectInputEvent(event, true)) { "Native two-finger layer event failed" } }
+                        finally { event.recycle() }
+                    }
+                    val gestureBegan = SystemClock.elapsedRealtimeNanos()
+                    try {
+                        event(MotionEvent.ACTION_DOWN, 1); touches = 1
+                        event(MotionEvent.ACTION_POINTER_DOWN or (1 shl MotionEvent.ACTION_POINTER_INDEX_SHIFT), 2); touches = 2
+                        SystemClock.sleep(60)
+                        event(MotionEvent.ACTION_POINTER_UP or (1 shl MotionEvent.ACTION_POINTER_INDEX_SHIFT), 2); touches = 1
+                        event(MotionEvent.ACTION_UP, 1); touches = 0
+                    } finally { if (touches > 0) event(MotionEvent.ACTION_CANCEL, touches) }
+                    val gestureEnded = SystemClock.elapsedRealtimeNanos()
+                    waitFor("Native layer row opacity popup") {
+                        state().getJSONObject("layer_tools").optLong("opacity_popup", -1) == target && findTag("layer-gesture-opacity") != null
+                    }
+                    fun slider() = childControl("layer-gesture-opacity", "number-slider-$opacityCaption")
+                    val bounds = settledControl("Layer row opacity slider", ::slider)
+                    val from = contactPoint(bounds)
+                    val previousFixture = chromeFixture
+                    chromeFixture = JSONObject(chromeFixture.toString()).put("target_layer", target).put("native_control", "layer-gesture-opacity")
+                        .put("gesture", "two_finger_tap").put("gesture_begin_boot_ns", gestureBegan).put("gesture_end_boot_ns", gestureEnded)
+                    targetWindow(::slider)
+                    try {
+                        continuous("ui-layer-row-opacity", {
+                            var shown = false
+                            instrumentation.runOnMainSync { shown = controlGeometry(slider()).optBoolean("visible") }
+                            check(shown && state().getJSONObject("layer_tools").optLong("opacity_popup", -1) == target) { "Native layer row opacity popup disappeared" }
+                            state().array("layers").objects().first { it.getLong("id") == target }.getDouble("opacity").toString()
+                        }) { milliseconds -> drag(from, milliseconds) { t -> bounds.width() * .25 * sin(2 * PI * t) to 0.0 } }
+                    } finally {
+                        if (findTag("layer-gesture-opacity") != null) nativeBack()
+                        waitFor("Layer row opacity popup closed") { findTag("layer-gesture-opacity") == null && state().getJSONObject("layer_tools").optLong("opacity_popup", -1) != target }
+                        if (previousLayer != target) nativeTap("layer-row-$previousLayer")
+                        chromeFixture = previousFixture
+                    }
+                }
+                fun scroll(label: String, tag: String, fixture: JSONObject, itemTags: List<List<String>> = emptyList()) {
+                    waitFor("$label overflow") { findTag(tag)?.second?.find {
+                        (it.config.getOrNull(SemanticsProperties.VerticalScrollAxisRange)?.maxValue() ?: 0f) > 0f
+                    } != null }
+                    lateinit var node: SemanticsNode
+                    lateinit var range: androidx.compose.ui.semantics.ScrollAxisRange
+                    instrumentation.runOnMainSync {
+                        node = findTag(tag)!!.second.find { (it.config.getOrNull(SemanticsProperties.VerticalScrollAxisRange)?.maxValue() ?: 0f) > 0f }!!
+                        range = node.config[SemanticsProperties.VerticalScrollAxisRange]
+                    }
+                    val lazy = node.config.getOrNull(SemanticsActions.ScrollToIndex)
+                    val count = node.config.getOrNull(SemanticsProperties.CollectionInfo)?.rowCount ?: 0
+                    val tags = if (lazy == null) emptyList() else itemTags.firstOrNull { it.size == count }
+                        ?: error("$label native collection has $count items; fixture tag counts=${itemTags.map { it.size }}")
+                    val index = if (lazy == null) -1 else (count / 2 until count).first { tags[it].isNotEmpty() }
+                    val targetTag = tags.getOrNull(index)
+                    val positioning = JSONArray()
+                    fun center() {
+                        instrumentation.runOnMainSync {
+                            if (lazy != null) check(lazy.action!!.invoke(index)) { "$label refused native ScrollToIndex($index)" }
+                            else node.config[SemanticsActions.ScrollBy].action!!.invoke(0f, range.maxValue() * .5f - range.value())
+                        }
+                        try {
+                            var previous = Float.NaN
+                            var stable = 0
+                            host.awaitMain("$label centered", 10_000) {
+                                val value = range.value()
+                                val maximum = range.maxValue()
+                                val target = targetTag?.let(::findTag)
+                                val geometry = controlGeometry(target)
+                                val bounds = node.boundsInRoot
+                                positioning.put(obj("boot_ns" to SystemClock.elapsedRealtimeNanos(), "value" to value, "maximum" to maximum,
+                                    "target" to geometry, "list_bounds" to bounds.toString()))
+                                stable = if (value == previous) stable + 1 else 0
+                                previous = value
+                                if (lazy == null) stable >= 3 && kotlin.math.abs(value - maximum * .5f) < 2f
+                                else stable >= 3 && value > 0f && maximum > value && geometry.optBoolean("visible") &&
+                                    kotlin.math.abs(target!!.second.boundsInRoot.top - bounds.top) < 2f
+                            }
+                        } finally {
+                            File(output, "$label-scroll-position.json").writeText(obj("index" to index, "collection_count" to count,
+                                "target_tag" to targetTag, "samples" to positioning).toString(2))
+                        }
+                    }
+                    center()
+                    val bounds = node.boundsInRoot
+                    val owner = findTag(tag)!!.first
+                    val origin = IntArray(2)
+                    instrumentation.runOnMainSync { owner.view.getLocationOnScreen(origin) }
+                    val from = bounds.center.x + origin[0] - host.surfaceOrigin.x.toDouble() to bounds.center.y + origin[1] - host.surfaceOrigin.y.toDouble()
+                    val span = if (lazy != null) bounds.height * .25 else minOf(bounds.height * .25, range.maxValue() * .2)
+                    check(span > 4) { "$label has insufficient scroll travel" }
+                    chromeFixture = fixture.put("scroll_maximum", range.maxValue()).put("scroll_bounds", JSONArray(listOf(bounds.left, bounds.top, bounds.right, bounds.bottom)))
+                        .put("scroll_positioning", if (lazy == null) "pixel_midpoint" else "native_item_index").put("center_index", index).put("center_tag", targetTag).put("collection_count", count)
+                    targetWindow { owner to node }
+                    injectedToolType = MotionEvent.TOOL_TYPE_FINGER
+                    try { continuous(label, {
+                        var value = 0f
+                        instrumentation.runOnMainSync { value = range.value() }
+                        value.toString()
+                    }) { milliseconds -> center(); drag(from, milliseconds) { t -> 0.0 to span * sin(2 * PI * t) } } }
+                    finally { injectedToolType = MotionEvent.TOOL_TYPE_STYLUS }
+                }
+                if (selected("ui-layers-scroll")) {
+                    currentUiLabel = "ui-layers-scroll"
+                    reveal("layers")
+                    val existing = state().array("layers").objects().map { it.getLong("id") }.toSet()
+                    val count = args.getString("uiLayerCount", "32")!!.toInt().also { require(it >= 16) }
+                    while (state().array("layers").length() < count) invoke("add_layer")
+                    scroll("ui-layers-scroll", "layer-rows", obj("layer_count" to state().array("layers").length(),
+                        "visible_layer_count" to state().array("layers").objects().count { it.optBoolean("visible") }, "photo_layer" to photoLayer),
+                        listOf(state().array("layers").objects().map { "layer-row-${it.getLong("id")}" } +
+                            if (state().getJSONObject("layer_tools").isNull("add_paper")) emptyList() else listOf("layer-add-paper")))
+                    for (layer in state().array("layers").objects().filter { it.getLong("id") !in existing })
+                        action(obj("type" to "layer", "action" to obj("op" to "delete", "id" to layer.getLong("id"))))
+                    action(obj("type" to "select_layer", "id" to paintLayer))
+                }
+                if (selected("ui-brushes-scroll")) {
+                    currentUiLabel = "ui-brushes-scroll"
+                    invoke("brush"); reveal("brushes")
+                    val view = state().getJSONObject("tool_panels").optJSONObject("brushes") ?: state().getJSONObject("tool_set")
+                    scroll("ui-brushes-scroll", "panel-body-brushes", obj("group_count" to view.array("groups").length(),
+                        "subtool_count" to view.array("subtools").length(), "catalog_brush_count" to host.catalog.array("brush_categories").objects().sumOf { it.array("brushes").length() }))
+                }
+                if (selected("ui-filters-scroll")) {
+                    currentUiLabel = "ui-filters-scroll"
+                    reveal("adjustments")
+                    val choices = state().array("adjustments").objects()
+                    val plain = choices.map { "adjustment-${it.getString("id")}" }
+                    val categorized = choices.flatMapIndexed { index, choice ->
+                        if (index == 0 || choice.getString("category") != choices[index - 1].getString("category")) listOf("", plain[index]) else listOf(plain[index])
+                    }
+                    scroll("ui-filters-scroll", "filter-list", obj("filter_count" to choices.size,
+                        "category_count" to state().array("filter_categories").length()), listOf(plain, categorized))
+                }
+                transitions("ui-zen-transition") {
+                    val before = state().getJSONObject("workspace").getBoolean("zen_mode")
+                    arrangedTransitions({
+                        val hidden = host.snapshot!!.optBoolean("chrome_hidden")
+                        hidden.toString() + controlGeometry(findTag("panel-body-layers")).opt("screen_bounds").toString() to true
+                    }, diagnostic = true) { nativeTap("zen-button") }
+                    check(state().getJSONObject("workspace").getBoolean("zen_mode") != before) { "Native Zen control did not change workspace mode" }
+                }
+                if (state().getJSONObject("workspace").getBoolean("zen_mode")) nativeTap("zen-button")
+                fun layoutSignature(tag: String): Pair<String, Boolean> {
+                    val found = findTag(tag) ?: return "absent" to true
+                    fun content(node: SemanticsNode): String = node.boundsInRoot.toString() +
+                        node.config.getOrNull(SemanticsProperties.Text)?.joinToString { it.text }.orEmpty() + node.children.joinToString { content(it) }
+                    return content(found.second) to true
+                }
+                fun menuText(text: String) = findTag("workspace-menu")?.let { (root, parent) ->
+                    parent.find { it.config.getOrNull(SemanticsProperties.Text)?.any { value -> value.text == text } == true }?.let { root to it }
+                }
+                fun menuItems(view: JSONObject) = view.array("sections").values().flatMap { (it as JSONArray).objects() }
+                fun openMenu(id: String) {
+                    if (findTag("application-menu-$id") != null) nativeTap("application-menu-$id")
+                    else {
+                        val entries = host.snapshot!!.getJSONObject("header").getJSONObject("model").array("zones").values().flatMap { (it as JSONArray).objects() }
+                        val tag = entries.mapNotNull { entry ->
+                            when (entry.getJSONObject("item").getString("kind")) {
+                                "menu" -> "header-control-${entry.getInt("id")}"
+                                "menu_labels" -> "header-menu-labels-compact"
+                                else -> null
+                            }?.takeIf { findTag(it) != null }
+                        }.firstOrNull() ?: error("No configured native application menu is visible")
+                        nativeTap(tag)
+                        val caption = host.snapshot!!.array("application_menus").objects().first { it.getString("id") == id }.getString("label")
+                        nativeTap(caption) { menuText(caption) }
+                    }
+                    waitFor("$id application menu") { findTag("workspace-menu") != null }
+                    val model = host.snapshot!!.array("application_menus").objects().first { it.getString("id") == id }.getJSONObject("model")
+                    val first = menuItems(model).first { it.optBoolean("enabled", true) && !it.optBoolean("is_heading") }.getString("label")
+                    settledControl("$id application page", { menuText(first) })
+                }
+                transitions("ui-menu-open") {
+                    arrangedTransitions({ layoutSignature("workspace-menu") }, diagnostic = true) { openMenu("filter") }
+                    check(findTag("workspace-menu") != null) { "Native filter menu did not open" }
+                    arrangedTransitions({ layoutSignature("workspace-menu") }, diagnostic = true) { nativeBack() }
+                    check(findTag("workspace-menu") == null) { "Native Back did not dismiss filter menu" }
+                }
+                if (selected("ui-menu-submenu")) {
+                    currentUiLabel = "ui-menu-submenu"
+                    val menu = native { JSONObject(Native.query(it, obj("type" to "application_menu", "menu" to "filter").toString())) }
+                    val submenu = menuItems(menu).first { it.array("sections").length() > 0 && it.optBoolean("enabled", true) }
+                    chromeFixture = obj("menu" to "filter", "submenu" to submenu.getString("label"), "submenu_item_count" to menuItems(submenu).size)
+                    val firstOption = menuItems(submenu).first { it.optBoolean("enabled", true) && !it.optBoolean("is_heading") }.getString("label")
+                    transitions("ui-menu-submenu") {
+                        val pages = JSONArray()
+                        fun capture(phase: String): String {
+                            var signature = ""
+                            instrumentation.runOnMainSync { signature = layoutSignature("workspace-menu").first }
+                            pages.put(obj("phase" to phase, "boot_ns" to SystemClock.elapsedRealtimeNanos(), "layout" to signature))
+                            return signature
+                        }
+                        try {
+                            openMenu("filter")
+                            val rootPage = capture("filter")
+                            arrangedTransitions({ layoutSignature("workspace-menu") }, diagnostic = true) {
+                                nativeTap(submenu.getString("label")) { menuText(submenu.getString("label")) }
+                            }
+                            settledControl("Native filter submenu option", { menuText(firstOption) })
+                            capture("submenu")
+                            check(findTag("workspace-menu-back") != null) { "Native menu item did not enter its submenu" }
+                            arrangedTransitions({ layoutSignature("workspace-menu") }, diagnostic = true) { nativeTap("workspace-menu-back") }
+                            waitFor("Native submenu Back restores the Filter page") { layoutSignature("workspace-menu").first == rootPage }
+                            capture("restored_filter")
+                            nativeBack()
+                            waitFor("Native submenu menu dismissed") { findTag("workspace-menu") == null }
+                        } finally {
+                            capture("final")
+                            File(output, "ui-menu-submenu-pages-interaction.json").writeText(obj("pages" to pages).toString(2))
+                        }
+                    }
+                }
+                if (selected("ui-dialog-transition")) {
+                    currentUiLabel = "ui-dialog-transition"
+                    val menu = native { JSONObject(Native.query(it, obj("type" to "application_menu", "menu" to "file").toString())) }
+                    val create = menuItems(menu).first { it.optJSONObject("action")?.optString("command") == "new_document" }
+                    chromeFixture = obj("dialog" to "new-drawing-dialog", "canvas" to documentExtent)
+                    val nativeJobs = DocumentController.nativeFileJobsForTest
+                    DocumentController.nativeFileJobsForTest = false
+                    fun dismissed() = findTag("new-drawing-dialog") == null && state().isNull("new_drawing") &&
+                        state().array("requests").objects().none { it.optJSONObject("kind")?.optJSONObject("request")?.optString("type") == "new" }
+                    try { transitions("ui-dialog-transition") {
+                        val lifecycle = JSONArray()
+                        fun capture(phase: String) = instrumentation.runOnMainSync {
+                            lifecycle.put(obj("phase" to phase, "boot_ns" to SystemClock.elapsedRealtimeNanos(),
+                                "dialog" to controlGeometry(findTag("new-drawing-dialog")), "new_drawing" to state().opt("new_drawing"), "requests" to state().array("requests")))
+                        }
+                        try {
+                            openMenu("file")
+                            capture("file_menu")
+                            arrangedTransitions({ layoutSignature("new-drawing-dialog") }, diagnostic = true) {
+                                nativeTap(create.getString("label")) { menuText(create.getString("label")) }
+                            }
+                            settledControl("Native New Drawing Cancel", { findTag("new-drawing-cancel") })
+                            capture("opened")
+                            check(findTag("new-drawing-dialog") != null && !state().isNull("new_drawing")) { "Native New command did not open its dialog" }
+                            arrangedTransitions({ layoutSignature("new-drawing-dialog") }, diagnostic = true) { nativeTap("new-drawing-cancel") }
+                            waitFor("Native New Drawing Cancel retires its request", ::dismissed)
+                            capture("cancelled")
+                            check(state().array("tabs").objects().any { it.optBoolean("active") && it.optInt("width") == width && it.optInt("height") == height }) { "Dialog journey changed the reference photo" }
+                        } finally {
+                            capture("final")
+                            File(output, "ui-dialog-transition-lifecycle-interaction.json").writeText(obj("lifecycle" to lifecycle).toString(2))
+                        }
+                    } } finally {
+                        try { if (findTag("new-drawing-dialog") != null) { nativeTap("new-drawing-cancel"); waitFor("New Drawing cleanup", ::dismissed) } }
+                        finally { DocumentController.nativeFileJobsForTest = nativeJobs }
+                    }
+                }
+                if (selected("ui-grouped-tool-menu")) {
+                    currentUiLabel = "ui-grouped-tool-menu"
+                    val entry = host.snapshot!!.getJSONObject("header").getJSONObject("model").array("zones").values().flatMap { (it as JSONArray).objects() }
+                        .first { it.getJSONObject("item").optJSONObject("control")?.let { control ->
+                            control.optString("kind") == "command" && control.optString("command") == "drawing_brush"
+                        } == true }
+                    val id = entry.getInt("id")
+                    val item = host.snapshot!!.getJSONObject("header").array("items").objects().first { it.getInt("id") == id }
+                    check(item.getBoolean("enabled") && item.getBoolean("has_variants")) { "Configured DrawingBrush has no native variants" }
+                    val tag = "header-control-$id"
+                    val request = obj("type" to "context", "target" to obj("kind" to "tool_variants", "anchor" to obj("kind" to "header", "id" to id)))
+                    val variants = native { JSONObject(Native.query(it, request.toString())) }
+                    val option = menuItems(variants).first { it.optBoolean("enabled", true) && it.optJSONObject("action") != null }.getString("label")
+                    chromeFixture = obj("header_control" to id, "control" to item.getJSONObject("resolved_control"), "variant_count" to menuItems(variants).size,
+                        "hold_ms" to android.view.ViewConfiguration.getLongPressTimeout() + 100)
+                    transitions("ui-grouped-tool-menu") {
+                        arrangedTransitions({ layoutSignature("workspace-menu") }, diagnostic = true) { nativeHold(tag) }
+                        check(findTag("workspace-menu") != null && menuText(option) != null) { "Native DrawingBrush hold did not expose its grouped tool options" }
+                        arrangedTransitions({ layoutSignature("workspace-menu") }, diagnostic = true) { nativeBack() }
+                        check(findTag("workspace-menu") == null) { "Native Back did not dismiss grouped tools" }
+                    }
+                }
+                if (selected("ui-tile-drag")) {
+                    currentUiLabel = "ui-tile-drag"
+                    val candidates = host.snapshot!!.array("panels").objects().map { panel ->
+                        val panelId = panel.getString("id")
+                        panel to panel.array("tiles").objects().filter { tile -> tile.optBoolean("enabled") && !tile.has("component") &&
+                            tile.getJSONObject("control").optString("kind") != "divider" && findTag("tile-$panelId-${tile.getInt("id")}") != null }
+                    }
+                    val (panel, tiles) = candidates.firstOrNull { it.second.size >= 2 }
+                        ?: error("Tile drag requires an actual visible panel with two draggable native tiles")
+                    val panelId = panel.getString("id")
+                    val first = settledControl("First native tile", { findTag("tile-$panelId-${tiles.first().getInt("id")}") })
+                    val last = settledControl("Last native tile", { findTag("tile-$panelId-${tiles.last().getInt("id")}") })
+                    val from = contactPoint(first)
+                    val delta = (last.centerX() - first.centerX()).toDouble() to (last.centerY() - first.centerY()).toDouble()
+                    check(kotlin.math.hypot(delta.first, delta.second) > 30 * activity.resources.displayMetrics.density) { "Tool tiles have insufficient drag travel" }
+                    val original = state().getJSONObject("workspace").toString()
+                    chromeFixture = obj("panel" to panelId, "tile_count" to panel.array("tiles").length(), "draggable_tile_count" to tiles.size,
+                        "source_tile" to tiles.first().getInt("id"), "target_tile" to tiles.last().getInt("id"),
+                        "hold_ms" to 700, "qualification" to "diagnostic", "cancel" to true)
+                    targetWindow { findTag("workspace") }
+                    injectedToolType = MotionEvent.TOOL_TYPE_FINGER
+                    try {
+                        continuous("ui-tile-drag", {
+                            var geometry = ""
+                            instrumentation.runOnMainSync { geometry = layoutSignature("workspace-drop-hint").first }
+                            geometry
+                        }) { milliseconds ->
+                            contact(from, milliseconds, holdMs = 700, cancel = true) { t ->
+                                val travel = (1 - cos(2 * PI * t)) * .5
+                                delta.first * travel to delta.second * travel
+                            }
+                            if (measuring) activeWindows.getJSONObject(activeWindows.length() - 1).put("qualification", "diagnostic")
+                            waitFor("Native tile drag cancelled") { state().getJSONObject("workspace").toString() == original }
+                        }
+                    } finally { injectedToolType = MotionEvent.TOOL_TYPE_STYLUS }
+                }
+
+                } catch (failure: Throwable) {
+                    measuring = false
+                    val snapshot = runCatching { native { JSONObject(Native.snapshot(it) ?: "{}") } }.getOrElse { obj("capture_error" to it.toString()) }
+                    File(output, "ui-failure-state.json").writeText(obj("boot_ns" to SystemClock.elapsedRealtimeNanos(),
+                        "current_label" to currentUiLabel, "requested_labels" to args.getString("labels"), "failure" to failure.stackTraceToString(),
+                        "snapshot" to snapshot, "header" to snapshot.opt("header"), "panels" to snapshot.opt("panels"),
+                        "tool_settings" to snapshot.optJSONObject("state")?.optJSONArray("tool_settings")).toString(2))
+                    activity.window.removeOnFrameMetricsAvailableListener(listener)
+                    metricsThread.quitSafely()
+                    throw failure
+                } finally {
+                    contactObserver = null; boundedContactSampling = false; measuring = false
+                    injectedToolType = MotionEvent.TOOL_TYPE_STYLUS
+                    uiCleanups.toList().asReversed().forEach { runCatching(it) }
+                    uiCleanups.clear()
                 }
             }
             if (wanted("paint")) {

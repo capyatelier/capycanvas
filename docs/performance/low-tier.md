@@ -61,6 +61,126 @@ Exact consumed-input-to-GPU-completion pooled p50/p95/p99 is
 54.323/70.200/78.513 → 53.983/69.598/75.179 ms. These software intervals exclude
 digitizer and panel latency; they do not measure physical pen-to-ink latency.
 
+## Android UI motion baseline
+
+Measured 2026-10-28 on the TCL TAB 11 Gen 2, 4248 × 2832 reference photo
+at Fit, factory display size/density 320 and font scale 1, default Low glass,
+light theme. The production baseline is `176c68cd6`. The v8 control APK is
+`33115e277148d2fb77564808a8e3acc89c2f5a10ed3d2f0e938df149b05c420f`;
+its test APK and native hashes are in `v8-artifact-manifest.json`. Older v4–v6
+recordings use their retained APK/test pairs; that hash does not identify them.
+These are baseline observations, separate from the retained-panel-body
+comparison above.
+
+Rates and gaps below use app-owned SurfaceFlinger buffer latches joined to
+actual display-frame completion. Continuous native controls with a recorded
+window title use that literal window: `art.capycanvas.capycanvas5/art.capycanvas.MainActivity`
+for main chrome and `Pop-Up Window` for layer-row Opacity and compact workspace
+menus. Older records without a title use the app-owned aggregate; they do not
+isolate a popup. FrameMetrics, callbacks and revision counts are attribution,
+not presented FPS or proof that every presentation contains a new pose.
+
+`resize-v8-light`, `wheel-v8-light`, `edit-wheel-v8-light`, column feedback and
+`drag-v5-light` use full six-second primers and three six-second measured
+contacts per input/mode. Native continuous UI controls also retain six-second
+primers and three measured contacts. Older layer/grouped-drawer/switcher
+fixtures used one-second primers or lack retained full-primer evidence and
+remain diagnostic under the current measurement rule. The layer drawer and
+other short transitions are diagnostic regardless of journey length.
+
+The canonical UI recording is
+`ui-full-complete-light/A-ui-full-complete-summary.json`: all 22 native rows
+and their three measured contacts passed in one 714.394-second JUnit run.
+It supersedes the earlier partial prefixes that failed later setup. Each row
+uses a full six-second primer. Short or discrete transitions still have no
+sustained-FPS qualification. Dark-theme completion for this full baseline
+matrix remains unmeasured.
+
+| Native motion | Actual presents/s | Presentation gap p99, ms | Fresh bounds/s | Evidence and limits |
+| --- | --- | --- | --- | --- |
+| Panel/column resize: Brushes, Properties, Navigator, toolbar; mouse/touch | 35.289–59.334 | 33.089–49.989 | 34.146–54.651 | `resize-v8-light` |
+| Tab drag, floating panel and docking destination; mouse/touch | 58.814–60.023 | 16.766–33.340 | 51.993–59.284 | `drag-v5-light` |
+| Panel drag over Color wheel | 58.815–59.850 | 16.761–33.316 | 47.429–57.404 | `color-overlap-v4-light; primer-limited diagnostic` |
+| Committed panel Color wheel; mouse/touch | 46.570–47.742 | 33.555–50.004 | — | `wheel-v8-light; committed native colors change; bounds count does not apply` |
+| Edit Color wheel; mouse/touch | 42.774–57.953 | 33.410–50.098 | — | `edit-wheel-v8-light; committed native colors change; bounds count does not apply` |
+| Canvas action bar move (real photo Transform Y scrub) | 5.692–7.210 | 483.203–649.862 | — | `ui-full-complete-light` |
+| Brush Size slider | 38.358–42.873 | 149.937–166.605 | — | `ui-full-complete-light` |
+| Brush Size value scrub | 46.293–50.222 | 49.980–150.088 | — | `ui-full-complete-light` |
+| Brush Opacity slider | 51.372–52.255 | 149.944–149.960 | — | `ui-full-complete-light` |
+| Brush Opacity value scrub | 34.695–44.843 | 50.065–166.618 | — | `ui-full-complete-light` |
+| Brush Flow slider | 49.960–52.124 | 116.666–149.904 | — | `ui-full-complete-light` |
+| Brush Flow value scrub | 34.348–41.928 | 166.568–166.618 | — | `ui-full-complete-light` |
+| Layer Opacity header slider | 52.910–57.074 | 33.327–49.922 | — | `ui-full-complete-light` |
+| Layer Opacity header value scrub | 54.629–56.217 | 33.347–49.978 | — | `ui-full-complete-light` |
+| Layer-row two-finger Opacity popup | 30.446–31.309 | 83.271–83.334 | — | `ui-full-complete-light` |
+| Layers list scroll | 59.502–59.850 | 16.847–16.882 | — | `ui-full-complete-light` |
+| Brushes list scroll | 55.871–58.120 | 33.313–66.639 | — | `ui-full-complete-light` |
+| Filters list scroll | 58.120–59.159 | 33.273–33.328 | — | `ui-full-complete-light` |
+| Grouped Drawing drawer scroll | 57.946–59.502 | 16.985–33.315 | — | `grouped-scroll-light; primer-limited diagnostic` |
+| Compact workspace choices and Visibility submenu scroll | 59.849–60.023 | 16.975–17.007 | — | `switcher-scroll-v6-light; primer-limited diagnostic; factory compact menus, vertical; horizontal strip unmeasured` |
+
+The resize matrix covers 24 contacts. Its lower rates are a baseline miss;
+retaining content does not make every moving bound meet 60/s. Fresh bounds
+are independently sampled from actual drawn geometry. Layer swipe/reorder
+records below retain their historical one-second primer limit and are not silently
+promoted to current qualification:
+
+| Layer motion | Recorded actual presents/s | Gap p99, ms | Limits |
+| --- | --- | --- | --- |
+| Swipe left | 56.217–57.428 | 33.331–33.391 | `layer-swipe-left-native-light`; three six-second contacts, historical one-second primer; primer-limited diagnostic |
+| Swipe right | 56.401–58.120 | 33.342–33.379 | `layer-swipe-right-native-light`; three six-second contacts, historical one-second primer; primer-limited diagnostic |
+| Layer reorder | 39.324–46.064 | 33.577–49.988 | `layer-reorder-native-light`; three six-second contacts, historical one-second primer; primer-limited diagnostic |
+| Attached filter reorder | 37.909–39.497 | 49.883–50.087 | `filter-reorder-native-light`; three six-second contacts, historical one-second primer; primer-limited diagnostic |
+
+Whole columns do not translate while held: Rust applies their docking move on
+release. `column-v8-light` samples changing `workspace-drop-hint` bounds and
+disappearance while the native grip crosses before/after column targets. It
+also requires a native release that changes layout and one Undo that restores
+it. Its 36 observed feedback windows are diagnostic; the earlier stationary
+grip's ~59 presents/s was not fresh column-body motion.
+
+Short transitions retain their observed draw windows and the first subsequent
+actual present bounded by the next request or contact end. The durations and
+onsets below are presentation observations, not fresh-pose latency or a
+sustained FPS claim. Repeated presentations within a transition stay in the
+series; idle gaps between requests are not joined. A single-present transition
+has no inter-present gap statistic. Tile dragging uses discrete drop-hint
+poses even when the contact lasts six seconds.
+
+| Native transition | Observed windows across three journeys | Observation duration, ms | First present from window start, ms | Gap p99, ms | Recording |
+| --- | --- | --- | --- | --- | --- |
+| Column docking feedback | 36 | 21.204–38.287 | 5.065–21.204 | 16.373–33.222 | `column-v8-light` |
+| Layers/Properties drawer | 39 | 85.619–284.824 | 7.475–28.968 | 16.663–33.390 | `drawer-v2-light` |
+| Action bar show/hide | 74 | 46.877–64.540 | 46.877–64.540 | — | `ui-full-complete-light` |
+| Action bar show/hide in Zen | 74 | 46.114–47.424 | 46.114–47.424 | — | `ui-full-complete-light` |
+| Native Select/Drawing Brush panel-content change | 66 | 74.920–147.237 | 13.041–147.237 | 49.994–66.638 | `ui-full-complete-light` |
+| Main menu open/close | 42 | 147.818–829.370 | 10.876–179.575 | 33.306–316.558 | `ui-full-complete-light` |
+| Filter submenu enter/return | 30 | 327.705–345.411 | 10.576–12.326 | 16.670–16.869 | `ui-full-complete-light` |
+| Grouped tool menu open/close | 42 | 148.326–749.861 | 61.528–529.803 | 16.657–283.243 | `ui-full-complete-light` |
+| Native grouped-tool tile drag/drop hint | 3 | 5991.644–6001.745 | 3.957–11.471 | 16.808–16.842 | `ui-full-complete-light` |
+| Zen enter/leave | 42 | 415.817–466.107 | 79.550–229.574 | 16.666–99.973 | `ui-full-complete-light` |
+| New Drawing open/Cancel | 30 | 264.827–427.732 | 11.257–128.274 | 33.397–199.925 | `ui-full-complete-light` |
+
+Layer/mask selection is instantaneous. `layer-selection-v9-light` passed three
+six-second contacts and records 14 deduplicated state-change observations per
+contact plus the actual app-window present series and each next present. This
+is not a fresh-selection latency measurement and has no sustained FPS.
+Expanded configuration, general dialog page traversal and the noncompact
+horizontal workspace strip remain unmeasured; New Drawing open/Cancel does
+not establish those journeys. Grouped menu/tile checks do not qualify every
+possible drawer sibling switch.
+
+The existing five-bubble fixture also passed three contacts at
+59.850–60.026 actual app-window presents/s, gap p99 16.820–16.917 ms, with
+factory settings and visible neighbor motion; see [Native tool bubbles](#native-tool-bubbles).
+This result does not extend to every short bubble opening transition.
+
+Raw traces, fixture snapshots, value variants, interactions, before/after
+geometry and per-row completion guards are under
+`/mnt/localssd/capycanvas5-android-ui-motion-20261028/baseline-tcl/`, using the
+recording names in the tables. Compact summaries are retained in
+`artifacts/android-ui-motion/final-baseline-inventory.local.{json,md}`.
+
 ## Navigation presentation
 
 Measured 2026-10-24–25 on the reference TCL TAB 11 Gen 2, comparing
@@ -306,36 +426,36 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 | Navigation with proof or tone guide shown | 60 | | |
 | Gradient drag | 60 | | |
 | Figure or ruler drag | 60 | | |
-| Layer opacity scrub | 60 | **Touch gesture revision unmeasured (2026-10-25).** Earlier: **Not met.** Maskless Solid Color over photo: screen 47.44 presents/s, p99 ≤49.98 ms; renderer 32.51 fresh completed updates/s | [Solid Color fills](#solid-color-fills); baseline also misses |
-| Layer reorder drag | 60 | | |
-| Layer row swipe | 60 | **Touch gesture revision unmeasured (2026-10-25).** Earlier: **Unqualified.** Partial left reveal: 57.8–59.6 moving window frames/s, maximum interval p99 33.392 ms; full reveal unmeasured | [Layer action reveal](#layer-action-reveal), 2026-10-24 |
+| Layer opacity scrub | 60 | Android header slider 52.910–57.074 actual presents/s; value 54.629–56.217/s; native row popup 30.446–31.309/s. Canonical successful native batch; popup observations use its literal window. Earlier Solid Color workload is separate | [Android UI motion baseline](#android-ui-motion-baseline), 2026-10-28 ; [Solid Color fills](#solid-color-fills) |
+| Layer reorder drag | 60 | Android native contacts record 39.324–46.064 actual presents/s, p99 33.577–49.988 ms; historical short-primer diagnostic | [Android UI motion baseline](#android-ui-motion-baseline), 2026-10-28  |
+| Layer row swipe | 60 | Android older native swipe diagnostics: left 56.217–57.428, right 56.401–58.120 actual presents/s; p99 up to 33.391 ms; short-primer limits apply | [Android UI motion baseline](#android-ui-motion-baseline), 2026-10-28  |
 | Workspace-manager row swipe and reorder | 60 | Unmeasured on reference hardware; functional input checks do not qualify moving-frame timing | [Workspace manager](../ui/default-workspaces.md#workspace-manager) |
-| Layer thumbnail selection animation | 60 | **Touch gesture revision unmeasured (2026-10-25).** Earlier: Unmeasured on the reference tablet | [Selection benchmark](../development/android.md#benchmarks) |
-| Attached filter drag inside a clipping run | 60 | **Not met.** 55.64–59.72 native UI fps; moving-frame gap p99 16.75–33.34 ms | [Filter attachment feedback](#filter-attachment-feedback), 2026-10-04 |
+| Layer thumbnail selection animation | 60 | Android instantaneous layer/mask selection: 14 observed state changes per contact; next-present observations only, no fresh-selection latency or sustained FPS | [Android UI motion baseline](#android-ui-motion-baseline), 2026-10-28  |
+| Attached filter drag inside a clipping run | 60 | Android attached-filter native diagnostic 37.909–39.497 actual presents/s, p99 49.883–50.087 ms; historical short primer prevents current qualification | [Android UI motion baseline](#android-ui-motion-baseline), 2026-10-28  |
 | Navigation with 8 visible paint layers | 60 | | |
 | Drawing with 8 visible paint layers, G-Pen 1024 px | 60 | **Not met.** Navigator open, Fit: 50.12 fresh updates/s (48.65–51.65), completion gap p99 29.30–32.87 ms | Retained-Navigator painting below; seven photo layers and one drawing layer |
-| Panel, tab, column or toolbar drag and docking | 60 | **Pre-existing gap; unqualified.** Recorded Android light group drag: 58.47–58.99 actual window presents/s; fresh bounds were not collected for this motion. Other hosts retain their existing measurements | [Native column bridges](#native-column-bridges); [Web workspace diagnostic](#web-workspace-diagnostic), 2026-10-26 |
+| Panel, tab, column or toolbar drag and docking | 60 | Android full-primer tab/panel contacts record 58.814–60.023 actual presents/s and 51.993–59.284 fresh bounds/s; column feedback is discrete. Other hosts retain their existing measurements | [Android UI motion baseline](#android-ui-motion-baseline), 2026-10-28 |
 | GTK Tool Set hover and press animation | 60 | Unmeasured on reference hardware; the short desktop GTK diagnostic does not qualify this tier | [GTK tool caption hover](top-tier.md#gtk-tool-caption-hover), 2026-10-26 |
-| Panel or column resize | 60 | **Pre-existing gap; unqualified.** Android gap: original 27.79 presented fps / 26.07 fresh bounds/s; retained port 53.64–58.47 presented fps / 41.71–42.97 fresh bounds/s. Web: original 8.43–8.63 bounds updates/s; SVG 21.40–23.42 geometry updates/s alongside 21.11–23.14 total Chrome presents/s GTK compact Tool Set and expanding divider revisions remain unmeasured on this tier. Windows chrome rail scrolling and edge arbitration are unmeasured on reference hardware (2026-10-28). | [Native column bridges](#native-column-bridges); [Web SVG column bridges](#web-svg-column-bridges); [GTK Tool Set density](top-tier.md#gtk-tool-set-density), [GTK toolbar dividers](top-tier.md#gtk-toolbar-divider-resize), 2026-10-26 |
+| Panel or column resize | 60 | **Pre-existing gap; unqualified.** Android full-primer matrix: 35.289–59.334 actual presents/s and 34.146–54.651 fresh bounds/s; [current baseline](#android-ui-motion-baseline). Web: original 8.43–8.63 bounds updates/s; SVG 21.40–23.42 geometry updates/s alongside 21.11–23.14 total Chrome presents/s GTK compact Tool Set and expanding divider revisions remain unmeasured on this tier. Windows chrome rail scrolling and edge arbitration are unmeasured on reference hardware (2026-10-28). | [Native column bridges](#native-column-bridges); [Web SVG column bridges](#web-svg-column-bridges); [GTK Tool Set density](top-tier.md#gtk-tool-set-density), [GTK toolbar dividers](top-tier.md#gtk-toolbar-divider-resize), 2026-10-26 |
 | Pen pressure utility and curve drag | 60 | Unmeasured on reference hardware | [Pen pressure measurement protocol](../ui/pen-pressure.md#validation); GTK desktop measurements do not qualify this tier |
 | Android tool bubble drag through four neighbours | 60 | **Met.** Cached native shadows: 59.677–60.023 actual app-window presents/s; p99 16.864–17.009 ms, factory display settings, default glass, 12 MP photo at Fit | [Native tool bubbles](#native-tool-bubbles), 2026-10-28 |
 | Web tool bubble drag through four neighbours | 60 | Unmeasured after the bubble release fixes; desktop browser journeys do not qualify the TCL reference tablet | [Web checks](../development/web.md#tests), 2026-10-24 |
 | Windows tool bubble drag through four neighbours | 60 | Unmeasured on reference hardware; Surface Pro / Adreno X1-85 functional checks do not qualify timing (PresentMon ETW access denied) | [Windows tool bubbles](../development/windows.md#tool-bubbles) |
 | Windows HDR color bubble drag and intensity scrub | 60 | Unmeasured on reference hardware; native input and pixel checks do not qualify presentation timing (PresentMon ETW access denied) | [Windows tool bubbles](../development/windows.md#tool-bubbles) |
 | HDR color bubble drag and intensity scrub | 60 | Unmeasured on reference hardware; other tablets and workstation diagnostics do not qualify this tier; Apple reference and native overlay timing unmeasured; 61 MP Mac canvas diagnostic only | [Web and Android HDR color bubbles](top-tier.md#web-and-android-hdr-color-bubbles); [Apple HDR diagnostic](top-tier.md#apple-hdr-color-bubble-diagnostic), 2026-10-24 |
-| Drawer open and close | 60 | **Unqualified.** Android Layers/Properties diagnostic fails draw/FrameMetrics timestamp correspondence; no trustworthy moving presentation rate | [Drawer timestamp diagnostic](#drawer-timestamp-diagnostic); [GTK Sketch Layers diagnostic](top-tier.md#gtk-sketch-layers-diagnostic) |
-| Zen fade, expanded configuration and dialog page transitions | 60 | Unmeasured on the reference tablet, including Windows header replacement during live theme changes; controlled-clock and input checks do not qualify presentation timing | [Shared chrome](../ui/shared-ui.md#window-chrome-and-zen-mode); [numeric controls](../ui/numeric-controls.md) |
-| Grouped tool menus, drawer switching and tile drag | 60 | Not measured on reference hardware | [Tool variations](../ui/panel-customization.md#tool-variations); functional checks do not qualify this tier |
-| Grouped Drawing drawer scrolling | 60 | **Met**, UI FrameMetrics 58.85–60.02 Hz, maximum p99 33.328 ms | [Grouped tool drawer scrolling](#grouped-tool-drawer-scrolling) below |
-| Colour wheel or picker drag | 60 | **Unqualified.** Committed-wheel diagnostic: mouse 48.24–51.16 UI Hz, touch 52.80–54.39; maximum p99 49.98 ms (2048 × 1536) | [Live paint icon diagnostic](#live-paint-icon-diagnostic) below |
-| Slider and value scrub: size, opacity, flow | 60 | Unmeasured on reference hardware; GTK/Web workstation diagnostics do not qualify this tier | [GTK](top-tier.md#gtk-panel-slider-diagnostic) and [Web](top-tier.md#web-numeric-panel-diagnostic), 2026-10-10 |
+| Drawer open and close | 60 | Android Layers/Properties uses observed draw-clock transitions; 39 diagnostic windows, 85.619–284.824 ms. Earlier timestamp-join fault is superseded | [Android UI motion baseline](#android-ui-motion-baseline), 2026-10-28 |
+| Zen fade, expanded configuration and dialog page transitions | 60 | Android Zen and New Drawing open/Cancel have fresh diagnostic observations; expanded configuration and general page traversal remain unmeasured. Windows live-theme header replacement remains unmeasured | [Android UI motion baseline](#android-ui-motion-baseline), 2026-10-28; [shared chrome](../ui/shared-ui.md#window-chrome-and-zen-mode) |
+| Grouped tool menus, drawer switching and tile drag | 60 | Android native grouped menus and tile/drop hints have fresh diagnostic observations; general sibling switching remains unmeasured | [Android UI motion baseline](#android-ui-motion-baseline), 2026-10-28 |
+| Grouped Drawing drawer scrolling | 60 | Android actual presents 57.946–59.502/s, p99 16.985–33.315 ms; older short primer, diagnostic | [Android UI motion baseline](#android-ui-motion-baseline), 2026-10-28 |
+| Colour wheel or picker drag | 60 | Android full-primer committed wheel 46.570–47.742 actual presents/s, p99 33.555–50.004 ms; Edit Color 42.774–57.953/s, p99 33.410–50.098 ms; target missed | [Android UI motion baseline](#android-ui-motion-baseline), 2026-10-28 |
+| Slider and value scrub: size, opacity, flow | 60 | Android actual native slider/value contacts are recorded; canonical native batch passed; numeric controls remain below target | [Android UI motion baseline](#android-ui-motion-baseline), 2026-10-28 |
 | Toolbar Size/Strength: Show value and Expand to fit | 60 | Unmeasured on reference hardware; functional platform journeys do not qualify this tier | [Slider display checks](../ui/toolbar-components.md#checks), 2026-10-25 |
-| Canvas action bar show, hide and move | 60 | **Not met.** UI frame p50/p95: 32.9/41.7 ms moving the bar, 11.6/21.0 ms show and hide (2048 × 1536) | Canvas-bar `ui-bar-move` and `ui-bar-show-hide`, 2026-09-27 |
-| Tool Options or panel content change | 60 | **Not met.** UI frame p50/p95 25.4/35.3 ms | Canvas-bar `ui-panel-change`, 2026-09-27 |
-| List scrolling: layers, brushes, filters | 60 | Unmeasured on the reference tablet; GTK Sketch with 1,000 layers has a desktop diagnostic only. Windows chrome rail scrolling and edge arbitration are unmeasured on reference hardware (2026-10-28). | [GTK layer input diagnostic](top-tier.md#gtk-layer-input-diagnostic) |
-| Workspace choices: horizontal scroll | 60 | Screen 59.42–59.82 presents/s, maximum p99 33.24 ms | Workspace switcher scrolling below; long-list fixture |
-| Workspace visibility checklist: vertical scroll | 60 | Screen 60.02 presents/s, maximum p99 17.03 ms | Workspace switcher scrolling below; long-list fixture |
-| Menu open and close | 60 | Application menu heading switching unmeasured on reference hardware | [Menu interaction](../ui/window-bar.md); functional checks do not qualify presented frame rate |
+| Canvas action bar show, hide and move | 60 | Android actual photo-transform bar movement 5.692–7.210 presents/s; short show/hide observations remain diagnostic; canonical native batch passed | [Android UI motion baseline](#android-ui-motion-baseline), 2026-10-28 |
+| Tool Options or panel content change | 60 | Android native Select/Drawing Brush content changes: 66 diagnostic windows, observation durations 74.920–147.237 ms; completed canonical successful batch | [Android UI motion baseline](#android-ui-motion-baseline), 2026-10-28  |
+| List scrolling: layers, brushes, filters | 60 | Android actual presents: Layers 59.502–59.850/s, Brushes 55.871–58.120/s, Filters 58.120–59.159/s; canonical native batch passed. GTK desktop diagnostic remains separate. Windows chrome rail scrolling and edge arbitration are unmeasured on reference hardware (2026-10-28). | [Android UI motion baseline](#android-ui-motion-baseline), 2026-10-28 ; [GTK layer input diagnostic](top-tier.md#gtk-layer-input-diagnostic) |
+| Workspace choices: horizontal scroll | 60 | Current factory display chooses compact vertical native menus: choices 59.849–60.023 actual presents/s; horizontal strip remains unmeasured by this matrix; short primer limits qualification | [Android UI motion baseline](#android-ui-motion-baseline), 2026-10-28  |
+| Workspace visibility checklist: vertical scroll | 60 | Factory compact native submenu: 60.021–60.023 actual presents/s, p99 up to 16.995 ms; short-primer diagnostic | [Android UI motion baseline](#android-ui-motion-baseline), 2026-10-28  |
+| Menu open and close | 60 | Android menu/submenu native transitions have fresh diagnostic observations; no sustained-FPS claim | [Android UI motion baseline](#android-ui-motion-baseline), 2026-10-28  |
 | Interface language change | 60 | Current lifecycle binary unmeasured. Earlier German checkpoint: cold publication 169.2–195.5 ms; warm 144.4–194.4 ms; preparation-only maximum 4.095 ms | Matched Web language checkpoint below; no tier qualification |
 
 ## Native tool bubbles
