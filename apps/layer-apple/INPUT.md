@@ -107,6 +107,9 @@ deactivation stop the repeat. Shared Rust decides which actions accept repeats. 
 of the system's three-finger editing gestures, so finger taps reach the shared
 touch gestures.
 
+In Zen mode, iPad defers top and bottom system gestures so shared edge peek
+receives the first inward swipe.
+
 AppKit forwards indirect trackpad contacts with stable IDs, native timestamps
 and positions in the touch device's point coordinates. Shared Rust recognizes
 the [three-finger scrub](../../docs/ui/settings.md#touch-gestures-and-pen-buttons)

@@ -26,6 +26,7 @@ private struct IPadEditorScene: View {
                 .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
         }.ignoresSafeArea()
             .statusBarHidden()
+            .defersSystemGestures(on: store.state["workspace"]["zen_mode"].bool ? [.top, .bottom] : [])
             .onChange(of: phase) { _, next in
                 if next != .active {
                     store.input(["type": "blur"])
