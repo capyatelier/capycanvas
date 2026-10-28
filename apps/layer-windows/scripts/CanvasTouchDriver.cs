@@ -36,6 +36,14 @@ public static class CapyCanvasTouch {
  static void Pulse(object unused){lock(gate){try{Frame(contacts);}catch(Exception error){failure=error;try{CancelAll();}catch{}}}}
  public static void Down(uint id,int x,int y){lock(gate){Verify();if(id<1||id>3||contacts.ContainsKey(id)||contacts.Count>=3)throw new Exception("Invalid touch contact.");var next=new SortedDictionary<uint,Point>(contacts);next.Add(id,new Point{x=x,y=y});Frame(next,id,0x10006);contacts=next;pulse.Change(8,8);}}
  public static void Move(uint id,int x,int y){lock(gate){Verify();if(!contacts.ContainsKey(id))throw new Exception("Missing touch contact.");var next=new SortedDictionary<uint,Point>(contacts);next[id]=new Point{x=x,y=y};Frame(next);contacts=next;}}
+ public static double MoveTimed(uint id,int dx,int dy,int milliseconds,bool release){
+  lock(gate){
+   Verify();if(milliseconds<=0)throw new ArgumentOutOfRangeException("milliseconds");if(!contacts.ContainsKey(id))throw new Exception("Missing touch contact.");
+   var from=contacts[id];var watch=System.Diagnostics.Stopwatch.StartNew();
+   double t;do{Thread.Sleep(8);t=Math.Min(1,watch.Elapsed.TotalMilliseconds/milliseconds);Move(id,from.x+(int)Math.Round(dx*t),from.y+(int)Math.Round(dy*t));}while(t<1);
+   if(release)Up(id);return watch.Elapsed.TotalMilliseconds;
+  }
+ }
  public static void Pair(int ax,int ay,int bx,int by){lock(gate){Verify();if(contacts.Count!=2||!contacts.ContainsKey(1)||!contacts.ContainsKey(2))throw new Exception("Expected contacts 1 and 2.");var next=new SortedDictionary<uint,Point>{{1,new Point{x=ax,y=ay}},{2,new Point{x=bx,y=by}}};Frame(next);contacts=next;}}
  public static void Up(uint id){lock(gate){Verify();if(!contacts.ContainsKey(id))throw new Exception("Missing touch contact.");Frame(contacts,id,0x40000);contacts.Remove(id);if(contacts.Count==0)pulse.Change(Timeout.Infinite,Timeout.Infinite);}}
  public static void Tap(int[] xs,int[] ys,int gap,int hold){if(xs.Length<1||xs.Length>3||xs.Length!=ys.Length)throw new Exception("Invalid touch tap.");var thread=Thread.CurrentThread;var priority=thread.Priority;thread.Priority=ThreadPriority.Highest;try{for(int i=0;i<xs.Length;i++){Down((uint)i+1,xs[i],ys[i]);Thread.Sleep(gap);}Thread.Sleep(hold);lock(gate){Verify();Frame(contacts,0,0x40000);contacts.Clear();pulse.Change(Timeout.Infinite,Timeout.Infinite);}}finally{thread.Priority=priority;}}

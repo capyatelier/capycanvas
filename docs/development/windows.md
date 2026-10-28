@@ -494,6 +494,10 @@ pen and touch contacts. Run its six `<theme>-<device>` variants, such as
 `tool-bubbles:light-pen`, through the VM or private-desktop runner. Its switches
 select focused scopes; use `-HdrOnly` with `-HdrDepth F16` and `F32` after
 changing HDR color bubbles, and `-BlendersOnly` after changing blender bubbles.
+The `tool-bubbles:native-controls-dark` and `tool-bubbles:native-controls-light`
+variants cover native card controls, scrolling, touch takeover and inertia.
+Use `tool-bubbles:inertia-dark` and `tool-bubbles:inertia-light` to isolate live
+scroll interruption and the next pan.
 
 ### GPU reconstruction
 

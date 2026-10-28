@@ -1,8 +1,10 @@
 param([Parameter(Mandatory)][string]$Executable,
-    [ValidateSet('dark-mouse','dark-touch','dark-pen','light-mouse','light-touch','light-pen','edge-dark-mouse','edge-dark-touch','edge-dark-pen','edge-light-mouse','edge-light-touch','edge-light-pen','row-pair-dark','row-pair-light','blenders-dark','blenders-light','sliders-dark','sliders-light','blender-controls-dark','blender-controls-light','hdr-f16-dark','hdr-f16-light','slider-preference-dark','slider-preference-light')][string]$Variant='dark-mouse',[switch]$RapidOnly,[switch]$SlidersOnly,[switch]$BlendersOnly,[switch]$EraserOnly,[switch]$EraserLightOnly,[switch]$HistoryOnly,[switch]$HistoryLightOnly,[switch]$NativeControlsOnly,[switch]$ScrollEpochOnly,[switch]$NumericOnly,[switch]$CurveOnly,[switch]$MenuOnly,[switch]$ObserverOnly,[switch]$VisualOnly,[switch]$BeadTransitionsOnly,[switch]$HdrOnly,[switch]$HdrRetirementOnly,[switch]$HdrPreviewOnly,[switch]$HdrContactsOnly,[switch]$ColorUndoOnly,[ValidateSet('F16','F32')][string]$HdrDepth='F16')
+    [ValidateSet('dark-mouse','dark-touch','dark-pen','light-mouse','light-touch','light-pen','edge-dark-mouse','edge-dark-touch','edge-dark-pen','edge-light-mouse','edge-light-touch','edge-light-pen','row-pair-dark','row-pair-light','inertia-dark','inertia-light','native-controls-dark','native-controls-light','blenders-dark','blenders-light','sliders-dark','sliders-light','blender-controls-dark','blender-controls-light','hdr-f16-dark','hdr-f16-light','slider-preference-dark','slider-preference-light')][string]$Variant='dark-mouse',[switch]$RapidOnly,[switch]$SlidersOnly,[switch]$BlendersOnly,[switch]$EraserOnly,[switch]$EraserLightOnly,[switch]$HistoryOnly,[switch]$HistoryLightOnly,[switch]$NativeControlsOnly,[switch]$ScrollEpochOnly,[switch]$NumericOnly,[switch]$CurveOnly,[switch]$MenuOnly,[switch]$ObserverOnly,[switch]$VisualOnly,[switch]$BeadTransitionsOnly,[switch]$HdrOnly,[switch]$HdrRetirementOnly,[switch]$HdrPreviewOnly,[switch]$HdrContactsOnly,[switch]$ColorUndoOnly,[ValidateSet('F16','F32')][string]$HdrDepth='F16')
 $ErrorActionPreference='Stop'
 $edgeOnly=$Variant.StartsWith('edge-');if($edgeOnly){$Variant=$Variant.Substring(5)}
 $rowPairOnly=$Variant.StartsWith('row-pair-');if($rowPairOnly){$NativeControlsOnly=$true;$Variant=$Variant.Substring(9)+'-touch'}
+$inertiaOnly=$Variant.StartsWith('inertia-');if($inertiaOnly){$NativeControlsOnly=$true;$Variant=$Variant.Substring(8)+'-touch'}
+if($Variant -match '^native-controls-(dark|light)$'){$NativeControlsOnly=$true;$Variant=$Matches[1]+'-touch'}
 if($Variant -match '^hdr-f16-(dark|light)$'){$HdrOnly=$true;$HdrPreviewOnly=$true;$HdrDepth='F16';$Variant=$Matches[1]+'-mouse'}
 $sliderPreferenceOnly=$Variant.StartsWith('slider-preference-')
 if($Variant -match '^slider-preference-(dark|light)$'){$SlidersOnly=$true;$Variant=$Matches[1]+'-mouse'}
@@ -785,6 +787,7 @@ function Layer-ListContacts([long]$Id){
     @{row_height=$rowHeight;add_limit=$limit;count=@((Model).state.layers).Count;list_bounds=$list.Current.BoundingRectangle.ToString();shared_card=(View $Id).card}|ConvertTo-Json -Depth 8|Set-Content (Join-Path $run 'list-overflow-setup.json')
     if(!$scroll.Current.VerticallyScrollable){throw 'Native bubble layer list did not overflow'}
     if($ScrollEpochOnly){Native-ScrollEpoch $Id;return}
+    if($inertiaOnly){Native-InertiaInterruption $Id $list $scroll;return}
     Settle-LayerScroll $scroll;$scroll.SetScrollPercent(-1,0);Settle-LayerScroll $scroll
     $beforeInputs=Settled-LayerState;$viewport=$list.Current.BoundingRectangle
     [CapyRowPointer]::Wheel([int]($viewport.X+$viewport.Width*.5),[int]($viewport.Y+$viewport.Height*.5),-120)
@@ -935,20 +938,34 @@ function Native-HistoryActions([long]$Id,$Paper,[string]$Before,[string]$Painted
     $checks.Add('native-history-accessibility-keyboard-and-disabled-state')
 }
 function Native-InertiaInterruption([long]$Id,$List,$Scroll){
-    Settle-LayerScroll $Scroll;$Scroll.SetScrollPercent(-1,0);Settle-LayerScroll $Scroll
+    Settle-LayerScroll $Scroll;$Scroll.SetScrollPercent(-1,50);Settle-LayerScroll $Scroll
     $origin=Settled-LayerState;$order=@($origin.state.layers.id)-join ',';$checkpoint=@($origin.windows_tabs.session_stamps|Where-Object id -eq $origin.windows_tabs.selected)[0].stamp.checkpoint
     $box=$List.Current.BoundingRectangle;$point=@{x=[int]($box.X+$box.Width*.5);y=[int]($box.Y+$box.Height*.65)}
+    $timeline=[Collections.Generic.List[object]]::new();$clock=[Diagnostics.Stopwatch]::StartNew()
+    $observe={param([string]$Stage) $percent=$Scroll.Current.VerticalScrollPercent;$native=$List.Current.ItemStatus|ConvertFrom-Json;$timeline.Add(@{stage=$Stage;elapsed_ms=$clock.Elapsed.TotalMilliseconds;percent=$percent;native=$native})}
+    $interruptStart=$null;$interrupted=$null;$flingMilliseconds=$null;$admission=@{before=$null;native=$null}
     [CapyCanvasTouch]::Initialize([uint32]$review.Id)
     try{
-        [CapyCanvasTouch]::Down(1,$point.x,$point.y);foreach($dy in @(15,40,80)){Start-Sleep -Milliseconds 25;[CapyCanvasTouch]::Move(1,$point.x,($point.y-$dy))};[CapyCanvasTouch]::Up(1)
+        [CapyCanvasTouch]::Down(1,$point.x,$point.y)
+        Wait-Until {$admission.native=$List.Current.ItemStatus|ConvertFrom-Json;$admission.native.device -eq 'touch' -and $admission.native.phase -eq 'pressed' -and $admission.native.touch_contacts -eq 1 -and $null -ne $admission.native.pointer_id} 'Native layer list did not process the initial touch'
+        $admission.before=$admission.native.generation
+        $flingMilliseconds=[CapyCanvasTouch]::MoveTimed(1,0,-25,100,$true)
         $moving=@{prior=$Scroll.Current.VerticalScrollPercent;before=$null;after=$null}
         Wait-Until {$value=$Scroll.Current.VerticalScrollPercent;if($value -gt $moving.prior+.05){$moving.before=$moving.prior;$moving.after=$value;return $true};$moving.prior=$value;return $false} 'Interrupt fixture did not observe live native inertia'
+        $timeline.Add(@{stage='second-down-before';elapsed_ms=$clock.Elapsed.TotalMilliseconds;percent=$moving.after;native=$null})
         [CapyCanvasTouch]::Down(1,$point.x,$point.y)
-        foreach($dy in @(25,55,90)){Start-Sleep -Milliseconds 35;[CapyCanvasTouch]::Move(1,$point.x,($point.y+$dy))}
-        try{Wait-Until {$Scroll.Current.VerticalScrollPercent -lt $moving.after-.5} 'Fresh opposite native pan did not interrupt live inertia'}
-        finally{@{inertia_before=$moving.before;inertia_after=$moving.after;opposite_pan=$Scroll.Current.VerticalScrollPercent}|ConvertTo-Json|Set-Content (Join-Path $run 'layer-scroll-interruption-attempt.json')}
+        & $observe 'second-down-returned'
+        Wait-Until {$admission.native=$List.Current.ItemStatus|ConvertFrom-Json;$admission.native.device -eq 'touch' -and $admission.native.generation -gt $admission.before -and $admission.native.phase -eq 'pressed' -and $admission.native.touch_contacts -eq 1 -and $null -ne $admission.native.pointer_id} 'Native layer list did not process the interrupting touch'
+        & $observe 'second-down-native'
+        $interruptStart=$Scroll.Current.VerticalScrollPercent
+        if($interruptStart -le 1 -or $interruptStart -ge 99){throw 'Native inertia reached a boundary before the interrupting contact'}
+        foreach($dy in @(25,55,90)){Start-Sleep -Milliseconds 35;[CapyCanvasTouch]::Move(1,$point.x,($point.y+$dy));& $observe ('opposite-'+$dy)}
+        Wait-Until {$Scroll.Current.VerticalScrollPercent -lt $interruptStart-.5} 'Fresh opposite native pan did not interrupt live inertia'
         $interrupted=$Scroll.Current.VerticalScrollPercent;[CapyCanvasTouch]::Up(1)
-    }finally{[CapyCanvasTouch]::Dispose()}
+    }finally{
+        [CapyCanvasTouch]::Dispose()
+        @{inertia_before=$moving.before;inertia_after=$moving.after;fling_ms=$flingMilliseconds;interrupt_start=$interruptStart;opposite_pan=$Scroll.Current.VerticalScrollPercent;native_admission=$admission;timeline=$timeline.ToArray()}|ConvertTo-Json -Depth 8|Set-Content (Join-Path $run 'layer-scroll-interruption-attempt.json')
+    }
     Settle-LayerScroll $Scroll;$Scroll.SetScrollPercent(-1,0);Settle-LayerScroll $Scroll
     $box=$List.Current.BoundingRectangle;$point=@{x=[int]($box.X+$box.Width*.5);y=[int]($box.Y+$box.Height*.65)}
     [CapyCanvasTouch]::Initialize([uint32]$review.Id)
@@ -1354,7 +1371,7 @@ try{
         [IO.File]::WriteAllText((Join-Path $run 'results.json'),(@{variant=$Variant;blenders_only=[bool]$BlendersOnly;checks=@($checks);scope=($scope+'; physical input and performance separate')}|ConvertTo-Json -Depth 12),[Text.UTF8Encoding]::new($false))
         return
     }
-    if(!$NumericOnly -and !$CurveOnly -and !$rowPairOnly){
+    if(!$NumericOnly -and !$CurveOnly -and !$rowPairOnly -and !$inertiaOnly){
     $dial=Take 'command' 'drawing_brush' (($camera.translation[0]+$document.width*.35*$camera.zoom)/$scale) (($camera.translation[1]+$document.height*.35*$camera.zoom)/$scale)
     Check-Artwork 'tear-out' $revision
     if($edgeOnly){
