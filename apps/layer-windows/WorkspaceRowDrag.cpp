@@ -358,7 +358,7 @@ void WorkspaceRowDrag::Refresh(std::vector<Id> const& order){
     std::erase_if(impl->rows,[](auto const& row){return !row.item.get();});
     if(impl->pointer&&!impl->current())impl->cancel();
 }
-bool WorkspaceRowDrag::FenceSelection()const{return bool(impl->pointer);}
+bool WorkspaceRowDrag::FenceSelection()const{return bool(impl->pointer)||impl->ignoreClick;}
 bool WorkspaceRowDrag::SuppressClick()const{return impl->ignoreClick;}
 bool WorkspaceRowDrag::Cancel(){return impl->cancel();}
 bool WorkspaceRowDrag::Escape(){
