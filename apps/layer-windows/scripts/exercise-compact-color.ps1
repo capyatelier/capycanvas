@@ -533,8 +533,8 @@ function Pair-Journey{
     $definition=(Model).paint_pair.definition|ConvertTo-Json -Compress;$rgba=(Model).paint_pair.rgba|ConvertTo-Json -Compress
     if(Find 'panel-tab-proof'){Invoke 'panel-tab-proof'}else{Invoke 'column-icon-proof'}
     Wait-Until {Find 'proof-panel-mode-sdr'} 'HDR Proof controls did not open'
-    Invoke 'proof-panel-mode-sdr';Wait-Until {Find 'proof-panel-exposure'} 'SDR appearance controls did not open'
-    (Control 'proof-panel-exposure').SetFocus();Pair-Text 'proof-panel-exposure' '-50';[CapyRowPointer]::Key([uint32]$review.Id,0x0D)
+    Invoke 'proof-panel-mode-sdr';Wait-Until {(Model).windows_proof_form.mode -eq 'sdr'} 'Proof panel did not enter SDR mode'
+    (Reveal-PanelControl 'proof' 'proof-panel-exposure').SetFocus();Pair-Text 'proof-panel-exposure' '-50';[CapyRowPointer]::Key([uint32]$review.Id,0x0D)
     $updated=@{pair=$null}
     Wait-Until {$updated.pair=(Model).paint_pair;$updated.pair -and (($updated.pair.rgba|ConvertTo-Json -Compress) -ne $rgba)} 'SDR rendition did not change the shared icon preview'
     if(($updated.pair.definition|ConvertTo-Json -Compress) -ne $definition){throw 'SDR rendition changed stored paint'}

@@ -486,6 +486,11 @@ function Reveal([string]$Id,[switch]$Focus,[string]$ViewportId){
  }
  throw "$Id stayed clipped in its scroll container"
 }
+function Reveal-PanelControl([string]$Panel,[string]$Id){
+ $groups=@((Model).layout.groups|Where-Object {$_.active -eq $Panel})
+ if($groups.Count -ne 1){throw "$Panel panel has no single live scroll viewport"}
+ Reveal $Id -ViewportId ('panel-body-scroll-'+$groups[0].id)
+}
 function Focus-Keyboard($Element,[switch]$Backward){
     $Element.SetFocus()
     Wait-Until {$Element.Current.HasKeyboardFocus} 'Native control did not receive focus'

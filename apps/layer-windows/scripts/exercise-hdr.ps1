@@ -292,11 +292,6 @@ function Select-Choice([string]$Id,[string]$Name){
  $item.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
 }
 function Idle {Wait-Until {$m=Model;$m -and !$m.windows_document -and !$m.state.document_file.busy -and !@($m.state.requests).Count} 'HDR/document operation did not finish' 60}
-function Proof-Reveal([string]$Id){
- $groups=@((Model).layout.groups|Where-Object {$_.active -eq 'proof'})
- if($groups.Count -ne 1){throw 'Proof panel has no single live scroll viewport'}
- Reveal $Id -ViewportId ('panel-body-scroll-'+$groups[0].id)
-}
 function Sdr {
  ProofPanel
  if((Model).windows_proof_form.mode -ne 'sdr'){
@@ -306,7 +301,7 @@ function Sdr {
  $proofGroup=@((Model).layout.groups|Where-Object active -eq 'proof')[0]
  $nativeProof=Control ('workspace-group-'+$proofGroup.id) -Arranged
  $null=Control 'proof-dial' -Within $nativeProof -Arranged
- $null=Proof-Reveal 'proof-panel-exposure';$null=Proof-Reveal 'proof-panel-contrast'
+ $null=Reveal-PanelControl 'proof' 'proof-panel-exposure';$null=Reveal-PanelControl 'proof' 'proof-panel-contrast'
 }
 function ProofPanel {
  Expand-PanelColumn 'proof'
@@ -829,7 +824,7 @@ try {
   } finally {[CapyRowPointer]::Dispose();[CapyRowPointer]::SetThreadDpiAwarenessContext($previousDpi)|Out-Null}
  }
  ProofPanel
- $field=Proof-Reveal 'proof-panel-exposure';$fieldId=$field.GetRuntimeId() -join ':'
+ $field=Reveal-PanelControl 'proof' 'proof-panel-exposure';$fieldId=$field.GetRuntimeId() -join ':'
  [CapyRowPointer]::SetForegroundWindow($drawingWindow)|Out-Null
  $field.SetFocus();Set-Text 'proof-panel-exposure' 'invalid';[CapyRowPointer]::Key([uint32]$review.Id,0x0D)
  if((Model).windows_proof_form.rendition.exposure -ne -1){throw 'Invalid Proof field changed the recipe'}
