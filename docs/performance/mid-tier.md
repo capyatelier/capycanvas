@@ -6,7 +6,7 @@ Reference: Wacom MovinkPad 11 (DTHA116) with a 1440 × 2200, 90 Hz panel. The
 canvas is 6000 × 4000.
 
 - Every row targets **90 fps** unless marked soft.
-- **The panel held 60 Hz in the recorded runs.** The default display mode is
+- **Earlier rows marked 60 Hz do not qualify.** The default display mode is
   60 Hz, and the firmware pins every app to 60 Hz (display policy render range
   60–60) unless the app is switched on in Settings › Display › Adaptive
   (`com.android.settings/.display.AdaptiveAPPRefreshRateActivity`), whose list
@@ -27,58 +27,84 @@ canvas is 6000 × 4000.
 
 ## Current Android UI motion measurement status
 
-The 2026-10-28 UI harness has fresh TCL observations and a matched Wacom
-MovinkPad 11 layer/filter reorder comparison at verified 90 Hz. The full current
-90 Hz UI matrix remains pending. Neither rejected
-[TCL compositing trial](low-tier.md#android-ui-compositing-trials) establishes a
-middle-tier gain. The retained thumbnail comparison below shows no stable gain
-and does not qualify either reorder row's cadence.
-Panel/tab/column docking, resize, drawer/Zen/dialog transitions, native menus,
-grouped tools and tile drag, brush/layer opacity controls, lists, workspace
-switcher and color wheels still need current measurements on this tier.
-Earlier Android numbers below remain historical and do not qualify the current
-harness or production revision. Other hosts retain their own evidence.
+Measured 2026-10-29 on the 6000 × 4000 photo at Fit, light theme, factory density
+240/font scale 1 and thermal status 0. Actual 90 Hz display/primer and measured
+contact evidence is retained per fixture. The final benchmark APK is
+`f86d532d…`, common tests `2e5a78f1…`; benchmark setup differs from TCL while
+production UI/Rust source and native bytes match its accepted `f280cd8a…`.
+The shipped changes are `bce7a641b` and `ae37124aa`. These are absolute final
+observations, not a new matched middle-tier gain claim.
 
-See the [low-tier Android UI baseline](low-tier.md#android-ui-motion-baseline)
-for exact fixtures, actual window ownership, partial-run limits and the
-remaining unmeasured journeys. Low-tier success or diagnostic cadence does not
-transfer to the 90 Hz target.
+Rates below are ranges across all retained measured contacts and input modes;
+p99 is the worst contact. Numeric delivery uses the exact shared resolver and
+must be assessed beside input-implied/display-eligible demand, rather than
+requiring a fresh scalar every refresh. Full per-contact demand, tails, modes,
+window ownership and proof remain in the
+[affected-row table](../../artifacts/android-ui-motion/final-report/affected-rows-final.local.md)
+and [evidence JSON](../../artifacts/android-ui-motion/final-report/affected-rows-final.local.json).
+These final observations are not matched cross-theme or cross-device effects.
 
-The corrected shared-resolver numeric gate has fresh TCL observations only.
-The former slow percent-value fixture was input-limited; its presentation
-rates cannot qualify freshness. The 240 dp/s fixture and delivered/implied
-value comparison still need a current 90 Hz MovinkPad pass.
+| UI motion | Actual presents/s | Worst contact gap p99, ms | Delivered scalar changes/s |
+| --- | --- | --- | --- |
+| Layer reorder | 72.149–74.161 | 22.426 | — |
+| Attached filter reorder | 35.099–59.837 | 55.928 | — |
+| Panel color wheel, mouse/touch | 74.249–76.834 | 22.707 | — |
+| Edit Color wheel, mouse/touch | 88.891–89.410 | 12.001 | — |
+| Brush size slider | 70.795–72.517 | 178.543 | 60.707–60.874 |
+| Brush size value scrub | 88.197–89.063 | 22.322 | 69.880–71.045 |
+| Brush opacity slider | 74.118–74.829 | 200.924 | 61.708–62.209 |
+| Brush opacity value scrub | 89.236–89.408 | 11.242 | 59.373–59.540 |
+| Brush flow slider | 73.691–74.118 | 156.273 | 59.707–61.208 |
+| Brush flow value scrub | 88.373–88.717 | 22.305 | 59.040–59.374 |
+| Layer opacity slider | 61.739–65.324 | 33.517 | 45.864–48.866 |
+| Layer opacity value scrub | 60.763–65.198 | 33.848 | 50.367–52.869 |
+| Layer-row opacity popup | 23.749–25.200 | 67.016 | 21.848–22.348 |
+| Layers scroll | unmeasured (fixture failed) | — | — |
+| Five tool bubbles, drag | 86.993–88.890 | 22.329 | — |
+| Bubble palette opening | unmeasured (fixture failed) | — | — |
+| HDR bubble drag | 88.717–89.411 | 11.775 | — |
+| HDR bubble intensity | 44.184–45.224 | 44.660 | — |
 
-The retained thumbnail projection improves matched TCL layer/filter reorder
-cadence. Its 2026-10-28 Wacom MovinkPad 11 comparison uses matched control and
-candidate APKs, identical tests and native libraries, a 6000 × 4000 photo at Fit,
-light theme and ABBA order. All eight fixtures pass at factory density 240,
-font scale 1 and thermal status 0, with verified 90 Hz before each primer and
-SurfaceFlinger presentations during motion. Each fixture has three six-second
-contacts after a full-duration primer; warming and slow contacts remain included.
-Layer reorder averages 70.537 → 70.631 presents/s, with worst contact gap p99
-22.412 → 33.497 ms. Filter reorder averages 54.088 → 54.742 presents/s, with
-worst p99 55.823 → 66.985 ms. Neither small rate difference establishes a stable
-gain; both rows miss the 90 Hz rate and gap targets. The full final matrix
-remains pending.
+Eight numeric labels and three transition labels completed before a later
+Layers-scroll centering failure in their containing batch. Their 33 complete
+contacts were recovered offline using the existing collector, original trace
+and exact shared resolver; the containing JUnit batch remains failed. The
+failed Layers scroll is unmeasured (`Timed out: ui-layers-scroll centered`),
+with its cause unproven. No failed or unreached contact is promoted.
+
+Bubble palette opening has the same lookup failure as the TCL control repro.
+HDR intensity remains a cadence miss. Its sole 60 Hz session latency-header
+sample is empty; every nonempty moving sample and contact/primer proof is
+90 Hz. The empty raw sample remains retained. Wheel/edit-wheel bounds are
+stationary and are not marker-freshness counters; their separate drawn-update
+fields do not prove fresh pixel identity.
+
+Both-theme matched Layers/Palettes appearance and history checks were performed
+on TCL; no dedicated Movink appearance comparison is claimed. Earlier 60 Hz
+Android UI rows remain historical. Switcher/grouped scroll fixture failures,
+brush-list overflow failure and seven unreached unrelated labels were left
+outside the final user scope; source fixes were not folded into this result.
+
+The earlier matched thumbnail projection comparison has eight fixtures at
+verified 90 Hz, factory240/font1/thermal0, 24MP Fit and full primers. Mean layer
+reorder is 70.537 → 70.631 presents/s, worst p99 22.412 → 33.497 ms; filter
+54.088 → 54.742, p99 55.823 → 66.985 ms. Neither establishes a middle-tier gain.
+Current wheel/reorder/most numeric rows still miss their full rate/gap/freshness
+targets; raw presents alone do not qualify input-limited controls.
 
 ## Android layout-only panel measurement identities
 
-The 2026-10-29 shared layout-only panel measurement keys and Android per-panel
-origin subscriptions improve matched TCL wheel cadence; the size-slider pooled
-three-ABBA gate passes within observed control spread with all 36 contacts
-retained. This fix is unmeasured on Wacom MovinkPad 11. The retained-thumbnail
-90 Hz reorder results above remain the current matched measurements and are
-not relabelled as results for this fix. The final 90 Hz pass remains pending.
-See the [low-tier comparison](low-tier.md#android-layout-only-panel-measurement-identities)
-for frozen APK attribution, rates, tails and diagnostic limits. Rebased TCL
-canvas guards preserve their controls, and six Palettes/Layers crop pairs are
-pixel-identical across light/dark themes. No middle-tier cadence, freshness or
-appearance qualification is claimed until the final pass.
+`ae37124aa` improves matched TCL wheel cadence; its complete size gate remains
+within control spread. The final absolute 90 Hz observations above include the
+fix, with no new matched middle-tier comparison. See the
+[low-tier comparison](low-tier.md#android-layout-only-panel-measurement-identities)
+for the original/final APK pairs, retained contacts, numeric gate and unchanged
+GPU replay limits. The matched TCL canvas guards preserve their controls and
+six Palettes/Layers crop pairs are pixel-identical across light/dark themes.
 
 ## Android panel composition
 
-The 2026-10-28 retained panel-body change is unmeasured on Wacom MovinkPad 11.
+The 2026-10-28 retained panel-body change has no matched Wacom MovinkPad 11 comparison.
 No matched reference-device comparison was completed before the experiment
 limit. The [TCL comparison](low-tier.md#android-panel-composition) establishes
 lower UI measure/layout cost on the low tier; it does not qualify 90 Hz cadence, fresh
@@ -335,36 +361,36 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 | Navigation with proof or tone guide shown | 90 | | |
 | Gradient drag | 90 | | |
 | Figure or ruler drag | 90 | | |
-| Layer opacity scrub | 90 | Current Android matrix unmeasured on the middle-tier reference; no 90 Hz claim. **Touch gesture revision unmeasured (2026-10-25).** Earlier: Solid Color revision unmeasured on this reference device | [Current Android status](#current-android-ui-motion-measurement-status); [Low-tier measurements](low-tier.md#solid-color-fills) do not qualify this tier |
-| Layer reorder drag | 90 | Current Android matrix unmeasured on the middle-tier reference; no 90 Hz claim. **Not met.** Android mouse-body drag: 58.8–59.6 window frames/s, interval p99 up to 33.49 ms, 24 MP photo, thermal 0, 60 Hz panel | [Current Android status](#current-android-ui-motion-measurement-status); `ded8453bf` + layer input port, release-profile benchmark; `artifacts/layer-input-port/android/motion-summary.json`, 2026-10-10 |
+| Layer opacity scrub | 90 | **Not met.** Verified90Hz row popup 23.749–25.200 actual presents/s, p99 67.016 ms, delivered 21.848–22.348 values/s; header slider/value rates and delivery are in the current table. | [Current Android status](#current-android-ui-motion-measurement-status), 2026-10-29 |
+| Layer reorder drag | 90 | **Not met.** Verified90Hz final 72.149–74.161 actual presents/s, p99 22.426 ms. Earlier matched thumbnail comparison 70.537 → 70.631/s establishes no stable middle-tier gain. | [Current Android status](#current-android-ui-motion-measurement-status), 2026-10-29 |
 | Layer row swipe | 90 | **Touch gesture revision unmeasured (2026-10-25).** Earlier: **Current handle fade unmeasured.** Earlier Android left reveal: 57.6–58.8 moving window frames/s, interval p99 up to 33.50 ms, 24 MP photo, thermal 0, 60 Hz panel; 90 Hz not met | `ded8453bf` + layer input port, 2026-10-10; [current measurements on other hardware](top-tier.md#layer-handle-fade), 2026-10-21–22 |
 | Workspace-manager row swipe and reorder | 90 | Unmeasured on reference hardware; functional input checks do not qualify moving-frame timing | [Workspace manager](../ui/default-workspaces.md#workspace-manager) |
-| Layer thumbnail selection animation | 90 | Current Android matrix unmeasured on the middle-tier reference; no 90 Hz claim. **Touch gesture revision unmeasured (2026-10-25).** Earlier: **Not met.** 59.705–59.706 window frames/s; p99 gap 16.80–16.91 ms on the device's 60 Hz panel | [Current Android status](#current-android-ui-motion-measurement-status); Isolated outline; measurement below, 2026-10-05 |
-| Attached filter drag inside a clipping run | 90 | Current Android matrix unmeasured on the middle-tier reference; no 90 Hz claim. Unmeasured: both attempts timed out waiting for the 24 MP drawing's shaders before motion | [Current Android status](#current-android-ui-motion-measurement-status); `7f69a9356` + clipping-filter changes, benchmark APK; `artifacts/clipping-filter/mid-performance{,-retry}.log`, 2026-10-04 |
+| Layer thumbnail selection animation | 90 | Historical observations below; current availability is in the Android status above. **Touch gesture revision unmeasured (2026-10-25).** Earlier: **Not met.** 59.705–59.706 window frames/s; p99 gap 16.80–16.91 ms on the device's 60 Hz panel | [Current Android status](#current-android-ui-motion-measurement-status); Isolated outline; measurement below, 2026-10-05 |
+| Attached filter drag inside a clipping run | 90 | **Not met.** Verified90Hz final 35.099–59.837 actual presents/s, p99 55.928 ms; slow first contact retained. | [Current Android status](#current-android-ui-motion-measurement-status), 2026-10-29 |
 | Layer swipe right: alpha lock (24 MP photo) | 90 | **Touch gesture revision unmeasured (2026-10-25).** Earlier: **Not met.** Android relationship overlay 58.8–59.4 fps, interval p99 16.8–16.9 ms; Web 53.1–54.6 fps, interval p99 33.5–50.2 ms | Android `00b2d6e73` + native port, 2026-10-04; Web `1d251ece`, 2026-09-27; details below |
 | Navigation with 16 visible paint layers | 90 | | |
 | Drawing between 16 photo layers, G-Pen 1024 px (17 visible layers) | 90 | **Not met.** BUILD32: 74.733–75.449 fresh updates/s; fresh gap p99 18.465–18.871 ms, Linear | [Current middle-layer comparison](#drawing-in-the-middle-of-sixteen-photo-layers); measured comparison bounds pass, 90/s remains missed |
-| Panel, tab, column or toolbar drag and docking | 90 | Current Android matrix unmeasured on the middle-tier reference; no 90 Hz claim. **Not met.** Floating panel-group drag frame p50/p95 13.4/15.5 ms; continuous-tab revisions unqualified on this reference device; GTK GPU joins and revised chrome handoff are unmeasured | [Current Android status](#current-android-ui-motion-measurement-status); `cbfad9e5`, 2026-09-26; [Web collector limits](#web-navigator-resize-diagnostic), 2026-10-19; [panel-tab compositing](top-tier.md#panel-tab-compositing) and [GTK column bridge diagnostic](top-tier.md#gtk-column-bridge-diagnostic), 2026-10-25 |
-| Android palette pill opening at the work-area edge | 90 | **FPS unqualified.** Instant clamp/short transition; 3–4 actual presents per opening, all neighbors stationary in the diagnostic | [Native palette opening](#native-palette-opening), 2026-10-23 |
-| Android tool bubble drag through four neighbours | 90 | **Met.** Cached native shadows: 88.717–89.236 actual app-window presents/s; p99 11.249–11.322 ms, factory display settings, default glass, 24 MP photo at Fit | [Native tool bubbles](#native-tool-bubbles), 2026-10-28 |
+| Panel, tab, column or toolbar drag and docking | 90 | Historical observations below; current availability is in the Android status above. **Not met.** Floating panel-group drag frame p50/p95 13.4/15.5 ms; continuous-tab revisions unqualified on this reference device; GTK GPU joins and revised chrome handoff are unmeasured | [Current Android status](#current-android-ui-motion-measurement-status); `cbfad9e5`, 2026-09-26; [Web collector limits](#web-navigator-resize-diagnostic), 2026-10-19; [panel-tab compositing](top-tier.md#panel-tab-compositing) and [GTK column bridge diagnostic](top-tier.md#gtk-column-bridge-diagnostic), 2026-10-25 |
+| Android palette pill opening at the work-area edge | 90 | Unmeasured in the final fixture: packet lookup fails; identical TCL control failure is retained. Historical short-transition observations remain separate. | [Current Android status](#current-android-ui-motion-measurement-status); [native palette opening](#native-palette-opening), 2026-10-29 |
+| Android tool bubble drag through four neighbours | 90 | **Not met in final absolute validation.** Verified90Hz 86.993–88.890 actual presents/s, p99 22.329 ms. Earlier cached-shadow matched measurements remain separate. | [Current Android status](#current-android-ui-motion-measurement-status); [native tool bubbles](#native-tool-bubbles), 2026-10-29 |
 | Web tool bubble drag through four neighbours | 90 | **Unqualified after the bubble release fixes.** Previous parity build missed the target: 60.01–74.59 actual presents/s, p99 33.497–33.525 ms, default Low glass, 24 MP photo at Fit | [Tool bubbles](#web-tool-bubbles), 2026-10-24 |
 | GTK Tool Set hover and press animation | 90 | Unmeasured on reference hardware; the short desktop GTK diagnostic does not qualify this tier | [GTK tool caption hover](top-tier.md#gtk-tool-caption-hover), 2026-10-26 |
-| Panel or column resize | 90 | Current Android matrix unmeasured on the middle-tier reference; no 90 Hz claim. Android shared vectors and Web SVG projection are unmeasured on this reference tier. GTK compact Tool Set and expanding divider revisions unmeasured on reference hardware. Current Web candidate and GTK GPU column joins unmeasured on reference hardware. Web baseline diagnostic: 18.64–18.72 changing bounds/s, RAF gap p99 67.1–83.8 ms; presented FPS unqualified. Blank-canvas Debug divider diagnostic: 27.22–44.74 changing bounds/s, window-vsync p99 33.50–83.78 ms. Windows chrome rail scrolling and edge arbitration are unmeasured on reference hardware (2026-10-28). | [Current Android status](#current-android-ui-motion-measurement-status); [Web Navigator resize](#web-navigator-resize-diagnostic), 2026-10-19; [Divider resize diagnostic](#divider-resize-diagnostic), 2026-10-10; [GTK Color resize](top-tier.md#gtk-color-panel-resize), 2026-10-04; [GTK column bridge diagnostic](top-tier.md#gtk-column-bridge-diagnostic), 2026-10-25; [GTK Tool Set density](top-tier.md#gtk-tool-set-density), 2026-10-26; [GTK toolbar dividers](top-tier.md#gtk-toolbar-divider-resize), 2026-10-26 |
+| Panel or column resize | 90 | Historical observations below; current availability is in the Android status above. Android shared vectors and Web SVG projection are unmeasured on this reference tier. GTK compact Tool Set and expanding divider revisions unmeasured on reference hardware. Current Web candidate and GTK GPU column joins unmeasured on reference hardware. Web baseline diagnostic: 18.64–18.72 changing bounds/s, RAF gap p99 67.1–83.8 ms; presented FPS unqualified. Blank-canvas Debug divider diagnostic: 27.22–44.74 changing bounds/s, window-vsync p99 33.50–83.78 ms. Windows chrome rail scrolling and edge arbitration are unmeasured on reference hardware (2026-10-28). | [Current Android status](#current-android-ui-motion-measurement-status); [Web Navigator resize](#web-navigator-resize-diagnostic), 2026-10-19; [Divider resize diagnostic](#divider-resize-diagnostic), 2026-10-10; [GTK Color resize](top-tier.md#gtk-color-panel-resize), 2026-10-04; [GTK column bridge diagnostic](top-tier.md#gtk-column-bridge-diagnostic), 2026-10-25; [GTK Tool Set density](top-tier.md#gtk-tool-set-density), 2026-10-26; [GTK toolbar dividers](top-tier.md#gtk-toolbar-divider-resize), 2026-10-26 |
 | Pen pressure and tilt utilities, curves and live previews | 90 | 87.74–89.25 presented fps; 11.17–22.33 ms gap p99 | [Current utility measurements](#pen-response-utilities); all rate floors pass, two cases narrowly miss the 22.2 ms gap limit |
 | Windows tool bubble drag through four neighbours | 90 | Unmeasured on reference hardware; Surface Pro / Adreno X1-85 functional checks do not qualify timing (PresentMon ETW access denied) | [Windows tool bubbles](../development/windows.md#tool-bubbles) |
 | Windows HDR color bubble drag and intensity scrub | 90 | Unmeasured on reference hardware; native input and pixel checks do not qualify presentation timing (PresentMon ETW access denied) | [Windows tool bubbles](../development/windows.md#tool-bubbles) |
 | Apple tool bubble drag through four neighbours | 90 | **Unqualified.** Reference hardware remains unmeasured; the M2 Pro Mac diagnostic uses the 61 MP canvas and does not measure the whole native overlay | [Apple native measurements](top-tier.md#apple-native-measurements), 2026-10-24 |
-| HDR color bubble drag and intensity scrub | 90 | **Not met; diagnostic display settings.** Android drag 58.39–86.64 actual app-window presents/s; intensity 45.57–50.75/s, p99 up to 55.825 ms, 24 MP F16 photo at Fit; Apple reference and native overlay timing unmeasured; 61 MP Mac canvas diagnostic only | [HDR color bubbles](#hdr-color-bubbles); [Apple HDR diagnostic](top-tier.md#apple-hdr-color-bubble-diagnostic), 2026-10-24 |
-| Drawer open and close | 90 | Current Android matrix unmeasured on the middle-tier reference; no 90 Hz claim. **Not met.** Layers/Properties completed native motion: 59.70–59.71 moving window frames/s, interval p99 up to 16.86 ms, 24 MP photo, thermal 0, active display mode 60 Hz | [Current Android status](#current-android-ui-motion-measurement-status); [Combined layer drawer](#combined-layer-drawer), 2026-10-10 |
-| Zen fade, expanded configuration and dialog page transitions | 90 | Current Android matrix unmeasured on the middle-tier reference; no 90 Hz claim. Unmeasured on the reference tablet, including Windows header replacement during live theme changes; controlled-clock and input checks do not qualify presentation timing | [Current Android status](#current-android-ui-motion-measurement-status); [Shared chrome](../ui/shared-ui.md#window-chrome-and-zen-mode); [numeric controls](../ui/numeric-controls.md) |
-| Grouped tool menus, drawer switching and tile drag | 90 | Current Android matrix unmeasured on the middle-tier reference; no 90 Hz claim. Not measured on reference hardware | [Current Android status](#current-android-ui-motion-measurement-status); [Tool variations](../ui/panel-customization.md#tool-variations); desktop functional checks do not qualify this tier |
-| Colour wheel or picker drag | 90 | Current Android matrix unmeasured on the middle-tier reference; no 90 Hz claim. Huion: frame CPU p50 4.6–5.1 ms, p95 under 9.6 ms; XP-Pen swatch comparison below is diagnostic only. Huion wheel drags (FrameMetrics, release benchmark, one 5 s mouse and one touch drag each, 90 Hz panel): Edit Color dialog 79.4 / 87.4 fps presented, panel wheel 77.1 / 79.2 fps; not met | [Current Android status](#current-android-ui-motion-measurement-status); [Colour picker](../ui/color-picker.md); [swatch comparison](#selected-swatch-comparison), 2026-10-03; `AndroidWorkspacePerformanceTest#editColorWheelFrameTiming`, 2026-10-04 |
-| Slider and value scrub: size, opacity, flow | 90 | Current Android matrix unmeasured on the middle-tier reference; no 90 Hz claim. Numeric input and geometry verified on MovinkPad 11; moving presentations unmeasured. Workstation diagnostics do not qualify this tier | [Current Android status](#current-android-ui-motion-measurement-status); [GTK](top-tier.md#gtk-panel-slider-diagnostic) and [Web](top-tier.md#web-numeric-panel-diagnostic), 2026-10-10 |
+| HDR color bubble drag and intensity scrub | 90 | Verified90Hz drag cadence 88.717–89.411 actual presents/s, p99 11.775 ms; intensity **not met**, 44.184–45.224/s, p99 44.660 ms. Empty60Hz session-header sample contains no actual presents; moving contacts90Hz. Apple evidence remains separate. | [Current Android status](#current-android-ui-motion-measurement-status); [Apple HDR diagnostic](top-tier.md#apple-hdr-color-bubble-diagnostic), 2026-10-29 |
+| Drawer open and close | 90 | Native header open/close has66 actual-SF diagnostic windows on verified90Hz, worst gap p99 100.470 ms. No sustained FPS claim. | [Current Android status](#current-android-ui-motion-measurement-status); harness `be0038bc1`, 2026-10-29 |
+| Zen fade, expanded configuration and dialog page transitions | 90 | Historical observations below; current availability is in the Android status above. Unmeasured on the reference tablet, including Windows header replacement during live theme changes; controlled-clock and input checks do not qualify presentation timing | [Current Android status](#current-android-ui-motion-measurement-status); [Shared chrome](../ui/shared-ui.md#window-chrome-and-zen-mode); [numeric controls](../ui/numeric-controls.md) |
+| Grouped tool menus, drawer switching and tile drag | 90 | Historical observations below; current availability is in the Android status above. Not measured on reference hardware | [Current Android status](#current-android-ui-motion-measurement-status); [Tool variations](../ui/panel-customization.md#tool-variations); desktop functional checks do not qualify this tier |
+| Colour wheel or picker drag | 90 | **Panel not met.** Verified90Hz panel 74.249–76.834 actual presents/s, p99 22.707 ms. Edit Color 88.891–89.410/s, p99 12.001 ms clears presentation cadence; marker freshness is unmeasured. | [Current Android status](#current-android-ui-motion-measurement-status), 2026-10-29 |
+| Slider and value scrub: size, opacity, flow | 90 | Final exact-resolver 90Hz observations are recorded. Size slider 70.795–72.517 actual presents/s, p99 178.543 ms, delivered 60.707–60.874 values/s; all six brush controls and demand/delivery appear in current table. | [Current Android status](#current-android-ui-motion-measurement-status), 2026-10-29 |
 | Toolbar Size/Strength: Show value and Expand to fit | 90 | Unmeasured on reference hardware; functional platform journeys do not qualify this tier | [Slider display checks](../ui/toolbar-components.md#checks), 2026-10-25 |
-| Canvas action bar show, hide and move | 90 | Current Android matrix unmeasured on the middle-tier reference; no 90 Hz claim. **Not met.** UI frame p50: 22.8 ms show and hide, 34.8 ms moving the bar | [Current Android status](#current-android-ui-motion-measurement-status); `cbfad9e5`, 2026-09-26 |
-| Tool Options or panel content change | 90 | Current Android matrix unmeasured on the middle-tier reference; no 90 Hz claim. **Not met.** UI frame p50 21.4 ms | [Current Android status](#current-android-ui-motion-measurement-status); `cbfad9e5`, 2026-09-26 |
-| List scrolling: layers, brushes, filters | 90 | Current Android matrix unmeasured on the middle-tier reference; no 90 Hz claim. Unmeasured on the reference tablet; GTK Sketch with 1,000 layers has a desktop diagnostic only. Windows chrome rail scrolling and edge arbitration are unmeasured on reference hardware (2026-10-28). | [Current Android status](#current-android-ui-motion-measurement-status); [GTK layer input diagnostic](top-tier.md#gtk-layer-input-diagnostic) |
-| Menu open and close | 90 | Current Android matrix unmeasured on the middle-tier reference; no 90 Hz claim. Application menu heading switching unmeasured on the tier canvas | [Current Android status](#current-android-ui-motion-measurement-status); [Menu interaction](../ui/window-bar.md); mouse and pen functional checks do not qualify presented frame rate |
+| Canvas action bar show, hide and move | 90 | Historical observations below; current availability is in the Android status above. **Not met.** UI frame p50: 22.8 ms show and hide, 34.8 ms moving the bar | [Current Android status](#current-android-ui-motion-measurement-status); `cbfad9e5`, 2026-09-26 |
+| Tool Options or panel content change | 90 | Historical observations below; current availability is in the Android status above. **Not met.** UI frame p50 21.4 ms | [Current Android status](#current-android-ui-motion-measurement-status); `cbfad9e5`, 2026-09-26 |
+| List scrolling: layers, brushes, filters | 90 | Layers centering and Brushes overflow fixture checks fail before qualified motion; Filters was not reached before the final user scope ended. No 90Hz list-cadence claim; GTK/Windows evidence remains separate. | [Current Android status](#current-android-ui-motion-measurement-status), 2026-10-29 |
+| Menu open and close | 90 | Historical observations below; current availability is in the Android status above. Application menu heading switching unmeasured on the tier canvas | [Current Android status](#current-android-ui-motion-measurement-status); [Menu interaction](../ui/window-bar.md); mouse and pen functional checks do not qualify presented frame rate |
 | G-Pen 1536 px stroke with a pending language change | 90 | **Not met.** 56.80 fresh updates/s (52.40–56.99), completion-gap p99 32.08–34.97 ms | Language-change diagnostic below; synthetic owner replay, no scanout qualification |
 
 ## HDR color bubbles
