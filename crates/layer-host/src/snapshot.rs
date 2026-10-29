@@ -81,7 +81,7 @@ impl NativeHost {
     /// Full snapshots and motion use the same acknowledgement/serialization path.
     pub fn take_update_bytes(&mut self) -> Result<Option<Vec<u8>>, serde_json::Error> {
         self.model_transport = false;
-        self.last_model_snapshot = None;
+        self.model_updates = crate::ModelUpdates::default();
         let mut bytes = Vec::new();
         let mut serializer = serde_json::Serializer::with_formatter(&mut bytes, SnapshotFormatter);
         Ok(self
@@ -94,7 +94,7 @@ impl NativeHost {
     /// Consumers of take_update_bytes refresh all models for dimension changes.
     pub fn take_layout_update_bytes(&mut self) -> Result<Option<Vec<u8>>, serde_json::Error> {
         self.model_transport = false;
-        self.last_model_snapshot = None;
+        self.model_updates = crate::ModelUpdates::default();
         self.layout_update_bytes()
     }
 

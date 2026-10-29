@@ -131,7 +131,7 @@ pub struct NativeHost {
     last_pen: Option<PenEvent>,
     paint_start_sequence: u64,
     last_snapshot: Option<SnapshotKey>,
-    last_model_snapshot: Option<model_update::ModelBaseline>,
+    model_updates: ModelUpdates,
     model_transport: bool,
     panel_vectors: std::cell::RefCell<layer_ui::PanelVectorCache>,
     pixel_scale: f32,
@@ -242,7 +242,7 @@ impl NativeHost {
         *self.catalog = layer_ui::ui_catalog_localized(self.session.localization());
         self.localization_generation = self.localization_generation.saturating_add(1);
         self.last_snapshot = None;
-        self.last_model_snapshot = None;
+        self.model_updates = ModelUpdates::default();
         self.last_workspace_model_revision = None;
         self.last_workspace_content_revision = None;
         true
@@ -277,7 +277,7 @@ impl NativeHost {
             last_pen: None,
             paint_start_sequence: 0,
             last_snapshot: None,
-            last_model_snapshot: None,
+            model_updates: ModelUpdates::default(),
             model_transport: false,
             panel_vectors: Default::default(),
             pixel_scale: 1.,

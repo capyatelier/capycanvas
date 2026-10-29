@@ -56,7 +56,7 @@ fn difference<'a>(
 
 /// The last full model and the byte range of each top-level field, so the next
 /// update splits only the new model.
-pub(crate) struct ModelBaseline {
+struct ModelBaseline {
     text: String,
     fields: BTreeMap<String, std::ops::Range<usize>>,
 }
@@ -71,10 +71,6 @@ impl ModelUpdates {
     /// Full models establish the baseline; layout, camera and other packets
     /// pass through without changing it.
     pub fn publish(&mut self, next: Vec<u8>) -> Result<Vec<u8>, serde_json::Error> {
-        Self::encode(&mut self.baseline, next)
-    }
-
-    fn encode(baseline: &mut Option<ModelBaseline>, next: Vec<u8>) -> Result<Vec<u8>, serde_json::Error> {
         let text = String::from_utf8(next).map_err(serde::de::Error::custom)?;
         let fields: Fields = serde_json::from_str(&text)?;
         if !fields.contains_key("state") { return Ok(text.into_bytes()); }
@@ -82,7 +78,7 @@ impl ModelUpdates {
             let start = value.get().as_ptr() as usize - text.as_ptr() as usize;
             (key.to_owned(), start..start + value.get().len())
         }).collect();
-        let bytes = match baseline.as_ref() {
+        let bytes = match self.baseline.as_ref() {
             Some(previous) if previous.fields.keys().map(String::as_str).eq(fields.keys().copied()) => {
                 let mut update = Update::default();
                 let mut path = Vec::new();
@@ -96,7 +92,7 @@ impl ModelUpdates {
             _ => text.clone().into_bytes(),
         };
         drop(fields);
-        *baseline = Some(ModelBaseline { text, fields: ranges });
+        self.baseline = Some(ModelBaseline { text, fields: ranges });
         Ok(bytes)
     }
 }
@@ -116,7 +112,7 @@ impl NativeHost {
         let Some(next) = self.layout_update_bytes()? else {
             return Ok(None);
         };
-        ModelUpdates::encode(&mut self.last_model_snapshot, next).map(Some)
+        self.model_updates.publish(next).map(Some)
     }
 }
 
@@ -212,11 +208,11 @@ mod tests {
         host.resize(3600,2200,2.).unwrap();
         assert_eq!(host.logical,logical);
         let packed=host.panel_vector_data();
-        let baseline=host.last_model_snapshot.as_ref().unwrap().text.clone();
+        let baseline=host.model_updates.baseline.as_ref().unwrap().text.clone();
         assert_eq!(host.snapshot_bytes().unwrap(),host.snapshot_bytes().unwrap());
         assert!(host.model_transport);
         assert_eq!(host.panel_vector_data(),packed,"a query cannot replace the published geometry cache");
-        assert_eq!(host.last_model_snapshot.as_ref().unwrap().text,baseline);
+        assert_eq!(host.model_updates.baseline.as_ref().unwrap().text,baseline);
         let packet=host.take_model_update_bytes().unwrap().expect("density change must publish even when logical extent is unchanged");
         apply(&mut retained,serde_json::from_slice(&packet).unwrap());
         let mut fresh=host.session.layout(logical).with_panel_bridges();
@@ -332,13 +328,13 @@ mod tests {
                 else {host.dispatch(UiAction::SetBrushSize {value:42.}).unwrap();}
                 let acknowledged=host.last_snapshot.clone();
                 let revisions=(host.last_workspace_model_revision,host.last_workspace_content_revision,host.last_camera_revision);
-                let baseline=host.last_model_snapshot.as_ref().map(|b|b.text.clone());
+                let baseline=host.model_updates.baseline.as_ref().map(|b|b.text.clone());
                 let bytes=host.snapshot_bytes().unwrap();
                 assert_eq!(bytes,host.snapshot_bytes().unwrap());
                 assert!(host.last_snapshot==acknowledged);
                 assert_eq!((host.last_workspace_model_revision,host.last_workspace_content_revision,host.last_camera_revision),revisions);
                 assert_eq!(host.model_transport,model_transport);
-                assert_eq!(host.last_model_snapshot.as_ref().map(|b|b.text.clone()),baseline);
+                assert_eq!(host.model_updates.baseline.as_ref().map(|b|b.text.clone()),baseline);
                 let current: Value=serde_json::from_slice(&bytes).unwrap();
                 let packet=take(&mut host).expect("a query cannot consume the subscriber's pending update");
                 apply(&mut retained,serde_json::from_slice(&packet).unwrap());
