@@ -144,7 +144,7 @@ impl PanelMeasurementCache {
     pub fn request(&self,identity:&PanelMeasurementIdentity,width:f32,split_filters:bool)->PanelMeasurementRequest {
         let mut request=PanelMeasurementRequest {identity:identity.clone(),width:panel_measurement_width(width),split_filters,
             tab_measured:false,body_measured:false};
-        request.tab_measured=self.tab(&request).is_some();request.body_measured=self.body_entry(&request).is_some_and(|entry|entry.body.is_some()&&(identity.cacheable||entry.verified));request
+        request.tab_measured=self.tab(&request).is_some();request.body_measured=self.body_entry(&request,Some(request.width)).is_some_and(|entry|identity.cacheable||entry.verified);request
     }
     fn tab(&self,request:&PanelMeasurementRequest)->Option<f32> {
         let context=self.context.as_ref()?;
@@ -153,15 +153,15 @@ impl PanelMeasurementCache {
         Some(self.tabs.iter().rev().find(|entry|entry.panel==request.identity.panel
             &&entry.key==request.identity.tab&&entry.context.same_metrics(context))?.width)
     }
-    fn body_entry(&self,request:&PanelMeasurementRequest)->Option<&MeasuredBody> {
+    fn body_entry(&self,request:&PanelMeasurementRequest,width:Option<f32>)->Option<&MeasuredBody> {
         let context=self.context.as_ref()?;
         let identity=self.identities.iter().find(|identity|identity.panel==request.identity.panel)?;
         if identity.body!=request.identity.body {return None;}
         self.bodies.iter().rev().find(|entry|entry.panel==request.identity.panel
-            &&entry.key==request.identity.body&&entry.width==request.width
+            &&entry.key==request.identity.body&&entry.body.is_some()&&width.is_none_or(|width|entry.width==width)
             &&entry.split_filters==request.split_filters&&entry.context.same_metrics(context))
     }
-    fn body(&self,request:&PanelMeasurementRequest)->Option<PanelBodyMeasurement> {self.body_entry(request)?.body}
+    fn body(&self,request:&PanelMeasurementRequest)->Option<PanelBodyMeasurement> {self.body_entry(request,Some(request.width)).or_else(||self.body_entry(request,None))?.body}
     pub fn project(&self,requests:&[PanelMeasurementRequest])->Vec<PanelMeasurement> {
         requests.iter().filter_map(|request| {
             let body=self.body(request);let tab=self.tab(request);
@@ -188,12 +188,29 @@ mod tests {
         let cache=cache();let cache=cache.with_reports(vec![report(&cache,200.,600.)]).unwrap();
         let different=request(&cache,300.);
         assert!(different.tab_measured);assert!(!different.body_measured);
-        assert_eq!(cache.project(&[different])[0].content_height,0.);
+        assert_eq!(cache.project(&[different])[0].content_height,600.);
         let cache=cache.with_reports(vec![report(&cache,300.,450.)]).unwrap();
         assert_eq!(cache.project(&[request(&cache,300.)])[0].content_height,450.);
         assert_eq!(cache.project(&[request(&cache,200.)])[0].content_height,600.);
         let late=report(&cache,200.,610.);let cache=cache.with_reports(vec![late]).unwrap();
         assert_eq!(cache.project(&[request(&cache,300.)])[0].content_height,450.);
+    }
+    #[test]
+    fn continuous_width_changes_keep_the_last_body_until_remeasured() {
+        let mut cache=cache();cache.identities[0].panel=Panel::Color;
+        cache=cache.with_reports(vec![report(&cache,280.,244.)]).unwrap();
+        let mut heights=vec![244.];
+        for width in (200..280).rev().map(|width|width as f32) {
+            let pending=request(&cache,width);
+            assert!(!pending.body_measured);
+            let projected=cache.project(&[pending]);
+            assert_eq!(projected[0].content_height,*heights.last().unwrap());
+            heights.push(projected[0].content_height);
+            cache=cache.with_reports(vec![report(&cache,width,width-36.)]).unwrap();
+            heights.push(cache.project(&[request(&cache,width)])[0].content_height);
+        }
+        assert!(heights.iter().all(|height|*height>0.));
+        assert!(heights.windows(2).all(|pair|pair[1]<=pair[0]));
     }
     #[test]
     fn content_and_metric_changes_invalidate_without_retagging_old_facts() {
