@@ -184,6 +184,7 @@ struct WorkspaceDrag {
     item: DockItem,
     panel: Panel,
     source: Bounds,
+    detach_bounds: Bounds,
     source_is_icon: bool,
     torn_off: bool,
     floating: Option<u32>,
@@ -1984,6 +1985,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     item,
                     panel: source.groups[0].active,
                     source: source.bounds,
+                    detach_bounds: source.bounds,
                     source_is_icon: false,
                     torn_off: false,
                     floating: None,
@@ -2013,12 +2015,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                             .find(|i| {
                                 i.panel == panel && i.bounds.contains(position[0], position[1])
                             })
-                            .map(|i| (g.group, g.icons.len(), g.active, i.bounds, false))
+                            .map(|i| (g.group, g.icons.len(), g.active, i.bounds, false, i.bounds))
                     })
             } else {
                 None
             };
-            let (source_id, source_count, source_active, source_bounds, source_floating) =
+            let (source_id, source_count, source_active, source_bounds, source_floating, detach_bounds) =
                 icon_source
                     .or_else(|| {
                         let source = match item {
@@ -2036,6 +2038,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                             source.active,
                             source.bounds,
                             source.floating,
+                            Bounds {
+                                height: if source.tabs_visible { TAB_BAR_HEIGHT.min(source.bounds.height) } else { source.bounds.height },
+                                ..source.bounds
+                            },
                         ))
                     })
                     .ok_or("Unknown drag source")?;
@@ -2059,6 +2065,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     _ => source_active,
                 },
                 source: source_bounds,
+                detach_bounds,
                 source_is_icon: icon_source.is_some(),
                 torn_off: false,
                 floating: (whole && source_floating).then_some(source_id),
@@ -2112,7 +2119,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         drag.moved |= position != drag.press;
         if drag.floating.is_none()
             && !matches!(drag.item, DockItem::Column { .. })
-            && drag.source.distance_to(position) > crate::layout::WORKSPACE_PROXIMITY
+            && drag.detach_bounds.distance_to(position) > crate::layout::WORKSPACE_PROXIMITY
         {
             self.state.workspace.layout.move_item(
                 viewport,
@@ -14547,6 +14554,60 @@ mod tests {
                 assert_eq!(s.state.workspace, after);
                 invoke(&mut s, CommandId::UndoWorkspace);
                 s.state.customization.column_drawers = vec![drawer.clone()];
+            }
+        }
+    }
+
+    #[test]
+    fn tab_detachment_measures_every_direction_from_the_strip() {
+        let viewport = [1200., 900.];
+        for platform in Platform::ALL {
+            for whole in [false, true] {
+                for direction in 0..4 {
+                    let mut s = session(platform);
+                    let group = s.state.workspace.layout.panel_group(Panel::Layers).unwrap();
+                    let source = find_group(&s, viewport, |g| g.id == group);
+                    assert!(source.tabs_visible);
+                    let bounds = source.bounds;
+                    let press = [bounds.x + 30., bounds.y + TAB_BAR_HEIGHT * 0.5];
+                    let edge = match direction {
+                        0 => [press[0], bounds.y],
+                        1 => [press[0], bounds.y + TAB_BAR_HEIGHT],
+                        2 => [bounds.x, press[1]],
+                        _ => [bounds.x + bounds.width, press[1]],
+                    };
+                    let offset = match direction {
+                        0 => [0., -1.],
+                        1 => [0., 1.],
+                        2 => [-1., 0.],
+                        _ => [1., 0.],
+                    };
+                    let point = |distance| [edge[0] + offset[0] * distance, edge[1] + offset[1] * distance];
+                    let item = if whole { DockItem::Group { group } }
+                        else { DockItem::Panel { panel: Panel::Layers } };
+                    let before = s.state.workspace.clone();
+                    s.drag_workspace(item, ContactPhase::Down, press, viewport, &[]).unwrap();
+                    let near = point(crate::layout::WORKSPACE_PROXIMITY);
+                    s.drag_workspace(item, ContactPhase::Move, near, viewport, &[]).unwrap();
+                    assert_eq!(s.state.workspace, before, "{platform:?}/{whole}/{direction}: threshold stays attached");
+                    let away = point(crate::layout::WORKSPACE_PROXIMITY + 1.);
+                    s.drag_workspace(item, ContactPhase::Move, away, viewport, &[]).unwrap();
+                    let drag = s.workspace_drag.unwrap();
+                    assert!(drag.torn_off, "{platform:?}/{whole}/{direction}: beyond the strip threshold detaches");
+                    let preview = drag.preview.unwrap();
+                    assert_eq!([preview.width, preview.height], [bounds.width, bounds.height]);
+                    assert_eq!([preview.x, preview.y], [away[0] - drag.offset[0], away[1] - drag.offset[1]]);
+                    s.drag_workspace(item, ContactPhase::Cancel, away, viewport, &[]).unwrap();
+                    assert_eq!(s.state.workspace, before);
+                    s.drag_workspace(item, ContactPhase::Down, press, viewport, &[]).unwrap();
+                    s.drag_workspace(item, ContactPhase::Up, [600., 450.], viewport, &[]).unwrap();
+                    assert_eq!(s.state.workspace.layout.floating.len(), 1);
+                    let after = s.state.workspace.clone();
+                    invoke(&mut s, CommandId::UndoWorkspace);
+                    assert_eq!(s.state.workspace, before);
+                    invoke(&mut s, CommandId::RedoWorkspace);
+                    assert_eq!(s.state.workspace, after);
+                }
             }
         }
     }

@@ -31,6 +31,23 @@ export async function checkDragCursors({ call, evaluate, settle }) {
   const release = async () => { await call("Input.dispatchMouseEvent", { type: "mouseReleased", ...last, button: "left", buttons: 0, clickCount: 1 }); held = false; await wait(); };
   try {
     for(const theme of ['light','dark'])for(const drawer of [false,true]){
+      await send({type:'restore_workspace',workspace:fixture});await send({type:'set_theme',theme});
+      if(drawer){
+        await send({type:'customize',action:{type:'set_column_collapsed',group:43,collapsed:true}});
+        await send({type:'customize',action:{type:'set_column_drawers',column:43,drawers:true}});
+        await evaluate(`document.querySelector('.collapsed-column[data-column="43"] [data-panel="layers"]').click()`);await wait();
+      }
+      const selector=drawer?'.drawer-tab-strip .dock-tab[data-panel="layers"]':'.tab-list .dock-tab[data-panel="layers"]';
+      const tab=await rect(selector),start=center(tab);
+      await press(start);await move({x:start.x,y:tab.y+tab.height+79});
+      assert.equal(await evaluate('layerApp.state().workspace.layout.floating.length'),0,`${theme} drawer=${drawer}: within the strip threshold stays attached`);
+      await move({x:start.x,y:tab.y+tab.height+81});
+      assert.equal(await evaluate('layerApp.state().workspace.layout.floating.length'),1,`${theme} drawer=${drawer}: downward detachment measures from the strip`);
+      await noSlide();
+      await evaluate("window.dispatchEvent(new Event('blur'))");await release();await clean();
+      assert.equal(await evaluate('layerApp.state().workspace.layout.floating.length'),0,'Cancellation restores the docked panel');
+    }
+    for(const theme of ['light','dark'])for(const drawer of [false,true]){
       const automatic=structuredClone(fixture);
       const panels=drawer?['brushes','sizes','layers','adjustments']:['toolbar','tool_settings','color','palettes','layers','adjustments'];
       const [first,second]=panels;

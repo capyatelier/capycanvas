@@ -10912,19 +10912,18 @@ fn native_tab_slide_input() {
         );
         let mut point = [start[0] - 16., start[1] + 8.];
         if end == "detach" {
-            point = [
-                w.surface.width() as f32 * 0.5,
-                w.surface.height() as f32 * 0.55,
-            ];
+            let source = ui_session(&w)
+                .layout([w.surface.width() as f32, w.surface.height() as f32])
+                .groups.into_iter().find(|g| g.id == group).unwrap().bounds;
+            point = [start[0], source.y + layer_ui::TAB_BAR_HEIGHT + 79.];
+            input.perform(serde_json::json!([{ "point": point }]));
+            assert!(state(&w).workspace.layout.floating.is_empty());
+            assert!(w.workspace_drag.borrow().as_ref().unwrap().tab.is_some());
+            point[1] += 2.;
+            assert!(point[1] < source.y + source.height);
             input.perform(serde_json::json!([{ "point": point }]));
             assert_eq!(state(&w).workspace.layout.floating.len(), 1);
-            let layout = ui_session(&w)
-                .layout([w.surface.width() as f32, w.surface.height() as f32]);
-            let floated = layout
-                .groups
-                .iter()
-                .find(|g| g.floating && g.active == panel)
-                .unwrap();
+            let floated = ui_session(&w).workspace_update().drag.unwrap().group.unwrap();
             assert!(
                 (floated.bounds.x - (point[0] - (start[0] - bounds.x()))).abs() < 1.,
                 "The pointer stays over the grabbed point within the detached tab"
