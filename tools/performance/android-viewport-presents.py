@@ -14,6 +14,7 @@ import math
 import pathlib
 import shutil
 import subprocess
+import struct
 import time
 
 
@@ -283,6 +284,146 @@ def window_presents(run, shown):
     return selected, dict(window_title=title, window_selection="literal native target window" if title is not None else "app-owned aggregate; target window unspecified", owned_surface_present_counts=counts)
 
 
+def replay_numeric(run, resolver):
+    origin = run.get("scalar_origin", {})
+    mapping = origin.get("mapping")
+    inputs = run.get("scalar_input_samples")
+    if not mapping or not inputs or not origin.get("resolved"):
+        run["scalar_replay"] = dict(status="unavailable", reason="Exact control/origin/input geometry missing")
+        return
+    toolbar = mapping.get("host_control") == "toolbar_slider"
+    if toolbar and (not mapping.get("toolbar_control") or mapping.get("bookmark_values") is None):
+        run["scalar_replay"] = dict(status="unavailable", reason="Toolbar DOWN bookmark control/values missing")
+        return
+    def f32(value):
+        return struct.unpack("f", struct.pack("f", value))[0]
+    control = mapping["control"]
+    value = origin["delivered_scalar"]
+    density = origin["density"]
+    down = inputs[0]
+    operation = mapping["operation"]
+    moved = False
+    material_slop = 0.0
+    down_normalizations = []
+    requests = [dict(boot_ns=origin["boot_ns"], request=dict(control=control, value=value, operation=dict(type="format")))]
+    bounds = origin["control_geometry"]["screen_bounds"]
+    for row in inputs:
+        timestamp = row["begin_boot_ns"]
+        contact_begin = run.get("motion", {}).get("contact_begin_boot_ns")
+        if row["action"] == 0 and type(contact_begin) is int and timestamp < contact_begin <= row.get("end_boot_ns", timestamp):
+            down_normalizations.append(dict(input_begin_boot_ns=timestamp, input_end_boot_ns=row["end_boot_ns"],
+                replay_boot_ns=contact_begin, reason="DOWN injection interval contains the recorded contact-start marker"))
+            timestamp = contact_begin
+        if row["action"] == 3:
+            continue
+        if "injected_screen_x" not in row or "injected_screen_y" not in row:
+            run["scalar_replay"] = dict(status="unavailable", reason="Actual Float pointer coordinates missing")
+            return
+        if toolbar:
+            if row["action"] == 1:
+                continue
+            if row["action"] != 0 and not moved:
+                distance = math.hypot(row["injected_screen_x"]-down["injected_screen_x"], row["injected_screen_y"]-down["injected_screen_y"])
+                if distance < 3*density:
+                    continue
+                moved = True
+            vertical = mapping["axis"] == "vertical"
+            travel = f32(f32((bounds[3]-bounds[1] if vertical else bounds[2]-bounds[0])-16*density)/density)
+            local = f32((bounds[3]-row["injected_screen_y"] if vertical else row["injected_screen_x"]-bounds[0])-8*density)
+            position = f32(max(0,min(1,f32(local/f32(travel*density)))))
+            if row["action"] == 0:
+                requests.append(dict(boot_ns=timestamp, toolbar_request=dict(type="slider_bookmark_value", control=mapping["toolbar_control"],
+                    values=[f32(item) for item in mapping["bookmark_values"]], position=position, travel=travel)))
+                continue
+            op = dict(type="position", position=position)
+        elif operation in ["scrub", "relative_position"]:
+            pixels = f32(f32(down["injected_screen_y"]-row["injected_screen_y"])/density)
+            if not moved and abs(pixels) <= origin["touch_slop_px"]/density:
+                continue
+            moved = True
+            op = dict(type="scrub", origin=value, pixels=pixels, fine=False) if operation == "scrub" else dict(type="position", position=f32(f32(origin["resolved"]["fill"])+f32(pixels/200)))
+        elif operation == "position":
+            if mapping.get("show_thumb") is not False or mapping.get("track_inset_dp") != 0:
+                run["scalar_replay"] = dict(status="unavailable", reason="Measured slider thumb/track contract missing")
+                return
+            if row["action"] == 0:
+                continue
+            if row["action"] == 1:
+                if moved:
+                    continue
+                local = f32(down["injected_screen_x"]-bounds[0])
+            else:
+                delta = f32(row["injected_screen_x"]-down["injected_screen_x"])
+                if not moved:
+                    if abs(delta) < origin["touch_slop_px"]:
+                        continue
+                    material_slop = math.copysign(origin["touch_slop_px"], delta)
+                    moved = True
+                local = f32(f32(row["injected_screen_x"]-bounds[0])-material_slop)
+            op = dict(type="position", position=f32(max(0, min(1, f32(local/f32(bounds[2]-bounds[0]))))))
+        else:
+            run["scalar_replay"] = dict(status="unavailable", reason="Unsupported native numeric operation")
+            return
+        requests.append(dict(boot_ns=timestamp, previous_float_value=bool(mapping.get("callback_float32")), previous_value=not mapping.get("callback_float32",False), request=dict(control=control, value=value, operation=op)))
+    result = subprocess.run([str(resolver)], input="".join(json.dumps(row)+"\n" for row in requests), text=True, capture_output=True, check=True)
+    resolved = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
+    if len(resolved) != len(requests) or any("error" in row for row in resolved):
+        raise ValueError("Shared numeric resolver failed or returned incomplete replay")
+    run["scalar_implied_samples"] = [dict(boot_ns=row["boot_ns"], value=row["float_value"] if mapping.get("callback_float32") else row["resolved"]["value"]) for row in resolved]
+    run["scalar_replay"] = dict(status="exact", resolver=str(resolver), source="captured native control/origin/Float input; shared NumericRequest resolver", operation=operation, down_boundary_normalizations=down_normalizations)
+
+
+def scalar_implied_summary(run, delivered_times):
+    rows = run.get("scalar_implied_samples")
+    proof = run.get("scalar_replay", {})
+    if rows is None or proof.get("status") != "exact":
+        return dict(implied_value_gate="unavailable: exact shared-resolver replay required")
+    begin, end = run["motion"]["contact_begin_boot_ns"], run["motion"]["contact_end_boot_ns"]
+    previous_time = None
+    previous_value = run.get("scalar_origin", {}).get("delivered_scalar")
+    implied = []
+    for row in rows:
+        timestamp = row["boot_ns"]
+        if type(timestamp) is not int or previous_time is not None and timestamp < previous_time:
+            raise ValueError("Implied scalar timestamps must be monotonic")
+        previous_time = timestamp
+        if not begin <= timestamp <= end:
+            continue
+        value = row["value"]
+        if previous_value is not None and value != previous_value:
+            implied.append(timestamp)
+        previous_value = value
+    response_gaps = []
+    for before, after in zip([begin] + delivered_times, delivered_times + [end]):
+        demand = next((time for time in implied if (before < time or before == begin == time) and time <= after), None)
+        if demand is not None:
+            response_gaps.append((after-demand)/1e6)
+    count = len(implied)
+    eligible = []
+    previous = run.get("scalar_origin", {}).get("delivered_scalar")
+    cursor = 0
+    value = previous
+    for opportunity in run.get("scalar_display_opportunities_boot_ns", []):
+        while cursor < len(rows) and rows[cursor]["boot_ns"] <= opportunity:
+            value = rows[cursor]["value"]
+            cursor += 1
+        if begin <= opportunity <= end and previous is not None and value != previous:
+            eligible.append(opportunity)
+        previous = value
+    return dict(implied_value_gate="shared-resolver demand; raw ratio is descriptive, not refresh-qualified or pixel latency",
+                display_eligible_implied_changes=len(eligible) if "scalar_display_opportunities_boot_ns" in run else None,
+                display_eligible_implied_changes_per_s=len(eligible)*1e9/(end-begin) if "scalar_display_opportunities_boot_ns" in run else None,
+                display_eligible_implied_timestamps_boot_ns=eligible,
+                display_opportunity_proof=run.get("scalar_display_opportunity_proof", "unavailable"),
+                delivered_to_display_eligible_change_ratio=len(delivered_times)/len(eligible) if eligible else None,
+                implied_value_changes=count, implied_value_changes_per_s=count*1e9/(end-begin),
+                implied_value_gap_p99_ms=quantile([(b-a)/1e6 for a,b in zip(implied,implied[1:])], .99),
+                implied_value_timestamps_boot_ns=implied,
+                delivered_to_implied_change_ratio=len(delivered_times)/count if count else None,
+                demand_conditioned_delivery_gap_p99_ms=quantile(response_gaps, .99),
+                demand_conditioned_delivery_gap_max_ms=max(response_gaps, default=None))
+
+
 def scalar_draw_summary(run):
     samples = run.get("scalar_draw_samples")
     if samples is None:
@@ -291,7 +432,8 @@ def scalar_draw_summary(run):
     begin, end = contact["contact_begin_boot_ns"], contact["contact_end_boot_ns"]
     if type(begin) is not int or type(end) is not int or end <= begin:
         raise ValueError("Scalar draw observations require an ordered contact")
-    previous = {}
+    origin = run.get("scalar_origin", {})
+    previous = {"delivered_scalar": origin["delivered_scalar"]} if "delivered_scalar" in origin else {}
     changes = {"delivered_scalar": [], "visual_signature": []}
     last_time = None
     observations = []
@@ -321,6 +463,7 @@ def scalar_draw_summary(run):
         result.update({prefix+"_changes": len(times), prefix+"_changes_per_s": len(times)*1e9/(end-begin),
                        prefix+"_gap_p99_ms": quantile([(b-a)/1e6 for a,b in zip(times,times[1:])], .99),
                        prefix+"_timestamps_boot_ns": times})
+    result.update(scalar_implied_summary(run, changes["delivered_scalar"]))
     if "scalar_observer_overhead" in run:
         result["scalar_observer_overhead"] = run["scalar_observer_overhead"]
     inputs = run.get("scalar_input_samples")
@@ -351,6 +494,15 @@ def chrome_summary(run, shown):
     shown, surfaces = window_presents(run, shown)
     if run.get("motion") == "layer-selection":
         return dict(selection_observations(run, shown), **surfaces)
+    if run.get("scalar_implied_samples") is not None and isinstance(run.get("motion"), dict):
+        begin, end = run["motion"]["contact_begin_boot_ns"], run["motion"]["contact_end_boot_ns"]
+        anchor = next((time for time in sorted(shown.values()) if begin <= time <= end), None)
+        hz = run.get("display_hz")
+        if anchor is not None and isinstance(hz, (int, float)) and hz > 0:
+            period = 1e9 / hz
+            first = anchor - math.floor((anchor-begin)/period)*period
+            run = dict(run, scalar_display_opportunities_boot_ns=[round(first+i*period) for i in range(int((end-first)/period)+1)],
+                       scalar_display_opportunity_proof="inferred display-mode lattice anchored to actual literal-target SF completion; not fresh buffer identity")
     completeness = geometry_completeness(run)
     discrete = run.get("qualification") == "diagnostic" or run.get("label") in DISCRETE_CHROME_LABELS or run.get("motion") in ["layer-selection", "layer-properties"]
     windows = run.get("active_windows")
@@ -458,8 +610,11 @@ def main():
     p.add_argument("--theme", choices=["light", "dark"], default="light")
     p.add_argument("--profile", action="store_true", help="Workspace diagnostic: Compose trace and 199 Hz app-only CPU stacks during the first measured contact; not FPS qualification")
     p.add_argument("--attribution", action="store_true", help="Diagnostic app/UI/scheduler attribution trace; no FPS qualification")
+    p.add_argument("--numeric-resolver", type=pathlib.Path, help="Shared NumericRequest JSONL replay executable")
     p.add_argument("--labels", help="Comma-separated native UI labels; only with --workspace-workload ui-batch")
     args = p.parse_args()
+    if args.numeric_resolver and not args.numeric_resolver.is_file():
+        p.error("Shared numeric resolver executable is unavailable")
     selected = args.labels.split(",") if args.labels is not None else None
     if selected is not None and args.workspace_workload != "ui-batch":
         p.error("--labels requires --workspace-workload ui-batch")
@@ -602,6 +757,9 @@ def main():
             runs = []
             for filename in reports:
                 raw = json.loads((args.output / filename).read_text())
+                if args.numeric_resolver and raw.get("scalar_draw_samples") is not None:
+                    replay_numeric(raw, args.numeric_resolver)
+                    (args.output / filename).write_text(json.dumps(raw, indent=2) + "\n")
                 result = chrome_summary(raw, shown) if chrome or motion == "column" else workspace_summary(args.processor, local, raw, shown, args.profile)
                 result.update({key: raw[key] for key in ["mode", "mouse"] if key in raw})
                 runs.append(result)

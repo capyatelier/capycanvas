@@ -73,8 +73,8 @@ contacts per variant; p99 is the worst contact presentation-gap p99.
 
 Trial 1 removes the full live-pane offscreen intermediate and retains the
 shadow separately. Trial 2 instead clips a content-only offscreen layer after
-rasterization, with the retained shadow outside. Both are rejected and removed:
-wheel gains accompany lower numeric-control rates. Neither is a production
+rasterization, with the retained shadow outside. Neither was accepted; both
+were removed pending a valid numeric gate. Neither is a shipped production
 frame-rate improvement. Trial 2 reuses the final trial-1 control as its opening
 control; its comparison uses only A2/C1/C2/A3.
 
@@ -104,6 +104,29 @@ Flow-value presentation delta cannot establish a fresh-value regression.
 A subsequent harness records scalar/composed value changes and input positions;
 clip ordering is being rechecked with that gate on the current measurement-cache
 baseline. The earlier presents-only result remains diagnostic.
+
+The corrected numeric gate replays captured controls, origins and Float pointer
+coordinates through shared Rust. The old 1 Hz, ±18–20 dp percent-value scrubs
+imply only about 16–20 distinct changes/s and legitimate turnaround plateaus;
+they cannot establish a delivery stall or reject clip ordering. The new value
+sweep runs at 240 dp/s. A fresh control at `6c6705231`, 12 MP Fit, factory
+density/font, thermal0 and three warmed contacts records:
+
+| Numeric row | Actual presents/s | Present gap p99, ms | Delivered / input-implied / display-eligible changes/s | Delivered gap p99, ms | Demand-conditioned gap p99, ms |
+| --- | --- | --- | --- | --- | --- |
+| Size slider | 38.55 | 166.58 | 27.19 / 172.62 / 52.54 | 246.03 | 238.45 |
+| Size value | 51.35 | 49.91 | 45.70 / 148.77 / 59.54 | 47.94 | 46.62 |
+| Opacity slider | 51.73 | 149.95 | 42.86 / 138.93 / 52.53 | 250.08 | 246.15 |
+| Flow value | 57.25 | 33.35 | 50.37 / 59.87 / 59.54 | 49.06 | 45.28 |
+
+Rates are contact medians; tails are the worst contact p99. All twelve exact
+replays pass. Display-eligible demand uses an inferred 60 Hz lattice anchored
+to actual target-window presents. Draw observations do not establish accepted
+input, matching-value latency or fresh SF buffer identity. Observer wall p99
+is at most0.274ms. The unrelated background editor remained invisible and used
+roughly10% of one CPU core; its activity is retained with the run. No production
+gain is claimed. Evidence: `artifacts/android-ui-motion/round3/numeric-validation/`
+and scratch `round3/small-rounded-abba/A1/numeric-validation/`.
 
 Separate diagnostic traces establish RenderThread drawing/flush work and
 software clip-mask generation. The wheel has about three large logical

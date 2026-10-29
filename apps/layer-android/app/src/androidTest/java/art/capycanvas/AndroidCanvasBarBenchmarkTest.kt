@@ -195,7 +195,7 @@ class AndroidCanvasBarBenchmarkTest {
             var lastDownInjectionNs = 0L
             var lastUpInjectionBootNs = 0L
             var firstDownInjectionBootNs = 0L
-            data class ScalarInput(val begin: Long, val end: Long, val action: Int, val x: Double, val y: Double)
+            data class ScalarInput(val begin: Long, val end: Long, val action: Int, val x: Double, val y: Double, val screenX: Float, val screenY: Float)
             var scalarInputs: MutableList<ScalarInput>? = null
             fun inject(action: Int, down: Long, x: Double, y: Double, pressure: Float) {
                 val inputBoot = if (scalarInputs != null) SystemClock.elapsedRealtimeNanos() else 0L
@@ -209,7 +209,7 @@ class AndroidCanvasBarBenchmarkTest {
                 val event = MotionEvent.obtain(down, SystemClock.uptimeMillis(), action, 1, properties, coords, 0, 0, 1f, 1f, 0, 0, if (injectedToolType == MotionEvent.TOOL_TYPE_FINGER) InputDevice.SOURCE_TOUCHSCREEN else InputDevice.SOURCE_STYLUS, 0)
                 try { check(instrumentation.uiAutomation.injectInputEvent(event, action != MotionEvent.ACTION_MOVE) || action == MotionEvent.ACTION_CANCEL) {
                     "Stylus injection failed: $event"
-                } } finally { scalarInputs?.add(ScalarInput(inputBoot, SystemClock.elapsedRealtimeNanos(), action, x, y)); event.recycle(); if (action == MotionEvent.ACTION_DOWN) lastDownInjectionNs = System.nanoTime() - injectionBegan }
+                } } finally { scalarInputs?.add(ScalarInput(inputBoot, SystemClock.elapsedRealtimeNanos(), action, x, y, coords[0].x, coords[0].y)); event.recycle(); if (action == MotionEvent.ACTION_DOWN) lastDownInjectionNs = System.nanoTime() - injectionBegan }
             }
             var mark = 0L
             var dispatched = 0L
@@ -960,8 +960,21 @@ class AndroidCanvasBarBenchmarkTest {
                     check(samples.any { !it.getBoolean("visible") }) { "Native canvas contact did not hide its bar" }
                 }
                 transitions("ui-bar-show-hide") { barContactTransitions() }
+                fun midpoint(label: String, numeric: JSONObject, value: () -> Double,
+                    control: () -> Pair<ViewRootForTest, SemanticsNode>?, slider: () -> Pair<ViewRootForTest, SemanticsNode>?) {
+                    val expected = JSONObject(Native.number(obj("control" to numeric, "value" to value(),
+                        "operation" to obj("type" to "position", "position" to .5)).toString(), host.languageTag))
+                    nativeTap("$label native midpoint", control = slider)
+                    var stable = 0
+                    waitFor("$label shared and composed midpoint") {
+                        val text = control()?.second?.find { node -> node.config.getOrNull(SemanticsProperties.Text)?.any { it.text == expected.getString("text") } == true }
+                        stable = if (value().toFloat() == expected.getDouble("value").toFloat() && text != null) stable + 1 else 0
+                        stable >= 3
+                    }
+                    chromeFixture.put("scalar_midpoint", expected)
+                }
                 var contactDetails: (() -> JSONObject)? = null
-                fun continuous(label: String, sample: () -> String, drawTarget: (() -> Pair<ViewRootForTest, SemanticsNode>?)? = null, drawValue: (() -> Double)? = null, contact: (Int) -> Unit) {
+                fun continuous(label: String, sample: () -> String, drawTarget: (() -> Pair<ViewRootForTest, SemanticsNode>?)? = null, drawValue: (() -> Double)? = null, prepare: () -> Unit = {}, contact: (Int) -> Unit) {
                     if (!selected(label)) return
                     currentUiLabel = label
                     val variants = mutableSetOf<String>()
@@ -970,6 +983,7 @@ class AndroidCanvasBarBenchmarkTest {
                     var lastDrawSamples = JSONArray()
                     var lastInputSamples = JSONArray()
                     var lastObserverOverhead = JSONObject()
+                    var lastOrigin = JSONObject()
                     contactObserver = {
                         var value: String? = null
                         try { val next = sample(); value = next; variants.add(next) }
@@ -979,78 +993,131 @@ class AndroidCanvasBarBenchmarkTest {
                     fun runContact(milliseconds: Int, phase: String) {
                         samples = JSONArray()
                         val began = SystemClock.elapsedRealtimeNanos()
-                        data class DrawSample(val boot: Long, val scalar: Double, val texts: List<String>, val ranges: List<Float>, var wall: Long, var cpu: Long)
+                        data class DrawSample(val boot: Long, val scalar: Double, val texts: List<String>, val ranges: List<Float>)
                         val drawRows = mutableListOf<DrawSample>()
                         val inputRows = mutableListOf<ScalarInput>()
                         var root: android.view.View? = null
                         var infos = emptyList<androidx.compose.ui.semantics.SemanticsInfo>()
+                        val rebinds = JSONArray()
+                        val observerCosts = mutableListOf<Pair<Long, Long>>()
                         val drawFailure = java.util.concurrent.atomic.AtomicReference<Throwable?>()
-                        val observer = android.view.ViewTreeObserver.OnDrawListener {
-                            if (drawTarget != null && drawFailure.get() == null) try {
+                        val main = android.os.Handler(android.os.Looper.getMainLooper())
+                        var observing = true
+                        var handoff = false
+                        lateinit var observer: android.view.ViewTreeObserver.OnDrawListener
+                        fun bind(reason: String): android.view.View {
+                            val target = checkNotNull(drawTarget?.invoke()) { "$label draw target unavailable" }
+                            fun collect(node: SemanticsNode): List<androidx.compose.ui.semantics.SemanticsInfo> =
+                                listOf(checkNotNull(node.layoutInfo as? androidx.compose.ui.semantics.SemanticsInfo)) + node.children.flatMap(::collect)
+                            val next = collect(target.second).filter { info -> info.semanticsConfiguration?.let { config ->
+                                config.getOrNull(SemanticsProperties.Text) != null || config.getOrNull(SemanticsProperties.ProgressBarRangeInfo) != null
+                            } == true }
+                            check(next.isNotEmpty() && next.all { it.isAttached && it.isPlaced }) { "$label has no attached and placed scalar visual semantics" }
+                            rebinds.put(obj("boot_ns" to SystemClock.elapsedRealtimeNanos(), "reason" to reason,
+                                "old_node_ids" to JSONArray(infos.map { it.semanticsId }), "node_ids" to JSONArray(next.map { it.semanticsId }),
+                                "target_id" to target.second.id, "old_root" to root?.let(System::identityHashCode),
+                                "root" to System.identityHashCode(target.first.view), "workspace_update" to host.snapshot?.opt("workspace_update")))
+                            infos = next
+                            return target.first.view
+                        }
+                        observer = android.view.ViewTreeObserver.OnDrawListener {
+                            if (drawTarget != null && observing && !handoff && drawFailure.get() == null) {
                                 val wall = System.nanoTime()
                                 val cpu = android.os.Debug.threadCpuTimeNanos()
-                                val boot = SystemClock.elapsedRealtimeNanos()
-                                val texts = mutableListOf<String>()
-                                val ranges = mutableListOf<Float>()
-                                for (info in infos) {
-                                    check(info.isAttached && info.isPlaced) { "$label scalar target detached" }
-                                    val config = checkNotNull(info.semanticsConfiguration) { "$label scalar semantics disappeared" }
-                                    config.getOrNull(SemanticsProperties.Text)?.forEach { texts.add(it.text) }
-                                    config.getOrNull(SemanticsProperties.ProgressBarRangeInfo)?.let { ranges.add(it.current) }
-                                }
-                                val scalar = checkNotNull(drawValue).invoke()
-                                val row = DrawSample(boot, scalar, texts, ranges, 0, 0)
-                                drawRows.add(row)
-                                row.wall = System.nanoTime()-wall
-                                row.cpu = android.os.Debug.threadCpuTimeNanos()-cpu
-                            } catch (error: Throwable) { drawFailure.compareAndSet(null, error) }
+                                try {
+                                    val boot = SystemClock.elapsedRealtimeNanos()
+                                    if (infos.any { !it.isAttached || !it.isPlaced }) {
+                                        val nextRoot = bind("detached_or_unplaced")
+                                        if (nextRoot !== root) {
+                                            handoff = true
+                                            rebinds.getJSONObject(rebinds.length() - 1).put("sampled", false)
+                                            main.post {
+                                                try {
+                                                    if (observing) {
+                                                        root?.viewTreeObserver?.takeIf { it.isAlive }?.removeOnDrawListener(observer)
+                                                        root = nextRoot
+                                                        root!!.viewTreeObserver.addOnDrawListener(observer)
+                                                        handoff = false
+                                                        rebinds.put(obj("boot_ns" to SystemClock.elapsedRealtimeNanos(), "reason" to "root_handoff",
+                                                            "root" to System.identityHashCode(nextRoot), "node_ids" to JSONArray(infos.map { it.semanticsId })))
+                                                    }
+                                                } catch (error: Throwable) { drawFailure.compareAndSet(null, error) }
+                                            }
+                                        } else rebinds.getJSONObject(rebinds.length() - 1).put("sampled", true)
+                                    }
+                                    if (!handoff) {
+                                        val texts = mutableListOf<String>()
+                                        val ranges = mutableListOf<Float>()
+                                        for (info in infos) {
+                                            val config = checkNotNull(info.semanticsConfiguration) { "$label scalar semantics disappeared" }
+                                            config.getOrNull(SemanticsProperties.Text)?.forEach { texts.add(it.text) }
+                                            config.getOrNull(SemanticsProperties.ProgressBarRangeInfo)?.let { ranges.add(it.current) }
+                                        }
+                                        val scalar = checkNotNull(drawValue).invoke()
+                                        drawRows.add(DrawSample(boot, scalar, texts, ranges))
+                                    }
+                                } catch (error: Throwable) { drawFailure.compareAndSet(null, error) }
+                                finally { observerCosts.add(System.nanoTime()-wall to android.os.Debug.threadCpuTimeNanos()-cpu) }
+                            }
                         }
                         instrumentation.runOnMainSync {
-                            drawTarget?.let {
-                                val target = checkNotNull(it.invoke()) { "$label draw target unavailable" }
-                                root = target.first.view
-                                fun collect(node: SemanticsNode): List<androidx.compose.ui.semantics.SemanticsInfo> =
-                                    listOf(checkNotNull(node.layoutInfo as? androidx.compose.ui.semantics.SemanticsInfo)) + node.children.flatMap(::collect)
-                                infos = collect(target.second).filter { info -> info.semanticsConfiguration?.let { config ->
-                                    config.getOrNull(SemanticsProperties.Text) != null || config.getOrNull(SemanticsProperties.ProgressBarRangeInfo) != null
-                                } == true }
-                                check(infos.isNotEmpty()) { "$label has no scalar visual semantics" }
+                            if (drawTarget != null) {
+                                root = bind("initial")
+                                lastOrigin = obj("boot_ns" to SystemClock.elapsedRealtimeNanos(), "delivered_scalar" to checkNotNull(drawValue).invoke(),
+                                    "node_ids" to JSONArray(infos.map { it.semanticsId }), "texts" to JSONArray(infos.flatMap {
+                                        it.semanticsConfiguration?.getOrNull(SemanticsProperties.Text)?.map { text -> text.text } ?: emptyList()
+                                    }), "expected_midpoint" to chromeFixture.opt("scalar_midpoint"),
+                                    "mapping" to chromeFixture.opt("scalar_mapping"), "control_geometry" to controlGeometry(drawTarget.invoke()),
+                                    "density" to activity.resources.displayMetrics.density, "touch_slop_px" to android.view.ViewConfiguration.get(activity).scaledTouchSlop,
+                                    "surface_origin" to JSONArray(listOf(host.surfaceOrigin.x, host.surfaceOrigin.y)))
+                            }
+                            chromeFixture.optJSONObject("scalar_mapping")?.getJSONObject("control")?.let { control ->
+                                if (drawTarget != null) lastOrigin.put("resolved", JSONObject(Native.number(obj("control" to control,
+                                    "value" to lastOrigin.getDouble("delivered_scalar"), "operation" to obj("type" to "format")).toString(), host.languageTag)))
                             }
                             root?.viewTreeObserver?.addOnDrawListener(observer)
                         }
                         if (drawTarget != null) scalarInputs = inputRows
-                        try { contact(milliseconds) }
-                        finally {
-                            instrumentation.runOnMainSync { root?.viewTreeObserver?.takeIf { it.isAlive }?.removeOnDrawListener(observer) }
+                        try {
+                            chromeFixture.optJSONObject("scalar_midpoint")?.takeIf { drawTarget != null }?.let { expected ->
+                                check(lastOrigin.getDouble("delivered_scalar").toFloat() == expected.getDouble("value").toFloat() &&
+                                    lastOrigin.array("texts").values().contains(expected.getString("text"))) { "$label pre-DOWN scalar or composed origin differs from its native midpoint" }
+                            }
+                            contact(milliseconds)
+                        } finally {
+                            instrumentation.runOnMainSync { observing = false; root?.viewTreeObserver?.takeIf { it.isAlive }?.removeOnDrawListener(observer) }
                             scalarInputs = null
                             val drawSamples = JSONArray(drawRows.map { row -> obj("boot_ns" to row.boot, "delivered_scalar" to row.scalar,
                                 "visual_signature" to (row.texts.joinToString("|") + "#" + row.ranges.joinToString("|"))) })
                             lastDrawSamples = drawSamples
                             lastInputSamples = JSONArray(inputRows.map { row -> obj("begin_boot_ns" to row.begin, "end_boot_ns" to row.end,
-                                "action" to row.action, "x" to row.x, "y" to row.y) })
-                            lastObserverOverhead = obj("samples" to drawRows.size, "wall_ms" to quantiles(drawRows.map { it.wall / 1e6 }),
-                                "thread_cpu_ms" to quantiles(drawRows.map { it.cpu / 1e6 }))
+                                "action" to row.action, "x" to row.x, "y" to row.y, "injected_screen_x" to row.screenX, "injected_screen_y" to row.screenY) })
+                            lastObserverOverhead = obj("samples" to drawRows.size, "callbacks" to observerCosts.size,
+                                "rebind_count" to rebinds.objects().count { it.optString("reason") == "detached_or_unplaced" }, "bindings" to rebinds,
+                                "wall_ms" to quantiles(observerCosts.map { it.first / 1e6 }), "thread_cpu_ms" to quantiles(observerCosts.map { it.second / 1e6 }))
                             File(output, "$label-$phase-interaction.json").writeText(obj("label" to label, "phase" to phase,
                                 "begin_boot_ns" to began, "end_boot_ns" to SystemClock.elapsedRealtimeNanos(), "fixture" to chromeFixture,
                                 "state_variants" to JSONArray(variants.toList()), "samples" to samples, "scalar_draw_samples" to drawSamples,
-                                "scalar_input_samples" to lastInputSamples, "scalar_observer_overhead" to lastObserverOverhead,
+                                "scalar_input_samples" to lastInputSamples, "scalar_observer_overhead" to lastObserverOverhead, "scalar_origin" to lastOrigin,
                                 "scalar_draw_error" to drawFailure.get()?.stackTraceToString()).toString(2))
                         }
                         drawFailure.get()?.let { throw it }
                     }
                     try {
                         canvasReady("$label primer canvas ready")
+                        prepare()
                         runContact(chromeDuration, "primer")
                         check(variants.size > 1) { "$label primer did not change native state" }
                         repeat(chromeRepeats) { index ->
                             variants.clear()
+                            prepare()
                             measure(label) { runContact(chromeDuration, "contact-${index + 1}") }
                             check(variants.size > 1) { "$label did not change during native contact" }
                             val file = File(output, "$label.json")
                             file.writeText(JSONObject(file.readText()).apply {
                                 if (drawTarget != null) {
                                     put("scalar_draw_samples", lastDrawSamples); put("scalar_input_samples", lastInputSamples)
-                                    put("scalar_observer_overhead", lastObserverOverhead)
+                                    put("scalar_observer_overhead", lastObserverOverhead); put("scalar_origin", lastOrigin)
                                 }
                             }.put("state_variants", variants.size)
                                 .put("contact_index", index + 1).put("primer_ms", chromeDuration).put("fixture", chromeFixture).toString(2))
@@ -1113,6 +1180,16 @@ class AndroidCanvasBarBenchmarkTest {
                 invoke("cancel_transform"); invoke("deselect"); invoke("brush")
                 action(obj("type" to "select_layer", "id" to paintLayer))
                 SystemClock.sleep(1500)
+                fun requireValueSweep(from: Pair<Double, Double>) {
+                    val amplitude = 40 * activity.resources.displayMetrics.density
+                    val y = from.second + host.surfaceOrigin.y
+                    require(y - amplitude >= 0 && y + amplitude <= activity.window.decorView.height) { "Value sweep must remain inside the private window" }
+                }
+                fun valueTravel(seconds: Double): Double {
+                    val distance = seconds * 240.0
+                    val phase = (distance + 40.0) % 160.0
+                    return if (phase <= 80.0) phase - 40.0 else 120.0 - phase
+                }
                 for (id in listOf("size", "opacity", "flow")) {
                     fun field() = state().array("tool_settings").objects().first { it.getString("id") == id }
                     for ((kind, label) in listOf("slider" to "ui-brush-$id-slider", "value" to "ui-brush-$id-value")) {
@@ -1134,27 +1211,36 @@ class AndroidCanvasBarBenchmarkTest {
                             if (findTag("toolbar-setting-$id") != null) { clickControl("toolbar-setting-$id"); popup = true }
                             else { reveal("tool_settings"); panel = true }
                         }
-                        if (kind == "value") {
-                            val sliderTag = "number-slider-${field().getString("label")}"
-                            nativeTap("$label native midpoint") {
-                                childControl("tool-setting-$id", sliderTag)
-                            }
-                        }
+                        chromeFixture.remove("scalar_midpoint")
+                        val prepare = { if (kind == "value") midpoint(label, field().getJSONObject("numeric"), { field().getDouble("value") }, ::control) {
+                            childControl("tool-setting-$id", "number-slider-${field().getString("label")}")
+                        } }
+                        prepare()
                         val bounds = settledControl(label, ::control)
                         val vertical = kind == "value" || component != null && bounds.height() > bounds.width()
                         val from = contactPoint(bounds, if (vertical) .5 else .35, if (vertical) .35 else .5)
-                        val span = if (kind == "slider") (if (vertical) bounds.height() else bounds.width()) * .3 else 18.0 * activity.resources.displayMetrics.density
+                        if (kind == "value") requireValueSweep(from)
+                        val span = (if (vertical) bounds.height() else bounds.width()) * .3
                         chromeFixture.put("native_control", if (component != null) "component-slider-${component.getInt("id")}" else if (panel) "tool-setting-$id" else if (popup) "toolbar-number-menu" else "toolbar-setting-$id")
+                        chromeFixture.put("scalar_mapping", obj("control" to field().getJSONObject("numeric"),
+                            "operation" to if (kind == "value") "scrub" else "position", "fine" to false, "callback_float32" to true, "show_thumb" to false, "track_inset_dp" to 0,
+                            "axis" to if (vertical) "vertical" else "horizontal", "host_control" to if (component != null) "toolbar_slider" else "material_number",
+                            "toolbar_control" to component?.optJSONObject("control"),
+                            "bookmark_values" to component?.getJSONObject("component")?.array("bookmarks")?.objects()?.map { it.getDouble("value") }?.let { JSONArray(it) },
+                            "value_speed_dp_s" to if (kind == "value") 240 else JSONObject.NULL, "value_amplitude_dp" to if (kind == "value") 40 else JSONObject.NULL,
+                            "input_origin" to JSONArray(listOf(from.first, from.second)),
+                            "bounds" to JSONArray(listOf(bounds.left, bounds.top, bounds.right, bounds.bottom))))
                         interactionSnapshot("$label-before", label, ::control)
                         targetWindow(::control)
-                        continuous(label, { field().getDouble("value").toString() }, ::control, { field().getDouble("value") }) { milliseconds ->
-                            drag(from, milliseconds) { t -> if (vertical) 0.0 to span * sin(2 * PI * t) else span * sin(2 * PI * t) to 0.0 }
+                        continuous(label, { field().getDouble("value").toString() }, ::control, { field().getDouble("value") }, prepare) { milliseconds ->
+                            drag(from, milliseconds) { t -> if (kind == "value") 0.0 to activity.resources.displayMetrics.density * valueTravel(t)
+                                else if (vertical) 0.0 to span * sin(2 * PI * t) else span * sin(2 * PI * t) to 0.0 }
                         }
                         interactionSnapshot("$label-after", label, ::control)
                         if (popup) { instrumentation.runOnMainSync { activity.onBackPressedDispatcher.onBackPressed() }; waitFor("numeric popup closed") { findTag("toolbar-number-menu") == null } }
                     }
                 }
-                chromeFixture.remove("native_control")
+                chromeFixture.remove("native_control"); chromeFixture.remove("scalar_midpoint")
                 if (selected("ui-panel-change")) {
                     currentUiLabel = "ui-panel-change"
                     reveal("tool_settings")
@@ -1194,17 +1280,28 @@ class AndroidCanvasBarBenchmarkTest {
                     if (!selected(opacityLabel)) continue
                     currentUiLabel = opacityLabel
                     fun opacityControl() = childControl("layer-opacity", "number-$kind-$opacityCaption")
-                    if (kind == "value") nativeTap("Layer opacity native midpoint") {
+                    chromeFixture.remove("scalar_midpoint")
+                    fun opacity() = state().array("layers").objects().first { it.optBoolean("editing") }.getDouble("opacity")
+                    val prepare = { if (kind == "value") midpoint(opacityLabel, host.catalog.getJSONObject("layer_opacity"), ::opacity, ::opacityControl) {
                         childControl("layer-opacity", "number-slider-$opacityCaption")
-                    }
+                    } }
+                    prepare()
                     val bounds = settledControl(opacityLabel, ::opacityControl)
                     val from = contactPoint(bounds)
-                    val span = if (kind == "slider") bounds.width() * .25 else 18.0 * activity.resources.displayMetrics.density
+                    if (kind == "value") requireValueSweep(from)
+                    val span = bounds.width() * .25
+                    chromeFixture.put("scalar_mapping", obj("control" to host.catalog.getJSONObject("layer_opacity"),
+                        "operation" to if (kind == "value") "relative_position" else "position", "fine" to false, "callback_float32" to true, "show_thumb" to false, "track_inset_dp" to 0,
+                        "axis" to if (kind == "value") "vertical" else "horizontal", "host_control" to "material_number_inline",
+                        "value_speed_dp_s" to if (kind == "value") 240 else JSONObject.NULL, "value_amplitude_dp" to if (kind == "value") 40 else JSONObject.NULL,
+                        "input_origin" to JSONArray(listOf(from.first, from.second)),
+                        "bounds" to JSONArray(listOf(bounds.left, bounds.top, bounds.right, bounds.bottom))))
                     targetWindow(::opacityControl)
-                    continuous(opacityLabel, { state().array("layers").objects().first { it.optBoolean("editing") }.getDouble("opacity").toString() }, ::opacityControl, { state().array("layers").objects().first { it.optBoolean("editing") }.getDouble("opacity") }) { milliseconds ->
-                        drag(from, milliseconds) { t -> if (kind == "value") 0.0 to span * sin(2 * PI * t) else span * sin(2 * PI * t) to 0.0 }
+                    continuous(opacityLabel, { opacity().toString() }, ::opacityControl, ::opacity, prepare) { milliseconds ->
+                        drag(from, milliseconds) { t -> if (kind == "value") 0.0 to activity.resources.displayMetrics.density * valueTravel(t) else span * sin(2 * PI * t) to 0.0 }
                     }
                 }
+                chromeFixture.remove("scalar_midpoint")
                 if (selected("ui-layer-row-opacity")) {
                     currentUiLabel = "ui-layer-row-opacity"
                     val previousLayer = state().array("layers").objects().first { it.optBoolean("editing") }.getLong("id")
@@ -1244,6 +1341,10 @@ class AndroidCanvasBarBenchmarkTest {
                     val previousFixture = chromeFixture
                     chromeFixture = JSONObject(chromeFixture.toString()).put("target_layer", target).put("native_control", "layer-gesture-opacity")
                         .put("gesture", "two_finger_tap").put("gesture_begin_boot_ns", gestureBegan).put("gesture_end_boot_ns", gestureEnded)
+                    chromeFixture.put("scalar_mapping", obj("control" to host.catalog.getJSONObject("layer_opacity"),
+                        "operation" to "position", "axis" to "horizontal", "host_control" to "material_number",
+                        "callback_float32" to true, "show_thumb" to false, "track_inset_dp" to 0,
+                        "bounds" to JSONArray(listOf(bounds.left, bounds.top, bounds.right, bounds.bottom))))
                     targetWindow(::slider)
                     try {
                         continuous("ui-layer-row-opacity", {

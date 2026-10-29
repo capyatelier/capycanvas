@@ -382,6 +382,13 @@ lets its `--adaptive-script` helper enable 90 Hz after private fixture setup.
   delivery and tails alongside actual presents. Draw observations do not prove
   pixel/SF identity or every accepted intermediate value. Reports retain the
   observer's CPU/wall overhead; missing observations cannot qualify freshness.
+  Build `cargo build -p layer-ui --example numeric_replay` with an SSD
+  `CARGO_TARGET_DIR`, then pass its executable as `--numeric-resolver` to replay
+  captured controls, origins and native pointer mappings through shared Rust.
+  Reports separate input-implied demand, display-eligible demand and delivered
+  changes; demand-conditioned gaps exclude unchanged plateaus. The display
+  opportunities are inferred from the display mode and actual target-window
+  presents, not fresh-buffer identities. Value scrubs use a 240 dp/s sweep.
   `ui-bar-show-hide`, `ui-bar-show-hide-zen`, `ui-panel-change` and
   `ui-zen-transition`, `ui-menu-open`, `ui-menu-submenu`, `ui-dialog-transition`,
   `ui-grouped-tool-menu` and `ui-tile-drag` report diagnostic transition windows. Each active window is

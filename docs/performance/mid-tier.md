@@ -44,6 +44,11 @@ for exact fixtures, actual window ownership, partial-run limits and the
 remaining unmeasured journeys. Low-tier success or diagnostic cadence does not
 transfer to the 90 Hz target.
 
+The corrected shared-resolver numeric gate has fresh TCL observations only.
+The former slow percent-value fixture was input-limited; its presentation
+rates cannot qualify freshness. The 240 dp/s fixture and delivered/implied
+value comparison still need a current 90 Hz MovinkPad pass.
+
 ## Android panel composition
 
 The 2026-10-28 retained panel-body change is unmeasured on Wacom MovinkPad 11.

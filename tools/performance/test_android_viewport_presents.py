@@ -460,6 +460,92 @@ class ScalarDrawGateTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,"injection intervals"):
             viewport.scalar_draw_summary(run)
 
+    def test_shared_implied_quantization_excludes_turnaround_without_demand(self):
+        run = dict(motion=dict(contact_begin_boot_ns=0,contact_end_boot_ns=1_000_000_000),
+                   scalar_origin=dict(delivered_scalar=.5), scalar_replay=dict(status="exact"),
+                   scalar_implied_samples=[dict(boot_ns=t,value=v) for t,v in [(0,.5),(100_000_000,.6),(800_000_000,.6),(900_000_000,.5)]])
+        run["scalar_display_opportunities_boot_ns"]=[0,500_000_000,1_000_000_000]
+        result = viewport.scalar_implied_summary(run,[110_000_000,910_000_000])
+        self.assertEqual(result["implied_value_changes"],2)
+        self.assertEqual(result["display_eligible_implied_changes"],2)
+        self.assertEqual(result["delivered_to_implied_change_ratio"],1)
+        self.assertEqual(result["demand_conditioned_delivery_gap_p99_ms"],10)
+        run["scalar_replay"]["status"]="assumed"
+        self.assertNotIn("implied_value_changes",viewport.scalar_implied_summary(run,[]))
+
+    def test_automatic_shared_replay_uses_origin_and_actual_float_input(self):
+        import json
+        run = dict(scalar_origin=dict(boot_ns=0,delivered_scalar=.5,density=2,touch_slop_px=8,
+                    resolved=dict(fill=.5),control_geometry=dict(screen_bounds=[0,0,100,20]),
+                    mapping=dict(control=dict(kind="slider"),operation="scrub",host_control="material_number",callback_float32=True)),
+                   scalar_input_samples=[dict(begin_boot_ns=t,action=a,injected_screen_x=50,injected_screen_y=y) for t,a,y in [(1,0,100),(2,2,96),(3,2,80)]])
+        def resolver(command, **kwargs):
+            rows=[json.loads(line) for line in kwargs["input"].splitlines()]
+            self.assertEqual(rows[0]["request"]["operation"],dict(type="format"))
+            self.assertEqual(rows[1]["request"]["operation"],dict(type="scrub",origin=.5,pixels=10,fine=False))
+            return SimpleNamespace(stdout="\n".join(json.dumps(dict(boot_ns=r["boot_ns"],resolved=dict(value=.525),float_value=.5249999761581421))for r in rows))
+        with patch.object(viewport.subprocess,"run",side_effect=resolver):
+            viewport.replay_numeric(run,"native-replay")
+        self.assertEqual(run["scalar_replay"]["status"],"exact")
+        self.assertEqual(run["scalar_implied_samples"][-1]["value"],.5249999761581421)
+        viewport.replay_numeric({},"unused")
+
+    def test_shared_replay_errors_do_not_qualify(self):
+        run=dict(scalar_origin=dict(boot_ns=0,delivered_scalar=.5,density=1,touch_slop_px=0,resolved=dict(fill=.5),
+                 control_geometry=dict(screen_bounds=[0,0,100,20]),mapping=dict(control={},operation="scrub",host_control="material_number")),
+                 scalar_input_samples=[dict(begin_boot_ns=0,action=0,injected_screen_x=0,injected_screen_y=0)])
+        with patch.object(viewport.subprocess,"run",return_value=SimpleNamespace(stdout='{"boot_ns":0,"error":"invalid"}')):
+            with self.assertRaisesRegex(ValueError,"resolver failed"):
+                viewport.replay_numeric(run,"native-replay")
+
+    def test_material_replay_keeps_initial_signed_slop_on_turnaround(self):
+        import json
+        run=dict(scalar_origin=dict(boot_ns=0,delivered_scalar=.5,density=1,touch_slop_px=5,resolved=dict(fill=.5),
+                 control_geometry=dict(screen_bounds=[0,0,200,20]),mapping=dict(control={},operation="position",host_control="material_number",show_thumb=False,track_inset_dp=0)),
+                 scalar_input_samples=[dict(begin_boot_ns=i,action=a,injected_screen_x=x,injected_screen_y=0) for i,(a,x) in enumerate([(0,60),(2,64),(2,65),(2,72),(2,75),(2,50),(1,50)],1)])
+        def resolver(command,**kwargs):
+            rows=[json.loads(line)for line in kwargs["input"].splitlines()]
+            positions=[r["request"]["operation"]["position"]for r in rows[1:]]
+            for actual,expected in zip(positions,[.3,.335,.35,.225]): self.assertAlmostEqual(actual,expected,places=6)
+            self.assertEqual(len(positions),4)
+            return SimpleNamespace(stdout="\n".join(json.dumps(dict(boot_ns=r["boot_ns"],resolved=dict(value=.5)))for r in rows))
+        with patch.object(viewport.subprocess,"run",side_effect=resolver): viewport.replay_numeric(run,"native-replay")
+
+    def test_toolbar_replay_routes_down_to_shared_bookmarks_and_moves_to_numeric(self):
+        import json
+        run=dict(scalar_origin=dict(boot_ns=0,delivered_scalar=.5,density=1,touch_slop_px=5,resolved=dict(fill=.5),
+                 control_geometry=dict(screen_bounds=[0,0,116,20]),mapping=dict(control={},operation="position",host_control="toolbar_slider",axis="horizontal",callback_float32=True,
+                 toolbar_control=dict(kind="brush_size_slider"),bookmark_values=[1,10])),
+                 scalar_input_samples=[dict(begin_boot_ns=i,action=a,injected_screen_x=x,injected_screen_y=10) for i,(a,x) in enumerate([(0,58),(2,59),(2,68),(1,68)],1)])
+        def resolver(command,**kwargs):
+            rows=[json.loads(line)for line in kwargs["input"].splitlines()]
+            self.assertEqual(len(rows),3)
+            self.assertEqual(rows[1]["toolbar_request"]["position"],.5)
+            self.assertEqual(rows[1]["toolbar_request"]["travel"],100)
+            self.assertAlmostEqual(rows[2]["request"]["operation"]["position"],.6,places=6)
+            self.assertTrue(rows[2]["previous_float_value"])
+            return SimpleNamespace(stdout="\n".join(json.dumps(dict(boot_ns=r["boot_ns"],resolved=dict(value=.5),float_value=.5))for r in rows))
+        with patch.object(viewport.subprocess,"run",side_effect=resolver): viewport.replay_numeric(run,"native-replay")
+
+    def test_down_boundary_normalization_preserves_raw_and_initial_demand(self):
+        import json
+        run=dict(motion=dict(contact_begin_boot_ns=10,contact_end_boot_ns=100),
+                 scalar_origin=dict(boot_ns=0,delivered_scalar=.5,density=1,touch_slop_px=5,resolved=dict(fill=.5),
+                 control_geometry=dict(screen_bounds=[0,0,116,20]),mapping=dict(control={},operation="position",host_control="toolbar_slider",axis="horizontal",callback_float32=True,
+                 toolbar_control=dict(kind="brush_size_slider"),bookmark_values=[1])),
+                 scalar_input_samples=[dict(begin_boot_ns=9,end_boot_ns=11,action=0,injected_screen_x=58,injected_screen_y=10),
+                                       dict(begin_boot_ns=20,end_boot_ns=22,action=2,injected_screen_x=68,injected_screen_y=10)])
+        def resolver(command,**kwargs):
+            rows=[json.loads(line)for line in kwargs["input"].splitlines()]
+            self.assertEqual([r["boot_ns"]for r in rows],[0,10,20])
+            return SimpleNamespace(stdout="\n".join(json.dumps(dict(boot_ns=r["boot_ns"],resolved=dict(value=v),float_value=v))for r,v in zip(rows,[.5,1,1])))
+        with patch.object(viewport.subprocess,"run",side_effect=resolver): viewport.replay_numeric(run,"native-replay")
+        self.assertEqual(run["scalar_input_samples"][0]["begin_boot_ns"],9)
+        self.assertEqual(len(run["scalar_replay"]["down_boundary_normalizations"]),1)
+        result=viewport.scalar_implied_summary(run,[30])
+        self.assertEqual(result["implied_value_changes"],1)
+        self.assertEqual(result["demand_conditioned_delivery_gap_p99_ms"],.00002)
+
 
 if __name__ == "__main__":
     unittest.main()
