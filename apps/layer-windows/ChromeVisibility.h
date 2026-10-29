@@ -8,9 +8,10 @@ struct ChromeVisibility:std::enable_shared_from_this<ChromeVisibility>{
     std::optional<bool> shown;bool interactive=true;
     weak_ref<FrameworkElement> boundElement;
     CompositionTarget::Rendering_revoker frames;
-    void apply(FrameworkElement const& element,bool visible,std::function<void()> changed={},bool placed=true){
+    void apply(FrameworkElement const& element,bool placed,bool hidden,std::function<void()> changed={}){
         if(boundElement.get()!=element){frames.revoke();shown.reset();boundElement=make_weak(element);interactive=element.IsHitTestVisible();}
         if(!placed){frames.revoke();shown.reset();element.IsHitTestVisible(false);element.Opacity(0);element.Visibility(Visibility::Collapsed);return;}
+        bool visible=!hidden;
         element.IsHitTestVisible(visible&&interactive);
         if(shown==visible)return;
         bool initial=!shown;shown=visible;frames.revoke();

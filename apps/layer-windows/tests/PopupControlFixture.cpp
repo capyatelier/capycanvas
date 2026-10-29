@@ -291,11 +291,11 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
         try {
             co_await wait([this]{return anchor.IsLoaded()&&untagged.ActualWidth()>0&&GetForegroundWindow()==hwnd;},L"Fixture did not become arranged and foreground");privacy();
             phase=L"chrome-replacement";auto fade=std::make_shared<ChromeVisibility>();Border previous,replacement,decoration;
-            fade->apply(previous,false);fade->apply(replacement,false);
+            fade->apply(previous,true,true);fade->apply(replacement,true,true);
             require(replacement.Visibility()==Visibility::Collapsed&&replacement.Opacity()==0&&!replacement.IsHitTestVisible(),L"Replacement chrome became visible while Zen remained hidden");
-            fade->apply(replacement,true);
+            fade->apply(replacement,true,false);
             require(replacement.Visibility()==Visibility::Visible&&replacement.Opacity()==1&&replacement.IsHitTestVisible(),L"Replacement chrome did not return from Zen");
-            decoration.IsHitTestVisible(false);fade->apply(decoration,true);
+            decoration.IsHitTestVisible(false);fade->apply(decoration,true,false);
             require(!decoration.IsHitTestVisible(),L"Replacement decorative chrome accepted input");++checks;
             phase=L"registry";auto popup=menu();auto ticket=owner.Begin(data,anchor,popup);pending();
             require(data->dismissTransients(),L"Pending popup ignored window cancellation registry");

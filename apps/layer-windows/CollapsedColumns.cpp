@@ -138,7 +138,7 @@ struct Column:std::enable_shared_from_this<Column>{
         if(std::abs(scroll.VerticalOffset()-offset)>.25)scrollVertical(scroll,offset);
         applying=false;
     }
-    void visible(bool shown){fade->apply(background,shown,[weak=weak_from_this()]{if(auto self=weak.lock();self&&self->changed)self->changed();});}
+    void visible(bool shown){fade->apply(background,true,!shown,[weak=weak_from_this()]{if(auto self=weak.lock();self&&self->changed)self->changed();});}
     J geometryMeasure()const{
         auto box=object(geometry,L"bounds");if(num(box,L"width")<=0||num(box,L"height")<=0||background.Opacity()<=0)return J{};
         A measured;
