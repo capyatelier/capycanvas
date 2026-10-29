@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "NewDrawingDialog.h"
+#include "WorkspaceShadow.h"
 #include "WorkflowMotion.h"
 #include "ColorEditor.h"
 #include "TextureDialog.h"
@@ -35,21 +36,23 @@ constexpr double InputHeight=34,ControlGap=6,RowGap=10,SectionGap=14,FieldWidth=
 constexpr uint32_t PaperColorLimit=64;
 constexpr double PresetTile=128,PresetFrameWidth=116,PresetFrameHeight=86,PresetFit=74,SummaryArt=36,TileGap=10;
 constexpr Size2 Preview{232,250},PreviewFit{196,214},NarrowPreview{348,140},NarrowFit{312,104};
-constexpr winrt::Windows::UI::Color Problem{255,0xe0,0x1b,0x24};
+constexpr Thickness NewDrawingPage{20,18,20,16},DrawerHead{20,18,20,0},DrawerBody{20,10,20,16};
+constexpr double Small=.9,Caption=.82,TileName=.93,Affix=.9,AffixOpacity=.62,Dim=.55;
 
 struct SheetArt {
     Grid root;
-    Border sheet;
-    Canvas grain;
+    Border sheet,ring;
+    Canvas grain,shadows;
+    WorkspaceShadow nearShadow,farShadow;
     Size2 fit{0,0};
-    double tile=40;
+    double tile=40;bool mini=false;
     J shown;
     winrt::Windows::UI::Color paint{};
     hstring grainKey;
-    void init(Size2 bounds,Size2 fitted,double grainTile){
-        tile=grainTile;resize(bounds,fitted);
+    void init(Size2 bounds,Size2 fitted,double grainTile,bool miniature=false){
+        tile=grainTile;mini=miniature;resize(bounds,fitted);
         sheet.HorizontalAlignment(HorizontalAlignment::Center);sheet.VerticalAlignment(VerticalAlignment::Center);
-        sheet.CornerRadius({2,2,2,2});grain.IsHitTestVisible(false);sheet.Child(grain);
+        sheet.CornerRadius({0,0,0,0});grain.IsHitTestVisible(false);sheet.Child(grain);shadows.IsHitTestVisible(false);shadows.Children().Append(farShadow.Root());shadows.Children().Append(nearShadow.Root());ring.IsHitTestVisible(false);ring.BorderThickness({1,1,1,1});ring.BorderBrush(fill(winrt::Windows::UI::Color{26,0,0,0}));shadows.Children().Append(ring);root.Children().Append(shadows);
         root.IsHitTestVisible(false);root.Children().Append(sheet);
     }
     void resize(Size2 bounds,Size2 fitted){root.Width(bounds[0]);root.Height(bounds[1]);fit=fitted;grainKey=L"";}
@@ -63,15 +66,18 @@ struct SheetArt {
         sheet.Width(w);sheet.Height(h);
         bool visible=flag(view,L"shown");
         if(visible)sheet.Background(fill(color));else sheet.Background(checker);
-        sheet.BorderThickness({1,1,1,1});sheet.BorderBrush(data->tint(L"text",31));
+        sheet.BorderThickness({0,0,0,0});
+        auto bounds=winrt::Windows::Foundation::Rect{float((root.Width()-w)/2),float((root.Height()-h)/2),float(w),float(h)};
+        nearShadow.Rounded(float(w),float(h),{0,0,0,0},2,1,.18f);farShadow.Rounded(float(w),float(h),{0,0,0,0},mini?3.f:14.f,mini?1.f:4.f,mini?.16f:.14f);nearShadow.Layout(bounds,1,!mini);farShadow.Layout(bounds,0,true);
+        ring.Visibility(mini?Visibility::Visible:Visibility::Collapsed);ring.Width(w+2);ring.Height(h+2);Canvas::SetLeft(ring,bounds.X-1);Canvas::SetTop(ring,bounds.Y-1);
         auto texture=view.GetNamedValue(L"texture",JsonValue::CreateNullValue());
         ImageSource source{nullptr};
         if(texture.ValueType()==JsonValueType::String)source=paperPreview(data,texture.GetString()).source;
         auto key=texture.Stringify()+L"/"+to_hstring(w)+L"x"+to_hstring(h)+(source?L"/ready":L"");
         grain.Opacity(visible?.2:.08);
         if(key==grainKey)return;
-        grainKey=key;grain.Children().Clear();grain.Width(w-2);grain.Height(h-2);
-        RectangleGeometry clip;clip.Rect({0,0,float(std::max(0.,w-2)),float(std::max(0.,h-2))});grain.Clip(clip);
+        grainKey=key;grain.Children().Clear();grain.Width(w);grain.Height(h);
+        RectangleGeometry clip;clip.Rect({0,0,float(std::max(0.,w)),float(std::max(0.,h))});grain.Clip(clip);
         if(!source)return;
         for(double y=0;y<h;y+=tile)for(double x=0;x<w;x+=tile){
             Image image;image.Source(source);image.Width(tile);image.Height(tile);image.Stretch(Stretch::Fill);
@@ -127,8 +133,8 @@ struct NewDrawingDialog::Impl:std::enable_shared_from_this<Impl>{
 
     Drawer presetsDrawer,paperDrawer,colorDrawer;
     TextBox search,saveName;
-    ScrollViewer tabScroll;
-    StackPanel tabs,summaryText,summaryTop,actions,saveRow;
+    Canvas tabs;
+    StackPanel summaryText,summaryTop,actions,saveRow;
     std::shared_ptr<WorkflowPages> footerPages=std::make_shared<WorkflowPages>();
     Grid presetGrid,summary;
     TextBlock empty,summaryName,summarySize,summaryDetails,paperTitle,colorTitle,paletteTitle,paletteCount;
@@ -251,7 +257,7 @@ struct NewDrawingDialog::Impl:std::enable_shared_from_this<Impl>{
     }
     void input(Control const& control){
         control.Height(InputHeight);control.MinHeight(0);control.MinWidth(0);control.Background(data->brush(L"input"));
-        control.BorderThickness({0});control.CornerRadius(data->controlCorner());control.VerticalAlignment(VerticalAlignment::Center);
+        control.BorderThickness({0,0,0,0});control.CornerRadius(data->controlCorner());control.VerticalAlignment(VerticalAlignment::Center);
         control.VerticalContentAlignment(VerticalAlignment::Center);
     }
     ComboBox choice(hstring const& id){
@@ -265,7 +271,6 @@ struct NewDrawingDialog::Impl:std::enable_shared_from_this<Impl>{
     }
     Button primary(hstring const& id,int column,std::function<void()> action){
         auto result=pickerButton(data,id,column,true,std::move(action));
-        result.IsEnabledChanged([](winrt::Windows::Foundation::IInspectable const& sender,DependencyPropertyChangedEventArgs const& args){sender.as<Button>().Opacity(unbox_value<bool>(args.NewValue())?1.:.5);});
         return result;
     }
     void mark(Button const& target,bool on,Brush const& off){
@@ -274,7 +279,7 @@ struct NewDrawingDialog::Impl:std::enable_shared_from_this<Impl>{
     }
     Button tileButton(hstring const& id){
         auto result=button(data,L"",[]{});result.HorizontalAlignment(HorizontalAlignment::Stretch);result.HorizontalContentAlignment(HorizontalAlignment::Stretch);
-        result.MinHeight(48);result.Padding({6,6,10,6});result.Background(buttonBackground(data));result.FontWeight(winrt::Windows::UI::Text::FontWeights::Bold());
+        result.MinHeight(44);result.Padding({4,4,12,4});result.Background(data->tint(L"text",18));result.FontWeight(winrt::Windows::UI::Text::FontWeights::Bold());
         AutomationProperties::SetAutomationId(result,id);return result;
     }
     StackPanel section(TextBlock const& heading,FrameworkElement const& content){
@@ -313,11 +318,11 @@ struct NewDrawingDialog::Impl:std::enable_shared_from_this<Impl>{
         auto weak=weak_from_this();
         pickerTitle(data,title,L"new-drawing-title");
         art.init(Preview,PreviewFit,40);
-        preview=button(data,L"",sends(op(L"presets")));preview.Width(Preview[0]);preview.Height(Preview[1]);preview.Padding({0});
-        preview.Background(data->tint(L"text",13));preview.CornerRadius({12,12,12,12});preview.Content(art.root);
+        preview=button(data,L"",sends(op(L"presets")));preview.Width(Preview[0]);preview.Height(Preview[1]);preview.Padding({0,0,0,0});
+        preview.Background(data->brush(L"view"));preview.CornerRadius({22*CornerFit,22*CornerFit,22*CornerFit,22*CornerFit});preview.Content(art.root);
         AutomationProperties::SetAutomationId(preview,L"new-drawing-preview");
         captionText=caption();captionText.TextAlignment(TextAlignment::Center);captionText.HorizontalAlignment(HorizontalAlignment::Center);AutomationProperties::SetAutomationId(captionText,L"new-drawing-caption");
-        capacity=caption(false,.82,.6);capacity.TextAlignment(TextAlignment::Center);capacity.HorizontalAlignment(HorizontalAlignment::Center);AutomationProperties::SetAutomationId(capacity,L"new-drawing-capacity");
+        capacity=caption(false,Small);capacity.TextAlignment(TextAlignment::Center);capacity.HorizontalAlignment(HorizontalAlignment::Center);AutomationProperties::SetAutomationId(capacity,L"new-drawing-capacity");
         captions.Spacing(2);captions.Children().Append(captionText);captions.Children().Append(capacity);
         left.Spacing(8);left.VerticalAlignment(VerticalAlignment::Top);left.Children().Append(preview);left.Children().Append(captions);
 
@@ -329,26 +334,26 @@ struct NewDrawingDialog::Impl:std::enable_shared_from_this<Impl>{
         Grid nameRow;nameRow.ColumnSpacing(RowGap);columns(nameRow,{autoWidth(),star()});column(nameRow,nameLabel,0);column(nameRow,name,1);
 
         sizeHeading=caption(true);
-        StackPanel linked;linked.Orientation(Orientation::Horizontal);linked.Spacing(2);
+        StackPanel linked;linked.Orientation(Orientation::Horizontal);linked.Spacing(0);
         for(int i=0;i<2;++i){
-            prefixes[i]=caption(false,1,.6);prefixes[i].Margin({10,0,0,0});
+            prefixes[i]=caption(false,Affix,AffixOpacity);prefixes[i].Margin({10,0,0,0});
             fields[i].Width(FieldWidth);fields[i].Height(InputHeight);fields[i].Background(data->brush(L"input"));fields[i].CornerRadius(data->controlCorner());
             AutomationProperties::SetAutomationId(fields[i],i?L"new-drawing-height":L"new-drawing-width");
             Grid slot;columns(slot,{autoWidth(),star()});column(slot,prefixes[i],0);fields[i].Child(slot);
             if(i)linked.Children().Append(link);
             linked.Children().Append(fields[i]);
             if(!i){
-                link=toggle(L"new-drawing-link",24,InputHeight);
+                link=toggle(L"new-drawing-link",26,InputHeight);
                 link.Click([weak](auto&&,auto&&){if(auto self=weak.lock())self->send(O({{L"op",S(L"linked")},{L"linked",B(!flag(self->shown,L"linked"))}}));});
             }
         }
         unit=choice(L"new-drawing-unit");unit.MinWidth(76);
         unit.SelectionChanged([weak](auto&&,auto&&){if(auto self=weak.lock())self->chose(self->unit,L"units",L"unit");});
-        StackPanel orientation;orientation.Orientation(Orientation::Horizontal);orientation.Spacing(2);orientation.Padding({2,2,2,2});
-        Border orientationWell;orientationWell.Background(data->tint(L"text",15));orientationWell.CornerRadius({data->controlCorner().TopLeft+2,data->controlCorner().TopLeft+2,data->controlCorner().TopLeft+2,data->controlCorner().TopLeft+2});
+        StackPanel orientation;orientation.Orientation(Orientation::Horizontal);orientation.Spacing(2);orientation.Padding({3,3,3,3});
+        Border orientationWell;orientationWell.Background(data->tint(L"text",15));orientationWell.CornerRadius({data->controlCorner().TopLeft+3,data->controlCorner().TopLeft+3,data->controlCorner().TopLeft+3,data->controlCorner().TopLeft+3});
         orientationWell.Child(orientation);orientationWell.VerticalAlignment(VerticalAlignment::Center);AutomationProperties::SetAutomationId(orientationWell,L"new-drawing-orientation");
         for(auto [target,value,id]:{std::tuple{&portrait,L"portrait",L"new-drawing-portrait"},std::tuple{&landscape,L"landscape",L"new-drawing-landscape"}}){
-            *target=toggle(id,30,30);(*target).Content(icon(hstring(L"layer-")+value,data->theme()));
+            *target=toggle(id,30,28);(*target).Content(icon(hstring(L"layer-")+value,data->theme()));
             auto orientationValue=hstring(value);
             target->Click([weak,orientationValue](auto&&,auto&&){if(auto self=weak.lock())self->send(O({{L"op",S(L"orientation")},{L"orientation",S(orientationValue)}}));});
             orientation.Children().Append(*target);
@@ -357,18 +362,18 @@ struct NewDrawingDialog::Impl:std::enable_shared_from_this<Impl>{
         column(dimensions,linked,0);column(dimensions,unit,1);column(dimensions,orientationWell,3);
 
         resolutionLabel=caption();resolutionLabel.Margin({0,0,4,0});
-        resolutionUnit=caption(false,1,.6);
+        resolutionUnit=caption(false,Affix,AffixOpacity);
         resolutionChoices=button(data,L"",[weak]{if(auto self=weak.lock()){
             Primitives::FlyoutShowOptions options;options.Placement(Primitives::FlyoutPlacementMode::BottomEdgeAlignedLeft);self->resolutionMenu.ShowAt(self->resolutionField,options);
         }});
-        resolutionChoices.Width(28);resolutionChoices.Height(InputHeight);resolutionChoices.Content(icon(L"chevron-down",data->theme(),14));
+        resolutionChoices.Width(26);resolutionChoices.Height(26);resolutionChoices.VerticalAlignment(VerticalAlignment::Center);resolutionChoices.CornerRadius({data->controlCorner().TopLeft-2,data->controlCorner().TopLeft-2,data->controlCorner().TopLeft-2,data->controlCorner().TopLeft-2});resolutionChoices.Content(icon(L"chevron-down",data->theme(),16));
         AutomationProperties::SetAutomationId(resolutionChoices,L"new-drawing-resolution-choices");
         columns(resolutionSlot,{{ValueWidth,GridUnitType::Pixel},autoWidth(),autoWidth()});resolutionSlot.ColumnSpacing(2);
         resolutionUnit.Margin({2,0,0,0});column(resolutionSlot,resolutionUnit,1);column(resolutionSlot,resolutionChoices,2);
-        resolutionField.Height(InputHeight);resolutionField.Background(data->brush(L"input"));resolutionField.CornerRadius(data->controlCorner());resolutionField.Child(resolutionSlot);
+        resolutionField.Padding({0,0,3,0});resolutionField.Height(InputHeight);resolutionField.Background(data->brush(L"input"));resolutionField.CornerRadius(data->controlCorner());resolutionField.Child(resolutionSlot);
         AutomationProperties::SetAutomationId(resolutionField,L"new-drawing-resolution-field");
         resolutionItems.Padding({4,4,4,4});resolutionMenu.Content(resolutionItems);AutomationProperties::SetAutomationId(resolutionItems,L"new-drawing-resolution-menu");
-        sizeLine=caption(false,.82,.6);sizeLine.Margin({RowGap,0,0,0});AutomationProperties::SetAutomationId(sizeLine,L"new-drawing-size");
+        sizeLine=caption(false,Small,Dim);sizeLine.Margin({RowGap,0,0,0});AutomationProperties::SetAutomationId(sizeLine,L"new-drawing-size");
         AutomationProperties::SetLiveSetting(sizeLine,Automation::Peers::AutomationLiveSetting::Polite);
         Grid resolutionRow;resolutionRow.ColumnSpacing(ControlGap);columns(resolutionRow,{autoWidth(),autoWidth(),star()});
         column(resolutionRow,resolutionLabel,0);column(resolutionRow,resolutionField,1);column(resolutionRow,sizeLine,2);
@@ -381,7 +386,7 @@ struct NewDrawingDialog::Impl:std::enable_shared_from_this<Impl>{
         depth.SelectionChanged([weak](auto&&,auto&&){if(auto self=weak.lock())self->chose(self->depth,L"depths",L"depth");});
         blending.SelectionChanged([weak](auto&&,auto&&){if(auto self=weak.lock())self->chose(self->blending,L"blendings",L"blending");});
         blendingHost=explainable(blending);blendingHost.Height(InputHeight);
-        spaceLabel=caption(false,.82,.6);depthLabel=caption(false,.82,.6);blendingLabel=caption(false,.82,.6);
+        spaceLabel=caption(false,Caption,Dim);depthLabel=caption(false,Caption,Dim);blendingLabel=caption(false,Caption,Dim);
         int index=0;
         for(auto [heading,control]:{std::pair<TextBlock,FrameworkElement>{spaceLabel,space},{depthLabel,depth},{blendingLabel,blendingHost}}){
             StackPanel cell;cell.Spacing(2);cell.Children().Append(heading);cell.Children().Append(control);column(colors,cell,index++);
@@ -393,10 +398,10 @@ struct NewDrawingDialog::Impl:std::enable_shared_from_this<Impl>{
         paperColor.Click([weak](auto&&,auto&&){if(auto self=weak.lock())self->send(op(L"paper_color"));});
         textureThumbnail=PaperThumbnail::Create(data,ThumbnailSide,20,true);
         paperPatch.Width(ThumbnailSide);paperPatch.Height(ThumbnailSide);paperPatch.IsHitTestVisible(false);
-        paperPatch.Data(squircleRectangle(float(ThumbnailSide),float(ThumbnailSide),{18,18,18,18}));
+        auto patchRadius=float(data->controlCorner().TopLeft-1);paperPatch.Data(squircleRectangle(float(ThumbnailSide),float(ThumbnailSide),{patchRadius,patchRadius,patchRadius,patchRadius}));
         paperPatch.Stroke(data->tint(L"text",31));paperPatch.StrokeThickness(1);
         textureName=caption(true);paperColorName=caption(true);
-        textureRelief=caption(false,.82,.6);textureRelief.LineHeight(0);textureRelief.FontWeight(winrt::Windows::UI::Text::FontWeights::Normal());AutomationProperties::SetAutomationId(textureRelief,L"new-drawing-texture-relief");
+        textureRelief=caption(false,Caption,Dim);textureRelief.LineHeight(0);textureRelief.FontWeight(winrt::Windows::UI::Text::FontWeights::Normal());AutomationProperties::SetAutomationId(textureRelief,L"new-drawing-texture-relief");
         StackPanel textureText;textureText.VerticalAlignment(VerticalAlignment::Center);textureText.Children().Append(textureName);textureText.Children().Append(textureRelief);
         for(auto [tile,picture,label]:{std::tuple<Button,FrameworkElement,FrameworkElement>{texture,textureThumbnail->root,textureText},{paperColor,paperPatch,paperColorName}}){
             Grid content;content.ColumnSpacing(RowGap);columns(content,{autoWidth(),star()});column(content,picture,0);column(content,label,1);tile.Content(content);
@@ -406,7 +411,7 @@ struct NewDrawingDialog::Impl:std::enable_shared_from_this<Impl>{
         right.Spacing(SectionGap);
         for(FrameworkElement part:{FrameworkElement(nameRow),FrameworkElement(section(sizeHeading,sizeRows)),FrameworkElement(section(colorHeading,colors)),FrameworkElement(section(paperHeading,paperTiles))})right.Children().Append(part);
         body.ColumnSpacing(24);body.RowSpacing(SectionGap);body.Children().Append(left);body.Children().Append(right);arrangeBody();
-        page.Padding({PickerPadding,PickerPadding,PickerPadding,PickerPadding});page.Spacing(SectionGap);page.Children().Append(title);page.Children().Append(body);
+        page.Padding(NewDrawingPage);page.Spacing(SectionGap);page.Children().Append(title);page.Children().Append(body);
         scroll.Content(page);scroll.HorizontalScrollBarVisibility(ScrollBarVisibility::Disabled);scroll.VerticalScrollBarVisibility(ScrollBarVisibility::Auto);mouseScrollbars(scroll);
         gate.Content(scroll);gate.IsTabStop(false);gate.HorizontalContentAlignment(HorizontalAlignment::Stretch);gate.VerticalContentAlignment(VerticalAlignment::Stretch);
     }
@@ -415,7 +420,7 @@ struct NewDrawingDialog::Impl:std::enable_shared_from_this<Impl>{
         pickerFooter(data,footer,{GridUnitType::Auto,GridUnitType::Star,GridUnitType::Auto,GridUnitType::Auto});
         presets=pickerButton(data,L"new-drawing-presets-button",0,false,sends(op(L"presets")));
         presetsLabel=caption();presetsLabel.FontWeight(winrt::Windows::UI::Text::FontWeights::Medium());
-        auto up=icon(L"chevron-down",data->theme(),14);up.RenderTransformOrigin({.5f,.5f});RotateTransform turn;turn.Angle(180);up.RenderTransform(turn);
+        auto up=icon(L"chevron-down",data->theme(),16);up.RenderTransformOrigin({.5f,.5f});RotateTransform turn;turn.Angle(180);up.RenderTransform(turn);
         StackPanel content;content.Orientation(Orientation::Horizontal);content.Spacing(6);content.Children().Append(presetsLabel);content.Children().Append(up);presets.Content(content);
         cancel=pickerButton(data,L"new-drawing-cancel",2,false,sends(op(L"cancel")));
         create=primary(L"new-drawing-create",3,[weak]{if(auto self=weak.lock())self->createDrawing();});
@@ -425,8 +430,8 @@ struct NewDrawingDialog::Impl:std::enable_shared_from_this<Impl>{
         auto& panel=target.root;panel.Background(data->brush(L"settings"));panel.Visibility(Visibility::Collapsed);panel.RenderTransform(target.shift);
         AutomationProperties::SetAutomationId(panel,id);
         for(auto height:{GridLength{1,GridUnitType::Auto},GridLength{1,GridUnitType::Star},GridLength{1,GridUnitType::Auto}}){RowDefinition row;row.Height(height);panel.RowDefinitions().Append(row);}
-        target.head.Padding({PickerPadding,PickerPadding,PickerPadding,8});panel.Children().Append(target.head);
-        target.body.Padding({PickerPadding,8,PickerPadding,PickerPadding});target.body.Spacing(SectionGap);
+        target.head.Padding(DrawerHead);panel.Children().Append(target.head);
+        target.body.Padding(DrawerBody);target.body.Spacing(SectionGap);
         target.scroll.Content(target.body);target.scroll.HorizontalScrollBarVisibility(ScrollBarVisibility::Disabled);target.scroll.VerticalScrollBarVisibility(ScrollBarVisibility::Auto);
         mouseScrollbars(target.scroll);Grid::SetRow(target.scroll,1);panel.Children().Append(target.scroll);
         Grid::SetRow(target.footer,2);panel.Children().Append(target.footer);
@@ -441,20 +446,18 @@ struct NewDrawingDialog::Impl:std::enable_shared_from_this<Impl>{
         input(search);search.HorizontalAlignment(HorizontalAlignment::Stretch);search.Padding({10,7,10,0});search.MaxLength(256);search.IsSpellCheckEnabled(false);
         AutomationProperties::SetAutomationId(search,L"new-drawing-search");inheritLanguage(search,data);
         search.TextChanged([weak](auto&&,auto&&){if(auto self=weak.lock();self&&!self->data->updating&&self->search.Text()!=str(self->drawerView(),L"query"))self->send(O({{L"op",S(L"search")},{L"query",S(self->search.Text())}}));});
-        presetsDrawer.head.Children().Append(search);
-        tabs.Orientation(Orientation::Horizontal);tabs.Spacing(4);AutomationProperties::SetAutomationId(tabs,L"new-drawing-tabs");
-        tabScroll.Content(tabs);tabScroll.HorizontalScrollBarVisibility(ScrollBarVisibility::Auto);tabScroll.VerticalScrollBarVisibility(ScrollBarVisibility::Disabled);
-        tabScroll.HorizontalScrollMode(ScrollMode::Enabled);tabScroll.VerticalScrollMode(ScrollMode::Disabled);mouseScrollbars(tabScroll);
+Grid searchField;search.Padding({34,7,10,0});searchField.Children().Append(search);auto searchIcon=icon(L"search",data->theme());searchIcon.Margin({10,0,0,0});searchIcon.HorizontalAlignment(HorizontalAlignment::Left);searchIcon.VerticalAlignment(VerticalAlignment::Center);searchField.Children().Append(searchIcon);presetsDrawer.head.Children().Append(searchField);
+        tabs.HorizontalAlignment(HorizontalAlignment::Stretch);tabs.SizeChanged([weak](auto&&,auto&&){if(auto self=weak.lock())self->arrangeTabs();});AutomationProperties::SetAutomationId(tabs,L"new-drawing-tabs");
         presetGrid.ColumnSpacing(TileGap);presetGrid.RowSpacing(12);AutomationProperties::SetAutomationId(presetGrid,L"new-drawing-presets");
         presetGrid.XYFocusKeyboardNavigation(XYFocusKeyboardNavigationMode::Enabled);
         presetGrid.SizeChanged([weak](auto&&,auto&&){if(auto self=weak.lock())self->arrangePresets();});
-        empty=caption(false,.82,.6);empty.TextWrapping(TextWrapping::Wrap);empty.Visibility(Visibility::Collapsed);AutomationProperties::SetAutomationId(empty,L"new-drawing-presets-empty");
-        for(FrameworkElement part:{FrameworkElement(tabScroll),FrameworkElement(presetGrid),FrameworkElement(empty)})presetsDrawer.body.Children().Append(part);
+        empty=caption(false,Small,Dim);empty.TextWrapping(TextWrapping::Wrap);empty.Visibility(Visibility::Collapsed);AutomationProperties::SetAutomationId(empty,L"new-drawing-presets-empty");
+        for(FrameworkElement part:{FrameworkElement(tabs),FrameworkElement(presetGrid),FrameworkElement(empty)})presetsDrawer.body.Children().Append(part);
         pickerFooter(data,presetsDrawer.footer,{GridUnitType::Star,GridUnitType::Auto});
-        summaryArt.init({SummaryArt,SummaryArt},{SummaryArt-2,SummaryArt-2},18);
-        summaryName=caption(true);AutomationProperties::SetAutomationId(summaryName,L"new-drawing-summary-name");
-        summarySize=caption(false,.82,.6);AutomationProperties::SetAutomationId(summarySize,L"new-drawing-summary-size");
-        summaryDetails=caption(false,.82,.6);AutomationProperties::SetAutomationId(summaryDetails,L"new-drawing-summary-details");
+        summaryArt.init({SummaryArt,SummaryArt},{SummaryArt-2,SummaryArt-2},18,true);
+        summaryName=caption(true,TileName);summaryName.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());AutomationProperties::SetAutomationId(summaryName,L"new-drawing-summary-name");
+        summarySize=caption(false,Small,Dim);AutomationProperties::SetAutomationId(summarySize,L"new-drawing-summary-size");
+        summaryDetails=caption(false,Small,Dim);AutomationProperties::SetAutomationId(summaryDetails,L"new-drawing-summary-details");
         summaryTop.Orientation(Orientation::Horizontal);summaryTop.Spacing(6);summaryTop.Children().Append(summaryName);summaryTop.Children().Append(summarySize);
         summaryText.Spacing(1);summaryText.VerticalAlignment(VerticalAlignment::Center);summaryText.Children().Append(summaryTop);summaryText.Children().Append(summaryDetails);
         summary.ColumnSpacing(RowGap);columns(summary,{autoWidth(),star()});column(summary,summaryArt.root,0);column(summary,summaryText,1);
@@ -489,9 +492,9 @@ struct NewDrawingDialog::Impl:std::enable_shared_from_this<Impl>{
         papers->trail(L"import",L"plus",[weak]{if(auto self=weak.lock())self->importPaper();});
         paperDrawer.body.Children().Append(papers->grid);
         pickerFooter(data,paperDrawer.footer,{GridUnitType::Star,GridUnitType::Auto,GridUnitType::Auto});
-        reliefLabel=caption();reliefUnit=caption(false,1,.6);reliefUnit.Margin({2,0,10,0});
+        reliefLabel=caption();reliefUnit=caption(false,Affix,AffixOpacity);reliefUnit.Margin({2,0,10,0});
         columns(reliefSlot,{{ValueWidth,GridUnitType::Pixel},autoWidth()});reliefSlot.ColumnSpacing(2);column(reliefSlot,reliefUnit,1);
-        reliefField.Height(InputHeight);reliefField.Background(data->tint(L"text",15));reliefField.CornerRadius(data->controlCorner());reliefField.Child(reliefSlot);
+        reliefField.Height(InputHeight);reliefField.Background(data->tint(L"text",18));reliefField.CornerRadius(data->controlCorner());reliefField.Child(reliefSlot);
         AutomationProperties::SetAutomationId(reliefField,L"new-drawing-paper-relief-field");
         reliefRow.ColumnSpacing(RowGap);reliefRow.HorizontalAlignment(HorizontalAlignment::Left);columns(reliefRow,{star(),autoWidth()});
         column(reliefRow,reliefLabel,0);column(reliefRow,reliefField,1);AutomationProperties::SetAutomationId(reliefLabel,L"new-drawing-paper-relief-label");
@@ -503,27 +506,26 @@ struct NewDrawingDialog::Impl:std::enable_shared_from_this<Impl>{
         auto weak=weak_from_this();
         drawer(colorDrawer,L"new-drawing-color-drawer");
         colorTitle=drawerTitle(colorDrawer,L"new-drawing-color-title");
-        colorDrawer.body.Padding({0});
-        StackPanel modes;modes.Orientation(Orientation::Horizontal);modes.Spacing(2);modes.Padding({4,4,4,4});
-        well.Child(modes);well.Background(data->tint(L"text",15));well.CornerRadius({17,17,17,17});well.VerticalAlignment(VerticalAlignment::Center);
+        StackPanel modes;modes.Orientation(Orientation::Horizontal);modes.Spacing(2);modes.Padding({3,3,3,3});
+        well.Child(modes);well.Background(data->tint(L"text",15));well.CornerRadius({data->controlCorner().TopLeft+3,data->controlCorner().TopLeft+3,data->controlCorner().TopLeft+3,data->controlCorner().TopLeft+3});well.VerticalAlignment(VerticalAlignment::Center);
         well.HorizontalAlignment(HorizontalAlignment::Right);AutomationProperties::SetAutomationId(well,L"new-drawing-color-mode");
         for(auto [target,label,glyph,id,transparent]:{std::tuple{&colorMode,&colorModeLabel,L"layer-solid",L"new-drawing-color-mode-color",false},std::tuple{&transparentMode,&transparentModeLabel,L"layer-transparent",L"new-drawing-color-mode-transparent",true}}){
-            *target=toggle(id,0,26);target->Padding({8,0,8,0});target->CornerRadius({13,13,13,13});
-            *label=caption();label->FontWeight(winrt::Windows::UI::Text::FontWeights::Medium());
+            *target=toggle(id,0,28);target->Padding({9,0,9,0});target->CornerRadius(data->controlCorner());
+            *label=caption();label->FontWeight(winrt::Windows::UI::Text::FontWeights::Normal());
             StackPanel content;content.Orientation(Orientation::Horizontal);content.Spacing(5);content.Children().Append(icon(glyph,data->theme(),14));content.Children().Append(*label);
             target->Content(content);
             bool clearSheet=transparent;
             target->Click([weak,clearSheet](auto&&,auto&&){if(auto self=weak.lock())self->send(O({{L"op",S(L"transparent")},{L"transparent",B(clearSheet)}}));});
             modes.Children().Append(*target);
         }
-        paletteTitle=caption();paletteCount=caption(false,1,.6);
+        paletteTitle=caption();paletteCount=caption(false,1,Dim);
         swatches.Orientation(Orientation::Horizontal);swatches.ItemWidth(SwatchSide+4);swatches.ItemHeight(SwatchSide+4);
         AutomationProperties::SetAutomationId(swatches,L"new-drawing-paper-color-tiles");
         for(uint32_t index=0;index<PaperColorLimit;++index){
             auto tile=button(data,L"",[weak,index]{if(auto self=weak.lock();self&&self->form&&index<self->swatchValues.size())self->form->choose(self->swatchValues[index]);});
-            tile.Width(SwatchSide);tile.Height(SwatchSide);tile.Padding({3,3,3,3});tile.CornerRadius({6,6,6,6});
+            tile.Width(SwatchSide);tile.Height(SwatchSide);tile.Padding({3,3,3,3});tile.CornerRadius(data->controlCorner());
             tile.HorizontalContentAlignment(HorizontalAlignment::Stretch);tile.VerticalContentAlignment(VerticalAlignment::Stretch);
-            SolidColorBrush paint;Border patch;patch.CornerRadius({5,5,5,5});patch.Background(paint);patch.BorderBrush(data->tint(L"text",31));patch.BorderThickness({1,1,1,1});tile.Content(patch);
+            SolidColorBrush paint;Border patch;patch.CornerRadius(data->controlCorner());patch.Background(paint);patch.BorderBrush(data->tint(L"text",31));patch.BorderThickness({1,1,1,1});tile.Content(patch);
             AutomationProperties::SetAutomationId(tile,L"new-drawing-paper-color-"+to_hstring(index));tile.Visibility(Visibility::Collapsed);
             tile.ContextRequested([weak,index](winrt::Windows::Foundation::IInspectable const& sender,ContextRequestedEventArgs const& e){if(auto self=weak.lock()){
                 e.Handled(true);self->swatchTarget=index;self->swatchDelete.Text(self->text(L"delete"));self->swatchMenu.ShowAt(sender.as<FrameworkElement>());
@@ -660,6 +662,7 @@ struct NewDrawingDialog::Impl:std::enable_shared_from_this<Impl>{
             binds,nullptr,true,id,false,presentation,&admit);
         auto entry=numberEntry(number);detach(entry);
         entry.Height(InputHeight);entry.TextAlignment(TextAlignment::Right);entry.HorizontalAlignment(HorizontalAlignment::Stretch);
+        entry.Resources().Insert(box_value(L"TextControlForegroundDisabled"),data->tint(L"text",92));
         entry.Padding({4,7,10,0});entry.VerticalAlignment(VerticalAlignment::Center);
         return entry;
     }
@@ -705,9 +708,9 @@ struct NewDrawingDialog::Impl:std::enable_shared_from_this<Impl>{
             auto item=button(data,str(choice,L"label"),[weak,value]{if(auto self=weak.lock()){self->resolutionMenu.Hide();self->send(O({{L"op",S(L"resolution")},{L"value",N(value)}}));}});
             item.HorizontalAlignment(HorizontalAlignment::Stretch);item.HorizontalContentAlignment(HorizontalAlignment::Stretch);item.MinHeight(InputHeight);item.Padding({10,0,10,0});
             item.FontWeight(winrt::Windows::UI::Text::FontWeights::Normal());item.IsEnabled(flag(choice,L"enabled"));
-            if(flag(choice,L"selected"))item.Background(selected(data));
+            if(flag(choice,L"selected"))item.Background(data->tint(L"text",26));
             Grid content;content.ColumnSpacing(16);columns(content,{star(),autoWidth()});
-            auto amount=caption();amount.Text(str(choice,L"label"));auto purpose=caption(false,1,.6);purpose.Text(str(choice,L"purpose"));
+            auto amount=caption();amount.Text(str(choice,L"label"));auto purpose=caption(false,1,Dim);purpose.Text(str(choice,L"purpose"));
             column(content,amount,0);column(content,purpose,1);content.MinWidth(200);item.Content(content);
             AutomationProperties::SetAutomationId(item,L"new-drawing-resolution-"+to_hstring(i));
             AutomationProperties::SetName(item,str(choice,L"label")+L" "+str(choice,L"purpose"));
@@ -730,12 +733,12 @@ struct NewDrawingDialog::Impl:std::enable_shared_from_this<Impl>{
         name.PlaceholderText(str(view,L"untitled"));
         if(name.Text()!=str(view,L"name")&&name.FocusState()==FocusState::Unfocused)name.Text(str(view,L"name"));
         numbers(view);for(auto const& bind:numberBinds)bind();
-        bool linked=flag(view,L"linked");mark(link,linked,clear());link.Content(icon(linked?L"link":L"unlink",data->theme()));
+        bool linked=flag(view,L"linked");link.Background(clear());AutomationProperties::SetItemStatus(link,linked?data->caption(L"search",L"selected"):hstring());auto linkedIcon=icon(linked?L"link":L"unlink",data->theme(),12);linkedIcon.Opacity(linked?1:AffixOpacity);link.Content(linkedIcon);
         items(unit,unitsKey,array(view,L"units"),labelOf,valued(setup.GetNamedValue(L"unit")),L"new-drawing-unit");
         markOrientation();
         fillResolutions(view);
         sizeLine.Text(str(pageView,L"size"));
-        bool problem=flag(pageView,L"problem");sizeLine.Foreground(problem?fill(Problem):data->brush(L"text"));sizeLine.Opacity(problem?1:.6);
+        bool problem=flag(pageView,L"problem");sizeLine.Foreground(problem?data->brush(L"error"):data->brush(L"text"));sizeLine.Opacity(problem?1:Dim);
         auto colorChoice=object(setup,L"color");
         items(space,spacesKey,array(view,L"spaces"),labelOf,valued(colorChoice.GetNamedValue(L"space")),L"document-space");
         items(depth,depthsKey,array(view,L"depths"),labelOf,valued(colorChoice.GetNamedValue(L"depth")),L"document-depth");
@@ -805,13 +808,13 @@ struct NewDrawingDialog::Impl:std::enable_shared_from_this<Impl>{
             tabsKey=key;tabs.Children().Clear();
             for(uint32_t i=0;i<tabList.Size();++i){
                 auto tab=tabList.GetObjectAt(i);
-                auto pill=toggle(L"new-drawing-tab-"+to_hstring(i),0,28);pill.Padding({10,0,10,0});
+                auto pill=toggle(L"new-drawing-tab-"+to_hstring(i),0,28);pill.Padding({11,0,11,0});pill.CornerRadius({14,14,14,14});
                 pill.Content(box_value(str(tab,L"label")));AutomationProperties::SetName(pill,str(tab,L"label"));
                 pill.Click([weak,i](auto&&,auto&&){if(auto self=weak.lock())self->send(O({{L"op",S(L"tab")},{L"index",N(i)}}));});
                 tabs.Children().Append(pill);
             }
         }
-        tabs.Opacity(flag(view,L"tabs_enabled")?1:.4);
+        arrangeTabs();
         for(uint32_t i=0;i<tabs.Children().Size()&&i<tabList.Size();++i){
             auto pill=tabs.Children().GetAt(i).as<Button>();pill.IsEnabled(flag(view,L"tabs_enabled"));
             mark(pill,flag(tabList.GetObjectAt(i),L"selected"),buttonBackground(data));
@@ -840,9 +843,14 @@ struct NewDrawingDialog::Impl:std::enable_shared_from_this<Impl>{
         if(saveName.Text()!=str(save,L"name")&&(starting||saveName.FocusState()==FocusState::Unfocused))saveName.Text(str(save,L"name"));
         pickerLabel(saveConfirm,str(save,L"confirm"));
         bool valid=flag(save,L"can_save");saveConfirm.IsEnabled(valid);
-        saveName.BorderThickness(valid?Thickness{0}:Thickness{1,1,1,1});saveName.BorderBrush(fill(Problem));
+        saveName.BorderThickness(valid?Thickness{0}:Thickness{1,1,1,1});saveName.BorderBrush(fill(color(L"#ee5555")));
         footerPages->show(1);
         if(starting){saveName.Focus(FocusState::Programmatic);saveName.SelectAll();}
+    }
+    void arrangeTabs(){
+        double width=tabs.ActualWidth();if(width<=0)return;double x=0,y=0;
+        for(auto child:tabs.Children()){auto pill=child.as<FrameworkElement>();pill.Measure({INFINITY,28});double w=pill.DesiredSize().Width;if(x>0&&x+w>width){x=0;y+=32;}Canvas::SetLeft(pill,x);Canvas::SetTop(pill,y);x+=w+4;}
+        tabs.Height(tabs.Children().Size()?y+28:0);
     }
     void fillPresets(A const& tiles){
         auto weak=weak_from_this();
@@ -850,12 +858,12 @@ struct NewDrawingDialog::Impl:std::enable_shared_from_this<Impl>{
         auto colors=[&]{std::vector<J> list;for(auto value:tiles)list.push_back(object(object(value.GetObject(),L"sheet"),L"color"));return displayed(list);}();
         for(uint32_t index=0;index<tiles.Size();++index){
             auto tile=tiles.GetObjectAt(index);
-            auto sheet=std::make_shared<SheetArt>();sheet->init({PresetFrameWidth,PresetFrameHeight},{PresetFit,PresetFit},37);
+            auto sheet=std::make_shared<SheetArt>();sheet->init({PresetFrameWidth,PresetFrameHeight},{PresetFit,PresetFit},37,true);
             sheet->show(data,checks(),object(tile,L"sheet"),colors[index]);
-            Border frame;frame.Width(PresetFrameWidth);frame.Height(PresetFrameHeight);frame.CornerRadius({10,10,10,10});frame.BorderThickness({2,2,2,2});
+            Border frame;frame.Width(PresetFrameWidth+6);frame.Height(PresetFrameHeight+6);frame.Padding({1,1,1,1});frame.CornerRadius({26*CornerFit,26*CornerFit,26*CornerFit,26*CornerFit});frame.BorderThickness({2,2,2,2});
             frame.BorderBrush(clear());frame.Background(clear());frame.HorizontalAlignment(HorizontalAlignment::Center);frame.Child(sheet->root);
             auto line=[&](hstring const& value,bool dim,int lines){
-                auto result=caption(false,dim?.82:1,dim?.6:1);result.Text(value);result.TextAlignment(TextAlignment::Center);result.HorizontalAlignment(HorizontalAlignment::Stretch);
+                auto result=caption(false,dim?Caption:TileName,dim?Dim:1);result.Text(value);result.TextAlignment(TextAlignment::Center);result.HorizontalAlignment(HorizontalAlignment::Stretch);
                 result.TextWrapping(TextWrapping::Wrap);result.MaxLines(lines);return result;
             };
             StackPanel content;content.Width(PresetTile);content.Spacing(4);content.Children().Append(frame);
@@ -866,7 +874,7 @@ struct NewDrawingDialog::Impl:std::enable_shared_from_this<Impl>{
             node.Padding({0,0,0,0});node.VerticalAlignment(VerticalAlignment::Top);node.HorizontalAlignment(HorizontalAlignment::Center);node.FontWeight(winrt::Windows::UI::Text::FontWeights::Normal());
             node.Content(content);AutomationProperties::SetAutomationId(node,L"new-drawing-preset-"+to_hstring(index));
             tooltip(node,str(tile,L"name")+L"\n"+str(tile,L"dimensions")+L" · "+str(tile,L"details"));
-            frame.Background(buttonFeedbackBrush(node,data->brush(L"text")));
+            frame.Background(buttonFeedbackBrush(node,data->brush(L"text"),26,41));
             node.DoubleTapped([weak](auto&&,DoubleTappedRoutedEventArgs const& e){if(auto self=weak.lock()){e.Handled(true);self->send(op(L"use_preset"));}});
             if(flag(tile,L"own")){
                 MenuFlyout menu;AutomationProperties::SetAutomationId(menu,L"new-drawing-preset-menu");
@@ -906,7 +914,7 @@ struct NewDrawingDialog::Impl:std::enable_shared_from_this<Impl>{
         auto relief=object(view,L"relief");reliefNumber(relief);
         if(opening)for(auto const& admit:reliefAdmissions)admit(true);
         for(auto const& bind:reliefBinds)bind();
-        bool enabled=flag(relief,L"enabled");reliefEntry.IsEnabled(enabled);reliefRow.Opacity(enabled?1:.5);
+        bool enabled=flag(relief,L"enabled");reliefEntry.IsEnabled(enabled);
     }
     void renderColors(J const& view,bool opening){
         auto weak=weak_from_this();
@@ -915,7 +923,7 @@ struct NewDrawingDialog::Impl:std::enable_shared_from_this<Impl>{
                 [weak](J const& value){if(auto self=weak.lock())self->send(O({{L"op",S(L"paper_color_value")},{L"color",value}}));},
                 [weak](bool blocked){if(auto self=weak.lock())self->colorUse.IsEnabled(!blocked);});
             if(!form)return;
-            form->arrange(narrow);
+            form->arrange(narrow);form->body.Padding({0,0,0,0});
             Grid::SetColumn(well,2);Grid::SetRow(well,0);form->head.Children().Append(well);
             StackPanel heading;heading.Orientation(Orientation::Horizontal);heading.Spacing(8);
             for(auto const& part:{paletteTitle,paletteCount}){detach(part);heading.Children().Append(part);}
@@ -935,7 +943,7 @@ struct NewDrawingDialog::Impl:std::enable_shared_from_this<Impl>{
             swatchTiles[i].BorderBrush(on?Brush(accent(data)):Brush(clear()));swatchTiles[i].BorderThickness(on?Thickness{2,2,2,2}:Thickness{0});
             AutomationProperties::SetItemStatus(swatchTiles[i],on?data->caption(L"search",L"selected"):hstring());
         }
-        addSwatch.IsEnabled(flag(view,L"can_add"));addSwatch.Opacity(flag(view,L"can_add")?1:.5);
+        addSwatch.IsEnabled(flag(view,L"can_add"));
         form->transparent(flag(view,L"transparent")?std::optional<hstring>(text(L"transparent")):std::nullopt);
     }
     void fillPalette(A const& palette){

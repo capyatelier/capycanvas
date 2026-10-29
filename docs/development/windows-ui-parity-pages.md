@@ -53,17 +53,6 @@ style), do not create a local copy in your files; wait for M4.
 constants in `NewDrawingDialog.cpp`, and fix detached number entries in
 `numberField`, not in NumberControl.
 
-**M3. New drawing, Size and Export dialogs, plus the shared Rust rules**
-(`NewDrawingDialog`, `SizeDialog`, `ExportForm`, `ExternalImages`,
-`DocumentView`, shared crates): HEAD-DLG-3, 6, 7, 12 to 15, 17 to 25, 26,
-27 (CHECK), 30, 31, 34, 35, 36. HEAD-DLG-27 and 34 share one palette error
-role; add it in shared Rust and use it on Windows (GTK keeps its theme error
-colour). HEAD-DLG-35 moves the export rules into `capy_export_draft` with a
-headless test. HEAD-DLG-36 adds the drop captions to every registered Fluent
-catalog. Run the shared Rust tests and localization checks on Linux before the
-VM round.
-Leave for M4: HEAD-DLG-1, 2, 4, 5, 8, 9, 10, 11, 16, 28, 29, 32, 33 *(A)*.
-
 **M4. Adopt Agent A's helpers** once P1–P8 are on `origin/main` (find them with
 `git log origin/main --grep='Windows UI parity'`). Move every *(A)* item above
 onto the helpers in one commit: bugs 2 and 13 (HEAD-1, PREF-7, with a zoomed
@@ -461,12 +450,6 @@ paper-tile homogeneous row, ComboBox .07 fill in New drawing (`choiceColors(...,
 - GTK reference: `style.css:546` `.new-drawing-dialog .new-drawing-field entry.number-entry { ... border: 0; background: none; }`.
 - Fix direction: in `numberField`, clear the entry background (and its PointerOver/Focused resources, see HEAD-DLG-4) so only the field Border paints.
 
-##### HEAD-DLG-3: The relief field fill differs from the other New drawing fields
-- Class: METRIC, BORDER/COLOR   Confidence: CERTAIN   Severity: low   Reported bug: none
-- Windows: `NewDrawingDialog.cpp:494` `reliefField.Background(data->tint(L"text",15))` (.059); combos `tint(text,18)` (.07); W/H/resolution fields `brush(L"input")`.
-- GTK reference: `style.css:543`: every `.new-drawing-field` (W, H, resolution, relief) uses `alpha(window-fg,.07)`.
-- Fix direction: one shared field fill for all of them (see HEAD-DLG-1).
-
 ##### HEAD-DLG-4: Default WinUI TextBox hover and focus states show through on every dialog text entry
 - Class: DEFAULT-CONTROL   Confidence: LIKELY (no override exists; the WinUI template swaps Background/BorderBrush/BorderThickness on PointerOver and Focused)   Severity: medium   Reported bug: none
 - Windows: `NewDrawingDialog.cpp:252-256` `input()` sets only `Background`, `BorderThickness{0}`, `CornerRadius`. There are no `TextControlBackgroundPointerOver/Focused` or `TextControlBorderBrushFocused` resource overrides for name, search, saveName or the number entries. `NumberControl.cpp:124-126` overrides only the `...Disabled` keys. Another view already fixes this: `WorkspaceManagerView.cpp:323` inserts `TextControlBackground`, `TextControlBackgroundPointerOver` and `TextControlBackgroundFocused`. `NewDrawingDialog.cpp:843` gives the invalid saveName a 1px red border, which the focused state's `TextControlBorderThemeThicknessFocused` and accent underline will override.
@@ -479,19 +462,6 @@ paper-tile homogeneous row, ComboBox .07 fill in New drawing (`choiceColors(...,
 - GTK reference: `style.css:89` `.choice-well button:checked { background: var(--header-selection) }`, `:90` checked hover -> `--header-selection-hover`, `:573` the hover overlay is `:not(:checked)` for wells, `:563` `button.new-drawing-pill:checked { background: var(--header-selection) }`.
 - Shared source: `theme.rs:323-324` `header_selection`, `header_selection_hover`. `theme.rs:495-498`: they are equal in dark, but light is `selection #c0d7f6` vs `header_selection #afc6e5`. In a modal dialog the glass `selection` variant is also translucent on an opaque sheet.
 - Fix direction: give `mark()` (or a shared `segmentSelected(data)`) `brush(L"header_selection")`, with `buttonFeedback(..., hoverSurface=brush(L"header_selection_hover"))` while checked, as `HeaderView.cpp:172` already does. The canvas-bar segmented control likely shares this.
-
-##### HEAD-DLG-6: The orientation well has the wrong padding, corner and button height
-- Class: METRIC   Confidence: CERTAIN   Severity: low   Reported bug: none
-- Windows: `NewDrawingDialog.cpp:347` `orientation.Padding({2,2,2,2})`; `:348` well corner `controlCorner().TopLeft+2` (9.02); `:351` `toggle(id,30,30)` gives 30x30 buttons.
-- GTK reference: `style.css:556` `.picker-dialog .choice-well.new-drawing-joined { padding: 3px; border-radius: calc(var(--control-radius) + 3px) }` (10.02); `:557` buttons `min-height: 28px`; `:558` `.new-drawing-icons button { min-width: 30px; padding: 0 }`, which gives 30x28 buttons. The well is 34 high in both, but the inner inset and corner differ.
-- Fix direction: add a `joinedWell(data)` helper (padding 3, corner controlCorner+3, button height 28) and use it for both New drawing wells (and HEAD-DLG-7).
-
-##### HEAD-DLG-7: The colour-mode well uses literal non-squircle corners and the wrong button metrics and weight
-- Class: METRIC   Confidence: CERTAIN   Severity: medium   Reported bug: none
-- Windows: `NewDrawingDialog.cpp:507` `modes.Padding({4,4,4,4})`; `:508` `well.CornerRadius({17,17,17,17})`; `:511` `toggle(id,0,26)`, `Padding({8,0,8,0})`, `CornerRadius({13,13,13,13})`, a fully round 26px pill; `:512` label `FontWeights::Medium()`.
-- GTK reference: `style.css:556` well padding 3, radius `control-radius + 3` (10.02); `:557` `.choice-well.new-drawing-joined button { min-height: 28px; padding: 0 9px; border-radius: var(--control-radius); font-weight: 400; }` (7.02). `.picker-dialog .choice-well button {font-weight:500}` at `:510` has equal specificity, and `:557` comes later, so 400 wins.
-- Shared source: `layout.rs:61` control_radius 13 * CornerFit .54.
-- Fix direction: use the same joined-well helper as HEAD-DLG-6: height 28, padding 9, `controlCorner()`, weight Normal, well padding 3 and corner +3. Remove the 17/13 literals.
 
 ##### HEAD-DLG-8: Segmented toggle text sits low (same build as the canvas-bar "scale" radio)
 - Class: VCENTER   Confidence: LIKELY (needs a screenshot to measure)   Severity: medium   Reported bug: #2 (same class), #13
@@ -524,108 +494,11 @@ paper-tile homogeneous row, ComboBox .07 fill in New drawing (`choiceColors(...,
 - GTK reference: `new_drawing.rs:404` resolution `gtk::Popover ... has_arrow(false)`, items are flat buttons (`:894`). `style.css:570` `.new-drawing-dialog popover button.selected { background: alpha(currentColor,.10) }`. The popover surface is `--popover-bg-color: var(--capy-panel)` (`style.css:7`).
 - Fix direction: add a shared popup style helper (presenter background `brush(L"panel")`, line border, control-radius corner, compact padding) and apply it to the ComboBox dropdown resources, the `Flyout` (`FlyoutPresenterStyle`) and `MenuFlyout`s, in both themes.
 
-##### HEAD-DLG-12: The selected resolution row is filled with the selection colour
-- Class: BORDER/COLOR   Confidence: CERTAIN   Severity: low   Reported bug: none
-- Windows: `NewDrawingDialog.cpp:708` `if(flag(choice,L"selected"))item.Background(selected(data));`.
-- GTK reference: `style.css:570` `popover button.selected { background: alpha(currentColor, .10) }`, with .08/.16 overlays on top (`:579`, `:609`).
-- Fix direction: `item.Background(data->tint(L"text",26))` for the selected row.
-
-##### HEAD-DLG-13: The resolution chevron button's hover box fills the whole field height
-- Class: HIGHLIGHT-GEOMETRY, METRIC   Confidence: CERTAIN   Severity: low   Reported bug: none (same class as #6, #14)
-- Windows: `NewDrawingDialog.cpp:364` `resolutionChoices.Width(28);Height(InputHeight /*34*/)`, corner `controlCorner()` (7.02, from `button()`), icon `chevron-down` at 14. `:366` slot spacing 2, and the field has no right padding.
-- GTK reference: `style.css:551` `.new-drawing-combo menubutton > button { min-width: 26px; min-height: 26px; padding: 0; border-radius: calc(var(--control-radius) - 2px) }` (5.02). `:547` field `padding-right: 3px`. The icon is 16 (`icons.rs:49`). The hover box is a 26px square inset 4px top and bottom inside the 34px field.
-- Fix direction: 26x26 button, `VerticalAlignment Center`, corner `controlCorner-2`, field right padding 3, icon 16.
-
-##### HEAD-DLG-14: The link toggle has the wrong width, icon size and checked look
-- Class: METRIC, BORDER/COLOR, HIGHLIGHT-GEOMETRY   Confidence: CERTAIN   Severity: medium   Reported bug: none
-- Windows: `NewDrawingDialog.cpp:341` `toggle(L"new-drawing-link",24,InputHeight)` (24 wide); `:733` `mark(link,linked,clear())` fills it with the selection colour when linked, and `icon(...)` is the default 16. `:332` the linked StackPanel `Spacing(2)`. When unlinked the icon is at full opacity.
-- GTK reference: `style.css:552` `button.new-drawing-link { min-width: 26px; min-height: 34px; padding: 0; background: none; color: alpha(currentColor,.62) }`; `:553` `:checked { background: none; color: var(--accent-color) }`; `:554` `image { -gtk-icon-size: 12px }`. `new_drawing.rs:386` linked Box spacing 0.
-- Fix direction: width 26, icon 12, spacing 0. Linked state: no background fill; show the icon in accent (an accent-tinted SVG, or opacity 1 against .62 unlinked).
-
-##### HEAD-DLG-15: Caption and affix font sizes and dimming don't match GTK
-- Class: METRIC   Confidence: CERTAIN   Severity: low   Reported bug: none
-- Windows (`caption(bold,scale,opacity)`, `NewDrawingDialog.cpp:248`):
-  - W/H prefixes `:334`, resolution unit `:360`, relief unit `:492`: `caption(false,1,.6)`. GTK `.new-drawing-affix { font-size: .9em; opacity: .62 }` (`style.css:542`).
-  - Capacity `:320`: `caption(false,.82,.6)`. GTK `capacity.add_css_class("new-drawing-small")` only (`new_drawing.rs:334`): .9em and not dimmed.
-  - Size line `:371`: `.82`. GTK `dim("new-drawing-small")` (`new_drawing.rs:423`): .9em.
-  - Summary size/details `:456-457` and empty message `:451`: `.82`. GTK `new-drawing-small` .9em (`new_drawing.rs:552,558-560`).
-  - Summary name `:455`: `caption(true)` (Bold, 1.0). GTK `.new-drawing-summary-name { font-size: .93em; font-weight: 600 }` (`style.css:568`).
-  - Preset tile name `:858-862`: scale 1. GTK `.new-drawing-tile-name { font-size: .93em }` (`style.css:567`).
-  - Dimmed text uses opacity .6 throughout; GTK `dim-label` is Adwaita's .55 (CHECK), affix .62.
-- Fix direction: name the GTK classes as caption presets (`Small=.9`, `Caption=.82`, `TileName=.93`, `Affix=.9/.62`, `Dim`) in one place and use them by name.
-
 ##### HEAD-DLG-16: The picker title is smaller than GTK's title-4
 - Class: METRIC   Confidence: LIKELY (Adwaita value)   Severity: low   Reported bug: none
 - Windows: `PickerDialog.h:23` `title.FontSize(data->textSize()*1.05)`, Bold.
 - GTK reference: `new_drawing.rs:167` `title.add_css_class("title-4")`. Adwaita title-4 is about 13pt at weight 700, about 1.18x the 11pt UI text.
 - Fix direction: take the title scale from the shared catalog, or use ~1.18 to match.
-
-##### HEAD-DLG-17: Page and drawer padding are uniform 20s instead of GTK's 18/20/16 and 10/20/16 insets
-- Class: METRIC, LAYOUT-COLLAPSE   Confidence: CERTAIN (colour drawer LIKELY)   Severity: medium   Reported bug: #21 (same class: extra space that leads to needless scroll)
-- Windows: `NewDrawingDialog.cpp:409` `page.Padding({PickerPadding x4})` = 20 on all sides; `:428` drawer head `{20,20,20,8}`; `:429` drawer body `{20,8,20,20}`; `:506` colour drawer `body.Padding({0})`, but the embedded form adds its own `body.Padding(PickerPadding x4)` (`ColorEditor.cpp:212`), giving a 28px gap between the title and the form.
-- GTK reference: `style.css:534` `.new-drawing-page { padding: 18px 20px 16px }`; `:535` `.new-drawing-drawer-head { padding: 18px 20px 0 }`; `:536` `.new-drawing-drawer-body { padding: 10px 20px 16px }`. The head-to-body gap is 10 (Windows 16, or 28 in the colour drawer); the bottom inset is 16 (Windows 20).
-- Fix direction: add `NewDrawingPage{18,20,16}`, `DrawerHead{18,20,0}`, `DrawerBody{10,20,16}` constants next to `PickerPadding` in PickerDialog.h and use them. The colour drawer should keep the drawer body padding and zero the embedded form's.
-
-##### HEAD-DLG-18: The preview well and its sheet use the wrong fill, a literal corner and a border instead of GTK's shadow
-- Class: BORDER/COLOR, METRIC   Confidence: CERTAIN   Severity: low   Reported bug: none
-- Windows: `NewDrawingDialog.cpp:317` `preview.Background(data->tint(L"text",13)); preview.CornerRadius({12,12,12,12})`; sheet `:52` `CornerRadius({2,...})`, `:66` `BorderThickness 1`, `BorderBrush tint(L"text",31)`.
-- GTK reference: `style.css:537` `button.new-drawing-preview { padding: 0; border-radius: calc(22px * var(--corner-fit)); background: var(--view-bg-color) }` (11.88, the `view` role); `:538` `.new-drawing-sheet { box-shadow: 0 1px 2px alpha(black,.18), 0 4px 14px alpha(black,.14) }`; `:539` mini sheets `0 0 0 1px alpha(black,.10), 0 1px 3px alpha(black,.16)`. No border, no radius.
-- Shared source: `theme.rs:361` `view` role.
-- Fix direction: `preview.Background(data->brush(L"view"))`, corner `22*CornerFit`; replace the sheet border with a ThemeShadow/DropShadow (or a .10 black ring for mini sheets).
-
-##### HEAD-DLG-19: Paper tiles are taller and use a different fill; the paper-colour patch is nearly a circle
-- Class: METRIC, BORDER/COLOR   Confidence: CERTAIN   Severity: medium   Reported bug: none
-- Windows: `NewDrawingDialog.cpp:277` `tileButton`: `MinHeight(48)`, `Padding({6,6,10,6})`, `Background(buttonBackground(data))` (= `tint(L"button",13)`, `UiControls.h:408`), so the tile is 36+12 = 48 tall. `:396` `paperPatch.Data(squircleRectangle(36,36,{18,18,18,18}))` uses a radius of half the side.
-- GTK reference: `style.css:559` `button.new-drawing-paper-tile { min-height: 36px; padding: 4px 12px 4px 4px; border-radius: var(--control-radius); background: alpha(var(--window-fg-color), .07) }`, so the tile is 44 tall; `:560` `.paper-preview { border-radius: calc(var(--control-radius) - 1px) }` (6.02).
-- Fix direction: padding `{4,4,12,4}`, no MinHeight 48, fill `tint(text,18)`, patch radius `controlCorner-1`.
-
-##### HEAD-DLG-20: Category pills are rounded rectangles in one scrolling row instead of round pills that wrap
-- Class: METRIC, LAYOUT-COLLAPSE   Confidence: CERTAIN (unchecked fill CHECK)   Severity: medium   Reported bug: none
-- Windows: `NewDrawingDialog.cpp:808` `toggle(...,0,28)`, `pill.Padding({10,0,10,0})`, corner `controlCorner()` (7.02, from `button()`); `:817` unchecked `buttonBackground(data)` (tint button 13); `:445-447` the tabs are a horizontal StackPanel inside a horizontally scrolling ScrollViewer.
-- GTK reference: `style.css:562` `button.new-drawing-pill { min-height: 28px; padding: 0 11px; border-radius: 99px; font-weight: 400 }`; unchecked uses the default Adwaita button fill. `new_drawing.rs:529` `adw::WrapBox ... child_spacing(4).line_spacing(4)`, so pills wrap onto more lines.
-- Fix direction: corner = height/2 (14), padding 11. Replace the ScrollViewer and StackPanel with a wrapping layout with 4px spacing (VariableSizedWrapGrid doesn't fit variable widths; use a small wrap panel or ItemsRepeater with a FlowLayout).
-
-##### HEAD-DLG-21: Disabled controls are dimmed twice, and primary and plain buttons dim differently
-- Class: BORDER/COLOR   Confidence: CERTAIN (Windows math); GTK opacity LIKELY   Severity: low   Reported bug: none
-- Windows: `NewDrawingDialog.cpp:814` `tabs.Opacity(.4)`, and `:816` also disables each pill. `ButtonFeedback.h:81` then sets content opacity `(92/255)/button.Opacity()` = .36, so pill text ends up at .4*.36 = .14. Relief: `:909` `reliefRow.Opacity(.5)` plus a disabled entry (see HEAD-DLG-22). Footer: `:268` `primary()` sets `Opacity(.5)` when disabled, so its content is min(1,.36/.5) = .72*.5 = .36 on a .5 background, while a disabled plain picker button (`:760`) keeps a full background with .36 content.
-- GTK reference: `new_drawing.rs:947` `browser.tabs.set_sensitive(...)`, `:1088` `relief_row.set_sensitive(...)`, `:878` `create.set_sensitive(...)`: one insensitive state, with one Adwaita disabled opacity for the whole widget.
-- Fix direction: dim in one place only. Drop the container `Opacity` calls and `primary()`'s `IsEnabledChanged` opacity, and let ButtonFeedback's disabled state handle it, with the same treatment for the background and content of primary and plain buttons.
-
-##### HEAD-DLG-22: When the relief field is disabled, its value text is invisible
-- Class: NULL-STATE   Confidence: LIKELY   Severity: medium   Reported bug: none
-- Windows: `NumberControl.cpp:125-126` sets `TextControlForegroundDisabled` = `clear()`, which relies on NumberControl's read-mode overlay TextBlock (`:135-136`) to show the value. `NewDrawingDialog.cpp:661` `numberField` detaches only the TextBox (`numberEntry` + `detach`) and drops that overlay. `:909` `reliefEntry.IsEnabled(enabled)` with `enabled=false` (no texture) then renders the entry's text transparent. W/H/resolution would show the same thing if ever disabled.
-- GTK reference: `new_drawing.rs:1088` `relief_row.set_sensitive(relief.enabled)`: the value stays visible, dimmed.
-- Fix direction: in `numberField`, override `TextControlForegroundDisabled` with `brush(L"text")` (the dimming comes from HEAD-DLG-21), or keep the number control whole instead of detaching its TextBox.
-
-##### HEAD-DLG-23: The preset frame has the wrong corner and padding and a lighter hover
-- Class: METRIC, HIGHLIGHT-GEOMETRY   Confidence: CERTAIN   Severity: low   Reported bug: none
-- Windows: `NewDrawingDialog.cpp:855` frame `Width(116);Height(86);CornerRadius({10,...});BorderThickness({2,...})` with no padding, so the 2px selection border eats into the 116x86 art area. `:824` `BorderBrush(on?accent:clear)`; `:869` `frame.Background(buttonFeedbackBrush(node,...))` uses hover 20/255 = .078.
-- GTK reference: `style.css:564` `.new-drawing-preset-frame { padding: 3px; border-radius: calc(26px * var(--corner-fit)) }` (14.04); `:565` hover `alpha(currentColor,.10)`; `:566` selected `outline: 2px solid var(--accent-color); outline-offset: -2px`. That makes the frame 122x92 with the outline drawn inside the padding.
-- Fix direction: frame size art+6, `Padding 3`, corner `26*CornerFit`, hover alpha 26 (.10) via `buttonFeedbackBrush(node,ink,26,41)`.
-
-##### HEAD-DLG-24: Paper-colour swatches use literal corners
-- Class: METRIC   Confidence: CERTAIN   Severity: low   Reported bug: none
-- Windows: `NewDrawingDialog.cpp:524` `tile.CornerRadius({6,6,6,6})`; `:526` `patch.CornerRadius({5,5,5,5})`; `:935` selected = 2px accent `BorderThickness` on the button.
-- GTK reference: `style.css:481` `.picker-dialog button.palette-tile { padding: 3px; border-radius: var(--control-radius) }` (7.02); `:482` `.palette-tile > * { border-radius: var(--control-radius) }`; `:483` selected `outline: 2px solid accent; outline-offset: -2px`.
-- Fix direction: `controlCorner()` for both tile and patch, instead of 6/5.
-
-##### HEAD-DLG-25: The preset search is a plain TextBox, without the search glyph
-- Class: DEFAULT-CONTROL   Confidence: LIKELY   Severity: low   Reported bug: none
-- Windows: `NewDrawingDialog.cpp:441` `input(search)`: a plain TextBox with only placeholder text, plus WinUI's default delete ("X") button when focused.
-- GTK reference: `new_drawing.rs:526` `gtk::SearchEntry`, with a leading search icon and a clear icon.
-- Fix direction: add a 16px `search` icon at the leading edge (TextBox with a leading Image in a Grid, or `AutoSuggestBox` with `QueryIcon`) and style its clear button through ButtonFeedback.
-
-##### HEAD-DLG-26: Chevron icons are 14px instead of 16px
-- Class: METRIC   Confidence: CERTAIN   Severity: low   Reported bug: none
-- Windows: `NewDrawingDialog.cpp:418` presets chevron `icon(L"chevron-down",...,14)`; `:364` resolution chevron 14.
-- GTK reference: `new_drawing.rs:506`, `:406` `crate::icons::image(...)`, which defaults to `set_pixel_size(16)` (`icons.rs:49`). Only the colour-mode glyphs are set to 14 (`new_drawing.rs:655`).
-- Fix direction: use the default 16 for both chevrons.
-
-##### HEAD-DLG-27: The "size too large" problem colour is a literal, the same in both themes
-- Class: METRIC, BORDER/COLOR   Confidence: CHECK   Severity: low   Reported bug: none
-- Windows: `NewDrawingDialog.cpp:38` `Problem{255,0xe0,0x1b,0x24}`; `:738` `sizeLine.Foreground(problem?fill(Problem):...)`; `:843` saveName invalid border.
-- GTK reference: `new_drawing.rs:857` `page.size.add_css_class("error")`: Adwaita's theme error colour, which is lighter in dark mode.
-- Fix direction: get an error role from the shared palette (add one if missing) and use it on every host.
 
 ##### HEAD-DLG-28: The New drawing dialog is shorter than GTK's
 - Class: METRIC   Confidence: LIKELY   Severity: low   Reported bug: none
@@ -639,18 +512,6 @@ paper-tile homogeneous row, ComboBox .07 fill in New drawing (`choiceColors(...,
 - GTK reference: `canvas_size.rs:41-104` / `image_size.rs:39-80`: an `adw::AlertDialog` (centred heading, theme font) with a `gtk::CheckButton`, `gtk::DropDown`, plain labels, and `message.add_css_class("dim-label")`.
 - Fix direction: build SizeDialog's labels with `label()`, the check with `compactCheck()`, and combos with the dialog field helper (HEAD-DLG-1/10). Give it a styled title (`pickerTitle`), or move it onto the picker dialog frame so titles and footers match the New drawing dialog.
 
-##### HEAD-DLG-30: Size dialog spacing and message dimming don't match GTK
-- Class: METRIC   Confidence: CERTAIN   Severity: low   Reported bug: none
-- Windows: `SizeDialog.cpp:65` `body.Width(332);body.Spacing(10)`; `:66` `values.Spacing(10)`; `:91` `message.Opacity(.72);message.MinHeight(20)`.
-- GTK reference: `canvas_size.rs:46` / `image_size.rs:48` `gtk::Box::new(Vertical, 12)`; message `dim-label`.
-- Fix direction: spacing 12; the same shared dim opacity as everywhere else.
-
-##### HEAD-DLG-31: Anchor cells are too big, and the chosen anchor has no selected state
-- Class: METRIC, HIGHLIGHT-GEOMETRY   Confidence: CERTAIN   Severity: low   Reported bug: none
-- Windows: `SizeDialog.cpp:7` `Cell=36`; `:152` cells 36x36; `:154` every cell gets `Background(data->tint(L"text",20))`; `:191` only the icon opacity (1 or 0) marks the chosen anchor.
-- GTK reference: `canvas_size.rs:76` `button.set_size_request(32, 32)`; grouped `gtk::ToggleButton`s (`:78`) with `set_active`, so the chosen cell gets Adwaita's `:checked` fill as well as the visible icon (`:239-241`).
-- Fix direction: `Cell=32`; fill the chosen cell with the same selected/segment role as HEAD-DLG-5.
-
 ##### HEAD-DLG-32: Size dialog response buttons keep the default ContentDialog button geometry
 - Class: DEFAULT-CONTROL   Confidence: CHECK   Severity: low   Reported bug: none
 - Windows: `ChoiceFeedback.cpp:60` `footer()` restyles PrimaryButton/CloseButton Background, Foreground, BorderThickness and CornerRadius only. Height, padding and FontWeight (Normal) stay at WinUI defaults.
@@ -663,32 +524,11 @@ paper-tile homogeneous row, ComboBox .07 fill in New drawing (`choiceColors(...,
 - GTK reference: `files/export.rs:119-135` `adw::ComboRow` inside `adw::PreferencesGroup` (boxed-list cards, `style.css:15` shadows); `:208`, `:403`, `:452` `adw::SwitchRow` for enlarge, remove-location and dither; bodies use `gtk::Box::new(Vertical, 12)` (`:999-1026`); `:239`, `:408` notes are `dim-label`.
 - Fix direction: build the form from the shared row helpers (label + combo/number/switch rows on a card surface, as SettingsView does), with `label()` text, the dialog field fill, the HEAD-DLG-4 TextBox resources for NumberBox, and spacing 12.
 
-##### HEAD-DLG-34: The export validation message isn't shown in the error colour
-- Class: BORDER/COLOR   Confidence: CERTAIN   Severity: medium   Reported bug: none
-- Windows: `ExportForm.h:113` `validation.TextWrapping(Wrap)` with no Foreground; `DocumentView.cpp:528` writes error text into it.
-- GTK reference: `files/export.rs:550` `validation.add_css_class("error")`.
-- Fix direction: set the shared error role on it (HEAD-DLG-27).
-
-##### HEAD-DLG-35: Export form rules and defaults live in the Windows host
-- Class: METRIC (host policy), NULL-STATE   Confidence: CERTAIN (policy); CHECK (crash)   Severity: low   Reported bug: none
-- Windows: `ExportForm.h:27`: quality is enabled when `format` is in a hard-coded list (`Jpeg`, `JpegHdr`, `JpegHdrMapped`, `AvifHdr`, `AvifHdrMapped`); `:55` resolution index-to-`Omit`/`Master`/`Ppi`; `:57` `std::array<hstring,4>{...}[intent.SelectedIndex()]` (index -1 would be out of bounds); `:59` the list of formats that get a conversion; `:102`, `:108` fallback defaults 90 and 300.
-- GTK reference: the export form reads these from the shared draft/view (`files/export.rs` uses the `export_draft` choices); AGENTS.md says business rules live in shared Rust.
-- Fix direction: have `capy_export_draft` return `quality_enabled`, the intent/resolution choice values and defaults, as it already does for formats/depths; the host only maps indices to returned values.
-
-##### HEAD-DLG-36: The file-drop caption is hard-coded English
-- Class: (UI text / localization; none of the listed classes)   Confidence: CERTAIN   Severity: medium   Reported bug: none
-- Windows: `ExternalImages.h:17` `dropCaption()` returns literals `L"Open drawing"`, `L"Open drawings or place images, not both"`, `L"Place images on canvas"`; used at `CanvasWindow.cpp:566` `DragUIOverride().Caption(...)`. The same English string is also hard-coded in `apps/layer-windows/native/src/documents.rs:653`.
-- GTK reference: no counterpart string. AGENTS.md: UI text lives in shared Rust / Fluent catalogs.
-- Fix direction: add the three captions to the shared catalog (native_copy) with Fluent entries in every locale, and read them via `data->caption(...)`.
 
 ---
 
 #### Root causes / systemic patterns
 
-1. **`brush(L"input")` on `settings` surfaces** (`input()` NewDrawingDialog.cpp:253, `choiceColors` default ChoiceFeedback.cpp:66, NumberControl.cpp:122). `input` == `settings` in dark (theme.rs:360/365), so dialog fields disappear. One "dialog field fill" helper (tint text 18) fixes HEAD-DLG-1, 2, 3 and part of 33.
-2. **No shared TextBox/popup restyle helper.** TextBox Focused/PointerOver resources (HEAD-DLG-4), the ComboBox dropdown, Flyout and MenuFlyout presenters (HEAD-DLG-11), CheckBox/NumberBox (HEAD-DLG-29, 33) all fall back to WinUI defaults. WorkspaceManagerView.cpp:323 and HeaderView.cpp:257 show the per-site fix. Moving it into UiControls (`textEntry`, `popupStyle`, `compactCheck` used everywhere) fixes most DEFAULT-CONTROL findings.
-3. **`label()` line model** (UiControls.h:424-430: LineHeight 18, MaxHeight, no TextLineBounds) plus literal TextBox padding `{..,7,..,0}`. This is the VCENTER root (HEAD-DLG-8, 9, 10, user bug #2/#13). Trimming to cap height in `label()` and computing entry insets the way NumberControl does fixes it across every host view.
-4. **`mark()`/`selected()` uses `selection`, not `header_selection`/`header_selection_hover`** for segmented wells and pills (HEAD-DLG-5, 12, 31).
-5. **Literal geometry instead of GTK metrics for joined wells, pills, frames and paddings** (17/13/12/10/6/5 corners, 26/30/48 heights, 20 paddings): HEAD-DLG-6, 7, 13, 14, 17-20, 23, 24. A small set of named picker metrics next to `PickerPadding` (joined well 3 / +3, segment 28 / 9, pill radius h/2, page 18/20/16, drawer 18/20/0 and 10/20/16) would replace them.
-6. **Opacity stacking for disabled state** (container Opacity plus ButtonFeedback's 92/255 content plus `primary()` .5): HEAD-DLG-21. The detached NumberControl TextBox loses its disabled readout: HEAD-DLG-22.
-
+1. Dialog fields and default controls still need Agent A's palette and entry helpers (HEAD-DLG-1, 2, 4, 29, 33).
+2. Caption centring, joined controls and selected surfaces need the shared label and segment helpers (HEAD-DLG-5, 8, 9, 10).
+3. Popup, picker-frame and footer adoption remains in M4 (HEAD-DLG-11, 16, 28, 32).

@@ -4,7 +4,7 @@
 
 using namespace CapyUi;
 struct SizeDialog::Impl:std::enable_shared_from_this<Impl>{
-    static constexpr double Width=332,Cell=36;
+    static constexpr double Width=332,Cell=32;
     struct Field{Border slot;hstring spec;uint64_t generation=0;Bindings binds;NumericAdmissions admissions;};
     Kind kind=Kind::Canvas;
     std::shared_ptr<WorkspaceData> data=std::make_shared<WorkspaceData>();
@@ -62,8 +62,8 @@ struct SizeDialog::Impl:std::enable_shared_from_this<Impl>{
     void init(){
         dialog.XamlRoot(xamlRoot);inheritLanguage(dialog,data);dialog.Content(body);dialog.DefaultButton(ContentDialogButton::Primary);
         AutomationProperties::SetAutomationId(dialog,id(L"dialog"));
-        body.Width(Width);body.Spacing(10);
-        values.Spacing(10);body.Children().Append(values);
+        body.Width(Width);body.Spacing(12);
+        values.Spacing(12);body.Children().Append(values);
         fields.resize(kind==Kind::Canvas?2:3);
         for(size_t i=0;i<2;++i)values.Children().Append(fields[i].slot);
         auto weak=weak_from_this();
@@ -88,7 +88,7 @@ struct SizeDialog::Impl:std::enable_shared_from_this<Impl>{
             choiceBox(&Impl::resample,id(L"resample"),L"resample",L"resamples");resample.MinWidth(160);
             body.Children().Append(row(caption,resample));
         }
-        message.TextWrapping(TextWrapping::Wrap);message.Opacity(.72);message.MinHeight(20);
+        message.TextWrapping(TextWrapping::Wrap);message.Opacity(.55);message.MinHeight(20);
         AutomationProperties::SetAutomationId(message,id(L"message"));
         AutomationProperties::SetLiveSetting(message,Automation::Peers::AutomationLiveSetting::Polite);
         body.Children().Append(message);
@@ -188,7 +188,7 @@ struct SizeDialog::Impl:std::enable_shared_from_this<Impl>{
         if(kind==Kind::Canvas){
             caption.Text(str(size,L"anchor_label"));
             if(auto key=array(size,L"anchors").Stringify()+data->theme();key!=anchorKey){anchorKey=key;buildAnchors(size);}
-            for(auto const& cell:anchors)cell.Content().as<UIElement>().Opacity(unbox_value<hstring>(cell.Tag())==str(size,L"anchor")?1.:0.);
+            for(auto const& cell:anchors){bool chosen=unbox_value<hstring>(cell.Tag())==str(size,L"anchor");cell.Content().as<UIElement>().Opacity(chosen?1.:0.);cell.Background(chosen?data->brush(L"header_selection"):data->tint(L"text",20));}
         }else{
             caption.Text(str(size,L"resample_label"));
             populate(resample,resamples,array(size,L"resamples"),L"resample",str(size,L"resample"));

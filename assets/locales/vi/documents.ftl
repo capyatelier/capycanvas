@@ -340,3 +340,7 @@ documents-gigabytes = { $value } GB
 documents-paper-none = Không
 documents-width-name = Chiều rộng
 documents-height-name = Chiều cao
+
+documents-drop-drawings = Mở bản vẽ
+documents-drop-mixed = Mở bản vẽ hoặc đặt hình ảnh, không làm cả hai cùng lúc
+documents-drop-images = Đặt hình ảnh lên khung vẽ

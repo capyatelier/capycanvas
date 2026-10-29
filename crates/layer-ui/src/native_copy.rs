@@ -168,6 +168,9 @@ copy_struct! { HeaderCopy {
 } }
 
 copy_struct! { ColorCopy {
+    drop_drawings: DOCUMENTS_DROP_DRAWINGS,
+    drop_mixed: DOCUMENTS_DROP_MIXED,
+    drop_images: DOCUMENTS_DROP_IMAGES,
     reset_balance_contrast: COLOR_FEATURES_EXPORT_RESET_NAMED => COLOR_FEATURES_PROOF_BALANCE_CONTRAST,
     reset_brightness: COLOR_FEATURES_EXPORT_RESET_NAMED => COLOR_FEATURES_PROOF_BRIGHTNESS,
     reset_highlight_color: COLOR_FEATURES_EXPORT_RESET_NAMED => COLOR_FEATURES_PROOF_HIGHLIGHT_COLOR,

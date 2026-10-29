@@ -337,3 +337,7 @@ documents-gigabytes = { $value } GB
 documents-paper-none = ไม่มี
 documents-width-name = ความกว้าง
 documents-height-name = ความสูง
+
+documents-drop-drawings = เปิดภาพวาด
+documents-drop-mixed = เลือกเปิดภาพวาดหรือวางรูปภาพอย่างใดอย่างหนึ่ง
+documents-drop-images = วางรูปภาพบนผืนผ้าใบ

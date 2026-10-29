@@ -343,3 +343,7 @@ documents-gigabytes = { $value } GB
 documents-paper-none = Nenhuma
 documents-width-name = Largura
 documents-height-name = Altura
+
+documents-drop-drawings = Abrir desenho
+documents-drop-mixed = Abra desenhos ou posicione imagens, não os dois ao mesmo tempo
+documents-drop-images = Posicionar imagens na tela

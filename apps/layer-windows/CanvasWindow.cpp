@@ -572,7 +572,7 @@ bool CanvasWindow::StartPrepared(CapyLaunch  prepared) {
         auto kind=*dropKind;auto commands=CapyUi::array(CapyUi::object(self->lastModel,L"state"),L"commands");
         bool enabled=kind!=CapyUi::DropKind::Mixed&&CapyUi::flag(CapyUi::find(commands,L"id",kind==CapyUi::DropKind::Drawings?L"open_document":L"import_image"),L"enabled");
         using winrt::Windows::ApplicationModel::DataTransfer::DataPackageOperation;
-        event.AcceptedOperation(enabled?DataPackageOperation::Copy:DataPackageOperation::None);event.DragUIOverride().Caption(CapyUi::dropCaption(kind));event.Handled(true);
+        event.AcceptedOperation(enabled?DataPackageOperation::Copy:DataPackageOperation::None);event.DragUIOverride().Caption(CapyUi::dropCaption(self->screenData,kind));event.Handled(true);
     }});
     panel.Drop([weak=weak_from_this()](auto&&,DragEventArgs const& event){if(auto self=weak.lock();self&&!self->closing&&CapyUi::fileDrag(event)){
         auto action=CapyUi::imageDrop(CapyUi::object(self->lastModel,L"state"));auto point=event.GetPosition(self->panel);auto scale=self->panel.XamlRoot().RasterizationScale();

@@ -341,3 +341,7 @@ documents-gigabytes = { $value } GB
 documents-paper-none = なし
 documents-width-name = 幅
 documents-height-name = 高さ
+
+documents-drop-drawings = 絵を開く
+documents-drop-mixed = 絵を開くか画像を配置するか、どちらかを選んでください
+documents-drop-images = キャンバスに画像を配置

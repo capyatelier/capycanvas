@@ -343,3 +343,7 @@ documents-gigabytes = { $value } GB
 documents-paper-none = Ninguno
 documents-width-name = Anchura
 documents-height-name = Altura
+
+documents-drop-drawings = Abrir dibujo
+documents-drop-mixed = Abre dibujos o coloca imágenes, no ambas cosas
+documents-drop-images = Colocar imágenes en el lienzo

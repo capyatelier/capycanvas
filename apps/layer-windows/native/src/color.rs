@@ -45,7 +45,7 @@ pub unsafe extern "C" fn capy_export_draft(context: u64, input: *const c_char) -
         let request = match request {
             Request::Draft(request) => request,
             Request::Copy { copy } => {
-                if copy.choices.as_ref().is_some_and(|choices| choices.formats.len()>11 || choices.depths.len()>4 || choices.backgrounds.len()>3 || choices.dithers.len()>2) { return Err("Export choices are too large".into()); }
+                if copy.choices.as_ref().is_some_and(|choices| choices.formats.len()>11 || choices.depths.len()>4 || choices.backgrounds.len()>3 || choices.dithers.len()>2 || choices.intents.len()>4 || choices.resolutions.len()>3) { return Err("Export choices are too large".into()); }
                 if copy.profile_captions.as_ref().is_some_and(|values| values.len()>layer_ui::profile_library::PROFILE_LIBRARY_ENTRIES+16) { return Err("Export captions are too large".into()); }
                 return Ok(serde_json::json!({"metadata":copy.metadata.map(|metadata|layer_ui::ExportMetadataView::localized_for(metadata.format,metadata.keep,&context.localizer)),"choices":copy.choices.map(|choices|choices.localized(&context.localizer)),
                     "error":copy.error_reason.as_ref().map(|reason|reason.message(&context.localizer)),"error_reason":copy.error_reason,

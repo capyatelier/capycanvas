@@ -1,4 +1,4 @@
-﻿param([Parameter(Mandatory)][string]$Executable,[string]$DebuggerPath,[switch]$RecoverGpu,[switch]$FailGpu,[ValidateSet('full','new-drawing','paper-color','gpu-recovery','gpu-unavailable','color-workflows','color-workflows-light','native-writeback','native-writeback-light')][string]$Journey='full')
+﻿param([Parameter(Mandatory)][string]$Executable,[string]$DebuggerPath,[switch]$RecoverGpu,[switch]$FailGpu,[ValidateSet('full','new-drawing','new-drawing-problem','paper-color','gpu-recovery','gpu-unavailable','color-workflows','color-workflows-light','native-writeback','native-writeback-light')][string]$Journey='full')
 $gpuRecovery=$Journey -eq 'gpu-recovery'
 $gpuUnavailable=$Journey -eq 'gpu-unavailable'
 $focusedGpu=$gpuRecovery -or $gpuUnavailable
@@ -145,7 +145,7 @@ function Invoke-Control([string]$Name) {
         catch [System.Windows.Automation.ElementNotAvailableException] {(Model).state.document_file.revision -ne $before}
     } "Could not invoke control: $Name"
 }
-function File-Command([string]$Id,[scriptblock]$Options) {
+function File-Command([string]$Id,[scriptblock]$Options,[switch]$OptionsOnly) {
     $script:scope=$root
     Foreground
     Wait-Until {((Model).state.commands|Where-Object id -eq $Id).enabled} "Document command stayed disabled: $Id" 45
@@ -157,6 +157,7 @@ function File-Command([string]$Id,[scriptblock]$Options) {
     if($Id -eq 'export_document') {
         Wait-Until {(Model).windows_document.stage -eq 'options'} 'Export options did not open' 45
         if($Options){& $Options}
+        if($OptionsOnly){return}
         Invoke-Control 'Preview Output'
         Wait-Until {(Model).windows_document.stage -eq 'preview'} 'Export preview did not finish' 60
         Invoke-Control 'Export'
@@ -234,8 +235,64 @@ function Close-NewDrawing([string]$Id) {
 function Open-Drawer([string]$Id,[string]$Kind) {
     Press $Id;Wait-Until {(Drawer).kind -eq $Kind -and !(Find $(switch($Kind){'presets'{'new-drawing-browser'}'paper'{'new-drawing-paper-drawer'}default{'new-drawing-color-drawer'}}) -Within $root).Current.IsOffscreen} "The $Kind drawer did not open"
 }
+function Test-NewDrawingProblem([string]$Theme){
+    $script:newTheme=$Theme;$script:scope=$root
+    $transparency=(Model).state.settings.transparency
+    foreach($glass in @('off','low')){
+        Set-CapyTransparency $glass
+        Open-NewDrawing
+        Pick-Choice 'new-drawing-unit' (Value-Index (Drawing).units 'mm')
+        Pick-Choice 'document-depth' (Value-Index (Drawing).depths 'F32')
+        if((Drawing).linked){Press 'new-drawing-link';Wait-Until {!(Drawing).linked} 'Problem capture did not unlink dimensions'}
+        Type-Text 'document-width' '65536' -Commit
+        Type-Text 'document-height' '65536' -Commit
+        Wait-Until {(Drawing).page.problem -and !(Drawing).can_create -and !(Owned 'new-drawing-create').Current.IsEnabled} 'Oversized drawing did not expose its shared size problem'
+        $bounds=(Owned 'new-drawing-size').Current.BoundingRectangle
+        $origin=[CapyRowPointer+Point]::new()
+        if(![CapyRowPointer]::ClientToScreen($drawing.Handle,[ref]$origin)){throw 'Size problem capture client origin is unavailable'}
+        [ordered]@{bounds=@{x=$bounds.X;y=$bounds.Y;width=$bounds.Width;height=$bounds.Height};client_origin=@($origin.x,$origin.y);palette_error=(Model).state.palette.error;theme=$Theme;transparency=$glass}|ConvertTo-Json -Depth 5|Set-Content (Join-Path $run ("new-drawing-size-problem-$Theme-glass-$glass-metrics.json"))
+        Capture ("new-drawing-size-problem-$Theme-glass-$glass") -WithModel -Composed
+        Close-NewDrawing 'new-drawing-cancel'
+    }
+    Set-CapyTransparency $transparency
+}
 function New-Journey([string]$Theme,[switch]$Full) {
     $script:newTheme=$Theme;$script:scope=$root
+    $transparency=(Model).state.settings.transparency
+    foreach($glass in @('off','low')){
+        Set-CapyTransparency $glass
+        Open-NewDrawing
+        $dpi=[CapyRowPointer]::GetDpiForWindow($drawing.Handle)/96.
+        foreach($id in @('new-drawing-texture','new-drawing-paper-color')){
+            $height=(Owned $id).Current.BoundingRectangle.Height/$dpi
+            if([Math]::Abs($height-44) -gt 1){throw "Paper tile $id is $height DIP high instead of 44"}
+        }
+        $orientation=(Owned 'new-drawing-portrait').Current.BoundingRectangle
+        if([Math]::Abs($orientation.Height/$dpi-28) -gt 1){throw 'Orientation segment is not 28 DIP high'}
+        [void](Control 'new-drawing-create' -Arranged)
+        Capture ("new-drawing-main-$Theme-glass-$glass") -WithModel -Composed
+        Open-Drawer 'new-drawing-presets-button' 'presets'
+        [void](Control 'new-drawing-browser-cancel' -Arranged)
+        Capture ("new-drawing-presets-$Theme-glass-$glass") -WithModel -Composed
+        Press 'new-drawing-browser-cancel';Wait-Until {!(Drawer)} 'Parity capture did not close presets'
+        Open-Drawer 'new-drawing-texture' 'paper'
+        [void](Control 'new-drawing-paper-use' -Arranged)
+        Capture ("new-drawing-paper-$Theme-glass-$glass") -WithModel -Composed
+        Press 'new-drawing-paper-cancel';Wait-Until {!(Drawer)} 'Parity capture did not close paper'
+        Open-Drawer 'new-drawing-paper-color' 'paper_color'
+        $mode=(Owned 'new-drawing-color-mode-color').Current.BoundingRectangle
+        if([Math]::Abs($mode.Height/$dpi-28) -gt 1){throw 'Paper colour segment is not 28 DIP high'}
+        [void](Control 'new-drawing-color-use' -Arranged)
+        Capture ("new-drawing-color-$Theme-glass-$glass") -WithModel -Composed
+        Press 'new-drawing-color-cancel';Wait-Until {!(Drawer)} 'Parity capture did not close paper colour'
+        Close-NewDrawing 'new-drawing-cancel'
+        File-Command 'export_document' -OptionsOnly
+        [void](Control 'export-format' -Arranged)
+        Capture ("export-options-$Theme-glass-$glass") -WithModel -Composed
+        Invoke-Control 'Cancel'
+        Wait-Until {!(Model).windows_document} 'Parity capture did not cancel Export options'
+    }
+    Set-CapyTransparency $transparency
     Open-NewDrawing
     New-Capture 'main'
     Press 'new-drawing-resolution-choices'
@@ -491,7 +548,7 @@ function Package-View {
     (Model).windows_document.summary
 }
 function Package-Action([string]$Name) {
-    $script:scope=Find-Id 'package-view'
+    $script:scope=Control 'package-view' -Arranged
     try{Invoke-Control $Name}finally{$script:scope=$root}
 }
 function Stroke-InkPixels {
@@ -824,7 +881,7 @@ function Test-LightNewDrawing {
     Write-Output "Light New drawing review process $($review.Id)"
     Bind-ReviewWindow 'No light review window'
     Wait-Until {$model=Model;$model.brush_ready -and $model.state.theme -eq 'light'} 'Light review did not start' 45
-    if($Journey -eq 'paper-color'){Test-PaperColorReopen}else{New-Journey 'light'}
+    if($Journey -eq 'paper-color'){Test-PaperColorReopen}elseif($Journey -eq 'new-drawing-problem'){Test-NewDrawingProblem 'light'}else{New-Journey 'light'}
     if($Journey -eq 'full'){Color-Workflows}
     Request-Close;Wait-Closed 'Light review close did not finish'
     if((Get-Item -LiteralPath $stderr).Length){throw 'Light native review reported stderr'}
@@ -837,8 +894,9 @@ if($focusedGpu -or $nativeWriteback){
     Wait-Until {$bounds=(Control 'drawing-canvas' -Arranged).Current.BoundingRectangle;$camera=(Model).state.camera;[Math]::Abs($bounds.Width-$camera.viewport[0]) -lt 2 -and [Math]::Abs($bounds.Height-$camera.viewport[1]) -lt 2 -and !(Model).windows_workspace.busy} 'Focused native workspace did not finish maximizing'
 }
 if($Journey -eq 'paper-color'){Test-PaperColorReopen}
+elseif($Journey -eq 'new-drawing-problem'){Test-NewDrawingProblem 'dark'}
 elseif($focusedColor -or $focusedGpu){New-FocusedDrawing}elseif(!$nativeWriteback){New-Journey 'dark' -Full}
-if($Journey -in @('new-drawing','paper-color')){
+if($Journey -in @('new-drawing','new-drawing-problem','paper-color')){
     Request-Close;Wait-Closed 'New drawing review close did not finish'
     if((Get-Item -LiteralPath $stderr).Length){throw 'New drawing native review reported stderr'}
     Test-LightNewDrawing
@@ -1136,7 +1194,7 @@ $badImage=Join-Path $run 'Invalid image.png'
 [IO.File]::WriteAllText($badImage,'synthetic invalid image')
 Import-Start;Choose-Path $badImage
 Wait-Until {(Model).windows_document.stage -eq 'error'} 'Invalid image did not report a recoverable decoder error' 30
-$script:scope=$root;$script:scope=Find-Id 'document-workflow';Invoke-Control 'Close';Import-Idle
+$script:scope=$root;$script:scope=Control 'document-workflow' -Arranged;Invoke-Control 'Close';Import-Idle
 if(@((Model).state.layers).Count -ne 2 -or (Model).state.document_file.modified){throw 'Invalid image changed the document'}
 Import-Start;Choose-Path $imageSource;Import-Idle
 Wait-Until {@((Model).state.layers).Count -eq 3 -and (Model).state.layer_tools.editing_layer.object} 'Image layer was not selected'

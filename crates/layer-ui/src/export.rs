@@ -1,7 +1,7 @@
 //! Delivery choices describe a copy of the master. Hosts own dialogs and jobs.
 use layer_core::color::source::{SourceChannels, SourceInterpretation};
 use layer_core::color::{
-    ColorProfile, DocumentColor, SampleDepth, OutputEncoding, ProfileChannels, RgbSpace,
+    ColorProfile, DocumentColor, SampleDepth, OutputEncoding, ProfileChannels, RgbSpace, RenderingIntent,
 };
 use layer_color::photo::{DeliveryMetadata, ExportMetadata, MetadataKeep};
 use serde::{Deserialize, Serialize};
@@ -435,14 +435,19 @@ pub struct ExportChoices {
     pub depths: Vec<ExportChoice<SampleDepth>>,
     pub backgrounds: Vec<ExportChoice<ExportBackground>>,
     pub dithers: Vec<ExportChoice<layer_core::color::OutputDither>>,
+    pub intents: Vec<ExportChoice<RenderingIntent>>,
+    pub resolutions: Vec<ExportChoice<ExportResolution>>,
 }
 impl ExportChoices {
-    fn new_localized(formats: &[ExportFormat], depths: &[SampleDepth], backgrounds: &[ExportBackground], dithers: &[layer_core::color::OutputDither], localizer: &crate::Localizer) -> Self {
+    fn new_localized(formats: &[ExportFormat], depths: &[SampleDepth], backgrounds: &[ExportBackground], dithers: &[layer_core::color::OutputDither], intents: &[RenderingIntent], resolutions: &[ExportResolution], localizer: &crate::Localizer) -> Self {
         use layer_core::color::OutputDither;
+        use crate::MessageId as M;
         Self {
             formats: formats.iter().map(|value| ExportChoice {value:*value, label:value.localized_name(localizer)}).collect(),
             depths: depths.iter().map(|value| ExportChoice {value:*value, label:localizer.text(match value {SampleDepth::U8=>crate::MessageId::COLOR_FEATURES_EXPORT_DEPTH_8, SampleDepth::U16=>crate::MessageId::COLOR_FEATURES_EXPORT_DEPTH_16, SampleDepth::F16=>crate::MessageId::COLOR_FEATURES_COLOR_DEPTH_FLOAT16, SampleDepth::F32=>crate::MessageId::COLOR_FEATURES_EXPORT_DEPTH_FLOAT32})}).collect(),
             backgrounds: backgrounds.iter().map(|value| ExportChoice {value:*value, label:localizer.text(match value {ExportBackground::Preserve=>crate::MessageId::COLOR_FEATURES_EXPORT_KEEP_TRANSPARENCY, ExportBackground::White=>crate::MessageId::COLOR_FEATURES_EXPORT_WHITE_BACKGROUND, ExportBackground::Black=>crate::MessageId::COLOR_FEATURES_EXPORT_BLACK_BACKGROUND})}).collect(),
+            intents: intents.iter().map(|value| ExportChoice {value:*value, label:localizer.text(match value {RenderingIntent::RelativeColorimetric=>M::COLOR_FEATURES_EXPORT_RELATIVE,RenderingIntent::Perceptual=>M::COLOR_FEATURES_EXPORT_PERCEPTUAL,RenderingIntent::Saturation=>M::COLOR_FEATURES_EXPORT_SATURATION,RenderingIntent::AbsoluteColorimetric=>M::COLOR_FEATURES_EXPORT_ABSOLUTE})}).collect(),
+            resolutions: resolutions.iter().map(|value| ExportChoice {value:value.clone(), label:localizer.text(match value {ExportResolution::Master=>M::COLOR_FEATURES_EXPORT_KEEP_RESOLUTION,ExportResolution::Omit=>M::COLOR_FEATURES_EXPORT_OMIT,ExportResolution::Ppi(_)=>M::COLOR_FEATURES_EXPORT_PPI})}).collect(),
             dithers: dithers.iter().map(|value| ExportChoice {value:*value, label:localizer.text(match value {OutputDither::None=>crate::MessageId::COLOR_FEATURES_EXPORT_DITHER_NONE, OutputDither::Stochastic8=>crate::MessageId::COLOR_FEATURES_EXPORT_DITHER_STOCHASTIC})}).collect(),
         }
     }
@@ -452,6 +457,8 @@ impl ExportChoices {
             &self.depths.iter().map(|choice| choice.value).collect::<Vec<_>>(),
             &self.backgrounds.iter().map(|choice| choice.value).collect::<Vec<_>>(),
             &self.dithers.iter().map(|choice| choice.value).collect::<Vec<_>>(),
+            &self.intents.iter().map(|choice| choice.value).collect::<Vec<_>>(),
+            &self.resolutions.iter().map(|choice| choice.value.clone()).collect::<Vec<_>>(),
             localizer,
         )
     }
@@ -460,6 +467,9 @@ impl ExportChoices {
 #[derive(Serialize)]
 pub struct ExportDraft {
     pub choices: ExportChoices,
+    pub quality_enabled: bool,
+    pub conversion_enabled: bool,
+    pub ppi: u32,
     pub hdr: bool,
     pub clip_hdr_range: bool,
     pub format: ExportFormat,
@@ -536,9 +546,12 @@ impl ExportRecipe {
         let depths: Vec<_> = if self.format == ExportFormat::Exr { vec![SampleDepth::F32] } else if self.format.is_hdr() { vec![SampleDepth::U16] } else if eight_bit { vec![SampleDepth::U8] } else { vec![SampleDepth::U8, SampleDepth::U16] };
         let backgrounds: Vec<_> = if self.format.gainmap()==Some(layer_color::photo::GainMapFormat::Jpeg) { vec![ExportBackground::Preserve, ExportBackground::White, ExportBackground::Black] } else if self.format.is_hdr() { vec![ExportBackground::Preserve] } else if jpeg || cmyk { vec![ExportBackground::White, ExportBackground::Black] } else { vec![ExportBackground::Preserve, ExportBackground::White, ExportBackground::Black] };
         let dithers: Vec<_> = if self.depth == SampleDepth::U8 { vec![OutputDither::None, OutputDither::Stochastic8] } else { vec![OutputDither::None] };
-        let choices = ExportChoices::new_localized(&formats, &depths, &backgrounds, &dithers, localizer);
+        let ppi = match self.resolution {ExportResolution::Ppi(value)=>value,_=>300};
+        let choices = ExportChoices::new_localized(&formats, &depths, &backgrounds, &dithers,
+            &[RenderingIntent::RelativeColorimetric,RenderingIntent::Perceptual,RenderingIntent::Saturation,RenderingIntent::AbsoluteColorimetric],
+            &[ExportResolution::Master,ExportResolution::Omit,ExportResolution::Ppi(ppi)], localizer);
         ExportDraft {
-            choices,
+            choices, quality_enabled:jpeg || self.format.gainmap().is_some(), conversion_enabled:!self.format.is_hdr(), ppi,
             hdr:self.format.is_hdr(),clip_hdr_range:self.format.maps_hdr_range(),format:self.format.with_hdr_range_mapping(false),
             formats,
             depths,
@@ -624,6 +637,72 @@ impl ExportForm {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn export_draft_projects_format_policy_and_preserves_authored_values() {
+        for (format, quality, conversion) in [
+            (ExportFormat::Png, false, true), (ExportFormat::Tiff, false, true),
+            (ExportFormat::Jpeg, true, true), (ExportFormat::Webp, false, true),
+            (ExportFormat::Exr, false, false), (ExportFormat::PngHdr, false, false),
+            (ExportFormat::PngHdrMapped, false, false), (ExportFormat::JpegHdr, true, false),
+            (ExportFormat::JpegHdrMapped, true, false), (ExportFormat::AvifHdr, true, false),
+            (ExportFormat::AvifHdrMapped, true, false),
+        ] {
+            let mut recipe = ExportRecipe::web_share();
+            recipe.jpeg_quality = 73;
+            recipe.resolution = ExportResolution::Ppi(144);
+            let draft = recipe.draft_canonical(ExportDraftAction::Format(format));
+            let value = serde_json::to_value(&draft).unwrap();
+            assert_eq!(value["quality_enabled"], quality, "{format:?}");
+            assert_eq!(value["conversion_enabled"], conversion, "{format:?}");
+            assert_eq!(value["ppi"], 144);
+            assert_eq!(value["recipe"]["jpeg_quality"], 73);
+            assert_eq!(value["recipe"]["resolution"], serde_json::json!({"Ppi":144}));
+            draft.recipe.validate().unwrap();
+        }
+        for resolution in [ExportResolution::Master, ExportResolution::Omit] {
+            let mut recipe = ExportRecipe::web_share();
+            recipe.resolution = resolution;
+            let draft = serde_json::to_value(recipe.draft_canonical(ExportDraftAction::Refresh)).unwrap();
+            assert_eq!(draft["ppi"], 300);
+            assert_eq!(draft["recipe"]["jpeg_quality"], 90);
+            assert_eq!(draft["choices"]["resolutions"][2]["value"], serde_json::json!({"Ppi":300}));
+        }
+    }
+
+    #[test]
+    fn export_intent_and_resolution_choices_keep_semantic_values_across_languages() {
+        let mut recipe = ExportRecipe::web_share();
+        recipe.resolution = ExportResolution::Ppi(144);
+        recipe.encoding.conversion.intent = layer_core::color::RenderingIntent::Saturation;
+        let draft = recipe.draft_canonical(ExportDraftAction::Refresh);
+        let intents = serde_json::json!(["RelativeColorimetric", "Perceptual", "Saturation", "AbsoluteColorimetric"]);
+        let resolutions = serde_json::json!(["Master", "Omit", {"Ppi":144}]);
+        let encoded = serde_json::to_value(&draft.choices).unwrap();
+        let retained: ExportChoices = serde_json::from_value(encoded).unwrap();
+        for language in crate::UiLanguage::ALL {
+            let localizer = crate::Localizer::shared(language);
+            let choices = serde_json::to_value(retained.localized(&localizer)).unwrap();
+            for (key, expected) in [("intents", &intents), ("resolutions", &resolutions)] {
+                let projected = choices[key].as_array().unwrap();
+                assert_eq!(projected.iter().map(|choice| choice["value"].clone()).collect::<Vec<_>>(), *expected.as_array().unwrap());
+                assert!(projected.iter().all(|choice| !choice["label"].as_str().unwrap().is_empty()));
+            }
+            for (key, labels) in [
+                ("intents", vec![crate::MessageId::COLOR_FEATURES_EXPORT_RELATIVE, crate::MessageId::COLOR_FEATURES_EXPORT_PERCEPTUAL,
+                    crate::MessageId::COLOR_FEATURES_EXPORT_SATURATION, crate::MessageId::COLOR_FEATURES_EXPORT_ABSOLUTE]),
+                ("resolutions", vec![crate::MessageId::COLOR_FEATURES_EXPORT_KEEP_RESOLUTION,
+                    crate::MessageId::COLOR_FEATURES_EXPORT_OMIT, crate::MessageId::COLOR_FEATURES_EXPORT_PPI]),
+            ] {
+                for (choice, label) in choices[key].as_array().unwrap().iter().zip(labels) {
+                    assert_eq!(choice["label"], localizer.text(label).as_ref());
+                }
+            }
+            let projected = draft.recipe.clone().draft_localized(ExportDraftAction::Refresh, &localizer);
+            assert_eq!(projected.recipe, draft.recipe);
+            assert_eq!(serde_json::to_value(projected.choices).unwrap(), choices);
+        }
+    }
+
     #[test]
     fn export_metadata_copy_projects_scalar_semantics_for_every_language() {
         let formats = [ExportFormat::Exr, ExportFormat::PngHdr, ExportFormat::PngHdrMapped, ExportFormat::JpegHdr,

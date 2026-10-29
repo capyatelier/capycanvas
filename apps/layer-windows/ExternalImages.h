@@ -14,7 +14,7 @@ inline fire_and_forget classifyDrop(DragEventArgs event,std::shared_ptr<DropKind
     }catch(hresult_error const&){}
     deferral.Complete();
 }
-inline hstring dropCaption(DropKind kind){return kind==DropKind::Drawings?L"Open drawing":kind==DropKind::Mixed?L"Open drawings or place images, not both":L"Place images on canvas";}
+inline hstring dropCaption(std::shared_ptr<WorkspaceData> const& data,DropKind kind){return data->caption(L"color",kind==DropKind::Drawings?L"drop_drawings":kind==DropKind::Mixed?L"drop_mixed":L"drop_images");}
 inline bool fileDrag(DragEventArgs const& event){return event.DataView().Contains(winrt::Windows::ApplicationModel::DataTransfer::StandardDataFormats::StorageItems());}
 inline J imageDrop(J const& state){
     auto file=object(state,L"document_file");auto layer=object(object(state,L"layer_tools"),L"editing_layer");

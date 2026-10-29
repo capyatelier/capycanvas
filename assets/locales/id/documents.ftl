@@ -486,3 +486,7 @@ documents-gigabytes = { $value } GB
 documents-paper-none = Tidak ada
 documents-width-name = Lebar
 documents-height-name = Tinggi
+
+documents-drop-drawings = Buka gambar
+documents-drop-mixed = Buka gambar atau tempatkan citra, jangan keduanya sekaligus
+documents-drop-images = Tempatkan citra di kanvas

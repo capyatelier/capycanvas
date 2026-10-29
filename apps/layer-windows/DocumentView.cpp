@@ -509,11 +509,11 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
                 add(featureText(L"profile",L"add_profile_dialog"),L"proof_import");add(featureText(L"profile",L"manage"),L"proof_manage");body.Children().Append(buttons);
                 dialog.PrimaryButtonText(common(L"apply"));
             }else if(kind==L"export"&&stage==L"options"){
-                exportForm=std::make_shared<ExportFormView>(localization);exportForm->root.Language(data->language());exportForm->init(details);
+                exportForm=std::make_shared<ExportFormView>(localization);exportForm->root.Language(data->language());exportForm->init(details);exportForm->validation.Foreground(data->brush(L"error"));
                 for(auto box:{exportForm->format,exportForm->profile,exportForm->depth,exportForm->background,exportForm->dither,exportForm->intent,exportForm->resolution,exportForm->metadata})choiceColors(data,box);
                 presentationChanged=[this,exportForm]{
                     auto details=object(object(model,L"windows_document"),L"details"),copy=object(object(details,L"feature_copy"),L"export");
-                    exportForm->relocalize(localization,details,data->language());
+                    exportForm->relocalize(localization,details,data->language());exportForm->validation.Foreground(data->brush(L"error"));
                     dialog.Title(box_value(str(copy,L"title")));dialog.PrimaryButtonText(str(copy,L"preview"));dialog.CloseButtonText(common(L"cancel"));
                 };
                 auto presetUpdating=std::make_shared<bool>(false);

@@ -650,7 +650,7 @@ impl DocumentService {
         if let DocumentAction::DropImages { epoch, revision, active_layer, paths, screen, layer } = action {
             let drawings = paths.iter().filter(|path| std::path::Path::new(path).extension().is_some_and(|e| e.eq_ignore_ascii_case("capy"))).count();
             if drawings != 0 {
-                if drawings != paths.len() { return Err("Open drawings or place images, not both".into()); }
+                if drawings != paths.len() { return Err(host.session.localization().text(layer_ui::MessageId::DOCUMENTS_DROP_MIXED).to_string()); }
                 if layer.is_some() { return Err("Drop drawing files on the canvas to open them".into()); }
                 return self.dispatch(host, DocumentAction::OpenPaths { paths });
             }

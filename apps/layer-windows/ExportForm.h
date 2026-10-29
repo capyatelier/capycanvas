@@ -24,7 +24,7 @@ struct ExportFormView : std::enable_shared_from_this<ExportFormView> {
         if(draft.HasKey(L"error"))throw hresult_invalid_argument(str(draft,L"error"));recipe=object(draft,L"recipe");
         updating=true;choices(format,array(object(draft,L"choices"),L"formats"),str(recipe,L"format"));choices(depth,array(object(draft,L"choices"),L"depths"),str(recipe,L"depth"));
         choices(background,array(object(draft,L"choices"),L"backgrounds"),str(recipe,L"background"));choices(dither,array(object(draft,L"choices"),L"dithers"),str(object(recipe,L"encoding"),L"dither"));auto hdr=flag(draft,L"hdr");if(hdr){profileId=L"";auto wanted=object(object(recipe,L"profile"),L"profile").Stringify();for(uint32_t i=0;i<profiles.Size();++i)if(object(profiles.GetObjectAt(i),L"profile").Stringify()==wanted)profile.SelectedIndex(i);}
-        profile.IsEnabled(!hdr);intent.IsEnabled(!hdr);quality.IsEnabled(str(recipe,L"format")==L"Jpeg"||str(recipe,L"format")==L"JpegHdr"||str(recipe,L"format")==L"JpegHdrMapped"||str(recipe,L"format")==L"AvifHdr"||str(recipe,L"format")==L"AvifHdrMapped");
+        profile.IsEnabled(!hdr);intent.IsEnabled(!hdr);quality.IsEnabled(flag(draft,L"quality_enabled"));
         presentMetadata();updating=false;
     }
     void presentMetadata(){
@@ -52,11 +52,12 @@ struct ExportFormView : std::enable_shared_from_this<ExportFormView> {
         auto value=J::Parse(recipe.Stringify());value.Insert(L"jpeg_quality",N(quality.Value()));
         if(resize.IsChecked().Value()){A bounds;bounds.Append(N(width.Value()));bounds.Append(N(height.Value()));value.Insert(L"size",O({{L"Fit",O({{L"bounds",bounds},{L"enlarge",B(enlarge.IsChecked().Value())}})}}));}
         else value.Insert(L"size",S(L"Original"));
-        value.Insert(L"resolution",resolution.SelectedIndex()==2?V(O({{L"Ppi",N(ppi.Value())}})):S(resolution.SelectedIndex()==1?L"Omit":L"Master"));
+        auto resolutions=array(object(draft,L"choices"),L"resolutions");auto resolutionIndex=resolution.SelectedIndex();
+        if(resolutionIndex>=0&&uint32_t(resolutionIndex)<resolutions.Size()){V next=resolutions.GetObjectAt(resolutionIndex).GetNamedValue(L"value");if(next.ValueType()==JsonValueType::Object)next=O({{L"Ppi",N(ppi.Value())}});value.Insert(L"resolution",next);}
         auto encoding=object(value,L"encoding");auto conversion=object(encoding,L"conversion");
-        conversion.Insert(L"intent",S(std::array<hstring,4>{L"RelativeColorimetric",L"Perceptual",L"Saturation",L"AbsoluteColorimetric"}[intent.SelectedIndex()]));
-        conversion.Insert(L"black_point_compensation",B(false));
-        if(str(value,L"format")==L"Png"||str(value,L"format")==L"Tiff"||str(value,L"format")==L"Jpeg"||str(value,L"format")==L"Webp"){encoding.Insert(L"conversion",conversion);value.Insert(L"encoding",encoding);}
+        auto intents=array(object(draft,L"choices"),L"intents");auto intentIndex=intent.SelectedIndex();
+        if(intentIndex>=0&&uint32_t(intentIndex)<intents.Size())conversion.Insert(L"intent",intents.GetObjectAt(intentIndex).GetNamedValue(L"value"));
+        if(flag(draft,L"conversion_enabled")){encoding.Insert(L"conversion",conversion);value.Insert(L"encoding",encoding);}
         auto result=exportDraft(localization.get(),O({{L"recipe",value},{L"color",color},{L"action",O({{L"type",S(L"refresh")}})},{L"validate",B(true)},{L"extent",extent}}));
         if(result.HasKey(L"error")){validationReason=result.GetNamedValue(L"error_reason",JsonValue::CreateNullValue());throw hresult_invalid_argument(str(result,L"error"));}return object(result,L"recipe");
     }
@@ -77,11 +78,9 @@ struct ExportFormView : std::enable_shared_from_this<ExportFormView> {
             if(int(i)==recipeProfile){comboOptionText(profile,i,str(object(details,L"form"),L"recipe_profile_name"));continue;}
             auto current=find(array(details,L"profiles"),L"id",str(profiles.GetObjectAt(i),L"library"));if(current.Size())comboOptionText(profile,i,str(current,L"name"));
         }profile.SelectedIndex(selected);
-        uint32_t i=0;for(auto key:{L"relative",L"perceptual",L"saturation",L"absolute"})comboOptionText(intent,i++,text(key));
-        i=0;for(auto key:{L"keep_resolution",L"omit",L"ppi"})comboOptionText(resolution,i++,text(key));
         auto projected=exportDraft(localization.get(),O({{L"copy",O({{L"choices",object(draft,L"choices")},{L"error_reason",validationReason},{L"metadata",O({{L"format",recipe.GetNamedValue(L"format")},{L"keep",object(recipe,L"metadata").GetNamedValue(L"keep")}})}})}}));
         draft.Insert(L"choices",object(projected,L"choices"));draft.Insert(L"metadata",object(projected,L"metadata"));
-        for(auto const& [control,key]:std::initializer_list<std::pair<ComboBox,wchar_t const*>>{{format,L"formats"},{depth,L"depths"},{background,L"backgrounds"},{dither,L"dithers"}}){
+        for(auto const& [control,key]:std::initializer_list<std::pair<ComboBox,wchar_t const*>>{{format,L"formats"},{depth,L"depths"},{background,L"backgrounds"},{dither,L"dithers"},{intent,L"intents"},{resolution,L"resolutions"}}){
             auto values=array(object(draft,L"choices"),key);
             for(uint32_t optionIndex=0;optionIndex<std::min(values.Size(),control.Items().Size());++optionIndex)comboOptionText(control,optionIndex,str(values.GetObjectAt(optionIndex),L"label"));
         }
@@ -96,16 +95,17 @@ struct ExportFormView : std::enable_shared_from_this<ExportFormView> {
         AutomationProperties::SetAutomationId(profile,L"export-profile");AutomationProperties::SetAutomationId(format,L"export-format");AutomationProperties::SetAutomationId(background,L"export-background");add(format,text(L"format"));add(profile,text(L"profile"));add(depth,text(L"depth"));add(background,text(L"background"));add(dither,text(L"dither"));add(intent,text(L"intent"));
         auto names=array(form,L"profile_names");for(uint32_t i=0;i<profiles.Size();++i)comboOption(profile,i<formProfiles?names.GetStringAt(i):int(i)==recipeProfile?str(form,L"recipe_profile_name"):str(profiles.GetObjectAt(i),L"name"));
         for(uint32_t i=0;i<profiles.Size();++i)if(profiles.GetObjectAt(i).Stringify()==original.Stringify())profile.SelectedIndex(i);
-        for(auto value:{text(L"relative"),text(L"perceptual"),text(L"saturation"),text(L"absolute")})comboOption(intent,value);
-        auto intentName=str(object(object(recipe,L"encoding"),L"conversion"),L"intent");intent.SelectedIndex(intentName==L"Perceptual"?1:intentName==L"Saturation"?2:intentName==L"AbsoluteColorimetric"?3:0);
+        auto initial=exportDraft(localization.get(),O({{L"recipe",recipe},{L"color",color},{L"action",O({{L"type",S(L"refresh")}})}}));recipe=object(initial,L"recipe");
+        auto intentValue=object(object(recipe,L"encoding"),L"conversion").GetNamedValue(L"intent",JsonValue::CreateNullValue());
+        auto intents=array(object(initial,L"choices"),L"intents");for(uint32_t i=0;i<intents.Size();++i){auto choice=intents.GetObjectAt(i);comboOption(intent,str(choice,L"label"));if(choice.GetNamedValue(L"value").Stringify()==intentValue.Stringify())intent.SelectedIndex(i);}
         for(auto const& [control,id]:std::initializer_list<std::pair<NumberBox,wchar_t const*>>{{quality,L"export-quality"},{width,L"export-width"},{height,L"export-height"},{ppi,L"export-ppi"}})AutomationProperties::SetAutomationId(control,id);
-        quality.Header(box_value(text(L"quality")));quality.Value(num(recipe,L"jpeg_quality",90));root.Children().Append(quality);
+        quality.Header(box_value(text(L"quality")));quality.Value(num(recipe,L"jpeg_quality"));root.Children().Append(quality);
         resize.Content(box_value(text(L"fit_bounds")));root.Children().Append(resize);auto fit=object(object(recipe,L"size"),L"Fit");resize.IsChecked(fit.Size()!=0);
         auto bounds=fit.Size()?array(fit,L"bounds"):array(details,L"extent");width.Header(box_value(text(L"maximum_width")));height.Header(box_value(text(L"maximum_height")));width.Value(bounds.GetNumberAt(0));height.Value(bounds.GetNumberAt(1));root.Children().Append(width);root.Children().Append(height);
         enlarge.Content(box_value(text(L"enlarge")));enlarge.IsChecked(flag(fit,L"enlarge"));root.Children().Append(enlarge);
-        add(resolution,text(L"resolution"));for(auto value:{text(L"keep_resolution"),text(L"omit"),text(L"ppi")})comboOption(resolution,value);
-        auto density=recipe.GetNamedValue(L"resolution");resolution.SelectedIndex(density.ValueType()==JsonValueType::Object?2:density.GetString()==L"Omit"?1:0);
-        ppi.Header(box_value(text(L"ppi")));ppi.Value(density.ValueType()==JsonValueType::Object?num(density.GetObject(),L"Ppi",300):300);root.Children().Append(ppi);
+        add(resolution,text(L"resolution"));auto density=recipe.GetNamedValue(L"resolution");auto resolutions=array(object(initial,L"choices"),L"resolutions");
+        for(uint32_t i=0;i<resolutions.Size();++i){auto choice=resolutions.GetObjectAt(i);comboOption(resolution,str(choice,L"label"));if(choice.GetNamedValue(L"value").Stringify()==density.Stringify())resolution.SelectedIndex(i);}
+        ppi.Header(box_value(text(L"ppi")));ppi.Value(num(initial,L"ppi"));root.Children().Append(ppi);
         photoMetadata=flag(form,L"metadata");metadata.HorizontalAlignment(HorizontalAlignment::Stretch);
         AutomationProperties::SetAutomationId(metadata,L"export-metadata");AutomationProperties::SetAutomationId(removeLocation,L"export-remove-location");
         AutomationProperties::SetAutomationId(metadataNote,L"export-metadata-note");metadataNote.TextWrapping(TextWrapping::Wrap);metadataNote.Opacity(.72);

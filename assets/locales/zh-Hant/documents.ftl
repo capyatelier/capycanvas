@@ -340,3 +340,7 @@ documents-gigabytes = { $value } GB
 documents-paper-none = 無
 documents-width-name = 寬度
 documents-height-name = 高度
+
+documents-drop-drawings = 開啟繪圖
+documents-drop-mixed = 請選擇開啟繪圖或放置影像，不能同時進行
+documents-drop-images = 將影像放置到畫布上

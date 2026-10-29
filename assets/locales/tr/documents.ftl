@@ -340,3 +340,7 @@ documents-gigabytes = { $value } GB
 documents-paper-none = Yok
 documents-width-name = Genişlik
 documents-height-name = Yükseklik
+
+documents-drop-drawings = Çizimi aç
+documents-drop-mixed = Çizimleri açın veya görselleri yerleştirin; ikisini aynı anda yapmayın
+documents-drop-images = Görselleri tuvale yerleştir

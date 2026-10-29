@@ -341,3 +341,7 @@ documents-gigabytes = { $value } GB
 documents-paper-none = 없음
 documents-width-name = 너비
 documents-height-name = 높이
+
+documents-drop-drawings = 그림 열기
+documents-drop-mixed = 그림 열기와 이미지 배치 중 하나를 선택하세요
+documents-drop-images = 캔버스에 이미지 배치

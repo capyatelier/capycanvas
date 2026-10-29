@@ -1,4 +1,4 @@
-param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme)
+﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme)
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 $CapyWaitSeconds=20
@@ -56,6 +56,25 @@ try {
     [CapyRowPointer]::Initialize([uint32]$review.Id)
     $original=Size;$wider=$original[0]+200
 
+    $transparency=(Model).state.settings.transparency
+    foreach($glass in @('off','low')){
+        Set-CapyTransparency $glass
+        Open-CanvasSize
+        $dpi=[CapyRowPointer]::GetDpiForWindow($review.MainWindowHandle)/96.
+        foreach($choice in @((Draft).anchors)){
+            $anchor=$choice.anchor
+            $bounds=(Control ('canvas-size-anchor-'+$anchor) -Arranged).Current.BoundingRectangle
+            if([Math]::Abs($bounds.Width/$dpi-32) -gt 1 -or [Math]::Abs($bounds.Height/$dpi-32) -gt 1){throw "Canvas anchor $anchor is not 32 by 32 DIP"}
+        }
+        Capture ("canvas-size-$($checks.theme)-glass-$glass") -WithModel -Composed
+        [CapyRowPointer]::Key([uint32]$review.Id,0x1B)
+        Wait-Until {!(Draft)} 'Canvas Size parity capture did not cancel'
+        Open-ImageSize
+        Capture ("image-size-$($checks.theme)-glass-$glass") -WithModel -Composed
+        [CapyRowPointer]::Key([uint32]$review.Id,0x1B)
+        Wait-Until {!(Image-Draft)} 'Image Size parity capture did not cancel'
+    }
+    Set-CapyTransparency $transparency
     Open-CanvasSize
     if((Pixels 'canvas-size-width') -ne $original[0] -or (Pixels 'canvas-size-height') -ne $original[1]){throw 'Canvas Size did not start at the current size'}
     if((Desktop-Button 'Apply').Current.IsEnabled){throw 'Apply was enabled before the size changed'}
