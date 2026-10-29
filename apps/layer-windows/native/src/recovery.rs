@@ -666,7 +666,7 @@ impl Service {
     }
     pub fn failed(&self)->bool{self.error.is_some()&&!self.closed}
     #[cfg_attr(
-        not(target_os = "windows"),
+        all(not(target_os = "windows"), not(test)),
         expect(dead_code, reason = "Used by the Windows host")
     )]
     pub fn status(&self, localization: &layer_ui::Localizer, selected: u64) -> serde_json::Value {
