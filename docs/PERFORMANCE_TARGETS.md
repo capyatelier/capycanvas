@@ -112,7 +112,7 @@ small dispatches, or CPU submission overhead.
 - Desktop, Web and Apple use their own harnesses.
 
 [Measuring performance](performance/measuring.md) has the full rules and commands.
-Record each result in the tier's table with its value, date and commit.
+Record only before → after, with date and commit, in the tier's table.
 
 ## Where we stand
 

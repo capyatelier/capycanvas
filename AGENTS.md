@@ -8,36 +8,6 @@ specific tasks.
 
 ## Hard rules
 
-### Working alongside other sessions
-
-- Other people and agents commit, build and use devices on this machine and push
-  to `origin/main` while you work. Use the worktree named by the user or provided
-  as the task's working directory; it already provides isolation.
-  Create another worktree only when none is assigned or the user requests one,
-  and put it under `/home`, never `/tmp`
-  ([environment](docs/development/environment.md)).
-- `/tmp` may be RAM-backed, so large files there can run the machine out of
-  memory. Keep builds, captures, recordings, downloads and other heavy files out
-  of it. When `/mnt/localssd` exists, put as many of them there as you can, such
-  as `CARGO_TARGET_DIR`, Gradle build directories and large test output. It is
-  temporary scratch space: anything in it is safe to clean up. Keep track of the
-  artifacts, worktrees, builds and test runs you create, and delete them once
-  you no longer need them so the disk doesn't fill.
-- Delegate routine, context-heavy verification such as test suites, scripted
-  journeys and performance runs to subagents on Sonnet or Sol, when supported.
-  Give them the worktree and commands, and ask for concise results with
-  relevant, verbatim failure excerpts. A subagent does its task itself instead
-  of delegating again.
-- Fetch and rebase onto `origin/main` before pushing. Never force-push `main`,
-  `git reset --hard` or bare `git stash` in a shared checkout, or delete another
-  session's worktree, branch, build, install or files.
-- A milestone is one fix or feature with its tests. When your task says to push,
-  push each one as soon as its own checks pass; never hold finished commits for
-  later work. The [commit guide](docs/COMMIT_GUIDE.md) covers rebasing and rechecks.
-- Install the hooks with `sh tools/git/install-hooks.sh` and never bypass them.
-  No `Co-Authored-By` trailers for AI assistants or agents; human coauthors are
-  fine. Follow the [commit guide](docs/COMMIT_GUIDE.md).
-
 ### Architecture
 
 - Business rules, state, validation, undo history and UI text live in shared
@@ -50,11 +20,16 @@ specific tasks.
 
 ### Code
 
+These rules cover tests, benchmark harnesses and tools as much as production code.
+
 - Replace, don't layer: delete superseded code in the same change, reuse existing
-  helpers and test harnesses, and keep refactors from adding lines.
-- Fix the class of failure, not the instance. Remove earlier fixes that did not
-  work, and add a regression test that fails without your fix. No special-case
-  patches.
+  helpers and harnesses, and keep refactors from adding lines.
+- Fix the cause, not the symptom or the instance: no replays, retries, waits or
+  special cases that hide an ordering or state bug. Remove earlier fixes that did
+  not work. Add a regression test that fails without your fix and runs in its
+  suite's normal command, not behind a benchmark flag.
+- Delete diagnostic probes, counters, flags and report fields when the
+  investigation that needed them ends; park them as patches in `artifacts/`.
 - Write self-documenting code. No explanatory, narrative or temporal comments.
   No test-only switches in production types.
 - Artwork stores authored data, not built-in shaders, UI metadata or GPU layouts.
@@ -66,8 +41,8 @@ specific tasks.
   old formats unless the task asks for them.
 - Add dependencies or vendored code only when necessary, and never copy GPL code
   or another app's artwork ([publication](docs/development/publication.md)).
-- Never run `cargo fmt` across the workspace; most files are not rustfmt-formatted,
-  and doing so rewrites hundreds of them.
+- Never run `cargo fmt` across the workspace; it rewrites hundreds of files that
+  are not rustfmt-formatted.
 
 ### Performance
 
@@ -75,8 +50,9 @@ specific tasks.
   where something moves count. See [performance targets](docs/PERFORMANCE_TARGETS.md).
 - Check every change that can affect how frames are produced against the targets,
   measure the affected rows by [its rules](docs/performance/measuring.md), and
-  record the results in the tier tables. Frame-rate work starts from a target row
-  and runs on that tier's reference device; VMs and emulators can't measure it.
+  record before → after in the tier table; trials and per-run detail stay in
+  `artifacts/`. Frame-rate work starts from a target row and runs on that tier's
+  reference device; VMs and emulators can't measure it.
 - Don't chase a target that `origin/main` already misses. Fix any regression
   against a matched `origin/main` control, record the shared miss, and finish
   the task; closing that gap is separate work
@@ -87,18 +63,39 @@ specific tasks.
 - Do what was asked. Offer anything else as a suggestion instead of doing it.
   Decide how you will know the task is done, and stop when that check passes.
 - Done means you walked the real user journeys on every affected host, in light
-  and dark themes for UI, and ran the [checks for your change](docs/development/testing.md).
+  and dark themes for UI, ran the [checks for your change](docs/development/testing.md),
+  and reviewed your whole diff against the [commit guide](docs/COMMIT_GUIDE.md#review-the-diff).
   Report each failure with its repro and list what you couldn't run. Reproduce a
   suspected bug or drop it; fix harness faults that block you instead of listing them.
 - Plans, handoffs and history docs are not evidence that something works. Check
-  the code.
+  the code. When you steer or review another agent, review its diffs, not only
+  its results.
+
+### Working alongside other sessions
+
+- Other people and agents commit, build and use devices on this machine and push
+  to `origin/main` while you work. Use the worktree named by the user or task.
+  Create another only when none is assigned or the user asks, under `/home`,
+  never `/tmp` ([environment](docs/development/environment.md)).
+- `/tmp` may be RAM-backed: keep builds, captures, recordings and downloads out
+  of it, and prefer `/mnt/localssd`, which is scratch space safe to clean. Delete
+  the artifacts, worktrees, builds and runs you create once you no longer need them.
+- Delegate routine, context-heavy verification such as test suites, scripted
+  journeys and performance runs to Sonnet or Sol subagents when supported. Give
+  them the worktree and commands, and ask for concise results with verbatim
+  failure excerpts. A subagent does its task itself instead of delegating again.
+- Never force-push `main`, `git reset --hard` or bare `git stash` in a shared
+  checkout, or delete another session's worktree, branch, build, install or files.
+- When your task says to push, push each milestone, one fix or feature with its
+  tests, as soon as its checks pass. Install the hooks with
+  `sh tools/git/install-hooks.sh`; never bypass them or add agent `Co-Authored-By`
+  trailers. The [commit guide](docs/COMMIT_GUIDE.md) covers rebasing and rechecks.
 
 ### Devices and user data
 
 - Reserve a tablet before using it and run every device command through
   `tools/devices/devices.py run` ([devices](docs/development/devices.md)). Use
-  only a device you were assigned or reserved; leave alone any device you are
-  told belongs to someone else.
+  only a device you were assigned or reserved.
 - Install test builds under your own application ID. Never uninstall or clear
   `art.capycanvas` or `art.capycanvas.editor`, or touch another session's
   installs, ports or browser tabs.
@@ -108,8 +105,9 @@ specific tasks.
 ### Docs and text
 
 - Edit a guide only when your change makes it wrong or changes how someone builds,
-  tests or extends the code. Fixes belong in commit messages and tests; logs,
-  measurements and handoffs stay in `artifacts/` or `*.local.md` ([writing](docs/development/writing.md)).
+  tests or extends the code; name a new test or flag in one line. Fixes belong in
+  commit messages and tests; logs, measurements and handoffs stay in `artifacts/`
+  or `*.local.md` ([writing](docs/development/writing.md)).
 - UI text uses plain words a painter knows. Don't add settings, menu items or
   explanatory text where better behaviour would do.
 - Update every registered Fluent catalog when adding UI text; run the
@@ -124,7 +122,7 @@ specific tasks.
 | Reserve or test a Windows VM or GPU | [Windows VM skill](skills/windows-vm/SKILL.md) |
 | Choose the checks for a change | [Testing](docs/development/testing.md) |
 | Use a tablet, VM, Mac or iPad | [Devices](docs/development/devices.md) |
-| Commit, rebase or push | [Commit guide](docs/COMMIT_GUIDE.md) |
+| Review a diff, commit or push | [Commit guide](docs/COMMIT_GUIDE.md) |
 | Touch brushes, shaders or anything that moves on screen | [Performance targets](docs/PERFORMANCE_TARGETS.md), [measuring](docs/performance/measuring.md) |
 | Change UI | [Workspace and UI](docs/ui/README.md); draggable UI must follow the [drag convention](docs/ui/drag-and-reorder.md) |
 | Port a feature to Apple or Windows | [Apple porting](docs/APPLE_PORTING_GUIDE.md), [Windows porting](docs/WINDOWS_PORTING_GUIDE.md) |

@@ -112,7 +112,7 @@ copy.
 
 ## Handoffs
 
-A handoff prompt for another session states the goal, the key pointers into the
-docs and code, the constraints and how to tell the work is done. Keep it short,
-don't restate what the docs already say, and name the tablet by brand and
-model or by tier. Keep it in the prompt or a `*.local.md` file, not in a commit.
+A handoff prompt states the goal, key pointers into the docs and code, the
+constraints and how to tell the work is done, including the [diff
+review](../COMMIT_GUIDE.md#review-the-diff). Keep it short, don't restate the
+docs, and name the tablet by brand and model or by tier.
