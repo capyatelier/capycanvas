@@ -1316,6 +1316,7 @@ Wait-Closed 'Session close did not finish'
 if((Get-Item -LiteralPath $stderr).Length){throw 'Native review reported stderr'}
 $stderr=Join-Path $run 'reopened.stderr.log'
 $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError $stderr
+$null=$review.Handle
 Bind-ReviewWindow 'No restarted review window'
 Wait-Until {(Model).brush_ready -and !(Model).windows_recovery.busy -and !(Model).windows_recovery.restoring} 'Session did not reopen' 120
 if((Model).state.settings.dark_base -ne '#223344' -or !(Model).state.document_file.modified){throw 'Window close lost the focused Preferences draft or unsaved drawing'}
@@ -1324,6 +1325,7 @@ if((Get-Item -LiteralPath $stderr).Length){throw 'Restarted native review report
 $env:CAPY_STORAGE_DIR=Join-Path $run 'untitled-profile'
 $stderr=Join-Path $run 'untitled.stderr.log'
 $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError $stderr
+$null=$review.Handle
 [IO.File]::WriteAllText((Join-Path $repo 'artifacts/windows/document-ui-review.pid'),[string]$review.Id)
 Write-Output "Untitled close review process $($review.Id)"
 Bind-ReviewWindow 'No untitled review window'

@@ -165,7 +165,7 @@ function Apply-Preview([string]$Name,[switch]$AcceptWithBrush,[switch]$Translate
  Pass ($Name+' stationary lasso preserves selection, export and Redo')
 }
 try{
- if(Get-Process CapyCanvas -ErrorAction SilentlyContinue){throw 'Close the existing app before the isolated editing review'}
+ if(Get-Process CapyCanvas -ErrorAction SilentlyContinue|Where-Object {$_.Path -eq $Executable}){throw 'Close the selected executable before the isolated editing review'}
  Enter-CapyEnvironment
  $env:CAPY_STORAGE_DIR=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1';$env:CAPY_TEST_DISPLAY='1';$env:CAPY_TEST_PRIMARY='1'
  [IO.File]::WriteAllText((Settings-File),(@{language=@{Explicit='en'};theme=$Theme}|ConvertTo-Json -Depth 4))
