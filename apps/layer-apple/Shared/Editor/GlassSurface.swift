@@ -295,6 +295,12 @@ extension View {
     }
 }
 
+enum DrawerShadow {
+    static func cuts(placement: JSON, connection: JSON) -> [CGRect] {
+        connection.isNull ? [] : [connection["bounds"].rect, placement["anchor"].rect]
+    }
+}
+
 struct OutsideShadow<S: Shape>: View {
     let shape: S
     let opacity: Double

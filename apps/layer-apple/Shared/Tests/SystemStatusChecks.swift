@@ -3,7 +3,7 @@ import CoreGraphics
 import ImageIO
 
 extension XCTestCase {
-    @MainActor func checkTitleBarToolDrawers(in app: XCUIApplication, theme: String = "light") {
+    @MainActor func checkTitleBarToolDrawers(in app: XCUIApplication, theme: String = "light", bridgesOnly: Bool = false) {
         app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"\#(theme)"},{"type":"set_color","rgba":[0.2,0.45,0.8,1]},{"type":"workspace_manager","command":{"type":"switch","id":"builtin:workspace:painter"}}]"#
         app.launch()
         let canvas = app.descendants(matching: .any)["canvas"].firstMatch
@@ -35,6 +35,16 @@ extension XCTestCase {
         workspaceActivate(app.buttons["header-tool-drawing_brush"])
         XCTAssertTrue(wheel.waitForNonExistence(timeout: 10), "Another header tool switches the drawer in one click")
         XCTAssertTrue(drawer.exists)
+        if bridgesOnly {
+            attachEditor(in: app, name: "brush-tool-bridge-" + theme)
+            workspaceActivate(app.buttons["header-tool-sculpt"])
+            XCTAssertTrue(drawer.waitForExistence(timeout: 10))
+            attachEditor(in: app, name: "sculpt-tool-bridge-" + theme)
+            workspaceActivate(app.buttons["Filters panel"])
+            XCTAssertTrue(drawer.waitForExistence(timeout: 10))
+            attachEditor(in: app, name: "filters-tool-bridge-" + theme)
+            return
+        }
         let pencil = app.buttons["brush_sets-Pencil"]
         XCTAssertTrue(pencil.waitForExistence(timeout: 10))
         workspaceActivate(pencil)

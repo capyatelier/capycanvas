@@ -142,11 +142,7 @@ private struct WorkspaceContentDrawer: View {
     private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
     var body: some View {
         let placement = drawer.geometry["placement"], connection = drawer.geometry["connection"], tabs = drawer.model["tabs"]
-#if os(macOS)
-        let shadowCuts = connection.isNull ? [] : [connection["bounds"].rect, placement["anchor"].rect]
-#else
-        let shadowCuts = connection.isNull ? [] : [connection["bounds"].rect]
-#endif
+        let shadowCuts = DrawerShadow.cuts(placement: placement, connection: connection)
         let panels = tabs["panels"].array.map { drawer.panel($0) }
         if !placement.isNull {
             ZStack(alignment: .topLeading) {

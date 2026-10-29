@@ -15,6 +15,14 @@ import SwiftUI
         return points
     }
     @MainActor static func main() {
+        let anchor = CGRect(x: 100, y: 20, width: 36, height: 36)
+        let bridge = CGRect(x: 92, y: 48, width: 52, height: 8)
+        let placement = JSON(["anchor": ["x": anchor.minX, "y": anchor.minY, "width": anchor.width, "height": anchor.height]])
+        let connection = JSON(["bounds": ["x": bridge.minX, "y": bridge.minY, "width": bridge.width, "height": bridge.height]])
+        precondition(DrawerShadow.cuts(placement: placement, connection: connection) == [bridge, anchor],
+            "Attached drawer shadows must exclude the bridge and its opening tile on every Apple host")
+        precondition(DrawerShadow.cuts(placement: placement, connection: JSON()).isEmpty,
+            "Disconnected drawers retain their complete outside shadow")
         for sweep in [-90.0, 90.0] {
             let arc = GlassArcRegistration(arc: JSON(["radius": 100, "band": 6, "start": 15, "sweep": sweep]), strength: 0.5)
             for scale: CGFloat in [1, 2] {
