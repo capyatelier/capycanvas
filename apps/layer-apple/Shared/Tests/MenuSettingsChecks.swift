@@ -272,6 +272,9 @@ extension XCTestCase {
         let entry = app.textFields["number-entry-Scroll pan speed"]
         XCTAssertTrue(value.waitForExistence(timeout: 20)); workspaceActivate(value)
         XCTAssertTrue(entry.waitForExistence(timeout: 5)); entry.typeText("1 + 0.25")
+        #if os(iOS)
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        #endif
         workspaceActivate(app.buttons["settings-done"])
         XCTAssertTrue(entry.waitForNonExistence(timeout: 5))
         #if os(macOS)
