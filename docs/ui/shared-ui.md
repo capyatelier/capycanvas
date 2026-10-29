@@ -94,8 +94,10 @@ The native sizing query includes both placements. Android, Apple and Windows
 cache those endpoints and call stateless `drawer_frame` on their UI clocks;
 container, column and bridge geometry advance without a render-owner query
 per frame. Opener, workspace, viewport and content measurements invalidate the cache.
-Windows layout callbacks invalidate measurements; the native timer restores
-list anchors after those callbacks return.
+Windows resolves drawer widths, batched toolbar geometry and page endpoints
+from `LayoutResolveInput::drawer_geometry` before presenting the measured bodies.
+Layout callbacks invalidate measurements; Rendering callbacks restore list anchors
+and advance the open animation after layout.
 `LayerState::swipe_actions` publishes ordered, localized, enabled actions using
 document validation. Hosts forward those actions and retain native measurement,
 scroll positions, contact capture and animation timing.

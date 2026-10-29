@@ -1,15 +1,13 @@
 #pragma once
 #include "PanelBody.h"
 
-// Projects shared tabbed drawers with retained native widgets;
-// the render owner remains responsible for geometry and GPU overview images.
 class WorkspaceDrawers {
 public:
     WorkspaceDrawers(std::shared_ptr<CapyUi::WorkspaceData> data,
         winrt::Microsoft::UI::Xaml::Controls::Canvas root,
         std::shared_ptr<WorkspaceGestures> gestures,std::function<void()> changed);
     ~WorkspaceDrawers();
-    void Apply();
+    void Apply(NativeLayoutInput input,float width,float height);
     void Reset();
     void AppendOverviews(CapyUi::A& slots)const;
     CapyUi::A Sources()const;

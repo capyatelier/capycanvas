@@ -27,6 +27,7 @@ __declspec(dllimport) CapyLayoutInput capy_layout_input_prepare(const char* json
 __declspec(dllimport) void capy_layout_input_free(CapyLayoutInput);
 __declspec(dllimport) CapyLayoutInput capy_layout_input_measure(CapyLayoutInput, const char* measurements);
 __declspec(dllimport) CapyString capy_layout_resolve(CapyLayoutInput, float width, float height);
+__declspec(dllimport) CapyString capy_drawer_resolve(CapyLayoutInput, float width, float height, const char* input);
 __declspec(dllimport) CapyString capy_panel_bridges(CapyLayoutInput, float width, float height, const char* measure);
 /* Read-only workspace geometry/menu queries, on the render owner. Metadata
    contains result (any JSON type) and error (null or string); no pixel payload. */

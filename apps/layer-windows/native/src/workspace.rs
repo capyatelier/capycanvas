@@ -66,6 +66,20 @@ pub extern "C" fn capy_layout_resolve(input:u64,width:f32,height:f32)->u64 {
 }
 
 /// # Safety
+/// Input is readable NUL-terminated UTF-8 JSON during this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_drawer_resolve(layout:u64,width:f32,height:f32,input:*const c_char)->u64 {
+    let result=std::panic::catch_unwind(|| {
+        unsafe {crate::input::with_text(input,|source| {
+            if source.len()>256*1024 {return Err("Drawer geometry request is too large".into());}
+            let layout=Handle::from_raw(layout).and_then(handles::shared::<LayoutInput>).map_err(|error|error.to_string())?;
+            layout.input.drawer_geometry([width,height],source)
+        })}
+    }).unwrap_or_else(|_|Err("Drawer geometry failed".into()));
+    layout_packet(result)
+}
+
+/// # Safety
 /// Input is readable NUL-terminated UTF-8 JSON for the duration of this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_panel_bridges(layout:u64,width:f32,height:f32,input: *const c_char) -> u64 {
@@ -163,6 +177,33 @@ fn stamp(host: &mut NativeHost, context: layer_ui::ToolbarContext, known_request
 mod tests {
     use crate::test_support::*;
     use super::*;
+    #[test]
+    fn prepared_drawer_geometry_matches_shared_input_without_mutating_session() {
+        let mut host=NativeHost::new(layer_ui::Platform::Windows).unwrap();
+        host.dispatch(layer_ui::UiAction::RestoreWorkspace {workspace:Box::new(layer_ui::WorkspaceState::default())}).unwrap();
+        host.resize(1600,1000,1.).unwrap();
+        let panel=layer_ui::Panel::Toolbar;
+        let tile=host.session.state().workspace.layout.panel(panel).unwrap().tiles().iter()
+            .find(|tile|tile.control==layer_ui::ToolbarControl::Color).unwrap().id;
+        host.dispatch(layer_ui::UiAction::ActivateTile {panel,tile}).unwrap();
+        let revision=host.session.engine().document().revision;
+        let state=host.session.state();let model=state.customization.drawer.as_ref().unwrap();
+        let request=json!({"model":model,"column_drawers":state.customization.column_drawers,"tiles":[],
+            "heights":vec![360.;model.columns.len()],"toolbars":true}).to_string();
+        let expected=host.session.layout_resolve_input().drawer_geometry(host.logical,&request).unwrap();
+        let source=CString::new(json!(host.session.layout_resolve_input()).to_string()).unwrap();
+        let input=unsafe {capy_layout_input_prepare(source.as_ptr())};assert_ne!(input,0);
+        let request=CString::new(request).unwrap();
+        let read=|handle|serde_json::from_str::<Value>(crate::owned::take_text(handle).to_str().unwrap()).unwrap();
+        let reply=read(unsafe {capy_drawer_resolve(input,1600.,1000.,request.as_ptr())});
+        assert_eq!(reply["result"],expected);assert!(reply["error"].is_null());
+        assert!(read(unsafe {capy_drawer_resolve(0,1600.,1000.,request.as_ptr())})["error"].is_string());
+        assert!(read(unsafe {capy_drawer_resolve(input,1600.,1000.,std::ptr::null())})["error"].is_string());
+        assert!(read(unsafe {capy_drawer_resolve(input,0.,1000.,request.as_ptr())})["error"].is_string());
+        assert_eq!(host.session.engine().document().revision,revision);
+        capy_layout_input_free(input);
+    }
+
     #[test]
     fn measured_layout_input_retains_source_and_matches_shared_session() {
         let mut host=NativeHost::new(layer_ui::Platform::Windows).unwrap();

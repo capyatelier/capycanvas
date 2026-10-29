@@ -58,7 +58,7 @@ impl From<TileAnchor> for DrawerAnchor {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DrawerTabs {
     pub group: u32,
     pub panels: Vec<Panel>,
@@ -105,13 +105,17 @@ pub fn drawer_frame(source: &str) -> Result<serde_json::Value, String> {
         progress: f32,
         #[serde(default)]
         closing: bool,
+        #[serde(default)]
+        clip_contents: bool,
     }
     let request: Request = serde_json::from_str(source).map_err(|error| error.to_string())?;
     let from = request.from.unwrap_or_else(|| request.to.closed());
     let end = if request.closing { request.to.closed() } else { request.to };
     let mut placement = end.interpolate_from(&from, request.progress);
-    for (column, start) in placement.columns.iter_mut().zip(&from.columns) {
-        *column = column.interpolate_from(*start, request.progress);
+    if !request.clip_contents {
+        for (column, start) in placement.columns.iter_mut().zip(&from.columns) {
+            *column = column.interpolate_from(*start, request.progress);
+        }
     }
     Ok(serde_json::json!({"connection": placement.connection(), "placement": placement}))
 }

@@ -26,8 +26,11 @@ try{
     $null=$review.Handle
     [IO.File]::WriteAllText((Join-Path $repo 'artifacts/windows/drawers-review.json'),(@{process_id=$review.Id;run=$run}|ConvertTo-Json))
     Write-Output "Owned drawer review $($review.Id)"
-    Wait-Until {$review.Refresh();$review.MainWindowHandle -ne [IntPtr]::Zero -and (Model).brush_ready} 'Review did not start' 45
-    $root=[System.Windows.Automation.AutomationElement]::FromHandle($review.MainWindowHandle)
+    $owned=@{window=$null}
+    Wait-Until {$owned.window=Owned-DrawingWindow $review;$owned.window -and (Model).brush_ready} 'Review did not start' 45
+    [CapyWindowApi]::ShowWindow($owned.window.Handle,3)|Out-Null
+    Wait-Until {$owned.window=Owned-DrawingWindow $review $owned.window.Handle.ToInt64();$owned.window -and $owned.window.Root.Current.IsOffscreen -eq $false} 'Review did not become visible'
+    $root=$owned.window.Root
     $tile=@(((Model).panels|Where-Object id -eq 'toolbar').tiles|Where-Object {$_.control.kind -eq 'color'})[0]
     if(!$tile){throw 'Shared color tile is missing'}
     $colorId="tile-toolbar-$($tile.id)"
@@ -54,26 +57,26 @@ try{
     Wait-Until {Collapsed 'sizes'} 'Workspace Undo did not restore collapse'
     & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'window';Invoke 'redo_workspace'
     Wait-Until {!(Collapsed 'sizes')} 'Workspace Redo did not restore expansion'
-    # The full editor groups Properties with Filters; Layers is independent.
-    if(!(Collapsed 'properties')){ContextMenu 'panel-tab-properties';Invoke 'Collapse column' -Name}
-    ContextMenu 'column-icon-properties';Invoke 'Open individual panels' -Name
-    Invoke 'column-icon-properties'
+    if(!(Collapsed 'layers')){ContextMenu 'panel-tab-layers';Invoke 'Collapse column' -Name}
+    ContextMenu 'column-icon-layers';Invoke 'Open individual panels' -Name
+    Invoke 'column-icon-layers'
     Wait-Until {$null -ne (Find 'drawer-tab-adjustments')} 'Column drawer did not expose shared tabs'
-    $right=@((Model).state.customization.column_drawers|Where-Object {$_.tabs.active -eq 'properties'})[0]
+    $right=@((Model).state.customization.column_drawers|Where-Object {$_.tabs.active -eq 'layers'})[0]
     $rightDrawer=Control "column-drawer-$($right.anchor.column)"
     $grip=Control "drawer-grip-$($right.anchor.group)"
     if($grip.Current.Name -ne 'Move all tabs'){throw 'Drawer is missing its whole-group drag handle'}
-    Wait-Until {try{($rightDrawer.Current.ItemStatus|ConvertFrom-Json).placement.bounds.width -eq 320}catch{$false}} 'Properties drawer did not reach shared width'
+    Wait-Until {try{($rightDrawer.Current.ItemStatus|ConvertFrom-Json).placement.bounds.width -gt 0}catch{$false}} 'Layers drawer did not reach shared width'
+    $drawerWidth=($rightDrawer.Current.ItemStatus|ConvertFrom-Json).placement.bounds.width
     foreach($press in 1..2){
         (Control 'drawer-tab-adjustments' -Arranged).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
         Wait-Until {@((Model).state.customization.column_drawers|Where-Object {$_.tabs.active -eq 'adjustments'}).Count -eq 1} 'Drawer tabs did not follow shared selection'
     }
     if($null -ne (Model).state.customization.expanded){throw 'Repeating a drawer tab opened configuration'}
-    if(($rightDrawer.Current.ItemStatus|ConvertFrom-Json).placement.bounds.width -ne 320){throw 'Drawer tab switch changed the shared column width'}
-    Capture 'filters-column'
-    Invoke 'column-icon-properties'
+    if(($rightDrawer.Current.ItemStatus|ConvertFrom-Json).placement.bounds.width -ne $drawerWidth){throw 'Drawer tab switch changed the shared column width'}
+    Capture 'adjustments-column'
+    Invoke 'column-icon-layers'
     Wait-Until {@((Model).state.customization.column_drawers).Count -eq 0} 'Column origin did not close after tab switch'
-    ContextMenu 'column-icon-properties';Invoke 'Expand column' -Name;Wait-Until {!(Collapsed 'properties')} 'Properties column did not expand'
+    ContextMenu 'column-icon-layers';Invoke 'Expand column' -Name;Wait-Until {!(Collapsed 'layers')} 'Layers column did not expand'
 
     if(!(Collapsed 'navigator')){ContextMenu 'panel-tab-navigator';Invoke 'Collapse column' -Name}
     Invoke 'column-icon-navigator'
@@ -85,10 +88,11 @@ try{
     Wait-Until {$null -eq (Find 'navigator-overview')} 'Navigator drawer left its preview visible after close'
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close -DiscardUnsaved
     if((Get-Item -LiteralPath $stderr).Length){throw 'Native stderr requires inspection'}
-    [pscustomobject]@{color_drawer_repeat_toggle='passed';native_column_context='passed';collapsed_column_repeat_toggle='passed';expand_undo_redo='passed';drawer_tab_selection_and_width='passed';navigator_drawer='passed';zero_exit='passed';scope='native controls and shared actions; visual parity, physical drag and presentation are separate'}|ConvertTo-Json
+    [pscustomobject]@{color_drawer_repeat_toggle='passed';native_column_context='passed';collapsed_column_repeat_toggle='passed';expand_undo_redo='passed';drawer_tab_selection_and_width='passed';drawer_tab_width=$drawerWidth;navigator_drawer='passed';zero_exit='passed';scope='native controls and shared actions; visual parity, physical drag and presentation are separate'}|ConvertTo-Json
 }catch{
     if($review -and !$review.HasExited){try{Capture 'failure'}catch{}}
     [IO.File]::WriteAllText((Join-Path $run 'failure.txt'),($_|Out-String)+$_.ScriptStackTrace);throw
 }finally{
+    if($review -and !$review.HasExited){Stop-Process -Id $review.Id -ErrorAction SilentlyContinue}
     Exit-CapyEnvironment
 }

@@ -4,11 +4,13 @@ $repo=(Resolve-Path(Join-Path $PSScriptRoot '../../..')).Path;$scripts=$PSScript
 . (Join-Path $scripts 'CapyUia.ps1')
 Add-Type -Path (Join-Path $scripts 'RowPointerDriver.cs')
 Add-Type -Path (Join-Path $scripts 'BubbleFixtureNative.cs')
-$projectionTokens=$null;$projectionErrors=$null
-$projectionAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $scripts 'exercise-expansion.ps1'),[ref]$projectionTokens,[ref]$projectionErrors)
-if($projectionErrors.Count){throw 'Overview projection helper parse failed'}
-$projection=$projectionAst.Find({param($node)$node-is[Management.Automation.Language.FunctionDefinitionAst]-and$node.Name-eq'Wait-OverviewProjection'},$true)
-if(!$projection){throw 'Overview projection helper missing'};Invoke-Expression $projection.Extent.Text
+foreach($helper in @(@('exercise-expansion.ps1','Wait-OverviewProjection'),@('exercise-tools.ps1','Select-Tool'))){
+ $tokens=$null;$errors=$null
+ $ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path $scripts $helper[0]),[ref]$tokens,[ref]$errors)
+ if($errors.Count){throw "$($helper[0]) helper parse failed"}
+ $definition=$ast.Find({param($node)$node-is[Management.Automation.Language.FunctionDefinitionAst]-and$node.Name-eq$helper[1]},$true)
+ if(!$definition){throw "$($helper[1]) helper missing"};Invoke-Expression $definition.Extent.Text
+}
 [CapyRowPointer]::VerifyPrivateDesktop($env:CAPY_PRIVATE_DESKTOP)
 $run=Join-Path $repo ('artifacts/windows/drawer-layout/'+$Theme+'-'+[guid]::NewGuid().ToString('N'));[IO.Directory]::CreateDirectory($run)|Out-Null
 $review=$null;$window=[IntPtr]::Zero;$checks=[Collections.Generic.List[object]]::new()
@@ -51,10 +53,19 @@ function Color-Check([string]$phase){
  Check ([math]::Abs($frame.Height/$scale-$placement.height)-le1.1) ($phase+' native drawer matches publication') @{frame=$frame;placement=$placement}
  Snapshot $phase
 }
+function Select-PenForScroll{
+ $ProcessId=$review.Id
+ Select-Tool 'pen'
+ Wait-Until {(Model).brush_ready -and (Model).state.brush.tool -eq 'pen' -and @((Model).state.tool_set.subtools).Count -eq 10} 'Pen brush choices did not prepare'
+}
 function Scroll-Check([string]$phase){
  $model=Model;$presentation=Presentation
  foreach($panel in @('navigator','brushes','tool_settings')){
   $group=@($model.layout.groups|Where-Object active -eq $panel)[0];if(!$group){throw "Missing active $panel group"}
+  if($panel-eq'brushes'){
+   Wait-Until {$body=@((Presentation).groups|Where-Object id -eq $group.id)[0].body_scroll;$body.extent_height -gt $body.viewport_height+.6} ($phase+' Pen brushes did not produce genuine overflow')
+   $presentation=Presentation
+  }
   $actual=@($presentation.groups|Where-Object id -eq $group.id)[0].body_scroll
   $anchor=switch($panel){navigator{'navigator-overview'} brushes{'tool-subtool-0'} tool_settings{'number-root-tool-setting-size'}}
   $outer=Control $anchor -Arranged;$pattern=$null
@@ -68,6 +79,7 @@ function Scroll-Check([string]$phase){
    Check (!$pattern.Current.VerticallyScrollable-and$actual.extent_height-le$actual.viewport_height+.6) ($phase+' Navigator fits without artificial scrolling') @{minimum=$group.min_body_height;actual=$actual;scroll=$pattern.Current;provider_id=$outer.Current.AutomationId;provider_bounds=$outer.Current.BoundingRectangle}
   }else{
    $scroll=$pattern
+   if($panel-eq'brushes'){Check ($actual.extent_height-gt$actual.viewport_height+.6-and$scroll.Current.VerticallyScrollable) ($phase+' Brushes have genuine native overflow') @{outer=$actual;scroll=$scroll.Current}}
    $before=$scroll.Current.VerticalScrollPercent
    if($scroll.Current.VerticallyScrollable){$scroll.Scroll([System.Windows.Automation.ScrollAmount]::NoAmount,[System.Windows.Automation.ScrollAmount]::LargeIncrement);Start-Sleep -Milliseconds 150;$after=$scroll.Current.VerticalScrollPercent;Check ($after-ne$before) ($phase+' '+$panel+' genuine overflow scroll moves') @{before=$before;after=$after;outer=$actual};$scroll.SetScrollPercent(-1,0)}
    else{Check ($panel-ne'brushes') ($phase+' Brushes expected genuine overflow') @{outer=$actual;scroll=$scroll.Current}}
@@ -145,6 +157,7 @@ try{
   Wait-Until {@((Model).layout.groups|Where-Object active -eq 'navigator').Count-gt0} 'Navigator column did not expand'
  }
  Wait-Until {Find 'navigator-overview' -Visible} 'Expanded Navigator overview did not arrange'
+ Select-PenForScroll
  Scroll-Check 'paint-scroll'
  [CapyWindowExercise]::MoveWindow($window,40,40,1601,1001,$true)|Out-Null;Start-Sleep -Milliseconds 800;Scroll-Check 'paint-scroll-fractional'
  Navigator-Contacts

@@ -31,7 +31,10 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
     std::shared_ptr<WorkspaceGestures> gestures;
     std::function<void()> changed,closed;
     std::wstring id;
-    J model,geometry,from,presentedSource;
+    J model,geometry,endpoint,from,presentedSource;
+    NativeLayoutInput layoutInput;
+    float viewportWidth=0,viewportHeight=0;
+    std::function<A()> tileMeasurements;
     hstring modelKey,layoutKey,columnsKey,backgroundKey,tabsKey;
     std::map<std::wstring,J> panels;
     struct Body {hstring key;bool splitFilters=false;std::unique_ptr<PanelBody> view;};
@@ -40,45 +43,45 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
     std::map<std::wstring,double> tabWidths;
     std::vector<Column> columns;
     std::map<std::wstring,J> toolbarLayouts;
-    Microsoft::UI::Dispatching::DispatcherQueueTimer timer{nullptr};
+    CompositionTarget::Rendering_revoker frames;
     std::vector<double> heights;
     std::unique_ptr<LayerInspector> inspector;
     Clock::time_point started;
-    bool closing=false,animating=false,dirty=true,busy=false,layingOut=false,disposed=false;
-    uint64_t generation=0;
+    bool closing=false,animating=false,dirty=true,layingOut=false,disposed=false;
     int order()const{return id==L"tool"?220:200;}
 
     ~Drawer(){dispose();}
     void dispose(){
-        if(disposed)return;disposed=true;++generation;
-        if(timer)timer.Stop();
+        if(disposed)return;disposed=true;frames.revoke();
         remove(workspace,frame);remove(workspace,bridge);remove(workspace,shadow.Root());
     }
     void init(){
         auto weak=weak_from_this();
-        frame.Background(clear());frame.Visibility(Visibility::Collapsed);frame.Child(content);
+        frame.Background(clear());frame.Opacity(0);frame.Child(content);
         background.Fill(data->glass(L"panel"));background.IsHitTestVisible(false);content.Children().Append(background);
         bridge.Fill(data->glass(L"panel"));bridge.Visibility(Visibility::Collapsed);
         Canvas::SetZIndex(frame,order());Canvas::SetZIndex(bridge,order());
         AutomationProperties::SetAutomationId(frame,id==L"tool"?L"tool-drawer":hstring(L"column-drawer-"+id));
         AutomationProperties::SetName(frame,id==L"tool"?L"Tool drawer":L"Column drawer");
         workspace.Children().Append(shadow.Root());workspace.Children().Append(bridge);workspace.Children().Append(frame);
-        timer=frame.DispatcherQueue().CreateTimer();timer.Interval(std::chrono::milliseconds(8));
-        timer.Tick([weak](auto&&,auto&&){if(auto self=weak.lock())self->drive();});
         frame.LayoutUpdated([weak](auto&&,auto&&){if(auto self=weak.lock())self->measured();});
-        frame.Unloaded([weak](auto&&,auto&&){if(auto self=weak.lock())self->timer.Stop();});
+        frame.Unloaded([weak](auto&&,auto&&){if(auto self=weak.lock())self->frames.revoke();});
         frame.Loaded([weak](auto&&,auto&&){if(auto self=weak.lock())self->wake();});
     }
-    void wake(){if(disposed)return;dirty=true;if(!timer.IsRunning())timer.Start();}
-    void apply(J const& current,hstring const& layout){
+    void wake(){
+        if(disposed)return;dirty=true;
+        if(!frames)frames=CompositionTarget::Rendering(auto_revoke,[weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->drive();});
+    }
+    void apply(J const& current,hstring const& layout,NativeLayoutInput input,float width,float height){
         if(disposed)return;
+        layoutInput=std::move(input);viewportWidth=width;viewportHeight=height;
         auto next=current.Size()?current.Stringify():hstring{};
         bool changedModel=next!=modelKey;
         if(changedModel){
             bool pageChange=inspector&&current.HasKey(L"layer_properties")&&model.HasKey(L"layer_properties")&&flag(current,L"layer_properties")!=flag(model,L"layer_properties");
             from=object(geometry,L"placement");started=Clock::now();animating=true;
             modelKey=next;closing=!current.Size();if(!closing)model=current;
-            ++generation;heights.assign(array(model,L"columns").Size(),0.);wake();
+            heights.assign(array(model,L"columns").Size(),0.);wake();
             if(pageChange){
                 inspector->startPosition=inspector->position;inspector->targetPosition=flag(model,L"layer_properties")?1.:0.;inspector->started=started;inspector->animating=true;
                 if(flag(model,L"layer_properties")){auto layer=bodies.find(L"layers");if(layer!=bodies.end()&&layer->second.view&&layer->second.view->layers)inspector->anchor=layer->second.view->layers->scrollAnchor();}
@@ -98,6 +101,7 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
         for(auto& [panel,body]:bodies)if(body.view)body.view->Apply(active(panel));
         if(inspector&&model.HasKey(L"layer_properties")){inspector->properties->Apply(flag(model,L"layer_properties"));refreshInspector();if(inspectorSizingKey()!=inspector->sizingKey)wake();}
         frame.IsHitTestVisible(!closing);bridge.IsHitTestVisible(!closing);
+        if(!closing)drive();
 
     }
     bool active(std::wstring const& panel)const{
@@ -107,98 +111,63 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
     hstring toolbarKey(J const& panel,double width)const{
         return O({{L"panel",panelStructure(panel)},{L"width",N(width)}}).Stringify();
     }
+    J resolve(bool toolbars,J const& layer=J{})const{
+        A measured;for(auto height:heights)measured.Append(N(height));
+        auto request=O({{L"model",model},{L"column_drawers",array(object(data->state,L"customization"),L"column_drawers")},
+            {L"tiles",tileMeasurements()},{L"heights",measured},{L"toolbars",B(toolbars)},
+            {L"layer",layer.Size()?V(layer):JsonValue::CreateNullValue()}});
+        NativeString raw(capy_drawer_resolve(layoutInput.get(),viewportWidth,viewportHeight,to_string(request.Stringify()).c_str()));J packet;
+        if(!raw||!J::TryParse(to_hstring(raw.get()),packet)||!object(packet,L"result").Size())
+            throw hresult_invalid_argument(L"Drawer layout resolution failed: "+str(packet,L"error"));
+        return object(packet,L"result");
+    }
+    void prepare(){
+        auto result=resolve(true);endpoint=object(result,L"placement");geometry=O({{L"placement",endpoint}});
+        for(auto value:array(result,L"toolbars")){
+            auto item=value.GetObject();auto found=panels.find(std::wstring(str(item,L"panel")));if(found==panels.end())continue;
+            auto key=toolbarKey(found->second,num(item,L"width"));
+            if(!toolbarLayouts.contains(std::wstring(key))){
+                if(toolbarLayouts.size()>=32)toolbarLayouts.erase(toolbarLayouts.begin());
+                toolbarLayouts[std::wstring(key)]=object(item,L"layout");
+            }
+        }
+        rebuild();
+        if(inspector&&model.HasKey(L"layer_properties")){
+            auto request=inspectorSizingRequest();
+            auto layer=O({{L"measurement",object(request,L"measurement")},
+                {L"rows",N(array(data->state,L"layers").Size())},{L"properties_height",N(num(request,L"properties_height"))}});
+            result=resolve(false,layer);inspector->sizes=object(result,L"sizes");inspector->sizingKey=inspectorSizingKey(request);
+            auto placements=array(inspector->sizes,L"placements");
+            if(placements.Size()==2){auto value=placements.GetAt(flag(model,L"layer_properties")?1:0);endpoint=value.ValueType()==JsonValueType::Object?value.GetObject():J{};}
+        }else if(measureHeights())endpoint=object(resolve(false),L"placement");
+        geometry=O({{L"placement",endpoint}});placeColumns();dirty=false;
+    }
     void drive(){
-        if(disposed){timer.Stop();return;}
-        if(busy)return;
-
-        if(closing&&!object(geometry,L"placement").Size()){timer.Stop();closed();return;}
+        if(disposed||!layoutInput){frames.revoke();return;}
+        if(layingOut)return;layingOut=true;struct Reset {bool& value;~Reset(){value=false;}} reset{layingOut};
+        if(closing&&!from.Size()){frames.revoke();closed();return;}
+        if(dirty&&!closing)prepare();
+        if(!closing&&!endpoint.Size()){frames.revoke();draw();return;}
         if(inspector&&model.HasKey(L"layer_properties")&&!closing&&!inspector->animating&&inspector->position==0&&inspector->anchor.Size()){
             auto layer=bodies.at(L"layers").view->layers;
             if(layer&&layer->restoreAnchor(inspector->anchor))inspector->anchor=J{};else dirty=true;
         }
-        double pagePosition=inspector?inspector->position:0.,pageProgress=1.;bool pageComplete=false;
         bool motion=Windows::UI::ViewManagement::UISettings().AnimationsEnabled();
-        if(inspector&&model.HasKey(L"layer_properties")&&!closing){
-            auto layer=bodies.find(L"layers");
-            if(layer!=bodies.end()&&layer->second.view){
-                auto request=inspectorSizingRequest();auto key=inspectorSizingKey(request);
-                if(key!=inspector->sizingKey){
-                    busy=true;auto serial=generation;
-                    if(!QueryWorkspace(data->query,request,[weak=weak_from_this(),serial,key](J reply){if(auto self=weak.lock()){
-                        self->busy=false;if(self->disposed||serial!=self->generation||!self->inspector)return;
-                        self->inspector->sizingKey=key;self->inspector->sizes=object(reply,L"result");self->wake();
-                    }}))busy=false;
-                    return;
-                }
-            }
-            if(inspector->animating){
-                pageProgress=motion?std::clamp(std::chrono::duration<double>(Clock::now()-inspector->started).count()/.2,0.,1.):1.;
-                pagePosition=inspector->startPosition+(inspector->targetPosition-inspector->startPosition)*(1.-std::pow(1.-pageProgress,3));
-                pageComplete=pageProgress>=1.;dirty=true;
-            }
-            auto sizes=array(inspector->sizes,L"heights");
-            if(sizes.Size()==2)heights={sizes.GetNumberAt(0)*(1.-pagePosition)+sizes.GetNumberAt(1)*pagePosition};
+        double progress=animating&&motion?std::clamp(std::chrono::duration<double>(Clock::now()-started).count()/.2,0.,1.):1.;
+        if(inspector&&inspector->animating&&!closing){
+            progress=motion?std::clamp(std::chrono::duration<double>(Clock::now()-inspector->started).count()/.2,0.,1.):1.;
+            inspector->position=inspector->startPosition+(inspector->targetPosition-inspector->startPosition)*(1.-std::pow(1.-progress,3));
+            if(progress>=1.)inspector->animating=false;
         }
-        // A tile body needs the shared wrapping geometry before native measurement.
-        auto placements=array(object(geometry,L"placement"),L"columns"),models=array(model,L"columns");
-        if(!closing)for(uint32_t i=0;i<std::min(placements.Size(),models.Size());++i){
-            auto width=num(placements.GetObjectAt(i),L"width");
-            for(auto value:models.GetArrayAt(i)){
-                auto found=panels.find(std::wstring(value.GetString()));if(found==panels.end())continue;
-                auto panel=found->second;if(!array(panel,L"tiles").Size())continue;
-                auto key=toolbarKey(panel,width);
-                if(toolbarLayouts.contains(std::wstring(key)))continue;
-                busy=true;auto serial=generation;
-                auto request=O({{L"type",S(L"drawer_toolbar")},{L"panel",S(str(panel,L"id"))},{L"width",N(width)},{L"height",N(800)}});
-                if(!QueryWorkspace(data->query,request,[weak=weak_from_this(),serial,key](J reply){
-                    if(auto self=weak.lock()){
-                        self->busy=false;if(self->disposed)return;
-                        if(serial==self->generation){
-                            auto result=object(reply,L"result");
-                            if(result.Size()){
-                                if(self->toolbarLayouts.size()>=32)self->toolbarLayouts.erase(self->toolbarLayouts.begin());
-                                self->toolbarLayouts[std::wstring(key)]=result;self->rebuild();self->wake();
-                            }
-                        }
-                    }
-                }))busy=false;
-                return;
-            }
-        }
-        if(!dirty&&!animating&&!(inspector&&inspector->animating)){dirty=false;timer.Stop();return;}
-        float progress=animating&&motion?std::clamp(std::chrono::duration<float>(Clock::now()-started).count()/.2f,0.f,1.f):1.f;
-        auto endpoints=inspector?array(inspector->sizes,L"placements"):A{};
-        J endpoint;
-        if(endpoints.Size()==2){auto value=endpoints.GetAt(flag(model,L"layer_properties")?1:0);if(value.ValueType()==JsonValueType::Object)endpoint=value.GetObject();}
-        if(inspector&&model.HasKey(L"layer_properties")&&((!closing&&endpoint.Size())||closing&&from.Size())){
-            auto end=closing?from:endpoint;
-            auto fraction=inspector->animating?pageProgress:progress;
-            auto request=O({{L"from",from.Size()?V(from):JsonValue::CreateNullValue()},{L"to",end},{L"progress",N(1.-std::pow(1.-fraction,3))},{L"closing",B(closing)}});
-            NativeString raw(capy_drawer_frame(data->localization.get(),to_string(request.Stringify()).c_str()),capy_string_free);
-            if(!raw)throw hresult_invalid_argument(L"Drawer frame failed");
-            geometry=J::Parse(to_hstring(raw.get()));inspector->position=pagePosition;
-            if(pageComplete)inspector->animating=false;
-            if(progress>=1)animating=false;
-            dirty=false;rebuild();draw();changed();
-            if(closing&&progress>=1){timer.Stop();closed();}
-            return;
-        }
-        A measured;for(auto height:heights)measured.Append(N(height));
-        auto request=O({{L"type",S(L"drawer")},{L"column",id==L"tool"?JsonValue::CreateNullValue():N(std::stoul(id))},
-            {L"heights",measured},{L"progress",N(progress)},{L"from",from.Size()?V(from):JsonValue::CreateNullValue()},{L"closing",B(closing)}});
-        auto serial=generation;busy=true;dirty=false;
-        if(!QueryWorkspace(data->query,request,[weak=weak_from_this(),serial,progress,pagePosition,pageComplete](J reply){
-            if(auto self=weak.lock()){
-                self->busy=false;if(self->disposed||serial!=self->generation)return;
-                self->geometry=object(reply,L"result");
-                if(self->inspector){self->inspector->position=pagePosition;if(pageComplete)self->inspector->animating=false;}
-                if(progress>=1)self->animating=false;
-                self->rebuild();
-                if(!self->closing&&self->measureHeights()){self->wake();return;}
-                self->draw();self->changed();
-                if(self->closing&&progress>=1){self->timer.Stop();self->closed();}
-            }
-        })){busy=false;dirty=true;}
+        auto fraction=inspector?1.-std::pow(1.-progress,3):progress;
+        auto end=closing?from:endpoint;
+        auto request=O({{L"from",from.Size()?V(from):JsonValue::CreateNullValue()},{L"to",end},{L"progress",N(fraction)},{L"closing",B(closing)},{L"clip_contents",B(!inspector)}});
+        NativeString raw(capy_drawer_frame(data->localization.get(),to_string(request.Stringify()).c_str()),capy_string_free);
+        if(!raw)throw hresult_invalid_argument(L"Drawer frame failed");
+        geometry=J::Parse(to_hstring(raw.get()));if(progress>=1.)animating=false;
+        rebuild();draw();changed();
+        if(closing&&progress>=1.){frames.revoke();closed();return;}
+        if(!dirty&&!animating&&!(inspector&&inspector->animating))frames.revoke();
     }
     void rebuild(){
         auto placements=array(object(geometry,L"placement"),L"columns"),models=array(model,L"columns");
@@ -365,6 +334,7 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
     void draw(){
         auto placement=object(geometry,L"placement");auto bounds=object(placement,L"bounds");
         frame.Visibility(bounds.Size()?Visibility::Visible:Visibility::Collapsed);
+        frame.Opacity(bounds.Size()?1.:0.);
         shadow.Layout(rectangle(bounds),order(),bounds.Size()!=0);
         if(!bounds.Size()){presentedSource=J{};bridge.Visibility(Visibility::Collapsed);return;}
         place(frame,bounds);
@@ -416,12 +386,12 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
     void refreshInspector(){inspector->refresh(flag(model,L"layer_properties"));}
     J inspectorSizingRequest()const{
         auto layer=bodies.find(L"layers");if(!inspector||layer==bodies.end()||!layer->second.view)return J{};
-        return inspector->sizingRequest(*layer->second.view);
+        auto placements=array(endpoint,L"columns");
+        return inspector->sizingRequest(*layer->second.view,placements.Size()?num(placements.GetObjectAt(0),L"width"):0.);
     }
     hstring inspectorSizingKey(J const& request)const{return request.Stringify()+L":"+to_hstring(array(data->state,L"layers").Size())+L":"+layoutKey+L":"+object(model,L"anchor").Stringify();}
     hstring inspectorSizingKey()const{return inspectorSizingKey(inspectorSizingRequest());}
     void paintBackground(){
-        if(!frame.IsLoaded())return;
         auto bounds=object(object(geometry,L"placement"),L"bounds");float width=float(num(bounds,L"width")),height=float(num(bounds,L"height"));
         if(width<=0||height<=0)return;
         A holes;auto tabs=array(data->state,L"tabs");auto document=tabs.Size()?tabs.GetObjectAt(0):J{};
@@ -519,7 +489,7 @@ struct WorkspaceDrawers::Impl:std::enable_shared_from_this<Impl>{
         }
         changed();publishing=false;
     }
-    void apply(){
+    void apply(NativeLayoutInput input,float width,float height){
         auto next=uint64_t(num(data->state,L"toolbar_context_generation"));
         if(context!=next){context=next;reset();}
         auto customization=object(data->state,L"customization");std::map<std::wstring,J> models;
@@ -531,6 +501,7 @@ struct WorkspaceDrawers::Impl:std::enable_shared_from_this<Impl>{
         for(auto const& [id,model]:models)if(!drawers.contains(id)){
             auto drawer=std::make_shared<Drawer>();drawer->data=data;drawer->workspace=root;drawer->gestures=gestures;drawer->id=id;
             auto weak=weak_from_this();auto weakDrawer=std::weak_ptr<Drawer>(drawer);
+            drawer->tileMeasurements=[weak]{A result;if(auto self=weak.lock())for(auto const& [id,drawer]:self->drawers)drawer->appendTiles(result);return result;};
             drawer->changed=[weak]{if(auto self=weak.lock())self->publish();};
             drawer->closed=[weak,weakDrawer,id]{
                 if(auto self=weak.lock()){
@@ -541,7 +512,7 @@ struct WorkspaceDrawers::Impl:std::enable_shared_from_this<Impl>{
             drawers[id]=drawer;drawer->init();
         }
         auto layout=object(data->model,L"layout").Stringify();
-        for(auto const& [id,drawer]:drawers){auto model=models.find(id);drawer->apply(model==models.end()?J{}:model->second,layout);}
+        for(auto const& [id,drawer]:drawers){auto model=models.find(id);drawer->apply(model==models.end()?J{}:model->second,layout,input,width,height);}
         publish();
     }
     void reset(){
@@ -551,7 +522,7 @@ struct WorkspaceDrawers::Impl:std::enable_shared_from_this<Impl>{
 WorkspaceDrawers::WorkspaceDrawers(std::shared_ptr<WorkspaceData> data,Canvas root,std::shared_ptr<WorkspaceGestures> gestures,std::function<void()> changed):
     impl(std::make_shared<Impl>()){impl->data=std::move(data);impl->root=root;impl->gestures=std::move(gestures);impl->changed=std::move(changed);}
 WorkspaceDrawers::~WorkspaceDrawers(){impl->reset();}
-void WorkspaceDrawers::Apply(){impl->apply();}
+void WorkspaceDrawers::Apply(NativeLayoutInput input,float width,float height){impl->apply(std::move(input),width,height);}
 void WorkspaceDrawers::Reset(){impl->reset();}
 void WorkspaceDrawers::AppendOverviews(A& slots)const{for(auto const& [id,drawer]:impl->drawers)drawer->appendOverviews(slots);}
 A WorkspaceDrawers::Sources()const{

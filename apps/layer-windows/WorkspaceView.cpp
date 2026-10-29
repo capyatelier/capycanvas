@@ -645,7 +645,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         if(full){pressure->attach();pressure->Publish();}
         notice->Place(layout);if(full){notice->Publish(data->state);data->queueColors();}
         collapsed->Apply();expansion->Apply(configurationHeight());present();
-        drawers->Apply();bubbles->Apply();gestures->Refresh();
+        drawers->Apply(layoutInput,viewportWidth,viewportHeight);bubbles->Apply();gestures->Refresh();
         auto status=object(layout,L"status");place(cameraSlot,status);
         cameraSlot.Visibility(num(status,L"height")>0?Visibility::Visible:Visibility::Collapsed);
         zoom->text.Foreground(data->brush(L"text"));
@@ -861,6 +861,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         A reports;
         if((data->updating&&!preparing)||!root.IsLoaded()||root.ActualWidth()<=0)return reports;
         auto requests=measurementRequests();auto context=metricContext();
+        auto scale=root.XamlRoot()?root.XamlRoot().RasterizationScale():1.;
         for(auto it=offscreen.begin();it!=offscreen.end();){
             if(find(array(data->model,L"panels"),L"id",hstring(it->first)).Size()){++it;continue;}
             uint32_t at=0;if(it->second.body&&measureHost.Children().IndexOf(it->second.body->Root(),at))measureHost.Children().RemoveAt(at);
@@ -888,7 +889,14 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
                 if(!flag(request,L"body_measured")){
                     double width=num(request,L"width"),actualWidth=width;double height=-1;J scroll;
                     if(array(panel,L"tiles").Size())height=0;
-                    else if(panelId==active){actualWidth=group.body->Root().ActualWidth();if(actualWidth<=0)actualWidth=width;height=group.body->ContentHeight(actualWidth);scroll=group.body->ScrollMetrics();}
+                    else if(panelId==active){
+                        auto bounds=rectangle(object(group.geometry,L"bounds"));
+                        if(preparing){group.frame.Measure({bounds.Width,bounds.Height});group.frame.Arrange(bounds);}
+                        actualWidth=group.body->Root().ActualWidth();
+                        if(std::abs(group.frame.ActualWidth()-width)*scale<=1.){
+                            height=group.body->ContentHeight(actualWidth);scroll=group.body->ScrollMetrics();
+                        }
+                    }
                     else {
                         auto& copy=offscreen[std::wstring(panelId)];
                         auto key=std::wstring(str(request,L"body"))+std::wstring(panelMetricKey);
@@ -906,10 +914,10 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
                         copy.body->Root().Width(width);
                         copy.body->Root().Measure({float(width),INFINITY});
                         copy.body->Root().Arrange({0,0,float(width),copy.body->Root().DesiredSize().Height});
-                        actualWidth=copy.body->Root().ActualWidth();if(actualWidth<=0)actualWidth=width;
+                        actualWidth=copy.body->Root().ActualWidth();
                         height=copy.body->ContentHeight(actualWidth);scroll=copy.body->ScrollMetrics();
                     }
-                    if(std::isfinite(height)&&height>=0)body=O({{L"actual_width",N(stable(actualWidth))},{L"content_height",N(stable(height))},
+                    if(std::isfinite(height)&&height>=0&&std::abs(actualWidth-width)*scale<=1.)body=O({{L"actual_width",N(stable(actualWidth))},{L"content_height",N(stable(height))},
                         {L"scroll",scroll.Size()?V(scroll):JsonValue::CreateNullValue()}});
                 }
                 if(tabWidth.ValueType()!=JsonValueType::Null||body.ValueType()!=JsonValueType::Null)
@@ -990,7 +998,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
                 group.bodyScroll.Height(bodyHeight);
                 if(auto content=group.bodyScroll.Content().try_as<FrameworkElement>())content.MinHeight(minimum);
             }
-            group.body->Layout(geometry);
+            group.body->Root().Width(previewBox.Width);group.body->Layout(geometry);
             if(group.footer){
                 auto grip=rectangle(object(group.geometry,L"footer_grip"));
                 grip.X=0;grip.Y=0;grip.Width=previewBox.Width;

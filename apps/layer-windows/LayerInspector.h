@@ -70,11 +70,11 @@ struct LayerInspector {
         propertyPage.Width(width);propertyPage.Height(std::max(1.,page));Canvas::SetTop(propertyPage,(1.-position)*page);
         layers.IsHitTestVisible(!open);propertyPage.IsHitTestVisible(open);
     }
-    J sizingRequest(PanelBody const& layers)const{
+    J sizingRequest(PanelBody const& layers,double width=0)const{
         auto measurement=layers.ScrollMetrics();
         if(num(measurement,L"unit_height")<=0)measurement.Insert(L"unit_height",N(40));
         measurement.Insert(L"fixed_height",N(num(measurement,L"fixed_height")+data->panelMetric(add.Visibility()==Visibility::Visible?L"inset":L"compound_spacing")*2));
-        return O({{L"type",S(L"layer_drawer_sizing")},{L"measurement",measurement},{L"properties_height",N(properties->ContentHeight())}});
+        return O({{L"type",S(L"layer_drawer_sizing")},{L"measurement",measurement},{L"properties_height",N(properties->ContentHeight(width))}});
     }
 };
 }

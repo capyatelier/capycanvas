@@ -1076,23 +1076,7 @@ impl NativeHost {
                 if ![width, height].into_iter().all(|v| v.is_finite() && v > 0.) {
                     return Err("Invalid drawer toolbar size".into());
                 }
-                let config = self.session.state().workspace.layout.panel(panel)?;
-                let geometry = layer_ui::toolbar_tile_layout(
-                    width,
-                    layer_ui::toolbar_content_height(width, config.tiles(), config.tile_style),
-                    layer_ui::Axis::Vertical,
-                    config.tiles(),
-                    false,
-                    config.tile_style,
-                );
-                let content_height = geometry
-                    .tiles
-                    .iter()
-                    .map(|b| b.y + b.height + 4.)
-                    .fold(0., f32::max);
-                let mut value = json!(geometry);
-                value["content_height"] = json!(content_height);
-                value
+                self.session.state().workspace.layout.drawer_toolbar(panel,width)?
             }
             Query::Navigator { viewport } => {
                 let state = self.session.state();
@@ -3058,6 +3042,78 @@ mod tests {
         assert!(app.resize(0, 100, 1.0).is_err());
         assert!(app.resize(100, 100, 0.0).is_err());
     }
+    #[test]
+    fn drawer_geometry_batch_matches_the_existing_host_queries() {
+        let mut host=NativeHost::new(layer_ui::Platform::Android).unwrap();
+        host.resize(2880,1800,1.75).unwrap();
+        let group=host.session.state().workspace.layout.panel_group(layer_ui::Panel::Brushes).unwrap();
+        host.dispatch(serde_json::from_value(serde_json::json!({"type":"move_panel","panel":"toolbar",
+            "target":{"kind":"tab","group":group},"viewport":host.logical})).unwrap()).unwrap();
+        host.dispatch(serde_json::from_value(serde_json::json!({"type":"customize","action":{
+            "type":"set_column_collapsed","group":group,"collapsed":true}})).unwrap()).unwrap();
+        let column=host.session.state().workspace.layout.collapsed_column_for_group(group).unwrap();
+        host.dispatch(serde_json::from_value(serde_json::json!({"type":"customize","action":{
+            "type":"set_column_drawers","column":column,"drawers":true}})).unwrap()).unwrap();
+        host.dispatch(serde_json::from_value(serde_json::json!({"type":"customize","action":{
+            "type":"toggle_column_drawer","group":group,"panel":"toolbar"}})).unwrap()).unwrap();
+        let parent=host.session.state().customization.column_drawers[0].clone();
+        let parent_request=serde_json::json!({"model":parent,"column_drawers":[],"tiles":[],
+            "heights":[300.],"toolbars":true});
+        let parent_reply=host.session.layout_resolve_input().drawer_geometry(host.logical,&parent_request.to_string()).unwrap();
+        assert!(parent_reply["placement"].is_object());
+        assert!(!parent_reply["toolbars"].as_array().unwrap().is_empty());
+        for toolbar in parent_reply["toolbars"].as_array().unwrap() {
+            let old=host.query(serde_json::json!({"type":"drawer_toolbar","panel":toolbar["panel"],
+                "width":toolbar["width"],"height":480.})).unwrap();
+            assert_eq!(toolbar["layout"],old);
+        }
+        let layout=&host.session.state().workspace.layout;
+        let panel=layer_ui::Panel::Toolbar;
+        let tile=layout.panel(panel).unwrap().tiles()[0].id;
+        host.dispatch(serde_json::from_value(serde_json::json!({"type":"measure_drawer_tiles","measurements":[{
+            "column":column,"anchor":{"panel":panel,"tile":tile},
+            "bounds":{"x":80.,"y":100.,"width":36.,"height":36.}}]})).unwrap()).unwrap();
+        host.dispatch(serde_json::from_value(serde_json::json!({"type":"customize","action":{
+            "type":"toggle_tool_drawer","anchor":{"panel":panel,"tile":tile}}})).unwrap()).unwrap();
+        let state=host.session.state();
+        let model=state.customization.drawer.as_ref().unwrap();
+        let heights=vec![300.;model.columns.len()];
+        let request=serde_json::json!({"model":model,"column_drawers":&state.customization.column_drawers,
+            "tiles":[{"column":column,"anchor":{"panel":panel,"tile":tile},
+                "bounds":{"x":80.,"y":100.,"width":36.,"height":36.}}],"heights":heights,"toolbars":false});
+        let pure=host.session.layout_resolve_input().drawer_geometry(host.logical,&request.to_string()).unwrap();
+        let legacy=host.query(serde_json::json!({"type":"drawer","heights":heights,"progress":1.})).unwrap();
+        assert_eq!(pure["placement"],legacy["placement"]);
+        assert!(pure["sizes"].is_null());
+    }
+
+    #[test]
+    fn layer_drawer_pages_match_the_existing_host_sizing_query() {
+        let mut host=NativeHost::new(layer_ui::Platform::Android).unwrap();
+        host.resize(1200,900,1.).unwrap();
+        let mut layout=layer_ui::DockLayout::default();
+        let panel=layout.add_toolbar(None,"Layers",&[layer_ui::ToolbarControl::Panel {panel:layer_ui::Panel::Layers}]).unwrap();
+        layout.move_panel(host.logical,panel,layer_ui::DockTarget::Edge {edge:layer_ui::Edge::Left,outer:false}).unwrap();
+        let tile=layout.panel(panel).unwrap().tiles()[0].id;
+        host.dispatch(layer_ui::UiAction::RestoreWorkspace {workspace:Box::new(layer_ui::WorkspaceState {
+            layout,..Default::default()})}).unwrap();
+        host.dispatch(serde_json::from_value(serde_json::json!({"type":"customize","action":{
+            "type":"toggle_tool_drawer","anchor":{"panel":panel,"tile":tile}}})).unwrap()).unwrap();
+        let state=host.session.state();
+        let model=state.customization.drawer.as_ref().unwrap();
+        assert_eq!(model.layer_properties,Some(false));
+        assert_eq!(model.columns.len(),1);
+        let measurement=serde_json::json!({"fixed_height":80.,"unit_height":32.});
+        let properties_height=370.;
+        let request=serde_json::json!({"model":model,"column_drawers":[],"tiles":[],
+            "heights":[300.],"toolbars":false,
+            "layer":{"measurement":measurement,"rows":state.layers.len(),"properties_height":properties_height}});
+        let pure=host.session.layout_resolve_input().drawer_geometry(host.logical,&request.to_string()).unwrap();
+        let old=host.query(serde_json::json!({"type":"layer_drawer_sizing",
+            "measurement":measurement,"properties_height":properties_height})).unwrap();
+        assert_eq!(pure["sizes"],old);
+    }
+
 }
 
 #[cfg(test)]
@@ -3078,4 +3134,5 @@ mod test_support {
         let handles = document.scene().constant_backdrop().to_vec();
         for handle in handles { document.artwork.occurrences.get_mut(handle).unwrap().visible = false; }
     }
+
 }

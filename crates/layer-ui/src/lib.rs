@@ -111,6 +111,7 @@ pub use header_drag::*;
 mod bubbles;
 pub use bubbles::*;
 mod drawers;
+mod drawer_geometry;
 mod panel_bridges;
 pub use panel_bridges::{PanelBridge, PanelBridgeReceiver, PanelBridgeMeasure, PanelColumnMeasure, PanelBridgeFrame, PanelBridgePath, PanelColumnGeometry, PanelVectorSurface, PanelVectorCache};
 pub use drawers::{
