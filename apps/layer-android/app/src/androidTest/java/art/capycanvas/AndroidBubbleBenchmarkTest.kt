@@ -37,6 +37,7 @@ class AndroidBubbleBenchmarkTest {
         val repeats = args.getString("repeats", "3")!!.toInt()
         val expectedRefresh = args.getString("expectedRefreshHz", "0")!!.toFloat()
         val workload = args.getString("workload", "drag")!!
+        val theme = args.getString("theme", "light")!!.also { require(it in listOf("light", "dark")) }
         val hdr = workload.startsWith("hdr-")
         val intensity = workload == "hdr-intensity"
         require(duration in 5000L..10000L && repeats >= 3)
@@ -51,6 +52,7 @@ class AndroidBubbleBenchmarkTest {
             val activity = scenario.activity()
             val host = activity.host
             fun action(value: JSONObject) = host.drain(value)
+            action(obj("type" to "set_theme", "theme" to theme))
             fun invoke(command: String) = action(obj("type" to "invoke", "command" to command))
             fun state() = host.snapshot!!.getJSONObject("state")
             fun query(value: JSONObject): Any? {
@@ -142,17 +144,10 @@ class AndroidBubbleBenchmarkTest {
                         "size" to 216, "recent" to true, "palette" to true, "pair" to true, "full" to false, "fold" to true, "swap" to false))))
                 }
                 SystemClock.sleep(1000)
-                output.resolve("fixture.json").writeText(obj("width" to width, "height" to height, "photo" to photo.path,
+                output.resolve("fixture.json").writeText(obj("theme" to theme, "width" to width, "height" to height, "photo" to photo.path,
                     "bubbles" to JSONArray(packets()), "workspace" to state().getJSONObject("workspace"), "transparency" to state().getJSONObject("settings").getString("transparency")).toString())
                 if (args.getString("waitForGo") == "true") {
-                    val ready = output.resolve("ready")
-                    val go = output.resolve("go")
-                    go.delete(); ready.writeText("ready")
-                    val deadline = SystemClock.uptimeMillis() + 180_000
-                    while (!go.exists()) {
-                        check(SystemClock.uptimeMillis() < deadline) { "Timed out waiting for benchmark refresh-policy setup" }
-                        SystemClock.sleep(50)
-                    }
+                    awaitBenchmarkRefreshPolicy(args, output, instrumentation, host, activity.window.decorView)
                     scenario.onActivity { assertSame("Policy setup retains the private Activity", activity, it) }
                     host.awaitMain("Canvas ready after refresh-policy setup", 180_000) {
                         host.snapshot?.optBoolean("canvas_ready") == true && host.snapshot?.optBoolean("shaders_ready") == true
@@ -219,7 +214,7 @@ class AndroidBubbleBenchmarkTest {
                         "clock" to "MONOTONIC", "display_hz" to refresh, "thermal_before" to thermal, "thermal_after" to power.currentThermalStatus,
                         "distinct_centers" to JSONArray(distinct), "drawn_centers" to JSONArray(positions.map { JSONArray(it.toList()) }), "frame_metrics_proxy" to JSONArray(synchronized(frameRows) { frameRows.map { JSONArray(it.toList()) } }),
                         "publication_metrics" to host.measurementReport()))
-                    output.resolve("result.json").writeText(obj("debuggable" to BuildConfig.DEBUG, "duration_ms" to duration,
+                    output.resolve("result.json").writeText(obj("theme" to theme, "debuggable" to BuildConfig.DEBUG, "duration_ms" to duration,
                         "width" to width, "height" to height, "contacts" to contacts).toString())
                     check(distinct[ids.indexOf(colorId)] > 1) { "Palette opening visibly moves its wheel" }
                     return
@@ -320,7 +315,7 @@ class AndroidBubbleBenchmarkTest {
                         "drawn_centers" to JSONArray(positions.map { JSONArray(it.toList()) }), "distinct_centers" to JSONArray(distinct),
                         "frame_metrics_proxy" to JSONArray(synchronized(frameRows) { frameRows.map { JSONArray(it.toList()) } }),
                         "publication_metrics" to host.measurementReport()))
-                    output.resolve("result.json").writeText(obj("debuggable" to BuildConfig.DEBUG, "duration_ms" to duration,
+                    output.resolve("result.json").writeText(obj("theme" to theme, "debuggable" to BuildConfig.DEBUG, "duration_ms" to duration,
                         "width" to width, "height" to height,
                         "frame_metrics_fields" to JSONArray(listOf("vsync_ns", "total_ns", "deadline_ns", "dropped_reports",
                             "input_ns", "animation_ns", "layout_measure_ns", "draw_ns", "sync_ns", "command_issue_ns", "swap_buffers_ns", "gpu_ns")),

@@ -795,6 +795,7 @@ class AndroidCanvasBarBenchmarkTest {
                 }
             }
             if (wanted("ui")) {
+                awaitBenchmarkRefreshPolicy(args, output, instrumentation, host, activity.window.decorView)
                 var currentUiLabel = "ui-fixture"
                 val uiCleanups = mutableListOf<() -> Unit>()
                 try {

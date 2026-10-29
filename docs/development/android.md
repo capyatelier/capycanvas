@@ -324,8 +324,21 @@ add work, such as renderer profiling, tracing or memory sampling, separately
 from rate runs.
 
 On the MovinkPad 11, installing, force-stopping or starting instrumentation clears
-the test app's Display › Adaptive switch. The bubble benchmark's ready/go barrier
-lets its `--adaptive-script` helper enable 90 Hz after private fixture setup.
+the test app's Display › Adaptive switch. Both UI collectors accept
+`--adaptive-script HELPER.py --adaptive-label UNIQUE_LABEL`
+`--adaptive-apk OWN.apk --adaptive-aapt /path/to/aapt`
+to enable it after private fixture setup and before the primer. Build the matched
+APKs with the worktree's own `-PcapyApplicationId` and
+`-PcapyAppLabel=UNIQUE_LABEL`. The helper checks the collector's reserved
+serial, private package, unique label and installed APK hash before opening
+Settings. A fresh READY token and process identity bind the fixture to that run;
+the collector returns to the same Activity and task. It records the initial
+policy and restores it when capture finishes. Select the expected refresh rate
+with `--target-hz 90` for bubbles or `--extra expectedRefreshHz=90` for workspace,
+layer and UI workloads. The fixture checks that rate before the primer.
+Viewport navigation, profiling and attribution do not support this barrier.
+Keep the before-primer refresh report and the existing SurfaceFlinger motion
+trace as evidence.
 
 - **Tool bubbles.** `AndroidBubbleBenchmarkTest#fiveBubbleMotion` drags one
   bubble through four others on the tier photo at Fit. Run
@@ -335,6 +348,7 @@ lets its `--adaptive-script` helper enable 90 Hz after private fixture setup.
   the tier photo in an F16 drawing with the color bubble; the latter sweeps the
   EV arc. `--workload palette-opening` repeats palette-bead taps
   (`--palette-transitions 1`–`10`) and reports no sustained-motion rate.
+  `--theme light` or `dark` selects the shared theme before the fixture.
   The collector requires factory display size and density and font scale 1.
   `--target-hz 60`, `90` or `120` also checks actual motion rate and p99 gaps
   against the tier limits, retaining the report and raw data on failure.

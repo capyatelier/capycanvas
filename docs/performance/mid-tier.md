@@ -27,15 +27,15 @@ canvas is 6000 × 4000.
 
 ## Current Android UI motion measurement status
 
-The 2026-10-28 UI harness matrix has fresh TCL low-tier observations, not
-middle-tier qualification. The final 90 Hz matrix was not run after the two
-[TCL compositing trials](low-tier.md#android-ui-compositing-trials) were rejected
-and the experiment limit was reached. Neither compositing candidate was
-accepted, and no matched middle-tier control/candidate comparison is established.
-No 90 Hz claim is made.
+The 2026-10-28 UI harness has fresh TCL observations and a matched Wacom
+MovinkPad 11 layer/filter reorder comparison at verified 90 Hz. The full current
+90 Hz UI matrix remains pending. Neither rejected
+[TCL compositing trial](low-tier.md#android-ui-compositing-trials) establishes a
+middle-tier gain. The retained thumbnail comparison below shows no stable gain
+and does not qualify either reorder row's cadence.
 Panel/tab/column docking, resize, drawer/Zen/dialog transitions, native menus,
 grouped tools and tile drag, brush/layer opacity controls, lists, workspace
-switcher and color wheels all need matched current measurements on this tier.
+switcher and color wheels still need current measurements on this tier.
 Earlier Android numbers below remain historical and do not qualify the current
 harness or production revision. Other hosts retain their own evidence.
 
@@ -50,8 +50,17 @@ rates cannot qualify freshness. The 240 dp/s fixture and delivered/implied
 value comparison still need a current 90 Hz MovinkPad pass.
 
 The retained thumbnail projection improves matched TCL layer/filter reorder
-cadence; it has no middle-tier qualification yet. A current control and
-candidate must be measured at verified 90 Hz after fixture startup.
+cadence. Its 2026-10-28 Wacom MovinkPad 11 comparison uses matched control and
+candidate APKs, identical tests and native libraries, a 6000 × 4000 photo at Fit,
+light theme and ABBA order. All eight fixtures pass at factory density 240,
+font scale 1 and thermal status 0, with verified 90 Hz before each primer and
+SurfaceFlinger presentations during motion. Each fixture has three six-second
+contacts after a full-duration primer; warming and slow contacts remain included.
+Layer reorder averages 70.537 → 70.631 presents/s, with worst contact gap p99
+22.412 → 33.497 ms. Filter reorder averages 54.088 → 54.742 presents/s, with
+worst p99 55.823 → 66.985 ms. Neither small rate difference establishes a stable
+gain; both rows miss the 90 Hz rate and gap targets. The full final matrix
+remains pending.
 
 ## Android panel composition
 

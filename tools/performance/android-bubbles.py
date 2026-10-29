@@ -23,6 +23,8 @@ photo, measuring the color bubble's native rim drag or constant-speed EV sweep.
   python3 tools/performance/android-bubbles.py artifacts/bubbles/android-mid --report-only
 """
 import argparse
+import uuid
+from android_adaptive import cleanup_steps, enable_adaptive, activity_identity, restore_adaptive, validate_identity
 import json
 import math
 import os
@@ -138,15 +140,6 @@ def report(directory, target_hz=None):
     return result
 
 
-def activity_identity(text, package):
-    component = package + "/art.capycanvas.MainActivity"
-    lines = [line for line in text.splitlines() if component in line and ("topResumedActivity=" in line or "mResumedActivity:" in line)]
-    matches = [re.search(r"ActivityRecord\{(\S+).*?\bt(\d+)\b", line) for line in lines]
-    identities = {(match.group(1), int(match.group(2))) for match in matches if match}
-    if len(identities) != 1:
-        raise ValueError("Expected one resumed private MainActivity identity")
-    return identities.pop()
-
 
 def factory_display_settings(size, density, font_scale):
     def physical(text, label, value):
@@ -170,6 +163,9 @@ def main():
     parser.add_argument("output", type=Path)
     parser.add_argument("--report-only", action="store_true")
     parser.add_argument("--adaptive-script", type=Path, help="Run this exact-row settings helper with 'enable' at the fixture's ready/go barrier")
+    parser.add_argument("--adaptive-label", help="Exact unique app label in the verified own APK")
+    parser.add_argument("--adaptive-apk", type=Path)
+    parser.add_argument("--adaptive-aapt", type=Path)
     parser.add_argument("--package", default=os.environ.get("CAPY_APPLICATION_ID"))
     parser.add_argument("--photo")
     parser.add_argument("--width", type=int)
@@ -177,6 +173,7 @@ def main():
     parser.add_argument("--duration-ms", type=int, default=6000)
     parser.add_argument("--target-hz", type=float, choices=[60, 90, 120], help="Require the reference refresh rate, actual motion rate and p99 gap limit")
     parser.add_argument("--palette-transitions", type=int, choices=range(1, 11), default=3, help="Short diagnostic only; do not calculate FPS")
+    parser.add_argument("--theme", choices=["light", "dark"], default="light")
     parser.add_argument("--workload", choices=["drag", "palette-opening", "hdr-drag", "hdr-intensity"], default="drag")
     parser.add_argument("--repeats", type=int, default=3)
     args = parser.parse_args()
@@ -192,6 +189,10 @@ def main():
     if not args.photo or not args.width or not args.height or not 5200 <= args.duration_ms <= 10000 or args.repeats < 3:
         parser.error("A tier photo/extent and at least three 5.2–10 second gestures are required")
     adb = shutil.which("adb") or str(Path.home() / "Android/Sdk/platform-tools/adb")
+    if args.adaptive_script:
+        if not args.adaptive_script.is_file() or not args.adaptive_label or not args.adaptive_label.strip() or not args.adaptive_apk or not args.adaptive_aapt or args.target_hz is None or args.target_hz <= 0:
+            parser.error("Adaptive requires an existing helper, explicit unique label, own APK, aapt and target Hz")
+        validate_identity([adb, "-s", os.environ["CAPY_ANDROID_SERIAL"]], args.package, args.adaptive_label, args.adaptive_apk, args.adaptive_aapt)
     def command(*parts, **kwargs):
         return subprocess.run([adb, *parts], check=True, text=True, capture_output=True, **kwargs).stdout
     args.output.mkdir(parents=True, exist_ok=False)
@@ -208,24 +209,31 @@ def main():
     if running.stdout.strip():
         parser.error("Stop the owned app before enabling Adaptive; force-stop clears that setting")
     cmd = [adb, "shell", "am", "instrument", "-w", "-r", "-e", "class", "art.capycanvas.AndroidBubbleBenchmarkTest#fiveBubbleMotion",
-           "-e", "workload", args.workload, "-e", "bubbleBenchmark", "true", "-e", "photo", args.photo, "-e", "width", str(args.width), "-e", "height", str(args.height),
+           "-e", "theme", args.theme, "-e", "workload", args.workload, "-e", "bubbleBenchmark", "true", "-e", "photo", args.photo, "-e", "width", str(args.width), "-e", "height", str(args.height),
            "-e", "durationMs", str(args.duration_ms), "-e", "repeats", str(args.repeats), f"{args.package}.test/androidx.test.runner.AndroidJUnitRunner"]
     if args.workload == "palette-opening":
         cmd[4:4] = ["-e", "paletteTransitions", str(args.palette_transitions)]
     if args.target_hz:
         cmd[4:4] = ["-e", "expectedRefreshHz", str(args.target_hz)]
     remote = f"/sdcard/Android/data/{args.package}/files/bubble-benchmark"
-    command("shell", "rm", "-f", *(f"{remote}/{name}" for name in ["ready", "go", "result.json", "fixture.json"]))
+    command("shell", "rm", "-f", *(f"{remote}/{name}" for name in ["ready", "go", "result.json", "fixture.json", "refresh-before-primer.json"]))
     if args.adaptive_script:
-        if not args.adaptive_script.is_file():
-            parser.error("Adaptive helper does not exist")
-        cmd[4:4] = ["-e", "waitForGo", "true"]
+        token = uuid.uuid4().hex
+        cmd[4:4] = ["-e", "waitForGo", "true", "-e", "benchmarkReadyToken", token]
     prepared = not args.adaptive_script
     samples, surface = [], None
     with (args.output / "instrumentation.log").open("w") as log:
         process = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT)
         deadline = time.monotonic() + 900
-        try:
+        with cleanup_steps(
+            lambda: command("shell", "am", "force-stop", args.package) if process.poll() is None else None,
+            lambda: process.wait(timeout=30) if process.poll() is None else None,
+            lambda: (args.output / "surface-latency.json").write_text(json.dumps(dict(surface=surface, samples=samples))),
+            lambda: (args.output / "hardware-after.txt").write_text(command("shell", "dumpsys thermalservice; dumpsys display")),
+            lambda: record_display_settings("after"),
+            lambda: command("pull", f"{remote}/refresh-before-primer.json", str(args.output)) if args.adaptive_script else None,
+            lambda: restore_adaptive([adb, "-s", os.environ["CAPY_ANDROID_SERIAL"]], args.package, args.adaptive_script, args.output, args.adaptive_label, args.adaptive_apk, args.adaptive_aapt) if args.adaptive_script else None,
+        ):
             while process.poll() is None:
                 if time.monotonic() > deadline:
                     raise TimeoutError("Bubble benchmark exceeded 15 minutes")
@@ -234,22 +242,7 @@ def main():
                     if ready.returncode != 0:
                         time.sleep(.5)
                         continue
-                    before = activity_identity(command("shell", "dumpsys", "activity", "activities"), args.package)
-                    subprocess.run([sys.executable, str(args.adaptive_script), "enable"], check=True)
-                    command("shell", "am", "task", "focus", str(before[1]))
-                    resume_deadline = time.monotonic() + 10
-                    while True:
-                        try:
-                            after = activity_identity(command("shell", "dumpsys", "activity", "activities"), args.package)
-                        except ValueError:
-                            after = None
-                        if after == before:
-                            break
-                        if time.monotonic() >= resume_deadline:
-                            raise ValueError(f"Private activity changed during policy setup: {before} -> {after}")
-                        time.sleep(.1)
-                    (args.output / "private-activity.json").write_text(json.dumps(dict(before=before, after=after)))
-                    (args.output / "hardware-before-motion.txt").write_text(command("shell", "dumpsys thermalservice; dumpsys display"))
+                    enable_adaptive([adb, "-s", os.environ["CAPY_ANDROID_SERIAL"]], args.package, args.adaptive_script, args.output, args.adaptive_label, args.adaptive_apk, args.adaptive_aapt, remote, token)
                     record_display_settings("before-motion")
                     command("shell", "touch", f"{remote}/go")
                     prepared = True
@@ -270,15 +263,8 @@ def main():
                     else:
                         samples.append(dict(begin_host_ns=started, end_host_ns=time.monotonic_ns(), text=text))
                 time.sleep(.5)
-        finally:
-            if process.poll() is None:
-                command("shell", "am", "force-stop", args.package)
-                process.wait(timeout=30)
-            (args.output / "surface-latency.json").write_text(json.dumps(dict(surface=surface, samples=samples)))
-            (args.output / "hardware-after.txt").write_text(command("shell", "dumpsys thermalservice; dumpsys display"))
-            record_display_settings("after")
-    if "OK (1 test)" not in (args.output / "instrumentation.log").read_text():
-        raise RuntimeError("Instrumentation failed; see instrumentation.log; raw surface samples retained")
+            if "OK (1 test)" not in (args.output / "instrumentation.log").read_text():
+                raise RuntimeError("Instrumentation failed; see instrumentation.log; raw surface samples retained")
     for name in ["fixture.json", "result.json"]:
         command("pull", f"{remote}/{name}", str(args.output / name))
     finish_report()

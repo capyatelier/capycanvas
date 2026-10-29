@@ -202,6 +202,7 @@ class AndroidWorkspacePerformanceTest {
                     window.addOnFrameMetricsAvailableListener(frameListener, Handler(frameThread.looper))
                 }
                 try {
+                    awaitBenchmarkRefreshPolicy(args, output, instrumentation, host, owner.view)
                     for (run in 0..3) {
                         instrumentation.runOnMainSync {
                             val delta = range.maxValue() * .5f - range.value()

@@ -269,6 +269,7 @@ internal class WorkspaceFrameTiming(private val instrumentation: Instrumentation
             window.addOnFrameMetricsAvailableListener(listener, Handler(frames.looper))
             try {
                 action(obj("type" to "preferences", "action" to obj("type" to "edit", "id" to "transparency", "value" to transparency)))
+                awaitBenchmarkRefreshPolicy(args, output, instrumentation, host, owner.view)
                 val selectedMode = args.getString("benchmarkMode")
                 val modes = (if (bridge) listOf(if (resize) "bridge-gap" else if (columnDrag) "bridge-column" else "bridge-panel") else if (colorWheel) listOf(wheel) else if (colorOverlap) listOf("color-overlap") else if (resize) listOf("brushes", "properties", "navigator", "toolbar") else listOf("attached", "floating", "destination")).filter { selectedMode == null || it == selectedMode }
                 for (mouse in if (bridge) listOf(true) else listOf(true, false)) for (mode in modes) for (run in if (bridge || tierPhoto) -1 until repeats else 0 until repeats) {

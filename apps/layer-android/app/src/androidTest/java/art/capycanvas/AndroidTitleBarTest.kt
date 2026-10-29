@@ -1659,6 +1659,7 @@ class AndroidTitleBarTest {
         tool=if(reorder) MotionEvent.TOOL_TYPE_MOUSE else MotionEvent.TOOL_TYPE_FINGER
         if(countReorder)instrumentation.runOnMainSync { compositionTracer(true) }
         try {
+            awaitBenchmarkRefreshPolicy(args, checkNotNull(instrumentation.targetContext.getExternalFilesDir(null)), instrumentation, host, window.decorView)
             for(run in 0..3) {
                 if(!discrete)down("layer-row-$id")
                 val start=point

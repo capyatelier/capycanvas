@@ -7,6 +7,8 @@ application ID first. Presents join the canvas SurfaceView's buffer numbers to
 SurfaceFlinger's actual display-frame times, so no clock conversion is needed.
 """
 import argparse
+import uuid
+from android_adaptive import cleanup_steps, enable_adaptive, restore_adaptive, validate_identity
 import csv
 import io
 import json
@@ -616,9 +618,15 @@ def main():
     p.add_argument("--theme", choices=["light", "dark"], default="light")
     p.add_argument("--profile", action="store_true", help="Workspace diagnostic: Compose trace and 199 Hz app-only CPU stacks during the first measured contact; not FPS qualification")
     p.add_argument("--attribution", action="store_true", help="Diagnostic app/UI/scheduler attribution trace; no FPS qualification")
+    p.add_argument("--adaptive-script", type=pathlib.Path)
+    p.add_argument("--adaptive-label", help="Exact unique app label in the verified own APK")
+    p.add_argument("--adaptive-apk", type=pathlib.Path)
+    p.add_argument("--adaptive-aapt", type=pathlib.Path)
     p.add_argument("--numeric-resolver", type=pathlib.Path, help="Shared NumericRequest JSONL replay executable")
     p.add_argument("--labels", help="Comma-separated native UI labels; only with --workspace-workload ui-batch")
     args = p.parse_args()
+    if args.adaptive_script and (not args.adaptive_script.is_file() or not args.adaptive_label or not args.adaptive_label.strip() or not args.adaptive_apk or not args.adaptive_aapt or args.profile or args.attribution or not args.workspace_workload):
+        p.error("Adaptive requires the verified own APK, aapt, and a clean workspace run")
     if args.numeric_resolver and not args.numeric_resolver.is_file():
         p.error("Shared numeric resolver executable is unavailable")
     selected = args.labels.split(",") if args.labels is not None else None
@@ -634,6 +642,13 @@ def main():
     if args.default_canvas and args.workspace_workload:
         p.error("--default-canvas is only for viewport navigation")
     extra = dict(item.split("=", 1) for item in filter(None, args.extra.split(",")))
+    if args.adaptive_script:
+        try:
+            refresh = float(extra.get("expectedRefreshHz", "0"))
+        except ValueError:
+            p.error("Adaptive requires a positive --extra expectedRefreshHz")
+        if not math.isfinite(refresh) or refresh <= 0:
+            p.error("Adaptive requires a positive --extra expectedRefreshHz")
     if chrome:
         try:
             chrome_arguments(args.workspace_workload, args.theme, args.repeats, selected)
@@ -644,8 +659,10 @@ def main():
             workspace_reports(args.workspace_workload, args.label, args.repeats, extra.get("benchmarkMode"))
         except ValueError as error:
             p.error(str(error))
-    args.output.mkdir(parents=True, exist_ok=True)
     adb = [shutil.which("adb") or str(pathlib.Path.home() / "Android/Sdk/platform-tools/adb"), "-s", args.serial]
+    if args.adaptive_script:
+        validate_identity(adb, args.package, args.adaptive_label, args.adaptive_apk, args.adaptive_aapt)
+    args.output.mkdir(parents=True, exist_ok=True)
     remote = f"/sdcard/Android/data/{args.package}/files/" + (CHROME_WORKLOADS[args.workspace_workload][1] if chrome else workspace_directory(args.workspace_workload) if args.workspace_workload else "viewport-benchmark")
     budget = capture_budget_seconds(args.workspace_workload, args.repeats, args.duration_ms, selected)
     capabilities = attribution_capabilities(adb) if args.attribution else None
@@ -685,15 +702,39 @@ def main():
                 else f"{args.package}.test/androidx.test.runner.AndroidJUnitRunner"]
         trace = f"/data/misc/perfetto-traces/{args.package}-{label}.perfetto-trace"
         session = f"{args.package}-{label}"
+        if args.adaptive_script:
+            token = uuid.uuid4().hex
+            cmd[-1:-1] = ["-e", "waitForGo", "true", "-e", "benchmarkReadyToken", token]
+            subprocess.run(adb + ["shell", "rm", "-f", f"{remote}/ready", f"{remote}/go", f"{remote}/refresh-before-primer.json"], check=True, capture_output=True)
         if args.profile:
             subprocess.run(adb + ["shell", "rm", "-f", f"{remote}/{label}-profile-ready", f"{remote}/{label}-profile-go"], check=True, capture_output=True)
         subprocess.run(adb + ["shell", "perfetto", "--txt", "-c", "-", "-o", trace, f"--detach={session}"],
                        input=config, text=True, check=True, capture_output=True)
-        try:
+        with cleanup_steps(
+            lambda: subprocess.run(adb + ["shell", "perfetto", f"--attach={session}", "--stop"], capture_output=True),
+            lambda: subprocess.run(adb + ["pull", f"{remote}/refresh-before-primer.json", str(args.output)], check=True, capture_output=True) if args.adaptive_script else None,
+            lambda: restore_adaptive(adb, args.package, args.adaptive_script, args.output, args.adaptive_label, args.adaptive_apk, args.adaptive_aapt) if args.adaptive_script else None,
+        ):
             time.sleep(1)
             print(f"Running {label}; instrumentation log streams to {args.output}", flush=True)
             with (args.output / f"{label}-instrument.log").open("w") as stream:
-                if not args.profile:
+                if args.adaptive_script:
+                    process = subprocess.Popen(cmd, stdout=stream, stderr=subprocess.STDOUT, text=True)
+                    with cleanup_steps(
+                        lambda: subprocess.run(adb + ["shell", "am", "force-stop", args.package], check=True, capture_output=True) if process.poll() is None else None,
+                        lambda: process.wait(timeout=15) if process.poll() is None else None,
+                    ):
+                        deadline = time.monotonic() + budget
+                        while process.poll() is None:
+                            if time.monotonic() >= deadline:
+                                raise TimeoutError("Adaptive fixture readiness exceeded capture budget")
+                            if subprocess.run(adb + ["shell", "test", "-f", f"{remote}/ready"], capture_output=True).returncode == 0:
+                                enable_adaptive(adb, args.package, args.adaptive_script, args.output, args.adaptive_label, args.adaptive_apk, args.adaptive_aapt, remote, token)
+                                subprocess.run(adb + ["shell", "touch", f"{remote}/go"], check=True, capture_output=True)
+                                break
+                            time.sleep(.1)
+                        process.wait(timeout=max(1, deadline - time.monotonic()))
+                elif not args.profile:
                     subprocess.run(cmd, stdout=stream, stderr=subprocess.STDOUT, text=True, timeout=budget)
                 else:
                     process = subprocess.Popen(cmd, stdout=stream, stderr=subprocess.STDOUT, text=True)
@@ -728,8 +769,6 @@ def main():
                         if profile is not None and profile.poll() is None:
                             profile.wait(timeout=15)
             log = (args.output / f"{label}-instrument.log").read_text()
-        finally:
-            subprocess.run(adb + ["shell", "perfetto", f"--attach={session}", "--stop"], capture_output=True)
         (args.output / f"{label}-instrument.log").write_text(log)
         local = args.output / f"{label}.perfetto-trace"
         subprocess.run(adb + ["pull", trace, str(local)], check=True, capture_output=True)
