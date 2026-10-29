@@ -1,4 +1,4 @@
-param([Parameter(Mandatory)][string]$Executable)
+param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme='dark')
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 if(!('CapyRowPointer' -as [type])){Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')}
@@ -20,6 +20,8 @@ function ContextMenu([string]$Id){
 try{
     Enter-CapyEnvironment
     $env:CAPY_STORAGE_DIR=Join-Path $run 'profile'
+    [IO.Directory]::CreateDirectory($env:CAPY_STORAGE_DIR)|Out-Null
+    [IO.File]::WriteAllText((Settings-File),(@{language=@{Explicit='en'};theme=$Theme}|ConvertTo-Json -Depth 4))
     $env:CAPY_TRACE_UI='1';$env:CAPY_SMOKE_TEST='1';$env:CAPY_TEST_DISPLAY='1';$env:CAPY_TEST_PRIMARY='1'
     $stderr=Join-Path $run 'stderr.log'
     $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError $stderr
@@ -37,8 +39,11 @@ try{
     Invoke $colorId
     Wait-Until {$null -ne (Model).state.customization.drawer} 'Color tile did not open shared drawer'
     Wait-Until {$null -ne (Find 'Color wheel' -Name)} 'Native drawer did not build Color controls'
-    $color=Control 'tool-drawer'
-    Wait-Until {try{($color.Current.ItemStatus|ConvertFrom-Json).placement.bounds.width -eq 280}catch{$false}} 'Color drawer did not reach shared width'
+    $color=Control 'tool-drawer' -Arranged
+    Wait-Until {try{
+        $width=($color.Current.ItemStatus|ConvertFrom-Json).placement.bounds.width;$scale=[CapyRowPointer]::GetDpiForWindow($owned.window.Handle)/96.
+        $width -gt 0 -and [Math]::Abs($color.Current.BoundingRectangle.Width/$scale-$width) -le 1
+    }catch{$false}} 'Color drawer did not reach shared width'
     Capture 'color'
     Invoke $colorId
     Wait-Until {$null -eq (Model).state.customization.drawer -and $null -eq (Find 'tool-drawer')} 'Repeating color tile did not close drawer'

@@ -13,6 +13,8 @@ $cargoProfileArgs = @(if ($Configuration -eq 'Release') { '--release' })
 if($LASTEXITCODE -ne 0){throw 'Renderer health regression failed.'}
 & (Join-Path $PSScriptRoot '../tests/capture-dpi.ps1')
 & (Join-Path $PSScriptRoot '../tests/uia-owned-search.ps1')
+& (Get-Process -Id $PID).Path -NoProfile -File (Join-Path $PSScriptRoot '../tests/fixture-owner-census.ps1') -Helper (Join-Path $PSScriptRoot 'CapyUia.ps1') -Output (Join-Path $testBuildDirectory ('fixture-owner-'+[guid]::NewGuid().ToString('N')))
+if($LASTEXITCODE -ne 0){throw 'Fixture owner census regression failed.'}
 & (Join-Path $PSScriptRoot '../tests/uia-projection-snapshot.ps1')
 & (Join-Path $PSScriptRoot '../tests/canvas-editing-pixels.ps1')
 & (Join-Path $PSScriptRoot '../tests/layers-menu-targeting.ps1')

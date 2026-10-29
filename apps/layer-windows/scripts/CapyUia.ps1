@@ -158,7 +158,16 @@ function Owned-DrawingWindow([Diagnostics.Process]$Process,[long]$WindowHandle,[
     })
     if($found.Count -gt 1){throw 'The owned process has multiple drawing windows; specify a window handle'}
     if($WindowHandle -and $found.Count -ne 1){throw 'The specified window is not an owned drawing window'}
-    if($found.Count){Register-CapyFixtureWindow $Process $found[0].Handle.ToInt64() $TraceDirectory;$found[0]}
+    if($found.Count){
+        $ownedHandle=$found[0].Handle.ToInt64()
+        $path=Join-Path $directory "windows-$($Process.Id).json"
+        if(Test-Path -LiteralPath $path){
+            $trace=Read-Snapshot $path
+            if($trace.process_id -eq $Process.Id -and @($trace.windows|Where-Object hwnd -eq $ownedHandle).Count -eq 0){return $null}
+        }
+        Register-CapyFixtureWindow $Process $ownedHandle $TraceDirectory
+        $found[0]
+    }
 }
 function Drawing-Checkpoint{
  $m=Model;$stamp=@($m.windows_tabs.session_stamps|Where-Object id -eq $m.windows_tabs.selected)
@@ -380,7 +389,15 @@ function Snapshot-Control($Snapshot,[string]$Id,$Type){
 }
 function Scroll-Pattern($Control,[switch]$Focus,[string]$ViewportId){
     $provider=$Control;$pattern=$null
-    if(!$provider.TryGetCurrentPattern([System.Windows.Automation.ScrollPattern]::Pattern,[ref]$pattern)){
+    $direct=$provider.TryGetCurrentPattern([System.Windows.Automation.ScrollPattern]::Pattern,[ref]$pattern)
+    if($direct -and $ViewportId){
+        $viewport=Native-Bounds $ViewportId ([CapyRowPointer]::GetDpiForWindow([IntPtr]$root.Current.NativeWindowHandle)/96.)
+        $current=$provider.Current;$bounds=$current.BoundingRectangle
+        $direct=$current.ProcessId -eq $review.Id -and !$current.IsOffscreen -and !$bounds.IsEmpty -and
+            [Math]::Abs($bounds.X-$viewport.X) -le 1 -and [Math]::Abs($bounds.Y-$viewport.Y) -le 1 -and
+            [Math]::Abs($bounds.Width-$viewport.Width) -le 1 -and $bounds.Height+1 -ge $viewport.Height
+    }
+    if(!$direct){
         $condition=[System.Windows.Automation.AndCondition]::new(
             [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,'PART_ScrollPresenter'),
             [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::IsScrollPatternAvailableProperty,$true))
@@ -410,27 +427,51 @@ function Scroll-Pattern($Control,[switch]$Focus,[string]$ViewportId){
     }
     $pattern
 }
-function Reveal([string]$Id,[switch]$Focus){
- $item=Control $Id
- if($Focus){$item.SetFocus();Wait-Until {$item.Current.HasKeyboardFocus} "$Id did not receive focus"}
- $walker=[System.Windows.Automation.TreeWalker]::ControlViewWalker;$node=$walker.GetParent($item);$scroll=$null;$viewport=$null;$viewportId=$null
- while($node){
-  $pattern=$null
-  if(!$scroll -and $node.TryGetCurrentPattern([System.Windows.Automation.ScrollPattern]::Pattern,[ref]$pattern) -and $pattern.Current.VerticallyScrollable){$scroll=$pattern;$viewport=$node}
-  if($node.Current.AutomationId -match '^panel-body-scroll-\d+$'){$viewportId=$node.Current.AutomationId;break}
-  if($node.Current.AutomationId -match '^workspace-group-(\d+)$'){if($scroll){$viewportId='panel-body-scroll-'+$Matches[1]};break}
-  if($node.Equals($root)){break}
-  $node=$walker.GetParent($node)
+function Reveal([string]$Id,[switch]$Focus,[string]$ViewportId){
+ $scroll=$null;$viewport=$null;$item=$null
+ if($ViewportId){
+  if(Find $ViewportId -Visible -NoPopups){$viewport=Control $ViewportId -Arranged -NoPopups}
+  else{
+   if($ViewportId -notmatch '^panel-body-scroll-(\d+)$'){throw "No owned group for native viewport: $ViewportId"}
+   $viewport=Control ('workspace-group-'+$Matches[1]) -Arranged -NoPopups
+  }
+ }else{
+  $item=Control $Id
+  if($Focus){$item.SetFocus();Wait-Until {$item.Current.HasKeyboardFocus} "$Id did not receive focus"}
+  $walker=[System.Windows.Automation.TreeWalker]::ControlViewWalker;$node=$walker.GetParent($item)
+  while($node){
+   $pattern=$null
+   if(!$scroll -and $node.TryGetCurrentPattern([System.Windows.Automation.ScrollPattern]::Pattern,[ref]$pattern) -and $pattern.Current.VerticallyScrollable){$scroll=$pattern;$viewport=$node}
+   if($node.Current.AutomationId -match '^panel-body-scroll-\d+$'){$ViewportId=$node.Current.AutomationId;break}
+   if($node.Current.AutomationId -match '^workspace-group-(\d+)$'){if($scroll){$ViewportId='panel-body-scroll-'+$Matches[1]};break}
+   if($node.Equals($root)){break}
+   $node=$walker.GetParent($node)
+  }
  }
  $scanFromTop=$false
  for($step=0;$step -lt 40;$step++){
-  $item=Control $Id;$bounds=$item.Current.BoundingRectangle
-  $clip=if($viewportId){Native-Bounds $viewportId ([CapyRowPointer]::GetDpiForWindow([IntPtr]$root.Current.NativeWindowHandle)/96.)}elseif($viewport){$viewport.Current.BoundingRectangle}else{$root.Current.BoundingRectangle}
+  $item=if($ViewportId -and $viewport){Find $Id -Within $viewport -NoPopups}else{Control $Id}
+  $bounds=if($item){$item.Current.BoundingRectangle}else{$null}
+  $clip=if($ViewportId){Native-Bounds $ViewportId ([CapyRowPointer]::GetDpiForWindow([IntPtr]$root.Current.NativeWindowHandle)/96.)}elseif($viewport){$viewport.Current.BoundingRectangle}else{$root.Current.BoundingRectangle}
   $clip.Intersect($root.Current.BoundingRectangle);$clip.Inflate(1,1)
-  if(!$item.Current.IsOffscreen -and !$bounds.IsEmpty -and $clip.Contains($bounds)){return (Control $Id -Arranged)}
+  if($item -and !$item.Current.IsOffscreen -and !$bounds.IsEmpty -and $clip.Contains($bounds)){
+   $ready=if($ViewportId -and $viewport){Control $Id -Within $viewport -Arranged -NoPopups}else{Control $Id -Arranged}
+   if($Focus -and $ViewportId){$ready.SetFocus();Wait-Until {$ready.Current.HasKeyboardFocus} "$Id did not receive focus"}
+   return $ready
+  }
+  if(!$scroll -and $ViewportId){
+   $lookup=@{scroll=$null}
+   Wait-Until {
+    try{$lookup.scroll=Scroll-Pattern $viewport -ViewportId $ViewportId}
+    catch{if($_.Exception.Message -ne 'Native scroll container must have exactly one scroll provider'){throw};return $false}
+    $true
+   } 'Native scroll container must have exactly one scroll provider'
+   $scroll=$lookup.scroll
+   Wait-Until {$scroll.Current.VerticallyScrollable} "$Id has no vertically scrollable native provider"
+  }
   if(!$scroll){throw "$Id is clipped outside any scroll container"}
   $before=$scroll.Current.VerticalScrollPercent
-  if($bounds.IsEmpty -and !$scanFromTop){
+  if((!$bounds -or $bounds.IsEmpty) -and !$scanFromTop){
    $scanFromTop=$true
    if($before -gt 0){
     $scroll.SetScrollPercent([System.Windows.Automation.ScrollPattern]::NoScroll,0)
@@ -438,7 +479,8 @@ function Reveal([string]$Id,[switch]$Focus){
     continue
    }
   }
-  $amount=if(!$bounds.IsEmpty -and $bounds.Top -lt $clip.Top){[System.Windows.Automation.ScrollAmount]::SmallDecrement}else{[System.Windows.Automation.ScrollAmount]::SmallIncrement}
+  $amount=if($bounds -and !$bounds.IsEmpty -and $bounds.Top -lt $clip.Top){[System.Windows.Automation.ScrollAmount]::SmallDecrement}else{[System.Windows.Automation.ScrollAmount]::SmallIncrement}
+  if(!$scroll.Current.VerticallyScrollable){throw "$Id has no vertically scrollable native provider"}
   $scroll.Scroll([System.Windows.Automation.ScrollAmount]::NoAmount,$amount)
   Wait-Until {[Math]::Abs($scroll.Current.VerticalScrollPercent-$before) -gt .01} "$Id did not scroll into view"
  }

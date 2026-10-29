@@ -1,11 +1,12 @@
-﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet("F16","F32")][string]$Depth="F16",[switch]$DrawingTabsOnly,[switch]$ControlsOnly,[ValidateSet('dark','light')][string]$Theme='dark',[ValidateSet('full','tab-drop-dark','tab-drop-light','screen-parity','screen-parity-light')][string]$Journey='full')
+﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet("F16","F32")][string]$Depth="F16",[switch]$DrawingTabsOnly,[switch]$ControlsOnly,[switch]$ArcContextOnly,[ValidateSet('dark','light')][string]$Theme='dark',[ValidateSet('full','tab-drop-dark','tab-drop-light','screen-parity','screen-parity-light')][string]$Journey='full')
 $ErrorActionPreference='Stop'
 $screenParity=$Journey -in @('screen-parity','screen-parity-light')
 if($screenParity){$ControlsOnly=$true;if($Journey -eq 'screen-parity-light'){$Theme='light'}}
 $tabDropOnly=$Journey.StartsWith('tab-drop-')
 if($tabDropOnly){$DrawingTabsOnly=$true;$Theme=$Journey -replace '^tab-drop-',''}
+if($ArcContextOnly){$ControlsOnly=$true}
 if($ControlsOnly -and !$screenParity -and !$PSBoundParameters.ContainsKey('Theme')){
- foreach($theme in @('dark','light')){& $PSCommandPath -Executable $Executable -Depth $Depth -ControlsOnly -Theme $theme}
+ foreach($theme in @('dark','light')){& $PSCommandPath -Executable $Executable -Depth $Depth -ControlsOnly -ArcContextOnly:$ArcContextOnly -Theme $theme}
  return
 }
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
@@ -291,10 +292,25 @@ function Select-Choice([string]$Id,[string]$Name){
  $item.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
 }
 function Idle {Wait-Until {$m=Model;$m -and !$m.windows_document -and !$m.state.document_file.busy -and !@($m.state.requests).Count} 'HDR/document operation did not finish' 60}
-function Sdr { ProofPanel;if(!(Find 'proof-panel-exposure')){Invoke 'proof-panel-mode-sdr'};$null=Control 'proof-panel-exposure';$null=Control 'proof-panel-contrast' }
+function Proof-Reveal([string]$Id){
+ $groups=@((Model).layout.groups|Where-Object {$_.active -eq 'proof'})
+ if($groups.Count -ne 1){throw 'Proof panel has no single live scroll viewport'}
+ Reveal $Id -ViewportId ('panel-body-scroll-'+$groups[0].id)
+}
+function Sdr {
+ ProofPanel
+ if((Model).windows_proof_form.mode -ne 'sdr'){
+  Invoke 'proof-panel-mode-sdr'
+  Wait-Until {(Model).windows_proof_form.mode -eq 'sdr'} 'Proof panel did not enter SDR mode'
+ }
+ $proofGroup=@((Model).layout.groups|Where-Object active -eq 'proof')[0]
+ $nativeProof=Control ('workspace-group-'+$proofGroup.id) -Arranged
+ $null=Control 'proof-dial' -Within $nativeProof -Arranged
+ $null=Proof-Reveal 'proof-panel-exposure';$null=Proof-Reveal 'proof-panel-contrast'
+}
 function ProofPanel {
  Expand-PanelColumn 'proof'
- if(Find 'proof-panel-mode' -Visible){return}
+ if(@((Model).layout.groups|Where-Object {$_.active -eq 'proof'}).Count -eq 1){return}
  $entry=@{id=$null}
  Wait-Until {
   if(Find 'proof-panel-mode' -Visible){return $true}
@@ -679,6 +695,7 @@ try {
  }
  $display=(Model).windows_display
  Button 'Test SDR output';Wait-Until {(Model).windows_display.headroom -eq 1} 'Synthetic SDR fallback did not apply'
+ if(!$ArcContextOnly){
  Sdr
  $before=(Model).state.document_file|ConvertTo-Json -Compress
  [CapyRowPointer]::SetForegroundWindow($drawingWindow)|Out-Null
@@ -688,6 +705,7 @@ try {
  Wait-Until {(Model).windows_proof_form.rendition.exposure -eq -1} 'Saved SDR appearance was lost'
  Command 'undo' 'Edit';Wait-Until {(Model).windows_proof_form.rendition.exposure -eq 0} 'SDR appearance undo failed'
  Command 'redo' 'Edit';Wait-Until {(Model).windows_proof_form.rendition.exposure -eq -1} 'SDR appearance redo failed'
+ }
  Invoke 'panel-tab-color'
  [CapyRowPointer]::SetForegroundWindow($drawingWindow)|Out-Null
  (Control 'color-readout').SetFocus();[CapyRowPointer]::Key([uint32]$review.Id,0x5D)
@@ -774,6 +792,13 @@ try {
   finally{[CapyRowPointer]::Dispose();[CapyRowPointer]::SetThreadDpiAwarenessContext($dpi)|Out-Null}
  }}
  if((Get-FileHash -LiteralPath $geometryDll -Algorithm SHA256).Hash -ne $geometryHash){throw 'Color geometry DLL changed during native contacts'}
+ if($ArcContextOnly){
+  & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -StateDirectory $run -Action Close -DiscardUnsaved
+  if(!$review.WaitForExit(15000) -or $review.ExitCode -ne 0){throw 'Owned HDR arc review did not close cleanly'}
+  if((Get-Item (Join-Path $run 'stderr.log')).Length){throw 'HDR arc stderr requires inspection'}
+  @{theme=$Theme;numeric_hdr_color='passed';arc_context_mouse_touch_pen=$arcCases;transparent_wheel_mouse_touch_pen=$wheelCases;scope='Native HDR color arc and wheel controls; physical HDR and performance unverified'}|ConvertTo-Json -Depth 8|Tee-Object -FilePath (Join-Path $run 'results.json')
+  return
+ }
  Invoke 'color-foreground';Wait-Until {(Model).state.colors.paint_slot -eq 'foreground'} 'HDR foreground did not return after context changes'
  (Control 'color-readout').SetFocus();[CapyRowPointer]::Key([uint32]$review.Id,0x5D)
  Invoke 'edit-color';Wait-Until {Find 'edit-color-apply'} 'HDR color restoration did not open'
@@ -804,8 +829,7 @@ try {
   } finally {[CapyRowPointer]::Dispose();[CapyRowPointer]::SetThreadDpiAwarenessContext($previousDpi)|Out-Null}
  }
  ProofPanel
- $null=Control 'proof-panel-exposure'
- $field=Control 'proof-panel-exposure';$fieldId=$field.GetRuntimeId() -join ':'
+ $field=Proof-Reveal 'proof-panel-exposure';$fieldId=$field.GetRuntimeId() -join ':'
  [CapyRowPointer]::SetForegroundWindow($drawingWindow)|Out-Null
  $field.SetFocus();Set-Text 'proof-panel-exposure' 'invalid';[CapyRowPointer]::Key([uint32]$review.Id,0x0D)
  if((Model).windows_proof_form.rendition.exposure -ne -1){throw 'Invalid Proof field changed the recipe'}

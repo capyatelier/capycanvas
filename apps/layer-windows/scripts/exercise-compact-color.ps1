@@ -208,7 +208,7 @@ function Pair-Setup{
     Wait-Until {Find 'picker-choice-color-0'} 'Header picker omitted Color'
     (Control 'picker-choice-color-0').GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
     $confirm=@{button=$null}
-    Wait-Until {$confirm.button=Find 'Add Tools' -Name -Type ([System.Windows.Automation.ControlType]::Button) -Visible;(Model).picker.can_confirm -and $confirm.button -and $confirm.button.Current.IsEnabled} 'Selected header tools did not enable Add Tools'
+    Wait-Until {$picker=(Model).picker;$confirm.button=Find 'Add Tools' -Name -Type ([System.Windows.Automation.ControlType]::Button) -Visible;$picker.selected_count -eq 1 -and $picker.can_confirm -and $confirm.button -and $confirm.button.Current.IsEnabled} 'Header picker did not enable Add Tools for its selected Color'
     $confirm.button=Control 'Add Tools' -Name -Type ([System.Windows.Automation.ControlType]::Button) -Arranged
     if(!$confirm.button.Current.IsEnabled -or $confirm.button.Current.ProcessId -ne $review.Id){throw 'Add Tools is not enabled in the owned picker'}
     $confirm.button.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()

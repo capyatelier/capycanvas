@@ -1,4 +1,4 @@
-param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light','settings-dark','settings-light')][string]$Theme='dark')
+param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light','settings-dark','settings-light')][string]$Theme='dark',[switch]$ToolbarRangeOnly)
 $ErrorActionPreference='Stop'
 $settingsOnly=$Theme.StartsWith('settings-');if($settingsOnly){$Theme=$Theme.Substring(9)}
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
@@ -98,6 +98,32 @@ function Check-Modes([string[]]$Expected){
         if($Expected -notcontains $id -and (Find ('tool-action-'+$id))){throw "Unexpected mode $id"}
     }
 }
+function Toolbar-Range{
+    (Control 'drawing-canvas').SetFocus()
+    [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(17),0x4B)
+    (Control 'command-search').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue((Command 'tonal_select').label)
+    Wait-Until {$result=Find 'command-result-0';$result -and $result.Current.IsEnabled -and $result.Current.Name -eq (Command 'tonal_select').label} 'Command search has no Tonal range'
+    Invoke 'command-result-0'
+    Wait-Until {!(Find 'command-search') -and (Tools).tool.selection.kind -eq 'tonal'} 'Tonal range did not activate'
+    $tones=$null
+    foreach($panel in @((Model).panels)){foreach($tile in @($panel.tiles)){foreach($option in @($tile.component.options)){if($option.Choice.id -eq 'tonal-tones'){$tones=$option.Choice}}}}
+    if(!$tones){throw 'Tool Options lacks the tone bar'}
+    $index=[Array]::FindIndex([object[]]@($tones.items),[Predicate[object]]{param($x)$x.icon -eq 'tonal-custom'})
+    Invoke ('toolbar-segment-tonal-tones-'+$index)
+    Wait-Until {Find 'toolbar-range'} 'Custom tonal range did not add the Tool Options range'
+    $trackElement=Control 'toolbar-range-track' -Arranged
+    $track=$trackElement.Current.BoundingRectangle
+    $from=@{x=[int]($track.X+$track.Width-10);y=[int]($track.Y+$track.Height/2)}
+    $to=@{x=[int]($track.X+$track.Width*.7);y=[int]($track.Y+$track.Height/2)}
+    $upper=((Model).state.tool_settings|Where-Object id -eq 'tonal_upper').value
+    Drag $from $to
+    Wait-Until {((Model).state.tool_settings|Where-Object id -eq 'tonal_upper').value -ne $upper} 'Tool Options range drag did not move the upper endpoint'
+    Capture 'toolbar-tonal' -Composed
+    $null=[CapyRowPointer]::SetForegroundWindow($drawingWindow)
+    Key 0x1B
+    if(!(Command 'rectangle_select').selected){Invoke (Tool-Tile 'rectangle_select')}
+    Wait-Until {(Tools).tool.selection.kind -eq 'rectangle' -and (Command 'select_all').enabled} 'Rectangle Select did not restore after Tonal range'
+}
 try {
     Enter-CapyEnvironment
     $env:CAPY_STORAGE_DIR=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1'
@@ -113,6 +139,19 @@ try {
     Start-Sleep -Milliseconds 600
     $null=[CapyRowPointer]::SetForegroundWindow($drawingWindow)
     [CapyRowPointer]::Initialize([uint32]$review.Id)
+
+    if($ToolbarRangeOnly){
+        Switch-Workspace 'Photo' 'builtin:workspace:photographer'
+        Fit-Canvas;Canvas-Points
+        Toolbar-Range
+        [CapyRowPointer]::Verify();[CapyRowPointer]::Dispose()
+        & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Close -DiscardUnsaved
+        if(!$review.WaitForExit(8000)){throw 'Selection review did not close'}
+        if((Get-Item -LiteralPath $stderr).Length){throw 'Selection review wrote to stderr'}
+        @{theme=$Theme;toolbar_range='passed'}|ConvertTo-Json|Set-Content (Join-Path $run 'result.json')
+        Write-Output "Selection Toolbar range passed: $run"
+        return
+    }
 
     if(!$settingsOnly){
         Switch-Workspace 'Photo' 'builtin:workspace:photographer'
@@ -267,27 +306,7 @@ try {
     if(!(Tools).has_selection){throw 'Grow lost the selection'}
     Wait-Until {(Command 'select_all').enabled} 'Grow did not finish' 20
 
-    (Control 'drawing-canvas').SetFocus()
-    [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(17),0x4B)
-    (Control 'command-search').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue((Command 'tonal_select').label)
-    Wait-Until {$result=Find 'command-result-0';$result -and $result.Current.IsEnabled -and $result.Current.Name -eq (Command 'tonal_select').label} 'Command search has no Tonal range'
-    Invoke 'command-result-0'
-    Wait-Until {!(Find 'command-search') -and (Tools).tool.selection.kind -eq 'tonal'} 'Tonal range did not activate'
-    $tones=$null
-    foreach($panel in @((Model).panels)){foreach($tile in @($panel.tiles)){foreach($option in @($tile.component.options)){if($option.Choice.id -eq 'tonal-tones'){$tones=$option.Choice}}}}
-    if(!$tones){throw 'Tool Options lacks the tone bar'}
-    $index=[Array]::FindIndex([object[]]@($tones.items),[Predicate[object]]{param($x)$x.icon -eq 'tonal-custom'})
-    Invoke ('toolbar-segment-tonal-tones-'+$index)
-    Wait-Until {Find 'toolbar-range'} 'Custom tonal range did not add the Tool Options range'
-    $upper=((Model).state.tool_settings|Where-Object id -eq 'tonal_upper').value
-    $track=(Control 'toolbar-range-track').Current.BoundingRectangle
-    Drag @{x=[int]($track.X+$track.Width-10);y=[int]($track.Y+$track.Height/2)} @{x=[int]($track.X+$track.Width*.7);y=[int]($track.Y+$track.Height/2)}
-    Wait-Until {((Model).state.tool_settings|Where-Object id -eq 'tonal_upper').value -ne $upper} 'Tool Options range drag did not move the upper endpoint'
-    Capture 'toolbar-tonal' -Composed
-    $null=[CapyRowPointer]::SetForegroundWindow($drawingWindow)
-    Key 0x1B
-    if(!(Command 'rectangle_select').selected){Invoke (Tool-Tile 'rectangle_select')}
-    Wait-Until {(Tools).tool.selection.kind -eq 'rectangle' -and (Command 'select_all').enabled} 'Rectangle Select did not restore after Tonal range'
+    Toolbar-Range
 
     $null=[CapyRowPointer]::SetForegroundWindow($drawingWindow)
     $artwork=(Model).state.colors.foreground.rgba|ConvertTo-Json -Compress
@@ -313,7 +332,14 @@ try {
 
     $before=@((Model).state.layers|ForEach-Object {$_.id})
     Expand-PanelColumn 'layers'
-    Invoke 'layer-new-selection'
+    if(Find 'layer-new-selection' -Visible){Invoke 'layer-new-selection'}else{
+        $slot=@((Tools).footer|Where-Object button -eq 'new_selection_layer')
+        if($slot.Count -ne 1 -or !$slot[0].item.enabled){throw 'Shared Layers footer does not offer New Selection Layer'}
+        Invoke 'layer-actions'
+        $overflow=@{item=$null}
+        Wait-Until {$overflow.item=@(Menu-Items|Where-Object {$_.Current.Name -eq $slot[0].item.label -and $_.Current.IsEnabled})|Select-Object -First 1;$null -ne $overflow.item} 'New Selection Layer did not appear in the native overflow'
+        $overflow.item.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+    }
     $created=@{id=$null}
     Wait-Until {$layer=@((Model).state.layers|Where-Object {$_.selection_layer -and $before -notcontains $_.id})[0];$created.id=$layer.id;$null -ne $layer} 'New Selection Layer did not add a row'
     $id=$created.id

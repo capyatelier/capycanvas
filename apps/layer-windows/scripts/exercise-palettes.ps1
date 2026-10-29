@@ -164,10 +164,15 @@ function Palette-Scroller([string]$Id){
     while($node -and !$node.TryGetCurrentPattern([System.Windows.Automation.ScrollPattern]::Pattern,[ref]$scroll)){$node=$walker.GetParent($node)}
     if(!$scroll -or !$scroll.Current.VerticallyScrollable){throw "$Id did not expose an overflowing native scroll provider"}
     @{container=Control-Trace $node}|ConvertTo-Json -Depth 12|Set-Content (Join-Path $run ($Id+'-scroll-container.json'))
-    $container=$node;$raw=[System.Windows.Automation.TreeWalker]::RawViewWalker
-    while($container -and $container.Current.ClassName -notmatch '(^|\.)Scroll(View|Viewer)$'){$container=$raw.GetParent($container)}
-    if(!$container){Save-PaletteScrollOwnership $Id @{node=$node};throw "$Id has no owning native scroll container"}
-    @{node=$node;pattern=$scroll;container=$container}
+    $panel=Control 'palettes-panel' -Arranged;$raw=[System.Windows.Automation.TreeWalker]::RawViewWalker;$ancestor=$node
+    while($ancestor -and !$ancestor.Equals($panel)){$ancestor=$raw.GetParent($ancestor)}
+    $provider=$node.Current;$bounds=$provider.BoundingRectangle;$content=Native-Bounds $Id $scale
+    if(!$ancestor -or $provider.ProcessId -ne $review.Id -or $provider.AutomationId -ne 'PART_ScrollPresenter' -or $provider.IsOffscreen -or $bounds.IsEmpty -or
+        [Math]::Abs($bounds.X-$content.X) -gt 1 -or [Math]::Abs($bounds.Width-$content.Width) -gt 1 -or $bounds.Height -ge $content.Height){
+        Save-PaletteScrollOwnership $Id @{node=$node;container=$panel}
+        throw "$Id has no owning native scroll container"
+    }
+    @{node=$node;pattern=$scroll;container=$panel}
 }
 function Save-PaletteScrollOwnership([string]$Id,$Scroller){
     $ancestry=[Collections.Generic.List[object]]::new();$walker=[System.Windows.Automation.TreeWalker]::RawViewWalker;$node=$Scroller.node;$owner=$null
@@ -184,9 +189,13 @@ function Save-PaletteScrollOwnership([string]$Id,$Scroller){
 function Palette-Scrollbars($Scroller){
     $viewport=$Scroller.node.Current.BoundingRectangle
     $condition=[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,$ControlType::ScrollBar)
+    $edge=2*$scale
     @($Scroller.container.FindAll([System.Windows.Automation.TreeScope]::Descendants,$condition)|Where-Object {
         $b=$_.Current.BoundingRectangle
-        !$_.Current.IsOffscreen -and !$b.IsEmpty -and $b.Height -gt $b.Width -and $b.X -ge $viewport.Right-30 -and $b.X -le $viewport.Right+5 -and $b.Y -ge $viewport.Y-5 -and $b.Bottom -le $viewport.Bottom+5
+        !$_.Current.IsOffscreen -and !$b.IsEmpty -and $b.Height -gt $b.Width -and
+            [Math]::Abs($b.Right-$viewport.Right) -le $edge -and
+            [Math]::Abs($b.Top-$viewport.Top) -le $edge -and
+            [Math]::Abs($b.Bottom-$viewport.Bottom) -le $edge
     })
 }
 function Palette-ScrollState([string]$Id,$Scroller){

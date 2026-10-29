@@ -72,8 +72,10 @@ function Edit-Form([int]$Row,[string]$Form){
 }
 function Property([string]$Key){(Model).state.layer_properties.controls|Where-Object {$_.key -eq $Key}}
 function Rgba($Color){if($null -ne $Color.rgba){$Color.rgba}else{$Color}}
-function Choose([string]$Id,[string]$Option){
-    (Control $Id).GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
+function Choose([string]$Id,[string]$Option,$Within=$root){
+    $item=Control $Id -Within $Within -Arranged -NoPopups:($Within -ne $root)
+    Wait-Until {$item.Current.IsEnabled} "$Id did not enable its native choice"
+    $item.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
     (Control $Option -Name -Type ([System.Windows.Automation.ControlType]::ListItem)).GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
 }
 function Select-Panel([string]$Id){
@@ -111,15 +113,23 @@ function Select-Filter([string]$Id,[string]$Label){
     Select-Panel 'adjustments'
     Wait-Until {@((Model).layout.groups|Where-Object {$_.active -eq 'adjustments'}).Count -gt 0} 'Filters tab did not open'
     if($null -ne (Model).state.filter_picker.search){Invoke 'filter-search-toggle'}
-    Choose 'filter-category' 'All filters'
+    $picker=Control 'filter-picker' -Arranged -NoPopups
+    Choose 'filter-category' 'All filters' -Within $picker
+    Wait-Until {$null -eq (Model).state.filter_picker.category} 'All filters category was not acknowledged'
     Invoke 'filter-search-toggle'
     Edit 'filter-search' $Label
     Wait-Until {(Model).state.filter_picker.search -eq $Label} 'Search not acknowledged'
+    $picker=Control 'filter-picker' -Arranged -NoPopups
     Wait-Until {
-        $buttons=$root.FindAll([System.Windows.Automation.TreeScope]::Descendants,
+        $buttons=$picker.FindAll([System.Windows.Automation.TreeScope]::Descendants,
             [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::Button))
-        $rows=@($buttons|Where-Object {$_.Current.AutomationId.StartsWith('filter-') -and $_.Current.AutomationId -ne 'filter-search-toggle'})
-        $rows.Count -eq (Model).state.adjustments.Count -and $null -ne (Find ('filter-'+$Id))
+        $frame=$picker.Current.BoundingRectangle
+        $rows=@($buttons|Where-Object {
+            $current=$_.Current;$bounds=$current.BoundingRectangle
+            $current.AutomationId.StartsWith('filter-') -and $current.AutomationId -ne 'filter-search-toggle' -and
+                !$current.IsOffscreen -and !$bounds.IsEmpty -and $frame.Contains($bounds)
+        })
+        $rows.Count -eq (Model).state.adjustments.Count -and @($rows|Where-Object {$_.Current.AutomationId -eq ('filter-'+$Id)}).Count -eq 1
     } 'Search rows did not reach the native tree'
     Invoke ('filter-'+$Id)
     Wait-Until {(Model).state.layer_properties.description -eq $Label} 'Inserted filter did not become active'

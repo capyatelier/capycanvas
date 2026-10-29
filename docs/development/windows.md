@@ -574,6 +574,10 @@ pass its executable as `-DropFixture` to `exercise-layer-pickup.ps1` for the ful
 journey. `-PendingDropOnly` runs the overlap check directly with the LayerDrop
 executable. Run both through `test-desktop.ps1`.
 
+`-PresentationsOnly` in the layer pickup fixture, `-ToolbarRangeOnly` in
+selection, `-ArcContextOnly` in HDR and `-PixelsOnly` in Navigator run those
+portions of their normal journeys.
+
 ## Matched editor captures
 
 Compare the editor with the Web app at the same document, workspace, theme,

@@ -491,19 +491,30 @@ try{
    (Control 'tool-action-liquify_adjust' -Arranged).GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
    Wait-Until {@((Model).state.tool_settings|Where-Object id -eq 'liquify_amount').Count -eq 1} 'Adjust did not reopen for held-arrow input'
    $slider=(Control 'tool-setting-liquify_amount-slider' -Arranged)
+   $range=$slider.GetCurrentPattern([System.Windows.Automation.RangeValuePattern]::Pattern)
+   if($range.Current.Minimum -gt .25 -or $range.Current.Maximum -lt .25){throw 'Amount slider range does not include the nonzero held-key starting value'}
+   $range.SetValue(.25)
+   Wait-Until {$setting=@((Model).state.tool_settings|Where-Object id -eq 'liquify_amount');$setting.Count -eq 1 -and [Math]::Abs($setting[0].value-.25) -lt .001 -and (Revision) -ne $adjustedPaint} 'Held-key starting Amount did not commit at 0.25'
+   $heldStartPixels=Wait-StablePixels {Pixels};$heldStartPaint=Revision
+   if($heldStartPixels -eq $adjustedPixels){throw 'Held-key starting Amount did not change composed artwork'}
+   $slider=(Control 'tool-setting-liquify_amount-slider' -Arranged)
    $slider.SetFocus();[CapyRowPointer]::Hover($endX,$sliderY)
    $keyValue=@((Model).state.tool_settings|Where-Object id -eq 'liquify_amount')[0].value
    try{
-    for($repeat=0;$repeat -lt 6;$repeat++){[CapyRowPointer]::Hold(0x25,$true);Start-Sleep -Milliseconds 35}
-    Wait-Until {@((Model).state.tool_settings|Where-Object id -eq 'liquify_amount')[0].value -lt $keyValue} 'Held slider arrow did not preview'
-    if((Revision) -ne $adjustedPaint){throw 'Held slider arrow committed before key Up'}
-   }finally{[CapyRowPointer]::Hold(0x25,$false)}
-   Wait-Until {(Revision) -ne $adjustedPaint} 'Held slider arrow did not commit on key Up'
+    for($repeat=0;$repeat -lt 6;$repeat++){[CapyRowPointer]::Hold(0x27,$true);Start-Sleep -Milliseconds 35}
+    Wait-Until {@((Model).state.tool_settings|Where-Object id -eq 'liquify_amount')[0].value -gt $keyValue} 'Held slider arrow did not preview'
+    if((Revision) -ne $heldStartPaint){throw 'Held slider arrow committed before key Up'}
+   }finally{[CapyRowPointer]::Hold(0x27,$false)}
+   Wait-Until {(Revision) -ne $heldStartPaint} 'Held slider arrow did not commit on key Up'
+   $keyAmount=@((Model).state.tool_settings|Where-Object id -eq 'liquify_amount')[0].value
+   if($keyAmount -le $keyValue -or $keyAmount -gt $range.Current.Maximum){throw "Held slider arrow left invalid nonzero Amount: $keyAmount"}
    $keyPixels=Wait-StablePixels {Pixels};$keyPaint=Revision
    Assert-History 0x5a $adjustedPixels $adjustedPaint 'Held arrow coalesced Undo'
    Assert-History 0x59 $keyPixels $keyPaint 'Held arrow single Redo'
    $adjustedPixels=$keyPixels;$adjustedPaint=$keyPaint
-   $reset=Control 'tool-action-liquify_reset'
+   $reset=Control 'tool-action-liquify_reset' -Arranged
+   if(!$reset.Current.IsEnabled -or !@((Model).state.commands|Where-Object {$_.id -eq 'liquify_reset' -and $_.enabled}).Count){throw "Reset is disabled after nonzero held Amount: $keyAmount"}
+   $checks.liquify_held_amount=$keyAmount
    $reset.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
    Wait-Until {(Pixels) -eq $seedPixels} 'Reset did not restore the seeded artwork'
    $resetPixels=Wait-StablePixels {Pixels}

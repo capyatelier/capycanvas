@@ -486,16 +486,21 @@ function Check-OverviewOverlap($Configuration){
 }
 function Shown([string]$Panel,[string]$Control){((Model).panels|Where-Object id -eq $Panel).controls|Where-Object control -eq $Control|Select-Object -ExpandProperty visible_in_panel}
 function Check-SizeGrid($Within,[string]$Device,[string]$Label){
+    if($Within -eq $root){
+        $active=@{group=$null}
+        Wait-Until {$groups=@((Model).layout.groups|Where-Object active -eq 'sizes');if($groups.Count -eq 1){$active.group=$groups[0];return $true};$false} 'Sizes did not activate one workspace group'
+        $Within=Control ('workspace-group-'+$active.group.id) -Arranged
+    }
     $found=@{tiles=@()}
     Wait-Until {
         $buttons=$Within.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new(
             [System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::Button))
         $found.tiles=@($buttons|Where-Object {$_.Current.AutomationId -like 'size-preset-*'})
         $found.tiles.Count -eq 40
-    } "Size grid shows $($found.tiles.Count) of 40 presets"
+    } 'Size grid did not arrange all 40 presets'
     $tiles=$found.tiles
     $scale=[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.;$tile=@(36,44)
-    $first=$tiles[0].Current.BoundingRectangle
+    $first=(Control $tiles[0].Current.AutomationId -Within $Within -Arranged).Current.BoundingRectangle
     $row=@($tiles|Where-Object {[Math]::Abs($_.Current.BoundingRectangle.Top-$first.Top) -lt 1})
     foreach($item in $row){$box=$item.Current.BoundingRectangle
         if([Math]::Abs($box.Width-$tile[0]*$scale) -gt 1.5 -or [Math]::Abs($box.Height-$tile[1]*$scale) -gt 1.5){throw "Size tile $($item.Current.AutomationId) is not $($tile[0]) x $($tile[1]) DIP"}}

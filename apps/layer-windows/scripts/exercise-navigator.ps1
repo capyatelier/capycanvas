@@ -1,4 +1,4 @@
-param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme='dark')
+param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme='dark',[switch]$PixelsOnly)
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 Add-Type -AssemblyName System.Drawing
@@ -128,6 +128,7 @@ try {
     $navDocument=Navigator-Document
     $navBaseline=(Model).state.camera
     $navigatorChecks=[Collections.Generic.List[object]]::new()
+    if(!$PixelsOnly){
     for($i=0;$i -lt 3;$i++){
         $beforeZoom=(Model).state.camera.zoom
         Invoke 'navigator-zoom_in'
@@ -205,6 +206,7 @@ try {
     Wait-Until {[Math]::Abs((Model).state.camera.zoom-$navBaseline.zoom) -lt .001} 'Navigator gesture zoom did not restore'
     if((Navigator-Document) -cne $navDocument){throw 'Navigator contacts modified the document'}
     @{baseline=$navBaseline;after_inverse_zoom=(Model).state.camera;document_before=$navDocument;document_after=(Navigator-Document)}|ConvertTo-Json -Depth 10|Set-Content (Join-Path $run 'navigator-pose.json')
+    }
     $bounds=$canvas.Current.BoundingRectangle
     [CapyRowPointer]::Hover([int]($bounds.Left+$bounds.Width/2),[int]($bounds.Top+$bounds.Height/2))
     $tooltip=[System.Windows.Automation.AndCondition]::new(
@@ -231,12 +233,15 @@ try {
     Wait-Until {(Model).state.tabs[0].width -eq 128 -and (Model).state.tabs[0].height -eq 64 -and !(Model).state.document_file.busy} 'Different-aspect document was not adopted' 45
     Wait-Until {(Control 'drawing-canvas').Current.IsEnabled} 'Document dialog input gate did not clear'
     if(((Control 'navigator-overview').GetRuntimeId() -join ':') -ne $identity){throw 'Document replacement rebuilt the Navigator'}
+    $paper=@((Model).state.layers|Where-Object {$_.paper -and $_.fill_color.opaque})
+    if($paper.Count -ne 1 -or $paper[0].fill_color.color.space -ne 'Srgb'){throw 'New document paper does not expose one opaque sRGB fill'}
+    $paperRgb=@($paper[0].fill_color.color.rgba[0..2]|ForEach-Object {[int][Math]::Round(255*$_)})
     Wait-Until {
         $replacement=Capture 'replacement'
         try {
             $area=Image-Rect
             $inside=$replacement.GetPixel($area.Left+8,$area.Top+8)
-            if($inside.R -lt 250 -or $inside.G -lt 250 -or $inside.B -lt 250){return $false}
+            if([Math]::Abs($inside.R-$paperRgb[0]) -gt 2 -or [Math]::Abs($inside.G-$paperRgb[1]) -gt 2 -or [Math]::Abs($inside.B-$paperRgb[2]) -gt 2){return $false}
             Surround-Matches $replacement
         }finally{$replacement.Dispose()}
     } 'New document did not fill the expected overview image'
@@ -266,7 +271,7 @@ try {
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -StateDirectory $run -Action Close
     if((Get-Item -LiteralPath $stderr).Length){throw 'Native runtime stderr requires inspection'}
     [PSCustomObject]@{
-        theme=$Theme;native_overview_contacts=$navigatorChecks.Count;secondary_mouse_admission='passed'
+        theme=$Theme;native_overview_contacts=$navigatorChecks.Count;secondary_mouse_admission=$(if($PixelsOnly){'not-run'}else{'passed'})
         shared_commands_and_camera='passed';retained_controls_and_resize='passed'
         live_stroke_and_exact_undo='passed';changed_preview_pixels=$changed
         document_aspect_replacement='passed';hide_reopen_and_theme='passed';zero_exit='passed'

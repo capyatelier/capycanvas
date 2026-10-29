@@ -1,4 +1,4 @@
-param([Parameter(Mandatory)][string]$Executable,[ValidateSet('touch','pen','mouse')][string]$Device='touch',[string]$DebuggerPath,[ValidateSet('drawers')][string]$ColumnMode='drawers',[ValidateSet('dark','light')][string]$Theme='dark',[switch]$ZenOnly)
+﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('touch','pen','mouse')][string]$Device='touch',[string]$DebuggerPath,[ValidateSet('drawers')][string]$ColumnMode='drawers',[ValidateSet('dark','light')][string]$Theme='dark',[switch]$ZenOnly)
 $ErrorActionPreference='Stop'
 if($ZenOnly -and !$PSBoundParameters.ContainsKey('Theme')){
     foreach($theme in @('dark','light')){& $PSCommandPath -Executable $Executable -Device $Device -ColumnMode $ColumnMode -Theme $theme -ZenOnly}
@@ -23,12 +23,12 @@ function Presentation {
     if($workspace){try{$workspace.Current.ItemStatus|ConvertFrom-Json}catch{}}
 }
 function Layout { (Model).state.workspace.layout|ConvertTo-Json -Depth 90 -Compress }
-function CommandTileId([string]$Command) {
-    $panels=@((Model).panels|Where-Object id -eq 'commands')
-    if($panels.Count -ne 1){throw 'Expected one Commands panel'}
+function CommandTileId([string]$Command,[string]$Panel='commands') {
+    $panels=@((Model).panels|Where-Object id -eq $Panel)
+    if($panels.Count -ne 1){throw "Expected one $Panel panel"}
     $tiles=@($panels[0].tiles|Where-Object {$_.resolved_control.kind -ceq 'command' -and $_.resolved_control.command -ceq $Command})
     if($tiles.Count -ne 1 -or @($panels[0].tiles|Where-Object id -eq $tiles[0].id).Count -ne 1){throw "Expected one $Command command tile"}
-    "tile-commands-$($tiles[0].id)"
+    "tile-$Panel-$($tiles[0].id)"
 }
 function Settled-Layout {
     $state=@{value=$null;count=0}
@@ -81,15 +81,15 @@ function Drifting-Taps {
     # pen in range between contacts to cover physical tablet hover routing.
     $script:case='drifting-short-taps'
     $before=Settled-Layout
-    foreach($choice in @(1,2,1,2)){
-        $at=Point ('tile-toolbar-'+$choice)
+    foreach($command in @('pen','pencil','pen','pencil')){
+        $at=Point (CommandTileId $command 'toolbar')
         if($Device -eq 'pen'){[CapyRowPointer]::PenHover($at.x,$at.y);Start-Sleep -Milliseconds 35}
         [CapyRowPointer]::Down($Device,$at.x,$at.y)
         Start-Sleep -Milliseconds 35
         [CapyRowPointer]::Move($at.x+8,$at.y)
         Start-Sleep -Milliseconds 35
         [CapyRowPointer]::Up($Device -eq 'pen')
-        Wait-Until {@((Model).panels|Where-Object id -eq 'toolbar')[0].tiles[$choice-1].selected} 'Small movement inside a button swallowed its short tap'
+        Wait-Until {@(@((Model).panels|Where-Object id -eq 'toolbar')[0].tiles|Where-Object {$_.resolved_control.command -eq $command})[0].selected} 'Small movement inside a button swallowed its short tap'
         Wait-Until {(Gesture).phase -eq 'idle' -and !(Gesture).ignore_click} 'Short tap left gesture suppression active'
         Intact $before
     }
@@ -271,6 +271,10 @@ try {
         @{theme=$Theme;zen_hide_restore_twice='passed';native_collapsed_peer='passed';layout_preserved='passed';scope='Native lifecycle functional checks; 180ms frame pacing and physical input unverified'}|ConvertTo-Json
         return
     }
+    $toolbarPen=CommandTileId 'pen' 'toolbar';$toolbarPencil=CommandTileId 'pencil' 'toolbar';$toolbarEraser=CommandTileId 'eraser' 'toolbar'
+    $dividers=@(@((Model).panels|Where-Object id -eq 'toolbar')[0].tiles|Where-Object {$_.control.kind -eq 'divider'})
+    if(!$dividers.Count){throw 'Shared toolbar does not contain a divider'}
+    $toolbarDivider="tile-toolbar-$($dividers[0].id)"
     $script:case='canvas-native-cursor'
     $canvas=(Control 'drawing-canvas').Current.BoundingRectangle
     $model=Model;$area=$model.layout.work_area;$density=$canvas.Width/$model.layout.viewport[0]
@@ -278,36 +282,36 @@ try {
     $canvasY=[int]($canvas.Y+($area.y+$area.height*.5)*$density)
     [CapyRowPointer]::Hover($canvasX,$canvasY)
     Wait-Until {![CapyRowPointer]::CursorVisible()} 'Canvas left the Windows mouse cursor visible'
-    $at=Point 'tile-toolbar-2'
+    $at=Point $toolbarPencil
     [CapyRowPointer]::Hover($at.x,$at.y)
     Wait-Until {[CapyRowPointer]::CursorVisible()} 'Toolbar did not restore the Windows cursor'
     $script:case='short-click'
-    Tap 'tile-toolbar-2'
-    Wait-Until {@((Model).panels|Where-Object id -eq 'toolbar')[0].tiles[1].selected} 'Short pointer tap did not activate Pencil'
+    Tap $toolbarPencil
+    Wait-Until {@(@((Model).panels|Where-Object id -eq 'toolbar')[0].tiles|Where-Object {$_.resolved_control.command -eq 'pencil'})[0].selected} 'Short pointer tap did not activate Pencil'
     if($Device -eq 'touch'){
         $script:case='second-contact-preserves-first-click'
-        $first=Point 'tile-toolbar-1';$second=Point 'tile-toolbar-9';$before=Settled-Layout
+        $first=Point $toolbarPen;$second=Point $toolbarDivider;$before=Settled-Layout
         [CapyCanvasTouch]::Initialize([uint32]$review.Id)
         try{
             [CapyCanvasTouch]::Down(1,$first.x,$first.y);Start-Sleep -Milliseconds 35
             [CapyCanvasTouch]::Down(2,$second.x,$second.y);Start-Sleep -Milliseconds 35
             [CapyCanvasTouch]::Up(2);[CapyCanvasTouch]::Up(1)
-            Wait-Until {@((Model).panels|Where-Object id -eq 'toolbar')[0].tiles[0].selected} 'A second chrome contact canceled the first native click'
+            Wait-Until {@(@((Model).panels|Where-Object id -eq 'toolbar')[0].tiles|Where-Object {$_.resolved_control.command -eq 'pen'})[0].selected} 'A second chrome contact canceled the first native click'
             Wait-Until {(Gesture).phase -eq 'idle'} 'Two chrome contacts retained a native owner'
             Intact $before
         }finally{[CapyCanvasTouch]::Dispose()}
     }
     Drifting-Taps
-    $destination=Point 'tile-toolbar-4'
-    $script:case='toolbar-early';Early-Motion 'tile-toolbar-1' $destination
-    $script:case='toolbar-release';Held-Release 'tile-toolbar-1'
-    $script:case='toolbar-drag';Held-Drag 'tile-toolbar-1' $destination
-    $script:case='toolbar-cancel';Held-Drag 'tile-toolbar-1' $destination -Cancel
-    $script:case='divider-early';Early-Motion 'tile-toolbar-9' $destination
-    $script:case='divider-release';Held-Release 'tile-toolbar-9'
-    $script:case='divider-drag';Held-Drag 'tile-toolbar-9' $destination
+    $destination=Point $toolbarEraser
+    $script:case='toolbar-early';Early-Motion $toolbarPen $destination
+    $script:case='toolbar-release';Held-Release $toolbarPen
+    $script:case='toolbar-drag';Held-Drag $toolbarPen $destination
+    $script:case='toolbar-cancel';Held-Drag $toolbarPen $destination -Cancel
+    $script:case='divider-early';Early-Motion $toolbarDivider $destination
+    $script:case='divider-release';Held-Release $toolbarDivider
+    $script:case='divider-drag';Held-Drag $toolbarDivider $destination
     $script:case='divider-keyboard'
-    (Control 'tile-toolbar-9').SetFocus()
+    (Control $toolbarDivider).SetFocus()
     [CapyRowPointer]::Key(0x5d)
     Wait-Until {(Gesture).menu_open} 'Divider did not expose its keyboard context menu'
     Dismiss
@@ -349,10 +353,10 @@ try {
     [CapyRowPointer]::Up()
     Wait-Until {(Gesture).phase -eq 'idle' -and (Floating-Toolbar (Model) $releasedAfter)} 'Toolbar grip did not commit a floating panel'
     Drifting-Taps
-    $destination=Point 'tile-toolbar-4'
-    $script:case='floating-early';Early-Motion 'tile-toolbar-1' $destination
-    $script:case='floating-release';Held-Release 'tile-toolbar-1'
-    $script:case='floating-drag';Held-Drag 'tile-toolbar-1' $destination
+    $destination=Point $toolbarEraser
+    $script:case='floating-early';Early-Motion $toolbarPen $destination
+    $script:case='floating-release';Held-Release $toolbarPen
+    $script:case='floating-drag';Held-Drag $toolbarPen $destination
     WindowCommand 'undo_workspace'
     Wait-Until {(Layout) -eq $before} 'One Undo did not restore the toolbar dock'
     $script:case='zen-visibility'
@@ -402,10 +406,10 @@ try {
     Tap 'column-icon-toolbar'
     Wait-Until {$null -ne (Find 'drawer-panel-toolbar')} 'Collapsed toolbar did not open its contents'
     Drifting-Taps
-    $destination=Point 'tile-toolbar-4'
-    $script:case='drawer-early';Early-Motion 'tile-toolbar-1' $destination
-    $script:case='drawer-release';Held-Release 'tile-toolbar-1'
-    $script:case='drawer-drag';Held-Drag 'tile-toolbar-1' $destination
+    $destination=Point $toolbarEraser
+    $script:case='drawer-early';Early-Motion $toolbarPen $destination
+    $script:case='drawer-release';Held-Release $toolbarPen
+    $script:case='drawer-drag';Held-Drag $toolbarPen $destination
     $script:case='nested-drawer'
     # History dismisses transient drawers but retains attached group panels.
     # Reopen only when the current native presentation actually needs it.

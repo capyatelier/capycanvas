@@ -222,13 +222,26 @@ function New-WorkspaceButton {
     $control=Control 'workspace-manager-create' -Arranged
     $bounds=$control.Current.BoundingRectangle;$items=(Control 'workspace-manager-items' -Arranged).Current.BoundingRectangle
     $remove=(Control 'workspace-manager-remove' -Arranged).Current.BoundingRectangle
+    $managerRoot=Control 'workspace-manager' -Arranged
+    $cancelPeer=Control 'Cancel' -Name -Within $managerRoot -Type ([System.Windows.Automation.ControlType]::Button) -Arranged
+    $applyPeer=Control (Manager).primary -Name -Within $managerRoot -Type ([System.Windows.Automation.ControlType]::Button) -Arranged
+    $cancel=$cancelPeer.Current.BoundingRectangle;$apply=$applyPeer.Current.BoundingRectangle
+    $footerViewport=$null;$node=[System.Windows.Automation.TreeWalker]::RawViewWalker.GetParent($applyPeer)
+    for($depth=0;$node -and !$node.Equals($managerRoot) -and $depth -lt 25;$depth++){
+        $scroll=$null;$current=$node.Current;$candidate=$current.BoundingRectangle
+        if($current.ProcessId -eq $review.Id -and !$current.IsOffscreen -and !$candidate.IsEmpty -and $candidate.Contains($cancel) -and $candidate.Contains($apply) -and $node.TryGetCurrentPattern([System.Windows.Automation.ScrollPattern]::Pattern,[ref]$scroll)){$footerViewport=$candidate;break}
+        $node=[System.Windows.Automation.TreeWalker]::RawViewWalker.GetParent($node)
+    }
+    $footerRight=if($footerViewport){$footerViewport.Right-($bounds.Left-$footerViewport.Left)}
+    $gapDip=($bounds.Top-$items.Bottom)/$scale
+    [ordered]@{items=$items;create=$bounds;remove=$remove;manager_bounds=$managerRoot.Current.BoundingRectangle;footer_viewport=$footerViewport;footer_right=$footerRight;footer_ancestry=@(Control-Trace $applyPeer);cancel=$cancel;apply=$apply;hover_gap_dip=$gapDip;scale=$scale}|ConvertTo-Json -Depth 8|Set-Content -LiteralPath (Join-Path $run 'workspace-action-geometry.json')
+    if(!$footerViewport){throw 'Manager footer has no owned native scroll viewport containing Cancel and Switch'}
     if($control.Current.Name -notlike 'New Workspace*'){throw 'New workspace icon has no accessible label'}
     if($bounds.Top -lt $items.Bottom-1 -or $bounds.Left -gt $items.Left+24*$scale -or $remove.Left -lt $bounds.Right-1 -or [Math]::Abs($remove.Top-$bounds.Top) -gt 1){throw 'Plus and trash are not below the left side of the list'}
-    if([Math]::Abs(($bounds.Top-$items.Bottom)/$scale-6) -gt 1){throw 'Workspace action hover targets do not have6 DIP of space above them'}
+    if([Math]::Abs($gapDip-6) -gt 1){throw 'Workspace action hover targets do not have 6 DIP of space above them'}
     if(Find 'workspace-manager-search' -Visible){throw 'Workspace manager still exposes Search'}
-    $cancel=(Control 'Cancel' -Name -Within (Control 'workspace-manager') -Type ([System.Windows.Automation.ControlType]::Button) -Arranged).Current.BoundingRectangle
-    $apply=(Control (Manager).primary -Name -Within (Control 'workspace-manager') -Type ([System.Windows.Automation.ControlType]::Button) -Arranged).Current.BoundingRectangle
-    $contentRight=(Control 'workspace-manager-title' -Arranged).Current.BoundingRectangle.Right
+    $titlePeer=Find 'workspace-manager-title' -Visible
+    $contentRight=if($titlePeer){(Control 'workspace-manager-title' -Arranged).Current.BoundingRectangle.Right}else{$footerRight}
     if($cancel.Right -gt $apply.Left -or $cancel.Width -ge $apply.Width*.9 -or [Math]::Abs($apply.Right-$contentRight) -gt 4*$scale -or [Math]::Abs($cancel.Height-34*$scale) -gt 2 -or [Math]::Abs($apply.Height-34*$scale) -gt 2){throw 'Manager footer is not natural-width Cancel then Switch aligned to the dialog body at34 DIP'}
     foreach($row in (Manager).rows){
         if(Find ('workspace-manager-options-'+$row.id) -Visible){throw 'Workspace row still has a dots button'}
