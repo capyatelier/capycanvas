@@ -20,7 +20,6 @@ struct LayerRowDrag::Impl:std::enable_shared_from_this<Impl>{
     Grid surface{nullptr};
     weak_ref<UIElement> inputSurface;
     std::pair<event_token,event_token> inputKey{};
-    PointerEventHandler inputMove{nullptr},inputUp{nullptr},inputCancel{nullptr};
     ScrollView list{nullptr};
     std::weak_ptr<LayerRow> source;
     Input::Pointer pointer{nullptr};
@@ -392,9 +391,6 @@ struct LayerRowDrag::Impl:std::enable_shared_from_this<Impl>{
     void detachInput(){
         if(auto root=inputSurface.get()){
             root.PreviewKeyDown(inputKey.first);root.KeyDown(inputKey.second);
-            root.RemoveHandler(UIElement::PointerMovedEvent(),box_value(inputMove));
-            root.RemoveHandler(UIElement::PointerReleasedEvent(),box_value(inputUp));
-            root.RemoveHandler(UIElement::PointerCanceledEvent(),box_value(inputCancel));
         }
         inputSurface={};
     }
@@ -402,15 +398,6 @@ struct LayerRowDrag::Impl:std::enable_shared_from_this<Impl>{
         detachInput();if(!surface.XamlRoot())return;
         auto root=surface.XamlRoot().Content();if(!root)return;
         inputSurface=make_weak(root);
-        inputMove=PointerEventHandler([weak=weak_from_this()](auto&&,auto&& e){if(auto self=weak.lock())self->motion(e);});
-        inputUp=PointerEventHandler([weak=weak_from_this()](auto&&,auto&& e){if(auto self=weak.lock())self->up(e);});
-        inputCancel=PointerEventHandler([weak=weak_from_this()](auto&&,PointerRoutedEventArgs const& e){
-            if(auto self=weak.lock();self&&!self->releasing&&self->touches.contains(e.Pointer().PointerId()))self->cancelTouches(L"pointer_canceled");
-            if(auto self=weak.lock();self&&!self->releasing&&!self->finishing&&self->pointer&&self->pointer.PointerId()==e.Pointer().PointerId())self->cancel(L"pointer_canceled");
-        });
-        root.AddHandler(UIElement::PointerMovedEvent(),box_value(inputMove),true);
-        root.AddHandler(UIElement::PointerReleasedEvent(),box_value(inputUp),true);
-        root.AddHandler(UIElement::PointerCanceledEvent(),box_value(inputCancel),true);
         inputKey=ShortcutKeys(root,[weak=weak_from_this()](auto&&,KeyRoutedEventArgs const& e){if(auto self=weak.lock()){
             if(composingKey(e))return;
             if(e.Key()==Windows::System::VirtualKey::Escape&&self->cancel(L"escape"))e.Handled(true);
@@ -424,6 +411,12 @@ struct LayerRowDrag::Impl:std::enable_shared_from_this<Impl>{
         timer=surface.DispatcherQueue().CreateTimer();timer.Interval(std::chrono::milliseconds(16));
         timer.Tick([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->tick();});
         surface.AddHandler(UIElement::PointerPressedEvent(),box_value(PointerEventHandler([weak=weak_from_this()](auto&&,auto&& e){if(auto self=weak.lock())self->down(e);})),true);
+        surface.AddHandler(UIElement::PointerMovedEvent(),box_value(PointerEventHandler([weak=weak_from_this()](auto&&,auto&& e){if(auto self=weak.lock())self->motion(e);})),true);
+        surface.AddHandler(UIElement::PointerReleasedEvent(),box_value(PointerEventHandler([weak=weak_from_this()](auto&&,auto&& e){if(auto self=weak.lock())self->up(e);})),true);
+        surface.AddHandler(UIElement::PointerCanceledEvent(),box_value(PointerEventHandler([weak=weak_from_this()](auto&&,PointerRoutedEventArgs const& e){
+            if(auto self=weak.lock();self&&!self->releasing&&self->touches.contains(e.Pointer().PointerId()))self->cancelTouches(L"pointer_canceled");
+            if(auto self=weak.lock();self&&!self->releasing&&!self->finishing&&self->pointer&&self->pointer.PointerId()==e.Pointer().PointerId())self->cancel(L"pointer_canceled");
+        })),true);
         PointerGesture::OnLeaving(surface,[weak=weak_from_this()](PointerRoutedEventArgs const& e){
             if(auto self=weak.lock();self&&!self->finishing&&self->pointer&&self->pointer.PointerId()==e.Pointer().PointerId()&&!self->owns(self->surface)){
                 for(auto const& entry:self->path)if(auto node=entry.get();node&&self->owns(node))return;
