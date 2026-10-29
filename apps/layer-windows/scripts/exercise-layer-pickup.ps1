@@ -287,31 +287,20 @@ function Check-KeyboardContext([long]$Layer) {
     Wait-Until {(Gesture).menu_open} 'Keyboard context action did not open the layer menu'
     $beforeMenuRows=Rows;$beforeMenuRevision=(Model).state.document_file.revision
     $source=Control "layer-$Layer-name";$organize=Control 'menu-organize' -Arranged
-    $menuItems=@();$ancestry=@()
-    try{$parent=[System.Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($organize);if($parent){$menuItems=@($parent.FindAll([System.Windows.Automation.TreeScope]::Children,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::MenuItem)))}}catch{}
-    try{$ancestry=@(Control-Trace $organize)}catch{}
-    $organizeTrace=@{before=@{organize=(Menu-State $organize);ancestry=$ancestry;focused=(Menu-State ([System.Windows.Automation.AutomationElement]::FocusedElement));siblings=@($menuItems|ForEach-Object {Menu-State $_});gesture=(Gesture)}}
-    $organizeTrace|ConvertTo-Json -Depth 15|Set-Content (Join-Path $run 'menu-organize-activation.json')
-    try{
-        Tap 'menu-organize'
-        $duplicate=Control 'layer-menu-duplicate' -Arranged
-    }finally{
-        $organizeTrace.after_tap=@{organize=(Menu-State $organize);focused=(Menu-State ([System.Windows.Automation.AutomationElement]::FocusedElement));duplicate=(Menu-State (Find 'layer-menu-duplicate'));gesture=(Gesture)}
-        $organizeTrace|ConvertTo-Json -Depth 15|Set-Content (Join-Path $run 'menu-organize-activation.json')
-    }
+    Tap 'menu-organize'
+    $duplicate=Control 'layer-menu-duplicate' -Arranged
     $submenu=[System.Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($duplicate)
     $menuItems=$submenu.FindAll([System.Windows.Automation.TreeScope]::Children,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::MenuItem))
     $nested=@{device=$Device;before=@{source=(Menu-State $source);parent=(Menu-State $organize);child=(Menu-State $duplicate);items=@($menuItems|ForEach-Object {Menu-State $_})};rows=$beforeMenuRows;revision=$beforeMenuRevision}
     try{
         Wait-Until {@($menuItems|Where-Object {$_.Current.HasKeyboardFocus -and !$_.Current.IsOffscreen}).Count -gt 0} 'Native Organize submenu did not acquire keyboard focus'
         [CapyRowPointer]::Key(0x1b)
-        $stable=0;$nested.first_escape_stable_polls=0
+        $escape=@{polls=0}
         Wait-Until {
             $matching=$false
             try{$child=Find 'layer-menu-duplicate';$matching=(!$child -or $child.Current.IsOffscreen) -and !$organize.Current.IsOffscreen -and $organize.Current.HasKeyboardFocus -and (Gesture).menu_open}catch [System.Windows.Automation.ElementNotAvailableException]{}
-            if($matching){$stable++}else{$stable=0}
-            $nested.first_escape_stable_polls=$stable
-            $stable -ge 2
+            if($matching){$escape.polls++}else{$escape.polls=0}
+            $escape.polls -ge 2
         } 'First Escape did not close only the native Organize submenu'
         $nested.after_first=@{parent=(Menu-State $organize);child=(Menu-State $duplicate);source=(Menu-State $source);gesture=(Gesture)}
         Dismiss
