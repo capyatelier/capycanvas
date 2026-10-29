@@ -473,7 +473,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         viewportWidth=width;viewportHeight=height;
         if(!resolveLayout())return;
         data->updating=true;struct Reset {bool& value;~Reset(){value=false;}} reset{data->updating};
-        applyLayout(data->model,false);
+        applyLayout(data->model,false);data->updating=false;presentBackgrounds();
     }
     void applyGlass(double previous){
         if(previous==num(object(data->model,L"windows_glass"),L"panel_revision",-1))return;
@@ -558,7 +558,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             auto viewport=array(object(model,L"layout"),L"viewport");
             if(viewport.Size()==2){viewportWidth=float(viewport.GetNumberAt(0));viewportHeight=float(viewport.GetNumberAt(1));}
         }
-        resolveLayout();applyLayout(data->model,full);if(full&&needsPanelMeasurements())preparePanels();tracePresentation();if(full)colorRequests();return true;
+        resolveLayout();applyLayout(data->model,full);if(full&&needsPanelMeasurements())preparePanels();data->updating=false;presentBackgrounds();tracePresentation();if(full)colorRequests();return true;
     }
     bool applyLayout(J const& model,bool full){
         bool rebuilt=false;
@@ -1020,7 +1020,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         if(!expanded.Size()&&str(object(data->state,L"customization"),L"expanded").empty()){
             for(auto& [id,group]:groups){group.configurationFrame.Child(nullptr);group.configuration.reset();}
         }
-        presentBackgrounds();queueMeasurements();
+        if(!data->updating)presentBackgrounds();queueMeasurements();
     }
     void appendGroupOverviews(A& slots,Group const& group){
         if(!(group.body&&group.body->navigator)&&!(group.presented.Size()&&group.configuration))return;
