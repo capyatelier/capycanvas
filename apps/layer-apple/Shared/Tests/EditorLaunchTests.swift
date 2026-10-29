@@ -312,9 +312,11 @@ final class EditorLaunchTests: XCTestCase {
         checkLayerConfiguration(in: editorTestApplication())
     }
 
-    @MainActor func testPanelConfigurationAndLiveDrag() throws {
+    @MainActor func testPanelConfigurationAndLiveDrag() throws { panelConfiguration(theme: "light") }
+    @MainActor func testPanelConfigurationAndLiveDragDark() throws { panelConfiguration(theme: "dark") }
+    @MainActor private func panelConfiguration(theme: String) {
         let app = ignoringSavedWindows(editorTestApplication())
-        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"customize","action":{"type":"show_all_controls","panel":"sizes"}}]"#
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"\#(theme)"},{"type":"customize","action":{"type":"set_panel_visible","panel":"sizes","visible":true}},{"type":"customize","action":{"type":"show_all_controls","panel":"sizes"}}]"#
         app.launch()
         checkPanelConfigurationAndLiveDrag(in: app)
     }
