@@ -145,7 +145,8 @@ watercolor and smudge against input that had final sensor values from the start.
 key, wheel, pinch and rotation events, application suspend and resume, and a
 Metal restart. The UIKit fixtures `canvas-hover.swift`, `pencil-estimates.swift`
 and `canvas-modifiers.swift` supply recognizer states and touches to the real
-iPad callbacks. The AppKit input fixture and UIKit modifier fixture check wheel
+iPad callbacks. The modifier fixture also supplies hardware Escape presses to
+check the shared key name and native shortcut callback. The AppKit input fixture and UIKit modifier fixture check wheel
 navigation while mouse buttons are held, continued contact after scrolling,
 cancellation, and exclusion during painting. None of these replace a physical
 Pencil or tablet check.

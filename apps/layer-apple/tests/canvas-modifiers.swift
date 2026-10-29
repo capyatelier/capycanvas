@@ -1,6 +1,17 @@
 import UIKit
 import ImageIO
 
+private final class EscapeKey: UIKey {
+    override var keyCode: UIKeyboardHIDUsage { .keyboardEscape }
+    override var characters: String { "\u{1b}" }
+    override var charactersIgnoringModifiers: String { characters }
+    override var modifierFlags: UIKeyModifierFlags { [] }
+}
+private final class EscapePress: UIPress {
+    private let suppliedKey = EscapeKey()
+    override var key: UIKey? { suppliedKey }
+}
+
 // Supplied UIKit contacts through the production canvas and Rust owner. Saved
 // ruler geometry checks the modifier's effect, without keyboard/UI automation.
 private final class Contact: UITouch {
@@ -99,6 +110,12 @@ private final class NativeRotation: UIRotationGestureRecognizer {
     }
     private func run() async throws {
         try require(StorageLocations.installation != nil, "Prepare private process temporary storage")
+        let capture = ShortcutKeyCapture.CaptureView()
+        var escaped = false
+        capture.captured = { key, command, shift, alt in escaped = key == "escape" && !command && !shift && !alt }
+        try require(AppleKeyName.name(EscapeKey()) == "escape", "UIKit hardware Escape must use the shared key name")
+        capture.pressesBegan([EscapePress()], with: nil)
+        try require(escaped, "UIKit hardware Escape must reach the native menu key handler")
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("capy-modifiers-\(UUID())")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
         defer { try? FileManager.default.removeItem(at: root) }
