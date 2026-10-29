@@ -621,3 +621,5 @@ tilt-reverse-vertical = Invertir vertical
 tilt-swap-axes = Intercambiar ejes
 tilt-use-pen = Usa el lápiz aquí
 common-stroke-input-canceled = El trazo era demasiado largo y se canceló. Puedes seguir pintando.
+
+native-color-stroke-recording-file-type = Grabación de trazos de Capy

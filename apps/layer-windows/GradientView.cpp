@@ -92,7 +92,7 @@ struct EditorView:std::enable_shared_from_this<EditorView> {
         selected=std::max(0,index-1);send(stopEdit(N(index),0,JsonValue::CreateNullValue(),true));
     }
     Button iconButton(wchar_t const* glyph,hstring const& suffix,std::function<void()> action){
-        auto pick=button(data,L"",std::move(action));pick.Width(data->panelMetric(L"control_height"));pick.Height(data->panelMetric(L"control_height"));pick.Content(icon(glyph,data->theme(),data->panelMetric(L"icon_size")));
+        auto pick=raisedButton(data,L"",std::move(action));pick.Width(data->panelMetric(L"control_height"));pick.Height(data->panelMetric(L"control_height"));pick.Content(icon(glyph,data->theme(),data->panelMetric(L"icon_size")));
         AutomationProperties::SetAutomationId(pick,source.id+L"-"+suffix);return pick;
     }
     void name(Button const& pick,hstring const& text){if(AutomationProperties::GetName(pick)!=text){AutomationProperties::SetName(pick,text);tooltip(pick,text);}}

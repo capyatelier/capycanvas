@@ -621,3 +621,5 @@ tilt-reverse-vertical = Inverser verticalement
 tilt-swap-axes = Permuter les axes
 tilt-use-pen = Utilisez votre stylet ici
 common-stroke-input-canceled = Le trait était trop long et a été annulé. Vous pouvez continuer à peindre.
+
+native-color-stroke-recording-file-type = Enregistrement de traits Capy

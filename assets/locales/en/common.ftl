@@ -257,6 +257,8 @@ native-color-navigator-overview = Navigator overview
 
 native-color-record-tablet = Record tablet input for up to 10 minutes
 
+native-color-stroke-recording-file-type = Capy stroke recording
+
 native-color-histogram = Histogram
 
 native-color-auto-update = Auto update

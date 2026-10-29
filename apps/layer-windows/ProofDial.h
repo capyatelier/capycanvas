@@ -4,7 +4,7 @@
 #include "PointerGesture.h"
 #include <winrt/Microsoft.UI.Xaml.Shapes.h>
 #include <winrt/Microsoft.UI.Input.h>
-#include <robuffer.h>
+#include "BitmapUpload.h"
 #include <optional>
 
 namespace CapyUi {
@@ -12,11 +12,12 @@ namespace CapyUi {
 struct ProofDial:std::enable_shared_from_this<ProofDial>{
     std::shared_ptr<WorkspaceData> data;
     ContentControl root;Canvas canvas;Viewbox view;
-    Shapes::Ellipse field,marker;std::array<Shapes::Polyline,2> arcs;
-    std::array<Shapes::Ellipse,2> handles;std::array<TextBlock,4> texts;std::array<Image,4> icons;
+    Shapes::Ellipse field,marker,markerHalo,focusRing;ImageBrush fieldImage;std::shared_ptr<BitmapUpload> upload=BitmapUpload::Create();std::array<Shapes::Polyline,2> arcs;
+    std::array<Shapes::Ellipse,2> handles,handleHalos;bool initialized=false;hstring paintedTheme;std::array<TextBlock,4> texts;std::array<Image,4> icons;
     Button reset;std::array<MenuFlyoutItem,4> resetItems;std::shared_ptr<ControlCapture> capture;winrt::Windows::Foundation::Point origin{},last{};
     std::optional<winrt::Windows::System::VirtualKey> heldKey;uint64_t pressedAt=0;winrt::Windows::Foundation::Point pressedPoint{};uint8_t pressedPart=0;
     hstring epoch,identity,key;uint8_t part=0;static constexpr float side=256;
+    ~ProofDial(){upload->Close();}
     J form()const{return object(data->model,L"windows_proof_form");}
     J geometry(std::optional<winrt::Windows::Foundation::Point> point={})const{
         J request=O({{L"size",N(side)},{L"recipe",object(form(),L"rendition")}});
@@ -40,34 +41,39 @@ struct ProofDial:std::enable_shared_from_this<ProofDial>{
         std::array<hstring,4> labels{data->caption(L"color",L"reset_balance_contrast"),data->caption(L"color",L"reset_brightness"),data->caption(L"color",L"reset_highlight_color"),str(copy,L"reset_sdr")};
         for(uint32_t i=0;i<labels.size();++i){resetItems[i].Text(labels[i]);AutomationProperties::SetName(resetItems[i],labels[i]);}
         auto current=array(form(),L"identity").Stringify();if(current!=identity){cancel();identity=current;}
-        auto next=object(form(),L"rendition").Stringify()+data->theme();if(next==key)return;key=next;
+        auto next=object(form(),L"rendition").Stringify()+data->theme()+to_hstring(root.FocusState()==FocusState::Keyboard);if(next==key)return;key=next;
         auto g=geometry();if(!g.Size()||g.HasKey(L"error"))return;
-        auto ink=data->brush(L"text");circle(field,array(g,L"center"),num(g,L"radius"));circle(marker,array(g,L"marker"),num(g,L"marker_radius"));
-        marker.Stroke(ink);marker.Fill(clear());marker.StrokeThickness(2);
-        auto tracks=array(g,L"arcs");for(uint32_t i=0;i<2;++i){auto track=tracks.GetObjectAt(i);auto spec=object(track,L"geometry");PointCollection points;
+        bool setup=!initialized;initialized=true;bool themeChanged=paintedTheme!=data->theme();paintedTheme=data->theme();
+        auto ink=data->brush(L"text");if(setup)circle(field,array(g,L"center"),num(g,L"radius"));circle(marker,array(g,L"marker"),num(g,L"marker_radius"));circle(markerHalo,array(g,L"marker"),num(g,L"marker_radius"));
+        auto tracks=array(g,L"arcs");for(uint32_t i=0;i<2;++i){auto track=tracks.GetObjectAt(i);auto spec=object(track,L"geometry");if(setup){PointCollection points;
             for(auto item:array(track,L"path")){auto p=item.GetArray();points.Append({float(p.GetNumberAt(0)),float(p.GetNumberAt(1))});}
-            arcs[i].Points(points);arcs[i].Stroke(data->brush(L"border"));arcs[i].StrokeThickness(num(spec,L"width"));
-            circle(handles[i],array(track,L"point"),num(spec,L"marker_radius"));handles[i].Fill(ink);
+            arcs[i].Points(points);LinearGradientBrush gradient;gradient.MappingMode(BrushMappingMode::Absolute);gradient.StartPoint({points.GetAt(0).X,0});gradient.EndPoint({points.GetAt(points.Size()-1).X,0});
+            auto stop=[&](double offset,Windows::UI::Color color){GradientStop item;item.Offset(offset);item.Color(color);gradient.GradientStops().Append(item);};
+            if(i==0){stop(0,{255,10,10,10});stop(.5,{255,140,140,140});stop(1,{255,255,255,255});}else{stop(0,{255,242,242,242});stop(1,{255,38,140,217});}
+            arcs[i].Stroke(gradient);arcs[i].StrokeThickness(num(spec,L"width"));arcs[i].StrokeStartLineCap(PenLineCap::Round);arcs[i].StrokeEndLineCap(PenLineCap::Round);}
+            circle(handles[i],array(track,L"point"),num(spec,L"marker_radius"));circle(handleHalos[i],array(track,L"point"),num(spec,L"marker_radius"));
         }
+        auto selected=part==0?array(g,L"marker"):part<=2?array(tracks.GetObjectAt(part-1),L"point"):array(g,L"marker");double radius=part==0?num(g,L"marker_radius"):part<=2?num(object(tracks.GetObjectAt(part-1),L"geometry"),L"marker_radius"):num(g,L"marker_radius");circle(focusRing,selected,radius+3);focusRing.Visibility(root.FocusState()==FocusState::Keyboard?Visibility::Visible:Visibility::Collapsed);
         auto readouts=array(g,L"readouts"),values=array(g,L"percentages"),names=array(g,L"icons");
         for(uint32_t i=0;i<4;++i){auto r=readouts.GetObjectAt(i);auto at=array(r,L"text"),box=array(r,L"icon");
-            texts[i].Text(to_hstring(int(std::lround(values.GetNumberAt(i))))+L"%");texts[i].Foreground(ink);texts[i].FontSize(num(g,L"text_size"));texts[i].Width(52);texts[i].TextAlignment(TextAlignment::Center);
+            auto text=to_hstring(int(std::lround(values.GetNumberAt(i))))+L"%";
+            if(texts[i].Text()!=text)texts[i].Text(text);texts[i].Foreground(ink);texts[i].FontSize(num(g,L"text_size"));texts[i].Width(52);texts[i].TextAlignment(TextAlignment::Center);
             Canvas::SetLeft(texts[i],at.GetNumberAt(0)-26);Canvas::SetTop(texts[i],at.GetNumberAt(1)-num(g,L"text_size"));
-            icons[i].Source(icon(names.GetStringAt(i),data->theme()).Source());icons[i].Width(box.GetNumberAt(2));icons[i].Height(box.GetNumberAt(3));Canvas::SetLeft(icons[i],box.GetNumberAt(0));Canvas::SetTop(icons[i],box.GetNumberAt(1));
+            if(themeChanged)icons[i].Source(icon(names.GetStringAt(i),data->theme()).Source());icons[i].Width(box.GetNumberAt(2));icons[i].Height(box.GetNumberAt(3));Canvas::SetLeft(icons[i],box.GetNumberAt(0));Canvas::SetTop(icons[i],box.GetNumberAt(1));
         }
-        auto box=array(g,L"reset");reset.Width(box.GetNumberAt(2));reset.Height(box.GetNumberAt(3));Canvas::SetLeft(reset,box.GetNumberAt(0));Canvas::SetTop(reset,box.GetNumberAt(1));reset.Content(icon(L"reset",data->theme()));
+        auto box=array(g,L"reset");reset.Width(box.GetNumberAt(2));reset.Height(box.GetNumberAt(3));Canvas::SetLeft(reset,box.GetNumberAt(0));Canvas::SetTop(reset,box.GetNumberAt(1));if(themeChanged)reset.Content(icon(L"reset",data->theme()));
     }
     void init(){
-        auto weak=weak_from_this();root.IsTabStop(true);edgeTag(root,L"edge_contact",S(L"input"));root.MinWidth(128);root.MaxWidth(side);root.HorizontalAlignment(HorizontalAlignment::Stretch);
+        auto weak=weak_from_this();root.IsTabStop(true);edgeTag(root,L"edge_contact",S(L"input"));root.MinWidth(128);root.HorizontalAlignment(HorizontalAlignment::Stretch);
         AutomationProperties::SetAutomationId(root,L"proof-dial");
         canvas.Width(side);canvas.Height(side);canvas.Background(clear());view.Child(canvas);view.Stretch(Stretch::Uniform);root.Content(view);
-        // One shared immutable illustration; native bitmap storage is BGRA.
-        Imaging::WriteableBitmap bitmap(256,256);uint8_t* bytes=nullptr;check_hresult(bitmap.PixelBuffer().as<::Windows::Storage::Streams::IBufferByteAccess>()->Buffer(&bytes));
-        if(!capy_proof_texture(256,bytes,256*256*4))throw hresult_invalid_argument(L"Proof texture failed");for(size_t i=0;i<256*256*4;i+=4)std::swap(bytes[i],bytes[i+2]);bitmap.Invalidate();
-        ImageBrush image;image.ImageSource(bitmap);image.Stretch(Stretch::Fill);field.Fill(image);field.IsHitTestVisible(false);canvas.Children().Append(field);
-        for(uint32_t i=0;i<2;++i){arcs[i].IsHitTestVisible(false);handles[i].IsHitTestVisible(false);canvas.Children().Append(arcs[i]);canvas.Children().Append(handles[i]);}
-        marker.IsHitTestVisible(false);canvas.Children().Append(marker);
-        for(uint32_t i=0;i<4;++i){texts[i].IsHitTestVisible(false);icons[i].IsHitTestVisible(false);canvas.Children().Append(texts[i]);canvas.Children().Append(icons[i]);}
+        field.Fill(fieldImage);field.IsHitTestVisible(false);canvas.Children().Append(field);auto bytes=std::make_shared<std::vector<uint8_t>>();
+        upload->Submit({[bytes]{bytes->resize(256*256*4);if(!capy_proof_texture(256,bytes->data(),bytes->size()))bytes->clear();return std::span<uint8_t const>(*bytes);},0,256*256*4,256,256,true,true,[weak]{return !weak.expired();},[weak](bool accepted){if(auto self=weak.lock();self&&accepted)self->fieldImage.ImageSource(self->upload->Image());}});
+        auto halo=[](Shapes::Ellipse const& ring){ring.Stroke(fill({166,0,0,0}));ring.StrokeThickness(4);ring.Fill(clear());ring.IsHitTestVisible(false);};halo(markerHalo);
+        for(auto const& handle:handles){handle.Stroke(fill({255,255,255,255}));handle.StrokeThickness(2);handle.Fill(clear());}
+        for(uint32_t i=0;i<2;++i){arcs[i].IsHitTestVisible(false);handles[i].IsHitTestVisible(false);halo(handleHalos[i]);canvas.Children().Append(arcs[i]);canvas.Children().Append(handleHalos[i]);canvas.Children().Append(handles[i]);}
+        marker.Stroke(fill({255,255,255,255}));marker.Fill(clear());marker.StrokeThickness(2);marker.IsHitTestVisible(false);canvas.Children().Append(markerHalo);canvas.Children().Append(marker);focusRing.Stroke(fill({166,255,255,255}));focusRing.StrokeThickness(1);focusRing.IsHitTestVisible(false);canvas.Children().Append(focusRing);
+        for(uint32_t i=0;i<4;++i){texts[i]=label(data,L"",false,false);texts[i].Opacity(.62);texts[i].IsHitTestVisible(false);icons[i].Opacity(.62);icons[i].IsHitTestVisible(false);canvas.Children().Append(texts[i]);canvas.Children().Append(icons[i]);}
         reset.Padding({0});reset.MinWidth(0);reset.MinHeight(0);reset.Background(clear());reset.BorderThickness({0});AutomationProperties::SetAutomationId(reset,L"proof-dial-reset");
         buttonColors(data,reset);
         reset.Click([weak](auto&&,auto&&){if(auto self=weak.lock())self->control(3,O({{L"type",S(L"reset")}}));});canvas.Children().Append(reset);
@@ -89,7 +95,7 @@ struct ProofDial:std::enable_shared_from_this<ProofDial>{
             self->contact(L"down");AutomationProperties::SetItemStatus(self->root,self->data->caption(L"header",L"dragging"));e.Handled(true);
         }});
         root.PointerMoved([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock();self&&self->capture->Owns(e.Pointer().PointerId())){self->last=e.GetCurrentPoint(self->canvas).Position();self->contact(L"move");e.Handled(true);}});
-        root.LostFocus([weak](auto&&,auto&&){if(auto self=weak.lock())self->cancel();});root.Unloaded([weak](auto&&,auto&&){if(auto self=weak.lock())self->finishKey(true);});
+        root.GotFocus([weak](auto&&,auto&&){if(auto self=weak.lock()){self->key=L"";self->refresh();}});root.LostFocus([weak](auto&&,auto&&){if(auto self=weak.lock()){self->cancel();self->key=L"";self->refresh();}});root.Unloaded([weak](auto&&,auto&&){if(auto self=weak.lock())self->finishKey(true);});
         root.KeyDown([weak](auto&&,KeyRoutedEventArgs const& e){if(auto self=weak.lock()){
             using winrt::Windows::System::VirtualKey;auto key=e.Key();if(key==VirtualKey::Escape){self->cancel();e.Handled(true);return;}
             if(self->capture->Active())return;

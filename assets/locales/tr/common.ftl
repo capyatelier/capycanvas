@@ -612,3 +612,5 @@ tilt-reverse-vertical = Dikeyi ters çevir
 tilt-swap-axes = Eksenleri değiştir
 tilt-use-pen = Kaleminizi burada kullanın
 common-stroke-input-canceled = Çizgi çok uzun olduğu için iptal edildi. Boyamaya devam edebilirsiniz.
+
+native-color-stroke-recording-file-type = Capy fırça darbesi kaydı

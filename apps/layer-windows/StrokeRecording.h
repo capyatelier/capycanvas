@@ -8,7 +8,7 @@ namespace CapyUi {
 struct StrokeRecording:std::enable_shared_from_this<StrokeRecording>{
     std::shared_ptr<WorkspaceData> data;
     Microsoft::UI::Dispatching::DispatcherQueueTimer timer{nullptr};
-    J status=O({{L"label",S(L"Start stroke recording")}});
+    J status;
     hstring error;
     bool saving=false,pending=false,awaiting=false;
     std::chrono::steady_clock::time_point deadline;
@@ -53,7 +53,7 @@ struct StrokeRecording:std::enable_shared_from_this<StrokeRecording>{
         try{
             winrt::Microsoft::Windows::Storage::Pickers::FileSavePicker picker(winrt::Microsoft::UI::WindowId{data->windowId});
             picker.SuggestedFileName(L"stroke-recording");picker.DefaultFileExtension(L".capystrokes");
-            picker.FileTypeChoices().Insert(L"Capy stroke recording",single_threaded_vector<hstring>({L".capystrokes"}));
+            picker.FileTypeChoices().Insert(data->caption(L"color",L"stroke_recording_file_type"),single_threaded_vector<hstring>({L".capystrokes"}));
             auto file=co_await picker.PickSaveFileAsync();
             if(file){
                 data->document(to_string(O({{L"operation",S(L"save_stroke_recording")},{L"path",S(file.Path())}}).Stringify()));

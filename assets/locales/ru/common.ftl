@@ -612,3 +612,5 @@ tilt-reverse-vertical = Отразить по вертикали
 tilt-swap-axes = Поменять оси
 tilt-use-pen = Используйте перо здесь
 common-stroke-input-canceled = Мазок оказался слишком длинным и был отменён. Можно продолжать рисовать.
+
+native-color-stroke-recording-file-type = Запись мазков Capy

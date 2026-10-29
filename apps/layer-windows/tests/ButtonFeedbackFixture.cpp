@@ -61,6 +61,9 @@ struct App:ApplicationT<App,Markup::IXamlMetadataProvider>{
         auto wrapped=CapyUi::wrapPanel(40,32,4);for(int i=0;i<5;++i)wrapped.Children().Append(Border());
         wrapped.Measure({88,std::numeric_limits<float>::infinity()});auto narrow=wrapped.DesiredSize().Height;wrapped.Measure({160,std::numeric_limits<float>::infinity()});
         if(wrapped.DesiredSize().Height<=0||narrow<=wrapped.DesiredSize().Height)throw hresult_error(E_FAIL,L"Offscreen wrap panel did not measure its rows from the available width");
+        auto natural=CapyUi::wrapPanel(0,26,4);for(auto width:{50.,80.}){Border cell;cell.Width(width);natural.Children().Append(cell);}
+        natural.Measure({std::numeric_limits<float>::infinity(),std::numeric_limits<float>::infinity()});auto wide=natural.DesiredSize();natural.Measure({90,std::numeric_limits<float>::infinity()});
+        if(wide.Width<130||natural.DesiredSize().Height<=wide.Height)throw hresult_error(E_FAIL,L"Natural wrap panel lost its caption width or wrapped-row height");
         Button modal;modal.Content(box_value(L"Show dialog"));Automation::AutomationProperties::SetAutomationId(modal,L"feedback-show-dialog");
         modal.Click([this](auto&&,auto&&){showDialog();});body.Children().Append(modal);
         StackPanel popup;popup.Spacing(24);popup.Children().Append(probe(L"feedback-flyout"));

@@ -104,6 +104,18 @@ struct WrapLayout:PanelT<WrapLayout>{
     int columns(double width)const{return std::max(1,std::min(limit,int((width+gap)/(cellWidth+gap))));}
     Windows::Foundation::Size layout(Windows::Foundation::Size size,bool arrange){
         double width=std::isfinite(size.Width)?std::max(0.f,size.Width):cellWidth;
+        if(cellWidth<=0){
+            width=std::isfinite(size.Width)?std::max(0.f,size.Width):std::numeric_limits<float>::infinity();double x=0,y=0,rowHeight=0,extent=0;
+            for(auto child:Children()){
+                if(child.Visibility()==Visibility::Collapsed)continue;
+                if(!arrange)child.Measure({float(width),cellHeight>0?float(cellHeight):std::numeric_limits<float>::infinity()});
+                auto desired=child.DesiredSize();double w=std::min(width,double(desired.Width)),h=cellHeight>0?cellHeight:desired.Height;
+                if(x>0&&x+w>width){y+=rowHeight+rowGap;x=0;rowHeight=0;}
+                if(arrange)child.Arrange({float(x),float(y),float(w),float(h)});
+                extent=std::max(extent,x+w);x+=w+gap;rowHeight=std::max(rowHeight,h);
+            }
+            return {float(extent),float(y+rowHeight)};
+        }
         int count=columns(width);double cell=stretch?(width-gap*(count-1))/count:std::min(cellWidth,width),y=0,rowHeight=0;
         uint32_t visible=0;double extent=0;
         for(auto child:Children()){

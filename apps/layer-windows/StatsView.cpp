@@ -1,4 +1,5 @@
 #include "pch.h"
+#include <winrt/Microsoft.UI.Xaml.Documents.h>
 #include "StatsView.h"
 #include "WorkspaceQuery.h"
 #include "StrokeRecording.h"
@@ -35,15 +36,15 @@ struct StatsView:std::enable_shared_from_this<StatsView>{
         return true;
     }
     void init(){
-        root.Spacing(data->panelMetric(L"control_spacing"));
+        root.Spacing(data->panelMetric(L"group_spacing"));
         AutomationProperties::SetAutomationId(root,L"renderer-stats");
         chart.Height(46);chart.IsHitTestVisible(false);
         AutomationProperties::SetAutomationId(chart,L"renderer-stats-chart");
-        samples.Stroke(data->brush(L"text"));samples.StrokeThickness(1);
-        budget.Stroke(data->brush(L"settings_secondary"));budget.StrokeThickness(1);
+        samples.Stroke(data->brush(L"text"));samples.StrokeThickness(1.5);samples.Opacity(.9);
+        budget.Stroke(data->brush(L"text"));budget.StrokeThickness(1);budget.Opacity(.3);DoubleCollection dash;dash.Append(3);dash.Append(3);budget.StrokeDashArray(dash);
         chart.Children().Append(budget);chart.Children().Append(samples);
         chart.SizeChanged([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->draw();});
-        record=button(data,L"Start stroke recording",[weak=weak_from_this()]{if(auto self=weak.lock();self&&self->data->strokes)self->data->strokes->click();});
+        record=button(data,L"",[weak=weak_from_this()]{if(auto self=weak.lock();self&&self->data->strokes)self->data->strokes->click();});
         record.HorizontalAlignment(HorizontalAlignment::Stretch);record.MinHeight(data->controlHeight());record.Padding({6,0,6,0});
         AutomationProperties::SetAutomationId(record,L"stroke-recording");
         recordError=label(data,L"");recordError.TextWrapping(TextWrapping::Wrap);recordError.Opacity(.75);AutomationProperties::SetAutomationId(recordError,L"stroke-recording-error");
@@ -84,7 +85,7 @@ struct StatsView:std::enable_shared_from_this<StatsView>{
                 ColumnDefinition reading;reading.Width({1,GridUnitType::Auto});line.ColumnDefinitions().Append(reading);
                 line.ColumnSpacing(data->panelMetric(L"control_spacing"));
                 auto text=label(data,str(row,L"label"));line.Children().Append(text);captions.push_back(text);rowLines.push_back(line);
-                auto value=label(data,L"");Grid::SetColumn(value,1);line.Children().Append(value);values.push_back(value);
+                auto value=label(data,L"");Documents::Typography::SetNumeralAlignment(value,FontNumeralAlignment::Tabular);Grid::SetColumn(value,1);line.Children().Append(value);values.push_back(value);
                 AutomationProperties::SetAutomationId(value,L"renderer-stat-"+to_hstring(i));
                 tooltip(line,str(row,L"description"));
                 AutomationProperties::SetHelpText(value,str(row,L"description"));

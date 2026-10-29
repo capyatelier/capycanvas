@@ -32,8 +32,8 @@ struct PreviewPanel:std::enable_shared_from_this<PreviewPanel>{
     void init(Canvas const& root){
         host=root;auto weak=weak_from_this();
         title=label(data,L"",true);body.Children().Append(title);body.Children().Append(slot);
-        apply=button(data,data->copyCommon(L"apply"),[weak]{if(auto self=weak.lock())self->accept();});
-        cancel=button(data,data->copyCommon(L"cancel"),[weak]{if(auto self=weak.lock())self->dismiss();});
+        apply=raisedButton(data,data->copyCommon(L"apply"),[weak]{if(auto self=weak.lock())self->accept();});
+        cancel=raisedButton(data,data->copyCommon(L"cancel"),[weak]{if(auto self=weak.lock())self->dismiss();});
         for(auto action:{cancel,apply}){action.Padding({12,5,12,5});action.MinHeight(34);action.AllowFocusOnInteraction(false);}
         AutomationProperties::SetAutomationId(apply,id(L"apply"));AutomationProperties::SetAutomationId(cancel,id(L"cancel"));
         StackPanel actions;actions.Orientation(Orientation::Horizontal);actions.Spacing(8);actions.HorizontalAlignment(HorizontalAlignment::Right);

@@ -612,3 +612,5 @@ tilt-reverse-vertical = Đảo dọc
 tilt-swap-axes = Đổi trục
 tilt-use-pen = Dùng bút tại đây
 common-stroke-input-canceled = Nét vẽ quá dài nên đã bị hủy. Bạn có thể tiếp tục vẽ.
+
+native-color-stroke-recording-file-type = Bản ghi nét vẽ Capy

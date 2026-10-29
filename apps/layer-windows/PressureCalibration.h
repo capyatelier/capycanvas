@@ -24,7 +24,7 @@ struct ResponseCalibration:std::enable_shared_from_this<ResponseCalibration>{
     Bindings bindings;
     TranslateTransform translation;
     std::optional<uint32_t> pointer;
-    hstring built,measured,shape,drawn,presentedTarget;
+    hstring built,measured,shape,drawn,presentedTarget,paintedTheme;
     bool measuring=false,publishing=false,projecting=false,exposed=false;
     bool tilt()const{return object(data->state,L"tilt_calibration").Size()!=0;}
     hstring target()const{return tilt()?L"tilt":L"pressure";}
@@ -74,10 +74,10 @@ struct ResponseCalibration:std::enable_shared_from_this<ResponseCalibration>{
         circle.Width(62);circle.Height(62);circle.StrokeThickness(2);Canvas::SetLeft(circle,5);Canvas::SetTop(circle,5);circle.Opacity(.18);direction.Children().Append(circle);
         for(auto const& arrow:arrows){arrow.StrokeThickness(1.5);arrow.IsHitTestVisible(false);direction.Children().Append(arrow);}
         arrows[0].Opacity(.55);arrows[1].StrokeThickness(2.5);
-        StackPanel segments;segments.Orientation(Orientation::Horizontal);segments.HorizontalAlignment(HorizontalAlignment::Center);
+        auto segments=segmentRow(data);segments.HorizontalAlignment(HorizontalAlignment::Center);
         for(size_t i=0;i<axes.size();++i){
             auto control=axes[i];control.Width(36);control.Height(36);control.MinWidth(0);control.MinHeight(0);control.Padding({0});control.BorderThickness({0});control.IsChecked(false);
-            double radius=data->panelMetric(L"control_radius")*CornerFit;control.CornerRadius({i==0?radius:0.,i==2?radius:0.,i==2?radius:0.,i==0?radius:0.});
+            segmentColors(data,control);control.CornerRadius({});
             control.Click([weak](auto&&,auto&&){if(auto self=weak.lock();self&&!self->projecting){
                 self->data->dispatch(O({{L"type",S(L"tilt_calibration")},{L"action",O({{L"kind",S(L"axes")},{L"axes",O({
                     {L"reverse_horizontal",B(self->axes[0].IsChecked().Value())},{L"reverse_vertical",B(self->axes[1].IsChecked().Value())},{L"swap",B(self->axes[2].IsChecked().Value())}})}})}}));
@@ -148,7 +148,7 @@ struct ResponseCalibration:std::enable_shared_from_this<ResponseCalibration>{
         if(!model.Size()){exposed=false;presentedTarget=L"";frame.Visibility(Visibility::Collapsed);shadow.Layout({-100000,0,1,1},1099,false);if(!built.empty()){built=L"";bindings.clear();slot.Child(nullptr);measured=L"";}return;}
         if(presentedTarget!=target()){presentedTarget=target();exposed=false;}
         frame.Opacity(exposed?1:0);frame.IsHitTestVisible(exposed);
-        auto key=target()+data->theme()+object(data->state,L"palette").Stringify();
+        auto key=target();bool themeChanged=paintedTheme!=data->theme();paintedTheme=data->theme();
         bool rebuilt=key!=built;
         if(rebuilt){built=key;bindings.clear();
             if(auto parent=directionControl.Parent().try_as<Panel>()){uint32_t index;if(parent.Children().IndexOf(directionControl,index))parent.Children().RemoveAt(index);}
@@ -156,8 +156,8 @@ struct ResponseCalibration:std::enable_shared_from_this<ResponseCalibration>{
         auto prefix=L"pen-"+target();
         AutomationProperties::SetAutomationId(frame,prefix+L"-dialog");AutomationProperties::SetAutomationId(title,prefix+L"-title");AutomationProperties::SetAutomationId(close,prefix+L"-close");
         title.Text(str(model,L"title"));title.Foreground(data->brush(L"text"));surface.Fill(data->tint(L"panel",255));
-        close.Content(icon(L"window-close",data->theme()));AutomationProperties::SetName(close,str(model,L"close"));tooltip(close,str(model,L"close"));AutomationProperties::SetName(frame,str(model,L"title"));
-        for(auto [control,id]:{std::pair{firmer,L"firmer"},std::pair{lighter,L"lighter"},std::pair{reset,L"reset"},std::pair{cancel,L"cancel"},std::pair{apply,L"apply"}}){auto text=str(model,id);if(tilt()&&(control==firmer||control==lighter)){if(rebuilt)control.Content(icon(control==firmer?L"minus":L"plus",data->theme(),16));tooltip(control,text);}else buttonCaption(control,text);AutomationProperties::SetName(control,text);AutomationProperties::SetAutomationId(control,prefix+L"-"+id);}
+        if(rebuilt||themeChanged)close.Content(icon(L"window-close",data->theme()));AutomationProperties::SetName(close,str(model,L"close"));tooltip(close,str(model,L"close"));AutomationProperties::SetName(frame,str(model,L"title"));
+        for(auto [control,id]:{std::pair{firmer,L"firmer"},std::pair{lighter,L"lighter"},std::pair{reset,L"reset"},std::pair{cancel,L"cancel"},std::pair{apply,L"apply"}}){auto text=str(model,id);if(tilt()&&(control==firmer||control==lighter)){if(rebuilt||themeChanged)control.Content(icon(control==firmer?L"minus":L"plus",data->theme(),16));tooltip(control,text);}else buttonCaption(control,text);AutomationProperties::SetName(control,text);AutomationProperties::SetAutomationId(control,prefix+L"-"+id);}
         firmer.IsEnabled(flag(model,L"firmer_enabled"));lighter.IsEnabled(flag(model,L"lighter_enabled"));apply.IsEnabled(!tilt()||flag(object(data->state,L"tilt_calibration"),L"ready"));apply.Background(accent(data));apply.Foreground(data->brush(L"accent_foreground"));
         for(auto control:{firmer,lighter}){control.Width(tilt()?36.:std::numeric_limits<double>::quiet_NaN());control.Padding(tilt()?Thickness{0}:Thickness{12,0,12,0});auto corners=data->controlCorner();if(tilt()){if(control==firmer){corners.TopRight=0;corners.BottomRight=0;}else{corners.TopLeft=0;corners.BottomLeft=0;}}control.CornerRadius(corners);}
         sensitivity.ColumnSpacing(tilt()?0:8);Grid::SetColumn(sensitivity,tilt()?1:0);Grid::SetColumnSpan(sensitivity,tilt()?1:4);
@@ -173,7 +173,7 @@ struct ResponseCalibration:std::enable_shared_from_this<ResponseCalibration>{
             auto tiltView=object(data->state,L"tilt_calibration"),axis=object(tiltView,L"axes");device.Text(str(tiltView,L"device"));device.Foreground(data->brush(L"text"));directionTitle.Text(str(tiltView,L"direction"));directionTitle.Foreground(data->brush(L"text"));
             AutomationProperties::SetAutomationId(directionControl,L"pen-tilt-direction");AutomationProperties::SetName(directionControl,str(tiltView,L"direction"));AutomationProperties::SetAutomationId(device,L"pen-tilt-device");projecting=true;
             std::array<hstring,3> names{L"reverse_horizontal",L"reverse_vertical",L"swap"},ids{L"reverse-horizontal",L"reverse-vertical",L"swap-axes"},icons{L"flip-horizontal",L"flip-vertical",L"swap-orientation"};
-            for(size_t i=0;i<axes.size();++i){auto label=str(tiltView,names[i]==L"swap"?L"swap_axes":names[i].c_str());if(rebuilt){axes[i].Content(icon(icons[i],data->theme(),16));buttonColors(data,axes[i]);}axes[i].IsChecked(flag(axis,names[i].c_str()));axes[i].Background(flag(axis,names[i].c_str())?selected(data):data->brush(L"input"));AutomationProperties::SetAutomationId(axes[i],L"pen-tilt-"+ids[i]);AutomationProperties::SetName(axes[i],label);tooltip(axes[i],label);}
+            for(size_t i=0;i<axes.size();++i){auto label=str(tiltView,names[i]==L"swap"?L"swap_axes":names[i].c_str());if(rebuilt||themeChanged)axes[i].Content(icon(icons[i],data->theme(),16));axes[i].IsChecked(flag(axis,names[i].c_str()));AutomationProperties::SetAutomationId(axes[i],L"pen-tilt-"+ids[i]);AutomationProperties::SetName(axes[i],label);tooltip(axes[i],label);}
             projecting=false;drawDirection();
         }
         for(auto const& bind:bindings)bind();

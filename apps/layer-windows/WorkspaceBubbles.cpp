@@ -371,8 +371,10 @@ void WorkspaceBubbles::Impl::content(std::shared_ptr<Record> const& r,std::share
         if(p->glass)iconAt(p->art,data,L"palette",center,13);
         else{SwatchFace swatch;swatch.Update(data,array(p->data,L"rgba"),size.Width,workspace.XamlRoot()?workspace.XamlRoot().RasterizationScale():1,flag(p->data,L"selected"),str(p->data,L"kind")==L"foreground",false);p->art.Children().Append(swatch.root);}
     }else{
-        if(p->data.GetNamedValue(L"preview",JsonValue::CreateNullValue()).ValueType()==JsonValueType::Number){previewAt(p->decorations,data,int(num(p->data,L"preview")),{center.X,13},{size.Width*.68f,14});auto text=label(data,str(p->data,L"label"));text.TextAlignment(TextAlignment::Center);text.TextTrimming(TextTrimming::CharacterEllipsis);text.MaxLines(1);text.Opacity(.8);text.IsHitTestVisible(false);text.Measure({INFINITY,INFINITY});auto height=text.DesiredSize().Height;place(text,{center.X,size.Height-5-height/2},{size.Width-16,height});p->art.Children().Append(text);}
-        else iconAt(p->art,data,str(p->data,L"icon"),center,18);
+        bool preview=p->data.GetNamedValue(L"preview",JsonValue::CreateNullValue()).ValueType()==JsonValueType::Number,brush=prefix(p->key,L"brush:");
+        if(preview)previewAt(p->decorations,data,int(num(p->data,L"preview")),{center.X,13},{size.Width*.68f,14});
+        else iconAt(p->art,data,str(p->data,L"icon"),brush?Point{center.X,13}:center,18);
+        if(brush||preview){auto text=label(data,str(p->data,L"label"));text.TextAlignment(TextAlignment::Center);text.TextTrimming(TextTrimming::CharacterEllipsis);text.MaxLines(1);text.Opacity(.8);text.IsHitTestVisible(false);text.Measure({INFINITY,INFINITY});auto height=text.DesiredSize().Height;place(text,{center.X,size.Height-5-height/2},{size.Width-16,height});p->art.Children().Append(text);}
     }
     bool interactive=p->key==L"face"||prefix(p->key,L"bead:")||prefix(p->key,L"item:")||prefix(p->key,L"brush:");
     if(interactive&&!p->accessible){p->accessible=bubbleButton();auto region=shape(surface(*r,*p,true),clear());region.IsHitTestVisible(true);p->accessible.Content(region);p->root.Children().Append(p->accessible);

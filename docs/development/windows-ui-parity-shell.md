@@ -40,7 +40,7 @@ other two plans build on.
 `apps/layer-windows/`), plus shared panel layout in `crates/layer-workspace`
 and colour view models in `crates/layer-ui`.
 
-The same agent also owns every file the [panels plan](windows-ui-parity-panels.md#files-this-plan-owns)
+The same agent also owns every file the panels plan
 lists.
 
 Changing a helper signature may require a mechanical edit at call sites in
@@ -54,7 +54,7 @@ adoption milestone.
 
 ## Order of work
 
-One agent implements this plan and the [panels plan](windows-ui-parity-panels.md)
+One agent implements this plan and the panels plan
 in five milestones. Each milestone is one commit, or a few commits pushed
 together, with one VM build and one test round, pushed to `origin/main` when
 its checks pass. Fix every finding listed for a milestone before building, so
@@ -205,7 +205,7 @@ same file at the same time:
 | Plan | Owner | Scope |
 | --- | --- | --- |
 | [Primitives and shell](windows-ui-parity-shell.md) | Agent A | Shared WinUI helpers and theme resources, workspace shell (tabs, drawers, bridges, columns, drag states), colour panels |
-| [Panels](windows-ui-parity-panels.md) | Agent B | Layers, tools and brushes, toolbar components, bubbles, filters and effects, curves, scopes, proof, navigator, palettes |
+| Panels | Agent B | Layers, tools and brushes, toolbar components, bubbles, filters and effects, curves, scopes, proof, navigator, palettes |
 | [Pages and chrome](windows-ui-parity-pages.md) | Agent C | Preferences, shortcuts, workspace manager, title bar, drawing tabs, canvas bar, notices, document and New drawing dialogs |
 
 The findings were audited at `4cfc7e043`, and the root causes of the reported

@@ -82,7 +82,7 @@ inline StackPanel ProofPanel(std::shared_ptr<WorkspaceData> const& data,Bindings
             auto options=J::Parse(value.Stringify());options.Insert(L"document_profile",document);
             if(!object(settings,L"profile").Size())settings.Insert(L"profile",document.Size()?document:array(value,L"profiles").GetObjectAt(0));
             details.Insert(L"form",options);details.Insert(L"settings",settings);details.Insert(L"profiles",array(value,L"library"));
-            auto form=std::make_shared<ProofFormView>(data->localization);form->init(details,J(),document.Size()?hstring(L"document"):hstring());
+            auto form=std::make_shared<ProofFormView>(data);form->init(details,J(),document.Size()?hstring(L"document"):hstring());
             for(auto box:{form->profile,form->intent,form->simulation})box.FontWeight(winrt::Windows::UI::Text::FontWeights::Bold());
             for(auto const& [control,id]:std::initializer_list<std::pair<FrameworkElement,wchar_t const*>>{{form->profile,L"proof-panel-profile"},{form->intent,L"proof-panel-intent"},{form->simulation,L"proof-panel-simulation"},{form->bpc,L"proof-panel-bpc"}})AutomationProperties::SetAutomationId(control,id);
             *printForm=form;printControls.Children().Append(form->root);

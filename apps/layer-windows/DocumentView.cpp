@@ -492,7 +492,7 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
                 body.Children().Append(profileList);body.Children().Append(visibility);
                 dialog.PrimaryButtonText(profileText(L"add_profile_dialog"));dialog.SecondaryButtonText(profileText(L"remove"));dialog.IsSecondaryButtonEnabled(entries.Size()!=0);dialog.CloseButtonText(common(L"done"));
             }else if(kind==L"proof"){
-                proofForm=std::make_shared<ProofFormView>(localization);proofForm->root.Language(data->language());proofForm->init(details,proofDraft,proofProfileId);body.Children().Append(proofForm->root);
+                proofForm=std::make_shared<ProofFormView>(data);proofForm->root.Language(data->language());proofForm->init(details,proofDraft,proofProfileId);body.Children().Append(proofForm->root);
                 for(auto box:{proofForm->profile,proofForm->intent,proofForm->simulation})choiceColors(data,box,ControlSurface::Dialog);
                 presentationChanged=[this,proofForm]{
                     auto details=object(object(model,L"windows_document"),L"details"),copy=object(object(details,L"feature_copy"),L"proof");

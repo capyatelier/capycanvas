@@ -129,7 +129,7 @@ struct CurveEditor : std::enable_shared_from_this<CurveEditor> {
         reset=button(data,L"",[weak]{if(auto self=weak.lock()){self->cancel();self->send(O({{L"kind",S(L"reset")}}));}});
         reset.Width(data->panelMetric(L"control_height"));reset.Height(data->panelMetric(L"control_height"));reset.Content(icon(L"reset",data->theme()));reset.Visibility(Visibility::Collapsed);
         AutomationProperties::SetAutomationId(reset,property?property->id()+L"-reset":L"pen-"+responseTarget+L"-curve-reset");
-        chart.Height(200);chart.MinWidth(64);chart.Background(data->brush(L"input"));
+        chart.Height(200);chart.MinWidth(64);chart.Background(data->tint(L"text",31));
         if(property)chart.Children().Append(CapyScopes::TonalPlot(data,bindings));chart.Children().Append(focus);
         Grid frame;frame.ColumnSpacing(data->panelMetric(L"control_spacing"));frame.RowSpacing(4);
         for(auto width:{GridUnitType::Auto,GridUnitType::Star}){ColumnDefinition column;column.Width({1,width});frame.ColumnDefinitions().Append(column);}
@@ -236,7 +236,7 @@ struct CurveEditor : std::enable_shared_from_this<CurveEditor> {
             auto white=axisViews.GetObjectAt(axis).GetNamedValue(L"white",JsonValue::CreateNullValue());
             if(white.ValueType()!=JsonValueType::Number)continue;double at=white.GetNumber();
             Shapes::Line l;l.X1(inset+(axis?0:at*width));l.Y1(inset+(axis?(1-at)*height:0));l.X2(inset+(axis?width:at*width));l.Y2(inset+(axis?(1-at)*height:height));
-            l.Stroke(data->brush(L"text"));l.StrokeThickness(1);l.Opacity(.7);
+            l.Stroke(data->brush(L"text"));l.StrokeThickness(1);l.Opacity(.2);
             DoubleCollection dash;dash.Append(3);dash.Append(3);l.StrokeDashArray(dash);grid.Children().Append(l);
         }
         std::vector<Point> path;for(auto value:array(model,L"plot")){auto at=value.GetArray();path.push_back({float(inset+at.GetNumberAt(0)*width),float(inset+(1-at.GetNumberAt(1))*height)});}
@@ -245,10 +245,10 @@ struct CurveEditor : std::enable_shared_from_this<CurveEditor> {
             Shapes::Polyline polygon;std::vector<Point> handles;
             for(auto point:p){auto at=point.GetArray();handles.push_back({float(inset+at.GetNumberAt(0)*width),float(inset+(1-at.GetNumberAt(1))*height)});}
             polygon.Points().ReplaceAll(handles);polygon.Stroke(data->brush(L"text"));polygon.StrokeThickness(1);polygon.Opacity(.35);
-            DoubleCollection dash;dash.Append(3);dash.Append(3);polygon.StrokeDashArray(dash);grid.Children().Append(polygon);
+            grid.Children().Append(polygon);
         }
         auto marker=array(model,L"marker");
-        if(marker.Size()==2){Shapes::Ellipse dot;dot.Width(8);dot.Height(8);dot.Fill(accent(data));Canvas::SetLeft(dot,inset+marker.GetNumberAt(0)*width-4);Canvas::SetTop(dot,inset+(1-marker.GetNumberAt(1))*height-4);dots.Children().Append(dot);}
+        if(marker.Size()==2){Shapes::Ellipse dot;dot.Width(10);dot.Height(10);dot.Stroke(data->brush(L"text"));dot.StrokeThickness(1);dot.Opacity(.8);Canvas::SetLeft(dot,inset+marker.GetNumberAt(0)*width-5);Canvas::SetTop(dot,inset+(1-marker.GetNumberAt(1))*height-5);dots.Children().Append(dot);}
         for(uint32_t i=0;i<p.Size();i++){
             auto at=p.GetArrayAt(i);double x=inset+at.GetNumberAt(0)*width,y=inset+(1-at.GetNumberAt(1))*height;
             Shapes::Ellipse dot;dot.Width(7);dot.Height(7);dot.Fill(data->brush(L"text"));

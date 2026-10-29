@@ -65,7 +65,7 @@ struct FiltersView : std::enable_shared_from_this<FiltersView> {
         categoryGlyph.Width(16);categoryGlyph.Height(16);categoryGlyph.IsHitTestVisible(false);
         categoryGlyph.HorizontalAlignment(HorizontalAlignment::Left);header.Children().Append(categoryGlyph);
         edgeTag(search,L"edge_contact",S(L"input"));search.MinWidth(0);search.MinHeight(data->controlHeight());search.Height(data->controlHeight());search.FontSize(data->textSize());search.MaxLength(120);
-        search.Background(data->brush(L"input"));search.Padding({6,0,6,0});search.CornerRadius(data->controlCorner());search.BorderThickness({0});
+        search.Padding({6,0,6,0});fieldColors(data,search);
         AutomationProperties::SetAutomationId(search,L"filter-search");header.Children().Append(search);
         // TextChanging is synchronous, so programmatic updates stay inside
         // Updating. Keep typed text until its own model acknowledgement arrives.
