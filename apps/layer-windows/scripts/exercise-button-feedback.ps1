@@ -25,6 +25,13 @@ try{
     Wait-Until {foreach($handle in [CapyWindowApi]::Windows([uint32]$owned.Id)){$candidate=[System.Windows.Automation.AutomationElement]::FromHandle($handle);$probe=$candidate.FindFirst([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,'feedback-root'));if($probe){$script:window=$handle;return $true}};$false} 'Feedback fixture did not start' 30
     [CapyWindowApi]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
     [CapyWindowApi]::SetForegroundWindow($window)|Out-Null;[CapyRowPointer]::Initialize([uint32]$owned.Id)
+    foreach($probe in @(@('feedback-disabled-default',(92./255)),@('feedback-disabled-custom',.45))){
+        $control=Element $probe[0];Wait-Until {$control.Current.ItemStatus -match 'content_opacity='} 'Disabled feedback metadata unavailable'
+        $state=@{};foreach($part in $control.Current.ItemStatus.Split(';')){$pair=$part.Split('=');$state[$pair[0]]=$pair[1]}
+        $effective=[double]$state.content_opacity*[double]$state.opacity
+        if([math]::Abs($effective-$probe[1])-gt.0001){throw "Disabled content opacity for $($probe[0]): actual $effective, expected $($probe[1])"}
+        $records.Add(@{stage=$probe[0];effective_opacity=$effective})
+    }
     foreach($context in @('root','dialog','flyout')){
         if($context-eq'dialog'){Invoke-Button 'feedback-show-dialog'};if($context-eq'flyout'){Invoke-Button 'feedback-show-flyout'}
         $control=Element ('feedback-'+$context);if(!$control){throw "Missing $context button"}

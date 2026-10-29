@@ -6,7 +6,7 @@
 using namespace CapyEffects;
 namespace {
 A categorySchema(A const& categories){
-    A schema;for(auto value:categories){auto item=value.GetObject();schema.Append(O({{L"id",item.GetNamedValue(L"id")},{L"icon",S(str(item,L"icon"))}}));}return schema;
+    A schema;for(auto value:categories){auto item=value.GetObject();schema.Append(O({{L"id",item.GetNamedValue(L"id",JsonValue::CreateNullValue())},{L"icon",S(str(item,L"icon"))}}));}return schema;
 }
 struct FiltersView : std::enable_shared_from_this<FiltersView> {
     std::shared_ptr<WorkspaceData> data;
@@ -27,7 +27,7 @@ struct FiltersView : std::enable_shared_from_this<FiltersView> {
     void preview(){
         if(!root.IsLoaded()||!root.XamlRoot()||!root.XamlRoot().IsHostVisible()||list.ActualHeight()<=0){RemoveFilterPreviewView(data->previews,reinterpret_cast<uint64_t>(this));return;}
         auto file=object(data->state,L"document_file");
-        auto context=file.GetNamedValue(L"epoch").Stringify();
+        auto context=file.GetNamedValue(L"epoch",JsonValue::CreateNullValue()).Stringify();
         std::vector<hstring> visible;
         for(auto const& row:previews){
             if(row.bundled)continue;
@@ -59,7 +59,7 @@ struct FiltersView : std::enable_shared_from_this<FiltersView> {
         category.SelectionChanged([weak](auto&&,auto&&){if(auto self=weak.lock();self&&!self->data->updating){
             auto categories=array(self->data->state,L"filter_categories");int index=self->category.SelectedIndex();
             if(index>=0&&uint32_t(index)<categories.Size())self->send(O({{L"op",S(L"category")},
-                {L"category",categories.GetObjectAt(index).GetNamedValue(L"id")}}));
+                {L"category",categories.GetObjectAt(index).GetNamedValue(L"id",JsonValue::CreateNullValue())}}));
         }});
         category.Margin({22,0,0,0});header.Children().Append(category);
         categoryGlyph.Width(16);categoryGlyph.Height(16);categoryGlyph.IsHitTestVisible(false);
@@ -93,7 +93,7 @@ struct FiltersView : std::enable_shared_from_this<FiltersView> {
         if(key!=catalogKey){catalogKey=key;category.Items().Clear();for(auto value:categories)comboOption(category,str(value.GetObject(),L"label"));}
         for(uint32_t i=0;i<categories.Size();++i)comboOptionText(category,i,str(categories.GetObjectAt(i),L"label"));
         int categorySelected=0;for(uint32_t i=0;i<categories.Size();i++)if(str(categories.GetObjectAt(i),L"id")==str(picker,L"category"))categorySelected=i;
-        category.SelectedIndex(categorySelected);
+        selectIndex(category,categorySelected);
         auto glyph=categorySelected>=0&&uint32_t(categorySelected)<categories.Size()?str(categories.GetObjectAt(categorySelected),L"icon",L"adjustments"):hstring(L"adjustments");
         if(glyph!=categoryGlyphKey){categoryGlyphKey=glyph;categoryGlyph.Source(icon(glyph,data->theme()).Source());}
         bool open=picker.GetNamedValue(L"search",JsonValue::CreateNullValue()).ValueType()==JsonValueType::String;
@@ -192,7 +192,7 @@ FrameworkElement FilterTypesPanel(std::shared_ptr<WorkspaceData> const& data,Bin
         if(state->key!=key){
             state->key=key;state->buttons.clear();state->labels.clear();choices.Children().Clear();
             for(auto value:categories){
-                auto item=value.GetObject();auto category=item.GetNamedValue(L"id");
+                auto item=value.GetObject();auto category=item.GetNamedValue(L"id",JsonValue::CreateNullValue());
                 auto pick=button(data,str(item,L"label"),[data,category]{data->dispatch(O({{L"type",S(L"filter_picker")},
                     {L"action",O({{L"op",S(L"category")},{L"category",category}})}}));});
                 pick.Height(44);pick.Padding({6,5,6,5});pick.HorizontalAlignment(HorizontalAlignment::Stretch);

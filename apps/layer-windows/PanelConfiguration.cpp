@@ -45,23 +45,23 @@ struct PanelConfiguration::Impl:std::enable_shared_from_this<Impl>{
         choice.SelectionChanged([weak](auto&& sender,auto&&){if(auto self=weak.lock();self&&!self->data->updating){
             auto item=sender.template as<ComboBox>().SelectedItem().template try_as<ComboBoxItem>();if(!item)return;
             auto tag=item.Tag().template try_as<J>();if(!tag||str(tag,L"epoch")!=epoch(self->data))return;
-            self->data->dispatchDocument(O({{L"type",S(L"select_layer")},{L"id",tag.GetNamedValue(L"id")}}),str(tag,L"epoch"));
+            self->data->dispatchDocument(O({{L"type",S(L"select_layer")},{L"id",tag.GetNamedValue(L"id",JsonValue::CreateNullValue())}}),str(tag,L"epoch"));
         }});
         auto key=std::make_shared<hstring>();
         bindings.emplace_back([data=data,choice,key]{
             A identity;auto layers=array(data->state,L"layers");
             for(auto value:layers){auto row=value.GetObject();identity.Append(O({
-                {L"id",row.GetNamedValue(L"id")},{L"label",S(str(row,L"label"))}}));}
+                {L"id",row.GetNamedValue(L"id",JsonValue::CreateNullValue())},{L"label",S(str(row,L"label"))}}));}
             auto next=epoch(data)+identity.Stringify();
             if(next!=*key){
                 *key=next;choice.Items().Clear();
                 for(auto value:layers){auto row=value.GetObject();ComboBoxItem item;
                     item.Content(box_value(str(row,L"label")));
-                    item.Tag(O({{L"epoch",S(epoch(data))},{L"id",row.GetNamedValue(L"id")}}));choice.Items().Append(item);}
+                    item.Tag(O({{L"epoch",S(epoch(data))},{L"id",row.GetNamedValue(L"id",JsonValue::CreateNullValue())}}));choice.Items().Append(item);}
             }
             int selected=-1;
             for(uint32_t i=0;i<layers.Size();++i)if(flag(layers.GetObjectAt(i),L"editing")){selected=int(i);break;}
-            choice.SelectedIndex(selected);
+            selectIndex(choice,selected);
         });
         return choice;
     }

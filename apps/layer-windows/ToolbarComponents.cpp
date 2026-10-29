@@ -65,7 +65,7 @@ Imaging::WriteableBitmap trackRaster(double width,double height,double scale,boo
 
 struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
     struct Field {
-        FrameworkElement row{nullptr};
+        FrameworkElement row{nullptr};J schema{nullptr};
         std::function<void(J const&)> update;
         std::function<void()> orient;
         std::function<winrt::Windows::Foundation::Size()> natural;
@@ -200,22 +200,36 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
     }
     void Update(J const& tile){
         auto value=object(tile,L"component");if(!value.Size())return;
-        sliderStyle=object(tile,L"slider_style");
+        auto nextStyle=object(tile,L"slider_style");bool styleChanged=!JsonEqual(nextStyle,sliderStyle);sliderStyle=nextStyle;
         auto nextSchema=O({{L"component",schemaFor(value)},{L"slider_style",sliderStyle}});
         tileLabel=str(tile,L"label");AutomationProperties::SetName(root,tileLabel);
         if(!JsonEqual(nextSchema,schema)){
-            closePopup();
-            for(auto& f:fields){if(f.dispose)f.dispose();uint32_t index;if(root.Children().IndexOf(f.row,index))root.Children().RemoveAt(index);}
-            fields.clear();schema=nextSchema;model=value;
-            if(standalone)buildSlider(tile);
-            else for(auto option:array(model,L"options")){
-                auto entry=option.GetObject();
-                if(entry.HasKey(L"Range"))fields.push_back(rangeField(object(entry,L"Range")));
-                else if(entry.HasKey(L"Numeric"))fields.push_back(numericField(object(entry,L"Numeric")));
-                else if(entry.HasKey(L"Choice"))fields.push_back(choiceField(object(entry,L"Choice")));
-                else if(entry.HasKey(L"Gradient"))fields.push_back(gradientField(object(entry,L"Gradient")));
-                else fields.push_back(actionField(object(entry,L"Action")));
-                root.Children().Append(fields.back().row);
+            bool contextChanged=!JsonEqual(object(model,L"context"),object(value,L"context"));
+            if(contextChanged){closePopup();if(sliderCapture)sliderCapture->Cancel();finishSliderKey(true);}
+            schema=nextSchema;model=value;
+            if(standalone){
+                if(!sliderRow||styleChanged){
+                    for(auto& field:fields){if(field.dispose)field.dispose();uint32_t index;if(root.Children().IndexOf(field.row,index))root.Children().RemoveAt(index);}
+                    fields.clear();buildSlider(tile);
+                }else sliderEdit=edit();
+            }else{
+                auto previous=std::move(fields);fields.clear();
+                for(auto option:array(model,L"options")){
+                    auto entry=option.GetObject();A one;one.Append(entry);auto key=schemaFor(O({{L"options",one}}));
+                    auto found=contextChanged?previous.end():std::find_if(previous.begin(),previous.end(),[&](auto const& field){return field.row&&JsonEqual(field.schema,key);});
+                    Field field;
+                    if(found!=previous.end()){field=std::move(*found);found->row=nullptr;}
+                    else if(entry.HasKey(L"Range"))field=rangeField(object(entry,L"Range"));
+                    else if(entry.HasKey(L"Numeric"))field=numericField(object(entry,L"Numeric"));
+                    else if(entry.HasKey(L"Choice"))field=choiceField(object(entry,L"Choice"));
+                    else if(entry.HasKey(L"Gradient"))field=gradientField(object(entry,L"Gradient"));
+                    else field=actionField(object(entry,L"Action"));
+                    field.schema=key;fields.push_back(std::move(field));
+                }
+                for(auto& field:previous)if(field.row){if(field.dispose)field.dispose();uint32_t at;if(root.Children().IndexOf(field.row,at))root.Children().RemoveAt(at);}
+                for(uint32_t i=0;i<fields.size();++i){uint32_t at,next=i+2;auto row=fields[i].row;
+                    if(root.Children().IndexOf(row,at)){if(at==next)continue;root.Children().RemoveAt(at);}root.Children().InsertAt(next,row);
+                }
             }
             measured=false;
         }
@@ -279,6 +293,7 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
     }
 
     void buildSlider(J const& tile){
+        trackKey.clear();marksKey=L"";boundsKey.clear();
         auto weak=weak_from_this();
         sliderEdit=edit();field=object(model,L"numeric");
         opacity=str(control,L"kind")!=L"brush_size_slider";
@@ -385,7 +400,7 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
     }
     void updateSlider(){
         auto next=object(model,L"numeric");enabled=next.Size()!=0;
-        if(enabled){field=next;current=num(next,L"value");}
+        if(enabled){field=next;spec=object(next,L"numeric");current=num(next,L"value");}
         auto title=enabled?str(next,L"label"):tileLabel;
         AutomationProperties::SetName(cap,title);tooltip(cap,title);AutomationProperties::SetName(access,title);
         auto shown=numeric(data->localization.get(),spec,current,O({{L"type",S(L"format")}}));level=num(shown,L"fill");
@@ -710,15 +725,15 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
     }
     Field rangeField(J const& interval){
         auto weak=weak_from_this();auto send=edit();auto bounds=array(interval,L"bounds");
-        std::array<hstring,2> ids{str(bounds.GetObjectAt(0),L"id"),str(bounds.GetObjectAt(1),L"id")};
-        auto range=RangeControl::Create(data,bounds.GetObjectAt(0),bounds.GetObjectAt(1),str(interval,L"label"),L"toolbar",sliders,
+        std::array<hstring,2> ids{str(objectAt(bounds,0),L"id"),str(objectAt(bounds,1),L"id")};
+        auto range=RangeControl::Create(data,objectAt(bounds,0),objectAt(bounds,1),str(interval,L"label"),L"toolbar",sliders,
             [send,ids](int index,double value,hstring const& phase){
                 send(O({{L"type",S(L"tool_setting_contact")},{L"id",S(ids[index])},{L"value",N(value)},{L"phase",S(phase)}}));});
         Field result;result.row=range->root;result.intrinsic=true;result.worded=true;result.across=range->root.Height();
         result.update=[range](J const& option){
             auto interval=object(option,L"Range");auto current=array(interval,L"bounds");
-            range->Relabel(current.GetObjectAt(0),current.GetObjectAt(1),str(interval,L"label"));
-            range->Update(num(current.GetObjectAt(0),L"value"),num(current.GetObjectAt(1),L"value"));
+            range->Relabel(objectAt(current,0),objectAt(current,1),str(interval,L"label"));
+            range->Update(num(objectAt(current,0),L"value"),num(objectAt(current,1),L"value"));
         };
         result.dispose=[range]{range->Dispose();};
         result.natural=[weak,range]{
@@ -827,7 +842,7 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
             *labelText=object(option,L"Choice");auto current=array(*labelText,L"items");
             auto nextWidth=current.Stringify()+to_hstring(self->data->textSize())+self->data->language();
             if(nextWidth!=*widthKey){*widthKey=nextWidth;self->measured=false;}
-            J chosen=current.Size()?current.GetObjectAt(0):J{};
+            J chosen=current.Size()?objectAt(current,0):J{};
             for(auto value:current)if(flag(value.GetObject(),L"selected"))chosen=value.GetObject();
             auto title=str(*labelText,L"label"),reason=str(chosen,L"disabled_reason");AutomationProperties::SetName(pick,title);tooltip(pick,reason.empty()?title:reason);AutomationProperties::SetHelpText(pick,reason);
             name.Text(str(chosen,L"label"));AutomationProperties::SetItemStatus(pick,str(chosen,L"label"));

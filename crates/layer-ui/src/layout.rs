@@ -48,6 +48,11 @@ pub struct PanelControlMetrics {
     pub field_padding: f32,
     pub icon_size: f32,
     pub control_radius: f32,
+    pub layer_edge_inset: f32,
+    pub disclosure_height: f32,
+    pub layer_unit_height: f32,
+    pub layer_swipe_action_width: f32,
+    pub layer_swipe_threshold: f32,
 }
 pub const PANEL_CONTROL_METRICS: PanelControlMetrics = PanelControlMetrics {
     inset: PANEL_CONTENT_INSET,
@@ -59,6 +64,11 @@ pub const PANEL_CONTROL_METRICS: PanelControlMetrics = PanelControlMetrics {
     field_padding: 6.,
     icon_size: 16.,
     control_radius: 13.,
+    layer_edge_inset: LAYER_EDGE_INSET,
+    disclosure_height: crate::LayerDrawerSizing::FOOTER_HEIGHT,
+    layer_unit_height: TILE_SIZE,
+    layer_swipe_action_width: 72.,
+    layer_swipe_threshold: 0.4,
 };
 /// Three standard tiles, two gaps, and the tool list's two content insets.
 pub const TOOL_PANEL_MIN_WIDTH: f32 = 3.0 * TILE_SIZE + 2.0 * TILE_GAP + 2.0 * PANEL_CONTENT_INSET;

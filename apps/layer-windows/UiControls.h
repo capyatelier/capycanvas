@@ -16,6 +16,9 @@
 #include <cmath>
 #include <filesystem>
 #include <functional>
+#include <limits>
+#include <optional>
+#include <climits>
 #include <unordered_map>
 #include <memory>
 #include <map>
@@ -70,6 +73,9 @@ inline A array(J const& value,wchar_t const* key){
     auto item=value.GetNamedValue(key,JsonValue::CreateNullValue());
     return item.ValueType()==JsonValueType::Array?item.GetArray():A{};
 }
+inline J objectAt(A const& values,int32_t index){
+    if(index<0||uint32_t(index)>=values.Size())return {};auto item=values.GetAt(index);return item.ValueType()==JsonValueType::Object?item.GetObject():J{};
+}
 inline hstring str(J const& value,wchar_t const* key,hstring fallback=L""){
     auto item=value.GetNamedValue(key,JsonValue::CreateNullValue());
     return item.ValueType()==JsonValueType::String?item.GetString():fallback;
@@ -92,6 +98,28 @@ inline Windows::UI::Color color(hstring const& hex){
 }
 inline SolidColorBrush fill(Windows::UI::Color value){return SolidColorBrush(value);}
 inline SolidColorBrush clear(){return fill({0,0,0,0});}
+struct WrapLayout:PanelT<WrapLayout>{
+    double cellWidth,cellHeight,gap,rowGap;bool stretch;int limit;
+    WrapLayout(double width,double height,double spacing,bool fill=false,int maximum=INT_MAX,double rows=-1):cellWidth(width),cellHeight(height),gap(spacing),rowGap(rows<0?spacing:rows),stretch(fill),limit(maximum){}
+    int columns(double width)const{return std::max(1,std::min(limit,int((width+gap)/(cellWidth+gap))));}
+    Windows::Foundation::Size layout(Windows::Foundation::Size size,bool arrange){
+        double width=std::isfinite(size.Width)?std::max(0.f,size.Width):cellWidth;
+        int count=columns(width);double cell=stretch?(width-gap*(count-1))/count:std::min(cellWidth,width),y=0,rowHeight=0;
+        uint32_t visible=0;double extent=0;
+        for(auto child:Children()){
+            if(child.Visibility()==Visibility::Collapsed)continue;
+            if(visible&&visible%count==0){y+=rowHeight+rowGap;rowHeight=0;}
+            if(!arrange)child.Measure({float(cell),cellHeight>0?float(cellHeight):std::numeric_limits<float>::infinity()});
+            double height=cellHeight>0?cellHeight:child.DesiredSize().Height;
+            if(arrange)child.Arrange({float((visible%count)*(cell+gap)),float(y),float(cell),float(height)});
+            rowHeight=std::max(rowHeight,height);extent=std::max(extent,(visible%count+1)*(cell+gap)-gap);++visible;
+        }
+        return {float(extent),float(visible?y+rowHeight:0)};
+    }
+    Windows::Foundation::Size MeasureOverride(Windows::Foundation::Size available){return layout(available,false);}
+    Windows::Foundation::Size ArrangeOverride(Windows::Foundation::Size size){layout(size,true);return size;}
+};
+inline Panel wrapPanel(double width,double height,double gap,bool stretch=false,int limit=INT_MAX,double rowGap=-1){return make<WrapLayout>(width,height,gap,stretch,limit,rowGap);}
 
 inline void place(FrameworkElement const& element,J const& rect){
     Canvas::SetLeft(element,num(rect,L"x"));Canvas::SetTop(element,num(rect,L"y"));
@@ -471,13 +499,13 @@ inline ComboBoxItem comboOption(ComboBox const& control,hstring const& text,hstr
     control.Items().Append(option);return option;
 }
 inline void comboOptionText(ComboBox const& control,uint32_t index,hstring const& text){
-    comboOptionText(control.Items().GetAt(index).as<ComboBoxItem>(),text);
+    if(index<control.Items().Size())if(auto option=control.Items().GetAt(index).try_as<ComboBoxItem>())comboOptionText(option,text);
 }
 template<typename T>
-inline void buttonColors(std::shared_ptr<WorkspaceData> const& data,T const& result,uint8_t hover=20,Brush const& checkedRole=nullptr){
+inline void buttonColors(std::shared_ptr<WorkspaceData> const& data,T const& result,uint8_t hover=20,Brush const& checkedRole=nullptr,double disabledContentOpacity=92./255.){
     Brush checked=checkedRole;if constexpr(std::is_same_v<T,Primitives::ToggleButton>)if(!checked)checked=selected(data);
     result.FocusVisualPrimaryBrush(data->tint(L"accent",128));result.FocusVisualSecondaryBrush(clear());
-    buttonFeedback(result,data->brush(L"text"),hover,41,nullptr,false,checked);
+    buttonFeedback(result,data->brush(L"text"),hover,41,nullptr,false,checked,disabledContentOpacity);
 }
 template<typename T=Button>
 inline T button(std::shared_ptr<WorkspaceData> const& data,hstring const& text,std::function<void()> action){
@@ -567,6 +595,29 @@ inline void revealTooltip(FrameworkElement const& target){
     reveal.timer.Start();
 }
 inline Grid explainable(Control const& control);
+inline Brush paletteResource(wchar_t const* name){
+    auto resources=Application::Current().Resources();auto key=box_value(hstring(name));
+    return resources.HasKey(key)?resources.Lookup(key).try_as<Brush>():clear();
+}
+struct RowDragPresentation:std::enable_shared_from_this<RowDragPresentation>{
+    Panel parent{nullptr};Canvas overlay{nullptr};Border face{nullptr};Image image{nullptr};weak_ref<FrameworkElement> sourceRow;double sourceOpacity=1;bool dimmed=false;Windows::Foundation::Point grab{};TranslateTransform translation{nullptr};uint64_t generation=0;
+    void Clear(){++generation;if(auto row=sourceRow.get();row&&dimmed)row.Opacity(sourceOpacity);dimmed=false;sourceRow={};if(parent&&overlay){uint32_t at;if(parent.Children().IndexOf(overlay,at))parent.Children().RemoveAt(at);}parent=nullptr;overlay=nullptr;face=nullptr;image=nullptr;}
+    winrt::fire_and_forget Capture(FrameworkElement row,uint64_t version,std::optional<double> opacity){
+        auto self=shared_from_this();Imaging::RenderTargetBitmap bitmap;
+        try{co_await bitmap.RenderAsync(row);if(generation==version&&image){image.Source(bitmap);if(opacity){row.Opacity(*opacity);dimmed=true;}}}catch(hresult_error const&){if(generation==version)Clear();}
+    }
+    void Move(UIElement const& source,Windows::Foundation::Point point){
+        if(!parent||!face)return;auto at=source.TransformToVisual(parent).TransformPoint(point);translation.X(at.X-grab.X);translation.Y(at.Y-grab.Y);
+    }
+    void Start(FrameworkElement const& row,UIElement const& source,Windows::Foundation::Point origin,Windows::Foundation::Point position,std::optional<double> opacity={}){
+        Clear();for(DependencyObject node=row;node;node=VisualTreeHelper::GetParent(node))if(auto panel=node.try_as<Panel>())parent=panel;
+        if(!parent)return;sourceRow=make_weak(row);sourceOpacity=row.Opacity();
+        overlay=Canvas();overlay.IsHitTestVisible(false);Canvas::SetZIndex(overlay,9000);if(auto grid=parent.try_as<Grid>()){Grid::SetRowSpan(overlay,std::max(1,int(grid.RowDefinitions().Size())));Grid::SetColumnSpan(overlay,std::max(1,int(grid.ColumnDefinitions().Size())));}parent.Children().Append(overlay);
+        face=Border();translation=TranslateTransform();face.RenderTransform(translation);face.Width(row.ActualWidth());face.Height(row.ActualHeight());face.Opacity(.7);face.Background(paletteResource(L"ComboBoxDropDownBackground"));
+        image=Image();image.Stretch(Stretch::Fill);face.Child(image);CornerRadius corners{};if(auto border=row.try_as<Border>())corners=border.CornerRadius();else if(auto control=row.try_as<Control>())corners=control.CornerRadius();clipRounded(face,corners);overlay.Children().Append(face);
+        grab=source.TransformToVisual(row).TransformPoint(origin);Move(source,position);Capture(row,generation,opacity);
+    }
+};
 struct ChoiceGrid {
     Grid grid;std::vector<Button> cells;std::vector<Grid> hosts;
     void update(std::shared_ptr<WorkspaceData> const& data,J const& spec)const{

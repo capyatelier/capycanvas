@@ -177,7 +177,7 @@ struct PropertiesView : std::enable_shared_from_this<PropertiesView> {
             for(auto option:array(kind,L"options"))comboOption(choices,option.GetString());
             AutomationProperties::SetName(choices,name);AutomationProperties::SetAutomationId(choices,property->id());
             choices.SelectionChanged([property,weak=make_weak(choices)](auto&&,auto&&){if(auto choices=weak.get();choices&&choices.SelectedIndex()>=0)property->set(N(choices.SelectedIndex()));});
-            bindings.emplace_back([property,choices]{auto model=property->model();auto title=str(model,L"label");AutomationProperties::SetName(choices,title);auto options=array(object(model,L"kind"),L"options");for(uint32_t i=0;i<options.Size();++i)comboOptionText(choices,i,options.GetStringAt(i));auto selected=int(num(object(model,L"value"),L"value"));if(choices.SelectedIndex()!=selected)choices.SelectedIndex(selected);});
+            bindings.emplace_back([property,choices]{auto model=property->model();auto title=str(model,L"label");AutomationProperties::SetName(choices,title);auto options=array(object(model,L"kind"),L"options");for(uint32_t i=0;i<options.Size();++i)comboOptionText(choices,i,options.GetStringAt(i));auto selected=int(num(object(model,L"value"),L"value"));if(choices.SelectedIndex()!=selected)selectIndex(choices,selected);});
             return propertyRow(property,choices,bindings);
         }
         if(type==L"toggle"){
@@ -272,7 +272,7 @@ struct PropertiesView : std::enable_shared_from_this<PropertiesView> {
             if(selected<0){labels.push_back(resourceName.empty()?resourceLabel.GetString():resourceName);selected=int(labels.size())-1;}
             if(resource.Items().Size()!=labels.size()){resource.Items().Clear();for(auto const& text:labels)comboOption(resource,text);}
             for(uint32_t i=0;i<labels.size();++i)comboOptionText(resource,i,labels[i]);
-            if(resource.SelectedIndex()!=selected)resource.SelectedIndex(selected);
+            if(resource.SelectedIndex()!=selected)selectIndex(resource,selected);
             AutomationProperties::SetName(resource,resourceLabel.GetString());AutomationProperties::SetHelpText(resource,resourceName);
             tooltip(resource,resourceName.empty()?resourceLabel.GetString():resourceName);
         }
@@ -348,7 +348,7 @@ struct PropertiesView : std::enable_shared_from_this<PropertiesView> {
         if(auto key=pageIds.Stringify();key!=pages){pages=key;page.Items().Clear();for(auto choice:pageChoices)comboOption(page,str(choice.GetObject(),L"label"));}
         for(uint32_t i=0;i<pageChoices.Size();++i)comboOptionText(page,i,str(pageChoices.GetObjectAt(i),L"label"));
         int32_t selected=-1;for(uint32_t i=0;i<pageChoices.Size();++i)if(str(pageChoices.GetObjectAt(i),L"id")==str(view,L"page"))selected=int32_t(i);
-        if(page.SelectedIndex()!=selected)page.SelectedIndex(selected);
+        if(page.SelectedIndex()!=selected)selectIndex(page,selected);
         page.Visibility(pageChoices.Size()>1?Visibility::Visible:Visibility::Collapsed);page.IsEnabled(flag(view,L"enabled"));
         AutomationProperties::SetName(page,str(view,L"title"));
         refreshActions(view);

@@ -37,7 +37,7 @@ Grid toolLabel(std::shared_ptr<WorkspaceData> const& data,J const& item,bool bol
 struct ToolSetView : std::enable_shared_from_this<ToolSetView> {
     std::shared_ptr<WorkspaceData> data;
     StackPanel root,list;
-    Canvas groups;
+    Panel groups{nullptr};
     Border divider;
     std::vector<Button> groupButtons,subtoolButtons;
     std::vector<TextBlock> groupTitles,subtoolTitles;
@@ -45,9 +45,9 @@ struct ToolSetView : std::enable_shared_from_this<ToolSetView> {
     hstring panel;
     std::function<J()> projection;
     bool media()const{return panel==L"brush_sets"||panel==L"sculpt_sets";}
-    double arrangedWidth=-1;
     ToolSetView(std::shared_ptr<WorkspaceData> data,hstring panel,std::function<J()> projection):data(std::move(data)),panel(std::move(panel)),projection(std::move(projection)){}
     void init(){
+        groups=wrapPanel(112,media()?44:36,2,media(),media()?1:INT_MAX);
         root.UseLayoutRounding(false);root.Spacing(6);list.Spacing(2);
         auto weak=weak_from_this();
         divider=dividerLine(data,true);
@@ -55,24 +55,6 @@ struct ToolSetView : std::enable_shared_from_this<ToolSetView> {
         root.Children().Append(groups);root.Children().Append(divider);root.Children().Append(list);
         groups.Visibility(panel==L"tools"?Visibility::Collapsed:Visibility::Visible);
         list.Visibility(media()?Visibility::Collapsed:Visibility::Visible);
-        groups.SizeChanged([weak](auto&&,auto&&){if(auto self=weak.lock())self->arrange();});
-    }
-    void arrange(){
-        double width=groups.ActualWidth();
-        if(std::abs(arrangedWidth-width)<.01)return;arrangedWidth=width;
-        int size=int(groupButtons.size());
-        constexpr double tile=3*36+2*2;
-        double gap=2,height=media()?44:36;
-        int count=media()?1:std::max(1,std::min(size,int((width+gap)/(tile+gap))));
-        for(int i=0;i<size;i++){
-            int row=i/count;
-            double itemWidth=media()?width:std::min(tile,width);
-            auto shell=groups.Children().GetAt(uint32_t(i)).as<FrameworkElement>();
-            Canvas::SetLeft(shell,(i%count)*(itemWidth+gap));Canvas::SetTop(shell,row*(height+gap));
-            shell.Width(itemWidth);shell.Height(height);
-        }
-        int rows=(size+count-1)/count;
-        groups.Height(rows?rows*height+(rows-1)*gap:0);
     }
     void rebuild(A const& items,bool group){
         auto& buttons=group?groupButtons:subtoolButtons;buttons.clear();
@@ -113,7 +95,7 @@ struct ToolSetView : std::enable_shared_from_this<ToolSetView> {
             }
             buttons.push_back(pick);titles.push_back(title);if(group)groups.Children().Append(shell);else list.Children().Append(shell);
         }
-        if(group){arrangedWidth=-1;arrange();}
+        if(group){groups.InvalidateMeasure();}
     }
     void refresh(){
         auto view=panel==L"brushes"&&projection?projection():J{};
@@ -167,7 +149,7 @@ struct SettingsView : std::enable_shared_from_this<SettingsView> {
             auto caption=title();text.Text(caption);AutomationProperties::SetName(choices,caption);
             auto options=names();for(uint32_t i=0;i<options.size();++i)comboOptionText(choices,i,options[i]);
             auto index=current(object(self->data->state,L"color_picker"));
-            if(choices.SelectedIndex()!=index){*syncing=true;choices.SelectedIndex(index);*syncing=false;}
+            if(choices.SelectedIndex()!=index){*syncing=true;selectIndex(choices,index);*syncing=false;}
         }});
         fields.emplace_back([weak=weak_from_this(),caption]{if(auto self=weak.lock())caption.Width({self->pickerLabelWidth(),GridUnitType::Pixel});});
         Grid::SetColumn(choices,1);row.Children().Append(choices);root.Children().Append(row);
@@ -220,10 +202,10 @@ struct SettingsView : std::enable_shared_from_this<SettingsView> {
         AutomationProperties::SetAutomationId(choices,L"tool-action-group-"+group);
         std::vector<hstring> commands;for(auto value:array(data->state,L"tool_actions"))if(auto item=value.GetObject();str(item,L"group")==group){auto id=str(item,L"command");commands.push_back(id);comboOption(choices,str(find(array(data->state,L"commands"),L"id",id),L"label"),L"tool-action-"+id);}
         auto weak=weak_from_this();auto syncing=std::make_shared<bool>(false);
-        choices.SelectionChanged([weak,choices,commands,syncing,context](auto&&,auto&&){if(auto self=weak.lock();self&&!*syncing&&!self->data->updating&&settingsContext(self->data->state)==context&&choices.SelectedIndex()>=0)self->data->dispatch(O({{L"type",S(L"invoke")},{L"command",S(commands.at(choices.SelectedIndex()))}}));});
+        choices.SelectionChanged([weak,choices,commands,syncing,context](auto&&,auto&&){if(auto self=weak.lock();self&&!*syncing&&!self->data->updating&&settingsContext(self->data->state)==context&&choices.SelectedIndex()>=0&&uint32_t(choices.SelectedIndex())<commands.size())self->data->dispatch(O({{L"type",S(L"invoke")},{L"command",S(commands.at(choices.SelectedIndex()))}}));});
         fields.emplace_back([weak,choices,commands,syncing,title,caption,group]{if(auto self=weak.lock()){
             auto name=self->actionGroupLabel(group);title.Text(name);AutomationProperties::SetName(choices,name);caption.Width({self->actionLabelWidth(),GridUnitType::Pixel});
-            bool enabled=false;*syncing=true;for(uint32_t i=0;i<commands.size();++i){auto command=find(array(self->data->state,L"commands"),L"id",commands[i]);comboOptionText(choices,i,str(command,L"label"));choices.Items().GetAt(i).as<ComboBoxItem>().IsEnabled(flag(command,L"enabled"));enabled=enabled||flag(command,L"enabled");if(flag(command,L"selected"))choices.SelectedIndex(int(i));}*syncing=false;choices.IsEnabled(enabled);
+            bool enabled=false;*syncing=true;for(uint32_t i=0;i<commands.size();++i){auto command=find(array(self->data->state,L"commands"),L"id",commands[i]);comboOptionText(choices,i,str(command,L"label"));choices.Items().GetAt(i).as<ComboBoxItem>().IsEnabled(flag(command,L"enabled"));enabled=enabled||flag(command,L"enabled");if(flag(command,L"selected"))selectIndex(choices,int(i));}*syncing=false;choices.IsEnabled(enabled);
         }});
         Grid::SetColumn(choices,1);row.Children().Append(choices);body.Children().Append(row);
     }
@@ -462,12 +444,12 @@ FrameworkElement BrushSizePanel(std::shared_ptr<WorkspaceData> const& data,Bindi
     for(auto [offset,alpha]:{std::pair{.4,1.},std::pair{.65,.2},std::pair{1.,0.}}){
         Media::GradientStop stop;stop.Offset(offset);auto color=ink;color.A=uint8_t(std::lround(ink.A*alpha));stop.Color(color);fade.GradientStops().Append(stop);
     }
-    Canvas grid;auto tiles=std::make_shared<std::vector<Button>>();
+    auto grid=wrapPanel(width,height,gap);
     for(auto value:array(data->catalog,L"brush_sizes")){
         auto preset=value.GetObject();double size=num(preset,L"value");auto text=str(preset,L"label");
         auto action=O({{L"type",S(L"set_brush_size")},{L"value",N(size)}});
         auto pick=button(data,text+L" px",[data,action]{data->dispatch(action);});
-        pick.Width(width);pick.Height(height);pick.CornerRadius({radius,radius,radius,radius});
+        pick.Height(height);pick.CornerRadius({radius,radius,radius,radius});
         pick.HorizontalContentAlignment(HorizontalAlignment::Stretch);pick.VerticalContentAlignment(VerticalAlignment::Stretch);
         Grid content;double diameter=num(preset,L"preview_diameter");
         Microsoft::UI::Xaml::Shapes::Path dot;Media::EllipseGeometry circle;circle.Center({width/2,width/2});
@@ -477,21 +459,11 @@ FrameworkElement BrushSizePanel(std::shared_ptr<WorkspaceData> const& data,Bindi
         caption.HorizontalAlignment(HorizontalAlignment::Center);caption.VerticalAlignment(VerticalAlignment::Bottom);caption.Margin({0,0,0,2});
         content.Children().Append(caption);pick.Content(content);
         AutomationProperties::SetAutomationId(pick,L"size-preset-"+text);actionTooltip(data,pick,[action]{return action;});
-        grid.Children().Append(pick);tiles->push_back(pick);
+        grid.Children().Append(pick);
         bindings.emplace_back([data,pick,size]{
             bool chosen=num(object(data->state,L"brush"),L"diameter")==size;pick.Background(chosen?selected(data):clear());
             AutomationProperties::SetItemStatus(pick,chosen?data->caption(L"search",L"selected"):hstring());
         });
     }
-    grid.SizeChanged([tiles,width,height,gap](auto const& sender,auto&&){
-        auto canvas=sender.template as<Canvas>();double available=canvas.ActualWidth();
-        int columns=std::max(1,int((available+gap)/(width+gap)));double cell=std::min(double(width),available);
-        for(size_t i=0;i<tiles->size();++i){
-            auto const& pick=(*tiles)[i];pick.Width(cell);
-            Canvas::SetLeft(pick,double(i%columns)*(cell+gap));Canvas::SetTop(pick,double(i/columns)*(height+gap));
-        }
-        size_t rows=(tiles->size()+columns-1)/columns;
-        canvas.Height(rows?rows*height+(rows-1)*gap:0);
-    });
     return grid;
 }

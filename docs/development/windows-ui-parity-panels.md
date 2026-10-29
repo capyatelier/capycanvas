@@ -170,199 +170,6 @@ grip 16, edge 6. Row height is the same (40 = 36 + 2×2 padding). The swipe colo
 group indentation (min(depth·8, 24)), the 14-px type badge (padding 1, radius 2, input fill, margin 3), the 1-px/3-px
 thumbnail ring geometry and the connection-line widths. Everything else is listed below.
 
-##### LAYER-1: Pressing or hovering a layer name lights up a large rounded box (user bug 6)
-- Class: HIGHLIGHT-GEOMETRY   Confidence: CERTAIN   Severity: high   Reported bug: 6
-- Windows: `apps/layer-windows/LayerRow.cpp:180-182`. The name is made with `button(data,…)`, which calls
-  `buttonColors` and so `buttonFeedback` with hover 20 and press 41 (UiControls.h:460-476). It is stretched across the
-  star column 9, with `MinHeight(36)`, `Margin({6,0,2,0})` and `CornerRadius(controlCorner())` (≈7 px). The result is
-  an overlay box from the thumbnail to the lock column, the full row height, on hover and on press. It also gets
-  `UseSystemFocusVisuals(true)` (ButtonFeedback.h:109), which draws a focus rectangle around the same box.
-- GTK reference: `apps/layer-linux/src/layers.rs:570-601`. The name is a plain `gtk::Label` inside a
-  `text` Box (`margin_start 6`, `hexpand`), with no hover or press style. Row selection comes from the row's
-  `GestureClick` (layers.rs:687-722), and rename from a double-press gesture on the label only (layers.rs:723-736).
-  `.layer-row` has no :hover/:active rule in style.css.
-- Fix direction: replace the name `Button` with a non-control element (the `caption` StackPanel inside a Grid or
-  Border, transparent background, hit-testable). Selection is already handled by `root.Tapped` (LayerRow.cpp:223-227),
-  and `DoubleTapped`/F2 can move to that element. If a keyboard stop is needed, keep `buttonFeedback(...,fixed=true)`
-  rather than an overlay. Delete the `name` Click path; the root tap already selects.
-
-##### LAYER-2: The selection-column icon (brush, check or reference) paints a second selection fill on a selected row (user bug 7)
-- Class: STACKED-BG, BORDER/COLOR   Confidence: CERTAIN   Severity: high   Reported bug: 7
-- Windows: `apps/layer-windows/LayerRow.cpp:336` sets `check.Background(flag(layer,L"selected")?selected(data):clear())`,
-  while LayerRow.cpp:277 already sets `body.Background(...selected(data)...)` for the same row. The brush icon is
-  `selection_icon = "layer-brush-symbolic"` for the drawing target (crates/layer-ui/src/session.rs:6361-6371), so a
-  selected row shows a 26×36 rounded box of selection colour on top of the selection colour. In glass mode
-  (`selected()` returns `glass(L"selection")`, which is translucent) the stacked fill comes out a visibly different,
-  darker colour. In opaque mode its rounded edge shows against the row.
-- GTK reference: `layers.rs:527-532` and `:1723-1726`. `selection` is a flat `.layer-icon.layer-column` button whose
-  background is never changed. Selection is shown only by `.layer-row.selected { background: var(--selection-bg) }`
-  (style.css:205; glass version at :462).
-- Fix direction: remove `check.Background(...)` at LayerRow.cpp:336 and leave it `clear()`. Keep the selected state in
-  automation only (`SetItemStatus` is already there).
-
-##### LAYER-3: Dropping a layer above the top row (over the header buttons) or below the last row finds no target (user bug 8)
-- Class: HIT-TEST   Confidence: CERTAIN   Severity: high   Reported bug: 8
-- Windows: `apps/layer-windows/LayerRowDrag.cpp:266-279`, `pick()`:
-  `if(at.X<0||at.Y<0||at.X>list.ActualWidth()||at.Y>list.ActualHeight())return {};`. It then matches only
-  realized row bounds. A pointer over the header (blend/opacity row and the alpha-lock/lock/attachment/reference row,
-  LayersView.cpp:105) returns no hit. So do the empty list space under the last row and the "Add paper" row, which is
-  not in `rows`. `target()` then clears `placement`, and `complete()` commits nothing (LayerRowDrag.cpp:282). Auto-scroll
-  in `tick()` (LayerRowDrag.cpp:373-377) keeps scrolling while the pointer is above the list, but the drop stays
-  invalid. Shared Rust also rejects fractions outside [0,1] (crates/layer-ui/src/session.rs:11169-11170), so the host
-  cannot pass a negative fraction instead.
-- GTK reference: `layers.rs:866-902`. GTK also installs a `DropTarget` per row only, with no list- or panel-level
-  target, so it probably has the same gap.
-- Fix direction (class fix): add one list-edge rule in shared Rust. A drop above the first visible row resolves to
-  Above(first), and a drop below the last resolves to Below(last); one way is a `layer_drop` query that takes
-  a list-relative y plus the first/last row ids, or one that accepts `edge: "before_first" | "after_last"`. Then
-  widen the Windows `pick()` horizontal test to `view->root` (header + list + footer) and clamp y into the first/last
-  realized row. Add a GTK `DropTarget` on the `LayerPanel` root/overlay that uses the same query. Add a
-  headless Rust test for both edges.
-
-##### LAYER-4: Every WorkspaceRowDrag list (workspace manager, drawing tabs) has the same edge-extent failure
-- Class: HIT-TEST   Confidence: CERTAIN   Severity: medium   Reported bug: 8 (same class)
-- Windows: `apps/layer-windows/WorkspaceRowDrag.cpp:166-168`,
-  `if(!dragging||!current()||position.X<0||position.X>surface.ActualWidth()||position.Y<0||position.Y>surface.ActualHeight())return;`.
-  `surface` is the list's own `listSurface` Grid (WorkspaceManagerView.cpp:206, DrawingTabs.h:232). Dragging above the
-  first row into the manager's header or action row, or below the list, sets `valid=false`, and release does nothing
-  (`commit=dragging&&valid` at :217). Inside the surface, above-first and below-last already resolve (:170-181), so
-  only the surface extent is wrong. Auto-scroll (:244-250) works only inside the 32-px band of the surface.
-- GTK reference: rows use `.workspace-drop-before/after` (style.css:110-111) on per-row targets.
-- Fix direction: test `position.Y` against the panel or dialog containing the list (pass a hit surface separate
-  from the hint surface into `WorkspaceRowDrag`) and clamp to the first/last realized row. This is the same
-  edge-extent rule as LAYER-3, so define it once.
-
-##### LAYER-5: The WorkspaceRowDrag insertion line uses a hard-coded blue instead of the accent role
-- Class: BORDER/COLOR, METRIC   Confidence: CERTAIN   Severity: medium   Reported bug: none
-- Windows: `WorkspaceRowDrag.cpp:290`, `hint.Background(fill(color(L"#3584e4")))`, a fixed GNOME blue that ignores
-  the theme accent and dark mode. `:189` draws it inset by 8 px on each side (`Width(surface-16)`, `Margin({8,line,0,0})`).
-- GTK reference: style.css:110-111, `.workspace-drop-before { box-shadow: inset 0 2px var(--accent-bg-color); }`, full row
-  width, drawn inside the row's top or bottom edge.
-- Fix direction: use `accent(data)`, which means passing `WorkspaceData` into `WorkspaceRowDrag`. Span the full row
-  width. Place the line inside the target row edge, not on the boundary.
-
-##### LAYER-6: A layer being dragged has no floating preview; the source row only dims to .55
-- Class: GLASS, HIGHLIGHT-GEOMETRY   Confidence: CERTAIN   Severity: medium   Reported bug: none (related to 4)
-- Windows: `LayerRowDrag.cpp:338-339`, `sourceRow->root.Opacity(.55)`. Nothing follows the pointer. WorkspaceRowDrag
-  does the same (`row.Opacity(.55)`, WorkspaceRowDrag.cpp:205).
-- GTK reference: `layers.rs:293-315`, `drag_preview`. A snapshot of the row is taken once at pickup, drawn over an
-  opaque `palette.panel` fill at `push_opacity(0.7)`, converted to a squircle, and attached at the grab hotspot. The
-  source row keeps full opacity. For the workspace manager, `.workspace-row-dragging { opacity: .45 }`
-  (style.css:109), not .55.
-- Fix direction: add a shared native row-preview helper (a snapshot of `row->root` placed in a top-level Canvas at the
-  grab offset, panel fill, opacity .7) used by both drag classes. Match the source-row opacity to GTK (layer row unchanged;
-  manager row .45).
-
-##### LAYER-7: The alpha-lock, lock and attachment toggles use the selection colour when checked; GTK uses a neutral tint
-- Class: BORDER/COLOR, STACKED-BG   Confidence: LIKELY   Severity: medium   Reported bug: none
-- Windows: `LayersView.cpp:81` sets `pick.Background(flag(layer,spec.property)?selected(data):clear())`, and
-  `buttonColors<ToggleButton>` also sets `checkedSurface=selected(data)` (UiControls.h:461-463). The attachment
-  toggle does the same at LayersView.cpp:92.
-- GTK reference: `layers.rs:179-186`, flat `.layer-icon` toggles. There is no `.layer-icon:checked` rule, so
-  libadwaita's flat `:checked` (a neutral `alpha(currentColor,…)` tint) applies. Only `.layer-reference:checked` is
-  overridden, to `alpha(fg,.12)` (style.css:207); Windows matches that one with `tint(text,31)`.
-- Fix direction: use one neutral checked tint (`tint(L"text",31)` or the Adwaita flat value) for every layer header
-  toggle, as already done for `reference`. Drop the duplicate explicit `Background(...)` assignments, because the
-  checkedSurface already drives the template.
-
-##### LAYER-8: The grip is a button with its own hover/press box, disabled dimming and a slightly different opacity
-- Class: HIGHLIGHT-GEOMETRY, METRIC   Confidence: CERTAIN   Severity: low   Reported bug: none
-- Windows: `LayerRow.cpp:212`, `grip=pick(L"",12,[]{})`, a `button()` 16×16 with hover/press feedback. `grip.Opacity(.6)`
-  at :212 and :256. `grip.IsEnabled(drag_from_handle)` at :359 also applies the feedback disabled-content dimming
-  (ButtonFeedback.h:85).
-- GTK reference: `layers.rs:610-613`, a `gtk::Image` with `.dim-label` (Adwaita opacity .55). It has no hover
-  style and is not dimmed when locked.
-- Fix direction: make the grip an Image or Border, not a Button (it has no click action). Use .55 to match dim-label,
-  and keep the swipe fade multiplier.
-
-##### LAYER-9: The link-mask button is 30 px tall; GTK's is the full 36-px row content height
-- Class: HIGHLIGHT-GEOMETRY, METRIC   Confidence: LIKELY   Severity: low   Reported bug: none
-- Windows: `LayerRow.cpp:129-130`. `pick` gives every column `Height(30)`, so `link` (10×30) gets a 30-px hover box.
-- GTK reference: `layers.rs:554-556`. `link` keeps the default valign FILL in `thumbnails`, so it is 10×36. Only the
-  thumbnail buttons set `valign Center`.
-- Fix direction: stretch `link` vertically, like eye and check (LayerRow.cpp:135).
-
-##### LAYER-10: Name and description lines are 20 px; two-line rows grow past GTK's height
-- Class: VCENTER, METRIC   Confidence: LIKELY   Severity: medium   Reported bug: none
-- Windows: `LayerRow.cpp:184-185`, `title.LineHeight(20)` and `meta.LineHeight(20)` (overriding `label()`'s 18 with
-  `MaxHeight` stacking). With a description, the caption is 40 px, more than the 36-px name slot, so the row grows to
-  44. A single-line title sits in a 20-px line box, which does not match GTK's natural Pango line.
-- GTK reference: `layers.rs:570-600`. Both lines are plain labels at the natural line height (≈18 px at 11 pt) inside
-  a `valign Center` Box, so the row stays at 40.
-- Fix direction: remove both `LineHeight(20)` overrides and keep the shared `label()` metrics, so both lines fit in 36.
-
-##### LAYER-11: Group folder and adjustment icons are 28 and 16 px; GTK uses 24 px for both
-- Class: METRIC   Confidence: LIKELY   Severity: low   Reported bug: none
-- Windows: `LayerRow.cpp:311-318`, `contentSymbol` size `preview?14:adjustment?16:28` and glyph
-  `preview?12:adjustment?16:28`.
-- GTK reference: `layers.rs:539-541` and `:1693`. `effect_icon.set_pixel_size(if thumbnail {12} else {24})` is used for
-  folders, adjustments and type icons alike. The `.layer-folder image {-gtk-icon-size:28px}` rule (style.css:216) is
-  overridden by the explicit pixel size.
-- Fix direction: use 24 for every non-thumbnail content symbol. Better, publish the symbol size from shared Rust
-  next to `content_icon` so both hosts read it.
-
-##### LAYER-12: Adjustment layers with `has_thumbnail` show a thumbnail and badge; GTK shows the large icon only
-- Class: NULL-STATE, LAYOUT   Confidence: CHECK   Severity: low   Reported bug: none
-- Windows: `LayerRow.cpp:308`, `preview=flag(layer,L"has_thumbnail")`.
-- GTK reference: `layers.rs:1690`, `let thumbnail = s.has_thumbnail && !s.adjustment_effect;`.
-- Fix direction: add `&&!adjustment`. Better, have shared Rust publish one `show_thumbnail` flag so the two hosts do
-  not each derive it.
-
-##### LAYER-13: The rename TextBox uses the default WinUI template
-- Class: DEFAULT-CONTROL   Confidence: LIKELY   Severity: medium   Reported bug: none
-- Windows: `LayerRow.cpp:189-190`. Only `Background(input)`, height, padding and margin are set. The default
-  template's border, focus underline (accent bottom border), focused-background resource (which replaces `Background`
-  on focus), 4-px corners and foreground stay in place.
-- GTK reference: `layers.rs:580-587` with `has_frame(false)`, `.layer-name-entry { padding: 0 2px; min-height: control-height }`
-  (style.css:219) and `.dock-panel entry { background: var(--input-bg); border-radius: var(--control-radius) }`
-  (style.css:185, 277). No frame and no underline.
-- Fix direction: route it through the shared Windows text-field styling helper used elsewhere for panel entries
-  (zero border, `controlCorner()`, focused/pointer-over background resources set to `input`, foreground `text`).
-
-##### LAYER-14: The "Add paper" row has button hover and press; GTK's paper row has none
-- Class: HIGHLIGHT-GEOMETRY   Confidence: CERTAIN   Severity: low   Reported bug: none
-- Windows: `LayersView.cpp:109-115`. `addPaper=button(...)`, with feedback overlay across the full 40-px row.
-- GTK reference: `layers.rs:140-158`. A `.layer-row` Box with a click gesture and no hover or active style.
-- Fix direction: use `buttonFeedback(addPaper,…,fixed=true)`, or a non-button row with a Tapped handler, matching LAYER-1.
-
-##### LAYER-15: The layer edge inset is hard-coded 6 in Windows; GTK reads the shared `LAYER_EDGE_INSET`
-- Class: METRIC   Confidence: CERTAIN   Severity: low   Reported bug: none
-- Windows: `LayersView.h:19` `LayerRowPadding{6,2,6,2}`, `LayersView.cpp:47` `header.Padding({6,4,6,4})`, `:177`
-  `footerFrame.Padding({6,4,6,4})`, `LayerRow.cpp:236` `dropMark.Margin({-6,-2,-6,-2})`, and `LayerInspector.h:31`
-  `footer.Padding({6,0,6,0})`.
-- GTK reference: `--layer-edge-inset` from `layer_ui::LAYER_EDGE_INSET` (lib.rs:72-85, style.css:195, 204, 476).
-- Shared source: `crates/layer-ui/src/layout.rs:35`. It is not part of the `panel_metrics` catalog.
-- Fix direction: add `layer_edge_inset` to `PanelControlMetrics`/catalog and read it through `panelMetric`. Derive the
-  `dropMark` margin from the same row padding.
-
-##### LAYER-16: Literal 49 for the disclosure footer and literal 40 for the fallback row height
-- Class: METRIC   Confidence: CERTAIN   Severity: low   Reported bug: none
-- Windows: `WorkspaceBubbles.cpp:265` `inspector.place(...,49,open)`, `LayerInspector.h:28` `footerRow.Height({49,…})`,
-  `WorkspaceDrawers.cpp:360` `num(inspector->sizes,L"footer_height",49.)`, and `LayerInspector.h:75`
-  `unit_height` fallback `N(40)`. Also `footer.CornerRadius({0,0,6,6})` at LayerInspector.h:31.
-- GTK reference: `workspace_bubbles.rs:744-745`, `row.set_height_request(PropertyDisclosure::HEIGHT)` (48) plus a
-  `gtk::Separator`. The fallback is `content_measurement` → `layer_ui::TILE_SIZE` (36) (layers.rs:1108).
-- Shared source: `crates/layer-ui/src/effects.rs:408` `PropertyDisclosure::HEIGHT = 48`.
-- Fix direction: publish the disclosure height (and separator) and the fallback unit from Rust, and use them in all
-  three places.
-
-##### LAYER-17: The layers bubble's alpha-lock icon position (user bug 17)
-- Class: ALIGNMENT   Confidence: CHECK   Severity: medium   Reported bug: 17
-- Windows: in simple (bubble) mode `full=false`, so column 11 is `12` and column 12 is `0` (LayerRow.cpp:356-358). The
-  lock is a 12×12 left-aligned Image (:211), after the name button's right margin of 2 (:182), then the 6-px row
-  padding.
-- GTK reference: `layers.rs:606-613` and `:1757`. The lock is a 12-px image after 2-px Box spacing. The grip is hidden
-  when `simple`, so the lock is followed only by the 6-px padding.
-- Finding: the column arithmetic gives the same x position on both hosts, so the code does not prove an offset. Two
-  things to check against a GTK screenshot of the same bubble: (a) whether `icon(...,12)` adds asset padding that GTK's
-  `pixel_size 12` does not; (b) whether the bubble passes `full=true` (`flag(p->data,L"full")`, WorkspaceBubbles.cpp:293)
-  when GTK uses `simple`. With `full=true`, column 11 becomes `14` when `can_drop_below` is set, and the 16-px grip
-  column is added, which moves the lock left, not right. If the measured offset is to the right, check whether the
-  row `root` is wider than the card (`layers.Width(width)` in LayerInspector.h:69 has no edge inset, while GTK's
-  card has `.dock-panel` padding).
-- Fix direction: measure one bubble row on both hosts. If the card width differs, align `LayerInspector::place`
-  with GTK's card insets rather than adjusting the lock column.
-
 ##### LAYER-18: The layers drawer default width (user bug 18)
 - Class: LAYOUT-COLLAPSE   Confidence: CHECK   Severity: medium   Reported bug: 18
 - Windows: the drawer width is not decided by the host. `WorkspaceDrawers.cpp:239-309` sizes each column to
@@ -375,74 +182,6 @@ thumbnail ring geometry and the connection-line widths. Everything else is liste
 - Fix direction: confirm that the viewport Windows sends for drawer layout is in DIPs and equals GTK's for the same
   window size. If the layers drawer should not depend on the 1600 breakpoint, change `default_width` for
   `Panel::Layers` in shared Rust (one place, both hosts), with a drawers.rs test. No host change is needed.
-
-##### LAYER-19: Double-tapping in the layer list's empty space can close and reopen the drawer (user bug 19)
-- Class: HIT-TEST   Confidence: CHECK   Severity: medium   Reported bug: 19
-- Windows evidence:
-  - The list's empty space is not hit-testable. `panelScrolling` sets `scroll.Background(nullptr)` and the
-    ScrollPresenter background to null (PanelScroll.h:12). `repeater`, `listFrame` and the `LayersView` root Grid have
-    no Background (LayersView.cpp:27, 106-120). In the drawer, `LayerInspector::pages` is a Canvas with no
-    background (LayerInspector.h:10, 29). A tap below the last row therefore lands on whatever is under the
-    drawer content, and is not handled by the layer panel.
-  - `WorkspaceGestures` sees every press as a chrome `contact` (`canvas:false`, WorkspaceGestures.cpp:524) and every
-    `DoubleTapped` with `handledEventsToo=true` (:742). `Drawer::appendBounds` skips the `tool` drawer
-    (WorkspaceDrawers.cpp:472), so the outside-contact test for that drawer relies only on Rust's placement, not on
-    measured native bounds.
-- GTK reference: the `ListView` is a hit target over its whole viewport. Row clicks are claimed per row
-  (layers.rs:687-722), rename is limited to the name label (:723-736), and a card claims contacts outside rows
-  (workspace_bubbles.rs:797-799).
-- Fix direction: reproduce on Windows with `CAPY_TRACE_UI` and log the chrome contact and drawer facts for each tap.
-  The likely fix is to give `listFrame` (or `LayersView::root`) a `clear()` background so empty list space belongs to
-  the panel, and to publish the tool drawer's measured bounds like the other drawers, so Rust's
-  outside-contact test uses the native frame.
-
-##### LAYER-20: The thumbnail selection ring animates over 200 ms on Windows; GTK has no transition in its CSS
-- Class: ANIMATION-RETRIGGER   Confidence: CHECK   Severity: low   Reported bug: none
-- Windows: `LayerRow.cpp:37-59`. `ThumbnailEdge::update` runs a 200-ms scale and opacity storyboard each time
-  `content_selected` or `mask_selected` changes. It only runs on a real change (`selected==editing` returns early),
-  so it is not replayed on refresh.
-- GTK reference: `.layer-thumbnail.layer-editing` (style.css:209) has no explicit transition. Any animation comes
-  from libadwaita's default button transitions.
-- Fix direction: confirm visually against GTK. Keep the animation only if GTK shows an equivalent transition.
-
-##### LAYER-21: The opacity popup is 240 wide in a default Flyout; GTK uses 220 plus 12-px margins
-- Class: METRIC, DEFAULT-CONTROL   Confidence: CHECK   Severity: low   Reported bug: none
-- Windows: `LayersView.cpp:238`, `content.Width(240)`, `Flyout()` with the default FlyoutPresenter padding and
-  min-width (TrackPopup styling not verified).
-- GTK reference: `layers.rs:427-433`, `opacity_editor.set_size_request(220,-1)` with 12-px margins on all sides in a
-  `gtk::Popover`.
-- Fix direction: set the presenter padding to 12 and the content width to 220 (or publish both from shared Rust).
-
-##### LAYER-22: The swipe reveal width (72) and threshold (.4) are literals on both hosts
-- Class: METRIC   Confidence: CERTAIN   Severity: low   Reported bug: none
-- Windows: `LayerRow.cpp:240, 244, 254, 256` and `LayerRowDrag.cpp:352-353` use `72` and `72*.4`.
-- GTK reference: `swipe_row.rs:6` `const REVEAL: f64 = 72.`, and `:126-127` `REVEAL * 0.4`.
-- Fix direction: publish the reveal width and threshold with `swipe_actions` from shared Rust. The values match
-  today; this only prevents them drifting apart.
-
-#### Root causes / systemic patterns
-
-1. **`button()` used for things that are not buttons** (LAYER-1, 8, 14, and the name focus rectangle). The
-   `CapyUi::button` helper always adds `buttonFeedback` hover and press plus focus visuals. In the layer row it is
-   used for the name, the grip and the paper row, which have no hover or press in GTK. Fix: add a non-control
-   "tappable surface" helper (transparent hit-testable Border with Tapped/DoubleTapped) and use it wherever GTK uses
-   a label, image or gesture on a Box.
-2. **Selection fill painted on children as well as the row** (LAYER-2, 7). `selected(data)` is assigned to child
-   controls (`check`, the header toggles) while the row or panel already carries it. Fix: the selection fill belongs only
-   on the row (`body`). Toggles use one neutral checked tint inside `buttonColors<ToggleButton>`.
-3. **Drop targets limited to the list or row bounds** (LAYER-3, 4). `LayerRowDrag::pick()` and
-   `WorkspaceRowDrag::target()` both reject positions outside the scroller or list surface, and GTK uses per-row targets
-   only. Fix: one shared Rust list-edge rule (before-first / after-last), with both hosts testing against the panel
-   root and clamping to the first/last realized row. This fixes layers, the workspace manager and drawing tabs together.
-4. **Drag presentation** (LAYER-5, 6). There is no shared preview or marker helper, and WorkspaceRowDrag uses
-   `#3584e4` and an 8-px inset. Fix: one `RowDragPresentation` (accent role, full-width inset line, pointer-following
-   snapshot at .7 over panel fill) used by both drag classes.
-5. **Literals where GTK uses shared metrics** (LAYER-15, 16, 22, plus the 20-px line heights in LAYER-10). Fix: add
-   `layer_edge_inset`, the disclosure height and the swipe reveal to the catalog and read them through `panelMetric`.
-6. **Hit-transparent panel surfaces** (LAYER-19). `panelScrolling` nulls scroller backgrounds, and the layer panel
-   containers have none, so empty list space does not belong to the panel. Fix: give the panel root a `clear()`
-   background once (in `LayersPanel` or `panelScrolling`'s content owner), and publish native bounds for the tool
-   drawer.
 
 ### AREA=TOOL — Windows vs GTK parity audit
 
@@ -460,54 +199,7 @@ drawer tiles.
 
 #### User bugs in scope — root causes
 
-##### TOOL-1: Toolbar slider track vanishes after any slider rebuild (user bug 20)
-- Class: ANIMATION-RETRIGGER, NULL-STATE   Confidence: CERTAIN (code) / LIKELY as the visible symptom   Severity: high   Reported bug: 20
-- Windows: `ToolbarComponents.cpp:195-201` — `Update()` rebuilds the whole slider (`buildSlider`) whenever `schemaKey(component)`
-  changes. `schemaKey` (`:164-191`) keeps `context` (generation, document, tool, brush, layer, mask — `layer-ui/src/toolbar_components.rs:62-70`)
-  and the presence of `numeric`, so the slider is rebuilt on every tool/brush/layer/document change and when the document first
-  becomes ready (numeric goes from absent to present). `buildSlider` (`:301-304`) creates a **new** `trackImage` and `marks`
-  canvas, but `trackKey`/`marksKey` (`:91`) are never reset. `paintTrack` (`:411-412`) then sees an unchanged key
-  (`w x h @ scale, axis, ink`) and never sets `Source` on the new image; `paintSlider` (`:420-421`) returns before drawing
-  bookmarks. Result: after the first context change (or after the document arrives, in Sketch at startup) Size/Strength
-  render with no track and no bookmarks; only the thumb (and readout if enabled) remains.
-- GTK reference: `toolbar_components.rs:620-789` builds the `gtk::Scale` once; `refresh` (`:791-830`) only updates value,
-  readout and bookmarks and calls `queue_draw`; `paint_track` (`:1505-1566`) repaints every snapshot. A context change only
-  closes the preview (`:799-801`).
-- Shared source: `ToolbarComponentView` (`layer-ui/src/toolbar_components.rs:75-81`).
-- Fix direction: do not rebuild the standalone slider on schema/context change — build once in `init`, and in `Update` only
-  call `updateSlider()` (close the popup when `context` changes, like GTK). If a rebuild is kept anywhere, clear
-  `trackKey`/`marksKey` inside `buildSlider`. Add a windowless test that a context change keeps a non-null track source.
-
-##### TOOL-3: Brush Sizes panel (and tool-group grids) report zero/incorrect content height (user bug 5)
-- Class: LAYOUT-COLLAPSE   Confidence: LIKELY   Severity: high   Reported bug: 5
-- Windows: `ToolView.cpp:470-501` (`BrushSizePanel`) — the preset grid is a `Canvas` whose `Height` is assigned only inside its
-  `SizeChanged` handler (`:491-500`). A Canvas with no explicit `Height` measures to 0, so any measurement taken before the
-  first arrange — `PanelBody::contentHeight` (`PanelBody.cpp:157`, `content.Measure({width,INF})`) and the drawer's
-  `measureHeights` (`WorkspaceDrawers.cpp:389`) — returns 0 for the grid. Dropping the panel out creates a new `PanelBody`
-  (new Canvas, no Height yet) whose first measurement is reported to shared layout, so the floating group is sized to
-  zero content height and nothing re-reports it.
-- Same pattern: `ToolView.cpp:58-76` (`ToolSetView::arrange`) — the tool-group `Canvas` is laid out in `SizeChanged`; before the
-  first arrange `ActualWidth()==0` → `count=1`, non-media `itemWidth=min(112,0)=0` and `Height=rows*36+gaps` (all groups on
-  separate rows). The first measured height is too tall and the tiles are zero-width until a later arrange.
-  `TextureDialog.cpp:156,211-224` uses the same SizeChanged-driven column assignment (hidden by the fixed 600 px dialog height).
-- GTK reference: `tool_panels.rs:636-641` `adw::WrapBox` and `:35-42` `gtk::FlowBox` report height-for-width in `measure`, so the
-  first measurement is correct.
-- Fix direction: one shared wrap helper that computes columns/rows from the width it is *measured* with (a `Panel` subclass
-  with `MeasureOverride`/`ArrangeOverride`, or an `ItemsRepeater` + `UniformGridLayout`), used by the size presets, tool groups
-  and texture grid. Delete the three `SizeChanged` arrangers. Add a test that measures `BrushSizePanel` at a fixed width
-  before arrange and gets `rows*tile+gaps`.
-
----
-
 #### Toolbar components (ToolbarComponents.cpp)
-
-##### TOOL-4: Toolbar options rebuild every field when any one field's schema changes
-- Class: ANIMATION-RETRIGGER   Confidence: CERTAIN   Severity: medium   Reported bug: none (same class as 1)
-- Windows: `ToolbarComponents.cpp:197-210` — if the concatenated schema of all options differs, every field is disposed and
-  rebuilt and `closePopup()` dismisses open editors/menus.
-- GTK reference: `toolbar_components.rs:832-861` — within one context, fields whose `same_schema` matches are retained and
-  only new ones are built; docs `toolbar-components.md:102-104` ("adding or removing fields retains compatible editors and open lists").
-- Fix direction: key each field by its own `schemaKey(option)`; reuse matching fields in order when `context` is unchanged.
 
 ##### TOOL-5: Slider hit area is a 28 px band, not the tile's cross extent
 - Class: HIT-TEST   Confidence: LIKELY   Severity: medium   Reported bug: none
@@ -647,7 +339,7 @@ drawer tiles.
 
 #### Brush size presets (ToolView.cpp — BrushSizePanel)
 
-(Main issue: TOOL-3.) Tile size, dot gradient (0.4/0.65/1.0 stops), label `margin-bottom 2`, normal weight and radius
+Tile size, dot gradient (0.4/0.65/1.0 stops), label `margin-bottom 2`, normal weight and radius
 `small.size/2*CornerFit` all match `tool_panels.rs:636-673` / `style.css:322`. `actionTooltip` is placed on the pick
 itself; the tile is also a drag source in some layouts — per `apps/layer-windows/AGENTS.md` keep tooltips off drag
 surfaces (CHECK whether size presets are dragged).
@@ -714,13 +406,8 @@ padding 2×7 tabular, tag radius 9 / padding 3×9 / ≤96 px, count badge ≥22 
 
 #### Root causes / systemic patterns
 
-1. **Rebuild-on-update with stale caches** (TOOL-1, 2, 4, 17, 25): views are destroyed and rebuilt whenever a serialized
-   key changes, and caches that guard painting/measuring (`trackKey`, `marksKey`, drawer `heights`) outlive the rebuilt
-   elements or are cleared too eagerly. Fixing `ToolbarComponent::Update` (never rebuild the slider; retain compatible
-   option fields) and `Drawer::apply` (keep heights, animate from presented bounds) closes both user bugs 1 and 20 and the
-   general "animation replays" class.
-2. **Layout computed in `SizeChanged` instead of measure** (TOOL-3, 12, 16; TextureGrid): a shared wrap-panel helper with
-   `MeasureOverride` (width → rows) replaces three hand-rolled Canvas arrangers and fixes user bug 5.
+1. **Theme refresh rebuilds retained views** (TOOL-17, 25): retain the Tool Set list and calibration curve while refreshing their palette.
+2. **Tool group geometry** (TOOL-12, 16): use natural caption width and the control-height metric in the measurable wrap panel, and collapse empty groups.
 3. **Hand-entered metrics instead of published ones** (TOOL-8, 10, 12, 13, 14, 15, 20, 24): `panel_metrics`,
    `tool_preview_metrics`, `TileStyle` size/radius and `BRUSH_SETS_MIN_WIDTH` are already in the catalog/`style` query;
    reading them removes most literal 36/112/40/34/62/6/18 values.
@@ -754,35 +441,6 @@ control_height 26, field_padding 6, icon 16, control_radius 13 (x corner-fit .54
 - Windows: `WorkspaceDrawers.cpp:348-349` sets `body.view->Root().Height(body.view->navigator?272.:480.)`. This overrides the `NaturalHeight(width)` that PanelBody sets (`PanelBody.cpp:225`). NavigatorLayout clamps the image to `available-fixedHeight` (`NavigatorView.cpp:71-74`), so a wide drawer shows a letterboxed overview, and the buttons are not at the bottom when the column is taller.
 - GTK reference: `navigator.rs:300-321` uses a natural vexpand Box with no fixed height in drawers.
 - Fix direction: use `navigator->NaturalHeight(width)`, or the placement height as in FX-1.
-
-##### FX-4: Clicking Blend Mode in the filter drawer's Properties (no filter selected): property dropdowns never register as popups
-- Class: NULL-STATE, HIT-TEST, DEFAULT-CONTROL   Confidence: LIKELY for the mechanism, CHECK for the exact crash frame   Severity: high   Reported bug: 22
-- Context: the filters drawer is `[FilterTypes],[Adjustments],[Properties]` (`crates/layer-ui/src/drawers.rs:382`). With no filter (effect layer) selected, `effects.rs:727-733` (shared) publishes `opacity` (number), `blend` (Choice of up to 25 options, value = `LayerBlend::code()`), and `color_mode`. Windows builds the blend control at `EffectView.cpp:173-181`.
-- Windows:
-  - `EffectView.cpp:174-179` (property choices), `:285-289` (`styleChoice` for page/resource) and `FilterView.cpp:56` (category) style ComboBoxes with `choiceColors` but never call `data->popup(true/false)` on DropDownOpened, DropDownClosed or Unloaded. Every other panel dropdown does: `GradientView.cpp:110-113`, `ScopesView.cpp:166-169`, `ToolView.cpp:167,228`, `PanelConfiguration.cpp:51`. Without the popup count, `popup_open` stays false in the chrome facts (`WorkspaceGestures.cpp:149`, `CanvasWindow.cpp:1684-1689`). Rust then treats the next contact as an outside contact and closes the drawer (`crates/layer-ui/src/session.rs:1366-1414`, `CloseExpanded` gated on `!facts.popup_open`). The 25-row blend list is the tallest dropdown in the drawer and the only one that reliably extends past the drawer bounds and over the canvas. Closing the drawer removes the column frame (`WorkspaceDrawers.cpp:55`, `:318-321`) while the ComboBox popup is still open and its `SelectionChanged` → `Property::set` → `dispatchDocument` is still pending. That is the most likely crash path. A drawer filter with a choice parameter normally has short lists that fit inside the drawer, which is consistent with the crash being tied to Blend Mode.
-  - A second candidate in the same binding is `EffectView.cpp:180`: `choices.SelectedIndex(int(num(value)))` with no range check against `Items().Size()`. WinUI throws E_INVALIDARG for an out-of-range index, and an exception thrown out of a binding is fatal. The option list is filtered per layer (`effects.rs:727-731` drops PassThrough for non-groups) while the value is a raw code. Today the codes line up because PassThrough is last in `LayerBlend::ALL` (layer-core/src/layers.rs:245-270), but nothing guards the invariant.
-  - Rust `LayerAction::Blend` (`art_layers.rs:1195-1207`) only returns errors and has no panic path. `Property::action` (`EffectControls.h:258-265`) guards `updating`, `current()` and `enabled`.
-- GTK reference: `effects.rs:900-911` uses a native `gtk::DropDown`, whose own popover grab keeps the drawer open.
-- Fix direction: move popup bookkeeping into `CapyUi::choiceColors` (`ChoiceFeedback.cpp:65`), which every styled ComboBox already calls, and delete the four copies in Gradient/Scopes/Tool/PanelConfiguration. Clamp every model-driven `SelectedIndex` (helper: `selectIndex(box,int)` that writes -1 when out of range). Repro to confirm: open the filters drawer on a paint layer, open Blend Mode, pick an item that sits over the canvas, and capture the stack with WinDbg (`!analyze`).
-
-##### FX-5: Other unguarded `ComboBox::SelectedIndex` writes from model values (same failure class as #22)
-- Class: NULL-STATE   Confidence: LIKELY   Severity: medium   Reported bug: 22 (class)
-- Windows:
-  - `ScopesView.cpp:172-176` (`syncChoices`) writes `box.SelectedIndex(int(num(current,"source")))` even when `sources`/`channels` are empty (default view before the first publish gives index 0 with 0 items).
-  - `EffectView.cpp:180` (see FX-4).
-  - `ProofForm.h:277-283`: `bpc.IsEnabled(flag(intents.GetObjectAt(intent.SelectedIndex()),...))` is called with SelectedIndex -1 when the draft intent is not in the list, which gives GetObjectAt(0xFFFFFFFF) and throws inside a binding. `current()` (`:226-235`) has the same unguarded indexing, but its caller wraps it in try/catch (`ProofPanel.h:90-92`).
-- GTK reference: GTK uses `unwrap_or(0)` (`files/proof.rs:446-451`) and `set_selected(INVALID_LIST_POSITION)` for none (`effects.rs:778`).
-- Fix direction: one guarded `selectIndex` helper in UiControls.h, used by all of these.
-
-##### FX-6: ResponseCurveField dereferences a null `property` if coordinate readouts are ever enabled
-- Class: NULL-STATE   Confidence: CERTAIN (latent)   Severity: low   Reported bug: 22 (class)
-- Windows: `CurveView.cpp:110,113-114,118`. `coordinate()` uses `property->id()` and `property->view()`, but `ResponseCurveField` (`:270-272`) constructs the editor with `property==nullptr`. It is safe today only because `response_calibration.rs:81` sets `coordinate_readouts:false`.
-- Fix direction: derive the id the same way as `:129` (`property?property->id():L"pen-"+responseTarget`), and use `enabled = property?flag(property->view(),"enabled"):true`.
-
-##### FX-7: Filter preview timer throws if `document_file.epoch` is absent
-- Class: NULL-STATE   Confidence: LIKELY   Severity: low
-- Windows: `FilterView.cpp:29-30` uses `file.GetNamedValue(L"epoch")` with no default, called from a 200ms timer tick. JsonObject throws on a missing key. Everywhere else the code uses `GetNamedValue(L"epoch",Null)`.
-- Fix direction: `GetNamedValue(L"epoch",JsonValue::CreateNullValue())`.
 
 ##### FX-8: Filter picker header-to-list gap is 0 instead of 6 (14 in a drawer)
 - Class: METRIC   Confidence: CERTAIN   Severity: low
@@ -964,34 +622,9 @@ control_height 26, field_padding 6, icon 16, control_radius 13 (x corner-fit .54
 - Windows: `EffectView.cpp:236` `MinHeight(32)` for calibration group items. `PalettesView.cpp:186` `MinHeight(34)`.
 - Fix direction: use one menu-row metric, the same one NativeMenuItems uses.
 
-##### FX-38: Dropdown popup items are not themed
-- Class: DEFAULT-CONTROL   Confidence: CHECK   Severity: low   Reported bug: 11 (class)
-- Windows: `ChoiceFeedback.cpp:44-48` overrides only ComboBox host resources (Background*, Foreground*, BorderBrush*). The `ComboBoxItem*` and `ComboBoxDropDown*` popup resources are not overridden, so every property/category/scope dropdown list uses the WinUI default template colours, and can mismatch the app theme or be hard to see.
-- Fix direction: extend `choiceColors` with ComboBoxDropDownBackground, ComboBoxItemForeground, ComboBoxItemBackgroundPointerOver and the related keys from the panel/text/selection roles.
-
----
-
 #### Root causes / systemic patterns
 
 1. **Fixed drawer body heights** (`PanelBody.cpp:222-224`, `WorkspaceDrawers.cpp:348-353`): exact `Height(440/480/272)` instead of filling the column's placement height with a minimum. This closes FX-1 (bug 21), FX-3 and the adjustments 480-vs-440 mismatch. Replace it with one fill-height path in `placeColumns`.
-2. **`choiceColors` is incomplete** (`ChoiceFeedback.cpp:65`): it styles the host but not popup bookkeeping, item colours or index safety. Moving `DropDownOpened/Closed/Unloaded → data->popup()` in, adding item resources, and adding a guarded `selectIndex` helper closes FX-4 (bug 22 candidate), FX-5, FX-24's popup part and FX-38, and lets four duplicated popup blocks be deleted.
-3. **No shared "raised button" or "text field" styling**: `button()` defaults to a clear, zero-padding face, and each site improvises (input, control_fill or nothing). TextBoxes leak WinUI focus visuals. A `raisedButton()` helper and a `textFieldColors()` helper close FX-2, FX-13, FX-16 and FX-36.
+3. **Remaining helper adoptions**: use `raisedButton()` and `fieldColors()` for FX-2, FX-13, FX-16 and FX-36.
 4. **Corner, metric and spacing literals in place of panel metrics**: 6px palette radii, 56/36/44/18/12 sizes, RowSpacing 0/10, and `.85` axis text. Using `controlCorner()` and `panelMetric()` everywhere closes FX-8 to FX-11, FX-15, FX-17, FX-20, FX-23, FX-29, FX-35 and FX-37.
 5. **Opaque roles where GTK uses glass-aware classes**: `brush("selection")` and `brush("bg")` where `selected(data)` or the panel surface role should be used (FX-32, FX-28).
-6. **Unchecked JSON indexing in bindings** (`GetNamedValue` without default, `GetObjectAt(SelectedIndex())`, null `property` in the shared CurveEditor): FX-5, FX-6, FX-7. Each one throws out of an event handler or binding, which ends the process.
-
-### Moved from the shell audit
-
-##### SHELL-8: Brush size panel measures 0 content height, so a dragged-out Sizes panel drops at 0 body height (bug 5)
-- Class: LAYOUT-COLLAPSE   Confidence: LIKELY (strong code evidence)   Severity: high   Reported bug: 5
-- Windows:
-  - `ToolView.cpp:470-500`: `BrushSizePanel` is a `Canvas`. Its `Height` is set only in `grid.SizeChanged`.
-  - A Canvas reports `DesiredSize.Height=0` from `Measure`. `PanelBody` measures with `content.Measure({width,INF})` (`PanelBody.cpp:157`). The offscreen copy is measured synchronously with Measure/Arrange (`WorkspaceView.cpp:906-910`) before any SizeChanged fires.
-  - So `content_height` is about `2*inset`. Shared `settle_floating_drop` (`crates/layer-ui/src/layout.rs:3711-3721`) uses `content_height + chrome` as the natural height, which gives a body of almost 0.
-  - The same panel is used in `PanelConfiguration.cpp:101`.
-- Other panel kinds in the same class:
-  - Any body whose height comes from `SizeChanged`, `ActualWidth` or explicit `Height` literals: `PanelBody.cpp:225-227` (440/480/navigator) for non-scrollable bodies.
-  - Drawer `placeColumns` (`WorkspaceDrawers.cpp:348-353`): layers/adjustments 480, navigator 272, others `ContentHeight`.
-  - Tile panels deliberately report 0 (`WorkspaceView.cpp:890`) and rely on the shared toolbar path.
-- GTK reference: `crate::tool_panels::SizePanel` is a measurable GTK container. `measure()` returns its wrapped rows for the given width.
-- Fix direction: make `BrushSizePanel` measure for any width. Compute `rows*height+(rows-1)*gap` from the width passed to `contentHeight`, using the same column formula, or override `MeasureOverride` with a custom panel. Add a regression test: measure an offscreen Sizes body at a width that has never been arranged, and expect a height greater than the inset.

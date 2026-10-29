@@ -40,7 +40,7 @@ struct State:std::enable_shared_from_this<State> {
     std::shared_ptr<Contacts> input;
     std::optional<uint32_t> pointer;
     bool inside=false,hoverAllowed=true,ignoreNativePress=false;
-    uint8_t hover=20,press=41;
+    uint8_t hover=20,press=41;double disabledContentOpacity=92./255.;
     Brush hoverSurface{nullptr},checkedSurface{nullptr};
     bool fixed=false,external=false;
     ~State(){if(ink)ink.UnregisterPropertyChangedCallback(SolidColorBrush::ColorProperty(),inkChanged);}
@@ -78,7 +78,7 @@ struct State:std::enable_shared_from_this<State> {
         if(over&&!pressed&&hoverSurface)background=hoverSurface;
         root.Children().GetAt(0).as<Border>().Background(background);
         root.Children().GetAt(1).as<Border>().Background(external?Brush(nullptr):overlay);
-        root.Children().GetAt(2).as<ContentPresenter>().Opacity(button.IsEnabled()||button.Opacity()<=0?1.:std::min(1.,(92./255)/button.Opacity()));
+        root.Children().GetAt(2).as<ContentPresenter>().Opacity(button.IsEnabled()||button.Opacity()<=0?1.:std::min(1.,disabledContentOpacity/button.Opacity()));
     }
 };
 inline void Contacts::end(PointerRoutedEventArgs const& event,PointerCompletion completion){
@@ -120,9 +120,9 @@ inline std::shared_ptr<State> state(Primitives::ButtonBase const& button){
 }
 inline void buttonFeedback(winrt::Microsoft::UI::Xaml::Controls::Primitives::ButtonBase const& button,winrt::Microsoft::UI::Xaml::Media::SolidColorBrush const& ink,
     uint8_t hover=20,uint8_t press=41,winrt::Microsoft::UI::Xaml::Media::Brush const& hoverSurface=nullptr,bool fixed=false,
-    winrt::Microsoft::UI::Xaml::Media::Brush const& checkedSurface=nullptr){
+    winrt::Microsoft::UI::Xaml::Media::Brush const& checkedSurface=nullptr,double disabledContentOpacity=92./255.){
     auto state=feedback::state(button);state->source(ink);state->hover=hover;state->press=press;
-    state->hoverSurface=hoverSurface;state->fixed=fixed;state->checkedSurface=checkedSurface;state->present();
+    state->hoverSurface=hoverSurface;state->fixed=fixed;state->checkedSurface=checkedSurface;state->disabledContentOpacity=disabledContentOpacity;state->present();
 }
 inline winrt::Microsoft::UI::Xaml::Media::SolidColorBrush buttonFeedbackBrush(winrt::Microsoft::UI::Xaml::Controls::Primitives::ButtonBase const& button,
     winrt::Microsoft::UI::Xaml::Media::SolidColorBrush const& ink,uint8_t hover=20,uint8_t press=41){

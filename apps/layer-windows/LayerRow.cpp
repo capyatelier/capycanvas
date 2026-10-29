@@ -96,7 +96,7 @@ void LayerRow::init(){
     swipeFrame.Children().Append(swipeActions);swipeFrame.Children().Append(body);body.RenderTransform(swipeTransform);
     swipeFrame.SizeChanged([weak](auto&&,SizeChangedEventArgs const& e){if(auto self=weak.lock()){RectangleGeometry clip;clip.Rect({0,0,e.NewSize().Width,e.NewSize().Height});self->swipeFrame.Clip(clip);}});
     root.Unloaded([weak](auto&&,auto&&){if(auto self=weak.lock()){self->swipe(0,false);self->contentEdge.stop();self->maskEdge.stop();self->textureEdge.stop();}});root.MinHeight(LayerRowHeight);root.BorderThickness({0});
-    root.BorderBrush(accent(data));body.ColumnSpacing(0);body.Padding(LayerRowPadding);
+    root.BorderBrush(accent(data));body.ColumnSpacing(0);body.Padding(layerRowPadding(data));
     AutomationProperties::SetAutomationId(root,L"layer-row-"+to_hstring(uint64_t(id)));
     auto rowCaption=[weak]{
         auto self=weak.lock();if(!self||!self->current())return hstring();
@@ -176,18 +176,17 @@ void LayerRow::init(){
         return O({{L"type",S(L"layer")},{L"action",target}});});
     actionTooltip(data,mask,[weak]{auto self=weak.lock();if(!self)return J{};
         return O({{L"type",S(L"layer")},{L"action",O({{L"op",S(L"select")},{L"id",N(self->id)},{L"mask",B(true)}})}});});
-    link.Content(icon(L"link",data->theme(),10));
+    link.Content(icon(L"link",data->theme(),10));link.Height(36);
     name=button(data,data->caption(L"layers",L"layer"),[weak]{if(auto self=weak.lock();self&&self->clickAllowed())self->action(rowSelection(self->id));});
-    name.MinHeight(36);name.HorizontalAlignment(HorizontalAlignment::Stretch);name.HorizontalContentAlignment(HorizontalAlignment::Stretch);
-    name.FontWeight(Windows::UI::Text::FontWeights::Normal());name.Padding({0});name.Margin({6,0,2,0});
+    name.FontWeight(Windows::UI::Text::FontWeights::Normal());name.MinHeight(36);name.HorizontalAlignment(HorizontalAlignment::Stretch);name.HorizontalContentAlignment(HorizontalAlignment::Stretch);name.Padding({0});name.Margin({6,0,2,0});
     StackPanel caption;title=label(data,L"");title.TextTrimming(TextTrimming::CharacterEllipsis);caption.Children().Append(title);
-    title.LineHeight(20);AutomationProperties::SetAutomationId(title,L"layer-"+to_hstring(uint64_t(id))+L"-label");
-    meta=label(data,L"");meta.Opacity(.55);meta.LineHeight(20);
+    AutomationProperties::SetAutomationId(title,L"layer-"+to_hstring(uint64_t(id))+L"-label");
+    meta=label(data,L"");meta.Opacity(.55);
     AutomationProperties::SetAutomationId(meta,L"layer-"+to_hstring(uint64_t(id))+L"-meta");
-    meta.TextTrimming(TextTrimming::CharacterEllipsis);caption.Children().Append(meta);name.Content(caption);
+    meta.TextTrimming(TextTrimming::CharacterEllipsis);caption.Children().Append(meta);caption.VerticalAlignment(VerticalAlignment::Center);name.Content(caption);
     Grid::SetColumn(name,9);body.Children().Append(name);
     edgeTag(rename,L"edge_contact",S(L"input"));rename.MinWidth(0);rename.MinHeight(data->controlHeight());rename.Height(data->controlHeight());rename.Padding({2,0,2,0});rename.Margin({6,0,2,0});rename.FontSize(data->textSize());
-    rename.MaxLength(128);rename.Background(data->brush(L"input"));rename.Visibility(Visibility::Collapsed);
+    rename.MaxLength(128);fieldColors(data,rename);rename.Visibility(Visibility::Collapsed);
     copyName(data,rename,data->copyCaption(L"layers",L"name"));Grid::SetColumn(rename,9);body.Children().Append(rename);
     rename.KeyDown([weak](auto&&,KeyRoutedEventArgs const& e){if(auto self=weak.lock()){
         if(composingKey(e))return;
@@ -199,20 +198,20 @@ void LayerRow::init(){
     rename.LostFocus([weak](auto&&,auto&&){if(auto self=weak.lock())self->commit(false);});
     name.DoubleTapped([weak](auto&&,DoubleTappedRoutedEventArgs const& e){if(auto self=weak.lock();self&&self->clickAllowed()&&flag(self->model(),L"can_rename"))
         self->action(O({{L"op",S(L"begin_rename")},{L"id",N(self->id)}}));e.Handled(true);});
-    name.KeyDown([weak](auto&&,KeyRoutedEventArgs const& e){if(auto self=weak.lock()){
+    root.KeyDown([weak](auto&&,KeyRoutedEventArgs const& e){if(auto self=weak.lock()){
         if(e.Key()==Windows::System::VirtualKey::F2){if(flag(self->model(),L"can_rename"))self->action(O({{L"op",S(L"begin_rename")},{L"id",N(self->id)}}));e.Handled(true);}
     }});
-    for(auto target:{name,content,mask})target.KeyDown([weak](auto&& sender,KeyRoutedEventArgs const& e){
+    for(FrameworkElement target:{FrameworkElement(name),FrameworkElement(content),FrameworkElement(mask)})target.KeyDown([weak](auto&& sender,KeyRoutedEventArgs const& e){
         if(e.Key()!=Windows::System::VirtualKey::Application&&!(e.Key()==Windows::System::VirtualKey::F10&&(GetKeyState(VK_SHIFT)&0x8000)))return;
         if(auto self=weak.lock()){
-            auto anchor=sender.template as<Button>();self->context(anchor==self->mask,anchor);e.Handled(true);
+            auto anchor=sender.template as<FrameworkElement>();self->context(anchor==self->mask,anchor);e.Handled(true);
         }
     });
     lockImage.Width(12);lockImage.Height(12);lockImage.HorizontalAlignment(HorizontalAlignment::Left);lockImage.IsHitTestVisible(false);Grid::SetColumn(lockImage,11);body.Children().Append(lockImage);
-    grip=pick(L"",12,[]{});grip.Height(16);grip.Content(icon(L"grip",data->theme()));grip.Opacity(.6);
+    grip=pick(L"",12,[]{});grip.MinHeight(0);grip.Width(16);grip.Height(16);grip.Content(icon(L"grip",data->theme()));grip.Opacity(.55);
     copyName(data,grip,data->copyCaption(L"layers",L"move_layer"));
-    for(auto item:{std::pair{eye,L"visibility"},std::pair{check,L"selection"},std::pair{content,L"content"},
-        std::pair{load,L"load"},std::pair{mask,L"mask"},std::pair{link,L"link"},std::pair{name,L"name"},std::pair{grip,L"drag"}})
+    for(auto const& item:std::array<std::pair<FrameworkElement,wchar_t const*>,8>{{{eye,L"visibility"},{check,L"selection"},{content,L"content"},
+        {load,L"load"},{mask,L"mask"},{link,L"link"},{name,L"name"},{grip,L"drag"}}})
         AutomationProperties::SetAutomationId(item.first,L"layer-"+to_hstring(uint64_t(id))+L"-"+item.second);
     AutomationProperties::SetAutomationId(rename,L"layer-"+to_hstring(uint64_t(id))+L"-rename");
     AutomationProperties::SetAutomationId(texture,L"layer-texture-"+to_hstring(uint64_t(id)));
@@ -233,15 +232,15 @@ void LayerRow::init(){
         e.Handled(true);
     });
     mask.RightTapped([weak](auto&&,RightTappedRoutedEventArgs const& e){if(auto self=weak.lock();self&&self->contextAllowed())self->context(true,self->mask);e.Handled(true);});
-    dropMark.IsHitTestVisible(false);dropMark.BorderBrush(accent(data));dropMark.Margin({-6,-2,-6,-2});
+    dropMark.IsHitTestVisible(false);dropMark.BorderBrush(accent(data));auto rowPadding=layerRowPadding(data);dropMark.Margin({-rowPadding.Left,-rowPadding.Top,-rowPadding.Right,-rowPadding.Bottom});
     Grid::SetColumnSpan(dropMark,13);body.Children().Append(dropMark);
     swipe(0);
 }
-double LayerRow::revealWidth()const{return std::min(std::max(1.,root.ActualWidth()),array(model(),L"swipe_actions").Size()*72.);}
+double LayerRow::revealWidth()const{return std::min(std::max(1.,root.ActualWidth()),array(model(),L"swipe_actions").Size()*data->panelMetric(L"layer_swipe_action_width"));}
 bool LayerRow::canSwipe()const{for(auto value:array(model(),L"swipe_actions"))if(flag(value.GetObject(),L"enabled"))return true;return false;}
 void LayerRow::swipe(double offset,bool animate){
     swipeFrames.revoke();
-    auto target=std::clamp(offset,object(model(),L"right_swipe").Size()?-72.:0.,revealWidth());
+    auto target=std::clamp(offset,object(model(),L"right_swipe").Size()?-data->panelMetric(L"layer_swipe_action_width"):0.,revealWidth());
     if(!animate||!root.IsLoaded()||!Windows::UI::ViewManagement::UISettings().AnimationsEnabled()||target==swipeOffset){positionSwipe(target);return;}
     auto from=swipeOffset;auto start=std::chrono::steady_clock::now();
     swipeFrames=CompositionTarget::Rendering(auto_revoke,[weak=weak_from_this(),from,target,start](auto&&,auto&&){if(auto self=weak.lock()){
@@ -251,9 +250,9 @@ void LayerRow::swipe(double offset,bool animate){
     }});
 }
 void LayerRow::positionSwipe(double offset){
-    swipeOffset=std::clamp(offset,object(model(),L"right_swipe").Size()?-72.:0.,revealWidth());swipeTransform.X(-swipeOffset);
+    swipeOffset=std::clamp(offset,object(model(),L"right_swipe").Size()?-data->panelMetric(L"layer_swipe_action_width"):0.,revealWidth());swipeTransform.X(-swipeOffset);
     auto width=revealWidth();swipeActions.Width(width);
-    grip.Opacity(.6*(1-std::clamp(std::abs(swipeOffset)/(swipeOffset>0?std::max(1.,width):72.),0.,1.)));
+    grip.Opacity(.55*(1-std::clamp(std::abs(swipeOffset)/(swipeOffset>0?std::max(1.,width):data->panelMetric(L"layer_swipe_action_width")),0.,1.)));
     RectangleGeometry clip;clip.Rect({float(width-std::max(0.,swipeOffset)),0,float(std::max(0.,swipeOffset)),float(root.ActualHeight())});swipeActions.Clip(clip);
     swipeActions.Visibility(swipeOffset>0?Visibility::Visible:Visibility::Collapsed);
     if(auto view=owner.lock())view->connections();
@@ -305,17 +304,17 @@ void LayerRow::refresh(){
     if(icons!=iconKey){
         iconKey=icons;eye.Content(icon(shown,data->theme()));check.Content(icon(str(layer,L"selection_icon"),data->theme()));
         auto contentIcon=flag(layer,L"group")?(flag(layer,L"collapsed")?L"folder":L"folder-open"):str(layer,L"content_icon");
-        bool adjustment=flag(layer,L"adjustment_effect"),preview=flag(layer,L"has_thumbnail"),symbol=!contentIcon.empty()&&!flag(layer,L"selection_layer");
+        bool preview=flag(layer,L"has_thumbnail"),symbol=!contentIcon.empty()&&!flag(layer,L"selection_layer");
         contentThumbnail.Visibility(preview?Visibility::Visible:Visibility::Collapsed);
         contentSymbol.Visibility(symbol?Visibility::Visible:Visibility::Collapsed);
-        contentSymbol.Width(preview?14:adjustment?16:28);contentSymbol.Height(preview?14:adjustment?16:28);
+        contentSymbol.Width(preview?14:24);contentSymbol.Height(preview?14:24);
         contentSymbol.Padding({preview?1.:0.});contentSymbol.CornerRadius({2,2,2,2});
         contentSymbol.HorizontalAlignment(preview?HorizontalAlignment::Right:HorizontalAlignment::Center);
         contentSymbol.VerticalAlignment(preview?VerticalAlignment::Bottom:VerticalAlignment::Center);
         contentSymbol.Margin(preview?Thickness{0,0,3,3}:Thickness{0});
         contentSymbol.Background(preview?data->brush(L"input"):clear());
         if(symbol){
-            auto glyph=icon(contentIcon,data->theme(),preview?12:adjustment?16:28);
+            auto glyph=icon(contentIcon,data->theme(),preview?12:24);
             if(preview)AutomationProperties::SetAutomationId(glyph,L"layer-"+to_hstring(uint64_t(id))+L"-type-symbol");
             contentSymbol.Child(glyph);
         }
@@ -333,7 +332,6 @@ void LayerRow::refresh(){
     body.ColumnDefinitions().GetAt(5).Width({full&&selectionLayer?32.:0.,GridUnitType::Pixel});
     if(selectionLayer){auto tip=str(layer,L"load_selection_tooltip");AutomationProperties::SetName(load,tip);CapyUi::tooltip(load,tip);}
     AutomationProperties::SetItemStatus(check,flag(layer,L"selected")?data->caption(L"search",L"selected"):data->caption(L"layers",L"unselected"));
-    check.Background(flag(layer,L"selected")?selected(data):clear());
     bool hasMask=full&&flag(layer,L"has_mask");
     content.Background(clear());mask.Background(clear());
     contentEdge.update(data,flag(layer,L"content_selected"));maskEdge.update(data,flag(layer,L"mask_selected"));
@@ -356,7 +354,7 @@ void LayerRow::refresh(){
     body.ColumnDefinitions().GetAt(11).Width({full&&flag(layer,L"can_drop_below")?14.:12.,GridUnitType::Pixel});
     body.ColumnDefinitions().GetAt(12).Width({full&&flag(layer,L"can_drop_below")?16.:0.,GridUnitType::Pixel});
     grip.Visibility(full&&flag(layer,L"can_drop_below")?Visibility::Visible:Visibility::Collapsed);
-    grip.IsEnabled(flag(layer,L"drag_from_handle"));
+    grip.IsEnabled(flag(layer,L"drag_from_handle"));grip.IsHitTestVisible(flag(layer,L"drag_from_handle"));
     hstring details=str(layer,L"description");
     meta.Text(details);meta.Visibility(!full||details.empty()?Visibility::Collapsed:Visibility::Visible);
     bool editing=renameTarget(data)==id;

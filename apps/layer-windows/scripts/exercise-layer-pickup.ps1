@@ -189,6 +189,18 @@ function Pick-Up([string]$Id,[double]$Layer,[switch]$Grip) {
         if(!$hold.state.captured){throw 'Held row did not retain contact capture'}
     }
 }
+function Drag-PanelEdge([double]$Layer,[ValidateSet('before','after')][string]$Edge){
+    $before=Rows;$at=Point "layer-$Layer-drag"
+    $bounds=if($Edge -eq 'before'){(Control 'layer-controls' -Arranged).Current.BoundingRectangle}else{Layer-Viewport}
+    $to=@{x=[int]($bounds.Left+$bounds.Width/2);y=[int]$(if($Edge -eq 'before'){$bounds.Top+$bounds.Height/2}else{$bounds.Bottom-2})}
+    [CapyRowPointer]::Down($Device,$at.x,$at.y);Move-To @{x=$at.x-30;y=$at.y};Move-To $to
+    Wait-Until {$g=Gesture;$g.phase -eq 'dragging' -and $g.can_drop} "Panel $Edge edge did not admit a drop"
+    [CapyRowPointer]::Up();Wait-Until {(Gesture).phase -eq 'idle' -and (Rows) -ne $before} "Panel $Edge edge drop did not commit"
+    $layers=@((Model).state.layers)
+    $actual=if($Edge -eq 'before'){$layers[0].id}else{$layers[$layers.Count-2].id}
+    if($actual -ne $Layer){throw "Panel $Edge edge placed layer $Layer at the wrong end"}
+    Layer-History 'Undo';Wait-Until {(Rows) -eq $before} 'Panel edge drop was not one undo'
+}
 function Drag-Row([string]$Id,[double]$Layer,[double]$Target,[switch]$Grip,[switch]$Cancel,[double]$Fraction=.6,[switch]$PressAfterRelease,[switch]$PendingDropGate) {
     if($PressAfterRelease -and !$PendingDropGate){throw 'Pending final drop requires the isolated query gate'}
     $before=Rows
@@ -684,6 +696,8 @@ try {
     $script:case='row-whitespace';Drag-Row "layer-row-$created" $created $paint
     $script:case='child-control-drag';Drag-Row "layer-$created-visibility" $created $paint
     $script:case='immediate-grip';Drag-Row "layer-$created-drag" $created $paint -Grip
+    $script:case='header-edge-drop';Drag-PanelEdge $paint before
+    $script:case='empty-list-edge-drop';Drag-PanelEdge $created after
     $script:case='row-cancel';Drag-Row "layer-$created-name" $created $paint -Cancel
     Check-KeyboardContext $created
     Check-Presentations $created $paint

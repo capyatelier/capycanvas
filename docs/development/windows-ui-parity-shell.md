@@ -333,16 +333,6 @@ TextInput.cpp, KeyNames.h and NativePresentation.h have no visual surface, and I
 
 #### Other primitive differences
 
-##### PRIM-24: `icon()` call sites that overflow their host
-- Class: METRIC, ALIGNMENT   Confidence: CHECK   Severity: low   Reported bug: none
-- Windows:
-  - `LayerRow.cpp:212` `grip=pick(L"",12,…)` is a 12 px-wide button with `grip.Height(16)` holding a 16 px `icon(L"grip")`. The image is wider than its button and is clipped or overflows.
-  - `LayerRow.cpp:324` uses a 10 px link icon. GTK matches (`style.css:220-221`, 10px).
-  - `NativeMenus.h:181-185` `ToolGroupMarker` is a 16 px icon pinned Bottom/Right; GTK uses the same asset.
-- Fix direction: check `LayerRow.cpp:212` with a screenshot. Size the grip button to the icon or the icon to the button.
-
----
-
 #### Tree-wide call sites with asymmetric vertical padding or margin (text- or icon-bearing)
 
 These sites hand-tune vertical centring. Each one is a candidate for removal once PRIM-1, PRIM-3 and PRIM-10 are fixed in the helpers:

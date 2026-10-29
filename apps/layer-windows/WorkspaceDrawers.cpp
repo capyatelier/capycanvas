@@ -326,7 +326,7 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
                 }
             }
             if(inspector&&model.HasKey(L"layer_properties")){
-                inspector->place(bodies.at(L"layers").view->Root(),width,num(placement,L"height"),num(inspector->sizes,L"footer_height",49.),flag(model,L"layer_properties"));
+                inspector->place(bodies.at(L"layers").view->Root(),width,num(placement,L"height"),num(inspector->sizes,L"footer_height",data->panelMetric(L"disclosure_height")),flag(model,L"layer_properties"));
             }
         }
     }

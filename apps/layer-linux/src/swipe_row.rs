@@ -3,7 +3,8 @@ use adw::prelude::*;
 use gtk::{glib, subclass::prelude::*};
 use std::cell::{Cell, OnceCell, RefCell};
 
-const REVEAL: f64 = 72.;
+const REVEAL: f64 = layer_ui::PANEL_CONTROL_METRICS.layer_swipe_action_width as f64;
+const THRESHOLD: f64 = layer_ui::PANEL_CONTROL_METRICS.layer_swipe_threshold as f64;
 type Changed = Box<dyn Fn(&SwipeRow)>;
 mod imp {
     use super::*;
@@ -123,8 +124,8 @@ impl SwipeRow {
         drag.connect_drag_end(glib::clone!(#[weak] row, move |g, _, _| {
             if row.imp().admitted.replace(false) {
                 let released = g.current_event().is_some_and(|e| matches!(e.event_type(), gtk::gdk::EventType::ButtonRelease | gtk::gdk::EventType::TouchEnd));
-                let toggle = released && row.imp().offset.get() <= -REVEAL * 0.4;
-                let threshold = if row.imp().origin.get() > 0. { row.imp().origin.get() - REVEAL * 0.4 } else { REVEAL * 0.4 };
+                let toggle = released && row.imp().offset.get() <= -REVEAL * THRESHOLD;
+                let threshold = if row.imp().origin.get() > 0. { row.imp().origin.get() - REVEAL * THRESHOLD } else { REVEAL * THRESHOLD };
                 row.reveal(released && row.imp().offset.get() >= threshold);
                 if toggle { swipe_right(); }
             }

@@ -17,7 +17,7 @@ struct LayerRowDrag::Impl:std::enable_shared_from_this<Impl>{
     std::weak_ptr<LayersView> view;
     std::weak_ptr<WorkspaceData> context;
     uint64_t transient=0;
-    Grid surface{nullptr};
+    Grid surface{nullptr};std::shared_ptr<RowDragPresentation> preview=std::make_shared<RowDragPresentation>();
     weak_ref<UIElement> inputSurface;
     std::pair<event_token,event_token> inputKey{};
     ScrollView list{nullptr};
@@ -40,7 +40,7 @@ struct LayerRowDrag::Impl:std::enable_shared_from_this<Impl>{
     hstring placement,epoch;
     double id=-1,normalizedTarget=-1,effectOwner=-1;
     Point origin{},position{};
-    double initialScroll=0,sourceOpacity=1,initialSwipe=0;
+    double initialScroll=0,initialSwipe=0;
     bool swiping=false;
     HWND windowHandle=nullptr;
     bool grip=false,mask=false,held=false,dragging=false,finishing=false,pickup=false;
@@ -193,9 +193,9 @@ struct LayerRowDrag::Impl:std::enable_shared_from_this<Impl>{
         releasing=false;path.clear();
     }
     void clear(bool closeMenu){
+        preview->Clear();
         if(pointer)if(auto owner=view.lock())owner->data->pointerCancels.Forget(pointer.PointerId(),this);
         if(swiping)if(auto row=source.lock())row->swipe(0);
-        if(dragging)if(auto row=source.lock())row->root.Opacity(sourceOpacity);
         ++generation;pointer=nullptr;source.reset();held=false;dragging=false;swiping=false;finishing=false;busy=false;
         hit.reset();answered.reset();placement=L"";normalizedTarget=-1;effectOwner=-1;timer.Stop();
         if(recognizing){recognizing=false;recognizer.CompleteGesture();}
@@ -267,17 +267,24 @@ struct LayerRowDrag::Impl:std::enable_shared_from_this<Impl>{
         }
     }
     std::optional<Hit> pick()const{
+        auto owner=view.lock();if(!owner||!std::isfinite(position.X)||!std::isfinite(position.Y))return {};
+        auto panel=surface.TransformToVisual(owner->root).TransformPoint(position);
+        if(panel.X<0||panel.Y<0||panel.X>owner->root.ActualWidth()||panel.Y>owner->root.ActualHeight())return {};
         auto at=surface.TransformToVisual(list).TransformPoint(position);
-        if(at.X<0||at.Y<0||at.X>list.ActualWidth()||at.Y>list.ActualHeight())return {};
-        if(auto owner=view.lock())for(auto const& [element,row]:owner->rows){
+        std::shared_ptr<LayerRow> first,last;float top=std::numeric_limits<float>::infinity(),bottom=-top;
+        for(auto const& [element,row]:owner->rows){
             if(!row->current()||!row->root.IsLoaded())continue;
             auto bounds=row->root.TransformToVisual(list).TransformBounds({0,0,float(row->root.ActualWidth()),float(row->root.ActualHeight())});
-            if(at.X>=bounds.X&&at.X<bounds.X+bounds.Width&&at.Y>=bounds.Y&&at.Y<bounds.Y+bounds.Height&&bounds.Height>0){
+            if(bounds.Height<=0||bounds.Y+bounds.Height<=0||bounds.Y>=list.ActualHeight())continue;
+            if(bounds.Y<top){top=bounds.Y;first=row;}if(bounds.Y+bounds.Height>bottom){bottom=bounds.Y+bounds.Height;last=row;}
+            if(at.Y>=bounds.Y&&at.Y<bounds.Y+bounds.Height){
                 auto thumb=row->content.TransformToVisual(list).TransformBounds({0,0,float(row->content.ActualWidth()),float(row->content.ActualHeight())});
                 bool thumbnail=at.X>=thumb.X&&at.X<thumb.X+thumb.Width&&at.Y>=thumb.Y&&at.Y<thumb.Y+thumb.Height;
                 return Hit{row->id,std::clamp(int((at.Y-bounds.Y)/bounds.Height*4),0,3),thumbnail};
             }
         }
+        if(first&&capy_list_drop_edge(at.Y,top,bottom)==-1)return Hit{first->id,0,false};
+        if(last&&capy_list_drop_edge(at.Y,top,bottom)==1)return Hit{last->id,3,false};
         return {};
     }
     void complete(){
@@ -339,10 +346,10 @@ struct LayerRowDrag::Impl:std::enable_shared_from_this<Impl>{
             if(!pickup||!movable(row)||!sourceRow||sourceRow->swipeOffset!=0)return;
             if(!claim())return;
             dragging=true;ignoreClick=true;suppressContext=true;hideMenu();
-            sourceOpacity=sourceRow->root.Opacity();sourceRow->root.Opacity(.55);
+            preview->Start(sourceRow->root,surface,origin,position);
         }
         if(swiping){if(auto row=source.lock())row->swipe(initialSwipe>0?std::max(0.,initialSwipe-(position.X-origin.X)):initialSwipe-(position.X-origin.X),false);e.Handled(true);}
-        if(dragging){target();e.Handled(true);publish();}
+        if(dragging){preview->Move(surface,position);target();e.Handled(true);publish();}
     }
     void up(PointerRoutedEventArgs const& e){
         if(touch(e,L"up"))return;
@@ -352,8 +359,8 @@ struct LayerRowDrag::Impl:std::enable_shared_from_this<Impl>{
         if(recognizing){recognizing=false;recognizer.ProcessUpEvent(e.GetCurrentPoint(surface));}
         position=e.GetCurrentPoint(surface).Position();
         if(swiping){
-            auto row=source.lock();auto operation=row&&row->swipeOffset<=-72*.4?object(row->model(),L"right_swipe"):J{};
-            if(row)row->swipe(row->swipeOffset>=(initialSwipe>0?initialSwipe-72*.4:72*.4)?row->revealWidth():0);
+            auto row=source.lock();auto operation=row&&row->swipeOffset<=-row->data->panelMetric(L"layer_swipe_action_width")*row->data->panelMetric(L"layer_swipe_threshold")?object(row->model(),L"right_swipe"):J{};
+            if(row)row->swipe(row->swipeOffset>=(initialSwipe>0?initialSwipe-row->data->panelMetric(L"layer_swipe_action_width")*row->data->panelMetric(L"layer_swipe_threshold"):row->data->panelMetric(L"layer_swipe_action_width")*row->data->panelMetric(L"layer_swipe_threshold"))?row->revealWidth():0);
             swiping=false;e.Handled(true);clear(true);if(row&&operation.Size())row->action(operation);return;
         }
         if(dragging){

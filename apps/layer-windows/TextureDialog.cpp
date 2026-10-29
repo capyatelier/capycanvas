@@ -149,11 +149,11 @@ std::optional<TexturePicker> texturePicker(J const& state,double layer,double ep
 hstring textureTileId(J const& tile){return tile.GetNamedValue(L"id",JsonValue::CreateNullValue()).Stringify();}
 
 std::shared_ptr<TextureGrid> TextureGrid::Create(std::shared_ptr<WorkspaceData> const& data,hstring const& prefix){
-    auto result=std::make_shared<TextureGrid>();result->data=data;result->prefix=prefix;
+    auto result=std::make_shared<TextureGrid>();result->grid=wrapPanel(TileFrame,0,TileColumnGap,true,6,TileRowGap);result->data=data;result->prefix=prefix;
     auto& grid=result->grid;
-    grid.ColumnSpacing(TileColumnGap);grid.RowSpacing(TileRowGap);grid.XYFocusKeyboardNavigation(XYFocusKeyboardNavigationMode::Enabled);
+    grid.XYFocusKeyboardNavigation(XYFocusKeyboardNavigationMode::Enabled);
     AutomationProperties::SetAutomationId(grid,prefix+L"-grid");
-    grid.SizeChanged([weak=result->weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->arrange();});
+
     return result;
 }
 TextureGrid::Tile TextureGrid::make(V const& id,hstring const& text,hstring const& suffix,hstring const& glyph,std::function<void()> click){
@@ -180,7 +180,7 @@ TextureGrid::Tile TextureGrid::make(V const& id,hstring const& text,hstring cons
 void TextureGrid::trail(hstring const& suffix,hstring const& glyph,std::function<void()> click){
     trailing=make(JsonValue::CreateNullValue(),L"",suffix,glyph,std::move(click));
     AutomationProperties::SetAutomationId(trailing->node,prefix+L"-"+suffix);
-    grid.Children().Append(trailing->node);columns=0;arrange();
+    grid.Children().Append(trailing->node);grid.InvalidateMeasure();
 }
 void TextureGrid::rename(Tile const& target,hstring const& text){
     target.caption.Text(text);tooltip(target.node,text);AutomationProperties::SetName(target.node,text);AutomationProperties::SetName(target.picture->root,text);
@@ -206,21 +206,7 @@ void TextureGrid::rebuild(A const& list){
         grid.Children().Append(tile.node);tiles.push_back(std::move(tile));
     }
     if(trailing)grid.Children().Append(trailing->node);
-    columns=0;arrange();
-}
-void TextureGrid::arrange(){
-    std::vector<Button> nodes;for(auto const& tile:tiles)nodes.push_back(tile.node);
-    if(trailing)nodes.push_back(trailing->node);
-    double width=grid.ActualWidth();if(width<=0||nodes.empty())return;
-    int next=std::clamp(int((width+TileColumnGap)/(TileFrame+TileColumnGap)),1,6);
-    if(next!=columns){
-        columns=next;grid.ColumnDefinitions().Clear();
-        for(int i=0;i<columns;++i){ColumnDefinition column;column.Width({1,GridUnitType::Star});grid.ColumnDefinitions().Append(column);}
-    }
-    auto rows=int((nodes.size()+columns-1)/columns);
-    while(int(grid.RowDefinitions().Size())<rows){RowDefinition row;row.Height({1,GridUnitType::Auto});grid.RowDefinitions().Append(row);}
-    while(int(grid.RowDefinitions().Size())>rows)grid.RowDefinitions().RemoveAtEnd();
-    for(size_t i=0;i<nodes.size();++i){Grid::SetColumn(nodes[i],int(i)%columns);Grid::SetRow(nodes[i],int(i)/columns);}
+    grid.InvalidateMeasure();
 }
 void TextureGrid::mark(hstring const& id){
     for(auto const& tile:tiles){

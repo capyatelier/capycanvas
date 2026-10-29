@@ -214,7 +214,7 @@ struct EditorView:std::enable_shared_from_this<EditorView> {
         }
         int chosen=-1;auto mix=str(value(),L"interpolation");
         for(uint32_t i=0;i<modes.Size();++i)if(modes.GetArrayAt(i).GetStringAt(0)==mix)chosen=int(i);
-        if(interpolation.SelectedIndex()!=chosen){syncing=true;interpolation.SelectedIndex(chosen);syncing=false;}
+        if(interpolation.SelectedIndex()!=chosen){syncing=true;selectIndex(interpolation,chosen);syncing=false;}
         auto caption=str(gradient(),L"interpolation_label");AutomationProperties::SetName(interpolation,caption);tooltip(interpolation,caption);
         name(reverse,str(gradient(),L"reverse_label"));name(reset,data->caption(L"color",L"reset_gradient"));
         name(remove,data->caption(L"color",L"remove_stop"));name(bucket,data->caption(L"color",L"use_selected"));

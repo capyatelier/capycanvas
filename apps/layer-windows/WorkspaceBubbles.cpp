@@ -265,7 +265,7 @@ void WorkspaceBubbles::Impl::draw(std::shared_ptr<Record> const& r,std::shared_p
     if(p->inspector&&!p->retired){auto& inspector=*p->inspector;bool open=flag(p->data,L"properties");
         p->cardHost.Width(p->size.Width);p->cardHost.Height(p->size.Height);
         if(inspector.animating){auto t=winrt::Windows::UI::ViewManagement::UISettings().AnimationsEnabled()?std::clamp(std::chrono::duration<double>(Clock::now()-inspector.started).count()/.2,0.,1.):1.;inspector.position=inspector.startPosition+(inspector.targetPosition-inspector.startPosition)*(1-std::pow(1-t,3));inspector.animating=t<1;active=active||inspector.animating;}
-        inspector.place(p->layers->Root(),p->size.Width,p->size.Height,49,open);
+        inspector.place(p->layers->Root(),p->size.Width,p->size.Height,data->panelMetric(L"disclosure_height"),open);
         if(!inspector.animating&&!open&&inspector.anchor.Size()&&p->layers->layers->restoreAnchor(inspector.anchor))inspector.anchor=J{};
     }
 }

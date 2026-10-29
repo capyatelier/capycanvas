@@ -21,7 +21,7 @@ struct WorkspaceRowDrag::Impl:std::enable_shared_from_this<Impl>{
     ListView list{nullptr};
     ScrollViewer observedScroll{nullptr};
     bool panning=false;
-    Grid surface{nullptr};
+    Grid surface{nullptr};std::shared_ptr<RowDragPresentation> preview=std::make_shared<RowDragPresentation>();Point origin{};
     Border hint;
     MenuFlyout visibleMenu{nullptr};
     std::function<bool()> available;
@@ -47,7 +47,6 @@ struct WorkspaceRowDrag::Impl:std::enable_shared_from_this<Impl>{
     NativeInput::PointerDeviceType device=NativeInput::PointerDeviceType::Mouse;
     HWND owner=nullptr;
     std::optional<hstring> before;
-    double sourceOpacity=1;
     bool held=false,dragging=false,grip=false,child=false,releasing=false;
     bool ignoreClick=false,suppressContext=false,valid=false,recognizing=false;
     bool trace=GetEnvironmentVariableW(L"CAPY_TRACE_UI",nullptr,0)!=0;
@@ -78,17 +77,15 @@ struct WorkspaceRowDrag::Impl:std::enable_shared_from_this<Impl>{
         }
     }
     void clear(bool hideMenu){
+        preview->Clear();
         if(hideMenu)hideMenus();
-        ++generation;auto old=source;source.reset();pointer=nullptr;
-        bool wasDrag=dragging;held=false;dragging=false;valid=false;before.reset();
+        ++generation;source.reset();pointer=nullptr;
+        held=false;dragging=false;valid=false;before.reset();
         timer.Stop();hint.Visibility(Visibility::Collapsed);
         if(recognizing){recognizing=false;recognizer.CompleteGesture();}
         releasing=true;surface.ReleasePointerCaptures();releasing=false;
         for(auto const& [weak,mode]:scrollModes)if(auto content=weak.get())content.ManipulationMode(mode);
         scrollModes.clear();path.clear();
-        if(old){
-            if(auto row=old->item.get();row&&wasDrag)row.Opacity(sourceOpacity);
-        }
         ended();deferClick();evidence();
     }
     bool cancel(hstring reason=L"cancel"){
@@ -151,7 +148,7 @@ struct WorkspaceRowDrag::Impl:std::enable_shared_from_this<Impl>{
             auto point=e.GetCurrentPoint(surface);
             if(!PointerGesture::PrimaryContact(point))return;
             source=row;pointer=e.Pointer();device=point.PointerDeviceType();
-            position=point.Position();grip=inside(original,row.grip.get());
+            origin=position=point.Position();grip=inside(original,row.grip.get());
             child=inside(original,row.more.get())||inside(original,row.pin.get())||bool(original.try_as<TextBox>());
             ignoreClick=grip||child;
             owner=GetAncestor(GetForegroundWindow(),GA_ROOTOWNER);
@@ -172,15 +169,15 @@ struct WorkspaceRowDrag::Impl:std::enable_shared_from_this<Impl>{
     bool crossed()const{return recognizer.Moved();}
     void target(){
         valid=false;before.reset();hint.Visibility(Visibility::Collapsed);
-        if(!dragging||!current()||position.X<0||position.X>surface.ActualWidth()
-            ||position.Y<0||position.Y>surface.ActualHeight())return;
+        if(!dragging||!current()||!std::isfinite(position.X)||!std::isfinite(position.Y))return;
+        if(position.X<0||position.Y<0||position.X>surface.ActualWidth()||position.Y>surface.ActualHeight())return;
         std::optional<hstring> last;double line=0;
         for(auto value:list.Items()){
             auto row=value.try_as<ListViewItem>();if(!row||!row.IsLoaded())continue;
             auto bounds=row.TransformToVisual(surface).TransformBounds({0,0,float(row.ActualWidth()),float(row.ActualHeight())});
-            if(bounds.Y+bounds.Height<=0||bounds.Y>=surface.ActualHeight())continue;
+            if(bounds.Height<=0||bounds.Y+bounds.Height<=0||bounds.Y>=surface.ActualHeight())continue;
             auto id=unbox_value<hstring>(row.Tag());
-            if(position.Y<bounds.Y+bounds.Height*.5f){before=id;line=bounds.Y;last.reset();break;}
+            if(capy_list_drop_edge(position.Y,bounds.Y,bounds.Y+bounds.Height*.5f)!=1){before=id;line=bounds.Y;last.reset();break;}
             last=id;line=bounds.Y+bounds.Height;
         }
         if(last){
@@ -194,7 +191,7 @@ struct WorkspaceRowDrag::Impl:std::enable_shared_from_this<Impl>{
         // validates the final id/before pair against current persisted order.
         if(before==source->id||before==successor)return;
         valid=true;
-        hint.Width(std::max(0.,surface.ActualWidth()-16));hint.Margin({8,std::clamp(line,0.,std::max(0.,surface.ActualHeight()-2)),0,0});
+        hint.Width(std::max(0.,surface.ActualWidth()));hint.Margin({0,std::clamp(line,0.,std::max(0.,surface.ActualHeight()-2)),0,0});
         hint.Visibility(Visibility::Visible);
     }
     void motion(PointerRoutedEventArgs const& e){
@@ -210,10 +207,10 @@ struct WorkspaceRowDrag::Impl:std::enable_shared_from_this<Impl>{
             }
             if(!claim())return;
             dragging=true;ignoreClick=true;suppressContext=true;
-            auto row=source->item.get();sourceOpacity=row.Opacity();row.Opacity(.55);
+            auto row=source->item.get();preview->Start(row,surface,origin,position,.45);
             hideMenus();
         }
-        if(dragging){target();e.Handled(true);evidence();}
+        if(dragging){preview->Move(surface,position);target();e.Handled(true);evidence();}
     }
     void up(PointerRoutedEventArgs const& e){
         if(!pointer||pointer.PointerId()!=e.Pointer().PointerId())return;
@@ -295,10 +292,11 @@ struct WorkspaceRowDrag::Impl:std::enable_shared_from_this<Impl>{
         });
     }
     void init(){
-        hint.Height(2);hint.Background(fill(color(L"#3584e4")));hint.IsHitTestVisible(false);
+        hint.Height(2);hint.Background(paletteResource(L"AccentFillColorDefaultBrush"));hint.IsHitTestVisible(false);
         hint.HorizontalAlignment(HorizontalAlignment::Left);hint.VerticalAlignment(VerticalAlignment::Top);
         hint.Visibility(Visibility::Collapsed);AutomationProperties::SetAutomationId(hint,L"workspace-manager-drop");
         surface.Children().Append(hint);
+        surface.Loaded([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->hint.Background(paletteResource(L"AccentFillColorDefaultBrush"));});
         list.Loaded([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock()){
             auto scroll=scrollIn(self->list);if(!scroll||scroll==self->observedScroll)return;
             self->observedScroll=scroll;

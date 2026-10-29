@@ -156,7 +156,7 @@ ComboBox selector(std::shared_ptr<WorkspaceData> const& data,hstring const& id){
 void syncChoices(ComboBox const& box,A const& labels,int selected){
     if(box.Items().Size()!=labels.Size()){box.Items().Clear();for(auto value:labels)comboOption(box,value.GetString());}
     for(uint32_t i=0;i<labels.Size();++i)comboOptionText(box,i,labels.GetStringAt(i));
-    if(box.SelectedIndex()!=selected)box.SelectedIndex(selected);
+    if(box.SelectedIndex()!=selected)selectIndex(box,selected);
 }
 void sendHistogram(std::shared_ptr<WorkspaceData> const& data,J const& action){
     if(!data->updating)data->dispatch(O({{L"type",S(L"histogram")},{L"action",action}}));

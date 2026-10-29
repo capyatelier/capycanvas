@@ -16,7 +16,7 @@ winrt::Microsoft::UI::Xaml::FrameworkElement LayersPanel(
 namespace CapyLayers {
 using namespace CapyUi;
 inline constexpr double LayerRowHeight=40;
-inline constexpr Thickness LayerRowPadding{6,2,6,2};
+inline Thickness layerRowPadding(std::shared_ptr<WorkspaceData> const& data){auto inset=data->panelMetric(L"layer_edge_inset");return {inset,2,inset,2};}
 inline J layerAction(J const& operation){return O({{L"type",S(L"layer")},{L"action",operation}});}
 inline hstring epochOf(std::shared_ptr<WorkspaceData> const& data){
     return to_hstring(uint64_t(num(object(data->state,L"document_file"),L"epoch")));

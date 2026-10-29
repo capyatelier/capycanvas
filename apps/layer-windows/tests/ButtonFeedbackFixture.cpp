@@ -35,7 +35,7 @@ struct App:ApplicationT<App,Markup::IXamlMetadataProvider>{
     void status(){
         for(auto const& button:probes){auto state=CapyUi::feedback::state(button);
             Automation::AutomationProperties::SetItemStatus(button,
-                L"contact="+to_hstring(bool(state->pointer))+L";alpha="+to_hstring(state->overlay.Color().A)+L";clicks="+to_hstring(clicks));
+                L"contact="+to_hstring(bool(state->pointer))+L";alpha="+to_hstring(state->overlay.Color().A)+L";clicks="+to_hstring(clicks)+L";content_opacity="+to_hstring(VisualTreeHelper::GetChildrenCount(button)?VisualTreeHelper::GetChild(button,0).as<Grid>().Children().GetAt(2).as<ContentPresenter>().Opacity():-1)+L";opacity="+to_hstring(button.Opacity()));
         }
     }
     fire_and_forget showDialog(){
@@ -55,6 +55,12 @@ struct App:ApplicationT<App,Markup::IXamlMetadataProvider>{
         StackPanel body;body.Width(460);body.Spacing(28);body.Margin({80,80,0,0});
         body.HorizontalAlignment(HorizontalAlignment::Left);body.VerticalAlignment(VerticalAlignment::Top);
         body.Children().Append(probe(L"feedback-root"));
+        auto data=std::make_shared<CapyUi::WorkspaceData>();data->state=CapyUi::O({{L"palette",CapyUi::O({{L"text",CapyUi::S(L"#1e1e1e")},{L"accent",CapyUi::S(L"#3584e4")}})}});
+        StackPanel disabled;disabled.Orientation(Orientation::Horizontal);disabled.Spacing(20);
+        for(auto custom:{false,true}){auto button=probe(custom?L"feedback-disabled-custom":L"feedback-disabled-default");button.Height(20);if(custom)CapyUi::buttonColors(data,button,20,nullptr,.45);button.Opacity(.55);button.IsEnabled(false);disabled.Children().Append(button);}body.Children().Append(disabled);
+        auto wrapped=CapyUi::wrapPanel(40,32,4);for(int i=0;i<5;++i)wrapped.Children().Append(Border());
+        wrapped.Measure({88,std::numeric_limits<float>::infinity()});auto narrow=wrapped.DesiredSize().Height;wrapped.Measure({160,std::numeric_limits<float>::infinity()});
+        if(wrapped.DesiredSize().Height<=0||narrow<=wrapped.DesiredSize().Height)throw hresult_error(E_FAIL,L"Offscreen wrap panel did not measure its rows from the available width");
         Button modal;modal.Content(box_value(L"Show dialog"));Automation::AutomationProperties::SetAutomationId(modal,L"feedback-show-dialog");
         modal.Click([this](auto&&,auto&&){showDialog();});body.Children().Append(modal);
         StackPanel popup;popup.Spacing(24);popup.Children().Append(probe(L"feedback-flyout"));
@@ -62,7 +68,7 @@ struct App:ApplicationT<App,Markup::IXamlMetadataProvider>{
         hide.Click([this](auto&&,auto&&){flyout.Hide();});popup.Children().Append(hide);flyout.Content(popup);
         Button anchor;anchor.Content(box_value(L"Show flyout"));anchor.Flyout(flyout);
         Automation::AutomationProperties::SetAutomationId(anchor,L"feedback-show-flyout");body.Children().Append(anchor);
-        root.Children().Append(body);window=Window();window.Content(root);window.Activate();
+        root.Children().Append(body);window=Window();window.Content(root);window.AppWindow().Move({40,40});window.AppWindow().Resize({1200,1100});window.Activate();
         timer=Microsoft::UI::Dispatching::DispatcherQueue::GetForCurrentThread().CreateTimer();
         timer.Interval(std::chrono::milliseconds(30));timer.Tick([this](auto&&,auto&&){status();});timer.Start();
     }

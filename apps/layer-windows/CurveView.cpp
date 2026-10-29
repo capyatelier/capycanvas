@@ -106,15 +106,15 @@ struct CurveEditor : std::enable_shared_from_this<CurveEditor> {
         auto field=number(data,presentation.title(),object(curve(),L"numeric"),
             [value]{auto v=value();return v.ValueType()==JsonValueType::Object?num(v.GetObject(),L"value"):0.;},
             [weak,operation,captured](double v){if(auto self=weak.lock())if(auto action=operation(v))self->send(action,*captured?L"move":L"");},
-            bindings,nullptr,true,property->id()+(axis?L"-output":L"-input"),false,presentation);
+            bindings,nullptr,true,(property?property->id():L"pen-"+responseTarget)+(axis?L"-output":L"-input"),false,presentation);
         auto& gate=coordinates[axis];gate.Content(field);gate.IsTabStop(false);gate.HorizontalContentAlignment(HorizontalAlignment::Stretch);
         auto caption=label(data,presentation.title());caption.TextTrimming(TextTrimming::CharacterEllipsis);
         bindings.emplace_back([value,gate,caption,title=presentation.title,property=property]{
-            auto v=value();gate.IsEnabled(v.ValueType()==JsonValueType::Object&&!flag(v.GetObject(),L"read_only")&&flag(property->view(),L"enabled"));
+            auto v=value();gate.IsEnabled(v.ValueType()==JsonValueType::Object&&!flag(v.GetObject(),L"read_only")&&(!property||flag(property->view(),L"enabled")));
             auto text=title();if(caption.Text()!=text){caption.Text(text);tooltip(caption,text);}
         });
         StackPanel result;result.Children().Append(caption);result.Children().Append(gate);ev[axis]=axisText(data);ev[axis].HorizontalAlignment(HorizontalAlignment::Right);
-        AutomationProperties::SetAutomationId(ev[axis],property->id()+(axis?L"-output-ev":L"-input-ev"));
+        AutomationProperties::SetAutomationId(ev[axis],(property?property->id():L"pen-"+responseTarget)+(axis?L"-output-ev":L"-input-ev"));
         result.Children().Append(ev[axis]);Grid::SetColumn(result,axis);return result;
     }
     void init(Bindings& bindings){

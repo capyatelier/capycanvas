@@ -44,7 +44,8 @@ void LayersView::init(){
         RowDefinition row;row.Height({1,unit});root.RowDefinitions().Append(row);
     }
     auto iconSlot=data->panelMetric(L"control_height"),compound=data->panelMetric(L"compound_spacing");
-    header.Padding({6,4,6,4});header.Spacing(compound);values.ColumnSpacing(data->panelMetric(L"group_spacing"));
+    auto edge=data->panelMetric(L"layer_edge_inset");root.Background(clear());listFrame.Background(clear());
+    header.Padding({edge,4,edge,4});header.Spacing(compound);values.ColumnSpacing(data->panelMetric(L"group_spacing"));
     for(int i=0;i<2;i++){ColumnDefinition column;column.Width({1,GridUnitType::Star});values.ColumnDefinitions().Append(column);}
     blend=button(data,L"",[weak]{if(auto self=weak.lock();self&&!self->data->updating){auto layer=self->editing();if(layer.Size())self->context(num(layer,L"id"),false,self->blend,{},false,true);}});
     blendLabel=label(data,L"",true);blendLabel.TextTrimming(TextTrimming::CharacterEllipsis);blendLabel.VerticalAlignment(VerticalAlignment::Center);
@@ -71,25 +72,25 @@ void LayersView::init(){
         Toggle{L"lock",data->copyCaption(L"layers",L"lock_editing"),L"locked",L"lock",L"edit_lock"}}){
         auto pick=button<Primitives::ToggleButton>(data,spec.label,[weak,spec]{if(auto self=weak.lock()){
             auto layer=self->editing();if(layer.Size())self->action(O({{L"op",S(spec.op)},
-                {L"id",layer.GetNamedValue(L"id")},{L"value",B(!flag(layer,spec.property))}}));
+                {L"id",layer.GetNamedValue(L"id",JsonValue::CreateNullValue())},{L"value",B(!flag(layer,spec.property))}}));
         }});
-        pick.Width(iconSlot);pick.Height(iconSlot);pick.Content(icon(spec.icon,data->theme()));
+        pick.Width(iconSlot);pick.Height(iconSlot);pick.Content(icon(spec.icon,data->theme()));buttonColors(data,pick,20,data->tint(L"text",31));
         AutomationProperties::SetAutomationId(pick,L"layer-"+hstring(spec.op));
         actionTooltip(data,pick,[weak,spec]{auto self=weak.lock();auto layer=self?self->editing():J{};if(!layer.Size())return J{};
-            return O({{L"type",S(L"layer")},{L"action",O({{L"op",S(spec.op)},{L"id",layer.GetNamedValue(L"id")},{L"value",B(!flag(layer,spec.property))}})}});});
+            return O({{L"type",S(L"layer")},{L"action",O({{L"op",S(spec.op)},{L"id",layer.GetNamedValue(L"id",JsonValue::CreateNullValue())},{L"value",B(!flag(layer,spec.property))}})}});});
         tools.Children().Append(pick);controls.emplace_back([data=data,pick,spec](J layer,J capabilities){
-            pick.IsEnabled(flag(capabilities,spec.capability));pick.IsChecked(flag(layer,spec.property));pick.Opacity(pick.IsEnabled()?1.:.36);pick.Background(flag(layer,spec.property)?selected(data):clear());
+            pick.IsEnabled(flag(capabilities,spec.capability));pick.IsChecked(flag(layer,spec.property));pick.Opacity(pick.IsEnabled()?1.:.36);
         });
     }
     auto attachment=button<Primitives::ToggleButton>(data,L"",[weak]{if(auto self=weak.lock()){
         auto operation=object(object(self->view(),L"attachment"),L"action");if(operation.Size())self->action(operation);
     }});
-    attachment.Width(iconSlot);attachment.Height(iconSlot);AutomationProperties::SetAutomationId(attachment,L"layer-attachment");tools.Children().Append(attachment);
+    buttonColors(data,attachment,20,data->tint(L"text",31));attachment.Width(iconSlot);attachment.Height(iconSlot);AutomationProperties::SetAutomationId(attachment,L"layer-attachment");tools.Children().Append(attachment);
     controls.emplace_back([weak,attachment,key=std::make_shared<hstring>()](J,J){if(auto self=weak.lock()){
         auto state=object(self->view(),L"attachment");auto next=self->data->theme()+L":"+str(state,L"icon");
         if(*key!=next){*key=next;attachment.Content(icon(str(state,L"icon"),self->data->theme()));}
         attachment.IsEnabled(object(state,L"action").Size()!=0);attachment.IsChecked(flag(state,L"checked"));
-        attachment.Opacity(attachment.IsEnabled()?1.:.36);attachment.Background(flag(state,L"checked")?selected(self->data):clear());
+        attachment.Opacity(attachment.IsEnabled()?1.:.36);
         AutomationProperties::SetName(attachment,str(state,L"label"));AutomationProperties::SetHelpText(attachment,str(state,L"description"));
         CapyUi::tooltip(attachment,str(state,L"description"));
     }});
@@ -99,7 +100,7 @@ void LayersView::init(){
     AutomationProperties::SetAutomationId(reference,L"layer-reference");actionTooltip(data,reference,[]{return O({{L"type",S(L"layer")},{L"action",O({{L"op",S(L"reference_selection")}})}});});tools.Children().Append(reference);
     controls.emplace_back([weak,reference](J,J){if(auto self=weak.lock()){
         auto view=self->view();reference.IsEnabled(flag(view,L"can_reference"));reference.Opacity(reference.IsEnabled()?1.:.36);
-        reference.IsChecked(flag(view,L"references_selected"));reference.Background(flag(view,L"references_selected")?self->data->tint(L"text",31):clear());
+        reference.IsChecked(flag(view,L"references_selected"));
         auto text=str(view,L"reference_action_label");if(AutomationProperties::GetName(reference)!=text){AutomationProperties::SetName(reference,text);CapyUi::tooltip(reference,text);}
     }});
     header.Children().Append(tools);root.Children().Append(header);
@@ -108,9 +109,9 @@ void LayersView::init(){
     repeater.HorizontalCacheLength(.0);repeater.VerticalCacheLength(.5);
     addPaper=button(data,L"",[weak]{if(auto self=weak.lock();self&&!self->data->updating){
         auto action=object(self->view(),L"add_paper");
-        if(action.Size())self->data->dispatchDocument(O({{L"type",S(L"effect")},{L"action",action.GetNamedValue(L"action")}}),epochOf(self->data));
+        if(action.Size())self->data->dispatchDocument(O({{L"type",S(L"effect")},{L"action",action.GetNamedValue(L"action",JsonValue::CreateNullValue())}}),epochOf(self->data));
     }});
-    addPaper.MinHeight(LayerRowHeight);addPaper.Padding(LayerRowPadding);addPaper.CornerRadius({0});
+    addPaper.MinHeight(LayerRowHeight);addPaper.Padding(layerRowPadding(data));addPaper.CornerRadius({0});
     addPaper.FontWeight(Windows::UI::Text::FontWeights::Normal());addPaper.HorizontalAlignment(HorizontalAlignment::Stretch);
     AutomationProperties::SetAutomationId(addPaper,L"layer-add-paper");
     list.Content(repeater);list.HorizontalScrollMode(ScrollingScrollMode::Disabled);
@@ -150,7 +151,7 @@ void LayersView::init(){
         selectionLayer.IsEnabled(flag(command,L"enabled"));selectionLayer.Opacity(selectionLayer.IsEnabled()?1.:.36);
     });
     auto mask=footerButton(L"mask",data->copyCaption(L"layers",L"add_mask"),L"layer-add-mask",[weak]{if(auto self=weak.lock()){
-        auto layer=self->editing();if(layer.Size())self->action(O({{L"op",S(L"add_mask")},{L"id",layer.GetNamedValue(L"id")},{L"replace",B(false)}}));
+        auto layer=self->editing();if(layer.Size())self->action(O({{L"op",S(L"add_mask")},{L"id",layer.GetNamedValue(L"id",JsonValue::CreateNullValue())},{L"replace",B(false)}}));
     }},L"add_mask");
     controls.emplace_back([mask](J,J capabilities){mask.IsEnabled(flag(capabilities,L"mask"));mask.Opacity(mask.IsEnabled()?1.:.36);});
     auto addFilter=footerButton(L"add-filter",data->copyCaption(L"layers",L"add_filter"),L"layer-add-filter",[weak]{if(auto self=weak.lock())self->showMenu(object(self->view(),L"add_filter"),self->footer);},L"add_filter");
@@ -174,7 +175,7 @@ void LayersView::init(){
         self->fitFooter();more.IsEnabled(layer.Size()!=0);more.Opacity(more.IsEnabled()?1.:.36);
     });
     footer.Children().RemoveAtEnd();
-    footerFrame.Padding({6,4,6,4});
+    footerFrame.Padding({edge,4,edge,4});
     footerFrame.SizeChanged([weak](auto&&,auto&&){if(auto self=weak.lock())self->fitFooter();});
     ColumnDefinition actionsColumn;actionsColumn.Width({1,GridUnitType::Star});footerFrame.ColumnDefinitions().Append(actionsColumn);
     ColumnDefinition moreColumn;moreColumn.Width({iconSlot,GridUnitType::Pixel});footerFrame.ColumnDefinitions().Append(moreColumn);
@@ -235,7 +236,7 @@ void LayersView::refresh(){
                 &&num(self->view(),L"opacity_popup",-1)==activeId){
                 self->data->dispatchDocument(O({{L"type",S(L"set_layer_opacity")},{L"id",N(activeId)},{L"opacity",N(value)}}),generation);
             }},opacityPopupBindings,nullptr,false,L"layer-gesture-opacity");
-        content.Width(240);opacityPopup=Flyout();opacityPopup.Content(content);TrackPopup(opacityPopup,data);
+        content.Width(220);opacityPopup=Flyout();opacityPopup.Content(content);TrackPopup(opacityPopup,data);Style presenter(xaml_typename<FlyoutPresenter>());presenter.Setters().Append(Setter(Control::PaddingProperty(),box_value(Thickness{12,12,12,12})));opacityPopup.FlyoutPresenterStyle(presenter);
         auto opened=make_weak(opacityPopup);
         opacityPopup.Closed([weak,opened,generation](auto&&,auto&&){if(auto self=weak.lock();self&&self->opacityPopup==opened.get()){
             self->opacityPopup=nullptr;self->opacityPopupBindings.clear();

@@ -25,10 +25,10 @@ struct LayerInspector {
     LayerInspector(std::shared_ptr<WorkspaceData> source,J const& panel,std::shared_ptr<WorkspaceGestures> const& gestures,std::function<void()> changed,std::function<void()> toggle):data(std::move(source)){
         properties=std::make_unique<PanelBody>(data,panel,J{},changed,gestures,true);
         RowDefinition page;page.Height({1,GridUnitType::Star});root.RowDefinitions().Append(page);
-        RowDefinition footerRow;footerRow.Height({49,GridUnitType::Pixel});root.RowDefinitions().Append(footerRow);
+        RowDefinition footerRow;footerRow.Height({data->panelMetric(L"disclosure_height"),GridUnitType::Pixel});root.RowDefinitions().Append(footerRow);
         root.Children().Append(pages);
         footer=button(data,L"",std::move(toggle));
-        footer.MinWidth(0);footer.Padding({6,0,6,0});footer.BorderThickness({0});footer.CornerRadius({0,0,6,6});footer.HorizontalAlignment(HorizontalAlignment::Stretch);footer.HorizontalContentAlignment(HorizontalAlignment::Stretch);footer.Background(clear());footer.FontWeight(winrt::Windows::UI::Text::FontWeights::Normal());
+        footer.MinWidth(0);footer.Padding({data->panelMetric(L"layer_edge_inset"),0,data->panelMetric(L"layer_edge_inset"),0});footer.BorderThickness({0});footer.CornerRadius({0,0,data->controlCorner().BottomRight,data->controlCorner().BottomLeft});footer.HorizontalAlignment(HorizontalAlignment::Stretch);footer.HorizontalContentAlignment(HorizontalAlignment::Stretch);footer.Background(clear());footer.FontWeight(winrt::Windows::UI::Text::FontWeights::Normal());
         face.ColumnSpacing(data->panelMetric(L"group_spacing"));for(int i=0;i<3;++i){ColumnDefinition col;col.Width({i==1?1.:data->panelMetric(L"control_height"),i==1?GridUnitType::Star:GridUnitType::Pixel});face.ColumnDefinitions().Append(col);}
         mark=icon(L"properties",data->theme());mark.HorizontalAlignment(HorizontalAlignment::Center);mark.VerticalAlignment(VerticalAlignment::Center);face.Children().Append(mark);
         StackPanel text;text.Spacing(1);text.VerticalAlignment(VerticalAlignment::Center);
@@ -72,7 +72,7 @@ struct LayerInspector {
     }
     J sizingRequest(PanelBody const& layers,double width=0)const{
         auto measurement=layers.ScrollMetrics();
-        if(num(measurement,L"unit_height")<=0)measurement.Insert(L"unit_height",N(40));
+        if(num(measurement,L"unit_height")<=0)measurement.Insert(L"unit_height",N(data->panelMetric(L"layer_unit_height")));
         measurement.Insert(L"fixed_height",N(num(measurement,L"fixed_height")+data->panelMetric(add.Visibility()==Visibility::Visible?L"inset":L"compound_spacing")*2));
         return O({{L"type",S(L"layer_drawer_sizing")},{L"measurement",measurement},{L"properties_height",N(properties->ContentHeight(width))}});
     }

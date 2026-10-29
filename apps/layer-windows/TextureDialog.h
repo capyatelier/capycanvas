@@ -25,10 +25,9 @@ struct TextureGrid : std::enable_shared_from_this<TextureGrid> {
     struct Tile {Button node{nullptr};std::shared_ptr<PaperThumbnail> picture;Microsoft::UI::Xaml::Shapes::Path hover{nullptr},ring{nullptr};TextBlock caption{nullptr};hstring id;};
     std::shared_ptr<WorkspaceData> data;
     hstring prefix;
-    Grid grid;
+    Panel grid{nullptr};
     std::vector<Tile> tiles;
     std::optional<Tile> trailing;
-    int columns=0;
     std::function<void(uint32_t)> picked,activated;
     std::function<void(J)> act;
     static std::shared_ptr<TextureGrid> Create(std::shared_ptr<WorkspaceData> const& data,hstring const& prefix);
@@ -36,7 +35,6 @@ struct TextureGrid : std::enable_shared_from_this<TextureGrid> {
     void trail(hstring const& suffix,hstring const& glyph,std::function<void()> click);
     void rename(Tile const& target,hstring const& text);
     void rebuild(A const& list);
-    void arrange();
     void mark(hstring const& id);
     bool focus(hstring const& id);
 };

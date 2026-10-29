@@ -229,6 +229,17 @@ pub unsafe extern "C" fn capy_document_tab_slide(input: *const c_char) -> u64 {
         .map_or(0, crate::owned::text)
 }
 
+#[unsafe(no_mangle)]
+pub extern "C" fn capy_list_drop_edge(position: f32, first: f32, last: f32) -> i32 {
+    use layer_ui::list_drop::{list_drop_edge, ListDropEdge};
+    match list_drop_edge(position, first, last) {
+        Some(ListDropEdge::BeforeFirst) => -1,
+        Some(ListDropEdge::Inside) => 0,
+        Some(ListDropEdge::AfterLast) => 1,
+        None => 2,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
