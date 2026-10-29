@@ -26,6 +26,7 @@ final class ReorderInputView: UIView, UIGestureRecognizerDelegate, UIPointerInte
     private weak var contactScroll: UIScrollView?
     private var lastPoint: CGPoint?
     private var pan: UIPanGestureRecognizer!
+    private var windowDrag: UIWindowSceneDragInteraction?
     private var press: UILongPressGestureRecognizer!
     private var secondary: UITapGestureRecognizer!
     private var edgeDoublePress: UITapGestureRecognizer?
@@ -82,12 +83,13 @@ final class ReorderInputView: UIView, UIGestureRecognizerDelegate, UIPointerInte
             layerTouches = recognizer; attached?.addGestureRecognizer(recognizer)
         }
         attached?.addGestureRecognizer(pan); attached?.addGestureRecognizer(press); attached?.addGestureRecognizer(secondary)
-        attachEdges(); attachBubbles()
+        attachEdges(); attachBubbles(); attachWindowDrag()
         updateViewport()
     }
     override func layoutSubviews() { super.layoutSubviews(); validate() }
     func detach() {
         guard attached != nil else { return }
+        if let windowDrag { windowDrag.view?.removeInteraction(windowDrag); self.windowDrag = nil }
         releaseKeyboard()
         handledKeys.removeAll()
         cancel(detaching: true); attached?.removeGestureRecognizer(pan); attached?.removeGestureRecognizer(press)
@@ -107,8 +109,27 @@ final class ReorderInputView: UIView, UIGestureRecognizerDelegate, UIPointerInte
             let recognizer = LayerTouchRecognizer(marker: self, model: layer)
             layerTouches = recognizer; attached?.addGestureRecognizer(recognizer)
         }
-        updateViewport(); attachEdges(); attachBubbles()
+        updateViewport(); attachEdges(); attachBubbles(); attachWindowDrag()
         if isFirstResponder, model?.bubbleInput?.acceptsIntensityKeys != true { releaseKeyboard() }
+    }
+    private func attachWindowDrag() {
+        guard let tabs = model as? DrawingTabInteraction, !tabs.vertical else {
+            if let windowDrag { windowDrag.view?.removeInteraction(windowDrag); self.windowDrag = nil }
+            return
+        }
+        guard windowDrag == nil, attached != nil, !bounds.isEmpty else { return }
+        let center = CGPoint(x: bounds.midX, y: bounds.midY)
+        var ancestor = superview
+        while let host = ancestor {
+            if host.hitTest(host.convert(center, from: self), with: nil) != nil {
+                guard host.convert(host.bounds, to: self) == bounds else { return }
+                let interaction = UIWindowSceneDragInteraction()
+                interaction.gestureForFailureRelationships.require(toFail: pan)
+                host.addInteraction(interaction); windowDrag = interaction
+                return
+            }
+            ancestor = host.superview
+        }
     }
     private func attachEdges() {
         guard edge == nil, let attached, let workspace = model as? WorkspaceReorderInteraction else { return }
