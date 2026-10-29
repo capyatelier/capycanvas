@@ -121,7 +121,10 @@ struct WrapLayout:PanelT<WrapLayout>{
         for(auto child:Children()){
             if(child.Visibility()==Visibility::Collapsed)continue;
             if(visible&&visible%count==0){y+=rowHeight+rowGap;rowHeight=0;}
-            if(!arrange)child.Measure({float(cell),cellHeight>0?float(cellHeight):std::numeric_limits<float>::infinity()});
+            if(!arrange){
+                if(auto item=child.try_as<FrameworkElement>();item&&item.Width()!=cell)item.Width(cell);
+                child.Measure({float(cell),cellHeight>0?float(cellHeight):std::numeric_limits<float>::infinity()});
+            }
             double height=cellHeight>0?cellHeight:child.DesiredSize().Height;
             if(arrange)child.Arrange({float((visible%count)*(cell+gap)),float(y),float(cell),float(height)});
             rowHeight=std::max(rowHeight,height);extent=std::max(extent,(visible%count+1)*(cell+gap)-gap);++visible;
