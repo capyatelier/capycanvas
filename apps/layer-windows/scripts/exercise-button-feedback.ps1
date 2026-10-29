@@ -22,7 +22,18 @@ function Check-State($Control,[string]$Stage,[bool]$Contact,[int]$Alpha,[int]$Cl
 try{
     $env:CAPY_FEEDBACK_THEME=$Theme;$Executable=(Resolve-Path -LiteralPath $Executable).Path
     $owned=Start-Process -FilePath $Executable -WorkingDirectory (Split-Path $Executable) -WindowStyle Hidden -PassThru -RedirectStandardError (Join-Path $run 'stderr.log');$null=$owned.Handle
-    Wait-Until {foreach($handle in [CapyWindowApi]::Windows([uint32]$owned.Id)){$candidate=[System.Windows.Automation.AutomationElement]::FromHandle($handle);$probe=$candidate.FindFirst([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,'feedback-root'));if($probe){$script:window=$handle;return $true}};$false} 'Feedback fixture did not start' 30
+    Wait-Until {
+        foreach($candidate in Owned-ProcessWindows $owned){
+            $info=$candidate.Root.Current
+            if($info.ControlType -ne [System.Windows.Automation.ControlType]::Window -or $info.NativeWindowHandle -ne $candidate.Handle.ToInt64()){continue}
+            $probe=$candidate.Root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,'feedback-root'))
+            $pattern=$null
+            if((Test-CapySearchItem $probe $candidate.Root $owned.Id) -and $candidate.Root.TryGetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern,[ref]$pattern)){
+                $script:window=$candidate.Handle;$script:closePattern=$pattern;return $true
+            }
+        }
+        $false
+    } 'Feedback fixture did not start' 30
     [CapyWindowApi]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
     [CapyWindowApi]::SetForegroundWindow($window)|Out-Null;[CapyRowPointer]::Initialize([uint32]$owned.Id)
     foreach($probe in @(@('feedback-disabled-default',(92./255)),@('feedback-disabled-custom',.45))){
@@ -54,7 +65,7 @@ try{
         }
         if($context-eq'dialog'){Invoke-Button 'feedback-close-dialog'};if($context-eq'flyout'){Invoke-Button 'feedback-hide-flyout'}
     }
-    [CapyWindowApi]::PostMessage($window,0x10,[UIntPtr]::Zero,[IntPtr]::Zero)|Out-Null
+    $closePattern.Close()
     if(!$owned.WaitForExit(8000)){throw 'Feedback fixture failed to close normally'}
     if($owned.ExitCode-ne0){throw "Feedback fixture exited $($owned.ExitCode)"}
     if((Get-Item -LiteralPath (Join-Path $run 'stderr.log')).Length){throw 'Feedback fixture wrote stderr'}
