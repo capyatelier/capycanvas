@@ -134,7 +134,7 @@ Panel sizing uses transient keyed measurements in `UiSession` and
 `LayoutResolveInput`. Resolved layouts publish `measurement_requests`: separate
 Rust-issued identities for a panel's tab and body, the requested logical width,
 and whether matching measurements exist. Tab widths are independent of body
-widths. Body facts are selected by content identity, requested width, split mode
+widths. Body facts are selected by content identity, requested width
 and host metric context; the report also records the width actually measured.
 Changing workspaces preserves this bounded cache without copying outgoing
 unkeyed heights into the destination. Neither keys nor measurements are saved
