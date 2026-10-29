@@ -6,13 +6,16 @@ extension XCTestCase {
     }
 
     @MainActor func checkNativeDrawingTabs(in app: XCUIApplication, theme: String = "light") throws {
-        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"\#(theme)"},{"type":"customize","action":{"type":"insert_tools","panel":"commands","before":null}},{"type":"customize","action":{"type":"picker_select","control":{"kind":"command","command":"drawings"},"selected":true}},{"type":"customize","action":{"type":"confirm_tools"}}]"#
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"\#(theme)"},{"type":"workspace_manager","command":{"type":"switch","id":"builtin:workspace:illustrator"}},{"type":"customize","action":{"type":"insert_tools","panel":"commands","before":null}},{"type":"customize","action":{"type":"picker_select","control":{"kind":"command","command":"drawings"},"selected":true}},{"type":"customize","action":{"type":"confirm_tools"}}]"#
         app.launch(); capturePaintEditor(in: app, theme: theme)
         func command(_ label: String) {
             workspaceActivate(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "toolbar-tile-commands-", label)).firstMatch)
         }
         command("New…")
         createNewDrawing(width: "2048", height: "1536", depth: 3, in: app)
+        let canvas = app.descendants(matching: .any)["canvas"].firstMatch
+        expectation(for: NSPredicate(format: "value == %@", "Canvas ready"), evaluatedWith: canvas)
+        waitForExpectations(timeout: 60)
         func drawings() {
             command("Drawings…")
             XCTAssertTrue(app.buttons["Done"].firstMatch.waitForExistence(timeout: 15))
