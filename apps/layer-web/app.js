@@ -1076,6 +1076,14 @@ function startTabSlide(drag) {
   const overlay = element("div", "tab-slide-overlay");
   Object.assign(overlay.style, { left: `${clip.x}px`, top: `${clip.y}px`,
     width: `${clip.width}px`, height: `${clip.height}px` });
+  const owner = drag.node.closest('.panel-preview,.content-drawer');
+  if (owner) {
+    const bounds = owner.getBoundingClientRect(), style = getComputedStyle(owner);
+    if (Math.abs(bounds.left - clip.x) < 1 && Math.abs(bounds.top - clip.y) < 1)
+      overlay.style.borderTopLeftRadius = style.borderTopLeftRadius;
+    if (Math.abs(bounds.right - clip.x - clip.width) < 1 && Math.abs(bounds.top - clip.y) < 1)
+      overlay.style.borderTopRightRadius = style.borderTopRightRadius;
+  }
   overlay.setAttribute("aria-hidden", "true"); overlay.inert = true;
   // Freeze insertion geometry; only these noninteractive copies move.
   const tabs = grabbed.map(({ source, hit }) => {

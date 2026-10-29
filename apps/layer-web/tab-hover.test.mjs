@@ -67,6 +67,38 @@ export async function checkTabSurfaceCoverage({call,evaluate,settle}) {
   } finally { await evaluate("(async()=>{const root=document.querySelector('#tab-surface-fixture');if(root){(await import('./workspace-chrome.js')).releaseTabSurfaces(root);root.remove()}})()"); }
 }
 
+export async function checkTabDragCorner({call,evaluate,settle}) {
+  const saved=await evaluate('layerApp.state().workspace'),themeSaved=await evaluate('document.body.dataset.theme'),bodyStyle=await evaluate('document.body.getAttribute("style")');
+  const fixture=structuredClone(saved),panels=['brushes','sizes','layers','properties'];
+  Object.assign(fixture.layout,{bands:[{id:40,edge:'left',extent:280,root:{kind:'tabs',id:41,panels,active:'sizes',tab_style:'icon'}}],floating:[],collapsed:[],column_scroll:[],fit_tab_groups:[],fit_height_groups:[],column_stacks:[],next_id:Math.max(42,fixture.layout.next_id)});
+  fixture.zen_mode=false;
+  const send=async action=>{await evaluate(`layerApp.dispatch(${JSON.stringify(action)})`);await settle();};
+  let down=false,point;
+  const input=async(type,p=point)=>{point=p;await call('Input.dispatchMouseEvent',{type:{down:'mousePressed',move:'mouseMoved',up:'mouseReleased'}[type],...p,button:'left',buttons:type==='up'?0:1,clickCount:1});down=type!=='up';};
+  const sample=async clip=>{
+    const shot=(await call('Page.captureScreenshot',{format:'png',clip:{x:clip.x,y:clip.y,width:40,height:40,scale:1}})).data;
+    return evaluate(`(async()=>{const image=new Image();image.src='data:image/png;base64,${shot}';await image.decode();const canvas=new OffscreenCanvas(image.width,image.height),context=canvas.getContext('2d',{willReadFrequently:true});context.drawImage(image,0,0);const x=Math.floor((1.5+${clip.groupX}-${clip.x})*image.width/40),y=Math.floor((1.5+${clip.groupY}-${clip.y})*image.height/40);return Array.from(context.getImageData(x,y,1,1).data.slice(0,3))})()`);
+  };
+  try {
+    for(const theme of ['light','dark'])for(const [panel,dx] of [['sizes',36],['layers',-36]]){
+      await send({type:'restore_workspace',workspace:fixture});await send({type:'set_theme',theme});
+      const geometry=await evaluate(`(()=>{const workspace=document.querySelector('#workspace'),group=document.querySelector('.dock-group[data-group="41"]'),tab=group.querySelector('.dock-tab[data-panel="${panel}"]'),g=group.getBoundingClientRect(),w=workspace.getBoundingClientRect(),t=tab.getBoundingClientRect(),backdrop=document.createElement('div');Object.assign(backdrop.style,{position:'absolute',left:g.x-w.x+'px',top:g.y-w.y+'px',width:g.width+'px',height:g.height+'px',background:'rgb(255,0,255)',zIndex:'0',pointerEvents:'none'});backdrop.id='tab-drag-corner-backdrop';workspace.append(backdrop);group.style.boxShadow='none';document.body.style.setProperty('--glass-strip','rgb(40,40,40)');document.body.style.setProperty('--glass-panel','rgb(80,80,80)');return{groupX:g.x,groupY:g.y,x:Math.floor(g.x),y:Math.floor(g.y),start:{x:t.x+t.width/2,y:t.y+t.height/2}}})()`);
+      await settle();
+      const before=await sample(geometry);
+      assert.ok(before[0]>200&&before[1]<30&&before[2]>200,`${theme} ${panel}: the rounded corner exposes the backdrop: ${before}`);
+      await input('down',geometry.start);await input('move',{x:geometry.start.x+dx,y:geometry.start.y});await settle();
+      assert.equal(await evaluate("document.querySelectorAll('.tab-slide-overlay').length"),1,`${theme} ${panel}: tab slide starts`);
+      const during=await sample(geometry);
+      assert.deepEqual(during,before,`${theme} ${panel}: dragging preserves the group upper-left corner`);
+      await input('up');await evaluate("document.querySelector('#tab-drag-corner-backdrop')?.remove()");
+    }
+  } finally {
+    if(down)await input('up');
+    await evaluate(`(()=>{document.querySelector('#tab-drag-corner-backdrop')?.remove();const style=${JSON.stringify(bodyStyle)};if(style===null)document.body.removeAttribute('style');else document.body.setAttribute('style',style)})()`);
+    await send({type:'restore_workspace',workspace:saved});await send({type:'set_theme',theme:themeSaved});
+  }
+}
+
 export async function checkTabHoverContours({call,evaluate,settle}) {
   await checkTabSurfaceCoverage({call,evaluate,settle});
   const dir='artifacts/panel-tab-hover/web';await mkdir(dir,{recursive:true});

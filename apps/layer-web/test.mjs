@@ -133,7 +133,7 @@ import { checkCustomization, checkWorkspace, checkTabStyles, checkToolbarManager
 import { checkWorkspaceMotion } from "./workspace-motion.test.mjs";
 import { checkWorkspaceResize, checkWorkspaceConstraints } from "./workspace-resize.test.mjs";
 import { checkWorkspaceRendering } from "./workspace-rendering.test.mjs";
-import {checkTabSurfaceCoverage} from './tab-hover.test.mjs';
+import {checkTabSurfaceCoverage,checkTabDragCorner} from './tab-hover.test.mjs';
 
 const packageHost = process.argv.includes("--package") ? await servePackage() : null;
 
@@ -425,7 +425,7 @@ try {
     [process.argv.includes("--paper-library"), () => checkPaperLibrary({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--layers"), () => checkLayers({ call, evaluate, settle }), checkErrors],
     [process.argv.includes("--toolbar-manager"), () => checkToolbarManager({ call, evaluate, settle }), checkErrors],
-    [process.argv.includes('--tab-surfaces'), async()=>{for(const deviceScaleFactor of [1,2]){await call('Emulation.setDeviceMetricsOverride',{width:1440,height:1000,deviceScaleFactor,mobile:false});await checkTabSurfaceCoverage({call,evaluate,settle});}}, checkErrors],
+    [process.argv.includes('--tab-surfaces'), async()=>{for(const deviceScaleFactor of [1,2]){await call('Emulation.setDeviceMetricsOverride',{width:1440,height:1000,deviceScaleFactor,mobile:false});await checkTabSurfaceCoverage({call,evaluate,settle});await checkTabDragCorner({call,evaluate,settle});}}, checkErrors],
     [process.argv.includes("--tab-styles"), () => checkTabStyles({ call, evaluate, settle }), checkErrors],
     [process.argv.includes("--settings-audit"), () => checkSettingsParity({ call, evaluate, settle }), checkErrors],
     [process.argv.includes("--workspace-constraints"), () => checkWorkspaceConstraints({call,evaluate,settle,reload}), checkErrors],
