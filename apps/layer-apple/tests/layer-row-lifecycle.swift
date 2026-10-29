@@ -107,6 +107,29 @@ import QuartzCore
         try require(order(store) == expected && store.failure == nil, "A late release after remount cannot commit")
         note("PASS platform \(platform): active source removal/rename, late release, deletion Undo and list remount cancellation")
 
+        let immediateInitial = order(store), immediateFirst = immediateInitial[0]
+        let next = immediateInitial[1], nextFrame = model.frames[next]!.row
+        let immediateStart = body(immediateFirst)
+        let immediateEnd = CGPoint(x: immediateStart.x, y: nextFrame.maxY - 2)
+        guard let released = model.source(at: immediateStart) else { throw HostFailure(message: "Immediate-drop source was not measured") }
+        model.contact.prepare(released, device: .mouse, origin: immediateStart)
+        try require(model.contact.move(to: immediateEnd), "Immediate-drop contact must start dragging")
+        await barrier(store)
+        guard let immediateHint = model.drag, let immediateTarget = immediateHint.target,
+              let immediatePosition = immediateHint.position else { throw HostFailure(message: "Immediate-drop feedback must accept the destination") }
+        var immediateOrder = immediateInitial.filter { $0 != immediateFirst }
+        immediateOrder.insert(immediateFirst, at: immediateOrder.firstIndex(of: immediateTarget)! + (immediatePosition == "below" ? 1 : 0))
+        model.contact.release(at: immediateEnd)
+        guard let following = model.source(at: immediateStart) else { throw HostFailure(message: "The following row press was not admitted") }
+        model.contact.prepare(following, device: .mouse, origin: immediateStart)
+        await barrier(store); await barrier(store)
+        try require(order(store) == immediateOrder && store.failure == nil,
+            "A new row press before the final drop reply must preserve the completed reorder")
+        model.contact.cancel()
+        try await edit(store, ["type": "invoke", "command": "undo"])
+        try require(order(store) == immediateInitial, "The completed drop before a new press must add exactly one Undo entry")
+        note("PASS platform \(platform): completed row drop survives an immediate following press and one Undo restores order")
+
         // New documents can reuse numeric layer IDs. Capture must also retain
         // document identity across the reset.
         let reused = initial[initial.count - 2]
@@ -170,8 +193,13 @@ import QuartzCore
             let end = CGPoint(x: source.midX, y: destination.minY + destination.height * fraction)
             number += 1; try event(.leftMouseDown, at: start, marker: marker, number: number); try await drain(0.02)
             number += 1; try event(.leftMouseDragged, at: end, marker: marker, number: number); try await drain()
-            try await wait("Native hierarchy drag must reach its measured target") {
-                model.contact.dragging && model.drag?.hit?.target == target
+            if row(id)["locked"].bool {
+                try require(!accepted && model.contact.target?.canDrag == false && !model.contact.dragging,
+                    "A locked layer body must reject native pickup")
+            } else {
+                try await wait("Native hierarchy drag must reach its measured target") {
+                    model.contact.dragging && model.drag?.hit?.target == target
+                }
             }
             await barrier(store)
             try require(accepted ? model.drag?.target == (feedbackTarget ?? target) && model.drag?.position == position

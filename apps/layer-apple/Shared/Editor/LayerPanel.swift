@@ -86,7 +86,7 @@ struct LayerPanel: View {
                 if !simple && visible("layer_actions") { footer.modifier(PanelBodyMeasurement(panel: "layers", part: "footer")) }
             }
         }
-            .onAppear { interaction.store = store }
+            .onAppear { interaction.store = store; interaction.scrollPosition = scrollPosition }
             .onChange(of: drawerPagePosition) { before, next in
                 if before == 0 && next != 0 { retainedOffset = scrollPosition.offset }
                 if next == 0, let offset = retainedOffset { scrollPosition.scrollTo(y: offset); retainedOffset = nil }

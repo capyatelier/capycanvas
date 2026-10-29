@@ -395,7 +395,8 @@ final class ReorderInputView: UIView, UIGestureRecognizerDelegate, UIPointerInte
         updateViewport()
         var scrolled = false
         if let (scroll, next) = reorderScrollTarget(at: location()) {
-            scroll.setContentOffset(next, animated: false)
+            if let position = model?.scrollPosition { position.scrollTo(y: next.y + scroll.adjustedContentInset.top) }
+            else { scroll.setContentOffset(next, animated: false) }
             scrolled = true
         }
         _ = moveReorder(location(), force: scrolled)

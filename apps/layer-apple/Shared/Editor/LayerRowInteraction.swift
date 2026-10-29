@@ -100,6 +100,7 @@ enum LayerMenuSource: Equatable { case row(UInt64), footer }
         var effectOwner: UInt64?
     }
     weak var store: EditorStore?
+    weak var scrollPosition: EditorScrollPosition?
     let contact = ReorderContact()
     let swipeOwner = UUID()
     private var swipeOrigin = CGPoint.zero
@@ -219,10 +220,10 @@ enum LayerMenuSource: Equatable { case row(UInt64), footer }
         let hit = hit(point, excluding: drag.id), id = drag.id
         cancelDrop()
         guard let hit else { return }
-        let request = dropRequest, currentEpoch = epoch
+        let currentEpoch = epoch
         store.query(["type": "layer_drop", "epoch": currentEpoch, "id": id, "target": hit.target,
             "fraction": hit.fraction, "surface": hit.surface]) { [weak self] result in
-            guard let self, dropRequest == request, epoch == currentEpoch, result["epoch"].uint == currentEpoch,
+            guard let self, epoch == currentEpoch, result["epoch"].uint == currentEpoch,
                   !result["position"].isNull, !result["target"].isNull,
                   layers.contains(where: { $0["id"].uint == id && $0["can_drop_below"].bool }),
                   layers.contains(where: { $0["id"].uint == hit.target }) else { return }

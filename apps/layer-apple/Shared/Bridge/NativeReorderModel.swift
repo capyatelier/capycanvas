@@ -179,6 +179,7 @@ struct EdgeReachState: Equatable {
     func moveSwipe(to point: CGPoint)
     func finishSwipe(cancelled: Bool)
     var edgeScroll: ReorderEdgeScroll? { get }
+    var scrollPosition: EditorScrollPosition? { get }
 }
 
 @MainActor protocol NativeLayerTouchModel: NativeReorderModel {
@@ -210,6 +211,7 @@ extension NativeReorderModel {
     func moveSwipe(to point: CGPoint) {}
     func finishSwipe(cancelled: Bool) {}
     var edgeScroll: ReorderEdgeScroll? { nil }
+    var scrollPosition: EditorScrollPosition? { nil }
     func recognizeHold() { if !swiping { contact.recognizeHold() } }
     func nativeInputDetached() {
         // Native recognizers are already detached. SwiftUI can still own its

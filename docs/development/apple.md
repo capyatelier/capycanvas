@@ -220,7 +220,9 @@ changing the bridge, menus, settings, publications or layers:
   text fields with priority key commands. Assign fonts and placeholders only when
   they change.
 - **Layers.** Drop previews and releases query `layer_drop`; reject stale
-  replies and commit the release through the shared `Drop`. Object layers use
+  replies and commit the release through the shared `Drop`. Keep released drops
+  independent of hover cancellation and route native edge scrolling through the
+  positioned list's scroll owner. Object layers use
   ordinary rows and shared actions ([image objects](../ui/image-objects.md)).
 
 ## Tool bubbles

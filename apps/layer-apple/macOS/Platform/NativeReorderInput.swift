@@ -216,9 +216,11 @@ final class ReorderInputView: NSView, NSGestureRecognizerDelegate {
                 let clip = scroll.contentView
                 let limit = max(0, (scroll.documentView?.bounds.height ?? 0) - clip.bounds.height)
                 let previous = clip.bounds.origin
-                clip.scroll(to: CGPoint(x: clip.bounds.minX, y: max(0, min(limit, clip.bounds.minY + delta))))
+                let target = max(0, min(limit, clip.bounds.minY + delta))
+                if let position = model.scrollPosition { position.scrollTo(y: target) }
+                else { clip.scroll(to: CGPoint(x: clip.bounds.minX, y: target)); scroll.reflectScrolledClipView(clip) }
                 scrolled = previous != clip.bounds.origin
-                scroll.reflectScrolledClipView(clip); updateViewport()
+                updateViewport()
             }
         }
         _ = move(pan.location(in: self), force: scrolled)
