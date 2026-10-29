@@ -1,7 +1,10 @@
-param([Parameter(Mandatory)][int]$ProcessId,
-      [ValidateSet('Stroke','Undo','Redo','Resize','Close','Test stroke','Test pan','Test backlog')][string]$Action='Stroke',
-      [int]$X=400,[int]$Y=400,[int]$Width=1500,[int]$Height=1000,[switch]$DiscardUnsaved,[string]$StateDirectory,[long]$WindowHandle)
+param([int]$ProcessId,
+      [string]$Action='Stroke',
+      [int]$X=400,[int]$Y=400,[int]$Width=1500,[int]$Height=1000,[switch]$DiscardUnsaved,[string]$StateDirectory,[long]$WindowHandle,[string]$Executable,[ValidateSet('dark','light')][string]$Theme='dark')
 $ErrorActionPreference='Stop'
+if($Action -notin @('Stroke','Undo','Redo','Resize','Close','Test stroke','Test pan','Test backlog')){throw "Invalid window action: $Action"}
+if($Executable){& (Join-Path $PSScriptRoot 'exercise-header.ps1') -Executable $Executable -Theme $Theme -FullscreenOnly;return}
+if(!$ProcessId){throw 'Supply an executable or an owned process ID'}
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
 Add-Type -TypeDefinition @'

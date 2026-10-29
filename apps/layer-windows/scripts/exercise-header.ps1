@@ -1,10 +1,11 @@
-﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('mouse','pen','touch')][string]$Device='mouse',[ValidateSet('paint','sketch','photo')][string]$Workspace='paint',[switch]$Catalog,[ValidateSet('dark','light')][string]$Theme='dark',[ValidateSet('full','catalog-only','catalog-only-light','background','options','options-light','options-pen','options-touch','menus','menus-light','zen','zen-workspace')][string]$Journey='full',[switch]$FullscreenOnly,[switch]$FullscreenBaseline)
+﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('mouse','pen','touch')][string]$Device='mouse',[ValidateSet('paint','sketch','photo')][string]$Workspace='paint',[switch]$Catalog,[ValidateSet('dark','light')][string]$Theme='dark',[ValidateSet('full','catalog-only','catalog-only-light','background','options','options-light','options-pen','options-touch','menus','menus-light','zen','zen-workspace','parity','parity-light')][string]$Journey='full',[switch]$FullscreenOnly,[switch]$FullscreenBaseline)
 $ErrorActionPreference='Stop'
 if($FullscreenBaseline){$FullscreenOnly=$true}
 $catalogJourney=$Journey -in @('catalog-only','catalog-only-light')
 if($Journey -eq 'catalog-only-light'){$Theme='light'}
 if($Journey -eq 'options-light'){$Theme='light'}
 if($Journey -eq 'menus-light'){$Theme='light'}
+if($Journey -eq 'parity-light'){$Theme='light'}
 if($Journey -eq 'options-pen'){$Device='pen'}
 if($Journey -eq 'options-touch'){$Device='touch'}
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
@@ -338,6 +339,27 @@ function Check-CompactWorkspace {
     Check-Geometry
 }
 
+function Capture-HeaderParity {
+    $initial=HeaderJson
+    $captureTransparency=(Model).state.settings.transparency
+    foreach($captureGlass in @('off','low')){
+        Set-CapyTransparency $captureGlass
+        Edit-Header
+        $scale=[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.
+        $metrics=@()
+        foreach($id in @('header-component-tools','header-edit-done','header-edit-cancel')){
+            $box=(Control $id -Arranged).Current.BoundingRectangle
+            if([Math]::Abs($box.Height/$scale-32) -gt 1){throw "$id is not 32 DIP high"}
+            $metrics+=@{id=$id;width_dip=$box.Width/$scale;height_dip=$box.Height/$scale}
+        }
+        $metrics|ConvertTo-Json|Set-Content (Join-Path $run "header-metrics-$Theme-glass-$captureGlass.json")
+        Capture ("header-customize-$Theme-glass-$captureGlass") -WithModel -Composed
+        Invoke 'header-edit-cancel'
+        Wait-Until {!(Model).header.editing -and (HeaderJson) -eq $initial} 'Title bar capture did not cancel its edit'
+    }
+    Set-CapyTransparency $captureTransparency
+}
+
 function Edit-Header {
     WindowCommand 'customize_workspace_ui'
     Wait-Until {(Model).header.editing} 'Titlebar editor did not open'
@@ -492,7 +514,8 @@ function Check-Fullscreen([switch]$WindowOnly) {
 }
 function Check-FullscreenWindow {
     Add-Type -AssemblyName System.Drawing
-    Add-Type -ReferencedAssemblies System.Drawing -TypeDefinition @'
+    $references=@(Get-ChildItem -LiteralPath (Join-Path $PSHOME 'ref') -Filter '*.dll' | ForEach-Object FullName)+@([System.Drawing.Bitmap].Assembly.Location)+@((Join-Path $PSHOME 'System.Private.Windows.Core.dll'),(Join-Path $PSHOME 'System.Private.Windows.GdiPlus.dll'))
+    Add-Type -ReferencedAssemblies ($references | Select-Object -Unique) -TypeDefinition @'
 using System;using System.Runtime.InteropServices;using System.Drawing;using System.Threading;using System.Collections.Generic;using System.Diagnostics;using System.IO;
 public static class CapyFullscreenProbe {
  [StructLayout(LayoutKind.Sequential)] public struct Rect {public int left,top,right,bottom;public int[] Values(){return new[]{left,top,right,bottom};}}
@@ -891,6 +914,12 @@ try {
     $env:CAPY_STORAGE_DIR=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1'
     [IO.File]::WriteAllText((Settings-File),(@{theme=$Theme}|ConvertTo-Json))
     Start-Review 'initial';Capture 'normal'
+    if($Journey -in @('parity','parity-light')){
+        Capture-HeaderParity
+        & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Close -DiscardUnsaved
+        if((Get-Item -LiteralPath $stderr).Length){throw 'Native stderr requires inspection'}
+        return
+    }
     if($FullscreenOnly){
         Check-FullscreenWindow
         & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Close -DiscardUnsaved
@@ -983,6 +1012,7 @@ try {
     Invoke 'header-edit-cancel'
     Wait-Until {!(Model).header.editing -and (HeaderJson) -eq $initial} 'Cancel did not restore the initial header'
     if((Model).state.workspace.layout.canvas_info.visible -ne $footer){throw 'Cancel changed footer visibility'}
+    Capture-HeaderParity
     Edit-Header;Drop-Component;Check-ClockCaption;$tools=Add-Tools;Capture 'customized'
     Invoke 'header-edit-done'
     Wait-Until {!(Model).header.editing} 'Done did not close titlebar editing'

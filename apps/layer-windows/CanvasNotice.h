@@ -149,7 +149,7 @@ struct CanvasNotice:std::enable_shared_from_this<CanvasNotice>{
         Canvas::SetLeft(frame,left);Canvas::SetTop(frame,top);
         std::array<float,4> radii{SurfaceRadius,SurfaceRadius,SurfaceRadius,SurfaceRadius};
         surface.Data(squircleRectangle(width,height,radii));
-        shadow.Shape(squircleRectangle(width,height,radii),width,height,12,2,.16f);shadow.Cut(radii);
+        shadow.Shape(squircleRectangle(width,height,radii),width,height,8,2,.16f);shadow.Cut(radii);
         shadow.Layout({float(left),float(top),width,height},899,true);
         frame.Opacity(1);frame.IsHitTestVisible(true);
     }

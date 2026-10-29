@@ -1,5 +1,6 @@
-param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light','invert-dark','invert-light','tail-dark','tail-light')][string]$Theme='dark')
+﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light','invert-dark','invert-light','tail-dark','tail-light','parity','parity-light')][string]$Theme='dark')
 $ErrorActionPreference='Stop'
+$parityCapture=$Theme -in @('parity','parity-light');if($parityCapture){$Theme=if($Theme -eq 'parity-light'){'light'}else{'dark'}}
 $Theme=$Theme.ToLowerInvariant();$invertOnly=$Theme.StartsWith('invert-');if($invertOnly){$Theme=$Theme.Substring(7)}
 $tailOnly=$Theme.StartsWith('tail-');if($tailOnly){$Theme=$Theme.Substring(5)}
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
@@ -169,6 +170,38 @@ function Subtool([string]$Command){
   } "$Command did not activate its requested shared tool"
  }finally{$toolChoices|ConvertTo-Json -Depth 12|Set-Content -LiteralPath (Join-Path $run 'tool-choices.json')}
 }
+function Capture-CanvasParity([string]$Context){
+ $captureTransparency=(Model).state.settings.transparency
+ foreach($captureGlass in @('off','low')){
+  Set-CapyTransparency $captureGlass
+  Check-BarGeometry $Context
+  $scale=[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.
+  $metrics=@()
+  foreach($item in @((Model).state.canvas_bar.items)+@((Model).state.canvas_bar.completion)){
+   if($item.option.Choice){
+    $choice=$item.option.Choice
+    for($i=0;$i -lt @($choice.items).Count;$i++){
+     $id="canvas-bar-choice-$($choice.id)-$i"
+     $box=(Control $id -Arranged).Current.BoundingRectangle
+     if([Math]::Abs($box.Height/$scale-26) -gt 1){throw "$id segment is not 26 DIP high"}
+     $metrics+=@{id=$id;width_dip=$box.Width/$scale;height_dip=$box.Height/$scale}
+    }
+    continue
+   }
+   $id=if($item.menu){"canvas-bar-menu-$($item.menu)"}elseif($item.option.Action){"canvas-bar-$($item.option.Action.state.id)"}else{$null}
+   if(!$id){continue};$control=Find $id;if(!$control -or $control.Current.IsOffscreen){continue}
+   $box=$control.Current.BoundingRectangle
+   $metrics+=@{id=$id;width_dip=$box.Width/$scale;height_dip=$box.Height/$scale;icon_only=[bool]$item.icon_only}
+   if($item.menu){
+    $images=$control.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::Image))
+    foreach($image in $images){$bounds=$image.Current.BoundingRectangle;if($image.Current.IsOffscreen -or $bounds.IsEmpty){continue};if([Math]::Abs($bounds.Width/$scale-16) -gt 1 -or [Math]::Abs($bounds.Height/$scale-16) -gt 1){throw "$id menu glyph is not 16 DIP"};$metrics+=@{id=$id+'-glyph';width_dip=$bounds.Width/$scale;height_dip=$bounds.Height/$scale}}
+   }
+  }
+  $metrics|ConvertTo-Json|Set-Content (Join-Path $run "$Context-metrics-$Theme-glass-$captureGlass.json")
+  Capture ("$Context-$Theme-glass-$captureGlass") -WithModel -Composed
+ }
+ Set-CapyTransparency $captureTransparency
+}
 function Check-BarGeometry([string]$Context){
  $scale=[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.
  $owner=Control 'canvas-action-bar' -Arranged
@@ -227,7 +260,7 @@ try {
  Wait-Until {$native.window=Owned-DrawingWindow $review;$null -ne $native.window} 'Review did not start' 45
  $root=$native.window.Root;$drawingWindow=$native.window.Handle
  $invokeTrace.Start($root,[int]$review.Id)
- Use-PaintWorkspace
+ if(!$parityCapture){Use-PaintWorkspace}
  Wait-Until {(Model).brush_ready -and (Model).windows_workspace.ready -and !(Model).windows_workspace.busy -and (Model).state.theme -eq $Theme} 'Canvas bar review did not start in the requested theme'
  $checks.initial_theme=$Theme
  $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)
@@ -254,6 +287,17 @@ try {
  if($bar.Top -lt $selection[1][1]){throw "The selection bar is not below the selection: $($bar.Top) < $($selection[1][1])"}
  if([Math]::Abs(($bar.X+$bar.Width/2)-$cx) -gt 40){throw 'The selection bar is not centred under the selection'}
  $paint=Paint
+ if($parityCapture){
+  Capture-CanvasParity 'selection'
+  Tap 'canvas-bar-scale_rotate' 'mouse'
+  Wait-Until {(Kind) -eq 'transform' -and (Bar)} 'Transform did not open for parity capture'
+  $null=Assert-ModeProjection (Model) $true 0
+  Capture-CanvasParity 'transform-segments'
+  Tap 'canvas-bar-cancel_transform' 'mouse'
+  Wait-Until {(Kind) -ne 'transform'} 'Parity transform did not cancel'
+  Close-CanvasReview
+  return
+ }
  if(!$tailOnly){
  $glass=@{snapshot=$null;key='';stable=0}
  Wait-Until {$m=Model;$key=($m.windows_glass|Select-Object regions,panel_revision|ConvertTo-Json -Compress);if($key -ceq $glass.key){$glass.stable++}else{$glass.key=$key;$glass.stable=0};$glass.snapshot=$m;$glass.stable -ge 3} 'Selection bar glass did not settle' 5
@@ -267,6 +311,7 @@ try {
   Wait-Until {$m=Model;(Glass-State $m) -ceq $glassState -and ($m.state.canvas_bar.anchor -join ',') -ceq $glassAnchor -and [int]$m.windows_glass.regions -eq $visibleGlass} 'Showing the selection bar did not restore exactly its glass region and selection' 5
   $glassProbe.restored=(Model).windows_glass
  }finally{$glassProbe.current=(Model).windows_glass;$glassProbe|ConvertTo-Json -Depth 6|Set-Content (Join-Path $run 'selection-bar-glass-registration.json')}
+ Capture-CanvasParity 'selection'
  Capture ('selection-'+$Theme)
  $checks.selection_below_object_with_glass='passed'
 
@@ -407,6 +452,7 @@ try {
  $mode=@($choices|Where-Object segmented)[0]
  if(!$mode){throw 'The transform bar has no segmented mode choice'}
  $null=Assert-ModeProjection (Model) $true 0
+ Capture-CanvasParity 'transform-segments'
  $lockBefore=[bool]@((Model).state.commands|Where-Object id -eq 'transform_uniform')[0].selected
  if(!$lockBefore){Tap 'canvas-bar-transform_uniform' 'mouse';Wait-Until {@((Model).state.commands|Where-Object id -eq 'transform_uniform')[0].selected} 'Keep proportions did not turn on' 5}
  Check-Lock $true

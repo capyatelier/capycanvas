@@ -224,7 +224,8 @@ function New-WorkspaceButton {
     if(Find 'workspace-manager-search' -Visible){throw 'Workspace manager still exposes Search'}
     $cancel=(Control 'Cancel' -Name -Within (Control 'workspace-manager') -Type ([System.Windows.Automation.ControlType]::Button) -Arranged).Current.BoundingRectangle
     $apply=(Control (Manager).primary -Name -Within (Control 'workspace-manager') -Type ([System.Windows.Automation.ControlType]::Button) -Arranged).Current.BoundingRectangle
-    if($cancel.Right -gt $apply.Left -or $cancel.Width -ge $apply.Width*.9 -or [Math]::Abs($apply.Right-$items.Right) -gt 4*$scale -or [Math]::Abs($cancel.Height-34*$scale) -gt 2 -or [Math]::Abs($apply.Height-34*$scale) -gt 2){throw 'Manager footer is not natural-width Cancel then Switch aligned right at34 DIP'}
+    $contentRight=(Control 'workspace-manager-title' -Arranged).Current.BoundingRectangle.Right
+    if($cancel.Right -gt $apply.Left -or $cancel.Width -ge $apply.Width*.9 -or [Math]::Abs($apply.Right-$contentRight) -gt 4*$scale -or [Math]::Abs($cancel.Height-34*$scale) -gt 2 -or [Math]::Abs($apply.Height-34*$scale) -gt 2){throw 'Manager footer is not natural-width Cancel then Switch aligned to the dialog body at34 DIP'}
     foreach($row in (Manager).rows){
         if(Find ('workspace-manager-options-'+$row.id) -Visible){throw 'Workspace row still has a dots button'}
         $grip=(Control ('workspace-manager-grip-'+$row.id) -Arranged).Current.BoundingRectangle

@@ -46,7 +46,7 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
     TextBox search,name,description;
     ComboBox choices;
     ListView list;
-    Grid listSurface;RichEditBox nameLine;TextBlock nameText;bool nameAlignmentPending=true;
+    Grid listSurface;Border listRing;RichEditBox nameLine;TextBlock nameText;bool nameAlignmentPending=true;
     std::unique_ptr<WorkspaceRowDrag> rowDrag;
     uint64_t selectionSerial=0;
     struct Row {
@@ -167,7 +167,7 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
         toolbarActions.Content(box_value(copy(L"header",L"toolbar_actions")));toolbarActions.HorizontalAlignment(HorizontalAlignment::Left);
         buttonColors(copyData,thisWorkspace);buttonColors(copyData,savedToolbars);buttonColors(copyData,toolbarActions);buttonColors(copyData,retry);
         AutomationProperties::SetAutomationId(toolbarActions,L"workspace-toolbar-actions");toolbarActions.Flyout(toolbarMenu);
-        title.TextWrapping(TextWrapping::Wrap);heading.Children().Append(title);
+        title.TextWrapping(TextWrapping::Wrap);AutomationProperties::SetAutomationId(title,L"workspace-manager-title");heading.Children().Append(title);
         for(auto control:{create,removeSelected,workspaceCancel,workspaceApply}){
             control.Background(clear());control.BorderThickness({0,0,0,0});control.CornerRadius(copyData->controlCorner());buttonColors(copyData,control,38);
         }
@@ -198,7 +198,7 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
         AutomationProperties::SetAutomationId(choices,L"workspace-manager-choice");
         retry.Content(box_value(copy(L"header",L"retry")));retry.HorizontalAlignment(HorizontalAlignment::Left);
         AutomationProperties::SetAutomationId(retry,L"workspace-manager-retry");
-        listSurface.BorderThickness({1,1,1,1});listSurface.BorderBrush(copyData->line(L"settings",L"card_ring"));listSurface.CornerRadius({12,12,12,12});listSurface.Children().Append(list);
+        listSurface.CornerRadius({12,12,12,12});listSurface.Children().Append(list);listRing.BorderThickness({1,1,1,1});listRing.BorderBrush(copyData->line(L"settings",L"card_ring"));listRing.CornerRadius({12,12,12,12});listRing.IsHitTestVisible(false);listSurface.Children().Append(listRing);
         for(auto const& metric:{nameLine.as<FrameworkElement>(),nameText.as<FrameworkElement>()}){
             metric.Opacity(0);metric.IsHitTestVisible(false);metric.MaxWidth(0);metric.HorizontalAlignment(HorizontalAlignment::Left);metric.VerticalAlignment(VerticalAlignment::Top);
             AutomationProperties::SetAccessibilityView(metric,Automation::Peers::AccessibilityView::Raw);listSurface.Children().Append(metric);

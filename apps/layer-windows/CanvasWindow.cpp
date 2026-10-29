@@ -110,7 +110,7 @@ void CapyLifecycle(char const* event) {
 CanvasWindow::CanvasWindow(std::function<void()> create,std::function<void(uint64_t)> close,
     std::function<void(uint64_t)> preferencesChanged,std::function<void()> deviceLoss)
     :windowId(window.AppWindow().Id().Value),
-     createWindow(std::move(create)),testDeviceLoss(std::move(deviceLoss)),onClosed(std::move(close)),workspacePreferencesChanged(std::move(preferencesChanged)) {
+     createWindow(std::move(create)),testDeviceLoss(std::move(deviceLoss)),onClosed(std::move(close)),workspacePreferencesChanged(std::move(preferencesChanged)),screenData(std::make_shared<CapyUi::WorkspaceData>()) {
     // HWND/WindowId can be reused after an earlier window closes. Invalidate
     // its old diagnostic model before publishing the new live-window manifest.
     if(GetEnvironmentVariableW(L"CAPY_TRACE_UI",nullptr,0))for(auto kind:{"ui-state","camera-state","presentation-state"})TraceState(kind,"{}");
@@ -273,9 +273,12 @@ void CanvasWindow::Open() {
     status.VerticalAlignment(VerticalAlignment::Bottom);
     status.Margin(Thickness{0,0,0,40});
     root.Children().Append(status);
+    screenChip=CapyUi::button(screenData,L"",[]{});screenChip.Padding({10,3,10,3});screenChip.CornerRadius({12*CapyUi::CornerFit,12*CapyUi::CornerFit,12*CapyUi::CornerFit,12*CapyUi::CornerFit});
+    screenTitle=CapyUi::label(screenData,L"");screenHeadline=CapyUi::label(screenData,L"",true);screenBody=CapyUi::label(screenData,L"");
     screenChip.HorizontalAlignment(HorizontalAlignment::Center);screenChip.VerticalAlignment(VerticalAlignment::Bottom);screenChip.Margin({0,0,0,76});screenChip.Visibility(Visibility::Collapsed);screenChip.IsTabStop(false);
     AutomationProperties::SetAutomationId(screenChip,L"screen-status");
-    StackPanel screenDetails;screenDetails.Width(312);screenDetails.Spacing(6);
+    screenClipped=CapyUi::compactCheck(screenData,box_value(L""));
+    StackPanel screenDetails;screenDetails.Width(340);screenDetails.Spacing(12);
     for(auto text:{screenTitle,screenHeadline,screenBody}){text.TextWrapping(TextWrapping::Wrap);screenDetails.Children().Append(text);}
     screenTitle.Opacity(.7);screenHeadline.FontWeight(Windows::UI::Text::FontWeights::SemiBold());screenDetails.Children().Append(screenClipped);screenPopup.Content(screenDetails);screenChip.Flyout(screenPopup);
     AutomationProperties::SetAutomationId(screenDetails,L"screen-details");AutomationProperties::SetAutomationId(screenHeadline,L"screen-details-headline");AutomationProperties::SetAutomationId(screenClipped,L"screen-show-clipped");
@@ -503,6 +506,7 @@ bool CanvasWindow::StartPrepared(CapyLaunch  prepared) {
         auto process=std::to_string(GetCurrentProcessId()),window=std::to_string(windowId);
         PublishPanelMetrics("panel-metrics-"+process+"-"+window+".json","{\"process_id\":"+process+",\"window_id\":"+window+",\"panel_metrics\":"+to_string(CapyUi::object(catalogView,L"panel_metrics").Stringify())+"}");
     }
+    screenData->catalog=catalogView;screenData->localization=localization;
     screenCopy=CapyUi::object(CapyUi::object(catalogView,L"native_copy"),L"color");
     screenFontSize=CapyUi::num(catalogView,L"text_size_pt",11)*4/3;
     workspace=std::make_unique<WorkspaceView>([weak=weak_from_this()](std::string json){
@@ -1851,18 +1855,20 @@ bool CanvasWindow::ApplyModel(Windows::Data::Json::JsonObject const& model,Nativ
 
 void CanvasWindow::ApplyScreen(Windows::Data::Json::JsonObject const& model){
     using namespace CapyUi;
+    screenData->adoptLocalization(model);screenData->state=object(model,L"state");screenData->refreshPalette();
+    screenChip.Background(headerSurface(screenData));buttonFeedback(screenChip,screenData->brush(L"text"),26,41);
     auto state=object(model,L"state"),screen=object(state,L"screen"),chip=object(screen,L"chip"),details=object(screen,L"details");
     auto catalog=object(object(model,L"localization"),L"catalog");auto updated=object(object(catalog,L"native_copy"),L"color");if(updated.Size())screenCopy=updated;if(catalog.Size())screenFontSize=num(catalog,L"text_size_pt",11)*4/3;
     auto key=screen.Stringify()+screenCopy.Stringify()+str(state,L"theme")+to_hstring(screenFontSize);if(screenKey==key)return;screenKey=key;
     auto colorCopy=screenCopy;screenChip.FontSize(screenFontSize);screenClipped.FontSize(screenFontSize);
-    for(auto text:{screenTitle,screenHeadline,screenBody})text.FontSize(screenFontSize);
+    for(auto text:{screenTitle,screenHeadline,screenBody})text.FontSize(screenFontSize);screenTitle.FontSize(screenFontSize/1.2);
     auto foreground=SolidColorBrush(color(str(object(state,L"palette"),L"text",L"#fafafb")));
     auto warning=SolidColorBrush(color(str(state,L"theme")==L"dark"?L"#e5a50a":L"#9c5700"));
     screenChip.Visibility(chip.Size()?Visibility::Visible:Visibility::Collapsed);
     if(!chip.Size()||!details.Size()){if(screenPopupOpen)screenPopup.Hide();return;}
-    StackPanel face;face.Orientation(Orientation::Horizontal);face.Spacing(6);
-    if(flag(chip,L"warning")){auto mark=icon(L"warning",str(state,L"theme"));face.Children().Append(mark);}
-    TextBlock label;label.Text(str(chip,L"label"));face.Children().Append(label);screenChip.Content(face);
+    StackPanel face;face.Orientation(Orientation::Horizontal);face.Spacing(4);
+    if(flag(chip,L"warning")){FontIcon mark;mark.FontFamily(FontFamily(L"Segoe MDL2 Assets"));mark.Glyph(L"\uE7BA");mark.FontSize(16);mark.Width(16);mark.Height(16);mark.Foreground(warning);mark.VerticalAlignment(VerticalAlignment::Center);face.Children().Append(mark);}
+    auto captionText=CapyUi::label(screenData,str(chip,L"label"),true);captionText.VerticalAlignment(VerticalAlignment::Center);face.Children().Append(captionText);screenChip.Content(face);
     auto caption=str(colorCopy,L"screen_details");AutomationProperties::SetName(screenChip,caption);ToolTipService::SetToolTip(screenChip,box_value(caption));
     screenTitle.Text(str(details,L"title"));screenHeadline.Text(str(details,L"headline"));screenHeadline.Foreground(flag(details,L"warning")?warning:foreground);
     screenBody.Text(str(details,L"body"));screenBody.Visibility(screenBody.Text().empty()?Visibility::Collapsed:Visibility::Visible);

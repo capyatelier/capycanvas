@@ -53,14 +53,6 @@ style), do not create a local copy in your files; wait for M4.
 constants in `NewDrawingDialog.cpp`, and fix detached number entries in
 `numberField`, not in NumberControl.
 
-**M2. Title bar, drawing tabs, status, zoom, canvas bar and notice**
-(`HeaderView`, `HeaderInput`, `HeaderStatus`, `DrawingTabs`, `ZoomReadout`,
-`CanvasActionBar`, `CanvasNotice`, the chrome parts of `CanvasWindow`):
-HEAD-4 to HEAD-21, HEAD-23, 24, 25, 27 (CHECK). HEAD-11 size choices use the
-segment helper, so land HEAD-11's surface, padding, shadow and chips now and
-its joined size row in M4.
-Leave for M4: HEAD-1, 2, 3, 22, 26 and the HEAD-11 size row *(A)*.
-
 **M3. New drawing, Size and Export dialogs, plus the shared Rust rules**
 (`NewDrawingDialog`, `SizeDialog`, `ExportForm`, `ExternalImages`,
 `DocumentView`, shared crates): HEAD-DLG-3, 6, 7, 12 to 15, 17 to 25, 26,
@@ -77,7 +69,7 @@ Leave for M4: HEAD-DLG-1, 2, 4, 5, 8, 9, 10, 11, 16, 28, 29, 32, 33 *(A)*.
 onto the helpers in one commit: bugs 2 and 13 (HEAD-1, PREF-7, with a zoomed
 capture; remove per-site centring offsets such as `alignNames`' shift maths),
 bug 11 and the prompt dropdown (PREF-1, 2), PREF-3 face, PREF-4, 8, 11, 16,
-28 face, 29, HEAD-2, 3, 11 size row, 22, 26, HEAD-DLG-1, 2, 4, 5, 8, 9, 10,
+28 face, 29, HEAD-2, 3, 8 opacity, 11 size row, 21 parent radius, 22, 26, 27, HEAD-DLG-1, 2, 4, 5, 8, 9, 10,
 11, 16, 28, 29, 32, 33. Then recheck every page of this plan, because P1
 changes every caption. If P1–P8 are not on `origin/main` when M3 is pushed,
 stop and report the M4 items as blocked on Agent A.
@@ -99,7 +91,7 @@ finish.
   - Preferences and workspaces: `header-settings`, `settings-storage`, `shortcut-page`, `shortcuts`,
     `manager`, `manager-focus`.
   - M2: `switcher`, `switcher-drag`, `header`, `header-placement`,
-    `canvas-bar`, `notice`, `zoom-readout`, `window`.
+    `canvas-bar`, `notice`, `zoom-readout`, `window`, `manager-focus`.
   - M3: `documents`, `size-dialogs`, and `localization:default` for the new text.
   - M4: all of the above, once, plus the full `localization` matrix if M4
     changes text.
@@ -399,113 +391,20 @@ Background facts used below:
 - GTK reference: one helper, `segment_buttons()` (`toolbar_components.rs:571`), plus the CSS rules `.selection-modes > button` / `:first-child` / `:last-child`.
 - Fix direction: add one `segmentRow(data, items, captions)` helper in UiControls.h that owns the joined radii (control radius on the outer corners, square joins), the fill (HEAD-2), the caption (HEAD-1) and the checked surface, and use it in the canvas bar, ToolView, ToolbarComponents and PressureCalibration.
 
-##### HEAD-4: Canvas bar dropdown arrow is 12px; GTK's MenuButton arrow is 16px
-- Class: METRIC   Confidence: LIKELY   Severity: low   Reported bug: none
-- Windows: `CanvasActionBar.h:89` `icon(L"chevron-down",data->theme(),12)`.
-- GTK reference: `canvas_bar.rs:357` `button.set_always_show_arrow(!tile)`. That is libadwaita's 16px `arrow` node, and the bar's images are forced to 16px (style.css:152 `.canvas-action-bar image { -gtk-icon-size: 16px; }`).
-- Fix direction: use the bar's `glyph` (16) for the chevron, or the shared toolbar `icon` size.
+##### HEAD-8: Exact disabled title-bar content opacity still needs the shared helper *(A)*
+- M2 keeps tile surfaces opaque and applies GTK sensitivity: editing and groups with variants stay enabled.
+- ButtonFeedback dims disabled content once at its existing 92/255 default. No glyph opacity is stacked on it.
+- In M4, use Agent A's per-control disabled-content opacity override with 0.45 for header tools, including Zen Capy.
 
-##### HEAD-5: Canvas bar and canvas notice shadows use blur 12; GTK `.dock-panel` uses 8
-- Class: METRIC   Confidence: LIKELY (assuming `WorkspaceShadow::Shape(...,blur,...)` maps to the CSS blur radius)   Severity: low   Reported bug: none
-- Windows: `CanvasActionBar.h:254` and `CanvasNotice.h:152` call `shadow.Shape(...,12,2,.16f)`. `PressureCalibration.h:170` uses `8,2,.16f` for the same `.dock-panel` surface.
-- GTK reference: style.css:137 `.dock-panel { box-shadow: 0 2px 8px alpha(black, .16) }`. Both GTK widgets are `.dock-panel` (`canvas_bar.rs:51`, `notice.rs:31`).
-- Fix direction: add a shared `DockPanelShadow{8,2,.16}` constant and use it on all three.
+##### HEAD-11: Header editor size choices still need joined segments *(A)*
+- Windows: `HeaderView.cpp` builds separate size buttons with full corners.
+- GTK uses one linked row with square interior joins.
+- Adopt Agent A's segment helper in M4.
 
-##### HEAD-6: The canvas bar value dropdown rebuilds its content on every state refresh
-- Class: ANIMATION-RETRIGGER (rebuild instead of update)   Confidence: CERTAIN   Severity: low   Reported bug: 1 (class)
-- Windows: `CanvasActionBar.h:164-167`. `update()` is called from `restore()` on every `Apply()` (`:215`) and every segment click (`:100`). It runs `picker.Content(labelled(...))`, which allocates a new StackPanel, Image (new SvgImageSource decode) and TextBlock each time, even when the chosen item has not changed.
-- GTK reference: `toolbar_components` `Field::update` sets the label and icon in place.
-- Fix direction: keep the `labelled()` parts in `Field`, update the text and `setIcon()` in place, and skip the update when the chosen label and icon are unchanged.
-
-##### HEAD-7: Title-bar divider tool is drawn as a horizontal line; GTK draws it vertical
-- Class: METRIC, BORDER/COLOR   Confidence: CERTAIN   Severity: medium   Reported bug: none
-- Windows: `HeaderView.cpp:541-542`: `Border line;line.Height(1);line.Margin({6,6,6,6});line.Background(data->brush(L"tabbar"))`. In a square tile this is a 1px horizontal bar across the middle, in the `tabbar` colour.
-- GTK reference: `workspace_header.rs:659-665` draws `cr.rectangle(width/2, 10., 1., height-20)` at `alpha .5` of the foreground. That is a vertical 1px line, inset 10px top and bottom.
-- Fix direction: `line.Width(1); line.Margin({0,10,0,10}); line.HorizontalAlignment(Center); line.Background(data->tint(L"text",128))`, or reuse `dividerLine(data,true)` from WorkspaceGeometry so the header and toolbars share one divider.
-
-##### HEAD-8: Disabled title-bar tools fade the whole tile to .36; GTK fades only the icon to .45
-- Class: METRIC, STACKED-BG   Confidence: CERTAIN   Severity: low   Reported bug: none
-- Windows: `HeaderView.cpp:548` `pick.Opacity(editing||enabled?1.:.36)`. The opacity covers the button background as well (the selected or open drawer fill). Zen Capy uses the same value (`:483`).
-- GTK reference: `workspace_header.rs:522-525`: `button.set_sensitive(enabled || has_variants || editing)` and `content.set_opacity(if enabled || editing { 1. } else { 0.45 })`, which applies to the content only.
-- Fix direction: put the opacity on the content (Image / ColorPair) at .45 and keep the tile surface at full opacity. A tool group with variants stays enabled, as in GTK.
-
-##### HEAD-9: Customize Title Bar outlines every item; GTK outlines only the selected one
-- Class: HIGHLIGHT-GEOMETRY, BORDER/COLOR   Confidence: CERTAIN   Severity: medium   Reported bug: none
-- Windows: `HeaderView.cpp:735-736`: `native.outline.BorderThickness(editing?{1,1,1,1}:{})`, with the brush set to red if detached, `accent` if selected, otherwise `brush(L"tabbar")`. Every item gets a 1px box.
-- GTK reference: `workspace_header.rs:592-599` adds `editing-selection` only to the selected item. style.css:74: `.window-bar .header-item.editing-selection { outline: 1px solid alpha(var(--window-fg-color), .45); outline-offset: -1px; border-radius: var(--header-radius); }`.
-- Fix direction: draw the outline only for `input->Selected()==id`, in `tint(L"text",115)` (.45), and keep the red detached outline.
-
-##### HEAD-10: Customize Title Bar zone guides are full rounded boxes; GTK draws top and bottom rules with a drop-target highlight
-- Class: BORDER/COLOR, HIGHLIGHT-GEOMETRY   Confidence: CERTAIN   Severity: low   Reported bug: none
-- Windows: `HeaderView.cpp:391` and `:742`: each zone `Border` has `BorderThickness 1`, `CornerRadius 6` and `BorderBrush(data->brush(L"tabbar"))`, with no state change while dropping.
-- GTK reference: `workspace_header.rs:1128-1157` draws two 1px rules (top and bottom edges only, square) in `rgba(0.4,0.65,0.9, 0.35)`, raised to `0.8` alpha on the zone under the drop.
-- Fix direction: draw top and bottom rules only, in the shared guide colour, and raise the alpha on the hovered drop zone from `input->Preview()`.
-
-##### HEAD-11: Customize Title Bar editor panel differs in surface, padding, radius, shadow and chip contents
-- Class: METRIC, BORDER/COLOR, ALIGNMENT   Confidence: CERTAIN   Severity: medium   Reported bug: none
-- Windows: `HeaderView.cpp:383` `bank.Background(data->brush(L"panel")); CornerRadius({8,...}); Padding({6,...})`, with no shadow. Chips (`:572-575`): `buttonBackground` (5%), `CornerRadius 6`, `Height 36`, grip and label only, no icon. Layout (`:605-610`): 6px gaps on both axes. Size choices (`:581-585`): separate `Button`s, each with a full `controlCorner()`, no joins, `Height 36`. Done/Cancel (`:593-597`): `Height 36`, `Padding 10`. Controls are all `Spacing(6)` (`:579`).
-- GTK reference: style.css:68-77 and `workspace_header_editor.rs:21-150`. `.header-editor { background: var(--window-bg-color); border-radius: var(--surface-radius); box-shadow: 0 3px 12px alpha(black,.18) }`; `.header-editor-content { padding: 8px 12px }`; WrapBox `child_spacing 6`, `line_spacing 8`. Chips: `.header-component { border-radius: var(--control-radius); background: alpha(fg,.06) }`, body `min-height 24; padding 4px 6px`, with an icon plus label (`:89-92`), grip `16×24`. Sizes: a `.linked` homogeneous ToggleButton row with square interior joins (style.css:75-77). Option groups are spaced 12, the footer 6. Buttons `min-height 24px; padding 4px 8px`.
-- Fix direction: use `brush(L"bg")` for the bank, `SurfaceRadius*CornerFit`, padding `{12,8,12,8}`, and a WorkspaceShadow (12,3,.18). Chips get `control_radius`, `tint(text,15)`, a 32px height and an icon. Sizes go through the segment helper from HEAD-3 (joined ToggleButtons), with 12px between option groups.
-
-##### HEAD-12: Selected workspace pill hover replaces the glass selection with an opaque colour
-- Class: GLASS, HIGHLIGHT-GEOMETRY   Confidence: LIKELY   Severity: medium   Reported bug: 14 (related class: switcher hover)
-- Windows: `HeaderView.cpp:171-172`: `item.Background(id==active?glass(L"switcher_selection"):clear())` and `buttonFeedback(item,...,id==active?0:20,41, id==active?data->brush(L"header_selection_hover"):nullptr)`. ButtonFeedback.h:78 swaps in that opaque `hoverSurface` on pointer-over, so with transparency on, the active pill turns opaque while hovered.
-- GTK reference: style.css:89-90 `.choice-well button:checked:hover { background: var(--header-selection-hover) }`, but in glass mode `window.capy-workspace.glass .workspace-switcher button:checked { background-color: var(--glass-switcher-selection) }` (:472) has higher specificity, so the glass selection stays while hovering.
-- Fix direction: pass `hoverSurface` only when `!data->transparent()`, or add a glass `switcher_selection_hover` role to the shared GlassPalette and use it in both hosts.
-
-##### HEAD-13: Workspace options dot is .65 opacity; GTK uses .7
-- Class: BORDER/COLOR   Confidence: CERTAIN   Severity: low   Reported bug: none
-- Windows: `HeaderView.cpp:369` `moreIcon.Opacity(.65)`.
-- GTK reference: style.css:91 `.workspace-switcher .workspace-options > button { ... color: alpha(var(--window-fg-color), .7) }`.
-- Fix direction: use .7.
-
-##### HEAD-14: Compact workspace button shows a fixed "Workspaces" caption at a fixed width and never ellipsizes; GTK shows the active workspace name
-- Class: LAYOUT-COLLAPSE, NULL-STATE   Confidence: CERTAIN   Severity: medium   Reported bug: none
-- Windows: `HeaderView.cpp:373` `workspaceOverflow=button(data,data->copyCaption(L"header",L"workspaces"),...); ... Width(144)`. Its content is never changed and is a boxed string with no TextTrimming.
-- GTK reference: `workspace_header.rs:570-583`: the compact label is the current workspace's `view.name`, falling back to "Workspaces" when there is no id, and `ellipsize_caption(compact)` (`:741`).
-- Fix direction: set the content to a trimmed `label()` holding `str(windows_workspace,"title")` or the shared view name, fall back to the caption, and keep `TextTrimming::CharacterEllipsis`.
-
-##### HEAD-15: Title-bar overflow popup rows drop the selected state and the default button surface
-- Class: HIGHLIGHT-GEOMETRY, BORDER/COLOR   Confidence: CERTAIN   Severity: low   Reported bug: none
-- Windows: `HeaderView.cpp:409-416`: rows are `button()` with `FontWeight Normal`, a clear background, `MinHeight 34` and no gap between rows. A selected tool (`spec.selected`) is not shown.
-- GTK reference: `workspace_header.rs:1162-1180`: a `gtk::Box` with spacing 4 holding `gtk::Button::with_label` (default tinted and bold), `selected(&button, active)`, and a scroller capped at `max_content_height(400)`.
-- Fix direction: apply `selected(data)` to the background when `flag(spec,"selected")`, add `rows.Spacing(4)`, and cap the height at 400.
-
-##### HEAD-16: Drawing tabs: the close control is the text "×", not the close icon
-- Class: VCENTER, METRIC   Confidence: LIKELY (the glyph's math-axis placement in bold Segoe UI sits below the 24px box centre)   Severity: medium   Reported bug: none
-- Windows: `DrawingTabs.h:187` `t.close.Content(box_value(L"×"))`, a bold Segoe UI glyph in a 24×24 button. The same is used for the list row remove (`:197`) and the slide copy (`:94`, `label(data,L"×")`). The selector arrow is also text: `selector.Content(box_value(label+L" ▾"))` (`:206`).
-- GTK reference: `documents.rs:598-601` `gtk::Button::from_icon_name("window-close-symbolic")` with `valign Center`; style.css:435 `.document-tab button.document-tab-close { min-width: 24px; min-height: 24px; padding: 0; border-radius: calc(12px * var(--corner-fit)) }`. Selector: label plus `Image::from_icon_name("pan-down-symbolic")` with spacing 6 (`documents.rs:380-382`).
-- Fix direction: use `icon(L"close",theme,16)` (Assets ship `layer-close-symbolic.svg`) for the close, remove and slide-copy controls, and a `labelled(text, chevron-down 16)`-style content for the selector.
-
-##### HEAD-17: Drawing tab titles are bold; GTK tab titles are normal weight
-- Class: BORDER/COLOR (font weight)   Confidence: LIKELY (WinUI inherits FontWeight from the Button into its non-bold `label()` child; HeaderView.cpp:413 and ZoomReadout.h:132 set Normal explicitly for this reason)   Severity: medium   Reported bug: none
-- Windows: `DrawingTabs.h:185-186` `t.select=button(...)` (Bold) `; t.text=CapyUi::label(data,label)`. `label()` sets no FontWeight when `bold=false`, so the title inherits Bold.
-- GTK reference: style.css:434 `.document-tab button.document-tab-select { ... font-weight: normal; }`.
-- Fix direction: `t.select.FontWeight(Normal)`. More generally, have `label()` always set its weight explicitly (Normal or Bold) so a parent `button()` cannot change it.
-
-##### HEAD-18: Drawing tabs: hovering the close button drops the whole-tab hover, title inset is 4px narrower, and idle separators are missing
-- Class: HIGHLIGHT-GEOMETRY, METRIC, BORDER/COLOR   Confidence: CERTAIN (separators, inset); LIKELY (hover)   Severity: medium   Reported bug: none
-- Windows: `DrawingTabs.h:162-169`. Hover and press feedback belong to `t.select` and `t.close` separately, so on the close button the select button leaves pointer-over and the tab fill disappears, leaving only the 24px circle. `:176`: `t.select.Padding({inset+12,0,inset+12,0})` (inset = tile/2 → 30px at Small) and `t.close.Margin({0,0,inset-12,0})`. There are no separators.
-- GTK reference: style.css:425-433. `.document-tab:hover` / `:active` sit on the row (the tab), so the fill covers the tab while the close button shows its own hover (documents.rs:575-587 also forwards ACTIVE to the row). Inset: select `padding 0 4px` plus a balance box of `TAB_CLOSE_SIZE+inset` = 24+6 (documents.rs:450-467) gives a 34px title inset at Small. Idle separators: `.document-tab:not(.selected):not(:hover):not(:active) + .document-tab:not(...)` draws a 1px line at 80% height in `currentColor` at `--border-opacity`.
-- Fix direction: drive the tab fill from pointer-over on `t.box` (the Grid) and not from the select button; compute the title inset as `4 + 24 + (tile-24)/2`; add a 1px, 80%-height separator between adjacent idle tabs using `data->line(L"", L"border")` or the shared border opacity.
-
-##### HEAD-19: Battery readout uses Segoe UI and a fixed 36px tile; GTK uses the battery numerals font and scales with header size
-- Class: METRIC, VCENTER   Confidence: CERTAIN (scaling, font); LIKELY (vertical offset)   Severity: low   Reported bug: 13 (class: text centring)
-- Windows: `HeaderStatus.h:25-37`: `batteryTile.Width(36).Height(36)`, radius `18*.54` literal, glyph grid fixed at `26×14`. `percent=label(data,L"",true)` is Segoe UI Bold 11/10px with `LineHeight(14)` (ignored under MaxHeight, so the line is about 14.6px, centred in 14px, with Segoe UI's low baseline). No 4/5px right inset change while charging.
-- GTK reference: `system_status.rs:293-321` `apply_header_size()`: the battery is `tile×tile`, the drawing is `26*scale × 14*scale`, the font is `11*scale` (or 10) with margin_end `4*scale` (5 while charging). style.css:408 `.battery-percent { font-family: "Capy Battery Numerals"; font-size: 11px; font-weight: bold; transform: translate(.5px,.5px) }`. Radius `.window-bar .header-readout { border-radius: var(--header-radius) }` (18/24/30 × fit).
-- Fix direction: pass the header size into `HeaderStatus::Apply` and scale the tile, glyph and font by `icon/20`, using `CornerFit` and the header radius. Bundle the same numerals font (or centre with `TextLineBounds::Tight`) and use `BlockLineHeight` for the 14px line.
-
-##### HEAD-20: Clock and battery tile radius is a literal 18*.54 and does not follow the header size
-- Class: METRIC   Confidence: CERTAIN   Severity: low   Reported bug: none
-- Windows: `HeaderStatus.h:27` `CornerRadius({18*.54,...})` for both tiles.
-- GTK reference: style.css:37-38. The battery uses `var(--header-radius)` (scales with header-medium/-large, :26-28); the clock (`header-text`) keeps `calc(18px * var(--corner-fit))`.
-- Fix direction: use `CornerFit`; give the battery `tile*.5*CornerFit` from the header size, as HeaderView's `corner()` does.
-
-##### HEAD-21: Zoom readout weight, radius and hover differ from `.status-bubble`
-- Class: BORDER/COLOR, METRIC   Confidence: LIKELY (weight); CERTAIN (radius, hover)   Severity: low   Reported bug: none
-- Windows: `ZoomReadout.h:40-43`: `text.FontWeight(Normal)`, `root.Padding({10,3,10,3})`, and `button()` hover 20 (.08). `WorkspaceView.cpp:205-207`: radius is `height*.5*CornerFit` (about 7px at 26px).
-- GTK reference: `zoom_readout.rs:24-32` is a `flat` `status-bubble` button whose label inherits libadwaita's bold button weight. style.css:134-136: `border-radius: calc(12px * var(--corner-fit))` (6.48px), `padding: 3px 10px`, hover `.10` (26) and active `.16`.
-- Fix direction: remove the Normal override, use a fixed `12*CornerFit` radius, and use `buttonFeedback(root,text,26,41)`.
+##### HEAD-21: The zoom readout's parent overwrites its fixed corner radius *(A)*
+- `ZoomReadout.h` uses `12*CornerFit`, but `WorkspaceView.cpp` replaces it with `height*.5*CornerFit`.
+- GTK `.status-bubble` keeps `12*CornerFit` for every header size.
+- Adopt the parent-radius fix in M4 after Agent A's shell helpers land.
 
 ##### HEAD-22: Zoom, drawings and screen popups use default WinUI Flyout and ListView chrome
 - Class: DEFAULT-CONTROL   Confidence: CHECK (needs a light/dark screenshot)   Severity: medium   Reported bug: 11 (class: popups against the background)
@@ -513,48 +412,25 @@ Background facts used below:
 - GTK reference: `popover` takes `--popover-bg-color: var(--capy-panel)` (style.css:8) and line colours (:12, :15). The drawings popup is a plain list of flat buttons (`documents.rs:632-680`), and the zoom menu is a `PopoverMenu`.
 - Fix direction: route every Flyout through one helper that sets the presenter background to `brush(L"panel")`, a border from `line(L"panel",L"border")`, the panel corner radius and `RequestedTheme`. Replace the ListView item template's selection visuals with the shared `selected(data)` fill, and build the tab context menu with `NativeMenuItems`.
 
-##### HEAD-23: Drawing list secondary text is a literal 11px
-- Class: METRIC   Confidence: CERTAIN   Severity: low   Reported bug: none
-- Windows: `DrawingTabs.h:198` `r.location.FontSize(11)`.
-- GTK reference: `documents.rs:638-651` uses one label `"✓ • title\nlocation"` at the UI text size with middle ellipsis and a 48-char limit.
-- Fix direction: use `data->textSize()` (or `textSize()/1.2` as SettingsView does for secondary text) and middle ellipsis.
-
-##### HEAD-24: Single-drawing title and compact selector skip the shared label helper (font, trimming)
-- Class: METRIC, LAYOUT-COLLAPSE   Confidence: CERTAIN (selector has no trimming); CHECK (font family)   Severity: low   Reported bug: none
-- Windows: `DrawingTabs.h:216-217`: `plain` is a raw `TextBlock` (no `FontFamily(L"Segoe UI")`, no `inheritLanguage`, padding `{8,0,8,0}`). The selector content is a boxed string `label+L" ▾"` with no TextTrimming, so long names are clipped and not ellipsized.
-- GTK reference: style.css:40,82 `.window-bar .document-title { padding: 6px 8px; font-weight: 600 }`; the selector label is `set_ellipsize(End)`, `hexpand` (documents.rs:376-383).
-- Fix direction: build both through `label()` (semibold for the title) with `CharacterEllipsis`.
-
-##### HEAD-25: Screen (display) status chip is an unstyled WinUI Button
-- Class: DEFAULT-CONTROL, METRIC   Confidence: CERTAIN   Severity: medium   Reported bug: none
-- Windows: `CanvasWindow.cpp:271` `screenChip` is a bare `Button`: no `button()` helper, no `buttonFeedback`, default `ButtonBackground`, border, 4px corner and Normal weight. The content StackPanel has spacing 6 and a raw `TextBlock` (`:1853-1855`). `screenClipped` is a default `CheckBox` rather than `compactCheck()`. The details popup is 312 wide with spacing 6 throughout, and the title is the same size at .7 opacity.
-- GTK reference: `screen_view.rs:39-60`: a `flat` `status-bubble` button (glass chip, `12*fit` radius, `padding 3px 10px`, hover .10/.16), chip spacing 4, the warning icon with the `warning` class, `DETAILS_WIDTH` 340, heading spacing `SPACING/2`, content `SPACING*2`, title in `caption dim-label`, headline in `heading`.
-- Fix direction: build the chip with `button()` plus `headerSurface(data)`, `12*CornerFit` radius and padding `{10,3,10,3}`; use `compactCheck` and the panel spacing metrics; width 340.
-
 ##### HEAD-26: Document dialogs use the stock ContentDialog layout and raw TextBlocks
 - Class: DEFAULT-CONTROL, METRIC   Confidence: LIKELY   Severity: medium   Reported bug: none
 - Windows: `DocumentView.cpp:130-142, 211-226, 318-323, 351-375, 442-560, 621-646`. These are `ContentDialog`s whose footer (ChoiceFeedback.cpp:55-63) recolours the template buttons (accent or `control_fill`, `controlCorner`) but keeps the stock layout: equal-width stretched buttons, 32px tall, Normal weight, 24px dialog padding. Body text is often a raw `TextBlock` (`:140, :321, :354 status, :623, :633`) at the WinUI default font size and family instead of `label()`. The progress state is a bare `ProgressRing` 48×48 (`:646`).
 - GTK reference: style.css:502-511: `.dialog-page { padding: 20px }`, `.dialog-footer { padding: 16px 20px 20px }`, `.dialog-footer > button { min-height: 34px; padding: 0 16px; border-radius: var(--control-radius); font-weight: 500 }` (right-aligned natural width).
 - Fix direction: extend `dialogSurface()`/`footer()` to set button `MinHeight 34`, `Padding {16,0,16,0}`, `SemiBold`, and natural width aligned right (template part `CommandSpace`), with dialog padding 20. Replace the raw TextBlocks with `label()`.
 
-##### HEAD-27: Canvas notice and canvas bar disabled opacity is .36
-- Class: BORDER/COLOR   Confidence: CHECK (libadwaita's insensitive styling is not explicit in the repo CSS)   Severity: low   Reported bug: none
-- Windows: `CanvasActionBar.h:154,173` and `CanvasNotice.h:94` use `Opacity(enabled?1:.36)` on the whole button, including an accent background.
-- GTK reference: `notice.rs:66` and `canvas_bar.rs` use `set_sensitive(false)`, which is libadwaita's insensitive style (dimmed label and icon). The repo's own explicit value for dimmed chrome is .45 (`workspace_header.rs:524`).
-- Fix direction: pick one shared disabled-content opacity for chrome (the shared catalog has none) and apply it to the content only, as in HEAD-8.
+
+##### HEAD-27: Canvas bar and notice disabled content must use the shared policy *(A)*
+- Adopt Agent A's disabled-content opacity handling in M4 and remove per-site whole-button opacity.
+- Preserve the tile surface and let the shared helper dim the content once. Header tools alone use the 0.45 override from HEAD-8.
+
 
 ---
 
 #### Root causes / systemic patterns
 
-1. **`label()` centres the Segoe UI line box, not the glyphs** (UiControls.h:424-430). `LineHeight(18)` under MaxHeight is a no-op, and Segoe UI's ascent is much larger than its descent, so every single-line caption in a fixed-height control sits about 1px low. This explains user bug 2, the same class as 10/12/13, and HEAD-1 and HEAD-19. Fixing `label()` (Tight line bounds for single-line captions, or a separate `caption()` helper) closes it across canvas bar segments, text tiles, notice actions, switcher pills, menu labels, tab titles and the clock in one change.
-2. **`label()` does not set its weight when not bold**, so it inherits Bold from `button()` (HEAD-17, partly HEAD-15 and HEAD-21). Setting the weight explicitly in `label()` removes the per-site `FontWeight(Normal)` patches (HeaderView.cpp:413, ZoomReadout.h:132).
-3. **There is no shared segmented-control helper** (HEAD-2, HEAD-3, HEAD-11 size choices). Each site picks its own fill (`input` is opaque and breaks glass), radii, height and padding. One `segmentRow()` matching `segment_buttons()` and style.css:342-345/442-444 would fix the canvas bar, ToolView, ToolbarComponents, PressureCalibration and the header editor.
-4. **Flyouts, ListView and ContentDialog are left at WinUI defaults** (HEAD-22, HEAD-25, HEAD-26). A single `popupSurface(data, flyout)` and an extended `dialogSurface()` footer (height 34, padding 16, weight 500, right-aligned) would cover every popup and dialog in scope.
-5. **Header-size-dependent chrome is hard-coded at Small** (HEAD-19, HEAD-20) and literal `.54` / `6` / `8` radii appear in place of `CornerFit` and the surface or control radius (HeaderStatus.h:27, HeaderView.cpp:383,388,391,505,572). Passing the header size into HeaderStatus and using `corner()` / `SurfaceRadius*CornerFit` / `controlCorner()` removes them.
-6. **Text glyphs stand in for icons** ("×", "▾"; HEAD-16) and create their own centring errors. Use the shipped `layer-close` / `chevron-down` SVGs.
-
----
+1. Single-line caption centring still depends on Agent A's shared label helper (HEAD-1).
+2. Joined segments and their surfaces need the shared segment builder (HEAD-2, HEAD-3, HEAD-11).
+3. Flyout, list and document dialog chrome still needs the shared popup and dialog helpers (HEAD-22, HEAD-26).
 
 ### HEAD-DLG section (NewDrawingDialog, SizeDialog, ExportForm, ExternalImages)
 

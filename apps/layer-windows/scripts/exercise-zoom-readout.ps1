@@ -1,5 +1,8 @@
-﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme='dark',[switch]$Navigation,[ValidateSet('mouse','pen','touch')][string]$Device='mouse',[ValidateSet('none','dark-mouse','light-mouse','dark-pen','dark-touch')][string]$RotationSnapping='none',[string]$FixtureContext)
+﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light','navigation-light','parity','parity-light')][string]$Theme='dark',[switch]$Navigation,[ValidateSet('mouse','pen','touch')][string]$Device='mouse',[ValidateSet('none','dark-mouse','light-mouse','dark-pen','dark-touch')][string]$RotationSnapping='none',[string]$FixtureContext)
 $ErrorActionPreference='Stop'
+$parityCapture=$Theme -in @('parity','parity-light')
+if($parityCapture){$Theme=if($Theme -eq 'parity-light'){'light'}else{'dark'}}
+if($Theme -eq 'navigation-light'){$Theme='light';$Navigation=$true}
 if($RotationSnapping -ne 'none' -and !$env:CAPY_PRIVATE_DESKTOP){
  & (Join-Path $PSScriptRoot 'test-desktop.ps1') -Script $PSCommandPath -Parameters @{Executable=$Executable;RotationSnapping=$RotationSnapping;FixtureContext=$env:CAPY_FIXTURE_CONTEXT} -TimeoutSeconds 900
  return
@@ -577,12 +580,48 @@ function Navigation-DrawingsClosed([string]$Name) {
  }finally{[CapyRowPointer]::Hold(0x20,$false)}
  Wait-Until {!(Model).navigation_cursor -and (Focused) -and !(Find 'drawing-list' -Visible)} "$Name did not release held Pan with Drawings closed"
 }
-function Navigation-Drawings {
- Navigation-Command 'pen';Wait-Until {Navigation-Selected 'pen'} 'Pen did not select before drawing cycle'
- $source=(Model).windows_tabs.selected;$sourceDrawing=Navigation-PaintState;$count=@((Model).windows_tabs.tabs).Count
+function Capture-DrawingTabParity {
+ $captureTransparency=(Model).state.settings.transparency
+ foreach($captureGlass in @('off','low')){
+  Set-CapyTransparency $captureGlass
+  $close=Control ('drawing-close-'+(Model).windows_tabs.selected) -Arranged
+  $bounds=$close.Current.BoundingRectangle
+  [CapyRowPointer]::Hover([int]($bounds.Left+$bounds.Width/2),[int]($bounds.Top+$bounds.Height/2))
+  Capture ("drawing-tab-close-hover-$Theme-glass-$captureGlass") -WithModel -Composed
+ }
+ Set-CapyTransparency $captureTransparency
+}
+function Capture-ZoomParity {
+ $captureTransparency=(Model).state.settings.transparency
+ foreach($captureGlass in @('off','low')){
+  Set-CapyTransparency $captureGlass
+  Navigation-Focus
+  Open-Readout 'mouse'
+  Capture ("zoom-menu-$Theme-glass-$captureGlass") -WithModel -Composed
+  Close-Menu
+  if(Find 'screen-status' -Visible){
+   Invoke-Id 'screen-status'
+   Wait-Until {Find 'screen-details-headline' -Visible} 'Screen details did not open for parity capture'
+   $details=(Control 'screen-details-headline' -Arranged).Current.BoundingRectangle
+   $dpi=[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.
+   if([Math]::Abs($details.Width/$dpi-340) -gt 1){throw 'Screen details content is not 340 DIP wide'}
+   Capture ("screen-menu-$Theme-glass-$captureGlass") -WithModel -Composed
+   [CapyRowPointer]::Key([uint32]$review.Id,0x1B)
+   Wait-Until {!(Find 'screen-details-headline' -Visible)} 'Screen details did not close after parity capture'
+  }else{$checks.screen_capture='shared screen chip hidden on this adapter'}
+ }
+ Set-CapyTransparency $captureTransparency
+}
+function Open-ParityDrawing {
+ $source=(Model).windows_tabs.selected;$count=@((Model).windows_tabs.tabs).Count
  & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'File'
  Invoke-Id 'new_document';New-DrawingPixels 2048 1536;Invoke 'new-drawing-create'
  Wait-Until {@((Model).windows_tabs.tabs).Count -eq $count+1 -and (Model).windows_tabs.selected -ne $source -and (Model).brush_ready -and !(Find 'canvas-status' -Visible)} 'Navigation second drawing did not become ready' 90
+}
+function Navigation-Drawings {
+ Navigation-Command 'pen';Wait-Until {Navigation-Selected 'pen'} 'Pen did not select before drawing cycle'
+ $source=(Model).windows_tabs.selected;$sourceDrawing=Navigation-PaintState;$count=@((Model).windows_tabs.tabs).Count
+ Open-ParityDrawing
  $peer=(Model).windows_tabs.selected;$peerDrawing=Navigation-PaintState;$tabIds=@((Model).windows_tabs.tabs.id)|ConvertTo-Json -Compress
  foreach($pair in @(@{mods=@(0x11,0x10);key=0x09;target=$source},@{mods=@(0x11);key=0x22;target=$peer},@{mods=@(0x11);key=0x21;target=$source},@{mods=@(0x11);key=0x09;target=$peer})){
   Navigation-Focus;[CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]$pair.mods,[uint16]$pair.key)
@@ -615,6 +654,7 @@ function Navigation-Drawings {
   if(!(Navigation-Selected 'pen') -or (Model).navigation_cursor){throw 'Releasing a parked navigation key changed the newly active drawing'}
  }finally{[CapyRowPointer]::Hold(0x5a,$false)}
  Wait-Until {((Model).state.commands|Where-Object id -eq 'drawings').shortcut -eq 'Ctrl+Shift+A'} 'Shared Drawings default hint is missing'
+ Capture-DrawingTabParity
  Navigation-DrawingsPopup 'default' ([uint16[]]@(0x11,0x10)) 0x41
  Navigation-Focus;[CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),0x4b)
  Wait-Until {(Find 'command-search' -Visible) -and (Control 'command-search').Current.HasKeyboardFocus} 'Drawings text ownership field did not focus'
@@ -792,7 +832,7 @@ try {
  $native=@{window=$null}
  Wait-Until {$native.window=Owned-DrawingWindow $review;$null -ne $native.window} 'The zoom drawing window did not open' 45
  $drawingWindow=$native.window.Handle;$root=$native.window.Root
- Use-PaintWorkspace
+ if(!$parityCapture){Use-PaintWorkspace}
  Wait-Until {(Model).brush_ready -and (Model).windows_workspace.ready -and !(Model).windows_workspace.busy} 'Zoom review did not start' 45
  $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)
  [CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
@@ -801,7 +841,11 @@ try {
  (Control 'drawing-canvas').SetFocus()
  Wait-Until {Focused} 'The canvas did not take focus'
 
- if($RotationSnapping -ne 'none'){
+ if($parityCapture){
+  Capture-ZoomParity
+  Open-ParityDrawing
+  Capture-DrawingTabParity
+ }elseif($RotationSnapping -ne 'none'){
   Check-RotationSnapping
   $checks.scope='Snap rotation preference and native rotation gesture; full readout journey runs separately'
  }elseif($Navigation){Navigation-Journey}else{
@@ -809,6 +853,9 @@ try {
  Check-ReadoutCamera
  Open-Readout 'mouse'
  Check-ZoomCaptions
+ Close-Menu
+ Capture-ZoomParity
+ Open-Readout 'mouse'
  Capture "zoom-menu-$Theme"
  $order=@('zoom-field','zoom-zoom_in','zoom-200','zoom-lock-zoom','rotation-field','zoom-reset_rotation','zoom-snap-rotation','zoom-lock-rotation','zoom-button-zoom_out')
  $tops=@($order|ForEach-Object {(Item $_).Current.BoundingRectangle.Top})

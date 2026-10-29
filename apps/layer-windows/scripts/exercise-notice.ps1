@@ -1,4 +1,4 @@
-param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme='dark')
+﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme='dark')
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 $CapyWaitSeconds=45
@@ -78,6 +78,16 @@ try {
  if(!(Focused)){throw 'The notice took focus from the canvas'}
  $notice=(Find 'canvas-notice').Current.BoundingRectangle
  if([Math]::Abs(($notice.X+$notice.Width/2)-($canvas.X+$canvas.Width/2)) -gt ($canvas.Width*.25)){throw 'The notice is not centered over the canvas'}
+ $captureTransparency=(Model).state.settings.transparency
+ foreach($captureGlass in @('off','low')){
+  Set-CapyTransparency $captureGlass
+  Click 'mouse' $point
+  Wait-Until {(NoticeText) -eq $reason} 'Locked notice did not return after changing transparency'
+  Capture ("locked-notice-$Theme-glass-$captureGlass") -WithModel -Composed
+ }
+ Set-CapyTransparency $captureTransparency
+ Click 'mouse' $point
+ Wait-Until {(NoticeText) -eq $reason} 'Locked notice did not return after restoring transparency'
  Capture ("locked-notice-$Theme")
  $first=(Notice).id
  Click 'pen' $point

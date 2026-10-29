@@ -36,6 +36,8 @@
 // Opt-in, local lifecycle diagnostics; never used on the presentation hot path.
 void CapyLifecycle(char const* event);
 
+namespace CapyUi {struct WorkspaceData;}
+
 class CanvasWindow : public std::enable_shared_from_this<CanvasWindow> {
 public:
     CanvasWindow(std::function<void()> createWindow,std::function<void(uint64_t)> onClosed,
@@ -69,6 +71,7 @@ private:
     CanvasSurfaceState surfaceState;
     winrt::Microsoft::UI::Xaml::Controls::ContentControl canvasFocus;
     winrt::Microsoft::UI::Xaml::Controls::TextBlock status;
+    std::shared_ptr<CapyUi::WorkspaceData> screenData;
     winrt::Microsoft::UI::Xaml::Controls::Button screenChip;
     winrt::Microsoft::UI::Xaml::Controls::Flyout screenPopup;
     winrt::Microsoft::UI::Xaml::Controls::TextBlock screenTitle,screenHeadline,screenBody;

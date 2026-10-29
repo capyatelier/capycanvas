@@ -1,4 +1,4 @@
-﻿param([Parameter(Mandatory)][string]$Executable)
+﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme='dark')
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 $CapyCacheModel=$true
@@ -54,6 +54,9 @@ function Close {
 try {
     Enter-CapyEnvironment
     $env:CAPY_STORAGE_DIR=Join-Path $run 'profile'
+    $config=Join-Path $env:CAPY_STORAGE_DIR 'config'
+    New-Item -ItemType Directory -Force $config|Out-Null
+    [IO.File]::WriteAllText((Join-Path $config 'settings.json'),(@{language=@{Explicit='en'};theme=$Theme}|ConvertTo-Json -Depth 4))
     $env:CAPY_TRACE_UI='1';$env:CAPY_SMOKE_TEST='1';$env:CAPY_TEST_DISPLAY='1';$env:CAPY_TEST_PRIMARY='1'
     Launch 'first'
     Menu 'Manage Workspaces…'

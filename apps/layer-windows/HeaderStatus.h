@@ -14,6 +14,7 @@ class HeaderStatus {
         winrt::Microsoft::UI::Xaml::Controls::Grid battery;
         winrt::Microsoft::UI::Xaml::Shapes::Path bolt{nullptr};
         winrt::Microsoft::UI::Dispatching::DispatcherQueueTimer timer{nullptr};
+        double scale=1;
         bool visible=false,placeholder=false,editable=false,knownBattery=false;
         ~Impl(){if(timer)timer.Stop();}
         void init(){
@@ -24,7 +25,7 @@ class HeaderStatus {
 
             batteryTile.Width(36);batteryTile.Height(36);
             for(auto tile:{clockTile,batteryTile})tile.Background(headerSurface(data));
-            clockTile.CornerRadius({18*.54,18*.54,18*.54,18*.54});batteryTile.CornerRadius({18*.54,18*.54,18*.54,18*.54});
+            clockTile.CornerRadius({18*CornerFit,18*CornerFit,18*CornerFit,18*CornerFit});batteryTile.CornerRadius({18*CornerFit,18*CornerFit,18*CornerFit,18*CornerFit});
             battery.Width(26);battery.Height(14);battery.VerticalAlignment(VerticalAlignment::Center);
             battery.HorizontalAlignment(HorizontalAlignment::Center);
             shell.Width(22);shell.Height(14);shell.HorizontalAlignment(HorizontalAlignment::Left);shell.CornerRadius({4,4,4,4});
@@ -63,8 +64,8 @@ class HeaderStatus {
                 auto track=color(charging?L"#c4c9cf":light?L"#707479":L"#a3a8b0");
                 auto ink=color(charging?L"#13251a":light?L"#ffffff":L"#202226");
                 auto paint=color(charging?L"#91b89d":low?(light?L"#a15d59":L"#bc9996"):light?L"#3f4246":L"#e5e7eb");
-                shell.Background(fill(track));cap.Background(fill(track));charge.Background(fill(paint));charge.Width(22.*level/100.);
-                percent.Text(known?to_hstring(level):L"?");percent.FontSize(level==100?10:11);percent.Foreground(fill(ink));
+                shell.Background(fill(track));cap.Background(fill(track));charge.Background(fill(paint));charge.Width(22.*scale*level/100.);
+                percent.Text(known?to_hstring(level):L"?");percent.FontSize((level==100?10:11)*scale);percent.Width((charging?21.:22.)*scale);percent.Margin({0,0,(charging?5.:4.)*scale,0});percent.Foreground(fill(ink));
                 cap.Visibility(charging?Visibility::Collapsed:Visibility::Visible);bolt.Visibility(charging?Visibility::Visible:Visibility::Collapsed);
                 bolt.Fill(fill(light?ink:color(L"#e5e7eb")));bolt.Stroke(fill(light?track:color(L"#202226")));
                 auto description=known?L"Battery "+to_hstring(level)+L"%"+(charging?L", charging":low?L", low":L""):L"Battery unavailable";
@@ -76,11 +77,17 @@ class HeaderStatus {
             timer.Interval(std::chrono::milliseconds(std::max(20,std::min(15000,untilMinute+20))));
             if(!placeholder)timer.Start();else timer.Stop();
         }
-        void apply(bool fullscreen,bool hidden,bool editing){
+        void apply(bool fullscreen,bool hidden,bool editing,double tile,double icon){
+            scale=icon/20.;clockTile.Height(tile);batteryTile.Width(tile);batteryTile.Height(tile);batteryTile.CornerRadius({tile*.5*CapyUi::CornerFit,tile*.5*CapyUi::CornerFit,tile*.5*CapyUi::CornerFit,tile*.5*CapyUi::CornerFit});
+            battery.Width(26*scale);battery.Height(14*scale);shell.Width(22*scale);shell.Height(14*scale);charge.Height(14*scale);shell.CornerRadius({4*scale,4*scale,4*scale,4*scale});charge.CornerRadius({4*scale,4*scale,4*scale,4*scale});cap.CornerRadius({scale,scale,scale,scale});bolt.StrokeThickness(1.75*scale);
+            percent.Width(26*scale);percent.LineHeight(14*scale);percent.LineStackingStrategy(winrt::Microsoft::UI::Xaml::LineStackingStrategy::BlockLineHeight);percent.TextLineBounds(winrt::Microsoft::UI::Xaml::TextLineBounds::Tight);
+            cap.Width(2*scale);cap.Height(6*scale);cap.Margin({23*scale,4*scale,0,0});bolt.Width(8*scale);bolt.Height(12*scale);bolt.Margin({18*scale,scale,0,0});
+
             using namespace CapyUi;
             bool next=!hidden&&(fullscreen||editing),nextPlaceholder=editing&&!fullscreen;
             clockTile.Visibility(next?Visibility::Visible:Visibility::Collapsed);
-            if(next!=visible||placeholder!=nextPlaceholder||editable!=editing){visible=next;placeholder=nextPlaceholder;editable=editing;refresh();}
+            if(next!=visible||placeholder!=nextPlaceholder||editable!=editing){visible=next;placeholder=nextPlaceholder;editable=editing;}
+            refresh();
             if(!next)batteryTile.Visibility(Visibility::Collapsed);
         }
     };
@@ -92,5 +99,5 @@ public:
     auto Clock()const{return impl->clockTile;}
     auto Battery()const{return impl->batteryTile;}
     bool HasBattery()const{return impl->knownBattery;}
-    void Apply(bool fullscreen,bool hidden,bool editing){impl->apply(fullscreen,hidden,editing);}
+    void Apply(bool fullscreen,bool hidden,bool editing,double tile,double icon){impl->apply(fullscreen,hidden,editing,tile,icon);}
 };

@@ -1,8 +1,10 @@
-﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet("F16","F32")][string]$Depth="F16",[switch]$DrawingTabsOnly,[switch]$ControlsOnly,[ValidateSet('dark','light')][string]$Theme='dark',[ValidateSet('full','tab-drop-dark','tab-drop-light')][string]$Journey='full')
+﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet("F16","F32")][string]$Depth="F16",[switch]$DrawingTabsOnly,[switch]$ControlsOnly,[ValidateSet('dark','light')][string]$Theme='dark',[ValidateSet('full','tab-drop-dark','tab-drop-light','screen-parity','screen-parity-light')][string]$Journey='full')
 $ErrorActionPreference='Stop'
-$tabDropOnly=$Journey -ne 'full'
+$screenParity=$Journey -in @('screen-parity','screen-parity-light')
+if($screenParity){$ControlsOnly=$true;if($Journey -eq 'screen-parity-light'){$Theme='light'}}
+$tabDropOnly=$Journey.StartsWith('tab-drop-')
 if($tabDropOnly){$DrawingTabsOnly=$true;$Theme=$Journey -replace '^tab-drop-',''}
-if($ControlsOnly -and !$PSBoundParameters.ContainsKey('Theme')){
+if($ControlsOnly -and !$screenParity -and !$PSBoundParameters.ContainsKey('Theme')){
  foreach($theme in @('dark','light')){& $PSCommandPath -Executable $Executable -Depth $Depth -ControlsOnly -Theme $theme}
  return
 }
@@ -363,6 +365,27 @@ function Delivery([string]$Name,[string]$Format){
  Wait-Until {Test-Path -LiteralPath $path} 'HDR export missing'
  (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
 }
+function Capture-ScreenParity {
+ if(!(Model).state.screen.chip){
+  @{theme=$Theme;screen_capture='unreachable: shared screen chip absent with existing HDR mock'}|ConvertTo-Json|Set-Content (Join-Path $run 'screen-parity-status.json')
+  return
+ }
+  $captureTransparency=(Model).state.settings.transparency
+  foreach($captureGlass in @('off','low')){
+   Set-CapyTransparency $captureGlass
+   Invoke 'screen-status'
+   Wait-Until {Find 'screen-details-headline' -Visible} 'Screen details did not open for parity capture'
+   $details=(Control 'screen-details-headline' -Arranged).Current.BoundingRectangle
+   @{offered=$null -ne (Model).state.screen.details.show_clipped;visible=[bool](Find 'screen-show-clipped' -Visible)}|ConvertTo-Json|Set-Content (Join-Path $run "screen-checkbox-$Theme-glass-$captureGlass.json")
+   $scale=[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.
+   if([Math]::Abs($details.Width/$scale-340) -gt 1){throw 'Screen details content is not 340 DIP wide'}
+   @{width_dip=$details.Width/$scale;theme=$Theme;transparency=$captureGlass}|ConvertTo-Json|Set-Content (Join-Path $run "screen-metrics-$Theme-glass-$captureGlass.json")
+   Capture ("screen-menu-$Theme-glass-$captureGlass") -WithModel -Composed
+   [CapyRowPointer]::Key([uint32]$review.Id,0x1B)
+   Wait-Until {!(Find 'screen-details-headline' -Visible)} 'Screen details did not close after parity capture'
+  }
+  Set-CapyTransparency $captureTransparency
+ }
 try {
  Enter-CapyEnvironment @('CAPY_TEST_HDR')
  $env:CAPY_STORAGE_DIR=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1'
@@ -391,6 +414,13 @@ try {
  if(!$DrawingTabsOnly){& (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Resize -Width 1800 -Height 1300}
  Wait-Until {(Find 'drawing-tab-1') -and (Find 'drawing-tab-2') -and (Model).windows_tabs.available} 'Full native drawing strip did not appear'
  if(!$DrawingTabsOnly -and !$ControlsOnly -and !(Control 'drawing-tab-1').Current.Name.StartsWith('• ')){throw 'Dirty tab lacks the unsaved marker'}
+ if($screenParity){
+  Capture-ScreenParity
+  & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -StateDirectory $run -Action Close -DiscardUnsaved
+  if(!$review.WaitForExit(15000) -or $review.ExitCode -ne 0){throw 'Owned screen parity review did not close cleanly'}
+  if((Get-Item (Join-Path $run 'stderr.log')).Length){throw 'Screen parity stderr requires inspection'}
+  return
+ }
  if(!$ControlsOnly){
  if(!$tabDropOnly){
  (Control 'drawing-tab-2').SetFocus()
@@ -794,6 +824,7 @@ try {
  Invoke 'proof-panel-mode-sdr';Wait-Until {(Model).state.preview_sdr} 'The SDR dial did not appear in SDR mode'
  $screen=(Model).state.screen
  if($screen.chip){
+  Capture-ScreenParity
   Invoke 'screen-status';Wait-Until {$null -ne (Find 'screen-details-headline')} 'Screen details did not open'
   if((Control 'screen-details-headline').Current.Name -ne $screen.details.headline){throw 'Screen details headline differs from shared assessment'}
   $clipped='not-offered'

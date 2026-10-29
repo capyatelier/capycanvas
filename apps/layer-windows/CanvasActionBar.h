@@ -68,7 +68,7 @@ struct CanvasActionBar:std::enable_shared_from_this<CanvasActionBar>{
     void quiet(Control const& control){control.AllowFocusOnInteraction(false);control.IsTabStop(false);}
     void tiled(Control const& control){
         double r=tile*.5*CornerFit;
-        control.Width(tile);control.Height(tile);control.Padding({0});control.CornerRadius({r,r,r,r});
+        control.Width(tile);control.Height(tile);control.Padding({0,0,0,0});control.CornerRadius({r,r,r,r});
         control.HorizontalContentAlignment(HorizontalAlignment::Stretch);control.VerticalContentAlignment(VerticalAlignment::Stretch);quiet(control);
     }
     void worded(Control const& control,double padding=10){
@@ -86,7 +86,7 @@ struct CanvasActionBar:std::enable_shared_from_this<CanvasActionBar>{
         if(!name.empty())inner.Children().Append(icon(name,iconTheme.empty()?data->theme():iconTheme,glyph));
         auto words=label(data,text,true);words.VerticalAlignment(VerticalAlignment::Center);
         inner.Children().Append(words);
-        if(menu)inner.Children().Append(icon(L"chevron-down",data->theme(),12));
+        if(menu)inner.Children().Append(icon(L"chevron-down",data->theme(),glyph));
         return inner;
     }
     FrameworkElement spaced(FrameworkElement const& element){element.Margin({ControlClearance,ControlClearance,ControlClearance,ControlClearance});return element;}
@@ -164,7 +164,16 @@ struct CanvasActionBar:std::enable_shared_from_this<CanvasActionBar>{
             }else if(auto picker=element.try_as<Button>()){
                 J chosen=list.Size()?list.GetObjectAt(0):J{};
                 for(auto value:list)if(flag(value.GetObject(),L"selected"))chosen=value.GetObject();
-                if(chosen.Size())picker.Content(labelled(str(chosen,L"icon"),str(chosen,L"label"),true));
+                if(chosen.Size()){
+                    auto name=str(chosen,L"icon"),text=str(chosen,L"label"),key=name+L"|"+text+L"|"+data->theme();auto tag=picker.Tag().try_as<J>();
+                    if(str(tag?tag:J{},L"canvas_bar_value")!=key){
+                        if(auto content=picker.Content().try_as<StackPanel>()){
+                            auto image=content.Children().GetAt(0).as<Image>();if(!name.empty())setIcon(image,name,data->theme(),glyph);image.Visibility(name.empty()?Visibility::Collapsed:Visibility::Visible);
+                            content.Children().GetAt(1).as<TextBlock>().Text(text);
+                        }else{StackPanel body;body.Orientation(Orientation::Horizontal);body.Spacing(6);Image image;if(!name.empty())setIcon(image,name,data->theme(),glyph);image.Visibility(name.empty()?Visibility::Collapsed:Visibility::Visible);body.Children().Append(image);auto caption=label(data,text,true);caption.VerticalAlignment(VerticalAlignment::Center);body.Children().Append(caption);body.Children().Append(icon(L"chevron-down",data->theme(),glyph));picker.Content(body);}
+                        edgeTag(picker,L"canvas_bar_value",S(key));
+                    }
+                }
             }
             return;
         }
@@ -251,7 +260,7 @@ struct CanvasActionBar:std::enable_shared_from_this<CanvasActionBar>{
             std::array<float,4> radii{SurfaceRadius,SurfaceRadius,SurfaceRadius,SurfaceRadius};
             surface.Data(squircleRectangle(width,height,radii));
             frame.CornerRadius({SurfaceRadius*CornerFit,SurfaceRadius*CornerFit,SurfaceRadius*CornerFit,SurfaceRadius*CornerFit});
-            shadow.Shape(squircleRectangle(width,height,radii),width,height,12,2,.16f);shadow.Cut(radii);
+            shadow.Shape(squircleRectangle(width,height,radii),width,height,8,2,.16f);shadow.Cut(radii);
             shadow.Layout(rectangle(bounds),179,true);
         }else{
             Canvas::SetLeft(frame,Offscreen);shadow.Layout({float(Offscreen),0,1,1},179,false);

@@ -37,10 +37,10 @@ struct ZoomReadout:std::enable_shared_from_this<ZoomReadout>{
     }
     void init(){
         auto weak=weak_from_this();
-        text.FontSize(data->textSize());text.FontWeight(Windows::UI::Text::FontWeights::Normal());text.IsHitTestVisible(false);
+        text=label(data,L"",true);text.FontSize(data->textSize());text.FontWeight(Windows::UI::Text::FontWeights::Bold());text.IsHitTestVisible(false);
         AutomationProperties::SetAutomationId(text,L"canvas-camera");
         root=button(data,L"",[weak]{if(auto self=weak.lock())self->toggle();});
-        root.Content(text);root.Padding({10,3,10,3});root.AllowFocusOnInteraction(false);root.IsTabStop(false);
+        root.Content(text);root.Padding({10,3,10,3});root.CornerRadius({12*CornerFit,12*CornerFit,12*CornerFit,12*CornerFit});buttonFeedback(root,data->brush(L"text"),26,41);root.AllowFocusOnInteraction(false);root.IsTabStop(false);
         root.ContextRequested([weak](auto&&,ContextRequestedEventArgs const& e){e.Handled(true);if(auto self=weak.lock();self&&!self->open)self->toggle();});
         AutomationProperties::SetAutomationId(root,L"canvas-view-info");
         auto name=data->copyCaption(L"header",L"zoom");

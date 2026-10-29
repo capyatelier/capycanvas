@@ -424,6 +424,7 @@ pub enum NativeCaption {
     CloseDrawing { title: String },
     SwitchDrawing { title: String },
     DrawingTitle { title: String, width: u32, height: u32 },
+    DrawingLocation { location: String },
     OptionsFor { title: String },
     MovePanel { title: String },
     ChoosePalette { name: String },
@@ -460,6 +461,12 @@ impl NativeCaption {
             Self::LayerRow { title } => { args.set("title", title.as_str()); MessageId::NATIVE_LAYER_ROW },
             Self::CloseDrawing { title } => { args.set("title", title.as_str()); MessageId::NATIVE_CLOSE_DRAWING },
             Self::SwitchDrawing { title } => { args.set("title", title.as_str()); MessageId::NATIVE_SWITCH_DRAWING },
+            Self::DrawingLocation { location } => {
+                let count = location.chars().count();
+                return if count <= 48 { location.clone() } else {
+                    format!("{}…{}", location.chars().take(23).collect::<String>(), location.chars().skip(count - 24).collect::<String>())
+                };
+            },
             Self::DrawingTitle { title, width, height } => {
                 args.set("title", title.as_str()); args.set("width", width.to_string()); args.set("height", height.to_string());
                 MessageId::NATIVE_DRAWING_TITLE
@@ -713,5 +720,19 @@ mod numeric_caption_tests {
             serde_json::json!({"type":"numeric_error","reason":{"reason":"range","label":"literal","min":0,"max":1,"error":"literal"}}),
             serde_json::json!({"type":"numeric_error","reason":{"reason":"range","label":"literal","min":null,"max":1}}),
         ] { assert!(serde_json::from_value::<NativeCaption>(malformed).is_err()); }
+    }
+}
+
+#[cfg(test)]
+mod drawing_caption_tests {
+    #[test]
+    fn drawing_locations_preserve_path_ends_with_unicode_in_the_middle() {
+        let localizer = crate::Localizer::shared(crate::UiLanguage::English);
+        let short = "C:/絵/🐾.capy";
+        assert_eq!(super::NativeCaption::DrawingLocation { location:short.into() }.message(&localizer), short);
+        let long = format!("C:/{}終わり.capy", "🐾".repeat(60));
+        let text = super::NativeCaption::DrawingLocation { location:long }.message(&localizer);
+        assert_eq!(text.chars().count(), 48);
+        assert!(text.starts_with("C:/"));assert!(text.ends_with("終わり.capy"));assert_eq!(text.matches('…').count(), 1);
     }
 }
