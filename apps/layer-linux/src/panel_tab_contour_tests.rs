@@ -48,16 +48,6 @@ fn contour_pixels(texture: &gdk::Texture) -> Vec<u8> {
     pixels
 }
 
-fn selected_reference_edges(tab:&gtk::graphene::Rect,width:i32,height:i32,scale:f64)->Vec<bool> {
-    let width=(f64::from(width)*scale).ceil() as i32;let height=(f64::from(height)*scale).ceil() as i32;
-    let mut surface=gtk::cairo::ImageSurface::create(gtk::cairo::Format::A8,width,height).unwrap();
-    let cr=gtk::cairo::Context::new(&surface).unwrap();cr.scale(scale,scale);cr.set_source_rgba(1.,1.,1.,1.);
-    let radius=gtk::graphene::Size::new(layer_ui::SURFACE_RADIUS,layer_ui::SURFACE_RADIUS);let square=gtk::graphene::Size::new(0.,0.);
-    let mut shape=gtk::gsk::RoundedRect::new(*tab,radius,radius,square,square);shape.normalize();crate::squircle::rounded_rect(&cr,&shape);
-    for(x,direction)in[(tab.x(),-1.),(tab.x()+tab.width(),1.)]{crate::squircle::concave_foot(&cr,f64::from(x),f64::from(height)/scale,6.,direction);}
-    cr.fill().unwrap();drop(cr);let stride=surface.stride() as usize;let coverage=surface.data().unwrap();let mut edges=vec![false;width as usize*height as usize];
-    for y in 0..height as usize{for x in 0..width as usize{let alpha=coverage[y*stride+x];edges[y*width as usize+x]=!((alpha==0||alpha==255)&&(y.saturating_sub(2)..=(y+2).min(height as usize-1)).all(|yy|(x.saturating_sub(2)..=(x+2).min(width as usize-1)).all(|xx|coverage[yy*stride+xx]==alpha)));}}edges
-}
 
 #[test]
 #[ignore = "isolated Mutter native-input.js --native-test=native_panel_tab_contours_are_continuous"]
@@ -94,34 +84,40 @@ fn native_panel_tab_contours_are_continuous() {
                         let tab = if drawer { named::<gtk::Button>(w.window.upcast_ref(), &format!("column-drawer-tab-{panel:?}")) }
                             else { w.groups.borrow().iter().find(|g| g.id == group).unwrap().tabs.iter().find(|(p, _)| *p == panel).unwrap().1.clone() };
                         let strip = tab.parent().unwrap();
+                        until(|| tab.is_mapped() && strip.width() > 0 && strip.height() > 0, "native tab strip allocation");
                         let bounds = tab.compute_bounds(&strip).unwrap();
                         assert_eq!(bounds.y(), 0.);
                         assert_eq!(bounds.height(), strip.height() as f32);
                         let floor = ["tab-strip-tint", "tab-foot-tint"].map(|class| find_css(&strip, class).unwrap().color().alpha())
                             .into_iter().fold(1f32, f32::min) * 255.;
-                        let scale = strip.scale_factor() as f32;
+                        let grid=crate::squircle::PixelGrid::for_widget(&strip);
+                        assert!(grid.scale.into_iter().all(|scale| scale > 0.), "native tab pixel grid has a physical scale");
+                        let scale=grid.scale[0].abs();let phase=grid.offset.map(|v|v.rem_euclid(1.));
                         let snapshot = gtk::Snapshot::new();
+                        snapshot.translate(&gtk::graphene::Point::new(phase[0],phase[1]));
                         snapshot.scale(scale, scale);
                         gtk::WidgetPaintable::new(Some(&strip)).snapshot(&snapshot, strip.width() as f64, strip.height() as f64);
                         let node = snapshot.to_node().unwrap();
                         if level.enabled() {
                             let mut regions = Vec::new();
                             crate::glass::collect(&node, &w.palette.get().unwrap().glass.surfaces(), &mut regions);
-                            assert!(regions.iter().any(|region| region.bounds == [0., 0., strip.width() as f32 * scale, strip.height() as f32 * scale]), "tab strip retains its complete blurred backdrop");
+                            let expected=[phase[0],phase[1],strip.width() as f32*scale,strip.height() as f32*scale];
+                            assert!(regions.iter().any(|region|region.bounds.into_iter().zip(expected).all(|(a,b)|(a-b).abs()<0.01)), "tab strip retains its complete blurred backdrop");
                         }
-                        let node = crate::squircle::converted(&node, scale.into());
-                        let texture = w.window.renderer().unwrap().render_texture(&node, Some(&gtk::graphene::Rect::new(0., 0., strip.width() as f32 * scale, strip.height() as f32 * scale)));
+                        let node = crate::squircle::converted(&node, 1.);
+                        let texture = w.window.renderer().unwrap().render_texture(&node, Some(&gtk::graphene::Rect::new(0., 0., (strip.width() as f32 * scale+phase[0]).ceil(), (strip.height() as f32 * scale+phase[1]).ceil())));
                         let pixels = contour_pixels(&texture);
-                        let edges=selected_reference_edges(&bounds,strip.width(),strip.height(),scale.into());assert_eq!(edges.len(),pixels.len()/4);
-                        let mut gap=None;let(mut edge_count,mut interior_count)=(0,0);let(mut edge_min,mut interior_min)=(255u8,255u8);
-                        for(i,pixel)in pixels.as_chunks::<4>().0.iter().enumerate(){let edge=edges[i];if edge{edge_count+=1;edge_min=edge_min.min(pixel[3]);}else{interior_count+=1;interior_min=interior_min.min(pixel[3]);}let allowed=if edge{floor*0.75}else{floor};if f32::from(pixel[3])+2.<allowed&&gap.is_none(){gap=Some((i,pixel[3],edge,allowed));}}
+                        let interior=|i:usize|{let x=(i%texture.width() as usize)as f32;let y=(i/texture.width() as usize)as f32;x>=phase[0]&&x+1.<=phase[0]+strip.width() as f32*scale&&y>=phase[1]&&y+1.<=phase[1]+strip.height() as f32*scale};
+                        let minimum=pixels.as_chunks::<4>().0.iter().enumerate().filter(|(i,_)|interior(*i)).map(|(_,p)|p[3]).min().unwrap_or(255);
+                        let gap=pixels.as_chunks::<4>().0.iter().enumerate().find_map(|(i,p)|
+                            (interior(i)&&f32::from(p[3])+2.<floor).then_some((i,p[3])));
 
                         let name = format!("{}-{theme:?}-{level:?}-{style:?}-{panel:?}", if drawer { "drawer" } else { "docked" }).to_lowercase();
                         if gap.is_some() || panel == Panel::Adjustments {
                             texture.save_to_png(output.join(format!("{name}.png"))).unwrap();
                         }
-                        coverage_reports.push(serde_json::json!({"case":name,"reference":"original Cairo selected outline plus feet;2physical-pixel band","floor":floor,"edge_floor":floor*0.75,"tolerance":2,"edge_pixels":edge_count,"interior_pixels":interior_count,"edge_min_alpha":edge_min,"interior_min_alpha":interior_min,"first_gap":gap}));
-                        if let Some((i,alpha,edge,allowed))=gap{gaps.push(format!("{name}: alpha {alpha} below {allowed:.1} at ({}, {}),reference_edge{edge}",i%texture.width() as usize,i/texture.width() as usize));}
+                        coverage_reports.push(serde_json::json!({"case":name,"floor":floor,"tolerance":2,"scale":scale,"phase":phase,"minimum_alpha":minimum,"first_gap":gap}));
+                        if let Some((i,alpha))=gap{gaps.push(format!("{name}: alpha {alpha} below {floor:.1} at ({}, {})",i%texture.width() as usize,i/texture.width() as usize));}
                     }
                 }
             }

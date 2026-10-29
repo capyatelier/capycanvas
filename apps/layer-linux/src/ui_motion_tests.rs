@@ -196,6 +196,7 @@ fn native_active_tab_matches_panel() {
     let (window_x, window_y) = w.window.surface_transform();
     let offset = [origin.x() + window_x as f32, origin.y() + window_y as f32];
     let mut mismatches = Vec::new();
+    let mut reports = Vec::new();
     for theme in [Theme::Dark, Theme::Light] {
         w.dispatch(UiAction::SetTheme { theme: Some(theme) });
         for level in [layer_ui::Transparency::Off, layer_ui::Transparency::Low, layer_ui::Transparency::Medium, layer_ui::Transparency::High] {
@@ -207,8 +208,12 @@ fn native_active_tab_matches_panel() {
             let stride = texture.width() as usize * 4;
             let mut pixels = vec![0; stride * texture.height() as usize];
             texture.download(&mut pixels, stride);
+            let monitor=w.area.display().monitor_at_surface(&w.window.surface().unwrap()).unwrap().geometry();
+            let scale=[texture.width() as f32/monitor.width() as f32,texture.height() as f32/monitor.height() as f32];
             let sample = |x: f32, y: f32| {
-                let i = (y + offset[1]).round() as usize * stride + (x + offset[0]).round() as usize * 4;
+                let x=((x+offset[0]-monitor.x() as f32)*scale[0]).floor() as usize;
+                let y=((y+offset[1]-monitor.y() as f32)*scale[1]).floor() as usize;
+                let i = y * stride + x * 4;
                 [pixels[i + 2], pixels[i + 1], pixels[i]]
             };
             for group in w.groups.borrow().iter().filter(|g| g.tabs_visible) {
@@ -217,12 +222,14 @@ fn native_active_tab_matches_panel() {
                 let body = group.stack.compute_bounds(&w.surface).unwrap();
                 let tab_pixel = sample(tab.x() + 4., tab.y() + tab.height() - 3.);
                 let body_pixel = sample(body.x() + 3., body.y() + 3.);
+                reports.push(serde_json::json!({"case":name,"group":group.id,"scale":scale,"tab":tab_pixel,"body":body_pixel}));
                 if tab_pixel.into_iter().zip(body_pixel).any(|(tab, body)| tab.abs_diff(body) > 1) {
                     mismatches.push(format!("{name} group {}: tab {tab_pixel:?} panel {body_pixel:?}", group.id));
                 }
             }
         }
     }
+    std::fs::write(captures.join("tab-body-pixels.json"),serde_json::to_vec_pretty(&reports).unwrap()).unwrap();
     input.finish();
     assert!(mismatches.is_empty(), "active tabs differ from their panels:\n{}", mismatches.join("\n"));
 }

@@ -95,7 +95,15 @@ impl PixelGrid {
         let grid = Self::new(scale);
         widget.root().and_then(|root| root.dynamic_cast::<gtk::Widget>().ok())
             .and_then(|root| widget.compute_transform(&root))
-            .map_or(grid, |matrix| grid.transform(&gsk::Transform::new().matrix(&matrix)))
+            .map_or(grid, |matrix| grid.matrix(&matrix))
+    }
+
+    fn matrix(self, matrix: &graphene::Matrix) -> Self {
+        let Some((xx, yx, xy, yy, dx, dy)) = matrix.to_2d() else {
+            return Self { scale: [0.; 2], offset: [0.; 2] };
+        };
+        self.transform(&gsk::Transform::new().matrix_2d(xx as f32, yx as f32, xy as f32,
+            yy as f32, dx as f32, dy as f32))
     }
 
     fn transform(self, transform: &gsk::Transform) -> Self {
@@ -866,6 +874,28 @@ pub(crate) fn converted(node: &gsk::RenderNode, scale: f64) -> gsk::RenderNode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn widget_matrices_preserve_device_scale_and_phase() {
+        for scale in [1., 1.25, 2.] {
+            let grid = PixelGrid::new(scale);
+            let native = grid.matrix(&graphene::Matrix::from_2d(1., 0., 0., 1., 0.25, 0.5));
+            assert_eq!(native.scale, [scale as f32; 2]);
+            assert_eq!(native.offset, [scale as f32 * 0.25, scale as f32 * 0.5]);
+            let scaled = grid.matrix(&graphene::Matrix::from_2d(2., 0., 0., 3., 4., 5.));
+            assert_eq!(scaled.scale, [scale as f32 * 2., scale as f32 * 3.]);
+            assert_eq!(scaled.offset, [scale as f32 * 4., scale as f32 * 5.]);
+            let rotated = grid.matrix(&graphene::Matrix::from_2d(0., 1., -1., 0., 3., 4.));
+            assert_eq!(rotated.scale, [scale as f32, -scale as f32]);
+            assert_eq!(rotated.offset, [scale as f32 * 4., scale as f32 * 3.]);
+            let shear = grid.matrix(&graphene::Matrix::from_2d(1., 0.5, 0., 1., 0., 0.));
+            assert_eq!(shear.scale, [0.; 2]);
+            let perspective = grid.matrix(&graphene::Matrix::from_float([
+                1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., -1., 0., 0., 0., 1.,
+            ]));
+            assert_eq!(perspective.scale, [0.; 2]);
+        }
+    }
 
     fn panel(radius: f32) -> gsk::RenderNode {
         let bounds = graphene::Rect::new(0., 0., 80., 120.);
