@@ -46,7 +46,10 @@ function Swatches{@((Panel).swatches|ForEach-Object {[uint64]$_.id})}
 function Menu-Items{
     $items=[System.Windows.Automation.AutomationElement]::RootElement.FindAll([System.Windows.Automation.TreeScope]::Descendants,
         [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,$ControlType::MenuItem))
-    @($items|Where-Object {$_.Current.ProcessId -eq $review.Id -and !$_.Current.IsOffscreen -and [System.Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($_).Current.ControlType -eq $ControlType::Menu})
+    @($items|Where-Object {
+        $surface=[System.Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($_)
+        $surface -and $surface.Current.ControlType -eq $ControlType::Menu -and (Test-CapySearchItem $_ $surface $review.Id)
+    })
 }
 function Check-MenuEscape{
     Wait-Until {@(Menu-Items).Count -gt 0} 'Palette menu did not open before Escape'

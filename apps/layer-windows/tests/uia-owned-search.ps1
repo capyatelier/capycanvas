@@ -7,11 +7,11 @@ Add-Type -TypeDefinition @'
 using System;using System.Collections.Generic;
 namespace CapyOwnedSearchTest {
  public enum TreeScope{Children,Descendants}
- public static class ControlType{public static object Menu="menu";}
+ public static class ControlType{public static object Menu="menu",MenuItem="menu-item";}
  public class Condition{public virtual bool Matches(Node n){return true;}}
  public class PropertyCondition:Condition {
   string property;object value;public PropertyCondition(object p,object v){property=(string)p;value=v;}
-  public override bool Matches(Node n){return Object.Equals(property=="pid"?(object)n.ProcessId:property=="id"?n.AutomationId:property=="scroll_available"?(object)(n.Provider!=null):n.Name,value);}
+  public override bool Matches(Node n){return Object.Equals(property=="pid"?(object)n.ProcessId:property=="id"?n.AutomationId:property=="scroll_available"?(object)(n.Provider!=null):property=="type"?n.ControlType:n.Name,value);}
  }
  public class AndCondition:Condition {
   Condition[] values;public AndCondition(params Condition[] v){values=v;}
@@ -198,3 +198,24 @@ $rejected=$false
 try{Reveal 'missing-target' -ViewportId 'panel-body-scroll-24'|Out-Null}catch{if($_.Exception.Message -ne 'missing-target has no vertically scrollable native provider'){throw};$rejected=$true}
 if(!$rejected -or $provider.Provider.Steps -ne 0){throw 'Reveal tried to scroll a native provider without vertical extent'}
 Write-Output 'Owned Reveal rejects a native provider without vertical extent before calling Scroll.'
+
+$paletteAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../scripts/exercise-palettes.ps1'),[ref]$tokens,[ref]$errors)
+if(@($errors).Count){throw ($errors|Out-String)}
+$menuItems=@($paletteAst.FindAll({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Menu-Items'},$true))
+if($menuItems.Count -ne 1){throw 'Missing actual palette menu census'}
+. ([scriptblock]::Create($menuItems[0].Extent.Text.Replace('System.Windows.Automation.','CapyOwnedSearchTest.')))
+$ControlType=[CapyOwnedSearchTest.ControlType]
+[CapyOwnedSearchTest.AutomationElement]::RootElement.Children.Clear()
+$surface=[CapyOwnedSearchTest.Node]::new('menu-surface',33,250,250);$surface.ControlType=$ControlType::Menu
+$surface.BoundingRectangle=[CapyOwnedSearchTest.Rect]::new(250,250,100,100)
+[CapyOwnedSearchTest.AutomationElement]::RootElement.Children.Add($surface)
+$visible=[CapyOwnedSearchTest.Node]::new('visible-menu-item',33,260,260);$visible.ControlType=$ControlType::MenuItem
+$visible.BoundingRectangle=[CapyOwnedSearchTest.Rect]::new(260,260,80,26);$visible.Parent=$surface;$surface.Children.Add($visible)
+$empty=[CapyOwnedSearchTest.Node]::new('unarranged-menu-item',33,0,0);$empty.ControlType=$ControlType::MenuItem
+$empty.BoundingRectangle=[CapyOwnedSearchTest.Rect]::new(0,0,0,0);$empty.Parent=$surface;$surface.Children.Add($empty)
+if(@(Menu-Items).Count -ne 1 -or @(Menu-Items)[0] -ne $visible){throw 'Palette menu census accepted an unarranged peer reported as onscreen'}
+$surface.IsOffscreen=$true
+if(@(Menu-Items).Count){throw 'Palette menu census accepted peers on a hidden menu surface'}
+$surface.IsOffscreen=$false;$visible.BoundingRectangle=[CapyOwnedSearchTest.Rect]::new(1000,1000,80,26)
+if(@(Menu-Items).Count){throw 'Palette menu census accepted peers outside their menu surface'}
+Write-Output 'Palette menu census retains visible owned items and rejects unarranged, hidden-surface and out-of-surface peers.'
