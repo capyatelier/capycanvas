@@ -73,7 +73,7 @@ private struct BrushSliderComponent: View {
                 guard !store.workspace.input.contact.consumeClick() else { return }
                 openPreview()
             } label: {
-                if tile["slider_style"]["show_value"].bool {
+                if layout["show_value"].bool {
                     SliderValueReadout(readout: ToolbarUI.resolve(["type": "slider_readout", "style": panel["tile_style"].raw,
                         "axis": vertical ? "vertical" : "horizontal", "control": spec.raw, "value": value], language: store.interfaceLanguage),
                         title: ToolbarUI.cached(["type": "style", "style": panel["tile_style"].raw], language: store.interfaceLanguage)["labeled"].bool ? model["value_label"].string : nil,
@@ -85,7 +85,7 @@ private struct BrushSliderComponent: View {
                 .accessibilityLabel(label).help(label)
                 .accessibilityIdentifier("slider-cap-\(tile["id"].uint)")
                 .modifier(WorkspaceDrag(workspace: store.workspace, item: item, surface: .tile, context: item))
-                .placed(layout[0])
+                .placed(layout["cap"])
             ToolbarSliderTrack(identity: model["context"].stableKey, fill: shown["fill"].number, marks: marks,
                 opacity: tile["control"]["kind"].string != "brush_size_slider", vertical: vertical,
                 enabled: !field.isNull, label: label, valueText: shown["text"].string,
@@ -95,7 +95,7 @@ private struct BrushSliderComponent: View {
                 }, change: pick, step: step)
                 .modifier(WorkspaceDrag(workspace: store.workspace, item: item, surface: .control, context: item, canDrag: false))
                 .accessibilityIdentifier("component-slider-\(tile["id"].uint)")
-                .placed(layout[1])
+                .placed(layout["track"])
         }
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("editor-workspace")) } action: { next in
             if next.size != frame.size { session.close(store.workspace.sliderPreview) }

@@ -127,7 +127,7 @@ export function createToolbarComponent({ app, tile, view, element, button, icon,
     target(cap, item); draggable(cap, item);
     const readout = element('span', 'toolbar-slider-readout'), title = element('span', 'toolbar-slider-title');
     const valueRow = element('span', 'toolbar-slider-value-row'), valueLabel = element('span', 'toolbar-slider-value'), unit = element('span', 'toolbar-slider-unit');
-    valueRow.append(valueLabel, unit); readout.append(title, valueRow); cap.append(readout);
+    valueRow.append(valueLabel, unit); readout.append(title, valueRow); cap.append(readout); readout.hidden = true;
     const track = element('div', 'number-track'), slider = element('input', 'number-slider');
     slider.type = 'range'; slider.min = 0; slider.max = 1; slider.step = 'any'; slider.setAttribute('aria-label', field.label);
     const marks = element('div', 'toolbar-slider-marks'), thumb = element('div', 'toolbar-slider-thumb');
@@ -249,7 +249,8 @@ export function createToolbarComponent({ app, tile, view, element, button, icon,
     function orient() {
       slider.style.writingMode = vertical ? 'vertical-lr' : ''; slider.style.direction = vertical ? 'rtl' : '';
       slider.setAttribute('aria-orientation', vertical ? 'vertical' : 'horizontal');
-      const [capBounds, trackBounds] = app.toolbar_ui({ type: 'slider_layout', width: extent[0], height: extent[1], axis: vertical ? 'vertical' : 'horizontal', style: tileStyle, slider_style: sliderPreferences });
+      const {cap:capBounds, track:trackBounds, show_value} = app.toolbar_ui({ type: 'slider_layout', width: extent[0], height: extent[1], axis: vertical ? 'vertical' : 'horizontal', style: tileStyle, slider_style: sliderPreferences });
+      readout.hidden = !show_value;
       place(cap, capBounds);
       const along = Math.max(0, (vertical ? trackBounds.height : trackBounds.width) - 4);
       place(track, vertical ? { ...trackBounds, x: (extent[0] - 28) / 2, y: trackBounds.y + 2, width: 28, height: along }
@@ -258,7 +259,6 @@ export function createToolbarComponent({ app, tile, view, element, button, icon,
       updateReadout();
     }
     function updateReadout() {
-      readout.hidden = !sliderPreferences.show_value;
       if (readout.hidden) return;
       const presentation = app.toolbar_ui({type:'slider_readout', style:tileStyle, axis:vertical?'vertical':'horizontal', control:field.numeric, value:current});
       const {inset, gap, units_below} = presentation.metrics;

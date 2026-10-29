@@ -415,9 +415,10 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
     }
     void layoutSlider(){
         auto geometry=toolbarUi(data->localization.get(),O({{L"type",S(L"slider_layout")},{L"width",N(width)},{L"height",N(height)},
-            {L"axis",S(vertical?L"vertical":L"horizontal")},{L"style",S(tileStyle)},{L"slider_style",sliderStyle}})).GetArray();
+            {L"axis",S(vertical?L"vertical":L"horizontal")},{L"style",S(tileStyle)},{L"slider_style",sliderStyle}})).GetObject();
         sliderRow.Width(width);sliderRow.Height(height);
-        place(cap,geometry.GetObjectAt(0));auto bounds=geometry.GetObjectAt(1);
+        place(cap,object(geometry,L"cap"));auto bounds=object(geometry,L"track");
+        if(readout)readout.Visibility(flag(geometry,L"show_value")?Visibility::Visible:Visibility::Collapsed);
         double x=num(bounds,L"x"),y=num(bounds,L"y"),w=num(bounds,L"width"),h=num(bounds,L"height");
         if(vertical){Canvas::SetLeft(track,(width-28)/2);Canvas::SetTop(track,y+2);track.Width(28);track.Height(std::max(0.,h-4));}
         else{Canvas::SetLeft(track,x+2);Canvas::SetTop(track,(height-28)/2);track.Width(std::max(0.,w-4));track.Height(28);}

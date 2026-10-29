@@ -863,8 +863,8 @@ fn slider_expansion_fills_rows_without_stretching_neighbors() {
         assert!(stacked.tiles[0].y + stacked.tiles[0].height <= stacked.tiles[1].y);
         for axis in [Axis::Horizontal, Axis::Vertical] {
             let parts = toolbar_slider_styled_layout(a.width, a.height, axis, style, tiles[0].slider_style);
-            assert!(parts.iter().all(|b| b.width >= 0. && b.height >= 0.));
-            assert!(parts[0].intersection(parts[1]).is_none());
+            assert!([parts.cap, parts.track].iter().all(|b| b.width >= 0. && b.height >= 0.));
+            assert!(parts.cap.intersection(parts.track).is_none());
         }
     }
 }
@@ -1690,3 +1690,24 @@ fn dab_settings_change_the_brush_stamp_wherever_a_brush_has_them() {
     assert!(["size", "flow", "strength", "opacity", "hardness", "angle", "grain_depth", "material_hardness", "bristle_scale", "bristle_load"].iter().all(|id| seen.contains(id)), "{seen:?}");
 }
 
+
+#[test]
+fn short_sliders_reclaim_readouts_without_changing_the_saved_preference() {
+    for tile in [TileStyle::Small, TileStyle::Medium, TileStyle::Large, TileStyle::MediumLabeled, TileStyle::Labeled] {
+        for axis in [Axis::Horizontal, Axis::Vertical] {
+            let vertical = axis == Axis::Vertical;
+            let [w, h] = tile.size();
+            let threshold = 4. * if vertical { h } else { w };
+            let style = ToolbarSliderStyle { show_value: true, expand: true };
+            for extent in [0., 4., threshold - 1., threshold, threshold + 100., threshold - 1.] {
+                let (width, height) = if vertical { (w, extent) } else { (extent, h) };
+                let layout = toolbar_slider_styled_layout(width, height, axis, tile, style);
+                assert_eq!(layout.show_value, extent >= threshold);
+                let hidden = toolbar_slider_styled_layout(width, height, axis, tile, ToolbarSliderStyle { show_value: false, ..style });
+                assert!(!hidden.show_value);
+                if extent < threshold { assert_eq!(layout, hidden); }
+                for part in [layout.cap, layout.track] { assert!(part.width >= 0. && part.height >= 0.); }
+            }
+        }
+    }
+}

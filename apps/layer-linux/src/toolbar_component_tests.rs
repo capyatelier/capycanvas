@@ -3313,6 +3313,23 @@ fn slider_display_journey(d: &mut Driver, devices: &[&str], menus: bool) {
         assert_eq!(label, d.named(&format!("slider-value-{strength}")));
         assert_eq!(label.downcast_ref::<gtk::Label>().unwrap().text(), "10");
         d.capture_canvas(&format!("slider-display-{theme:?}.png"));
+        let expanded=state(&d.w).workspace;
+        let mut compact=expanded.clone();
+        compact.layout.floating.iter_mut().find(|f|f.root.id()==group).unwrap().height=Some(100.);
+        d.w.dispatch(UiAction::RestoreWorkspace{workspace:Box::new(compact)});pump(250);
+        for id in [size,strength] {
+            let readout=d.named(&format!("slider-value-{id}"));
+            assert!(!readout.is_mapped(),"short slider hides enabled readout");
+            let cap=d.named(&format!("tile-{id}"));d.click(&cap);pump(150);
+            let preview=d.named("brush-slider-preview").downcast::<gtk::Popover>().unwrap();
+            assert!(preview.is_mapped(),"short slider cap still opens its preview");preview.popdown();pump(100);
+        }
+        assert!(state(&d.w).workspace.layout.panel(panel).unwrap().tiles().iter().all(|tile|tile.slider_style.show_value),"short fitting retains Show value preference");
+        d.w.dispatch(UiAction::RestoreWorkspace{workspace:Box::new(expanded)});pump(250);
+        for id in [size,strength] {assert!(d.named(&format!("slider-value-{id}")).is_mapped(),"enlarging restores slider readout");}
+        let scale=d.named(&format!("component-slider-{size}"));
+        let strength_scale=d.named(&format!("component-slider-{strength}"));
+        let label=d.named(&format!("slider-value-{strength}"));
         for &device in devices {
             for id in [size, strength] {
                 let track = d.named(&format!("component-slider-{id}"));

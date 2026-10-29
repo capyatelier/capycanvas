@@ -30,6 +30,9 @@ A 12×28px squircle thumb uses a 60% text border. The tracks have no
 persistent numeric readout by default. Each slider's context menu offers
 **Show value** and **Expand to fit**, independently for each copy. Show value adds
 a number and its unit above a vertical track, or before a horizontal track.
+The readout appears only when the slider is at least four tiles long along its
+track axis. Shorter sliders give that space back to the track without changing
+Show value; the readout returns when the slider grows.
 Small vertical sliders put `px` or `%` below the number. Medium vertical sliders
 also stack the unit when the value has three or more digits; shorter values and
 other presentations keep them together on one line. The standard font size is
@@ -234,7 +237,8 @@ The bar stacks on narrow side toolbars and moves into overflow as a whole.
   toolbars and retained drawers. `toolbar_transport.rs` exposes stateless fitting,
   numeric metadata and formatting queries to Wasm, JNI and `capy_apple_toolbar_ui`;
   pointer timing/capture and font measurement stay native.
-  `slider_layout` receives the tile and slider styles; `slider_readout` publishes
+  `slider_layout` receives the tile and slider styles and returns `cap`, `track`
+  and `show_value`; `slider_readout` publishes
   the formatted value, unit, spacing and unit placement. Every host measures its
   native font, keeps the standard size when it fits, and shrinks the value and
   unit together inside the shared content insets. Windows uses the same queries

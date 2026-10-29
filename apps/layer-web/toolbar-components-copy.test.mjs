@@ -41,6 +41,7 @@ function harness(t,standalone=false){
   const rasterWorker=request=>{assert.equal(request.operation,'alpha-image');assert.deepEqual(request.metadata,{size:1});assert.equal(request.buffers.length,1);assert.ok(request.buffers[0] instanceof Uint8Array);workerRequests.push(request);return workerReply(request);};
   const formatted=value=>({value,text:String(value),edit:String(value),fill:value/100});
   const app={native_caption:request=>{assert.equal(request.type,'numeric_error');assert.equal(request.reason.reason,'invalid_expression');return`${language}:invalid`;},catalog:()=>({panel_metrics:{control_height:26},native_copy:{tool_controls:Object.fromEntries(['more_options','remove_bookmark','bookmark_value'].map(key=>[key,`${language}:${key}`]))}}),numeric_labels:label=>({edit:`${language}:edit:${label}`,decrease:'-',increase:'+'}),number_input:request=>formatted(request.value),toolbar_stamp:(context,known)=>{stampQueries.push({context,known});const next=stampReply(context,known);if(next?.alpha.length)stamps++;return next;},toolbar_ui:request=>{
+    if(request.type==='slider_readout')return {value:'5',unit:'px',metrics:{inset:4,gap:2,units_below:false}};
     if(request.type==='choice_style'){assert.equal(request.labeled,true);return{size:[36,36],icon:16};}if(request.type==='options_layout'){layouts++;return{more:{},fields:language==='en'?request.sizes.map(()=>({width:100,height:30})):request.sizes.map(()=>null)};}if(request.type==='style')return{size:[100,30],labeled:true,gap:4};if(request.type==='numeric_info')return{samples:['0','100'],icon:'size'};if(request.type==='number'){if(request.request.operation.type==='expression'){expressions++;throw{numeric_error:{reason:'invalid_expression'},message:`${language}:invalid`};};return formatted(request.request.value);}if(request.type==='slider_preview')return{side:100,radius:4,caption:{},bookmark:{},icon:16,text:'5 px',viewport:{x:0,y:0,width:100,height:100},opacity:1,stamp:{x:0,y:0,width:100,height:100}};
     throw Error(request.type);
   }};
@@ -151,4 +152,26 @@ test('fractional numeric captions reach the shared fitter without integer trunca
   h.root.layoutComponent({width:800,height:36},'horizontal');
   assert.ok(measured.sizes[0][0]>=natural,'The caption and retained number editor must fit their complete intrinsic width');
   assert.deepEqual(h.actions,[]);
+});
+
+test('standalone slider resize hides and restores the shared readout without rebuilding its controls',t=>{
+  const h=harness(t,true),original=h.app.toolbar_ui,layouts=[];
+  let showValue=true;
+  h.app.toolbar_ui=request=>{
+    if(request.type==='slider_layout'){
+      layouts.push(request);
+      return {cap:{x:0,y:0,width:36,height:36},track:{x:36,y:0,width:Math.max(0,request.width-36),height:request.height},show_value:showValue};
+    }
+    if(request.type==='slider_readout')return {value:'5',unit:'px',metrics:{inset:4,gap:2,units_below:false}};
+    return original(request);
+  };
+  const tile=h.tile();tile.slider_style.show_value=true;h.root.updateComponent(tile);
+  const readout=h.root.querySelector('.toolbar-slider-readout'),cap=h.root.querySelector('.toolbar-slider-cap'),slider=h.root.querySelector('.number-slider');
+  h.root.layoutComponent({width:180,height:36},'horizontal');assert.equal(readout.hidden,false);
+  showValue=false;h.root.layoutComponent({width:100,height:36},'horizontal');assert.equal(readout.hidden,true);
+  assert.equal(cap.getAttribute('aria-label'),'en:size');assert.equal(slider.getAttribute('aria-label'),'en:size');
+  showValue=true;h.root.layoutComponent({width:180,height:36},'horizontal');assert.equal(readout.hidden,false);
+  assert.equal(h.root.querySelector('.toolbar-slider-cap'),cap);assert.equal(h.root.querySelector('.number-slider'),slider);
+  assert.ok(layouts.every(request=>request.slider_style.show_value),'fitting leaves the saved preference enabled');
+  assert.deepEqual(h.actions,[],'fitting does not edit the value or saved preference');
 });

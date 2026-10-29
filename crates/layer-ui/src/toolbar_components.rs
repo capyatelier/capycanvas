@@ -531,19 +531,28 @@ pub fn toolbar_slider_readout_extent(along: f32, axis: Axis) -> f32 {
 /// Equal end insets around the editable track. The empty leading inset remains
 /// a hold-to-reorder target without reserving space for a numeric readout.
 pub fn toolbar_slider_layout(width: f32, height: f32, axis: Axis) -> [Bounds; 2] {
-    toolbar_slider_styled_layout(width, height, axis, TileStyle::Small, ToolbarSliderStyle::default())
+    let layout = toolbar_slider_styled_layout(width, height, axis, TileStyle::Small, ToolbarSliderStyle::default());
+    [layout.cap, layout.track]
 }
 
-pub fn toolbar_slider_styled_layout(width: f32, height: f32, axis: Axis, tile: TileStyle, style: ToolbarSliderStyle) -> [Bounds; 2] {
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct ToolbarSliderLayout {
+    pub cap: Bounds,
+    pub track: Bounds,
+    pub show_value: bool,
+}
+
+pub fn toolbar_slider_styled_layout(width: f32, height: f32, axis: Axis, tile: TileStyle, style: ToolbarSliderStyle) -> ToolbarSliderLayout {
     let width = finite_size(width);
     let height = finite_size(height);
     let vertical = axis == Axis::Vertical;
     let cap = 8_f32.min(if vertical { height } else { width } / 2.);
-    let header = if style.show_value {
+    let show_value = style.show_value && (if vertical { height } else { width }) >= 4. * tile.size()[usize::from(vertical)];
+    let header = if show_value {
         toolbar_slider_readout_extent(tile.size()[usize::from(vertical)], axis).min(
             (if vertical { height } else { width }) - cap)
     } else { cap }.max(0.);
-    if vertical {
+    let [cap, track] = if vertical {
         [
             Bounds {
                 width,
@@ -571,7 +580,8 @@ pub fn toolbar_slider_styled_layout(width: f32, height: f32, axis: Axis, tile: T
                 ..Bounds::default()
             },
         ]
-    }
+    };
+    ToolbarSliderLayout { cap, track, show_value }
 }
 
 /// Icons belong to the shared field schema, including compact native hosts.

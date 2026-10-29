@@ -143,7 +143,7 @@ private fun formatted(language: String, control: JSONObject, value: Float, units
             val shown = formatted(host.languageTag, spec, value)
             val marks = model.array("bookmarks").objects()
             val sliderStyle = tile.getJSONObject("slider_style")
-            val geometry = remember(width, height, vertical, style, sliderStyle.toString()) { JSONArray(Native.toolbarUi(obj("type" to "slider_layout", "width" to width,
+            val geometry = remember(width, height, vertical, style, sliderStyle.toString()) { JSONObject(Native.toolbarUi(obj("type" to "slider_layout", "width" to width,
                 "height" to height, "axis" to if (vertical) "vertical" else "horizontal", "style" to style, "slider_style" to sliderStyle).toString(), host.languageTag)) }
             var preview by remember { mutableStateOf(false) }
             val sample = rememberToolbarStamp(host, obj("type" to "toolbar_stamp", "context" to context), preview)
@@ -155,16 +155,16 @@ private fun formatted(language: String, control: JSONObject, value: Float, units
                     if (currentEvent.buttons.isSecondaryPressed) { down.consume(); dock.context(item) }
                 }
             }) {
-                Box(Modifier.placed(geometry.getJSONObject(0), density).dragSource(dock, item, holdToDrag = true)
+                Box(Modifier.placed(geometry.getJSONObject("cap"), density).dragSource(dock, item, holdToDrag = true)
                     .clickable(enabled = field != null) { preview = true }.testTag("slider-cap-$id"), contentAlignment = Alignment.Center) {
-                    if (sliderStyle.getBoolean("show_value")) {
+                    if (geometry.getBoolean("show_value")) {
                         val readout = toolbarUi(host.languageTag, obj("type" to "slider_readout", "style" to style,
                             "axis" to if (vertical) "vertical" else "horizontal", "control" to spec, "value" to value))
                         SliderReadout(readout, if (dimensions.getBoolean("labeled")) model.getString("value_label") else null, field != null, id)
                     }
                 }
                 ToolbarSlider(shown.number("fill"), marks, opacity, vertical, field != null, label,
-                    Modifier.placed(geometry.getJSONObject(1), density).testTag("component-slider-$id"),
+                    Modifier.placed(geometry.getJSONObject("track"), density).testTag("component-slider-$id"),
                     contact = { down, moved -> preview = down || !moved }) { fill, snap, travel ->
                     val next = if (snap) org.json.JSONTokener(Native.toolbarUi(obj("type" to "slider_bookmark_value", "control" to control,
                         "values" to JSONArray(marks.map { it.number("value") }), "position" to fill, "travel" to travel).toString(), host.languageTag)).nextValue() as Number

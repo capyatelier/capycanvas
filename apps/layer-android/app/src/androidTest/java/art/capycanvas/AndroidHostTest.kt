@@ -4416,6 +4416,40 @@ class AndroidHostTest {
     }
 
 
+    @Test fun shortToolbarSlidersHideReadoutsWithoutChangingPreferences() {
+        device.landscape(compose.activityRule.scenario)
+        val fixture = JSONObject(defaultWorkspace)
+        val layout = fixture.getJSONObject("layout")
+        val panel = layout.array("panels").objects().first { it.getString("id") == "toolbar" }
+        val panelId = panel.getString("id")
+        val sliders = listOf("brush_size_slider", "brush_strength_slider").mapIndexed { index, kind ->
+            obj("id" to index + 1, "control" to obj("kind" to kind), "slider_style" to obj("show_value" to true, "expand" to true))
+        }
+        panel.put("content", obj("kind" to "toolbar", "name" to JSONObject.NULL, "tiles" to JSONArray(sliders)))
+        panel.put("tile_style", "small")
+        for (key in listOf("bands", "collapsed", "column_stacks", "column_scroll", "fit_height_groups", "fit_tab_groups")) layout.put(key, JSONArray())
+        val floating = obj("root" to tabs(2, panelId), "position" to JSONArray(listOf(30, 90)), "width" to 74,
+            "height" to 300, "default_width" to JSONObject.NULL, "toolbar_layout" to "compact")
+        layout.put("floating", JSONArray(listOf(floating)))
+        for (theme in listOf("light", "dark")) {
+            action(obj("type" to "set_theme", "theme" to theme))
+            for (height in listOf(300, 100, 300)) {
+                floating.put("height", height)
+                action(obj("type" to "restore_workspace", "workspace" to fixture))
+                for (tile in sliders) {
+                    val id = tile.getInt("id")
+                    val value = compose.onNodeWithTag("slider-value-$id", useUnmergedTree = true)
+                    if (height == 100) value.assertDoesNotExist() else value.assertIsDisplayed()
+                    compose.onNodeWithTag("component-slider-$id", useUnmergedTree = true).assertIsDisplayed()
+                    val savedTile = state().getJSONObject("workspace").getJSONObject("layout").array("panels").objects()
+                        .first { it.getString("id") == panelId }.getJSONObject("content").array("tiles").objects().first { it.getInt("id") == id }
+                    assertTrue("Available space preserves Show value", savedTile.getJSONObject("slider_style").getBoolean("show_value"))
+                }
+                capture("toolbar-slider-$theme-$height")
+            }
+        }
+    }
+
     @Test fun compactNumberInputAndVerticalRibbonStayUsable() {
         action(obj("type" to "customize", "action" to obj("type" to "set_control_visible", "panel" to "sizes", "control" to "brush_size", "visible" to true)))
         // The full editor shows brush size in Tool Settings as well as Sizes.

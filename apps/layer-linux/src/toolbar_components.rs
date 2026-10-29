@@ -181,9 +181,11 @@ mod imp {
                 }
             };
             if self.slider.get() {
-                let bounds = toolbar_slider_styled_layout(width as f32, height as f32, axis,
+                let layout = toolbar_slider_styled_layout(width as f32, height as f32, axis,
                     self.style.get(), self.slider_style.get());
-                if let (Some(label), Some(unit)) = (self.readout_label.borrow().as_ref(), self.readout_unit.borrow().as_ref()) {
+                let bounds = [layout.cap, layout.track];
+                if let Some(content) = children[0].first_child().and_then(|button|button.first_child()) { content.set_visible(layout.show_value); }
+                if layout.show_value && let (Some(label), Some(unit)) = (self.readout_label.borrow().as_ref(), self.readout_unit.borrow().as_ref()) {
                     let metrics = toolbar_slider_readout_metrics(self.style.get(), axis, &label.text());
                     if let Some(row) = self.readout_row.borrow().as_ref() {
                         row.set_orientation(if metrics.units_below { gtk::Orientation::Vertical } else { gtk::Orientation::Horizontal });

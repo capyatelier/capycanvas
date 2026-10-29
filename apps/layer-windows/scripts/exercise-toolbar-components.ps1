@@ -12,14 +12,7 @@ $directory=Split-Path -Parent $Executable
 $run=Join-Path $repo ('artifacts/windows/toolbar-components/'+[Guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($run)|Out-Null
 $directory=$run;$CapyTraceDirectory=$run
-function Control([string]$Value,[switch]$Name,$Within=$root,$Type){
-    $hit=@{item=$null};Wait-Until {$hit.item=Find $Value -Name:$Name -Within $Within -Type $Type;$null -ne $hit.item -and !$hit.item.Current.IsOffscreen} "Missing native control: $Value";$hit.item
-}
-function Box([string]$Id){
-    $ready=@{box=$null}
-    Wait-Until {$c=Find $Id;if(!$c -or $c.Current.IsOffscreen){return $false};$ready.box=$c.Current.BoundingRectangle;$ready.box.Width -gt 0 -and $ready.box.Height -gt 0} "Unarranged $Id"
-    $ready.box
-}
+function Box([string]$Id){(Control $Id -Arranged).Current.BoundingRectangle}
 function Tile([string]$Kind){
     foreach($panel in @((Model).panels)){foreach($tile in @($panel.tiles)){if($tile.control.kind -eq $Kind){return $tile}}}
 }
@@ -68,6 +61,7 @@ try {
     if($band.Count -ne 1 -or $band[0].edge -ne 'left' -or $band[0].alignment -ne 'center'){throw 'Sketch sliders are not docked in the centered left compact region'}
     Capture 'sketch-dark' -WithModel
 
+    if($Journey -eq 'full'){
     $track="component-slider-$($size.id)";$preview="slider-bookmark-$($size.id)"
     Focus-Review
     $start=(Brush).diameter
@@ -116,6 +110,7 @@ try {
     Press 'mouse' $at;Drag $at @{x=$at.x+120;y=$at.y};Release
     if(((Model).state.workspace.layout|ConvertTo-Json -Depth 40 -Compress) -ne $layout){throw 'A quick cap drag moved the toolbar component'}
     Write-Output 'PASS: A quick cap drag without a hold does not reorder the component'
+    }
 
     foreach($kind in @('brush_size_slider','brush_strength_slider')){
         $tile=Tile $kind
@@ -144,6 +139,24 @@ try {
     }
     Capture "slider-values-$Theme" -WithModel -Composed
     Write-Output 'PASS: Slider display menus, persisted choices, live numbers, stacked units and clear margins'
+    $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Normal)
+    & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -StateDirectory $run -Action Resize -Width 1200 -Height 320
+    $scale=[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.
+    foreach($kind in @('brush_size_slider','brush_strength_slider')){
+        $tile=Tile $kind
+        Wait-Until {[Math]::Abs((Box "slider-cap-$($tile.id)").Height/$scale-8) -lt 1} 'Short slider retained its value cap'
+        if(Find "slider-value-$($tile.id)" -Visible){throw 'Short slider retained its visible value label'}
+        if(!(Tile $kind).slider_style.show_value){throw 'Short slider cleared its saved Show value preference'}
+    }
+    Capture "slider-values-short-$Theme" -WithModel -Composed
+    $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)
+    foreach($kind in @('brush_size_slider','brush_strength_slider')){
+        $tile=Tile $kind
+        Wait-Until {(Box "slider-cap-$($tile.id)").Height/$scale -gt 8 -and !(Control "slider-value-$($tile.id)").Current.IsOffscreen} 'Restoring slider length did not restore its value'
+        if(!(Tile $kind).slider_style.show_value){throw 'Restoring slider length changed its Show value preference'}
+    }
+    Capture "slider-values-restored-$Theme" -WithModel -Composed
+    if($Journey -ne 'full'){Finish-Review 'Slider display preferences, live values, short-track hiding and restoration';return}
 
     Switch-Workspace 'Photo' 'builtin:workspace:photographer'
     $options=Tile 'tool_options'
@@ -173,7 +186,6 @@ try {
     Wait-Until {[Math]::Abs((Brush).diameter-37) -lt .001} 'Tool Options size did not restore after the track check'
     Write-Output 'PASS: Tool Options Show Sliders hides and restores the numeric track and native input'
     Capture 'photo-brush-options' -WithModel
-    if($Journey -ne 'full'){Finish-Review 'Native numeric track construction, Show Sliders visibility, inline pointer input and pen/touch standalone tracks';return}
     $beforeFaceLayout=(Model).state.workspace.layout|ConvertTo-Json -Depth 40 -Compress
     $grip=Box 'ribbon-grip-commands';$hostBox=$root.Current.BoundingRectangle;$scale=[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.
     if($scale -le 0 -or [double]::IsNaN($scale) -or [double]::IsInfinity($scale)){throw 'Invalid owned toolbar DPI'}
