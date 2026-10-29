@@ -589,6 +589,12 @@ def capture_budget_seconds(workload, repeats, duration_ms, selected=None):
     return 900
 
 
+def write_run_summary(path, summary, capabilities=None):
+    path.write_text(json.dumps(diagnostic_summary(summary, capabilities) if capabilities is not None else summary, indent=2))
+    if any(row.get("instrumentation_passed") is False for row in summary.values()):
+        raise SystemExit(1)
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("output", type=pathlib.Path)
@@ -772,7 +778,7 @@ def main():
                            "glass_regions": info["display"].get("glass_regions"), "thermal_status": info.get("thermal_status"),
                            "runs": runs}
         print(motion, json.dumps(summary[motion]), flush=True)
-    (args.output / f"{args.label}-summary.json").write_text(json.dumps(diagnostic_summary(summary, capabilities) if args.attribution else summary, indent=2))
+    write_run_summary(args.output / f"{args.label}-summary.json", summary, capabilities if args.attribution else None)
 
 
 if __name__ == "__main__":

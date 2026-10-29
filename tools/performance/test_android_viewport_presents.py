@@ -547,5 +547,19 @@ class ScalarDrawGateTest(unittest.TestCase):
         self.assertEqual(result["demand_conditioned_delivery_gap_p99_ms"],.00002)
 
 
+class InstrumentationFailureStatusTest(unittest.TestCase):
+    def test_failure_summary_is_saved_before_nonzero_exit(self):
+        import json
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/"summary.json"
+            summary={"ui-batch":dict(instrumentation_passed=False,qualification=False,retained_reports=["raw.json"])}
+            with self.assertRaises(SystemExit) as failure:
+                viewport.write_run_summary(path,summary)
+            self.assertEqual(failure.exception.code,1)
+            self.assertEqual(json.loads(path.read_text()),summary)
+            viewport.write_run_summary(path,{"ui-batch":dict(runs=[])})
+
+
 if __name__ == "__main__":
     unittest.main()

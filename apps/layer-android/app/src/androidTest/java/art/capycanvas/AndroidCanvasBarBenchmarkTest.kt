@@ -1346,16 +1346,17 @@ class AndroidCanvasBarBenchmarkTest {
                         "callback_float32" to true, "show_thumb" to false, "track_inset_dp" to 0,
                         "bounds" to JSONArray(listOf(bounds.left, bounds.top, bounds.right, bounds.bottom))))
                     targetWindow(::slider)
-                    try {
+                    java.io.Closeable {
+                        try {
+                            if (findTag("layer-gesture-opacity") != null) nativeBack()
+                            waitFor("Layer row opacity popup closed") { findTag("layer-gesture-opacity") == null && state().getJSONObject("layer_tools").optLong("opacity_popup", -1) != target }
+                            if (previousLayer != target) nativeTap("layer-row-$previousLayer")
+                        } finally { chromeFixture = previousFixture }
+                    }.use {
                         continuous("ui-layer-row-opacity", {
                             check(state().getJSONObject("layer_tools").optLong("opacity_popup", -1) == target) { "Native layer row opacity popup disappeared" }
                             state().array("layers").objects().first { it.getLong("id") == target }.getDouble("opacity").toString()
                         }, ::slider, { state().array("layers").objects().first { it.getLong("id") == target }.getDouble("opacity") }) { milliseconds -> drag(from, milliseconds) { t -> bounds.width() * .25 * sin(2 * PI * t) to 0.0 } }
-                    } finally {
-                        if (findTag("layer-gesture-opacity") != null) nativeBack()
-                        waitFor("Layer row opacity popup closed") { findTag("layer-gesture-opacity") == null && state().getJSONObject("layer_tools").optLong("opacity_popup", -1) != target }
-                        if (previousLayer != target) nativeTap("layer-row-$previousLayer")
-                        chromeFixture = previousFixture
                     }
                 }
                 fun scroll(label: String, tag: String, fixture: JSONObject, itemTags: List<List<String>> = emptyList()) {
