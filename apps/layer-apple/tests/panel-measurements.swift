@@ -112,6 +112,10 @@ import Darwin
                 precondition(unitStore.failure == nil, String(describing: unitStore.failure))
                 return !unitStore.state.isNull && !unitStore.catalog.isNull
             }
+            unitStore.native?.resize(width: 1200, height: 900, scale: 1)
+            try await wait("Unit measurements have the fixture viewport") {
+                unitStore.snapshot["layout"]["viewport"].array.map { $0.number } == [1200, 900]
+            }
             let retainedUnits = PanelMeasurements(store: unitStore)
             func measuredUnitPanel() -> JSON {
                 precondition(unitStore.failure == nil, String(describing: unitStore.failure))
@@ -347,6 +351,8 @@ import Darwin
             let width = measured("sizes")["tab_width"].number + measured("stats")["tab_width"].number + 22
             return abs(group("sizes")["bounds"].rect.width - width) < 0.02 && fitted("stats")
         }
+        try await store.apply(["type": "select_panel_tab", "group": group("sizes")["id"].raw, "panel": "sizes"])
+        try await wait("Sizes is measured at the tabbed width") { fitted("sizes") }
         if group("sizes")["active"].string != "stats" {
             try await store.apply(["type": "select_panel_tab", "group": group("sizes")["id"].raw, "panel": "stats"])
         }
