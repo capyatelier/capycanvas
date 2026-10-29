@@ -222,7 +222,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         drawers=std::make_unique<WorkspaceDrawers>(data,root,gestures,[weak=weak_from_this()]{if(auto self=weak.lock()){self->publishDrawerSources();self->queueMeasurements();}});
         expansion=std::make_unique<WorkspaceExpansion>(data,root,gestures,[weak=weak_from_this()]{if(auto self=weak.lock())self->present();});
         bubbles=std::make_unique<WorkspaceBubbles>(data,root,[weak=weak_from_this()]{if(auto self=weak.lock();self&&self->glassChanged)self->glassChanged();});
-        measureGate.Content(measureHost);measureGate.IsEnabled(false);measureGate.IsTabStop(false);measureGate.IsHitTestVisible(false);measureGate.Opacity(0);Canvas::SetLeft(measureGate,-100000);root.Children().Append(measureGate);
+        measureGate.Content(measureHost);measureGate.IsEnabled(false);measureGate.IsTabStop(false);measureGate.IsHitTestVisible(false);measureGate.Visibility(Visibility::Collapsed);Canvas::SetLeft(measureGate,-100000);root.Children().Append(measureGate);
         root.LayoutUpdated([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->measured();});
         root.Loaded([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->presentBackgrounds();});
     }
