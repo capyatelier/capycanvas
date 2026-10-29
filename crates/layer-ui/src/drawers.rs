@@ -124,6 +124,7 @@ pub fn drawer_frame(source: &str) -> Result<serde_json::Value, String> {
         closing: bool,
         #[serde(default)]
         clip_contents: bool,
+        pixel_scale: Option<f32>,
     }
     let request: Request = serde_json::from_str(source).map_err(|error| error.to_string())?;
     let from = request.from.unwrap_or_else(|| request.to.closed());
@@ -132,6 +133,16 @@ pub fn drawer_frame(source: &str) -> Result<serde_json::Value, String> {
     if !request.clip_contents {
         for (column, start) in placement.columns.iter_mut().zip(&from.columns) {
             *column = column.interpolate_from(*start, request.progress);
+        }
+    }
+    if let Some(scale)=request.pixel_scale {
+        if !scale.is_finite() || scale<=0. {return Err("Invalid drawer pixel scale".into());}
+        let snap=|b:Bounds| {let x=(b.x*scale).round()/scale;let y=(b.y*scale).round()/scale;
+            Bounds {x,y,width:((b.x+b.width)*scale).round()/scale-x,height:((b.y+b.height)*scale).round()/scale-y}};
+        let origin=placement.bounds;placement.bounds=snap(origin);placement.anchor=snap(placement.anchor);
+        for column in &mut placement.columns {
+            let b=snap(Bounds {x:origin.x+column.x,y:origin.y+column.y,..*column});
+            *column=Bounds {x:b.x-placement.bounds.x,y:b.y-placement.bounds.y,..b};
         }
     }
     Ok(serde_json::json!({"connection": placement.connection(), "placement": placement}))
@@ -492,17 +503,19 @@ impl ContentDrawer {
                 if panels.contains(&Panel::ToolSettings) { 240. } else { 184. }
             }).collect();
         }
+        let width=|panel:&Panel| if *panel==Panel::Layers {crate::PANEL_MIN_WIDTH+crate::TILE_SIZE+crate::TILE_GAP}
+            else {panel.default_width(viewport_width)};
         if let Some(tabs) = &self.tabs {
             return vec![
                 tabs.panels
                     .iter()
-                    .map(|p| p.default_width(viewport_width))
+                    .map(width)
                     .fold(0., f32::max),
             ];
         }
         self.columns
             .iter()
-            .map(|panels| panels.iter().map(|p| p.default_width(viewport_width)).fold(0.0, f32::max))
+            .map(|panels| panels.iter().map(width).fold(0.0, f32::max))
             .collect()
     }
 
@@ -1149,7 +1162,7 @@ mod tests {
                 .unwrap();
             let mut d = drawer(&layout);
             d.columns = vec![vec![Panel::Sizes, Panel::Layers], vec![Panel::Color]];
-            assert_eq!(d.column_widths(VIEWPORT[0]), [242., 242.]);
+            assert_eq!(d.column_widths(VIEWPORT[0]), [280., 242.]);
             let p = d.placement(&layout, VIEWPORT, &[500.0, 200.0]).unwrap();
             contained(&p, VIEWPORT);
             if matches!(p.direction, Edge::Left | Edge::Top) {

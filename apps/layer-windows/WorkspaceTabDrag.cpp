@@ -25,7 +25,7 @@ struct WorkspaceTabDrag::Impl {
         J hit,model;
         hstring panel;
         double opacity=1,target=0;
-        bool active=false;
+        bool active=false,showIcon=true,showName=true;
         FrameworkElement copy{nullptr};
         Vector3KeyFrameAnimation animation{nullptr};
     };
@@ -65,6 +65,7 @@ struct WorkspaceTabDrag::Impl {
             auto index=uint32_t(num(current,L"index"));
             auto bounds=element.TransformToVisual(root).TransformBounds({0,0,float(element.ActualWidth()),float(element.ActualHeight())});
             Entry entry;auto shell=shellOf(element);entry.source=make_weak(shell);entry.opacity=shell.Opacity();
+            if(auto button=element.try_as<Button>())if(auto row=button.Content().try_as<StackPanel>();row&&row.Children().Size()>=2){entry.showIcon=row.Children().GetAt(0).Visibility()==Visibility::Visible;entry.showName=row.Children().GetAt(1).Visibility()==Visibility::Visible;}
             entry.panel=str(current,L"panel");entry.model=find(array(data->model,L"panels"),L"id",entry.panel);
             if(!entry.model.Size())continue;
             entry.hit=O({{L"group",N(group)},{L"index",N(index)},{L"bounds",rectangle(bounds)}});
@@ -95,11 +96,10 @@ struct WorkspaceTabDrag::Impl {
             auto& entry=entries[i];hits.Append(entry.hit);
             StackPanel row;row.Orientation(Orientation::Horizontal);row.Spacing(6);
             row.HorizontalAlignment(HorizontalAlignment::Center);row.VerticalAlignment(VerticalAlignment::Center);
-            auto presentation=object(entry.model,L"tab");
-            if(flag(presentation,L"show_icon"))row.Children().Append(panelIcon(data,str(entry.model,L"icon"),paintIcons));
-            if(flag(presentation,L"show_name"))row.Children().Append(label(data,str(entry.model,L"title"),true));
+            if(entry.showIcon)row.Children().Append(panelIcon(data,str(entry.model,L"icon"),paintIcons));
+            if(entry.showName)row.Children().Append(label(data,str(entry.model,L"title"),true));
             Border content;content.Padding({8,4,8,4});content.Child(row);
-            auto copy=panelTabShell(content,entry.active?Brush(data->brush(L"panel")):Brush(nullptr));
+            auto copy=content;
             auto bounds=rectangle(object(entry.hit,L"bounds"));bounds.X-=float(num(clip,L"x"));bounds.Y-=float(num(clip,L"y"));
             place(copy,rectangle(bounds));entry.copy=copy;
             Canvas::SetZIndex(copy,i==source?2:entry.active?1:0);overlay.Children().Append(copy);
@@ -156,9 +156,8 @@ struct WorkspaceTabDrag::Impl {
             auto shell=shellOf(element);
             bool active=unbox_value_or<hstring>(shell.Tag(),L"")==L"active-panel-tab-shell";
             if(active!=entry.active){
-                entry.active=active;auto copy=entry.copy.as<Grid>();
-                selectPanelTabShell(copy,active,active?Brush(data->brush(L"panel")):Brush(nullptr));
-                Canvas::SetZIndex(copy,index==source?2:active?1:0);
+                entry.active=active;
+                Canvas::SetZIndex(entry.copy,index==source?2:active?1:0);
             }
             if(shell==entry.source.get())continue;
             if(auto previous=entry.source.get())previous.Opacity(entry.opacity);
@@ -174,3 +173,8 @@ J WorkspaceTabDrag::Begin(){return impl->begin();}
 void WorkspaceTabDrag::Update(J const& presentation){impl->update(presentation);}
 void WorkspaceTabDrag::Refresh(std::vector<weak_ref<FrameworkElement>> const& tabs){impl->refresh(tabs);}
 void WorkspaceTabDrag::Clear(){impl->clear();}
+
+std::pair<float,bool> WorkspaceTabDrag::ActiveOffset(uint32_t group)const{
+    if(impl->visible&&impl->group==group)for(uint32_t i=0;i<impl->entries.size();++i)if(impl->entries[i].active)return {float(impl->entries[i].target),i!=impl->source&&impl->animate};
+    return {};
+}

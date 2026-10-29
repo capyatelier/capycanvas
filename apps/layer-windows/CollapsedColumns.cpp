@@ -25,7 +25,7 @@ struct Column:std::enable_shared_from_this<Column>{
     bool gpu=false,nativeResize=false;
     double reported=0;
     bool applying=false;
-    std::array<float,4> corners{SurfaceRadius,SurfaceRadius,SurfaceRadius,SurfaceRadius};
+    std::array<float,4> corners{SurfaceRadius,SurfaceRadius,SurfaceRadius,SurfaceRadius},sourceRadii{SurfaceRadius,SurfaceRadius,SurfaceRadius,SurfaceRadius};
     std::array<float,6> surfaceShape{};
     void shape(float width,float height){
         std::array<float,6> next{width,height,corners[0],corners[1],corners[2],corners[3]};
@@ -63,12 +63,12 @@ struct Column:std::enable_shared_from_this<Column>{
     }
     void apply(J const& next){
         applying=true;geometry=next;
-        auto bounds=object(geometry,L"bounds"),content=object(geometry,L"content");place(background,bounds);
+        auto bounds=rectangle(pixelBounds(rectangle(object(geometry,L"bounds")),workspace)),content=object(geometry,L"content");placeOnPixelGrid(background,bounds,workspace);
         J source;for(auto value:data->drawerSources){auto anchor=object(value.GetObject(),L"anchor");
             if(str(anchor,L"kind")==L"column"&&num(anchor,L"column",-1)==id)source=value.GetObject();}
         corners={SurfaceRadius,SurfaceRadius,SurfaceRadius,SurfaceRadius};
         if(source.Size()){auto square=sourceCorners(data,source,bounds);for(int i=0;i<4;++i)if(square[i])corners[i]=0;}
-        auto open=object(geometry,L"open");
+        sourceRadii=corners;auto open=object(geometry,L"open");
         auto facing=str(source,L"direction"),joined=str(object(source,L"anchor"),L"origin");
         shape(float(num(bounds,L"width")),float(num(bounds,L"height")));
         place(grip,local(object(geometry,L"grip"),bounds));place(scroll,local(content,bounds));
@@ -140,7 +140,7 @@ struct Column:std::enable_shared_from_this<Column>{
     }
     void visible(bool shown){fade->apply(background,true,!shown,[weak=weak_from_this()]{if(auto self=weak.lock();self&&self->changed)self->changed();});}
     J geometryMeasure()const{
-        auto box=object(geometry,L"bounds");if(num(box,L"width")<=0||num(box,L"height")<=0||background.Opacity()<=0)return J{};
+        auto box=rectangle(pixelBounds(rectangle(object(geometry,L"bounds")),workspace));if(num(box,L"width")<=0||num(box,L"height")<=0||background.Opacity()<=0)return J{};
         A measured;
         for(auto value:array(geometry,L"groups"))for(auto icon:array(value.GetObject(),L"icons")){
             auto item=icon.GetObject();A pair;pair.Append(S(str(item,L"panel")));pair.Append(object(item,L"bounds"));measured.Append(pair);}
@@ -152,13 +152,13 @@ struct Column:std::enable_shared_from_this<Column>{
             else surface.Fill(data->glass(L"panel"));
         }
         J column;for(auto value:array(frame,L"columns"))if(num(value.GetObject(),L"column")==id){column=value.GetObject();break;}
-        auto radii=array(column,L"radii");
-        if(radii.Size()==4)for(uint32_t i=0;i<4;++i)corners[i]=float(radii.GetNumberAt(i));
+        auto radii=array(column,L"radii");corners=sourceRadii;
+        if(radii.Size()==4)for(uint32_t i=0;i<4;++i)corners[i]=std::min(corners[i],float(radii.GetNumberAt(i)));
         for(auto value:array(column,L"icons")){auto pair=value.GetArray();auto found=buttons.find(std::wstring(pair.GetStringAt(0)));if(found==buttons.end())continue;
             auto r=pair.GetArrayAt(1);found->second.CornerRadius({r.GetNumberAt(0)*CornerFit,r.GetNumberAt(1)*CornerFit,r.GetNumberAt(2)*CornerFit,r.GetNumberAt(3)*CornerFit});}
         gpu=false;for(auto value:array(frame,L"bridges"))if(value.GetArray().GetNumberAt(0)==id)gpu=ready;
         surface.Opacity(gpu?0:1);
-        shape(float(num(object(geometry,L"bounds"),L"width")),float(num(object(geometry,L"bounds"),L"height")));
+        auto snapped=pixelBounds(rectangle(object(geometry,L"bounds")),workspace);shape(snapped.Width,snapped.Height);
     }
     void collectGlass(A& regions,UIElement const& reference)const{
         if(!gpu)appendGlass(regions,background,reference,{corners[0],corners[1],corners[2],corners[3]},true);
@@ -198,6 +198,6 @@ void CollapsedColumns::ForEachBounds(UIElement const& reference,std::function<vo
         auto bounds=allocatedBounds(column->background,reference);if(bounds.Width>0&&bounds.Height>0)visit(id,bounds);
     }
 }
-void CollapsedColumns::PresentBridges(J const& frame,bool ready,bool resizing){for(auto const& [id,column]:impl->columns)column->present(frame,ready,resizing);}
+void CollapsedColumns::PresentBridges(J const& frame,bool ready,bool resizing,std::vector<uint32_t> const& publishedColumns){for(auto const& [id,column]:impl->columns)column->present(frame,ready&&std::find(publishedColumns.begin(),publishedColumns.end(),id)!=publishedColumns.end(),resizing);}
 double CollapsedColumns::Opacity(uint32_t column)const{auto found=impl->columns.find(column);return found==impl->columns.end()?0:found->second->background.Opacity();}
 void CollapsedColumns::AppendGlass(A& regions,UIElement const& reference)const{for(auto const& [id,column]:impl->columns)column->collectGlass(regions,reference);}

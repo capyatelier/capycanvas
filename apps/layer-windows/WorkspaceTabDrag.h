@@ -13,6 +13,7 @@ public:
     void Update(CapyUi::J const& presentation);
     void Refresh(std::vector<winrt::weak_ref<winrt::Microsoft::UI::Xaml::FrameworkElement>> const& tabs);
     void Clear();
+    std::pair<float,bool> ActiveOffset(uint32_t group)const;
 private:
     struct Impl;
     std::unique_ptr<Impl> impl;

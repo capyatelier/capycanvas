@@ -189,10 +189,29 @@ try {
  Press ('header-item-'+$brush.id)
  Wait-Until {(ConvertTo-Json -InputObject (Model).state.customization.drawer.columns -Compress) -eq '[["brush_sets"],["tools"],["tool_settings"]]'} 'Layers to Brush did not adopt the shared three-column drawer'
  Wait-Until {(Control 'drawer-panel-brush_sets' -Arranged) -and (Control 'drawer-panel-tools' -Arranged) -and (Control 'drawer-panel-tool_settings' -Arranged)} 'Brush drawer native bodies did not appear after Layers'
+ $brushDrawer=Control 'tool-drawer' -Arranged;$brushIdentity=$brushDrawer.GetRuntimeId() -join ':'
+ $categories=@((Model).state.tool_panels.brush_sets.groups)
+ $category=@($categories|Where-Object {$_.enabled -and !$_.selected})[0]
+ if(!$category){throw 'Sketch drawer has no other brush category'}
+ $categoryId='brush-set-'+$category.icon
+ (Control $categoryId -Within $brushDrawer -Arranged).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+ Wait-Until {@((Model).state.tool_panels.brush_sets.groups|Where-Object {$_.icon -eq $category.icon -and $_.selected}).Count -eq 1} 'Drawer brush category did not select'
+ if(((Control 'tool-drawer').GetRuntimeId() -join ':') -ne $brushIdentity){throw 'Changing the brush category recreated the open drawer'}
  Capture ('drawer-brush-switch-'+$Theme) -Composed -WithModel
  Press ('header-item-'+$entry.id)
  Wait-Until {(Model).state.customization.drawer.layer_properties -eq $false -and (Find 'layer-new' -Visible)} 'Layers did not reopen after Brush'
  Check-Footer
+ $layerDrawer=Control 'tool-drawer' -Arranged;$layerIdentity=$layerDrawer.GetRuntimeId() -join ':'
+ $other=@((Model).state.layers|Where-Object {$_.id -ne (Model).state.layer_tools.editing_layer.id})[0]
+ if(!$other){throw 'Layers drawer has no second editing target'}
+ Press ("layer-"+$other.id+'-name')
+ Wait-Until {(Model).state.layer_tools.editing_layer.id -eq $other.id} 'Drawer row did not change the editing target'
+ if(((Control 'tool-drawer').GetRuntimeId() -join ':') -ne $layerIdentity){throw 'Selecting a layer recreated the open drawer'}
+ $row=Bounds ("layer-"+$other.id+'-name')
+ [CapyRowPointer]::DoubleClick([int]($row.X+$row.Width*.5),[int]($row.Y+$row.Height*.5))|Out-Null
+ Wait-Until {Find ("layer-"+$other.id+'-rename') -Visible} 'Layer double tap did not start rename'
+ [CapyRowPointer]::Key([uint32]$review.Id,0x1B)
+ if(!(Model).state.customization.drawer -or ((Control 'tool-drawer').GetRuntimeId() -join ':') -ne $layerIdentity){throw 'Layer double tap dismissed or recreated the drawer'}
  Test-AddPaper
  $paper=@((Model).state.layers|Where-Object content_icon -eq 'layer-paper-symbolic')[0]
  $paperEye=Bounds ("layer-"+$paper.id+'-visibility')

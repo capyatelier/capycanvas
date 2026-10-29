@@ -154,7 +154,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     std::array<std::shared_ptr<PreviewPanel>,2> previewPanels{std::make_shared<PreviewPanel>(),std::make_shared<PreviewPanel>()};
     std::shared_ptr<ResponseCalibration> pressure=std::make_shared<ResponseCalibration>();
     double cameraRevision=-1;
-    hstring previousTheme,previousPalette;
+    hstring previousTheme,previousPalette,paintedTheme;std::vector<uint32_t> publishedBridgeGroups,publishedBridgeColumns;
     Flyout popup{nullptr};
     std::wstring popupControl;
     std::shared_ptr<uint64_t> popupGeneration=std::make_shared<uint64_t>(0);
@@ -205,6 +205,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         surface.CornerRadius(zoom->root.CornerRadius());
         surface.HorizontalAlignment(HorizontalAlignment::Right);surface.VerticalAlignment(VerticalAlignment::Bottom);surface.Margin({4,0,4,0});
         cameraSlot.Children().Append(surface);
+        root.Children().Append(cameraSlot);
         canvasBar->data=data;
         canvasBar->changed=[weak=weak_from_this()]{if(auto self=weak.lock()){self->gestures->ChromeChanged();self->placePreviews();if(self->glassChanged)self->glassChanged();}};
         canvasBar->init(root);
@@ -257,7 +258,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             group.tabLabels.Background(clear());
         }
         auto frame=group.layout;
-        frame.RowDefinitions().GetAt(0).Height({flag(geometry,L"tabs_visible")?36.:0.,GridUnitType::Pixel});
+        frame.RowDefinitions().GetAt(0).Height({flag(geometry,L"tabs_visible")?data->panelMetric(L"tab_bar_height"):0.,GridUnitType::Pixel});
         frame.RowDefinitions().GetAt(2).Height({num(object(geometry,L"footer_grip"),L"height"),GridUnitType::Pixel});
         A members;for(auto const& id:panelTabIds(array(geometry,L"panels"))){
             auto model=find(array(data->model,L"panels"),L"id",id);
@@ -270,17 +271,12 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             uint32_t index=0;bool fitted=automaticTabs(data,num(geometry,L"id"));
             for(auto value:array(geometry,L"panels")){
                 auto id=value.GetString();auto model=find(array(data->model,L"panels"),L"id",id);
-                auto tab=button(data,str(model,L"title"),[data=data,id,groupId=num(geometry,L"id")]{
-                    data->dispatch(O({{L"type",S(L"select_panel_tab")},{L"group",N(groupId)},{L"panel",S(id)}}));
-                });tab.UseLayoutRounding(false);tab.Height(36);tab.MinWidth(36);tab.Padding(Thickness{8,4,8,4});tab.CornerRadius(CornerRadius{6,6,0,0});
-                StackPanel content;content.Orientation(Orientation::Horizontal);content.Spacing(6);
                 auto tabStyle=object(model,L"tab");
-                content.Children().Append(panelIcon(data,str(model,L"icon"),group.paintIcons));
-                {
-                    auto name=label(data,str(model,L"title"),true);name.Visibility(flag(tabStyle,L"show_name")?Visibility::Visible:Visibility::Collapsed);content.Children().Append(name);
-                    if(fitted)group.automatic.push_back({tab,name,std::wstring(id)+L"\n"+std::wstring(str(model,L"title"))+L"\n"+std::to_wstring(data->textSize())});
-                }
-                tab.Content(content);
+                auto tab=panelTabButton(data,str(model,L"title"),panelIcon(data,str(model,L"icon"),group.paintIcons),tabStyle,[data=data,id,groupId=num(geometry,L"id")]{
+                    data->dispatch(O({{L"type",S(L"select_panel_tab")},{L"group",N(groupId)},{L"panel",S(id)}}));
+                });
+                auto name=tab.Content().as<StackPanel>().Children().GetAt(1).as<TextBlock>();
+                if(fitted)group.automatic.push_back({tab,name,std::wstring(id)+L"\n"+std::wstring(str(model,L"title"))+L"\n"+std::to_wstring(data->textSize())});
                 auto item=O({{L"kind",S(L"panel")},{L"panel",S(id)}});
                 gestures->Source(tab,O({{L"type",S(L"drag_workspace")},{L"item",item}}),item,false,
                     O({{L"group",N(num(geometry,L"id"))},{L"index",N(index++)},{L"panel",S(id)}}));
@@ -294,29 +290,18 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
                 group.tabs.emplace(std::wstring(id),shell);tabs.Children().Append(shell);
             }
             if(!group.tabScroll){
-                group.tabScroll=ScrollView();auto tabScroll=group.tabScroll;tabScroll.Content(tabs);tabScroll.HorizontalScrollBarVisibility(ScrollingScrollBarVisibility::Hidden);
-                tabScroll.HorizontalScrollMode(ScrollingScrollMode::Enabled);tabScroll.VerticalScrollMode(ScrollingScrollMode::Disabled);
-                tabScroll.VerticalScrollBarVisibility(ScrollingScrollBarVisibility::Hidden);
-                tabScroll.ContentOrientation(ScrollingContentOrientation::Horizontal);
-                tabScroll.IgnoredInputKinds(ScrollingInputKinds::Touch|ScrollingInputKinds::Pen);
-                tabScroll.Background(clear());tabScroll.CornerRadius({});
+                group.tabScroll=ScrollView();auto tabScroll=group.tabScroll;Border handle;group.header=panelHeader(data,tabs,tabScroll,handle);auto header=group.header;
                 gestures->Source(tabScroll,O({{L"type",S(L"drag_workspace")},{L"item",groupItem}}),groupItem,true,{},WorkspaceGestures::Pickup::Sideways);
                 tabScroll.SizeChanged([weak=weak_from_this(),id=uint32_t(num(geometry,L"id"))](auto&&,auto&&){if(auto self=weak.lock()){self->fitTabs(id);self->cutStrip(id);}});
                 tabScroll.ViewChanged([weak=weak_from_this(),id=uint32_t(num(geometry,L"id"))](auto&&,auto&&){if(auto self=weak.lock())self->cutStrip(id);});
                 tabs.SizeChanged([weak=weak_from_this(),id=uint32_t(num(geometry,L"id"))](auto&&,auto&&){if(auto self=weak.lock())self->cutStrip(id);});
-                group.header=Grid();auto header=group.header;header.Background(clear());
-                ColumnDefinition labels;labels.Width({1,GridUnitType::Star});header.ColumnDefinitions().Append(labels);
-                ColumnDefinition trailing;trailing.Width({20,GridUnitType::Pixel});header.ColumnDefinitions().Append(trailing);
-                header.Children().Append(tabScroll);
-                Border handle;handle.Background(clear());handle.Width(20);handle.Height(36);
-                handle.HorizontalAlignment(HorizontalAlignment::Left);handle.Child(panelGrip(data->theme()));
                 gestures->Source(handle,O({{L"type",S(L"drag_workspace")},{L"item",groupItem}}),groupItem,true);
                 AutomationProperties::SetAutomationId(handle,L"group-grip-"+to_hstring(uint32_t(num(geometry,L"id"))));
                 copyName(data,handle,data->copyDelivery(L"move_group"));
                 auto help=data->copyDelivery(L"drag_panel");
                 AutomationProperties::SetHelpText(handle,help);
                 data->copyView([weak=make_weak(handle),resolve=help.current]{if(auto view=weak.get()){AutomationProperties::SetHelpText(view,resolve());return true;}return false;});
-                Grid::SetColumn(handle,1);header.Children().Append(handle);frame.Children().Append(header);
+                frame.Children().Append(header);
             }
         }
         group.header.Visibility(flag(geometry,L"tabs_visible")?Visibility::Visible:Visibility::Collapsed);
@@ -437,7 +422,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     J metricContext(){
         auto scale=root.XamlRoot()?root.XamlRoot().RasterizationScale():1.;
         auto textScale=Windows::UI::ViewManagement::UISettings().TextScaleFactor();
-        auto style=L"winui:"+data->language()+L":"+data->theme()+L":"+to_hstring(data->textSize());
+        auto style=L"winui:"+data->language()+L":"+to_hstring(data->textSize());
         auto key=O({{L"scale",N(scale)},{L"text_scale",N(textScale)},{L"style",S(style)}}).Stringify();
         if(key!=panelMetricKey){
             static std::atomic<uint64_t> generation{0};
@@ -547,8 +532,8 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         auto theme=data->theme(),palette=object(data->state,L"palette").Stringify();
         if(theme!=previousTheme||palette!=previousPalette){
             panelBridgeKey=L"";
-            expansion->Reset();drawers->Reset();collapsed->Reset();root.Children().Clear();groups.clear();bodies.clear();bridgeShadows.clear();handles.clear();previousTheme=theme;previousPalette=palette;root.Children().Append(cameraSlot);canvasBar->attach();notice->attach();colorStrip->attach();for(auto const& panel:previewPanels)panel->attach();
-            measureHost.Children().Clear();offscreen.clear();root.Children().Append(measureGate);
+            for(auto& [id,group]:groups)group.backgroundKey=L"";
+            previousTheme=theme;previousPalette=palette;
         }
         root.RequestedTheme(theme==L"dark"?ElementTheme::Dark:ElementTheme::Light);
         }
@@ -580,7 +565,6 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             }
             AutomationProperties::SetName(group.frame,str(panel,L"title"));
             group.geometry=geometry;group.offset={};
-            if(float fit=groupRadius(geometry)*CornerFit;group.frame.CornerRadius().TopLeft!=fit){group.frame.CornerRadius({fit,fit,fit,fit});group.border.CornerRadius({fit,fit,fit,fit});}
             // Geometry-only changes retain controls, focus, capture and scroll.
             if(full||added||!group.body){
             auto structure=J::Parse(geometry.Stringify());
@@ -644,13 +628,14 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         zoom->text.Foreground(data->brush(L"text"));
         updateCamera(object(data->state,L"camera"));
         updatePopup();queueMeasurements();
+        if(paintedTheme!=data->theme()){paintedTheme=data->theme();std::set<void*> seen;refreshAssetIconTheme(root,paintedTheme,seen);}
         applyMotion(object(update,L"drag"));
         return rebuilt;
     }
 
     Rect placement(Group const& group)const{
         auto bounds=rectangle(object(group.presented.Size()?group.presented:group.geometry,L"bounds"));
-        bounds.X+=group.offset.X;bounds.Y+=group.offset.Y;return bounds;
+        bounds.X+=group.offset.X;bounds.Y+=group.offset.Y;return pixelBounds(bounds,root);
     }
     void placeMotion(uint32_t id,Group const& group){
         // Native render transforms preserve control resolution and move hit/clip
@@ -680,13 +665,14 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         movingGroup=next;
         if(next)if(auto found=groups.find(*next);found!=groups.end()){
             auto& group=found->second;
-            auto from=rectangle(object(group.geometry,L"bounds")),to=rectangle(object(motion,L"bounds"));
+            auto from=pixelBounds(rectangle(object(group.geometry,L"bounds")),root),to=pixelBounds(rectangle(object(motion,L"bounds")),root);
             Point offset{to.X-from.X,to.Y-from.Y};
             moved|=offset.X!=group.offset.X||offset.Y!=group.offset.Y;
             group.offset=offset;placeMotion(*next,group);
         }
-        gestures->Present(drag);
-        if(moved)queueMeasurements();
+        gestures->Present(drag);bool tabsMoved=drawers->PresentTabs();
+        for(auto& [id,group]:groups){auto [offset,animate]=gestures->TabOffset(id);tabsMoved=group.strip.TranslateTab(offset,animate)||tabsMoved;}
+        if(moved)queueMeasurements();if((moved||tabsMoved)&&glassChanged)glassChanged();
     }
     void traceSurfaces(){
         if(!root.IsLoaded())return;
@@ -964,10 +950,10 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         for(auto& [id,group]:groups){
             bool active=expanded.Size()&&num(expanded,L"group")==id&&group.configuration;
             group.presented=active?expanded:J{};
-            auto bounds=object(active?expanded:group.geometry,L"bounds");auto box=rectangle(bounds);
+            auto bounds=object(active?expanded:group.geometry,L"bounds");auto box=pixelBounds(rectangle(bounds),root);
             auto preview=active?object(expanded,L"preview"):rectangle({0,0,box.Width,box.Height});
-            auto previewBox=rectangle(preview);
-            place(group.frame,bounds);placeMotion(id,group);place(group.border,preview);
+            auto previewBox=pixelBounds(rectangle(preview),root);
+            placeOnPixelGrid(group.frame,bounds,root);placeMotion(id,group);placeOnPixelGrid(group.border,preview,root);
             group.content.Width(box.Width);group.content.Height(box.Height);
             group.clip.Rect({0,0,box.Width,box.Height});
             group.fade->apply(group.frame,true,group.hidden,[weak=weak_from_this(),id,frame=make_weak(group.frame),shadow=make_weak(group.shadow.Root())]{auto self=weak.lock();auto view=frame.get();if(!self||!view)return;auto group=self->groups.find(id);if(group==self->groups.end()||group->second.frame!=view)return;if(auto surface=shadow.get())surface.Opacity(group->second.gpu||!group->second.bridge.empty()?0:view.Opacity());if(view.Opacity()==0&&group->second.body)group->second.body->Apply(false);self->queueMeasurements();if(self->glassChanged)self->glassChanged();});
@@ -979,7 +965,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
                 geometry=J::Parse(group.geometry.Stringify());geometry.Insert(L"bounds",preview);
                 if(expanded.HasKey(L"tiles"))geometry.Insert(L"tiles",object(expanded,L"tiles"));
             }
-            double bodyHeight=std::max(0.,double(previewBox.Height)-(flag(geometry,L"tabs_visible")?36.:0.)
+            double bodyHeight=std::max(0.,double(previewBox.Height)-(flag(geometry,L"tabs_visible")?data->panelMetric(L"tab_bar_height"):0.)
                 -num(object(geometry,L"footer_grip"),L"height"));
             double minimum=object(geometry,L"tiles").Size()?0.:num(geometry,L"min_body_height");
             if(group.bodyScroll){
@@ -993,18 +979,17 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
                 place(group.footer,rectangle(grip));
             }
             if(active){
-                auto configuration=object(expanded,L"configuration");auto configBox=rectangle(configuration);
+                auto configuration=object(expanded,L"configuration");auto configBox=pixelBounds(rectangle(configuration),root);
                 bool left=configBox.X<previewBox.X;bool tabs=configBox.Y>0;
-                group.border.CornerRadius(left?CornerRadius{tabs?8.:0.,8,8,0}:CornerRadius{8,tabs?8.:0.,0,8});
-                group.configurationFrame.CornerRadius(left?CornerRadius{8,0,0,8}:CornerRadius{0,8,8,0});
-                place(group.configurationFrame,configuration);
+                auto radius=groupRadius(group.geometry)*CornerFit;group.border.CornerRadius(left?CornerRadius{tabs?radius:0.,radius,radius,0}:CornerRadius{radius,tabs?radius:0.,0,radius});
+                group.configurationFrame.CornerRadius(left?CornerRadius{radius,0,0,radius}:CornerRadius{0,radius,radius,0});
+                placeOnPixelGrid(group.configurationFrame,configuration,root);
                 group.configurationFrame.Opacity(1);group.configurationFrame.IsHitTestVisible(!group.hidden);
                 group.configuration->SetVisible(!group.hidden);
                 AutomationProperties::SetItemStatus(group.configuration->Root(),expanded.Stringify());
             }else{
-                group.border.CornerRadius({8,8,8,8});
                 // Measure full natural content before the first shared geometry reply.
-                place(group.configurationFrame,rectangle({box.Width,0,std::min(380.f,float(root.ActualWidth())),box.Height}));
+                place(group.configurationFrame,rectangle({box.Width,0,std::min(float(data->panelMetric(L"configuration_width")),float(root.ActualWidth())),box.Height}));
                 group.configurationFrame.Opacity(0);group.configurationFrame.IsHitTestVisible(false);
                 if(group.configuration){group.configuration->SetVisible(false);AutomationProperties::SetItemStatus(group.configuration->Root(),L"");}
             }
@@ -1036,7 +1021,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     }
     bool panelBridgesReady()const{return panelBridgeFrame.Size()&&num(object(data->model,L"windows_glass"),L"panel_revision",-1)==double(panelBridgeRevision);}
     bool panelBridgeGroup(uint32_t id)const{
-        if(!panelBridgesReady())return false;
+        if(!panelBridgesReady()||std::find(publishedBridgeGroups.begin(),publishedBridgeGroups.end(),id)==publishedBridgeGroups.end())return false;
         for(auto value:array(panelBridgeFrame,L"bridges"))for(auto receiver:array(value.GetArray().GetObjectAt(2),L"receivers"))if(num(receiver.GetObject(),L"group")==id)return true;
         return false;
     }
@@ -1065,7 +1050,8 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     static A panelColor(Windows::UI::Color color,double opacity=1){
         A result;for(auto value:{color.R/255.,color.G/255.,color.B/255.,color.A/255.*opacity})result.Append(N(value));return result;
     }
-    A panelSurfaces(UIElement const& reference)const{
+    A panelSurfaces(UIElement const& reference){
+        publishedBridgeGroups.clear();publishedBridgeColumns.clear();publishedBridgeGroups.reserve(groups.size());publishedBridgeColumns.reserve(array(panelBridgeFrame,L"columns").Size());
         A surfaces;auto offset=root.TransformToVisual(reference).TransformPoint({0,0});
         for(auto value:array(panelBridgeFrame,L"columns")){
             auto column=value.GetObject();double id=num(column,L"column");A bridges;
@@ -1074,17 +1060,20 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             A receivers;
             auto expected=array(bridges.GetObjectAt(0),L"receivers");
             for(auto receiverValue:expected){auto receiver=receiverValue.GetObject();auto found=groups.find(uint32_t(num(receiver,L"group")));if(found==groups.end())continue;
-                auto const& group=found->second;if(group.hidden||group.presented.Size()||!group.frame.IsLoaded())continue;
+                auto const& group=found->second;if(group.hidden||group.presented.Size()||!group.frame.IsLoaded()||group.frame.Visibility()!=Visibility::Visible||group.frame.Opacity()<=0)continue;
+                auto actual=allocatedBounds(group.frame,root),wanted=rectangle(object(receiver,L"bounds"));auto scale=root.XamlRoot()?root.XamlRoot().RasterizationScale():1.;
+                if(actual.Width<=0||actual.Height<=0||std::max({std::abs(actual.X-wanted.X),std::abs(actual.Y-wanted.Y),std::abs(actual.Width-wanted.Width),std::abs(actual.Height-wanted.Height)})*scale>.5)continue;
                 auto rect=[](Rect bounds){A values;for(auto v:{bounds.X,bounds.Y,bounds.Width,bounds.Height})values.Append(N(v));return values;};
-                bool tabbed=flag(group.geometry,L"tabs_visible");
+                bool tabbed=flag(group.geometry,L"tabs_visible");auto activeTab=tabbed?allocatedBounds(group.activeTab,root):Rect{};activeTab.X+=gestures->TabOffset(uint32_t(num(receiver,L"group"))).first;
                 receivers.Append(O({{L"group",N(num(receiver,L"group"))},
                     {L"tab_bar",rect(tabbed?allocatedBounds(group.header,root):Rect{})},
-                    {L"active_tab",rect(tabbed?allocatedBounds(group.activeTab,root):Rect{})},
+                    {L"active_tab",rect(activeTab)},
                     {L"tab_clip",rect(tabbed?allocatedBounds(group.tabScroll,root):Rect{})},
                     {L"color",panelColor(data->glass(L"panel").Color(),group.frame.Opacity())},
                     {L"strip_color",panelColor(data->glass(L"strip").Color(),group.frame.Opacity())}}));
             }
             if(receivers.Size()!=expected.Size())continue;
+            publishedBridgeColumns.push_back(uint32_t(id));for(auto item:receivers)publishedBridgeGroups.push_back(uint32_t(num(item.GetObject(),L"group")));
             auto b=rectangle(object(column,L"bounds"));A sidebar,translation;
             for(auto v:{b.X,b.Y,b.Width,b.Height})sidebar.Append(N(v));translation.Append(N(offset.X));translation.Append(N(offset.Y));
             surfaces.Append(O({{L"offset",translation},{L"sidebar",sidebar},{L"radii",array(column,L"radii")},
@@ -1107,29 +1096,30 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             std::array<float,4> corners{radius,radius,radius,radius};
             if(source.Size()&&!expanded){auto square=sourceCorners(data,source,bounds);for(int i=0;i<4;++i)if(square[i])corners[i]=0;}
             for(auto value:array(panelBridgeFrame,L"groups")){auto geometry=value.GetObject();if(num(geometry,L"group")!=id)continue;
-                auto radii=array(geometry,L"radii");for(uint32_t i=0;i<4;++i)corners[i]=float(radii.GetNumberAt(i));break;}
+                auto radii=array(geometry,L"radii");for(uint32_t i=0;i<4;++i)corners[i]=std::min(corners[i],float(radii.GetNumberAt(i)));break;}
             A radii;for(auto r:corners)radii.Append(N(r));
             auto key=O({{L"expansion",group.presented},{L"tabbed",B(tabbed)},{L"source",source},{L"transparent",B(data->transparent())},{L"bounds",bounds},{L"slots",slots},
                 {L"glass",object(object(data->state,L"palette"),L"glass")},{L"scale",N(root.XamlRoot()?root.XamlRoot().RasterizationScale():1)},
                 {L"radius",N(radius)},{L"corners",radii},{L"bridge",S(group.bridgeKey)},{L"native_resize",B(nativeResize())},{L"width",N(num(document,L"width"))},{L"height",N(num(document,L"height"))}}).Stringify();
             if(key==group.backgroundKey)continue;group.backgroundKey=key;
-            group.corners=tabbed&&!expanded?std::array<float,4>{SurfaceRadius,SurfaceRadius,corners[2],corners[3]}:corners;
+            group.corners=corners;CornerRadius rounded{corners[0]*CornerFit,corners[1]*CornerFit,corners[2]*CornerFit,corners[3]*CornerFit};group.frame.CornerRadius(nativeResize()?CornerRadius{}:rounded);if(!expanded)group.border.CornerRadius(rounded);
             float width=float(num(bounds,L"width")),height=float(num(bounds,L"height"));
             GeometryGroup shape{nullptr};
             if(expanded){shape=GeometryGroup();shape.FillRule(FillRule::EvenOdd);shape.Children().Append(expansionShape(group.presented));}
             cutStrip(group);
-            float top=tabbed&&!expanded&&!connected?36.f:0;
+            float top=tabbed&&!expanded&&!connected?float(data->panelMetric(L"tab_bar_height")):0;
             Canvas::SetTop(group.background.Root(),top);
             auto color=(expanded||nativeResize()?data->brush(L"panel"):data->glass(source.Size()?L"source":L"panel")).Color();
             if(nativeResize())color.A=255;
             if(group.header)group.header.Background(expanded?data->brush(L"tabbar"):clear());
             if(group.activeTab)for(auto layer:group.activeTab.Children())if(auto canvas=layer.try_as<Canvas>())for(auto item:canvas.Children())if(auto path=item.try_as<Microsoft::UI::Xaml::Shapes::Path>())
                 path.Fill(expanded?Brush(data->brush(L"panel")):Brush(nullptr));
-            auto shadowKey=O({{L"expansion",group.presented},{L"radius",N(radius)},{L"width",bounds.GetNamedValue(L"width")},{L"height",bounds.GetNamedValue(L"height")}}).Stringify();
+            auto shadowKey=O({{L"expansion",group.presented},{L"corners",radii},{L"radius",N(radius)},{L"width",bounds.GetNamedValue(L"width")},{L"height",bounds.GetNamedValue(L"height")}}).Stringify();
             if(shadowKey!=group.shadowKey){
                 group.shadowKey=shadowKey;
-                if(expanded){group.shadow.Shape(expansionShape(group.presented),width,height,36,8,.4f);group.shadow.Uncut();}
-                else group.shadow.Rounded(width,height,{radius,radius,radius,radius},12,2,.16f);
+                auto style=panelShadowStyle(data,expanded);
+                if(expanded){group.shadow.Shape(expansionShape(group.presented),width,height,style.blur,style.offset,style.opacity);group.shadow.Uncut();}
+                else group.shadow.Rounded(width,height,corners,style.blur,style.offset,style.opacity);
             }
             std::vector<Rect> holes;
             for(auto value:slots){
@@ -1156,10 +1146,8 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         if(resizeHandback&&!windowResizing&&panelBridgesReady()){
             resizeHandback=false;for(auto& [id,group]:groups)group.backgroundKey=L"";
         }
-        collapsed->PresentBridges(panelBridgeFrame,!nativeResize()&&panelBridgesReady(),nativeResize());
+        collapsed->PresentBridges(panelBridgeFrame,!nativeResize()&&panelBridgesReady(),nativeResize(),publishedBridgeColumns);
         for(auto& [id,group]:groups){
-            double radius=nativeResize()?0:SurfaceRadius*CornerFit;
-            if(group.frame.CornerRadius().TopLeft!=radius)group.frame.CornerRadius({radius,radius,radius,radius});
             J path;
             if(nativeResize()&&!group.hidden&&!group.presented.Size())for(auto value:array(panelBridgeFrame,L"paths"))
                 if(num(value.GetObject(),L"group")==id){path=value.GetObject();break;}
@@ -1192,7 +1180,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
                     auto r=rectangle(object(receiver.GetObject(),L"bounds"));
                     appendBridgeCommands(commands,bridgeCommands(array(path.GetObject(),L"commands")),r.X-bounds.X,r.Y-bounds.Y);
                 }
-            item.shadow.Layout(bounds,-1,true);item.shadow.Contour(commands,bounds.Width,bounds.Height,12,2,.16f);item.revision=panelBridgeRevision;
+            auto style=panelShadowStyle(data);item.shadow.Layout(bounds,-1,true);item.shadow.Contour(commands,bounds.Width,bounds.Height,style.blur,style.offset,style.opacity);item.revision=panelBridgeRevision;
         }
         for(auto it=bridgeShadows.begin();it!=bridgeShadows.end();)if(!live.contains(it->first)){
             uint32_t index=0;if(root.Children().IndexOf(it->second.shadow.Root(),index))root.Children().RemoveAt(index);it=bridgeShadows.erase(it);
@@ -1200,20 +1188,20 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     }
     void cutStrip(uint32_t id){if(auto found=groups.find(id);found!=groups.end())cutStrip(found->second);}
     void cutStrip(Group& group){
-        std::vector<Point> band,active;float width=placement(group).Width;
+        std::vector<Point> band,active;float width=placement(group).Width,clipX=0,clipWidth=width;
         if(flag(group.geometry,L"tabs_visible")&&!group.presented.Size()&&width>0){
-            band=squircleOutline(width,36,{SurfaceRadius,SurfaceRadius,0,0});
-            if(auto tab=group.activeTab;tab&&tab.Opacity()>0&&tab.ActualWidth()>0){
+            band=squircleOutline(width,float(data->panelMetric(L"tab_bar_height")),{group.corners[0],group.corners[1],0,0});
+            if(auto tab=group.activeTab;tab&&tab.ActualWidth()>0){
                 auto view=group.tabScroll.TransformToVisual(group.content).TransformPoint({0,0});
                 float x=view.X+group.tabLabels.ActualOffset().x+tab.ActualOffset().x-float(group.tabScroll.HorizontalOffset())-6;
                 auto outline=panelTabOutline(float(tab.ActualWidth()),float(tab.ActualHeight()));
                 for(auto& point:outline){point.X+=x;point.Y+=view.Y;}
-                active=clipColumns(outline,view.X,view.X+float(group.tabScroll.ActualWidth()));
+                active=std::move(outline);clipX=view.X;clipWidth=float(group.tabScroll.ActualWidth());
             }
         }
         auto strip=(nativeResize()?data->brush(L"tabbar"):data->glass(L"strip")).Color(),panel=(nativeResize()?data->brush(L"panel"):data->glass(L"panel")).Color();
         if(nativeResize()){strip.A=255;panel.A=255;}
-        group.strip.Present(width,std::move(band),std::move(active),strip,panel);
+        group.strip.Present(width,float(data->panelMetric(L"tab_bar_height")),std::move(band),std::move(active),strip,panel,clipX,clipWidth);
     }
     void resizeHandle(std::wstring const& key,J const& bounds,J const& action,int z,bool resetColumn=false){
         auto [it,added]=handles.try_emplace(key);
@@ -1257,7 +1245,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         if(glassChanged)glassChanged();
     }
     A glass(UIElement const& reference,A& connections,A& arcs,A& colors,A& panels,uint64_t& panelRevision){
-        panels=windowResizing?A{}:panelSurfaces(reference);auto encoded=panels.Stringify();
+        if(windowResizing){publishedBridgeGroups.clear();publishedBridgeColumns.clear();panels=A{};}else panels=panelSurfaces(reference);auto encoded=panels.Stringify();
         if(encoded!=lastPanelSurfaces){lastPanelSurfaces=encoded;++panelBridgeRevision;presentPanelBridges();}
         panelRevision=panelBridgeRevision;
         A regions;

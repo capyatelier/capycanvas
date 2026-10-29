@@ -6,6 +6,12 @@
 #include <vector>
 
 namespace CapyUi {
+inline constexpr float CompositionShadowBlurScale=1.5f;
+struct PanelShadowStyle {float blur,offset,opacity;};
+inline PanelShadowStyle panelShadowStyle(std::shared_ptr<WorkspaceData> const& data,bool expanded=false){
+    return {float(data->panelMetric(expanded?L"expanded_shadow_blur":L"panel_shadow_blur"))*CompositionShadowBlurScale,
+        float(data->panelMetric(expanded?L"expanded_shadow_offset":L"panel_shadow_offset")),float(data->panelMetric(expanded?L"expanded_shadow_opacity":L"panel_shadow_opacity"))};
+}
 using ContourCommands=std::vector<std::array<float,7>>;
 Microsoft::UI::Composition::CompositionPath CompositionPathFromCommands(ContourCommands const& commands,std::vector<winrt::Windows::Foundation::Rect> const& holes={});
 winrt::Windows::Foundation::Rect ContourBounds(float width,float height,ContourCommands const& commands,float padding=0);

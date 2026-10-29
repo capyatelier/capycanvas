@@ -152,4 +152,30 @@ fn supplied_drawer_geometry_rejects_invalid_measurements() {
     }
 }
 
+#[test]
+fn layer_drawer_width_is_stable_across_scaled_viewports() {
+    let drawer=ContentDrawer {anchor:DrawerAnchor::Header {id:1},columns:vec![vec![Panel::Layers]],
+        tabs:None,compact:false,layer_properties:None,tool_set:None,dismissal:DrawerDismissal::OutsideContact};
+    assert_eq!(drawer.column_widths(1920.),[280.]);
+    for scale in [1.,1.25,1.5,2.] {assert_eq!(drawer.column_widths(1920./scale),[280.]);}
+}
+
+#[test]
+fn native_drawer_frames_snap_columns_and_the_connection_to_the_same_edges() {
+    let placement=DrawerPlacement {bounds:Bounds {x:100.3,y:76.2,width:240.4,height:360.3},
+        anchor:Bounds {x:140.2,y:40.1,width:36.,height:36.1},direction:Edge::Bottom,
+        columns:vec![Bounds {x:0.,y:0.,width:120.2,height:360.3},Bounds {x:120.2,y:0.,width:120.2,height:360.3}]};
+    for scale in [1.,1.25,1.5,2.] {
+        let source=json!({"from":placement,"to":placement,"progress":1.,"pixel_scale":scale}).to_string();
+        let frame=drawer_frame(&source).unwrap();
+        let snapped:DrawerPlacement=serde_json::from_value(frame["placement"].clone()).unwrap();
+        let first=snapped.columns[0];let second=snapped.columns[1];
+        assert!((first.x+first.width-second.x).abs()<0.0001);
+        assert!((second.x+second.width-snapped.bounds.width).abs()<0.0001);
+        for b in [snapped.bounds,snapped.anchor] {for v in [b.x,b.y,b.x+b.width,b.y+b.height] {assert!((v*scale-(v*scale).round()).abs()<0.0001);}}
+        let connection:DrawerConnection=serde_json::from_value(frame["connection"].clone()).unwrap();
+        assert!((connection.bounds.y+connection.bounds.height-snapped.bounds.y).abs()<0.0001);
+    }
+}
+
 }

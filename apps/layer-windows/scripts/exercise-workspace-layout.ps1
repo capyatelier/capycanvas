@@ -244,13 +244,15 @@ function Check-BodyRetention{
     Wait-Until {!(Model).windows_workspace.dirty -and !(Model).windows_workspace.saving} 'Photo tab restoration did not save' 30
     $otherTheme=if($Theme -eq 'dark'){'light'}else{'dark'}
     Body-Theme $otherTheme
-    Wait-Until {$node=Find 'histogram-chart' -Visible;$node -and (($node.GetRuntimeId() -join ':') -cne $histogram.runtime)} 'Theme change did not rebuild Histogram body' 30
-    $changed=Body-Identity 'histogram-chart'
-    $receipt.stages+=@{stage='other-theme';theme=$otherTheme;histogram=$changed.runtime}
+    $changed=Assert-BodyIdentity 'histogram-chart' $histogram.runtime
+    $changedProperties=Assert-BodyIdentity 'layer-properties' $properties.runtime
+    $changedLayers=Assert-BodyIdentity 'layer-list' $layers.runtime
+    $receipt.stages+=@{stage='other-theme';theme=$otherTheme;histogram=$changed.runtime;properties=$changedProperties.runtime;layers=$changedLayers.runtime}
     Body-Theme $Theme
-    Wait-Until {$node=Find 'histogram-chart' -Visible;$node -and (($node.GetRuntimeId() -join ':') -cne $changed.runtime)} 'Theme restoration did not rebuild Histogram body' 30
-    $restored=Body-Identity 'histogram-chart'
-    $receipt.stages+=@{stage='restored-theme';theme=$Theme;histogram=$restored.runtime}
+    $restored=Assert-BodyIdentity 'histogram-chart' $histogram.runtime
+    $restoredProperties=Assert-BodyIdentity 'layer-properties' $properties.runtime
+    $restoredLayers=Assert-BodyIdentity 'layer-list' $layers.runtime
+    $receipt.stages+=@{stage='restored-theme';theme=$Theme;histogram=$restored.runtime;properties=$restoredProperties.runtime;layers=$restoredLayers.runtime}
     Use-Workspace $initial $names[$initial]
     if((Model).windows_workspace.id -ne $initial -or (Model).state.theme -ne $Theme -or (Model).windows_workspace.dirty -or (Model).windows_workspace.saving){throw 'Body retention fixture did not restore its workspace or theme'}
     if(((Model).state.document_file|ConvertTo-Json -Depth 20 -Compress) -cne $document){throw 'Body retention fixture changed the document or history'}

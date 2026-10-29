@@ -14424,8 +14424,7 @@ mod tests {
         assert_eq!(
             width,
             vec![
-                Panel::Layers
-                    .default_width(viewport[0])
+                (PANEL_MIN_WIDTH + TILE_SIZE + TILE_GAP)
                     .max(Panel::Properties.default_width(viewport[0]))
                     .max(Panel::Adjustments.default_width(viewport[0]))
             ]

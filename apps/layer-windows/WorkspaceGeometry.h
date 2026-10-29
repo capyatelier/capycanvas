@@ -1,6 +1,7 @@
 #pragma once
 #include "UiControls.h"
 #include <array>
+#include <set>
 #include <winrt/Microsoft.UI.Xaml.Shapes.h>
 
 namespace CapyUi {
@@ -11,6 +12,14 @@ inline Rect rectangle(J const& value){
 }
 inline J rectangle(Rect value){
     return O({{L"x",N(value.X)},{L"y",N(value.Y)},{L"width",N(value.Width)},{L"height",N(value.Height)}});
+}
+inline Rect pixelBounds(Rect bounds,UIElement const& reference){
+    double scale=reference.XamlRoot()?reference.XamlRoot().RasterizationScale():1;
+    float x=float(std::round(bounds.X*scale)/scale),y=float(std::round(bounds.Y*scale)/scale);
+    return {x,y,float(std::round((bounds.X+bounds.Width)*scale)/scale)-x,float(std::round((bounds.Y+bounds.Height)*scale)/scale)-y};
+}
+inline void placeOnPixelGrid(FrameworkElement const& element,J const& bounds,UIElement const& reference){
+    auto box=pixelBounds(rectangle(bounds),reference);Canvas::SetLeft(element,box.X);Canvas::SetTop(element,box.Y);element.Width(std::max(0.f,box.Width));element.Height(std::max(0.f,box.Height));
 }
 inline V toolbarUi(CapyLocalization  localization,J const& request){
     NativeString result(capy_toolbar_ui(localization,to_string(request.Stringify()).c_str()),capy_string_free);
@@ -42,6 +51,19 @@ inline Rect visibleBounds(FrameworkElement const& element,FrameworkElement const
 inline Rect allocatedBounds(FrameworkElement const& element,UIElement const& reference){
     if(!element||!element.IsLoaded()||element.Visibility()!=Visibility::Visible||element.ActualWidth()<=0||element.ActualHeight()<=0)return {};
     return element.TransformToVisual(reference).TransformBounds({0,0,float(element.ActualWidth()),float(element.ActualHeight())});
+}
+inline void refreshAssetIconTheme(DependencyObject const& node,hstring const& theme,std::set<void*>& seen){
+    if(!node||!seen.insert(get_abi(node)).second)return;
+    if(auto image=node.try_as<Image>())if(auto source=image.Source().try_as<Imaging::SvgImageSource>();source&&source.UriSource()){
+        std::wstring uri(source.UriSource().AbsoluteUri());auto root=std::wstring(asset(L"").AbsoluteUri());
+        for(auto old:{L"dark",L"light"}){auto part=std::wstring(L"/icons/")+old+L"/";auto at=uri.find(part);
+            if(uri.starts_with(root)&&at!=std::wstring::npos&&hstring(old)!=theme){uri.replace(at,part.size(),L"/icons/"+std::wstring(theme)+L"/");image.Source(Imaging::SvgImageSource(Windows::Foundation::Uri(hstring(uri))));break;}}
+    }
+    if(auto panel=node.try_as<Panel>())for(auto child:panel.Children())refreshAssetIconTheme(child,theme,seen);
+    if(auto border=node.try_as<Border>())refreshAssetIconTheme(border.Child(),theme,seen);
+    if(auto content=node.try_as<ContentControl>())if(auto child=content.Content().try_as<DependencyObject>())refreshAssetIconTheme(child,theme,seen);
+    if(auto scroll=node.try_as<ScrollView>())if(auto child=scroll.Content().try_as<DependencyObject>())refreshAssetIconTheme(child,theme,seen);
+    for(int i=0;i<VisualTreeHelper::GetChildrenCount(node);++i)refreshAssetIconTheme(VisualTreeHelper::GetChild(node,i),theme,seen);
 }
 inline int visualOrder(Canvas const& root,FrameworkElement const& element){
     uint32_t index=0;root.Children().IndexOf(element,index);
@@ -131,7 +153,7 @@ inline void fitAutomaticTabs(std::shared_ptr<WorkspaceData> const& data,std::vec
             t.tab.Measure({std::numeric_limits<float>::infinity(),std::numeric_limits<float>::infinity()});
             found=widths.emplace(t.key,t.tab.DesiredSize().Width).first;t.name.Visibility(shown);
         }
-        A pair;pair.Append(N(found->second));pair.Append(N(36));pairs.Append(pair);
+        A pair;pair.Append(N(found->second));pair.Append(N(data->panelMetric(L"tab_bar_height")));pairs.Append(pair);
     }
     auto request=O({{L"type",S(L"automatic_tab_names")},{L"available",N(available)},{L"widths",pairs}});
     NativeString reply(capy_toolbar_ui(data->localization.get(),to_string(request.Stringify()).c_str()),capy_string_free);
@@ -244,14 +266,27 @@ inline Grid panelTabShell(FrameworkElement const& content,Brush const& fill,Brus
     }});
     return shell;
 }
+inline Button panelTabButton(std::shared_ptr<WorkspaceData> const& data,hstring const& title,FrameworkElement const& glyph,J const& presentation,std::function<void()> action){
+    auto tab=button(data,title,std::move(action));double height=data->panelMetric(L"tab_bar_height"),radius=SurfaceRadius*CornerFit;
+    tab.Height(height);tab.MinWidth(height);tab.Padding({8,4,8,4});tab.CornerRadius({radius,radius,0,0});
+    StackPanel row;row.Orientation(Orientation::Horizontal);row.Spacing(data->panelMetric(L"group_spacing"));row.Children().Append(glyph);
+    auto name=label(data,title,true);name.Visibility(flag(presentation,L"show_name")?Visibility::Visible:Visibility::Collapsed);row.Children().Append(name);tab.Content(row);return tab;
+}
+inline Grid panelHeader(std::shared_ptr<WorkspaceData> const& data,StackPanel const& tabs,ScrollView const& scroll,Border const& grip){
+    Grid header;header.Background(clear());ColumnDefinition labels;labels.Width({1,GridUnitType::Star});header.ColumnDefinitions().Append(labels);
+    auto height=data->panelMetric(L"tab_bar_height"),width=data->panelMetric(L"tab_grip_width");ColumnDefinition trailing;trailing.Width({width,GridUnitType::Pixel});header.ColumnDefinitions().Append(trailing);
+    scroll.Content(tabs);scroll.Background(clear());scroll.CornerRadius({});scroll.HorizontalScrollMode(ScrollingScrollMode::Enabled);scroll.HorizontalScrollBarVisibility(ScrollingScrollBarVisibility::Hidden);
+    scroll.VerticalScrollMode(ScrollingScrollMode::Disabled);scroll.VerticalScrollBarVisibility(ScrollingScrollBarVisibility::Hidden);scroll.ContentOrientation(ScrollingContentOrientation::Horizontal);scroll.IgnoredInputKinds(ScrollingInputKinds::Touch|ScrollingInputKinds::Pen);header.Children().Append(scroll);
+    grip.Background(clear());grip.Width(width);grip.Height(height);grip.HorizontalAlignment(HorizontalAlignment::Left);grip.Child(panelGrip(data->theme()));Grid::SetColumn(grip,1);header.Children().Append(grip);return header;
+}
 // Same joined outline as the shared-layout Android expansion. The two
 // native child frames clip their own content; this path paints the join.
 inline PathGeometry expansionShape(J const& value){
     auto preview=rectangle(object(value,L"preview")),configuration=rectangle(object(value,L"configuration"));
     auto bounds=rectangle(object(value,L"bounds"));float width=bounds.Width,height=bounds.Height;
-    if(configuration.Y<=0)return roundedRectangle(width,height,{8,8,8,8});
+    if(configuration.Y<=0)return roundedRectangle(width,height,{SurfaceRadius*CornerFit,SurfaceRadius*CornerFit,SurfaceRadius*CornerFit,SurfaceRadius*CornerFit});
     float left=preview.X,right=left+preview.Width,top=configuration.Y;
-    float radius=std::min({8.f,height*.5f,width*.5f});
+    float radius=std::min({SurfaceRadius*CornerFit,height*.5f,width*.5f});
     PathFigure figure;figure.StartPoint({left+radius,0});figure.IsClosed(true);figure.IsFilled(true);
     auto line=[&](float x,float y){LineSegment segment;segment.Point({x,y});figure.Segments().Append(segment);};
     auto curve=[&](float x1,float y1,float x2,float y2){

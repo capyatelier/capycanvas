@@ -1,6 +1,7 @@
 #include "pch.h"
 #include "WorkspaceExpansion.h"
 #include "WorkspaceQuery.h"
+#include "WorkspaceGeometry.h"
 #include <chrono>
 #include <winrt/Windows.UI.ViewManagement.h>
 
@@ -38,9 +39,11 @@ struct WorkspaceExpansion::Impl:std::enable_shared_from_this<Impl>{
         if(next.empty())return;
         auto layout=object(data->model,L"layout").Stringify();
         measured=std::max(0.,measured);
-        if(next!=panel||closing!=wanted.empty()||layout!=layoutKey||std::abs(measured-height)>.5){
-            from=geometry;panel=next;closing=wanted.empty();layoutKey=layout;height=measured;
-            started=Clock::now();animating=true;dirty=true;++generation;timer.Start();
+        bool transition=next!=panel||closing!=wanted.empty();
+        if(transition||layout!=layoutKey||std::abs(measured-height)>.5){
+            if(transition){from=geometry;started=Clock::now();animating=true;}
+            panel=next;closing=wanted.empty();layoutKey=layout;height=measured;
+            dirty=true;++generation;timer.Start();
         }
     }
     void drive(){
@@ -56,6 +59,7 @@ struct WorkspaceExpansion::Impl:std::enable_shared_from_this<Impl>{
             if(auto self=weak.lock()){
                 self->busy=false;if(self->disposed||serial!=self->generation)return;
                 self->geometry=object(reply,L"result");
+                for(auto key:{L"bounds",L"preview",L"configuration"})if(auto box=object(self->geometry,key);box.Size())self->geometry.Insert(key,rectangle(pixelBounds(rectangle(box),self->root)));
                 if(progress>=1||!self->geometry.Size())self->animating=false;
                 if(!self->geometry.Size()||(self->closing&&progress>=1)){
                     self->geometry=J{};self->panel=L"";self->from=J{};self->layoutKey=L"";

@@ -40,12 +40,12 @@ struct CompositeEffect : winrt::implements<CompositeEffect,Windows::Graphics::Ef
 };
 struct Surface {
     SpriteVisual visual{nullptr};
-    CompositionPathGeometry path{nullptr};
+    CompositionPathGeometry path{nullptr};CompositionSpriteShape shape{nullptr};InsetClip tabClip{nullptr};
     std::array<CompositionColorBrush,2> inks{nullptr,nullptr};
     CompositionVisualSurface mask{nullptr};
     std::vector<Windows::Foundation::Point> band,tab;
     Windows::UI::Color strip{},panel{};
-    float width=0;
+    float width=0,height=0,offset=0,clipLeft=0,clipRight=0;
     void create(Compositor const& compositor){
         using Windows::Graphics::Effects::IGraphicsEffectSource;
         CompositionEffectSourceParameter stripSource(L"Strip"),panelSource(L"Panel"),maskSource(L"Mask");
@@ -54,22 +54,31 @@ struct Surface {
         auto effect=winrt::make<CompositeEffect>(D2D1_COMPOSITE_MODE_PLUS,background.as<IGraphicsEffectSource>(),foreground.as<IGraphicsEffectSource>());
         auto brush=compositor.CreateEffectFactory(effect).CreateBrush();
         path=compositor.CreatePathGeometry();
-        auto shape=compositor.CreateSpriteShape(path);shape.FillBrush(compositor.CreateColorBrush({255,255,255,255}));
-        auto source=compositor.CreateShapeVisual();source.BorderMode(CompositionBorderMode::Soft);source.Shapes().Append(shape);
+        shape=compositor.CreateSpriteShape(path);shape.FillBrush(compositor.CreateColorBrush({255,255,255,255}));
+        auto source=compositor.CreateShapeVisual();source.BorderMode(CompositionBorderMode::Soft);source.Shapes().Append(shape);tabClip=compositor.CreateInsetClip();source.Clip(tabClip);
         mask=compositor.CreateVisualSurface();mask.SourceVisual(source);
         brush.SetSourceParameter(L"Mask",compositor.CreateSurfaceBrush(mask));
         inks[0]=compositor.CreateColorBrush();inks[1]=compositor.CreateColorBrush();
         brush.SetSourceParameter(L"Strip",inks[0]);brush.SetSourceParameter(L"Panel",inks[1]);
         visual=compositor.CreateSpriteVisual();visual.BorderMode(CompositionBorderMode::Soft);visual.Brush(brush);apply();
     }
+    bool translate(float value,bool animate){
+        if(offset==value)return false;offset=value;if(!shape)return true;
+        if(animate){
+            auto compositor=shape.Compositor();auto move=compositor.CreateVector2KeyFrameAnimation();
+            move.InsertExpressionKeyFrame(0,L"this.StartingValue");move.InsertKeyFrame(1,{value,0},compositor.CreateCubicBezierEasingFunction({.215f,.61f},{.355f,1.f}));
+            move.Duration(std::chrono::milliseconds(120));shape.StartAnimation(L"Offset",move);
+        }else{shape.StopAnimation(L"Offset");shape.Offset({value,0});}
+        return true;
+    }
     void apply(){
         if(!visual||band.empty()||width<=0)return;
-        path.Path(CompositionPathFromContours({tab}));
+        path.Path(CompositionPathFromContours({tab}));shape.StopAnimation(L"Offset");shape.Offset({offset,0});tabClip.LeftInset(clipLeft);tabClip.RightInset(clipRight);
         auto compositor=visual.Compositor();
         visual.Clip(compositor.CreateGeometricClip(compositor.CreatePathGeometry(CompositionPathFromContours({band}))));
         inks[0].Color(strip);inks[1].Color(panel);
-        visual.Size({width,36});
-        mask.SourceSize({width,36});mask.SourceVisual().Size({width,36});
+        visual.Size({width,height});
+        mask.SourceSize({width,height});mask.SourceVisual().Size({width,height});
     }
 };
 }
@@ -88,9 +97,11 @@ public:
         });
     }
     Canvas Root()const{return root;}
-    void Present(float width,std::vector<Windows::Foundation::Point> band,std::vector<Windows::Foundation::Point> tab,Windows::UI::Color strip,Windows::UI::Color panel){
-        root.Width(width);root.Height(36);root.Visibility(band.empty()?Visibility::Collapsed:Visibility::Visible);
-        state->width=width;state->band=std::move(band);state->tab=std::move(tab);state->strip=strip;state->panel=panel;state->apply();
+    bool TranslateTab(float offset,bool animate){return state->translate(offset,animate);}
+    void Present(float width,float height,std::vector<Windows::Foundation::Point> band,std::vector<Windows::Foundation::Point> tab,Windows::UI::Color strip,Windows::UI::Color panel,float clipX=0,float clipWidth=-1){
+        root.Width(width);root.Height(height);root.Visibility(band.empty()?Visibility::Collapsed:Visibility::Visible);
+        state->clipLeft=std::max(0.f,clipX);state->clipRight=clipWidth<0?0:std::max(0.f,width-clipX-clipWidth);
+        state->width=width;state->height=height;state->band=std::move(band);state->tab=std::move(tab);state->strip=strip;state->panel=panel;state->apply();
     }
 };
 }

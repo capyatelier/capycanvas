@@ -2,6 +2,7 @@
 #include "WorkspaceDrawers.h"
 #include "WorkspaceGeometry.h"
 #include "WorkspaceShadow.h"
+#include "WorkspaceTabSurface.h"
 #include "WorkspaceQuery.h"
 #include "LayerInspector.h"
 #include "PanelScroll.h"
@@ -39,7 +40,7 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
     std::map<std::wstring,J> panels;
     struct Body {hstring key;bool splitFilters=false;std::unique_ptr<PanelBody> view;};
     std::map<std::wstring,Body> bodies;
-    struct Column {Grid frame;Grid header{nullptr};std::map<std::wstring,Grid> tabs;ScrollView scroll;StackPanel stack;std::vector<std::wstring> panels;std::vector<AutomaticTab> automatic;Bindings paintIcons;};
+    struct Column {Grid frame;Grid header{nullptr};WorkspaceTabSurface strip;Border divider;double naturalHeight=0;std::array<float,9> stripShape{};Windows::UI::Color stripColor{},panelColor{};bool stripValid=false;std::map<std::wstring,Grid> tabs;ScrollView scroll;StackPanel stack;std::vector<std::wstring> panels;std::vector<AutomaticTab> automatic;Bindings paintIcons;};
     std::map<std::wstring,double> tabWidths;
     std::vector<Column> columns;
     std::map<std::wstring,J> toolbarLayouts;
@@ -47,7 +48,7 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
     std::vector<double> heights;
     std::unique_ptr<LayerInspector> inspector;
     Clock::time_point started;
-    bool closing=false,animating=false,dirty=true,layingOut=false,disposed=false;
+    bool closing=false,animating=false,dirty=true,layingOut=false,disposed=false,snapTarget=false;
     int order()const{return id==L"tool"?220:200;}
 
     ~Drawer(){dispose();}
@@ -79,9 +80,12 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
         bool changedModel=next!=modelKey;
         if(changedModel){
             bool pageChange=inspector&&current.HasKey(L"layer_properties")&&model.HasKey(L"layer_properties")&&flag(current,L"layer_properties")!=flag(model,L"layer_properties");
-            from=object(geometry,L"placement");started=Clock::now();animating=true;
+            bool transition=!model.Size()||closing||!current.Size();
+            bool switching=current.Size()&&model.Size()&&object(current,L"anchor").Stringify()!=object(model,L"anchor").Stringify();
+            if(transition||pageChange){from=object(geometry,L"placement");started=Clock::now();animating=true;}
+            if(switching){animating=false;from=J{};}snapTarget=switching||pageChange;
             modelKey=next;closing=!current.Size();if(!closing)model=current;
-            heights.assign(array(model,L"columns").Size(),0.);wake();
+            heights.resize(array(model,L"columns").Size(),0.);wake();
             if(pageChange){
                 inspector->startPosition=inspector->position;inspector->targetPosition=flag(model,L"layer_properties")?1.:0.;inspector->started=started;inspector->animating=true;
                 if(flag(model,L"layer_properties")){auto layer=bodies.find(L"layers");if(layer!=bodies.end()&&layer->second.view&&layer->second.view->layers)inspector->anchor=layer->second.view->layers->scrollAnchor();}
@@ -122,6 +126,7 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
         return object(packet,L"result");
     }
     void prepare(){
+        auto presented=object(geometry,L"placement"),previous=endpoint;
         auto result=resolve(true);endpoint=object(result,L"placement");geometry=O({{L"placement",endpoint}});
         for(auto value:array(result,L"toolbars")){
             auto item=value.GetObject();auto found=panels.find(std::wstring(str(item,L"panel")));if(found==panels.end())continue;
@@ -140,7 +145,11 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
             auto placements=array(inspector->sizes,L"placements");
             if(placements.Size()==2){auto value=placements.GetAt(flag(model,L"layer_properties")?1:0);endpoint=value.ValueType()==JsonValueType::Object?value.GetObject():J{};}
         }else if(measureHeights())endpoint=object(resolve(false),L"placement");
-        geometry=O({{L"placement",endpoint}});placeColumns();dirty=false;
+        auto oldBounds=rectangle(object(previous,L"bounds")),nextBounds=rectangle(object(endpoint,L"bounds"));
+        if(!snapTarget&&!animating&&previous.Size()&&pixelBounds(oldBounds,workspace)!=pixelBounds(nextBounds,workspace)){
+            from=presented;started=Clock::now();animating=true;
+        }
+        snapTarget=false;geometry=O({{L"placement",endpoint}});placeColumns();dirty=false;
     }
     void drive(){
         if(disposed||!layoutInput){frames.revoke();return;}
@@ -153,15 +162,15 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
             if(layer&&layer->restoreAnchor(inspector->anchor))inspector->anchor=J{};else dirty=true;
         }
         bool motion=Windows::UI::ViewManagement::UISettings().AnimationsEnabled();
-        double progress=animating&&motion?std::clamp(std::chrono::duration<double>(Clock::now()-started).count()/.2,0.,1.):1.;
+        double progress=animating&&motion?std::clamp(std::chrono::duration<double>(Clock::now()-started).count()/(std::max(1.,num(data->catalog,L"panel_expansion_ms",200))/1000.),0.,1.):1.;
         if(inspector&&inspector->animating&&!closing){
-            progress=motion?std::clamp(std::chrono::duration<double>(Clock::now()-inspector->started).count()/.2,0.,1.):1.;
+            progress=motion?std::clamp(std::chrono::duration<double>(Clock::now()-inspector->started).count()/(std::max(1.,num(data->catalog,L"panel_expansion_ms",200))/1000.),0.,1.):1.;
             inspector->position=inspector->startPosition+(inspector->targetPosition-inspector->startPosition)*(1.-std::pow(1.-progress,3));
             if(progress>=1.)inspector->animating=false;
         }
         auto fraction=inspector?1.-std::pow(1.-progress,3):progress;
         auto end=closing?from:endpoint;
-        auto request=O({{L"from",from.Size()?V(from):JsonValue::CreateNullValue()},{L"to",end},{L"progress",N(fraction)},{L"closing",B(closing)},{L"clip_contents",B(!inspector)}});
+        auto request=O({{L"from",from.Size()?V(from):JsonValue::CreateNullValue()},{L"to",end},{L"progress",N(fraction)},{L"closing",B(closing)},{L"clip_contents",B(!inspector)},{L"pixel_scale",N(workspace.XamlRoot()?workspace.XamlRoot().RasterizationScale():1)}});
         NativeString raw(capy_drawer_frame(data->localization.get(),to_string(request.Stringify()).c_str()),capy_string_free);
         if(!raw)throw hresult_invalid_argument(L"Drawer frame failed");
         geometry=J::Parse(to_hstring(raw.get()));if(progress>=1.)animating=false;
@@ -200,64 +209,51 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
         auto previous=std::move(columns);columns.clear();
         for(auto& column:previous){
             column.stack.Children().Clear();column.scroll.Content(nullptr);column.panels.clear();
-            if(tabsKey!=nextTabsKey){column.frame.Children().Clear();column.header=nullptr;column.tabs.clear();column.automatic.clear();column.paintIcons.clear();}
+            if(tabsKey!=nextTabsKey){if(column.header){uint32_t at;if(column.header.Children().IndexOf(column.strip.Root(),at))column.header.Children().RemoveAt(at);}column.stripValid=false;column.frame.Children().Clear();column.header=nullptr;column.tabs.clear();column.automatic.clear();column.paintIcons.clear();}
             else while(column.frame.Children().Size()>(column.header?1u:0u))column.frame.Children().RemoveAtEnd();
         }
         tabsKey=nextTabsKey;std::set<std::wstring> keep;auto weak=weak_from_this();
         for(uint32_t i=0;i<models.Size();++i){
             bool retained=i<previous.size();Column column=retained?std::move(previous[i]):Column{};double width=num(placements.GetObjectAt(i),L"width");
             if(!retained){
-                RowDefinition tabRow;tabRow.Height({tabs.Size()?36.:0.,GridUnitType::Pixel});column.frame.RowDefinitions().Append(tabRow);
+                RowDefinition tabRow;tabRow.Height({tabs.Size()?data->panelMetric(L"tab_bar_height"):0.,GridUnitType::Pixel});column.frame.RowDefinitions().Append(tabRow);
                 RowDefinition bodyRow;bodyRow.Height({1,GridUnitType::Star});column.frame.RowDefinitions().Append(bodyRow);
                 column.stack.Background(clear());column.scroll.ContentOrientation(ScrollingContentOrientation::Vertical);panelScrolling(column.scroll,column.stack,data);column.scroll.VerticalScrollMode(ScrollingScrollMode::Enabled);
                 column.scroll.HorizontalScrollMode(ScrollingScrollMode::Disabled);column.scroll.HorizontalScrollBarVisibility(ScrollingScrollBarVisibility::Hidden);
                 column.scroll.VerticalScrollBarVisibility(ScrollingScrollBarVisibility::Auto);mouseScrollbars(column.scroll);
-            }else column.frame.RowDefinitions().GetAt(0).Height({tabs.Size()?36.:0.,GridUnitType::Pixel});
+            }else column.frame.RowDefinitions().GetAt(0).Height({tabs.Size()?data->panelMetric(L"tab_bar_height"):0.,GridUnitType::Pixel});
             if(tabs.Size()&&!column.header){
                 auto group=num(tabs,L"group");
                 auto groupItem=O({{L"kind",S(L"group")},{L"group",N(group)}});
-                Grid header;header.Background(clear());
-                ColumnDefinition tabColumn;tabColumn.Width({1,GridUnitType::Star});header.ColumnDefinitions().Append(tabColumn);
-                ColumnDefinition gripColumn;gripColumn.Width({28,GridUnitType::Pixel});header.ColumnDefinitions().Append(gripColumn);
                 StackPanel row;row.Orientation(Orientation::Horizontal);row.Background(clear());
+                ScrollView strip;Border grip;auto header=panelHeader(data,row,strip,grip);
+                Grid::SetColumnSpan(column.strip.Root(),2);Canvas::SetZIndex(column.strip.Root(),-1);header.Children().Append(column.strip.Root());
                 uint32_t index=0;
                 for(auto value:array(tabs,L"panels")){
                     auto panelId=value.GetString();auto found=panels.find(std::wstring(panelId));if(found==panels.end())continue;
                     auto panel=found->second;
-                    auto pick=button(data,str(panel,L"title"),[data=data,group=num(tabs,L"group"),panelId]{
+                    auto presentation=object(panel,L"tab");bool fitted=automaticTabs(data,group);
+                    auto pick=panelTabButton(data,str(panel,L"title"),panelIcon(data,str(panel,L"icon"),column.paintIcons),presentation,[data=data,group=num(tabs,L"group"),panelId]{
                         data->dispatch(O({{L"type",S(L"select_panel_tab")},{L"group",N(group)},{L"panel",S(panelId)}}));
                     });
-                    pick.Height(36);pick.MinWidth(36);pick.Padding({8,4,8,4});pick.CornerRadius({6,6,0,0});
-                    StackPanel labelRow;labelRow.Orientation(Orientation::Horizontal);labelRow.Spacing(6);
-                    auto presentation=object(panel,L"tab");bool fitted=automaticTabs(data,group);
-                    labelRow.Children().Append(panelIcon(data,str(panel,L"icon"),column.paintIcons));
-                    {
-                        auto name=label(data,str(panel,L"title"),true);name.Visibility(flag(presentation,L"show_name")?Visibility::Visible:Visibility::Collapsed);labelRow.Children().Append(name);
-                        if(fitted)column.automatic.push_back({pick,name,std::wstring(panelId)+L"\n"+std::wstring(str(panel,L"title"))+L"\n"+std::to_wstring(data->textSize())});
-                    }
-                    pick.Content(labelRow);
+                    auto name=pick.Content().as<StackPanel>().Children().GetAt(1).as<TextBlock>();
+                    if(fitted)column.automatic.push_back({pick,name,std::wstring(panelId)+L"\n"+std::wstring(str(panel,L"title"))+L"\n"+std::to_wstring(data->textSize())});
                     AutomationProperties::SetAutomationId(pick,L"drawer-tab-"+panelId);
                     auto item=O({{L"kind",S(L"panel")},{L"panel",S(panelId)}});
                     gestures->Source(pick,O({{L"type",S(L"drag_workspace")},{L"item",item}}),item,false,
                         O({{L"group",N(group)},{L"index",N(index++)},{L"panel",S(panelId)}}));
                     auto shell=panelTabShell(pick,nullptr,data->tint(L"text",20));column.tabs.emplace(std::wstring(panelId),shell);row.Children().Append(shell);
                 }
-                ScrollView strip;strip.Content(row);strip.Background(clear());
                 strip.SizeChanged([weak,index=columns.size()](auto&& sender,auto&&){if(auto self=weak.lock();self&&index<self->columns.size())fitAutomaticTabs(self->data,self->columns[index].automatic,sender.template as<ScrollView>().ActualWidth(),self->tabWidths);});
-                strip.HorizontalScrollMode(ScrollingScrollMode::Enabled);strip.HorizontalScrollBarVisibility(ScrollingScrollBarVisibility::Hidden);
-                strip.VerticalScrollMode(ScrollingScrollMode::Disabled);strip.VerticalScrollBarVisibility(ScrollingScrollBarVisibility::Hidden);
-                strip.ContentOrientation(ScrollingContentOrientation::Horizontal);strip.IgnoredInputKinds(ScrollingInputKinds::Touch|ScrollingInputKinds::Pen);header.Children().Append(strip);
+                strip.ViewChanged([weak,index=columns.size()](auto&&,auto&&){if(auto self=weak.lock();self&&index<self->columns.size()){auto placements=array(object(self->geometry,L"placement"),L"columns");if(index<placements.Size())self->paintStrip(self->columns[index],placements.GetObjectAt(uint32_t(index)),uint32_t(index));}});
                 gestures->Source(strip,O({{L"type",S(L"drag_workspace")},{L"item",groupItem}}),groupItem,false,{},WorkspaceGestures::Pickup::Sideways);
-                Border grip;grip.Background(clear());grip.Width(20);grip.Height(36);
-                grip.HorizontalAlignment(HorizontalAlignment::Left);grip.Child(panelGrip(data->theme()));
                 gestures->Source(grip,O({{L"type",S(L"drag_workspace")},{L"item",groupItem}}),groupItem);
                 AutomationProperties::SetAutomationId(grip,L"drawer-grip-"+to_hstring(uint32_t(group)));
                 AutomationProperties::SetName(grip,data->delivery(L"move_group"));
                 AutomationProperties::SetHelpText(grip,data->delivery(L"drag_panel"));
-                Grid::SetColumn(grip,1);header.Children().Append(grip);
                 column.header=header;column.frame.Children().Append(header);
             }
-            column.stack.Spacing(6);column.stack.VerticalAlignment(VerticalAlignment::Top);
+            column.stack.Spacing(data->panelMetric(L"group_spacing"));column.stack.VerticalAlignment(VerticalAlignment::Top);
             for(auto value:models.GetArrayAt(i)){
                 std::wstring panelId=value.GetString().c_str();auto found=panels.find(panelId);if(found==panels.end())continue;
                 auto panel=found->second;auto bodyKey=toolbarKey(panel,width);auto toolbar=toolbarLayouts.find(std::wstring(bodyKey));
@@ -288,6 +284,7 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
                 column.scroll.Content(column.stack);
                 Grid::SetRow(column.scroll,1);column.frame.Children().Append(column.scroll);
             }
+            if(i){column.divider.Background(data->line(L"panel",L"border"));column.divider.Width(1);column.divider.HorizontalAlignment(HorizontalAlignment::Left);column.divider.VerticalAlignment(VerticalAlignment::Stretch);column.divider.IsHitTestVisible(false);Grid::SetRowSpan(column.divider,2);column.frame.Children().Append(column.divider);}
             if(!retained)content.Children().Append(column.frame);columns.push_back(std::move(column));
         }
         for(uint32_t i=models.Size();i<previous.size();++i)remove(content,previous[i].frame);
@@ -306,7 +303,7 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
         }
         auto placements=array(object(geometry,L"placement"),L"columns");
         for(uint32_t i=0;i<std::min(uint32_t(columns.size()),placements.Size());++i){
-            auto placement=placements.GetObjectAt(i);auto& column=columns[i];place(column.frame,placement);
+            auto placement=placements.GetObjectAt(i);auto& column=columns[i];placeOnPixelGrid(column.frame,placement,workspace);
             double width=num(placement,L"width");
             for(auto const& panelId:column.panels){
                 auto& body=bodies.at(panelId);auto panel=panels.at(panelId);body.view->Root().Width(width);
@@ -314,8 +311,10 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
                 if(toolbar!=toolbarLayouts.end()){
                     body.view->Layout(O({{L"tiles",toolbar->second}}));
                     body.view->Root().Height(std::max(36.,num(toolbar->second,L"content_height")));
-                }else if(panelId==L"layers"||panelId==L"adjustments"||body.view->navigator){
-                    body.view->Root().Height(body.view->navigator?272.:480.);
+                }else if(body.view->drawerMinimum>0&&!inspector){
+                    size_t filling=0;for(auto const& member:column.panels)if(bodies.at(member).view->drawerMinimum>0)++filling;
+                    auto available=num(placement,L"height")-(tabs.Size()?data->panelMetric(L"tab_bar_height"):0.);
+                    body.view->Root().Height(body.view->drawerMinimum+std::max(0.,available-column.naturalHeight)/std::max(size_t(1),filling));
                 }else{
                     auto height=body.view->ContentHeight(width);
                     if(height>=0)body.view->Root().Height(height);
@@ -325,23 +324,39 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
                     body.view->Root().Margin({0,inset,0,inset});
                 }
             }
+            if(column.header)paintStrip(column,placement,i);
             if(inspector&&model.HasKey(L"layer_properties")){
                 inspector->place(bodies.at(L"layers").view->Root(),width,num(placement,L"height"),num(inspector->sizes,L"footer_height",data->panelMetric(L"disclosure_height")),flag(model,L"layer_properties"));
             }
         }
     }
 
+    void paintStrip(Column& column,J const& placement,uint32_t index){
+        float width=float(num(placement,L"width")),height=float(data->panelMetric(L"tab_bar_height")),x=0,activeWidth=0,activeHeight=0,clipX=0,clipWidth=width;
+        auto scroll=column.header.Children().GetAt(0).as<ScrollView>();auto active=column.tabs.find(std::wstring(str(object(model,L"tabs"),L"active")));
+        if(active!=column.tabs.end()&&active->second.IsLoaded()){
+            auto shell=active->second;auto at=shell.TransformToVisual(column.frame).TransformPoint({0,0});x=at.X;activeWidth=float(shell.ActualWidth());activeHeight=float(shell.ActualHeight());
+            auto clip=scroll.TransformToVisual(column.frame).TransformPoint({0,0});clipX=clip.X;clipWidth=float(scroll.ActualWidth());
+        }
+        float left=index?0:SurfaceRadius,right=index+1==columns.size()?SurfaceRadius:0;
+        std::array<float,9> shape{width,height,x,activeWidth,activeHeight,clipX,clipWidth,left,right};auto strip=data->glass(L"strip").Color(),panel=data->glass(L"panel").Color();
+        if(column.stripValid&&shape==column.stripShape&&strip==column.stripColor&&panel==column.panelColor)return;
+        column.stripValid=true;column.stripShape=shape;column.stripColor=strip;column.panelColor=panel;
+        auto band=squircleOutline(width,height,{left,right,0,0});std::vector<Point> foot;
+        if(activeWidth>0&&activeHeight>0){foot=panelTabOutline(activeWidth,activeHeight);for(auto& p:foot)p.X+=x-6;}
+        column.strip.Present(width,height,std::move(band),std::move(foot),strip,panel,clipX,clipWidth);
+    }
     void draw(){
         auto placement=object(geometry,L"placement");auto bounds=object(placement,L"bounds");
         frame.Visibility(bounds.Size()?Visibility::Visible:Visibility::Collapsed);
         frame.Opacity(bounds.Size()?1.:0.);
         shadow.Layout(rectangle(bounds),order(),bounds.Size()!=0);
         if(!bounds.Size()){presentedSource=J{};bridge.Visibility(Visibility::Collapsed);return;}
-        place(frame,bounds);
+        placeOnPixelGrid(frame,bounds,workspace);
         RectangleGeometry clip;clip.Rect({0,0,float(num(bounds,L"width")),float(num(bounds,L"height"))});content.Clip(clip);
         auto connection=object(geometry,L"connection");
         bridge.Visibility(connection.Size()?Visibility::Visible:Visibility::Collapsed);
-        if(connection.Size()){place(bridge,object(connection,L"bounds"));bridge.Data(drawerBridge(connection));}
+        if(connection.Size()){placeOnPixelGrid(bridge,object(connection,L"bounds"),workspace);bridge.Data(drawerBridge(connection));}
         // A local, inspectable geometry record; no documents or profile paths.
         AutomationProperties::SetItemStatus(frame,geometry.Stringify());
         paintBackground();
@@ -351,13 +366,16 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
     bool measureHeights(){
         auto placements=array(object(geometry,L"placement"),L"columns");
         if(columns.empty()||columns.size()!=placements.Size()||columns.size()!=array(model,L"columns").Size()||inspector)return false;
-        double tabHeight=object(model,L"tabs").Size()?36.:0.;
+        double tabHeight=object(model,L"tabs").Size()?data->panelMetric(L"tab_bar_height"):0.;
         std::vector<double> next;
         for(uint32_t i=0;i<columns.size();++i){
-            auto width=num(placements.GetObjectAt(i),L"width");
-            if(width<=0)return false;
-            columns[i].stack.Measure({float(width),INFINITY});
-            next.push_back(columns[i].stack.DesiredSize().Height+tabHeight);
+            auto width=num(placements.GetObjectAt(i),L"width");if(width<=0)return false;
+            auto& column=columns[i];double total=0;
+            for(auto const& id:column.panels){auto const& body=bodies.at(id).view;auto natural=body->drawerMinimum>0?body->drawerMinimum:body->ContentHeight(width);
+                if(natural<0){body->Root().Measure({float(width),INFINITY});natural=body->Root().DesiredSize().Height;}
+                else {auto margin=body->Root().Margin();natural+=margin.Top+margin.Bottom;}total+=natural;
+            }
+            if(column.panels.size()>1)total+=(column.panels.size()-1)*column.stack.Spacing();column.naturalHeight=total;next.push_back(total+tabHeight);
         }
         bool differs=next.size()!=heights.size();
         if(!differs)for(size_t i=0;i<next.size();++i)if(std::abs(next[i]-heights[i])>.5){differs=true;break;}
@@ -375,6 +393,7 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
             paintBackground();changed();layingOut=false;return;
         }
         if(measureHeights())wake();
+        for(uint32_t i=0;i<columns.size();++i)if(columns[i].header){auto list=array(object(geometry,L"placement"),L"columns");if(i<list.Size())paintStrip(columns[i],list.GetObjectAt(i),i);}
         paintBackground();changed();layingOut=false;
     }
     void initInspector(){
@@ -411,17 +430,18 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
         std::array<float,4> radii{SurfaceRadius,SurfaceRadius,SurfaceRadius,SurfaceRadius};
         for(uint32_t i=0;i<std::min(4u,corners.Size());++i)if(corners.GetBooleanAt(i))radii[i]=0;
         frame.CornerRadius({radii[0]*CornerFit,radii[1]*CornerFit,radii[2]*CornerFit,radii[3]*CornerFit});
-        auto outline=squircleRectangle(width,height,radii);
+        float top=object(model,L"tabs").Size()?float(data->panelMetric(L"tab_bar_height")):0;Canvas::SetTop(background,top);
+        auto bodyRadii=top?std::array<float,4>{0,0,radii[2],radii[3]}:radii;auto outline=squircleRectangle(width,std::max(0.f,height-top),bodyRadii);
         auto link=object(object(geometry,L"connection"),L"bounds");
         auto silhouette=O({{L"width",N(width)},{L"height",N(height)},{L"corners",corners},{L"link",link},{L"origin",bounds}}).Stringify();
         if(silhouette!=shadowKey){
-            shadowKey=silhouette;shadow.Shape(squircleRectangle(width,height,radii),width,height,21,5,1.f/3);
+            shadowKey=silhouette;auto style=panelShadowStyle(data);shadow.Shape(squircleRectangle(width,height,radii),width,height,style.blur,style.offset,style.opacity);
             std::vector<Rect> bridgeArea;
             if(link.Size())bridgeArea.push_back({float(num(link,L"x")-num(bounds,L"x")),float(num(link,L"y")-num(bounds,L"y")),float(num(link,L"width")),float(num(link,L"height"))});
             shadow.Cut(radii,std::move(bridgeArea));
         }
         GeometryGroup shape;shape.FillRule(FillRule::EvenOdd);shape.Children().Append(outline);
-        for(auto hole:holes){RectangleGeometry region;region.Rect(rectangle(hole.GetObject()));shape.Children().Append(region);}
+        for(auto hole:holes){RectangleGeometry region;auto box=rectangle(hole.GetObject());box.Y-=top;region.Rect(box);shape.Children().Append(region);}
         background.Data(shape);
     }
     void collectGlass(A& regions,A& links,UIElement const& reference)const{
@@ -464,7 +484,6 @@ struct WorkspaceDrawers::Impl:std::enable_shared_from_this<Impl>{
     std::function<void()> changed;
     std::map<std::wstring,std::shared_ptr<Drawer>> drawers;
     hstring lastTiles=L"[]",lastBounds=L"[]",lastFacts;
-    std::optional<uint64_t> context;
     bool publishing=false,resetting=false;
     void publish(){
         if(publishing||resetting)return;publishing=true;
@@ -481,6 +500,7 @@ struct WorkspaceDrawers::Impl:std::enable_shared_from_this<Impl>{
         }
         auto tool=drawers.find(L"tool");J geometry=tool==drawers.end()?J{}:tool->second->geometry;
         auto bounds=object(object(geometry,L"placement"),L"bounds"),connection=object(object(geometry,L"connection"),L"bounds");
+        if(tool!=drawers.end()&&tool->second->frame.IsLoaded()){auto actual=visibleBounds(tool->second->frame,root);if(actual.Width>0&&actual.Height>0)bounds=rectangle(actual);}
         auto facts=O({{L"content_drawer",bounds.Size()?V(bounds):JsonValue::CreateNullValue()},
             {L"drawer_connection",connection.Size()?V(connection):JsonValue::CreateNullValue()}});
         if(facts.Stringify()!=lastFacts){
@@ -490,8 +510,6 @@ struct WorkspaceDrawers::Impl:std::enable_shared_from_this<Impl>{
         changed();publishing=false;
     }
     void apply(NativeLayoutInput input,float width,float height){
-        auto next=uint64_t(num(data->state,L"toolbar_context_generation"));
-        if(context!=next){context=next;reset();}
         auto customization=object(data->state,L"customization");std::map<std::wstring,J> models;
         if(!flag(data->model,L"chrome_hidden"))for(auto value:array(customization,L"column_drawers")){
             auto model=value.GetObject();models[std::to_wstring(uint32_t(num(object(model,L"anchor"),L"column")))]=model;
@@ -539,4 +557,12 @@ FrameworkElement WorkspaceDrawers::Anchor(std::wstring const& control)const{
         if(auto found=body->anchors.find(control);found!=body->anchors.end())return found->second;
     }
     return nullptr;
+}
+
+bool WorkspaceDrawers::PresentTabs(){
+    bool moved=false;
+    for(auto const& [id,drawer]:impl->drawers){auto [offset,animate]=impl->gestures->TabOffset(uint32_t(num(object(drawer->model,L"tabs"),L"group")));
+        for(auto& column:drawer->columns)if(column.header)moved=column.strip.TranslateTab(offset,animate)||moved;
+    }
+    return moved;
 }

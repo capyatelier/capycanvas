@@ -15,6 +15,7 @@ public:
     winrt::Microsoft::UI::Xaml::FrameworkElement Root()const{return root;}
     void Apply(bool visible);
     void Layout(CapyUi::J const& geometry);
+    double drawerMinimum=0;winrt::hstring iconTheme;
     double ContentHeight(double width=0)const;
     CapyUi::J ScrollMetrics()const{return scrollMetrics?scrollMetrics():CapyUi::J{};}
     std::unique_ptr<NavigatorView> navigator;

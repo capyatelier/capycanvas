@@ -435,20 +435,24 @@ mod allocation {
             }
             if let Some(owner) = self.owner.borrow().upgrade()
                 && let Some(hint) = owner.drop_hint.borrow().as_ref()
+                && let Some(palette) = owner.palette.get()
             {
                 let b = hint.bounds;
                 let body = matches!(hint.target, DockTarget::Tab { .. })
                     && b.width > 3. && b.height > 3.;
                 let rect = gtk::graphene::Rect::new(b.x, b.y, b.width, b.height);
+                let [r,g,b]=palette.accent.0.map(|v|v as f32/255.);
+                let metrics=layer_ui::PANEL_CONTROL_METRICS;
+                let edge=gdk::RGBA::new(r,g,b,metrics.drop_hint_alpha);
                 snapshot.append_color(
-                    &gdk::RGBA::new(0.38, 0.68, 1.0, if body { 0.25 } else { 0.95 }),
+                    &gdk::RGBA::new(r,g,b,if body {metrics.drop_hint_body_alpha}else{metrics.drop_hint_alpha}),
                     &rect,
                 );
                 if body {
                     snapshot.append_border(
-                        &gtk::gsk::RoundedRect::from_rect(rect, 0.),
-                        &[2.; 4],
-                        &[gdk::RGBA::new(0.38, 0.68, 1.0, 0.95); 4],
+                        &gtk::gsk::RoundedRect::from_rect(rect, metrics.drop_hint_radius),
+                        &[metrics.drop_hint_border; 4],
+                        &[edge; 4],
                     );
                 }
             }

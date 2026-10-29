@@ -157,32 +157,6 @@ its own pages after A's helpers land.
 
 ## Findings
 
-### Layers area: Windows vs GTK parity audit (AREA=LAYER)
-
-Read in full: LayersView.cpp/.h, LayerRow.cpp, LayerRowDrag.cpp/.h, LayerThumbnails.cpp/.h, LayerInspector.h,
-ThumbnailOwners.h, WorkspaceRowDrag.cpp/.h, WorkspaceBubbles.cpp, BubblePresentation.h; ButtonFeedback.h and the
-`button()`/`selected()` helpers in UiControls.h. GTK: layers.rs, layers/connections.rs, swipe_row.rs, the
-workspace_bubbles.rs card, and the style.css layer rules. Shared: layer-ui layout.rs, drawers.rs, effects.rs, session.rs.
-
-The Windows row column grid (`{slot+gap, slot+gap, 0, 5, 32, 0, 12, 32, 0, *, 0, 14, 16}`, LayerRow.cpp:121) adds up
-to the same widths as GTK's 2-px Box spacing: eye 26+2, gutter 3+2, thumbnail 30+2, link 10+2, name margin 6, lock 12,
-grip 16, edge 6. Row height is the same (40 = 36 + 2×2 padding). The swipe colours match (.16/.24/#c01c28), as do the
-group indentation (min(depth·8, 24)), the 14-px type badge (padding 1, radius 2, input fill, margin 3), the 1-px/3-px
-thumbnail ring geometry and the connection-line widths. Everything else is listed below.
-
-##### LAYER-18: The layers drawer default width (user bug 18)
-- Class: LAYOUT-COLLAPSE   Confidence: CHECK   Severity: medium   Reported bug: 18
-- Windows: the drawer width is not decided by the host. `WorkspaceDrawers.cpp:239-309` sizes each column to
-  `placement.columns[i].width` from Rust. `LayerInspector::place` fills that width.
-- Shared source: `crates/layer-ui/src/drawers.rs:468-485` `column_widths` → `Panel::default_width`
-  (`crates/layer-ui/src/layout.rs:716-722`). That is `PANEL_MIN_WIDTH` (242) plus `TILE_SIZE+TILE_GAP` only when
-  `viewport_width >= 1600` (giving 280). The breakpoint is in DIPs, so a 1920-px display at 125 % (1536 DIP) gets 242,
-  while GTK at scale 1 on the same panel gets 280. `LAYERS_MIN_WIDTH` (226) is applied to docked columns
-  (layout.rs:2643) but not to drawers.
-- Fix direction: confirm that the viewport Windows sends for drawer layout is in DIPs and equals GTK's for the same
-  window size. If the layers drawer should not depend on the 1600 breakpoint, change `default_width` for
-  `Panel::Layers` in shared Rust (one place, both hosts), with a drawers.rs test. No host change is needed.
-
 ### AREA=TOOL — Windows vs GTK parity audit
 
 Scope read: `apps/layer-windows/ToolView.cpp`, `ToolbarComponents.cpp`, `WorkspaceBubbles.cpp`, `BubblePresentation.h`,
@@ -418,29 +392,6 @@ Shared metrics (crates/layer-ui/src/layout.rs:52): inset 8, control_spacing 4, g
 control_height 26, field_padding 6, icon 16, control_radius 13 (x corner-fit .54, about 7px).
 
 ---
-
-##### FX-1: Drawer bodies use fixed heights, so the Filter Types Cancel button never docks at the drawer bottom and the list scrolls when it doesn't need to
-- Class: LAYOUT-COLLAPSE, METRIC   Confidence: CERTAIN   Severity: high   Reported bug: 21
-- Windows:
-  - `apps/layer-windows/PanelBody.cpp:222-224`: in a drawer (`scrollable=false`) `filter_types` gets `root.Height(440)` and `adjustments` gets `root.Height(480)` (or 440 when split). These are exact heights, not minimums.
-  - `apps/layer-windows/WorkspaceDrawers.cpp:348-353` (`placeColumns`): `adjustments`/`layers` are forced to `Height(480.)` and the navigator to `272.`. The 440 split value is overwritten. `filter_types` falls through to `ContentHeight()`, and because PanelBody never sets `contentHeight` for it, that returns -1, so it keeps 440.
-  - `WorkspaceDrawers.cpp:290` sets `column.stack.VerticalAlignment(Top)` inside a `ScrollView`, and `measureHeights()` (`:381-395`) reports the stack's natural height. The drawer therefore grows to the tallest column (adjustments at 480). The Filter Types column is placed at that height, but its body stays 440 tall and is pinned to the top. The result is a gap under Cancel. The category list gets a Star row of only `440-16-4-26` px, so it scrolls even though the column has room.
-  - `apps/layer-windows/FilterView.cpp:180-189`: FilterTypesPanel is a Grid with a Star list row and an Auto footer row. That layout is correct, but it only works when the Grid gets the full column height.
-- GTK reference: `apps/layer-linux/src/workspace_drawer.rs:435-442` uses `set_height_request(440)` on both `filter_types` and `adjustments`, which is a minimum. `effects.rs:140-149` makes `types_scroll.set_vexpand(true)` and then appends Cancel. The column Box sits in a Viewport (`workspace_drawer.rs:454-456`) and fills the drawer, so Cancel stays at the bottom and the list only scrolls when the drawer really is shorter than its content.
-- Shared source: the drawer column heights come from Rust `drawer_placement(... heights)`, and each column's `height` is in `geometry.placement.columns[i].height`.
-- Fix direction: give drawer "fill" bodies (filter_types, adjustments, layers, navigator) the column's placement height (`num(placement,"height")` minus tab height and insets) in `placeColumns`. Use the 440 minimum only for measurement (`MinHeight`, or report 440 as the measured height). Delete the `Height(440/480/272)` literals in PanelBody and placeColumns. Also drop the 480 for adjustments in a drawer, since GTK uses 440 (the duplicate in `PanelConfiguration.cpp:93,102` follows the same pattern). One helper, `fillHeight(body, placement)`, covers every drawer panel that has a docked footer. Audit result: only FilterTypes has bottom-docked action buttons in this area. Palettes (footer in a Grid Star layout, measured via contentHeight) and Stats/Proof (natural StackPanels) are not affected.
-
-##### FX-2: Filter Types "Cancel" is drawn as bare text with no button face or padding; row gap also differs
-- Class: DEFAULT-CONTROL, BORDER/COLOR, METRIC   Confidence: CERTAIN   Severity: medium   Reported bug: 21 (same control)
-- Windows: `FilterView.cpp:187-188`. `button()` (UiControls.h:467-472) gives `Background(clear())` and `Padding(0)`, and only `MinHeight` is added. `root.RowSpacing(control_spacing=4)` (`:180`).
-- GTK reference: `effects.rs:146-149` uses a plain non-flat `gtk::Button`. `style.css:185-186` `.dock-panel button` gives min-height 26, `padding: 0 var(--panel-field-padding)` (6px) and control radius, with the Adwaita raised fill. `filter_types` Box spacing is 6 (`effects.rs:140`).
-- Fix direction: give the Cancel button `Padding({field_padding,0,field_padding,0})` and the shared raised-button fill (see FX-17). Change RowSpacing to `group_spacing`.
-
-##### FX-3: Navigator in a drawer is fixed at 272px whatever the width
-- Class: LAYOUT-COLLAPSE, METRIC   Confidence: LIKELY   Severity: medium   Reported bug: none
-- Windows: `WorkspaceDrawers.cpp:348-349` sets `body.view->Root().Height(body.view->navigator?272.:480.)`. This overrides the `NaturalHeight(width)` that PanelBody sets (`PanelBody.cpp:225`). NavigatorLayout clamps the image to `available-fixedHeight` (`NavigatorView.cpp:71-74`), so a wide drawer shows a letterboxed overview, and the buttons are not at the bottom when the column is taller.
-- GTK reference: `navigator.rs:300-321` uses a natural vexpand Box with no fixed height in drawers.
-- Fix direction: use `navigator->NaturalHeight(width)`, or the placement height as in FX-1.
 
 ##### FX-8: Filter picker header-to-list gap is 0 instead of 6 (14 in a drawer)
 - Class: METRIC   Confidence: CERTAIN   Severity: low

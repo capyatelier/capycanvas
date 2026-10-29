@@ -184,7 +184,7 @@ FrameworkElement FilterTypesPanel(std::shared_ptr<WorkspaceData> const& data,Bin
     choices.Background(clear());ScrollView scroll;scroll.Content(choices);scroll.ContentOrientation(ScrollingContentOrientation::Vertical);panelScrolling(scroll,choices,data);scroll.HorizontalScrollMode(ScrollingScrollMode::Disabled);
     scroll.HorizontalScrollBarVisibility(ScrollingScrollBarVisibility::Hidden);
     scroll.VerticalScrollBarVisibility(ScrollingScrollBarVisibility::Auto);mouseScrollbars(scroll);root.Children().Append(scroll);
-    auto cancel=button(data,data->copyCommon(L"cancel"),[data]{data->dispatch(O({{L"type",S(L"effect")},{L"action",O({{L"op",S(L"cancel_filter")}})}}));});
+    auto cancel=raisedButton(data,data->copyCommon(L"cancel"),[data]{data->dispatch(O({{L"type",S(L"effect")},{L"action",O({{L"op",S(L"cancel_filter")}})}}));});
     cancel.HorizontalAlignment(HorizontalAlignment::Left);cancel.MinHeight(data->controlHeight());
     AutomationProperties::SetAutomationId(cancel,L"cancel-filter");Grid::SetRow(cancel,1);root.Children().Append(cancel);
     bindings.emplace_back([data,state,choices]{

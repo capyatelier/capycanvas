@@ -615,6 +615,7 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
             }))ticket.Cancel();
     }
     void doubleClick(DoubleTappedRoutedEventArgs const& e){
+        if(e.Handled())return;
         auto tag=target(e.OriginalSource());if(!flag(tag,L"workspace_double")){edgeDoublePress(e);return;}
         auto sourceAction=object(tag,L"workspace_action");
         auto context=object(tag,L"workspace_context");
@@ -646,9 +647,8 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
         auto bounds=object(value,L"bounds");
         if(!bounds.Size()){hint.Visibility(Visibility::Collapsed);return;}
         bool body=str(object(value,L"target"),L"kind")==L"tab"&&num(bounds,L"width")>3&&num(bounds,L"height")>3;
-        hint.Background(body?data->tint(L"accent",64):accent(data));hint.BorderBrush(accent(data));
-        hint.BorderThickness(body?Thickness{2,2,2,2}:Thickness{});
-        hint.CornerRadius(body?CornerRadius{}:CornerRadius{2,2,2,2});
+        hint.Background(data->tint(L"accent",uint8_t(std::lround(data->panelMetric(body?L"drop_hint_body_alpha":L"drop_hint_alpha")*255))));hint.BorderBrush(data->tint(L"accent",uint8_t(std::lround(data->panelMetric(L"drop_hint_alpha")*255))));
+        auto border=data->panelMetric(L"drop_hint_border"),radius=data->panelMetric(L"drop_hint_radius");hint.BorderThickness(body?Thickness{border,border,border,border}:Thickness{});hint.CornerRadius({radius,radius,radius,radius});
         place(hint,bounds);hint.Visibility(Visibility::Visible);
     }
     void present(J const& drag){
@@ -732,7 +732,7 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
         });
         root.AddHandler(UIElement::DoubleTappedEvent(),box_value(DoubleTappedEventHandler([weak](auto&&,auto&& e){
             if(auto self=weak.lock())self->doubleClick(e);
-        })),true);
+        })),false);
         root.SizeChanged([weak](auto&&,auto&&){if(auto self=weak.lock())self->chrome(O({{L"kind",S(L"refresh")}}));});
         ShortcutKeys(root,[weak](auto&&,KeyRoutedEventArgs const& e){if(auto self=weak.lock()){
             if(e.Key()==Windows::System::VirtualKey::Escape&&self->cancelAll(L"escape"))e.Handled(true);
@@ -778,3 +778,5 @@ bool WorkspaceGestures::Cancel(){return impl->cancelAll();}
 bool WorkspaceGestures::SuppressClick()const{return impl->ignoreClick;}
 bool WorkspaceGestures::DeferRemoval(UIElement const& element,std::shared_ptr<void> owner){return impl->deferRemoval(element,std::move(owner));}
 bool WorkspaceGestures::Retains(UIElement const& element)const{return impl->retains(element);}
+
+std::pair<float,bool> WorkspaceGestures::TabOffset(uint32_t group)const{return impl->tabSlide->ActiveOffset(group);}

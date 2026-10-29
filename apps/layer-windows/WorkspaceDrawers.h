@@ -9,6 +9,7 @@ public:
     ~WorkspaceDrawers();
     void Apply(NativeLayoutInput input,float width,float height);
     void Reset();
+    bool PresentTabs();
     void AppendOverviews(CapyUi::A& slots)const;
     CapyUi::A Sources()const;
     void AppendGlass(CapyUi::A& regions,CapyUi::A& connections,winrt::Microsoft::UI::Xaml::UIElement const& reference)const;

@@ -225,9 +225,8 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
         scrollMetrics=[]{return O({{L"fixed_height",N(0)},{L"unit_height",N(0)}});};
     if(!scrollable){
         auto id=str(panel,L"id");
-        if((id==L"filter_types"&&shows(panel,L"filter_types"))||(id==L"adjustments"&&flag(geometry,L"split_filters")))root.Height(440);
-        else if((id==L"layers"&&shows(panel,L"layers"))||(id==L"adjustments"&&shows(panel,L"adjustments")))root.Height(480);
-        else if(navigator)root.Height(navigator->NaturalHeight(num(object(geometry,L"bounds"),L"width",272)));
+        if(id==L"layers"&&shows(panel,L"layers"))drawerMinimum=data->panelMetric(L"drawer_layers_min_height");
+        else if((id==L"filter_types"&&shows(panel,L"filter_types"))||(id==L"adjustments"&&shows(panel,L"adjustments")))drawerMinimum=data->panelMetric(L"drawer_filters_min_height");
     }
 }
 void PanelBody::Layout(J const& geometry){
@@ -260,4 +259,5 @@ double PanelBody::ContentHeight(double width)const{
 void PanelBody::Apply(bool visible){
     if(navigator)navigator->Apply(visible);
     for(auto const& binding:bindings)binding();
+    if(iconTheme!=data->theme()){iconTheme=data->theme();std::set<void*> seen;refreshAssetIconTheme(root,iconTheme,seen);}
 }

@@ -15,6 +15,7 @@ public:
         CapyUi::J const& action,CapyUi::J const& context={},bool doubleClick=false,
         CapyUi::J const& tab={},Pickup pickup=Pickup::Immediate);
     void Refresh();
+    std::pair<float,bool> TabOffset(uint32_t group)const;
     void Present(CapyUi::J const& drag);
     void ChromeChanged();
     bool Cancel();
