@@ -97,8 +97,10 @@ impl Columns {
                 let mut bar=group.tab_strip.parent();
                 while bar.as_ref().is_some_and(|b|b.widget_name()!="panel-tab-bar") { bar=bar.and_then(|b|b.parent()); }
                 let bar=bar.filter(|b|group.tabs_visible && b.is_mapped()).and_then(|b|b.compute_bounds(&w.surface));
-                let active=group.tabs.iter().find(|(_,b)|b.has_css_class("selected-tool") && b.opacity()>0.)
-                    .and_then(|(_,b)|b.compute_bounds(&w.surface));
+                let active=group.tab_strip.active_bounds().and_then(|rect| {
+                    let origin=group.tab_strip.compute_point(&w.surface,&gtk::graphene::Point::zero())?;
+                    Some(gtk::graphene::Rect::new(rect.x()+origin.x(),rect.y()+origin.y(),rect.width(),rect.height()))
+                });
                 let mut viewport=group.tab_strip.parent();
                 while viewport.as_ref().is_some_and(|b|!b.is::<gtk::ScrolledWindow>()) { viewport=viewport.and_then(|b|b.parent()); }
                 let clip=viewport.and_then(|b|b.compute_bounds(&w.surface)).or(bar);

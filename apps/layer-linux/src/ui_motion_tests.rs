@@ -235,6 +235,290 @@ fn native_active_tab_matches_panel() {
 }
 
 #[test]
+#[ignore = "private compositor captures and native input"]
+fn native_panel_tab_drag_matches_rest() {
+    let output = std::path::PathBuf::from(std::env::var_os("LAYER_TEST_ARTIFACTS").unwrap());
+    let captures = std::path::PathBuf::from(std::env::var_os("LAYER_NATIVE_CAPTURE_DIR").unwrap());
+    let app = native_test_app("art.capycanvas.PanelTabDragPixels");
+    let w = fixture_workspace(&app);
+    w.window.maximize();
+    w.window.present();
+    pump(1600);
+    let original = layer_ui::WorkspaceState::default();
+    let group = original.layout.panel_group(Panel::Layers).unwrap();
+    let viewport = [w.surface.width() as f32, w.surface.height() as f32];
+    let mut input = RemoteInput::new().settle_ms(0).timeout_secs(15);
+    input.ready();
+    let mut reports = Vec::new();
+    for theme in [Theme::Dark, Theme::Light] {
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        for level in [layer_ui::Transparency::Off, layer_ui::Transparency::Medium] {
+            use_transparency(&w, level);
+            for docked in [false, true] {
+                for device in if docked { &["mouse"][..] } else { &["mouse", "touch"][..] } {
+                    let panel = Panel::Layers;
+                    let name = format!("{theme:?}-{level:?}-{device}-{}", if docked { "docked" } else { "floating" })
+                        .to_lowercase();
+                    let mut fixture = original.clone();
+                    if docked { fixture.layout.set_column_collapsed(group, true, viewport).unwrap(); }
+                    let column = docked.then(|| fixture.layout.collapsed_column_for_group(group).unwrap());
+                    w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(fixture) });
+                    pump(200);
+                    if !docked {
+                        w.dispatch(UiAction::MoveGroup {
+                            group,
+                            target: DockTarget::Float { position: [500., 220.] },
+                            viewport,
+                        });
+                        let mut fixture = state(&w).workspace;
+                        let floating = fixture.layout.floating.iter_mut().find(|f| f.root.id() == group).unwrap();
+                        floating.width = 300.;
+                        floating.height = Some(360.);
+                        w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(fixture) });
+                    } else {
+                        let button = w.columns.button(column.unwrap(), Panel::Layers).unwrap();
+                        input.click(screen_point(button.upcast_ref(), &w.window, [0.5, 0.5]));
+                        until(|| {
+                            let groups = w.groups.borrow();
+                            groups.iter().find(|g| g.id == group).is_some_and(|view|
+                                view.root.has_css_class("gpu-panel-surface") && view.tabs_visible
+                                    && view.tabs.iter().any(|(p, tab)| *p == panel && tab.is_mapped()))
+                        }, "docked tab uses the GPU PanelSurface");
+                    }
+                    w.dispatch(UiAction::SelectPanelTab { group, panel: Panel::Properties });
+                    pump(200);
+                    let reference_bounds = w
+                        .groups
+                        .borrow()
+                        .iter()
+                        .find(|g| g.id == group)
+                        .unwrap()
+                        .tab_strip
+                        .compute_bounds(&w.surface)
+                        .unwrap();
+                    input.perform(
+                        serde_json::json!([{"point":[10.,10.]},{"wait_ms":180},{"capture":format!("strip-{name}")} ]),
+                    );
+                    w.dispatch(UiAction::SelectPanelTab { group, panel });
+                    pump(250);
+                    let tab = w
+                        .groups
+                        .borrow()
+                        .iter()
+                        .find(|g| g.id == group)
+                        .unwrap()
+                        .tabs
+                        .iter()
+                        .find(|(p, _)| *p == panel)
+                        .unwrap()
+                        .1
+                        .clone();
+                    let strip = tab.parent().unwrap();
+                    let band = strip.compute_bounds(&w.surface).unwrap();
+                    let bounds = tab.compute_bounds(&w.surface).unwrap();
+                    assert_eq!(reference_bounds, band, "strip reference retains the same native geometry");
+                    let content = gtk::Snapshot::new();
+                    let parent_origin = strip.compute_point(&w.surface, &gtk::graphene::Point::zero()).unwrap();
+                    content.translate(&parent_origin);
+                    strip.snapshot_child(&tab, &content);
+                    let source_content = content.to_node().unwrap();
+                    let start = [bounds.x() + bounds.width() * 0.5, bounds.y() + bounds.height() * 0.5];
+                    input.perform(
+                        serde_json::json!([{"point":start},{"wait_ms":180},{"capture":format!("rest-{name}")} ]),
+                    );
+                    input.perform(serde_json::json!([
+                        contact(device, "down", start),
+                        contact(device, "move", [start[0] + 40., start[1]])
+                    ]));
+                    until(
+                        || w.workspace_drag.borrow().as_ref().is_some_and(|d| d.started && d.tab.is_some()),
+                        "native panel tab pickup",
+                    );
+                    let shifted = w.workspace_drag.borrow().as_ref().unwrap().tab.as_ref().unwrap().bounds;
+                    assert!(
+                        shifted.x - bounds.x() > 34.,
+                        "native pickup vacates the strip beyond the fixed outer shadow"
+                    );
+                    input.perform(serde_json::json!([{"wait_ms":180},{"capture":format!("shifted-{name}")} ]));
+                    let scale = w.window.surface().unwrap().scale() as f32;
+                    let (blank_pixels, checked, unexpected_content) =
+                        assert_tab_preview_content(&w, &source_content, bounds, shifted, scale, &output, &name);
+                    input.perform(serde_json::json!([contact(device, "move", start)]));
+                    pump(250);
+                    let held = w.workspace_drag.borrow().as_ref().unwrap().tab.as_ref().unwrap().bounds;
+                    assert!(
+                        (held.x - bounds.x()).abs() <= 1. && (held.y - bounds.y()).abs() <= 1.,
+                        "compare the same resting and held geometry"
+                    );
+                    input.perform(serde_json::json!([{"wait_ms":180},{"capture":format!("held-{name}")} ]));
+                    let rest = gdk::Texture::from_filename(captures.join(format!("rest-{name}.png"))).unwrap();
+                    let held = gdk::Texture::from_filename(captures.join(format!("held-{name}.png"))).unwrap();
+                    let moving = gdk::Texture::from_filename(captures.join(format!("shifted-{name}.png"))).unwrap();
+                    let strip_reference =
+                        gdk::Texture::from_filename(captures.join(format!("strip-{name}.png"))).unwrap();
+                    assert_eq!((rest.width(), rest.height()), (held.width(), held.height()));
+                    let monitor = w.area.display().monitor_at_surface(&w.window.surface().unwrap()).unwrap().geometry();
+                    let scale =
+                        [rest.width() as f32 / monitor.width() as f32, rest.height() as f32 / monitor.height() as f32];
+                    let origin = w.surface.compute_point(&w.window, &gtk::graphene::Point::zero()).unwrap();
+                    let (wx, wy) = w.window.surface_transform();
+                    let point = |x: f32, y: f32| {
+                        [
+                            (x + origin.x() + wx as f32 - monitor.x() as f32) * scale[0],
+                            (y + origin.y() + wy as f32 - monitor.y() as f32) * scale[1],
+                        ]
+                    };
+                    let a = point(band.x(), band.y());
+                    let b = point(band.x() + band.width(), band.y() + band.height() + 2.);
+                    let crop = [
+                        a[0].floor().max(0.) as usize,
+                        a[1].floor().max(0.) as usize,
+                        b[0].ceil().min(rest.width() as f32) as usize,
+                        b[1].ceil().min(rest.height() as f32) as usize,
+                    ];
+                    let width = crop[2] - crop[0];
+                    let height = crop[3] - crop[1];
+                    let pixels = |texture: &gdk::Texture, label: &str| {
+                        let stride = texture.width() as usize * 4;
+                        let mut full = vec![0; stride * texture.height() as usize];
+                        texture.download(&mut full, stride);
+                        let cropped = (crop[1]..crop[3])
+                            .flat_map(|y| full[y * stride + crop[0] * 4..y * stride + crop[2] * 4].iter().copied())
+                            .collect::<Vec<_>>();
+                        gdk::MemoryTexture::new(
+                            width as i32,
+                            height as i32,
+                            gdk::MemoryFormat::B8g8r8a8Premultiplied,
+                            &glib::Bytes::from_owned(cropped.clone()),
+                            width * 4,
+                        )
+                        .save_to_png(output.join(format!("{name}-{label}.png")))
+                        .unwrap();
+                        cropped
+                    };
+                    let before = pixels(&rest, "rest");
+                    let after = pixels(&held, "held");
+                    let moving = pixels(&moving, "shifted");
+                    let strip_reference = pixels(&strip_reference, "strip");
+                    let at = |bytes: &[u8], x: f32, y: f32| {
+                        let p = point(x, y);
+                        let i = ((p[1].floor() as usize - crop[1]) * width + p[0].floor() as usize - crop[0]) * 4;
+                        bytes[i..i + 4].to_vec()
+                    };
+                    let delta =
+                        |a: Vec<u8>, b: Vec<u8>| a.into_iter().zip(b).map(|(a, b)| a.abs_diff(b)).max().unwrap();
+                    let x = bounds.x() + bounds.width() - 4.;
+                    let resting_blank = at(&before, x, bounds.y() + bounds.height() - 3.);
+                    let moving_blank = at(&moving, x + shifted.x - bounds.x(), shifted.y + shifted.height - 3.);
+                    let shifted_interior = delta(resting_blank.clone(), moving_blank.clone());
+                    let vacated_reference = at(&strip_reference, bounds.x() + 28., bounds.y() + bounds.height() - 3.);
+                    let vacated_observed = at(&moving, bounds.x() + 28., bounds.y() + bounds.height() - 3.);
+                    let vacated = delta(vacated_reference.clone(), vacated_observed.clone());
+                    let left = point(bounds.x() - 6., bounds.y())[0].floor().max(crop[0] as f32) as usize - crop[0];
+                    let right = point(bounds.x() + bounds.width() + 6., bounds.y())[0]
+                        .ceil().min(crop[2] as f32) as usize - crop[0];
+                    let maximum = (0..height).flat_map(|y| (y * width + left) * 4..(y * width + right) * 4)
+                        .map(|i| before[i].abs_diff(after[i])).max().unwrap_or(0);
+                    let center = point(bounds.x() + bounds.width() * 0.5, bounds.y() + bounds.height() - 3.);
+                    let center =
+                        ((center[1].floor() as usize - crop[1]) * width + center[0].floor() as usize - crop[0]) * 4;
+                    let interior = before[center..center + 4]
+                        .iter()
+                        .zip(&after[center..center + 4])
+                        .map(|(a, b)| a.abs_diff(*b))
+                        .max()
+                        .unwrap();
+                    reports.push(serde_json::json!({"case":name,"source_and_feet_byte_delta":maximum,"interior_byte_delta":interior,
+                    "shifted_interior_byte_delta":shifted_interior,"vacated_strip_byte_delta":if docked {None} else {Some(vacated)},
+                    "blank_reference_pixels":blank_pixels,"checked_content_pixels":checked,"unexpected_content_pixels":unexpected_content}));
+                    std::fs::write(output.join("tab-drag-rest.json"), serde_json::to_vec_pretty(&reports).unwrap())
+                        .unwrap();
+                    input.perform(serde_json::json!([contact(device, "up", start)]));
+                    pump(100);
+                    assert!(
+                        interior <= 1 && maximum <= 1 && shifted_interior <= 1 && (docked || vacated <= 1),
+                        "{name}: held tab differs from rest: interior{interior}, source and feet{maximum}, shifted interior{shifted_interior}, vacated strip{vacated}; see tab-drag-rest.json"
+                    );
+                }
+            }
+        }
+    }
+    input.finish();
+    w.window.destroy();
+    pump(100);
+}
+
+fn assert_tab_preview_content(
+    w: &Rc<Workspace>,
+    source_content: &gtk::gsk::RenderNode,
+    bounds: gtk::graphene::Rect,
+    shifted: Bounds,
+    scale: f32,
+    output: &std::path::Path,
+    name: &str,
+) -> (usize, usize, usize) {
+    let expected = gtk::Snapshot::new();
+    expected.translate(&gtk::graphene::Point::new(shifted.x - bounds.x(), shifted.y - bounds.y()));
+    expected.append_node(source_content);
+    let expected = expected.to_node().unwrap();
+    let preview = gtk::Snapshot::new();
+    w.workspace_drag.borrow().as_ref().unwrap().tab.as_ref().unwrap().snapshot(
+        &preview,
+        w.window.frame_clock().unwrap().frame_time(),
+        scale,
+    );
+    let preview = preview.to_node().unwrap();
+    let viewport = gtk::graphene::Rect::new(
+        (shifted.x * scale).floor(),
+        (shifted.y * scale).floor(),
+        ((shifted.x + shifted.width) * scale).ceil() - (shifted.x * scale).floor(),
+        ((shifted.y + shifted.height) * scale).ceil() - (shifted.y * scale).floor(),
+    );
+    let transparent = |node: &gtk::gsk::RenderNode, label: &str| {
+        let node = gtk::gsk::TransformNode::new(node, Some(&gtk::gsk::Transform::new().scale(scale, scale)));
+        let texture = w.window.renderer().unwrap().render_texture(node, Some(&viewport));
+        texture.save_to_png(output.join(format!("{name}-{label}.png"))).unwrap();
+        let mut pixels = vec![0; texture.width() as usize * texture.height() as usize * 4];
+        texture.download(&mut pixels, texture.width() as usize * 4);
+        (texture, pixels)
+    };
+    let (expected, expected_pixels) = transparent(&expected, "source-content");
+    let (preview, preview_pixels) = transparent(&preview, "preview-content");
+    assert_eq!((expected.width(), expected.height()), (preview.width(), preview.height()));
+    let (mut blank_pixels, mut unexpected_content, mut checked) = (0, 0, 0);
+    let mut first_content = None;
+    for y in 0..expected.height() as usize {
+        for x in 0..expected.width() as usize {
+            let gx = viewport.x() + x as f32 + 0.5;
+            let gy = viewport.y() + y as f32 + 0.5;
+            if gx < shifted.x * scale + 2.
+                || gx > (shifted.x + shifted.width) * scale - 2.
+                || gy < shifted.y * scale + 2.
+                || gy > (shifted.y + shifted.height) * scale - 2.
+            {
+                continue;
+            }
+            checked += 1;
+            let i = (y * expected.width() as usize + x) * 4;
+            if expected_pixels[i + 3] <= 1 {
+                blank_pixels += 1;
+                if preview_pixels[i + 3] > 1 {
+                    unexpected_content += 1;
+                    if first_content.is_none() {
+                        first_content = Some(
+                            serde_json::json!({"pixel":[x,y],"expected_alpha":expected_pixels[i+3],"preview_alpha":preview_pixels[i+3]}),
+                        );
+                    }
+                }
+            }
+        }
+    }
+    assert!(blank_pixels * 2 > checked, "source-only snapshot leaves most tab pixels transparent");
+    assert_eq!(unexpected_content, 0, "{name}: neighbouring tab content inside source; first={first_content:?}");
+    (blank_pixels, checked, unexpected_content)
+}
+
+#[test]
 #[ignore = "isolated Mutter captures; LAYER_NATIVE_CAPTURE_DIR=<dir> workspace-motion.sh gtk --native-test=native_workspace_switch_repaints_vacated_regions --native-storage"]
 fn native_workspace_switch_repaints_vacated_regions() {
     let captures = std::path::PathBuf::from(std::env::var("LAYER_NATIVE_CAPTURE_DIR").expect("compositor captures"));

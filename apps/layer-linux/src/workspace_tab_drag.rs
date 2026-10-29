@@ -5,6 +5,7 @@ pub(crate) struct NativeTabSlide {
     pub bounds: Bounds,
     pub clip: Bounds,
     pub tabs: Vec<SlidingTab>,
+    strip: Option<crate::panel_tabs::PanelTabs>,
     source: usize,
     pub hits: Vec<TabHit>,
     started: Rc<Cell<i64>>,
@@ -50,6 +51,7 @@ impl SlidingTab {
 
 impl NativeTabSlide {
     pub fn new(tabs: Vec<SlidingTab>, source: usize, clip: Bounds, group: u32) -> Option<Self> {
+        let strip = tabs.get(source)?.widget.parent().and_then(|widget| widget.downcast().ok());
         let hits = tabs
             .iter()
             .enumerate()
@@ -63,6 +65,7 @@ impl NativeTabSlide {
             bounds: tabs.get(source)?.bounds,
             clip,
             tabs,
+            strip,
             source,
             hits,
             started: Rc::new(Cell::new(0)),
@@ -84,12 +87,14 @@ impl NativeTabSlide {
     }
 
     pub fn hide(&self) {
+        if let Some(strip) = &self.strip { strip.set_dragged(self.tabs[self.source].widget.compute_bounds(strip)); }
         for tab in &self.tabs {
             tab.widget.set_opacity(0.);
         }
     }
 
     pub fn restore(self) {
+        if let Some(strip) = &self.strip { strip.set_dragged(None); }
         if let Some(tick) = self.tick.take() {
             tick.remove();
         }
@@ -105,6 +110,11 @@ impl NativeTabSlide {
         offset: impl Fn(usize) -> f32,
     ) {
         self.bounds = bounds;
+        if let Some(strip) = &self.strip
+            && let Some(origin) = strip.compute_point(surface, &gtk::graphene::Point::zero()) {
+            strip.set_dragged(Some(gtk::graphene::Rect::new(bounds.x - origin.x(), bounds.y - origin.y(),
+                bounds.width, bounds.height)));
+        }
         if (0..self.tabs.len()).all(|index| self.tabs[index].to == offset(index)) {
             return;
         }
@@ -150,13 +160,23 @@ impl NativeTabSlide {
             } else {
                 tab.from + (tab.to - tab.from) * progress
             };
-            snapshot.save();
-            snapshot.translate(&gtk::graphene::Point::new(
-                (offset * scale).round() / scale,
-                0.,
-            ));
-            snapshot.append_node(&tab.node);
-            snapshot.restore();
+            let append = || {
+                snapshot.save();
+                snapshot.translate(&gtk::graphene::Point::new((offset * scale).round() / scale, 0.));
+                snapshot.append_node(&tab.node);
+                snapshot.restore();
+            };
+            if index != self.source && self.strip.is_some() {
+                let left = (self.bounds.x * scale).round() / scale;
+                let right = ((self.bounds.x + self.bounds.width) * scale).round() / scale;
+                for (x, width) in [(self.clip.x, left - self.clip.x),
+                    (right, self.clip.x + self.clip.width - right)] {
+                    if width <= 0. { continue; }
+                    snapshot.push_clip(&gtk::graphene::Rect::new(x, self.clip.y, width, self.clip.height));
+                    append();
+                    snapshot.pop();
+                }
+            } else { append(); }
         }
         snapshot.pop();
     }
@@ -167,12 +187,7 @@ impl Workspace {
         let DragTarget::Dock(DockItem::Panel { panel }) = drag.target else {
             return;
         };
-        let Some((group, palette)) = self.gpu.borrow().as_ref().and_then(|g| {
-            Some((
-                g.session.state().workspace.layout.panel_group(panel)?,
-                g.session.state().palette,
-            ))
-        }) else {
+        let Some(group) = self.gpu.borrow().as_ref().and_then(|g| g.session.state().workspace.layout.panel_group(panel)) else {
             return;
         };
         let mut picked = Some(drag.source.clone());
@@ -192,7 +207,7 @@ impl Workspace {
             while let Some(tab) = child {
                 child = tab.next_sibling();
                 if tab.is::<gtk::Button>()
-                    && let Some(tab) = snapshot_tab(tab, &self.surface, palette)
+                    && let Some(tab) = SlidingTab::capture(tab, self.surface.upcast_ref(), |_, _| {})
                 {
                     tabs.push(tab);
                 }
@@ -270,42 +285,4 @@ fn bounds(b: gtk::graphene::Rect) -> Bounds {
         width: b.width(),
         height: b.height(),
     }
-}
-
-fn snapshot_tab(
-    widget: gtk::Widget,
-    surface: &DockSurface,
-    palette: ThemePalette,
-) -> Option<SlidingTab> {
-    let selected = widget.has_css_class("selected-tool");
-    let [r, g, b] = if selected {
-        palette.panel
-    } else {
-        palette.tabbar
-    }
-    .0;
-    let color = gdk::RGBA::new(r as f32 / 255., g as f32 / 255., b as f32 / 255., 1.);
-    SlidingTab::capture(widget, surface.upcast_ref(), |snapshot, rect| {
-        let top = gtk::graphene::Size::new(crate::panel_tabs::TAB_RADIUS, crate::panel_tabs::TAB_RADIUS);
-        let square = gtk::graphene::Size::new(0., 0.);
-        snapshot.push_rounded_clip(&gtk::gsk::RoundedRect::new(*rect, top, top, square, square));
-        snapshot.append_color(&color, rect);
-        snapshot.pop();
-        if selected {
-            let cr = snapshot.append_cairo(&gtk::graphene::Rect::new(
-                rect.x() - 6.,
-                rect.y(),
-                rect.width() + 12.,
-                rect.height(),
-            ));
-            cr.set_source_rgba(
-                color.red().into(),
-                color.green().into(),
-                color.blue().into(),
-                1.,
-            );
-            crate::panel_tabs::feet(&cr, rect, rect.y() + rect.height());
-            let _ = cr.fill();
-        }
-    })
 }

@@ -158,7 +158,8 @@ fn resize_input(scenarios: &[&str]) {
                 let last = Rc::new(Cell::new(view.width()));
                 let clock = w.surface.frame_clock().unwrap();
                 let paint_start = Rc::new(Cell::new(Instant::now()));
-                let before_paint = clock.connect_before_paint(glib::clone!(#[strong] paint_start, move |_| paint_start.set(Instant::now())));
+                let paint_cpu_start=Rc::new(Cell::new(0.));let paint_cpu=Rc::new(RefCell::new(Vec::new()));
+                let before_paint = clock.connect_before_paint(glib::clone!(#[strong] paint_start,#[strong]paint_cpu_start,move |_| {paint_start.set(Instant::now());paint_cpu_start.set(crate::timing::thread_cpu_ms());}));
                 let after_paint = clock.connect_after_paint(glib::clone!(
                     #[strong]
                     geometry,
@@ -168,11 +169,13 @@ fn resize_input(scenarios: &[&str]) {
                     view,
                     #[strong]
                     paint_start,
+                    #[strong]paint_cpu_start,#[strong]paint_cpu,
                     move |clock| {
                         let width = view.width();
                         if last.replace(width) != width
                             && let Some(timing) = clock.current_timings() {
                                 geometry.borrow_mut().push((timing, width, paint_start.get().elapsed().as_secs_f64() * 1000.));
+                                paint_cpu.borrow_mut().push(crate::timing::thread_cpu_ms()-paint_cpu_start.get());
                             }
                     }
                 ));
@@ -241,6 +244,7 @@ fn resize_input(scenarios: &[&str]) {
                     assert_eq!(refreshed, 0);
                 }
                 let report = serde_json::json!({"touch":touch,"scenario":scenario,"repeat":repeat,"scale":wheel.scale_factor(),"inputs":cpu.len(),"model_refreshes":refreshed,"dispatch_ms":{"p50":cpu[cpu.len()/2],"p95":cpu[cpu.len()*95/100]},"paint_ms":{"p95":percentile(geometry.borrow().iter().map(|(_,_,ms)|*ms).collect(),95)},"geometry_hz":hz,"gap_p99_ms":gap_p99,"wheel_snapshot_p95_ms":percentile(wheel.imp().snapshot_ms.borrow().clone(),95),"field_p95_ms":percentile(wheel.imp().field_render_ms.borrow().clone(),95),"field_rebuilds":wheel.imp().field_render_ms.borrow().len(),"changed_presentations":times.len(),"width_range":[geometry.borrow().iter().map(|(_,w,_)|*w).min(),geometry.borrow().iter().map(|(_,w,_)|*w).max()]});
+                let mut report=report;report["paint_wall_ms"]=report["paint_ms"].clone();report["paint_thread_cpu_ms"]=serde_json::json!({"p95":percentile(paint_cpu.borrow().clone(),95)});
                 eprintln!("{report}");
                 reports.push(report);
                 if let Ok(minimum) = std::env::var("LAYER_RESIZE_MIN_HZ") {

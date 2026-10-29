@@ -19,6 +19,7 @@ mod imp {
         pub gpu_background: Cell<bool>,
         pub(super) paths: RefCell<CornerPaths>,
         pub(super) textures: RefCell<CornerTextures>,
+        pub dragged: Cell<Option<graphene::Rect>>,
         pub(super) hover_path: RefCell<Option<([u32; 6], gsk::Path)>>,
     }
     #[glib::object_subclass]
@@ -104,7 +105,7 @@ mod imp {
             let grid = crate::squircle::PixelGrid::for_widget(obj.upcast_ref());
             let Some([strip, foot]) = self.tints.borrow().clone() else { return };
             let selected = buttons.iter().find(|b| b.has_css_class("selected-tool") && b.opacity() > 0.);
-            let active = selected.and_then(|tab| tab.compute_bounds(&*obj));
+            let active = obj.active_bounds();
             let gpu = self.gpu_background.get();
             let hovered = gtk::Snapshot::new();
             let corners = self.hover_bottom.borrow();
@@ -369,6 +370,16 @@ glib::wrapper! {
         @extends gtk::Widget, @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
 }
 impl PanelTabs {
+    pub fn active_bounds(&self) -> Option<graphene::Rect> {
+        self.imp().dragged.get().or_else(|| self.imp().buttons.borrow().iter()
+            .find(|tab| tab.has_css_class("selected-tool") && tab.opacity() > 0.)
+            .and_then(|tab| tab.compute_bounds(self)))
+            .map(|rect| snapped_tab(&rect, crate::squircle::PixelGrid::for_widget(self.upcast_ref())))
+    }
+    pub fn set_dragged(&self, rect: Option<graphene::Rect>) {
+        if self.imp().dragged.replace(rect) != rect { self.queue_draw(); }
+    }
+
     pub fn set_gpu_background(&self,enabled: bool) {
         if self.imp().gpu_background.replace(enabled)!=enabled {self.queue_draw();}
     }

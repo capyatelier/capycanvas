@@ -28,8 +28,20 @@ fn workspace_motion_input(scenarios: &[&str]) {
     input.ready();
     let saved = || serde_json::to_value(state(&w).workspace).unwrap();
     let mut reports = Vec::new();
+    let report_path=std::env::var("LAYER_MOTION_REPORT").unwrap_or_else(|_|"../../artifacts/workspace-motion/gtk.json".into());
+    let report_directory=std::path::Path::new(&report_path).parent().unwrap_or_else(||std::path::Path::new(".")).to_path_buf();
     for touch in [false, true] {
         for &scenario in scenarios {
+            if scenario == "tab" {
+                until(|| {
+                    let ready = w.gpu.borrow().as_ref().is_some_and(|gpu| {
+                        let clipped = gpu.session.engine().backend().screen_clipped;
+                        clipped.is_some() && gpu.session.state().screen.clipped == clipped
+                    });
+                    if !ready { w.wake(); }
+                    ready
+                }, "initial screen clipping report published");
+            }
             let mut fixture = original.clone();
             let viewport = [w.surface.width() as f32, w.surface.height() as f32];
             if scenario == "color-overlap" {
@@ -160,16 +172,28 @@ fn workspace_motion_input(scenarios: &[&str]) {
             w.publication.frames.borrow_mut().clear();
             let clock = w.surface.frame_clock().unwrap();
             let timings = Rc::new(RefCell::new(Vec::new()));
+            let tab_motion=scenario=="tab";
+            let scale=w.window.surface().unwrap().scale() as f32;
+            let pose=||w.workspace_drag.borrow().as_ref().and_then(|d|d.tab.as_ref()).map(|tab|
+                [tab.bounds.x,tab.bounds.y,tab.bounds.width,tab.bounds.height].map(|v|(v*scale).round() as i32));
+            let last_pose=Rc::new(Cell::new(if tab_motion {pose()} else {None}));
+            let poses=Rc::new(RefCell::new(Vec::new()));
+            let paint_start=Rc::new(Cell::new(0.));let paint_cpu=Rc::new(RefCell::new(Vec::new()));
+            let before_paint=clock.connect_before_paint(glib::clone!(#[strong]paint_start,move|_|paint_start.set(crate::timing::thread_cpu_ms())));
             let after = clock.connect_after_paint(glib::clone!(
-                #[strong]
-                timings,
+                #[strong]timings,#[strong]last_pose,#[strong]poses,#[strong]paint_start,#[strong]paint_cpu,#[weak]w,
                 move |clock| {
+                    let pose=tab_motion.then(||w.workspace_drag.borrow().as_ref().and_then(|d|d.tab.as_ref()).map(|tab|
+                        [tab.bounds.x,tab.bounds.y,tab.bounds.width,tab.bounds.height].map(|v|(v*scale).round() as i32))).flatten();
+                    if tab_motion && (pose.is_none() || last_pose.replace(pose)==pose) {return;}
                     if let Some(t) = clock.current_timings() {
                         timings.borrow_mut().push(t);
+                        if let Some(pose)=pose {poses.borrow_mut().push(pose);}
+                        paint_cpu.borrow_mut().push(crate::timing::thread_cpu_ms()-paint_start.get());
                     }
                 }
             ));
-            let events: Vec<_> = (0..550)
+            let events: Vec<_> = (0..if scenario == "tab" { 1250 } else { 550 })
                 .map(|i| {
                     let t = i as f32 * 0.004;
                     let triangle = |t: f32| {
@@ -210,6 +234,7 @@ fn workspace_motion_input(scenarios: &[&str]) {
             input.perform(serde_json::to_value(events).unwrap());
             pump(50);
             clock.disconnect(after);
+            clock.disconnect(before_paint);
             let canvas = {
                 let stats = worker_stats.lock().unwrap();
                 let mut gpu: Vec<f64> = stats.gpu.iter().map(|v| v[1]).collect();
@@ -296,6 +321,17 @@ fn workspace_motion_input(scenarios: &[&str]) {
             let mut placement_cpu: Vec<_> = frames.iter().map(|f| f.1).collect();
             placement_cpu.sort_by(f64::total_cmp);
             let report = serde_json::json!({"touch":touch,"scenario":scenario,"pickup_command_to_present_ms":pickup_command_to_present_ms,"native_input_samples":cpu.len(),"native_input_gate_passed":cpu.len()>200,"native_input_minimum_exclusive":200,"model_refreshes":0,"dispatch_ms":{"p50":cpu.get(cpu.len()/2),"p95":cpu.get(cpu.len()*95/100)},"placement_ms":{"p50":placement_cpu.get(placement_cpu.len()/2),"p95":placement_cpu.get(placement_cpu.len()*95/100)},"placement_hz":hz(&frames.iter().map(|f|f.0).collect::<Vec<_>>()),"presentation_hz":hz(&presented),"presented_frames":presented.len(),"presentation_gap_p99_ms":presentation_gap_p99_ms,"refresh_intervals_us":timings.borrow().iter().map(|t|t.refresh_interval()).collect::<std::collections::BTreeSet<_>>(),"canvas":canvas});
+            let mut report=report;let mut paints=paint_cpu.borrow().clone();paints.sort_by(f64::total_cmp);
+            report["paint_thread_cpu_p95_ms"]=serde_json::json!(paints.get(paints.len()*95/100));
+            if tab_motion {
+                let poses=poses.borrow();let range:[[_;2];4]=std::array::from_fn(|axis|[poses.iter().map(|p|p[axis]).min(),poses.iter().map(|p|p[axis]).max()]);
+                assert!(poses.len()>20&&range[0][1].unwrap()-range[0][0].unwrap()>10,"observe changing requested device-rounded tab geometry");
+                report["presentation_metric"]=serde_json::json!("completed GDK presents for changed requested device-rounded source-tab poses; does not establish fresh geometry for GPU-owned bridges");
+                report["changed_requested_device_poses"]=serde_json::json!(poses.len());report["requested_device_pose_range"]=serde_json::json!(range);
+                let raw=timings.borrow().iter().zip(poses.iter()).zip(paint_cpu.borrow().iter()).map(|((timing,pose),cpu)|serde_json::json!({"requested_device_pose":pose,"frame_time_us":timing.frame_time(),"presentation_time_us":timing.presentation_time(),"complete":timing.is_complete(),"paint_thread_cpu_ms":cpu})).collect::<Vec<_>>();
+                let output=std::env::var_os("LAYER_TEST_ARTIFACTS").map(std::path::PathBuf::from).unwrap_or_else(||report_directory.clone());std::fs::create_dir_all(&output).unwrap();
+                std::fs::write(output.join(format!("tab-poses-{device}.json")),serde_json::to_vec_pretty(&raw).unwrap()).unwrap();
+            }
             eprintln!("{report}");
             reports.push(report);
             assert!(!placement_cpu.is_empty(), "publish native placement");
@@ -337,7 +373,6 @@ fn workspace_motion_input(scenarios: &[&str]) {
             assert!(w.workspace_drag.borrow().is_none());
         }
     }
-    let report_path = std::env::var("LAYER_MOTION_REPORT").unwrap_or_else(|_| "../../artifacts/workspace-motion/gtk.json".into());
     if let Some(parent) = std::path::Path::new(&report_path).parent() {
         std::fs::create_dir_all(parent).unwrap();
     }

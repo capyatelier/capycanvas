@@ -455,12 +455,6 @@ mod allocation {
                     );
                 }
             }
-            let composed = composed.to_node();
-            let snapshot = target;
-            match &owner {
-                Some(owner) => owner.present_chrome(snapshot, composed, chrome_changed),
-                None => if let Some(node) = composed { snapshot.append_node(&node); },
-            }
             if let Some(owner) = &owner
                 && let Some(drag) = owner.workspace_drag.borrow().as_ref()
                 && let Some(tab) = &drag.tab
@@ -470,8 +464,15 @@ mod allocation {
                     self.obj()
                         .frame_clock()
                         .map_or(0, |clock| clock.frame_time()),
-                    self.obj().scale_factor() as f32,
+                    self.obj().native().and_then(|native| native.surface())
+                        .map_or(self.obj().scale_factor() as f32, |surface| surface.scale() as f32),
                 );
+            }
+            let composed = composed.to_node();
+            let snapshot = target;
+            match &owner {
+                Some(owner) => owner.present_chrome(snapshot, composed, chrome_changed),
+                None => if let Some(node) = composed { snapshot.append_node(&node); },
             }
             if let Some(owner) = &owner {
                 let now = self
