@@ -75,7 +75,7 @@ struct CanvasNotice:std::enable_shared_from_this<CanvasNotice>{
                 auto offer=value.GetObject();auto token=str(offer,L"id");
                 auto choice=button(data,L"",[weak,token]{if(auto self=weak.lock())self->accept(token);});
                 auto caption=label(data,L"",true);caption.VerticalAlignment(VerticalAlignment::Center);choice.Content(caption);edgeTag(choice,L"notice_offer",S(key(offer)));
-                choice.Height(data->controlHeight());choice.Padding({10,0,10,0});choice.CornerRadius(data->controlCorner());
+                buttonColors(data,choice,20,nullptr,.45);choice.Height(data->controlHeight());choice.Padding({10,0,10,0});choice.CornerRadius(data->controlCorner());
                 choice.AllowFocusOnInteraction(false);
                 if(flag(offer,L"accent")){
                     choice.Background(accent(data));caption.Foreground(data->brush(L"accent_foreground"));

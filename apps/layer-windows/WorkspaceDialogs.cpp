@@ -229,7 +229,7 @@ struct WorkspaceDialogs::Impl:std::enable_shared_from_this<Impl>{
         auto model=view();bool picker=kind==L"picker",manager=kind==L"toolbar_manager";
         auto title=label(data,str(model,L"title"),true);title.TextAlignment(TextAlignment::Center);title.HorizontalAlignment(HorizontalAlignment::Stretch);dialog.Title(title);
         AutomationProperties::SetAutomationId(dialog,picker?L"tool-picker":manager?L"toolbar-manager":L"toolbar-prompt");
-        dialogSurface(data,dialog);
+        dialogSurface(data,dialog);dialogLayout(data,dialog);
         dialog.CloseButtonText(manager?str(model,L"close_label"):str(model,L"cancel_label",L"Cancel"));
         dialog.PrimaryButtonText(manager?str(model,L"delete_label"):str(model,L"confirm_label"));
         auto size=xamlRoot.Size();body.Width(std::max(240.,std::min(480.,double(size.Width)-96)));

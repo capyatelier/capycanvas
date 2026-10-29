@@ -262,7 +262,7 @@ struct NewDrawingDialog::Impl:std::enable_shared_from_this<Impl>{
         if(auto entry=control.try_as<TextBox>())fieldColors(data,entry,ControlSurface::Drawing);
     }
     ComboBox choice(hstring const& id){
-        ComboBox result;input(result);choiceColors(data,result,ControlSurface::Drawing);result.HorizontalAlignment(HorizontalAlignment::Stretch);AutomationProperties::SetAutomationId(result,id);
+        ComboBox result;input(result);choiceColors(data,result,ControlSurface::Drawing,ChoiceFeedbackMode::Field,winrt::Windows::UI::Text::FontWeights::Bold());result.HorizontalAlignment(HorizontalAlignment::Stretch);AutomationProperties::SetAutomationId(result,id);
         return result;
     }
     Button toggle(hstring const& id,double width,double height){
@@ -328,7 +328,7 @@ struct NewDrawingDialog::Impl:std::enable_shared_from_this<Impl>{
         left.Spacing(8);left.VerticalAlignment(VerticalAlignment::Top);left.Children().Append(preview);left.Children().Append(captions);
 
         nameLabel=caption();
-        input(name);name.HorizontalAlignment(HorizontalAlignment::Stretch);name.MaxLength(256);name.Padding({10,7,10,0});
+        input(name);name.HorizontalAlignment(HorizontalAlignment::Stretch);name.MaxLength(256);name.Padding({10,0,10,0});entryBaseline(name);
         AutomationProperties::SetAutomationId(name,L"new-drawing-name");inheritLanguage(name,data);
         name.TextChanged([weak](auto&&,auto&&){if(auto self=weak.lock();self&&!self->data->updating&&self->name.Text()!=str(self->shown,L"name"))self->send(O({{L"op",S(L"name")},{L"text",S(self->name.Text())}}));});
         name.KeyDown([weak](auto&&,KeyRoutedEventArgs const& e){if(auto self=weak.lock();self&&!composingKey(e)&&e.Key()==winrt::Windows::System::VirtualKey::Enter){e.Handled(true);self->createDrawing();}});
@@ -338,7 +338,7 @@ struct NewDrawingDialog::Impl:std::enable_shared_from_this<Impl>{
         StackPanel linked;linked.Orientation(Orientation::Horizontal);linked.Spacing(0);
         for(int i=0;i<2;++i){
             prefixes[i]=caption(false,Affix,AffixOpacity);prefixes[i].Margin({10,0,0,0});
-            fields[i].Width(FieldWidth);fields[i].Height(InputHeight);fields[i].Background(data->brush(L"input"));fields[i].CornerRadius(data->controlCorner());
+            fields[i].Width(FieldWidth);fields[i].Height(InputHeight);fields[i].Background(fieldBackground(data,ControlSurface::Drawing));fields[i].CornerRadius(data->controlCorner());
             AutomationProperties::SetAutomationId(fields[i],i?L"new-drawing-height":L"new-drawing-width");
             Grid slot;columns(slot,{autoWidth(),star()});column(slot,prefixes[i],0);fields[i].Child(slot);
             if(i)linked.Children().Append(link);
@@ -371,7 +371,7 @@ struct NewDrawingDialog::Impl:std::enable_shared_from_this<Impl>{
         AutomationProperties::SetAutomationId(resolutionChoices,L"new-drawing-resolution-choices");
         columns(resolutionSlot,{{ValueWidth,GridUnitType::Pixel},autoWidth(),autoWidth()});resolutionSlot.ColumnSpacing(2);
         resolutionUnit.Margin({2,0,0,0});column(resolutionSlot,resolutionUnit,1);column(resolutionSlot,resolutionChoices,2);
-        resolutionField.Padding({0,0,3,0});resolutionField.Height(InputHeight);resolutionField.Background(data->brush(L"input"));resolutionField.CornerRadius(data->controlCorner());resolutionField.Child(resolutionSlot);
+        resolutionField.Padding({0,0,3,0});resolutionField.Height(InputHeight);resolutionField.Background(fieldBackground(data,ControlSurface::Drawing));resolutionField.CornerRadius(data->controlCorner());resolutionField.Child(resolutionSlot);
         AutomationProperties::SetAutomationId(resolutionField,L"new-drawing-resolution-field");
         resolutionItems.Padding({4,4,4,4});resolutionMenu.Content(resolutionItems);AutomationProperties::SetAutomationId(resolutionItems,L"new-drawing-resolution-menu");
         sizeLine=caption(false,Small,Dim);sizeLine.Margin({RowGap,0,0,0});AutomationProperties::SetAutomationId(sizeLine,L"new-drawing-size");
@@ -447,7 +447,7 @@ struct NewDrawingDialog::Impl:std::enable_shared_from_this<Impl>{
         input(search);search.HorizontalAlignment(HorizontalAlignment::Stretch);search.MaxLength(256);search.IsSpellCheckEnabled(false);
         AutomationProperties::SetAutomationId(search,L"new-drawing-search");inheritLanguage(search,data);
         search.TextChanged([weak](auto&&,auto&&){if(auto self=weak.lock();self&&!self->data->updating&&self->search.Text()!=str(self->drawerView(),L"query"))self->send(O({{L"op",S(L"search")},{L"query",S(self->search.Text())}}));});
-Grid searchField;search.Padding({34,7,10,0});searchField.Children().Append(search);auto searchIcon=icon(L"search",data->theme());searchIcon.Margin({10,0,0,0});searchIcon.HorizontalAlignment(HorizontalAlignment::Left);searchIcon.VerticalAlignment(VerticalAlignment::Center);searchField.Children().Append(searchIcon);presetsDrawer.head.Children().Append(searchField);
+Grid searchField;search.Padding({34,0,10,0});entryBaseline(search);searchField.Children().Append(search);auto searchIcon=icon(L"search",data->theme());searchIcon.Margin({10,0,0,0});searchIcon.HorizontalAlignment(HorizontalAlignment::Left);searchIcon.VerticalAlignment(VerticalAlignment::Center);searchField.Children().Append(searchIcon);presetsDrawer.head.Children().Append(searchField);
         tabs.HorizontalAlignment(HorizontalAlignment::Stretch);tabs.SizeChanged([weak](auto&&,auto&&){if(auto self=weak.lock())self->arrangeTabs();});AutomationProperties::SetAutomationId(tabs,L"new-drawing-tabs");
         presetGrid.ColumnSpacing(TileGap);presetGrid.RowSpacing(12);AutomationProperties::SetAutomationId(presetGrid,L"new-drawing-presets");
         presetGrid.XYFocusKeyboardNavigation(XYFocusKeyboardNavigationMode::Enabled);
@@ -468,10 +468,10 @@ Grid searchField;search.Padding({34,7,10,0});searchField.Children().Append(searc
         saveAs=pickerButton(data,L"new-drawing-save-as",0,false,sends(op(L"save_as")));
         select=primary(L"new-drawing-select",0,sends(op(L"use_preset")));
         actions.Orientation(Orientation::Horizontal);actions.Spacing(8);for(auto const& node:{browserCancel,saveAs,select})actions.Children().Append(node);
-        input(saveName);saveName.Width(150);saveName.MaxLength(64);saveName.Padding({10,7,10,0});AutomationProperties::SetAutomationId(saveName,L"new-drawing-save-name");inheritLanguage(saveName,data);
+        input(saveName);saveName.Width(150);saveName.MaxLength(64);saveName.Padding({10,0,10,0});entryBaseline(saveName);AutomationProperties::SetAutomationId(saveName,L"new-drawing-save-name");inheritLanguage(saveName,data);
         saveName.TextChanged([weak](auto&&,auto&&){if(auto self=weak.lock();self&&!self->data->updating&&self->saveName.Text()!=str(object(self->drawerView(),L"save"),L"name"))self->send(O({{L"op",S(L"preset_name")},{L"text",S(self->saveName.Text())}}));});
         saveName.KeyDown([weak](auto&&,KeyRoutedEventArgs const& e){if(auto self=weak.lock();self&&!composingKey(e)&&e.Key()==winrt::Windows::System::VirtualKey::Enter){e.Handled(true);self->send(op(L"save_preset"));}});
-        input(saveGroup);choiceColors(data,saveGroup,ControlSurface::Drawing);saveGroup.Width(150);AutomationProperties::SetAutomationId(saveGroup,L"new-drawing-save-group");
+        input(saveGroup);choiceColors(data,saveGroup,ControlSurface::Drawing,ChoiceFeedbackMode::Field,winrt::Windows::UI::Text::FontWeights::Bold());saveGroup.Width(150);AutomationProperties::SetAutomationId(saveGroup,L"new-drawing-save-group");
         saveGroup.SelectionChanged([weak](auto&&,auto&&){if(auto self=weak.lock()){
             auto groups=array(object(self->drawerView(),L"save"),L"groups");auto index=self->saveGroup.SelectedIndex();
             if(self->data->updating||index<0||uint32_t(index)>=groups.Size())return;
@@ -495,7 +495,7 @@ Grid searchField;search.Padding({34,7,10,0});searchField.Children().Append(searc
         pickerFooter(data,paperDrawer.footer,{GridUnitType::Star,GridUnitType::Auto,GridUnitType::Auto});
         reliefLabel=caption();reliefUnit=caption(false,Affix,AffixOpacity);reliefUnit.Margin({2,0,10,0});
         columns(reliefSlot,{{ValueWidth,GridUnitType::Pixel},autoWidth()});reliefSlot.ColumnSpacing(2);column(reliefSlot,reliefUnit,1);
-        reliefField.Height(InputHeight);reliefField.Background(data->tint(L"text",18));reliefField.CornerRadius(data->controlCorner());reliefField.Child(reliefSlot);
+        reliefField.Height(InputHeight);reliefField.Background(fieldBackground(data,ControlSurface::Drawing));reliefField.CornerRadius(data->controlCorner());reliefField.Child(reliefSlot);
         AutomationProperties::SetAutomationId(reliefField,L"new-drawing-paper-relief-field");
         reliefRow.ColumnSpacing(RowGap);reliefRow.HorizontalAlignment(HorizontalAlignment::Left);columns(reliefRow,{star(),autoWidth()});
         column(reliefRow,reliefLabel,0);column(reliefRow,reliefField,1);AutomationProperties::SetAutomationId(reliefLabel,L"new-drawing-paper-relief-label");
@@ -657,13 +657,12 @@ Grid searchField;search.Padding({34,7,10,0});searchField.Children().Append(searc
     TextBox numberField(J const& spec,wchar_t const* titleKey,wchar_t const* operation,hstring const& id,std::function<double(J const&)> value,Bindings& binds,NumericAdmissions& admit){
         auto weak=weak_from_this();
         NumberPresentation presentation;presentation.preference=true;presentation.title=[weak,titleKey]{if(auto self=weak.lock())return self->text(titleKey);return hstring();};
-        auto number=CapyUi::number(data,text(titleKey),spec,
+        auto number=CapyUi::number(data,ControlSurface::Transparent,text(titleKey),spec,
             [weak,value]{if(auto self=weak.lock();self&&self->shown.Size())return value(self->shown);return 0.;},
             [weak,operation](double next){if(auto self=weak.lock())self->send(O({{L"op",S(operation)},{L"value",N(next)}}));},
             binds,nullptr,true,id,false,presentation,&admit);
         auto entry=numberEntry(number);detach(entry);
         entry.Height(InputHeight);entry.TextAlignment(TextAlignment::Right);entry.HorizontalAlignment(HorizontalAlignment::Stretch);
-        entry.Resources().Insert(box_value(L"TextControlForegroundDisabled"),data->tint(L"text",92));
         auto padding=entry.Padding();padding.Left=4;padding.Right=10;entry.Padding(padding);entry.VerticalAlignment(VerticalAlignment::Center);
         return entry;
     }

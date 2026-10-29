@@ -3,6 +3,8 @@
 #include <winrt/Microsoft.UI.Xaml.Automation.Peers.h>
 
 namespace CapyUi {
+StackPanel number(std::shared_ptr<WorkspaceData> const& data,ControlSurface surface,hstring const& title,J const& spec,
+    std::function<double()> get,std::function<void(double)> set,Bindings& bindings,Bindings* commits=nullptr,bool valueOnly=false,hstring const& identifier=L"",bool inlineTrack=false,NumberPresentation const& presentation={},NumericAdmissions* admissions=nullptr);
 inline constexpr double PickerPadding=20,PickerDialogHeight=486.67;
 inline ContentDialog pickerDialog(std::shared_ptr<WorkspaceData> const& data,XamlRoot const& xaml,Grid const& root,FrameworkElement const& page,Grid const& footer,hstring const& id){
     ContentDialog dialog;dialog.XamlRoot(xaml);

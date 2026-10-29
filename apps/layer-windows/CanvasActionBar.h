@@ -69,11 +69,11 @@ struct CanvasActionBar:std::enable_shared_from_this<CanvasActionBar>{
     void tiled(Control const& control){
         double r=tile*.5*CornerFit;
         control.Width(tile);control.Height(tile);control.Padding({0,0,0,0});control.CornerRadius({r,r,r,r});
-        control.HorizontalContentAlignment(HorizontalAlignment::Stretch);control.VerticalContentAlignment(VerticalAlignment::Stretch);quiet(control);
+        control.HorizontalContentAlignment(HorizontalAlignment::Stretch);control.VerticalContentAlignment(VerticalAlignment::Stretch);buttonColors(data,control.as<Primitives::ButtonBase>(),20,control.try_as<Primitives::ToggleButton>()?Brush(selected(data)):Brush(nullptr),.45);quiet(control);
     }
     void worded(Control const& control,double padding=10){
         control.Height(data->controlHeight());control.Padding({padding,0,padding,0});control.CornerRadius(data->controlCorner());
-        control.VerticalAlignment(VerticalAlignment::Center);quiet(control);
+        control.VerticalAlignment(VerticalAlignment::Center);buttonColors(data,control.as<Primitives::ButtonBase>(),20,control.try_as<Primitives::ToggleButton>()?Brush(selected(data)):Brush(nullptr),.45);quiet(control);
     }
     FrameworkElement face(hstring const& name,hstring const& iconTheme,bool group){
         Grid result;auto image=icon(name,iconTheme,glyph);
@@ -97,7 +97,7 @@ struct CanvasActionBar:std::enable_shared_from_this<CanvasActionBar>{
         for(uint32_t i=0;i<list.Size();++i){
             auto entry=list.GetObjectAt(i);auto action=object(entry,L"action");
             auto toggle=button<Primitives::ToggleButton>(data,L"",[weak,action]{if(auto self=weak.lock()){self->send(action);self->restore();}});
-            toggle.Content(labelled(str(entry,L"icon"),str(entry,L"label")));worded(toggle,8);segmentColors(data,toggle);buttonColors(data,toggle,20,selected(data));toggle.CornerRadius({0,0,0,0});
+            toggle.Content(labelled(str(entry,L"icon"),str(entry,L"label")));worded(toggle,8);segmentColors(data,toggle);buttonColors(data,toggle,20,selected(data),.45);toggle.CornerRadius({0,0,0,0});
             AutomationProperties::SetAutomationId(toggle,L"canvas-bar-choice-"+id+L"-"+to_hstring(i));AutomationProperties::SetName(toggle,str(entry,L"label"));tooltip(toggle,str(entry,L"label"));
             group.Children().Append(toggle);
         }

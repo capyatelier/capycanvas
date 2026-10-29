@@ -8,9 +8,6 @@
 #include <algorithm>
 #include <map>
 #include <optional>
-#include <limits>
-#include <winrt/Microsoft.UI.Text.h>
-#include <winrt/Microsoft.UI.Xaml.Documents.h>
 #include <winrt/Microsoft.UI.Xaml.Automation.Peers.h>
 
 using namespace CapyUi;
@@ -46,7 +43,7 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
     TextBox search,name,description;
     ComboBox choices;
     ListView list;
-    Grid listSurface;Border listRing;RichEditBox nameLine;TextBlock nameText;bool nameAlignmentPending=true;
+    Grid listSurface;Border listRing;
     std::unique_ptr<WorkspaceRowDrag> rowDrag;
     uint64_t selectionSerial=0;
     struct Row {
@@ -200,17 +197,6 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
         buttonCaption(retry,copy(L"header",L"retry"));retry.HorizontalAlignment(HorizontalAlignment::Left);
         AutomationProperties::SetAutomationId(retry,L"workspace-manager-retry");
         listSurface.CornerRadius({12,12,12,12});listSurface.Children().Append(list);listRing.BorderThickness({1,1,1,1});listRing.BorderBrush(copyData->line(L"settings",L"card_ring"));listRing.CornerRadius({12,12,12,12});listRing.IsHitTestVisible(false);listSurface.Children().Append(listRing);
-        for(auto const& metric:{nameLine.as<FrameworkElement>(),nameText.as<FrameworkElement>()}){
-            metric.Opacity(0);metric.IsHitTestVisible(false);metric.MaxWidth(0);metric.HorizontalAlignment(HorizontalAlignment::Left);metric.VerticalAlignment(VerticalAlignment::Top);
-            AutomationProperties::SetAccessibilityView(metric,Automation::Peers::AccessibilityView::Raw);listSurface.Children().Append(metric);
-        }
-        nameLine.IsTabStop(false);nameLine.MinWidth(0);nameLine.MinHeight(0);nameLine.BorderThickness({0,0,0,0});nameLine.Padding({0,0,0,0});
-        nameLine.AcceptsReturn(false);nameLine.TextWrapping(TextWrapping::NoWrap);nameLine.Height(copyData->controlHeight());
-        nameLine.LayoutUpdated([weak=weak_from_this()](auto&&,auto&&){
-            if(auto self=weak.lock();self&&self->showing&&self->nameAlignmentPending&&self->nameLine.IsLoaded()&&self->nameLine.ActualHeight()>0){
-                self->nameAlignmentPending=false;try{self->alignNames();}catch(...){self->fail();}
-            }
-        });
         clipRounded(listSurface,{12,12,12,12});
         rowDrag=std::make_unique<WorkspaceRowDrag>(list,listSurface,
             [weak=weak_from_this()]{auto self=weak.lock();return self&&self->canReorder();},
@@ -269,39 +255,6 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
             }
         });
     }
-    void alignNames(){
-        using namespace winrt::Microsoft::UI::Text;
-        auto font=[](auto const& target,auto const& source){
-            target.FontFamily(source.FontFamily());target.FontSize(source.FontSize());target.FontWeight(source.FontWeight());
-            target.FontStyle(source.FontStyle());target.FontStretch(source.FontStretch());target.CharacterSpacing(source.CharacterSpacing());
-            target.Language(source.Language());target.FlowDirection(source.FlowDirection());target.IsTextScaleFactorEnabled(source.IsTextScaleFactorEnabled());
-            target.UseLayoutRounding(source.UseLayoutRounding());
-        };
-        auto available=winrt::Windows::Foundation::Size{std::numeric_limits<float>::infinity(),std::numeric_limits<float>::infinity()};
-        for(auto& [id,row]:rows){
-            auto slot=row.entry.Parent().try_as<Grid>();if(!slot||!slot.IsLoaded()||slot.ActualWidth()<=0)continue;
-            nameLine.MaxWidth(slot.ActualWidth());nameText.MaxWidth(slot.ActualWidth());
-            font(nameLine,row.entry);font(nameText,row.title);nameText.LineHeight(row.title.LineHeight());
-            nameText.LineStackingStrategy(row.title.LineStackingStrategy());nameText.TextLineBounds(row.title.TextLineBounds());
-            nameText.Text(row.title.Text().empty()?hstring(L"0"):row.title.Text());nameText.Measure(available);auto title=nameText.DesiredSize();
-            nameText.Arrange({0,0,title.Width,title.Height});
-            auto character=nameText.ContentStart().GetCharacterRect(winrt::Microsoft::UI::Xaml::Documents::LogicalDirection::Forward);
-            auto text=row.entry.Visibility()==Visibility::Visible?row.entry.Text():row.title.Text();
-            nameLine.Height(copyData->controlHeight());nameLine.Document().SetText(TextSetOptions::None,text.empty()?hstring(L"0"):text);
-            nameLine.Measure(available);auto native=nameLine.DesiredSize();nameLine.Arrange({0,0,native.Width,native.Height});
-            auto range=nameLine.Document().GetRange(0,1);winrt::Windows::Foundation::Point top,baseline,bottom;
-            auto options=PointOptions::Start|PointOptions::ClientCoordinates|PointOptions::AllowOffClient;
-            range.GetPoint(HorizontalCharacterAlignment::Left,VerticalCharacterAlignment::Top,options,top);
-            range.GetPoint(HorizontalCharacterAlignment::Left,VerticalCharacterAlignment::Baseline,options,baseline);
-            range.GetPoint(HorizontalCharacterAlignment::Left,VerticalCharacterAlignment::Bottom,options,bottom);
-            double lineHeight=bottom.Y-top.Y,ascent=baseline.Y-top.Y;
-            double shift=character.Y+nameText.BaselineOffset()-title.Height/2-(ascent-lineHeight/2);
-            if(title.Height<=0||lineHeight<=0||!std::isfinite(shift))throw hresult_error(E_FAIL);
-            auto height=std::max({copyData->controlHeight(),double(title.Height),lineHeight+2*std::abs(shift)});
-            auto padding=(height-lineHeight)/2,fieldPadding=copyData->panelMetric(L"field_padding");
-            slot.MinHeight(height);row.entry.Height(height);row.entry.Padding({fieldPadding,padding+shift,fieldPadding,padding-shift});
-        }
-    }
     void fitRows() {
         double height=0;
         for(uint32_t index=0;index<std::min(7u,list.Items().Size());++index)
@@ -330,12 +283,9 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
         row.entry.Visibility(Visibility::Collapsed);row.entry.MinWidth(0);row.entry.MinHeight(0);row.entry.Height(copyData->controlHeight());row.entry.Padding({fieldPadding,0,fieldPadding,0});row.entry.Background(copyData->brush(L"input"));row.entry.BorderThickness({0,0,0,0});row.entry.CornerRadius(copyData->controlCorner());row.entry.VerticalContentAlignment(VerticalAlignment::Center);
         row.entry.FontSize(copyData->textSize());row.title.FontSize(copyData->textSize());
         auto nameFont=FontFamily(L"Segoe UI");row.title.FontFamily(nameFont);row.entry.FontFamily(nameFont);
-        row.title.SizeChanged([weak=weak_from_this()](auto&&,SizeChangedEventArgs const& e){
-            if(e.NewSize().Height>0)if(auto self=weak.lock())self->nameAlignmentPending=true;
-        });
         for(auto state:{L"",L"PointerOver",L"Focused"})row.entry.Resources().Insert(box_value(hstring(L"TextControlBackground")+state),copyData->brush(L"input"));
         AutomationProperties::SetAutomationId(row.entry,L"workspace-manager-rename-"+id);AutomationProperties::SetName(row.entry,common(L"name"));
-        row.entry.TextChanged([weak=weak_from_this(),id](auto&&,auto&&){if(auto self=weak.lock();self&&!self->updating&&self->editingId==id){self->submittedName=false;self->nameAlignmentPending=true;}});
+        row.entry.TextChanged([weak=weak_from_this(),id](auto&&,auto&&){if(auto self=weak.lock();self&&!self->updating&&self->editingId==id){self->submittedName=false;}});
         row.entry.KeyDown([weak=weak_from_this()](auto&&,KeyRoutedEventArgs const& e){if(!composingKey(e))if(auto self=weak.lock()){
             if(e.Key()==Windows::System::VirtualKey::Enter){e.Handled(true);self->finishName();}
             else if(e.Key()==Windows::System::VirtualKey::Escape){e.Handled(true);self->dispatch(O({{L"type",S(L"cancel")}}));}
@@ -347,7 +297,7 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
         row.item.KeyDown([weak=weak_from_this(),id](auto&&,KeyRoutedEventArgs const& e){if(e.Key()==Windows::System::VirtualKey::F2&&!composingKey(e))if(auto self=weak.lock()){
             auto found=self->rows.find(std::wstring(id));if(found!=self->rows.end()&&found->second.rename.IsEnabled()){e.Handled(true);self->dispatch(form(L"rename",S(id)));}
         }});
-        nameSlot.Children().Append(row.title);nameSlot.Children().Append(row.entry);text.Children().Append(nameSlot);text.Children().Append(row.subtitle);content.Children().Append(text);
+        nameSlot.Children().Append(row.title);nameSlot.Children().Append(row.entry);entryBaseline(row.entry,row.title);text.Children().Append(nameSlot);text.Children().Append(row.subtitle);content.Children().Append(text);
         auto options=row.menu;auto metadata=row.context;row.rename.Text(recovery(L"rename"));row.remove.Text(common(L"delete"));
         AutomationProperties::SetAutomationId(row.rename,L"workspace-manager-rename");
         AutomationProperties::SetAutomationId(row.remove,L"workspace-manager-delete");
@@ -402,7 +352,7 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
             auto found=rows.find(key);
             if(found==rows.end())found=rows.emplace(key,makeRow(id)).first;
             auto& row=found->second;row.swipe.Content().as<Grid>().BorderThickness({0,next.size()==1?0.:1.,0,0});auto label=str(data,L"title"),detail=str(data,L"subtitle");
-            if(row.title.Text()!=label)nameAlignmentPending=true;row.title.Text(label);row.subtitle.Text(detail);row.subtitle.Visibility(detail.empty()?Visibility::Collapsed:Visibility::Visible);
+            row.title.Text(label);row.subtitle.Text(detail);row.subtitle.Visibility(detail.empty()?Visibility::Collapsed:Visibility::Visible);
             auto pin=object(data,L"pin");
             uint32_t position=saved.Size();for(uint32_t i=0;i<saved.Size();++i)if(saved.GetStringAt(i)==id)position=i;
             row.pin.Visibility(configurable?Visibility::Visible:Visibility::Collapsed);
@@ -601,7 +551,7 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
     }
     void apply(J const& value,bool unavailable) {
         copyData->model=value;copyData->state=object(value,L"state");copyData->refreshPalette();
-        if(copyData->adoptLocalization(value)){nameAlignmentPending=true;
+        if(copyData->adoptLocalization(value)){
             catalog=copyData->catalog;localization=copyData->localization;
             buttonCaption(thisWorkspace,copy(L"header",L"this_workspace"));buttonCaption(savedToolbars,copy(L"header",L"saved_toolbars"));
             buttonCaption(toolbarActions,copy(L"header",L"toolbar_actions"));buttonCaption(retry,copy(L"header",L"retry"));

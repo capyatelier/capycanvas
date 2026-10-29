@@ -15,7 +15,7 @@ struct ExportFormView : std::enable_shared_from_this<ExportFormView> {
     std::array<NumericAdmissions,4> numericAdmissions;
     std::map<std::wstring,TextBlock> captions;
     StackPanel metadataSection;
-    CheckBox resize,enlarge,removeLocation;
+    CheckBox resize;ToggleSwitch enlarge,removeLocation;
     TextBlock validation,metadataNote;
     A extent;
     J recipe,draft,color;
@@ -44,7 +44,7 @@ struct ExportFormView : std::enable_shared_from_this<ExportFormView> {
         }
         for(uint32_t i=0;i<choices.Size();++i)comboOptionText(metadata,i,str(choices.GetObjectAt(i),L"label"));
         for(uint32_t i=0;i<choices.Size();++i)if(str(choices.GetObjectAt(i),L"value")==str(kept,L"keep")&&metadata.SelectedIndex()!=int32_t(i))metadata.SelectedIndex(i);
-        captions.at(L"remove_location").Text(str(view,L"remove_location"));AutomationProperties::SetName(removeLocation,str(view,L"remove_location"));removeLocation.IsChecked(flag(kept,L"remove_location"));
+        captions.at(L"remove_location").Text(str(view,L"remove_location"));AutomationProperties::SetName(removeLocation,str(view,L"remove_location"));removeLocation.IsOn(flag(kept,L"remove_location"));
         auto note=str(view,L"note");metadataNote.Text(note);
         metadataSection.Visibility(photoMetadata&&flag(view,L"available")?Visibility::Visible:Visibility::Collapsed);
         metadata.Visibility(photoMetadata&&flag(view,L"available")?Visibility::Visible:Visibility::Collapsed);
@@ -54,7 +54,7 @@ struct ExportFormView : std::enable_shared_from_this<ExportFormView> {
     void chooseMetadata(){
         if(updating||metadata.SelectedIndex()<0)return;
         auto choice=array(object(draft,L"metadata"),L"choices").GetObjectAt(metadata.SelectedIndex());
-        normalize(O({{L"type",S(L"metadata")},{L"value",O({{L"keep",choice.GetNamedValue(L"value")},{L"remove_location",B(removeLocation.IsChecked().Value())}})}}));
+        normalize(O({{L"type",S(L"metadata")},{L"value",O({{L"keep",choice.GetNamedValue(L"value")},{L"remove_location",B(removeLocation.IsOn())}})}}));
     }
     J current(){
         auto resolutions=array(object(draft,L"choices"),L"resolutions");auto resolutionIndex=resolution.SelectedIndex();
@@ -64,7 +64,7 @@ struct ExportFormView : std::enable_shared_from_this<ExportFormView> {
             for(auto const& admit:numericAdmissions[index])if(!admit(false))throw hresult_invalid_argument(AutomationProperties::GetHelpText(numberEntry(numericRows[index].Content().as<UIElement>())));
         }
         auto value=J::Parse(recipe.Stringify());value.Insert(L"jpeg_quality",N(numbers[0]));
-        if(resize.IsChecked().Value()){A bounds;bounds.Append(N(numbers[1]));bounds.Append(N(numbers[2]));value.Insert(L"size",O({{L"Fit",O({{L"bounds",bounds},{L"enlarge",B(enlarge.IsChecked().Value())}})}}));}
+        if(resize.IsChecked().Value()){A bounds;bounds.Append(N(numbers[1]));bounds.Append(N(numbers[2]));value.Insert(L"size",O({{L"Fit",O({{L"bounds",bounds},{L"enlarge",B(enlarge.IsOn())}})}}));}
         else value.Insert(L"size",S(L"Original"));
         if(resolutionIndex>=0&&uint32_t(resolutionIndex)<resolutions.Size()){V next=resolutions.GetObjectAt(resolutionIndex).GetNamedValue(L"value");if(next.ValueType()==JsonValueType::Object)next=O({{L"Ppi",N(numbers[3])}});value.Insert(L"resolution",next);}
         auto encoding=object(value,L"encoding");auto conversion=object(encoding,L"conversion");
@@ -80,7 +80,7 @@ struct ExportFormView : std::enable_shared_from_this<ExportFormView> {
             captions.at(key).Text(text(key));AutomationProperties::SetName(control,text(key));
         }
         for(auto const& binds:numericBinds)for(auto const& bind:binds)bind();
-        for(auto const& [control,key]:std::initializer_list<std::pair<CheckBox,wchar_t const*>>{{resize,L"fit_bounds"},{enlarge,L"enlarge"}}){captions.at(key).Text(text(key));AutomationProperties::SetName(control,text(key));}
+        for(auto const& [control,key]:std::initializer_list<std::pair<FrameworkElement,wchar_t const*>>{{resize,L"fit_bounds"},{enlarge,L"enlarge"}}){captions.at(key).Text(text(key));AutomationProperties::SetName(control,text(key));}
         updating=true;struct Reset{bool& updating;~Reset(){updating=false;}}reset{updating};
         auto selected=profile.SelectedIndex();
         auto names=array(object(details,L"form"),L"profile_names");
@@ -111,7 +111,7 @@ struct ExportFormView : std::enable_shared_from_this<ExportFormView> {
         for(uint32_t i=0;i<resolutions.Size();++i){auto choice=resolutions.GetObjectAt(i);comboOption(resolution,str(choice,L"label"));if(choice.GetNamedValue(L"value").Stringify()==density.Stringify())selectIndex(resolution,int32_t(i));}
         auto fit=object(object(recipe,L"size"),L"Fit");auto bounds=fit.Size()?array(fit,L"bounds"):array(details,L"extent");
         numbers={num(recipe,L"jpeg_quality"),bounds.GetNumberAt(0),bounds.GetNumberAt(1),num(initial,L"ppi")};
-        resize=compactCheck(data,nullptr);enlarge=compactCheck(data,nullptr);removeLocation=compactCheck(data,nullptr);resize.IsChecked(fit.Size()!=0);enlarge.IsChecked(flag(fit,L"enlarge"));
+        resize=compactCheck(data,nullptr);enlarge=compactSwitch();removeLocation=compactSwitch();resize.IsChecked(fit.Size()!=0);enlarge.IsOn(flag(fit,L"enlarge"));
         auto add=[&](StackPanel const& group,FrameworkElement const& content){if(group.Children().Size()){Border line;line.Height(1);line.Background(data->line(L"settings",L"card_shade"));group.Children().Append(line);}group.Children().Append(content);};
         auto row=[&](wchar_t const* key,FrameworkElement const& control){Grid row;row.MinHeight(54);row.Padding({14,8,14,8});row.ColumnSpacing(12);ColumnDefinition words;words.Width({1,GridUnitType::Star});row.ColumnDefinitions().Append(words);ColumnDefinition value;value.Width({1,GridUnitType::Auto});row.ColumnDefinitions().Append(value);auto caption=label(data,text(key));caption.VerticalAlignment(VerticalAlignment::Center);caption.TextWrapping(TextWrapping::Wrap);row.Children().Append(caption);captions.emplace(key,caption);Grid::SetColumn(control,1);control.VerticalAlignment(VerticalAlignment::Center);AutomationProperties::SetName(control,text(key));row.Children().Append(control);return row;};
         auto group=[&]{auto section=preferenceGroup(data,L"");root.Children().Append(section.section);return section;};
@@ -137,7 +137,7 @@ struct ExportFormView : std::enable_shared_from_this<ExportFormView> {
         bind(format,L"formats",L"format");bind(depth,L"depths",L"depth");bind(background,L"backgrounds",L"background");bind(dither,L"dithers",L"encoding");
         profile.SelectionChanged([weak](auto&&,auto&&){if(auto self=weak.lock();self&&!self->updating&&self->profile.SelectedIndex()>=0){auto value=self->profiles.GetObjectAt(self->profile.SelectedIndex());self->profileId=str(value,L"library");self->normalize(O({{L"type",S(L"profile")},{L"value",value}}));}});
         metadata.SelectionChanged([weak](auto&&,auto&&){if(auto self=weak.lock())self->chooseMetadata();});
-        removeLocation.Click([weak](auto&&,auto&&){if(auto self=weak.lock())self->chooseMetadata();});
+        removeLocation.Toggled([weak](auto&&,auto&&){if(auto self=weak.lock())self->chooseMetadata();});
     }
 };
 }

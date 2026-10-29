@@ -24,6 +24,11 @@ function Owned([string]$Value){
 function Prefs{(Model).preferences}
 function Page{(Prefs).shortcut_page}
 function Shown([string]$Id){$item=Find $Id;if($item -and !$item.Current.IsOffscreen){$item}}
+$compactSwitchChecks=0
+function Visible-NamedSwitch([string]$Name){
+ $condition=[System.Windows.Automation.AndCondition]::new([System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,$Name),[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::IsTogglePatternAvailableProperty,$true))
+ @($root.FindAll([System.Windows.Automation.TreeScope]::Descendants,$condition)|Where-Object {!$_.Current.IsOffscreen -and !$_.Current.BoundingRectangle.IsEmpty -and $_.Current.BoundingRectangle.Width -gt 0})
+}
 function Press([uint16]$Key){[CapyRowPointer]::Key([uint32]$review.Id,$Key)}
 function Choose([string]$Id,[string]$Name){
  (Control $Id).GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
@@ -69,6 +74,11 @@ try {
    Invoke-Id ('preference-page-'+$page.id)
    Wait-Until {(Prefs).page -eq $page.id -and (Shown 'settings-title')} "Preferences page $($page.id) did not open"
    $name="preferences-$($page.id)-$Theme-glass-$($glass.name)"
+   foreach($row in @($page.groups.rows|Where-Object {$_.kind.type -eq 'switch' -and $_.visible -ne $false})){
+    $switch=@(Visible-NamedSwitch $row.title)
+    if($switch.Count -gt 1){throw "Preferences switch $($row.id) has ambiguous arranged peers"}
+    if($switch.Count){Assert-CapyCompactSwitch $switch[0] ([bool]$row.kind.active) $drawingWindow (Join-Path $run ($name+'-'+$row.id+'-compact-switch.json'));$compactSwitchChecks++}
+   }
    Capture $name -WithModel -Composed
    if($page.id -eq 'color'){
     Visit-ProfileManager ($name+'-profile-manager')
@@ -110,6 +120,7 @@ try {
   }
  }
  Set-CapyTransparency $originalTransparency
+ if(!$compactSwitchChecks){throw 'Preferences did not expose an arranged compact switch'}
  $checks.preferences_pages_and_glass_captures='passed'
  Invoke 'Keyboard Shortcuts' -Name
  Wait-Until {(Prefs).page -eq 'shortcuts' -and (Shown 'shortcut-category-Modifier keys') -and (Shown 'keymap-preset')} 'Keyboard Shortcuts did not list its categories before any search'
@@ -182,8 +193,10 @@ try {
  Invoke-Id ('modifier-'+$held.key+$(if($held.command){'-command'})+$(if($held.shift){'-shift'})+$(if($held.alt){'-alt'}))
  Wait-Until {(Prefs).modifier_editor.label -eq $modifier.label -and (Shown 'modifier-same')} "Modifier key $($modifier.label) did not open"
  $perTool=(Prefs).modifier_editor.per_tool
+ Assert-CapyCompactSwitch (Control 'modifier-same' -Arranged) (!$perTool) $drawingWindow (Join-Path $run ('modifier-same-'+$Theme+'-compact-switch.json'))
  (Control 'modifier-same').GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
  Wait-Until {(Prefs).modifier_editor.per_tool -ne $perTool} 'Same for every tool did not change'
+ Assert-CapyCompactSwitch (Control 'modifier-same' -Arranged) $perTool $drawingWindow (Join-Path $run ('modifier-same-toggled-'+$Theme+'-compact-switch.json'))
  $action=@((Prefs).modifier_editor.actions)[0];$suffix=if($action.category){$action.category}else{'all'}
  Invoke-Id ('modifier-action-'+$suffix)
  Wait-Until {(Page).picker -and (Shown 'action-picker-search')} 'The action picker did not open'

@@ -193,7 +193,7 @@ struct ShortcutPage::Impl:std::enable_shared_from_this<Impl>{
         return result;
     }
     ComboBox dropdown(hstring const& name,hstring const& id,std::function<void(int32_t)> choose){
-        ComboBox result;choiceColors(data,result,ControlSurface::Settings);result.MinWidth(120);result.MaxWidth(220);AutomationProperties::SetName(result,name);AutomationProperties::SetAutomationId(result,id);tooltip(result,name);
+        ComboBox result;choiceColors(data,result,id==L"keymap-preset"?ControlSurface::Card:ControlSurface::Settings,id==L"keymap-preset"?ChoiceFeedbackMode::RowSuffix:ChoiceFeedbackMode::Field);result.MinWidth(120);result.MaxWidth(220);AutomationProperties::SetName(result,name);AutomationProperties::SetAutomationId(result,id);tooltip(result,name);
         result.SelectionChanged([data=data,choose=std::move(choose)](auto&& sender,auto&&){
             auto index=sender.template as<ComboBox>().SelectedIndex();if(!data->updating&&index>=0)choose(index);
         });
@@ -226,7 +226,7 @@ struct ShortcutPage::Impl:std::enable_shared_from_this<Impl>{
         keymapChoice=dropdown(copy(L"keymap_preset"),L"keymap-preset",[weak=weak_from_this()](int32_t index){
             if(auto self=weak.lock()){auto presets=array(object(self->preferences(),L"keymap"),L"presets");
                 if(uint32_t(index)<presets.Size())send(self->data,act(L"select_keymap",{{L"id",S(str(presets.GetObjectAt(index),L"id"))}}));}
-        });keymapChoice.Background(clear());keymapChoice.MinHeight(38);cell(preset,keymapChoice,1);follow(localized(L"keymap_preset"),naming(keymapChoice));
+        });keymapChoice.MinHeight(38);cell(preset,keymapChoice,1);follow(localized(L"keymap_preset"),naming(keymapChoice));
         auto more=keymapMore=button(data,L"",[]{});more.Width(34);more.Height(34);more.CornerRadius(data->controlCorner());
         follow(localized(L"keymap_options"),naming(more));AutomationProperties::SetAutomationId(more,L"keymap-menu");
         MenuFlyout options;
@@ -237,7 +237,7 @@ struct ShortcutPage::Impl:std::enable_shared_from_this<Impl>{
             item.Click([data=data,action](auto&&,auto&&){send(data,action);});options.Items().Append(item);
         }
         more.Flyout(options);cell(preset,more,2);
-        keymap.list.Children().Append(preset);root.Children().Append(keymap.section);
+        keymap.list.Children().Append(choiceRow(data,preset,keymapChoice));root.Children().Append(keymap.section);
 
         StackPanel shortcuts;shortcuts.Spacing(12);shortcuts.MaxWidth(GroupWidth);AutomationProperties::SetAutomationId(shortcuts,L"shortcuts");
         auto heading=label(data,localized(L"title"),true);heading.Margin({0,8,0,0});shortcuts.Children().Append(heading);
@@ -467,7 +467,7 @@ struct ShortcutPage::Impl:std::enable_shared_from_this<Impl>{
             remember([this,section,current,prefix]{auto value=current();section.summary.Text(prefix==L"modifier"?data->caption(O({{L"type",S(L"modifier_hold")},{L"label",S(str(value,L"label"))}})):copy(L"pen_action_help"));});
             if(flag(binding,L"modified"))section.actions.Children().Append(glyphButton(L"reset",L"reset_default",reset,prefix+L"-reset"));
             auto row=line();TextBlock heading{nullptr};cell(row,words(L"",L"",&heading),0);
-            ToggleSwitch toggle;toggle.MinWidth(0);toggle.OnContent(box_value(L""));toggle.OffContent(box_value(L""));
+            auto toggle=compactSwitch();
             AutomationProperties::SetAutomationId(toggle,prefix+L"-same");
             toggle.Toggled([data=data,same](auto&& sender,auto&&){if(!data->updating)send(data,same(!sender.template as<ToggleSwitch>().IsOn()));});cell(row,toggle,1);add(section.list,row);
             remember([this,heading,toggle,current]{auto text=copy(L"same_all_tools");heading.Text(text);AutomationProperties::SetName(toggle,text);auto selected=!flag(current(),L"per_tool");if(toggle.IsOn()!=selected)toggle.IsOn(selected);});

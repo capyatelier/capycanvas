@@ -268,7 +268,7 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
             control.MinHeight(34);AutomationProperties::SetAutomationId(control,L"setting-action-"+id);widget=control;
             bindings.emplace_back([data=data,id,control]{buttonCaption(control,str(object(rowFor(data,id),L"kind"),L"label"));});
         }else if(type==L"switch"){
-            ToggleSwitch control;control.MinWidth(0);control.OnContent(box_value(L""));control.OffContent(box_value(L""));
+            auto control=compactSwitch();
             control.Toggled([data=data,id](auto&& sender,auto&&){
                 if(!data->updating)edit(data,id,B(sender.template as<ToggleSwitch>().IsOn()));
             });widget=control;
@@ -332,7 +332,7 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
             }
             widget=strip;
         }else if(type==L"choice"){
-            ComboBox control;choiceColors(data,control,ControlSurface::Card);control.Background(clear());control.MinHeight(38);AutomationProperties::SetAutomationId(control,L"preference-choice-"+id);control.MinWidth(132);control.MaxWidth(220);
+            ComboBox control;choiceColors(data,control,ControlSurface::Card,ChoiceFeedbackMode::RowSuffix);control.MinHeight(38);AutomationProperties::SetAutomationId(control,L"preference-choice-"+id);control.MinWidth(132);control.MaxWidth(220);
             auto options=array(kind,L"options"),icons=array(kind,L"icons");
             for(uint32_t i=0;i<options.Size();++i){
                 StackPanel option;option.Orientation(Orientation::Horizontal);option.Spacing(12);
@@ -429,11 +429,11 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
             MenuFlyoutItem item;item.Text(str(spec,L"label"));item.KeyboardAcceleratorTextOverride(str(spec,L"hint"));item.IsEnabled(flag(spec,L"enabled"));
             item.Click([data,id](auto&&,auto&&){send(data,O({{L"type",S(L"reset")},{L"id",S(id)}}));});menu.Items().Append(item);
         });
-        ContentControl field;field.IsTabStop(false);field.HorizontalContentAlignment(HorizontalAlignment::Stretch);field.Content(line);
+        ContentControl field;field.IsTabStop(false);field.HorizontalContentAlignment(HorizontalAlignment::Stretch);field.Content(widget&&widget.try_as<ComboBox>()?UIElement(choiceRow(data,line,widget.as<ComboBox>())):UIElement(line));
         field.ContextFlyout(reset);rows.emplace(id.c_str(),field);
-        bindings.emplace_back([data=data,id,field]{
+        bindings.emplace_back([data=data,id,field,choice=bool(widget&&widget.try_as<ComboBox>())]{
             auto row=rowFor(data,id);field.Visibility(flag(row,L"visible",true)?Visibility::Visible:Visibility::Collapsed);
-            field.IsEnabled(flag(row,L"enabled",true));field.Opacity(flag(row,L"enabled",true)?1:.5);
+            field.IsEnabled(flag(row,L"enabled",true));field.Opacity(choice||flag(row,L"enabled",true)?1:.5);
         });
         return field;
     }

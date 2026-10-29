@@ -499,6 +499,15 @@ function Focus-Keyboard($Element,[switch]$Backward){
     if($Backward){[CapyRowPointer]::Key([uint32]$review.Id,0x09)}else{[CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x10),0x09)}
     Wait-Until {$Element.Current.HasKeyboardFocus} 'Keyboard navigation did not return focus to the native control'
 }
+function Assert-CapyCompactSwitch($Control,[bool]$Expected,[IntPtr]$Window,[string]$Output){
+    $bounds=$Control.Current.BoundingRectangle;$scale=[CapyRowPointer]::GetDpiForWindow($Window)/96.
+    $toggle=$Control.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)
+    $on=$toggle.Current.ToggleState -eq [System.Windows.Automation.ToggleState]::On
+    $name=$Control.Current.Name
+    @{name=$name;class=$Control.Current.ClassName;width_dip=$bounds.Width/$scale;height_dip=$bounds.Height/$scale;expected=$Expected;actual=$on;scale=$scale}|ConvertTo-Json|Set-Content $Output
+    if([Math]::Abs($bounds.Width-40*$scale) -gt 1.5){throw "Compact switch $name is not 40 DIP wide within 1.5 physical pixels"}
+    if($on -ne $Expected){throw "Compact switch $name disagrees with the shared state"}
+}
 function Control-Trace($Element){
     $walker=[System.Windows.Automation.TreeWalker]::RawViewWalker
     $items=@();$node=$Element
@@ -612,7 +621,7 @@ function Set-CapyTransparency([ValidateSet('off','low','medium','high')][string]
     Wait-Until {(Model).state.settings.transparency -eq $Value} 'Panel transparency did not acknowledge its native choice'
     if($opened){
         Invoke-Id 'CloseButton'
-        Wait-Until {!(Model).preferences} 'Preferences did not close after transparency capture'
+        Wait-Until {$canvas=Find 'drawing-canvas';!(Model).preferences -and $canvas -and $canvas.Current.IsEnabled} 'Preferences did not close and release the drawing canvas after transparency capture'
     }
 }
 function Capture([string]$Name,[switch]$WithModel,[switch]$Composed){

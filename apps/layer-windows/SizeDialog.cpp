@@ -123,7 +123,7 @@ struct SizeDialog::Impl:std::enable_shared_from_this<Impl>{
         field.binds.clear();field.admissions.clear();
         auto weak=weak_from_this();auto operation=op(index);auto control=spec(size,index);
         NumberPresentation presentation;presentation.compact=false;presentation.title=[weak,index]{if(auto self=weak.lock())return label(self->view(),index);return hstring();};
-        auto number=CapyUi::number(data,label(size,index),control,
+        auto number=CapyUi::number(data,ControlSurface::Dialog,label(size,index),control,
             [weak,index]{if(auto self=weak.lock())return value(self->view(),index);return 0.;},
             [weak,operation,index,generation](double next){
                 if(auto self=weak.lock();self&&self->fields[index].generation==generation&&self->settled()&&!self->data->updating)
@@ -174,7 +174,7 @@ struct SizeDialog::Impl:std::enable_shared_from_this<Impl>{
         auto size=view();
         if(!size.Size()){hide();return;}
         if(!showing&&blocked)return;
-        dialogSurface(data,dialog);
+        dialogSurface(data,dialog);dialogLayout(data,dialog);
         title.Text(str(size,L"title"));
         dialog.PrimaryButtonText(str(size,L"apply_label"));dialog.CloseButtonText(str(size,L"cancel_label"));
         data->updating=true;

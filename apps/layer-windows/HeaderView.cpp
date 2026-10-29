@@ -23,10 +23,10 @@ J edit(J const& action){return O({{L"type",S(L"customize")},{L"action",O({{L"typ
 void style(Button const& item,std::shared_ptr<WorkspaceData> const& data,bool surface=true){
     item.Height(36);item.Padding({6,0,6,0});item.UseLayoutRounding(false);
     if(surface){
-        item.Background(headerSurface(data));buttonFeedback(item,data->brush(L"text"),26,41);
+        item.Background(headerSurface(data));buttonFeedback(item,data->brush(L"text"),26,41,nullptr,false,nullptr,.45);
     }else{
         item.BorderBrush(clear());item.BackgroundSizing(BackgroundSizing::InnerBorderEdge);
-        item.Background(clear());buttonFeedback(item,data->brush(L"text"),26,41);
+        item.Background(clear());buttonFeedback(item,data->brush(L"text"),26,41,nullptr,false,nullptr,.45);
     }
 }
 }
@@ -172,7 +172,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
             next.emplace_back(item,id);
             content.Foreground(data->brush(L"text"));item.IsChecked(id==active);item.IsEnabled(flag(storage,L"ready"));
             item.Background(id==active?chosen:clear());
-            buttonFeedback(item,data->brush(L"text"),id==active?0:20,41,id==active&&!data->transparent()?data->brush(L"header_selection_hover"):Brush(nullptr));
+            buttonFeedback(item,data->brush(L"text"),id==active?0:20,41,id==active&&!data->transparent()?data->brush(L"header_selection_hover"):Brush(nullptr),false,nullptr,.45);
             item.Foreground(data->brush(L"text"));
             AutomationProperties::SetName(item,name);
         }
@@ -551,7 +551,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
                 pick.IsTabStop(!editing);pick.Width(tile);pick.Height(tile);pick.IsEnabled(editing||flag(spec,L"enabled",true)||flag(spec,L"has_variants"));
                 auto facing=drawerFacing(data,O({{L"kind",S(L"header")},{L"id",N(id)}}));bool open=!facing.empty();
                 auto background=flag(spec,L"selected")?data->glass(L"header_selection"):open?data->glass(L"panel"):clear();
-                pick.Background(background);buttonFeedback(pick,data->brush(L"text"),26,41,nullptr,flag(spec,L"selected"));
+                pick.Background(background);buttonFeedback(pick,data->brush(L"text"),26,41,nullptr,flag(spec,L"selected"),nullptr,.45);
                 pick.CornerRadius(facingCorners(corner(),facing));
                 AutomationProperties::SetItemStatus(pick,open?data->caption(L"header",L"open"):flag(spec,L"selected")?data->caption(L"header",L"on"):data->caption(L"header",L"off"));
                 AutomationProperties::SetName(pick,label);AutomationProperties::SetHelpText(pick,reason);

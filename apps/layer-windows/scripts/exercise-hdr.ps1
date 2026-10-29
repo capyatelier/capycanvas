@@ -422,7 +422,7 @@ try {
  Wait-Until {(Model).brush_ready -and ($DrawingTabsOnly -or ((Model).color_panel.hdr -and (Model).color_panel.document_depth -eq $Depth -and (Model).windows_display.analysis.ready))} 'Drawing creation did not settle' 60
  if(!$DrawingTabsOnly -and (Model).windows_display.format -ne 'Rgba16Float'){throw 'Expected native floating-point swap chain'}
  if(@((Model).windows_tabs.tabs).Count -ne 2 -or (!$DrawingTabsOnly -and !$ControlsOnly -and !(Model).windows_tabs.tabs[0].modified)){throw 'New did not retain the first drawing'}
- if(!$DrawingTabsOnly){& (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Resize -Width 1800 -Height 1300}
+ if(!$DrawingTabsOnly){& (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -StateDirectory $run -Action Resize -Width 1800 -Height 1300}
  Wait-Until {(Find 'drawing-tab-1') -and (Find 'drawing-tab-2') -and (Model).windows_tabs.available} 'Full native drawing strip did not appear'
  if(!$DrawingTabsOnly -and !$ControlsOnly -and !(Control 'drawing-tab-1').Current.Name.StartsWith('• ')){throw 'Dirty tab lacks the unsaved marker'}
  if($screenParity){
@@ -660,7 +660,7 @@ try {
  # Three drawings force a compact selector at this DPI; two still fit the strip.
  Command 'new_document' 'File';New-DrawingPixels 32 24;Button 'Create';Idle
  Wait-Until {@((Model).windows_tabs.tabs).Count -eq 3 -and (Model).windows_tabs.available} 'Third drawing did not become available' 60
- & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Resize -Width 900 -Height 1100
+ & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -StateDirectory $run -Action Resize -Width 900 -Height 1100
  Wait-Until {(Find 'drawing-selector')} 'Compact drawing selector did not appear'
  foreach($device in @('mouse','touch','pen')){
   Write-Output "Native contact: $device at line $($MyInvocation.ScriptLineNumber)"
@@ -683,7 +683,7 @@ try {
  Wait-Until {(Model).windows_tabs.selected -eq 1 -and (Model).windows_tabs.available} 'Selector keyboard activation failed' 60
  Open-Drawings;(Control 'drawing-row-2').SetFocus();[CapyRowPointer]::Key([uint32]$review.Id,0x0D)
  Wait-Until {(Model).windows_tabs.selected -eq 2 -and (Model).windows_tabs.available} 'Selector did not restore the HDR drawing' 60
- & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Resize -Width 1800 -Height 1300
+ & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -StateDirectory $run -Action Resize -Width 1800 -Height 1300
  Wait-Until {(Find 'drawing-close-3')} 'Full strip did not return'
  Invoke 'drawing-close-3'
  Wait-Until {@((Model).windows_tabs.tabs).Count -eq 2 -and (Model).windows_tabs.selected -eq 2 -and (Model).windows_tabs.available} 'Closing the clean selector fixture drawing failed' 60

@@ -256,6 +256,11 @@ function Test-NewDrawingProblem([string]$Theme){
     }
     Set-CapyTransparency $transparency
 }
+function Export-Switch([string]$Name){
+    $switchCondition=[System.Windows.Automation.AndCondition]::new([System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,$Name),[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::IsTogglePatternAvailableProperty,$true))
+    $hit=@{item=$null};Wait-Until {$hit.item=@($root.FindAll([System.Windows.Automation.TreeScope]::Descendants,$switchCondition)|Where-Object {!$_.Current.IsOffscreen -and !$_.Current.BoundingRectangle.IsEmpty -and $_.Current.BoundingRectangle.Width -gt 0})|Select-Object -First 1;$hit.item} "Export switch $Name did not arrange"
+    $hit.item
+}
 function New-Journey([string]$Theme,[switch]$Full) {
     $script:newTheme=$Theme;$script:scope=$root
     $transparency=(Model).state.settings.transparency
@@ -287,8 +292,21 @@ function New-Journey([string]$Theme,[switch]$Full) {
         Press 'new-drawing-color-cancel';Wait-Until {!(Drawer)} 'Parity capture did not close paper colour'
         Close-NewDrawing 'new-drawing-cancel'
         File-Command 'export_document' -OptionsOnly
-        [void](Control 'export-format' -Arranged)
+        $formatControl=Control 'export-format' -Arranged
+        $dialog=Control 'document-workflow' -Arranged
+        $primary=(Control 'PrimaryButton' -Within $dialog -Arranged).Current.BoundingRectangle
+        $close=(Control 'CloseButton' -Within $dialog -Arranged).Current.BoundingRectangle
+        $footerScale=[CapyRowPointer]::GetDpiForWindow($drawing.Handle)/96.
+        $gap=$close.Left-$primary.Right
+        @{primary_bounds=@($primary.X,$primary.Y,$primary.Width,$primary.Height);close_bounds=@($close.X,$close.Y,$close.Width,$close.Height);gap_dip=$gap/$footerScale;primary_height_dip=$primary.Height/$footerScale;close_height_dip=$close.Height/$footerScale;scale=$footerScale}|ConvertTo-Json|Set-Content (Join-Path $run ("export-footer-$Theme-glass-$glass.json"))
+        if([Math]::Abs($gap-8*$footerScale) -gt 1.5){throw 'Export primary and close responses are not separated by 8 DIP'}
+        if([Math]::Abs($primary.Height-34*$footerScale) -gt 1.5 -or [Math]::Abs($close.Height-34*$footerScale) -gt 1.5){throw 'Export responses are not 34 DIP high'}
         Capture ("export-options-$Theme-glass-$glass") -WithModel -Composed
+        Scroll-Position $formatControl 100
+        $export=(Model).windows_document.details
+        $enlarge=Export-Switch $export.form.copy.enlarge
+        Assert-CapyCompactSwitch $enlarge ([bool]$export.recipe.size.Fit.enlarge) $drawing.Handle (Join-Path $run ("export-enlarge-$Theme-glass-$glass-compact-switch.json"))
+        Capture ("export-options-lower-$Theme-glass-$glass") -WithModel -Composed
         Invoke-Control 'Cancel'
         Wait-Until {!(Model).windows_document} 'Parity capture did not cancel Export options'
     }
@@ -1296,6 +1314,7 @@ File-Command 'export_document' {
     Wait-Until {!(Find-Id 'export-remove-location').Current.IsOffscreen} 'Remove location could not be scrolled into view'
     $remove=Control 'export-remove-location' -Arranged
     if($remove.Current.Name -cne (Model).windows_document.details.feature_copy.export.remove_location){throw 'Remove location accessible caption differs from the shared metadata copy'}
+    Assert-CapyCompactSwitch $remove ([bool](Model).windows_document.details.recipe.metadata.remove_location) $drawing.Handle (Join-Path $run ('export-remove-location-'+(Model).state.theme+'-compact-switch.json'))
     Combo-Select $script:metadata {$_.Current.Name -eq 'Copyright & Contact'}
     Wait-Until {!(Find-Id 'export-remove-location')} 'Remove location stayed for Copyright & Contact'
 }

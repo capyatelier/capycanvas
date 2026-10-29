@@ -1,5 +1,5 @@
 #include "pch.h"
-#include "UiControls.h"
+#include "PickerDialog.h"
 #include "PointerGesture.h"
 #include <winrt/Microsoft.UI.Xaml.Automation.Peers.h>
 #include <winrt/Microsoft.UI.Xaml.Automation.Provider.h>
@@ -66,6 +66,10 @@ void showNumericError(TextBox const& entry,hstring const& text){
 }
 StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& title,J const& spec,
     std::function<double()> get,std::function<void(double)> set,Bindings& bindings,Bindings* commits,bool valueOnly,hstring const& identifier,bool inlineTrack,NumberPresentation const& presentation,NumericAdmissions* admissions){
+    return number(data,ControlSurface::Panel,title,spec,std::move(get),std::move(set),bindings,commits,valueOnly,identifier,inlineTrack,presentation,admissions);
+}
+StackPanel number(std::shared_ptr<WorkspaceData> const& data,ControlSurface surfaceKind,hstring const& title,J const& spec,
+    std::function<double()> get,std::function<void(double)> set,Bindings& bindings,Bindings* commits,bool valueOnly,hstring const& identifier,bool inlineTrack,NumberPresentation const& presentation,NumericAdmissions* admissions){
     auto currentTitle=presentation.title?presentation.title:std::function<hstring()>([title]{return title;});
     auto caption=std::make_shared<NumericCaption>();
     auto numericCopy=[source=std::weak_ptr<WorkspaceData>(data),currentTitle,caption]{
@@ -121,7 +125,8 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
     TextBox entry;entry.UseLayoutRounding(false);entry.Width(panel?68:ranged?72:60);entry.MinWidth(0);entry.MinHeight(0);entry.Height(valueHeight);
     entry.VerticalAlignment(panel?VerticalAlignment::Bottom:VerticalAlignment::Center);
     inheritLanguage(entry,data);entry.FontSize(data->textSize());entry.FontFamily(FontFamily(L"Segoe UI"));entry.Foreground(data->brush(L"text"));
-    fieldColors(data,entry);
+    auto entrySurface=surfaceKind==ControlSurface::Panel||surfaceKind==ControlSurface::Card?surfaceKind:ControlSurface::Transparent;
+    fieldColors(data,entry,entrySurface);
     auto hiddenText=clear();
     entry.Resources().Insert(box_value(L"TextControlForegroundDisabled"),hiddenText);
     entry.TextAlignment(TextAlignment::Right);Grid::SetColumn(entry,1);
@@ -165,8 +170,10 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
         entry.IsEnabledChanged([readout](auto&&,DependencyPropertyChangedEventArgs const& args){
             if(auto view=readout.get())view.Opacity(unbox_value<bool>(args.NewValue())?1.:.36);
         });
-        entry.Loaded([readout](Windows::Foundation::IInspectable const& sender,auto&&){
-            if(auto view=readout.get())view.Opacity(sender.as<TextBox>().IsEnabled()?1.:.36);
+        entry.Loaded([readout,source=std::weak_ptr<WorkspaceData>(data)](Windows::Foundation::IInspectable const& sender,auto&&){
+            auto entry=sender.as<TextBox>();
+            if(auto view=readout.get())view.Opacity(entry.IsEnabled()?1.:.36);
+            else if(auto data=source.lock())entry.Resources().Insert(box_value(L"TextControlForegroundDisabled"),data->tint(L"text",92));
         });
     }
     AutomationProperties::SetName(entry,str(numericLabels,L"edit"));if(!identifier.empty())AutomationProperties::SetAutomationId(entry,identifier);
@@ -442,8 +449,8 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
         auto next=local->resolve(spec,local->value,O({{L"type",S(L"step")},{L"steps",N(e.GetCurrentPoint(nullptr).Properties().MouseWheelDelta()/120.)}}));
         local->value=num(next,L"value");setText(str(next,L"text"));set(local->value);e.Handled(true);
     })),true);
-    entry.GotFocus([data,local,showText,setText](Windows::Foundation::IInspectable const& sender,RoutedEventArgs const&){
-        auto entry=sender.as<TextBox>();entry.Background(data->brush(L"input"));
+    entry.GotFocus([data,entrySurface,local,showText,setText](Windows::Foundation::IInspectable const& sender,RoutedEventArgs const&){
+        auto entry=sender.as<TextBox>();entry.Background(fieldBackground(data,entrySurface));
         if(!local->editing)setText(showText(L"edit"));
     });
     // LosingFocus is synchronous; close and target-change commands must follow
@@ -547,7 +554,7 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
         auto panel=color(str(palette,L"panel")),ink=color(str(palette,L"text"));
         track.Color({255,uint8_t((int(panel.R)+ink.R)/2),uint8_t((int(panel.G)+ink.G)/2),uint8_t((int(panel.B)+ink.B)/2)});
     });
-    bindings.emplace_back([data,local,caption,spec,get,entry,slider,setText,setPosition,presented,finish,captures,finishSliderKey,identity=presentation.identity]{
+    bindings.emplace_back([data,entrySurface,local,caption,spec,get,entry,slider,setText,setPosition,presented,finish,captures,finishSliderKey,identity=presentation.identity]{
         if(identity && local->identity!=identity()){
             ++local->contactGeneration;for(auto const& capture:*captures)capture->Cancel();finishSliderKey(true);finish(L"cancel");
             local->identity=identity();local->editing=false;local->dragging=false;local->scrubbing=false;local->turning=false;
@@ -558,7 +565,7 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
         struct Reset{bool& value;bool previous;~Reset(){value=previous;}} reset{local->formatting,previous};
         local->value=get();auto shown=local->resolve(spec,local->value,O({{L"type",S(L"format")}}));
         setText(presented?presented():str(shown,entry.FocusState()==FocusState::Unfocused?L"text":L"edit"));
-        entry.Background(entry.FocusState()==FocusState::Unfocused?clear():data->brush(L"input"));
+        entry.Background(entry.FocusState()==FocusState::Unfocused?clear():fieldBackground(data,entrySurface));
         slider.Value(num(shown,L"fill"));
     });
     root.Unloaded([local,finish,finishSliderKey](auto&&,auto&&){++local->contactGeneration;finishSliderKey(true);finish(L"cancel");local->scrubbing=false;local->turning=false;local->dragging=false;});
@@ -596,7 +603,7 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
             entry.Width(std::max(24.,measureText(hstring(measure)))+2*data->panelMetric(L"field_padding"));
         }
         header.Children().RemoveAt(1);spin.Children().Append(valueBox);
-        Border frame;frame.Child(spin);frame.Background(data->brush(L"input"));frame.CornerRadius(data->controlCorner());
+        Border frame;frame.Child(spin);frame.Background(fieldBackground(data,surfaceKind));frame.CornerRadius(data->controlCorner());
         Grid::SetColumn(frame,1);header.Children().Append(frame);
     }
     Grid trackRow;trackRow.ColumnSpacing(6);

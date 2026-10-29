@@ -35,6 +35,12 @@ function Open-SizeDialog([string]$Command,[scriptblock]$Opened){
 }
 function Open-CanvasSize{Open-SizeDialog 'canvas_size' {(Draft) -and (Find 'canvas-size-width')}}
 function Open-ImageSize{Open-SizeDialog 'image_size' {(Image-Draft) -and (Find 'image-size-width')}}
+function Capture-SizeParity([string]$Name,[string]$TitleId){
+    $title=(Control $TitleId -Arranged).Current.BoundingRectangle
+    $titleX=[int]($title.X+$title.Width/2);$titleY=[int]($title.Y+$title.Height/2)
+    $null=Wait-StablePixels {Screen-Pixels $titleX $titleY} -Composed
+    Capture $Name -WithModel -Composed
+}
 function Field([string]$Id){(Control $Id -Type $ControlType::Edit).GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value}
 function Pixels([string]$Id){[int]((Field $Id) -replace '[^0-9.-]','')}
 try {
@@ -67,11 +73,11 @@ try {
             $bounds=(Control ('canvas-size-anchor-'+$anchor) -Arranged).Current.BoundingRectangle
             if([Math]::Abs($bounds.Width/$dpi-32) -gt 1 -or [Math]::Abs($bounds.Height/$dpi-32) -gt 1){throw "Canvas anchor $anchor is not 32 by 32 DIP"}
         }
-        Capture ("canvas-size-$($checks.theme)-glass-$glass") -WithModel -Composed
+        Capture-SizeParity ("canvas-size-$($checks.theme)-glass-$glass") 'canvas-size-title'
         [CapyRowPointer]::Key([uint32]$review.Id,0x1B)
         Wait-Until {!(Draft)} 'Canvas Size parity capture did not cancel'
         Open-ImageSize
-        Capture ("image-size-$($checks.theme)-glass-$glass") -WithModel -Composed
+        Capture-SizeParity ("image-size-$($checks.theme)-glass-$glass") 'image-size-title'
         [CapyRowPointer]::Key([uint32]$review.Id,0x1B)
         Wait-Until {!(Image-Draft)} 'Image Size parity capture did not cancel'
     }
