@@ -8,6 +8,8 @@ import { tmpdir } from "node:os";
 import { extname, join, resolve } from "node:path";
 import { filesIn, writeWorker } from "./package.mjs";
 import { checkPenRendering } from "./pen-rendering.test.mjs";
+import { createDrawing } from "./new-drawing-fixture.mjs";
+import {readyCanvas,readyCanvasPixels,waitForPixels} from "./canvas-pixels-fixture.mjs";
 
 export async function servePackage() {
   const source = resolve("dist/capycanvas");
@@ -97,7 +99,7 @@ async function checkFullscreen({ call, evaluate, settle, canvasPixels }) {
     await call("Input.dispatchMouseEvent", { type: "mouseReleased", x: point.x + 200, y: point.y, button: "left", buttons: 0, clickCount: 1 });
     await waitFor("layerApp.state().commands.find(c=>c.id==='undo').enabled");
     await settle();
-    assert.ok((await canvasPixels()).white < before.white - 50, "GPU ink renders after the fullscreen resize");
+    await waitForPixels(canvasPixels,settle,pixels=>pixels.white<before.white-50,"GPU ink renders after the fullscreen resize");
     mkdirSync("artifacts/ui/fullscreen", { recursive: true });
     for (const theme of ["light", "dark"]) {
       await evaluate(`layerApp.dispatch({type:'set_theme',theme:'${theme}'})`); await settle();
@@ -155,9 +157,7 @@ async function checkPointerIds({ call, evaluate, settle, canvasPixels }) {
         const init={bubbles:true,cancelable:true,pointerId:id,pointerType:kind,clientX:px,clientY:py,button:0,buttons:end?0:1,pressure:end?0:.7};
         const event=new PointerEvent(type,init);
         if(coalesced)Object.defineProperty(event,'getCoalescedEvents',{value:()=>[new PointerEvent(type,{...init,clientX:px-20}),new PointerEvent(type,init)]});
-        // Main's tablet fix finalizes painted ink on capture loss; other
-        // controls retain their own cancellation semantics.
-        expectedRoutes.push([String(id>>>0),end&&kind==='pen'?'up':type==='lostpointercapture'?'cancel':type.slice(7)]);
+        expectedRoutes.push([String(id>>>0),type==='pointercancel'?'cancel':end&&kind==='pen'?'up':type==='lostpointercapture'?'cancel':type.slice(7)]);
         canvas.dispatchEvent(event);
       };
       try {
@@ -166,13 +166,19 @@ async function checkPointerIds({ call, evaluate, settle, canvasPixels }) {
           emit('pointerdown',id,kind,x,y+i*12);
           emit('pointermove',id,kind,x+100,y+i*12,true);
           emit(end,id,kind,x+100,y+i*12);
-          expectedSamples.push(...[1,2,2,3].map(phase=>[id>>>0,phase]));
+          expectedSamples.push(...[1,2,2,end==='pointercancel'?4:3].map(phase=>[id>>>0,phase]));
+          await settle();
+        }
+        const deadline=performance.now()+30000;
+        while(!app.brush_ready()||app.canvas_work_pending()){
+          if(performance.now()>deadline)throw Error('Pen contacts did not finish before navigation');
           await settle();
         }
         const zoom=app.state().camera.zoom;
         emit('pointerdown',-11,'touch',x,y);
         emit('pointerdown',-12,'touch',x+100,y);
         emit('pointermove',-12,'touch',x+180,y);
+        await settle();
         const scale=app.state().camera.zoom/zoom;
         emit('pointerup',-11,'touch',x,y);
         emit('pointerup',-12,'touch',x+180,y);
@@ -187,14 +193,19 @@ async function checkPointerIds({ call, evaluate, settle, canvasPixels }) {
     assert.doesNotMatch(result.status, /error|invalid|u64/i);
     await evaluate("layerApp.dispatch({type:'invoke',command:'fit_canvas'})");
     await settle();
-    assert.ok((await canvasPixels()).white < before.white - 50, "Negative-ID pen strokes reach the GPU canvas");
+    await waitForPixels(canvasPixels,settle,pixels=>pixels.white<before.white-50,"Negative-ID pen strokes reach the GPU canvas");
   } finally { await call("Input.setIgnoreInputEvents", { ignore: false }); }
   console.log("Signed pointer IDs: Wasm routing, GPU ink, coalesced samples, cancel/capture loss and multitouch passed");
 }
 
-export async function checkPwa({ call, evaluate, settle, canvasPixels, host, storageOnly = false }) {
+export async function checkPwa({ call, evaluate, settle, canvasPixels: capturePixels, host, storageOnly = false }) {
+  const canvasPixels=readyCanvasPixels({evaluate,settle,capturePixels});
   const settledDocument = () => settleDocument(evaluate);
   await settledDocument();
+  await evaluate("layerApp.dispatch({type:'invoke',command:'new_document'})");
+  await evaluate(createDrawing());
+  await readyCanvas({evaluate,settle});
+  await settle();
   if (!storageOnly) {
   await checkPenRendering({call, evaluate, settle});
   await checkPointerIds({ call, evaluate, settle, canvasPixels });
@@ -264,12 +275,12 @@ export async function checkPwa({ call, evaluate, settle, canvasPixels, host, sto
     // Ordinary reload: a hard reload can bypass the worker in Chrome.
     await call("Page.reload"); await ready(previous); await settledDocument();
   };
-  const historyPixels = async command => {
+  const historyPixels = async (command, clip, expected, message) => {
     const revision = await evaluate("String(layerApp.state().document_file.revision)");
     await evaluate(`layerApp.dispatch({type:'invoke',command:'${command}'})`);
     await evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function check(){if(String(layerApp.state().document_file.revision)!==${JSON.stringify(revision)})resolve();else if(performance.now()-start>10000)reject(Error('History did not complete'));else setTimeout(check,25)}check()})`);
     await settle();
-    return canvasPixels();
+    return waitForPixels(canvasPixels,settle,expected,message,clip);
   };
   const offline = async (value) => {
     host.state.online = !value;
@@ -308,6 +319,9 @@ export async function checkPwa({ call, evaluate, settle, canvasPixels, host, sto
     assert.ok(await evaluate(`(async()=>{const keys=await caches.keys();return keys.some(k=>k.startsWith('capycanvas:'+location.href+':'))})()`));
     await offline(true);
     await reload();
+    await evaluate("layerApp.dispatch({type:'invoke',command:'new_document'})");
+    await evaluate(createDrawing());
+    await settle();
     assert.equal(await evaluate("document.querySelector('link[rel=icon]').sizes.value"), "32x32");
     const icons = await evaluate(`(async()=>{
       const manifestUrl=document.querySelector('link[rel=manifest]').href;
@@ -331,19 +345,17 @@ export async function checkPwa({ call, evaluate, settle, canvasPixels, host, sto
     await evaluate("layerApp.dispatch({type:'select_brush',id:1});layerApp.dispatch({type:'set_theme',theme:'light'});layerApp.dispatch({type:'invoke',command:'fit_canvas'})");
     await settle();
     assert.ok(await evaluate("Promise.all([...document.querySelectorAll('.brush-preview')].map(i=>i.decode())).then(()=>true)"));
-    const before = await canvasPixels();
+    const inkClip = {x:640,y:420,width:280,height:60,scale:1};
+    const before = await waitForPixels(canvasPixels,settle,pixels=>pixels.white>pixels.total*.9,"Flat white paper must fill the stroke region",inkClip);
     await call("Input.dispatchMouseEvent", { type: "mousePressed", x: 650, y: 450, button: "left", buttons: 1, clickCount: 1 });
     for (let x = 670; x <= 900; x += 20)
       await call("Input.dispatchMouseEvent", { type: "mouseMoved", x, y: 450, button: "left", buttons: 1 });
     await call("Input.dispatchMouseEvent", { type: "mouseReleased", x: 900, y: 450, button: "left", buttons: 0, clickCount: 1 });
     await settle();
-    const painted = await canvasPixels();
-    assert.ok(painted.white < before.white - 50, "Real GPU ink must render after an offline cold reload");
-    const undone = await historyPixels("undo");
-    assert.ok(undone.white > painted.white + 50, "Offline ink can be undone");
-    const redone = await historyPixels("redo");
-    assert.ok(redone.white < undone.white - 50, "Offline ink can be redone");
-    assert.ok((await historyPixels("undo")).white > redone.white + 50, "Offline ink can be removed before another reload");
+    const painted = await waitForPixels(canvasPixels,settle,pixels=>pixels.white<before.white-50,"Real GPU ink must render after an offline cold reload",inkClip);
+    const undone = await historyPixels("undo",inkClip,pixels=>pixels.white>painted.white+50,"Offline ink can be undone");
+    const redone = await historyPixels("redo",inkClip,pixels=>pixels.white<undone.white-50,"Offline ink can be redone");
+    await historyPixels("undo",inkClip,pixels=>pixels.white>redone.white+50,"Offline ink can be removed before another reload");
     await evaluate("layerApp.dispatch({type:'set_theme',theme:'dark'})");
     await settle();
     assert.ok(await evaluate("Promise.all([...document.querySelectorAll('.brush-preview')].map(i=>i.decode())).then(()=>true)"));

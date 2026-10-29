@@ -1,4 +1,6 @@
 import {checkHdrBubbles} from './hdr-bubbles.test.mjs';
+import {createDrawing} from './new-drawing-fixture.mjs';
+import {readyCanvas,readyCanvasPixels,waitForPixels} from './canvas-pixels-fixture.mjs';
 import {checkBubbleRelease,checkBubbleReleaseColdStartup} from './bubble-release-journey.test.mjs';
 import {checkToolBubbles,installBubbleInputTrace} from "./tool-bubbles.test.mjs";
 import {checkEraserBubbles} from './eraser-bubbles.test.mjs';
@@ -460,6 +462,14 @@ try {
     [process.argv.includes("--preferences"), () => checkPreferences({ call, evaluate, settle, errors }), checkErrors],
     [process.argv.includes("--parity"), () => checkParity({ call, evaluate, settle }), checkErrors],
   ])) {
+    const smokePixels=readyCanvasPixels({evaluate,settle,capturePixels:canvasPixels});
+    const blankTab=await evaluate("String(layerApp.app.document_tabs(0).tabs[0].id)");
+    await evaluate("layerApp.dispatch({type:'invoke',command:'new_document'})");
+    await evaluate(createDrawing());
+    await readyCanvas({evaluate,settle});
+    await evaluate(`layerApp.documents.close(BigInt(${JSON.stringify(blankTab)}))`);
+    await readyCanvas({evaluate,settle});
+    await settle();
     assert.equal(
       await evaluate("layerApp.state().settings.theme ?? null"),
       null,
@@ -485,16 +495,12 @@ try {
     await evaluate("layerApp.dispatch({type:'set_theme',theme:null})");
     await settle();
     assert.equal(await evaluate("layerApp.state().theme"), "dark");
-    const pixels = await canvasPixels();
-    assert.ok(
-      pixels.white > pixels.total * 0.1,
-      `GPU canvas must visibly contain paper: ${JSON.stringify(pixels)}`,
-    );
+    const pixels=await waitForPixels(smokePixels,settle,pixels=>pixels.white>pixels.total*0.1,"GPU canvas must visibly contain paper");
     assert.equal(await evaluate("layerApp.state().tabs.length"), 1);
     assert.equal(await evaluate("layerApp.state().layers.length"), 2);
     const chooseBrush = async (tool, group, id) => {
       await click(`[data-command="${tool}"]`);
-      await click(`.brushes-control [data-tool-choice="${group}"]`);
+      if(group)await click(`.brushes-control [data-tool-choice="${group}"]`);
       await click(`.brushes-control [data-brush="${id}"]`);
       assert.equal(await evaluate("layerApp.state().brush.preset"), id);
     };
@@ -511,6 +517,7 @@ try {
     };
     await chooseBrush("brush", "Paint", 4);
     await chooseSize(96);
+    await evaluate("layerApp.canvas.focus()");
     // Temporary Space shortcut must route to camera gestures, never pen records.
     const beforePan = await evaluate("layerApp.state().camera.translation");
     await evaluate(
@@ -688,17 +695,17 @@ try {
       clickCount: 1,
     });
     await settle();
-    const painted = await canvasPixels();
+    const painted = await smokePixels();
     assert.ok(
       pixels.white - painted.white > 200,
       `Native mouse input must visibly paint: before=${pixels.white}, after=${painted.white}; ${JSON.stringify(await evaluate("({events:window.inkEvents,dpi:devicePixelRatio,w:layerApp.canvas.width,css:layerApp.canvas.clientWidth,camera:layerApp.state().camera.translation,zoom:layerApp.state().camera.zoom,undo:layerApp.state().commands.find(c=>c.id==='undo')})"))}`,
     );
     // Chrome-generated pen events must preserve pressure through DOM -> Wasm.
-    await chooseBrush("pen", "Pen", 1);
+    await chooseBrush("pen", null, 1);
     await chooseSize(96);
     const pressureInk = [];
     for (const force of [0.3, 1.0]) {
-      const baseline = (await canvasPixels()).white;
+      const baseline = (await smokePixels()).white;
       for (let i = 0; i <= 24; i++) {
         await call("Input.dispatchMouseEvent", {
           type:
@@ -719,7 +726,7 @@ try {
         });
       }
       await settle();
-      pressureInk.push(baseline - (await canvasPixels()).white);
+      pressureInk.push(baseline - (await smokePixels()).white);
       await click('[data-command="undo"]');
     }
     assert.ok(

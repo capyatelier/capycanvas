@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import {mkdir,writeFile} from "node:fs/promises";
-export async function checkEditor({call,evaluate,settle,canvasPixels}) {
+import {createDrawing} from "./new-drawing-fixture.mjs";
+import {readyCanvas,readyCanvasPixels,waitForPixels} from "./canvas-pixels-fixture.mjs";
+export async function checkEditor({call,evaluate,settle,canvasPixels:capturePixels}) {
   const wait=(condition,timeout=25000)=>evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function check(){const error=window.layerApp?.state().host_error;if(error)reject(Error('Host error: '+error));else if(${condition})resolve(true);else if(performance.now()-start>${timeout})reject(Error("Timed out: "+${JSON.stringify(condition)}+"; "+document.querySelector("#status").textContent));else setTimeout(check,40);}check();})`);
+  const canvasPixels=readyCanvasPixels({evaluate,settle,capturePixels});
   const click=async selector=>{await evaluate(`document.querySelector(${JSON.stringify(selector)}).click()`);await settle();};
   const invoke=async id=>{await evaluate(`layerApp.dispatch({type:"invoke",command:${JSON.stringify(id)}})`);await settle();};
   const show=async panel=>{
@@ -35,9 +38,13 @@ export async function checkEditor({call,evaluate,settle,canvasPixels}) {
   if(await evaluate("layerApp.state().workspace.zen_mode"))await invoke("zen_mode");
   console.log("editor startup",await evaluate('layerApp.startupTimes'));
   await wait('layerApp.startupTimes.complete!==null');
+  await invoke("new_document");
+  await evaluate(createDrawing());
+  await readyCanvas({evaluate,settle});
+  await settle();
   assert.ok(await evaluate('layerApp.app.editor_models(innerWidth,innerHeight).application_menus.every(menu=>document.querySelector(`[data-menu="${menu.id}"]`))'));
   assert.ok(await evaluate('!!document.querySelector(".commands-panel .tile-button")'));
-  assert.ok((await canvasPixels()).white>10000);
+  await waitForPixels(canvasPixels,settle,pixels=>pixels.white>10000,"Paper must be visible in the editor");
   for(let i=0;i<4;i++)await invoke("zoom_in");
   const middle=await evaluate("Math.floor(innerWidth/2)");
   const header=await call("Page.captureScreenshot",{format:"png",fromSurface:true,clip:{x:middle,y:2,width:1,height:1,scale:1}});
