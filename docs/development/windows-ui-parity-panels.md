@@ -9,19 +9,12 @@ the panel halves of 19 and 21.
 
 ## Prompt
 
-> You are Agent B for the Windows UI parity work in Capy Canvas. Read
-> `AGENTS.md`, `apps/layer-windows/AGENTS.md` and
-> `docs/development/windows-ui-parity-panels.md`. Implement that plan on
-> Windows. Agents A and C are working `windows-ui-parity-shell.md` and
-> `windows-ui-parity-pages.md` in parallel on other machines. Agent A owns the
-> shared helpers (`UiControls.h`, `ChoiceFeedback`, `ButtonFeedback`,
-> `NumberControl`, drawers and panel bodies); do not edit them. Start with the
-> independent items, then fetch `origin/main` and adopt A's helpers when they
-> land. Edit only the files your plan owns. Fix root causes, add regression
-> checks, push each milestone to `origin/main` as soon as its checks pass, and
-> remove each finding from the plan in the commit that fixes it. Reproduce
-> CHECK findings before fixing them, or drop them. Finish with a list of what
-> you fixed, what you dropped and what you could not run.
+> One agent implements this plan together with
+> `docs/development/windows-ui-parity-shell.md`. Use the prompt, combined
+> [order of work](windows-ui-parity-shell.md#order-of-work) and
+> [validation](windows-ui-parity-shell.md#validation) in that plan. The panel
+> findings land in its milestones M2 (bugs and Layers), M3 (drawer sizes,
+> FX-1 to FX-3, LAYER-18) and M4 (tools, filters and the remaining panels).
 
 ## Files this plan owns
 
@@ -44,56 +37,8 @@ the drop rule changes.
 
 ## Order of work
 
-Independent of Agent A (start immediately):
-
-1. **Bug 22 crash** (FX-4, then FX-5, 6, 7). Reproduce Blend Mode with no
-   filter selected under a debugger and capture the stack before you fix it.
-   Guard every `SelectedIndex`/`GetObjectAt`/`GetNamedValue` read in your views.
-   If the cause is missing popup bookkeeping, report the popup at the
-   EffectView and FilterView sites the way `GradientView.cpp` does; Agent A
-   later folds this into `choiceColors` (P3).
-2. **Bug 20 sliders** (TOOL-1, TOOL-4): stop rebuilding the slider on context
-   changes, or reset `trackKey`/`marksKey` with the rebuilt elements; keep
-   matching option fields.
-3. **Bug 5 zero height** (TOOL-3, SHELL-8): one wrap panel that measures rows
-   from the width it gets, replacing the three Canvas layouts in `ToolView.cpp`
-   and `TextureDialog.cpp`.
-4. **Bugs 6 and 7** (LAYER-1, LAYER-2, LAYER-8, LAYER-14): add a non-control
-   tappable-surface helper in `LayersView.h` for the name, grip and paper row;
-   paint the selection fill only on the row.
-5. **Bug 8 drops** (LAYER-3, LAYER-4): a shared Rust before-first/after-last
-   list-edge rule with a headless test; both drag hosts hit-test against the
-   panel root and clamp to the first and last row.
-6. **Bug 19 hit-test** (LAYER-19): give the layer panel content a hit-testable
-   clear background.
-7. **Bug 17** (LAYER-17): measure against a GTK capture first; fix only a
-   measured offset.
-8. Remaining LAYER, TOOL and FX metric, border and null-state items.
-
-After Agent A lands P2–P7: LAYER-7 (P6), FX-2, FX-13, FX-16, FX-36 (P5),
-FX-24, FX-38 (P3), TOOL-8, TOOL-21 and the PressureCalibration segments (P7),
-LAYER-13 and the palette text fields (P4). Check every panel again after P1,
-because `label()` changes text position everywhere.
-
-## Validation
-
-- `apps/layer-windows/scripts/test-without-gpu.ps1`;
-  `cargo test --locked -p layer-host -p layer-ui -p layer-workspace -p layer-windows --lib`;
-  `cargo clippy --locked -p layer-windows --all-targets -- -D warnings`.
-- Fixtures: `exercise-layers` (all variants incl. `-Relationships`),
-  `exercise-layer-drawer`, `exercise-layer-pickup`, `exercise-workspace-pickup`,
-  `exercise-toolbar-components`, `exercise-toolbars`, `exercise-tools`,
-  `exercise-tool-variations`, `exercise-tool-bubbles`, `exercise-pressure`,
-  `exercise-effects`, `exercise-illustration-filters`, `exercise-palettes`,
-  `exercise-navigator`, `exercise-navigator-allocation`, `exercise-scopes`,
-  `exercise-proof`.
-- Journeys, light and dark, glass on and off: sketch size and strength sliders
-  after switching tool, brush, layer and document; drag the Brush Sizes panel
-  out and drop it; press and select layers; drag a layer onto the header
-  buttons and below the last row (mouse, touch, pen); Blend Mode with and
-  without a selected filter; filters drawer Cancel at the bottom.
-- Slider and bubble changes affect frames: measure the affected rows by
-  [measuring](../performance/measuring.md) on the Windows reference device.
+See the combined [order of work](windows-ui-parity-shell.md#order-of-work) and
+[validation](windows-ui-parity-shell.md#validation) in the shell plan.
 
 ## Shared context for all three plans
 
@@ -199,8 +144,9 @@ its own pages after A's helpers land.
 - Fix policy-level defects (drop rules, widths, readout markers, export rules)
   in shared Rust with a headless test, not in the host. Shared Rust changes
   touch common crates; keep them small and rebase often.
-- One finding or one class per milestone. Push each milestone after its checks
-  pass; fetch and rebase onto `origin/main` before every push.
+- Batch findings into the milestones of the [order of work](windows-ui-parity-shell.md#order-of-work):
+  one VM round each. Push each milestone after its checks pass; fetch and
+  rebase onto `origin/main` before every push.
 - Remove a finding from your plan in the commit that fixes it. Record dropped
   CHECK items (not reproduced) in the commit message. Delete your plan in the
   commit that closes its last item.

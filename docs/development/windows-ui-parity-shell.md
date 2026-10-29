@@ -9,17 +9,19 @@ other two plans build on.
 
 ## Prompt
 
-> You are Agent A for the Windows UI parity work in Capy Canvas. Read
-> `AGENTS.md`, `apps/layer-windows/AGENTS.md` and
-> `docs/development/windows-ui-parity-shell.md`. Implement that plan on
-> Windows. Land the helper contract (P1–P8) first and push it, because
-> Agents B and C are working `windows-ui-parity-panels.md` and
-> `windows-ui-parity-pages.md` in parallel on other machines and depend on it.
-> Edit only the files your plan owns. Fix root causes, add regression checks,
-> push each milestone to `origin/main` as soon as its checks pass, and remove
-> each finding from the plan in the commit that fixes it. Reproduce CHECK
-> findings before fixing them, or drop them. Finish with a list of what you
-> fixed, what you dropped and what you could not run.
+> You are Agent A+B for the Windows UI parity work in Capy Canvas: you
+> implement both `docs/development/windows-ui-parity-shell.md` and
+> `docs/development/windows-ui-parity-panels.md`. Read `AGENTS.md`,
+> `apps/layer-windows/AGENTS.md` and both plans, then follow the combined
+> [order of work](#order-of-work) below: five milestones, each one commit (or a
+> few pushed together), one VM build and one test round. Land M1, the helper
+> contract (P1–P8), first and push it, because Agent C is working
+> `windows-ui-parity-pages.md` in parallel and waits on it. Edit only the files
+> the two plans own. Fix root causes, add regression checks, push each
+> milestone to `origin/main` as soon as its checks pass, and remove each finding
+> from its plan in the commit that fixes it. Reproduce CHECK findings before
+> fixing them, or drop them. Aim to finish in about two to three hours. Finish
+> with a list of what you fixed, what you dropped and what you could not run.
 
 ## Files this plan owns
 
@@ -38,59 +40,161 @@ other two plans build on.
 `apps/layer-windows/`), plus shared panel layout in `crates/layer-workspace`
 and colour view models in `crates/layer-ui`.
 
+The same agent also owns every file the [panels plan](windows-ui-parity-panels.md#files-this-plan-owns)
+lists.
+
 Changing a helper signature may require a mechanical edit at call sites in
-other plans' files. Make that edit in the same commit, keep it mechanical (no
-visual retuning there), and push it promptly so the others rebase onto it early.
-Delete per-site workarounds the new helpers supersede in the same commit, e.g.
-the `alignNames` baseline shift in `WorkspaceManagerView.cpp` and the
-duplicated `DropDownOpened`/`DropDownClosed` popup blocks.
+Agent C's files. Make that edit in the same commit, keep it mechanical (no
+visual retuning there), and push it promptly so C rebases onto it early. Delete
+per-site workarounds the new helpers supersede in your own files in the same
+commit, e.g. the duplicated `DropDownOpened`/`DropDownClosed` popup blocks.
+Leave cleanups in C's files that a signature change doesn't force, such as the
+`alignNames` baseline shift in `WorkspaceManagerView.cpp`, to C's helper
+adoption milestone.
 
 ## Order of work
 
-1. **Helper contract, P1–P8** (PRIM-1, 2, 3, 6–15, 17–19, 23; COLOR-1).
-   P1 fixes bugs 2 and 13 everywhere. P3 fixes bug 11. Verify the canvas bar
-   "Scale" segment and the About rows before and after with a zoomed capture:
-   the gaps above and below the glyphs should match within 0.5 px. Push.
-2. **Drawer lifecycle** (SHELL-1, 2, 3, 4, 26; TOOL-2): port GTK
-   `Drawer::refresh`. Retire a drawer only when its model is gone, keep the
-   measured heights, animate only on open, close or resize, and don't rebuild
-   on theme change. Fixes bug 1 and the drawer half of bug 19. Then SHELL-24
-   (double-tap routing).
-3. **Pixel snapping** (SHELL-5, 17, 25, 16): one rounding step for frames,
-   drawers, bridges and columns, with the same rounded bounds passed to
-   `capy_panel_bridges`. Fixes bugs 3 and 15.
-4. **Glass in transient states** (SHELL-6, 7, 14): tab slide preview and
-   expanded panels use glass roles. Fixes bug 4. Leave vertical resize
-   (bug 16) as recorded in SHELL-7.
-5. **Drawer sizes** (FX-1, FX-3, SHELL-9, SHELL-10): panels that fill a drawer
-   column take the column's height with the GTK minimum. Fixes the drawer half
-   of bug 21. Make the drawer width breakpoint in shared Rust independent of
-   display scaling (bug 18), with a headless test.
-6. **Shell metrics and headers** (SHELL-11–13, 15, 18–23): one tab-header
-   builder and catalog metrics.
-7. **Colour panels** (COLOR-2 onward).
-8. Remaining PRIM items (PRIM-4, 5, 16, 20–22, 24).
+One agent implements this plan and the [panels plan](windows-ui-parity-panels.md)
+in five milestones. Each milestone is one commit, or a few commits pushed
+together, with one VM build and one test round, pushed to `origin/main` when
+its checks pass. Fix every finding listed for a milestone before building, so
+the VM builds and captures once per milestone, not once per finding.
+
+- Overlap work with the VM. Once a round's sync has finished, write the next
+  milestone's code while the VM builds and runs, and stage commits by explicit
+  path so each holds only tested changes. Run shared Rust tests and GTK
+  reference captures on Linux while the VM works.
+- Spend at most a few minutes reproducing a low-severity CHECK finding. If it
+  doesn't reproduce, drop it and name it in the commit message.
+- A low-severity METRIC finding whose values already match GTK needs no visual
+  change; move the literal to the shared metric only when you are editing that
+  code anyway, otherwise drop it with a note.
+
+**Baseline, before M1.** Start the VM and build the unchanged tree with one
+small fixture run, which also warms the build caches. While you write M1, use
+that build for M1's before captures and to reproduce bug 22 with its stack, so
+M2 knows whether M1's P3 alone fixed it.
+
+**M1. Helper contract** (critical path for Agent C, push it first): P1–P8 with
+PRIM-1 to PRIM-23 and COLOR-1, in `UiControls.h`, `ButtonFeedback.h`,
+`ChoiceFeedback`, `NumberControl`, `RangeControl`, `PickerDialog.h`,
+`NativeMenus.h`, `CommandSearch.h`, `ScrollIndicators.h`, `PanelScroll.h` and
+`App.cpp`. P1 fixes bugs 2 and 13, P3 fixes bug 11 and gives every ComboBox
+the popup bookkeeping FX-4 points at. Verify the canvas bar "Scale" segment and
+the About rows before and after with zoomed captures: the gaps above and below
+the glyphs should match within 0.5 px. Name the final helpers and signatures in
+the commit message, which must contain "Windows UI parity" so C finds it with
+`git log origin/main --grep='Windows UI parity'`.
+
+**M2. Panel bugs and the Layers panel**: bugs 5, 6, 7, 8, 17, 20, 22 and the
+hit-test half of 19, then every remaining LAYER finding except LAYER-18.
+
+- Bug 22 (FX-4 to FX-7): fix the cause the baseline stack shows (debugger or a
+  Windows Error Reporting local dump), with a fixture step that opens Blend Mode
+  with no filter selected and fails without the fix. Guard
+  every `SelectedIndex`/`GetObjectAt`/`GetNamedValue` read in the panel files,
+  using M1's `selectIndex`.
+- Bug 20 (TOOL-1, TOOL-4): stop rebuilding the slider on context changes, or
+  reset `trackKey`/`marksKey` with the rebuilt elements; keep matching option
+  fields.
+- Bug 5 (TOOL-3, SHELL-8): one wrap panel that measures rows from the width it
+  gets, replacing the three Canvas layouts in `ToolView.cpp` and
+  `TextureDialog.cpp`.
+- Bugs 6 and 7 (LAYER-1, 2, 7, 8, 14): a non-control tappable-surface helper in
+  `LayersView.h` for the name, grip and paper row; the selection fill paints
+  only on the row; LAYER-7 uses P6.
+- Bug 8 (LAYER-3, 4, 5): a shared Rust before-first/after-last list-edge rule
+  with a headless test; both drag hosts hit-test against the panel root and
+  clamp to the first and last row. `WorkspaceRowDrag` also serves C's
+  workspace manager and drawing tabs: keep its interface stable and say in the
+  commit message how the drop rule changed.
+- Bug 19 hit-test (LAYER-19): give the layer panel content a hit-testable clear
+  background. Bug 17 (LAYER-17): measure against a GTK capture first and fix
+  only a measured offset.
+- LAYER-6, 9 to 16 and 20 to 22, with LAYER-13 on P4.
+
+**M3. Workspace shell**: bugs 1, 3, 4, 15, 18, 21 and the lifecycle and routing
+halves of 19. Reread SHELL-1 to SHELL-4, FX-1 and FX-3 against
+`crates/layer-ui/src/drawer_geometry.rs` first.
+
+- Drawer lifecycle (SHELL-1 to 4, 26, TOOL-2): port GTK `Drawer::refresh`.
+  Retire a drawer only when its model is gone, keep the measured heights,
+  animate only on open, close or resize, and don't rebuild on theme change.
+  Then SHELL-24 (double-tap routing, CHECK).
+- Pixel snapping (SHELL-5, 16, 17, 25): one rounding step for frames, drawers,
+  bridges and columns, with the same rounded bounds passed to
+  `capy_panel_bridges`.
+- Glass in transient states (SHELL-6, 7, 14): the tab slide preview and expanded
+  panels use glass roles. Leave vertical resize (bug 16) as recorded in SHELL-7.
+- Drawer sizes (FX-1, FX-3, SHELL-9, SHELL-10, LAYER-18): panels that fill a
+  drawer column take the column's height with the GTK minimum; FX-2 gives the
+  Filter Types Cancel its P5 face. Make the drawer width breakpoint in shared
+  Rust independent of display scaling, with a headless test.
+- Shell metrics and headers (SHELL-11 to 13, 15, 18 to 23): one tab-header
+  builder and catalog metrics.
+
+**M4. Tools, filters and the remaining panels**: TOOL-5 to TOOL-27 and FX-8 to
+FX-38, including every remaining helper adoption in the panel files (FX-13,
+FX-16, FX-24, FX-36, FX-38, TOOL-8, TOOL-21, the `PressureCalibration` segments
+and the palette text fields). Split it into two rounds at the TOOL/FX boundary
+only if a failure in one half blocks the other.
+
+**M5. Colour panels and close-out**: COLOR-2 to COLOR-24 and PRIM-24 (CHECK).
+Then run every fixture listed below once, recheck every panel against GTK
+(M1's `label()` change moves text everywhere), and delete each plan in the
+commit that closes its last item, keeping deferred items (bug 16) recorded in
+the commit message.
 
 ## Validation
 
-- `apps/layer-windows/scripts/test-without-gpu.ps1`;
-  `cargo test --locked -p layer-host -p layer-ui -p layer-workspace -p layer-windows --lib`;
+Use the `capycanvas4` VM only (the helper's default for this worktree). Keep it
+warm between milestones and stop it when you finish. Use ordinary WARP
+`fixtures` for layout, metrics and colours. Claim at most one pool GPU, only when
+a capture needs hardware (glass, bridge surfaces, drawer motion): a running VM
+cannot change its GPU, so stop it and `start --gpu`. Keep one adapter mode per
+round, because each mode builds separately.
+
+- Every milestone: `fixtures --profile dev-perf` with that milestone's fixtures
+  (`--no-build` when only fixture scripts changed), then strict Clippy from the
+  synced tree over SSH:
   `cargo clippy --locked -p layer-windows --all-targets -- -D warnings`.
-- Fixtures: `exercise-button-feedback`, `exercise-popup`, `exercise-tooltips`,
-  `exercise-scroll-indicators`, `exercise-drawers`, `exercise-drawer-layout`,
-  `exercise-layer-drawer`, `exercise-tab-drag`, all `exercise-tab-pickup`
-  variants, `exercise-panel-bridge-layout`, `exercise-column-stacks`,
-  `exercise-transparency`, `exercise-expansion`, `exercise-workspace-layout`,
-  `exercise-color-editor`, `exercise-color-picker`, `exercise-compact-color`.
-  Because P1–P3 change every page, also run `exercise-canvas-bar`,
-  `exercise-shortcut-page` and `exercise-header-settings` after step 1.
-- Journeys, light and dark, glass on and off: switch brush categories with the
-  sketch drawer open (no replay); double-tap in the layers drawer list (drawer
-  stays); drag a floating tab sideways (glass); open a single panel from a
-  collapsed column group (no bridge gap at 100%, 125% and 150% scaling).
-- Drawer animation and tab drag affect how frames are produced: measure the
-  affected rows by [measuring](../performance/measuring.md) on the Windows
-  reference device and record them in the tier tables.
+- M1, M2, M3 and M5 also run `check` (`test-without-gpu.ps1` and the Windows Rust
+  tests). When shared Rust changes (M2, M3), run
+  `cargo test --locked -p layer-host -p layer-ui -p layer-workspace -p layer-windows --lib`
+  on Linux before the VM round, with `CARGO_TARGET_DIR` under `/mnt/localssd`.
+- Fixtures (names as `fixtures` takes them; a bare name runs every variant):
+  - M1: `button-feedback`, `popup`, `tooltips`, `scroll-indicators`,
+    `command-search`, `canvas-bar`, `shortcut-page`, `header-settings`,
+    `compact-color`, `effects`.
+  - M2: `layers`, `layer-drawer`, `layer-pickup`, `workspace-pickup`,
+    `toolbar-components`, `toolbars`, `tools`, `tool-variations`,
+    `tool-bubbles`, `effects`, `illustration-filters`, `manager`,
+    `switcher-drag`.
+  - M3: `drawers`, `drawer-layout`, `layer-drawer`, `tab-drag`, `tab-pickup`,
+    `panel-bridge-layout`, `column-stacks`, `transparency`, `expansion`,
+    `workspace-layout`, `navigator`, `navigator-allocation`, `effects`.
+  - M4: `toolbar-components`, `toolbars`, `tools`, `tool-variations`,
+    `tool-bubbles`, `pressure`, `stroke-recording`, `effects`,
+    `illustration-filters`, `palettes`, `navigator`, `scopes`, `proof`.
+  - M5: `color-editor`, `color-picker`, `compact-color`, then the union of every
+    list above once.
+- Before blaming your change for a fixture failure, check the known failures in
+  [testing](testing.md) (for example `proof` timing out choosing sRGB after save
+  and reopen) and rerun it on `origin/main` when unsure.
+- Captures, light and dark, glass on and off, of what each milestone changed,
+  batched into one scripted run per theme, measured against the GTK values
+  quoted in each finding. M3 journeys: switch brush categories with the sketch
+  drawer open (no replay); double-tap in the layers drawer list (drawer stays);
+  drag a floating tab sideways (glass); open a single panel from a collapsed
+  column group (no bridge gap). M2 journeys: sketch size and strength sliders
+  after switching tool, brush, layer and document; drag the Brush Sizes panel
+  out and drop it; press and select layers; drag a layer onto the header buttons
+  and below the last row; Blend Mode with and without a selected filter.
+- Drawer animation, tab drag, sliders and bubbles affect how frames are
+  produced, but the Windows reference PCs are not reachable from this machine
+  and a VM cannot qualify a frame-rate target. List those rows as not run, and
+  make sure motion paths gain no per-frame rebuilds, allocations or layout
+  passes.
 
 ## Shared context for all three plans
 
@@ -196,8 +300,9 @@ its own pages after A's helpers land.
 - Fix policy-level defects (drop rules, widths, readout markers, export rules)
   in shared Rust with a headless test, not in the host. Shared Rust changes
   touch common crates; keep them small and rebase often.
-- One finding or one class per milestone. Push each milestone after its checks
-  pass; fetch and rebase onto `origin/main` before every push.
+- Batch findings into the milestones of the [order of work](windows-ui-parity-shell.md#order-of-work):
+  one VM round each. Push each milestone after its checks pass; fetch and
+  rebase onto `origin/main` before every push.
 - Remove a finding from your plan in the commit that fixes it. Record dropped
   CHECK items (not reproduced) in the commit message. Delete your plan in the
   commit that closes its last item.
