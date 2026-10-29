@@ -170,9 +170,9 @@ private:
     void QueueSnapshots();
     static winrt::fire_and_forget DecodeSnapshots(std::shared_ptr<SnapshotState>,
         winrt::Microsoft::UI::Dispatching::DispatcherQueue,std::weak_ptr<CanvasWindow>,CanvasSnapshotMailbox::Batch);
-    void ApplyPending(PreparedSnapshots);
+    bool ApplyPending(PreparedSnapshots);
     void FailPresentation(std::string);
-    void ApplyModel(winrt::Windows::Data::Json::JsonObject const&,NativeLayoutInput,uint32_t sections=CanvasAllSections);
+    bool ApplyModel(winrt::Windows::Data::Json::JsonObject const&,NativeLayoutInput,uint32_t sections=CanvasAllSections);
     void Popup(bool open);
     void UpdatePopup();
     void ApplyDialogs();

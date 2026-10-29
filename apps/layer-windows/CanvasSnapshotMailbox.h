@@ -24,7 +24,7 @@ public:
     Batch Take(){auto batch=std::exchange(pending,{});if(batch.full.empty())pending.localization=std::exchange(batch.localization,{});batch.sequence=sequence;return batch;}
     std::optional<Batch> BeginDecode(){
         if(closed||decoding||(pending.full.empty()&&pending.layout.empty()&&pending.workspace.empty()&&pending.camera.empty()&&pending.search.empty()&&pending.glass.empty()))return {};
-        decoding=true;return Take();
+        decoding=true;auto batch=Take();unappliedModel|=!batch.full.empty();return batch;
     }
     void CompleteDecode(){decoding=false;}
     bool ApplyDecoded(bool model){
@@ -35,9 +35,13 @@ public:
     bool Closed()const{return closed;}
     uint64_t Sequence()const{return sequence;}
     void Posted(uint64_t value){if(value>posted)posted=value;}
+    bool Posted(uint64_t value,bool applied,bool model,uint32_t& sections){
+        if(!applied||(!model&&unappliedModel))return false;
+        sections=0;unappliedModel=false;Posted(value);return true;
+    }
     bool IsPosted(uint64_t value)const{return !closed&&value<=posted;}
 private:
     Batch pending;
-    bool decoding=false,closed=false,skippedModel=false;
+    bool decoding=false,closed=false,skippedModel=false,unappliedModel=false;
     uint64_t sequence=0,posted=0;
 };

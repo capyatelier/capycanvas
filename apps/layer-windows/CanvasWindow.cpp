@@ -1604,13 +1604,12 @@ winrt::fire_and_forget CanvasWindow::DecodeSnapshots(std::shared_ptr<SnapshotSta
         }
         bool superseded=false;
         {std::lock_guard lock(state->mutex);superseded=!state->pending.ApplyDecoded(bool(batch.full));}
-        if(!superseded)self->ApplyPending(std::move(batch));
+        bool hasModel=bool(batch.full),applied=!superseded&&self->ApplyPending(std::move(batch));
         std::deque<std::function<void()>> replies;
         {
             std::lock_guard lock(state->mutex);
-            if(!superseded){
-                state->unappliedSections=0;state->pendingLocalization=nullptr;
-                state->pending.Posted(sequence);
+            if(state->pending.Posted(sequence,applied,hasModel,state->unappliedSections)){
+                state->pendingLocalization=nullptr;
                 while(!state->replies.empty()&&state->pending.IsPosted(state->replies.front().first)){
                     replies.push_back(std::move(state->replies.front().second));state->replies.pop_front();
                 }
@@ -1629,21 +1628,23 @@ void CanvasWindow::FailPresentation(std::string message) {
     {std::lock_guard lock(mutex);transportFailed=true;}
     wake.notify_all();space.notify_all();Fail(std::move(message));
 }
-void CanvasWindow::ApplyPending(PreparedSnapshots batch) {
-    if(closing)return;
+bool CanvasWindow::ApplyPending(PreparedSnapshots batch) {
+    if(closing)return false;
     try {
         workspace->Resize(float(panel.ActualWidth()),float(panel.ActualHeight()));
         if(batch.full){
             if(batch.localization)batch.full.Insert(L"localization",batch.localization);
-            ApplyModel(batch.full,std::move(batch.fullInput),batch.sections);
+            if(!ApplyModel(batch.full,std::move(batch.fullInput),batch.sections))return false;
         }
         if(!closing&&batch.layout)workspace->Apply(batch.layout,std::move(batch.reflowInput));
         for(auto const& patch:{batch.workspace,batch.camera,batch.search,batch.glass})
             if(!closing&&patch)workspace->Apply(patch);
+        return true;
     } catch(hresult_error const& error) {
         char code[16];std::snprintf(code,sizeof code," [0x%08X]",uint32_t(error.code().value));
         Fail(to_string(error.message())+code);
-    }
+    } catch(std::exception const& error) {Fail(error.what());}
+    return false;
 }
 
 void CanvasWindow::ApplyDialogs() {
@@ -1751,7 +1752,7 @@ void CanvasWindow::SendLaunchFiles(Windows::Data::Json::JsonObject const& model)
 void CanvasWindow::RefreshWorkspaceSwitcher() {
     if(!closing&&!closed)Send(R"({"operation":"input","input":{"type":"refresh_switcher"}})",CanvasCommandKind::Workspace);
 }
-void CanvasWindow::ApplyModel(Windows::Data::Json::JsonObject const& model,NativeLayoutInput input,uint32_t sections) {
+bool CanvasWindow::ApplyModel(Windows::Data::Json::JsonObject const& model,NativeLayoutInput input,uint32_t sections) {
     using namespace CapyUi;
     auto presentation=object(model,L"localization");
     if(presentation.Size()){
@@ -1764,12 +1765,28 @@ void CanvasWindow::ApplyModel(Windows::Data::Json::JsonObject const& model,Nativ
     }
     auto focus=settings&&settings->IsOpen()?FocusManager::GetFocusedElement(root.XamlRoot()).try_as<Control>():nullptr;
     if(focus)if(auto owner=ItemsControl::ItemsControlFromItemContainer(focus))focus=owner;
-    if(sections&CanvasWorkspace){if(!workspace->Apply(model,std::move(input)))return;}
-    else if(!workspace->ApplyFields(model,(sections&CanvasScopes)!=0))return;
+    if(sections&CanvasWorkspace){if(!workspace->Apply(model,std::move(input)))return false;}
+    else if(!workspace->ApplyFields(model,(sections&CanvasScopes)!=0))return false;
     lastModel=model;
     bool retheme=false;
     auto state=object(model,L"state");auto theme=str(state,L"theme",L"dark");
     auto workspaceReady=flag(state,L"workspace_ready");
+    auto storage=object(model,L"windows_workspace");
+    auto preferencesClose=object(model,L"windows_settings_close");
+    if(flag(object(model,L"windows_tabs"),L"window_ready")&&flag(object(state,L"document_file"),L"close_ready")&&(!storage.Size()||flag(storage,L"closed"))
+        &&(!preferencesClose.Size()||flag(preferencesClose,L"ready"))
+        &&(!object(model,L"windows_recovery").Size()||flag(object(model,L"windows_recovery"),L"ready"))){Stop();return true;}
+    if(!statusFailed){
+        auto message=str(model,L"error");
+        if(message.empty())message=str(state,L"host_error");
+        if(message.empty())message=str(object(model,L"windows_recovery"),L"error");
+        if(message.empty()&&str(object(model,L"windows_document"),L"type")==L"workflow_busy")message=str(bootstrap,L"preparing_document");
+        if(message.empty())message=str(object(model,L"windows_filter_load"),L"error");
+        if(message.empty()&&!flag(model,L"brush_ready"))message=str(bootstrap,L"preparing_brush");
+        if(message.empty()&&flag(object(model,L"windows_filter_load"),L"pending"))message=str(bootstrap,L"loading_filters");
+        if(message.empty())message=str(object(model,L"windows_proof"),L"text");
+        status.Text(message);status.Visibility(message.empty()?Visibility::Collapsed:Visibility::Visible);
+    }
     if(sections&CanvasWindowState){
     auto suspended=flag(model,L"windows_rendering_suspended");
     workspace->Root().Visibility(suspended||!workspaceReady?Visibility::Collapsed:Visibility::Visible);
@@ -1791,7 +1808,6 @@ void CanvasWindow::ApplyModel(Windows::Data::Json::JsonObject const& model,Nativ
             if(auto self=weak.lock();self&&!self->closing)for(uint32_t index=0;index<sessionWindows;++index)self->createWindow();
         });
     }
-    auto storage=object(model,L"windows_workspace");
     if(flag(storage,L"ready")){
         auto next=uint64_t(num(storage,L"switcher_revision"));
         bool changed=workspacePreferencesRevision&&*workspacePreferencesRevision!=next;
@@ -1807,21 +1823,6 @@ void CanvasWindow::ApplyModel(Windows::Data::Json::JsonObject const& model,Nativ
             if(!SetPropW(workspaceOwnerWindow,property.c_str(),reinterpret_cast<HANDLE>(1)))throw hresult_error(HRESULT_FROM_WIN32(GetLastError()));
             workspaceOwnerProperty=std::move(property);
         }
-    }
-    auto preferencesClose=object(model,L"windows_settings_close");
-    if(flag(object(model,L"windows_tabs"),L"window_ready")&&flag(object(state,L"document_file"),L"close_ready")&&(!storage.Size()||flag(storage,L"closed"))
-        &&(!preferencesClose.Size()||flag(preferencesClose,L"ready"))
-        &&(!object(model,L"windows_recovery").Size()||flag(object(model,L"windows_recovery"),L"ready"))){Stop();return;}
-    if(!statusFailed){
-        auto message=str(model,L"error");
-        if(message.empty())message=str(state,L"host_error");
-        if(message.empty())message=str(object(model,L"windows_recovery"),L"error");
-        if(message.empty()&&str(object(model,L"windows_document"),L"type")==L"workflow_busy")message=str(bootstrap,L"preparing_document");
-        if(message.empty())message=str(object(model,L"windows_filter_load"),L"error");
-        if(message.empty()&&!flag(model,L"brush_ready"))message=str(bootstrap,L"preparing_brush");
-        if(message.empty()&&flag(object(model,L"windows_filter_load"),L"pending"))message=str(bootstrap,L"loading_filters");
-        if(message.empty())message=str(object(model,L"windows_proof"),L"text");
-        status.Text(message);status.Visibility(message.empty()?Visibility::Collapsed:Visibility::Visible);
     }
     ApplyScreen(model);
     auto nextTheme=theme==L"dark"?ElementTheme::Dark:ElementTheme::Light;
@@ -1845,6 +1846,7 @@ void CanvasWindow::ApplyModel(Windows::Data::Json::JsonObject const& model,Nativ
             if(auto self=weak.lock();self&&!self->closing&&self->settings->IsOpen())
                 if(auto control=target.get();control&&control.IsLoaded())control.Focus(FocusState::Programmatic);
         });
+    return true;
 }
 
 void CanvasWindow::ApplyScreen(Windows::Data::Json::JsonObject const& model){

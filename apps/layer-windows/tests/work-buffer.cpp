@@ -391,6 +391,23 @@ int main() {
     assert(CanvasSections({L"workspace_update",L"content_revision"})==0);
     assert(CanvasSections({L"windows_workspace",L"busy"})==(CanvasHeader|CanvasWindowState|CanvasDialogs));
     assert(CanvasSections({L"layout",L"groups"})==CanvasAllSections);
+    for(auto initialSections:{uint32_t(0),uint32_t(CanvasWindowState)}){
+        CanvasSnapshotMailbox acceptedModels;auto pendingSections=initialSections;
+        acceptedModels.Push("close-ready",true,true);
+        auto rejectedModel=acceptedModels.BeginDecode();assert(rejectedModel);
+        assert(!acceptedModels.Posted(rejectedModel->sequence,false,true,pendingSections));
+        assert(pendingSections==initialSections&&!acceptedModels.IsPosted(rejectedModel->sequence));
+        acceptedModels.CompleteDecode();acceptedModels.Push("camera",false,false,"camera");
+        auto patch=acceptedModels.BeginDecode();assert(patch&&patch->full.empty());
+        assert(!acceptedModels.Posted(patch->sequence,true,false,pendingSections));
+        assert(pendingSections==initialSections&&!acceptedModels.IsPosted(rejectedModel->sequence));
+        acceptedModels.CompleteDecode();acceptedModels.Push("accepted model",true,true);
+        auto acceptedModel=acceptedModels.BeginDecode();assert(acceptedModel);pendingSections|=CanvasScopes;
+        assert(acceptedModels.Posted(acceptedModel->sequence,true,true,pendingSections));
+        assert(!pendingSections&&acceptedModels.IsPosted(rejectedModel->sequence)&&acceptedModels.IsPosted(acceptedModel->sequence));
+        acceptedModels.CompleteDecode();
+    }
+    std::cout<<"Canvas models: rejected applications retain sections and replies across patches until an accepted model passed\n";
     CanvasSnapshotMailbox continuous;
     continuous.Push("base",true,true);
     uint64_t lastApplied=0;int applied=0,skipped=0;
