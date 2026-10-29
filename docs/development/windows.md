@@ -578,6 +578,7 @@ executable. Run both through `test-desktop.ps1`.
 selection, `-ArcContextOnly` in HDR and `-PixelsOnly` in Navigator run those
 portions of their normal journeys.
 `-ColumnEarlyOnly` in workspace pickup tests early motion along a collapsed strip.
+`-SwipeCleanupOnly` in switcher drag runs its native swipe Delete cleanup.
 
 ## Matched editor captures
 

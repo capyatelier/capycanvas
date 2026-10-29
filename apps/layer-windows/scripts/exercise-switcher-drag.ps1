@@ -1,8 +1,8 @@
-﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('touch','pen','mouse')][string]$Device='touch',[switch]$Overflow,[ValidateSet('dark','light')][string]$Theme='dark',[switch]$ReorderOnly,[switch]$ContextHoldOnly,[ValidateSet('drag','cancel','escape')][string]$ContextEnding)
+﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('touch','pen','mouse')][string]$Device='touch',[switch]$Overflow,[ValidateSet('dark','light')][string]$Theme='dark',[switch]$ReorderOnly,[switch]$ContextHoldOnly,[switch]$SwipeCleanupOnly,[ValidateSet('drag','cancel','escape')][string]$ContextEnding)
 $ErrorActionPreference='Stop'
-if($ReorderOnly -and $ContextHoldOnly){throw 'Choose one focused switcher scope'}
-if(($ReorderOnly -or $ContextHoldOnly) -and $Overflow){throw 'Overflow is a separate switcher scope'}
-if($ContextHoldOnly -and $Device -eq 'mouse'){throw 'Custom context hold requires touch or pen'}
+if(@($ReorderOnly,$ContextHoldOnly,$SwipeCleanupOnly).Where({$_}).Count -gt 1){throw 'Choose one focused switcher scope'}
+if(($ReorderOnly -or $ContextHoldOnly -or $SwipeCleanupOnly) -and $Overflow){throw 'Overflow is a separate switcher scope'}
+if(($ContextHoldOnly -or $SwipeCleanupOnly) -and $Device -eq 'mouse'){throw 'Focused custom row contacts require touch or pen'}
 if($ContextEnding -and !$ContextHoldOnly){throw 'ContextEnding requires ContextHoldOnly'}
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 $CapyPopups=$true
@@ -666,7 +666,36 @@ function Held-Context-Retirement([string]$Id,[string[]]$Endings=@('drag','cancel
         Preview-Intact;Order-Intact $saved $revision
     }
 }
-function Custom-Options([switch]$RetirementOnly,[string]$ContextEnding){
+function Custom-Cleanup([string]$custom,$saved,$revision){
+    if($Device -in @('touch','pen')){
+        Swipe-Reveal $custom
+        Preview-Intact;Order-Intact $saved $revision
+        Capture ($Device+'-swipe-before-outside') -Composed
+        $null=Native-TapAt (New-WorkspaceButton) 0
+        Wait-Until {(Manager).prompt.title -eq 'New Workspace'} 'Outside press swallowed the New workspace action'
+        Choose 'Cancel';Settled
+        Wait-Until {$null -eq (Manager).prompt} 'Outside New Cancel did not return to manager'
+        Preview-Intact;Order-Intact $saved $revision
+        Capture ($Device+'-swipe-outside-dismissed') -Composed
+        Swipe-Reveal $custom
+        Preview-Intact;Order-Intact $saved $revision
+        Capture ($Device+'-swipe-delete') -Composed
+        Swipe-DeleteAction $custom
+    }else{
+        $previousPreview=$preview;$script:preview=$custom;Preview-Select
+        $remove=Control 'workspace-manager-remove' -Arranged
+        Wait-Until {$remove.Current.IsEnabled} 'Selected custom workspace did not enable footer Delete'
+        $remove.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+    }
+    Wait-Until {(Manager).prompt.title -eq 'Delete'} 'Custom cleanup did not open Delete'
+    Choose 'Delete';Settled
+    Wait-Until {@((Manager).rows|Where-Object id -eq $custom).Count -eq 0 -and (Manager).page -eq 'workspaces'} 'Delete closed manager or retained removed workspace'
+    if($Device -notin @('touch','pen')){$script:preview=$previousPreview;Preview-Select}
+    Preview-Intact
+    Capture ($Device+'-custom-context-inline-delete') -Composed
+}
+
+function Custom-Options([switch]$RetirementOnly,[switch]$CleanupOnly,[string]$ContextEnding){
     (New-WorkspaceButton).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
     Wait-Until {(Manager).prompt.title -eq 'New Workspace'} 'Custom fixture did not open naming'
     (Control 'workspace-manager-name').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('Grip options')
@@ -682,6 +711,7 @@ function Custom-Options([switch]$RetirementOnly,[string]$ContextEnding){
     Wait-Until {(Storage).id -eq $active -and !(Storage).busy} 'Original workspace did not return'
     Open-Manager;Preview-Select
     $saved=@((Storage).order);$revision=(Storage).switcher_revision
+    if($CleanupOnly){Custom-Cleanup $custom $saved $revision;return}
     if(!$RetirementOnly){
         $nameGeometry=Workspace-TextGeometry $custom
         Capture 'workspace-rename-display' -Composed
@@ -745,32 +775,7 @@ function Custom-Options([switch]$RetirementOnly,[string]$ContextEnding){
         $script:preview=$footerPreview;Preview-Select
         Preview-Intact;Order-Intact $saved $revision
     }
-    if($Device -in @('touch','pen')){
-        Swipe-Reveal $custom
-        Preview-Intact;Order-Intact $saved $revision
-        Capture ($Device+'-swipe-before-outside') -Composed
-        $null=Native-TapAt (New-WorkspaceButton) 0
-        Wait-Until {(Manager).prompt.title -eq 'New Workspace'} 'Outside press swallowed the New workspace action'
-        Choose 'Cancel';Settled
-        Wait-Until {$null -eq (Manager).prompt} 'Outside New Cancel did not return to manager'
-        Preview-Intact;Order-Intact $saved $revision
-        Capture ($Device+'-swipe-outside-dismissed') -Composed
-        Swipe-Reveal $custom
-        Preview-Intact;Order-Intact $saved $revision
-        Capture ($Device+'-swipe-delete') -Composed
-        Swipe-DeleteAction $custom
-    }else{
-        $previousPreview=$preview;$script:preview=$custom;Preview-Select
-        $remove=Control 'workspace-manager-remove' -Arranged
-        Wait-Until {$remove.Current.IsEnabled} 'Selected custom workspace did not enable footer Delete'
-        $remove.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
-    }
-    Wait-Until {(Manager).prompt.title -eq 'Delete'} 'Custom cleanup did not open Delete'
-    Choose 'Delete';Settled
-    Wait-Until {@((Manager).rows|Where-Object id -eq $custom).Count -eq 0 -and (Manager).page -eq 'workspaces'} 'Delete closed manager or retained removed workspace'
-    if($Device -notin @('touch','pen')){$script:preview=$previousPreview;Preview-Select}
-    Preview-Intact
-    Capture ($Device+'-custom-context-inline-delete') -Composed
+    Custom-Cleanup $custom $saved $revision
 }
 
 function Prepare-MiddleRowIdle {
@@ -963,14 +968,15 @@ try {
         Get-Content (Join-Path $run 'results.json')
         return
     }
-    if($ContextHoldOnly){
-        $script:gestureCase='custom-context-setup'
-        Custom-Options -RetirementOnly -ContextEnding $ContextEnding
+    if($ContextHoldOnly -or $SwipeCleanupOnly){
+        $script:gestureCase=if($ContextHoldOnly){'custom-context-setup'}else{'custom-swipe-cleanup'}
+        Custom-Options -RetirementOnly:$ContextHoldOnly -CleanupOnly:$SwipeCleanupOnly -ContextEnding $ContextEnding
         $script:gestureCase='custom-context-close'
         Choose 'Cancel';Closed
         if((Storage).id -ne $active){throw 'Context hold review changed the active workspace'}
         Close
-        @{device=$Device;theme=$Theme;scope='context-hold-only';context_ending=$ContextEnding;custom_context_endings='passed';preview_preserved='passed';order_preserved='passed';zero_exit='passed'}|
+        $scope=if($ContextHoldOnly){'context-hold-only'}else{'swipe-cleanup-only'}
+        @{device=$Device;theme=$Theme;scope=$scope;context_ending=$ContextEnding;custom_context_endings=$(if($ContextHoldOnly){'passed'});swipe_cleanup=$(if($SwipeCleanupOnly){'passed'});preview_preserved='passed';order_preserved='passed';zero_exit='passed'}|
             ConvertTo-Json|Set-Content (Join-Path $run 'results.json')
         Get-Content (Join-Path $run 'results.json')
         return
