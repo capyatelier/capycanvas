@@ -109,6 +109,12 @@ pub struct CapyHost {
     edge_touches: std::collections::BTreeMap<u64, bool>,
     scopes: crate::scopes::Scopes,
 }
+fn touch_policy(scale: f32) -> layer_ui::TouchPolicy {
+    use windows::Win32::UI::{HiDpi::GetSystemMetricsForDpi, WindowsAndMessaging::{SM_CXDRAG, SM_CYDRAG}};
+    let dpi = (scale * 96.).round().clamp(1., u32::MAX as f32) as u32;
+    let slop = unsafe { GetSystemMetricsForDpi(SM_CXDRAG, dpi).max(GetSystemMetricsForDpi(SM_CYDRAG, dpi)) }.max(1) as f32;
+    layer_ui::TouchPolicy { slop, ..Default::default() }
+}
 fn pointer_button(sample: &CapyPointer) -> PointerButton {
     match sample.button {
         0 => PointerButton::Primary,
@@ -231,6 +237,7 @@ impl CapyHost {
         let mut native = launch.native.take().ok_or("Windows launch was already adopted")?;
         native.startup = Default::default();
         native.resize(width, height, scale)?;
+        native.session.set_touch_policy(touch_policy(scale))?;
         let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
         descriptor.backends = wgpu::Backends::DX12;
         descriptor.backend_options.dx12.shader_compiler =
@@ -818,6 +825,7 @@ pub unsafe extern "C" fn capy_resize(
         host.target = None;
         host.scale = scale;
         host.native.resize(width, height, scale)?;
+        host.native.session.set_touch_policy(touch_policy(scale))?;
         if let Some(config) = &mut host.config {
             let device = host.native
                 .session
@@ -2070,6 +2078,26 @@ mod handle_tests {
         }
     }
     impl Drop for Owner { fn drop(&mut self) { unsafe {capy_destroy(self.0);} } }
+
+    #[test]
+    fn native_layer_taps_use_physical_slop_after_dpi_changes() {
+        for scale in [1., 1.5, 2., 1.] {
+            for moved in [false, true] {
+                let owner = Owner::new(1600, 1000);
+                assert_eq!(unsafe { capy_resize(owner.0, 1600, 1000, scale) }, 0);
+                let row = borrow::<CapyHost>(owner.0).unwrap().native.session.state().layers.iter().find(|row| row.editing).unwrap().id;
+                let slop = touch_policy(scale).slop;
+                for (phase, dx, ms) in [("down", 0., 0), ("move", if moved { slop + 1. } else { 0. }, 30), ("up", if moved { slop + 1. } else { 0. }, 60)] {
+                    for id in [1, 2] {
+                        let input = CString::new(serde_json::json!({"type":"layer_touch","surface":9,"id":id,"row":row,
+                            "phase":phase,"position":[100. + id as f32 * 50. + dx,100.],"time_ns":1_000_000_000u64 + ms * 1_000_000 + id}).to_string()).unwrap();
+                        assert_eq!(unsafe { capy_input(owner.0,input.as_ptr()) }, 0);
+                    }
+                }
+                assert_eq!(borrow::<CapyHost>(owner.0).unwrap().native.session.state().layer_tools.opacity_popup, (!moved).then_some(row), "scale {scale}, slop {slop}, moved {moved}");
+            }
+        }
+    }
 
     fn edge_owner() -> (Owner, [f32; 2]) {
         let owner=Owner::new(1600,1000);

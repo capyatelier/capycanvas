@@ -903,7 +903,6 @@ void CanvasWindow::Pointer(std::vector<CapyPointer> samples,Windows::System::Vir
     if(samples.empty())return;auto first=samples.front();auto id=uint32_t(first.id);
     {std::lock_guard lock(mutex);if(closing)return;}
     if(first.phase==1){
-        dispatcher.TryEnqueue([weak=weak_from_this()]{if(auto self=weak.lock();self&&!self->closing)self->canvasFocus.Focus(FocusState::Pointer);});
         if(!SyncContactModifiers(modifiers))return;
     }
     if(pen&&!PenButtons(id,first.phase!=4&&barrel))return;
@@ -927,7 +926,7 @@ CanvasScroll CanvasWindow::ScrollSample(Point position,int32_t deltaUnits,bool h
     bool zoom=(modifiers&Mod::Control)!=Mod::None;
     UINT units=3;SystemParametersInfoW(horizontal?SPI_GETWHEELSCROLLCHARS:SPI_GETWHEELSCROLLLINES,0,&units,0);
     float distance=units==WHEEL_PAGESCROLL?(horizontal?float(size.width):float(size.height))/density:float(units)*16.f;
-    float delta=float(deltaUnits)/WHEEL_DELTA*(zoom?100.f:distance);
+    float delta=float(deltaUnits)/WHEEL_DELTA*(zoom?40.f:distance);
     return CanvasScroll{position.X*density,position.Y*density,horizontal?delta:0.f,horizontal?0.f:-delta,density,zoom,
         !horizontal&&(modifiers&Mod::Shift)!=Mod::None};
 }
@@ -1068,7 +1067,11 @@ int CanvasWindow::DispatchWork(CanvasWork const& item,bool retiring) {
         if(result>=0){
             bool accepted=canvasContacts.Admit(first.id,first.phase,last.phase,(result&1)!=0);
             result=accepted?capy_pointer(host,points->data(),points->size()):0;
-            if(accepted&&result==0)latencyTrace.Consume(*points);
+            if(accepted&&result==0){
+                latencyTrace.Consume(*points);
+                if(first.phase==1&&first.tool!=3&&(first.flags&1)==0)
+                    dispatcher.TryEnqueue([weak=weak_from_this()]{if(auto self=weak.lock();self&&!self->closing)self->canvasFocus.Focus(FocusState::Pointer);});
+            }
         }
         return result;
     }

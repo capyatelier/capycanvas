@@ -14,7 +14,17 @@ function Select-Tool([string]$Id){
  $target=@{id=$null};Wait-Until {foreach($panel in (Model).panels){foreach($tile in $panel.tiles){if($tile.control.kind -eq 'command' -and $tile.control.command -eq $Id){$target.id="tile-$($panel.id)-$($tile.id)";return $true}}};$false} "No native $Id tile"
  Invoke $target.id;Wait-Until {((Model).state.commands|Where-Object id -eq $Id).selected} "Tool did not select: $Id"
 }
-function Camera {(Model).state.camera}
+function Camera {
+ if(!$script:cameraFile){
+  $path=State-File;$owned=Read-Snapshot $path
+  if($owned.process_id -ne $review.Id -or !$owned.model.windows_isolated_settings){throw 'Camera snapshot is not from the owned isolated drawing'}
+  $script:cameraWindow=$owned.window_id
+  $script:cameraFile=Join-Path (Split-Path -Parent $path) ((Split-Path -Leaf $path) -replace '^ui-state-','camera-state-')
+ }
+ $snapshot=Read-Snapshot $script:cameraFile
+ if($snapshot.process_id -ne $review.Id -or $snapshot.window_id -ne $script:cameraWindow){throw 'Camera snapshot is not from the owned drawing window'}
+ $snapshot.camera
+}
 function Same-Camera($a,$b,[double]$Pixels=.1){
  $a -and $b -and [Math]::Abs($a.zoom-$b.zoom) -lt .0001 -and [Math]::Abs($a.rotation-$b.rotation) -lt .0001 -and
  [Math]::Abs($a.translation[0]-$b.translation[0]) -lt $Pixels -and [Math]::Abs($a.translation[1]-$b.translation[1]) -lt $Pixels
@@ -190,8 +200,10 @@ try{
  for($i=1;$i -le 10;$i++){[CapyCanvasTouch]::Move(1,($cx-100+$i*4),($cy+$i*3));Start-Sleep -Milliseconds 12}
  Stable 'single finger neither paints nor navigates with Pen' $before
  [CapyCanvasTouch]::Up(1);Stable 'single-finger release does not jump' $before
+ $panClock=[Diagnostics.Stopwatch]::StartNew()
  [CapyCanvasTouch]::Down(1,($cx-100),$cy);[CapyCanvasTouch]::Down(2,($cx+100),$cy)
  Stable 'adding second finger does not jump' $before
+ $checks.Add(@{name='pan input timing';before_first_move_ms=$panClock.Elapsed.TotalMilliseconds})
  for($i=1;$i -le 10;$i++){[CapyCanvasTouch]::Pair(($cx-100+$i*6),($cy+$i*3),($cx+100+$i*6),($cy+$i*3));Start-Sleep -Milliseconds 12}
  $expected=$before|ConvertTo-Json -Depth 8|ConvertFrom-Json;$expected.translation[0]+=60;$expected.translation[1]+=30
  Check 'two-finger pan preserves scale and rotation' {(Matches-Gesture (Camera) $expected)}

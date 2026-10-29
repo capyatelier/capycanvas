@@ -21,6 +21,8 @@ function Choice-Context{
 }
 function Pick([string]$Id,[int]$Index){
  Choice-Context|ConvertTo-Json -Depth 15|Set-Content (Join-Path $run ("$Id-$Index-before.json"))
+ (Control 'drawing-canvas' -Arranged).SetFocus()
+ $park=Canvas-Point;[CapyRowPointer]::Hover($park[0],$park[1])
  $box=(Control "tool-choice-$Id-$Index" -Arranged).Current.BoundingRectangle
  [CapyRowPointer]::Down('mouse',[int]($box.X+$box.Width/2),[int]($box.Y+$box.Height/2));Start-Sleep -Milliseconds 45;[CapyRowPointer]::Up()
  try{Wait-Until {(Choice $Id).items[$Index].selected} "Zoom choice $Id/$Index did not reach shared state"}finally{Choice-Context|ConvertTo-Json -Depth 15|Set-Content (Join-Path $run ("$Id-$Index-after.json"))}
@@ -168,8 +170,12 @@ try{
  Pick 'zoom-click' 0;Pick 'zoom-drag' 3
  foreach($device in 'mouse','pen','touch'){
   Reset-Zoom
+  $priorFocus=Control 'tool-action-center_zoom_clicks' -Arranged;Focus-Keyboard $priorFocus
   $before=(Model).state.camera.zoom;Canvas-Tap $device
   Wait-Until {(Model).state.camera.zoom -gt $before} "$device Zoom In did not zoom"
+  if($device -eq 'touch'){
+   if(!$priorFocus.Current.HasKeyboardFocus){throw 'An unclaimed touch canvas press stole keyboard focus'}
+  }else{Wait-Until {(Control 'drawing-canvas').Current.HasKeyboardFocus} "$device canvas press did not focus the canvas after chrome admission"}
  }
  Pick 'zoom-click' 1
  $before=(Model).state.camera.zoom;Canvas-Tap 'mouse'
@@ -221,6 +227,9 @@ try{
  Reset-Zoom
  $before=(Model).state.camera.zoom;Wheel 0x11
  Wait-Until {(Model).state.camera.zoom -gt $before} 'Ctrl+wheel did not zoom with Wheel Zoom selected'
+ $actual=(Model).state.camera.zoom/$before
+ $expected=[Math]::Exp(.06*(Model).state.settings.zoom_speed)
+ if([Math]::Abs($actual-$expected) -gt .0001){throw "Ctrl+wheel notch uses the wrong shared zoom unit: $actual expected $expected"}
  $before=(Model).state.camera
  Wheel 0x10
  Wait-Until {[Math]::Abs((Model).state.camera.translation[0]-$before.translation[0]) -gt .001} 'Shift+wheel did not pan horizontally'
@@ -238,6 +247,9 @@ try{
  Reset-Zoom
  $before=(Model).state.camera.zoom;Wheel 0x11
  Wait-Until {(Model).state.camera.zoom -gt $before} 'Ctrl+wheel did not zoom with Wheel Pan selected'
+ $actual=(Model).state.camera.zoom/$before
+ $expected=[Math]::Exp(.06*(Model).state.settings.zoom_speed)
+ if([Math]::Abs($actual-$expected) -gt .0001){throw "Ctrl+wheel notch uses the wrong shared zoom unit: $actual expected $expected"}
  $checks.navigation_preferences='passed'
  if((Model).state.settings.quick_pinch_fit -ne $true -or (Model).state.settings.quick_pinch_restore -ne $true){throw 'Quick pinch preferences did not default to enabled'}
  Set-PinchPreferences $false $false
