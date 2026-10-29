@@ -1,7 +1,10 @@
 import XCTest
 
 extension XCTestCase {
-    @MainActor func checkReleaseEscapeOrder(in app: XCUIApplication, theme: String) {
+    @MainActor func checkReleaseEscapeOrder(in app: XCUIApplication, theme: String) throws {
+        #if os(iOS)
+        throw XCTSkip("XCTest text injection cannot send hardware Escape to the UIKit canvas; canvas-modifiers.swift covers the native hardware-key contract.")
+        #else
         app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"\#(theme)"},{"type":"workspace_manager","command":{"type":"switch","id":"builtin:workspace:illustrator"}},{"type":"customize","action":{"type":"set_column_collapsed","group":16,"collapsed":true}},{"type":"customize","action":{"type":"set_column_drawers","column":12,"drawers":false}},{"type":"customize","action":{"type":"toggle_column_drawer","group":16,"panel":"layers"}}]"#
         app.launch(); waitForEditorInteraction(in: app)
         createWhitePaperDrawing(width: "1440", height: "1080", in: app)
@@ -43,6 +46,7 @@ extension XCTestCase {
         XCTAssertTrue(camera.waitForExistence(timeout: 10), "Escape leaves Zen after the other owners are closed")
         attachEditor(in: app, name: "release-escape-order-\(theme)")
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)
+        #endif
     }
 
     @MainActor func activateCanvasBarAction(_ id: String, label: String, in app: XCUIApplication) {

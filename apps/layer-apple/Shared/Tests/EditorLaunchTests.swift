@@ -158,8 +158,8 @@ final class EditorLaunchTests: XCTestCase {
     @MainActor func testVectorKeyboard() throws { try checkVectorKeyboard(in: editorCaptureApplication(), theme: "light") }
     @MainActor func testVectorKeyboardDark() throws { try checkVectorKeyboard(in: editorCaptureApplication(), theme: "dark") }
     #endif
-    @MainActor func testReleaseEscapeOrder() { checkReleaseEscapeOrder(in: editorCaptureApplication(), theme: "light") }
-    @MainActor func testReleaseEscapeOrderDark() { checkReleaseEscapeOrder(in: editorCaptureApplication(), theme: "dark") }
+    @MainActor func testReleaseEscapeOrder() throws { try checkReleaseEscapeOrder(in: editorCaptureApplication(), theme: "light") }
+    @MainActor func testReleaseEscapeOrderDark() throws { try checkReleaseEscapeOrder(in: editorCaptureApplication(), theme: "dark") }
     @MainActor func testReleaseToolbarBubbles() { checkReleaseToolbarBubbles(in: editorCaptureApplication(), theme: "light") }
     @MainActor func testReleaseToolbarBubblesDark() { checkReleaseToolbarBubbles(in: editorCaptureApplication(), theme: "dark") }
     @MainActor func testReleaseToolbarZen() { checkReleaseToolbarZen(in: editorCaptureApplication(), theme: "light") }
