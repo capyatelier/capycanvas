@@ -689,17 +689,16 @@ private class PanelContent(val id: Int, val active: String, val panels: JSONArra
 @Composable private fun PanelGroupBody(host: CanvasHost, state: JSONObject, group: PanelContent,
     panel: JSONObject, dock: DockInteraction, constrained: Boolean) {
     val scroll = rememberScrollState()
-    val origin = dock.measurementOrigin(group.active)
-    var measuredWidth by remember(origin?.key) { mutableFloatStateOf(0f) }
-    val measuredContent = remember(origin?.key) { arrayOfNulls<PanelContentSize>(1) }
+    val origins = (listOf(group.active) + listOf("palettes", "color").filter { it != group.active && group.panels.values().contains(it) })
+        .associateWith { dock.measurementOrigin(it) }
+    val origin = origins[group.active]
     val contextItem = remember(group.active) { obj("kind" to "panel", "panel" to group.active) }
     val onContent = remember(dock, group.active, origin) { { content: PanelContentSize ->
-        measuredContent[0] = content
-        dock.measure(group.active, origin, content = content, actualWidth = measuredWidth)
+        dock.measure(group.active, origin, content = content)
     } }
     Box(Modifier.fillMaxSize().onGloballyPositioned {
-        measuredWidth = it.size.width / dock.density
-        measuredContent[0]?.let { content -> dock.measure(group.active, origin, content = content, actualWidth = measuredWidth) }
+        val width = it.size.width / dock.density
+        origins.forEach { (panel, request) -> dock.measure(panel, request, actualWidth = width) }
     }
         .then(if (constrained) Modifier.panelScroll(scroll) else Modifier)) {
         if (group.tiles != null) ToolRibbon(host, panel, group.tiles, dock, Modifier.fillMaxSize(), group.vertical)
@@ -709,13 +708,9 @@ private class PanelContent(val id: Int, val active: String, val panels: JSONArra
                 onContent = onContent)
         }
     }
-    if (group.active != "palettes" && group.panels.values().contains("palettes")) {
-        val companion = dock.measurementOrigin("palettes")
-        key(companion?.key) { PaletteMeasurement(host) { dock.measure("palettes", companion, content = it, actualWidth = measuredWidth) } }
-    }
-    if (group.active != "color" && group.panels.values().contains("color")) {
-        val companion = dock.measurementOrigin("color")
-        key(companion?.key) { ColorMeasurement(host) { dock.measure("color", companion, content = it, actualWidth = measuredWidth) } }
+    for ((panel, companion) in origins) if (panel != group.active) key(companion?.key) {
+        val report = { content: PanelContentSize -> dock.measure(panel, companion, content = content) }
+        when (panel) { "palettes" -> PaletteMeasurement(host, report); "color" -> ColorMeasurement(host, report) }
     }
 }
 

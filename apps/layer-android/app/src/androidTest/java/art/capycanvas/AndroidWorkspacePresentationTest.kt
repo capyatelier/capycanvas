@@ -139,6 +139,26 @@ class AndroidWorkspacePresentationTest {
             }
             requests(palettes=request("palettes","different"))
             compose.runOnIdle { assertEquals("body",JSONObject(origins.getValue("layers")!!.request).getString("body")) }
+            compose.runOnIdle {
+                val batch=DockInteraction::class.java.getDeclaredMethod("measurementBatch").apply { isAccessible=true }
+                fun body(panel:String)=(batch.invoke(dock) as JSONObject).array("reports").objects()
+                    .find { it.getJSONObject("request").getString("panel")==panel }?.objectOrNull("body")
+                for ((panel,widthFirst) in listOf("layers" to true,"palettes" to false)) {
+                    val origin=origins.getValue(panel)!!
+                    val content=PanelContentSize(180f,40f,28f)
+                    if (widthFirst) dock.measure(panel,origin,actualWidth=240f) else dock.measure(panel,origin,content=content)
+                    assertNull(body(panel))
+                    if (widthFirst) dock.measure(panel,origin,content=content) else dock.measure(panel,origin,actualWidth=240f)
+                    assertEquals(240f,body(panel)!!.number("actual_width"),0f)
+                    assertEquals(180f,body(panel)!!.number("content_height"),0f)
+                    val changed=origin.copy(key=origin.key+"changed",request=JSONObject(origin.request).put("body","changed").toString())
+                    dock.measure(panel,changed,content=PanelContentSize(220f))
+                    assertNull(body(panel))
+                    dock.measure(panel,changed,actualWidth=260f)
+                    assertEquals(260f,body(panel)!!.number("actual_width"),0f)
+                    assertEquals(220f,body(panel)!!.number("content_height"),0f)
+                }
+            }
         } finally { compose.runOnIdle { store.clear() } }
     }
 

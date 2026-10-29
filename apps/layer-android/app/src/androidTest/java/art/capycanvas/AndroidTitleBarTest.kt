@@ -1887,6 +1887,7 @@ class AndroidTitleBarTest {
         tap("layer-attachment");assertNull(row(curves).objectOrNull("relationship"))
         tap("layer-attachment");assertEquals(highlights,row(curves).getJSONObject("relationship").getLong("target"))
         undo();undo();assertEquals(owner,row(curves).getJSONObject("relationship").getLong("target"))
+        action(obj("type" to "set_layer_opacity","id" to owner,"opacity" to 0.5))
         for(width in listOf(226,300)) for(theme in listOf("light","dark")) {
             val workspace=JSONObject(state().getJSONObject("workspace").toString())
             workspace.getJSONObject("layout").array("bands").objects().first { it.getJSONObject("root").toString().contains("layers") }.put("extent",width)

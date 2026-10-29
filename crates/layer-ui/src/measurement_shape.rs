@@ -42,7 +42,7 @@ fn body(state:&UiState,panel:Panel)->(Value,bool) {
         Panel::Color=>json!(state.display_colors().has_hdr_picker()),
         Panel::Palettes=>json!([state.color_library.palettes.iter().find(|p|p.id==state.color_library.active).map(|p|p.swatches.len()),
             state.display_colors().hdr_intensity()!=0.]),
-        Panel::Layers=>json!([state.layers.iter().map(|layer|(&layer.label,layer.depth,layer.collapsed)).collect::<Vec<_>>(),
+        Panel::Layers=>json!([state.layers.iter().map(|layer|(&layer.label,layer.depth,layer.collapsed,!layer.description.is_empty())).collect::<Vec<_>>(),
             state.layer_tools.add_paper.is_some(),state.layer_tools.footer.iter().map(|slot|(&slot.button,slot.min_width,&slot.item.label)).collect::<Vec<_>>()]),
         Panel::Adjustments=>json!([state.adjustments.iter().map(|choice|(&choice.label,&choice.category,&choice.category_label)).collect::<Vec<_>>(),
             state.filter_picker.search.is_some(),state.filter_picker.empty_label]),
@@ -88,15 +88,19 @@ mod tests {
                 UiAction::SetBrushSize {value:32.},
                 UiAction::SetBrushOpacity {value:0.25},
                 UiAction::SetBrushStrength {value:0.5},
-                UiAction::SetLayerOpacity {id:None,opacity:0.5},
-                UiAction::SetLayerOpacity {id:None,opacity:0.75},
-                UiAction::SetLayerOpacity {id:None,opacity:1.},
             ] {
                 session.dispatch(action).unwrap();
                 for (before,after) in initial.iter().zip(identities(session.state())) {
                     assert_eq!(*before,after,"{platform:?} panel {:?}",before.panel);
                 }
             }
+            session.dispatch(UiAction::SetLayerOpacity {id:None,opacity:0.5}).unwrap();
+            let described=identities(session.state());
+            assert_ne!(identity(session.state(),Panel::Layers).body,initial.iter().find(|key|key.panel==Panel::Layers).unwrap().body);
+            session.dispatch(UiAction::SetLayerOpacity {id:None,opacity:0.75}).unwrap();
+            assert_eq!(described,identities(session.state()));
+            session.dispatch(UiAction::SetLayerOpacity {id:None,opacity:1.}).unwrap();
+            assert_eq!(initial,identities(session.state()));
         }
     }
     #[test]
