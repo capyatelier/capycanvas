@@ -4,6 +4,7 @@
 #include "WorkspaceGeometry.h"
 #include "NativeMenus.h"
 #include "RangeControl.h"
+#include "NativeJson.h"
 #include "PointerGesture.h"
 #include "EffectControls.h"
 #include <robuffer.h>
@@ -77,7 +78,7 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
     hstring panelId,tileStyle,tileLabel;double tileId=0,iconSize=16,tileRadius=SurfaceRadius;
     J control,style,item,model,sliderStyle;
     Canvas root;Border blank;Button more{nullptr};
-    std::wstring schema,boundsKey;
+    J schema{nullptr};std::wstring boundsKey;
     std::vector<Field> fields;
     bool vertical=false,measured=false,standalone=true,text=true,sliders=true;
     double width=0,height=0;
@@ -169,7 +170,7 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
         if(editor){editor.Hide();editor=nullptr;closed=true;}
         return closed;
     }
-    std::wstring schemaKey(J const& component)const{
+    J schemaFor(J const& component)const{
         auto key=copy(component);
         if(key.HasKey(L"value_label"))key.Remove(L"value_label");
         if(auto value=object(key,L"numeric");value.Size())value.SetNamedValue(L"value",N(0));
@@ -195,14 +196,14 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
             for(auto const& entry:node){auto value=entry.Value();if(value.ValueType()==JsonValueType::Object)strip(value.GetObject());
                 else if(value.ValueType()==JsonValueType::Array)for(auto item:value.GetArray())if(item.ValueType()==JsonValueType::Object)strip(item.GetObject());}
         };strip(key);
-        return key.Stringify().c_str();
+        return key;
     }
     void Update(J const& tile){
         auto value=object(tile,L"component");if(!value.Size())return;
         sliderStyle=object(tile,L"slider_style");
-        auto nextSchema=schemaKey(value)+std::wstring(sliderStyle.Stringify());
+        auto nextSchema=O({{L"component",schemaFor(value)},{L"slider_style",sliderStyle}});
         tileLabel=str(tile,L"label");AutomationProperties::SetName(root,tileLabel);
-        if(nextSchema!=schema){
+        if(!JsonEqual(nextSchema,schema)){
             closePopup();
             for(auto& f:fields){if(f.dispose)f.dispose();uint32_t index;if(root.Children().IndexOf(f.row,index))root.Children().RemoveAt(index);}
             fields.clear();schema=nextSchema;model=value;

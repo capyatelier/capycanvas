@@ -1,5 +1,6 @@
 #include "../CanvasModelUpdate.h"
 #include <cassert>
+#include "../NativeJson.h"
 
 int main(){
     winrt::init_apartment();
@@ -29,5 +30,22 @@ int main(){
     next=models.Model();
     assert(next.GetNamedArray(L"rows").Size()==1&&next.GetNamedArray(L"rows").GetNumberAt(0)==7);
     assert(next.GetNamedObject(L"state").GetNamedValue(L"histogram").ValueType()==winrt::Windows::Data::Json::JsonValueType::Null);
+    CanvasModelUpdate toolbar;
+    toolbar.Read(J::Parse(LR"({"state":{},"component":{"options":[{"Range":{"bounds":[{"preview":false,"id":"lower","group_id":"","numeric":{"min":-149,"max":128},"value":-3.5},{"preview":false,"id":"upper","group_id":"","numeric":{"min":-149,"max":128},"value":-1.5}]}}]}})"));
+    auto schema=[](J const& model){
+        auto component=J::Parse(model.GetNamedObject(L"component").Stringify());
+        for(auto bound:component.GetNamedArray(L"options").GetObjectAt(0).GetNamedObject(L"Range").GetNamedArray(L"bounds"))
+            bound.GetObject().SetNamedValue(L"value",winrt::Windows::Data::Json::JsonValue::CreateNumberValue(0));
+        return component;
+    };
+    auto before=schema(toolbar.Model());
+    toolbar.Read(J::Parse(LR"({"model_update":[[["component","options","0","Range","bounds","1","value"],6]]})"));
+    auto after=schema(toolbar.Model());
+    assert(CapyUi::JsonEqual(before,after));
+    auto changed=J::Parse(after.Stringify());
+    changed.GetNamedArray(L"options").GetObjectAt(0).GetNamedObject(L"Range").GetNamedArray(L"bounds").GetObjectAt(1).SetNamedValue(L"id",winrt::Windows::Data::Json::JsonValue::CreateStringValue(L"other"));
+    assert(!CapyUi::JsonEqual(before,changed));
+    assert(!CapyUi::JsonEqual(J::Parse(LR"({"bounds":[1,2]})"),J::Parse(LR"({"bounds":[2,1]})")));
+    assert(!CapyUi::JsonEqual(J::Parse(LR"({"enabled":true})"),J::Parse(LR"({"enabled":false})")));
     return 0;
 }
