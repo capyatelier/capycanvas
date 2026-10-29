@@ -4,6 +4,7 @@
 #include "PointerScrub.h"
 #include "ColorStrip.h"
 #include "ColorWheel.h"
+#include "ColorIntensity.h"
 #include "Checker.h"
 #include "WorkspaceQuery.h"
 #include "PickerDialog.h"
@@ -17,8 +18,7 @@ namespace {
 namespace Animation=winrt::Microsoft::UI::Xaml::Media::Animation;
 using winrt::Windows::Foundation::Point;
 using winrt::Windows::System::VirtualKey;
-constexpr double WheelSide=232,RecentTile=34,SheetTile=40,NarrowWidth=700,ScrubSlop=4;
-constexpr winrt::Windows::UI::Color Invalid{255,0xe0,0x1b,0x24};
+constexpr double RecentTile=34,SheetTile=40,NarrowWidth=700,ScrubSlop=4;
 
 bool held(int key){return (GetKeyState(key)&0x8000)!=0;}
 hstring speed(bool shift,bool fine){return shift?L"fast":fine?L"fine":L"normal";}
@@ -76,12 +76,10 @@ struct Editor:std::enable_shared_from_this<Editor>{
     Canvas wheelBox,arc;
     Image image;
     Shapes::Path arcTrack;
-    std::vector<Shapes::Line> ramp;
-    Shapes::Ellipse markerShadow,marker;
+    std::shared_ptr<ColorIntensity> intensityArc;
     WheelImage drawing;
-    J layout;
     double side=0,stageSize=0,inset=0;
-    hstring layoutKey,paintKey,arcKey;
+    hstring layoutKey,paintKey;
     bool drawQueued=false;
     std::optional<uint32_t> wheelPointer,arcPointer;
     uint32_t wheelPart=0;
@@ -125,7 +123,7 @@ struct Editor:std::enable_shared_from_this<Editor>{
         page.SizeChanged([weak](auto&&,SizeChangedEventArgs const& e){if(auto self=weak.lock()){
             auto size=e.NewSize();self->sheet.Width(size.Width);self->sheet.Height(size.Height);
             RectangleGeometry clip;clip.Rect({0,0,size.Width,size.Height});self->page.Clip(clip);
-            if(!self->sheetOpen)self->sheetShift.Y(size.Height);
+            if(!self->sheetOpen)self->sheetShift.Y(size.Height);self->queueDraw();
         }});
         root.KeyDown([weak](auto&&,KeyRoutedEventArgs const& e){if(auto self=weak.lock())self->key(e);});
         resized=xaml.Changed(auto_revoke,[weak](auto&&,auto&&){if(auto self=weak.lock())self->fit();});
@@ -160,7 +158,7 @@ struct Editor:std::enable_shared_from_this<Editor>{
         auto weak=weak_from_this();
         pickerTitle(data,title,L"edit-color-title");
         buildWheel();
-        shapes.Orientation(Orientation::Horizontal);shapes.Spacing(2);shapes.Padding({4,4,4,4});shapes.CornerRadius({17,17,17,17});
+        shapes.Orientation(Orientation::Horizontal);shapes.Spacing(2);shapes.Padding({4,4,4,4});shapes.CornerRadius({18*CornerFit,18*CornerFit,18*CornerFit,18*CornerFit});
         shapes.Background(data->tint(L"text",15));shapes.HorizontalAlignment(HorizontalAlignment::Center);
         auto choices=array(view,L"shapes");
         for(uint32_t i=0;i<3&&i<choices.Size();++i){
@@ -169,7 +167,7 @@ struct Editor:std::enable_shared_from_this<Editor>{
             StackPanel content;content.Orientation(Orientation::Horizontal);content.Spacing(4);
             content.Children().Append(icon(L"color-"+shape,data->theme()));
             TextBlock text;text.Text(str(choice,L"label"));text.FontWeight(winrt::Windows::UI::Text::FontWeights::Medium());text.VerticalAlignment(VerticalAlignment::Center);content.Children().Append(text);
-            node.Content(content);node.Height(26);node.Padding({8,0,8,0});node.CornerRadius({13,13,13,13});
+            node.Content(content);node.Height(26);node.Padding({8,0,8,0});node.CornerRadius(data->controlCorner());
             AutomationProperties::SetAutomationId(node,L"edit-color-shape-"+shape);shapes.Children().Append(node);shapeButtons[i]=node;
         }
         left.RowSpacing(6);left.VerticalAlignment(VerticalAlignment::Top);for(int i=0;i<2;++i){RowDefinition row;row.Height(GridLength{1,GridUnitType::Auto});left.RowDefinitions().Append(row);}
@@ -204,15 +202,16 @@ struct Editor:std::enable_shared_from_this<Editor>{
         Grid::SetColumn(pick,1);Grid::SetColumn(hexBlock,2);Grid::SetRow(captions,1);
         for(FrameworkElement part:{FrameworkElement(pair),FrameworkElement(pick),FrameworkElement(hexBlock),FrameworkElement(captions)})head.Children().Append(part);
         buildRows();
-        status.TextWrapping(TextWrapping::Wrap);status.Foreground(fill(Invalid));status.FontSize(data->textSize()*.9);status.Margin({0,6,0,0});
+        status.TextWrapping(TextWrapping::Wrap);status.Foreground(data->brush(L"error"));status.FontSize(data->textSize());status.Margin({0,6,0,0});
         status.Visibility(Visibility::Collapsed);AutomationProperties::SetAutomationId(status,L"edit-color-error");
         AutomationProperties::SetLiveSetting(status,Automation::Peers::AutomationLiveSetting::Polite);
         for(int i=0;i<2;++i)values.RowDefinitions().Append(RowDefinition());
         Grid::SetRow(status,1);values.Children().Append(rows);values.Children().Append(status);
         body.Padding({PickerPadding,PickerPadding,PickerPadding,PickerPadding});body.ColumnSpacing(24);body.RowSpacing(14);
         for(FrameworkElement part:{FrameworkElement(title),FrameworkElement(left),FrameworkElement(head),FrameworkElement(values)})body.Children().Append(part);
+        values.SizeChanged([weak](auto&&,auto&&){if(auto self=weak.lock())self->queueDraw();});
         bodyGate.Content(body);bodyGate.IsTabStop(false);bodyGate.HorizontalContentAlignment(HorizontalAlignment::Stretch);bodyGate.VerticalContentAlignment(VerticalAlignment::Stretch);
-        bodyScroll.Content(bodyGate);bodyScroll.HorizontalScrollBarVisibility(ScrollBarVisibility::Disabled);bodyScroll.VerticalScrollBarVisibility(ScrollBarVisibility::Auto);mouseScrollbars(bodyScroll);
+        bodyScroll.Content(bodyGate);bodyScroll.HorizontalScrollBarVisibility(ScrollBarVisibility::Disabled);bodyScroll.VerticalScrollBarVisibility(ScrollBarVisibility::Auto);mouseScrollbars(bodyScroll);bodyScroll.SizeChanged([weak](auto&&,auto&&){if(auto self=weak.lock())self->queueDraw();});
         arrange(false);
     }
 
@@ -221,10 +220,9 @@ struct Editor:std::enable_shared_from_this<Editor>{
         wheelBox.Background(clear());image.Stretch(Stretch::Fill);image.IsHitTestVisible(false);
         AutomationProperties::SetAutomationId(image,L"edit-color-wheel");AutomationProperties::SetName(image,copy(L"wheel"));
         wheelBox.Children().Append(image);
-        arc.Visibility(Visibility::Collapsed);arcTrack.Stroke(clear());arcTrack.StrokeStartLineCap(PenLineCap::Round);arcTrack.StrokeEndLineCap(PenLineCap::Round);
-        arc.Children().Append(arcTrack);markerShadow.IsHitTestVisible(false);marker.IsHitTestVisible(false);
-        markerShadow.Stroke(fill({128,0,0,0}));markerShadow.StrokeThickness(4);marker.Stroke(fill({255,255,255,255}));marker.StrokeThickness(2);
-        arc.Children().Append(markerShadow);arc.Children().Append(marker);wheelBox.Children().Append(arc);
+        intensityArc=std::make_shared<ColorIntensity>();intensityArc->data=data;
+        intensityArc->changed=[weak](double stops){if(auto self=weak.lock())self->setIntensity(stops);};
+        intensityArc->init(L"edit-color-intensity-range");arc=intensityArc->root;arcTrack=intensityArc->track;arc.Visibility(Visibility::Collapsed);wheelBox.Children().Append(arc);
         AutomationProperties::SetAutomationId(arcTrack,L"edit-color-intensity-arc");
         wheelBox.PointerPressed([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock())self->wheelDown(e);});
         wheelBox.PointerMoved([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock();self&&self->wheelPointer==e.Pointer().PointerId()){self->wheelPick(e.GetCurrentPoint(self->wheelBox).Position());e.Handled(true);}});
@@ -252,13 +250,10 @@ struct Editor:std::enable_shared_from_this<Editor>{
         A point;point.Append(N(at.X));point.Append(N(at.Y));
         act(O({{L"op",S(L"wheel")},{L"action",O({{L"op",S(L"pick_wheel")},{L"part",S(wheelPart==1?L"hue":L"field")},{L"point",point},{L"size",N(side)}})}}));
     }
-    void arcPick(Point at){
-        A point;point.Append(N(at.X));point.Append(N(at.Y));
-        auto hit=colorUi(data->localization.get(),O({{L"type",S(L"arc")},{L"size",N(stageSize)},{L"point",point}})).GetObject();
-        auto fraction=hit.GetNamedValue(L"fraction",JsonValue::CreateNullValue());
-        if(fraction.ValueType()!=JsonValueType::Number)return;
-        act(O({{L"op",S(L"wheel")},{L"action",O({{L"op",S(L"hdr_intensity")},{L"stops",N(std::round((-2+8*fraction.GetNumber())*100)/100)}})}}),O({{L"kind",S(L"intensity")}}));
+    void setIntensity(double stops){
+        act(O({{L"op",S(L"wheel")},{L"action",O({{L"op",S(L"hdr_intensity")},{L"stops",N(stops)}})}}),O({{L"kind",S(L"intensity")}}));
     }
+    void arcPick(Point at){setIntensity(intensityArc->pick(at));}
 
     void buildRows(){
         auto weak=weak_from_this();
@@ -304,7 +299,7 @@ struct Editor:std::enable_shared_from_this<Editor>{
         f->text.TextAlignment(TextAlignment::Right);f->text.FontFamily(FontFamily(L"Segoe UI"));f->text.FontSize(data->textSize());f->text.Foreground(data->brush(L"text"));
         f->text.VerticalAlignment(VerticalAlignment::Center);f->show.Content(f->text);AutomationProperties::SetAutomationId(f->show,id);
         f->entry.Width(width);f->entry.MinWidth(0);f->entry.MinHeight(28);f->entry.Padding({4,2,4,2});f->entry.TextAlignment(TextAlignment::Right);f->entry.MaxLength(256);
-        f->entry.FontSize(data->textSize());f->entry.BorderThickness({2,2,2,2});f->entry.BorderBrush(accent(data));f->entry.Visibility(Visibility::Collapsed);
+        fieldColors(data,f->entry,ControlSurface::Dialog);f->entry.Visibility(Visibility::Collapsed);
         f->entry.IsSpellCheckEnabled(false);f->entry.IsTextPredictionEnabled(false);AutomationProperties::SetAutomationId(f->entry,id+L"-entry");
         f->cell.Children().Append(f->show);f->cell.Children().Append(f->entry);
         std::weak_ptr<Field> owner=f;
@@ -383,7 +378,7 @@ struct Editor:std::enable_shared_from_this<Editor>{
         mini.Orientation(Orientation::Horizontal);mini.Spacing(8);mini.VerticalAlignment(VerticalAlignment::Center);
         mini.Children().Append(miniPair);mini.Children().Append(miniHex);mini.Visibility(Visibility::Collapsed);
         footer.Children().Append(recentFrame);footer.Children().Append(mini);
-        more=button(data,copy(L"all_swatches"),[weak]{if(auto self=weak.lock())self->showSheet(!self->sheetOpen);});
+        more=raisedButton(data,copy(L"all_swatches"),[weak]{if(auto self=weak.lock())self->showSheet(!self->sheetOpen);});
         more.Width(34);more.Height(34);moreGlyph=icon(L"chevron-down",data->theme());moreGlyph.RenderTransformOrigin({.5f,.5f});
         RotateTransform turn;turn.Angle(180);moreGlyph.RenderTransform(turn);more.Content(moreGlyph);
         AutomationProperties::SetAutomationId(more,L"edit-color-swatches");Grid::SetColumn(more,1);footer.Children().Append(more);
@@ -400,7 +395,7 @@ struct Editor:std::enable_shared_from_this<Editor>{
         for(auto height:{GridLength{1,GridUnitType::Auto},GridLength{1,GridUnitType::Star}}){RowDefinition row;row.Height(height);sheet.RowDefinitions().Append(row);}
         Grid head;head.ColumnSpacing(6);
         for(auto width:{GridLength{1,GridUnitType::Star},GridLength{1,GridUnitType::Auto}}){ColumnDefinition definition;definition.Width(width);head.ColumnDefinitions().Append(definition);}
-        search.MinHeight(34);search.MaxLength(256);search.IsSpellCheckEnabled(false);AutomationProperties::SetAutomationId(search,L"edit-color-search");
+        fieldColors(data,search,ControlSurface::Dialog);search.MinHeight(34);search.MaxLength(256);search.IsSpellCheckEnabled(false);AutomationProperties::SetAutomationId(search,L"edit-color-search");
         search.TextChanged([weak](auto&&,auto&&){if(auto self=weak.lock();self&&!self->updating){
             try{if(!self->request(O({{L"op",S(L"search")},{L"text",S(self->search.Text())}})))self->fillSheet();}catch(hresult_error const&){}
         }});
@@ -422,9 +417,9 @@ struct Editor:std::enable_shared_from_this<Editor>{
     Button tile(J const& entry,hstring const& id,double size){
         auto weak=weak_from_this();auto detail=str(entry,L"detail");auto value=object(entry,L"color");
         auto node=button(data,detail,[weak,value]{if(auto self=weak.lock())self->act(O({{L"op",S(L"color")},{L"color",value}}));});
-        node.Width(size);node.Height(size);node.Padding({3,3,3,3});node.CornerRadius({6,6,6,6});
+        node.Width(size);node.Height(size);node.Padding({3,3,3,3});node.CornerRadius(data->controlCorner());
         node.HorizontalContentAlignment(HorizontalAlignment::Stretch);node.VerticalContentAlignment(VerticalAlignment::Stretch);
-        ensureChecker(SheetTile);Border patch,paint;patch.CornerRadius({5,5,5,5});paint.CornerRadius({5,5,5,5});
+        ensureChecker(SheetTile);Border patch,paint;patch.CornerRadius(data->controlCorner());paint.CornerRadius(data->controlCorner());
         ImageBrush pixels;pixels.ImageSource(checker);pixels.Stretch(Stretch::None);pixels.AlignmentX(AlignmentX::Left);pixels.AlignmentY(AlignmentY::Top);patch.Background(pixels);
         paint.Background(fill(previewColor(array(entry,L"rgba"))));patch.Child(paint);node.Content(patch);
         if(flag(entry,L"current")){node.BorderBrush(accent(data));node.BorderThickness({2,2,2,2});}
@@ -512,7 +507,7 @@ struct Editor:std::enable_shared_from_this<Editor>{
             Grid::SetColumnSpan(title,1);Grid::SetRow(head,1);Grid::SetColumn(head,0);Grid::SetRow(left,2);Grid::SetColumn(left,0);Grid::SetRowSpan(left,1);
             Grid::SetRow(values,3);Grid::SetColumn(values,0);left.HorizontalAlignment(HorizontalAlignment::Center);
         }else{
-            for(auto width:{GridLength{WheelSide,GridUnitType::Pixel},GridLength{1,GridUnitType::Star}}){ColumnDefinition column;column.Width(width);body.ColumnDefinitions().Append(column);}
+            for(auto width:{GridLength{1,GridUnitType::Auto},GridLength{1,GridUnitType::Star}}){ColumnDefinition column;column.Width(width);body.ColumnDefinitions().Append(column);}
             for(auto height:{GridLength{1,GridUnitType::Auto},GridLength{1,GridUnitType::Auto},GridLength{1,GridUnitType::Star}}){RowDefinition row;row.Height(height);body.RowDefinitions().Append(row);}
             Grid::SetColumnSpan(title,2);Grid::SetRow(left,1);Grid::SetColumn(left,0);Grid::SetRowSpan(left,2);
             Grid::SetRow(head,1);Grid::SetColumn(head,1);Grid::SetRow(values,2);Grid::SetColumn(values,1);left.HorizontalAlignment(HorizontalAlignment::Stretch);
@@ -565,6 +560,7 @@ struct Editor:std::enable_shared_from_this<Editor>{
         for(uint32_t i=0;i<3&&i<choices.Size();++i){
             auto choice=choices.GetObjectAt(i);bool on=flag(choice,L"selected");
             shapeButtons[i].Background(on?data->brush(L"header_selection"):clear());
+            buttonFeedback(shapeButtons[i],data->brush(L"text"),20,41,on?Brush(data->brush(L"header_selection_hover")):Brush(nullptr));
             AutomationProperties::SetItemStatus(shapeButtons[i],on?data->caption(L"search",L"selected"):L"");
             AutomationProperties::SetName(shapeButtons[i],str(choice,L"label"));tooltip(shapeButtons[i],str(choice,L"name"));
             AutomationProperties::SetHelpText(shapeButtons[i],str(choice,L"name"));
@@ -610,7 +606,7 @@ struct Editor:std::enable_shared_from_this<Editor>{
         bool blocked=false;
         for(auto const& f:fields()){
             bool invalid=error&&errorTarget.Size()&&errorTarget.Stringify()==f->target.Stringify();
-            f->entry.BorderBrush(invalid?fill(Invalid):accent(data));
+            f->entry.BorderBrush().as<SolidColorBrush>().Color(invalid?InvalidFieldColor:Windows::UI::Color{0,0,0,0});
             blocked|=invalid&&f->editing();blocked|=f->editing()&&textComposing(f->entry);
         }
         if(apply){apply.IsEnabled(!blocked);apply.Opacity(blocked?.5:1);}
@@ -676,44 +672,22 @@ struct Editor:std::enable_shared_from_this<Editor>{
     void draw(){
         if(finished||!view.Size())return;
         auto panel=panelView();bool hdr=flag(panel,L"hdr");
-        double next=WheelSide;
-        auto nextLayout=to_hstring(next)+(hdr?L"/hdr":L"");
+        double width=bodyScroll.ViewportWidth(),height=bodyScroll.ViewportHeight();
+        if(width<=0)width=body.ActualWidth();if(width<=0)width=10000;
+        width=std::max(0.,width-body.Padding().Left-body.Padding().Right);
+        if(!narrow)width=std::max(0.,width-values.ActualWidth()-body.ColumnSpacing());
+        if(height<=0)height=10000;
+        else {height-=body.Padding().Top+body.Padding().Bottom+title.ActualHeight()+shapes.ActualHeight()+left.RowSpacing()+body.RowSpacing();if(narrow)height-=head.ActualHeight()+values.ActualHeight()+body.RowSpacing()*2;height=std::max(0.,height);}
+        auto nextLayout=to_hstring(width)+L"/"+to_hstring(height)+(hdr?L"/hdr":L"");
         if(nextLayout!=layoutKey){
-            layoutKey=nextLayout;side=next;stageSize=side+28;arcKey=L"";
-            layout=colorUi(data->localization.get(),O({{L"type",S(L"layout")},{L"size",N(stageSize)},{L"hdr",B(hdr)}})).GetObject();
-            inset=array(layout,L"wheel").GetNumberAt(1);double bottom=inset+side;
-            if(hdr){
-                auto start=colorUi(data->localization.get(),O({{L"type",S(L"arc")},{L"size",N(stageSize)},{L"fraction",N(0)}})).GetObject();
-                auto end=colorUi(data->localization.get(),O({{L"type",S(L"arc")},{L"size",N(stageSize)},{L"fraction",N(1)}})).GetObject();
-                auto geometry=object(start,L"geometry");double radius=num(geometry,L"radius"),width=num(geometry,L"width"),markerRadius=num(geometry,L"marker_radius");
-                bottom=array(geometry,L"center").GetNumberAt(1)+radius+std::max(width/2,markerRadius)+2;
-                PathFigure figure;auto from=array(start,L"point"),to=array(end,L"point");
-                figure.StartPoint({float(from.GetNumberAt(0)),float(from.GetNumberAt(1))});figure.IsClosed(false);figure.IsFilled(false);
-                ArcSegment segment;segment.Point({float(to.GetNumberAt(0)),float(to.GetNumberAt(1))});segment.Size({float(radius),float(radius)});
-                segment.SweepDirection(SweepDirection::Counterclockwise);figure.Segments().Append(segment);
-                PathGeometry track;track.Figures().Append(figure);arcTrack.Data(track);arcTrack.StrokeThickness(width);
-                auto path=array(start,L"path");size_t segments=path.Size()?path.Size()-1:0;
-                while(ramp.size()>segments){uint32_t at;if(arc.Children().IndexOf(ramp.back(),at))arc.Children().RemoveAt(at);ramp.pop_back();}
-                while(ramp.size()<segments){Shapes::Line line;line.StrokeStartLineCap(PenLineCap::Round);line.StrokeEndLineCap(PenLineCap::Round);line.IsHitTestVisible(false);arc.Children().InsertAt(uint32_t(ramp.size()),line);ramp.push_back(line);}
-                for(uint32_t i=1;i<path.Size();i++){auto const& line=ramp[i-1];auto a=path.GetArrayAt(i-1),b=path.GetArrayAt(i);line.X1(a.GetNumberAt(0));line.Y1(a.GetNumberAt(1));line.X2(b.GetNumberAt(0));line.Y2(b.GetNumberAt(1));line.StrokeThickness(width);}
-                markerShadow.Width(markerRadius*2+4);markerShadow.Height(markerRadius*2+4);marker.Width(markerRadius*2+2);marker.Height(markerRadius*2+2);
-            }
+            layoutKey=nextLayout;
+            auto bare=colorUi(data->localization.get(),O({{L"type",S(L"bare_layout")},{L"width",N(width)},{L"height",N(height)},{L"hdr",B(hdr)}})).GetObject();
+            side=num(bare,L"wheel");stageSize=num(bare,L"stage");inset=num(bare,L"inset");double bottom=num(bare,L"bottom");
             wheelBox.Width(side);wheelBox.Height(bottom-inset);image.Width(side);image.Height(side);
             Canvas::SetLeft(arc,-inset);Canvas::SetTop(arc,-inset);arc.Width(stageSize);arc.Height(bottom);
+            paintKey=L"";
         }
-        arc.Visibility(hdr?Visibility::Visible:Visibility::Collapsed);
-        if(hdr){
-            double stops=num(panel,L"intensity");auto ramps=array(panel,L"intensity_ramp");auto markerColor=array(panel,L"marker_color");
-            auto nextArc=to_hstring(stops)+ramps.Stringify()+markerColor.Stringify();
-            if(nextArc!=arcKey){
-                arcKey=nextArc;
-                for(size_t i=0;i<ramp.size()&&i<ramps.Size();i++)ramp[i].Stroke(fill(previewColor(ramps.GetArrayAt(uint32_t(i)))));
-                auto point=array(colorUi(data->localization.get(),O({{L"type",S(L"arc")},{L"size",N(stageSize)},{L"fraction",N((stops+2)/8)}})).GetObject(),L"point");
-                for(auto const& dot:{markerShadow,marker}){Canvas::SetLeft(dot,point.GetNumberAt(0)-dot.Width()/2);Canvas::SetTop(dot,point.GetNumberAt(1)-dot.Height()/2);}
-                marker.Fill(fill(previewColor(markerColor)));
-                wchar_t text[32];swprintf(text,32,L"%.2f EV",stops);AutomationProperties::SetItemStatus(arcTrack,text);
-            }
-        }
+        intensityArc->present(panel,stageSize,hdr);
         auto nextPaint=panel.Stringify()+L"/"+to_hstring(scale());
         if(nextPaint==paintKey)return;
         try{

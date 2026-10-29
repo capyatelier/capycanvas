@@ -48,8 +48,12 @@ function Select-Fixtures([string[]]$Available,[string[]]$Requested) {
     }
     @($Available | Where-Object { !$Requested -or $_ -in $Requested -or ($_ -split ':')[0] -in $Requested -or $_ -in $defaults })
 }
-function Control-Fixture([string]$Fixture){
+function Control-Fixture([string]$Fixture,[string[]]$Arguments=@()){
+    if($Fixture -eq 'layer-pickup' -and '-PendingDropOnly' -in $Arguments){return 'LayerDrop'}
     switch($Fixture){'button-feedback'{'Feedback'} 'sdk-feedback'{'Feedback'} 'scroll-indicators'{'Feedback'} 'navigator-allocation'{'Feedback'} 'popup'{'Popup'} default{$null}}
+}
+function Get-FixtureCompanionArguments([string]$Fixture,[string[]]$Arguments,[scriptblock]$BuildControl){
+    if($Fixture -eq 'layer-pickup' -and '-PendingDropOnly' -notin $Arguments){'-DropFixture';& $BuildControl 'LayerDrop'}
 }
 $selected = if ($Name) { $Name -split ',' } else { @() }
 $planned = @(Select-Fixtures $runs.Keys $selected)
@@ -152,6 +156,20 @@ function Start-Shortcuts {
     @('-File', (Join-Path $scripts 'exercise-shortcuts.ps1'), '-ProcessId', $review.Id, '-StateFile', $state.FullName)
 }
 
+function Build-ControlFixture([string]$controlFixture){
+    if(!$controlBuilds.ContainsKey($controlFixture)){
+        $directory=(Split-Path $editorExecutable)+'-'+$controlFixture
+        $intermediate=(Split-Path $editorExecutable) -replace '-dev-perf$',''
+        & (Join-Path $scripts 'build.ps1') -Configuration Release -RustProfile $RustProfile -ControlFixture $controlFixture -SoftwareAdapterTests:(!$HardwareGpu) -SkipRust -SkipRestore -OutputDirectory $directory -IntermediateDirectory ($intermediate+'.obj') *> (Join-Path $Output ('build-'+$controlFixture+'.log'))
+        $controlBuilds[$controlFixture]=Join-Path $directory 'CapyCanvas.exe'
+        @($controlBuilds.GetEnumerator()|ForEach-Object {
+            $binaryDirectory=Split-Path $_.Value
+            @{fixture=$_.Key;profile=$RustProfile;hardware_gpu=[bool]$HardwareGpu;source_provenance='provenance.json';files=@('CapyCanvas.exe','layer_windows.dll'|ForEach-Object {@{name=$_;sha256=(Get-FileHash -LiteralPath (Join-Path $binaryDirectory $_)).Hash}})}
+        })|ConvertTo-Json -Depth 5|Set-Content (Join-Path $Output 'control-builds.json')
+    }
+    $controlBuilds[$controlFixture]
+}
+
 New-Item -ItemType Directory -Force $Output | Out-Null
 "$($area.Width)x$($area.Height) work area at $([CapyVm.Native]::GetDpiForSystem()) dpi" | Set-Content (Join-Path $Output 'display.txt')
 if ($HardwareGpu) {
@@ -172,23 +190,14 @@ foreach ($run in $runs.GetEnumerator()) {
     $env:CAPY_FIXTURE_CONTEXT = "$log-context.json"
     $started = Get-Date
     try {
-        $controlFixture=Control-Fixture $fixture
+        $controlFixture=Control-Fixture $fixture $run.Value
         $Executable=$editorExecutable
         if($controlFixture){
-            if(!$controlBuilds.ContainsKey($controlFixture)){
-                $directory=(Split-Path $editorExecutable)+'-'+$controlFixture
-                $intermediate=(Split-Path $editorExecutable) -replace '-dev-perf$',''
-                & (Join-Path $scripts 'build.ps1') -Configuration Release -RustProfile $RustProfile -ControlFixture $controlFixture -SoftwareAdapterTests:(!$HardwareGpu) -SkipRust -SkipRestore -OutputDirectory $directory -IntermediateDirectory ($intermediate+'.obj') *> (Join-Path $Output ('build-'+$controlFixture+'.log'))
-                $controlBuilds[$controlFixture]=Join-Path $directory 'CapyCanvas.exe'
-                @($controlBuilds.GetEnumerator()|ForEach-Object {
-                    $binaryDirectory=Split-Path $_.Value
-                    @{fixture=$_.Key;profile=$RustProfile;hardware_gpu=[bool]$HardwareGpu;source_provenance='provenance.json';files=@('CapyCanvas.exe','layer_windows.dll'|ForEach-Object {@{name=$_;sha256=(Get-FileHash -LiteralPath (Join-Path $binaryDirectory $_)).Hash}})}
-                })|ConvertTo-Json -Depth 5|Set-Content (Join-Path $Output 'control-builds.json')
-            }
-            $Executable=$controlBuilds[$controlFixture]
+            $Executable=Build-ControlFixture $controlFixture
         }
         if ($DebuggerPath -and $fixture -notin $debuggable) { throw "Fixture $fixture does not support console debugging." }
         $arguments = if ($null -eq $run.Value) { Start-Shortcuts } else { @('-File', (Join-Path $scripts "exercise-$fixture.ps1"), '-Executable', $Executable) + $run.Value }
+        $arguments += @(Get-FixtureCompanionArguments $fixture $run.Value ${function:Build-ControlFixture})
         if ($DebuggerPath) { $arguments += @('-DebuggerPath', ('"' + $DebuggerPath + '"')) }
         $process = Start-Process (Get-Process -Id $PID).Path -ArgumentList (@('-NoProfile', '-Sta') + $arguments) -NoNewWindow -PassThru -RedirectStandardOutput "$log.log" -RedirectStandardError "$log.err"
         $null = $process.Handle

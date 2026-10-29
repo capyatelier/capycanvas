@@ -10,6 +10,7 @@ pub enum ColorUiRequest {
     IntensityPoint {size:f32, point:[f32;2], minimum:f32, maximum:f32},
     IntensityCaption { size: f32, advances: Vec<f32> },
     PickerLayout { size: f32, #[serde(default)] hdr: bool },
+    BareLayout { width: f32, height: f32, #[serde(default)] hdr: bool },
     HdrPreview { color: RgbColor, document_space: RgbSpace, recipe: layer_core::color::hdr::SdrRendition, headroom: f32 },
     Layout { size: f32, #[serde(default)] hdr: bool },
     Arc { size: f32, point: Option<[f32;2]>, #[serde(default)] fraction: f32 },
@@ -81,7 +82,7 @@ pub fn color_ui_localized(request: ColorUiRequest, localizer: &crate::localizati
         ColorUiRequest::IntensityPoint {size,point,minimum,maximum} => {
             if !point.iter().all(|v|v.is_finite()) || !minimum.is_finite() || !maximum.is_finite() || minimum>=maximum || minimum < -149. || maximum>128. {return Err("Invalid intensity range".into());}
             let a=HdrIntensityArc::new(size).ok_or("Invalid picker extent")?;
-            return Ok(serde_json::json!(minimum+a.fraction(point)*(maximum-minimum)));
+            return Ok(serde_json::json!(a.value(point,[minimum,maximum])));
         },
         ColorUiRequest::IntensityArc {size,stops,depth,base,document_space,recipe,headroom} => {
             super::hdr_picker::HdrPaint::validate_stops(stops).map_err(|reason|reason.message(localizer))?;
@@ -108,6 +109,9 @@ pub fn color_ui_localized(request: ColorUiRequest, localizer: &crate::localizati
         ColorUiRequest::ProofDial {size,recipe,point,part} => return crate::proof_panel::sdr_dial(size,recipe,point,part),
         ColorUiRequest::ProofControl {recipe,part,edit} => return serde_json::to_value(crate::proof_panel::sdr_control(recipe,part,edit)?).map_err(|e|e.to_string()),
         ColorUiRequest::PrintProof {settings} => return serde_json::to_value(settings.recipe().map_err(|reason|reason.proof_message(localizer))?).map_err(|e|e.to_string()),
+        ColorUiRequest::BareLayout {width,height,hdr} => {
+            return serde_json::to_value(BareColorWheel::fit(width,height,hdr).ok_or("Invalid bare wheel allocation")?).map_err(|e|e.to_string());
+        },
         ColorUiRequest::Layout {size,hdr} => {
             let layout=if hdr {ColorPanelLayout::with_hdr(size)}else{ColorPanelLayout::new(size)}.ok_or("Invalid color panel size")?;
             let mut value=serde_json::to_value(layout).map_err(|e|e.to_string())?;
@@ -268,6 +272,17 @@ pub fn color_validation_localized(color: RgbColor, document: RgbSpace, display: 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn native_intensity_points_keep_shared_precision_and_depth_bounds() {
+        let arc=HdrIntensityArc::new(260.).unwrap();
+        let value=color_ui(ColorUiRequest::IntensityPoint {size:260.,point:arc.point(1./3.),minimum:-2.,maximum:6.}).unwrap();
+        assert!((value.as_f64().unwrap()-0.67).abs()<0.0001);
+        let [minimum,maximum]=HdrIntensityArc::range(15.9,layer_core::color::SampleDepth::F16);
+        let value=color_ui(ColorUiRequest::IntensityPoint {size:260.,point:arc.point(1.),minimum,maximum}).unwrap().as_f64().unwrap();
+        assert!((value-f64::from(maximum)).abs()<0.0001);
+        assert!(value<16.);
+    }
+
     fn editor_json(request: serde_json::Value) -> serde_json::Value {
         color_ui(serde_json::from_value(request).unwrap()).unwrap()
     }

@@ -61,14 +61,7 @@ pub(crate) fn draw(
     let label = layout(widget, font, true, state.readout_label());
     let label_width = advance(&label);
     append(snapshot, &label, [2., font + 1.], 0., false, ink);
-    let gamut = |space| {
-        if matches!(view, ViewColor::Mapped { .. }) {
-            state.definition().in_hdr_gamut(space)
-        } else {
-            state.definition().in_gamut(space)
-        }
-    };
-    if !gamut(view.space()).unwrap() || !gamut(state.rgb_space()).unwrap() {
+    if state.readout_out_of_gamut(view.space(),matches!(view,ViewColor::Mapped {..})) {
         append(
             snapshot,
             &layout(widget, font, true, "!"),

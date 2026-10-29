@@ -173,6 +173,8 @@ struct ColorCoordinates {
 #[derive(Clone, Debug, Serialize)]
 pub struct ColorPanelView {
     pub hdr: bool,
+    pub out_of_gamut: bool,
+    pub intensity_range: [f32; 2],
     pub document_depth: layer_core::color::SampleDepth,
     pub intensity: f32,
     pub base: RgbColor,
@@ -320,6 +322,8 @@ impl ColorState {
         };
         ColorPanelView {
             hdr: self.hdr_picker.is_some(),
+            out_of_gamut: self.readout_out_of_gamut(display, false),
+            intensity_range: HdrIntensityArc::range(self.hdr_intensity(), self.hdr_depth),
             document_depth: self.hdr_depth,
             intensity: self.hdr_intensity(),
             base: self.picker_base(),
@@ -365,6 +369,10 @@ impl ColorState {
                 })
             },
         }
+    }
+    pub fn readout_out_of_gamut(&self, display: RgbSpace, mapped: bool) -> bool {
+        let inside=|space| if mapped {self.definition().in_hdr_gamut(space)} else {self.definition().in_gamut(space)};
+        !inside(display).unwrap_or(false) || !inside(self.rgb_space).unwrap_or(false)
     }
     pub fn front_swatch(&self) -> ColorSlot {
         match self.paint_slot {
@@ -1187,6 +1195,37 @@ impl ColorArcCaption {
         }).collect()
     }
 }
+#[derive(Clone, Copy, Debug, Serialize)]
+pub struct BareColorWheel {
+    pub wheel: f32,
+    pub stage: f32,
+    pub inset: f32,
+    pub height: f32,
+    pub bottom: f32,
+}
+impl BareColorWheel {
+    pub const MIN: f32=160.;
+    pub const MAX: f32=232.;
+    pub fn new(wheel: f32, hdr: bool) -> Option<Self> {
+        if !wheel.is_finite() || !(Self::MIN..=Self::MAX).contains(&wheel) {return None;}
+        let stage=ColorPanelLayout::stage_for_wheel(wheel)?;
+        let inset=ColorPanelLayout::new(stage)?.wheel[1];
+        let bottom=if hdr {let arc=HdrIntensityArc::new(stage)?;
+            arc.center[1]+arc.radius+(arc.width*0.5).max(arc.marker_radius)+2.
+        } else {inset+wheel};
+        Some(Self {wheel,stage,inset,height:bottom-inset,bottom})
+    }
+    pub fn fit(width: f32, height: f32, hdr: bool) -> Option<Self> {
+        if !width.is_finite() || !height.is_finite() || width<0. || height<0. {return None;}
+        let (mut low,mut high)=(Self::MIN,width.clamp(Self::MIN,Self::MAX));
+        if Self::new(high,hdr)?.height<=height {return Self::new(high,hdr);}
+        while high-low>0.5 {let middle=(low+high)*0.5;
+            if Self::new(middle,hdr)?.height<=height {low=middle;} else {high=middle;}
+        }
+        Self::new(low,hdr)
+    }
+}
+
 impl ColorPanelLayout {
     pub fn stage_for_wheel(wheel: f32) -> Option<f32> {
         if !wheel.is_finite() || wheel < Self::new(128.)?.wheel[2] { return None; }
@@ -1453,6 +1492,40 @@ fn triangle_weights(triangle: [[f32; 2]; 3], p: [f32; 2]) -> [f32; 3] {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn readout_gamut_checks_display_and_document_without_clipping_paint() {
+        let mut colors=ColorState::default();
+        let red=RgbColor::new(RgbSpace::DisplayP3,[1.,0.,0.,1.]).unwrap();
+        colors.set_color(red).unwrap();
+        assert!(colors.view().out_of_gamut);
+        assert!(colors.readout_out_of_gamut(RgbSpace::DisplayP3,false));
+        colors.set_rgb_space(RgbSpace::DisplayP3).unwrap();
+        assert!(!colors.readout_out_of_gamut(RgbSpace::DisplayP3,false));
+        assert_eq!(colors.definition(),red);
+        colors.set_rgb_space(RgbSpace::Srgb).unwrap();
+        colors.set_document_depth(layer_core::color::SampleDepth::F32).unwrap();
+        colors.set_color(RgbColor::from_linear(RgbSpace::Srgb,[8.,2.,1.,1.]).unwrap()).unwrap();
+        assert!(colors.view().out_of_gamut);
+        let view=colors.view_mapped(Default::default(),&crate::Localizer::shared(crate::UiLanguage::English));
+        assert!(!view.out_of_gamut);
+        assert_eq!(view.intensity_range,HdrIntensityArc::range(colors.hdr_intensity(),colors.hdr_depth));
+        colors.set_color(red).unwrap();
+        assert!(colors.readout_out_of_gamut(RgbSpace::Srgb,true));
+    }
+    #[test]
+    fn bare_wheel_fits_its_allocation_and_retains_the_scroll_minimum() {
+        for hdr in [false,true] {for width in [120.,160.,188.,232.,400.] {for height in [120.,180.,232.,400.] {
+            let fit=BareColorWheel::fit(width,height,hdr).unwrap();
+            assert!((BareColorWheel::MIN..=BareColorWheel::MAX).contains(&fit.wheel));
+            if width>=BareColorWheel::MIN {assert!(fit.wheel<=width);}
+            if BareColorWheel::new(BareColorWheel::MIN,hdr).unwrap().height<=height {assert!(fit.height<=height+0.001);}
+            assert!((ColorPanelLayout::new(fit.stage).unwrap().wheel[2]-fit.wheel).abs()<0.001);
+            assert!((fit.inset+fit.height-fit.bottom).abs()<0.001);
+        }}}
+        for [width,height] in [[f32::NAN,200.],[200.,f32::INFINITY],[-1.,200.],[200.,-1.]] {
+            assert!(BareColorWheel::fit(width,height,false).is_none());
+        }
+    }
     #[test]
     fn swatch_stacking_follows_the_remembered_paint() {
         let mut colors = ColorState::default();

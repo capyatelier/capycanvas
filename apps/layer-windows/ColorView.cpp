@@ -8,6 +8,7 @@
 #include "Checker.h"
 #include "ColorWheel.h"
 #include "ColorTouch.h"
+#include "ColorIntensity.h"
 #include <dwrite_2.h>
 #include <winrt/Microsoft.UI.Xaml.Shapes.h>
 #include <winrt/Microsoft.UI.Input.h>
@@ -145,8 +146,7 @@ struct View:std::enable_shared_from_this<View>{
     std::array<SwatchFace,3> swatchFaces;
     std::array<bool,3> hovered{};
     Button edit;Shapes::Ellipse editFill;
-    Canvas arc;Shapes::Path arcTrack;std::vector<Shapes::Line> ramp;Shapes::Ellipse markerShadow,marker;
-    Slider intensity;bool syncingIntensity=false;
+    Canvas arc;Shapes::Path arcTrack;Slider intensity;std::shared_ptr<ColorIntensity> intensityArc;
     std::shared_ptr<ControlCapture> wheelCapture,arcCapture,touchCapture;hstring arcKey,arcContext;
     ColorTouches touches;
     bool layoutHdr=false;double frameWidth=0,frameHeight=0;
@@ -158,7 +158,7 @@ struct View:std::enable_shared_from_this<View>{
     Button swap,readout;
     Shapes::Path readoutHit;
     TextBlock labelMetrics;
-    Image labelImage;hstring labelKey;
+    Image labelImage,gamutImage;hstring labelKey;
     Shapes::Path readoutFocus;
     struct Glyph {Image image;MatrixTransform transform;wchar_t scalar=0;std::array<double,9> key{};};
     std::vector<Glyph> glyphs,captionGlyphs;
@@ -191,15 +191,11 @@ struct View:std::enable_shared_from_this<View>{
     J model()const{return previewing()?object(data->colorPreview,L"view"):object(data->model,L"color_panel");}
     J paintColors()const{return previewing()?object(data->colorPreview,L"colors"):displayColors(data->state);}
     static J geometry(std::shared_ptr<WorkspaceData> const& data,double size,bool hdr){return colorUi(data->localization.get(),O({{L"type",S(L"layout")},{L"size",N(size)},{L"hdr",B(hdr)}})).GetObject();}
-    J arcAt(double fraction)const{return colorUi(data->localization.get(),O({{L"type",S(L"arc")},{L"size",N(panelSize)},{L"fraction",N(fraction)}})).GetObject();}
     void pickIntensity(Point position){
         if(arcContext.empty()||arcContext!=intensityContext())return;
-        A point;point.Append(N(position.X));point.Append(N(position.Y));
-        auto hit=colorUi(data->localization.get(),O({{L"type",S(L"arc")},{L"size",N(panelSize)},{L"point",point}})).GetObject();
-        auto fraction=hit.GetNamedValue(L"fraction",JsonValue::CreateNullValue());
-        if(fraction.ValueType()==JsonValueType::Number)setIntensity(-2+8*fraction.GetNumber());
+        setIntensity(intensityArc->pick(position));
     }
-    void setIntensity(double stops){sendEdit(O({{L"op",S(L"hdr_intensity")},{L"stops",N(std::clamp(stops,-2.,6.))}}),!arcContext.empty()?arcContext:intensityContext());}
+    void setIntensity(double stops){sendEdit(O({{L"op",S(L"hdr_intensity")},{L"stops",N(stops)}}),!arcContext.empty()?arcContext:intensityContext());}
     bool transparentSlot()const{return str(displayColors(data->state),L"slot")==L"transparent";}
     void cancelArc(){if(arcCapture)arcCapture->Cancel();}
     void contact(hstring const& phase){data->dispatch(O({{L"type",S(L"color_contact")},{L"phase",S(phase)}}));}
@@ -307,7 +303,7 @@ struct View:std::enable_shared_from_this<View>{
             Point at{};
             if(!e.TryGetPosition(self->stage,at)){
                 if(e.OriginalSource()!=self->intensity)return;
-                auto middle=array(self->arcAt(.5),L"point");at={float(middle.GetNumberAt(0)),float(middle.GetNumberAt(1))};
+                auto middle=array(self->intensityArc->at(.5),L"point");at={float(middle.GetNumberAt(0)),float(middle.GetNumberAt(1))};
             }else if(!self->historyArea(at))return;
             e.Handled(true);
             if(!self->wheelCapture->Active()&&(!self->arcCapture||!self->arcCapture->Active())&&self->touches.contacts.empty())self->showMenu(self->stage,O({{L"kind",S(L"color_wheel")}}),at);
@@ -390,7 +386,7 @@ struct View:std::enable_shared_from_this<View>{
             shapes[i]=control(data->caption(L"color",L"shape"),[weak,i]{if(auto self=weak.lock())self->send(O({{L"op",S(L"shape")},{L"shape",array(self->model(),L"other_shapes").GetAt(i)}}));});
             buttonFeedback(shapes[i],nullptr,0,0,nullptr,true);
             stage.Children().Append(shapes[i]);AutomationProperties::SetAutomationId(shapes[i],L"color-shape-"+to_hstring(i));
-            shapes[i].PointerEntered([weak,i](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock()){self->shapeHovered[i]=e.Pointer().PointerDeviceType()==Microsoft::UI::Input::PointerDeviceType::Mouse;self->refresh();}});
+            shapes[i].PointerEntered([weak,i](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock()){self->shapeHovered[i]=e.Pointer().PointerDeviceType()!=Microsoft::UI::Input::PointerDeviceType::Touch;self->refresh();}});
             shapes[i].PointerExited([weak,i](auto&&,auto&&){if(auto self=weak.lock()){self->shapeHovered[i]=false;self->refresh();}});
         }
         swap=control(data->caption(L"color",L"swap"),[weak]{if(auto self=weak.lock())self->send(O({{L"op",S(L"swap")}}));});
@@ -398,11 +394,9 @@ struct View:std::enable_shared_from_this<View>{
         stage.Children().Append(swap);AutomationProperties::SetAutomationId(swap,L"color-swap");
         Grid swapContent;swapGlyph=icon(L"color-swap",data->theme());swapGlyph.HorizontalAlignment(HorizontalAlignment::Center);swapGlyph.VerticalAlignment(VerticalAlignment::Center);
         swapContent.Children().Append(swapFill);swapContent.Children().Append(swapGlyph);swap.Content(swapContent);
-        arc.Background(nullptr);arc.Visibility(Visibility::Collapsed);
-        arcTrack.Stroke(clear());arcTrack.StrokeStartLineCap(PenLineCap::Round);arcTrack.StrokeEndLineCap(PenLineCap::Round);
-        arc.Children().Append(arcTrack);
-        markerShadow.IsHitTestVisible(false);marker.IsHitTestVisible(false);
-        markerShadow.Stroke(fill({128,0,0,0}));markerShadow.StrokeThickness(4);marker.Stroke(fill({255,255,255,255}));marker.StrokeThickness(2);
+        intensityArc=std::make_shared<ColorIntensity>();intensityArc->data=data;
+        intensityArc->changed=[weak](double stops){if(auto self=weak.lock();self&&!self->transparentSlot())self->setIntensity(stops);};
+        intensityArc->init(L"color-intensity");arc=intensityArc->root;arcTrack=intensityArc->track;intensity=intensityArc->access;
         arcCapture=captureControl(data,arcTrack,[weak](uint32_t,bool cancel,PointerRoutedEventArgs const* event){if(auto self=weak.lock()){
             cancel=cancel||self->arcContext!=self->intensityContext();
             if(!cancel&&event)self->pickIntensity(event->GetCurrentPoint(self->stage).Position());
@@ -417,13 +411,7 @@ struct View:std::enable_shared_from_this<View>{
         arcTrack.PointerMoved([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock();self&&self->arcCapture->Owns(e.Pointer().PointerId())){
             self->pickIntensity(e.GetCurrentPoint(self->stage).Position());e.Handled(true);
         }});
-        arcTrack.DoubleTapped([weak](auto&&,auto&&){if(auto self=weak.lock();self&&!self->transparentSlot())self->setIntensity(0);});
-        intensity.Minimum(-2);intensity.Maximum(6);intensity.StepFrequency(.01);intensity.SmallChange(.1);intensity.LargeChange(1);
-        intensity.Width(1);intensity.Height(1);intensity.Opacity(0);intensity.IsHitTestVisible(false);intensity.Visibility(Visibility::Collapsed);
-        copyName(data,intensity,data->copyCaption(L"color",L"intensity"));AutomationProperties::SetAutomationId(intensity,L"color-intensity");
-        intensity.ValueChanged([weak](auto&&,Primitives::RangeBaseValueChangedEventArgs const& e){if(auto self=weak.lock();self&&!self->syncingIntensity&&!self->transparentSlot())self->setIntensity(e.NewValue());});
-        intensity.PreviewKeyDown([weak](auto&&,KeyRoutedEventArgs const& e){if(auto self=weak.lock();self&&e.Key()==winrt::Windows::System::VirtualKey::Home){self->setIntensity(0);e.Handled(true);}});
-        stage.Children().Append(arc);stage.Children().Append(intensity);
+        stage.Children().Append(arc);
         readout=control(data->caption(L"color",L"switch_readout"),[weak]{if(auto self=weak.lock())self->send(O({{L"op",S(L"toggle_readout")}}));});
         buttonFeedback(readout,nullptr,0,0,nullptr,true);
         MenuFlyout editMenu;MenuFlyoutItem editItem;editItem.Text(data->caption(L"color",L"edit_menu"));
@@ -433,7 +421,7 @@ struct View:std::enable_shared_from_this<View>{
         AutomationProperties::SetAutomationId(readout,L"color-readout");stage.Children().Append(readout);
         readoutHit.Fill(clear());readoutBody.Children().Append(readoutHit);
         labelMetrics.UseLayoutRounding(false);labelMetrics.FontFamily(FontFamily(L"Segoe UI"));labelMetrics.FontWeight(winrt::Windows::UI::Text::FontWeights::Bold());labelMetrics.IsHitTestVisible(false);AutomationProperties::SetAccessibilityView(labelMetrics,Automation::Peers::AccessibilityView::Raw);
-        labelImage.IsHitTestVisible(false);labelImage.Stretch(Stretch::Fill);AutomationProperties::SetAccessibilityView(labelImage,Automation::Peers::AccessibilityView::Raw);readoutBody.Children().Append(labelImage);readoutFocus.IsHitTestVisible(false);
+        labelImage.IsHitTestVisible(false);labelImage.Stretch(Stretch::Fill);AutomationProperties::SetAccessibilityView(labelImage,Automation::Peers::AccessibilityView::Raw);readoutBody.Children().Append(labelImage);gamutImage.IsHitTestVisible(false);gamutImage.Stretch(Stretch::Fill);AutomationProperties::SetAccessibilityView(gamutImage,Automation::Peers::AccessibilityView::Raw);readoutBody.Children().Append(gamutImage);readoutFocus.IsHitTestVisible(false);
         readoutFocus.Opacity(.9);readoutFocus.StrokeThickness(1.5);readoutBody.Children().Append(readoutFocus);
         for(int i=0;i<3;i++){
             chips[i].IsHitTestVisible(false);chips[i].CornerRadius({2,2,2,2});chips[i].RenderTransform(chipTransforms[i]);
@@ -471,9 +459,13 @@ struct View:std::enable_shared_from_this<View>{
         double labelFont=std::clamp(panelSize*.044,9.,12.);
         labelMetrics.Text(str(view,L"readout_label"));labelMetrics.FontSize(GlyphRasterizer::fontSize(labelFont));
         labelMetrics.Measure({1000,1000});
-        auto labelNext=labelMetrics.Text()+L"/"+data->theme()+L"/"+to_hstring(labelFont)+L"/"+to_hstring(rasterScale)+(focused?L"/focus":L"");
+        bool outOfGamut=flag(view,L"out_of_gamut");
+        auto labelNext=labelMetrics.Text()+(outOfGamut?L"/gamut":L"")+L"/"+data->theme()+L"/"+to_hstring(labelFont)+L"/"+to_hstring(rasterScale)+(focused?L"/focus":L"");
         if(labelNext!=labelKey){
-            rasterizer.draw(labelImage,std::wstring_view(labelMetrics.Text()),labelFont,true,Matrix{1,0,0,1,2,labelFont+1},rasterScale,ink.as<SolidColorBrush>().Color(),.9f);labelKey=labelNext;
+            rasterizer.draw(labelImage,std::wstring_view(labelMetrics.Text()),labelFont,true,Matrix{1,0,0,1,2,labelFont+1},rasterScale,ink.as<SolidColorBrush>().Color(),.9f);
+            gamutImage.Visibility(outOfGamut?Visibility::Visible:Visibility::Collapsed);
+            if(outOfGamut)rasterizer.draw(gamutImage,L"!",labelFont,true,Matrix{1,0,0,1,labelMetrics.DesiredSize().Width+6,labelFont+1},rasterScale,ink.as<SolidColorBrush>().Color(),.9f);
+            labelKey=labelNext;
         }
         readoutFocus.Stroke(ink);readoutFocus.Visibility(focused?Visibility::Visible:Visibility::Collapsed);
         float w=labelMetrics.DesiredSize().Width+5,h=float(labelFont+4);
@@ -525,16 +517,12 @@ struct View:std::enable_shared_from_this<View>{
     }
     void updateArc(J const& view){
         bool hdr=flag(view,L"hdr")&&layoutHdr;
-        arc.Visibility(hdr?Visibility::Visible:Visibility::Collapsed);intensity.Visibility(hdr?Visibility::Visible:Visibility::Collapsed);
+        intensityArc->present(view,panelSize,hdr,!transparentSlot());
         if(!hdr)return;
         double stops=num(view,L"intensity");
         auto ramps=array(view,L"intensity_ramp");auto markerColor=array(view,L"marker_color");
         auto next=to_hstring(stops)+ramps.Stringify()+markerColor.Stringify()+to_hstring(panelSize)+data->theme();
         if(next==arcKey)return;arcKey=next;
-        for(size_t i=0;i<ramp.size()&&i<ramps.Size();i++)ramp[i].Stroke(fill(rgba(ramps.GetArrayAt(uint32_t(i)))));
-        auto point=array(arcAt((stops+2)/8),L"point");double x=point.GetNumberAt(0),y=point.GetNumberAt(1);
-        for(auto const& dot:{markerShadow,marker}){Canvas::SetLeft(dot,x-dot.Width()/2);Canvas::SetTop(dot,y-dot.Height()/2);}
-        marker.Fill(fill(rgba(markerColor)));
         wchar_t text[32];swprintf(text,32,L"%s%.2f EV",stops>=0?L"+":L"",stops);
         double font=num(object(layout,L"intensity_caption"),L"font_size");
         if(measuredFont!=font){advances.clear();measuredFont=font;metrics.FontSize(GlyphRasterizer::fontSize(font));}
@@ -556,8 +544,6 @@ struct View:std::enable_shared_from_this<View>{
             if(c!=L' ')rasterizer.draw(glyph.image,std::wstring_view(&c,1),font,false,position,layoutScale,ink,.8f);
         }
         for(;index<captionGlyphs.size();index++)captionGlyphs[index].image.Visibility(Visibility::Collapsed);
-        syncingIntensity=true;intensity.Value(stops);syncingIntensity=false;
-        wchar_t value[32];swprintf(value,32,L"%.1f EV",stops);AutomationProperties::SetItemStatus(intensity,value);
     }
     void refresh(){
         auto view=model();if(!view.Size()||!root.XamlRoot())return;
@@ -592,30 +578,6 @@ struct View:std::enable_shared_from_this<View>{
             image.Width(paintSide);image.Height(paintSide);Canvas::SetLeft(image,paintInset-inset);Canvas::SetTop(image,paintInset-inset);
             drawError.Width(side);Canvas::SetTop(drawError,side*.4);
             placeBox(readout,array(layout,L"readout"));placeBox(swap,array(layout,L"swap"));placeBox(edit,array(layout,L"edit"));
-            if(hdr){
-                auto start=arcAt(0),end=arcAt(1);auto shape=object(start,L"geometry");
-                double radius=num(shape,L"radius"),width=num(shape,L"width");
-                PathFigure figure;auto from=array(start,L"point"),to=array(end,L"point");
-                figure.StartPoint({float(from.GetNumberAt(0)),float(from.GetNumberAt(1))});figure.IsClosed(false);figure.IsFilled(false);
-                ArcSegment segment;segment.Point({float(to.GetNumberAt(0)),float(to.GetNumberAt(1))});segment.Size({float(radius),float(radius)});
-                segment.SweepDirection(SweepDirection::Counterclockwise);figure.Segments().Append(segment);
-                PathGeometry track;track.Figures().Append(figure);arcTrack.Data(track);arcTrack.StrokeThickness(width);
-                auto path=array(start,L"path");
-                size_t segments=path.Size()?path.Size()-1:0;
-                while(ramp.size()>segments){uint32_t at;if(arc.Children().IndexOf(ramp.back(),at))arc.Children().RemoveAt(at);ramp.pop_back();}
-                while(ramp.size()<segments){
-                    Shapes::Line line;line.StrokeStartLineCap(PenLineCap::Round);line.StrokeEndLineCap(PenLineCap::Round);
-                    line.IsHitTestVisible(false);arc.Children().InsertAt(uint32_t(ramp.size()),line);ramp.push_back(line);
-                }
-                for(uint32_t i=1;i<path.Size();i++){
-                    auto const& line=ramp[i-1];auto a=path.GetArrayAt(i-1),b=path.GetArrayAt(i);
-                    line.X1(a.GetNumberAt(0));line.Y1(a.GetNumberAt(1));line.X2(b.GetNumberAt(0));line.Y2(b.GetNumberAt(1));line.StrokeThickness(width);
-                }
-                double markerRadius=num(shape,L"marker_radius");
-                markerShadow.Width(markerRadius*2+4);markerShadow.Height(markerRadius*2+4);
-                marker.Width(markerRadius*2+2);marker.Height(markerRadius*2+2);
-                for(auto const& dot:{markerShadow,marker}){uint32_t at;if(!arc.Children().IndexOf(dot,at))arc.Children().Append(dot);}
-            }
             for(int i=0;i<2;i++)placeBox(shapes[i],array(layout,L"shapes").GetArrayAt(i));
             const std::array<wchar_t const*,3> slots{L"background",L"foreground",L"transparent"};
             for(int i=0;i<3;i++){

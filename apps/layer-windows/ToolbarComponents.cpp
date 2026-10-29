@@ -421,7 +421,7 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
         else{Canvas::SetLeft(track,x+2);Canvas::SetTop(track,2);track.Width(std::max(0.,w-4));track.Height(std::max(0.,height-4));}
         access.Width(track.Width());access.Height(track.Height());
         access.Orientation(vertical?Orientation::Vertical:Orientation::Horizontal);
-        updateReadout();paintTrack();paintSlider();
+        marksKey=L"";updateReadout();paintTrack();paintSlider();
     }
     void paintTrack(){
         double w=track.Width(),h=track.Height();
@@ -836,7 +836,7 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
             bool compact=self->vertical&&!flag(self->style,L"labeled");
             content.Children().GetAt(1).as<FrameworkElement>().Visibility(compact?Visibility::Collapsed:Visibility::Visible);
             content.Children().GetAt(2).as<FrameworkElement>().Visibility(self->vertical?Visibility::Collapsed:Visibility::Visible);
-            pick.Background(self->vertical?clear():self->data->brush(L"control_fill"));pick.Padding(self->vertical?(compact?Thickness{2}:Thickness{8,0,6,0}):Thickness{6,0,6,0});
+            pick.Background(self->vertical?clear():self->data->brush(L"control_fill"));pick.Padding(self->vertical?(compact?Thickness{2,2,2,2}:Thickness{8,0,6,0}):Thickness{6,0,6,0});
             pick.HorizontalContentAlignment(compact?HorizontalAlignment::Center:HorizontalAlignment::Stretch);
         };
         result.natural=[pick,data=data]{

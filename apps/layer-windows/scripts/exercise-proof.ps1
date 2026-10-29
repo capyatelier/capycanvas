@@ -129,8 +129,16 @@ try {
  $profileBounds=Native-Bounds 'proof-panel-profile' $scale
  $gamutBounds=Native-Bounds 'proof-panel-gamut' $scale
  foreach($bounds in $modeBounds+@($gamutBounds)){if([Math]::Abs($bounds.Height/$scale-26) -gt 1){throw 'Proof panel controls do not use compact height'}}
- if([Math]::Abs(($modeBounds[1].Left-$modeBounds[0].Right)/$scale-4) -gt 1 -or [Math]::Abs($gamutBounds.Left-$profileBounds.Left) -gt 1){throw 'Proof panel controls do not use consistent peer gaps and side alignment'}
- @{theme=$Theme;dpi=96*$scale;modes=$modeBounds;profile=$profileBounds;gamut=$gamutBounds}|ConvertTo-Json -Depth 5|Set-Content (Join-Path $run 'proof-panel-geometry.json')
+ if([Math]::Abs(($modeBounds[1].Left-$modeBounds[0].Right)/$scale-4) -gt 1){throw 'Proof panel mode controls do not use consistent peer gaps'}
+ $rows=@(foreach($id in @('profile','simulation','intent')){
+  $control=Control ('proof-panel-'+$id) -Arranged
+  $caption=$control.Current.LabeledBy
+  if(!$caption){throw "Proof $id choice lost its accessible row label"}
+  $labelBounds=$caption.Current.BoundingRectangle;$inputBounds=Native-Bounds ('proof-panel-'+$id) $scale
+  if([Math]::Abs(($inputBounds.Left-$labelBounds.Right)/$scale-4) -gt 1 -or [Math]::Abs($gamutBounds.Left-$labelBounds.Left) -gt 1 -or [Math]::Abs($inputBounds.Left-$profileBounds.Left) -gt 1){throw 'Proof row captions, choices and warning do not share their intended edges and gap'}
+  @{id=$id;caption=$labelBounds;choice=$inputBounds}
+ })
+ @{theme=$Theme;dpi=96*$scale;modes=$modeBounds;profile=$profileBounds;gamut=$gamutBounds;rows=$rows}|ConvertTo-Json -Depth 5|Set-Content (Join-Path $run 'proof-panel-geometry.json')
  Capture ('proof-panel-'+$Theme)
  Invoke 'proof-panel-gamut';Wait-Until {(Model).state.gamut_warning} 'Gamut warning failed'
  Command 'soft_proof';Wait-Until {!(Model).state.soft_proof -and !(Model).state.gamut_warning -and !(Model).windows_proof.text} 'Off did not clear proof status'

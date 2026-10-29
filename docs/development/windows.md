@@ -568,6 +568,8 @@ Pass the native reports to the `number-controls` and `color-panel` scenarios of
 `CAPY_BITMAP_FIXTURE` path and writes `bitmap-upload-fixture-result.json` beside
 it. Rebuild normally before using the editor again.
 
+The VM fixture runner builds and routes the LayerDrop companion automatically.
+
 The LayerDrop build mounts the production layer panel and holds its final drop
 reply until the fixture releases it. Build it in a separate output folder and
 pass its executable as `-DropFixture` to `exercise-layer-pickup.ps1` for the full

@@ -877,7 +877,7 @@ mod wheel {
         fn measure(&self, orientation: gtk::Orientation, for_size: i32) -> (i32, i32, i32, i32) {
             if self.bare.get() {
                 return if orientation == gtk::Orientation::Vertical {
-                    let height = |width: i32| super::bare_stage(width as f32, self.hdr.get()).map_or(0, |(_, _, height)| height.ceil() as i32);
+                    let height = |width: i32| layer_ui::BareColorWheel::new(width as f32,self.hdr.get()).map_or(0,|layout|layout.height.ceil() as i32);
                     let (low, high) = self.bare_range.get();
                     (height(low), height(if for_size < 0 { high } else { for_size.clamp(low, high) }), -1, -1)
                 } else {
@@ -1009,7 +1009,7 @@ glib::wrapper! {
     pub struct ColorWheel(ObjectSubclass<wheel::Wheel>) @extends gtk::Widget,
         @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
 }
-const BARE_WHEEL: (i32, i32) = (160, 232);
+const BARE_WHEEL: (i32, i32) = (layer_ui::BareColorWheel::MIN as i32, layer_ui::BareColorWheel::MAX as i32);
 fn reset_gestures(widget: &gtk::Widget) {
     let controllers = widget.observe_controllers();
     for i in 0..controllers.n_items() {
@@ -1017,18 +1017,6 @@ fn reset_gestures(widget: &gtk::Widget) {
     }
     let mut child = widget.first_child();
     while let Some(widget) = child { child = widget.next_sibling(); reset_gestures(&widget); }
-}
-fn bare_stage(wheel: f32, hdr: bool) -> Option<(f32, f32, f32)> {
-    let stage = ColorPanelLayout::stage_for_wheel(wheel)?;
-    let layout = ColorPanelLayout::new(stage)?;
-    let inset = layout.wheel[1];
-    let bottom = if hdr {
-        let arc = layer_ui::HdrIntensityArc::new(stage)?;
-        arc.center[1] + arc.radius + (arc.width * 0.5).max(arc.marker_radius) + 2.
-    } else {
-        inset + layout.wheel[3]
-    };
-    Some((stage, inset, bottom - inset))
 }
 impl ColorWheel {
     pub(crate) fn bare() -> Self {
@@ -1198,16 +1186,8 @@ impl ColorWheel {
     fn stage_bounds(&self) -> (f32, [f32; 2]) {
         if let Some(layout) = self.imp().bubble_layout.get() { return (layout.stage, [0.; 2]); }
         if self.imp().bare.get() {
-            let hdr = self.imp().hdr.get();
-            let fits = |wheel: f32| bare_stage(wheel, hdr).is_some_and(|(_, _, height)| height <= self.height() as f32);
-            let (mut low, mut high) = (self.imp().bare_range.get().0 as f32, self.width() as f32);
-            if fits(high) { low = high; }
-            while high - low > 0.5 {
-                let candidate = (low + high) * 0.5;
-                if fits(candidate) { low = candidate; } else { high = candidate; }
-            }
-            let Some((size, inset, _)) = bare_stage(low, hdr) else { return (0., [0., 0.]); };
-            return (size, [(self.width() as f32 - low) * 0.5 - inset, -inset]);
+            let Some(layout)=layer_ui::BareColorWheel::fit(self.width() as f32,self.height() as f32,self.imp().hdr.get()) else {return (0.,[0.;2]);};
+            return (layout.stage,[(self.width() as f32-layout.wheel)*0.5-layout.inset,-layout.inset]);
         }
         let mut size = self.width().min(self.height()).max(0);
         let mut footer = 0.;

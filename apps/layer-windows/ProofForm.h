@@ -70,7 +70,7 @@ struct ProofFormView {
         auto add=[&](ComboBox const& box,hstring const& title,hstring const& id){
             choiceColors(data,box);box.MinHeight(data->controlHeight());box.MinWidth(0);box.FontSize(data->textSize());box.Padding({data->panelMetric(L"field_padding"),0,0,0});box.HorizontalAlignment(HorizontalAlignment::Stretch);
             Grid row;row.ColumnSpacing(data->panelMetric(L"control_spacing"));for(auto unit:{GridUnitType::Auto,GridUnitType::Star}){ColumnDefinition column;column.Width({1,unit});row.ColumnDefinitions().Append(column);}
-            auto caption=label(data,title);twoLines(caption);caption.VerticalAlignment(VerticalAlignment::Center);captions[index++]=caption;row.Children().Append(caption);Grid::SetColumn(box,1);row.Children().Append(box);
+            auto caption=label(data,title);twoLines(caption);caption.VerticalAlignment(VerticalAlignment::Center);captions[index++]=caption;AutomationProperties::SetLabeledBy(box,caption);row.Children().Append(caption);Grid::SetColumn(box,1);row.Children().Append(box);
             AutomationProperties::SetAutomationId(box,id);AutomationProperties::SetName(box,title);root.Children().Append(row);
         };
         add(profile,str(copy,L"profile"),L"proof-profile");add(simulation,str(copy,L"simulation"),L"proof-simulation");add(intent,str(copy,L"intent"),L"proof-intent");

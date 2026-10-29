@@ -274,7 +274,7 @@ struct PalettesView:std::enable_shared_from_this<PalettesView>{
         data->document(to_string(O({{L"operation",S(L"palette")},{L"action",O({{L"op",S(L"export")},{L"id",N(double(id))},{L"format",S(format)},{L"path",S(path)}})}}).Stringify()));
     }
     Tile makeTile(uint64_t id){
-        Tile t;t.id=id;t.node=tileButton(L"");t.patch=paint();Grid content;content.Children().Append(t.patch);t.ring=Border();t.ring.CornerRadius(data->controlCorner());t.ring.Margin({-3});t.ring.IsHitTestVisible(false);t.ring.BorderThickness({2});t.ring.BorderBrush(accent(data));content.Children().Append(t.ring);t.node.Content(content);auto weak=weak_from_this();
+        Tile t;t.id=id;t.node=tileButton(L"");t.patch=paint();Grid content;content.Children().Append(t.patch);t.ring=Border();t.ring.CornerRadius(data->controlCorner());t.ring.Margin({-3,-3,-3,-3});t.ring.IsHitTestVisible(false);t.ring.BorderThickness({2,2,2,2});t.ring.BorderBrush(accent(data));content.Children().Append(t.ring);t.node.Content(content);auto weak=weak_from_this();
         AutomationProperties::SetAutomationId(t.node,L"palette-swatch-"+to_hstring(id));
         t.node.Click([weak,id](auto&&,auto&&){if(auto self=weak.lock()){
             if(self->ignoreClick||(self->drag&&(self->drag->started||self->drag->held)))return;
@@ -548,7 +548,7 @@ struct PalettesView:std::enable_shared_from_this<PalettesView>{
         Grid::SetColumn(info,1);footer.Children().Append(info);Grid::SetRow(footer,2);root.Children().Append(footer);
         note.TextWrapping(TextWrapping::Wrap);note.FontSize(data->textSize());note.Visibility(Visibility::Collapsed);AutomationProperties::SetAutomationId(note,L"palette-message");
         AutomationProperties::SetLiveSetting(note,Microsoft::UI::Xaml::Automation::Peers::AutomationLiveSetting::Polite);Grid::SetRow(note,3);root.Children().Append(note);
-        add=tileButton(data->caption(L"palettes",L"add_current"));Border addFace;{auto radius=data->controlCorner().TopLeft+3;addFace.CornerRadius({radius});}addFace.Background(data->brush(L"input"));addFace.Child(icon(L"plus",data->theme()));add.Content(addFace);
+        add=tileButton(data->caption(L"palettes",L"add_current"));Border addFace;{auto radius=data->controlCorner().TopLeft+3;addFace.CornerRadius({radius,radius,radius,radius});}addFace.Background(data->brush(L"input"));addFace.Child(icon(L"plus",data->theme()));add.Content(addFace);
         tooltip(add,data->caption(L"palettes",L"add_current"));AutomationProperties::SetAutomationId(add,L"palette-add");
         add.Click([weak](auto&&,auto&&){if(auto self=weak.lock())self->addColor();});grid.Children().Append(add);
         scroll.SizeChanged([weak](auto&&,auto&&){if(auto self=weak.lock())self->arrange();});

@@ -286,7 +286,18 @@ function Pair-SetPaint([string[]]$Channels,[string]$Intensity=''){
     Invoke 'edit-color-form-0';Invoke 'edit-color-form-0-linear_rgb'
     Wait-Until {(Control 'edit-color-form-0').Current.Name -eq 'Linear RGB'} 'Edit Color did not switch to Linear RGB'
     for($i=0;$i -lt 3;$i++){Pair-Value "edit-color-0-$i" $Channels[$i]}
-    if($Intensity){Pair-Value 'edit-color-intensity' $Intensity}
+    if($Intensity){
+        Pair-Value 'edit-color-intensity' $Intensity
+        $range=Control 'edit-color-intensity-range'
+        $rangePattern=$range.GetCurrentPattern([System.Windows.Automation.RangeValuePattern]::Pattern)
+        $rangePattern.SetValue(1)
+        Wait-Until {$rangePattern.Current.Value -eq 1} 'Edit Color intensity did not accept its accessible range action'
+        $range.SetFocus();[CapyRowPointer]::Key([uint32]$review.Id,0x24)
+        Wait-Until {$rangePattern.Current.Value -eq 0} 'Edit Color intensity Home did not restore zero EV'
+        Capture ('pair-intensity-keyboard-'+$theme)
+        $rangePattern.SetValue([double]$Intensity)
+        Wait-Until {$rangePattern.Current.Value -eq [double]$Intensity} 'Edit Color intensity did not restore the requested HDR value'
+    }
     Invoke 'edit-color-apply'
     Wait-Until {$pair=(Model).paint_pair;$pair -and $pair.definition.rgba -and (($pair.definition|ConvertTo-Json -Compress) -ne $before)} 'Paint definition did not publish'
     Wait-Until {!(Find 'edit-color-apply')} 'Edit Color did not close'

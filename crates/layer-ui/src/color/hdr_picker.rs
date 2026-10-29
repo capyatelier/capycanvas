@@ -65,7 +65,8 @@ impl ColorState {
         let mut view=self.view_in_localized(RgbSpace::Srgb, localizer);
         if self.hdr_picker.is_none() {return view;}
         view.rendition=Some(recipe);
-        view.intensity_ramp=self.intensity_ramp(recipe, [-2., 6.]);
+        view.out_of_gamut=self.readout_out_of_gamut(RgbSpace::Srgb,true);
+        view.intensity_ramp=self.intensity_ramp(recipe, view.intensity_range);
         let preview=|color| self.mapped_swatch(color,recipe);
         view.marker_color=preview(self.definition())[..3].try_into().unwrap();
         for swatch in &mut view.swatches {swatch.rgba=match swatch.slot {ColorSlot::Foreground=>preview(self.foreground),ColorSlot::Background=>preview(self.background),ColorSlot::Transparent=>[0.;4],ColorSlot::Temporary=>preview(self.temporary)};}

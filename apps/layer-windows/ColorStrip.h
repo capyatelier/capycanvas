@@ -27,6 +27,7 @@ struct ColorStrip:std::enable_shared_from_this<ColorStrip>{
         Grid pair;pair.CornerRadius(data->controlCorner());clipRounded(pair,data->controlCorner());
         for(int column=0;column<2;++column){ColumnDefinition definition;definition.Width({20,GridUnitType::Pixel});pair.ColumnDefinitions().Append(definition);}
         original.Height(40);sample.Height(40);Grid::SetColumn(sample,1);pair.Children().Append(original);pair.Children().Append(sample);
+        Border edge;edge.CornerRadius(data->controlCorner());edge.BorderThickness({1,1,1,1});edge.BorderBrush(data->tint(L"text",31));edge.IsHitTestVisible(false);Grid::SetColumnSpan(edge,2);pair.Children().Append(edge);
         for(auto const& text:{hex,intensity,space,values}){text.FontFamily(FontFamily(L"Segoe UI"));text.IsHitTestVisible(false);text.VerticalAlignment(VerticalAlignment::Center);}
         hex.FontSize(15);hex.FontWeight(Windows::UI::Text::FontWeights::SemiBold());space.Opacity(.6);
         intensity.HorizontalAlignment(HorizontalAlignment::Right);values.HorizontalAlignment(HorizontalAlignment::Right);
@@ -65,7 +66,7 @@ struct ColorStrip:std::enable_shared_from_this<ColorStrip>{
         hex.Text(str(content,L"hex"));intensity.Text(str(content,L"intensity"));space.Text(str(content,L"label"));values.Text(str(content,L"values"));
         for(auto const& text:{hex,intensity,space,values})text.Foreground(data->brush(L"text"));
         auto tip=data->caption(L"color",L"picking_strip");AutomationProperties::SetName(root,tip);tooltip(root,tip);
-        surface.Fill(data->brush(L"panel"));
+        surface.Fill(data->brush(L"settings"));
         visible=true;present();
     }
     void Hide(){
@@ -90,7 +91,7 @@ struct ColorStrip:std::enable_shared_from_this<ColorStrip>{
         corner=str(placed,L"corner",corner);auto origin=array(placed,L"origin");
         double left=std::round(origin.GetNumberAt(0)/scale),top=std::round(origin.GetNumberAt(1)/scale);
         Canvas::SetLeft(root,left);Canvas::SetTop(root,top);root.Height(height);
-        std::array<float,4> radii{12,12,12,12};
+        std::array<float,4> radii{SurfaceRadius,SurfaceRadius,SurfaceRadius,SurfaceRadius};
         surface.Data(squircleRectangle(width,height,radii));feedbackSurface.Data(surface.Data());
         shadow.Shape(squircleRectangle(width,height,radii),width,height,8,2,.27f);shadow.Cut(radii);
         shadow.Layout({float(left),float(top),width,height},949,true);
