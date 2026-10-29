@@ -73,7 +73,6 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         }
     };
     std::map<std::wstring,Body> bodies;
-    double bodyTextScale=0;
     Canvas measureHost;
     ContentControl measureGate;
     hstring lastMeasurements;
@@ -244,8 +243,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     }
     void removeGroup(Group const& group,std::shared_ptr<void> owner={}){
         uint32_t index=0;
-        if(gestures->DeferRemoval(group.frame,std::move(owner)))std::erase_if(bodies,[&](auto const& entry){return entry.second.view==group.body;});
-        else if(root.Children().IndexOf(group.frame,index))root.Children().RemoveAt(index);
+        if(!gestures->DeferRemoval(group.frame,std::move(owner))&&root.Children().IndexOf(group.frame,index))root.Children().RemoveAt(index);
         if(root.Children().IndexOf(group.shadow.Root(),index))root.Children().RemoveAt(index);
     }
     void buildTabs(Group& group,J const& geometry){
@@ -351,7 +349,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         Body* retained=nullptr;
         if(object(geometry,L"tiles").Size())group.body=create();
         else{
-            auto key=O({{L"panel",panelStructure(panel)},{L"split_filters",B(flag(geometry,L"split_filters"))}}).Stringify();
+            auto key=O({{L"panel",panelStructure(panel)},{L"metrics",S(panelMetricKey)}}).Stringify();
             auto& cached=bodies[std::wstring(str(panel,L"id"))];
             if(!cached.view||cached.key!=key||gestures->Retains(cached.view->Root())){cached.view=create();cached.key=key;cached.host=nullptr;}
             else cached.Detach();
@@ -477,6 +475,10 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         data->updating=true;struct Reset {bool& value;~Reset(){value=false;}} reset{data->updating};
         applyLayout(data->model,false);
     }
+    void applyGlass(double previous){
+        if(previous==num(object(data->model,L"windows_glass"),L"panel_revision",-1))return;
+        presentBackgrounds();if(glassChanged)glassChanged();
+    }
     bool applyFields(J const& model,bool scopes){
         auto update=object(model,L"workspace_update");
         if(!publication.Accept(true,revision(update,L"revision"),revision(update,L"model_revision"),revision(update,L"content_revision")))return false;
@@ -491,7 +493,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             }
             queueMeasurements();
         }
-        if(previousGlass!=num(object(model,L"windows_glass"),L"panel_revision",-1)){presentBackgrounds();if(glassChanged)glassChanged();}
+        applyGlass(previousGlass);
         tracePresentation();return true;
     }
     bool apply(J const& snapshot,NativeLayoutInput preparedInput){
@@ -511,9 +513,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         if(!full&&!reflow&&snapshot.HasKey(L"windows_glass")){
             auto previous=num(object(data->model,L"windows_glass"),L"panel_revision",-1);
             data->model.Insert(L"windows_glass",snapshot.GetNamedValue(L"windows_glass"));
-            if(previous!=num(object(data->model,L"windows_glass"),L"panel_revision",-1)){
-                presentBackgrounds();if(glassChanged)glassChanged();
-            }
+            applyGlass(previous);
             if(snapshot.Size()==1){tracePresentation();return true;}
         }
         if(!full&&snapshot.HasKey(L"command_search")){
@@ -546,11 +546,6 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         RefreshFilterPreviewContext(data->previews,object(data->state,L"document_file").GetNamedValue(L"epoch").Stringify());
         lastMeasurements=L"";
         data->refreshPalette();
-        auto textScale=Windows::UI::ViewManagement::UISettings().TextScaleFactor();
-        if(relocalize||textScale!=bodyTextScale){
-            bodies.clear();for(auto& [id,group]:groups)group.key.clear();bodyTextScale=textScale;
-            measureHost.Children().Clear();offscreen.clear();
-        }
         auto theme=data->theme(),palette=object(data->state,L"palette").Stringify();
         if(theme!=previousTheme||palette!=previousPalette){
             panelBridgeKey=L"";
@@ -594,7 +589,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             for(auto field:{L"bounds",L"resize_handles",L"tiles",L"footer_grip",L"min_body_height",L"zen_kept",L"scrolls",L"panels"})if(structure.HasKey(field))structure.Remove(field);
             if(auto tiles=object(geometry,L"tiles");tiles.Size())structure.Insert(L"tile_style",S(str(tiles,L"tile_style")));
             structure.Insert(L"footer",B(object(geometry,L"footer_grip").Size()!=0));
-            J signature=O({{L"geometry",structure},{L"panel",panelStructure(panel)}});
+            J signature=O({{L"geometry",structure},{L"panel",panelStructure(panel)},{L"metrics",S(panelMetricKey)}});
             A headers;for(auto member:array(geometry,L"panels")){
                 auto model=find(array(data->model,L"panels"),L"id",member.GetString());
                 headers.Append(O({{L"id",member},{L"title",S(str(model,L"title"))},{L"icon",S(str(model,L"icon"))},{L"tab",object(model,L"tab")}}));
@@ -861,7 +856,6 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         A reports;
         if((data->updating&&!preparing)||!root.IsLoaded()||root.ActualWidth()<=0)return reports;
         auto requests=measurementRequests();auto context=metricContext();
-        auto scale=root.XamlRoot()?root.XamlRoot().RasterizationScale():1.;
         for(auto it=offscreen.begin();it!=offscreen.end();){
             if(find(array(data->model,L"panels"),L"id",hstring(it->first)).Size()){++it;continue;}
             uint32_t at=0;if(it->second.body&&measureHost.Children().IndexOf(it->second.body->Root(),at))measureHost.Children().RemoveAt(at);
@@ -893,9 +887,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
                         auto bounds=rectangle(object(group.geometry,L"bounds"));
                         if(preparing){group.frame.Measure({bounds.Width,bounds.Height});group.frame.Arrange(bounds);}
                         actualWidth=group.body->Root().ActualWidth();
-                        if(std::abs(group.frame.ActualWidth()-width)*scale<=1.){
-                            height=group.body->ContentHeight(actualWidth);scroll=group.body->ScrollMetrics();
-                        }
+                        height=group.body->ContentHeight(actualWidth);scroll=group.body->ScrollMetrics();
                     }
                     else {
                         auto& copy=offscreen[std::wstring(panelId)];
@@ -917,7 +909,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
                         actualWidth=copy.body->Root().ActualWidth();
                         height=copy.body->ContentHeight(actualWidth);scroll=copy.body->ScrollMetrics();
                     }
-                    if(std::isfinite(height)&&height>=0&&std::abs(actualWidth-width)*scale<=1.)body=O({{L"actual_width",N(stable(actualWidth))},{L"content_height",N(stable(height))},
+                    if(std::isfinite(height)&&height>=0)body=O({{L"actual_width",N(stable(actualWidth))},{L"content_height",N(stable(height))},
                         {L"scroll",scroll.Size()?V(scroll):JsonValue::CreateNullValue()}});
                 }
                 if(tabWidth.ValueType()!=JsonValueType::Null||body.ValueType()!=JsonValueType::Null)
