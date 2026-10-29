@@ -48,7 +48,7 @@ struct LayerRowDrag::Impl:std::enable_shared_from_this<Impl>{
     bool releasing=false,recognizing=false,ignoreClick=false,suppressContext=false,busy=false;
     bool trace=GetEnvironmentVariableW(L"CAPY_TRACE_UI",nullptr,0)!=0;
     uint64_t generation=0,revision=0;
-    J lastRelease,lastCancel,lastCaptureLoss,lastMove;
+    J lastRelease,lastCancel,lastCaptureLoss,lastMove,lastIgnoredDown;
     std::chrono::steady_clock::time_point tickAt;
     bool focus()const{return windowHandle&&GetAncestor(GetForegroundWindow(),GA_ROOTOWNER)==windowHandle&&!IsIconic(windowHandle);}
     bool crossed()const{return recognizer.Moved();}
@@ -170,6 +170,7 @@ struct LayerRowDrag::Impl:std::enable_shared_from_this<Impl>{
         if(lastCancel.Size())value.Insert(L"last_cancel",lastCancel);
         if(lastCaptureLoss.Size())value.Insert(L"last_capture_loss",lastCaptureLoss);
         if(lastMove.Size())value.Insert(L"last_move",lastMove);
+        if(lastIgnoredDown.Size())value.Insert(L"last_ignored_down",lastIgnoredDown);
         AutomationProperties::SetItemStatus(list,value.Stringify());
     }
     void deferClick(){
@@ -238,9 +239,12 @@ struct LayerRowDrag::Impl:std::enable_shared_from_this<Impl>{
         publish();
     }
     void down(PointerRoutedEventArgs const& e){
+        if(finishing){
+            if(trace){lastIgnoredDown=O({{L"generation",N(double(generation))},{L"pointer_id",N(e.Pointer().PointerId())},{L"reason",S(L"drop_pending")}});publish();}
+            e.Handled(true);return;
+        }
         auto owner=view.lock();if(owner&&owner->data->claimBubbleContact(e))return;
         if(touch(e,L"down"))return;
-        if(finishing)cancel(L"new_contact");
         if(pointer){if(pointer.PointerId()!=e.Pointer().PointerId())cancel(L"multiple_contacts");return;}
         rejected.reset();ignoreClick=false;suppressContext=false;++generation;
         auto original=e.OriginalSource().try_as<DependencyObject>();
@@ -251,7 +255,7 @@ struct LayerRowDrag::Impl:std::enable_shared_from_this<Impl>{
             if(row->renaming||inside(original,row->rename)||!row->current())return;
             source=row;id=row->id;epoch=row->epoch;pointer=e.Pointer();device=point.PointerDeviceType();
             owner->data->pointerCancels.Observe(pointer.PointerId(),this,[weak=weak_from_this()]{if(auto self=weak.lock())self->cancel(L"capture_handoff");});
-            grip=inside(original,row->grip);mask=inside(original,row->mask);initialSwipe=row->swipeOffset;row->swipe(initialSwipe,false);
+            grip=inside(original,row->grip);mask=inside(original,row->mask);initialSwipe=std::max(0.,row->swipeOffset);row->swipe(initialSwipe,false);
             pickup=initialSwipe==0&&movable(row->model());
             for(auto const& [key,other]:owner->rows)if(other!=row)other->swipe(0);
             origin=position=point.Position();initialScroll=list.VerticalOffset();windowHandle=GetAncestor(GetForegroundWindow(),GA_ROOTOWNER);
@@ -359,6 +363,10 @@ struct LayerRowDrag::Impl:std::enable_shared_from_this<Impl>{
             // pointer stayed in a cached target while another action changed it.
             ++revision;answered.reset();placement=L"";normalizedTarget=-1;effectOwner=-1;target();publish();
         }else{
+            if(auto row=source.lock()){
+                bool action=false;for(auto const& weak:path)if(auto node=weak.get();node&&node==row->swipeActions)action=true;
+                row->swipe(action&&initialSwipe>0?row->revealWidth():0);
+            }
             if(held||grip)e.Handled(true);
             if(trace)lastRelease=O({{L"source",N(id)},{L"commit",B(false)},{L"held",B(held)}});
             clear(false);

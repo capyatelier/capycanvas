@@ -54,6 +54,11 @@ function Menu-State($Item) {
     try{$c=$Item.Current;@{id=$c.AutomationId;runtime_id=@($Item.GetRuntimeId());bounds=$c.BoundingRectangle.ToString();offscreen=$c.IsOffscreen;focused=$c.HasKeyboardFocus;enabled=$c.IsEnabled;process=$c.ProcessId}}catch{@{error=$_.Exception.Message}}
 }
 function Layer-History([string]$Name) {Invoke $Name -Name}
+function Tap-RowBody([long]$Layer){
+    $box=(Control "layer-row-$Layer" -Arranged).Current.BoundingRectangle
+    $inset=8*[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.
+    [CapyRowPointer]::Down($Device,[int]($box.Left+$inset),[int]($box.Top+$box.Height/2));[CapyRowPointer]::Up()
+}
 function Layer-Viewport($Container=(Control 'layer-list' -Arranged)) {
     $list=$Container.Current.BoundingRectangle
     $header=Find 'layer-controls' -Visible;$footer=Find 'layer-footer' -Visible
@@ -161,7 +166,7 @@ function Pick-Up([string]$Id,[double]$Layer,[switch]$Grip) {
         if(!$hold.state.captured){throw 'Held row did not retain contact capture'}
     }
 }
-function Drag-Row([string]$Id,[double]$Layer,[double]$Target,[switch]$Grip,[switch]$Cancel,[double]$Fraction=.6) {
+function Drag-Row([string]$Id,[double]$Layer,[double]$Target,[switch]$Grip,[switch]$Cancel,[double]$Fraction=.6,[switch]$PressAfterRelease) {
     $before=Rows
     $to=Destination $Target $Fraction
     if($Device -ne 'mouse' -and !$Grip){
@@ -178,6 +183,7 @@ function Drag-Row([string]$Id,[double]$Layer,[double]$Target,[switch]$Grip,[swit
     }
     $at=Point $Id
     $to=Destination $Target $Fraction
+    $nextPress=if($PressAfterRelease){Point "layer-$Target-drag"}
     $clientOrigin=[CapyRowPointer+Point]::new()
     [CapyRowPointer]::ClientToScreen($drawingWindow,[ref]$clientOrigin)|Out-Null
     $script:contact=@{source=$Id;target=$Target;from=$at;to=$to;source_bounds=(Control $Id).Current.BoundingRectangle;target_bounds=(Control "layer-row-$Target").Current.BoundingRectangle;viewport_bounds=(Layer-Viewport);window_bounds=$root.Current.BoundingRectangle;client_origin=@{x=$clientOrigin.x;y=$clientOrigin.y};dpi=[CapyRowPointer]::GetDpiForWindow($drawingWindow)}
@@ -204,9 +210,16 @@ function Drag-Row([string]$Id,[double]$Layer,[double]$Target,[switch]$Grip,[swit
     $selected=@((Model).state.layers|Where-Object id -eq $Layer)[0].selected
     if($Cancel){
         if($Device -eq 'mouse'){[CapyRowPointer]::Key(0x1b);[CapyRowPointer]::Up()}else{[CapyRowPointer]::Cancel()}
-    }else{[CapyRowPointer]::Up()}
+    }else{
+        if($PressAfterRelease){$script:contact.release_tap_ms=[CapyRowPointer]::UpThenTap($Device,$nextPress.x,$nextPress.y)}
+        else{[CapyRowPointer]::Up()}
+    }
     $finished=@{state=$null}
     Wait-Until {$finished.state=Gesture;$finished.state.phase -eq 'idle'} 'Layer contact did not finish'
+    if($PressAfterRelease){
+        $script:contact.ignored_after_release=$finished.state.last_ignored_down
+        if($finished.state.last_ignored_down.generation -ne $admitted.generation -or $finished.state.last_ignored_down.reason -ne 'drop_pending'){throw 'The next press did not overlap the pending final drop query'}
+    }
     # Ordinary drawers retain their row surface during the closing animation.
     if($Cancel){
         if((Rows) -ne $before){throw 'Cancelled row move changed layers'}
@@ -288,6 +301,19 @@ try {
         if((Rows) -ne $before -or (Gesture).menu_open -or (Find "layer-$created-swipe-delete" -Visible)){throw 'Early vertical row motion reordered layers or opened a menu or swipe action'}
     }
     if($Device -ne 'mouse'){
+        $script:case='right-swipe-quick-reverse'
+        $before=Rows
+        $alphaBefore=@((Model).state.layers|Where-Object id -eq $created)[0].alpha_locked
+        $at=Point "layer-$created-name"
+        [CapyRowPointer]::Down($Device,$at.x,$at.y);Start-Sleep -Milliseconds 35
+        Move-To @{x=$at.x+90;y=$at.y}
+        Wait-Until {(Gesture).source_swipe -lt -29} 'Right swipe did not reach its action threshold'
+        [CapyRowPointer]::Up()
+        [CapyRowPointer]::Down($Device,$at.x,$at.y)
+        Move-To @{x=$at.x-90;y=$at.y};[CapyRowPointer]::Up()
+        Wait-Until {(Gesture).phase -eq 'idle' -and @((Model).state.layers|Where-Object id -eq $created)[0].alpha_locked -ne $alphaBefore} 'Immediate reverse swipe repeated the right swipe action'
+        Layer-History 'Undo';Wait-Until {(Rows) -eq $before} 'Right swipe and immediate reverse changed more than one action'
+        if(Find "layer-$created-swipe-delete" -Visible){Tap-RowBody $created;Wait-Until {!(Find "layer-$created-swipe-delete" -Visible)} 'Reverse swipe actions did not close on their row body'}
         $script:case='swipe-delete-close'
         $before=Rows
         Record-Swipe 'baseline'
@@ -301,6 +327,12 @@ try {
         if($partial.source_swipe -le 0 -or $partial.source_grip_opacity -le 0 -or $partial.source_grip_opacity -ge .6){throw 'Partial swipe did not fade the retained grip'}
         Wait-Until {$null -ne (Find "layer-$created-swipe-delete" -Visible)} 'Left swipe did not reveal Delete'
         Record-Swipe 'delete-opened'
+        Tap-RowBody $created
+        Wait-Until {!(Find "layer-$created-swipe-delete" -Visible)} 'A tap on an open row body did not close its actions'
+        $at=Point "layer-$created-name"
+        [CapyRowPointer]::Down($Device,$at.x,$at.y);Start-Sleep -Milliseconds 35
+        Move-To @{x=$at.x-90;y=$at.y};[CapyRowPointer]::Up()
+        Wait-Until {Find "layer-$created-swipe-delete" -Visible} 'Delete did not reopen after the row body tap'
         $action=(Control "layer-$created-swipe-delete" -Arranged).Current.BoundingRectangle
         $inset=2*[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.
         $at=@{x=[int]($action.X+$action.Width*.5);y=[int][Math]::Ceiling($action.Top+$inset)}
@@ -337,6 +369,7 @@ try {
         Layer-History 'Undo';Wait-Until {(Rows) -eq $before} 'Revealed Delete requires more than one Undo'
         Record-Swipe 'delete-undone'
     }
+    $script:case='new-press-after-drop';Drag-Row "layer-$created-drag" $created $paint -Grip -PressAfterRelease
     if($SwipeOnly){
         $script:case='settled-grip-reorder';Drag-Row "layer-$created-drag" $created $paint -Grip
         $script:case='settled-grip-cancel';Drag-Row "layer-$created-drag" $created $paint -Grip -Cancel
