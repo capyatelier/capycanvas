@@ -24,7 +24,7 @@ photo, measuring the color bubble's native rim drag or constant-speed EV sweep.
 """
 import argparse
 import uuid
-from android_adaptive import cleanup_steps, enable_adaptive, activity_identity, restore_adaptive, validate_identity
+from android_adaptive import cleanup_steps, enable_adaptive, restore_adaptive, validate_identity
 import json
 import math
 import os
@@ -32,7 +32,6 @@ import re
 from pathlib import Path
 import shutil
 import subprocess
-import sys
 import time
 
 

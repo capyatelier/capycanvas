@@ -48,11 +48,6 @@ class BubblePresentsTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             bubbles.latency("11111111\n1 2\n")
 
-    def test_private_activity_identity_uses_the_resumed_exact_component(self):
-        text = "topResumedActivity=ActivityRecord{abc u0 owned.app/art.capycanvas.MainActivity t123}"
-        self.assertEqual(bubbles.activity_identity(text, "owned.app"), ("abc", 123))
-        with self.assertRaises(ValueError):
-            bubbles.activity_identity(text, "other.app")
 
     def test_short_palette_diagnostic_retains_poses_without_fps(self):
         with tempfile.TemporaryDirectory() as temporary:

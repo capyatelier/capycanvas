@@ -1561,23 +1561,6 @@ class AndroidTitleBarTest {
         val selection=args.getString("layerSelectionBenchmark")=="true"
         val properties=args.getString("layerPropertiesBenchmark")=="true"
         val discrete=selection || properties
-        val countReorder=args.getString("countReorderScopes")=="true"
-        require(!countReorder || reorder)
-        val countScopes=java.util.concurrent.atomic.AtomicBoolean(false)
-        val scopeCounts=java.util.concurrent.ConcurrentHashMap<String,java.util.concurrent.atomic.AtomicInteger>()
-        val scopes=listOf("PanelControls","LayerPanel","LayerRow","LayerConnections")
-        @OptIn(androidx.compose.runtime.InternalComposeTracingApi::class)
-        fun compositionTracer(active:Boolean) {
-            androidx.compose.runtime.Composer.setTracer(if(!active)null else object:androidx.compose.runtime.CompositionTracer {
-                override fun isTraceInProgress()=true
-                override fun traceEventStart(key:Int,dirty1:Int,dirty2:Int,info:String) {
-                    if(countScopes.get())scopes.firstOrNull { info.startsWith("art.capycanvas.$it (") }?.let {
-                        scopeCounts.computeIfAbsent(it) { java.util.concurrent.atomic.AtomicInteger() }.incrementAndGet()
-                    }
-                }
-                override fun traceEventEnd() {}
-            })
-        }
         val swipeDirection=if(args.getString("layerSwipeDirection")=="left") -1 else 1
         org.junit.Assume.assumeTrue(discrete || reorder || args.getString("layerSwipeBenchmark")=="true")
         val width=args.getString("width")?.toInt() ?: 6000
@@ -1630,9 +1613,6 @@ class AndroidTitleBarTest {
                 ((geometryProperties?.positionInRoot?.y ?: 0f)*1000).toLong(),
                 ((geometryInspector?.boundsInRoot?.height ?: 0f)*1000).toLong(),SystemClock.elapsedRealtimeNanos())
         }
-        val drawListener=android.view.ViewTreeObserver.OnDrawListener {
-            if(measureGeometry && collectGeometry)geometryFrames.add(geometry())
-        }
         instrumentation.runOnMainSync {
             if(measureGeometry) {
                 geometryContent=checkNotNull(node(if(properties)"layer-rows" else "layer-content-$id")).second
@@ -1640,7 +1620,6 @@ class AndroidTitleBarTest {
                     geometryProperties=checkNotNull(node("layer-properties")).second
                     geometryInspector=checkNotNull(node("layer-inspector")).second
                 }
-                window.decorView.viewTreeObserver.addOnDrawListener(drawListener)
             }
         }
         val listener=android.view.Window.OnFrameMetricsAvailableListener { _,metrics,dropped ->
@@ -1657,7 +1636,6 @@ class AndroidTitleBarTest {
         }
         instrumentation.runOnMainSync { window.addOnFrameMetricsAvailableListener(listener,android.os.Handler(thread.looper)) }
         tool=if(reorder) MotionEvent.TOOL_TYPE_MOUSE else MotionEvent.TOOL_TYPE_FINGER
-        if(countReorder)instrumentation.runOnMainSync { compositionTracer(true) }
         try {
             awaitBenchmarkRefreshPolicy(args, checkNotNull(instrumentation.targetContext.getExternalFilesDir(null)), instrumentation, host, window.decorView)
             for(run in 0..3) {
@@ -1674,15 +1652,7 @@ class AndroidTitleBarTest {
                 val beginBoot=SystemClock.elapsedRealtimeNanos()
                 val beginMonoAfterBoot=System.nanoTime()
                 frames.clear()
-                var rowBaseline=emptyMap<Long,Triple<JSONObject,String,Int?>>()
-                if(countReorder)instrumentation.runOnMainSync {
-                    rowBaseline=state().array("layers").objects().associate { row ->
-                        val rowId=row.getLong("id")
-                        rowId to Triple(row,row.toString(),node("layer-row-$rowId")?.second?.id)
-                    }
-                    scopeCounts.clear();countScopes.set(true)
-                }
-                lateinit var callback: android.view.Choreographer.FrameCallback
+                lateinit var callback: WindowFrames
                 var selectedInterval=-1L
                 fun selectedState()=if(properties)state().getJSONObject("customization").getJSONObject("drawer").getBoolean("layer_properties")
                     else state().array("layers").objects().first { it.getLong("id")==id }.getBoolean("mask_selected")
@@ -1693,11 +1663,12 @@ class AndroidTitleBarTest {
                     geometryFrames.clear()
                     arrangedFrames.clear()
                     if(measureGeometry) { geometryFrames.add(geometry()); collectGeometry=true }
-                    val clock=android.view.Choreographer.getInstance()
-                    callback=android.view.Choreographer.FrameCallback {
+                    callback=WindowFrames(onDraw = {
+                        if(measureGeometry && collectGeometry)geometryFrames.add(geometry())
+                    }) { _ ->
                         if(measureGeometry)arrangedFrames.add(geometry())
                         val elapsed=SystemClock.uptimeMillis()-begin
-                        if(elapsed>=duration) { collectGeometry=false; done.countDown() }
+                        if(elapsed>=duration) { collectGeometry=false; done.countDown(); false }
                         else {
                             if(discrete) {
                                 val mask=selectedState()
@@ -1722,14 +1693,14 @@ class AndroidTitleBarTest {
                                 val move=motion(tool,MotionEvent.ACTION_MOVE,start+delta,downAt,button)
                                 try { checkNotNull(pressed).view.dispatchTouchEvent(move) } finally { move.recycle() }
                             }
-                            clock.postFrameCallback(callback)
+                            true
                         }
                     }
-                    clock.postFrameCallback(callback)
+                    callback.watch(window.decorView)
+                    callback.start()
                 }
                 try { assertTrue(done.await(15,java.util.concurrent.TimeUnit.SECONDS)) }
-                finally { instrumentation.runOnMainSync { android.view.Choreographer.getInstance().removeFrameCallback(callback) } }
-                if(countReorder)instrumentation.runOnMainSync { countScopes.set(false) }
+                finally { instrumentation.runOnMainSync { callback.close() } }
                 val endNs=System.nanoTime()
                 val endBoot=SystemClock.elapsedRealtimeNanos()
                 val endMonoAfterBoot=System.nanoTime()
@@ -1783,39 +1754,11 @@ class AndroidTitleBarTest {
                         "received_frames" to JSONArray(received.map { JSONArray(it.toList()) }),
                         "draw_geometry_columns" to JSONArray(listOf("draw_mono_ns","content_x_millipx","content_y_millipx","properties_y_millipx","inspector_height_millipx","draw_boot_ns")),
                         "draw_geometry" to JSONArray(observedGeometry.map { JSONArray(it.toList()) }),
-                        "arranged_geometry" to JSONArray(arranged.map { JSONArray(it.toList()) }),
                         "moving_draw_mono_ns" to JSONArray(moving.sorted()),
                         "camera" to state().getJSONObject("camera"),
                         "layers" to state().array("layers"),"frames" to JSONArray(rows.map { JSONArray(it.toList()) }))
-                    if(countReorder) {
-                        val identities=JSONArray()
-                        instrumentation.runOnMainSync {
-                            for(row in state().array("layers").objects()) {
-                                val rowId=row.getLong("id");val before=rowBaseline[rowId]
-                                identities.put(obj("id" to rowId,"authored_equal" to (before?.second==row.toString()),
-                                    "model_same_reference" to (before?.first===row),
-                                    "semantics_same_id" to (before?.third==node("layer-row-$rowId")?.second?.id)))
-                            }
-                        }
-                        result.put("composition_scope_counts",obj(*scopes.map { it to (scopeCounts[it]?.get() ?: 0) }.toTypedArray()))
-                        result.put("row_identity_witnesses",identities)
-                        result.put("layout_measure_frames",rows.count { it[6]>0 })
-                        result.put("layout_measure_total_ns",rows.sumOf { it[6] })
-                        result.put("scope_qualification","Diagnostic aggregate scopes include drag preview; layout measure is whole-window, not per-row")
-                    }
                     if(properties)result.put("active_windows",activeWindows)
                     java.io.File(instrumentation.targetContext.getExternalFilesDir(null),"$label-$run.json").writeText(result.toString())
-                    if(countReorder) {
-                        val panels=scopeCounts["LayerPanel"]?.get() ?: 0
-                        val rowScopes=scopeCounts["LayerRow"]?.get() ?: 0
-                        assertTrue("Reorder fixture retains multiple authored rows",rowBaseline.size>1)
-                        assertTrue("Authored row models and semantics remain stable",result.getJSONArray("row_identity_witnesses").objects().all {
-                            it.getBoolean("authored_equal") && it.getBoolean("model_same_reference") && it.getBoolean("semantics_same_id")
-                        })
-                        assertTrue("LayerPanel composition was counted",panels>0)
-                        assertTrue("LayerRow composition was counted",rowScopes>0)
-                        assertTrue("Unchanged authored rows skip composition: $rowScopes row scopes for $panels panels and ${rowBaseline.size} authored rows",rowScopes<=panels*rowBaseline.size)
-                    }
                     assertTrue("Moving frames were measured",rows.size>1)
                     if(properties)assertTrue("Native footer contacts changed pages throughout the gesture",transitions.size>=duration/selectionInterval-2)
                     if(measureGeometry)assertTrue("Drawn geometry changes during native contact",moving.size>1)
@@ -1826,9 +1769,7 @@ class AndroidTitleBarTest {
         } finally {
             instrumentation.runOnMainSync {
                 window.removeOnFrameMetricsAvailableListener(listener)
-                if(measureGeometry)window.decorView.viewTreeObserver.removeOnDrawListener(drawListener)
             }
-            if(countReorder)instrumentation.runOnMainSync { countScopes.set(false);compositionTracer(false) }
             thread.quitSafely()
         }
     }

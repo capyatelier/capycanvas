@@ -378,7 +378,12 @@ class AndroidCanvasBarBenchmarkTest {
                     "over_8_33" to sorted.count { it > 8.333 })
             }
             var refreshRate = 0f
-            fun selected(label: String) = args.getString("labels")?.split(',')?.let { label in it } != false
+            var currentUiLabel = "ui-fixture"
+            fun selected(label: String): Boolean {
+                val selected = args.getString("labels")?.split(',')?.let { label in it } != false
+                if (selected) currentUiLabel = label
+                return selected
+            }
             fun measure(label: String, operation: () -> Unit) {
                 if (!selected(label)) return
                 mark = 0L
@@ -437,10 +442,6 @@ class AndroidCanvasBarBenchmarkTest {
                 val completedAt = rows.map { it.getLong(2) }.filter { it < operated }.sorted()
                 val ui = synchronized(uiFrames) { uiFrames.filter { frame -> frame.vsync < operated && (!label.startsWith("ui-") || activeWindows.length() == 0 ||
                     (0 until activeWindows.length()).any { index -> activeWindows.getJSONObject(index).let { frame.vsync in it.getLong("begin_ns")..it.getLong("end_ns") } }) } }
-                val vsyncs = ui.map { it.vsync }.filter { it <= operated }.distinct().sorted()
-                val uiIntervals = vsyncs.zipWithNext().filter { (before, after) -> !label.startsWith("ui-") || activeWindows.length() == 0 ||
-                    (0 until activeWindows.length()).any { index -> activeWindows.getJSONObject(index).let { before >= it.getLong("begin_ns") && after <= it.getLong("end_ns") } }
-                }.map { (before, after) -> after - before }
                 val seconds = (operated - began) / 1e9
                 val result = obj("label" to label, "display_hz" to refreshRate, "seconds" to seconds, "transparency" to transparency,
                     "utility_requested_hz" to JSONArray(requestedRates.toList()), "utility_active_display_hz" to JSONArray(activeRates.toList()),
@@ -473,8 +474,6 @@ class AndroidCanvasBarBenchmarkTest {
                     "gpu_submit_to_complete_ms" to quantiles(rows.map { (it.getLong(2) - it.getLong(1)) / 1e6 }),
                     "gpu_completion_interval_ms" to quantiles(completedAt.zipWithNext { a, b -> (b - a) / 1e6 }),
                     "ui_frames" to ui.size,
-                    "ui_hz" to if (uiIntervals.isEmpty()) 0.0 else uiIntervals.size * 1e9 / uiIntervals.sum(),
-                    "ui_interval_ms" to quantiles(uiIntervals.map { it / 1e6 }),
                     "ui_frame_ms" to quantiles(ui.map { it.total / 1e6 }),
                     "ui_layout_ms" to quantiles(ui.map { it.layout / 1e6 }),
                     "ui_draw_ms" to quantiles(ui.map { it.draw / 1e6 }),
@@ -796,8 +795,6 @@ class AndroidCanvasBarBenchmarkTest {
             }
             if (wanted("ui")) {
                 awaitBenchmarkRefreshPolicy(args, output, instrumentation, host, activity.window.decorView)
-                var currentUiLabel = "ui-fixture"
-                val uiCleanups = mutableListOf<() -> Unit>()
                 try {
                 require(args.getString("width") != null && args.getString("height") != null && width > 0 && height > 0 && photoPath != null) { "UI rate runs require an explicit reference photo and canvas extent" }
                 check(!BuildConfig.DEBUG) { "UI rate runs require a benchmark build" }
@@ -850,7 +847,6 @@ class AndroidCanvasBarBenchmarkTest {
                 fun nativeBack() = instrumentation.sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_BACK)
                 fun transitions(label: String, journey: () -> Unit) {
                     if (!selected(label)) return
-                    currentUiLabel = label
                     chromeFixture.remove("window_title")
                     canvasReady("$label primer canvas ready")
                     val priming = SystemClock.uptimeMillis() + chromeDuration
@@ -874,47 +870,35 @@ class AndroidCanvasBarBenchmarkTest {
                     var observerFailure: Throwable? = null
                     val deadline = SystemClock.uptimeMillis() + 10000
                     var timedOut = false
-                    var lastDraw = 0L
-                    var lastDrawBoot = 0L
-                    val draw = android.view.ViewTreeObserver.OnDrawListener { lastDraw = System.nanoTime(); lastDrawBoot = SystemClock.elapsedRealtimeNanos() }
-                    val drawingRoots = linkedSetOf<android.view.View>()
-                    fun watch(view: android.view.View) { if (drawingRoots.add(view)) view.viewTreeObserver.addOnDrawListener(draw) }
-                    val observer = object : android.view.Choreographer.FrameCallback {
-                        var previous = ""
-                        var stable = 0
-                        var changes = 0
-                        var previousDraw = 0L
-                        override fun doFrame(frameTimeNanos: Long) {
-                            try {
-                            for (tag in listOf("workspace-menu", "tool-drawer", "new-drawing-dialog")) findTag(tag)?.first?.view?.let(::watch)
+                    var previous = ""
+                    var stable = 0
+                    var changes = 0
+                    var previousDraw = 0L
+                    lateinit var observer: WindowFrames
+                    observer = WindowFrames { _ ->
+                        try {
+                            for (tag in listOf("workspace-menu", "tool-drawer", "new-drawing-dialog")) findTag(tag)?.first?.view?.let(observer::watch)
                             val (signature, visible) = snapshot()
                             val sample = obj("begin_ns" to System.nanoTime(), "begin_boot_ns" to SystemClock.elapsedRealtimeNanos(),
-                                "signature" to signature, "visible" to visible, "draw_ns" to lastDraw, "draw_boot_ns" to lastDrawBoot)
+                                "signature" to signature, "visible" to visible, "draw_ns" to observer.drawNs, "draw_boot_ns" to observer.drawBootNs)
                             samples.add(sample)
                             started.countDown()
                             if (previous != "" && signature != previous) { changes++; stable = 0 }
-                            else if (lastDraw != previousDraw) stable = 0 else stable++
-                            previousDraw = lastDraw
+                            else if (observer.drawNs != previousDraw) stable = 0 else stable++
+                            previousDraw = observer.drawNs
                             previous = signature
                             timedOut = SystemClock.uptimeMillis() > deadline
-                            if (released.get() && stable >= 4 && changes >= 1 && sample.getBoolean("visible") || timedOut) finished.countDown()
-                            else android.view.Choreographer.getInstance().postFrameCallback(this)
-                            } catch (failure: Throwable) { observerFailure = failure; started.countDown(); finished.countDown() }
-                        }
+                            val done = released.get() && stable >= 4 && changes >= 1 && visible || timedOut
+                            if (done) finished.countDown()
+                            !done
+                        } catch (failure: Throwable) { observerFailure = failure; started.countDown(); finished.countDown(); false }
                     }
-                    val cleanup = {
-                        instrumentation.runOnMainSync {
-                            android.view.Choreographer.getInstance().removeFrameCallback(observer)
-                            drawingRoots.forEach { if (it.viewTreeObserver.isAlive) it.viewTreeObserver.removeOnDrawListener(draw) }
-                        }
-                    }
-                    uiCleanups.add(cleanup)
                     var requested = 0L
                     var requestedBoot = 0L
                     try {
                         instrumentation.runOnMainSync {
-                            watch(activity.window.decorView)
-                            android.view.Choreographer.getInstance().postFrameCallback(observer)
+                            observer.watch(activity.window.decorView)
+                            observer.start()
                         }
                         check(started.await(3, java.util.concurrent.TimeUnit.SECONDS)) { "Canvas action bar observer did not start" }
                         observerFailure?.let { throw it }
@@ -924,12 +908,12 @@ class AndroidCanvasBarBenchmarkTest {
                         released.set(true)
                         check(finished.await(12, java.util.concurrent.TimeUnit.SECONDS)) { "Native transition observer timed out" }
                         observerFailure?.let { throw it }
-                    } finally { cleanup(); uiCleanups.remove(cleanup) }
+                    } finally { instrumentation.runOnMainSync { observer.close() } }
                     check(!timedOut) { "Native UI did not settle before the transition deadline" }
                     check(samples.map { it.getString("signature") }.distinct().size > 1 && samples.last().getBoolean("visible")) { "Native control did not change arranged geometry" }
                     if (measuring) {
                         if (diagnostic) activeWindows.put(obj("begin_ns" to requested, "begin_boot_ns" to requestedBoot,
-                            "end_ns" to maxOf(requested, lastDraw, samples.last().getLong("begin_ns")), "end_boot_ns" to maxOf(requestedBoot, lastDrawBoot, samples.last().getLong("begin_boot_ns")),
+                            "end_ns" to maxOf(requested, observer.drawNs, samples.last().getLong("begin_ns")), "end_boot_ns" to maxOf(requestedBoot, observer.drawBootNs, samples.last().getLong("begin_boot_ns")),
                             "kind" to "request_to_observed_ui_settled", "qualification" to "diagnostic"))
                         else {
                             val windows = linkedMapOf<String, JSONObject>()
@@ -975,9 +959,8 @@ class AndroidCanvasBarBenchmarkTest {
                     chromeFixture.put("scalar_midpoint", expected)
                 }
                 var contactDetails: (() -> JSONObject)? = null
-                fun continuous(label: String, sample: () -> String, drawTarget: (() -> Pair<ViewRootForTest, SemanticsNode>?)? = null, drawValue: (() -> Double)? = null, prepare: () -> Unit = {}, contact: (Int) -> Unit) {
+                fun continuous(label: String, sample: () -> String, drawTarget: (() -> Pair<ViewRootForTest, SemanticsNode>?)? = null, prepare: () -> Unit = {}, contact: (Int) -> Unit) {
                     if (!selected(label)) return
-                    currentUiLabel = label
                     val variants = mutableSetOf<String>()
                     boundedContactSampling = true
                     var samples = JSONArray()
@@ -985,7 +968,7 @@ class AndroidCanvasBarBenchmarkTest {
                     var lastInputSamples = JSONArray()
                     var lastObserverOverhead = JSONObject()
                     var lastOrigin = JSONObject()
-                    contactObserver = {
+                    contactObserver = if (drawTarget != null) null else fun() {
                         var value: String? = null
                         try { val next = sample(); value = next; variants.add(next) }
                         finally { samples.put(obj("boot_ns" to SystemClock.elapsedRealtimeNanos(), "state" to value, "details" to contactDetails?.invoke())) }
@@ -1054,7 +1037,8 @@ class AndroidCanvasBarBenchmarkTest {
                                             config.getOrNull(SemanticsProperties.Text)?.forEach { texts.add(it.text) }
                                             config.getOrNull(SemanticsProperties.ProgressBarRangeInfo)?.let { ranges.add(it.current) }
                                         }
-                                        val scalar = checkNotNull(drawValue).invoke()
+                                        val scalar = sample().toDouble()
+                                        variants.add(scalar.toString())
                                         drawRows.add(DrawSample(boot, scalar, texts, ranges))
                                     }
                                 } catch (error: Throwable) { drawFailure.compareAndSet(null, error) }
@@ -1064,7 +1048,7 @@ class AndroidCanvasBarBenchmarkTest {
                         instrumentation.runOnMainSync {
                             if (drawTarget != null) {
                                 root = bind("initial")
-                                lastOrigin = obj("boot_ns" to SystemClock.elapsedRealtimeNanos(), "delivered_scalar" to checkNotNull(drawValue).invoke(),
+                                lastOrigin = obj("boot_ns" to SystemClock.elapsedRealtimeNanos(), "delivered_scalar" to sample().toDouble(),
                                     "node_ids" to JSONArray(infos.map { it.semanticsId }), "texts" to JSONArray(infos.flatMap {
                                         it.semanticsConfiguration?.getOrNull(SemanticsProperties.Text)?.map { text -> text.text } ?: emptyList()
                                     }), "expected_midpoint" to chromeFixture.opt("scalar_midpoint"),
@@ -1127,7 +1111,6 @@ class AndroidCanvasBarBenchmarkTest {
                     } finally { contactObserver = null; boundedContactSampling = false }
                 }
                 if (selected("ui-bar-move")) {
-                    currentUiLabel = "ui-bar-move"
                     reveal("tool_settings")
                     invoke("cancel_transform"); invoke("deselect"); invoke("rectangle_select")
                     val camera = state().getJSONObject("camera")
@@ -1191,6 +1174,30 @@ class AndroidCanvasBarBenchmarkTest {
                     val phase = (distance + 40.0) % 160.0
                     return if (phase <= 80.0) phase - 40.0 else 120.0 - phase
                 }
+                fun numericContact(label: String, kind: String, numeric: JSONObject, value: () -> Double,
+                    control: () -> Pair<ViewRootForTest, SemanticsNode>?, prepare: () -> Unit,
+                    component: JSONObject? = null, relative: Boolean = false) {
+                    chromeFixture.remove("scalar_midpoint")
+                    prepare()
+                    val bounds = settledControl(label, control)
+                    val vertical = kind == "value" || component != null && bounds.height() > bounds.width()
+                    val fraction = if (relative) .5 else .35
+                    val from = contactPoint(bounds, if (vertical) .5 else fraction, if (vertical) fraction else .5)
+                    if (kind == "value") requireValueSweep(from)
+                    val span = (if (vertical) bounds.height() else bounds.width()) * if (relative) .25 else .3
+                    chromeFixture.put("scalar_mapping", obj("control" to numeric,
+                        "operation" to if (kind != "value") "position" else if (relative) "relative_position" else "scrub",
+                        "axis" to if (vertical) "vertical" else "horizontal", "host_control" to if (component != null) "toolbar_slider" else "material_number",
+                        "toolbar_control" to component?.optJSONObject("control"),
+                        "bookmark_values" to component?.getJSONObject("component")?.array("bookmarks")?.objects()?.map { it.getDouble("value") }?.let { JSONArray(it) }))
+                    interactionSnapshot("$label-before", label, control)
+                    targetWindow(control)
+                    continuous(label, { value().toString() }, control, prepare) { milliseconds ->
+                        drag(from, milliseconds) { t -> if (kind == "value") 0.0 to activity.resources.displayMetrics.density * valueTravel(t)
+                            else if (vertical) 0.0 to span * sin(2 * PI * t) else span * sin(2 * PI * t) to 0.0 }
+                    }
+                    interactionSnapshot("$label-after", label, control)
+                }
                 for (id in listOf("size", "opacity", "flow")) {
                     fun field() = state().array("tool_settings").objects().first { it.getString("id") == id }
                     for ((kind, label) in listOf("slider" to "ui-brush-$id-slider", "value" to "ui-brush-$id-value")) {
@@ -1198,7 +1205,6 @@ class AndroidCanvasBarBenchmarkTest {
                         var popup = false
                         var panel = kind == "value"
                         if (panel) reveal("tool_settings")
-                        currentUiLabel = label
                         val component = if (kind == "slider") host.snapshot!!.array("panels").objects().firstOrNull { it.getString("id") == "toolbar" }?.array("tiles")?.objects()
                             ?.firstOrNull { it.optJSONObject("component")?.optJSONObject("numeric")?.optString("id") == id && findTag("component-slider-${it.getInt("id")}") != null } else null
                         fun control(): Pair<ViewRootForTest, SemanticsNode>? {
@@ -1212,38 +1218,16 @@ class AndroidCanvasBarBenchmarkTest {
                             if (findTag("toolbar-setting-$id") != null) { clickControl("toolbar-setting-$id"); popup = true }
                             else { reveal("tool_settings"); panel = true }
                         }
-                        chromeFixture.remove("scalar_midpoint")
                         val prepare = { if (kind == "value") midpoint(label, field().getJSONObject("numeric"), { field().getDouble("value") }, ::control) {
                             childControl("tool-setting-$id", "number-slider-${field().getString("label")}")
                         } }
-                        prepare()
-                        val bounds = settledControl(label, ::control)
-                        val vertical = kind == "value" || component != null && bounds.height() > bounds.width()
-                        val from = contactPoint(bounds, if (vertical) .5 else .35, if (vertical) .35 else .5)
-                        if (kind == "value") requireValueSweep(from)
-                        val span = (if (vertical) bounds.height() else bounds.width()) * .3
                         chromeFixture.put("native_control", if (component != null) "component-slider-${component.getInt("id")}" else if (panel) "tool-setting-$id" else if (popup) "toolbar-number-menu" else "toolbar-setting-$id")
-                        chromeFixture.put("scalar_mapping", obj("control" to field().getJSONObject("numeric"),
-                            "operation" to if (kind == "value") "scrub" else "position", "fine" to false, "callback_float32" to true, "show_thumb" to false, "track_inset_dp" to 0,
-                            "axis" to if (vertical) "vertical" else "horizontal", "host_control" to if (component != null) "toolbar_slider" else "material_number",
-                            "toolbar_control" to component?.optJSONObject("control"),
-                            "bookmark_values" to component?.getJSONObject("component")?.array("bookmarks")?.objects()?.map { it.getDouble("value") }?.let { JSONArray(it) },
-                            "value_speed_dp_s" to if (kind == "value") 240 else JSONObject.NULL, "value_amplitude_dp" to if (kind == "value") 40 else JSONObject.NULL,
-                            "input_origin" to JSONArray(listOf(from.first, from.second)),
-                            "bounds" to JSONArray(listOf(bounds.left, bounds.top, bounds.right, bounds.bottom))))
-                        interactionSnapshot("$label-before", label, ::control)
-                        targetWindow(::control)
-                        continuous(label, { field().getDouble("value").toString() }, ::control, { field().getDouble("value") }, prepare) { milliseconds ->
-                            drag(from, milliseconds) { t -> if (kind == "value") 0.0 to activity.resources.displayMetrics.density * valueTravel(t)
-                                else if (vertical) 0.0 to span * sin(2 * PI * t) else span * sin(2 * PI * t) to 0.0 }
-                        }
-                        interactionSnapshot("$label-after", label, ::control)
+                        numericContact(label, kind, field().getJSONObject("numeric"), { field().getDouble("value") }, ::control, prepare, component)
                         if (popup) { instrumentation.runOnMainSync { activity.onBackPressedDispatcher.onBackPressed() }; waitFor("numeric popup closed") { findTag("toolbar-number-menu") == null } }
                     }
                 }
                 chromeFixture.remove("native_control"); chromeFixture.remove("scalar_midpoint")
                 if (selected("ui-panel-change")) {
-                    currentUiLabel = "ui-panel-change"
                     reveal("tool_settings")
                     val commands = listOf("select", "drawing_brush")
                     val entries = host.snapshot!!.getJSONObject("header").getJSONObject("model").array("zones").values().flatMap { (it as JSONArray).objects() }
@@ -1275,36 +1259,20 @@ class AndroidCanvasBarBenchmarkTest {
                 }
                 val opacityCaption = host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("opacity")
                 val layerOpacityLabels = listOf("ui-layer-opacity-slider", "ui-layer-opacity-value", "ui-layer-row-opacity")
-                layerOpacityLabels.firstOrNull(::selected)?.let { currentUiLabel = it; reveal("layers") }
+                layerOpacityLabels.firstOrNull(::selected)?.let { reveal("layers") }
                 for (kind in listOf("slider", "value")) {
                     val opacityLabel = "ui-layer-opacity-$kind"
                     if (!selected(opacityLabel)) continue
-                    currentUiLabel = opacityLabel
+
                     fun opacityControl() = childControl("layer-opacity", "number-$kind-$opacityCaption")
-                    chromeFixture.remove("scalar_midpoint")
                     fun opacity() = state().array("layers").objects().first { it.optBoolean("editing") }.getDouble("opacity")
                     val prepare = { if (kind == "value") midpoint(opacityLabel, host.catalog.getJSONObject("layer_opacity"), ::opacity, ::opacityControl) {
                         childControl("layer-opacity", "number-slider-$opacityCaption")
                     } }
-                    prepare()
-                    val bounds = settledControl(opacityLabel, ::opacityControl)
-                    val from = contactPoint(bounds)
-                    if (kind == "value") requireValueSweep(from)
-                    val span = bounds.width() * .25
-                    chromeFixture.put("scalar_mapping", obj("control" to host.catalog.getJSONObject("layer_opacity"),
-                        "operation" to if (kind == "value") "relative_position" else "position", "fine" to false, "callback_float32" to true, "show_thumb" to false, "track_inset_dp" to 0,
-                        "axis" to if (kind == "value") "vertical" else "horizontal", "host_control" to "material_number_inline",
-                        "value_speed_dp_s" to if (kind == "value") 240 else JSONObject.NULL, "value_amplitude_dp" to if (kind == "value") 40 else JSONObject.NULL,
-                        "input_origin" to JSONArray(listOf(from.first, from.second)),
-                        "bounds" to JSONArray(listOf(bounds.left, bounds.top, bounds.right, bounds.bottom))))
-                    targetWindow(::opacityControl)
-                    continuous(opacityLabel, { opacity().toString() }, ::opacityControl, ::opacity, prepare) { milliseconds ->
-                        drag(from, milliseconds) { t -> if (kind == "value") 0.0 to activity.resources.displayMetrics.density * valueTravel(t) else span * sin(2 * PI * t) to 0.0 }
-                    }
+                    numericContact(opacityLabel, kind, host.catalog.getJSONObject("layer_opacity"), ::opacity, ::opacityControl, prepare, relative = true)
                 }
                 chromeFixture.remove("scalar_midpoint")
                 if (selected("ui-layer-row-opacity")) {
-                    currentUiLabel = "ui-layer-row-opacity"
                     val previousLayer = state().array("layers").objects().first { it.optBoolean("editing") }.getLong("id")
                     val target = paintLayer
                     val rowTag = "layer-row-$target"
@@ -1344,7 +1312,6 @@ class AndroidCanvasBarBenchmarkTest {
                         .put("gesture", "two_finger_tap").put("gesture_begin_boot_ns", gestureBegan).put("gesture_end_boot_ns", gestureEnded)
                     chromeFixture.put("scalar_mapping", obj("control" to host.catalog.getJSONObject("layer_opacity"),
                         "operation" to "position", "axis" to "horizontal", "host_control" to "material_number",
-                        "callback_float32" to true, "show_thumb" to false, "track_inset_dp" to 0,
                         "bounds" to JSONArray(listOf(bounds.left, bounds.top, bounds.right, bounds.bottom))))
                     targetWindow(::slider)
                     java.io.Closeable {
@@ -1357,7 +1324,7 @@ class AndroidCanvasBarBenchmarkTest {
                         continuous("ui-layer-row-opacity", {
                             check(state().getJSONObject("layer_tools").optLong("opacity_popup", -1) == target) { "Native layer row opacity popup disappeared" }
                             state().array("layers").objects().first { it.getLong("id") == target }.getDouble("opacity").toString()
-                        }, ::slider, { state().array("layers").objects().first { it.getLong("id") == target }.getDouble("opacity") }) { milliseconds -> drag(from, milliseconds) { t -> bounds.width() * .25 * sin(2 * PI * t) to 0.0 } }
+                        }, ::slider) { milliseconds -> drag(from, milliseconds) { t -> bounds.width() * .25 * sin(2 * PI * t) to 0.0 } }
                     }
                 }
                 fun scroll(label: String, tag: String, fixture: JSONObject, itemTags: List<List<String>> = emptyList()) {
@@ -1424,7 +1391,6 @@ class AndroidCanvasBarBenchmarkTest {
                     finally { injectedToolType = MotionEvent.TOOL_TYPE_STYLUS }
                 }
                 if (selected("ui-layers-scroll")) {
-                    currentUiLabel = "ui-layers-scroll"
                     reveal("layers")
                     val existing = state().array("layers").objects().map { it.getLong("id") }.toSet()
                     val count = args.getString("uiLayerCount", "32")!!.toInt().also { require(it >= 16) }
@@ -1438,14 +1404,12 @@ class AndroidCanvasBarBenchmarkTest {
                     action(obj("type" to "select_layer", "id" to paintLayer))
                 }
                 if (selected("ui-brushes-scroll")) {
-                    currentUiLabel = "ui-brushes-scroll"
                     invoke("brush"); reveal("brushes")
                     val view = state().getJSONObject("tool_panels").optJSONObject("brushes") ?: state().getJSONObject("tool_set")
                     scroll("ui-brushes-scroll", "panel-body-brushes", obj("group_count" to view.array("groups").length(),
                         "subtool_count" to view.array("subtools").length(), "catalog_brush_count" to host.catalog.array("brush_categories").objects().sumOf { it.array("brushes").length() }))
                 }
                 if (selected("ui-filters-scroll")) {
-                    currentUiLabel = "ui-filters-scroll"
                     reveal("adjustments")
                     val choices = state().array("adjustments").objects()
                     val plain = choices.map { "adjustment-${it.getString("id")}" }
@@ -1471,7 +1435,6 @@ class AndroidCanvasBarBenchmarkTest {
                     return content(found.second) to true
                 }
                 if (selected("ui-drawer-open-close")) {
-                    currentUiLabel = "ui-drawer-open-close"
                     val header = host.snapshot!!.getJSONObject("header").getJSONObject("model").array("zones").values()
                         .flatMap { (it as JSONArray).objects() }.first { it.getJSONObject("item").optJSONObject("control")?.optString("panel") == "layers" }.getInt("id")
                     fun drawer() = state().getJSONObject("customization").optJSONObject("drawer")
@@ -1526,7 +1489,6 @@ class AndroidCanvasBarBenchmarkTest {
                     check(findTag("workspace-menu") == null) { "Native Back did not dismiss filter menu" }
                 }
                 if (selected("ui-menu-submenu")) {
-                    currentUiLabel = "ui-menu-submenu"
                     val menu = native { JSONObject(Native.query(it, obj("type" to "application_menu", "menu" to "filter").toString())) }
                     val submenu = menuItems(menu).first { it.array("sections").length() > 0 && it.optBoolean("enabled", true) }
                     chromeFixture = obj("menu" to "filter", "submenu" to submenu.getString("label"), "submenu_item_count" to menuItems(submenu).size)
@@ -1560,7 +1522,6 @@ class AndroidCanvasBarBenchmarkTest {
                     }
                 }
                 if (selected("ui-dialog-transition")) {
-                    currentUiLabel = "ui-dialog-transition"
                     val menu = native { JSONObject(Native.query(it, obj("type" to "application_menu", "menu" to "file").toString())) }
                     val create = menuItems(menu).first { it.optJSONObject("action")?.optString("command") == "new_document" }
                     chromeFixture = obj("dialog" to "new-drawing-dialog", "canvas" to documentExtent)
@@ -1597,7 +1558,6 @@ class AndroidCanvasBarBenchmarkTest {
                     }
                 }
                 if (selected("ui-grouped-tool-menu")) {
-                    currentUiLabel = "ui-grouped-tool-menu"
                     val entry = host.snapshot!!.getJSONObject("header").getJSONObject("model").array("zones").values().flatMap { (it as JSONArray).objects() }
                         .first { it.getJSONObject("item").optJSONObject("control")?.let { control ->
                             control.optString("kind") == "command" && control.optString("command") == "drawing_brush"
@@ -1619,7 +1579,6 @@ class AndroidCanvasBarBenchmarkTest {
                     }
                 }
                 if (selected("ui-tile-drag")) {
-                    currentUiLabel = "ui-tile-drag"
                     val candidates = host.snapshot!!.array("panels").objects().map { panel ->
                         val panelId = panel.getString("id")
                         panel to panel.array("tiles").objects().filter { tile -> tile.optBoolean("enabled") && !tile.has("component") &&
@@ -1668,8 +1627,6 @@ class AndroidCanvasBarBenchmarkTest {
                 } finally {
                     contactObserver = null; boundedContactSampling = false; measuring = false
                     injectedToolType = MotionEvent.TOOL_TYPE_STYLUS
-                    uiCleanups.toList().asReversed().forEach { runCatching(it) }
-                    uiCleanups.clear()
                 }
             }
             if (wanted("paint")) {
@@ -1928,8 +1885,7 @@ class AndroidCanvasBarBenchmarkTest {
                     Scrub("dehaze", "amount", "Amount", "effect-dehaze-amount-drag", .3, span = .4),
                     Scrub("exposure", "exposure", "Exposure", "effect-chain-exposure-drag", .45, true),
                 )
-                val selectedLabels = args.getString("labels")?.split(',')
-                for (scrub in scrubs.filter { selectedLabels == null || it.label in selectedLabels }) {
+                for (scrub in scrubs.filter { selected(it.label) }) {
                     val preparedAt = System.nanoTime()
                     val lookup = if (scrub.id == "color_lookup") lookupDocument() else null
                     val photoLayer = lookup?.first ?: photoDocument()
@@ -2116,10 +2072,9 @@ class AndroidCanvasBarBenchmarkTest {
                 }
             }
             if (wanted("pointwise-navigation")) {
-                val selectedLabels = args.getString("labels")?.split(',')
                 for (id in listOf("none", "invert", "desaturate", "threshold", "photo_filter", "color_lookup", "shadows_highlights", "clarity", "dehaze", "gaussian_blur", "unsharp_mask")) {
                     val label = "effect-$id-pan"
-                    if (selectedLabels != null && label !in selectedLabels) continue
+                    if (!selected(label)) continue
                     val preparedAt = System.nanoTime()
                     val lookup = if (id == "color_lookup") lookupDocument() else null
                     val photoLayer = lookup?.first ?: photoDocument()
@@ -2256,8 +2211,6 @@ class AndroidCanvasBarBenchmarkTest {
                 }
             }
             if (wanted("gradients")) {
-                val selectedLabels = args.getString("labels")?.split(',')
-                fun enabled(label: String) = selectedLabels == null || label in selectedLabels
                 fun reveal(panel: String) {
                     action(obj("type" to "customize", "action" to obj("type" to "set_panel_visible", "panel" to panel, "visible" to true)))
                     val group = host.panelGroup(panel)
@@ -2267,7 +2220,7 @@ class AndroidCanvasBarBenchmarkTest {
                 }
                 for (effectId in listOf("gradient_map", "gradient_fill")) {
                     val label = "effect-$effectId-stop-drag"
-                    if (!enabled(label)) continue
+                    if (!selected(label)) continue
                     val photoLayer = photoDocument()
                     action(obj("type" to "select_layer", "id" to photoLayer))
                     waitFor("Gradient catalog ready") { !state().getJSONObject("filter_load").getBoolean("pending") }
@@ -2312,7 +2265,7 @@ class AndroidCanvasBarBenchmarkTest {
                     }
                 }
                 val label = "gradient-tool-geometry-drag"
-                if (enabled(label)) {
+                if (selected(label)) {
                     photoDocument(); invoke("add_layer"); invoke("gradient"); reveal("tool_settings")
                     clickControl("tool-segment-gradient-shape-0"); invoke("fit_canvas"); waitGuide("Gradient tool source settled")
                     fun geometry() = state().getJSONObject("camera").getJSONArray("work_area")
@@ -2345,7 +2298,7 @@ class AndroidCanvasBarBenchmarkTest {
                     }
                 }
             }
-            if (wanted("curves") && args.getString("labels")?.split(',')?.let { "effect-curves-drag" in it } != false) {
+            if (wanted("curves") && selected("effect-curves-drag")) {
                 val photoLayer = photoDocument()
                 action(obj("type" to "select_layer", "id" to photoLayer))
                 waitFor("Curves catalog ready") { !state().getJSONObject("filter_load").getBoolean("pending") }

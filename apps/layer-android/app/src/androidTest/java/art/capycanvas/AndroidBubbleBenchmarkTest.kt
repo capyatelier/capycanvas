@@ -146,13 +146,8 @@ class AndroidBubbleBenchmarkTest {
                 SystemClock.sleep(1000)
                 output.resolve("fixture.json").writeText(obj("theme" to theme, "width" to width, "height" to height, "photo" to photo.path,
                     "bubbles" to JSONArray(packets()), "workspace" to state().getJSONObject("workspace"), "transparency" to state().getJSONObject("settings").getString("transparency")).toString())
-                if (args.getString("waitForGo") == "true") {
-                    awaitBenchmarkRefreshPolicy(args, output, instrumentation, host, activity.window.decorView)
-                    scenario.onActivity { assertSame("Policy setup retains the private Activity", activity, it) }
-                    host.awaitMain("Canvas ready after refresh-policy setup", 180_000) {
-                        host.snapshot?.optBoolean("canvas_ready") == true && host.snapshot?.optBoolean("shaders_ready") == true
-                    }
-                }
+                awaitBenchmarkRefreshPolicy(args, output, instrumentation, host, activity.window.decorView)
+                scenario.onActivity { assertSame("Policy setup retains the private Activity", activity, it) }
                 if (workload == "palette-opening") {
                     val handler = checkNotNull(host.headerKeyHandler)
                     val inputField = checkNotNull(handler.javaClass.declaredFields.singleOrNull { it.type == BubbleInteraction::class.java }) { "Bubble frame-loop owner missing: ${handler.javaClass.declaredFields.map { it.type.name }}" }.apply { isAccessible = true }

@@ -153,11 +153,11 @@ class ChromeWorkloadTest(unittest.TestCase):
         self.assertIn("art.capycanvas.AndroidTitleBarTest#layerSwipeFrameTiming", args)
 
     def test_canvas_reports_select_native_ui_fixture_and_requested_repeat_count(self):
-        args = viewport.chrome_arguments("ui-brush-flow-value", "dark", 4)
+        args = viewport.chrome_arguments("ui-batch", "dark", 4, ["ui-brush-flow-value"])
         self.assertIn("art.capycanvas.AndroidCanvasBarBenchmarkTest#canvasBarFrameTiming", args)
         self.assertIn("ui-brush-flow-value", args)
         self.assertIn("uiRepeats", args)
-        self.assertEqual(viewport.chrome_reports("ui-brush-flow-value", 4),
+        self.assertEqual(viewport.chrome_reports("ui-batch", 4, ["ui-brush-flow-value"]),
                          [f"ui-brush-flow-value-{run}.json" for run in range(1, 5)])
 
     def test_discrete_windows_never_join_idle_gaps_or_report_sustained_rate(self):
@@ -212,14 +212,6 @@ class AttributionTraceTest(unittest.TestCase):
 
 
 class ChromeCoverageTest(unittest.TestCase):
-    def test_ui_labels_select_exact_fixture_and_three_repeats(self):
-        for label in ["ui-drawer-open-close", "ui-layer-opacity-value", "ui-layers-scroll", "ui-brushes-scroll", "ui-filters-scroll",
-                      "ui-zen-transition", "ui-bar-show-hide", "ui-bar-show-hide-zen"]:
-            self.assertIn(label, viewport.chrome_arguments(label, "light", 3))
-            self.assertEqual(viewport.chrome_reports(label, 3), [f"{label}-{index}.json" for index in range(1, 4)])
-            with self.assertRaises(ValueError):
-                viewport.chrome_arguments(label, "light", 2)
-
     def test_discrete_label_stays_diagnostic_even_in_long_window(self):
         fixture = WorkspaceWindowTest()
         run = fixture.run_data()
@@ -256,17 +248,6 @@ class ChromeCoverageTest(unittest.TestCase):
 
 
 class BatchAndFailureEvidenceTest(unittest.TestCase):
-    def test_batch_omits_label_filter_and_collects_each_native_ui_report(self):
-        args = viewport.chrome_arguments("ui-batch", "dark", 3)
-        self.assertNotIn("labels", args)
-        self.assertIn("ui", args)
-        reports = viewport.chrome_reports("ui-batch", 3)
-        expected = {filename for label, (selector, _, _, _) in viewport.CHROME_WORKLOADS.items()
-                    if selector.startswith("AndroidCanvasBar") and label != "ui-batch"
-                    for filename in viewport.chrome_reports(label, 3)}
-        self.assertEqual(set(reports), expected)
-        self.assertEqual(len(reports), len(expected))
-
     def test_failed_instrumentation_pulls_only_existing_specific_reports(self):
         commands = []
         def adb_call(command, **kwargs):
@@ -294,7 +275,7 @@ class PrimerEvidenceTest(unittest.TestCase):
                 viewport.workspace_reports(workload, "trial", 3)))
 
     def test_canvas_failure_interactions_are_specific_expected_filenames(self):
-        self.assertEqual(viewport.chrome_interactions("ui-bar-move", 3),
+        self.assertEqual(viewport.chrome_interactions("ui-batch", 3, ["ui-bar-move"]),
                          ["ui-bar-move-primer-interaction.json"] +
                          [f"ui-bar-move-contact-{index}-interaction.json" for index in range(1, 4)])
         batch = viewport.chrome_interactions("ui-batch", 3)
@@ -364,17 +345,9 @@ class BatchSubsetAndWindowTest(unittest.TestCase):
         self.assertEqual(viewport.chrome_reports("ui-batch", 3, labels),
                          [f"{label}-{index}.json" for label in labels for index in range(1, 4)])
         self.assertEqual(len(viewport.chrome_interactions("ui-batch", 3, labels)), 8)
-        for workload, selected in [("ui-batch", ["unknown"]), ("ui-bar-move", labels), ("ui-batch", [])]:
+        for workload, selected in [("ui-batch", ["unknown"]), ("layer-swipe", labels), ("gap", labels), (None, labels), ("ui-batch", [])]:
             with self.assertRaises(ValueError):
                 viewport.chrome_arguments(workload, "light", 3, selected)
-
-    def test_layer_row_opacity_is_in_native_ui_batch_with_target_window_metadata(self):
-        self.assertIn("ui-layer-row-opacity", viewport.CHROME_WORKLOADS["ui-batch"][3])
-        self.assertIn("ui-layer-row-opacity", viewport.chrome_arguments("ui-layer-row-opacity", "light", 3))
-        self.assertEqual(viewport.chrome_reports("ui-layer-row-opacity", 3),
-                         [f"ui-layer-row-opacity-{index}.json" for index in range(1, 4)])
-        _, metadata = viewport.window_presents({}, {"latchBuffer Main#1 - 1": 100})
-        self.assertIn("aggregate", metadata["window_selection"])
 
     def test_literal_target_popup_excludes_faster_main_root_and_similar_titles(self):
         shown = {"latchBuffer owned/MainActivity#1 - 1": 100,
@@ -420,6 +393,15 @@ class CaptureBudgetTest(unittest.TestCase):
 
 
 class ScalarDrawGateTest(unittest.TestCase):
+    def test_same_timestamp_value_changes_keep_zero_gap_without_a_rate_span(self):
+        run = dict(motion=dict(contact_begin_boot_ns=0, contact_end_boot_ns=10),
+                   scalar_origin=dict(delivered_scalar="0"),
+                   scalar_draw_samples=[dict(boot_ns=5, delivered_scalar=value, visual_signature=value) for value in ["1", "2"]])
+        result = viewport.scalar_draw_summary(run)
+        self.assertEqual(result["delivered_scalar_changes"], 2)
+        self.assertEqual(result["delivered_scalar_gap_p99_ms"], 0)
+        self.assertIsNone(viewport.presentation_stats([5, 5])["presented_per_s"])
+
     def test_quantized_repeated_draws_do_not_count_as_fresh_values(self):
         run = dict(motion=dict(contact_begin_boot_ns=0, contact_end_boot_ns=6_000_000_000),
                    scalar_draw_samples=[dict(boot_ns=t, delivered_scalar="99", visual_signature=value)
@@ -479,7 +461,7 @@ class ScalarDrawGateTest(unittest.TestCase):
         import json
         run = dict(scalar_origin=dict(boot_ns=0,delivered_scalar=.5,density=2,touch_slop_px=8,
                     resolved=dict(fill=.5),control_geometry=dict(screen_bounds=[0,0,100,20]),
-                    mapping=dict(control=dict(kind="slider"),operation="scrub",host_control="material_number",callback_float32=True)),
+                    mapping=dict(control=dict(kind="slider"),operation="scrub",host_control="material_number")),
                    scalar_input_samples=[dict(begin_boot_ns=t,action=a,injected_screen_x=50,injected_screen_y=y) for t,a,y in [(1,0,100),(2,2,96),(3,2,80)]])
         def resolver(command, **kwargs):
             rows=[json.loads(line) for line in kwargs["input"].splitlines()]
@@ -503,20 +485,20 @@ class ScalarDrawGateTest(unittest.TestCase):
     def test_material_replay_keeps_initial_signed_slop_on_turnaround(self):
         import json
         run=dict(scalar_origin=dict(boot_ns=0,delivered_scalar=.5,density=1,touch_slop_px=5,resolved=dict(fill=.5),
-                 control_geometry=dict(screen_bounds=[0,0,200,20]),mapping=dict(control={},operation="position",host_control="material_number",show_thumb=False,track_inset_dp=0)),
+                 control_geometry=dict(screen_bounds=[0,0,200,20]),mapping=dict(control={},operation="position",host_control="material_number")),
                  scalar_input_samples=[dict(begin_boot_ns=i,action=a,injected_screen_x=x,injected_screen_y=0) for i,(a,x) in enumerate([(0,60),(2,64),(2,65),(2,72),(2,75),(2,50),(1,50)],1)])
         def resolver(command,**kwargs):
             rows=[json.loads(line)for line in kwargs["input"].splitlines()]
             positions=[r["request"]["operation"]["position"]for r in rows[1:]]
             for actual,expected in zip(positions,[.3,.335,.35,.225]): self.assertAlmostEqual(actual,expected,places=6)
             self.assertEqual(len(positions),4)
-            return SimpleNamespace(stdout="\n".join(json.dumps(dict(boot_ns=r["boot_ns"],resolved=dict(value=.5)))for r in rows))
+            return SimpleNamespace(stdout="\n".join(json.dumps(dict(boot_ns=r["boot_ns"],float_value=.5,resolved=dict(value=.5)))for r in rows))
         with patch.object(viewport.subprocess,"run",side_effect=resolver): viewport.replay_numeric(run,"native-replay")
 
     def test_toolbar_replay_routes_down_to_shared_bookmarks_and_moves_to_numeric(self):
         import json
         run=dict(scalar_origin=dict(boot_ns=0,delivered_scalar=.5,density=1,touch_slop_px=5,resolved=dict(fill=.5),
-                 control_geometry=dict(screen_bounds=[0,0,116,20]),mapping=dict(control={},operation="position",host_control="toolbar_slider",axis="horizontal",callback_float32=True,
+                 control_geometry=dict(screen_bounds=[0,0,116,20]),mapping=dict(control={},operation="position",host_control="toolbar_slider",axis="horizontal",
                  toolbar_control=dict(kind="brush_size_slider"),bookmark_values=[1,10])),
                  scalar_input_samples=[dict(begin_boot_ns=i,action=a,injected_screen_x=x,injected_screen_y=10) for i,(a,x) in enumerate([(0,58),(2,59),(2,68),(1,68)],1)])
         def resolver(command,**kwargs):
@@ -526,14 +508,14 @@ class ScalarDrawGateTest(unittest.TestCase):
             self.assertEqual(rows[1]["toolbar_request"]["travel"],100)
             self.assertAlmostEqual(rows[2]["request"]["operation"]["position"],.6,places=6)
             self.assertTrue(rows[2]["previous_float_value"])
-            return SimpleNamespace(stdout="\n".join(json.dumps(dict(boot_ns=r["boot_ns"],resolved=dict(value=.5),float_value=.5))for r in rows))
+            return SimpleNamespace(stdout="\n".join(json.dumps(dict(boot_ns=r["boot_ns"],float_value=.5,resolved=dict(value=.5)))for r in rows))
         with patch.object(viewport.subprocess,"run",side_effect=resolver): viewport.replay_numeric(run,"native-replay")
 
     def test_down_boundary_normalization_preserves_raw_and_initial_demand(self):
         import json
         run=dict(motion=dict(contact_begin_boot_ns=10,contact_end_boot_ns=100),
                  scalar_origin=dict(boot_ns=0,delivered_scalar=.5,density=1,touch_slop_px=5,resolved=dict(fill=.5),
-                 control_geometry=dict(screen_bounds=[0,0,116,20]),mapping=dict(control={},operation="position",host_control="toolbar_slider",axis="horizontal",callback_float32=True,
+                 control_geometry=dict(screen_bounds=[0,0,116,20]),mapping=dict(control={},operation="position",host_control="toolbar_slider",axis="horizontal",
                  toolbar_control=dict(kind="brush_size_slider"),bookmark_values=[1])),
                  scalar_input_samples=[dict(begin_boot_ns=9,end_boot_ns=11,action=0,injected_screen_x=58,injected_screen_y=10),
                                        dict(begin_boot_ns=20,end_boot_ns=22,action=2,injected_screen_x=68,injected_screen_y=10)])

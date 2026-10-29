@@ -59,7 +59,7 @@ class AdaptiveIdentityTest(unittest.TestCase):
 
     def test_retains_exact_activity_and_task(self):
         outputs=[self.foreground,'123',self.ready,'',self.foreground,'123',self.ready,'hardware']
-        with tempfile.TemporaryDirectory() as directory, patch('android_adaptive.validate_identity'), patch('android_adaptive.subprocess.check_output',side_effect=outputs) as command, patch('android_adaptive.subprocess.run') as helper:
+        with tempfile.TemporaryDirectory() as directory, patch('android_adaptive.subprocess.check_output',side_effect=outputs) as command, patch('android_adaptive.subprocess.run') as helper:
             enable_adaptive(self.adb,PACKAGE,Path('helper'),Path(directory),LABEL,Path('apk'),Path('aapt'),'remote','fresh')
             self.assertIn(self.adb+['shell','am','task','focus','42'],[call.args[0] for call in command.call_args_list])
             argv=helper.call_args.args[0]
@@ -68,13 +68,13 @@ class AdaptiveIdentityTest(unittest.TestCase):
             self.assertTrue(Path(directory,'private-activity.json').exists())
 
     def test_stale_ready_never_opens_settings(self):
-        with tempfile.TemporaryDirectory() as directory, patch('android_adaptive.validate_identity'), patch('android_adaptive.subprocess.check_output',side_effect=[self.foreground,'123',self.ready.replace('fresh','old')]), patch('android_adaptive.subprocess.run') as helper:
+        with tempfile.TemporaryDirectory() as directory, patch('android_adaptive.subprocess.check_output',side_effect=[self.foreground,'123',self.ready.replace('fresh','old')]), patch('android_adaptive.subprocess.run') as helper:
             with self.assertRaisesRegex(ValueError,'READY'):enable_adaptive(self.adb,PACKAGE,Path('helper'),Path(directory),LABEL,Path('apk'),Path('aapt'),'remote','fresh')
             helper.assert_not_called()
 
     def test_recreation_rejects_release(self):
         outputs=[self.foreground,'123',self.ready,'',self.foreground.replace('{abc','{def')]
-        with tempfile.TemporaryDirectory() as directory, patch('android_adaptive.validate_identity'), patch('android_adaptive.subprocess.check_output',side_effect=outputs), patch('android_adaptive.subprocess.run'):
+        with tempfile.TemporaryDirectory() as directory, patch('android_adaptive.subprocess.check_output',side_effect=outputs), patch('android_adaptive.subprocess.run'):
             with self.assertRaisesRegex(ValueError,'activity changed'):enable_adaptive(self.adb,PACKAGE,Path('helper'),Path(directory),LABEL,Path('apk'),Path('aapt'),'remote','fresh')
             self.assertFalse(Path(directory,'private-activity.json').exists())
 

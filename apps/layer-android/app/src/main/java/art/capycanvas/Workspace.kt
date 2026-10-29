@@ -647,7 +647,7 @@ private fun expandedShape(expansion: JSONObject, density: Float) = GenericShape 
     }
 }
 
-private class PanelContent(val id: Int, val active: String, val panels: JSONArray, val tabs: Boolean,
+internal class PanelContent(val id: Int, val active: String, val panels: JSONArray, val tabs: Boolean,
     val minimumBody: Float, val tiles: JSONObject?, val vertical: Boolean, val footer: Float?)
 
 @Composable private fun panelContent(group: JSONObject): PanelContent {
@@ -658,7 +658,7 @@ private class PanelContent(val id: Int, val active: String, val panels: JSONArra
     return remember(id,active,panels,tabs,minimum,tiles,vertical,footer) { PanelContent(id,active,panels,tabs,minimum,tiles,vertical,footer) }
 }
 
-@Composable private fun PanelGroup(host: CanvasHost, state: JSONObject, group: PanelContent,
+@Composable internal fun PanelGroup(host: CanvasHost, state: JSONObject, group: PanelContent,
     panels: Map<String, JSONObject>, dock: DockInteraction, modifier: Modifier) {
     val colors = LocalPalette.current
     val active = group.active

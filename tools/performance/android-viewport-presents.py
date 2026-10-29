@@ -56,7 +56,7 @@ WHERE {match} ORDER BY presented_at"""
 
 def presentation_stats(times):
     gaps = [(b - a) / 1e6 for a, b in zip(times, times[1:])]
-    return dict(presented_per_s=(len(times) - 1) * 1e9 / (times[-1] - times[0]) if len(times) > 1 else None,
+    return dict(presented_per_s=(len(times) - 1) * 1e9 / (times[-1] - times[0]) if len(times) > 1 and times[-1] > times[0] else None,
                 presented_gap_p99_ms=quantile(gaps, .99), actual_present_timestamps_ns=times)
 
 
@@ -183,33 +183,29 @@ CHROME_WORKLOADS = {
 
 DISCRETE_CHROME_LABELS = {"ui-drawer-open-close", "ui-panel-change", "ui-bar-show-hide", "ui-bar-show-hide-zen", "ui-zen-transition", "ui-menu-open", "ui-menu-submenu", "ui-dialog-transition", "ui-grouped-tool-menu", "ui-tile-drag"}
 
-for chrome_label in ["ui-drawer-open-close", "ui-bar-move", "ui-panel-change", "ui-bar-show-hide", "ui-bar-show-hide-zen", "ui-zen-transition",
+CHROME_WORKLOADS["ui-batch"] = ("AndroidCanvasBarBenchmarkTest#canvasBarFrameTiming", "canvas-bar-benchmark",
+                                {"canvasBarBenchmark": "true", "scenarios": "ui"},
+                                ["ui-drawer-open-close", "ui-bar-move", "ui-panel-change", "ui-bar-show-hide", "ui-bar-show-hide-zen", "ui-zen-transition",
                      "ui-layer-opacity-value", "ui-layers-scroll", "ui-brushes-scroll", "ui-filters-scroll",
                      "ui-menu-open", "ui-menu-submenu", "ui-dialog-transition", "ui-grouped-tool-menu", "ui-tile-drag",
                      "ui-brush-size-slider", "ui-brush-size-value", "ui-brush-opacity-slider", "ui-brush-opacity-value",
-                     "ui-brush-flow-slider", "ui-brush-flow-value", "ui-layer-opacity-slider", "ui-layer-row-opacity"]:
-    CHROME_WORKLOADS[chrome_label] = ("AndroidCanvasBarBenchmarkTest#canvasBarFrameTiming", "canvas-bar-benchmark",
-                                    {"canvasBarBenchmark": "true", "scenarios": "ui", "labels": chrome_label}, [chrome_label])
-
-CHROME_WORKLOADS["ui-batch"] = ("AndroidCanvasBarBenchmarkTest#canvasBarFrameTiming", "canvas-bar-benchmark",
-                                {"canvasBarBenchmark": "true", "scenarios": "ui"},
-                                [label for label, (selector, _, _, _) in CHROME_WORKLOADS.items() if selector.startswith("AndroidCanvasBar")])
+                     "ui-brush-flow-slider", "ui-brush-flow-value", "ui-layer-opacity-slider", "ui-layer-row-opacity"])
 
 
 def chrome_labels(workload, selected=None):
-    labels = CHROME_WORKLOADS[workload][3]
     if selected is None:
-        return labels
-    if workload != "ui-batch" or not selected or any(label not in labels for label in selected):
+        return CHROME_WORKLOADS[workload][3]
+    if workload != "ui-batch" or not selected or any(label not in CHROME_WORKLOADS["ui-batch"][3] for label in selected):
         raise ValueError("--labels requires ui-batch and known native UI labels")
     return list(dict.fromkeys(selected))
 
 
 def chrome_arguments(workload, theme, repeats, selected=None):
+    selected = chrome_labels(workload, selected) if selected is not None else None
     selector, _, arguments, _ = CHROME_WORKLOADS[workload]
     arguments = dict(arguments, theme=theme, layerBenchmarkTheme=theme)
     if selected is not None:
-        arguments["labels"] = ",".join(chrome_labels(workload, selected))
+        arguments["labels"] = ",".join(selected)
     if selector.startswith("AndroidCanvasBar"):
         if repeats < 3:
             raise ValueError("CanvasBar UI workloads require at least three measured repeats")
@@ -268,8 +264,8 @@ def selection_observations(run, shown):
 
 
 def window_presents(run, shown):
-    fixture = run.get("fixture") or run.get("chromeFixture") or {}
-    title = run.get("raw_window_title") or run.get("window_title") or fixture.get("window_title")
+    fixture = run.get("fixture") or {}
+    title = run.get("window_title") or fixture.get("window_title")
     counts = {}
     selected = {}
     for latch, time in shown.items():
@@ -345,9 +341,6 @@ def replay_numeric(run, resolver):
             moved = True
             op = dict(type="scrub", origin=value, pixels=pixels, fine=False) if operation == "scrub" else dict(type="position", position=f32(f32(origin["resolved"]["fill"])+f32(pixels/200)))
         elif operation == "position":
-            if mapping.get("show_thumb") is not False or mapping.get("track_inset_dp") != 0:
-                run["scalar_replay"] = dict(status="unavailable", reason="Measured slider thumb/track contract missing")
-                return
             if row["action"] == 0:
                 continue
             if row["action"] == 1:
@@ -366,13 +359,39 @@ def replay_numeric(run, resolver):
         else:
             run["scalar_replay"] = dict(status="unavailable", reason="Unsupported native numeric operation")
             return
-        requests.append(dict(boot_ns=timestamp, previous_float_value=bool(mapping.get("callback_float32")), previous_value=not mapping.get("callback_float32",False), request=dict(control=control, value=value, operation=op)))
+        requests.append(dict(boot_ns=timestamp, previous_float_value=True, request=dict(control=control, value=value, operation=op)))
     result = subprocess.run([str(resolver)], input="".join(json.dumps(row)+"\n" for row in requests), text=True, capture_output=True, check=True)
     resolved = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
     if len(resolved) != len(requests) or any("error" in row for row in resolved):
         raise ValueError("Shared numeric resolver failed or returned incomplete replay")
-    run["scalar_implied_samples"] = [dict(boot_ns=row["boot_ns"], value=row["float_value"] if mapping.get("callback_float32") else row["resolved"]["value"]) for row in resolved]
+    run["scalar_implied_samples"] = [dict(boot_ns=row["boot_ns"], value=row["float_value"]) for row in resolved]
     run["scalar_replay"] = dict(status="exact", resolver=str(resolver), source="captured native control/origin/Float input; shared NumericRequest resolver", operation=operation, down_boundary_normalizations=down_normalizations)
+
+
+def scalar_changes(rows, begin, end, timestamp, value, previous=None):
+    times, observations = [], []
+    last = None
+    for row in rows:
+        time = timestamp(row)
+        if type(time) is not int or last is not None and time < last:
+            raise ValueError("Scalar timestamps must be monotonic")
+        last = time
+        current = value(row)
+        if not begin <= time <= end:
+            continue
+        observations.append(time)
+        if current is None or current == "":
+            raise ValueError("Scalar target has no observable value")
+        if previous is not None and current != previous:
+            times.append(time)
+        previous = current
+    return times, observations
+
+
+def scalar_change_stats(times, begin, end, prefix):
+    stats = presentation_stats(times)
+    return {prefix+"_changes": len(times), prefix+"_changes_per_s": len(times)*1e9/(end-begin),
+            prefix+"_gap_p99_ms": stats["presented_gap_p99_ms"], prefix+"_timestamps_boot_ns": times}
 
 
 def scalar_implied_summary(run, delivered_times):
@@ -381,20 +400,8 @@ def scalar_implied_summary(run, delivered_times):
     if rows is None or proof.get("status") != "exact":
         return dict(implied_value_gate="unavailable: exact shared-resolver replay required")
     begin, end = run["motion"]["contact_begin_boot_ns"], run["motion"]["contact_end_boot_ns"]
-    previous_time = None
-    previous_value = run.get("scalar_origin", {}).get("delivered_scalar")
-    implied = []
-    for row in rows:
-        timestamp = row["boot_ns"]
-        if type(timestamp) is not int or previous_time is not None and timestamp < previous_time:
-            raise ValueError("Implied scalar timestamps must be monotonic")
-        previous_time = timestamp
-        if not begin <= timestamp <= end:
-            continue
-        value = row["value"]
-        if previous_value is not None and value != previous_value:
-            implied.append(timestamp)
-        previous_value = value
+    implied, _ = scalar_changes(rows, begin, end, lambda row: row["boot_ns"], lambda row: row["value"],
+                                run.get("scalar_origin", {}).get("delivered_scalar"))
     response_gaps = []
     for before, after in zip([begin] + delivered_times, delivered_times + [end]):
         demand = next((time for time in implied if (before < time or before == begin == time) and time <= after), None)
@@ -418,9 +425,7 @@ def scalar_implied_summary(run, delivered_times):
                 display_eligible_implied_timestamps_boot_ns=eligible,
                 display_opportunity_proof=run.get("scalar_display_opportunity_proof", "unavailable"),
                 delivered_to_display_eligible_change_ratio=len(delivered_times)/len(eligible) if eligible else None,
-                implied_value_changes=count, implied_value_changes_per_s=count*1e9/(end-begin),
-                implied_value_gap_p99_ms=quantile([(b-a)/1e6 for a,b in zip(implied,implied[1:])], .99),
-                implied_value_timestamps_boot_ns=implied,
+                **scalar_change_stats(implied, begin, end, "implied_value"),
                 delivered_to_implied_change_ratio=len(delivered_times)/count if count else None,
                 demand_conditioned_delivery_gap_p99_ms=quantile(response_gaps, .99),
                 demand_conditioned_delivery_gap_max_ms=max(response_gaps, default=None))
@@ -435,60 +440,30 @@ def scalar_draw_summary(run):
     if type(begin) is not int or type(end) is not int or end <= begin:
         raise ValueError("Scalar draw observations require an ordered contact")
     origin = run.get("scalar_origin", {})
-    previous = {"delivered_scalar": origin["delivered_scalar"]} if "delivered_scalar" in origin else {}
-    changes = {"delivered_scalar": [], "visual_signature": []}
-    last_time = None
-    observations = []
-    for sample in samples:
-        timestamp = sample["boot_ns"]
-        if type(timestamp) is not int or last_time is not None and timestamp < last_time:
-            raise ValueError("Scalar draw timestamps must be monotonic")
-        last_time = timestamp
-        if not begin <= timestamp <= end:
-            continue
-        observations.append(timestamp)
-        for key in changes:
-            value = sample[key]
-            if value is None or value == "":
-                raise ValueError("Scalar target has no observable value")
-            if key in previous and value != previous[key]:
-                changes[key].append(timestamp)
-            previous[key] = value
+    changes = {}
+    for key in ["delivered_scalar", "visual_signature"]:
+        changes[key], observations = scalar_changes(samples, begin, end, lambda row: row["boot_ns"],
+                                                    lambda row: row[key], origin.get(key))
     if not observations:
         raise ValueError("No scalar draw observations inside contact")
     result = dict(fresh_value_gate="delivered scalar and composed semantics observed at draw; not pixel/SF identity or accepted-input rate",
                   scalar_observation_count=len(observations), scalar_contact_span_ms=(end-begin)/1e6,
-                  scalar_observation_onset_ms=(observations[0]-begin)/1e6 if observations else None,
-                  scalar_observation_trailing_ms=(end-observations[-1])/1e6 if observations else None)
+                  scalar_observation_onset_ms=(observations[0]-begin)/1e6,
+                  scalar_observation_trailing_ms=(end-observations[-1])/1e6)
     for key, prefix in [("delivered_scalar", "delivered_scalar"), ("visual_signature", "fresh_draw_value")]:
-        times = changes[key]
-        result.update({prefix+"_changes": len(times), prefix+"_changes_per_s": len(times)*1e9/(end-begin),
-                       prefix+"_gap_p99_ms": quantile([(b-a)/1e6 for a,b in zip(times,times[1:])], .99),
-                       prefix+"_timestamps_boot_ns": times})
+        result.update(scalar_change_stats(changes[key], begin, end, prefix))
     result.update(scalar_implied_summary(run, changes["delivered_scalar"]))
     if "scalar_observer_overhead" in run:
         result["scalar_observer_overhead"] = run["scalar_observer_overhead"]
     inputs = run.get("scalar_input_samples")
     if inputs is not None:
-        previous_time = None
-        previous_position = None
-        changed = []
-        events = 0
         for row in inputs:
-            timestamp = row["begin_boot_ns"]
-            if type(timestamp) is not int or type(row["end_boot_ns"]) is not int or row["end_boot_ns"] < timestamp or previous_time is not None and timestamp < previous_time:
+            if type(row["end_boot_ns"]) is not int or type(row["begin_boot_ns"]) is not int or row["end_boot_ns"] < row["begin_boot_ns"]:
                 raise ValueError("Scalar input timestamps must be ordered injection intervals")
-            previous_time = timestamp
-            if not begin <= timestamp <= end:
-                continue
-            events += 1
-            position = (row["x"], row["y"])
-            if previous_position is not None and position != previous_position:
-                changed.append(timestamp)
-            previous_position = position
-        result.update(injected_scalar_input_events=events, injected_scalar_position_changes=len(changed),
-                      injected_scalar_position_changes_per_s=len(changed)*1e9/(end-begin),
-                      injected_scalar_position_gap_p99_ms=quantile([(b-a)/1e6 for a,b in zip(changed,changed[1:])], .99))
+        changed, observations = scalar_changes(inputs, begin, end, lambda row: row["begin_boot_ns"], lambda row: (row["x"], row["y"]))
+        stats = scalar_change_stats(changed, begin, end, "injected_scalar_position")
+        stats.pop("injected_scalar_position_timestamps_boot_ns")
+        result.update(stats, injected_scalar_input_events=len(observations))
     return result
 
 
@@ -623,15 +598,13 @@ def main():
     p.add_argument("--adaptive-apk", type=pathlib.Path)
     p.add_argument("--adaptive-aapt", type=pathlib.Path)
     p.add_argument("--numeric-resolver", type=pathlib.Path, help="Shared NumericRequest JSONL replay executable")
-    p.add_argument("--labels", help="Comma-separated native UI labels; only with --workspace-workload ui-batch")
+    p.add_argument("--labels", help="Comma-separated native UI labels for ui-batch: " + ", ".join(CHROME_WORKLOADS["ui-batch"][3]))
     args = p.parse_args()
     if args.adaptive_script and (not args.adaptive_script.is_file() or not args.adaptive_label or not args.adaptive_label.strip() or not args.adaptive_apk or not args.adaptive_aapt or args.profile or args.attribution or not args.workspace_workload):
         p.error("Adaptive requires the verified own APK, aapt, and a clean workspace run")
     if args.numeric_resolver and not args.numeric_resolver.is_file():
         p.error("Shared numeric resolver executable is unavailable")
     selected = args.labels.split(",") if args.labels is not None else None
-    if selected is not None and args.workspace_workload != "ui-batch":
-        p.error("--labels requires --workspace-workload ui-batch")
     if args.attribution and (not args.workspace_workload or args.profile):
         p.error("--attribution requires a workspace workload and cannot combine with --profile")
     if args.workspace_runner == "self" and not args.workspace_workload:
@@ -649,7 +622,7 @@ def main():
             p.error("Adaptive requires a positive --extra expectedRefreshHz")
         if not math.isfinite(refresh) or refresh <= 0:
             p.error("Adaptive requires a positive --extra expectedRefreshHz")
-    if chrome:
+    if chrome or selected is not None:
         try:
             chrome_arguments(args.workspace_workload, args.theme, args.repeats, selected)
         except ValueError as error:
@@ -718,56 +691,45 @@ def main():
             time.sleep(1)
             print(f"Running {label}; instrumentation log streams to {args.output}", flush=True)
             with (args.output / f"{label}-instrument.log").open("w") as stream:
-                if args.adaptive_script:
-                    process = subprocess.Popen(cmd, stdout=stream, stderr=subprocess.STDOUT, text=True)
-                    with cleanup_steps(
-                        lambda: subprocess.run(adb + ["shell", "am", "force-stop", args.package], check=True, capture_output=True) if process.poll() is None else None,
-                        lambda: process.wait(timeout=15) if process.poll() is None else None,
-                    ):
-                        deadline = time.monotonic() + budget
-                        while process.poll() is None:
-                            if time.monotonic() >= deadline:
-                                raise TimeoutError("Adaptive fixture readiness exceeded capture budget")
-                            if subprocess.run(adb + ["shell", "test", "-f", f"{remote}/ready"], capture_output=True).returncode == 0:
-                                enable_adaptive(adb, args.package, args.adaptive_script, args.output, args.adaptive_label, args.adaptive_apk, args.adaptive_aapt, remote, token)
-                                subprocess.run(adb + ["shell", "touch", f"{remote}/go"], check=True, capture_output=True)
-                                break
-                            time.sleep(.1)
-                        process.wait(timeout=max(1, deadline - time.monotonic()))
-                elif not args.profile:
+                if not args.adaptive_script and not args.profile:
                     subprocess.run(cmd, stdout=stream, stderr=subprocess.STDOUT, text=True, timeout=budget)
                 else:
                     process = subprocess.Popen(cmd, stdout=stream, stderr=subprocess.STDOUT, text=True)
                     profile = None
                     perf = f"/data/local/tmp/{args.package}-{label}.perf.data"
-                    try:
-                        deadline = time.monotonic() + 600
+                    ready_file, go_file = ("ready", "go") if args.adaptive_script else (f"{label}-profile-ready", f"{label}-profile-go")
+                    with cleanup_steps(
+                        lambda: subprocess.run(adb + ["shell", "am", "force-stop", args.package], check=True, capture_output=True) if process.poll() is None else None,
+                        lambda: process.wait(timeout=30) if process.poll() is None else None,
+                        lambda: profile.wait(timeout=15) if profile is not None and profile.poll() is None else None,
+                    ):
+                        deadline = time.monotonic() + budget
                         while process.poll() is None:
-                            if time.monotonic() > deadline:
-                                raise TimeoutError("Workspace profile readiness exceeded ten minutes")
-                            ready = subprocess.run(adb + ["shell", "test", "-f", f"{remote}/{label}-profile-ready"], capture_output=True)
-                            if ready.returncode == 0:
-                                with (args.output / "simpleperf.log").open("w") as profile_log:
-                                    profile = subprocess.Popen(adb + ["shell", "simpleperf", "record", "--app", args.package,
-                                        "-e", "cpu-clock", "-f", "199", "--call-graph", "dwarf,16384", "--duration", "8", "-o", perf], stdout=profile_log, stderr=subprocess.STDOUT)
-                                    time.sleep(1)
-                                    if profile.poll() is not None and profile.returncode:
-                                        raise RuntimeError("App-only simpleperf refused sampling; see simpleperf.log")
-                                    subprocess.run(adb + ["shell", "touch", f"{remote}/{label}-profile-go"], check=True, capture_output=True)
+                            if time.monotonic() >= deadline:
+                                raise TimeoutError("Fixture readiness exceeded capture budget")
+                            if subprocess.run(adb + ["shell", "test", "-f", f"{remote}/{ready_file}"], capture_output=True).returncode == 0:
+                                if args.adaptive_script:
+                                    enable_adaptive(adb, args.package, args.adaptive_script, args.output, args.adaptive_label, args.adaptive_apk, args.adaptive_aapt, remote, token)
+                                if args.profile:
+                                    profile_log = (args.output / "simpleperf.log").open("w")
+                                    try:
+                                        profile = subprocess.Popen(adb + ["shell", "simpleperf", "record", "--app", args.package,
+                                            "-e", "cpu-clock", "-f", "199", "--call-graph", "dwarf,16384", "--duration", "8", "-o", perf], stdout=profile_log, stderr=subprocess.STDOUT)
+                                        time.sleep(1)
+                                        if profile.poll() is not None and profile.returncode:
+                                            raise RuntimeError("App-only simpleperf refused sampling; see simpleperf.log")
+                                    finally:
+                                        profile_log.close()
+                                subprocess.run(adb + ["shell", "touch", f"{remote}/{go_file}"], check=True, capture_output=True)
+                                if args.profile:
                                     profile.wait(timeout=15)
-                                if profile.returncode:
-                                    raise RuntimeError("App-only simpleperf failed; see simpleperf.log")
-                                subprocess.run(adb + ["pull", perf, str(args.output / "perf.data")], check=True, capture_output=True)
-                                subprocess.run(adb + ["shell", "rm", "-f", perf], check=True, capture_output=True)
+                                    if profile.returncode:
+                                        raise RuntimeError("App-only simpleperf failed; see simpleperf.log")
+                                    subprocess.run(adb + ["pull", perf, str(args.output / "perf.data")], check=True, capture_output=True)
+                                    subprocess.run(adb + ["shell", "rm", "-f", perf], check=True, capture_output=True)
                                 break
                             time.sleep(.1)
-                        process.wait(timeout=budget)
-                    finally:
-                        if process.poll() is None:
-                            subprocess.run(adb + ["shell", "am", "force-stop", args.package], capture_output=True)
-                            process.wait(timeout=30)
-                        if profile is not None and profile.poll() is None:
-                            profile.wait(timeout=15)
+                        process.wait(timeout=max(1, deadline - time.monotonic()))
             log = (args.output / f"{label}-instrument.log").read_text()
         (args.output / f"{label}-instrument.log").write_text(log)
         local = args.output / f"{label}.perfetto-trace"

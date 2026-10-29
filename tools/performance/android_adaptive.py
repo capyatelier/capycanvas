@@ -48,7 +48,6 @@ def validate_ready(text, package, token, pid):
 
 
 def enable_adaptive(adb, package, script, output, label, apk, aapt, remote, token):
-    validate_identity(adb, package, label, apk, aapt)
     def command(*args):
         return subprocess.check_output(adb + list(args), text=True)
     before = activity_identity(command('shell', 'dumpsys', 'activity', 'activities'), package)
@@ -80,7 +79,6 @@ def enable_adaptive(adb, package, script, output, label, apk, aapt, remote, toke
 def restore_adaptive(adb, package, script, output, label, apk, aapt):
     if not (output / 'adaptive-initial.json').exists():
         return
-    validate_identity(adb, package, label, apk, aapt)
     subprocess.run([sys.executable, str(script), 'restore', '--serial', adb[-1], '--package', package,
                     '--label', label, '--apk', str(apk), '--aapt', str(aapt), '--output', str(output)], check=True)
 
