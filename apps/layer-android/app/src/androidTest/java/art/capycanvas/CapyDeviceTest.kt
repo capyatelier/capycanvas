@@ -45,20 +45,15 @@ class CapyDeviceRule(private val nativeFileJobs: Boolean = false) : ExternalReso
         private set
     val recovery get() = AppStorage.of(instrumentation.targetContext).sessions
     private lateinit var userPreferences: Map<String, *>
-    private var rotation: Pair<Int, Boolean>? = null
     fun landscape(scenario: ActivityScenario<MainActivity>) = orient(scenario, true)
     fun portrait(scenario: ActivityScenario<MainActivity>) = orient(scenario, false)
     private fun orient(scenario: ActivityScenario<MainActivity>, landscape: Boolean) {
         fun turned(activity: MainActivity) = (activity.resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE) != landscape
         var turn = false
-        var current = 0
         scenario.onActivity {
-            if (rotation == null) rotation = it.window.decorView.display.rotation to (android.provider.Settings.System.getInt(it.contentResolver, android.provider.Settings.System.ACCELEROMETER_ROTATION, 1) != 0)
-            current = it.window.decorView.display.rotation
+            it.requestedOrientation = if (landscape) android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE else android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
             turn = turned(it)
         }
-        if (!turn) return
-        assertTrue(instrumentation.uiAutomation.setRotation(if (current % 2 == 0) android.app.UiAutomation.ROTATION_FREEZE_90 else android.app.UiAutomation.ROTATION_FREEZE_0))
         val until = SystemClock.uptimeMillis() + 10_000
         while (turn && SystemClock.uptimeMillis() < until) {
             SystemClock.sleep(50)
@@ -77,8 +72,6 @@ class CapyDeviceRule(private val nativeFileJobs: Boolean = false) : ExternalReso
     }
     override fun after() {
         val context = instrumentation.targetContext
-        rotation?.let { (previous, auto) -> instrumentation.uiAutomation.setRotation(if (auto) android.app.UiAutomation.ROTATION_UNFREEZE else previous) }
-        rotation = null
         context.deleteSharedPreferences(CanvasHost.preferencesName)
         AppStorage.directoryForTest = null
         DocumentController.nativeFileJobsForTest = false

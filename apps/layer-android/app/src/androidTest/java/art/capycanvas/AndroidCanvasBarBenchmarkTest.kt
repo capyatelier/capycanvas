@@ -889,7 +889,7 @@ class AndroidCanvasBarBenchmarkTest {
                             for (tag in listOf("workspace-menu", "tool-drawer", "new-drawing-dialog")) findTag(tag)?.first?.view?.let(::watch)
                             val (signature, visible) = snapshot()
                             val sample = obj("begin_ns" to System.nanoTime(), "begin_boot_ns" to SystemClock.elapsedRealtimeNanos(),
-                                "signature" to signature, "visible" to visible)
+                                "signature" to signature, "visible" to visible, "draw_ns" to lastDraw, "draw_boot_ns" to lastDrawBoot)
                             samples.add(sample)
                             started.countDown()
                             if (previous != "" && signature != previous) { changes++; stable = 0 }
@@ -1469,6 +1469,31 @@ class AndroidCanvasBarBenchmarkTest {
                     fun content(node: SemanticsNode): String = node.boundsInRoot.toString() +
                         node.config.getOrNull(SemanticsProperties.Text)?.joinToString { it.text }.orEmpty() + node.children.joinToString { content(it) }
                     return content(found.second) to true
+                }
+                if (selected("ui-drawer-open-close")) {
+                    currentUiLabel = "ui-drawer-open-close"
+                    val header = host.snapshot!!.getJSONObject("header").getJSONObject("model").array("zones").values()
+                        .flatMap { (it as JSONArray).objects() }.first { it.getJSONObject("item").optJSONObject("control")?.optString("panel") == "layers" }.getInt("id")
+                    fun drawer() = state().getJSONObject("customization").optJSONObject("drawer")
+                    drawer()?.let { current ->
+                        val anchor = current.getJSONObject("anchor")
+                        check(anchor.getString("kind") == "header") { "Drawer fixture requires a native header owner" }
+                        nativeTap("header-control-${anchor.getInt("id")}")
+                        waitFor("Previous native drawer closes") { drawer() == null }
+                    }
+                    chromeFixture = obj("drawer_panel" to "layers", "header_control" to header, "journey" to "native_header_drawer_open_close")
+                    transitions("ui-drawer-open-close") {
+                        for ((phase, opened) in listOf("open" to true, "close" to false)) {
+                            val samples = arrangedTransitions({
+                                val node = findTag("tool-drawer")
+                                val complete = if (opened) drawer()?.getJSONObject("anchor")?.optInt("id") == header && controlGeometry(node).optBoolean("visible")
+                                    else drawer() == null && node == null
+                                layoutSignature("tool-drawer").first to complete
+                            }, diagnostic = true) { nativeTap("header-control-$header") }
+                            if (measuring) activeWindows.getJSONObject(activeWindows.length()-1)
+                                .put("phase", phase).put("draw_geometry", JSONArray(samples))
+                        }
+                    }
                 }
                 fun menuText(text: String) = findTag("workspace-menu")?.let { (root, parent) ->
                     parent.find { it.config.getOrNull(SemanticsProperties.Text)?.any { value -> value.text == text } == true }?.let { root to it }

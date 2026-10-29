@@ -181,9 +181,9 @@ CHROME_WORKLOADS = {
     "layer-properties": ("AndroidTitleBarTest#layerSwipeFrameTiming", "", {"layerPropertiesBenchmark": "true"}, ["layer-properties"]),
 }
 
-DISCRETE_CHROME_LABELS = {"ui-panel-change", "ui-bar-show-hide", "ui-bar-show-hide-zen", "ui-zen-transition", "ui-menu-open", "ui-menu-submenu", "ui-dialog-transition", "ui-grouped-tool-menu", "ui-tile-drag"}
+DISCRETE_CHROME_LABELS = {"ui-drawer-open-close", "ui-panel-change", "ui-bar-show-hide", "ui-bar-show-hide-zen", "ui-zen-transition", "ui-menu-open", "ui-menu-submenu", "ui-dialog-transition", "ui-grouped-tool-menu", "ui-tile-drag"}
 
-for chrome_label in ["ui-bar-move", "ui-panel-change", "ui-bar-show-hide", "ui-bar-show-hide-zen", "ui-zen-transition",
+for chrome_label in ["ui-drawer-open-close", "ui-bar-move", "ui-panel-change", "ui-bar-show-hide", "ui-bar-show-hide-zen", "ui-zen-transition",
                      "ui-layer-opacity-value", "ui-layers-scroll", "ui-brushes-scroll", "ui-filters-scroll",
                      "ui-menu-open", "ui-menu-submenu", "ui-dialog-transition", "ui-grouped-tool-menu", "ui-tile-drag",
                      "ui-brush-size-slider", "ui-brush-size-value", "ui-brush-opacity-slider", "ui-brush-opacity-value",

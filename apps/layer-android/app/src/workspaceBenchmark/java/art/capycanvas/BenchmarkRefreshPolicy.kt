@@ -8,12 +8,16 @@ fun awaitBenchmarkRefreshPolicy(args: Bundle, output: File, instrumentation: and
     if (args.getString("waitForGo") != "true") return
     output.resolve("go").delete()
     val token = checkNotNull(args.getString("benchmarkReadyToken"))
+    @android.annotation.SuppressLint("BlockedPrivateApi")
+    val destroy = android.app.UiAutomation::class.java.getDeclaredMethod("destroy")
+    destroy.invoke(instrumentation.uiAutomation)
     output.resolve("ready").writeText(org.json.JSONObject().put("token", token).put("package", instrumentation.targetContext.packageName).put("pid", android.os.Process.myPid()).toString())
     val deadline = SystemClock.uptimeMillis() + 180_000
     while (!output.resolve("go").exists()) {
         check(SystemClock.uptimeMillis() < deadline) { "Timed out waiting for benchmark refresh-policy setup" }
         SystemClock.sleep(50)
     }
+    checkNotNull(instrumentation.getUiAutomation(0))
     var refresh = 0f
     var ready = false
     while (!ready) {

@@ -213,7 +213,7 @@ class AttributionTraceTest(unittest.TestCase):
 
 class ChromeCoverageTest(unittest.TestCase):
     def test_ui_labels_select_exact_fixture_and_three_repeats(self):
-        for label in ["ui-layer-opacity-value", "ui-layers-scroll", "ui-brushes-scroll", "ui-filters-scroll",
+        for label in ["ui-drawer-open-close", "ui-layer-opacity-value", "ui-layers-scroll", "ui-brushes-scroll", "ui-filters-scroll",
                       "ui-zen-transition", "ui-bar-show-hide", "ui-bar-show-hide-zen"]:
             self.assertIn(label, viewport.chrome_arguments(label, "light", 3))
             self.assertEqual(viewport.chrome_reports(label, 3), [f"{label}-{index}.json" for index in range(1, 4)])
@@ -223,13 +223,15 @@ class ChromeCoverageTest(unittest.TestCase):
     def test_discrete_label_stays_diagnostic_even_in_long_window(self):
         fixture = WorkspaceWindowTest()
         run = fixture.run_data()
-        run["label"] = "ui-zen-transition"
-        run["active_windows"] = [dict(begin_boot_ns=run["begin_boot_ns"], end_boot_ns=run["end_boot_ns"])]
-        result = viewport.chrome_summary(run, fixture.shown())
-        self.assertFalse(result["sustained"])
-        self.assertNotIn("presented_per_s", result["windows"][0])
-        self.assertEqual(result["windows"][0]["qualification"], "diagnostic")
-        self.assertEqual(len(result["windows"][0]["actual_present_timestamps_ns"]), 5)
+        for label in ["ui-zen-transition", "ui-drawer-open-close"]:
+            with self.subTest(label=label):
+                run["label"] = label
+                run["active_windows"] = [dict(begin_boot_ns=run["begin_boot_ns"], end_boot_ns=run["end_boot_ns"])]
+                result = viewport.chrome_summary(run, fixture.shown())
+                self.assertFalse(result["sustained"])
+                self.assertNotIn("presented_per_s", result["windows"][0])
+                self.assertEqual(result["windows"][0]["qualification"], "diagnostic")
+                self.assertEqual(len(result["windows"][0]["actual_present_timestamps_ns"]), 5)
 
     def test_workspace_preserves_fresh_geometry_rates(self):
         fixture = WorkspaceWindowTest()

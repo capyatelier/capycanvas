@@ -390,6 +390,8 @@ trace as evidence.
   `ui-layers-scroll`, `ui-brushes-scroll`, `ui-filters-scroll` and
   `ui-layer-row-opacity` (the native layer-row two-finger opacity popup). They select the native
   UI fixture and require at least three `--repeats` measured contacts.
+  `ui-bar-move` moves selected artwork through Transform Y; its timing includes
+  canvas transform work.
   Numeric reports also retain input positions, delivered scalar values and
   composed values observed at draw, with change rates and gap p99. Repeated
   quantized values do not demand a new frame each refresh; compare fresh-value
@@ -403,11 +405,13 @@ trace as evidence.
   changes; demand-conditioned gaps exclude unchanged plateaus. The display
   opportunities are inferred from the display mode and actual target-window
   presents, not fresh-buffer identities. Value scrubs use a 240 dp/s sweep.
-  `ui-bar-show-hide`, `ui-bar-show-hide-zen`, `ui-panel-change` and
+  `ui-drawer-open-close`, `ui-bar-show-hide`, `ui-bar-show-hide-zen`, `ui-panel-change` and
   `ui-zen-transition`, `ui-menu-open`, `ui-menu-submenu`, `ui-dialog-transition`,
   `ui-grouped-tool-menu` and `ui-tile-drag` report diagnostic transition windows. Each active window is
   reported separately; short transitions report presentation gaps and onset
   without a sustained frame rate, and idle gaps never join adjacent transitions.
+  `ui-drawer-open-close` taps the native Layers header owner and retains
+  independent actual-draw and arranged-geometry timestamps for each open/close.
   Run `--attribution` separately for diagnostic app graphics, view, input,
   runtime, scheduler and CPU-frequency traces. It enables Compose tracing where
   the fixture supports it, queries Perfetto for `gpu.renderstages`, and records
