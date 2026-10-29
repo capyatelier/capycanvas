@@ -2903,8 +2903,13 @@ impl<R: CanvasRenderer> UiSession<R> {
         let Some(swap) = color_history_session::paint_edit(&action).filter(|_| !self.defers(&action)) else {
             return self.dispatch_action(action);
         };
+        let context = self.color_edit_context();
+        let wheel_motion = matches!(&action, UiAction::Color { action: ColorAction::PickWheel { .. } });
         let before = self.paint_before();
         let result = self.dispatch_action(action);
+        if result.is_ok() && !wheel_motion && context != self.color_edit_context() && self.end_color_contact() {
+            return result;
+        }
         self.record_paint(before, swap && result.is_ok());
         result
     }

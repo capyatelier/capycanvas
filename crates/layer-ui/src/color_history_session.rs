@@ -77,13 +77,16 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.apply_brush()?;
         Ok((regions::BRUSH, false))
     }
-    pub(super) fn end_color_contact(&mut self) {
+    pub(super) fn end_color_contact(&mut self) -> bool {
         let mask = self.paint_mask();
         if let Some((started, start)) = self.color_history.contact.take()
             && started == mask
         {
             let (history, colors) = self.paints(mask);
             history.record(start.remembered_paints(), colors);
+            true
+        } else {
+            false
         }
     }
     pub(super) fn step_paint(&mut self, redo: bool) -> Result<(u32, bool), String> {

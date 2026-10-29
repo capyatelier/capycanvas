@@ -1171,6 +1171,53 @@ fn cancelled_wheel_contacts_restore_the_paint_without_a_step() {
 }
 
 #[test]
+fn retargeted_color_contacts_keep_the_new_context_and_one_history_step() {
+    use layer_core::color::{RgbColor, RgbSpace, SampleDepth};
+    for platform in Platform::ALL {
+        for terminal in [ContactPhase::Up, ContactPhase::Cancel] {
+            for target in ["background", "transparent", "toggle", "shape", "slot", "slot_intensity"] {
+                let mut document = Document::new(layer_core::PortableId::random(), 32, 32, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+                document.artwork.compositions.get_mut(document.artwork.root).unwrap().color.depth = SampleDepth::F32;
+                let mut s = UiSession::new(Recorder { color: document.composition().color, ..Default::default() }, document, [32, 32], platform).unwrap();
+                let original = s.state.colors.clone();
+                let context = s.color_edit_context();
+                s.dispatch(UiAction::ColorContact { phase: ContactPhase::Down }).unwrap();
+                for stops in [2., 3.] {
+                    s.dispatch(UiAction::ColorEdit { context, action: ColorAction::HdrIntensity { stops } }).unwrap();
+                }
+                let edited = s.state.colors.foreground;
+                let color = RgbColor::new(RgbSpace::Srgb, [0.2, 0.4, 0.6, 1.]).unwrap();
+                let action = match target {
+                    "background" => ColorAction::Select { slot: ColorSlot::Background },
+                    "transparent" => ColorAction::Select { slot: ColorSlot::Transparent },
+                    "toggle" => ColorAction::ToggleTransparent,
+                    "shape" => ColorAction::Shape { shape: s.state.colors.other_shapes()[0] },
+                    "slot" => ColorAction::SetSlot { slot: ColorSlot::Background, color },
+                    _ => ColorAction::SetSlotIntensity { slot: ColorSlot::Background, color, stops: 1. },
+                };
+                s.dispatch(UiAction::Color { action }).unwrap();
+                let selected = s.state.colors.clone();
+                s.dispatch(UiAction::ColorEdit { context, action: ColorAction::HdrIntensity { stops: 5. } }).unwrap();
+                assert_eq!(s.state.colors, selected, "{platform:?} {target}: stale motion");
+                s.dispatch(UiAction::ColorContact { phase: terminal }).unwrap();
+                assert_eq!(s.state.colors, selected, "{platform:?} {target} {terminal:?}: stale terminal");
+                if selected.background != original.background {
+                    for _ in 0..2 { s.dispatch(UiAction::Color { action: ColorAction::Undo }).unwrap(); }
+                    assert_eq!(s.state.colors.background, original.background);
+                    s.dispatch(UiAction::Color { action: ColorAction::Redo }).unwrap();
+                    assert_eq!(s.state.colors.background, selected.background);
+                }
+                s.dispatch(UiAction::Color { action: ColorAction::Select { slot: ColorSlot::Foreground } }).unwrap();
+                for _ in 0..2 { s.dispatch(UiAction::Color { action: ColorAction::Undo }).unwrap(); }
+                assert_eq!(s.state.colors.foreground, original.foreground);
+                s.dispatch(UiAction::Color { action: ColorAction::Redo }).unwrap();
+                assert_eq!(s.state.colors.foreground, edited);
+            }
+        }
+    }
+}
+
+#[test]
 fn two_and_three_finger_taps_on_a_wheel_follow_the_canvas_undo_bindings() {
     let mut s = session(Platform::Gtk);
     let original = s.state.colors.foreground;
