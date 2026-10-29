@@ -68,7 +68,7 @@ inline StackPanel ProofPanel(std::shared_ptr<WorkspaceData> const& data,Bindings
         if(hdr!=*modeHdr){*modeHdr=hdr;arrangeModes(hdr);}
         AutomationProperties::SetName(mode,copy(L"mode"));
         for(auto const& [choice,id]:modes){
-            auto title=id==L"off"?copy(L"mode_off"):id==L"print"?copy(L"mode_print"):hstring(L"SDR");choice.Content(box_value(title));AutomationProperties::SetName(choice,title);
+            auto title=id==L"off"?copy(L"mode_off"):id==L"print"?copy(L"mode_print"):hstring(L"SDR");buttonCaption(choice,title);AutomationProperties::SetName(choice,title);
             bool pressed=id==selected;
             choice.IsEnabled(available);
             choice.Background(pressed?Brush(data->tint(L"text",31)):Brush(clear()));

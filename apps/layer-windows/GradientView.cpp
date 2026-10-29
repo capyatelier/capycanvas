@@ -106,10 +106,6 @@ struct EditorView:std::enable_shared_from_this<EditorView> {
             auto modes=array(self->gradient(),L"interpolations");auto index=self->interpolation.SelectedIndex();
             if(index>=0&&uint32_t(index)<modes.Size())self->send(O({{L"kind",S(L"interpolation")},{L"value",S(modes.GetArrayAt(uint32_t(index)).GetStringAt(0))}}));
         }});
-        auto open=std::make_shared<bool>(false);
-        interpolation.DropDownOpened([data=data,open](auto&&,auto&&){if(!std::exchange(*open,true))data->popup(true);});
-        interpolation.DropDownClosed([data=data,open](auto&&,auto&&){if(std::exchange(*open,false))data->popup(false);});
-        interpolation.Unloaded([data=data,open](auto&&,auto&&){if(std::exchange(*open,false))data->popup(false);});
         reverse=iconButton(L"flip-horizontal",L"reverse",[weak]{if(auto self=weak.lock()){self->selected=int(self->stops().Size())-1-self->selected;self->send(O({{L"kind",S(L"reverse")}}));}});
         reset=iconButton(L"reset",L"reset",[weak]{if(auto self=weak.lock())self->send(O({{L"kind",S(L"reset")}}));});
         Grid::SetColumn(reverse,1);Grid::SetColumn(reset,2);

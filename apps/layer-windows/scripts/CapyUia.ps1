@@ -286,13 +286,21 @@ function Wait-StablePixels([scriptblock]$CapturePixels,[switch]$Composed){
     }while($watch.Elapsed.TotalSeconds -lt 5 -or $comparisons -lt 3)
     throw "Canvas pixels did not settle for comparison ($comparisons comparisons, $stable consecutive matches, $([Math]::Round($watch.Elapsed.TotalSeconds,3)) seconds)"
 }
+function Test-CapySearchItem($Item,$Surface,[int]$Owner){
+    if(!$Item -or !$Surface -or $Item.Current.IsOffscreen -or $Surface.Current.IsOffscreen -or $Item.Current.ProcessId -ne $Owner -or $Surface.Current.ProcessId -ne $Owner){return $false}
+    $bounds=$Item.Current.BoundingRectangle;$window=$Surface.Current.BoundingRectangle
+    !$bounds.IsEmpty -and $bounds.Width -gt 0 -and $bounds.Height -gt 0 -and
+        $bounds.X -lt $window.X+$window.Width -and $bounds.X+$bounds.Width -gt $window.X -and
+        $bounds.Y -lt $window.Y+$window.Height -and $bounds.Y+$bounds.Height -gt $window.Y
+}
 function Find([string]$Value,[switch]$Name,$Within=$root,$Type,[switch]$Visible,[switch]$NoPopups){
-    $shown={param($item)
-        if(!$item -or $item.Current.IsOffscreen){return $false}
-        $bounds=$item.Current.BoundingRectangle;$window=$root.Current.BoundingRectangle
-        !$bounds.IsEmpty -and $bounds.Width -gt 0 -and $bounds.Height -gt 0 -and
-            $bounds.X -lt $window.X+$window.Width -and $bounds.X+$bounds.Width -gt $window.X -and
-            $bounds.Y -lt $window.Y+$window.Height -and $bounds.Y+$bounds.Height -gt $window.Y
+    $shown={param($item,$surface=$root)
+        if($item -and $script:CapyPopups -and !$NoPopups){
+            for($parent=$item;$parent -and $parent -ne $root;$parent=[System.Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($parent)){
+                if($parent.Current.ControlType -eq [System.Windows.Automation.ControlType]::Menu -and $parent.Current.ProcessId -eq $review.Id){$surface=$parent;break}
+            }
+        }
+        Test-CapySearchItem $item $surface $review.Id
     }
     $property=if($Name){[System.Windows.Automation.AutomationElement]::NameProperty}else{[System.Windows.Automation.AutomationElement]::AutomationIdProperty}
     $condition=[System.Windows.Automation.PropertyCondition]::new($property,$Value)
@@ -323,7 +331,7 @@ function Find([string]$Value,[switch]$Name,$Within=$root,$Type,[switch]$Visible,
         foreach($window in [System.Windows.Automation.AutomationElement]::RootElement.FindAll([System.Windows.Automation.TreeScope]::Children,$owned)){
             if($window -eq $root){continue}
             foreach($item in $window.FindAll([System.Windows.Automation.TreeScope]::Descendants,$condition)){
-                if(& $shown $item){return $item}
+                if(& $shown $item $window){return $item}
             }
         }
     }
@@ -729,6 +737,7 @@ function Save-ProjectAs([string]$Path,[scriptblock]$NativeSaved){
     Wait-Until {!(Find 'Save As' -Name) -and (Control 'drawing-canvas').Current.IsEnabled} 'The Save As dialog did not close'
 }
 function Use-Workspace([string]$Id,[string]$Name){
+    Wait-Until {(Model).windows_workspace.ready -and !(Model).windows_workspace.busy} 'Workspace startup did not finish'
     $previousPopups=$script:CapyPopups;$script:CapyPopups=$true
     try{
         if((Model).windows_workspace.id -ne $Id){

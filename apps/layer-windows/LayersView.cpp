@@ -50,7 +50,7 @@ void LayersView::init(){
     blendLabel=label(data,L"",true);blendLabel.TextTrimming(TextTrimming::CharacterEllipsis);blendLabel.VerticalAlignment(VerticalAlignment::Center);
     {Grid content;ColumnDefinition text;text.Width({1,GridUnitType::Star});ColumnDefinition arrow;arrow.Width({1,GridUnitType::Auto});
         content.ColumnDefinitions().Append(text);content.ColumnDefinitions().Append(arrow);content.ColumnSpacing(4);content.Children().Append(blendLabel);
-        ContentControl chevron;chevron.IsTabStop(false);chevron.IsHitTestVisible(false);Grid::SetColumn(chevron,1);content.Children().Append(chevron);
+        ContentControl chevron;chevron.VerticalContentAlignment(VerticalAlignment::Center);chevron.IsTabStop(false);chevron.IsHitTestVisible(false);Grid::SetColumn(chevron,1);content.Children().Append(chevron);
         controls.emplace_back([data=data,chevron,theme=std::make_shared<hstring>()](J,J){if(*theme!=data->theme()){*theme=data->theme();chevron.Content(icon(L"chevron-down",*theme,16));}});blend.Content(content);}
     blend.MinWidth(0);blend.MinHeight(data->controlHeight());blend.Height(data->controlHeight());blend.Padding({6,0,6,0});blend.HorizontalContentAlignment(HorizontalAlignment::Stretch);
     copyName(data,header,data->copyCaption(L"layers",L"controls"));copyName(data,values,data->copyCaption(L"layers",L"blend_opacity"));

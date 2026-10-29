@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "CanvasWindow.h"
+#include "ChoiceFeedback.h"
 #include "TraceFile.h"
 #include <sstream>
 #include <shellapi.h>
@@ -134,6 +135,7 @@ struct App : ApplicationT<App, Markup::IXamlMetadataProvider> {
     com_array<Markup::XmlnsDefinition> GetXmlnsDefinitions() { return metadata.GetXmlnsDefinitions(); }
     void OnLaunched(LaunchActivatedEventArgs const&) {
         Resources().MergedDictionaries().Append(Controls::XamlControlsResources());
+        Resources().MergedDictionaries().Append(CapyUi::paletteResources());
         ForwardedLaunch()=[weak=get_weak()](std::vector<std::wstring> files){
             auto self=weak.get();
             if(!self||self->windows.empty())return false;

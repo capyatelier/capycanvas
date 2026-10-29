@@ -60,8 +60,8 @@ bool shifted(PointerRoutedEventArgs const& e){
 }
 void showNumericError(TextBox const& entry,hstring const& text){
     AutomationProperties::SetHelpText(entry,text);
-    if(text.empty()){entry.BorderThickness({0});ToolTipService::SetToolTip(entry,nullptr);}
-    else {entry.BorderThickness({1,1,1,1});entry.BorderBrush(fill({255,221,85,85}));tooltip(entry,text);}
+    entry.BorderBrush().as<SolidColorBrush>().Color(text.empty()?Windows::UI::Color{}:InvalidFieldColor);
+    if(text.empty())ToolTipService::SetToolTip(entry,nullptr);else tooltip(entry,text);
 }
 }
 StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& title,J const& spec,
@@ -96,7 +96,7 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
     auto numberId=identifier.empty()?title:identifier;
     AutomationProperties::SetAutomationId(root,L"number-root-"+numberId);
     AutomationProperties::SetName(root,title);
-    Grid header;header.UseLayoutRounding(false);header.ColumnSpacing(panel?0.:compact?data->panelMetric(L"control_spacing"):6);header.MinHeight(valueHeight);ColumnDefinition left;left.Width({1,GridUnitType::Star});header.ColumnDefinitions().Append(left);
+    Grid header;header.UseLayoutRounding(false);header.ColumnSpacing(panel?data->panelMetric(L"control_spacing"):compact?2.:6.);header.MinHeight(valueHeight);ColumnDefinition left;left.Width({1,GridUnitType::Star});header.ColumnDefinitions().Append(left);
     ColumnDefinition right;right.Width({panel?76.:1.,panel?GridUnitType::Pixel:GridUnitType::Auto});header.ColumnDefinitions().Append(right);
     if(panel){
         header.MinHeight(data->panelMetric(L"slider_height"));
@@ -105,7 +105,7 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
     }
     auto text=label(data,title);text.Margin(Thickness{preference||compact?0.:6.,0,0,0});text.VerticalAlignment(VerticalAlignment::Center);
     AutomationProperties::SetAutomationId(text,L"number-caption-"+numberId);
-    text.LineHeight(20);text.TextTrimming(TextTrimming::CharacterEllipsis);
+    text.TextTrimming(TextTrimming::CharacterEllipsis);
     tooltip(text,title);
     StackPanel labels;labels.UseLayoutRounding(false);labels.VerticalAlignment(VerticalAlignment::Center);labels.Children().Append(text);
     if(panel){labels.VerticalAlignment(VerticalAlignment::Top);text.MinHeight(20);}
@@ -114,15 +114,14 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
     weak_ref<TextBlock> detailView;
     if(!presentation.description.empty()||presentation.descriptionText){
         auto detail=label(data,presentation.description);detailView=make_weak(detail);detail.FontSize(data->textSize()/1.2);
-        detail.LineHeight(detail.FontSize()*1.25);detail.TextWrapping(TextWrapping::Wrap);detail.Opacity(.55);
+        detail.TextWrapping(TextWrapping::Wrap);detail.Opacity(.55);
         labels.Children().Append(detail);
     }
     header.Children().Append(labels);
     TextBox entry;entry.UseLayoutRounding(false);entry.Width(panel?68:ranged?72:60);entry.MinWidth(0);entry.MinHeight(0);entry.Height(valueHeight);
     entry.VerticalAlignment(panel?VerticalAlignment::Bottom:VerticalAlignment::Center);
     inheritLanguage(entry,data);entry.FontSize(data->textSize());entry.FontFamily(FontFamily(L"Segoe UI"));entry.Foreground(data->brush(L"text"));
-    entry.Background(data->brush(L"input"));entry.BorderThickness(Thickness{0});entry.CornerRadius(data->controlCorner());
-    entry.Resources().Insert(box_value(L"TextControlBackgroundDisabled"),clear());
+    fieldColors(data,entry);
     auto hiddenText=clear();
     entry.Resources().Insert(box_value(L"TextControlForegroundDisabled"),hiddenText);
     entry.TextAlignment(TextAlignment::Right);Grid::SetColumn(entry,1);
@@ -133,7 +132,7 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
     {
         // Read mode has the same text extent as the shared plain value. Keep
         // native text editing/accessibility while avoiding a hidden caret gutter.
-        auto display=label(data,L"");display.UseLayoutRounding(false);display.LineHeight(20);
+        auto display=label(data,L"");display.UseLayoutRounding(false);
         display.TextAlignment(valueOnly?TextAlignment::Center:TextAlignment::Right);display.VerticalAlignment(VerticalAlignment::Center);
         display.Margin({preference?9.:6.,0,preference?9.:6.,0});display.IsHitTestVisible(false);
         AutomationProperties::SetAccessibilityView(display,Automation::Peers::AccessibilityView::Raw);
@@ -221,14 +220,15 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
     auto measureText=[data,local](hstring const& value){
         // Routine model updates retain the measured extent of unchanged text.
         if(local->measuredWidth>=0&&local->measuredText==value)return local->measuredWidth;
-        auto measure=label(data,value,false,false);measure.UseLayoutRounding(false);measure.LineHeight(0);
+        auto measure=label(data,value,false,false);measure.UseLayoutRounding(false);
         measure.Measure({std::numeric_limits<float>::infinity(),std::numeric_limits<float>::infinity()});
         auto extent=measure.DesiredSize();local->measuredText=value;
         local->measuredWidth=extent.Width;local->measuredHeight=extent.Height;return local->measuredWidth;
     };
     measureText(L"0");
     double textInset=std::max(0.,(valueHeight-local->measuredHeight)/2);
-    entry.Padding({preference?9.:6.,textInset,preference?9.:6.,textInset});
+    double optical=data->textSize()*262./4096.;
+    entry.Padding({preference?8.:data->panelMetric(L"field_padding")-1,textInset-1-optical,preference?8.:data->panelMetric(L"field_padding")-1,textInset-1+optical});
     auto surface=make_weak(valueSurface);
     auto setText=[data,local,measureText,readout,panelValueBox,surface,hiddenText,ranged,valueOnly,inlineTrack,preference,panel,dialWeak,dialDot,dialSize,scale=num(spec,L"scale",1),weak=make_weak(entry)](hstring const& value){
         bool previous=std::exchange(local->formatting,true);
@@ -279,19 +279,19 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
     slider.Resources().Insert(box_value(L"SliderTrackThemeHeight"),box_value(4.));
     slider.Resources().Insert(box_value(L"SliderPreContentMargin"),box_value((stepSize-4)/2));
     slider.Resources().Insert(box_value(L"SliderPostContentMargin"),box_value((stepSize-4)/2));
-    if(!preference){
+    {
         for(auto key:{L"SliderOuterThumbBackground",L"SliderOuterThumbBackgroundPointerOver",L"SliderOuterThumbBackgroundPressed",L"SliderThumbBorderBrush"})
             slider.Resources().Insert(box_value(key),clear());
         for(auto key:{L"SliderHorizontalThumbWidth",L"SliderHorizontalThumbHeight",L"SliderInnerThumbWidth",L"SliderInnerThumbHeight"})
-            slider.Resources().Insert(box_value(key),box_value(0.));
+            slider.Resources().Insert(box_value(key),box_value(preference?16.:0.));
     }
     AutomationProperties::SetName(slider,title);if(!identifier.empty())AutomationProperties::SetAutomationId(slider,identifier+L"-slider");
     for(auto key:{L"SliderTrackValueFill",L"SliderTrackValueFillPointerOver",L"SliderTrackValueFillPressed",L"SliderTrackValueFillDisabled"})
         slider.Resources().Insert(box_value(key),preference?accent(data):track);
     for(auto key:{L"SliderThumbBackground",L"SliderThumbBackgroundPointerOver",L"SliderThumbBackgroundPressed"})
-        slider.Resources().Insert(box_value(key),preference?accent(data):data->brush(L"thumb"));
+        slider.Resources().Insert(box_value(key),data->brush(L"thumb"));
     for(auto key:{L"SliderTrackFill",L"SliderTrackFillPointerOver",L"SliderTrackFillPressed",L"SliderTrackFillDisabled"})
-        slider.Resources().Insert(box_value(key),data->brush(L"input"));
+        slider.Resources().Insert(box_value(key),preference?data->tint(L"text",31):data->brush(L"input"));
     auto commit=[data,local,caption,spec,get,set,setText,presented,identity=presentation.identity,weak=make_weak(entry)](bool cancel){
         auto entry=weak.get();if(!cancel&&entry&&textComposing(entry))return false;
         if(!entry||!local->editing)return true;

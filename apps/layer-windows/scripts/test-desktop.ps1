@@ -1,7 +1,7 @@
 param(
     [Parameter(Mandatory)][string]$Script,
     [hashtable]$Parameters=@{},
-    [ValidateRange(1,3600)][int]$TimeoutSeconds=600,
+    [ValidateRange(1,86400)][int]$TimeoutSeconds=600,
     [switch]$ConfigureVmDisplay
 )
 $ErrorActionPreference='Stop'

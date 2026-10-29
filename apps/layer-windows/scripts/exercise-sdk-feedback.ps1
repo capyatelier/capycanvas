@@ -21,6 +21,8 @@ function Over($base,$ink,[int]$amount){
 }
 function Choice([string]$Id,[string]$phase){
  Start-Sleep -Milliseconds 100;$s=Record $Id $phase
+ Check ($s.app_palette_owned-and(Equal-Color $s.app_foreground $s.ink)) "$phase app-owned palette follows the retained ink"
+ Check $s.app_palette_stable "$phase host contexts retain application palette roles"
  Check ($s.template_retained-and$s.resources_retained) "$phase retained SDK template/resources"
  $amount=switch($s.common){PointerOver{20} Pressed{41} default{0}};$expected=Over $s.base $s.ink $amount
  Check (Equal-Color $s.background $expected) "$phase effective SDK background $($s.common): actual $($s.background-join',') expected $($expected-join',')"
@@ -42,6 +44,14 @@ function Keyboard-Choice([string]$Id){
  $s=Choice $Id 'keyboard selection';Check ($s.selections-eq$before.selections+1) 'Keyboard selection emitted exactly one change'
 }
 function Footer([string]$Id,[string]$phase,[int]$alpha,[bool]$contact){Start-Sleep -Milliseconds 100;$s=Record $Id $phase;Check ($s.template-and$s.alpha-eq$alpha-and$s.contact-eq$contact) "$phase footer state actual alpha=$($s.alpha), contact=$($s.contact)";$s}
+function Footer-Captions([string]$Phase,[string]$Suffix){
+ foreach($pair in @(@('sdk-footer-primary','Apply'),@('sdk-footer-secondary','Other'),@('sdk-footer-close','Close'))){
+  $id=$pair[0];$expected=$pair[1]+$Suffix
+  Wait-Until {(State $id).expected_caption -ceq $expected} "$Phase SDK dialog caption property did not update"
+  $s=Record $id ($Phase+' caption');$actual=(Element $id).Current.Name
+  Check ($actual -ceq $s.expected_caption) "$Phase SDK footer caption actual '$actual', expected '$($s.expected_caption)'"
+ }
+}
 try{
  Enter-CapyEnvironment @('CAPY_FEEDBACK_SDK','CAPY_FEEDBACK_THEME');$env:CAPY_STORAGE_DIR=Join-Path $run 'profile';$env:CAPY_FEEDBACK_SDK='1';$env:CAPY_FEEDBACK_THEME=$Theme
  $Executable=(Resolve-Path $Executable).Path;$review=Start-Process -FilePath $Executable -WorkingDirectory (Split-Path $Executable) -WindowStyle Hidden -PassThru -RedirectStandardError(Join-Path $run 'stderr.log');$null=$review.Handle
@@ -59,13 +69,13 @@ try{
   [CapyRowPointer]::Down($device,$p[0],$p[1]);try{$null=Footer $id ($device+' footer held') 41 $true}finally{[CapyRowPointer]::Move($p[2],$p[3]);[CapyRowPointer]::Up()};[CapyRowPointer]::Hover($p[2],$p[3]);$null=Footer $id ($device+' footer canceled') 0 $false
  }
  $primaryIdentity=(Element 'sdk-footer-primary').GetRuntimeId()-join':';$secondaryIdentity=(Element 'sdk-footer-secondary').GetRuntimeId()-join':';$accent=(State 'sdk-footer-primary').background
- Invoke-Action 'sdk-default';$a=State 'sdk-footer-primary';$b=State 'sdk-footer-secondary';Check ((Equal-Color $b.background $accent)-and!(Equal-Color $a.background $accent)) 'Default role moves retained accent'
+ Invoke-Action 'sdk-default';Footer-Captions 'changed' ' now';$a=State 'sdk-footer-primary';$b=State 'sdk-footer-secondary';Check ((Equal-Color $b.background $accent)-and!(Equal-Color $a.background $accent)) 'Default role moves retained accent'
  Invoke-Action 'sdk-dialog-theme';$null=Choice 'sdk-choice-dialog' 'retained popup theme';Invoke-Action 'sdk-dialog-role';$null=Choice 'sdk-choice-dialog' 'retained popup role'
  Check ($primaryIdentity-eq((Element 'sdk-footer-primary').GetRuntimeId()-join':')-and$secondaryIdentity-eq((Element 'sdk-footer-secondary').GetRuntimeId()-join':')) 'Footer identities retained'
  Invoke-Action 'sdk-dialog-disable';$s=Footer 'sdk-footer-secondary' 'disabled footer' 0 $false;Check (!$s.enabled-and[math]::Abs($s.content_opacity-92./255)-lt.005) 'Disabled footer content opacity';Invoke-Action 'sdk-dialog-disable'
  $before=State 'sdk-footer-secondary';(Element 'sdk-dialog-input').SetFocus();[CapyRowPointer]::Key([uint32]$review.Id,0x0D);Wait-Until {(State 'sdk-footer-secondary').secondary-eq$before.secondary+1} 'Native DefaultButton Enter did not activate Secondary'
  Check ((State 'sdk-footer-primary').primary-eq$before.primary) 'DefaultButton Enter did not double activate'
- Invoke-Action 'sdk-default';$before=State 'sdk-footer-primary';(Element 'sdk-dialog-input').SetFocus();[CapyRowPointer]::Key([uint32]$review.Id,0x0D);Wait-Until {(State 'sdk-footer-primary').primary-eq$before.primary+1} 'Native DefaultButton Enter did not activate Primary'
+ Invoke-Action 'sdk-default';Footer-Captions 'restored' '';$before=State 'sdk-footer-primary';(Element 'sdk-dialog-input').SetFocus();[CapyRowPointer]::Key([uint32]$review.Id,0x0D);Wait-Until {(State 'sdk-footer-primary').primary-eq$before.primary+1} 'Native DefaultButton Enter did not activate Primary'
  Check ((State 'sdk-footer-secondary').secondary-eq$before.secondary) 'Primary Enter did not double activate'
  $p=Position 'sdk-footer-close';[CapyRowPointer]::Down('mouse',$p[0],$p[1]);[CapyRowPointer]::Up();Wait-Until {!(Element 'sdk-choice-dialog')} 'Native Close footer did not close dialog'
  [CapyWindowApi]::PostMessage($window,0x10,[UIntPtr]::Zero,[IntPtr]::Zero)|Out-Null;if(!$review.WaitForExit(8000)-or$review.ExitCode-ne0){throw 'SDK fixture did not close cleanly'};if((Get-Item(Join-Path $run 'stderr.log')).Length){throw 'SDK fixture stderr requires inspection'}

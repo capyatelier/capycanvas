@@ -97,7 +97,7 @@ struct ShortcutPage::Impl:std::enable_shared_from_this<Impl>{
         overlay.Visibility(Visibility::Collapsed);
         for(auto sheet:{&editor,&modifierSheet,&picker,&details,&import})build(*sheet);
         picker.start=flat(L"",[weak=weak_from_this()]{if(auto self=weak.lock()){auto spec=self->pickerModel();if(spec.Size())send(self->data,act(L"reset_trigger",{{L"trigger",S(str(spec,L"trigger"))}}));}});
-        follow(data->copyCommon(L"reset"),[button=picker.start](hstring const& text){button.Content(box_value(text));AutomationProperties::SetName(button,text);});
+        follow(data->copyCommon(L"reset"),[button=picker.start](hstring const& text){buttonCaption(button,text);AutomationProperties::SetName(button,text);});
         AutomationProperties::SetAutomationId(picker.start,L"action-picker-reset");picker.start.HorizontalAlignment(HorizontalAlignment::Left);
         picker.start.VerticalAlignment(VerticalAlignment::Center);picker.start.Margin({11,0,0,0});picker.frame.Children().Append(picker.start);
         pickerDescription=note(data,L"");AutomationProperties::SetAutomationId(pickerDescription,L"action-picker-description");
@@ -303,7 +303,7 @@ struct ShortcutPage::Impl:std::enable_shared_from_this<Impl>{
         auto confirm=flat(L"",[weak=weak_from_this()]{if(auto self=weak.lock())send(self->data,act(L"confirm_shortcut",{{L"replace",B(object(self->preferences(),L"capture").GetNamedValue(L"conflict",JsonValue::CreateNullValue()).ValueType()!=JsonValueType::Null)}}));});
         confirm.Background(accent(data));confirm.Foreground(data->brush(L"accent_foreground"));
         AutomationProperties::SetAutomationId(confirm,L"confirm-shortcut");cell(row,confirm,2);
-        remember([this,row,heading,detail,cancel,confirm]{auto current=object(preferences(),L"capture");auto notice=str(current,L"notice");heading.Text(str(current,L"shortcut"));detail.Text(notice);detail.Visibility(notice.empty()?Visibility::Collapsed:Visibility::Visible);AutomationProperties::SetName(row,str(current,L"shortcut"));auto cancelText=data->common(L"cancel");cancel.Content(box_value(cancelText));AutomationProperties::SetName(cancel,cancelText);auto confirmText=copy(flag(current,L"existing")?L"open":current.GetNamedValue(L"conflict",JsonValue::CreateNullValue()).ValueType()!=JsonValueType::Null?L"reassign":L"add");confirm.Content(box_value(confirmText));AutomationProperties::SetName(confirm,confirmText);confirm.IsEnabled(object(current,L"chord").Size()!=0&&str(current,L"error").empty());});
+        remember([this,row,heading,detail,cancel,confirm]{auto current=object(preferences(),L"capture");auto notice=str(current,L"notice");heading.Text(str(current,L"shortcut"));detail.Text(notice);detail.Visibility(notice.empty()?Visibility::Collapsed:Visibility::Visible);AutomationProperties::SetName(row,str(current,L"shortcut"));auto cancelText=data->common(L"cancel");buttonCaption(cancel,cancelText);AutomationProperties::SetName(cancel,cancelText);auto confirmText=copy(flag(current,L"existing")?L"open":current.GetNamedValue(L"conflict",JsonValue::CreateNullValue()).ValueType()!=JsonValueType::Null?L"reassign":L"add");buttonCaption(confirm,confirmText);AutomationProperties::SetName(confirm,confirmText);confirm.IsEnabled(object(current,L"chord").Size()!=0&&str(current,L"error").empty());});
         return row;
     }
     void refreshKeymap(){
@@ -342,7 +342,7 @@ struct ShortcutPage::Impl:std::enable_shared_from_this<Impl>{
             auto cancel=flat(L"",[data=data]{send(data,act(L"cancel_keymap_import"));});footer.Children().Append(cancel);
             auto confirm=flat(L"",[data=data]{send(data,act(L"confirm_keymap_import"));});confirm.Background(accent(data));confirm.Foreground(data->brush(L"accent_foreground"));
             AutomationProperties::SetAutomationId(confirm,L"confirm-keymap-import");footer.Children().Append(confirm);import.body.Children().Append(footer);
-            remember([this,body,cancel,confirm]{auto current=object(object(preferences(),L"keymap"),L"import");import.title.Text(str(current,L"heading"));body.Text(str(current,L"body"));auto cancelText=str(current,L"cancel_label"),importText=str(current,L"import_label");cancel.Content(box_value(cancelText));AutomationProperties::SetName(cancel,cancelText);confirm.Content(box_value(importText));AutomationProperties::SetName(confirm,importText);});
+            remember([this,body,cancel,confirm]{auto current=object(object(preferences(),L"keymap"),L"import");import.title.Text(str(current,L"heading"));body.Text(str(current,L"body"));auto cancelText=str(current,L"cancel_label"),importText=str(current,L"import_label");buttonCaption(cancel,cancelText);AutomationProperties::SetName(cancel,cancelText);buttonCaption(confirm,importText);AutomationProperties::SetName(confirm,importText);});
         }
         if(preview.Size())refresh(L"import");else {import.signature=L"";retained[L"import"].clear();}
         show(import,preview.Size()!=0);

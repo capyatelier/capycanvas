@@ -24,7 +24,7 @@ struct ColorStrip:std::enable_shared_from_this<ColorStrip>{
         root=button(data,L"",[weak]{if(auto self=weak.lock())self->tapped();});
         root.Padding({0,0,0,0});root.Width(Width);root.HorizontalContentAlignment(HorizontalAlignment::Stretch);root.VerticalContentAlignment(VerticalAlignment::Stretch);
         AutomationProperties::SetAutomationId(root,L"edit-color-strip");
-        Grid pair;pair.CornerRadius({6,6,6,6});
+        Grid pair;pair.CornerRadius(data->controlCorner());clipRounded(pair,data->controlCorner());
         for(int column=0;column<2;++column){ColumnDefinition definition;definition.Width({20,GridUnitType::Pixel});pair.ColumnDefinitions().Append(definition);}
         original.Height(40);sample.Height(40);Grid::SetColumn(sample,1);pair.Children().Append(original);pair.Children().Append(sample);
         for(auto const& text:{hex,intensity,space,values}){text.FontFamily(FontFamily(L"Segoe UI"));text.IsHitTestVisible(false);text.VerticalAlignment(VerticalAlignment::Center);}

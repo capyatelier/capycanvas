@@ -261,7 +261,7 @@ struct NewDrawingDialog::Impl:std::enable_shared_from_this<Impl>{
         control.VerticalContentAlignment(VerticalAlignment::Center);
     }
     ComboBox choice(hstring const& id){
-        ComboBox result;input(result);choiceColors(data,result,true);result.HorizontalAlignment(HorizontalAlignment::Stretch);AutomationProperties::SetAutomationId(result,id);
+        ComboBox result;input(result);choiceColors(data,result,ControlSurface::Drawing);result.HorizontalAlignment(HorizontalAlignment::Stretch);AutomationProperties::SetAutomationId(result,id);
         return result;
     }
     Button toggle(hstring const& id,double width,double height){
@@ -470,7 +470,7 @@ Grid searchField;search.Padding({34,7,10,0});searchField.Children().Append(searc
         input(saveName);saveName.Width(150);saveName.MaxLength(64);saveName.Padding({10,7,10,0});AutomationProperties::SetAutomationId(saveName,L"new-drawing-save-name");inheritLanguage(saveName,data);
         saveName.TextChanged([weak](auto&&,auto&&){if(auto self=weak.lock();self&&!self->data->updating&&self->saveName.Text()!=str(object(self->drawerView(),L"save"),L"name"))self->send(O({{L"op",S(L"preset_name")},{L"text",S(self->saveName.Text())}}));});
         saveName.KeyDown([weak](auto&&,KeyRoutedEventArgs const& e){if(auto self=weak.lock();self&&!composingKey(e)&&e.Key()==winrt::Windows::System::VirtualKey::Enter){e.Handled(true);self->send(op(L"save_preset"));}});
-        input(saveGroup);choiceColors(data,saveGroup,true);saveGroup.Width(150);AutomationProperties::SetAutomationId(saveGroup,L"new-drawing-save-group");
+        input(saveGroup);choiceColors(data,saveGroup,ControlSurface::Drawing);saveGroup.Width(150);AutomationProperties::SetAutomationId(saveGroup,L"new-drawing-save-group");
         saveGroup.SelectionChanged([weak](auto&&,auto&&){if(auto self=weak.lock()){
             auto groups=array(object(self->drawerView(),L"save"),L"groups");auto index=self->saveGroup.SelectedIndex();
             if(self->data->updating||index<0||uint32_t(index)>=groups.Size())return;
@@ -809,7 +809,7 @@ Grid searchField;search.Padding({34,7,10,0});searchField.Children().Append(searc
             for(uint32_t i=0;i<tabList.Size();++i){
                 auto tab=tabList.GetObjectAt(i);
                 auto pill=toggle(L"new-drawing-tab-"+to_hstring(i),0,28);pill.Padding({11,0,11,0});pill.CornerRadius({14,14,14,14});
-                pill.Content(box_value(str(tab,L"label")));AutomationProperties::SetName(pill,str(tab,L"label"));
+                buttonCaption(pill,str(tab,L"label"));AutomationProperties::SetName(pill,str(tab,L"label"));
                 pill.Click([weak,i](auto&&,auto&&){if(auto self=weak.lock())self->send(O({{L"op",S(L"tab")},{L"index",N(i)}}));});
                 tabs.Children().Append(pill);
             }

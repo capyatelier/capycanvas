@@ -7,6 +7,7 @@ Add-Type -TypeDefinition @'
 using System;using System.Collections.Generic;
 namespace CapyOwnedSearchTest {
  public enum TreeScope{Children,Descendants}
+ public static class ControlType{public static object Menu="menu";}
  public class Condition{public virtual bool Matches(Node n){return true;}}
  public class PropertyCondition:Condition {
   string property;object value;public PropertyCondition(object p,object v){property=(string)p;value=v;}
@@ -39,7 +40,7 @@ namespace CapyOwnedSearchTest {
  public class TreeWalker{public static TreeWalker ControlViewWalker=new TreeWalker();public Node GetParent(Node node){return node.Parent;}}
  public static class Driver{public static int GetDpiForWindow(IntPtr window){return 96;}}
  public class Node {
-  public string AutomationId,Name;public int ProcessId;bool offscreen;Rect bounds;public Node Parent;public Scroll Provider,TargetScroll;public int? ContentY;
+  public string AutomationId,Name;public object ControlType="control";public int ProcessId;bool offscreen;Rect bounds;public Node Parent;public Scroll Provider,TargetScroll;public int? ContentY;
   public bool HasKeyboardFocus;public IntPtr NativeWindowHandle=new IntPtr(1);
   public Rect BoundingRectangle{get{if(ContentY.HasValue){int y=ContentY.Value-(int)(TargetScroll.VerticalScrollPercent*2);return y>=100||y+20<=0?new Rect():new Rect(0,y,80,20);}return bounds;}set{bounds=value;}}
   public bool IsOffscreen{get{return ContentY.HasValue?BoundingRectangle.IsEmpty:offscreen;}set{offscreen=value;}}
@@ -58,7 +59,7 @@ namespace CapyOwnedSearchTest {
  public class Review{public int Id=33;public bool HasExited=false;public int ExitCode=0;public void Refresh(){}}
 }
 '@
-foreach($name in @('Find','Control','Wait-Until')){
+foreach($name in @('Test-CapySearchItem','Find','Control','Wait-Until')){
     $fn=@($ast.FindAll({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name}.GetNewClosure(),$true))
     if($fn.Count -ne 1){throw 'Missing actual UIA helper'}
     . ([scriptblock]::Create($fn[0].Extent.Text.Replace('System.Windows.Automation.','CapyOwnedSearchTest.')))
@@ -85,6 +86,23 @@ $selected=Control 'drawing-canvas' -Arranged -NoPopups
 $CapyEach=$null
 if($selected -ne $first -or $selected.Current.BoundingRectangle.X -ne 209 -or $selected.Current.BoundingRectangle.Y -ne 197 -or $script:ticks -lt 5){throw 'Root-only search did not wait for the independently known current-root bounds'}
 if((Control 'color-swatch-edit' -Arranged) -ne $menu){throw 'Default context-menu popup lookup changed'}
+$bottom=$root.Current.BoundingRectangle.Y+$root.Current.BoundingRectangle.Height
+$nativeMenu=[CapyOwnedSearchTest.Node]::new('native-menu',33,250,$bottom-5);$nativeMenu.ControlType=[CapyOwnedSearchTest.ControlType]::Menu;$nativeMenu.BoundingRectangle=[CapyOwnedSearchTest.Rect]::new(250,$bottom-5,424,163);$nativeMenu.Parent=$root;$root.Children.Add($nativeMenu)
+$outside=[CapyOwnedSearchTest.Node]::new('outside-owner-item',33,262,$bottom+20);$outside.BoundingRectangle=[CapyOwnedSearchTest.Rect]::new(262,$bottom+20,408,45);$outside.Parent=$nativeMenu;$nativeMenu.Children.Add($outside)
+if((Find 'outside-owner-item' -Visible) -ne $outside){throw 'Native menu item outside the document lost its actual popup surface'}
+if(Find 'outside-owner-item' -Visible -NoPopups){throw 'Root-only search accepted a popup outside document bounds'}
+$outside.IsOffscreen=$true
+if(Find 'outside-owner-item' -Visible){throw 'Popup search accepted an offscreen menu item'}
+$outside.IsOffscreen=$false;$nativeMenu.IsOffscreen=$true
+if(Find 'outside-owner-item' -Visible){throw 'Popup search accepted an offscreen menu surface'}
+$nativeMenu.IsOffscreen=$false;$outside.ProcessId=99
+if(Find 'outside-owner-item' -Visible){throw 'Popup search accepted a foreign-process menu item'}
+$outside.ProcessId=33;$outside.BoundingRectangle=[CapyOwnedSearchTest.Rect]::new(262,$bottom+200,408,45)
+if(Find 'outside-owner-item' -Visible){throw 'Popup search accepted an item beyond its menu bounds'}
+$detached=[CapyOwnedSearchTest.Node]::new('detached-popup',33,2500,0);$detached.BoundingRectangle=[CapyOwnedSearchTest.Rect]::new(2500,0,200,200)
+$detachedItem=[CapyOwnedSearchTest.Node]::new('detached-item',33,2510,10);$detachedItem.BoundingRectangle=[CapyOwnedSearchTest.Rect]::new(2510,10,50,40);$detachedItem.Parent=$detached;$detached.Children.Add($detachedItem);[CapyOwnedSearchTest.AutomationElement]::RootElement.Children.Add($detached)
+if((Find 'detached-item' -Visible) -ne $detachedItem){throw 'Detached owned popup was clipped against document bounds'}
+if(Find 'detached-item' -Visible -NoPopups){throw 'Root-only search escaped into a detached popup'}
 $secondList=[CapyOwnedSearchTest.Node]::new('layer-list',33,356,344);$secondRow=[CapyOwnedSearchTest.Node]::new('layer-7-content',33,366,354);$secondList.Children.Add($secondRow);$second.Children.Add($secondList)
 foreach($offscreen in @($false,$true)){
     $root.Children.Clear()

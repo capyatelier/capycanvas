@@ -3,6 +3,7 @@ param(
     [Parameter(Mandatory)][string]$Output,
     [string]$Name,
     [string]$DebuggerPath,
+    [ValidateSet('release','dev-perf')][string]$RustProfile='release',
     [ValidateRange(1,1440)][int]$TimeoutMinutes = 20,
     [switch]$HardwareGpu
 )
@@ -14,6 +15,8 @@ trap {
 }
 $runnerStarted = Get-Date
 $Executable = (Resolve-Path -LiteralPath $Executable).Path
+$editorExecutable=$Executable
+$controlBuilds=@{}
 $scripts = (Resolve-Path (Join-Path $PSScriptRoot '../../apps/layer-windows/scripts')).Path
 $runs = [ordered]@{ shortcuts = $null }
 $debuggable = @()
@@ -29,6 +32,30 @@ foreach ($script in Get-ChildItem (Join-Path $scripts 'exercise-*.ps1')) {
         $choices = ($parameter.Attributes | Where-Object { $_.TypeName.Name -eq 'ValidateSet' }).PositionalArguments.Value
         foreach ($choice in $choices | Where-Object { $null -ne $_ -and $_ -ne $parameter.DefaultValue.Value }) { $runs["${fixture}:$choice"] = @("-$option", $choice) }
     }
+}
+function Select-Fixtures([string[]]$Available,[string[]]$Requested) {
+    $Requested=@($Requested|ForEach-Object {if($_ -eq 'header-settings'){'header:catalog-only';'header:catalog-only-light'}else{$_}})
+    $defaults = @($Requested | Where-Object { $_ -match '^[^:]+:default$' } | ForEach-Object { ($_ -split ':')[0] })
+    foreach ($item in $Requested) {
+        $known = if ($item -match '^([^:]+):default$') { $Matches[1] -in $Available } else {
+            @($Available | Where-Object { $_ -eq $item -or ($_ -split ':')[0] -eq $item }).Count -gt 0
+        }
+        if (!$known) { throw "Unknown fixture: $item" }
+    }
+    @($Available | Where-Object { !$Requested -or $_ -in $Requested -or ($_ -split ':')[0] -in $Requested -or $_ -in $defaults })
+}
+function Control-Fixture([string]$Fixture){
+    switch($Fixture){'button-feedback'{'Feedback'} 'sdk-feedback'{'Feedback'} 'scroll-indicators'{'Feedback'} 'navigator-allocation'{'Feedback'} 'popup'{'Popup'} default{$null}}
+}
+$selected = if ($Name) { $Name -split ',' } else { @() }
+$planned = @(Select-Fixtures $runs.Keys $selected)
+if (!$planned.Count) { throw 'No fixtures selected.' }
+function Get-FixtureTimeoutSeconds([int]$Count,[int]$Minutes){
+    [int][Math]::Min(86400,[long]$Count*($Minutes*60+120))
+}
+if(!$env:CAPY_PRIVATE_DESKTOP){
+    & (Join-Path $PSScriptRoot '../../apps/layer-windows/scripts/test-desktop.ps1') -Script $PSCommandPath -Parameters $PSBoundParameters -TimeoutSeconds (Get-FixtureTimeoutSeconds $planned.Count $TimeoutMinutes)
+    exit
 }
 Add-Type -AssemblyName System.Drawing, System.Windows.Forms
 Add-Type -Namespace CapyVm -Name Native -MemberDefinition @'
@@ -61,7 +88,15 @@ function Save-Screen([string]$Path) {
 }
 
 function Reviews {
-    Get-Process CapyCanvas -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $Executable -and $_.StartTime -ge $runnerStarted }
+    $owners=@(foreach($file in Get-ChildItem -LiteralPath $Output -Filter '*-context.json' -File){
+        $context=Get-Content -LiteralPath $file.FullName -Raw|ConvertFrom-Json
+        @($context.process_id)+@($context.windows|ForEach-Object {$_.process_id})
+    })|Where-Object {$_}|Select-Object -Unique
+    $paths=@($editorExecutable)+@($controlBuilds.Values)
+    foreach($owner in $owners){
+        $process=Get-Process -Id $owner -ErrorAction SilentlyContinue
+        if($process -and $process.Path -in $paths -and $process.StartTime -ge $runnerStarted){$process}
+    }
 }
 function Stop-Review {
     $owned = @(Reviews)
@@ -123,19 +158,6 @@ if ($HardwareGpu) {
     $env:CAPY_WAIT_SCALE = '3'
 }
 $env:NO_COLOR = '1'
-function Select-Fixtures([string[]]$Available,[string[]]$Requested) {
-    $defaults = @($Requested | Where-Object { $_ -match '^[^:]+:default$' } | ForEach-Object { ($_ -split ':')[0] })
-    foreach ($item in $Requested) {
-        $known = if ($item -match '^([^:]+):default$') { $Matches[1] -in $Available } else {
-            @($Available | Where-Object { $_ -eq $item -or ($_ -split ':')[0] -eq $item }).Count -gt 0
-        }
-        if (!$known) { throw "Unknown fixture: $item" }
-    }
-    @($Available | Where-Object { !$Requested -or $_ -in $Requested -or ($_ -split ':')[0] -in $Requested -or $_ -in $defaults })
-}
-$selected = if ($Name) { $Name -split ',' } else { @() }
-$planned = @(Select-Fixtures $runs.Keys $selected)
-if (!$planned.Count) { throw 'No fixtures selected.' }
 @{runs=$planned;timeout_minutes=$TimeoutMinutes;hardware_gpu=[bool]$HardwareGpu}|ConvertTo-Json|Set-Content (Join-Path $Output 'plan.json')
 $results = Join-Path $Output 'results.jsonl'
 foreach ($run in $runs.GetEnumerator()) {
@@ -146,6 +168,21 @@ foreach ($run in $runs.GetEnumerator()) {
     $env:CAPY_FIXTURE_CONTEXT = "$log-context.json"
     $started = Get-Date
     try {
+        $controlFixture=Control-Fixture $fixture
+        $Executable=$editorExecutable
+        if($controlFixture){
+            if(!$controlBuilds.ContainsKey($controlFixture)){
+                $directory=(Split-Path $editorExecutable)+'-'+$controlFixture
+                $intermediate=(Split-Path $editorExecutable) -replace '-dev-perf$',''
+                & (Join-Path $scripts 'build.ps1') -Configuration Release -RustProfile $RustProfile -ControlFixture $controlFixture -SoftwareAdapterTests:(!$HardwareGpu) -SkipRust -SkipRestore -OutputDirectory $directory -IntermediateDirectory ($intermediate+'.obj') *> (Join-Path $Output ('build-'+$controlFixture+'.log'))
+                $controlBuilds[$controlFixture]=Join-Path $directory 'CapyCanvas.exe'
+                @($controlBuilds.GetEnumerator()|ForEach-Object {
+                    $binaryDirectory=Split-Path $_.Value
+                    @{fixture=$_.Key;profile=$RustProfile;hardware_gpu=[bool]$HardwareGpu;source_provenance='provenance.json';files=@('CapyCanvas.exe','layer_windows.dll'|ForEach-Object {@{name=$_;sha256=(Get-FileHash -LiteralPath (Join-Path $binaryDirectory $_)).Hash}})}
+                })|ConvertTo-Json -Depth 5|Set-Content (Join-Path $Output 'control-builds.json')
+            }
+            $Executable=$controlBuilds[$controlFixture]
+        }
         if ($DebuggerPath -and $fixture -notin $debuggable) { throw "Fixture $fixture does not support console debugging." }
         $arguments = if ($null -eq $run.Value) { Start-Shortcuts } else { @('-File', (Join-Path $scripts "exercise-$fixture.ps1"), '-Executable', $Executable) + $run.Value }
         if ($DebuggerPath) { $arguments += @('-DebuggerPath', ('"' + $DebuggerPath + '"')) }

@@ -48,11 +48,22 @@ void RangeControl::init(bool showTrack){
     AutomationProperties::SetAutomationId(track,prefix+L"-range-track");AutomationProperties::SetName(track,label);
     for(auto part:{trough,fill}){part.Height(4);Canvas::SetTop(part,12);part.IsHitTestVisible(false);track.Children().Append(part);}
     trough.Background(data->tint(L"text",51));fill.Background(data->tint(L"text",166));
-    for(auto& thumb:thumbs){
-        thumb.Width(6);thumb.Height(14);Canvas::SetTop(thumb,7);thumb.CornerRadius({2,2,2,2});
-        thumb.Background(data->brush(L"text"));thumb.IsHitTestVisible(false);track.Children().Append(thumb);
+    for(int i=0;i<2;++i){
+        auto thumb=thumbs[i];auto handle=handles[i];thumb.Width(6);thumb.Height(14);thumb.CornerRadius({2,2,2,2});
+        thumb.Background(data->brush(L"text"));thumb.IsHitTestVisible(false);handle.Content(thumb);handle.Width(12);handle.Height(20);Canvas::SetTop(handle,4);
+        handle.IsTabStop(true);handle.UseSystemFocusVisuals(true);handle.HorizontalContentAlignment(HorizontalAlignment::Center);handle.VerticalContentAlignment(VerticalAlignment::Center);
+        handle.FocusVisualPrimaryBrush(data->tint(L"accent",128));handle.FocusVisualSecondaryBrush(clear());track.Children().Append(handle);
+        AutomationProperties::SetName(handle,str(bounds[i],L"label")+L" — "+label);
+        handle.IsEnabledChanged([thumb](auto&&,DependencyPropertyChangedEventArgs const& e){thumb.Opacity(unbox_value<bool>(e.NewValue())?1.:.4);});
+        handle.KeyDown([weak,i](auto&&,KeyRoutedEventArgs const& e){
+            using Windows::System::VirtualKey;auto key=e.Key();if(key!=VirtualKey::Left&&key!=VirtualKey::Right&&key!=VirtualKey::Up&&key!=VirtualKey::Down)return;
+            if(auto self=weak.lock();self&&!self->retired&&self->handles[i].IsEnabled()){
+                auto next=numeric(self->data->localization.get(),object(self->bounds[i],L"numeric"),self->values[i],O({{L"type",S(L"step")},{L"steps",N(key==VirtualKey::Right||key==VirtualKey::Up?1:-1)}}));
+                self->set(i,num(next,L"value"));e.Handled(true);
+            }
+        });
     }
-    focus.Content(track);focus.IsTabStop(true);focus.HorizontalContentAlignment(HorizontalAlignment::Stretch);focus.VerticalContentAlignment(VerticalAlignment::Stretch);
+    focus.Content(track);focus.IsTabStop(false);focus.HorizontalContentAlignment(HorizontalAlignment::Stretch);focus.VerticalContentAlignment(VerticalAlignment::Stretch);
     AutomationProperties::SetName(focus,label);Grid::SetColumn(focus,1);root.Children().Append(focus);
     track.SizeChanged([weak](auto&&,auto&&){if(auto self=weak.lock())self->paint();});
     capture=captureControl(data,track,[weak](uint32_t,bool cancel,PointerRoutedEventArgs const* event){if(auto self=weak.lock();self&&self->contact){
@@ -67,7 +78,7 @@ void RangeControl::init(bool showTrack){
         int index=std::abs(positions[1]-positions[0])<1?int(x>=positions[0]):int(std::abs(x-positions[1])<std::abs(x-positions[0]));
         if(!self->capture->Begin(e))return;
         self->contact=Contact{index,self->values[index],self->domain,std::abs(x-positions[index])<=12?x-positions[index]:0};
-        self->focus.Focus(FocusState::Pointer);
+        self->handles[index].Focus(FocusState::Pointer);
         self->change(index,self->values[index],L"down");self->pick(x);e.Handled(true);
     }});
     track.PointerMoved([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock();self&&self->capture->Owns(e.Pointer().PointerId())){
@@ -86,7 +97,7 @@ void RangeControl::paint(){
     double lower=position(values[0],width),upper=position(values[1],width);
     trough.Width(std::max(0.,width-16));Canvas::SetLeft(trough,8);
     fill.Width(std::max(0.,upper-lower));Canvas::SetLeft(fill,lower);
-    Canvas::SetLeft(thumbs[0],lower-7);Canvas::SetLeft(thumbs[1],upper+1);
+    Canvas::SetLeft(handles[0],lower-10);Canvas::SetLeft(handles[1],upper-2);
 }
 void RangeControl::set(int index,double value,hstring const& phase){
     if(retired&&phase!=L"cancel")return;

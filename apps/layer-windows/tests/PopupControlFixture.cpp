@@ -290,6 +290,15 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
         auto self=shared_from_this();hstring error;
         try {
             co_await wait([this]{return anchor.IsLoaded()&&untagged.ActualWidth()>0&&GetForegroundWindow()==hwnd;},L"Fixture did not become arranged and foreground");privacy();
+            phase=L"primitives";
+            ComboBox choice;comboOption(choice,L"One");comboOption(choice,L"Two");choiceColors(data,choice,ControlSurface::Settings);
+            require(choice.Background().as<SolidColorBrush>().Color()!=data->brush(L"settings").Color(),L"Settings choice has no visible face");
+            selectIndex(choice,1);require(choice.SelectedIndex()==1,L"Valid choice was rejected");
+            selectIndex(choice,99);require(choice.SelectedIndex()==-1,L"Out-of-range choice was accepted");
+            root.Children().Append(choice);co_await wait([choice]{return choice.IsLoaded();},L"Native choice did not load");
+            choice.IsDropDownOpen(true);co_await wait([this]{return data->popupCount==1;},L"Native choice did not block workspace popup routing");
+            choice.IsDropDownOpen(false);co_await wait([this]{return data->popupCount==0;},L"Native choice did not release workspace popup routing");
+            root.Children().RemoveAtEnd();++checks;
             phase=L"chrome-replacement";auto fade=std::make_shared<ChromeVisibility>();Border previous,replacement,decoration;
             fade->apply(previous,true,true);fade->apply(replacement,true,true);
             require(replacement.Visibility()==Visibility::Collapsed&&replacement.Opacity()==0&&!replacement.IsHitTestVisible(),L"Replacement chrome became visible while Zen remained hidden");
@@ -371,7 +380,7 @@ struct App:ApplicationT<App,Markup::IXamlMetadataProvider>{
     Markup::IXamlType GetXamlType(Windows::UI::Xaml::Interop::TypeName const& type){return metadata.GetXamlType(type);}
     Markup::IXamlType GetXamlType(hstring const& name){return metadata.GetXamlType(name);}
     com_array<Markup::XmlnsDefinition> GetXmlnsDefinitions(){return metadata.GetXmlnsDefinitions();}
-    void OnLaunched(LaunchActivatedEventArgs const&){Resources().MergedDictionaries().Append(XamlControlsResources());wchar_t path[32768];auto size=GetEnvironmentVariableW(L"CAPY_POPUP_FIXTURE",path,32768);if(!size||size>=32768||!std::filesystem::path(path).is_absolute())throw hresult_invalid_argument();fixture=std::make_shared<Fixture>();fixture->context=context;fixture->textServices=textServices;fixture->init(path);}
+    void OnLaunched(LaunchActivatedEventArgs const&){Resources().MergedDictionaries().Append(XamlControlsResources());Resources().MergedDictionaries().Append(CapyUi::paletteResources());wchar_t path[32768];auto size=GetEnvironmentVariableW(L"CAPY_POPUP_FIXTURE",path,32768);if(!size||size>=32768||!std::filesystem::path(path).is_absolute())throw hresult_invalid_argument();fixture=std::make_shared<Fixture>();fixture->context=context;fixture->textServices=textServices;fixture->init(path);}
 };
 }
 int WINAPI wWinMain(HINSTANCE,HINSTANCE,PWSTR,int){auto context=fixtureContext(L"CAPY_POPUP_FIXTURE");auto textServices=std::make_shared<TextServicesLibrary>();init_apartment(apartment_type::single_threaded);Application::Start([context,textServices](auto&&){make<App>(context,textServices);});return resultCode;}

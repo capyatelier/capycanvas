@@ -3,6 +3,7 @@ $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 $CapyCacheModel=$true
 $CapyFind='visible'
+$CapyPopups=$true
 Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
 Add-Type -AssemblyName System.Drawing,System.Windows.Forms
 $CapyCaptureDelay=250
@@ -206,7 +207,11 @@ function Pair-Setup{
     Pair-Text 'tool-picker-search' 'choose current paint color'
     Wait-Until {Find 'picker-choice-color-0'} 'Header picker omitted Color'
     (Control 'picker-choice-color-0').GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
-    Invoke 'Add Tools' -Name
+    $confirm=@{button=$null}
+    Wait-Until {$confirm.button=Find 'Add Tools' -Name -Type ([System.Windows.Automation.ControlType]::Button) -Visible;(Model).picker.can_confirm -and $confirm.button -and $confirm.button.Current.IsEnabled} 'Selected header tools did not enable Add Tools'
+    $confirm.button=Control 'Add Tools' -Name -Type ([System.Windows.Automation.ControlType]::Button) -Arranged
+    if(!$confirm.button.Current.IsEnabled -or $confirm.button.Current.ProcessId -ne $review.Id){throw 'Add Tools is not enabled in the owned picker'}
+    $confirm.button.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
     Wait-Until {!(Model).picker} 'Header color picker did not close'
     Invoke 'header-edit-done';Wait-Until {!(Model).header.editing} 'Header color editor did not finish'
     $script:pairIdentities=@{}
@@ -257,7 +262,7 @@ function Assert-Pair([string]$Name){
             if($unit -le 0){throw "Missing canonical icon size for $($control.kind)"}
             $left=if($null -ne $control.center){$bounds.X+$control.center*$scale-8*$unit}else{$bounds.X+$bounds.Width/2-8*$unit}
             $top=$bounds.Y+$bounds.Height/2-8*$unit;$slack=0
-            if($control.title){$title=$control.title.Current.BoundingRectangle;$left=$title.X-6*$scale-16*$unit;$top=$title.Y+$title.Height/2-8*$unit;$slack=2}
+            if($control.title){$title=$control.title.Current.BoundingRectangle;$left=$title.X-6*$scale-16*$unit;$slack=2}
             $offsets=@(foreach($dy in -$slack..$slack){foreach($dx in -$slack..$slack){@{x=$dx;y=$dy}}})|Sort-Object {[Math]::Abs($_.x)+[Math]::Abs($_.y)}
             $glyph=$null
             foreach($offset in $offsets){
@@ -587,7 +592,6 @@ try{
     [IO.File]::WriteAllText((Settings-File),(@{theme=$theme;language=@{Explicit='en'}}|ConvertTo-Json -Depth 4))
     $env:CAPY_TRACE_UI='1';$env:CAPY_TEST_DISPLAY='1';$env:CAPY_TEST_PRIMARY='1'
     $CapyTraceDirectory=$run
-    if($slotMenuOnly){$CapyPopups=$true}
     # The smoke command strip covers the bottom swatches at this window size.
     # This fixture uses native controls only; keep the isolated profile and all
     # foreground/point ownership checks, without the unrelated overlay.
@@ -639,7 +643,10 @@ try{
         Capture $shape
     }
     if(((Control 'color-shape-0').GetRuntimeId() -join ':') -ne $retained){throw 'Color changes replaced retained shape controls'}
-    $button=Control 'color-shape-0';$target=(Model).color_panel.other_shapes[0];$button.SetFocus();[CapyRowPointer]::Key(0x20)
+    $button=Control 'color-shape-0';$target=(Model).color_panel.other_shapes[0];Focus-Keyboard $button
+    $focused=[System.Windows.Automation.AutomationElement]::FocusedElement
+    @{process_id=$review.Id;target=$button.Current.AutomationId;focused_process=$focused.Current.ProcessId;focused_id=$focused.Current.AutomationId;has_keyboard_focus=$button.Current.HasKeyboardFocus;shape=(Model).color_panel.shape;requested_shape=$target}|ConvertTo-Json|Set-Content (Join-Path $run 'shape-keyboard-focus.json')
+    [CapyRowPointer]::Key([uint32]$review.Id,0x20)
     Wait-Until {(Model).color_panel.shape -eq $target} 'Space did not activate the focused native shape button'
     Invoke 'color-background';Wait-Until {(Model).state.colors.slot -eq 'background'} 'Background selection failed'
     Invoke 'color-transparent';Wait-Until {(Model).state.colors.slot -eq 'transparent'} 'Transparent selection failed'

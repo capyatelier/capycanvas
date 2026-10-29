@@ -163,10 +163,6 @@ struct SettingsView : std::enable_shared_from_this<SettingsView> {
         choices.SelectionChanged([select,syncing,weak=make_weak(choices)](auto&&,auto&&){
             if(auto c=weak.get();c&&!*syncing&&c.SelectedIndex()>=0)select(c.SelectedIndex());
         });
-        auto open=std::make_shared<bool>(false);
-        choices.DropDownOpened([data=data,open](auto&&,auto&&){if(!std::exchange(*open,true))data->popup(true);});
-        choices.DropDownClosed([data=data,open](auto&&,auto&&){if(std::exchange(*open,false))data->popup(false);});
-        choices.Unloaded([data=data,open](auto&&,auto&&){if(std::exchange(*open,false))data->popup(false);});
         fields.emplace_back([weak=weak_from_this(),choices,syncing,current,title,names,text]{if(auto self=weak.lock()){
             auto caption=title();text.Text(caption);AutomationProperties::SetName(choices,caption);
             auto options=names();for(uint32_t i=0;i<options.size();++i)comboOptionText(choices,i,options[i]);
@@ -225,7 +221,6 @@ struct SettingsView : std::enable_shared_from_this<SettingsView> {
         std::vector<hstring> commands;for(auto value:array(data->state,L"tool_actions"))if(auto item=value.GetObject();str(item,L"group")==group){auto id=str(item,L"command");commands.push_back(id);comboOption(choices,str(find(array(data->state,L"commands"),L"id",id),L"label"),L"tool-action-"+id);}
         auto weak=weak_from_this();auto syncing=std::make_shared<bool>(false);
         choices.SelectionChanged([weak,choices,commands,syncing,context](auto&&,auto&&){if(auto self=weak.lock();self&&!*syncing&&!self->data->updating&&settingsContext(self->data->state)==context&&choices.SelectedIndex()>=0)self->data->dispatch(O({{L"type",S(L"invoke")},{L"command",S(commands.at(choices.SelectedIndex()))}}));});
-        auto open=std::make_shared<bool>(false);choices.DropDownOpened([data=data,open](auto&&,auto&&){if(!std::exchange(*open,true))data->popup(true);});choices.DropDownClosed([data=data,open](auto&&,auto&&){if(std::exchange(*open,false))data->popup(false);});choices.Unloaded([data=data,open](auto&&,auto&&){if(std::exchange(*open,false))data->popup(false);});
         fields.emplace_back([weak,choices,commands,syncing,title,caption,group]{if(auto self=weak.lock()){
             auto name=self->actionGroupLabel(group);title.Text(name);AutomationProperties::SetName(choices,name);caption.Width({self->actionLabelWidth(),GridUnitType::Pixel});
             bool enabled=false;*syncing=true;for(uint32_t i=0;i<commands.size();++i){auto command=find(array(self->data->state,L"commands"),L"id",commands[i]);comboOptionText(choices,i,str(command,L"label"));choices.Items().GetAt(i).as<ComboBoxItem>().IsEnabled(flag(command,L"enabled"));enabled=enabled||flag(command,L"enabled");if(flag(command,L"selected"))choices.SelectedIndex(int(i));}*syncing=false;choices.IsEnabled(enabled);

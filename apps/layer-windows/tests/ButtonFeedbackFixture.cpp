@@ -45,7 +45,7 @@ struct App:ApplicationT<App,Markup::IXamlMetadataProvider>{
         close.Click([this](auto&&,auto&&){dialog.Hide();});body.Children().Append(close);dialog.Content(body);co_await dialog.ShowAsync();
     }
     void OnLaunched(LaunchActivatedEventArgs const&){
-        Resources().MergedDictionaries().Append(XamlControlsResources());
+        Resources().MergedDictionaries().Append(XamlControlsResources());Resources().MergedDictionaries().Append(CapyUi::paletteResources());
         if(GetEnvironmentVariableW(L"CAPY_SCROLL_INDICATORS",nullptr,0)){indicators=std::make_shared<ScrollIndicatorsFixture>();indicators->open();return;}
         if(GetEnvironmentVariableW(L"CAPY_NAVIGATOR_LAYOUT",nullptr,0)){navigatorFixture=std::make_shared<NavigatorLayoutFixture>(context);navigatorFixture->open();return;}
         if(GetEnvironmentVariableW(L"CAPY_FEEDBACK_SDK",nullptr,0)){sdk=std::make_shared<SdkFeedbackFixture>();sdk->open();return;}

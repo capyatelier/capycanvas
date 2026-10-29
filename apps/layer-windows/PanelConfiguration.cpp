@@ -47,10 +47,6 @@ struct PanelConfiguration::Impl:std::enable_shared_from_this<Impl>{
             auto tag=item.Tag().template try_as<J>();if(!tag||str(tag,L"epoch")!=epoch(self->data))return;
             self->data->dispatchDocument(O({{L"type",S(L"select_layer")},{L"id",tag.GetNamedValue(L"id")}}),str(tag,L"epoch"));
         }});
-        auto open=std::make_shared<bool>(false);
-        choice.DropDownOpened([data=data,open](auto&&,auto&&){if(!std::exchange(*open,true))data->popup(true);});
-        choice.DropDownClosed([data=data,open](auto&&,auto&&){if(std::exchange(*open,false))data->popup(false);});
-        choice.Unloaded([data=data,open](auto&&,auto&&){if(std::exchange(*open,false))data->popup(false);});
         auto key=std::make_shared<hstring>();
         bindings.emplace_back([data=data,choice,key]{
             A identity;auto layers=array(data->state,L"layers");
@@ -159,8 +155,7 @@ struct PanelConfiguration::Impl:std::enable_shared_from_this<Impl>{
         for(auto value:array(panel,L"controls")){
             auto spec=value.GetObject();auto kind=str(spec,L"control");
             StackPanel section;section.Spacing(6);
-            CheckBox visible;edgeTag(visible,L"edge_reset_contact",S(L"pickup"));visible.Content(box_value(str(spec,L"label")));visible.FontSize(data->textSize());
-            visible.Foreground(data->brush(L"text"));visible.MinHeight(28);
+            auto visible=compactCheck(data,box_value(str(spec,L"label")));visible.FontSize(data->textSize());visible.Foreground(data->brush(L"text"));
             AutomationProperties::SetAutomationId(visible,L"configure-show-"+kind);
             auto weak=weak_from_this();auto selection=make_weak(visible);
             auto toggle=[weak,selection,kind](auto&&,auto&&){if(auto self=weak.lock();self&&!self->data->updating){

@@ -149,7 +149,7 @@ struct App : ApplicationT<App,Markup::IXamlMetadataProvider> {
     Markup::IXamlType GetXamlType(hstring const& name){return metadata.GetXamlType(name);}
     com_array<Markup::XmlnsDefinition> GetXmlnsDefinitions(){return metadata.GetXmlnsDefinitions();}
     void OnLaunched(LaunchActivatedEventArgs const&){
-        Resources().MergedDictionaries().Append(XamlControlsResources());
+        Resources().MergedDictionaries().Append(XamlControlsResources());Resources().MergedDictionaries().Append(CapyUi::paletteResources());
         wchar_t path[32768];auto length=GetEnvironmentVariableW(L"CAPY_NUMBER_FIXTURE",path,32768);
         if(!length||length>=32768||!std::filesystem::path(path).is_absolute())throw hresult_invalid_argument(L"CAPY_NUMBER_FIXTURE must be an absolute fixture path");
         fixture=std::make_shared<Fixture>();fixture->context=context;fixture->init(path);

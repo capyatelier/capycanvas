@@ -36,7 +36,7 @@ inline Button pickerButton(std::shared_ptr<WorkspaceData> const& data,hstring co
     result.Background(accent(data));result.Foreground(data->brush(L"accent_foreground"));
     return result;
 }
-inline void pickerLabel(Button const& target,hstring const& text){target.Content(box_value(text));AutomationProperties::SetName(target,text);}
+inline void pickerLabel(Button const& target,hstring const& text){buttonCaption(target,text);}
 inline double fitPicker(Grid const& root){
     auto xaml=root.XamlRoot();if(!xaml)return 0;auto size=xaml.Size();
     double width=std::max(280.,std::min(720.,double(size.Width)-24));

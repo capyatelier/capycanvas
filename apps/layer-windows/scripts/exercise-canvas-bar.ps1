@@ -327,7 +327,7 @@ try {
   Tap 'canvas-bar-invert_selection' $device
   Wait-Until {$m=Model;$m.state.document_file.revision -eq $invertRevision+2 -and $m.state.layer_tools.has_selection -and $m.state.canvas_bar.placement -eq 'near_object' -and ($m.state.canvas_bar.anchor -join ',') -ceq $invertAnchor} "$device second Invert did not restore the exact selection anchor" 5
   $barTaps[$barTaps.Count-1].acknowledged_ticks=[Diagnostics.Stopwatch]::GetTimestamp()
-  (Find 'drawing-canvas').SetFocus()
+  (Control 'drawing-canvas').SetFocus()
   [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),[uint16]0x5A)
   Wait-Until {$m=Model;$m.state.canvas_bar.placement -eq 'bottom_edge' -and $null -eq $m.state.canvas_bar.anchor -and @($m.state.commands|Where-Object id -eq 'redo')[0].enabled} "$device Invert Undo did not restore the inverted selection" 5
   [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),[uint16]0x59)
@@ -350,7 +350,7 @@ try {
  Wait-Until {$null -ne (Owned 'Copy Selection to New Layer' -Name)} 'The Copy menu has no Copy Selection to New Layer' 5
  (Owned 'Copy Selection to New Layer' -Name).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
  Wait-Until {@((Model).state.layers).Count -eq $layers+1 -and !(MenuOpen)} 'Copy Selection to New Layer did not add a layer through the bar menu' 5
- (Find 'drawing-canvas').SetFocus()
+ (Control 'drawing-canvas').SetFocus()
  [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),[uint16]0x5A)
  Wait-Until {@((Model).state.layers).Count -eq $layers -and (Paint) -eq $paint} 'One Undo did not remove the copied layer' 5
  $checks.selection_menus_copy_to_layer_one_undo_step='passed'
@@ -379,7 +379,7 @@ try {
    [double]::IsNaN($corners[$_]) -or [double]::IsInfinity($corners[$_]) -or $corners[$_] -ne [Math]::Truncate($corners[$_]) -or [Math]::Abs($corners[$_]-$selectionCorners[$_]) -gt 1
   }).Count -eq 0
  } 'The new effect mask did not reload the rectangle within pixel sampling bounds' 10
- (Find 'drawing-canvas').SetFocus()
+ (Control 'drawing-canvas').SetFocus()
  [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),[uint16]0x5A)
  Wait-Until {$m=Model;!$m.state.layer_tools.has_selection -and ($m.state.layers|ConvertTo-Json -Depth 20 -Compress) -ceq $effectLayers -and @($m.state.commands|Where-Object id -eq 'undo')[0].enabled -and @($m.state.commands|Where-Object id -eq 'redo')[0].enabled} 'One Undo did not remove only the loaded mask selection and preserve the effect history' 5
  [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),[uint16]0x5A)
@@ -532,7 +532,7 @@ try {
  Tap 'canvas-bar-apply_transform' 'touch'
  Wait-Until {(Kind) -ne 'transform' -and (Model).state.document_file.revision -ne $revision} 'Apply on the bar did not commit the transform' 10
  $applied=Paint
- (Find 'drawing-canvas').SetFocus()
+ (Control 'drawing-canvas').SetFocus()
  [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),[uint16]0x5A)
  Wait-Until {(Paint) -eq $paint} 'One Undo did not restore the pixels before the transform' 5
  [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),[uint16]0x59)
@@ -540,7 +540,7 @@ try {
  $checks.apply_one_undo_step='passed'
 
  $before=Paint;$revision=(Model).state.document_file.revision
- (Find 'drawing-canvas').SetFocus();[CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),[uint16]0x54)
+ (Control 'drawing-canvas').SetFocus();[CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),[uint16]0x54)
  Wait-Until {(Kind) -eq 'transform' -and (Bar)} 'Ctrl+T did not start a transform' 10
  $modeId=@((Model).state.canvas_bar.items|Where-Object {$_.option.Choice.segmented})[0].option.Choice.id
  $warp=[array]::IndexOf(@((Choice $modeId).items|ForEach-Object label),'Warp')
@@ -548,16 +548,16 @@ try {
  Tap ("canvas-bar-choice-$modeId-$warp") 'touch'
  Wait-Until {@((Choice $modeId).items)[$warp].selected -and @((Model).state.canvas_bar.items|Where-Object {$_.option.Choice -and !$_.option.Choice.segmented -and $_.option.Choice.label -eq 'Grid'}).Count} 'Warp did not offer its Grid choice' 5
  Capture 'warp-dark'
- (Find 'drawing-canvas').SetFocus();[CapyRowPointer]::Key([uint32]$review.Id,0x1B)
+ (Control 'drawing-canvas').SetFocus();[CapyRowPointer]::Key([uint32]$review.Id,0x1B)
  Wait-Until {(Kind) -ne 'transform'} 'Escape did not cancel the Warp transform' 5
  if((Paint) -ne $before -or (Model).state.document_file.revision -ne $revision){throw 'Cancelling the transform changed the drawing'}
  $checks.warp_mode_and_escape_cancel='passed'
 
- (Find 'drawing-canvas').SetFocus();[CapyRowPointer]::Key([uint32]$review.Id,0x09)
+ (Control 'drawing-canvas').SetFocus();[CapyRowPointer]::Key([uint32]$review.Id,0x09)
  Wait-Until {(Model).chrome_hidden -or (Model).state.workspace.zen_mode} 'Tab did not enter Zen' 5
  Wait-Until {(Bar)} 'The bar did not stay visible in Zen' 5
  Capture 'zen'
- (Find 'drawing-canvas').SetFocus();[CapyRowPointer]::Key([uint32]$review.Id,0x09)
+ (Control 'drawing-canvas').SetFocus();[CapyRowPointer]::Key([uint32]$review.Id,0x09)
  Wait-Until {!(Model).state.workspace.zen_mode} 'Tab did not leave Zen' 5
  $checks.visible_in_zen='passed'
 
@@ -589,11 +589,11 @@ try {
  [CapyRowPointer]::Key([uint32]$review.Id,0x1B)
  Wait-Until {!(MenuOpen)} 'Escape did not close More in Quick Mask' 5
  if((Kind) -ne 'quick_mask'){throw 'Escape with a menu open also left Quick Mask'}
- (Find 'drawing-canvas').SetFocus();[CapyRowPointer]::Key([uint32]$review.Id,0x1B)
+ (Control 'drawing-canvas').SetFocus();[CapyRowPointer]::Key([uint32]$review.Id,0x1B)
  Wait-Until {(Kind) -eq 'selection'} 'Escape did not leave Quick Mask for the selection' 5
  if((& $openColumns) -ne $columnsBefore){throw 'The Escape that left Quick Mask also changed the open columns'}
  if($columnsBefore -gt 0){
-  (Find 'drawing-canvas').SetFocus();[CapyRowPointer]::Key([uint32]$review.Id,0x1B)
+  (Control 'drawing-canvas').SetFocus();[CapyRowPointer]::Key([uint32]$review.Id,0x1B)
   Wait-Until {(& $openColumns) -eq 0} 'A second Escape did not close the open column' 5
   if((Kind) -ne 'selection'){throw 'Closing the column with Escape dropped the selection bar'}
  }

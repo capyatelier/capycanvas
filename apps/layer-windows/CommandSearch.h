@@ -57,10 +57,10 @@ struct CommandSearchPopup : std::enable_shared_from_this<CommandSearchPopup> {
         for(auto width:{GridLength{1,GridUnitType::Star},GridLength{1,GridUnitType::Auto},GridLength{1,GridUnitType::Auto}}){
             ColumnDefinition column;column.Width(width);header.ColumnDefinitions().Append(column);
         }
-        entry.MinHeight(32);entry.Padding({32,5,6,6});entry.PlaceholderText(data->caption(L"search",L"search_commands"));entry.IsSpellCheckEnabled(false);
+        fieldColors(data,entry);entry.MinHeight(32);entry.Padding({31,4,5,6});entry.PlaceholderText(data->caption(L"search",L"search_commands"));entry.IsSpellCheckEnabled(false);
         AutomationProperties::SetAutomationId(entry,L"command-search");AutomationProperties::SetName(entry,data->caption(L"search",L"search_commands"));
         field.Children().Append(entry);header.Children().Append(field);
-        unit.VerticalAlignment(VerticalAlignment::Center);unit.Opacity(.7);unit.Visibility(Visibility::Collapsed);
+        unit.VerticalAlignment(VerticalAlignment::Center);unit.Opacity(.55);unit.Visibility(Visibility::Collapsed);
         Grid::SetColumn(unit,1);header.Children().Append(unit);
         close=button(data,data->copyCaption(L"search",L"close_search"),[weak]{if(auto self=weak.lock())self->send(O({{L"type",S(L"close")}}));});
         close.Width(32);close.Height(32);close.Padding({0,0,0,0});
@@ -68,11 +68,11 @@ struct CommandSearchPopup : std::enable_shared_from_this<CommandSearchPopup> {
         Grid::SetColumn(close,2);header.Children().Append(close);
         body.Children().Append(header);
         results.Spacing(2);AutomationProperties::SetAutomationId(results,L"command-results");AutomationProperties::SetName(results,data->caption(L"search",L"commands"));
-        resultScroll.Content(results);resultScroll.VerticalScrollBarVisibility(ScrollBarVisibility::Auto);resultScroll.HorizontalScrollBarVisibility(ScrollBarVisibility::Disabled);
+        resultScroll.Content(results);resultScroll.VerticalScrollBarVisibility(ScrollBarVisibility::Auto);resultScroll.HorizontalScrollBarVisibility(ScrollBarVisibility::Disabled);mouseScrollbars(resultScroll);
         Grid::SetRow(resultScroll,1);body.Children().Append(resultScroll);
-        empty.Text(data->caption(L"search",L"no_matches"));empty.Opacity(.6);empty.Margin({0,12,0,12});empty.HorizontalAlignment(HorizontalAlignment::Center);
+        empty.Text(data->caption(L"search",L"no_matches"));empty.Opacity(.55);empty.Margin({0,12,0,12});empty.HorizontalAlignment(HorizontalAlignment::Center);
         empty.Visibility(Visibility::Collapsed);Grid::SetRow(empty,2);body.Children().Append(empty);
-        detail.Opacity(.7);detail.FontSize(12);detail.Height(20);detail.Margin({inset,0,inset,0});
+        detail.Opacity(.55);detail.FontSize(data->textSize()*.8);detail.Height(20);detail.Margin({inset,0,inset,0});
         detail.TextTrimming(TextTrimming::CharacterEllipsis);AutomationProperties::SetAutomationId(detail,L"command-search-detail");
         Grid::SetRow(detail,3);body.Children().Append(detail);
         frame.Child(body);frame.Padding({inset,inset,inset,inset});double radius=num(metrics,L"radius",12);frame.CornerRadius({radius,radius,radius,radius});frame.BorderThickness({1,1,1,1});
@@ -110,7 +110,7 @@ struct CommandSearchPopup : std::enable_shared_from_this<CommandSearchPopup> {
         appendGlass(regions,frame,reference,{radius,radius,radius,radius});
     }
     void paint(){
-        frame.Background(data->glass(L"panel"));frame.BorderBrush(data->tint(L"text",26));
+        frame.Background(data->glass(L"panel"));frame.BorderBrush(data->line(L"popover_border"));
         close.Content(icon(L"close",data->theme()));
         auto glyph=icon(L"search",data->theme());glyph.Opacity(.65);glyph.Margin({10,0,0,0});
         glyph.HorizontalAlignment(HorizontalAlignment::Left);glyph.VerticalAlignment(VerticalAlignment::Center);
@@ -131,11 +131,11 @@ struct CommandSearchPopup : std::enable_shared_from_this<CommandSearchPopup> {
             if(!enabled)name.Opacity(.45);
             content.Children().Append(name);
             if(flag(command,L"selected")){auto check=icon(L"check",data->theme(),16);check.VerticalAlignment(VerticalAlignment::Center);Grid::SetColumn(check,1);content.Children().Append(check);}
-            auto shortcut=label(data,str(command,L"shortcut"));shortcut.FontSize(12);shortcut.Opacity(.6);shortcut.VerticalAlignment(VerticalAlignment::Center);
+            auto shortcut=label(data,str(command,L"shortcut"));shortcut.FontSize(data->textSize()*.8);shortcut.Opacity(.55);shortcut.VerticalAlignment(VerticalAlignment::Center);
             Grid::SetColumn(shortcut,2);content.Children().Append(shortcut);
             Button row;buttonColors(data,row);row.Content(content);row.Height(height);row.HorizontalAlignment(HorizontalAlignment::Stretch);
             row.HorizontalContentAlignment(HorizontalAlignment::Stretch);row.Padding({inset,0,inset,0});row.BorderThickness({0,0,0,0});
-            row.CornerRadius({8,8,8,8});row.IsTabStop(false);
+            row.CornerRadius(data->controlCorner());row.IsTabStop(false);
             AutomationProperties::SetAutomationId(row,L"command-result-"+to_hstring(i));AutomationProperties::SetName(row,str(command,L"label"));
             AutomationProperties::SetHelpText(row,str(command,L"disabled_reason").empty()?str(command,L"description"):str(command,L"disabled_reason"));
             row.Click([weak,id](auto&&,auto&&){if(auto self=weak.lock())self->execute(id);});

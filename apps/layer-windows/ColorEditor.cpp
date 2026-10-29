@@ -364,7 +364,7 @@ struct Editor:std::enable_shared_from_this<Editor>{
 
     void framePair(Grid const& frame,double width){
         for(int column=0;column<2;++column){ColumnDefinition definition;definition.Width({width,GridUnitType::Pixel});frame.ColumnDefinitions().Append(definition);}
-        frame.CornerRadius({6,6,6,6});frame.BorderThickness({1,1,1,1});frame.BorderBrush(data->tint(L"text",31));
+        frame.CornerRadius(data->controlCorner());clipRounded(frame,data->controlCorner());frame.BorderThickness({1,1,1,1});frame.BorderBrush(data->tint(L"text",31));
     }
     void buildFooter(){
         auto weak=weak_from_this();

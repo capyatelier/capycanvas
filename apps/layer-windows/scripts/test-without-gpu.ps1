@@ -8,6 +8,7 @@ $testBuildDirectory=if($OutputDirectory){[IO.Path]::GetFullPath($OutputDirectory
 $packages = 'layer-core','layer-engine','layer-color','layer-render','layer-ui','layer-workspace','layer-host','layer-windows' | ForEach-Object { '-p', $_ }
 $cargoProfileArgs = @(if ($Configuration -eq 'Release') { '--release' })
 & (Join-Path $PSScriptRoot '../tests/script-encoding.ps1')
+& (Join-Path $repo 'tools/windows-vm/test-fixture-routing.ps1')
 & (Get-Process -Id $PID).Path -NoProfile -File (Join-Path $PSScriptRoot '../tests/renderer-health.ps1')
 if($LASTEXITCODE -ne 0){throw 'Renderer health regression failed.'}
 & (Join-Path $PSScriptRoot '../tests/capture-dpi.ps1')

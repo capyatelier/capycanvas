@@ -875,7 +875,7 @@ def fixtures(args):
     mode = " -HardwareGpu" if hardware else ""
     desktop(machine, f"-File {GUEST_REPO}\\tools\\windows-vm\\run-fixtures.ps1 "
                      f"-Executable {directory}\\CapyCanvas.exe -Output {output} "
-                     f"-TimeoutMinutes {args.timeout_minutes}{selection}{mode}")
+                     f"-TimeoutMinutes {args.timeout_minutes} -RustProfile {args.profile}{selection}{mode}")
     results, plan, failure = wait_for_fixtures(machine, output)
     local = retrieve(machine, f"{GUEST_REPO}\\artifacts\\windows\\vm-fixtures", name)
     provenance = {"revision": revision, "source": hashes, "build": record, "hardware_gpu": hardware}

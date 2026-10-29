@@ -27,11 +27,13 @@ try{
  [IO.File]::WriteAllText((Settings-File),(@{theme=$Theme}|ConvertTo-Json))
  $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError (Join-Path $run 'stderr.log');$null=$review.Handle
  Write-Output "Owned tooltip review $($review.Id): $run"
- Wait-Until {$review.Refresh();$review.MainWindowHandle -ne [IntPtr]::Zero -and (Model).brush_ready} 'Tooltip review did not start' 45
- $root=[System.Windows.Automation.AutomationElement]::FromHandle($review.MainWindowHandle)
+ $owned=@{window=$null}
+ Wait-Until {$owned.window=Owned-DrawingWindow $review;$owned.window -and (Model).brush_ready} 'Tooltip review did not start' 45
+ $root=$owned.window.Root;$drawingWindow=$owned.window.Handle
+ @{process_id=$review.Id;main_window=$review.MainWindowHandle.ToInt64();hwnd=$drawingWindow.ToInt64();name=$root.Current.Name;type=$root.Current.ControlType.ProgrammaticName}|ConvertTo-Json|Set-Content (Join-Path $run 'owned-window.json')
  $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)
  Start-Sleep -Milliseconds 800
- [CapyRowPointer]::SetForegroundWindow($review.MainWindowHandle)|Out-Null;[CapyRowPointer]::Initialize([uint32]$review.Id)
+ [CapyRowPointer]::SetForegroundWindow($drawingWindow)|Out-Null;[CapyRowPointer]::Initialize([uint32]$review.Id)
  $panel=@((Model).panels|Where-Object {$_.tiles.Count -gt 0})[0]
  $target=Center ("tile-"+$panel.id+"-"+$panel.tiles[0].id)
  $away=Center 'drawing-canvas'
@@ -40,7 +42,7 @@ try{
  [CapyRowPointer]::Hover($away.x,$away.y)
  Wait-Until {!(Tooltip)} 'Tooltip did not dismiss when the mouse left'
  (Find 'drawing-canvas').SetFocus()
- [CapyRowPointer]::Key([uint32]$review.Id,[ushort]0x4F)
+ [CapyRowPointer]::Key([uint32]$review.Id,[uint16]0x4F)
  Wait-Until {((Model).state.commands|Where-Object id -eq 'move').selected} 'O did not choose Move'
  $command=@((Model).state.commands|Where-Object id -eq 'move')[0];$hint=$command.tooltip
  if($hint -notmatch '\(.+\)$'){throw "Move has no shortcut in its command tooltip: $hint"}
@@ -61,7 +63,7 @@ try{
  }finally{[CapyRowPointer]::Up()}
  Start-Sleep -Milliseconds 400
  if(Tooltip){throw 'A tooltip appeared after the touch hold'}
- [CapyRowPointer]::Key([uint32]$review.Id,[ushort]0x1B)
+ [CapyRowPointer]::Key([uint32]$review.Id,[uint16]0x1B)
  @{theme=$Theme;mouse_hover='passed';touch_hold_without_tooltip='passed';action_shortcut_hint=$shown.text;target=$target.name}|ConvertTo-Json|Set-Content (Join-Path $run 'results.json')
  Get-Content (Join-Path $run 'results.json')
 }catch{

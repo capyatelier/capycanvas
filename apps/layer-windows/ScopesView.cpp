@@ -151,10 +151,6 @@ ComboBox selector(std::shared_ptr<WorkspaceData> const& data,hstring const& id){
     ComboBox box;box.MinWidth(0);box.MinHeight(data->controlHeight());box.Height(data->controlHeight());box.Padding({6,0,0,0});box.HorizontalAlignment(HorizontalAlignment::Stretch);
     box.FontSize(data->textSize());box.FontWeight(Windows::UI::Text::FontWeights::Bold());choiceColors(data,box);
     AutomationProperties::SetAutomationId(box,id);
-    auto open=std::make_shared<bool>(false);
-    box.DropDownOpened([data,open](auto&&,auto&&){if(!std::exchange(*open,true))data->popup(true);});
-    box.DropDownClosed([data,open](auto&&,auto&&){if(std::exchange(*open,false))data->popup(false);});
-    box.Unloaded([data,open](auto&&,auto&&){if(std::exchange(*open,false))data->popup(false);});
     return box;
 }
 void syncChoices(ComboBox const& box,A const& labels,int selected){

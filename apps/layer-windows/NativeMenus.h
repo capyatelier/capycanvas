@@ -42,7 +42,7 @@ inline void NativeMenuItems(winrt::Windows::Foundation::Collections::IVector<Men
             if(children.Size()){
                 auto item=retain(MenuFlyoutSubItem()).first;item.Text(text);item.IsEnabled(flag(spec,L"enabled",true));AutomationProperties::SetAutomationId(item,menuSlug(text));
                 updateIcon(item,spec);
-                item.FontSize(data->textSize());NativeMenuItems(item.Items(),children,data,dispatch,keepOpen);
+                item.FontFamily(FontFamily(L"Segoe UI"));item.FontSize(data->textSize());NativeMenuItems(item.Items(),children,data,dispatch,keepOpen);
             }else{
                 auto identifier=action.Size()?str(action,L"command",L"layer-menu-"+str(object(action,L"action"),L"op")):menuSlug(text);
                 if(str(action,L"type")==L"workspace_manager"){
@@ -57,7 +57,7 @@ inline void NativeMenuItems(winrt::Windows::Foundation::Collections::IVector<Men
                 auto add=[&](auto fresh){
                     auto [item,added]=retain(fresh);
                     auto heading=flag(spec,L"is_heading");
-                    item.Text(text);item.IsEnabled(!heading&&flag(spec,L"enabled",true));item.IsTabStop(!heading);item.FontSize(data->textSize());item.MinHeight(34);
+                    item.Text(text);item.IsEnabled(!heading&&flag(spec,L"enabled",true));item.IsTabStop(!heading);item.FontSize(data->textSize());item.MinHeight(data->controlHeight()+data->panelMetric(L"control_spacing"));item.FontFamily(FontFamily(L"Segoe UI"));
                     item.FontWeight(heading?winrt::Windows::UI::Text::FontWeights::SemiBold():Windows::UI::Text::FontWeights::Normal());
                     item.KeyboardAcceleratorTextOverride(str(spec,L"hint"));AutomationProperties::SetAutomationId(item,identifier);
                     updateIcon(item,spec);

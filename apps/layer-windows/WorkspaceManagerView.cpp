@@ -158,13 +158,13 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
         toolbarActions=button(copyData,L"",[]{});retry=button(copyData,L"",[]{});
         for(auto control:{thisWorkspace.as<Control>(),savedToolbars.as<Control>(),toolbarActions.as<Control>(),retry.as<Control>()}){control.Padding({10,5,10,5});control.MinHeight(34);}
         title=label(copyData,L"",true);title.HorizontalAlignment(HorizontalAlignment::Stretch);title.TextAlignment(TextAlignment::Center);intro=label(copyData,L"");
-        thisWorkspace.Content(box_value(copy(L"header",L"this_workspace")));savedToolbars.Content(box_value(copy(L"header",L"saved_toolbars")));
+        buttonCaption(thisWorkspace,copy(L"header",L"this_workspace"));buttonCaption(savedToolbars,copy(L"header",L"saved_toolbars"));
         AutomationProperties::SetAutomationId(thisWorkspace,L"workspace-toolbar-current");
         AutomationProperties::SetAutomationId(savedToolbars,L"workspace-toolbar-library");
         toolbarTabs.Children().Append(thisWorkspace);toolbarTabs.Children().Append(savedToolbars);
         thisWorkspace.Click([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock();self&&!self->updating)self->dispatch(O({{L"type",S(L"open")},{L"page",S(L"this_workspace")}}));});
         savedToolbars.Click([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock();self&&!self->updating)self->dispatch(O({{L"type",S(L"open")},{L"page",S(L"toolbar_library")}}));});
-        toolbarActions.Content(box_value(copy(L"header",L"toolbar_actions")));toolbarActions.HorizontalAlignment(HorizontalAlignment::Left);
+        buttonCaption(toolbarActions,copy(L"header",L"toolbar_actions"));toolbarActions.HorizontalAlignment(HorizontalAlignment::Left);
         buttonColors(copyData,thisWorkspace);buttonColors(copyData,savedToolbars);buttonColors(copyData,toolbarActions);buttonColors(copyData,retry);
         AutomationProperties::SetAutomationId(toolbarActions,L"workspace-toolbar-actions");toolbarActions.Flyout(toolbarMenu);
         title.TextWrapping(TextWrapping::Wrap);AutomationProperties::SetAutomationId(title,L"workspace-manager-title");heading.Children().Append(title);
@@ -196,7 +196,7 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
         AutomationProperties::SetAutomationId(description,L"workspace-manager-description");
         choiceColors(copyData,choices);choices.HorizontalAlignment(HorizontalAlignment::Stretch);
         AutomationProperties::SetAutomationId(choices,L"workspace-manager-choice");
-        retry.Content(box_value(copy(L"header",L"retry")));retry.HorizontalAlignment(HorizontalAlignment::Left);
+        buttonCaption(retry,copy(L"header",L"retry"));retry.HorizontalAlignment(HorizontalAlignment::Left);
         AutomationProperties::SetAutomationId(retry,L"workspace-manager-retry");
         listSurface.CornerRadius({12,12,12,12});listSurface.Children().Append(list);listRing.BorderThickness({1,1,1,1});listRing.BorderBrush(copyData->line(L"settings",L"card_ring"));listRing.CornerRadius({12,12,12,12});listRing.IsHitTestVisible(false);listSurface.Children().Append(listRing);
         for(auto const& metric:{nameLine.as<FrameworkElement>(),nameText.as<FrameworkElement>()}){
@@ -604,8 +604,8 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
         copyData->model=value;copyData->state=object(value,L"state");copyData->refreshPalette();
         if(copyData->adoptLocalization(value)){nameAlignmentPending=true;
             catalog=copyData->catalog;localization=copyData->localization;
-            thisWorkspace.Content(box_value(copy(L"header",L"this_workspace")));savedToolbars.Content(box_value(copy(L"header",L"saved_toolbars")));
-            toolbarActions.Content(box_value(copy(L"header",L"toolbar_actions")));retry.Content(box_value(copy(L"header",L"retry")));
+            buttonCaption(thisWorkspace,copy(L"header",L"this_workspace"));buttonCaption(savedToolbars,copy(L"header",L"saved_toolbars"));
+            buttonCaption(toolbarActions,copy(L"header",L"toolbar_actions"));buttonCaption(retry,copy(L"header",L"retry"));
             progress.Text(recovery(L"loading"));search.PlaceholderText(copy(L"header",L"search"));
             description.Header(box_value(copy(L"header",L"description")));description.Language(copyData->language());
             validationName=L"";++validationSerial;validationQueued=true;

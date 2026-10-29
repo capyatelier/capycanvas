@@ -481,7 +481,7 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
                 updateProfileVisibility=[this,button=make_weak(visibility),list=make_weak(profileList)]{auto target=button.get();auto box=list.get();if(!target||!box)return;
                     auto entries=array(object(object(model,L"windows_document"),L"details"),L"profiles");auto index=box.SelectedIndex();
                     bool shown=index<0||flag(entries.GetObjectAt(uint32_t(index)),L"visible",true);auto copy=object(object(object(object(model,L"windows_document"),L"details"),L"feature_copy"),L"profile");
-                    auto text=str(copy,shown?L"hide":L"show");target.Content(box_value(text));AutomationProperties::SetName(target,text);target.IsEnabled(index>=0);
+                    auto text=str(copy,shown?L"hide":L"show");buttonCaption(target,text);AutomationProperties::SetName(target,text);target.IsEnabled(index>=0);
                 };
                 profileList.SelectionChanged([this,profileList,updateProfileVisibility](auto&&,auto&&){updateProfileVisibility();if(dialog)dialog.IsSecondaryButtonEnabled(profileList.SelectedIndex()>=0);});
                 visibility.Click([this,scripted,entries,list=make_weak(profileList)](auto&&,auto&&){

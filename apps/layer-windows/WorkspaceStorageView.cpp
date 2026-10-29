@@ -109,7 +109,7 @@ struct WorkspaceStorageView::Impl : std::enable_shared_from_this<Impl> {
         data->adoptLocalization(snapshot);model=snapshot;copy=bootstrap;data->state=object(snapshot,L"state");data->refreshPalette();
         if(dialog)dialogSurface(data,dialog);
         message.FontSize(data->textSize());for(auto control:{retry,saveNew,backup}){control.FontSize(data->textSize());control.CornerRadius(data->controlCorner());}
-        retry.Content(box_value(text(L"retry")));saveNew.Content(box_value(text(L"save_as_new_workspace")));backup.Content(box_value(text(L"export_backup")));
+        buttonCaption(retry,text(L"retry"));buttonCaption(saveNew,text(L"save_as_new_workspace"));buttonCaption(backup,text(L"export_backup"));
         auto storage=object(model,L"windows_workspace");
         if(!storage.Size())return;
         auto error=str(storage,L"error"),notice=str(storage,L"notice");

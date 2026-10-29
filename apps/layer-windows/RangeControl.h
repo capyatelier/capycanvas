@@ -15,6 +15,7 @@ struct RangeControl : std::enable_shared_from_this<RangeControl> {
     std::shared_ptr<ControlCapture> capture;
     Border trough,fill;
     std::array<Border,2> thumbs;
+    std::array<ContentControl,2> handles;
     std::array<double,2> values{};
     std::array<double,2> domain{0,1};
     Bindings fields;

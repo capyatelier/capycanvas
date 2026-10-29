@@ -266,7 +266,7 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
         }else if(type==L"action"){
             auto control=button(data,str(kind,L"label"),[data=data,id]{if(!data->updating)data->dispatch(object(object(rowFor(data,id),L"kind"),L"action"));});
             AutomationProperties::SetAutomationId(control,L"setting-action-"+id);widget=control;
-            bindings.emplace_back([data=data,id,control]{control.Content(box_value(str(object(rowFor(data,id),L"kind"),L"label")));});
+            bindings.emplace_back([data=data,id,control]{buttonCaption(control,str(object(rowFor(data,id),L"kind"),L"label"));});
         }else if(type==L"switch"){
             ToggleSwitch control;control.MinWidth(0);control.OnContent(box_value(L""));control.OffContent(box_value(L""));
             control.Toggled([data=data,id](auto&& sender,auto&&){

@@ -251,11 +251,11 @@ struct PropertiesView : std::enable_shared_from_this<PropertiesView> {
         auto name=[](Button const& pick,hstring const& text){AutomationProperties::SetName(pick,text);tooltip(pick,text);};
         for(auto const& [index,pick]:actionButtons){
             auto spec=list.GetObjectAt(index);auto text=str(spec,L"label");name(pick,text);
-            if(str(spec,L"icon").empty())if(auto shown=pick.Content().try_as<Windows::Foundation::IReference<hstring>>();!shown||shown.Value()!=text)pick.Content(box_value(text));
+            if(str(spec,L"icon").empty())buttonCaption(pick,text);
         }
         for(auto const& [index,pick]:groupButtons){
             auto spec=list.GetObjectAt(index);auto text=str(object(spec,L"group"),L"label");name(pick,text);
-            if(str(spec,L"icon").empty())pick.Content(box_value(text));
+            if(str(spec,L"icon").empty())buttonCaption(pick,text);
         }
         for(auto const& [index,item]:menuItems){auto text=str(list.GetObjectAt(index),L"label");item.Text(text);AutomationProperties::SetName(item,text);}
         for(auto const& [index,pick]:actionButtons)pick.IsEnabled(flag(view,L"enabled"));

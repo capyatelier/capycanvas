@@ -25,6 +25,7 @@
 
 namespace CapyUi {
 constexpr float CornerFit=.54f;
+inline constexpr winrt::Windows::UI::Color InvalidFieldColor{255,238,85,85};
 using namespace winrt;
 using namespace Windows::Data::Json;
 using namespace Microsoft::UI::Xaml;
@@ -308,6 +309,7 @@ struct WorkspaceData : std::enable_shared_from_this<WorkspaceData> {
     mutable std::map<std::pair<std::wstring,uint8_t>,SolidColorBrush> tintBrushes;
     mutable std::map<std::wstring,SolidColorBrush> glassBrushes;
     mutable std::map<std::pair<std::wstring,std::wstring>,SolidColorBrush> lineBrushes;
+    ResourceDictionary controlResources=paletteResources();
     static Windows::UI::Color unitColor(A const& value){
         auto channel=[&](uint32_t i){return uint8_t(std::lround(std::clamp(value.GetNumberAt(i),0.,1.)*255));};
         return Windows::UI::Color{channel(3),channel(0),channel(1),channel(2)};
@@ -332,6 +334,7 @@ struct WorkspaceData : std::enable_shared_from_this<WorkspaceData> {
         for(auto const& [role,brush]:glassBrushes)brush.Color(glassColor(role.c_str()));
         for(auto const& [key,brush]:lineBrushes)brush.Color(lineColor(key.first,key.second));
         for(auto const& [key,brush]:tintBrushes){auto value=color(str(palette,key.first.c_str(),L"#414141"));value.A=key.second;brush.Color(value);}
+        refreshControlPalette(*this);
     }
     hstring caption(J const& request)const{
         auto source=to_string(request.Stringify());
@@ -421,15 +424,22 @@ inline void dialogSurface(std::shared_ptr<WorkspaceData> const& data,ContentDial
     auto theme=data->theme()==L"dark"?ElementTheme::Dark:ElementTheme::Light;
     if(dialog.RequestedTheme()!=theme)dialog.RequestedTheme(theme);
     auto background=data->brush(L"settings");if(dialog.Background()!=background)dialog.Background(background);
-    static thread_local auto overlay=box_value(L"ContentDialogTopOverlay");
-    if(!dialog.Resources().HasKey(overlay))dialog.Resources().Insert(overlay,clear());
     dialogButtonColors(data,dialog);
+}
+inline void opticalText(FrameworkElement const& text,double size){
+    TranslateTransform optical;optical.Y(-size*262./4096.);text.RenderTransform(optical);
+}
+inline void buttonCaption(ContentControl const& control,hstring const& text){
+    auto caption=control.Content().try_as<TextBlock>();
+    if(!caption){caption=TextBlock();caption.FontFamily(FontFamily(L"Segoe UI"));caption.FontSize(control.FontSize());opticalText(caption,control.FontSize());control.Content(caption);}
+    caption.ClearValue(TextBlock::ForegroundProperty());caption.ClearValue(TextBlock::FontWeightProperty());caption.ClearValue(TextBlock::FontSizeProperty());caption.ClearValue(TextBlock::FontFamilyProperty());
+    if(caption.Text()!=text)caption.Text(text);AutomationProperties::SetName(control,text);
 }
 inline TextBlock label(std::shared_ptr<WorkspaceData> const& data,hstring const& text,bool bold=false,bool retained=true){
     TextBlock result;result.Text(text);result.FontSize(data->textSize());
     if(retained)inheritLanguage(result,data);else result.Language(data->language());result.FontFamily(FontFamily(L"Segoe UI"));result.Foreground(data->brush(L"text"));
-    result.LineHeight(18);result.LineStackingStrategy(LineStackingStrategy::MaxHeight);
-    if(bold)result.FontWeight(Windows::UI::Text::FontWeights::Bold());
+    opticalText(result,data->textSize());
+    result.FontWeight(bold?Windows::UI::Text::FontWeights::Bold():Windows::UI::Text::FontWeights::Normal());
     return result;
 }
 inline CheckBox compactCheck(std::shared_ptr<WorkspaceData> const& data,winrt::Windows::Foundation::IInspectable const& content){
@@ -450,6 +460,8 @@ inline void comboOptionText(ComboBoxItem const& option,hstring const& text){
     if(!content){
         content=option.Content().try_as<TextBlock>();
         if(!content){content=TextBlock();content.TextTrimming(TextTrimming::CharacterEllipsis);option.Content(content);}
+        content.FontFamily(FontFamily(L"Segoe UI"));content.FontWeight(Windows::UI::Text::FontWeights::Normal());
+        opticalText(content,content.FontSize());
         option.Tag(content);
     }
     if(content.Text()!=text)content.Text(text);AutomationProperties::SetName(option,text);
@@ -462,13 +474,14 @@ inline void comboOptionText(ComboBox const& control,uint32_t index,hstring const
     comboOptionText(control.Items().GetAt(index).as<ComboBoxItem>(),text);
 }
 template<typename T>
-inline void buttonColors(std::shared_ptr<WorkspaceData> const& data,T const& result,uint8_t hover=20){
-    Brush checked{nullptr};if constexpr(std::is_same_v<T,Primitives::ToggleButton>)checked=selected(data);
+inline void buttonColors(std::shared_ptr<WorkspaceData> const& data,T const& result,uint8_t hover=20,Brush const& checkedRole=nullptr){
+    Brush checked=checkedRole;if constexpr(std::is_same_v<T,Primitives::ToggleButton>)if(!checked)checked=selected(data);
+    result.FocusVisualPrimaryBrush(data->tint(L"accent",128));result.FocusVisualSecondaryBrush(clear());
     buttonFeedback(result,data->brush(L"text"),hover,41,nullptr,false,checked);
 }
 template<typename T=Button>
 inline T button(std::shared_ptr<WorkspaceData> const& data,hstring const& text,std::function<void()> action){
-    T result;edgeTag(result,L"edge_reset_contact",S(L"pickup"));result.Content(box_value(text));result.FontSize(data->textSize());
+    T result;edgeTag(result,L"edge_reset_contact",S(L"pickup"));auto caption=label(data,text,true);caption.ClearValue(TextBlock::ForegroundProperty());caption.ClearValue(TextBlock::FontWeightProperty());caption.ClearValue(TextBlock::FontSizeProperty());caption.ClearValue(TextBlock::FontFamilyProperty());result.Content(caption);result.FontSize(data->textSize());
     inheritLanguage(result,data);result.FontFamily(FontFamily(L"Segoe UI"));result.Foreground(data->brush(L"text"));
     result.FontWeight(Windows::UI::Text::FontWeights::Bold());
     result.MinWidth(0);result.MinHeight(0);result.Padding(Thickness{0});
@@ -484,10 +497,22 @@ inline T button(std::shared_ptr<WorkspaceData> const& data,LocalizedCopy const& 
     data->copyView([weak=make_weak(result),resolve=text.current,shown=static_cast<hstring const&>(text)]() mutable {
         auto view=weak.get();if(!view)return false;
         auto next=resolve();
-        if(auto content=view.Content().try_as<Windows::Foundation::IReference<hstring>>();content&&content.Value()==shown)view.Content(box_value(next));
+        if(auto content=view.Content().try_as<TextBlock>();content&&content.Text()==shown)buttonCaption(view,next);
         AutomationProperties::SetName(view,next);shown=next;return true;
     });
     return result;
+}
+template<typename T=Button,typename Caption>
+inline T raisedButton(std::shared_ptr<WorkspaceData> const& data,Caption const& text,std::function<void()> action){
+    auto result=button<T>(data,text,std::move(action));result.Background(buttonBackground(data));result.MinHeight(data->controlHeight());
+    auto padding=data->panelMetric(L"field_padding");result.Padding({padding,0,padding,0});return result;
+}
+inline StackPanel segmentRow(std::shared_ptr<WorkspaceData> const& data){
+    StackPanel row;row.Orientation(Orientation::Horizontal);row.Spacing(0);row.Background(clear());clipRounded(row,data->controlCorner());return row;
+}
+inline void segmentColors(std::shared_ptr<WorkspaceData> const& data,Primitives::ToggleButton const& button){
+    button.MinHeight(data->controlHeight());button.Background(clear());button.CornerRadius(data->controlCorner());
+    buttonColors(data,button,20,data->brush(L"header_selection"));
 }
 inline bool& touchContact(){thread_local bool touch=false;return touch;}
 struct TooltipOwner {weak_ref<DependencyObject> owner;ToolTip tip{nullptr};};
@@ -541,15 +566,18 @@ inline void revealTooltip(FrameworkElement const& target){
     }
     reveal.timer.Start();
 }
+inline Grid explainable(Control const& control);
 struct ChoiceGrid {
-    Grid grid;std::vector<Button> cells;
+    Grid grid;std::vector<Button> cells;std::vector<Grid> hosts;
     void update(std::shared_ptr<WorkspaceData> const& data,J const& spec)const{
         AutomationProperties::SetName(grid,str(spec,L"label"));tooltip(grid,str(spec,L"label"));
         auto items=array(spec,L"items");
         for(uint32_t i=0;i<std::min<uint32_t>(items.Size(),uint32_t(cells.size()));++i){
             auto item=items.GetObjectAt(i);bool chosen=flag(item,L"selected");
-            cells[i].Background(chosen?selected(data):data->brush(L"control_fill"));cells[i].Content().as<UIElement>().Opacity(chosen?1.:.45);
-            AutomationProperties::SetName(cells[i],str(item,L"label"));tooltip(cells[i],str(item,L"label"));
+            cells[i].Background(chosen?selected(data):clear());cells[i].Content().as<UIElement>().Opacity(chosen?1.:.45);
+            cells[i].IsEnabled(flag(item,L"enabled",true));
+            AutomationProperties::SetName(cells[i],str(item,L"label"));tooltip(hosts[i],flag(item,L"enabled",true)?str(item,L"label"):str(item,L"disabled_reason"));
+            cells[i].IsHitTestVisible(flag(item,L"enabled",true));AutomationProperties::SetHelpText(cells[i],str(item,L"disabled_reason"));
             AutomationProperties::SetItemStatus(cells[i],chosen?data->caption(L"search",L"selected"):L"");
         }
     }
@@ -563,8 +591,8 @@ inline ChoiceGrid choiceGrid(std::shared_ptr<WorkspaceData> const& data,J const&
         auto action=object(items.GetObjectAt(i),L"action");
         auto cell=button(data,L"",[send,action]{send(action);});cell.Width(18);cell.Height(18);
         cell.Content(icon(str(items.GetObjectAt(i),L"icon"),data->theme(),6));
-        Grid::SetColumn(cell,int(i%columns));Grid::SetRow(cell,int(i/columns));AutomationProperties::SetAutomationId(cell,id+L"-"+to_hstring(i));
-        result.grid.Children().Append(cell);result.cells.push_back(cell);
+        auto host=explainable(cell);Grid::SetColumn(host,int(i%columns));Grid::SetRow(host,int(i/columns));AutomationProperties::SetAutomationId(cell,id+L"-"+to_hstring(i));
+        result.grid.Children().Append(host);result.cells.push_back(cell);result.hosts.push_back(host);
     }
     result.update(data,spec);return result;
 }

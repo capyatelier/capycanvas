@@ -163,7 +163,15 @@ try {
  $checks.evidence=$run
  [pscustomobject]$checks|ConvertTo-Json|Tee-Object -FilePath (Join-Path $run 'results.json')
 } catch {
- if($review -and !$review.HasExited){try{Capture 'failure'}catch{}}
+ if($review -and !$review.HasExited){
+  try{@{search=(Search-State);model=(Model)}|ConvertTo-Json -Depth 80|Set-Content (Join-Path $run 'failure-search.json')}catch{}
+  try{
+   $focused=[System.Windows.Automation.AutomationElement]::FocusedElement
+   $controls=@(foreach($id in @('command-bar','command-search')){$item=Find $id;if($item){$bounds=$item.Current.BoundingRectangle;@{id=$id;offscreen=$item.Current.IsOffscreen;bounds=@($bounds.X,$bounds.Y,$bounds.Width,$bounds.Height)}}})
+   @{process_id=$review.Id;foreground=[CapyRowPointer]::GetForegroundWindow().ToInt64();focused_process=$focused.Current.ProcessId;focused_id=$focused.Current.AutomationId;focused_name=$focused.Current.Name;controls=$controls}|ConvertTo-Json -Depth 8|Set-Content (Join-Path $run 'failure-focus.json')
+  }catch{}
+  try{Capture 'failure' -WithModel}catch{}
+ }
  [IO.File]::WriteAllText((Join-Path $run 'failure.txt'),($_|Out-String)+$_.ScriptStackTrace);throw
 } finally {
  [CapyRowPointer]::Dispose()
