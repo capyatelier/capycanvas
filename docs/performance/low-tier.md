@@ -99,6 +99,11 @@ candidate. Trial-2 Flow value means are 45.177/42.963 control versus
 does not exceed its 5.02% between-control mean spread. It remains an unresolved
 tradeoff, not proof of a uniquely attributed regression. Both candidate phases are below both control phases. No further
 production candidate was tried under the two-candidate stopping limit.
+The original numeric recordings contain no per-frame value timeline, so the
+Flow-value presentation delta cannot establish a fresh-value regression.
+A subsequent harness records scalar/composed value changes and input positions;
+clip ordering is being rechecked with that gate on the current measurement-cache
+baseline. The earlier presents-only result remains diagnostic.
 
 Separate diagnostic traces establish RenderThread drawing/flush work and
 software clip-mask generation. The wheel has about three large logical

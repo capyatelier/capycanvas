@@ -417,5 +417,49 @@ class CaptureBudgetTest(unittest.TestCase):
         self.assertEqual(viewport.capture_budget_seconds("column", 3, 6000), 900)
 
 
+class ScalarDrawGateTest(unittest.TestCase):
+    def test_quantized_repeated_draws_do_not_count_as_fresh_values(self):
+        run = dict(motion=dict(contact_begin_boot_ns=0, contact_end_boot_ns=6_000_000_000),
+                   scalar_draw_samples=[dict(boot_ns=t, delivered_scalar="99", visual_signature=value)
+                       for t, value in [(0,"1"),(1_000_000_000,"1"),(2_000_000_000,"2"),(3_000_000_000,"2"),(4_000_000_000,"1")]])
+        result = viewport.scalar_draw_summary(run)
+        self.assertEqual(result["fresh_draw_value_changes"], 2)
+        self.assertEqual(result["fresh_draw_value_changes_per_s"], 1/3)
+        self.assertEqual(result["fresh_draw_value_gap_p99_ms"], 2000)
+
+    def test_old_raw_report_does_not_invent_fresh_value_rate(self):
+        self.assertNotIn("fresh_draw_value_changes_per_s", viewport.scalar_draw_summary({}))
+
+    def test_out_of_order_samples_fail(self):
+        with self.assertRaisesRegex(ValueError, "monotonic"):
+            viewport.scalar_draw_summary(dict(motion=dict(contact_begin_boot_ns=0, contact_end_boot_ns=6), scalar_draw_samples=[dict(boot_ns=2,visual_signature="1",delivered_scalar="1"),dict(boot_ns=1,visual_signature="2",delivered_scalar="2")]))
+
+    def test_prefix_suffix_and_independent_scalar_revisits(self):
+        rows = [(0,"0","0"),(10,"1","1"),(20,"2","1"),(30,"1","2"),(40,"3","3")]
+        run = dict(motion=dict(contact_begin_boot_ns=10,contact_end_boot_ns=30),
+                   scalar_draw_samples=[dict(boot_ns=t,delivered_scalar=value,visual_signature=visual) for t,value,visual in rows])
+        result = viewport.scalar_draw_summary(run)
+        self.assertEqual(result["delivered_scalar_changes"],2)
+        self.assertEqual(result["fresh_draw_value_changes"],1)
+        self.assertEqual(result["delivered_scalar_timestamps_boot_ns"],[20,30])
+        self.assertEqual(result["scalar_observation_count"],3)
+        self.assertEqual(result["scalar_observation_onset_ms"],0)
+        self.assertEqual(result["scalar_observation_trailing_ms"],0)
+
+    def test_input_positions_and_observer_overhead_remain_distinct_from_values(self):
+        run = dict(motion=dict(contact_begin_boot_ns=0,contact_end_boot_ns=6_000_000_000),
+                   scalar_draw_samples=[dict(boot_ns=1,delivered_scalar="1",visual_signature="1")],
+                   scalar_observer_overhead=dict(samples=1,wall_ms=dict(p99=.1)),
+                   scalar_input_samples=[dict(begin_boot_ns=t,end_boot_ns=t+1,x=x,y=0,action=2) for t,x in [(0,0),(1,0),(2,1),(3,0)]])
+        result = viewport.scalar_draw_summary(run)
+        self.assertEqual(result["injected_scalar_input_events"],4)
+        self.assertEqual(result["injected_scalar_position_changes"],2)
+        self.assertEqual(result["fresh_draw_value_changes"],0)
+        self.assertEqual(result["scalar_observer_overhead"],run["scalar_observer_overhead"])
+        run["scalar_input_samples"][0]["end_boot_ns"] = -1
+        with self.assertRaisesRegex(ValueError,"injection intervals"):
+            viewport.scalar_draw_summary(run)
+
+
 if __name__ == "__main__":
     unittest.main()

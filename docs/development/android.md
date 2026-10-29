@@ -376,6 +376,12 @@ lets its `--adaptive-script` helper enable 90 Hz after private fixture setup.
   `ui-layers-scroll`, `ui-brushes-scroll`, `ui-filters-scroll` and
   `ui-layer-row-opacity` (the native layer-row two-finger opacity popup). They select the native
   UI fixture and require at least three `--repeats` measured contacts.
+  Numeric reports also retain input positions, delivered scalar values and
+  composed values observed at draw, with change rates and gap p99. Repeated
+  quantized values do not demand a new frame each refresh; compare fresh-value
+  delivery and tails alongside actual presents. Draw observations do not prove
+  pixel/SF identity or every accepted intermediate value. Reports retain the
+  observer's CPU/wall overhead; missing observations cannot qualify freshness.
   `ui-bar-show-hide`, `ui-bar-show-hide-zen`, `ui-panel-change` and
   `ui-zen-transition`, `ui-menu-open`, `ui-menu-submenu`, `ui-dialog-transition`,
   `ui-grouped-tool-menu` and `ui-tile-drag` report diagnostic transition windows. Each active window is

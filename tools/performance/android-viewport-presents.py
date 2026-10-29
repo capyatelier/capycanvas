@@ -283,6 +283,70 @@ def window_presents(run, shown):
     return selected, dict(window_title=title, window_selection="literal native target window" if title is not None else "app-owned aggregate; target window unspecified", owned_surface_present_counts=counts)
 
 
+def scalar_draw_summary(run):
+    samples = run.get("scalar_draw_samples")
+    if samples is None:
+        return dict(fresh_value_gate="unavailable: no scalar draw observations")
+    contact = run["motion"]
+    begin, end = contact["contact_begin_boot_ns"], contact["contact_end_boot_ns"]
+    if type(begin) is not int or type(end) is not int or end <= begin:
+        raise ValueError("Scalar draw observations require an ordered contact")
+    previous = {}
+    changes = {"delivered_scalar": [], "visual_signature": []}
+    last_time = None
+    observations = []
+    for sample in samples:
+        timestamp = sample["boot_ns"]
+        if type(timestamp) is not int or last_time is not None and timestamp < last_time:
+            raise ValueError("Scalar draw timestamps must be monotonic")
+        last_time = timestamp
+        if not begin <= timestamp <= end:
+            continue
+        observations.append(timestamp)
+        for key in changes:
+            value = sample[key]
+            if value is None or value == "":
+                raise ValueError("Scalar target has no observable value")
+            if key in previous and value != previous[key]:
+                changes[key].append(timestamp)
+            previous[key] = value
+    if not observations:
+        raise ValueError("No scalar draw observations inside contact")
+    result = dict(fresh_value_gate="delivered scalar and composed semantics observed at draw; not pixel/SF identity or accepted-input rate",
+                  scalar_observation_count=len(observations), scalar_contact_span_ms=(end-begin)/1e6,
+                  scalar_observation_onset_ms=(observations[0]-begin)/1e6 if observations else None,
+                  scalar_observation_trailing_ms=(end-observations[-1])/1e6 if observations else None)
+    for key, prefix in [("delivered_scalar", "delivered_scalar"), ("visual_signature", "fresh_draw_value")]:
+        times = changes[key]
+        result.update({prefix+"_changes": len(times), prefix+"_changes_per_s": len(times)*1e9/(end-begin),
+                       prefix+"_gap_p99_ms": quantile([(b-a)/1e6 for a,b in zip(times,times[1:])], .99),
+                       prefix+"_timestamps_boot_ns": times})
+    if "scalar_observer_overhead" in run:
+        result["scalar_observer_overhead"] = run["scalar_observer_overhead"]
+    inputs = run.get("scalar_input_samples")
+    if inputs is not None:
+        previous_time = None
+        previous_position = None
+        changed = []
+        events = 0
+        for row in inputs:
+            timestamp = row["begin_boot_ns"]
+            if type(timestamp) is not int or type(row["end_boot_ns"]) is not int or row["end_boot_ns"] < timestamp or previous_time is not None and timestamp < previous_time:
+                raise ValueError("Scalar input timestamps must be ordered injection intervals")
+            previous_time = timestamp
+            if not begin <= timestamp <= end:
+                continue
+            events += 1
+            position = (row["x"], row["y"])
+            if previous_position is not None and position != previous_position:
+                changed.append(timestamp)
+            previous_position = position
+        result.update(injected_scalar_input_events=events, injected_scalar_position_changes=len(changed),
+                      injected_scalar_position_changes_per_s=len(changed)*1e9/(end-begin),
+                      injected_scalar_position_gap_p99_ms=quantile([(b-a)/1e6 for a,b in zip(changed,changed[1:])], .99))
+    return result
+
+
 def chrome_summary(run, shown):
     shown, surfaces = window_presents(run, shown)
     if run.get("motion") == "layer-selection":
@@ -319,6 +383,7 @@ def chrome_summary(run, shown):
         summaries.append(summary)
     return dict(measurement="SurfaceFlinger app-window actual presentations in separate active windows",
                 sustained=all("presented_per_s" in window for window in summaries), windows=summaries, **completeness, **surfaces,
+                **scalar_draw_summary(run),
                 **{key: run[key] for key in ["run", "label", "mode", "presentation", "motion", "theme", "thermal_before", "thermal_after", "changed_bounds", "changed_bounds_rate", "column_docking_witness"] if key in run})
 
 

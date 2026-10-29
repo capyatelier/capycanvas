@@ -195,7 +195,10 @@ class AndroidCanvasBarBenchmarkTest {
             var lastDownInjectionNs = 0L
             var lastUpInjectionBootNs = 0L
             var firstDownInjectionBootNs = 0L
+            data class ScalarInput(val begin: Long, val end: Long, val action: Int, val x: Double, val y: Double)
+            var scalarInputs: MutableList<ScalarInput>? = null
             fun inject(action: Int, down: Long, x: Double, y: Double, pressure: Float) {
+                val inputBoot = if (scalarInputs != null) SystemClock.elapsedRealtimeNanos() else 0L
                 if (action == MotionEvent.ACTION_DOWN && measuring && firstDownInjectionBootNs == 0L) firstDownInjectionBootNs = SystemClock.elapsedRealtimeNanos()
                 if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) lastUpInjectionBootNs = SystemClock.elapsedRealtimeNanos()
                 val injectionBegan = System.nanoTime()
@@ -206,7 +209,7 @@ class AndroidCanvasBarBenchmarkTest {
                 val event = MotionEvent.obtain(down, SystemClock.uptimeMillis(), action, 1, properties, coords, 0, 0, 1f, 1f, 0, 0, if (injectedToolType == MotionEvent.TOOL_TYPE_FINGER) InputDevice.SOURCE_TOUCHSCREEN else InputDevice.SOURCE_STYLUS, 0)
                 try { check(instrumentation.uiAutomation.injectInputEvent(event, action != MotionEvent.ACTION_MOVE) || action == MotionEvent.ACTION_CANCEL) {
                     "Stylus injection failed: $event"
-                } } finally { event.recycle(); if (action == MotionEvent.ACTION_DOWN) lastDownInjectionNs = System.nanoTime() - injectionBegan }
+                } } finally { scalarInputs?.add(ScalarInput(inputBoot, SystemClock.elapsedRealtimeNanos(), action, x, y)); event.recycle(); if (action == MotionEvent.ACTION_DOWN) lastDownInjectionNs = System.nanoTime() - injectionBegan }
             }
             var mark = 0L
             var dispatched = 0L
@@ -958,26 +961,82 @@ class AndroidCanvasBarBenchmarkTest {
                 }
                 transitions("ui-bar-show-hide") { barContactTransitions() }
                 var contactDetails: (() -> JSONObject)? = null
-                fun continuous(label: String, sample: () -> String, contact: (Int) -> Unit) {
+                fun continuous(label: String, sample: () -> String, drawTarget: (() -> Pair<ViewRootForTest, SemanticsNode>?)? = null, drawValue: (() -> Double)? = null, contact: (Int) -> Unit) {
                     if (!selected(label)) return
                     currentUiLabel = label
                     val variants = mutableSetOf<String>()
                     boundedContactSampling = true
                     var samples = JSONArray()
+                    var lastDrawSamples = JSONArray()
+                    var lastInputSamples = JSONArray()
+                    var lastObserverOverhead = JSONObject()
                     contactObserver = {
                         var value: String? = null
                         try { val next = sample(); value = next; variants.add(next) }
                         finally { samples.put(obj("boot_ns" to SystemClock.elapsedRealtimeNanos(), "state" to value, "details" to contactDetails?.invoke())) }
                     }
+                    @Suppress("INVISIBLE_MEMBER", "INVISIBLE_REFERENCE")
                     fun runContact(milliseconds: Int, phase: String) {
                         samples = JSONArray()
                         val began = SystemClock.elapsedRealtimeNanos()
+                        data class DrawSample(val boot: Long, val scalar: Double, val texts: List<String>, val ranges: List<Float>, var wall: Long, var cpu: Long)
+                        val drawRows = mutableListOf<DrawSample>()
+                        val inputRows = mutableListOf<ScalarInput>()
+                        var root: android.view.View? = null
+                        var infos = emptyList<androidx.compose.ui.semantics.SemanticsInfo>()
+                        val drawFailure = java.util.concurrent.atomic.AtomicReference<Throwable?>()
+                        val observer = android.view.ViewTreeObserver.OnDrawListener {
+                            if (drawTarget != null && drawFailure.get() == null) try {
+                                val wall = System.nanoTime()
+                                val cpu = android.os.Debug.threadCpuTimeNanos()
+                                val boot = SystemClock.elapsedRealtimeNanos()
+                                val texts = mutableListOf<String>()
+                                val ranges = mutableListOf<Float>()
+                                for (info in infos) {
+                                    check(info.isAttached && info.isPlaced) { "$label scalar target detached" }
+                                    val config = checkNotNull(info.semanticsConfiguration) { "$label scalar semantics disappeared" }
+                                    config.getOrNull(SemanticsProperties.Text)?.forEach { texts.add(it.text) }
+                                    config.getOrNull(SemanticsProperties.ProgressBarRangeInfo)?.let { ranges.add(it.current) }
+                                }
+                                val scalar = checkNotNull(drawValue).invoke()
+                                val row = DrawSample(boot, scalar, texts, ranges, 0, 0)
+                                drawRows.add(row)
+                                row.wall = System.nanoTime()-wall
+                                row.cpu = android.os.Debug.threadCpuTimeNanos()-cpu
+                            } catch (error: Throwable) { drawFailure.compareAndSet(null, error) }
+                        }
+                        instrumentation.runOnMainSync {
+                            drawTarget?.let {
+                                val target = checkNotNull(it.invoke()) { "$label draw target unavailable" }
+                                root = target.first.view
+                                fun collect(node: SemanticsNode): List<androidx.compose.ui.semantics.SemanticsInfo> =
+                                    listOf(checkNotNull(node.layoutInfo as? androidx.compose.ui.semantics.SemanticsInfo)) + node.children.flatMap(::collect)
+                                infos = collect(target.second).filter { info -> info.semanticsConfiguration?.let { config ->
+                                    config.getOrNull(SemanticsProperties.Text) != null || config.getOrNull(SemanticsProperties.ProgressBarRangeInfo) != null
+                                } == true }
+                                check(infos.isNotEmpty()) { "$label has no scalar visual semantics" }
+                            }
+                            root?.viewTreeObserver?.addOnDrawListener(observer)
+                        }
+                        if (drawTarget != null) scalarInputs = inputRows
                         try { contact(milliseconds) }
                         finally {
+                            instrumentation.runOnMainSync { root?.viewTreeObserver?.takeIf { it.isAlive }?.removeOnDrawListener(observer) }
+                            scalarInputs = null
+                            val drawSamples = JSONArray(drawRows.map { row -> obj("boot_ns" to row.boot, "delivered_scalar" to row.scalar,
+                                "visual_signature" to (row.texts.joinToString("|") + "#" + row.ranges.joinToString("|"))) })
+                            lastDrawSamples = drawSamples
+                            lastInputSamples = JSONArray(inputRows.map { row -> obj("begin_boot_ns" to row.begin, "end_boot_ns" to row.end,
+                                "action" to row.action, "x" to row.x, "y" to row.y) })
+                            lastObserverOverhead = obj("samples" to drawRows.size, "wall_ms" to quantiles(drawRows.map { it.wall / 1e6 }),
+                                "thread_cpu_ms" to quantiles(drawRows.map { it.cpu / 1e6 }))
                             File(output, "$label-$phase-interaction.json").writeText(obj("label" to label, "phase" to phase,
                                 "begin_boot_ns" to began, "end_boot_ns" to SystemClock.elapsedRealtimeNanos(), "fixture" to chromeFixture,
-                                "state_variants" to JSONArray(variants.toList()), "samples" to samples).toString(2))
+                                "state_variants" to JSONArray(variants.toList()), "samples" to samples, "scalar_draw_samples" to drawSamples,
+                                "scalar_input_samples" to lastInputSamples, "scalar_observer_overhead" to lastObserverOverhead,
+                                "scalar_draw_error" to drawFailure.get()?.stackTraceToString()).toString(2))
                         }
+                        drawFailure.get()?.let { throw it }
                     }
                     try {
                         canvasReady("$label primer canvas ready")
@@ -988,7 +1047,12 @@ class AndroidCanvasBarBenchmarkTest {
                             measure(label) { runContact(chromeDuration, "contact-${index + 1}") }
                             check(variants.size > 1) { "$label did not change during native contact" }
                             val file = File(output, "$label.json")
-                            file.writeText(JSONObject(file.readText()).put("state_variants", variants.size)
+                            file.writeText(JSONObject(file.readText()).apply {
+                                if (drawTarget != null) {
+                                    put("scalar_draw_samples", lastDrawSamples); put("scalar_input_samples", lastInputSamples)
+                                    put("scalar_observer_overhead", lastObserverOverhead)
+                                }
+                            }.put("state_variants", variants.size)
                                 .put("contact_index", index + 1).put("primer_ms", chromeDuration).put("fixture", chromeFixture).toString(2))
                             file.copyTo(File(output, "$label-${index + 1}.json"), overwrite = true)
                         }
@@ -1083,7 +1147,7 @@ class AndroidCanvasBarBenchmarkTest {
                         chromeFixture.put("native_control", if (component != null) "component-slider-${component.getInt("id")}" else if (panel) "tool-setting-$id" else if (popup) "toolbar-number-menu" else "toolbar-setting-$id")
                         interactionSnapshot("$label-before", label, ::control)
                         targetWindow(::control)
-                        continuous(label, { field().getDouble("value").toString() }) { milliseconds ->
+                        continuous(label, { field().getDouble("value").toString() }, ::control, { field().getDouble("value") }) { milliseconds ->
                             drag(from, milliseconds) { t -> if (vertical) 0.0 to span * sin(2 * PI * t) else span * sin(2 * PI * t) to 0.0 }
                         }
                         interactionSnapshot("$label-after", label, ::control)
@@ -1137,7 +1201,7 @@ class AndroidCanvasBarBenchmarkTest {
                     val from = contactPoint(bounds)
                     val span = if (kind == "slider") bounds.width() * .25 else 18.0 * activity.resources.displayMetrics.density
                     targetWindow(::opacityControl)
-                    continuous(opacityLabel, { state().array("layers").objects().first { it.optBoolean("editing") }.getDouble("opacity").toString() }) { milliseconds ->
+                    continuous(opacityLabel, { state().array("layers").objects().first { it.optBoolean("editing") }.getDouble("opacity").toString() }, ::opacityControl, { state().array("layers").objects().first { it.optBoolean("editing") }.getDouble("opacity") }) { milliseconds ->
                         drag(from, milliseconds) { t -> if (kind == "value") 0.0 to span * sin(2 * PI * t) else span * sin(2 * PI * t) to 0.0 }
                     }
                 }
@@ -1183,11 +1247,9 @@ class AndroidCanvasBarBenchmarkTest {
                     targetWindow(::slider)
                     try {
                         continuous("ui-layer-row-opacity", {
-                            var shown = false
-                            instrumentation.runOnMainSync { shown = controlGeometry(slider()).optBoolean("visible") }
-                            check(shown && state().getJSONObject("layer_tools").optLong("opacity_popup", -1) == target) { "Native layer row opacity popup disappeared" }
+                            check(state().getJSONObject("layer_tools").optLong("opacity_popup", -1) == target) { "Native layer row opacity popup disappeared" }
                             state().array("layers").objects().first { it.getLong("id") == target }.getDouble("opacity").toString()
-                        }) { milliseconds -> drag(from, milliseconds) { t -> bounds.width() * .25 * sin(2 * PI * t) to 0.0 } }
+                        }, ::slider, { state().array("layers").objects().first { it.getLong("id") == target }.getDouble("opacity") }) { milliseconds -> drag(from, milliseconds) { t -> bounds.width() * .25 * sin(2 * PI * t) to 0.0 } }
                     } finally {
                         if (findTag("layer-gesture-opacity") != null) nativeBack()
                         waitFor("Layer row opacity popup closed") { findTag("layer-gesture-opacity") == null && state().getJSONObject("layer_tools").optLong("opacity_popup", -1) != target }
