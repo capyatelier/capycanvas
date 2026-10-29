@@ -60,7 +60,7 @@ function Native-Caption([string]$Id,[string]$Label){
    if(![string]::IsNullOrWhiteSpace($expected)){
     if(!$rectangles.Count){$issues+="Character $i has no visible rectangle"}
     foreach($rectangle in $rectangles){
-     if($rectangle.IsEmpty -or $rectangle.Width -le 0 -or $rectangle.Height -le 0 -or ![double]::IsFinite($rectangle.X+$rectangle.Y+$rectangle.Width+$rectangle.Height)){$issues+="Character $i has no positive finite rectangle";continue}
+     if($rectangle.IsEmpty -or $rectangle.Width -le 0 -or $rectangle.Height -le 0 -or [double]::IsNaN($rectangle.X+$rectangle.Y+$rectangle.Width+$rectangle.Height) -or [double]::IsInfinity($rectangle.X+$rectangle.Y+$rectangle.Width+$rectangle.Height)){$issues+="Character $i has no positive finite rectangle";continue}
      if(!$captionLimit.Contains($rectangle) -or !$rowLimit.Contains($rectangle)){$issues+="Character $i extends outside its caption or row"}
      foreach($other in $others){$hint=$other.Current.BoundingRectangle;if($hint.Width -gt 0 -and $hint.Height -gt 0 -and $rectangle.Right -gt $hint.X+1 -and $rectangle.X -lt $hint.Right-1 -and $rectangle.Bottom -gt $hint.Y+1 -and $rectangle.Y -lt $hint.Bottom-1){$issues+="Character $i overlaps its native shortcut"}}
     }

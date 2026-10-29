@@ -31,7 +31,7 @@ class HeaderStatus {
             shell.Width(22);shell.Height(14);shell.HorizontalAlignment(HorizontalAlignment::Left);shell.CornerRadius({4,4,4,4});
             charge.Height(14);charge.HorizontalAlignment(HorizontalAlignment::Left);charge.CornerRadius({4,4,4,4});
             shell.Child(charge);battery.Children().Append(shell);
-            percent=label(data,L"",true);percent.Width(22);percent.LineHeight(14);
+            percent=label(data,L"",true);percent.Width(22);
             percent.HorizontalAlignment(HorizontalAlignment::Left);percent.TextAlignment(TextAlignment::Center);
             percent.VerticalAlignment(VerticalAlignment::Center);battery.Children().Append(percent);
             cap.Width(2);cap.Height(6);cap.CornerRadius({1,1,1,1});cap.HorizontalAlignment(HorizontalAlignment::Left);
@@ -65,7 +65,7 @@ class HeaderStatus {
                 auto ink=color(charging?L"#13251a":light?L"#ffffff":L"#202226");
                 auto paint=color(charging?L"#91b89d":low?(light?L"#a15d59":L"#bc9996"):light?L"#3f4246":L"#e5e7eb");
                 shell.Background(fill(track));cap.Background(fill(track));charge.Background(fill(paint));charge.Width(22.*scale*level/100.);
-                percent.Text(known?to_hstring(level):L"?");percent.FontSize((level==100?10:11)*scale);percent.Width((charging?21.:22.)*scale);percent.Margin({0,0,(charging?5.:4.)*scale,0});percent.Foreground(fill(ink));
+                percent.Text(known?to_hstring(level):L"?");percent.FontSize((level==100?10:11)*scale);opticalText(percent,percent.FontSize());percent.Width((charging?21.:22.)*scale);percent.Margin({0,0,(charging?5.:4.)*scale,0});percent.Foreground(fill(ink));
                 cap.Visibility(charging?Visibility::Collapsed:Visibility::Visible);bolt.Visibility(charging?Visibility::Visible:Visibility::Collapsed);
                 bolt.Fill(fill(light?ink:color(L"#e5e7eb")));bolt.Stroke(fill(light?track:color(L"#202226")));
                 auto description=known?L"Battery "+to_hstring(level)+L"%"+(charging?L", charging":low?L", low":L""):L"Battery unavailable";
@@ -80,7 +80,6 @@ class HeaderStatus {
         void apply(bool fullscreen,bool hidden,bool editing,double tile,double icon){
             scale=icon/20.;clockTile.Height(tile);batteryTile.Width(tile);batteryTile.Height(tile);batteryTile.CornerRadius({tile*.5*CapyUi::CornerFit,tile*.5*CapyUi::CornerFit,tile*.5*CapyUi::CornerFit,tile*.5*CapyUi::CornerFit});
             battery.Width(26*scale);battery.Height(14*scale);shell.Width(22*scale);shell.Height(14*scale);charge.Height(14*scale);shell.CornerRadius({4*scale,4*scale,4*scale,4*scale});charge.CornerRadius({4*scale,4*scale,4*scale,4*scale});cap.CornerRadius({scale,scale,scale,scale});bolt.StrokeThickness(1.75*scale);
-            percent.Width(26*scale);percent.LineHeight(14*scale);percent.LineStackingStrategy(winrt::Microsoft::UI::Xaml::LineStackingStrategy::BlockLineHeight);percent.TextLineBounds(winrt::Microsoft::UI::Xaml::TextLineBounds::Tight);
             cap.Width(2*scale);cap.Height(6*scale);cap.Margin({23*scale,4*scale,0,0});bolt.Width(8*scale);bolt.Height(12*scale);bolt.Margin({18*scale,scale,0,0});
 
             using namespace CapyUi;

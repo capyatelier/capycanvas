@@ -83,7 +83,7 @@ struct WorkspaceDialogs::Impl:std::enable_shared_from_this<Impl>{
             RowDefinition row;row.Height({1,unit});body.RowDefinitions().Append(row);
         }
         description.TextWrapping(TextWrapping::Wrap);body.Children().Append(description);
-        name.HorizontalAlignment(HorizontalAlignment::Stretch);name.MaxLength(256);
+        fieldColors(data,name,ControlSurface::Dialog);fieldColors(data,search,ControlSurface::Dialog);name.HorizontalAlignment(HorizontalAlignment::Stretch);name.MaxLength(256);
         Grid::SetRow(name,1);body.Children().Append(name);
         search.HorizontalAlignment(HorizontalAlignment::Stretch);
         Grid::SetRow(search,2);body.Children().Append(search);

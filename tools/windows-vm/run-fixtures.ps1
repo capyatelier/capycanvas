@@ -18,6 +18,10 @@ $Executable = (Resolve-Path -LiteralPath $Executable).Path
 $editorExecutable=$Executable
 $controlBuilds=@{}
 $scripts = (Resolve-Path (Join-Path $PSScriptRoot '../../apps/layer-windows/scripts')).Path
+function Get-FixtureVariantArguments([string]$Fixture,[string]$Option,[string]$Choice){
+    if($Fixture -eq 'switcher-drag' -and $Option -eq 'ContextEnding'){'-ContextHoldOnly'}
+    "-$Option";$Choice
+}
 $runs = [ordered]@{ shortcuts = $null }
 $debuggable = @()
 foreach ($script in Get-ChildItem (Join-Path $scripts 'exercise-*.ps1')) {
@@ -30,7 +34,7 @@ foreach ($script in Get-ChildItem (Join-Path $scripts 'exercise-*.ps1')) {
         $option = $parameter.Name.VariablePath.UserPath
         if ($parameter.StaticType -eq [switch]) { $runs["${fixture}:$option"] = @("-$option") }
         $choices = ($parameter.Attributes | Where-Object { $_.TypeName.Name -eq 'ValidateSet' }).PositionalArguments.Value
-        foreach ($choice in $choices | Where-Object { $null -ne $_ -and $_ -ne $parameter.DefaultValue.Value }) { $runs["${fixture}:$choice"] = @("-$option", $choice) }
+        foreach ($choice in $choices | Where-Object { $null -ne $_ -and $_ -ne $parameter.DefaultValue.Value }) { $runs["${fixture}:$choice"] = @(Get-FixtureVariantArguments $fixture $option $choice) }
     }
 }
 function Select-Fixtures([string[]]$Available,[string[]]$Requested) {

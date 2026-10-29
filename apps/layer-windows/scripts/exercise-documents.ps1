@@ -1294,6 +1294,8 @@ File-Command 'export_document' {
     if(!$scroll){throw 'The export options do not scroll'}
     $scroll.SetScrollPercent([System.Windows.Automation.ScrollPattern]::NoScroll,100)
     Wait-Until {!(Find-Id 'export-remove-location').Current.IsOffscreen} 'Remove location could not be scrolled into view'
+    $remove=Control 'export-remove-location' -Arranged
+    if($remove.Current.Name -cne (Model).windows_document.details.feature_copy.export.remove_location){throw 'Remove location accessible caption differs from the shared metadata copy'}
     Combo-Select $script:metadata {$_.Current.Name -eq 'Copyright & Contact'}
     Wait-Until {!(Find-Id 'export-remove-location')} 'Remove location stayed for Copyright & Contact'
 }

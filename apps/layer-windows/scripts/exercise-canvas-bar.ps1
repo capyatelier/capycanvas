@@ -7,6 +7,12 @@ $tailOnly=$Theme.StartsWith('tail-');if($tailOnly){$Theme=$Theme.Substring(5)}
 $CapyWaitSeconds=45
 Add-Type -AssemblyName System.Drawing
 Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
+$inkHelpers=[System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot 'capture-number-controls.ps1'),[ref]$null,[ref]$null)
+foreach($helper in @('Measure-RenderedInk','Assert-ControlCaptionInk','Save-ControlCaptionInk')){
+ $definition=$inkHelpers.Find({param($node)$node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $helper},$true)
+ if(!$definition){throw "Missing rendered ink helper: $helper"}
+ . ([scriptblock]::Create($definition.Extent.Text))
+}
 if(!('CapyBarInvokeTrace' -as [type])){Add-Type -ReferencedAssemblies @([System.Windows.Automation.AutomationElement].Assembly.Location;[System.Windows.Automation.AutomationEvent].Assembly.Location;'WindowsBase';if($PSVersionTable.PSEdition -eq 'Core'){'System.Collections.dll';'System.Threading.dll'}) -TypeDefinition @'
 using System;
 using System.Collections.Generic;
@@ -199,6 +205,10 @@ function Capture-CanvasParity([string]$Context){
   }
   $metrics|ConvertTo-Json|Set-Content (Join-Path $run "$Context-metrics-$Theme-glass-$captureGlass.json")
   Capture ("$Context-$Theme-glass-$captureGlass") -WithModel -Composed
+  if($Context -eq 'transform-segments'){
+   $caption=Control 'canvas-bar-choice-transform-mode-0' -Arranged
+   $null=Save-ControlCaptionInk $caption $drawingWindow (Join-Path $run "$Context-$Theme-glass-$captureGlass.png") (Model).state.palette.text (Join-Path $run "scale-caption-$Theme-glass-$captureGlass")
+  }
  }
  Set-CapyTransparency $captureTransparency
 }

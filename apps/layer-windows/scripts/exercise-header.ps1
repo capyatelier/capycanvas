@@ -345,6 +345,17 @@ function Capture-HeaderParity {
     foreach($captureGlass in @('off','low')){
         Set-CapyTransparency $captureGlass
         Edit-Header
+        $entry=@(Entries|Where-Object {$candidate=Find ('header-select-'+$_.id) -Visible;$candidate -and $candidate.Current.IsEnabled -and !$candidate.Current.BoundingRectangle.IsEmpty})|Select-Object -First 1
+        if(!$entry){throw 'Header has no arranged item for its selection outline'}
+        Select-HeaderItem $entry.id
+        $selected=Control ('header-item-'+$entry.id) -Arranged
+        $editor=Control ('header-select-'+$entry.id) -Arranged
+        $selectedStatus='Selected'
+        Wait-Until {$selected.Current.ItemStatus -ceq $selectedStatus} 'Header item did not acknowledge its native selection'
+        $done=Control 'header-edit-done' -Arranged;$done.SetFocus()
+        $away=At 'drawing-canvas';[CapyRowPointer]::Hover($away.x,$away.y)
+        Wait-Until {$done.Current.HasKeyboardFocus -and !$editor.Current.HasKeyboardFocus -and $selected.Current.ItemStatus -ceq $selectedStatus} 'Moving keyboard focus changed the selected header item'
+        @{selected_id=$entry.id;selected_status=$selected.Current.ItemStatus;selected_keyboard_focus=$editor.Current.HasKeyboardFocus;done_keyboard_focus=$done.Current.HasKeyboardFocus}|ConvertTo-Json|Set-Content (Join-Path $run "header-outline-$Theme-glass-$captureGlass.json")
         $scale=[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.
         $metrics=@()
         foreach($id in @('header-component-tools','header-edit-done','header-edit-cancel')){
@@ -514,7 +525,7 @@ function Check-Fullscreen([switch]$WindowOnly) {
 }
 function Check-FullscreenWindow {
     Add-Type -AssemblyName System.Drawing
-    $references=@(Get-ChildItem -LiteralPath (Join-Path $PSHOME 'ref') -Filter '*.dll' | ForEach-Object FullName)+@([System.Drawing.Bitmap].Assembly.Location)+@((Join-Path $PSHOME 'System.Private.Windows.Core.dll'),(Join-Path $PSHOME 'System.Private.Windows.GdiPlus.dll'))
+    $references=if($PSEdition -eq 'Core'){@(Get-ChildItem -LiteralPath (Join-Path $PSHOME 'ref') -Filter '*.dll' | ForEach-Object FullName)+@([System.Drawing.Bitmap].Assembly.Location)+@((Join-Path $PSHOME 'System.Private.Windows.Core.dll'),(Join-Path $PSHOME 'System.Private.Windows.GdiPlus.dll'))}else{@('System.dll','System.Core.dll','System.Drawing.dll')}
     Add-Type -ReferencedAssemblies ($references | Select-Object -Unique) -TypeDefinition @'
 using System;using System.Runtime.InteropServices;using System.Drawing;using System.Threading;using System.Collections.Generic;using System.Diagnostics;using System.IO;
 public static class CapyFullscreenProbe {

@@ -79,12 +79,12 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
     }
     static hstring profileLabel(J const& entry){return str(entry,L"name")+L" · "+str(entry,L"state")+(entry.HasKey(L"issue")?L" · "+str(entry,L"issue"):L"");}
     template<class Control> void copyHeader(Control const& control,LocalizedCopy const& copy){
-        control.Header(box_value(hstring(copy)));AutomationProperties::SetName(control,copy);
-        data->copyView([weak=make_weak(control),resolve=copy.current]{auto control=weak.get();if(!control)return false;auto value=resolve();control.Header(box_value(value));AutomationProperties::SetName(control,value);return true;});
+        auto caption=label(data,hstring(copy));control.Header(caption);AutomationProperties::SetName(control,copy);
+        data->copyView([weak=make_weak(control),caption,resolve=copy.current]{auto control=weak.get();if(!control)return false;auto value=resolve();caption.Text(value);AutomationProperties::SetName(control,value);return true;});
     }
     template<class Control> void copyContent(Control const& control,LocalizedCopy const& copy){
-        control.Content(box_value(hstring(copy)));AutomationProperties::SetName(control,copy);
-        data->copyView([weak=make_weak(control),resolve=copy.current]{auto control=weak.get();if(!control)return false;auto value=resolve();control.Content(box_value(value));AutomationProperties::SetName(control,value);return true;});
+        control.FontFamily(FontFamily(L"Segoe UI"));control.FontSize(data->textSize());control.Foreground(data->brush(L"text"));buttonCaption(control,hstring(copy));
+        data->copyView([weak=make_weak(control),resolve=copy.current]{auto control=weak.get();if(!control)return false;buttonCaption(control,resolve());return true;});
     }
     fire_and_forget importPaper(J envelope){
         auto lifetime=shared_from_this();auto id=num(envelope,L"id");showing=true;changed();
@@ -137,7 +137,7 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
                 dialog.Title(box_value(str(request,L"title")));
                 dialog.PrimaryButtonText(str(options,L"save_label"));
                 dialog.SecondaryButtonText(str(options,L"discard_label"));
-                TextBlock text;text.Text(str(options,L"unsaved_description"));text.TextWrapping(TextWrapping::Wrap);
+                auto text=label(data,str(options,L"unsaved_description"));text.TextWrapping(TextWrapping::Wrap);
                 body.Children().Append(text);
                 ScrollViewer scroll;scroll.MaxHeight(std::max(180.,double(size.Height)-220));scroll.Content(body);dialog.Content(scroll);
                 auto choice=co_await dialog.ShowAsync();
@@ -211,7 +211,7 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
             dialog=ContentDialog();dialog.XamlRoot(window.Content().XamlRoot());dialogSurface(data,dialog);dialog.Title(box_value(str(object(request,L"copy"),L"interpret_title")));
             dialog.PrimaryButtonText(recovery(L"open"));dialog.CloseButtonText(common(L"cancel"));
             StackPanel body;body.Spacing(12);auto info=label(data,interpretationText(L"interpret_help"));info.TextWrapping(TextWrapping::Wrap);body.Children().Append(info);
-            ComboBox space;choiceColors(data,space);AutomationProperties::SetAutomationId(space,L"document-interpret-profile");copyHeader(space,interpretationText(L"interpret_as"));auto spaces=array(request,L"spaces");
+            ComboBox space;choiceColors(data,space,ControlSurface::Dialog);AutomationProperties::SetAutomationId(space,L"document-interpret-profile");copyHeader(space,interpretationText(L"interpret_as"));auto spaces=array(request,L"spaces");
             A choices;for(auto value:spaces){comboOption(space,value.GetArray().GetStringAt(1));choices.Append(O({{L"Builtin",value.GetArray().GetAt(0)}}));}
             for(auto item:array(request,L"profiles")){auto entry=item.GetObject();if(entry.HasKey(L"issue"))continue;comboOption(space,str(entry,L"name"),L"document-interpret-profile-"+str(entry,L"id"));choices.Append(O({{L"library",S(str(entry,L"id"))}}));}
             space.SelectedIndex(0);body.Children().Append(space);dialog.Content(body);
@@ -318,7 +318,7 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
             dialog=ContentDialog();dialog.XamlRoot(window.Content().XamlRoot());dialogSurface(data,dialog);
             AutomationProperties::SetAutomationId(dialog,L"package-view");dialog.Title(box_value(str(summary,L"status")));dialog.PrimaryButtonText(str(summary,L"copy_original"));dialog.SecondaryButtonText(flag(object(summary,L"capabilities"),L"export")?str(summary,L"export_preview"):L"");dialog.CloseButtonText(str(summary,L"close"));
             StackPanel body;body.Spacing(12);body.MaxWidth(640);
-            auto text=[body](hstring value){TextBlock label;label.Text(value);label.TextWrapping(TextWrapping::Wrap);body.Children().Append(label);};text(str(summary,L"reason"));
+            auto text=[body,data=data](hstring value){auto words=label(data,value);words.TextWrapping(TextWrapping::Wrap);body.Children().Append(words);};text(str(summary,L"reason"));
             for(auto value:array(summary,L"outputs"))text(str(value.GetObject(),L"name"));
             if(flag(object(summary,L"capabilities"),L"view")){Image image;image.MaxHeight(384);image.Stretch(Stretch::Uniform);body.Children().Append(image);preview(image,id,0);}
             dialog.Content(body);presentationChanged=[this]{auto summary=object(object(model,L"windows_document"),L"summary");dialog.Title(box_value(str(summary,L"status")));dialog.PrimaryButtonText(str(summary,L"copy_original"));dialog.SecondaryButtonText(flag(object(summary,L"capabilities"),L"export")?str(summary,L"export_preview"):L"");dialog.CloseButtonText(str(summary,L"close"));};
@@ -350,8 +350,8 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
         try{
             dialog=ContentDialog();dialog.XamlRoot(window.Content().XamlRoot());dialogSurface(data,dialog);dialog.CloseButtonText(common(L"cancel"));dialog.PrimaryButtonText(common(L"apply"));dialog.IsPrimaryButtonEnabled(false);
             AutomationProperties::SetAutomationId(dialog,L"document-workflow");
-            StackPanel body;body.Spacing(10);body.Width(std::max(200.,std::min(540.,double(window.Content().XamlRoot().Size().Width)-120)));
-            ComboBox space,depth,intent;for(auto box:{space,depth,intent})choiceColors(data,box);CheckBox copy,dither;TextBlock status;status.TextWrapping(TextWrapping::Wrap);
+            StackPanel body;body.Spacing(12);body.MaxWidth(std::max(200.,std::min(540.,double(window.Content().XamlRoot().Size().Width)-120)));body.HorizontalAlignment(HorizontalAlignment::Stretch);
+            ComboBox space,depth,intent;for(auto box:{space,depth,intent})choiceColors(data,box,ControlSurface::Dialog);auto copy=compactCheck(data,label(data,L"")),dither=compactCheck(data,label(data,L""));auto status=label(data,L"");status.TextWrapping(TextWrapping::Wrap);
             auto text=[&](LocalizedCopy const& value){auto label=CapyUi::label(data,value);label.TextWrapping(TextWrapping::Wrap);body.Children().Append(label);return label;};
             if(kind==L"depth"){
                 copyHeader(depth,featureText(L"color",L"depth"));for(auto key:{L"depth_8",L"depth_16",L"depth_float16",L"depth_float32"})comboOption(depth,str(object(object(details,L"feature_copy"),L"color"),key));depth.SelectedIndex(depthIndex(str(object(details,L"color"),L"depth")));body.Children().Append(depth);
@@ -372,7 +372,7 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
             std::array<Image,3> images;std::array<TextBlock,3> headings;
             std::array<std::shared_ptr<BitmapUpload>,3> uploads;for(uint32_t i=0;i<3;++i){uploads[i]=BitmapUpload::Create();}
             for(uint32_t i=0;i<3;++i){headings[i].TextWrapping(TextWrapping::Wrap);body.Children().Append(headings[i]);images[i].MaxHeight(210);images[i].Stretch(Stretch::Uniform);images[i].Visibility(Visibility::Collapsed);body.Children().Append(images[i]);}
-            body.Children().Append(status);ScrollViewer scroll;scroll.Content(body);scroll.MaxHeight(std::max(180.,double(window.Content().XamlRoot().Size().Height)-220));dialog.Content(scroll);
+            body.Children().Append(status);ScrollViewer scroll;scroll.HorizontalScrollMode(ScrollMode::Disabled);scroll.HorizontalScrollBarVisibility(ScrollBarVisibility::Disabled);scroll.HorizontalContentAlignment(HorizontalAlignment::Stretch);scroll.Content(body);scroll.MaxHeight(std::max(180.,double(window.Content().XamlRoot().Size().Height)-220));dialog.Content(scroll);
             auto pending=std::make_shared<bool>(true);auto seen=std::make_shared<hstring>();auto generation=std::make_shared<uint64_t>(0);
             auto prepare=[this,id,kind,space,depth,intent,copy,dither,spaces,profiles,pending,generation,images]{
                 if(stopping)return;*pending=true;++*generation;dialog.IsPrimaryButtonEnabled(false);for(auto image:images){image.Source(nullptr);image.Visibility(Visibility::Collapsed);}
@@ -431,7 +431,7 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
             showing=false;changed();co_return;
         }
         J action=O({{L"op",S(L"cancel")}});
-        auto scripted=std::make_shared<J>();std::shared_ptr<ExportFormView> exportForm;std::shared_ptr<ProofFormView> proofForm;ComboBox profileList;choiceColors(data,profileList);TextBox profileSearch;A profileChoices;std::function<void()> updateProfileVisibility,filterProfiles;
+        auto scripted=std::make_shared<J>();std::shared_ptr<ExportFormView> exportForm;std::shared_ptr<ProofFormView> proofForm;ComboBox profileList;choiceColors(data,profileList,ControlSurface::Dialog);TextBox profileSearch;A profileChoices;std::function<void()> updateProfileVisibility,filterProfiles;
         if(kind==L"proof"&&proofRequest!=id){proofRequest=id;proofDraft=J();proofProfileId=L"";proofManaging=false;}
         bool library=kind==L"profiles"||(kind==L"proof"&&proofManaging);
         auto feature=object(details,L"feature_copy"),colorCopy=object(feature,L"color"),exportCopy=object(feature,L"export"),profileCopy=object(feature,L"profile"),proofCopy=object(feature,L"proof");
@@ -444,9 +444,9 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
             auto title=library?profileText(L"library_title"):kind==L"proof"?str(proofCopy,L"title"):kind==L"export"?exportText(L"title"):kind==L"assign"?colorText(L"assign_title"):kind==L"convert"?colorText(L"convert_title"):kind==L"depth"?colorText(L"depth_title"):
                 kind==L"place"||kind==L"paste"?profileText(L"interpret_title"):kind==L"repair"?colorText(L"repair_title"):kind==L"rasterize"?colorText(L"rasterize_title"):str(details,L"title");
             dialog.Title(box_value(title));
-            StackPanel body;body.Spacing(10);body.Width(std::max(200.,std::min(540.,double(window.Content().XamlRoot().Size().Width)-120)));
+            StackPanel body;body.Spacing(12);body.MaxWidth(std::max(200.,std::min(540.,double(window.Content().XamlRoot().Size().Width)-120)));body.HorizontalAlignment(HorizontalAlignment::Stretch);
             auto text=[&](auto const& value){auto item=label(data,value);item.TextWrapping(TextWrapping::Wrap);body.Children().Append(item);return item;};
-            ComboBox space;choiceColors(data,space);
+            ComboBox space;choiceColors(data,space,ControlSurface::Dialog);
             auto spaces=array(request,L"spaces");
             if(!str(request,L"error").empty()){auto error=text(documentText(L"error",false));AutomationProperties::SetAutomationId(error,L"document-workflow-error");}
             if(stage==L"error"&&kind!=L"proof"){
@@ -454,7 +454,7 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
             }else if(library){
                 AutomationProperties::SetAutomationId(text(featureText(L"profile",L"library_help")),L"profile-library-help");
                 AutomationProperties::SetAutomationId(profileList,L"document-profile-library");auto entries=array(details,L"profiles");copyHeader(profileList,featureText(L"profile",L"library_title"));profileList.HorizontalAlignment(HorizontalAlignment::Stretch);
-                auto search=profileSearch;search.PlaceholderText(native(L"header",L"search"));AutomationProperties::SetAutomationId(search,L"profile-library-search");search.Visibility(entries.Size()>7?Visibility::Visible:Visibility::Collapsed);body.Children().Append(search);
+                auto search=profileSearch;fieldColors(data,search,ControlSurface::Dialog);search.PlaceholderText(native(L"header",L"search"));AutomationProperties::SetAutomationId(search,L"profile-library-search");search.Visibility(entries.Size()>7?Visibility::Visible:Visibility::Collapsed);body.Children().Append(search);
                 for(auto item:entries){auto entry=item.GetObject();comboOption(profileList,profileLabel(entry),L"document-profile-"+str(entry,L"id"));}
                 auto searchSerial=std::make_shared<uint64_t>(0);
                 auto filter=std::make_shared<std::shared_ptr<std::function<void(uint32_t)>>>();
@@ -493,7 +493,7 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
                 dialog.PrimaryButtonText(profileText(L"add_profile_dialog"));dialog.SecondaryButtonText(profileText(L"remove"));dialog.IsSecondaryButtonEnabled(entries.Size()!=0);dialog.CloseButtonText(common(L"done"));
             }else if(kind==L"proof"){
                 proofForm=std::make_shared<ProofFormView>(localization);proofForm->root.Language(data->language());proofForm->init(details,proofDraft,proofProfileId);body.Children().Append(proofForm->root);
-                for(auto box:{proofForm->profile,proofForm->intent,proofForm->simulation})choiceColors(data,box);
+                for(auto box:{proofForm->profile,proofForm->intent,proofForm->simulation})choiceColors(data,box,ControlSurface::Dialog);
                 presentationChanged=[this,proofForm]{
                     auto details=object(object(model,L"windows_document"),L"details"),copy=object(object(details,L"feature_copy"),L"proof");
                     proofForm->relocalize(localization,details,data->language());dialog.Title(box_value(str(copy,L"title")));dialog.PrimaryButtonText(common(L"apply"));dialog.CloseButtonText(common(L"cancel"));
@@ -509,17 +509,16 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
                 add(featureText(L"profile",L"add_profile_dialog"),L"proof_import");add(featureText(L"profile",L"manage"),L"proof_manage");body.Children().Append(buttons);
                 dialog.PrimaryButtonText(common(L"apply"));
             }else if(kind==L"export"&&stage==L"options"){
-                exportForm=std::make_shared<ExportFormView>(localization);exportForm->root.Language(data->language());exportForm->init(details);exportForm->validation.Foreground(data->brush(L"error"));
-                for(auto box:{exportForm->format,exportForm->profile,exportForm->depth,exportForm->background,exportForm->dither,exportForm->intent,exportForm->resolution,exportForm->metadata})choiceColors(data,box);
+                exportForm=std::make_shared<ExportFormView>(data);exportForm->root.Language(data->language());exportForm->init(details);exportForm->validation.Foreground(data->brush(L"error"));
                 presentationChanged=[this,exportForm]{
                     auto details=object(object(model,L"windows_document"),L"details"),copy=object(object(details,L"feature_copy"),L"export");
                     exportForm->relocalize(localization,details,data->language());exportForm->validation.Foreground(data->brush(L"error"));
                     dialog.Title(box_value(str(copy,L"title")));dialog.PrimaryButtonText(str(copy,L"preview"));dialog.CloseButtonText(common(L"cancel"));
                 };
                 auto presetUpdating=std::make_shared<bool>(false);
-                auto presets=object(details,L"presets");ComboBox preset;choiceColors(data,preset);copyHeader(preset,featureText(L"export",L"preset"));preset.HorizontalAlignment(HorizontalAlignment::Stretch);
+                auto presets=object(details,L"presets");ComboBox preset;choiceColors(data,preset,ControlSurface::Dialog);copyHeader(preset,featureText(L"export",L"preset"));preset.HorizontalAlignment(HorizontalAlignment::Stretch);
                 for(auto name:array(presets,L"names"))comboOption(preset,name.GetString());auto selectedPreset=presets.GetNamedValue(L"index",JsonValue::CreateNullValue());preset.SelectedIndex(selectedPreset.ValueType()==JsonValueType::Number?int(selectedPreset.GetNumber()):0);body.Children().Append(preset);
-                body.Children().Append(exportForm->root);TextBox name;AutomationProperties::SetAutomationId(name,L"export-preset-name");copyHeader(name,featureText(L"export",L"preset_name"));name.MaxLength(64);body.Children().Append(name);
+                body.Children().Append(exportForm->root);TextBox name;fieldColors(data,name,ControlSurface::Dialog);AutomationProperties::SetAutomationId(name,L"export-preset-name");copyHeader(name,featureText(L"export",L"preset_name"));name.MaxLength(64);body.Children().Append(name);
                 auto operate=[this,scripted,exportForm](J operation){
                     *scripted=O({{L"op",S(L"export_preset")},{L"action",operation},{L"profile_id",exportForm->profileId.empty()?JsonValue::CreateNullValue():S(exportForm->profileId)}});dialog.Hide();
                 };
@@ -557,7 +556,7 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
                 for(auto item:array(details,L"profiles")){auto entry=item.GetObject();if(entry.HasKey(L"issue"))continue;comboOption(space,str(entry,L"name"),L"document-profile-choice-"+str(entry,L"id"));profileChoices.Append(O({{L"library",S(str(entry,L"id"))}}));}
                 space.SelectedIndex(0);body.Children().Append(space);dialog.PrimaryButtonText(colorText(L"add_source"));
             }
-            ScrollViewer scroll;scroll.Content(body);scroll.MaxHeight(std::max(180.,double(window.Content().XamlRoot().Size().Height)-220));dialog.Content(scroll);
+            ScrollViewer scroll;scroll.HorizontalScrollMode(ScrollMode::Disabled);scroll.HorizontalScrollBarVisibility(ScrollBarVisibility::Disabled);scroll.HorizontalContentAlignment(HorizontalAlignment::Stretch);scroll.Content(body);scroll.MaxHeight(std::max(180.,double(window.Content().XamlRoot().Size().Height)-220));dialog.Content(scroll);
             auto projected=presentationChanged;
             presentationChanged=[this,projected,kind,stage,library,space,profileList,profileSearch,profileChoices,updateProfileVisibility,filterProfiles]{
                 if(projected){projected();return;}
@@ -620,7 +619,7 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
         try{
             dialog=ContentDialog();dialog.XamlRoot(window.Content().XamlRoot());dialogSurface(data,dialog);dialog.Title(box_value(recovery(L"attention")));
             dialog.PrimaryButtonText(recovery(L"retry"));dialog.CloseButtonText(common(L"keep_open"));
-            TextBlock text;text.MaxWidth(420);text.TextWrapping(TextWrapping::Wrap);text.Text(str(state,L"error"));dialog.Content(text);
+            auto text=label(data,str(state,L"error"));text.MaxWidth(420);text.TextWrapping(TextWrapping::Wrap);dialog.Content(text);
             presentationChanged=[this,text]{dialog.Title(box_value(recovery(L"attention")));dialog.PrimaryButtonText(recovery(L"retry"));dialog.CloseButtonText(common(L"keep_open"));text.Text(str(object(model,L"windows_recovery"),L"error"));};
             if(co_await dialog.ShowAsync()==ContentDialogResult::Primary)action=L"retry";
         }catch(hresult_error const& error){if(!stopping)report(to_string(error.message()));}
@@ -630,7 +629,7 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
         auto lifetime=shared_from_this();showing=true;changed();hstring action=L"later";
         try{
             dialog=ContentDialog();dialog.XamlRoot(window.Content().XamlRoot());dialogSurface(data,dialog);
-            TextBlock text;text.MaxWidth(420);text.TextWrapping(TextWrapping::Wrap);dialog.Content(text);
+            auto text=label(data,L"");text.MaxWidth(420);text.TextWrapping(TextWrapping::Wrap);dialog.Content(text);
             presentationChanged=[this,text]{dialog.Title(box_value(recovery(L"title")));dialog.PrimaryButtonText(recovery(L"retry"));dialog.SecondaryButtonText(recovery(L"discard"));dialog.CloseButtonText(recovery(L"later"));text.Text(recovery(L"explanation"));};
             presentationChanged();dialog.DefaultButton(ContentDialogButton::Close);
             auto result=co_await dialog.ShowAsync();

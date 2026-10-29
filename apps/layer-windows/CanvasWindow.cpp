@@ -1861,7 +1861,7 @@ void CanvasWindow::ApplyScreen(Windows::Data::Json::JsonObject const& model){
     auto catalog=object(object(model,L"localization"),L"catalog");auto updated=object(object(catalog,L"native_copy"),L"color");if(updated.Size())screenCopy=updated;if(catalog.Size())screenFontSize=num(catalog,L"text_size_pt",11)*4/3;
     auto key=screen.Stringify()+screenCopy.Stringify()+str(state,L"theme")+to_hstring(screenFontSize);if(screenKey==key)return;screenKey=key;
     auto colorCopy=screenCopy;screenChip.FontSize(screenFontSize);screenClipped.FontSize(screenFontSize);
-    for(auto text:{screenTitle,screenHeadline,screenBody})text.FontSize(screenFontSize);screenTitle.FontSize(screenFontSize/1.2);
+    for(auto text:{screenTitle,screenHeadline,screenBody}){text.FontSize(screenFontSize);opticalText(text,text.FontSize());}screenTitle.FontSize(screenFontSize/1.2);opticalText(screenTitle,screenTitle.FontSize());
     auto foreground=SolidColorBrush(color(str(object(state,L"palette"),L"text",L"#fafafb")));
     auto warning=SolidColorBrush(color(str(state,L"theme")==L"dark"?L"#e5a50a":L"#9c5700"));
     screenChip.Visibility(chip.Size()?Visibility::Visible:Visibility::Collapsed);

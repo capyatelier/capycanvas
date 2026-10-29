@@ -1,8 +1,15 @@
 ﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme='dark')
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
-$CapyWaitSeconds=20
+$CapyWaitSeconds=20;$CapyPopups=$true
 Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
+Add-Type -AssemblyName System.Drawing
+$inkHelpers=[System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot 'capture-number-controls.ps1'),[ref]$null,[ref]$null)
+foreach($helper in @('Measure-RenderedInk','Assert-ControlCaptionInk','Save-ControlCaptionInk')){
+ $definition=$inkHelpers.Find({param($node)$node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $helper},$true)
+ if(!$definition){throw "Missing rendered ink helper: $helper"}
+ . ([scriptblock]::Create($definition.Extent.Text))
+}
 $repo=(Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
 $Executable=(Resolve-Path -LiteralPath $Executable).Path
 $run=Join-Path $repo ('artifacts/windows/shortcut-page/'+[Guid]::NewGuid().ToString('N'))
@@ -24,6 +31,21 @@ function Choose([string]$Id,[string]$Name){
  $hit.item.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
 }
 function Type-Into([string]$Id,[string]$Text){(Control $Id).GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($Text)}
+function Visit-ProfileManager([string]$CaptureName){
+ Invoke-Id 'manage-color-profiles'
+ $done=@{item=$null}
+ Wait-Until {
+  $condition=[System.Windows.Automation.AndCondition]::new(
+   [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,'Done'),
+   [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ProcessIdProperty,$review.Id))
+  $done.item=[System.Windows.Automation.AutomationElement]::RootElement.FindFirst([System.Windows.Automation.TreeScope]::Descendants,$condition)
+  !(Prefs) -and $done.item
+ } 'Manage Color Profiles did not open the profile manager'
+ $done.item=Control 'Done' -Name -Type ([System.Windows.Automation.ControlType]::Button) -Arranged
+ if($CaptureName){Capture $CaptureName -WithModel -Composed}
+ $done.item.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+ Wait-Until {(Prefs).page -eq 'color' -and (Shown 'CloseButton')} 'Closing the profile manager did not return to the Color page'
+}
 try {
  Enter-CapyEnvironment
  $env:CAPY_STORAGE_DIR=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1'
@@ -48,6 +70,9 @@ try {
    Wait-Until {(Prefs).page -eq $page.id -and (Shown 'settings-title')} "Preferences page $($page.id) did not open"
    $name="preferences-$($page.id)-$Theme-glass-$($glass.name)"
    Capture $name -WithModel -Composed
+   if($page.id -eq 'color'){
+    Visit-ProfileManager ($name+'-profile-manager')
+   }
    if($page.id -eq 'appearance'){
     $dpi=[CapyRowPointer]::GetDpiForWindow([IntPtr]$root.Current.NativeWindowHandle)/96.
     foreach($row in @($page.groups.rows|Where-Object {$_.kind.type -eq 'swatches' -and $_.kind.inline -and $_.visible -ne $false})){
@@ -62,6 +87,18 @@ try {
     Type-Into 'shortcuts-search' 'Undo'
     Wait-Until {(Prefs).shortcut_query -eq 'Undo' -and (Page).filtering -and (Shown 'shortcut-command.Undo')} 'Preferences capture search did not filter Undo'
     Capture ($name+'-filtered') -WithModel -Composed
+    $beforeContext=(Page).context|ConvertTo-Json -Depth 10 -Compress;$beforeShow=(Page).show
+    foreach($filter in @(@{id='shortcut-context';items=@((Page).contexts)},@{id='shortcut-show';items=@((Page).shows)})){
+     $picker=Control $filter.id -Arranged
+     $pattern=$picker.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern)
+     $pattern.Expand()
+     Wait-Until {$pattern.Current.ExpandCollapseState -eq [System.Windows.Automation.ExpandCollapseState]::Expanded} 'Shortcut filter did not expand'
+     $null=Control ($filter.items[0].label) -Name -Type ([System.Windows.Automation.ControlType]::ListItem) -Arranged
+     Capture ($name+'-'+$filter.id+'-open') -WithModel -Composed
+     $pattern.Collapse()
+     Wait-Until {$pattern.Current.ExpandCollapseState -eq [System.Windows.Automation.ExpandCollapseState]::Collapsed} 'Shortcut filter did not collapse'
+     if(((Page).context|ConvertTo-Json -Depth 10 -Compress) -cne $beforeContext -or (Page).show -ne $beforeShow -or (Prefs).shortcut_query -ne 'Undo'){throw 'Opening a shortcut filter changed its shared selection or query'}
+    }
     Type-Into 'shortcuts-search' ''
     Wait-Until {!(Page).filtering} 'Preferences capture search did not clear'
    }
@@ -172,6 +209,9 @@ try {
  Wait-Until {!(Page).picker -and $null -ne (Model).state.settings.gestures -and (Model).state.settings.gestures.'touch.tap.2' -eq ''} 'Nothing did not turn off the two-finger tap'
  Invoke-Id 'trigger-touch.tap.2'
  Wait-Until {(Page).picker.modified -and (Shown 'action-picker-reset')} 'The picker did not offer Reset'
+ $reset=Control 'action-picker-reset' -Arranged
+ Capture "action-picker-reset-$Theme" -WithModel -Composed
+ $null=Save-ControlCaptionInk $reset $drawingWindow (Join-Path $run "action-picker-reset-$Theme.png") (Model).state.palette.text (Join-Path $run "reset-caption-$Theme")
  Invoke-Id 'action-picker-reset'
  Wait-Until {!(Model).state.settings.gestures -or $null -eq (Model).state.settings.gestures.'touch.tap.2'} 'Reset did not restore the two-finger tap'
  Wait-Until {!(Page).picker -and (Prefs)} 'Reset did not close the picker'
@@ -183,17 +223,7 @@ try {
 
  Invoke 'Color' -Name -Within (Control 'Preferences' -Name -Type ([System.Windows.Automation.ControlType]::Window))
  Wait-Until {(Prefs).page -eq 'color' -and (Shown 'manage-color-profiles')} 'The Color page did not offer Manage Color Profiles'
- Invoke-Id 'manage-color-profiles'
- $done=@{item=$null}
- Wait-Until {
-  $condition=[System.Windows.Automation.AndCondition]::new(
-   [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,'Done'),
-   [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ProcessIdProperty,$review.Id))
-  $done.item=[System.Windows.Automation.AutomationElement]::RootElement.FindFirst([System.Windows.Automation.TreeScope]::Descendants,$condition)
-  !(Prefs) -and $done.item
- } 'Manage Color Profiles did not open the profile manager'
- $done.item.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
- Wait-Until {(Prefs).page -eq 'color' -and (Shown 'CloseButton')} 'Closing the profile manager did not return to the Color page'
+ Visit-ProfileManager
  $checks.profile_manager_returns_to_preferences='passed'
 
  Press 0x1B

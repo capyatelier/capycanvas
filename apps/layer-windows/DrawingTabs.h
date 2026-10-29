@@ -60,14 +60,19 @@ struct DrawingTabs:std::enable_shared_from_this<DrawingTabs>{
     void close(uint64_t id){if(finishing)return;popup.Hide();send(O({{L"op",S(L"close")},{L"id",N(double(id))}}));}
     MenuFlyout menu(uint64_t id){
         MenuFlyout menu;TrackPopup(menu,data);auto weak=weak_from_this();
-        auto add=[&](hstring name,J action){MenuFlyoutItem item;item.Text(name);item.Click([weak,action](auto&&,auto&&){if(auto self=weak.lock())self->send(action);});menu.Items().Append(item);return item;};
-        auto retry=add(data->caption(L"header",L"retry_storage"),O({{L"op",S(L"retry_storage")}}));
-        add(data->caption(L"header",L"move_left_up"),O({{L"op",S(L"step")},{L"id",N(double(id))},{L"forward",B(false)}}));
-        add(data->caption(L"header",L"move_right_down"),O({{L"op",S(L"step")},{L"id",N(double(id))},{L"forward",B(true)}}));
-        auto undo=add(data->caption(L"header",L"undo_order"),O({{L"op",S(L"history")},{L"redo",B(false)}}));auto redo=add(data->caption(L"header",L"redo_order"),O({{L"op",S(L"history")},{L"redo",B(true)}}));
-        AutomationProperties::SetAutomationId(undo,L"drawing-order-undo");AutomationProperties::SetAutomationId(redo,L"drawing-order-redo");
-        menu.Opening([weak,retry,undo,redo](auto&&,auto&&){if(auto self=weak.lock()){auto m=self->model();retry.Visibility(str(m,L"storage_error").empty()?Visibility::Collapsed:Visibility::Visible);undo.IsEnabled(flag(m,L"can_undo"));redo.IsEnabled(flag(m,L"can_redo"));}});
-        MenuFlyoutItem item;item.Text(data->caption(L"header",L"close_drawing"));item.Click([weak,id](auto&&,auto&&){if(auto self=weak.lock())self->close(id);});menu.Items().Append(item);return menu;
+        menu.Opening([weak,owner=make_weak(menu),id](auto&&,auto&&){if(auto self=weak.lock())if(auto menu=owner.get()){
+            A rows;auto model=self->model();
+            auto add=[&](wchar_t const* key,wchar_t const* identifier,J action,bool enabled=true){rows.Append(O({{L"label",S(self->data->caption(L"header",key))},{L"enabled",B(enabled)},{L"action",O({{L"command",S(identifier)},{L"action",action}})}}));};
+            if(!str(model,L"storage_error").empty())add(L"retry_storage",L"drawing-retry-storage",O({{L"op",S(L"retry_storage")}}));
+            add(L"move_left_up",L"drawing-move-left",O({{L"op",S(L"step")},{L"id",N(double(id))},{L"forward",B(false)}}));
+            add(L"move_right_down",L"drawing-move-right",O({{L"op",S(L"step")},{L"id",N(double(id))},{L"forward",B(true)}}));
+            add(L"undo_order",L"drawing-order-undo",O({{L"op",S(L"history")},{L"redo",B(false)}}),flag(model,L"can_undo"));
+            add(L"redo_order",L"drawing-order-redo",O({{L"op",S(L"history")},{L"redo",B(true)}}),flag(model,L"can_redo"));
+            add(L"close_drawing",L"drawing-close",O({{L"op",S(L"close")},{L"id",N(double(id))}}));
+            A sections;sections.Append(rows);NativeMenuItems(menu.Items(),sections,self->data,[weak](J value){if(auto self=weak.lock()){
+                auto action=object(value,L"action");if(str(action,L"op")==L"close")self->close(uint64_t(num(action,L"id")));else self->send(action);
+            }});
+        }});return menu;
     }
     A hits(){A result;for(auto value:array(model(),L"tabs")){auto id=uint64_t(num(value.GetObject(),L"id"));auto it=tabs.find(id);if(it==tabs.end())continue;auto box=it->second.box;
         auto b=box.TransformToVisual(root).TransformBounds({0,0,float(box.ActualWidth()),float(box.ActualHeight())});
@@ -201,7 +206,7 @@ struct DrawingTabs:std::enable_shared_from_this<DrawingTabs>{
                 Row r;r.item.Tag(box_value(key));AutomationProperties::SetAutomationId(r.item,L"drawing-row-"+key);Grid row;row.ColumnDefinitions().Append(ColumnDefinition());ColumnDefinition first;first.Width({28,GridUnitType::Pixel});row.ColumnDefinitions().InsertAt(0,first);ColumnDefinition lastColumn;lastColumn.Width({28,GridUnitType::Pixel});row.ColumnDefinitions().Append(lastColumn);auto title=str(spec,L"title");
                 r.grip=button(data,data->copyCaption(L"header",L"reorder_drawing"),[]{});r.grip.Content(panelGrip(data->theme()));r.grip.Padding({0,0,0,0});r.grip.MinWidth(0);AutomationProperties::SetAutomationId(r.grip,L"drawing-grip-"+key);
                 r.remove=button(data,data->copyCaption(L"header",L"close_drawing"),[weak,id]{if(auto self=weak.lock())self->close(id);});r.remove.Content(icon(L"close",data->theme()));r.remove.Padding({0,0,0,0});r.remove.MinWidth(0);Grid::SetColumn(r.remove,2);AutomationProperties::SetAutomationId(r.remove,L"drawing-row-close-"+key);r.menu=menu(id);
-                StackPanel labels;r.text=CapyUi::label(data,label);r.location=CapyUi::label(data,L"");r.location.FontSize(data->textSize()/1.2);r.location.TextTrimming(TextTrimming::CharacterEllipsis);labels.Children().Append(r.text);labels.Children().Append(r.location);Grid::SetColumn(labels,1);row.Children().Append(r.grip);row.Children().Append(labels);row.Children().Append(r.remove);r.item.Content(row);
+                StackPanel labels;r.text=CapyUi::label(data,label);r.location=CapyUi::label(data,L"");r.location.FontSize(data->textSize()/1.2);opticalText(r.location,r.location.FontSize());r.location.TextTrimming(TextTrimming::CharacterEllipsis);labels.Children().Append(r.text);labels.Children().Append(r.location);Grid::SetColumn(labels,1);row.Children().Append(r.grip);row.Children().Append(labels);row.Children().Append(r.remove);r.item.Content(row);
                 rowDrag->Attach(r.item,r.grip,r.remove,nullptr,r.menu,key);rows.emplace(id,r);
             }
             auto& t=tabs.at(id);t.text.Text(label);t.text.Foreground(data->brush(L"text"));paintTab(t,id==uint64_t(num(m,L"selected")));t.select.IsEnabled(available());t.close.IsEnabled(available());tooltip(t.select,str(spec,L"location",label));AutomationProperties::SetName(t.select,label);

@@ -169,8 +169,9 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
         AutomationProperties::SetAutomationId(toolbarActions,L"workspace-toolbar-actions");toolbarActions.Flyout(toolbarMenu);
         title.TextWrapping(TextWrapping::Wrap);AutomationProperties::SetAutomationId(title,L"workspace-manager-title");heading.Children().Append(title);
         for(auto control:{create,removeSelected,workspaceCancel,workspaceApply}){
-            control.Background(clear());control.BorderThickness({0,0,0,0});control.CornerRadius(copyData->controlCorner());buttonColors(copyData,control,38);
+            control.Background(clear());control.BorderThickness({0,0,0,0});control.CornerRadius(copyData->controlCorner());buttonFeedback(control,copyData->brush(L"text"),8,20);
         }
+        buttonColors(copyData,workspaceCancel);buttonColors(copyData,workspaceApply);
         workspaceFooter.Orientation(Orientation::Horizontal);workspaceFooter.Spacing(8);workspaceFooter.HorizontalAlignment(HorizontalAlignment::Right);
         for(auto control:{workspaceCancel,workspaceApply}){control.MinWidth(0);control.MinHeight(34);control.Padding({16,0,16,0});control.FontWeight(Windows::UI::Text::FontWeights::Bold());}
         workspaceFooter.Children().Append(workspaceCancel);workspaceFooter.Children().Append(workspaceApply);
@@ -186,7 +187,7 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
         intro.TextWrapping(TextWrapping::Wrap);promptMessage.TextWrapping(TextWrapping::Wrap);
         error.TextWrapping(TextWrapping::Wrap);
         progress.Text(recovery(L"loading"));progress.Visibility(Visibility::Collapsed);
-        search.PlaceholderText(copy(L"header",L"search"));AutomationProperties::SetAutomationId(search,L"workspace-manager-search");
+        fieldColors(copyData,search,ControlSurface::Settings);fieldColors(copyData,name,ControlSurface::Dialog);fieldColors(copyData,description,ControlSurface::Dialog);search.PlaceholderText(copy(L"header",L"search"));AutomationProperties::SetAutomationId(search,L"workspace-manager-search");
         list.SelectionMode(ListViewSelectionMode::Single);list.IsItemClickEnabled(true);
         ScrollViewer::SetHorizontalScrollBarVisibility(list,ScrollBarVisibility::Disabled);
         AutomationProperties::SetAutomationId(list,L"workspace-manager-items");
@@ -194,7 +195,7 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
         AutomationProperties::SetAutomationId(name,L"workspace-manager-name");
         description.Header(box_value(copy(L"header",L"description")));description.AcceptsReturn(true);description.TextWrapping(TextWrapping::Wrap);description.MinHeight(72);
         AutomationProperties::SetAutomationId(description,L"workspace-manager-description");
-        choiceColors(copyData,choices);choices.HorizontalAlignment(HorizontalAlignment::Stretch);
+        choiceColors(copyData,choices,ControlSurface::Dialog);choices.HorizontalAlignment(HorizontalAlignment::Stretch);
         AutomationProperties::SetAutomationId(choices,L"workspace-manager-choice");
         buttonCaption(retry,copy(L"header",L"retry"));retry.HorizontalAlignment(HorizontalAlignment::Left);
         AutomationProperties::SetAutomationId(retry,L"workspace-manager-retry");
@@ -210,7 +211,7 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
                 self->nameAlignmentPending=false;try{self->alignNames();}catch(...){self->fail();}
             }
         });
-        listSurface.SizeChanged([](auto const& sender,SizeChangedEventArgs const& e){auto size=e.NewSize();ClipSurface(sender.template as<UIElement>(),size.Width,size.Height,{12,12,12,12},false);});
+        clipRounded(listSurface,{12,12,12,12});
         rowDrag=std::make_unique<WorkspaceRowDrag>(list,listSurface,
             [weak=weak_from_this()]{auto self=weak.lock();return self&&self->canReorder();},
             [weak=weak_from_this()](hstring id,std::optional<hstring> before){if(auto self=weak.lock())
@@ -325,7 +326,7 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
         AutomationProperties::SetAutomationId(nameSlot,L"workspace-name-slot-"+id);
         row.title=label(copyData,L"");row.subtitle=label(copyData,L"");
         row.title.TextTrimming(TextTrimming::CharacterEllipsis);row.subtitle.TextTrimming(TextTrimming::CharacterEllipsis);
-        row.title.Margin({fieldPadding,0,fieldPadding,0});row.title.VerticalAlignment(VerticalAlignment::Center);row.subtitle.Margin({fieldPadding,0,fieldPadding,0});row.subtitle.FontSize(copyData->textSize()/1.2);row.subtitle.Opacity(.55);
+        row.title.Margin({fieldPadding,0,fieldPadding,0});row.title.VerticalAlignment(VerticalAlignment::Center);row.subtitle.Margin({fieldPadding,0,fieldPadding,0});row.subtitle.FontSize(copyData->textSize()/1.2);opticalText(row.subtitle,row.subtitle.FontSize());row.subtitle.Opacity(.55);
         row.entry.Visibility(Visibility::Collapsed);row.entry.MinWidth(0);row.entry.MinHeight(0);row.entry.Height(copyData->controlHeight());row.entry.Padding({fieldPadding,0,fieldPadding,0});row.entry.Background(copyData->brush(L"input"));row.entry.BorderThickness({0,0,0,0});row.entry.CornerRadius(copyData->controlCorner());row.entry.VerticalContentAlignment(VerticalAlignment::Center);
         row.entry.FontSize(copyData->textSize());row.title.FontSize(copyData->textSize());
         auto nameFont=FontFamily(L"Segoe UI");row.title.FontFamily(nameFont);row.entry.FontFamily(nameFont);
@@ -405,7 +406,7 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
             auto pin=object(data,L"pin");
             uint32_t position=saved.Size();for(uint32_t i=0;i<saved.Size();++i)if(saved.GetStringAt(i)==id)position=i;
             row.pin.Visibility(configurable?Visibility::Visible:Visibility::Collapsed);
-            row.pin.IsChecked(flag(pin,L"selected"));row.pin.IsEnabled(flag(pin,L"enabled"));row.pin.Opacity(flag(pin,L"enabled")?1:.5);
+            row.pin.IsChecked(flag(pin,L"selected"));row.pin.IsEnabled(flag(pin,L"enabled"));
             AutomationProperties::SetName(row.pin,str(pin,L"label"));tooltip(row.pin,str(pin,L"label"));
 
             row.current.Visibility(configurable&&flag(data,L"current")?Visibility::Visible:Visibility::Collapsed);
@@ -488,7 +489,6 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
         create.Content(icon(L"plus",theme,16));removeSelected.Content(icon(L"delete",theme,16));
         bool deletable=false;for(auto value:array(model,L"rows")){auto row=value.GetObject();if(str(row,L"id")==str(model,L"selected"))for(auto option:array(row,L"options")){auto action=option.GetObject();if(str(object(action,L"action"),L"type")==L"delete")deletable=flag(action,L"enabled");}}
         removeSelected.Visibility(page==L"workspaces"?Visibility::Visible:Visibility::Collapsed);removeSelected.IsEnabled((!busy||inlineName)&&deletable);
-        removeSelected.Opacity(removeSelected.IsEnabled()?1:.36);create.Opacity(create.IsEnabled()?1:.36);
         rowActions.Visibility(!naming&&(page==L"workspaces"||page==L"this_workspace")?Visibility::Visible:Visibility::Collapsed);
         split.Visibility(naming||page==L"prompt"?Visibility::Collapsed:Visibility::Visible);
         promptBody.Visibility(naming?Visibility::Visible:Visibility::Collapsed);
@@ -518,8 +518,8 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
                 choicesKey=signature;choices.Items().Clear();
                 auto chosen=str(details,L"selected");
                 for(auto value:options){
-                    auto option=value.GetObject();ComboBoxItem item;item.Tag(box_value(str(option,L"id")));item.Content(box_value(str(option,L"label")));
-                    choices.Items().Append(item);if(str(option,L"id")==chosen)choices.SelectedItem(item);
+                    auto option=value.GetObject();auto item=comboOption(choices,str(option,L"label"));item.Tag(box_value(str(option,L"id")));
+                    if(str(option,L"id")==chosen)selectIndex(choices,int32_t(choices.Items().Size()-1));
                 }
             }
         }
@@ -528,7 +528,6 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
         progress.Text(busy?recovery(L"saving"):recovery(L"loading"));progress.Visibility((busy&&!inlineName)||flag(model,L"loading")?Visibility::Visible:Visibility::Collapsed);
         retry.Visibility(flag(model,L"retry")?Visibility::Visible:Visibility::Collapsed);retry.IsEnabled(!busy);
         bool workspacePage=page==L"workspaces"&&!naming;
-        auto palette=object(object(snapshot,L"state"),L"palette");
         listSurface.Background(copyData->brush(L"card"));
         for(auto const& [id,row]:rows){
             for(auto state:{L"Selected",L"SelectedPointerOver",L"SelectedPressed"})row.item.Resources().Insert(box_value(hstring(L"ListViewItemBackground")+state),selected(copyData));
@@ -539,13 +538,13 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
         if(detailKey!=detailsKey){detailsKey=detailKey;detailsBody.Children().Clear();
             auto title=label(copyData,str(detailSpec,L"title"),true);title.TextWrapping(TextWrapping::Wrap);detailsBody.Children().Append(title);
             auto description=label(copyData,str(detailSpec,L"description"));description.TextWrapping(TextWrapping::Wrap);description.IsTextSelectionEnabled(true);detailsBody.Children().Append(description);
-            for(auto value:array(detailSpec,L"actions")){auto spec=value.GetObject();auto action=object(spec,L"action");auto control=button(copyData,str(spec,L"label"),[weak=weak_from_this(),action]{if(auto self=weak.lock())self->dispatch(O({{L"type",S(L"action")},{L"action",action}}));});control.Padding({10,5,10,5});control.MinHeight(34);control.IsEnabled(flag(spec,L"enabled")&&!busy);detailsBody.Children().Append(control);}
+            for(auto value:array(detailSpec,L"actions")){auto spec=value.GetObject();auto action=object(spec,L"action");auto control=raisedButton(copyData,str(spec,L"label"),[weak=weak_from_this(),action]{if(auto self=weak.lock())self->dispatch(O({{L"type",S(L"action")},{L"action",action}}));});control.MinHeight(34);control.IsEnabled(flag(spec,L"enabled")&&!busy);detailsBody.Children().Append(control);}
         }
         workspaceFooter.Visibility(workspacePage?Visibility::Visible:Visibility::Collapsed);
-        workspaceCancel.Content(box_value(common(L"cancel")));workspaceApply.Content(box_value(str(model,L"primary")));
-        workspaceCancel.Background(copyData->tint(L"text",26));
-        workspaceApply.Background(fill(color(str(palette,L"accent"))));workspaceApply.Foreground(fill(color(str(palette,L"accent_foreground"))));
-        workspaceApply.IsEnabled((!busy||inlineName)&&flag(model,L"enabled")&&!flag(model,L"loading"));workspaceApply.Opacity(workspaceApply.IsEnabled()?1:.5);
+        buttonCaption(workspaceCancel,common(L"cancel"));buttonCaption(workspaceApply,str(model,L"primary"));
+        workspaceCancel.Background(buttonBackground(copyData));
+        workspaceApply.Background(accent(copyData));workspaceApply.Foreground(copyData->brush(L"accent_foreground"));
+        workspaceApply.IsEnabled((!busy||inlineName)&&flag(model,L"enabled")&&!flag(model,L"loading"));
         dialog.PrimaryButtonText(workspacePage?L"":naming?str(details,L"confirm"):str(model,L"primary"));
         dialog.IsPrimaryButtonEnabled((!busy||inlineName)&&!flag(model,L"loading")&&(naming?(name.Visibility()!=Visibility::Visible||nameValid):flag(model,L"enabled")));
         dialog.CloseButtonText(workspacePage?L"":common(L"cancel"));

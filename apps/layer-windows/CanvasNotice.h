@@ -91,7 +91,7 @@ struct CanvasNotice:std::enable_shared_from_this<CanvasNotice>{
             auto offer=offers.GetObjectAt(i);auto choice=choices[i];bool enabled=flag(offer,L"enabled");
             auto caption=choice.Content().as<TextBlock>();auto name=str(offer,L"label");
             if(caption.Text()!=name){caption.Text(name);AutomationProperties::SetName(choice,name);changed=true;}
-            explain(actions.Children().GetAt(i).as<Grid>(),choice,enabled,name,str(offer,L"reason"));choice.Opacity(enabled?1:.36);
+            explain(actions.Children().GetAt(i).as<Grid>(),choice,enabled,name,str(offer,L"reason"));
         }
         reflow|=changed;
         if(shown==id){if(changed)present();return;}

@@ -36,8 +36,8 @@ struct WorkspaceStorageView::Impl : std::enable_shared_from_this<Impl> {
         Grid content;content.ColumnSpacing(8);ColumnDefinition text;text.Width({1,GridUnitType::Star});ColumnDefinition actions;actions.Width({1,GridUnitType::Auto});content.ColumnDefinitions().Append(text);content.ColumnDefinitions().Append(actions);
         message=label(data,L"");message.TextWrapping(TextWrapping::Wrap);message.VerticalAlignment(VerticalAlignment::Center);content.Children().Append(message);
         buttons.Orientation(Orientation::Horizontal);buttons.Spacing(8);
-        retry=button(data,L"",[]{});saveNew=button(data,L"",[]{});backup=button(data,L"",[]{});
-        for(auto control:{retry,saveNew,backup}){control.Padding({10,5,10,5});control.MinHeight(34);}
+        retry=raisedButton(data,L"",[]{});saveNew=raisedButton(data,L"",[]{});backup=raisedButton(data,L"",[]{});
+        for(auto control:{retry,saveNew,backup}){control.MinHeight(34);}
         AutomationProperties::SetAutomationId(retry,L"workspace-storage-retry");
         AutomationProperties::SetAutomationId(saveNew,L"workspace-storage-save-new");
         AutomationProperties::SetAutomationId(backup,L"workspace-storage-backup");

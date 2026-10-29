@@ -53,7 +53,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
     std::vector<std::pair<FrameworkElement,double>> bankParts;
     StackPanel editorControls,sizeChoices,menuLabels,switches;
     std::vector<Button> menus;
-    std::vector<std::pair<Button,hstring>> sizes;
+    std::vector<std::pair<Primitives::ToggleButton,hstring>> sizes;
     CheckBox footer;
     Button primary,menuOverflow,workspaceOverflow,workspaceOptions,settings,recovery;
     TextBlock workspaceCompactText{nullptr};
@@ -229,7 +229,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
         auto padding=menuCapsule.Padding();menuWidth=padding.Left+padding.Right+menuLabels.Spacing()*std::max(0,int(menus.size())-1);
         for(auto const& item:menus){
             auto caption=str(find(specs,L"id",unbox_value<hstring>(item.Tag())),L"label");
-            item.Content(box_value(caption));AutomationProperties::SetName(item,caption);item.FontSize(fontSize);
+            item.FontSize(fontSize);buttonCaption(item,caption);opticalText(item.Content().as<TextBlock>(),fontSize);
             item.Width(textWidth(caption,false,true)+16);menuWidth+=item.Width();
         }
         menuGeneration=data->localizationGeneration;
@@ -581,14 +581,14 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
             AutomationProperties::SetAutomationId(chip,L"header-component-"+kind);bankContent.Children().Append(chip);bankParts.emplace_back(chip,chip.Width());
         }
         editorControls=StackPanel();editorControls.Orientation(Orientation::Horizontal);editorControls.Spacing(12);editorControls.Height(32);
-        sizeChoices=StackPanel();sizeChoices.Orientation(Orientation::Horizontal);
+        sizeChoices=segmentRow(data);sizeChoices.Background(data->tint(L"text",26));
         for(auto value:array(view,L"sizes")){
-            auto size=value.GetObject();auto id=str(size,L"id");auto choice=button(data,str(size,L"label"),[data=data,id]{data->dispatch(edit(O({{L"type",S(L"set_size")},{L"size",S(id)}})));});
-            choice.Padding({8,0,8,0});choice.Height(32);AutomationProperties::SetAutomationId(choice,L"header-size-"+id);
+            auto size=value.GetObject();auto id=str(size,L"id");auto choice=button<Primitives::ToggleButton>(data,str(size,L"label"),[data=data,id]{data->dispatch(edit(O({{L"type",S(L"set_size")},{L"size",S(id)}})));});
+            segmentColors(data,choice);choice.CornerRadius({0,0,0,0});choice.Padding({8,0,8,0});choice.Height(32);AutomationProperties::SetAutomationId(choice,L"header-size-"+id);
             sizeChoices.Children().Append(choice);sizes.emplace_back(choice,id);
         }
         editorControls.Children().Append(sizeChoices);
-        footer=CheckBox();footer.Content(box_value(data->caption(L"header",L"show_footer")));footer.MinWidth(0);footer.MinHeight(0);footer.Height(32);footer.FontSize(data->textSize());
+        footer=compactCheck(data,label(data,data->caption(L"header",L"show_footer")));footer.MinHeight(0);footer.Height(32);footer.FontSize(data->textSize());
         AutomationProperties::SetAutomationId(footer,L"header-show-footer");
         auto change=[weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock();self&&!self->applying)
             self->data->dispatch(edit(O({{L"type",S(L"canvas_info")},{L"visible",B(self->footer.IsChecked().Value())}})));
@@ -619,7 +619,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
         auto widthShown=float(std::max(1.,width-12));auto radius=float(SurfaceRadius*CornerFit);
         bankShadow.Rounded(widthShown,float(shown),{radius,radius,radius,radius},12,3,.18f);bankShadow.Layout({6,float(height+6),widthShown,float(shown)},19,true);
         totalHeight=height+shown+12;
-        for(auto const& [item,id]:sizes)item.Background(id==str(object(view,L"model"),L"size")?selected(data):clear());
+        for(auto const& [item,id]:sizes)item.IsChecked(id==str(object(view,L"model"),L"size"));
         footer.IsChecked(flag(object(object(object(data->state,L"workspace"),L"layout"),L"canvas_info"),L"visible",true));
     }
     J geometryRequest(double width){

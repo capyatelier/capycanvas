@@ -15,6 +15,20 @@ public static class CapyNumberCapture {
  [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr window,IntPtr dc,uint flags);
 }
 '@
+function Measure-RenderedInk([Drawing.Bitmap]$Bitmap,[int[]]$Region,[Drawing.Color]$Background,[Drawing.Color]$Foreground=[Drawing.Color]::Empty){
+    $left,$top,$width,$height=$Region;$right=$left+$width;$bottom=$top+$height
+    if($left-lt0-or$top-lt0-or$right-gt$Bitmap.Width-or$bottom-gt$Bitmap.Height-or$width-le0-or$height-le0){throw 'Invalid rendered ink pixel region'}
+    $contrast=[Math]::Pow($Foreground.R-$Background.R,2)+[Math]::Pow($Foreground.G-$Background.G,2)+[Math]::Pow($Foreground.B-$Background.B,2)
+    if(!$Foreground.IsEmpty -and !$contrast){throw 'Rendered caption has no foreground contrast'}
+    $ink=0;$minX=$right;$minY=$bottom;$maxX=-1;$maxY=-1
+    for($y=$top;$y-lt$bottom;$y++){for($x=$left;$x-lt$right;$x++){
+        $pixel=$Bitmap.GetPixel($x,$y)
+        $distance=[Math]::Pow($pixel.R-$Foreground.R,2)+[Math]::Pow($pixel.G-$Foreground.G,2)+[Math]::Pow($pixel.B-$Foreground.B,2)
+        $matches=if($Foreground.IsEmpty){$pixel.R-ne$Background.R-or$pixel.G-ne$Background.G-or$pixel.B-ne$Background.B}else{$distance-le$contrast/16}
+        if($matches){$ink++;$minX=[Math]::Min($minX,$x);$minY=[Math]::Min($minY,$y);$maxX=[Math]::Max($maxX,$x);$maxY=[Math]::Max($maxY,$y)}
+    }}
+    [ordered]@{ink_pixels=$ink;region=$Region;ink_bounds=$(if($ink){@($minX,$minY,($maxX-$minX+1),($maxY-$minY+1))}else{@()})}
+}
 function Assert-NumberValueInk([Drawing.Bitmap]$Bitmap,$Report,[int[]]$Offset){
     $background=[Drawing.ColorTranslator]::FromHtml($Report.palette.input)
     $records=@(foreach($part in $Report.frames.PSObject.Properties|Where-Object Name -like '*:entry'){
@@ -24,17 +38,50 @@ function Assert-NumberValueInk([Drawing.Bitmap]$Bitmap,$Report,[int[]]$Offset){
         $right=[int][Math]::Floor($Offset[0]+($frame.x+$frame.width-$padding)*$scale)
         $top=[int][Math]::Ceiling($Offset[1]+($frame.y+$inset)*$scale)
         $bottom=[int][Math]::Floor($Offset[1]+($frame.y+$frame.height-$inset)*$scale)
-        if($left-lt0-or$top-lt0-or$right-gt$Bitmap.Width-or$bottom-gt$Bitmap.Height-or$left-ge$right-or$top-ge$bottom){throw "Invalid numeric value pixel region: $($part.Name)"}
-        $ink=0
-        for($y=$top;$y-lt$bottom;$y++){for($x=$left;$x-lt$right;$x++){
-            $pixel=$Bitmap.GetPixel($x,$y)
-            if($pixel.R-ne$background.R-or$pixel.G-ne$background.G-or$pixel.B-ne$background.B){$ink++}
-        }}
-        if(!$ink){throw "Rendered numeric value is blank: $($part.Name)"}
-        [ordered]@{part=$part.Name;ink_pixels=$ink;region=@($left,$top,($right-$left),($bottom-$top))}
+        $record=Measure-RenderedInk $Bitmap @($left,$top,($right-$left),($bottom-$top)) $background
+        if(!$record.ink_pixels){throw "Rendered numeric value is blank: $($part.Name)"}
+        $record['part']=$part.Name;$record
     })
     if(!$records.Count){throw 'Numeric review contains no rendered spin value regions'}
     $records
+}
+function Assert-ControlCaptionInk([string]$Image,[double[]]$ControlBounds,[double[]]$CaptionBounds,[string]$Foreground,[string]$Output,[double]$Scale=1){
+    if($Scale -le 0){throw 'Invalid caption capture scale'}
+    $bitmap=[Drawing.Bitmap]::new($Image)
+    try{
+        $left=[int][Math]::Ceiling($CaptionBounds[0]);$right=[int][Math]::Floor($CaptionBounds[0]+$CaptionBounds[2])
+        $top=[int][Math]::Ceiling($ControlBounds[1]+1);$bottom=[int][Math]::Floor($ControlBounds[1]+$ControlBounds[3]-1)
+        $background=$bitmap.GetPixel([int](($left+$right)/2),$top)
+        $record=Measure-RenderedInk $bitmap @($left,$top,($right-$left),($bottom-$top)) $background ([Drawing.ColorTranslator]::FromHtml($Foreground))
+        if(!$record.ink_pixels){throw 'Rendered control caption is blank'}
+        $record['control_bounds']=$ControlBounds;$record['caption_bounds']=$CaptionBounds;$record['foreground']=$Foreground;$record['minimum_foreground_coverage']=.75
+        $record['scale']=$Scale;$record['control_height_dip']=$ControlBounds[3]/$Scale;$record['control_height_physical_pixels']=$ControlBounds[3]
+        $record['top_gap']=$record.ink_bounds[1]-$ControlBounds[1]
+        $record['bottom_gap']=$ControlBounds[1]+$ControlBounds[3]-$record.ink_bounds[1]-$record.ink_bounds[3]
+        $record['gap_delta']=[Math]::Abs($record.top_gap-$record.bottom_gap);$record['tolerance_physical_pixels']=.5
+        $centeredTop=$ControlBounds[1]+($ControlBounds[3]-$record.ink_bounds[3])/2
+        $record['minimum_raster_gap_delta']=2*[Math]::Abs($centeredTop-[Math]::Round($centeredTop))
+        $record['excess_gap_delta']=$record.gap_delta-$record.minimum_raster_gap_delta
+        $record['raster_alignment_epsilon']=1e-6
+        $record|ConvertTo-Json -Depth 6|Set-Content ($Output+'-ink.json')
+        $crop=[Drawing.Rectangle]::FromLTRB([int][Math]::Floor($ControlBounds[0]),[int][Math]::Floor($ControlBounds[1]),[int][Math]::Ceiling($ControlBounds[0]+$ControlBounds[2]),[int][Math]::Ceiling($ControlBounds[1]+$ControlBounds[3]))
+        $raw=$bitmap.Clone($crop,[Drawing.Imaging.PixelFormat]::Format24bppRgb)
+        try{
+            $raw.Save(($Output+'-raw.png'),[Drawing.Imaging.ImageFormat]::Png)
+            $zoom=[Drawing.Bitmap]::new($raw.Width*4,$raw.Height*4);$graphics=[Drawing.Graphics]::FromImage($zoom)
+            try{$graphics.InterpolationMode=[Drawing.Drawing2D.InterpolationMode]::NearestNeighbor;$graphics.PixelOffsetMode=[Drawing.Drawing2D.PixelOffsetMode]::Half;$graphics.DrawImage($raw,[Drawing.Rectangle]::new(0,0,$zoom.Width,$zoom.Height));$zoom.Save(($Output+'-4x.png'),[Drawing.Imaging.ImageFormat]::Png)}finally{$graphics.Dispose();$zoom.Dispose()}
+        }finally{$raw.Dispose()}
+        if($record.gap_delta -gt .5 -and $record.excess_gap_delta -gt $record.raster_alignment_epsilon){throw "Control caption ink gaps exceed the nearest raster center by $($record.excess_gap_delta) physical pixels"}
+        $record
+    }finally{$bitmap.Dispose()}
+}
+function Save-ControlCaptionInk($Control,[IntPtr]$Window,[string]$Image,[string]$Foreground,[string]$Output){
+    $caption=@($Control.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::Text))|Where-Object {$_.Current.Name -ceq $Control.Current.Name -and !$_.Current.IsOffscreen -and !$_.Current.BoundingRectangle.IsEmpty})
+    if($caption.Count -ne 1){throw "Control has no unique arranged caption: $($Control.Current.Name)"}
+    $origin=[CapyRowPointer+Point]::new()
+    if(![CapyRowPointer]::ClientToScreen($Window,[ref]$origin)){throw 'Caption capture client origin is unavailable'}
+    $button=$Control.Current.BoundingRectangle;$label=$caption[0].Current.BoundingRectangle
+    Assert-ControlCaptionInk $Image @(($button.X-$origin.x),($button.Y-$origin.y),$button.Width,$button.Height) @(($label.X-$origin.x),($label.Y-$origin.y),$label.Width,$label.Height) $Foreground $Output ([CapyRowPointer]::GetDpiForWindow($Window)/96.)
 }
 [CapyNumberCapture]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
 $Executable=(Resolve-Path -LiteralPath $Executable).Path

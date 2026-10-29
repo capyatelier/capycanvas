@@ -1,6 +1,7 @@
 #include "pch.h"
 #include "SizeDialog.h"
 #include "UiControls.h"
+#include "PickerDialog.h"
 
 using namespace CapyUi;
 struct SizeDialog::Impl:std::enable_shared_from_this<Impl>{
@@ -14,7 +15,7 @@ struct SizeDialog::Impl:std::enable_shared_from_this<Impl>{
     std::vector<Field> fields;
     ComboBox unit,resample;
     CheckBox option;
-    TextBlock caption,message;
+    TextBlock title,caption,message,optionCaption;
     Grid anchorGrid;
     std::vector<Button> anchors;
     hstring units,resamples,anchorKey;
@@ -43,7 +44,7 @@ struct SizeDialog::Impl:std::enable_shared_from_this<Impl>{
         return index<2?array(size,L"values").GetNumberAt(uint32_t(index)):num(size,L"resolution");
     }
     void choiceBox(ComboBox Impl::* member,hstring const& automation,wchar_t const* key,wchar_t const* list){
-        auto box=this->*member;choiceColors(data,box);box.HorizontalAlignment(HorizontalAlignment::Stretch);box.MinWidth(0);
+        auto box=this->*member;choiceColors(data,box,ControlSurface::Dialog);box.HorizontalAlignment(HorizontalAlignment::Stretch);box.MinWidth(0);
         AutomationProperties::SetAutomationId(box,automation);
         box.SelectionChanged([weak=weak_from_this(),member,key,list](auto&&,auto&&){if(auto self=weak.lock()){
             auto choices=array(self->view(),list);auto index=(self.get()->*member).SelectedIndex();
@@ -68,14 +69,14 @@ struct SizeDialog::Impl:std::enable_shared_from_this<Impl>{
         for(size_t i=0;i<2;++i)values.Children().Append(fields[i].slot);
         auto weak=weak_from_this();
         choiceBox(&Impl::unit,id(L"unit"),L"unit",L"units");
-        option.MinWidth(0);option.MinHeight(34);AutomationProperties::SetAutomationId(option,id(optionKey()));
+        optionCaption=CapyUi::label(data,L"");option=compactCheck(data,optionCaption);option.MinHeight(34);AutomationProperties::SetAutomationId(option,id(optionKey()));
         option.Click([weak](auto&&,auto&&){if(auto self=weak.lock()){
             bool next=self->option.IsChecked().Value();
             self->option.IsChecked(flag(self->view(),self->optionKey()));
             self->choose(O({{L"op",S(self->optionKey())},{self->optionKey(),B(next)}}));
         }});
         body.Children().Append(row(unit,option));
-        caption.VerticalAlignment(VerticalAlignment::Center);
+        title=CapyUi::label(data,L"",true);pickerTitle(data,title,id(L"title"));title.Width(Width);title.TextAlignment(TextAlignment::Center);opticalText(title,title.FontSize());dialog.Title(title);caption=CapyUi::label(data,L"");message=CapyUi::label(data,L"");caption.VerticalAlignment(VerticalAlignment::Center);
         if(kind==Kind::Canvas){
             anchorGrid.RowSpacing(2);anchorGrid.ColumnSpacing(2);
             for(int i=0;i<3;++i){
@@ -161,10 +162,10 @@ struct SizeDialog::Impl:std::enable_shared_from_this<Impl>{
     void populate(ComboBox const& box,hstring& signature,A const& choices,wchar_t const* key,hstring const& chosen){
         if(auto next=choices.Stringify();next!=signature){
             signature=next;box.Items().Clear();
-            for(auto const& choice:choices)box.Items().Append(box_value(str(choice.GetObject(),L"label")));
+            for(auto const& choice:choices)comboOption(box,str(choice.GetObject(),L"label"));
         }
         for(uint32_t i=0;i<choices.Size();++i)if(str(choices.GetObjectAt(i),key)==chosen){
-            if(box.SelectedIndex()!=int32_t(i))box.SelectedIndex(i);
+            selectIndex(box,int32_t(i));
             AutomationProperties::SetName(box,str(choices.GetObjectAt(i),L"label"));
         }
     }
@@ -174,7 +175,7 @@ struct SizeDialog::Impl:std::enable_shared_from_this<Impl>{
         if(!size.Size()){hide();return;}
         if(!showing&&blocked)return;
         dialogSurface(data,dialog);
-        dialog.Title(box_value(str(size,L"title")));
+        title.Text(str(size,L"title"));
         dialog.PrimaryButtonText(str(size,L"apply_label"));dialog.CloseButtonText(str(size,L"cancel_label"));
         data->updating=true;
         struct Reset{bool& flag;~Reset(){flag=false;}} reset{data->updating};
@@ -183,7 +184,7 @@ struct SizeDialog::Impl:std::enable_shared_from_this<Impl>{
             if(key!=fields[i].spec){fields[i].spec=key;build(i,size);}
         }
         populate(unit,units,array(size,L"units"),L"unit",str(size,L"unit"));
-        option.Content(box_value(str(size,kind==Kind::Canvas?L"relative_label":L"constrain_label")));
+        optionCaption.Text(str(size,kind==Kind::Canvas?L"relative_label":L"constrain_label"));
         option.IsChecked(flag(size,optionKey()));
         if(kind==Kind::Canvas){
             caption.Text(str(size,L"anchor_label"));

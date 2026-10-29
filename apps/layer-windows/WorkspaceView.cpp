@@ -202,9 +202,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         data->colorsPresented=[weak=weak_from_this()]{if(auto self=weak.lock())self->tracePresentation();};
         zoom->data=data;zoom->init();
         auto surface=cameraSurface;surface.Child(zoom->root);surface.Background(headerSurface(data));
-        surface.SizeChanged([button=zoom->root](auto&& sender,SizeChangedEventArgs const& e){
-            double r=e.NewSize().Height*.5*CornerFit;sender.template as<Border>().CornerRadius({r,r,r,r});button.CornerRadius({r,r,r,r});
-        });
+        surface.CornerRadius(zoom->root.CornerRadius());
         surface.HorizontalAlignment(HorizontalAlignment::Right);surface.VerticalAlignment(VerticalAlignment::Bottom);surface.Margin({4,0,4,0});
         cameraSlot.Children().Append(surface);
         canvasBar->data=data;

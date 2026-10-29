@@ -92,15 +92,13 @@ struct CanvasActionBar:std::enable_shared_from_this<CanvasActionBar>{
     FrameworkElement spaced(FrameworkElement const& element){element.Margin({ControlClearance,ControlClearance,ControlClearance,ControlClearance});return element;}
     FrameworkElement segments(J const& spec){
         auto id=str(spec,L"id");auto list=array(spec,L"items");auto weak=weak_from_this();
-        StackPanel group;group.Orientation(Orientation::Horizontal);group.VerticalAlignment(VerticalAlignment::Center);
+        auto group=segmentRow(data);group.Background(data->tint(L"text",26));group.VerticalAlignment(VerticalAlignment::Center);
         AutomationProperties::SetAutomationId(group,L"canvas-bar-choice-"+id);AutomationProperties::SetName(group,str(spec,L"label"));
-        double r=data->panelMetric(L"control_radius")*CornerFit;
         for(uint32_t i=0;i<list.Size();++i){
             auto entry=list.GetObjectAt(i);auto action=object(entry,L"action");
             auto toggle=button<Primitives::ToggleButton>(data,L"",[weak,action]{if(auto self=weak.lock()){self->send(action);self->restore();}});
-            toggle.Content(labelled(str(entry,L"icon"),str(entry,L"label")));worded(toggle,8);toggle.Background(data->brush(L"input"));
+            toggle.Content(labelled(str(entry,L"icon"),str(entry,L"label")));worded(toggle,8);segmentColors(data,toggle);buttonColors(data,toggle,20,selected(data));toggle.CornerRadius({0,0,0,0});
             AutomationProperties::SetAutomationId(toggle,L"canvas-bar-choice-"+id+L"-"+to_hstring(i));AutomationProperties::SetName(toggle,str(entry,L"label"));tooltip(toggle,str(entry,L"label"));
-            double left=i==0?r:0,right=i+1==list.Size()?r:0;toggle.CornerRadius({left,right,right,left});
             group.Children().Append(toggle);
         }
         return spaced(group);
@@ -151,7 +149,6 @@ struct CanvasActionBar:std::enable_shared_from_this<CanvasActionBar>{
         if(!str(item,L"menu").empty()){
             auto state=command(item);bool enabled=!state.Size()||flag(state,L"enabled");auto button=explained(element);
             explain(element.as<Grid>(),button,enabled,str(item,L"label"),str(state,L"disabled_reason"));
-            button.Opacity(enabled?1:.36);
             return;
         }
         if(auto spec=choice(item);spec.Size()){
@@ -179,7 +176,6 @@ struct CanvasActionBar:std::enable_shared_from_this<CanvasActionBar>{
         }
         auto button=explained(element);auto state=command(item);bool enabled=flag(state,L"enabled");
         explain(element.as<Grid>(),button,enabled,str(state,L"tooltip"),str(state,L"disabled_reason"));
-        button.Opacity(enabled?1:.36);
         if(auto toggle=button.try_as<Primitives::ToggleButton>())toggle.IsChecked(flag(state,L"selected"));
     }
     void restore(){
