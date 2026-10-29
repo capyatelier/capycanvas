@@ -373,18 +373,15 @@ final class EditorLaunchTests: XCTestCase {
         checkNewDrawingAndExportCancellation(in: app)
     }
 
-    @MainActor func testNewDrawingDialog() throws {
+    @MainActor func testNewDrawingDialog() throws { newDrawingDialog(theme: "light") }
+    @MainActor func testNewDrawingDialogDark() throws { newDrawingDialog(theme: "dark") }
+    @MainActor func testNewDrawingKeyboardHeight() { newDrawingDialog(theme: "light", keyboardOnly: true) }
+    @MainActor func testNewDrawingKeyboardHeightDark() { newDrawingDialog(theme: "dark", keyboardOnly: true) }
+    @MainActor private func newDrawingDialog(theme: String, keyboardOnly: Bool = false) {
         let app = ignoringSavedWindows(editorTestApplication())
-        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"invoke","command":"new_document"}]"#
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"\#(theme)"},{"type":"invoke","command":"new_document"}]"#
         app.launch()
-        checkNewDrawingDialog(in: app, theme: "light")
-    }
-
-    @MainActor func testNewDrawingDialogDark() throws {
-        let app = ignoringSavedWindows(editorTestApplication())
-        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"dark"},{"type":"invoke","command":"new_document"}]"#
-        app.launch()
-        checkNewDrawingDialog(in: app, theme: "dark")
+        checkNewDrawingDialog(in: app, theme: theme, keyboardOnly: keyboardOnly)
     }
 
     @MainActor func testSettingsAndWorkspaceRestart() throws { checkSettingsAndWorkspaceRestart(in: ignoringSavedWindows(editorTestApplication())) }

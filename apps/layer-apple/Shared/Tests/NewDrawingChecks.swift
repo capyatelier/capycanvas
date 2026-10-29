@@ -20,6 +20,7 @@ extension XCTestCase {
         #if os(macOS)
         field.typeKey(XCUIKeyboardKey.tab.rawValue, modifierFlags: [])
         #else
+        field.typeText("\n")
         dismissEditorKeyboard(in: app)
         #endif
     }
@@ -53,6 +54,10 @@ extension XCTestCase {
         XCTAssertTrue(usePaper.waitForNonExistence(timeout: 10))
         workspaceActivate(app.buttons["new-drawing-paper-color"])
         let white = app.buttons["new-drawing-paper-color-0"]
+        #if os(iOS)
+        revealEditorControl(white, identifier: "new-drawing-paper-color-0", type: .button,
+            in: newDrawingElement("new-drawing-color-drawer", in: app).scrollViews.firstMatch)
+        #endif
         XCTAssertEqual(white.label, "White")
         workspaceActivate(white)
         let useColor = app.buttons["new-drawing-color-use"]
@@ -100,9 +105,14 @@ extension XCTestCase {
     }
     #endif
 
-    @MainActor func checkNewDrawingDialog(in app: XCUIApplication, theme: String) {
+    @MainActor func checkNewDrawingDialog(in app: XCUIApplication, theme: String, keyboardOnly: Bool = false) {
         let create = app.buttons["new-drawing-create"]
         XCTAssertTrue(create.waitForExistence(timeout: 60), "The New drawing dialog did not open after canvas startup")
+        #if os(iOS)
+        let dialog = app.descendants(matching: .any)["new-drawing-dialog"].firstMatch
+        checkDialogKeyboardHeight(dialog, in: app) { workspaceActivate(app.textFields["new-drawing-name"]) }
+        #endif
+        if keyboardOnly { return }
         expectNewDrawingText("new-drawing-caption", in: app) { $0.hasPrefix("Sketchbook A4") }
         let resolution = newDrawingNumber("resolution", in: app)
         XCTAssertEqual(resolution.value as? String, "300")
@@ -200,6 +210,10 @@ extension XCTestCase {
         XCTAssertTrue(useColor.waitForExistence(timeout: 10))
         XCTAssertFalse(app.buttons["color-pick"].exists, "The paper color has no eyedropper")
         let kraft = app.buttons["new-drawing-paper-color-5"]
+        #if os(iOS)
+        revealEditorControl(kraft, identifier: "new-drawing-paper-color-5", type: .button,
+            in: newDrawingElement("new-drawing-color-drawer", in: app).scrollViews.firstMatch)
+        #endif
         XCTAssertEqual(kraft.label, "Kraft")
         workspaceActivate(kraft)
         expectation(for: NSPredicate(format: "selected == YES"), evaluatedWith: kraft)
@@ -373,11 +387,11 @@ extension XCTestCase {
         pickColdPress()
         let texture = coldPress.label
         let importTile = app.buttons["new-drawing-paper-import"]
+        revealEditorControl(importTile, identifier: "new-drawing-paper-import", type: .button,
+            in: newDrawingElement("new-drawing-paper-drawer", in: app).scrollViews.firstMatch)
         XCTAssertTrue(importTile.waitForExistence(timeout: 10))
         XCTAssertEqual(importTile.label, "Import…")
         XCTAssertEqual(importTile.frame.size, noPaper.frame.size, "Import… is a tile like No paper")
-        revealEditorControl(importTile, identifier: "new-drawing-paper-import", type: .button,
-            in: newDrawingElement("new-drawing-paper-drawer", in: app).scrollViews.firstMatch)
         XCTAssertEqual(newDrawingElement("new-drawing-papers", in: app).buttons.allElementsBoundByIndex.last?.identifier,
             importTile.identifier, "Import… follows the imported papers")
         attachEditor(in: app, name: "new-drawing-paper-import-" + theme)

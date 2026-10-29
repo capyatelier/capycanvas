@@ -145,7 +145,7 @@ struct ProofDial: View {
                 }
                 .accessibilityIdentifier("proof-dial")
         }.aspectRatio(1, contentMode: .fit).frame(minWidth: 128, minHeight: 128)
-            .sheet(isPresented: $numeric) { ProofNumbers(store: store, controller: controller).modifier(EditorPopupPresentation()) }
+            .sheet(isPresented: $numeric) { ProofNumbers(store: store, controller: controller).modifier(EditorFittedPresentation()).modifier(EditorPopupPresentation()) }
     }
     private func adjust(_ key: String, _ direction: Double) {
         let part = ["balance": 0, "contrast": 0, "exposure": 1, "highlight_color": 2][key] ?? 0
@@ -294,7 +294,7 @@ private struct PrintProfileMenu: View {
         .onAppear { mounted = true; reload() }.onDisappear { mounted = false }
         .sheet(isPresented: $library, onDismiss: reload) {
             ColorProfileLibrary(preferences: controller.preferences) { choose($0); library = false }
-                .modifier(EditorPopupPresentation())
+                .modifier(EditorFittedPresentation()).modifier(EditorPopupPresentation())
         }
         .fileImporter(isPresented: $importing, allowedContentTypes: [UTType(filenameExtension: "icc") ?? .data, UTType(filenameExtension: "icm") ?? .data]) { result in
             switch result {

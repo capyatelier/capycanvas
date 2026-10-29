@@ -1,15 +1,29 @@
 import SwiftUI
 
+#if os(iOS)
+@available(iOS 18.0, *)
+private struct EditorPreferredPresentationSizing: PresentationSizing {
+    func proposedSize(for root: PresentationSizingRoot, context: PresentationSizingContext) -> ProposedViewSize {
+        ProposedViewSize(root.sizeThatFits(.unspecified))
+    }
+}
+#endif
+
 struct EditorFittedPresentation: ViewModifier {
     @State private var height: CGFloat = 500
     @ViewBuilder func body(content: Content) -> some View {
-        if #available(iOS 18.0, macOS 15.0, *) {
-            content.presentationSizing(.fitted)
+        #if os(iOS)
+        if #available(iOS 18.0, *) {
+            content.fixedSize(horizontal: false, vertical: true)
+                .presentationSizing(EditorPreferredPresentationSizing())
         } else {
             content.fixedSize(horizontal: false, vertical: true)
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height = max(1, $0) }
                 .presentationDetents([.height(height)])
         }
+        #else
+        content.presentationSizing(.fitted)
+        #endif
     }
 }
 

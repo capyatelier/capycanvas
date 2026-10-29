@@ -26,10 +26,10 @@ rustup target add aarch64-apple-darwin aarch64-apple-ios aarch64-apple-ios-sim
 ```
 
 The iPad app and UI test runner require iPadOS 17.5 or later, including the
-12.9-inch second-generation iPad Pro. On iPadOS 18 and later, scrolling and
-fitted sheets use the current SwiftUI APIs. On iPadOS 17, native scroll
-observation preserves layer offsets and scroll cancellation, and sheet detents
-follow the content height.
+12.9-inch second-generation iPad Pro. On iPadOS 18 and later, scrolling uses
+the current SwiftUI APIs. On iPadOS 17, native scroll observation preserves
+layer offsets and scroll cancellation. Fitted iPad sheets propose their content's
+preferred size on iPadOS 18 and use a content-height detent on iPadOS 17.
 
 The scripts default to `/Applications/Xcode.app/Contents/Developer`; set
 `DEVELOPER_DIR` if Xcode is elsewhere. A physical iPad also needs Developer Mode,
@@ -202,7 +202,8 @@ changing the bridge, menus, settings, publications or layers:
   bodies keep the shared `min_body_height` inside an outer `EditorScrollView`;
   tabs and footer grips stay outside that viewport.
 - **Dialogs and menus.** Keep common sizing, footer margins and Mac button faces
-  in `EditorPopupSurface.swift`. Use `EditorActionMenu` and `editorPopover` with
+  in `EditorPopupSurface.swift`. Apply `EditorFittedPresentation` to custom
+  sheet content, including nested forms. Use `EditorActionMenu` and `editorPopover` with
   one `EditorPopoverHost` at the editor or sheet root, and register each
   presented source's popup lifetime with the workspace. Adapt these instead of
   adding per-menu presenters or gesture overrides.

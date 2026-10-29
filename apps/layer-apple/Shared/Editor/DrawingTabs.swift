@@ -386,7 +386,7 @@ struct DrawingTabsPresentation: ViewModifier {
                     Spacer(); Button(store.bootstrap["common"]["done"].string) { tabs.presented = false }.keyboardShortcut(.cancelAction)
                 }
             }.padding(20).frame(minWidth: 340, idealWidth: 480, minHeight: 260, idealHeight: 440)
-                .modifier(EditorPopupPresentation()).modifier(EditorPopoverHost())
+                .modifier(EditorFittedPresentation()).modifier(EditorPopupPresentation()).modifier(EditorPopoverHost())
                 .accessibilityElement(children: .contain).accessibilityIdentifier("drawing-selector")
         }
     }

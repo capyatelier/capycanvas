@@ -40,9 +40,9 @@ struct SettingsView: View {
                 } }
         }.sheet(isPresented: Binding(get: { !model["shortcut_page"]["picker"].isNull },
             set: { if !$0 { action(["type": "close_action_picker"]) } })) {
-            ActionPickerSheet(store: store).modifier(EditorPopupPresentation())
+            ActionPickerSheet(store: store).modifier(EditorFittedPresentation()).modifier(EditorPopupPresentation())
         }
-        .sheet(isPresented: $profiles) { ColorProfileLibrary(preferences: store.colorPreferences).modifier(EditorPopupPresentation()) }
+        .sheet(isPresented: $profiles) { ColorProfileLibrary(preferences: store.colorPreferences).modifier(EditorFittedPresentation()).modifier(EditorPopupPresentation()) }
             .onChange(of: model["search_focus"].uint) { _, request in
                 DispatchQueue.main.async {
                     let current = store.snapshot["preferences"]

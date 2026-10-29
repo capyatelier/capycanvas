@@ -220,7 +220,7 @@ struct PaperFiles: ViewModifier {
     @ObservedObject var controller: PaperController
     func body(content: Content) -> some View {
         content.sheet(item:controller.texture == nil ? $controller.rename : Binding<PaperRename?>.constant(nil)) { draft in
-            PaperNameForm(controller:controller,draft:draft).modifier(EditorPopupPresentation())
+            PaperNameForm(controller:controller,draft:draft).modifier(EditorFittedPresentation()).modifier(EditorPopupPresentation())
         }
             .sheet(item:$controller.texture,onDismiss:{ controller.textureClosed() }) { request in
                 TextureDialog(store:store,controller:controller,request:request).modifier(EditorDialogPresentation(identifier:"texture-dialog",idealHeight:600))
@@ -326,7 +326,7 @@ private struct TextureDialog: View {
             }
         }.onChange(of:JSON([control["paper"]["tiles"].raw,control["value"].raw]).stableKey,initial:true) { _, _ in follow() }
             .onAppear { focused = true }
-            .sheet(item:$controller.rename) { draft in PaperNameForm(controller:controller,draft:draft).modifier(EditorPopupPresentation()) }
+            .sheet(item:$controller.rename) { draft in PaperNameForm(controller:controller,draft:draft).modifier(EditorFittedPresentation()).modifier(EditorPopupPresentation()) }
     }
     private func tile(_ item: JSON, index: Int) -> some View {
         let id = item["id"].raw as? String, actions = item["actions"].array

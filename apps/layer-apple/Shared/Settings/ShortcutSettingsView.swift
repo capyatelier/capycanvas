@@ -26,19 +26,19 @@ struct ShortcutSettingsView: View {
             }
         }
         .sheet(isPresented: Binding(get: { !model["shortcut_editor"].isNull }, set: { if !$0 { closeEditor() } })) {
-            ShortcutEditorSheet(store: store).modifier(EditorPopupPresentation())
+            ShortcutEditorSheet(store: store).modifier(EditorFittedPresentation()).modifier(EditorPopupPresentation())
         }
         .sheet(isPresented: Binding(get: { model["capture"]["id"].string == "modifier" }, set: { if !$0 { action(["type": "cancel_shortcut"]) } })) {
-            ModifierCaptureSheet(store: store).modifier(EditorPopupPresentation())
+            ModifierCaptureSheet(store: store).modifier(EditorFittedPresentation()).modifier(EditorPopupPresentation())
         }
         .background {
             Color.clear
                 .sheet(isPresented: Binding(get: { keymap["details"].bool }, set: { if !$0 { action(["type": "keymap_details", "open": false]) } })) {
-                    KeymapDetailsSheet(store: store).modifier(EditorPopupPresentation())
+                    KeymapDetailsSheet(store: store).modifier(EditorFittedPresentation()).modifier(EditorPopupPresentation())
                 }
             Color.clear
                 .sheet(isPresented: Binding(get: { !keymap["import"].isNull }, set: { if !$0 { action(["type": "cancel_keymap_import"]) } })) {
-                    KeymapImportSheet(store: store).modifier(EditorPopupPresentation())
+                    KeymapImportSheet(store: store).modifier(EditorFittedPresentation()).modifier(EditorPopupPresentation())
                 }
         }
         .fileExporter(isPresented: Binding(get: { exporting != nil }, set: { if !$0 { exporting = nil } }),

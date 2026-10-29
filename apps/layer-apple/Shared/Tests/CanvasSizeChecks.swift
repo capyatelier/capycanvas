@@ -32,6 +32,9 @@ extension XCTestCase {
         workspaceActivate(topLeft)
         expectation(for: NSPredicate(format: "selected == YES"), evaluatedWith: topLeft); waitForExpectations(timeout: 5)
         let width = app.textFields["number-entry-canvas-size-width"]
+        #if os(iOS)
+        checkDialogKeyboardHeight(app.descendants(matching: .any)["canvas-size-dialog"].firstMatch, in: app) { workspaceActivate(width) }
+        #endif
         workspaceActivate(width)
         width.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: (width.value as? String)?.count ?? 0) + "\(newWidth)")
         width.typeKey(XCUIKeyboardKey.return.rawValue, modifierFlags: [])
@@ -65,6 +68,9 @@ extension XCTestCase {
         let newHeight = Int((Double(initialHeight) * Double(newWidth) / Double(initialWidth)).rounded())
         XCTAssertEqual(displayed(message), "Current size: \(initialWidth) × \(initialHeight) px")
         let width = app.textFields["number-entry-image-size-width"]
+        #if os(iOS)
+        checkDialogKeyboardHeight(app.descendants(matching: .any)["image-size-dialog"].firstMatch, in: app) { workspaceActivate(width) }
+        #endif
         workspaceActivate(width)
         width.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: (width.value as? String)?.count ?? 0) + "\(newWidth)")
         width.typeKey(XCUIKeyboardKey.return.rawValue, modifierFlags: [])

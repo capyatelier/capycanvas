@@ -894,24 +894,24 @@ struct ProjectFilesModifier: ViewModifier {
                     }.padding(24).frame(minWidth: 320, idealWidth: 560)
                         .accessibilityElement(children: .contain)
                         .accessibilityIdentifier("preserved-package-preview")
-                        .interactiveDismissDisabled(files.packageCopying).modifier(EditorPopupPresentation())
+                        .interactiveDismissDisabled(files.packageCopying).modifier(EditorFittedPresentation()).modifier(EditorPopupPresentation())
                 }
             }
             .sheet(isPresented: Binding(get: { files.pendingProfile != nil }, set: { if !$0 { files.chooseProfile(nil) } })) {
                 PhotoProfileForm(preferences: files.preferences, interpretation: files.pendingProfile ?? JSON(),
                     spaces: files.documentSpaces, error: files.profileError, busy: files.interpreting) {
                     files.chooseProfile($0)
-                }.interactiveDismissDisabled(files.interpreting).modifier(EditorPopupPresentation())
+                }.interactiveDismissDisabled(files.interpreting).modifier(EditorFittedPresentation()).modifier(EditorPopupPresentation())
             }
             .sheet(isPresented: Binding(get: { files.colorEditor != nil }, set: { if !$0 { files.colorEditor?.cancel() } })) {
                 if let editor = files.colorEditor {
                     DocumentColorForm(editor: editor, spaces: files.documentSpaces)
-                        .interactiveDismissDisabled(editor.publishing).modifier(EditorPopupPresentation())
+                        .interactiveDismissDisabled(editor.publishing).modifier(EditorFittedPresentation()).modifier(EditorPopupPresentation())
                 }
             }
             .sheet(isPresented: Binding(get: { files.exportEditor != nil }, set: { if !$0 { files.exportEditor?.cancel() } }),
                 onDismiss: files.exportDismissed) {
-                if let editor = files.exportEditor { ExportForm(editor: editor).modifier(EditorPopupPresentation()) }
+                if let editor = files.exportEditor { ExportForm(editor: editor).modifier(EditorFittedPresentation()).modifier(EditorPopupPresentation()) }
             }
             #if os(iOS)
             .background {

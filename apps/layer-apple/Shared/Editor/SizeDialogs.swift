@@ -60,6 +60,7 @@ private struct SizeForm: View {
                     .accessibilityIdentifier(kind.identifier + "-apply")
             }
         }.padding(20).frame(width: 380)
+            .accessibilityElement(children: .contain).accessibilityIdentifier(kind.identifier + "-dialog")
     }
     private func number(_ label: String, value: Double, control: JSON, op: String) -> some View {
         NumberControl(store: store, label: label, value: value, control: control, identifier: kind.identifier + "-" + op, entryWidth: 96,

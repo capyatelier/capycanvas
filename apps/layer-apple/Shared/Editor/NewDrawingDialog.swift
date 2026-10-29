@@ -10,7 +10,7 @@ struct NewDrawingPresentation: ViewModifier {
             if !$0 && !store.state["new_drawing"].isNull { store.projectFiles.newDrawing(["op": "cancel"]) }
         }), onDismiss: { store.focusCanvas?() }) {
             NewDrawingDialog(store: store)
-                .frame(minWidth: 340, idealWidth: 720, maxWidth: 760, minHeight: 440, idealHeight: 540, maxHeight: 680)
+                .frame(minWidth: 340, idealWidth: 720, maxWidth: 760, minHeight: 440, idealHeight: 500, maxHeight: 680)
                 .accessibilityElement(children: .contain).accessibilityIdentifier("new-drawing-dialog")
                 .modifier(EditorFittedPresentation()).modifier(EditorPopupPresentation())
         }

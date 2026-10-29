@@ -6,7 +6,7 @@ struct WorkspaceManagerPresentation: ViewModifier {
         content
             .sheet(isPresented: Binding(get: { workspaces.presented }, set: { if !$0 { workspaces.dismiss() } })) {
                 WorkspaceManagerView(workspaces: workspaces)
-                    .modifier(EditorPopupPresentation())
+                    .modifier(EditorFittedPresentation()).modifier(EditorPopupPresentation())
             }
     }
 }

@@ -15,7 +15,7 @@ struct PaletteFiles: ViewModifier {
                 defaultFilename: controller.export?.name) { controller.exported($0) }
             .sheet(item: Binding(get: { controller.dialog.flatMap { $0.kind == .remove ? nil : $0 } },
                 set: { if $0 == nil, controller.dialog?.kind != .remove { controller.dialog = nil } })) { dialog in
-                PaletteNameForm(controller: controller, dialog: dialog).modifier(EditorPopupPresentation())
+                PaletteNameForm(controller: controller, dialog: dialog).modifier(EditorFittedPresentation()).modifier(EditorPopupPresentation())
             }
             .alert(controller.copy["remove_title"].string, isPresented: Binding(get: { controller.dialog?.kind == .remove },
                 set: { if !$0, controller.dialog?.kind == .remove { controller.dialog = nil } }), presenting: controller.dialog) { dialog in

@@ -49,7 +49,7 @@ struct ProfileChooserButtons: View {
                 .accessibilityIdentifier("color-profile-library")
         }.sheet(isPresented: $library, onDismiss: { onLibraryDismiss?() }) {
             ColorProfileLibrary(preferences: preferences) { profile in onProfile(profile); library = false }
-                .modifier(EditorPopupPresentation())
+                .modifier(EditorFittedPresentation()).modifier(EditorPopupPresentation())
         }
     }
 }

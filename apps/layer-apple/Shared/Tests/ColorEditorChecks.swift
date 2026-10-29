@@ -87,6 +87,9 @@ extension XCTestCase {
                    "color-format-2", "color-copy-0", "color-swatches", "color-editor-shape-circle", "color-editor-shape-square", "color-editor-shape-triangle"] {
             XCTAssertTrue(element(id).waitForExistence(timeout: 5), "Edit Color shows \(id)")
         }
+        #if os(iOS)
+        checkDialogKeyboardHeight(element("edit-color-dialog"), in: app) { workspaceActivate(element("color-value-hex")) }
+        #endif
         expectHex("#E61A1A", "The editor starts from the paint")
         #if os(macOS)
         NSPasteboard.general.clearContents(); NSPasteboard.general.setString("native clipboard sentinel", forType: .string)
@@ -286,11 +289,7 @@ extension XCTestCase {
         workspaceActivate(texture)
         XCTAssertTrue(dialog.waitForExistence(timeout: 10), "The texture thumbnail opens Choose Texture")
         XCTAssertEqual(dialog.frame.width, editColorSize.width, accuracy: 1, "Choose Texture keeps the Edit Color width")
-        #if os(macOS)
         XCTAssertGreaterThan(dialog.frame.height, editColorSize.height, "Choose Texture has room for its tile browser")
-        #else
-        XCTAssertEqual(dialog.frame.height, editColorSize.height, accuracy: 1, "Choose Texture keeps the Edit Color height")
-        #endif
         expectPending(drawingPaper)
         attachEditor(in: app, name: "texture-dialog-\(theme)")
         workspaceActivate(rough); expectPending(rough)
