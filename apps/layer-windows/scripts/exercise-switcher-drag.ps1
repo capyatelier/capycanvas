@@ -1,5 +1,9 @@
-﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('touch','pen','mouse')][string]$Device='touch',[switch]$Overflow,[ValidateSet('dark','light')][string]$Theme='dark')
+﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('touch','pen','mouse')][string]$Device='touch',[switch]$Overflow,[ValidateSet('dark','light')][string]$Theme='dark',[switch]$ReorderOnly,[switch]$ContextHoldOnly,[ValidateSet('drag','cancel','escape')][string]$ContextEnding)
 $ErrorActionPreference='Stop'
+if($ReorderOnly -and $ContextHoldOnly){throw 'Choose one focused switcher scope'}
+if(($ReorderOnly -or $ContextHoldOnly) -and $Overflow){throw 'Overflow is a separate switcher scope'}
+if($ContextHoldOnly -and $Device -eq 'mouse'){throw 'Custom context hold requires touch or pen'}
+if($ContextEnding -and !$ContextHoldOnly){throw 'ContextEnding requires ContextHoldOnly'}
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 $CapyPopups=$true
 Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
@@ -624,10 +628,11 @@ function Held-Rename([string]$Id){
     }
     Write-Output "$Device held pin and Apply across inline rename passed"
 }
-function Held-Context-Retirement([string]$Id){
+function Held-Context-Retirement([string]$Id,[string[]]$Endings=@('drag','cancel','escape')){
     if($Device -eq 'mouse'){return}
     $saved=@((Storage).order);$revision=(Storage).switcher_revision
-    foreach($ending in @('drag','cancel','escape')){
+    foreach($ending in $Endings){
+        $script:gestureCase='custom-context-'+$ending
         $at=Point $Id
         Row-Context $Id -KeepPressed
         try{
@@ -648,10 +653,10 @@ function Held-Context-Retirement([string]$Id){
         Preview-Intact;Order-Intact $saved $revision
     }
 }
-function Custom-Options {
+function Custom-Options([switch]$RetirementOnly,[string]$ContextEnding){
     (New-WorkspaceButton).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
     Wait-Until {(Manager).prompt.title -eq 'New Workspace'} 'Custom fixture did not open naming'
-    (Control 'workspace-manager-name').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('Grip options custom workspace')
+    (Control 'workspace-manager-name').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('Grip options')
     Wait-Until {(Control 'Create and Switch' -Name -Within (Control 'workspace-manager') -Type ([System.Windows.Automation.ControlType]::Button)).Current.IsEnabled} 'Custom workspace name did not enable confirmation'
     Choose 'Create and Switch';Settled
     Wait-Until {$null -eq (Manager).prompt -and (Manager).page -eq 'workspaces'} 'New workspace closed the manager'
@@ -664,9 +669,13 @@ function Custom-Options {
     Wait-Until {(Storage).id -eq $active -and !(Storage).busy} 'Original workspace did not return'
     Open-Manager;Preview-Select
     $saved=@((Storage).order);$revision=(Storage).switcher_revision
-    $nameGeometry=Workspace-TextGeometry $custom
-    Capture 'workspace-rename-display' -Composed
-    Held-Context-Retirement $custom
+    if(!$RetirementOnly){
+        $nameGeometry=Workspace-TextGeometry $custom
+        Capture 'workspace-rename-display' -Composed
+    }
+    $endings=if($RetirementOnly -and $ContextEnding){@($ContextEnding)}else{@('drag','cancel','escape')}
+    Held-Context-Retirement $custom -Endings $endings
+    if($RetirementOnly){return}
     Row-Context $custom
     Preview-Intact;Order-Intact $saved $revision
     Invoke 'workspace-manager-rename'
@@ -680,7 +689,7 @@ function Custom-Options {
     $editor.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('Discarded inline name')
     [CapyRowPointer]::Key([uint32]$review.Id,27)
     Wait-Until {$null -eq (Manager).prompt} 'Escape did not cancel inline Rename'
-    if(@((Manager).rows|Where-Object id -eq $custom)[0].title -ne 'Grip options custom workspace'){throw 'Escape persisted inline name'}
+    if(@((Manager).rows|Where-Object id -eq $custom)[0].title -ne 'Grip options'){throw 'Escape persisted inline name'}
     Preview-Intact;Order-Intact $saved $revision
     Write-Output "$Device context Rename Escape passed"
     $previousPreview=$preview
@@ -924,6 +933,35 @@ try {
     if(!(Find ('workspace-manager-current-'+$active))){throw 'Current workspace checkmark is missing'}
     $wrong=Find ('workspace-manager-current-'+$preview)
     if($wrong -and !$wrong.Current.IsOffscreen){throw 'Dialog preview moved the current workspace checkmark'}
+    if($ReorderOnly){
+        $script:gestureCase='reorder-grip';$script:case=$script:gestureCase
+        Drag -Grip
+        $script:gestureCase='reorder-body-hold';$script:case=$script:gestureCase
+        Drag -Hold:($Device -ne 'mouse')
+        $script:gestureCase='reorder-cancel';$script:case=$script:gestureCase
+        Drag -Grip -Cancel
+        No-Drop;No-Drop -Outside
+        $script:gestureCase='reorder-close'
+        Choose 'Cancel';Closed
+        if((Storage).id -ne $active){throw 'Reorder review changed the active workspace'}
+        Close
+        @{device=$Device;theme=$Theme;scope='reorder-only';grip_and_body_drop='passed';cancellation='passed';no_op_and_outside_drops='passed';preview_preserved='passed';single_reorder_commit='passed';zero_exit='passed'}|
+            ConvertTo-Json|Set-Content (Join-Path $run 'results.json')
+        Get-Content (Join-Path $run 'results.json')
+        return
+    }
+    if($ContextHoldOnly){
+        $script:gestureCase='custom-context-setup'
+        Custom-Options -RetirementOnly -ContextEnding $ContextEnding
+        $script:gestureCase='custom-context-close'
+        Choose 'Cancel';Closed
+        if((Storage).id -ne $active){throw 'Context hold review changed the active workspace'}
+        Close
+        @{device=$Device;theme=$Theme;scope='context-hold-only';context_ending=$ContextEnding;custom_context_endings='passed';preview_preserved='passed';order_preserved='passed';zero_exit='passed'}|
+            ConvertTo-Json|Set-Content (Join-Path $run 'results.json')
+        Get-Content (Join-Path $run 'results.json')
+        return
+    }
     $null=New-WorkspaceButton
     $taps=[Collections.Generic.List[object]]::new()
     $secondaryContacts=[Collections.Generic.List[object]]::new()

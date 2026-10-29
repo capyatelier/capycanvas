@@ -1,4 +1,4 @@
-﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('touch','pen','mouse')][string]$Device='touch',[ValidateSet('drawers')][string]$ColumnMode='drawers',[ValidateSet('dark','light')][string]$Theme='dark',[switch]$SwipeOnly,[switch]$PenSwipeOnly)
+﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('touch','pen','mouse')][string]$Device='touch',[ValidateSet('drawers')][string]$ColumnMode='drawers',[ValidateSet('dark','light')][string]$Theme='dark',[switch]$SwipeOnly,[switch]$PenSwipeOnly,[switch]$HoldOnly)
 $ErrorActionPreference='Stop'
 if($PenSwipeOnly){$SwipeOnly=$true;$Device='pen'}
 if($SwipeOnly -and !$PenSwipeOnly -and !$PSBoundParameters.ContainsKey('Device')){
@@ -10,7 +10,7 @@ if($SwipeOnly -and !$PenSwipeOnly -and !$PSBoundParameters.ContainsKey('Device')
     return
 }
 if(!$PSBoundParameters.ContainsKey('Theme')){
-    foreach($theme in @('dark','light')){& $PSCommandPath -Executable $Executable -Device $Device -ColumnMode $ColumnMode -Theme $theme -SwipeOnly:$SwipeOnly}
+    foreach($theme in @('dark','light')){& $PSCommandPath -Executable $Executable -Device $Device -ColumnMode $ColumnMode -Theme $theme -SwipeOnly:$SwipeOnly -HoldOnly:$HoldOnly}
     return
 }
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
@@ -269,6 +269,14 @@ try {
     $count=(Model).state.layers.Count;Invoke 'layer-new'
     Wait-Until {(Model).state.layers.Count -eq $count+1} 'New layer did not appear'
     $created=(Model).state.layer_tools.editing_layer.id
+    if($HoldOnly){
+        $script:case='row-whitespace';Drag-Row "layer-row-$created" $created $paint
+        [CapyRowPointer]::Dispose()
+        & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Close -DiscardUnsaved
+        if((Get-Item -LiteralPath $stderr).Length){throw 'Native row hold stderr requires review'}
+        @{device=$Device;theme=$Theme;row_whitespace_hold_drag_undo_redo='passed';scope='Native row body hold and reorder'}|ConvertTo-Json
+        return
+    }
     $script:case='visibility-short-click'
     Tap "layer-$created-visibility"
     Wait-Until {!@((Model).state.layers|Where-Object id -eq $created)[0].visible} 'Short click did not toggle visibility'
