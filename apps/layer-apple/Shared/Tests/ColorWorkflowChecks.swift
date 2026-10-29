@@ -4,9 +4,10 @@ extension XCTestCase {
     #if os(iOS)
     @MainActor func checkDialogKeyboardHeight(_ dialog: XCUIElement, in app: XCUIApplication, openKeyboard: () -> Void) {
         if app.keyboards.firstMatch.exists { dismissEditorKeyboard(in: app) }
+        let width = dialog.frame.width
         func outerFrame() -> CGRect {
             app.otherElements.containing(.any, identifier: dialog.identifier).allElementsBoundByIndex
-                .map(\.frame).filter { abs($0.width - dialog.frame.width) <= 2 }
+                .map(\.frame).filter { abs($0.width - width) <= 2 }
                 .max { $0.height < $1.height } ?? .zero
         }
         let initial = outerFrame()
@@ -15,13 +16,15 @@ extension XCTestCase {
         openKeyboard()
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
         dismissEditorKeyboard(in: app)
+        var current = initial
         let restored = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
-            abs(outerFrame().height - initial.height) <= 2 && outerFrame().height - dialog.frame.height <= 40
+            current = outerFrame()
+            return abs(current.height - initial.height) <= 2 && current.height - dialog.frame.height <= 40
         }, object: app)
         let result = XCTWaiter.wait(for: [restored], timeout: 10)
         if app.state == .runningForeground { attachEditor(in: app, name: dialog.identifier + "-after-keyboard") }
         XCTAssertEqual(result, .completed,
-            "Keyboard dismissal must restore the native sheet height: before \(initial), after \(outerFrame()), content \(dialog.frame)")
+            "Keyboard dismissal must restore the native sheet height: before \(initial), after \(current), content \(dialog.frame)")
     }
     @MainActor func fileProviderRoot(_ provider: String, in app: XCUIApplication) -> XCUIElement {
         app.cells.matching(NSPredicate(format: "identifier == %@ OR identifier == %@",

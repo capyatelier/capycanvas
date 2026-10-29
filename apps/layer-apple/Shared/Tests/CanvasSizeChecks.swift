@@ -35,9 +35,13 @@ extension XCTestCase {
         #if os(iOS)
         checkDialogKeyboardHeight(app.descendants(matching: .any)["canvas-size-dialog"].firstMatch, in: app) { workspaceActivate(width) }
         #endif
-        workspaceActivate(width)
-        width.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: (width.value as? String)?.count ?? 0) + "\(newWidth)")
+        replaceEditorText(width, with: "\(newWidth)", in: app)
+        #if os(macOS)
         width.typeKey(XCUIKeyboardKey.return.rawValue, modifierFlags: [])
+        #else
+        width.typeText("\n")
+        dismissEditorKeyboard(in: app)
+        #endif
         expectation(for: NSPredicate { _, _ in displayed(message) == "New size: \(newWidth) × \(initialHeight) px" }, evaluatedWith: message)
         waitForExpectations(timeout: 10)
         attachEditor(in: app, name: "canvas-size")
@@ -71,9 +75,13 @@ extension XCTestCase {
         #if os(iOS)
         checkDialogKeyboardHeight(app.descendants(matching: .any)["image-size-dialog"].firstMatch, in: app) { workspaceActivate(width) }
         #endif
-        workspaceActivate(width)
-        width.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: (width.value as? String)?.count ?? 0) + "\(newWidth)")
+        replaceEditorText(width, with: "\(newWidth)", in: app)
+        #if os(macOS)
         width.typeKey(XCUIKeyboardKey.return.rawValue, modifierFlags: [])
+        #else
+        width.typeText("\n")
+        dismissEditorKeyboard(in: app)
+        #endif
         expectation(for: NSPredicate { _, _ in displayed(message) == "New size: \(newWidth) × \(newHeight) px" }, evaluatedWith: message)
         waitForExpectations(timeout: 10)
         XCTAssertTrue(apply.isEnabled)

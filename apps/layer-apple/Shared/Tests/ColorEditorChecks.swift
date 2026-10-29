@@ -54,12 +54,16 @@ extension XCTestCase {
             return text != nil
         }, object: app)
         guard XCTWaiter.wait(for: [available], timeout: 10) == .completed else {
+            let hierarchy = XCTAttachment(string: "App state: \(app.state.rawValue)\n" + app.debugDescription)
+            hierarchy.name = "color-value-unavailable-hierarchy"; hierarchy.lifetime = .keepAlways; add(hierarchy)
+            let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+            screenshot.name = "color-value-unavailable"; screenshot.lifetime = .keepAlways; add(screenshot)
             XCTFail("The color value must remain available"); return ""
         }
         return text ?? ""
     }
     @MainActor func checkEditColor(in app: XCUIApplication, theme: String) {
-        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"\#(theme)"},{"type":"set_color","rgba":[0.2,0.45,0.8,1]},{"type":"invoke","command":"select_all"},{"type":"invoke","command":"fill_selection"},{"type":"invoke","command":"deselect"},{"type":"set_color","rgba":[0.9,0.1,0.1,1]}]"#
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"\#(theme)"},{"type":"workspace_manager","command":{"type":"switch","id":"builtin:workspace:illustrator"}},{"type":"set_color","rgba":[0.2,0.45,0.8,1]},{"type":"invoke","command":"select_all"},{"type":"invoke","command":"fill_selection"},{"type":"invoke","command":"deselect"},{"type":"set_color","rgba":[0.9,0.1,0.1,1]}]"#
         app.launch()
         let canvas = app.descendants(matching: .any)["canvas"].firstMatch
         XCTAssertTrue(canvas.waitForExistence(timeout: 30))
@@ -225,6 +229,7 @@ extension XCTestCase {
             canvas.value as? String == "Canvas ready" && sketch.exists && sketch.isSelected
         }, evaluatedWith: app)
         waitForExpectations(timeout: 30)
+        createWhitePaperDrawing(in: app)
         editorMenu(in: app, menu: "View", id: "fit_canvas", label: "Fit canvas")
         func pixels(_ accept: @escaping (Int, Int, Int) -> Bool, _ message: String) {
             let match = NSPredicate { _, _ in
@@ -238,7 +243,7 @@ extension XCTestCase {
         pixels({ r, g, b in min(r, g, b) >= 250 }, "A new drawing shows white Paper")
         let footer = app.buttons["layer-properties-disclosure"]
         func showLayers() {
-            if !footer.exists { workspaceActivate(app.buttons["Layers panel"]) }
+            if !footer.exists { workspaceActivate(app.buttons.matching(NSPredicate(format: "identifier == %@ AND label == %@", "header-tool-panel", "Layers panel")).firstMatch) }
             XCTAssertTrue(footer.waitForExistence(timeout: 10))
         }
         showLayers()
@@ -267,6 +272,7 @@ extension XCTestCase {
         XCTAssertTrue(footer.waitForExistence(timeout: 10), "Use Color preserves the sheet's parent drawer")
         pixels({ r, g, b in r >= 250 && g <= 5 && b <= 5 }, "Use Color sets the fill")
         editorHistory("Undo", in: app)
+        XCTAssertTrue(footer.waitForNonExistence(timeout: 10))
         pixels({ r, g, b in min(r, g, b) >= 250 }, "Undo restores the fill")
         showLayers()
 
@@ -282,7 +288,7 @@ extension XCTestCase {
             expectation(for: NSPredicate(format: "selected == YES"), evaluatedWith: tile)
             waitForExpectations(timeout: 10)
         }
-        expectTexture("Drawing paper")
+        expectTexture("Drawing")
         let white = editorPixels(in: app)
         let dialog = app.descendants(matching: .any)["texture-dialog"].firstMatch
         let drawingPaper = app.buttons["texture-tile-4"], rough = app.buttons["texture-tile-2"]
@@ -296,7 +302,7 @@ extension XCTestCase {
         XCTAssertFalse(drawingPaper.isSelected)
         workspaceActivate(app.buttons["texture-cancel"])
         XCTAssertTrue(dialog.waitForNonExistence(timeout: 10))
-        expectTexture("Drawing paper"); expectPixels(white, in: app)
+        expectTexture("Drawing"); expectPixels(white, in: app)
         workspaceActivate(texture)
         XCTAssertTrue(dialog.waitForExistence(timeout: 10))
         expectPending(drawingPaper); XCTAssertFalse(rough.isSelected, "Cancel forgets the pending texture")
@@ -305,16 +311,17 @@ extension XCTestCase {
         XCTAssertTrue(dialog.waitForNonExistence(timeout: 10))
         expectTexture("Rough")
         editorHistory("Undo", in: app)
+        XCTAssertTrue(footer.waitForNonExistence(timeout: 10))
         showLayers()
-        expectTexture("Drawing paper"); expectPixels(white, in: app)
+        expectTexture("Drawing"); expectPixels(white, in: app)
 
         let addMask = app.buttons["layer-Add mask"]
         XCTAssertTrue(addMask.waitForExistence(timeout: 10))
         XCTAssertFalse(addMask.isEnabled, "Paper can't have a mask")
         #if os(macOS)
-        thumbnail.rightClick()
+        workspacePoint(thumbnail)?.rightClick()
         #else
-        thumbnail.press(forDuration: 0.6)
+        workspacePoint(thumbnail)?.press(forDuration: 0.6)
         #endif
         for label in ["Add mask", "Mask: reveal selection", "Mask: hide selection", "Paste mask"] {
             let item = revealLayerMenuAction(label, in: app)
