@@ -368,7 +368,7 @@ private struct ColorClipboardKeys: UIViewRepresentable {
             view.isFirstResponder ? view : view.subviews.lazy.compactMap { self.firstResponder(in: $0) }.first
         }
         func claimFocus() {
-            guard let window, window.isKeyWindow, !editing, !isFirstResponder, copyColor != nil, !NativeTextContext.composing else { return }
+            guard let window, window.isKeyWindow, !editing, !isFirstResponder, copyColor != nil, !NativeTextContext.inputBusy else { return }
             let responder = firstResponder(in: window)
             guard !(responder is UITextInput) else { return }
             becomeFirstResponder()

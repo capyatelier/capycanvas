@@ -30,6 +30,7 @@ The iPad app and UI test runner require iPadOS 17.5 or later, including the
 the current SwiftUI APIs. On iPadOS 17, native scroll observation preserves
 layer offsets and scroll cancellation. Fitted iPad sheets propose their content's
 preferred size on iPadOS 18 and use a content-height detent on iPadOS 17.
+The Color editor's clipboard shortcuts claim keyboard focus only after captured input ends.
 
 The scripts default to `/Applications/Xcode.app/Contents/Developer`; set
 `DEVELOPER_DIR` if Xcode is elsewhere. A physical iPad also needs Developer Mode,
