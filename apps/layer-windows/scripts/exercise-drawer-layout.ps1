@@ -59,18 +59,14 @@ function Select-PenForScroll{
  Wait-Until {(Model).brush_ready -and (Model).state.brush.tool -eq 'pen' -and @((Model).state.tool_set.subtools).Count -eq 10} 'Pen brush choices did not prepare'
 }
 function Scroll-Check([string]$phase){
- $model=Model;$presentation=Presentation
+ $model=Model
  foreach($panel in @('navigator','brushes','tool_settings')){
   $group=@($model.layout.groups|Where-Object active -eq $panel)[0];if(!$group){throw "Missing active $panel group"}
-  if($panel-eq'brushes'){
-   Wait-Until {$body=@((Presentation).groups|Where-Object id -eq $group.id)[0].body_scroll;$body.extent_height -gt $body.viewport_height+.6} ($phase+' Pen brushes did not produce genuine overflow')
-   $presentation=Presentation
-  }
-  $actual=@($presentation.groups|Where-Object id -eq $group.id)[0].body_scroll
   $anchor=switch($panel){navigator{'navigator-overview'} brushes{'tool-subtool-0'} tool_settings{'number-root-tool-setting-size'}}
   $outer=Control $anchor -Arranged;$pattern=$null
   while($outer-and!$outer.TryGetCurrentPattern([System.Windows.Automation.ScrollPattern]::Pattern,[ref]$pattern)){$outer=[System.Windows.Automation.TreeWalker]::RawViewWalker.GetParent($outer)}
   if(!$outer){throw "$panel has no ancestor ScrollPattern provider"}
+  $actual=@((Presentation).groups|Where-Object id -eq $group.id)[0].body_scroll
   $scale=[CapyRowPointer]::GetDpiForWindow($window)/96.
   Check ([math]::Abs($outer.Current.BoundingRectangle.Height/$scale-$actual.viewport_height)-le1.1) ($phase+' '+$panel+' actual ScrollPresenter viewport') @{provider=$outer.Current.AutomationId;bounds=$outer.Current.BoundingRectangle;actual=$actual}
   if($panel-eq'navigator'){
@@ -82,7 +78,6 @@ function Scroll-Check([string]$phase){
    if($panel-eq'brushes'){Check ($actual.extent_height-gt$actual.viewport_height+.6-and$scroll.Current.VerticallyScrollable) ($phase+' Brushes have genuine native overflow') @{outer=$actual;scroll=$scroll.Current}}
    $before=$scroll.Current.VerticalScrollPercent
    if($scroll.Current.VerticallyScrollable){$scroll.Scroll([System.Windows.Automation.ScrollAmount]::NoAmount,[System.Windows.Automation.ScrollAmount]::LargeIncrement);Start-Sleep -Milliseconds 150;$after=$scroll.Current.VerticalScrollPercent;Check ($after-ne$before) ($phase+' '+$panel+' genuine overflow scroll moves') @{before=$before;after=$after;outer=$actual};$scroll.SetScrollPercent(-1,0)}
-   else{Check ($panel-ne'brushes') ($phase+' Brushes expected genuine overflow') @{outer=$actual;scroll=$scroll.Current}}
   }
  }
  Wait-OverviewProjection

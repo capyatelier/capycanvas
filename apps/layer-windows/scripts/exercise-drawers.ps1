@@ -65,7 +65,7 @@ try{
     $rightDrawer=Control "column-drawer-$($right.anchor.column)"
     $grip=Control "drawer-grip-$($right.anchor.group)"
     if($grip.Current.Name -ne 'Move all tabs'){throw 'Drawer is missing its whole-group drag handle'}
-    Wait-Until {try{($rightDrawer.Current.ItemStatus|ConvertFrom-Json).placement.bounds.width -gt 0}catch{$false}} 'Layers drawer did not reach shared width'
+    Wait-Until {try{($rightDrawer.Current.ItemStatus|ConvertFrom-Json).placement.bounds.width -eq 320}catch{$false}} 'Layers drawer did not reach shared width'
     $drawerWidth=($rightDrawer.Current.ItemStatus|ConvertFrom-Json).placement.bounds.width
     foreach($press in 1..2){
         (Control 'drawer-tab-adjustments' -Arranged).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
