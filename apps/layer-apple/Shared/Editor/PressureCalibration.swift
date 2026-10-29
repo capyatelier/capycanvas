@@ -77,14 +77,21 @@ private struct PenResponsePanel: View {
                     VStack(spacing: 12) {
                         CurveEditor(store: store, control: view["editor"], target: JSON(["kind": kind]), label: view["title"].string,
                             axisGutter: view["axis_gutter"].string, plotOverlay: tilt ? AnyView(directionCircle.padding(8)) : nil).id(kind)
-                        HStack(spacing: 8) {
-                            if tilt { Text(view["sensitivity"].string).frame(maxWidth: .infinity, alignment: .leading) }
-                            HStack(spacing: tilt ? 0 : 8) {
-                                sensitivity("firmer", lighter: false, icon: "minus")
-                                sensitivity("lighter", lighter: true, icon: "plus")
+                        HStack(spacing: store.panelMetrics.inset) {
+                            HStack(spacing: store.panelMetrics.spacing) {
+                                if tilt { Text(view["sensitivity"].string).accessibilityIdentifier("pen-tilt-sensitivity-title") }
+                                HStack(spacing: tilt ? 0 : 8) {
+                                    sensitivity("firmer", lighter: false, icon: "minus")
+                                    sensitivity("lighter", lighter: true, icon: "plus")
+                                }
                             }
-                            if tilt { Text(view["direction"].string).frame(maxWidth: .infinity, alignment: .leading); direction }
-                        }
+                            if tilt {
+                                HStack(spacing: store.panelMetrics.spacing) {
+                                    Text(view["direction"].string).accessibilityIdentifier("pen-tilt-direction-title")
+                                    direction
+                                }
+                            }
+                        }.frame(maxWidth: .infinity, alignment: .center)
                     }.padding(.horizontal, 16).fixedSize(horizontal: false, vertical: true)
                         .onGeometryChange(for: CGSize.self) { $0.size } action: { bodySize = $0 }
                 }.frame(height: min(bodySize.height, max(0, viewport.size.height - headerHeight - footerHeight)))

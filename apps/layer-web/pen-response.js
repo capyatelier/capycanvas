@@ -54,7 +54,7 @@ export function createPenResponse({state,workspace,element,button,icon,numberFie
       direction=element('section','utility-direction-section');direction.append(element('strong','utility-direction-title'));
       const controls=element('div','utility-controls-row');
       sensitivityTitle=element('span','utility-sensitivity-title');
-      if(mode==='tilt')controls.append(sensitivityTitle,sensitivity);
+      if(mode==='tilt'){const group=element('section','utility-sensitivity-section');group.append(sensitivityTitle,sensitivity);controls.append(group);}
       circle=document.createElementNS('http://www.w3.org/2000/svg','svg');circle.classList.add('utility-direction');circle.id='pen-tilt-direction';circle.setAttribute('viewBox','0 0 72 72');circle.setAttribute('role','img');
       circle.onpointerdown=e=>{e.preventDefault();e.stopPropagation();};
       const ring=document.createElementNS(circle.namespaceURI,'circle');ring.setAttribute('cx','36');ring.setAttribute('cy','36');ring.setAttribute('r','31');circle.append(ring);

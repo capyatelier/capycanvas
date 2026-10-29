@@ -69,7 +69,7 @@ function Reveal-Tilt([string]$Id,[switch]$NoScroll){
     $peer=Control $Id -NoPopups
     if($root.Current.ProcessId-ne$review.Id -or $peer.Current.ProcessId-ne$review.Id){throw 'Calibration target does not belong to the owned root'}
     if($peer.Current.AutomationId-cne$Id){throw 'Calibration peer has the wrong AutomationId'}
-    if($Id-notmatch'^pen-(tilt|pressure)-(curve|firmer|lighter|direction|reverse-horizontal|reverse-vertical|swap-axes)$'){
+    if($Id-notmatch'^pen-(tilt|pressure)-(curve|firmer|lighter|direction|sensitivity-title|direction-title|reverse-horizontal|reverse-vertical|swap-axes)$'){
         return (Control $Id -Arranged -NoPopups)
     }
     $runtime=$peer.GetRuntimeId();$scroll=Tilt-Scroll $peer
@@ -202,7 +202,7 @@ function Assert-Geometry{
     foreach($id in @('firmer','lighter','reset','cancel','apply','reverse-horizontal','reverse-vertical','swap-axes')){
         $r=(Reveal-Tilt "pen-tilt-$id").Current.BoundingRectangle
         if([Math]::Abs($r.Height/$scale-36) -gt 1){throw "Tilt $id is not tile-height: $r at scale $scale"}
-        if($id -in @('reverse-horizontal','reverse-vertical','swap-axes') -and [Math]::Abs($r.Width/$scale-36) -gt 1){throw "Tilt $id is not a square tile segment"}
+        if($id -in @('firmer','lighter','reverse-horizontal','reverse-vertical','swap-axes') -and [Math]::Abs($r.Width/$scale-36) -gt 1){throw "Tilt $id is not a square tile segment"}
         $controls[$id]=@($r.X,$r.Y,$r.Width,$r.Height)
     }
     $reset=(Control 'pen-tilt-reset' -Arranged).Current.BoundingRectangle;$cancel=(Control 'pen-tilt-cancel' -Arranged).Current.BoundingRectangle;$apply=(Control 'pen-tilt-apply' -Arranged).Current.BoundingRectangle
@@ -210,7 +210,20 @@ function Assert-Geometry{
     $first=(Reveal-Tilt 'pen-tilt-reverse-horizontal').Current.BoundingRectangle;$last=(Reveal-Tilt 'pen-tilt-swap-axes').Current.BoundingRectangle
     $firmer=(Reveal-Tilt 'pen-tilt-firmer').Current.BoundingRectangle;$lighter=(Reveal-Tilt 'pen-tilt-lighter').Current.BoundingRectangle
     if([Math]::Abs($first.Top-$firmer.Top) -gt $scale -or [Math]::Abs($last.Top-$lighter.Top) -gt $scale -or $first.Left -le $lighter.Right -or $firmer.Top -lt $plot.Bottom){throw 'Tilt sensitivity and direction controls do not share one row below the graph'}
-    @{theme=$Theme;scale=$scale;controls=$controls;frame=@($frame.X,$frame.Y,$frame.Width,$frame.Height);plot=@($plot.X,$plot.Y,$plot.Width,$plot.Height);preview=@($preview.X,$preview.Y,$preview.Width,$preview.Height)}|ConvertTo-Json -Depth 8|Set-Content (Join-Path $run 'geometry.json')
+    $titles=@{}
+    foreach($id in @('sensitivity-title','direction-title')){
+        $title=Reveal-Tilt "pen-tilt-$id";$r=$title.Current.BoundingRectangle
+        $titles[$id]=@($r.X,$r.Y,$r.Width,$r.Height)
+        $pattern=$null
+        if($title.TryGetCurrentPattern([System.Windows.Automation.TextPattern]::Pattern,[ref]$pattern)){
+            $text=$pattern.DocumentRange.GetBoundingRectangles()
+            if($text.Count -eq 4 -and [Math]::Abs($r.Width-$text[2]) -gt 2*$scale){throw "Tilt $id reserves space beyond its text"}
+        }
+    }
+    $sensitivity=(Reveal-Tilt 'pen-tilt-sensitivity-title').Current.BoundingRectangle;$direction=(Reveal-Tilt 'pen-tilt-direction-title').Current.BoundingRectangle
+    if([Math]::Abs(($firmer.Left-$sensitivity.Right)/$scale-4) -gt 1 -or [Math]::Abs(($first.Left-$direction.Right)/$scale-4) -gt 1){throw 'Tilt labels do not sit 4px before their button bars'}
+    if([Math]::Abs(($direction.Left-$lighter.Right)/$scale-8) -gt 1 -or [Math]::Abs(($sensitivity.Left+$last.Right-$frame.Left-$frame.Right)/2) -gt $scale){throw 'Tilt control groups do not share an 8px gap in a centered natural-width row'}
+    @{theme=$Theme;scale=$scale;controls=$controls;titles=$titles;frame=@($frame.X,$frame.Y,$frame.Width,$frame.Height);plot=@($plot.X,$plot.Y,$plot.Width,$plot.Height);preview=@($preview.X,$preview.Y,$preview.Width,$preview.Height)}|ConvertTo-Json -Depth 8|Set-Content (Join-Path $run 'geometry.json')
 }
 function Preview([string]$Stage,[string]$ExpectedCurve=''){
     $history=History;$artwork=Artwork;$draft=if($ExpectedCurve){$ExpectedCurve}else{Curve};$paperPoint=Canvas-Point

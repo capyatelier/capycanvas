@@ -3277,6 +3277,24 @@ class AndroidHostTest {
             val sensitivity = bounds("pen-tilt-firmer")
             for (tag in listOf("lighter", "reverse-horizontal", "reverse-vertical", "swap-axes"))
                 assertEquals("Sensitivity and direction controls share one row", sensitivity.center.y, bounds("pen-tilt-$tag").center.y, 1f)
+            val density = compose.activity.resources.displayMetrics.density
+            val sensitivityTitle = bounds("pen-tilt-sensitivity-title")
+            val directionTitle = bounds("pen-tilt-direction-title")
+            assertEquals("Sensitivity label meets its buttons", 4f * density, sensitivity.left - sensitivityTitle.right, 1f)
+            assertEquals("Direction label meets its buttons", 4f * density, bounds("pen-tilt-reverse-horizontal").left - directionTitle.right, 1f)
+            assertEquals("Calibration control pairs stay together", 8f * density, directionTitle.left - bounds("pen-tilt-lighter").right, 1f)
+            assertEquals("Calibration controls are centered as one row", bounds("pen-tilt-dialog").center.x,
+                (sensitivityTitle.left + bounds("pen-tilt-swap-axes").right) / 2f, 1f)
+            for (tag in listOf("sensitivity-title", "direction-title")) {
+                val label = compose.onNodeWithTag("pen-tilt-$tag", useUnmergedTree = true)
+                val layouts = mutableListOf<TextLayoutResult>()
+                label.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+                val layout = layouts.single()
+                assertEquals("Calibration labels use their text width", layout.multiParagraph.maxIntrinsicWidth,
+                    label.fetchSemanticsNode().boundsInRoot.width, 1f)
+                assertEquals("Calibration labels align with their buttons", sensitivity.center.y,
+                    label.fetchSemanticsNode().boundsInRoot.center.y, 1f)
+            }
             for (tag in listOf("reset", "cancel", "apply")) compose.onNodeWithTag("pen-tilt-$tag").assertHeightIsEqualTo(36.dp)
         }
         val stylus = InputDevice.getDeviceIds().asSequence().mapNotNull { InputDevice.getDevice(it) }

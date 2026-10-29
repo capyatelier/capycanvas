@@ -65,7 +65,19 @@ extension XCTestCase {
         XCTAssertEqual(graph.frame.maxX - preview.frame.maxX, 8, accuracy: 1)
         XCTAssertEqual(graph.frame.maxY - preview.frame.maxY, 8, accuracy: 1)
         let firmer = app.buttons["pen-tilt-firmer"], lighter = app.buttons["pen-tilt-lighter"]
+        let sensitivity = panel.staticTexts["pen-tilt-sensitivity-title"].firstMatch
+        let direction = panel.staticTexts["pen-tilt-direction-title"].firstMatch
+        XCTAssertTrue(sensitivity.waitForExistence(timeout: 5))
+        XCTAssertTrue(direction.waitForExistence(timeout: 5))
+        XCTAssertEqual(firmer.frame.minX - sensitivity.frame.maxX, 4, accuracy: 1)
+        XCTAssertEqual(axis(axisIDs[0]).frame.minX - direction.frame.maxX, 4, accuracy: 1)
+        XCTAssertEqual(direction.frame.minX - lighter.frame.maxX, 8, accuracy: 1)
+        XCTAssertEqual((sensitivity.frame.minX + axis(axisIDs[2]).frame.maxX) / 2, panel.frame.midX, accuracy: 1)
         XCTAssertEqual(firmer.frame.midY, lighter.frame.midY, accuracy: 1)
+        for control in [firmer, lighter] + axisIDs.map({ axis($0) }) {
+            XCTAssertEqual(control.frame.width, 36, accuracy: 1)
+            XCTAssertEqual(control.frame.height, 36, accuracy: 1)
+        }
         for id in axisIDs {
             XCTAssertEqual(axis(id).frame.midY, firmer.frame.midY, accuracy: 1)
             XCTAssertGreaterThan(axis(id).frame.minX, lighter.frame.maxX)

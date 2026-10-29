@@ -797,9 +797,9 @@ body[data-theme="dark"] .toolbar-manager .destructive-action { color: #ff7b63; }
 .utility-panel .curve-axis-y .curve-axis-label { left:5px; }
 .utility-panel .curve-axis-x { grid-column:2; grid-row:2; min-height:18px; }
 .utility-panel .curve-frame > span { grid-column:3; grid-row:1; padding-left:10px; white-space:pre; font-size:.85em; opacity:0; pointer-events:none; }
-.utility-controls-row { display:flex; align-items:center; gap:8px; }
-.utility-controls-row > span,.utility-direction-title { min-width:0; flex:0 1 auto; font-weight:normal; overflow-wrap:anywhere; }
-.utility-direction-section { display:flex; align-items:center; gap:8px; flex:1 1 auto; min-width:0; }
+.utility-controls-row { display:flex; align-items:center; justify-content:center; gap:var(--panel-inset); }
+.utility-sensitivity-title,.utility-direction-title { min-width:0; flex:0 1 auto; font-weight:normal; overflow-wrap:anywhere; }
+.utility-sensitivity-section,.utility-direction-section { display:flex; align-items:center; gap:var(--panel-control-spacing); flex:0 1 auto; min-width:0; }
 .utility-direction { position:absolute; right:8px; bottom:8px; width:72px; height:72px; overflow:visible; touch-action:none; pointer-events:all; }
 .utility-panel .utility-compact-sensitivity { flex:none; width:auto; gap:0; border:0; }
 .utility-panel .utility-compact-sensitivity svg { width:16px; height:16px; }

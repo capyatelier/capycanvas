@@ -44,6 +44,7 @@ import kotlin.math.roundToInt
     key(kind) {
         val colors = LocalPalette.current
         val density = LocalDensity.current.density
+        val metrics = panelMetrics()
         val current by rememberUpdatedState(view)
         val prefix = "pen-$kind"
         fun send(action: JSONObject, published: (() -> Unit)? = null) = host.dispatch(if (tilt != null)
@@ -130,37 +131,39 @@ import kotlin.math.roundToInt
                                 }
                             }
                         }
-                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(metrics.inset, Alignment.CenterHorizontally)) {
                             if (tilt == null) {
                                 OutlinedButton({ send(obj("kind" to "sensitivity", "lighter" to false)) }, Modifier.weight(1f).height(36.dp).testTag("$prefix-firmer"),
                                     enabled = view.getBoolean("firmer_enabled"), shape = ControlShape, contentPadding = PaddingValues(horizontal = 12.dp)) { Text(view.getString("firmer")) }
                                 OutlinedButton({ send(obj("kind" to "sensitivity", "lighter" to true)) }, Modifier.weight(1f).height(36.dp).testTag("$prefix-lighter"),
                                     enabled = view.getBoolean("lighter_enabled"), shape = ControlShape, contentPadding = PaddingValues(horizontal = 12.dp)) { Text(view.getString("lighter")) }
                             } else {
-                                Text(view.getString("sensitivity"), Modifier.weight(1f))
-                                Row(Modifier.clip(ControlShape).border(1.dp, colors.divider, ControlShape)) {
-                                    for ((key, lighter, icon) in listOf(Triple("firmer", false, "minus"), Triple("lighter", true, "plus"))) {
-                                        HoverTip(view.getString(key)) {
-                                            Box(Modifier.size(36.dp).background(colors.input).testTag("$prefix-$key")
-                                                .clickable(enabled = view.getBoolean("${key}_enabled")) { send(obj("kind" to "sensitivity", "lighter" to lighter)) }
-                                                .semantics { contentDescription = view.getString(key) }, contentAlignment = Alignment.Center) { SharedIcon(icon, null, Modifier.size(16.dp)) }
+                                Row(Modifier.weight(1f, fill = false), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(metrics.spacing)) {
+                                    Text(view.getString("sensitivity"), Modifier.weight(1f, fill = false).testTag("pen-tilt-sensitivity-title"))
+                                    Row(Modifier.clip(ControlShape).border(1.dp, colors.divider, ControlShape)) {
+                                        for ((key, lighter, icon) in listOf(Triple("firmer", false, "minus"), Triple("lighter", true, "plus"))) {
+                                            HoverTip(view.getString(key)) {
+                                                Box(Modifier.size(36.dp).background(colors.input).testTag("$prefix-$key")
+                                                    .clickable(enabled = view.getBoolean("${key}_enabled")) { send(obj("kind" to "sensitivity", "lighter" to lighter)) }
+                                                    .semantics { contentDescription = view.getString(key) }, contentAlignment = Alignment.Center) { SharedIcon(icon, null, Modifier.size(16.dp)) }
+                                            }
                                         }
                                     }
                                 }
-                            }
-                            if (tilt != null) {
-                                Text(view.getString("direction"), Modifier.weight(1f))
-                                Row(Modifier.height(36.dp).clip(ControlShape).border(1.dp, colors.divider, ControlShape).testTag("pen-tilt-axes")) {
-                                    for ((field, icon, tag) in listOf(Triple("reverse_horizontal", "flip-horizontal", "reverse-horizontal"),
-                                        Triple("reverse_vertical", "flip-vertical", "reverse-vertical"), Triple("swap", "swap-orientation", "swap-axes"))) {
-                                        val checked = view.getJSONObject("axes").getBoolean(field)
-                                        val label = view.getString(if (field == "swap") "swap_axes" else field)
-                                        HoverTip(label) {
-                                            Box(Modifier.size(36.dp).background(if (checked) colors.active else colors.input).testTag("pen-tilt-$tag")
-                                                .toggleable(checked, role = Role.Checkbox) { value ->
-                                                    val axes = current.getJSONObject("axes").copy().put(field, value)
-                                                    host.dispatch(obj("type" to "tilt_calibration", "action" to obj("kind" to "axes", "axes" to axes)))
-                                                }.semantics { contentDescription = label }, contentAlignment = Alignment.Center) { SharedIcon(icon, null, Modifier.size(16.dp)) }
+                                Row(Modifier.weight(1f, fill = false), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(metrics.spacing)) {
+                                    Text(view.getString("direction"), Modifier.weight(1f, fill = false).testTag("pen-tilt-direction-title"))
+                                    Row(Modifier.height(36.dp).clip(ControlShape).border(1.dp, colors.divider, ControlShape).testTag("pen-tilt-axes")) {
+                                        for ((field, icon, tag) in listOf(Triple("reverse_horizontal", "flip-horizontal", "reverse-horizontal"),
+                                            Triple("reverse_vertical", "flip-vertical", "reverse-vertical"), Triple("swap", "swap-orientation", "swap-axes"))) {
+                                            val checked = view.getJSONObject("axes").getBoolean(field)
+                                            val label = view.getString(if (field == "swap") "swap_axes" else field)
+                                            HoverTip(label) {
+                                                Box(Modifier.size(36.dp).background(if (checked) colors.active else colors.input).testTag("pen-tilt-$tag")
+                                                    .toggleable(checked, role = Role.Checkbox) { value ->
+                                                        val axes = current.getJSONObject("axes").copy().put(field, value)
+                                                        host.dispatch(obj("type" to "tilt_calibration", "action" to obj("kind" to "axes", "axes" to axes)))
+                                                    }.semantics { contentDescription = label }, contentAlignment = Alignment.Center) { SharedIcon(icon, null, Modifier.size(16.dp)) }
+                                            }
                                         }
                                     }
                                 }

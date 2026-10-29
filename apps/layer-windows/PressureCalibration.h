@@ -61,7 +61,7 @@ struct ResponseCalibration:std::enable_shared_from_this<ResponseCalibration>{
         for(auto control:{firmer,lighter,reset,cancel,apply}){control.MinWidth(0);control.Padding({12,0,12,0});control.MinHeight(36);}
         sensitivity.ColumnSpacing(8);
         sensitivityTitle=label(data,L"");sensitivityTitle.TextWrapping(TextWrapping::Wrap);sensitivityTitle.VerticalAlignment(VerticalAlignment::Center);
-        controls.ColumnSpacing(8);
+        controls.ColumnSpacing(0);
         for(int i=0;i<4;i++){ColumnDefinition column;column.Width({1,i%2?GridUnitType::Auto:GridUnitType::Star});controls.ColumnDefinitions().Append(column);}
         controls.Children().Append(sensitivityTitle);Grid::SetColumn(sensitivity,1);controls.Children().Append(sensitivity);
         for(int i=0;i<2;i++){ColumnDefinition column;column.Width({1,GridUnitType::Star});sensitivity.ColumnDefinitions().Append(column);}
@@ -161,6 +161,11 @@ struct ResponseCalibration:std::enable_shared_from_this<ResponseCalibration>{
         firmer.IsEnabled(flag(model,L"firmer_enabled"));lighter.IsEnabled(flag(model,L"lighter_enabled"));apply.IsEnabled(!tilt()||flag(object(data->state,L"tilt_calibration"),L"ready"));apply.Background(accent(data));apply.Foreground(data->brush(L"accent_foreground"));
         for(auto control:{firmer,lighter}){control.Width(tilt()?36.:std::numeric_limits<double>::quiet_NaN());control.Padding(tilt()?Thickness{0}:Thickness{12,0,12,0});auto corners=data->controlCorner();if(tilt()){if(control==firmer){corners.TopRight=0;corners.BottomRight=0;}else{corners.TopLeft=0;corners.BottomLeft=0;}}control.CornerRadius(corners);}
         sensitivity.ColumnSpacing(tilt()?0:8);Grid::SetColumn(sensitivity,tilt()?1:0);Grid::SetColumnSpan(sensitivity,tilt()?1:4);
+        controls.HorizontalAlignment(tilt()?HorizontalAlignment::Center:HorizontalAlignment::Stretch);
+        for(uint32_t i=0;i<4;++i)controls.ColumnDefinitions().GetAt(i).Width({1,!tilt()&&i==0?GridUnitType::Star:GridUnitType::Auto});
+        sensitivityTitle.Margin({0,0,data->panelMetric(L"control_spacing"),0});directionTitle.Margin(sensitivityTitle.Margin());
+        sensitivity.Margin({0,0,tilt()?data->panelMetric(L"inset"):0.,0});
+        AutomationProperties::SetAutomationId(sensitivityTitle,L"pen-tilt-sensitivity-title");AutomationProperties::SetAutomationId(directionTitle,L"pen-tilt-direction-title");
         for(auto text:{sensitivityTitle,directionTitle}){text.Visibility(tilt()?Visibility::Visible:Visibility::Collapsed);text.Foreground(data->brush(L"text"));}
         sensitivityTitle.Text(str(model,L"sensitivity"));
         device.Visibility(tilt()?Visibility::Visible:Visibility::Collapsed);directionSection.Visibility(tilt()?Visibility::Visible:Visibility::Collapsed);
@@ -173,6 +178,7 @@ struct ResponseCalibration:std::enable_shared_from_this<ResponseCalibration>{
         }
         for(auto const& bind:bindings)bind();
         double width=std::min(std::max(384.,num(object(model,L"bounds"),L"width")),host.ActualWidth());if(width<=0)return;
+        for(auto text:{sensitivityTitle,directionTitle})text.MaxWidth(std::max(1.,(width-32.-5.*36.-2.*data->panelMetric(L"control_spacing")-data->panelMetric(L"inset"))/2.));
         frame.Visibility(Visibility::Visible);frame.Width(width);frame.Height(std::numeric_limits<double>::quiet_NaN());scroll.MaxHeight(std::max(0.,host.ActualHeight()-header.ActualHeight()-footer.ActualHeight()-32));
         frame.Measure({float(width),INFINITY});float height=std::min(frame.DesiredSize().Height,float(host.ActualHeight()));frame.Height(height);
         auto b=object(model,L"bounds");translation.X(num(b,L"x"));translation.Y(num(b,L"y"));

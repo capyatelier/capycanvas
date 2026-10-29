@@ -461,7 +461,19 @@ fn assert_axis_bar(panel:&gtk::Widget,w:&Workspace) {
     assert!((graph.x()+graph.width()-preview_bounds.x()-preview_bounds.width()-8.).abs()<1. && (graph.y()+graph.height()-preview_bounds.y()-preview_bounds.height()-8.).abs()<1.,"direction preview keeps an eight-pixel plot inset");
     let sensitivity=find_named(panel,"pen-tilt-firmer").unwrap().compute_bounds(panel).unwrap();
     assert!((bar_bounds.y()-sensitivity.y()).abs()<1.,"sensitivity and direction controls share a compact row");
-    assert!(bar_bounds.x()>sensitivity.x()+sensitivity.width(),"direction follows sensitivity");
+    let labels=["pen-tilt-sensitivity-title","pen-tilt-direction-title"].map(|name|find_named(panel,name).unwrap().downcast::<gtk::Label>().unwrap());
+    let text=labels.each_ref().map(|label| {
+        let bounds=label.compute_bounds(panel).unwrap();
+        let width=label.layout().pixel_size().0 as f32;
+        assert!((bounds.width()-width).abs()<1.,"compact label keeps its intrinsic text width");
+        [bounds.x()+label.layout_offsets().0 as f32,width]
+    });
+    let lighter=find_named(panel,"pen-tilt-lighter").unwrap().compute_bounds(panel).unwrap();
+    assert!([&sensitivity,&lighter].iter().all(|bounds|bounds.width()==TILE_SIZE && bounds.height()==TILE_SIZE),"sensitivity controls keep square tile targets");
+    assert!((sensitivity.x()-text[0][0]-text[0][1]-4.).abs()<1.,"Sensitivity text stays four pixels from its bar");
+    assert!((bar_bounds.x()-text[1][0]-text[1][1]-4.).abs()<1.,"Direction text stays four pixels from its bar");
+    assert!((text[1][0]-lighter.x()-lighter.width()-8.).abs()<1.,"compact groups stay eight pixels apart");
+    assert!((text[0][0]+bar_bounds.x()+bar_bounds.width()-panel.width() as f32).abs()<1.5,"combined compact row stays centered in the dialog");
     assert!(buttons.iter().all(|button|button.width()==TILE_SIZE as i32 && button.height()==TILE_SIZE as i32));
     let bounds=buttons.each_ref().map(|button|button.compute_bounds(&bar).unwrap());
     assert!(bounds.windows(2).all(|pair|(pair[0].x()+pair[0].width()-pair[1].x()).abs()<1.));

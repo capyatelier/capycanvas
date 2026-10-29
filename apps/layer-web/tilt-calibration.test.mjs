@@ -54,6 +54,17 @@ export async function checkTiltCalibration({call,evaluate,settle}) {
     const shot=await call('Page.captureScreenshot',{format:'png',clip:{x:Math.floor(x),y:Math.floor(y),width:1,height:1,scale:1}});
     return evaluate(`(async()=>{const image=new Image();image.src='data:image/png;base64,${shot.data}';await image.decode();const canvas=new OffscreenCanvas(1,1),ctx=canvas.getContext('2d',{willReadFrequently:true});ctx.drawImage(image,0,0);return [...ctx.getImageData(0,0,1,1).data]})()`);
   };
+  const assertCompactRow=async()=>{
+    const geometry=await evaluate(`(()=>{const p=document.querySelector('${panel}'),r=n=>n.getBoundingClientRect().toJSON(),caption=selector=>{const node=p.querySelector(selector),range=document.createRange();range.selectNodeContents(node);return{box:r(node),text:range.getBoundingClientRect().toJSON()}};return{panel:r(p),labels:[caption('.utility-sensitivity-title'),caption('.utility-direction-title')],buttons:[...p.querySelectorAll('.utility-sensitivity button,.utility-direction-controls button')].map(r)}})()`);
+    const [sensitivity,direction]=geometry.labels,[less,more,...axes]=geometry.buttons;
+    for(const label of geometry.labels)assert.ok(Math.abs(label.box.width-label.text.width)<.75,'Compact labels keep intrinsic text widths');
+    for(const button of geometry.buttons)assert.ok(Math.abs(button.width-36)<.5&&Math.abs(button.height-36)<.5,'Compact buttons keep square 36px targets');
+    assert.ok(Math.abs(less.x-sensitivity.text.right-4)<.75,'Sensitivity text stays four pixels from its bar');
+    assert.ok(Math.abs(axes[0].x-direction.text.right-4)<.75,'Direction text stays four pixels from its bar');
+    assert.ok(Math.abs(direction.text.x-more.right-8)<.75,'Compact groups stay eight pixels apart');
+    assert.ok(Math.abs((sensitivity.text.x+axes.at(-1).right)/2-(geometry.panel.x+geometry.panel.width/2))<.75,'Combined compact row stays centered in the dialog');
+    assert.ok(geometry.labels.every(label=>label.box.height<=36),'Compact captions fit one control row');
+  };
   const shortViewport=async theme=>{
     await call('Emulation.setDeviceMetricsOverride',{width:640,height:480,deviceScaleFactor:1,mobile:false});await settle();
     let tiltPlot;
@@ -67,8 +78,7 @@ export async function checkTiltCalibration({call,evaluate,settle}) {
         assert.ok(Math.abs(geometry.graph.width-geometry.graph.height)<1,`${theme}/${mode}: short plot stays square`);
         assert.ok(Math.abs(geometry.graph.x+geometry.graph.width/2-midpoint)<1,`${theme}/${mode}: scrollbar preserves the outer centerline`);
         if(mode==='tilt'){
-          const captions=await evaluate(`[...document.querySelectorAll('${selector} .utility-sensitivity-title,${selector} .utility-direction-title')].map(n=>n.getBoundingClientRect().toJSON())`);
-          assert.ok(captions.every(r=>r.height<=36),`${theme}: compact captions fit one control row`);
+          await assertCompactRow();
           tiltPlot=geometry.graph;
           assert.ok(geometry.direction.x>=geometry.graph.x+geometry.graph.width/2&&geometry.direction.y>=geometry.graph.y+geometry.graph.height/2,'Short direction preview sits in the lower-right plot quadrant');
           assert.ok(geometry.direction.x+geometry.direction.width<=geometry.graph.x+geometry.graph.width+1&&geometry.direction.y+geometry.direction.height<=geometry.graph.y+geometry.graph.height+1,'Short direction preview stays inside the plot');
@@ -154,6 +164,7 @@ export async function checkTiltCalibration({call,evaluate,settle}) {
     for(let i=1;i<geometry.toggles.length;i++)assert.ok(Math.abs(geometry.toggles[i].rect.x-geometry.toggles[i-1].rect.x-36)<1,'Direction segments touch');
     const sensitivity=geometry.buttons.slice(0,2);for(const r of sensitivity)assert.ok(Math.abs(r.width-36)<1&&Math.abs(r.y-geometry.toggles[0].rect.y)<1,'Sensitivity uses square targets on the direction row');
     assert.ok(Math.abs(sensitivity[1].x-sensitivity[0].x-36)<1,'Sensitivity segments touch');
+    await assertCompactRow();
     assert.deepEqual(geometry.axesY,['90°','Output','0°']);assert.deepEqual(geometry.axesX,['0°','Input','90°']);
     assert.equal(await evaluate(`document.querySelector('${panel}').getAttribute('aria-modal')`),'false');
     const layout=await evaluate('layerApp.app.layout(innerWidth,innerHeight)'),opened=layout.collapsed.find(c=>c.open).open.bounds;
