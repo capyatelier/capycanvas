@@ -22,6 +22,17 @@ otherwise.
 | Cold launch with an empty shader cache → ready | 10 s | **Not met.** Android median 35.29 s to selected-brush readiness ([idle preparation](#idle-brush-preparation), 2026-10-08) | Huion: 3.50 s to all shaders; workspace 2.34 s ([shader readiness](../internals/shared-shader-readiness.md), 2026-09-25) | |
 | Open the tier photo → first frame | 3 / 4 / 6 s | | | |
 
+## Windows UI VM diagnostic
+
+Measured 2026-10-28 on RTX PRO 6000 Windows GPU VM, 2560 × 1600 at 120 Hz/125%, accepted runtime `30d276f68`. **VM diagnostic; does not qualify a tier.** Medians in milliseconds; screen-copy cadence 33–41 ms. Layout counts use separate Rendering geometry observations.
+
+| Destination / theme | First change ms | Settled ms | Destination layouts |
+| --- | ---: | ---: | ---: |
+| Photo / dark | 304.8 | 346.4 | 1 |
+| Photo / light | 276.4 | 327.1 | 1 |
+| Sketch / dark | 162.2 | 236.5 | 1 |
+| Sketch / light | 158.3 | 224.2 | 1 |
+
 ## Demand-driven startup
 
 Startup prepares the document, selected brush and physical eraser. Other brushes,
