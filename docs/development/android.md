@@ -323,112 +323,33 @@ SurfaceFlinger presents measure display cadence. Record diagnostic options that
 add work, such as renderer profiling, tracing or memory sampling, separately
 from rate runs.
 
-On the MovinkPad 11, installing, force-stopping or starting instrumentation clears
-the test app's Display › Adaptive switch. Both UI collectors accept
-`--adaptive-script HELPER.py --adaptive-label UNIQUE_LABEL`
-`--adaptive-apk OWN.apk --adaptive-aapt /path/to/aapt`
-to enable it after private fixture setup and before the primer. Build the matched
-APKs with the worktree's own `-PcapyApplicationId` and
-`-PcapyAppLabel=UNIQUE_LABEL`. The helper checks the collector's reserved
-serial, private package, unique label and installed APK hash before opening
-Settings. A fresh READY token and process identity bind the fixture to that run;
-the collector returns to the same Activity and task. It records the initial
-policy and restores it when capture finishes. Select the expected refresh rate
-with `--target-hz 90` for bubbles or `--extra expectedRefreshHz=90` for workspace,
-layer and UI workloads. The fixture checks that rate before the primer.
+On MovinkPad 11, enable the private test app's 90 Hz Adaptive policy after
+fixture setup. Both collectors accept
+`--adaptive-script HELPER.py --adaptive-label UNIQUE_LABEL --adaptive-apk OWN.apk --adaptive-aapt /path/to/aapt`.
+Build with your own `-PcapyApplicationId` and `-PcapyAppLabel=UNIQUE_LABEL`.
+Use `--target-hz 90` for bubbles or `--extra expectedRefreshHz=90` for workspace,
+layer and UI workloads. The helper restores the initial policy after capture.
 Viewport navigation, profiling and attribution do not support this barrier.
-Keep the before-primer refresh report and the existing SurfaceFlinger motion
-trace as evidence.
 
-- **Tool bubbles.** `AndroidBubbleBenchmarkTest#fiveBubbleMotion` drags one
-  bubble through four others on the tier photo at Fit. Run
-  `tools/performance/android-bubbles.py OUTPUT --photo DEVICE_PHOTO --width WIDTH --height HEIGHT`
-  through `devices.py run` after installing the benchmark and test APKs under
-  the worktree's application ID. `--workload hdr-drag` and `hdr-intensity` use
-  the tier photo in an F16 drawing with the color bubble; the latter sweeps the
-  EV arc. `--workload palette-opening` repeats palette-bead taps
-  (`--palette-transitions 1`–`10`) and reports no sustained-motion rate.
-  `--theme light` or `dark` selects the shared theme before the fixture.
-  The collector requires factory display size and density and font scale 1.
-  `--target-hz 60`, `90` or `120` also checks actual motion rate and p99 gaps
-  against the tier limits, retaining the report and raw data on failure.
-  `--report-only` rebuilds a report from captured data; missing recorded factory
-  settings make it diagnostic.
-- **Workspace motion.** `AndroidWorkspacePerformanceTest` runs with
-  `-e workspaceBenchmark true`: `#colorPanelOverlapFrameTiming`,
-  `#colorWheelFrameTiming`, `#editColorWheelFrameTiming` (the Edit Color
-  dialog's wheel), `#continuousDragFrameTiming` and
-  `#continuousResizeFrameTiming`. `-e workspaceTransparency 0`–`3` sets panel
-  transparency (off to high) and restores it afterwards. Results appear in
-  logcat under `CapyDragPerf` and `CapyResizePerf`. The gap and panel column
-  benchmarks also run inside the optimized app with
-  `android-viewport-presents.py --workspace-workload gap --workspace-runner self`
-  ([workspace columns](../performance/measuring.md)); both entry points share
-  `WorkspaceFrameTiming`. `--workspace-workload column` uses the panel runner
-  with `columnDrag=true` to exercise discrete whole-column docking feedback,
-  native release and one Undo. It retains actual hint geometry and reports
-  separate diagnostic transitions; columns move on release. Bridge report
-  and capture paths remain the same. Compare optimization settings with the same runner.
-  For actual app-window presentations of the other continuous workloads, use
-  `android-viewport-presents.py --workspace-workload resize|drag|wheel|edit-wheel|color-overlap`
-  with the tier photo, matching width/height, label and usual collector arguments.
-  These use the JUnit benchmark APK pair, enable `tierPhoto`, and collect every
-  mouse/touch mode and measured repeat from `workspace-tab-benchmark`.
-  `--extra benchmarkMode=navigator` limits resize to Navigator; drag modes are
-  `attached`, `floating` and `destination`. Profiling and the self runner are
-  supported only for the column gap/panel workloads.
-  The same collector accepts `switcher-scroll`, `grouped-scroll`, `layer-swipe`,
-  `layer-reorder`, `filter-reorder`, `layer-selection` and `layer-properties`.
-  Scroll and layer fixtures produce three measured runs. Instantaneous layer
-  selection reports state observations and the next app-window presentation only,
-  without claiming fresh-selection latency or sustained motion cadence. These require the
-  benchmark APK with explicit boot-clock windows; older recordings fail validation.
-  Canvas bar UI workloads use their label as `--workspace-workload`: `ui-bar-move`,
-  `ui-panel-change`, `ui-brush-size-slider`, `ui-brush-size-value`,
-  `ui-brush-opacity-slider`, `ui-brush-opacity-value`, `ui-brush-flow-slider`,
-  `ui-brush-flow-value`, `ui-layer-opacity-slider`, `ui-layer-opacity-value`,
-  `ui-layers-scroll`, `ui-brushes-scroll`, `ui-filters-scroll` and
-  `ui-layer-row-opacity` (the native layer-row two-finger opacity popup). They select the native
-  UI fixture and require at least three `--repeats` measured contacts.
-  `ui-bar-move` moves selected artwork through Transform Y; its timing includes
-  canvas transform work.
-  Numeric reports also retain input positions, delivered scalar values and
-  composed values observed at draw, with change rates and gap p99. Repeated
-  quantized values do not demand a new frame each refresh; compare fresh-value
-  delivery and tails alongside actual presents. Draw observations do not prove
-  pixel/SF identity or every accepted intermediate value. Reports retain the
-  observer's CPU/wall overhead; missing observations cannot qualify freshness.
-  Build `cargo build -p layer-ui --example numeric_replay` with an SSD
-  `CARGO_TARGET_DIR`, then pass its executable as `--numeric-resolver` to replay
-  captured controls, origins and native pointer mappings through shared Rust.
-  Reports separate input-implied demand, display-eligible demand and delivered
-  changes; demand-conditioned gaps exclude unchanged plateaus. The display
-  opportunities are inferred from the display mode and actual target-window
-  presents, not fresh-buffer identities. Value scrubs use a 240 dp/s sweep.
-  `ui-drawer-open-close`, `ui-bar-show-hide`, `ui-bar-show-hide-zen`, `ui-panel-change` and
-  `ui-zen-transition`, `ui-menu-open`, `ui-menu-submenu`, `ui-dialog-transition`,
-  `ui-grouped-tool-menu` and `ui-tile-drag` report diagnostic transition windows. Each active window is
-  reported separately; short transitions report presentation gaps and onset
-  without a sustained frame rate, and idle gaps never join adjacent transitions.
-  `ui-drawer-open-close` taps the native Layers header owner and retains
-  independent actual-draw and arranged-geometry timestamps for each open/close.
-  Run `--attribution` separately for diagnostic app graphics, view, input,
-  runtime, scheduler and CPU-frequency traces. It enables Compose tracing where
-  the fixture supports it, queries Perfetto for `gpu.renderstages`, and records
-  the capability response; unsupported GPU tracing stays absent. Attribution
-  summaries explicitly disable qualification. Use clean captures for tier rates.
-  `--workspace-workload ui-batch` runs all native UI rows in one fixture, collecting
-  each label and repeat without reopening the photo between rows. Use
-  `--labels ui-menu-open,ui-dialog-transition` to select a subset of batch rows.
-  Native target-window titles restrict popup rows to their own actual presents;
-  reports also retain counts for each owned surface. Failed
-  instrumentation retains expected report files that already exist and switcher
-  readiness and native interaction diagnostics, with qualification disabled in
-  the failure summary. Workspace primer contacts use the same six-second default
-  duration and are retained as raw `--1.json` reports; rate summaries include
-  only measured repeats. Batch trace and instrumentation budgets scale with
-  selected row count, repeats and contact duration; the collector stops its own
-  Perfetto session when instrumentation finishes.
+- **Tool bubbles.** Run `tools/performance/android-bubbles.py OUTPUT --package "$CAPY_APPLICATION_ID" --photo DEVICE_PHOTO --width WIDTH --height HEIGHT`
+  through `devices.py run`, using the installed benchmark/test APK pair and your
+  application ID. Use `--workload` and `--theme light|dark`; see `--help` for
+  workloads and refresh/report options.
+- **Workspace and UI motion.** Run
+  `tools/performance/android-viewport-presents.py OUTPUT --serial "$CAPY_ANDROID_SERIAL" --package OWN_ID --processor TRACE_PROCESSOR --label RUN_LABEL --photo DEVICE_PHOTO --width WIDTH --height HEIGHT --workspace-workload WORKLOAD`
+  through `devices.py run` with the tier photo and private benchmark/test APKs.
+  Use `--workspace-workload ui-batch --labels LABEL1,LABEL2 --repeats 3` for selected
+  native UI rows. The collector's `--help` lists workloads and UI labels.
+  Use `--workspace-workload resize|drag|wheel|edit-wheel|color-overlap` for panel
+  motion, `--workspace-workload gap --workspace-runner self` for the optimized
+  self runner, or `--workspace-workload column` for whole-column docking.
+  `--extra benchmarkMode=navigator` selects Navigator resize;
+  `--extra workspaceTransparency=0`–`3` selects panel transparency.
+  Build the numeric resolver with `cargo build --locked -p layer-ui --example numeric_replay`
+  using an SSD `CARGO_TARGET_DIR`, and pass the executable as `--numeric-resolver`.
+  Run `--attribution` separately from rate captures. Short transitions report
+  diagnostic windows rather than sustained FPS; see the
+  [measurement rules](../performance/measuring.md).
 - **Scrolling.** `AndroidWorkspacePerformanceTest#workspaceSwitcherScrollFrameTiming`
   with `-e switcherBenchmark true` scrolls the workspace choices and visibility
   checklist. When the factory display presents a compact header, it opens the
