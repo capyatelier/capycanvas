@@ -5771,21 +5771,12 @@ Original failures, control attribution and warmed checks are preserved in
 
 ### GTK exact panel-tab surfaces
 
-The 2026-10-28 combined tab-seam and glass-drag comparison uses control
-`441e0827d`, bundled GTK 4.24.1 with GSK Vulkan and color management, and the same
-NVIDIA workstation in a private 1600 × 1000, 120 Hz Mutter session at scale 1.
-The default 1333 × 1000 drawing does not qualify the reference tablet tier.
-Each case has three repeats, with alternating control/candidate order. All 132
-probe-off contacts pass the native journey assertions. The tab fixture waits
-for the initial asynchronous screen-clipping report before timing; its original
-model-retention assertions remain intact. Only tab motion uses 1,250 input
-events; other motion scenarios retain 550.
-
-Rates below are per-case medians, shown as a range where a row includes multiple
-cases. Gaps are the worst individual gesture's p99. Window and column rates
-count completed presents with changed native geometry. Tab rates count completed
-GDK presents for changed requested device-rounded source-tab poses; they do not
-establish fresh displayed geometry for GPU-owned bridges.
+Original rows compare control `441e0827d` on 2026-10-28; cleanup rows compare
+`ade9aad53` with one paired run per case. Both use bundled GTK
+4.24.1 Vulkan on the NVIDIA workstation at scale 1 in private 1600 × 1000,
+120 Hz Mutter. Rates are per-case median ranges; gaps are the worst gesture p99.
+The default drawing does not qualify the reference tier, and tab presents track
+requested poses rather than fresh GPU-owned bridge geometry.
 
 | Theme / motion | Presents/s, control → candidate | Worst p99 gap ms | Paint CPU p95 median range ms |
 | --- | ---: | ---: | ---: |
@@ -5795,31 +5786,16 @@ establish fresh displayed geometry for GPU-owned bridges.
 | Light window | 105.22 → 110.45 | 28.972 → 25.101 | 5.374 → 4.632 |
 | Light column | 115.06–118.03 → 116.46–118.04 | 25.015 → 24.980 | 2.172–3.442 → 2.053–3.577 |
 | Light tab | 120.006 → 119.814–120.008 | 8.636 → 8.854 | 0.781–0.810 → 0.996–1.012 |
+| Cleanup dark tab | 119.808–120.011 → 119.612–120.003 | 8.763 → 9.006 | 0.561 → 0.689–0.980 |
+| Cleanup dark column | 116.663–118.030 → 115.458–118.428 | 24.986 → 24.985 | 1.951–3.215 → 2.043–3.501 |
+| Cleanup light tab | 119.216–120.004 → 119.607–120.003 | 9.034 → 9.035 | 0.420–0.673 → 0.537–0.635 |
+| Cleanup light column | 116.446–118.427 → 116.454–118.228 | 24.932 → 24.989 | 1.889–3.443 → 2.210–3.367 |
 
-Throughput is broadly stable, with higher light-window throughput in this batch;
-CPU and pacing changes are mixed. Light-tab CPU p95 rises about 0.2 ms. Dark
-Navigator/mouse and right-column/touch CPU p95 medians rise 0.361 and 0.520 ms,
-with overlapping repeat ranges. Light Sizes/mouse gap-p99 median worsens
-10.651 → 24.826 ms: its three control values are 25.015/10.553/10.651 ms and
-candidate values 24.980/16.804/24.826 ms. The existing approximately 25 ms gap
-occurs more often in the candidate samples. These results do not establish a
-uniform CPU or pacing improvement; the shared window/column target misses remain.
-
-Separate probe-on captures show tab images/paint falling about 2.03 → 1.04,
-uploads about one per paint → one total warmed upload per theme, and zero Vulkan
-memory allocations in both versions. The surviving float16 target spans the
-strip: nominal image payload rises about 43.5 → 74.9 KB/paint despite the lower
-image count. Window modal counts remain 32 at matching sizes; the raw light mean
-32.17 → 32.43 reflects the sampled geometry mix. Column means differ by at most
-0.23%. Full-window conversions remain float16, with unchanged payload ranges.
-
-Exact tab/body colour checks pass all 72 native samples. The 6,912 pixel
-comparisons, 288 native contour cases, 36 floating/docked drag cases at scales
-1/1.25/2, and 58 window-free GTK tests pass. Curved-corner textures preserve flat
-interiors, including glass, while native rectangles remove the antialiased join
-hole. The reviewed light/dark 1×/2× crops and complete per-case results are in
-`artifacts/gtk-tab-fixes-20261028/`, including `exact-tab-crop-manifest.json`,
-`final-paced-report.json` and `final-resource-report.json`.
+CPU and pacing are mixed: the original light-tab CPU p95 rises about 0.2 ms,
+and light Sizes/mouse median gap p99 worsens 10.651 → 24.826 ms; both versions
+have 25 ms gaps. Cleanup rates are similar, with higher dark-tab CPU p95 in this
+single pair. Existing resize target misses remain. Complete evidence is in
+`artifacts/gtk-tab-fixes-20261028/` and `artifacts/gtk-tab-cleanup-20261028/`.
 
 ## Windows window resize
 

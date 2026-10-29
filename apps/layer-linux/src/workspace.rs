@@ -461,8 +461,7 @@ mod allocation {
                     self.obj()
                         .frame_clock()
                         .map_or(0, |clock| clock.frame_time()),
-                    self.obj().native().and_then(|native| native.surface())
-                        .map_or(self.obj().scale_factor() as f32, |surface| surface.scale() as f32),
+                    crate::squircle::device_scale(&*self.obj()) as f32,
                 );
             }
             let composed = composed.to_node();
@@ -476,7 +475,7 @@ mod allocation {
                     .obj()
                     .frame_clock()
                     .map_or(0, |clock| clock.frame_time());
-                let scale = self.obj().scale_factor() as f32;
+                let scale = crate::squircle::device_scale(&*self.obj()) as f32;
                 owner.documents.snapshot_drag(snapshot, now, scale);
                 owner.header.snapshot_drag(snapshot, now, scale);
             }

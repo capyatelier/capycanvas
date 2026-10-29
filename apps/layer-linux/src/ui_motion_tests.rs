@@ -1,6 +1,15 @@
 // Compositor recordings of workspace motion, analysed by tools/visual/ui_motion.py.
 use super::*;
 
+fn capture_point(w: &Workspace, texture: &gdk::Texture) -> impl Fn(f32, f32) -> [f32; 2] {
+    let monitor = w.area.display().monitor_at_surface(&w.window.surface().unwrap()).unwrap().geometry();
+    let scale = [texture.width() as f32 / monitor.width() as f32, texture.height() as f32 / monitor.height() as f32];
+    let origin = w.surface.compute_point(&w.window, &gtk::graphene::Point::zero()).unwrap();
+    let (wx, wy) = w.window.surface_transform();
+    let offset = [origin.x() + wx as f32 - monitor.x() as f32, origin.y() + wy as f32 - monitor.y() as f32];
+    move |x, y| [(x + offset[0]) * scale[0], (y + offset[1]) * scale[1]]
+}
+
 #[test]
 #[ignore = "isolated Mutter recording; LAYER_NATIVE_CAPTURE_DIR=<dir> workspace-motion.sh gtk --native-test=native_ui_motion_recording --native-storage"]
 fn native_ui_motion_recording() {
@@ -192,9 +201,6 @@ fn native_active_tab_matches_panel() {
     pump(1600);
     input.ready();
     pump(300);
-    let origin = w.surface.compute_point(&w.window, &gtk::graphene::Point::zero()).unwrap();
-    let (window_x, window_y) = w.window.surface_transform();
-    let offset = [origin.x() + window_x as f32, origin.y() + window_y as f32];
     let mut mismatches = Vec::new();
     let mut reports = Vec::new();
     for theme in [Theme::Dark, Theme::Light] {
@@ -208,12 +214,10 @@ fn native_active_tab_matches_panel() {
             let stride = texture.width() as usize * 4;
             let mut pixels = vec![0; stride * texture.height() as usize];
             texture.download(&mut pixels, stride);
-            let monitor=w.area.display().monitor_at_surface(&w.window.surface().unwrap()).unwrap().geometry();
-            let scale=[texture.width() as f32/monitor.width() as f32,texture.height() as f32/monitor.height() as f32];
+            let point = capture_point(&w, &texture);
             let sample = |x: f32, y: f32| {
-                let x=((x+offset[0]-monitor.x() as f32)*scale[0]).floor() as usize;
-                let y=((y+offset[1]-monitor.y() as f32)*scale[1]).floor() as usize;
-                let i = y * stride + x * 4;
+                let p = point(x, y);
+                let i = p[1].floor() as usize * stride + p[0].floor() as usize * 4;
                 [pixels[i + 2], pixels[i + 1], pixels[i]]
             };
             for group in w.groups.borrow().iter().filter(|g| g.tabs_visible) {
@@ -222,7 +226,7 @@ fn native_active_tab_matches_panel() {
                 let body = group.stack.compute_bounds(&w.surface).unwrap();
                 let tab_pixel = sample(tab.x() + 4., tab.y() + tab.height() - 3.);
                 let body_pixel = sample(body.x() + 3., body.y() + 3.);
-                reports.push(serde_json::json!({"case":name,"group":group.id,"scale":scale,"tab":tab_pixel,"body":body_pixel}));
+                reports.push(serde_json::json!({"case":name,"group":group.id,"tab":tab_pixel,"body":body_pixel}));
                 if tab_pixel.into_iter().zip(body_pixel).any(|(tab, body)| tab.abs_diff(body) > 1) {
                     mismatches.push(format!("{name} group {}: tab {tab_pixel:?} panel {body_pixel:?}", group.id));
                 }
@@ -331,16 +335,13 @@ fn native_panel_tab_drag_matches_rest() {
                         contact(device, "move", [start[0] + 40., start[1]])
                     ]));
                     until(
-                        || w.workspace_drag.borrow().as_ref().is_some_and(|d| d.started && d.tab.is_some()),
-                        "native panel tab pickup",
+                        || w.workspace_drag.borrow().as_ref().is_some_and(|d| d.started
+                            && d.tab.as_ref().is_some_and(|tab| tab.bounds.x - bounds.x() > 34.)),
+                        "native panel tab pickup beyond the fixed outer shadow",
                     );
                     let shifted = w.workspace_drag.borrow().as_ref().unwrap().tab.as_ref().unwrap().bounds;
-                    assert!(
-                        shifted.x - bounds.x() > 34.,
-                        "native pickup vacates the strip beyond the fixed outer shadow"
-                    );
                     input.perform(serde_json::json!([{"wait_ms":180},{"capture":format!("shifted-{name}")} ]));
-                    let scale = w.window.surface().unwrap().scale() as f32;
+                    let scale = crate::squircle::device_scale(&w.window) as f32;
                     let (blank_pixels, checked, unexpected_content) =
                         assert_tab_preview_content(&w, &source_content, bounds, shifted, scale, &output, &name);
                     input.perform(serde_json::json!([contact(device, "move", start)]));
@@ -357,17 +358,7 @@ fn native_panel_tab_drag_matches_rest() {
                     let strip_reference =
                         gdk::Texture::from_filename(captures.join(format!("strip-{name}.png"))).unwrap();
                     assert_eq!((rest.width(), rest.height()), (held.width(), held.height()));
-                    let monitor = w.area.display().monitor_at_surface(&w.window.surface().unwrap()).unwrap().geometry();
-                    let scale =
-                        [rest.width() as f32 / monitor.width() as f32, rest.height() as f32 / monitor.height() as f32];
-                    let origin = w.surface.compute_point(&w.window, &gtk::graphene::Point::zero()).unwrap();
-                    let (wx, wy) = w.window.surface_transform();
-                    let point = |x: f32, y: f32| {
-                        [
-                            (x + origin.x() + wx as f32 - monitor.x() as f32) * scale[0],
-                            (y + origin.y() + wy as f32 - monitor.y() as f32) * scale[1],
-                        ]
-                    };
+                    let point = capture_point(&w, &rest);
                     let a = point(band.x(), band.y());
                     let b = point(band.x() + band.width(), band.y() + band.height() + 2.);
                     let crop = [
@@ -410,24 +401,17 @@ fn native_panel_tab_drag_matches_rest() {
                     let x = bounds.x() + bounds.width() - 4.;
                     let resting_blank = at(&before, x, bounds.y() + bounds.height() - 3.);
                     let moving_blank = at(&moving, x + shifted.x - bounds.x(), shifted.y + shifted.height - 3.);
-                    let shifted_interior = delta(resting_blank.clone(), moving_blank.clone());
+                    let shifted_interior = delta(resting_blank, moving_blank);
                     let vacated_reference = at(&strip_reference, bounds.x() + 28., bounds.y() + bounds.height() - 3.);
                     let vacated_observed = at(&moving, bounds.x() + 28., bounds.y() + bounds.height() - 3.);
-                    let vacated = delta(vacated_reference.clone(), vacated_observed.clone());
+                    let vacated = delta(vacated_reference, vacated_observed);
                     let left = point(bounds.x() - 6., bounds.y())[0].floor().max(crop[0] as f32) as usize - crop[0];
                     let right = point(bounds.x() + bounds.width() + 6., bounds.y())[0]
                         .ceil().min(crop[2] as f32) as usize - crop[0];
                     let maximum = (0..height).flat_map(|y| (y * width + left) * 4..(y * width + right) * 4)
                         .map(|i| before[i].abs_diff(after[i])).max().unwrap_or(0);
-                    let center = point(bounds.x() + bounds.width() * 0.5, bounds.y() + bounds.height() - 3.);
-                    let center =
-                        ((center[1].floor() as usize - crop[1]) * width + center[0].floor() as usize - crop[0]) * 4;
-                    let interior = before[center..center + 4]
-                        .iter()
-                        .zip(&after[center..center + 4])
-                        .map(|(a, b)| a.abs_diff(*b))
-                        .max()
-                        .unwrap();
+                    let center = [bounds.x() + bounds.width() * 0.5, bounds.y() + bounds.height() - 3.];
+                    let interior = delta(at(&before, center[0], center[1]), at(&after, center[0], center[1]));
                     reports.push(serde_json::json!({"case":name,"source_and_feet_byte_delta":maximum,"interior_byte_delta":interior,
                     "shifted_interior_byte_delta":shifted_interior,"vacated_strip_byte_delta":if docked {None} else {Some(vacated)},
                     "blank_reference_pixels":blank_pixels,"checked_content_pixels":checked,"unexpected_content_pixels":unexpected_content}));

@@ -306,7 +306,7 @@ pub(crate) fn drag_preview(
     snapshot.pop();
     let node = snapshot.to_node()?;
     let snapshot = gtk::Snapshot::new();
-    let scale = row.native().and_then(|native| native.surface()).map_or(f64::from(row.scale_factor()), |surface| surface.scale());
+    let scale = crate::squircle::device_scale(row);
     snapshot.append_node(crate::squircle::converted(&node, scale));
     snapshot.to_paintable(Some(&gtk::graphene::Size::new(
         row.width() as f32,

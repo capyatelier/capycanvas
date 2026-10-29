@@ -80,6 +80,12 @@ fn grid_bounds(bounds: &graphene::Rect, scale: f64) -> bool {
         .all(|value| (f64::from(value) * scale).fract() == 0.)
 }
 
+pub(crate) fn device_scale(widget: &impl IsA<gtk::Widget>) -> f64 {
+    let widget = widget.as_ref();
+    widget.native().and_then(|native| native.surface())
+        .map_or(f64::from(widget.scale_factor()), |surface| surface.scale())
+}
+
 #[derive(Clone, Copy)]
 pub(crate) struct PixelGrid {
     pub scale: [f32; 2],
@@ -90,9 +96,7 @@ impl PixelGrid {
     fn new(scale: f64) -> Self { Self { scale: [scale as f32; 2], offset: [0.; 2] } }
 
     pub fn for_widget(widget: &gtk::Widget) -> Self {
-        let scale = widget.native().and_then(|native| native.surface())
-            .map_or(widget.scale_factor() as f64, |surface| surface.scale());
-        let grid = Self::new(scale);
+        let grid = Self::new(device_scale(widget));
         widget.root().and_then(|root| root.dynamic_cast::<gtk::Widget>().ok())
             .and_then(|root| widget.compute_transform(&root))
             .map_or(grid, |matrix| grid.matrix(&matrix))
@@ -133,6 +137,11 @@ impl PixelGrid {
         let pixel = value * self.scale[axis] + self.offset[axis];
         let edge = if self.scale[axis] > 0. { pixel.ceil() } else { pixel.floor() };
         (edge - self.offset[axis]) / self.scale[axis]
+    }
+
+    pub fn round(self, axis: usize, value: f32) -> f32 {
+        if self.scale[axis] == 0. { return value; }
+        ((value * self.scale[axis] + self.offset[axis]).round() - self.offset[axis]) / self.scale[axis]
     }
 
     fn key(self) -> [u32; 4] {
@@ -877,6 +886,11 @@ mod tests {
 
     #[test]
     fn widget_matrices_preserve_device_scale_and_phase() {
+        let flipped = PixelGrid { scale: [-1.25, 0.], offset: [0.25, 0.5] };
+        assert_eq!(flipped.floor(0, 0.6), 0.2);
+        assert_eq!(flipped.ceil(0, 0.6), 1.);
+        assert_eq!(flipped.round(0, 0.6), 1.);
+        assert_eq!(flipped.round(1, 0.6), 0.6);
         for scale in [1., 1.25, 2.] {
             let grid = PixelGrid::new(scale);
             let native = grid.matrix(&graphene::Matrix::from_2d(1., 0., 0., 1., 0.25, 0.5));
@@ -1082,10 +1096,7 @@ fn append_converted(widget: &gtk::Widget, converter: &RefCell<Converter>, conten
     let Some(node) = content.to_node() else {
         return;
     };
-    let scale = widget
-        .native()
-        .and_then(|native| native.surface())
-        .map_or_else(|| f64::from(widget.scale_factor()), |surface| surface.scale());
+    let scale = device_scale(widget);
     let window = widget.native().and_then(|native| native.downcast::<crate::window::Window>().ok())
         .map(|window| [window.width() as f32, window.height() as f32, window.corner_radius()]);
     snapshot.append_node(converter.borrow_mut().frame_in_window(&node, scale, window));

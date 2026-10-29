@@ -45,8 +45,8 @@ fn native_panel_tab_alpha_pixels() {
                 }
                 let reference=masked_fill(gsk::ContainerNode::new(&background).upcast(),paint(panel,&state,&bounds),mask_node.clone());
                 let hover_node=background.get(1).cloned();
-                let mut paths=CornerPaths::new();let mut textures=CornerTextures::new();
-                let candidate=tab_background(&bounds,Some(&selected),&bg,&panel,hover_node.as_ref(),crate::squircle::PixelGrid{scale:[scale;2],offset:[origin[0]*scale,origin[1]*scale]},&mut paths,&mut textures);
+                let mut textures=CornerTextures::new();
+                let candidate=tab_background(&bounds,Some(&selected),&bg,&panel,hover_node.as_ref(),crate::squircle::PixelGrid{scale:[scale;2],offset:[origin[0]*scale,origin[1]*scale]},&mut textures);
                 for context in 0..3 {for float_target in [false,true] {
                     let wrap=|node:&gsk::RenderNode|{let node=match context{1=>gsk::OpacityNode::new(node,0.7).upcast(),2=>gsk::ClipNode::new(node,&graphene::Rect::new(2.3,3.7,(width-5) as f32,29.)).upcast(),_=>node.clone()};gsk::TransformNode::new(node,Some(&gsk::Transform::new().translate(&graphene::Point::new(origin[0],origin[1])))).upcast()};
                     let a=wrap(&reference);let b=crate::squircle::converted(&wrap(&candidate),scale as f64);let physical=|node:&gsk::RenderNode|gsk::TransformNode::new(node,Some(&gsk::Transform::new().scale(scale,scale))).upcast();let a=physical(&a);let converted_candidate=physical(&b);let raw_candidate=physical(&wrap(&candidate));let legacy_node=a.clone();let viewport=graphene::Rect::new(0.,0.,(width as f32*scale+2.).ceil(),(36.*scale+2.).ceil());let a=render(&a,&viewport,&state,float_target);let b=render(&converted_candidate,&viewport,&state,float_target);let mut byte_error=0;let mut float_error=0f32;
@@ -104,11 +104,13 @@ fn masked_fill(background: gtk::gsk::RenderNode, foreground: gtk::gsk::RenderNod
 }
 
 
-fn selected_outline(cr: &gtk::cairo::Context, tab: &gtk::graphene::Rect, bottom: f32) {
+pub(super) fn selected_outline(cr: &gtk::cairo::Context, tab: &gtk::graphene::Rect, bottom: f32) {
     let radius = gtk::graphene::Size::new(layer_ui::SURFACE_RADIUS, layer_ui::SURFACE_RADIUS);
     let square = gtk::graphene::Size::new(0., 0.);
     let mut shape = gtk::gsk::RoundedRect::new(*tab, radius, radius, square, square);
     shape.normalize();
     crate::squircle::rounded_rect(cr, &shape);
-    feet(cr, tab, bottom);
+    for (x, direction) in [(tab.x(), -1.), (tab.x() + tab.width(), 1.)] {
+        crate::squircle::concave_foot(cr, x.into(), bottom.into(), 6., direction);
+    }
 }

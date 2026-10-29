@@ -133,6 +133,21 @@ use layer_render::CanvasRenderer;
 use layer_ui::FloatingToolbarLayout;
 use std::time::{Duration, Instant};
 
+struct PaintTimer(Cell<(Instant, f64)>);
+impl PaintTimer {
+    fn connect(clock: &gdk::FrameClock) -> (Rc<Self>, glib::SignalHandlerId) {
+        let timer = Rc::new(Self(Cell::new((Instant::now(), 0.))));
+        let before = clock.connect_before_paint(glib::clone!(#[strong] timer, move |_| {
+            timer.0.set((Instant::now(), crate::timing::thread_cpu_ms()));
+        }));
+        (timer, before)
+    }
+    fn elapsed(&self) -> (f64, f64) {
+        let (start, cpu) = self.0.get();
+        (start.elapsed().as_secs_f64() * 1000., crate::timing::thread_cpu_ms() - cpu)
+    }
+}
+
 /// A new drawing at `depth`, as New drawing makes it.
 pub(crate) fn new_drawing_at(width: u32, height: u32, depth: layer_core::color::SampleDepth) -> layer_core::Document {
     NewDocumentOptions {

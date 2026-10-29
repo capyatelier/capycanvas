@@ -166,7 +166,7 @@ impl NativeTabSlide {
                 snapshot.append_node(&tab.node);
                 snapshot.restore();
             };
-            if index != self.source && self.strip.is_some() {
+            if index != self.source {
                 let left = (self.bounds.x * scale).round() / scale;
                 let right = ((self.bounds.x + self.bounds.width) * scale).round() / scale;
                 for (x, width) in [(self.clip.x, left - self.clip.x),

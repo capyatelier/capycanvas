@@ -6,7 +6,6 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use gtk::{gdk, graphene, gsk};
 pub(crate) const TAB_RADIUS: f32 = layer_ui::SURFACE_RADIUS * crate::squircle::CORNER_FIT;
-type CornerPaths = HashMap<[u32; 8], gsk::Path>;
 type CornerTextures = HashMap<[u32; 18], gdk::Texture>;
 mod imp {
     use super::*;
@@ -17,7 +16,6 @@ mod imp {
         pub hover_bottom: RefCell<Vec<[i8; 2]>>,
         pub tints: RefCell<Option<[gtk::Box; 2]>>,
         pub gpu_background: Cell<bool>,
-        pub(super) paths: RefCell<CornerPaths>,
         pub(super) textures: RefCell<CornerTextures>,
         pub dragged: Cell<Option<graphene::Rect>>,
         pub(super) hover_path: RefCell<Option<([u32; 6], gsk::Path)>>,
@@ -104,7 +102,7 @@ mod imp {
             let bounds = gtk::graphene::Rect::new(0., 0., obj.width() as f32, obj.height() as f32);
             let grid = crate::squircle::PixelGrid::for_widget(obj.upcast_ref());
             let Some([strip, foot]) = self.tints.borrow().clone() else { return };
-            let selected = buttons.iter().find(|b| b.has_css_class("selected-tool") && b.opacity() > 0.);
+            let selected = selected_visible(&buttons);
             let active = obj.active_bounds();
             let gpu = self.gpu_background.get();
             let hovered = gtk::Snapshot::new();
@@ -131,7 +129,7 @@ mod imp {
                 hovered.unwrap_or_else(|| gsk::ColorNode::new(&gdk::RGBA::TRANSPARENT, &bounds).upcast())
             } else {
                 tab_background(&bounds, active.as_ref(), &strip.color(), &foot.color(), hovered.as_ref(),
-                    grid, &mut self.paths.borrow_mut(), &mut self.textures.borrow_mut())
+                    grid, &mut self.textures.borrow_mut())
             };
             snapshot.append_node(if strip.color().alpha() < 1. || foot.color().alpha() < 1. {
                 crate::glass::surface(node)
@@ -148,20 +146,19 @@ mod imp {
 
 struct TabRegion {
     bounds: graphene::Rect,
-    path: Option<gsk::Path>,
-    key: [u32; 8],
+    corner: Option<[u32; 8]>,
 }
 
 impl TabRegion {
     fn rectangle(regions: &mut Vec<Self>, [x, y, width, height]: [f32; 4]) {
         if width > 0. && height > 0. {
-            regions.push(Self { bounds: graphene::Rect::new(x, y, width, height), path: None, key: [0; 8] });
+            regions.push(Self { bounds: graphene::Rect::new(x, y, width, height), corner: None });
         }
     }
 }
 
 fn selected_regions(bounds: &graphene::Rect, tab: &graphene::Rect,
-    grid: crate::squircle::PixelGrid, paths: &mut CornerPaths) -> (Vec<TabRegion>, Vec<TabRegion>) {
+    grid: crate::squircle::PixelGrid) -> (Vec<TabRegion>, Vec<TabRegion>) {
     let tab = snapped_tab(tab, grid);
     let square = graphene::Size::new(0., 0.);
     let radius = graphene::Size::new(layer_ui::SURFACE_RADIUS, layer_ui::SURFACE_RADIUS);
@@ -212,59 +209,66 @@ fn selected_regions(bounds: &graphene::Rect, tab: &graphene::Rect,
         if width <= 0. || height <= 0. { continue; }
         let key = [width, height, anchor[0], anchor[1], radius[0], radius[1], kind as f32,
             if kind == 4 { tab.width() } else { 0. }].map(f32::to_bits);
-        let inside = paths.entry(key).or_insert_with(|| crate::squircle::path(|cr| match kind {
-                0 => {
-                    cr.move_to(f64::from(anchor[0]), f64::from(height));
-                    cr.line_to(f64::from(anchor[0]), f64::from(anchor[1] + radius[1]));
-                    crate::squircle::corner(cr, [f64::from(anchor[0] + radius[0]), f64::from(anchor[1] + radius[1])],
-                        [f64::from(-radius[0]), 0.], [0., f64::from(-radius[1])]);
-                    cr.line_to(f64::from(width), f64::from(anchor[1]));
-                    cr.line_to(f64::from(width), f64::from(height));
-                    cr.close_path();
-                }
-                1 => {
-                    cr.move_to(0., f64::from(anchor[1]));
-                    cr.line_to(f64::from(anchor[0] - radius[0]), f64::from(anchor[1]));
-                    crate::squircle::corner(cr, [f64::from(anchor[0] - radius[0]), f64::from(anchor[1] + radius[1])],
-                        [0., f64::from(-radius[1])], [f64::from(radius[0]), 0.]);
-                    cr.line_to(f64::from(anchor[0]), f64::from(height));
-                    cr.line_to(0., f64::from(height));
-                    cr.close_path();
-                }
-                2 => {
-                    cr.rectangle(f64::from(anchor[0]), 0., f64::from(width - anchor[0]), f64::from(height));
-                    crate::squircle::concave_foot(cr, f64::from(anchor[0]), f64::from(anchor[1]), 6., -1.);
-                }
-                3 => {
-                    cr.rectangle(0., 0., f64::from(anchor[0]), f64::from(height));
-                    crate::squircle::concave_foot(cr, f64::from(anchor[0]), f64::from(anchor[1]), 6., 1.);
-                }
-                _ => {
-                    let radius = graphene::Size::new(radius[0], radius[1]);
-                    let shape = gsk::RoundedRect::new(graphene::Rect::new(anchor[0], anchor[1],
-                        tab.width(), height - anchor[1]), radius, radius, square, square);
-                    crate::squircle::rounded_rect(cr, &shape);
-                }
-            }));
         let rect = graphene::Rect::new(x, y, width, height);
-        foreground.push(TabRegion { bounds: rect, path: Some(inside.clone()), key });
+        foreground.push(TabRegion { bounds: rect, corner: Some(key) });
     }
     (background, foreground)
 }
 
+fn selected_visible(buttons: &[gtk::Button]) -> Option<&gtk::Button> {
+    buttons.iter().find(|button| button.has_css_class("selected-tool") && button.opacity() > 0.)
+}
+
+fn corner_path(key: [u32; 8]) -> gsk::Path {
+    let [width, height, x, y, rx, ry, kind, tab_width] = key.map(f32::from_bits);
+    let (anchor, radius) = ([x, y], [rx, ry]);
+    let square = graphene::Size::new(0., 0.);
+    crate::squircle::path(|cr| match kind as u32 {
+        0 => {
+            cr.move_to(f64::from(anchor[0]), f64::from(height));
+            cr.line_to(f64::from(anchor[0]), f64::from(anchor[1] + radius[1]));
+            crate::squircle::corner(cr, [f64::from(anchor[0] + radius[0]), f64::from(anchor[1] + radius[1])],
+                [f64::from(-radius[0]), 0.], [0., f64::from(-radius[1])]);
+            cr.line_to(f64::from(width), f64::from(anchor[1]));
+            cr.line_to(f64::from(width), f64::from(height));
+            cr.close_path();
+        }
+        1 => {
+            cr.move_to(0., f64::from(anchor[1]));
+            cr.line_to(f64::from(anchor[0] - radius[0]), f64::from(anchor[1]));
+            crate::squircle::corner(cr, [f64::from(anchor[0] - radius[0]), f64::from(anchor[1] + radius[1])],
+                [0., f64::from(-radius[1])], [f64::from(radius[0]), 0.]);
+            cr.line_to(f64::from(anchor[0]), f64::from(height));
+            cr.line_to(0., f64::from(height));
+            cr.close_path();
+        }
+        2 => {
+            cr.rectangle(f64::from(anchor[0]), 0., f64::from(width - anchor[0]), f64::from(height));
+            crate::squircle::concave_foot(cr, f64::from(anchor[0]), f64::from(anchor[1]), 6., -1.);
+        }
+        3 => {
+            cr.rectangle(0., 0., f64::from(anchor[0]), f64::from(height));
+            crate::squircle::concave_foot(cr, f64::from(anchor[0]), f64::from(anchor[1]), 6., 1.);
+        }
+        _ => {
+            let radius = graphene::Size::new(radius[0], radius[1]);
+            let shape = gsk::RoundedRect::new(graphene::Rect::new(anchor[0], anchor[1],
+                tab_width, height - anchor[1]), radius, radius, square, square);
+            crate::squircle::rounded_rect(cr, &shape);
+        }
+    })
+}
+
 fn snapped_tab(tab: &graphene::Rect, grid: crate::squircle::PixelGrid) -> graphene::Rect {
-    let snap = |x: f32| if grid.scale[0] == 0. { x } else {
-        ((x * grid.scale[0] + grid.offset[0]).round() - grid.offset[0]) / grid.scale[0]
-    };
-    let left = snap(tab.x());
-    graphene::Rect::new(left, tab.y(), snap(tab.x() + tab.width()) - left, tab.height())
+    let left = grid.round(0, tab.x());
+    graphene::Rect::new(left, tab.y(), grid.round(0, tab.x() + tab.width()) - left, tab.height())
 }
 
 fn corner_texture(region: &TabRegion, background: &gdk::RGBA, foreground: &gdk::RGBA,
     grid: crate::squircle::PixelGrid, textures: &mut CornerTextures) -> gdk::Texture {
     let rgba = |c: &gdk::RGBA| [c.red(), c.green(), c.blue(), c.alpha()];
     let mut key = [0; 18];
-    key[..8].copy_from_slice(&region.key);
+    key[..8].copy_from_slice(&region.corner.unwrap());
     key[8..10].copy_from_slice(&grid.scale.map(f32::to_bits));
     key[10..14].copy_from_slice(&rgba(background).map(f32::to_bits));
     key[14..18].copy_from_slice(&rgba(foreground).map(f32::to_bits));
@@ -277,7 +281,7 @@ fn corner_texture(region: &TabRegion, background: &gdk::RGBA, foreground: &gdk::
             let cr = gtk::cairo::Context::new(&mask).unwrap();
             cr.scale(scale[0].into(), scale[1].into());
             cr.set_source_rgba(1., 1., 1., 1.);
-            region.path.as_ref().unwrap().to_cairo(&cr);
+            corner_path(region.corner.unwrap()).to_cairo(&cr);
             cr.fill().unwrap();
         }
         let stride = mask.stride() as usize;
@@ -298,16 +302,15 @@ fn corner_texture(region: &TabRegion, background: &gdk::RGBA, foreground: &gdk::
 
 fn tab_background(bounds: &graphene::Rect, tab: Option<&graphene::Rect>, background: &gdk::RGBA,
     foreground: &gdk::RGBA, hover: Option<&gsk::RenderNode>, grid: crate::squircle::PixelGrid,
-    paths: &mut CornerPaths, textures: &mut CornerTextures) -> gsk::RenderNode {
-    if paths.len() > 64 { paths.clear(); }
+    textures: &mut CornerTextures) -> gsk::RenderNode {
     if textures.len() > 64 { textures.clear(); }
-    let (outside, inside) = tab.map_or_else(|| (vec![TabRegion { bounds: *bounds, path: None, key: [0; 8] }], Vec::new()),
-        |tab| selected_regions(bounds, tab, grid, paths));
+    let (outside, inside) = tab.map_or_else(|| (vec![TabRegion { bounds: *bounds, corner: None }], Vec::new()),
+        |tab| selected_regions(bounds, tab, grid));
     let snapshot = gtk::Snapshot::new();
     snapshot.push_clip(bounds);
     for region in &outside { snapshot.append_color(background, &region.bounds); }
     for region in &inside {
-        if region.path.is_some() {
+        if region.corner.is_some() {
             snapshot.append_texture(&corner_texture(region, background, foreground, grid, textures), &region.bounds);
         } else { snapshot.append_color(foreground, &region.bounds); }
     }
@@ -371,8 +374,7 @@ glib::wrapper! {
 }
 impl PanelTabs {
     pub fn active_bounds(&self) -> Option<graphene::Rect> {
-        self.imp().dragged.get().or_else(|| self.imp().buttons.borrow().iter()
-            .find(|tab| tab.has_css_class("selected-tool") && tab.opacity() > 0.)
+        self.imp().dragged.get().or_else(|| selected_visible(&self.imp().buttons.borrow())
             .and_then(|tab| tab.compute_bounds(self)))
             .map(|rect| snapped_tab(&rect, crate::squircle::PixelGrid::for_widget(self.upcast_ref())))
     }
@@ -474,13 +476,6 @@ pub(crate) fn hover(cr: &gtk::cairo::Context, tab: &gtk::graphene::Rect, corners
     }
 }
 
-#[cfg(test)]
-fn feet(cr: &gtk::cairo::Context, tab: &gtk::graphene::Rect, bottom: f32) {
-    for (x, direction) in [(tab.x(), -1.), (tab.x() + tab.width(), 1.)] {
-        crate::squircle::concave_foot(cr, f64::from(x), f64::from(bottom), 6., direction);
-    }
-}
-
 pub(crate) fn strip_end(child: &impl IsA<gtk::Widget>) -> gtk::Box {
     let end = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     end.add_css_class("tab-strip-end");
@@ -499,16 +494,9 @@ mod tests {
             let bounds = graphene::Rect::new(0., 0., 100., 36.);
             let grid = crate::squircle::PixelGrid { scale: [scale; 2], offset: [0.25, 0.5] };
             let tab = snapped_tab(&graphene::Rect::new(12., 0., width, 36.), grid);
-            let mut paths = CornerPaths::new();
-            let (outside, inside) = selected_regions(&bounds, &tab, grid, &mut paths);
-            let outline = crate::squircle::path(|cr| {
-                let radius = graphene::Size::new(layer_ui::SURFACE_RADIUS, layer_ui::SURFACE_RADIUS);
-                let square = graphene::Size::new(0., 0.);
-                let mut shape = gsk::RoundedRect::new(tab, radius, radius, square, square);
-                shape.normalize();
-                crate::squircle::rounded_rect(cr, &shape);
-                feet(cr, &tab, bounds.height());
-            });
+            let (outside, inside) = selected_regions(&bounds, &tab, grid);
+            let outline = crate::squircle::path(|cr| native_rgba_pixels::selected_outline(cr, &tab, bounds.height()));
+            let paths: Vec<_> = inside.iter().map(|region| region.corner.map(corner_path)).collect();
             for y in 1..(bounds.height() * scale) as usize { for x in 0..(bounds.width() * scale) as usize {
                 let point = graphene::Point::new((x as f32 + 0.5 - grid.offset[0]) / scale,
                     (y as f32 + 0.5 - grid.offset[1]) / scale);
@@ -516,8 +504,8 @@ mod tests {
                     assert_eq!(outside.iter().chain(&inside).filter(|region| region.bounds.contains_point(&point)).count(), 1,
                         "pieces overlap or leave a gap: width {width}, scale {scale}, point {point:?}");
                 }
-                let count = inside.iter().filter(|region| region.bounds.contains_point(&point)
-                    && region.path.as_ref().is_none_or(|path| path.in_fill(
+                let count = inside.iter().zip(&paths).filter(|(region, path)| region.bounds.contains_point(&point)
+                    && path.as_ref().is_none_or(|path| path.in_fill(
                         &graphene::Point::new(point.x() - region.bounds.x(), point.y() - region.bounds.y()), gsk::FillRule::Winding))).count();
                 assert_eq!(count, usize::from(outline.in_fill(&point, gsk::FillRule::Winding)),
                     "width {width}, scale {scale}, point {point:?}");
@@ -530,10 +518,10 @@ mod tests {
                     cr.translate(grid.offset[0].into(), grid.offset[1].into());
                     cr.scale(scale.into(), scale.into());
                     cr.set_source_rgba(0.2, 0.4, 0.6, f64::from(alpha));
-                    for region in &inside {
+                    for (region, path) in inside.iter().zip(&paths) {
                         cr.save().unwrap();
                         cr.translate(region.bounds.x().into(), region.bounds.y().into());
-                        if let Some(path) = &region.path {
+                        if let Some(path) = path {
                             path.to_cairo(&cr);
                         } else { cr.rectangle(0., 0., region.bounds.width().into(), region.bounds.height().into()); }
                         cr.fill().unwrap();
@@ -557,14 +545,13 @@ mod tests {
         let tab = graphene::Rect::new(12., 0., 72., 36.);
         let background = gdk::RGBA::new(0.2, 0.3, 0.4, 0.5);
         let panel = gdk::RGBA::new(0.6, 0.7, 0.8, 0.85);
-        let mut paths = CornerPaths::new();
         let mut textures = CornerTextures::new();
         let mut previous = None;
         for grid in [crate::squircle::PixelGrid::default(),
             crate::squircle::PixelGrid { scale: [2.; 2], offset: [0.; 2] },
             crate::squircle::PixelGrid { scale: [2.; 2], offset: [0., 0.5] }] {
-            let (_, regions) = selected_regions(&bounds, &tab, grid, &mut paths);
-            let corner = regions.iter().find(|region| region.path.is_some()).unwrap();
+            let (_, regions) = selected_regions(&bounds, &tab, grid);
+            let corner = regions.iter().find(|region| region.corner.is_some()).unwrap();
             let texture = corner_texture(corner, &background, &panel, grid, &mut textures);
             assert_eq!(texture.as_ptr(), corner_texture(corner, &background, &panel, grid, &mut textures).as_ptr());
             if let Some(previous) = previous { assert_ne!(texture.as_ptr(), previous); }
