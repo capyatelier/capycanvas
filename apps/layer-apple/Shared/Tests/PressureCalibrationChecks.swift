@@ -57,6 +57,20 @@ extension XCTestCase {
             XCTAssertEqual(values(), expected, "Axis choices must remain independent")
         }
         let graph = panel.descendants(matching: .any)["effect-curve"].firstMatch
+        let preview = panel.descendants(matching: .any)["pen-tilt-direction"].firstMatch
+        XCTAssertTrue(preview.waitForExistence(timeout: 5))
+        XCTAssertEqual(graph.frame.width, graph.frame.height, accuracy: 1)
+        XCTAssertEqual(preview.frame.width, 72, accuracy: 1)
+        XCTAssertEqual(preview.frame.height, 72, accuracy: 1)
+        XCTAssertEqual(graph.frame.maxX - preview.frame.maxX, 8, accuracy: 1)
+        XCTAssertEqual(graph.frame.maxY - preview.frame.maxY, 8, accuracy: 1)
+        let firmer = app.buttons["pen-tilt-firmer"], lighter = app.buttons["pen-tilt-lighter"]
+        XCTAssertEqual(firmer.frame.midY, lighter.frame.midY, accuracy: 1)
+        for id in axisIDs {
+            XCTAssertEqual(axis(id).frame.midY, firmer.frame.midY, accuracy: 1)
+            XCTAssertGreaterThan(axis(id).frame.minX, lighter.frame.maxX)
+        }
+        XCTAssertGreaterThanOrEqual(firmer.frame.minY, graph.frame.maxY)
         graph.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap(); pointCount(3)
         workspaceActivate(app.buttons["pen-tilt-reset"]); pointCount(2)
         XCTAssertEqual(values(), initial)

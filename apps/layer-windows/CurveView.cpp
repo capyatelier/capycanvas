@@ -266,7 +266,7 @@ FrameworkElement CapyEffects::CurveField(std::shared_ptr<Property> const& proper
     bindings.emplace_back([view]{view->refresh();});return view->root;
 }
 
-FrameworkElement CapyEffects::ResponseCurveField(std::shared_ptr<WorkspaceData> const& data,Bindings& bindings,hstring const& target){
-    auto view=std::make_shared<CurveEditor>();view->data=data;view->responseTarget=target;view->init(bindings);
+FrameworkElement CapyEffects::ResponseCurveField(std::shared_ptr<WorkspaceData> const& data,Bindings& bindings,hstring const& target,FrameworkElement const& overlay){
+    auto view=std::make_shared<CurveEditor>();view->data=data;view->responseTarget=target;view->init(bindings);if(overlay)view->chart.Children().Append(overlay);
     bindings.emplace_back([view]{view->refresh();});return view->root;
 }

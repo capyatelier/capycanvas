@@ -429,6 +429,7 @@ tilt-title = 펜 기울기
 tilt-description = 그리면서 펜 기울기를 조절합니다.
 tilt-less-sensitive = 감도 낮추기
 tilt-more-sensitive = 감도 높이기
+tilt-sensitivity = 감도
 tilt-direction = 방향
 tilt-reverse-horizontal = 좌우 반전
 tilt-reverse-vertical = 상하 반전

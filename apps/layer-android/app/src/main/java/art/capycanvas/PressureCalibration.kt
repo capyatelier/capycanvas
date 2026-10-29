@@ -70,7 +70,7 @@ import kotlin.math.roundToInt
                 .width(maxOf(384.dp, bounds.number("width").dp).coerceAtMost(maxWidth)).heightIn(max = maxHeight)
                 .onSizeChanged { extent = Offset(it.width / density, it.height / density) }
                 .onGloballyPositioned { host.calibrationPenBounds = it.boundsInWindow() }
-                .pointerInput(Unit) { awaitPointerEventScope { while (true) awaitPointerEvent().changes.forEach { it.consume() } } }
+                .pointerInput(Unit) { awaitPointerEventScope { while (true) awaitPointerEvent() } }
                 .alpha(if (exposed) 1f else 0f)
                 .testTag("$prefix-dialog").semantics { paneTitle = current.getString("title") },
                 shape = SurfaceShape, color = colors.panel, contentColor = colors.text, shadowElevation = 8.dp) {
@@ -106,17 +106,10 @@ import kotlin.math.roundToInt
                     }
                     Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        SharedCurveControl(host, state, view.getJSONObject("editor"), view.getString("title"), obj("kind" to kind), gutterLabel = view.getString("axis_gutter"))
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            OutlinedButton({ send(obj("kind" to "sensitivity", "lighter" to false)) }, Modifier.weight(1f).height(36.dp).testTag("$prefix-firmer"),
-                                enabled = view.getBoolean("firmer_enabled"), shape = ControlShape, contentPadding = PaddingValues(horizontal = 12.dp)) { Text(view.getString("firmer")) }
-                            OutlinedButton({ send(obj("kind" to "sensitivity", "lighter" to true)) }, Modifier.weight(1f).height(36.dp).testTag("$prefix-lighter"),
-                                enabled = view.getBoolean("lighter_enabled"), shape = ControlShape, contentPadding = PaddingValues(horizontal = 12.dp)) { Text(view.getString("lighter")) }
-                        }
-                        if (tilt != null) {
-                            Text(view.getString("direction"), Modifier.padding(top = 4.dp), fontWeight = FontWeight.Bold)
-                            Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Canvas(Modifier.size(72.dp).testTag("pen-tilt-direction").semantics { contentDescription = current.getString("direction") }) {
+                        SharedCurveControl(host, state, view.getJSONObject("editor"), view.getString("title"), obj("kind" to kind), gutterLabel = view.getString("axis_gutter")) {
+                            if (tilt != null) {
+                                Canvas(Modifier.align(Alignment.BottomEnd).padding(8.dp).size(72.dp)
+                                    .pointerInput(Unit) { awaitPointerEventScope { while (true) awaitPointerEvent().changes.forEach { it.consume() } } }.testTag("pen-tilt-direction").semantics { contentDescription = current.getString("direction") }) {
                                     val radius = size.minDimension / 2f - 5.dp.toPx()
                                     drawCircle(colors.text.copy(alpha = .18f), radius, style = Stroke(1.dp.toPx()))
                                     for ((key, adjusted) in listOf("input_direction" to false, "adjusted_direction" to true)) {
@@ -135,6 +128,28 @@ import kotlin.math.roundToInt
                                         }
                                     }
                                 }
+                            }
+                        }
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            if (tilt == null) {
+                                OutlinedButton({ send(obj("kind" to "sensitivity", "lighter" to false)) }, Modifier.weight(1f).height(36.dp).testTag("$prefix-firmer"),
+                                    enabled = view.getBoolean("firmer_enabled"), shape = ControlShape, contentPadding = PaddingValues(horizontal = 12.dp)) { Text(view.getString("firmer")) }
+                                OutlinedButton({ send(obj("kind" to "sensitivity", "lighter" to true)) }, Modifier.weight(1f).height(36.dp).testTag("$prefix-lighter"),
+                                    enabled = view.getBoolean("lighter_enabled"), shape = ControlShape, contentPadding = PaddingValues(horizontal = 12.dp)) { Text(view.getString("lighter")) }
+                            } else {
+                                Text(view.getString("sensitivity"), Modifier.weight(1f))
+                                Row(Modifier.clip(ControlShape).border(1.dp, colors.divider, ControlShape)) {
+                                    for ((key, lighter, icon) in listOf(Triple("firmer", false, "minus"), Triple("lighter", true, "plus"))) {
+                                        HoverTip(view.getString(key)) {
+                                            Box(Modifier.size(36.dp).background(colors.input).testTag("$prefix-$key")
+                                                .clickable(enabled = view.getBoolean("${key}_enabled")) { send(obj("kind" to "sensitivity", "lighter" to lighter)) }
+                                                .semantics { contentDescription = view.getString(key) }, contentAlignment = Alignment.Center) { SharedIcon(icon, null, Modifier.size(16.dp)) }
+                                        }
+                                    }
+                                }
+                            }
+                            if (tilt != null) {
+                                Text(view.getString("direction"), Modifier.weight(1f))
                                 Row(Modifier.height(36.dp).clip(ControlShape).border(1.dp, colors.divider, ControlShape).testTag("pen-tilt-axes")) {
                                     for ((field, icon, tag) in listOf(Triple("reverse_horizontal", "flip-horizontal", "reverse-horizontal"),
                                         Triple("reverse_vertical", "flip-vertical", "reverse-vertical"), Triple("swap", "swap-orientation", "swap-axes"))) {

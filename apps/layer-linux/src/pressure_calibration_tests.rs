@@ -388,6 +388,34 @@ fn native_tilt_calibration() {
     native.finish();w.window.close();
 }
 
+#[test]
+#[ignore="private Mutter display and tablet proxy; LAYER_MOTION_VIEWPORT=640x480 workspace-motion.sh gtk --native-test=native_short_tilt_calibration --tablet"]
+fn native_short_tilt_calibration() {
+    let app=native_test_app("art.capycanvas.ShortTiltCalibration");
+    let mut native=RemoteInput::new();native.ready();
+    let w=Workspace::with_project(&app,Some((new_drawing_at(256,256,SampleDepth::F32),None)));
+    w.window.maximize();w.window.present();ready(&w);
+    let theme=if std::env::var("CAPY_NATIVE_TEST_THEME").is_ok_and(|v|v=="dark"){Theme::Dark}else{Theme::Light};
+    w.dispatch(UiAction::SetTheme{theme:Some(theme)});
+    w.dispatch(UiAction::Invoke{command:CommandId::PenTilt});pump(250);
+    let panel=w.pressure_calibration.root.upcast_ref::<gtk::Widget>();
+    assert_dialog_footer(panel,"pen-tilt");assert_axis_bar(panel,&w);
+    let before=artwork_history(&w);
+    for name in ["reverse-horizontal","reverse-vertical","swap-axes"] {
+        let button=find_named(panel,&format!("pen-tilt-{name}")).unwrap().downcast::<gtk::ToggleButton>().unwrap();
+        let at=screen_point(button.upcast_ref(),&w.window,[0.5,0.5]);
+        native.perform(json!([contact("pen","down",at),contact("pen","up",at)]));
+        assert!(button.is_active(),"short viewport pen activates {name}");
+    }
+    let lighter=find_named(panel,"pen-tilt-lighter").unwrap();let at=screen_point(&lighter,&w.window,[0.5,0.5]);
+    native.perform(json!([contact("pen","down",at),contact("pen","up",at)]));
+    assert_ne!(response_view(&w,true).editor.points,[[0.,0.],[1.,1.]],"short viewport pen changes sensitivity");
+    assert_eq!(artwork_history(&w),before,"utility pen controls leave artwork unchanged");
+    let output=std::path::PathBuf::from(std::env::var("LAYER_TEST_ARTIFACTS").unwrap());std::fs::create_dir_all(&output).unwrap();
+    crate::snapshot(&w).save_to_png(output.join(format!("tilt-{theme:?}-short.png"))).unwrap();
+    native.finish();w.window.close();pump(100);
+}
+
 fn assert_dialog_footer(panel:&gtk::Widget,prefix:&str) {
     let buttons=["reset","cancel","apply"].map(|name|find_named(panel,&format!("{prefix}-{name}")).unwrap());
     let footer=buttons[0].parent().unwrap();assert!(footer.has_css_class("dialog-actions"));
@@ -396,7 +424,7 @@ fn assert_dialog_footer(panel:&gtk::Widget,prefix:&str) {
     let title=find_named(panel,&format!("{prefix}-title")).unwrap().compute_bounds(panel).unwrap();
     let sensitivity=find_named(panel,&format!("{prefix}-firmer")).unwrap().compute_bounds(panel).unwrap();
     let apply=buttons[2].compute_bounds(panel).unwrap();
-    assert!((reset_bounds.x()-title.x()).abs()<1.5 && (reset_bounds.x()-sensitivity.x()).abs()<1.5,"title, content and footer share an inset");
+    assert!((reset_bounds.x()-title.x()).abs()<1.5,"title and footer share an inset");
     assert!((panel.width() as f32-apply.x()-apply.width()-16.).abs()<1.5,"balanced footer end inset");
     let graph=find_named(panel,&format!("{prefix}-graph")).unwrap().compute_bounds(panel).unwrap();
     assert!((graph.width()-graph.height()).abs()<=1.,"equal input/output scales use a square plot: {graph:?}");
@@ -424,10 +452,16 @@ fn assert_axis_bar(panel:&gtk::Widget,w:&Workspace) {
     let preview=find_named(panel,"pen-tilt-direction").unwrap();
     let preview_bounds=preview.compute_bounds(panel).unwrap();let bar_bounds=bar.compute_bounds(panel).unwrap();
     let graph=find_named(panel,"pen-tilt-graph").unwrap().compute_bounds(panel).unwrap();
-    let center=graph.x()+graph.width()*0.5;
-    assert!((preview_bounds.x()+preview_bounds.width()*0.5-center).abs()<1.);
-    assert!((bar_bounds.x()+bar_bounds.width()*0.5-center).abs()<1.,"plot, preview and icon bar share one centerline");
-    assert!((bar_bounds.y()-preview_bounds.y()-preview_bounds.height()-8.).abs()<1.,"consistent preview/control gap");
+    let placed=panel.compute_bounds(&w.surface).unwrap();
+    assert!(placed.x()>=-1. && placed.y()>=-1. && placed.x()+placed.width()<=w.surface.width() as f32+1. && placed.y()+placed.height()<=w.surface.height() as f32+1.,"utility stays inside the viewport: {placed:?}");
+    let footer=find_named(panel,"pen-tilt-reset").unwrap().compute_bounds(panel).unwrap();
+    assert!(bar_bounds.y()>=graph.y()+graph.height() && bar_bounds.y()+bar_bounds.height()<=footer.y(),"direction controls stay visible between plot and footer");
+    assert!(preview_bounds.x()>=graph.x()+graph.width()*0.5 && preview_bounds.y()>=graph.y()+graph.height()*0.5,"direction preview overlays the lower-right plot quadrant");
+    assert!(preview_bounds.x()+preview_bounds.width()<=graph.x()+graph.width()+1. && preview_bounds.y()+preview_bounds.height()<=graph.y()+graph.height()+1.,"direction preview stays inside the graph");
+    assert!((graph.x()+graph.width()-preview_bounds.x()-preview_bounds.width()-8.).abs()<1. && (graph.y()+graph.height()-preview_bounds.y()-preview_bounds.height()-8.).abs()<1.,"direction preview keeps an eight-pixel plot inset");
+    let sensitivity=find_named(panel,"pen-tilt-firmer").unwrap().compute_bounds(panel).unwrap();
+    assert!((bar_bounds.y()-sensitivity.y()).abs()<1.,"sensitivity and direction controls share a compact row");
+    assert!(bar_bounds.x()>sensitivity.x()+sensitivity.width(),"direction follows sensitivity");
     assert!(buttons.iter().all(|button|button.width()==TILE_SIZE as i32 && button.height()==TILE_SIZE as i32));
     let bounds=buttons.each_ref().map(|button|button.compute_bounds(&bar).unwrap());
     assert!(bounds.windows(2).all(|pair|(pair[0].x()+pair[0].width()-pair[1].x()).abs()<1.));

@@ -2074,11 +2074,13 @@ class AndroidHostTest {
             canvas = findCanvas(compose.activity.window.decorView)!!
             canvas.getLocationOnScreen(location)
         }
+        val area = host.snapshot!!.getJSONObject("layout").getJSONObject("work_area")
+        val density = compose.activity.resources.displayMetrics.density
         val down = SystemClock.uptimeMillis()
         for (i in 0..steps) {
             val coords = MotionEvent.PointerCoords().apply {
-                x = canvas.width * (0.35f + i.toFloat() / steps * 0.3f) + location[0]
-                y = canvas.height * (0.45f + kotlin.math.sin(i / 12f) * 0.08f) + location[1]
+                x = (area.number("x") + area.number("width") * (0.35f + i.toFloat() / steps * 0.3f)) * density + location[0]
+                y = (area.number("y") + area.number("height") * (0.45f + kotlin.math.sin(i / 12f) * 0.08f)) * density + location[1]
                 pressure = 0.3f + i.toFloat() / steps * 0.6f
                 setAxisValue(MotionEvent.AXIS_TILT, 0.3f)
                 setAxisValue(MotionEvent.AXIS_ORIENTATION, 0.2f)
@@ -3242,6 +3244,14 @@ class AndroidHostTest {
             host.drain()
             compose.waitForIdle()
         }
+        fun exposeCanvas() {
+            val density = compose.activity.resources.displayMetrics.density
+            compose.onNodeWithTag("pen-tilt-title").performTouchInput {
+                swipe(center, center - androidx.compose.ui.geometry.Offset(300f * density, 0f), 500)
+            }
+            host.drain()
+            compose.waitForIdle()
+        }
         fun open() {
             openSettings()
             compose.onNodeWithTag("settings-category-input").performClick()
@@ -3258,9 +3268,15 @@ class AndroidHostTest {
             val plotCenter = bounds("effect-curve").center.x
             assertEquals("Symmetric font-sized gutters center the graph", bounds("pen-tilt-dialog").center.x, plotCenter, 1f)
             compose.onNodeWithTag("pen-tilt-direction").performScrollTo().assertWidthIsEqualTo(72.dp).assertHeightIsEqualTo(72.dp)
-            assertEquals("Direction and graph share a centerline", plotCenter, bounds("pen-tilt-direction").center.x, 1f)
+            val plot = bounds("effect-curve")
+            val direction = bounds("pen-tilt-direction")
+            assertTrue("Direction preview stays inside the graph", plot.contains(direction.topLeft) && plot.contains(direction.bottomRight - androidx.compose.ui.geometry.Offset(1f, 1f)))
+            assertTrue("Direction preview occupies the lower right of the graph", direction.center.x > plot.center.x && direction.center.y > plot.center.y)
             for (tag in listOf("firmer", "lighter", "reverse-horizontal", "reverse-vertical", "swap-axes"))
                 compose.onNodeWithTag("pen-tilt-$tag").performScrollTo().assertHeightIsEqualTo(36.dp)
+            val sensitivity = bounds("pen-tilt-firmer")
+            for (tag in listOf("lighter", "reverse-horizontal", "reverse-vertical", "swap-axes"))
+                assertEquals("Sensitivity and direction controls share one row", sensitivity.center.y, bounds("pen-tilt-$tag").center.y, 1f)
             for (tag in listOf("reset", "cancel", "apply")) compose.onNodeWithTag("pen-tilt-$tag").assertHeightIsEqualTo(36.dp)
         }
         val stylus = InputDevice.getDeviceIds().asSequence().mapNotNull { InputDevice.getDevice(it) }
@@ -3292,6 +3308,14 @@ class AndroidHostTest {
             }
             host.drain()
         }
+        fun penClick(name: String) {
+            val tag = "pen-tilt-$name"
+            compose.onNodeWithTag(tag).performScrollTo()
+            val at = point(tag)
+            send(MotionEvent.ACTION_DOWN, at)
+            send(MotionEvent.ACTION_UP, at)
+            compose.waitForIdle()
+        }
         fun direction(key: String, x: Double, y: Double) {
             waitState {
                 calibration().optJSONArray(key)?.let { kotlin.math.abs(it.getDouble(0) - x) < .002 && kotlin.math.abs(it.getDouble(1) - y) < .002 } == true
@@ -3309,6 +3333,7 @@ class AndroidHostTest {
         compose.onNodeWithTag("pen-tilt-apply").assertIsNotEnabled()
         capture("tilt-calibration-$theme-default")
         val neutral = points()
+        exposeCanvas()
         val beforeBounds = calibration().getJSONObject("bounds").toString()
         lateinit var canvas: CanvasSurfaceView
         val origin = IntArray(2)
@@ -3318,8 +3343,10 @@ class AndroidHostTest {
         }
         val area = host.snapshot!!.getJSONObject("layout").getJSONObject("work_area")
         val density = compose.activity.resources.displayMetrics.density
-        val canvasPoint = androidx.compose.ui.geometry.Offset(origin[0] + (area.number("x") + 24f) * density,
-            origin[1] + (area.number("y") + area.number("height") * .75f) * density)
+        val canvasPoint = listOf(area.number("height") * .5f, area.number("height") * .75f, area.number("height") * .25f).flatMap { y -> listOf(.85f, .15f).map { x ->
+            androidx.compose.ui.geometry.Offset(origin[0] + (area.number("x") + area.number("width") * x) * density,
+                origin[1] + (area.number("y") + y) * density)
+        } }.first { !host.calibrationPenBounds!!.contains(it) }
         assertFalse("The first Lasso contact uses uncovered canvas", host.calibrationPenBounds!!.contains(canvasPoint))
         send(MotionEvent.ACTION_DOWN, canvasPoint)
         waitState { calibration().getBoolean("ready") }
@@ -3345,17 +3372,21 @@ class AndroidHostTest {
         assertFalse(calibration().getJSONObject("editor").isNull("marker"))
         send(MotionEvent.ACTION_UP, point("pen-tilt-direction"), 60.0, 60.0)
         send(MotionEvent.ACTION_HOVER_ENTER, point("pen-tilt-title"))
-        click("reverse-horizontal")
+        penClick("reverse-horizontal")
         direction("adjusted_direction", -x, y)
         assertFalse(axes().getBoolean("reverse_vertical")); assertFalse(axes().getBoolean("swap"))
-        click("reverse-vertical")
+        penClick("reverse-vertical")
         direction("adjusted_direction", -x, -y)
         assertTrue(axes().getBoolean("reverse_horizontal")); assertFalse(axes().getBoolean("swap"))
-        click("swap-axes")
+        penClick("swap-axes")
         direction("adjusted_direction", -y, -x)
         assertTrue(axes().getBoolean("reverse_horizontal")); assertTrue(axes().getBoolean("reverse_vertical"))
         capture("tilt-calibration-$theme-preview")
         assertEquals("Preview does not edit the response", neutral, points())
+        penClick("firmer")
+        waitState { points() != neutral }
+        penClick("lighter")
+        waitState { points() == neutral }
         assertEquals(beforeRevision, state().getJSONObject("document_file").getLong("revision"))
         assertEquals(beforeHistory, state().array("commands").objects().filter { it.getString("id") in listOf("undo", "redo") }.map { it.getBoolean("enabled") })
         assertArrayEquals("Dialog sensor preview never paints", beforePixels, gradientOutput())
@@ -3372,14 +3403,14 @@ class AndroidHostTest {
         action(obj("type" to "invoke", "command" to "undo"))
         settle()
         assertArrayEquals("One Undo removes only the real canvas stroke", beforePixels, gradientOutput())
-        click("firmer")
+        penClick("firmer")
         waitState { points() != neutral }
         click("cancel")
         waitState { it.objectOrNull("tilt_calibration") == null }
         assertEquals(original, saved())
         open()
         assertEquals(neutral, points())
-        click("reverse-horizontal"); click("firmer")
+        penClick("reverse-horizontal"); penClick("firmer")
         waitState { axes().getBoolean("reverse_horizontal") && points() != neutral }
         val applied = points()
         val appliedAxes = axes().toString()
@@ -3444,6 +3475,7 @@ class AndroidHostTest {
         action(obj("type" to "invoke", "command" to "lasso"))
         open()
         assertFalse("The new native drawing session has no registered pen yet", calibration().getBoolean("ready"))
+        exposeCanvas()
         assertFalse(host.calibrationPenBounds!!.contains(canvasPoint))
         send(MotionEvent.ACTION_DOWN, canvasPoint)
         waitState { calibration().getBoolean("ready") }
@@ -3616,6 +3648,7 @@ class AndroidHostTest {
             waitState { it.objectOrNull("pressure_calibration") == null }
             assertEquals("Apply saves the edited pressure curve", applied, saved())
             action(obj("type" to "invoke", "command" to "pencil"))
+            host.awaitReady(compose = compose)
             penStroke(15)
             waitState { it.array("commands").objects().first { command -> command.getString("id") == "undo" }.getBoolean("enabled") }
             capture("pressure-calibration-$theme")

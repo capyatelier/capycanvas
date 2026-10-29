@@ -388,6 +388,7 @@ tilt-title = Inclinazione della penna
 tilt-description = Regola l’inclinazione della penna mentre disegni.
 tilt-less-sensitive = Meno sensibile
 tilt-more-sensitive = Più sensibile
+tilt-sensitivity = Sensibilità
 tilt-direction = Direzione
 tilt-reverse-horizontal = Inverti orizzontale
 tilt-reverse-vertical = Inverti verticale

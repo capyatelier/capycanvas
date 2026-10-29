@@ -67,10 +67,15 @@ export async function checkTiltCalibration({call,evaluate,settle}) {
         assert.ok(Math.abs(geometry.graph.width-geometry.graph.height)<1,`${theme}/${mode}: short plot stays square`);
         assert.ok(Math.abs(geometry.graph.x+geometry.graph.width/2-midpoint)<1,`${theme}/${mode}: scrollbar preserves the outer centerline`);
         if(mode==='tilt'){
-          tiltPlot=geometry.graph;assert.ok(Math.abs(geometry.direction.x+geometry.direction.width/2-midpoint)<1,'Short direction preview shares the outer centerline');
-          const b=geometry.body;await call('Input.dispatchMouseEvent',{type:'mouseWheel',x:b.x+b.width-24,y:b.y+b.height-24,deltaX:0,deltaY:1200});
-          await wait(`(()=>{const b=document.querySelector('${selector} .utility-body');return b.scrollTop>0&&b.scrollTop>=b.scrollHeight-b.clientHeight-1})()`);
-          const before=(await read()).axes.swap;await contact(`${selector} [aria-label="Swap axes"]`,'mouse');assert.notEqual((await read()).axes.swap,before,'Native body scroll reaches direction controls');
+          const captions=await evaluate(`[...document.querySelectorAll('${selector} .utility-sensitivity-title,${selector} .utility-direction-title')].map(n=>n.getBoundingClientRect().toJSON())`);
+          assert.ok(captions.every(r=>r.height<=36),`${theme}: compact captions fit one control row`);
+          tiltPlot=geometry.graph;
+          assert.ok(geometry.direction.x>=geometry.graph.x+geometry.graph.width/2&&geometry.direction.y>=geometry.graph.y+geometry.graph.height/2,'Short direction preview sits in the lower-right plot quadrant');
+          assert.ok(geometry.direction.x+geometry.direction.width<=geometry.graph.x+geometry.graph.width+1&&geometry.direction.y+geometry.direction.height<=geometry.graph.y+geometry.graph.height+1,'Short direction preview stays inside the plot');
+          for(const [label,key] of [['Reverse horizontal','reverse_horizontal'],['Reverse vertical','reverse_vertical'],['Swap axes','swap']]){
+            const control=await rect(`${selector} [aria-label="${label}"]`);assert.ok(control.y>=geometry.graph.y+geometry.graph.height&&control.y+control.height<=geometry.footer.y,`${label} stays visible above the footer`);
+            const before=(await read()).axes[key];await contact(`${selector} [aria-label="${label}"]`,'pen');assert.notEqual((await read()).axes[key],before,`Short viewport pen contact activates ${label}`);
+          }
         }else assert.ok(Math.abs(geometry.graph.width-tiltPlot.width)<1&&Math.abs(geometry.graph.height-tiltPlot.height)<1,'Short pressure and tilt plots keep matching dimensions');
         await capture(`${theme}-short-${mode}`);await contact(`${selector} .utility-actions button:nth-last-child(2)`,'mouse');
       }
@@ -140,11 +145,15 @@ export async function checkTiltCalibration({call,evaluate,settle}) {
     assert.ok(geometry.panel.width>=384,'Utility retains the 384px minimum');
     assert.ok(Math.abs(geometry.graph.width-geometry.graph.height)<1,'Tilt graph is square');
     assert.ok(Math.abs(geometry.title.y+geometry.title.height/2-geometry.close.y-geometry.close.height/2)<1,'Title and Close share a centerline');
-    assert.ok(Math.abs(geometry.direction.x+geometry.direction.width/2-geometry.graph.x-geometry.graph.width/2)<1,'Direction preview and graph share a centerline');
+    assert.ok(geometry.direction.x>=geometry.graph.x+geometry.graph.width/2&&geometry.direction.y>=geometry.graph.y+geometry.graph.height/2,'Direction preview overlays the lower-right plot quadrant');
+    assert.ok(geometry.direction.x+geometry.direction.width<=geometry.graph.x+geometry.graph.width+1&&geometry.direction.y+geometry.direction.height<=geometry.graph.y+geometry.graph.height+1,'Direction preview stays inside the graph');
     for(const r of geometry.buttons)assert.ok(Math.abs(r.height-36)<1,'Actions use 36px toolbar tiles');
+    for(const r of [...geometry.buttons,...geometry.toggles.map(t=>t.rect)])assert.ok(r.x>=geometry.panel.x&&r.y>=geometry.panel.y&&r.x+r.width<=geometry.panel.x+geometry.panel.width+.5&&r.y+r.height<=geometry.panel.y+geometry.panel.height+.5,'Every compact utility target stays inside the panel');
     assert.equal(geometry.toggles.length,3);
     for(const t of geometry.toggles){assert.ok(Math.abs(t.rect.width-36)<1&&Math.abs(t.rect.height-36)<1,'Direction toggles use square 36px targets');assert.equal(t.title,t.label);assert.ok(Math.abs(t.icon.width-16)<1&&Math.abs(t.icon.height-16)<1,'Direction icons use 16px boxes');}
     for(let i=1;i<geometry.toggles.length;i++)assert.ok(Math.abs(geometry.toggles[i].rect.x-geometry.toggles[i-1].rect.x-36)<1,'Direction segments touch');
+    const sensitivity=geometry.buttons.slice(0,2);for(const r of sensitivity)assert.ok(Math.abs(r.width-36)<1&&Math.abs(r.y-geometry.toggles[0].rect.y)<1,'Sensitivity uses square targets on the direction row');
+    assert.ok(Math.abs(sensitivity[1].x-sensitivity[0].x-36)<1,'Sensitivity segments touch');
     assert.deepEqual(geometry.axesY,['90°','Output','0°']);assert.deepEqual(geometry.axesX,['0°','Input','90°']);
     assert.equal(await evaluate(`document.querySelector('${panel}').getAttribute('aria-modal')`),'false');
     const layout=await evaluate('layerApp.app.layout(innerWidth,innerHeight)'),opened=layout.collapsed.find(c=>c.open).open.bounds;

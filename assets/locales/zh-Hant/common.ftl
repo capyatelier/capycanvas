@@ -429,6 +429,7 @@ tilt-title = 筆傾斜
 tilt-description = 繪畫時調整筆的傾斜反應。
 tilt-less-sensitive = 降低靈敏度
 tilt-more-sensitive = 提高靈敏度
+tilt-sensitivity = 靈敏度
 tilt-direction = 方向
 tilt-reverse-horizontal = 水平反轉
 tilt-reverse-vertical = 垂直反轉

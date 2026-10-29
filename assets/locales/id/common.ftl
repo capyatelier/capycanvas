@@ -688,6 +688,7 @@ tilt-title = Kemiringan pena
 tilt-description = Sesuaikan kemiringan pena sambil menggambar.
 tilt-less-sensitive = Kurang peka
 tilt-more-sensitive = Lebih peka
+tilt-sensitivity = Sensitivitas
 tilt-direction = Arah
 tilt-reverse-horizontal = Balik horizontal
 tilt-reverse-vertical = Balik vertikal

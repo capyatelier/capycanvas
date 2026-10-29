@@ -381,6 +381,7 @@ tilt-title = การเอียงปากกา
 tilt-description = ปรับการเอียงปากกาขณะวาด
 tilt-less-sensitive = ลดความไว
 tilt-more-sensitive = เพิ่มความไว
+tilt-sensitivity = ความไว
 tilt-direction = ทิศทาง
 tilt-reverse-horizontal = กลับแนวนอน
 tilt-reverse-vertical = กลับแนวตั้ง

@@ -612,6 +612,7 @@ tilt-title = Stiftneigung
 tilt-description = Stiftneigung beim Zeichnen anpassen.
 tilt-less-sensitive = Weniger empfindlich
 tilt-more-sensitive = Empfindlicher
+tilt-sensitivity = Empfindlichkeit
 tilt-direction = Richtung
 tilt-reverse-horizontal = Horizontal umkehren
 tilt-reverse-vertical = Vertikal umkehren

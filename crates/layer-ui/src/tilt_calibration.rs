@@ -25,6 +25,7 @@ pub struct TiltCalibrationView {
     pub device:String,
     pub ready:bool,
     pub axes:TiltAxes,
+    pub sensitivity:String,
     pub direction:String,
     pub reverse_horizontal:String,
     pub reverse_vertical:String,
@@ -135,9 +136,10 @@ impl<R:CanvasRenderer> UiSession<R> {
         let editor=&self.tilt_calibration.editor;let l=&self.state.localization;
         let Some(mut panel)=editor.view_as(l,MessageId::TILT_TITLE,MessageId::TILT_LESS_SENSITIVE,MessageId::TILT_MORE_SENSITIVE,CurveDomain::Degrees) else{return};
         let device=self.tilt_calibration.target.as_ref();
-        if editor.placement.is_none() {panel.bounds.height=520.;}
+        if editor.placement.is_none() {panel.bounds.height=440.;}
         let mut view=TiltCalibrationView {panel,device:device.map_or_else(||l.text(MessageId::TILT_USE_PEN).to_string(),|d|if d.label.is_empty(){l.text(MessageId::COMMAND_PEN).to_string()}else{d.label.clone()}),ready:device.is_some(),
             axes:device.map_or(self.tilt_calibration.axes,|device|self.tilt_calibration.axes.in_frame(device.native_to_surface)),
+            sensitivity:l.text(MessageId::TILT_SENSITIVITY).to_string(),
             direction:l.text(MessageId::TILT_DIRECTION).to_string(),reverse_horizontal:l.text(MessageId::TILT_REVERSE_HORIZONTAL).to_string(),
             reverse_vertical:l.text(MessageId::TILT_REVERSE_VERTICAL).to_string(),swap_axes:l.text(MessageId::TILT_SWAP_AXES).to_string(),
             input_direction:None,adjusted_direction:None};

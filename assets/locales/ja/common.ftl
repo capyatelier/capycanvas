@@ -429,6 +429,7 @@ tilt-title = ペンの傾き
 tilt-description = 描きながらペンの傾きを調整します。
 tilt-less-sensitive = 感度を下げる
 tilt-more-sensitive = 感度を上げる
+tilt-sensitivity = 感度
 tilt-direction = 方向
 tilt-reverse-horizontal = 左右を反転
 tilt-reverse-vertical = 上下を反転

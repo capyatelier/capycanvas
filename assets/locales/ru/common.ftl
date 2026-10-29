@@ -605,6 +605,7 @@ tilt-title = Наклон пера
 tilt-description = Настройте наклон пера во время рисования.
 tilt-less-sensitive = Меньше чувствительность
 tilt-more-sensitive = Больше чувствительность
+tilt-sensitivity = Чувствительность
 tilt-direction = Направление
 tilt-reverse-horizontal = Отразить по горизонтали
 tilt-reverse-vertical = Отразить по вертикали

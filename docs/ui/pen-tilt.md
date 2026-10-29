@@ -33,9 +33,12 @@ it rescales the other controls while preserving the normalized curve shape.
 reduce output even from the neutral response. Each step changes an endpoint
 coordinate by 2.5 percentage points; its minimum is 2.25°.
 
-The direction preview shows input in gray and adjusted tilt in blue. It sits above
-the joined segmented icon bar used by Tool Options, on the same centerline as
-the graph. Its independent **Reverse horizontal**, **Reverse vertical** and
+The direction preview shows input in gray and adjusted tilt in blue. Its 72-unit
+circle overlays the graph's bottom-right corner with an 8-unit inset. Below the
+graph, **Sensitivity** has joined minus and plus buttons, followed on the same
+row by **Direction** and the joined segmented icon bar used by Tool Options.
+Sensitivity buttons retain Less sensitive and More sensitive in tooltips and
+accessible labels. The direction bar's independent **Reverse horizontal**, **Reverse vertical** and
 **Swap axes** toggles retain their text in tooltips and accessible labels. They
 can be combined to represent all eight signed axis mappings.
 Swapping happens before the reflections. Direction correction preserves the lean
@@ -122,7 +125,10 @@ intact.
 Run the core tilt tests, engine tests and UI tilt, pressure calibration, held
 contact and localization tests. Run `native_tilt_calibration` through
 `tools/performance/workspace-motion.sh gtk --native-test=native_tilt_calibration --tablet`
-in both themes. It covers Preferences, mouse/touch/pen controls, native tilt
+in both themes. Run `native_short_tilt_calibration` with
+`LAYER_MOTION_VIEWPORT=640x480` through the same harness to check the compact
+layout and pen controls on a short screen. The full journey covers Preferences,
+mouse/touch/pen controls, native tilt
 metadata, editing before first pen input, hover with a hidden cursor, retained
 window geometry on first input with Lasso, Pencil and Hand, cancelled unbound
 curve gestures, deferred identification during a curve drag, preview-only input

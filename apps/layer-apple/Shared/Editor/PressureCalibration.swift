@@ -76,12 +76,15 @@ private struct PenResponsePanel: View {
                 EditorScrollView(.vertical) {
                     VStack(spacing: 12) {
                         CurveEditor(store: store, control: view["editor"], target: JSON(["kind": kind]), label: view["title"].string,
-                            axisGutter: view["axis_gutter"].string).id(kind)
+                            axisGutter: view["axis_gutter"].string, plotOverlay: tilt ? AnyView(directionCircle.padding(8)) : nil).id(kind)
                         HStack(spacing: 8) {
-                            sensitivity("firmer", lighter: false, icon: "minus")
-                            sensitivity("lighter", lighter: true, icon: "plus")
+                            if tilt { Text(view["sensitivity"].string).frame(maxWidth: .infinity, alignment: .leading) }
+                            HStack(spacing: tilt ? 0 : 8) {
+                                sensitivity("firmer", lighter: false, icon: "minus")
+                                sensitivity("lighter", lighter: true, icon: "plus")
+                            }
+                            if tilt { Text(view["direction"].string).frame(maxWidth: .infinity, alignment: .leading); direction }
                         }
-                        if tilt { direction.padding(.top, 4) }
                     }.padding(.horizontal, 16).fixedSize(horizontal: false, vertical: true)
                         .onGeometryChange(for: CGSize.self) { $0.size } action: { bodySize = $0 }
                 }.frame(height: min(bodySize.height, max(0, viewport.size.height - headerHeight - footerHeight)))
@@ -112,42 +115,45 @@ private struct PenResponsePanel: View {
                 .accessibilityElement(children: .contain).accessibilityIdentifier(prefix + "-dialog")
         }
     }
-    private func sensitivity(_ key: String, lighter: Bool, icon: String) -> some View {
-        Button { send(["kind": "sensitivity", "lighter": lighter]) } label: {
-            HStack(spacing: 6) { SharedIcon(name: icon); Text(view[key].string) }.frame(maxWidth: .infinity, minHeight: 36)
-        }.buttonStyle(.bordered).disabled(!view[key + "_enabled"].bool).accessibilityIdentifier(prefix + "-" + key)
+    @ViewBuilder private func sensitivity(_ key: String, lighter: Bool, icon: String) -> some View {
+        let control = Button { send(["kind": "sensitivity", "lighter": lighter]) } label: {
+            HStack(spacing: 6) { SharedIcon(name: icon); if !tilt { Text(view[key].string) } }
+                .frame(maxWidth: tilt ? nil : .infinity, minHeight: 36)
+                .frame(width: tilt ? 36 : nil)
+                .background(tilt ? palette["input"] : .clear, in: SquircleShape.control.segment(lighter ? 1 : 0, of: 2))
+        }.disabled(!view[key + "_enabled"].bool).accessibilityIdentifier(prefix + "-" + key)
+            .accessibilityLabel(view[key].string).help(view[key].string)
+        if tilt { control.buttonStyle(.plain) } else { control.buttonStyle(.bordered) }
+    }
+    private var directionCircle: some View {
+        Canvas { context, size in
+            let center = CGPoint(x: size.width / 2, y: size.height / 2), radius = min(size.width, size.height) / 2 - 5
+            context.stroke(Path(ellipseIn: CGRect(x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2)),
+                with: .color(palette["text"].opacity(0.18)), lineWidth: 1)
+            for key in ["input_direction", "adjusted_direction"] {
+                let vector = view[key]
+                if !vector.isNull {
+                    let x = vector[0].number * radius, y = vector[1].number * radius, length = hypot(x, y)
+                    var arrow = Path(); arrow.move(to: center); arrow.addLine(to: CGPoint(x: center.x + x, y: center.y + y))
+                    if length > 3 {
+                        let ux = x / length, uy = y / length
+                        arrow.move(to: CGPoint(x: center.x + x - ux * 6 - uy * 3, y: center.y + y - uy * 6 + ux * 3))
+                        arrow.addLine(to: CGPoint(x: center.x + x, y: center.y + y))
+                        arrow.addLine(to: CGPoint(x: center.x + x - ux * 6 + uy * 3, y: center.y + y - uy * 6 - ux * 3))
+                    }
+                    let adjusted = key == "adjusted_direction"
+                    context.stroke(arrow, with: .color(adjusted ? palette.accent : palette["text"].opacity(0.55)), lineWidth: adjusted ? 2.5 : 1.5)
+                }
+            }
+        }.frame(width: 72, height: 72).accessibilityLabel(view["direction"].string).accessibilityIdentifier("pen-tilt-direction")
+            .contentShape(Rectangle()).gesture(DragGesture(minimumDistance: 0).onChanged { _ in })
     }
     private var direction: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(view["direction"].string).fontWeight(.semibold)
-            VStack(spacing: 8) {
-                Canvas { context, size in
-                    let center = CGPoint(x: size.width / 2, y: size.height / 2), radius = min(size.width, size.height) / 2 - 5
-                    context.stroke(Path(ellipseIn: CGRect(x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2)),
-                        with: .color(palette["text"].opacity(0.18)), lineWidth: 1)
-                    for key in ["input_direction", "adjusted_direction"] {
-                        let vector = view[key]
-                        if !vector.isNull {
-                            let x = vector[0].number * radius, y = vector[1].number * radius, length = hypot(x, y)
-                            var arrow = Path(); arrow.move(to: center); arrow.addLine(to: CGPoint(x: center.x + x, y: center.y + y))
-                            if length > 3 {
-                                let ux = x / length, uy = y / length
-                                arrow.move(to: CGPoint(x: center.x + x - ux * 6 - uy * 3, y: center.y + y - uy * 6 + ux * 3))
-                                arrow.addLine(to: CGPoint(x: center.x + x, y: center.y + y))
-                                arrow.addLine(to: CGPoint(x: center.x + x - ux * 6 + uy * 3, y: center.y + y - uy * 6 - ux * 3))
-                            }
-                            let adjusted = key == "adjusted_direction"
-                            context.stroke(arrow, with: .color(adjusted ? palette.accent : palette["text"].opacity(0.55)), lineWidth: adjusted ? 2.5 : 1.5)
-                        }
-                    }
-                }.frame(width: 72, height: 72).accessibilityLabel(view["direction"].string).accessibilityIdentifier("pen-tilt-direction")
-                HStack(spacing: 0) {
-                    axis("reverse_horizontal", label: "reverse_horizontal", icon: "flip-horizontal", index: 0)
-                    axis("reverse_vertical", label: "reverse_vertical", icon: "flip-vertical", index: 1)
-                    axis("swap", label: "swap_axes", icon: "swap-orientation", index: 2)
-                }.accessibilityElement(children: .contain).accessibilityIdentifier("pen-tilt-axes")
-            }.frame(maxWidth: .infinity)
-        }
+        HStack(spacing: 0) {
+            axis("reverse_horizontal", label: "reverse_horizontal", icon: "flip-horizontal", index: 0)
+            axis("reverse_vertical", label: "reverse_vertical", icon: "flip-vertical", index: 1)
+            axis("swap", label: "swap_axes", icon: "swap-orientation", index: 2)
+        }.accessibilityElement(children: .contain).accessibilityIdentifier("pen-tilt-axes")
     }
     private func axis(_ key: String, label: String, icon: String, index: Int) -> some View {
         let active = view["axes"][key].bool

@@ -617,6 +617,7 @@ tilt-title = Inclinação da caneta
 tilt-description = Ajuste a inclinação da caneta enquanto desenha.
 tilt-less-sensitive = Menos sensível
 tilt-more-sensitive = Mais sensível
+tilt-sensitivity = Sensibilidade
 tilt-direction = Direção
 tilt-reverse-horizontal = Inverter horizontal
 tilt-reverse-vertical = Inverter vertical

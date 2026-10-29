@@ -310,7 +310,7 @@ private data class CurveTap(val position: Offset, val time: Long, val epoch: Lon
 }
 
 @Composable internal fun SharedCurveControl(host: CanvasHost, state: JSONObject, control: JSONObject, label: String, target: JSONObject,
-    enabled: Boolean = true, histogram: Boolean = false, gutterLabel: String? = null) {
+    enabled: Boolean = true, histogram: Boolean = false, gutterLabel: String? = null, overlay: @Composable BoxScope.() -> Unit = {}) {
     val colors = LocalPalette.current
     val density = LocalDensity.current.density
     val current by rememberUpdatedState(control)
@@ -446,6 +446,7 @@ private data class CurveTap(val position: Offset, val time: Long, val epoch: Lon
                         .clickable(enabled = enabled) { lastTap = null; dispatch(obj("kind" to "reset")) }, contentAlignment = Alignment.Center) {
                         SharedIcon("reset", curve.getString("reset_label"), tint = colors.secondary)
                     }
+                    overlay()
                 }
                 Box(Modifier.fillMaxWidth()) {
                     Text(axes[0].getString("minimum"), Modifier.align(Alignment.CenterStart), color = colors.secondary)

@@ -614,6 +614,7 @@ tilt-title = Inclinación del lápiz
 tilt-description = Ajusta la inclinación del lápiz mientras dibujas.
 tilt-less-sensitive = Menos sensible
 tilt-more-sensitive = Más sensible
+tilt-sensitivity = Sensibilidad
 tilt-direction = Dirección
 tilt-reverse-horizontal = Invertir horizontal
 tilt-reverse-vertical = Invertir vertical

@@ -614,6 +614,7 @@ tilt-title = Inclinaison du stylet
 tilt-description = Ajustez l’inclinaison du stylet en dessinant.
 tilt-less-sensitive = Moins sensible
 tilt-more-sensitive = Plus sensible
+tilt-sensitivity = Sensibilité
 tilt-direction = Direction
 tilt-reverse-horizontal = Inverser horizontalement
 tilt-reverse-vertical = Inverser verticalement

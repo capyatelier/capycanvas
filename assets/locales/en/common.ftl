@@ -611,6 +611,7 @@ tilt-title = Pen tilt
 tilt-description = Adjust pen tilt while drawing.
 tilt-less-sensitive = Less sensitive
 tilt-more-sensitive = More sensitive
+tilt-sensitivity = Sensitivity
 tilt-direction = Direction
 tilt-reverse-horizontal = Reverse horizontal
 tilt-reverse-vertical = Reverse vertical

@@ -605,6 +605,7 @@ tilt-title = Độ nghiêng bút
 tilt-description = Điều chỉnh độ nghiêng bút khi vẽ.
 tilt-less-sensitive = Giảm độ nhạy
 tilt-more-sensitive = Tăng độ nhạy
+tilt-sensitivity = Độ nhạy
 tilt-direction = Hướng
 tilt-reverse-horizontal = Đảo ngang
 tilt-reverse-vertical = Đảo dọc

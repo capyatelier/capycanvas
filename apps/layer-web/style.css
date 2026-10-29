@@ -797,14 +797,17 @@ body[data-theme="dark"] .toolbar-manager .destructive-action { color: #ff7b63; }
 .utility-panel .curve-axis-y .curve-axis-label { left:5px; }
 .utility-panel .curve-axis-x { grid-column:2; grid-row:2; min-height:18px; }
 .utility-panel .curve-frame > span { grid-column:3; grid-row:1; padding-left:10px; white-space:pre; font-size:.85em; opacity:0; pointer-events:none; }
-.utility-direction-section { margin-top:4px; }
-.utility-direction-title { display:block; line-height:18px; }
-.utility-direction-input { display:flex; flex-direction:column; align-items:center; gap:8px; margin-top:8px; }
-.utility-direction { width:72px; height:72px; overflow:visible; touch-action:none; }
+.utility-controls-row { display:flex; align-items:center; gap:8px; }
+.utility-controls-row > span,.utility-direction-title { min-width:0; flex:0 1 auto; font-weight:normal; overflow-wrap:anywhere; }
+.utility-direction-section { display:flex; align-items:center; gap:8px; flex:1 1 auto; min-width:0; }
+.utility-direction { position:absolute; right:8px; bottom:8px; width:72px; height:72px; overflow:visible; touch-action:none; pointer-events:all; }
+.utility-panel .utility-compact-sensitivity { flex:none; width:auto; gap:0; border:0; }
+.utility-panel .utility-compact-sensitivity svg { width:16px; height:16px; }
+.utility-panel .utility-compact-sensitivity > button { flex:none; min-width:36px; width:36px; padding:0; border:0; border-radius:0; background:var(--input); }
 .utility-direction circle { fill:none; stroke:var(--text); stroke-opacity:.18; }
 .utility-direction path { fill:none; stroke:var(--text); stroke-opacity:.55; stroke-width:1.5; }
 .utility-direction path.adjusted { stroke:#2985f2; stroke-opacity:1; stroke-width:2.5; }
-.utility-panel .utility-direction-controls { width:auto; border:0; }
+.utility-panel .utility-direction-controls { flex:none; width:auto; border:0; }
 .utility-panel .utility-direction-controls > button { flex:none; width:36px; height:36px; min-height:36px; padding:0; background:var(--input); border:0; }
 .utility-panel .utility-direction-controls > button[aria-pressed=true] { background:var(--selection); }
 .utility-panel .utility-direction-controls svg { width:16px; height:16px; }

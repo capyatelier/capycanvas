@@ -60,7 +60,7 @@ FrameworkElement ColorField(std::shared_ptr<Property> const& property,hstring co
     std::function<hstring()> context={},std::function<hstring()> currentTitle={});
 Button CompactColorField(std::shared_ptr<WorkspaceData> const& data,hstring const& id,std::function<hstring()> title,
     std::function<J()> get,std::function<void(J)> set,Bindings& bindings,std::function<hstring()> context);
-FrameworkElement ResponseCurveField(std::shared_ptr<WorkspaceData> const& data,Bindings& bindings,hstring const& target);
+FrameworkElement ResponseCurveField(std::shared_ptr<WorkspaceData> const& data,Bindings& bindings,hstring const& target,FrameworkElement const& overlay=nullptr);
 FrameworkElement CurveField(std::shared_ptr<Property> const& property,Bindings& bindings);
 struct GradientSource {
     std::function<J()> control;

@@ -605,6 +605,7 @@ tilt-title = Kalem eğimi
 tilt-description = Çizerken kalem eğimini ayarlayın.
 tilt-less-sensitive = Daha az duyarlı
 tilt-more-sensitive = Daha duyarlı
+tilt-sensitivity = Hassasiyet
 tilt-direction = Yön
 tilt-reverse-horizontal = Yatayı ters çevir
 tilt-reverse-vertical = Dikeyi ters çevir

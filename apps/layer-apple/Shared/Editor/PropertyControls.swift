@@ -198,6 +198,7 @@ struct CurveEditor: View {
     let label: String
     var histogram = false
     var axisGutter: String?
+    var plotOverlay: AnyView?
     @Environment(\.isEnabled) private var enabled
     @FocusState private var focused: Bool
     @State private var contact: [String: Any]?
@@ -281,7 +282,7 @@ struct CurveEditor: View {
             HStack(alignment: axisGutter == nil ? .center : .top, spacing: 4) {
                 verticalAxis(axes[1])
                 VStack(spacing: 2) {
-                    plot
+                    plot.overlay(alignment: .bottomTrailing) { plotOverlay }
                     ZStack {
                         HStack { Text(axes[0]["minimum"].string); Spacer(); Text(axes[0]["maximum"].string) }
                         Text(axes[0]["label"].string)

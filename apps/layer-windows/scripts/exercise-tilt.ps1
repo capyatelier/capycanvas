@@ -197,7 +197,7 @@ function Assert-Geometry{
     $plot=(Reveal-Tilt 'pen-tilt-curve').Current.BoundingRectangle
     $preview=(Reveal-Tilt 'pen-tilt-direction').Current.BoundingRectangle
     if($frame.Width/$scale -lt 383 -or [Math]::Abs($plot.Width-$plot.Height) -gt $scale -or [Math]::Abs(($plot.Left+$plot.Right-$frame.Left-$frame.Right)/2) -gt $scale){throw 'Tilt plot is not square and centered in its minimum-width utility'}
-    if([Math]::Abs($preview.Width/$scale-72) -gt 1 -or [Math]::Abs($preview.Height/$scale-72) -gt 1 -or [Math]::Abs(($preview.Left+$preview.Right-$plot.Left-$plot.Right)/2) -gt $scale){throw 'Tilt preview is not 72px on the plot centerline'}
+    if([Math]::Abs($preview.Width/$scale-72) -gt 1 -or [Math]::Abs($preview.Height/$scale-72) -gt 1 -or [Math]::Abs(($plot.Right-$preview.Right)/$scale-8) -gt 1 -or [Math]::Abs(($plot.Bottom-$preview.Bottom)/$scale-8) -gt 1){throw 'Tilt preview is not 72px with an 8px inset inside the lower-right plot corner'}
     $controls=@{}
     foreach($id in @('firmer','lighter','reset','cancel','apply','reverse-horizontal','reverse-vertical','swap-axes')){
         $r=(Reveal-Tilt "pen-tilt-$id").Current.BoundingRectangle
@@ -208,7 +208,8 @@ function Assert-Geometry{
     $reset=(Control 'pen-tilt-reset' -Arranged).Current.BoundingRectangle;$cancel=(Control 'pen-tilt-cancel' -Arranged).Current.BoundingRectangle;$apply=(Control 'pen-tilt-apply' -Arranged).Current.BoundingRectangle
     if([Math]::Abs(($reset.Left-$frame.Left)/$scale-16) -gt 1 -or [Math]::Abs(($frame.Right-$apply.Right)/$scale-16) -gt 1 -or [Math]::Abs(($apply.Left-$cancel.Right)/$scale-8) -gt 1){throw 'Tilt footer does not preserve 16px gutters and 8px action spacing'}
     $first=(Reveal-Tilt 'pen-tilt-reverse-horizontal').Current.BoundingRectangle;$last=(Reveal-Tilt 'pen-tilt-swap-axes').Current.BoundingRectangle
-    if([Math]::Abs(($first.Left+$last.Right-$preview.Left-$preview.Right)/2) -gt $scale -or [Math]::Abs(($first.Top-$preview.Bottom)/$scale-8) -gt 1){throw 'Tilt segments are not centered 8px below the preview'}
+    $firmer=(Reveal-Tilt 'pen-tilt-firmer').Current.BoundingRectangle;$lighter=(Reveal-Tilt 'pen-tilt-lighter').Current.BoundingRectangle
+    if([Math]::Abs($first.Top-$firmer.Top) -gt $scale -or [Math]::Abs($last.Top-$lighter.Top) -gt $scale -or $first.Left -le $lighter.Right -or $firmer.Top -lt $plot.Bottom){throw 'Tilt sensitivity and direction controls do not share one row below the graph'}
     @{theme=$Theme;scale=$scale;controls=$controls;frame=@($frame.X,$frame.Y,$frame.Width,$frame.Height);plot=@($plot.X,$plot.Y,$plot.Width,$plot.Height);preview=@($preview.X,$preview.Y,$preview.Width,$preview.Height)}|ConvertTo-Json -Depth 8|Set-Content (Join-Path $run 'geometry.json')
 }
 function Preview([string]$Stage,[string]$ExpectedCurve=''){

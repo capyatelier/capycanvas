@@ -10,7 +10,7 @@ struct ResponseCalibration:std::enable_shared_from_this<ResponseCalibration>{
     std::shared_ptr<WorkspaceData> data;
     Canvas host{nullptr},presenter{nullptr},direction;
     ContentControl frame,directionControl;
-    Grid layers,header,footer;
+    Grid layers,header,footer,controls,sensitivity;
     StackPanel body,content,heading,directionSection;
     Shapes::Path surface;
     Shapes::Ellipse circle;
@@ -18,7 +18,7 @@ struct ResponseCalibration:std::enable_shared_from_this<ResponseCalibration>{
     std::array<Primitives::ToggleButton,3> axes;
     ScrollViewer scroll;
     Border slot;
-    TextBlock title{nullptr},device{nullptr},directionTitle{nullptr};
+    TextBlock title{nullptr},device{nullptr},directionTitle{nullptr},sensitivityTitle{nullptr};
     Button close{nullptr},firmer{nullptr},lighter{nullptr},reset{nullptr},cancel{nullptr},apply{nullptr};
     WorkspaceShadow shadow;
     Bindings bindings;
@@ -59,17 +59,21 @@ struct ResponseCalibration:std::enable_shared_from_this<ResponseCalibration>{
         cancel=button(data,L"",[weak]{if(auto self=weak.lock())self->send(O({{L"kind",S(L"cancel")}}));});
         apply=button(data,L"",[weak]{if(auto self=weak.lock())self->send(O({{L"kind",S(L"apply")}}));});
         for(auto control:{firmer,lighter,reset,cancel,apply}){control.MinWidth(0);control.Padding({12,0,12,0});control.MinHeight(36);}
-        Grid sensitivity;sensitivity.ColumnSpacing(8);
+        sensitivity.ColumnSpacing(8);
+        sensitivityTitle=label(data,L"");sensitivityTitle.TextWrapping(TextWrapping::Wrap);sensitivityTitle.VerticalAlignment(VerticalAlignment::Center);
+        controls.ColumnSpacing(8);
+        for(int i=0;i<4;i++){ColumnDefinition column;column.Width({1,i%2?GridUnitType::Auto:GridUnitType::Star});controls.ColumnDefinitions().Append(column);}
+        controls.Children().Append(sensitivityTitle);Grid::SetColumn(sensitivity,1);controls.Children().Append(sensitivity);
         for(int i=0;i<2;i++){ColumnDefinition column;column.Width({1,GridUnitType::Star});sensitivity.ColumnDefinitions().Append(column);}
         firmer.HorizontalAlignment(HorizontalAlignment::Stretch);lighter.HorizontalAlignment(HorizontalAlignment::Stretch);
         Grid::SetColumn(lighter,1);sensitivity.Children().Append(firmer);sensitivity.Children().Append(lighter);
-        content.Spacing(12);content.Padding({16,0,16,0});content.Children().Append(slot);content.Children().Append(sensitivity);
-        directionTitle=label(data,L"",true);directionSection.Spacing(8);directionSection.Margin({0,4,0,0});directionSection.Children().Append(directionTitle);
+        content.Spacing(12);content.Padding({16,0,16,0});content.Children().Append(slot);content.Children().Append(controls);
+        directionTitle=label(data,L"");directionTitle.TextWrapping(TextWrapping::Wrap);directionTitle.VerticalAlignment(VerticalAlignment::Center);Grid::SetColumn(directionTitle,2);controls.Children().Append(directionTitle);
         direction.Width(72);direction.Height(72);direction.Background(clear());
-        directionControl.Content(direction);directionControl.Width(72);directionControl.Height(72);directionControl.HorizontalAlignment(HorizontalAlignment::Center);directionControl.HorizontalContentAlignment(HorizontalAlignment::Stretch);directionControl.VerticalContentAlignment(VerticalAlignment::Stretch);
+        directionControl.Content(direction);directionControl.Width(72);directionControl.Height(72);directionControl.HorizontalAlignment(HorizontalAlignment::Right);directionControl.VerticalAlignment(VerticalAlignment::Bottom);directionControl.Margin({0,0,8,8});directionControl.HorizontalContentAlignment(HorizontalAlignment::Stretch);directionControl.VerticalContentAlignment(VerticalAlignment::Stretch);
         circle.Width(62);circle.Height(62);circle.StrokeThickness(2);Canvas::SetLeft(circle,5);Canvas::SetTop(circle,5);circle.Opacity(.18);direction.Children().Append(circle);
         for(auto const& arrow:arrows){arrow.StrokeThickness(1.5);arrow.IsHitTestVisible(false);direction.Children().Append(arrow);}
-        arrows[0].Opacity(.55);arrows[1].StrokeThickness(2.5);directionSection.Children().Append(directionControl);
+        arrows[0].Opacity(.55);arrows[1].StrokeThickness(2.5);
         StackPanel segments;segments.Orientation(Orientation::Horizontal);segments.HorizontalAlignment(HorizontalAlignment::Center);
         for(size_t i=0;i<axes.size();++i){
             auto control=axes[i];control.Width(36);control.Height(36);control.MinWidth(0);control.MinHeight(0);control.Padding({0});control.BorderThickness({0});control.IsChecked(false);
@@ -80,7 +84,7 @@ struct ResponseCalibration:std::enable_shared_from_this<ResponseCalibration>{
             }});
             segments.Children().Append(control);
         }
-        directionSection.Children().Append(segments);content.Children().Append(directionSection);
+        directionSection.Children().Append(segments);Grid::SetColumn(directionSection,3);controls.Children().Append(directionSection);
         scroll.Content(content);scroll.HorizontalScrollBarVisibility(ScrollBarVisibility::Disabled);scroll.VerticalScrollBarVisibility(ScrollBarVisibility::Auto);body.Children().Append(scroll);
         footer.ColumnSpacing(8);footer.Margin({16,16,16,16});
         for(int i=0;i<4;i++){ColumnDefinition column;column.Width({1,i==1?GridUnitType::Star:GridUnitType::Auto});footer.ColumnDefinitions().Append(column);}
@@ -146,13 +150,19 @@ struct ResponseCalibration:std::enable_shared_from_this<ResponseCalibration>{
         frame.Opacity(exposed?1:0);frame.IsHitTestVisible(exposed);
         auto key=target()+data->theme()+object(data->state,L"palette").Stringify();
         bool rebuilt=key!=built;
-        if(rebuilt){built=key;bindings.clear();slot.Child(CapyEffects::ResponseCurveField(data,bindings,target()));drawn=L"";}
+        if(rebuilt){built=key;bindings.clear();
+            if(auto parent=directionControl.Parent().try_as<Panel>()){uint32_t index;if(parent.Children().IndexOf(directionControl,index))parent.Children().RemoveAt(index);}
+            slot.Child(CapyEffects::ResponseCurveField(data,bindings,target(),tilt()?directionControl.as<FrameworkElement>():nullptr));drawn=L"";}
         auto prefix=L"pen-"+target();
         AutomationProperties::SetAutomationId(frame,prefix+L"-dialog");AutomationProperties::SetAutomationId(title,prefix+L"-title");AutomationProperties::SetAutomationId(close,prefix+L"-close");
         title.Text(str(model,L"title"));title.Foreground(data->brush(L"text"));surface.Fill(data->tint(L"panel",255));
         close.Content(icon(L"window-close",data->theme()));AutomationProperties::SetName(close,str(model,L"close"));tooltip(close,str(model,L"close"));AutomationProperties::SetName(frame,str(model,L"title"));
-        for(auto [control,id]:{std::pair{firmer,L"firmer"},std::pair{lighter,L"lighter"},std::pair{reset,L"reset"},std::pair{cancel,L"cancel"},std::pair{apply,L"apply"}}){auto text=str(model,id);if(unbox_value_or<hstring>(control.Content(),L"")!=text)control.Content(box_value(text));AutomationProperties::SetName(control,text);AutomationProperties::SetAutomationId(control,prefix+L"-"+id);}
+        for(auto [control,id]:{std::pair{firmer,L"firmer"},std::pair{lighter,L"lighter"},std::pair{reset,L"reset"},std::pair{cancel,L"cancel"},std::pair{apply,L"apply"}}){auto text=str(model,id);if(tilt()&&(control==firmer||control==lighter)){if(rebuilt)control.Content(icon(control==firmer?L"minus":L"plus",data->theme(),16));tooltip(control,text);}else if(unbox_value_or<hstring>(control.Content(),L"")!=text)control.Content(box_value(text));AutomationProperties::SetName(control,text);AutomationProperties::SetAutomationId(control,prefix+L"-"+id);}
         firmer.IsEnabled(flag(model,L"firmer_enabled"));lighter.IsEnabled(flag(model,L"lighter_enabled"));apply.IsEnabled(!tilt()||flag(object(data->state,L"tilt_calibration"),L"ready"));apply.Background(accent(data));apply.Foreground(data->brush(L"accent_foreground"));
+        for(auto control:{firmer,lighter}){control.Width(tilt()?36.:std::numeric_limits<double>::quiet_NaN());control.Padding(tilt()?Thickness{0}:Thickness{12,0,12,0});auto corners=data->controlCorner();if(tilt()){if(control==firmer){corners.TopRight=0;corners.BottomRight=0;}else{corners.TopLeft=0;corners.BottomLeft=0;}}control.CornerRadius(corners);}
+        sensitivity.ColumnSpacing(tilt()?0:8);Grid::SetColumn(sensitivity,tilt()?1:0);Grid::SetColumnSpan(sensitivity,tilt()?1:4);
+        for(auto text:{sensitivityTitle,directionTitle}){text.Visibility(tilt()?Visibility::Visible:Visibility::Collapsed);text.Foreground(data->brush(L"text"));}
+        sensitivityTitle.Text(str(model,L"sensitivity"));
         device.Visibility(tilt()?Visibility::Visible:Visibility::Collapsed);directionSection.Visibility(tilt()?Visibility::Visible:Visibility::Collapsed);
         if(tilt()){
             auto tiltView=object(data->state,L"tilt_calibration"),axis=object(tiltView,L"axes");device.Text(str(tiltView,L"device"));device.Foreground(data->brush(L"text"));directionTitle.Text(str(tiltView,L"direction"));directionTitle.Foreground(data->brush(L"text"));
