@@ -1309,14 +1309,7 @@ fn replacing_the_workspace_keeps_host_measurements_and_follows_the_header_size()
     let measurements = [(Panel::Color, 300.), (Panel::Navigator, 180.)]
         .map(|(panel, content_height)| PanelMeasurement { panel, tab_width: 0., content_height, scroll: None })
         .to_vec();
-    let requests=s.layout(STACK_VIEW).measurement_requests;
-    let context=crate::PanelMetricContext {generation:1,scale:1.,text_scale:1.,style:"column-test".into()};
-    let reports=measurements.into_iter().map(|measurement| {
-        let request=requests.iter().find(|request|request.identity.panel==measurement.panel).unwrap().clone();
-        crate::PanelMeasurementReport {request:request.clone(),context:context.clone(),tab_width:None,
-            body:Some(crate::PanelBodyMeasurement {actual_width:request.width,content_height:measurement.content_height,scroll:None})}
-    }).collect();
-    s.dispatch(UiAction::MeasurePanels { measurements:crate::PanelMeasurementBatch {context,reports} }).unwrap();
+    s.dispatch(UiAction::MeasurePanels { measurements:measured_batch(&s,STACK_VIEW,measurements) }).unwrap();
     s.dispatch(UiAction::MeasureHeader { height: paint.header.size.height(), items: Vec::new() }).unwrap();
     let fitted = |s: &UiSession<Recorder>| {
         let resolved = s.layout(STACK_VIEW);

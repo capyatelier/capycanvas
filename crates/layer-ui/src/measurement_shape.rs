@@ -1,16 +1,10 @@
 use crate::*;
 use serde::Serialize;
 use serde_json::{Value,json};
-use sha2::{Digest,Sha256};
-use std::io::Write;
+use layer_core::package::HashWriter;
 
-struct ShapeHash(Sha256);
-impl Write for ShapeHash {
-    fn write(&mut self,bytes:&[u8])->std::io::Result<usize> {self.0.update(bytes);Ok(bytes.len())}
-    fn flush(&mut self)->std::io::Result<()> {Ok(())}
-}
 fn key(value:&impl Serialize)->String {
-    let mut hash=ShapeHash(Sha256::new());serde_json::to_writer(&mut hash,value).unwrap();format!("{:x}",hash.0.finalize())
+    let mut hash=HashWriter::default();serde_json::to_writer(&mut hash,value).unwrap();hash.hex()
 }
 fn setting(value:&ToolSetting)->Value {json!([value.id,value.label,value.group_id,value.group,value.numeric,value.preview])}
 fn tools(value:&ToolSetView)->Value {
@@ -37,8 +31,8 @@ fn option(value:&ToolOption)->Value {
     }
 }
 fn scope(value:&HistogramView)->Value {json!([value.sources,value.channels,value.labels,value.axis])}
-fn body(state:&UiState,panel:Panel)->Value {
-    match panel {
+fn body(state:&UiState,panel:Panel)->(Value,bool) {
+    let value=match panel {
         Panel::Brushes|Panel::BrushSets|Panel::SculptSets|Panel::Tools=>json!([tools(state.tool_panel(panel)),
             state.tool_extra.iter().any(|extra|matches!(extra,ToolOption::Choice {id:"tonal-tones",..}))]),
         Panel::ToolSettings=>json!({"picker":state.layer_tools.tool.picks_color(),
@@ -63,16 +57,17 @@ fn body(state:&UiState,panel:Panel)->Value {
         Panel::Navigator=>json!(state.tabs.first().map(|tab|(tab.width,tab.height))),
         Panel::Histogram=>scope(&state.histogram),Panel::Waveform=>scope(&state.waveform),
         Panel::Proof=>json!([state.soft_proof,state.preview_sdr,state.display_colors().has_hdr_picker()]),
-        _=>Value::Null,
-    }
+        Panel::Toolbar|Panel::Commands|Panel::Sizes|Panel::Stats|Panel::CustomToolbar(_)=>Value::Null,
+    };
+    (value,!matches!(panel,Panel::Stats|Panel::Proof|Panel::Palettes))
 }
 pub(crate) fn identities(state:&UiState)->Vec<PanelMeasurementIdentity> {
     state.workspace.layout.panels.iter().map(|panel| {
         let tab=state.workspace.layout.tab_presentation(panel.id);
         let style=(state.theme,state.localization.language());
         let tab=key(&(panel.title_localized(&state.localization),panel.icon(),tab.show_icon,tab.show_name,style));
-        let cacheable=!matches!(panel.id,Panel::Proof|Panel::Stats|Panel::Palettes);
-        let body=key(&(&panel.content,panel.tile_style,style,body(state,panel.id)));
+        let (body,cacheable)=body(state,panel.id);
+        let body=key(&(&panel.content,panel.tile_style,style,body));
         PanelMeasurementIdentity {panel:panel.id,tab,body,cacheable}
     }).collect()
 }

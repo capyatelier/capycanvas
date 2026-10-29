@@ -14,7 +14,6 @@ pub struct PanelMeasurementRequest {
     #[serde(flatten)]
     pub identity:PanelMeasurementIdentity,
     pub width:f32,
-    pub split_filters:bool,
     pub tab_measured:bool,
     pub body_measured:bool,
 }
@@ -71,7 +70,7 @@ pub(crate) struct PanelMeasurementCache {
 #[derive(Clone,Debug,PartialEq,Serialize,Deserialize)]
 struct MeasuredTab {panel:Panel,key:String,context:PanelMetricContext,width:f32}
 #[derive(Clone,Debug,PartialEq,Serialize,Deserialize)]
-struct MeasuredBody {panel:Panel,key:String,context:PanelMetricContext,width:f32,split_filters:bool,body:Option<PanelBodyMeasurement>,verified:bool}
+struct MeasuredBody {panel:Panel,key:String,context:PanelMetricContext,width:f32,body:PanelBodyMeasurement,verified:bool}
 
 pub(crate) fn panel_measurement_width(width:f32)->f32 {(width*64.).round()/64.}
 
@@ -125,11 +124,11 @@ impl PanelMeasurementCache {
             }
             if let Some(body)=report.body {
                 let previous=cache.bodies.iter().position(|entry|entry.panel==panel&&entry.key==identity.body
-                    &&entry.width==report.request.width&&entry.split_filters==report.request.split_filters
+                    &&entry.width==report.request.width
                     &&entry.context.same_metrics(&report.context));
                 if let Some(index)=previous {cache.bodies.remove(index);}
                 cache.bodies.push(MeasuredBody {panel,key:identity.body.clone(),context:report.context,
-                    width:report.request.width,split_filters:report.request.split_filters,body:Some(body),verified:true});
+                    width:report.request.width,body,verified:true});
                 if cache.bodies.iter().filter(|entry|entry.panel==panel).count()>8 {
                     let first=cache.bodies.iter().position(|entry|entry.panel==panel).unwrap();cache.bodies.remove(first);
                 }
@@ -138,8 +137,8 @@ impl PanelMeasurementCache {
         }
         Ok(cache)
     }
-    pub fn request(&self,identity:&PanelMeasurementIdentity,width:f32,split_filters:bool)->PanelMeasurementRequest {
-        let mut request=PanelMeasurementRequest {identity:identity.clone(),width:panel_measurement_width(width),split_filters,
+    pub fn request(&self,identity:&PanelMeasurementIdentity,width:f32)->PanelMeasurementRequest {
+        let mut request=PanelMeasurementRequest {identity:identity.clone(),width:panel_measurement_width(width),
             tab_measured:false,body_measured:false};
         request.tab_measured=self.tab(&request).is_some();request.body_measured=self.body_entry(&request,Some(request.width)).is_some_and(|entry|identity.cacheable||entry.verified);request
     }
@@ -155,10 +154,10 @@ impl PanelMeasurementCache {
         let identity=self.identities.iter().find(|identity|identity.panel==request.identity.panel)?;
         if identity.body!=request.identity.body {return None;}
         self.bodies.iter().rev().find(|entry|entry.panel==request.identity.panel
-            &&entry.key==request.identity.body&&entry.body.is_some()&&width.is_none_or(|width|entry.width==width)
-            &&entry.split_filters==request.split_filters&&entry.context.same_metrics(context))
+            &&entry.key==request.identity.body&&width.is_none_or(|width|entry.width==width)
+            &&entry.context.same_metrics(context))
     }
-    fn body(&self,request:&PanelMeasurementRequest)->Option<PanelBodyMeasurement> {self.body_entry(request,Some(request.width)).or_else(||self.body_entry(request,None))?.body}
+    fn body(&self,request:&PanelMeasurementRequest)->Option<PanelBodyMeasurement> {Some(self.body_entry(request,Some(request.width)).or_else(||self.body_entry(request,None))?.body)}
     pub fn project(&self,requests:&[PanelMeasurementRequest])->Vec<PanelMeasurement> {
         requests.iter().filter_map(|request| {
             let body=self.body(request);let tab=self.tab(request);
@@ -175,7 +174,7 @@ mod tests {
     fn cache()->PanelMeasurementCache {
         PanelMeasurementCache {identities:vec![PanelMeasurementIdentity {panel:Panel::Histogram,tab:"tab".into(),body:"scope".into(),cacheable:true}],..Default::default()}
     }
-    fn request(cache:&PanelMeasurementCache,width:f32)->PanelMeasurementRequest {cache.request(&cache.identities[0],width,false)}
+    fn request(cache:&PanelMeasurementCache,width:f32)->PanelMeasurementRequest {cache.request(&cache.identities[0],width)}
     fn report(cache:&PanelMeasurementCache,width:f32,height:f32)->PanelMeasurementReport {
         PanelMeasurementReport {request:request(cache,width),context:PanelMetricContext {generation:1,scale:1.25,text_scale:1.,style:"native".into()},
             tab_width:Some(110.),body:Some(PanelBodyMeasurement {actual_width:width,content_height:height,scroll:None})}

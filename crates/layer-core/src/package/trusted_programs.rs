@@ -47,7 +47,15 @@ impl ResourceWriter for Contents {
         Err("Custom filters cannot contain image defaults".into())
     }
 }
-struct HashWriter(Sha256);
+#[derive(Default)]
+pub struct HashWriter(Sha256);
+impl HashWriter {
+    pub fn hex(self)->String {
+        let mut hex=String::with_capacity(64);
+        for byte in self.0.finalize() {std::fmt::Write::write_fmt(&mut hex,format_args!("{byte:02x}")).unwrap();}
+        hex
+    }
+}
 impl Write for HashWriter {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
         self.0.update(bytes); Ok(bytes.len())

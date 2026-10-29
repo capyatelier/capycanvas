@@ -18,7 +18,7 @@ pub mod registry;
 pub mod values;
 pub mod effect_records;
 mod trusted_programs;
-pub use trusted_programs::TrustedPrograms;
+pub use trusted_programs::{HashWriter, TrustedPrograms};
 pub mod selection_records;
 pub mod vector_records;
 #[cfg(test)]

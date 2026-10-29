@@ -1815,6 +1815,13 @@ impl<R: CanvasRenderer> UiSession<R> {
             || self.workspace_drag.is_some_and(|drag| drag.chrome_visible);
         self.interaction.hidden = self.state.workspace.zen_mode && !pinned;
     }
+    pub(crate) fn panel_measurement_cache(&self)->crate::panel_measurements::PanelMeasurementCache {
+        let mut cache=self.panel_measurements.clone();
+        cache.identities=crate::measurement_shape::identities(&self.state);cache
+    }
+    fn workspace_viewport(&self)->[f32;2] {
+        self.logical_viewport.or(self.interaction.viewport).unwrap_or(self.state.camera.viewport.map(|value|value as f32))
+    }
     /// Measure once in logical workspace units; all hosts use the same chrome
     /// insets, docking topology, and tile allocation rules.
     pub fn layout(&self, viewport: [f32; 2]) -> ResolvedLayout {
@@ -3387,19 +3394,14 @@ impl<R: CanvasRenderer> UiSession<R> {
                 ) }
             }
             UiAction::MeasurePanels { measurements } => {
-                let mut cache=self.panel_measurements.clone();
-                cache.identities=crate::measurement_shape::identities(&self.state);
-                self.panel_measurements=cache.accept(measurements)?;
-                let viewport=self.logical_viewport.or(self.interaction.viewport)
-                    .unwrap_or(self.state.camera.viewport.map(|value|value as f32));
+                self.panel_measurements=self.panel_measurement_cache().accept(measurements)?;
+                let viewport=self.workspace_viewport();
                 let accepted=crate::LayoutResolveInput::new(&self.state.workspace.layout,None)
                     .with_cache(self.panel_measurements.clone()).measured_layout(viewport).measurements;
                 if self.state.workspace.layout.measurements == accepted { (0, false) } else if self.floating_auto_fit.is_empty() {
                     self.state.workspace.layout.measurements = accepted;
                     (LAYOUT, false)
                 } else {
-                    let viewport = self.logical_viewport.or(self.interaction.viewport)
-                        .unwrap_or(self.state.camera.viewport.map(|value| value as f32));
                     let before = self.state.workspace.layout.resolved(viewport);
                     let first: Vec<_> = self.floating_auto_fit.iter().filter_map(|(group, panels)| {
                         let measured: Vec<_> = panels.iter().copied().filter(|panel|
@@ -6144,9 +6146,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .palette(self.state.theme, self.state.platform, self.system_accent);
         }
         if regions & (regions::LAYOUT|regions::CUSTOMIZATION|regions::SETTINGS) != 0 {
-            let viewport=self.logical_viewport.or(self.interaction.viewport)
-                .unwrap_or(self.state.camera.viewport.map(|value|value as f32));
-            let mut cache=self.panel_measurements.clone();cache.identities=crate::measurement_shape::identities(&self.state);
+            let viewport=self.workspace_viewport();
+            let cache=self.panel_measurement_cache();
             self.state.workspace.layout.measurements=crate::LayoutResolveInput::new(&self.state.workspace.layout,None)
                 .with_cache(cache).measured_layout(viewport).measurements;
         }

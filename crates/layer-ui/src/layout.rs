@@ -1067,13 +1067,13 @@ impl<'a> LayoutResolveInput<'a> {
         cache.identities.iter().map(|identity| {
             let width=result.groups.iter().find(|group|group.panels.contains(&identity.panel))
                 .map_or_else(||identity.panel.default_width(result.viewport[0]),|group|group.bounds.width);
-            cache.request(identity,width,false)
+            cache.request(identity,width)
         }).collect()
     }
     pub(crate) fn measured_layout(&self,viewport:[f32;2])->DockLayout {
         let mut layout=self.layout.as_ref().clone();
         if let Some(cache)=self.cache.as_ref().filter(|cache|cache.context.is_some()) {
-            layout.measurements=cache.project(&cache.identities.iter().map(|identity|cache.request(identity,0.,false)).collect::<Vec<_>>());
+            layout.measurements=cache.project(&cache.identities.iter().map(|identity|cache.request(identity,0.)).collect::<Vec<_>>());
             for _ in 0..4 {
                 let requests=self.requests(cache,&layout.resolved(viewport));
                 let measurements=cache.project(&requests);
