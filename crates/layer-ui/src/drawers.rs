@@ -96,6 +96,23 @@ pub struct DrawerPlacement {
     pub columns: Vec<Bounds>,
 }
 
+#[derive(Serialize)]
+pub struct DrawerToolbar {
+    #[serde(flatten)]
+    pub layout:TileLayout,
+    pub content_height:f32,
+}
+impl DockLayout {
+    pub fn drawer_toolbar(&self,panel:Panel,width:f32)->Result<DrawerToolbar,String> {
+        if !width.is_finite()||width<=0. {return Err("Invalid drawer toolbar size".into());}
+        let config=self.panel(panel)?;
+        let layout=toolbar_tile_layout(width,toolbar_content_height(width,config.tiles(),config.tile_style),
+            Axis::Vertical,config.tiles(),false,config.tile_style);
+        let content_height=layout.tiles.iter().map(|bounds|bounds.y+bounds.height+4.).fold(0.,f32::max);
+        Ok(DrawerToolbar {layout,content_height})
+    }
+}
+
 pub fn drawer_frame(source: &str) -> Result<serde_json::Value, String> {
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
@@ -732,21 +749,9 @@ impl CustomizationState {
                     .find(|m| m.group == group)?
                     .bounds;
                 let active = layout.active_panel(origin)?;
-                let config = layout.panel(active).ok()?;
-                let tiles = (active.kind() == PanelKind::Tiles).then(|| {
-                    crate::toolbar_tile_layout(
-                        bounds.width,
-                        crate::toolbar_content_height(
-                            bounds.width,
-                            config.tiles(),
-                            config.tile_style,
-                        ),
-                        Axis::Vertical,
-                        config.tiles(),
-                        false,
-                        config.tile_style,
-                    )
-                });
+                let tiles = if active.kind() == PanelKind::Tiles {
+                    Some(layout.drawer_toolbar(active,bounds.width).ok()?.layout)
+                }else{None};
                 Some(GroupPlacement {
                     id: group,
                     bounds,

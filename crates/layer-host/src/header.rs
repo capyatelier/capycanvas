@@ -5,14 +5,7 @@ use layer_ui::{Bounds, HeaderDrag, HeaderDragSource, HeaderDragStart, HeaderLayo
 #[derive(Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub(crate) enum HeaderRequest {
-    Geometry {
-        model: HeaderLayout,
-        editing: bool,
-        documents: usize,
-        width: f32,
-        insets: [f32; 2],
-        metrics: Vec<HeaderMetric>,
-    },
+    Geometry(layer_ui::HeaderGeometryRequest),
     Begin {
         model: HeaderLayout,
         editing: bool,
@@ -37,11 +30,11 @@ pub(crate) enum HeaderRequest {
 }
 
 impl NativeHost {
-    pub(crate) fn header_request(&mut self, request: HeaderRequest) -> Value {
+    pub(crate) fn header_request(&mut self, request: HeaderRequest) -> Result<Value,String> {
         let state = self.session.state();
         let model = state.workspace.layout.header.projected_for(state.platform);
         let editing = state.customization.header_editing;
-        if !matches!(request, HeaderRequest::Geometry { .. }) && (!editing
+        if !matches!(request, HeaderRequest::Geometry(_)) && (!editing
             || self
                 .header_drag
                 .as_ref()
@@ -49,15 +42,8 @@ impl NativeHost {
         {
             self.header_drag = None;
         }
-        match request {
-            HeaderRequest::Geometry {
-                model,
-                editing,
-                documents,
-                width,
-                insets,
-                metrics,
-            } => json!(model.resolve_documents(width, insets, &metrics, editing, documents)),
+        Ok(match request {
+            HeaderRequest::Geometry(request) => return request.resolve(),
             HeaderRequest::Begin {
                 model: measured,
                 editing: measured_editing,
@@ -106,7 +92,7 @@ impl NativeHost {
                     .flatten()
                     .map(|a| a.action())
             ),
-        }
+        })
     }
 }
 
@@ -152,22 +138,22 @@ mod tests {
         };
         let mut blocked = begin();
         if let HeaderRequest::Begin { editing, .. } = &mut blocked { *editing = false; }
-        assert_eq!(host.header_request(blocked), json!(false));
-        assert_eq!(host.header_request(begin()), json!(true));
+        assert_eq!(host.header_request(blocked).unwrap(), json!(false));
+        assert_eq!(host.header_request(begin()).unwrap(), json!(true));
         let finish = |cancel| HeaderRequest::Finish { position: [700., 20.], cancel };
-        let measure = || HeaderRequest::Geometry { model: model.clone(), editing: true, documents: 1,
-            width: 1400., insets: [0., 0.], metrics: metrics.clone() };
-        assert_eq!(host.header_request(measure()), json!(geometry));
+        let measure = || HeaderRequest::Geometry(layer_ui::HeaderGeometryRequest { model: model.clone(), editing: true, documents: 1,
+            width: 1400., insets: [0., 0.], metrics: metrics.clone() });
+        assert_eq!(host.header_request(measure()).unwrap(), json!(geometry));
         assert!(host.header_drag.is_some());
         let preview = host.header_request(HeaderRequest::Preview {
             position: [700., 20.],
-        });
+        }).unwrap();
         assert!(!preview.is_null());
         assert_eq!(host.session.state().workspace.layout.header, model);
         assert_eq!(host.session.durable_workspace(), before);
-        assert!(host.header_request(finish(true)).is_null());
-        assert_eq!(host.header_request(begin()), json!(true));
-        let action = host.header_request(finish(false));
+        assert!(host.header_request(finish(true)).unwrap().is_null());
+        assert_eq!(host.header_request(begin()).unwrap(), json!(true));
+        let action = host.header_request(finish(false)).unwrap();
         host.dispatch(serde_json::from_value(action).unwrap())
             .unwrap();
         assert_eq!(
@@ -184,19 +170,19 @@ mod tests {
         assert_eq!(host.session.durable_workspace(), before);
         host.dispatch(HeaderAction::Cancel.action()).unwrap();
         assert_eq!(host.session.state().workspace.layout.header, model);
-        assert_eq!(host.header_request(begin()), json!(false));
+        assert_eq!(host.header_request(begin()).unwrap(), json!(false));
         host.dispatch(HeaderAction::Edit { editing: true }.action())
             .unwrap();
         host.dispatch(HeaderAction::SetSize { size: layer_ui::HeaderSize::Large }.action()).unwrap();
-        assert_eq!(host.header_request(measure()), json!(geometry));
-        assert_eq!(host.header_request(begin()), json!(false));
+        assert_eq!(host.header_request(measure()).unwrap(), json!(geometry));
+        assert_eq!(host.header_request(begin()).unwrap(), json!(false));
         host.dispatch(HeaderAction::SetSize { size: model.size }.action()).unwrap();
-        assert_eq!(host.header_request(begin()), json!(true));
+        assert_eq!(host.header_request(begin()).unwrap(), json!(true));
         host.dispatch(HeaderAction::Remove { id }.action()).unwrap();
-        assert_eq!(host.header_request(measure()), json!(geometry));
-        assert!(host.header_request(finish(false)).is_null());
-        assert_eq!(host.header_request(begin()), json!(false));
+        assert_eq!(host.header_request(measure()).unwrap(), json!(geometry));
+        assert!(host.header_request(finish(false)).unwrap().is_null());
+        assert_eq!(host.header_request(begin()).unwrap(), json!(false));
         host.dispatch(HeaderAction::Cancel.action()).unwrap();
-        assert_eq!(host.header_request(measure()), json!(geometry));
+        assert_eq!(host.header_request(measure()).unwrap(), json!(geometry));
     }
 }

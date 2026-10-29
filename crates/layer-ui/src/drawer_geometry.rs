@@ -35,14 +35,17 @@ struct Request {
     layer:Option<Layer>,
 }
 
-impl DockLayout {
-    pub fn drawer_toolbar(&self,panel:Panel,width:f32)->Result<Value,String> {
-        if !width.is_finite()||width<=0. {return Err("Invalid drawer toolbar size".into());}
-        let config=self.panel(panel)?;
-        let geometry=toolbar_tile_layout(width,toolbar_content_height(width,config.tiles(),config.tile_style),
-            Axis::Vertical,config.tiles(),false,config.tile_style);
-        let content_height=geometry.tiles.iter().map(|bounds|bounds.y+bounds.height+4.).fold(0.,f32::max);
-        let mut value=json!(geometry);value["content_height"]=json!(content_height);Ok(value)
+impl CustomizationState {
+    pub fn layer_drawer_sizing(&self,drawer:Option<&ContentDrawer>,layout:&DockLayout,viewport:[f32;2],
+        measurement:PanelScrollMeasurement,rows:usize,properties_height:f32)->Result<Value,String> {
+        if ![measurement.fixed_height,measurement.unit_height,properties_height].into_iter()
+            .all(|value|value.is_finite()&&value>=0.)
+            ||drawer.is_some_and(|drawer|drawer.columns.len()!=1||drawer.layer_properties.is_none()) {
+            return Err("Invalid layer drawer measurements".into());
+        }
+        let heights=LayerDrawerSizing::pages(measurement,rows,viewport[1],properties_height);
+        let placements=heights.map(|height|drawer.and_then(|drawer|self.drawer_placement(drawer,layout,viewport,&[height])));
+        Ok(json!({"heights":heights,"placements":placements,"footer_height":LayerDrawerSizing::FOOTER_HEIGHT}))
     }
 }
 
@@ -71,13 +74,7 @@ impl LayoutResolveInput<'_> {
             }
         }
         let sizes=if let Some(layer)=request.layer {
-            if ![layer.measurement.fixed_height,layer.measurement.unit_height,layer.properties_height].into_iter()
-                .all(|value|value.is_finite()&&value>=0.)||drawer.columns.len()!=1||drawer.layer_properties.is_none() {
-                return Err("Invalid layer drawer measurements".into());
-            }
-            let heights=LayerDrawerSizing::pages(layer.measurement,layer.rows,viewport[1],layer.properties_height);
-            let placements=heights.map(|height|customization.drawer_placement(&drawer,&layout,viewport,&[height]));
-            json!({"heights":heights,"placements":placements,"footer_height":LayerDrawerSizing::FOOTER_HEIGHT})
+            customization.layer_drawer_sizing(Some(&drawer),&layout,viewport,layer.measurement,layer.rows,layer.properties_height)?
         }else{Value::Null};
         Ok(json!({"placement":placement,"toolbars":toolbars,"sizes":sizes}))
     }

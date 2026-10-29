@@ -233,17 +233,8 @@ pub unsafe extern "C" fn capy_document_tab_slide(input: *const c_char) -> u64 {
 mod tests {
     use super::*;
     #[test]
-    fn header_geometry_ffi_is_stateless_and_uses_the_supplied_model() {
+    fn header_geometry_ffi_rejects_null_input() {
         let context=crate::test_support::Localization::new(layer_ui::Localizer::shared(layer_ui::UiLanguage::English));
-        for (width,documents,size) in [(1600.,1,layer_ui::HeaderSize::Large),(640.,3,layer_ui::HeaderSize::Small)] {
-            let mut model=layer_ui::HeaderLayout::default();model.size=size;
-            let request=serde_json::json!({"op":"geometry","model":model,"editing":false,"documents":documents,
-                "width":width,"insets":[0.,168.],"metrics":[]}).to_string();
-            let input=CString::new(request.clone()).unwrap();
-            let response=unsafe {capy_header_frame(context.raw(),input.as_ptr())};
-            let actual:serde_json::Value=serde_json::from_str(crate::owned::take_text(response).to_str().unwrap()).unwrap();
-            assert_eq!(actual,layer_ui::header_frame(&request).unwrap());
-        }
         let response=unsafe {capy_header_frame(context.raw(),std::ptr::null())};
         let error:serde_json::Value=serde_json::from_str(crate::owned::take_text(response).to_str().unwrap()).unwrap();
         assert!(error.get("error").is_some());

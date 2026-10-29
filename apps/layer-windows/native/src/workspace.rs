@@ -65,32 +65,33 @@ pub extern "C" fn capy_layout_resolve(input:u64,width:f32,height:f32)->u64 {
         .unwrap_or_else(|_|Err("Workspace layout failed".into())))
 }
 
+unsafe fn geometry_request(input:*const c_char,query:impl FnOnce(&str)->Result<Value,String>)->u64 {
+    layout_packet(std::panic::catch_unwind(std::panic::AssertUnwindSafe(||unsafe {
+        crate::input::with_text(input,|source| {
+            if source.len()>256*1024 {return Err("Geometry request is too large".into());}
+            query(source)
+        })
+    })).unwrap_or_else(|_|Err("Geometry failed".into())))
+}
+
 /// # Safety
 /// Input is readable NUL-terminated UTF-8 JSON during this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_drawer_resolve(layout:u64,width:f32,height:f32,input:*const c_char)->u64 {
-    let result=std::panic::catch_unwind(|| {
-        unsafe {crate::input::with_text(input,|source| {
-            if source.len()>256*1024 {return Err("Drawer geometry request is too large".into());}
-            let layout=Handle::from_raw(layout).and_then(handles::shared::<LayoutInput>).map_err(|error|error.to_string())?;
-            layout.input.drawer_geometry([width,height],source)
-        })}
-    }).unwrap_or_else(|_|Err("Drawer geometry failed".into()));
-    layout_packet(result)
+    unsafe {geometry_request(input,|source| {
+        let layout=Handle::from_raw(layout).and_then(handles::shared::<LayoutInput>).map_err(|error|error.to_string())?;
+        layout.input.drawer_geometry([width,height],source)
+    })}
 }
 
 /// # Safety
 /// Input is readable NUL-terminated UTF-8 JSON for the duration of this call.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn capy_panel_bridges(layout:u64,width:f32,height:f32,input: *const c_char) -> u64 {
-    let result=std::panic::catch_unwind(|| {
-        unsafe {crate::input::with_text(input, |text| {
-            if text.len()>256*1024 {return Err("Panel geometry request is too large".into());}
-            let measure=serde_json::from_str(text).map_err(|error|error.to_string())?;
-            resolve_layout(layout,width,height)?.measured_panel_bridges(measure).map(|frame|json!(frame))
-        })}
-    }).unwrap_or_else(|_|Err("Panel geometry failed".into()));
-    layout_packet(result)
+pub unsafe extern "C" fn capy_panel_bridges(layout:u64,width:f32,height:f32,input:*const c_char)->u64 {
+    unsafe {geometry_request(input,|source| {
+        let measure=serde_json::from_str(source).map_err(|error|error.to_string())?;
+        resolve_layout(layout,width,height)?.measured_panel_bridges(measure).map(|frame|json!(frame))
+    })}
 }
 
 fn request(json: &str) -> Result<Value, String> {
@@ -106,13 +107,10 @@ fn request(json: &str) -> Result<Value, String> {
             | "workspace_drag_preview"
             | "layer_drop"
             | "image_layer_drop"
-            | "drawer"
-            | "layer_drawer_sizing"
             | "bubble_motion"
             | "bubble_grab"
             | "can_take_bubble"
             | "bubble_wheel_color"
-            | "drawer_toolbar"
             | "expansion"
             | "renderer_stats"
             | "application_menu"
@@ -558,7 +556,6 @@ mod tests {
             json!({"type":"application_link","link":"source_code"}),
             json!({"type":"renderer_stats"}),
             json!({"type":"panel_handle_target","item":{"kind":"panel","panel":"layers"}}),
-            json!({"type":"drawer","column":null,"heights":[],"progress":1}),
             json!({"type":"expansion","panel":"toolbar","heights":[0,420],"progress":1}),
             json!({"type":"header","request":{"op":"geometry","model":host.session.state().workspace.layout.header.projected_for(layer_ui::Platform::Windows),"editing":false,"documents":1,"width":1400,"insets":[0,0],"metrics":[]}}),
             json!({"type":"swatch_sheet","query":"","current":layer_core::color::RgbColor::WHITE}),
@@ -648,7 +645,9 @@ mod tests {
         for query in [
             r#"{"type":"load_filter_package"}"#.to_owned(),
             r#"{"type":"invoke","command":"new_layer"}"#.to_owned(),
-            r#"{"type":"drawer_toolbar","panel":"layers","width":0,"height":480}"#.to_owned(),
+            r#"{"type":"drawer_toolbar","panel":"layers","width":320,"height":480}"#.to_owned(),
+            r#"{"type":"drawer","column":null,"heights":[],"progress":1}"#.to_owned(),
+            r#"{"type":"layer_drawer_sizing","measurement":{"fixed_height":0,"unit_height":1},"properties_height":0}"#.to_owned(),
             " ".repeat(8193),
             "{".to_owned(),
         ] {

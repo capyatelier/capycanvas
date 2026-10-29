@@ -852,7 +852,7 @@ impl NativeHost {
             },
         }
         let result = match serde_json::from_value(query).map_err(|e| e.to_string())? {
-            Query::Header { request } => self.header_request(request),
+            Query::Header { request } => self.header_request(request)?,
             Query::PanelBridges { layout, measure } => json!(layout.measured_panel_bridges(measure)?),
             Query::Catalog => json!(self.catalog),
             Query::NativeCaption { caption } => json!(caption.message(self.session.localization())),
@@ -1063,10 +1063,8 @@ impl NativeHost {
             }
             Query::LayerDrawerSizing {measurement, properties_height} => {
                 let state = self.session.state();
-                let heights = layer_ui::LayerDrawerSizing::pages(measurement, state.layers.len(), self.logical[1], properties_height);
-                let placements = heights.map(|height| state.customization.drawer.as_ref().and_then(|drawer|
-                    state.customization.drawer_placement(drawer, &state.workspace.layout, self.logical, &[height])));
-                json!({"heights": heights, "placements": placements, "footer_height": layer_ui::LayerDrawerSizing::FOOTER_HEIGHT})
+                state.customization.layer_drawer_sizing(state.customization.drawer.as_ref(),&state.workspace.layout,
+                    self.logical,measurement,state.layers.len(),properties_height)?
             }
             Query::DrawerToolbar {
                 panel,
@@ -1076,7 +1074,7 @@ impl NativeHost {
                 if ![width, height].into_iter().all(|v| v.is_finite() && v > 0.) {
                     return Err("Invalid drawer toolbar size".into());
                 }
-                self.session.state().workspace.layout.drawer_toolbar(panel,width)?
+                json!(self.session.state().workspace.layout.drawer_toolbar(panel,width)?)
             }
             Query::Navigator { viewport } => {
                 let state = self.session.state();
