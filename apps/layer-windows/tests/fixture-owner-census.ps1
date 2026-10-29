@@ -33,7 +33,7 @@ try {
  Registry @{process_id=$PID;windows=@(@{hwnd=$handle;id=77},@{hwnd=$handle;id=78})};Expect-Failure {Register}
  Registry @{process_id=$PID;windows=@(@{hwnd=$handle;id=78})};Expect-Failure {Register}
  Registry @{process_id=$PID;windows=@(@{hwnd=$handle;id=77})};[CapyWindowApi]::Owner=$PID+1;Expect-Failure {Register};[CapyWindowApi]::Owner=$PID
- $context=Get-Content $env:CAPY_FIXTURE_CONTEXT -Raw|ConvertFrom-Json -AsHashtable;$context.windows[0].executable='foreign.exe';$context|ConvertTo-Json -Depth 8|Set-Content $env:CAPY_FIXTURE_CONTEXT;Expect-Failure {Register}
+ $context=Get-Content $env:CAPY_FIXTURE_CONTEXT -Raw|ConvertFrom-Json;$context.windows[0].executable='foreign.exe';$context|ConvertTo-Json -Depth 8|Set-Content $env:CAPY_FIXTURE_CONTEXT;Expect-Failure {Register}
  $fakeRoot=[pscustomobject]@{}
  $fakeRoot|Add-Member -MemberType ScriptMethod -Name FindFirst -Value {param($scope,$condition)[pscustomobject]@{id='drawing-canvas'}}
  $script:lookupWindow=[pscustomobject]@{Root=$fakeRoot;Handle=[IntPtr]$handle}
