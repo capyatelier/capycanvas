@@ -104,14 +104,15 @@ impl PanelMeasurementCache {
             let finite=|v:f32|v.is_finite()&&(0.0..1_000_000.0).contains(&v);
             if !finite(report.request.width)||report.request.width<=0.
                 ||report.tab_width.is_some_and(|v|!finite(v)||v<=0.)
-                ||report.body.is_some_and(|b|!finite(b.actual_width)||b.actual_width<=0.||!finite(b.content_height)
+                ||report.body.is_some_and(|b|!finite(b.actual_width)||!finite(b.content_height)
                     ||b.scroll.is_some_and(|s|!finite(s.fixed_height)||!finite(s.unit_height)||s.fixed_height>b.content_height)) {
                 return Err("Invalid panel measurement".into());
             }
             if cache.context.as_ref().is_some_and(|c|!report.context.same_metrics(c)){continue;}
             let Some(identity)=cache.identities.iter().find(|i|i.panel==report.request.identity.panel) else {continue;};
             if report.request.identity.tab!=identity.tab {report.tab_width=None;}
-            if report.request.identity.body!=identity.body {report.body=None;}
+            if report.request.identity.body!=identity.body||report.body.is_some_and(|body|body.actual_width==0.
+                ||(body.actual_width-report.request.width).abs()*report.context.scale>1.) {report.body=None;}
             if report.tab_width.is_none()&&report.body.is_none(){continue;}
             cache.context=Some(report.context.clone());
             report.request.width=panel_measurement_width(report.request.width);
@@ -126,13 +127,9 @@ impl PanelMeasurementCache {
                 let previous=cache.bodies.iter().position(|entry|entry.panel==panel&&entry.key==identity.body
                     &&entry.width==report.request.width&&entry.split_filters==report.request.split_filters
                     &&entry.context.same_metrics(&report.context));
-                let mut body=Some(body);
-                if let Some(index)=previous {
-                    let previous=cache.bodies.remove(index);
-                    if previous.body.is_some_and(|old|old.actual_width!=body.unwrap().actual_width){body=None;}
-                }
+                if let Some(index)=previous {cache.bodies.remove(index);}
                 cache.bodies.push(MeasuredBody {panel,key:identity.body.clone(),context:report.context,
-                    width:report.request.width,split_filters:report.request.split_filters,body,verified:true});
+                    width:report.request.width,split_filters:report.request.split_filters,body:Some(body),verified:true});
                 if cache.bodies.iter().filter(|entry|entry.panel==panel).count()>8 {
                     let first=cache.bodies.iter().position(|entry|entry.panel==panel).unwrap();cache.bodies.remove(first);
                 }
@@ -181,7 +178,7 @@ mod tests {
     fn request(cache:&PanelMeasurementCache,width:f32)->PanelMeasurementRequest {cache.request(&cache.identities[0],width,false)}
     fn report(cache:&PanelMeasurementCache,width:f32,height:f32)->PanelMeasurementReport {
         PanelMeasurementReport {request:request(cache,width),context:PanelMetricContext {generation:1,scale:1.25,text_scale:1.,style:"native".into()},
-            tab_width:Some(110.),body:Some(PanelBodyMeasurement {actual_width:width-2.,content_height:height,scroll:None})}
+            tab_width:Some(110.),body:Some(PanelBodyMeasurement {actual_width:width,content_height:height,scroll:None})}
     }
     #[test]
     fn width_changes_select_only_matching_body_facts_and_keep_tabs() {
@@ -225,13 +222,16 @@ mod tests {
         assert_eq!(cache.context.unwrap().text_scale,1.5);
     }
     #[test]
-    fn inconsistent_actual_width_requires_a_settled_report() {
-        let cache=cache();let cache=cache.with_reports(vec![report(&cache,200.,600.)]).unwrap();
-        let mut contradictory=report(&cache,200.,620.);contradictory.body.as_mut().unwrap().actual_width=196.;
-        let cache=cache.with_reports(vec![contradictory.clone()]).unwrap();
-        assert!(!request(&cache,200.).body_measured);
-        let cache=cache.with_reports(vec![contradictory]).unwrap();
-        assert_eq!(cache.project(&[request(&cache,200.)])[0].content_height,620.);
+    fn width_tolerance_keeps_independent_tabs_and_previous_valid_bodies() {
+        let cache=cache();let mut measured=report(&cache,200.,600.);measured.context.scale=2.;
+        let cache=cache.with_reports(vec![measured.clone()]).unwrap();
+        for (actual_width,expected) in [(0.,600.),(196.,600.),(200.5,620.),(200.515625,600.)] {
+            let mut next=measured.clone();next.tab_width=Some(120.);
+            next.body=Some(PanelBodyMeasurement {actual_width,content_height:620.,scroll:None});
+            let updated=cache.with_reports(vec![next.clone()]).unwrap().with_reports(vec![next]).unwrap();
+            let projected=updated.project(&[request(&updated,200.)]);
+            assert_eq!(projected[0].content_height,expected);assert_eq!(projected[0].tab_width,120.);
+        }
     }
     #[test]
     fn invalid_reports_are_transactional_and_cache_is_bounded() {
