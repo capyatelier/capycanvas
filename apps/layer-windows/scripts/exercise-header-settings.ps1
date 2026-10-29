@@ -1,5 +1,8 @@
-﻿param([Parameter(Mandatory)][int]$ProcessId,[Parameter(Mandatory)][long]$WindowHandle,[Parameter(Mandatory)][string]$StateFile,[string]$EvidenceDirectory=(Split-Path -Parent $StateFile))
+﻿param([int]$ProcessId,[long]$WindowHandle,[string]$StateFile,[string]$EvidenceDirectory,[string]$Executable)
 $ErrorActionPreference='Stop'
+if($Executable){& (Join-Path $PSScriptRoot 'exercise-header.ps1') -Executable $Executable -Journey catalog-only;return}
+if(!$ProcessId -or !$WindowHandle -or !$StateFile){throw 'Supply an executable or an owned process, window and state file'}
+if(!$EvidenceDirectory){$EvidenceDirectory=Split-Path -Parent $StateFile}
 Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
 if(!('CapyRowPointer' -as [type])){Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')}
 $app=Get-Process -Id $ProcessId
@@ -33,7 +36,9 @@ function Control([string]$Name,$Type=[System.Windows.Automation.ControlType]::Bu
     $hit.element
 }
 function Invoke-Control([string]$Name,$Type=[System.Windows.Automation.ControlType]::Button) {
-    (Control $Name $Type).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+    $item=Control $Name $Type;$pattern=$null
+    if($item.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern,[ref]$pattern)){$pattern.Invoke()}
+    else{$item.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()}
 }
 function Toggle-Control([string]$Name,$Type=[System.Windows.Automation.ControlType]::Button) {
     (Control $Name $Type).GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
@@ -121,10 +126,10 @@ function Wait-SwatchAllocation([string]$Id,$Row,[double]$Scale,[bool]$Open,[int]
     }
     $stable.value
 }
-function Assert-SwatchAllocation($Closed,$Open,$ClosedAgain,[double]$Gap,[double]$Scale) {
+function Assert-SwatchAllocation($Closed,$Open,$ClosedAgain,[double]$Gap,[double]$Scale,[bool]$Inline) {
     if([double]::IsNaN($Scale) -or [double]::IsInfinity($Scale) -or $Scale -le 0 -or !$Open.entry -or $Open.entry_in_strip){throw 'Native swatch allocation does not isolate its revealed entry'}
     $inset=$Open.row.bottom-$Open.entry.bottom
-    $metrics=[ordered]@{gap=($Open.entry.top-$Open.strip.bottom)/$Scale;growth=($Open.row.height-$Closed.row.height-$Open.entry.height)/$Scale;closed_excess=($Closed.row.bottom-$Closed.strip.bottom-$inset)/$Scale;closed_again_excess=($ClosedAgain.row.bottom-$ClosedAgain.strip.bottom-$inset)/$Scale;closed_height_change=($ClosedAgain.row.height-$Closed.row.height)/$Scale;strip_height_change=($Open.strip.height-$Closed.strip.height)/$Scale;row_width_change=($Open.row.width-$Closed.row.width)/$Scale}
+    $metrics=if($Inline){[ordered]@{gap=($Open.strip.x-$Open.entry.x-$Open.entry.width)/$Scale;entry_alignment=(($Open.entry.top+$Open.entry.bottom)-($Open.strip.top+$Open.strip.bottom))/(2*$Scale);row_height_change=($Open.row.height-$Closed.row.height)/$Scale;closed_height_change=($ClosedAgain.row.height-$Closed.row.height)/$Scale;strip_height_change=($Open.strip.height-$Closed.strip.height)/$Scale;row_width_change=($Open.row.width-$Closed.row.width)/$Scale}}else{[ordered]@{gap=($Open.entry.top-$Open.strip.bottom)/$Scale;growth=($Open.row.height-$Closed.row.height-$Open.entry.height)/$Scale;closed_excess=($Closed.row.bottom-$Closed.strip.bottom-$inset)/$Scale;closed_again_excess=($ClosedAgain.row.bottom-$ClosedAgain.strip.bottom-$inset)/$Scale;closed_height_change=($ClosedAgain.row.height-$Closed.row.height)/$Scale;strip_height_change=($Open.strip.height-$Closed.strip.height)/$Scale;row_width_change=($Open.row.width-$Closed.row.width)/$Scale}}
     foreach($name in $metrics.Keys){$expected=if($name -in @('gap','growth')){$Gap}else{0};if([double]::IsNaN($metrics[$name]) -or [double]::IsInfinity($metrics[$name]) -or [Math]::Abs($metrics[$name]-$expected) -gt 1./$Scale){throw "Native custom-color allocation differs at ${name}: $($metrics|ConvertTo-Json -Compress)"}}
     $metrics
 }
@@ -144,7 +149,7 @@ function Check-SwatchAllocation([string]$Id) {
         if(!(Control $row.title ([System.Windows.Automation.ControlType]::Edit)).Current.HasKeyboardFocus){throw 'Opening Custom did not focus the retained native field'}
         (Swatch-Button $Id 0).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
         $record.closed_again=Wait-SwatchAllocation $Id $row $record.scale $false 0 $row.kind.swatches[0].value
-        $gap=if($row.kind.inline){8.}else{12.};$record.metrics=Assert-SwatchAllocation $record.closed $record.open $record.closed_again $gap $record.scale
+        $gap=if($row.kind.inline){8.}else{12.};$record.metrics=Assert-SwatchAllocation $record.closed $record.open $record.closed_again $gap $record.scale ([bool]$row.kind.inline)
     }finally{
         try{
             (Swatch-Button $Id $selected).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()

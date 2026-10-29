@@ -40,6 +40,40 @@ try {
  (Control 'drawing-canvas').SetFocus()
  [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),[uint16]0xBC)
  Wait-Until {(Prefs) -and (Shown 'CloseButton')} 'Ctrl+, did not open Preferences'
+ $originalTransparency=(Model).state.settings.transparency
+ foreach($glass in @(@{name='off';index=0},@{name='low';index=1})){
+  Set-CapyTransparency $glass.name
+  foreach($page in @((Prefs).pages)){
+   Invoke-Id ('preference-page-'+$page.id)
+   Wait-Until {(Prefs).page -eq $page.id -and (Shown 'settings-title')} "Preferences page $($page.id) did not open"
+   $name="preferences-$($page.id)-$Theme-glass-$($glass.name)"
+   Capture $name -WithModel -Composed
+   if($page.id -eq 'appearance'){
+    $dpi=[CapyRowPointer]::GetDpiForWindow([IntPtr]$root.Current.NativeWindowHandle)/96.
+    foreach($row in @($page.groups.rows|Where-Object {$_.kind.type -eq 'swatches' -and $_.kind.inline -and $_.visible -ne $false})){
+     $swatches=@(0..($row.kind.swatches.Count-1)|ForEach-Object {Shown ('setting-'+$row.id+'-swatch-'+$_)})
+     for($i=1;$i -lt $swatches.Count;$i++){
+      $pitch=($swatches[$i].Current.BoundingRectangle.Left-$swatches[$i-1].Current.BoundingRectangle.Left)/$dpi
+      if([Math]::Abs($pitch-38) -gt 1){throw "Inline swatch $($row.id) pitch is $pitch DIP instead of 38"}
+     }
+    }
+   }
+   if($page.id -eq 'shortcuts'){
+    Type-Into 'shortcuts-search' 'Undo'
+    Wait-Until {(Prefs).shortcut_query -eq 'Undo' -and (Page).filtering -and (Shown 'shortcut-command.Undo')} 'Preferences capture search did not filter Undo'
+    Capture ($name+'-filtered') -WithModel -Composed
+    Type-Into 'shortcuts-search' ''
+    Wait-Until {!(Page).filtering} 'Preferences capture search did not clear'
+   }
+   $metrics=@((Control 'Preferences' -Name -Type ([System.Windows.Automation.ControlType]::Window)).FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition)|Where-Object {!$_.Current.IsOffscreen -and $_.Current.AutomationId}|ForEach-Object {
+    $item=$_.Current;$bounds=$item.BoundingRectangle
+    [ordered]@{id=$item.AutomationId;name=$item.Name;type=$item.ControlType.ProgrammaticName;x=$bounds.X;y=$bounds.Y;width=$bounds.Width;height=$bounds.Height}
+   })
+   $metrics|ConvertTo-Json -Depth 5|Set-Content (Join-Path $run ($name+'-metrics.json'))
+  }
+ }
+ Set-CapyTransparency $originalTransparency
+ $checks.preferences_pages_and_glass_captures='passed'
  Invoke 'Keyboard Shortcuts' -Name
  Wait-Until {(Prefs).page -eq 'shortcuts' -and (Shown 'shortcut-category-Modifier keys') -and (Shown 'keymap-preset')} 'Keyboard Shortcuts did not list its categories before any search'
  if((Page).filtering){throw 'The shortcut page opened filtered'}
@@ -60,6 +94,7 @@ try {
  $search=Control 'shortcuts-search';$search.SetFocus();Wait-Until {$search.Current.HasKeyboardFocus} 'Shortcut search did not take focus'
  [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),[uint16]0x5A)
  Wait-Until {(Prefs).shortcut_query -and @((Prefs).shortcuts|Where-Object {$_.id -eq 'command.Undo' -and $_.visible}).Count -eq 1 -and (Shown 'shortcut-command.Undo')} 'A pressed Ctrl+Z did not find Undo'
+ Capture "shortcuts-filters-$Theme" -WithModel -Composed
  $checks.chord_search='passed'
 
  Invoke-Id 'shortcut-command.Undo'

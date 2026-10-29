@@ -174,6 +174,8 @@ copy_struct! { ColorCopy {
     highlight_clipped_colors: NATIVE_HIGHLIGHT_CLIPPED_COLORS,
     screen_details: NATIVE_SCREEN_DETAILS,
     manage_profiles: COLOR_FEATURES_PROFILE_MANAGE,
+    profile_library_title: COLOR_FEATURES_PROFILE_LIBRARY_TITLE,
+    profile_menu_help: COLOR_FEATURES_PROFILE_MENU_HELP,
     effects: NATIVE_COLOR_EFFECTS,
     category: NATIVE_COLOR_CATEGORY,
     color: WORKSPACE_PANEL_COLOR,

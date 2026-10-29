@@ -540,6 +540,26 @@ function Model{
     if($model){$script:CapyTrace.model=$model}
     if($script:CapyTrace.process -eq $review.Id){$script:CapyTrace.model}
 }
+function Set-CapyTransparency([ValidateSet('off','low','medium','high')][string]$Value){
+    $opened=!(Model).preferences
+    if($opened){
+        [CapyRowPointer]::SetForegroundWindow([IntPtr]$root.Current.NativeWindowHandle)|Out-Null
+        Wait-Until {$canvas=Find 'drawing-canvas';$canvas -and $canvas.Current.IsEnabled} 'Previous native dialog did not release the drawing canvas'
+        $canvas=Control 'drawing-canvas' -Arranged;$canvas.SetFocus()
+        Wait-Until {$canvas.Current.HasKeyboardFocus} 'The drawing canvas did not take focus before Preferences'
+        [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),[uint16]0xBC)
+        Wait-Until {(Model).preferences -and (Find 'preference-page-appearance')} 'Preferences did not open for transparency capture'
+    }
+    Invoke-Id 'preference-page-appearance'
+    Wait-Until {(Model).preferences.page -eq 'appearance'} 'Appearance did not open for transparency capture'
+    $index=[array]::IndexOf(@('off','low','medium','high'),$Value)
+    Invoke-Id ('preference-transparency-'+$index)
+    Wait-Until {(Model).state.settings.transparency -eq $Value} 'Panel transparency did not acknowledge its native choice'
+    if($opened){
+        Invoke-Id 'CloseButton'
+        Wait-Until {!(Model).preferences} 'Preferences did not close after transparency capture'
+    }
+}
 function Capture([string]$Name,[switch]$WithModel,[switch]$Composed){
     if($script:CapyCaptureDelay){Start-Sleep -Milliseconds $script:CapyCaptureDelay}
     $handle=[IntPtr]$root.Current.NativeWindowHandle;$owner=[uint32]0

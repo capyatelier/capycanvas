@@ -2,6 +2,9 @@
 #include "UiControls.h"
 
 namespace CapyUi {
+struct PreferenceGroup {StackPanel section,list,actions;Grid heading;TextBlock title{nullptr},summary{nullptr};};
+PreferenceGroup preferenceGroup(std::shared_ptr<WorkspaceData> const&,hstring const&,hstring const& summary=L"");
+
 class ShortcutPage {
 public:
     ShortcutPage(std::shared_ptr<WorkspaceData> data,Grid overlay);

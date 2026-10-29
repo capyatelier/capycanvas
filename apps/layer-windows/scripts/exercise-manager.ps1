@@ -67,6 +67,32 @@ function Close {
     if((Get-Item -LiteralPath $stderr).Length){throw 'Native stderr requires inspection'}
 }
 function Check-Pins([string]$WorkspaceId,[string]$WorkspaceName){
+    if([CapyRowPointer]::Initialized){[CapyRowPointer]::Dispose()}
+    [CapyRowPointer]::Initialize([uint32]$review.Id)
+    $transparency=(Model).state.settings.transparency
+    foreach($glass in @(@{name='off';index=0},@{name='low';index=1})){
+        Set-CapyTransparency $glass.name
+        Menu 'Manage Workspaces…'
+        $row=Control ('workspace-manager-row-'+$WorkspaceId) -Arranged
+        $rect=$row.Current.BoundingRectangle
+        [CapyRowPointer]::Hover([int]($rect.Left+$rect.Width*.5),[int]($rect.Top+$rect.Height*.5))
+        Capture ("manager-hover-$Theme-glass-"+$glass.name) -WithModel -Composed
+        $preview=@((Manager).rows|Where-Object id -ne $WorkspaceId)[0]
+        $selected=Select-Row $preview.id
+        $selectedBounds=$selected.Current.BoundingRectangle
+        $details=@{item=$null}
+        Wait-Until {
+            $details.item=@((Control 'workspace-manager').FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::Text))|Where-Object {$_.Current.Name -eq $preview.title -and !$_.Current.IsOffscreen -and $_.Current.BoundingRectangle.Left -ge $selectedBounds.Right - 1})|Select-Object -First 1
+            $null -ne $details.item
+        } 'Workspace details title is not arranged to the right of the list'
+        $detailsBounds=$details.item.Current.BoundingRectangle
+        $dialogBounds=(Control 'workspace-manager').Current.BoundingRectangle
+        $primaryBounds=(Button (Manager).primary).Current.BoundingRectangle
+        [ordered]@{row=$selectedBounds;details_title=$detailsBounds;primary=$primaryBounds;overlay=$dialogBounds;dpi=[CapyRowPointer]::GetDpiForWindow([IntPtr]$root.Current.NativeWindowHandle)}|ConvertTo-Json -Depth 5|Set-Content (Join-Path $run ("manager-split-$Theme-glass-"+$glass.name+'.json'))
+        Capture ("manager-selected-$Theme-glass-"+$glass.name) -WithModel -Composed
+        Choose 'Cancel';Closed
+    }
+    Set-CapyTransparency $transparency
     Menu 'Manage Workspaces…'
     Capture 'workspaces'
     $pinId='workspace-manager-pin-'+$WorkspaceId
@@ -328,5 +354,6 @@ try {
     if($review -and !$review.HasExited){try{Capture 'failure'}catch{}}
     [IO.File]::WriteAllText((Join-Path $run 'failure.txt'),($_|Out-String)+$_.ScriptStackTrace);throw
 }finally{
+    [CapyRowPointer]::Dispose()
     Exit-CapyEnvironment
 }

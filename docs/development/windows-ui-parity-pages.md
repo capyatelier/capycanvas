@@ -18,7 +18,7 @@ also fixes reported bugs 9, 10, 12 and 14, the page half of 11, and verifies
 > shared helpers (`UiControls.h`, `ChoiceFeedback`, `ButtonFeedback`,
 > `NumberControl`, `PickerDialog.h`, `NativeMenus.h`); do not edit them. Start
 > with the independent items, then fetch `origin/main` and adopt A's helpers
-> when they land. Edit only the files your plan owns. Work in the four batched
+> when they land. Edit only the files your plan owns. Work in the batched
 > milestones of the order of work: one commit and one VM test round each. Fix
 > root causes, add regression checks, push each milestone to `origin/main` as
 > soon as its checks pass, and remove each finding from the plan in the commit
@@ -40,7 +40,7 @@ catalog and run the localization checks).
 
 ## Order of work
 
-Work in four milestones. Each milestone is one commit, one VM build and one
+Each milestone is one commit, one VM build and one
 test round, pushed to `origin/main` when its checks pass. Fix every listed
 finding in the milestone's files before building, so the VM builds and captures
 once per milestone rather than once per finding. Write the next milestone's
@@ -52,15 +52,6 @@ style), do not create a local copy in your files; wait for M4.
 `PickerDialog.h` and `NumberControl.cpp` belong to Agent A: put New-drawing-only
 constants in `NewDrawingDialog.cpp`, and fix detached number entries in
 `numberField`, not in NumberControl.
-
-**M1. Preferences, shortcuts and workspace pages** (`SettingsView`,
-`ShortcutPage`, `WorkspaceManagerView`, `WorkspaceStorageView`,
-`WorkspaceDialogs`): bugs 10, 12, 14 and the placement half of bug 9.
-PREF-3 (row placement), 5, 6 (icon size, spacing and centring), 9, 10, 12, 13,
-14, 15, 17, 18, 19 (CHECK), 20, 21, 22, 23, 24, 25 (CHECK), 26, 27, 28 (layout,
-radius, padding, inline buttons), 30, 31. Grep these files for every other
-`ContentControl` icon host and fix them in the same commit.
-Leave for M4: PREF-1, 2, 3 face, 4, 7, 8, 11, 16, 29, the 28 button face *(A)*.
 
 **M2. Title bar, drawing tabs, status, zoom, canvas bar and notice**
 (`HeaderView`, `HeaderInput`, `HeaderStatus`, `DrawingTabs`, `ZoomReadout`,
@@ -105,7 +96,7 @@ finish.
 - Shared Rust (M3): `cargo test --locked -p layer-host -p layer-ui -p layer-workspace --lib`
   and the localization checks on Linux.
 - Fixtures per milestone (they live in `apps/layer-windows/scripts/exercise-*.ps1`):
-  - M1: `header-settings`, `settings-storage`, `shortcut-page`, `shortcuts`,
+  - Preferences and workspaces: `header-settings`, `settings-storage`, `shortcut-page`, `shortcuts`,
     `manager`, `manager-focus`.
   - M2: `switcher`, `switcher-drag`, `header`, `header-placement`,
     `canvas-bar`, `notice`, `zoom-readout`, `window`.
@@ -278,20 +269,9 @@ Key palette fact (theme.rs:390-396): `input = surface([51;3],[250;3])` and `sett
 - GTK reference: `workspace_manager_dialog.rs:728` uses `gtk::DropDown::from_strings`, which has the Adwaita default button fill.
 - Fix direction: same helper fix as PREF-1.
 
-##### PREF-3: "Manage profiles" is a fill-less bold label placed at the top of the page; GTK uses a suffix button in a row at the end (bug 9)
-- Class: DEFAULT-CONTROL, LAYOUT-COLLAPSE, ALIGNMENT   Confidence: CERTAIN   Severity: high   Reported bug: 9
-- Windows: `SettingsView.cpp:207-213`. It is built with `button(data,…)` (UiControls.h:466-475), which applies
-  `Background(clear())`, `FontWeight Bold`, `Padding 0`, `BorderThickness 0`. The code then sets `Padding({10,5,10,5})`,
-  `MinHeight(34)` and `HorizontalAlignment::Center`, and appends the button to `container` *before* the group loop. It
-  therefore renders as centred bold text with only a hover overlay, sits above the first group and has no title or help text.
-- GTK reference: `preferences.rs:925-941` adds a new `adw::PreferencesGroup` *after* all groups. It holds an `ActionRow`
-  (title `ProfileCopy::library_title`, subtitle `menu_help`) with a suffix `gtk::Button` labelled `copy.manage`, set to
-  `valign(Center)` and `set_activatable_widget` so the whole row hovers and activates. The button uses the Adwaita default
-  style (`alpha(currentColor,.1)` fill, 6px radius).
-- Shared source: `color_feature_copy.rs:112-149` (`library_title`, `menu_help`, `manage`).
-- Fix direction: build it as a normal card section after the groups, using the same `field()` row as an `action` row
-  (title and description on the left, button on the right). Give the action button a real fill (see PREF-4). Expose
-  `library_title` and `menu_help` in `native_copy` if they are missing.
+##### PREF-3: Manage profiles still needs the raised button face *(A)*
+- The profile-library row is after the colour groups, with its localized title, help and suffix action.
+- Use Agent A's raised-button helper for the suffix action in M4.
 
 ##### PREF-4: Every action-row button and every sheet `flat()` button lacks the Adwaita button fill; `flat()` uses an opaque white/black brush
 - Class: DEFAULT-CONTROL, BORDER/COLOR   Confidence: CERTAIN   Severity: high   Reported bug: class of 9
@@ -310,29 +290,6 @@ Key palette fact (theme.rs:390-396): `input = surface([51;3],[250;3])` and `sett
 - Fix direction: add one "default button" helper (fill `tint("text",26)` or palette `control_fill`, `controlCorner()`,
   `Padding{10,5,10,5}`, `MinHeight 34`). Use it for action rows, Manage profiles, `flat()` and `actionButton()`. Delete
   `flat()`'s `brush("button")`.
-
-##### PREF-5: Preferences sidebar icons sit at the top of the row (bug 12)
-- Class: VCENTER   Confidence: CERTAIN   Severity: medium   Reported bug: 12
-- Windows: `SettingsView.cpp:198-201`. Each tab's content is a `Grid` with a `ContentControl tabIcon` (16px Image from
-  `icon()`) next to the label. The ContentControl has no `VerticalAlignment` or `VerticalContentAlignment`. It stretches
-  to the row height, and the WinUI default `ContentControl` style is `VerticalContentAlignment=Top`, so the 16px image
-  draws at the top of the label's ~19.5px line box (about 2px high). When a label wraps to two lines, the icon stays pinned
-  to the first line's top.
-- GTK reference: `preferences.rs:396,942-947`. `adw::ViewSwitcherSidebar` rows centre the icon and label (`valign center`).
-- Fix direction: use the `Image` directly (re-source it with `setIcon` in the theme binding, as `ShortcutPage::themed`
-  does) and set `VerticalAlignment::Center`. Alternatively set `tabIcon.VerticalContentAlignment(Center)` and
-  `VerticalAlignment(Center)`. Remove the ContentControl wrapper pattern in this file (see PREF-6).
-
-##### PREF-6: Icons in a choice dropdown (Cursor shape) sit too high, and are 16px with 8px spacing instead of 24px with 12px (bug 10)
-- Class: VCENTER, METRIC, DEFAULT-CONTROL   Confidence: CERTAIN (wrapper), LIKELY (padding)   Severity: medium   Reported bug: 10
-- Windows: `SettingsView.cpp:333-339`. Each option is a horizontal `StackPanel` (`Spacing 8`) holding a
-  `ContentControl glyph` (no vertical alignment, so its content is Top-aligned as in PREF-5) with `icon(id,theme)` at the
-  default 16px, plus a label. On top of that, `choiceColors` never sets `Padding`, so the WinUI default `ComboBoxPadding`
-  `12,5,0,7` (asymmetric) lifts the closed box's content by about 1px. The two effects add up to roughly 3px.
-- GTK reference: `preferences.rs:733-766`. The factory row is `gtk::Box` with spacing **12**, `Image` `pixel_size(24)` and a
-  label. GtkBox centres both children. The same factory is used for the button and the list.
-- Fix direction: use an `Image` set to `VerticalAlignment Center` at 24px with option spacing 12. In `choiceColors` set
-  symmetric `Padding({field_padding,0,…,0})`, `VerticalContentAlignment Center`, and `MinHeight(controlHeight)` or 34.
 
 ##### PREF-7: Systemic text-centring error in `label()` (bug 13 and "centering errors are everywhere")
 - Class: VCENTER   Confidence: LIKELY (font metrics; needs a pixel check)   Severity: medium   Reported bug: 13 (and 2)
@@ -360,26 +317,6 @@ Key palette fact (theme.rs:390-396): `input = surface([51;3],[250;3])` and `sett
 - Fix direction: add one `compactSwitch(data)` helper with a minimal template or resource overrides (palette accent,
   control_fill, no content column), and use it in both places.
 
-##### PREF-9: The shortcut-row hover/press highlight is inset 14px/8px inside the row, unlike every other list row
-- Class: HIGHLIGHT-GEOMETRY   Confidence: CERTAIN   Severity: medium   Reported bug: class of 6/14
-- Windows: `ShortcutPage.cpp:371-385`. `row=line()` is a Grid with `Padding({14,8,14,8})`. The clickable `choose` button
-  (`Padding 0`, `controlCorner()` radius) sits *inside* that padding. Hover and press therefore paint a rounded rectangle
-  inset 14px horizontally and 8px vertically, while `navRow` (:164-167), `buttonRow` (:183-187) and picker rows (:530)
-  paint the full row with square corners.
-- GTK reference: `shortcut_page.rs:1081-1100`. The `ActionRow` is `set_activatable(true)`, so the hover covers the whole
-  row. The reset button is a separate flat circular suffix.
-- Fix direction: make the row itself the button (as `navRow` does, `Padding 14,8`, `CornerRadius 0`) and keep the reset
-  glyph as a sibling column outside the button, or overlay it.
-
-##### PREF-10: Full-bleed row highlights are not clipped to the card's 12px corners
-- Class: HIGHLIGHT-GEOMETRY, SEAM   Confidence: LIKELY   Severity: low   Reported bug: class of 6
-- Windows: cards are `Border` + `CornerRadius 12` (`SettingsView.cpp:220`, `ShortcutPage.cpp:139`), and rows are buttons with
-  `CornerRadius 0` (`navRow`, `buttonRow`, picker `choice`). A WinUI Border does not clip its child, so hovering or pressing the
-  first or last row paints square corners past the card's rounded corners.
-- GTK reference: `list.boxed-list` rows inherit rounded first/last corners from libadwaita.
-- Fix direction: clip the card (as `WorkspaceManagerView` does with `ClipSurface`, :205) inside the `group()` and
-  `build()` card factories, so every row is covered.
-
 ##### PREF-11: Row hover and press strength is 8%/16%, compared with Adwaita's 3%/8% for list rows
 - Class: HIGHLIGHT-GEOMETRY, METRIC   Confidence: LIKELY   Severity: low   Reported bug: none
 - Windows: `buttonColors` uses `hover=20,press=41` (UiControls.h:461-463 and ButtonFeedback.h:43) for every row button
@@ -388,47 +325,6 @@ Key palette fact (theme.rs:390-396): `input = surface([51;3],[250;3])` and `sett
 - GTK reference: preference list rows use libadwaita's `row.activatable:hover`/`:active` (about `alpha(currentColor,.03/.08)`).
   Custom buttons use `.08/.16` (`style.css:580-632`). `.workspace-list-actions button` is `flat` (Adwaita flat hover).
 - Fix direction: give `buttonColors` a list-row preset and use it for row buttons. Drop the ad-hoc `38`.
-
-##### PREF-12: Group heading-to-card gap differs between pages (6px against 12px)
-- Class: METRIC, ALIGNMENT   Confidence: CERTAIN   Severity: low   Reported bug: none
-- Windows: `SettingsView.cpp:217-218`: heading `Margin{0,8,0,0}` + `section.Spacing(6)`, so 6px to the card.
-  `ShortcutPage.cpp:128,137`: heading `Margin{0,8,0,6}` + `Spacing(6)`, so 12px. Shortcuts and Input groups therefore sit
-  6px further from their titles than Appearance, Canvas and the other pages. The Shortcuts title (:242) uses yet another
-  layout (`Margin{0,8,0,0}`, `Spacing 12`).
-- GTK reference: every page uses `adw::PreferencesGroup`, so header spacing is the same everywhere.
-- Fix direction: build all groups with one `group()` factory (ShortcutPage already has one; SettingsView should reuse it).
-
-##### PREF-13: Cards have no ring or shadow lines
-- Class: BORDER/COLOR   Confidence: CERTAIN   Severity: low   Reported bug: none
-- Windows: cards are `Background(card)` only (`SettingsView.cpp:220`, `ShortcutPage.cpp:139`, workspace `listSurface`
-  `WorkspaceManagerView.cpp:519`).
-- GTK reference: `style.css:11,14`. `list.boxed-list, .card` draw `--line-settings-card-ring/-shadow/-far-shadow` inside
-  dialog sheets.
-- Shared source: `Lines.settings.card_ring/card_shadow/card_far_shadow` (theme.rs SurfaceLines), available as `data->line(L"settings",…)`.
-- Fix direction: give the shared card factory a 1px `line("settings","card_ring")` border, plus a shadow if Windows
-  composition allows it.
-
-##### PREF-14: Image-tile choices lack the base fill and the selected accent ring
-- Class: BORDER/COLOR, HIGHLIGHT-GEOMETRY   Confidence: CERTAIN   Severity: low   Reported bug: none
-- Windows: `SettingsView.cpp:279-291`. A 64×64 ToggleButton with `Padding 8` and radius `32*CornerFit` (these match).
-  Unselected `Background(clear())`; selected `selected(data)` with no ring.
-- GTK reference: `style.css:255-256`. `.image-selector button` uses `background: alpha(fg,.04)`. `:checked` uses
-  `background: var(--selection-bg); box-shadow: inset 0 0 0 2px var(--accent-bg-color)`.
-- Fix direction: unselected `tint("text",10)`. Selected: add an inner 2px `accent` border (`BorderThickness 2`, `BorderBrush accent`).
-
-##### PREF-15: Inline swatches change width when selected, use too wide a pitch, and are laid out below the title instead of as a suffix
-- Class: LAYOUT-COLLAPSE, ALIGNMENT, METRIC   Confidence: CERTAIN   Severity: medium   Reported bug: none
-- Windows: `SettingsView.cpp:351-416`. Each swatch sits in a `ring` Border with `Padding 2` and
-  `BorderThickness(active?2:0)`, so the selected item is 4px wider and its neighbours in the inline `StackPanel`
-  (`Spacing 10`) move when the selection changes. The pitch is 28+8+10 = 46px against GTK's 38px. For `inline` rows the
-  circles and the hex entry are added under the title with `ColumnSpan 2` (:415), and the entry appears *below* the circles.
-- GTK reference: `swatch_selector.rs:40-75` and `preferences.rs:711-714`. The inline selector is a row **suffix**
-  (`add_suffix`) on the right, with the entry revealer sliding in *left* of the circles (`SlideLeft`). Selection is
-  `outline: 2px; outline-offset: 2px` (`style.css:451`), which does not affect layout. Spacing is 10 (8 to the entry). In the
-  non-inline layout the flow box spacing is 10 and the entry has a 12px top margin. Unselected swatches without a colour use
-  `alpha(fg,.1)` fill + `inset 1px alpha(fg,.15)`; Windows uses no fill + a 1px `tint(text,64)` (25%) border (:389).
-- Fix direction: give the ring a constant 2px border (transparent when inactive). Put inline selectors in column 1 as a
-  suffix, with the entry to the left of the circles. Use GTK's empty-swatch fill and border alphas.
 
 ##### PREF-16: Choice rows draw a filled ComboBox field; GTK ComboRow has no field box
 - Class: DEFAULT-CONTROL, BORDER/COLOR   Confidence: LIKELY   Severity: low   Reported bug: none
@@ -439,119 +335,9 @@ Key palette fact (theme.rs:390-396): `input = surface([51;3],[250;3])` and `sett
 - Fix direction: decide on parity. Either style the closed ComboBox as a transparent suffix (no fill, symmetric padding,
   row-height hit area) or document the divergence. At minimum apply the padding fix from PREF-6.
 
-##### PREF-17: The sidebar title is left-aligned at 46px; GTK centres it in the sidebar header
-- Class: ALIGNMENT   Confidence: LIKELY   Severity: low   Reported bug: none
-- Windows: `SettingsView.cpp:142` `sideTitle.Margin({46,0,8,0})`, left aligned, bold, beside the 34px search toggle.
-- GTK reference: `preferences.rs:397-407`. The `adw::HeaderBar` in the sidebar centres the title, with the search toggle packed at the start.
-- Fix direction: centre the title in the header area while still reserving space for the toggle (symmetric 46px on both sides).
-
-##### PREF-18: Search toggle has no checked state and is circular; Adwaita header toggles are rounded squares with a checked fill
-- Class: HIGHLIGHT-GEOMETRY   Confidence: CERTAIN   Severity: low   Reported bug: none
-- Windows: `SettingsView.cpp:42-45,144-147`. `headerButton` is a plain `Button` with `CornerRadius side/2`; the open search
-  state is never shown on it.
-- GTK reference: `preferences.rs:401-406,997` use a `gtk::ToggleButton` in the header bar (flat, about 6px radius,
-  `:checked` uses `alpha(currentColor,.1)`), with `set_active(view.searching)`.
-- Fix direction: make it a ToggleButton with the `buttonColors` checked surface and `IsChecked` bound to `searching`. Use
-  `controlCorner()`.
-
-##### PREF-19: Sidebar tab geometry: 42px rows with 14/12 padding; Adwaita navigation rows are smaller
-- Class: METRIC   Confidence: CHECK   Severity: low   Reported bug: none
-- Windows: `SettingsView.cpp:149,196`. Tab `MinHeight 42`, `Padding{14,12,14,12}`, `ColumnSpacing 12`, sidebar `Padding{6,0,6,6}`,
-  `Spacing 2`. Selected fill `tint(text,26)` (`:502`, matches Adwaita's .10). Radius `controlCorner()` (13·0.54 ≈ 7).
-  Labels wrap.
-- GTK reference: libadwaita `ViewSwitcherSidebar` rows (about 36-38px min height, about 6px margin, 6px radius, labels
-  ellipsized). The sidebar width is 190-210 at 0.26 of the dialog; Windows is a fixed 210 and never collapses (GTK
-  collapses below 620sp).
-- Fix direction: measure against a GTK screenshot and move the values into shared `panel_metrics` if they differ.
-
-##### PREF-20: Sheet close buttons have no fill, unlike the dialog close button
-- Class: BORDER/COLOR   Confidence: CERTAIN   Severity: low   Reported bug: none
-- Windows: `ShortcutPage.cpp:109-111`. Sheet `close` is `button()` (clear fill). The main dialog close at `SettingsView.cpp:177`
-  gets `tint(L"text",26)`.
-- GTK reference: Adwaita dialog close buttons look the same in both places (circular, `alpha(currentColor,.1)`).
-- Fix direction: build both from one close-button helper.
-
-##### PREF-21: The picker "Reset" header button is 1px low and its fill is invisible
-- Class: VCENTER, DEFAULT-CONTROL   Confidence: CERTAIN   Severity: low   Reported bug: none
-- Windows: `ShortcutPage.cpp:80-83`. `flat()` (34px high) at `Margin{11,7,0,0}` in a 46px header, so its centre is at 24
-  rather than 23. Its fill problem is covered by PREF-4.
-- Fix direction: `VerticalAlignment Center` within the header row instead of a top margin.
-
-##### PREF-22: The workspace manager list uses the default ListViewItem presenter: inset rounded hover/selection plate, accent pill, no dividers (likely bug 14)
-- Class: HIGHLIGHT-GEOMETRY, DEFAULT-CONTROL   Confidence: LIKELY   Severity: medium   Reported bug: 14
-- Windows: `WorkspaceManagerView.cpp:182-184,299-301`. `ListView` with plain `ListViewItem`s (`Padding 0`, `MinHeight 56`).
-  No ItemContainerStyle or resource overrides. The WinUI 3 `ListViewItemPresenter` draws its pointer-over, pressed and
-  selected backplate *inset* (about 4px horizontal and 2px vertical margin, 4px radius) plus a 3px system-accent selection
-  pill. Inside the clipped `listSurface` card (:205, :519), the hover plate therefore has 4px side gaps but only 2px against
-  neighbours and the top and bottom card edges, which is the inconsistent margin. Selection uses system
-  `ListViewItemBackgroundSelected*` colours, not palette `selection`. There are no row dividers.
-- GTK reference: `style.css:93-98`. `.workspace-manager-items > row { border:0; border-radius:0 }` gives a full-bleed row
-  hover and selection. `row + row { box-shadow: inset 0 1px var(--card-shade-color) }` adds dividers.
-  `.workspace-row-content { min-height:56px; padding:0 12px 0 calc(12px - field-padding) }` (Windows matches this at :307).
-- Fix direction: give the items a container style or resource overrides (`ListViewItemPresenter` backplate margin 0,
-  `CornerRadius 0`, `SelectionIndicatorVisualEnabled=false`, PointerOver/Selected brushes from palette `selection` and
-  `tint(text,…)`), and add `line("settings","card_shade")` dividers. If the report meant the header switcher's "Manage
-  workspaces" options menu (`HeaderView.cpp:365-370`, `HeaderInput.cpp:323`), that is outside this scope. Its MenuFlyout
-  items have the same default inset-plate behaviour and need the same check.
-
-##### PREF-23: Workspace manager tabs, Retry and Toolbar actions are default-styled WinUI buttons
-- Class: DEFAULT-CONTROL, VCENTER, METRIC   Confidence: CERTAIN   Severity: medium   Reported bug: none
-- Windows: `WorkspaceManagerView.cpp:152-161,191`. `thisWorkspace` and `savedToolbars` are ToggleButtons, plus
-  `toolbarActions` and `retry`. They get `buttonColors` (template replaced) but no Background, FontSize, FontFamily,
-  FontWeight or Padding. They keep the WinUI default `ToggleButtonBackground`/`ButtonBackground` resource fill, 14px system
-  font (not `textSize`/Segoe UI as in `button()`), normal weight, and default padding `11,5,11,6`, which is asymmetric and
-  puts the text about 0.5px high.
-- GTK reference: `workspace_manager_dialog.rs:406,419` use `gtk::ToggleButton::with_label` / `gtk::Button::with_label`
-  (Adwaita bold label, `alpha(currentColor,.1)` fill, `:checked` fill).
-- Fix direction: create them with `button<T>(data,…)` (or the default-button helper from PREF-4).
-
-##### PREF-24: Workspace manager text and colour literals differ from the other dialogs
-- Class: BORDER/COLOR, METRIC   Confidence: CERTAIN   Severity: low   Reported bug: none
-- Windows:
-  - `WorkspaceManagerView.cpp:514` error colour `#ffb4ab`/`#b3261e`; `SettingsView.cpp:511` and `ShortcutPage.cpp:189,492`
-    use `#ff7b63`/`#c01c28` (the Adwaita error colours).
-  - `:316` `row.subtitle.FontSize(12)` is a literal; GTK uses `font-size: smaller` (0.833 × ui size, as Windows already
-    does elsewhere with `textSize()/1.2`).
-  - `row.title`/`subtitle`/`intro`/`title` never get a palette `text` foreground, so they inherit the theme default.
-  - Cancel and Apply use `SemiBold`; `button()` uses Bold, as Adwaita does.
-- Fix direction: one shared error-colour helper (or palette role), `textSize()/1.2`, `label()` for the texts and Bold buttons.
-
-##### PREF-25: Workspace manager list is a single column; GTK uses a sidebar list plus a details pane
-- Class: LAYOUT-COLLAPSE   Confidence: CHECK (may be deliberate)   Severity: low   Reported bug: none
-- Windows: `WorkspaceManagerView.cpp:211-214,470`. One 412px column (search, list, actions, prompt). Prompts replace the list.
-- GTK reference: `workspace_manager_dialog.rs:47-160`. A 520×540 `adw::Dialog` with a `gtk::Paned`: 220-280px sidebar
-  (search, list, +/− actions) and a details pane (`margin-start 18`).
-- Fix direction: confirm whether the divergence is intended. If it is not, mirror the split layout.
-
-##### PREF-26: Toolbar manager and tool picker rows use default RadioButton and CheckBox templates without a card
-- Class: DEFAULT-CONTROL, METRIC   Confidence: CERTAIN   Severity: low   Reported bug: none
-- Windows: `WorkspaceDialogs.cpp:147-160,92`. Rows are a `CheckBox` (picker) or `RadioButton` (manager) with the default
-  template (system accent glyphs), `Padding 8`, `MinHeight 58/64`, 20px icon and SemiBold title, stacked with `Spacing 1`
-  directly on the dialog background (no card).
-- GTK reference: `workspace_customization.rs:215,296-305`. The manager is a `boxed-list` of selectable `adw::ActionRow`s with
-  a 16px prefix icon and normal-weight title, and selection is the row highlight with no radio. The picker uses
-  `CheckButton`s inside boxed-list cards (`margins 9`, :766-781).
-- Fix direction: put the rows in the shared card with dividers. For the manager, use selectable rows (palette `selection`
-  fill) instead of RadioButtons. Use a 16px icon and normal weight.
-
-##### PREF-27: Dialog titles use the ContentDialog default title style
-- Class: DEFAULT-CONTROL, METRIC   Confidence: LIKELY   Severity: low   Reported bug: none
-- Windows: `WorkspaceDialogs.cpp:226`, `WorkspaceStorageView.cpp:67` `dialog.Title(box_value(text))`, and
-  `WorkspaceManagerView.cpp:162,536` (a TextBlock with no font set). These inherit WinUI's `ContentDialog` title style
-  (about 20px SemiBold, left-aligned).
-- GTK reference: `adw::Dialog` header bar title (bold, ui text size, centred).
-- Fix direction: give all three a `label(data,title,true)` title, centred as the SettingsView header does.
-
-##### PREF-28: Storage status banner: panel fill, padding and radius differ, buttons are unstyled, and the layout is stacked
-- Class: DEFAULT-CONTROL, METRIC, BORDER/COLOR   Confidence: CERTAIN   Severity: low   Reported bug: none
-- Windows: `WorkspaceStorageView.cpp:32-43,134-136`. `root` uses `Padding 12`, `CornerRadius {8}` (literal), background
-  `palette.panel`, message above a separate button row, and three default `Button`s (no `buttonColors`, system font and fill).
-  `message` gets no `FontSize`, so it is 14px rather than `textSize`.
-- GTK reference: `workspace_manager.rs:65-86` and `style.css:113-114`. A horizontal box (label hexpand + Retry + Save as
-  new inline), `.workspace-notice { background: var(--window-bg-color); padding: 6px 12px; border-radius: var(--surface-radius) }`
-  (18·0.54 ≈ 9.7).
-- Fix direction: use the `bg` (surround) role, `6,12` padding and `18*CornerFit` radius, put the buttons inline, and build
-  them with `button()` plus the default fill.
+##### PREF-28: Storage actions still need the raised button face *(A)*
+- The notice uses the surround fill, 6px/12px padding, surface radius and inline actions with shared text metrics.
+- Adopt Agent A's raised-button helper for Retry, Save as new and Backup in M4.
 
 ##### PREF-29: Text entries are default WinUI TextBoxes
 - Class: DEFAULT-CONTROL   Confidence: CERTAIN   Severity: low   Reported bug: none
@@ -563,24 +349,6 @@ Key palette fact (theme.rs:390-396): `input = surface([51;3],[250;3])` and `sett
   `.preference-entry { background: var(--input-bg); box-shadow:none }` (`style.css:371-372`).
 - Fix direction: one `entryColors(data,box,surface)` helper next to `choiceColors`, using the same surface-dependent fill
   rule as PREF-1, and use it at all of these sites.
-
-##### PREF-30: Link rows use default HyperlinkButton colour and padding
-- Class: DEFAULT-CONTROL, BORDER/COLOR   Confidence: CERTAIN (no palette brush)   Severity: low   Reported bug: none
-- Windows: `SettingsView.cpp:417-419`. `HyperlinkButton` with no Foreground, FontSize or Padding: system accent, 14px,
-  default `11,5,11,6` padding, so Website and Source code use a different size and right inset from the Info values.
-- GTK reference: `preferences.rs:878-882` `gtk::LinkButton` (accent link colour, valign center).
-- Fix direction: `Foreground(accent(data))`, `FontSize(textSize)` and symmetric padding, so the text lines up with the Info value column.
-
-##### PREF-31: Small metric and inset differences
-- Class: METRIC   Confidence: CERTAIN   Severity: low   Reported bug: none
-- `SettingsView.cpp:293,415-416`: title-to-tiles and title-to-swatches spacing is `10`; GTK `titled_row` body spacing is
-  **12** (`preferences.rs:180`).
-- `SettingsView.cpp:179`: error label `Margin{18,0,18,6}`; GTK `margins(&self.error, 12)` (`preferences.rs:526`).
-- `SettingsView.cpp:49` and `ShortcutPage.cpp:105`: header height `46`; Adwaita header bar is 47.
-- `ShortcutPage.cpp:571`: sheet dim `0x88`/`0x22` black literals; Adwaita dialog dimming is used on GTK (`style.css:415-416`
-  sets 12% only for workspace dialogs).
-- `ShortcutPage.cpp:229,120`: keymap "more" is circular (radius 17) and shortcut reset glyphs use `controlCorner`; GTK has the
-  reverse: `more` is a flat MenuButton (rounded square) and reset `icon_button` is `flat circular` (`shortcut_page.rs:368-375,695-698`).
 
 ---
 
@@ -594,16 +362,11 @@ Key palette fact (theme.rs:390-396): `input = surface([51;3],[250;3])` and `sett
    for ad-hoc fills: none (action rows, Manage profiles: bug 9, PREF-3/4), opaque `brush("button")` (ShortcutPage `flat()`:
    invisible text), raw WinUI buttons (workspace tabs, Retry, storage banner: PREF-23/28). One helper with the Adwaita button
    fill (`tint("text",26)`), `controlCorner`, `Padding 10,5`, `MinHeight 34` and Bold closes PREF-3/4/20/21/23/28.
-3. **Icons wrapped in `ContentControl`** inherit WinUI's `VerticalContentAlignment=Top` (bugs 10 and 12, PREF-5/6). Use `Image`
-   plus `setIcon` with `VerticalAlignment Center` everywhere a themed icon is rebound.
 4. **`label()` line box metrics** (Segoe UI, `LineHeight 18`, `MaxHeight`) put text about 1-2px low in every centred row
    (bug 13, likely bug 2, PREF-7), and WinUI default paddings (`ComboBoxPadding 12,5,0,7`, `ButtonPadding 11,5,11,6`) add
    another 0.5-1px. Fix it in `label()` (`TextLineBounds`) and with symmetric paddings in the colour helpers.
-5. **WinUI default containers left unstyled**: `ListViewItemPresenter` backplate (bug 14, PREF-22), `ToggleSwitch` (PREF-8),
-   `RadioButton`/`CheckBox` rows (PREF-26), `HyperlinkButton` (PREF-30) and ContentDialog titles (PREF-27). Each needs one
-   shared style helper in UiControls/ChoiceFeedback rather than per-site fixes.
-6. **Two group and card factories** (SettingsView inline vs `ShortcutPage::group`) drift apart: heading gap (PREF-12), no card
-   clip (PREF-10), no card ring (PREF-13). Unify on one factory that clips, rings and divides.
+5. **Native switches and entries still need the palette helpers** (PREF-8/29). Adopt the compact switch and entry resources from P2/P4 in M4.
+
 
 ### HEAD audit: title bar, drawing tabs, status, canvas action bar, notice, zoom readout, document dialogs
 

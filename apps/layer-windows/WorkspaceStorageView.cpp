@@ -30,12 +30,14 @@ struct WorkspaceStorageView::Impl : std::enable_shared_from_this<Impl> {
     void failure() { send(to_string(O({{L"operation",S(L"failure")},{L"error",S(text(L"workspace_dialog_failed"))}}).Stringify())); }
     void init() {
         root.HorizontalAlignment(HorizontalAlignment::Center);root.VerticalAlignment(VerticalAlignment::Bottom);
-        root.Margin({16,16,16,64});root.Padding({12,12,12,12});root.CornerRadius({8,8,8,8});
+        root.Margin({16,16,16,64});root.Padding({12,6,12,6});root.CornerRadius({18*CornerFit,18*CornerFit,18*CornerFit,18*CornerFit});
         root.MaxWidth(640);root.Visibility(Visibility::Collapsed);
         AutomationProperties::SetAutomationId(root,L"workspace-storage-status");
-        StackPanel content;content.Spacing(8);
-        message.TextWrapping(TextWrapping::Wrap);content.Children().Append(message);
+        Grid content;content.ColumnSpacing(8);ColumnDefinition text;text.Width({1,GridUnitType::Star});ColumnDefinition actions;actions.Width({1,GridUnitType::Auto});content.ColumnDefinitions().Append(text);content.ColumnDefinitions().Append(actions);
+        message=label(data,L"");message.TextWrapping(TextWrapping::Wrap);message.VerticalAlignment(VerticalAlignment::Center);content.Children().Append(message);
         buttons.Orientation(Orientation::Horizontal);buttons.Spacing(8);
+        retry=button(data,L"",[]{});saveNew=button(data,L"",[]{});backup=button(data,L"",[]{});
+        for(auto control:{retry,saveNew,backup}){control.Padding({10,5,10,5});control.MinHeight(34);}
         AutomationProperties::SetAutomationId(retry,L"workspace-storage-retry");
         AutomationProperties::SetAutomationId(saveNew,L"workspace-storage-save-new");
         AutomationProperties::SetAutomationId(backup,L"workspace-storage-backup");
@@ -44,7 +46,7 @@ struct WorkspaceStorageView::Impl : std::enable_shared_from_this<Impl> {
             O({{L"type",S(L"form")},{L"action",O({{L"type",S(L"save_as_new")}})}})).Stringify()));});
         backup.Click([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->exportBackup();});
         buttons.Children().Append(retry);buttons.Children().Append(saveNew);buttons.Children().Append(backup);
-        content.Children().Append(buttons);root.Child(content);
+        Grid::SetColumn(buttons,1);buttons.VerticalAlignment(VerticalAlignment::Center);content.Children().Append(buttons);root.Child(content);
     }
     void restore() {
         HWND handle=nullptr;check_hresult(window.as<IWindowNative>()->get_WindowHandle(&handle));
@@ -66,7 +68,7 @@ struct WorkspaceStorageView::Impl : std::enable_shared_from_this<Impl> {
             StackPanel body;body.Spacing(12);body.MaxWidth(460);
             TextBlock explanation;explanation.TextWrapping(TextWrapping::Wrap);
             bool ready=flag(object(model,L"windows_workspace"),L"ready");
-            dialog.Title(box_value(text(preferences?L"preferences_not_saved":ready?L"workspace_not_saved":L"workspace_not_opened")));
+            auto title=label(data,text(preferences?L"preferences_not_saved":ready?L"workspace_not_saved":L"workspace_not_opened"),true);title.TextAlignment(TextAlignment::Center);title.HorizontalAlignment(HorizontalAlignment::Stretch);dialog.Title(title);
             dialog.PrimaryButtonText(text(L"retry"));
             dialog.SecondaryButtonText(text(L"close_without_saving"));
             dialog.CloseButtonText(str(object(copy,L"common"),L"keep_open"));
@@ -104,8 +106,9 @@ struct WorkspaceStorageView::Impl : std::enable_shared_from_this<Impl> {
         picker=nullptr;showing=false;changed();
     }
     void apply(J const& snapshot,J const& bootstrap,bool blocked) {
-        model=snapshot;copy=bootstrap;data->state=object(snapshot,L"state");data->refreshPalette();
+        data->adoptLocalization(snapshot);model=snapshot;copy=bootstrap;data->state=object(snapshot,L"state");data->refreshPalette();
         if(dialog)dialogSurface(data,dialog);
+        message.FontSize(data->textSize());for(auto control:{retry,saveNew,backup}){control.FontSize(data->textSize());control.CornerRadius(data->controlCorner());}
         retry.Content(box_value(text(L"retry")));saveNew.Content(box_value(text(L"save_as_new_workspace")));backup.Content(box_value(text(L"export_backup")));
         auto storage=object(model,L"windows_workspace");
         if(!storage.Size())return;
@@ -125,7 +128,7 @@ struct WorkspaceStorageView::Impl : std::enable_shared_from_this<Impl> {
             return;
         }
         auto palette=object(object(model,L"state"),L"palette");
-        root.Background(fill(color(str(palette,L"panel",L"#242428"))));
+        root.Background(data->brush(L"bg"));
         message.Foreground(fill(color(str(palette,L"text",L"#fafafb"))));
         buttons.Visibility(error.empty()?Visibility::Collapsed:Visibility::Visible);
         for(auto button:{retry,saveNew,backup})button.IsEnabled(!blocked&&!showing&&!flag(storage,L"busy"));

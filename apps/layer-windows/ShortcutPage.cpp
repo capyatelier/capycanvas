@@ -2,6 +2,7 @@
 #include "ShortcutPage.h"
 #include "KeyNames.h"
 #include "WorkspaceGeometry.h"
+#include "WorkspaceShadow.h"
 #include <winrt/Microsoft.UI.Xaml.Automation.Peers.h>
 #include <winrt/Microsoft.Windows.Storage.Pickers.h>
 #include <filesystem>
@@ -29,8 +30,26 @@ constexpr wchar_t ModifierCategory[]=L"Modifier keys";
 
 }
 
+PreferenceGroup CapyUi::preferenceGroup(std::shared_ptr<WorkspaceData> const& data,hstring const& title,hstring const& summary){
+        PreferenceGroup g;g.section.Spacing(12);g.section.MaxWidth(GroupWidth);g.section.HorizontalAlignment(HorizontalAlignment::Stretch);
+        auto heading=g.heading;heading.ColumnSpacing(12);
+        ColumnDefinition text;text.Width({1,GridUnitType::Star});ColumnDefinition tail;tail.Width({1,GridUnitType::Auto});
+        heading.ColumnDefinitions().Append(text);heading.ColumnDefinitions().Append(tail);
+        StackPanel words;words.Spacing(6);
+        g.title=label(data,title,true);g.title.Visibility(title.empty()?Visibility::Collapsed:Visibility::Visible);words.Children().Append(g.title);
+        g.summary=label(data,summary);g.summary.TextWrapping(TextWrapping::Wrap);g.summary.Opacity(.55);
+        g.summary.Visibility(summary.empty()?Visibility::Collapsed:Visibility::Visible);words.Children().Append(g.summary);
+        heading.Children().Append(words);Grid::SetColumn(g.actions,1);g.actions.VerticalAlignment(VerticalAlignment::Center);heading.Children().Append(g.actions);
+        heading.Visibility(title.empty()&&summary.empty()?Visibility::Collapsed:Visibility::Visible);heading.Margin({0,8,0,0});
+        g.section.Children().Append(heading);
+        Border card;card.Background(data->brush(L"card"));card.CornerRadius({12,12,12,12});card.BorderThickness({1,1,1,1});card.BorderBrush(data->line(L"settings",L"card_ring"));card.Child(g.list);
+        card.SizeChanged([](auto const& sender,SizeChangedEventArgs const& e){auto size=e.NewSize();ClipSurface(sender.template as<UIElement>(),size.Width,size.Height,{12,12,12,12},false);});
+        g.section.Children().Append(card);
+        return g;
+    }
+
 struct ShortcutPage::Impl:std::enable_shared_from_this<Impl>{
-    struct Group{StackPanel section,list,actions;Grid heading;TextBlock title{nullptr},summary{nullptr};};
+    using Group=PreferenceGroup;
     struct Row{Button button{nullptr};TextBlock title{nullptr},detail{nullptr},value{nullptr};};
     struct KeymapResult{hstring diagnostic,text;bool tooLarge=false;};
     struct Sheet{Grid frame;TextBlock title{nullptr};Button close{nullptr},start{nullptr};StackPanel body;hstring signature;};
@@ -80,7 +99,7 @@ struct ShortcutPage::Impl:std::enable_shared_from_this<Impl>{
         picker.start=flat(L"",[weak=weak_from_this()]{if(auto self=weak.lock()){auto spec=self->pickerModel();if(spec.Size())send(self->data,act(L"reset_trigger",{{L"trigger",S(str(spec,L"trigger"))}}));}});
         follow(data->copyCommon(L"reset"),[button=picker.start](hstring const& text){button.Content(box_value(text));AutomationProperties::SetName(button,text);});
         AutomationProperties::SetAutomationId(picker.start,L"action-picker-reset");picker.start.HorizontalAlignment(HorizontalAlignment::Left);
-        picker.start.VerticalAlignment(VerticalAlignment::Top);picker.start.Margin({11,7,0,0});picker.frame.Children().Append(picker.start);
+        picker.start.VerticalAlignment(VerticalAlignment::Center);picker.start.Margin({11,0,0,0});picker.frame.Children().Append(picker.start);
         pickerDescription=note(data,L"");AutomationProperties::SetAutomationId(pickerDescription,L"action-picker-description");
         follow(localized(L"search_actions"),[entry=pickerSearch](hstring const& text){entry.PlaceholderText(text);AutomationProperties::SetName(entry,text);});AutomationProperties::SetAutomationId(pickerSearch,L"action-picker-search");
         pickerSearch.TextChanged([weak=weak_from_this()](auto&& sender,auto&&){
@@ -102,12 +121,13 @@ struct ShortcutPage::Impl:std::enable_shared_from_this<Impl>{
     void build(Sheet& sheet){
         sheet.frame.Width(SheetWidth);sheet.frame.HorizontalAlignment(HorizontalAlignment::Center);sheet.frame.VerticalAlignment(VerticalAlignment::Center);
         sheet.frame.CornerRadius({16*CornerFit,16*CornerFit,16*CornerFit,16*CornerFit});sheet.frame.Visibility(Visibility::Collapsed);
-        RowDefinition head;head.Height({46,GridUnitType::Pixel});RowDefinition rest;rest.Height({1,GridUnitType::Star});
+        RowDefinition head;head.Height({47,GridUnitType::Pixel});RowDefinition rest;rest.Height({1,GridUnitType::Star});
         sheet.frame.RowDefinitions().Append(head);sheet.frame.RowDefinitions().Append(rest);
         sheet.title=label(data,L"",true);sheet.title.HorizontalAlignment(HorizontalAlignment::Center);sheet.title.VerticalAlignment(VerticalAlignment::Center);
         sheet.frame.Children().Append(sheet.title);
         sheet.close=button(data,L"",[]{});sheet.close.Width(24);sheet.close.Height(24);sheet.close.CornerRadius({12,12,12,12});
-        sheet.close.HorizontalAlignment(HorizontalAlignment::Right);sheet.close.VerticalAlignment(VerticalAlignment::Top);sheet.close.Margin({0,11,11,0});
+        remember([this,close=sheet.close]{close.Background(data->tint(L"text",26));});
+        sheet.close.HorizontalAlignment(HorizontalAlignment::Right);sheet.close.VerticalAlignment(VerticalAlignment::Center);sheet.close.Margin({0,0,11,0});
         follow(data->copyCommon(L"close"),naming(sheet.close));sheet.frame.Children().Append(sheet.close);
         ScrollViewer scroll;scroll.VerticalScrollBarVisibility(ScrollBarVisibility::Auto);mouseScrollbars(scroll);Grid::SetRow(scroll,1);
         sheet.body.Spacing(18);sheet.body.Padding({12,0,12,24});scroll.Content(sheet.body);sheet.frame.Children().Append(scroll);
@@ -119,27 +139,12 @@ struct ShortcutPage::Impl:std::enable_shared_from_this<Impl>{
     }
     Button glyphButton(wchar_t const* glyph,wchar_t const* key,J action,hstring const& id){
         auto name=copy(key);
-        auto result=button(data,L"",[data=data,action]{send(data,action);});result.Width(34);result.Height(34);result.Content(themed(glyph));
+        auto result=button(data,L"",[data=data,action]{send(data,action);});result.Width(34);result.Height(34);result.CornerRadius({17,17,17,17});result.Content(themed(glyph));
         AutomationProperties::SetName(result,name);AutomationProperties::SetAutomationId(result,id);tooltip(result,name);
         remember([this,result,key=std::wstring(key)]{auto name=copy(key.c_str());AutomationProperties::SetName(result,name);tooltip(result,name);});
         return result;
     }
-    Group group(hstring const& title,hstring const& summary=L""){
-        Group g;g.section.Spacing(6);g.section.MaxWidth(GroupWidth);g.section.HorizontalAlignment(HorizontalAlignment::Stretch);
-        auto heading=g.heading;heading.ColumnSpacing(12);
-        ColumnDefinition text;text.Width({1,GridUnitType::Star});ColumnDefinition tail;tail.Width({1,GridUnitType::Auto});
-        heading.ColumnDefinitions().Append(text);heading.ColumnDefinitions().Append(tail);
-        StackPanel words;words.Spacing(6);
-        g.title=label(data,title,true);g.title.Visibility(title.empty()?Visibility::Collapsed:Visibility::Visible);words.Children().Append(g.title);
-        g.summary=label(data,summary);g.summary.TextWrapping(TextWrapping::Wrap);g.summary.Opacity(.55);
-        g.summary.Visibility(summary.empty()?Visibility::Collapsed:Visibility::Visible);words.Children().Append(g.summary);
-        heading.Children().Append(words);Grid::SetColumn(g.actions,1);g.actions.VerticalAlignment(VerticalAlignment::Center);heading.Children().Append(g.actions);
-        heading.Visibility(title.empty()&&summary.empty()?Visibility::Collapsed:Visibility::Visible);heading.Margin({0,8,0,6});
-        g.section.Children().Append(heading);
-        Border card;card.Background(data->brush(L"card"));card.CornerRadius({12,12,12,12});card.Child(g.list);
-        g.section.Children().Append(card);
-        return g;
-    }
+    Group group(hstring const& title,hstring const& summary=L""){return preferenceGroup(data,title,summary);}
     void add(StackPanel const& list,UIElement const& row){
         if(list.Children().Size()){Border line;line.Height(1);line.Background(data->line(L"settings",L"card_shade"));list.Children().Append(line);}
         list.Children().Append(row);
@@ -186,9 +191,9 @@ struct ShortcutPage::Impl:std::enable_shared_from_this<Impl>{
         result.HorizontalAlignment(HorizontalAlignment::Stretch);result.HorizontalContentAlignment(HorizontalAlignment::Left);
         result.CornerRadius({0,0,0,0});result.MinHeight(54);result.FontWeight(winrt::Windows::UI::Text::FontWeights::Normal());result.Padding({14,8,14,8});
         StackPanel content;content.Orientation(Orientation::Horizontal);content.Spacing(12);content.Children().Append(themed(glyph));
-        auto words=label(data,text);words.VerticalAlignment(VerticalAlignment::Center);if(destructive)words.Foreground(fill(color(data->theme()==L"dark"?L"#ff7b63":L"#c01c28")));
+        auto words=label(data,text);words.VerticalAlignment(VerticalAlignment::Center);if(destructive)words.Foreground(data->brush(L"error"));
         content.Children().Append(words);result.Content(content);AutomationProperties::SetName(result,text);AutomationProperties::SetAutomationId(result,id);
-        remember([this,result,words,destructive,key=std::wstring(key)]{auto text=copy(key.c_str());words.Text(text);AutomationProperties::SetName(result,text);if(destructive)words.Foreground(fill(color(data->theme()==L"dark"?L"#ff7b63":L"#c01c28")));});
+        remember([this,result,words,destructive,key=std::wstring(key)]{auto text=copy(key.c_str());words.Text(text);AutomationProperties::SetName(result,text);if(destructive)words.Foreground(data->brush(L"error"));});
         return result;
     }
     ComboBox dropdown(hstring const& name,hstring const& id,std::function<void(int32_t)> choose){
@@ -226,7 +231,7 @@ struct ShortcutPage::Impl:std::enable_shared_from_this<Impl>{
             if(auto self=weak.lock()){auto presets=array(object(self->preferences(),L"keymap"),L"presets");
                 if(uint32_t(index)<presets.Size())send(self->data,act(L"select_keymap",{{L"id",S(str(presets.GetObjectAt(index),L"id"))}}));}
         });cell(preset,keymapChoice,1);follow(localized(L"keymap_preset"),naming(keymapChoice));
-        auto more=keymapMore=button(data,L"",[]{});more.Width(34);more.Height(34);more.CornerRadius({17,17,17,17});
+        auto more=keymapMore=button(data,L"",[]{});more.Width(34);more.Height(34);more.CornerRadius(data->controlCorner());
         follow(localized(L"keymap_options"),naming(more));AutomationProperties::SetAutomationId(more,L"keymap-menu");
         MenuFlyout options;
         for(auto [text,action,id]:{std::tuple{L"import_menu",act(L"choose_keymap_file"),L"keymap-import-button"},std::tuple{L"export_menu",act(L"export_keymap"),L"keymap-export-button"},
@@ -369,9 +374,9 @@ struct ShortcutPage::Impl:std::enable_shared_from_this<Impl>{
         if(empty.Size()){emptyTitle.Text(str(empty,L"title"));emptyText.Text(str(empty,L"description"));}
     }
     UIElement shortcutRow(J const& spec){
-        auto id=str(spec,L"id");auto row=line();AutomationProperties::SetAutomationId(row,L"shortcut-row-"+id);
+        auto id=str(spec,L"id");auto row=line();row.Padding({0,0,0,0});row.ColumnSpacing(0);AutomationProperties::SetAutomationId(row,L"shortcut-row-"+id);
         auto choose=button(data,L"",[data=data,id]{send(data,act(L"edit_shortcut",{{L"id",S(id)}}));});
-        choose.HorizontalAlignment(HorizontalAlignment::Stretch);choose.HorizontalContentAlignment(HorizontalAlignment::Stretch);choose.Padding({0,0,0,0});choose.Background(clear());choose.FontWeight(winrt::Windows::UI::Text::FontWeights::Normal());
+        choose.HorizontalAlignment(HorizontalAlignment::Stretch);choose.HorizontalContentAlignment(HorizontalAlignment::Stretch);choose.Padding({14,8,14,8});choose.CornerRadius({0,0,0,0});choose.Background(clear());choose.FontWeight(winrt::Windows::UI::Text::FontWeights::Normal());
         Grid content;content.ColumnSpacing(12);
         ColumnDefinition text;text.Width({1,GridUnitType::Star});ColumnDefinition binding;binding.Width({1,GridUnitType::Auto});
         content.ColumnDefinitions().Append(text);content.ColumnDefinitions().Append(binding);
@@ -489,7 +494,7 @@ struct ShortcutPage::Impl:std::enable_shared_from_this<Impl>{
             auto description=label(data,L"");description.TextWrapping(TextWrapping::Wrap);description.Opacity(.55);description.TextAlignment(TextAlignment::Center);editor.body.Children().Append(description);
             auto problem=label(data,L"");problem.TextWrapping(TextWrapping::Wrap);editor.body.Children().Append(problem);
             auto section=group(L"",L" ");AutomationProperties::SetAutomationId(section.summary,L"shortcut-default-summary");
-            remember([this,description,problem,section]{auto current=object(preferences(),L"shortcut_editor");editor.title.Text(str(current,L"label"));description.Text(str(current,L"description"));auto capture=object(preferences(),L"capture");auto error=str(capture,L"id")==str(current,L"id")?hstring():str(preferences(),L"error");problem.Text(error);problem.Visibility(error.empty()?Visibility::Collapsed:Visibility::Visible);problem.Foreground(fill(color(data->theme()==L"dark"?L"#ff7b63":L"#c01c28")));auto summary=data->caption(O({{L"type",S(L"shortcut_defaults")},{L"keys",array(current,L"defaults")}}));for(auto overlap:array(current,L"overlaps"))summary=summary+L"\n"+overlap.GetString();section.summary.Text(summary);});
+            remember([this,description,problem,section]{auto current=object(preferences(),L"shortcut_editor");editor.title.Text(str(current,L"label"));description.Text(str(current,L"description"));auto capture=object(preferences(),L"capture");auto error=str(capture,L"id")==str(current,L"id")?hstring():str(preferences(),L"error");problem.Text(error);problem.Visibility(error.empty()?Visibility::Collapsed:Visibility::Visible);problem.Foreground(data->brush(L"error"));auto summary=data->caption(O({{L"type",S(L"shortcut_defaults")},{L"keys",array(current,L"defaults")}}));for(auto overlap:array(current,L"overlaps"))summary=summary+L"\n"+overlap.GetString();section.summary.Text(summary);});
             if(flag(spec,L"modified"))section.actions.Children().Append(glyphButton(L"reset",L"reset_default",act(L"reset_shortcut",{{L"id",S(id)}}),L"shortcut-editor-reset"));
             auto bindings=array(spec,L"bindings");
             for(uint32_t i=0;i<bindings.Size();++i){
@@ -568,7 +573,7 @@ struct ShortcutPage::Impl:std::enable_shared_from_this<Impl>{
             double limit=std::max(200.,height-32);
             if(sheet==&picker||sheet==&details)sheet->frame.Height(std::min(PickerHeight,limit));else sheet->frame.MaxHeight(limit);
         }
-        overlay.Background(top?fill(winrt::Windows::UI::Color{uint8_t(data->theme()==L"dark"?0x88:0x22),0,0,0}):nullptr);
+        overlay.Background(top?fill(winrt::Windows::UI::Color{uint8_t(31),0,0,0}):nullptr);
         overlay.Visibility(top?Visibility::Visible:Visibility::Collapsed);
     }
     void finish(uint32_t id,hstring const& diagnostic,hstring const& text,bool tooLarge=false){

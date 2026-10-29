@@ -1,6 +1,7 @@
 #include "pch.h"
 #include "WorkspaceDialogs.h"
 #include "UiControls.h"
+#include "ShortcutPage.h"
 #include <limits>
 #include <optional>
 
@@ -91,7 +92,7 @@ struct WorkspaceDialogs::Impl:std::enable_shared_from_this<Impl>{
         auto factory=make_self<Factory>();factory->owner=weak_from_this();repeater.ItemTemplate(factory.as<IElementFactory>());
         StackLayout layout;layout.Orientation(Orientation::Vertical);layout.Spacing(1);repeater.Layout(layout);
         repeater.ItemsSource(source);repeater.VerticalCacheLength(.5);repeater.HorizontalCacheLength(0);
-        scroller.Content(repeater);scroller.HorizontalScrollMode(ScrollingScrollMode::Disabled);
+        auto card=preferenceGroup(data,L"");card.list.Children().Append(repeater);scroller.Content(card.section);scroller.HorizontalScrollMode(ScrollingScrollMode::Disabled);
         scroller.HorizontalScrollBarVisibility(ScrollingScrollBarVisibility::Hidden);
         scroller.VerticalScrollBarVisibility(ScrollingScrollBarVisibility::Auto);mouseScrollbars(scroller);
         AutomationProperties::SetAutomationId(scroller,L"workspace-dialog-list");
@@ -144,17 +145,17 @@ struct WorkspaceDialogs::Impl:std::enable_shared_from_this<Impl>{
     UIElement makeRow(hstring const& key){
         auto found=choices.find(std::wstring(key));if(found==choices.end())return Border();
         Row row;auto spec=found->second;
-        if(kind==L"picker")row.toggle=CheckBox();else {RadioButton radio;radio.GroupName(L"workspace-managed-toolbars");row.toggle=radio;}
+        if(kind==L"picker")row.toggle=CheckBox();else row.toggle=button<Primitives::ToggleButton>(data,L"",[]{});
         row.toggle.Tag(box_value(key));row.toggle.MinHeight(kind==L"picker"?58:64);
-        row.toggle.Padding({8,8,8,8});row.toggle.HorizontalAlignment(HorizontalAlignment::Stretch);
+        row.toggle.Padding({12,8,12,8});row.toggle.CornerRadius({0,0,0,0});row.toggle.HorizontalAlignment(HorizontalAlignment::Stretch);
         row.toggle.HorizontalContentAlignment(HorizontalAlignment::Stretch);row.toggle.FontSize(data->textSize());
         Grid content;content.ColumnSpacing(12);
-        ColumnDefinition imageColumn;imageColumn.Width({24,GridUnitType::Pixel});content.ColumnDefinitions().Append(imageColumn);
+        ColumnDefinition imageColumn;imageColumn.Width({16,GridUnitType::Pixel});content.ColumnDefinitions().Append(imageColumn);
         ColumnDefinition textColumn;textColumn.Width({1,GridUnitType::Star});content.ColumnDefinitions().Append(textColumn);
-        row.image.Width(20);row.image.Height(20);row.image.VerticalAlignment(VerticalAlignment::Center);row.image.IsHitTestVisible(false);
+        row.image.Width(16);row.image.Height(16);row.image.VerticalAlignment(VerticalAlignment::Center);row.image.IsHitTestVisible(false);
         content.Children().Append(row.image);
         StackPanel labels;labels.Spacing(3);
-        row.title.FontSize(data->textSize());row.title.TextWrapping(TextWrapping::Wrap);row.title.FontWeight(Windows::UI::Text::FontWeights::SemiBold());
+        row.title.FontSize(data->textSize());row.title.TextWrapping(TextWrapping::Wrap);row.title.FontWeight(Windows::UI::Text::FontWeights::Normal());
         row.detail.FontSize(data->textSize()*.833333);row.detail.TextWrapping(TextWrapping::Wrap);
         labels.Children().Append(row.title);labels.Children().Append(row.detail);Grid::SetColumn(labels,1);content.Children().Append(labels);
         row.toggle.Content(content);
@@ -164,6 +165,7 @@ struct WorkspaceDialogs::Impl:std::enable_shared_from_this<Impl>{
             if(self->kind==L"picker")self->send(O({{L"type",S(L"picker_select")},{L"control",object(found->second,L"control")},
                 {L"selected",B(selected.IsChecked()&&selected.IsChecked().Value())}}));
             else if(selected.IsChecked()&&selected.IsChecked().Value())self->send(O({{L"type",S(L"select_managed_toolbar")},{L"panel",S(str(found->second,L"panel"))}}));
+            else{*updating=true;selected.IsChecked(str(self->view(),L"selected")==str(found->second,L"panel"));*updating=false;}
         }};
         row.toggle.Checked(select);row.toggle.Unchecked(select);
         auto control=row.toggle;auto [it,inserted]=rows.emplace(control.as<::IUnknown>().get(),std::move(row));(void)inserted;
@@ -177,6 +179,8 @@ struct WorkspaceDialogs::Impl:std::enable_shared_from_this<Impl>{
         *row.updating=true;
         row.toggle.IsChecked(picker?flag(spec,L"selected"):str(view(),L"selected")==str(spec,L"panel"));
         *row.updating=false;
+        row.toggle.Background(!picker&&row.toggle.IsChecked()&&row.toggle.IsChecked().Value()?selected(data):clear());
+        row.toggle.BorderThickness({0,1,0,0});row.toggle.BorderBrush(data->line(L"settings",L"card_shade"));
         AutomationProperties::SetName(row.toggle,title);AutomationProperties::SetHelpText(row.toggle,detail);
         AutomationProperties::SetAutomationId(row.toggle,picker?L"picker-choice-"+choiceId(spec):L"managed-toolbar-"+str(spec,L"panel"));
         auto imageKey=str(spec,L"icon")+L":"+data->theme();
@@ -223,7 +227,7 @@ struct WorkspaceDialogs::Impl:std::enable_shared_from_this<Impl>{
             kind=next;currentIdentity=nextIdentity;source.Clear();choices.clear();nameDraft.reset();searchDraft.reset();
         }
         auto model=view();bool picker=kind==L"picker",manager=kind==L"toolbar_manager";
-        dialog.Title(box_value(str(model,L"title")));
+        auto title=label(data,str(model,L"title"),true);title.TextAlignment(TextAlignment::Center);title.HorizontalAlignment(HorizontalAlignment::Stretch);dialog.Title(title);
         AutomationProperties::SetAutomationId(dialog,picker?L"tool-picker":manager?L"toolbar-manager":L"toolbar-prompt");
         dialogSurface(data,dialog);
         dialog.CloseButtonText(manager?str(model,L"close_label"):str(model,L"cancel_label",L"Cancel"));
