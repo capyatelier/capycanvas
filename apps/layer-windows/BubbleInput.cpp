@@ -245,15 +245,15 @@ void WorkspaceBubbles::Impl::up(PointerRoutedEventArgs const& e,bool cancelled){
     releasing=true;inputRoot.ReleasePointerCapture(e.Pointer());releasing=false;contactSurface();wake();
 }
 bool WorkspaceBubbles::Impl::cancel(bool abandon){
-    bool had=contact||candidate||menuOwner.Active();dismiss();auto c=std::exchange(contact,{});auto source=std::exchange(candidate,{});
+    bool had=contact||candidate||menuOwner.Active()||!colorTouches.contacts.empty(),redraw=had;dismiss();auto c=std::exchange(contact,{});auto source=std::exchange(candidate,{});
     if(source)data->pointerCancels.Forget(source->pointer.PointerId(),this);
-    for(auto const& [id,record]:records){had|=record->pressed||record->hovered&&record->hovered.ValueType()!=JsonValueType::Null;record->pressed=false;record->hovered=nullptr;}
+    for(auto const& [id,record]:records){had|=record->pressed;redraw|=record->pressed||record->hovered&&record->hovered.ValueType()!=JsonValueType::Null;record->pressed=false;record->hovered=nullptr;}
     hovering=false;
     if(c){releasing=true;data->pointerCancels.Cancel(c->pointer.PointerId());for(auto weak:c->path)if(auto element=weak.get();element&&PointerGesture::Captured(element,c->pointer.PointerId()))element.ReleasePointerCapture(c->pointer);releasing=false;}
     if(c){stop(c);if(!abandon){if(c->paired&&!c->pairEnded){if(c->lifted)drag(c->grab,L"cancel",c->midpoint);}else restore(c);}c->record->pinch=1;c->record->pressed=false;c->record->hovered=nullptr;}
     colorTouches.cancel(*data,layer);
     if(source&&source->moving&&!abandon)drag(source->grab,L"cancel",source->last);
-    releasing=true;if(inputRoot)inputRoot.ReleasePointerCaptures();releasing=false;holdTimer.Stop();contactSurface();if(had)wake();return had;
+    releasing=true;if(inputRoot)inputRoot.ReleasePointerCaptures();releasing=false;holdTimer.Stop();contactSurface();if(redraw)wake();return had;
 }
 void WorkspaceBubbles::Impl::hold(){
     auto c=contact;if(!c||c->paired||c->holdAt<0){holdTimer.Stop();return;}

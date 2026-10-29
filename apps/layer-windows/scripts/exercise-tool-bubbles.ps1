@@ -1,5 +1,5 @@
 param([Parameter(Mandatory)][string]$Executable,
-    [ValidateSet('dark-mouse','dark-touch','dark-pen','light-mouse','light-touch','light-pen','edge-dark-mouse','edge-dark-touch','edge-dark-pen','edge-light-mouse','edge-light-touch','edge-light-pen','row-pair-dark','row-pair-light','inertia-dark','inertia-light','native-controls-dark','native-controls-light','blenders-dark','blenders-light','sliders-dark','sliders-light','blender-controls-dark','blender-controls-light','hdr-f16-dark','hdr-f16-light','slider-preference-dark','slider-preference-light')][string]$Variant='dark-mouse',[switch]$RapidOnly,[switch]$SlidersOnly,[switch]$BlendersOnly,[switch]$EraserOnly,[switch]$EraserLightOnly,[switch]$HistoryOnly,[switch]$HistoryLightOnly,[switch]$NativeControlsOnly,[switch]$ScrollEpochOnly,[switch]$NumericOnly,[switch]$CurveOnly,[switch]$MenuOnly,[switch]$ObserverOnly,[switch]$VisualOnly,[switch]$BeadTransitionsOnly,[switch]$HdrOnly,[switch]$HdrRetirementOnly,[switch]$HdrPreviewOnly,[switch]$HdrContactsOnly,[switch]$ColorUndoOnly,[ValidateSet('F16','F32')][string]$HdrDepth='F16')
+    [ValidateSet('dark-mouse','dark-touch','dark-pen','light-mouse','light-touch','light-pen','edge-dark-mouse','edge-dark-touch','edge-dark-pen','edge-light-mouse','edge-light-touch','edge-light-pen','row-pair-dark','row-pair-light','inertia-dark','inertia-light','native-controls-dark','native-controls-light','blenders-dark','blenders-light','sliders-dark','sliders-light','blender-controls-dark','blender-controls-light','hdr-f16-dark','hdr-f16-light','slider-preference-dark','slider-preference-light')][string]$Variant='dark-mouse',[switch]$RapidOnly,[switch]$ZenOnly,[switch]$SlidersOnly,[switch]$BlendersOnly,[switch]$EraserOnly,[switch]$EraserLightOnly,[switch]$HistoryOnly,[switch]$HistoryLightOnly,[switch]$NativeControlsOnly,[switch]$ScrollEpochOnly,[switch]$NumericOnly,[switch]$CurveOnly,[switch]$MenuOnly,[switch]$ObserverOnly,[switch]$VisualOnly,[switch]$BeadTransitionsOnly,[switch]$HdrOnly,[switch]$HdrRetirementOnly,[switch]$HdrPreviewOnly,[switch]$HdrContactsOnly,[switch]$ColorUndoOnly,[ValidateSet('F16','F32')][string]$HdrDepth='F16')
 $ErrorActionPreference='Stop'
 $edgeOnly=$Variant.StartsWith('edge-');if($edgeOnly){$Variant=$Variant.Substring(5)}
 $rowPairOnly=$Variant.StartsWith('row-pair-');if($rowPairOnly){$NativeControlsOnly=$true;$Variant=$Variant.Substring(9)+'-touch'}
@@ -1338,6 +1338,25 @@ try{
     $w=(Control 'drawing-canvas' -Arranged).Current.BoundingRectangle;$width=(Model).layout.viewport[0];$height=(Model).layout.viewport[1]
     $revision=Revision
     $initial=Model;$camera=$initial.state.camera;$document=@($initial.state.tabs|Where-Object active)[0]
+    if($ZenOnly){
+        $zenBubble=Take 'command' 'drawing_brush' (($camera.translation[0]+$document.width*.35*$camera.zoom)/$scale) (($camera.translation[1]+$document.height*.35*$camera.zoom)/$scale)
+        $source=(View $zenBubble).source|ConvertTo-Json -Depth 12 -Compress;$at=Center $zenBubble
+        if($Device -eq 'touch'){Tap $at}elseif($Device -eq 'pen'){[CapyRowPointer]::PenHover($at.x,$at.y)}else{[CapyRowPointer]::Hover($at.x,$at.y)}
+        Start-Sleep -Milliseconds 100
+        if([CapyRowPointer]::Active -or (Find 'Put back' -Name -Type ([System.Windows.Automation.ControlType]::MenuItem) -Visible)){throw 'Zen hover regression requires no active press or menu'}
+        $input=Input-Trace $at.x $at.y;$face=Control "tool-bubble-$zenBubble" -Arranged;$bounds=$face.Current.BoundingRectangle
+        $input|ConvertTo-Json -Depth 30|Set-Content (Join-Path $run 'zen-input.json')
+        if($face.Current.ProcessId -ne $review.Id -or !$bounds.Contains([System.Windows.Point]::new($at.x,$at.y))){throw 'Zen hover regression point is outside its owned arranged bubble'}
+        $canvas=Control 'drawing-canvas';$canvas.SetFocus();Wait-Until {$canvas.Current.HasKeyboardFocus} 'Canvas did not receive native focus for Zen'
+        [CapyRowPointer]::Key([uint32]$review.Id,0x09);Wait-Until {(Model).state.workspace.zen_mode} 'Tab did not enter Zen'
+        if(!(Find "tool-bubble-$zenBubble" -Visible)){throw 'Zen hid the hovered bubble'}
+        Escape;Wait-Until {!(Model).state.workspace.zen_mode} 'Fresh Escape after bubble hover did not leave Zen'
+        if(!(Find "tool-bubble-$zenBubble" -Visible) -or ((View $zenBubble).source|ConvertTo-Json -Depth 12 -Compress) -cne $source){throw 'Fresh Escape removed or replaced the hovered bubble'}
+        @{variant=$Variant;bubble=$zenBubble;input=$input;active=[CapyRowPointer]::Active;fresh_escape='passed';same_bubble='passed'}|ConvertTo-Json -Depth 30|Set-Content (Join-Path $run 'zen-results.json')
+        & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Close -DiscardUnsaved|Out-Null
+        if((Get-Item -LiteralPath $stderr).Length){throw 'Zen bubble native stderr requires inspection'}
+        return
+    }
     if($HdrOnly){
         Invoke-BubbleHdrChecks
         & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Close -DiscardUnsaved|Out-Null
@@ -1546,7 +1565,6 @@ try{
     Settled-Capture 'zen';[CapyRowPointer]::Key([uint32]$review.Id,0x09);Wait-Until {!(Model).state.workspace.zen_mode} 'Tab did not leave Zen'
     $checks.Add('zen-retains-bubbles')
     $canvas.SetFocus();[CapyRowPointer]::Key([uint32]$review.Id,0x09);Wait-Until {(Model).state.workspace.zen_mode} 'Tab did not reenter Zen'
-    [CapyRowPointer]::Hover($paper.x,$paper.y)
     Escape;Wait-Until {!(Model).state.workspace.zen_mode} 'Fresh Escape did not leave Zen'
     foreach($id in @($dial,$controls,$history,$color)){if(!(Find "tool-bubble-$id" -Visible)){throw "Leaving Zen hid bubble $id"}}
     $checks.Add('fresh-escape-leaves-zen-and-retains-bubbles')
