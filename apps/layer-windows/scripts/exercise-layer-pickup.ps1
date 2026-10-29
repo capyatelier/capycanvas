@@ -1,16 +1,16 @@
-﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('touch','pen','mouse')][string]$Device='touch',[ValidateSet('drawers')][string]$ColumnMode='drawers',[ValidateSet('dark','light')][string]$Theme='dark',[switch]$SwipeOnly,[switch]$PenSwipeOnly,[switch]$HoldOnly)
+﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('touch','pen','mouse')][string]$Device='touch',[ValidateSet('drawers')][string]$ColumnMode='drawers',[ValidateSet('dark','light')][string]$Theme='dark',[switch]$SwipeOnly,[switch]$PenSwipeOnly,[switch]$HoldOnly,[switch]$KeyboardContextOnly,[switch]$PresentationsOnly,[switch]$PendingDropOnly,[string]$DropFixture,[string]$DropRun)
 $ErrorActionPreference='Stop'
 if($PenSwipeOnly){$SwipeOnly=$true;$Device='pen'}
 if($SwipeOnly -and !$PenSwipeOnly -and !$PSBoundParameters.ContainsKey('Device')){
     foreach($device in @('touch','pen','mouse')){
-        $options=@{Executable=$Executable;Device=$device;ColumnMode=$ColumnMode;SwipeOnly=$true}
+        $options=@{Executable=$Executable;Device=$device;ColumnMode=$ColumnMode;SwipeOnly=$true;DropFixture=$DropFixture}
         if($PSBoundParameters.ContainsKey('Theme')){$options.Theme=$Theme}
         & $PSCommandPath @options
     }
     return
 }
 if(!$PSBoundParameters.ContainsKey('Theme')){
-    foreach($theme in @('dark','light')){& $PSCommandPath -Executable $Executable -Device $Device -ColumnMode $ColumnMode -Theme $theme -SwipeOnly:$SwipeOnly -HoldOnly:$HoldOnly}
+    foreach($theme in @('dark','light')){& $PSCommandPath -Executable $Executable -Device $Device -ColumnMode $ColumnMode -Theme $theme -SwipeOnly:$SwipeOnly -HoldOnly:$HoldOnly -KeyboardContextOnly:$KeyboardContextOnly -PresentationsOnly:$PresentationsOnly -PendingDropOnly:$PendingDropOnly -DropFixture $DropFixture -DropRun $DropRun}
     return
 }
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
@@ -19,7 +19,7 @@ if(!('CapyRowPointer' -as [type])){Add-Type -Path (Join-Path $PSScriptRoot 'RowP
 $repo=(Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
 $Executable=(Resolve-Path -LiteralPath $Executable).Path
 $directory=Split-Path -Parent $Executable
-$run=Join-Path $repo ('artifacts/windows/layer-pickup/'+[Guid]::NewGuid().ToString('N'))
+$run=if($PendingDropOnly -and $DropRun){[IO.Path]::GetFullPath($DropRun)}else{Join-Path $repo ('artifacts/windows/layer-pickup/'+[Guid]::NewGuid().ToString('N'))}
 [IO.Directory]::CreateDirectory($run)|Out-Null
 $sourceReveals=[Collections.Generic.List[object]]::new()
 $swipeStages=[Collections.Generic.List[object]]::new()
@@ -72,6 +72,29 @@ function Undo-Redo([string]$Before,[string]$After) {
     Layer-History 'Undo';Wait-Until {(Rows) -eq $Before} 'One Undo did not restore the original layer order'
     Layer-History 'Redo';Wait-Until {(Rows) -eq $After} 'One Redo did not restore the completed layer move'
     Layer-History 'Undo';Wait-Until {(Rows) -eq $Before} 'Final Undo did not restore the fixture'
+}
+function Verify-PendingDropFixture {
+    if(!$DropFixture){throw 'Build the LayerDrop control fixture and pass -DropFixture for deterministic final-drop coverage'}
+    $fixture=(Resolve-Path -LiteralPath $DropFixture).Path
+    if($fixture -eq $Executable){throw 'DropFixture must be the separate LayerDrop control executable'}
+    $shell=[Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
+    $parentContext=if($env:CAPY_FIXTURE_CONTEXT -and (Test-Path -LiteralPath $env:CAPY_FIXTURE_CONTEXT)){Get-Content -LiteralPath $env:CAPY_FIXTURE_CONTEXT -Raw|ConvertFrom-Json}
+    try {
+        & $shell -NoProfile -ExecutionPolicy Bypass -File $PSCommandPath -Executable $fixture -Device $Device -Theme $Theme -PendingDropOnly -DropRun (Join-Path $run 'pending-drop')
+        $childExit=$LASTEXITCODE
+    }finally{
+        if($parentContext){
+            $childContext=Get-Content -LiteralPath $env:CAPY_FIXTURE_CONTEXT -Raw|ConvertFrom-Json
+            Update-CapyFixtureContext ({
+                param($context)
+                $context.Clear()
+                foreach($property in $parentContext.PSObject.Properties){$context[$property.Name]=$property.Value}
+                $context.windows=@($parentContext.windows|Where-Object {$null -ne $_})+@($childContext.windows|Where-Object {$null -ne $_})
+                $context.closes=@($parentContext.closes|Where-Object {$null -ne $_})+@($childContext.closes|Where-Object {$null -ne $_})
+            }.GetNewClosure())
+        }
+    }
+    if($childExit -ne 0){throw "Deterministic final-drop fixture exited $childExit"}
 }
 function Reveal([string]$Id) {
     if($Id -notmatch '^layer-(?:row-)?\d+(?:-|$)'){return}
@@ -166,7 +189,8 @@ function Pick-Up([string]$Id,[double]$Layer,[switch]$Grip) {
         if(!$hold.state.captured){throw 'Held row did not retain contact capture'}
     }
 }
-function Drag-Row([string]$Id,[double]$Layer,[double]$Target,[switch]$Grip,[switch]$Cancel,[double]$Fraction=.6,[switch]$PressAfterRelease) {
+function Drag-Row([string]$Id,[double]$Layer,[double]$Target,[switch]$Grip,[switch]$Cancel,[double]$Fraction=.6,[switch]$PressAfterRelease,[switch]$PendingDropGate) {
+    if($PressAfterRelease -and !$PendingDropGate){throw 'Pending final drop requires the isolated query gate'}
     $before=Rows
     $to=Destination $Target $Fraction
     if($Device -ne 'mouse' -and !$Grip){
@@ -208,10 +232,21 @@ function Drag-Row([string]$Id,[double]$Layer,[double]$Target,[switch]$Grip,[swit
     if($admitted.menu_open){throw 'Dragging retained the held context menu'}
     $editing=(Model).state.layer_tools.editing_layer
     $selected=@((Model).state.layers|Where-Object id -eq $Layer)[0].selected
+    if($PendingDropGate){
+        Invoke 'layer-drop-arm'
+        Wait-Until {(Control 'layer-drop-arm').Current.ItemStatus -eq 'armed'} 'Final drop gate did not arm'
+    }
     if($Cancel){
         if($Device -eq 'mouse'){[CapyRowPointer]::Key(0x1b);[CapyRowPointer]::Up()}else{[CapyRowPointer]::Cancel()}
     }else{
-        if($PressAfterRelease){$script:contact.release_tap_ms=[CapyRowPointer]::UpThenTap($Device,$nextPress.x,$nextPress.y)}
+        if($PressAfterRelease -and $PendingDropGate){
+            [CapyRowPointer]::Up()
+            Wait-Until {(Control 'layer-drop-arm').Current.ItemStatus -eq 'held' -and (Gesture).phase -eq 'finishing'} 'Final drop query was not held after release'
+            [CapyRowPointer]::Down($Device,$nextPress.x,$nextPress.y)
+            Wait-Until {(Gesture).last_ignored_down.generation -eq $admitted.generation} 'The next press did not reach the held final drop'
+            [CapyRowPointer]::Up()
+            Invoke 'layer-drop-release'
+        }
         else{[CapyRowPointer]::Up()}
     }
     $finished=@{state=$null}
@@ -234,11 +269,171 @@ function Drag-Row([string]$Id,[double]$Layer,[double]$Target,[switch]$Grip,[swit
         Undo-Redo $before $after
     }
 }
+function Check-KeyboardContext([long]$Layer) {
+    $script:case='keyboard-context'
+    Focus-Key "layer-$Layer-name" 0x5d
+    Wait-Until {(Gesture).menu_open} 'Keyboard context action did not open the layer menu'
+    $beforeMenuRows=Rows;$beforeMenuRevision=(Model).state.document_file.revision
+    $source=Control "layer-$Layer-name";$organize=Control 'menu-organize' -Arranged
+    $menuItems=@();$ancestry=@()
+    try{$parent=[System.Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($organize);if($parent){$menuItems=@($parent.FindAll([System.Windows.Automation.TreeScope]::Children,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::MenuItem)))}}catch{}
+    try{$ancestry=@(Control-Trace $organize)}catch{}
+    $organizeTrace=@{before=@{organize=(Menu-State $organize);ancestry=$ancestry;focused=(Menu-State ([System.Windows.Automation.AutomationElement]::FocusedElement));siblings=@($menuItems|ForEach-Object {Menu-State $_});gesture=(Gesture)}}
+    $organizeTrace|ConvertTo-Json -Depth 15|Set-Content (Join-Path $run 'menu-organize-activation.json')
+    try{
+        Tap 'menu-organize'
+        $duplicate=Control 'layer-menu-duplicate' -Arranged
+    }finally{
+        $organizeTrace.after_tap=@{organize=(Menu-State $organize);focused=(Menu-State ([System.Windows.Automation.AutomationElement]::FocusedElement));duplicate=(Menu-State (Find 'layer-menu-duplicate'));gesture=(Gesture)}
+        $organizeTrace|ConvertTo-Json -Depth 15|Set-Content (Join-Path $run 'menu-organize-activation.json')
+    }
+    $submenu=[System.Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($duplicate)
+    $menuItems=$submenu.FindAll([System.Windows.Automation.TreeScope]::Children,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::MenuItem))
+    $nested=@{device=$Device;before=@{source=(Menu-State $source);parent=(Menu-State $organize);child=(Menu-State $duplicate);items=@($menuItems|ForEach-Object {Menu-State $_})};rows=$beforeMenuRows;revision=$beforeMenuRevision}
+    try{
+        Wait-Until {@($menuItems|Where-Object {$_.Current.HasKeyboardFocus -and !$_.Current.IsOffscreen}).Count -gt 0} 'Native Organize submenu did not acquire keyboard focus'
+        [CapyRowPointer]::Key(0x1b)
+        $stable=0;$nested.first_escape_stable_polls=0
+        Wait-Until {
+            $matching=$false
+            try{$child=Find 'layer-menu-duplicate';$matching=(!$child -or $child.Current.IsOffscreen) -and !$organize.Current.IsOffscreen -and $organize.Current.HasKeyboardFocus -and (Gesture).menu_open}catch [System.Windows.Automation.ElementNotAvailableException]{}
+            if($matching){$stable++}else{$stable=0}
+            $nested.first_escape_stable_polls=$stable
+            $stable -ge 2
+        } 'First Escape did not close only the native Organize submenu'
+        $nested.after_first=@{parent=(Menu-State $organize);child=(Menu-State $duplicate);source=(Menu-State $source);gesture=(Gesture)}
+        Dismiss
+        Wait-Until {$parent=Find 'menu-organize';!$parent -or $parent.Current.IsOffscreen} 'Second Escape did not dismiss the native parent menu'
+        if((Rows) -ne $beforeMenuRows -or (Model).state.document_file.revision -ne $beforeMenuRevision){throw 'Nested menu cancellation changed layer state or history'}
+    }finally{
+        $nested.after_second=@{parent=(Menu-State $organize);child=(Menu-State $duplicate);source=(Menu-State $source);gesture=(Gesture);rows=(Rows);revision=(Model).state.document_file.revision}
+        $nested|ConvertTo-Json -Depth 15|Set-Content (Join-Path $run 'nested-menu-escape.json')
+    }
+    if($Device -eq 'mouse'){
+        $script:case='secondary-context'
+        $at=Point "layer-$Layer-name"
+        [CapyRowPointer]::RightClick($at.x,$at.y)
+        Wait-Until {(Gesture).menu_open} 'Secondary click did not open the layer menu'
+        Dismiss
+    }
+}
+function Check-Presentations([long]$created,[long]$paint) {
+    # Reuse the same row controller after native panel reparenting and drawer
+    # creation. Workspace history is independent of each document reorder.
+    # Verify collapse/expand before taking the history baseline. Both
+    # presentations then exercise the same row controller and one-step Undo.
+    Focus-Key 'panel-tab-layers' 0x5d;Invoke 'Collapse column' -Name
+    Start-Sleep -Milliseconds 300
+    $column=@((Model).layout.collapsed|Where-Object {($_.groups.icons.panel) -contains 'layers'})[0].id
+    $at=Point 'column-icon-layers';[CapyRowPointer]::RightClick($at.x,$at.y)
+    $individual=(Control 'Open individual panels' -Name).GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)
+    if($individual.Current.ToggleState -ne [System.Windows.Automation.ToggleState]::On){
+        $individual.Toggle()
+        Wait-Until {@((Model).state.workspace.layout.column_stacks|Where-Object column -eq $column)[0].drawers} 'Individual panel drawers did not enable'
+        $at=Point 'column-icon-layers';[CapyRowPointer]::RightClick($at.x,$at.y)
+    }
+    Invoke 'Expand column' -Name
+    Wait-Until {$null -ne (Find 'panel-tab-layers')} 'Column mode setup did not restore Layers'
+    $workspaceBefore=(Model).state.workspace|ConvertTo-Json -Depth 80 -Compress
+    @{layout=(Model).layout;workspace=(Model).state.workspace}|ConvertTo-Json -Depth 90|Set-Content (Join-Path $run 'presentations-before.json')
+    foreach($presentation in @('floating','drawer')){
+        $script:case="$presentation-setup"
+        if($presentation -eq 'floating'){
+            $at=Point 'panel-tab-layers';$to=Point 'drawing-canvas'
+            # Arrange the host with mouse input; each row below is tested with
+            # the requested device. Tab tear-off has its own acceptance fixture.
+            [CapyRowPointer]::Down('mouse',$at.x,$at.y);Start-Sleep -Milliseconds 35
+            Move-To $to
+            Wait-Until {
+                try{$g=(Workspace-Root).Current.HelpText|ConvertFrom-Json;$g.phase -eq 'dragging'}catch{$false}
+            } 'Layer tab did not begin its native drag'
+            [CapyRowPointer]::Up()
+            Wait-Until {@((Model).layout.groups|Where-Object {$_.panels -contains 'layers' -and $_.floating}).Count -eq 1} 'Layer tab did not tear off into a floating panel'
+        }else{
+            Focus-Key 'panel-tab-layers' 0x5d
+            Invoke 'Collapse column' -Name
+            Wait-Until {$tile=Find 'column-icon-layers';$tile -and !$tile.Current.IsOffscreen} 'Collapsed column did not expose Layers'
+            Invoke 'column-icon-layers'
+            Wait-Until {@((Model).state.customization.column_drawers|Where-Object {$_.anchor.origin -eq 'layers'}).Count -eq 1} 'Layer column drawer did not open'
+        }
+        $null=Point "layer-$created-name"
+        $script:case="$presentation-row";Drag-Row "layer-$created-name" $created $paint
+        $script:case="$presentation-whitespace";Drag-Row "layer-row-$created" $created $paint
+        $script:case="$presentation-child";Drag-Row "layer-$created-visibility" $created $paint
+        $script:case="$presentation-grip";Drag-Row "layer-$created-drag" $created $paint -Grip
+        $script:case="$presentation-cancel";Drag-Row "layer-$created-name" $created $paint -Cancel
+        if($presentation -eq 'drawer' -and @((Model).state.customization.column_drawers).Count -eq 0){
+            # Row cancellation can consume Escape before workspace chrome.
+            # Reopen only if the containing drawer was dismissed too.
+            Invoke 'column-icon-layers'
+            Wait-Until {@((Model).state.customization.column_drawers|Where-Object {$_.anchor.origin -eq 'layers'}).Count -eq 1} 'Layer drawer did not reopen after cancellation'
+        }
+        $script:case="$presentation-release"
+        $before=Rows
+        Pick-Up "layer-$created-visibility" $created
+        if($Device -eq 'mouse'){
+            Start-Sleep -Milliseconds 800
+            if((Gesture).menu_open){throw 'Mouse row hold opened a presentation menu'}
+            [CapyRowPointer]::Key(0x1b);[CapyRowPointer]::Up()
+        }else{
+            [CapyRowPointer]::Up()
+            Wait-Until {$g=Gesture;$g.phase -eq 'idle' -and $g.menu_open} 'Held presentation release did not retain its menu'
+            Dismiss
+        }
+        if((Rows) -ne $before){throw 'Held presentation release activated visibility'}
+        if($presentation -eq 'drawer'){
+            if(@((Model).state.customization.column_drawers).Count){Invoke 'column-icon-layers'}
+            Wait-Until {@((Model).state.customization.column_drawers).Count -eq 0} 'Layer drawer did not close'
+        }
+        & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'window'
+        Invoke 'undo_workspace'
+        try{
+            Wait-Until {
+                $restored=Model
+                (($restored.state.workspace|ConvertTo-Json -Depth 80 -Compress) -eq $workspaceBefore) -and
+                    @($restored.layout.groups|Where-Object {$_.panels -contains 'layers' -and !$_.floating}).Count -eq 1
+            } 'Workspace Undo did not restore docked Layers'
+        }finally{
+            @{layout=(Model).layout;workspace=(Model).state.workspace}|ConvertTo-Json -Depth 90|Set-Content (Join-Path $run ($presentation+'-undo.json'))
+        }
+        $null=Point "layer-$created-name"
+    }
+}
 try {
-    Enter-CapyEnvironment
+    Enter-CapyEnvironment @('CAPY_LAYER_DROP_FIXTURE')
     $env:CAPY_STORAGE_DIR=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1'
     [IO.Directory]::CreateDirectory($env:CAPY_STORAGE_DIR)|Out-Null
     [IO.File]::WriteAllText((Settings-File),(@{language=@{Explicit='en'};theme=$Theme}|ConvertTo-Json -Depth 4))
+    if($PendingDropOnly){
+        $env:CAPY_LAYER_DROP_FIXTURE=$run
+        $stderr=Join-Path $run 'stderr.log'
+        $review=Start-Process -FilePath $Executable -WorkingDirectory $run -WindowStyle Hidden -PassThru -RedirectStandardError $stderr
+        $null=$review.Handle
+        $script:CapyStateFile=Join-Path $run "ui-state-$($review.Id)-1.json"
+        $script:CapyTraceDirectory=$run
+        $native=@{window=$null}
+        Wait-Until {
+            $windows=@(Owned-ProcessWindows $review|Where-Object {$_.Root.Current.Name -eq 'Capy Canvas layer drop fixture'})
+            if($windows.Count -eq 1){$native.window=$windows[0];$script:root=$native.window.Root;$script:drawingWindow=$native.window.Handle}
+            $native.window -and (Model).state.layers.Count -ge 2 -and (Find 'layer-list' -Within $root)
+        } 'Layer drop fixture did not present real shared layers' 75
+        Register-CapyFixtureWindow $review $drawingWindow.ToInt64() $run
+        [CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
+        if(![CapyRowPointer]::SetForegroundWindow($drawingWindow)){throw 'Could not focus owned layer drop fixture'}
+        [CapyRowPointer]::Initialize([uint32]$review.Id)
+        $created=(Model).state.layer_tools.editing_layer.id
+        $paint=@((Model).state.layers|Where-Object id -ne $created)[0].id
+        if(!$created -or !$paint){throw 'Layer drop fixture requires two real movable layers'}
+        $script:case='new-press-after-drop'
+        Drag-Row "layer-$created-drag" $created $paint -Grip -PressAfterRelease -PendingDropGate
+        [CapyRowPointer]::Dispose()
+        $null=[CapyWindowApi]::PostMessage($drawingWindow,0x10,[UIntPtr]::Zero,[IntPtr]::Zero)
+        if(!$review.WaitForExit(15000)){throw 'Owned layer drop fixture did not close'}
+        if($review.ExitCode -ne 0){throw "Owned layer drop fixture exited $($review.ExitCode)"}
+        if((Get-Item -LiteralPath $stderr).Length){throw 'Layer drop fixture stderr requires review'}
+        @{device=$Device;theme=$Theme;scope='deterministic real-layer final drop overlap';last_ignored_down='drop_pending';reorder_undo_redo='passed';zero_exit='passed'}|ConvertTo-Json
+        return
+    }
     $stderr=Join-Path $run 'stderr.log'
     $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $run 'stdout.log') -RedirectStandardError $stderr
     $null=$review.Handle
@@ -269,6 +464,22 @@ try {
     $count=(Model).state.layers.Count;Invoke 'layer-new'
     Wait-Until {(Model).state.layers.Count -eq $count+1} 'New layer did not appear'
     $created=(Model).state.layer_tools.editing_layer.id
+    if($PresentationsOnly){
+        Check-Presentations $created $paint
+        [CapyRowPointer]::Dispose()
+        & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Close -DiscardUnsaved
+        if((Get-Item -LiteralPath $stderr).Length){throw 'Native presentation stderr requires review'}
+        @{device=$Device;theme=$Theme;floating_and_drawer_rows='passed';scope='Native layer floating and drawer presentations'}|ConvertTo-Json
+        return
+    }
+    if($KeyboardContextOnly){
+        Check-KeyboardContext $created
+        [CapyRowPointer]::Dispose()
+        & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Close -DiscardUnsaved
+        if((Get-Item -LiteralPath $stderr).Length){throw 'Native keyboard context stderr requires review'}
+        @{device=$Device;theme=$Theme;keyboard_context='passed';scope='Native layer keyboard and nested-menu context'}|ConvertTo-Json
+        return
+    }
     if($HoldOnly){
         $script:case='row-whitespace';Drag-Row "layer-row-$created" $created $paint
         [CapyRowPointer]::Dispose()
@@ -377,7 +588,7 @@ try {
         Layer-History 'Undo';Wait-Until {(Rows) -eq $before} 'Revealed Delete requires more than one Undo'
         Record-Swipe 'delete-undone'
     }
-    $script:case='new-press-after-drop';Drag-Row "layer-$created-drag" $created $paint -Grip -PressAfterRelease
+    $script:case='settled-grip-before-pending-drop';Drag-Row "layer-$created-drag" $created $paint -Grip
     if($SwipeOnly){
         $script:case='settled-grip-reorder';Drag-Row "layer-$created-drag" $created $paint -Grip
         $script:case='settled-grip-cancel';Drag-Row "layer-$created-drag" $created $paint -Grip -Cancel
@@ -474,106 +685,8 @@ try {
     $script:case='child-control-drag';Drag-Row "layer-$created-visibility" $created $paint
     $script:case='immediate-grip';Drag-Row "layer-$created-drag" $created $paint -Grip
     $script:case='row-cancel';Drag-Row "layer-$created-name" $created $paint -Cancel
-    $script:case='keyboard-context'
-    Focus-Key "layer-$created-name" 0x5d
-    Wait-Until {(Gesture).menu_open} 'Keyboard context action did not open the layer menu'
-    $beforeMenuRows=Rows;$beforeMenuRevision=(Model).state.document_file.revision
-    $source=Control "layer-$created-name";$organize=Control 'menu-organize' -Arranged
-    Tap 'menu-organize'
-    $duplicate=Control 'layer-menu-duplicate' -Arranged
-    $submenu=[System.Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($duplicate)
-    $menuItems=$submenu.FindAll([System.Windows.Automation.TreeScope]::Children,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::MenuItem))
-    $nested=@{device=$Device;before=@{source=(Menu-State $source);parent=(Menu-State $organize);child=(Menu-State $duplicate);items=@($menuItems|ForEach-Object {Menu-State $_})};rows=$beforeMenuRows;revision=$beforeMenuRevision}
-    try{
-        Wait-Until {@($menuItems|Where-Object {$_.Current.HasKeyboardFocus -and !$_.Current.IsOffscreen}).Count -gt 0} 'Native Organize submenu did not acquire keyboard focus'
-        [CapyRowPointer]::Key(0x1b)
-        Wait-Until {$child=Find 'layer-menu-duplicate';(!$child -or $child.Current.IsOffscreen) -and !$organize.Current.IsOffscreen -and $organize.Current.HasKeyboardFocus -and (Gesture).menu_open} 'First Escape did not close only the native Organize submenu'
-        $nested.after_first=@{parent=(Menu-State $organize);child=(Menu-State $duplicate);source=(Menu-State $source);gesture=(Gesture)}
-        Dismiss
-        Wait-Until {$parent=Find 'menu-organize';!$parent -or $parent.Current.IsOffscreen} 'Second Escape did not dismiss the native parent menu'
-        if((Rows) -ne $beforeMenuRows -or (Model).state.document_file.revision -ne $beforeMenuRevision){throw 'Nested menu cancellation changed layer state or history'}
-    }finally{
-        $nested.after_second=@{parent=(Menu-State $organize);child=(Menu-State $duplicate);source=(Menu-State $source);gesture=(Gesture);rows=(Rows);revision=(Model).state.document_file.revision}
-        $nested|ConvertTo-Json -Depth 15|Set-Content (Join-Path $run 'nested-menu-escape.json')
-    }
-    if($Device -eq 'mouse'){
-        $script:case='secondary-context'
-        $at=Point "layer-$created-name"
-        [CapyRowPointer]::RightClick($at.x,$at.y)
-        Wait-Until {(Gesture).menu_open} 'Secondary click did not open the layer menu'
-        Dismiss
-    }
-    # Reuse the same row controller after native panel reparenting and drawer
-    # creation. Workspace history is independent of each document reorder.
-    # Verify collapse/expand before taking the history baseline. Both
-    # presentations then exercise the same row controller and one-step Undo.
-    Focus-Key 'panel-tab-layers' 0x5d;Invoke 'Collapse column' -Name
-    Start-Sleep -Milliseconds 300
-    $column=@((Model).layout.collapsed|Where-Object {($_.groups.icons.panel) -contains 'layers'})[0].id
-    $at=Point 'column-icon-layers';[CapyRowPointer]::RightClick($at.x,$at.y)
-    $individual=(Control 'Open individual panels' -Name).GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)
-    if($individual.Current.ToggleState -ne [System.Windows.Automation.ToggleState]::On){
-        $individual.Toggle()
-        Wait-Until {@((Model).state.workspace.layout.column_stacks|Where-Object column -eq $column)[0].drawers} 'Individual panel drawers did not enable'
-        $at=Point 'column-icon-layers';[CapyRowPointer]::RightClick($at.x,$at.y)
-    }
-    Invoke 'Expand column' -Name
-    Wait-Until {$null -ne (Find 'panel-tab-layers')} 'Column mode setup did not restore Layers'
-    $layoutBefore=(Model).layout|ConvertTo-Json -Depth 80 -Compress
-    foreach($presentation in @('floating','drawer')){
-        $script:case="$presentation-setup"
-        if($presentation -eq 'floating'){
-            $at=Point 'panel-tab-layers';$to=Point 'drawing-canvas'
-            # Arrange the host with mouse input; each row below is tested with
-            # the requested device. Tab tear-off has its own acceptance fixture.
-            [CapyRowPointer]::Down('mouse',$at.x,$at.y);Start-Sleep -Milliseconds 35
-            Move-To $to
-            Wait-Until {
-                try{$g=(Workspace-Root).Current.HelpText|ConvertFrom-Json;$g.phase -eq 'dragging'}catch{$false}
-            } 'Layer tab did not begin its native drag'
-            [CapyRowPointer]::Up()
-            Wait-Until {@((Model).layout.groups|Where-Object {$_.panels -contains 'layers' -and $_.floating}).Count -eq 1} 'Layer tab did not tear off into a floating panel'
-        }else{
-            Focus-Key 'panel-tab-layers' 0x5d
-            Invoke 'Collapse column' -Name
-            Wait-Until {$tile=Find 'column-icon-layers';$tile -and !$tile.Current.IsOffscreen} 'Collapsed column did not expose Layers'
-            Invoke 'column-icon-layers'
-            Wait-Until {@((Model).state.customization.column_drawers|Where-Object {$_.anchor.origin -eq 'layers'}).Count -eq 1} 'Layer column drawer did not open'
-        }
-        $null=Point "layer-$created-name"
-        $script:case="$presentation-row";Drag-Row "layer-$created-name" $created $paint
-        $script:case="$presentation-whitespace";Drag-Row "layer-row-$created" $created $paint
-        $script:case="$presentation-child";Drag-Row "layer-$created-visibility" $created $paint
-        $script:case="$presentation-grip";Drag-Row "layer-$created-drag" $created $paint -Grip
-        $script:case="$presentation-cancel";Drag-Row "layer-$created-name" $created $paint -Cancel
-        if($presentation -eq 'drawer' -and @((Model).state.customization.column_drawers).Count -eq 0){
-            # Row cancellation can consume Escape before workspace chrome.
-            # Reopen only if the containing drawer was dismissed too.
-            Invoke 'column-icon-layers'
-            Wait-Until {@((Model).state.customization.column_drawers|Where-Object {$_.anchor.origin -eq 'layers'}).Count -eq 1} 'Layer drawer did not reopen after cancellation'
-        }
-        $script:case="$presentation-release"
-        $before=Rows
-        Pick-Up "layer-$created-visibility" $created
-        if($Device -eq 'mouse'){
-            Start-Sleep -Milliseconds 800
-            if((Gesture).menu_open){throw 'Mouse row hold opened a presentation menu'}
-            [CapyRowPointer]::Key(0x1b);[CapyRowPointer]::Up()
-        }else{
-            [CapyRowPointer]::Up()
-            Wait-Until {$g=Gesture;$g.phase -eq 'idle' -and $g.menu_open} 'Held presentation release did not retain its menu'
-            Dismiss
-        }
-        if((Rows) -ne $before){throw 'Held presentation release activated visibility'}
-        if($presentation -eq 'drawer'){
-            if(@((Model).state.customization.column_drawers).Count){Invoke 'column-icon-layers'}
-            Wait-Until {@((Model).state.customization.column_drawers).Count -eq 0} 'Layer drawer did not close'
-        }
-        & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'window'
-        Invoke 'undo_workspace'
-        Wait-Until {((Model).layout|ConvertTo-Json -Depth 80 -Compress) -eq $layoutBefore} 'Workspace Undo did not restore docked Layers'
-        $null=Point "layer-$created-name"
-    }
+    Check-KeyboardContext $created
+    Check-Presentations $created $paint
     $before=Contact-State
     $space=@{before=(Layer-Viewport);artwork_before=@{rows=$before.rows;checkpoint=$before.checkpoint;modified=$before.modified}}
     try{
@@ -729,11 +842,12 @@ try {
     [CapyRowPointer]::Dispose()
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Close -DiscardUnsaved
     if((Get-Item -LiteralPath $stderr).Length){throw 'Native stderr requires review'}
+    Verify-PendingDropFixture
     [pscustomobject]@{device=$Device;theme=$Theme;column_mode=$ColumnMode;short_click='passed';hold_release='passed';row_drag=$(if($Device -eq 'mouse'){'passed'}else{'handle_only_passed'});child_control_drag=$(if($Device -eq 'mouse'){'passed'}else{'denied_passed'});immediate_grip='passed';cancel='passed';one_step_undo_redo='passed';row_whitespace='passed';rename_ownership='passed';source_removal='passed';mask_and_selection_children='passed';group_content_and_into_drop='passed';keyboard_context='passed';edge_scroll_retention='passed';minimize_cancellation='passed';native_scroll=$(if($Device -eq 'mouse'){'not_applicable'}else{'passed'});floating_and_drawer_rows='passed';scope='OS-delivered synthetic input; physical-device and presentation-performance acceptance remain separate'}|ConvertTo-Json
 }catch{
     $fixtureFailed=$true;$failure=$_
     try{
-        @{case=$script:case;error=$failure.ToString();contact=$script:contact;press=$script:press;foreground=$script:foregroundState;gesture=(Gesture);rows=(Rows);workspace_presentation=$(try{(Workspace-Root).Current.ItemStatus}catch{$null})}|ConvertTo-Json -Depth 10|Set-Content (Join-Path $run 'failure.json')
+        @{case=$script:case;error=$failure.ToString();script_stack=$failure.ScriptStackTrace;contact=$script:contact;press=$script:press;foreground=$script:foregroundState;gesture=(Gesture);rows=(Rows);workspace_presentation=$(try{(Workspace-Root).Current.ItemStatus}catch{$null})}|ConvertTo-Json -Depth 10|Set-Content (Join-Path $run 'failure.json')
         if($review -and !$review.HasExited){
             & (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Output (Join-Path $run 'failure.png') -ClientOnly *> (Join-Path $run 'failure-window.json')
         }

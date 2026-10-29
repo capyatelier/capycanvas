@@ -358,7 +358,9 @@ struct LayerRowDrag::Impl:std::enable_shared_from_this<Impl>{
             swiping=false;e.Handled(true);clear(true);if(row&&operation.Size())row->action(operation);return;
         }
         if(dragging){
-            finishing=true;ignoreClick=true;e.Handled(true);release();
+            finishing=true;ignoreClick=true;e.Handled(true);
+            if(auto owner=view.lock())owner->data->pointerCancels.Forget(pointer.PointerId(),this);
+            release();
             // A release always asks current shared policy again, even when the
             // pointer stayed in a cached target while another action changed it.
             ++revision;answered.reset();placement=L"";normalizedTarget=-1;effectOwner=-1;target();publish();
@@ -404,7 +406,7 @@ struct LayerRowDrag::Impl:std::enable_shared_from_this<Impl>{
         inputUp=PointerEventHandler([weak=weak_from_this()](auto&&,auto&& e){if(auto self=weak.lock())self->up(e);});
         inputCancel=PointerEventHandler([weak=weak_from_this()](auto&&,PointerRoutedEventArgs const& e){
             if(auto self=weak.lock();self&&!self->releasing&&self->touches.contains(e.Pointer().PointerId()))self->cancelTouches(L"pointer_canceled");
-            if(auto self=weak.lock();self&&!self->releasing&&self->pointer&&self->pointer.PointerId()==e.Pointer().PointerId())self->cancel(L"pointer_canceled");
+            if(auto self=weak.lock();self&&!self->releasing&&!self->finishing&&self->pointer&&self->pointer.PointerId()==e.Pointer().PointerId())self->cancel(L"pointer_canceled");
         });
         root.AddHandler(UIElement::PointerMovedEvent(),box_value(inputMove),true);
         root.AddHandler(UIElement::PointerReleasedEvent(),box_value(inputUp),true);
@@ -423,7 +425,7 @@ struct LayerRowDrag::Impl:std::enable_shared_from_this<Impl>{
         timer.Tick([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->tick();});
         surface.AddHandler(UIElement::PointerPressedEvent(),box_value(PointerEventHandler([weak=weak_from_this()](auto&&,auto&& e){if(auto self=weak.lock())self->down(e);})),true);
         PointerGesture::OnLeaving(surface,[weak=weak_from_this()](PointerRoutedEventArgs const& e){
-            if(auto self=weak.lock();self&&self->pointer&&self->pointer.PointerId()==e.Pointer().PointerId()&&!self->owns(self->surface)){
+            if(auto self=weak.lock();self&&!self->finishing&&self->pointer&&self->pointer.PointerId()==e.Pointer().PointerId()&&!self->owns(self->surface)){
                 for(auto const& entry:self->path)if(auto node=entry.get();node&&self->owns(node))return;
                 self->clear(false);
             }
@@ -431,7 +433,7 @@ struct LayerRowDrag::Impl:std::enable_shared_from_this<Impl>{
         surface.AddHandler(UIElement::PointerCaptureLostEvent(),box_value(PointerEventHandler([weak=weak_from_this()](auto&&,PointerRoutedEventArgs const& e){
             if(auto self=weak.lock();self&&!self->releasing){
                 auto contactId=e.Pointer().PointerId();bool paired=self->multitouch&&self->touches.contains(contactId);
-                if(!paired&&(!self->pointer||self->pointer.PointerId()!=contactId))return;
+                if(!paired&&(self->finishing||!self->pointer||self->pointer.PointerId()!=contactId))return;
                 auto point=e.GetCurrentPoint(self->surface);bool captured=PointerGesture::Captured(self->surface,contactId);
                 if(self->trace){
                     auto original=e.OriginalSource();auto node=original.try_as<DependencyObject>();

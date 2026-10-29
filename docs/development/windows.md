@@ -544,7 +544,7 @@ contacts so the stroke can be reconstructed.
 
 ### Control reviews
 
-`build.ps1 -ControlFixture Number|Color|Bitmap|Popup|Feedback` replaces the app's
+`build.ps1 -ControlFixture Number|Color|Bitmap|Popup|Feedback|LayerDrop` replaces the app's
 entry point with production controls for review. Number and Color reviews
 compare with the Web controls through shared Rust models; generate the models at
 the display's actual scale, and regenerate native and Web inputs together after
@@ -567,6 +567,12 @@ Pass the native reports to the `number-controls` and `color-panel` scenarios of
 `test-desktop.ps1`. The Bitmap build reads its input from an absolute
 `CAPY_BITMAP_FIXTURE` path and writes `bitmap-upload-fixture-result.json` beside
 it. Rebuild normally before using the editor again.
+
+The LayerDrop build mounts the production layer panel and holds its final drop
+reply until the fixture releases it. Build it in a separate output folder and
+pass its executable as `-DropFixture` to `exercise-layer-pickup.ps1` for the full
+journey. `-PendingDropOnly` runs the overlap check directly with the LayerDrop
+executable. Run both through `test-desktop.ps1`.
 
 ## Matched editor captures
 
