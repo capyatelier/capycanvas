@@ -110,7 +110,7 @@ coordinates through shared Rust. The old 1 Hz, ±18–20 dp percent-value scrubs
 imply only about 16–20 distinct changes/s and legitimate turnaround plateaus;
 they cannot establish a delivery stall or reject clip ordering. The new value
 sweep runs at 240 dp/s. A fresh control at `6c6705231`, 12 MP Fit, factory
-density/font, thermal0 and three warmed contacts records:
+density/font, thermal status 0 and three warmed contacts records:
 
 | Numeric row | Actual presents/s | Present gap p99, ms | Delivered / input-implied / display-eligible changes/s | Delivered gap p99, ms | Demand-conditioned gap p99, ms |
 | --- | --- | --- | --- | --- | --- |
@@ -123,10 +123,18 @@ Rates are contact medians; tails are the worst contact p99. All twelve exact
 replays pass. Display-eligible demand uses an inferred 60 Hz lattice anchored
 to actual target-window presents. Draw observations do not establish accepted
 input, matching-value latency or fresh SF buffer identity. Observer wall p99
-is at most0.274ms. The unrelated background editor remained invisible and used
-roughly10% of one CPU core; its activity is retained with the run. No production
+is at most 0.274 ms. The unrelated editor continued using CPU in the background;
+its visibility and CPU counters are retained with the run. No production
 gain is claimed. Evidence: `artifacts/android-ui-motion/round3/numeric-validation/`
 and scratch `round3/small-rounded-abba/A1/numeric-validation/`.
+
+The current control cannot qualify native layer-row opacity: changing opacity
+replaces the panel's measurement identity and loses its popup owner. A single-row
+repro fails with `ui-layer-row-opacity draw target unavailable`; shared state
+still marks the popup open. Earlier 30–31 presents/s results predate this check.
+The primary failure and suppressed cleanup timeout are retained in
+`artifacts/android-ui-motion/round3/layer-popup-owner-repro.local.md` and scratch
+`round3/popup-primary-control/`. No candidate workaround is applied.
 
 Separate diagnostic traces establish RenderThread drawing/flush work and
 software clip-mask generation. The wheel has about three large logical
@@ -145,6 +153,47 @@ acceptance were not run for these discarded candidates. The proposed 90 Hz colle
 extension has not been built or validated on Android and is not shipped code. Exact APKs,
 hashes, contacts and p99 samples are retained under
 `/mnt/localssd/capycanvas5-android-ui-motion-20261028/critical-trial{1,2}-abba/`.
+
+## Android retained thumbnail projection
+
+The Layers panel retains its thumbnail-map projection until its images or
+document epoch change. Unchanged rows can then skip composition during drag.
+Matched TCL ABBA at `df1b3b570`, 12 MP Fit, factory density/font and thermal
+status 0, uses identical native libraries and test APK `f14cd42e…`:
+
+| Row | Control → candidate actual presents/s | Worst contact gap p99, ms |
+| --- | --- | --- |
+| Layer reorder | 44.779 → 50.431 (+12.62%) | 49.983 → 49.983 |
+| Attached filter reorder | 38.049 → 45.246 (+18.91%) | 83.322 → 83.311 |
+
+Both candidate phase means exceed both controls; control drift is 1.69% and
+4.39%, respectively. All eight native fixtures pass. These rows still miss
+60 Hz, and their worst-contact tails do not improve. Numeric fresh values are
+not applicable to these rows.
+
+Separate composition diagnostics show 68.7% fewer LayerRow entries, about
+four → one per LayerPanel entry. A regression assertion fails on control
+(`764 row scopes for 191 panels and 3 authored rows`) and passes all candidate
+contacts. Clean FrameMetrics animation-phase p50 falls 14.98 → 11.22 ms for
+layers and 17.43 → 11.93 ms for filters. These are elapsed phase times; the
+RenderThread command-issue phase does not improve. Both-theme red, gradient,
+reverse and undo pixel checks pass on control and candidate; all six thumbnail
+and row crops are pixel-identical. Relationship captures are also identical
+before a shared control swipe failure. Full
+contact triples, hashes, costs and acceptance checks are retained under
+`artifacts/android-ui-motion/round3/retained-thumbnail-attribution/` and scratch
+`round3/retained-thumbnail-{abba,regression,acceptance}/`.
+
+Matched canvas guards pass all eight native fixtures on the 12 MP photo at
+Fit with Navigator, OS input and G-Pen 1024. Actual presents/s are pan
+60.022 → 60.023, pinch 48.087 → 48.316, rotate 60.022 → 60.023 and stroke
+38.879 → 38.743. Completed stroke updates are 38.39 → 38.28/s, within contact
+spread; software input-to-completion p99 is 83.843 → 79.541 ms. These do not
+measure physical digitizer-to-panel latency. No material canvas regression
+is established. The separately reproduced popup-owner and pass-through-swipe
+control failures remain unresolved. The full filter journey completes its
+light/dark thumbnail checks, then the control times out while revealing Delete
+on the remaining row; that later geometry failure is retained separately.
 
 ## Android UI motion baseline
 
@@ -511,12 +560,12 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 | Navigation with proof or tone guide shown | 60 | | |
 | Gradient drag | 60 | | |
 | Figure or ruler drag | 60 | | |
-| Layer opacity scrub | 60 | Android header slider 52.910–57.074 actual presents/s; value 54.629–56.217/s; native row popup 30.446–31.309/s. Canonical successful native batch; popup observations use its literal window. Earlier Solid Color workload is separate | [Android UI motion baseline](#android-ui-motion-baseline), 2026-10-28 ; [Solid Color fills](#solid-color-fills) |
-| Layer reorder drag | 60 | Android native contacts record 39.324–46.064 actual presents/s, p99 33.577–49.988 ms; historical short-primer diagnostic | [Android UI motion baseline](#android-ui-motion-baseline), 2026-10-28  |
+| Layer opacity scrub | 60 | Current native row popup cannot qualify: its owner disappears during the primer while shared state remains open. Earlier header slider 52.910–57.074 actual presents/s, value 54.629–56.217/s and popup 30.446–31.309/s are historical. Earlier Solid Color workload is separate | [Current Android control check](#android-ui-compositing-trials); [Android UI motion baseline](#android-ui-motion-baseline), 2026-10-28; [Solid Color fills](#solid-color-fills) |
+| Layer reorder drag | 60 | Matched Android ABBA improves 44.779 → 50.431 actual presents/s; worst-contact gap p99 remains 49.983 ms. Target still missed | [Retained thumbnail projection](#android-retained-thumbnail-projection), 2026-10-28 |
 | Layer row swipe | 60 | Android older native swipe diagnostics: left 56.217–57.428, right 56.401–58.120 actual presents/s; p99 up to 33.391 ms; short-primer limits apply | [Android UI motion baseline](#android-ui-motion-baseline), 2026-10-28  |
 | Workspace-manager row swipe and reorder | 60 | Unmeasured on reference hardware; functional input checks do not qualify moving-frame timing | [Workspace manager](../ui/default-workspaces.md#workspace-manager) |
 | Layer thumbnail selection animation | 60 | Android instantaneous layer/mask selection: 14 observed state changes per contact; next-present observations only, no fresh-selection latency or sustained FPS | [Android UI motion baseline](#android-ui-motion-baseline), 2026-10-28  |
-| Attached filter drag inside a clipping run | 60 | Android attached-filter native diagnostic 37.909–39.497 actual presents/s, p99 49.883–50.087 ms; historical short primer prevents current qualification | [Android UI motion baseline](#android-ui-motion-baseline), 2026-10-28  |
+| Attached filter drag inside a clipping run | 60 | Matched Android ABBA improves 38.049 → 45.246 actual presents/s; worst-contact gap p99 83.322 → 83.311 ms. Target still missed | [Retained thumbnail projection](#android-retained-thumbnail-projection), 2026-10-28 |
 | Navigation with 8 visible paint layers | 60 | | |
 | Drawing with 8 visible paint layers, G-Pen 1024 px | 60 | **Not met.** Navigator open, Fit: 50.12 fresh updates/s (48.65–51.65), completion gap p99 29.30–32.87 ms | Retained-Navigator painting below; seven photo layers and one drawing layer |
 | Panel, tab, column or toolbar drag and docking | 60 | Android full-primer tab/panel contacts record 58.814–60.023 actual presents/s and 51.993–59.284 fresh bounds/s; column feedback is discrete. Other hosts retain their existing measurements | [Android UI motion baseline](#android-ui-motion-baseline), 2026-10-28 |

@@ -64,5 +64,9 @@ internal class LayerThumbnails(private val host: CanvasHost) {
         }
     }
     DisposableEffect(cache, owner) { onDispose { cache.remove(owner) } }
-    return cache.images.filterKeys { it.startsWith("$epoch:") }.mapKeys { it.key.substringAfter(':') }
+    return remember(cache, epoch) {
+        derivedStateOf(structuralEqualityPolicy()) {
+            cache.images.filterKeys { it.startsWith("$epoch:") }.mapKeys { it.key.substringAfter(':') }
+        }
+    }.value
 }

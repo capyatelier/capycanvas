@@ -49,6 +49,10 @@ The former slow percent-value fixture was input-limited; its presentation
 rates cannot qualify freshness. The 240 dp/s fixture and delivered/implied
 value comparison still need a current 90 Hz MovinkPad pass.
 
+The retained thumbnail projection improves matched TCL layer/filter reorder
+cadence; it has no middle-tier qualification yet. A current control and
+candidate must be measured at verified 90 Hz after fixture startup.
+
 ## Android panel composition
 
 The 2026-10-28 retained panel-body change is unmeasured on Wacom MovinkPad 11.

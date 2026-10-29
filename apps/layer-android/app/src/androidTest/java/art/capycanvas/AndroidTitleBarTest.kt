@@ -1561,6 +1561,23 @@ class AndroidTitleBarTest {
         val selection=args.getString("layerSelectionBenchmark")=="true"
         val properties=args.getString("layerPropertiesBenchmark")=="true"
         val discrete=selection || properties
+        val countReorder=args.getString("countReorderScopes")=="true"
+        require(!countReorder || reorder)
+        val countScopes=java.util.concurrent.atomic.AtomicBoolean(false)
+        val scopeCounts=java.util.concurrent.ConcurrentHashMap<String,java.util.concurrent.atomic.AtomicInteger>()
+        val scopes=listOf("PanelControls","LayerPanel","LayerRow","LayerConnections")
+        @OptIn(androidx.compose.runtime.InternalComposeTracingApi::class)
+        fun compositionTracer(active:Boolean) {
+            androidx.compose.runtime.Composer.setTracer(if(!active)null else object:androidx.compose.runtime.CompositionTracer {
+                override fun isTraceInProgress()=true
+                override fun traceEventStart(key:Int,dirty1:Int,dirty2:Int,info:String) {
+                    if(countScopes.get())scopes.firstOrNull { info.startsWith("art.capycanvas.$it (") }?.let {
+                        scopeCounts.computeIfAbsent(it) { java.util.concurrent.atomic.AtomicInteger() }.incrementAndGet()
+                    }
+                }
+                override fun traceEventEnd() {}
+            })
+        }
         val swipeDirection=if(args.getString("layerSwipeDirection")=="left") -1 else 1
         org.junit.Assume.assumeTrue(discrete || reorder || args.getString("layerSwipeBenchmark")=="true")
         val width=args.getString("width")?.toInt() ?: 6000
@@ -1640,6 +1657,7 @@ class AndroidTitleBarTest {
         }
         instrumentation.runOnMainSync { window.addOnFrameMetricsAvailableListener(listener,android.os.Handler(thread.looper)) }
         tool=if(reorder) MotionEvent.TOOL_TYPE_MOUSE else MotionEvent.TOOL_TYPE_FINGER
+        if(countReorder)instrumentation.runOnMainSync { compositionTracer(true) }
         try {
             for(run in 0..3) {
                 if(!discrete)down("layer-row-$id")
@@ -1655,6 +1673,14 @@ class AndroidTitleBarTest {
                 val beginBoot=SystemClock.elapsedRealtimeNanos()
                 val beginMonoAfterBoot=System.nanoTime()
                 frames.clear()
+                var rowBaseline=emptyMap<Long,Triple<JSONObject,String,Int?>>()
+                if(countReorder)instrumentation.runOnMainSync {
+                    rowBaseline=state().array("layers").objects().associate { row ->
+                        val rowId=row.getLong("id")
+                        rowId to Triple(row,row.toString(),node("layer-row-$rowId")?.second?.id)
+                    }
+                    scopeCounts.clear();countScopes.set(true)
+                }
                 lateinit var callback: android.view.Choreographer.FrameCallback
                 var selectedInterval=-1L
                 fun selectedState()=if(properties)state().getJSONObject("customization").getJSONObject("drawer").getBoolean("layer_properties")
@@ -1702,6 +1728,7 @@ class AndroidTitleBarTest {
                 }
                 try { assertTrue(done.await(15,java.util.concurrent.TimeUnit.SECONDS)) }
                 finally { instrumentation.runOnMainSync { android.view.Choreographer.getInstance().removeFrameCallback(callback) } }
+                if(countReorder)instrumentation.runOnMainSync { countScopes.set(false) }
                 val endNs=System.nanoTime()
                 val endBoot=SystemClock.elapsedRealtimeNanos()
                 val endMonoAfterBoot=System.nanoTime()
@@ -1759,8 +1786,35 @@ class AndroidTitleBarTest {
                         "moving_draw_mono_ns" to JSONArray(moving.sorted()),
                         "camera" to state().getJSONObject("camera"),
                         "layers" to state().array("layers"),"frames" to JSONArray(rows.map { JSONArray(it.toList()) }))
+                    if(countReorder) {
+                        val identities=JSONArray()
+                        instrumentation.runOnMainSync {
+                            for(row in state().array("layers").objects()) {
+                                val rowId=row.getLong("id");val before=rowBaseline[rowId]
+                                identities.put(obj("id" to rowId,"authored_equal" to (before?.second==row.toString()),
+                                    "model_same_reference" to (before?.first===row),
+                                    "semantics_same_id" to (before?.third==node("layer-row-$rowId")?.second?.id)))
+                            }
+                        }
+                        result.put("composition_scope_counts",obj(*scopes.map { it to (scopeCounts[it]?.get() ?: 0) }.toTypedArray()))
+                        result.put("row_identity_witnesses",identities)
+                        result.put("layout_measure_frames",rows.count { it[6]>0 })
+                        result.put("layout_measure_total_ns",rows.sumOf { it[6] })
+                        result.put("scope_qualification","Diagnostic aggregate scopes include drag preview; layout measure is whole-window, not per-row")
+                    }
                     if(properties)result.put("active_windows",activeWindows)
                     java.io.File(instrumentation.targetContext.getExternalFilesDir(null),"$label-$run.json").writeText(result.toString())
+                    if(countReorder) {
+                        val panels=scopeCounts["LayerPanel"]?.get() ?: 0
+                        val rowScopes=scopeCounts["LayerRow"]?.get() ?: 0
+                        assertTrue("Reorder fixture retains multiple authored rows",rowBaseline.size>1)
+                        assertTrue("Authored row models and semantics remain stable",result.getJSONArray("row_identity_witnesses").objects().all {
+                            it.getBoolean("authored_equal") && it.getBoolean("model_same_reference") && it.getBoolean("semantics_same_id")
+                        })
+                        assertTrue("LayerPanel composition was counted",panels>0)
+                        assertTrue("LayerRow composition was counted",rowScopes>0)
+                        assertTrue("Unchanged authored rows skip composition: $rowScopes row scopes for $panels panels and ${rowBaseline.size} authored rows",rowScopes<=panels*rowBaseline.size)
+                    }
                     assertTrue("Moving frames were measured",rows.size>1)
                     if(properties)assertTrue("Native footer contacts changed pages throughout the gesture",transitions.size>=duration/selectionInterval-2)
                     if(measureGeometry)assertTrue("Drawn geometry changes during native contact",moving.size>1)
@@ -1773,6 +1827,7 @@ class AndroidTitleBarTest {
                 window.removeOnFrameMetricsAvailableListener(listener)
                 if(measureGeometry)window.decorView.viewTreeObserver.removeOnDrawListener(drawListener)
             }
+            if(countReorder)instrumentation.runOnMainSync { countScopes.set(false);compositionTracer(false) }
             thread.quitSafely()
         }
     }
@@ -2456,6 +2511,36 @@ class AndroidTitleBarTest {
             it.getJSONObject("item").objectOrNull("control")?.optString("panel") == panel
         }.getInt("id")
         fun drawer() = state().getJSONObject("customization").objectOrNull("drawer")
+        fun openLayerRows() {
+            val opener=header("layers")
+            val headerId=opener.removePrefix("header-control-").toInt()
+            fun currentLayers()=drawer()?.objectOrNull("anchor")?.let { it.optString("kind")=="header" && it.optInt("id")==headerId }==true
+            if(currentLayers()) {
+                if(drawer()!!.getBoolean("layer_properties")) {
+                    tap("layer-properties-disclosure")
+                    waitFor("Native Layers properties close") { currentLayers() && !drawer()!!.getBoolean("layer_properties") }
+                }
+                tap(opener)
+                waitFor("Native Layers drawer closes") { drawer()==null }
+            }
+            tap(opener)
+            waitFor("Native Layers drawer published") {
+                drawer()?.let { current ->
+                    val anchor=current.getJSONObject("anchor")
+                    anchor.optString("kind")=="header" && anchor.optInt("id")==headerId && current.has("layer_properties") &&
+                        current.getJSONArray("columns").values().any { (it as JSONArray).values().contains("layers") }
+                }==true
+            }
+            if(drawer()!!.getBoolean("layer_properties"))tap("layer-properties-disclosure")
+            waitFor("Native layer rows page is arranged") {
+                if(drawer()?.optBoolean("layer_properties")!=false)return@waitFor false
+                val inspector=node("layer-inspector")?.second?.boundsInRoot ?: return@waitFor false
+                val target=node("layer-row-2") ?: return@waitFor false
+                val row=target.second.boundsInRoot
+                val visible=row.intersect(inspector).intersect(androidx.compose.ui.geometry.Rect(0f,0f,target.first.view.width.toFloat(),target.first.view.height.toFloat()))
+                row.width>0f && row.height>0f && visible.width>=row.width*.9f && visible.height>=target.second.size.height*.9f
+            }
+        }
         fun layer(op: String, id: Long) = action(obj("type" to "layer", "action" to obj("op" to op, "id" to id, "mask" to false)))
         val filters=header("adjustments")
         tap(filters)
@@ -2486,7 +2571,7 @@ class AndroidTitleBarTest {
         tap("color-bucket")
         val paper=state().array("layers").objects().first { it.getLong("id")==2L }
         assertTrue(paper.getBoolean("has_thumbnail"))
-        assertEquals("layer-fill-symbolic",paper.getString("content_icon"))
+        assertEquals("layer-paper-symbolic",paper.getString("content_icon"))
         assertFalse(paper.getBoolean("has_mask"))
         assertFalse(paper.getString("description").contains("Protected"))
         assertTrue(state().getJSONObject("layer_tools").getJSONObject("controls").getBoolean("opacity"))
@@ -2500,22 +2585,29 @@ class AndroidTitleBarTest {
             }
             shot("paper-properties-$theme")
         }
-        fun waitThumbnail(label: String, matches: (List<Int>) -> Boolean) {
+        fun waitThumbnail(label: String, matches: (List<Int>) -> Boolean):List<Int> {
             waitFor(label) { node("layer-thumbnail-2-false") != null }
             val deadline=SystemClock.uptimeMillis()+15000
             while(true) {
                 val bounds=screenBounds("layer-thumbnail-2-false")
                 val image=instrumentation.uiAutomation.takeScreenshot()
-                val colors=listOf(.2f,.5f,.8f).map { image.getPixel((bounds.left+bounds.width*it).toInt(),(bounds.top+bounds.height*.35f).toInt()) }
+                val last=bounds.width.toInt()-1
+                val edge=(last*.2f).roundToInt()
+                fun pixel(x:Int)=image.getPixel(bounds.left.toInt()+x,(bounds.top+bounds.height*.35f).toInt())
+                val middleLeft=pixel(last/2);val middleRight=pixel((last+1)/2)
+                val middle=android.graphics.Color.rgb((android.graphics.Color.red(middleLeft)+android.graphics.Color.red(middleRight))/2,
+                    (android.graphics.Color.green(middleLeft)+android.graphics.Color.green(middleRight))/2,
+                    (android.graphics.Color.blue(middleLeft)+android.graphics.Color.blue(middleRight))/2)
+                val colors=listOf(pixel(edge),middle,pixel(last-edge))
                 image.recycle()
-                if(matches(colors)) return
+                if(matches(colors)) return colors
                 assertTrue("$label: $colors", SystemClock.uptimeMillis()<deadline)
                 SystemClock.sleep(100)
             }
         }
-        tap(header("layers"))
         for(theme in listOf("light","dark")) {
             action(obj("type" to "set_theme","theme" to theme))
+            openLayerRows()
             waitThumbnail("$theme red fill thumbnail") { colors ->
                 val color=colors[1]
                 android.graphics.Color.red(color)>240 && android.graphics.Color.green(color)<10 && android.graphics.Color.blue(color)<10
@@ -2529,17 +2621,28 @@ class AndroidTitleBarTest {
         tap("adjustment-gradient_fill")
         action(obj("type" to "effect", "action" to obj("op" to "set", "layer" to 2, "key" to "angle", "value" to obj("kind" to "number", "value" to 0))))
         assertEquals("layer-gradient-symbolic",state().array("layers").objects().first { it.getLong("id")==2L }.getString("content_icon"))
-        tap(header("layers"))
         for(theme in listOf("light","dark")) {
             action(obj("type" to "set_theme", "theme" to theme))
+            openLayerRows()
             waitFor("Gradient type symbol") { node("layer-type-symbol-2") != null }
+            var forward=emptyList<Int>()
             for((step, reverse) in listOf(false,true,false).withIndex()) {
-                if(reverse) action(obj("type" to "effect", "action" to obj("op" to "set", "layer" to 2, "key" to "reverse", "value" to obj("kind" to "toggle", "value" to true))))
-                else if(step==2) action(obj("type" to "invoke", "command" to "undo"))
-                waitThumbnail("$theme gradient thumbnail reverse=$reverse") { colors ->
-                    val left=android.graphics.Color.red(colors[0]);val right=android.graphics.Color.red(colors[2])
-                    if(reverse) left>180 && right<80 else left<80 && right>180
+                if(reverse) {
+                    val destination=state().getJSONObject("layer_properties").array("controls").objects().first { it.getString("key")=="gradient" }
+                        .getJSONObject("gradient").getJSONObject("destination")
+                    action(obj("type" to "effect","action" to obj("op" to "gradient","target" to destination,"edit" to obj("kind" to "reverse"))))
+                } else if(step==2) action(obj("type" to "invoke", "command" to "undo"))
+                val colors=waitThumbnail("$theme gradient thumbnail reverse=$reverse") { pixels ->
+                    if(step==0) {
+                        val gray=pixels.map { android.graphics.Color.red(it) }
+                        pixels.all { kotlin.math.abs(android.graphics.Color.red(it)-android.graphics.Color.green(it))<=3 &&
+                            kotlin.math.abs(android.graphics.Color.red(it)-android.graphics.Color.blue(it))<=3 } &&
+                            gray[0]<gray[1] && gray[1]<gray[2] && gray[2]-gray[0]>100
+                    } else pixels.zip(if(reverse)forward.reversed() else forward).all { (actual,expected) ->
+                        listOf(16,8,0).all { shift -> kotlin.math.abs(((actual shr shift) and 255)-((expected shr shift) and 255))<=3 }
+                    }
                 }
+                if(step==0)forward=colors
                 shot("gradient-thumbnail-$theme-$reverse")
             }
         }
@@ -2554,8 +2657,10 @@ class AndroidTitleBarTest {
         for((id,device) in listOf(1L to MotionEvent.TOOL_TYPE_STYLUS,2L to MotionEvent.TOOL_TYPE_FINGER)) {
             tool=device
             swipe(id,-90f)
-            waitFor("Delete revealed") { node("layer-delete-$id")!=null }
-            assertTrue(bounds("layer-delete-$id").width>=70*density)
+            waitFor("Delete is fully revealed") { node("layer-delete-$id")?.second?.let {
+                it.size.width>0 && it.size.height>0 && kotlin.math.abs(it.boundsInRoot.width-it.size.width)<=1f &&
+                    kotlin.math.abs(it.boundsInRoot.height-it.size.height)<=1f
+            }==true }
             swipe(id,90f)
             waitFor("Reverse closes Delete") { node("layer-delete-$id")==null }
             swipe(id,-90f)
