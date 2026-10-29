@@ -52,7 +52,7 @@ struct WorkspaceRowDrag::Impl:std::enable_shared_from_this<Impl>{
     bool ignoreClick=false,suppressContext=false,valid=false,recognizing=false;
     bool trace=GetEnvironmentVariableW(L"CAPY_TRACE_UI",nullptr,0)!=0;
     uint64_t generation=0;
-    J lastRelease,lastCancel;
+    J lastRelease,lastCancel,lastCaptureLoss;
     std::chrono::steady_clock::time_point tickAt;
     void evidence(){
         if(!trace)return;
@@ -62,6 +62,7 @@ struct WorkspaceRowDrag::Impl:std::enable_shared_from_this<Impl>{
             {L"grip",B(grip)},{L"panning",B(panning)},{L"can_drop",B(valid)},{L"before",before?S(*before):JsonValue::CreateNullValue()}});
         if(lastRelease.Size())value.Insert(L"last_release",lastRelease);
         if(lastCancel.Size())value.Insert(L"last_cancel",lastCancel);
+        if(lastCaptureLoss.Size())value.Insert(L"last_capture_loss",lastCaptureLoss);
         AutomationProperties::SetItemStatus(list,value.Stringify());
     }
     void deferClick(){
@@ -69,7 +70,15 @@ struct WorkspaceRowDrag::Impl:std::enable_shared_from_this<Impl>{
         surface.DispatcherQueue().TryEnqueue(Microsoft::UI::Dispatching::DispatcherQueuePriority::Low,
             [weak=weak_from_this(),epoch]{if(auto self=weak.lock();self&&self->generation==epoch&&!self->pointer)self->ignoreClick=false;});
     }
+    void hideMenus(){
+        if(visibleMenu){auto menu=std::exchange(visibleMenu,nullptr);menu.Hide();}
+        if(source){
+            if(auto menu=source->context.get())menu.Hide();
+            if(auto menu=source->menu.get())menu.Hide();
+        }
+    }
     void clear(bool hideMenu){
+        if(hideMenu)hideMenus();
         ++generation;auto old=source;source.reset();pointer=nullptr;
         bool wasDrag=dragging;held=false;dragging=false;valid=false;before.reset();
         timer.Stop();hint.Visibility(Visibility::Collapsed);
@@ -79,12 +88,11 @@ struct WorkspaceRowDrag::Impl:std::enable_shared_from_this<Impl>{
         scrollModes.clear();path.clear();
         if(old){
             if(auto row=old->item.get();row&&wasDrag)row.Opacity(sourceOpacity);
-            if(hideMenu)if(auto menu=old->menu.get())menu.Hide();
         }
         ended();deferClick();evidence();
     }
     bool cancel(hstring reason=L"cancel"){
-        if(!pointer&&!source)return false;
+        if(!pointer&&!source&&!visibleMenu)return false;
         if(trace)lastCancel=O({{L"generation",N(double(generation))},{L"reason",S(reason)}});
         ignoreClick=true;clear(true);return true;
     }
@@ -203,7 +211,7 @@ struct WorkspaceRowDrag::Impl:std::enable_shared_from_this<Impl>{
             if(!claim())return;
             dragging=true;ignoreClick=true;suppressContext=true;
             auto row=source->item.get();sourceOpacity=row.Opacity();row.Opacity(.55);
-            if(auto menu=source->menu.get())menu.Hide();
+            hideMenus();
         }
         if(dragging){target();e.Handled(true);evidence();}
     }
@@ -314,11 +322,22 @@ struct WorkspaceRowDrag::Impl:std::enable_shared_from_this<Impl>{
         surface.AddHandler(UIElement::PointerCanceledEvent(),box_value(canceled),true);
         surface.AddHandler(UIElement::PointerCaptureLostEvent(),box_value(PointerEventHandler([weak=weak_from_this()](auto&&,PointerRoutedEventArgs const& e){
             if(auto self=weak.lock();self&&!self->releasing&&self->pointer&&self->pointer.PointerId()==e.Pointer().PointerId()){
+                auto point=e.GetCurrentPoint(self->surface);bool captured=self->owns(self->surface);
+                if(self->trace){auto original=e.OriginalSource().try_as<FrameworkElement>();
+                    self->lastCaptureLoss=O({{L"generation",N(double(self->generation))},{L"pointer_id",N(e.Pointer().PointerId())},
+                        {L"original",S(original?AutomationProperties::GetAutomationId(original):hstring())},{L"surface_capture",B(captured)},
+                        {L"in_contact",B(point.IsInContact())},{L"canceled",B(point.Properties().IsCanceled())}});self->evidence();}
+                if(e.OriginalSource()!=self->surface&&captured&&!point.Properties().IsCanceled())return;
                 // Native buttons release their capture before Click/ItemClick.
                 // Preserve that ordinary release and the More button's flyout.
                 if(self->child)self->clear(false);
                 else if(!self->held&&!self->dragging&&!self->grip&&!e.GetCurrentPoint(self->surface).IsInContact())self->up(e);
-                else self->cancel(L"capture_lost");
+                else{
+                    auto generation=self->generation;auto id=self->pointer.PointerId();
+                    self->surface.DispatcherQueue().TryEnqueue([weak=std::weak_ptr<Impl>(self),generation,id]{
+                        if(auto self=weak.lock();self&&self->generation==generation&&self->pointer&&self->pointer.PointerId()==id&&!self->owns(self->surface))self->cancel(L"capture_lost");
+                    });
+                }
             }
         })),true);
         ShortcutKeys(surface,[weak=weak_from_this()](auto&&,KeyRoutedEventArgs const& e){

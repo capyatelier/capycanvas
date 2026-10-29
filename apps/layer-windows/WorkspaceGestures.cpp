@@ -330,7 +330,9 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
     }
     void edgeMove(PointerRoutedEventArgs const& e){
         if(!edge||edge->pointer!=e.Pointer().PointerId())return;
-        auto p=e.GetCurrentPoint(root);if(!p.IsInContact())return;
+        auto p=e.GetCurrentPoint(root);
+        if(p.Properties().IsCanceled()){edgeEnd(L"cancel",L"pointer_canceled");return;}
+        if(!p.IsInContact())return;
         edgeMotion(p,p.Position());
         if(edge->claimed)e.Handled(true);
     }
@@ -501,16 +503,15 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
     }
     void down(PointerRoutedEventArgs const& e){
         if(edge&&(edge->claimed||edge->shield))return;
-        if(pointer){if(*pointer!=e.Pointer().PointerId())cancel(L"additional_contact");return;}
+        if(pointer)return;
         if(dragging||data->externalPopup||data->popupCount)return;
         ignoreClick=false;rejectedPointer.reset();
         auto p=e.GetCurrentPoint(root);if(!PointerGesture::PrimaryContact(p))return;
         auto tag=target(e.OriginalSource());
-        if(flag(tag,L"workspace_control"))return;
         auto tab=object(tag,L"workspace_tab");
         if(tab.Size())data->chrome.Insert(L"contact_tab",S(str(tab,L"panel")));
         chrome(O({{L"kind",S(L"contact")},{L"position",point(p.Position())},{L"canvas",B(false)}}));
-        if(!tag.Size())return;
+        if(flag(tag,L"workspace_control")||!tag.Size())return;
         action=object(tag,L"workspace_action");
         if(!action.Size()&&e.Handled())return;
         // Empty column space offers a menu and double-click, without becoming
@@ -551,6 +552,8 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
     void move(PointerRoutedEventArgs const& e){
         if(!pointer||*pointer!=e.Pointer().PointerId()||finishing)return;
         if(!current()){cancel(L"source_invalid");return;}
+        if(e.GetCurrentPoint(root).Properties().IsCanceled()){cancel(L"pointer_canceled");return;}
+        if(contextOnly&&held)return;
         auto next=e.GetCurrentPoint(root).Position();
         if(recognizing)recognizer.Move(root,e);
         if(!dragging&&crossed()){

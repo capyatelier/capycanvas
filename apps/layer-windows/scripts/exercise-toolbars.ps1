@@ -53,6 +53,10 @@ function BackgroundContext([string]$Id){
             Start-Sleep -Milliseconds 900
             if($device -ne 'mouse'){Wait-Until {$null -ne (Find 'Add Tools…' -Name)} "$device background hold did not open the toolbar menu"}
             elseif(Find 'Add Tools…' -Name){throw 'Mouse background hold opened a menu'}
+            if($device -ne 'mouse'){
+                [CapyRowPointer]::Move($at.x+24,$at.y)
+                Wait-Until {$null -ne (Find 'Add Tools…' -Name)} 'Motion after an empty toolbar hold dismissed its menu'
+            }
             if($cancel){[CapyRowPointer]::Cancel()}else{[CapyRowPointer]::Up()}
             if($cancel -or $device -eq 'mouse'){Wait-Until {!(Find 'Add Tools…' -Name)} 'Cancelled background hold left a menu'}
             else{

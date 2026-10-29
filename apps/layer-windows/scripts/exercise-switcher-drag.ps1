@@ -233,13 +233,13 @@ function New-WorkspaceButton {
     }
     $control
 }
-function Row-Context([string]$Id){
+function Row-Context([string]$Id,[switch]$KeepPressed){
     $at=Point $Id
     if($Device -eq 'mouse'){[CapyRowPointer]::RightClick($at.x,$at.y)}else{
         if($Device -eq 'pen'){[CapyRowPointer]::PenHover($at.x,$at.y);Start-Sleep -Milliseconds 50}
         [CapyRowPointer]::Down($Device,$at.x,$at.y)
         Wait-Until {(Gesture).phase -eq 'held'} 'Custom row hold was not recognized' 4
-        [CapyRowPointer]::Up($Device -eq 'pen')
+        if(!$KeepPressed){[CapyRowPointer]::Up($Device -eq 'pen')}
     }
     Wait-Until {$null -ne (Find 'workspace-manager-rename') -and $null -ne (Find 'workspace-manager-delete')} 'Custom row context did not expose Rename and Delete'
     foreach($id in @('workspace-manager-rename','workspace-manager-delete')){$item=Control $id -Arranged;Wait-Until {$item.Current.IsEnabled} 'Custom context action remained disabled'}
@@ -623,6 +623,30 @@ function Held-Rename([string]$Id){
     }
     Write-Output "$Device held pin and Apply across inline rename passed"
 }
+function Held-Context-Retirement([string]$Id){
+    if($Device -eq 'mouse'){return}
+    $saved=@((Storage).order);$revision=(Storage).switcher_revision
+    foreach($ending in @('drag','cancel','escape')){
+        $at=Point $Id
+        Row-Context $Id -KeepPressed
+        try{
+            if($ending -eq 'drag'){
+                [CapyRowPointer]::Move([int]($at.x+24*$scale),$at.y)
+                Wait-Until {(Gesture).phase -eq 'dragging'} 'Held custom context did not continue into dragging'
+                Wait-Until {!(Find 'workspace-manager-rename') -and !(Find 'workspace-manager-delete') -and !(Find 'workspace-manager-move-up')} 'Dragging retained a custom context or grip menu'
+                [CapyRowPointer]::Up($Device -eq 'pen')
+            }elseif($ending -eq 'cancel'){
+                [CapyRowPointer]::Cancel()
+            }else{
+                [CapyRowPointer]::Key([uint32]$review.Id,27)
+                Wait-Until {!(Find 'workspace-manager-rename') -and !(Find 'workspace-manager-delete')} 'Escape retained the custom context menu'
+                [CapyRowPointer]::Up($Device -eq 'pen')
+            }
+        }finally{if([CapyRowPointer]::Active){[CapyRowPointer]::Cancel()}}
+        Wait-Until {(Gesture).phase -eq 'idle' -and !(Find 'workspace-manager-rename') -and !(Find 'workspace-manager-delete') -and !(Find 'workspace-manager-move-up')} "$ending retained a custom context, grip menu or contact"
+        Preview-Intact;Order-Intact $saved $revision
+    }
+}
 function Custom-Options {
     (New-WorkspaceButton).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
     Wait-Until {(Manager).prompt.title -eq 'New Workspace'} 'Custom fixture did not open naming'
@@ -641,6 +665,7 @@ function Custom-Options {
     $saved=@((Storage).order);$revision=(Storage).switcher_revision
     $nameGeometry=Workspace-TextGeometry $custom
     Capture 'workspace-rename-display' -Composed
+    Held-Context-Retirement $custom
     Row-Context $custom
     Preview-Intact;Order-Intact $saved $revision
     Invoke 'workspace-manager-rename'
@@ -849,8 +874,10 @@ function Drag([switch]$Grip,[switch]$Hold,[switch]$Cancel){
     }else{Start-Sleep -Milliseconds 45}
     Preview-Intact;Order-Intact $saved $revision
     Move-To $target
-    Wait-Until {$g=Gesture;$g.phase -eq 'dragging' -and $g.can_drop} "$Device did not drag with the original contact"
-    $gesture=Gesture
+    $observed=@{gesture=$null}
+    Wait-Until {$observed.gesture=Gesture;$observed.gesture.phase -eq 'dragging' -and $observed.gesture.can_drop} "$Device did not drag with the original contact"
+    $gesture=$observed.gesture
+    $gesture|ConvertTo-Json -Depth 30|Set-Content (Join-Path $run ('drag-admission-'+$script:case+'.json'))
     if($gesture.device -ne $Device -or $gesture.grip -ne [bool]$Grip -or $gesture.source -ne $source){throw 'Native pointer device or actual row hit differs from the fixture'}
     if(Find 'workspace-manager-move-up'){throw 'Dragging left the context menu open'}
     Preview-Intact;Order-Intact $saved $revision

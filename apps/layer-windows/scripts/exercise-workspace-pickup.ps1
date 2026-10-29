@@ -7,6 +7,7 @@ if($ZenOnly -and !$PSBoundParameters.ContainsKey('Theme')){
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 $CapyFind='prefer-visible';$CapyPopups=$true
 Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
+if($Device -eq 'touch'){Add-Type -Path (Join-Path $PSScriptRoot 'CanvasTouchDriver.cs')}
 $repo=(Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
 $Executable=(Resolve-Path -LiteralPath $Executable).Path
 $directory=Split-Path -Parent $Executable
@@ -283,6 +284,19 @@ try {
     $script:case='short-click'
     Tap 'tile-toolbar-2'
     Wait-Until {@((Model).panels|Where-Object id -eq 'toolbar')[0].tiles[1].selected} 'Short pointer tap did not activate Pencil'
+    if($Device -eq 'touch'){
+        $script:case='second-contact-preserves-first-click'
+        $first=Point 'tile-toolbar-1';$second=Point 'tile-toolbar-9';$before=Settled-Layout
+        [CapyCanvasTouch]::Initialize([uint32]$review.Id)
+        try{
+            [CapyCanvasTouch]::Down(1,$first.x,$first.y);Start-Sleep -Milliseconds 35
+            [CapyCanvasTouch]::Down(2,$second.x,$second.y);Start-Sleep -Milliseconds 35
+            [CapyCanvasTouch]::Up(2);[CapyCanvasTouch]::Up(1)
+            Wait-Until {@((Model).panels|Where-Object id -eq 'toolbar')[0].tiles[0].selected} 'A second chrome contact canceled the first native click'
+            Wait-Until {(Gesture).phase -eq 'idle'} 'Two chrome contacts retained a native owner'
+            Intact $before
+        }finally{[CapyCanvasTouch]::Dispose()}
+    }
     Drifting-Taps
     $destination=Point 'tile-toolbar-4'
     $script:case='toolbar-early';Early-Motion 'tile-toolbar-1' $destination

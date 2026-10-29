@@ -1546,6 +1546,7 @@ try{
     Settled-Capture 'zen';[CapyRowPointer]::Key([uint32]$review.Id,0x09);Wait-Until {!(Model).state.workspace.zen_mode} 'Tab did not leave Zen'
     $checks.Add('zen-retains-bubbles')
     $canvas.SetFocus();[CapyRowPointer]::Key([uint32]$review.Id,0x09);Wait-Until {(Model).state.workspace.zen_mode} 'Tab did not reenter Zen'
+    [CapyRowPointer]::Hover($paper.x,$paper.y)
     Escape;Wait-Until {!(Model).state.workspace.zen_mode} 'Fresh Escape did not leave Zen'
     foreach($id in @($dial,$controls,$history,$color)){if(!(Find "tool-bubble-$id" -Visible)){throw "Leaving Zen hid bubble $id"}}
     $checks.Add('fresh-escape-leaves-zen-and-retains-bubbles')
