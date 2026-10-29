@@ -35,7 +35,14 @@ import org.json.JSONObject
 
 class AndroidWorkspacePresentationTest {
     private val motion=object:MotionDurationScale { override var scaleFactor=1f }
-    @get:Rule val compose=createComposeRule(effectContext=motion)
+    @get:Rule(order=0) val device=CapyDeviceRule()
+    @get:Rule(order=1) val compose=createComposeRule(effectContext=motion)
+
+    @androidx.compose.runtime.Composable private fun MeasurementOriginProbe(dock:DockInteraction,panel:String,
+        onOrigin:(PanelMeasurementOrigin?)->Unit) {
+        val origin=dock.measurementOrigin(panel)
+        androidx.compose.runtime.SideEffect { onOrigin(origin) }
+    }
 
     private fun observedModelReads(test: (SnapshotStateObserver, MutableSet<String>, (String) -> Unit) -> Unit) {
         compose.setContent { }
@@ -55,6 +62,84 @@ class AndroidWorkspacePresentationTest {
             "groups" to JSONArray().put(obj("id" to 5,"height" to 200))),
             "state" to obj("workspace" to obj("layout" to obj("bands" to JSONArray().put(obj("id" to 4,"extent" to 240)),
                 "floating" to JSONArray())))))
+    }
+
+
+    @Test fun panelMeasurementOriginsObserveOwnRequestsAndCurrentMetrics() {
+        val store=androidx.lifecycle.ViewModelStore()
+        lateinit var host:CanvasHost
+        lateinit var dock:DockInteraction
+        val counts=mutableMapOf<String,Int>()
+        val origins=mutableMapOf<String,PanelMeasurementOrigin?>()
+        fun request(panel:String, body:String="body", width:Int=240)=obj("panel" to panel,
+            "tab" to "tab-$panel","body" to body,"width" to width)
+        val model=ObservedModel(listOf("layout")).apply {
+            assign(obj("layout" to obj("measurement_requests" to JSONArray(listOf(request("layers"),request("palettes"))))))
+        }
+        compose.runOnIdle {
+            host=CanvasHost(androidx.test.core.app.ApplicationProvider.getApplicationContext())
+            store.put("measurements",host)
+            dock=DockInteraction(host)
+            dock.panelMetrics(1f,1f,"light")
+        }
+        @Suppress("UNCHECKED_CAST")
+        val snapshot=CanvasHost::class.java.getDeclaredField("snapshot\$delegate").let {
+            it.isAccessible=true
+            it.get(host) as androidx.compose.runtime.MutableState<JSONObject?>
+        }
+        try {
+            compose.waitUntil(30_000) { host.workspaceManager?.let { it.optBoolean("ready") && !it.optBoolean("busy") }==true }
+            compose.runOnIdle { snapshot.value=model }
+            compose.setContent {
+                for (panel in listOf("layers","palettes")) {
+                    val observed=androidx.compose.runtime.remember(panel) { { origin:PanelMeasurementOrigin? ->
+                        counts[panel]=(counts[panel] ?: 0)+1
+                        origins[panel]=origin
+                    } }
+                    MeasurementOriginProbe(dock,panel,observed)
+                }
+            }
+            compose.waitForIdle()
+            fun requests(layers:JSONObject=request("layers"),palettes:JSONObject=request("palettes")) {
+                compose.runOnIdle { model.getJSONObject("layout").put("measurement_requests",JSONArray(listOf(layers,palettes))) }
+                compose.waitForIdle()
+            }
+            val original=compose.runOnIdle { counts.toMap() to origins.toMap() }
+            requests(palettes=request("palettes","different"))
+            compose.runOnIdle {
+                assertEquals("Layer origin ${original.second["layers"]} -> ${origins["layers"]}",original.first["layers"],counts["layers"])
+                assertEquals(original.second["layers"],origins["layers"])
+                assertTrue(counts.getValue("palettes")>original.first.getValue("palettes"))
+            }
+            val beforeOwn=compose.runOnIdle { origins.getValue("layers")!! }
+            requests(layers=request("layers","own",260),palettes=request("palettes","different"))
+            compose.runOnIdle {
+                val next=origins.getValue("layers")!!
+                assertNotEquals(beforeOwn.key,next.key)
+                assertEquals(260,JSONObject(next.request).getInt("width"))
+                assertEquals("own",JSONObject(next.request).getString("body"))
+            }
+            val beforeMetrics=compose.runOnIdle { counts.toMap() to origins.toMap() }
+            compose.runOnIdle { dock.panelMetrics(1f,1f,"light") }
+            compose.waitForIdle()
+            compose.runOnIdle { assertEquals(beforeMetrics.first,counts) }
+            for ((scale,textScale,style) in listOf(Triple(1f,1.5f,"light"),Triple(1f,1.5f,"dark"),Triple(2f,1.5f,"dark"))) {
+                val before=compose.runOnIdle { origins.toMap() }
+                compose.runOnIdle { dock.panelMetrics(scale,textScale,style) }
+                compose.waitForIdle()
+                compose.runOnIdle {
+                    for (panel in listOf("layers","palettes")) {
+                        val next=origins.getValue(panel)!!
+                        assertNotEquals(before.getValue(panel)!!.context,next.context)
+                        assertEquals(scale,JSONObject(next.context).number("scale"),0f)
+                        assertEquals(textScale,JSONObject(next.context).number("text_scale"),0f)
+                        assertEquals(style,JSONObject(next.context).getString("style"))
+                    }
+                }
+            }
+            requests(palettes=request("palettes","different"))
+            compose.runOnIdle { assertEquals("body",JSONObject(origins.getValue("layers")!!.request).getString("body")) }
+        } finally { compose.runOnIdle { store.clear() } }
     }
 
     @Test fun physicalPanelCornerRadiiRemainFixedInRtlWhileLegacyShapesMirror() {

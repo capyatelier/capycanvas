@@ -205,19 +205,23 @@ internal class DockInteraction(val host: CanvasHost) {
     private var contextTarget: String? = null
     private var contextOwner: Any? = null
     private val measurements = mutableMapOf<String, PanelMeasurement>()
-    private var panelMetrics: JSONObject? = null
+    private var panelMetrics by mutableStateOf<JSONObject?>(null)
     private var lastPanelReport: String? = null
     fun panelMetrics(scale: Float, textScale: Float, style: String) {
         val old = panelMetrics
         if (old == null || old.number("scale") != scale || old.number("text_scale") != textScale || old.getString("style") != style)
             panelMetrics = obj("generation" to (++panelMetricGeneration), "scale" to scale, "text_scale" to textScale, "style" to style)
     }
-    fun measurementOrigin(panel: String): PanelMeasurementOrigin? {
-        val request = host.snapshot?.objectOrNull("layout")?.array("measurement_requests")?.objects()?.find { it.getString("panel") == panel } ?: return null
-        val context = panelMetrics?.toString() ?: return null
-        val key = JSONArray(listOf(request.getString("tab"), request.getString("body"), request.number("width"), request.optBoolean("split_filters"), context)).toString()
-        return PanelMeasurementOrigin(key, request.toString(), context)
-    }
+    @Composable fun measurementOrigin(panel: String): PanelMeasurementOrigin? = remember(this, panel) {
+        derivedStateOf(structuralEqualityPolicy()) {
+            val request = host.snapshot?.objectOrNull("layout")?.array("measurement_requests")?.objects()?.find { it.getString("panel") == panel }
+            val context = panelMetrics?.toString()
+            if (request == null || context == null) null else {
+                val key = JSONArray(listOf(request.getString("tab"), request.getString("body"), request.number("width"), context)).toString()
+                PanelMeasurementOrigin(key, request.toString(), context)
+            }
+        }
+    }.value
 
     fun measureColumnDrawer(column: Int, group: Int?, bounds: Rect?) {
         val next = bounds?.takeIf { group != null && it.width > 0f && it.height > 0f }?.let {

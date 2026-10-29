@@ -324,6 +324,10 @@ internal class LayerSwipe {
     val label=layer.getString("label")
     val rowCaption=remember(label, host.languageTag) { JSONObject(Native.nativeCaption(obj("type" to "layer_row", "title" to label).toString(), host.languageTag)).getString("text") }
     val latest by rememberUpdatedState(layer)
+    val currentContext by rememberUpdatedState(context)
+    val currentDrag by rememberUpdatedState(drag)
+    val currentHeld by rememberUpdatedState(held)
+    val currentCancelContext by rememberUpdatedState(cancelContext)
     DisposableEffect(id) { onDispose { contentBounds(null,0f) } }
     var origin by remember { mutableStateOf(Offset.Zero) }
     var press by remember { mutableStateOf(Offset.Zero) }
@@ -353,7 +357,7 @@ internal class LayerSwipe {
     fun select(toggle:Boolean=toggleSelection) = host.layer(obj("op" to "select_row","id" to id,"extend" to extendSelection,"toggle" to toggle))
     fun openContext(mask:Boolean) {
         if (!focused || (contactActive && !contactMenus)) return
-        if (!contactActive || (holdEligible && !longPressed)) { longPressed=true; context(mask,origin+press) }
+        if (!contactActive || (holdEligible && !longPressed)) { longPressed=true; currentContext(mask,origin+press) }
     }
     Box(modifier.onPreviewKeyEvent {
             extendSelection=it.keyShiftPressed; toggleSelection=it.keyCtrlPressed || it.keyMetaPressed; false
@@ -391,7 +395,7 @@ internal class LayerSwipe {
                 var released=false
                 var remaining=viewConfiguration.longPressTimeoutMillis
                 var eventTime=down.uptimeMillis
-                held(true)
+                currentHeld(true)
                 if (secondary) { openContext(full && row.getBoolean("has_mask") && maskBounds.contains(origin+press)); down.consume() }
                 try { do {
                     val event=if (holdEligible && !longPressed && !dragging) {
@@ -413,7 +417,7 @@ internal class LayerSwipe {
                         val allowed=if(delta.x<0)row.array("swipe_actions").objects().any { it.optBoolean("enabled") } else swipeStart>0 || !row.isNull("right_swipe")
                         if(allowed && kotlin.math.abs(delta.x)>kotlin.math.abs(delta.y)) {
                             swiping=true; swipe.owner=swipeOwner; swipe.bounds=rowBounds; swipe.tracking=true
-                            cancelContext()
+                            currentCancelContext()
                         }
                     }
                     if(swiping) {
@@ -426,11 +430,11 @@ internal class LayerSwipe {
                     }
                     if (directDrag && !pickup(latest)) {
                         directDrag=false
-                        if (dragging) { drag(origin+down.position,true,true); dragging=false }
+                        if (dragging) { currentDrag(origin+down.position,true,true); dragging=false }
                     }
                     if (!secondary && directDrag && resting && !dragging && change.pressed &&
                         moved) { dragging=true; holdEligible=false }
-                    if (dragging) { change.consume(); drag(origin+change.position,!change.pressed,false); if(!change.pressed)dragging=false }
+                    if (dragging) { change.consume(); currentDrag(origin+change.position,!change.pressed,false); if(!change.pressed)dragging=false }
                     if (longPressed) change.consume()
                     if (!change.pressed) { released=true; break }
                 } while(true) } finally {
@@ -441,9 +445,9 @@ internal class LayerSwipe {
                         if(released && swipe.offset>=threshold)swipe.offset=(latest.array("swipe_actions").length()*72*density).coerceAtMost(size.width.toFloat()) else swipe.close()
                         if(toggle)latest.objectOrNull("right_swipe")?.let { host.layer(it) }
                     }
-                    if(dragging)drag(origin+down.position,true,true)
-                    if(!released)cancelContext()
-                    longPressed=false; holdEligible=false; contactActive=false; contactMenus=true; held(false)
+                    if(dragging)currentDrag(origin+down.position,true,true)
+                    if(!released)currentCancelContext()
+                    longPressed=false; holdEligible=false; contactActive=false; contactMenus=true; currentHeld(false)
                 }
             }
         }.combinedClickable(onClick={select()},onLongClick={openContext(false)}))

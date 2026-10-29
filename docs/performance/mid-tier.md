@@ -62,6 +62,20 @@ worst p99 55.823 → 66.985 ms. Neither small rate difference establishes a stab
 gain; both rows miss the 90 Hz rate and gap targets. The full final matrix
 remains pending.
 
+## Android layout-only panel measurement identities
+
+The 2026-10-29 shared layout-only panel measurement keys and Android per-panel
+origin subscriptions improve matched TCL wheel cadence; the size-slider pooled
+three-ABBA gate passes within observed control spread with all 36 contacts
+retained. This fix is unmeasured on Wacom MovinkPad 11. The retained-thumbnail
+90 Hz reorder results above remain the current matched measurements and are
+not relabelled as results for this fix. The final 90 Hz pass remains pending.
+See the [low-tier comparison](low-tier.md#android-layout-only-panel-measurement-identities)
+for frozen APK attribution, rates, tails and diagnostic limits. Rebased TCL
+canvas guards preserve their controls, and six Palettes/Layers crop pairs are
+pixel-identical across light/dark themes. No middle-tier cadence, freshness or
+appearance qualification is claimed until the final pass.
+
 ## Android panel composition
 
 The 2026-10-28 retained panel-body change is unmeasured on Wacom MovinkPad 11.

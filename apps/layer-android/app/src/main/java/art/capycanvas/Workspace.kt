@@ -691,13 +691,22 @@ private class PanelContent(val id: Int, val active: String, val panels: JSONArra
     val scroll = rememberScrollState()
     val origin = dock.measurementOrigin(group.active)
     var measuredWidth by remember(origin?.key) { mutableFloatStateOf(0f) }
-    Box(Modifier.fillMaxSize().onGloballyPositioned { measuredWidth = it.size.width / dock.density }
+    val measuredContent = remember(origin?.key) { arrayOfNulls<PanelContentSize>(1) }
+    val contextItem = remember(group.active) { obj("kind" to "panel", "panel" to group.active) }
+    val onContent = remember(dock, group.active, origin) { { content: PanelContentSize ->
+        measuredContent[0] = content
+        dock.measure(group.active, origin, content = content, actualWidth = measuredWidth)
+    } }
+    Box(Modifier.fillMaxSize().onGloballyPositioned {
+        measuredWidth = it.size.width / dock.density
+        measuredContent[0]?.let { content -> dock.measure(group.active, origin, content = content, actualWidth = measuredWidth) }
+    }
         .then(if (constrained) Modifier.panelScroll(scroll) else Modifier)) {
         if (group.tiles != null) ToolRibbon(host, panel, group.tiles, dock, Modifier.fillMaxSize(), group.vertical)
         else key(origin?.key) {
             PanelControls(host, state, panel, Modifier.fillMaxWidth().then(if (constrained) Modifier.height(group.minimumBody.dp) else Modifier.fillMaxHeight())
-                .contextSource(dock, obj("kind" to "panel", "panel" to group.active)),
-                onContent = { dock.measure(group.active, origin, content = it, actualWidth = measuredWidth) })
+                .contextSource(dock, contextItem),
+                onContent = onContent)
         }
     }
     if (group.active != "palettes" && group.panels.values().contains("palettes")) {

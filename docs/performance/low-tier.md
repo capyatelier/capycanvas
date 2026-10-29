@@ -195,6 +195,93 @@ control failures remain unresolved. The full filter journey completes its
 light/dark thumbnail checks, then the control times out while revealing Delete
 on the remaining row; that later geometry failure is retained separately.
 
+## Android layout-only panel measurement identities
+
+Measured 2026-10-29 on TCL TAB 11 Gen 2: 4248 × 2832 reference photo at
+Fit, factory density 320, font scale 1, 60 Hz and thermal status 0. Shared
+panel measurement keys retain layout inputs while excluding live values;
+Android subscribes to per-panel origins instead of the whole request array.
+No clip, shadow or glass change is included. The frozen comparison is based on
+the original baseline: control APK `72145997…`, candidate `1ef3909c…`, common test `81ac0612…`.
+Each ABBA phase uses a full six-second primer and three six-second contacts.
+All measured contacts, including slow contacts, remain included.
+
+| Native motion | Control → candidate median presents/s | Control → candidate mean presents/s | Worst contact present-gap p99, ms |
+| --- | --- | --- | --- |
+| Color wheel, mouse | 37.547 → 44.521 (+18.6%) | 36.922 → 44.578 | 66.657 → 50.000 |
+| Color wheel, touch | 42.800 → 45.146 (+5.5%) | 42.969 → 45.161 | 50.022 → 49.984 |
+| Layer reorder | 50.499 → 50.194 | 51.483 → 50.456 | 49.984 → 49.982 |
+| Attached filter reorder | 43.480 → 43.171 | 44.507 → 45.471 | 83.268 → 66.663 |
+
+Wheel cadence improves; reorder differences do not establish a stable gain.
+All four rows still miss 60/s. Diagnostic wheel contacts record zero unchanged
+docked-control composition scopes and zero measurement requests. Three large
+logical GPU layer replays remain, with about 20 uploads per flush: this is a
+UI-work reduction, not evidence of fewer GPU replays or a passed GPU gate.
+[Mouse](../../artifacts/android-ui-motion/round5/final-panel-body-mouse.json),
+[touch](../../artifacts/android-ui-motion/round5/final-panel-body-touch.json) and
+[Skia counts](../../artifacts/android-ui-motion/round5/final-panel-body-skia-counts.csv)
+retain the diagnostic attribution.
+
+The size-slider gate pools three ABBAs, 36 contacts with exact native replay.
+Mean actual presents/s is 36.555 → 35.760 (−2.18%); mean delivered scalar
+changes/s is 27.287 → 27.018 (−0.98%). Both differences are within the observed
+control-phase spread: 35.159–38.268 presents/s and 26.351–28.352 delivered/s.
+The tie-breaker's candidate mean, 35.916 presents/s and 27.240 delivered/s,
+exceeds its closing control's 35.159 and 26.351. This passes the pooled
+non-regression gate without excluding outliers; it does not improve size cadence.
+Worst contact p99 across all three comparisons is 183.223 → 183.260 ms for
+presents, 259.763 → 258.917 ms for delivered values and 249.317 → 252.103 ms
+for demand-conditioned delivery gaps. All remain misses.
+[All contacts and tails](../../artifacts/android-ui-motion/round5/final-numeric-three-comparisons.csv)
+and [phase means](../../artifacts/android-ui-motion/round5/final-numeric-three-comparisons-summary.json)
+retain the complete gate, including the confirmation outlier.
+
+The windowless identity regression passes actual color, brush and layer-numeric
+dispatches across platform policies. The candidate rebased onto `752d5d9b1`
+has separate APKs (`bb97…` control, final `f280…` candidate, `c238…` common
+tests); the rates above remain attributed to the frozen original pair. Retained
+rows exposed stale document callbacks: the exact layer-input journey passed
+both control runs and failed both initial candidate runs at the first body
+hold. Refreshing retained callbacks fixes that case, including both-theme
+finger, pen and mouse hold/drag/swipe/cancel contacts.
+
+All eight matched canvas guard fixtures complete. Mean actual presents/s for
+pan is 60.023 → 60.023, pinch 48.385 → 48.363 and rotation 60.023 → 60.023;
+pinch remains a shared target miss. Software-input stroke is a regression
+diagnostic, not brush-tier qualification: native submissions are 38.4 → 38.6/s,
+with input-to-completion p50 54.674 → 54.682 ms and p99 85.369 → 81.594 ms.
+Physical digitizer latency is unmeasured. All six Palettes/Layers crop pairs
+are pixel-identical in light and dark themes, including Layers at 226/300 dp.
+Palette history/expansion passes; the Layers relationship fixture retains the
+same late pass-through assertion failure in control and candidate, after all
+four screenshot postconditions.
+
+The final rebased/callback ABBA completes all 16 fixtures and retains all 60
+contacts, with identical common tests and factory display/thermal conditions.
+Every candidate wheel contact exceeds every matched control contact. The
+following rates are contact means; tails are the worst contact p99.
+
+| Motion | Control → candidate presents/s | Present-gap p99, ms | Delivered values/s |
+| --- | --- | --- | --- |
+| Wheel, mouse | 37.642 → 44.846 (+19.1%) | 66.722 → 50.059 | — |
+| Wheel, touch | 43.088 → 45.406 (+5.4%) | 66.387 → 49.963 | — |
+| Size slider | 36.522 → 36.765 | 166.606 → 183.227 | 27.491 → 27.101 |
+| Layer reorder | 50.122 → 49.382 | 33.669 → 49.992 | — |
+| Filter reorder | 44.567 → 44.997 | 66.655 → 66.883 | — |
+
+Size delivered-gap p99 is 252.494 → 255.501 ms; demand-conditioned p99 is
+249.069 → 251.784 ms. This independent integration check remains separate from
+the accepted original three-ABBA size gate. Layer phase means A1/B1/B2/A2 are
+50.113/49.989/48.775/50.131 presents/s; phase worst p99 values are
+33.604/49.992/49.923/33.669 ms. Candidate tails occupy three refresh intervals,
+matching the historical shipped-thumbnail 49.983 ms tail; the two current
+controls occupy two. The rate difference is within contact spread and does
+not establish a reorder gain. No tail investigation or extra campaign is added.
+[Final integration contacts and provenance](../../artifacts/android-ui-motion/round5/rebased-integration-summary.json)
+retain the exact phase evidence. Final TCL dark and MovinkPad 90 Hz matrices
+remain pending.
+
 ## Android UI motion baseline
 
 Measured 2026-10-28 on the TCL TAB 11 Gen 2, 4248 × 2832 reference photo

@@ -14,7 +14,7 @@ fn tools(value:&ToolSetView)->Value {
 fn property(value:&PropertyControl)->Value {
     let curve=value.curve.as_ref().map(|curve|json!({"readouts":curve.coordinate_readouts,"polygon":curve.control_polygon,
         "numeric":curve.numeric,"domain":curve.domain,"help":curve.help,"reset":curve.reset_label,
-        "axes":curve.axes.iter().map(|axis|(&axis.label,&axis.minimum,&axis.maximum)).collect::<Vec<_>>() }));
+        "axes":curve.axes.iter().map(|axis|&axis.label).collect::<Vec<_>>() }));
     let gradient=value.gradient.as_ref().map(|gradient|json!([gradient.interpolation_label,gradient.interpolations,gradient.reverse_label]));
     let paper=value.paper.as_ref().map(|paper|json!([paper.tiles.iter().map(|tile|(&tile.label,tile.actions.len())).collect::<Vec<_>>(),paper.import.is_some()]));
     json!({"key":value.key,"label":value.label,"page":value.page,"section":value.section,"section_id":value.section_id,"kind":value.kind,
@@ -30,7 +30,7 @@ fn option(value:&ToolOption)->Value {
         ToolOption::Action {state,checkable}=>json!([state.id,state.label,state.icon,checkable]),
     }
 }
-fn scope(value:&HistogramView)->Value {json!([value.sources,value.channels,value.labels,value.axis])}
+fn scope(value:&HistogramView)->Value {json!([value.sources,value.channels,value.labels])}
 fn body(state:&UiState,panel:Panel)->(Value,bool) {
     let value=match panel {
         Panel::Brushes|Panel::BrushSets|Panel::SculptSets|Panel::Tools=>json!([tools(state.tool_panel(panel)),
@@ -41,8 +41,8 @@ fn body(state:&UiState,panel:Panel)->(Value,bool) {
             "extra":state.tool_extra.iter().map(option).collect::<Vec<_>>() }),
         Panel::Color=>json!(state.display_colors().has_hdr_picker()),
         Panel::Palettes=>json!([state.color_library.palettes.iter().find(|p|p.id==state.color_library.active).map(|p|p.swatches.len()),
-            ColorLibrary::color_detail(state.display_colors())]),
-        Panel::Layers=>json!([state.layers.iter().map(|layer|(&layer.label,&layer.description,layer.depth,layer.collapsed)).collect::<Vec<_>>(),
+            state.display_colors().hdr_intensity()!=0.]),
+        Panel::Layers=>json!([state.layers.iter().map(|layer|(&layer.label,layer.depth,layer.collapsed)).collect::<Vec<_>>(),
             state.layer_tools.add_paper.is_some(),state.layer_tools.footer.iter().map(|slot|(&slot.button,slot.min_width,&slot.item.label)).collect::<Vec<_>>()]),
         Panel::Adjustments=>json!([state.adjustments.iter().map(|choice|(&choice.label,&choice.category,&choice.category_label)).collect::<Vec<_>>(),
             state.filter_picker.search.is_some(),state.filter_picker.empty_label]),
@@ -59,7 +59,7 @@ fn body(state:&UiState,panel:Panel)->(Value,bool) {
         Panel::Proof=>json!([state.soft_proof,state.preview_sdr,state.display_colors().has_hdr_picker()]),
         Panel::Toolbar|Panel::Commands|Panel::Sizes|Panel::Stats|Panel::CustomToolbar(_)=>Value::Null,
     };
-    (value,!matches!(panel,Panel::Stats|Panel::Proof|Panel::Palettes))
+    (value,!matches!(panel,Panel::Stats|Panel::Proof))
 }
 pub(crate) fn identities(state:&UiState)->Vec<PanelMeasurementIdentity> {
     state.workspace.layout.panels.iter().map(|panel| {
@@ -78,11 +78,48 @@ mod tests {
     fn state()->UiState {crate::session::test_support::session(Platform::Windows).state().clone()}
     fn identity(state:&UiState,panel:Panel)->PanelMeasurementIdentity {identities(state).into_iter().find(|identity|identity.panel==panel).unwrap()}
     #[test]
+    fn color_and_numeric_edits_preserve_every_panel_measurement_identity() {
+        for platform in Platform::ALL {
+            let mut session=crate::session::test_support::session(platform);
+            let initial=identities(session.state());
+            for action in [
+                UiAction::SetColor {rgba:[0.8,0.2,0.4,1.]},
+                UiAction::SetColor {rgba:[0.2,0.7,0.3,1.]},
+                UiAction::SetBrushSize {value:32.},
+                UiAction::SetBrushOpacity {value:0.25},
+                UiAction::SetBrushStrength {value:0.5},
+                UiAction::SetLayerOpacity {id:None,opacity:0.5},
+                UiAction::SetLayerOpacity {id:None,opacity:0.75},
+                UiAction::SetLayerOpacity {id:None,opacity:1.},
+            ] {
+                session.dispatch(action).unwrap();
+                for (before,after) in initial.iter().zip(identities(session.state())) {
+                    assert_eq!(*before,after,"{platform:?} panel {:?}",before.panel);
+                }
+            }
+        }
+    }
+    #[test]
+    fn palette_detail_keys_track_hdr_suffix_presence_without_hashing_values() {
+        let mut state=state();
+        state.colors.set_document_depth(layer_core::color::SampleDepth::F32).unwrap();
+        let initial=identity(&state,Panel::Palettes);
+        assert!(initial.cacheable);
+        state.colors.apply(ColorAction::HdrIntensity {stops:1.}).unwrap();
+        let hdr=identity(&state,Panel::Palettes);
+        assert_ne!(initial.body,hdr.body);
+        state.colors.apply(ColorAction::HdrIntensity {stops:2.}).unwrap();
+        assert_eq!(hdr,identity(&state,Panel::Palettes));
+        state.colors.apply(ColorAction::HdrIntensity {stops:0.}).unwrap();
+        assert_eq!(initial,identity(&state,Panel::Palettes));
+    }
+    #[test]
     fn numeric_and_scope_publications_keep_intrinsic_keys_but_copy_and_rows_change_them() {
         let mut state=state();let initial=identities(&state);
         state.revision+=100;state.brush.diameter+=12.;state.brush.opacity=0.25;
         state.histogram.captured_time=Some(12.);state.histogram.status="Updating".into();
         state.histogram.description="new accessibility description".into();state.histogram.range="new range".into();
+        state.histogram.axis=["-12 EV".into(),"24 EV".into()];state.waveform.axis=["0".into(),"10000".into()];
         assert_eq!(initial,identities(&state));
         let before=identity(&state,Panel::Layers);state.layers.push(state.layers[0].clone());
         assert_ne!(before.body,identity(&state,Panel::Layers).body);assert_eq!(before.tab,identity(&state,Panel::Layers).tab);
