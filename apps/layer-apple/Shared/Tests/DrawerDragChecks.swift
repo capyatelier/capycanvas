@@ -2,7 +2,7 @@ import XCTest
 
 extension XCTestCase {
     @MainActor func checkDrawerDragAndDock(in app: XCUIApplication, theme: String = "light") {
-        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"\#(theme)"},{"type":"move_panel","panel":"toolbar","target":{"kind":"tab","group":6},"viewport":[1376,1032]},{"type":"customize","action":{"type":"set_column_collapsed","group":6,"collapsed":true}},{"type":"customize","action":{"type":"set_column_drawers","column":4,"drawers":true}}]"#
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"\#(theme)"},{"type":"workspace_manager","command":{"type":"switch","id":"builtin:workspace:illustrator"}},{"type":"move_panel","panel":"toolbar","target":{"kind":"tab","group":6},"viewport":[1376,1032]},{"type":"customize","action":{"type":"set_column_collapsed","group":6,"collapsed":true}},{"type":"customize","action":{"type":"set_column_drawers","column":4,"drawers":true}}]"#
         app.launch()
         let canvas = app.descendants(matching: .any)["canvas"].firstMatch
         expectation(for: NSPredicate(format: "value == %@", "Canvas ready"), evaluatedWith: canvas)
