@@ -12,7 +12,6 @@ import SwiftUI
     private weak var store: EditorStore?
     private var current = JSON()
     private var key = ""
-    private var layerSizesContext = ""
     var sizingContext: String {
         guard let store else { return "" }
         return JSON([model["anchor"].raw, store.snapshot["layout"].raw, id == "tool" ? store.contentDrawers.tileRevision : 0]).stableKey
@@ -63,12 +62,13 @@ import SwiftUI
                 guard let self, let request = self.latest else { return }
                 let target: JSON
                 if request.closing { target = request.from }
-                else if !self.model["layer_properties"].isNull && self.layerSizesContext == self.sizingContext && !self.layerSizes["placements"].isNull {
-                    target = self.layerSizes["placements"][request.pageTo == 1 ? 1 : 0]
-                } else {
+                else {
+                    let page = request.pageTo == 1 ? 1 : 0
+                    let heights = !self.model["layer_properties"].isNull && self.layerSizes["heights"].array.count == 2
+                        ? [self.layerSizes["heights"][page].number] : request.heights
                     target = await withCheckedContinuation { continuation in
                         store.query(["type": "drawer", "column": UInt64(self.id) as Any? ?? NSNull(),
-                            "heights": request.heights, "progress": 1, "from": NSNull(), "closing": false]) {
+                            "heights": heights, "progress": 1, "from": NSNull(), "closing": false]) {
                             continuation.resume(returning: $0["placement"])
                         }
                     }
@@ -107,8 +107,8 @@ import SwiftUI
         heights[column] = height; refresh(current)
     }
     func measureLayerPages(_ next: JSON) {
-        guard next.stableKey != layerSizes.stableKey || layerSizesContext != sizingContext else { return }
-        layerSizesContext = sizingContext; layerSizes = next; refresh(current)
+        guard next.stableKey != layerSizes.stableKey else { return }
+        layerSizes = next; refresh(current)
     }
     func toggleLayerProperties() { store?.customize(["type": "toggle_layer_drawer_properties"]) }
     func stop() { latest = nil; task?.cancel(); task = nil }

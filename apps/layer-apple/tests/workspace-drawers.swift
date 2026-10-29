@@ -91,6 +91,20 @@ import SwiftUI
         store.workspace.cancel(item)
         let _: JSON = await withCheckedContinuation { c in store.query(["type": "catalog"]) { c.resume(returning: $0) } }
         precondition(store.failure == nil, store.failure ?? "")
+        let inspector = ContentDrawerPresentation(id: "4", store: store)
+        inspector.reduceMotion = true
+        let inspectorModel = store.state["customization"]["column_drawers"][0].replacing("layer_properties", with: JSON(false))
+        let sizes = JSON(["heights": [400, 500], "footer_height": 49])
+        inspector.refresh(inspectorModel)
+        inspector.measureLayerPages(sizes)
+        try await wait("Measured inspector page") { inspector.geometry["placement"]["bounds"].rect.height == 400 }
+        let nextAnchor = inspectorModel["anchor"].replacing("origin", with: JSON("brushes"))
+        inspector.refresh(inspectorModel.replacing("anchor", with: nextAnchor).replacing("layer_properties", with: JSON(true)))
+        try await wait("Inspector page after anchor context changes") { inspector.pagePosition == 1 }
+        inspector.measureLayerPages(sizes)
+        precondition(inspector.geometry["placement"]["bounds"].rect.height == 500,
+            "A new sizing context must retain measured page heights until replacement measurements arrive")
+        inspector.stop()
         store.customize(["type": "toggle_column_drawer", "group": 6, "panel": "toolbar"])
         try await wait("Closing drawer stops intercepting input") {
             store.contentDrawers.items["4"]?.interactive != true
