@@ -18,9 +18,11 @@ also fixes reported bugs 9, 10, 12 and 14, the page half of 11, and verifies
 > shared helpers (`UiControls.h`, `ChoiceFeedback`, `ButtonFeedback`,
 > `NumberControl`, `PickerDialog.h`, `NativeMenus.h`); do not edit them. Start
 > with the independent items, then fetch `origin/main` and adopt A's helpers
-> when they land. Edit only the files your plan owns. Fix root causes, add
-> regression checks, push each milestone to `origin/main` as soon as its checks
-> pass, and remove each finding from the plan in the commit that fixes it.
+> when they land. Edit only the files your plan owns. Work in the four batched
+> milestones of the order of work: one commit and one VM test round each. Fix
+> root causes, add regression checks, push each milestone to `origin/main` as
+> soon as its checks pass, and remove each finding from the plan in the commit
+> that fixes it.
 > Reproduce CHECK findings before fixing them, or drop them. Finish with a list
 > of what you fixed, what you dropped and what you could not run.
 
@@ -38,45 +40,87 @@ catalog and run the localization checks).
 
 ## Order of work
 
-Independent of Agent A (start immediately):
+Work in four milestones. Each milestone is one commit, one VM build and one
+test round, pushed to `origin/main` when its checks pass. Fix every listed
+finding in the milestone's files before building, so the VM builds and captures
+once per milestone rather than once per finding. Write the next milestone's
+code while the VM runs the current one, but commit only tested code.
 
-1. **Bugs 10 and 12** (PREF-5, PREF-6): replace the `ContentControl` icon hosts
-   in `SettingsView.cpp` with a centred `Image`, using GTK's icon size and
-   spacing. Grep your files for other `ContentControl` icon hosts.
-2. **Bug 9 placement** (PREF-3): move Manage profiles into a titled row at the
-   end of the colour page, as GTK does. Apply the raised face when P5 lands.
-3. **Bug 14** (PREF-22, PREF-23, PREF-25): replace the default ListViewItem
-   presentation in the workspace manager with full-width square rows and
-   dividers.
-4. **Highlight geometry** (PREF-9, PREF-10, HEAD-9, HEAD-18, HEAD-DLG-13).
-5. **Header and canvas bar metrics** (HEAD-4–20, HEAD-23–27): borders,
-   opacities, radii, icons in place of text glyphs (HEAD-16).
-6. **New drawing, Size and Export dialog geometry** (HEAD-DLG-3, 6, 7, 12–28,
-   30, 31, 34, 36). HEAD-DLG-35 (export rules into shared Rust) last.
-7. Remaining PREF items.
+Findings marked *(A)* need Agent A's helpers. Leave them in the plan until M4.
+If you need a value that A's helper will own (button fill, field fill, popup
+style), do not create a local copy in your files; wait for M4.
+`PickerDialog.h` and `NumberControl.cpp` belong to Agent A: put New-drawing-only
+constants in `NewDrawingDialog.cpp`, and fix detached number entries in
+`numberField`, not in NumberControl.
 
-After Agent A lands P1–P8: verify bugs 2 and 13 (HEAD-1, PREF-7) with a zoomed
-capture and remove remaining per-site centring offsets; bug 11 and the prompt
-dropdown (PREF-1, PREF-2, P3 with the `settings` surface); HEAD-2, HEAD-3 (P7);
-PREF-3 face (P5); PREF-8, PREF-29, HEAD-22, HEAD-26, HEAD-DLG-1, 2, 4, 5, 9,
-10, 11, 29, 32, 33 (P2–P4). Check every page again after P1.
+**M1. Preferences, shortcuts and workspace pages** (`SettingsView`,
+`ShortcutPage`, `WorkspaceManagerView`, `WorkspaceStorageView`,
+`WorkspaceDialogs`): bugs 10, 12, 14 and the placement half of bug 9.
+PREF-3 (row placement), 5, 6 (icon size, spacing and centring), 9, 10, 12, 13,
+14, 15, 17, 18, 19 (CHECK), 20, 21, 22, 23, 24, 25 (CHECK), 26, 27, 28 (layout,
+radius, padding, inline buttons), 30, 31. Grep these files for every other
+`ContentControl` icon host and fix them in the same commit.
+Leave for M4: PREF-1, 2, 3 face, 4, 7, 8, 11, 16, 29, the 28 button face *(A)*.
+
+**M2. Title bar, drawing tabs, status, zoom, canvas bar and notice**
+(`HeaderView`, `HeaderInput`, `HeaderStatus`, `DrawingTabs`, `ZoomReadout`,
+`CanvasActionBar`, `CanvasNotice`, the chrome parts of `CanvasWindow`):
+HEAD-4 to HEAD-21, HEAD-23, 24, 25, 27 (CHECK). HEAD-11 size choices use the
+segment helper, so land HEAD-11's surface, padding, shadow and chips now and
+its joined size row in M4.
+Leave for M4: HEAD-1, 2, 3, 22, 26 and the HEAD-11 size row *(A)*.
+
+**M3. New drawing, Size and Export dialogs, plus the shared Rust rules**
+(`NewDrawingDialog`, `SizeDialog`, `ExportForm`, `ExternalImages`,
+`DocumentView`, shared crates): HEAD-DLG-3, 6, 7, 12 to 15, 17 to 25, 26,
+27 (CHECK), 30, 31, 34, 35, 36. HEAD-DLG-27 and 34 share one palette error
+role; add it in shared Rust and use it on Windows (GTK keeps its theme error
+colour). HEAD-DLG-35 moves the export rules into `capy_export_draft` with a
+headless test. HEAD-DLG-36 adds the drop captions to every registered Fluent
+catalog. Run the shared Rust tests and localization checks on Linux before the
+VM round.
+Leave for M4: HEAD-DLG-1, 2, 4, 5, 8, 9, 10, 11, 16, 28, 29, 32, 33 *(A)*.
+
+**M4. Adopt Agent A's helpers** once P1–P8 are on `origin/main` (find them with
+`git log origin/main --grep='Windows UI parity'`). Move every *(A)* item above
+onto the helpers in one commit: bugs 2 and 13 (HEAD-1, PREF-7, with a zoomed
+capture; remove per-site centring offsets such as `alignNames`' shift maths),
+bug 11 and the prompt dropdown (PREF-1, 2), PREF-3 face, PREF-4, 8, 11, 16,
+28 face, 29, HEAD-2, 3, 11 size row, 22, 26, HEAD-DLG-1, 2, 4, 5, 8, 9, 10,
+11, 16, 28, 29, 32, 33. Then recheck every page of this plan, because P1
+changes every caption. If P1–P8 are not on `origin/main` when M3 is pushed,
+stop and report the M4 items as blocked on Agent A.
 
 ## Validation
 
-- `apps/layer-windows/scripts/test-without-gpu.ps1`;
-  `cargo test --locked -p layer-host -p layer-ui -p layer-workspace -p layer-windows --lib`;
-  `cargo clippy --locked -p layer-windows --all-targets -- -D warnings`.
-- Fixtures: `exercise-header-settings`, `exercise-settings-storage`,
-  `exercise-shortcut-page`, `exercise-shortcuts`, `exercise-manager`,
-  `exercise-manager-focus`, `exercise-switcher`, `exercise-switcher-drag`,
-  `exercise-header`, `exercise-header-placement`, `exercise-canvas-bar`,
-  `exercise-notice`, `exercise-zoom-readout`, `exercise-documents`,
-  `exercise-size-dialogs`, `exercise-window`, and `exercise-localization` for
-  any text change.
-- Journeys, light and dark, glass on and off: every Preferences page incl.
-  colour management and About; shortcut page filters; manage workspaces list
-  hover and selection; title bar customization; drawing tabs with close hover;
-  canvas bar segments; New drawing, Canvas size, Image size and Export dialogs.
+Use the `capycanvas1` VM only (`tools/windows-vm/windows-vm.py`, which defaults
+to this worktree's VM). Keep it warm between milestones and stop it when you
+finish.
+
+- Every milestone: `tools/windows-vm/windows-vm.py check` (runs
+  `test-without-gpu.ps1` and the Windows Rust tests) and strict Clippy over SSH;
+  then `fixtures` with only the milestone's fixtures below. Use
+  `--profile dev-perf` for repeated rounds; `--no-build` when only fixture
+  scripts changed.
+- Shared Rust (M3): `cargo test --locked -p layer-host -p layer-ui -p layer-workspace --lib`
+  and the localization checks on Linux.
+- Fixtures per milestone (they live in `apps/layer-windows/scripts/exercise-*.ps1`):
+  - M1: `header-settings`, `settings-storage`, `shortcut-page`, `shortcuts`,
+    `manager`, `manager-focus`.
+  - M2: `switcher`, `switcher-drag`, `header`, `header-placement`,
+    `canvas-bar`, `notice`, `zoom-readout`, `window`.
+  - M3: `documents`, `size-dialogs`, and `localization:default` for the new text.
+  - M4: all of the above, once, plus the full `localization` matrix if M4
+    changes text.
+- Captures, light and dark, glass on and off, of what the milestone changed:
+  every Preferences page incl. colour management and About, shortcut page
+  filters, manage workspaces list hover and selection (M1); title bar
+  customization, drawing tabs with close hover, canvas bar segments, notice,
+  zoom and screen popups (M2); New drawing, Canvas size, Image size and Export
+  dialogs (M3). Batch all of a milestone's captures into one scripted run per
+  theme. Measure the captures against the GTK values quoted in each finding.
+  The software adapter is fine for layout, metrics and colours; use a pool GPU
+  (`start --gpu`, one card at most) only if a glass capture needs it.
 
 ## Shared context for all three plans
 
@@ -182,8 +226,9 @@ its own pages after A's helpers land.
 - Fix policy-level defects (drop rules, widths, readout markers, export rules)
   in shared Rust with a headless test, not in the host. Shared Rust changes
   touch common crates; keep them small and rebase often.
-- One finding or one class per milestone. Push each milestone after its checks
-  pass; fetch and rebase onto `origin/main` before every push.
+- Batch findings by file area, as this plan's order of work lists them. Push
+  each milestone after its checks pass; fetch and rebase onto `origin/main`
+  before every push.
 - Remove a finding from your plan in the commit that fixes it. Record dropped
   CHECK items (not reproduced) in the commit message. Delete your plan in the
   commit that closes its last item.
