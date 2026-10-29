@@ -360,7 +360,7 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
             AutomationProperties::SetAutomationId(entry,L"setting-text-"+id);AutomationProperties::SetName(entry,titleText);
             Border entryPage;entryPage.Padding(inlineRow?Thickness{0,0,8,0}:Thickness{0,12,0,0});entryPage.Child(entry);
             auto entryPages=std::make_shared<WorkflowPages>();Border emptyEntry;entryPages->append(emptyEntry);entryPages->append(entryPage);
-            struct Draft{hstring text,key,saved;bool changed=false,editing=false;std::vector<winrt::weak_ref<Button>> buttons;std::vector<winrt::weak_ref<Border>> rings;std::vector<hstring> colors;};
+            struct Draft{hstring text,key,saved;bool changed=false,editing=false;std::vector<Button> buttons;std::vector<Border> rings;std::vector<hstring> colors;};
             auto draft=std::make_shared<Draft>();
             entry.TextChanging([data=data,draft](auto&& sender,auto&&){
                 if(!data->updating){draft->text=sender.template as<TextBox>().Text();draft->changed=true;}
@@ -387,20 +387,20 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
                         auto swatch=swatches.GetObjectAt(i);
                         Button circle;circle.Width(side);circle.Height(side);circle.Padding({0,0,0,0});circle.MinWidth(0);circle.MinHeight(0);circle.CornerRadius({side/2,side/2,side/2,side/2});buttonColors(data,circle);
                         if(auto glyph=str(swatch,L"icon");!glyph.empty())circle.Content(icon(glyph,data->theme(),side*.5));
-                        AutomationProperties::SetAutomationId(circle,L"setting-"+id+L"-swatch-"+to_hstring(i));draft->buttons.push_back(make_weak(circle));draft->colors.emplace_back();
-                        circle.Click([data,id,swatch,entry,draft,repaint](auto&&,auto&&){
-                            if(data->updating)return;
+                        AutomationProperties::SetAutomationId(circle,L"setting-"+id+L"-swatch-"+to_hstring(i));draft->buttons.push_back(circle);draft->colors.emplace_back();
+                        circle.Click([data,id,swatch,editor=make_weak(entry),draftState=std::weak_ptr<Draft>(draft),repaint](auto&&,auto&&){
+                            auto draft=draftState.lock();if(!draft||data->updating)return;
                             draft->editing=flag(swatch,L"custom");
                             if(!draft->editing)edit(data,id,S(str(swatch,L"value")));
                             if(auto refresh=repaint.lock())(*refresh)();
-                            if(draft->editing){entry.Focus(FocusState::Programmatic);entry.SelectAll();}
+                            if(draft->editing)if(auto entry=editor.get()){entry.Focus(FocusState::Programmatic);entry.SelectAll();}
                         });
-                        Border ring;ring.Padding({2,2,2,2});ring.CornerRadius({side/2+4,side/2+4,side/2+4,side/2+4});ring.BorderThickness({2,2,2,2});ring.Child(circle);circles.Children().Append(ring);draft->rings.push_back(make_weak(ring));
+                        Border ring;ring.Padding({2,2,2,2});ring.CornerRadius({side/2+4,side/2+4,side/2+4,side/2+4});ring.BorderThickness({2,2,2,2});ring.Child(circle);circles.Children().Append(ring);draft->rings.push_back(ring);
                     }
                 }
                 for(uint32_t i=0;i<swatches.Size();++i){
-                    auto swatch=swatches.GetObjectAt(i);auto title=str(swatch,L"label");auto button=draft->buttons[i].get();
-                    tooltip(button,title);AutomationProperties::SetName(button,title);AutomationProperties::SetItemStatus(button,i==chosen?data->caption(L"search",L"selected"):L"");draft->rings[i].get().BorderBrush(i==chosen?data->brush(L"text"):clear());
+                    auto swatch=swatches.GetObjectAt(i);auto title=str(swatch,L"label");auto button=draft->buttons[i];
+                    tooltip(button,title);AutomationProperties::SetName(button,title);AutomationProperties::SetItemStatus(button,i==chosen?data->caption(L"search",L"selected"):L"");draft->rings[i].BorderBrush(i==chosen?data->brush(L"text"):clear());
                     auto paint=swatch.GetNamedValue(L"color",JsonValue::CreateNullValue());auto colorKey=paint.Stringify();
                     if(draft->colors[i]!=colorKey){draft->colors[i]=colorKey;button.Background(paint.ValueType()==JsonValueType::String?fill(color(paint.GetString())):data->tint(L"text",26));button.BorderThickness(paint.ValueType()==JsonValueType::String?Thickness{}:Thickness{1,1,1,1});button.BorderBrush(data->tint(L"text",38));}
                     if(auto glyph=button.Content().try_as<Image>()){setIcon(glyph,str(swatch,L"icon"),data->theme(),side*.5);glyph.Visibility(i==chosen?Visibility::Collapsed:Visibility::Visible);}
