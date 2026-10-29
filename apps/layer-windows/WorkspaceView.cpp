@@ -364,7 +364,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             if(!group.bodyScroll){
                 group.bodyViewport=Grid();group.bodyViewport.Children().Append(body);
                 if(retained)retained->host=group.bodyViewport;
-                group.bodyViewport.Background(clear());group.bodyScroll=ScrollView();group.bodyScroll.Content(group.bodyViewport);group.bodyScroll.ContentOrientation(ScrollingContentOrientation::None);panelScrolling(group.bodyScroll,group.bodyViewport,data);group.bodyScroll.HorizontalScrollMode(ScrollingScrollMode::Disabled);
+                group.bodyViewport.Background(clear());group.bodyScroll=ScrollView();group.bodyScroll.Content(group.bodyViewport);group.bodyScroll.ContentOrientation(body.try_as<StackPanel>()?ScrollingContentOrientation::Vertical:ScrollingContentOrientation::None);panelScrolling(group.bodyScroll,group.bodyViewport,data);group.bodyScroll.HorizontalScrollMode(ScrollingScrollMode::Disabled);
                 group.bodyScroll.HorizontalScrollBarVisibility(ScrollingScrollBarVisibility::Hidden);
                 group.bodyScroll.VerticalScrollBarVisibility(ScrollingScrollBarVisibility::Auto);mouseScrollbars(group.bodyScroll);
                 group.bodyScroll.ViewChanged([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->measured();});
@@ -884,8 +884,6 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
                     double width=num(request,L"width"),actualWidth=width;double height=-1;J scroll;
                     if(array(panel,L"tiles").Size())height=0;
                     else if(panelId==active){
-                        auto bounds=rectangle(object(group.geometry,L"bounds"));
-                        if(preparing){group.frame.Measure({bounds.Width,bounds.Height});group.frame.Arrange(bounds);}
                         actualWidth=group.body->Root().ActualWidth();
                         height=group.body->ContentHeight(actualWidth);scroll=group.body->ScrollMetrics();
                     }

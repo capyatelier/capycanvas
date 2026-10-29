@@ -169,7 +169,7 @@ FrameworkElement FiltersPanel(std::shared_ptr<WorkspaceData> const& data,Binding
         }return J{};
     };
     if(contentHeight)*contentHeight=[weak=std::weak_ptr(view)](double){
-        if(auto view=weak.lock()){auto padding=view->root.Padding();return padding.Top+padding.Bottom+(view->split?0:view->header.ActualHeight())+view->list.ExtentHeight();}
+        if(auto view=weak.lock();view&&view->root.IsLoaded()){auto padding=view->root.Padding();return padding.Top+padding.Bottom+(view->split?0:view->header.ActualHeight())+view->list.ExtentHeight();}
         return -1.;
     };
     return view->root;

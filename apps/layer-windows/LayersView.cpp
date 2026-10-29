@@ -456,7 +456,7 @@ FrameworkElement LayersPanel(std::shared_ptr<WorkspaceData> const& data,Bindings
         }return J{};
     };
     if(contentHeight)*contentHeight=[weak=std::weak_ptr(view)](double){
-        if(auto view=weak.lock()){
+        if(auto view=weak.lock();view&&view->root.IsLoaded()){
             auto height=[](FrameworkElement const& item){return item.Visibility()==Visibility::Visible?item.ActualHeight():0.;};
             return height(view->header)+height(view->footerFrame)+
                 (view->list.Visibility()==Visibility::Visible?view->list.ExtentHeight():0.);
