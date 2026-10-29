@@ -266,7 +266,7 @@ struct WorkspaceRowDrag::Impl:std::enable_shared_from_this<Impl>{
             if(auto self=weak.lock();self&&self->available()){
                 e.Handled(true);
                 if(self->suppressContext)return;
-                self->cancel();self->ignoreClick=true;
+                if(!self->cancel()){self->ignoreClick=true;self->deferClick();}
                 if(auto target=row.item.get())self->menuAt(row,e.GetPosition(target),false);
             }
         });
