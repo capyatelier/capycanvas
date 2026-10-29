@@ -46,11 +46,16 @@ function Swipe($From,$To,[int]$Steps=10,[scriptblock]$During){
 function Contact($Point){
     $at=Screen $Point.x $Point.y
     if($Device -eq 'mouse'){[CapyRowPointer]::Hover($at.x,$at.y)}
+    $before=Gesture;$previous=$before.edge_contact.pointer;$replyTime=$before.edge_reply.time;$ack=@{edge=$null}
     [CapyRowPointer]::Down($Device,$at.x,$at.y)
-    Start-Sleep -Milliseconds 120
-    $edge=(Gesture).edge
-    [CapyRowPointer]::Cancel();Start-Sleep -Milliseconds 120
-    $edge
+    try{
+        Wait-Until {
+            $g=Gesture;$ack.edge=$g.edge;$contact=$g.edge_contact
+            $fresh=if($contact){$contact.primary -and ($Device -eq 'mouse' -or $contact.pointer -ne $previous)}else{$contact=$g.edge;$contact -and $g.edge_reply.time -ne $replyTime}
+            $fresh -and [Math]::Abs($contact.position[0]-$Point.x) -le 1 -and [Math]::Abs($contact.position[1]-$Point.y) -le 1
+        } 'Native contact Down was not acknowledged at the requested point'
+        $ack.edge
+    }finally{[CapyRowPointer]::Cancel();Wait-Until {!(Gesture).edge} 'Native contact Cancel did not settle'}
 }
 function Reach-Point([object[]]$Candidates,[scriptblock]$Accept){
     foreach($point in $Candidates){$edge=Contact $point;Settled;if($edge -and (& $Accept $edge)){return $point}}
