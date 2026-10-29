@@ -1,5 +1,6 @@
-﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('touch','pen','mouse')][string]$Device='touch',[string]$DebuggerPath,[ValidateSet('drawers')][string]$ColumnMode='drawers',[ValidateSet('dark','light')][string]$Theme='dark',[switch]$ZenOnly)
+﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('touch','pen','mouse')][string]$Device='touch',[string]$DebuggerPath,[ValidateSet('drawers')][string]$ColumnMode='drawers',[ValidateSet('dark','light')][string]$Theme='dark',[switch]$ZenOnly,[switch]$ColumnEarlyOnly)
 $ErrorActionPreference='Stop'
+if($ZenOnly -and $ColumnEarlyOnly){throw 'Choose one focused workspace scope'}
 if($ZenOnly -and !$PSBoundParameters.ContainsKey('Theme')){
     foreach($theme in @('dark','light')){& $PSCommandPath -Executable $Executable -Device $Device -ColumnMode $ColumnMode -Theme $theme -ZenOnly}
     return
@@ -230,6 +231,23 @@ function Held-Drag([string]$Id,$To,[switch]$Cancel) {
     }
     (Gesture)|ConvertTo-Json -Depth 8|Set-Content (Join-Path $run ($script:case+'-terminal.json'))
 }
+function Check-ColumnEarly {
+    $script:case='collapsed-column'
+    $at=Point 'panel-tab-sizes'
+    [CapyRowPointer]::RightClick($at.x,$at.y)
+    Collapse-Column
+    Wait-Until {$null -ne (Find 'column-icon-sizes')} 'Panel context did not collapse its column'
+    Use-Drawers 'column-icon-sizes'
+    Tap 'column-icon-sizes'
+    Wait-Until {@((Model).state.customization.column_drawers).Count -gt 0} 'Short icon tap did not open its drawer'
+    Tap 'column-icon-sizes'
+    Wait-Until {@((Model).state.customization.column_drawers).Count -eq 0} 'Short icon tap did not close its drawer'
+    $at=Point 'column-icon-sizes'
+    $distance=[int](32*[CapyRowPointer]::GetDpiForWindow($drawing.Handle)/96.)
+    $tangent=@{x=$at.x;y=$at.y+$distance}
+    if(!$root.Current.BoundingRectangle.Contains($tangent.x,$tangent.y)){$tangent.y=$at.y-$distance}
+    $script:case='column-early';Early-Motion 'column-icon-sizes' $tangent
+}
 $closeAttempted=$false
 try {
     Enter-CapyEnvironment
@@ -271,6 +289,7 @@ try {
         @{theme=$Theme;zen_hide_restore_twice='passed';native_collapsed_peer='passed';layout_preserved='passed';scope='Native lifecycle functional checks; 180ms frame pacing and physical input unverified'}|ConvertTo-Json
         return
     }
+    if($ColumnEarlyOnly){Check-ColumnEarly}else{
     $toolbarPen=CommandTileId 'pen' 'toolbar';$toolbarPencil=CommandTileId 'pencil' 'toolbar';$toolbarEraser=CommandTileId 'eraser' 'toolbar'
     $dividers=@(@((Model).panels|Where-Object id -eq 'toolbar')[0].tiles|Where-Object {$_.control.kind -eq 'divider'})
     if(!$dividers.Count){throw 'Shared toolbar does not contain a divider'}
@@ -367,19 +386,8 @@ try {
     Toggle-Zen
     Wait-Until {!(Model).chrome_hidden} 'Zen did not restore chrome'
     Intact $before
-    $script:case='collapsed-column'
-    $at=Point 'panel-tab-sizes'
-    [CapyRowPointer]::RightClick($at.x,$at.y)
-    Collapse-Column
-    Wait-Until {$null -ne (Find 'column-icon-sizes')} 'Panel context did not collapse its column'
-    Use-Drawers 'column-icon-sizes'
-    Tap 'column-icon-sizes'
-    Wait-Until {@((Model).state.customization.column_drawers).Count -gt 0} 'Short icon tap did not open its drawer'
-    Tap 'column-icon-sizes'
-    Wait-Until {@((Model).state.customization.column_drawers).Count -eq 0} 'Short icon tap did not close its drawer'
-    $at=Point 'column-icon-sizes'
+    Check-ColumnEarly
     $destination=Point 'drawing-canvas'
-    $script:case='column-early';Early-Motion 'column-icon-sizes' $destination
     $script:case='column-release';Held-Release 'column-icon-sizes'
     $script:case='column-drag';Held-Drag 'column-icon-sizes' $destination
     $script:case='column-cancel';Held-Drag 'column-icon-sizes' $destination -Cancel
@@ -426,11 +434,16 @@ try {
     Held-Release ('tile-toolbar-'+$color.id)
     if($null -eq (Model).state.customization.drawer){throw 'Held release activated the nested drawer origin'}
     $script:case='held-blur';Held-Blur ('tile-toolbar-'+$color.id)
+    }
     if((Model).state.document_file.modified){throw 'Workspace gestures unexpectedly modified the drawing'}
     [CapyRowPointer]::Dispose()
     $closeAttempted=$true
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close
     if((Get-Item -LiteralPath $stderr).Length){throw 'Native stderr requires review'}
+    if($ColumnEarlyOnly){
+        @{device=$Device;theme=$Theme;scope='column-early-only';early_rejection='passed';layout_preserved='passed';zero_exit='passed'}|ConvertTo-Json
+        return
+    }
     [pscustomobject]@{device=$Device;column_mode=$ColumnMode;canvas_cursor='passed';short_click='passed';drifting_taps='passed';early_rejection='passed';hold_release_menu='passed';same_contact_drag='passed';immediate_grip='passed';native_cancellation='passed';one_step_undo_redo='passed';collapsed_icons='passed';floating_tiles='passed';divider_tiles='passed';disabled_commands='passed';drawer_tiles='passed';nested_drawer='passed';zen_visibility='passed';divider_keyboard='passed';held_blur='passed';native_submenu='passed';zero_exit='passed';scope='OS-delivered synthetic input; physical devices, full presentation matrix and timing remain separate'}|ConvertTo-Json
 }catch{
     $failure=$_

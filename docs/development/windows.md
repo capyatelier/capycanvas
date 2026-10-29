@@ -577,6 +577,7 @@ executable. Run both through `test-desktop.ps1`.
 `-PresentationsOnly` in the layer pickup fixture, `-ToolbarRangeOnly` in
 selection, `-ArcContextOnly` in HDR and `-PixelsOnly` in Navigator run those
 portions of their normal journeys.
+`-ColumnEarlyOnly` in workspace pickup tests early motion along a collapsed strip.
 
 ## Matched editor captures
 
