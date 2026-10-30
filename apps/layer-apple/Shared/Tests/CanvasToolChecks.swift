@@ -344,15 +344,13 @@ extension XCTestCase {
             return XCTFail("The numeric control must expose its own label")
         }
         XCTAssertLessThan(abs(label.frame.midY - value.frame.midY), 36)
-        #if os(macOS)
-        label.doubleClick()
-        #else
-        let window = app.windows.firstMatch, frame = label.frame
-        guard frame.width > 0, frame.height > 0, scroll.frame.contains(frame), window.frame.contains(frame) else {
+        guard scroll.frame.contains(label.frame), let point = workspacePoint(label) else {
             return XCTFail("The numeric caption must be visible inside its editor window")
         }
-        window.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(
-            dx: frame.midX - window.frame.minX, dy: frame.midY - window.frame.minY)).doubleTap()
+        #if os(macOS)
+        point.doubleClick()
+        #else
+        point.doubleTap()
         #endif
     }
 
