@@ -623,14 +623,6 @@ impl WgpuRasterizer {
             }
             let retained = source_access::retained_targets(packet.scene);
             runtime.targets.retain(|id, _| retained.contains_key(id));
-            for (id, revision) in packet.restore_rasters {
-                if retained.get(id).and_then(|scene|scene.raster(*id)).is_some_and(|root|root.try_data().is_some_and(|data|data.is_ok())) {continue;}
-                if let Some(current) = runtime.targets.get_mut(id) {
-                    let data = revision.wait_data().map_err(GpuRasterError::Effect)?;
-                    self.restore_target(*id, current, data, reset, &mut damage)?;
-                    current.revision = revision.clone();
-                }
-            }
             for (&target, scene) in retained.iter().filter(|(t, scene)| scene.raster(**t).is_some()) {
                 for (id, revision) in std::iter::once((target, scene.raster(target).unwrap()))
                 {
@@ -643,6 +635,10 @@ impl WgpuRasterizer {
                         Some(Err(error)) => return Err(GpuRasterError::Effect(error)),
                         None => None,
                     };
+                    let (revision, wanted) = if wanted.is_none()
+                        && let Some((_, restored)) = packet.restore_rasters.iter().find(|(target, _)| *target == id) {
+                        (restored, Some(restored.wait_data().map_err(GpuRasterError::Effect)?))
+                    } else { (revision, wanted) };
                     if let Some(current) = runtime.targets.get_mut(&id) {
                         if reset || (wanted.is_some() && (current.revision != *revision || packet.restore_rasters.iter().any(|(target,_)|*target==id))) {
                             let data = wanted.unwrap_or_else(|| current.data.clone());
@@ -654,13 +650,7 @@ impl WgpuRasterizer {
                     } else {
                         // A target inserted with pending pixels, such as a
                         // layer copy with an operation, starts from its source.
-                        let restored = packet
-                            .restore_rasters
-                            .iter()
-                            .find(|(target, _)| *target == id)
-                            .map(|(_, root)| root.wait_data().map_err(GpuRasterError::Effect))
-                            .transpose()?;
-                        let data = wanted.or(restored).unwrap_or_default();
+                        let data = wanted.unwrap_or_default();
                         if !data.tiles.is_empty() {
                             damage.extend(
                                 restored_damage(

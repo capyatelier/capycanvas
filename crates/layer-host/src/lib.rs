@@ -1351,6 +1351,42 @@ mod tests {
     }
 
     #[test]
+    fn crop_apply_keeps_canvas_size_available_after_deleting_pixels() {
+        use layer_ui::CommandId;
+        let (_reference, mut host) = gpu_host(layer_ui::Platform::Android, [800, 600]);
+        let clock = std::cell::Cell::new(0);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        let settle = |host: &mut NativeHost| {
+            while !host.startup.complete || host.session.wants_continuous_frames() {
+                frame_step(host, &clock, deadline);
+                assert!(!host.session.rendering_suspended(), "{:?}", host.error);
+            }
+        };
+        settle(&mut host);
+        for command in [CommandId::SelectAll, CommandId::FillSelection, CommandId::Deselect, CommandId::RectangleSelect] {
+            host.dispatch(UiAction::Invoke { command }).unwrap();
+        }
+        settle(&mut host);
+        host.dispatch(UiAction::Invoke { command: CommandId::Crop }).unwrap();
+        host.dispatch(UiAction::SetToolSetting { id: "crop_angle".into(), value: 0.1 }).unwrap();
+        host.dispatch(UiAction::Invoke { command: CommandId::ApplyTransform }).unwrap();
+        settle(&mut host);
+        host.dispatch(UiAction::Invoke { command: CommandId::Undo }).unwrap();
+        settle(&mut host);
+        host.dispatch(UiAction::Invoke { command: CommandId::Crop }).unwrap();
+        for (id, value) in [("crop_width", 480.), ("crop_height", 360.)] {
+            host.dispatch(UiAction::SetToolSetting { id: id.into(), value }).unwrap();
+        }
+        host.dispatch(UiAction::Invoke { command: CommandId::CropDeleteCroppedPixels }).unwrap();
+        host.dispatch(UiAction::Invoke { command: CommandId::ApplyTransform }).unwrap();
+        settle(&mut host);
+        assert_eq!(host.session.engine().document().composition().size, [480, 360]);
+        assert!(host.session.command(CommandId::CanvasSize).enabled);
+        host.dispatch(UiAction::Invoke { command: CommandId::CanvasSize }).unwrap();
+        assert!(host.session.state().layer_tools.canvas_size.is_some());
+    }
+
+    #[test]
     fn the_first_surface_frame_preserves_a_prepared_drawing() {
         for platform in [layer_ui::Platform::Android, layer_ui::Platform::Windows, layer_ui::Platform::Mac, layer_ui::Platform::Ios] {
             let (_reference, mut host) = gpu_host(platform, [64; 2]);
