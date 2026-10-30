@@ -14,6 +14,7 @@ function Gesture {
     if(!$script:gestureRoot){$script:gestureRoot=Workspace-Root}
     $trace=$script:gestureRoot.Current.HelpText
     $gesture=try{$trace|ConvertFrom-Json}catch{}
+    if($gesture -and $gesture.PSObject.Properties.Name -contains 'native_scrollers' -and @($gesture.native_scrollers).Count){throw "Workspace scrollers accept native touch or pen: $($gesture.native_scrollers|ConvertTo-Json -Compress)"}
     $gesture
 }
 function Layout {(Model).layout}
