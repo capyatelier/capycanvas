@@ -119,6 +119,7 @@ final class EditorLaunchTests: XCTestCase {
     @MainActor func testLiveColorTabDark() { checkLiveColorTab(in: editorCaptureApplication(), theme: "dark") }
     @MainActor func testTonalSelection() { checkTonalSelection(in: editorCaptureApplication()) }
     @MainActor func testPalettes() { checkPalettes(in: editorCaptureApplication()) }
+    @MainActor func testPalettesDark() { checkPalettes(in: editorCaptureApplication(), theme: "dark") }
     @MainActor func testStrokeRecording() { checkStrokeRecording(in: editorCaptureApplication()) }
     @MainActor func testPanelTransparency() { checkPanelTransparency(in: editorCaptureApplication()) }
     @MainActor func testZenPreferences() { checkZenPreferences(in: editorCaptureApplication()) }

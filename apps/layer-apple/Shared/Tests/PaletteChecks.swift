@@ -1,9 +1,9 @@
 import XCTest
 
 extension XCTestCase {
-    @MainActor func checkPalettes(in app: XCUIApplication) {
-        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"set_color","rgba":[0.2,0.45,0.8,1]}]"#
-        app.launch(); capturePaintEditor(in: app)
+    @MainActor func checkPalettes(in app: XCUIApplication, theme: String = "light") {
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"\#(theme)"},{"type":"set_color","rgba":[0.2,0.45,0.8,1]}]"#
+        app.launch(); capturePaintEditor(in: app, theme: theme)
         func any(_ id: String) -> XCUIElement { app.descendants(matching: .any)[id].firstMatch }
         func expect(_ format: String, _ element: XCUIElement, _ args: CVarArg...) {
             expectation(for: NSPredicate(format: format, argumentArray: args), evaluatedWith: element)
@@ -141,7 +141,7 @@ extension XCTestCase {
         #endif
         let target = swatches()[1], removed = target.identifier
         #if os(macOS)
-        target.rightClick()
+        workspacePoint(target)?.rightClick()
         #else
         target.press(forDuration: 0.8)
         #endif
