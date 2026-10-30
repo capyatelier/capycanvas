@@ -10,7 +10,6 @@ public:
         std::shared_ptr<WorkspaceGestures> gestures,std::function<void()> changed);
     ~WorkspaceExpansion();
     void Apply(double configurationHeight);
-    void Reset();
     CapyUi::J Geometry()const;
     winrt::hstring Panel()const;
     bool Closing()const;

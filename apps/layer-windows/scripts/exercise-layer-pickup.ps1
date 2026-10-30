@@ -1,4 +1,4 @@
-﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('touch','pen','mouse')][string]$Device='touch',[ValidateSet('drawers')][string]$ColumnMode='drawers',[ValidateSet('dark','light')][string]$Theme='dark',[switch]$SwipeOnly,[switch]$PenSwipeOnly,[switch]$HoldOnly,[switch]$KeyboardContextOnly,[switch]$PresentationsOnly,[switch]$PendingDropOnly,[string]$DropFixture,[string]$DropRun)
+﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('touch','pen','mouse')][string]$Device='touch',[ValidateSet('drawers')][string]$ColumnMode='drawers',[ValidateSet('dark','light')][string]$Theme='dark',[switch]$SwipeOnly,[switch]$PenSwipeOnly,[switch]$HoldOnly,[switch]$KeyboardContextOnly,[switch]$PresentationsOnly,[switch]$ClippedEdgesOnly,[switch]$PendingDropOnly,[string]$DropFixture,[string]$DropRun)
 $ErrorActionPreference='Stop'
 if($PenSwipeOnly){$SwipeOnly=$true;$Device='pen'}
 if($SwipeOnly -and !$PenSwipeOnly -and !$PSBoundParameters.ContainsKey('Device')){
@@ -10,7 +10,7 @@ if($SwipeOnly -and !$PenSwipeOnly -and !$PSBoundParameters.ContainsKey('Device')
     return
 }
 if(!$PSBoundParameters.ContainsKey('Theme')){
-    foreach($theme in @('dark','light')){& $PSCommandPath -Executable $Executable -Device $Device -ColumnMode $ColumnMode -Theme $theme -SwipeOnly:$SwipeOnly -HoldOnly:$HoldOnly -KeyboardContextOnly:$KeyboardContextOnly -PresentationsOnly:$PresentationsOnly -PendingDropOnly:$PendingDropOnly -DropFixture $DropFixture -DropRun $DropRun}
+    foreach($theme in @('dark','light')){& $PSCommandPath -Executable $Executable -Device $Device -ColumnMode $ColumnMode -Theme $theme -SwipeOnly:$SwipeOnly -HoldOnly:$HoldOnly -KeyboardContextOnly:$KeyboardContextOnly -PresentationsOnly:$PresentationsOnly -ClippedEdgesOnly:$ClippedEdgesOnly -PendingDropOnly:$PendingDropOnly -DropFixture $DropFixture -DropRun $DropRun}
     return
 }
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
@@ -200,6 +200,57 @@ function Drag-PanelEdge([double]$Layer,[ValidateSet('before','after')][string]$E
     $actual=if($Edge -eq 'before'){$layers[0].id}else{$layers[$layers.Count-2].id}
     if($actual -ne $Layer){throw "Panel $Edge edge placed layer $Layer at the wrong end"}
     Layer-History 'Undo';Wait-Until {(Rows) -eq $before} 'Panel edge drop was not one undo'
+}
+function Visible-LayerRows{
+    $viewport=Layer-Viewport
+    @((Model).state.layers|ForEach-Object {
+        $row=Find ("layer-row-"+$_.id)
+        if($row){$box=$row.Current.BoundingRectangle;if($box.Height -gt 0 -and $box.Bottom -gt $viewport.Top -and $box.Top -lt $viewport.Bottom){@{id=$_.id;bounds=$box}}}
+    }|Sort-Object {$_.bounds.Top})
+}
+function Check-ClippedEdges{
+    for($i=0;$i -lt 16;$i++){$count=(Model).state.layers.Count;Invoke 'layer-new';Wait-Until {(Model).state.layers.Count -eq $count+1} 'Clipped-edge layer did not appear'}
+    $scroll=Scroll-Pattern (Control 'layer-list' -Arranged)
+    if(!$scroll.Current.VerticallyScrollable){throw 'Clipped-edge fixture did not overflow Layers'}
+    foreach($edge in 'before','after'){
+        $script:case='clipped-'+$edge;$scroll.SetScrollPercent(-1,50)
+        Wait-Until {[Math]::Abs($scroll.Current.VerticalScrollPercent-50) -lt .1} 'Clipped-edge list did not reach its middle'
+        $viewport=Layer-Viewport;$visible=Visible-LayerRows;$row=if($edge -eq 'before'){$visible[0]}else{$visible[-1]}
+        $height=($visible|ForEach-Object {$_.bounds.Height}|Measure-Object -Maximum).Maximum
+        $overflow=if($edge -eq 'before'){$viewport.Top-$row.bounds.Top}else{$row.bounds.Bottom-$viewport.Bottom}
+        $clipped=[Math]::Max($overflow,$height-$row.bounds.Height)
+        $range=$viewport.Height*(100/$scroll.Current.VerticalViewSize-1)
+        $direction=if($edge -eq 'before'){1}else{-1}
+        $percent=50+$direction*($height*.8-$clipped)/$range*100
+        $scroll.SetScrollPercent(-1,$percent)
+        $admitted=@{row=$null;visible=$null;viewport=$null}
+        Wait-Until {
+            $admitted.viewport=Layer-Viewport;$admitted.visible=Visible-LayerRows
+            $admitted.row=if($edge -eq 'before'){$admitted.visible[0]}else{$admitted.visible[-1]}
+            $overflow=if($edge -eq 'before'){$admitted.viewport.Top-$admitted.row.bounds.Top}else{$admitted.row.bounds.Bottom-$admitted.viewport.Bottom}
+            $clipped=[Math]::Max($overflow,$height-$admitted.row.bounds.Height)
+            [Math]::Abs($scroll.Current.VerticalScrollPercent-$percent) -lt .1 -and $clipped -gt $height*.65 -and $clipped -lt $height*.95
+        } 'Clipped-edge fixture did not expose a partially clipped boundary row'
+        $viewport=$admitted.viewport;$target=$admitted.row;$next=$null
+        if($edge -eq 'after'){
+            $layers=@((Model).state.layers);$index=[Array]::IndexOf([int64[]]$layers.id,[int64]$target.id)
+            if($index -ge 0 -and $index+1 -lt $layers.Count -and $layers[$index+1].depth -eq $layers[$index].depth){$next=$layers[$index+1].id}
+        }
+        $source=@($admitted.visible|Where-Object {$_.id -ne $target.id -and $_.bounds.Top -ge $viewport.Top -and $_.bounds.Bottom -le $viewport.Bottom -and [Math]::Abs($_.bounds.Height-$height) -lt .5}|Sort-Object {[Math]::Min($_.bounds.Top-$viewport.Top,$viewport.Bottom-$_.bounds.Bottom)} -Descending)[0]
+        if(!$source){throw 'Clipped-edge fixture has no interior source row'}
+        $before=Rows;$at=Point ("layer-"+$source.id+'-drag')
+        [CapyRowPointer]::Down($Device,$at.x,$at.y);Move-To @{x=$at.x-30;y=$at.y}
+        Wait-Until {(Gesture).phase -eq 'dragging'} 'Clipped-edge handle did not begin dragging'
+        $outside=if($edge -eq 'before'){$viewport.Top-1}else{$viewport.Bottom+1}
+        [CapyRowPointer]::Move([int]($viewport.Left+$viewport.Width*.5),[int]$outside);[CapyRowPointer]::Up()
+        Wait-Until {$g=Gesture;$g.phase -eq 'idle' -and $g.last_release.commit} 'Clipped-edge drop did not commit'
+        $released=(Gesture).last_release;$position=if($edge -eq 'before'){'above'}else{'below'}
+        $boundary=($released.target -eq $target.id -and $released.position -eq $position) -or ($edge -eq 'after' -and $null -ne $next -and $released.target -eq $next -and $released.position -eq 'above')
+        if(!$boundary -or $released.surface -ne 'row'){throw 'A clipped row intercepted the outside list-edge drop'}
+        @{edge=$edge;source=$source.id;target=$target;viewport=$viewport;release=$released}|ConvertTo-Json -Depth 8|Set-Content (Join-Path $run ('clipped-'+$edge+'.json'))
+        Capture ('clipped-'+$edge)
+        Layer-History 'Undo';Wait-Until {(Rows) -eq $before} 'Clipped-edge drop was not one Undo'
+    }
 }
 function Drag-Row([string]$Id,[double]$Layer,[double]$Target,[switch]$Grip,[switch]$Cancel,[double]$Fraction=.6,[switch]$PendingDropGate) {
     $before=Rows
@@ -464,6 +515,14 @@ try {
     $count=(Model).state.layers.Count;Invoke 'layer-new'
     Wait-Until {(Model).state.layers.Count -eq $count+1} 'New layer did not appear'
     $created=(Model).state.layer_tools.editing_layer.id
+    if($ClippedEdgesOnly){
+        Check-ClippedEdges
+        [CapyRowPointer]::Dispose()
+        & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Close -DiscardUnsaved
+        if((Get-Item -LiteralPath $stderr).Length){throw 'Clipped-edge stderr requires review'}
+        @{device=$Device;theme=$Theme;partially_clipped_header_footer_drops='passed';one_step_undo='passed'}|ConvertTo-Json
+        return
+    }
     if($PresentationsOnly){
         Check-Presentations $created $paint
         [CapyRowPointer]::Dispose()

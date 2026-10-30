@@ -521,6 +521,7 @@ struct Editor:std::enable_shared_from_this<Editor>{
     }
 
     void relabel(){
+        layoutKey=L"";
         auto edit=copy(L"edit");
         if(dialog){title.Text(edit);AutomationProperties::SetName(dialog,edit);AutomationProperties::SetName(root,edit);AutomationProperties::SetName(miniPair,edit);}
         currentCaption.Text(copy(L"current"));newCaption.Text(copy(L"new"));
@@ -672,15 +673,18 @@ struct Editor:std::enable_shared_from_this<Editor>{
     void draw(){
         if(finished||!view.Size())return;
         auto panel=panelView();bool hdr=flag(panel,L"hdr");
-        double width=bodyScroll.ViewportWidth(),height=bodyScroll.ViewportHeight();
+        double width=bodyScroll.ViewportWidth(),height=dialog?root.MaxHeight()-footer.ActualHeight():bodyScroll.ViewportHeight();
         if(width<=0)width=body.ActualWidth();if(width<=0)width=10000;
         width=std::max(0.,width-body.Padding().Left-body.Padding().Right);
-        if(!narrow)width=std::max(0.,width-values.ActualWidth()-body.ColumnSpacing());
-        if(height<=0)height=10000;
+        if(!std::isfinite(height)||height<=0)height=10000;
         else {height-=body.Padding().Top+body.Padding().Bottom+title.ActualHeight()+shapes.ActualHeight()+left.RowSpacing()+body.RowSpacing();if(narrow)height-=head.ActualHeight()+values.ActualHeight()+body.RowSpacing()*2;height=std::max(0.,height);}
-        auto nextLayout=to_hstring(width)+L"/"+to_hstring(height)+(hdr?L"/hdr":L"");
+        auto nextLayout=to_hstring(width)+L"/"+to_hstring(height)+L"/"+to_hstring(scale())+data->language()+(narrow?L"/narrow":L"/wide")+(hdr?L"/hdr":L"");
         if(nextLayout!=layoutKey){
             layoutKey=nextLayout;
+            if(!narrow){
+                head.Measure({INFINITY,INFINITY});rows.Measure({INFINITY,INFINITY});
+                width=std::max(0.,width-std::max(head.DesiredSize().Width,rows.DesiredSize().Width)-body.ColumnSpacing());
+            }
             auto bare=colorUi(data->localization.get(),O({{L"type",S(L"bare_layout")},{L"width",N(width)},{L"height",N(height)},{L"hdr",B(hdr)}})).GetObject();
             side=num(bare,L"wheel");stageSize=num(bare,L"stage");inset=num(bare,L"inset");double bottom=num(bare,L"bottom");
             wheelBox.Width(side);wheelBox.Height(bottom-inset);image.Width(side);image.Height(side);

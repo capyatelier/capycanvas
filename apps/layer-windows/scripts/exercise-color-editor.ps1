@@ -1,5 +1,6 @@
-﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme='dark')
+﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light','layout-dark','layout-light')][string]$Theme='dark')
 $ErrorActionPreference='Stop'
+$layoutOnly=$Theme.StartsWith('layout-');if($layoutOnly){$Theme=$Theme.Substring(7)}
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 $CapyFind='visible'
 $CapyCaptureDelay=250
@@ -122,6 +123,31 @@ function Numeric-Input([string]$Device,[ValidateSet('cancel','outside','modifier
         @($numericInputChecks.ToArray())|ConvertTo-Json -Depth 12|Set-Content (Join-Path $run 'numeric-input.json')
     }
 }
+function Check-EditorRegrow([string]$Kind){
+    $window=$root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern)
+    $window.SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Normal)
+    $scale=[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.
+    & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Resize -Width ([int](1000*$scale)) -Height ([int](900*$scale))
+    Open-Editor
+    $retained=(Control 'edit-color-wheel' -Within $editorFrame).GetRuntimeId() -join ':'
+    $receipts=[Collections.Generic.List[object]]::new()
+    foreach($stage in @(@{name='tall';width=1000;height=900},@{name='short';width=1000;height=360},@{name='regrown';width=1000;height=900},@{name='wider';width=1180;height=900})){
+        & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Resize -Width ([int]($stage.width*$scale)) -Height ([int]($stage.height*$scale))
+        $arranged=@{box=$null}
+        Wait-Until {
+            $arranged.box=(Control 'edit-color-wheel' -Within $editorFrame -Arranged).Current.BoundingRectangle
+            $side=$arranged.box.Width/$scale
+            if($stage.name -eq 'short'){$side -ge 159 -and $side -lt 231}else{[Math]::Abs($side-232) -le 1}
+        } 'Edit Color wheel did not shrink and regain its full available size'
+        if(((Control 'edit-color-wheel' -Within $editorFrame).GetRuntimeId() -join ':') -ne $retained){throw 'Edit Color resize rebuilt its wheel control'}
+        $receipts.Add(@{stage=$stage;wheel=$arranged.box;scale=$scale;kind=$Kind})
+        $receipts|ConvertTo-Json -Depth 7|Set-Content (Join-Path $run ("wheel-regrow-$Kind-$Theme.json"))
+        Capture ("wheel-$Kind-$($stage.name)-$Theme") -WithModel
+    }
+    Invoke 'edit-color-cancel';Closed-Editor 'Edit Color layout review did not cancel'
+    $window.SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)
+    Wait-Until {$window.Current.WindowVisualState -eq [System.Windows.Automation.WindowVisualState]::Maximized} 'Editor layout review did not restore its window'
+}
 try {
     Enter-CapyEnvironment
     $env:CAPY_STORAGE_DIR=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1'
@@ -138,6 +164,22 @@ try {
     $null=[CapyRowPointer]::SetForegroundWindow($drawingWindow)
     [CapyRowPointer]::Initialize([uint32]$review.Id)
     Use-PaintWorkspace
+    Check-EditorRegrow 'sdr'
+    if($layoutOnly){
+        $CapyPopups=$true
+        & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'File'
+        Invoke 'new_document';New-DrawingPixels 128 96
+        (Control 'document-depth').GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
+        (Control '16-bit float HDR' -Name -Type ([System.Windows.Automation.ControlType]::ListItem)).GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
+        Invoke 'Create' -Name
+        Wait-Until {(Model).color_panel.hdr -and (Model).brush_ready -and !(Model).state.document_file.busy} 'HDR layout drawing did not open' 60
+        Check-EditorRegrow 'hdr'
+        [CapyRowPointer]::Dispose()
+        & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Close -DiscardUnsaved
+        if((Get-Item -LiteralPath $stderr).Length){throw 'Editor layout review wrote stderr'}
+        @{theme=$Theme;retained_sdr_hdr_shrink_and_regrow='passed'}|ConvertTo-Json
+        return
+    }
     $revision=(Model).state.document_file.revision
 
     Invoke-Id 'color-swap'

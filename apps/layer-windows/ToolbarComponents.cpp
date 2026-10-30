@@ -309,7 +309,7 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
         trackInk=Shapes::Path();trackInk.IsHitTestVisible(false);track.Children().Append(trackInk);
         marks=Canvas();marks.IsHitTestVisible(false);track.Children().Append(marks);
         thumb=Border();thumb.CornerRadius({6*CornerFit,6*CornerFit,6*CornerFit,6*CornerFit});thumb.BorderThickness({1,1,1,1});
-        thumb.BorderBrush(fill(alpha(color(str(object(data->state,L"palette"),L"text")),153)));
+        thumb.BorderBrush(data->tint(L"text",153));
         thumb.Background(data->brush(L"thumb"));thumb.IsHitTestVisible(false);track.Children().Append(thumb);
         access=Slider();access.Minimum(0);access.Maximum(1);access.StepFrequency(.001);access.SmallChange(.01);access.LargeChange(.1);
         access.Opacity(0);access.IsHitTestVisible(false);access.IsThumbToolTipEnabled(false);

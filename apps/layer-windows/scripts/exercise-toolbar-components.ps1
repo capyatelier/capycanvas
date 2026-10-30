@@ -1,9 +1,10 @@
-param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme='dark',[ValidateSet('full','numeric','numeric-light')][string]$Journey='full')
+﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme='dark',[ValidateSet('full','numeric','numeric-light','theme','theme-light')][string]$Journey='full')
 $ErrorActionPreference='Stop'
-if($Journey -eq 'numeric-light'){$Theme='light'}
+if($Journey -in @('numeric-light','theme-light')){$Theme='light'}
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 $CapyPopups=$true
 Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
+Add-Type -AssemblyName System.Drawing
 if($env:CAPY_PRIVATE_DESKTOP){[CapyRowPointer]::VerifyPrivateDesktop($env:CAPY_PRIVATE_DESKTOP)}
 $CapyEach={if($env:CAPY_PRIVATE_DESKTOP){[CapyRowPointer]::VerifyPrivateDesktop($env:CAPY_PRIVATE_DESKTOP)};[CapyRowPointer]::Verify()}
 $repo=(Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
@@ -41,6 +42,51 @@ function Finish-Review([string]$Scope){
     if((Get-Item $stderr).Length){throw 'Review stderr is not empty'}
     @{status='passed';theme=$Theme;journey=$Journey;captures=$run;scope=$Scope}|ConvertTo-Json
 }
+function Check-ThemeInk{
+    $id="component-slider-$($size.id)";$slider=Control $id -Arranged
+    $retained=$slider.GetRuntimeId() -join ':';$pattern=$slider.GetCurrentPattern([System.Windows.Automation.RangeValuePattern]::Pattern)
+    $start=$pattern.Current.Value;$before=(Tile 'brush_size_slider').component.numeric.value
+    $pattern.SetValue(.5)
+    Wait-Until {[Math]::Abs($pattern.Current.Value-.5) -lt .01 -and ((Tile 'brush_size_slider').component.numeric.value -ne $before -or [Math]::Abs($start-.5) -lt .01)} 'Theme slider did not acknowledge its middle value'
+    $records=[Collections.Generic.List[object]]::new()
+    foreach($next in @($Theme,$(if($Theme -eq 'dark'){'light'}else{'dark'}),$Theme)){
+        if((Model).state.theme -ne $next){
+            $null=[CapyRowPointer]::SetForegroundWindow($drawingWindow)
+            $canvas=Control 'drawing-canvas' -Arranged;$canvas.SetFocus()
+            Wait-Until {$canvas.Current.HasKeyboardFocus} 'Toolbar theme canvas did not take focus'
+            [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),[uint16]0xBC)
+            Wait-Until {(Model).preferences -and (Find 'preference-page-appearance')} 'Toolbar theme preferences did not open'
+            Invoke 'preference-page-appearance'
+            $choice=Control 'preference-choice-theme'
+            $choice.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
+            (Control $(if($next -eq 'dark'){'Dark'}else{'Light'}) -Name -Type ([System.Windows.Automation.ControlType]::ListItem)).GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
+            Wait-Until {(Model).state.theme -eq $next} 'Toolbar theme did not apply'
+            Invoke 'CloseButton';Wait-Until {!(Model).preferences} 'Toolbar theme preferences did not close'
+        }
+        $slider=Control $id -Arranged
+        if(($slider.GetRuntimeId() -join ':') -ne $retained){throw 'A theme switch rebuilt the toolbar slider'}
+        $track=$slider.Current.BoundingRectangle;$scale=[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.
+        $value=$pattern.Current.Value;$vertical=$track.Height -gt $track.Width
+        $x=if($vertical){$track.Left+$track.Width*.5}else{$track.Left+($track.Width-12*$scale)*$value+6*$scale}
+        $y=if($vertical){$track.Top+($track.Height-12*$scale)*(1-$value)}else{$track.Top+($track.Height-28*$scale)*.5}
+        $name="slider-theme-$next";Capture $name -WithModel -Composed
+        $origin=[CapyRowPointer+Point]::new();if(![CapyRowPointer]::ClientToScreen($drawingWindow,[ref]$origin)){throw 'Theme capture has no owned client origin'}
+        $image=[System.Drawing.Bitmap]::new((Join-Path $run ($name+'.png')))
+        try{
+            $px=[int][Math]::Floor($x-$origin.x);$py=[int][Math]::Floor($y-$origin.y)
+            $ink=[Drawing.ColorTranslator]::FromHtml((Model).state.palette.text);$thumb=[Drawing.ColorTranslator]::FromHtml((Model).state.palette.thumb)
+            $background=$image.GetPixel($px,[Math]::Max(0,$py-[int][Math]::Ceiling(2*$scale)))
+            $expected=@(foreach($base in @($thumb,$background)){,@('R','G','B'|ForEach-Object {[Math]::Round(($ink.$_*153+$base.$_*102)/255)})})
+            $distance=1000;$pixels=@(foreach($dy in 0,1,2){foreach($dx in -1,0,1){$pixel=$image.GetPixel($px+$dx,$py+$dy);,@($pixel.R,$pixel.G,$pixel.B)}})
+            foreach($pixel in $pixels){foreach($target in $expected){$delta=0;for($i=0;$i -lt 3;$i++){$delta=[Math]::Max($delta,[Math]::Abs($pixel[$i]-$target[$i]))};$distance=[Math]::Min($distance,$delta)}}
+            $records.Add(@{theme=$next;runtime=$retained;track=$track;sample=@($px,$py);pixels=$pixels;expected=$expected;distance=$distance})
+            $records|ConvertTo-Json -Depth 8|Set-Content (Join-Path $run 'slider-theme-ink.json')
+            if($distance -gt 40){throw 'Retained slider thumb border kept the previous theme ink'}
+        }finally{$image.Dispose()}
+    }
+    $pattern.SetValue($start)
+    Wait-Until {[Math]::Abs($pattern.Current.Value-$start) -lt .01} 'Theme slider did not restore its initial value'
+}
 try {
     Enter-CapyEnvironment
     $env:CAPY_STORAGE_DIR=Join-Path $run 'profile'
@@ -60,6 +106,8 @@ try {
     $band=@((Model).state.workspace.layout.bands)
     if($band.Count -ne 1 -or $band[0].edge -ne 'left' -or $band[0].alignment -ne 'center'){throw 'Sketch sliders are not docked in the centered left compact region'}
     Capture 'sketch-dark' -WithModel
+    Check-ThemeInk
+    if($Journey -in @('theme','theme-light')){Finish-Review 'Retained slider theme ink and body identity';return}
 
     if($Journey -eq 'full'){
     $track="component-slider-$($size.id)";$preview="slider-bookmark-$($size.id)"

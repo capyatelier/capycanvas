@@ -190,7 +190,6 @@ CollapsedColumns::CollapsedColumns(std::shared_ptr<WorkspaceData> data,Canvas ro
     impl(std::make_shared<Impl>()){impl->data=std::move(data);impl->root=root;impl->gestures=std::move(gestures);impl->changed=std::move(changed);}
 CollapsedColumns::~CollapsedColumns(){impl->reset();}
 void CollapsedColumns::Apply(){impl->apply();}
-void CollapsedColumns::Reset(){impl->reset();}
 A CollapsedColumns::Geometry()const{A result;for(auto const& [id,column]:impl->columns){auto value=column->geometryMeasure();if(value.Size())result.Append(value);}return result;}
 void CollapsedColumns::ForEachBounds(UIElement const& reference,std::function<void(uint32_t,Rect)> const& visit)const{
     for(auto const& [id,column]:impl->columns){

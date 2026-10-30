@@ -485,6 +485,7 @@ struct WorkspaceDrawers::Impl:std::enable_shared_from_this<Impl>{
     std::map<std::wstring,std::shared_ptr<Drawer>> drawers;
     hstring lastTiles=L"[]",lastBounds=L"[]",lastFacts;
     bool publishing=false,resetting=false;
+    uint64_t contextGeneration=0;
     void publish(){
         if(publishing||resetting)return;publishing=true;
         A measuredBounds;for(auto const& [id,drawer]:drawers)drawer->appendBounds(measuredBounds);
@@ -515,7 +516,11 @@ struct WorkspaceDrawers::Impl:std::enable_shared_from_this<Impl>{
             auto model=value.GetObject();models[std::to_wstring(uint32_t(num(object(model,L"anchor"),L"column")))]=model;
         }
         auto tool=object(customization,L"drawer");if(tool.Size())models[L"tool"]=tool;
-        if(models.empty()&&drawers.empty()&&!lastFacts.empty())return;
+        auto generation=uint64_t(num(data->state,L"toolbar_context_generation"));bool retired=false;
+        if(std::exchange(contextGeneration,generation)!=generation){
+            for(auto it=drawers.begin();it!=drawers.end();)if(!models.contains(it->first)){it->second->dispose();it=drawers.erase(it);retired=true;}else ++it;
+        }
+        if(models.empty()&&drawers.empty()&&!lastFacts.empty()){if(retired)publish();return;}
         for(auto const& [id,model]:models)if(!drawers.contains(id)){
             auto drawer=std::make_shared<Drawer>();drawer->data=data;drawer->workspace=root;drawer->gestures=gestures;drawer->id=id;
             auto weak=weak_from_this();auto weakDrawer=std::weak_ptr<Drawer>(drawer);
@@ -541,7 +546,6 @@ WorkspaceDrawers::WorkspaceDrawers(std::shared_ptr<WorkspaceData> data,Canvas ro
     impl(std::make_shared<Impl>()){impl->data=std::move(data);impl->root=root;impl->gestures=std::move(gestures);impl->changed=std::move(changed);}
 WorkspaceDrawers::~WorkspaceDrawers(){impl->reset();}
 void WorkspaceDrawers::Apply(NativeLayoutInput input,float width,float height){impl->apply(std::move(input),width,height);}
-void WorkspaceDrawers::Reset(){impl->reset();}
 void WorkspaceDrawers::AppendOverviews(A& slots)const{for(auto const& [id,drawer]:impl->drawers)drawer->appendOverviews(slots);}
 A WorkspaceDrawers::Sources()const{
     A result;

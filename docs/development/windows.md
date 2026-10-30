@@ -580,6 +580,7 @@ executable. Run both through `test-desktop.ps1`.
 selection, `-ArcContextOnly` in HDR and `-PixelsOnly` in Navigator run those
 portions of their normal journeys.
 `-ColumnEarlyOnly` in workspace pickup tests early motion along a collapsed strip.
+`-ClippedEdgesOnly` checks layer-list boundaries; toolbar components `-Journey theme`/`theme-light` checks retained theme ink, and color editor `-Theme layout-dark`/`layout-light` checks SDR/HDR wheel shrink and growth.
 `-SwipeCleanupOnly` in switcher drag runs its native swipe Delete cleanup.
 
 ## Matched editor captures

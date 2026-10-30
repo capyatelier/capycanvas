@@ -611,7 +611,6 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
             }))ticket.Cancel();
     }
     void doubleClick(DoubleTappedRoutedEventArgs const& e){
-        if(e.Handled())return;
         auto tag=target(e.OriginalSource());if(!flag(tag,L"workspace_double")){edgeDoublePress(e);return;}
         auto sourceAction=object(tag,L"workspace_action");
         auto context=object(tag,L"workspace_context");

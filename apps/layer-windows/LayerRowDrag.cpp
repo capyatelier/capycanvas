@@ -275,8 +275,9 @@ struct LayerRowDrag::Impl:std::enable_shared_from_this<Impl>{
             if(!row->current()||!row->root.IsLoaded())continue;
             auto bounds=row->root.TransformToVisual(list).TransformBounds({0,0,float(row->root.ActualWidth()),float(row->root.ActualHeight())});
             if(bounds.Height<=0||bounds.Y+bounds.Height<=0||bounds.Y>=list.ActualHeight())continue;
-            if(bounds.Y<top){top=bounds.Y;first=row;}if(bounds.Y+bounds.Height>bottom){bottom=bounds.Y+bounds.Height;last=row;}
-            if(at.Y>=bounds.Y&&at.Y<bounds.Y+bounds.Height){
+            float visibleTop=std::max(0.f,bounds.Y),visibleBottom=std::min(float(list.ActualHeight()),bounds.Y+bounds.Height);
+            if(visibleTop<top){top=visibleTop;first=row;}if(visibleBottom>bottom){bottom=visibleBottom;last=row;}
+            if(at.Y>=visibleTop&&at.Y<visibleBottom){
                 auto thumb=row->content.TransformToVisual(list).TransformBounds({0,0,float(row->content.ActualWidth()),float(row->content.ActualHeight())});
                 bool thumbnail=at.X>=thumb.X&&at.X<thumb.X+thumb.Width&&at.Y>=thumb.Y&&at.Y<thumb.Y+thumb.Height;
                 return Hit{row->id,std::clamp(int((at.Y-bounds.Y)/bounds.Height*4),0,3),thumbnail};

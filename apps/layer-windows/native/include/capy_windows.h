@@ -93,8 +93,8 @@ __declspec(dllimport) float capy_navigator_aspect(uint32_t document_width, uint3
    Hit result: 0 none, 1 hue, 2 field. Free returned strings with capy_string_free.
    Field output is exactly side*side*4 writable RGBA8 bytes, side in 1..=2048. */
 __declspec(dllimport) uint32_t capy_color_hit(float x, float y, float size, uint32_t projection);
-/* Whether a focused button takes its activation key; key is a shared key name. */
 __declspec(dllimport) int32_t capy_list_drop_edge(float position, float first, float last);
+/* Whether a focused button takes its activation key; key is a shared key name. */
 __declspec(dllimport) bool capy_control_takes_key(char const* key, bool command, bool alt, bool keyboard_focus);
 __declspec(dllimport) CapyPreview capy_document_preview(CapyHost host, char const* json);
 __declspec(dllimport) CapyString capy_export_draft(CapyLocalization localization, char const* json);

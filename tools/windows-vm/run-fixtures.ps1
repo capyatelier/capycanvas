@@ -13,6 +13,11 @@ trap {
     ($_ | Out-String) + $_.ScriptStackTrace | Set-Content (Join-Path $Output 'runner-error.txt')
     exit 1
 }
+function Write-FixtureResult([string]$Path,[string]$Json){
+    $stream=[IO.File]::Open($Path,[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::Write,([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
+    $writer=[IO.StreamWriter]::new($stream,[Text.UTF8Encoding]::new($false))
+    try{$null=$stream.Seek(0,[IO.SeekOrigin]::End);$writer.WriteLine($Json);$writer.Flush()}finally{$writer.Dispose();$stream.Dispose()}
+}
 $runnerStarted = Get-Date
 $Executable = (Resolve-Path -LiteralPath $Executable).Path
 $editorExecutable=$Executable
@@ -53,7 +58,7 @@ function Control-Fixture([string]$Fixture,[string[]]$Arguments=@()){
     switch($Fixture){'button-feedback'{'Feedback'} 'sdk-feedback'{'Feedback'} 'scroll-indicators'{'Feedback'} 'navigator-allocation'{'Feedback'} 'popup'{'Popup'} default{$null}}
 }
 function Get-FixtureCompanionArguments([string]$Fixture,[string[]]$Arguments,[scriptblock]$BuildControl){
-    if($Fixture -eq 'layer-pickup' -and '-PendingDropOnly' -notin $Arguments){'-DropFixture';& $BuildControl 'LayerDrop'}
+    if($Fixture -eq 'layer-pickup' -and '-PendingDropOnly' -notin $Arguments -and '-ClippedEdgesOnly' -notin $Arguments){'-DropFixture';& $BuildControl 'LayerDrop'}
 }
 $selected = if ($Name) { $Name -split ',' } else { @() }
 $planned = @(Select-Fixtures $runs.Keys $selected)
@@ -218,8 +223,9 @@ foreach ($run in $runs.GetEnumerator()) {
         if ($exit -ne 0 -and !(Test-Path "$log.png")) { Save-Screen "$log.png" }
         Save-Evidence $log
     } catch { $exit = 'evidence'; $message += " $($_.Exception.Message)" }
-    [ordered]@{ name = $run.Key; exit = $exit; seconds = [math]::Round(((Get-Date) - $started).TotalSeconds); message = $message } |
-        ConvertTo-Json -Compress | Add-Content $results
+    $resultJson = [ordered]@{ name = $run.Key; exit = $exit; seconds = [math]::Round(((Get-Date) - $started).TotalSeconds); message = $message } |
+        ConvertTo-Json -Compress
+    Write-FixtureResult $results $resultJson
 }
 Stop-Review
 Set-Content (Join-Path $Output 'complete') ''

@@ -8,7 +8,6 @@ public:
         std::shared_ptr<WorkspaceGestures> gestures,std::function<void()> changed);
     ~WorkspaceDrawers();
     void Apply(NativeLayoutInput input,float width,float height);
-    void Reset();
     bool PresentTabs();
     void AppendOverviews(CapyUi::A& slots)const;
     CapyUi::A Sources()const;

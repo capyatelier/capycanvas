@@ -7,7 +7,6 @@ public:
         winrt::Microsoft::UI::Xaml::Controls::Canvas root,std::shared_ptr<WorkspaceGestures> gestures,std::function<void()> changed);
     ~CollapsedColumns();
     void Apply();
-    void Reset();
     CapyUi::A Geometry()const;
     void ForEachBounds(winrt::Microsoft::UI::Xaml::UIElement const& reference,std::function<void(uint32_t,winrt::Windows::Foundation::Rect)> const& visit)const;
     void PresentBridges(CapyUi::J const& frame,bool ready,bool resizing,std::vector<uint32_t> const& publishedColumns);

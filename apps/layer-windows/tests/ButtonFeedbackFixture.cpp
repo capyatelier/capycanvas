@@ -3,6 +3,7 @@
 #include "SdkFeedbackFixture.h"
 #include "NavigatorLayoutFixture.h"
 #include "ScrollIndicatorsFixture.h"
+#include "WorkspaceDrawers.h"
 #include <winrt/Microsoft.UI.Xaml.Automation.h>
 #include <chrono>
 #include <string_view>
@@ -44,6 +45,20 @@ struct App:ApplicationT<App,Markup::IXamlMetadataProvider>{
         Button close;close.Content(box_value(L"Close"));Automation::AutomationProperties::SetAutomationId(close,L"feedback-close-dialog");
         close.Click([this](auto&&,auto&&){dialog.Hide();});body.Children().Append(close);dialog.Content(body);co_await dialog.ShowAsync();
     }
+    void verifyDrawerContext(){
+        auto data=std::make_shared<CapyUi::WorkspaceData>();data->send=[](std::string){};Canvas workspace;
+        auto gestures=std::make_shared<WorkspaceGestures>(data,workspace);
+        WorkspaceDrawers drawers(data,workspace,gestures,[]{});
+        auto apply=[&](double generation,bool open){
+            data->state=CapyUi::O({{L"toolbar_context_generation",CapyUi::N(generation)},{L"customization",CapyUi::O({{L"drawer",open?CapyUi::V(CapyUi::O({{L"columns",CapyUi::A{}}})):CapyUi::JsonValue::CreateNullValue()}})}});
+            drawers.Apply({},500,500);
+        };
+        apply(0,true);if(!workspace.Children().Size())throw hresult_error(E_FAIL,L"Drawer lifecycle fixture did not mount its drawer");
+        apply(1,false);if(workspace.Children().Size())throw hresult_error(E_FAIL,L"Replaced toolbar context retained its closing drawer");
+        apply(1,true);apply(1,false);
+        if(!workspace.Children().Size())throw hresult_error(E_FAIL,L"Unchanged drawer context lost its closing presentation");
+        apply(2,false);if(workspace.Children().Size())throw hresult_error(E_FAIL,L"Context replacement did not retire a drawer already closing");
+    }
     void OnLaunched(LaunchActivatedEventArgs const&){
         Resources().MergedDictionaries().Append(XamlControlsResources());Resources().MergedDictionaries().Append(CapyUi::paletteResources());
         if(GetEnvironmentVariableW(L"CAPY_SCROLL_INDICATORS",nullptr,0)){indicators=std::make_shared<ScrollIndicatorsFixture>();indicators->open();return;}
@@ -56,6 +71,7 @@ struct App:ApplicationT<App,Markup::IXamlMetadataProvider>{
         body.HorizontalAlignment(HorizontalAlignment::Left);body.VerticalAlignment(VerticalAlignment::Top);
         body.Children().Append(probe(L"feedback-root"));
         auto data=std::make_shared<CapyUi::WorkspaceData>();data->state=CapyUi::O({{L"palette",CapyUi::O({{L"text",CapyUi::S(L"#1e1e1e")},{L"accent",CapyUi::S(L"#3584e4")}})}});
+        verifyDrawerContext();
         StackPanel disabled;disabled.Orientation(Orientation::Horizontal);disabled.Spacing(20);
         for(auto custom:{false,true}){auto button=probe(custom?L"feedback-disabled-custom":L"feedback-disabled-default");button.Height(20);if(custom)CapyUi::buttonColors(data,button,20,nullptr,.45);button.Opacity(.55);button.IsEnabled(false);disabled.Children().Append(button);}body.Children().Append(disabled);
         auto wrapped=CapyUi::wrapPanel(40,32,4);

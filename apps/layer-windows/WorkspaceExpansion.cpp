@@ -69,12 +69,6 @@ struct WorkspaceExpansion::Impl:std::enable_shared_from_this<Impl>{
             }
         })){busy=false;dirty=true;}
     }
-    void reset(){
-        ++generation;timer.Stop();panel=L"";geometry=J{};from=J{};layoutKey=L"";height=0;
-        dirty=false;animating=false;closing=false;
-        data->chrome.Insert(L"expanded_panel",JsonValue::CreateNullValue());lastFacts=L"null";
-        gestures->ChromeChanged();
-    }
 };
 WorkspaceExpansion::WorkspaceExpansion(std::shared_ptr<WorkspaceData> data,Canvas root,
     std::shared_ptr<WorkspaceGestures> gestures,std::function<void()> changed):impl(std::make_shared<Impl>()){
@@ -83,7 +77,6 @@ WorkspaceExpansion::WorkspaceExpansion(std::shared_ptr<WorkspaceData> data,Canva
 }
 WorkspaceExpansion::~WorkspaceExpansion(){impl->disposed=true;impl->timer.Stop();++impl->generation;}
 void WorkspaceExpansion::Apply(double height){impl->apply(height);}
-void WorkspaceExpansion::Reset(){impl->reset();}
 J WorkspaceExpansion::Geometry()const{return impl->geometry;}
 hstring WorkspaceExpansion::Panel()const{return impl->panel;}
 bool WorkspaceExpansion::Closing()const{return impl->closing;}
