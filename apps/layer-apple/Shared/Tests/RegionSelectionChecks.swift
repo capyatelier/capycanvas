@@ -11,8 +11,7 @@ extension XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"set_color","rgba":[0,0,1,1]}]"#
         app.launch(); capturePaintEditor(in: app)
-        editorMenu(in: app, menu: "File", id: "new_document", label: "New…")
-        createNewDrawing(width: "64", height: "64", in: app)
+        createWhitePaperDrawing(width: "64", height: "64", in: app)
         editorMenu(in: app, menu: "View", id: "fit_canvas", label: "Fit canvas")
         let viewport = workspaceViewport(in: app), originalFrame = viewport.frame
         let title = editorDocumentTitle(in: app)
@@ -32,16 +31,13 @@ extension XCTestCase {
             let url = root.appendingPathComponent(gap ? "Broken outline.png" : "Closed outline.png")
             let output = try XCTUnwrap(CGImageDestinationCreateWithURL(url as CFURL, UTType.png.identifier as CFString, 1, nil))
             CGImageDestinationAddImage(output, image, nil); XCTAssertTrue(CGImageDestinationFinalize(output))
-            workspaceActivate(app.buttons["layer-Import image as layer"])
+            workspaceActivate(app.buttons["layer-Import Image as Layer…"])
             XCTAssertTrue(accept.waitForExistence(timeout: 15)); goToFolder(url, in: app); workspaceActivate(accept)
             XCTAssertTrue(accept.waitForNonExistence(timeout: 15))
             let place = app.buttons["canvas-bar-action-apply_transform"]
             XCTAssertTrue(place.waitForExistence(timeout: 20)); workspaceActivate(place)
             XCTAssertTrue(place.waitForNonExistence(timeout: 10))
-            workspaceActivate(app.buttons["layer-Layer actions"])
-            let rasterize = app.buttons["menu-action-Rasterize Layer"]
-            XCTAssertTrue(rasterize.waitForExistence(timeout: 5)); workspaceActivate(rasterize)
-            XCTAssertTrue(rasterize.waitForNonExistence(timeout: 10))
+            editorMenu(in: app, menu: "Layer", id: "rasterize_layer", label: "Rasterize Layer")
             return try pixels()
         }
         var exportIndex = 0
