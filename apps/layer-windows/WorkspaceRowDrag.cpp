@@ -51,7 +51,7 @@ struct WorkspaceRowDrag::Impl:std::enable_shared_from_this<Impl>{
     bool ignoreClick=false,suppressContext=false,valid=false,recognizing=false;
     bool trace=GetEnvironmentVariableW(L"CAPY_TRACE_UI",nullptr,0)!=0;
     uint64_t generation=0;
-    J lastRelease,lastCancel,lastCaptureLoss;
+    J lastRelease,lastCancel;
     std::chrono::steady_clock::time_point tickAt;
     void evidence(){
         if(!trace)return;
@@ -61,7 +61,6 @@ struct WorkspaceRowDrag::Impl:std::enable_shared_from_this<Impl>{
             {L"grip",B(grip)},{L"panning",B(panning)},{L"can_drop",B(valid)},{L"before",before?S(*before):JsonValue::CreateNullValue()}});
         if(lastRelease.Size())value.Insert(L"last_release",lastRelease);
         if(lastCancel.Size())value.Insert(L"last_cancel",lastCancel);
-        if(lastCaptureLoss.Size())value.Insert(L"last_capture_loss",lastCaptureLoss);
         AutomationProperties::SetItemStatus(list,value.Stringify());
     }
     void deferClick(){
@@ -321,10 +320,6 @@ struct WorkspaceRowDrag::Impl:std::enable_shared_from_this<Impl>{
         surface.AddHandler(UIElement::PointerCaptureLostEvent(),box_value(PointerEventHandler([weak=weak_from_this()](auto&&,PointerRoutedEventArgs const& e){
             if(auto self=weak.lock();self&&!self->releasing&&self->pointer&&self->pointer.PointerId()==e.Pointer().PointerId()){
                 auto point=e.GetCurrentPoint(self->surface);bool captured=self->owns(self->surface);
-                if(self->trace){auto original=e.OriginalSource().try_as<FrameworkElement>();
-                    self->lastCaptureLoss=O({{L"generation",N(double(self->generation))},{L"pointer_id",N(e.Pointer().PointerId())},
-                        {L"original",S(original?AutomationProperties::GetAutomationId(original):hstring())},{L"surface_capture",B(captured)},
-                        {L"in_contact",B(point.IsInContact())},{L"canceled",B(point.Properties().IsCanceled())}});self->evidence();}
                 if(e.OriginalSource()!=self->surface&&captured&&!point.Properties().IsCanceled())return;
                 // Native buttons release their capture before Click/ItemClick.
                 // Preserve that ordinary release and the More button's flyout.

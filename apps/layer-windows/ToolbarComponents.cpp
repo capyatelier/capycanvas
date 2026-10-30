@@ -133,13 +133,13 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
         if(auto source=gestures.lock();source&&source->SuppressClick())return;
         data->dispatch(O({{L"type",S(L"activate_tile")},{L"panel",S(panelId)},{L"tile",N(tileId)}}));
     }
-    void send(J const& action)const{
-        data->dispatch(O({{L"type",S(L"toolbar_edit")},{L"context",object(model,L"context")},{L"action",action}}));
-    }
     auto edit()const{
         return [data=data,context=copy(object(model,L"context"))](J const& action){
             data->dispatch(O({{L"type",S(L"toolbar_edit")},{L"context",context},{L"action",action}}));
         };
+    }
+    void send(J const& action)const{
+        edit()(action);
     }
     bool closePopup(){
         bool closed=false;
@@ -323,7 +323,7 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
         sliderCapture=captureControl(data,track,[weak](uint32_t,bool cancel,PointerRoutedEventArgs const* event){if(auto self=weak.lock();self&&self->contact){
             auto finished=*self->contact;self->contact.reset();
             if(cancel)self->current=finished.before;
-            self->sliderPhase(cancel?L"cancel":L"up",cancel?finished.before:self->current);
+            self->sliderPhase(cancel?L"cancel":L"up",self->current);
             if(cancel||finished.moved)self->closePopup();if(event)event->Handled(true);
         }});
         track.PointerPressed([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock())self->pressed(e);});

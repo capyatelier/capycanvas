@@ -13,9 +13,9 @@ namespace Peers=Microsoft::UI::Xaml::Automation::Peers;
 namespace Provider=Microsoft::UI::Xaml::Automation::Provider;
 struct NumericCaption {hstring title,language,errorLanguage;J labels,errorReason;};
 struct NumberState {
-    double value=0;bool editing=false,dragging=false,formatting=false,gesture=false,sliderKeyboard=false;
+    double value=0;bool editing=false,dragging=false,formatting=false,gesture=false;
     bool scrubbing=false,turning=false,fine=false;std::optional<Windows::System::VirtualKey> sliderKey;double origin=0,originY=0;
-    double scrubOrigin=0,scrubBase=0,scrubPixels=0,dialShown=0,sliderOrigin=0;
+    double scrubOrigin=0,scrubBase=0,scrubPixels=0,dialShown=0;
     uint64_t contactGeneration=0;
     hstring identity;
     hstring measuredText;double measuredWidth=-1,measuredHeight=0;
@@ -483,7 +483,7 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,ControlSurface surf
         ++local->contactGeneration;
         bool transaction=local->gesture;local->dragging=false;finish(cancel?L"cancel":L"up");
         if(cancel){
-            local->value=local->sliderOrigin;if(!transaction)set(local->value);auto shown=local->resolve(spec,local->value,O({{L"type",S(L"format")}}));setText(str(shown,L"text"));
+            local->value=local->origin;if(!transaction)set(local->value);auto shown=local->resolve(spec,local->value,O({{L"type",S(L"format")}}));setText(str(shown,L"text"));
             if(auto slider=weak.get()){bool formatting=std::exchange(local->formatting,true);slider.Value(num(shown,L"fill"));local->formatting=formatting;}
         }
     };
@@ -497,7 +497,7 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,ControlSurface surf
         if(!cancel&&event)moveSlider(*event);completeSlider(cancel);if(event)event->Handled(true);
     });captures->push_back(sliderCapture);
     auto finishSliderKey=[local,finish,set,setText,spec,weak=make_weak(slider)](bool cancel){
-        if(!local->sliderKey)return;local->sliderKey.reset();local->sliderKeyboard=false;
+        if(!local->sliderKey)return;local->sliderKey.reset();
         bool transaction=local->gesture;finish(cancel?L"cancel":L"up");
         if(cancel){
             local->value=local->origin;if(!transaction)set(local->value);
@@ -510,7 +510,7 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,ControlSurface surf
         auto slider=weak.get();if(!slider||!slider.IsEnabled()||local->dragging)return;
         finishSliderKey(false);if(!commit(false)){e.Handled(true);return;}
         if(!sliderCapture->Begin(e))return;slider.Focus(FocusState::Pointer);
-        local->sliderOrigin=local->origin=local->value;++local->contactGeneration;
+        local->origin=local->value;++local->contactGeneration;
         local->dragging=true;if(phase&&!local->gesture){local->gesture=true;phase(L"down",local->value);}
         moveSlider(e);e.Handled(true);
     })),true);
@@ -526,14 +526,13 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,ControlSurface surf
             if(!commit(false)){e.Handled(true);return;}local->sliderKey=key;local->origin=local->value;
             if(phase&&!local->gesture){local->gesture=true;phase(L"down",local->value);}
         }
-        local->sliderKeyboard=true;
     });
     slider.KeyUp([local,finishSliderKey](auto&&,KeyRoutedEventArgs const& e){if(local->sliderKey==e.Key())finishSliderKey(false);});
     slider.LostFocus([finishSliderKey](auto&&,auto&&){finishSliderKey(false);});
     slider.ValueChanged([data,local,caption,spec,set,setPosition,setText,phase,range=make_weak(slider),weak=make_weak(entry)](auto&&,Primitives::RangeBaseValueChangedEventArgs const& e){
         if(data->updating||local->formatting)return;
         auto next=local->resolve(spec,local->value,O({{L"type",S(L"position")},{L"position",N(e.NewValue())}}));
-        if(setPosition&&!local->sliderKeyboard){
+        if(setPosition&&!local->sliderKey.has_value()){
             auto value=num(next,L"value");
             auto shown=local->resolve(spec,local->value,O({{L"type",S(L"format")}}));
             if(auto slider=range.get()){local->formatting=true;slider.Value(num(shown,L"fill"));local->formatting=false;}

@@ -47,7 +47,7 @@ struct LayerRowDrag::Impl:std::enable_shared_from_this<Impl>{
     bool releasing=false,recognizing=false,ignoreClick=false,suppressContext=false,busy=false;
     bool trace=GetEnvironmentVariableW(L"CAPY_TRACE_UI",nullptr,0)!=0;
     uint64_t generation=0,revision=0;
-    J lastRelease,lastCancel,lastCaptureLoss,lastMove,lastIgnoredDown;
+    J lastRelease,lastCancel,lastMove,lastIgnoredDown;
     std::chrono::steady_clock::time_point tickAt;
     bool focus()const{return windowHandle&&GetAncestor(GetForegroundWindow(),GA_ROOTOWNER)==windowHandle&&!IsIconic(windowHandle);}
     bool crossed()const{return recognizer.Moved();}
@@ -167,7 +167,6 @@ struct LayerRowDrag::Impl:std::enable_shared_from_this<Impl>{
             {L"target",normalizedTarget>=0?N(normalizedTarget):JsonValue::CreateNullValue()},{L"surface",S(hit&&hit->thumbnail?L"thumbnail":L"row")}});
         if(lastRelease.Size())value.Insert(L"last_release",lastRelease);
         if(lastCancel.Size())value.Insert(L"last_cancel",lastCancel);
-        if(lastCaptureLoss.Size())value.Insert(L"last_capture_loss",lastCaptureLoss);
         if(lastMove.Size())value.Insert(L"last_move",lastMove);
         if(lastIgnoredDown.Size())value.Insert(L"last_ignored_down",lastIgnoredDown);
         AutomationProperties::SetItemStatus(list,value.Stringify());
@@ -435,14 +434,6 @@ struct LayerRowDrag::Impl:std::enable_shared_from_this<Impl>{
                 auto contactId=e.Pointer().PointerId();bool paired=self->multitouch&&self->touches.contains(contactId);
                 if(!paired&&(self->finishing||!self->pointer||self->pointer.PointerId()!=contactId))return;
                 auto point=e.GetCurrentPoint(self->surface);bool captured=PointerGesture::Captured(self->surface,contactId);
-                if(self->trace){
-                    auto original=e.OriginalSource();auto node=original.try_as<DependencyObject>();
-                    self->lastCaptureLoss=O({{L"surface_owned",B(captured)},{L"multitouch",B(paired)},
-                        {L"held",B(self->held)},{L"dragging",B(self->dragging)},{L"in_contact",B(point.IsInContact())},
-                        {L"canceled",B(point.Properties().IsCanceled())},
-                        {L"source_type",S(original?get_class_name(original):hstring{})},
-                        {L"source_id",S(node?AutomationProperties::GetAutomationId(node):hstring{})}});
-                }
                 if(paired){if(!captured)self->cancelTouches(L"capture_lost");self->publish();}
                 else if(!self->held&&!self->dragging&&!self->swiping&&!self->grip&&!point.IsInContact())self->up(e);
                 else if(point.Properties().IsCanceled())self->cancel(L"pointer_canceled");

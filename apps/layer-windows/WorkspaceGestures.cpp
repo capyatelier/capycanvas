@@ -43,7 +43,7 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
     bool needsHold=false,contextOnly=false,held=false,recognizing=false,ignoreClick=false;
     bool trace=GetEnvironmentVariableW(L"CAPY_TRACE_UI",nullptr,0)!=0;
     uint64_t generation=0,motion=0;
-    J lastRelease,lastCancel,lastCaptureLoss,lastDown;
+    J lastRelease,lastCancel,lastDown;
     NativeInput::InputPointerSource inputSource{nullptr};
     NativeInput::PointerPoint inputDown{nullptr};
     event_token inputPressed{},inputMoved{};
@@ -68,12 +68,12 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
     bool owns(UIElement const& element)const{
         return pointer&&PointerGesture::Captured(element,*pointer);
     }
-    static void nativeScrollers(DependencyObject const& node,A& result,A& editors,bool editor=false){
+    static void nativeScrollers(DependencyObject const& node,A& result,bool editor=false){
         editor|=bool(node.try_as<TextBox>())||bool(node.try_as<RichEditBox>())||bool(node.try_as<PasswordBox>());
         bool native=false;
         if(auto view=node.try_as<ScrollView>())native=(view.IgnoredInputKinds()&(ScrollingInputKinds::Touch|ScrollingInputKinds::Pen))!=(ScrollingInputKinds::Touch|ScrollingInputKinds::Pen);
         else if(auto scroll=node.try_as<ScrollViewer>())native=scroll.HorizontalScrollMode()!=ScrollMode::Disabled||scroll.VerticalScrollMode()!=ScrollMode::Disabled;
-        if(native){
+        if(native&&!editor){
             hstring owner;
             for(auto parent=node;parent&&owner.empty();parent=VisualTreeHelper::GetParent(parent))owner=AutomationProperties::GetAutomationId(parent);
             auto value=O({{L"id",S(owner)},{L"type",S(get_class_name(node))}});
@@ -81,17 +81,17 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
                 value.Insert(L"horizontal",N(int(scroll.HorizontalScrollMode())));value.Insert(L"vertical",N(int(scroll.VerticalScrollMode())));
                 value.Insert(L"width",N(scroll.ScrollableWidth()));value.Insert(L"height",N(scroll.ScrollableHeight()));
             }
-            (editor?editors:result).Append(value);
+            result.Append(value);
         }
-        for(int i=0;i<VisualTreeHelper::GetChildrenCount(node);++i)nativeScrollers(VisualTreeHelper::GetChild(node,i),result,editors,editor);
+        for(int i=0;i<VisualTreeHelper::GetChildrenCount(node);++i)nativeScrollers(VisualTreeHelper::GetChild(node,i),result,editor);
     }
     void evidence(){
         if(!trace)return;
-        A scrollers,editors;nativeScrollers(root,scrollers,editors);
+        A scrollers;nativeScrollers(root,scrollers);
         auto value=O({{L"phase",S(finishing?L"finishing":dragging?L"dragging":held?L"held":pointer?L"pressed":L"idle")},
             {L"generation",N(double(generation))},{L"source",object(action,L"item")},{L"requires_hold",B(needsHold)},{L"context_only",B(contextOnly)},
             {L"device",S(deviceName(device))},
-            {L"captured",B(owns(root))},{L"menu_open",B(menuOwner.Open())},{L"ignore_click",B(ignoreClick)},{L"native_scrollers",scrollers},{L"editor_scrollers",editors},
+            {L"captured",B(owns(root))},{L"menu_open",B(menuOwner.Open())},{L"ignore_click",B(ignoreClick)},{L"native_scrollers",scrollers},
             {L"can_drop",B(dragging&&hint.Visibility()==Visibility::Visible)},
             {L"pointer_id",pointer?N(*pointer):JsonValue::CreateNullValue()},
             {L"routed_pointer_id",contact?N(contact.PointerId()):JsonValue::CreateNullValue()},
@@ -99,7 +99,6 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
         if(lastDown.Size())value.Insert(L"last_down",lastDown);
         if(lastRelease.Size())value.Insert(L"last_release",lastRelease);
         if(lastCancel.Size())value.Insert(L"last_cancel",lastCancel);
-        if(lastCaptureLoss.Size())value.Insert(L"last_capture_loss",lastCaptureLoss);
         if(edge){
             auto edgeSource=edge->path.empty()?FrameworkElement{nullptr}:edge->path.front().get().try_as<FrameworkElement>();
             value.Insert(L"edge",O({{L"contact",S(edge->contactClass)},{L"device",S(edge->device)},{L"vertical",B(edge->vertical)},
@@ -302,10 +301,7 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
     void edgeDown(PointerRoutedEventArgs const& e){
         auto p=e.GetCurrentPoint(root);
         if(trace){
-            A path;for(auto node=e.OriginalSource().try_as<DependencyObject>();node&&node!=root;node=VisualTreeHelper::GetParent(node))if(auto element=node.try_as<FrameworkElement>()){
-                auto tag=element.Tag().try_as<J>();path.Append(O({{L"id",S(AutomationProperties::GetAutomationId(element))},{L"type",S(get_class_name(element))},{L"role",S(tag?str(tag,L"edge_contact"):hstring{})},{L"reset",S(tag?str(tag,L"edge_reset_contact"):hstring{})},{L"captured",B(PointerGesture::Captured(element,p.PointerId()))}}));
-            }
-            lastEdgeContact=O({{L"pointer",N(p.PointerId())},{L"position",point(p.Position())},{L"contact",S(edgeContact(e.OriginalSource()))},{L"primary",B(PointerGesture::PrimaryContact(p))},{L"previous_claimed",B(edge&&edge->claimed)},{L"path",path}});evidence();
+            lastEdgeContact=O({{L"pointer",N(p.PointerId())},{L"position",point(p.Position())},{L"contact",S(edgeContact(e.OriginalSource()))},{L"primary",B(PointerGesture::PrimaryContact(p))}});evidence();
         }
         if(edge&&edge->pointer==p.PointerId())edgeEnd(L"cancel");
         if(!data->edges||!PointerGesture::PrimaryContact(p))return;
@@ -696,17 +692,6 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
             if(auto self=weak.lock();self&&!self->releasing&&self->edge&&self->edge->pointer==e.Pointer().PointerId()&&e.GetCurrentPoint(self->root).IsInContact()
                 &&(!self->edge->claimed||e.OriginalSource().try_as<UIElement>()==self->root))self->edgeEnd(L"cancel",L"capture_lost");
             if(auto self=weak.lock();self&&!self->releasing&&self->pointer==e.Pointer().PointerId()){
-                if(self->trace){
-                    auto source=e.OriginalSource().try_as<UIElement>();
-                    auto p=e.GetCurrentPoint(self->root);
-                    self->lastCaptureLoss=O({{L"generation",N(double(self->generation))},
-                        {L"source_is_root",B(source==self->root)},{L"root_captured",B(self->owns(self->root))},
-                        {L"source_name",S(source?AutomationProperties::GetAutomationId(source):L"")},
-                        {L"root_hit_test_visible",B(self->root.IsHitTestVisible())},{L"external_popup",B(self->data->externalPopup)},
-                        {L"source_loaded",B(self->source.get()&&self->source.get().IsLoaded())},
-                        {L"in_contact",B(p.IsInContact())},{L"canceled",B(p.Properties().IsCanceled())},{L"dragging",B(self->dragging)},
-                        {L"position",point(p.Position())}});
-                }
                 // A Button releases its capture before the normal routed Up.
                 if(e.OriginalSource().try_as<UIElement>()==self->root||e.GetCurrentPoint(self->root).IsInContact())
                     self->cancel(L"capture_lost");
