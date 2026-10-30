@@ -1509,10 +1509,11 @@ impl Workspace {
             keyboard_focus,
             #[upgrade_or]
             glib::Propagation::Proceed,
-            move |controller, key, _, modifiers| {
+            move |controller, key, keycode, modifiers| {
                 keyboard_focus.key_pressed(controller);
                 this.update_zen();
                 if this.preferences.recording() {
+                    let key = crate::input::shortcut_key(key, keycode, modifiers, false);
                     this.interact(crate::input::key_input(key, true, modifiers, false, None));
                     return glib::Propagation::Stop;
                 }
@@ -1540,13 +1541,8 @@ impl Workspace {
                 {
                     return glib::Propagation::Proceed;
                 }
-                let editing = gtk::prelude::GtkWindowExt::focus(&this.window).is_some_and(|w| {
-                    w.is::<gtk::Text>()
-                        || w.is::<gtk::Entry>()
-                        || w.is::<gtk::TextView>()
-                        || w.is::<gtk::Range>()
-                        || w.is::<gtk::DropDown>()
-                });
+                let editing = crate::input::editing_focus(&this.window);
+                let key = crate::input::shortcut_key(key, keycode, modifiers, editing || this.window.visible_dialog().is_some());
                 if this
                     .interact(crate::input::key_input(key, true, modifiers, editing, None))
                     .handled
@@ -1560,12 +1556,15 @@ impl Workspace {
         keys.connect_key_released(glib::clone!(
             #[weak(rename_to = this)]
             self,
-            move |_, key, _, modifiers| {
+            move |_, key, keycode, modifiers| {
                 if this.window.visible_dialog().is_some_and(|d| d != this.preferences.dialog)
                     && !this.preferences.editing_shortcut()
                 {
                     return;
                 }
+                let typing = !this.preferences.recording()
+                    && (crate::input::editing_focus(&this.window) || this.window.visible_dialog().is_some());
+                let key = crate::input::shortcut_key(key, keycode, modifiers, typing);
                 // Release the shortcut that opened the editor, even though its
                 // key presses now belong to native controls. Otherwise reopening
                 // with the same shortcut is mistaken for an already-held key.

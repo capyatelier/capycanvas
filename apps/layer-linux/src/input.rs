@@ -676,6 +676,33 @@ pub fn key_input(
     }
 }
 
+pub(crate) fn editing_focus(window: &adw::ApplicationWindow) -> bool {
+    gtk::prelude::GtkWindowExt::focus(window).is_some_and(|w| {
+        w.is::<gtk::Text>() || w.is::<gtk::Entry>() || w.is::<gtk::TextView>() || w.is::<gtk::Range>() || w.is::<gtk::DropDown>()
+    })
+}
+
+/// The key a Latin layout places on the same physical key, so shortcuts work in every layout.
+/// Unchorded typing keeps its own character.
+pub(crate) fn shortcut_key(key: gdk::Key, keycode: u32, modifiers: gdk::ModifierType, typing: bool) -> gdk::Key {
+    use gdk::ModifierType as M;
+    if key.to_unicode().is_none_or(|c| c.is_ascii())
+        || typing && !modifiers.intersects(M::CONTROL_MASK | M::ALT_MASK | M::SUPER_MASK | M::META_MASK)
+    {
+        return key;
+    }
+    gdk::Display::default().and_then(|display| display.map_keycode(keycode)).map_or(key, |entries| latin_key(key, &entries))
+}
+
+fn latin_key(key: gdk::Key, entries: &[(gdk::KeymapKey, gdk::Key)]) -> gdk::Key {
+    let level = entries.iter().find(|(_, k)| *k == key).map_or(0, |(entry, _)| entry.level());
+    entries
+        .iter()
+        .filter(|(entry, k)| entry.level() == level && k.to_unicode().is_some_and(|c| c.is_ascii_graphic()))
+        .min_by_key(|(entry, _)| entry.group())
+        .map_or(key, |&(_, k)| k)
+}
+
 pub(crate) fn control_takes_key(input: &UiInput, keyboard_focus: bool) -> bool {
     matches!(input, UiInput::Key { key, modifiers, .. } if layer_ui::control_takes_key(key, *modifiers, keyboard_focus))
 }
@@ -1103,6 +1130,20 @@ mod tests {
     }
 
     use super::*;
+    #[test]
+    fn shortcuts_use_the_latin_key_at_the_same_position_and_level() {
+        let z = |group, level, key| (gdk::KeymapKey::new(52, group, level), key);
+        let russian_first = [z(0, 0, gdk::Key::Cyrillic_ya), z(0, 1, gdk::Key::Cyrillic_YA), z(1, 0, gdk::Key::z), z(1, 1, gdk::Key::Z)];
+        assert_eq!(latin_key(gdk::Key::Cyrillic_ya, &russian_first), gdk::Key::z);
+        assert_eq!(latin_key(gdk::Key::Cyrillic_YA, &russian_first), gdk::Key::Z);
+        let english_first = [z(0, 0, gdk::Key::z), z(0, 1, gdk::Key::Z), z(1, 0, gdk::Key::Cyrillic_ya), z(1, 1, gdk::Key::Cyrillic_YA)];
+        assert_eq!(latin_key(gdk::Key::Cyrillic_ya, &english_first), gdk::Key::z);
+        let greek_only = [(gdk::KeymapKey::new(38, 0, 0), gdk::Key::Greek_alpha)];
+        assert_eq!(latin_key(gdk::Key::Greek_alpha, &greek_only), gdk::Key::Greek_alpha);
+        assert_eq!(shortcut_key(gdk::Key::Cyrillic_ya, 52, gdk::ModifierType::empty(), true), gdk::Key::Cyrillic_ya);
+        assert_eq!(shortcut_key(gdk::Key::bracketleft, 34, gdk::ModifierType::CONTROL_MASK, false), gdk::Key::bracketleft);
+    }
+
     #[test]
     fn native_clock_removes_initial_delivery_latency_without_reordering() {
         for hz in [60u64, 120, 240, 480, 1000] {
