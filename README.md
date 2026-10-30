@@ -20,12 +20,12 @@
   <a href="docs/engineering.md">Engineering</a>
 </p>
 
-Capy Canvas is free, GPU-accelerated painting and photo editing software. We
-want to improve upon the ideas of the past, and build something better.
+Capy Canvas is free, GPU-accelerated painting and photo editing software.
 
-The gap in creative software is most stark on Linux, where there are not many good
-options for artists. Though, well-designed software should work everywhere:
-Windows, Mac, iPad and Android, and web.
+This project started from the simple idea of using GPU shaders to simulate
+physical media. Equations that model graphite rubbing on paper, or ink
+soaking into the page. Wrapped in a customizable UI that can be as
+minimal or complex as you like.
 
 We want artists to build their own tools. We envision a world where painters
 build their own brush engine, and photographers write their effect shaders.
