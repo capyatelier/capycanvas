@@ -124,8 +124,9 @@ impl ToneService {
             }
             self.stamp = Some(stamp);
         }
-        let idle =
-            !s.state().document_file.close_ready && s.require_document_snapshot_idle().is_ok();
+        let idle = !s.state().document_file.close_ready
+            && !s.engine().has_pending_document_edits()
+            && s.require_document_snapshot_idle().is_ok();
         if !idle {
             if let Some(p) = &self.pending {
                 p.control.cancel();
@@ -267,5 +268,33 @@ mod tests {
         assert!(tone.tick(&host).unwrap());
         assert!(tone.guide.is_none());
         assert_eq!(tone.status()["retained"], false);
+    }
+
+    #[test]
+    fn tone_service_defers_analysis_until_a_raster_edit_is_submitted() {
+        let mut document = layer_core::Document::new(layer_core::authored::PortableId::random(), 32, 24, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+        crate::test_support::composition_mut(&mut document).color.depth = SampleDepth::F32;
+        let gpu = WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
+        let mut host = NativeHost::new(layer_ui::Platform::Mac).unwrap();
+        *host.session =
+            UiSession::new(Renderer(Some(gpu.into())), document, [32, 24], layer_ui::Platform::Mac).unwrap();
+        let mut tone = ToneService::new(None);
+        settle(&mut tone, &mut host);
+        let publications = tone.publications();
+
+        for command in [CommandId::SelectAll, CommandId::FillSelection] {
+            host.dispatch(UiAction::Invoke { command }).unwrap();
+        }
+        assert!(host.session.engine().has_pending_document_edits());
+        assert!(host.session.require_document_snapshot_idle().is_ok());
+        tone.tick(&host).unwrap();
+        tone.changed = Some(Instant::now() - Duration::from_millis(181));
+        tone.tick(&host).unwrap();
+        assert!(tone.pending.is_none());
+        assert_eq!(tone.publications(), publications);
+
+        settle(&mut tone, &mut host);
+        assert_eq!(tone.publications(), publications + 1);
+        assert!(tone.current(&host).is_some());
     }
 }
