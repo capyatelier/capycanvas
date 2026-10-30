@@ -270,7 +270,7 @@ extension XCTestCase {
         workspaceActivate(configuration.buttons["brush-color"])
         let popup = app.descendants(matching: .any)["toolbar-control-popup"].firstMatch
         XCTAssertTrue(popup.waitForExistence(timeout: 5))
-        colorControlPoint(popup.buttons["color-background"], in: app).clickOrTap()
+        colorControlPoint(popup.buttons["color-background"], in: popup).clickOrTap()
         expectation(for: NSPredicate(format: "selected == YES"), evaluatedWith: popup.buttons["color-background"])
         waitForExpectations(timeout: 5)
         workspaceActivate(popup.buttons["Done"])
@@ -294,7 +294,7 @@ extension XCTestCase {
         workspaceActivate(liveColor)
         XCTAssertTrue(popup.waitForExistence(timeout: 5), "The live panel swatch must open the same color picker")
         XCTAssertTrue(popup.buttons["color-background"].isSelected)
-        colorControlPoint(popup.buttons["color-foreground"], in: app).clickOrTap()
+        colorControlPoint(popup.buttons["color-foreground"], in: popup).clickOrTap()
         expectation(for: NSPredicate(format: "selected == YES"), evaluatedWith: popup.buttons["color-foreground"])
         waitForExpectations(timeout: 5)
         workspaceActivate(popup.buttons["Done"])

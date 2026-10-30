@@ -69,8 +69,8 @@ extension XCTestCase {
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)
     }
 
-    @MainActor func revealColorControl(_ element: XCUIElement, in app: XCUIApplication) {
-        let scroll = app.scrollViews.containing(.any, identifier: "color-panel-controls").firstMatch
+    @MainActor func revealColorControl(_ element: XCUIElement, in container: XCUIElement) {
+        let scroll = container.scrollViews.containing(.any, identifier: "color-panel-controls").firstMatch
         XCTAssertTrue(element.waitForExistence(timeout: 5))
         guard scroll.exists else { return }
         // Scroll the panel's padding, outside the wheel contact area.
@@ -90,8 +90,8 @@ extension XCTestCase {
         XCTFail("Color control did not become fully visible: \(element.identifier)")
     }
 
-    @MainActor func colorControlPoint(_ control: XCUIElement, in app: XCUIApplication) -> XCUICoordinate {
-        revealColorControl(control, in: app)
+    @MainActor func colorControlPoint(_ control: XCUIElement, in container: XCUIElement) -> XCUICoordinate {
+        revealColorControl(control, in: container)
         let offset = switch control.identifier {
         // The readout's rectangular AX frame includes the excluded wheel.
         // Activate its visible label, which lies inside the curved button.
