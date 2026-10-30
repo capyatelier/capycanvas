@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import {createDrawing} from "./new-drawing-fixture.mjs";
 
 export async function checkSmoothing({call, evaluate, settle}) {
   const inPage = (fn, ...args) => evaluate(`(${fn})(...${JSON.stringify(args)})`);
@@ -30,6 +31,9 @@ export async function checkSmoothing({call, evaluate, settle}) {
     }, shot.data, point);
   };
   try {
+    await action({type:"invoke",command:"new_document"});
+    await evaluate(createDrawing());
+    await waitForInk();
     await action({type:"select_brush", id:1});
     await action({type:"set_brush_size", value:18});
     await action({type:"set_color", rgba:[0.05,0.1,0.3,1]});
