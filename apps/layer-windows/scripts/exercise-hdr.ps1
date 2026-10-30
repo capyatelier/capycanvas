@@ -617,6 +617,7 @@ try {
    if($releasedSource.Left -le $releasedNeighbor.Left){throw 'Drawing-tab release exposed the original order before arranging its committed layout'}
    Wait-Until {((Model).windows_tabs.tabs.id -join ',') -eq $expectedReorder} 'A native tab drag did not produce the expected order on release'
   if(((Control 'drawing-tab-1' -Within $tabStrip).GetRuntimeId() -join ':') -ne $tabWidget){throw 'Reorder rebuilt the native tab'}
+  Assert-TabKeyOrder @((Model).windows_tabs.tabs|ForEach-Object {'drawing-tab-'+$_.id;'drawing-close-'+$_.id})
   Write-Output "$device phase: order history"
   $historyIndex=0
   foreach($history in @('undo','redo','undo')){

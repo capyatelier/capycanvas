@@ -452,6 +452,7 @@ Focused tab-drop journeys are `tab-drag:release-dark`, `tab-drag:release-light`,
 `hdr:tab-drop-dark` and `hdr:tab-drop-light`. They cover panel and drawing tabs
 with mouse, pen and touch, including native control identity, arranged release
 positions and order history. Run all `tab-pickup` variants after input changes.
+`tab-drag:release-dark`/`release-light` and `drawer-dark`/`drawer-light` retain composed release-frame sequences and check far-left commits and active-tab feet.
 
 Fixtures share the helpers in `CapyUia.ps1`, such as `Owned-DrawingWindow`,
 `Control -Arranged`, `Workspace-Root`, `Tool-Tile`, `Use-PaintWorkspace`,

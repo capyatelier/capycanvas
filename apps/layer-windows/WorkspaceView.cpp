@@ -283,7 +283,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
                 AutomationProperties::SetAutomationId(tab,L"panel-tab-"+id);
                 auto shell=panelTabShell(tab,nullptr,data->tint(L"text",20));
                 {
-                    auto cut=[weak=weak_from_this(),id=uint32_t(num(geometry,L"id"))]{if(auto self=weak.lock())self->cutStrip(id);};
+                    auto cut=[weak=weak_from_this(),id=uint32_t(num(geometry,L"id"))]{if(auto self=weak.lock()){self->cutStrip(id);if(self->glassChanged)self->glassChanged();}};
                     shell.SizeChanged([cut](auto&&,auto&&){cut();});
                     shell.RegisterPropertyChangedCallback(UIElement::OpacityProperty(),[cut](auto&&,auto&&){cut();});
                 }
@@ -1064,7 +1064,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
                 auto actual=allocatedBounds(group.frame,root),wanted=rectangle(object(receiver,L"bounds"));auto scale=root.XamlRoot()?root.XamlRoot().RasterizationScale():1.;
                 if(actual.Width<=0||actual.Height<=0||std::max({std::abs(actual.X-wanted.X),std::abs(actual.Y-wanted.Y),std::abs(actual.Width-wanted.Width),std::abs(actual.Height-wanted.Height)})*scale>.5)continue;
                 auto rect=[](Rect bounds){A values;for(auto v:{bounds.X,bounds.Y,bounds.Width,bounds.Height})values.Append(N(v));return values;};
-                bool tabbed=flag(group.geometry,L"tabs_visible");auto activeTab=tabbed?allocatedBounds(group.activeTab,root):Rect{};activeTab.X+=gestures->TabOffset(uint32_t(num(receiver,L"group"))).first;
+                bool tabbed=flag(group.geometry,L"tabs_visible");auto activeTab=tabbed?gestures->TabBounds(uint32_t(num(receiver,L"group")),root).value_or(allocatedBounds(group.activeTab,root)):Rect{};activeTab.X+=gestures->TabOffset(uint32_t(num(receiver,L"group"))).first;
                 receivers.Append(O({{L"group",N(num(receiver,L"group"))},
                     {L"tab_bar",rect(tabbed?allocatedBounds(group.header,root):Rect{})},
                     {L"active_tab",rect(activeTab)},
@@ -1188,14 +1188,15 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     }
     void cutStrip(uint32_t id){if(auto found=groups.find(id);found!=groups.end())cutStrip(found->second);}
     void cutStrip(Group& group){
+        auto [offset,animate]=gestures->TabOffset(uint32_t(num(group.geometry,L"id")));group.strip.TranslateTab(offset,animate);
         std::vector<Point> band,active;float width=placement(group).Width,clipX=0,clipWidth=width;
         if(flag(group.geometry,L"tabs_visible")&&!group.presented.Size()&&width>0){
             band=squircleOutline(width,float(data->panelMetric(L"tab_bar_height")),{group.corners[0],group.corners[1],0,0});
             if(auto tab=group.activeTab;tab&&tab.ActualWidth()>0){
                 auto view=group.tabScroll.TransformToVisual(group.content).TransformPoint({0,0});
-                float x=view.X+group.tabLabels.ActualOffset().x+tab.ActualOffset().x-float(group.tabScroll.HorizontalOffset())-6;
-                auto outline=panelTabOutline(float(tab.ActualWidth()),float(tab.ActualHeight()));
-                for(auto& point:outline){point.X+=x;point.Y+=view.Y;}
+                auto bounds=gestures->TabBounds(uint32_t(num(group.geometry,L"id")),group.content).value_or(allocatedBounds(tab,group.content));
+                auto outline=panelTabOutline(bounds.Width,bounds.Height);
+                for(auto& point:outline){point.X+=bounds.X-6;point.Y+=bounds.Y;}
                 active=std::move(outline);clipX=view.X;clipWidth=float(group.tabScroll.ActualWidth());
             }
         }

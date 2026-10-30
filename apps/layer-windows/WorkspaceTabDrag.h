@@ -14,6 +14,7 @@ public:
     void Refresh(std::vector<winrt::weak_ref<winrt::Microsoft::UI::Xaml::FrameworkElement>> const& tabs);
     void Clear();
     std::pair<float,bool> ActiveOffset(uint32_t group)const;
+    std::optional<winrt::Windows::Foundation::Rect> ActiveBounds(uint32_t group,winrt::Microsoft::UI::Xaml::UIElement const& relative)const;
 private:
     struct Impl;
     std::unique_ptr<Impl> impl;

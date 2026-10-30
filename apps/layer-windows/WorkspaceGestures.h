@@ -16,6 +16,7 @@ public:
         CapyUi::J const& tab={},Pickup pickup=Pickup::Immediate);
     void Refresh();
     std::pair<float,bool> TabOffset(uint32_t group)const;
+    std::optional<winrt::Windows::Foundation::Rect> TabBounds(uint32_t group,winrt::Microsoft::UI::Xaml::UIElement const& relative)const;
     void Present(CapyUi::J const& drag);
     void ChromeChanged();
     bool Cancel();

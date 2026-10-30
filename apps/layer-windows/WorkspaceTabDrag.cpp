@@ -43,13 +43,13 @@ struct WorkspaceTabDrag::Impl {
     }
     ~Impl(){clear();}
     void hide(){
+        bool wasVisible=std::exchange(visible,false);
         for(auto& entry:entries){
             if(entry.animation){entry.copy.StopAnimation(entry.animation);entry.animation=nullptr;}
             if(entry.copy)entry.copy.Translation({float(entry.target),0,0});
-            if(visible)if(auto original=entry.source.get())original.Opacity(entry.opacity);
+            if(wasVisible)if(auto original=entry.source.get())original.Opacity(entry.opacity);
         }
         uint32_t index;if(root.Children().IndexOf(overlay,index))root.Children().RemoveAt(index);
-        visible=false;
     }
     void clear(){
         hide();overlay.Children().Clear();entries.clear();clip=J{};
@@ -91,7 +91,7 @@ struct WorkspaceTabDrag::Impl {
         place(overlay,clip);overlay.Background(CapyUi::clear());
         RectangleGeometry mask;mask.Rect({0,0,float(num(clip,L"width")),float(num(clip,L"height"))});overlay.Clip(mask);
         animate=Windows::UI::ViewManagement::UISettings().AnimationsEnabled();
-        A hits;Bindings paintIcons;
+        visible=true;A hits;Bindings paintIcons;
         for(uint32_t i=0;i<entries.size();++i){
             auto& entry=entries[i];hits.Append(entry.hit);
             StackPanel row;row.Orientation(Orientation::Horizontal);row.Spacing(6);
@@ -105,7 +105,7 @@ struct WorkspaceTabDrag::Impl {
             Canvas::SetZIndex(copy,i==source?2:entry.active?1:0);overlay.Children().Append(copy);
             if(auto original=entry.source.get())original.Opacity(0);
         }
-        visible=true;root.Children().Append(overlay);
+        root.Children().Append(overlay);
         return O({{L"tabs",hits},{L"clip",clip}});
     }
     void update(J const& presentation){
@@ -119,8 +119,9 @@ struct WorkspaceTabDrag::Impl {
         auto offsets=array(preview,L"offsets");
         if(offsets.Size()!=entries.size()){hide();return;}
         if(!visible){
+            visible=true;
             for(auto const& entry:entries)if(auto original=entry.source.get())original.Opacity(0);
-            root.Children().Append(overlay);visible=true;
+            root.Children().Append(overlay);
         }
         for(uint32_t i=0;i<entries.size();++i){
             auto& entry=entries[i];
@@ -177,4 +178,9 @@ void WorkspaceTabDrag::Clear(){impl->clear();}
 std::pair<float,bool> WorkspaceTabDrag::ActiveOffset(uint32_t group)const{
     if(impl->visible&&impl->group==group)for(uint32_t i=0;i<impl->entries.size();++i)if(impl->entries[i].active)return {float(impl->entries[i].target),i!=impl->source&&impl->animate};
     return {};
+}
+std::optional<Windows::Foundation::Rect> WorkspaceTabDrag::ActiveBounds(uint32_t group,UIElement const& relative)const{
+    if(impl->visible&&impl->group==group)for(auto const& entry:impl->entries)if(entry.active)
+        return impl->root.TransformToVisual(relative).TransformBounds(rectangle(object(entry.hit,L"bounds")));
+    return std::nullopt;
 }

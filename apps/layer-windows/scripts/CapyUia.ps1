@@ -499,6 +499,14 @@ function Focus-Keyboard($Element,[switch]$Backward){
     if($Backward){[CapyRowPointer]::Key([uint32]$review.Id,0x09)}else{[CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x10),0x09)}
     Wait-Until {$Element.Current.HasKeyboardFocus} 'Keyboard navigation did not return focus to the native control'
 }
+function Assert-TabKeyOrder([string[]]$Ids){
+    Focus-Keyboard (Control $Ids[0] -Arranged)
+    foreach($tabId in $Ids|Select-Object -Skip 1){
+        $expectedTab=Control $tabId -Arranged
+        [CapyRowPointer]::Key([uint32]$review.Id,0x09)
+        Wait-Until {$expectedTab.Current.HasKeyboardFocus} "Tab-key focus did not follow visual order to $tabId"
+    }
+}
 function Assert-CapyCompactSwitch($Control,[bool]$Expected,[IntPtr]$Window,[string]$Output){
     $bounds=$Control.Current.BoundingRectangle;$scale=[CapyRowPointer]::GetDpiForWindow($Window)/96.
     $toggle=$Control.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)

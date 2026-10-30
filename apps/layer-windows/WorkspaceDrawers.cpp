@@ -228,6 +228,7 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
                 StackPanel row;row.Orientation(Orientation::Horizontal);row.Background(clear());
                 ScrollView strip;Border grip;auto header=panelHeader(data,row,strip,grip);
                 Grid::SetColumnSpan(column.strip.Root(),2);Canvas::SetZIndex(column.strip.Root(),-1);header.Children().Append(column.strip.Root());
+                auto paint=[weak,index=columns.size()]{if(auto self=weak.lock();self&&index<self->columns.size()){auto placements=array(object(self->geometry,L"placement"),L"columns");if(index<placements.Size())self->paintStrip(self->columns[index],placements.GetObjectAt(uint32_t(index)),uint32_t(index));}};
                 uint32_t index=0;
                 for(auto value:array(tabs,L"panels")){
                     auto panelId=value.GetString();auto found=panels.find(std::wstring(panelId));if(found==panels.end())continue;
@@ -242,10 +243,12 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
                     auto item=O({{L"kind",S(L"panel")},{L"panel",S(panelId)}});
                     gestures->Source(pick,O({{L"type",S(L"drag_workspace")},{L"item",item}}),item,false,
                         O({{L"group",N(group)},{L"index",N(index++)},{L"panel",S(panelId)}}));
-                    auto shell=panelTabShell(pick,nullptr,data->tint(L"text",20));column.tabs.emplace(std::wstring(panelId),shell);row.Children().Append(shell);
+                    auto shell=panelTabShell(pick,nullptr,data->tint(L"text",20));
+                    shell.RegisterPropertyChangedCallback(UIElement::OpacityProperty(),[paint](auto&&,auto&&){paint();});
+                    column.tabs.emplace(std::wstring(panelId),shell);row.Children().Append(shell);
                 }
                 strip.SizeChanged([weak,index=columns.size()](auto&& sender,auto&&){if(auto self=weak.lock();self&&index<self->columns.size())fitAutomaticTabs(self->data,self->columns[index].automatic,sender.template as<ScrollView>().ActualWidth(),self->tabWidths);});
-                strip.ViewChanged([weak,index=columns.size()](auto&&,auto&&){if(auto self=weak.lock();self&&index<self->columns.size()){auto placements=array(object(self->geometry,L"placement"),L"columns");if(index<placements.Size())self->paintStrip(self->columns[index],placements.GetObjectAt(uint32_t(index)),uint32_t(index));}});
+                strip.ViewChanged([paint](auto&&,auto&&){paint();});
                 gestures->Source(strip,O({{L"type",S(L"drag_workspace")},{L"item",groupItem}}),groupItem,false,{},WorkspaceGestures::Pickup::Sideways);
                 gestures->Source(grip,O({{L"type",S(L"drag_workspace")},{L"item",groupItem}}),groupItem);
                 AutomationProperties::SetAutomationId(grip,L"drawer-grip-"+to_hstring(uint32_t(group)));
@@ -332,10 +335,12 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
     }
 
     void paintStrip(Column& column,J const& placement,uint32_t index){
+        auto [offset,animate]=gestures->TabOffset(uint32_t(num(object(model,L"tabs"),L"group")));column.strip.TranslateTab(offset,animate);
         float width=float(num(placement,L"width")),height=float(data->panelMetric(L"tab_bar_height")),x=0,activeWidth=0,activeHeight=0,clipX=0,clipWidth=width;
         auto scroll=column.header.Children().GetAt(0).as<ScrollView>();auto active=column.tabs.find(std::wstring(str(object(model,L"tabs"),L"active")));
         if(active!=column.tabs.end()&&active->second.IsLoaded()){
-            auto shell=active->second;auto at=shell.TransformToVisual(column.frame).TransformPoint({0,0});x=at.X;activeWidth=float(shell.ActualWidth());activeHeight=float(shell.ActualHeight());
+            auto bounds=gestures->TabBounds(uint32_t(num(object(model,L"tabs"),L"group")),column.frame).value_or(allocatedBounds(active->second,column.frame));
+            x=bounds.X;activeWidth=bounds.Width;activeHeight=bounds.Height;
             auto clip=scroll.TransformToVisual(column.frame).TransformPoint({0,0});clipX=clip.X;clipWidth=float(scroll.ActualWidth());
         }
         float left=index?0:SurfaceRadius,right=index+1==columns.size()?SurfaceRadius:0;

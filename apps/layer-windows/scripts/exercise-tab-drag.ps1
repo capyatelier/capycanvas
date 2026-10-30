@@ -4,6 +4,58 @@ $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 $CapyCacheModel=$true;$CapyEach={if($env:CAPY_PRIVATE_DESKTOP){[CapyRowPointer]::VerifyPrivateDesktop($env:CAPY_PRIVATE_DESKTOP)};[CapyCanvasTouch]::Verify()}
 Add-Type -AssemblyName System.Drawing
+Add-Type -ReferencedAssemblies System.Drawing -TypeDefinition @'
+using System;
+using System.Drawing;
+using System.Runtime.InteropServices;
+public static class TabFrames {
+ [DllImport("dwmapi.dll")] public static extern int DwmFlush();
+ static int Delta(Color p,Color q){return Math.Max(Math.Abs(p.R-q.R),Math.Max(Math.Abs(p.G-q.G),Math.Abs(p.B-q.B)));}
+ public static Bitmap Grab(int x,int y,int width,int height){
+  var image=new Bitmap(width,height);
+  using(var graphics=Graphics.FromImage(image))graphics.CopyFromScreen(x,y,0,0,image.Size);
+  return image;
+ }
+ public sealed class Envelope {
+  readonly int width,height;
+  readonly int[] lo,hi;
+  public Envelope(Bitmap preview,Bitmap final){
+   width=preview.Width;height=preview.Height;int size=width*height*3;
+   var minimum=new int[size];var maximum=new int[size];lo=new int[size];hi=new int[size];
+   for(int y=0;y<height;y++)for(int x=0;x<width;x++){
+    int i=(y*width+x)*3;var p=preview.GetPixel(x,y);var q=final.GetPixel(x,y);
+    minimum[i]=Math.Min(p.R,q.R);minimum[i+1]=Math.Min(p.G,q.G);minimum[i+2]=Math.Min(p.B,q.B);
+    maximum[i]=Math.Max(p.R,q.R);maximum[i+1]=Math.Max(p.G,q.G);maximum[i+2]=Math.Max(p.B,q.B);
+   }
+   for(int y=0;y<height;y++)for(int x=0;x<width;x++){
+    int i=(y*width+x)*3;lo[i]=lo[i+1]=lo[i+2]=255;
+    for(int yy=Math.Max(0,y-1);yy<=Math.Min(height-1,y+1);yy++)
+     for(int xx=Math.Max(0,x-1);xx<=Math.Min(width-1,x+1);xx++){
+      int j=(yy*width+xx)*3;
+      for(int c=0;c<3;c++){lo[i+c]=Math.Min(lo[i+c],minimum[j+c]);hi[i+c]=Math.Max(hi[i+c],maximum[j+c]);}
+     }
+    for(int c=0;c<3;c++){lo[i+c]-=6;hi[i+c]+=6;}
+   }
+  }
+  public int Difference(Bitmap image){
+   int count=0;
+   for(int y=0;y<height;y++)for(int x=0;x<width;x++){
+    int i=(y*width+x)*3;var v=image.GetPixel(x,y);
+    if(v.R<lo[i]||v.R>hi[i]||v.G<lo[i+1]||v.G>hi[i+1]||v.B<lo[i+2]||v.B>hi[i+2])count++;
+   }
+   return count;
+  }
+ }
+ public static int FootDifference(Bitmap a,RectangleF from,Bitmap b,RectangleF to,double scale){
+  int count=0,pad=(int)(8*scale),y=(int)(to.Bottom-5*scale),oldY=(int)(from.Bottom-5*scale);
+  for(int x=pad;x<to.Width-pad;x++){
+   int oldX=(int)(from.X+pad+(x-pad)*(from.Width-2*pad)/(to.Width-2*pad));
+   if(Delta(a.GetPixel(oldX,oldY),b.GetPixel((int)to.X+x,y))>16)count++;
+  }
+  return count;
+ }
+}
+'@
 Add-Type -Path (Join-Path $PSScriptRoot 'CanvasTouchDriver.cs')
 Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
 $ControlType=[System.Windows.Automation.ControlType]
@@ -187,6 +239,90 @@ function Drawer-Widths([string[]]$Panels){
  foreach($panel in $Panels){$result[$panel]=[Math]::Round((Control ('drawer-tab-'+$panel) -Arranged).Current.BoundingRectangle.Width/$scale,2)}
  $result
 }
+function Tab-Order([string]$Panel){
+ $layout=(Model).state.workspace.layout
+ $visit={param($node) if(!$node){return};if($node.kind -eq 'tabs'){if($node.panels -contains $Panel){$node.panels}}else{& $visit $node.first;& $visit $node.second}}
+ foreach($node in @($layout.bands.root)+@($layout.floating.root)){& $visit $node}
+}
+function Check-Foot([string]$Name,[string]$Before,$From,[string]$After,$To){
+ $a=[Drawing.Bitmap]::new($Before);$b=[Drawing.Bitmap]::new($After)
+ try{
+  if($To.Width-16*$scale -lt 8){throw "$Name has no measurable active foot"}
+  $wrong=[TabFrames]::FootDifference($a,$From,$b,$To,$scale)
+  if($wrong -gt 3){$script:frameFailures+=@("$Name foot does not cover its active tab ($wrong pixels)")}
+  $wrong
+ }finally{$a.Dispose();$b.Dispose()}
+}
+function Release-Frames([string]$Name,$Area){
+ $folder=Join-Path $run $Name;[IO.Directory]::CreateDirectory($folder)|Out-Null
+ $frames=[Collections.Generic.List[Drawing.Bitmap]]::new();$times=@()
+ try{
+  for($i=0;$i -lt 90;$i++){
+   $null=[TabFrames]::DwmFlush()
+   if($i -eq 3){$up=[Diagnostics.Stopwatch]::GetTimestamp();[CapyRowPointer]::Up()}
+   $begin=[Diagnostics.Stopwatch]::GetTimestamp()
+   $image=[TabFrames]::Grab([int]$Area.Left,[int]$Area.Top,[int]$Area.Width,[int]$Area.Height)
+   $frames.Add($image);$times+=@{frame=$i;begin=$begin;end=[Diagnostics.Stopwatch]::GetTimestamp()}
+  }
+  Wait-Until {$null -eq (Find-Preview)} "$Name did not hand over to its arranged controls"
+  Wait-StablePixels {Screen-Pixels ([int]($Area.Left+$Area.Width/2)) ([int]($Area.Bottom-2*$scale))} -Composed|Out-Null
+  $final=[TabFrames]::Grab([int]$Area.Left,[int]$Area.Top,[int]$Area.Width,[int]$Area.Height)
+  $final.Save((Join-Path $folder 'final.png'))
+  $envelope=[TabFrames+Envelope]::new($frames[2],$final)
+  $errors=@();$scores=for($i=0;$i -lt $frames.Count;$i++){
+   $frames[$i].Save((Join-Path $folder ('frame-{0:D3}.png' -f $i)))
+   $invalid=$envelope.Difference($frames[$i])
+   if($invalid -gt 8){$errors+=@($i)}
+   @{frame=$i;invalid_pixels=$invalid}
+  }
+  @{area=$Area;up=$up;frequency=[Diagnostics.Stopwatch]::Frequency;times=$times;scores=$scores;invalid=$errors}|ConvertTo-Json -Depth 8|Set-Content (Join-Path $folder 'frames.json')
+  if($errors.Count){$script:frameFailures+=@("$Name exposed a third strip state in frames $($errors -join ',')")}
+ }finally{foreach($image in $frames){$image.Dispose()};if($final){$final.Dispose()}}
+}
+function Leftward-Tab([string]$Prefix,[string]$Panel,[string]$First,[string]$Device,[double]$Edge=-12){
+ Invoke ($Prefix+$Panel)
+ $originalOrder=(Tab-Order $Panel) -join ','
+ $source=(Control ($Prefix+$Panel) -Arranged).Current.BoundingRectangle
+ $firstBounds=(Control ($Prefix+$First) -Arranged).Current.BoundingRectangle
+ $name="$Prefix$Panel-$Device-$Edge"
+ $area=[Drawing.Rectangle]::new([int]($firstBounds.Left-8*$scale),[int]$firstBounds.Top,[int]($source.Right-$firstBounds.Left+16*$scale),[int]$firstBounds.Height)
+ Wait-StablePixels {Screen-Pixels ([int]($source.Left+$source.Width/2)) ([int]($source.Bottom-5*$scale))} -Composed|Out-Null
+ Capture ($name+'-before') -Composed
+ [CapyRowPointer]::Down($Device,[int]($source.Left+8*$scale),[int]($source.Top+$source.Height/2))
+ try{
+  Walk ($source.Left+8*$scale) ($source.Top+$source.Height/2) ($firstBounds.Left+$Edge*$scale) ($source.Top+$source.Height/2)
+  Wait-Until {$p=Preview;$p -and $p.insertion -eq 0} "$name did not preview slot zero"
+  Wait-StablePixels {Screen-Pixels ([int]($firstBounds.Left+$source.Width/2)) ([int]($source.Bottom-5*$scale))} -Composed|Out-Null
+  $preview=Preview
+  Capture ($name+'-drag') -Composed
+  $origin=[CapyRowPointer+Point]::new();$null=[CapyRowPointer]::ClientToScreen($drawingWindow,[ref]$origin)
+  $title=@((Model).panels|Where-Object id -eq $Panel)[0].title
+  $labels=(Find-Preview).FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,$title))
+  $labelBounds=@();foreach($label in $labels){
+   $box=$label.Current.BoundingRectangle;$labelBounds+=@($box.ToString())
+   if($box.Left -lt $origin.x+$preview.bounds.x*$scale-1 -or $box.Right -gt $origin.x+($preview.bounds.x+$preview.bounds.width)*$scale+1){$script:frameFailures+=@("$name name extends outside its active tab")}
+  }
+  $from=[Drawing.RectangleF]::new(($source.Left-$origin.x),($source.Top-$origin.y),$source.Width,$source.Height)
+  $moving=[Drawing.RectangleF]::new(($preview.bounds.x*$scale),($preview.bounds.y*$scale),($preview.bounds.width*$scale),($preview.bounds.height*$scale))
+  $dragPath=Join-Path $run ($name+'-drag.png')
+  $wrong=Check-Foot $name (Join-Path $run ($name+'-before.png')) $from $dragPath $moving
+  Release-Frames $name $area
+  $arranged=(Control ($Prefix+$Panel) -Arranged).Current.BoundingRectangle
+  $settled=[Drawing.RectangleF]::new(($arranged.Left-$area.Left),($arranged.Top-$area.Top),$arranged.Width,$arranged.Height)
+  $finalWrong=Check-Foot ($name+'-final') $dragPath $moving (Join-Path $run ($name+'/final.png')) $settled
+  @{source=$source.ToString();preview=$preview;labels=$labelBounds;foot_mismatches=$wrong;final_foot_mismatches=$finalWrong}|ConvertTo-Json -Depth 8|Set-Content (Join-Path $run ($name+'-geometry.json'))
+ }finally{if([CapyRowPointer]::Active){[CapyRowPointer]::Cancel()}}
+ Wait-Until {$null -eq (Find-Preview)} "$name retained its preview"
+ $order=@(Tab-Order $Panel)
+ if($order[0] -ne $Panel){$script:frameFailures+=@("$name committed a different order from slot zero")}
+ if(($order -join ',') -eq $originalOrder){return}
+ & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'window';Invoke 'undo_workspace'
+ Wait-Until {((Tab-Order $Panel) -join ',') -eq $originalOrder} "$name did not undo"
+ if($Prefix -eq 'drawer-tab-'){
+  if(!@((Model).state.customization.column_drawers|Where-Object {$_.tabs.panels -contains $Panel}).Count){Invoke 'column-icon-layers'}
+  Wait-Until {@((Model).state.customization.column_drawers|Where-Object {$_.tabs.panels -contains $Panel}).Count -eq 1 -and (Find ($Prefix+$Panel) -Visible)} "$name did not reopen its drawer"
+ }
+}
 function Drawer-Style([uint32]$Group,[string]$Name,[string]$Value){
  $previous=(Control 'drawer-tab-brushes' -Arranged).GetRuntimeId() -join ':'
  $grip=(Control ('drawer-grip-'+$Group) -Arranged).Current.BoundingRectangle
@@ -231,6 +367,7 @@ function Drawer-Review {
  $before|ConvertTo-Json|Set-Content (Join-Path $run 'drawer-before-widths.json')
  if(@($before.Values|Where-Object {$_ -gt 45}).Count -eq 0 -or @($before.Values|Where-Object {$_ -le 45}).Count -eq 0){throw 'Drawer setup did not fit a mixture of named and icon tabs'}
  Capture 'drawer-before-reorder' -Composed
+ foreach($device in @('mouse','pen','touch')){foreach($edge in @(-12,4)){Leftward-Tab 'drawer-tab-' 'sizes' 'layers' $device $edge}}
  $bounds=(Control 'drawer-tab-brushes' -Arranged).Current.BoundingRectangle
  $first=(Control 'drawer-tab-layers' -Arranged).Current.BoundingRectangle
  $startX=$bounds.Left+8*$scale;$startY=$bounds.Top+$bounds.Height/2
@@ -242,6 +379,7 @@ function Drawer-Review {
  }finally{if([CapyRowPointer]::Active){[CapyRowPointer]::Cancel()}}
  $committed=@('brushes','layers','adjustments','sizes')
  Wait-Until {((Drawer-Group $group).tabs.panels -join ',') -eq ($committed -join ',') -and $null -eq (Find-Preview)} 'Drawer reorder did not commit its new order'
+ Assert-TabKeyOrder @($committed|ForEach-Object {'drawer-tab-'+$_})
  $after=Drawer-Widths $panels
  $width=[Math]::Round((Control ('column-drawer-'+(Drawer-Group $group).anchor.column) -Arranged).Current.BoundingRectangle.Width/$scale,2)
  Capture 'drawer-after-reorder' -Composed
@@ -256,6 +394,7 @@ function Drawer-Review {
  if(@($panels|Where-Object {[Math]::Abs($before[$_]-$fresh[$_]) -gt 1}).Count -eq 0){throw 'Fresh Automatic names did not change priority after the reorder'}
  foreach($panel in $panels){if([Math]::Abs($after[$panel]-$fresh[$panel]) -gt 1){throw "Drawer reorder left stale Automatic name width on $panel"}}
  Capture 'drawer-fresh-order' -Composed
+ if($script:frameFailures.Count){throw ($script:frameFailures -join "`n")}
  & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -StateDirectory $run -Action Close -DiscardUnsaved
  if(!$review.WaitForExit(15000) -or $review.ExitCode -ne 0){throw 'Drawer review did not close cleanly'}
  [pscustomobject]@{theme=$Theme;drawer_automatic_reorder='passed';fresh_order_oracle='passed';width=$width;zero_exit='passed'}|ConvertTo-Json
@@ -292,10 +431,18 @@ try{
  finally{$viewportProof|ConvertTo-Json|Set-Content (Join-Path $run 'maximized-viewport.json')}
  Start-Sleep -Milliseconds 350
  $baseline=Model
+ $script:frameFailures=@()
  $normal=$baseline.state.workspace.layout|ConvertTo-Json -Depth 80 -Compress
  $baseline|ConvertTo-Json -Depth 90|Set-Content (Join-Path $run 'before-model.json')
  if($Journey -like 'drawer-*'){Drawer-Review;return}
  if($Journey -like 'release-*'){
+  foreach($device in @('mouse','pen','touch')){foreach($edge in @(-12,4)){Leftward-Tab 'panel-tab-' 'sizes' 'tool_settings' $device $edge}}
+  if(@((Model).layout.collapsed|Where-Object {$_.groups.icons.panel -contains 'layers'}).Count){
+   (Control 'column-icon-layers' -Arranged).SetFocus();[CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x10),0x79)
+   Wait-Until {$null -ne (Find 'Expand column' -Name)} 'Far-left setup did not expose Expand column'
+   Invoke 'Expand column' -Name
+  }
+  foreach($device in @('mouse','pen','touch')){Leftward-Tab 'panel-tab-' 'adjustments' 'layers' $device}
   foreach($script:slideDevice in @('mouse','pen','touch')){
    $position=Start-Slide
    $retainedSource=(Control 'panel-tab-tool_settings').GetRuntimeId() -join ':'
@@ -312,6 +459,7 @@ try{
     if(($control.GetRuntimeId() -join ':') -ne $target[1]){throw "Drop replaced retained control $($target[0])"}
    }
    Capture "after-release-$slideDevice" -Composed
+   Assert-TabKeyOrder @('panel-tab-sizes','panel-tab-tool_settings')
    Undo-Workspace
   }
   $script:slideDevice='mouse'
@@ -329,6 +477,7 @@ try{
   Wait-Until {(Current-Group).floating -and !(Presentation).workspace_update.drag.drop_hint} 'Detached mouse tab did not leave the target'
   [CapyRowPointer]::Up()
   Undo-Workspace
+  if($script:frameFailures.Count){throw ($script:frameFailures -join "`n")}
   & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -StateDirectory $run -Action Close -DiscardUnsaved
   if(!$review.WaitForExit(15000) -or $review.ExitCode -ne 0){throw 'Release review did not close cleanly'}
   @{theme=$Theme;devices=@('mouse','pen','touch');retained_tabs='passed';retained_content='passed';committed_handoff='passed';attached_hint='hidden';detached_hint='shown'}|ConvertTo-Json

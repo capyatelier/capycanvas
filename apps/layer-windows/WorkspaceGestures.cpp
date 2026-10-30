@@ -764,3 +764,4 @@ bool WorkspaceGestures::DeferRemoval(UIElement const& element,std::shared_ptr<vo
 bool WorkspaceGestures::Retains(UIElement const& element)const{return impl->retains(element);}
 
 std::pair<float,bool> WorkspaceGestures::TabOffset(uint32_t group)const{return impl->tabSlide->ActiveOffset(group);}
+std::optional<Rect> WorkspaceGestures::TabBounds(uint32_t group,UIElement const& relative)const{return impl->tabSlide->ActiveBounds(group,relative);}

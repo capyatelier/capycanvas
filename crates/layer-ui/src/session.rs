@@ -2329,64 +2329,55 @@ impl<R: CanvasRenderer> UiSession<R> {
         if source_group.is_some() {
             resolved.groups.retain(|g| Some(g.id) != source_group);
         }
-        let menubar = (!docks_hidden && !matches!(item, DockItem::Tile { .. }))
-            .then(|| self.state.workspace.layout.menubar_drop_hint(&resolved, position)).flatten();
-        let prepend = (!docks_hidden && matches!(item, DockItem::Panel { .. } | DockItem::Group { .. }))
-            .then(|| resolved.prepend_group_drop_hint(position)).flatten();
-        let compact_edge = (!docks_hidden)
-            .then(|| self.state.workspace.layout.compact_edge_drop_hint(
-                &resolved, item, position, self.workspace_drag.and_then(|drag| drag.preview),
-            )).flatten();
-        let mut hint = if let Some(hint) = prepend.or(compact_edge).or(menubar) {
-            hint
-        } else if let DockItem::Column { column } = item {
-            if docks_hidden {
-                return None;
-            }
-            self.state
-                .workspace
-                .layout
-                .column_drop_hint(&resolved, column, position)?
-        } else if let DockItem::Tile { panel, tile } = item {
-            let layout = &self.state.workspace.layout;
-            let source = layout
-                .panel(panel)
-                .ok()?
-                .tiles()
-                .iter()
-                .find(|t| t.id == tile)?;
-            // Separators themselves still reorder as ordinary toolbar tiles.
-            let group_hint = (source.control != crate::ToolbarControl::Divider)
-                .then(|| resolved.tile_group_drop_hint(position, layout))
-                .flatten();
-            group_hint.or_else(|| resolved.tile_drop_hint(position, layout))?
-        } else {
-            (!docks_hidden)
-                .then(|| resolved.stack_item_drop_hint(position))
-                .flatten()
-                .or_else(|| resolved.drop_hint(position[0], position[1], tabs, !docks_hidden))?
-        };
-        // The attached preview and the committed drop use the same frozen
-        // switch points, including a release between pointer-motion events.
-        if let DockTarget::Tab {
-            group,
-            index: Some(_),
-        } = hint.target
-            && let Some(drag) = self.workspace_tab_drag.as_ref()
-            && drag.group == group
-            && (hint.bounds.width <= 3. || hint.bounds.height <= 3.)
-            && let Some(preview) = self.tab_drag_preview(position)
+        let hint = if let Some(preview) = self.tab_drag_preview(position)
+            && self.workspace_drag.is_some_and(|drag| drag.item == item)
         {
-            hint.target = DockTarget::Tab {
-                group,
-                index: Some(preview.insertion),
-            };
-            hint.bounds = crate::layout::tab_insertion_line(
-                resolved.groups.iter().find(|g| g.id == group)?,
-                tabs,
-                preview.insertion,
-            );
-        }
+            let group = self.workspace_tab_drag.as_ref()?.group;
+            DropHint {
+                target: DockTarget::Tab { group, index: Some(preview.insertion) },
+                bounds: crate::layout::tab_insertion_line(
+                    resolved.groups.iter().find(|g| g.id == group)?, tabs, preview.insertion,
+                ),
+            }
+        } else {
+            let menubar = (!docks_hidden && !matches!(item, DockItem::Tile { .. }))
+                .then(|| self.state.workspace.layout.menubar_drop_hint(&resolved, position)).flatten();
+            let prepend = (!docks_hidden && matches!(item, DockItem::Panel { .. } | DockItem::Group { .. }))
+                .then(|| resolved.prepend_group_drop_hint(position)).flatten();
+            let compact_edge = (!docks_hidden)
+                .then(|| self.state.workspace.layout.compact_edge_drop_hint(
+                    &resolved, item, position, self.workspace_drag.and_then(|drag| drag.preview),
+                )).flatten();
+            if let Some(hint) = prepend.or(compact_edge).or(menubar) {
+                hint
+            } else if let DockItem::Column { column } = item {
+                if docks_hidden {
+                    return None;
+                }
+                self.state
+                    .workspace
+                    .layout
+                    .column_drop_hint(&resolved, column, position)?
+            } else if let DockItem::Tile { panel, tile } = item {
+                let layout = &self.state.workspace.layout;
+                let source = layout
+                    .panel(panel)
+                    .ok()?
+                    .tiles()
+                    .iter()
+                    .find(|t| t.id == tile)?;
+                // Separators themselves still reorder as ordinary toolbar tiles.
+                let group_hint = (source.control != crate::ToolbarControl::Divider)
+                    .then(|| resolved.tile_group_drop_hint(position, layout))
+                    .flatten();
+                group_hint.or_else(|| resolved.tile_drop_hint(position, layout))?
+            } else {
+                (!docks_hidden)
+                    .then(|| resolved.stack_item_drop_hint(position))
+                    .flatten()
+                    .or_else(|| resolved.drop_hint(position[0], position[1], tabs, !docks_hidden))?
+            }
+        };
         let mut probe = self.state.workspace.layout.clone();
         probe.move_item(viewport, item, hint.target.clone()).ok()?;
         (probe != self.state.workspace.layout).then_some(hint)
@@ -14661,82 +14652,89 @@ mod tests {
 
     #[test]
     fn attached_tab_release_uses_frozen_halfway_points() {
-        for (delta, insertion, order) in [
-            (
-                31.,
-                3,
-                [Panel::Layers, Panel::Properties, Panel::Adjustments],
-            ),
-            (
-                -41.,
-                0,
-                [Panel::Adjustments, Panel::Layers, Panel::Properties],
-            ),
-        ] {
-            let mut s = session(Platform::Gtk);
-            let viewport = [1200., 900.];
-            let group = 8;
-            let bounds = find_group(&s, viewport, |g| g.id == group).bounds;
-            let mut tabs: Vec<_> = [80., 36., 60.]
-                .into_iter()
-                .enumerate()
-                .scan(bounds.x, |x, (index, width)| {
-                    let tab = TabHit {
-                        group,
-                        index,
-                        bounds: Bounds {
-                            x: *x,
-                            width,
-                            height: TAB_BAR_HEIGHT,
-                            ..bounds
-                        },
-                    };
-                    *x += width;
-                    Some(tab)
-                })
-                .collect();
-            let press = [bounds.x + 98., bounds.y + 18.];
-            let item = DockItem::Panel {
-                panel: Panel::Adjustments,
-            };
-            let before = s.state.workspace.clone();
-            s.drag_workspace(item, ContactPhase::Down, press, viewport, &tabs)
+        for platform in Platform::ALL {
+            for (delta, insertion, order) in [
+                (
+                    31.,
+                    3,
+                    [Panel::Layers, Panel::Properties, Panel::Adjustments],
+                ),
+                (
+                    -41.,
+                    0,
+                    [Panel::Adjustments, Panel::Layers, Panel::Properties],
+                ),
+                (
+                    -110.,
+                    0,
+                    [Panel::Adjustments, Panel::Layers, Panel::Properties],
+                ),
+            ] {
+                let mut s = session(platform);
+                let viewport = [1200., 900.];
+                let group = 8;
+                let bounds = find_group(&s, viewport, |g| g.id == group).bounds;
+                let mut tabs: Vec<_> = [80., 36., 60.]
+                    .into_iter()
+                    .enumerate()
+                    .scan(bounds.x, |x, (index, width)| {
+                        let tab = TabHit {
+                            group,
+                            index,
+                            bounds: Bounds {
+                                x: *x,
+                                width,
+                                height: TAB_BAR_HEIGHT,
+                                ..bounds
+                            },
+                        };
+                        *x += width;
+                        Some(tab)
+                    })
+                    .collect();
+                let press = [bounds.x + 98., bounds.y + 18.];
+                let item = DockItem::Panel {
+                    panel: Panel::Adjustments,
+                };
+                let before = s.state.workspace.clone();
+                s.drag_workspace(item, ContactPhase::Down, press, viewport, &tabs)
+                    .unwrap();
+                s.begin_tab_drag(&tabs, bounds);
+                s.drag_workspace(
+                    item,
+                    ContactPhase::Move,
+                    [press[0] + 9., press[1]],
+                    viewport,
+                    &tabs,
+                )
                 .unwrap();
-            s.begin_tab_drag(&tabs, bounds);
-            s.drag_workspace(
-                item,
-                ContactPhase::Move,
-                [press[0] + 9., press[1]],
-                viewport,
-                &tabs,
-            )
-            .unwrap();
-            assert_eq!(s.state.workspace, before);
-            // Even a changed host measurement cannot change the chosen slot.
-            for tab in &mut tabs {
-                tab.bounds.x += 100.;
-            }
-            let release = [press[0] + delta, press[1]];
-            assert_eq!(s.tab_drag_preview(release).unwrap().insertion, insertion);
-            assert_eq!(
-                s.drop_hint(viewport, release, &tabs, item, None)
-                    .unwrap()
-                    .target,
-                DockTarget::Tab {
-                    group,
-                    index: Some(insertion)
+                assert_eq!(s.state.workspace, before);
+                // Even a changed host measurement cannot change the chosen slot.
+                for tab in &mut tabs {
+                    tab.bounds.x += 100.;
                 }
-            );
-            // Release can cross a switch without an intervening move event.
-            s.drag_workspace(item, ContactPhase::Up, release, viewport, &tabs)
-                .unwrap();
-            assert_eq!(
-                s.state.workspace.layout.group_panels(group).unwrap(),
-                &order
-            );
-            assert!(s.tab_drag_preview(release).is_none());
-            invoke(&mut s, CommandId::UndoWorkspace);
-            assert_eq!(s.state.workspace, before);
+                let release = [press[0] + delta, press[1]];
+                assert_eq!(s.tab_drag_preview(release).unwrap().insertion, insertion);
+                assert_eq!(
+                    s.drop_hint(viewport, release, &tabs, item, None)
+                        .map(|hint| hint.target),
+                    Some(DockTarget::Tab {
+                        group,
+                        index: Some(insertion)
+                    }),
+                    "{platform:?}, delta {delta}"
+                );
+                // Release can cross a switch without an intervening move event.
+                s.drag_workspace(item, ContactPhase::Up, release, viewport, &tabs)
+                    .unwrap();
+                assert_eq!(
+                    s.state.workspace.layout.group_panels(group).unwrap(),
+                    &order
+                );
+                assert!(s.tab_drag_preview(release).is_none());
+                invoke(&mut s, CommandId::UndoWorkspace);
+                assert_eq!(s.state.workspace, before);
+            }
         }
     }
 
