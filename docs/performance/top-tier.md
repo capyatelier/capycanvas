@@ -3426,7 +3426,8 @@ measurements remain required.
 
 | Hardware / workload | Current rate and metric | Motion interval p99 | Qualification |
 | --- | --- | --- | --- |
-| M2 Pro Mac mini, 90 Hz: drawing profiles | Not measured | Not measured | Unqualified; current optimized comparison required |
+| M2 Pro Mac mini, 90 Hz: other drawing profiles | Not measured | Not measured | Unqualified; current optimized comparison required |
+| M2 Pro Mac mini, 90 Hz: reference-photo G-Pen, 2048 px, default Low glass, light / dark | 89.284 / 89.395 → 89.229 / 89.173 completed-update lower bounds/s; `a9cd3853f` → `a5eb973b7`, 2026-10-30 | 11.111 ms in both themes and builds | **Unqualified for 120:** display limited to 90 Hz; matched cadence with small contact-boundary count differences; `artifacts/apple/release-1015/candidate-a5eb973b7/perf-glass/results.local.md` |
 | M4 iPad Pro, 120 Hz: drawing profiles | Not measured | Not measured | Unqualified; current optimized comparison required |
 | M4 iPad Pro, 120 Hz: reference-photo G-Pen, 2048 px, light / dark | 117.915 / 118.138 → 117.748 / 118.249 completed updates/s; latest input-update lower bounds 117.693 / 118.193 | Latest completion gaps 16.667 / 8.334 ms | **Not met:** below 120 completed updates/s; `artifacts/apple-panel-coverage-performance-20261026/gpen-{light,dark}/report.json` |
 | M4 iPad Pro, 120 Hz: reference-photo Wet Watercolor, 512 px, light / dark | 119.472 / 119.305 → 119.249 / 119.416 completed updates/s; latest input-update lower bounds 119.083 / 119.416 | Latest completion gaps 8.334 / 8.334 ms | **Not met:** below 120 completed updates/s; `artifacts/apple-panel-coverage-performance-20261026/watercolor-{light,dark}/report.json` |
