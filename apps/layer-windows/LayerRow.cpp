@@ -178,8 +178,9 @@ void LayerRow::init(){
         return O({{L"type",S(L"layer")},{L"action",O({{L"op",S(L"select")},{L"id",N(self->id)},{L"mask",B(true)}})}});});
     link.Content(icon(L"link",data->theme(),10));link.Height(36);
     name=button(data,data->caption(L"layers",L"layer"),[weak]{if(auto self=weak.lock();self&&self->clickAllowed())self->action(rowSelection(self->id));});
-    name.FontWeight(Windows::UI::Text::FontWeights::Normal());name.MinHeight(36);name.HorizontalAlignment(HorizontalAlignment::Stretch);name.HorizontalContentAlignment(HorizontalAlignment::Stretch);name.Padding({0});name.Margin({6,0,2,0});
-    StackPanel caption;title=label(data,L"");title.TextTrimming(TextTrimming::CharacterEllipsis);caption.Children().Append(title);
+    buttonFeedback(name,data->brush(L"text"),0,0);
+    name.FontWeight(Windows::UI::Text::FontWeights::Normal());name.MinHeight(36);name.HorizontalAlignment(HorizontalAlignment::Stretch);name.HorizontalContentAlignment(HorizontalAlignment::Stretch);name.Padding({0});
+    StackPanel caption;caption.Margin({6,0,0,0});title=label(data,L"");title.TextTrimming(TextTrimming::CharacterEllipsis);caption.Children().Append(title);
     AutomationProperties::SetAutomationId(title,L"layer-"+to_hstring(uint64_t(id))+L"-label");
     meta=label(data,L"");meta.Opacity(.55);
     AutomationProperties::SetAutomationId(meta,L"layer-"+to_hstring(uint64_t(id))+L"-meta");
