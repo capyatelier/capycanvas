@@ -142,21 +142,22 @@ extension XCTestCase {
         XCTAssertTrue(more.waitForExistence(timeout: 10), "Photo's command bar carries Tool Options")
         attachEditor(in: app, name: "photo-tool-options-\(theme)")
         let options = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "toolbar-component-")).firstMatch
-        func openDisplayMenu() {
+        func openDisplayMenu(fromEmptySpace: Bool) {
             let end = options.descendants(matching: .any).allElementsBoundByIndex.map(\.frame)
                 .filter { $0.width < options.frame.width && $0.maxX < more.frame.minX }.map(\.maxX).max() ?? options.frame.minX
-            let blank = options.coordinate(withNormalizedOffset: .zero)
-                .withOffset(CGVector(dx: (end + more.frame.minX) / 2 - options.frame.minX, dy: options.frame.height / 2))
+            let point = fromEmptySpace ? workspacePoint(options)?
+                .withOffset(CGVector(dx: (end + more.frame.minX) / 2 - options.frame.midX, dy: 0))
+                : workspacePoint(more)
             #if os(macOS)
-            blank.rightClick()
+            point?.rightClick()
             #else
-            blank.press(forDuration: 0.8)
+            point?.press(forDuration: 0.8)
             #endif
         }
-        for _ in 0..<2 {
-            openDisplayMenu()
+        for fromEmptySpace in [true, false] {
+            openDisplayMenu(fromEmptySpace: fromEmptySpace)
             let sliders = app.buttons["menu-action-Show Sliders"]
-            XCTAssertTrue(sliders.waitForExistence(timeout: 5), "Empty options space opens the display menu")
+            XCTAssertTrue(sliders.waitForExistence(timeout: 5), fromEmptySpace ? "Empty options space opens the display menu" : "More opens the display menu")
             workspaceActivate(sliders)
             expectation(for: NSPredicate(format: "exists == NO"), evaluatedWith: sliders)
             waitForExpectations(timeout: 5)
