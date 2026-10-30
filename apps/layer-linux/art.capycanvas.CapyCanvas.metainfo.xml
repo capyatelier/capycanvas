@@ -320,7 +320,7 @@
     </screenshot>
   </screenshots>
   <releases>
-    <release version="1.0.15" date="2026-10-26">
+    <release version="1.0.15" date="2026-10-30">
       <description>
         <p>More painting and editing tools on Windows.</p>
         <ul>
@@ -329,6 +329,7 @@
           <li>Try artistic filters and improved mask, color and number controls.</li>
           <li>Recover the canvas after graphics errors and keep tools responsive.</li>
         </ul>
+        <p>Drawings and recovered sessions from 1.0.14 containing image layers may no longer be editable. Keep originals and export flattened PNGs before updating.</p>
       </description>
     </release>
     <release version="1.0.14" date="2026-10-19">
