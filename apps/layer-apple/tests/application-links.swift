@@ -25,9 +25,11 @@ import SwiftUI
             for (index, command) in ["website", "source_code", "website"].enumerated() {
                 accepted = index == 2
                 store.invoke(command)
-                try await wait("Link callback and request completion") {
+                try await wait("Link callback, error state and request completion") {
                     urls.count == index + 1
                         && !store.state["requests"].array.contains { $0["kind"]["type"].string == "open_link" }
+                        && store.failure == (accepted ? nil : "Could not open the link")
+                        && (accepted ? store.state["host_error"].isNull : store.state["host_error"].string == "Could not open the link")
                 }
                 let expected = await withCheckedContinuation { continuation in
                     store.query(["type": "application_link", "link": command]) { continuation.resume(returning: $0.string) }
