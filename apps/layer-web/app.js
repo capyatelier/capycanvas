@@ -768,9 +768,13 @@ measureBox.setAttribute("aria-hidden", "true"); workspace.append(measureBox);
 // An isolated tree retains measurement controls without exposing duplicate IDs
 // to application lookup. It uses the same CSS and inherits the workspace theme.
 const measurementRoot = measureBox.attachShadow({mode:"closed"});
-const measurementStyle = new CSSStyleSheet();
-measurementStyle.replaceSync([...$("workspace-style").sheet.cssRules].map(rule=>rule.cssText).join("\n"));
-measurementRoot.adoptedStyleSheets = [measurementStyle];
+const measurementStyle = $("workspace-style").cloneNode();
+measurementStyle.removeAttribute("id");
+await new Promise((resolve,reject)=>{
+  measurementStyle.addEventListener("load",resolve,{once:true});
+  measurementStyle.addEventListener("error",reject,{once:true});
+  measurementRoot.append(measurementStyle);
+});
 function invalidatePanelMeasurement(id) {
   const cached=panelMeasurements.get(id);
   if(cached){releaseTabs(cached.root);cached.root.remove();}

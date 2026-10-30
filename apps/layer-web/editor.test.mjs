@@ -4,6 +4,9 @@ import {createDrawing} from "./new-drawing-fixture.mjs";
 import {readyCanvas,readyCanvasPixels,waitForPixels} from "./canvas-pixels-fixture.mjs";
 import {checkTextEntry} from './control-style-fixture.mjs';
 export async function checkEditor({call,evaluate,settle,canvasPixels:capturePixels}) {
+  const masks=await evaluate(`(()=>{const input=document.createElement('input');input.type='checkbox';input.checked=true;input.className='panel-check';document.body.append(input);const visible=getComputedStyle(input,'::after').maskImage;editorMeasurementRoot.append(input);const measured=getComputedStyle(input,'::after').maskImage;input.remove();return {visible,measured};})()`);
+  assert.notEqual(masks.visible,'none');
+  assert.equal(masks.measured,masks.visible,'Measurement controls keep their external stylesheet asset base');
   const wait=(condition,timeout=25000)=>evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function check(){const error=window.layerApp?.state().host_error;if(error)reject(Error('Host error: '+error));else if(${condition})resolve(true);else if(performance.now()-start>${timeout})reject(Error("Timed out: "+${JSON.stringify(condition)}+"; "+document.querySelector("#status").textContent));else setTimeout(check,40);}check();})`);
   const canvasPixels=readyCanvasPixels({evaluate,settle,capturePixels});
   const click=async selector=>{await evaluate(`document.querySelector(${JSON.stringify(selector)}).click()`);await settle();};

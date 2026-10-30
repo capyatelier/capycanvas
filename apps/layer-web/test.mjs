@@ -231,6 +231,7 @@ try {
     `window.__overflowEvents=[];for(const type of ['pointerdown','pointerup','click'])window.addEventListener(type,e=>{const value={type,id:e.pointerId,pointer:e.pointerType,target:e.target.tagName,source:e.target.closest('details')?.id};__overflowEvents.push(value);setTimeout(()=>{value.prevented=e.defaultPrevented},0);},true)`});
   if(process.argv.some(flag=>['--pipeline-readiness','--drawing-tabs-recovery','--staged-startup'].includes(flag)))await call('Page.addScriptToEvaluateOnNewDocument',{source:'Error.stackTraceLimit=100'});
   const pageUrl = packageHost?.url || process.env.LAYER_WEB_URL || "http://127.0.0.1:4173";
+  if(process.argv.includes('--editor'))await call('Page.addScriptToEvaluateOnNewDocument',{source:`const attachShadow=Element.prototype.attachShadow;Element.prototype.attachShadow=function(options){const root=attachShadow.call(this,options);if(this.classList.contains('panel-measure'))window.editorMeasurementRoot=root;return root;};`});
   if(process.argv.includes('--native-writeback'))await call('Page.addScriptToEvaluateOnNewDocument',{source:`(${installNativeWritebackTrace})()`});
   if(process.argv.includes('--heal-portability'))await call('Page.addScriptToEvaluateOnNewDocument',{source:`(${installHealPortabilityTrace})()`});
   if(process.argv.includes('--tool-bubbles')&&process.env.LAYER_BUBBLE_INPUT_TRACE==='1')await call('Page.addScriptToEvaluateOnNewDocument',{source:`(${installBubbleInputTrace})()`});
