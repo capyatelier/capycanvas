@@ -10,7 +10,7 @@
 
 <h1 align="center">Capy Canvas</h1>
 
-<p align="center">Linux · Windows · macOS · iPad · Android · Web</p>
+<p align="center">Linux · Android · iPad · Windows · macOS · Web</p>
 
 <p align="center">
   <a href="https://capycanvas.art/">Website</a> ·
