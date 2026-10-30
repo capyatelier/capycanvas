@@ -45,6 +45,32 @@ export async function checkEditor({call,evaluate,settle,canvasPixels:capturePixe
   assert.ok(await evaluate('layerApp.app.editor_models(innerWidth,innerHeight).application_menus.every(menu=>document.querySelector(`[data-menu="${menu.id}"]`))'));
   assert.ok(await evaluate('!!document.querySelector(".commands-panel .tile-button")'));
   await waitForPixels(canvasPixels,settle,pixels=>pixels.white>10000,"Paper must be visible in the editor");
+  await show("adjustments");
+  for(const theme of ["light","dark"]) {
+    await evaluate(`layerApp.dispatch({type:"set_theme",theme:${JSON.stringify(theme)}})`);
+    await click(".filter-picker-header button");
+    await call("Input.insertText",{text:"glass"});await settle();
+    const search=await evaluate(`(()=>{
+      const input=document.querySelector('.filter-picker-header input[type=search]'),header=input.parentElement,select=header.querySelector('select');
+      const style=getComputedStyle(input),control=getComputedStyle(select),rect=input.getBoundingClientRect();
+      const fields=['height','borderTopWidth','borderTopLeftRadius','cornerShape','backgroundColor','color','fontFamily','fontSize','paddingLeft','outlineStyle','boxShadow'];
+      return {value:input.value,focused:document.activeElement===input,left:rect.left,headerLeft:header.getBoundingClientRect().left,
+        actual:fields.map(k=>style[k]),expected:fields.map(k=>control[k]),
+        clear:{x:rect.right-parseFloat(style.paddingRight)-6,y:rect.top+rect.height/2}};
+    })()`);
+    assert.equal(search.value,"glass");assert.equal(search.focused,true);
+    assert.equal(search.left,search.headerLeft,"Filters search aligns with its header");
+    assert.deepEqual(search.actual,search.expected,`${theme} Filters search matches the panel dropdown`);
+    assert.deepEqual(await evaluate("layerApp.state().adjustments.map(c=>c.id)"),["glass","rainy_glass"]);
+    await mkdir("artifacts/ui/filter-search",{recursive:true});
+    const shot=await call("Page.captureScreenshot",{format:"png"});
+    await writeFile(`artifacts/ui/filter-search/${theme}.png`,Buffer.from(shot.data,"base64"));
+    for(const type of ["mousePressed","mouseReleased"])await call("Input.dispatchMouseEvent",{type,...search.clear,button:"left",buttons:type==="mousePressed"?1:0,clickCount:1});
+    await settle();
+    assert.equal(await evaluate("layerApp.state().filter_picker.search"),"","Native search clear updates the filter list");
+    await click(".filter-picker-header button");
+  }
+  await show("layers");
   for(let i=0;i<4;i++)await invoke("zoom_in");
   const middle=await evaluate("Math.floor(innerWidth/2)");
   const header=await call("Page.captureScreenshot",{format:"png",fromSurface:true,clip:{x:middle,y:2,width:1,height:1,scale:1}});

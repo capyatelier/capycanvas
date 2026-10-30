@@ -500,7 +500,7 @@ button.layer-row { justify-content: center; gap: var(--panel-group-spacing); fon
 .palette-info { display: flex; flex-direction: column; align-items: flex-end; flex: 1; min-width: 0; }
 .panel button.palette-name { display: flex; max-width: 100%; min-height: var(--panel-control-height); padding: 0 6px; font-weight: 400; line-height: var(--panel-control-height); }
 .palette-detail { margin-right: 6px; font-size: .9em; opacity: .55; white-space: normal; }
-.palette-entry { min-width: 0; height: var(--panel-control-height); padding: 0 6px; border: 0; border-radius: var(--control-radius); background: var(--input); color: var(--text); box-shadow: none; font: inherit; }
+.palette-entry, .filter-picker-header input { min-width: 0; height: var(--panel-control-height); padding: 0 6px; border: 0; border-radius: var(--control-radius); background: var(--input); color: var(--text); box-shadow: none; font: inherit; }
 .palette-editor { width: 100%; text-align: right; }
 .palette-entry.error { box-shadow: inset 0 0 0 1px #e55; }
 .palette-message { flex: none; margin: 0; color: #e55; overflow-wrap: anywhere; }
