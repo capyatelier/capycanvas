@@ -213,28 +213,6 @@ public static class CapyRowPointer {
    pulse.Change(hovering?25:Timeout.Infinite,hovering?25:Timeout.Infinite);
   }
  }
- public static double UpThenTap(string device,int x,int y) {
-  lock(gate){
-   Check();if(!active)throw new InvalidOperationException("An active review contact is required.");
-   uint next=device=="touch"?2u:device=="pen"?3u:device=="mouse"?4u:0;
-   if(next==0||next!=kind)throw new ArgumentException("The tap must use the active pointer device.");
-   var point=new Point{x=x,y=y};Guard(last);Guard(point);
-   var clock=System.Diagnostics.Stopwatch.StartNew();
-   if(kind==4){
-    var movement=new Mouse{dx=(point.x-GetSystemMetrics(76))*65535/(GetSystemMetrics(78)-1),
-     dy=(point.y-GetSystemMetrics(77))*65535/(GetSystemMetrics(79)-1),flags=0xC001};
-    var inputs=new[]{new Input{mouse=new Mouse{flags=mouseRelease}},new Input{mouse=movement},
-     new Input{mouse=new Mouse{flags=2}},new Input{mouse=new Mouse{flags=4}}};
-    if(SendInput(4,inputs,40)!=4)throw new Win32Exception(Marshal.GetLastWin32Error());
-    ContactDurationMilliseconds=(System.Diagnostics.Stopwatch.GetTimestamp()-contactDown)*1000.0/System.Diagnostics.Stopwatch.Frequency;
-    last=point;active=false;hovering=false;pulse.Change(Timeout.Infinite,Timeout.Infinite);
-   }else{
-    try{Up(kind==3);Down(device,x,y);Up();}
-    finally{if(active)Cancel();}
-   }
-   return clock.Elapsed.TotalMilliseconds;
-  }
- }
  public static double DoubleClick(int x,int y) {
   lock(gate){
    Check();if(active)throw new Exception("A review contact is already active.");

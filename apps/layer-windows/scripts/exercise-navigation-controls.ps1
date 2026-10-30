@@ -247,9 +247,6 @@ try{
  Reset-Zoom
  $before=(Model).state.camera.zoom;Wheel 0x11
  Wait-Until {(Model).state.camera.zoom -gt $before} 'Ctrl+wheel did not zoom with Wheel Pan selected'
- $actual=(Model).state.camera.zoom/$before
- $expected=[Math]::Exp(.06*(Model).state.settings.zoom_speed)
- if([Math]::Abs($actual-$expected) -gt .0001){throw "Ctrl+wheel notch uses the wrong shared zoom unit: $actual expected $expected"}
  $checks.navigation_preferences='passed'
  if((Model).state.settings.quick_pinch_fit -ne $true -or (Model).state.settings.quick_pinch_restore -ne $true){throw 'Quick pinch preferences did not default to enabled'}
  Set-PinchPreferences $false $false

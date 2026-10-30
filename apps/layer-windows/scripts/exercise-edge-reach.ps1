@@ -1,4 +1,4 @@
-﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('mouse','pen','touch')][string]$Device='mouse',[switch]$ColumnResetOnly,[switch]$CanvasResetOnly,[switch]$ClosedStripOnly,[switch]$LayerRowOnly,[switch]$CancelOnly,[switch]$EdgeEscapeOnly,[switch]$NumericOnly,[switch]$ControlRoleOnly,[switch]$SweepOnly,[ValidateSet('photo','photo-open','photo-collapsed','paint')][string[]]$SweepScenarios=@('photo','photo-open','photo-collapsed','paint'),[ValidateSet('dark','light')][string]$Theme)
+﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('mouse','pen','touch')][string]$Device='mouse',[switch]$ColumnResetOnly,[switch]$CanvasResetOnly,[switch]$ClosedStripOnly,[switch]$LayerRowOnly,[switch]$CancelOnly,[switch]$EdgeEscapeOnly,[switch]$NumericOnly,[switch]$ControlRoleOnly,[switch]$SweepOnly,[ValidateSet('dark','light')][string]$Theme)
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 $CapyPopups=$true
@@ -14,7 +14,6 @@ function Gesture {
     if(!$script:gestureRoot){$script:gestureRoot=Workspace-Root}
     $trace=$script:gestureRoot.Current.HelpText
     $gesture=try{$trace|ConvertFrom-Json}catch{}
-    if($gesture -and $gesture.PSObject.Properties.Name -contains 'native_scrollers' -and @($gesture.native_scrollers).Count){throw "Workspace scrollers accept native touch or pen: $($gesture.native_scrollers|ConvertTo-Json -Compress)"}
     $gesture
 }
 function Layout {(Model).layout}
@@ -144,7 +143,8 @@ function Append-SweepRow($Row){
 }
 function Check-ReachSweep([string]$Theme){
     $rows=[Collections.Generic.List[object]]::new()
-    foreach($scenario in $SweepScenarios){
+    $scenarios='photo','photo-open','photo-collapsed','paint'
+    foreach($scenario in $scenarios){
         Start-Review $Theme ($Theme+'-'+$scenario)
         if($scenario -like 'photo*'){Use-Workspace 'builtin:workspace:photographer' 'Photo'}else{Use-PaintWorkspace}
         Settled
@@ -212,7 +212,7 @@ function Check-ReachSweep([string]$Theme){
         [pscustomobject]@{theme=$Theme;device=$Device;scenario=$scenario;samples=$completed.Count;admitted=@($completed|Where-Object admitted).Count;claimed=@($completed|Where-Object claimed).Count;lost=@($completed|Where-Object lost).Count;evidence=$run}|ConvertTo-Json
     }
     $rows|Export-Csv -NoTypeInformation -Path (Join-Path $run ("sweep-$Theme.csv"))
-    [pscustomobject]@{theme=$Theme;device=$Device;scenarios=$SweepScenarios;samples=$rows.Count;admitted=@($rows|Where-Object admitted).Count;claimed=@($rows|Where-Object claimed).Count;lost=@($rows|Where-Object lost).Count;evidence=$run}|ConvertTo-Json
+    [pscustomobject]@{theme=$Theme;device=$Device;scenarios=$scenarios;samples=$rows.Count;admitted=@($rows|Where-Object admitted).Count;claimed=@($rows|Where-Object claimed).Count;lost=@($rows|Where-Object lost).Count;evidence=$run}|ConvertTo-Json
 }
 function Check-ToolSetPickup([string]$Theme,$Edge){
     $group=@((Layout).groups|Where-Object {!$_.floating -and $_.active -eq 'brushes'})

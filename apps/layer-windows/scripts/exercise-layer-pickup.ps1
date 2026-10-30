@@ -201,8 +201,7 @@ function Drag-PanelEdge([double]$Layer,[ValidateSet('before','after')][string]$E
     if($actual -ne $Layer){throw "Panel $Edge edge placed layer $Layer at the wrong end"}
     Layer-History 'Undo';Wait-Until {(Rows) -eq $before} 'Panel edge drop was not one undo'
 }
-function Drag-Row([string]$Id,[double]$Layer,[double]$Target,[switch]$Grip,[switch]$Cancel,[double]$Fraction=.6,[switch]$PressAfterRelease,[switch]$PendingDropGate) {
-    if($PressAfterRelease -and !$PendingDropGate){throw 'Pending final drop requires the isolated query gate'}
+function Drag-Row([string]$Id,[double]$Layer,[double]$Target,[switch]$Grip,[switch]$Cancel,[double]$Fraction=.6,[switch]$PendingDropGate) {
     $before=Rows
     $to=Destination $Target $Fraction
     if($Device -ne 'mouse' -and !$Grip){
@@ -219,7 +218,7 @@ function Drag-Row([string]$Id,[double]$Layer,[double]$Target,[switch]$Grip,[swit
     }
     $at=Point $Id
     $to=Destination $Target $Fraction
-    $nextPress=if($PressAfterRelease){Point "layer-$Target-drag"}
+    $nextPress=if($PendingDropGate){Point "layer-$Target-drag"}
     $clientOrigin=[CapyRowPointer+Point]::new()
     [CapyRowPointer]::ClientToScreen($drawingWindow,[ref]$clientOrigin)|Out-Null
     $script:contact=@{source=$Id;target=$Target;from=$at;to=$to;source_bounds=(Control $Id).Current.BoundingRectangle;target_bounds=(Control "layer-row-$Target").Current.BoundingRectangle;viewport_bounds=(Layer-Viewport);window_bounds=$root.Current.BoundingRectangle;client_origin=@{x=$clientOrigin.x;y=$clientOrigin.y};dpi=[CapyRowPointer]::GetDpiForWindow($drawingWindow)}
@@ -251,7 +250,7 @@ function Drag-Row([string]$Id,[double]$Layer,[double]$Target,[switch]$Grip,[swit
     if($Cancel){
         if($Device -eq 'mouse'){[CapyRowPointer]::Key(0x1b);[CapyRowPointer]::Up()}else{[CapyRowPointer]::Cancel()}
     }else{
-        if($PressAfterRelease -and $PendingDropGate){
+        if($PendingDropGate){
             [CapyRowPointer]::Up()
             Wait-Until {(Control 'layer-drop-arm').Current.ItemStatus -eq 'held' -and (Gesture).phase -eq 'finishing'} 'Final drop query was not held after release'
             [CapyRowPointer]::Down($Device,$nextPress.x,$nextPress.y)
@@ -263,7 +262,7 @@ function Drag-Row([string]$Id,[double]$Layer,[double]$Target,[switch]$Grip,[swit
     }
     $finished=@{state=$null}
     Wait-Until {$finished.state=Gesture;$finished.state.phase -eq 'idle'} 'Layer contact did not finish'
-    if($PressAfterRelease){
+    if($PendingDropGate){
         $script:contact.ignored_after_release=$finished.state.last_ignored_down
         if($finished.state.last_ignored_down.generation -ne $admitted.generation -or $finished.state.last_ignored_down.reason -ne 'drop_pending'){throw 'The next press did not overlap the pending final drop query'}
     }
@@ -426,7 +425,7 @@ try {
         $paint=@((Model).state.layers|Where-Object id -ne $created)[0].id
         if(!$created -or !$paint){throw 'Layer drop fixture requires two real movable layers'}
         $script:case='new-press-after-drop'
-        Drag-Row "layer-$created-drag" $created $paint -Grip -PressAfterRelease -PendingDropGate
+        Drag-Row "layer-$created-drag" $created $paint -Grip -PendingDropGate
         [CapyRowPointer]::Dispose()
         $null=[CapyWindowApi]::PostMessage($drawingWindow,0x10,[UIntPtr]::Zero,[IntPtr]::Zero)
         if(!$review.WaitForExit(15000)){throw 'Owned layer drop fixture did not close'}
