@@ -63,19 +63,26 @@ import SwiftUI
             let original = JSON(["space": space, "rgba": [0.12345678, 0.23456789, 0.34567891, 213.0 / 65535]])
             for mode in ["unchanged", "rgb", "invalid"] {
                 var received: JSON?
+                let session = ColorEditorSession(controller: nil, store: nil, colors: JSON(NSNull()), value: original) { color, _ in received = color }
+                if mode == "invalid" {
+                    try require(!session.act(["op": "value", "row": 0, "index": 0, "text": "invalid"], target: "0-0"), "Only a valid value commits")
+                    try require(session.blocked, "Invalid draft must block Use Color")
+                    session.close(apply: true)
+                    try require(received == nil, "Invalid draft must not publish")
+                    print("PASS: \(space) rejected color draft cannot publish")
+                    continue
+                }
                 let window = NSWindow(contentRect: CGRect(x: 80, y: 80, width: 720, height: 520),
                     styleMask: [.titled, .closable], backing: .buffered, defer: false)
                 window.isReleasedWhenClosed = false
-                let session = ColorEditorSession(controller: nil, store: nil, colors: JSON(NSNull()), value: original) { color, _ in received = color }
                 let host = NSHostingView(rootView: ColorEditor(session: session))
                 window.contentView = host; window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
                 defer { window.contentView = nil; window.close() }
                 try await Task.sleep(for: .milliseconds(100))
                 try require(fields(host).isEmpty, "Values show as text until they are tapped")
                 try canceledScrub(host, session: session, window: window)
-                if ["rgb", "invalid"].contains(mode) {
-                    try require(session.act(["op": "value", "row": 0, "index": 0, "text": mode == "invalid" ? "invalid" : "32"], target: "0-0") == (mode == "rgb"),
-                        "Only a valid value commits")
+                if mode == "rgb" {
+                    try require(session.act(["op": "value", "row": 0, "index": 0, "text": "32"], target: "0-0"), "Only a valid value commits")
                     try await Task.sleep(for: .milliseconds(100))
                 }
                 if let path = ProcessInfo.processInfo.environment["CAPY_COLOR_CAPTURE"], let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
@@ -84,14 +91,10 @@ import SwiftUI
                 }
                 try require(window.makeFirstResponder(nil), "Focus must leave the color fields")
                 try key("\r", code: 36, window: window)
-                try await Task.sleep(for: .milliseconds(100))
-                if mode == "invalid" {
-                    try require(received == nil, "Invalid draft must not publish")
-                } else {
-                    guard let received else { throw HostFailure(message: "Color was not published") }
-                    if mode == "rgb" { try require(abs(received["rgba"][0].number - 32.0 / 255) < 1e-6, "Typed RGB must publish") }
-                    else { for i in 0..<3 { try require(Float(received["rgba"][i].number) == Float(original["rgba"][i].number), "Untouched RGB precision must survive the native form") } }
-                }
+                try await wait("Native color publication") { received != nil }
+                guard let received else { throw HostFailure(message: "Color was not published") }
+                if mode == "rgb" { try require(abs(received["rgba"][0].number - 32.0 / 255) < 1e-6, "Typed RGB must publish") }
+                else { for i in 0..<3 { try require(Float(received["rgba"][i].number) == Float(original["rgba"][i].number), "Untouched RGB precision must survive the native form") } }
                 print("PASS: \(space) native color \(mode)")
             }
         }
