@@ -109,13 +109,13 @@ extension XCTestCase {
             expectation(for: NSPredicate { _, _ in !status.label.isEmpty || !((status.value as? String) ?? "").isEmpty }, evaluatedWith: status)
             waitForExpectations(timeout: 30)
             resize(kind, to: 450)
-            let logarithmic = group.buttons["scope-\(kind)-log"].firstMatch
-            let selected = logarithmic.isSelected
+            let logarithmic = group.descendants(matching: .any)["scope-\(kind)-log"].firstMatch
+            let selected = String(describing: logarithmic.value ?? "")
             workspaceActivate(logarithmic)
-            expectation(for: NSPredicate(format: "selected == %@", NSNumber(value: !selected)), evaluatedWith: logarithmic)
+            expectation(for: NSPredicate { _, _ in String(describing: logarithmic.value ?? "") == (selected == "1" ? "0" : "1") }, evaluatedWith: logarithmic)
             waitForExpectations(timeout: 10)
             workspaceActivate(logarithmic)
-            expectation(for: NSPredicate(format: "selected == %@", NSNumber(value: selected)), evaluatedWith: logarithmic)
+            expectation(for: NSPredicate { _, _ in String(describing: logarithmic.value ?? "") == selected }, evaluatedWith: logarithmic)
             waitForExpectations(timeout: 10)
             guard let first = frames(kind) else { XCTFail("The scope must expose seven positive native frames"); return }
             let firstBounds = group.frame
