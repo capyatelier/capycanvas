@@ -68,7 +68,8 @@ points and resolves them through the same shared bridge projection. The existing
 glass transport carries receiver IDs, four corner radii and native tab bounds to
 the render worker. It applies the surface offset and display scale once, prepares
 the existing GPU chrome pipelines, and acknowledges the revision after presenting.
-Only that matching revision suppresses the native backing and shadow; controls,
+That matching revision adopts GPU ownership; continuing receivers retain it
+through geometry changes, until membership or GPU generation changes. Controls,
 focus, scrolling and input targets remain native. The first `WM_SIZING` in a native size/move loop gives opaque
 native contours and shadows ownership for the whole window resize gesture and
 suppresses GPU panel surfaces. `WM_EXITSIZEMOVE` restores the GPU scene through

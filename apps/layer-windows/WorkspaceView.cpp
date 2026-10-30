@@ -522,6 +522,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         layoutInput=std::move(preparedInput);
         if(full){
         if(previousGpu>0&&num(model,L"windows_gpu_generation")!=previousGpu){
+            for(auto& [id,group]:groups)group.gpu=false;publishedBridgeGroups.clear();publishedBridgeColumns.clear();
             data->thumbnails=CreateLayerThumbnailCache(data->query);
             data->previews=CreateFilterPreviewCache(data->query);
         }
@@ -1021,7 +1022,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     }
     bool panelBridgesReady()const{return panelBridgeFrame.Size()&&num(object(data->model,L"windows_glass"),L"panel_revision",-1)==double(panelBridgeRevision);}
     bool panelBridgeGroup(uint32_t id)const{
-        if(!panelBridgesReady()||std::find(publishedBridgeGroups.begin(),publishedBridgeGroups.end(),id)==publishedBridgeGroups.end())return false;
+        if(std::find(publishedBridgeGroups.begin(),publishedBridgeGroups.end(),id)==publishedBridgeGroups.end())return false;
         for(auto value:array(panelBridgeFrame,L"bridges"))for(auto receiver:array(value.GetArray().GetObjectAt(2),L"receivers"))if(num(receiver.GetObject(),L"group")==id)return true;
         return false;
     }
@@ -1061,14 +1062,16 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             auto expected=array(bridges.GetObjectAt(0),L"receivers");
             for(auto receiverValue:expected){auto receiver=receiverValue.GetObject();auto found=groups.find(uint32_t(num(receiver,L"group")));if(found==groups.end())continue;
                 auto const& group=found->second;if(group.hidden||group.presented.Size()||!group.frame.IsLoaded()||group.frame.Visibility()!=Visibility::Visible||group.frame.Opacity()<=0)continue;
-                auto actual=allocatedBounds(group.frame,root),wanted=rectangle(object(receiver,L"bounds"));auto scale=root.XamlRoot()?root.XamlRoot().RasterizationScale():1.;
-                if(actual.Width<=0||actual.Height<=0||std::max({std::abs(actual.X-wanted.X),std::abs(actual.Y-wanted.Y),std::abs(actual.Width-wanted.Width),std::abs(actual.Height-wanted.Height)})*scale>.5)continue;
                 auto rect=[](Rect bounds){A values;for(auto v:{bounds.X,bounds.Y,bounds.Width,bounds.Height})values.Append(N(v));return values;};
-                bool tabbed=flag(group.geometry,L"tabs_visible");auto activeTab=tabbed?gestures->TabBounds(uint32_t(num(receiver,L"group")),root).value_or(allocatedBounds(group.activeTab,root)):Rect{};activeTab.X+=gestures->TabOffset(uint32_t(num(receiver,L"group"))).first;
+                bool tabbed=flag(group.geometry,L"tabs_visible");auto bounds=placement(group);
+                auto slot=[&](FrameworkElement const& item){if(!tabbed)return Rect{};auto result=allocatedBounds(item,group.frame);result.X+=bounds.X;result.Y+=bounds.Y;return result;};
+                auto bar=tabbed?Rect{bounds.X,bounds.Y,bounds.Width,float(data->panelMetric(L"tab_bar_height"))}:Rect{};
+                auto activeTab=tabbed?gestures->TabBounds(uint32_t(num(receiver,L"group")),group.frame).value_or(allocatedBounds(group.activeTab,group.frame)):Rect{};
+                if(tabbed){activeTab.X+=bounds.X;activeTab.Y+=bounds.Y;}activeTab.X+=gestures->TabOffset(uint32_t(num(receiver,L"group"))).first;
                 receivers.Append(O({{L"group",N(num(receiver,L"group"))},
-                    {L"tab_bar",rect(tabbed?allocatedBounds(group.header,root):Rect{})},
+                    {L"tab_bar",rect(bar)},
                     {L"active_tab",rect(activeTab)},
-                    {L"tab_clip",rect(tabbed?allocatedBounds(group.tabScroll,root):Rect{})},
+                    {L"tab_clip",rect(slot(group.tabScroll))},
                     {L"color",panelColor(data->glass(L"panel").Color(),group.frame.Opacity())},
                     {L"strip_color",panelColor(data->glass(L"strip").Color(),group.frame.Opacity())}}));
             }
@@ -1153,7 +1156,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
                 if(num(value.GetObject(),L"group")==id){path=value.GetObject();break;}
             auto key=path.Stringify();
             if(key!=group.bridgeKey){group.bridgeKey=key;group.bridge=bridgeCommands(array(path,L"commands"));group.backgroundKey=L"";}
-            group.gpu=!nativeResize()&&panelBridgeGroup(id)&&!group.presented.Size();
+            group.gpu=!nativeResize()&&!group.presented.Size()&&panelBridgeGroup(id)&&(group.gpu||panelBridgesReady());
             group.background.Root().Opacity(group.gpu?0:1);group.strip.Root().Opacity(group.gpu?0:1);
             group.shadow.Root().Opacity(group.gpu||!group.bridge.empty()?0:group.frame.Opacity());
         }

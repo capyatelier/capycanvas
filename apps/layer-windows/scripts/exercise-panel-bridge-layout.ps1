@@ -86,6 +86,30 @@ try{
     Open-Column 'before-resize';$retained=Retained-Controls
     $continuing=@((Presentation).groups|Where-Object gpu_background|ForEach-Object id)
     Check ($continuing.Count -eq 3) 'Real border resize starts with three presented receivers' $continuing
+    $dividerFolder=Join-Path $run 'stack-divider';$at=At 'divider-13'
+    $observer=[PanelBridgeCapture]::new($window,[uint32]$review.Id,(Workspace-Root),$dividerFolder)
+    try{
+        $observer.Arm();[CapyRowPointer]::Down('mouse',$at.x,$at.y)
+        $dividerStart=[Diagnostics.Stopwatch]::GetTimestamp();$clock=[Diagnostics.Stopwatch]::StartNew()
+        try{
+            while($clock.ElapsedMilliseconds -lt 3000){
+                [CapyRowPointer]::Move($at.x,$at.y+[int](60*[Math]::Sin([Math]::PI*$clock.Elapsed.TotalSeconds)))
+                Start-Sleep -Milliseconds 8
+            }
+            [CapyRowPointer]::Move($at.x,$at.y)
+        }finally{$dividerEnd=[Diagnostics.Stopwatch]::GetTimestamp();[CapyRowPointer]::Up()}
+    }finally{$observer.Dispose()}
+    $dividerSamples=@(foreach($sample in $observer.States){
+        $native=Get-Content -LiteralPath $sample.path -Raw|ConvertFrom-Json
+        if($native.snapshot_qpc -ge $dividerStart -and $native.snapshot_qpc -le $dividerEnd){$native}
+    })
+    $dividerSamples|ConvertTo-Json -Depth 40|Set-Content (Join-Path $dividerFolder 'presentations.json')
+    Check ($dividerSamples.Count -gt 0 -and @($dividerSamples.panel_revision|Sort-Object -Unique).Count -gt 1 -and @($dividerSamples|Where-Object {$_.panel_revision -ne $_.presented_panel_revision}).Count -gt 0) 'Stack-divider samples include changing unacknowledged bridge revisions' $dividerSamples.Count
+    foreach($native in $dividerSamples){
+        $receivers=@($native.groups|Where-Object {$_.id -in $continuing})
+        Check ($receivers.Count -eq $continuing.Count -and @($receivers|Where-Object {!$_.gpu_background -or $_.native_bridge_background}).Count -eq 0) 'Stack-divider receivers retain GPU ownership without native backing' @{qpc=$native.snapshot_qpc;revision=$native.panel_revision;presented=$native.presented_panel_revision;receivers=$receivers}
+    }
+    Open-Column 'stack-divider-settled'
     $moveStart=[CapyBridgeWindow]::Bounds($window);$caption=$null
     $captionY=[int]($root.Current.BoundingRectangle.Top+(Model).titlebar_insets[2]*([CapyRowPointer]::GetDpiForWindow($window)/96.)*.5)
     for($x=$moveStart[0]+100;$x-lt$moveStart[0]+$moveStart[2]-200;$x+=8){
