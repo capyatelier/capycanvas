@@ -235,7 +235,9 @@ try {
   if(process.argv.includes('--native-writeback'))await call('Page.addScriptToEvaluateOnNewDocument',{source:`(${installNativeWritebackTrace})()`});
   if(process.argv.includes('--heal-portability'))await call('Page.addScriptToEvaluateOnNewDocument',{source:`(${installHealPortabilityTrace})()`});
   if(process.argv.includes('--tool-bubbles')&&process.env.LAYER_BUBBLE_INPUT_TRACE==='1')await call('Page.addScriptToEvaluateOnNewDocument',{source:`(${installBubbleInputTrace})()`});
+  const pageLoaded = cdp.once("Page.loadEventFired", 120000);
   await call("Page.navigate", { url: pageUrl });
+  await pageLoaded;
   await evaluate(
     `new Promise((resolve, reject) => { const started = performance.now(); function check() { if (window.layerApp && document.body.dataset.gpu === 'ready' && layerApp.app.brush_ready()) resolve(true); else if (performance.now() - started > 25000) reject(new Error(document.querySelector('#gpu-notice')?.textContent || document.querySelector('#status')?.textContent)); else setTimeout(check, 100); } check(); })`,
   );
