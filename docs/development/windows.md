@@ -192,6 +192,7 @@ a minute for an instance that is still starting or closing. Builds with differen
 storage never hand launches to each other; `exercise-file-activation.ps1` checks
 both cases. It also drags an image and a saved drawing from another window onto
 the drawing tabs, which opens each as a new drawing.
+`-Theme dark` and `-Theme light` also cover canvas photo placement and Undo.
 
 ### Environment switches
 

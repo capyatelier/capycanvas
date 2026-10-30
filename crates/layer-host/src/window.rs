@@ -238,7 +238,7 @@ impl<P: Parked> DocumentWindow<P> {
         }
         Ok(match request {
             TabRequest::View { width } => self.view(host, width),
-            TabRequest::Prepare => { host.session.prepare_document_action()?; Value::Null },
+            TabRequest::Prepare => { host.session.prepare_document_switch()?; Value::Null },
             TabRequest::Ready => json!({
                 "available": host.session.can_switch_document(),
                 "park": self.park_ready(host)?,
@@ -341,10 +341,7 @@ impl<P: Parked> DocumentWindow<P> {
         if !self.documents.contains_parked(target) {
             return Err(layer_ui::DocumentSessionError::TabClosed.message(host.session.localization()));
         }
-        host.session.prepare_document_action()?;
-        if !host.session.can_park_document() {
-            return Err(layer_ui::DocumentTransportRefusal::SwitchOperation.message(host.session.localization()).to_string());
-        }
+        host.session.prepare_document_switch()?;
         if !self.park_ready(host)? {
             return Err("Wait for drawing capture before switching drawings".into());
         }

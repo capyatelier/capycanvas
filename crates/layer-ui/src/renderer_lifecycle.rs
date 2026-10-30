@@ -64,21 +64,23 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
     /// The host has no modal work and must wait for this boundary before normal
     /// parking. Failed renderers remain navigable/saveable/closeable.
-    pub(super) fn document_park_interaction_idle(&self)->bool {
-        self.require_workspace_idle().is_ok() && !self.workspace_transition && !self.state.customization.header_editing
-            && self.deferred_edits.is_empty() && self.state.requests.is_empty() && !self.state.document_file.busy
-    }
-    pub fn can_switch_document(&self) -> bool {
-        (self.rendering_suspended || (self.require_action_idle().is_ok() && self.require_workspace_idle().is_ok()))
-            && !self.workspace_transition && !self.state.customization.header_editing
+    pub(super) fn document_switch_interaction_idle(&self, suspended: bool)->bool {
+        (suspended || self.require_workspace_idle().is_ok()) && !self.workspace_transition && !self.state.customization.header_editing
             && self.state.requests.is_empty() && !self.state.document_file.busy
     }
+    pub fn can_switch_document(&self) -> bool {
+        self.document_switch_interaction_idle(self.rendering_suspended)
+            && (self.rendering_suspended || self.require_action_idle().is_ok())
+    }
+    pub fn prepare_document_switch(&mut self) -> Result<(), String> {
+        self.prepare_document_action()?;
+        if self.can_switch_document() { Ok(()) }
+        else { Err(DocumentTransportRefusal::SwitchOperation.message(self.localization()).to_string()) }
+    }
     pub fn can_park_document(&self) -> bool {
-        (self.rendering_suspended || (self.require_workspace_idle().is_ok()
-            && (if self.state.document_file.close_ready { self.require_document_snapshot_idle() } else { self.require_document_idle() }).is_ok()
-            && self.engine.can_park()))
-            && !self.workspace_transition && !self.state.customization.header_editing
-            && self.deferred_edits.is_empty() && self.state.requests.is_empty() && !self.state.document_file.busy
+        let idle = if self.state.document_file.close_ready { self.require_document_snapshot_idle() } else { self.require_document_idle() };
+        self.document_switch_interaction_idle(self.rendering_suspended) && self.deferred_edits.is_empty()
+            && (self.rendering_suspended || (idle.is_ok() && self.engine.can_park()))
     }
 
     pub(super) fn discard_render_requests(&mut self) {
@@ -395,6 +397,34 @@ mod tests {
 
     fn source(pixel: [u8; 4]) -> layer_core::color::source::SourceImage {
         std::sync::Arc::unwrap_or_clone(layer_core::color::source::rgba8_source([1, 1], |_, _| pixel))
+    }
+
+    #[test]
+    fn parking_waits_for_an_open_crop_to_finish() {
+        let mut drawing = session(Platform::Gtk);
+        drawing.frame(0, 0).unwrap();
+        assert!(drawing.can_park_document());
+        invoke(&mut drawing, CommandId::Crop);
+        assert!(!drawing.can_park_document());
+        assert!(drawing.park_document().is_err());
+        invoke(&mut drawing, CommandId::CancelTransform);
+        assert!(drawing.can_park_document());
+    }
+
+    #[test]
+    fn closing_can_park_while_private_filter_validation_blocks_switching() {
+        let mut drawing = session(Platform::Gtk);
+        drawing.frame(0, 0).unwrap();
+        let package = package_json(drawing.effect_catalog.categories().to_vec(), vec![custom_filter("unsharp_mask")]);
+        drawing.load_effect_package(&package, |_| panic!("inline package"), layer_core::EffectInstallMode::Merge).unwrap();
+        assert!(drawing.pending_filters.is_some());
+        assert!(!drawing.can_switch_document());
+        assert!(!drawing.can_park_document());
+        drawing.request_session_close().unwrap();
+        assert!(!drawing.can_switch_document());
+        assert!(drawing.can_park_document());
+        drawing.park_document().unwrap();
+        assert!(drawing.rendering_suspended());
     }
 
     #[test]

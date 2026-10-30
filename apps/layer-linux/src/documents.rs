@@ -845,8 +845,7 @@ impl Documents {
         {
             let mut gpu = w.gpu.borrow_mut();
             let session = &mut gpu.as_mut().unwrap().session;
-            session.prepare_document_action()?;
-            if !session.can_switch_document() { return Err(layer_ui::DocumentTransportRefusal::SwitchOperation.message(session.localization()).to_string()); }
+            session.prepare_document_switch()?;
         }
         while w
             .gpu

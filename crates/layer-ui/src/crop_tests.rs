@@ -44,6 +44,23 @@ fn unrelated_document_actions_apply_crop_but_chrome_and_settings_leave_it_open()
 }
 
 #[test]
+fn disabled_document_commands_leave_crop_and_transform_open() {
+    for mode in [CommandId::Crop, CommandId::ScaleRotate] {
+        let mut s = crop_session();
+        invoke(&mut s, mode);
+        if mode == CommandId::Crop { invoke(&mut s, CommandId::CropRatioSixteenNine); }
+        let command = CommandId::ApplyLayerMask;
+        assert!(!s.command_flags(command).0);
+        let document = s.engine.document().clone();
+        let checkpoint = s.engine.checkpoint();
+        assert!(s.dispatch(UiAction::Invoke { command }).is_err());
+        assert!(s.operation.active());
+        assert_eq!(s.engine.document(), &document);
+        assert_eq!(s.engine.checkpoint(), checkpoint);
+    }
+}
+
+#[test]
 fn crop_keeps_its_frame_while_layer_properties_and_targets_change() {
     for property in 0..5 {
         let mut s = crop_session();

@@ -225,7 +225,7 @@ impl<R:CanvasRenderer> UiSession<R> {
     pub fn can_replace_startup_session(&self,stamp:&SessionStamp)->bool {
         let mut current=self.session_stamp();
         current.state.camera=stamp.state.camera.clone();
-        self.document_park_interaction_idle() && current==*stamp && !self.state.document_file.modified && !self.state.document_file.busy
+        self.document_switch_interaction_idle(false) && self.deferred_edits.is_empty() && current==*stamp && !self.state.document_file.modified
             && self.state.document_file.location.is_none() && !self.engine.can_undo() && !self.engine.can_redo()
     }
     pub fn request_session_close(&mut self)->Result<UiChange,String> {
@@ -764,6 +764,17 @@ mod tests {
         let stamp=original.session_stamp();assert!(original.can_replace_startup_session(&stamp));
         let mut another=session(Platform::Gtk);another.frame(0,0).unwrap();assert!(!another.can_replace_startup_session(&stamp));
         assert!(!stamp.same_editor(&another.session_stamp()));
+    }
+    #[test]
+    fn suspended_startup_replacement_still_waits_for_a_live_pointer() {
+        let mut original=session(Platform::Gtk);original.frame(0,0).unwrap();
+        let stamp=original.session_stamp();
+        original.input(UiInput::Pointer {id:1,phase:ContactPhase::Down,kind:PointerKind::Mouse,button:PointerButton::Pan,position:[200.,200.],time_ns:1}).unwrap();
+        original.rendering_suspended=true;
+        assert!(original.can_switch_document());assert!(original.can_park_document());
+        assert!(!original.can_replace_startup_session(&stamp));
+        original.input(UiInput::Pointer {id:1,phase:ContactPhase::Cancel,kind:PointerKind::Mouse,button:PointerButton::Pan,position:[200.,200.],time_ns:2}).unwrap();
+        assert!(original.can_replace_startup_session(&stamp));
     }
     #[test]
     fn startup_replacement_ignores_pending_gpu_but_waits_for_live_pointer() {

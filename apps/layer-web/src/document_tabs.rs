@@ -77,9 +77,7 @@ impl WebApp {
     }
 
     pub fn prepare_document_switch(&mut self) -> Result<(), JsValue> {
-        self.session.prepare_document_action().map_err(js)?;
-        if !self.session.can_switch_document() { return Err(js(layer_ui::DocumentTransportRefusal::SwitchOperation.message(self.session.localization()))); }
-        Ok(())
+        self.session.prepare_document_switch().map_err(js)
     }
 
     /// Poll without blocking the browser: an immediate Undo may have moved an

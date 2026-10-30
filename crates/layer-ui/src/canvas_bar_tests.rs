@@ -840,6 +840,8 @@ fn applying_a_distorted_pixel_selection_waits_for_its_resampled_coverage() {
     invoke(&mut s, CommandId::ApplyTransform);
     s.frame(4, 4).unwrap();
     assert!(s.operation.active(), "the transform stays open until its coverage returns");
+    assert!(!s.can_park_document());
+    assert!(s.park_document().is_err());
     assert!(!s.command(CommandId::ApplyTransform).enabled);
     assert_eq!(s.command_disabled_reason(CommandId::ApplyTransform).as_deref(), Some("Applying the transform"));
     assert!(s.command(CommandId::CancelTransform).enabled);

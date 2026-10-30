@@ -300,8 +300,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                 if self.cropping() => false,
             UiAction::Layer { action: LayerAction::Tool { tool } } if *tool == self.layer_interaction.tool => false,
             action if super::held_actions::selects_tool(action) => true,
-            UiAction::Invoke { command } => super::command_catalog::document_action(*command)
-                || matches!(command, CommandId::SaveDocument | CommandId::SaveDocumentAs | CommandId::CloseDocument | CommandId::QuickMask | CommandId::NewSelectionLayer | CommandId::MaskSelection),
+            UiAction::Invoke { command } => self.command_flags(*command).0 && (super::command_catalog::document_action(*command)
+                || matches!(command, CommandId::SaveDocument | CommandId::SaveDocumentAs | CommandId::CloseDocument | CommandId::QuickMask | CommandId::NewSelectionLayer | CommandId::MaskSelection)),
             UiAction::Selection { action } => !matches!(action, SelectionAction::ResizeRadius { .. } | SelectionAction::ApplyResize | SelectionAction::CancelResize),
             UiAction::FileDrop { .. } | UiAction::CanvasSize { .. } | UiAction::ImageSize { .. } => true,
             UiAction::SelectLayer { .. } | UiAction::SetLayerVisibility { .. } | UiAction::SetLayerOpacity { .. } => self.operation.transforming() || self.objects.placing() || self.vector_paths.drafting(),

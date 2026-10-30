@@ -36,8 +36,6 @@ pub(crate) enum DocumentAction {
     SaveStrokeRecording { path: String },
     DropImages { epoch: u64, revision: u64, active_layer: u64, paths: Vec<String>,
         screen: Option<layer_core::Point>, layer: Option<(u64, f32)> },
-    #[serde(skip)]
-    DroppedImages { id: u32, paths: Vec<String>, screen: Option<layer_core::Point>, layer: Option<(u64, f32)> },
     Workflow { id: u32, action: crate::document_workflows::Action },
     Create { id: u32, epoch: u64, revision: u64 },
     Interpret { id: u32, profile: Option<crate::color_storage::ProfileChoice> },
@@ -70,6 +68,7 @@ pub(crate) enum DocumentAction {
         path: String,
     },
 }
+struct IncomingDrop { id: u32, paths: Vec<String>, screen: Option<layer_core::Point>, layer: Option<(u64, f32)> }
 pub(crate) fn recovery_environment(session: &UiSession<Renderer>) -> Result<OpenEnvironment, String> {
     OpenEnvironment::capture(
         session,
@@ -384,6 +383,8 @@ pub(crate) struct DocumentService {
     activating: bool,
     spilling: bool,
     deferred_action: Option<DocumentAction>,
+    incoming_drop: Option<IncomingDrop>,
+    pending_tab: Option<tabs::Action>,
     close_window: bool,
     quit_pending:bool,
     close_next: bool,
@@ -437,6 +438,8 @@ impl DocumentService {
             activating: false,
             spilling: false,
             deferred_action: None,
+            incoming_drop: None,
+            pending_tab: None,
             close_window: false,
             quit_pending:false,
             close_next: false,
@@ -637,11 +640,6 @@ impl DocumentService {
             host.invalidate_snapshot();
             return Ok(());
         }
-        if self.spilling {
-            if self.deferred_action.is_some() { return Err("A file response is already queued".into()); }
-            self.deferred_action = Some(action);
-            return Ok(());
-        }
         if self.activating { return Err("Wait for the drawing to finish starting".into()); }
         if let DocumentAction::Cancel { id } = action
             && let Some(active) = self.active.as_ref().filter(|a| a.id == id)
@@ -650,6 +648,7 @@ impl DocumentService {
             return Ok(());
         }
         if let DocumentAction::DropImages { epoch, revision, active_layer, paths, screen, layer } = action {
+            if self.incoming_drop.as_ref().is_some_and(|drop| !host.session.file_drop_pending(drop.id)) { self.incoming_drop = None; }
             let drawings = paths.iter().filter(|path| std::path::Path::new(path).extension().is_some_and(|e| e.eq_ignore_ascii_case("capy"))).count();
             if drawings != 0 {
                 if drawings != paths.len() { return Err(host.session.localization().text(layer_ui::MessageId::DOCUMENTS_DROP_MIXED).to_string()); }
@@ -660,20 +659,30 @@ impl DocumentService {
             if self.active.is_some() || self.workflow_control.is_some()
                 || host.session.engine().document().working.occurrence.map(layer_ui::occurrence_token).unwrap_or(0) != active_layer { return Err("The canvas changed while receiving images; try again".into()); }
             let previous = host.session.state().revision;
-            let (id, change) = host.session.request_file_drop(layer_ui::ImportIntent::Place)?; host.apply_change(previous, change);
-            if host.session.state().requests.iter().any(|request| request.id == id) { return self.place_drop(host, id, paths, screen, layer); }
-            self.deferred_action = Some(DocumentAction::DroppedImages { id, paths, screen, layer });
+            let (id, change) = host.session.request_file_drop(layer_ui::ImportIntent::Place)?;
+            self.incoming_drop = Some(IncomingDrop { id, paths, screen, layer });host.apply_change(previous, change);
+            return Ok(());
+        }
+        if self.spilling {
+            if self.deferred_action.is_some() { return Err("A file response is already queued".into()); }
+            self.deferred_action = Some(action);
             return Ok(());
         }
         if let DocumentAction::WorkflowBegin { id } = action {
             if self.active.is_some() || self.workflow_control.is_some() { return Err("A document operation is already running".into()); }
+            let placing = matches!(Self::request(host, id), Ok(DocumentRequest::Place));
+            if placing && self.incoming_drop.as_ref().is_some_and(|drop| !host.session.file_drop_pending(drop.id)) { self.incoming_drop = None; }
             let mut task = match crate::document_workflows::Task::capture(host, id) { Ok(task) => task, Err(error) => return Self::complete(host, id, Err(error)) };
+            let action = if placing && let Some(drop) = self.incoming_drop.take_if(|drop| drop.id == id) {
+                if let Err(error) = task.place_at(host, drop.screen, drop.layer) { return Self::complete(host, id, Err(error)); }
+                crate::document_workflows::Action::ReadImages { paths: drop.paths, alternatives: Vec::new() }
+            } else { crate::document_workflows::Action::Describe };
             task.offer_clip(self.window.documents.clip.get().map(|clip| clip.nonce.clone()));
             self.workflow_quiet = task.quiet();
             self.workflow_title = task.progress_title(host);
             self.workflow_control = Some((id, task.control.clone()));
             self.workflow_running = true;
-            self.worker.submit(Job::Workflow { task, action: crate::document_workflows::Action::Describe })?;
+            self.worker.submit(Job::Workflow { task, action })?;
             return Ok(());
         }
         if let DocumentAction::Workflow { id, action } = action {
@@ -869,23 +878,8 @@ impl DocumentService {
             Err(error) => Self::complete(host, id, Err(error)),
         }
     }
-    fn place_drop(&mut self, host: &mut NativeHost, id: u32, paths: Vec<String>, screen: Option<layer_core::Point>, layer: Option<(u64, f32)>) -> Result<(), String> {
-        let prepared = (|| { let mut task = crate::document_workflows::Task::capture(host, id)?;task.place_at(host, screen, layer)?;Ok::<_, String>(task) })();
-        let task = match prepared { Ok(task) => task, Err(error) => return Self::complete(host, id, Err(error)) };
-        self.workflow_quiet = false;self.workflow_title = None;
-        self.workflow_control = Some((id, task.control.clone()));self.workflow_running = true;
-        self.worker.submit(Job::Workflow { task, action: crate::document_workflows::Action::ReadImages { paths, alternatives: Vec::new() } })?;
-        Ok(())
-    }
     pub(crate) fn poll(&mut self, host: &mut NativeHost) -> Result<(), String> {
         self.poll_tabs(host)?;
-        if let Some(DocumentAction::DroppedImages { id, .. }) = &self.deferred_action {
-            if !host.session.file_drop_pending(*id) { self.deferred_action = None; }
-            else if host.session.state().requests.iter().any(|request| request.id == *id) {
-                let Some(DocumentAction::DroppedImages { id, paths, screen, layer }) = self.deferred_action.take() else { unreachable!() };
-                self.place_drop(host, id, paths, screen, layer)?;
-            }
-        }
         self.palettes.poll(host);
         self.papers.poll(host)?;
         self.open_queued(host);
@@ -1146,6 +1140,71 @@ mod tests {
     impl Drop for Fixture {
         fn drop(&mut self) {
             self.service.stop_worker().unwrap();
+        }
+    }
+
+    #[test]
+    fn a_photo_drop_preserves_a_waiting_tab_and_bypasses_spill_dispatch() {
+        for spilling in [false, true] {
+            let mut f = Fixture::new();
+            f.service.tab_action(&mut f.host, tabs::Action::Adjacent { forward: true }).unwrap();
+            assert!(matches!(f.service.pending_tab, Some(tabs::Action::Adjacent { forward: true })));
+            f.service.spilling = spilling;
+            let file = &f.host.session.state().document_file;
+            f.act(DocumentAction::DropImages {
+                epoch: file.epoch, revision: file.revision,
+                active_layer: layer_ui::occurrence_token(f.host.session.engine().document().working.occurrence.unwrap()),
+                paths: vec![f.path("photo.png")], screen: Some(layer_core::Point { x: 20., y: 30. }), layer: None,
+            });
+            let id = f.service.incoming_drop.as_ref().unwrap().id;
+            assert!(matches!(f.service.pending_tab, Some(tabs::Action::Adjacent { forward: true })));
+            assert!(f.host.session.file_drop_pending(id));
+            assert!(f.service.deferred_action.is_none());
+            f.service.spilling = true;
+            f.service.worker.shared.mailbox.lock().unwrap().completed = Some(Ok(Completed::Spilled));
+            f.service.poll(&mut f.host).unwrap();
+            assert!(!f.service.spilling);
+            assert_eq!(f.service.incoming_drop.as_ref().unwrap().id, id);
+            assert!(matches!(f.service.pending_tab, Some(tabs::Action::Adjacent { forward: true })));
+            assert!(f.service.workflow_control.is_none());
+            assert!(matches!(DocumentService::request(&f.host, id), Ok(DocumentRequest::Place)));
+        }
+    }
+
+    #[test]
+    fn stale_photo_drops_clear_at_the_next_drop_or_place_request() {
+        for place in [false, true] {
+            let mut f = Fixture::new();
+            let drop = |f: &mut Fixture| {
+                let file = &f.host.session.state().document_file;
+                f.act(DocumentAction::DropImages {
+                    epoch: file.epoch, revision: file.revision,
+                    active_layer: layer_ui::occurrence_token(f.host.session.engine().document().working.occurrence.unwrap()),
+                    paths: vec![f.path("photo.png")], screen: None, layer: None,
+                });
+            };
+            drop(&mut f);
+            let stale = f.service.incoming_drop.as_ref().unwrap().id;
+            DocumentService::complete(&mut f.host, stale, Ok(false)).unwrap();
+            assert!(!f.host.session.file_drop_pending(stale));
+            if place {
+                f.invoke(CommandId::ImportImage);
+                f.act(DocumentAction::WorkflowBegin { id: f.request() });
+                assert!(f.service.incoming_drop.is_none());
+            } else {
+                let file = &f.host.session.state().document_file;
+                let rejected = DocumentAction::DropImages {
+                    epoch: file.epoch, revision: file.revision,
+                    active_layer: layer_ui::occurrence_token(f.host.session.engine().document().working.occurrence.unwrap()),
+                    paths: vec![f.path("drawing.capy"), f.path("photo.png")], screen: None, layer: None,
+                };
+                assert!(f.service.dispatch(&mut f.host, rejected).is_err());
+                assert!(f.service.incoming_drop.is_none());
+                drop(&mut f);
+                let next = f.service.incoming_drop.as_ref().unwrap().id;
+                assert_ne!(next, stale);
+                assert!(f.host.session.file_drop_pending(next));
+            }
         }
     }
 

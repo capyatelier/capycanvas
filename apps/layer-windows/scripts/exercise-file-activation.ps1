@@ -1,4 +1,4 @@
-﻿param([Parameter(Mandatory)][string]$Executable)
+﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme='dark')
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 $CapyWaitSeconds=45
@@ -78,10 +78,11 @@ function Forward([string]$Directory,[string[]]$Arguments){
 try {
     Enter-CapyEnvironment
     $env:CAPY_STORAGE_DIR=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1'
+    [IO.File]::WriteAllText((Settings-File),(@{language=@{Explicit='en'};theme=$Theme}|ConvertTo-Json -Depth 4))
     $review=Start-Process -FilePath $Executable -WorkingDirectory $run -PassThru -RedirectStandardError (Join-Path $run 'stderr.log')
     $null=$review.Handle
     Write-Output "Owned file activation review $($review.Id): $run"
-    Wait-Until {$m=Model;$m.brush_ready -and $m.windows_workspace.ready -and !$m.windows_workspace.busy -and @($m.state.commands|Where-Object {$_.id -eq 'open_document' -and $_.enabled}).Count} 'File activation review did not start' 90
+    Wait-Until {$m=Model;$m.brush_ready -and $m.state.theme -eq $Theme -and $m.windows_workspace.ready -and !$m.windows_workspace.busy -and @($m.state.commands|Where-Object {$_.id -eq 'open_document' -and $_.enabled}).Count} 'File activation review did not start' 90
     $before=@(Tabs).Count
     $first=Image 'First 日本語.png' ([Drawing.Color]::FromArgb(255,200,40,40))
     $second=Image 'Second drawing.png' ([Drawing.Color]::FromArgb(255,40,60,200))
@@ -114,6 +115,17 @@ try {
     $saved=Join-Path $run 'Dropped drawing.capy'
     Save-ProjectAs $saved
     $photo=Image 'Dropped photo.png' ([Drawing.Color]::FromArgb(255,220,160,30))
+    $source=Model;$layers=@($source.state.layers|Select-Object id,name,paint_revision,mask_revision)|ConvertTo-Json -Compress
+    $revision=$source.state.document_file.revision;$tab=$source.windows_tabs.selected;$count=@(Tabs).Count
+    $effect=Drop-Files @($photo) 'drawing-canvas'
+    if($effect -ne 'Copy'){throw "The canvas refused the dropped photo: $effect"}
+    Wait-Until {$m=Model;$m.state.layer_tools.tool -eq 'transform' -and @($m.state.layers).Count -eq @($source.state.layers).Count+1 -and !$m.state.document_file.busy} 'The canvas photo drop did not open Place' 60
+    if(@(Tabs).Count -ne $count -or (Model).windows_tabs.selected -ne $tab){throw 'Canvas placement opened or selected another drawing'}
+    Invoke-Id 'canvas-bar-apply_transform'
+    Wait-Until {$m=Model;$m.state.layer_tools.tool -ne 'transform' -and $m.state.document_file.revision -gt $revision -and @($m.state.layers).Count -eq @($source.state.layers).Count+1} 'Place did not accept the dropped photo' 60
+    $placed=(Model).state.document_file.revision
+    Invoke 'Undo' -Name
+    Wait-Until {$m=Model;$m.state.document_file.revision -gt $placed -and (@($m.state.layers|Select-Object id,name,paint_revision,mask_revision)|ConvertTo-Json -Compress) -ceq $layers} 'One Undo did not restore the drawing before the photo drop' 60
     $effect=Drop-Files @($photo,$saved) 'drawing-tabs'
     if($effect -ne 'Copy'){throw "The drawing tabs refused an image and a drawing: $effect"}
     Wait-Until {@(Tabs).Count -eq $before+5 -and !(Model).state.document_file.busy} 'Files dropped on the drawing tabs did not open as drawings' 60
@@ -123,7 +135,7 @@ try {
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close -DiscardUnsaved -StateDirectory $run
     if(!$review.WaitForExit(20000)){throw 'File activation review did not close'}
     if((Get-Item (Join-Path $run 'stderr.log')).Length){throw 'Native stderr requires review'}
-    [pscustomobject]@{forwarded_in_order='passed';relative_path='passed';launch_opens_window='passed';storage_isolated='passed';tab_drop='passed';evidence=$run}|ConvertTo-Json|Tee-Object -FilePath (Join-Path $run 'results.json')
+    [pscustomobject]@{forwarded_in_order='passed';relative_path='passed';launch_opens_window='passed';storage_isolated='passed';tab_drop='passed';canvas_photo_drop_place_and_undo='passed';theme=$Theme;evidence=$run}|ConvertTo-Json|Tee-Object -FilePath (Join-Path $run 'results.json')
 } finally {
     if($other -and !$other.HasExited){Stop-Process -Id $other.Id -Force}
     if($review){$review.Refresh();if(!$review.HasExited){Stop-Process -Id $review.Id -Force}}

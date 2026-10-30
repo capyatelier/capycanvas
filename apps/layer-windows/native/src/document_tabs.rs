@@ -79,6 +79,9 @@ impl DocumentService {
         view
     }
     fn idle(&self) -> bool {
+        self.pending_tab.is_none() && self.work_idle()
+    }
+    fn work_idle(&self) -> bool {
         self.active.is_none()
             && self.workflow.is_none()
             && !self.workflow_running
@@ -241,8 +244,8 @@ impl DocumentService {
             return Err(layer_ui::DocumentTransportRefusal::ChangeInProgress.message(host.session.localization()).to_string());
         }
         if matches!(action, Action::Select { .. } | Action::Adjacent { .. } | Action::Close { .. }) {
-            host.session.prepare_document_action()?;
-            if !self.window.park_ready(host)? { self.deferred_action = Some(DocumentAction::Tabs { action }); host.invalidate_snapshot(); return Ok(()); }
+            host.session.prepare_document_switch()?;
+            if !self.window.park_ready(host)? { self.pending_tab = Some(action); host.invalidate_snapshot(); return Ok(()); }
         }
         match action {
             Action::Select { id } => self.select(host, id)?,
@@ -302,8 +305,8 @@ impl DocumentService {
         Ok(())
     }
     pub(super) fn poll_tabs(&mut self, host: &mut NativeHost) -> Result<(), String> {
-        if matches!(self.deferred_action, Some(DocumentAction::Tabs { .. })) && self.window.park_ready(host)? {
-            let action = self.deferred_action.take().unwrap(); self.dispatch(host, action)?;
+        if self.pending_tab.is_some() && self.work_idle() && self.window.park_ready(host)? {
+            let action = self.pending_tab.take().unwrap(); self.tab_action(host, action)?;
         }
         if let Some((id, forward)) = host.session.state().requests.iter().find_map(|request| {
             if let HostRequestKind::AdjacentDrawing { forward } = request.kind { Some((request.id, forward)) } else { None }
