@@ -37,8 +37,7 @@ struct LayerThumbnailCache : std::enable_shared_from_this<LayerThumbnailCache> {
                 }
                 images.emplace(id,Tile{L"",readback.item.target,BitmapUpload::Create(),++clock});
             }
-            auto& tile=images.at(id);tile.key=L"";auto bitmap=tile.upload;std::weak_ptr<BitmapUpload> weakBitmap=bitmap;
-            bitmap->Clear();
+            auto bitmap=images.at(id).upload;std::weak_ptr<BitmapUpload> weakBitmap=bitmap;
             bitmap->Submit({BitmapUpload::ReadPacket(packet),readback.offset,8*4096,32,32,true,false,
                 [weak,generation,id,revision,weakBitmap]{
                     auto self=weak.lock();if(!self||self->epoch!=generation)return false;
@@ -118,10 +117,14 @@ std::chrono::milliseconds RefreshLayerThumbnails(std::shared_ptr<LayerThumbnailC
     return cache?cache->refresh(owner,epoch,visible):std::chrono::milliseconds(120);
 }
 void ForgetLayerThumbnails(std::shared_ptr<LayerThumbnailCache> const& cache,void const* owner){if(cache)cache->targets.Forget(owner);}
-ImageSource LayerThumbnailSource(std::shared_ptr<LayerThumbnailCache> const& cache,hstring const& epoch,LayerThumbnail const& item){
+ImageSource LayerThumbnailSource(std::shared_ptr<LayerThumbnailCache> const& cache,hstring const& epoch,LayerThumbnail const& item,bool* current){
+    if(current)*current=false;
     if(cache&&cache->epoch==epoch){
         auto found=cache->images.find(slot(item));
-        if(found!=cache->images.end()&&found->second.key==key(item)){found->second.used=++cache->clock;return found->second.upload->Image();}
+        if(found!=cache->images.end()&&found->second.target==item.target){
+            auto source=found->second.upload->Image();if(current)*current=source&&found->second.key==key(item);
+            found->second.used=++cache->clock;return source;
+        }
     }return nullptr;
 }
 }

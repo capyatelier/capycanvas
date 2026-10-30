@@ -14,5 +14,5 @@ std::chrono::milliseconds RefreshLayerThumbnails(std::shared_ptr<LayerThumbnailC
     void const* owner,winrt::hstring const& epoch,std::vector<LayerThumbnail> const& visible);
 void ForgetLayerThumbnails(std::shared_ptr<LayerThumbnailCache> const&,void const* owner);
 winrt::Microsoft::UI::Xaml::Media::ImageSource LayerThumbnailSource(
-    std::shared_ptr<LayerThumbnailCache> const&,winrt::hstring const& epoch,LayerThumbnail const&);
+    std::shared_ptr<LayerThumbnailCache> const&,winrt::hstring const& epoch,LayerThumbnail const&,bool* current=nullptr);
 }

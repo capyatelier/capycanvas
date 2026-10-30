@@ -379,9 +379,9 @@ void LayerRow::thumbnails(std::vector<LayerThumbnail>& visible){
     for(bool isMask:{false,true}){
         if(isMask?!flag(layer,L"has_mask"):!flag(layer,L"has_thumbnail"))continue;
         auto item=thumbnail(layer,isMask);visible.push_back(item);
-        auto source=LayerThumbnailSource(data->thumbnails,epoch,item);auto shown=isMask?maskThumbnail:contentThumbnail;
+        bool current=false;auto source=LayerThumbnailSource(data->thumbnails,epoch,item,&current);auto shown=isMask?maskThumbnail:contentThumbnail;
         auto preview=isMask?maskPreview:contentPreview;
-        if(preview.ImageSource()!=source)preview.ImageSource(source);AutomationProperties::SetItemStatus(shown,source?data->caption(L"header",L"ready"):data->caption(L"layers",L"pending"));
+        if(preview.ImageSource()!=source)preview.ImageSource(source);AutomationProperties::SetItemStatus(shown,current?data->caption(L"header",L"ready"):data->caption(L"layers",L"pending"));
     }
 }
 }

@@ -19,6 +19,7 @@ struct Frame {
 };
 struct Frames {
     Frame rgba,bgra,newer,largeRed,largeGreen,paperWhite,paperBlue;
+    PreviewPacket paperBluePacket;
     std::shared_ptr<std::vector<uint8_t>> paperBlueBgra;
     std::shared_ptr<std::vector<uint8_t>> blank=std::make_shared<std::vector<uint8_t>>(24);
     std::shared_ptr<std::vector<uint8_t>> expected=std::make_shared<std::vector<uint8_t>>(std::initializer_list<uint8_t>{0,0,255,255,0,128,0,128,0,0,0,0,255,0,0,255,10,20,30,64,23,22,21,255});
@@ -35,6 +36,9 @@ struct Frames {
             (*paperBlue.bytes)[p]=220;(*paperBlue.bytes)[p+1]=236;(*paperBlue.bytes)[p+2]=251;(*paperBlue.bytes)[p+3]=255;
             (*paperBlueBgra)[p]=251;(*paperBlueBgra)[p+1]=236;(*paperBlueBgra)[p+2]=220;(*paperBlueBgra)[p+3]=255;
         }
+        uint8_t blueWebp[]={82,73,70,70,30,0,0,0,87,69,66,80,86,80,56,76,17,0,0,0,47,31,192,7,0,7,80,246,114,119,191,255,129,136,232,127,0,0};
+        uint32_t width=0,height=0;paperBluePacket=PreviewPacket(capy_decode_webp(blueWebp,sizeof(blueWebp),&width,&height),capy_preview_free);
+        if(!paperBluePacket||width!=32||height!=32)throw hresult_error(E_FAIL,L"Blue thumbnail packet did not decode");
         for(auto [frame,green]:{std::pair{&largeRed,false},std::pair{&largeGreen,true}}){
             frame->width=frame->height=1024;frame->rgba=false;
             frame->bytes=std::make_shared<std::vector<uint8_t>>(1024*1024*4);
@@ -282,6 +286,24 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
         require(upload->Image()==source&&brush.ImageSource()==source,L"Paper recolor replaced its retained ImageBrush source");
         require(frames->paperBlue.reads->load()==1,L"Blue Paper bytes were not read exactly once");
         co_await pixels(frames->paperBlueBgra,32,32,false,row);
+        co_await submit(frames->paperWhite);
+        auto cache=CreateLayerThumbnailCache([](CanvasQueryKind,std::string,PreviewReply){return false;});
+        LayerThumbnail item{L"layer",L"paint",L"1",false};
+        RefreshLayerThumbnails(cache,this,L"document",{item});
+        cache->images.emplace(slot(item),LayerThumbnailCache::Tile{key(item),item.target,upload,1});
+        bool current=false;
+        require(LayerThumbnailSource(cache,L"document",item,&current)==source&&current,L"Completed thumbnail revision was not ready");
+        item.revision=L"2";RefreshLayerThumbnails(cache,this,L"document",{item});
+        require(LayerThumbnailSource(cache,L"document",item,&current)==source&&!current,L"Pending revision discarded the retained thumbnail or reported ready");
+        cache->upload(frames->paperBluePacket,L"document",{{item,0}});
+        require(LayerThumbnailSource(cache,L"document",item,&current)==source&&!current&&brush.ImageSource()==source,L"Pending upload cleared the retained thumbnail or reported ready");
+        auto result=std::make_shared<Outcome>();auto complete=std::move(upload->active->request.complete);auto weak=weak_from_this();
+        upload->active->request.complete=[weak,result,complete=std::move(complete)](bool accepted){complete(accepted);if(auto self=weak.lock())self->finish(result,1,accepted);};
+        co_await wait(result);
+        require(result->accepted.at(1)&&LayerThumbnailSource(cache,L"document",item,&current)==source&&current,L"New thumbnail revision did not publish on its retained source");
+        co_await pixels(frames->paperBlueBgra,32,32,false,row);
+        auto other=item;other.target=L"other";
+        require(!LayerThumbnailSource(cache,L"document",other)&&!LayerThumbnailSource(cache,L"other",item),L"Thumbnail source crossed a target or document identity");
         surface.Children().RemoveAtEnd();++checks;
     }
     winrt::fire_and_forget run(){
