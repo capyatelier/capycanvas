@@ -67,13 +67,17 @@ extension XCTestCase {
         let firmer = app.buttons["pen-tilt-firmer"], lighter = app.buttons["pen-tilt-lighter"]
         let sensitivity = panel.staticTexts["pen-tilt-sensitivity-title"].firstMatch
         let direction = panel.staticTexts["pen-tilt-direction-title"].firstMatch
+        let title = panel.staticTexts["Pen tilt"].firstMatch
+        let close = app.buttons["pen-tilt-close"]
         XCTAssertTrue(sensitivity.waitForExistence(timeout: 5))
         XCTAssertTrue(direction.waitForExistence(timeout: 5))
+        XCTAssertTrue(title.waitForExistence(timeout: 5))
+        XCTAssertTrue(close.waitForExistence(timeout: 5))
         XCTAssertEqual(firmer.frame.minX - sensitivity.frame.maxX, 4, accuracy: 1)
         XCTAssertEqual(axis(axisIDs[0]).frame.minX - direction.frame.maxX, 4, accuracy: 1)
         XCTAssertGreaterThanOrEqual(direction.frame.minX - lighter.frame.maxX, 7)
-        XCTAssertEqual(sensitivity.frame.minX - panel.frame.minX, 16, accuracy: 1)
-        XCTAssertEqual(panel.frame.maxX - axis(axisIDs[2]).frame.maxX, 16, accuracy: 1)
+        XCTAssertEqual(sensitivity.frame.minX, title.frame.minX, accuracy: 1)
+        XCTAssertEqual(axis(axisIDs[2]).frame.maxX, close.frame.maxX, accuracy: 1)
         XCTAssertEqual(firmer.frame.midY, lighter.frame.midY, accuracy: 1)
         for control in [firmer, lighter] + axisIDs.map({ axis($0) }) {
             XCTAssertEqual(control.frame.width, 36, accuracy: 1)
@@ -92,7 +96,6 @@ extension XCTestCase {
         graph.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap(); pointCount(3)
         XCTAssertFalse(app.buttons["pen-tilt-apply"].isEnabled)
         let original = panel.frame
-        let title = panel.staticTexts["Pen tilt"].firstMatch
         let press = title.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
         press.press(forDuration: 0.05, thenDragTo: press.withOffset(CGVector(dx: -60, dy: 30)), withVelocity: .slow, thenHoldForDuration: 0.05)
         XCTAssertLessThan(panel.frame.minX, original.minX - 30)
@@ -124,7 +127,11 @@ extension XCTestCase {
             XCTAssertTrue(panel.waitForExistence(timeout: 10))
         }
         func reopen() {
+            #if os(macOS)
             workspaceActivate(app.buttons["settings-button"])
+            #else
+            editorMenu(in: app, menu: "Edit", id: "settings", label: "Settings…")
+            #endif
             let input = app.staticTexts["settings-page-input"]
             XCTAssertTrue(input.waitForExistence(timeout: 10)); workspaceActivate(input)
             let adjust = app.buttons["preference-pen_pressure"]
@@ -163,10 +170,11 @@ extension XCTestCase {
         XCTAssertTrue(canvas.waitForExistence(timeout: 20))
         expectation(for: NSPredicate(format: "value == %@", "Canvas ready"), evaluatedWith: canvas); waitForExpectations(timeout: 30)
         #if os(macOS)
-        let before = editorPixels(in: app)
-        let stroke = app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.6))
+        let paintPoint = CGPoint(x: 0.68, y: 0.6)
+        let before = editorPixels(in: app, at: paintPoint)
+        let stroke = app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: paintPoint.x, dy: paintPoint.y))
         stroke.press(forDuration: 0.05, thenDragTo: stroke.withOffset(CGVector(dx: 80, dy: 0)), withVelocity: .slow, thenHoldForDuration: 0.05)
-        expectation(for: NSPredicate { _, _ in self.editorPixels(in: app) != before }, evaluatedWith: canvas)
+        expectation(for: NSPredicate { _, _ in self.editorPixels(in: app, at: paintPoint) != before }, evaluatedWith: canvas)
         waitForExpectations(timeout: 15)
         #endif
         attachEditor(in: app, name: "pen-pressure-\(theme)")
