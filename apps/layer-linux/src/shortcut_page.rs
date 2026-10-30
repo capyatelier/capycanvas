@@ -709,8 +709,9 @@ impl ShortcutPage {
             w,
             #[upgrade_or]
             glib::Propagation::Proceed,
-            move |_, key, _, modifiers| {
+            move |_, key, keycode, modifiers| {
                 use gtk::gdk::ModifierType as M;
+                let key = crate::input::shortcut_key(key, keycode, modifiers, true);
                 let named = key.name().is_some_and(|n| {
                     (n.starts_with('F') && n[1..].parse::<u8>().is_ok()) || n.starts_with("XF86") || n.starts_with("Audio")
                 });
@@ -830,10 +831,11 @@ impl ShortcutPage {
                 w,
                 #[upgrade_or]
                 glib::Propagation::Proceed,
-                move |_, key, _, modifiers| {
+                move |_, key, keycode, modifiers| {
                     if !w.preferences.shortcut_page.recording() {
                         return glib::Propagation::Proceed;
                     }
+                    let key = crate::input::shortcut_key(key, keycode, modifiers, false);
                     w.interact(crate::input::key_input(key, true, modifiers, false, None));
                     glib::Propagation::Stop
                 }
@@ -841,7 +843,8 @@ impl ShortcutPage {
             keys.connect_key_released(glib::clone!(
                 #[weak]
                 w,
-                move |_, key, _, modifiers| {
+                move |_, key, keycode, modifiers| {
+                    let key = crate::input::shortcut_key(key, keycode, modifiers, false);
                     w.interact(crate::input::key_input(key, false, modifiers, false, None));
                 }
             ));
