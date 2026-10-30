@@ -15,7 +15,7 @@ struct CanvasActionBar:std::enable_shared_from_this<CanvasActionBar>{
     Border frame;
     Grid content;
     Shapes::Path surface;
-    StackPanel row,items,completion;
+    StackPanel row;
     TextBlock caption{nullptr};
     Button more{nullptr};
     MenuFlyout menu{nullptr};
@@ -35,11 +35,9 @@ struct CanvasActionBar:std::enable_shared_from_this<CanvasActionBar>{
         auto style=toolbarUi(data->localization.get(),O({{L"type",S(L"style")},{L"style",S(L"small")}})).GetObject();
         tile=array(style,L"size").GetNumberAt(1);gap=num(style,L"gap",gap);glyph=num(style,L"icon",glyph);
         row.Orientation(Orientation::Horizontal);row.Spacing(gap);
-        for(auto panel:{items,completion}){panel.Orientation(Orientation::Horizontal);panel.Spacing(gap);}
         caption=label(data,L"");caption.VerticalAlignment(VerticalAlignment::Center);caption.Margin({12,0,8,0});caption.Opacity(.8);
         more=button(data,L"",[weak]{if(auto self=weak.lock())self->openMenu();});tiled(more);
         AutomationProperties::SetAutomationId(more,L"canvas-bar-more");copyName(data,more,data->copyCommon(L"more"),true);
-        row.Children().Append(caption);row.Children().Append(items);row.Children().Append(more);row.Children().Append(completion);
         surface.IsHitTestVisible(false);content.Children().Append(surface);content.Children().Append(row);
         frame.Child(content);frame.Background(clear());
         AutomationProperties::SetAutomationId(frame,L"canvas-action-bar");copyName(data,frame,data->copyCaption(L"color",L"canvas_actions"));
@@ -197,14 +195,16 @@ struct CanvasActionBar:std::enable_shared_from_this<CanvasActionBar>{
     }
     void rebuild(){
         menuOwner.Cancel();
-        items.Children().Clear();completion.Children().Clear();fields.clear();sizes=J{};placement=L"";
+        row.Children().Clear();row.Children().Append(caption);fields.clear();sizes=J{};placement=L"";
         caption.Text(str(view,L"label"));caption.Visibility(str(view,L"label").empty()?Visibility::Collapsed:Visibility::Visible);
-        for(auto [list,panel]:{std::pair{L"items",items},std::pair{L"completion",completion}})
+        auto append=[&](wchar_t const* list){
             for(auto value:array(view,list)){
                 auto item=value.GetObject();auto made=field(item);
                 Field entry{flag(item,L"separated")?divided(made):made,made};
-                panel.Children().Append(entry.slot);fields.push_back(entry);
+                row.Children().Append(entry.slot);fields.push_back(entry);
             }
+        };
+        append(L"items");row.Children().Append(more);append(L"completion");
         surface.Fill(data->glass(L"panel"));
         more.Content(face(L"more",data->theme(),false));
     }
