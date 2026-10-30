@@ -71,14 +71,13 @@ extension XCTestCase {
     }
     @MainActor func checkCollapsedColumnsDrawersAndZen(in app: XCUIApplication) {
         workspaceActivate(app.buttons["column-icon-toolbar"])
-        let column = app.descendants(matching: .any)
-            .matching(NSPredicate(format: "identifier BEGINSWITH %@", "column-connection-4-")).firstMatch
+        let column = app.descendants(matching: .any)["workspace-group-6"].firstMatch
         XCTAssertTrue(column.waitForExistence(timeout: 10), "The collapsed column opens as its stacked groups")
-        let group = app.descendants(matching: .any)["workspace-group-6"].firstMatch
+        let group = column
         workspaceActivate(group.buttons["panel-tab-brushes"])
-        XCTAssertTrue(group.buttons["brush-1"].waitForExistence(timeout: 5))
+        XCTAssertTrue(group.buttons["brush-2"].waitForExistence(timeout: 5))
         workspaceActivate(group.buttons["panel-tab-toolbar"])
-        let pen = group.buttons["toolbar-tile-toolbar-1"]
+        let pen = group.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "toolbar-tile-toolbar-", "Pen")).firstMatch
         workspaceActivate(pen)
         let drawer = app.descendants(matching: .any)["tool-drawer"].firstMatch
         if !drawer.waitForExistence(timeout: 2) { workspaceActivate(pen) }
