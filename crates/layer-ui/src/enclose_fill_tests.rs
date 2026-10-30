@@ -355,7 +355,7 @@ mod enclose_fill_checks {
     }
 
     #[test]
-    fn enclose_fill_is_disabled_while_editing_masks() {
+    fn enclose_fill_leaves_selection_masks_and_refuses_layer_masks() {
         for platform in Platform::ALL {
             for command in [CommandId::QuickMask, CommandId::NewSelectionLayer, CommandId::EditLayerMask] {
                 let mut s = session(platform);
@@ -365,11 +365,14 @@ mod enclose_fill_checks {
                     invoke(&mut s, CommandId::EditLayerContent);
                 }
                 invoke(&mut s, command);
-                assert!(!s.command(CommandId::EncloseFill).enabled);
-                assert!(s.dispatch(UiAction::Invoke { command: CommandId::EncloseFill }).is_err());
-                assert!(s.dispatch(UiAction::Layer { action: LayerAction::Tool {
-                    tool: LayerCanvasTool::EncloseFill { source: RegionSource::Visible },
-                }}).is_err());
+                if command == CommandId::EditLayerMask {
+                    assert!(!s.command(CommandId::EncloseFill).enabled);
+                    assert!(s.dispatch(UiAction::Invoke { command: CommandId::EncloseFill }).is_err());
+                } else {
+                    assert!(s.command(CommandId::EncloseFill).enabled);
+                    invoke(&mut s, CommandId::EncloseFill);
+                    assert!(s.selection_masks.target().is_none());
+                }
             }
         }
     }

@@ -32,6 +32,7 @@ pub enum TabRequest {
         width: f32,
     },
     Ready,
+    Prepare,
     Recovery {
         id: u64,
     },
@@ -216,6 +217,7 @@ impl<P: Parked> DocumentWindow<P> {
     pub fn view(&self, host: &NativeHost, width: f32) -> Value {
         let documents = &self.documents;
         json!({
+            "available": host.session.can_switch_document(),
             "tabs": documents.labels(&host.session.state().document_file, |p| &p.session().state().document_file, host.session.localization()),
             "selected": documents.selected(),
             "upcoming_id": documents.upcoming_id(),
@@ -236,8 +238,9 @@ impl<P: Parked> DocumentWindow<P> {
         }
         Ok(match request {
             TabRequest::View { width } => self.view(host, width),
+            TabRequest::Prepare => { host.session.prepare_document_action()?; Value::Null },
             TabRequest::Ready => json!({
-                "available": host.session.can_park_document(),
+                "available": host.session.can_switch_document(),
                 "park": self.park_ready(host)?,
                 "close": host.session.command(CommandId::CloseDocument).enabled,
                 "approved": host.session.state().document_file.close_ready,
@@ -338,6 +341,7 @@ impl<P: Parked> DocumentWindow<P> {
         if !self.documents.contains_parked(target) {
             return Err(layer_ui::DocumentSessionError::TabClosed.message(host.session.localization()));
         }
+        host.session.prepare_document_action()?;
         if !host.session.can_park_document() {
             return Err(layer_ui::DocumentTransportRefusal::SwitchOperation.message(host.session.localization()).to_string());
         }
@@ -1009,6 +1013,31 @@ mod tests {
         resume(&mut window, &mut host, &mut current);
         assert_eq!(window.documents.selected(), 2);
         drop((stale, current));
+        finish(host, window);
+    }
+
+    #[test]
+    fn drawing_switch_applies_crop_and_restores_the_previous_tool() {
+        let mut host = host();
+        let mut window = Window::default();
+        open(&mut window, &mut host);
+        let before = host.session.engine().document().composition().size;
+        invoke(&mut host, CommandId::Pencil);
+        invoke(&mut host, CommandId::Crop);
+        invoke(&mut host, CommandId::CropRatioSixteenNine);
+        window.request(&mut host, TabRequest::Prepare).unwrap();
+        settle(&mut host);
+        assert!(host.session.command(CommandId::Pencil).selected);
+        assert_ne!(host.session.engine().document().composition().size, before);
+        let size = host.session.engine().document().composition().size;
+        let mut activation = switch(&mut window, &mut host, 1);
+        activation.work().unwrap();
+        resume(&mut window, &mut host, &mut activation);
+        let mut activation = switch(&mut window, &mut host, 2);
+        activation.work().unwrap();
+        resume(&mut window, &mut host, &mut activation);
+        assert_eq!(host.session.engine().document().composition().size, size);
+        assert!(host.session.command(CommandId::Pencil).selected);
         finish(host, window);
     }
 

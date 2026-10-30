@@ -1,13 +1,14 @@
 import {liveCopy,bindCopy} from './localization.js';
 // Browser transport and hit targets only. Rust captures camera coordinates,
 // validates layer destinations, prepares the entire batch and owns its history.
-export function createImageImport({app,canvas,dispatch,applyChange,wake,element,button,message,gpuOperation,interpret,openClipboard,openFiles}) {
+export function createImageImport({app,canvas,applyChange,wake,element,button,message,gpuOperation,interpret,openClipboard,openFiles}) {
   const bootstrap=liveCopy(app,"bootstrap_view"),delivery=liveCopy(app,"document_delivery_copy");
   let incoming=null,control=null;
   const command=id=>app.state().commands.find(c=>c.id===id);
   const clear=()=>document.querySelectorAll('.external-image-drop').forEach(row=>row.classList.remove('external-image-drop','layer-drop-before','layer-drop-after','layer-drop-into'));
   const isFiles=e=>e.dataTransfer?.types.includes('Files');
   function hit(e) {
+    if(incoming&&!app.image_drop_pending(incoming.id))incoming=null;
     if(!command('import_image')?.enabled)return null;
     const row=e.target.closest?.('.layer-row');
     if(row) {
@@ -32,16 +33,14 @@ export function createImageImport({app,canvas,dispatch,applyChange,wake,element,
     let command;
     try{command=app.file_drop(files.map(file=>file.name),!!target.destination);}catch(error){message(error);return;}
     if(command==='open_document'){openFiles(files).catch(error=>{if(error?.name!=='AbortError')message(error);});return;}
-    incoming={...target,files};
-    dispatch({type:'invoke',command:'import_image'});
-    // The document request is serviced synchronously by dispatch. Never retain
-    // an unclaimed drop for a later picker request.
-    incoming=null;
+    try {
+      const request=app.request_image_drop();incoming={...target,files,id:request.id};applyChange(request.change);
+    } catch(error) { incoming=null;message(error); }
   });
   window.addEventListener('pagehide',()=>control?.cancel());
   return {
     async run(id,choose) {
-      const drop=incoming;incoming=null;
+      const drop=incoming?.id===id?incoming:null;incoming=null;
       const request=app.capture_image_import(id,drop?.screen??null,drop?.destination??null);
       let prepared,progress;
       try {

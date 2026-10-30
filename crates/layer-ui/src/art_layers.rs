@@ -616,7 +616,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
     pub fn image_layer_drop_hint(&self, target: u64, fraction: f32) -> Option<LayerDropPosition> {
         if !fraction.is_finite() || !(0.0..=1.0).contains(&fraction)
-            || self.operation.active() || !self.engine.backend().supports_tiled_sources()
+            || !self.engine.backend().supports_tiled_sources()
         { return None; }
         let handle = occurrence_handle(target).ok()?;
         let row = self.engine.document().scene().occurrence(handle)?;
@@ -1023,13 +1023,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.set_references(references)?;
             }
             LayerAction::Tool { tool } => {
-                if tool.selection_tool().is_some() && tool.selection_tool()!=Some(SelectionTool::Tonal) { self.return_to_artwork()?; }
-                if self.selection_masks.target().is_some() && matches!(tool, LayerCanvasTool::Transform | LayerCanvasTool::Crop | LayerCanvasTool::Move | LayerCanvasTool::LassoFill | LayerCanvasTool::EncloseFill { .. } | LayerCanvasTool::Figure { .. }) {
-                    return Err("Return to artwork to use this tool".into());
-                }
+                if (tool.selection_tool().is_some() && tool.selection_tool() != Some(SelectionTool::Tonal))
+                    || matches!(tool, LayerCanvasTool::Transform | LayerCanvasTool::Crop | LayerCanvasTool::Move | LayerCanvasTool::EditPoints | LayerCanvasTool::LassoFill | LayerCanvasTool::EncloseFill { .. } | LayerCanvasTool::Figure { .. }) { self.return_to_artwork()?; }
                 if matches!(tool, LayerCanvasTool::EncloseFill { .. })
                     && matches!(self.engine.document().working.target, Some(SourceTarget::Coverage(_))) {
-                    return Err("Return to artwork to use this tool".into());
+                    return Err(self.localization().text(MessageId::COMMANDS_RETURN_TO_THE_ARTWORK_FIRST).to_string());
                 }
                 if tool.picks_color() {
                     self.eyedropper.layer = tool == LayerCanvasTool::PickLayer;

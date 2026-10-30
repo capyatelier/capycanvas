@@ -126,11 +126,18 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.engine.backend_mut().set_vector_preview(preview);
         Ok(())
     }
-    pub(super) fn finish_vector_path(&mut self, closed: bool) -> Result<(), String> {
-        let Some(draft) = &self.vector_paths.draft else { return Ok(()) };
+    fn vector_path_refusal(&self) -> Option<MessageId> {
+        let draft = self.vector_paths.draft.as_ref()?;
         let current = match draft.paint { Some(target) => self.engine.document().drawing_content() == Some(target), None => self.editing_vector_layer() == Some(draft.layer) };
-        let refusal = if self.engine.document().is_locked(draft.layer) { Some(MessageId::COMMANDS_THE_ACTIVE_LAYER_IS_LOCKED) } else { (!current).then_some(MessageId::OBJECTS_NOTICE_STALE) };
-        if let Some(refusal) = refusal {
+        if self.engine.document().is_locked(draft.layer) { Some(MessageId::COMMANDS_THE_ACTIVE_LAYER_IS_LOCKED) } else { (!current).then_some(MessageId::OBJECTS_NOTICE_STALE) }
+    }
+    pub(super) fn apply_vector_path(&mut self) -> Result<(), String> {
+        if self.vector_path_refusal().is_some() { self.cancel_vector_path(); return Ok(()); }
+        self.finish_vector_path(false)
+    }
+    pub(super) fn finish_vector_path(&mut self, closed: bool) -> Result<(), String> {
+        if self.vector_paths.draft.is_none() { return Ok(()); }
+        if let Some(refusal) = self.vector_path_refusal() {
             self.cancel_vector_path();
             return Err(self.localization().text(refusal).to_string());
         }

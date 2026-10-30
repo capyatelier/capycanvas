@@ -117,7 +117,7 @@ fn image_size_changes_only_the_resolution_or_both_in_one_step() {
 }
 
 #[test]
-fn image_size_validates_limits_and_refuses_while_cropping() {
+fn image_size_validates_limits_and_applies_an_open_crop() {
     let mut s = crop_session();
     s.renderer_mut().max_dimension = Some(1500);
     invoke(&mut s, CommandId::ImageSize);
@@ -130,8 +130,10 @@ fn image_size_validates_limits_and_refuses_while_cropping() {
     assert!(s.state.layer_tools.image_size.is_none());
     assert!(s.dispatch(UiAction::ImageSize { action: ImageSizeAction::Apply }).is_err());
     invoke(&mut s, CommandId::Crop);
-    assert!(!s.command(CommandId::ImageSize).enabled);
-    assert_eq!(s.command_disabled_reason(CommandId::ImageSize).as_deref(), Some("Apply or cancel the crop first"));
+    assert!(s.command(CommandId::ImageSize).enabled);
+    invoke(&mut s, CommandId::ImageSize);
+    assert!(!s.cropping());
+    assert!(s.state.layer_tools.image_size.is_some());
 }
 
 #[test]

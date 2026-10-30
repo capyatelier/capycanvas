@@ -1495,6 +1495,7 @@ pub struct UiState {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum UiAction {
+    FileDrop { id: u32, intent: ImportIntent },
     ColorSlotMenu { slot: ColorSlot, library: bool },
     CurveEditor { target: CurveEditorTarget, action: CurveEditorAction },
     PressureCalibration { action: PressureCalibrationAction },

@@ -73,6 +73,13 @@ impl CapyApple {
 /// not just the current recovery snapshot, before retiring the GPU.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_apple_document_prepare_switch(app: u64, now: u64) -> i32 {
+    let Some(mut owner) = handles::app(app) else { return -1; };
+    if owner.perform(|a| {
+        a.host.session.prepare_document_action()?;
+        if !a.host.session.can_switch_document() { return Err(layer_ui::DocumentTransportRefusal::SwitchOperation.message(a.host.session.localization()).to_string()); }
+        Ok(())
+    }).is_none() { return -1; }
+    drop(owner);
     let ready = unsafe { capy_apple_prepare_recovery(app, now) };
     if ready != 0 {
         return ready;

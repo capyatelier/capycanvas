@@ -514,7 +514,7 @@ fn tool_switches_cancel_unstarted_transform_bounds_and_accept_selection_coverage
 }
 
 #[test]
-fn pending_transform_activates_only_the_last_requested_tool() {
+fn pending_transform_runs_queued_tool_choices_after_applying() {
     let mut s = bake_session(true);
     start_bake(&mut s).unwrap();
     let output = completed_bake(&frozen_plan(&s));
@@ -525,7 +525,49 @@ fn pending_transform_activates_only_the_last_requested_tool() {
     assert_eq!(s.engine.backend().snapshot_requests.len(), 1);
     bake_reply(&mut s, Ok(layer_render::SnapshotResult::TransformPixels(output)));
     assert!(s.command(CommandId::Brush).selected);
-    assert!(s.operation.next_tool.is_none());
+    assert!(s.deferred_edits.is_empty());
+}
+
+#[test]
+fn deferred_apply_keeps_document_actions_in_order_until_the_transform_lands() {
+    let mut s = bake_session(true);
+    invoke(&mut s, CommandId::Pencil);
+    invoke(&mut s, CommandId::ScaleRotate);
+    if s.content_bounds.busy() { reply_bounds(&mut s, [0., 0., 16., 8.]); }
+    s.set_transform_control("transform_width", 2.).unwrap();
+    s.renderer_mut().settling = true;
+    invoke(&mut s, CommandId::ApplyTransform);
+    for command in [CommandId::SelectAll, CommandId::Deselect, CommandId::Eraser] {
+        s.dispatch(UiAction::Invoke { command }).unwrap();
+    }
+    assert!(s.operation.active());
+    s.renderer_mut().settling = false;
+    s.frame(10, 10).unwrap();
+    let output = completed_bake(&frozen_plan(&s));
+    assert!(s.engine.document().working.selection.is_none());
+    bake_reply(&mut s, Ok(layer_render::SnapshotResult::TransformPixels(output)));
+    assert!(!s.operation.active());
+    assert!(s.deferred_edits.is_empty());
+    assert!(s.command(CommandId::Eraser).selected);
+    assert!(s.engine.document().working.selection.is_none());
+    invoke(&mut s, CommandId::Undo);
+    assert!(s.engine.document().working.selection.is_some(), "Select All lands before Deselect");
+}
+
+#[test]
+fn cancelling_an_async_apply_retires_its_drop_before_manual_import() {
+    for command in [CommandId::CancelTransform, CommandId::Undo] {
+        let mut s = bake_session(true);
+        start_bake(&mut s).unwrap();
+        let (drop, _) = s.request_file_drop(ImportIntent::Place).unwrap();
+        assert!(s.file_drop_pending(drop));
+        invoke(&mut s, command);
+        assert!(!s.file_drop_pending(drop));
+        assert!(s.deferred_edits.is_empty());
+        invoke(&mut s, CommandId::ImportImage);
+        let request = s.state.requests.iter().find(|r| matches!(r.kind, HostRequestKind::Document { request: DocumentRequest::Place })).unwrap();
+        assert_ne!(request.id, drop, "the manual request cannot claim the retired drop");
+    }
 }
 
 #[test]
@@ -548,7 +590,7 @@ fn abandoned_or_failed_transform_never_activates_its_requested_tool() {
         let reply = if reason == 6 { Err(layer_render::BackendError("GPU worker failed")) }
             else { Ok(layer_render::SnapshotResult::TransformPixels(output)) };
         bake_reply(&mut s, reply);
-        assert!(s.operation.next_tool.is_none(), "reason={reason}");
+        assert!(s.deferred_edits.is_empty(), "reason={reason}");
         assert!(!s.command(CommandId::Eraser).selected, "reason={reason}");
         assert_live_artwork_eq(s.engine.document(), &before);
         assert!(!s.engine.can_undo());
@@ -581,16 +623,19 @@ fn temporary_pan_leaves_transform_open_and_keyboard_tool_choice_accepts_it() {
 }
 
 #[test]
-fn undo_during_pending_bake_preserves_history_and_discards_changed_result() {
+fn undo_cancels_a_pending_bake_before_stepping_history() {
     let mut s = bake_session(true);
     let before = s.engine.document().clone();
     rename_bake(&mut s);
+    let renamed = s.engine.document().clone();
     start_bake(&mut s).unwrap();
     let output = completed_bake(&frozen_plan(&s));
     invoke(&mut s, CommandId::Undo);
     bake_reply(&mut s, Ok(layer_render::SnapshotResult::TransformPixels(output)));
     assert!(!s.content_bounds.busy());
     assert!(!s.operation.active());
+    assert_live_artwork_eq(s.engine.document(), &renamed);
+    invoke(&mut s, CommandId::Undo);
     assert_live_artwork_eq(s.engine.document(), &before);
     assert!(s.engine.can_redo());
     invoke(&mut s, CommandId::Redo);

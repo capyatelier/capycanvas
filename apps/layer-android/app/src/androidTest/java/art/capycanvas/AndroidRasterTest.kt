@@ -2138,14 +2138,16 @@ class AndroidRasterTest {
                 val positionY = settings("tool-setting-transform_y").fetchSemanticsNode().boundsInRoot
                 assertEquals("Position reference remains compact", 54.0, (reference.width / density).toDouble(), 1.0)
                 assertEquals(54.0, (reference.height / density).toDouble(), 1.0)
-                assertEquals("Coordinates stay beside the reference", 12.0, ((positionX.left - reference.right) / density).toDouble(), 1.0)
+                assertEquals("Coordinates stay beside the reference", host.catalog.getJSONObject("panel_metrics").getDouble("compound_spacing"), ((positionX.left - reference.right) / density).toDouble(), 1.0)
                 assertTrue(positionX.top >= reference.top - density && positionY.bottom <= reference.bottom + density)
                 File(activity.getExternalFilesDir(null), "validation/$theme-transform-position.png").also { it.parentFile!!.mkdirs() }.outputStream().use { instrumentation.uiAutomation.takeScreenshot().compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
                 for (index in 0..8) {
                     settings("tool-segment-transform-reference-$index").assertIsDisplayed().performTouchInput { click(center) }
                     refresh()
-                    val choice = published().array("tool_extra").objects().first { it.optJSONObject("Choice")?.optString("id") == "transform-reference" }.getJSONObject("Choice")
-                    assertTrue(choice.array("items").getJSONObject(index).getBoolean("selected"))
+                    compose.waitUntil(5_000) {
+                        val choice = published().array("tool_extra").objects().first { it.optJSONObject("Choice")?.optString("id") == "transform-reference" }.getJSONObject("Choice")
+                        choice.array("items").getJSONObject(index).getBoolean("selected")
+                    }
                     val x = referenceHull.getDouble(0) + (referenceHull.getDouble(2) - referenceHull.getDouble(0)) * (index % 3) / 2.0
                     val y = referenceHull.getDouble(1) + (referenceHull.getDouble(3) - referenceHull.getDouble(1)) * (index / 3) / 2.0
                     assertEquals("Reference publishes absolute document X", x, setting("transform_x"), .01)

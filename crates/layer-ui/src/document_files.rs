@@ -462,7 +462,16 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.state.document_file.busy = self.files.pending.is_some();
     }
 
+    pub fn request_file_drop(&mut self, intent: ImportIntent) -> Result<(u32, UiChange), String> {
+        if let Some(reason) = self.command_disabled_reason(intent.command()) { return Err(reason); }
+        let id = self.reserve_request_id()?;
+        self.dispatch(UiAction::FileDrop { id, intent }).map(|change| (id, change))
+    }
     pub(super) fn request_document(&mut self, request: DocumentRequest) -> Result<(), String> {
+        let id = self.reserve_request_id()?;
+        self.request_document_with_id(id, request)
+    }
+    pub(super) fn request_document_with_id(&mut self, id: u32, request: DocumentRequest) -> Result<(), String> {
         if matches!(request, DocumentRequest::Save { .. }) {
             self.require_raster_snapshot()?;
         } else if matches!(request, DocumentRequest::ConfirmClose { .. }) {
@@ -480,8 +489,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 _ => None,
             }
         } else { None };
-        let id = self.next_request;
-        self.request(HostRequestKind::Document { request })?;
+        self.queue_host_request(id, HostRequestKind::Document { request });
         self.files.pending_copy = pending_copy;
         self.set_host_error(None);
         self.files.pending = Some((id, None));
@@ -814,23 +822,23 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
     }
 
-    fn document_interaction_idle_reason(&self) -> Option<DocumentIdleReason> {
+    fn document_interaction_idle_reason(&self, allow_mode: bool) -> Option<DocumentIdleReason> {
         if !self.canvas_idle() { Some(DocumentIdleReason::CanvasInteraction) }
-        else if self.content_bounds.baking() { Some(DocumentIdleReason::WaitTransform) }
+        else if self.content_bounds.baking() && !allow_mode { Some(DocumentIdleReason::WaitTransform) }
         else if self.conversion_busy() { Some(DocumentIdleReason::CanvasOperation) }
-        else if self.operation.active() || self.objects.placing() {
+        else if !allow_mode && (self.operation.active() || self.objects.placing()) {
             Some(if self.cropping() { DocumentIdleReason::ApplyCrop } else { DocumentIdleReason::ApplyTransform })
-        } else if (self.region_tools.busy() && !self.refine_previewing())
+        } else if (self.region_tools.busy() && !self.refine_previewing() && !(allow_mode && self.region_tools.applying_transform()))
             || self.targeted_curve_busy() || self.auto_levels.is_some()
             || self.eyedropper.calibration.as_ref().is_some_and(|calibration| calibration.request.is_some()) {
             Some(DocumentIdleReason::CanvasOperation)
         } else { None }
     }
     fn require_document_interaction_idle(&self) -> Result<(), String> {
-        self.document_interaction_idle_reason().map_or(Ok(()), |reason| Err(reason.message(self.localization()).to_string()))
+        self.document_interaction_idle_reason(false).map_or(Ok(()), |reason| Err(reason.message(self.localization()).to_string()))
     }
     pub fn document_idle_reason(&self) -> Option<DocumentIdleReason> {
-        self.document_interaction_idle_reason().or_else(|| self.pending_filters.is_some().then_some(DocumentIdleReason::CanvasOperation))
+        self.document_interaction_idle_reason(false).or_else(|| self.pending_filters.is_some().then_some(DocumentIdleReason::CanvasOperation))
     }
     pub(crate) fn require_proof_idle(&self) -> Result<(), crate::ColorFeatureError> {
         self.document_idle_reason().map_or(Ok(()), |reason| Err(reason.into()))
@@ -843,6 +851,14 @@ impl<R: CanvasRenderer> UiSession<R> {
         if self.painted_selections.busy() { return Err(FileFailure::SelectionCapture.message(self.localization())); }
         self.require_document_interaction_idle()?;
         Ok(())
+    }
+
+    pub(super) fn can_snapshot_after_mode(&self) -> bool {
+        (self.operation.active() || self.objects.placing()) && self.require_action_idle().is_ok()
+    }
+    pub(super) fn require_action_idle(&self) -> Result<(), String> {
+        self.document_interaction_idle_reason(true).or_else(|| self.pending_filters.is_some().then_some(DocumentIdleReason::CanvasOperation))
+            .map_or(Ok(()), |reason| Err(reason.message(self.localization()).to_string()))
     }
 
     pub fn require_document_idle(&self) -> Result<(), String> {

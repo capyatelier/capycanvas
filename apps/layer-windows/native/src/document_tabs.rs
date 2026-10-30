@@ -72,7 +72,7 @@ impl DocumentService {
         view["available"] = (self.idle()
             && !self.close_window
             && !host.session.state().document_file.close_ready
-            && host.session.can_park_document())
+            && host.session.can_switch_document())
         .into();
         view["activating"] = self.activating.into();
         view["window_ready"] = self.window_close_ready(host).into();
@@ -240,6 +240,10 @@ impl DocumentService {
         if !self.idle() || self.close_window || host.session.state().document_file.close_ready {
             return Err(layer_ui::DocumentTransportRefusal::ChangeInProgress.message(host.session.localization()).to_string());
         }
+        if matches!(action, Action::Select { .. } | Action::Adjacent { .. } | Action::Close { .. }) {
+            host.session.prepare_document_action()?;
+            if !self.window.park_ready(host)? { self.deferred_action = Some(DocumentAction::Tabs { action }); host.invalidate_snapshot(); return Ok(()); }
+        }
         match action {
             Action::Select { id } => self.select(host, id)?,
             Action::Adjacent { forward } => {
@@ -298,6 +302,9 @@ impl DocumentService {
         Ok(())
     }
     pub(super) fn poll_tabs(&mut self, host: &mut NativeHost) -> Result<(), String> {
+        if matches!(self.deferred_action, Some(DocumentAction::Tabs { .. })) && self.window.park_ready(host)? {
+            let action = self.deferred_action.take().unwrap(); self.dispatch(host, action)?;
+        }
         if let Some((id, forward)) = host.session.state().requests.iter().find_map(|request| {
             if let HostRequestKind::AdjacentDrawing { forward } = request.kind { Some((request.id, forward)) } else { None }
         }) {

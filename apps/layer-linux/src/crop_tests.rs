@@ -175,6 +175,14 @@ fn ratio_handle_and_apply(device: Device, id: &str) {
     w.dispatch(UiAction::Invoke { command: CommandId::Undo });
     until(|| document(&w).composition().size[0] == before.composition().size[0], "one undo step restores the canvas");
     assert_eq!(document(&w).composition().size[1], before.composition().size[1]);
+    choose(&w, &mut input, "Image", &["Crop"]);
+    w.dispatch(UiAction::Invoke { command: CommandId::CropRatioSixteenNine });
+    let expected = [setting(&w, "crop_width").round() as u32, setting(&w, "crop_height").round() as u32];
+    input.perform(json!([{"key": 98, "down": true}, {"key": 98, "down": false}]));
+    until(|| !cropping(&w) && state(&w).layer_tools.tool == LayerCanvasTool::Paint, "choosing Brush applies the crop");
+    assert_eq!(document(&w).composition().size, expected);
+    w.dispatch(UiAction::Invoke { command: CommandId::Undo });
+    until(|| document(&w).composition().size == before.composition().size, "the automatic crop is one undo step");
     input.finish();
     w.window.close();
     pump(50);

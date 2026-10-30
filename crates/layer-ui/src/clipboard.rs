@@ -886,9 +886,6 @@ impl<R: CanvasRenderer> UiSession<R> {
         position: impl Fn(&Self, [u32; 2]) -> Point,
     ) -> Result<(), String> {
         self.require_document_idle()?;
-        if self.operation.placing() {
-            return Err("Apply or cancel the photo placement first".into());
-        }
         if !self.engine.backend().supports_tiled_sources() {
             return Err("This renderer does not support tiled photo layers".into());
         }
@@ -939,7 +936,6 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     fn paste_objects(&mut self, objects: Vec<(Arc<str>, layer_core::ImageObject)>, destination: Option<ImageLayerDestination>, masked: bool) -> Result<(), String> {
         self.require_document_idle()?;
-        if self.operation.placing() || self.objects.placing() { return Err(self.localization().text(MessageId::COMMANDS_APPLY_OR_CANCEL_THE_TRANSFORM_FIRST).to_string()); }
         if masked { refused(self.paste_into_refusal())?; }
         if !self.engine.backend().supports_tiled_sources() {
             return Err("This renderer does not support tiled photo layers".into());

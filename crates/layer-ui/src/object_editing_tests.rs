@@ -7,6 +7,30 @@ fn session() -> UiSession<Recorder> {
     UiSession::new(Recorder { tiled_sources: true, ..Default::default() },
         Document::new(PortableId::random(), 1000, 1000, DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }), [1000, 1000], Platform::Gtk).unwrap()
 }
+
+#[test]
+fn placement_apply_restores_the_tool_and_import_applies_an_open_placement() {
+    for tool in [LayerCanvasTool::Paint, LayerCanvasTool::Move] {
+        let mut s = session();
+        s.layer_action(LayerAction::Tool { tool }).unwrap();
+        let checkpoint = s.engine.checkpoint();
+        s.place_layer_source("Photo", std::sync::Arc::unwrap_or_clone(rgba8_source([20, 10], |_, _| [255; 4])), None).unwrap();
+        let selected = s.selected_objects();
+        let active = s.engine.document().working.occurrence;
+        invoke(&mut s, CommandId::ApplyTransform);
+        assert_eq!(s.layer_interaction.tool, tool);
+        assert_eq!(s.selected_objects(), selected);
+        assert_eq!(s.engine.document().working.occurrence, active);
+        s.frame(1, 1).unwrap();
+        assert_eq!(s.state.canvas_bar.is_some(), tool == LayerCanvasTool::Move);
+        assert_ne!(s.engine.checkpoint(), checkpoint);
+        s.place_layer_source("Next", std::sync::Arc::unwrap_or_clone(rgba8_source([20, 10], |_, _| [255; 4])), None).unwrap();
+        s.dispatch(UiAction::Invoke { command: CommandId::ImportImage }).unwrap();
+        assert!(!s.objects.placing());
+        assert_eq!(s.layer_interaction.tool, tool);
+        assert!(s.state.requests.iter().any(|r| matches!(r.kind, HostRequestKind::Document { request: DocumentRequest::Place })));
+    }
+}
 fn image(extent: [u32; 2]) -> layer_core::Image { rgba8_source(extent, |x, y| [x as u8, y as u8, 7, 255]).into() }
 fn add(s: &mut UiSession<Recorder>, name: &str, parent: Option<OccurrenceHandle>, affine: Affine64, at: usize) -> (OccurrenceHandle, ImageObjectHandle) {
     let mut object = ImageObject::new(image([100, 100]));
@@ -521,44 +545,19 @@ fn placement_hint_survives_transforms_and_cancelled_drags_until_completion() {
 }
 
 #[test]
-fn placement_refuses_row_and_direct_property_actions_without_changing_the_document() {
-    let (mut s, layer, _) = fixture();
-    let id = occurrence_token(layer);
-    let original = s.engine.document().clone();
-    s.place_layer_sources(vec![("Photo".into(), std::sync::Arc::unwrap_or_clone(rgba8_source([200, 100], |_, _| [255; 4])))],
-        Some(Point { x: 600., y: 600. }), None).unwrap();
-    let provisional = s.engine.document().clone();
-    let checkpoint = s.engine.checkpoint();
-    let refusal = s.localization().text(MessageId::COMMANDS_APPLY_OR_CANCEL_THE_TRANSFORM_FIRST);
-    for action in [LayerAction::Select { id, mask: false }, LayerAction::SelectRow { id, extend: false, toggle: true },
-        LayerAction::SelectAllLayers { selected: false }, LayerAction::Visibility { id, value: false },
-        LayerAction::Reparent { id, parent: None, index: 0 }, LayerAction::DuplicateSelected, LayerAction::DeleteSelected] {
-        assert_eq!(s.layer_action(action).unwrap_err(), refusal.as_ref());
-        assert_eq!(s.engine.document(), &provisional);
-        assert_eq!(s.engine.checkpoint(), checkpoint);
+fn placement_applies_before_row_and_property_actions_but_filter_search_keeps_it_open() {
+    for property in [false, true] {
+        let (mut s, layer, _) = fixture();
+        let id = occurrence_token(layer);
+        s.place_layer_source("Photo", std::sync::Arc::unwrap_or_clone(rgba8_source([200, 100], |_, _| [255; 4])), None).unwrap();
+        s.dispatch(UiAction::FilterPicker { action: FilterPickerAction::Search { query: "blur".into() } }).unwrap();
         assert!(s.objects.placing());
+        let action = if property { UiAction::SetLayerOpacity { id: Some(id), opacity: 0.25 } } else { UiAction::SelectLayer { id } };
+        s.dispatch(action).unwrap();
+        assert!(!s.objects.placing());
+        if property { assert_eq!(s.engine.document().scene().occurrence(layer).unwrap().opacity, 0.25); }
+        else { assert_eq!(s.engine.document().working.occurrence, Some(layer)); }
     }
-    let search = s.state.filter_picker.search.clone();
-    for action in [UiAction::SelectLayer { id }, UiAction::SetLayerVisibility { id, visible: false },
-        UiAction::SetLayerOpacity { id: Some(id), opacity: 0.25 }, UiAction::SetLayerOpacity { id: None, opacity: 0.5 },
-        UiAction::Effect { action: EffectAction::Set { layer: id, key: "opacity".into(), value: layer_core::EffectValue::Number(0.75) } },
-        UiAction::Effect { action: EffectAction::InsertAttached { effect: "gaussian_blur".into(), owner: id, epoch: s.state.document_file.epoch } },
-        UiAction::FilterPicker { action: FilterPickerAction::Search { query: "blur".into() } }] {
-        assert_eq!(s.dispatch(action).unwrap_err(), refusal.as_ref());
-        assert_eq!(s.engine.document(), &provisional);
-        assert_eq!(s.engine.checkpoint(), checkpoint);
-        assert_eq!(s.state.filter_picker.search, search);
-        assert!(s.objects.placing());
-    }
-    invoke(&mut s, CommandId::CancelTransform);
-    assert_live_artwork_eq(s.engine.document(), &original);
-    s.dispatch(UiAction::SelectLayer { id }).unwrap();
-    assert_eq!(s.engine.document().working.occurrence, Some(layer));
-    s.dispatch(UiAction::SetLayerOpacity { id: Some(id), opacity: 0.25 }).unwrap();
-    assert_eq!(s.engine.document().scene().occurrence(layer).unwrap().opacity, 0.25);
-    invoke(&mut s, CommandId::Undo);
-    assert_live_artwork_eq(s.engine.document(), &original);
-    assert_eq!(s.engine.checkpoint(), checkpoint);
 }
 
 #[test]

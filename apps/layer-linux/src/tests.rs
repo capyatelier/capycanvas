@@ -2431,9 +2431,7 @@ fn native_operation_tool() {
         command: CommandId::Move,
     });
     pump(100);
-    assert_eq!(w.tool_set.group_buttons.borrow().len(), 2);
-    let transform = w.tool_set.group_buttons.borrow()[1].clone();
-    click(&transform);
+    click(&command(&w, CommandId::ScaleRotate));
     assert_eq!(state(&w).layer_tools.tool, LayerCanvasTool::Transform);
     // Exercise the real canvas input/controller: moving inside the box, then
     // its lower-right handle. The opposite corner must not jump on resize.
@@ -2458,7 +2456,7 @@ fn native_operation_tool() {
     edit_number(&number("transform_angle"), "360/12");
     pump(150);
     assert!((value("transform_angle") - std::f32::consts::PI / 6.).abs() < 0.001);
-    let uniform: gtk::ToggleButton = find_named(
+    let uniform: gtk::CheckButton = find_named(
         &w.panel_widget(Panel::ToolSettings),
         "tool-action-TransformUniform",
     )
@@ -2532,8 +2530,7 @@ fn native_operation_tool() {
     assert_eq!(document().artwork, original.artwork);
     assert_eq!(document().working.selection, original.working.selection);
     assert_eq!(state(&w).layer_tools.tool, LayerCanvasTool::Move);
-    let transform = w.tool_set.group_buttons.borrow()[1].clone();
-    click(&transform);
+    click(&command(&w, CommandId::ScaleRotate));
     edit_number(&number("transform_x"), "240");
     let apply: gtk::Button = find_named(
         &w.panel_widget(Panel::ToolSettings),

@@ -99,8 +99,8 @@ fn trim_and_fit_content_refuse_when_nothing_is_visible() {
     assert_eq!(notice_text(&s), Some("There are no visible pixels to trim to"));
     assert_eq!(s.command_disabled_reason(CommandId::CropFitContent).as_deref(), Some("Choose the Crop tool first"));
     invoke(&mut s, CommandId::Crop);
-    assert!(!s.command(CommandId::Trim).enabled);
-    assert_eq!(s.command_disabled_reason(CommandId::Trim).as_deref(), Some("Apply or cancel the crop first"));
+    assert!(s.command(CommandId::Trim).enabled);
+    assert_eq!(s.command_disabled_reason(CommandId::Trim), None);
     invoke(&mut s, CommandId::CropFitContent);
     reply_bounds(&mut s, [0.; 4]);
     assert_eq!(notice_text(&s), Some("There are no visible pixels to fit the crop to"));

@@ -132,6 +132,7 @@ struct Drag {
 /// drag of the selected pixels by whole layer pixels, applied on release.
 struct Transaction {
     placement: Option<Placement>,
+    previous: LayerCanvasTool,
     serial: u64,
     target: Option<SourceTarget>,
     selection: Option<Selection>,
@@ -160,7 +161,6 @@ struct Transaction {
 pub(super) struct Operation {
     pub liquify: Option<super::liquify::Adjustment>,
     current: Option<Transaction>,
-    pub next_tool: Option<Box<UiAction>>,
     /// An open crop is a canvas operation too, so idle checks wait on it.
     pub crop: Option<super::crop::CropSession>,
     pub crop_options: super::crop::CropOptions,
@@ -291,29 +291,50 @@ fn source_frame(doc: &Document, target: OccurrenceHandle) -> Rect {
 }
 
 impl<R: CanvasRenderer> UiSession<R> {
-    pub(super) fn accept_transform_for_tool(&mut self, action: &UiAction) -> Result<bool, String> {
-        if !super::held_actions::selects_tool(action) || self.interaction.applying_hold
-            || matches!(action, UiAction::Invoke { command: CommandId::ScaleRotate }
-                | UiAction::Layer { action: LayerAction::Tool { tool: LayerCanvasTool::Transform } })
-            || !(self.operation.transforming() || self.objects.placing()) {
-            return Ok(false);
+    pub(super) fn applies_open_mode(&self, action: &UiAction) -> bool {
+        if self.interaction.applying_hold { return false; }
+        match action {
+            UiAction::Invoke { command: CommandId::ScaleRotate } | UiAction::Layer { action: LayerAction::Tool { tool: LayerCanvasTool::Transform } }
+                if self.operation.transforming() || self.objects.placing() => false,
+            UiAction::Invoke { command: CommandId::Crop } | UiAction::Layer { action: LayerAction::Tool { tool: LayerCanvasTool::Crop } }
+                if self.cropping() => false,
+            UiAction::Layer { action: LayerAction::Tool { tool } } if *tool == self.layer_interaction.tool => false,
+            action if super::held_actions::selects_tool(action) => true,
+            UiAction::Invoke { command } => super::command_catalog::document_action(*command)
+                || matches!(command, CommandId::SaveDocument | CommandId::SaveDocumentAs | CommandId::CloseDocument | CommandId::QuickMask | CommandId::NewSelectionLayer | CommandId::MaskSelection),
+            UiAction::Selection { action } => !matches!(action, SelectionAction::ResizeRadius { .. } | SelectionAction::ApplyResize | SelectionAction::CancelResize),
+            UiAction::FileDrop { .. } | UiAction::CanvasSize { .. } | UiAction::ImageSize { .. } => true,
+            UiAction::SelectLayer { .. } | UiAction::SetLayerVisibility { .. } | UiAction::SetLayerOpacity { .. } => self.operation.transforming() || self.objects.placing() || self.vector_paths.drafting(),
+            UiAction::Layer { action } => (self.operation.transforming() || self.objects.placing() || self.vector_paths.drafting()) && matches!(action, LayerAction::New { .. } | LayerAction::NewVector | LayerAction::NewBelow
+                | LayerAction::Select { .. } | LayerAction::SelectRow { .. } | LayerAction::ToggleSelection { .. } | LayerAction::SelectAllLayers { .. }
+                | LayerAction::GroupSelected | LayerAction::Ungroup { .. } | LayerAction::Flatten | LayerAction::DeleteSelected | LayerAction::DuplicateSelected
+                | LayerAction::Visibility { .. } | LayerAction::Clear { .. } | LayerAction::RepairSourceProfile { .. } | LayerAction::RasterizeSource { .. }
+                | LayerAction::PasteMask { .. } | LayerAction::MaskSelection { .. } | LayerAction::Duplicate { .. } | LayerAction::Delete { .. }
+                | LayerAction::Lock { .. } | LayerAction::AddMask { .. } | LayerAction::DeleteMask { .. } | LayerAction::ApplyMask { .. }
+                | LayerAction::FillSelection | LayerAction::InvertMask { .. } | LayerAction::ClearMask { .. } | LayerAction::MoveLayer { .. }
+                | LayerAction::Deselect | LayerAction::InvertSelection | LayerAction::Reparent { .. } | LayerAction::Drop { .. }),
+            UiAction::Effect { action } => self.operation.placing() || self.objects.placing() || (self.operation.transforming()
+                && matches!(action, EffectAction::Insert { .. } | EffectAction::InsertAttached { .. } | EffectAction::Set { .. }
+                    | EffectAction::LayerOpacity { .. } | EffectAction::Reset { .. } | EffectAction::Number { .. } | EffectAction::UseCurrentColor { .. }
+                    | EffectAction::CurvePoint { .. } | EffectAction::CurveNumber { .. } | EffectAction::CurveRemoveAt { .. } | EffectAction::Gesture { .. })),
+            _ => false,
         }
-        if let UiAction::Invoke { command } = action
-            && let Some(reason) = self.command_disabled_reason(*command) { return Err(reason); }
-        if let UiAction::SelectBrush { id } = action { super::preset(*id)?; }
-        if self.objects.placing() {
-            self.finish_object_placement(true)?;
-        } else if !self.content_bounds.baking() && !self.region_tools.applying_transform() {
-            self.finish_transform(true)?;
-        }
-        if self.operation.transforming() {
-            self.operation.next_tool = Some(Box::new(action.clone()));
-            return Ok(true);
-        }
-        Ok(false)
     }
-    pub(super) fn activate_transform_tool(&mut self, action: Option<Box<UiAction>>) -> Result<u32, String> {
-        action.map_or(Ok(0), |action| self.dispatch(*action).map(|change| change.regions))
+    pub(super) fn applying_mode(&self) -> bool {
+        self.content_bounds.baking() || self.region_tools.applying_transform()
+    }
+    pub fn prepare_document_action(&mut self) -> Result<(), String> {
+        if self.applying_mode() || !self.deferred_edits.is_empty() || !(self.operation.active() || self.objects.placing() || self.vector_paths.drafting()) { return Ok(()); }
+        if self.operation.active() || self.objects.placing() {
+            let apply = UiAction::Invoke { command: CommandId::ApplyTransform };
+            if !self.defer_document_action(&apply) {
+                if self.objects.placing() { self.finish_object_placement(true)?; }
+                else { self.finish_transform(true)?; }
+            }
+        }
+        if self.vector_paths.drafting() { self.apply_vector_path()?; }
+        self.refresh_file_state();
+        Ok(())
     }
     pub(super) fn transform_roots(&self) -> Vec<OccurrenceHandle> {
         let doc = self.engine.document();
@@ -350,18 +371,17 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
     pub(super) fn begin_transform(&mut self) -> Result<(), String> {
         self.require_idle()?;
-        if self.cropping() {
-            return Err("Apply or cancel the crop first".into());
-        }
         refused(self.transform_refusal())?;
         if self.operation.active() {
             return Ok(());
         }
+        let previous = self.layer_interaction.tool;
         self.cancel_layer_gesture()?;
         if self.measured_target_bounds().is_none() {
             return self.request_content_bounds(super::image_geometry::ContentUse::Transform);
         }
-        let t = self.pixel_transaction()?;
+        let mut t = self.pixel_transaction()?;
+        t.previous = previous;
         self.operation.serial = t.serial;
         self.operation.current = Some(t);
         self.layer_interaction.tool = LayerCanvasTool::Transform;
@@ -470,6 +490,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn begin_outline_transform(&mut self) -> Result<(), String> {
         self.require_document_idle()?;
         refused(self.outline_refusal())?;
+        let previous = self.layer_interaction.tool;
         self.cancel_layer_gesture()?;
         let doc = self.engine.document();
         let selection = doc.working.selection.clone().ok_or("Make a selection first")?;
@@ -479,7 +500,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let serial = self.operation.serial.wrapping_add(1);
         let t = Transaction::new(serial, doc.active_target(), None, doc.revision, Affine::IDENTITY, bounds, Pose::identity());
         self.operation.serial = serial;
-        self.operation.current = Some(Transaction { outline: Some(selection), ..t });
+        self.operation.current = Some(Transaction { outline: Some(selection), previous, ..t });
         self.layer_interaction.tool = LayerCanvasTool::Transform;
         self.state.layer_tools.tool = LayerCanvasTool::Transform;
         self.layer_interaction.changed = true;
@@ -555,13 +576,12 @@ impl<R: CanvasRenderer> UiSession<R> {
         &mut self,
         pixels: std::sync::Arc<layer_core::SelectionPixels>,
     ) -> Result<u32, String> {
-        let next_tool = self.operation.next_tool.take();
-        self.engine.commit_transform(Some(pixels)).map_err(error)?;
+        if let Err(cause) = self.engine.commit_transform(Some(pixels)) { self.discard_mode_actions(); return Err(error(cause)); }
         self.cancel_transform()?;
-        self.activate_transform_tool(next_tool)
+        Ok(0)
     }
     pub(super) fn cancel_transform(&mut self) -> Result<bool, String> {
-        self.operation.next_tool = None;
+        if self.mode_apply_pending() { self.discard_mode_actions(); }
         let cancelled = self.cancel_content_bounds() | self.cancel_conversion();
         if self.cropping() {
             self.finish_crop(false)?;
@@ -587,8 +607,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.engine.set_transform_preview(None).map_err(error)?;
         }
         self.layer_interaction.path.clear();
-        self.layer_interaction.tool = LayerCanvasTool::Move;
-        self.state.layer_tools.tool = LayerCanvasTool::Move;
+        self.layer_interaction.tool = transaction.previous;
+        self.state.layer_tools.tool = transaction.previous;
         self.layer_interaction.changed = true;
         self.refresh_tools();
         self.operation.changed = true;
@@ -630,7 +650,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             source_base: None,
         };
         if transform != t.transform {
-            self.operation.next_tool = None;
+            if self.applying_mode() { self.discard_mode_actions(); }
             if self.region_tools.applying_transform() { self.region_tools.cancel(); }
             if self.content_bounds.baking() { self.cancel_content_bounds(); }
         }
@@ -1380,6 +1400,7 @@ impl Transaction {
         let geometry = Geometry { pose, exact_affine: None, inner: None, mesh: None, frame: bounds, pivot: center(bounds), interpolation: None, nodes: BTreeSet::new() };
         Self {
             placement: None,
+            previous: LayerCanvasTool::Move,
             serial,
             target,
             selection,

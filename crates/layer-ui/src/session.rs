@@ -2544,7 +2544,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let enabled = match id {
             CommandId::SearchCommands => idle && !self.state.settings_open && !self.state.customization.blocks_shortcuts() && !self.state.customization.header_editing,
             CommandId::LiquifyReset | CommandId::LiquifyAdjust => idle && (self.operation.liquify.is_some() || self.engine.liquify_context().is_some()),
-            CommandId::QuickMask | CommandId::NewSelectionLayer => idle && !self.operation.active(),
+            CommandId::QuickMask | CommandId::NewSelectionLayer => idle,
             CommandId::SaveSelectionLayer => idle && self.has_selection(),
             CommandId::ReturnToArtwork | CommandId::ResetMaskColors | CommandId::SwapMaskColors => idle && self.selection_masks.target().is_some(),
             CommandId::MaskOverlayProtected | CommandId::FillSelectionMask | CommandId::ClearSelectionMask => idle && self.selection_masks.target().is_some_and(|t| match t {
@@ -2553,17 +2553,19 @@ impl<R: CanvasRenderer> UiSession<R> {
             }),
             CommandId::Reselect => idle && !self.has_selection() && self.selection_masks.reselect.is_some(),
             CommandId::LoadSelectionLayer | CommandId::InvertSelectionLayer => {
-                self.require_document_idle().is_ok()
+                self.require_action_idle().is_ok()
                     && self.selection_masks.target().is_some_and(|t| match t {
                         layer_core::SelectionTarget::Current => false,
                         layer_core::SelectionTarget::Saved(layer) => id == CommandId::LoadSelectionLayer || !document.is_locked(layer),
                     })
             }
-            CommandId::ScaleRotate | CommandId::ClearLayer | CommandId::Figure | CommandId::Move | CommandId::EditPoints | CommandId::LassoFill | CommandId::EncloseFill | CommandId::FillSelection | CommandId::RepairSourceProfile | CommandId::RasterizeSource
+            CommandId::ClearLayer | CommandId::FillSelection | CommandId::RepairSourceProfile | CommandId::RasterizeSource
             | CommandId::InvertLayerMask | CommandId::LayerMaskEnabled | CommandId::ApplyLayerMask
                 if self.selection_masks.target().is_some() => false,
+            CommandId::ScaleRotate | CommandId::Figure | CommandId::Move | CommandId::EditPoints | CommandId::LassoFill | CommandId::EncloseFill | CommandId::Crop
+                if self.selection_masks.target().is_some() => idle,
             CommandId::InvertLayerMask | CommandId::LayerMaskEnabled | CommandId::ApplyLayerMask => {
-                self.require_document_idle().is_ok()
+                self.require_action_idle().is_ok()
                     && !document.is_locked(active.unwrap_or_default())
                     && scene.occurrence(active.unwrap_or_default()).is_some_and(|l| {
                         l.mask.as_ref().is_some_and(|m| {
@@ -2577,10 +2579,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             CommandId::EditLayerContent => idle && matches!(document.working.target, Some(SourceTarget::Coverage(_))),
             CommandId::DeleteLayer if self.selection_masks.quick() => false,
-            CommandId::SdrRendition => document.composition().color.depth.is_float() && self.require_document_idle().is_ok() && !self.state.document_file.busy,
-            CommandId::PreviewSdr => document.composition().color.depth.is_float() && self.state.hdr_display_available && !self.state.soft_proof && !self.state.gamut_warning && self.require_document_idle().is_ok() && !self.state.document_file.busy,
-            CommandId::SoftProofSetup => self.require_document_idle().is_ok() && !self.state.document_file.busy,
-            CommandId::SoftProof => self.require_document_idle().is_ok() && !self.state.document_file.busy,
+            CommandId::SdrRendition => document.composition().color.depth.is_float() && self.require_action_idle().is_ok() && !self.state.document_file.busy,
+            CommandId::PreviewSdr => document.composition().color.depth.is_float() && self.state.hdr_display_available && !self.state.soft_proof && !self.state.gamut_warning && self.require_action_idle().is_ok() && !self.state.document_file.busy,
+            CommandId::SoftProofSetup => self.require_action_idle().is_ok() && !self.state.document_file.busy,
+            CommandId::SoftProof => self.require_action_idle().is_ok() && !self.state.document_file.busy,
             CommandId::GamutWarning => document.output().proof.is_some(),
             CommandId::PutBackBubbles => !self.state.workspace.layout.bubbles.bubbles.is_empty(),
             CommandId::ResetLayout if self.managed_workspace.is_some() => {
@@ -2591,35 +2593,35 @@ impl<R: CanvasRenderer> UiSession<R> {
                         .is_some_and(|w| durable_layout(&self.state.workspace.layout) != w.baseline)
             }
             CommandId::RepairSourceProfile | CommandId::RasterizeSource => {
-                self.require_document_idle().is_ok() && !self.state.document_file.busy
+                self.require_action_idle().is_ok() && !self.state.document_file.busy
                     && !matches!(document.working.target, Some(SourceTarget::Coverage(_)))
                     && if id == CommandId::RepairSourceProfile { self.active_source_use().is_some_and(|target| self.can_repair_source(target)) }
                         else { self.can_edit_original(active.unwrap_or_default()) }
             }
             CommandId::RasterizeLayer | CommandId::ConvertToObject => self.conversion_refusal(id).is_none(),
-            CommandId::ExportAgain => self.files.last_export.is_some() && self.require_document_idle().is_ok() && !self.state.document_file.busy,
+            CommandId::ExportAgain => self.files.last_export.is_some() && self.require_action_idle().is_ok() && !self.state.document_file.busy,
             CommandId::AssignProfile | CommandId::ConvertColorSpace | CommandId::ChangeBitDepth | CommandId::ImportImage | CommandId::PasteAsNewImage | CommandId::DocumentProperties | CommandId::NewDocument | CommandId::OpenDocument | CommandId::ExportDocument => {
-                self.require_document_idle().is_ok() && !self.state.document_file.busy
+                self.require_action_idle().is_ok() && !self.state.document_file.busy
             }
             CommandId::PasteImage | CommandId::PasteInPlace | CommandId::PasteAtView | CommandId::PasteAtCursor => {
-                self.require_document_idle().is_ok() && !self.state.document_file.busy && self.paste_refusal().is_none()
+                self.require_action_idle().is_ok() && !self.state.document_file.busy && self.paste_refusal().is_none()
             }
             CommandId::PasteInto => {
-                self.require_document_idle().is_ok() && !self.state.document_file.busy && self.paste_into_refusal().is_none()
+                self.require_action_idle().is_ok() && !self.state.document_file.busy && self.paste_into_refusal().is_none()
             }
             CommandId::Copy | CommandId::Cut | CommandId::CopyMerged | CommandId::CopyPixels => {
-                self.require_document_idle().is_ok() && !self.state.document_file.busy && self.copy_refusal(id).is_none()
+                self.require_action_idle().is_ok() && !self.state.document_file.busy && self.copy_refusal(id).is_none()
             }
             CommandId::SaveDocument | CommandId::SaveDocumentAs => {
-                self.require_raster_snapshot().is_ok() && !self.state.document_file.busy
+                (self.require_raster_snapshot().is_ok() || self.can_snapshot_after_mode()) && !self.state.document_file.busy
             }
-            CommandId::CloseDocument => self.require_document_snapshot_idle().is_ok() && !self.opening_drawing(),
-            CommandId::ScaleRotate => idle && !self.cropping() && self.can_transform(),
+            CommandId::CloseDocument => (self.require_document_snapshot_idle().is_ok() || self.can_snapshot_after_mode()) && !self.opening_drawing(),
+            CommandId::ScaleRotate => idle && (self.can_transform() || self.object_target_for(LayerCanvasTool::Transform).is_some_and(|layer| document.objects_editable(layer))),
             CommandId::TransformAgain => self.require_document_idle().is_ok() && self.transform_again_refusal().is_none(),
             CommandId::TransformSnapping => idle && (self.operation.transforming() || self.layer_interaction.tool == LayerCanvasTool::Move),
             CommandId::Crop => {
                 idle && (self.cropping()
-                    || (self.require_document_idle().is_ok() && self.canvas_geometry_refusal().is_none()))
+                    || (self.require_action_idle().is_ok() && self.canvas_geometry_refusal().is_none()))
             }
             CommandId::CropRatioFree
             | CommandId::CropRatioOriginal
@@ -2639,7 +2641,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             | CommandId::CropFitContent => idle && self.cropping(),
             CommandId::StraightenToGuide => {
                 idle && self.straighten_to_guide_refusal().is_none()
-                    && (self.cropping() || self.require_document_idle().is_ok())
+                    && (self.cropping() || self.require_action_idle().is_ok())
             }
             CommandId::PlacementOriginalSize => false,
             CommandId::ApplyTransform => {
@@ -2689,7 +2691,6 @@ impl<R: CanvasRenderer> UiSession<R> {
             CommandId::MaskSelection => {
                 idle && document.working.selection.is_some()
                     && self.selection_masks.target().is_none()
-                    && !self.operation.active()
                     && !document.is_locked(active.unwrap_or_default())
                     && !layer_core::paper::is_paper_layer(scene, active.unwrap_or_default())
                     && scene.occurrence(active.unwrap_or_default()).is_some_and(|l| {
@@ -2705,36 +2706,36 @@ impl<R: CanvasRenderer> UiSession<R> {
             | CommandId::CloneFlipHorizontal
             | CommandId::CloneFlipVertical
             | CommandId::CloneResetOffset => self.clone_command_enabled(id),
-            CommandId::Undo => self.canvas_contact_idle() && (self.operation.placing() || self.objects.placing() || self.cropping() || self.vector_paths.drafting() || self.engine.can_undo() || self.history_pending()),
-            CommandId::Redo => self.canvas_contact_idle() && !self.cropping() && !self.objects.placing() && (self.engine.can_redo() || self.undo_deferred()),
-            CommandId::SelectAll => self.require_document_idle().is_ok(),
+            CommandId::Undo => self.canvas_contact_idle() && (self.operation.placing() || self.objects.placing() || self.cropping() || self.applying_mode() || self.vector_paths.drafting() || self.engine.can_undo() || self.history_pending()),
+            CommandId::Redo => self.canvas_contact_idle() && !self.operation.active() && !self.objects.placing() && !self.vector_paths.drafting() && (self.engine.can_redo() || self.undo_deferred()),
+            CommandId::SelectAll => self.require_action_idle().is_ok(),
             CommandId::Deselect | CommandId::InvertSelection => {
-                self.require_document_idle().is_ok() && self.has_selection()
+                self.require_action_idle().is_ok() && self.has_selection()
             }
             CommandId::ClearSelected | CommandId::ClearOutside => {
-                self.require_document_idle().is_ok() && self.clear_refusal().is_none()
+                self.require_action_idle().is_ok() && self.clear_refusal().is_none()
             }
             CommandId::CopySelectionToLayer | CommandId::CutSelectionToLayer => {
-                self.require_document_idle().is_ok()
+                self.require_action_idle().is_ok()
                     && self.selection_to_layer_refusal(id == CommandId::CutSelectionToLayer).is_none()
             }
             CommandId::DiscardPaintEdits => {
-                self.require_document_idle().is_ok() && self.discard_paint_edits_refusal().is_none()
+                self.require_action_idle().is_ok() && self.discard_paint_edits_refusal().is_none()
             }
             CommandId::MergeDown
             | CommandId::MergeGroup
             | CommandId::MergeVisible
             | CommandId::FlattenImage
             | CommandId::StampVisible => {
-                self.require_document_idle().is_ok()
+                self.require_action_idle().is_ok()
                     && merges::merge_kind(id).is_some_and(|kind| self.merge_refusal(kind).is_none())
             }
             CommandId::BlendPerceptual | CommandId::BlendLinear => {
-                self.require_document_idle().is_ok() && !self.state.document_file.busy && self.blending_refusal().is_none()
+                self.require_action_idle().is_ok() && !self.state.document_file.busy && self.blending_refusal().is_none()
             }
-            CommandId::NewDodgeBurnLayer => self.require_document_idle().is_ok() && self.dodge_burn_refusal().is_none(),
+            CommandId::NewDodgeBurnLayer => self.require_action_idle().is_ok() && self.dodge_burn_refusal().is_none(),
             CommandId::FrequencySeparation => {
-                self.require_document_idle().is_ok() && self.separation_refusal().is_none()
+                self.require_action_idle().is_ok() && self.separation_refusal().is_none()
             }
             CommandId::CanvasSize
             | CommandId::ImageSize
@@ -2744,21 +2745,21 @@ impl<R: CanvasRenderer> UiSession<R> {
             | CommandId::FlipImageHorizontal
             | CommandId::FlipImageVertical
             | CommandId::Trim
-            | CommandId::RevealAll => self.require_document_idle().is_ok() && self.canvas_geometry_refusal().is_none(),
+            | CommandId::RevealAll => self.require_action_idle().is_ok() && self.canvas_geometry_refusal().is_none(),
             CommandId::CropCanvasToSelection => {
-                self.require_document_idle().is_ok() && self.crop_to_selection_refusal().is_none()
+                self.require_action_idle().is_ok() && self.crop_to_selection_refusal().is_none()
             }
             CommandId::GrowSelection
             | CommandId::ShrinkSelection
             | CommandId::FeatherSelection
             | CommandId::BorderSelection
-            | CommandId::SmoothSelection => self.require_document_idle().is_ok() && self.refine_refusal().is_none(),
+            | CommandId::SmoothSelection => self.require_action_idle().is_ok() && self.refine_refusal().is_none(),
             CommandId::TransformSelectionOutline => {
-                self.require_document_idle().is_ok() && self.outline_refusal().is_none()
+                self.require_action_idle().is_ok() && self.outline_refusal().is_none()
             }
             CommandId::ClearLayer | CommandId::FillSelection => {
                 let vector = active.is_some_and(|handle| scene.vector_layer(handle).is_some());
-                self.require_document_idle().is_ok()
+                self.require_action_idle().is_ok()
                     && (editable || self.object_content())
                     && !matches!(document.working.target, Some(SourceTarget::Coverage(_)))
                     && !document.is_locked(active.unwrap_or_default())
@@ -2772,7 +2773,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             CommandId::AddLayer | CommandId::NewVectorLayer => idle,
             CommandId::UseReferenceBelow => {
-                self.require_document_idle().is_ok() && self.use_reference_below_reason().is_none()
+                self.require_action_idle().is_ok() && self.use_reference_below_reason().is_none()
             }
             CommandId::DeleteLayer => idle && self.can_delete_layer_rows(self.selected_layers()),
             CommandId::RaiseLayer | CommandId::LowerLayer => idle && self.layer_step_edit(id == CommandId::RaiseLayer).is_ok(),
@@ -2933,9 +2934,11 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.engine.complete_liquify_momentum();
             self.engine.backend_mut().shader_input();
         }
-        if self.defer_document_action(&action) {
-            return Ok(self.changed(regions::COMMANDS, true));
-        }
+        let transforming = self.operation.active() || self.objects.placing();
+        let cropping = self.cropping();
+        let revision = self.engine.document().revision;
+        if !self.rendering_suspended && !self.workspace_read_only && !self.workspace_transition && self.applies_open_mode(&action) { self.prepare_document_action()?; }
+        if self.defer_document_action(&action) { return Ok(self.changed(regions::BRUSH | regions::COMMANDS, true)); }
         self.end_holds_for_tool_choice(&action);
         if let UiAction::CommandSearch { action } = action {
             return self.command_search_action(action);
@@ -2961,13 +2964,6 @@ impl<R: CanvasRenderer> UiSession<R> {
             return self.notice_action(id, accept, action);
         }
         self.finish_liquify_contact(&action)?;
-        if (self.operation.placing() || self.objects.placing()) && matches!(&action,
-            UiAction::SelectLayer { .. } | UiAction::SetLayerVisibility { .. }
-            | UiAction::SetLayerOpacity { .. }
-            | UiAction::Effect { .. } | UiAction::FilterPicker { .. })
-        {
-            return Err(self.localization().text(MessageId::COMMANDS_APPLY_OR_CANCEL_THE_TRANSFORM_FIRST).to_string());
-        }
         // An interrupted property contact still needs to restore its preview.
         // The gesture handler cancels it when editing is no longer available.
         let continuing_effect_gesture = matches!(&action,UiAction::Effect{action:
@@ -3025,10 +3021,6 @@ impl<R: CanvasRenderer> UiSession<R> {
         if self.workspace_transition && !continuing_effect_gesture && !action.is_host_report() && !canceling_workspace_gesture {
             return Err("A workspace change is in progress".into());
         }
-        let transforming = self.operation.active() || self.objects.placing();
-        if self.accept_transform_for_tool(&action)? {
-            return Ok(self.changed(regions::BRUSH | regions::COMMANDS, true));
-        }
         use regions::*;
         let model_revision = self.workspace_model_revision;
         let content_revision = self.workspace_content_revision;
@@ -3052,7 +3044,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                 ..
             }
         );
-        let revision = self.engine.document().revision;
         let was_expanded = self.state.customization.has_drawer();
         let was_filter_drawer = self.filter_drawer_open();
         let was_zen = self.state.workspace.zen_mode;
@@ -3603,6 +3594,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.workspace_tab_drag = None;
                 self.state.customization = CustomizationState::default();
                 (LAYOUT | CUSTOMIZATION | BUBBLES | bubbles.regions, bubbles.canvas_wake)
+            }
+            UiAction::FileDrop { id, intent } => {
+                if let Some(reason) = self.command_disabled_reason(intent.command()) { return Err(reason); }
+                self.request_document_with_id(id, match intent { ImportIntent::Open => DocumentRequest::Open, ImportIntent::Place => DocumentRequest::Place })?;
+                (DOCUMENT | HOST, false)
             }
             UiAction::Invoke { command } => {
                 if let Some(reason) = self.command_disabled_reason(command) { return Err(reason); }
@@ -4327,6 +4323,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         if self.refresh_commands() {
             changed |= COMMANDS;
         }
+        if cropping && !self.cropping() { changed |= regions::CAMERA; }
         let change = self.changed(changed, wake || transforming != (self.operation.active() || self.objects.placing()));
         // Preserve legacy region notifications, but let incremental consumers
         // distinguish ordinary motion from tear-off and every other UI change.
@@ -5112,7 +5109,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 Ok((BRUSH | COMMANDS, true))
             }
             CommandId::ScaleRotate => {
-                self.begin_transform()?;
+                self.layer_action(LayerAction::Tool { tool: LayerCanvasTool::Transform })?;
                 Ok((BRUSH | DOCUMENT, true))
             }
             CommandId::TransformSelectionOutline => {
@@ -5492,13 +5489,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             CommandId::Undo | CommandId::Redo => {
                 let redo = command == CommandId::Redo;
                 if !redo && self.remove_vector_path_point()? { return Ok((BRUSH | DOCUMENT | COMMANDS, true)); }
-                if self.operation.placing() || self.cropping() {
+                if self.operation.active() || self.applying_mode() {
                     if redo {
-                        return Err(if self.operation.placing() {
-                            "Apply or cancel the transform first"
-                        } else {
-                            "Apply or cancel the crop first"
-                        }.into());
+                        return Err(self.operation_refusal().to_string());
                     }
                     self.finish_transform(false)?;
                     return Ok((BRUSH | DOCUMENT | COMMANDS, true));
@@ -5732,11 +5725,18 @@ impl<R: CanvasRenderer> UiSession<R> {
         Ok(())
     }
 
-    fn request(&mut self, kind: HostRequestKind) -> Result<(), String> {
+    fn reserve_request_id(&mut self) -> Result<u32, String> {
         let id = self.next_request;
         self.next_request = id.checked_add(1).ok_or("Host request IDs exhausted")?;
+        Ok(id)
+    }
+    fn queue_host_request(&mut self, id: u32, kind: HostRequestKind) {
         self.state.requests.push(HostRequest { id, kind });
         self.host_requests_changed = true;
+    }
+    fn request(&mut self, kind: HostRequestKind) -> Result<(), String> {
+        let id = self.reserve_request_id()?;
+        self.queue_host_request(id, kind);
         Ok(())
     }
     fn open_settings(&mut self, page: SettingsPage) {

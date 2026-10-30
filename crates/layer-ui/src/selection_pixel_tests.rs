@@ -116,7 +116,7 @@ mod selection_pixel_checks {
         invoke(&mut s, CommandId::ReturnToArtwork);
         s.dispatch(UiAction::Layer { action: LayerAction::FillSelection }).unwrap();
         invoke(&mut s, CommandId::ScaleRotate);
-        assert_eq!(reason(&s).as_deref(), Some("Apply or cancel the transform first"));
+        assert_eq!(reason(&s), None);
     }
 
     #[test]
@@ -200,7 +200,7 @@ mod selection_pixel_checks {
         assert_eq!(reason(&s).as_deref(), Some("The active layer is locked"));
         s.dispatch(UiAction::Layer { action: LayerAction::Lock { id: crate::session::occurrence_token(id), value: false } }).unwrap();
         invoke(&mut s, CommandId::ScaleRotate);
-        assert_eq!(reason(&s).as_deref(), Some("Apply or cancel the transform first"));
+        assert_eq!(reason(&s), None);
         invoke(&mut s, CommandId::CancelTransform);
         invoke(&mut s, CommandId::QuickMask);
         assert_eq!(reason(&s).as_deref(), Some("Return to the artwork first"));

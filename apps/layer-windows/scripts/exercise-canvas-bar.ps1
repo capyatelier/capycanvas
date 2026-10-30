@@ -93,7 +93,7 @@ function Kind {(Model).state.canvas_bar.context.kind}
 function Paint {@((Model).state.layers|ForEach-Object {"$($_.id):$($_.paint_revision)"}) -join ','}
 function Value([string]$Id){((Model).state.tool_settings|Where-Object id -eq $Id).value}
 function Glass-State($Snapshot){
- [ordered]@{selection=$Snapshot.state.layer_tools.has_selection;paint=@($Snapshot.state.layers|Select-Object id,paint_revision);document=$Snapshot.state.document_file|Select-Object epoch,revision,modified;viewport=$Snapshot.state.camera.viewport;chrome=$Snapshot.state.customization;panel_revision=$Snapshot.windows_glass.panel_revision}|ConvertTo-Json -Depth 20 -Compress
+ [ordered]@{selection=$Snapshot.state.layer_tools.has_selection;paint=@($Snapshot.state.layers|Select-Object id,paint_revision);document=$Snapshot.state.document_file|Select-Object epoch,revision,modified;viewport=$Snapshot.state.camera.viewport;chrome=$Snapshot.state.customization}|ConvertTo-Json -Depth 20 -Compress
 }
 function Bar-Visibility([bool]$Visible){
  $choice=@((Model).state.commands|Where-Object id -eq 'show_canvas_action_bar')[0]

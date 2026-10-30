@@ -222,9 +222,6 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     pub(super) fn begin_crop(&mut self, angle: Option<f32>) -> Result<(), String> {
         self.require_idle()?;
-        if self.operation.transforming() {
-            return Err("Apply or cancel the transform first".into());
-        }
         if self.cropping() {
             if let Some(angle) = angle {
                 self.set_crop_angle(angle)?;
@@ -232,13 +229,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             return Ok(());
         }
         refused(self.canvas_geometry_refusal())?;
+        let previous = self.layer_interaction.tool;
         self.cancel_layer_gesture()?;
-        let doc = self.engine.document();
-        let canvas = doc.composition().size;
-        let previous = match self.layer_interaction.tool {
-            LayerCanvasTool::Crop | LayerCanvasTool::Transform => LayerCanvasTool::Move,
-            tool => tool,
-        };
+        let canvas = self.engine.document().composition().size;
         self.operation.crop = Some(CropSession {
             frame: CropFrame::canvas(canvas),
             portrait: canvas[1] > canvas[0],
@@ -303,7 +296,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn crop_command(&mut self, command: CommandId) -> Result<(), String> {
         self.require_idle()?;
         if command == CommandId::Crop {
-            return self.begin_crop(None);
+            return self.layer_action(LayerAction::Tool { tool: LayerCanvasTool::Crop });
         }
         let session = self.operation.crop.as_mut().ok_or("Choose the Crop tool first")?;
         let (canvas, angle, [w, h]) = (session.canvas, session.frame.angle, session.frame.size);

@@ -1,6 +1,26 @@
 //! Semantic commands and command search. Catalog entries are projections of the
 //! existing command/menu/tool schemas; execution always returns to dispatch.
 use super::*;
+
+pub(super) fn document_action(command: CommandId) -> bool {
+    matches!(command,
+        CommandId::SdrRendition | CommandId::PreviewSdr | CommandId::SoftProofSetup | CommandId::SoftProof | CommandId::RepairSourceProfile
+        | CommandId::RasterizeSource | CommandId::AssignProfile | CommandId::ConvertColorSpace | CommandId::ChangeBitDepth | CommandId::ImportImage
+        | CommandId::PasteImage | CommandId::PasteAsNewImage | CommandId::PasteInPlace | CommandId::PasteAtView | CommandId::PasteAtCursor
+        | CommandId::PasteInto | CommandId::Copy | CommandId::Cut | CommandId::CopyMerged | CommandId::CopyPixels | CommandId::DocumentProperties
+        | CommandId::NewDocument | CommandId::OpenDocument | CommandId::ExportDocument | CommandId::ExportAgain | CommandId::UseReferenceBelow
+        | CommandId::SelectAll | CommandId::Deselect | CommandId::InvertSelection | CommandId::ClearLayer | CommandId::FillSelection
+        | CommandId::ClearSelected | CommandId::ClearOutside | CommandId::CopySelectionToLayer | CommandId::CutSelectionToLayer
+        | CommandId::DiscardPaintEdits | CommandId::LiquifyAdjust | CommandId::LiquifyReset | CommandId::MergeDown | CommandId::MergeGroup
+        | CommandId::MergeVisible | CommandId::FlattenImage | CommandId::StampVisible | CommandId::NewDodgeBurnLayer
+        | CommandId::FrequencySeparation | CommandId::BlendPerceptual | CommandId::BlendLinear | CommandId::LoadSelectionLayer
+        | CommandId::InvertSelectionLayer | CommandId::InvertLayerMask | CommandId::LayerMaskEnabled | CommandId::ApplyLayerMask
+        | CommandId::CanvasSize | CommandId::CropCanvasToSelection | CommandId::GrowSelection | CommandId::ShrinkSelection
+        | CommandId::FeatherSelection | CommandId::BorderSelection | CommandId::SmoothSelection | CommandId::TransformSelectionOutline
+        | CommandId::ImageSize | CommandId::RotateImageLeft | CommandId::RotateImageRight | CommandId::RotateImage180
+        | CommandId::FlipImageHorizontal | CommandId::FlipImageVertical | CommandId::Trim | CommandId::RevealAll)
+}
+
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -989,74 +1009,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             return l.text(MessageId::COMMANDS_PAINTING_IS_UNAVAILABLE_SAVE_THE_DRAWING_AND_REOPEN_IT);
         }
         let gate = match command {
-            C::SdrRendition
-            | C::PreviewSdr
-            | C::SoftProofSetup
-            | C::SoftProof
-            | C::RepairSourceProfile
-            | C::RasterizeSource
-            | C::AssignProfile
-            | C::ConvertColorSpace
-            | C::ChangeBitDepth
-            | C::ImportImage
-            | C::PasteImage
-            | C::PasteAsNewImage
-            | C::PasteInPlace
-            | C::PasteAtView
-            | C::PasteAtCursor
-            | C::PasteInto
-            | C::Copy
-            | C::Cut
-            | C::CopyMerged
-            | C::CopyPixels
-            | C::DocumentProperties
-            | C::NewDocument
-            | C::OpenDocument
-            | C::ExportDocument
-            | C::ExportAgain
-            | C::UseReferenceBelow
-            | C::SelectAll
-            | C::Deselect
-            | C::InvertSelection
-            | C::ClearLayer
-            | C::FillSelection
-            | C::ClearSelected
-            | C::ClearOutside
-            | C::CopySelectionToLayer
-            | C::CutSelectionToLayer
-            | C::DiscardPaintEdits
-            | C::LiquifyAdjust
-            | C::LiquifyReset
-            | C::MergeDown
-            | C::MergeGroup
-            | C::MergeVisible
-            | C::FlattenImage
-            | C::StampVisible
-            | C::NewDodgeBurnLayer
-            | C::FrequencySeparation
-            | C::BlendPerceptual
-            | C::BlendLinear
-            | C::LoadSelectionLayer
-            | C::InvertSelectionLayer
-            | C::InvertLayerMask
-            | C::LayerMaskEnabled
-            | C::ApplyLayerMask
-            | C::CanvasSize
-            | C::CropCanvasToSelection
-            | C::GrowSelection
-            | C::ShrinkSelection
-            | C::FeatherSelection
-            | C::BorderSelection
-            | C::SmoothSelection
-            | C::TransformSelectionOutline
-            | C::ImageSize
-            | C::RotateImageLeft
-            | C::RotateImageRight
-            | C::RotateImage180
-            | C::FlipImageHorizontal
-            | C::FlipImageVertical
-            | C::Trim
-            | C::RevealAll => self.require_document_idle(),
+            command if document_action(command) => self.require_action_idle(),
             C::SaveDocument | C::SaveDocumentAs => self.require_raster_snapshot(),
             C::CloseDocument => self.require_document_snapshot_idle(),
             C::ResetLayout if self.managed_workspace.is_some() => self.require_workspace_idle(),
@@ -1077,7 +1030,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             C::LiquifyAdjust | C::LiquifyReset => l.text(MessageId::COMMANDS_LIQUIFY_NO_CHANGES),
             C::ExportAgain => l.text(MessageId::COMMANDS_EXPORT_FIRST),
             C::Undo => l.text(MessageId::COMMANDS_NOTHING_TO_UNDO),
-            C::Redo if self.cropping() => l.text(MessageId::COMMANDS_APPLY_OR_CANCEL_THE_CROP_FIRST),
+            C::Redo if self.vector_paths.drafting() => l.text(MessageId::COMMAND_FINISH_PATH),
+            C::Redo if self.operation.active() || self.objects.placing() => self.operation_refusal(),
             C::Redo => l.text(MessageId::COMMANDS_NOTHING_TO_REDO),
             C::UndoWorkspace | C::RedoWorkspace if self.state.customization.header_editing => {
                 l.text(MessageId::COMMANDS_FINISH_CUSTOMIZING_THE_TITLE_BAR_FIRST)
@@ -1130,11 +1084,6 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             C::EditLayerMask => l.text(MessageId::COMMANDS_ALREADY_EDITING_THE_LAYER_MASK),
             C::EditLayerContent => l.text(MessageId::COMMANDS_ALREADY_EDITING_THE_LAYER_CONTENT),
-            C::QuickMask | C::NewSelectionLayer | C::PlacementOriginalSize | C::ScaleRotate
-                if self.operation.active() && !self.operation.placing() =>
-            {
-                self.operation_refusal()
-            }
             C::PlacementOriginalSize => l.text(MessageId::COMMANDS_ORIGINAL_SIZE_SELECT_IMAGES),
             C::Reselect if selection => l.text(MessageId::COMMANDS_DESELECT_BEFORE_RESTORING_THE_PREVIOUS_SELECTION),
             C::Reselect => l.text(MessageId::COMMANDS_NO_PREVIOUS_SELECTION_TO_RESTORE),

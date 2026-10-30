@@ -322,11 +322,18 @@ fn native_multiple_photo_import_chooser() {
         driver.click_placement(&w, if apply { "canvas-bar-ApplyTransform" } else { "canvas-bar-CancelTransform" });
         ready(&w);
         if apply {
+            assert_eq!(state(&w).layer_tools.tool, LayerCanvasTool::Paint);
+            assert!(state(&w).canvas_bar.is_none());
+            assert_eq!(ui_session(&w).engine().document().selected_objects(), imported.selected_objects());
             let saved = super::place_source::snapshot(&w);
             let reopened = open_native_document(std::io::Cursor::new(saved));
             assert_eq!(artwork_manifest(&reopened), artwork_manifest(&imported));
             let pixel = document_pixel(&w, [100, 75]);
             assert!(pixel[0] > 180 && pixel[2] < 100, "photos cover the paint below: {pixel:?}");
+            native_pen_path(&w, &[[65., 75.], [100., 75.], [135., 75.]]);
+            ready(&w);
+            assert!(state(&w).notice.is_some(), "painting on the active image offers artwork actions");
+            assert_live_artwork_eq(ui_session(&w).engine().document(), &imported);
             invoke(&w, CommandId::AddLayer);
             invoke(&w, CommandId::Pen);
             ready(&w);

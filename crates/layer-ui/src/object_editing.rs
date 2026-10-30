@@ -30,7 +30,7 @@ struct Gesture {
     pivot: bool,
 }
 
-struct Placement { insert: Edit, inverse: Edit, objects: Vec<ImageObjectHandle> }
+struct Placement { insert: Edit, inverse: Edit, objects: Vec<ImageObjectHandle>, previous: LayerCanvasTool }
 
 #[derive(Default)]
 pub(super) struct ObjectEditing {
@@ -508,7 +508,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let inverse = self.engine.document().clone().apply(insert.clone()).map_err(error)?;
         self.engine.preview_edit(insert.clone()).map_err(error)?;
         let layer = objects.first().and_then(|object| self.engine.document().scene().object_owner(*object));
-        self.objects.placement = Some(Placement { insert, inverse, objects });
+        self.objects.placement = Some(Placement { insert, inverse, objects, previous: self.layer_interaction.tool });
         self.objects.layer_move = false;
         self.engine.backend_mut().prepare_moving_layer(layer);
         self.object_tool(LayerCanvasTool::Transform)?;
@@ -518,6 +518,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         Ok(())
     }
     pub(super) fn finish_object_placement(&mut self, apply: bool) -> Result<(), String> {
+        if !apply && self.mode_apply_pending() { self.discard_mode_actions(); }
         self.finish_object_gesture(false)?;
         let Some(placement) = self.objects.placement.take() else { return Err("No active placement".into()); };
         let doc = self.engine.document();
@@ -527,7 +528,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.engine.backend_mut().prepare_moving_layer(None);
         self.objects.changed = true;
         if let Some(finish) = finish { self.layer_edit(Edit::Batch(vec![placement.insert, finish]))?; }
-        self.object_tool(LayerCanvasTool::Move)?;
+        self.object_tool(placement.previous)?;
         self.refresh_document();
         self.refresh_commands();
         Ok(())
@@ -580,7 +581,6 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn place_image_objects(&mut self, sources: Vec<(String, layer_core::color::source::SourceImage)>, centre: Option<Point>,
         destination: Option<ImageLayerDestination>, interactive: bool, fit: bool) -> Result<(), String> {
         self.require_document_idle()?;
-        if self.operation.placing() || self.objects.placing() { return Err(self.localization().text(MessageId::COMMANDS_APPLY_OR_CANCEL_THE_TRANSFORM_FIRST).to_string()); }
         if !self.engine.backend().supports_tiled_sources() { return Err("This renderer does not support tiled photo layers".into()); }
         if sources.is_empty() { return Err("Choose at least one image".into()); }
         let centre = centre.map_or_else(|| if interactive { self.engine.document().composition().size.map(|v| f64::from(v) * 0.5) } else { self.view_centre64() },

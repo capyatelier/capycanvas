@@ -73,16 +73,14 @@ async fn spool(clipboard: &gdk::Clipboard, mime: &str) -> Result<TemporaryImage,
 
 /// Import chosen or dropped images, or with `mode` paste an image another
 /// application put on the clipboard.
-pub(super) async fn run(w: &Rc<Workspace>, mode: Option<layer_ui::PasteMode>) -> Result<bool, String> {
+pub(super) async fn run(w: &Rc<Workspace>, id: Option<u32>, mode: Option<layer_ui::PasteMode>) -> Result<bool, String> {
     let paste = mode.is_some();
     let request = mode.map_or(layer_ui::DocumentRequest::Place, |mode| layer_ui::DocumentRequest::Paste { mode });
-    let incoming = if paste { None } else { w.image_drop.borrow_mut().take() };
+    let incoming = if paste { None } else { w.image_drop.borrow_mut().take().filter(|drop| Some(drop.request) == id) };
     let (context, policy, working) = {
         let gpu = w.gpu.borrow();
         let session = &gpu.as_ref().ok_or("Canvas unavailable")?.session;
-        let context = if let Some(d) = &incoming {
-            layer_ui::ImagePlacementContext { epoch: d.epoch, revision: d.revision, target: d.target, center: d.center, destination: d.destination }
-        } else { session.image_placement_context(None, None)? };
+        let context = session.image_placement_context(incoming.as_ref().and_then(|d| d.center), incoming.as_ref().and_then(|d| d.destination))?;
         (context, session.state().settings.photo_open, session.engine().document().composition().color.space)
     };
     let paths = if paste {

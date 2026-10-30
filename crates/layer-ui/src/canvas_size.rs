@@ -258,9 +258,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// Why no geometry command can change the canvas right now.
     pub(super) fn canvas_geometry_refusal(&self) -> Option<std::sync::Arc<str>> {
         let l = self.localization();
-        if self.operation.active() {
-            Some(self.operation_refusal())
-        } else if self.selection_masks.target().is_some() {
+        if self.selection_masks.target().is_some() {
             Some(l.text(MessageId::COMMANDS_RETURN_TO_THE_ARTWORK_FIRST))
         } else if self.state.document_file.busy {
             Some(l.text(MessageId::COMMANDS_WAIT_FOR_THE_CURRENT_FILE_OPERATION))

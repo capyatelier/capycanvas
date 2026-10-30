@@ -1,4 +1,41 @@
 fn vector_session() -> (UiSession<Recorder>, OccurrenceHandle) { vector_session_on(Platform::Gtk) }
+
+#[test]
+fn picking_a_tool_finishes_a_valid_path_draft_and_drops_an_incomplete_one() {
+    for count in [1, 3] {
+        let (mut s, layer) = vector_session();
+        s.object_tool(LayerCanvasTool::Figure { shape: FigureShape::Path, paint: FigurePaint::Outline }).unwrap();
+        for (i, at) in [[100., 100.], [300., 120.], [200., 300.]][..count].iter().enumerate() {
+            let point = surface_at(&s, *at);
+            press(&mut s, 10 + i as u64 * 5, &[point, point]);
+        }
+        assert!(s.vector_paths.drafting());
+        invoke(&mut s, CommandId::Pencil);
+        assert!(!s.vector_paths.drafting());
+        assert_eq!(s.engine.document().scene().vector_layer(layer).unwrap().path_count(), usize::from(count > 1));
+    }
+}
+
+#[test]
+fn explicit_path_finish_reports_a_locked_draft_and_implicit_finish_drops_it() {
+    for explicit in [false, true] {
+        let (mut s, layer) = vector_session();
+        s.object_tool(LayerCanvasTool::Figure { shape: FigureShape::Path, paint: FigurePaint::Outline }).unwrap();
+        for (i, at) in [[100., 100.], [300., 120.]].into_iter().enumerate() {
+            let point = surface_at(&s, at);
+            press(&mut s, 10 + i as u64 * 5, &[point, point]);
+        }
+        let doc = s.engine.document();
+        let mut occurrence = doc.scene().occurrence(layer).unwrap().clone(); occurrence.locked = true;
+        let edit = layer_core::Edit::Occurrence(layer_core::authored::RecordChange::replace(&doc.artwork.occurrences, layer, Some(occurrence)).unwrap());
+        s.engine.apply_edit(edit).unwrap();
+        let result = s.dispatch(UiAction::Invoke { command: if explicit { CommandId::FinishPath } else { CommandId::Pencil } });
+        if explicit { assert_eq!(result.unwrap_err(), s.localization().text(MessageId::COMMANDS_THE_ACTIVE_LAYER_IS_LOCKED).as_ref()); }
+        else { result.unwrap(); }
+        assert!(!s.vector_paths.drafting());
+        assert_eq!(s.engine.document().scene().vector_layer(layer).unwrap().path_count(), 0);
+    }
+}
 fn vector_session_on(platform: Platform) -> (UiSession<Recorder>, OccurrenceHandle) {
     let mut s = session(platform);
     s.select_brush(DefaultBrushPreset::GPen as u32).unwrap();
@@ -1717,35 +1754,18 @@ fn the_eraser_mode_and_outline_width_choice_come_back_with_the_preferences() {
 }
 
 #[test]
-fn finishing_a_path_whose_layer_changed_explains_why_and_adds_nothing() {
-    let (mut s, handle) = vector_session();
-    let click = |s: &mut UiSession<Recorder>, first: u64, at: [f64; 2]| { let p = surface_at(s, at); press(s, first, &[p, p]); };
-    let draft = |s: &mut UiSession<Recorder>, first: u64| {
-        s.dispatch(UiAction::Layer { action: LayerAction::Tool { tool: LayerCanvasTool::Figure { shape: FigureShape::Path, paint: FigurePaint::Outline } } }).unwrap();
-        for (i, at) in [[100., 100.], [300., 120.], [200., 300.]].into_iter().enumerate() { click(s, first + i as u64 * 5, at); }
-        assert!(s.command(CommandId::FinishPath).enabled);
-    };
-    let text = |s: &UiSession<Recorder>, id| s.localization().text(id).to_string();
-    let checkpoint = s.engine.checkpoint();
-    draft(&mut s, 10);
-    layer(&mut s, LayerAction::Lock { id: occurrence_token(handle), value: true });
-    assert_eq!(s.dispatch(UiAction::Invoke { command: CommandId::FinishPath }).err(), Some(text(&s, MessageId::COMMANDS_THE_ACTIVE_LAYER_IS_LOCKED)));
-    assert!(!s.command(CommandId::FinishPath).enabled, "the draft is gone");
-    layer(&mut s, LayerAction::Lock { id: occurrence_token(handle), value: false });
-    draft(&mut s, 40);
-    layer(&mut s, LayerAction::New { group: false, clipped: false });
-    let paint = s.engine.document().working.occurrence.unwrap();
-    assert_eq!(s.dispatch(UiAction::Invoke { command: CommandId::FinishPath }).err(), Some(text(&s, MessageId::OBJECTS_NOTICE_STALE)));
-    assert_eq!(s.engine.document().scene().vector_layer(handle).unwrap().path_count(), 0);
-    draft(&mut s, 70);
-    layer(&mut s, LayerAction::Lock { id: occurrence_token(paint), value: true });
-    assert_eq!(s.dispatch(UiAction::Invoke { command: CommandId::FinishPath }).err(), Some(text(&s, MessageId::COMMANDS_THE_ACTIVE_LAYER_IS_LOCKED)));
-    layer(&mut s, LayerAction::Lock { id: occurrence_token(paint), value: false });
-    draft(&mut s, 100);
-    layer(&mut s, LayerAction::Select { id: occurrence_token(handle), mask: false });
-    assert_eq!(s.dispatch(UiAction::Invoke { command: CommandId::FinishPath }).err(), Some(text(&s, MessageId::OBJECTS_NOTICE_STALE)));
-    assert!(s.engine.document().target_operations(s.engine.document().scene().source_target(paint).unwrap()).is_none_or(<[_]>::is_empty), "nothing is painted");
-    let _ = checkpoint;
+fn layer_changes_finish_the_path_before_switching_or_locking() {
+    for lock in [false, true] {
+        let (mut s, layer_id) = vector_session();
+        s.object_tool(LayerCanvasTool::Figure { shape: FigureShape::Path, paint: FigurePaint::Outline }).unwrap();
+        for (i, at) in [[100., 100.], [300., 120.], [200., 300.]].into_iter().enumerate() {
+            let point = surface_at(&s, at);
+            press(&mut s, 10 + i as u64 * 5, &[point, point]);
+        }
+        layer(&mut s, if lock { LayerAction::Lock { id: occurrence_token(layer_id), value: true } } else { LayerAction::New { group: false, clipped: false } });
+        assert!(!s.vector_paths.drafting());
+        assert_eq!(s.engine.document().scene().vector_layer(layer_id).unwrap().path_count(), 1);
+    }
 }
 
 #[test]

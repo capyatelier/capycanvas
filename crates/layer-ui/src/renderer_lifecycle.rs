@@ -53,7 +53,6 @@ impl<R: CanvasRenderer> UiSession<R> {
             "tool": self.layer_interaction.tool, "transform_open": self.operation.transforming(),
             "transform_pixels_pending": self.content_bounds.baking(),
             "transform_selection_pending": self.region_tools.applying_transform(),
-            "transform_tool_requested": self.operation.next_tool.is_some(),
             "raster_backing_pending": self.engine.raster_backing_pending(),
             "content_bounds": self.content_bounds.diagnostics(),
             "input_pending": self.engine.has_pending_input(), "stroke_active": self.engine.has_active_stroke(),
@@ -69,6 +68,11 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.require_workspace_idle().is_ok() && !self.workspace_transition && !self.state.customization.header_editing
             && self.deferred_edits.is_empty() && self.state.requests.is_empty() && !self.state.document_file.busy
     }
+    pub fn can_switch_document(&self) -> bool {
+        (self.rendering_suspended || (self.require_action_idle().is_ok() && self.require_workspace_idle().is_ok()))
+            && !self.workspace_transition && !self.state.customization.header_editing
+            && self.state.requests.is_empty() && !self.state.document_file.busy
+    }
     pub fn can_park_document(&self) -> bool {
         (self.rendering_suspended || (self.require_workspace_idle().is_ok()
             && (if self.state.document_file.close_ready { self.require_document_snapshot_idle() } else { self.require_document_idle() }).is_ok()
@@ -80,7 +84,6 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn discard_render_requests(&mut self) {
         self.engine.clear_liquify_preview();
         self.operation.liquify = None;
-        self.operation.next_tool = None;
         self.cancel_content_bounds();
         self.content_bounds = Default::default();
         self.resubmit_conversion();
@@ -89,7 +92,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.cancel_tonal();
         self.region_tools.renderer_replaced();
         self.painted_selections.renderer_replaced();
-        self.deferred_edits.clear();
+        self.discard_mode_actions();
         self.reset_filter_previews();
     }
 

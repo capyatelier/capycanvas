@@ -63,6 +63,7 @@ impl WebApp {
     }
     pub fn document_tabs(&self, width: f32) -> Result<JsValue, JsValue> {
         serialize(&serde_json::json!({
+            "available": self.session.can_switch_document(),
             "tabs": self.documents.labels(&self.session.state().document_file, |s| &s.state().document_file, self.session.localization()),
             "selected": self.documents.selected(),
             "upcoming_id": self.documents.upcoming_id(),
@@ -73,6 +74,12 @@ impl WebApp {
             "storage_error": self.documents.storage_error(),
             "resident_bytes": self.documents.resident_bytes(),
         }))
+    }
+
+    pub fn prepare_document_switch(&mut self) -> Result<(), JsValue> {
+        self.session.prepare_document_action().map_err(js)?;
+        if !self.session.can_switch_document() { return Err(js(layer_ui::DocumentTransportRefusal::SwitchOperation.message(self.session.localization()))); }
+        Ok(())
     }
 
     /// Poll without blocking the browser: an immediate Undo may have moved an

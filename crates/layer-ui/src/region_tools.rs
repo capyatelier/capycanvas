@@ -357,7 +357,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             let target = self.region_tools.target.take_if(|t| {
                 result.as_ref().map_or(!queued, |result| t.generation == result.request_id)
             });
-            let result = result.map_err(error)?;
+            let result = result.map_err(|cause| { if target.as_ref().is_some_and(|t| matches!(t.purpose, Purpose::Transform)) { self.discard_mode_actions(); } error(cause) })?;
             let doc = self.engine.document();
             if let Some(target) = target.filter(|t| doc.owner == t.owner && doc.revision == t.revision && doc.working.occurrence == t.layer && doc.working.target == t.source) {
                 match target.purpose {

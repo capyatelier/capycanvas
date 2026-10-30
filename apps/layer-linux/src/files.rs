@@ -240,7 +240,7 @@ async fn document_request(
     request: &DocumentRequest,
 ) -> Result<bool, String> {
     if matches!(request, DocumentRequest::ImportLookup {..}) {
-        let Some((file,_)) = choose_file(w, request).await? else {return Ok(false);};
+        let Some((file,_)) = choose_file(w, id, request).await? else {return Ok(false);};
         let path = file.path().ok_or_else(|| DocumentHostError::ChooseDeviceFile.message(&w.localization()))?;
         let resource = gio::spawn_blocking(move || {
             use std::io::Read;
@@ -258,7 +258,7 @@ async fn document_request(
         return color::history(w, id).await;
     }
     if matches!(request, DocumentRequest::Place) {
-        return place::run(w, None).await;
+        return place::run(w, Some(id), None).await;
     }
     if let DocumentRequest::Paste { mode } = request {
         return clipboard::paste(w, *mode).await;
@@ -288,7 +288,7 @@ async fn document_request(
     if let DocumentRequest::Export { name, owner, repeat, .. } = request {
         return export::run(w, id, name, *owner, repeat.as_ref()).await;
     }
-    let Some((file,approved)) = choose_file(w, request).await? else {
+    let Some((file,approved)) = choose_file(w, id, request).await? else {
         return Ok(false);
     };
     let path = file.path().ok_or_else(|| DocumentHostError::ChooseDeviceFile.message(&w.localization()))?;
@@ -351,6 +351,7 @@ async fn document_request(
 
 async fn choose_file(
     w: &Workspace,
+    id: u32,
     request: &DocumentRequest,
 ) -> Result<Option<(gio::File,bool)>, String> {
     if let DocumentRequest::Save {
@@ -367,7 +368,7 @@ async fn choose_file(
         if reusable {return Ok(Some((file,false)));}
     }
     if matches!(request, DocumentRequest::Open)
-        && let Some(incoming) = w.image_drop.borrow_mut().take()
+        && let Some(incoming) = w.image_drop.borrow_mut().take().filter(|drop| drop.request == id)
     {
         return Ok(Some((incoming.files.into_iter().next().ok_or_else(|| DocumentHostError::NoDrawingToOpen.message(&w.localization()))?,false)));
     }

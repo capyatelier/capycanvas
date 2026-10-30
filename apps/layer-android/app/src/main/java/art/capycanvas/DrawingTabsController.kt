@@ -114,6 +114,7 @@ internal class DrawingTabsController(private val host: CanvasHost) {
                     }
                     return@launch
                 }
+                query(obj("op" to "prepare"))
                 check(JSONObject(query(obj("op" to "ready"))).optBoolean("available")) { "Finish the current operation before switching drawings" }
                 drain(); waitReady(); host.recovery.capture()?.join()
                 activate(id); selector=false

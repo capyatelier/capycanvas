@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {mkdir,writeFile} from 'node:fs/promises';
+import {createDrawing} from './new-drawing-fixture.mjs';
 
 const BLUE=[.1,.3,.8,1];
 const bar='.canvas-action-bar';
@@ -128,14 +129,24 @@ export async function checkCrop({call,evaluate,settle,device=false}) {
   const theme=await evaluate('layerApp.state().settings.theme ?? null'),sampleWidth=await evaluate('layerApp.state().color_picker.sample_width');
   let overlay='is unchecked because screenshots here omit WebGPU pixels';
   try {
+    await invoke('new_document');await evaluate(createDrawing({width:800,height:600}));
+    await wait('!layerApp.state().document_file.busy&&layerApp.app.brush_ready()');
     await send({type:'set_color_sample_size',width:1});
     await wait(`(()=>{[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent==='Keep for Later')?.click();return !document.querySelector('dialog[open]');})()`);
     if(await evaluate('layerApp.state().layer_tools.has_selection'))await invoke('deselect');
     await invoke('fit_canvas');await invoke('zoom_out');
     const [width,height]=await size();
+    await openCrop('mouse');await invoke('crop_ratio_sixteen_nine');
+    const appliedSize=[Math.round(await setting('crop_width')),Math.round(await setting('crop_height'))];
+    await key('b','KeyB',66);
+    await wait("layerApp.state().layer_tools.tool==='paint'");
+    assert.deepEqual(await size(),appliedSize,'Choosing Brush applies the open crop');
+    await invoke('undo');await wait(`JSON.stringify([layerApp.state().tabs[0].width,layerApp.state().tabs[0].height])==='${JSON.stringify([width,height])}'`);
+    await openCrop('mouse');await invoke('crop_ratio_free');await invoke('reset_transform');await invoke('cancel_transform');
     await invoke('rectangle_select');
     await drag(await screen(width*.2,height*.2),await screen(width*.8,height*.8),'mouse',6);
     await wait('layerApp.state().layer_tools.has_selection');
+    await send({type:'set_brush_opacity',value:1});
     await send({type:'set_color',rgba:BLUE});await invoke('fill_selection');await invoke('deselect');
     await sample(await screen(width*.5,height*.5),blue,'The fill paints the middle of the canvas');
     const center=await screen(width*.5,height*.5);
@@ -223,7 +234,7 @@ export async function checkCrop({call,evaluate,settle,device=false}) {
       const straight=await size();
       assert.ok(Math.abs(straight[0]-w)<=1&&Math.abs(straight[1]-h)<=1,`${kind}: Apply cuts the turned frame: ${straight} for ${[w,h]}`);
       assert.ok(straight[0]<width&&straight[1]<height,`${kind}: the level crop fits inside the old canvas`);
-      const around=(x,y)=>screen(straight[0]/2+x,straight[1]/2+y),edge=-height*.3+20;
+      const around=(x,y)=>screen(straight[0]/2+x,straight[1]/2+y),edge=-height*.3/Math.cos(turned);
       await sample(await around(0,0),blue,`${kind}: the fill stays in the middle`);
       await sample(await around(-width*.22,edge),white,`${kind}: the image turns, lowering the fill's top-left corner`);
       await sample(await around(width*.22,edge),blue,`${kind}: the image turns, raising the fill's top-right corner`);

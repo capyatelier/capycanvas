@@ -44,6 +44,14 @@ fn configures_transform(action: &UiAction) -> bool {
     }
 }
 
+fn mode_command(action: &UiAction) -> Option<CommandId> {
+    match action {
+        UiAction::CanvasBarEdit { action, .. } | UiAction::ToolbarEdit { action, .. } => mode_command(action),
+        UiAction::Invoke { command } => Some(*command),
+        _ => None,
+    }
+}
+
 impl<R: CanvasRenderer> UiSession<R> {
     fn defer_edit(&mut self, input: EditInput) {
         self.queue_edit(input, None);
@@ -167,14 +175,23 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.deferred_edits.iter().any(|edit| matches!(edit.input,
             EditInput::Action(UiAction::Invoke { command: CommandId::Undo })))
     }
+    pub fn file_drop_pending(&self, id: u32) -> bool {
+        self.state.requests.iter().any(|request| request.id == id)
+            || self.deferred_edits.iter().any(|edit| matches!(&edit.input, EditInput::Action(UiAction::FileDrop { id: pending, .. }) if *pending == id))
+    }
+    pub(super) fn mode_apply_pending(&self) -> bool {
+        self.applying_mode() || self.deferred_edits.iter().any(|edit| matches!(&edit.input, EditInput::Action(action) if mode_command(action) == Some(CommandId::ApplyTransform)))
+    }
+    pub(super) fn discard_mode_actions(&mut self) { self.deferred_edits.clear(); }
     fn deferrable(&self, action: &UiAction) -> bool {
+        if self.mode_apply_pending() && matches!(mode_command(action), Some(CommandId::CancelTransform | CommandId::ResetTransform | CommandId::Undo)) { return false; }
         let configures_brush = configures_brush(action);
         !(self.rendering_suspended || self.workspace_read_only || self.workspace_transition
             || (self.deferred_contact().unwrap_or(self.pen_contact) && !configures_brush
                 && !(self.deferred_contact() == Some(true) && held_actions::selects_tool(action)))
             || self.state.document_file.close_ready
             || matches!(action, UiAction::Invoke { command } if Self::command_without_document(*command) || NAVIGATOR_COMMANDS.contains(command) || matches!(command, CommandId::FitCanvas | CommandId::ActualPixels))
-            || !(configures_brush || held_actions::selects_tool(action) || matches!(action, UiAction::Invoke { .. } | UiAction::Selection { .. }
+            || !(configures_brush || held_actions::selects_tool(action) || matches!(action, UiAction::Invoke { .. } | UiAction::FileDrop { .. } | UiAction::Selection { .. }
                 | UiAction::Layer { .. } | UiAction::SelectLayer { .. }
                 | UiAction::SetLayerVisibility { .. } | UiAction::SetLayerOpacity { .. }
                 | UiAction::Effect { .. } | UiAction::FilterPicker { .. }
@@ -186,7 +203,8 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
     fn edits_pending(&self, action: &UiAction) -> bool {
         let history = matches!(action, UiAction::Invoke { command: CommandId::Undo | CommandId::Redo });
-        !self.deferred_edits.is_empty() || self.painted_selections.busy()
+        let applying = self.applying_mode() && self.applies_open_mode(action);
+        applying || !self.deferred_edits.is_empty() || self.painted_selections.busy()
             || (history && (self.region_tools.publishing_edit() || self.files.pending.is_some()))
             || (self.engine.raster_backing_pending() && !held_actions::selects_tool(action) && !configures_brush(action)
                 && !(configures_transform(action) && self.files.pending.is_none() && !self.region_tools.publishing_edit()))
@@ -213,8 +231,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                 deferred.pop_front();
                 continue;
             }
-            if (self.engine.raster_backing_pending()
-                && !matches!(&edit.input, EditInput::Action(action) if configures_transform(action))) || self.files.pending.is_some()
+            if self.applying_mode() || (self.engine.raster_backing_pending()
+                && !matches!(&edit.input, EditInput::Action(action) if configures_transform(action) || configures_brush(action) || held_actions::selects_tool(action))) || self.files.pending.is_some()
                 || matches!(&edit.input, EditInput::Pen { event, .. } if starts_contact(event) && !self.paint_ready())
                 || (matches!(&edit.input, EditInput::Action(action) if !configures_brush(action))
                     && (self.painted_selections.busy() || self.region_tools.publishing_edit()
@@ -225,10 +243,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             let edit = deferred.pop_front().unwrap();
             match edit.input {
                 EditInput::Action(action) => {
-                    if matches!(&action, UiAction::Invoke { command } if !self.command_flags(*command).0) { continue; }
+                    let applying = mode_command(&action) == Some(CommandId::ApplyTransform);
                     match self.dispatch(action) {
                         Ok(change) => changed |= change.regions,
-                        Err(error) => { self.notify(error); changed |= regions::COMMANDS; }
+                        Err(error) => { if applying { self.deferred_edits.append(&mut deferred); self.discard_mode_actions(); } self.notify(error); changed |= regions::COMMANDS; }
                     }
                 },
                 EditInput::Pen { event, camera, pressure, tilt } => {

@@ -144,8 +144,12 @@ export async function checkImagePlacement({call,evaluate,settle}) {
     assert.equal((await state()).document_file.modified,base.document_file.modified);
     assert.equal((await command('undo')).enabled,base.commands.find(c=>c.id==='undo').enabled,'Cancel leaves no history');
 
+    await invoke('pencil');
     await importFiles(files);
     await click('.canvas-action-bar [data-command=apply_transform]');
+    assert.equal((await state()).layer_tools.tool,'paint','Apply restores the previous brush');
+    assert.equal((await state()).canvas_bar??null,null,'The brush has no image frame or transform bar');
+    assert.equal((await selectedImages()).length,files.length,'Apply keeps the imported layers selected');
     const fitted=await save(),sources=imageIdentity(fitted),originalContents=imageContent(fitted);
     assert.equal(imageLayers(fitted).length,files.length);
     assert.equal(sources.length,files.length,'Each placed photo is one immutable image');

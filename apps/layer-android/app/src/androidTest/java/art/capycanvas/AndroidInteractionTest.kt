@@ -6830,11 +6830,12 @@ class AndroidInteractionTest {
             waitFor("the Photo workspace", 30_000) { host.workspaceManager?.optString("id") == "builtin:workspace:photographer" && host.workspaceManager?.optBoolean("busy") == false }
             command("fit_canvas"); SystemClock.sleep(300)
             fun at(x: Double, y: Double) = listOf(width * x, height * y)
+            val previousTool = canvasTool()
             host.importImage(texturedPhoto(width.toInt(), height.toInt()))
             waitFor("the placement bar", 10_000) { barKind() == "placement" }
             assertEquals("the photo covers the canvas", listOf(0.0, 0.0, width, height), canvasBar()!!.array("anchor").let { a -> (0 until 4).map { a.getDouble(it) } })
             command("apply_transform")
-            waitFor("the placed photo stays selected", 10_000) { barKind() == "transform" }
+            waitFor("Apply restores the previous tool", 10_000) { canvasTool() == previousTool && barKind() != "placement" }
             val photo = editingLayer()
             layerAction(obj("op" to "new", "group" to false, "clipped" to false))
             val target = editingLayer()

@@ -85,6 +85,13 @@ impl WebApp {
         let intent = layer_ui::ImportIntent::for_drop(drawings, layer).map_err(|refusal| js(refusal.message(self.session.localization())))?;
         serialize(&intent.command())
     }
+    pub fn request_image_drop(&mut self) -> Result<JsValue, JsValue> {
+        #[derive(serde::Serialize)]
+        struct DropRequest { id: u32, change: layer_ui::UiChange }
+        let (id, change) = self.session.request_file_drop(layer_ui::ImportIntent::Place).map_err(js)?;
+        serialize(&DropRequest { id, change })
+    }
+    pub fn image_drop_pending(&self, id: u32) -> bool { self.session.file_drop_pending(id) }
     pub fn capture_image_import(
         &self,
         id: u32,

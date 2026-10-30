@@ -62,7 +62,7 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,canvasReady
     const request=app.state().requests.find(request=>!before.has(request.id)&&request.kind.type==='document'&&request.kind.request.type==='paste');
     if(request){nativeDeliveries.set(request.id,Promise.resolve(files));event.preventDefault();applyChange(change);}
   });
-  const images=createImageImport({app,canvas,dispatch,applyChange,wake,element,button,icon,message,gpuOperation,
+  const images=createImageImport({app,canvas,applyChange,wake,element,button,icon,message,gpuOperation,
     openClipboard,openFiles,interpret:()=>chooseSourceProfile({app,dialog,element,button})});
   const pruneHandles=()=>{const live=new Set(app.document_tabs(0).tabs.flatMap(t=>[t.uri,t.export_uri]));for(const key of handles.keys())if(!live.has(key))handles.delete(key);};
   const location=(name,handle)=>{const uri=`browser:${crypto.randomUUID()}`;if(handle)handles.set(uri,handle);return{uri,name};};
@@ -386,7 +386,7 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,canvasReady
     changing=true;tabs.cancel();
     const blocker=element('div','document-transition');blocker.setAttribute('role','status');blocker.append(element('span','',()=>delivery.switching_drawing));document.body.append(blocker);
     try{
-      await proof.pause();await readyToPark();
+      app.prepare_document_switch();await proof.pause();await readyToPark();
       await action();
       await trim();
       await recovery.ensure();

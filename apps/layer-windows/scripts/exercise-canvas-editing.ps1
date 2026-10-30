@@ -176,6 +176,20 @@ try{
  Wait-Until {$native.window=Owned-DrawingWindow $review;$m=Model;$null -ne $native.window -and $m.brush_ready -and $m.state.theme -eq $Theme} 'Isolated editing canvas did not start' 45
  $handle=$native.window.Handle;$root=$native.window.Root
  Use-PaintWorkspace
+ & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'File';Invoke 'new_document'
+ New-DrawingPixels 2133 1600
+ Invoke 'new-drawing-texture'
+ Wait-Until {(Model).state.new_drawing.drawer.kind -eq 'paper'} 'New drawing texture drawer did not open'
+ $relief=New-DrawingControl 'new-drawing-paper-relief'
+ $relief.SetFocus();$relief.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('0')
+ Invoke 'new-drawing-paper-use'
+ Wait-Until {(Model).state.new_drawing.setup.paper.relief -eq 0 -and !(Model).state.new_drawing.drawer} 'Pixel fixture retained visible paper texture'
+ Invoke 'new-drawing-paper-color'
+ Wait-Until {(Model).state.new_drawing.drawer.kind -eq 'paper_color'} 'New drawing paper color drawer did not open'
+ Invoke 'new-drawing-color-mode-color';Invoke 'new-drawing-paper-color-0';Invoke 'new-drawing-color-use'
+ Wait-Until {!((Model).state.new_drawing.drawer) -and !((Model).state.new_drawing.setup.paper.transparent)} 'Pixel fixture did not choose white paper'
+ Invoke 'new-drawing-create'
+ Wait-Until {!(Model).state.new_drawing -and (Model).canvas_ready -and (Model).brush_ready -and !(Model).state.document_file.busy} 'Flat paper pixel fixture did not become ready' 45
  $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)
  Wait-Until {$c=(Model).state.camera;$b=(Control 'drawing-canvas').Current.BoundingRectangle;[Math]::Abs($c.viewport[0]-$b.Width) -lt .1 -and $b.Width -gt 1600} 'Maximized canvas did not settle'
  if(@((Model).layout.groups|Where-Object active -eq 'layers').Count){Invoke 'column-icon-layers';Wait-Until {@((Model).layout.groups|Where-Object active -eq 'layers').Count -eq 0} 'Column did not close'}

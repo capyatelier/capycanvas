@@ -127,5 +127,5 @@ pub(super) async fn paste(w: &Rc<Workspace>, mode: PasteMode) -> Result<bool, St
         w.wake();
         return Ok(true);
     }
-    super::place::run(w, Some(mode)).await
+    super::place::run(w, None, Some(mode)).await
 }

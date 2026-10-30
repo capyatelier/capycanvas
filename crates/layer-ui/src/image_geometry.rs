@@ -130,9 +130,6 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// Move the canvas in one undo step, with `then` in the same step, and
     /// keep the image still on screen.
     pub(super) fn apply_canvas_geometry(&mut self, geometry: &CanvasGeometry, then: Vec<Edit>) -> Result<(), CanvasGeometryError> {
-        if self.operation.placing() {
-            return Err(CanvasGeometryError::Unsupported("Apply or cancel the photo placement first"));
-        }
         let plan = self.engine.canvas_geometry_plan(geometry)?;
         if let Some(plan) = plan.remap_plan(self.engine.document()) {
             return self.start_remap(plan, RemapCompletion::Canvas { geometry: *geometry, then })
@@ -188,7 +185,6 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
         };
         let remap = self.content_bounds.remap.take().unwrap();
-        let next_tool = self.operation.next_tool.take();
         let result = result.and_then(|result| {
             let layer_render::SnapshotResult::Remap(results) = result else { return Err(l.text(MessageId::COMMANDS_CANVAS_CHANGE_DRAWING_CHANGED).to_string()); };
             match remap.completion {
@@ -205,9 +201,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
             }
             self.refresh_document();
-            self.activate_transform_tool(next_tool)
+            Ok(0)
         });
-        let changed = match result { Ok(changed) => changed, Err(message) => { self.notify(message); 0 } };
+        let changed = match result { Ok(changed) => changed, Err(message) => { self.discard_mode_actions(); self.notify(message); 0 } };
         self.refresh_tools();
         self.refresh_commands();
         changed | regions::DOCUMENT | regions::COMMANDS | regions::HOST
@@ -449,7 +445,6 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
         };
         let bake = self.content_bounds.bake.take().unwrap();
-        let next_tool = self.operation.next_tool.take();
         if self.operation.transforming() { let _ = self.cancel_transform(); }
         let result = result.and_then(|result| {
             let layer_render::SnapshotResult::TransformPixels(edit) = result else { return Err(l.text(MessageId::COMMANDS_TRANSFORM_PIXELS_UNEXPECTED_RESULT).to_string()); };
@@ -458,9 +453,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.source_edit_candidates(&edit, Default::default())?;
             self.engine.apply_edit(edit).map_err(error)?;
             self.refresh_document();
-            self.activate_transform_tool(next_tool)
+            Ok(0)
         });
-        let changed = match result { Ok(changed) => changed, Err(message) => { self.notify(message); 0 } };
+        let changed = match result { Ok(changed) => changed, Err(message) => { self.discard_mode_actions(); self.notify(message); 0 } };
         self.refresh_tools();
         self.refresh_commands();
         changed | regions::DOCUMENT | regions::BRUSH | regions::COMMANDS | regions::HOST

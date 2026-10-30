@@ -63,6 +63,50 @@ fn filled_selection_session() -> UiSession<Recorder> {
     s
 }
 
+#[test]
+fn transforms_restore_the_previous_tool_and_cancellation_keeps_history() {
+    for outline in [false, true] {
+        for selection in [false, true] {
+            if outline && !selection { continue; }
+            for finish in [CommandId::ApplyTransform, CommandId::CancelTransform, CommandId::Undo, CommandId::ImportImage] {
+                let mut s = filled_selection_session();
+                if !selection { invoke(&mut s, CommandId::Deselect); }
+                invoke(&mut s, CommandId::Pencil);
+                let checkpoint = s.engine.checkpoint();
+                invoke(&mut s, if outline { CommandId::TransformSelectionOutline } else { CommandId::ScaleRotate });
+                let start = s.transform_controls().into_iter().find(|c| c.id == "transform_x").unwrap().value;
+                s.set_transform_control("transform_x", start + 20.).unwrap();
+                assert!(!s.command(CommandId::Redo).enabled);
+                invoke(&mut s, finish);
+                s.frame(10, 10).unwrap();
+                assert!(!s.operation.active());
+                assert!(s.command(CommandId::Pencil).selected);
+                if matches!(finish, CommandId::CancelTransform | CommandId::Undo) { assert_eq!(s.engine.checkpoint(), checkpoint); }
+                else if outline { assert_ne!(s.engine.document().working.selection, Some(rectangle([100., 100., 300., 300.]))); }
+                else { assert_ne!(s.engine.checkpoint(), checkpoint); }
+            }
+        }
+    }
+}
+
+#[test]
+fn artwork_tools_leave_quick_mask_without_changing_the_selection() {
+    for platform in Platform::ALL {
+        for command in [CommandId::Move, CommandId::ScaleRotate, CommandId::Crop, CommandId::LassoFill, CommandId::EncloseFill, CommandId::Figure] {
+            let mut s = session(platform);
+            let selection = rectangle([100., 100., 300., 300.]);
+            s.fill_selection(selection.clone()).unwrap();
+            s.frame(1, 1).unwrap();
+            s.layer_edit(canvas_bar_selection_edit(s.engine.document(), Some(selection.clone()))).unwrap();
+            invoke(&mut s, CommandId::QuickMask);
+            assert!(s.command(command).enabled, "{platform:?} {command:?}");
+            invoke(&mut s, command);
+            assert!(s.selection_masks.target().is_none(), "{platform:?} {command:?}");
+            assert_eq!(s.engine.document().working.selection.as_ref(), Some(&selection));
+        }
+    }
+}
+
 fn mode_choice(bar: &CanvasBarView) -> Vec<CommandId> {
     match &bar.items[0].option {
         ToolOption::Choice { items, .. } => items
@@ -187,8 +231,8 @@ fn transform_publishes_a_bar_whose_edits_expire_with_the_transform() {
     assert!(!s.operation.active());
     assert_eq!(
         s.state.canvas_bar.as_ref().map(|b| b.context.kind),
-        Some(CanvasBarKind::Selection),
-        "the moved selection's bar follows the transform"
+        None,
+        "the previous brush returns without a selection-tool bar"
     );
     invoke(&mut s, CommandId::ScaleRotate);
     let next = s.state.canvas_bar.clone().unwrap();
@@ -387,6 +431,8 @@ fn image_placement_bar_offers_object_commands_and_counts_a_batch() {
     assert!(s.objects.placing());
     invoke(&mut s, CommandId::ApplyTransform);
     s.frame(3, 3).unwrap();
+    assert!(s.state.canvas_bar.is_none());
+    invoke(&mut s, CommandId::Move);
     let selected = s.state.canvas_bar.as_ref().unwrap();
     assert_eq!(selected.context.kind, CanvasBarKind::Transform);
     assert_eq!(bar_commands(&selected.items), bar_commands(&bar.items));
@@ -805,6 +851,7 @@ fn applying_a_distorted_pixel_selection_waits_for_its_resampled_coverage() {
     assert_ne!(change.regions & regions::BRUSH, 0, "Tool Options follow the Apply in the same frame");
     assert!(s.engine.document().working.selection.is_some());
     invoke(&mut s, CommandId::Undo);
+    s.frame(10, 10).unwrap();
     assert_live_artwork_eq(s.engine.document(), &before);
 }
 
@@ -1063,6 +1110,7 @@ fn selection_bar_menus_list_their_commands_and_refuse_stale_edits() {
     assert!(matches!(operations[..], [(_, layer_core::RasterOperation { kind: layer_core::RasterOperationKind::Erase { .. }, .. })]));
     assert!(operations[0].1.coverage.selection.as_ref().unwrap().inverted, "Clear Outside erases the inverse");
     invoke(&mut s, CommandId::Undo);
+    s.frame(10, 10).unwrap();
     assert_live_artwork_eq(s.engine.document(), &before);
     invoke(&mut s, CommandId::Deselect);
     assert!(s.state.canvas_bar.is_none());
@@ -1090,6 +1138,7 @@ fn adjust_on_the_selection_bar_masks_the_new_effect_to_the_selection() {
     assert!(selection.is_none(), "the mask consumes the selection");
     assert!(s.command(CommandId::Reselect).enabled);
     invoke(&mut s, CommandId::Undo);
+    s.frame(10, 10).unwrap();
     assert_live_artwork_eq(s.engine.document(), &before);
     assert_eq!(s.engine.document().working.selection, before.working.selection, "and restores the selection");
 }
@@ -1543,7 +1592,9 @@ fn lasso_fill_is_a_tool_command() {
     let action = UiAction::Layer { action: LayerAction::Tool { tool: LayerCanvasTool::LassoFill } };
     assert_eq!(crate::shortcuts::tool_command(&action), Some(CommandId::LassoFill));
     invoke(&mut s, CommandId::QuickMask);
-    assert_eq!(s.command_disabled_reason(CommandId::LassoFill).as_deref(), Some("Return to the artwork first"));
+    assert_eq!(s.command_disabled_reason(CommandId::LassoFill), None);
+    invoke(&mut s, CommandId::LassoFill);
+    assert!(s.selection_masks.target().is_none());
 }
 
 #[test]
@@ -1603,12 +1654,14 @@ fn transform_again_replays_only_the_last_accepted_layer_delta_once_and_atomicall
     assert_eq!(base_origin(&after), [140, 70]);
     assert!(after.extents_cover_canvas());
     invoke(&mut s, CommandId::Undo);
+    s.frame(10, 10).unwrap();
     assert_live_artwork_eq(s.engine.document(), &before);
     invoke(&mut s, CommandId::Redo);
     assert_live_artwork_eq(s.engine.document(), &after);
     let remembered = s.operation.last_transform;
     invoke(&mut s, CommandId::ScaleRotate);
     measured(&mut s);
+    assert!(!s.command(CommandId::TransformAgain).enabled);
     let x = s.state.tool_settings.iter().find(|control| control.id == "transform_x").unwrap().value;
     s.set_transform_control("transform_x", x + 25.).unwrap();
     invoke(&mut s, CommandId::CancelTransform);

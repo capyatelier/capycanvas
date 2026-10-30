@@ -62,7 +62,7 @@ export async function checkVectorTools({call,evaluate,settle}) {
     await stroke(line([300,1100],[1700,1100],40));
     await expect(`${theme} inked`,[1000,1100],true,green);
     await invoke('eraser');
-    await send({type:'set_brush_size',value:8});
+    await send({type:'set_brush_size',value:40});
     await stroke(line([1000,1000],[1000,1200]));
     await expect(`${theme} erased`,[1000,1100],false,green);
     await expect(`${theme} kept`,[700,1100],true,green);

@@ -3,23 +3,24 @@
 use crate::workspace::Workspace;
 use adw::prelude::*;
 use gtk::{gdk, gio, glib};
-use layer_ui::{FileDropRefusal, ImageLayerDestination, ImportIntent, LayerDropPosition, UiAction};
+use layer_ui::{FileDropRefusal, ImageLayerDestination, ImportIntent, LayerDropPosition};
 use std::rc::Rc;
 
 pub(crate) struct Incoming {
+    pub request: u32,
     pub files: Vec<gio::File>,
     pub center: Option<layer_core::Point>,
     pub destination: Option<ImageLayerDestination>,
-    pub epoch: u64,
-    pub revision: u64,
-    pub target: Option<layer_core::authored::SourceTarget>,
 }
 fn intent(files: &[gio::File], onto_layer: bool) -> Result<ImportIntent, FileDropRefusal> {
     ImportIntent::for_drop(files.iter().map(|file| file.path().is_some_and(|path| ImportIntent::is_drawing_path(&path))), onto_layer)
 }
 fn available(w: &Workspace, intent: ImportIntent) -> bool {
-    w.image_drop.borrow().is_none()
-        && w.gpu.borrow().as_ref().is_some_and(|g| g.session.command(intent.command()).enabled)
+    let gpu = w.gpu.borrow();
+    let Some(g) = gpu.as_ref() else { return false; };
+    let mut incoming = w.image_drop.borrow_mut();
+    if incoming.as_ref().is_some_and(|drop| !g.session.file_drop_pending(drop.request)) { incoming.take(); }
+    incoming.is_none() && g.session.command(intent.command()).enabled
 }
 fn files(target: &gtk::DropTarget) -> Option<Vec<gio::File>> {
     Some(target.value()?.get::<gdk::FileList>().ok()?.files())
@@ -40,16 +41,9 @@ pub(crate) fn receive(
         }
         let mut gpu = w.gpu.borrow_mut();
         let g = gpu.as_mut().ok_or("Canvas unavailable")?;
-        let doc = g.session.engine().document();
-        *w.image_drop.borrow_mut() = Some(Incoming {
-            files,
-            center,
-            destination,
-            epoch: g.session.state().document_file.epoch,
-            revision: doc.revision,
-            target: doc.active_target(),
-        });
-        g.session.dispatch(UiAction::Invoke { command: intent.command() })
+        let (request, change) = g.session.request_file_drop(intent)?;
+        *w.image_drop.borrow_mut() = Some(Incoming { request, files, center, destination });
+        Ok(change)
     })();
     let accepted = result.is_ok();
     if !accepted {
@@ -114,21 +108,8 @@ pub(crate) fn install(w: &Rc<Workspace>) {
             let Ok(files) = value.get::<gdk::FileList>() else {
                 return false;
             };
-            let center = {
-                let gpu = w.gpu.borrow();
-                let Some(g) = gpu.as_ref() else {
-                    return false;
-                };
-                let scale = w.area.scale_factor() as f32;
-                g.session
-                    .state()
-                    .camera
-                    .input_transform()
-                    .map(layer_core::Point {
-                        x: x as f32 * scale,
-                        y: y as f32 * scale,
-                    })
-            };
+            let scale = w.area.scale_factor() as f32;
+            let center = layer_core::Point { x: x as f32 * scale, y: y as f32 * scale };
             receive(&w, files.files(), Some(center), None)
         }
     ));

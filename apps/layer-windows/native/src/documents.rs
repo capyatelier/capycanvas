@@ -36,6 +36,8 @@ pub(crate) enum DocumentAction {
     SaveStrokeRecording { path: String },
     DropImages { epoch: u64, revision: u64, active_layer: u64, paths: Vec<String>,
         screen: Option<layer_core::Point>, layer: Option<(u64, f32)> },
+    #[serde(skip)]
+    DroppedImages { id: u32, paths: Vec<String>, screen: Option<layer_core::Point>, layer: Option<(u64, f32)> },
     Workflow { id: u32, action: crate::document_workflows::Action },
     Create { id: u32, epoch: u64, revision: u64 },
     Interpret { id: u32, profile: Option<crate::color_storage::ProfileChoice> },
@@ -657,13 +659,10 @@ impl DocumentService {
             Self::matches(host, epoch, revision)?;
             if self.active.is_some() || self.workflow_control.is_some()
                 || host.session.engine().document().working.occurrence.map(layer_ui::occurrence_token).unwrap_or(0) != active_layer { return Err("The canvas changed while receiving images; try again".into()); }
-            host.dispatch(layer_ui::UiAction::Invoke { command: layer_ui::CommandId::ImportImage })?;
-            let id = host.session.state().requests.iter().find(|r| matches!(r.kind, HostRequestKind::Document { request: DocumentRequest::Place })).ok_or("Image placement request is missing")?.id;
-            let prepared = (|| { let mut task = crate::document_workflows::Task::capture(host, id)?;task.place_at(host, screen, layer)?;Ok::<_, String>(task) })();
-            let task = match prepared { Ok(task) => task, Err(error) => return Self::complete(host, id, Err(error)) };
-            self.workflow_quiet = false;self.workflow_title = None;
-            self.workflow_control = Some((id, task.control.clone()));self.workflow_running = true;
-            self.worker.submit(Job::Workflow { task, action: crate::document_workflows::Action::ReadImages { paths, alternatives: Vec::new() } })?;
+            let previous = host.session.state().revision;
+            let (id, change) = host.session.request_file_drop(layer_ui::ImportIntent::Place)?; host.apply_change(previous, change);
+            if host.session.state().requests.iter().any(|request| request.id == id) { return self.place_drop(host, id, paths, screen, layer); }
+            self.deferred_action = Some(DocumentAction::DroppedImages { id, paths, screen, layer });
             return Ok(());
         }
         if let DocumentAction::WorkflowBegin { id } = action {
@@ -870,8 +869,23 @@ impl DocumentService {
             Err(error) => Self::complete(host, id, Err(error)),
         }
     }
+    fn place_drop(&mut self, host: &mut NativeHost, id: u32, paths: Vec<String>, screen: Option<layer_core::Point>, layer: Option<(u64, f32)>) -> Result<(), String> {
+        let prepared = (|| { let mut task = crate::document_workflows::Task::capture(host, id)?;task.place_at(host, screen, layer)?;Ok::<_, String>(task) })();
+        let task = match prepared { Ok(task) => task, Err(error) => return Self::complete(host, id, Err(error)) };
+        self.workflow_quiet = false;self.workflow_title = None;
+        self.workflow_control = Some((id, task.control.clone()));self.workflow_running = true;
+        self.worker.submit(Job::Workflow { task, action: crate::document_workflows::Action::ReadImages { paths, alternatives: Vec::new() } })?;
+        Ok(())
+    }
     pub(crate) fn poll(&mut self, host: &mut NativeHost) -> Result<(), String> {
         self.poll_tabs(host)?;
+        if let Some(DocumentAction::DroppedImages { id, .. }) = &self.deferred_action {
+            if !host.session.file_drop_pending(*id) { self.deferred_action = None; }
+            else if host.session.state().requests.iter().any(|request| request.id == *id) {
+                let Some(DocumentAction::DroppedImages { id, paths, screen, layer }) = self.deferred_action.take() else { unreachable!() };
+                self.place_drop(host, id, paths, screen, layer)?;
+            }
+        }
         self.palettes.poll(host);
         self.papers.poll(host)?;
         self.open_queued(host);

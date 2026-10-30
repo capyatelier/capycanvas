@@ -25,6 +25,45 @@ fn crop_frame(s: &UiSession<Recorder>) -> crop::CropFrame {
     s.operation.crop.as_ref().expect("an open crop").frame()
 }
 
+#[test]
+fn unrelated_document_actions_apply_crop_but_chrome_and_settings_leave_it_open() {
+    for command in [CommandId::Pencil, CommandId::Move, CommandId::SelectAll, CommandId::ImportImage, CommandId::ExportDocument] {
+        let mut s = crop_session();
+        invoke(&mut s, CommandId::Crop);
+        invoke(&mut s, CommandId::CropRatioSixteenNine);
+        for action in [UiAction::SetTheme { theme: Some(Theme::Dark) }, UiAction::SetBrushSize { value: 12. }, UiAction::SetZoom { zoom: 0.5 }] {
+            s.dispatch(action).unwrap();
+            assert!(s.cropping());
+            assert_eq!(s.engine.document().composition().size, [1000, 800]);
+        }
+        s.dispatch(UiAction::Invoke { command }).unwrap();
+        assert!(!s.cropping(), "{command:?}");
+        assert_eq!(s.engine.document().composition().size, [1000, 563], "{command:?}");
+        assert!(s.engine.can_undo());
+    }
+}
+
+#[test]
+fn crop_keeps_its_frame_while_layer_properties_and_targets_change() {
+    for property in 0..5 {
+        let mut s = crop_session();
+        let id = occurrence_token(s.engine.document().working.occurrence.unwrap());
+        invoke(&mut s, CommandId::Crop);
+        invoke(&mut s, CommandId::CropRatioSixteenNine);
+        let frame = crop_frame(&s);
+        let action = match property {
+            0 => UiAction::SelectLayer { id },
+            1 => UiAction::SetLayerVisibility { id, visible: false },
+            2 => UiAction::SetLayerOpacity { id: Some(id), opacity: 0.5 },
+            3 => UiAction::Layer { action: LayerAction::Visibility { id, value: false } },
+            _ => UiAction::Effect { action: EffectAction::LayerOpacity { layer: id, opacity: 0.75 } },
+        };
+        s.dispatch(action).unwrap();
+        assert_eq!(s.engine.document().composition().size, [1000, 800]);
+        assert_eq!(crop_frame(&s), frame);
+    }
+}
+
 fn crop_contact(s: &mut UiSession<Recorder>, sequence: u64, phase: PenPhase, at: Point, tool: layer_engine::ToolKind) {
     let mut e = event(s, sequence, phase, 1.);
     e.surface_position = on_surface(s, at);
@@ -60,7 +99,7 @@ fn crop_bar_choice(s: &mut UiSession<Recorder>, group: &str, command: CommandId)
 }
 
 #[test]
-fn crop_starts_at_the_canvas_with_its_bar_and_blocks_other_edits() {
+fn crop_starts_at_the_canvas_with_its_bar_and_allows_follow_up_edits() {
     let mut s = crop_session();
     invoke(&mut s, CommandId::Brush);
     invoke(&mut s, CommandId::Crop);
@@ -103,10 +142,11 @@ fn crop_starts_at_the_canvas_with_its_bar_and_blocks_other_edits() {
     assert_eq!(settings, [("crop_width", 1000.), ("crop_height", 800.), ("crop_angle", 0.)]);
     assert!(s.command(CommandId::CropRatioFree).selected && s.command(CommandId::CropOverlayThirds).selected);
     assert!(!s.command(CommandId::CropDeleteCroppedPixels).selected, "cropped pixels are kept by default");
-    for command in [CommandId::ClearLayer, CommandId::CanvasSize, CommandId::SelectAll, CommandId::ScaleRotate, CommandId::TransformFlipHorizontal] {
-        assert!(!s.command(command).enabled, "{command:?}");
+    for command in [CommandId::ClearLayer, CommandId::CanvasSize, CommandId::SelectAll, CommandId::ScaleRotate] {
+        assert!(s.command(command).enabled, "{command:?}");
     }
-    assert_eq!(s.command_disabled_reason(CommandId::CanvasSize).as_deref(), Some("Apply or cancel the crop first"));
+    assert_eq!(s.command_disabled_reason(CommandId::CanvasSize), None);
+    assert!(!s.command(CommandId::TransformFlipHorizontal).enabled);
     let overlay = s.renderer_mut().crop_overlay.expect("the shield");
     near_point(overlay.to_crop.map(Point { x: 1000., y: 800. }), Point { x: 1., y: 1. }, 1e-4);
     let mut segments = Vec::new();
