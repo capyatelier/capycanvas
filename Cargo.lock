@@ -1493,6 +1493,7 @@ dependencies = [
  "layer-core",
  "layer-engine",
  "layer-render",
+ "layer-ui",
  "libc",
  "naga",
  "objc2",

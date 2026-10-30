@@ -163,7 +163,11 @@ fn pnl_field(point: vec2<f32>,header: u32) -> f32 {
     return joined;
 }
 
+fn pnl_encoded_blend() -> bool {
+    return panel_data[0].z>0. && camera.viewport.z<.5 && !VIEW_PQ;
+}
 fn pnl_ui(rgba: vec4<f32>) -> vec4<f32> {
+    if pnl_encoded_blend() { return vec4(rgba.rgb*rgba.a,rgba.a); }
     var rgb=view_ui_rgb(sdr_decode(rgba.rgb,0u));
     if camera.viewport.z>.5 { rgb=sdr_encode(rgb,0u); }
     return vec4(view_store(vec4(rgb,1.)).rgb*rgba.a,rgba.a);
@@ -237,7 +241,13 @@ fn pnl_coverage(point: vec2<f32>,header: u32) -> vec2<f32> {
         let p=in.position.xy;
         let uv=(vec2(transform.x*p.x+transform.z*p.y,transform.y*p.x+transform.w*p.y)+offset)*panel_data[0].xy;
         let blurred=textureSampleLevel(panel_backdrop,panel_sampler,uv,0.);
-        tint=vec4(tint.rgb+blurred.rgb/max(blurred.a,1e-4)*(1.-tint.a),1.);
+        if pnl_encoded_blend() {
+            let backdrop=view_ui_srgb(blurred.rgb/(max(blurred.a,1e-4)*VIEW_WHITE_SCALE));
+            let mixed=tint.rgb+sdr_encode(backdrop,0u)*(1.-tint.a);
+            tint=view_store(vec4(view_ui_rgb(sdr_decode(mixed,0u)),1.));
+        } else {
+            tint=vec4(tint.rgb+blurred.rgb/max(blurred.a,1e-4)*(1.-tint.a),1.);
+        }
     }
     let alpha=tint.a*coverage+shadow*(1.-coverage);
     return vec4(tint.rgb*coverage,alpha)*window_coverage(point);

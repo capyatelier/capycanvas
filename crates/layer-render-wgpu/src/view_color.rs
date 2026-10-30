@@ -98,6 +98,7 @@ pub(crate) fn matrix_shader(name: &str, matrix: layer_core::color::rgb::Matrix3)
 pub(crate) fn shader(source: RgbSpace, destination: RgbSpace) -> String {
     let mut result = transform("view_working_rgb", source, destination);
     result.push_str(&transform("view_ui_rgb", RgbSpace::Srgb, destination));
+    result.push_str(&transform("view_ui_srgb", destination, RgbSpace::Srgb));
     result.push_str("fn view_straight(c:vec4<f32>)->vec3<f32>{if c.a>0. {return view_working_rgb(c.rgb/c.a);}return vec3<f32>(0.);}\n");
     result
 }

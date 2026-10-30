@@ -23,6 +23,7 @@ web-time = "1.1.0"
 crc32fast = "1.5"
 
 [dev-dependencies]
+layer-ui = { path = "../layer-ui" }
 naga = { version = "30.0.0", features = ["wgsl-in", "spv-out", "hlsl-out"] }
 png = "0.17.16"
 image-webp = "=0.2.4"

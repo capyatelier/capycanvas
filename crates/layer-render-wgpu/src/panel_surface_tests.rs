@@ -723,3 +723,39 @@ fn gpu_panel_surface_single_anchors_preserve_remote_receivers_and_adjacent_gap_g
     }
     assert!(failures.is_empty(), "a single source tile changed remote receiver corners: {failures:?}");
 }
+
+#[test]
+fn gpu_panel_surface_linear_targets_reproduce_opaque_palette_colors() {
+    use layer_core::color::{RgbSpace, f16};
+    use layer_ui::{GlassColor, Platform, Settings, Theme, Transparency};
+    let renderer=renderer();
+    let format=wgpu::TextureFormat::Rgba16Float;
+    let target=crate::create_target(renderer.device(),SIZE,format,"linear panel palette").0;
+    for theme in [Theme::Dark,Theme::Light] {
+        let palette=Settings {transparency:Transparency::Low,..Default::default()}.palette(theme,Platform::Windows,None);
+        let panel=GlassColor::over(palette.panel.0.map(|v|f32::from(v)/255.),[1.;3],palette.glass.panel.0[3]).0;
+        let strip=GlassColor::over(palette.tabbar.0.map(|v|f32::from(v)/255.),[1.;3],palette.glass.strip.0[3]).0;
+        for encoding in [crate::SdrSurfaceColor::ExtendedLinearSrgb,crate::SdrSurfaceColor::WindowsScrgb] {
+            let mut presenter=ViewportPresenter::for_surface(&renderer,format,encoding).unwrap();
+            let mut scene=tabbed_receiver_column();
+            scene.color=panel;
+            for receiver in &mut scene.groups {receiver.color=panel;receiver.strip_color=strip;}
+            presenter.set_backdrop(&renderer,&[crate::BackdropRegion::rounded([0.,0.,256.,224.],[0.;4],crate::BackdropRegion::SQUIRCLE)],
+                crate::BackdropBlurStyle {levels:palette.glass.blur.levels,offset:palette.glass.blur.offset},false);
+            presenter.set_panel_surfaces(&renderer,&[scene]);
+            presenter.present(&renderer,&target.create_view(&Default::default()),camera(SIZE),[1.;4]).unwrap();
+            let bytes=crate::layer_tests::page_bytes(&renderer,&target);
+            let scale=if encoding==crate::SdrSurfaceColor::WindowsScrgb {layer_core::color::hdr::REFERENCE_WHITE_NITS/80.}else{1.};
+            for (y,expected) in [(64,palette.panel.0),(38,palette.tabbar.0)] {
+                let offset=((y*SIZE[0]+170)*8) as usize;
+                for channel in 0..3 {
+                    let at=offset+channel*2;
+                    let linear=f16::from_bits(u16::from_le_bytes([bytes[at],bytes[at+1]])).to_f32()/scale;
+                    let actual=RgbSpace::Srgb.encode(f64::from(linear));
+                    assert!((actual-f64::from(expected[channel])/255.).abs()<=1./255.,
+                        "{theme:?}/{encoding:?} y={y} channel={channel}: {actual} vs {}",expected[channel]);
+                }
+            }
+        }
+    }
+}
