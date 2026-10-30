@@ -71,8 +71,9 @@ extension XCTestCase {
         XCTAssertTrue(direction.waitForExistence(timeout: 5))
         XCTAssertEqual(firmer.frame.minX - sensitivity.frame.maxX, 4, accuracy: 1)
         XCTAssertEqual(axis(axisIDs[0]).frame.minX - direction.frame.maxX, 4, accuracy: 1)
-        XCTAssertEqual(direction.frame.minX - lighter.frame.maxX, 8, accuracy: 1)
-        XCTAssertEqual((sensitivity.frame.minX + axis(axisIDs[2]).frame.maxX) / 2, panel.frame.midX, accuracy: 1)
+        XCTAssertGreaterThanOrEqual(direction.frame.minX - lighter.frame.maxX, 7)
+        XCTAssertEqual(sensitivity.frame.minX - panel.frame.minX, 16, accuracy: 1)
+        XCTAssertEqual(panel.frame.maxX - axis(axisIDs[2]).frame.maxX, 16, accuracy: 1)
         XCTAssertEqual(firmer.frame.midY, lighter.frame.midY, accuracy: 1)
         for control in [firmer, lighter] + axisIDs.map({ axis($0) }) {
             XCTAssertEqual(control.frame.width, 36, accuracy: 1)

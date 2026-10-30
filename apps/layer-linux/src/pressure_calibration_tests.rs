@@ -472,8 +472,9 @@ fn assert_axis_bar(panel:&gtk::Widget,w:&Workspace) {
     assert!([&sensitivity,&lighter].iter().all(|bounds|bounds.width()==TILE_SIZE && bounds.height()==TILE_SIZE),"sensitivity controls keep square tile targets");
     assert!((sensitivity.x()-text[0][0]-text[0][1]-4.).abs()<1.,"Sensitivity text stays four pixels from its bar");
     assert!((bar_bounds.x()-text[1][0]-text[1][1]-4.).abs()<1.,"Direction text stays four pixels from its bar");
-    assert!((text[1][0]-lighter.x()-lighter.width()-8.).abs()<1.,"compact groups stay eight pixels apart");
-    assert!((text[0][0]+bar_bounds.x()+bar_bounds.width()-panel.width() as f32).abs()<1.5,"combined compact row stays centered in the dialog");
+    assert!(text[1][0]-lighter.x()-lighter.width()>=7.,"compact groups stay at least eight pixels apart");
+    assert!((text[0][0]-16.).abs()<1.,"Sensitivity starts at the left content gutter");
+    assert!((panel.width() as f32-bar_bounds.x()-bar_bounds.width()-16.).abs()<1.,"Direction ends at the right content gutter");
     assert!(buttons.iter().all(|button|button.width()==TILE_SIZE as i32 && button.height()==TILE_SIZE as i32));
     let bounds=buttons.each_ref().map(|button|button.compute_bounds(&bar).unwrap());
     assert!(bounds.windows(2).all(|pair|(pair[0].x()+pair[0].width()-pair[1].x()).abs()<1.));

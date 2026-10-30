@@ -77,7 +77,7 @@ private struct PenResponsePanel: View {
                     VStack(spacing: 12) {
                         CurveEditor(store: store, control: view["editor"], target: JSON(["kind": kind]), label: view["title"].string,
                             axisGutter: view["axis_gutter"].string, plotOverlay: tilt ? AnyView(directionCircle.padding(8)) : nil).id(kind)
-                        HStack(spacing: store.panelMetrics.inset) {
+                        HStack(spacing: 0) {
                             HStack(spacing: store.panelMetrics.spacing) {
                                 if tilt { Text(view["sensitivity"].string).accessibilityIdentifier("pen-tilt-sensitivity-title") }
                                 HStack(spacing: tilt ? 0 : 8) {
@@ -86,6 +86,7 @@ private struct PenResponsePanel: View {
                                 }
                             }
                             if tilt {
+                                Spacer(minLength: store.panelMetrics.inset)
                                 HStack(spacing: store.panelMetrics.spacing) {
                                     Text(view["direction"].string).accessibilityIdentifier("pen-tilt-direction-title")
                                     direction

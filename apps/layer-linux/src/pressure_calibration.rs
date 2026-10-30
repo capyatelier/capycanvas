@@ -12,7 +12,6 @@ pub(crate) struct PressurePanel {
     body: gtk::Box,
     device: gtk::Label,
     direction: gtk::Box,
-    controls: gtk::Box,
     sensitivity_title: gtk::Label,
     sensitivity_bar: gtk::Box,
     direction_title: gtk::Label,
@@ -66,6 +65,7 @@ impl PressurePanel {
         let lighter = gtk::Button::new(); lighter.set_widget_name("pen-pressure-lighter");
         sensitivity_bar.append(&firmer); sensitivity_bar.append(&lighter);controls.append(&sensitivity);body.append(&controls);
         let direction = gtk::Box::new(gtk::Orientation::Horizontal,layer_ui::PANEL_CONTROL_SPACING as i32);
+        direction.set_hexpand(true);direction.set_halign(gtk::Align::End);
         let direction_title = gtk::Label::builder().xalign(0.).wrap(true).build();direction_title.set_widget_name("pen-tilt-direction-title");direction.append(&direction_title);
         let arrows = gtk::DrawingArea::builder().content_width(72).content_height(72).build(); arrows.set_widget_name("pen-tilt-direction");arrows.set_halign(gtk::Align::End);arrows.set_valign(gtk::Align::End);arrows.set_margin_end(8);arrows.set_margin_bottom(8);
         let axis_bar=gtk::Box::new(gtk::Orientation::Horizontal,0);axis_bar.add_css_class("linked");axis_bar.add_css_class("selection-modes");axis_bar.set_homogeneous(true);axis_bar.set_halign(gtk::Align::Center);
@@ -82,7 +82,7 @@ impl PressurePanel {
         let apply = gtk::Button::new(); apply.set_widget_name("pen-pressure-apply"); apply.add_css_class("suggested-action");
         for button in [&firmer,&lighter,&reset,&cancel,&apply] {button.set_height_request(layer_ui::TILE_SIZE as i32);}
         footer.append(&reset); footer.append(&spacer); footer.append(&cancel); footer.append(&apply); column.append(&footer);
-        Rc::new(Self { root, column, title, heading, close, body, device, direction, controls, sensitivity_title, sensitivity_bar, direction_title, arrows, axes,
+        Rc::new(Self { root, column, title, heading, close, body, device, direction, sensitivity_title, sensitivity_bar, direction_title, arrows, axes,
             tilt:Cell::new(false), projecting:Cell::new(false), tilt_view:RefCell::new(None), firmer, lighter, reset, cancel, apply,
             editor: RefCell::new(None), bounds: Cell::new(None), pending_bounds: Cell::new(None), presented: RefCell::new(None), measured: Cell::new(None), bound: Cell::new(false) })
     }
@@ -194,7 +194,6 @@ impl PressurePanel {
         self.title.set_label(&view.title); self.column.update_property(&[gtk::accessible::Property::Label(&view.title),gtk::accessible::Property::Modal(false)]);
         self.close.set_tooltip_text(Some(&view.close)); self.close.update_property(&[gtk::accessible::Property::Label(&view.close)]);
         self.reset.set_label(&view.reset);
-        self.controls.set_halign(if tilt.is_some(){gtk::Align::Center}else{gtk::Align::Fill});
         self.sensitivity_title.set_visible(tilt.is_some());
         self.sensitivity_bar.set_hexpand(tilt.is_none());
         self.sensitivity_bar.set_spacing(if tilt.is_some(){0}else{8});

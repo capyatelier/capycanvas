@@ -3282,9 +3282,11 @@ class AndroidHostTest {
             val directionTitle = bounds("pen-tilt-direction-title")
             assertEquals("Sensitivity label meets its buttons", 4f * density, sensitivity.left - sensitivityTitle.right, 1f)
             assertEquals("Direction label meets its buttons", 4f * density, bounds("pen-tilt-reverse-horizontal").left - directionTitle.right, 1f)
-            assertEquals("Calibration control pairs stay together", 8f * density, directionTitle.left - bounds("pen-tilt-lighter").right, 1f)
-            assertEquals("Calibration controls are centered as one row", bounds("pen-tilt-dialog").center.x,
-                (sensitivityTitle.left + bounds("pen-tilt-swap-axes").right) / 2f, 1f)
+            assertTrue("Calibration control pairs keep at least eight pixels apart", directionTitle.left - bounds("pen-tilt-lighter").right >= 8f * density - 1f)
+            assertEquals("Sensitivity controls align with the left content gutter", bounds("pen-tilt-dialog").left + 16f * density,
+                sensitivityTitle.left, 1f)
+            assertEquals("Direction controls align with the right content gutter", bounds("pen-tilt-dialog").right - 16f * density,
+                bounds("pen-tilt-swap-axes").right, 1f)
             for (tag in listOf("sensitivity-title", "direction-title")) {
                 val label = compose.onNodeWithTag("pen-tilt-$tag", useUnmergedTree = true)
                 val layouts = mutableListOf<TextLayoutResult>()
@@ -3361,10 +3363,24 @@ class AndroidHostTest {
         }
         val area = host.snapshot!!.getJSONObject("layout").getJSONObject("work_area")
         val density = compose.activity.resources.displayMetrics.density
-        val canvasPoint = listOf(area.number("height") * .5f, area.number("height") * .75f, area.number("height") * .25f).flatMap { y -> listOf(.85f, .15f).map { x ->
-            androidx.compose.ui.geometry.Offset(origin[0] + (area.number("x") + area.number("width") * x) * density,
-                origin[1] + (area.number("y") + y) * density)
-        } }.first { !host.calibrationPenBounds!!.contains(it) }
+        val camera = state().getJSONObject("camera")
+        assertEquals(0.0, camera.getDouble("rotation"), 0.0)
+        assertEquals(listOf(false, false), camera.getJSONArray("flipped").values())
+        val translation = camera.getJSONArray("translation")
+        val zoom = camera.number("zoom")
+        val drawing = state().array("tabs").objects().first { it.getBoolean("active") }
+        val sheet = androidx.compose.ui.geometry.Rect(origin[0] + translation.getDouble(0).toFloat(),
+            origin[1] + translation.getDouble(1).toFloat(),
+            origin[0] + translation.getDouble(0).toFloat() + drawing.getInt("width") * zoom,
+            origin[1] + translation.getDouble(1).toFloat() + drawing.getInt("height") * zoom)
+        val visible = sheet.intersect(androidx.compose.ui.geometry.Rect(origin[0] + area.number("x") * density,
+            origin[1] + area.number("y") * density, origin[0] + (area.number("x") + area.number("width")) * density,
+            origin[1] + (area.number("y") + area.number("height")) * density))
+        val stroke = androidx.compose.ui.geometry.Offset(24f * density, 0f)
+        val panel = host.calibrationPenBounds!!
+        val canvasPoint = listOf(.5f, .75f, .25f).flatMap { y -> listOf(.85f, .15f).map { x ->
+            androidx.compose.ui.geometry.Offset(visible.left + visible.width * x, visible.top + visible.height * y)
+        } }.first { !panel.contains(it) && !panel.contains(it + stroke) && visible.contains(it + stroke) }
         assertFalse("The first Lasso contact uses uncovered canvas", host.calibrationPenBounds!!.contains(canvasPoint))
         send(MotionEvent.ACTION_DOWN, canvasPoint)
         waitState { calibration().getBoolean("ready") }
@@ -3411,7 +3427,7 @@ class AndroidHostTest {
         action(obj("type" to "invoke", "command" to "pencil"))
         host.awaitReady(compose = compose)
         send(MotionEvent.ACTION_DOWN, canvasPoint)
-        val end = canvasPoint + androidx.compose.ui.geometry.Offset(24f * density, 0f)
+        val end = canvasPoint + stroke
         send(MotionEvent.ACTION_MOVE, end)
         send(MotionEvent.ACTION_UP, end)
         waitState { it.getJSONObject("document_file").getLong("revision") != beforeRevision }

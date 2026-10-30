@@ -61,8 +61,9 @@ export async function checkTiltCalibration({call,evaluate,settle}) {
     for(const button of geometry.buttons)assert.ok(Math.abs(button.width-36)<.5&&Math.abs(button.height-36)<.5,'Compact buttons keep square 36px targets');
     assert.ok(Math.abs(less.x-sensitivity.text.right-4)<.75,'Sensitivity text stays four pixels from its bar');
     assert.ok(Math.abs(axes[0].x-direction.text.right-4)<.75,'Direction text stays four pixels from its bar');
-    assert.ok(Math.abs(direction.text.x-more.right-8)<.75,'Compact groups stay eight pixels apart');
-    assert.ok(Math.abs((sensitivity.text.x+axes.at(-1).right)/2-(geometry.panel.x+geometry.panel.width/2))<.75,'Combined compact row stays centered in the dialog');
+    assert.ok(direction.text.x-more.right>=7.25,'Compact groups stay at least eight pixels apart');
+    assert.ok(Math.abs(sensitivity.text.x-geometry.panel.x-16)<.75,'Sensitivity starts at the left content gutter');
+    assert.ok(Math.abs(geometry.panel.right-axes.at(-1).right-16)<.75,'Direction ends at the right content gutter');
     assert.ok(geometry.labels.every(label=>label.box.height<=36),'Compact captions fit one control row');
   };
   const shortViewport=async theme=>{

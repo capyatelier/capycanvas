@@ -131,14 +131,14 @@ import kotlin.math.roundToInt
                                 }
                             }
                         }
-                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(metrics.inset, Alignment.CenterHorizontally)) {
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(metrics.inset)) {
                             if (tilt == null) {
                                 OutlinedButton({ send(obj("kind" to "sensitivity", "lighter" to false)) }, Modifier.weight(1f).height(36.dp).testTag("$prefix-firmer"),
                                     enabled = view.getBoolean("firmer_enabled"), shape = ControlShape, contentPadding = PaddingValues(horizontal = 12.dp)) { Text(view.getString("firmer")) }
                                 OutlinedButton({ send(obj("kind" to "sensitivity", "lighter" to true)) }, Modifier.weight(1f).height(36.dp).testTag("$prefix-lighter"),
                                     enabled = view.getBoolean("lighter_enabled"), shape = ControlShape, contentPadding = PaddingValues(horizontal = 12.dp)) { Text(view.getString("lighter")) }
                             } else {
-                                Row(Modifier.weight(1f, fill = false), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(metrics.spacing)) {
+                                Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(metrics.spacing)) {
                                     Text(view.getString("sensitivity"), Modifier.weight(1f, fill = false).testTag("pen-tilt-sensitivity-title"))
                                     Row(Modifier.clip(ControlShape).border(1.dp, colors.divider, ControlShape)) {
                                         for ((key, lighter, icon) in listOf(Triple("firmer", false, "minus"), Triple("lighter", true, "plus"))) {
@@ -150,7 +150,7 @@ import kotlin.math.roundToInt
                                         }
                                     }
                                 }
-                                Row(Modifier.weight(1f, fill = false), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(metrics.spacing)) {
+                                Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(metrics.spacing, Alignment.End)) {
                                     Text(view.getString("direction"), Modifier.weight(1f, fill = false).testTag("pen-tilt-direction-title"))
                                     Row(Modifier.height(36.dp).clip(ControlShape).border(1.dp, colors.divider, ControlShape).testTag("pen-tilt-axes")) {
                                         for ((field, icon, tag) in listOf(Triple("reverse_horizontal", "flip-horizontal", "reverse-horizontal"),

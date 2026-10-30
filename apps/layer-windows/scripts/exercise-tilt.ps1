@@ -222,7 +222,7 @@ function Assert-Geometry{
     }
     $sensitivity=(Reveal-Tilt 'pen-tilt-sensitivity-title').Current.BoundingRectangle;$direction=(Reveal-Tilt 'pen-tilt-direction-title').Current.BoundingRectangle
     if([Math]::Abs(($firmer.Left-$sensitivity.Right)/$scale-4) -gt 1 -or [Math]::Abs(($first.Left-$direction.Right)/$scale-4) -gt 1){throw 'Tilt labels do not sit 4px before their button bars'}
-    if([Math]::Abs(($direction.Left-$lighter.Right)/$scale-8) -gt 1 -or [Math]::Abs(($sensitivity.Left+$last.Right-$frame.Left-$frame.Right)/2) -gt $scale){throw 'Tilt control groups do not share an 8px gap in a centered natural-width row'}
+    if(($direction.Left-$lighter.Right)/$scale -lt 7 -or [Math]::Abs(($sensitivity.Left-$frame.Left)/$scale-16) -gt 1 -or [Math]::Abs(($frame.Right-$last.Right)/$scale-16) -gt 1){throw 'Tilt control groups do not preserve 16px outer gutters and at least 8px between groups'}
     @{theme=$Theme;scale=$scale;controls=$controls;titles=$titles;frame=@($frame.X,$frame.Y,$frame.Width,$frame.Height);plot=@($plot.X,$plot.Y,$plot.Width,$plot.Height);preview=@($preview.X,$preview.Y,$preview.Width,$preview.Height)}|ConvertTo-Json -Depth 8|Set-Content (Join-Path $run 'geometry.json')
 }
 function Preview([string]$Stage,[string]$ExpectedCurve=''){

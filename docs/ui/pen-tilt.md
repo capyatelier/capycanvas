@@ -37,9 +37,9 @@ The direction preview shows input in gray and adjusted tilt in blue. Its 72-unit
 circle overlays the graph's bottom-right corner with an 8-unit inset. Below the
 graph, **Sensitivity** has joined minus and plus buttons, followed on the same
 row by **Direction** and the joined segmented icon bar used by Tool Options.
-Each caption stays 4 units from its bar. The two groups have an 8-unit gap, and
-their combined natural width is centered below the graph; spare width does not
-stretch the captions.
+Each caption stays 4 units from its bar. Sensitivity aligns with the left content
+edge and Direction with the right. Spare width goes between the groups, with an
+8-unit minimum gap.
 Sensitivity buttons retain Less sensitive and More sensitive in tooltips and
 accessible labels. The direction bar's independent **Reverse horizontal**, **Reverse vertical** and
 **Swap axes** toggles retain their text in tooltips and accessible labels. They
