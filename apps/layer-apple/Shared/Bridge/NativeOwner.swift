@@ -431,7 +431,8 @@ final class NativeOwner: @unchecked Sendable {
         completion: @escaping @Sendable (String?) -> Void) {
         queue.async { [self] in
             do {
-                if let decision = closeDecision { try check(capy_apple_document_close(nativeValue(handle), UInt32(id), decision)) }
+                if closeDecision == 0 { _ = try request(0, JSON(["type": "invoke", "command": "close_document"])) }
+                else if let decision = closeDecision { try check(capy_apple_document_close(nativeValue(handle), UInt32(id), decision)) }
                 else { try check(capy_apple_document_complete(nativeValue(handle), UInt32(id), succeeded == true ? 1 : 0)) }
                 try publish(); completion(nil)
             } catch { completion(error.localizedDescription) }
@@ -635,9 +636,7 @@ final class NativeOwner: @unchecked Sendable {
         init(_ handle: UInt64) { self.handle = handle }
         deinit { let pointer = handle; NativeProjectTask.io.async { capy_document_free(nativeValue(pointer)) } }
     }
-    func switchDocument(_ id: UInt64, closing: Bool = false,
-        removing: (@Sendable (@escaping @Sendable (Bool) -> Void) -> Void)? = nil,
-        completion: @escaping @Sendable (String?) -> Void) {
+    func prepareDocumentSwitch(completion: @escaping @Sendable (String?) -> Void) {
         let deadline = DispatchTime.now() + .seconds(15)
         @Sendable func attempt() {
             do {
@@ -647,6 +646,18 @@ final class NativeOwner: @unchecked Sendable {
                     queue.asyncAfter(deadline: .now() + .milliseconds(16), execute: attempt); return
                 }
                 try check(ready)
+                try publish()
+                completion(nil)
+            } catch { completion(error.localizedDescription) }
+        }
+        queue.async(execute: attempt)
+    }
+    func switchDocument(_ id: UInt64, closing: Bool = false,
+        removing: (@Sendable (@escaping @Sendable (Bool) -> Void) -> Void)? = nil,
+        completion: @escaping @Sendable (String?) -> Void) {
+        prepareDocumentSwitch { [self] error in
+            guard error == nil else { completion(error); return }
+            do {
                 guard let task = nativeHandle(capy_apple_document_switch(nativeValue(handle), id, closing)) else { try check(-1); return }
                 let job = DocumentJob(task)
                 if closing {
@@ -667,7 +678,6 @@ final class NativeOwner: @unchecked Sendable {
                 } else { runDocumentJob(job, completion: completion) }
             } catch { completion(error.localizedDescription) }
         }
-        queue.async(execute: attempt)
     }
     private func documentStorage() {
         guard let task = nativeHandle(capy_apple_document_storage(nativeValue(handle))) else { return }

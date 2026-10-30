@@ -49,18 +49,22 @@ import UniformTypeIdentifiers
         else { adjacent(command["kind"]["forward"].bool) }
     }
     func select(_ id: UInt64, completion: @escaping (Bool) -> Void = { _ in }) {
-        guard let store, !busy, !store.projectFiles.busy else { completion(false); return }
+        guard let store, let native = store.native, !busy, !store.projectFiles.busy else { completion(false); return }
         if id == selected { completion(true); return }
         busy = true
-        store.recovery.flush { [weak self] saved in
+        native.prepareDocumentSwitch { [weak self] error in DispatchQueue.main.async {
             guard let self else { completion(false); return }
-            guard saved else { busy = false; store.projectFiles.error = store.recovery.failure ?? store.bootstrap["action_failed"].string; completion(false); return }
-            store.native?.switchDocument(id) { [weak self] error in DispatchQueue.main.async {
+            guard error == nil else { self.busy = false; store.projectFiles.error = error; completion(false); return }
+            store.recovery.flush { [weak self] saved in
                 guard let self else { completion(false); return }
-                self.busy = false; if let error { store.projectFiles.error = error }
-                store.wake?(); completion(error == nil)
-            } }
-        }
+                guard saved else { self.busy = false; store.projectFiles.error = store.recovery.failure ?? store.bootstrap["action_failed"].string; completion(false); return }
+                native.switchDocument(id) { [weak self] error in DispatchQueue.main.async {
+                    guard let self else { completion(false); return }
+                    self.busy = false; if let error { store.projectFiles.error = error }
+                    store.wake?(); completion(error == nil)
+                } }
+            }
+        } }
     }
     func adjacent(_ forward: Bool) {
         store?.query(["type": "document_tabs", "op": "adjacent", "forward": forward]) { [weak self] id in

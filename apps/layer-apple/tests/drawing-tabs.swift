@@ -246,5 +246,64 @@ import QuartzCore
             precondition(windowAllowed == true && !store.projectFiles.confirming && store.drawingTabs.rows.count == 3)
             print("Apple \(platform): device pickup matrix, independent history/save destinations, per-tab recovery, close/cancel, ordered multi-open and session checkpoint close without per-drawing prompts passed")
         }
+        for platform: UInt32 in [0, 1] {
+            let store = EditorStore(platform: platform, persistence: EditorPersistence(root: root.appendingPathComponent("crop-switch-\(platform)")), managedWorkspaces: false)
+            let native = store.native!, surface = attachSurface(store, CGSize(width: 960, height: 720))
+            defer { native.detach(); withExtendedLifetime(surface) {} }
+            func wait(_ name: String, _ ready: () -> Bool) async throws {
+                try await CapyTest.wait(name, seconds: 8, failure: { store.recovery.error ?? store.failure ?? store.projectFiles.error },
+                    step: { await frame(native) }, ready)
+            }
+            try await wait("crop switch startup") { store.snapshot["shaders_ready"].bool }
+            let firstWidth = store.state["tabs"][0]["width"].uint
+            let firstHeight = store.state["tabs"][0]["height"].uint
+            let firstLayers = store.state["layers"].stableKey
+            store.projectFiles = ProjectFiles(store: store, dialogs: .init(open: { _, done in done([]) }, save: { _, _, done in done(nil) },
+                create: { _, done in done(newSheet([800, 600])) }))
+            try await store.apply(["type": "invoke", "command": "new_document"])
+            try await wait("colored second drawing") { store.drawingTabs.rows.count == 2 && store.drawingTabs.selected == 2 && store.snapshot["shaders_ready"].bool }
+            for command in ["add_layer", "select_all", "fill_selection", "deselect", "pencil", "crop"] {
+                try await store.apply(["type": "invoke", "command": command])
+            }
+            try await wait("crop width control") { store.state["tool_settings"].array.contains { $0["id"].string == "crop_width" } }
+            try await store.apply(["type": "set_tool_setting", "id": "crop_width", "value": 480])
+            try await wait("modified crop") { store.state["tool_settings"].array.contains { $0["id"].string == "crop_width" && $0["value"].number == 480 } }
+            var switched: Bool?
+            store.drawingTabs.select(1) { switched = $0 }
+            try await wait("modified crop drawing switch") { switched != nil }
+            try require(switched == true && store.drawingTabs.selected == 1, "Switching away from a modified crop must finish")
+            switched = nil
+            store.drawingTabs.select(2) { switched = $0 }
+            try await wait("cropped drawing return") { switched != nil && store.snapshot["shaders_ready"].bool }
+            try require(switched == true && store.state["tabs"][0]["width"].uint == 480
+                && store.state["tabs"][0]["height"].uint == 600 && store.state["brush"]["preset"].uint == 2
+                && !store.state["tool_settings"].array.contains { $0["id"].string == "crop_width" },
+                "Switching back must show the applied 480 × 600 crop and restore Pencil")
+            print("Apple \(platform): modified crop commits before drawing switch and restores Pencil")
+            for (mode, setting, value) in [("crop", "crop_width", 320), ("scale_rotate", "transform_x", 48)] {
+                if mode == "scale_rotate" {
+                    try await store.apply(["type": "invoke", "command": "new_document"])
+                    try await wait("transform close drawing") { store.drawingTabs.rows.count == 2 && store.drawingTabs.selected != 1 && store.snapshot["shaders_ready"].bool }
+                    for command in ["add_layer", "select_all", "fill_selection", "deselect", "pencil"] {
+                        try await store.apply(["type": "invoke", "command": command])
+                    }
+                }
+                try await store.apply(["type": "invoke", "command": mode])
+                try await wait("\(mode) close control") { store.state["tool_settings"].array.contains { $0["id"].string == setting } }
+                try await store.apply(["type": "set_tool_setting", "id": setting, "value": value])
+                try await wait("modified \(mode) before close") { store.state["tool_settings"].array.contains { $0["id"].string == setting && $0["value"].number == Double(value) } }
+                let closingID = store.drawingTabs.selected
+                store.drawingTabs.close(closingID)
+                try await wait("\(mode) close prompt") { store.projectFiles.confirming }
+                store.projectFiles.choose("discard")
+                try await wait("\(mode) drawing closed") { store.drawingTabs.rows.count == 1 && store.drawingTabs.selected == 1
+                    && !store.drawingTabs.busy && !store.projectFiles.busy && store.snapshot["shaders_ready"].bool }
+                try require(store.state["tabs"][0]["width"].uint == firstWidth && store.state["tabs"][0]["height"].uint == firstHeight
+                    && store.state["layers"].stableKey == firstLayers
+                    && !store.state["tool_settings"].array.contains { $0["id"].string == setting },
+                    "Closing a drawing in \(mode) must preserve the surviving drawing and retire its mode")
+                print("Apple \(platform): modified \(mode) closes and preserves the surviving drawing")
+            }
+        }
     }
 }
