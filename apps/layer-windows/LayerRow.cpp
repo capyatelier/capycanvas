@@ -287,7 +287,7 @@ void LayerRow::refresh(){
         }});pick.MinWidth(0);pick.Padding({4,0,4,0});pick.CornerRadius({0});pick.VerticalAlignment(VerticalAlignment::Stretch);pick.HorizontalAlignment(HorizontalAlignment::Stretch);
             TextBlock caption;caption.MaxLines(1);caption.TextTrimming(TextTrimming::CharacterEllipsis);caption.TextAlignment(TextAlignment::Center);pick.Content(caption);pick.HorizontalContentAlignment(HorizontalAlignment::Stretch);
             AutomationProperties::SetAutomationId(pick,L"layer-"+to_hstring(uint64_t(id))+L"-swipe-"+hstring(key));}
-        pick.Content().as<TextBlock>().Text(str(model,L"label"));pick.IsEnabled(flag(model,L"enabled"));AutomationProperties::SetName(pick,str(model,L"label"));ToolTipService::SetToolTip(pick,box_value(str(model,L"label")));
+        pick.Content().as<TextBlock>().Text(str(model,L"label"));pick.IsEnabled(flag(model,L"enabled"));AutomationProperties::SetName(pick,str(model,L"label"));tooltip(pick,str(model,L"label"));
         pick.Background(key==L"delete"?fill({255,192,28,40}):data->tint(L"text",key==L"duplicate"?61:41));
         pick.Foreground(key==L"delete"?fill({255,255,255,255}):data->brush(L"text"));
         pick.FontSize(data->textSize());

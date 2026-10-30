@@ -1869,7 +1869,7 @@ void CanvasWindow::ApplyScreen(Windows::Data::Json::JsonObject const& model){
     StackPanel face;face.Orientation(Orientation::Horizontal);face.Spacing(4);
     if(flag(chip,L"warning")){FontIcon mark;mark.FontFamily(FontFamily(L"Segoe MDL2 Assets"));mark.Glyph(L"\uE7BA");mark.FontSize(16);mark.Width(16);mark.Height(16);mark.Foreground(warning);mark.VerticalAlignment(VerticalAlignment::Center);face.Children().Append(mark);}
     auto captionText=CapyUi::label(screenData,str(chip,L"label"),true);captionText.VerticalAlignment(VerticalAlignment::Center);face.Children().Append(captionText);screenChip.Content(face);
-    auto caption=str(colorCopy,L"screen_details");AutomationProperties::SetName(screenChip,caption);ToolTipService::SetToolTip(screenChip,box_value(caption));
+    auto caption=str(colorCopy,L"screen_details");AutomationProperties::SetName(screenChip,caption);tooltip(screenChip,caption);
     screenTitle.Text(str(details,L"title"));screenHeadline.Text(str(details,L"headline"));screenHeadline.Foreground(flag(details,L"warning")?warning:foreground);
     screenBody.Text(str(details,L"body"));screenBody.Visibility(screenBody.Text().empty()?Visibility::Collapsed:Visibility::Visible);
     auto clipped=details.GetNamedValue(L"show_clipped",JsonValue::CreateNullValue());updatingScreen=true;

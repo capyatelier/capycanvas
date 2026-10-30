@@ -27,6 +27,12 @@ function Navigator-Document{
     $file=(Model).state.document_file
     @($file.epoch,$file.revision,$file.modified)|ConvertTo-Json -Compress
 }
+function Navigator-Tooltips{
+    $condition=[System.Windows.Automation.AndCondition]::new(
+        [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::ToolTip),
+        [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ProcessIdProperty,$review.Id))
+    @([System.Windows.Automation.AutomationElement]::RootElement.FindAll([System.Windows.Automation.TreeScope]::Descendants,$condition)|Where-Object {!$_.Current.IsOffscreen})
+}
 function Navigator {
     & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Window'
     $menuCondition=[System.Windows.Automation.AndCondition]::new(
@@ -148,7 +154,20 @@ try {
                 $y=[int]($box.Top+$box.Height/2)
                 $finish=if($fresh){'up'}else{$ending}
                 $stimulus=if($finish -eq 'up'){'normal native Up'}elseif($device -eq 'pen'){'synthetic pen device removal'}else{'synthetic touch canceled Up'}
+                $tooltipBefore=$null
+                if($device -eq 'mouse' -and !$fresh){
+                    Focus-Keyboard (Control 'navigator-zoom_out' -Arranged)
+                    [CapyRowPointer]::Key([uint32]$review.Id,0x09)
+                    Wait-Until {(Control 'navigator-zoom_in').Current.HasKeyboardFocus} 'Tab did not focus Zoom in'
+                    $tip=@{element=$null}
+                    Wait-Until {
+                        $tip.element=@(Navigator-Tooltips|Where-Object {$_.Current.Name -eq ((Model).state.commands|Where-Object id -eq 'zoom_in').tooltip})[0]
+                        $tip.element -and $tip.element.Current.BoundingRectangle.Contains([double]$x0,[double]$y)
+                    } 'The focused Zoom in tooltip did not cover the Navigator drag start'
+                    $tooltipBefore=@{input='Tab';text=$tip.element.Current.Name;bounds=$tip.element.Current.BoundingRectangle}
+                }
                 $row=@{device=$device;ending_stimulus=$stimulus;fresh=$fresh;start_px=@($x0,$y);end_px=@($x1,$y);bounds=$box;hit=(Input-Trace $x0 $y);before=(Model).state.camera;document_before=(Navigator-Document);move_samples=6;move_sleep_ms=25;uia_during_contact=$false}
+                if($tooltipBefore){$row.tooltip_before=$tooltipBefore}
                 $timer=[Diagnostics.Stopwatch]::StartNew()
                 try{
                     try{
@@ -159,16 +178,18 @@ try {
                             [CapyRowPointer]::Move([int]($x0+($x1-$x0)*$step/6),$y)
                             Start-Sleep -Milliseconds 25
                         }
-                        $settled=@{pose=$null;count=0;camera=$null}
+                        $down=$row.down
+                        $dx=($x1-$x0)/$fit;if($down.flipped[0]){$dx=-$dx}
+                        $dy=0.;$cos=[Math]::Cos($down.rotation);$sin=[Math]::Sin($down.rotation)
+                        $target=@{x=$down.translation[0]-$down.zoom*($cos*$dx-$sin*$dy);y=$down.translation[1]-$down.zoom*($sin*$dx+$cos*$dy);tolerance=.5*[Math]::Abs($down.zoom)/$fit;camera=$null}
                         Wait-Until {
-                            $c=(Model).state.camera;$pose=Navigator-Pose $c
-                            if($pose -ceq $settled.pose){$settled.count++}else{$settled.count=0}
-                            $settled.pose=$pose;$settled.camera=$c
-                            $settled.count -ge 2 -and
-                                ([Math]::Abs($c.translation[0]-$row.down.translation[0]) -gt .1 -or
-                                 [Math]::Abs($c.translation[1]-$row.down.translation[1]) -gt .1)
-                        } "$device Navigator motion did not pan"
-                        $row.live=$settled.camera
+                            $c=(Model).state.camera;$target.camera=$c
+                            $ex=$c.translation[0]-$target.x;$ey=$c.translation[1]-$target.y
+                            $c.zoom -eq $down.zoom -and $c.rotation -eq $down.rotation -and
+                                ($c.flipped -join ',') -ceq ($down.flipped -join ',') -and
+                                [Math]::Sqrt($ex*$ex+$ey*$ey) -le $target.tolerance
+                        } "$device Navigator motion did not reach the final move"
+                        $row.live=$target.camera
                         $row.document_live=Navigator-Document
                     }finally{
                         if([CapyRowPointer]::Active){
@@ -209,10 +230,7 @@ try {
     }
     $bounds=$canvas.Current.BoundingRectangle
     [CapyRowPointer]::Hover([int]($bounds.Left+$bounds.Width/2),[int]($bounds.Top+$bounds.Height/2))
-    $tooltip=[System.Windows.Automation.AndCondition]::new(
-        [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::ToolTip),
-        [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ProcessIdProperty,$review.Id))
-    Wait-Until {!@([System.Windows.Automation.AutomationElement]::RootElement.FindAll([System.Windows.Automation.TreeScope]::Descendants,$tooltip)|Where-Object {!$_.Current.IsOffscreen}).Count} 'Navigator tooltip did not leave the capture area'
+    Wait-Until {!(Navigator-Tooltips).Count} 'Navigator tooltip did not leave the capture area'
     $area=Image-Rect
     $blank=Capture 'blank'
     try {

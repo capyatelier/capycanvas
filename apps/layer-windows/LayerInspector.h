@@ -53,7 +53,7 @@ struct LayerInspector {
         add.Opacity(open?0:1);add.IsHitTestVisible(!open);add.IsTabStop(!open);
         mark.Visibility(simple?Visibility::Collapsed:Visibility::Visible);face.ColumnDefinitions().GetAt(0).Width({simple?0.:slot,GridUnitType::Pixel});label.TextAlignment(simple?TextAlignment::Right:TextAlignment::Left);
         footer.IsEnabled(open||view.GetNamedValue(L"layer",JsonValue::CreateNullValue()).ValueType()!=JsonValueType::Null);
-        AutomationProperties::SetName(footer,label.Text());ToolTipService::SetToolTip(footer,box_value(label.Text()+(summary.Text().empty()?L"":L"\n"+summary.Text())));
+        AutomationProperties::SetName(footer,label.Text());tooltip(footer,label.Text()+(summary.Text().empty()?L"":L"\n"+summary.Text()));
         setIcon(mark,L"properties",data->theme());setIcon(chevron,L"chevron-down",data->theme());chevronRotation.Angle(open?0.:180.);label.FontSize(data->textSize());summary.FontSize(data->textSize()*.9);
         auto nextTarget=CapyLayers::epochOf(data)+L":"+to_hstring(num(view,L"layer",-1));if(nextTarget!=target){target=nextTarget;anchor=J{};}
     }

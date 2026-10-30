@@ -570,6 +570,30 @@ inline void setTouchContact(bool touch){
         return false;
     });
 }
+inline void dismissTooltipOnDeparture(ToolTip const& tip,DependencyObject const& owner){
+    auto host=std::make_shared<weak_ref<UIElement>>();
+    auto depart=box_value(PointerEventHandler([host,owner=make_weak(owner),tip=make_weak(tip)](auto&&,PointerRoutedEventArgs const& event){
+        if(event.IsGenerated())return;
+        auto target=owner.get();
+        for(auto node=event.OriginalSource().try_as<DependencyObject>();node;node=VisualTreeHelper::GetParent(node))if(node==target)return;
+        if(auto root=host->get())if(auto tooltip=tip.get();tooltip&&tooltip.IsOpen()){
+            auto popups=VisualTreeHelper::GetOpenPopupsForXamlRoot(root.XamlRoot());tooltip.IsOpen(false);
+            for(auto popup:popups)if(popup.Child()==tooltip)popup.IsOpen(false);
+        }
+    }));
+    tip.Opened([host,depart,owner=make_weak(owner)](auto&&,auto&&){
+        if(host->get())return;
+        if(auto target=owner.get())if(auto view=target.try_as<UIElement>();view&&view.XamlRoot()){
+            auto root=view.XamlRoot().Content();*host=make_weak(root);
+            for(auto event:{UIElement::PointerEnteredEvent(),UIElement::PointerMovedEvent()})root.AddHandler(event,depart,true);
+        }
+    });
+    tip.Closed([host,depart](auto&& sender,auto&&){
+        if(sender.template as<ToolTip>().IsOpen())return;
+        if(auto root=host->get())for(auto event:{UIElement::PointerEnteredEvent(),UIElement::PointerMovedEvent()})root.RemoveHandler(event,depart);
+        *host=weak_ref<UIElement>{};
+    });
+}
 inline void tooltip(DependencyObject const& target,hstring const& text){
     auto& owners=tooltipOwners();
     if(auto found=owners.find(get_abi(target));found!=owners.end()&&found->second.owner.get()==target){
@@ -578,7 +602,7 @@ inline void tooltip(DependencyObject const& target,hstring const& text){
         return;
     }
     if(owners.size()>=1024)std::erase_if(owners,[](auto const& entry){return !entry.second.owner.get();});
-    ToolTip tip;tip.Content(box_value(text));
+    ToolTip tip;tip.Content(box_value(text));dismissTooltipOnDeparture(tip,target);
     if(!touchContact())ToolTipService::SetToolTip(target,tip);
     owners.insert_or_assign(get_abi(target),TooltipOwner{make_weak(target),tip});
 }
