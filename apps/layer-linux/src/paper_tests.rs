@@ -99,7 +99,7 @@ fn native_paper_picker_relief_and_scale() {
     save_snapshot(&w, 200, || path("texture-dialog"));
     assert_eq!(dialog.title(), "Choose Texture");
     assert_eq!(grid.observe_children().n_items(), built_in() as u32);
-    assert_eq!(pending(&grid), drawing(), "Drawing is selected");
+    assert_eq!(pending(&grid), drawing(), "Fine tooth is selected");
     let size = content_size(&dialog);
     assert_eq!(size, (720, 560), "Choose Texture is Edit Color's width and shows three full rows");
     let tile = grid.child_at_index(0).unwrap();
@@ -215,7 +215,7 @@ fn native_paper_picker_relief_and_scale() {
     assert_eq!(texture(&w), layer_core::paper::default_texture());
 
     let row = || state(&w).layers.into_iter().find(|row| row.id == paper).unwrap();
-    assert_eq!(row().paper.unwrap().label.as_ref(), "Drawing");
+    assert_eq!(row().paper.unwrap().label.as_ref(), "Fine tooth");
     let thumbnails = || {
         let row: gtk::Box = named(w.window.upcast_ref(), &format!("art-layer-{paper}"));
         let buttons: Vec<gtk::Button> = descendants::<gtk::Button>(row.upcast_ref()).into_iter().filter(|b| b.has_css_class("layer-thumbnail") && b.is_visible()).collect();

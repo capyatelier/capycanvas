@@ -288,7 +288,7 @@ extension XCTestCase {
             expectation(for: NSPredicate(format: "selected == YES"), evaluatedWith: tile)
             waitForExpectations(timeout: 10)
         }
-        expectTexture("Drawing")
+        expectTexture("Fine tooth")
         let white = editorPixels(in: app)
         let dialog = app.descendants(matching: .any)["texture-dialog"].firstMatch
         let drawingPaper = app.buttons["texture-tile-4"], rough = app.buttons["texture-tile-2"]
@@ -302,7 +302,7 @@ extension XCTestCase {
         XCTAssertFalse(drawingPaper.isSelected)
         workspaceActivate(app.buttons["texture-cancel"])
         XCTAssertTrue(dialog.waitForNonExistence(timeout: 10))
-        expectTexture("Drawing"); expectPixels(white, in: app)
+        expectTexture("Fine tooth"); expectPixels(white, in: app)
         workspaceActivate(texture)
         XCTAssertTrue(dialog.waitForExistence(timeout: 10))
         expectPending(drawingPaper); XCTAssertFalse(rough.isSelected, "Cancel forgets the pending texture")
@@ -313,7 +313,7 @@ extension XCTestCase {
         editorHistory("Undo", in: app)
         XCTAssertTrue(footer.waitForNonExistence(timeout: 10))
         showLayers()
-        expectTexture("Drawing"); expectPixels(white, in: app)
+        expectTexture("Fine tooth"); expectPixels(white, in: app)
 
         let addMask = app.buttons["layer-Add mask"]
         XCTAssertTrue(addMask.waitForExistence(timeout: 10))

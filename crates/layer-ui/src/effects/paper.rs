@@ -249,7 +249,7 @@ mod tests {
         assert_eq!((numeric.kind, numeric.min, numeric.max), (NumericKind::Dial, 0., 360.));
         assert_eq!(view.controls[4].value, EffectValue::Number(225.));
         let PropertyKind::Choice { options } = &view.controls[1].kind else { panic!("texture is a choice") };
-        assert_eq!(options.iter().map(|o| o.as_ref()).collect::<Vec<_>>(), ["Hot press", "Cold press", "Rough", "Extra rough", "Drawing", "Bristol", "Newsprint", "Ingres",
+        assert_eq!(options.iter().map(|o| o.as_ref()).collect::<Vec<_>>(), ["Hot press", "Cold press", "Rough", "Extra rough", "Fine tooth", "Bristol", "Newsprint", "Ingres",
             "Pastel", "Sanded", "Coarse grit", "Washi", "Unryu", "Handmade", "Canvas", "Linen",
             "Canvas paper", "Rough linen", "Burlap", "Gesso panel", "Gesso across", "Gesso down", "Rough gesso", "Rough across",
             "Rough down", "Matte film", "Chalkboard", "Concrete", "Sand", "Asphalt", "Barn wood", "Dry mud",

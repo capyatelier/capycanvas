@@ -115,7 +115,7 @@ extension XCTestCase {
             XCTAssertTrue(drawer.waitForExistence(timeout: 10))
             #endif
         }
-        let papers = ["Hot press", "Cold press", "Rough", "Extra rough", "Drawing", "Bristol", "Newsprint", "Ingres",
+        let papers = ["Hot press", "Cold press", "Rough", "Extra rough", "Fine tooth", "Bristol", "Newsprint", "Ingres",
             "Pastel", "Sanded", "Coarse grit", "Washi", "Unryu", "Handmade", "Canvas", "Linen",
             "Canvas paper", "Rough linen", "Burlap", "Gesso panel", "Gesso across", "Gesso down", "Rough gesso", "Rough across",
             "Rough down", "Matte film", "Chalkboard", "Concrete", "Sand", "Asphalt", "Barn wood", "Dry mud",
@@ -588,7 +588,7 @@ extension XCTestCase {
             let shot=XCTAttachment(screenshot:app.screenshot())
             shot.name="paper-"+phase+"-"+theme;shot.lifetime = .keepAlways;add(shot)
         }
-        properties();expect(texture,value:"Drawing")
+        properties();expect(texture,value:"Fine tooth")
         let original=settledSample()
         openChooser();workspaceActivate(app.buttons["texture-import"]);XCTAssertTrue(chooser.waitForNonExistence(timeout:10))
         #if os(macOS)
@@ -601,7 +601,7 @@ extension XCTestCase {
         XCTAssertTrue(cancel.waitForExistence(timeout:20));captureState("import-cancel-chooser");workspaceActivate(cancel)
         XCTAssertTrue(cancel.waitForNonExistence(timeout:15))
         #endif
-        properties();expect(texture,value:"Drawing");samePixels(original);noError()
+        properties();expect(texture,value:"Fine tooth");samePixels(original);noError()
         openChooser();workspaceActivate(app.buttons["texture-import"]);XCTAssertTrue(chooser.waitForNonExistence(timeout:10))
         #if os(macOS)
         XCTAssertTrue(open.waitForExistence(timeout:20));goToFolder(photo,in:app)
@@ -624,7 +624,7 @@ extension XCTestCase {
         let thumbnailBefore=try await ordinaryPaperThumbnail(importedTile,name:"paper-native-import-preview-"+theme)
         useTile(importedTile)
         let imported=settledSample()
-        editorMenu(in:app,menu:"Edit",id:"undo",label:"Undo");properties();expect(texture,value:"Drawing")
+        editorMenu(in:app,menu:"Edit",id:"undo",label:"Undo");properties();expect(texture,value:"Fine tooth")
         editorMenu(in:app,menu:"Edit",id:"redo",label:"Redo");properties();expect(texture,value:fileName)
         samePixels(imported)
         context(fileName,action:"Rename…")

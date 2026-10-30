@@ -825,7 +825,7 @@ mod tests {
         act(&mut s, NewDrawingAction::Paper);
         let (tiles, relief) = paper(&s);
         assert_eq!((tiles[0].id.clone(), tiles.len()), (None, layer_core::paper::built_in_papers().len() + 1));
-        assert!(tiles.iter().any(|tile| tile.selected && tile.id.as_deref() == Some("drawing_paper")));
+        assert!(tiles.iter().any(|tile| tile.selected && tile.id.as_deref() == Some("cold_press")));
         assert_eq!((relief.value, relief.enabled, relief.numeric.min, relief.numeric.max), (100., true, 0., 300.));
         assert!(s.dispatch(UiAction::NewDrawing { action: NewDrawingAction::PickPaper { id: Some("missing".into()) } }).is_err());
         act(&mut s, NewDrawingAction::PaperRelief { value: 250. });

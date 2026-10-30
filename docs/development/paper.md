@@ -197,7 +197,7 @@ any other Paper bakes it into paint, as for any fill.
 - **Brushes read the paper in document pixels.** `paper_uv` in
   [`contact_field.wgsl`](../../crates/layer-render-wgpu/src/contact_field.wgsl)
   adds the target layer's offset, so moving a layer does not shift its tooth.
-- **Calibration.** Drawing paper gives every dry-media brush the tooth contrast
+- **Calibration.** Fine tooth paper gives every dry-media brush the tooth contrast
   of the single built-in paper that preceded Paper, so a 300 ppi drawing keeps
   its pencil, charcoal, chalk, pastel and crayon character. The other papers
   were tuned against it with every dry-media brush at three pressures. Every
@@ -310,7 +310,7 @@ with Add to Library; adding it reuses an equal stored image.
   does not.
 - **Brush cost follows tooth contrast.** Brushes read the paper once per pixel,
   with its tile size and relief in the per-batch uniform and no extra shader
-  variant. Dry media on Drawing paper run as fast as before Paper; rougher
+  variant. Dry media on Fine tooth paper run as fast as before Paper; rougher
   papers cost them a few percent more per update
   ([top tier](../performance/top-tier.md#paper)).
 - **The paper preview** shades the displayed canvas with the paper's slope

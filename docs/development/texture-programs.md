@@ -320,11 +320,11 @@ the app simpler to use.
 
 Eighteen programs make 38 papers; presets are listed with each. Their
 amplitudes are tooth depths tuned by eye, not measurements
-([measurements](paper.md#measurements)). Drawing paper has the height spread of
+([measurements](paper.md#measurements)). Fine tooth paper has the height spread of
 the paper the app had before Paper, so each dry-media brush keeps its tooth
 contrast; the other papers were tuned against it in the
 [paper gallery](#validation-and-tests). Bristol and hot press fill sooner than
-Drawing paper; rough, handmade and canvas leave more paper white. Each 300 ppi
+Fine tooth paper; rough, handmade and canvas leave more paper white. Each 300 ppi
 tile bakes in under 4 ms on an NVIDIA RTX PRO 6000; mobile bake times are not
 measured.
 
@@ -385,7 +385,7 @@ slightly stretched fine tooth, partly aligned fibers and a calender plateau.
 | `finish` | % | 0–100 | 35 |
 | `seed` | count | 0–16777215 | 1 |
 
-Presets: Drawing (`tooth` 0.35, `finish` 35), Bristol (0.2, 55). Period
+Presets: Fine tooth (`tooth` 0.35, `finish` 35), Bristol (0.2, 55). Period
 64 mm.
 
 ```wgsl

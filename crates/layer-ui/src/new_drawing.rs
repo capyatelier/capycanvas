@@ -320,16 +320,16 @@ pub fn built_in_presets() -> &'static [BuiltInPreset] {
         use SampleDepth::{F16, U8, U16};
         let p = |id, name, group, setup| BuiltInPreset { id, name, group, setup };
         vec![
-            p("pocket-book", M::DOCUMENTS_PRESET_POCKET_BOOK, Sketch, sheet(In, 3.5, 5.5, 300, Srgb, U8, "drawing_paper", 100, NATURAL, false)),
-            p("sketchbook-a5", M::DOCUMENTS_PRESET_SKETCHBOOK_A5, Sketch, sheet(Mm, 210., 148., 300, Srgb, U8, "drawing_paper", 100, NATURAL, false)),
-            p("sketchbook-a4", M::DOCUMENTS_PRESET_SKETCHBOOK_A4, Sketch, sheet(Mm, 297., 210., 300, Srgb, U8, "drawing_paper", 100, NATURAL, false)),
-            p("sketch-pad", M::DOCUMENTS_PRESET_SKETCH_PAD, Sketch, sheet(In, 12., 9., 300, Srgb, U8, "drawing_paper", 100, WHITE, false)),
-            p("square-book", M::DOCUMENTS_PRESET_SQUARE_BOOK, Sketch, sheet(In, 8., 8., 300, Srgb, U8, "drawing_paper", 100, CREAM, false)),
-            p("toned-tan", M::DOCUMENTS_PRESET_TONED_TAN, Sketch, sheet(In, 12., 9., 300, Srgb, U8, "drawing_paper", 100, TONED_TAN, false)),
-            p("toned-gray", M::DOCUMENTS_PRESET_TONED_GRAY, Sketch, sheet(In, 12., 9., 300, Srgb, U8, "drawing_paper", 100, TONED_GRAY, false)),
-            p("toned-blue", M::DOCUMENTS_PRESET_TONED_BLUE, Sketch, sheet(In, 12., 9., 300, Srgb, U8, "drawing_paper", 100, TONED_BLUE, false)),
-            p("kraft-paper", M::DOCUMENTS_PRESET_KRAFT_PAPER, Sketch, sheet(In, 11., 8.5, 300, Srgb, U8, "drawing_paper", 100, KRAFT, false)),
-            p("black-book", M::DOCUMENTS_PRESET_BLACK_BOOK, Sketch, sheet(Mm, 210., 148., 300, Srgb, U8, "drawing_paper", 100, BLACK, false)),
+            p("pocket-book", M::DOCUMENTS_PRESET_POCKET_BOOK, Sketch, sheet(In, 3.5, 5.5, 300, Srgb, U8, "cold_press", 100, NATURAL, false)),
+            p("sketchbook-a5", M::DOCUMENTS_PRESET_SKETCHBOOK_A5, Sketch, sheet(Mm, 210., 148., 300, Srgb, U8, "cold_press", 100, NATURAL, false)),
+            p("sketchbook-a4", M::DOCUMENTS_PRESET_SKETCHBOOK_A4, Sketch, sheet(Mm, 297., 210., 300, Srgb, U8, "cold_press", 100, NATURAL, false)),
+            p("sketch-pad", M::DOCUMENTS_PRESET_SKETCH_PAD, Sketch, sheet(In, 12., 9., 300, Srgb, U8, "cold_press", 100, WHITE, false)),
+            p("square-book", M::DOCUMENTS_PRESET_SQUARE_BOOK, Sketch, sheet(In, 8., 8., 300, Srgb, U8, "cold_press", 100, CREAM, false)),
+            p("toned-tan", M::DOCUMENTS_PRESET_TONED_TAN, Sketch, sheet(In, 12., 9., 300, Srgb, U8, "cold_press", 100, TONED_TAN, false)),
+            p("toned-gray", M::DOCUMENTS_PRESET_TONED_GRAY, Sketch, sheet(In, 12., 9., 300, Srgb, U8, "cold_press", 100, TONED_GRAY, false)),
+            p("toned-blue", M::DOCUMENTS_PRESET_TONED_BLUE, Sketch, sheet(In, 12., 9., 300, Srgb, U8, "cold_press", 100, TONED_BLUE, false)),
+            p("kraft-paper", M::DOCUMENTS_PRESET_KRAFT_PAPER, Sketch, sheet(In, 11., 8.5, 300, Srgb, U8, "cold_press", 100, KRAFT, false)),
+            p("black-book", M::DOCUMENTS_PRESET_BLACK_BOOK, Sketch, sheet(Mm, 210., 148., 300, Srgb, U8, "cold_press", 100, BLACK, false)),
             p("bristol-pad", M::DOCUMENTS_PRESET_BRISTOL_PAD, Sketch, sheet(In, 14., 11., 300, Srgb, U8, "bristol", 100, WHITE, false)),
             p("newsprint-pad", M::DOCUMENTS_PRESET_NEWSPRINT_PAD, Sketch, sheet(In, 24., 18., 300, Srgb, U8, "newsprint", 50, NEWSPRINT, false)),
             p("drafting-film", M::DOCUMENTS_PRESET_DRAFTING_FILM, Sketch, sheet(In, 12., 9., 300, Srgb, U8, "drafting_film", 100, WHITE, false)),
@@ -1142,8 +1142,8 @@ mod tests {
         let screen = catalog.get(&PresetKey::BuiltIn(THIS_SCREEN.into())).unwrap();
         assert_eq!((screen.setup.extent(), screen.setup.resolution), ([2880, 1800], 220));
         let summary = catalog.summary("Kraft paper", &built_in("kraft-paper", None).unwrap());
-        assert_eq!((summary.size.as_str(), summary.details.as_str()), ("11 × 8.5 in · 300 ppi", "sRGB 8-bit SDR · Drawing 100 %, Kraft"));
-        assert_eq!(catalog.get(&PresetKey::BuiltIn("uhd-hdr".into())).unwrap().details, "144 ppi · Drawing · HDR");
+        assert_eq!((summary.size.as_str(), summary.details.as_str()), ("11 × 8.5 in · 300 ppi", "sRGB 8-bit SDR · Cold press 100 %, Kraft"));
+        assert_eq!(catalog.get(&PresetKey::BuiltIn("uhd-hdr".into())).unwrap().details, "144 ppi · Fine tooth · HDR");
         assert_eq!(catalog.tiles(BrowserTab::Group(PresetGroup::Digital), "").len(), 10);
     }
 }

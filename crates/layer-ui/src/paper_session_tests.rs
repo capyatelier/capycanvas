@@ -389,7 +389,7 @@ fn paper_rows_name_their_texture_and_previews_resolve_by_identity() {
     let mut s = session(Platform::Gtk);
     let layer = paper_layer(&s);
     let row = |s: &UiSession<Recorder>| s.state.layers.iter().find(|row| row.id == layer).unwrap().paper.clone().unwrap();
-    assert_eq!(row(&s), crate::LayerPaper { id: Some("drawing_paper".into()), label: "Drawing".into(), editable: true });
+    assert_eq!(row(&s), crate::LayerPaper { id: Some("drawing_paper".into()), label: "Fine tooth".into(), editable: true });
     assert!(s.state.layers.iter().filter(|row| row.id != layer).all(|row| row.paper.is_none()));
     assert_eq!(s.paper_preview("drawing_paper"), Some(layer_core::paper::built_in_paper("drawing_paper").unwrap().preview.clone()));
     s.dispatch(UiAction::Effect { action: EffectAction::Set { layer, key: "texture".into(), value: layer_core::EffectValue::Choice(2) } }).unwrap();
