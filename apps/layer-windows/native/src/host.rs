@@ -308,7 +308,6 @@ impl CapyHost {
     }
 
     fn accepts_workspace_input(&self)->Result<bool,String> {
-        if self.native.session.workspace_read_only(){return Ok(false);}
         if self.services.as_ref().is_some_and(|service|service.close_status().requested){return Ok(false);}
         self.workspaces.as_ref().map(|owner|owner.with(|service|Ok(service.accepts_input(crate::workspace_service::now_ms())))).transpose().map(|accepted|accepted.unwrap_or(true))
     }
@@ -2060,7 +2059,18 @@ mod handle_tests {
             Self(handles::insert(host).unwrap().raw())
         }
         fn blocked(&self, blocked: bool) {
-            borrow::<CapyHost>(self.0).unwrap().native.session.set_workspace_read_only(blocked);
+            let mut host=borrow::<CapyHost>(self.0).unwrap();
+            if blocked {
+                if host.services.is_none() {
+                    let (_,settings)=crate::settings::SettingsService::launch(&[],None).unwrap();
+                    host.services=Some(settings.start(&mut host.native,||{}));
+                }
+                host.native.session.request_document_close().unwrap();
+            } else {
+                host.native.session.reset_document_close();
+            }
+            host.poll_services().unwrap();
+            assert_eq!(host.accepts_workspace_input().unwrap(),!blocked);
         }
         fn edge(&self, id: u64, phase: &str, position: [f32; 2], ms: u64) -> i32 {
             self.edge_as(id,phase,"touch",position,ms)
@@ -2245,6 +2255,30 @@ mod handle_tests {
         owner.pointer(&[sample(7,4,start,7)]);
         let host=borrow::<CapyHost>(owner.0).unwrap();
         assert!(host.edge_touches.is_empty() && host.live_contacts.is_empty());
+    }
+
+    #[test]
+    fn read_only_workspace_finishes_an_existing_canvas_contact() {
+        let owner=Owner::new(1600,1000);
+        let mut contact=sample(7,1,[800.,500.],1);contact.tool=0;
+        {
+            let host=borrow::<CapyHost>(owner.0).unwrap();
+            assert!(host.native.session.pointer_contact_paints(layer_ui::PointerKind::Pen,PointerButton::Primary,[800.,500.]));
+        }
+        owner.pointer(&[contact]);
+        assert!(borrow::<CapyHost>(owner.0).unwrap().native.session.require_workspace_idle().is_err());
+        borrow::<CapyHost>(owner.0).unwrap().native.session.set_workspace_read_only(true);
+        contact.phase=2;contact.x+=40.;contact.sequence=2;contact.timestamp_ns=400_000_000;
+        owner.pointer(&[contact]);
+        assert!(borrow::<CapyHost>(owner.0).unwrap().native.session.require_workspace_idle().is_err(),"read-only interrupted the admitted paint contact");
+        contact.phase=3;contact.sequence=3;contact.timestamp_ns=600_000_000;
+        owner.pointer(&[contact]);
+        borrow::<CapyHost>(owner.0).unwrap().native.session.require_workspace_idle().unwrap();
+        contact.phase=1;contact.sequence=4;contact.timestamp_ns=800_000_000;
+        owner.pointer(&[contact]);
+        borrow::<CapyHost>(owner.0).unwrap().native.session.require_workspace_idle().unwrap();
+        contact.phase=3;contact.sequence=5;contact.timestamp_ns=1_000_000_000;
+        owner.pointer(&[contact]);
     }
 
     #[test]
