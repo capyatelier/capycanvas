@@ -25,7 +25,7 @@ import SwiftUI
             for (index, command) in ["website", "source_code", "website"].enumerated() {
                 accepted = index == 2
                 store.invoke(command)
-                try await wait("Link callback, error state and request completion") {
+                try await wait("Link callback for platform \(platform), \(command): callbacks \(urls.count)/\(index + 1), requests \(store.state["requests"].stableKey), native error \(String(describing: store.failure)), shared error \(store.state["host_error"].stableKey), expected error \(store.bootstrap["recovery"]["link_open_failed"].string), window visible \(window.isVisible)") {
                     urls.count == index + 1
                         && !store.state["requests"].array.contains { $0["kind"]["type"].string == "open_link" }
                         && store.failure == (accepted ? nil : "Could not open the link")
