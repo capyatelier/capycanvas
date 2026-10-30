@@ -104,10 +104,10 @@ try{
         if($native.snapshot_qpc -ge $dividerStart -and $native.snapshot_qpc -le $dividerEnd){$native}
     })
     $dividerSamples|ConvertTo-Json -Depth 40|Set-Content (Join-Path $dividerFolder 'presentations.json')
-    Check ($dividerSamples.Count -gt 0 -and @($dividerSamples.panel_revision|Sort-Object -Unique).Count -gt 1 -and @($dividerSamples|Where-Object {$_.panel_revision -ne $_.presented_panel_revision}).Count -gt 0) 'Stack-divider samples include changing unacknowledged bridge revisions' $dividerSamples.Count
+    Check ($dividerSamples.Count -gt 0 -and @($dividerSamples.chrome_revision|Sort-Object -Unique).Count -gt 1 -and @($dividerSamples|Where-Object {$_.chrome_revision -ne $_.presented_chrome_revision}).Count -gt 0) 'Stack-divider samples include changing unacknowledged bridge revisions' $dividerSamples.Count
     foreach($native in $dividerSamples){
         $receivers=@($native.groups|Where-Object {$_.id -in $continuing})
-        Check ($receivers.Count -eq $continuing.Count -and @($receivers|Where-Object {!$_.gpu_background -or $_.native_bridge_background}).Count -eq 0) 'Stack-divider receivers retain GPU ownership without native backing' @{qpc=$native.snapshot_qpc;revision=$native.panel_revision;presented=$native.presented_panel_revision;receivers=$receivers}
+        Check ($receivers.Count -eq $continuing.Count -and @($receivers|Where-Object {!$_.gpu_background -or $_.native_bridge_background}).Count -eq 0) 'Stack-divider receivers retain GPU ownership without native backing' @{qpc=$native.snapshot_qpc;revision=$native.chrome_revision;presented=$native.presented_chrome_revision;receivers=$receivers}
     }
     Open-Column 'stack-divider-settled'
     $moveStart=[CapyBridgeWindow]::Bounds($window);$caption=$null
@@ -123,8 +123,8 @@ try{
             [CapyRowPointer]::Move($caption[0]+12*$step,$caption[1]+6*$step)
             Wait-Until {$box=[CapyBridgeWindow]::Bounds($window);$box[0]-ge$moveStart[0]+8*$step} 'SendInput titlebar drag did not move owned window'
             $native=Presentation;$receivers=@($native.groups|Where-Object {$_.id -in $continuing})
-            $moveSamples.Add(@{qpc=[Diagnostics.Stopwatch]::GetTimestamp();step=$step;bounds=[CapyBridgeWindow]::Bounds($window);window_resizing=$native.window_resizing;native_resize_pending=$native.native_resize_pending;panel_revision=$native.panel_revision;presented_panel_revision=$native.presented_panel_revision;receivers=$receivers})
-            Check (!$native.window_resizing -and !$native.native_resize_pending -and $native.panel_revision -eq $native.presented_panel_revision -and $receivers.Count -eq $continuing.Count -and @($receivers|Where-Object {!$_.gpu_background -or $_.native_bridge_background}).Count -eq 0) 'Titlebar movement retains presented GPU receivers' $moveSamples[$moveSamples.Count-1]
+            $moveSamples.Add(@{qpc=[Diagnostics.Stopwatch]::GetTimestamp();step=$step;bounds=[CapyBridgeWindow]::Bounds($window);window_resizing=$native.window_resizing;native_resize_pending=$native.native_resize_pending;chrome_revision=$native.chrome_revision;presented_chrome_revision=$native.presented_chrome_revision;receivers=$receivers})
+            Check (!$native.window_resizing -and !$native.native_resize_pending -and $native.chrome_revision -eq $native.presented_chrome_revision -and $receivers.Count -eq $continuing.Count -and @($receivers|Where-Object {!$_.gpu_background -or $_.native_bridge_background}).Count -eq 0) 'Titlebar movement retains presented GPU receivers' $moveSamples[$moveSamples.Count-1]
         }
     }finally{[CapyRowPointer]::Up();$moveSamples|ConvertTo-Json -Depth 30|Set-Content (Join-Path $run 'titlebar-move-samples.json')}
     $moveEnd=[CapyBridgeWindow]::Bounds($window)

@@ -115,7 +115,7 @@ function Check-Open([int]$Id){
                 if(!$button -or (($button.Current.ItemStatus -eq 'Selected') -ne ($icon.panel -eq $group.active))){return $false}
             }
         }
-        if(!$presentation.panel_revision -or $presentation.presented_panel_revision -ne $presentation.panel_revision){return $false}
+        if(!$presentation.chrome_revision -or $presentation.presented_chrome_revision -ne $presentation.chrome_revision){return $false}
         $frame=$presentation.panel_bridge_frame
         if(!$frame -or !$frame.bridges){return $false}
         $bridges=@($frame.bridges|Where-Object {$_[0] -eq $Id})

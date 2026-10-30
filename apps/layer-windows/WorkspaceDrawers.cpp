@@ -54,7 +54,9 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
     ~Drawer(){dispose();}
     void dispose(){
         if(disposed)return;disposed=true;frames.revoke();
-        remove(workspace,frame);remove(workspace,bridge);remove(workspace,shadow.Root());
+        auto owner=weak_from_this().lock();
+        for(auto const& element:{UIElement(frame),UIElement(bridge),UIElement(shadow.Root())})
+            if(!gestures->DeferRemoval(element,owner))remove(workspace,element);
     }
     void init(){
         auto weak=weak_from_this();
@@ -174,8 +176,8 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
         NativeString raw(capy_drawer_frame(data->localization.get(),to_string(request.Stringify()).c_str()),capy_string_free);
         if(!raw)throw hresult_invalid_argument(L"Drawer frame failed");
         geometry=J::Parse(to_hstring(raw.get()));if(progress>=1.)animating=false;
-        rebuild();draw();changed();
         if(closing&&progress>=1.){frames.revoke();closed();return;}
+        rebuild();draw();changed();
         if(!dirty&&!animating&&!(inspector&&inspector->animating))frames.revoke();
     }
     void rebuild(){
@@ -418,11 +420,10 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
     void paintBackground(){
         auto bounds=object(object(geometry,L"placement"),L"bounds");float width=float(num(bounds,L"width")),height=float(num(bounds,L"height"));
         if(width<=0||height<=0)return;
-        A holes;auto tabs=array(data->state,L"tabs");auto document=tabs.Size()?tabs.GetObjectAt(0):J{};
+        A holes;auto document=data->chromeFrames->presented.document;
         for(auto const& column:columns)for(auto const& panel:column.panels){
             auto const& body=bodies.at(panel).view;if(!body||!body->navigator)continue;
-            auto clip=visibleBounds(column.scroll,content);
-            auto slot=body->navigator->Placement(content,clip,order());if(!slot.Size())continue;
+            auto slot=body->navigator->PresentedPlacement(content);if(!slot.Size())continue;
             auto nav=coordinates(array(slot,L"bounds"));float image[4]{};
             if(!capy_navigator_image(nav.Width,nav.Height,uint32_t(num(document,L"width")),uint32_t(num(document,L"height")),image))continue;
             auto hole=intersect(intersect({nav.X+image[0],nav.Y+image[1],image[2],image[3]},coordinates(array(slot,L"clip"))),{0,0,width,height});
@@ -452,15 +453,16 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
     void collectGlass(A& regions,A& links,UIElement const& reference)const{
         auto design=cornerRadii(frame.CornerRadius());for(auto& radius:design)radius/=CornerFit;
         if(disposed||!appendGlass(regions,frame,reference,design,true))return;
+        data->chromeFrames->Track(frame);data->chromeFrames->Track(bridge);data->chromeFrames->Track(shadow.Root());
         appendConnection(links,object(geometry,L"connection"),workspace,reference);
     }
-    void appendOverviews(A& slots)const{
+    void appendOverviews(A& slots,bool capture=true)const{
         if(disposed||!frame.IsLoaded())return;
         for(auto const& column:columns)for(auto const& panel:column.panels){
             auto const& body=bodies.at(panel).view;
             if(!body||!body->navigator)continue;
-            auto slot=body->navigator->Placement(workspace,visibleBounds(column.scroll,workspace),visualOrder(workspace,frame));
-            if(slot.Size())slots.Append(slot);
+            auto slot=body->navigator->Placement(workspace,visibleBounds(column.scroll,workspace),visualOrder(workspace,frame),capture);
+            if(slot.Size()){slot.Insert(L"opacity",N(frame.Opacity()));slots.Append(slot);}
         }
     }
     void appendBounds(A& measurements)const{
@@ -488,20 +490,20 @@ struct WorkspaceDrawers::Impl:std::enable_shared_from_this<Impl>{
     std::shared_ptr<WorkspaceGestures> gestures;
     std::function<void()> changed;
     std::map<std::wstring,std::shared_ptr<Drawer>> drawers;
-    hstring lastTiles=L"[]",lastBounds=L"[]",lastFacts;
+    hstring lastTiles=L"[]",lastBounds=L"[]",lastFacts,lastChrome;
     bool publishing=false,resetting=false;
     uint64_t contextGeneration=0;
     void publish(){
-        if(publishing||resetting)return;publishing=true;
+        if(publishing||resetting)return;publishing=true;bool updated=false;
         A measuredBounds;for(auto const& [id,drawer]:drawers)drawer->appendBounds(measuredBounds);
         auto placed=measuredBounds.Stringify();
         if(placed!=lastBounds){
-            lastBounds=placed;data->dispatch(O({{L"type",S(L"measure_column_drawers")},{L"measurements",measuredBounds}}));
+            updated=true;lastBounds=placed;data->dispatch(O({{L"type",S(L"measure_column_drawers")},{L"measurements",measuredBounds}}));
         }
         A tiles;for(auto const& [id,drawer]:drawers)drawer->appendTiles(tiles);
         auto measurements=tiles.Stringify();
         if(measurements!=lastTiles){
-            lastTiles=measurements;data->dispatch(O({{L"type",S(L"measure_drawer_tiles")},{L"measurements",tiles}}));
+            updated=true;lastTiles=measurements;data->dispatch(O({{L"type",S(L"measure_drawer_tiles")},{L"measurements",tiles}}));
             if(auto it=drawers.find(L"tool");it!=drawers.end())it->second->wake();
         }
         auto tool=drawers.find(L"tool");J geometry=tool==drawers.end()?J{}:tool->second->geometry;
@@ -510,10 +512,13 @@ struct WorkspaceDrawers::Impl:std::enable_shared_from_this<Impl>{
         auto facts=O({{L"content_drawer",bounds.Size()?V(bounds):JsonValue::CreateNullValue()},
             {L"drawer_connection",connection.Size()?V(connection):JsonValue::CreateNullValue()}});
         if(facts.Stringify()!=lastFacts){
-            lastFacts=facts.Stringify();for(auto const& fact:facts)data->chrome.Insert(fact.Key(),fact.Value());
+            updated=true;lastFacts=facts.Stringify();for(auto const& fact:facts)data->chrome.Insert(fact.Key(),fact.Value());
             gestures->ChromeChanged();
         }
-        changed();publishing=false;
+        A chrome;for(auto const& [id,drawer]:drawers){A overviews;drawer->appendOverviews(overviews,false);
+            chrome.Append(O({{L"geometry",drawer->geometry},{L"overviews",overviews},{L"source",drawer->presentedSource}}));}
+        auto key=chrome.Stringify();if(key!=lastChrome){lastChrome=key;updated=true;}
+        if(updated)changed();publishing=false;
     }
     void apply(NativeLayoutInput input,float width,float height){
         auto customization=object(data->state,L"customization");std::map<std::wstring,J> models;
@@ -551,6 +556,7 @@ WorkspaceDrawers::WorkspaceDrawers(std::shared_ptr<WorkspaceData> data,Canvas ro
     impl(std::make_shared<Impl>()){impl->data=std::move(data);impl->root=root;impl->gestures=std::move(gestures);impl->changed=std::move(changed);}
 WorkspaceDrawers::~WorkspaceDrawers(){impl->reset();}
 void WorkspaceDrawers::Apply(NativeLayoutInput input,float width,float height){impl->apply(std::move(input),width,height);}
+void WorkspaceDrawers::PresentChrome(){for(auto const& [id,drawer]:impl->drawers)drawer->paintBackground();}
 void WorkspaceDrawers::AppendOverviews(A& slots)const{for(auto const& [id,drawer]:impl->drawers)drawer->appendOverviews(slots);}
 A WorkspaceDrawers::Sources()const{
     A result;

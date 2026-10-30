@@ -54,10 +54,10 @@ inline Rect allocatedBounds(FrameworkElement const& element,UIElement const& ref
 }
 inline void refreshAssetIconTheme(DependencyObject const& node,hstring const& theme,std::set<void*>& seen){
     if(!node||!seen.insert(get_abi(node)).second)return;
-    if(auto image=node.try_as<Image>())if(auto source=image.Source().try_as<Imaging::SvgImageSource>();source&&source.UriSource()){
-        std::wstring uri(source.UriSource().AbsoluteUri());auto root=std::wstring(asset(L"").AbsoluteUri());
+    if(auto image=node.try_as<Image>())if(auto source=image.Source().try_as<Imaging::SvgImageSource>();source)if(auto path=iconUri(source)){
+        std::wstring uri(path.AbsoluteUri());auto root=std::wstring(asset(L"").AbsoluteUri());
         for(auto old:{L"dark",L"light"}){auto part=std::wstring(L"/icons/")+old+L"/";auto at=uri.find(part);
-            if(uri.starts_with(root)&&at!=std::wstring::npos&&hstring(old)!=theme){uri.replace(at,part.size(),L"/icons/"+std::wstring(theme)+L"/");image.Source(Imaging::SvgImageSource(Windows::Foundation::Uri(hstring(uri))));break;}}
+            if(uri.starts_with(root)&&at!=std::wstring::npos&&hstring(old)!=theme){auto name=uri.substr(uri.find_last_of(L'/')+1);if(name.ends_with(L".svg"))name.resize(name.size()-4);setIcon(image,hstring(name),theme,image.Width());break;}}
     }
     if(auto panel=node.try_as<Panel>())for(auto child:panel.Children())refreshAssetIconTheme(child,theme,seen);
     if(auto border=node.try_as<Border>())refreshAssetIconTheme(border.Child(),theme,seen);

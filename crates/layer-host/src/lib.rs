@@ -1351,6 +1351,24 @@ mod tests {
     }
 
     #[test]
+    fn undrawable_overviews_do_not_hold_canvas_presentation() {
+        use scene::{Navigators, NavigatorSlot, SceneDisplay, SlotUnits};
+        let (_reference, mut host) = gpu_host(layer_ui::Platform::Windows, [64; 2]);
+        host.startup.canvas_ready = true;
+        let gpu = host.session.engine().backend().0.as_ref().unwrap();
+        let mut presenter = layer_render_wgpu::ViewportPresenter::for_surface(gpu,
+            wgpu::TextureFormat::Rgba8UnormSrgb, layer_render_wgpu::SdrSurfaceColor::Srgb).unwrap();
+        for (units, bounds) in [(SlotUnits::Logical, [0.,0.,8.,30.]), (SlotUnits::Physical, [0.,0.,30.,16.])] {
+            let mut navigators = Navigators::new(units);
+            navigators.set(vec![NavigatorSlot { bounds, clip: bounds, order: 0, opacity: 1. }]).unwrap();
+            assert_eq!(navigators.count(), 1);
+            assert!(navigators.placements(&host, 2.).is_empty());
+            assert!(host.compose_scene(&mut presenter, &mut Default::default(), &navigators, &[], None,
+                SceneDisplay { scale: 2., headroom: 1., blank_presented: true, compositor_hdr: false }).unwrap());
+        }
+    }
+
+    #[test]
     fn crop_apply_keeps_canvas_size_available_after_deleting_pixels() {
         use layer_ui::CommandId;
         let (_reference, mut host) = gpu_host(layer_ui::Platform::Android, [800, 600]);

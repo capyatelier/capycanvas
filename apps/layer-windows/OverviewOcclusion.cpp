@@ -58,7 +58,7 @@ struct OverviewOcclusion::Impl{
     void apply(Canvas const& root,A const& slots,J const& document){
         struct Hole{Rect bounds;int order;};std::vector<Hole> holes;
         for(auto value:slots){
-            auto slot=value.GetObject();auto bounds=rect(array(slot,L"bounds"));float image[4]{};
+            auto slot=value.GetObject();if(num(slot,L"opacity",1)<=0)continue;auto bounds=rect(array(slot,L"bounds"));float image[4]{};
             if(!capy_navigator_image(bounds.Width,bounds.Height,uint32_t(num(document,L"width")),uint32_t(num(document,L"height")),image))continue;
             auto hole=intersect({bounds.X+image[0],bounds.Y+image[1],image[2],image[3]},rect(array(slot,L"clip")));
             if(hole.Width>0&&hole.Height>0)holes.push_back({hole,int(num(slot,L"order"))});

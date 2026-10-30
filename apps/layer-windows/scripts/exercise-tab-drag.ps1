@@ -1,5 +1,5 @@
-param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme='dark',[ValidateSet('full','preview-dark','preview-light','release-dark','release-light','drawer-dark','drawer-light')][string]$Journey='full')
-if($Journey -ne 'full'){$Theme=$Journey -replace '^(preview|release|drawer)-',''}
+param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme='dark',[ValidateSet('full','preview-dark','preview-light','release-dark','release-light','drawer-dark','drawer-light','chrome-dark','chrome-light')][string]$Journey='full')
+if($Journey -ne 'full'){$Theme=$Journey -replace '^(preview|release|drawer|chrome)-',''}
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 $CapyCacheModel=$true;$CapyEach={if($env:CAPY_PRIVATE_DESKTOP){[CapyRowPointer]::VerifyPrivateDesktop($env:CAPY_PRIVATE_DESKTOP)};[CapyCanvasTouch]::Verify()}
@@ -37,14 +37,24 @@ public static class TabFrames {
     for(int c=0;c<3;c++){lo[i+c]-=6;hi[i+c]+=6;}
    }
   }
-  public int Difference(Bitmap image){
+  public int Difference(Bitmap image){return Difference(image,Rectangle.Empty);}
+  public int Difference(Bitmap image,Rectangle excluded){
    int count=0;
    for(int y=0;y<height;y++)for(int x=0;x<width;x++){
+    if(excluded.Contains(x,y))continue;
     int i=(y*width+x)*3;var v=image.GetPixel(x,y);
     if(v.R<lo[i]||v.R>hi[i]||v.G<lo[i+1]||v.G>hi[i+1]||v.B<lo[i+2]||v.B>hi[i+2])count++;
    }
    return count;
   }
+ }
+ public static int[] Remaining(Bitmap image,Bitmap final,Rectangle overview){
+  int native=0,paper=0;
+  for(int y=0;y<image.Height;y++)for(int x=0;x<image.Width;x++){
+   if(Delta(image.GetPixel(x,y),final.GetPixel(x,y))<=6)continue;
+   if(overview.Contains(x,y))paper++;else native++;
+  }
+  return new[]{native,paper};
  }
  public static int FootDifference(Bitmap a,RectangleF from,Bitmap b,RectangleF to,double scale){
   int count=0,pad=(int)(8*scale),y=(int)(to.Bottom-5*scale),oldY=(int)(from.Bottom-5*scale);
@@ -253,17 +263,190 @@ function Check-Foot([string]$Name,[string]$Before,$From,[string]$After,$To){
   $wrong
  }finally{$a.Dispose();$b.Dispose()}
 }
-function Release-Frames([string]$Name,$Area){
- $folder=Join-Path $run $Name;[IO.Directory]::CreateDirectory($folder)|Out-Null
+function Sample-Frames($Area,[scriptblock]$Action){
  $frames=[Collections.Generic.List[Drawing.Bitmap]]::new();$times=@()
  try{
   for($i=0;$i -lt 90;$i++){
-   $null=[TabFrames]::DwmFlush()
-   if($i -eq 3){$up=[Diagnostics.Stopwatch]::GetTimestamp();[CapyRowPointer]::Up()}
+   $null=[TabFrames]::DwmFlush();$actionAt=[Diagnostics.Stopwatch]::GetTimestamp();& $Action $i|Out-Null
    $begin=[Diagnostics.Stopwatch]::GetTimestamp()
-   $image=[TabFrames]::Grab([int]$Area.Left,[int]$Area.Top,[int]$Area.Width,[int]$Area.Height)
-   $frames.Add($image);$times+=@{frame=$i;begin=$begin;end=[Diagnostics.Stopwatch]::GetTimestamp()}
+   $frames.Add([TabFrames]::Grab([int]$Area.Left,[int]$Area.Top,[int]$Area.Width,[int]$Area.Height))
+   $end=[Diagnostics.Stopwatch]::GetTimestamp()
+   $times+=@{frame=$i;action=$actionAt;begin=$begin;end=$end}
   }
+  @{frames=$frames;times=$times}
+ }catch{foreach($image in $frames){$image.Dispose()};throw}
+}
+function Chrome-Area([double]$Top,[double]$Height){
+ $bounds=$root.Current.BoundingRectangle
+ [Drawing.Rectangle]::new([int]($bounds.Right-400*$scale),[int]$Top,[int](400*$scale),[int]($Height*$scale))
+}
+function Chrome-Ink($Image,$Bounds){
+ $count=0
+ for($y=[Math]::Max(0,$Bounds.Top);$y -lt [Math]::Min($Image.Height,$Bounds.Bottom);$y++){
+  for($x=[Math]::Max(0,$Bounds.Left);$x -lt [Math]::Min($Image.Width,$Bounds.Right);$x++){
+   $pixel=$Image.GetPixel($x,$y)
+   if(($Theme -eq 'dark' -and [Math]::Min($pixel.R,[Math]::Min($pixel.G,$pixel.B)) -gt 150) -or ($Theme -eq 'light' -and [Math]::Max($pixel.R,[Math]::Max($pixel.G,$pixel.B)) -lt 110)){$count++}
+  }
+ };$count
+}
+function Chrome-Sample([string]$Name,$Area,[scriptblock]$Action,[scriptblock]$Check){
+ $folder=Join-Path $run $Name;[IO.Directory]::CreateDirectory($folder)|Out-Null
+ Capture ($Name+'-before') -WithModel -Composed
+ $sample=Sample-Frames $Area $Action
+ try{
+  Capture ($Name+'-held') -WithModel -Composed
+  $null=[TabFrames]::DwmFlush();$final=[TabFrames]::Grab($Area.Left,$Area.Top,$Area.Width,$Area.Height)
+  try{
+   $final.Save((Join-Path $folder 'held.png'))
+   for($i=0;$i -lt $sample.frames.Count;$i++){$sample.frames[$i].Save((Join-Path $folder ('frame-{0:D3}.png' -f $i)))}
+   @{area=@($Area.Left,$Area.Top,$Area.Width,$Area.Height);action_frame=3;motion_frames=$(if($Name -in @('chrome-edge-open','chrome-filters-pickup')){@(4,75)}else{@()});moving_window=$(if($Name -in @('chrome-edge-open','chrome-filters-pickup')){@{start=$sample.times[4].action;end=$sample.times[75].begin}});frequency=[Diagnostics.Stopwatch]::Frequency;times=$sample.times}|ConvertTo-Json -Depth 8|Set-Content (Join-Path $folder 'frames.json')
+   & $Check $sample.frames $final $Area $Name
+  }finally{$final.Dispose()}
+ }finally{foreach($image in $sample.frames){$image.Dispose()}}
+}
+function Chrome-Overview($Frames,$Final,$Area,[string]$Name,$overview=$null,$header=$null){
+ if(!$overview){$overview=(Control 'navigator-overview' -Arranged).Current.BoundingRectangle}
+ if(!$header){$tab=Find 'panel-tab-navigator' -Visible;if(!$tab){$tab=Control 'drawer-tab-navigator' -Arranged};$header=$tab.Current.BoundingRectangle}
+ $icon=[Drawing.Rectangle]::new([int]($header.Left-$Area.Left+8*$scale),[int]($header.Top-$Area.Top+($header.Height-16*$scale)/2),[int](16*$scale),[int](16*$scale))
+ $ink=Chrome-Ink $Final $icon;if($ink -lt 5){throw "$Name has no composed Navigator reference glyph"}
+ $x=[int]($overview.Left-$Area.Left+$overview.Width/2);$y=[int]($overview.Top-$Area.Top+$overview.Height/2)
+ $fill=$Final.GetPixel([int]($header.Right-$Area.Left-5*$scale),[int]($header.Top-$Area.Top+8*$scale))
+ $errors=@();for($i=3;$i -lt $Frames.Count;$i++){
+  if((Chrome-Ink $Frames[$i] $icon) -lt $ink*.7){continue}
+  $pixel=$Frames[$i].GetPixel($x,$y)
+  if([Math]::Max($pixel.R,[Math]::Max($pixel.G,$pixel.B)) -lt [Math]::Min($fill.R,[Math]::Min($fill.G,$fill.B))-4){$errors+=@($i)}
+ }
+ @{overview=$overview;header=$header;reference_ink=$ink;fallback=@($fill.R,$fill.G,$fill.B);invalid=$errors}|ConvertTo-Json -Depth 8|Set-Content (Join-Path $run ($Name+'-pixels.json'))
+ if($errors.Count){$script:frameFailures+=@("$Name exposed the canvas through Navigator in frames $($errors -join ',')")}
+}
+function Chrome-Review {
+ Use-PaintWorkspace
+ Set-CapyTransparency high
+ $column=@((Model).layout.collapsed|Where-Object {$_.groups.icons.panel -contains 'navigator'})[0]
+ if(!$column){
+  $bounds=(Control 'panel-tab-navigator' -Arranged).Current.BoundingRectangle
+  [CapyRowPointer]::RightClick([int]($bounds.Left+$bounds.Width/2),[int]($bounds.Top+$bounds.Height/2));Invoke 'Collapse column' -Name
+  Wait-Until {@((Model).layout.collapsed|Where-Object {$_.groups.icons.panel -contains 'navigator'}).Count -gt 0} 'Chrome setup did not collapse the Paint right column'
+  $column=@((Model).layout.collapsed|Where-Object {$_.groups.icons.panel -contains 'navigator'})[0]
+ }
+ if($column.open){Invoke 'column-icon-navigator';Wait-Until {!(@((Model).layout.collapsed|Where-Object id -eq $column.id)[0].open)} 'Navigator member did not close'}
+ $origin=[CapyRowPointer+Point]::new();[CapyRowPointer]::ClientToScreen($drawingWindow,[ref]$origin)|Out-Null
+ $divider=@((Model).layout.dividers|Where-Object {$_.axis -eq 'horizontal' -and !$_.fixed}|Sort-Object {$_.bounds.x} -Descending)[0]
+ $x=[int]($origin.x+($divider.bounds.x+$divider.bounds.width/2)*$scale);$y=[int]($origin.y+120*$scale)
+ $area=Chrome-Area ($origin.y+48*$scale) 350
+ Chrome-Sample 'chrome-edge-open' $area {
+  param($i)
+  if($i -eq 3){[CapyRowPointer]::Down('mouse',$x,$y)}
+  if($i -ge 4 -and $i -le 75){[CapyRowPointer]::Move([int]($x-110*$scale*($i-3)/72),$y)}
+ } ${function:Chrome-Overview}
+ $closingOverview=(Control 'navigator-overview' -Arranged).Current.BoundingRectangle;$closingHeader=(Control 'panel-tab-navigator' -Arranged).Current.BoundingRectangle
+ $excluded=[Drawing.Rectangle]::FromLTRB([int][Math]::Floor($closingOverview.Left-$area.Left),[int][Math]::Floor($closingOverview.Top-$area.Top),[int][Math]::Ceiling($closingOverview.Right-$area.Left),[int][Math]::Ceiling($closingOverview.Bottom-$area.Top))
+ Chrome-Sample 'chrome-edge-close' $area {param($i)if($i -eq 3){[CapyRowPointer]::Key(0x1b);[CapyRowPointer]::Up()}} {
+  param($frames,$final,$area,$name)
+  Chrome-Overview $frames $frames[2] $area ($name+'-hole') $closingOverview $closingHeader
+  $envelope=[TabFrames+Envelope]::new($frames[2],$final);$bad=@();$fullBad=@();$scores=@()
+  for($i=3;$i -lt $frames.Count;$i++){
+   $full=$envelope.Difference($frames[$i]);$native=$envelope.Difference($frames[$i],$excluded);$remaining=[TabFrames]::Remaining($frames[$i],$final,$excluded)
+   $scores+=@{frame=$i;full_invalid_pixels=$full;native_invalid_pixels=$native;overview_invalid_pixels=($full-$native);native_remaining_pixels=$remaining[0];overview_remaining_pixels=$remaining[1]}
+   if($full -gt 8){$fullBad+=@($i)}
+   if($native -gt 8){$bad+=@($i)}
+  }
+  @{overview=$closingOverview;excluded=$excluded;area=$area;native_invalid=$bad;full_invalid=$fullBad;scores=$scores}|ConvertTo-Json -Depth 8|Set-Content (Join-Path $run ($name+'-pixels.json'))
+  if($bad.Count){$script:frameFailures+=@("$name exposed a third native chrome state in frames $($bad -join ',')")}
+ }
+ Wait-Until {@((Model).layout.collapsed|Where-Object id -eq $column.id).Count -gt 0} 'Edge cancellation did not restore its column'
+ $icon=Control 'column-icon-layers' -Arranged;$b=$icon.Current.BoundingRectangle
+ [CapyRowPointer]::RightClick([int]($b.Left+$b.Width/2),[int]($b.Top+$b.Height/2));Invoke 'Expand column' -Name
+ Wait-Until {$null -ne (Find 'panel-tab-adjustments' -Visible)} 'Right column did not expand'
+ Invoke 'panel-tab-layers'
+ $layers=(Control 'panel-tab-layers' -Arranged).Current.BoundingRectangle;$filters=(Control 'panel-tab-adjustments' -Arranged).Current.BoundingRectangle
+ $area=Chrome-Area ($layers.Top-8*$scale) 160
+ $x=[int]($filters.Left+8*$scale);$y=[int]($filters.Top+$filters.Height/2)
+ Chrome-Sample 'chrome-filters-pickup' $area {
+  param($i)
+  if($i -eq 3){[CapyRowPointer]::Down('mouse',$x,$y)}
+  if($i -ge 4 -and $i -le 75){[CapyRowPointer]::Move([int]($x+40*$scale*($i-3)/72),$y)}
+ } {
+  param($frames,$final,$area,$name)
+  $bad=@();foreach($tab in @($layers,$filters)){
+   $glyph=[Drawing.Rectangle]::new([int]($tab.Left-$area.Left+8*$scale),[int]($tab.Top-$area.Top+($tab.Height-16*$scale)/2),[int](16*$scale),[int](16*$scale))
+   $reference=Chrome-Ink $frames[2] $glyph
+   if($reference -lt 5){throw "$name has no composed source glyph"}
+   for($i=3;$i -lt $frames.Count;$i++){
+    $moved=[Drawing.Rectangle]::new($glyph.X+[int](40*$scale),$glyph.Y,$glyph.Width,$glyph.Height)
+    if((Chrome-Ink $frames[$i] $glyph) -lt $reference*.3 -and ($tab -eq $layers -or (Chrome-Ink $frames[$i] $moved) -lt $reference*.3)){$bad+=@($i)}
+   }
+  }
+  @{invalid=$bad}|ConvertTo-Json|Set-Content (Join-Path $run ($name+'-pixels.json'))
+  if($bad.Count){$script:frameFailures+=@("$name lost tab glyphs in frames $($bad -join ',')")}
+ }
+ [CapyRowPointer]::Key(0x1b);[CapyRowPointer]::Up()
+ Wait-Until {$null -eq (Find-Preview)} 'Chrome pickup cancellation retained its preview'
+ Invoke 'panel-tab-adjustments'
+ $category=Control 'filter-category' -Arranged;$category.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
+ $tone=Control 'Tone' -Name -Type $ControlType::ListItem
+ $b=$category.Current.BoundingRectangle;$area=Chrome-Area ($b.Top-8*$scale) 80
+ Chrome-Sample 'chrome-tone-category' $area {param($i)if($i -eq 3){$tone.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()}} {
+  param($frames,$final,$area,$name)
+  $glyph=[Drawing.Rectangle]::new([int]($b.Left-$area.Left-22*$scale),[int]($b.Top-$area.Top+($b.Height-16*$scale)/2),[int](16*$scale),[int](16*$scale))
+  $sourceInk=Chrome-Ink $frames[2] $glyph;$finalInk=Chrome-Ink $final $glyph
+  if($sourceInk -lt 5 -or $finalInk -lt 5){throw "$name has no composed source or Tone reference glyph"}
+  $reference=[Math]::Min($sourceInk,$finalInk);$bad=@();$scores=@()
+  for($i=4;$i -lt $frames.Count;$i++){
+   $ink=Chrome-Ink $frames[$i] $glyph;$scores+=@{frame=$i;ink=$ink}
+   if($ink -lt $reference*.3){$bad+=@($i)}
+  }
+  @{glyph=$glyph;source_ink=$sourceInk;final_ink=$finalInk;invalid=$bad;scores=$scores}|ConvertTo-Json -Depth 6|Set-Content (Join-Path $run ($name+'-pixels.json'))
+  if($bad.Count){$script:frameFailures+=@("$name lost its category glyph in frames $($bad -join ',')")}
+ }
+ $b=(Control 'panel-tab-navigator' -Arranged).Current.BoundingRectangle
+ [CapyRowPointer]::RightClick([int]($b.Left+$b.Width/2),[int]($b.Top+$b.Height/2));Invoke 'Collapse column' -Name
+ Wait-Until {$null -ne (Find 'column-icon-navigator' -Visible)} 'Drawer setup did not collapse the column'
+ $b=(Control 'column-icon-navigator' -Arranged).Current.BoundingRectangle
+ [CapyRowPointer]::RightClick([int]($b.Left+$b.Width/2),[int]($b.Top+$b.Height/2))
+ $toggle=(Control 'Open individual panels' -Name).GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)
+ if($toggle.Current.ToggleState -eq [System.Windows.Automation.ToggleState]::Off){$toggle.Toggle()}
+ [CapyRowPointer]::Key(0x1b)
+ $area=Chrome-Area ($origin.y+48*$scale) 350;$x=[int]($b.Left+$b.Width/2);$y=[int]($b.Top+$b.Height/2)
+ Chrome-Sample 'chrome-drawer-open' $area {param($i)if($i -eq 3){[CapyRowPointer]::Down('mouse',$x,$y);[CapyRowPointer]::Up()}} ${function:Chrome-Overview}
+ Capture 'chrome-final' -WithModel -Composed
+ $displayPath=(State-File) -replace 'ui-state-','presentation-state-';$idleDisplay=@{snapshot=$null}
+ Wait-Until {$display=Read-Snapshot $displayPath;$idleDisplay.snapshot=$display;$display.process_id -eq $review.Id -and $display.required -and $null -ne $display.displayed -and $display.displayed -ge $display.required} 'Idle chrome content did not reach the current displayed presentation'
+ Wait-Until {$native=Presentation;$native.chrome_revision -and $native.presented_chrome_revision -eq $native.chrome_revision} 'Idle chrome did not reach its presented revision'
+ $idle=Model;$shown=Presentation
+ $reference=@{frames=@($idle.windows_glass.frames);revision=$shown.chrome_revision;presented=$shown.presented_chrome_revision}
+ $script:chromeIdle=@{start=[Diagnostics.Stopwatch]::GetTimestamp();display=$idleDisplay.snapshot;frequency=[Diagnostics.Stopwatch]::Frequency;trace=((Split-Path -Leaf (State-File)) -replace '^ui-state-','latency-' -replace '\.json$','-presentations.csv')}
+ $observations=@();for($i=0;$i -lt 90;$i++){
+  $null=[TabFrames]::DwmFlush();$idle=Model;$shown=Presentation
+  $observations+=@{sample=$i;ticks=[Diagnostics.Stopwatch]::GetTimestamp();frames=@($idle.windows_glass.frames);revision=$shown.chrome_revision;presented=$shown.presented_chrome_revision}
+ }
+ $script:chromeIdle.end=[Diagnostics.Stopwatch]::GetTimestamp()
+ @{reference=$reference;observations=$observations;window=$script:chromeIdle}|ConvertTo-Json -Depth 8|Set-Content (Join-Path $run 'chrome-idle.json')
+ if(@($observations|Where-Object {($_.frames -join ',') -ne ($reference.frames -join ',') -or $_.revision -ne $reference.revision -or $_.presented -ne $reference.presented}).Count){$script:frameFailures+=@('Idle chrome republished or produced GPU backdrop frames')}
+ if($script:frameFailures.Count){throw ($script:frameFailures -join "`n")}
+ @{theme=$Theme;device='mouse';transparency='high';navigator_handoff='passed';tab_glyphs='passed';tone_category='passed';drawer_handoff='passed';idle_chrome_revision='passed'}|ConvertTo-Json
+}
+
+function Chrome-IdleResult {
+ $frequency=[decimal]$script:chromeIdle.frequency
+ $start=[decimal]$script:chromeIdle.start;$end=[decimal]$script:chromeIdle.end
+ $startNs=[long]([Math]::Floor($start/$frequency)*1000000000+[Math]::Floor(($start%$frequency)*1000000000/$frequency))
+ $endNs=[long]([Math]::Floor($end/$frequency)*1000000000+[Math]::Floor(($end%$frequency)*1000000000/$frequency))
+ $trace=Join-Path $run $script:chromeIdle.trace
+ if(!(Test-Path -LiteralPath $trace)){throw 'Idle chrome has no presentation trace'}
+ $status=Get-Content ($trace -replace '-presentations.csv$','-status.json') -Raw|ConvertFrom-Json
+ if($status.overflow){throw 'Idle chrome presentation trace overflowed'}
+ $rows=@(Import-Csv -LiteralPath $trace);$during=@($rows|Where-Object {[decimal]$_.render_start_ns -ge $startNs -and [decimal]$_.render_start_ns -le $endNs})
+ @{window=$script:chromeIdle;start_ns=$startNs;end_ns=$endNs;trace=$trace;presentations=$rows.Count;idle_presentations=$during}|ConvertTo-Json -Depth 8|Set-Content (Join-Path $run 'chrome-idle-presentations.json')
+ if($during.Count){throw "Idle chrome rendered $($during.Count) GPU presentations"}
+ @{idle_presentations='passed';observed_presentations=$rows.Count}|ConvertTo-Json
+}
+function Release-Frames([string]$Name,$Area){
+ $folder=Join-Path $run $Name;[IO.Directory]::CreateDirectory($folder)|Out-Null
+ $frames=$null
+ try{
+  $sample=Sample-Frames $Area {param($i)if($i -eq 3){$script:releaseUp=[Diagnostics.Stopwatch]::GetTimestamp();[CapyRowPointer]::Up()}}
+  $frames=$sample.frames;$times=$sample.times;$up=$script:releaseUp
   Wait-Until {$null -eq (Find-Preview)} "$Name did not hand over to its arranged controls"
   Wait-StablePixels {Screen-Pixels ([int]($Area.Left+$Area.Width/2)) ([int]($Area.Bottom-2*$scale))} -Composed|Out-Null
   $final=[TabFrames]::Grab([int]$Area.Left,[int]$Area.Top,[int]$Area.Width,[int]$Area.Height)
@@ -400,7 +583,8 @@ function Drawer-Review {
  [pscustomobject]@{theme=$Theme;drawer_automatic_reorder='passed';fresh_order_oracle='passed';width=$width;zero_exit='passed'}|ConvertTo-Json
 }
 try{
- Enter-CapyEnvironment
+ Enter-CapyEnvironment @('CAPY_LATENCY_TRACE')
+ if($Journey -like 'chrome-*' -or ($Journey -eq 'full' -and $Theme -eq 'dark')){$env:CAPY_LATENCY_TRACE='1'}
  $env:CAPY_STORAGE_DIR=Join-Path $run 'profile'
  [IO.File]::WriteAllText((Settings-File),(@{language=@{Explicit='en'};theme=$Theme}|ConvertTo-Json -Compress))
  $env:CAPY_TRACE_UI='1';$env:CAPY_SMOKE_TEST='1';$env:CAPY_TEST_DISPLAY='1';$env:CAPY_TEST_PRIMARY='1'
@@ -410,7 +594,7 @@ try{
  [IO.File]::WriteAllText((Join-Path $repo 'artifacts/windows/tab-drag-review.json'),(@{process_id=$review.Id;run=$run}|ConvertTo-Json))
  Write-Output "Owned tab review $($review.Id)"
  $native=@{window=$null}
- Wait-Until {$native.window=Owned-DrawingWindow $review;$native.window -and (Model).brush_ready -and (Model).windows_workspace.ready -and !(Model).windows_workspace.busy} 'Review did not start' 75
+ Wait-Until {$startup=Model;if(!$startup.brush_ready -or !$startup.windows_workspace.ready -or $startup.windows_workspace.busy){return $false};$native.window=Owned-DrawingWindow $review;$null -ne $native.window} 'Review did not start' 75
  $drawingWindow=$native.window.Handle;$root=$native.window.Root
  [CapyCanvasTouch]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
  [CapyWindowApi]::ShowWindow($drawingWindow,3)|Out-Null
@@ -434,6 +618,7 @@ try{
  $script:frameFailures=@()
  $normal=$baseline.state.workspace.layout|ConvertTo-Json -Depth 80 -Compress
  $baseline|ConvertTo-Json -Depth 90|Set-Content (Join-Path $run 'before-model.json')
+ if($Journey -in @('chrome-dark','chrome-light')){Chrome-Review;return}
  if($Journey -like 'drawer-*'){Drawer-Review;return}
  if($Journey -like 'release-*'){
   foreach($device in @('mouse','pen','touch')){foreach($edge in @(-12,4)){Leftward-Tab 'panel-tab-' 'sizes' 'tool_settings' $device $edge}}
@@ -590,17 +775,26 @@ try{
   };$true}finally{$restored.Dispose()}
  } 'Navigator cancellation did not restore the lower native panel pixels'
  if((Model).state.document_file.modified){throw 'Navigator workspace/camera motion modified the drawing'}
+ if($Theme -eq 'dark'){[CapyRowPointer]::Initialize([uint32]$review.Id);Chrome-Review}
  & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -StateDirectory $run -Action Close -DiscardUnsaved
  if(!$review.WaitForExit(15000)){throw 'Owned tab-drag window did not close'}
  if($review.ExitCode -ne 0){throw "Owned tab-drag process exited $($review.ExitCode)"}
  if((Get-Item -LiteralPath $stderr).Length){throw 'Native stderr requires inspection'}
  [pscustomobject]@{os_touch_routing='passed';attached_preview='passed';fixed_hit_rectangles='passed';release_insertion='passed';different_grab_position='passed';pointer_cancel='passed';tear_off='passed';held_floating_drag='passed';incremental_publication='passed';retained_native_controls='passed';resize_grip_placement='passed';navigator_gpu_motion='passed';fast_tearoff_capture='passed';mixed_camera='passed';overview_occlusion_and_restore='passed';detached_cancel='passed';workspace_undo='passed';zero_exit='passed';scope='OS-injected touch; physical input and latency acceptance remain separate'}|ConvertTo-Json
 }catch{
+ $script:journeyFailure=$_
  try{Capture 'failure' -WithModel -Composed}catch{}
  [IO.File]::WriteAllText((Join-Path $run 'failure.txt'),($_|Out-String)+$_.ScriptStackTrace);throw
 }finally{
  try{[CapyRowPointer]::Dispose()}catch{}
  try{[CapyCanvasTouch]::Dispose()}catch{}
  if($review -and !$review.HasExited){if($drawingWindow){$null=[CapyWindowApi]::PostMessage($drawingWindow,0x10,[UIntPtr]::Zero,[IntPtr]::Zero)};if(!$review.WaitForExit(10000)){$review.Kill();$review.WaitForExit()}}
- Exit-CapyEnvironment
+ try{
+  if($script:chromeIdle){
+   try{Chrome-IdleResult}catch{
+    $_|Out-String|Set-Content (Join-Path $run 'chrome-idle-failure.txt')
+    if($script:journeyFailure){Write-Error $_ -ErrorAction Continue}else{throw}
+   }
+  }
+ }finally{Exit-CapyEnvironment}
 }

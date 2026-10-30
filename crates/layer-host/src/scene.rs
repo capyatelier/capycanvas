@@ -312,7 +312,7 @@ impl NativeHost {
         glass: &[BackdropRegion],
         tone: Option<Arc<GpuToneGuide>>,
         display: SceneDisplay,
-    ) -> Result<(), String> {
+    ) -> Result<bool, String> {
         let error = |e: layer_render_wgpu::GpuRasterError| e.to_string();
         self.session.update_canvas_cursor(cursor);
         self.session.append_layer_overlay(&mut cursor.segments);
@@ -377,7 +377,7 @@ impl NativeHost {
             },
             session.hold_canvas_backdrop(),
         );
-        Ok(())
+        Ok(staged)
     }
 }
 

@@ -4,7 +4,7 @@ use crate::device::D3d12Watch;
 use crate::input::{read_json, with_text};
 use layer_host::{
     NativeHost,
-    scene::{Glass, Navigators, SceneDisplay},
+    scene::SceneDisplay,
 };
 use layer_render::CanvasRenderer;
 use layer_render_wgpu::ViewportPresenter;
@@ -89,10 +89,8 @@ pub struct CapyHost {
     instance: wgpu::Instance,
     cursor: CanvasCursor,
     chrome_facts: layer_ui::ChromeFacts,
-    navigators: Navigators,
-    glass: Glass,
-    presented_panel_revision: Option<u64>,
-    published_panel_revision: Option<u64>,
+    chrome: crate::chrome::Chrome,
+    published_chrome_revision: Option<u64>,
     published_glass_count: usize,
     scale: f32,
     blank_presented: bool,
@@ -273,10 +271,8 @@ impl CapyHost {
             instance,
             cursor: CanvasCursor::default(),
             chrome_facts: layer_ui::ChromeFacts::default(),
-            navigators: Default::default(),
-            glass: Default::default(),
-            presented_panel_revision: None,
-            published_panel_revision: None,
+            chrome: Default::default(),
+            published_chrome_revision: None,
             published_glass_count: 0,
             scale,
             blank_presented: false,
@@ -455,7 +451,7 @@ impl CapyHost {
         self.native.invalidate_snapshot();
         self.native.startup = Default::default();
         self.presenter = Some(presenter);
-        self.presented_panel_revision = None;
+        self.chrome.presented_revision = None;
         self.config = Some(config);
         self.native.reset_canvas_frame_rate();
         Ok(())
@@ -498,7 +494,7 @@ impl CapyHost {
             presenter.pipelines_ready(gpu);
             self.presenter = Some(presenter);
             self.presenter_key = Some(key);
-            self.presented_panel_revision = None;
+            self.chrome.presented_revision = None;
         }
         let presenter = self
             .presenter
@@ -506,7 +502,7 @@ impl CapyHost {
             .ok_or("Viewport presenter is not prepared")?;
         let chrome=self.blank_presented;
         if chrome {
-            presenter.set_panel_surfaces(gpu,self.glass.panels(self.scale));
+            presenter.set_panel_surfaces(gpu,self.chrome.glass.panels(self.scale));
             if !presenter.prepare_chrome(gpu) {
                 self.native.dirty=true;
                 return Ok(1);
@@ -519,15 +515,20 @@ impl CapyHost {
             blank_presented: self.blank_presented,
             compositor_hdr: false,
         };
-        self.native.compose_scene(
+        let chrome_staged = self.native.compose_scene(
             presenter,
             &mut self.cursor,
-            &self.navigators,
-            self.glass.regions(self.scale),
+            &self.chrome.navigators,
+            self.chrome.glass.regions(self.scale),
             tone,
             display,
         )?;
         if let Some(timing) = &mut self.frame_timing { timing.composed_ns = crate::frame_timing::now(); }
+        if !self.chrome.can_present(chrome_staged) {
+            self.native.dirty = true;
+            self.poll_services()?;
+            return Ok(1);
+        }
         let gpu = self.native.session.engine().backend().0.as_ref().unwrap();
         let Some(target) = take_prepared_target(presenter, gpu, &mut self.target) else {
             if !self.surface_ready.queued && let Some(target)=self.target.take() {
@@ -564,9 +565,7 @@ impl CapyHost {
         self.blank_presented = true;
         gpu.device().poll(wgpu::PollType::Poll).map_err(err)?;
         self.gpu.check()?;
-        if chrome {
-            self.presented_panel_revision=Some(self.glass.panel_revision());
-        }
+        self.chrome.presented(chrome_staged && presenter.chrome_ready());
         self.poll_services()?;
         Ok(i32::from(self.native.dirty))
     }
@@ -1299,8 +1298,8 @@ pub unsafe extern "C" fn capy_snapshot(host: u64, info: *mut CapySnapshotInfo) -
                     .collect()
             },
             windows_glass: serde_json::json!({
-                "regions": host.glass.count(),
-                "panel_revision": host.presented_panel_revision,
+                "regions": host.chrome.glass.count(),
+                "chrome_revision": host.chrome.presented_revision,
                 "frames": host.presenter.as_ref().map_or([0; 2], |p| p.backdrop_frames()),
             }),
             windows_document: host.documents.as_ref().and_then(|service| service.status()),
@@ -1328,7 +1327,7 @@ pub unsafe extern "C" fn capy_snapshot(host: u64, info: *mut CapySnapshotInfo) -
                 format!("{} ({:?})", info.name, info.device_type)
             }),
         };
-        let glass_changed=host.published_panel_revision!=host.presented_panel_revision||host.published_glass_count!=host.glass.count();
+        let glass_changed=host.published_chrome_revision!=host.chrome.presented_revision||host.published_glass_count!=host.chrome.glass.count();
         let update=host.native.take_layout_update_bytes().map_err(err)?;
         let bytes=match update {
             Some(bytes)=>{
@@ -1337,15 +1336,15 @@ pub unsafe extern "C" fn capy_snapshot(host: u64, info: *mut CapySnapshotInfo) -
                 Some(layer_host::extend_update(bytes,&extension))
             },
             None if glass_changed=>Some(serde_json::to_vec(&serde_json::json!({
-                "windows_glass":{"regions":host.glass.count(),"frames":host.presenter.as_ref().map_or([0;2],|p|p.backdrop_frames()),
-                    "panel_revision":host.presented_panel_revision},
+                "windows_glass":{"regions":host.chrome.glass.count(),"frames":host.presenter.as_ref().map_or([0;2],|p|p.backdrop_frames()),
+                    "chrome_revision":host.chrome.presented_revision},
             })).map_err(err)?),
             None=>None,
         };
         if let Some(bytes) = bytes {
             host.localization_generation = Some(generation);
-            host.published_panel_revision=host.presented_panel_revision;
-            host.published_glass_count=host.glass.count();
+            host.published_chrome_revision=host.chrome.presented_revision;
+            host.published_glass_count=host.chrome.glass.count();
             let routing = if info.is_null() { None } else { Some(CapySnapshotInfo::read(&bytes).map_err(err)?) };
             let snapshot = CString::new(bytes).map_err(err)?;
             if let Some(routing) = routing { unsafe { *info = routing; } }
@@ -1612,30 +1611,8 @@ pub unsafe extern "C" fn capy_glass(host: u64, json: *const c_char) -> i32 {
     guard(host, |host| {
         let layout = unsafe { with_text(json, |text| Ok(serde_json::from_str(text))) }?
             .map_err(|_| "Invalid glass geometry".to_string());
-        match layout.and_then(|layout| host.native.set_glass(&mut host.glass, layout)) {
-            Ok(()) => Ok(0),
-            Err(error) => {
-                fail(error);
-                Ok(1)
-            }
-        }
-    })
-}
-
-/// Native overview geometry, serialized on the same owner as canvas actions.
-/// # Safety
-/// `host` must be null or a live exclusively accessed host. `json` must be null
-/// or a readable, unchanged NUL-terminated buffer throughout the call.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn capy_overviews(host: u64, json: *const c_char) -> i32 {
-    guard(host, |host| {
-        let slots = unsafe { with_text(json, |text| Ok(serde_json::from_str(text))) }?
-            .map_err(|_| "Invalid Navigator geometry".to_string());
-        match slots.and_then(|slots| host.navigators.set(slots)) {
-            Ok(changed) => {
-                host.native.dirty |= changed;
-                Ok(0)
-            }
+        match layout.and_then(|layout| host.chrome.set(layout)) {
+            Ok(changed) => { host.native.dirty |= changed; Ok(0) },
             Err(error) => {
                 fail(error);
                 Ok(1)
@@ -1978,10 +1955,10 @@ mod snapshot_routing_tests {
         assert_eq!(std::mem::offset_of!(CapySnapshotInfo,brush_ready),first+6*std::mem::size_of::<usize>());
         assert_eq!(std::mem::offset_of!(CapySnapshotInfo,glass),first+8*std::mem::size_of::<usize>());
         assert_eq!(std::mem::size_of::<CapySnapshotInfo>(),first+10*std::mem::size_of::<usize>());
-        for bytes in [br#"{"camera":{},"windows_glass":{"panel_revision":3}}"#.as_slice(),
-            br#"{"command_search":null,"windows_glass":{"panel_revision":3}}"#] {
+        for bytes in [br#"{"camera":{},"windows_glass":{"chrome_revision":3}}"#.as_slice(),
+            br#"{"command_search":null,"windows_glass":{"chrome_revision":3}}"#] {
             let info=CapySnapshotInfo::read(bytes).unwrap();
-            assert_eq!(&bytes[info.glass.offset..info.glass.offset+info.glass.length],br#"{"panel_revision":3}"#);
+            assert_eq!(&bytes[info.glass.offset..info.glass.offset+info.glass.length],br#"{"chrome_revision":3}"#);
         }
     }
     #[test]

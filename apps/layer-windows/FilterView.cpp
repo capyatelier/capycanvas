@@ -95,7 +95,7 @@ struct FiltersView : std::enable_shared_from_this<FiltersView> {
         int categorySelected=0;for(uint32_t i=0;i<categories.Size();i++)if(str(categories.GetObjectAt(i),L"id")==str(picker,L"category"))categorySelected=i;
         selectIndex(category,categorySelected);
         auto glyph=categorySelected>=0&&uint32_t(categorySelected)<categories.Size()?str(categories.GetObjectAt(categorySelected),L"icon",L"adjustments"):hstring(L"adjustments");
-        if(glyph!=categoryGlyphKey){categoryGlyphKey=glyph;categoryGlyph.Source(icon(glyph,data->theme()).Source());}
+        if(glyph!=categoryGlyphKey){categoryGlyphKey=glyph;setIcon(categoryGlyph,glyph,data->theme());}
         bool open=picker.GetNamedValue(L"search",JsonValue::CreateNullValue()).ValueType()==JsonValueType::String;
         bool wasOpen=search.Visibility()==Visibility::Visible;
         categoryGlyph.Visibility(open?Visibility::Collapsed:Visibility::Visible);

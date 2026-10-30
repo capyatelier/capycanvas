@@ -278,7 +278,36 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
             if(std::any_of(edge->path.begin(),edge->path.end(),[&](auto const& weak){return weak.get()==node;}))return true;
         return false;
     }
-    bool deferRemoval(UIElement const& element,std::shared_ptr<void> retainedOwner){
+    struct RetiredNavigation {
+        Bindings restore;
+        ~RetiredNavigation(){for(auto& reset:restore)reset();}
+    };
+    void retireNavigation(UIElement const& element,Bindings* restore=nullptr){
+        std::function<void(DependencyObject const&)> hideFromNavigation=[&](DependencyObject const& node){
+            if(restore){auto view=AutomationProperties::GetAccessibilityView(node);auto control=node.try_as<Control>();bool stop=control&&control.IsTabStop();
+                restore->emplace_back([weak=make_weak(node),view,stop]{if(auto node=weak.get()){AutomationProperties::SetAccessibilityView(node,view);if(auto control=node.try_as<Control>())control.IsTabStop(stop);}});}
+            if(auto control=node.try_as<Control>())control.IsTabStop(false);
+            AutomationProperties::SetAccessibilityView(node,Microsoft::UI::Xaml::Automation::Peers::AccessibilityView::Raw);
+            for(int n=0;n<VisualTreeHelper::GetChildrenCount(node);++n)hideFromNavigation(VisualTreeHelper::GetChild(node,n));
+        };
+        hideFromNavigation(element);
+    }
+    void retireVisual(UIElement const& element,Bindings* restore=nullptr){
+        retireNavigation(element,restore);auto visual=Microsoft::UI::Xaml::Hosting::ElementCompositionPreview::GetElementVisual(element);
+        visual.StartAnimation(L"Opacity",visual.Compositor().CreateExpressionAnimation(L"0"));
+    }
+    bool deferRemoval(UIElement const& element,std::shared_ptr<void> retainedOwner,std::shared_ptr<RetiredNavigation> navigation={}){
+        if(data->chromeFrames->Retains(element)){
+            auto parent=VisualTreeHelper::GetParent(element).try_as<Panel>();if(!parent)return false;
+            auto key=ChromeFrames::Id(element);if(data->chromeFrames->retiring.contains(key))return true;
+            if(!navigation)navigation=std::make_shared<RetiredNavigation>();
+            element.IsHitTestVisible(false);retireNavigation(element,navigation->restore.empty()?&navigation->restore:nullptr);element.Opacity(0);
+            data->chromeFrames->retiring.emplace(key,[weak=weak_from_this(),parent,element,navigation,retainedOwner=std::move(retainedOwner)]{
+                if(auto self=weak.lock();self&&self->deferRemoval(element,retainedOwner,navigation))return;
+                uint32_t index;if(parent.Children().IndexOf(element,index))parent.Children().RemoveAt(index);
+            });
+            return true;
+        }
         if(!retains(element))return false;
         auto parent=VisualTreeHelper::GetParent(element).try_as<Panel>();if(!parent)return false;
         if(!edge->shield){
@@ -289,14 +318,9 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
             AutomationProperties::SetAccessibilityView(shield,Microsoft::UI::Xaml::Automation::Peers::AccessibilityView::Raw);
             root.Children().Append(shield);edge->shield=shield;AutomationProperties::SetName(shield,AutomationProperties::GetName(root));shield.Focus(FocusState::Programmatic);
         }
-        std::function<void(DependencyObject const&)> hideFromNavigation=[&](DependencyObject const& node){
-            if(auto control=node.try_as<Control>())control.IsTabStop(false);
-            AutomationProperties::SetAccessibilityView(node,Microsoft::UI::Xaml::Automation::Peers::AccessibilityView::Raw);
-            for(int n=0;n<VisualTreeHelper::GetChildrenCount(node);++n)hideFromNavigation(VisualTreeHelper::GetChild(node,n));
-        };
-        hideFromNavigation(element);auto visual=Microsoft::UI::Xaml::Hosting::ElementCompositionPreview::GetElementVisual(element);
-        visual.StartAnimation(L"Opacity",visual.Compositor().CreateExpressionAnimation(L"0"));edge->retired.emplace_back(make_weak(parent),element);
-        if(retainedOwner)edge->owners.push_back(std::move(retainedOwner));return true;
+        if(!navigation)navigation=std::make_shared<RetiredNavigation>();
+        retireVisual(element,navigation->restore.empty()?&navigation->restore:nullptr);edge->retired.emplace_back(make_weak(parent),element);
+        if(retainedOwner)edge->owners.push_back(std::move(retainedOwner));edge->owners.push_back(std::move(navigation));return true;
     }
     void edgeDown(PointerRoutedEventArgs const& e){
         auto p=e.GetCurrentPoint(root);
@@ -761,7 +785,11 @@ void WorkspaceGestures::ChromeChanged(){impl->chrome(O({{L"kind",S(L"refresh")}}
 bool WorkspaceGestures::Cancel(){return impl->cancelAll();}
 bool WorkspaceGestures::SuppressClick()const{return impl->ignoreClick;}
 bool WorkspaceGestures::DeferRemoval(UIElement const& element,std::shared_ptr<void> owner){return impl->deferRemoval(element,std::move(owner));}
-bool WorkspaceGestures::Retains(UIElement const& element)const{return impl->retains(element);}
+bool WorkspaceGestures::Retains(UIElement const& element)const{
+    if(!impl->data->chromeFrames->retiring.empty())for(auto node=element.as<DependencyObject>();node&&node!=impl->root;node=VisualTreeHelper::GetParent(node))
+        if(impl->data->chromeFrames->retiring.contains(ChromeFrames::Id(node)))return true;
+    return impl->retains(element);
+}
 
 std::pair<float,bool> WorkspaceGestures::TabOffset(uint32_t group)const{return impl->tabSlide->ActiveOffset(group);}
 std::optional<Rect> WorkspaceGestures::TabBounds(uint32_t group,UIElement const& relative)const{return impl->tabSlide->ActiveBounds(group,relative);}

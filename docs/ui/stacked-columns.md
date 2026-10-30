@@ -65,11 +65,11 @@ an unconnected native tab bar only clips its content and adds no corner filler.
 
 Windows measures its retained native groups, strip viewport and tiles in logical
 points and resolves them through the same shared bridge projection. The existing
-glass transport carries receiver IDs, four corner radii and native tab bounds to
+chrome transport carries receiver IDs, overview slots, glass regions and native tab bounds to
 the render worker. It applies the surface offset and display scale once, prepares
 the existing GPU chrome pipelines, and acknowledges the revision after presenting.
-That matching revision adopts GPU ownership; continuing receivers retain it
-through geometry changes, until membership or GPU generation changes. Controls,
+Receivers stay GPU-owned while present in both the acknowledged and current packets;
+overview holes use acknowledged slots, and retiring elements wait for an acknowledged exclusion. Controls,
 focus, scrolling and input targets remain native. During native window sizing,
 native contours draw the translucent tint while GPU surfaces retain blur and
 shadows. GPU tint remains until XAML has rendered the native tint;

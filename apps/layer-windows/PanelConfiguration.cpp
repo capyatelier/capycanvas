@@ -217,5 +217,5 @@ FrameworkElement PanelConfiguration::Anchor(std::wstring const& control)const{
 void PanelConfiguration::AppendOverviews(A& slots,UIElement const& reference,Windows::Foundation::Rect clip,int order)const{
     if(!impl->navigator)return;
     clip=intersect(clip,visibleBounds(impl->navigator->Root(),reference.as<FrameworkElement>()));
-    auto slot=impl->navigator->Placement(reference,clip,order);if(slot.Size())slots.Append(slot);
+    auto slot=impl->navigator->Placement(reference,clip,order,true);if(slot.Size())slots.Append(slot);
 }

@@ -146,14 +146,13 @@ struct Column:std::enable_shared_from_this<Column>{
             auto item=icon.GetObject();A pair;pair.Append(S(str(item,L"panel")));pair.Append(object(item,L"bounds"));measured.Append(pair);}
         return O({{L"column",N(id)},{L"bounds",box},{L"content",object(geometry,L"content")},{L"icons",measured}});
     }
-    void present(J const& frame,bool ready,bool resizing,bool published){
+    void present(J const& frame,bool ready){
         J column;for(auto value:array(frame,L"columns"))if(num(value.GetObject(),L"column")==id){column=value.GetObject();break;}
         auto radii=array(column,L"radii");corners=sourceRadii;
         if(radii.Size()==4)for(uint32_t i=0;i<4;++i)corners[i]=std::min(corners[i],float(radii.GetNumberAt(i)));
         for(auto value:array(column,L"icons")){auto pair=value.GetArray();auto found=buttons.find(std::wstring(pair.GetStringAt(0)));if(found==buttons.end())continue;
             auto r=pair.GetArrayAt(1);found->second.CornerRadius({r.GetNumberAt(0)*CornerFit,r.GetNumberAt(1)*CornerFit,r.GetNumberAt(2)*CornerFit,r.GetNumberAt(3)*CornerFit});}
-        bool bridged=false;for(auto value:array(frame,L"bridges"))if(value.GetArray().GetNumberAt(0)==id)bridged=true;
-        gpu=!resizing&&bridged&&published&&(gpu||ready);
+        gpu=ready;
         surface.Opacity(gpu?0:1);
         auto snapped=pixelBounds(rectangle(object(geometry,L"bounds")),workspace);shape(snapped.Width,snapped.Height);
     }
@@ -194,6 +193,9 @@ void CollapsedColumns::ForEachBounds(UIElement const& reference,std::function<vo
         auto bounds=allocatedBounds(column->background,reference);if(bounds.Width>0&&bounds.Height>0)visit(id,bounds);
     }
 }
-void CollapsedColumns::PresentBridges(J const& frame,bool ready,bool resizing,std::vector<uint32_t> const& publishedColumns){for(auto const& [id,column]:impl->columns)column->present(frame,ready,resizing,std::find(publishedColumns.begin(),publishedColumns.end(),id)!=publishedColumns.end());}
+void CollapsedColumns::PresentBridges(J const& frame,bool resizing){for(auto const& [id,column]:impl->columns)column->present(frame,!resizing&&impl->data->chromeFrames->Column(id));}
 double CollapsedColumns::Opacity(uint32_t column)const{auto found=impl->columns.find(column);return found==impl->columns.end()?0:found->second->background.Opacity();}
-void CollapsedColumns::AppendGlass(A& regions,UIElement const& reference)const{for(auto const& [id,column]:impl->columns)column->collectGlass(regions,reference);}
+void CollapsedColumns::AppendGlass(A& regions,UIElement const& reference,std::vector<uint32_t> const& publishedColumns)const{for(auto const& [id,column]:impl->columns){
+    if(column->background.IsLoaded()&&column->background.Visibility()==Visibility::Visible)impl->data->chromeFrames->Track(column->background);
+    if(std::find(publishedColumns.begin(),publishedColumns.end(),id)==publishedColumns.end())column->collectGlass(regions,reference);
+}}

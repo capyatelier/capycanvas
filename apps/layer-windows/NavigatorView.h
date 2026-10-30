@@ -11,7 +11,8 @@ public:
     double NaturalHeight(double width) const;
     double FixedHeight() const;
     CapyUi::J Placement(winrt::Microsoft::UI::Xaml::UIElement const& reference,
-        winrt::Windows::Foundation::Rect clip, int order) const;
+        winrt::Windows::Foundation::Rect clip, int order,bool capture=false) const;
+    CapyUi::J PresentedPlacement(winrt::Microsoft::UI::Xaml::UIElement const& reference)const;
 private:
     struct Impl;
     std::shared_ptr<Impl> impl;

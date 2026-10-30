@@ -9,6 +9,7 @@
 #include "ScrollIndicators.h"
 #include "PointerModality.h"
 #include "NativeHandles.h"
+#include "ChromeFrames.h"
 #include <winrt/Microsoft.UI.Xaml.Automation.h>
 #include <winrt/Microsoft.UI.Xaml.Media.Imaging.h>
 #include <winrt/Windows.UI.Text.h>
@@ -22,6 +23,7 @@
 #include <unordered_map>
 #include <memory>
 #include <map>
+#include <set>
 #include <optional>
 #include <vector>
 #include <type_traits>
@@ -234,15 +236,8 @@ inline std::optional<Microsoft::UI::Input::InputSystemCursorShape> resizeCursor(
     }
     return {};
 }
-inline void setIcon(Image const& result,hstring name,hstring theme,double size=16){
-    std::wstring file=name.c_str();
-    if(!file.starts_with(L"layer-"))file=L"layer-"+file;
-    if(!file.ends_with(L"-symbolic"))file+=L"-symbolic";
-    result.Width(size);result.Height(size);result.IsHitTestVisible(false);
-    auto uri=asset(L"icons/"+std::wstring(theme.c_str())+L"/"+file+L".svg");
-    auto source=result.Source().try_as<Imaging::SvgImageSource>();
-    if(!source||!source.UriSource()||source.UriSource().AbsoluteUri()!=uri.AbsoluteUri())result.Source(Imaging::SvgImageSource(uri));
-}
+void setIcon(Image const& result,hstring name,hstring theme,double size=16);
+Windows::Foundation::Uri iconUri(Imaging::SvgImageSource const& source);
 inline Image icon(hstring name,hstring theme,double size=16){
     Image result;setIcon(result,name,theme,size);return result;
 }
@@ -321,6 +316,7 @@ struct WorkspaceData : std::enable_shared_from_this<WorkspaceData> {
     std::function<void(std::string,std::function<void(int32_t)>)> edges;
     std::function<bool(uint32_t)> edgeHolding,cancelEdge;
     J chrome=O({{L"held",B(false)},{L"dragging",B(false)},{L"popup_open",B(false)}});
+    std::shared_ptr<ChromeFrames> chromeFrames=std::make_shared<ChromeFrames>();
     bool externalPopup=false;
     bool updating=false;
     PointerCancelRegistry pointerCancels;

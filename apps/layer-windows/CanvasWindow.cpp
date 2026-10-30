@@ -67,7 +67,6 @@ static int DispatchCanvasCommand(CapyHost  host,CanvasCommand const& command) {
         case CanvasCommandKind::Prediction:return capy_native_prediction(host,command.json=="true");
         case CanvasCommandKind::Document:return capy_document_action(host,json);
         case CanvasCommandKind::Workspace:return capy_workspace_action(host,json);
-        case CanvasCommandKind::Overviews:return capy_overviews(host,json);
         case CanvasCommandKind::Glass:return capy_glass(host,json);
         case CanvasCommandKind::Action:return capy_action(host,json);
         case CanvasCommandKind::Filters:return capy_load_filter_directory(host,json);
@@ -123,7 +122,7 @@ LRESULT CALLBACK CanvasWindow::WindowMessage(HWND window,UINT message,WPARAM wpa
             if(message==WM_ENTERSIZEMOVE)self->nativeSizing=false;
             else if((message==WM_SIZING&&!self->nativeSizing)||(message==WM_EXITSIZEMOVE&&self->nativeSizing)){
                 self->nativeSizing=message==WM_SIZING;
-                try{self->workspace->SetWindowResizing(self->nativeSizing);self->CollectGlass();}
+                try{self->workspace->SetWindowResizing(self->nativeSizing);self->PublishGlass();}
                 catch(hresult_error const& error){self->Fail(to_string(error.message()));}
                 catch(std::exception const& error){self->Fail(error.what());}
             }
@@ -408,11 +407,10 @@ void CanvasWindow::Resize() {
 void CanvasWindow::PublishGlass(){
     if(closing||closed||!panel||!workspace)return;
     if(header)header->SetDrawerSources(workspace->DrawerSources());
-    if(glassPosted)return;
-    glassPosted=true;
-    if(!dispatcher.TryEnqueue([weak=weak_from_this()]{
-        if(auto self=weak.lock()){self->glassPosted=false;self->CollectGlass();}
-    }))glassPosted=false;
+    if(glassFrame)return;
+    glassFrame=Microsoft::UI::Xaml::Media::CompositionTarget::Rendered(auto_revoke,[weak=weak_from_this()](auto&&,auto&&){
+        if(auto self=weak.lock()){self->glassFrame.revoke();if(self->closing||self->closed||!self->workspace)return;self->workspace->MeasureChrome();self->CollectGlass();}
+    });
 }
 void CanvasWindow::CollectGlass(){
     auto self=this;
@@ -429,12 +427,14 @@ void CanvasWindow::CollectGlass(){
             auto source=Microsoft::UI::Input::InputNonClientPointerSource::GetForWindowId(self->window.AppWindow().Id());source.SetRegionRects(Microsoft::UI::Input::NonClientRegionKind::Passthrough,input);
         }
     }
-    Windows::Data::Json::JsonArray connections,arcs,colors,panels;uint64_t panelRevision=0;auto regions=self->workspace->Glass(self->panel,connections,arcs,colors,panels,panelRevision);
+    Windows::Data::Json::JsonArray connections,arcs,colors,panels,overviews;auto regions=self->workspace->Glass(self->panel,connections,arcs,colors,panels,overviews);
     if(self->header)self->header->AppendGlass(regions,self->panel);
     Windows::Data::Json::JsonObject request;request.Insert(L"regions",regions);request.Insert(L"connections",connections);request.Insert(L"arcs",arcs);request.Insert(L"color_bubbles",colors);
-    request.Insert(L"panels",panels);request.Insert(L"panel_revision",CapyUi::N(double(panelRevision)));
-    auto json=to_string(request.Stringify());
-    if(json==self->lastGlass)return;self->lastGlass=json;self->Send(json,CanvasCommandKind::Glass);
+    request.Insert(L"panels",panels);Windows::Data::Json::JsonObject packet;packet.Insert(L"glass",request);packet.Insert(L"overviews",overviews);
+    auto json=to_string(packet.Stringify());
+    if(json==self->lastGlass){self->workspace->ChromeSent(self->chromeRevision);return;}
+    self->lastGlass=json;packet.Insert(L"revision",CapyUi::N(double(++self->chromeRevision)));self->workspace->ChromeSent(self->chromeRevision);
+    self->Send(to_string(packet.Stringify()),CanvasCommandKind::Glass);
 }
 void CanvasWindow::Start() {
     if(renderer.joinable()||closing)return;
@@ -511,9 +511,7 @@ bool CanvasWindow::StartPrepared(CapyLaunch  prepared) {
     screenFontSize=CapyUi::num(catalogView,L"text_size_pt",11)*4/3;
     workspace=std::make_unique<WorkspaceView>([weak=weak_from_this()](std::string json){
         if(auto self=weak.lock())self->Send(std::move(json));
-    },catalogView,localization,[weak=weak_from_this()](std::string json){
-        if(auto self=weak.lock())self->Send(std::move(json),CanvasCommandKind::Overviews);
-    },[weak=weak_from_this()](CanvasQueryKind kind,std::string json,PreviewReply reply){
+    },catalogView,localization,[weak=weak_from_this()](CanvasQueryKind kind,std::string json,PreviewReply reply){
         if(auto self=weak.lock())return self->RequestPreviews(kind,std::move(json),std::move(reply));return false;
     },[weak=weak_from_this()](bool open){if(auto self=weak.lock()){self->workspacePopupOpen=open;self->UpdatePopup();}},
     [weak=weak_from_this()](std::string json){if(auto self=weak.lock()){

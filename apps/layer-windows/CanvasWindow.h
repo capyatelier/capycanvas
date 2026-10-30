@@ -127,6 +127,7 @@ private:
     winrt::Windows::Data::Json::JsonObject lastModel;
     winrt::Windows::Data::Json::JsonObject tracedModel;
     std::string lastGlass;
+    uint64_t chromeRevision=0;
     std::wstring workspaceOwnerProperty;
     HWND workspaceOwnerWindow=nullptr;
     bool applyingDialogs=false,headerPopupOpen=false,workspacePopupOpen=false;
@@ -165,7 +166,7 @@ private:
         uint32_t sections=CanvasAllSections;
     };
     std::shared_ptr<SnapshotState> snapshots=std::make_shared<SnapshotState>();
-    bool glassPosted=false;
+    winrt::Microsoft::UI::Xaml::Media::CompositionTarget::Rendered_revoker glassFrame;
     void UpdateNavigationCursor();
     void Publish(std::string snapshot, CapySnapshotInfo const& info);
     std::vector<std::pair<std::function<void(int32_t)>,int32_t>> completedCommands;

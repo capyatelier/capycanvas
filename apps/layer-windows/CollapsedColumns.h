@@ -9,9 +9,9 @@ public:
     void Apply();
     CapyUi::A Geometry()const;
     void ForEachBounds(winrt::Microsoft::UI::Xaml::UIElement const& reference,std::function<void(uint32_t,winrt::Windows::Foundation::Rect)> const& visit)const;
-    void PresentBridges(CapyUi::J const& frame,bool ready,bool resizing,std::vector<uint32_t> const& publishedColumns);
+    void PresentBridges(CapyUi::J const& frame,bool resizing);
     double Opacity(uint32_t column)const;
-    void AppendGlass(CapyUi::A& regions,winrt::Microsoft::UI::Xaml::UIElement const& reference)const;
+    void AppendGlass(CapyUi::A& regions,winrt::Microsoft::UI::Xaml::UIElement const& reference,std::vector<uint32_t> const& publishedColumns)const;
 private:
     struct Impl;
     std::shared_ptr<Impl> impl;

@@ -310,7 +310,7 @@ try {
  }
  if(!$tailOnly){
  $glass=@{snapshot=$null;key='';stable=0}
- Wait-Until {$m=Model;$key=($m.windows_glass|Select-Object regions,panel_revision|ConvertTo-Json -Compress);if($key -ceq $glass.key){$glass.stable++}else{$glass.key=$key;$glass.stable=0};$glass.snapshot=$m;$glass.stable -ge 3} 'Selection bar glass did not settle' 5
+ Wait-Until {$m=Model;$key=($m.windows_glass|Select-Object regions,chrome_revision|ConvertTo-Json -Compress);if($key -ceq $glass.key){$glass.stable++}else{$glass.key=$key;$glass.stable=0};$glass.snapshot=$m;$glass.stable -ge 3} 'Selection bar glass did not settle' 5
  $visibleGlass=[int]$glass.snapshot.windows_glass.regions;$glassState=Glass-State $glass.snapshot;$glassAnchor=$glass.snapshot.state.canvas_bar.anchor -join ','
  $glassProbe=[ordered]@{visible=$glass.snapshot.windows_glass;state=$glassState;anchor=$glassAnchor}
  try{

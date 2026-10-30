@@ -28,6 +28,8 @@ mod filter_packages;
 #[cfg(any(target_os = "windows", test))]
 mod navigator;
 #[cfg(any(target_os = "windows", test))]
+mod chrome;
+#[cfg(any(target_os = "windows", test))]
 mod previews;
 #[cfg(any(target_os = "windows", test))]
 mod scopes;
