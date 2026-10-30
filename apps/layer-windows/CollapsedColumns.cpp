@@ -22,7 +22,7 @@ struct Column:std::enable_shared_from_this<Column>{
     std::map<std::wstring,Button> buttons;
     std::map<std::wstring,Bindings> paintIcons;
     std::map<uint32_t,Border> dividers;
-    bool gpu=false,nativeResize=false;
+    bool gpu=false;
     double reported=0;
     bool applying=false;
     std::array<float,4> corners{SurfaceRadius,SurfaceRadius,SurfaceRadius,SurfaceRadius},sourceRadii{SurfaceRadius,SurfaceRadius,SurfaceRadius,SurfaceRadius};
@@ -147,10 +147,6 @@ struct Column:std::enable_shared_from_this<Column>{
         return O({{L"column",N(id)},{L"bounds",box},{L"content",object(geometry,L"content")},{L"icons",measured}});
     }
     void present(J const& frame,bool ready,bool resizing,bool published){
-        if(nativeResize!=resizing){nativeResize=resizing;
-            if(nativeResize){auto color=data->brush(L"panel").Color();color.A=255;surface.Fill(fill(color));}
-            else surface.Fill(data->glass(L"panel"));
-        }
         J column;for(auto value:array(frame,L"columns"))if(num(value.GetObject(),L"column")==id){column=value.GetObject();break;}
         auto radii=array(column,L"radii");corners=sourceRadii;
         if(radii.Size()==4)for(uint32_t i=0;i<4;++i)corners[i]=std::min(corners[i],float(radii.GetNumberAt(i)));

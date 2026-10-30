@@ -77,6 +77,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     ContentControl measureGate;
     hstring lastMeasurements;
     CompositionTarget::Rendering_revoker measurementFrame;
+    CompositionTarget::Rendered_revoker resizeTintFrame;
     CompositionTarget::Rendering_revoker resizeTraceFrame;
     std::array<float,3> titlebar{};
     hstring lastTitlebar;
@@ -144,8 +145,6 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     bool windowResizing=false,resizeHandback=false;
     int64_t nativeSizingStartQpc=0,nativeSizingEndQpc=0;
     bool nativeResize()const{return windowResizing||resizeHandback;}
-    struct BridgeShadow {WorkspaceShadow shadow;uint64_t revision=0;};
-    std::map<uint32_t,BridgeShadow> bridgeShadows;
     std::shared_ptr<CommandSearchPopup> commandSearch=std::make_shared<CommandSearchPopup>();
     std::shared_ptr<CanvasActionBar> canvasBar=std::make_shared<CanvasActionBar>();
     std::shared_ptr<CanvasNotice> notice=std::make_shared<CanvasNotice>();
@@ -778,7 +777,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             {L"color_field_pixels",N(double(data->colorFieldPixels))},
             {L"color_preview",object(data->colorPreview,L"picker").GetNamedValue(L"preview",JsonValue::CreateNullValue())},
             {L"workspace_update",workspaceUpdate},{L"groups",positions},{L"handles",grips},{L"elements",elements},
-            {L"window_resizing",B(windowResizing)},{L"native_resize_pending",B(resizeHandback)},{L"gpu_panels_suppressed",B(windowResizing)},
+            {L"window_resizing",B(windowResizing)},{L"native_resize_pending",B(resizeHandback)},
             {L"snapshot_qpc",N(double(snapshotQpc.QuadPart))},{L"native_sizing_start_qpc",N(double(nativeSizingStartQpc))},{L"native_sizing_end_qpc",N(double(nativeSizingEndQpc))},
             {L"resize_layout_frames",O({{L"count",N(double(resizeFrames.size()+resizeFrameOverflow))},{L"overflow",N(double(resizeFrameOverflow))},{L"tolerance",N(.01)},{L"samples",resizeSamples}})},
             {L"resize_panel_bounds",O({{L"count",N(double(resizeBounds.size()+resizeBoundsOverflow))},{L"overflow",N(double(resizeBoundsOverflow))},{L"samples",boundSamples}})},
@@ -1048,7 +1047,8 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         }
         panelBridgeKey=key;panelQueryLayoutRevision=panelLayoutRevision;panelBridgeFrame=frame;++panelBridgeRevision;
     }
-    static A panelColor(Windows::UI::Color color,double opacity=1){
+    A panelColor(Windows::UI::Color color,double opacity=1)const{
+        if(windowResizing&&!resizeTintFrame)color={0,0,0,0};
         A result;for(auto value:{color.R/255.,color.G/255.,color.B/255.,color.A/255.*opacity})result.Append(N(value));return result;
     }
     A panelSurfaces(UIElement const& reference){
@@ -1112,8 +1112,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             cutStrip(group);
             float top=tabbed&&!expanded&&!connected?float(data->panelMetric(L"tab_bar_height")):0;
             Canvas::SetTop(group.background.Root(),top);
-            auto color=(expanded||nativeResize()?data->brush(L"panel"):data->glass(source.Size()?L"source":L"panel")).Color();
-            if(nativeResize())color.A=255;
+            auto color=(expanded?data->brush(L"panel"):data->glass(source.Size()?L"source":L"panel")).Color();
             if(group.header)group.header.Background(expanded?data->brush(L"tabbar"):clear());
             if(group.activeTab)for(auto layer:group.activeTab.Children())if(auto canvas=layer.try_as<Canvas>())for(auto item:canvas.Children())if(auto path=item.try_as<Microsoft::UI::Xaml::Shapes::Path>())
                 path.Fill(expanded?Brush(data->brush(L"panel")):Brush(nullptr));
@@ -1138,6 +1137,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             }
             if(expanded)group.background.Shape(shape,color);
             else if(connected){
+                if(tabbed)holes.push_back({0,0,width,float(data->panelMetric(L"tab_bar_height"))});
                 group.background.Contour(width,height,group.bridge,color,std::move(holes));
             }else{
                 auto bodyRadii=tabbed?std::array<float,4>{0,0,corners[2],corners[3]}:corners;
@@ -1160,34 +1160,6 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             group.background.Root().Opacity(group.gpu?0:1);group.strip.Root().Opacity(group.gpu?0:1);
             group.shadow.Root().Opacity(group.gpu||!group.bridge.empty()?0:group.frame.Opacity());
         }
-        std::set<uint32_t> live;
-        if(nativeResize())for(auto value:array(panelBridgeFrame,L"columns")){
-            auto column=value.GetObject();auto id=uint32_t(num(column,L"column"));
-            A paths;for(auto item:array(panelBridgeFrame,L"paths"))if(num(item.GetObject(),L"column")==id)paths.Append(item);
-            if(!paths.Size())continue;
-            live.insert(id);auto [entry,added]=bridgeShadows.try_emplace(id);auto& item=entry->second;
-            if(added)root.Children().Append(item.shadow.Root());
-            item.shadow.Root().Opacity(collapsed->Opacity(id));
-            if(item.revision==panelBridgeRevision)continue;
-            auto source=rectangle(object(column,L"bounds")),bounds=source;
-            for(auto path:paths)for(auto receiver:array(panelBridgeFrame,L"groups"))
-                if(num(receiver.GetObject(),L"group")==num(path.GetObject(),L"group")){
-                    auto r=rectangle(object(receiver.GetObject(),L"bounds"));float x=std::min(bounds.X,r.X),y=std::min(bounds.Y,r.Y);
-                    bounds={x,y,std::max(bounds.X+bounds.Width,r.X+r.Width)-x,std::max(bounds.Y+bounds.Height,r.Y+r.Height)-y};
-                }
-            std::array<float,4> radii{};auto corners=array(column,L"radii");
-            for(uint32_t i=0;i<4;++i)radii[i]=float(corners.GetNumberAt(i));
-            ContourCommands commands;appendBridgeCommands(commands,squircleCommands(source.Width,source.Height,radii),source.X-bounds.X,source.Y-bounds.Y);
-            for(auto path:paths)for(auto receiver:array(panelBridgeFrame,L"groups"))
-                if(num(receiver.GetObject(),L"group")==num(path.GetObject(),L"group")){
-                    auto r=rectangle(object(receiver.GetObject(),L"bounds"));
-                    appendBridgeCommands(commands,bridgeCommands(array(path.GetObject(),L"commands")),r.X-bounds.X,r.Y-bounds.Y);
-                }
-            auto style=panelShadowStyle(data);item.shadow.Layout(bounds,-1,true);item.shadow.Contour(commands,bounds.Width,bounds.Height,style.blur,style.offset,style.opacity);item.revision=panelBridgeRevision;
-        }
-        for(auto it=bridgeShadows.begin();it!=bridgeShadows.end();)if(!live.contains(it->first)){
-            uint32_t index=0;if(root.Children().IndexOf(it->second.shadow.Root(),index))root.Children().RemoveAt(index);it=bridgeShadows.erase(it);
-        }else ++it;
     }
     void cutStrip(uint32_t id){if(auto found=groups.find(id);found!=groups.end())cutStrip(found->second);}
     void cutStrip(Group& group){
@@ -1203,8 +1175,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
                 active=std::move(outline);clipX=view.X;clipWidth=float(group.tabScroll.ActualWidth());
             }
         }
-        auto strip=(nativeResize()?data->brush(L"tabbar"):data->glass(L"strip")).Color(),panel=(nativeResize()?data->brush(L"panel"):data->glass(L"panel")).Color();
-        if(nativeResize()){strip.A=255;panel.A=255;}
+        auto strip=data->glass(L"strip").Color(),panel=data->glass(L"panel").Color();
         group.strip.Present(width,float(data->panelMetric(L"tab_bar_height")),std::move(band),std::move(active),strip,panel,clipX,clipWidth);
     }
     void resizeHandle(std::wstring const& key,J const& bounds,J const& action,int z,bool resetColumn=false){
@@ -1249,12 +1220,12 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         if(glassChanged)glassChanged();
     }
     A glass(UIElement const& reference,A& connections,A& arcs,A& colors,A& panels,uint64_t& panelRevision){
-        if(windowResizing){publishedBridgeGroups.clear();publishedBridgeColumns.clear();panels=A{};}else panels=panelSurfaces(reference);auto encoded=panels.Stringify();
+        panels=panelSurfaces(reference);auto encoded=panels.Stringify();
         if(encoded!=lastPanelSurfaces){lastPanelSurfaces=encoded;++panelBridgeRevision;presentPanelBridges();}
         panelRevision=panelBridgeRevision;
         A regions;
-        for(auto const& [id,group]:groups)if(!windowResizing&&!group.gpu&&group.frame.Visibility()==Visibility::Visible&&!group.presented.Size())appendGlass(regions,group.frame,reference,{group.corners[0],group.corners[1],group.corners[2],group.corners[3]},true);
-        if(!windowResizing)collapsed->AppendGlass(regions,reference);drawers->AppendGlass(regions,connections,reference);
+        for(auto const& [id,group]:groups)if(!group.gpu&&group.frame.Visibility()==Visibility::Visible&&!group.presented.Size())appendGlass(regions,group.frame,reference,{group.corners[0],group.corners[1],group.corners[2],group.corners[3]},true);
+        collapsed->AppendGlass(regions,reference);drawers->AppendGlass(regions,connections,reference);
         appendGlass(regions,cameraSurface,reference,cornerRadii(cameraSurface.CornerRadius()));
         canvasBar->AppendGlass(regions,reference);notice->AppendGlass(regions,reference);commandSearch->AppendGlass(regions,reference);
         bubbles->Glass(regions,arcs,colors,reference);
@@ -1293,6 +1264,10 @@ void WorkspaceView::SetWindowResizing(bool value){
         impl->resizeBounds.clear();impl->resizeBounds.reserve(32768);impl->resizeBoundsOverflow=0;
     }
     impl->windowResizing=value;impl->resizeHandback=!value;
+    impl->resizeTintFrame.revoke();
+    if(value)impl->resizeTintFrame=CompositionTarget::Rendered(auto_revoke,[weak=std::weak_ptr<Impl>(impl)](auto&&,auto&&){
+        if(auto self=weak.lock()){self->resizeTintFrame.revoke();if(self->glassChanged)self->glassChanged();}
+    });
     ++impl->panelBridgeRevision;impl->lastPanelSurfaces=L"";
     for(auto& [id,group]:impl->groups)group.backgroundKey=L"";
     impl->presentBackgrounds();impl->tracePresentation();impl->queueMeasurements();

@@ -18,13 +18,13 @@ public sealed class PanelBridgeCapture : IDisposable {
  [DllImport("user32.dll")] static extern IntPtr WindowFromPoint(Point point);
  [DllImport("user32.dll")] static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
  [DllImport("user32.dll")] static extern IntPtr SendMessage(IntPtr window,uint message,IntPtr wparam,IntPtr lparam);
- public sealed class Sample {public long begin,end;public int width_begin,width_end,height;public string path;}
+ public sealed class Sample {public long begin,end;public int width_begin,width_end,height;public string path,model_path;}
  readonly List<Sample> states=new List<Sample>();
  readonly ManualResetEventSlim stateReady=new ManualResetEventSlim(),cameraReady=new ManualResetEventSlim();
  readonly IntPtr window;
  readonly uint owner;
  readonly AutomationElement workspace;
- readonly string folder;
+ readonly string folder,modelFile;
  readonly Rectangle area;
  Thread observer,camera;
  volatile bool stopping;
@@ -35,8 +35,8 @@ public sealed class PanelBridgeCapture : IDisposable {
  public Sample[] States {get{return states.ToArray();}}
  static Rect Bounds(IntPtr window){Rect r;if(!GetWindowRect(window,out r))throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());return r;}
  void Guard(){uint process;GetWindowThreadProcessId(window,out process);if(process!=owner)throw new InvalidOperationException("Resize window ownership changed.");GetWindowThreadProcessId(GetForegroundWindow(),out process);if(process!=owner)throw new InvalidOperationException("Resize input lost its owned foreground.");}
- public PanelBridgeCapture(IntPtr window,uint owner,AutomationElement workspace,string folder){
-  this.window=window;this.owner=owner;this.workspace=workspace;this.folder=folder;Directory.CreateDirectory(folder);
+ public PanelBridgeCapture(IntPtr window,uint owner,AutomationElement workspace,string folder,string modelFile){
+  this.window=window;this.owner=owner;this.workspace=workspace;this.folder=folder;this.modelFile=modelFile;Directory.CreateDirectory(folder);
   var r=Bounds(window);InitialWidth=r.right-r.left;area=new Rectangle(r.left-8,r.top-8,InitialWidth+360,r.bottom-r.top+16);
   File.WriteAllText(Path.Combine(folder,"origin.json"),"{\"x\":"+area.X+",\"y\":"+area.Y+",\"width\":"+area.Width+",\"height\":"+area.Height+",\"qpc_frequency\":"+Stopwatch.Frequency+"}");
  }
@@ -44,10 +44,10 @@ public sealed class PanelBridgeCapture : IDisposable {
   Guard();observer=new Thread(()=>{try{
    SetThreadDpiAwarenessContext(new IntPtr(-4));int index=0;
    while(!stopping){
-    long begin=Stopwatch.GetTimestamp();var before=Bounds(window);string json=workspace.Current.ItemStatus;var after=Bounds(window);long end=Stopwatch.GetTimestamp();
+    long begin=Stopwatch.GetTimestamp();var before=Bounds(window);string model;using(var file=new FileStream(modelFile,FileMode.Open,FileAccess.Read,FileShare.ReadWrite|FileShare.Delete))using(var reader=new StreamReader(file))model=reader.ReadToEnd();string json=workspace.Current.ItemStatus;var after=Bounds(window);long end=Stopwatch.GetTimestamp();
     if(string.IsNullOrEmpty(json))throw new InvalidOperationException("Workspace presentation is unavailable.");
-    string path=Path.Combine(folder,"state-"+(index++).ToString("D4")+".json");File.WriteAllText(path,json);
-    states.Add(new Sample{begin=begin,end=end,width_begin=before.right-before.left,width_end=after.right-after.left,height=after.bottom-after.top,path=path});stateReady.Set();Thread.Sleep(20);
+    string path=Path.Combine(folder,"state-"+(index++).ToString("D4")+".json");File.WriteAllText(path,json);string modelPath=Path.ChangeExtension(path,"model.json");File.WriteAllText(modelPath,model);
+    states.Add(new Sample{begin=begin,end=end,width_begin=before.right-before.left,width_end=after.right-after.left,height=after.bottom-after.top,path=path,model_path=modelPath});stateReady.Set();Thread.Sleep(20);
    }
   }catch(Exception error){failure=error;stopping=true;stateReady.Set();}});
   camera=new Thread(()=>{try{

@@ -93,6 +93,10 @@ radii. The shared `ViewportPresenter` blurs its own artwork beneath them:
   geometry; scaling applies to positions and lengths once, not angles or
   strength. Movement and strength changes redraw without publishing a full UI
   model; a changed region count still publishes the glass diagnostics.
+  Joined panels retain GPU tint during in-app drags. During native window
+  sizing, native contours draw tint over GPU blur and shadows; GPU tint stays
+  until XAML has rendered the native tint, and returns after the
+  final tinted GPU revision is presented.
 - Drawer and column connectors add their rectangle and concave feet from the
   shared `DrawerConnection::glass` geometry.
 
@@ -270,6 +274,8 @@ level for the Apple drawing workloads.
 On Windows, `exercise-transparency.ps1` (the VM fixture `transparency`) also
 compares each active tab with its panel body, over the surround and over paper,
 in both themes at every level.
+`exercise-panel-bridge-layout.ps1` checks continuing GPU owners during divider
+drags and native tint owners with retained glass regions during window sizing.
 
 On GTK, `native_active_tab_matches_panel` compares each active tab with its
 panel body in compositor captures, in both themes at every level. On Android,

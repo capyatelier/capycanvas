@@ -117,41 +117,11 @@ struct WorkspaceShadow::State {
     DropShadow shadow{nullptr};
     RetainedShadow retained;
     XamlRoot::Changed_revoker scaleChanged;
-    bool rounded=false,contoured=false;
-    ContourCommands commands,cachedCommands;
-    ShapeVisual contourMask{nullptr};
-    CompositionPathGeometry contourPath{nullptr};
-    CompositionSpriteShape contourShape{nullptr};
-    CompositionVisualSurface contourSurface{nullptr};
-    CompositionSurfaceBrush contourAlpha{nullptr};
-    CompositionGeometricClip contourClip{nullptr};
-    float cachedWidth=-1,cachedHeight=-1,cachedBlur=-1,cachedOffset=0;
+    bool rounded=false;
     float width=0,height=0,blur=8,offset=2,opacity=.16f;
     std::optional<ShadowCut> cut;
     void apply(){
         if(!visual||rounded)return;
-        if(contoured){
-            auto compositor=visual.Compositor();
-            if(!contourPath||contourPath.Compositor()!=compositor){
-                contourPath=compositor.CreatePathGeometry();contourShape=compositor.CreateSpriteShape(contourPath);contourShape.FillBrush(compositor.CreateColorBrush({255,255,255,255}));
-                contourMask=compositor.CreateShapeVisual();contourMask.BorderMode(CompositionBorderMode::Soft);contourMask.Shapes().Append(contourShape);
-                contourSurface=compositor.CreateVisualSurface();contourSurface.SourceVisual(contourMask);contourAlpha=compositor.CreateSurfaceBrush(contourSurface);contourAlpha.Stretch(CompositionStretch::Fill);cachedWidth=-1;
-            }
-            auto bounds=ContourBounds(width,height,commands);
-            visual.Size({bounds.Width,bounds.Height});visual.Offset({padding+bounds.X,padding+bounds.Y,0});
-            contourMask.Size(visual.Size());contourSurface.SourceSize(visual.Size());contourShape.Offset({-bounds.X,-bounds.Y});
-            if(cachedCommands!=commands||cachedWidth!=width||cachedHeight!=height||cachedBlur!=blur||cachedOffset!=offset){
-                auto interior=commandGeometry(commands);contourPath.Path(CompositionPath(winrt::make<GeometrySource>(interior)));
-                float reach=std::max(padding,3*blur+std::abs(offset));winrt::com_ptr<ID2D1RectangleGeometry> outer;
-                winrt::check_hresult(factory()->CreateRectangleGeometry({bounds.X-reach,bounds.Y-reach,bounds.X+bounds.Width+reach,bounds.Y+bounds.Height+reach},outer.put()));
-                auto exterior=combine(outer.get(),interior.get(),D2D1_COMBINE_MODE_EXCLUDE);
-                contourClip=compositor.CreateGeometricClip(compositor.CreatePathGeometry(CompositionPath(winrt::make<GeometrySource>(exterior))));
-                contourClip.TransformMatrix({1,0,0,1,-bounds.X,-bounds.Y});
-                cachedCommands=commands;cachedWidth=width;cachedHeight=height;cachedBlur=blur;cachedOffset=offset;
-            }
-            shadow.Mask(contourAlpha);visual.Clip(contourClip);
-            shadow.BlurRadius(blur);shadow.Offset({0,offset,0});shadow.Opacity(opacity);return;
-        }
         visual.Size({width,height});visual.Offset({padding,padding,0});
         if(cut&&width>0&&height>0){
             auto compositor=visual.Compositor();
@@ -196,20 +166,14 @@ void WorkspaceShadow::Cut(std::vector<Windows::Foundation::Point> contour){
 }
 void WorkspaceShadow::Uncut(){state->cut.reset();state->apply();}
 void WorkspaceShadow::Shape(Geometry const& geometry,float width,float height,float blur,float offset,float opacity){
-    bool rounded=std::exchange(state->rounded,false);state->contoured=false;maskHost.Visibility(Visibility::Visible);
+    bool rounded=std::exchange(state->rounded,false);maskHost.Visibility(Visibility::Visible);
     if(state->shadow)state->shadow.Mask(mask.GetAlphaMask());
     mask.Data(geometry);mask.Width(width);mask.Height(height);
     state->width=width;state->height=height;state->blur=blur;state->offset=offset;state->opacity=opacity;state->apply();
     if(rounded&&state->visual)ElementCompositionPreview::SetElementChildVisual(root,state->visual);
 }
-void WorkspaceShadow::Contour(ContourCommands const& commands,float width,float height,float blur,float offset,float opacity){
-    if(!std::isfinite(width)||!std::isfinite(height)||width<0||height<0||!std::isfinite(blur)||blur<0||!std::isfinite(offset)||!std::isfinite(opacity)||opacity<0||opacity>1)throw winrt::hresult_invalid_argument();
-    bool rounded=std::exchange(state->rounded,false);state->contoured=true;maskHost.Visibility(Visibility::Collapsed);
-    state->commands=commands;state->width=width;state->height=height;state->blur=blur;state->offset=offset;state->opacity=opacity;state->apply();
-    if(rounded&&state->visual)ElementCompositionPreview::SetElementChildVisual(root,state->visual);
-}
 void WorkspaceShadow::Rounded(float width,float height,std::array<float,4> radii,float blur,float offset,float opacity){
-    bool rounded=std::exchange(state->rounded,true);state->contoured=false;maskHost.Visibility(Visibility::Collapsed);
+    bool rounded=std::exchange(state->rounded,true);maskHost.Visibility(Visibility::Collapsed);
     state->retained.Present(width,height,radii,blur,offset,opacity);
     if(!state->retained.visual&&root.IsLoaded())state->retained.Create(ElementCompositionPreview::GetElementVisual(root).Compositor());
     if(!rounded&&state->retained.visual)ElementCompositionPreview::SetElementChildVisual(root,state->retained.visual);

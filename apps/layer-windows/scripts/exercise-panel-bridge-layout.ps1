@@ -87,7 +87,7 @@ try{
     $continuing=@((Presentation).groups|Where-Object gpu_background|ForEach-Object id)
     Check ($continuing.Count -eq 3) 'Real border resize starts with three presented receivers' $continuing
     $dividerFolder=Join-Path $run 'stack-divider';$at=At 'divider-13'
-    $observer=[PanelBridgeCapture]::new($window,[uint32]$review.Id,(Workspace-Root),$dividerFolder)
+    $observer=[PanelBridgeCapture]::new($window,[uint32]$review.Id,(Workspace-Root),$dividerFolder,(State-File))
     try{
         $observer.Arm();[CapyRowPointer]::Down('mouse',$at.x,$at.y)
         $dividerStart=[Diagnostics.Stopwatch]::GetTimestamp();$clock=[Diagnostics.Stopwatch]::StartNew()
@@ -123,16 +123,17 @@ try{
             [CapyRowPointer]::Move($caption[0]+12*$step,$caption[1]+6*$step)
             Wait-Until {$box=[CapyBridgeWindow]::Bounds($window);$box[0]-ge$moveStart[0]+8*$step} 'SendInput titlebar drag did not move owned window'
             $native=Presentation;$receivers=@($native.groups|Where-Object {$_.id -in $continuing})
-            $moveSamples.Add(@{qpc=[Diagnostics.Stopwatch]::GetTimestamp();step=$step;bounds=[CapyBridgeWindow]::Bounds($window);window_resizing=$native.window_resizing;native_resize_pending=$native.native_resize_pending;gpu_panels_suppressed=$native.gpu_panels_suppressed;panel_revision=$native.panel_revision;presented_panel_revision=$native.presented_panel_revision;receivers=$receivers})
-            Check (!$native.window_resizing -and !$native.native_resize_pending -and !$native.gpu_panels_suppressed -and $native.panel_revision -eq $native.presented_panel_revision -and $receivers.Count -eq $continuing.Count -and @($receivers|Where-Object {!$_.gpu_background -or $_.native_bridge_background}).Count -eq 0) 'Titlebar movement retains presented GPU receivers' $moveSamples[$moveSamples.Count-1]
+            $moveSamples.Add(@{qpc=[Diagnostics.Stopwatch]::GetTimestamp();step=$step;bounds=[CapyBridgeWindow]::Bounds($window);window_resizing=$native.window_resizing;native_resize_pending=$native.native_resize_pending;panel_revision=$native.panel_revision;presented_panel_revision=$native.presented_panel_revision;receivers=$receivers})
+            Check (!$native.window_resizing -and !$native.native_resize_pending -and $native.panel_revision -eq $native.presented_panel_revision -and $receivers.Count -eq $continuing.Count -and @($receivers|Where-Object {!$_.gpu_background -or $_.native_bridge_background}).Count -eq 0) 'Titlebar movement retains presented GPU receivers' $moveSamples[$moveSamples.Count-1]
         }
     }finally{[CapyRowPointer]::Up();$moveSamples|ConvertTo-Json -Depth 30|Set-Content (Join-Path $run 'titlebar-move-samples.json')}
     $moveEnd=[CapyBridgeWindow]::Bounds($window)
     Check ($moveEnd[0] -gt $moveStart[0]+30 -and $moveEnd[2] -eq $moveStart[2] -and $moveEnd[3] -eq $moveStart[3]) 'Real titlebar drag changes position without resizing' $moveEnd
     Save-State 'titlebar-move-settled';Capture 'titlebar-move' -Composed -WithModel
     [CapyWindowExercise]::MoveWindow($window,40,40,1500,1000,$true)|Out-Null
+    $preSizingRegions=(Model).windows_glass.regions
     $motionFolder=Join-Path $run 'continuous-resize'
-    $observer=[PanelBridgeCapture]::new($window,[uint32]$review.Id,(Workspace-Root),$motionFolder)
+    $observer=[PanelBridgeCapture]::new($window,[uint32]$review.Id,(Workspace-Root),$motionFolder,(State-File))
     try{$observer.Arm();$observer.Drag([CapyWindowExercise])}
     finally{$observer.Dispose()}
     $samples=@($observer.States)
@@ -148,11 +149,12 @@ try{
     Check ($sizingStart -ge $observer.DownQpc -and $sizingEnd -ge $sizingStart -and $sizingEnd -ge $observer.UpQpc) 'Native sizing source markers bracket the actual contact' @{start=$sizingStart;end=$sizingEnd;down=$observer.DownQpc;up=$observer.UpQpc}
     $classified=@(foreach($sample in $samples){
         $native=Get-Content -LiteralPath $sample.path -Raw|ConvertFrom-Json
+        $model=(Get-Content -LiteralPath $sample.model_path -Raw|ConvertFrom-Json).model
         $source=[long]$native.snapshot_qpc
         $interval=if($source -lt $sizingStart){'pre-sizing'}elseif($source -lt $sizingEnd){'active-sizing'}else{'post-sizing'}
         $receivers=@($native.groups|Where-Object {$_.id -in $continuing})
         $projected=@($native.panel_bridge_frame.bridges|ForEach-Object {$_[2].receivers}|ForEach-Object group|Sort-Object -Unique)
-        @{sample=$sample;source_qpc=$source;interval=$interval;window_resizing=$native.window_resizing;native_resize_pending=$native.native_resize_pending;gpu_panels_suppressed=$native.gpu_panels_suppressed;receivers=$receivers;projected=$projected;bridges=@($native.panel_bridge_frame.bridges).Count}
+        @{sample=$sample;source_qpc=$source;glass_regions=$model.windows_glass.regions;interval=$interval;window_resizing=$native.window_resizing;native_resize_pending=$native.native_resize_pending;receivers=$receivers;projected=$projected;bridges=@($native.panel_bridge_frame.bridges).Count}
     })
     $classified|ConvertTo-Json -Depth 30|Set-Content (Join-Path $motionFolder 'source-intervals.json')
     $firstActive=@($classified|Where-Object {$_.source_qpc -ge $sizingStart -and $_.source_qpc -lt $sizingEnd}|Select-Object -First 1)
@@ -163,11 +165,12 @@ try{
         Check ($entry.source_qpc -gt 0 -and $entry.source_qpc -le $entry.sample.end) 'Every presentation snapshot has an ordered source timestamp' $entry
         Check ($entry.receivers.Count -eq 3 -and @($continuing|Where-Object {$_ -notin $entry.projected}).Count -eq 0 -and $entry.bridges -gt 0) 'Every source interval retains three measured bridge receivers' $entry
         if($entry.interval -eq 'active-sizing'){
-            Check ($entry.window_resizing -and $entry.gpu_panels_suppressed -and @($entry.receivers|Where-Object {!$_.native_bridge_background -or $_.gpu_background}).Count -eq 0) 'Every active source snapshot has three native owners and suppressed GPU panels' $entry
+            Check ($preSizingRegions -gt 0 -and $entry.glass_regions -ge $preSizingRegions) 'Every active source snapshot retains the pre-sizing glass regions' @{before=$preSizingRegions;entry=$entry}
+            Check ($entry.window_resizing -and @($entry.receivers|Where-Object {!$_.native_bridge_background -or $_.gpu_background}).Count -eq 0) 'Every active source snapshot retains three native tint owners' $entry
         }elseif($entry.interval -eq 'pre-sizing'){
-            Check (!$entry.window_resizing -and !$entry.native_resize_pending -and !$entry.gpu_panels_suppressed -and @($entry.receivers|Where-Object {!$_.gpu_background -or $_.native_bridge_background}).Count -eq 0) 'Every pre-sizing source snapshot retains three GPU owners' $entry
+            Check (!$entry.window_resizing -and !$entry.native_resize_pending -and @($entry.receivers|Where-Object {!$_.gpu_background -or $_.native_bridge_background}).Count -eq 0) 'Every pre-sizing source snapshot retains three GPU owners' $entry
         }else{
-            Check (!$entry.window_resizing -and !$entry.gpu_panels_suppressed) 'Every post-sizing source snapshot restores the GPU scene request' $entry
+            Check (!$entry.window_resizing) 'Every post-sizing source snapshot has left native sizing' $entry
             if($entry.native_resize_pending){
                 Check (@($entry.receivers|Where-Object {!$_.native_bridge_background -or $_.gpu_background}).Count -eq 0) 'Post-sizing handback keeps three native owners until acknowledgment' $entry
             }else{
@@ -223,7 +226,7 @@ try{
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $window.ToInt64() -Action Close
     Check ($review.WaitForExit(8000)-and$review.ExitCode-eq0) 'Normal owned process exit' $null
     Check ((Get-Item -LiteralPath $stderr).Length-eq0) 'Empty native stderr' $null
-    @{passed=$true;theme=$Theme;checks=$checks.Count;tabbed_fixture=$tabbed;exe_sha256=(Get-FileHash $Executable).Hash;dll_sha256=(Get-FileHash (Join-Path $directory 'layer_windows.dll')).Hash;exit_code=$review.ExitCode;scope='Real SendInput right-border drag; observers armed before Down; first changed bounds and all sampled motion require three native receivers; ordered input/state/raw composed captures retained; unsampled frames and performance unqualified'}|
+    @{passed=$true;theme=$Theme;checks=$checks.Count;tabbed_fixture=$tabbed;exe_sha256=(Get-FileHash $Executable).Hash;dll_sha256=(Get-FileHash (Join-Path $directory 'layer_windows.dll')).Hash;exit_code=$review.ExitCode;scope='Real SendInput stack-divider and right-border drags; continuing GPU owners during divider motion; native receiver ownership through sizing handback; ordered input/state/raw composed captures retained; unsampled frames and performance unqualified'}|
         ConvertTo-Json -Depth 20|Set-Content (Join-Path $run 'result.json')
     Write-Output "Panel bridge layout PASS $Theme $run"
 }catch{

@@ -70,11 +70,11 @@ the render worker. It applies the surface offset and display scale once, prepare
 the existing GPU chrome pipelines, and acknowledges the revision after presenting.
 That matching revision adopts GPU ownership; continuing receivers retain it
 through geometry changes, until membership or GPU generation changes. Controls,
-focus, scrolling and input targets remain native. The first `WM_SIZING` in a native size/move loop gives opaque
-native contours and shadows ownership for the whole window resize gesture and
-suppresses GPU panel surfaces. `WM_EXITSIZEMOVE` restores the GPU scene through
-the matching presented-revision handshake. Glass turns off and on at these
-boundaries; title-bar movement and single-step window sizing retain the usual GPU path.
+focus, scrolling and input targets remain native. During native window sizing,
+native contours draw the translucent tint while GPU surfaces retain blur and
+shadows. GPU tint remains until XAML has rendered the native tint;
+`WM_EXITSIZEMOVE` returns tint ownership through the matching presented-revision
+handshake. Title-bar movement and single-step window sizing retain the usual GPU path.
 Retired allocation IDs are ignored; duplicate, nonfinite or negative measurements
 are rejected. Missing current allocations clear the join. Ordinary individual
 panel drawers retain their shared drawer connection.

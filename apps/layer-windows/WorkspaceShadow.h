@@ -26,7 +26,6 @@ public:
     Canvas Root()const{return root;}
     void Layout(winrt::Windows::Foundation::Rect bounds,int order,bool visible);
     void Shape(Geometry const& geometry,float width,float height,float blur,float offset,float opacity);
-    void Contour(ContourCommands const& commands,float width,float height,float blur,float offset,float opacity);
     void Rounded(float width,float height,std::array<float,4> radii,float blur,float offset,float opacity);
     void Cut(std::array<float,4> radii,std::vector<winrt::Windows::Foundation::Rect> extra={});
     void Cut(std::vector<winrt::Windows::Foundation::Point> contour);
