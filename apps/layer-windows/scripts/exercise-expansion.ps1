@@ -424,6 +424,16 @@ function Dismiss([string]$Panel,[string]$Source="panel-tab-$Panel"){
     Wait-Until {$null -eq (Model).state.customization.expanded -and $null -eq (Find "panel-configuration-$Panel")} "Escape did not close $Panel configuration"
 }
 function Toggle([string]$Id){(Control $Id).GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()}
+function Color-Difference($Actual,$Expected){
+    [Math]::Max([Math]::Max([Math]::Abs($Actual.R-$Expected.R),[Math]::Abs($Actual.G-$Expected.G)),[Math]::Abs($Actual.B-$Expected.B))
+}
+function Overview-Bounds{
+    foreach($item in $root.FindAll([System.Windows.Automation.TreeScope]::Descendants,
+        [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,'navigator-overview'))){
+        $current=$item.Current;$box=$current.BoundingRectangle
+        if($current.ProcessId -eq $review.Id -and !$current.IsOffscreen -and $box.Width -gt 0 -and $box.Height -gt 0){$box}
+    }
+}
 function Wait-OverviewProjection{
     $drawingWindow=[IntPtr]$root.Current.NativeWindowHandle
     $origin=[CapyRowPointer+Point]::new()
@@ -440,11 +450,7 @@ function Wait-OverviewProjection{
             if($right -gt $x -and $bottom -gt $y){@{left=$origin.x+$x*$scale;top=$origin.y+$y*$scale;right=$origin.x+$right*$scale;bottom=$origin.y+$bottom*$scale}}
         })
         $remaining=[Collections.Generic.List[object]]::new()
-        foreach($item in $root.FindAll([System.Windows.Automation.TreeScope]::Descendants,
-            [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,'navigator-overview'))){
-            $current=$item.Current;$box=$current.BoundingRectangle
-            if($current.ProcessId -eq $review.Id -and !$current.IsOffscreen -and $box.Width -gt 0 -and $box.Height -gt 0){$remaining.Add($box)}
-        }
+        foreach($box in (Overview-Bounds)){$remaining.Add($box)}
         if(!$visible.Count -or $visible.Count -ne $remaining.Count){return $false}
         foreach($box in $visible){
             $match=$remaining|Sort-Object {[Math]::Abs($_.Left-$box.left)+[Math]::Abs($_.Top-$box.top)}|Select-Object -First 1
@@ -461,17 +467,20 @@ function Check-OverviewOverlap($Configuration){
     $origin=[CapyRowPointer+Point]::new()
     if(![CapyRowPointer]::ClientToScreen($drawingWindow,[ref]$origin)){throw 'Cannot locate client capture'}
     $scale=[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.
-    $document=(Model).state.tabs[0]
+    $snapshot=Model;$document=$snapshot.state.tabs[0]
+    $reference=@(Overview-Bounds|Where-Object {!$_.IntersectsWith($overview)})
+    if($reference.Count -ne 1){throw 'Independent Navigator overview reference is unavailable'}
+    $reference=$reference[0]
     $fit=[Math]::Min(($overview.Width-8*$scale)/$document.width,($overview.Height-8*$scale)/$document.height)
     $width=$document.width*$fit;$height=$document.height*$fit
-    $groups=@((Model).layout.groups|Where-Object {$_.active -ne 'navigator'})
+    $groups=@($snapshot.layout.groups|Where-Object {$_.active -ne 'navigator'})
     $hit=$null
     foreach($fy in 0.1,0.3,0.5,0.7,0.9){foreach($fx in 0.04,0.2,0.5,0.8,0.96){
         if($hit){break}
         $px=[int]($overview.Left-$origin.x+($overview.Width-$width)/2+$width*$fx)
         $py=[int]($overview.Top-$origin.y+($overview.Height-$height)/2+$height*$fy)
         foreach($group in $groups){$b=$group.bounds
-            if($px -gt $b.x*$scale -and $px -lt ($b.x+$b.width)*$scale -and $py -gt ($b.y+36)*$scale -and $py -lt ($b.y+$b.height)*$scale){$hit=@{x=$px;y=$py};break}}
+            if($px -gt $b.x*$scale -and $px -lt ($b.x+$b.width)*$scale -and $py -gt ($b.y+36)*$scale -and $py -lt ($b.y+$b.height)*$scale){$hit=@{x=$px;y=$py;fx=$fx;fy=$fy};break}}
     }}
     if(!$hit){throw 'Fixture did not overlap a lower native panel'}
     $x=$hit.x;$y=$hit.y
@@ -479,9 +488,12 @@ function Check-OverviewOverlap($Configuration){
     $after=[Drawing.Bitmap]::new((Join-Path $run 'navigator.png'))
     try{
         $old=$before.GetPixel($x,$y);$pixel=$after.GetPixel($x,$y)
-        if($old.R -gt 245 -and $old.G -gt 245 -and $old.B -gt 245){throw 'Overlap reference was already white'}
-        if($pixel.R -lt 245 -or $pixel.G -lt 245 -or $pixel.B -lt 245){throw 'Lower native panel covers the GPU overview'}
-        return @{x=$x;y=$y;before=$old.ToArgb()}
+        $referenceFit=[Math]::Min(($reference.Width-8*$scale)/$document.width,($reference.Height-8*$scale)/$document.height)
+        $referenceWidth=$document.width*$referenceFit;$referenceHeight=$document.height*$referenceFit
+        $expected=$after.GetPixel([int]($reference.Left-$origin.x+($reference.Width-$referenceWidth)/2+$referenceWidth*$hit.fx),[int]($reference.Top-$origin.y+($reference.Height-$referenceHeight)/2+$referenceHeight*$hit.fy))
+        if((Color-Difference $old $expected) -le 3){throw 'Overview reference does not distinguish the lower native panel'}
+        if((Color-Difference $pixel $expected) -gt 3){throw 'Lower native panel covers the GPU overview'}
+        return @{x=$x;y=$y;before=$old.ToArgb();overview=$pixel.ToArgb()}
     }finally{$before.Dispose();$after.Dispose()}
 }
 function Shown([string]$Panel,[string]$Control){((Model).panels|Where-Object id -eq $Panel).controls|Where-Object control -eq $Control|Select-Object -ExpandProperty visible_in_panel}
@@ -577,7 +589,7 @@ try{
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Resize -Width 900 -Height 720
     Start-Sleep -Milliseconds 400
     $placement=$configuration.Current.ItemStatus|ConvertFrom-Json
-    if(!$placement -or $placement.configuration.width -gt 380){throw 'Narrow expansion lost shared geometry'}
+    if(!$placement -or [Math]::Round($placement.configuration.width*$scale) -gt [Math]::Round(380*$scale)){throw 'Narrow expansion lost shared geometry'}
     if(((Control 'configure-show-brush_size').GetRuntimeId() -join ':') -ne $identity){throw 'Narrow resize replaced configuration controls'}
     Capture 'sizes-narrow'
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Resize -Width 1500 -Height 1000
@@ -628,7 +640,10 @@ try{
     Start-Sleep -Milliseconds 250
     Capture 'navigator-after' -Composed
     $restored=[Drawing.Bitmap]::new((Join-Path $run 'navigator-after.png'))
-    try{$pixel=$restored.GetPixel($occlusion.x,$occlusion.y);if($pixel.R -gt 245 -and $pixel.G -gt 245 -and $pixel.B -gt 245){throw 'Closing configuration did not restore the lower native panel'}}
+    try{
+        $pixel=$restored.GetPixel($occlusion.x,$occlusion.y);$original=[Drawing.Color]::FromArgb([int]$occlusion.before);$overview=[Drawing.Color]::FromArgb([int]$occlusion.overview)
+        if((Color-Difference $pixel $original) -ge (Color-Difference $pixel $overview)){throw 'Closing configuration did not restore the lower native panel'}
+    }
     finally{$restored.Dispose()}
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Resize -Width 1500 -Height 1000
     Start-Sleep -Milliseconds 400
