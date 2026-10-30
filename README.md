@@ -83,11 +83,20 @@ like Fresco and Rebelle.
 
 The *Paint* workspace brings simulated physical media to digital illustration.
 
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/paint-workspace-dark.svg">
-  <img src="docs/assets/paint-workspace-light.svg" width="1920" alt="An oil painting of a house by the sea at sunset in Paint, with brushes, colors and layers beside the canvas.">
-</picture>
+<p>
+  <a href="docs/assets/paint-workspace-light.webp#gh-light-mode-only">
+    <picture>
+      <source type="image/webp" media="(prefers-reduced-motion: no-preference)" srcset="docs/assets/paint-workspace-light.webp">
+      <img src="docs/assets/paint-workspace-light.svg" width="1920" alt="An oil painting of a house by the sea at sunset in Paint, with brushes, colors and layers beside the canvas.">
+    </picture>
+  </a>
+  <a href="docs/assets/paint-workspace-dark.webp#gh-dark-mode-only">
+    <picture>
+      <source type="image/webp" media="(prefers-reduced-motion: no-preference)" srcset="docs/assets/paint-workspace-dark.webp">
+      <img src="docs/assets/paint-workspace-dark.svg" width="1920" alt="An oil painting of a house by the sea at sunset in Paint, with brushes, colors and layers beside the canvas.">
+    </picture>
+  </a>
+</p>
 
 ## Photo
 
