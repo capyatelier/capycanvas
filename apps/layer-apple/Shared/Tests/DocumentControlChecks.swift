@@ -438,7 +438,7 @@ extension XCTestCase {
         let second = root.appendingPathComponent("Second blue.png")
         try source.write(to: second)
         let layers = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "layer-row-"))
-        let importImage = app.buttons["layer-Import image as layer"]
+        let importImage = app.buttons["layer-Import Image as Layer…"]
         let open = app.windows.buttons["OKButton"].firstMatch
         let paper = editorPixels(in: app)
         workspaceActivate(importImage)
@@ -457,7 +457,7 @@ extension XCTestCase {
             waitForExpectations(timeout: 15)
             app.typeKey("a", modifierFlags: .command); workspaceActivate(open)
             XCTAssertTrue(open.waitForNonExistence(timeout: 15))
-            expectation(for: NSPredicate(format: "count == 3"), evaluatedWith: layers)
+            expectation(for: NSPredicate(format: "count == 4"), evaluatedWith: layers)
             expectation(for: NSPredicate { _, _ in
                 let pixels = self.editorPixels(in: app); return Int(pixels[2]) > Int(pixels[0]) + 100
             }, evaluatedWith: app)
@@ -483,7 +483,7 @@ extension XCTestCase {
             "Use the selected photo name for its Object layer")
         let imported = editorPixels(in: app)
         attachEditor(in: app, name: "native-image-imported")
-        for (command, count, expected) in [("Undo", 2, paper), ("Redo", 3, imported)] {
+        for (command, count, expected) in [("Undo", 2, paper), ("Redo", 4, imported)] {
             editorHistory(command, in: app)
             expectation(for: NSPredicate { _, _ in
                 layers.count == count && self.editorPixels(in: app) == expected
