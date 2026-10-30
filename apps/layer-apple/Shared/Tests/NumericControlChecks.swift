@@ -86,7 +86,7 @@ extension XCTestCase {
             }
             let label = properties.staticTexts["Opacity"].firstMatch
             #if os(macOS)
-            label.rightClick()
+            workspacePoint(label)?.rightClick()
             let reset = app.menuItems["Reset"]
             #else
             let scroll = app.scrollViews.containing(.any, identifier: "layer-properties").firstMatch
