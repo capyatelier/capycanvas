@@ -362,6 +362,7 @@ void LayerRow::refresh(){
     if(editing&&!renaming){renaming=true;committing=false;rename.Text(str(layer,L"label"));rename.Visibility(Visibility::Visible);name.Visibility(Visibility::Collapsed);
         focusRename();}
     else if(!editing&&renaming){renaming=false;committing=false;rename.Visibility(Visibility::Collapsed);name.Visibility(Visibility::Visible);}
+    thumbnails();
 }
 void LayerRow::focusRename(){
     if(renameFocus){rename.LayoutUpdated(renameFocus);renameFocus={};}
@@ -374,11 +375,11 @@ void LayerRow::focusRename(){
         }
     });
 }
-void LayerRow::thumbnails(std::vector<LayerThumbnail>& visible){
+void LayerRow::thumbnails(std::vector<LayerThumbnail>* visible){
     if(!current())return;auto layer=model();
     for(bool isMask:{false,true}){
         if(isMask?!flag(layer,L"has_mask"):!flag(layer,L"has_thumbnail"))continue;
-        auto item=thumbnail(layer,isMask);visible.push_back(item);
+        auto item=thumbnail(layer,isMask);if(visible)visible->push_back(item);
         bool current=false;auto source=LayerThumbnailSource(data->thumbnails,epoch,item,&current);auto shown=isMask?maskThumbnail:contentThumbnail;
         auto preview=isMask?maskPreview:contentPreview;
         if(preview.ImageSource()!=source)preview.ImageSource(source);AutomationProperties::SetItemStatus(shown,current?data->caption(L"header",L"ready"):data->caption(L"layers",L"pending"));

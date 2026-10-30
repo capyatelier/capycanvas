@@ -342,7 +342,7 @@ void LayersView::preview(){
     for(auto const& [element,row]:rows){
         if(!row->root.IsLoaded())continue;
         auto rect=row->root.TransformToVisual(list).TransformBounds({0,0,float(row->root.ActualWidth()),float(row->root.ActualHeight())});
-        if(rect.Y+rect.Height>0&&rect.Y<list.ActualHeight())row->thumbnails(visible);
+        if(rect.Y+rect.Height>0&&rect.Y<list.ActualHeight())row->thumbnails(&visible);
     }
     auto interval=RefreshLayerThumbnails(data->thumbnails,this,epoch,visible);
     if(timer.Interval()!=interval)timer.Interval(interval);

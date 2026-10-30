@@ -120,7 +120,7 @@ std::shared_ptr<PlotView> plotView(std::shared_ptr<ScopeFeed> const& source,bool
 }
 struct WaveformView : std::enable_shared_from_this<WaveformView> {
     std::shared_ptr<ScopeFeed> source;
-    Image image;std::shared_ptr<BitmapUpload> upload=BitmapUpload::Create();uint64_t installed=uint64_t(-1);hstring context;
+    Image image;std::shared_ptr<BitmapUpload> upload=BitmapUpload::Create();uint64_t installed=uint64_t(-1);hstring context,document;
     ~WaveformView(){upload->Close();}
     void init(FrameworkElement const& chart){
         image.Stretch(Stretch::Fill);image.IsHitTestVisible(false);
@@ -131,12 +131,16 @@ struct WaveformView : std::enable_shared_from_this<WaveformView> {
     void resize(FrameworkElement const& chart){
         auto root=chart.XamlRoot();if(!root)return;double scale=root.RasterizationScale();
         std::array<int,2> size{int(std::lround(chart.ActualWidth()*scale)),int(std::lround(chart.ActualHeight()*scale))};
-        if(size!=source->waveformSize){source->waveformSize=size;upload->Clear();image.Source(nullptr);installed=uint64_t(-1);}
+        if(size!=source->waveformSize){source->waveformSize=size;installed=uint64_t(-1);}
         source->refresh();
     }
     void install(){
         auto current=source->context();
-        if(context!=current){context=current;upload->Clear();image.Source(nullptr);installed=uint64_t(-1);}
+        if(context!=current){
+            context=current;auto data=source->owner.lock();auto next=data?object(data->state,L"document_file").GetNamedValue(L"epoch",JsonValue::CreateNullValue()).Stringify():hstring{};
+            if(document!=next){document=next;upload->Clear();image.Source(nullptr);}
+            installed=uint64_t(-1);
+        }
         if(installed==source->generation||source->waveformContext!=current||source->waveformRasterSize!=source->waveformSize)return;
         installed=source->generation;
         if(!source->waveform){upload->Clear();image.Source(nullptr);return;}

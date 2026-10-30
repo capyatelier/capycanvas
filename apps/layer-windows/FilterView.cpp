@@ -24,18 +24,21 @@ struct FiltersView : std::enable_shared_from_this<FiltersView> {
     struct PreviewRow {hstring id;Button button{nullptr};Image image{nullptr};TextBlock text{nullptr},heading{nullptr};bool bundled=false;};
     std::vector<PreviewRow> previews;
     ~FiltersView(){if(timer)timer.Stop();RemoveFilterPreviewView(data->previews,reinterpret_cast<uint64_t>(this));}
+    hstring previewContext()const{return object(data->state,L"document_file").GetNamedValue(L"epoch",JsonValue::CreateNullValue()).Stringify();}
+    void bindPreview(Image const& image,hstring const& id,hstring const& context){
+        bool current=false;auto source=FilterPreviewSource(data->previews,context,id,&current);
+        if(image.Source()!=source)image.Source(source);
+        AutomationProperties::SetItemStatus(image,current?data->caption(L"header",L"ready"):data->caption(L"layers",L"pending"));
+    }
     void preview(){
         if(!root.IsLoaded()||!root.XamlRoot()||!root.XamlRoot().IsHostVisible()||list.ActualHeight()<=0){RemoveFilterPreviewView(data->previews,reinterpret_cast<uint64_t>(this));return;}
-        auto file=object(data->state,L"document_file");
-        auto context=file.GetNamedValue(L"epoch",JsonValue::CreateNullValue()).Stringify();
+        auto context=previewContext();
         std::vector<hstring> visible;
         for(auto const& row:previews){
             if(row.bundled)continue;
             auto rect=row.button.TransformToVisual(list).TransformBounds({0,0,float(row.button.ActualWidth()),float(row.button.ActualHeight())});
             if(rect.Y+rect.Height>0&&rect.Y<list.ActualHeight())visible.push_back(row.id);
-            auto source=FilterPreviewSource(data->previews,context,row.id);
-            if(row.image.Source()!=source)row.image.Source(source);
-            AutomationProperties::SetItemStatus(row.image,source?data->caption(L"header",L"ready"):data->caption(L"layers",L"pending"));
+            bindPreview(row.image,row.id,context);
         }
         RefreshFilterPreviews(data->previews,reinterpret_cast<uint64_t>(this),context,visible);
     }
@@ -132,7 +135,7 @@ struct FiltersView : std::enable_shared_from_this<FiltersView> {
                     AutomationProperties::SetItemStatus(preview,data->caption(L"layers",L"pending"));
                     preview.Source(CapyUi::bundledImage(L"filter-previews/"+std::wstring(str(choice,L"id").c_str())+L".webp",
                         [data=data,image=winrt::make_weak(preview)]{if(auto shown=image.get())AutomationProperties::SetItemStatus(shown,data->caption(L"header",L"ready"));}));
-                }
+                }else bindPreview(preview,str(choice,L"id"),previewContext());
                 AutomationProperties::SetName(preview,str(choice,L"label"));
                 AutomationProperties::SetAutomationId(preview,L"filter-preview-"+str(choice,L"id"));
                 content.Children().Append(preview);

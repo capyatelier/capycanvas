@@ -16,5 +16,5 @@ void RefreshFilterPreviews(std::shared_ptr<FilterPreviewCache> const&,
     uint64_t view,winrt::hstring const& epoch,std::vector<winrt::hstring> const& visible);
 void RemoveFilterPreviewView(std::shared_ptr<FilterPreviewCache> const&,uint64_t view);
 winrt::Microsoft::UI::Xaml::Media::ImageSource FilterPreviewSource(
-    std::shared_ptr<FilterPreviewCache> const&,winrt::hstring const& epoch,winrt::hstring const& id);
+    std::shared_ptr<FilterPreviewCache> const&,winrt::hstring const& epoch,winrt::hstring const& id,bool* current=nullptr);
 }

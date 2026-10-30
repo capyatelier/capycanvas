@@ -3,6 +3,12 @@
 #include "BitmapUpload.h"
 #include <winrt/Microsoft.UI.Xaml.Shapes.h>
 #include "../LayerThumbnails.cpp"
+#include "../FilterPreviews.cpp"
+#include "../ScopesView.cpp"
+#include "../FilterView.cpp"
+#include "LayersView.h"
+#include "ColorWheel.h"
+#include "ColorEditor.h"
 #include <winrt/Windows.Storage.Streams.h>
 #include <robuffer.h>
 #include <atomic>
@@ -306,19 +312,126 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
         require(!LayerThumbnailSource(cache,L"document",other)&&!LayerThumbnailSource(cache,L"other",item),L"Thumbnail source crossed a target or document identity");
         surface.Children().RemoveAtEnd();++checks;
     }
+    ControlContext controlContext;A retentionResults;
+    std::shared_ptr<WorkspaceData> workspace(){
+        auto data=std::make_shared<WorkspaceData>();controlContext.apply(data);
+        data->catalog.Insert(L"panel_metrics",O({{L"layer_swipe_action_width",N(64)},{L"control_height",N(30)},{L"compound_spacing",N(2)}}));
+        data->state=O({{L"theme",S(L"dark")},{L"document_file",O({{L"epoch",N(1)}})}});
+        data->query=[](CanvasQueryKind,std::string,PreviewReply){return false;};
+        return data;
+    }
+    winrt::Windows::Foundation::IAsyncAction filterRetention(bool contextChange){
+        co_await submit(frames->paperWhite);auto source=upload->Image();
+        auto cache=CreateFilterPreviewCache([](CanvasQueryKind,std::string,PreviewReply){return false;});
+        cache->context=L"old";cache->key=L"first";cache->images.emplace(L"filter",FilterPreviewCache::Tile{cache->key,upload});
+        bool current=false;require(FilterPreviewSource(cache,L"old",L"filter",&current)==source&&current,L"Accepted filter preview was not current");
+        if(contextChange)RefreshFilterPreviewContext(cache,L"new");else cache->key=L"second";
+        require(FilterPreviewSource(cache,cache->context,L"filter",&current)==source&&!current,
+            L"Filter key/context change discarded retained preview pixels");
+        co_await pixels(frames->paperWhite.bytes,32,32);++checks;
+    }
+    winrt::Windows::Foundation::IAsyncAction filterUpload(bool stale){
+        co_await submit(frames->paperWhite);auto source=upload->Image();
+        auto cache=CreateFilterPreviewCache([](CanvasQueryKind,std::string,PreviewReply){return false;});
+        cache->context=L"old";cache->key=L"first";cache->images.emplace(L"filter",FilterPreviewCache::Tile{cache->key,upload});
+        cache->key=L"second";cache->upload(frames->paperBluePacket,32,32,{L"filter"});
+        auto result=std::make_shared<Outcome>();auto complete=std::move(upload->active->request.complete);auto weak=weak_from_this();
+        upload->active->request.complete=[weak,result,complete=std::move(complete)](bool accepted){complete(accepted);if(auto self=weak.lock())self->finish(result,1,accepted);};
+        bool current=true;bool retained=FilterPreviewSource(cache,L"old",L"filter",&current)==source&&!current;
+        if(stale)RefreshFilterPreviewContext(cache,L"new");co_await wait(result);
+        require(result->accepted.at(1)!=stale,L"Filter upload crossed its document context or rejected current pixels");
+        require(retained&&FilterPreviewSource(cache,cache->context,L"filter",&current)==source&&current!=stale,
+            L"Pending/stale filter upload discarded retained pixels");
+        require(!FilterPreviewSource(cache,L"unrelated",L"filter",&current)&&!current,L"Filter freshness crossed its document context");
+        co_await pixels(stale?frames->paperWhite.bytes:frames->paperBlueBgra,32,32);++checks;
+    }
+    winrt::Windows::Foundation::IAsyncAction filterRows(){
+        co_await submit(frames->paperWhite);auto source=upload->Image();auto data=workspace();
+        data->previews=CreateFilterPreviewCache(data->query);data->previews->context=L"1";data->previews->key=L"key";
+        data->previews->images.emplace(L"filter",FilterPreviewCache::Tile{L"key",upload});
+        data->state.Insert(L"filter_picker",O({{L"category",S(L"all")}}));
+        A categories;categories.Append(O({{L"id",S(L"all")},{L"label",S(L"All")},{L"icon",S(L"adjustments")}}));data->state.Insert(L"filter_categories",categories);
+        A choices;choices.Append(O({{L"id",S(L"filter")},{L"label",S(L"Filter")},{L"category",S(L"all")}}));data->state.Insert(L"adjustments",choices);
+        auto view=std::make_shared<FiltersView>();view->data=data;view->init();view->refresh();
+        require(view->previews.size()==1&&view->previews.front().image.Source()==source,L"New filter row did not bind its cached preview before the timer");++checks;
+    }
+    winrt::Windows::Foundation::IAsyncAction layerRow(){
+        co_await submit(frames->paperWhite);auto source=upload->Image();auto data=workspace();
+        A layers;layers.Append(O({{L"id",N(7)},{L"paint_revision",N(1)},{L"has_thumbnail",B(true)},{L"visible",B(true)},{L"label",S(L"Layer")},{L"selection_icon",S(L"selection")},{L"content_icon",S(L"paint")}}));data->state.Insert(L"layers",layers);
+        data->thumbnails=CreateLayerThumbnailCache(data->query);LayerThumbnail item{L"7",L"7",L"1",false};
+        RefreshLayerThumbnails(data->thumbnails,this,L"1",{item});data->thumbnails->images.emplace(slot(item),LayerThumbnailCache::Tile{key(item),item.target,upload,1});
+        auto row=std::make_shared<CapyLayers::LayerRow>();row->data=data;row->id=7;row->epoch=L"1";row->init();row->refresh();
+        require(row->contentPreview.ImageSource()==source,L"New layer row did not bind its cached thumbnail before the timer");++checks;
+    }
+    winrt::Windows::Foundation::IAsyncAction waveformResize(){
+        auto data=workspace();auto feed=std::make_shared<ScopeFeed>();feed->owner=data;
+        auto view=std::make_shared<WaveformView>();view->source=feed;view->upload=upload;view->context=feed->context();
+        co_await submit(frames->paperWhite);view->image.Source(upload->Image());auto source=upload->Image();
+        auto scale=image.XamlRoot().RasterizationScale();Grid chart;chart.Width(16/scale);chart.Height(16/scale);chart.Children().Append(view->image);surface.Children().Append(chart);
+        co_await rendered(chart);feed->waveformSize={16,16};chart.Width(64);chart.Height(64);co_await rendered(chart);view->resize(chart);
+        bool retained=view->image.Source()==source&&upload->Image()==source;
+        feed->waveformContext=feed->context();feed->waveformRasterSize={1,1};view->install();
+        require(retained&&view->image.Source()==source,L"Waveform resize discarded pixels while the new raster size was pending");
+        co_await pixels(frames->paperWhite.bytes,32,32,false,view->image);
+        data->state.Insert(L"document_file",O({{L"epoch",N(2)}}));view->install();
+        require(!view->image.Source()&&!upload->Image(),L"Waveform document change retained another document's pixels");++checks;
+    }
+    winrt::Windows::Foundation::IAsyncAction raster(CapyWheel::FieldRequest request,std::shared_ptr<CapyWheel::FieldResult> result){
+        co_await resume_background();std::vector<uint8_t> bytes;
+        require(CapyWheel::rasterField(request,bytes),L"Wheel raster fixture request failed");
+        com_ptr<ID2D1DeviceContext> context;check_hresult(request.device->d2d->CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE,context.put()));
+        *result={request.key,request.pixels,request.epoch,request.device,{}};
+        check_hresult(context->CreateBitmap(D2D1::SizeU(request.pixels,request.pixels),bytes.data(),request.pixels*4,
+            D2D1::BitmapProperties(D2D1::PixelFormat(DXGI_FORMAT_R8G8B8A8_UNORM,D2D1_ALPHA_MODE_PREMULTIPLIED)),result->bitmap.put()));
+        co_await apartment;
+    }
+    winrt::Windows::Foundation::IAsyncAction wheelLayout(bool ringFirst){
+        auto data=workspace();auto opened=colorUi(data->localization.get(),O({{L"type",S(L"editor_open")},{L"slot",S(L"foreground")}})).GetObject();
+        auto model=object(object(opened,L"view"),L"panel");require(model.Size()>0,L"Wheel fixture has no shared color panel");
+        CapyWheel::WheelImage wheel;wheel.start([]{});wheel.worker->running=wheel.ringWorker->running=true;
+        Image shown;shown.Width(48);shown.Height(48);surface.Children().Append(shown);co_await rendered(shown);
+        wheel.present(shown,model,data->state,48,1);
+        auto ring=std::make_shared<CapyWheel::FieldResult>(),field=std::make_shared<CapyWheel::FieldResult>();
+        co_await raster(*wheel.ringWorker->pending,ring);co_await raster(*wheel.worker->pending,field);
+        wheel.ringReady=*ring;wheel.ready=*field;wheel.present(shown,model,data->state,48,1);
+        auto source=shown.Source();auto oldRing=wheel.ring;auto oldField=wheel.field;
+        auto changed=colorUi(data->localization.get(),O({{L"type",S(L"editor")},{L"editor",object(opened,L"editor")},{L"action",O({{L"op",S(L"wheel")},{L"action",O({{L"op",S(L"shape")},{L"shape",S(str(model,L"shape")==L"triangle"?L"circle":L"triangle")}})}})}})).GetObject();
+        model=object(object(changed,L"view"),L"panel");wheel.present(shown,model,data->state,48,1);
+        bool retained=shown.Source()==source&&wheel.ring==oldRing&&wheel.field==oldField;
+        co_await raster(*wheel.ringWorker->pending,ring);co_await raster(*wheel.worker->pending,field);
+        if(ringFirst)wheel.ringReady=*ring;else wheel.ready=*field;wheel.present(shown,model,data->state,56,1);
+        require(retained&&shown.Source()==source&&wheel.ring==oldRing&&wheel.field==oldField,L"Wheel layout/partial result replaced the presented surface before both rasters were ready");
+        if(ringFirst)wheel.ready=*field;else wheel.ringReady=*ring;wheel.present(shown,model,data->state,56,1);
+        require(wheel.ring!=oldRing&&wheel.field!=oldField&&shown.Source()!=source&&wheel.pixels==56
+            &&wheel.worker->pending&&wheel.worker->pending->pixels==56&&wheel.ringWorker->pending&&wheel.ringWorker->pending->pixels==56,
+            L"Wheel did not adopt its ready layout pair while the latest size was pending");++checks;
+    }
+    winrt::Windows::Foundation::IAsyncAction retentionCases(){
+        std::vector<hstring> errors;upload->Close();upload=BitmapUpload::Create();image.Source(nullptr);
+        for(auto const& [name,run]:std::vector<std::pair<hstring,std::function<winrt::Windows::Foundation::IAsyncAction()>>>{
+            {L"filter-key",[this]{return filterRetention(false);}},{L"filter-context",[this]{return filterRetention(true);}},
+            {L"filter-upload",[this]{return filterUpload(false);}},{L"filter-stale-upload",[this]{return filterUpload(true);}},{L"filter-row",[this]{return filterRows();}},
+            {L"layer-row",[this]{return layerRow();}},{L"waveform-resize",[this]{return waveformResize();}},{L"wheel-ring-first",[this]{return wheelLayout(true);}},{L"wheel-field-first",[this]{return wheelLayout(false);}}}){
+            phase=name;hstring failure;try{co_await run();}catch(hresult_error const& e){failure=e.message();}catch(...){failure=L"Unhandled fixture failure";}
+            retentionResults.Append(O({{L"case",S(name)},{L"passed",B(failure.empty())},{L"error",S(failure)}}));if(!failure.empty())errors.push_back(name+L": "+failure);
+            surface.Children().Clear();surface.Children().Append(image);upload->Close();upload=BitmapUpload::Create();image.Source(nullptr);
+        }
+        if(!errors.empty()){hstring message;for(auto const& error:errors)message=message+error+L"\n";throw hresult_error(E_FAIL,message);}
+    }
     winrt::fire_and_forget run(){
         auto self=shared_from_this();hstring error;
         try{
             phase=L"encoding";co_await encoding();phase=L"reentrancy";co_await coalescing();
             phase=L"before-copy-context";co_await invalidation();phase=L"throwing-callbacks";co_await exceptions();
-            phase=L"predicate-reentry";co_await predicateReentry();phase=L"awaited-context";co_await awaitedCancellation();phase=L"thumbnail-epoch";co_await thumbnailEpoch();phase=L"thumbnail-owners";thumbnailOwners();phase=L"paper-recolor";co_await paperRecolor();phase=L"close";
+            phase=L"predicate-reentry";co_await predicateReentry();phase=L"awaited-context";co_await awaitedCancellation();phase=L"thumbnail-epoch";co_await thumbnailEpoch();phase=L"thumbnail-owners";thumbnailOwners();phase=L"paper-recolor";co_await paperRecolor();co_await retentionCases();phase=L"close";
             auto result=std::make_shared<Outcome>();upload->Close();
             upload->Submit(request(frames->rgba,result,1));co_await wait(result);
             require(!result->accepted.at(1),L"Closed owner accepted new pixels");++checks;
         }catch(hresult_error const& e){resultCode=1;error=e.message();}
         catch(...){resultCode=1;error=L"Unhandled fixture failure";}
-        auto path=output;auto count=checks;auto text=to_string(error);auto step=to_string(phase);auto allocations=identities.size();auto slots=poolSize;
+        auto path=output;auto count=checks;auto text=to_string(error);auto step=to_string(phase);auto allocations=identities.size();auto slots=poolSize;auto cases=to_string(retentionResults.Stringify());
         co_await resume_background();
+        std::ofstream details(path.parent_path()/L"bitmap-retention-fixture-result.json");details<<cases;
         std::ofstream file(path);file<<"{\"passed\":"<<count<<",\"exit_code\":"<<resultCode<<",\"phase\":\""<<step<<"\",\"observed_bitmap_identities\":"<<allocations<<",\"current_pool_slots\":"<<slots<<"}\n";
         if(!text.empty()){std::ofstream raw(path.parent_path()/L"bitmap-upload-fixture-error.log");raw<<text;}
         if(!file)resultCode=1;
@@ -346,7 +459,7 @@ struct App:ApplicationT<App,Markup::IXamlMetadataProvider>{
         Resources().MergedDictionaries().Append(XamlControlsResources());Resources().MergedDictionaries().Append(CapyUi::paletteResources());
         wchar_t path[32768];auto length=GetEnvironmentVariableW(L"CAPY_BITMAP_FIXTURE",path,32768);
         if(!length||length>=32768||!std::filesystem::path(path).is_absolute())throw hresult_invalid_argument();
-        fixture=std::make_shared<Fixture>();fixture->frames=frames;fixture->init(path);
+        fixture=std::make_shared<Fixture>();fixture->frames=frames;fixture->controlContext=context;fixture->init(path);
     }
 };
 }

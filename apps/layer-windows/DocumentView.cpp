@@ -374,8 +374,8 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
             for(uint32_t i=0;i<3;++i){headings[i].TextWrapping(TextWrapping::Wrap);body.Children().Append(headings[i]);images[i].MaxHeight(210);images[i].Stretch(Stretch::Uniform);images[i].Visibility(Visibility::Collapsed);body.Children().Append(images[i]);}
             body.Children().Append(status);ScrollViewer scroll;scroll.HorizontalScrollMode(ScrollMode::Disabled);scroll.HorizontalScrollBarVisibility(ScrollBarVisibility::Disabled);scroll.HorizontalContentAlignment(HorizontalAlignment::Stretch);scroll.Content(body);scroll.MaxHeight(std::max(180.,double(window.Content().XamlRoot().Size().Height)-220));dialog.Content(scroll);
             auto pending=std::make_shared<bool>(true);auto seen=std::make_shared<hstring>();auto generation=std::make_shared<uint64_t>(0);
-            auto prepare=[this,id,kind,space,depth,intent,copy,dither,spaces,profiles,pending,generation,images]{
-                if(stopping)return;*pending=true;++*generation;dialog.IsPrimaryButtonEnabled(false);for(auto image:images){image.Source(nullptr);image.Visibility(Visibility::Collapsed);}
+            auto prepare=[this,id,kind,space,depth,intent,copy,dither,spaces,profiles,pending,generation]{
+                if(stopping)return;*pending=true;++*generation;dialog.IsPrimaryButtonEnabled(false);
                 V choice=JsonValue::CreateNullValue();
                 if(kind==L"assign")choice=O({{L"Assign",spaces.GetArrayAt(space.SelectedIndex()).GetAt(0)}});
                 if(kind==L"convert")choice=O({{L"Convert",O({{L"space",spaces.GetArrayAt(space.SelectedIndex()).GetAt(0)},{L"options",O({{L"intent",S(std::array<hstring,4>{L"RelativeColorimetric",L"Perceptual",L"Saturation",L"AbsoluteColorimetric"}[intent.SelectedIndex()])},{L"black_point_compensation",B(false)}})}})}});

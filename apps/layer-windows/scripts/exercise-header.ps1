@@ -1,4 +1,4 @@
-﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('mouse','pen','touch')][string]$Device='mouse',[ValidateSet('paint','sketch','photo')][string]$Workspace='paint',[switch]$Catalog,[ValidateSet('dark','light')][string]$Theme='dark',[ValidateSet('full','catalog-only','catalog-only-light','background','options','options-light','options-pen','options-touch','menus','menus-light','zen','zen-workspace','parity','parity-light')][string]$Journey='full',[switch]$FullscreenOnly,[switch]$FullscreenBaseline)
+﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('mouse','pen','touch')][string]$Device='mouse',[ValidateSet('paint','sketch','photo')][string]$Workspace='paint',[switch]$Catalog,[ValidateSet('dark','light')][string]$Theme='dark',[ValidateSet('full','catalog-only','catalog-only-light','background','options','options-light','options-pen','options-touch','menus','menus-light','zen','zen-workspace','parity','parity-light','palette','palette-light')][string]$Journey='full',[switch]$FullscreenOnly,[switch]$FullscreenBaseline)
 $ErrorActionPreference='Stop'
 if($FullscreenBaseline){$FullscreenOnly=$true}
 $catalogJourney=$Journey -in @('catalog-only','catalog-only-light')
@@ -6,9 +6,11 @@ if($Journey -eq 'catalog-only-light'){$Theme='light'}
 if($Journey -eq 'options-light'){$Theme='light'}
 if($Journey -eq 'menus-light'){$Theme='light'}
 if($Journey -eq 'parity-light'){$Theme='light'}
+if($Journey -eq 'palette-light'){$Theme='light'}
 if($Journey -eq 'options-pen'){$Device='pen'}
 if($Journey -eq 'options-touch'){$Device='touch'}
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
+. (Join-Path $PSScriptRoot 'ComposedFrames.ps1')
 Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
 $CapyPopups=$true
 $repo=(Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
@@ -757,6 +759,70 @@ function Check-Narrow {
  Check-Geometry
 }
 
+function Header-GlyphInk($Image,$Bounds){
+    $background=$Image.GetPixel([int]($Bounds.Left+$Bounds.Width/2),$Bounds.Top+1)
+    $side=[int]([Math]::Min($Bounds.Width,$Bounds.Height)*.68)
+    $left=[int]($Bounds.Left+($Bounds.Width-$side)/2);$top=[int]($Bounds.Top+($Bounds.Height-$side)/2)
+    $ink=0
+    for($y=$top;$y -lt $top+$side;$y++){for($x=$left;$x -lt $left+$side;$x++){
+        $pixel=$Image.GetPixel($x,$y)
+        if([Math]::Max([Math]::Abs([int]$pixel.R-$background.R),[Math]::Max([Math]::Abs([int]$pixel.G-$background.G),[Math]::Abs([int]$pixel.B-$background.B))) -gt 4){$ink++}
+    }}
+    $ink
+}
+function Check-HeaderPalette {
+    Maximize-DrawingWindow
+    while(@((Model).windows_tabs.tabs).Count -lt 2){
+        & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'File'
+        Invoke 'new_document';New-DrawingPixels 64 64;Invoke 'new-drawing-create'
+        Wait-Until {!(Model).state.new_drawing -and (Model).brush_ready} 'Palette fixture drawing did not open' 60
+    }
+    Check-Geometry
+    (Control 'drawing-canvas').SetFocus()
+    [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),[uint16]0xBC)
+    $dialog=Control 'Preferences' -Name -Type ([System.Windows.Automation.ControlType]::Window)
+    $combo=Control 'Color theme' -Name -Type ([System.Windows.Automation.ControlType]::ComboBox)
+    $first=if($Theme -eq 'dark'){'Light'}else{'Dark'};$second=if($Theme -eq 'dark'){'Dark'}else{'Light'}
+    $failures=@()
+    foreach($choice in @($first,$second,$first,$second)){
+        $number=@(Get-ChildItem -LiteralPath $run -Directory -Filter 'palette-*').Count
+        $folder=Join-Path $run ('palette-'+$number+'-'+$choice.ToLower());[IO.Directory]::CreateDirectory($folder)|Out-Null
+        $header=(Control 'title-bar' -Arranged).Current.BoundingRectangle
+        $area=[Drawing.Rectangle]::new([int]$header.Left,[int]$header.Top,[int]$header.Width,[int]$header.Height)
+        $glyphs=@(Control 'zen-capy' -Arranged)
+        foreach($tab in (Model).windows_tabs.tabs){$glyphs+=Control ('drawing-close-'+$tab.id) -Arranged}
+        $regions=@();foreach($glyph in $glyphs){$box=$glyph.Current.BoundingRectangle
+            $regions+=@{id=$glyph.Current.AutomationId;identity=($glyph.GetRuntimeId() -join ':');bounds=[Drawing.Rectangle]::new([int]($box.Left-$area.Left),[int]($box.Top-$area.Top),[int]$box.Width,[int]$box.Height)}
+        }
+        $combo.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
+        $option=Control $choice -Name -Type ([System.Windows.Automation.ControlType]::ListItem)
+        $sample=Sample-Frames $area {param($i)if($i -eq 3){$option.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()}}
+        try{
+            Wait-Until {(Model).state.theme -eq $choice.ToLower()} 'Palette fixture theme did not apply'
+            $final=[TabFrames]::Grab($area.Left,$area.Top,$area.Width,$area.Height)
+            try{
+                $final.Save((Join-Path $folder 'final.png'))
+                for($i=0;$i -lt $sample.frames.Count;$i++){$sample.frames[$i].Save((Join-Path $folder ('frame-{0:D3}.png' -f $i)))}
+                $metrics=@();foreach($region in $regions){
+                    $sourceInk=Header-GlyphInk $sample.frames[2] $region.bounds;$finalInk=Header-GlyphInk $final $region.bounds
+                    if($sourceInk -lt 5 -or $finalInk -lt 5){throw "Palette fixture has no reference glyph for $($region.id): $sourceInk / $finalInk"}
+                    $reference=[Math]::Min($sourceInk,$finalInk);$bad=@();$scores=@()
+                    for($i=3;$i -lt $sample.frames.Count;$i++){$ink=Header-GlyphInk $sample.frames[$i] $region.bounds;$scores+=@{frame=$i;ink=$ink};if($ink -lt $reference*.2){$bad+=@($i)}}
+                    $current=Control $region.id -Arranged;$afterIdentity=$current.GetRuntimeId() -join ':'
+                    $metrics+=@{id=$region.id;bounds=$region.bounds;source_ink=$sourceInk;final_ink=$finalInk;invalid=$bad;scores=$scores;before_identity=$region.identity;after_identity=$afterIdentity}
+                    if($bad.Count){$failures+=@("$choice $($region.id) blank in frames $($bad -join ',')")}
+                    if($afterIdentity -ne $region.identity){$failures+=@("$choice replaced retained header control $($region.id)")}
+                }
+                @{theme=$choice;area=$area;frequency=[Diagnostics.Stopwatch]::Frequency;times=$sample.times;glyphs=$metrics}|ConvertTo-Json -Depth 10|Set-Content (Join-Path $folder 'pixels.json')
+            }finally{$final.Dispose()}
+        }finally{foreach($image in $sample.frames){$image.Dispose()}}
+    }
+    Invoke 'CloseButton' -Within $dialog
+    Wait-Until {!(Find 'Preferences' -Name) -and (Control 'drawing-canvas').Current.IsEnabled} 'Palette fixture Preferences did not close'
+    if($failures.Count){throw ($failures -join "`n")}
+    @{theme=$Theme;header_palette_glyph_frames='passed';cold_and_warm_theme_changes='passed';run=$run}|ConvertTo-Json|Set-Content (Join-Path $run 'results.json')
+}
+
 function Set-ZenTheme([string]$Theme) {
     (Control 'drawing-canvas').SetFocus()
     [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),[uint16]0xBC)
@@ -925,6 +991,13 @@ try {
     $env:CAPY_STORAGE_DIR=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1'
     [IO.File]::WriteAllText((Settings-File),(@{theme=$Theme}|ConvertTo-Json))
     Start-Review 'initial';Capture 'normal'
+    if($Journey -in @('palette','palette-light')){
+        Check-HeaderPalette
+        & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Close -DiscardUnsaved
+        if((Get-Item -LiteralPath $stderr).Length){throw 'Native stderr requires inspection'}
+        Get-Content (Join-Path $run 'results.json')
+        return
+    }
     if($Journey -in @('parity','parity-light')){
         Capture-HeaderParity
         & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Close -DiscardUnsaved

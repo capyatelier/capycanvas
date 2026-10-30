@@ -6,7 +6,7 @@
 using namespace CapyUi;
 namespace {
 struct IconSources {
-    struct Entry {Imaging::SvgImageSource source{nullptr};bool ready=false,streaming=false;std::vector<std::pair<void*,weak_ref<Image>>> waiting;};
+    struct Entry {Imaging::SvgImageSource source{nullptr};bool ready=false;std::vector<std::pair<void*,weak_ref<Image>>> waiting;};
     struct Binding {weak_ref<Image> image;hstring key;};
     std::map<hstring,Entry> sources;
     std::map<void*,hstring> keys;
@@ -25,19 +25,22 @@ struct IconSources {
         }
     }
     static fire_and_forget Load(hstring key,std::filesystem::path path){
-        auto& entry=Current().sources.at(key);if(entry.streaming)co_return;entry.streaming=true;auto source=entry.source;
+        auto source=Current().sources.at(key).source;
         apartment_context apartment;co_await resume_background();
         try{
             auto file=co_await Windows::Storage::StorageFile::GetFileFromPathAsync(path.make_preferred().wstring());
             auto stream=co_await file.OpenReadAsync();co_await apartment;
             auto status=co_await source.SetSourceAsync(stream);stream.Close();
-            if(status==Imaging::SvgImageSourceLoadStatus::Success)Ready(key);
+            if(status==Imaging::SvgImageSourceLoadStatus::Success){
+                Ready(key);auto theme=path.parent_path().filename()==L"dark"?L"light":L"dark";
+                auto relative=L"icons/"+std::wstring(theme)+L"/"+path.filename().wstring();Get(asset(relative),assetPath(relative));
+            }
         }catch(...){}
     }
-    static Entry& Get(Windows::Foundation::Uri const& uri){
+    static Entry& Get(Windows::Foundation::Uri const& uri,std::filesystem::path const& path){
         auto key=uri.AbsoluteUri();auto& cache=Current();auto [found,added]=cache.sources.try_emplace(key);
         auto& entry=found->second;
-        if(added){entry.source=Imaging::SvgImageSource(uri);cache.keys.emplace(get_abi(entry.source),key);entry.source.Opened([key](auto&&,auto&&){Ready(key);});}
+        if(added){entry.source=Imaging::SvgImageSource();cache.keys.emplace(get_abi(entry.source),key);Load(key,path);}
         return entry;
     }
 };
@@ -52,8 +55,8 @@ void CapyUi::setIcon(Image const& result,hstring name,hstring theme,double size)
     auto key=uri.AbsoluteUri();auto& cache=IconSources::Current();auto pending=cache.bindings.find(get_abi(result));
     if(pending!=cache.bindings.end()&&pending->second.image.get()==result&&pending->second.key==key)return;
     if(source)if(auto previous=IconSources::UriOf(source);previous&&previous.AbsoluteUri()==key){cache.bindings.erase(get_abi(result));return;}
-    auto& entry=IconSources::Get(uri);
+    auto& entry=IconSources::Get(uri,assetPath(relative));
     if(entry.ready||!result.Source()){cache.bindings.erase(get_abi(result));result.Source(entry.source);}
-    else{cache.bindings.insert_or_assign(get_abi(result),IconSources::Binding{make_weak(result),key});entry.waiting.emplace_back(get_abi(result),make_weak(result));IconSources::Load(key,assetPath(relative));}
+    else{cache.bindings.insert_or_assign(get_abi(result),IconSources::Binding{make_weak(result),key});entry.waiting.emplace_back(get_abi(result),make_weak(result));}
 }
 Windows::Foundation::Uri CapyUi::iconUri(Imaging::SvgImageSource const& source){return IconSources::UriOf(source);}

@@ -455,6 +455,7 @@ with mouse, pen and touch, including native control identity, arranged release
 positions and order history. Run all `tab-pickup` variants after input changes.
 `tab-drag:release-dark`/`release-light` and `drawer-dark`/`drawer-light` retain composed release-frame sequences and check far-left commits and active-tab feet.
 `tab-drag:chrome-dark`/`chrome-light` check stack and drawer handoffs, retained tab/category icons and idle GPU presentations.
+`header:palette`/`palette-light` and `documents:color-workflows` retain composed frames through theme changes and comparison updates.
 
 Fixtures share the helpers in `CapyUia.ps1`, such as `Owned-DrawingWindow`,
 `Control -Arranged`, `Workspace-Root`, `Tool-Tile`, `Use-PaintWorkspace`,
@@ -569,7 +570,7 @@ Pass the native reports to the `number-controls` and `color-panel` scenarios of
 `exercise-scroll-indicators.ps1` and `exercise-navigator-allocation.ps1` through
 `test-desktop.ps1`. The Bitmap build reads its input from an absolute
 `CAPY_BITMAP_FIXTURE` path and writes `bitmap-upload-fixture-result.json` beside
-it. Rebuild normally before using the editor again.
+it, with named preview-retention cases in `bitmap-retention-fixture-result.json`. Rebuild normally before using the editor again.
 
 The VM fixture runner builds and routes the LayerDrop companion automatically.
 

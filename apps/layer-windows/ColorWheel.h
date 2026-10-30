@@ -103,7 +103,7 @@ struct WheelImage {
     int pixels=0;
     com_ptr<ID2D1ImageBrush> ring;
     com_ptr<ID2D1Bitmap> field;
-    hstring ringKey,ringLayout,fieldKey,fieldLayout;
+    hstring ringKey,ringLayout,fieldKey,fieldLayout,presentedLayout;
     std::shared_ptr<FieldWorker> ringWorker,worker;
     std::optional<FieldResult> ringReady,ready;
     uint64_t ringEpoch=0,epoch=0;uint32_t fieldPixels=0;
@@ -127,6 +127,27 @@ struct WheelImage {
         if(!device||FAILED(device->d3d->GetDeviceRemovedReason())){
             device=Device::get();surface=nullptr;ring=nullptr;field=nullptr;ringKey=fieldKey=L"";
         }
+        auto shape=str(model,L"shape");uint32_t projection=shape==L"circle"?2:shape==L"triangle"?1:0;
+        auto working=str(model,L"rgb_space",L"Srgb");uint32_t rgbSpace=working==L"DisplayP3"?1:working==L"AdobeRgb"?2:working==L"ProPhoto"?3:0;
+        auto shapeKey=shape+L"/"+working;
+        if(shapeKey!=ringLayout){ringLayout=shapeKey;++ringEpoch;ringReady.reset();ringWorker->cancel();}
+        float hueValue=float(array(model,L"wheel_components").GetNumberAt(0));
+        bool hdr=flag(model,L"hdr");auto rendition=object(model,L"rendition").Stringify();
+        auto layoutKey=shapeKey+(hdr?L"/hdr"+rendition:hstring{});
+        if(layoutKey!=fieldLayout){fieldLayout=layoutKey;++epoch;ready.reset();worker->cancel();}
+        auto wantedRing=shapeKey+L"/"+to_hstring(next);
+        auto wanted=layoutKey+L"/"+to_hstring(next)+L"/"+to_hstring(hueValue);if(hdr)wanted=wanted+state.Stringify();
+        bool readyRing=ringReady&&ringReady->epoch==ringEpoch&&ringReady->device==device;
+        bool readyField=ready&&ready->epoch==epoch&&ready->device==device;
+        bool hasRing=(ring&&ringKey==wantedRing)||(readyRing&&ringReady->key==wantedRing);
+        bool hasField=(field&&fieldKey==wanted)||(readyField&&ready->key==wanted);
+        if(!hasRing)ringWorker->submit(FieldRequest{wantedRing,uint32_t(next),0,projection,rgbSpace,false,true,{},ringEpoch,device});
+        if(!hasField)worker->submit(FieldRequest{wanted,uint32_t(next),hueValue,projection,rgbSpace,hdr,false,
+            hdr?to_string(O({{L"state",state},{L"rendition",object(model,L"rendition")}}).Stringify()):std::string{},epoch,device});
+        if(!ring||!field||presentedLayout!=layoutKey){
+            bool currentRing=ring&&std::wstring_view(ringKey).starts_with(std::wstring_view(shapeKey+L"/"));
+            if((!currentRing&&!readyRing)||!((field&&presentedLayout==layoutKey)||readyField))return;
+        }
         if(!surface||pixels!=next){
             pixels=next;
             surface=Imaging::SurfaceImageSource(pixels,pixels,false);
@@ -149,26 +170,13 @@ struct WheelImage {
             auto geometry=object(model,L"geometry");
             auto center=point(array(geometry,L"center"));
             float inner=float(num(geometry,L"inner")),outer=float(num(geometry,L"outer"));
-            auto shape=str(model,L"shape");uint32_t projection=shape==L"circle"?2:shape==L"triangle"?1:0;
-            auto working=str(model,L"rgb_space",L"Srgb");uint32_t rgbSpace=working==L"DisplayP3"?1:working==L"AdobeRgb"?2:working==L"ProPhoto"?3:0;
-            auto shapeKey=shape+L"/"+working;
-            if(shapeKey!=ringLayout){ringLayout=shapeKey;ring=nullptr;ringKey=L"";++ringEpoch;ringReady.reset();ringWorker->cancel();}
             if(auto result=std::exchange(ringReady,std::nullopt);result&&result->epoch==ringEpoch&&result->device==device){
                 check_hresult(result->status);float side=float(result->pixels);
                 ring=nullptr;check_hresult(context->CreateImageBrush(result->bitmap.get(),D2D1::ImageBrushProperties(D2D1::RectF(0,0,side,side)),
                     D2D1::BrushProperties(1,D2D1::Matrix3x2F::Scale(1/side,1/side)),ring.put()));ringKey=result->key;
             }
-            auto wantedRing=shapeKey+L"/"+to_hstring(pixels);
-            if(ringKey!=wantedRing)ringWorker->submit(FieldRequest{wantedRing,uint32_t(pixels),0,projection,rgbSpace,false,true,{},ringEpoch,device});
             Paint white{1,1,1,1};
-            float hueValue=float(array(model,L"wheel_components").GetNumberAt(0));
-            bool hdr=flag(model,L"hdr");auto rendition=object(model,L"rendition").Stringify();
-            auto layoutKey=shapeKey+(hdr?L"/hdr"+rendition:hstring{});
-            if(layoutKey!=fieldLayout){fieldLayout=layoutKey;field=nullptr;fieldKey=L"";++epoch;ready.reset();worker->cancel();}
             if(auto result=std::exchange(ready,std::nullopt);result&&result->epoch==epoch&&result->device==device){check_hresult(result->status);field=result->bitmap;fieldKey=result->key;fieldPixels=result->pixels;}
-            auto wanted=layoutKey+L"/"+to_hstring(pixels)+L"/"+to_hstring(hueValue);if(hdr)wanted=wanted+state.Stringify();
-            if(fieldKey!=wanted)worker->submit(FieldRequest{wanted,uint32_t(pixels),hueValue,projection,rgbSpace,hdr,false,
-                hdr?to_string(O({{L"state",state},{L"rendition",object(model,L"rendition")}}).Stringify()):std::string{},epoch,device});
             com_ptr<ID2D1Factory> factory;context->GetFactory(factory.put());com_ptr<ID2D1Geometry> clip;
             if(projection==0){auto square=array(geometry,L"square");float x=float(square.GetNumberAt(0)),y=float(square.GetNumberAt(1)),w=float(square.GetNumberAt(2));
                 float radius=float(std::min(6.,size*.02)/size);com_ptr<ID2D1RoundedRectangleGeometry> rounded;
@@ -195,7 +203,7 @@ struct WheelImage {
                 brush->SetColor(Paint{0,0,0,.5f});context->DrawEllipse(ellipse,brush.get(),float(4/size));
                 brush->SetColor(white);context->DrawEllipse(ellipse,brush.get(),float(2/size));
             }
-            active=false;check_hresult(native->EndDraw());
+            active=false;check_hresult(native->EndDraw());presentedLayout=layoutKey;
         }catch(...){if(active)native->EndDraw();throw;}
     }
 };

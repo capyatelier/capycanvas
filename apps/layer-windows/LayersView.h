@@ -71,7 +71,7 @@ struct LayerRow : std::enable_shared_from_this<LayerRow> {
     void action(J operation);
     void init();
     void refresh();
-    void thumbnails(std::vector<LayerThumbnail>& visible);
+    void thumbnails(std::vector<LayerThumbnail>* visible=nullptr);
     void commit(bool cancel);
     void context(bool mask,UIElement const& anchor);
     bool loadThumbnail(bool mask);

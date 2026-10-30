@@ -92,7 +92,7 @@ struct FilterPreviewCache : std::enable_shared_from_this<FilterPreviewCache> {
     void publish(hstring const& epoch){
         if(context==epoch)return;
         context=epoch;key=L"";
-        for(auto& [id,tile]:images){tile.key=L"";tile.upload->Clear();}
+        for(auto& [id,tile]:images)tile.key=L"";
     }
     void refresh(uint64_t view,hstring const& epoch,std::vector<hstring> const& visible){
         publish(epoch);
@@ -111,9 +111,13 @@ void RefreshFilterPreviewContext(std::shared_ptr<FilterPreviewCache> const& cach
 void RefreshFilterPreviews(std::shared_ptr<FilterPreviewCache> const& cache,uint64_t view,hstring const& epoch,
     std::vector<hstring> const& visible){if(cache)cache->refresh(view,epoch,visible);}
 void RemoveFilterPreviewView(std::shared_ptr<FilterPreviewCache> const& cache,uint64_t view){if(cache)cache->remove(view);}
-ImageSource FilterPreviewSource(std::shared_ptr<FilterPreviewCache> const& cache,hstring const& epoch,hstring const& id){
+ImageSource FilterPreviewSource(std::shared_ptr<FilterPreviewCache> const& cache,hstring const& epoch,hstring const& id,bool* current){
+    if(current)*current=false;
     if(cache&&cache->context==epoch){auto found=cache->images.find(id);
-        if(found!=cache->images.end()&&found->second.key==cache->key)return found->second.upload->Image();
+        if(found!=cache->images.end()){
+            auto source=found->second.upload->Image();if(current)*current=source&&!cache->key.empty()&&found->second.key==cache->key;
+            return source;
+        }
     }return nullptr;
 }
 }

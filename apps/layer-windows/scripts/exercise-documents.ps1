@@ -19,6 +19,7 @@ $CapyCacheModel=$true
 $CapyPopups=$true
 $drawIndex=0
 Add-Type -AssemblyName System.Drawing
+. (Join-Path $PSScriptRoot 'ComposedFrames.ps1')
 Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
@@ -922,12 +923,13 @@ if($Journey -in @('new-drawing','new-drawing-problem','paper-color')){
     return
 }
 function Combo-Value($Combo){$selection=$Combo.GetCurrentPattern([System.Windows.Automation.SelectionPattern]::Pattern).Current.GetSelection();if($selection.Count){$selection[0].Current.Name}}
-function Combo-Select($Combo,[scriptblock]$Pick){
+function Combo-Item($Combo,[scriptblock]$Pick){
     $Combo.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
     $hit=@{item=$null};Wait-Until {$hit.item=@($Combo.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new(
         [System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::ListItem))|Where-Object $Pick)[0];$hit.item} 'Missing drop-down choice'
-    $hit.item.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
+    $hit.item
 }
+function Combo-Select($Combo,[scriptblock]$Pick){(Combo-Item $Combo $Pick).GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()}
 
 
 function Color-Command([string]$Id){
@@ -944,12 +946,43 @@ function Color-Preview([string]$Space,[switch]$Copy){
     $confirm=if($Copy){(Model).windows_document.details.feature_copy.color.create_copy}else{'Apply'}
     Wait-Until {$dialog=Find-Id 'document-workflow';$dialog -and (Find-Name $confirm).Current.IsEnabled} 'Completed comparison did not enable its commit action'
 }
+function Color-Images {
+    $dialog=Find-Id 'document-workflow';if(!$dialog){return}
+    @($dialog.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new(
+        [System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::Image))|Where-Object {
+        !$_.Current.IsOffscreen -and $_.Current.BoundingRectangle.Width -gt 64 -and $_.Current.BoundingRectangle.Height -gt 64
+    }|Sort-Object {$_.Current.BoundingRectangle.Top})
+}
+function Color-Frames {
+    $images=@{items=@()};Wait-Until {$images.items=@(Color-Images);$images.items.Count -ge 2} 'Color comparison did not display its preview images'
+    $bounds=$images.items[0].Current.BoundingRectangle
+    $area=[Drawing.Rectangle]::FromLTRB([int][Math]::Ceiling($bounds.Left+12),[int][Math]::Ceiling($bounds.Top+12),[int][Math]::Floor($bounds.Right-12),[int][Math]::Floor($bounds.Bottom-12))
+    $choice=Combo-Item (Owned 'document-profile-choice') {$_.Current.Name -eq 'Display P3'}
+    $folder=Join-Path $run ('color-preview-frames-'+(Model).state.theme);[IO.Directory]::CreateDirectory($folder)|Out-Null
+    $sample=Sample-Frames $area {param($i)if($i -eq 3){$choice.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()}}
+    try{
+        Color-Preview 'DisplayP3'
+        Wait-Until {@(Color-Images).Count -ge 2} 'Color comparison did not restore its preview images'
+        $null=[TabFrames]::DwmFlush();$final=[TabFrames]::Grab($area.Left,$area.Top,$area.Width,$area.Height)
+        try{
+            $final.Save((Join-Path $folder 'held.png'));$envelope=[TabFrames+Envelope]::new($sample.frames[2],$final);$bad=@();$scores=@()
+            for($i=0;$i -lt $sample.frames.Count;$i++){
+                $sample.frames[$i].Save((Join-Path $folder ('frame-{0:D3}.png' -f $i)))
+                $changed=$envelope.Difference($sample.frames[$i]);$scores+=@{frame=$i;invalid_pixels=$changed}
+                if($i -ge 3 -and $changed -gt 8){$bad+=@($i)}
+            }
+            @{area=@($area.Left,$area.Top,$area.Width,$area.Height);action_frame=3;frequency=[Diagnostics.Stopwatch]::Frequency;times=$sample.times;scores=$scores;invalid=$bad}|ConvertTo-Json -Depth 8|Set-Content (Join-Path $folder 'frames.json')
+            if($bad.Count){throw "Color comparison hid or moved its Before preview in frames $($bad -join ','); captures: $folder"}
+        }finally{$final.Dispose()}
+    }finally{foreach($image in $sample.frames){$image.Dispose()}}
+}
 function Color-Workflows {
     $script:scope=$root;$before=Model;$original=$before.windows_tabs.selected;$count=@($before.windows_tabs.tabs).Count
     $layers=$before.state.layers|ConvertTo-Json -Depth 40 -Compress;$file=$before.state.document_file|Select-Object revision,modified,location,unsaved_name,epoch|ConvertTo-Json -Depth 20 -Compress
     Color-Command 'convert_color_space'
     Wait-Until {$view=(Model).windows_document;$view.kind -eq 'convert' -and $view.stage -eq 'preview'} 'Color comparison did not start automatically' 60
-    foreach($space in @('Display P3','sRGB','Display P3')){Combo-Select (Owned 'document-profile-choice') {$_.Current.Name -eq $space}}
+    Color-Frames
+    foreach($space in @('sRGB','Display P3')){Combo-Select (Owned 'document-profile-choice') {$_.Current.Name -eq $space}}
     Color-Preview 'DisplayP3'
     if(((Model).state.document_file|Select-Object revision,modified,location,unsaved_name,epoch|ConvertTo-Json -Depth 20 -Compress) -ne $file){throw 'Comparison choices edited the original drawing'}
     Invoke-Control 'Cancel';Wait-Until {!(Model).windows_document -and !@((Model).state.requests).Count} 'Comparison Cancel did not drain the worker'

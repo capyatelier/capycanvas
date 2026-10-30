@@ -62,7 +62,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
     Border document;
     std::shared_ptr<DrawingTabs> drawings;
     std::vector<std::pair<Primitives::ToggleButton,hstring>> workspaces;
-    hstring switchActive,theme,palette,bankKey,geometryKey,lastMeasurement,traceKey;
+    hstring switchActive,theme,bankKey,geometryKey,lastMeasurement,traceKey;
     J geometry,view,configuration,recoveryBounds;
     std::array<J,3> overflowBounds;
     std::vector<Button> overflow;
@@ -784,8 +784,8 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
         if(!view.Size())return;
         if(editing!=flag(view,L"editing"))input->Cancel();
         editing=flag(view,L"editing");hidden=flag(snapshot,L"chrome_hidden")&&!flag(snapshot,L"windows_rendering_suspended");
-        auto nextTheme=data->theme(),nextPalette=object(data->state,L"palette").Stringify();
-        if(!built||nextTheme!=theme||nextPalette!=palette){theme=nextTheme;palette=nextPalette;build();}
+        bool themeChanged=theme!=data->theme();theme=data->theme();
+        if(!built)build();
         root.RequestedTheme(theme==L"dark"?ElementTheme::Dark:ElementTheme::Light);
         root.TabFocusNavigation(editing?Input::KeyboardNavigationMode::Cycle:Input::KeyboardNavigationMode::Local);
         drawings->refresh();
@@ -800,7 +800,12 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
         for(auto item:{menuOverflow,recovery}){menuIcon(item);item.Width(tile);}
         workspaceOverflow.Height(tile);
         if(num(snapshot,L"header_presentation_height",-1)!=totalHeight)lastMeasurement=L"";
-        applyItems();reflow();requests();publish();
+        applyItems();
+        if(themeChanged){
+            std::set<void*> seen;refreshAssetIconTheme(root,theme,seen);
+            for(auto const& [id,row]:drawings->rows){refreshAssetIconTheme(row.grip,theme,seen);refreshAssetIconTheme(row.remove,theme,seen);}
+        }
+        reflow();requests();publish();
     }
     double corner()const{return tile*.5*CornerFit;}
     void glass(A& regions,DependencyObject const& node,UIElement const& reference)const{
