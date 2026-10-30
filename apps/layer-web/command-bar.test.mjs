@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {glassCss} from './control-style-fixture.mjs';
 import {mkdir, writeFile} from 'node:fs/promises';
 
 export async function checkCommandBar({call, evaluate, settle}) {
@@ -160,7 +161,7 @@ async function checkGlass({call, evaluate, settle, key, open, query, wait, settl
     const body = await bounds(), span = [body.x + 16, body.x + body.width - 16];
     const colors = await evaluate(`(()=>{const p=layerApp.state().palette,probe=document.body.appendChild(document.createElement('i'));
       const css=c=>{probe.style.background=c;return getComputedStyle(probe).backgroundColor;},g=p.glass.panel;
-      const r={glass:css('rgb('+g.slice(0,3).map(v=>v*255).join(' ')+' / '+g[3]+')'),panel:css(p.panel),input:css(p.input),
+      const r={glass:css((${glassCss})(g)),panel:css(p.panel),input:css(p.input),
         bar:getComputedStyle(document.querySelector('#command-bar')).backgroundColor,field:getComputedStyle(document.querySelector('.command-search-field')).backgroundColor,
         radius:getComputedStyle(document.querySelector('#command-bar')).borderTopLeftRadius};probe.remove();return r;})()`);
     assert.equal(colors.bar, colors.glass, `${name}: the bar uses the panel glass fill`);

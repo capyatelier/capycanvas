@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import {mkdir, writeFile} from "node:fs/promises";
+import {checkTextEntry} from './control-style-fixture.mjs';
 
 export async function checkWorkspaceManager({call, evaluate, settle, reload, touch = false}) {
   const wait = async (predicate, timeout = 15000) => {
@@ -51,17 +52,21 @@ export async function checkWorkspaceManager({call, evaluate, settle, reload, tou
   async function advancedToolbars(){
     const count=await evaluate('layerApp.state().workspace.layout.panels.length'),name=`Web reusable ${Date.now()}`,description='Reusable brush and color controls';
     await send({type:'invoke',command:'manage_toolbars'});await wait('JSON.parse(layerApp.app.workspace_view()).page==="this_workspace"');
+    await checkTextEntry(evaluate,'#workspace-manager-search',{padding:12,reference:'.preferences-search',capture:theme=>shot(`toolbar-search-${theme}`)});
     const toolbar=(await view()).rows[0];assert.ok(toolbar);
     await click(`.workspace-choice[data-id=${JSON.stringify(toolbar.id)}]`);
     await wait('!!document.querySelector(".workspace-details [data-action=save_toolbar]")');
     await click('.workspace-details [data-action=save_toolbar]');await text('#workspace-item-name',' ');
     assert.equal(await evaluate('document.querySelector(".workspace-form .suggested-action").disabled'),true);
+    await checkTextEntry(evaluate,'#workspace-item-name');
     await text('#workspace-item-name',name);await click('.workspace-form .suggested-action');await idle();
     await click('.workspace-manager-tabs [data-page=toolbar_library]');await wait('JSON.parse(layerApp.app.workspace_view()).page==="toolbar_library"');
     let item=(await view()).rows.find(row=>row.title===name);assert.ok(item);
     await text('#workspace-manager-search',name);await wait(`JSON.parse(layerApp.app.workspace_view()).rows.length===1`);
     await click(`.workspace-choice[data-id=${JSON.stringify(item.id)}]`);await wait('!!document.querySelector(".workspace-details [data-action=rename]")');
-    await click('.workspace-details [data-action=rename]');await text('#workspace-item-description',description);await click('.workspace-form .suggested-action');await idle();
+    await click('.workspace-details [data-action=rename]');
+    await checkTextEntry(evaluate,'#workspace-item-name,#workspace-item-description',{capture:theme=>shot(`toolbar-details-${theme}`)});
+    await text('#workspace-item-description',description);await click('.workspace-form .suggested-action');await idle();
     await wait(`JSON.parse(layerApp.app.workspace_view()).details?.description===${JSON.stringify(description)}`);
     await click('.workspace-details [data-action=update_toolbar]');
     const options=(await view()).prompt.choices;assert.ok(options.length);

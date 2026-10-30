@@ -110,6 +110,8 @@ body[data-theme="light"] { color-scheme: light; --bg: #b8b8b8; --panel: #ededed;
 .panel-context-menu { font-size: var(--ui-text-size); }
 body { margin: 0; overflow: hidden; background: var(--bg); color: var(--text); }
 button, input, select, summary { font: inherit; accent-color: var(--accent); }
+:where(input:not([type]), input[type="text"], input[type="search"], textarea) { border: 0; border-radius: var(--control-radius); background: var(--input); color: var(--text); font: inherit; }
+:where(.workspace-form, .document-dialog) :where(input:not([type]), input[type="text"], input[type="search"], textarea) { min-height: 34px; padding: 6px 9px; }
 button, select, input[type="color"], summary { min-height: 34px; border: 0; border-radius: var(--control-radius); background: transparent; color: var(--text); padding: 5px 17px; }
 button, summary { cursor: default; font-weight: 700; line-height: 24px; }
 :where(:root:not([data-touch])) button:hover:not(:disabled):not(.panel-grip):not(.dock-tab):not(:where(.workspace-manager *, .workspace-form *, .color-readout, .color-shape, .shortcut-choose, .texture-tile)), :where(:root:not([data-touch])) summary:hover, :where(:root:not([data-touch])) select:hover:not(:disabled) { background: color-mix(in srgb, var(--text) 8%, transparent); }
@@ -455,7 +457,7 @@ button.layer-row { justify-content: center; gap: var(--panel-group-spacing); fon
 .layer-lock { width: 12px; }
 .layer-grip { width: 16px; touch-action: none; opacity: .6; }
 .layer-grip[aria-disabled=true] { pointer-events: none; }
-.layer-name-entry { width: 100%; min-width: 0; height: var(--panel-control-height); padding: 0 2px; border-radius: var(--control-radius); }
+.layer-name-entry { width: 100%; min-width: 0; height: var(--panel-control-height); padding: 0 2px; }
 :is(.panel,.layer-drag-preview) .layer-thumbnail.editing-target { border-color: var(--accent); outline: 3px solid var(--accent); outline-offset: -2px; }
 .layer-drop-before { box-shadow: inset 0 2px var(--accent); }
 .layer-drop-after { box-shadow: inset 0 -2px var(--accent); }
@@ -500,7 +502,7 @@ button.layer-row { justify-content: center; gap: var(--panel-group-spacing); fon
 .palette-info { display: flex; flex-direction: column; align-items: flex-end; flex: 1; min-width: 0; }
 .panel button.palette-name { display: flex; max-width: 100%; min-height: var(--panel-control-height); padding: 0 6px; font-weight: 400; line-height: var(--panel-control-height); }
 .palette-detail { margin-right: 6px; font-size: .9em; opacity: .55; white-space: normal; }
-.palette-entry, .filter-picker-header input { min-width: 0; height: var(--panel-control-height); padding: 0 6px; border: 0; border-radius: var(--control-radius); background: var(--input); color: var(--text); box-shadow: none; font: inherit; }
+.palette-entry { min-width: 0; height: var(--panel-control-height); padding: 0 6px; box-shadow: none; }
 .palette-editor { width: 100%; text-align: right; }
 .palette-entry.error { box-shadow: inset 0 0 0 1px #e55; }
 .palette-message { flex: none; margin: 0; color: #e55; overflow-wrap: anywhere; }
@@ -560,7 +562,7 @@ dialog h2 { margin: 0; font-size: inherit; font-weight: 700; }
 .preferences-navigation button { display: flex; align-items: center; gap: 12px; text-align: left; font-weight: 400; padding: 12px 14px; height: 42px; line-height: 18px; }
 .preferences-navigation button[aria-selected="true"] { background: color-mix(in srgb, var(--text) 10%, transparent); }
 .preferences-content { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
-.preferences-search { margin: 6px; min-width: 0; padding: 8px 12px; height: 34px; flex: none; border: 0; border-radius: var(--control-radius); background: color-mix(in srgb, var(--text) 10%, transparent); color: inherit; }
+.preferences-search, .workspace-search { margin: 6px; min-width: 0; padding: 8px 12px; height: 34px; flex: none; background: color-mix(in srgb, var(--text) 10%, transparent); color: inherit; }
 .preferences-search-toggle { position: absolute; left: 6px; width: 34px; padding: 0; display: grid; place-items: center; }
 .preferences-search-results { overflow-y: auto; padding: 6px; }
 .preferences-search-results button { display: flex; flex-direction: column; align-items: start; text-align: left; width: 100%; padding: 10px; font-weight: 400; line-height: 18px; }

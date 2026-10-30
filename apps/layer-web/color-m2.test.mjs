@@ -1,6 +1,7 @@
 import {histogramJourney} from './histogram-journey.mjs';
 import {createDrawing} from './new-drawing-fixture.mjs';
 import assert from 'node:assert/strict';
+import {checkTextEntry} from './control-style-fixture.mjs';
 import {paintBaseImage,authoredIdentity,readPackage,packageObject,packageComposition,packageOccurrences,packageResources,packageResourceIdentity,resourceIdentity,sourceIdentity,rasterIdentity,sourceContent,sourceSamples,packageObjects,imageIdentity,imageContent} from './package-fixture.test.mjs';
 const rasterResources=m=>packageResources(m,'capy.raster-tile/1').map(resource=>resourceIdentity(m,{ref:resource.id}));
 const compositionColor=m=>({space:'srgb',depth:'u8',...packageComposition(m).data.color});
@@ -238,10 +239,13 @@ export async function checkSourceEdits({call,evaluate,settle}) {
 
 export async function checkExportPresets({evaluate}) {
   const {wait,click}=helpers(evaluate);
+  await evaluate(`window.presetSavePicker=window.showSaveFilePicker;window.showSaveFilePicker=async options=>({name:options.suggestedName,async createWritable(){return{async write(bytes){if(!(bytes.size??bytes.byteLength))throw Error('Empty export')},async close(){},async abort(){}}}})`);
+  try {
   const invoke=async()=>{await wait('!layerApp.documents.busy()&&layerApp.state().commands.find(c=>c.id==="export_document")?.enabled');await evaluate(`layerApp.dispatch({type:'invoke',command:'export_document'})`);await wait(`!!document.querySelector('select[aria-label="Destination"]')`);};
   const preset=index=>evaluate(`(async()=>JSON.parse(JSON.stringify(await layerApp.app.export_presets({type:'get',index:${index}}),(_,v)=>typeof v==='bigint'?Number(v):v)))()`);
   const name='Tablet delivery '+Date.now();
-  await invoke();await evaluate(`(()=>{const d=document.querySelector('dialog[open]');const select=(label,value)=>{const node=d.querySelector('select[aria-label="'+label+'"]');node.value=value;node.dispatchEvent(new Event('change'));};
+  await invoke();await checkTextEntry(evaluate,'input[aria-label="Preset name"]');
+  await evaluate(`(()=>{const d=document.querySelector('dialog[open]');const select=(label,value)=>{const node=d.querySelector('select[aria-label="'+label+'"]');node.value=value;node.dispatchEvent(new Event('change'));};
     select('Format','Png');select('Output profile','1');select('Bit depth','U16');select('Pixel size','Fit');select('Resolution metadata','Ppi');
     for(const[label,value]of[['Maximum width (px)','321'],['Maximum height (px)','123'],['Pixels per inch','287']]){const entry=d.querySelector('input.number-entry[aria-label="'+label+'"]');entry.closest('.number-control').querySelector('.number-value').click();entry.value=value;entry.dispatchEvent(new Event('input',{bubbles:true}));}d.querySelector('input[aria-label="Preset name"]').value=${JSON.stringify(name)};})()`);
   await click('Save Preset');await wait(`document.querySelector('select[aria-label="Destination"]')?.selectedOptions[0]?.textContent===${JSON.stringify(name)}`);
@@ -264,11 +268,12 @@ export async function checkExportPresets({evaluate}) {
   const reset=await preset(0);assert.equal(reset.recipe.format,'Png');assert.equal(reset.recipe.profile.profile.Builtin,'Srgb');assert.equal(reset.recipe.size,'Original');
   await click('Cancel');await wait('!layerApp.state().document_file.busy');
   console.log('Named export presets save/update/delete, restore all size/profile/depth/DPI choices across dialog reopen, remember successful delivery and reset destinations passed');
+  } finally {await evaluate('window.showSaveFilePicker=presetSavePicker;delete window.presetSavePicker');}
 }
 
 export async function checkProfileLibrary({evaluate}) {
   const {wait,invoke,click,idle}=helpers(evaluate);
-  await evaluate(`window.showOpenFilePicker=async()=>[{name:'profile-library.png',async getFile(){return new File([sdrPhotoBytes],'profile-library.png')}}];`);
+  await evaluate(`(async()=>{const bytes=await(await fetch('/pkg/prophoto16.png')).arrayBuffer();window.showOpenFilePicker=async()=>[{name:'profile-library.png',async getFile(){return new File([bytes],'profile-library.png')}}]})()`);
   await invoke('open_document');await idle();
   const report=await evaluate(`(async()=>{
     window.libraryBytes=new Uint8Array(layerApp.app.export_form().profiles.find(p=>p.profile.Icc).profile.Icc);
@@ -293,6 +298,7 @@ export async function checkProfileLibrary({evaluate}) {
   await invoke('export_document');await wait(`!!document.querySelector('select[aria-label="Output profile"]')`);await click('Saved Profiles…');
   await wait(`!![...document.querySelectorAll('.profile-library .profile-entry')].find(e=>e.textContent.includes(libraryId.slice(0,12)))`);
   assert.equal(await evaluate('document.querySelector("#profile-library-search").hidden'),false);
+  await checkTextEntry(evaluate,'#profile-library-search');
   await evaluate(`(()=>{const search=document.querySelector('#profile-library-search');search.value=libraryId.slice(0,12);search.dispatchEvent(new Event('input',{bubbles:true}));})()`);
   await wait(`document.querySelectorAll('.profile-library .profile-entry').length===1`);
 

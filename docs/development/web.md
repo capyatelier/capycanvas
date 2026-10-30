@@ -176,6 +176,8 @@ Desktop browser journeys, including those that record frame callbacks, don't
 qualify a performance tier; use the reference hardware, canvas and
 completed-update rules in [performance measuring](../performance/measuring.md).
 
+`--export-presets` and `--profile-library` check delivery controls independently of `--shared-workflows`.
+
 On macOS, enable Safari's Develop > Allow Remote Automation once, start
 `safaridriver -p 4444`, and run `node apps/layer-web/safari-test.mjs` against the
 local build. `SAFARIDRIVER_URL` selects an already running driver and

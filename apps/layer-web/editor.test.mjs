@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import {mkdir,writeFile} from "node:fs/promises";
 import {createDrawing} from "./new-drawing-fixture.mjs";
 import {readyCanvas,readyCanvasPixels,waitForPixels} from "./canvas-pixels-fixture.mjs";
+import {checkTextEntry} from './control-style-fixture.mjs';
 export async function checkEditor({call,evaluate,settle,canvasPixels:capturePixels}) {
   const wait=(condition,timeout=25000)=>evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function check(){const error=window.layerApp?.state().host_error;if(error)reject(Error('Host error: '+error));else if(${condition})resolve(true);else if(performance.now()-start>${timeout})reject(Error("Timed out: "+${JSON.stringify(condition)}+"; "+document.querySelector("#status").textContent));else setTimeout(check,40);}check();})`);
   const canvasPixels=readyCanvasPixels({evaluate,settle,capturePixels});
@@ -71,6 +72,9 @@ export async function checkEditor({call,evaluate,settle,canvasPixels:capturePixe
     await click(".filter-picker-header button");
   }
   await show("layers");
+  await evaluate("layerApp.dispatch({type:'layer',action:{op:'begin_rename',id:1}})");
+  await checkTextEntry(evaluate,'.layer-name-entry',{height:await evaluate('layerApp.app.catalog().panel_metrics.control_height'),padding:2});
+  await evaluate("layerApp.dispatch({type:'layer',action:{op:'cancel_rename'}})");
   for(let i=0;i<4;i++)await invoke("zoom_in");
   const middle=await evaluate("Math.floor(innerWidth/2)");
   const header=await call("Page.captureScreenshot",{format:"png",fromSurface:true,clip:{x:middle,y:2,width:1,height:1,scale:1}});

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import {glassCss} from './control-style-fixture.mjs';
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import {createDrawing} from './new-drawing-fixture.mjs';
 
@@ -261,7 +262,7 @@ export async function checkPreferences({ call, evaluate, settle, errors }) {
     assert.ok(await evaluate(`(() => {
       const palette=layerApp.state().palette, probe=document.body.appendChild(document.createElement('i'));
       const css=color=>{probe.style.background=color;return getComputedStyle(probe).backgroundColor};
-      const glass=name=>css('rgb('+palette.glass[name].slice(0,3).map(v=>v*255).join(' ')+' / '+palette.glass[name][3]+')');
+      const glass=name=>css((${glassCss})(palette.glass[name]));
       const surfaces=[['.panel-preview:has(> .dock-tabs) > .panel-frame',glass('panel')],['.dock-tabs .tab-list > .dock-tab[aria-selected="true"] .tab-surface-strip',glass('strip')],
         ['#settings',css(palette.settings)],['.preferences-sidebar',css(palette.sidebar)],['${selector}',css(palette.input)]];
       probe.remove();
@@ -331,7 +332,7 @@ export async function checkPreferences({ call, evaluate, settle, errors }) {
     await customEditorGeometry('#setting-accent',false);
     await action({ type: 'close_settings' });
     assert.ok(await evaluate(`(() => { const c=layerApp.state().palette.glass.switcher_selection, pressed=document.querySelector('#header .workspace-switcher button[aria-pressed="true"]'), probe=document.body.appendChild(document.createElement('i'));
-      probe.style.background='rgb('+c.slice(0,3).map(v=>v*255).join(' ')+' / '+c[3]+')'; const expected=getComputedStyle(probe).backgroundColor; probe.remove();
+      probe.style.background=(${glassCss})(c); const expected=getComputedStyle(probe).backgroundColor; probe.remove();
       return !pressed || getComputedStyle(pressed).backgroundColor===expected; })()`), 'the switcher uses the core switcher selection');
   }
   await click('#header [data-command="settings"]');

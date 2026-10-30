@@ -117,7 +117,7 @@ export async function checkNewDrawing({call,evaluate,settle}) {
     await click('#new-drawing-save-as');
     assert.ok((await drawer()).save,'Save As opens naming over the filtered presets');
     await key('Escape','Escape',27);
-    assert.equal((await drawer()).save,null,'Escape leaves naming first');
+    assert.equal((await drawer()).save??null,null,'Escape leaves naming first');
     assert.equal((await drawer()).query,'chalk','Leaving naming retains the preset search');
     await key('Escape','Escape',27);
     browser=await drawer();

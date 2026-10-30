@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import {checkTextEntry} from './control-style-fixture.mjs';
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 
 export async function checkPalettes({ call, evaluate, settle, reload }) {
@@ -386,6 +387,7 @@ export async function checkPalettes({ call, evaluate, settle, reload }) {
 
   await tap(`${P} .palette-selector`, "touch"); await tap(`${P} .palette-library-add`); await menuItem("New Palette…"); await idle();
   assert.ok(await visible("dialog.palette-form[open]"));
+  await checkTextEntry(evaluate,'dialog.palette-form[open] input',{capture:theme=>shot(`palette-name-${theme}`)});
   await evaluate("document.querySelector('dialog.palette-form input').select()"); await type("Pop art");
   assert.equal(await evaluate("document.querySelector('dialog.palette-form .suggested-action').disabled"), true, "duplicate palette names are rejected live");
   await evaluate("document.querySelector('dialog.palette-form input').select()"); await type("Studies");

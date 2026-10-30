@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {checkTextEntry} from './control-style-fixture.mjs';
 import {mkdir,writeFile} from 'node:fs/promises';
 import {checkBlobReads} from './blob-read-fixture.mjs';
 
@@ -69,6 +70,7 @@ export async function checkPaperLibrary({call,evaluate,settle}) {
     await choose(linen.find(a=>a.op==='rename_paper').label);
     const prompt='#paper-rename-dialog[open]',copy="layerApp.app.catalog().native_copy.paper";
     await wait(`!!document.querySelector('${prompt}')`);
+    await checkTextEntry(evaluate,'#paper-rename-name',{capture:theme=>capture(`paper-name-${theme}`)});
     const field=()=>evaluate(`(()=>{const f=document.querySelector('${prompt}'),n=f.querySelector('#paper-rename-name'),save=f.querySelector('.suggested-action');return{title:f.querySelector('h2').textContent===${copy}.rename_title,save:save.textContent===${copy}.rename,enabled:!save.disabled,error:f.querySelector('.workspace-error').textContent,value:n.value,focused:document.activeElement===n,selected:n.selectionStart===0&&n.selectionEnd===n.value.length}})()`);
     assert.deepEqual(await field(),{title:true,save:true,enabled:true,error:'',value:'Linen scan',focused:true,selected:true},'Rename opens with the paper name selected');
     await call('Input.dispatchKeyEvent',{type:'keyDown',key:'Backspace',code:'Backspace',windowsVirtualKeyCode:8});
