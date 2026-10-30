@@ -5,6 +5,7 @@ $curveOnly=$Theme.StartsWith('curve-');if($curveOnly){$Theme=$Theme.Substring(6)
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 $CapyCacheModel=$true;$CapyCaptureDelay=250
 Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
+$CapyEach={[CapyRowPointer]::VerifyPrivateDesktop($env:CAPY_PRIVATE_DESKTOP);[CapyRowPointer]::Verify()}
 Add-Type -AssemblyName System.Drawing
 Add-Type -TypeDefinition @'
 using System;

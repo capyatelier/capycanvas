@@ -109,7 +109,13 @@ public static class CapyRowPointer {
   GetWindowThreadProcessId(WindowFromPoint(point),out process);
   if(process!=owner)throw new Exception("Input point is outside the owned review.");
  }
- static void Check(){if(failure!=null)throw new Exception("Pointer keepalive failed.",failure);}
+ static void Check(){
+  if(failure==null&&active&&kind!=4){
+   double gap=Math.Max(MaxGapMilliseconds,(System.Diagnostics.Stopwatch.GetTimestamp()-lastInjection)*1000.0/System.Diagnostics.Stopwatch.Frequency);
+   if(gap>=500)failure=new TimeoutException("Synthetic pointer keepalive gap was "+gap.ToString("F1",System.Globalization.CultureInfo.InvariantCulture)+" ms; the contact may have ended.");
+  }
+  if(failure!=null)throw new Exception("Pointer keepalive failed: "+failure.Message,failure);
+ }
  public static void Verify(){lock(gate)Check();}
  static void EndHover() {
   if(!hovering)return;
@@ -126,7 +132,12 @@ public static class CapyRowPointer {
  static void MouseButton(uint flags) {
   if(SendInput(1,new[]{new Input{mouse=new Mouse{flags=flags}}},40)!=1)throw new Win32Exception(Marshal.GetLastWin32Error());
  }
+ static void InjectionAccepted(uint flags,long now) {
+  if(active)MaxGapMilliseconds=Math.Max(MaxGapMilliseconds,(now-lastInjection)*1000.0/System.Diagnostics.Stopwatch.Frequency);
+  lastInjection=now;if(active&&(flags&0x8000)==0)Check();
+ }
  static void Send(Point point,uint flags) {
+  if(active&&(flags&0x8000)==0)Check();
   var info=new PointerInfo{type=kind,id=0,flags=flags,pixel=point};
   for(int retry=0;retry<20;retry++){
    bool accepted;
@@ -134,9 +145,7 @@ public static class CapyRowPointer {
     contact=new Rect{left=point.x-2,top=point.y-2,right=point.x+2,bottom=point.y+2},orientation=90,pressure=512}});
    else accepted=InjectSyntheticPointerInput(pen,new[]{new TypeInfo{type=3,pen=new PenInfo{pointer=info,flags=penButtons|(eraserEnd?6u:0u),mask=13,pressure=512,tiltX=tiltX,tiltY=tiltY}}},1);
    if(accepted){
-    long now=System.Diagnostics.Stopwatch.GetTimestamp();
-    if(active)MaxGapMilliseconds=Math.Max(MaxGapMilliseconds,(now-lastInjection)*1000.0/System.Diagnostics.Stopwatch.Frequency);
-    lastInjection=now;return;
+    InjectionAccepted(flags,System.Diagnostics.Stopwatch.GetTimestamp());return;
    }
    int error=Marshal.GetLastWin32Error();if(error!=21)throw new Win32Exception(error,new Win32Exception(error).Message+" "+InjectionFailure(point,flags,retry));Thread.Sleep(1);
   }
@@ -145,9 +154,9 @@ public static class CapyRowPointer {
  static void Pulse(object unused) {
   lock(gate){
    if((!active&&!hovering)||kind==4)return;
-   try{Guard(last);Send(last,active?0x20006u:0x20002u);}
+   try{Check();Guard(last);Send(last,active?0x20006u:0x20002u);}
    catch(Exception error){
-    failure=error;try{Cancel();}catch{}
+    if(failure==null)failure=error;try{Cancel();}catch{}
     active=false;pulse.Change(Timeout.Infinite,Timeout.Infinite);
    }
   }
