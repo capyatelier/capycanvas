@@ -27,6 +27,9 @@ function Get-FixtureVariantArguments([string]$Fixture,[string]$Option,[string]$C
     if($Fixture -eq 'switcher-drag' -and $Option -eq 'ContextEnding'){'-ContextHoldOnly'}
     "-$Option";$Choice
 }
+function ConvertTo-FixtureCommandLine([string[]]$Arguments){
+    (@($Arguments|ForEach-Object {'"'+($_ -replace '(\\*)"','$1$1\"' -replace '(\\+)$','$1$1')+'"'}) -join ' ')
+}
 $runs = [ordered]@{ shortcuts = $null }
 $debuggable = @()
 foreach ($script in Get-ChildItem (Join-Path $scripts 'exercise-*.ps1')) {
@@ -203,8 +206,8 @@ foreach ($run in $runs.GetEnumerator()) {
         if ($DebuggerPath -and $fixture -notin $debuggable) { throw "Fixture $fixture does not support console debugging." }
         $arguments = if ($null -eq $run.Value) { Start-Shortcuts } else { @('-File', (Join-Path $scripts "exercise-$fixture.ps1"), '-Executable', $Executable) + $run.Value }
         $arguments += @(Get-FixtureCompanionArguments $fixture $run.Value ${function:Build-ControlFixture})
-        if ($DebuggerPath) { $arguments += @('-DebuggerPath', ('"' + $DebuggerPath + '"')) }
-        $process = Start-Process (Get-Process -Id $PID).Path -ArgumentList (@('-NoProfile', '-Sta') + $arguments) -NoNewWindow -PassThru -RedirectStandardOutput "$log.log" -RedirectStandardError "$log.err"
+        if ($DebuggerPath) { $arguments += @('-DebuggerPath', $DebuggerPath) }
+        $process = Start-Process (Get-Process -Id $PID).Path -ArgumentList (ConvertTo-FixtureCommandLine (@('-NoProfile', '-Sta') + $arguments)) -NoNewWindow -PassThru -RedirectStandardOutput "$log.log" -RedirectStandardError "$log.err"
         $null = $process.Handle
         $finished = $process.WaitForExit($TimeoutMinutes * 60000)
         if (!$finished) {

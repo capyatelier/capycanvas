@@ -2,7 +2,7 @@ $ErrorActionPreference='Stop'
 $tokens=$null;$errors=$null
 $ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot 'run-fixtures.ps1'),[ref]$tokens,[ref]$errors)
 if(@($errors).Count){throw ($errors|Out-String)}
-foreach($name in 'Select-Fixtures','Control-Fixture','Reviews','Get-FixtureTimeoutSeconds','Get-FixtureVariantArguments','Get-FixtureCompanionArguments','Write-FixtureResult'){
+foreach($name in 'Select-Fixtures','Control-Fixture','Reviews','Get-FixtureTimeoutSeconds','Get-FixtureVariantArguments','Get-FixtureCompanionArguments','Write-FixtureResult','ConvertTo-FixtureCommandLine'){
     $function=$ast.Find({param($node)$node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name},$false)
     . ([scriptblock]::Create($function.Extent.Text))
 }
@@ -26,6 +26,28 @@ if(!$rejected){throw 'Unknown fixture silently skipped'}
 if((Get-FixtureTimeoutSeconds 47 20) -ne 62040){throw 'Matrix timeout lost per-fixture budgets'}
 if((Get-FixtureTimeoutSeconds 1 20) -ne 1320){throw 'Single fixture timeout changed'}
 if((Get-FixtureTimeoutSeconds 1000 1440) -ne 86400){throw 'Matrix timeout exceeded private desktop upper bound'}
+$argumentsRun=Join-Path ([IO.Path]::GetTempPath()) ('capy fixture arguments '+[guid]::NewGuid().ToString('N'))
+[IO.Directory]::CreateDirectory($argumentsRun)|Out-Null
+try{
+    $probe=Join-Path $argumentsRun 'fixture child.ps1'
+    $receipt=Join-Path $argumentsRun 'arguments.json'
+    @'
+param([string]$Executable,[string]$StateFile,[string]$DebuggerPath,[string]$DropFixture,[string]$Output,[switch]$Enabled)
+@{Executable=$Executable;StateFile=$StateFile;DebuggerPath=$DebuggerPath;DropFixture=$DropFixture;Enabled=[bool]$Enabled}|ConvertTo-Json|Set-Content -LiteralPath $Output -Encoding UTF8
+'@|Set-Content -LiteralPath $probe -Encoding UTF8
+    $values=[ordered]@{Executable=('C:\owned app\'+[char]0x65e5+'\CapyCanvas.exe');StateFile='C:\owned state\ui.json';DebuggerPath='C:\owned tools\debugger"quoted.exe';DropFixture='C:\owned companion\'}
+    $arguments=@('-NoProfile','-File',$probe)
+    foreach($entry in $values.GetEnumerator()){$arguments+=@("-$($entry.Key)",$entry.Value)}
+    $arguments+=@('-Output',$receipt,'-Enabled')
+    $powershell=(Get-Process -Id $PID).Path
+    $child=Start-Process $powershell -ArgumentList (ConvertTo-FixtureCommandLine $arguments) -PassThru -NoNewWindow -RedirectStandardOutput (Join-Path $argumentsRun 'stdout.log') -RedirectStandardError (Join-Path $argumentsRun 'stderr.log')
+    $null=$child.Handle
+    if(!$child.WaitForExit(30000)){Stop-Process -Id $child.Id;throw 'Fixture argument probe timed out'}
+    if($child.ExitCode -ne 0 -or !(Test-Path -LiteralPath $receipt)){throw ('Fixture argument probe failed: '+(Get-Content (Join-Path $argumentsRun 'stderr.log') -Raw))}
+    $actual=Get-Content -LiteralPath $receipt -Raw|ConvertFrom-Json
+    foreach($entry in $values.GetEnumerator()){if($actual.($entry.Key) -cne $entry.Value){throw ('Fixture argument changed: '+$entry.Key+' expected '+$entry.Value+' received '+$actual.($entry.Key))}}
+    if(!$actual.Enabled){throw 'Fixture switch did not bind'}
+}finally{Remove-Item -LiteralPath $argumentsRun -Recurse -Force}
 $Output=Join-Path ([IO.Path]::GetTempPath()) ('capy-fixture-owners-'+[guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($Output)|Out-Null
 $runnerStarted=Get-Date;$editorExecutable='C:\owned\CapyCanvas.exe';$controlBuilds=@{}
