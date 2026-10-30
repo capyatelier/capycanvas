@@ -288,24 +288,24 @@ extension XCTestCase {
             expectation(for: NSPredicate(format: "selected == YES"), evaluatedWith: tile)
             waitForExpectations(timeout: 10)
         }
-        expectTexture("Fine tooth")
+        expectTexture("Cold press")
         let white = editorPixels(in: app)
         let dialog = app.descendants(matching: .any)["texture-dialog"].firstMatch
-        let drawingPaper = app.buttons["texture-tile-4"], rough = app.buttons["texture-tile-2"]
+        let coldPress = app.buttons["texture-tile-1"], rough = app.buttons["texture-tile-2"]
         workspaceActivate(texture)
         XCTAssertTrue(dialog.waitForExistence(timeout: 10), "The texture thumbnail opens Choose Texture")
         XCTAssertEqual(dialog.frame.width, editColorSize.width, accuracy: 1, "Choose Texture keeps the Edit Color width")
         XCTAssertGreaterThan(dialog.frame.height, editColorSize.height, "Choose Texture has room for its tile browser")
-        expectPending(drawingPaper)
+        expectPending(coldPress)
         attachEditor(in: app, name: "texture-dialog-\(theme)")
         workspaceActivate(rough); expectPending(rough)
-        XCTAssertFalse(drawingPaper.isSelected)
+        XCTAssertFalse(coldPress.isSelected)
         workspaceActivate(app.buttons["texture-cancel"])
         XCTAssertTrue(dialog.waitForNonExistence(timeout: 10))
-        expectTexture("Fine tooth"); expectPixels(white, in: app)
+        expectTexture("Cold press"); expectPixels(white, in: app)
         workspaceActivate(texture)
         XCTAssertTrue(dialog.waitForExistence(timeout: 10))
-        expectPending(drawingPaper); XCTAssertFalse(rough.isSelected, "Cancel forgets the pending texture")
+        expectPending(coldPress); XCTAssertFalse(rough.isSelected, "Cancel forgets the pending texture")
         workspaceActivate(rough); expectPending(rough)
         workspaceActivate(app.buttons["texture-apply"])
         XCTAssertTrue(dialog.waitForNonExistence(timeout: 10))
@@ -313,7 +313,7 @@ extension XCTestCase {
         editorHistory("Undo", in: app)
         XCTAssertTrue(footer.waitForNonExistence(timeout: 10))
         showLayers()
-        expectTexture("Fine tooth"); expectPixels(white, in: app)
+        expectTexture("Cold press"); expectPixels(white, in: app)
 
         let addMask = app.buttons["layer-Add mask"]
         XCTAssertTrue(addMask.waitForExistence(timeout: 10))
