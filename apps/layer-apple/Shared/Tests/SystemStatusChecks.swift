@@ -425,7 +425,7 @@ extension XCTestCase {
             expectation(for:NSPredicate(format:"value == %@",value),evaluatedWith:element)
             waitForExpectations(timeout:20)
         }
-        func createDrawing(defaults: Bool = false) {
+        func createDrawing(defaults: Bool = false, paper: String? = nil) {
             editorMenu(in:app,menu:"File",id:"new_document",label:"New…")
             let create = app.buttons["new-drawing-create"]
             XCTAssertTrue(create.waitForExistence(timeout:20))
@@ -439,6 +439,14 @@ extension XCTestCase {
             #if os(iOS)
             dismissEditorKeyboard(in:app)
             #endif
+            if let paper {
+                expectNewDrawingValue("new-drawing-texture","Cold press, 100 %",in:app)
+                workspaceActivate(app.buttons["new-drawing-texture"])
+                let choice=app.buttons.matching(NSPredicate(format:"identifier BEGINSWITH %@ AND label == %@","new-drawing-paper-tile-",paper)).firstMatch
+                revealEditorControl(choice,label:paper,type:.button,in:newDrawingElement("new-drawing-paper-drawer",in:app).scrollViews.firstMatch)
+                workspaceActivate(choice)
+                workspaceActivate(app.buttons["new-drawing-paper-use"])
+            }
             workspaceActivate(create)
             XCTAssertTrue(create.waitForNonExistence(timeout:60))
             expect(canvas,value:"Canvas ready")
@@ -449,16 +457,19 @@ extension XCTestCase {
             editorMenu(in:app,menu:"View",id:"fit_canvas",label:"Fit canvas")
         }
         createDrawing(defaults:true)
+        let unpainted = editorScreenshot(in:app)
         editorMenu(in:app,menu:"Select",id:"select_all",label:"Select all pixels")
         editorMenu(in:app,menu:"Edit",id:"fill_selection",label:"Fill selection")
         expectation(for:NSPredicate { _,_ in let p=self.editorPixels(in:app);return Int(p[2])>Int(p[0])+50 },evaluatedWith:app)
         waitForExpectations(timeout:20)
         let bounds = bluePaperBounds(in:app)
         let imagePoints = [CGPoint(x:bounds.midX,y:bounds.midY),CGPoint(x:bounds.minX+bounds.width*0.1,y:bounds.midY)]
+        let paper = editorPixelSamples(from:unpainted,at:[imagePoints[1]],size:8)[0]
         expectBluePaper([true,true],at:imagePoints,in:app)
         editorMenu(in:app,menu:"Edit",id:"scale_rotate",label:"Transform")
-        let uniform = app.buttons["tool-action-transform_uniform"]
+        let uniform = app.descendants(matching:.any)["tool-action-transform_uniform"].firstMatch
         XCTAssertTrue(uniform.waitForExistence(timeout:10))
+        revealEditorControl(uniform,in:app.scrollViews.containing(.any,identifier:uniform.identifier).firstMatch)
         if !uniform.isSelected { workspaceActivate(uniform) }
         let width = app.buttons["number-value-tool-transform_width"]
         revealEditorControl(width,in:app.scrollViews.containing(.button,identifier:width.identifier).firstMatch)
@@ -474,7 +485,8 @@ extension XCTestCase {
         workspaceActivate(apply)
         XCTAssertTrue(width.waitForNonExistence(timeout:20))
         editorMenu(in:app,menu:"Select",id:"deselect",label:"Deselect pixels")
-        expectBluePaper([true,false],at:imagePoints,in:app)
+        expectBluePaper([true],at:[imagePoints[0]],in:app)
+        expectPixels(paper,in:app,at:imagePoints[1])
         attachEditor(in:app,name:"paper-source-nonuniform-"+theme)
         editorMenu(in:app,menu:"File",id:"export_document",label:"Export…")
         chooseExportDestination(in:app)
@@ -543,7 +555,7 @@ extension XCTestCase {
             app.buttons.matching(NSPredicate(format:"identifier BEGINSWITH %@ AND label == %@","texture-tile-",label)).firstMatch
         }
         func revealTile(_ tile: XCUIElement) {
-            revealEditorControl(tile,in:app.scrollViews.containing(.button,identifier:tile.identifier).firstMatch)
+            revealEditorControl(tile,identifier:tile.identifier,type:.button,in:chooser.scrollViews.firstMatch)
         }
         func useTile(_ item: XCUIElement) {
             workspaceActivate(item)
@@ -557,7 +569,13 @@ extension XCTestCase {
         func context(_ label: String, action: String) {
             openChooser();let item=tile(label);XCTAssertTrue(item.waitForExistence(timeout:10));revealTile(item)
             #if os(macOS)
-            item.rightClick();let command=app.menuItems[action].firstMatch
+            item.rightClick()
+            let commands=app.menuItems.matching(identifier:action)
+            expectation(for:NSPredicate { _,_ in commands.allElementsBoundByIndex.contains { $0.isHittable } },evaluatedWith:app)
+            waitForExpectations(timeout:10)
+            guard let command=commands.allElementsBoundByIndex.first(where:{ $0.isHittable }) else {
+                return XCTFail("The paper context menu must offer \(action)")
+            }
             #else
             item.press(forDuration:0.8);let command=app.buttons[action].firstMatch
             #endif
@@ -588,7 +606,7 @@ extension XCTestCase {
             let shot=XCTAttachment(screenshot:app.screenshot())
             shot.name="paper-"+phase+"-"+theme;shot.lifetime = .keepAlways;add(shot)
         }
-        properties();expect(texture,value:"Fine tooth")
+        properties();expect(texture,value:"Cold press")
         let original=settledSample()
         openChooser();workspaceActivate(app.buttons["texture-import"]);XCTAssertTrue(chooser.waitForNonExistence(timeout:10))
         #if os(macOS)
@@ -601,7 +619,7 @@ extension XCTestCase {
         XCTAssertTrue(cancel.waitForExistence(timeout:20));captureState("import-cancel-chooser");workspaceActivate(cancel)
         XCTAssertTrue(cancel.waitForNonExistence(timeout:15))
         #endif
-        properties();expect(texture,value:"Fine tooth");samePixels(original);noError()
+        properties();expect(texture,value:"Cold press");samePixels(original);noError()
         openChooser();workspaceActivate(app.buttons["texture-import"]);XCTAssertTrue(chooser.waitForNonExistence(timeout:10))
         #if os(macOS)
         XCTAssertTrue(open.waitForExistence(timeout:20));goToFolder(photo,in:app)
@@ -624,7 +642,7 @@ extension XCTestCase {
         let thumbnailBefore=try await ordinaryPaperThumbnail(importedTile,name:"paper-native-import-preview-"+theme)
         useTile(importedTile)
         let imported=settledSample()
-        editorMenu(in:app,menu:"Edit",id:"undo",label:"Undo");properties();expect(texture,value:"Fine tooth")
+        editorMenu(in:app,menu:"Edit",id:"undo",label:"Undo");properties();expect(texture,value:"Cold press")
         editorMenu(in:app,menu:"Edit",id:"redo",label:"Redo");properties();expect(texture,value:fileName)
         samePixels(imported)
         context(fileName,action:"Rename…")
@@ -680,7 +698,7 @@ extension XCTestCase {
         editorMenu(in:app,menu:"Edit",id:"redo",label:"Redo");properties();expect(texture,value:"Rough")
         chooseTile(addedName)
         attachEditor(in:app,name:"paper-native-library-actions-"+theme)
-        createDrawing()
+        createDrawing(paper:addedName)
         for command in ["Undo","Redo"] {
             let history=app.buttons.matching(NSPredicate(format:"identifier BEGINSWITH %@ AND label == %@","toolbar-tile-commands-",command)).firstMatch
             XCTAssertTrue(history.exists);XCTAssertFalse(history.isEnabled,"New drawing starts with empty authored history")

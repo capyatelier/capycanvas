@@ -258,8 +258,10 @@ extension XCTestCase {
     }
 
     @MainActor func editorPixelSamples(in app: XCUIApplication, at points: [CGPoint], size: Int) -> [Data] {
-        // Read all locations from one frame, avoiding repeated native captures.
-        let screenshot = editorScreenshot(in: app)
+        editorPixelSamples(from: editorScreenshot(in: app), at: points, size: size)
+    }
+
+    @MainActor func editorPixelSamples(from screenshot: XCUIScreenshot, at points: [CGPoint], size: Int) -> [Data] {
         // Normalize PNG orientation at full resolution before locating samples.
         // A landscape simulator capture can store portrait pixels plus EXIF.
         let source = CGImageSourceCreateWithData(screenshot.pngRepresentation as CFData, nil)!
