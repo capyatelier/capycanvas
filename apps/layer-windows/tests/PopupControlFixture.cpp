@@ -205,9 +205,19 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
         require(SendInput(1,&event,sizeof(INPUT))==1,L"Workspace IME key injection failed");
     }
     winrt::Windows::Foundation::IAsyncAction defaultIme(){
-        for(bool stale:{false,true}){
-        hstring label=stale?L"native-default-stale-enter":L"native-default-enter";
-        ContentDialog dialog;TextBox entry;entry.Text(L"Draft");captureTextComposition(entry);
+        enum class DefaultIme{Active,Retired,Stale};
+        for(auto mode:{DefaultIme::Active,DefaultIme::Retired,DefaultIme::Stale}){
+        bool stale=mode==DefaultIme::Stale,retired=mode==DefaultIme::Retired;
+        hstring label=stale?L"native-default-stale-enter":retired?L"native-default-retired-enter":L"native-default-enter";
+        auto busy=std::make_shared<bool>(false);auto pending=std::make_shared<bool>(false),published=std::make_shared<bool>(false);auto trace=imeTrace;
+        auto complete=std::make_shared<std::function<void()>>();Windows::Foundation::IInspectable completion{nullptr};
+        ContentDialog dialog;TextBox entry;entry.Text(L"Draft");
+        if(retired){
+            completion=box_value(KeyEventHandler([complete](auto&&,KeyRoutedEventArgs const& e){if(e.Key()==Windows::System::VirtualKey::Enter&&*complete)(*complete)();}));
+            entry.AddHandler(UIElement::PreviewKeyDownEvent(),completion,true);
+        }
+        if(!stale)captureTextComposition(entry,[busy,pending,published](bool value){*busy=value;if(*pending&&!value)*published=true;});
+        else captureTextComposition(entry);
         dialog.XamlRoot(root.XamlRoot());dialog.RequestedTheme(root.RequestedTheme());dialog.Title(box_value(L"Native default action"));dialog.Content(entry);
         dialog.PrimaryButtonText(L"Save");dialog.CloseButtonText(L"Cancel");dialog.DefaultButton(ContentDialogButton::Primary);
         auto primary=std::make_shared<unsigned>(0),events=std::make_shared<unsigned>(0);auto closed=std::make_shared<bool>(false);
@@ -219,12 +229,27 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
         try{
             co_await wait([entry]{return entry.IsLoaded()&&entry.ActualWidth()>0;},L"Native default TextBox did not become arranged");
             entry.Focus(FocusState::Keyboard);entry.Select(0,0);privacy();
-            auto trace=imeTrace;
             ScopedComposition composition(*textServices,[trace,label](hstring api,HRESULT result,uintptr_t pointer){
                 trace->push_back(O({{L"case",S(label)},{L"api",S(api)},{L"code",N(int32_t(result))},{L"pointer",N(double(pointer))}}));
             });
+            struct CompletionRoute{
+                TextBox const& entry;std::array<Windows::Foundation::IInspectable*,2> handlers;std::shared_ptr<std::function<void()>> callback;
+                ~CompletionRoute(){*callback={};for(auto handler:handlers)if(*handler){entry.RemoveHandler(UIElement::PreviewKeyDownEvent(),*handler);*handler=nullptr;}}
+            } completionRoute{entry,{&completion,&starter},complete};
+            std::exception_ptr completionFailure;
+            if(retired)*complete=[this,entry,&composition,&completionFailure]{
+                try{
+                    require(FocusManager::GetFocusedElement(root.XamlRoot())==entry&&textComposing(entry),L"Confirming Return lost its focused marked TextBox");
+                    composition.end();
+                    require(composition.observations.at(L"ITfContext::RequestEditSession/end").first==S_OK&&composition.observations.at(L"ITfEditSession::DoEditSession/end").first==S_OK,
+                        L"Confirming Return did not complete its synchronous TSF edit session");
+                    require(!textComposing(entry)&&entry.Text()==L"\u5019\u88dcDraft",L"Confirming Return did not retain exact completed native text");
+                }catch(...){completionFailure=std::current_exception();}
+            };
             co_await wait([this,entry,&composition]{return composition.focused(entry,root.XamlRoot());},L"Native default TextBox did not acquire its TSF context");
             composition.begin();co_await wait([entry]{return textComposing(entry)&&entry.Text()==L"\u5019\u88dcDraft";},L"Native default TextBox did not acquire exact marked text");
+            if(!stale)require(*busy,L"Marked native input did not notify localization ownership");
+            *pending=true;
             if(stale){
                 auto triggered=std::make_shared<bool>(false);std::exception_ptr callbackFailure;auto oldTime=GetTickCount()-1000;
                 starter=box_value(KeyEventHandler([this,entry,&composition,&heldKey,&callbackFailure,triggered,trace,label,oldTime](auto&&,KeyRoutedEventArgs const& e){
@@ -248,11 +273,17 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
                 if(callbackFailure)std::rethrow_exception(callbackFailure);
             }else{nativeKey(VK_RETURN,false);heldKey=true;}
             co_await wait([events]{return *events>0;},L"Candidate Enter did not reach the native dialog route");
+            *complete={};if(completion){entry.RemoveHandler(UIElement::PreviewKeyDownEvent(),completion);completion=nullptr;}
+            if(completionFailure)std::rethrow_exception(completionFailure);
+            if(mode==DefaultIme::Active)require(textComposing(entry),L"Active native default editor retired before explicit TSF completion");
             require(*primary==0,L"Composition-owned Enter invoked the native default button");
             require(FocusManager::GetFocusedElement(root.XamlRoot())==entry&&entry.Text()==L"\u5019\u88dcDraft",L"Candidate Enter changed the native default editor or its text");
+            if(!stale)require(!*published,L"Localization published before physical candidate confirmation release");
             composition.end();co_await wait([entry]{return !textComposing(entry);},L"Native default composition did not finish");
+            if(!stale)require(!*published,L"Completed composition published while confirming Enter was held");
             auto release=*events;nativeKey(VK_RETURN,true);heldKey=false;
             co_await wait([events,release]{return *events>release;},L"Candidate Enter release did not reach the native dialog route");
+            if(!stale)co_await wait([published]{return *published;},L"Physical candidate confirmation release did not admit publication");
             require(*primary==0,L"Composition-owned Enter release invoked the native default button");
             nativeKey(VK_RETURN,false);nativeKey(VK_RETURN,true);
             co_await wait([primary]{return *primary>0;},L"Ordinary Enter did not recover the native default button");

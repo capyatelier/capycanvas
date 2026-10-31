@@ -10,6 +10,7 @@ struct TextComposition : implements<TextComposition,Windows::Foundation::IInspec
     TextCompositionKeys keys;
     std::function<void(bool)> localizationInput;
     void Notify(){if(localizationInput)localizationInput(keys.Busy());}
+    void NotifyAfterInput(){if(keys.Busy())Notify();else Microsoft::UI::Dispatching::DispatcherQueue::GetForCurrentThread().TryEnqueue([weak=get_weak()]{if(auto state=weak.get())state->Notify();});}
     com_ptr<ITfSource> source;
     DWORD cookie=TF_INVALID_COOKIE;
     ~TextComposition(){Detach();}
@@ -33,7 +34,7 @@ struct TextComposition : implements<TextComposition,Windows::Foundation::IInspec
         com_ptr<ITfContextComposition> composing;com_ptr<IEnumITfCompositionView> items;com_ptr<ITfCompositionView> item;ULONG count=0;
         if(SUCCEEDED(context->QueryInterface(__uuidof(ITfContextComposition),composing.put_void()))&&SUCCEEDED(composing->EnumCompositions(items.put()))&&SUCCEEDED(items->Next(1,item.put(),&count)))
             keys.Update(count!=0,uint32_t(GetTickCount()));
-        Notify();return S_OK;
+        NotifyAfterInput();return S_OK;
     }
 };
 TextComposition* composition(DependencyObject element){
@@ -54,7 +55,7 @@ void captureTextComposition(TextBox const& entry,std::function<void(bool)> local
     entry.Resources().Insert(key,state.as<Windows::Foundation::IInspectable>());
     auto weak=state->get_weak();
     entry.TextCompositionStarted([weak](auto&&,auto&&){if(auto state=weak.get())state->Start();});
-    entry.TextCompositionEnded([weak](auto&&,auto&&){if(auto state=weak.get();state&&!state->source){state->keys.Update(false,uint32_t(GetTickCount()));state->Notify();}});
+    entry.TextCompositionEnded([weak](auto&&,auto&&){if(auto state=weak.get();state&&!state->source){state->keys.Update(false,uint32_t(GetTickCount()));state->NotifyAfterInput();}});
     entry.LostFocus([weak](auto&&,auto&&){if(auto state=weak.get())state->Clear();});
     entry.Unloaded([weak](auto&&,auto&&){if(auto state=weak.get())state->Clear();});
     entry.PreviewKeyDown([](auto&&,KeyRoutedEventArgs const& event){
@@ -64,8 +65,7 @@ void captureTextComposition(TextBox const& entry,std::function<void(bool)> local
     entry.AddHandler(UIElement::KeyUpEvent(),box_value(KeyEventHandler([weak](auto&&,KeyRoutedEventArgs const& event){
         if(auto state=weak.get()){
             state->keys.Owns(uint32_t(event.Key()),uint32_t(GetMessageTime()),true,event.KeyStatus().WasKeyDown);
-            auto entry=event.OriginalSource().try_as<FrameworkElement>();
-            if(entry)entry.DispatcherQueue().TryEnqueue([weak]{if(auto state=weak.get())state->Notify();});
+            state->NotifyAfterInput();
         }
     })),true);
 }
