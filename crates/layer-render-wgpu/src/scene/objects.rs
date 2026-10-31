@@ -377,7 +377,7 @@ impl Scene {
             let mut data=[0.;32];data[..4].copy_from_slice(&[0.,0.,PAGE_SIZE as f32,PAGE_SIZE as f32]);
             data[4..8].copy_from_slice(&[PAGE_SIZE as f32,PAGE_SIZE as f32,0.,0.]);
             data[8]=1.;data[9]=1.;data[31]=Convert::Encode.code();
-            self.jobs.push(Job::Draw {target:self.pool[output].view.clone(),sources:[view,r.empty_view.clone(),r.empty_view.clone()],data,over:false,clip:None,source_target:None});
+            self.jobs.push(Job::Draw {target:self.pool[output].view.clone(),sources:[view,r.empty_view.clone(),r.empty_view.clone(), r.empty_paper_view.clone()],data,over:false,clip:None,source_target:None});
         } else {
             self.jobs.push(Job::Copy {source:texture,source_origin:[0;2],destination:self.pool[output].texture.clone(),origin:[0;2],width:PAGE_SIZE,height:PAGE_SIZE});
         }

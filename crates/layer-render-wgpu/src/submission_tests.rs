@@ -15,7 +15,7 @@ fn multilayer_4k_fill_replay_matches_incremental_submissions() {
         let operation = RasterOperation {
             placement: layer_core::Affine::IDENTITY,
             coverage: reveal_all(extent, [0, 0]),
-            kind: RasterOperationKind::Fill {
+            kind: RasterOperationKind::Fill { texture: Default::default(),
                 color: [0.1 + (id % 3) as f32 * 0.3, 0.25, 0.55, 0.2],
                 alpha_locked: false,
             },
@@ -31,7 +31,7 @@ fn multilayer_4k_fill_replay_matches_incremental_submissions() {
         let root = partial.compositions.get(partial.root).unwrap().result;
         partial.stacks.get_mut(root).unwrap().entries = owners[..count].to_vec();
         let partial = Document::from_artwork(partial).unwrap();
-        r.submit(FramePacket {
+        crate::test_support::submit_ready(&mut r, FramePacket {
             view: view(),
             dab_batches: &batches[count - 1..count],
             reset_layers: count == 1,
@@ -43,7 +43,7 @@ fn multilayer_4k_fill_replay_matches_incremental_submissions() {
     assert!(incremental.as_chunks::<4>().0.iter().all(|pixel| pixel[3] > 0));
     for telemetry in [false, true] {
         r.set_telemetry_enabled(telemetry);
-        r.submit(FramePacket {
+        crate::test_support::submit_ready(&mut r, FramePacket {
             view: view(),
             dab_batches: &batches,
             reset_layers: true,

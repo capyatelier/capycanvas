@@ -3806,7 +3806,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                     let mut fields = options.controls(&self.state.localization);
                     fields.extend(options.edge_controls(&self.state.localization));
                     fields
-                } else if self.layer_interaction.tool.region().is_some() && id != "opacity" {
+                } else if self.layer_interaction.tool.region().is_some() && id != "opacity"
+                    || id == "grain_depth" && matches!(self.layer_interaction.tool, LayerCanvasTool::LassoFill | LayerCanvasTool::Gradient { .. }) {
                     region_tools::RegionTools::default().controls(&self.state.localization)
                 } else {
                     let brush = layer_core::default_brush(tools::preset(self.state.brush.preset)?);
@@ -3859,7 +3860,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 } else if !self.state.tool_settings.iter().any(|c| c.id == id) {
                     return Err("This setting is not used by the selected tool".into());
                 }
-                if self.layer_interaction.tool.region().is_some()
+                if (self.layer_interaction.tool.region().is_some() || id == "grain_depth" && matches!(self.layer_interaction.tool, LayerCanvasTool::LassoFill | LayerCanvasTool::Gradient { .. }))
                     && id != "opacity" && !id.starts_with("selection_")
                 {
                     self.region_tools.edit(&id, value, &self.state.localization)?;
@@ -6002,6 +6003,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             else if kind.geometric() { self.selection_tools.options.controls(&self.state.localization) } else { Vec::new() }
         } else if let Some((fill, _, contiguous)) = self.layer_interaction.tool.region() {
             let mut controls = self.region_tools.controls(&self.state.localization);
+            if !fill { controls.retain(|c| c.id != "grain_depth"); }
             if !contiguous || fill && matches!(self.layer_interaction.tool, LayerCanvasTool::Region { .. }) && self.region_tools.scope == FillScope::Everywhere { controls.retain(|c| c.id != "gap_closing"); }
             if fill {
                 controls.extend(
@@ -6020,6 +6022,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .into_iter()
                 .filter(|c| c.id == "opacity")
                 .map(ToolSetting::ungrouped)
+                .chain(self.region_tools.controls(&self.state.localization).into_iter().filter(|c| c.id == "grain_depth"))
                 .collect()
         } else {
             Vec::new()
@@ -9228,8 +9231,7 @@ mod tests {
         assert!(key(&mut s, "g", true, false, false).handled);
         key(&mut s, "g", false, false, false);
         assert_eq!(s.state.tool_set.subtools.len(), 3);
-        assert_eq!(s.state.tool_settings.len(), 1);
-        assert_eq!(s.state.tool_settings[0].id, "opacity");
+        assert_eq!(s.state.tool_settings.iter().map(|field| field.id).collect::<Vec<_>>(), ["opacity", "grain_depth"]);
         let action = s.state.tool_set.subtools[2].action.clone();
         s.dispatch(action).unwrap();
         let tool = s.layer_interaction.tool;
@@ -9305,7 +9307,7 @@ mod tests {
             end,
             ref gradient,
             shape, reverse, opacity,
-            alpha_locked,
+            alpha_locked, ..
         } = operations[0].kind
         else {
             panic!("gradient")

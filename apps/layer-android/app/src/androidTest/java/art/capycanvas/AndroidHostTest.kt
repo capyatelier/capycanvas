@@ -299,10 +299,11 @@ class AndroidHostTest {
             compose.onNode(hasTestTag("gradient-editor") and hasAnyAncestor(isPopup())).assertIsDisplayed()
             compose.onNode(hasTestTag("effect-gradient") and hasAnyAncestor(isPopup())).performTouchInput {click(center)}
             waitState {it.array("tool_extra").objects().firstOrNull {option->option.has("Gradient")}?.getJSONObject("Gradient")?.getJSONObject("value")?.getJSONObject("value")?.getJSONArray("stops")?.length()==3}
-            val toolBefore=state().getJSONArray("tool_extra").toString()
+            fun gradientDefinition() = state().array("tool_extra").objects().single { it.has("Gradient") }.getJSONObject("Gradient").getJSONObject("value").toString()
+            val toolBefore=gradientDefinition()
             instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_ESCAPE)
             compose.waitUntil(5_000) {compose.onAllNodes(hasTestTag("gradient-editor") and hasAnyAncestor(isPopup())).fetchSemanticsNodes().isEmpty()}
-            assertEquals(toolBefore,state().getJSONArray("tool_extra").toString())
+            assertEquals(toolBefore,gradientDefinition())
             action(obj("type" to "invoke","command" to "fit_canvas"))
             val shapeNodes=compose.onAllNodes(SemanticsMatcher("Gradient shape tag") {it.config.getOrNull(SemanticsProperties.TestTag)?.contains("gradient-shape")==true},useUnmergedTree=true).fetchSemanticsNodes()
             File(File(compose.activity.getExternalFilesDir(null),"validation").apply {mkdirs()},"p30-shape-$theme.json").writeText(obj("tool_extra" to state().getJSONArray("tool_extra"),"tags" to JSONArray(shapeNodes.map {node->obj("tag" to node.config.getOrNull(SemanticsProperties.TestTag),"bounds" to node.boundsInRoot.toString())})).toString())
@@ -312,7 +313,9 @@ class AndroidHostTest {
                 file.writeText(obj("phase" to phase,"before" to published()).toString())
                 runBlocking {host.glassPresented()}
                 try {
-                    compose.waitUntil(5_000) {published().getJSONObject("tone").getBoolean("idle")}
+                    compose.waitUntil(5_000) {
+                        published().getJSONObject("tone").getBoolean("idle") && runBlocking { host.withNative { !Native.renderingPending(it) } }
+                    }
                     file.writeText(obj("phase" to phase,"retired" to published()).toString())
                     return gradientOutput()
                 } catch(error:Throwable) {
@@ -321,7 +324,10 @@ class AndroidHostTest {
                 }
             }
             for(index in 0..2) {
-                panelNode("tool-segment-gradient-shape-$index").performClick()
+                panelNode("tool-setting-grain_depth").performScrollTo().assertIsDisplayed()
+                action(obj("type" to "set_tool_setting", "id" to "grain_depth", "value" to index.toDouble()))
+                assertEquals(index.toDouble(), state().array("tool_settings").objects().single { it.getString("id") == "grain_depth" }.getDouble("value"), 0.0)
+                panelNode("tool-segment-gradient-shape-$index").performScrollTo().performClick()
                 for(tool in listOf(MotionEvent.TOOL_TYPE_FINGER,MotionEvent.TOOL_TYPE_STYLUS,MotionEvent.TOOL_TYPE_MOUSE)) {
                 action(obj("type" to "invoke","command" to "fit_canvas"))
                 val camera=state().getJSONObject("camera");val viewport=camera.getJSONArray("viewport");val area=camera.getJSONArray("work_area")

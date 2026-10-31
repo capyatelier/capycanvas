@@ -236,6 +236,10 @@ impl crate::Document {
     pub fn paper_surface(&self, occurrence: OccurrenceHandle) -> Option<PaperSurface> {
         surface(self.scene(), occurrence)
     }
+    pub fn nearest_paper_binding(&self, target: Option<SourceTarget>) -> Option<PaperBinding> {
+        let paper = paper_occurrence(self.scene(), target.and_then(|target| self.target_owner(target)).or(self.working.occurrence))?;
+        Some(PaperBinding { surface: Arc::new(self.paper_surface(paper)?), target_offset: target.map_or([0; 2], |target| self.target_offset(target)) })
+    }
     pub fn paper_binding(&self, target: SourceTarget) -> PaperBinding {
         PaperBinding { surface: Arc::new(self.paper(Some(target))), target_offset: self.target_offset(target) }
     }
@@ -481,5 +485,13 @@ mod tests {
         assert_eq!(paper_occurrence(scene, Some(ink)), Some(paper));
         assert_eq!(paper_occurrence(scene, Some(paper)), Some(paper));
         assert_eq!(paper_occurrence(scene, None), Some(paper));
+        let target = doc.drawing_target().unwrap();
+        let binding = doc.nearest_paper_binding(Some(target)).unwrap();
+        assert_eq!(binding, doc.paper_binding(target));
+        let mut changed = doc.clone();
+        changed.set_paper_texture(built_in_paper("rough").unwrap().texture.clone());
+        assert_ne!(changed.nearest_paper_binding(Some(target)).as_ref(), Some(&binding));
+        assert_eq!(doc.nearest_paper_binding(Some(target)).as_ref(), Some(&binding));
+        assert_eq!(changed.without_paper().unwrap().nearest_paper_binding(Some(target)), None);
     }
 }

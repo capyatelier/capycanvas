@@ -125,7 +125,7 @@ mod enclose_fill_checks {
                 invoke(&mut s, command);
                 assert!(s.command(command).selected);
                 assert_eq!(s.state.tool_settings.iter().map(|setting| setting.id).collect::<Vec<_>>(),
-                    ["tolerance", "gap_closing", "expansion", "opacity"]);
+                    ["grain_depth", "tolerance", "gap_closing", "expansion", "opacity"]);
                 for (id, value) in [("tolerance", 0.25), ("gap_closing", 3.), ("expansion", -2.)] {
                     s.dispatch(UiAction::SetToolSetting { id: id.into(), value }).unwrap();
                 }
@@ -374,6 +374,83 @@ mod enclose_fill_checks {
             }
         }
     }
+    #[test]
+    fn fill_texture_controls_share_range_reset_and_saved_strength_on_every_platform() {
+        for platform in Platform::ALL {
+            let mut s = session(platform);
+            for command in [CommandId::Fill, CommandId::LassoFill, CommandId::EncloseFill, CommandId::Gradient] {
+                invoke(&mut s, command);
+                let field = s.state.tool_settings.iter().find(|field| field.id == "grain_depth").unwrap();
+                assert_eq!(field.label_id, MessageId::TOOL_SETTING_GRAIN_DEPTH);
+                assert_eq!((field.numeric.min, field.numeric.max, field.value), (0., 2., 1.));
+                for value in [0., 1., 2.] {
+                    s.dispatch(UiAction::SetToolSetting { id: "grain_depth".into(), value }).unwrap();
+                    assert_eq!(s.capture_fill_texture().strength, value);
+                }
+                for value in [-0.01, 2.01, f32::NAN] {
+                    assert!(s.dispatch(UiAction::SetToolSetting { id: "grain_depth".into(), value }).is_err());
+                }
+                let saved = s.editing_state();
+                let mut reopened = session(platform);
+                reopened.restore_editing(saved).unwrap();
+                assert_eq!(reopened.capture_fill_texture().strength, 2.);
+                s.dispatch(UiAction::ResetToolSetting { id: "grain_depth".into() }).unwrap();
+                assert_eq!(s.capture_fill_texture().strength, 1.);
+            }
+            invoke(&mut s, CommandId::Fill);
+            s.dispatch(UiAction::SetToolSetting { id: "grain_depth".into(), value: 2. }).unwrap();
+            invoke(&mut s, CommandId::Brush);
+            s.fill_selection(Selection::polygon(vec![Point { x: 10., y: 10. }, Point { x: 80., y: 10. }, Point { x: 80., y: 80. }]).unwrap()).unwrap();
+            let target = s.engine.document().drawing_content().unwrap();
+            assert_eq!(s.engine.document().target_operations(target).unwrap().last().unwrap().kind.fill_texture().unwrap().strength, 2.);
+            invoke(&mut s, CommandId::AutoSelect);
+            assert!(!s.state.tool_settings.iter().any(|field| field.id == "grain_depth"));
+        }
+    }
+
+    #[test]
+    fn fill_contacts_retain_the_paper_resolved_at_pen_down() {
+        for command in [CommandId::Fill, CommandId::LassoFill, CommandId::EncloseFill, CommandId::Gradient] {
+            let mut s = session(Platform::Gtk);
+            invoke(&mut s, command);
+            if matches!(command, CommandId::Fill | CommandId::EncloseFill) { invoke(&mut s, CommandId::SelectionEditing); }
+            let target = s.engine.document().drawing_content().unwrap();
+            let expected = s.engine.document().nearest_paper_binding(Some(target)).unwrap();
+            contact(&mut s, PenPhase::Down, [20., 30.]);
+            let doc = s.engine.document();
+            let paper = doc.bottom_paper().unwrap();
+            let handle = doc.scene().effect_handle(paper).unwrap();
+            let mut effect = doc.artwork.effects.get(handle).unwrap().clone();
+            for value in &mut effect.values {
+                if let layer_core::EffectValue::Texture(texture) = value {
+                    *texture = layer_core::paper::built_in_paper("rough").unwrap().texture.clone();
+                }
+            }
+            let edit = layer_core::Edit::Effect(layer_core::authored::RecordChange::replace(&doc.artwork.effects, handle, Some(effect)).unwrap());
+            s.engine.apply_edit(edit).unwrap();
+            assert_ne!(s.capture_fill_texture().paper.as_ref(), Some(&expected));
+            contact(&mut s, PenPhase::Move, [180., 30.]);
+            contact(&mut s, PenPhase::Move, [180., 190.]);
+            contact(&mut s, PenPhase::Up, [20., 190.]);
+            if matches!(command, CommandId::Fill | CommandId::EncloseFill) {
+                s.frame(1, 1).unwrap();
+                let request = s.renderer_mut().region_requests.last().unwrap().clone();
+                reply(&mut s, &request);
+                s.frame(2, 2).unwrap();
+            }
+            let operations = s.engine.document().target_operations(target).unwrap();
+            assert_eq!(operations.last().unwrap().kind.fill_texture().unwrap().paper.as_ref(), Some(&expected), "{command:?}");
+            assert!(s.layer_interaction.fill_texture.is_none());
+            if command == CommandId::Fill {
+                contact(&mut s, PenPhase::Down, [20., 30.]);
+                s.dispatch(UiAction::SetToolSetting { id: "grain_depth".into(), value: 0. }).unwrap();
+                contact(&mut s, PenPhase::Up, [20., 30.]);
+                assert!(s.layer_interaction.fill_texture.is_none());
+            }
+
+        }
+    }
+
 }
 
 mod fill_option_checks {
@@ -415,4 +492,5 @@ mod fill_option_checks {
             assert!(request.contiguous && request.enclosure.is_some());
         }
     }
+
 }

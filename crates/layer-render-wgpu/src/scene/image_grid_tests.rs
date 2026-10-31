@@ -338,7 +338,7 @@ fn effect_grids_preserve_document_coordinates_and_partial_edge_centers() {
             let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
             scene.begin_frame();
             scene.jobs.push(Job::Effect {
-                target: result.view.clone(), sources: [front_image.view.clone(), original_image.view.clone(), r.empty_view.clone()],
+                target: result.view.clone(), sources: [front_image.view.clone(), original_image.view.clone(), r.empty_view.clone(), r.empty_paper_view.clone()],
                 data: effects::image_grid(output, front, original), prepared,
                 masks: Box::new(std::array::from_fn(|_| r.empty_view.clone())),
                 source_target: None, changed_cells: None,
@@ -458,7 +458,7 @@ fn authored_spatial_references_preserve_builtin_windows_and_orientation() {
                     data[24..27].fill(0.5);
                 }
                 scene.begin_frame();
-                scene.jobs.push(Job::Effect { target: output.view.clone(), sources: [previous.view.clone(), original.clone(), r.empty_view.clone()],
+                scene.jobs.push(Job::Effect { target: output.view.clone(), sources: [previous.view.clone(), original.clone(), r.empty_view.clone(), r.empty_paper_view.clone()],
                     data, prepared, masks: Box::new(std::array::from_fn(|_| r.empty_view.clone())), source_target:None, changed_cells:None });
                 let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
                 scene.encode_jobs(r, &mut encoder).unwrap();
@@ -543,7 +543,7 @@ fn multipass_opacity_reads_original_finite_support_independently_of_intermediate
             let output = Image::new(r, input_plan, "finite support opacity result");
             let prepared = scene.effects.prepare(r, document.scene(), &[handle], effects::Execution::Image(pass), 0., 0, layer_core::BlendSpace::Linear).unwrap();
             scene.begin_frame();
-            scene.jobs.push(Job::Effect { target: output.view.clone(), sources: [previous, input.view.clone(), r.empty_view.clone()],
+            scene.jobs.push(Job::Effect { target: output.view.clone(), sources: [previous, input.view.clone(), r.empty_view.clone(), r.empty_paper_view.clone()],
                 data: effects::image_grid(input_plan, front, input_plan), prepared,
                 masks: Box::new(std::array::from_fn(|_| r.empty_view.clone())), source_target:None, changed_cells:None });
             let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
@@ -602,7 +602,7 @@ fn encoded_effect_jobs_retain_distinct_spatial_mappings_and_parameters_before_su
         let outputs: Vec<_> = documents.iter().map(|document| {
             let output = Image::new(r, plan, "immutable spatial result");
             let prepared = scene.effects.prepare(r, document.scene(), &[handle], effects::Execution::Preview, 0., 0, layer_core::BlendSpace::Linear).unwrap();
-            scene.jobs.push(Job::Effect {target:output.view.clone(), sources:[input.view.clone(), input.view.clone(), r.empty_view.clone()],
+            scene.jobs.push(Job::Effect {target:output.view.clone(), sources:[input.view.clone(), input.view.clone(), r.empty_view.clone(), r.empty_paper_view.clone()],
                 data:effects::image_grid(plan, plan, plan), prepared, masks:Box::new(std::array::from_fn(|_| r.empty_view.clone())), source_target:None, changed_cells:None});
             output
         }).collect();

@@ -1042,6 +1042,14 @@ class AndroidFeatureParityTest {
                 assertEquals(drawings, host.drawingTabs.rows.size)
 
                 openNewDrawing()
+                tap("new-drawing-presets-button")
+                awaitDrawing("Digital presets") { it.panel()?.getString("kind") == "presets" }
+                field("new-drawing-search").performTextReplacement("Full HD")
+                awaitDrawing("Full HD found") { it.tiles().firstOrNull()?.getString("name") == "Full HD" }
+                tap("new-drawing-preset-0", true)
+                tap("new-drawing-select")
+                awaitDrawing("Digital preset has no paper") { it.isNull("drawer") && it.paper().isNull("texture") }
+                shot(theme, "digital-no-paper")
                 field("new-drawing-name").performTextReplacement("Harbor study $theme")
                 awaitDrawing("named") { it.getString("name") == "Harbor study $theme" }
                 tap("new-drawing-create")
@@ -1049,6 +1057,7 @@ class AndroidFeatureParityTest {
                 awaitDocument()
                 compose.waitUntil(30_000) { host.drawingTabs.rows.any { it.getString("title") == "Harbor study $theme" } }
                 assertEquals(drawings + 1, host.drawingTabs.rows.size)
+                assertEquals("Digital creates only its paint layer", 1, state().array("layers").length())
                 assertEquals("Harbor study $theme", state().getJSONObject("document_file").getString("unsaved_name"))
             }
         } finally {

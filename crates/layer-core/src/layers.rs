@@ -357,6 +357,11 @@ pub struct RasterOperation {
     pub coverage: CoverageSnapshot,
     pub kind: RasterOperationKind,
 }
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct FillTexture {
+    pub strength: f32,
+    pub paper: Option<crate::paper::PaperBinding>,
+}
 #[derive(Clone, Debug, PartialEq)]
 pub enum RasterOperationKind {
     ColorMode(crate::color::LayerColorMode),
@@ -371,10 +376,12 @@ pub enum RasterOperationKind {
     Transform(crate::ImageTransform),
     Figure(Figure),
     Fill {
+        texture: FillTexture,
         color: [f32; 4],
         alpha_locked: bool,
     },
     Gradient {
+        texture: FillTexture,
         start: Point,
         end: Point,
         gradient: crate::GradientDefinition,
@@ -394,6 +401,17 @@ pub enum RasterOperationKind {
         offset: Point,
         low: PaintHandle,
     },
+}
+impl RasterOperationKind {
+    pub fn fill_texture(&self) -> Option<&FillTexture> {
+        match self { Self::Fill { texture, .. } | Self::Gradient { texture, .. } => Some(texture), _ => None }
+    }
+}
+impl FillTexture {
+    fn valid(&self) -> bool {
+        self.strength.is_finite() && (0. ..=2.).contains(&self.strength)
+            && self.paper.as_ref().is_none_or(|paper| paper.surface.mapping.inverse().is_some() && paper.surface.texture.validate().is_ok())
+    }
 }
 impl RasterOperation {
     /// Conservative affected area in layer coordinates. Inverted coverage and
@@ -475,15 +493,15 @@ impl RasterOperation {
                     }
             }
             RasterOperationKind::Figure(figure) => figure.valid(),
-            RasterOperationKind::Fill { color, .. } => color_ok(color),
+            RasterOperationKind::Fill { color, texture, .. } => color_ok(color) && texture.valid(),
             RasterOperationKind::Gradient {
-                start, end, gradient, opacity, ..
+                start, end, gradient, opacity, texture, ..
             } => {
                 [start.x, start.y, end.x, end.y]
                     .iter()
                     .all(|v| v.is_finite())
                     && start != end && (end.x-start.x).is_finite() && (end.y-start.y).is_finite()
-                    && gradient.validate().is_ok() && opacity.is_finite() && (0. ..=1.).contains(opacity)
+                    && texture.valid() && gradient.validate().is_ok() && opacity.is_finite() && (0. ..=1.).contains(opacity)
             }
         };
         if valid { Ok(()) } else { Err(DocumentError::InvalidLayerOperation("Invalid paint operation")) }
@@ -1108,8 +1126,8 @@ mod organization_tests {
     fn paint_operations_accept_extended_rgb_and_reject_invalid_coverage() {
         let operations = |color| {
             [
-                RasterOperationKind::Fill { color, alpha_locked: false },
-                RasterOperationKind::Gradient {
+                RasterOperationKind::Fill { texture: Default::default(), color, alpha_locked: false },
+                RasterOperationKind::Gradient { texture: Default::default(),
                     start: Point { x: 10., y: 20. },
                     end: Point { x: 80., y: 60. },
                     gradient: crate::GradientDefinition::new([0.,1.].map(|position|crate::GradientStop {position,color:crate::color::RgbColor {space:crate::color::RgbSpace::Srgb,linear_rgb:Some([color[0],color[1],color[2]]),rgba:std::array::from_fn(|c|if c==3 {color[c]}else{crate::color::RgbSpace::Srgb.encode(f64::from(color[c])) as f32})}}).to_vec()),
@@ -1148,6 +1166,15 @@ mod organization_tests {
                 for operation in operations(color) {
                     assert!(operation.validate([100; 2]).is_err(), "channel {channel}: {value}");
                 }
+            }
+        }
+        for strength in [f32::NAN, f32::INFINITY, -0.001, 2.001] {
+            for mut operation in operations([0.5; 4]).into_iter().take(2) {
+                match &mut operation.kind {
+                    RasterOperationKind::Fill { texture, .. } | RasterOperationKind::Gradient { texture, .. } => texture.strength = strength,
+                    _ => unreachable!(),
+                }
+                assert!(operation.validate([100; 2]).is_err());
             }
         }
         for alpha in [-0.001, 1.001] {

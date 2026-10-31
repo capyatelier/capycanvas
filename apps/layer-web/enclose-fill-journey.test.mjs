@@ -69,7 +69,7 @@ export async function checkEncloseFill({call,evaluate,settle}) {
         assert.ok(controls.includes(id),`${id} is shared with Fill`);
         assert.ok(await evaluate(`!!document.querySelector('[data-tool-setting="${id}"]')`),`${id} has a native Web control`);
       }
-      for(const [id,value] of [['tolerance',.15],['gap_closing',0],['expansion',0]])await send({type:'set_tool_setting',id,value});
+      for(const [id,value] of [['tolerance',.15],['gap_closing',0],['expansion',0],['grain_depth',0]])await send({type:'set_tool_setting',id,value});
       if(await selected('smooth_region_edges'))await contact('[data-tool-action="smooth_region_edges"]');
       assert.equal(await selected('smooth_region_edges'),false);
       await send({type:'set_color',rgba:[.85,.1,.05,1]});await invoke('fit_canvas');await idle();
@@ -104,6 +104,52 @@ export async function checkEncloseFill({call,evaluate,settle}) {
         await invoke('redo');await idle();assert.deepEqual(rasterIdentity(await save()),after,`${mode}: exact redo`);
         await invoke('undo');await idle();
       }
+      const paperLayer=await evaluate('Number(layerApp.state().layers.find(l=>l.content_icon==="layer-paper-symbolic")?.id)');assert.ok(Number.isFinite(paperLayer),'Imported drawing supplies its default Paper');
+      await send({type:'layer',action:{op:'delete',id:paperLayer}});
+      assert.ok(await evaluate('!!layerApp.state().layer_tools.add_paper'),'No Paper fixture removes its Paper');
+      const target=await evaluate('Number(layerApp.state().layers.find(l=>l.editing).id)');
+      for(const paper of [false,true]) {
+        if(paper) {
+          const action=await evaluate('JSON.parse(JSON.stringify(layerApp.state().layer_tools.add_paper.action,(_,v)=>typeof v==="bigint"?String(v):v))');
+          await send({type:'effect',action});await idle();
+          await send({type:'layer',action:{op:'select',id:target,mask:false}});
+        }
+        for(const command of ['fill','lasso_fill','enclose_fill','gradient']) {
+          await invoke(command);await idle();
+          const control=await evaluate('layerApp.state().tool_settings.find(c=>c.id==="grain_depth")');
+          assert.ok(control,`${command}: Texture strength exists`);assert.equal(control.numeric.max,2);
+          const results=[];
+          for(const strength of [0,1,2]) {
+            await send({type:'set_tool_setting',id:'grain_depth',value:strength});
+            assert.equal(await evaluate('layerApp.state().tool_settings.find(c=>c.id==="grain_depth").value'),strength);
+            const before=rasterIdentity(await save());
+            if(command==='fill') {
+              await pointer('mousePressed',await screen([85,110]));await pointer('mouseReleased',await screen([85,110]));await settle();
+            } else if(command==='gradient') {
+              await pointer('mousePressed',await screen([60,80]));await pointer('mouseMoved',await screen([120,140]));await pointer('mouseReleased',await screen([120,140]));await settle();
+            } else await path();
+            await idle();const after=rasterIdentity(await save());results.push(await output());
+            if(paper&&strength===1)await writeFile(`${directory}/texture-${command}-${theme}.png`,Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));
+            assert.notDeepEqual(after,before,`${command}/${paper}/${strength}: deposits paint`);
+            await invoke('undo');await idle();assert.deepEqual(rasterIdentity(await save()),before,`${command}/${paper}/${strength}: one undo`);
+            await invoke('redo');await idle();assert.deepEqual(rasterIdentity(await save()),after,`${command}/${paper}/${strength}: exact redo`);
+            await invoke('undo');await idle();
+          }
+          if(!paper)for(const result of results.slice(1))assert.deepEqual(result,results[0],`${command}: No paper is bit-exact flat at every strength`);
+          else for(const [index,result] of results.entries())if(index)assert.notDeepEqual(result,results[0],`${command}: paper changes coverage at ${index*100}%`);
+        }
+      }
+      await invoke('new_document');await wait('!!layerApp.state().new_drawing');
+      await contact('#new-drawing-presets-button');
+      const digital=await evaluate('layerApp.state().new_drawing.drawer.tabs.findIndex(t=>t.label==="Digital")');assert.ok(digital>=0);
+      await contact(`#new-drawing-tabs [data-new-drawing-tab="${digital}"]`);
+      await send({type:'new_drawing',action:{op:'search',query:'Full HD'}});
+      const preset=await evaluate('layerApp.state().new_drawing.drawer.tiles.findIndex(t=>t.name==="Full HD")');assert.ok(preset>=0);
+      await contact(`#new-drawing-presets [data-new-drawing-preset="${preset}"]`);await contact('#new-drawing-select');
+      assert.equal(await evaluate('layerApp.state().new_drawing.setup.paper.texture??null'),null,'Digital Full HD uses No paper');
+      await wait(`(()=>{const n=document.querySelector('#new-drawing-create'),r=n.getBoundingClientRect();return !layerApp.state().new_drawing.drawer&&n.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2))})()`);
+      await contact('#new-drawing-create');await wait('!layerApp.state().new_drawing');await idle();
+      assert.ok(await evaluate('!!layerApp.state().layer_tools.add_paper'),'Digital drawing has no Paper layer');
       assert.equal(await evaluate('layerApp.state().host_error??null'),null);
       console.log(`PASS ${theme}: Enclose and Fill reference holes, untouched ink/exterior/reference, exact single undo/redo and Escape`);
     }

@@ -186,7 +186,7 @@ impl FilterPreviews {
             data[31] = Convert::Encode.code();
             self.scene.jobs.push(Job::Draw {
                 target: encoded.1.clone(),
-                sources: [source.clone(), r.empty_view.clone(), r.empty_view.clone()],
+                sources: [source.clone(), r.empty_view.clone(), r.empty_view.clone(), r.empty_paper_view.clone()],
                 data,
                 over: false,
                 clip: None,source_target:None,
@@ -225,7 +225,7 @@ impl FilterPreviews {
             data[12..16].copy_from_slice(&[0., 0., extent[0] as f32, extent[1] as f32]);
             self.scene.jobs.push(Job::Draw {
                 target: atlas.1.clone(),
-                sources: [previous, r.empty_view.clone(), r.empty_view.clone()],
+                sources: [previous, r.empty_view.clone(), r.empty_view.clone(), r.empty_paper_view.clone()],
                 data,
                 over: false,
                 clip: None,
@@ -314,7 +314,7 @@ impl Scene {
             let (texture, target) = &targets[stage % targets.len()];
             let mut data = effects::image_grid(grid, if stage == 0 { source_grid } else { grid }, source_grid);
             data[4..8].copy_from_slice(&[texture.width() as f32, texture.height() as f32, 0., stage as f32]);
-            self.jobs.push(Job::Effect { target: target.clone(), sources: [previous, source.clone(), r.empty_view.clone()],
+            self.jobs.push(Job::Effect { target: target.clone(), sources: [previous, source.clone(), r.empty_view.clone(), r.empty_paper_view.clone()],
                 data, prepared: prepared.clone(), masks: Box::new(std::array::from_fn(|_| r.empty_view.clone())),source_target:None,changed_cells:None });
             previous = target.clone();
         }

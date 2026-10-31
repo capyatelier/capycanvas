@@ -39,7 +39,7 @@ fn a_dodge_and_burn_layer_goes_above_the_active_clipping_stack_filled_with_the_n
     let [(target, fill)] = &plan.operations[..] else { panic!("one fill") };
     let target = *target;
     let gray = doc.soft_light_neutral();
-    assert_eq!(fill.kind, RasterOperationKind::Fill { color: [gray, gray, gray, 1.], alpha_locked: false });
+    assert_eq!(fill.kind, RasterOperationKind::Fill { texture: Default::default(), color: [gray, gray, gray, 1.], alpha_locked: false });
     assert_eq!(fill.coverage.target, doc.artwork.coverage.next_handle());
     doc.apply(Edit::Batch(plan.edits)).unwrap();
     assert_eq!(names(&doc), ["Dodge & Burn", "Clipped", "Base", "Under", "Paper"]);

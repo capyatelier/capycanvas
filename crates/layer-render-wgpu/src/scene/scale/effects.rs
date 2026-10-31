@@ -91,7 +91,7 @@ impl Evaluator<'_> {
             let stage = if boundary { crate::effects::Execution::Image(pass) } else { crate::effects::Execution::Fused };
             let prepared = self.scene.effects.prepare(self.r, self.packet.scene, &handles, stage, self.packet.time_seconds, plan.level, self.packet.blend_space)?;
             self.scene.jobs.push(Job::Effect {
-                target: target.clone(), sources: [previous, input.view().unwrap().clone(), self.r.empty_view.clone()],
+                target: target.clone(), sources: [previous, input.view().unwrap().clone(), self.r.empty_view.clone(), self.r.empty_paper_view.clone()],
                 data, prepared, masks: views.clone(),source_target:None,changed_cells:None,
             });
             self.encode_scene_jobs()?;

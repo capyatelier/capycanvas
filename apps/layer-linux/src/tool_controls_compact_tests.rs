@@ -60,7 +60,7 @@ fn assert_family(w: &Rc<Workspace>, panel: &gtk::Widget, context: &str) {
 fn assert_spacing(panel: &gtk::Widget, context: &str) {
     let first = match context {
         name if primary_fields(name).is_some() => named::<gtk::Widget>(panel, "tool-setting-size"),
-        "fill" | "enclose-fill" => named::<gtk::Widget>(panel, "tool-setting-tolerance"),
+        "fill" | "enclose-fill" => named::<gtk::Widget>(panel, "tool-setting-grain_depth"),
         "zoom" => named::<gtk::Widget>(panel, "tool-choice-bar-zoom-click").parent().unwrap(),
         "eyedropper" => named::<gtk::Widget>(panel, "color-picker-source").parent().unwrap(),
         "gradient" => named::<gtk::Widget>(panel, "tool-choice-bar-gradient-shape"),

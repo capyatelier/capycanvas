@@ -642,7 +642,7 @@ fn cold_native_color_feeds_bounded_live_filter_windows() {
 fn cold_native_operations_publish_complete_color_and_restore_exact_history() {
     use layer_core::{Affine, ImageTransform, CoverageSnapshot, RasterOperation, RasterOperationKind};
     for kind in [
-        RasterOperationKind::Fill {
+        RasterOperationKind::Fill { texture: Default::default(),
             color: [0.12, 0.38, 0.73, 0.42],
             alpha_locked: true,
         },

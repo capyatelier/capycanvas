@@ -206,7 +206,7 @@ impl Scene {
             ]);
             self.jobs[start] = Job::Draw {
                 target: destination.view.clone(),
-                sources: [r.empty_view.clone(), r.empty_view.clone(), r.empty_view.clone()],
+                sources: [r.empty_view.clone(), r.empty_view.clone(), r.empty_view.clone(), r.empty_paper_view.clone()],
                 data: fill,
                 over: false,
                 clip: Some(region),source_target:None,
@@ -645,7 +645,7 @@ impl Scene {
                     }
                     self.jobs.push(Job::Effect {
                         target: target.view.clone(),
-                        sources: [previous.view.clone(), cached.input.view.clone(), r.empty_view.clone()],
+                        sources: [previous.view.clone(), cached.input.view.clone(), r.empty_view.clone(), r.empty_paper_view.clone()],
                         data,
                         prepared: self.effects.prepare(
                             r,

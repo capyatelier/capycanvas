@@ -116,11 +116,11 @@ pub(super) fn coverage_source(flags:u32)->Cow<'static,str> {
         if fine {include_str!("relief_completion_fine.wgsl")} else {"fn relief_contact(dab:Dab,world:vec2<f32>,paper:f32)->f32 {\n    if dab.texture_sign.x!=2.0 {return relief_segment_contact(dab,world,paper);}\n    return completion_exposure(dab,world,paper);\n}"})} else {String::new()};
     let relief_contact=if completed {completion.as_str()} else {contact};
     if flags!=u32::MAX && flags&64!=0 {
-        compose_wgsl(&[include_str!("brush_math.wgsl"),include_str!("contact_field.wgsl"),
-            include_str!("relief.wgsl"),relief_contact,include_str!("bristle_absent.wgsl"),include_str!("dry_footprint.wgsl"),include_str!("brush_alpha.wgsl")])
+        compose_wgsl(&[include_str!("brush_math.wgsl"),include_str!("paper_sample.wgsl"),include_str!("contact_field.wgsl"),
+            include_str!("relief_transfer.wgsl"),include_str!("relief.wgsl"),relief_contact,include_str!("bristle_absent.wgsl"),include_str!("dry_footprint.wgsl"),include_str!("brush_alpha.wgsl")])
     } else {
-        let relief=if has(64) {compose_wgsl(&[include_str!("relief.wgsl"),relief_contact])} else {include_str!("relief_absent.wgsl").into()};
-        compose_wgsl(&[include_str!("brush_math.wgsl"),include_str!("analytic_coverage.wgsl"),
+        let relief=if has(64) {compose_wgsl(&[include_str!("relief_transfer.wgsl"),include_str!("relief.wgsl"),relief_contact])} else {include_str!("relief_absent.wgsl").into()};
+        compose_wgsl(&[include_str!("brush_math.wgsl"),include_str!("paper_sample.wgsl"),include_str!("analytic_coverage.wgsl"),
             include_str!("brush_coverage.wgsl"),include_str!("contact_field.wgsl"),
             if has(1) {include_str!("contact.wgsl")} else {include_str!("contact_absent.wgsl")},&relief,
             if has(512) {include_str!("bristle.wgsl")} else {include_str!("bristle_absent.wgsl")},
@@ -899,7 +899,7 @@ mod tests {
             module.functions.iter().filter_map(|(_, f)| f.name.clone())
                 .chain(module.global_variables.iter().filter_map(|(_, v)| v.name.clone())).collect::<BTreeSet<_>>()
         };
-        let relief = names(&[include_str!("relief.wgsl"), include_str!("relief_fine.wgsl")], &["relief_contact"]);
+        let relief = names(&[include_str!("relief_transfer.wgsl"),include_str!("relief.wgsl"), include_str!("relief_fine.wgsl")], &["relief_contact"]);
         let completion = names(&[include_str!("relief_completion.wgsl")], &["relief_contact"]);
         let fine_completion = names(&[include_str!("relief_completion_fine.wgsl")], &["relief_contact"]);
         let bristle = names(&[include_str!("bristle.wgsl")], &["bristles_enabled", "bristle_footprint"]);

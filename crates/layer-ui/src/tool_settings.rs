@@ -196,8 +196,7 @@ impl Definition {
     fn numeric(&self, brush: &BrushSnapshot) -> NumericControl {
         let mut numeric = (self.numeric)();
         if self.id == "grain_depth" && brush.contact.is_some_and(|c| c.dry.is_some()) {
-            numeric.max = 2.;
-            numeric.soft_max = 2.;
+            numeric = texture_strength_control();
         }
         if self.id == "spread" && brush.execution == BrushExecution::Smudge && matches!(brush.blender.kind, BlenderKind::Dither | BlenderKind::Scatter) {
             numeric.mapping = crate::NumericMapping::Log;
@@ -205,6 +204,10 @@ impl Definition {
         }
         numeric
     }
+}
+
+pub(super) fn texture_strength_control() -> NumericControl {
+    NumericControl { max: 2., soft_max: 2., ..NumericControl::percent() }
 }
 
 fn default_primary(brush: &BrushSnapshot) -> &'static [&'static str] {

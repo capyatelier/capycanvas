@@ -87,6 +87,12 @@ export async function checkTitleBar({call,evaluate,settle,reload}) {
         await wait('layerApp.state().workspace.layout.bubbles.bubbles.length===1');
         assert.equal(await evaluate('layerApp.state().workspace.layout.bubbles.bubbles[0].source.control.slot'),'fill');
         assert.ok(await evaluate('layerApp.state().commands.find(c=>c.id==="enclose_fill").selected'));
+        await wait('layerApp.app.bubbles()[0].view.rings.some(r=>r.setting==="grain_depth")');
+        const before=await evaluate('layerApp.state().tool_settings.find(c=>c.id==="grain_depth").value');
+        const arc=async fraction=>evaluate(`(()=>{const view=layerApp.app.bubbles()[0].view,index=view.rings.findIndex(r=>r.setting==='grain_depth'),path=document.querySelectorAll('.tool-bubble .bubble-halo > g')[index].querySelector('.bubble-track'),p=path.getPointAtLength(path.getTotalLength()*${fraction}),screen=new DOMPoint(p.x,p.y).matrixTransform(path.getScreenCTM());return{x:screen.x,y:screen.y}})()`);
+        await settle();await pointer('down',await arc(before>1?.8:.2));await pointer('move',await arc(before>1?.2:.8));await pointer('up');await settle();
+        assert.notEqual(await evaluate('layerApp.state().tool_settings.find(c=>c.id==="grain_depth").value'),before,`${device}: Fill Texture strength arc edits its setting`);
+        await shot(`sketch-fill-bubble-${device}-${theme}`);
         await send({type:'restore_workspace',workspace:saved});
       }
       device='mouse';

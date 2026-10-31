@@ -142,6 +142,17 @@ fn native_new_drawing_dialog_review() {
         let across = (0..8).filter_map(|index| tiles.child_at_index(index)).filter(|tile| tile.compute_bounds(&tiles).is_some_and(|bounds| bounds.y() < 1.)).count();
         assert_eq!(across, 5, "five presets across on desktop");
         shot("2-presets");
+        tab(&w, "Digital");
+        let digital = part::<gtk::FlowBox>(&w, "new-drawing-presets");
+        assert_eq!(digital.observe_children().n_items(), 10);
+        let full_hd = digital.child_at_index(1).unwrap();
+        input.click(screen_point(full_hd.upcast_ref(), &w.window, [0.5, 0.5]));
+        input.click(screen_point(part::<gtk::Button>(&w, "new-drawing-select").upcast_ref(), &w.window, [0.5, 0.5]));
+        pump(200);
+        assert!(state(&w).new_drawing.as_ref().unwrap().setup.paper.texture.is_none());
+        shot("2-digital-no-paper");
+        input.click(screen_point(part::<gtk::Button>(&w, "new-drawing-presets-button").upcast_ref(), &w.window, [0.5, 0.5]));
+        pump(200);
         tab(&w, "Mixed media");
         shot("2-presets-mixed-media");
         tab(&w, "Pastel");

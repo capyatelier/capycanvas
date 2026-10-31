@@ -12,6 +12,7 @@ pub enum FillScope { #[default] Connected, Everywhere }
 pub(super) struct RegionTools {
     pub scope: FillScope,
     pub tolerance: f32,
+    pub texture_strength: f32,
     pub refinement: layer_render::RegionRefinement,
     pub source: [RegionSource; 2],
     pub enclose_source: RegionSource,
@@ -45,6 +46,7 @@ impl Default for RegionTools {
         Self {
             scope: FillScope::Connected,
             tolerance: 0.1,
+            texture_strength: 1.,
             refinement: layer_render::RegionRefinement {
                 smooth_edges: true,
                 ..Default::default()
@@ -61,9 +63,10 @@ impl Default for RegionTools {
     }
 }
 impl RegionTools {
-    pub(super) fn fields(&self) -> [(&'static str, MessageId, Option<MessageId>, NumericControl, f32); 3] {
+    pub(super) fn fields(&self) -> [(&'static str, MessageId, Option<MessageId>, NumericControl, f32); 4] {
         let distance = layer_render::RegionRefinement::MAX_DISTANCE as f64;
         [
+            ("grain_depth", MessageId::TOOL_SETTING_GRAIN_DEPTH, None, tool_settings::texture_strength_control(), self.texture_strength),
             (
                 "tolerance",
                 MessageId::TOOL_CONTROL_TOLERANCE,
@@ -111,6 +114,7 @@ impl RegionTools {
         }
         match id {
             "tolerance" => self.tolerance = value,
+            "grain_depth" => self.texture_strength = value,
             "gap_closing" => self.refinement.gap_closing = value as u32,
             "expansion" => self.refinement.expansion = value as i32,
             _ => unreachable!(),
@@ -154,6 +158,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         match event.phase {
             PenPhase::Down => {
                 self.region_tools.cancel();
+                self.layer_interaction.fill_texture = matches!(self.layer_interaction.tool, LayerCanvasTool::Region { fill: true, .. }).then(|| self.capture_fill_texture());
                 self.region_tools.contact = Some(
                     self.state
                         .camera
@@ -162,12 +167,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                 );
             }
             PenPhase::Up => {
-                let Some(point) = self.region_tools.contact.take() else {
-                    return;
-                };
-                self.request_region_at(point, None, None);
+                if let Some(point) = self.region_tools.contact.take() { self.request_region_at(point, None, None); }
+                self.layer_interaction.fill_texture = None;
             }
-            PenPhase::Cancel => self.region_tools.cancel(),
+            PenPhase::Cancel => { self.region_tools.cancel(); self.layer_interaction.fill_texture = None; },
             _ => (),
         }
     }

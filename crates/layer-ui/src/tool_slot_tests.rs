@@ -1193,5 +1193,12 @@ fn sketch_fill_header_remembers_its_tool_opens_tools_and_takes_a_bubble() {
         assert_eq!(s.bubbles().len(), 1);
         assert_eq!(s.state().workspace.layout.bubbles.bubbles[0].source, BubbleSource::Control { control });
         assert!(s.command(CommandId::EncloseFill).selected);
+        assert_eq!(s.bubbles()[0].rings.iter().map(|ring| ring.setting).collect::<Vec<_>>(), ["grain_depth"]);
+        let bubble = s.bubbles()[0].clone();
+        let position = bubble.rings[0].arc.point(0.75);
+        for phase in [ContactPhase::Down, ContactPhase::Up] {
+            s.dispatch(UiAction::Bubble { action: BubbleAction::Ring { id: bubble.id, phase, position } }).unwrap();
+        }
+        assert!((s.region_tools.texture_strength - 1.5).abs() < 0.01);
     }
 }

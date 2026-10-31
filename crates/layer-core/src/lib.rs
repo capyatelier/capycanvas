@@ -2327,6 +2327,12 @@ impl<'a> RootInventory<'a> {
         self.coverage(&operation.coverage.source);
         self.selections.extend(operation.coverage.selection.iter());
         match &operation.kind {
+            RasterOperationKind::Fill { texture, .. } | RasterOperationKind::Gradient { texture, .. } => {
+                if let Some(paper) = &texture.paper { match &paper.surface.texture {
+                    TextureSource::Image(image) => self.image(image),
+                    TextureSource::Program(instance) => { self.program(&instance.program); self.values(&instance.values); }
+                } }
+            }
             RasterOperationKind::Transform(t) => self.meshes.extend(t.placement.mesh.iter()),
             RasterOperationKind::Bake { scene, .. }
             | RasterOperationKind::FrequencyDetail { scene, .. } => {self.indices.push(&scene.index);self.artwork(&scene.artwork);},

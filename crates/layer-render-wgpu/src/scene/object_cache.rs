@@ -298,7 +298,7 @@ impl ObjectCache {
                         let mut data=[0.;32];data[..4].copy_from_slice(&[0.,0.,task.key.size[0] as f32,task.key.size[1] as f32]);
                         data[4..8].copy_from_slice(&[task.key.size[0] as f32,task.key.size[1] as f32,0.,0.]);
                         data[8]=1.;data[9]=1.;data[31]=Convert::Encode.code();
-                        scene.jobs.push(Job::Draw {target:spare.create_view(&Default::default()),sources:[task.job.output.clone(),r.empty_view.clone(),r.empty_view.clone()],data,over:false,clip:None,source_target:None});
+                        scene.jobs.push(Job::Draw {target:spare.create_view(&Default::default()),sources:[task.job.output.clone(),r.empty_view.clone(),r.empty_view.clone(), r.empty_paper_view.clone()],data,over:false,clip:None,source_target:None});
                         scene.encode_jobs(r,encoder)?;
                         steps+=u64::from(task.key.size[0])*u64::from(task.key.size[1]);
                         std::mem::swap(&mut task.texture,&mut c.spare);

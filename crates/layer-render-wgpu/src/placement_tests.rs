@@ -66,7 +66,7 @@ fn raster_gradients_preserve_authored_stops_and_opacity() {
     let operation=RasterOperation {
         placement:Affine::IDENTITY,
         coverage:reveal_all(extent,[0,0]),
-        kind:RasterOperationKind::Gradient {
+        kind:RasterOperationKind::Gradient { texture: Default::default(),
             start:Point{x:16.,y:64.},end:Point{x:112.,y:64.},
             gradient:layer_core::GradientDefinition {
                 stops:[[1.,0.,0.,1.],[0.,0.,1.,1.]].into_iter().enumerate().map(|(i,rgba)|layer_core::GradientStop {

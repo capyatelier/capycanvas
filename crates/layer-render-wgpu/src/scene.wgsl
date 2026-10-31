@@ -1,3 +1,5 @@
+override FILL_PAPER: bool = false;
+override FILL_GRADIENT: bool = false;
 // operation_offset.w converts the color a layer draw contributes: 1 encodes
 // linear layer pixels into the Perceptual composite, 2 decodes the composite.
 // 3 keeps a composite's coverage within 0–1 for a layer's pages, and 4 also
@@ -121,10 +123,10 @@ fn figure_color(p: vec2<f32>) -> vec4<f32> {
     return scene_value(v);
 }
 fn scene_value(v: Vertex) -> vec4<f32> {
-    if settings.options.x==12. {return scene_space(scene_image(v))*settings.options.y;}
-    let op = u32(settings.options.x);
-    if op == 0u { return settings.color; }
-    if op == 10u {
+    let op = select(u32(settings.options.x), select(6u, 18u, FILL_GRADIENT), FILL_PAPER);
+    if !FILL_PAPER && settings.options.x==12. {return scene_space(scene_image(v))*settings.options.y;}
+    if !FILL_PAPER && op == 0u { return settings.color; }
+    if !FILL_PAPER && op == 10u {
         let spread=max(settings.color.zw/settings.rect.zw-1.,vec2<f32>(0.))/3.;
         var ink=vec4<f32>(0.);
         for (var j=-1;j<=1;j++) {
@@ -136,12 +138,12 @@ fn scene_value(v: Vertex) -> vec4<f32> {
         return hdr_map_sdr(ink/9.,settings.operation_linear,settings.operation_offset);
     }
     let raw = scene_read(front,v);
-    if op == 6u || op == 11u || op == 18u {
+    if FILL_PAPER || op == 6u || op == 11u || op == 18u {
         // Constant fills are the degenerate case (equal endpoint colors).
         let local = settings.extent.zw + v.uv * settings.rect.zw;
         let p = mat2x2<f32>(settings.operation_linear.xy, settings.operation_linear.zw) * local + settings.operation_offset.xy;
         var src: vec4<f32>;
-        if op == 11u { src = figure_color(p)*raw.a; }
+        if !FILL_PAPER && op == 11u { src = figure_color(p)*raw.a; }
         else if op==18u {
             let flags=u32(settings.options.z);
             let t=gradient_shape(p-settings.backdrop.xy,settings.backdrop.zw-settings.backdrop.xy,flags%4u,flags>=4u);
@@ -149,8 +151,14 @@ fn scene_value(v: Vertex) -> vec4<f32> {
             let color=gradient_dither(sample.color,p,settings.options.y,sample.dither);
             src=vec4(color.rgb*color.a,color.a)*settings.color.x*raw.a;
         } else {src=vec4(settings.color.rgb*settings.color.a,settings.color.a)*raw.a;}
+        if FILL_PAPER && settings.operation_offset.z > 0. {
+            let paper = paper_sample(scene_paper, paper_sampling, local, settings.source_over);
+            let h = clamp(.5 + settings.operation_offset.z * (paper - .5), 0., 1.);
+            let contact = relief_transfer((.25 - (.5 - h)) / .05);
+            src *= (1. - exp(-6. * contact)) / (1. - exp(-6.));
+        }
         let dst = scene_read(back,v);
-        if op==11u && settings.options.y>=16. {
+        if !FILL_PAPER && op==11u && settings.options.y>=16. {
             return select(dst*(1.-src.a),dst,settings.options.w>.5);
         }
         if settings.options.w > .5 {

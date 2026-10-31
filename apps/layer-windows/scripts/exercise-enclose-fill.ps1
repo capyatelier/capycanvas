@@ -61,6 +61,84 @@ function Settled{Wait-Until {$m=Model;$m -and !$m.state.document_file.busy -and 
 function Holes([bool]$Filled){
     Wait-Until {$a=Pixel 85 110;$b=Pixel 195 110;(Red $a) -eq $Filled -and (Red $b) -eq $Filled} $(if($Filled){'The enclosed holes did not fill'}else{'The enclosed holes did not clear'}) 15
 }
+function Texture-Strength([int]$Percent){
+    $entry=Reveal-PanelControl 'tool_settings' 'tool-setting-grain_depth';$entry.SetFocus()
+    $entry.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue([string]$Percent);Key 0x0D
+    Wait-Until {((Model).state.tool_settings|Where-Object id -eq 'grain_depth').value -eq $Percent/100.} "Texture strength did not accept $Percent%"
+}
+function Texture-Samples{
+    $start=Screen 150 95;$end=Screen 158 103
+    $bitmap=[Drawing.Bitmap]::new(($end.x-$start.x),($end.y-$start.y));$graphics=[Drawing.Graphics]::FromImage($bitmap)
+    $stream=[IO.MemoryStream]::new();$hash=[Security.Cryptography.SHA256]::Create()
+    try{
+        $graphics.CopyFromScreen($start.x,$start.y,0,0,$bitmap.Size);$bitmap.Save($stream,[Drawing.Imaging.ImageFormat]::Png)
+        [BitConverter]::ToString($hash.ComputeHash($stream.ToArray())).Replace('-','')
+    }finally{$hash.Dispose();$stream.Dispose();$graphics.Dispose();$bitmap.Dispose()}
+}
+function Texture-Path([string]$Tool){
+    if($Tool -eq 'fill'){$at=Screen 190 120;[CapyRowPointer]::Down('mouse',$at.x,$at.y);[CapyRowPointer]::Up();return}
+    if($Tool -eq 'enclose_fill'){Enclose;return}
+    $points=if($Tool -eq 'gradient'){@(@(80,120),@(300,120))}else{@(@(70,70),@(290,70),@(290,180),@(70,180),@(70,70))}
+    $at=Screen $points[0][0] $points[0][1];[CapyRowPointer]::Down('mouse',$at.x,$at.y)
+    try{foreach($point in $points[1..($points.Count-1)]){$at=Screen $point[0] $point[1];[CapyRowPointer]::Move($at.x,$at.y)}}finally{[CapyRowPointer]::Up()}
+}
+function Check-Textures{
+    Use-PaintWorkspace
+    $records=[Collections.Generic.List[object]]::new()
+    foreach($paper in @('none','bristol','hot_press')){
+        Command 'new_document';Wait-Until {(Model).state.new_drawing} 'New drawing did not open'
+        Invoke 'new-drawing-presets-button';Wait-Until {(Model).state.new_drawing.drawer.kind -eq 'presets'} 'Preset browser did not open'
+        (New-DrawingControl 'new-drawing-search').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('Full HD')
+        Wait-Until {@((Model).state.new_drawing.drawer.tiles).Count -eq 1 -and (Model).state.new_drawing.drawer.tiles[0].name -eq 'Full HD'} 'Digital Full HD preset was not found'
+        Invoke 'new-drawing-preset-0';Invoke 'new-drawing-select'
+        Wait-Until {!(Model).state.new_drawing.drawer -and (Model).state.new_drawing.values[0] -eq 1920 -and (Model).state.new_drawing.values[1] -eq 1080} 'Full HD did not apply'
+        if($null -ne (Model).state.new_drawing.setup.paper.texture){throw 'Digital Full HD retained paper'}
+        New-DrawingPixels 384 256
+        if($paper -ne 'none'){
+            Invoke 'new-drawing-texture';Wait-Until {(Model).state.new_drawing.drawer.kind -eq 'paper'} 'Paper drawer did not open'
+            $tiles=@((Model).state.new_drawing.drawer.tiles);$index=@(0..($tiles.Count-1)|Where-Object {$tiles[$_].id -eq $paper})
+            if($index.Count -ne 1){throw "Missing paper $paper"}
+            Invoke ('new-drawing-paper-tile-'+$index[0])
+            Wait-Until {(Model).state.new_drawing.drawer.tiles[$index[0]].selected -and (New-DrawingControl 'new-drawing-paper-relief').Current.IsEnabled} 'Texture paper selection did not enable relief'
+            $entry=New-DrawingControl 'new-drawing-paper-relief';$entry.SetFocus();$entry.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('0')
+            Invoke 'new-drawing-paper-use';Wait-Until {(Model).state.new_drawing.setup.paper.texture -eq $paper -and !(Model).state.new_drawing.drawer} 'Paper did not apply'
+        }
+        Invoke 'new-drawing-create';Wait-Until {!(Model).state.new_drawing -and (Model).brush_ready -and !(Model).state.document_file.busy} 'Texture drawing did not become ready' 45
+        if(($paper -eq 'none') -and @((Model).state.layers|Where-Object content_icon -eq 'layer-paper-symbolic').Count){throw 'Digital Full HD created a Paper layer'}
+        Fit-Canvas;Command 'pen'
+        $start=Screen 50 50;[CapyRowPointer]::Down('mouse',$start.x,$start.y)
+        try{foreach($point in @(@(300,50),@(300,170),@(50,170),@(50,50))){$at=Screen $point[0] $point[1];[CapyRowPointer]::Move($at.x,$at.y)}}finally{[CapyRowPointer]::Up()}
+        Settled;Invoke-Id 'layer-reference';Wait-Until {(Model).state.layer_tools.references_selected} 'Texture reference was not marked'
+        Invoke-Id 'layer-new';Wait-Until {!@((Model).state.layers|Where-Object editing)[0].reference} 'Texture target did not open'
+        Invoke-Id 'color-edit';Wait-Until {Find 'edit-color-apply'} 'Texture color editor did not open'
+        Invoke 'edit-color-hex';$entry=Control 'edit-color-hex-entry';$entry.SetFocus();$entry.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('#D91A0D');Key 0x0D
+        Invoke 'edit-color-apply';Wait-Until {!(Find 'edit-color-apply')} 'Texture color editor did not close'
+        Park;$emptyRevision=Revision
+        foreach($tool in @('fill','lasso_fill','enclose_fill','gradient')){
+            Command $tool;Wait-Until {((Model).state.commands|Where-Object id -eq $tool).selected} "Texture tool did not activate: $tool"
+            Settled;Park;$empty=Texture-Samples
+            $flat=$null
+            foreach($percent in @(0,100,200)){
+                Texture-Strength $percent;Texture-Path $tool
+                Wait-Until {(Revision) -ne $emptyRevision} "Texture $tool did not paint at $percent%" 30
+                Settled;Park;$filled=Texture-Samples
+                if($filled -eq $empty){throw "Texture $tool left sampled pixels empty at $percent%"}
+                if($percent -eq 0){$flat=$filled}elseif($paper -eq 'none' -and $filled -ne $flat){throw "No paper changed $tool pixels at $percent%"}
+                if($paper -ne 'none' -and $percent -eq 200 -and $filled -eq $flat){throw "$paper did not texture $tool at 200%"}
+                if($percent -eq 100){Capture "texture-$paper-$tool-$Theme" -WithModel}
+                Chord @(0x11) 0x5A;Wait-Until {(Revision) -eq $emptyRevision} 'Texture Undo did not restore the target';Settled;Park
+                Wait-Until {(Texture-Samples) -eq $empty} 'Texture Undo did not restore pixels'
+                Chord @(0x11) 0x59;Wait-Until {(Revision) -ne $emptyRevision} 'Texture Redo did not restore the target';Settled;Park
+                Wait-Until {(Texture-Samples) -eq $filled} 'Texture Redo did not restore pixels'
+                Chord @(0x11) 0x5A;Wait-Until {(Revision) -eq $emptyRevision} 'Texture restoration Undo did not complete';Settled
+                $records.Add(@{paper=$paper;tool=$tool;strength=$percent;pixels=$filled;undo_redo='passed'})
+                Write-Output "$paper $tool $percent% pixels and Undo/Redo passed"
+            }
+        }
+    }
+    $records|ConvertTo-Json -Depth 4|Set-Content (Join-Path $run 'texture-results.json')
+    @{theme=$Theme;cases=$records.Count;digital_no_paper='passed';evidence=$run}|ConvertTo-Json
+}
 try {
     Enter-CapyEnvironment
     $env:CAPY_STORAGE_DIR=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1'
@@ -144,11 +222,13 @@ try {
     Key 0x1B;Wait-Until {$null -eq (Model).state.customization.drawer} 'Sketch Fill drawer did not close'
     $canvas=(Control 'drawing-canvas' -Arranged).Current.BoundingRectangle
     [CapyRowPointer]::Down('mouse',$x,$y);[CapyRowPointer]::Move([int]($canvas.X+$canvas.Width/2),[int]($canvas.Y+$canvas.Height/2));[CapyRowPointer]::Up()
-    Wait-Until {@((Model).state.workspace.layout.bubbles.bubbles).Count -eq 1} 'Sketch Fill did not take a bubble'
-    $bubble=@((Model).state.workspace.layout.bubbles.bubbles)[0]
-    if($bubble.source.control.slot -ne 'fill'){throw 'Sketch Fill took a different bubble source'}
+    $taken=@{bubble=$null}
+    Wait-Until {$model=Model;if(!$model){return $false};$bubbles=@($model.state.workspace.layout.bubbles.bubbles);if($bubbles.Count -ne 1){return $false};$taken.bubble=$bubbles[0];$null -ne $taken.bubble} 'Sketch Fill did not take a bubble'
+    $bubble=$taken.bubble
+    if($bubble.source.control.slot -ne 'fill'){throw "Sketch Fill took a different bubble source: $($bubble.source|ConvertTo-Json -Depth 8 -Compress)"}
     $null=Control ('tool-bubble-'+$bubble.id) -Arranged
     Capture "sketch-fill-bubble-$Theme" -WithModel
+    Check-Textures
     if((Model).state.host_error){throw "Enclose and Fill reported $((Model).state.host_error)"}
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close
     if((Get-Item -LiteralPath $stderr).Length){throw 'Native stderr requires inspection'}

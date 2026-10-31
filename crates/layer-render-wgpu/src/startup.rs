@@ -123,7 +123,7 @@ pub(super) struct Requirements {
 impl Requirements {
     pub(super) fn capture_scene(r:&WgpuRasterizer,view:SceneView<'_>,watercolor:bool)->Self {
         let mut required = Self::default();
-        required.render.extend(r.scene_pipelines.pipeline.iter().cloned());
+        required.render.extend(r.scene_pipelines.for_scene(view).cloned());
         required.compute.push(r.scene_pipelines.constant.2.clone());
         required.compute.extend(r.scene_pipelines.scale_pipelines().into_iter().cloned());
         required.compute.extend(r.transforms.as_ref().unwrap().placement_pipelines());
@@ -404,7 +404,7 @@ impl WgpuRasterizer {
             let mut required = Requirements::default();
             required
                 .render
-                .extend(self.scene_pipelines.pipeline.iter().cloned());
+                .extend(self.scene_pipelines.for_scene(document.scene()).cloned());
             if self.device.portable_blend() { required.compute.extend(self.portable_blend.pipelines.iter().cloned()); }
             required.compute.push(self.scene_pipelines.constant.2.clone());
             if shader.key.watercolor {required.compute.push(self.pipelines.watercolor_compute.1.clone());}
@@ -538,6 +538,9 @@ impl WgpuRasterizer {
         startup.current = current;
         startup.resized = resized;
         startup.preparation.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if startup.brush.is_none() {
+            for pipeline in &self.scene_pipelines.pipeline[3..] { startup.compiler.background(pipeline, OTHER, || true); }
+        }
         startup.brush = Some(ShaderBrushKey::new(document, brush));
         startup.transform = transform;
         startup.compiler.start();
@@ -804,6 +807,22 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
         renderer.validate_and_prepare_brush_resources(&batches).unwrap();
+        document.set_paper_texture(layer_core::paper::built_in_paper("bristol").unwrap().texture.clone());
+        let target = document.drawing_target().unwrap();
+        let operation = layer_core::RasterOperation { placement: layer_core::Affine::IDENTITY,
+            coverage: crate::layer_tests::placement::reveal_all([128; 2], [0; 2]),
+            kind: layer_core::RasterOperationKind::Fill { color: [0.2, 0.4, 0.8, 1.], alpha_locked: false,
+                texture: layer_core::FillTexture { strength: 1., paper: document.nearest_paper_binding(Some(target)) } } };
+        crate::layer_tests::placement::paint_mut(&mut document).operations = Arc::new(vec![operation]);
+        let batches = [DabBatch { kind: DabBatchKind::RasterOperation(0), dab_count: 0,
+            ..crate::test_support::dab_batch(target, brush_style(&document, &layer_core::default_brush(layer_core::DefaultBrushPreset::GPen), StrokeTool::Brush), damage) }];
+        let packet = layer_render::FramePacket { dab_batches: &batches, ..crate::test_support::packet(document.scene(), [128; 2]) };
+        assert!(!renderer.raster_dependencies_ready(packet, None));
+        while !renderer.raster_dependencies_ready(packet, None) {
+            renderer.poll_startup().unwrap();
+            assert!(std::time::Instant::now() < deadline, "fill paper must prepare before submission");
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
     }
     #[test]
     fn a_style_change_the_brush_key_ignores_needs_no_new_preparation() {
@@ -840,6 +859,43 @@ mod tests {
         assert!(renderer.prepare_startup(&document, &brush, false).is_err());
         assert!(renderer.startup.is_some());
         assert!(!renderer.poll_startup().unwrap().complete);
+    }
+    #[test]
+    fn failed_fill_paper_admission_reaches_fallible_submission() {
+        use layer_core::color::source::{SourceBuilder, SourceChannels, SourceInterpretation};
+        let color = layer_core::color::DocumentColor::default();
+        let reference = WgpuRasterizer::new_native_headless(color).unwrap();
+        let mut renderer = crate::test_support::staged_renderer(&reference, color);
+        let mut document = Document::new(layer_core::authored::PortableId::random(), 64, 64, layer_core::DocumentNames { paint: "Ink".into(), paper: "Paper".into() }).without_paper().unwrap();
+        let brush = layer_core::default_brush(layer_core::DefaultBrushPreset::GPen);
+        renderer.shader_idle(false, false);
+        renderer.prepare_startup(&document, &brush, false).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        crate::test_support::wait_startup(&mut renderer, deadline, |progress| progress.brush_ready, format_args!("G-Pen"));
+        assert!(renderer.scene_pipelines.pipeline[3..].iter().all(|pipeline| !pipeline.ready()));
+        let mut image = SourceBuilder::new([4; 2], SourceInterpretation { channels: SourceChannels::Gray,
+            depth: layer_core::color::SampleDepth::U8, profile: Default::default(), profile_assumed: false }, 1 << 20).unwrap();
+        for _ in 0..4 { image.push_row(&[128; 4]).unwrap(); }
+        let binding = layer_core::paper::PaperBinding { target_offset: [0; 2], surface: Arc::new(layer_core::paper::PaperSurface {
+            texture: layer_core::TextureSource::Image(Arc::new(image.finish().unwrap()).into()), mapping: layer_core::Affine64([1., 0., 0., 1., 0., 0.]) }) };
+        let target = document.drawing_target().unwrap();
+        let before = document.target_raster(target).unwrap().identity();
+        let operation = layer_core::RasterOperation { placement: layer_core::Affine::IDENTITY,
+            coverage: crate::layer_tests::placement::reveal_all([64; 2], [0; 2]),
+            kind: layer_core::RasterOperationKind::Fill { color: [0.2, 0.4, 0.8, 1.], alpha_locked: false,
+                texture: layer_core::FillTexture { strength: 1., paper: Some(binding) } } };
+        let damage = operation.bounds([64; 2]);
+        crate::layer_tests::placement::paint_mut(&mut document).operations = Arc::new(vec![operation]);
+        let batches = [DabBatch { kind: DabBatchKind::RasterOperation(0), dab_count: 0,
+            ..crate::test_support::dab_batch(target, brush_style(&document, &brush, StrokeTool::Brush), damage) }];
+        let packet = layer_render::FramePacket { dab_batches: &batches, ..crate::test_support::packet(document.scene(), [64; 2]) };
+        while !renderer.raster_dependencies_ready(packet, None) {
+            renderer.poll_startup().unwrap();
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(renderer.submit(packet).unwrap_err().to_string().contains("physical size"));
+        assert_eq!(document.target_raster(target).unwrap().identity(), before);
     }
     #[test]
     fn fill_selection_prepares_the_resolved_paint_target() {
@@ -1019,7 +1075,7 @@ mod gpu_tests {
                 .all(|p| !p.ready())
         );
         assert!(renderer.pipelines.dry_material.kernels.iter().all(|p| !p.ready()));
-        let document = Document::new(layer_core::authored::PortableId::random(), 128, 128, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+        let mut document = Document::new(layer_core::authored::PortableId::random(), 128, 128, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         let brush = layer_core::default_brush(layer_core::DefaultBrushPreset::GPen);
         renderer.shader_idle(false, false);
         renderer.prepare_startup(&document, &brush, false).unwrap();
@@ -1033,13 +1089,32 @@ mod gpu_tests {
         recolored.color_rgba_linear = [8., 0.25, 0.5, 1.];
         assert!(!renderer.startup_needs_update(&document, &recolored, false));
         assert!(renderer.poll_startup().unwrap().brush_ready);
-        assert!(
-            renderer
-                .scene_pipelines
-                .pipeline
-                .iter()
-                .all(|p| p.ready())
-        );
+        assert!(renderer.scene_pipelines.for_scene(document.scene()).all(|p| p.ready()));
+        assert!(renderer.scene_pipelines.pipeline[3..].iter().all(|pipeline| !pipeline.ready()));
+        let target = document.drawing_target().unwrap();
+        let paper = document.nearest_paper_binding(Some(target)).unwrap();
+        for texture in [layer_core::FillTexture { strength: 0., paper: Some(paper) },
+            layer_core::FillTexture { strength: 1., paper: None }] {
+            let operation = layer_core::RasterOperation { placement: layer_core::Affine::IDENTITY,
+                coverage: crate::layer_tests::placement::reveal_all([128; 2], [0; 2]),
+                kind: layer_core::RasterOperationKind::Fill { color: [0.2, 0.4, 0.8, 1.], alpha_locked: false, texture } };
+            let damage = operation.bounds([128; 2]);
+            crate::layer_tests::placement::paint_mut(&mut document).operations = Arc::new(vec![operation]);
+            document.revision += 1;
+            renderer.prepare_startup(&document, &brush, false).unwrap();
+            let batches = [DabBatch { kind: DabBatchKind::RasterOperation(0), dab_count: 0,
+                ..crate::test_support::dab_batch(target, brush_style(&document, &brush, StrokeTool::Brush), damage) }];
+            let packet = layer_render::FramePacket { dab_batches: &batches, ..crate::test_support::packet(document.scene(), [128; 2]) };
+            while !renderer.raster_dependencies_ready(packet, None) {
+                renderer.poll_startup().unwrap();
+                assert!(std::time::Instant::now() < deadline, "flat fill dependencies must prepare without optional compilation");
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            assert!(renderer.scene_pipelines.for_scene(document.scene()).all(|pipeline| pipeline.ready()));
+            assert!(renderer.scene_pipelines.pipeline[3..].iter().all(|pipeline| !pipeline.ready()), "flat fills must not require the paper variant");
+        }
+        crate::layer_tests::placement::paint_mut(&mut document).operations = Arc::default();
+        document.revision += 1;
         assert!(
             renderer
                 .native_edit
@@ -1066,9 +1141,11 @@ mod gpu_tests {
                 assert!(!required.ready(), "unselected {preset:?} must begin cold");
                 (preset, required)
             });
-        renderer.shader_idle(true, true);
+        renderer.shader_idle(true, false);
         let deadline = std::time::Instant::now() + Duration::from_secs(60);
         crate::test_support::wait_startup(&mut renderer, deadline, |progress| progress.complete, format_args!("Startup compilation timed out"));
+        let paper_pipelines = [3, 4].map(|index| renderer.scene_pipelines.pipeline[index].clone());
+        crate::test_support::wait_startup(&mut renderer, deadline, |_| paper_pipelines.iter().all(|pipeline| pipeline.ready()), format_args!("Background fill pipeline timed out"));
         for (preset, required) in &unselected {
             assert!(!required.ready(), "unselected {preset:?} must remain cold after idle startup");
         }

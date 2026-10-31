@@ -472,7 +472,7 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     fn halo_settings(&self) -> Vec<&ToolSetting> {
         if self.state.layer_tools.tool != LayerCanvasTool::Paint {
-            return Vec::new();
+            return self.state.tool_settings.iter().filter(|c| c.id == "grain_depth").collect();
         }
         let controls = &self.state.tool_settings;
         let ids = self.ring_ids(self.state.brush.preset, self.engine.configured_brush(), controls);
@@ -611,7 +611,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let tools = &self.state;
         self.bubble_state
             .halo
-            .filter(|(_, brush)| tools.workspace.layout.bubbles.show_sliders && tools.layer_tools.tool == LayerCanvasTool::Paint && tools.brush.preset == *brush)
+            .filter(|(_, brush)| tools.workspace.layout.bubbles.show_sliders && (tools.layer_tools.tool == LayerCanvasTool::Paint || tools.tool_settings.iter().any(|setting| setting.id == "grain_depth")) && tools.brush.preset == *brush)
             .map(|(id, _)| id)
     }
 

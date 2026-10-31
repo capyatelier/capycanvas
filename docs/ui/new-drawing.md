@@ -46,10 +46,10 @@ If display dimensions are unavailable, the sheet is 1,440 × 1,080 px.
   field like W and H, sits at the left of the footer and is disabled for No
   paper. Use Texture applies the paper and its visibility; Cancel keeps both.
   Light and Shows through paint start at their defaults.
-- **Texture visibility in presets.** Screens, comics pages, print sizes and
-  Blueprint start at 0%: their drawings are reproduced, so a lit sheet would
-  print over the real one. Physical papers start at 100%, the relief their
-  brushes feel. Newsprint and Chalkboard start at 50%. The rough Full sheet,
+- **Paper in presets.** Digital presets start with No paper. Comics pages, print
+  sizes and Blueprint keep their paper at 0% Texture visibility: their drawings
+  are reproduced, so a lit sheet would print over the real one. Physical papers
+  start at 100%, the relief their brushes feel. Newsprint and Chalkboard start at 50%. The rough Full sheet,
   Extra rough, the handmade Journal and the surfaces whose structure is the
   point, Barn board, Cracked earth, Crumpled page, Sidewalk and Toilet paper,
   start at 150% so their surface reads.

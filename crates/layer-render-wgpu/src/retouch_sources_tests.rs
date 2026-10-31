@@ -137,7 +137,7 @@ fn engine(doc: Document, feedback: bool) -> (InputProducer<PenEvent>, CanvasEngi
         .append_raster_operation(TARGET, RasterOperation {
             placement: layer_core::Affine::IDENTITY,
             coverage: reveal_all(extent),
-            kind: RasterOperationKind::Fill { color: FILL, alpha_locked: false },
+            kind: RasterOperationKind::Fill { texture: Default::default(), color: FILL, alpha_locked: false },
         })
         .unwrap();
     flush(&mut engine);
@@ -296,7 +296,7 @@ fn retouch_source_preserves_unmixed_perceptual_pixels() {
         engine.append_raster_operation(TARGET, RasterOperation {
             placement: layer_core::Affine::IDENTITY,
             coverage: reveal_all(SIZE),
-            kind: RasterOperationKind::Fill { color: [0.1433, 0.27534, 0.423, 1.], alpha_locked: false },
+            kind: RasterOperationKind::Fill { texture: Default::default(), color: [0.1433, 0.27534, 0.423, 1.], alpha_locked: false },
         }).unwrap();
         engine.set_layer_opacity(TARGET_USE, opacity).unwrap();
         engine.set_retouch(Some(RetouchSource::References));

@@ -82,14 +82,15 @@ fn backing(root: &RasterRevision) -> BTreeMap<TileKey, Vec<u8>> {
         .map(|(key, tile)| (*key, tile.wait_backing().unwrap().decode().unwrap()))
         .collect()
 }
-fn engine(
-    mut document: layer_core::Document,
-) -> (InputProducer<PenEvent>, CanvasEngine<WgpuRasterizer>) {
+fn engine(document: layer_core::Document) -> (InputProducer<PenEvent>, CanvasEngine<WgpuRasterizer>) {
+    let r = WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
+    engine_on(document, r)
+}
+fn engine_on(mut document: layer_core::Document, r: WgpuRasterizer) -> (InputProducer<PenEvent>, CanvasEngine<WgpuRasterizer>) {
     if document.active_target().is_none() {
         document.working.occurrence = Some(occurrence_id(&document));
         document.working.target = Some(target(&document));
     }
-    let r = WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
     let (input, consumer) = input_queue(64);
     let mut engine =
         CanvasEngine::new(r, document, consumer, view(), ViewTransform::IDENTITY).unwrap();
@@ -129,7 +130,7 @@ fn native_half_float_multiply_brush_saturates_finite_output() {
     let id=target(&document);
     let (mut input,mut live)=engine(document);
     live.append_raster_operation(id,layer_core::RasterOperation {placement:layer_core::Affine::IDENTITY,coverage:reveal_all([256;2],[0,0]),
-        kind:layer_core::RasterOperationKind::Fill {color:[40000.,40000.,40000.,1.],alpha_locked:false}}).unwrap();
+        kind:layer_core::RasterOperationKind::Fill { texture: Default::default(),color:[40000.,40000.,40000.,1.],alpha_locked:false}}).unwrap();
     flush(&mut live);
     let mut brush=layer_core::BrushSnapshot {color_rgba_linear:[2.,2.,2.,1.],diameter:64.,hardness:1.,opacity:1.,flow:1.,mappings:Arc::from([]),..Default::default()};
     brush.rendering.blend_mode=layer_core::BrushBlendMode::Multiply;
@@ -272,12 +273,12 @@ fn native_extended_fill_gradient_and_figure_pixels_survive_history_and_save() {
             };
             let start = Point { x: 64., y: 32. };
             let end = Point { x: 320., y: 96. };
-            let mut kinds = vec![RasterOperationKind::Fill { color: colors[0], alpha_locked: false }];
+            let mut kinds = vec![RasterOperationKind::Fill { texture: Default::default(), color: colors[0], alpha_locked: false }];
             for (shape, reverse) in layer_core::GradientShape::ALL.into_iter().flat_map(|shape| [false, true].map(move |reverse| (shape, reverse))) {
                 for transparent in [false, true] {
                     let mut colors = colors;
                     if transparent { colors[1][3] = 0.; }
-                    kinds.push(RasterOperationKind::Gradient { start, end, gradient: layer_core::GradientDefinition { stops: colors.into_iter().enumerate().map(|(i, rgba)| layer_core::GradientStop { position: i as f32, color: layer_core::color::RgbColor::from_linear(space, rgba).unwrap() }).collect(), interpolation: layer_core::ColorMixSpace::LinearRgb }, shape, reverse, opacity: 1., alpha_locked: false });
+                    kinds.push(RasterOperationKind::Gradient { texture: Default::default(), start, end, gradient: layer_core::GradientDefinition { stops: colors.into_iter().enumerate().map(|(i, rgba)| layer_core::GradientStop { position: i as f32, color: layer_core::color::RgbColor::from_linear(space, rgba).unwrap() }).collect(), interpolation: layer_core::ColorMixSpace::LinearRgb }, shape, reverse, opacity: 1., alpha_locked: false });
                 }
             }
             kinds.push(RasterOperationKind::Figure(Figure {
@@ -1159,7 +1160,7 @@ fn native_gradient_dither_changes_integer_code_boundaries_without_bias() {
         set_color(&mut document,DocumentColor {space,depth});let id=target(&document);
         let (_,mut live)=engine(document);
         let gradient=GradientDefinition {stops:[first,first+8.].into_iter().enumerate().map(|(i,code)|GradientStop {position:i as f32,color:RgbColor::new(space,[(code/f64::from(maximum)) as f32,(code/f64::from(maximum)) as f32,(code/f64::from(maximum)) as f32,1.]).unwrap()}).collect(),interpolation:ColorMixSpace::Classic};
-        let kind=if route=="tool" {RasterOperationKind::Gradient {gradient:gradient.clone(),shape:GradientShape::Linear,reverse:false,opacity:1.,start:Point::default(),end:Point {x:1024.,y:0.},alpha_locked:false}} else {
+        let kind=if route=="tool" {RasterOperationKind::Gradient { texture: Default::default(),gradient:gradient.clone(),shape:GradientShape::Linear,reverse:false,opacity:1.,start:Point::default(),end:Point {x:1024.,y:0.},alpha_locked:false}} else {
             let definition=layer_core::bundled_effect_catalog().get(if route=="fill" {"gradient_fill"}else{"gradient_map"}).unwrap();
             let mut instance=layer_core::EffectInstance::new(definition.program());instance.set("gradient",layer_core::EffectValue::Gradient(gradient)).unwrap();
             if route=="fill" {instance.set("angle",layer_core::EffectValue::Number(0.)).unwrap();}
@@ -1266,7 +1267,7 @@ fn layer_color_modes_convert_originals_constrain_edits_and_survive_history_and_r
             assert_eq!(reopened.backend_mut().readback_srgb_rgba8().unwrap(), live.backend_mut().readback_srgb_rgba8().unwrap());
             let id = target(reopened.document());
             reopened.append_raster_operation(id, layer_core::RasterOperation { placement: layer_core::Affine::IDENTITY,
-                coverage: reveal_all([256; 2], [0, 0]), kind: layer_core::RasterOperationKind::Fill { color: [0.1, 0.8, 0.2, 0.8], alpha_locked: false } }).unwrap();
+                coverage: reveal_all([256; 2], [0, 0]), kind: layer_core::RasterOperationKind::Fill { texture: Default::default(), color: [0.1, 0.8, 0.2, 0.8], alpha_locked: false } }).unwrap();
             flush(&mut reopened);
             let filled = reopened.backend_mut().readback_srgb_rgba8().unwrap();
             assert!(filled.as_chunks::<4>().0.iter().all(|p| (p[..3] == [0; 3] || p[..3] == [255; 3]) && p[3] == 255));
@@ -1349,6 +1350,115 @@ fn blend_pickup_of_excess_alpha_commits_bounded_color() {
             for stored in bytes.chunks(16) {
                 let [r, g, b, a] = std::array::from_fn(|i| f32::from_le_bytes(stored[i * 4..][..4].try_into().unwrap()));
                 assert!([r, g, b, a].iter().all(|v| v.is_finite()) && (a == 0. || (f32::MIN_POSITIVE..=1.).contains(&a)), "{texel:?}: {key:?} holds {:?}", [r, g, b, a]);
+            }
+        }
+    }
+}
+
+fn fill_contact_pixels(binding: layer_core::paper::PaperBinding, strength: f32, color: DocumentColor, extent: [u32; 2]) -> BTreeMap<TileKey, Vec<u8>> {
+    let mut doc = paint_document(extent, "Flat contact");
+    set_color(&mut doc, color);
+    paint_mut(&mut doc).raster = RasterRevision::pending();
+    let mut style = crate::tests::test_style(BrushExecution::Dry);
+    style.grain = Some(layer_core::BrushGrain { depth: strength });
+    style.paper = Some(binding);
+    style.rendering.accumulation = layer_core::BrushAccumulation::Flow;
+    style.contact = Some(layer_core::BrushContact { paper: 1., pressure_gain: 1., dry: Some(layer_core::BrushDryMedia {
+        poses: [layer_core::BrushDryPose { radii: [1.; 2], relief: [0.; 3] }; 3],
+        softness: 0.05, loading: 0., corner: 0., relief_offset: 0.,
+    }), ..Default::default() });
+    let mut dab = crate::layer_tests::dab([1.; 4]);
+    dab.center = layer_core::Point { x: 192., y: 64. };
+    dab.radii = [1000.; 2]; dab.previous = [1000., 1000., 1., 0.];
+    dab.contact = [0.5, 0., 0., 0.]; dab.previous_contact = dab.contact;
+    let batch = crate::test_support::dab_batch(target(&doc), style, layer_core::Rect::from_extent(extent));
+    let omitted = if color.depth == SampleDepth::F16 { wgpu::Features::FLOAT32_FILTERABLE } else { wgpu::Features::empty() };
+    let mut r = WgpuRasterizer::native_headless_without(color, omitted).unwrap();
+    crate::test_support::submit_settled(&mut r, layer_render::FramePacket { dabs: &[dab], dab_batches: &[batch], reset_layers: true,
+        ..crate::test_support::packet(doc.scene(), extent) });
+    backing(&paint(&doc).raster)
+}
+
+#[test]
+fn native_fill_texture_matches_contact_and_flat_pixels_through_history() {
+    use layer_core::{Affine, FillTexture, RasterOperation, RasterOperationKind, Point};
+    use layer_core::color::source::{SourceBuilder, SourceChannels, SourceInterpretation};
+    let extent = [384, 128];
+    let interpretation = SourceInterpretation { channels: SourceChannels::Gray, depth: SampleDepth::U8,
+        profile: Default::default(), profile_assumed: false };
+    let mut builder = SourceBuilder::new([128; 2], interpretation, 1 << 20).unwrap();
+    let levels = [0u8, 64, 128, 255];
+    let row: Vec<_> = (0..128).map(|x| levels[x / 32]).collect();
+    for _ in 0..128 { builder.push_row(&row).unwrap(); }
+    let mut image = builder.finish().unwrap();
+    image.resolution = Some(layer_core::ImageResolution::ppi(300));
+    let surface = Arc::new(layer_core::paper::PaperSurface { texture: layer_core::TextureSource::Image(Arc::new(image).into()),
+        mapping: layer_core::Affine64([300. / 25.4, 0., 0., 300. / 25.4, 0.37, -0.23]) });
+    for depth in [SampleDepth::U8, SampleDepth::F16] {
+        let mut doc = paint_document(extent, "Fill texture");
+        set_color(&mut doc, DocumentColor { depth, ..Default::default() });
+        let id = target(&doc);
+        let omitted = if depth == SampleDepth::F16 { wgpu::Features::FLOAT32_FILTERABLE } else { wgpu::Features::empty() };
+        let r = WgpuRasterizer::native_headless_without(doc.composition().color, omitted).unwrap();
+        let (_, mut live) = engine_on(doc, r);
+        let empty = backing(&paint(live.document()).raster);
+        let color = [0.2, 0.4, 0.8, 0.625];
+        for gradient in [false, true] {
+            let mut flat = None;
+            for (strength, paper) in [(0., None), (0., Some([19, -7])), (2., None), (0.2, Some([19, -7])), (1., Some([19, -7])), (2., Some([19, -7]))] {
+                let texture = FillTexture { strength, paper: paper.map(|target_offset| layer_core::paper::PaperBinding { surface: surface.clone(), target_offset }) };
+                let kind = if gradient { RasterOperationKind::Gradient { texture, start: Point::default(), end: Point { x: 128., y: 0. },
+                    gradient: layer_core::GradientDefinition::new([0., 1.].map(|position| layer_core::GradientStop { position,
+                        color: layer_core::color::RgbColor::from_linear(RgbSpace::Srgb, color).unwrap() }).to_vec()),
+                    shape: layer_core::GradientShape::Linear, reverse: false, opacity: 1., alpha_locked: false }
+                } else { RasterOperationKind::Fill { texture, color, alpha_locked: false } };
+                let mut coverage = reveal_all(extent, [0; 2]);
+                coverage.source.default_coverage = 0.4;
+                live.append_raster_operation(id, RasterOperation { placement: Affine::IDENTITY, coverage, kind }).unwrap();
+                flush(&mut live);
+                let pixels = backing(&paint(live.document()).raster);
+                if strength < 0.5 || paper.is_none() {
+                    if let Some(flat) = &flat { assert!(&pixels == flat, "{depth:?} gradient={gradient} flat must be bit exact"); }
+                    else { flat = Some(pixels.clone()); }
+                } else {
+                    assert!(&pixels != flat.as_ref().unwrap());
+                    for x in [16u32, 48, 80, 112, 272, 304, 336, 368] {
+                        let height = f32::from(levels[((x + 19) % 128 / 32) as usize]) / 255.;
+                        let h = (0.5 + strength * (height - 0.5)).clamp(0., 1.);
+                        let t = ((0.25 - (0.5 - h)) / 0.05).clamp(0., 1.);
+                        let contact = t * t * (3. - 2. * t);
+                        let alpha = (1. - (-6. * contact).exp()) / (1. - (-6f32).exp()) * color[3] * 0.4;
+                        let key = TileKey { plane: layer_core::raster::RasterPlane::Color, coordinate: [x / 256, 0] };
+                        let offset = ((64 * 256 + x % 256) as usize) * depth.bytes() * 4;
+                        let bytes = &pixels[&key][offset..];
+                        let actual = if depth == SampleDepth::U8 { f32::from(bytes[3]) / 255. }
+                            else { layer_core::color::f16::from_bits(u16::from_le_bytes(bytes[6..8].try_into().unwrap())).to_f32() };
+                        assert!((actual - alpha).abs() <= 2. / 255., "{depth:?} gradient={gradient} strength={strength} x={x}: {actual} vs {alpha}");
+                    }
+                }
+                if !gradient && strength > 0. && let Some(target_offset) = paper {
+                    let stroke = fill_contact_pixels(layer_core::paper::PaperBinding { surface: surface.clone(), target_offset }, strength,
+                        live.document().composition().color, extent);
+                    let bpp = depth.bytes() * 4;
+                    let mut empty = 0;
+                    for (key, fill) in &pixels {
+                        for (pixel, (fill, ink)) in fill.chunks_exact(bpp).zip(stroke[key].chunks_exact(bpp)).enumerate() {
+                            if key.coordinate[0] * 256 + pixel as u32 % 256 >= extent[0] || key.coordinate[1] * 256 + pixel as u32 / 256 >= extent[1] { continue; }
+                            let fill_empty = fill[3 * depth.bytes()..].iter().all(|byte| *byte == 0);
+                            let ink_empty = ink[3 * depth.bytes()..].iter().all(|byte| *byte == 0);
+                            if strength < 0.5 { assert!(!fill_empty && !ink_empty, "full engagement covers the same texels"); }
+                            if ink_empty { empty += 1; assert!(fill_empty, "fill covered a grain the dry contact left empty"); }
+                        }
+                    }
+                    if strength >= 0.5 { assert!(empty > 0 && empty < extent[0] * extent[1]); }
+                }
+                assert!(live.undo().unwrap()); flush(&mut live);
+                assert_eq!(backing(&paint(live.document()).raster), empty);
+                assert!(live.redo().unwrap()); flush(&mut live);
+                assert_eq!(backing(&paint(live.document()).raster), pixels);
+                let mut bytes = Vec::new(); write_capture(&live.capture_artwork(0).unwrap(), &mut bytes).unwrap();
+                assert_eq!(backing(&paint(&read_document(bytes)).raster), pixels);
+                assert!(live.undo().unwrap()); flush(&mut live);
             }
         }
     }

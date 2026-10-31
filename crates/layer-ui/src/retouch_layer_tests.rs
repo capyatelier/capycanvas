@@ -52,7 +52,7 @@ mod retouch_layer_checks {
             let source = s.engine.document().scene().source_target(id);
             let [(target, fill)] = &s.renderer_mut().pending_operations[..] else { panic!("one fill") };
             assert_eq!(Some(*target), source);
-            let RasterOperationKind::Fill { color, alpha_locked: false } = fill.kind else { panic!("a fill") };
+            let RasterOperationKind::Fill { color, alpha_locked: false, .. } = fill.kind else { panic!("a fill") };
             assert!((color[0] - gray).abs() < 1e-7 && color[..3].iter().all(|c| *c == color[0]) && color[3] == 1., "{space:?}: {color:?}");
             invoke(&mut s, CommandId::Undo);
             assert_live_artwork_eq(s.engine.document(), &before);

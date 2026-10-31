@@ -1099,6 +1099,7 @@ pub struct WgpuRasterizer {
     zero_pages: [wgpu::Texture; 2],
     _empty_texture: wgpu::Texture,
     empty_view: wgpu::TextureView,
+    empty_paper_view: wgpu::TextureView,
     _empty_scalar_texture: wgpu::Texture,
     empty_scalar_view: wgpu::TextureView,
     reservoir: BrushReservoir,
@@ -1264,6 +1265,7 @@ impl WgpuRasterizer {
             create_target_bind_group(&device, &target_layout, &target_buffer, &unclipped);
         let (empty_texture, empty_view) =
             create_color_target(&device, [1, 1], "layer transparent missing page");
+        let empty_paper_view = create_target(&device, [1, 1], wgpu::TextureFormat::R8Unorm, "empty fill paper").1;
         let (empty_scalar_texture, empty_scalar_view) = create_target(
             &device,
             [1, 1],
@@ -1507,6 +1509,7 @@ impl WgpuRasterizer {
             zero_pages,
             _empty_texture: empty_texture,
             empty_view,
+            empty_paper_view,
             _empty_scalar_texture: empty_scalar_texture,
             empty_scalar_view,
             reservoir,
@@ -1741,11 +1744,13 @@ impl WgpuRasterizer {
 
     fn prepare_paper(&mut self, style: &layer_render::DabStyle, priority: u8) -> Result<(), GpuRasterError> {
         let (Some(_), Some(binding)) = (style.grain, &style.paper) else { return Ok(()) };
+        self.prepare_paper_binding(binding, priority)
+    }
+
+    fn prepare_paper_binding(&mut self, binding: &layer_core::paper::PaperBinding, priority: u8) -> Result<(), GpuRasterError> {
         let compiler = self.startup.as_ref().map(|startup| -> &startup::Compiler { &startup.compiler });
         self.papers.require(&self.device, compiler, binding, priority)?;
-        if self.startup.is_none() {
-            self.papers.advance(&self.device, &self.queue, true, None)?;
-        }
+        if self.startup.is_none() { self.papers.advance(&self.device, &self.queue, true, None)?; }
         Ok(())
     }
 
@@ -1879,6 +1884,18 @@ impl WgpuRasterizer {
     fn brush_batches_ready(&mut self, packet: FramePacket<'_>) -> bool {
         let mut ready = true;
         for batch in packet.dab_batches {
+            if let DabBatchKind::RasterOperation(index) = batch.kind
+                && let Some((pipeline, texture)) = packet.scene.operations(batch.target).and_then(|ops| ops.get(index as usize)).and_then(|op| scene::fill_pipeline(&op.kind))
+            {
+                if let Some(startup) = &self.startup {
+                    ready &= startup.compiler.require([&self.scene_pipelines.pipeline[pipeline]], startup::BRUSH);
+                    startup.compiler.start();
+                }
+                if let Some(binding) = &texture.paper
+                    && self.prepare_paper_binding(binding, startup::BRUSH).is_ok() {
+                    ready &= paper::PaperTile::id_for(binding).is_none_or(|id| self.papers.view(&id).is_some());
+                }
+            }
             ready &= self.brush_textures_ready(&batch.style);
             if let Some(startup) = &self.startup && !startup.current.covers(&batch.style) {
                 let dabs = packet.dabs.get(batch.first_dab as usize..(batch.first_dab + batch.dab_count) as usize).unwrap_or_default();
@@ -5755,9 +5772,9 @@ fn advanced_brush_shader(device: &PipelineDevice) -> Deferred<wgpu::ShaderModule
                 source: wgpu::ShaderSource::Wgsl(compose_wgsl(&[
                     &working_color::shader(&device),
                     include_str!("brush_types.wgsl"), include_str!("advanced_brush.wgsl"),
-                    include_str!("brush_math.wgsl"), include_str!("contact_field.wgsl"),
+                    include_str!("brush_math.wgsl"), include_str!("paper_sample.wgsl"), include_str!("contact_field.wgsl"),
                     include_str!("analytic_coverage.wgsl"), include_str!("brush_coverage.wgsl"),
-                    include_str!("contact.wgsl"), include_str!("relief.wgsl"), include_str!("relief_fine.wgsl"),
+                    include_str!("contact.wgsl"), include_str!("relief_transfer.wgsl"),include_str!("relief.wgsl"), include_str!("relief_fine.wgsl"),
                     include_str!("selection_clip.wgsl"),
                 ])),
             })

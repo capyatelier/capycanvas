@@ -1530,7 +1530,7 @@ mod tests {
             crate::test_support::view(extent), ViewTransform::IDENTITY).unwrap();
         engine.append_raster_operation(target(engine.document()), layer_core::RasterOperation {
             placement: layer_core::Affine::IDENTITY, coverage: reveal_all(extent, [0, 0]),
-            kind: layer_core::RasterOperationKind::Fill { color: [0., 0., 1., 1.], alpha_locked: false },
+            kind: layer_core::RasterOperationKind::Fill { texture: Default::default(), color: [0., 0., 1., 1.], alpha_locked: false },
         }).unwrap();
         let deadline = Instant::now() + Duration::from_secs(30);
         loop {

@@ -4571,7 +4571,7 @@ mod tests {
     fn appended_raster_operations_are_incremental_and_undo_restores_revisions() {
         for kind in [
             layer_core::RasterOperationKind::Transform(layer_core::ImageTransform::affine(layer_core::Affine::translation(Point { x: 10., y: 4. }))),
-            layer_core::RasterOperationKind::Gradient {
+            layer_core::RasterOperationKind::Gradient { texture: Default::default(),
                 start: Point::default(),
                 end: Point { x: 128.0, y: 0.0 },
                 gradient: layer_core::GradientDefinition::new(vec![layer_core::GradientStop {position:0.,color:layer_core::color::RgbColor::new(layer_core::color::RgbSpace::Srgb,[1.,0.,0.,1.]).unwrap()},layer_core::GradientStop {position:1.,color:layer_core::color::RgbColor::new(layer_core::color::RgbSpace::Srgb,[0.,0.,1.,1.]).unwrap()}]),

@@ -86,6 +86,8 @@ fn setting(app: &App, id: &str, value: f32) {
 fn apple_region_refinement_changes_coverage_and_restores_exact_history() {
     for platform in [0, 1] {
         let app = region_app(platform, false);
+        app.invoke("fill");
+        setting(&app, "grain_depth", 0.);
         let baseline = app.pixels();
         let mut id = 0;
         for device in [0, 1] {

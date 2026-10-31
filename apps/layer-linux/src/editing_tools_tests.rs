@@ -51,6 +51,62 @@ pub(super) fn stroke(input: &mut RemoteInput, w: &Workspace, from: [f32; 2], to:
 
 #[test]
 #[ignore = "private Wayland display and hardware GPU"]
+fn native_fill_texture_controls_and_papers() {
+    let app = native_test_app("art.capycanvas.FillTexture");
+    let output = std::path::PathBuf::from(std::env::var("LAYER_TEST_ARTIFACTS").unwrap());
+    std::fs::create_dir_all(&output).unwrap();
+    let mut input = RemoteInput::new().timeout_secs(30);
+    input.ready();
+    for theme in [Theme::Light, Theme::Dark] {
+        for paper in [None, Some("bristol"), Some("hot_press")] {
+            let mut project = new_drawing(384, 256, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
+            if let Some(id) = paper { project.set_paper_texture(layer_core::paper::built_in_paper(id).unwrap().texture.clone()); }
+            else { project = project.without_paper().unwrap(); }
+            let w = Workspace::with_project(&app, Some((project, None)));
+            w.window.maximize(); w.window.present(); ready(&w);
+            w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+            let workspace = tool_settings_workspace(&w, &[CommandId::Fill, CommandId::Gradient], true, false);
+            w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(workspace) });
+            invoke(&w, CommandId::FitCanvas);
+            w.dispatch(UiAction::SetColor { rgba: [0.85, 0.1, 0.05, 1.] });
+            let empty = pixels(&raster(&w));
+            for command_id in [CommandId::Fill, CommandId::LassoFill, CommandId::EncloseFill, CommandId::Gradient] {
+                invoke(&w, command_id); ready(&w);
+                let panel = w.panel_widget(Panel::ToolSettings);
+                let strength = named::<crate::number_control::NumberControl>(&panel, "tool-setting-grain_depth");
+                histogram::scroll_to(strength.upcast_ref());
+                assert!(strength.is_mapped(), "{command_id:?} exposes Texture strength");
+                for value in ["0", "100", "200"] {
+                    edit_number(&strength, value);
+                    let setting = state(&w).tool_settings.into_iter().find(|field| field.id == "grain_depth").unwrap();
+                    assert_eq!(setting.value, value.parse::<f32>().unwrap() / 100.);
+                }
+            }
+            let mut flat = None;
+            for strength in ["0", "100"] {
+                invoke(&w, CommandId::Fill); ready(&w);
+                let control = named::<crate::number_control::NumberControl>(&w.panel_widget(Panel::ToolSettings), "tool-setting-grain_depth");
+                histogram::scroll_to(control.upcast_ref()); edit_number(&control, strength);
+                let before = raster(&w);
+                stroke(&mut input, &w, [192., 128.], [192., 128.]);
+                committed(&w, &before);
+                let filled = pixels(&raster(&w));
+                if strength == "0" { flat = Some(filled.clone()); }
+                else {
+                    if paper.is_none() { assert_eq!(Some(&filled), flat.as_ref(), "No paper remains bit-exact at 100%"); }
+                    capture_ui(&w, &output, &format!("fill-texture-{}-100-{theme:?}.png", paper.unwrap_or("none")));
+                }
+                invoke(&w, CommandId::Undo); ready(&w); assert_eq!(pixels(&raster(&w)), empty);
+                invoke(&w, CommandId::Redo); ready(&w); assert_eq!(pixels(&raster(&w)), filled);
+                invoke(&w, CommandId::Undo); ready(&w);
+            }
+            w.window.destroy(); pump(100);
+        }
+    }
+}
+
+#[test]
+#[ignore = "private Wayland display and hardware GPU"]
 fn native_enclose_fill_pointer_workflow() {
     let app = native_test_app("art.capycanvas.EncloseFill");
     let output = std::env::var_os("LAYER_TEST_ARTIFACTS").map(std::path::PathBuf::from)
@@ -104,7 +160,7 @@ fn native_enclose_fill_pointer_workflow() {
         let source = find_named(&w.panel_widget(Panel::ToolSettings), "tool-action-group-selection-source").unwrap();
         histogram::scroll_to(&source);
         capture_ui(&w, &output, &format!("enclose-source-{theme:?}.png"));
-        for (id, value) in [("tolerance", "15"), ("gap_closing", "0"), ("expansion", "0")] {
+        for (id, value) in [("grain_depth", "0"), ("tolerance", "15"), ("gap_closing", "0"), ("expansion", "0")] {
             let control = named::<crate::number_control::NumberControl>(
                 &w.panel_widget(Panel::ToolSettings), &format!("tool-setting-{id}"));
             assert!(control.is_mapped(), "{id} is visible for Enclose and Fill");

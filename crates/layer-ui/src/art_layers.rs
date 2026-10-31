@@ -447,6 +447,7 @@ pub(super) struct LayerInteraction {
     pub collapsed: BTreeSet<OccurrenceHandle>,
     pub clipboard_mask: Option<(CoverageSnapshot, [i64; 2])>,
     pub path: Vec<Point>,
+    pub fill_texture: Option<layer_core::FillTexture>,
     original: Option<(OccurrenceHandle, Occurrence)>,
     pub changed: bool,
     pub gradient: GradientToolSettings,
@@ -1761,9 +1762,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                     }
                     _ => (),
                 }
-                self.layer_interaction.path.push(p);
                 self.layer_interaction.original =
                     (self.layer_interaction.tool == LayerCanvasTool::Move).then(|| (id, layer.clone()));
+                self.layer_interaction.fill_texture = matches!(self.layer_interaction.tool, LayerCanvasTool::LassoFill | LayerCanvasTool::EncloseFill { .. } | LayerCanvasTool::Gradient { .. }).then(|| self.capture_fill_texture());
+                self.layer_interaction.path.push(p);
             }
             PenPhase::Move | PenPhase::Up => {
                 if self.layer_interaction.path.is_empty() {
@@ -1851,6 +1853,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     }
                     self.layer_interaction.path.clear();
                     self.layer_interaction.original = None;
+                    self.layer_interaction.fill_texture = None;
                 }
             }
             PenPhase::Cancel => {
@@ -1886,6 +1889,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let selection = self.selection_tools.cancel();
         let region = self.region_tools.cancellable();
         self.region_tools.cancel();
+        self.layer_interaction.fill_texture = None;
         if self.layer_interaction.path.is_empty() {
             return Ok(tonal || selection || region || transform || effect || sdr);
         }
@@ -1907,11 +1911,22 @@ impl<R: CanvasRenderer> UiSession<R> {
         )
     }
 
+    pub(super) fn capture_fill_texture(&self) -> layer_core::FillTexture {
+        let doc = self.engine.document();
+        layer_core::FillTexture { strength: self.region_tools.texture_strength,
+            paper: doc.nearest_paper_binding(doc.drawing_content()) }
+    }
+
+    fn fill_texture(&self) -> layer_core::FillTexture {
+        self.layer_interaction.fill_texture.clone().unwrap_or_else(|| self.capture_fill_texture())
+    }
+
     pub(super) fn fill_operation(&self) -> layer_core::RasterOperationKind {
         let brush = self.engine.brush();
         let mut color = brush.color_rgba_linear;
         color[3] *= brush.opacity;
         layer_core::RasterOperationKind::Fill {
+            texture: self.fill_texture(),
             color,
             alpha_locked: self
                 .engine
@@ -1934,7 +1949,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let doc=self.engine.document();
         let target=doc.drawing_content().ok_or("Select a drawing layer")?;
         let colors:Vec<_>=gradient.stops.iter().map(|stop|stop.color).collect();
-        let kind=layer_core::RasterOperationKind::Gradient {start,end,gradient,shape,reverse,
+        let kind=layer_core::RasterOperationKind::Gradient {texture:self.fill_texture(),start,end,gradient,shape,reverse,
             opacity:self.state.brush.opacity,alpha_locked:doc.target_owner(target).and_then(|id|doc.scene().occurrence(id)).is_some_and(|layer|layer.alpha_locked)};
         self.paint_operation(doc.working.selection.clone(),kind,&colors)
     }

@@ -816,6 +816,16 @@ class AndroidRasterTest {
             assertEquals(enclose, tools.array("groups").objects().single { it.getBoolean("selected") }.getString("label"))
             val group = host.snapshot!!.getJSONObject("layout").array("groups").objects().first { "tool_settings" in it.array("panels").values() }.getInt("id")
             ui(obj("type" to "select_panel_tab", "group" to group, "panel" to "tool_settings"))
+            for (strength in listOf(0.0, 1.0, 2.0)) {
+                settings("tool-setting-grain_depth").performScrollTo().assertIsDisplayed()
+                ui(obj("type" to "set_tool_setting", "id" to "grain_depth", "value" to strength))
+                for (command in listOf("fill", "lasso_fill", "enclose_fill")) {
+                    ui(obj("type" to "invoke", "command" to command))
+                    val field = published().array("tool_settings").objects().single { it.getString("id") == "grain_depth" }
+                    assertEquals("Texture strength is shared by all fill tools", strength, field.getDouble("value"), 0.0)
+                    assertEquals(2.0, field.getJSONObject("numeric").getDouble("max"), 0.0)
+                }
+            }
             for (command in listOf("selection_visible", "selection_editing", "selection_reference")) {
                 settings("tool-action-group-selection-source").performScrollTo().assertIsDisplayed().performClick(); host.drain()
                 compose.onNodeWithTag("tool-action-$command").assertIsDisplayed().performClick(); host.drain()

@@ -154,7 +154,7 @@ fn artwork_sample_identity_rejects_unpublished_pixel_commands() {
         Arc::make_mut(&mut p.operations).push(crate::RasterOperation {
             placement: crate::Affine::IDENTITY,
             coverage,
-            kind: crate::RasterOperationKind::Fill { color: [1., 0., 0., 1.], alpha_locked: false },
+            kind: crate::RasterOperationKind::Fill { texture: Default::default(), color: [1., 0., 0., 1.], alpha_locked: false },
         })
     });
     assert!(!request.matches_artwork(&changed));

@@ -65,6 +65,9 @@ Fill offers Connected for the tapped area and Everywhere for every matching
 colour in the source. Fill and Enclose and Fill share Smooth edges; Auto select
 uses its existing Anti-aliasing switch alone. Fill is available in pen-button
 and finger-tap bindings; four-finger tap remains unbound by default.
+Fill, Lasso fill, Enclose and Fill, Fill Selection and Gradient share Texture
+strength, from 0–200%, starting at 100%. They use the nearest Paper at or below
+the target when the fill starts; 0% or No paper gives a flat fill.
 
 ## Enclose and Fill
 

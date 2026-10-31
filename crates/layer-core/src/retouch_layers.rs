@@ -88,7 +88,7 @@ impl Document {
         let fill = RasterOperation {
             placement: Affine::IDENTITY,
             coverage: CoverageSnapshot::reveal_all(self.artwork.coverage.next_handle(), canvas, [0; 2]),
-            kind: RasterOperationKind::Fill { color: [gray, gray, gray, 1.], alpha_locked: false },
+            kind: RasterOperationKind::Fill { texture: Default::default(), color: [gray, gray, gray, 1.], alpha_locked: false },
         };
         let mut working = self.working.clone();
         working.occurrence = Some(active);

@@ -261,7 +261,7 @@ fn gradients() -> (Engine, InputProducer<PenEvent>) {
             .append_raster_operation(engine.document().scene().source_target(id).unwrap(), RasterOperation {
                 placement: Affine::IDENTITY,
                 coverage: CoverageSnapshot::reveal_all(CoverageHandle::from_index(0), SIZE, [0, 0]),
-                kind: RasterOperationKind::Gradient { start, end, gradient:layer_core::GradientDefinition {stops:colors.into_iter().enumerate().map(|(i,rgba)|layer_core::GradientStop {position:i as f32,color:layer_core::color::RgbColor::from_linear(layer_core::color::RgbSpace::Srgb,rgba).unwrap()}).collect(),interpolation:layer_core::ColorMixSpace::LinearRgb},shape:layer_core::GradientShape::Linear,reverse:false,opacity:1.,alpha_locked:false },
+                kind: RasterOperationKind::Gradient { texture: Default::default(), start, end, gradient:layer_core::GradientDefinition {stops:colors.into_iter().enumerate().map(|(i,rgba)|layer_core::GradientStop {position:i as f32,color:layer_core::color::RgbColor::from_linear(layer_core::color::RgbSpace::Srgb,rgba).unwrap()}).collect(),interpolation:layer_core::ColorMixSpace::LinearRgb},shape:layer_core::GradientShape::Linear,reverse:false,opacity:1.,alpha_locked:false },
             })
             .unwrap();
         image(&mut engine, 1_000_000);
@@ -415,7 +415,7 @@ fn resizing_a_whole_layer_leaves_no_vacated_tiles() {
         .append_raster_operation(paint, RasterOperation {
             placement: Affine::IDENTITY,
             coverage: CoverageSnapshot::reveal_all(CoverageHandle::from_index(0), extent, [0, 0]),
-            kind: RasterOperationKind::Fill { color: [0.2, 0.4, 0.8, 0.5], alpha_locked: false },
+            kind: RasterOperationKind::Fill { texture: Default::default(), color: [0.2, 0.4, 0.8, 0.5], alpha_locked: false },
         })
         .unwrap();
     settled(&mut engine, 0);

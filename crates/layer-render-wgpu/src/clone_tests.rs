@@ -177,7 +177,7 @@ fn clone_strokes_stay_inside_the_selection_and_keep_alpha_locked_transparency() 
         .append_raster_operation(TARGET, RasterOperation {
             placement: layer_core::Affine::IDENTITY,
             coverage,
-            kind: RasterOperationKind::Fill { color: FILL, alpha_locked: false },
+            kind: RasterOperationKind::Fill { texture: Default::default(), color: FILL, alpha_locked: false },
         })
         .unwrap();
     let edit = occurrence_edit(engine.document(), TARGET_USE, |o| o.alpha_locked = true);

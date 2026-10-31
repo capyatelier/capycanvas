@@ -1,8 +1,3 @@
-fn relief_transfer(x: f32) -> f32 {
-    let t = clamp(x, 0.0, 1.0);
-    return t*t*(3.0-2.0*t);
-}
-
 fn relief_inverse(height: f32, profile: vec3<f32>) -> f32 {
     let h = height-profile.x;
     if h <= 0.0 { return -1.0; }
