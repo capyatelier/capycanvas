@@ -681,6 +681,12 @@ impl NativeHost {
         recipe.output_extent(document.composition().size)?;
         Ok(())
     }
+    fn palette_panel(&self, query: &str) -> layer_ui::PalettePanelView {
+        let state = self.session.state();
+        let colors = state.display_colors();
+        layer_ui::PalettePanelView::new(colors, &state.color_library, query,
+            |color| self.swatch_preview(colors, color), self.session.localization())
+    }
     pub fn query(&mut self, query: Value) -> Result<Value, String> {
         #[derive(Deserialize)]
         #[serde(rename_all = "snake_case")]
@@ -769,6 +775,7 @@ impl NativeHost {
             PaletteMenu {
                 target: layer_ui::PaletteMenuTarget,
             },
+            PalettePanel { query: String },
             SwatchSheet {
                 query: String,
                 current: layer_core::color::RgbColor,
@@ -956,6 +963,7 @@ impl NativeHost {
             Query::PaletteMenu { target } => {
                 json!(self.session.state().color_library.menu(target, self.session.localization())?)
             }
+            Query::PalettePanel { query } => json!(self.palette_panel(&query)),
             Query::SwatchSheet { query, current } => {
                 let state = self.session.state();
                 let colors = state.display_colors();
@@ -2348,6 +2356,30 @@ mod tests {
             app.snapshot()["toolbar_prompt"]["title"],
             "Duplicate Toolbar"
         );
+    }
+
+    #[test]
+    fn palette_search_queries_filter_shared_names_without_editing_them() {
+        let mut app = NativeHost::new(layer_ui::Platform::Android).unwrap();
+        let id = app.session.state().color_library.active_palette().id;
+        for (name, query) in [("한글", "한글"), ("Ｆｏｏ", "foo"), ("Foo", "Ｆｏｏ")] {
+            app.dispatch(layer_ui::UiAction::Color { action: layer_ui::ColorAction::Library {
+                action: layer_ui::ColorLibraryAction::RenamePalette { id, name: name.into() },
+            }}).unwrap();
+            let before = app.session.state().color_library.clone();
+            let revision = app.session.engine().document().revision;
+            for text in [query.to_owned(), format!("  {query}  ")] {
+                let found = app.query(json!({"type":"palette_panel","query":text})).unwrap();
+                assert_eq!(found["palettes"].as_array().unwrap().len(), 1);
+                assert_eq!(found["palettes"][0]["id"], id);
+                assert_eq!(found["palettes"][0]["name"], name);
+            }
+            let all = app.query(json!({"type":"palette_panel","query":""})).unwrap();
+            assert_eq!(all["palettes"], app.snapshot()["palette_panel"]["palettes"]);
+            assert!(app.query(json!({"type":"palette_panel","query":"missing palette"})).unwrap()["palettes"].as_array().unwrap().is_empty());
+            assert_eq!(app.session.state().color_library, before);
+            assert_eq!(app.session.engine().document().revision, revision);
+        }
     }
 
     #[test]

@@ -4,7 +4,6 @@ struct ExportForm: View {
     @ObservedObject var editor: ExportController
     @Environment(\.capyInterfaceLanguage) private var language
     private var copy: JSON { editor.copy }
-    private struct WholeNumber: Error { let label: String }
     @State private var fit = false
     @State private var enlarge = false
     @State private var width = "2048"
@@ -200,20 +199,17 @@ struct ExportForm: View {
         }
     }
     private func selectedRecipe() throws -> JSON {
-        func integer(_ text: String, _ label: String) throws -> Int {
-            guard let value = Int(text.trimmingCharacters(in: .whitespacesAndNewlines)) else {
-                throw WholeNumber(label: label)
-            }
-            return value
+        func integer(_ text: String, _ control: String) throws -> UInt64 {
+            try NativeTextContext.number(editor.details["form"]["numeric"][control], value: 0,
+                operation: ["type": "expression", "text": text], language: language)["value"].uint
         }
         return try editor.recipe.replacing("jpeg_quality", with: (format == "Jpeg" || gainmap)
-                ? JSON(integer(quality, "color-features-export-quality")) : editor.recipe["jpeg_quality"])
-            .replacing("size", with: fit ? JSON(["Fit": ["bounds": [integer(width, "color-features-export-maximum-width"), integer(height, "color-features-export-maximum-height")], "enlarge": enlarge]]) : JSON("Original"))
-            .replacing("resolution", with: resolution == "Ppi" ? JSON(["Ppi": integer(ppi, "color-features-export-ppi")]) : JSON(resolution))
+                ? JSON(integer(quality, "quality")) : editor.recipe["jpeg_quality"])
+            .replacing("size", with: fit ? JSON(["Fit": ["bounds": [integer(width, "dimension"), integer(height, "dimension")], "enlarge": enlarge]]) : JSON("Original"))
+            .replacing("resolution", with: resolution == "Ppi" ? JSON(["Ppi": integer(ppi, "ppi")]) : JSON(resolution))
     }
     private func withRecipe(_ action: (JSON) -> Void) {
         do { action(try selectedRecipe()) }
-        catch let error as WholeNumber { editor.invalidNumber(error.label) }
         catch { editor.error = error.localizedDescription }
     }
     private func restoreFields() {

@@ -312,7 +312,8 @@ mod tests {
             serde_json::from_str::<serde_json::Value>(owned.to_str().unwrap()).unwrap()
         };
         assert_eq!(invoke("12+3")["value"], 15.);
-        assert_eq!(invoke("１２＋３")["error"], layer_ui::NumericError::InvalidExpression.message(&localization));
+        assert_eq!(invoke("１２＋３")["value"], 15.);
+        assert_eq!(invoke("１２＋")["error"], layer_ui::NumericError::InvalidExpression.message(&localization));
         assert_eq!(invoke("{ $literal } 日本語")["error"], layer_ui::NumericError::InvalidExpression.message(&localization));
         assert!(std::sync::Arc::ptr_eq(&context.localizer, &localization));
     }

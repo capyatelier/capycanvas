@@ -1,8 +1,6 @@
 use super::*;
 use super::editor::ColorForm;
 
-const MAX_TEXT: usize = 256;
-
 #[derive(Clone, Copy)]
 struct Number {
     value: f64,
@@ -10,9 +8,7 @@ struct Number {
 }
 
 pub(super) fn parse_color_text(text: &str, document: RgbSpace, form: Option<ColorForm>) -> Result<RgbColor, ColorEditorError> {
-    if text.len() > MAX_TEXT {
-        return Err(ColorEditorError::ColorSyntax);
-    }
+    let text = crate::numeric::bounded_numeric_text(text).map_err(|_| ColorEditorError::ColorSyntax)?;
     let lower = text.trim().trim_end_matches(';').trim().to_ascii_lowercase();
     if let Some(rgb) = named(&lower).or_else(|| hex(&lower)) {
         return Ok(RgbColor::new(RgbSpace::Srgb, [rgb[0], rgb[1], rgb[2], 1.])?);
@@ -173,6 +169,18 @@ mod tests {
     use super::*;
     fn parse(text: &str) -> RgbColor { parse_color_text(text, RgbSpace::Srgb, None).unwrap() }
     fn hex_of(color: RgbColor) -> String { ColorLibrary::hex_preview(color) }
+
+    #[test]
+    fn compatibility_color_input_uses_numeric_width_and_native_japanese_punctuation() {
+        for (text, ascii) in [("#１２３４５６", "#123456"), ("＃ＡｂＣｄＥｆ", "#AbCdEf"),
+            ("ｒｇｂ（１２。５ ０ ２５５）", "rgb(12.5 0 255)"),
+            ("ｃｏｌｏｒ（ｓｒｇｂ－ｌｉｎｅａｒ ー１２ ０ １２。５）", "color(srgb-linear -12 0 12.5)")] {
+            assert_eq!(parse(text), parse(ascii), "{text}");
+        }
+        for text in ["#".to_owned() + &"１".repeat(86), "1".repeat(257)] {
+            assert!(parse_color_text(&text, RgbSpace::Srgb, None).is_err());
+        }
+    }
 
     #[test]
     fn css_notations_hex_names_and_bare_numbers_agree() {

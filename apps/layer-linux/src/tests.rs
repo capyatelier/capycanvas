@@ -13937,7 +13937,7 @@ fn native_numeric_preedit_guard() {
         let wheel = (0..display_controllers.n_items()).find_map(|i| display_controllers.item(i).and_downcast::<gtk::EventControllerScroll>()).unwrap();
         stack.set_visible_child_name("entry");
         entry.grab_focus();
-        entry.set_text("１２＋３ ｐｘ");
+        entry.set_text("１２＋ ｐｘ");
         let controllers = entry.observe_controllers();
         let keys = (0..controllers.n_items()).find_map(|i| controllers.item(i).and_downcast::<gtk::EventControllerKey>().filter(|controller| controller.name().as_deref() == Some("numeric-editor-cancel"))).unwrap();
         for preedit in ["にほんご", "简体", "繁體", "한국어", "１２"] {
@@ -13949,14 +13949,14 @@ fn native_numeric_preedit_guard() {
             for button in &steps { button.emit_clicked(); }
             scale.set_value(0.7);
             assert!(wheel.emit_by_name::<bool>("scroll", &[&0f64, &1f64]));
-            assert_eq!(entry.text(), "１２＋３ ｐｘ");
+            assert_eq!(entry.text(), "１２＋ ｐｘ");
             assert_eq!(stack.visible_child_name().as_deref(), Some("entry"));
             assert_eq!(control.value(), 32.);
         }
         text.emit_preedit_changed("");
         assert!(!control.commit_text());
         assert_eq!(control.value(), 32.);
-        assert_eq!(entry.text(), "１２＋３ ｐｘ");
+        assert_eq!(entry.text(), "１２＋ ｐｘ");
         let capture = (0..controllers.n_items()).find_map(|i| controllers.item(i).and_downcast::<gtk::EventControllerKey>().filter(|controller| controller.name().as_deref() == Some("numeric-composition-capture"))).unwrap();
         let changed = std::rc::Rc::new(std::cell::Cell::new(0));
         control.connect_value_changed(glib::clone!(#[strong] changed, move |_| changed.set(changed.get() + 1)));
@@ -13964,13 +13964,13 @@ fn native_numeric_preedit_guard() {
         text.emit_preedit_changed("한국어");
         assert!(!capture.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Return, &36u32, &gdk::ModifierType::empty()]));
         text.emit_preedit_changed("");
-        entry.set_text("12+3 px");
+        entry.set_text("１２＋３ ｐｘ");
         assert!(!control.input_valid());
         for _ in 0..2 {
             assert!(!capture.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Return, &36u32, &gdk::ModifierType::empty()]));
             entry.emit_by_name::<()>("activate", &[]);
             assert!(keys.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Return, &36u32, &gdk::ModifierType::empty()]));
-            assert_eq!(entry.text(), "12+3 px");
+            assert_eq!(entry.text(), "１２＋３ ｐｘ");
             assert_eq!(stack.visible_child_name().as_deref(), Some("entry"));
             assert_eq!(control.value(), 32.);
             assert_eq!(changed.get(), 0);
@@ -13989,7 +13989,7 @@ fn native_numeric_preedit_guard() {
         capture.emit_by_name::<()>("key-released", &[&gdk::Key::Return, &36u32, &gdk::ModifierType::empty()]);
         assert_eq!(control.value(), 15.);
         assert_eq!(stack.visible_child_name().as_deref(), Some("value"));
-        for (literal, reason) in [("一二", layer_ui::NumericError::InvalidExpression), ("１２＋", layer_ui::NumericError::InvalidExpression), ("２３", layer_ui::NumericError::InvalidExpression), ("２＋３", layer_ui::NumericError::InvalidExpression), ("1/0", layer_ui::NumericError::FiniteNumber)] {
+        for (literal, reason) in [("一二", layer_ui::NumericError::InvalidExpression), ("１２＋", layer_ui::NumericError::InvalidExpression), ("1/0", layer_ui::NumericError::FiniteNumber)] {
             stack.set_visible_child_name("entry");
             entry.set_text(literal);
             for button in &steps { button.emit_clicked(); }
@@ -14026,7 +14026,7 @@ fn native_numeric_preedit_guard() {
         let spin_window = adw::ApplicationWindow::builder().application(&*app).content(&spin_control).build();
         spin_window.present();
         pump(40);
-        for (literal, reason) in [("一二", layer_ui::NumericError::InvalidExpression), ("１２＋", layer_ui::NumericError::InvalidExpression), ("２３", layer_ui::NumericError::InvalidExpression), ("２＋３", layer_ui::NumericError::InvalidExpression), ("1/0", layer_ui::NumericError::FiniteNumber)] {
+        for (literal, reason) in [("一二", layer_ui::NumericError::InvalidExpression), ("１２＋", layer_ui::NumericError::InvalidExpression), ("1/0", layer_ui::NumericError::FiniteNumber)] {
             spin.set_text(literal);
             assert!(!spin_control.commit_text());
             spin.update();
@@ -14041,7 +14041,7 @@ fn native_numeric_preedit_guard() {
         assert!(spin_keys.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Escape, &0u32, &gdk::ModifierType::empty()]));
         assert_eq!(spin_control.value(), 4.);
         assert_eq!(spin.text(), "4");
-        spin.set_text("１２＋３");
+        spin.set_text("１２＋");
         let spin_text = spin.delegate().and_downcast::<gtk::Text>().unwrap();
         spin_text.emit_preedit_changed("にほんご");
         assert!(!spin_keys.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Escape, &0u32, &gdk::ModifierType::empty()]));
@@ -14049,24 +14049,24 @@ fn native_numeric_preedit_guard() {
         spin.update();
         spin_text.emit_by_name::<()>("activate", &[]);
         spin.emit_change_value(gtk::ScrollType::StepDown);
-        assert_eq!(spin.text(), "１２＋３");
+        assert_eq!(spin.text(), "１２＋");
         assert_eq!(spin_control.value(), 4.);
         spin_text.emit_preedit_changed("");
         assert!(!spin_control.commit_text());
         assert_eq!(spin_control.value(), 4.);
-        assert_eq!(spin.text(), "１２＋３");
+        assert_eq!(spin.text(), "１２＋");
         assert!(!spin_control.input_valid());
         let spin_capture = (0..spin_controllers.n_items()).find_map(|i| spin_controllers.item(i).and_downcast::<gtk::EventControllerKey>().filter(|controller| controller.name().as_deref() == Some("numeric-composition-capture"))).unwrap();
         spin_text.emit_preedit_changed("简体");
         assert!(!spin_capture.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Return, &36u32, &gdk::ModifierType::empty()]));
         spin_text.emit_preedit_changed("");
-        spin.set_text("12+3");
+        spin.set_text("１２＋３");
         assert!(!spin_control.input_valid());
         assert!(!spin_control.commit_text());
         spin.update();
         spin_text.emit_by_name::<()>("activate", &[]);
         spin.emit_change_value(gtk::ScrollType::StepDown);
-        assert_eq!(spin.text(), "12+3");
+        assert_eq!(spin.text(), "１２＋３");
         assert_eq!(spin_control.value(), 4.);
         spin_capture.emit_by_name::<()>("key-released", &[&gdk::Key::Return, &36u32, &gdk::ModifierType::empty()]);
         assert!(spin_control.input_valid());
@@ -14077,8 +14077,8 @@ fn native_numeric_preedit_guard() {
         assert_eq!(spin_control.value(), 15.);
         spin_capture.emit_by_name::<()>("key-released", &[&gdk::Key::Return, &36u32, &gdk::ModifierType::empty()]);
         spin.set_text("２０００");
-        assert!(!spin_control.commit_text());
-        assert_eq!(spin_control.value(), 15.);
+        assert!(spin_control.commit_text());
+        assert_eq!(spin_control.value(), 16.);
         spin.set_text("2000");
         assert!(spin_control.commit_text());
         assert_eq!(spin_control.value(), 16.);
@@ -14196,7 +14196,7 @@ fn native_numeric_size_apply_refuses_uncommitted_text() {
             let spin = descendant::<gtk::SpinButton>(&number).unwrap();
             let before = ui_session(&w).engine().document().clone();
             let old_value = number.value();
-            for literal in ["一二", "１２＋", "１２＋３", "２＋３", "２３", "1/0"] {
+            for literal in ["一二", "１２＋", "1/0"] {
                 spin.set_text(literal);
                 assert!(!number.commit_text());
                 assert!(!dialog.is_response_enabled("apply"));
@@ -14209,7 +14209,7 @@ fn native_numeric_size_apply_refuses_uncommitted_text() {
                 assert_eq!((current.composition().size, current.revision), (before.composition().size, before.revision));
                 assert!(if image { state(&w).layer_tools.image_size.is_some() } else { state(&w).layer_tools.canvas_size.is_some() });
             }
-            spin.set_text(if image { "256" } else { "512" });
+            spin.set_text(if image { "２５６" } else { "５１２" });
             assert!(number.commit_text());
             pump(30);
             assert!(dialog.is_response_enabled("apply"));

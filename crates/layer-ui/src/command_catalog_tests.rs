@@ -681,10 +681,15 @@ fn toolbar_visibility_search_projects_default_and_literal_custom_titles() {
 }
 
 #[test]
-fn command_numbers_refuse_compatibility_input_and_leave_rejected_edits_unchanged() {
+fn command_numbers_accept_compatibility_input_and_leave_rejected_edits_unchanged() {
     let mut s = session(Platform::Gtk);
+    for (text, value) in [("１２＋３ ｐｘ", 15.), ("２＋３", 5.), ("２３", 23.), ("１２３", 123.), ("１２。５", 12.5)] {
+        s.execute_catalog_command("tool_setting.size", Some(text.into())).unwrap();
+        assert_eq!(s.state.brush.diameter, value);
+        assert_eq!(s.engine.configured_brush().diameter, value);
+    }
     let before = s.state.brush.diameter;
-    for text in ["ｓｑｒｔ（－１）", "１２＋３ ｐｘ", "２＋３", "２３", "１２３", "sqrt(-1)"] {
+    for text in ["ｓｑｒｔ（－１）", "１２＋", "ｐｒｉｎｔ（１）", "sqrt(-1)"] {
         assert!(s.execute_catalog_command("tool_setting.size", Some(text.into())).is_err());
         assert_eq!(s.state.brush.diameter, before);
         assert_eq!(s.engine.configured_brush().diameter, before);

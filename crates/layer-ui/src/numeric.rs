@@ -1,7 +1,7 @@
 //! Platform-neutral number-field policy. Native widgets own focus, selection,
 //! pointer capture and unfinished text, never numeric math or expression parsing.
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::{borrow::Cow, sync::Arc};
 use crate::{Localizer, MessageId};
 use layer_core::ResourceLabel;
 
@@ -82,8 +82,17 @@ pub(crate) fn parse_numeric_text(source: &str) -> Result<f32, NumericError> {
     if !value.is_finite() { return Err(NumericError::FiniteNumber); }
     Ok(value)
 }
-fn bounded_numeric_text(source: &str) -> Result<&str, NumericError> {
-    if source.len() > 256 { Err(NumericError::ExpressionTooLong) } else { Ok(source) }
+pub(crate) fn bounded_numeric_text(source: &str) -> Result<Cow<'_, str>, NumericError> {
+    if source.len() > 256 { return Err(NumericError::ExpressionTooLong); }
+    let ascii = |character| match character {
+        '\u{ff01}'..='\u{ff5e}' => char::from_u32(character as u32 - 0xfee0).unwrap(),
+        '。' => '.',
+        'ー' => '-',
+        character => character,
+    };
+    Ok(if source.chars().any(|character| ascii(character) != character) {
+        Cow::Owned(source.chars().map(ascii).collect())
+    } else { Cow::Borrowed(source) })
 }
 fn numeric_label(label: &ResourceLabel, localization: &Localizer) -> Arc<str> {
     match label {
@@ -426,11 +435,7 @@ impl NumericControl {
                 }
                 self.value_at_position(position)
             }
-            NumericOperation::Expression { text } => {
-                let text = bounded_numeric_text(&text)?;
-                if text.trim().is_empty() { self.default_value.ok_or(NumericError::ExpressionRequired)? }
-                else { self.expression(text)? / self.scale }
-            }
+            NumericOperation::Expression { text } => self.expression(&text)?,
             NumericOperation::Dial { x, y, radius } => self.dial_value(value, x, y, radius)?,
         };
         if !resolved.is_finite() {
@@ -516,7 +521,9 @@ impl NumericControl {
         trim_fractional_zeros(&text)
     }
     fn expression(&self, source: &str) -> Result<f64, NumericError> {
-        let text = bounded_numeric_text(source)?.trim();
+        let text = bounded_numeric_text(source)?;
+        let text = text.trim();
+        if text.is_empty() { return self.default_value.ok_or(NumericError::ExpressionRequired); }
         let text = if self.unit.is_empty() { text }
             else { text.strip_suffix(&self.unit).unwrap_or(text).trim_end() };
         // fasteval has a diagnostic print() builtin. Number fields expose only
@@ -535,7 +542,7 @@ impl NumericControl {
             ("sqrt", [value]) => Some(value.sqrt()),
             _ => None,
         };
-        fasteval::ez_eval(text, &mut namespace).map_err(|_| NumericError::InvalidExpression)
+        fasteval::ez_eval(text, &mut namespace).map(|value| value / self.scale).map_err(|_| NumericError::InvalidExpression)
     }
 }
 
@@ -982,22 +989,42 @@ mod input_tests {
     use super::*;
 
     #[test]
-    fn compatibility_numeric_input_is_refused_without_rewriting_literal_text() {
+    fn numeric_width_conversion_borrows_unchanged_text_and_maps_all_fullwidth_ascii() {
+        for text in ["12.5", "-12", "日本", "١٢", "−2"] {
+            assert!(matches!(bounded_numeric_text(text).unwrap(), Cow::Borrowed(value) if value == text));
+        }
+        let fullwidth: String = ('\u{ff01}'..='\u{ff5e}').collect();
+        assert!(fullwidth.len() > 256);
+        for character in fullwidth.chars() {
+            let text = character.to_string();
+            assert_eq!(bounded_numeric_text(&text).unwrap(), char::from_u32(character as u32 - 0xfee0).unwrap().to_string());
+        }
+        assert_eq!(bounded_numeric_text(&fullwidth).unwrap_err(), NumericError::ExpressionTooLong);
+    }
+
+    #[test]
+    fn compatibility_numeric_input_is_accepted_without_rewriting_literal_text() {
         let control = NumericControl::number(-100., 100., 0.1, 1).unit("px");
-        for text in ["１２．５ ｐｘ", "－２＋３", "＋５＊２", "ｓｑｒｔ（９）", "２＾３", "５０％", "１２＋", "２＋３", "２３", "１２３", "١٢", "12,5", "−2", "2²"] {
+        for (text, value) in [("１２．５ ｐｘ", 12.5), ("１２。５", 12.5), ("ー１２", -12.), ("－２＋３", 1.),
+            ("＋５＊２", 10.), ("ｓｑｒｔ（９）", 3.), ("２＾３", 8.), ("２＋３", 5.), ("２３", 23.), ("１２３", 100.)] {
             let operation = NumericOperation::Expression { text: text.into() };
             let encoded = serde_json::to_string(&operation).unwrap();
             assert_eq!(serde_json::from_str::<NumericOperation>(&encoded).unwrap(), operation);
-            assert!(control.resolve(32., operation.clone()).is_err(), "{text}");
+            assert_eq!(control.resolve(32., operation.clone()).unwrap().value, value, "{text}");
             assert_eq!(operation, NumericOperation::Expression { text: text.into() });
         }
-        for (text, value) in [("12.5 px", 12.5), ("-2+3", 1.), ("+5*2", 10.), ("sqrt(9)", 3.), ("2^3", 8.)] {
-            assert_eq!(control.resolve(0., NumericOperation::Expression { text: text.into() }).unwrap().value, value);
+        for text in ["１２＋", "١٢", "12,5", "−2", "2²", "ｐｒｉｎｔ（１）", "＂１２＂"] {
+            assert!(control.resolve(32., NumericOperation::Expression { text: text.into() }).is_err(), "{text}");
         }
         let pressure = NumericControl::number(0.1, 5., 0.1, 1).unit("×");
         assert_eq!(pressure.resolve(0., NumericOperation::Expression { text: "　1.5 × ".into() }).unwrap().value, 1.5);
         let percent = NumericControl::percent();
-        assert_eq!(percent.resolve(0., NumericOperation::Expression { text: "50%".into() }).unwrap().value, 0.5);
+        for text in ["50%", "５０％"] {
+            assert_eq!(percent.resolve(0., NumericOperation::Expression { text: text.into() }).unwrap().value, 0.5);
+        }
+        for (text, value) in [("１２．５", 12.5), ("１２。５", 12.5), ("ー１２", -12.), ("－１２", -12.)] {
+            assert_eq!(parse_numeric_text(text).unwrap(), value);
+        }
     }
 
     #[test]

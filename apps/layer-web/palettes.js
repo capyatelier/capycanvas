@@ -129,20 +129,14 @@ export function createPalettes({ app, state, workspace, element, button, icon, p
       if (show && editing) { commitName(); if (editing) return; }
       expanded.hidden = true; chooser.hidden = !show; normal.inert = show;
       if (!show) { selector.focus(); return; }
-      filter();
+      choices();
       (typing ? search : list.querySelector(".palette-choice[aria-selected=true]") ?? search).focus();
     }
     function expand(show) {
       chooser.hidden = true; expanded.hidden = !show; normal.inert = show; layoutGrids();
       (show ? expanded : history).lastElementChild?.focus();
     }
-    function filter() {
-      const query = search.value.trim().toLowerCase();
-      let visible = 0;
-      for (const row of list.children) { row.hidden = !row.dataset.name.toLowerCase().includes(query); visible += !row.hidden; }
-      empty.hidden = visible > 0;
-    }
-    search.addEventListener("input", filter);
+    search.addEventListener("input", choices);
     function showLabel() { editor.hidden = true; name.hidden = false; }
     function editName() {
       editing = true;
@@ -250,7 +244,8 @@ export function createPalettes({ app, state, workspace, element, button, icon, p
     const resize = new ResizeObserver(() => { cancelAnimationFrame(layoutFrame); layoutFrame = requestAnimationFrame(layoutGrids); });
     resize.observe(body);
     function choices() {
-      list.replaceChildren(...view.palettes.map(palette => {
+      const palettes = app.palette_panel(search.value).palettes;
+      list.replaceChildren(...palettes.map(palette => {
         const row = button("", () => {
           if (editing) { commitName(); if (editing) return; }
           if (library({ op: "select_palette", id: palette.id }, report)) browse(false);
@@ -263,7 +258,7 @@ export function createPalettes({ app, state, workspace, element, button, icon, p
         row.append(element("span", "palette-choice-name", palette.name), strip);
         return row;
       }));
-      filter();
+      empty.hidden = palettes.length > 0;
     }
     function sync() {
       const s = selectedSwatch();

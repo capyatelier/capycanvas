@@ -120,6 +120,7 @@ fn request(json: &str) -> Result<Value, String> {
             | "palette_menu"
             | "palette_reorder_preview"
             | "palette_action"
+            | "palette_panel"
             | "swatch_sheet"
             | "reveal_panel"
             | "canvas_bar_layout"
@@ -560,6 +561,8 @@ mod tests {
             json!({"type":"header","request":{"op":"geometry","model":host.session.state().workspace.layout.header.projected_for(layer_ui::Platform::Windows),"editing":false,"documents":1,"width":1400,"insets":[0,0],"metrics":[]}}),
             json!({"type":"swatch_sheet","query":"","current":layer_core::color::RgbColor::WHITE}),
             json!({"type":"swatch_sheet","query":"zzz","current":layer_core::color::RgbColor::WHITE}),
+            json!({"type":"palette_panel","query":""}),
+            json!({"type":"palette_panel","query":"zzz"}),
         ] {
             let expected = host.query(query.clone()).unwrap();
             let result = metadata(super::query(&mut host, &query.to_string()).unwrap());

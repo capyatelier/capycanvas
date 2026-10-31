@@ -802,10 +802,10 @@ impl PresetCatalog<'_> {
         BrowserTab::Group(PresetGroup::Sketch)
     }
     pub fn tiles(&self, tab: BrowserTab, query: &str) -> Vec<PresetView> {
-        let query = query.trim().to_lowercase();
+        let query = crate::search::normalize(query.trim());
         if !query.is_empty() {
             return self.get(&PresetKey::Last).into_iter().chain(self.all())
-                .filter(|view| format!("{} {} {}", view.name, view.dimensions, view.details).to_lowercase().contains(&query)).collect();
+                .filter(|view| crate::search::normalize(&format!("{} {} {}", view.name, view.dimensions, view.details)).contains(&query)).collect();
         }
         match tab {
             BrowserTab::Recent => self.recent(),
@@ -1126,6 +1126,19 @@ mod tests {
             let surface = opened.paper(None);
             assert_eq!(surface.texture, layer_core::paper::built_in_paper("cold_press").unwrap().texture);
             assert_eq!(layer_core::paper::light(opened.scene().effect(paper).unwrap()).unwrap().relief, 1.);
+        }
+    }
+
+    #[test]
+    fn preset_search_matches_width_and_canonical_names_without_renaming_them() {
+        let l = english();
+        let mut settings = NewDocumentSettings::default();
+        let setup = catalog(&settings, &l).tiles(BrowserTab::Recent, "CHALK")[0].setup.clone();
+        assert_eq!(catalog(&settings, &l).tiles(BrowserTab::Recent, " ＣＨＡＬＫ ")[0].name, "Chalkboard");
+        for (name, query) in [("한글", "한글"), ("Ｆｏｏ", "foo"), ("Foo", "Ｆｏｏ")] {
+            settings.apply(NewDocumentAction::SaveSetup { name: name.into(), group: PresetGroup::Yours, setup: setup.clone() }).unwrap();
+            let found = catalog(&settings, &l).tiles(BrowserTab::Recent, query);
+            assert!(found.iter().any(|view| view.name == name), "{name}: {query}");
         }
     }
 

@@ -670,11 +670,15 @@ private fun DrawScope.checker(colors: Palette) {
     val host = LocalCanvasHost.current
     val colors = LocalPalette.current
     var query by remember { mutableStateOf("") }
+    var shown by remember { mutableStateOf<JSONObject?>(null) }
     val focus = remember { FocusRequester() }
     var addBounds by remember { mutableStateOf(Rect.Zero) }
     LaunchedEffect(Unit) { if (controller.keyboard) focus.requestFocus() }
-    val palettes = view.array("palettes").objects()
-    val matches = palettes.filter { it.getString("name").lowercase().contains(query.trim().lowercase()) }
+    LaunchedEffect(query, view.array("palettes").toString()) {
+        val text = query
+        host.query(obj("type" to "palette_panel", "query" to text)) { value -> if (query == text) shown = value as? JSONObject }
+    }
+    val matches = (shown ?: view).array("palettes").objects()
     Column(modifier.blockInput().testTag("palette-browser"), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             CoreTextField(query, { query = it }, Modifier.weight(1f).paletteFocus(controller).focusRequester(focus).testTag("palette-search"), height = panelMetrics().height,

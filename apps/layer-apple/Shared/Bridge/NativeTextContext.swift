@@ -59,6 +59,13 @@ extension KeyPress {
             return try JSON.decode(response)
         } catch { return JSON(["error": error.localizedDescription]) }
     }
+    static func number(_ control: JSON, value: Double, operation: [String: Any], language: String) throws -> JSON {
+        let request = try JSON(["language": language, "request": ["control": control.raw, "value": value, "operation": operation]]).encoded()
+        guard let response = request.withCString({ takeNativeText(capy_apple_numeric($0)) }) else { throw HostFailure(message: "Numeric input failed") }
+        let value = try JSON.decode(response)
+        if !value["error"].isNull { throw HostFailure(message: value["error"].string) }
+        return value
+    }
     static func caption(_ request: [String: Any], language: String) -> String {
         do {
             let text = try JSON(["language": language, "request": request]).encoded()

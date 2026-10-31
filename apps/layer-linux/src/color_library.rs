@@ -485,18 +485,11 @@ impl PalettePanel {
             toggle.grab_focus();
         }
     }
-    fn filter(&self) {
-        let query = self.search.text().trim().to_lowercase();
-        self.empty
-            .set_visible(self.library.borrow().as_ref().is_none_or(|l| {
-                !l.palettes
-                    .iter()
-                    .any(|p| p.name.to_lowercase().contains(&query))
-            }));
-        self.list.set_filter_func(move |row| {
-            row.tooltip_text()
-                .is_some_and(|n| n.to_lowercase().contains(&query))
-        });
+    fn filter(self: &Rc<Self>) {
+        if let Some(workspace) = self.workspace.borrow().upgrade()
+            && let Some(library) = self.library.borrow().as_ref() {
+            self.rebuild_chooser(library, &workspace.localization());
+        }
     }
     fn edit_name(&self) {
         self.editing.set(true);
@@ -912,7 +905,10 @@ impl PalettePanel {
         while let Some(child) = self.list.first_child() {
             self.list.remove(&child);
         }
-        for palette in &library.palettes {
+        let query = self.search.text();
+        let mut matches = library.matching_palettes(&query).peekable();
+        self.empty.set_visible(matches.peek().is_none());
+        for palette in matches {
             let row = gtk::ListBoxRow::new();
             row.set_tooltip_text(Some(&palette.name));
             row.set_widget_name(&format!("palette-choice-{}", palette.id));
@@ -945,7 +941,6 @@ impl PalettePanel {
             row.set_child(Some(&content));
             self.list.append(&row);
         }
-        self.filter();
     }
     fn ask_name(self: &Rc<Self>, initial: &str, id: Option<u64>) {
         let Some(w) = self.workspace.borrow().upgrade() else {

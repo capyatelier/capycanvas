@@ -10,7 +10,6 @@
 #include <winrt/Microsoft.UI.Xaml.Controls.Primitives.h>
 #include <winrt/Microsoft.Windows.Storage.Pickers.h>
 #include <winrt/Windows.UI.ViewManagement.h>
-#include <cwctype>
 #include <limits>
 #include <set>
 
@@ -128,20 +127,20 @@ struct PalettesView:std::enable_shared_from_this<PalettesView>{
         if(show&&editing){commitName();if(editing)return;}
         expanded.Visibility(Visibility::Collapsed);chooser.Visibility(show?Visibility::Visible:Visibility::Collapsed);normal.IsHitTestVisible(!show);normal.Opacity(show?0:1);
         if(!show){selector.Focus(FocusState::Programmatic);return;}
-        filter();
-        Control target=search;
-        if(!typing)for(auto child:list.Children())if(auto row=child.try_as<Button>();row&&flag(row.Tag().try_as<J>(),L"palette_active"))target=row;
-        target.Focus(FocusState::Programmatic);
+        filter(true,typing);
     }
-    void filter(){
-        std::wstring query=search.Text().c_str();for(auto& ch:query)ch=wchar_t(std::towlower(ch));
-        auto trim=[](std::wstring s){auto a=s.find_first_not_of(L" \t");auto b=s.find_last_not_of(L" \t");return a==std::wstring::npos?std::wstring{}:s.substr(a,b-a+1);};
-        query=trim(query);int visible=0;
-        for(auto child:list.Children()){
-            auto row=child.as<Button>();std::wstring label=AutomationProperties::GetName(row).c_str();for(auto& ch:label)ch=wchar_t(std::towlower(ch));
-            bool shown=label.find(query)!=std::wstring::npos;row.Visibility(shown?Visibility::Visible:Visibility::Collapsed);visible+=shown;
-        }
-        empty.Visibility(visible?Visibility::Collapsed:Visibility::Visible);
+    void filter(bool focus=false,bool typing=true){
+        auto query=search.Text();auto weak=weak_from_this();
+        QueryWorkspace(data->query,O({{L"type",S(L"palette_panel")},{L"query",S(query)}}),[weak,query,focus,typing](J reply){
+            auto self=weak.lock();if(!self||self->search.Text()!=query)return;
+            auto error=str(reply,L"error");if(!error.empty()){self->report(error);return;}
+            self->choices(array(object(reply,L"result"),L"palettes"));
+            if(focus&&self->chooser.Visibility()==Visibility::Visible){
+                Control target=self->search;
+                if(!typing)for(auto child:self->list.Children())if(auto row=child.try_as<Button>();row&&flag(row.Tag().try_as<J>(),L"palette_active"))target=row;
+                target.Focus(FocusState::Programmatic);
+            }
+        });
     }
     void editName(){
         editing=true;hstring value;
@@ -418,9 +417,9 @@ struct PalettesView:std::enable_shared_from_this<PalettesView>{
         if(nameLabel.Text()!=label)nameLabel.Text(label);
         tooltip(name,data->caption(L"palettes",L"rename_help"));AutomationProperties::SetName(name,label);
     }
-    void choices(){
+    void choices(A const& palettes){
         list.Children().Clear();auto weak=weak_from_this();
-        for(auto value:array(view(),L"palettes")){
+        for(auto value:palettes){
             auto palette=value.GetObject();auto id=uint64_t(num(palette,L"id"));auto title=str(palette,L"name");
             auto row=button(data,title,[weak,id]{if(auto self=weak.lock()){
                 if(self->editing){self->commitName();if(self->editing)return;}
@@ -441,7 +440,7 @@ struct PalettesView:std::enable_shared_from_this<PalettesView>{
                 if(auto self=weak.lock())self->menu(O({{L"kind",S(L"palette")},{L"id",N(double(id))}}),sender.as<FrameworkElement>(),title);});
             list.Children().Append(row);
         }
-        filter();
+        empty.Visibility(palettes.Size()?Visibility::Collapsed:Visibility::Visible);
     }
     void render(){
         ensureChecker();
@@ -464,7 +463,7 @@ struct PalettesView:std::enable_shared_from_this<PalettesView>{
         add.IsEnabled(flag(v,L"can_name"));name.IsEnabled(flag(v,L"can_name"));
         auto nextHistory=array(v,L"history").Stringify();
         if(nextHistory!=historyKey){historyKey=nextHistory;historyTiles(history,historyCells,false);historyTiles(expanded,expandedCells,true);}
-        if(nextChoices!=choicesKey){choicesKey=nextChoices;choices();}
+        if(nextChoices!=choicesKey){choicesKey=nextChoices;filter();}
         auto nextName=str(v,L"name");if(selectorLabel.Text()!=nextName){selectorLabel.Text(nextName);tooltip(selector,data->caption(O({{L"type",S(L"choose_palette")},{L"name",S(nextName)}})));}AutomationProperties::SetName(selector,data->caption(L"palettes",L"choose"));
         if(detail.Text()!=str(v,L"color_detail"))detail.Text(str(v,L"color_detail"));
         sync();arrange();

@@ -405,11 +405,6 @@ import Darwin
         wake?()
     }
     func resolveNumber(_ control: JSON, value: Double, operation: [String: Any]) throws -> JSON {
-        let request = try JSON(["language": interfaceLanguage, "request": ["control": control.raw, "value": value, "operation": operation]]).encoded()
-        guard let response = request.withCString({ takeNativeText(capy_apple_numeric($0)) }) else { throw HostFailure(message: "Numeric input failed") }
-
-        let value = try JSON.decode(response)
-        if !value["error"].isNull { throw HostFailure(message: value["error"].string) }
-        return value
+        try NativeTextContext.number(control, value: value, operation: operation, language: interfaceLanguage)
     }
 }

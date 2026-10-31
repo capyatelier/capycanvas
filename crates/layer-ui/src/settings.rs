@@ -2826,7 +2826,7 @@ mod localization_tests {
             ..Default::default()
         };
         let mut settings = Settings::default();
-        let action = PreferenceAction::Edit { id: PreferenceId::PanSpeed, value: PreferenceValue::Text("１．５".into()) };
+        let action = PreferenceAction::Edit { id: PreferenceId::PanSpeed, value: PreferenceValue::Text("１，５".into()) };
         state.edit(&mut settings, action.clone(), Platform::Gtk, &english);
         let error = state.error.clone().unwrap();
         let before = settings.clone();
@@ -3060,16 +3060,18 @@ mod numeric_input_tests {
     use super::*;
 
     #[test]
-    fn settings_compatibility_numeric_text_is_refused_without_mutation() {
+    fn settings_numeric_text_accepts_width_and_keeps_invalid_edits_unchanged() {
         let localization = Localizer::shared(UiLanguage::English);
         let mut settings = Settings::default();
         let before = settings.clone();
-        for text in ["１．５", "２３", "１２３", "５", "１＋１", "１，５", "２ ×", "ＮａＮ", "ｉｎｆ", "ﷺﷺﷺﷺﷺﷺﷺﷺﷺﷺﷺﷺ"] {
+        for text in ["２３", "１２３", "５", "１＋１", "１，５", "２ ×", "ＮａＮ", "ｉｎｆ", "ﷺﷺﷺﷺﷺﷺﷺﷺﷺﷺﷺﷺ"] {
             assert!(settings.localized_edit(PreferenceId::PanSpeed, PreferenceValue::Text(text.into()), Platform::Gtk, &localization).is_err(), "{text}");
             assert_eq!(settings, before);
         }
-        settings.localized_edit(PreferenceId::PanSpeed, PreferenceValue::Text("1.5".into()), Platform::Gtk, &localization).unwrap();
-        assert_eq!(settings.pan_speed, 1.5);
+        for text in ["1.5", "１．５", "１。５"] {
+            settings.localized_edit(PreferenceId::PanSpeed, PreferenceValue::Text(text.into()), Platform::Gtk, &localization).unwrap();
+            assert_eq!(settings.pan_speed, 1.5);
+        }
         settings.validate_localized(&localization).unwrap();
     }
 }

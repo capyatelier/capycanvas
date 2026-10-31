@@ -186,6 +186,25 @@ export async function checkPalettes({ call, evaluate, settle, reload }) {
   assert.equal(await evaluate(`document.querySelectorAll('${P} .palette-choice').length`), (await library()).palettes.length);
   assert.equal(await evaluate(`document.querySelector('${P} .palette-choice[aria-selected=true]').dataset.name`), "Ocean Study", "active row is highlighted");
   await shot("chooser");
+  const searchPalette = async text => {
+    await evaluate(`(()=>{const field=document.querySelector('${P} .palette-search');field.value=${JSON.stringify(text)};field.dispatchEvent(new Event('input'));})()`);
+    await idle();
+  };
+  const selectedPalette = (await active()).id;
+  for (const theme of ["light", "dark"]) {
+    await send({type:"set_theme",theme});
+    for (const [name, query] of [["한글","한글"],["Ｆｏｏ","foo"],["Foo","Ｆｏｏ"]]) {
+      await send({type:"color",action:{op:"library",action:{op:"rename_palette",id:selectedPalette,name}}});
+      await searchPalette(` ${query} `);
+      assert.deepEqual(await evaluate(`[...document.querySelectorAll('${P} .palette-choice')].map(n=>n.dataset.name)`),[name]);
+      assert.equal(await evaluate(`document.querySelector('${P} .palette-search').value`),` ${query} `);
+      await searchPalette("missing palette");
+      assert.equal(await evaluate(`document.querySelectorAll('${P} .palette-choice').length`),0);
+      await searchPalette("");
+      assert.equal((await active()).name,name);
+    }
+  }
+  await send({type:"color",action:{op:"library",action:{op:"rename_palette",id:selectedPalette,name:"Ocean Study"}}});
   await type("zzz");
   assert.ok(await visible(`${P} .palette-no-results`), "no matching palettes");
   await evaluate(`(()=>{const s=document.querySelector('${P} .palette-search');s.value='';s.dispatchEvent(new Event('input'));})()`);

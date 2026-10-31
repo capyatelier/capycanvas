@@ -116,7 +116,7 @@ extension XCTestCase {
         expectation(for: NSPredicate(format: "enabled == YES"), evaluatedWith: app.buttons["export-choose-file"])
         waitForExpectations(timeout: 20)
         let fit = app.checkBoxes["export-fit"]; reveal(fit); workspaceActivate(fit)
-        field("export-width", "64"); field("export-height", "64")
+        field("export-width", "６４"); field("export-height", "64")
         let preview = app.buttons["export-preview"]
         reveal(preview); workspaceActivate(preview)
         XCTAssertTrue(app.staticTexts["export-output-size"].waitForExistence(timeout: 60))

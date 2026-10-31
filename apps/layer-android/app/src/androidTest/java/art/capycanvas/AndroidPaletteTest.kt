@@ -101,16 +101,18 @@ class AndroidPaletteTest {
     private fun hold(at: Offset) { event(MotionEvent.ACTION_DOWN, at); SystemClock.sleep(ViewConfiguration.getLongPressTimeout() + 250L) }
     private fun capture(name: String) { settle(); screenshot("validation/palettes/$name.png") }
     private fun key(code: Int, meta: Int = 0) { pressKey(code, meta); settle() }
+    private fun editable(node: SemanticsNode): SemanticsNode? = if (node.config.getOrNull(SemanticsActions.SetText) != null) node else node.children.firstNotNullOfOrNull(::editable)
     private fun setText(tag: String, value: String) {
-        val target = node(tag)
+        lateinit var input: android.view.View
         instrumentation.runOnMainSync {
-            fun editable(n: SemanticsNode): SemanticsNode? = if (n.config.getOrNull(SemanticsActions.SetText) != null) n else n.children.firstNotNullOfOrNull(::editable)
+            val (root, target) = checkNotNull(tagged(tag(tag))) { "Missing $tag" }
+            input = root.view
             assertTrue(checkNotNull(editable(target)).config[SemanticsActions.SetText].action!!.invoke(AnnotatedString(value)))
         }
         instrumentation.runOnMainSync {
-            owner.view.context.getSystemService(android.view.inputmethod.InputMethodManager::class.java).hideSoftInputFromWindow(owner.view.windowToken, 0)
+            input.context.getSystemService(android.view.inputmethod.InputMethodManager::class.java).hideSoftInputFromWindow(input.windowToken, 0)
         }
-        waitFor("keyboard hidden") { owner.view.rootWindowInsets?.isVisible(android.view.WindowInsets.Type.ime()) != true }
+        waitFor("keyboard hidden") { input.rootWindowInsets?.isVisible(android.view.WindowInsets.Type.ime()) != true }
         SystemClock.sleep(400)
     }
     private fun switchWorkspace(id: String) {
@@ -241,6 +243,27 @@ class AndroidPaletteTest {
         instrumentation.runOnMainSync { node("palette-name-editor").config[SemanticsActions.OnImeAction].action!!.invoke() }
         waitFor("rename commits") { view().array("swatches").objects()[0].getString("name") == "Unique swatch" }
         assertFalse(exists("palette-name-editor"))
+    }
+
+    @Test fun chooserMatchesSharedUnicodeSearchWithoutRenamingPalettes() {
+        showPalettes()
+        val id = view().getLong("palette")
+        for (theme in listOf("light", "dark")) {
+            action(obj("type" to "set_theme", "theme" to theme))
+            for ((name, query) in listOf("한글" to "한글", "Ｆｏｏ" to "foo", "Foo" to "Ｆｏｏ")) {
+                assertNull(library(obj("op" to "rename_palette", "id" to id, "name" to name)))
+                if (!exists("palette-browser")) tap(center("palette-chooser"))
+                setText("palette-search", " $query ")
+                waitFor("normalized palette $name") { exists("palette-choice-$id") && library().array("palettes").objects().none { it.getLong("id") != id && exists("palette-choice-${it.getLong("id")}") } }
+                assertEquals(name, node("palette-choice-$id").config[SemanticsProperties.ContentDescription].single())
+                assertEquals(" $query ", checkNotNull(editable(node("palette-search"))).config[SemanticsProperties.EditableText].text)
+                setText("palette-search", "missing palette")
+                waitFor("empty palette search") { exists("palette-empty-search") && !exists("palette-choice-$id") }
+                setText("palette-search", "")
+                waitFor("palette search reset") { exists("palette-choice-$id") }
+                assertEquals(name, library().array("palettes").objects().first { it.getLong("id") == id }.getString("name"))
+            }
+        }
     }
 
     @Test fun chooserSearchesSelectsAndUsesSharedMenus() {

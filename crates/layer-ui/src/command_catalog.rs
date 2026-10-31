@@ -1741,7 +1741,7 @@ mod localization_tests {
         let entry = session.command_search.entries.iter().find(|entry| entry.descriptor.id == "tool_setting.size").unwrap().descriptor.clone();
         session.command_search_action(CommandSearchAction::Select { id: entry.id.clone() }).unwrap();
         session.command_search_action(CommandSearchAction::Execute { id: entry.id.clone(), value: None }).unwrap();
-        session.command_search_action(CommandSearchAction::Execute { id: entry.id.clone(), value: Some("１２".into()) }).unwrap();
+        session.command_search_action(CommandSearchAction::Execute { id: entry.id.clone(), value: Some("１２＋".into()) }).unwrap();
         session.command_search.recent = vec!["command.fit_canvas".into()];
         let before = session.state.command_search.clone().unwrap();
         let selected = before.results[before.selected].id.clone();

@@ -83,6 +83,12 @@ extension XCTestCase {
         let rows = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "palette-choice-"))
         XCTAssertTrue(rows.firstMatch.waitForExistence(timeout: 5))
         XCTAssertGreaterThanOrEqual(rows.count, 10, "Apple installs the starter palettes")
+        search.typeText("Ｉｎｋ")
+        expectation(for: NSPredicate { _, _ in rows.count == 1 && rows.firstMatch.label == "Ink" }, evaluatedWith: app)
+        waitForExpectations(timeout: 10)
+        search.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 3))
+        expectation(for: NSPredicate { _, _ in rows.count >= 10 }, evaluatedWith: app)
+        waitForExpectations(timeout: 10)
         let other = rows.allElementsBoundByIndex.first { $0.label != original }!
         let otherName = other.label
         workspaceActivate(other)

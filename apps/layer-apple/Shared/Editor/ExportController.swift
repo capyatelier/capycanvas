@@ -50,10 +50,6 @@ import SwiftUI
             }
         }
     }
-    func invalidNumber(_ label: String) {
-        projectedError = JSON(["type": "native_caption", "caption": ["type": "numeric_error", "reason": ["reason": "whole_number", "label": ["message": label]]]])
-        refreshCopy()
-    }
     private func blockedRange() {
         busy = false
         if closing { finish(nil); return }

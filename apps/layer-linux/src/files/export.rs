@@ -1337,8 +1337,8 @@ mod numeric_tests {
                 assert!(numeric_inputs_ready(std::slice::from_ref(&row), true));
                 let accepted = row.value();
                 stack.set_visible_child_name("entry");
-                input.set_text("１２３");
-                assert!(!numeric_inputs_ready(std::slice::from_ref(&row), true));
+                input.set_text(&valid.chars().map(|digit| char::from_u32(digit as u32 + 0xfee0).unwrap()).collect::<String>());
+                assert!(numeric_inputs_ready(std::slice::from_ref(&row), true));
                 assert_eq!(row.value(), accepted);
                 stack.set_visible_child_name("entry");
                 input.set_text(invalid);

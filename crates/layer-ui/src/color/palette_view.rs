@@ -96,13 +96,13 @@ impl SwatchSheetView {
         localizer: &crate::Localizer,
     ) -> Self {
         let typed = query.trim();
-        let query = typed.to_lowercase();
+        let query = crate::search::normalize(typed);
         let hex = query.trim_start_matches('#');
         let found = |name: &str, color: RgbColor| {
-            name.to_lowercase().contains(&query) || (!hex.is_empty() && ColorLibrary::hex_preview(color)[1..].to_lowercase().contains(hex))
+            crate::search::normalize(name).contains(&query) || (!hex.is_empty() && ColorLibrary::hex_preview(color)[1..].to_lowercase().contains(hex))
         };
         let section = |palette: Option<u64>, title: &str, entries: Vec<(Option<u64>, &str, RgbColor)>| {
-            let whole = query.is_empty() || title.to_lowercase().contains(&query);
+            let whole = query.is_empty() || crate::search::normalize(title).contains(&query);
             let total = entries.len();
             let tiles: Vec<_> = entries
                 .into_iter()
@@ -180,6 +180,10 @@ impl ColorLibrary {
             Self::hex_preview(color),
             color.space.name()
         )
+    }
+    pub fn matching_palettes(&self, query: &str) -> impl Iterator<Item = &ColorPalette> {
+        let query = crate::search::normalize(query.trim());
+        self.palettes.iter().filter(move |palette| query.is_empty() || crate::search::normalize(&palette.name).contains(&query))
     }
     pub fn preview_colors(palette: &ColorPalette) -> impl Iterator<Item = RgbColor> + '_ {
         let count = palette.swatches.len().min(5);
@@ -271,6 +275,7 @@ impl PalettePanelView {
     pub fn new(
         colors: &ColorState,
         library: &ColorLibrary,
+        query: &str,
         preview: impl Fn(RgbColor) -> [f32; 4],
         localizer: &crate::Localizer,
     ) -> Self {
@@ -300,8 +305,7 @@ impl PalettePanelView {
                 .map(|c| tile(None, &recently_used, *c))
                 .collect(),
             palettes: library
-                .palettes
-                .iter()
+                .matching_palettes(query)
                 .map(|p| PaletteChoiceView {
                     id: p.id,
                     name: p.name.clone(),
@@ -321,6 +325,23 @@ impl PalettePanelView {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn swatch_search_matches_width_and_canonical_names_without_rewriting_them() {
+        let english = crate::Localizer::shared(crate::UiLanguage::English);
+        for (name, query) in [("한글", "한글"), ("Ｆｏｏ", "foo"), ("Foo", "Ｆｏｏ")] {
+            let mut library = ColorLibrary::canonical();
+            library.apply_canonical(ColorLibraryAction::RenamePalette { id: 1, name: name.into() }).unwrap();
+            let sheet = SwatchSheetView::new(&library, query, RgbColor::BLACK, |c| c.rgba, &english);
+            assert_eq!(sheet.sections.len(), 1, "{name}: {query}");
+            assert_eq!(sheet.sections[0].title, name);
+            library.apply_canonical(ColorLibraryAction::RenamePalette { id: 1, name: "Other".into() }).unwrap();
+            library.apply_canonical(ColorLibraryAction::Store { palette: 1, name: name.into(), color: RgbColor::BLACK }).unwrap();
+            let sheet = SwatchSheetView::new(&library, query, RgbColor::BLACK, |c| c.rgba, &english);
+            assert_eq!(sheet.sections[0].tiles[0].name, name);
+            assert!(SwatchSheetView::new(&library, "missing", RgbColor::BLACK, |c| c.rgba, &english).sections.is_empty());
+        }
+    }
+
     #[test]
     fn swatch_sheet_searches_palette_names_color_names_and_hex() {
         let mut library = ColorLibrary::canonical();
@@ -414,7 +435,7 @@ mod tests {
 
         let mut state = ColorState::default();
         state.set_color(color).unwrap();
-        let view = PalettePanelView::new(&state, &library, |c| state.preview(c), &crate::Localizer::shared(crate::UiLanguage::English));
+        let view = PalettePanelView::new(&state, &library, "", |c| state.preview(c), &crate::Localizer::shared(crate::UiLanguage::English));
         assert_eq!(view.swatches.iter().filter(|t| t.current).count(), 1);
         assert!(view.can_undo && !view.can_redo);
         assert_eq!(view.palettes[0].preview.len(), 2);

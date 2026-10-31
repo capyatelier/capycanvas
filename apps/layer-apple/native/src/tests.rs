@@ -1788,6 +1788,13 @@ fn stateless_numeric_input_uses_shared_policy_without_a_session() {
     );
     assert_eq!(resolve(json!({"type":"format"}))["text"], "100");
     assert!(resolve(json!({"type":"expression","text":"invalid"}))["error"].is_string());
+    let controls = layer_ui::ExportNumericControls::default();
+    for (control, text, expected) in [(controls.quality, "９０", 90.), (controls.dimension, "１２８０", 1280.), (controls.ppi, "３００", 300.)] {
+        let resolve = |text| localized_stateless(capy_apple_numeric,
+            json!({"control":control,"value":0.,"operation":{"type":"expression","text":text}}).to_string());
+        assert_eq!(resolve(text)["value"], expected);
+        for invalid in ["ＮａＮ", "１／０", "１２＋"] { assert!(resolve(invalid)["error"].is_string()); }
+    }
 }
 
 #[test]

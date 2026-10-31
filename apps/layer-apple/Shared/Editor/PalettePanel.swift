@@ -287,11 +287,11 @@ private struct PaletteChooser: View {
     let view: JSON
     @ObservedObject var rows: PaletteRowInteraction
     @State private var query = ""
+    @State private var choices: [JSON]?
     @FocusState private var searching: Bool
     @Environment(\.editorPalette) private var palette
     var body: some View {
-        let needle = query.trimmingCharacters(in: .whitespaces).lowercased()
-        let matches = view["palettes"].array.filter { needle.isEmpty || $0["name"].string.lowercased().contains(needle) }
+        let matches = choices ?? view["palettes"].array
         VStack(spacing: 6) {
             HStack(spacing: 4) {
                 HStack(spacing: 6) {
@@ -319,11 +319,19 @@ private struct PaletteChooser: View {
                 }
             }.frame(maxHeight: .infinity)
         }.accessibilityElement(children: .contain).accessibilityIdentifier("palette-browser")
+            .onChange(of: query, initial: true) { _, _ in search() }
+            .onChange(of: view["palettes"].stableKey) { _, _ in search() }
             .onAppear {
                 #if os(macOS)
                 searching = true
                 #endif
             }
+    }
+    private func search() {
+        let text = query
+        store.query(["type": "palette_panel", "query": text]) { shown in
+            if query == text { choices = shown["palettes"].array }
+        }
     }
     private var menu: some View {
         EditorActionMenu(model: AppleContextMenu(controller.menu?.model ?? JSON(), invoke: { store.dispatch($0) },
