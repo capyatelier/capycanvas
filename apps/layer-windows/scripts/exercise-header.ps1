@@ -242,15 +242,8 @@ function Check-PenOrder {
     try{
     $hint=@((Model).state.commands|Where-Object id -eq 'pen')[0]
     if(!$hint.shortcut){throw 'The shared Pen command has no shortcut hint'}
-    $tooltip=[System.Windows.Automation.AndCondition]::new(
-        [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,'capy-tooltip'),
-        [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ProcessIdProperty,$review.Id))
     function PenTooltip {
-        foreach($window in Owned-ProcessWindows $review){
-            foreach($tip in $window.Root.FindAll([System.Windows.Automation.TreeScope]::Subtree,$tooltip)){
-                if(!$tip.Current.IsOffscreen -and $tip.Current.ProcessId -eq $review.Id){return $tip}
-            }
-        }
+        Capy-Tooltips $review.Id|Select-Object -First 1
     }
     $away=At 'drawing-canvas';[CapyRowPointer]::Hover($away.x,$away.y)
     $at=At (Tool-Tile 'pen');[CapyRowPointer]::Hover($at.x,$at.y)

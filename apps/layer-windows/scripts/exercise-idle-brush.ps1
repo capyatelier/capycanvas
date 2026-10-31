@@ -132,7 +132,7 @@ function Assert-DocumentSurface{
  $cache=[System.Windows.Automation.CacheRequest]::new();$cache.AutomationElementMode=[System.Windows.Automation.AutomationElementMode]::None
  $cache.TreeScope=[System.Windows.Automation.TreeScope]::Element
  foreach($property in @('BoundingRectangle','IsOffscreen','ProcessId','Name','ControlType')){$cache.Add([System.Windows.Automation.AutomationElement]::($property+'Property'))}
- $types=@(foreach($type in @([System.Windows.Automation.ControlType]::Menu,[System.Windows.Automation.ControlType]::ToolTip,[System.Windows.Automation.ControlType]::Window)){[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,$type)})
+ $types=@((Capy-TooltipCondition);foreach($type in @([System.Windows.Automation.ControlType]::Menu,[System.Windows.Automation.ControlType]::Window)){[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,$type)})
  $filter=[System.Windows.Automation.OrCondition]::new([System.Windows.Automation.Condition[]]$types)
  $owned=[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ProcessIdProperty,$review.Id)
  $surface=[Windows.Rect]::new($projection.bounds.X+$projection.document_crop.X,$projection.bounds.Y+$projection.document_crop.Y,$projection.document_crop.Width,$projection.document_crop.Height)

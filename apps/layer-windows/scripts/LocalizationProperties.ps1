@@ -251,10 +251,7 @@ function Check-WorkspaceGrips($View,[string]$Tag){
  }
 }
 function Numeric-Tooltip{
- $condition=[System.Windows.Automation.AndCondition]::new(
-  [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::ToolTip),
-  [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ProcessIdProperty,$review.Id))
- [System.Windows.Automation.AutomationElement]::RootElement.FindFirst([System.Windows.Automation.TreeScope]::Descendants,$condition)
+ Capy-Tooltips $review.Id|Select-Object -First 1
 }
 function Preference-Numeric{
  Use-Window $first

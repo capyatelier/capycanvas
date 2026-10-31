@@ -442,11 +442,7 @@ function Assert-BubbleHdrRamp([long]$Id,[string]$Stage,$Spec=$null,[switch]$Keep
     if(@($samples|Where-Object maximum_error -gt 4).Count -or $markerError -gt 2){throw 'Native HDR ramp, round caps or marker differs from shared display colors'}
 }
 function Assert-BubbleHdrNoTooltip([long]$Id,[string]$Stage='hdr-keyboard-no-tooltip'){
-    $condition=[System.Windows.Automation.AndCondition]::new(
-        [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::ToolTip),
-        [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ProcessIdProperty,$review.Id))
-    $found=@([System.Windows.Automation.AutomationElement]::RootElement.FindAll([System.Windows.Automation.TreeScope]::Descendants,$condition))
-    if(!$found.Count){$found=@($root.FindAll([System.Windows.Automation.TreeScope]::Descendants,$condition))}
+    $found=@(Capy-Tooltips $review.Id)
     $c=Center $Id;$b=(Packet $Id).color.bounds;$face=[System.Windows.Rect]::new($c.x+$b.x*$scale,$c.y+$b.y*$scale,$b.width*$scale,$b.height*$scale)
     $visible=@(foreach($item in $found){$current=$item.Current;$bounds=$current.BoundingRectangle;if(!$current.IsOffscreen -and $bounds.Width -gt 0 -and $bounds.Height -gt 0){@{name=$current.Name;class=$current.ClassName;runtime_id=($item.GetRuntimeId() -join ':');bounds=@($bounds.X,$bounds.Y,$bounds.Width,$bounds.Height);over=$bounds.IntersectsWith($face)}}})
     $hdrEvidence.Add(@{stage=$Stage;visible=$visible;face=@($face.X,$face.Y,$face.Width,$face.Height)})

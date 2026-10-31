@@ -378,10 +378,7 @@ function Move-Utility([double]$X,[double]$Y){
 function Park-UtilityCapture{
     $window=$root.Current.BoundingRectangle
     [CapyRowPointer]::Hover([int]($window.Left+$window.Width/2),[int]($window.Top+42*$scale))
-    $tooltip=[System.Windows.Automation.AndCondition]::new(
-        [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::ToolTip),
-        [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ProcessIdProperty,$review.Id))
-    Wait-Until {!@([System.Windows.Automation.AutomationElement]::RootElement.FindAll([System.Windows.Automation.TreeScope]::Descendants,$tooltip)|Where-Object {!$_.Current.IsOffscreen}).Count} 'Utility tooltip did not leave the capture area'
+    Wait-Until {!@(Capy-Tooltips $review.Id).Count} 'Utility tooltip did not leave the capture area'
 }
 function Utility-Overlays{
     Start-Review -Maximized;Tool 'lasso'

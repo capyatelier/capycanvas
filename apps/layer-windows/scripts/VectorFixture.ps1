@@ -150,8 +150,7 @@ function Tool-Item([string]$List,[scriptblock]$Match,[string]$Wanted){
 function Reason-Hover($Button,[string]$Reason){
   if(!$Reason -or $Button.Current.HelpText-cne$Reason){throw 'The native hover target has no current shared reason'}
   $at=Center $Button;[CapyRowPointer]::Hover($at[0],$at[1]);$tip=@{node=$null}
-  $hoverCondition=[System.Windows.Automation.AndCondition]::new([System.Windows.Automation.Condition[]]@([System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::ToolTip),[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ProcessIdProperty,$review.Id),[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::IsOffscreenProperty,$false)))
-  Wait-Until {$tip.node=[System.Windows.Automation.AutomationElement]::RootElement.FindFirst([System.Windows.Automation.TreeScope]::Descendants,$hoverCondition);$tip.node -and $tip.node.Current.Name -ceq $Reason} 'The tool hover did not expose its shared reason'
+  Wait-Until {$tip.node=Capy-Tooltips $review.Id|Select-Object -First 1;$tip.node -and $tip.node.Current.Name -ceq $Reason} 'The tool hover did not expose its shared reason'
   Start-Sleep -Milliseconds 200
   if($tip.node.Current.Name -cne $Reason -or $Button.Current.HelpText -cne $Reason){throw 'A delayed shortcut reply replaced the current tool reason'}
   Park
