@@ -107,7 +107,8 @@ internal class LayerSwipe {
     val footer = view.array("footer").objects()
     val overflow = footer.filter { footerWidth + .5f < it.getDouble("min_width") }
     fun shown(button: String) = overflow.none { it.getString("button") == button }
-    var rowHeight by remember { mutableFloatStateOf(40f) }
+    val rowHeight = maxOf(40f, panelMetrics().height.value + 4f,
+        androidx.compose.ui.text.rememberTextMeasurer().measure("", LocalTextStyle.current).size.height / density.density + 4f)
     val fixedHeight = if (full) headerHeight + footerHeight else 0f
     val measured = if (!full || headerHeight > 0f && footerHeight > 0f)
         PanelContentSize(fixedHeight + (layers.size + if (addPaper != null) 1 else 0) * rowHeight, fixedHeight, rowHeight) else null
@@ -243,7 +244,7 @@ internal class LayerSwipe {
                     item(key=layer.getLong("id")) {
                         val id=layer.getLong("id")
                         val highlight=drag?.takeIf { it.hintTarget==id }?.position
-                        LayerRow(host,layer,view.optLong("rename_layer",-1),images,Modifier.imageDropTarget(host,id).onSizeChanged { rowHeight = it.height / density.density }.onGloballyPositioned { bounds[id]=it.boundsInRoot() },highlight,full=full,attachment=drag?.effectOwner==id,
+                        LayerRow(host,layer,view.optLong("rename_layer",-1),images,Modifier.imageDropTarget(host,id).onGloballyPositioned { bounds[id]=it.boundsInRoot() },highlight,full=full,attachment=drag?.effectOwner==id,
                             context={mask,point -> contextMenu(layer,mask,point)},
                             contentBounds={rect,shift -> if(rect==null) { thumbnails.remove(id);bounds.remove(id) } else thumbnails[id]=LayerThumbnail(rect,rect.translate(Offset(shift.roundToInt().toFloat(),0f)))},
                             held={contactHeld=it},cancelContext={menuGeneration++; menu=null},
@@ -252,7 +253,6 @@ internal class LayerSwipe {
                     }
                     if (addPaper != null) item(key="add-paper") {
                         Row(Modifier.fillMaxWidth().heightIn(min=40.dp).clipToBounds().testTag("layer-add-paper")
-                            .onSizeChanged { rowHeight = it.height / density.density }
                             .clickable(role=Role.Button) { host.dispatch(obj("type" to "effect", "action" to addPaper.getJSONObject("action"))) }
                             .padding(horizontal=6.dp,vertical=2.dp), verticalAlignment=Alignment.CenterVertically,
                             horizontalArrangement=Arrangement.spacedBy(panelMetrics().group,Alignment.CenterHorizontally)) {
