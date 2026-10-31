@@ -242,37 +242,139 @@ pub fn connector(c: &layer_ui::DrawerConnection, out: &mut Vec<BackdropRegion>) 
 #[derive(Default)]
 pub(crate) struct Chrome {
     revision: std::cell::Cell<u64>,
-    frames: std::cell::RefCell<std::collections::VecDeque<(u64, i64, gsk::RenderNode)>>,
+    frames: std::cell::RefCell<std::collections::VecDeque<(u64, gsk::RenderNode)>>,
+    initial: std::cell::Cell<Option<(u64, u64)>>,
+    shown: std::cell::Cell<u64>,
+    status: std::cell::RefCell<Option<std::sync::Arc<crate::render_thread::ChromeStatus>>>,
 }
-pub(crate) const CHROME_HOLD_US: i64 = 100_000;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ChromeState {
+    Standalone,
+    Preparing(u64),
+    Ready(u64),
+    Visible(u64, u64),
+    Retired(u64),
+}
 impl Chrome {
+    pub fn attach(&self, status: &std::sync::Arc<crate::render_thread::ChromeStatus>) {
+        let mut current = self.status.borrow_mut();
+        if current.as_ref().is_none_or(|current| !std::sync::Arc::ptr_eq(current, status)) {
+            *current = Some(status.clone());
+        }
+    }
+    pub fn state(&self) -> ChromeState {
+        self.status.borrow().as_ref().map_or(ChromeState::Standalone, |status| status.state())
+    }
     pub fn revision(&self) -> u64 {
         self.revision.get()
     }
-    pub fn compose(&self, node: gsk::RenderNode, changed: bool, presented: Option<u64>, now: i64) -> (gsk::RenderNode, u64, bool) {
+    pub fn compose(&self, node: gsk::RenderNode, changed: bool, state: ChromeState) -> (gsk::RenderNode, u64, bool) {
         let mut frames = self.frames.borrow_mut();
-        if changed || frames.is_empty() {
-            if changed {
-                self.revision.set(self.revision.get() + 1);
-            }
-            frames.push_back((self.revision.get(), now, node));
+        if frames.is_empty() {
+            frames.push_back((0, node));
+        } else if changed {
+            self.revision.set(self.revision.get() + 1);
+            frames.push_back((self.revision.get(), node));
         } else {
-            frames.back_mut().unwrap().2 = node;
+            frames.back_mut().unwrap().1 = node;
         }
         let latest = frames.len() - 1;
-        let shown = presented
-            .and_then(|presented| frames.iter().rposition(|(revision, ..)| *revision <= presented))
-            .filter(|&index| index < latest && now - frames[index + 1].1 < CHROME_HOLD_US)
-            .unwrap_or(latest);
+        let (shown, initial) = match state {
+            ChromeState::Standalone | ChromeState::Preparing(_) | ChromeState::Retired(_) => {
+                self.initial.set(None);
+                (latest, false)
+            }
+            ChromeState::Ready(owner) => match self.initial.get().filter(|(held, _)| *held == owner) {
+                Some((_, revision)) => (frames.iter().position(|(held, _)| *held == revision).unwrap(), false),
+                None => {
+                    self.initial.set(Some((owner, frames[latest].0)));
+                    (latest, true)
+                }
+            },
+            ChromeState::Visible(_, presented) => {
+                self.initial.set(None);
+                (frames.iter().rposition(|(revision, _)| *revision <= presented).unwrap(), false)
+            }
+        };
+        let (revision, node) = frames[shown].clone();
+        assert!(revision >= self.shown.get());
+        self.shown.set(revision);
         frames.drain(..shown);
-        let (revision, _, node) = frames.front().unwrap().clone();
-        (node, revision, frames.len() > 1)
+        (node, revision, initial)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn chrome_without_a_visible_gpu_retains_only_the_latest_node() {
+        for state in [ChromeState::Standalone, ChromeState::Preparing(1), ChromeState::Retired(1)] {
+            let chrome = Chrome::default();
+            for revision in 0..1000 {
+                let node = gsk::ColorNode::new(&gtk::gdk::RGBA::BLACK, &gtk::graphene::Rect::new(0., 0., 1., 1.)).upcast();
+                assert_eq!(chrome.compose(node, true, state).1, revision);
+                assert_eq!(chrome.frames.borrow().len(), 1);
+            }
+        }
+    }
+
+    #[test]
+    fn chrome_startup_keeps_the_restored_ui_live_until_the_first_frame_is_ready() {
+        let chrome = Chrome::default();
+        let node = || gsk::ColorNode::new(&gtk::gdk::RGBA::BLACK, &gtk::graphene::Rect::new(0., 0., 1., 1.)).upcast();
+        assert_eq!(chrome.compose(node(), true, ChromeState::Preparing(1)).1, 0);
+        assert_eq!(chrome.compose(node(), true, ChromeState::Preparing(1)).1, 1);
+        assert_eq!(chrome.compose(node(), true, ChromeState::Preparing(1)).1, 2);
+        let (_, revision, initial) = chrome.compose(node(), false, ChromeState::Ready(1));
+        assert_eq!((revision, initial), (2, true));
+        let (_, revision, initial) = chrome.compose(node(), true, ChromeState::Ready(1));
+        assert_eq!((revision, initial), (2, false));
+        assert_eq!(chrome.frames.borrow().len(), 2);
+        assert_eq!(chrome.compose(node(), true, ChromeState::Visible(1, 2)).1, 2);
+        assert_eq!(chrome.compose(node(), false, ChromeState::Visible(1, 4)).1, 4);
+        assert_eq!(chrome.frames.borrow().len(), 1);
+    }
+
+    #[test]
+    fn chrome_retirement_and_reattachment_never_rewind_the_visible_revision() {
+        let chrome = Chrome::default();
+        let node = || gsk::ColorNode::new(&gtk::gdk::RGBA::BLACK, &gtk::graphene::Rect::new(0., 0., 1., 1.)).upcast();
+        chrome.compose(node(), false, ChromeState::Preparing(1));
+        chrome.compose(node(), true, ChromeState::Ready(1));
+        assert_eq!(chrome.compose(node(), true, ChromeState::Ready(1)).1, 1);
+        assert_eq!(chrome.compose(node(), true, ChromeState::Retired(1)).1, 3);
+        assert_eq!(chrome.compose(node(), true, ChromeState::Preparing(2)).1, 4);
+        let (_, revision, initial) = chrome.compose(node(), false, ChromeState::Ready(2));
+        assert_eq!((revision, initial), (4, true));
+        assert_eq!(chrome.compose(node(), true, ChromeState::Visible(2, 4)).1, 4);
+        assert_eq!(chrome.compose(node(), false, ChromeState::Visible(2, 5)).1, 5);
+        assert_eq!(chrome.compose(node(), true, ChromeState::Retired(2)).1, 6);
+        assert_eq!(chrome.frames.borrow().len(), 1);
+    }
+
+    #[test]
+    fn chrome_starts_with_an_explicit_initial_presentation() {
+        let chrome = Chrome::default();
+        let node = gsk::ColorNode::new(&gtk::gdk::RGBA::BLACK, &gtk::graphene::Rect::new(0., 0., 1., 1.)).upcast();
+        let (_, revision, initial) = chrome.compose(node, true, ChromeState::Preparing(1));
+        assert!(!initial);
+        assert_eq!(revision, 0);
+        assert_eq!(chrome.revision(), 0);
+    }
+
+    #[test]
+    fn chrome_keeps_unacknowledged_history_without_an_age_limit() {
+        let chrome = Chrome::default();
+        let node = || gsk::ColorNode::new(&gtk::gdk::RGBA::BLACK, &gtk::graphene::Rect::new(0., 0., 1., 1.)).upcast();
+        chrome.compose(node(), false, ChromeState::Visible(1, 0));
+        chrome.compose(node(), true, ChromeState::Visible(1, 0));
+        chrome.compose(node(), true, ChromeState::Visible(1, 0));
+        assert_eq!(chrome.compose(node(), false, ChromeState::Visible(1, 0)).1, 0);
+        assert_eq!(chrome.compose(node(), false, ChromeState::Visible(1, 1)).1, 1);
+        assert_eq!(chrome.compose(node(), false, ChromeState::Visible(1, 2)).1, 2);
+    }
 
     #[test]
     fn faded_glass_and_glass_arcs_become_matching_backdrops() {
@@ -302,19 +404,18 @@ mod tests {
     }
 
     #[test]
-    fn chrome_shows_the_committed_revision_until_the_canvas_reports_or_the_hold_expires() {
+    fn chrome_shows_the_committed_revision_until_the_canvas_reports() {
         let node = |shade: f32| -> gsk::RenderNode {
             gsk::ColorNode::new(&gtk::gdk::RGBA::new(shade, 0., 0., 1.), &gtk::graphene::Rect::new(0., 0., 1., 1.)).upcast()
         };
         let shade = |node: &gsk::RenderNode| node.downcast_ref::<gsk::ColorNode>().unwrap().color().red();
         let chrome = Chrome::default();
-        let shown = |(node, revision, waiting): (gsk::RenderNode, u64, bool)| (shade(&node), revision, waiting);
-        assert_eq!(shown(chrome.compose(node(0.), false, Some(0), 0)), (0., 0, false));
-        assert_eq!(shown(chrome.compose(node(0.25), true, Some(0), 10)), (0., 0, true));
-        assert_eq!(shown(chrome.compose(node(0.5), false, Some(0), 20)), (0., 0, true));
-        assert_eq!(shown(chrome.compose(node(0.5), false, Some(1), 30)), (0.5, 1, false));
-        assert_eq!(shown(chrome.compose(node(0.75), true, Some(1), 40)), (0.5, 1, true));
-        assert_eq!(shown(chrome.compose(node(0.75), false, Some(1), 40 + CHROME_HOLD_US)), (0.75, 2, false));
-        assert_eq!(shown(chrome.compose(node(1.), true, None, 50 + CHROME_HOLD_US)), (1., 3, false));
+        let shown = |(node, revision, _): (gsk::RenderNode, u64, bool)| (shade(&node), revision);
+        assert_eq!(shown(chrome.compose(node(0.), false, ChromeState::Visible(1, 0))), (0., 0));
+        assert_eq!(shown(chrome.compose(node(0.25), true, ChromeState::Visible(1, 0))), (0., 0));
+        assert_eq!(shown(chrome.compose(node(0.5), false, ChromeState::Visible(1, 0))), (0., 0));
+        assert_eq!(shown(chrome.compose(node(0.5), false, ChromeState::Visible(1, 1))), (0.5, 1));
+        assert_eq!(shown(chrome.compose(node(0.75), true, ChromeState::Visible(1, 1))), (0.5, 1));
+        assert_eq!(shown(chrome.compose(node(1.), false, ChromeState::Visible(1, 2))), (1., 2));
     }
 }

@@ -18,7 +18,7 @@ use wayland_client::{
     backend::{Backend, ObjectId},
     globals::{GlobalListContents, registry_queue_init},
     protocol::{
-        wl_compositor, wl_region, wl_registry, wl_subcompositor, wl_subsurface, wl_surface,
+        wl_callback, wl_compositor, wl_region, wl_registry, wl_subcompositor, wl_subsurface, wl_surface,
     },
 };
 use wayland_protocols::wp::presentation_time::client::{wp_presentation, wp_presentation_feedback};
@@ -353,6 +353,7 @@ struct Events {
     monotonic: bool,
     feedback_pending: usize,
     stroke_pacer: pacing::StrokePacer,
+    initial_applied: bool,
     #[cfg(test)]
     presented: Vec<[u64; 4]>,
 }
@@ -453,6 +454,12 @@ impl Child {
             presentation.feedback(&self.surface, &self.events.handle(), Presentation { id, stroke });
         }
     }
+    pub fn initial_commit(&self) {
+        self.surface.frame(&self.events.handle(), ());
+    }
+    pub fn take_initial_commit(&mut self) -> bool {
+        std::mem::take(&mut self.state.initial_applied)
+    }
 
     #[cfg(test)]
     pub fn take_presented(&mut self) -> Vec<[u64; 4]> {
@@ -464,6 +471,13 @@ struct Presentation {
     #[cfg_attr(not(test), allow(dead_code))]
     id: u64,
     stroke: Option<StrokeTarget>,
+}
+
+impl Dispatch<wl_callback::WlCallback, ()> for Events {
+    fn event(state: &mut Self, _: &wl_callback::WlCallback, event: wl_callback::Event,
+        _: &(), _: &Connection, _: &QueueHandle<Self>) {
+        if matches!(event, wl_callback::Event::Done {..}) { state.initial_applied = true; }
+    }
 }
 
 impl Drop for Child {

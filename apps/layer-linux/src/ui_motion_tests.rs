@@ -1,6 +1,58 @@
 // Compositor recordings of workspace motion, analysed by tools/visual/ui_motion.py.
 use super::*;
 
+#[test]
+#[ignore = "private Wayland display, 61 MP filter preparation and compositor recording"]
+fn native_chrome_during_filter_preparation() {
+    let mut input = RemoteInput::new().settle_ms(8).timeout_secs(60);
+    let app = native_test_app("art.capycanvas.ChromePreparation");
+    let w = Workspace::with_project(&app, Some((super::native_navigation::photo([9504, 6336]), None)));
+    w.window.maximize(); w.window.present();
+    wait_workspaces(&w);
+    until(|| w.gpu.borrow().as_ref().is_some_and(|g| g.session.engine().backend().startup.complete), "initial canvas ready");
+    input.ready();
+    let output = std::path::PathBuf::from(std::env::var_os("LAYER_TEST_ARTIFACTS").unwrap());
+    let mut reports = Vec::new();
+    let mut violations = Vec::new();
+    for theme in [Theme::Light, Theme::Dark] {
+        for level in [layer_ui::Transparency::Off, layer_ui::Transparency::Medium] {
+            w.dispatch(UiAction::SetTheme {theme:Some(theme)});
+            use_transparency(&w, level);
+            let name = format!("chrome-preparation-{theme:?}-{level:?}").to_lowercase();
+            input.perform(serde_json::json!([{"record_start":name},{"wait_ms":100}]));
+            let frames = sample_after_paint(&w.surface, glib::clone!(#[strong] w, move || {
+                (w.chrome_released.get(), w.chrome.revision(), w.chrome.state())
+            }));
+            let mut actions = Vec::new();
+            for turn in 0..6 {
+                let now = glib::monotonic_time();
+                actions.push(now);
+                w.dispatch(UiAction::Effect {action:layer_ui::EffectAction::Insert {effect:"gaussian_blur".into()}});
+                w.dispatch(UiAction::SetTheme {theme:Some(if turn % 2 == 0 {Theme::Dark} else {Theme::Light})});
+                w.dispatch(UiAction::Invoke {command:CommandId::ZenMode});
+                pump(350);
+            }
+            let frames = frames.finish();
+            let mut previous = 0;
+            let rows: Vec<_> = frames.iter().map(|frame| {
+                let (shown, requested, state) = frame.state;
+                if shown < previous { violations.push(format!("{name}: {previous} -> {shown}")); }
+                previous = shown;
+                if let crate::glass::ChromeState::Visible(_, confirmed) = state && shown > confirmed {
+                    violations.push(format!("{name}: GTK {shown} ahead of GPU {confirmed}"));
+                }
+                serde_json::json!({"paint_us":frame.time,"shown":shown,"requested":requested,"state":format!("{state:?}")})
+            }).collect();
+            assert!(!rows.is_empty(), "filter preparation paints chrome");
+            input.perform(serde_json::json!([{"wait_ms":100},{"record_stop":true}]));
+            reports.push(serde_json::json!({"name":name,"actions_us":actions,"frames":rows}));
+        }
+    }
+    std::fs::write(output.join("chrome-preparation.json"), serde_json::to_vec_pretty(&reports).unwrap()).unwrap();
+    input.finish(); w.window.destroy(); pump(100);
+    assert!(violations.is_empty(), "{}", violations.join("\n"));
+}
+
 fn capture_point(w: &Workspace, texture: &gdk::Texture) -> impl Fn(f32, f32) -> [f32; 2] {
     capture_point_size(w, [texture.width(), texture.height()])
 }

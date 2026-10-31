@@ -6698,3 +6698,71 @@ observations remain in the VM's `performance-20261026-203533`,
 report and display comparison are retained under
 `artifacts/windows-bridge-audit/performance/`. This run has no matched code
 baseline and does not resolve native panel-gap, physical pen or HDR qualification.
+
+
+## GTK chrome ordering
+
+Measured 2026-10-31 on RTX PRO 6000 Blackwell Max-Q, NVIDIA 615.71.09,
+private Mutter 50.5 at 1600 × 1000, scale 1, 120 Hz. Final ink comparisons use
+bundled GTK 4.24.1, optimized binaries based on `3aa2e64b6`, identical parked
+attribution instrumentation, GPU timestamps off and no phase tracing. Each
+workload runs ABBA then BAAB. No foreign GPU overlap was detected. These are
+workstation diagnostics; physical pen latency and reference-tier qualification
+remain unmeasured.
+
+| Measurement | Main → ordered chrome |
+| --- | ---: |
+| Pen-up contact cadence range, Hz | 119.878–119.952 → 119.844–119.957 |
+| Pen-up full-contact cadence median, Hz | 119.812 → 119.810 |
+| Pen-up longest actual presentation gap, ms | 14.441 → 14.095 |
+| Following-stroke first completed-packet presentation median / maximum, ms | 18.847 / 21.220 → 18.905 / 21.180 |
+| Exact terminal frame after Up median / maximum, ms | 47.390 / 49.517 → 47.437 / 49.990 |
+| G-Pen moving cadence median, Hz | 120.009 → 120.008 |
+| G-Pen per-trial p99 gap median, ms | 8.661 → 8.761 |
+| G-Pen longest actual presentation gap, ms | 14.937 → 10.216 |
+
+Pen-up includes one prime/Undo per invocation and sixteen measured six-second
+contacts per variant; all sixteen terminal frames have exact presentation feedback. Its
+consumed-packet progression median is 119.646 Hz and p99 gap median 8.590 ms
+for both variants. G-Pen has four six-second trials per variant on the existing
+synthetic photo24 fixture with a 1536 px brush; its contact bounds are inferred
+from packet watermarks, without an authored prime/Undo. Consumed-watermark
+attribution does not prove fresh accepted pixels. The earlier candidate run at
+114–118 Hz with 52–137 ms gaps remains unexplained and preserved; neither the
+final repeats nor the earlier rebased matched pen-up block reproduced it.
+
+The final bundled-runtime concurrent ink/Zen check is one A/B pair, four contacts
+each: full-contact cadence 112.551 → 110.228 Hz and progress-gap p99 median
+35.192 → 39.175 ms. Both miss the combined-motion target; the small pair does
+not establish a latency change. Source-availability p99 is 35.712 → 36.471 ms.
+An independent system-GTK ABBA reduces repeated watermarks 3 → 2; the earlier
+candidate's repeated old-canvas presentation on nearly every toggle is absent.
+
+Existing UI ABBA comparisons below use matched `6f1448d17` binaries and inherited
+system GTK 4.22.5. They remain separate from the bundled-runtime ink comparison.
+Values are median per-contact moving rate and median per-contact p99 gap.
+
+| Motion | Main → ordered chrome, Hz | Main → ordered chrome p99 gap, ms |
+| --- | ---: | ---: |
+| Panel, light | 114.86 → 115.55 | 24.92 → 20.83 |
+| Panel, dark | 115.65 → 113.07 | 24.92 → 24.86 |
+| Column, light left / right | 115.79 / 114.89 → 117.12 / 115.31 | 16.70 / 16.70 → 16.67 / 16.70 |
+| Column, dark left / right | 116.70 / 116.37 → 116.88 / 116.54 | 16.67 / 16.69 → 16.68 / 16.67 |
+| Tab, light / dark | 119.81 / 119.90 → 119.81 / 119.81 | 8.57 / 8.61 → 8.60 / 8.57 |
+| Zen, light / dark | 119.46 / 118.92 → 118.83 / 119.16 | 10.86 / 11.86 → 11.36 / 11.04 |
+
+Panel and column pacing misses remain shared with main. Dark-panel cadence is
+lower in this sample, with overlapping contact ranges; no desktop or reference
+120 Hz qualification follows. Panel/tab fixtures lack complete contact windows;
+Zen full-contact medians are light 101.82 → 103.23 and dark 102.47 → 103.71 Hz.
+Overlapping foreign GPU runs are preserved, excluded and replaced separately.
+
+Cold NVIDIA shader-cache-disabled restored-UI medians are light 475.28 → 456.16
+and dark 445.56 → 445.77 ms, two runs per variant/theme on the earlier matched
+system runtime. The explicit first-present handshake adds about 60–65 ms to
+first canvas feedback in that comparison; restored UI remains live meanwhile.
+The loaded 61 MP trace has 76 → 0 confirmed GTK-ahead mismatch instants. Its
+27 conservative unknown instants are background surface 101, fully covered by
+the opaque full-window canvas after its first opaque present. Source/trace
+reasoning, exact chrome-response timings, runtime receipts, original outlier,
+per-contact results and parked probes remain in `artifacts/gtk-race-ordering.local/`.

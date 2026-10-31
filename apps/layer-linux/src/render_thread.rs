@@ -26,17 +26,51 @@ fn error(e: impl std::fmt::Display) -> String {
 }
 /// Wake the canvas once GTK is next idle, from any thread.
 fn wake_canvas(area: &gtk::glib::SendWeakRef<gtk::Picture>) {
-    canvas_action(area, "canvas.wake");
+    canvas_action(area, "canvas.wake", None);
 }
-fn canvas_action(area: &gtk::glib::SendWeakRef<gtk::Picture>, action: &'static str) {
+fn canvas_action(area: &gtk::glib::SendWeakRef<gtk::Picture>, action: &'static str, owner: Option<u64>) {
     let area = area.clone();
     gtk::glib::idle_add_once(move || {
         if let Some(area) = area.upgrade() {
-            let _ = area.activate_action(action, None);
+            let parameter = owner.map(|owner| gtk::glib::variant::ToVariant::to_variant(&owner));
+            let _ = area.activate_action(action, parameter.as_ref());
         }
     });
 }
-const CHROME_SYNC_LIMIT: Duration = Duration::from_micros(crate::glass::CHROME_HOLD_US as u64);
+
+const CHROME_PREPARING: u64 = u64::MAX;
+const CHROME_READY: u64 = u64::MAX - 1;
+const CHROME_RETIRED: u64 = u64::MAX - 2;
+pub(crate) struct ChromeStatus {
+    owner: u64,
+    value: AtomicU64,
+}
+impl ChromeStatus {
+    fn new(owner: u64) -> Self { Self {owner,value:AtomicU64::new(CHROME_PREPARING)} }
+    pub(crate) fn state(&self) -> crate::glass::ChromeState {
+        use crate::glass::ChromeState;
+        match self.value.load(Ordering::Acquire) {
+            CHROME_PREPARING => ChromeState::Preparing(self.owner),
+            CHROME_READY => ChromeState::Ready(self.owner),
+            CHROME_RETIRED => ChromeState::Retired(self.owner),
+            revision => ChromeState::Visible(self.owner, revision),
+        }
+    }
+    fn publish(&self, revision: u64) {
+        assert!(revision < CHROME_RETIRED);
+        self.value.store(revision, Ordering::Release);
+    }
+}
+
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+enum FirstChrome {
+    #[default]
+    Preparing,
+    Ready,
+    Granted,
+    Submitted,
+    Visible,
+}
 
 fn workspace_presenter(renderer: &WgpuRasterizer,format: wgpu::TextureFormat,color: layer_render_wgpu::SdrSurfaceColor) -> Result<ViewportPresenter,String> {
     let mut presenter=ViewportPresenter::for_surface(renderer,format,color).map_err(error)?;
@@ -49,35 +83,101 @@ struct ChromeHandoff {
     requested: u64,
     published: u64,
     hold: bool,
-    synchronized: Option<(u64, std::time::Instant)>,
+    synchronized: Option<u64>,
+    first: FirstChrome,
 }
 impl ChromeHandoff {
-    fn request(&mut self, revision: u64, hold: bool) {
+    fn request(&mut self, revision: u64, hold: bool) -> bool {
+        if matches!(self.first, FirstChrome::Granted | FirstChrome::Submitted) || revision < self.requested { return false; }
         self.requested = revision;
         self.hold = hold;
+        true
     }
     fn changed(&self) -> bool { self.requested != self.published }
-    fn can_present(&self) -> bool { self.synchronized.is_none() }
-    fn should_hold(&self) -> bool { self.changed() && self.hold }
-    fn publish(&mut self, now: std::time::Instant) -> Option<u64> {
+    fn ready(&mut self) { assert_eq!(self.first, FirstChrome::Preparing); self.first = FirstChrome::Ready; }
+    fn grant(&mut self, revision: u64) -> bool {
+        if self.first != FirstChrome::Ready { return false; }
+        assert!(revision >= self.requested);
+        self.requested = revision;
+        self.hold = true;
+        self.first = FirstChrome::Granted;
+        true
+    }
+    fn can_present(&self) -> bool {
+        matches!(self.first, FirstChrome::Granted | FirstChrome::Visible) && self.synchronized.is_none()
+    }
+    fn should_hold(&self) -> bool { self.first == FirstChrome::Granted || self.changed() && self.hold }
+    fn publish(&mut self) -> Option<u64> {
         assert!(self.can_present());
-        if !self.changed() { return None; }
-        if self.should_hold() { self.synchronized = Some((self.requested, now)); }
+        if !self.changed() && self.first == FirstChrome::Visible { return None; }
+        if self.should_hold() { self.synchronized = Some(self.requested); }
         self.published = self.requested;
+        self.first = if self.first == FirstChrome::Granted { FirstChrome::Submitted } else { FirstChrome::Visible };
         Some(self.published)
     }
     fn release(&mut self, revision: u64) -> bool {
-        if self.synchronized.is_some_and(|(held, _)| revision >= held) {
+        if self.first == FirstChrome::Submitted { return false; }
+        if self.synchronized.is_some_and(|held| revision >= held) {
             self.synchronized = None;
             true
         } else { false }
     }
-    fn expire(&mut self, now: std::time::Instant) -> bool {
-        if self.synchronized.is_some_and(|(_, since)| now.duration_since(since) >= CHROME_SYNC_LIMIT) {
-            self.synchronized = None;
-            true
-        } else { false }
+    fn initial_applied(&mut self) -> bool {
+        if self.first != FirstChrome::Submitted { return false; }
+        self.first = FirstChrome::Visible;
+        self.release(self.published)
     }
+}
+
+struct ChromePresentation {
+    revision: u64,
+    hold: bool,
+    surround: [f32; 4],
+    backdrops: Vec<layer_render_wgpu::BackdropRegion>,
+    panels: Vec<layer_render_wgpu::PanelSurface>,
+    style: layer_render_wgpu::BackdropBlurStyle,
+    backdrop_hold: bool,
+    overviews: Vec<layer_render_wgpu::OverviewPlacement>,
+}
+enum ChromeUpdate {
+    Current(ChromePresentation, u64),
+    Initial(ChromePresentation),
+}
+
+#[derive(Default)]
+struct ChromeRequests {
+    considered_input: u64,
+    first: Option<(u64, ChromePresentation)>,
+    latest: Option<(u64, ChromePresentation)>,
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FrameReadiness { Waiting, Dependencies, Ready }
+impl FrameReadiness {
+    fn input_ready(self, order: u64) -> bool { self == Self::Ready && order != 0 }
+}
+impl ChromeRequests {
+    fn request(&mut self, chrome: ChromePresentation, after_input: u64) {
+        let newest = self.latest.as_ref().or(self.first.as_ref());
+        if newest.is_some_and(|(_, newest)| newest.revision > chrome.revision) { return; }
+        match &mut self.first {
+            None => self.first = Some((after_input, chrome)),
+            Some((after, current)) if *after == after_input => *current = chrome,
+            Some(_) => self.latest = Some((after_input, chrome)),
+        }
+    }
+    fn considered(&mut self, input: u64) { self.considered_input = self.considered_input.max(input); }
+    fn take_ready(&mut self, readiness: FrameReadiness, order: u64) -> Option<ChromePresentation> {
+        if readiness.input_ready(order) || self.first.as_ref().is_none_or(|(after, _)| *after > self.considered_input) { return None; }
+        let (_, chrome) = self.first.take().unwrap();
+        self.first = self.latest.take();
+        Some(chrome)
+    }
+}
+
+fn input_frame_order(order: &mut u64, dabs: usize, terminal: bool) -> u64 {
+    if dabs == 0 && !terminal { return 0; }
+    *order += 1;
+    *order
 }
 
 #[derive(Clone)]
@@ -127,21 +227,15 @@ struct Frame {
     batches: Vec<DabBatch>,
     restore_rasters: Vec<(SourceTarget, layer_core::raster::RasterRevision)>,
     reset: bool,
+    input_order: u64,
     composite: bool,
     commit_rasters: bool,
     blend_space: layer_core::BlendSpace,
     geometry: Geometry,
     present: bool,
-    surround: [f32; 4],
     picker: Option<layer_render::ColorPickerOverlay>,
     cursor: Vec<CursorSegment>,
-    overviews: Vec<layer_render_wgpu::OverviewPlacement>,
-    backdrops: Vec<layer_render_wgpu::BackdropRegion>,
-    panel_surfaces: Vec<layer_render_wgpu::PanelSurface>,
-    backdrop_style: layer_render_wgpu::BackdropBlurStyle,
-    backdrop_hold: bool,
-    chrome: u64,
-    chrome_hold: bool,
+    chrome: ChromePresentation,
     stroke_target: Option<crate::wayland::StrokeTarget>,
     // Every queued producer must resolve its immutable roots, even on failure.
     pending_rasters: Vec<layer_core::raster::RasterRevision>,
@@ -227,7 +321,8 @@ enum Command {
     FilterPreviews(u64, layer_render::FilterPreviewRequest),
     CancelFilterPreviews(u64),
     Frame(Box<Frame>),
-    Present(ViewState, Geometry, [f32; 4], Vec<CursorSegment>),
+    Wake,
+    Present(ViewState, Geometry, Vec<CursorSegment>),
     ReleaseChrome(u64),
     Asset(AssetId, layer_core::ProjectAsset),
     Release(AssetId),
@@ -344,6 +439,9 @@ pub struct RenderWorker {
     telemetry: Arc<std::sync::Mutex<layer_render::RendererTelemetry>>,
     telemetry_enabled: bool,
     commands: mpsc::Sender<Command>,
+    chrome_updates: mpsc::Sender<ChromeUpdate>,
+    chrome_sent: Option<u64>,
+    input_order: u64,
     replies: mpsc::Receiver<Reply>,
     failure: Arc<std::sync::OnceLock<String>>,
     in_flight: Arc<AtomicUsize>,
@@ -377,17 +475,36 @@ pub struct RenderWorker {
     pub(super) backdrop_hold: bool,
     pub(super) chrome: u64,
     pub(super) chrome_hold: bool,
-    presented_chrome: Arc<AtomicU64>,
+    presented_chrome: Arc<ChromeStatus>,
     pub(super) stroke_target: Option<crate::wayland::StrokeTarget>,
     #[cfg(test)]
     pub stats: Arc<std::sync::Mutex<crate::timing::Stats>>,
 }
 impl RenderWorker {
-    pub(crate) fn presented_chrome(&self) -> u64 {
-        self.presented_chrome.load(Ordering::Acquire)
+    fn chrome_presentation(&self) -> ChromePresentation {
+        ChromePresentation {revision:self.chrome,hold:self.chrome_hold,surround:self.surround,
+            backdrops:self.backdrops.clone(),panels:self.panel_surfaces.clone(),
+            style:self.backdrop_style,backdrop_hold:self.backdrop_hold,overviews:self.overviews.clone()}
     }
-    pub(crate) fn release_chrome(&self, revision: u64) {
-        let _ = self.send(Command::ReleaseChrome(revision));
+    pub(super) fn present_chrome(&mut self) -> Result<(), BackendError> {
+        if self.chrome_sent != Some(self.chrome) {
+            self.chrome_updates.send(ChromeUpdate::Current(self.chrome_presentation(), self.input_order))
+                .map_err(|_| BackendError("GPU worker stopped"))?;
+            self.chrome_sent = Some(self.chrome);
+            self.send(Command::Wake)?;
+        }
+        Ok(())
+    }
+    pub(super) fn start_chrome(&mut self, revision: u64) -> Result<(), String> {
+        assert_eq!(revision, self.chrome);
+        self.chrome_updates.send(ChromeUpdate::Initial(self.chrome_presentation())).map_err(error)?;
+        self.chrome_sent = Some(revision);
+        self.send(Command::Wake).map_err(error)
+    }
+    pub(crate) fn chrome_status(&self) -> &Arc<ChromeStatus> { &self.presented_chrome }
+    pub(crate) fn release_chrome(&self, revision: u64) -> impl FnOnce() + 'static {
+        let commands = self.commands.clone();
+        move || { let _ = commands.send(Command::ReleaseChrome(revision)); }
     }
     pub(crate) fn set_local_tone(
         &self,
@@ -453,6 +570,7 @@ impl RenderWorker {
         static NEXT_OWNER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         let proof_owner = NEXT_OWNER.fetch_add(1, Ordering::Relaxed);
         let (commands, receiver) = mpsc::channel();
+        let (chrome_updates, chrome_requests) = mpsc::channel();
         let (reply, replies) = mpsc::channel();
         let failure = Arc::new(std::sync::OnceLock::new());
         let worker_failure = failure.clone();
@@ -467,8 +585,9 @@ impl RenderWorker {
         ));
         let worker_telemetry = telemetry.clone();
         let failure_area = area.clone();
-        let presented_chrome = Arc::new(AtomicU64::new(0));
+        let presented_chrome = Arc::new(ChromeStatus::new(proof_owner));
         let worker_chrome = presented_chrome.clone();
+        let finished_chrome = presented_chrome.clone();
         #[cfg(test)]
         let stats = Arc::new(std::sync::Mutex::new(crate::timing::Stats::default()));
         #[cfg(test)]
@@ -487,6 +606,7 @@ impl RenderWorker {
                     }
                     Worker::new(parent, area, worker_clock, worker_chrome, color, &localization)?.run(
                         &receiver,
+                        &chrome_requests,
                         &reply,
                         &worker_telemetry,
                         &count,
@@ -502,6 +622,7 @@ impl RenderWorker {
                         .or_else(|| payload.downcast_ref::<&str>().map(|s| s.to_string()))
                         .unwrap_or_else(|| "GPU worker panicked".into()))
                 });
+                finished_chrome.value.store(CHROME_RETIRED, Ordering::Release);
                 if let Err(error) = &result {
                     // Optional result polls may consume Reply::Error. Keep the
                     // cause available for every subsequent readiness check and
@@ -565,6 +686,9 @@ impl RenderWorker {
             telemetry,
             telemetry_enabled: false,
             commands,
+            chrome_updates,
+            chrome_sent: None,
+            input_order: 0,
             replies,
             failure,
             in_flight,
@@ -818,7 +942,7 @@ impl CanvasRenderer for RenderWorker {
     fn poll_pending(&mut self, view: ViewState) -> Result<(), Self::Error> {
         if self.has_pending_submission() && self.settling_view.as_ref().is_none_or(|(old, cursor)| *old != view || *cursor != self.cursor)
             && let Some(geometry) = self.geometry {
-            self.send(Command::Present(view, geometry, self.surround, self.cursor.clone()))?;
+            self.send(Command::Present(view, geometry, self.cursor.clone()))?;
             self.settling_view = Some((view, self.cursor.clone()));
         }
         Ok(())
@@ -1139,6 +1263,9 @@ impl CanvasRenderer for RenderWorker {
             None if *self.selection_overlays != layer_core::authored::SelectionOverlays::default() => self.selection_overlays = Arc::default(),
             _ => (),
         }
+        let input_order = if self.present_frames {
+            input_frame_order(&mut self.input_order, packet.dabs.len(), packet.dab_batches.iter().any(|batch| batch.stroke_end))
+        } else { 0 };
         let frame = Frame {
             time_seconds: packet.time_seconds,
             view: packet.view,
@@ -1153,25 +1280,20 @@ impl CanvasRenderer for RenderWorker {
             batches: packet.dab_batches.to_vec(),
             restore_rasters: packet.restore_rasters.to_vec(),
             reset: packet.reset_layers,
+            input_order,
             composite: packet.composite_all,
             commit_rasters: packet.commit_rasters,
             blend_space: packet.blend_space,
             geometry,
             present: self.present_frames,
-            surround: self.surround,
             picker: self.picker,
             cursor: self.cursor.clone(),
-            overviews: self.overviews.clone(),
-            backdrops: self.backdrops.clone(),
-            panel_surfaces: self.panel_surfaces.clone(),
-            backdrop_style: self.backdrop_style,
-            backdrop_hold: self.backdrop_hold,
-            chrome: self.chrome,
-            chrome_hold: self.chrome_hold,
+            chrome: self.chrome_presentation(),
             stroke_target: self.stroke_target,
             #[cfg(test)]
             queued_ns: gtk::glib::monotonic_time().max(0) as u64 * 1000,
         };
+        if frame.present && input_order == 0 { self.present_chrome()?; }
         self.in_flight.fetch_add(1, Ordering::Release);
         self.first_frame_sent = true;
         self.settling_view = None;
@@ -1199,7 +1321,8 @@ struct Worker {
     config: wgpu::SurfaceConfiguration,
     surface_configured: bool,
     view_color: crate::display_color::ViewColor,
-    last_view: Option<(ViewState, [f32; 4])>,
+    last_view: Option<ViewState>,
+    surround: [f32; 4],
     geometry: Option<Geometry>,
     geometry_changed: bool,
     area: gtk::glib::SendWeakRef<gtk::Picture>,
@@ -1221,7 +1344,9 @@ struct Worker {
     screen_reported: Option<u64>,
     last_publish: std::time::Instant,
     chrome: ChromeHandoff,
-    presented_chrome: Arc<AtomicU64>,
+    chrome_requests: ChromeRequests,
+    presented_chrome: Arc<ChromeStatus>,
+    initial_completion: Option<Arc<AtomicBool>>,
 }
 impl Worker {
     #[cfg(test)]
@@ -1267,6 +1392,7 @@ impl Worker {
     fn run(
         mut self,
         receiver: &mpsc::Receiver<Command>,
+        chrome_requests: &mpsc::Receiver<ChromeUpdate>,
         reply: &mpsc::Sender<Reply>,
         worker_telemetry: &std::sync::Mutex<layer_render::RendererTelemetry>,
         count: &AtomicUsize,
@@ -1296,6 +1422,24 @@ impl Worker {
         #[cfg(test)]
         let mut fail_next_frame = false;
         loop {
+            if !matches!(self.chrome.first, FirstChrome::Granted | FirstChrome::Submitted) {
+                for request in chrome_requests.try_iter() {
+                    match request {
+                        ChromeUpdate::Current(chrome, after_input) => {
+                            if self.chrome.first == FirstChrome::Visible {
+                                self.chrome_requests.request(chrome, after_input);
+                            } else {
+                                self.set_chrome(&chrome);
+                            }
+                        },
+                        ChromeUpdate::Initial(chrome) => if self.chrome.grant(chrome.revision) {
+                            self.apply_chrome(&chrome);
+                            self.pending_present = true;
+                            break;
+                        },
+                    }
+                }
+            }
             if let Some(failure) = self.watch.failure() {
                 return Err(failure);
             }
@@ -1304,7 +1448,13 @@ impl Worker {
                 .poll(wgpu::PollType::Poll)
                 .map_err(error)?;
             self.child.dispatch()?;
-            self.expire_synchronization()?;
+            if self.child.take_initial_commit() && self.chrome.initial_applied() {
+                self.child.synchronize(false)?;
+                self.initial_completion = None;
+                self.presented_chrome.publish(self.chrome.published);
+                canvas_action(&self.area, "canvas.chrome", Some(self.presented_chrome.owner));
+            }
+            self.prepare_initial_chrome();
             let (revision, screen) = self.child.screen_color();
             if self.screen_reported != Some(revision) {
                 self.screen_reported = Some(revision);
@@ -1356,18 +1506,23 @@ impl Worker {
                     startup_input = None;
                 }
             }
-            if self.renderer.has_pending_submission() && let Some((view, surround)) = self.last_view {
+            if self.initial_completion.is_none() && self.renderer.has_pending_submission() && let Some(view) = self.last_view {
                 self.renderer.poll_pending(view).map_err(error)?;
                 if !self.renderer.has_pending_submission() {
-                    self.pending_present |= self.presenter.needs_present(&self.renderer, view, surround);
+                    self.pending_present |= self.presenter.needs_present(&self.renderer, view, self.surround);
                 }
                 self.report_frame(report);
             }
-            while (!self.backdrop_submitted || startup_progress.canvas_ready) && self.renderer.can_submit()
-                && pending_frames.front().is_some_and(|f| !self.backdrop_submitted || f.dabs.is_empty() || startup_progress.brush_ready)
-            {
-                let frame = pending_frames.front().unwrap();
-                if !self.dependencies_ready(frame) {self.report_frame(report);break;}
+            loop {
+                let readiness = pending_frames.front().map_or(FrameReadiness::Waiting,
+                    |frame| self.frame_readiness(frame, startup_progress.canvas_ready, startup_progress.brush_ready));
+                let order = pending_frames.front().map_or(0, |frame| frame.input_order);
+                self.publish_chrome(readiness, order)?;
+                match readiness {
+                    FrameReadiness::Waiting => break,
+                    FrameReadiness::Dependencies => { self.report_frame(report); break; }
+                    FrameReadiness::Ready => (),
+                }
                 let mut frame = pending_frames.pop_front().unwrap();
                 #[cfg(test)]
                 timing.begin(frame.queued_ns);
@@ -1378,7 +1533,7 @@ impl Worker {
                     document_drawn=true;self.report_frame(report);count.fetch_sub(1,Ordering::Release);
                 }
             }
-            if self.pending_present && let Some(target) = self.acquire()? {
+            if self.pending_present && self.renderer.has_presentable_frame() && let Some(target) = self.acquire()? {
                 self.publish(target, None, #[cfg(test)] None)?;
             }
             if telemetry_enabled && let Ok(mut snapshot) = worker_telemetry.try_lock() {
@@ -1444,7 +1599,7 @@ impl Worker {
                     continue;
                 }
             }
-            let next = if document_drawn && !deferred.is_empty() {
+            let next = if self.initial_completion.is_none() && document_drawn && !deferred.is_empty() {
                 Ok(deferred.pop_front().unwrap())
             } else if !startup_progress.complete
                 || !pending_frames.is_empty()
@@ -1453,6 +1608,7 @@ impl Worker {
                 || self.renderer.filter_previews_pending()
                 || self.pending_present
                 || !self.chrome.can_present()
+                || self.chrome.first != FirstChrome::Visible
                 || stamp_flight || pending_stamp.is_some()
                 || self.renderer.thumbnails_pending()
                 || !pending_thumbnails.is_empty()
@@ -1509,6 +1665,10 @@ impl Worker {
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
             };
+            if self.initial_completion.is_some() && !matches!(command, Command::Stop | Command::Wake | Command::ReleaseChrome(_)) {
+                deferred.push_back(command);
+                continue;
+            }
             if !document_drawn
                 && matches!(
                     command,
@@ -1686,14 +1846,14 @@ impl Worker {
                             .map_err(error)?;
                     }
                 }
+                Command::Wake => (),
                 Command::ReleaseChrome(revision) => {
                     if self.chrome.release(revision) {
                         self.child.synchronize(false)?;
                     }
                 }
-                Command::Present(view, geometry, surround, cursor) => {
-                    self.expire_synchronization()?;
-                    self.set_view(view, geometry, surround);
+                Command::Present(view, geometry, cursor) => {
+                    self.set_view(view, geometry);
                     self.cursor = cursor;
                     self.presenter.set_cursor(self.renderer.device(), &self.cursor, geometry.scale as f32);
                     if let Some(target) = self.acquire()? { self.publish(target, None, #[cfg(test)] None)?; }
@@ -1708,6 +1868,7 @@ impl Worker {
                         && (!startup_progress.canvas_ready
                             || (!frame.dabs.is_empty() && !startup_progress.brush_ready))
                     {
+                        self.chrome_requests.considered(frame.input_order);
                         pending_frames.push_back(frame);
                         continue;
                     }
@@ -1720,6 +1881,7 @@ impl Worker {
                         #[cfg(test)]
                         &mut timing,
                     )?;
+                    self.chrome_requests.considered(frame.input_order);
                     last_canvas_frame = std::time::Instant::now();
                     if backdrop {
                         pending_frames.push_back(frame);
@@ -1767,7 +1929,7 @@ impl Worker {
         parent: Parent,
         area: gtk::glib::SendWeakRef<gtk::Picture>,
         clock: Arc<crate::wayland::FrameClock>,
-        presented_chrome: Arc<AtomicU64>,
+        presented_chrome: Arc<ChromeStatus>,
         color: layer_core::color::DocumentColor,
         localization: &layer_ui::Localizer,
     ) -> Result<Self, String> {
@@ -1860,6 +2022,7 @@ impl Worker {
             config,
             surface_configured: false,
             last_view: None,
+            surround: [0.; 4],
             geometry: None,
             geometry_changed: false,
             area,
@@ -1881,7 +2044,9 @@ impl Worker {
             screen_reported: None,
             last_publish: std::time::Instant::now(),
             chrome: ChromeHandoff::default(),
+            chrome_requests: ChromeRequests::default(),
             presented_chrome,
+            initial_completion: None,
         })
     }
     /// Publish whether the renderer has work for later frames, and wake an
@@ -1931,9 +2096,54 @@ impl Worker {
         self.pending_present = self.last_view.is_some();
         Ok(())
     }
-    fn set_view(&mut self, view: ViewState, geometry: Geometry, surround: [f32; 4]) {
+    fn frame_readiness(&mut self, frame: &Frame, canvas_ready: bool, brush_ready: bool) -> FrameReadiness {
+        if self.initial_completion.is_some() || self.backdrop_submitted && !canvas_ready
+            || !self.renderer.can_submit() || self.backdrop_submitted && !frame.dabs.is_empty() && !brush_ready {
+            FrameReadiness::Waiting
+        } else if !self.dependencies_ready(frame) {
+            FrameReadiness::Dependencies
+        } else { FrameReadiness::Ready }
+    }
+    fn publish_chrome(&mut self, readiness: FrameReadiness, order: u64) -> Result<(), String> {
+        while let Some(chrome) = self.chrome_requests.take_ready(readiness, order) { self.set_chrome(&chrome); }
+        if !readiness.input_ready(order) && (self.chrome.changed() || self.chrome.first == FirstChrome::Granted)
+            && self.pending_present && self.renderer.has_presentable_frame()
+            && let Some(target) = self.acquire()? {
+            self.publish(target, None, #[cfg(test)] None)?;
+        }
+        Ok(())
+    }
+    fn set_chrome(&mut self, chrome: &ChromePresentation) {
+        if !self.chrome.request(chrome.revision, chrome.hold) { return; }
+        self.apply_chrome(chrome);
+    }
+    fn apply_chrome(&mut self, chrome: &ChromePresentation) {
+        self.surround = chrome.surround;
+        self.presenter.set_backdrop(&self.renderer, &chrome.backdrops, chrome.style, chrome.backdrop_hold);
+        self.presenter.set_panel_surfaces(&self.renderer, &chrome.panels);
+        self.overviews.clone_from(&chrome.overviews);
+        self.presenter.set_overviews(&self.renderer, &self.overviews);
+        self.pending_present |= self.last_view.is_some() && self.chrome.changed();
+    }
+    fn prepare_initial_chrome(&mut self) {
+        if self.chrome.first != FirstChrome::Preparing { return; }
+        if let Some(done) = &self.initial_completion {
+            if done.load(Ordering::Acquire) {
+                self.chrome.ready();
+                self.presented_chrome.value.store(CHROME_READY, Ordering::Release);
+                canvas_action(&self.area, "canvas.chrome", Some(self.presented_chrome.owner));
+            }
+        } else if self.last_view.is_some() && self.renderer.has_presentable_frame()
+            && self.presenter.pipelines_ready(&self.renderer) && self.presenter.chrome_ready() {
+            let done = Arc::new(AtomicBool::new(false));
+            let completed = done.clone();
+            self.renderer.queue().on_submitted_work_done(move || completed.store(true, Ordering::Release));
+            self.initial_completion = Some(done);
+        }
+    }
+    fn set_view(&mut self, view: ViewState, geometry: Geometry) {
         self.presenter.set_corner_radius(geometry.corner_radius * geometry.scale as f32);
-        self.last_view = Some((view, surround));
+        self.last_view = Some(view);
         self.geometry_changed |= self.geometry != Some(geometry);
         self.geometry = Some(geometry);
         self.pending_present = true;
@@ -1954,12 +2164,14 @@ impl Worker {
             return Err(failure);
         }
         let draw_start = std::time::Instant::now();
-        self.expire_synchronization()?;
         while frame.scene.view().targets().any(|t| frame.scene.view().raster(t).is_some_and(|r| r.try_data().is_none())) && !self.renderer.raster_ready()
         {
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
-        if frame.present {self.set_view(frame.view, frame.geometry, frame.surround);}
+        if frame.present {
+            self.set_chrome(&frame.chrome);
+            self.set_view(frame.view, frame.geometry);
+        }
         #[cfg(test)]
         timing.rendering(&self.renderer);
         self.renderer
@@ -1985,20 +2197,14 @@ impl Worker {
         #[cfg(test)]
         timing.mark(0);
         if !frame.present {return Ok(());}
-        self.chrome.request(frame.chrome, frame.chrome_hold);
         self.picker = frame.picker;
         self.presenter.set_color_picker(&self.renderer, self.picker);
         self.cursor.clone_from(&frame.cursor);
-        self.overviews.clone_from(&frame.overviews);
-        self.presenter
-            .set_overviews(&self.renderer, &self.overviews);
-        self.presenter.set_backdrop(&self.renderer, &frame.backdrops, frame.backdrop_style, frame.backdrop_hold);
-        self.presenter.set_panel_surfaces(&self.renderer,&frame.panel_surfaces);
         self.cursor_scale = frame.geometry.scale as f32;
         self.presenter
             .set_cursor(self.renderer.device(), &self.cursor, self.cursor_scale);
         self.pending_present = self.chrome.changed() || self.geometry_changed
-            || self.presenter.needs_present(&self.renderer, frame.view, frame.surround);
+            || self.presenter.needs_present(&self.renderer, frame.view, self.surround);
         let target = if self.pending_present {
             #[cfg(test)]
             let target = timing.acquire(|| self.acquire())?;
@@ -2017,13 +2223,6 @@ impl Worker {
         self.child.observe_draw_work(draw_start.elapsed().as_nanos().min(u64::MAX as u128) as u64);
         Ok(())
     }
-    fn expire_synchronization(&mut self) -> Result<(), String> {
-        if self.chrome.expire(std::time::Instant::now()) {
-            self.child.synchronize(false)?;
-        }
-        Ok(())
-    }
-
     fn configure_surface(&mut self) {
         self.surface.configure(self.renderer.device(), &self.config);
         self.surface_configured = true;
@@ -2034,7 +2233,7 @@ impl Worker {
         if !self.chrome.can_present() { return Ok(None); }
         if !self.presenter.pipelines_ready(&self.renderer) || !self.presenter.chrome_ready() {return Ok(None);}
         if !self.renderer.has_presentable_frame() { return Ok(None); }
-        let (view, _) = self.last_view.expect("rendered document");
+        let view = self.last_view.expect("rendered document");
         if !self.surface_configured || [self.config.width, self.config.height] != [view.width_px, view.height_px] {
             self.config.width = view.width_px;
             self.config.height = view.height_px;
@@ -2071,7 +2270,8 @@ impl Worker {
     ) -> Result<(), String> {
         let _presentation = self.renderer.prioritize_raster_presentation();
         self.last_publish = std::time::Instant::now();
-        let (camera, surround) = self.last_view.expect("rendered document");
+        let camera = self.last_view.expect("rendered document");
+        let surround = self.surround;
         #[cfg(test)]
         if let Some(timing) = &timing {
             timing.camera_view(camera, &self.renderer);
@@ -2098,6 +2298,7 @@ impl Worker {
         }
         let commands = encoder.finish();
         if self.chrome.should_hold() { self.child.synchronize(true)?; }
+        if self.chrome.first == FirstChrome::Granted { self.child.initial_commit(); }
         let moved = self.child.geometry(self.geometry.expect("rendered geometry"));
         #[cfg(test)]
         if let Some(timing) = &timing {
@@ -2125,9 +2326,9 @@ impl Worker {
                 }
             });
         }
-        if let Some(revision) = self.chrome.publish(std::time::Instant::now()) {
-            self.presented_chrome.store(revision, Ordering::Release);
-            canvas_action(&self.area, "canvas.chrome");
+        if let Some(revision) = self.chrome.publish() {
+            if self.chrome.first == FirstChrome::Visible { self.presented_chrome.publish(revision); }
+            canvas_action(&self.area, "canvas.chrome", Some(self.presented_chrome.owner));
         }
         if !self.paper_ready.load(Ordering::Acquire) {
             let ready = self.paper_ready.clone();
@@ -2144,7 +2345,8 @@ impl Worker {
         Ok(())
     }
     fn capture(&mut self, color: crate::display_color::ViewColor) -> Result<ReadbackImage, String> {
-        let (view, surround) = self.last_view.ok_or("Canvas has not rendered")?;
+        let view = self.last_view.ok_or("Canvas has not rendered")?;
+        let surround = self.surround;
         // Explicit screenshot only. No host pixels or texture imports in ink.
         let texture = self
             .renderer

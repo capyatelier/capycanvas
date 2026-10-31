@@ -2544,32 +2544,7 @@ impl Workspace {
                     };
                     this.frame_deadline.set(next);
                     let result = this.gpu.borrow_mut().as_mut().map(|g| {
-                        let overviews = this
-                            .navigator_overviews
-                            .placements(g.session.state(), area.scale_factor() as f32);
-                        g.session.renderer_mut().overviews = overviews;
-                        g.session.renderer_mut().chrome = this.chrome.revision();
-                        g.session.renderer_mut().chrome_hold = true;
-                        let scale = area.scale_factor() as f32;
-                        g.session.renderer_mut().panel_surfaces=this.panel_surfaces.borrow().iter().cloned()
-                            .map(|surface|surface.scaled(scale)).collect();
-                        let (surround, style)=this.chrome_style.get().unwrap_or_else(|| {
-                            let p=&g.session.state().palette;
-                            (p.surround_linear,layer_render_wgpu::BackdropBlurStyle {levels:p.glass.blur.levels,offset:p.glass.blur.offset})
-                        });
-                        g.session.renderer_mut().surround=surround;
-                        g.session.renderer_mut().backdrop_style=style;
-                        g.session.renderer_mut().backdrop_hold = g.session.hold_canvas_backdrop();
-                        let command_bar = g.session.state().palette.glass.transparency.enabled()
-                            .then(|| this.command_bar.glass(&this))
-                            .flatten();
-                        g.session.renderer_mut().backdrops = this.glass.borrow().iter().chain(&command_bar)
-                            .map(|r| layer_render_wgpu::BackdropRegion {
-                                bounds: r.bounds.map(|v| v * scale),
-                                radii: r.radii.map(|v| v * scale),
-                                shape: r.shape,
-                            })
-                            .collect();
+                        this.update_canvas_chrome(g);
                         g.render(area, now, !expedited)
                     });
                     match result {
@@ -2654,10 +2629,18 @@ impl Workspace {
         let wake = gtk::gio::SimpleAction::new("wake", None);
         wake.connect_activate(glib::clone!(#[weak(rename_to = this)] self, move |_, _| this.wake()));
         actions.add_action(&wake);
-        let chrome = gtk::gio::SimpleAction::new("chrome", None);
-        chrome.connect_activate(glib::clone!(#[weak(rename_to = this)] self, move |_, _| {
-            this.chrome_presented.set(true);
-            this.surface.queue_draw();
+        let chrome = gtk::gio::SimpleAction::new("chrome", Some(glib::VariantTy::UINT64));
+        chrome.connect_activate(glib::clone!(#[weak(rename_to = this)] self, move |_, parameter| {
+            let owner = parameter.and_then(|parameter| parameter.get::<u64>());
+            let current = this.gpu.borrow().as_ref().and_then(|g| {
+                let renderer = g.session.engine().backend();
+                (owner == Some(renderer.proof_owner)).then(|| renderer.chrome_status().clone())
+            });
+            if let Some(status) = current {
+                this.chrome.attach(&status);
+                this.chrome_presented.set(true);
+                this.surface.queue_draw();
+            }
         }));
         actions.add_action(&chrome);
         self.area.insert_action_group("canvas", Some(&actions));
@@ -3085,13 +3068,46 @@ impl Workspace {
         self.update_backdrop();
     }
 
+    fn update_canvas_chrome(&self, g: &mut GpuCanvas) {
+        self.chrome.attach(g.session.engine().backend().chrome_status());
+        let overviews = self
+            .navigator_overviews
+            .placements(g.session.state(), self.area.scale_factor() as f32);
+        g.session.renderer_mut().overviews = overviews;
+        g.session.renderer_mut().chrome = self.chrome.revision();
+        g.session.renderer_mut().chrome_hold = true;
+        let scale = self.area.scale_factor() as f32;
+        g.session.renderer_mut().panel_surfaces=self.panel_surfaces.borrow().iter().cloned()
+            .map(|surface|surface.scaled(scale)).collect();
+        let (surround, style)=self.chrome_style.get().unwrap_or_else(|| {
+            let p=&g.session.state().palette;
+            (p.surround_linear,layer_render_wgpu::BackdropBlurStyle {levels:p.glass.blur.levels,offset:p.glass.blur.offset})
+        });
+        g.session.renderer_mut().surround=surround;
+        g.session.renderer_mut().backdrop_style=style;
+        g.session.renderer_mut().backdrop_hold = g.session.hold_canvas_backdrop();
+        let command_bar = g.session.state().palette.glass.transparency.enabled()
+            .then(|| self.command_bar.glass(self))
+            .flatten();
+        g.session.renderer_mut().backdrops = self.glass.borrow().iter().chain(&command_bar)
+            .map(|r| layer_render_wgpu::BackdropRegion {
+                bounds: r.bounds.map(|v| v * scale),
+                radii: r.radii.map(|v| v * scale),
+                shape: r.shape,
+            })
+            .collect();
+    }
+
     fn present_chrome(self: &Rc<Self>, snapshot: &gtk::Snapshot, node: Option<gtk::gsk::RenderNode>, changed: bool) {
         let Some(node) = node else { return };
-        let presented = self.gpu.try_borrow().ok().and_then(|g| {
-            g.as_ref().filter(|g| g.session.engine().backend().startup.complete)
-                .map(|g| g.session.engine().backend().presented_chrome())
-        });
-        let (node, revision, waiting) = self.chrome.compose(node, changed, presented, glib::monotonic_time());
+        let (node, revision, initial) = self.chrome.compose(node, changed, self.chrome.state());
+        if initial {
+            let result = self.gpu.borrow_mut().as_mut().map(|g| {
+                self.update_canvas_chrome(g);
+                g.session.renderer_mut().start_chrome(revision)
+            });
+            if let Some(Err(error)) = result { self.gpu_error(&error); }
+        }
         snapshot.append_node(&node);
         let weak = Rc::downgrade(self);
         if changed {
@@ -3099,21 +3115,11 @@ impl Workspace {
                 if let Some(w) = weak.upgrade() { w.wake_frame(true, false); }
             }));
         }
-        if waiting && changed {
-            glib::timeout_add_local_once(
-                std::time::Duration::from_micros(crate::glass::CHROME_HOLD_US as u64),
-                glib::clone!(#[strong] weak, move || {
-                    if let Some(w) = weak.upgrade() { w.surface.queue_draw(); }
-                }),
-            );
-        }
         let shown = self.chrome_released.replace(revision) != revision;
         if self.chrome_presented.replace(false) || shown {
-            glib::idle_add_local_once(move || {
-                if let Some(w) = weak.upgrade() && let Some(g) = w.gpu.borrow().as_ref() {
-                    g.session.engine().backend().release_chrome(revision);
-                }
-            });
+            if let Some(g) = self.gpu.borrow().as_ref() {
+                glib::idle_add_local_once(g.session.engine().backend().release_chrome(revision));
+            }
         }
     }
     fn update_backdrop(&self) {

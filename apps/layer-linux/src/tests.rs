@@ -1321,6 +1321,10 @@ fn native_startup_latency() {
     let built = started.elapsed().as_secs_f64() * 1000.;
     w.window.present();
     let presented = started.elapsed().as_secs_f64() * 1000.;
+    let paint_start = glib::monotonic_time();
+    let frames = sample_after_paint(&w.surface, glib::clone!(#[strong] w, move || {
+        (w.workspaces.ready(), w.chrome_released.get(), w.chrome.revision(), glib::monotonic_time())
+    }));
     let send = |phase, x| {
         let now = glib::monotonic_time() as u64 * 1000;
         let event = pen_event(&state(&w).camera, [x, 400.], phase, now);
@@ -1366,7 +1370,6 @@ fn native_startup_latency() {
         let Some(progress) = w.gpu.borrow().as_ref().map(|g| g.session.engine().backend().startup) else { continue; };
         if !contact_started && w.workspaces.accepts_input(&w) {
             apply_fixture_theme(&w);
-            send(PenPhase::Down, 400.);
             w.dispatch(UiAction::SetBrushSize { value: 24. });
             contact_started = true;
         }
@@ -1379,7 +1382,12 @@ fn native_startup_latency() {
                 *slot = Some(started.elapsed().as_secs_f64() * 1000.);
             }
         }
-        if progress.brush_ready && contact_started && !painted {
+        let paint_ready = w.gpu.borrow().as_ref().is_some_and(|g| {
+            let engine = g.session.engine();
+            engine.backend().paint_ready(engine.document(), engine.configured_brush(), false)
+        });
+        if paint_ready && contact_started && !painted {
+            send(PenPhase::Down, 400.);
             send(PenPhase::Move, 450.);
             send(PenPhase::Up, 500.);
             send(PenPhase::Down, 400.);
@@ -1392,7 +1400,18 @@ fn native_startup_latency() {
         "GTK startup: UI built {built:.3}ms, present returned {presented:.3}ms, first canvas feedback {first_canvas:.3?}ms, max event-loop slice {max_pump_ms:.3}ms"
     );
     eprintln!("GTK startup document/brush/all ready: {stages:.3?}ms");
-    pump(100);
+    let frames = frames.finish();
+    let restored = frames.iter().find(|frame| frame.state.0 && frame.state.1 == frame.state.2)
+        .expect("restored workspace chrome paints without waiting for shader preparation");
+    let restored_ui_ms = presented + (restored.state.3 - paint_start) as f64 / 1000.;
+    eprintln!("GTK restored UI first paint {restored_ui_ms:.3}ms");
+    if let Some(output) = std::env::var_os("LAYER_TEST_ARTIFACTS") {
+        std::fs::write(std::path::Path::new(&output).join("startup.json"), serde_json::to_vec_pretty(&serde_json::json!({
+            "built_ms":built,"present_return_ms":presented,"restored_ui_ms":restored_ui_ms,
+            "first_canvas_feedback_ms":first_canvas,"ready_ms":stages,"max_pump_ms":max_pump_ms
+        })).unwrap()).unwrap();
+    }
+    until(|| strokes() == 2, "both ready startup contacts commit");
     assert_eq!(strokes(), 2);
     assert!(paper_pixels(&w) > 100_000);
     w.window.destroy();

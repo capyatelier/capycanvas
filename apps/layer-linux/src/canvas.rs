@@ -157,6 +157,7 @@ impl GpuCanvas {
         }
         let renderer = self.session.renderer_mut();
         if !renderer.ready()? {
+            renderer.present_chrome().map_err(|error| error.to_string())?;
             // Preserve queued pen samples; never stall GTK or drop paint.
             self.needs_present = true;
             return Ok(UiChange::default());
@@ -186,6 +187,7 @@ impl GpuCanvas {
             });
         self.session.renderer_mut().stroke_target = target;
         let mut changed = self.session.frame(now_ns, presentation_ns)?;
+        self.session.renderer_mut().present_chrome().map_err(|error| error.to_string())?;
         changed.regions |= resized.regions | std::mem::take(&mut self.pending_regions);
         if view_color_changed {
             changed.regions |= layer_ui::regions::BRUSH

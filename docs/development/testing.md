@@ -219,6 +219,7 @@ changing a decoder, a vendored codec patch or a reader of outside files.
 
 | Area | Checks |
 | --- | --- |
+| GTK chrome ordering | `native_chrome_during_filter_preparation`, `native_diagnostics_and_gpu_failure_recovery`, `native_document_tab_input` and `native_canvas_background_during_startup_and_tab_switch`; cold startup: `native_startup_latency` with `__GL_SHADER_DISK_CACHE=0`. |
 | Drags and reorder | GTK `workspace-motion.sh gtk --drag-pickup` and `--column-drops`; Web `--drag-pickup`, `--layer-hold`, `--long-press-drag` and `--drag-cursors`; Android `AndroidInteractionTest`; Windows `exercise-layer-pickup.ps1` and `exercise-workspace-pickup.ps1`. |
 | Cursor ownership | GTK `native_palette_reorder_input` and `native_palette_reorder_pen`; Web `--edge-reach`; Android `AndroidInteractionTest#nativeCursorDoesNotRetainDividerAfterQuickTabReorder`, `#nativeMouseCursorDoesNotRetainDividerOnNeutralChrome` and `#tileDropLosingWindowFocusRetiresDragState`. |
 | Workspace background and header menus | Android `AndroidInteractionTest#emptyWorkspaceBackgroundsOpenMenusWithoutDragging`, `#workspaceBackgroundMenusPreserveControlsAndColumnDoubleTap`, `#contextMenusFollowNativeContactsAcrossTheWindow`, `#contextRequestsKeepTheirSourceAndRetireLateReplies`, `#headerMenusUseContactPointsAndRetireTheirOwner` and `#secondContactCancelsWorkspaceAndHeaderMenus`; Apple `workspace-native-input.swift`; Windows `toolbars:dark`, `toolbars:light`, `header:options` and `header:options-light`. Check popup bounds against off-center contacts in both orientations. |

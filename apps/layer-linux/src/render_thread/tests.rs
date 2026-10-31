@@ -28,6 +28,148 @@ fn retired_context_capture_resolves_failure_without_changing_sources() {
 use super::*;
 use gtk::prelude::*;
 
+fn visible_chrome() -> ChromeHandoff {
+    let mut chrome = ChromeHandoff::default();
+    chrome.ready();
+    assert!(chrome.grant(0));
+    assert_eq!(chrome.publish(), Some(0));
+    assert!(chrome.initial_applied());
+    chrome
+}
+
+fn chrome_request(revision: u64) -> ChromePresentation {
+    ChromePresentation { revision, hold: true, surround: [0.; 4], backdrops: Vec::new(), panels: Vec::new(),
+        style: layer_render_wgpu::BackdropBlurStyle {levels:0, offset:0.}, backdrop_hold:false, overviews:Vec::new() }
+}
+
+#[test]
+fn chrome_requests_give_queued_ink_its_admission_turn_before_representing() {
+    let mut input = 0;
+    let ink = input_frame_order(&mut input, 1, false);
+    let mut requests = ChromeRequests::default();
+    requests.request(chrome_request(7), ink);
+    assert!(requests.take_ready(FrameReadiness::Waiting, 0).is_none());
+    requests.considered(ink);
+    assert_eq!(requests.take_ready(FrameReadiness::Waiting, 0).unwrap().revision, 7);
+    assert!(requests.take_ready(FrameReadiness::Waiting, 0).is_none());
+}
+
+#[test]
+fn chrome_requests_protect_zero_dab_terminals_but_bypass_nonink_work() {
+    let mut input = 0;
+    let mut requests = ChromeRequests::default();
+    assert_eq!(input_frame_order(&mut input, 0, false), 0);
+    requests.request(chrome_request(1), input);
+    assert_eq!(requests.take_ready(FrameReadiness::Waiting, 0).unwrap().revision, 1);
+    let terminal = input_frame_order(&mut input, 0, true);
+    requests.request(chrome_request(2), terminal);
+    assert!(requests.take_ready(FrameReadiness::Waiting, 0).is_none());
+    requests.considered(0);
+    assert!(requests.take_ready(FrameReadiness::Waiting, 0).is_none());
+    requests.considered(terminal);
+    assert_eq!(requests.take_ready(FrameReadiness::Waiting, 0).unwrap().revision, 2);
+}
+
+#[test]
+fn chrome_requests_accept_a_frame_considered_before_the_request() {
+    let mut requests = ChromeRequests::default();
+    requests.considered(2);
+    requests.considered(1);
+    requests.request(chrome_request(7), 2);
+    assert_eq!(requests.take_ready(FrameReadiness::Waiting, 0).unwrap().revision, 7);
+}
+
+#[test]
+fn chrome_requests_bypass_ready_nonink_work_but_yield_to_ready_input() {
+    let mut requests = ChromeRequests::default();
+    requests.request(chrome_request(7), 1);
+    requests.considered(1);
+    assert!(requests.take_ready(FrameReadiness::Ready, 1).is_none());
+    assert_eq!(requests.take_ready(FrameReadiness::Ready, 0).unwrap().revision, 7);
+}
+
+#[test]
+fn chrome_requests_keep_a_fixed_first_boundary_and_only_the_latest_successor() {
+    let mut requests = ChromeRequests::default();
+    for revision in 1..=1000 { requests.request(chrome_request(revision), revision); }
+    assert!(requests.take_ready(FrameReadiness::Waiting, 0).is_none());
+    requests.considered(1);
+    assert_eq!(requests.take_ready(FrameReadiness::Waiting, 0).unwrap().revision, 1);
+    assert!(requests.take_ready(FrameReadiness::Waiting, 0).is_none());
+    requests.considered(1000);
+    assert_eq!(requests.take_ready(FrameReadiness::Waiting, 0).unwrap().revision, 1000);
+    assert!(requests.take_ready(FrameReadiness::Waiting, 0).is_none());
+}
+
+#[test]
+fn chrome_requests_coalesce_the_same_input_boundary_and_ignore_older_requests() {
+    let mut requests = ChromeRequests::default();
+    requests.request(chrome_request(7), 2);
+    requests.request(chrome_request(8), 2);
+    requests.request(chrome_request(4), 1);
+    requests.considered(2);
+    assert_eq!(requests.take_ready(FrameReadiness::Waiting, 0).unwrap().revision, 8);
+    assert!(requests.take_ready(FrameReadiness::Waiting, 0).is_none());
+}
+
+#[test]
+fn chrome_first_present_uses_the_exact_grant_before_newer_or_deferred_requests() {
+    let mut chrome = ChromeHandoff::default();
+    chrome.request(3, false);
+    assert!(!chrome.can_present());
+    chrome.ready();
+    assert!(chrome.grant(7));
+    assert!(!chrome.request(8, false));
+    assert!(!chrome.request(7, false));
+    assert!(!chrome.request(4, true));
+    assert_eq!(chrome.requested, 7);
+    assert!(chrome.should_hold());
+    assert_eq!(chrome.publish(), Some(7));
+    assert!(!chrome.can_present());
+    assert!(!chrome.release(7));
+    assert!(chrome.initial_applied());
+    assert!(chrome.request(8, true));
+    assert_eq!(chrome.publish(), Some(8));
+}
+
+#[test]
+fn chrome_initial_revision_zero_still_requires_a_synchronized_first_commit() {
+    let mut chrome = ChromeHandoff::default();
+    chrome.request(0, false);
+    assert!(!chrome.can_present());
+    chrome.ready();
+    assert!(!chrome.can_present());
+    assert!(chrome.grant(0));
+    assert!(chrome.should_hold());
+    assert_eq!(chrome.publish(), Some(0));
+    assert!(!chrome.can_present());
+    assert!(!chrome.release(0));
+    assert!(chrome.initial_applied());
+}
+
+#[test]
+fn chrome_status_distinguishes_startup_visibility_and_retirement() {
+    use crate::glass::ChromeState;
+    let status = ChromeStatus::new(9);
+    assert_eq!(status.state(), ChromeState::Preparing(9));
+    status.value.store(CHROME_READY, Ordering::Release);
+    assert_eq!(status.state(), ChromeState::Ready(9));
+    status.publish(23);
+    assert_eq!(status.state(), ChromeState::Visible(9, 23));
+    status.value.store(CHROME_RETIRED, Ordering::Release);
+    assert_eq!(status.state(), ChromeState::Retired(9));
+    assert_eq!(ChromeStatus::new(10).state(), ChromeState::Preparing(10));
+}
+
+#[test]
+fn chrome_requests_cannot_be_replaced_by_an_older_deferred_frame() {
+    let mut chrome = ChromeHandoff::default();
+    chrome.request(7, true);
+    chrome.request(4, false);
+    assert_eq!(chrome.requested, 7);
+    assert!(chrome.should_hold());
+}
+
 #[test]
 #[ignore = "hardware GPU, no window: workspace presenter startup and replacement"]
 fn workspace_presenter_prepares_chrome_before_first_panel_parameters() {
@@ -81,15 +223,14 @@ fn workspace_presenter_prepares_chrome_before_first_panel_parameters() {
 
 #[test]
 fn chrome_requests_wait_for_publication_and_coalesce_behind_the_held_buffer() {
-    let mut chrome = ChromeHandoff::default();
-    let now = std::time::Instant::now();
+    let mut chrome = visible_chrome();
     chrome.request(1, true);
     assert_eq!(chrome.published, 0);
     assert!(chrome.can_present());
     assert!(chrome.should_hold());
     chrome.request(2, true);
     assert_eq!(chrome.published, 0, "an unacquired buffer cannot acknowledge either request");
-    assert_eq!(chrome.publish(now), Some(2));
+    assert_eq!(chrome.publish(), Some(2));
     chrome.request(3, true);
     chrome.request(4, true);
     assert!(!chrome.can_present());
@@ -98,28 +239,25 @@ fn chrome_requests_wait_for_publication_and_coalesce_behind_the_held_buffer() {
     assert!(!chrome.can_present());
     assert!(chrome.release(2), "release matches the held revision, not the latest request");
     assert!(chrome.can_present());
-    assert_eq!(chrome.publish(now), Some(4));
+    assert_eq!(chrome.publish(), Some(4));
     assert!(!chrome.release(2));
     assert!(chrome.release(4));
-    assert_eq!(chrome.publish(now), None);
+    assert_eq!(chrome.publish(), None);
     assert!(chrome.can_present());
 }
 
 #[test]
-fn chrome_hold_expires_without_new_requests_extending_its_deadline() {
-    let mut chrome = ChromeHandoff::default();
-    let now = std::time::Instant::now();
+fn chrome_holds_until_the_matching_parent_revision_is_released() {
+    let mut chrome = visible_chrome();
     chrome.request(1, true);
-    assert_eq!(chrome.publish(now), Some(1));
+    assert_eq!(chrome.publish(), Some(1));
     chrome.request(2, true);
-    assert!(!chrome.expire(now + CHROME_SYNC_LIMIT / 2));
-    chrome.request(3, false);
-    assert!(!chrome.can_present(), "a fade cannot overwrite a held shape change");
-    assert!(chrome.expire(now + CHROME_SYNC_LIMIT));
+    assert!(!chrome.can_present());
+    assert!(!chrome.release(0));
+    assert!(!chrome.can_present());
+    assert!(chrome.release(1));
     assert!(chrome.can_present());
-    assert_eq!(chrome.publish(now + CHROME_SYNC_LIMIT), Some(3));
-    assert!(chrome.can_present(), "fades need no parent-commit hold");
-    assert!(!chrome.expire(now + CHROME_SYNC_LIMIT * 2));
+    assert_eq!(chrome.publish(), Some(2));
 }
 
 fn pump_worker_window() {
@@ -157,7 +295,7 @@ fn native_hdr_display_hint_before_first_frame() {
             parent,
             area,
             Arc::default(),
-            Arc::default(),
+            Arc::new(ChromeStatus::new(0)),
             layer_core::color::DocumentColor {
                 depth: layer_core::color::SampleDepth::F16,
                 ..Default::default()
@@ -170,6 +308,7 @@ fn native_hdr_display_hint_before_first_frame() {
         worker.update_hdr_view()?;
         worker.run(
             &receiver,
+            &mpsc::channel().1,
             &reply,
             &Default::default(),
             &AtomicUsize::new(0),
@@ -203,7 +342,7 @@ fn native_late_shader_failure_after_startup() {
     let (reply, _replies) = mpsc::channel();
     let (prepared, ready) = mpsc::channel();
     let worker = std::thread::spawn(move || -> Result<(), String> {
-        let mut worker = Worker::new(parent, area, Arc::default(), Arc::default(), Default::default(), &layer_ui::Localizer::shared(layer_ui::UiLanguage::English))?;
+        let mut worker = Worker::new(parent, area, Arc::default(), Arc::new(ChromeStatus::new(0)), Default::default(), &layer_ui::Localizer::shared(layer_ui::UiLanguage::English))?;
         let document = layer_ui::new_drawing(32, 24, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English))?;
         let brush = layer_core::default_brush(layer_core::DefaultBrushPreset::GPen);
         worker.renderer.prepare_startup(&document, &brush, false).map_err(error)?;
@@ -216,7 +355,7 @@ fn native_late_shader_failure_after_startup() {
         layer_render_wgpu::enqueue_compiler_failure(&worker.renderer, CAUSE)
             .recv_timeout(Duration::from_secs(5)).map_err(error)?;
         prepared.send(()).map_err(error)?;
-        worker.run(&receiver, &reply, &Default::default(), &AtomicUsize::new(0),
+        worker.run(&receiver, &mpsc::channel().1, &reply, &Default::default(), &AtomicUsize::new(0),
             &Default::default(), Arc::default())
     });
     let deadline = std::time::Instant::now() + Duration::from_secs(40);
