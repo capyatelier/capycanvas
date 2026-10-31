@@ -29,7 +29,7 @@ minimal or complex as you like.
 
 We want artists to build their own tools. We envision a world where painters
 build their own brush engine, and photographers write their effect shaders.
-And while software may be AI generated, the tools should be used by humans.
+While software may be AI generated, the tools should be used by humans.
 Artists shouldn't have to wait for a software company to decide that their idea is worth
 building.
 
@@ -38,17 +38,17 @@ this to be a community of builders and creatives.
 
 ## Sketch
 
-My first foray into the digital art world (like many others) was with Procreate
+*My first foray into the digital art world (like many others) was with Procreate
 over a decade ago. Back when the apple pencil first came out, it was magic.
 Even though the hardware was slow by today's standards, it was so well done
-that it gave a real pen-to-paper feeling.
+that it gave a real pen-to-paper feeling.*
 
 This was the first time a drawing app was fully optimized for a mobile
 device, using predictive pen tracking and GPU powered brush+rendering
 engines. Then they dropped a clean and minimalist UI on top of it, which
 then became the industry standard for all modern drawing apps.
 
-The *Sketch* workspace is a tribute to our roots. The place where
+> The *Sketch* workspace is a tribute to our roots. The place where
 everyone starts out.
 
 <p>
@@ -68,8 +68,8 @@ everyone starts out.
 
 ## Paint
 
-Once you get into proper comic/manga work, the simple tools don't cut it anymore.
-Lasso fill is your best friend, and you learn to live with the necessary evil of masks.
+*Once you get into proper comic/manga work, the simple tools don't cut it anymore.
+Lasso fill is your best friend, and you learn to live with the necessary evil of masks.*
 
 There are many tools out there for professional illustration workflows, CSP and
 medibang are often what people learn first. And they are great, easy-to-use and
@@ -81,7 +81,7 @@ rendering and compositing was done on the CPU instead of the GPU. So they never
 were able to match the powerful, realistic paintbrush engines in modern apps
 like Fresco and Rebelle.
 
-The *Paint* workspace brings simulated physical media to digital illustration.
+> The *Paint* workspace brings simulated physical media to digital illustration.
 
 <p>
   <a href="docs/assets/paint-workspace-light.webp#gh-light-mode-only">
@@ -100,9 +100,9 @@ The *Paint* workspace brings simulated physical media to digital illustration.
 
 ## Photo
 
-Mobile devices are becoming more capable every day. It seems like OLED screens
+*Mobile devices are becoming more capable every day. It seems like OLED screens
 are everywhere, and my old phone saves its images in P3 HDR
-format by default. SRGB is a thing of the past.
+format by default. SRGB is a thing of the past.*
 
 To this date, the only painting app that properly supports wide gamut HDR is
 Krita. HDR is a complicated beast and is hard to get right. When you publish
@@ -110,7 +110,7 @@ HDR and wide-gamut images online, you need to control the gain mapping so
 that it still looks good on SDR devices. Of course no photo editor is complete
 without the all of the basics (proofing, effect chains, the whole enchilada)
 
-The *Photo* workspace enables stunning visuals for a new generation of wide-gamut screens.
+> The *Photo* workspace enables stunning visuals for a new generation of wide-gamut screens.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/photo-workspace-dark.svg">
