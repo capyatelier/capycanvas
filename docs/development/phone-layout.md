@@ -193,8 +193,9 @@ and two to four fingers tap.
 | **On** | Does what a pen does, with every tool. |
 | **Off** | Today's behavior. |
 
-The switch in Capy's menu shows what the current mode does now; choosing it sets
-On or Off. Settings → Input offers all three. Desktops show it only in Settings.
+Every platform starts in Auto. The switch in Capy's menu shows what the current
+mode does now; choosing it sets On or Off. Settings → Input offers all three.
+Desktops show it only in Settings.
 
 ### When a finger paints
 
@@ -346,7 +347,10 @@ full-screen overlay that slides down from the top, and on Web below 480 px wide.
   preference says. Tapping it, four fingers again, Tab or Escape brings the bars
   back.
 - The phone's hidden state drives Zen Mode's check in Capy's menu. It never writes
-  the workspace's saved Zen setting and isn't part of recovery.
+  the workspace's saved Zen setting and isn't saved or recovered, so a restart
+  shows the bars.
+- The four-finger tap toggles Zen on tablets and desktops too, wherever the host
+  delivers it.
 
 ## Left-handed use
 
@@ -431,14 +435,3 @@ it.
    pen and one without, no tile sits under a cutout or corner, the slider handles
    don't trigger the back gesture, and finger painting and pen takeover behave as
    tested. Emulators don't stand in for the pen, edge-gesture or tier checks.
-
-## Open questions
-
-Each has a lean that stands unless reviewed otherwise.
-
-- **Ten tools at most?** Ten get 27-unit tiles at 320; eight keep 35.5. Lean: ten.
-- **iPhone safe area as reported?** It costs about 94 pt of width in landscape.
-  Lean: yes, then revisit on a device.
-- **Hidden bars after a restart?** Lean: they come back.
-- **Four-finger tap for Zen on tablets too?** Lean: yes, except Windows.
-- **320 × 320 minimum window where hosts allow it?** Lean: yes.
