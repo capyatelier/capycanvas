@@ -684,3 +684,6 @@ command-liquify-adjust = Ajuster la fluidité
 commands-liquify-no-changes = Appliquez d’abord la fluidité à ce calque
 
 command-pen-tilt = Inclinaison du stylet…
+command-fill-connected = Contigu
+command-fill-everywhere = Partout
+command-smooth-region-edges = Lisser les bords

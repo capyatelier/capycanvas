@@ -684,3 +684,6 @@ command-liquify-adjust = Verflüssigen anpassen
 commands-liquify-no-changes = Wende zuerst Verflüssigen auf diese Ebene an
 
 command-pen-tilt = Stiftneigung…
+command-fill-connected = Zusammenhängend
+command-fill-everywhere = Überall
+command-smooth-region-edges = Kanten glätten

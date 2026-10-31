@@ -1264,3 +1264,6 @@ command-liquify-adjust = Sesuaikan Liquify
 commands-liquify-no-changes = Terapkan Liquify ke lapisan ini terlebih dahulu
 
 command-pen-tilt = Kemiringan pena…
+command-fill-connected = Terhubung
+command-fill-everywhere = Di mana saja
+command-smooth-region-edges = Haluskan tepi

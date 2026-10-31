@@ -2249,7 +2249,7 @@ fn native_connected_tools() {
         named::<crate::number_control::NumberControl>(&w.panel_widget(Panel::ToolSettings), &format!("tool-setting-{id}"))
     };
     edit_number(&setting("gap_closing"), "12");
-    edit_number(&setting("smoothing"), "100");
+    assert!(ui_session(&w).command(CommandId::SelectionAntialias).selected);
     native_pen_path(&w, &[[1000., 750.], [1000., 750.]]);
     pump(350);
     let selection = ui_session(&w)

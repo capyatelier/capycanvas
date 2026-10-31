@@ -84,15 +84,10 @@ fn native_enclose_fill_pointer_workflow() {
         let tools = w.panel_widget(Panel::Brushes);
         let groups = widgets(&tools).find(|widget| widget.has_css_class("tool-groups")).unwrap();
         assert_eq!(state(&w).tool_set.groups.iter().map(|item| item.label.as_ref()).collect::<Vec<_>>(),
-            ["Fill", "Lasso fill"]);
-        input.click(screen_point(&mapped_label(&groups, "Lasso fill").unwrap(), &w.window, [0.5, 0.5]));
-        assert_eq!(state(&w).tool_set.subtools.iter().map(|item| item.label.as_ref()).collect::<Vec<_>>(),
-            ["Lasso fill", "Enclose and Fill"]);
-        input.click(screen_point(&mapped_label(&tools, "Enclose and Fill").unwrap(), &w.window, [0.5, 0.5]));
-        assert!(ui_session(&w).command(CommandId::EncloseFill).selected);
-        input.click(screen_point(&mapped_label(&groups, "Fill").unwrap(), &w.window, [0.5, 0.5]));
-        assert!(ui_session(&w).command(CommandId::Fill).selected);
-        input.click(screen_point(&mapped_label(&groups, "Lasso fill").unwrap(), &w.window, [0.5, 0.5]));
+            ["Fill", "Lasso fill", "Enclose and Fill"]);
+        for label in ["Lasso fill", "Enclose and Fill", "Fill", "Enclose and Fill"] {
+            input.click(screen_point(&mapped_label(&groups, label).unwrap(), &w.window, [0.5, 0.5]));
+        }
         assert!(ui_session(&w).command(CommandId::EncloseFill).selected);
         for (index, source) in [CommandId::SelectionVisible, CommandId::SelectionEditing, CommandId::SelectionReference].into_iter().enumerate() {
             let option = named::<gtk::DropDown>(&w.panel_widget(Panel::ToolSettings), "tool-action-group-selection-source");
@@ -109,12 +104,16 @@ fn native_enclose_fill_pointer_workflow() {
         let source = find_named(&w.panel_widget(Panel::ToolSettings), "tool-action-group-selection-source").unwrap();
         histogram::scroll_to(&source);
         capture_ui(&w, &output, &format!("enclose-source-{theme:?}.png"));
-        for (id, value) in [("tolerance", "15"), ("gap_closing", "0"), ("expansion", "0"), ("smoothing", "0")] {
+        for (id, value) in [("tolerance", "15"), ("gap_closing", "0"), ("expansion", "0")] {
             let control = named::<crate::number_control::NumberControl>(
                 &w.panel_widget(Panel::ToolSettings), &format!("tool-setting-{id}"));
             assert!(control.is_mapped(), "{id} is visible for Enclose and Fill");
             edit_number(&control, value);
         }
+        let smooth = named::<gtk::CheckButton>(&w.panel_widget(Panel::ToolSettings), "tool-action-SmoothRegionEdges");
+        histogram::scroll_to(smooth.upcast_ref());
+        input.click(screen_point(smooth.upcast_ref(), &w.window, [0.5, 0.5]));
+        assert!(!ui_session(&w).command(CommandId::SmoothRegionEdges).selected);
         w.dispatch(UiAction::SetColor { rgba: [0.85, 0.1, 0.05, 1.] });
         ready(&w);
         let empty = pixels(&raster(&w));
@@ -136,9 +135,9 @@ fn native_enclose_fill_pointer_workflow() {
         ]));
         committed(&w, &before);
         let filled = pixels(&raster(&w));
-        let sample = |x: u32, y: u32| {
+        let sample = |paint: &BTreeMap<TileKey, Vec<u8>>, x: u32, y: u32| {
             let tile_size = layer_core::raster::TILE_SIZE;
-            let tile = filled.iter().find(|(key, _)| key.coordinate == [x / tile_size, y / tile_size]);
+            let tile = paint.iter().find(|(key, _)| key.coordinate == [x / tile_size, y / tile_size]);
             tile.map_or([0; 4], |(_, bytes)| {
                 assert_eq!(bytes.len(), (tile_size * tile_size * 4) as usize);
                 let offset = ((y % tile_size * tile_size + x % tile_size) * 4) as usize;
@@ -146,11 +145,11 @@ fn native_enclose_fill_pointer_workflow() {
             })
         };
         for [x, y] in [[85, 110], [195, 110]] {
-            let rgba = sample(x, y);
+            let rgba = sample(&filled, x, y);
             assert!(rgba[0] > 180 && rgba[1] < 80 && rgba[3] == 255, "enclosed hole {x},{y}: {rgba:?}");
         }
         for [x, y] in [[25, 110], [42, 110], [140, 110], [290, 110], [85, 195]] {
-            assert_eq!(sample(x, y)[3], 0, "only enclosed transparent holes reach the paint destination at {x},{y}");
+            assert_eq!(sample(&filled, x, y)[3], 0, "only enclosed transparent holes reach the paint destination at {x},{y}");
         }
         let reference_now = || {
             let gpu = w.gpu.borrow();
@@ -174,6 +173,51 @@ fn native_enclose_fill_pointer_workflow() {
         invoke(&w, CommandId::Redo); ready(&w);
         assert_eq!(pixels(&raster(&w)), filled, "cancel preserves the redo entry");
         assert_eq!(reference_now(), reference_pixels);
+        invoke(&w, CommandId::Undo); ready(&w);
+        input.click(screen_point(&mapped_label(&groups, "Fill").unwrap(), &w.window, [0.5, 0.5]));
+        input.click(screen_point(&mapped_label(&tools, "Reference layers").unwrap(), &w.window, [0.5, 0.5]));
+        for (index, everywhere) in [(0, false), (1, true)] {
+            let scope = named::<gtk::DropDown>(&w.panel_widget(Panel::ToolSettings), "tool-action-group-fill-scope");
+            histogram::scroll_to(scope.upcast_ref());
+            input.click(screen_point(scope.upcast_ref(), &w.window, [0.5, 0.5]));
+            input.key(0xff50);
+            for _ in 0..index { input.key(0xff54); }
+            input.key(0xff0d);
+            let before = raster(&w);
+            stroke(&mut input, &w, [85., 110.], [85., 110.]);
+            committed(&w, &before);
+            let result = pixels(&raster(&w));
+            assert_eq!(sample(&result, 85, 110)[3], 255);
+            for [x, y] in [[195, 110], [290, 110], [25, 110]] {
+                assert_eq!(sample(&result, x, y)[3], if everywhere { 255 } else { 0 });
+            }
+            invoke(&w, CommandId::Undo); ready(&w); assert_eq!(pixels(&raster(&w)), empty);
+            invoke(&w, CommandId::Redo); ready(&w); assert_eq!(pixels(&raster(&w)), result);
+            invoke(&w, CommandId::Undo); ready(&w);
+        }
+        w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(WorkspaceState {
+            layout: layer_ui::WorkspacePreset::Painter.layout(Platform::Gtk), ..WorkspaceState::default()
+        }) });
+        invoke(&w, CommandId::EncloseFill); invoke(&w, CommandId::Hand); ready(&w);
+        let id = state(&w).workspace.layout.header.entries().find(|entry| entry.item == HeaderItem::Tool {
+            control: ToolbarControl::ToolSlot { slot: layer_ui::ToolSlotId::Fill }
+        }).unwrap().id;
+        let header = find_named(w.window.upcast_ref(), &format!("header-item-{id}")).unwrap();
+        let at = screen_point(&header, &w.window, [0.5, 0.5]);
+        input.click(at); ready(&w);
+        assert!(ui_session(&w).command(CommandId::EncloseFill).selected);
+        input.click(at); ready(&w);
+        assert_eq!(state(&w).customization.drawer.as_ref().unwrap().columns, [vec![Panel::Tools], vec![Panel::ToolSettings]]);
+        let tools = find_named(w.window.upcast_ref(), "drawer-panel-Tools").unwrap();
+        for label in ["Fill", "Lasso fill", "Enclose and Fill"] { assert!(mapped_label(&tools, label).is_some()); }
+        capture_ui(&w, &output, &format!("sketch-fill-{theme:?}.png"));
+        input.click(at); ready(&w);
+        let destination = screen_point(w.area.upcast_ref(), &w.window, [0.5, 0.5]);
+        input.perform(serde_json::json!([
+            {"point": at, "down": true}, {"point": destination}, {"down": false}
+        ]));
+        ready(&w);
+        assert_eq!(state(&w).workspace.layout.bubbles.bubbles.len(), 1);
         healthy(&w);
         eprintln!("PASS {theme:?}: reference holes, separate paint source, untouched exterior/ink/reference, one undo/redo and native Escape");
         w.window.destroy(); pump(100);

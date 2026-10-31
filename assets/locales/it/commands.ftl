@@ -683,3 +683,6 @@ command-liquify-adjust = Regola Fluidifica
 commands-liquify-no-changes = Applica prima Fluidifica a questo livello
 
 command-pen-tilt = Inclinazione della penna…
+command-fill-connected = Contiguo
+command-fill-everywhere = Ovunque
+command-smooth-region-edges = Smussa bordi

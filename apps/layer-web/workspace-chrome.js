@@ -223,7 +223,7 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
             let child;
             if(panel==="layers"&&layer_properties!=null){inspector=createLayerInspector({app,state,workspace,element,button,icon,contentPanel,toggle:()=>send({type:"toggle_layer_drawer_properties"}),invalidate:()=>{if(!animating){animating=true;requestAnimationFrame(animate);}}});child=inspector.root;body.classList.add("layer-inspector-column");}
             else if(toolbarPanel){child=toolbar(panel);child.dataset.drawerToolbar=panel;}
-            else child=contentPanel(panel,drawer.columns.flat().includes("filter_types"),panel==="brushes"&&tool_set?()=>state().customization.drawer?.tool_set:null);
+            else child=contentPanel(panel,drawer.columns.flat().includes("filter_types"),tool_set?()=>state().customization.drawer?.tool_set:null);
             body.append(child);
           }
           root.append(body);return body;

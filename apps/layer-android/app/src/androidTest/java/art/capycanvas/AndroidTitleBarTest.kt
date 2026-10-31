@@ -659,11 +659,10 @@ class AndroidTitleBarTest {
             shot("workspace-choices-$theme-$size")
             choose()
         }
-        // Moving the selector into a crowded region must retain its menu action.
         restore("large")
         var before = 0
         instrumentation.runOnMainSync {
-            before = left.objects().first { node("header-item-${it.getInt("id")}") == null }.getInt("id")
+            before = left.objects().filter { node("header-item-${it.getInt("id")}") == null }[1].getInt("id")
         }
         edit(obj("type" to "move", "id" to id, "zone" to "left", "before" to before))
         waitFor("hidden workspace selector") { node("header-item-$id") == null }
@@ -970,7 +969,7 @@ class AndroidTitleBarTest {
         assertNotNull(node("tool-setting-selection_width")); assertNotNull(node("tool-setting-selection_height"))
         tap("tool-action-selection_fixed_size")
         invoke("color_select")
-        for (id in listOf("tolerance", "expansion", "smoothing")) assertNotNull(node("tool-setting-$id"))
+        for (id in listOf("tolerance", "expansion")) assertNotNull(node("tool-setting-$id"))
         assertNotNull(node("tool-action-group-selection-source"))
         for (id in listOf("selection_visible", "selection_editing", "selection_reference")) {
             tap("tool-action-group-selection-source")
@@ -1166,16 +1165,18 @@ class AndroidTitleBarTest {
             ?.let { node("header-variants-${it.getInt("id")}") != null } == true }
         for (theme in listOf("light", "dark")) {
             action(obj("type" to "set_theme", "theme" to theme))
-            for ((index, id) in listOf("drawing_brush", "sculpt", "select").withIndex()) {
-                tool = listOf(MotionEvent.TOOL_TYPE_MOUSE, MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_STYLUS)[index]
-                val headerId = entries().first { it.getJSONObject("item").objectOrNull("control")?.optString("command") == id }.getInt("id")
+            for ((index, id) in listOf("drawing_brush", "sculpt", "select", "fill").withIndex()) {
+                tool = listOf(MotionEvent.TOOL_TYPE_MOUSE, MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_STYLUS)[index % 3]
+                val headerId = entries().first { it.getJSONObject("item").objectOrNull("control")?.let { c -> c.optString("command") == id || c.optString("slot") == id } == true }.getInt("id")
                 val anchor = obj("kind" to "header", "id" to headerId)
                 action(obj("type" to "invoke", "command" to "hand"))
                 assertTrue(header(headerId).getBoolean("has_variants")); assertFalse(header(headerId).getBoolean("selected"))
                 val rows = variantRows(anchor)
                 if (id == "drawing_brush") assertEquals(mediaIcons.keys, rows.map(::brushGroup).toSet())
                 if (id == "sculpt") assertEquals(setOf("blend", "wet_paint", "effects", "liquify", "retouch"), rows.map(::brushGroup).toSet())
+                if (id == "fill") assertEquals(listOf("fill", "lasso_fill", "enclose_fill"), rows.map(::rowCommand))
                 val choices = if (id == "drawing_brush") mediaIcons.keys.map { group -> rows.firstOrNull { brushGroup(it) == group } ?: error("Sketch lacks $group: $rows") }
+                    else if (id == "fill") rows
                     else listOf(rows.first { it.optBoolean("enabled", true) })
                 if (id == "select") assertEquals(setOf("rectangle_select", "ellipse_select", "lasso", "polygon_select", "auto_select", "color_select", "selection_brush", "tonal_select"), rows.map(::rowCommand).toSet())
                 for (choice in choices) {
@@ -1183,14 +1184,29 @@ class AndroidTitleBarTest {
                     choose(anchor, "header-variants-$headerId", choice, "sketch-menu-$id-${choice.getString("icon")}-$theme")
                     val selectedIcon = if (choice.getJSONObject("action").getJSONObject("variant").getString("type") == "brush_group")
                         presets.single { it.getInt("id") == state().getJSONObject("brush").getInt("preset") }.getString("icon") else choice.getString("icon")
-                    waitFor("Sketch $id chosen group published") { command(id).getBoolean("selected") && header(headerId).getString("icon") == selectedIcon }
+                    val selectedCommand = if (id == "fill") rowCommand(choice) else id
+                    waitFor("Sketch $id chosen group published") { command(selectedCommand).getBoolean("selected") && header(headerId).getString("icon") == selectedIcon }
                     assertEquals(selectedIcon, header(headerId).getString("icon"))
+                    if (id == "fill") {
+                        action(obj("type" to "invoke", "command" to "hand"))
+                        assertEquals(selectedIcon, header(headerId).getString("icon"))
+                        tap("header-control-$headerId")
+                        waitFor("Sketch restores remembered fill") { command(selectedCommand).getBoolean("selected") }
+                    }
                     tap("header-control-$headerId")
                     waitFor("Sketch $id grouped drawer") { drawer() != null && node("tool-drawer") != null }
                     assertEquals(anchor.toString(), drawer()!!.getJSONObject("anchor").toString())
-                    if (id != "select") assertEquals("[[\"${if (id == "drawing_brush") "brush_sets" else "sculpt_sets"}\"],[\"tools\"],[\"tool_settings\"]]", drawer()!!.getJSONArray("columns").toString())
+                    if (id in listOf("select", "fill")) assertEquals("[[\"tools\"],[\"tool_settings\"]]", drawer()!!.getJSONArray("columns").toString())
+                    else assertEquals("[[\"${if (id == "drawing_brush") "brush_sets" else "sculpt_sets"}\"],[\"tools\"],[\"tool_settings\"]]", drawer()!!.getJSONArray("columns").toString())
                     shot("sketch-$id-${choice.getString("icon")}-$theme")
                     tap("header-control-$headerId"); waitFor("Sketch group drawer closes") { drawer() == null }
+                }
+                if (id == "fill") {
+                    drag("header-control-$headerId", outside())
+                    waitFor("Sketch Fill takes a bubble") { snapshot().array("bubbles").length() == 1 }
+                    shot("sketch-fill-bubble-$theme")
+                    action(obj("type" to "invoke", "command" to "put_back_bubbles"))
+                    waitFor("Fill bubble returns") { snapshot().array("bubbles").length() == 0 }
                 }
             }
         }

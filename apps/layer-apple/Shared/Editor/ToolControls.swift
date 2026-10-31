@@ -7,7 +7,7 @@ struct ToolSetControls: View {
     var panel = "brushes"
     var drawerToolSet = JSON()
     private var model: JSON {
-        panel == "brushes" ? drawerToolSet.isNull ? store.state["tool_set"] : drawerToolSet : store.state["tool_panels"][panel]
+        drawerToolSet.isNull ? panel == "brushes" ? store.state["tool_set"] : store.state["tool_panels"][panel] : drawerToolSet
     }
     private var sets: Bool { panel == "brush_sets" || panel == "sculpt_sets" }
     var body: some View {

@@ -681,3 +681,6 @@ command-liquify-adjust = Sıvılaştırmayı ayarla
 commands-liquify-no-changes = Önce bu katmana sıvılaştırma uygulayın
 
 command-pen-tilt = Kalem eğimi…
+command-fill-connected = Bitişik
+command-fill-everywhere = Her yerde
+command-smooth-region-edges = Kenarları yumuşat

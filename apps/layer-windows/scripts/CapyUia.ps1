@@ -755,27 +755,21 @@ function Fit-Canvas{
         try{$canvas.SetFocus();$canvas.Current.HasKeyboardFocus}catch [System.InvalidOperationException]{$false}
     }
     Wait-Until $focus 'The canvas did not take focus before Fit'
-    $revision=(Model).state.camera.revision
-    if($null -eq $revision){
-        Wait-Until {(Control 'canvas-view-info').Current.ItemStatus -eq 'Closed'} 'The zoom menu did not close before Fit'
-        foreach($id in @('zoom-fit_canvas','zoom-button-zoom_in')){
+    Wait-Until {(Control 'canvas-view-info').Current.ItemStatus -eq 'Closed'} 'The zoom menu did not close before Fit'
+    foreach($id in @('zoom-fit_canvas','zoom-button-zoom_in')){
+        Invoke-Id 'canvas-view-info'
+        Wait-Until {$item=Zoom-Item $id;(Control 'canvas-view-info').Current.ItemStatus -eq 'Open' -and $item -and !$item.Current.IsOffscreen -and $item.Current.IsEnabled} "Missing enabled zoom command: $id"
+        if($id -eq 'zoom-button-zoom_in'){$fitted=(Control 'canvas-camera').Current.Name}
+        (Zoom-Item $id).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+        if($id -eq 'zoom-button-zoom_in'){
+            Wait-Until {(Control 'canvas-camera').Current.Name -ne $fitted} 'Zoom In did not acknowledge a distinct camera'
             Invoke-Id 'canvas-view-info'
-            Wait-Until {$item=Zoom-Item $id;(Control 'canvas-view-info').Current.ItemStatus -eq 'Open' -and $item -and !$item.Current.IsOffscreen -and $item.Current.IsEnabled} "Missing enabled zoom command: $id"
-            if($id -eq 'zoom-button-zoom_in'){$fitted=(Control 'canvas-camera').Current.Name}
-            (Zoom-Item $id).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
-            if($id -eq 'zoom-button-zoom_in'){
-                Wait-Until {(Control 'canvas-camera').Current.Name -ne $fitted} 'Zoom In did not acknowledge a distinct camera'
-                Invoke-Id 'canvas-view-info'
-            }
-            Wait-Until {(Control 'canvas-view-info').Current.ItemStatus -eq 'Closed'} 'The zoom menu did not close'
         }
-        Wait-Until $focus 'The canvas did not take focus before Fit'
-        [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),0x30)
-        Wait-Until {(Control 'canvas-camera').Current.Name -eq $fitted} 'Fit did not restore the native camera readout'
-        return
+        Wait-Until {(Control 'canvas-view-info').Current.ItemStatus -eq 'Closed'} 'The zoom menu did not close'
     }
+    Wait-Until $focus 'The canvas did not take focus before Fit'
     [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),0x30)
-    Wait-Until {(Model).state.camera.revision -gt $revision} 'Fit did not advance the camera'
+    Wait-Until {(Control 'canvas-camera').Current.Name -eq $fitted} 'Fit did not restore the native camera readout'
 }
 function Save-ProjectAs([string]$Path,[scriptblock]$NativeSaved){
     & (Join-Path $script:CapyScripts 'open-application-menu.ps1') -Root $root -Name 'File'

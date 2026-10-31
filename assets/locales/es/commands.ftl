@@ -684,3 +684,6 @@ command-liquify-adjust = Ajustar Licuar
 commands-liquify-no-changes = Aplica Licuar a esta capa primero
 
 command-pen-tilt = Inclinación del lápiz…
+command-fill-connected = Contiguo
+command-fill-everywhere = En todas partes
+command-smooth-region-edges = Suavizar bordes

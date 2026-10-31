@@ -5,7 +5,12 @@ use super::*;
 use layer_core::{Point, Selection, authored::{OccurrenceHandle,SceneScope,SourceTarget}};
 use layer_render::RegionRequest;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FillScope { #[default] Connected, Everywhere }
+
 pub(super) struct RegionTools {
+    pub scope: FillScope,
     pub tolerance: f32,
     pub refinement: layer_render::RegionRefinement,
     pub source: [RegionSource; 2],
@@ -38,9 +43,10 @@ enum Purpose {
 impl Default for RegionTools {
     fn default() -> Self {
         Self {
+            scope: FillScope::Connected,
             tolerance: 0.1,
             refinement: layer_render::RegionRefinement {
-                smoothing: 1.,
+                smooth_edges: true,
                 ..Default::default()
             },
             source: [RegionSource::Visible; 2],
@@ -55,7 +61,7 @@ impl Default for RegionTools {
     }
 }
 impl RegionTools {
-    pub(super) fn fields(&self) -> [(&'static str, MessageId, Option<MessageId>, NumericControl, f32); 4] {
+    pub(super) fn fields(&self) -> [(&'static str, MessageId, Option<MessageId>, NumericControl, f32); 3] {
         let distance = layer_render::RegionRefinement::MAX_DISTANCE as f64;
         [
             (
@@ -78,13 +84,6 @@ impl RegionTools {
                 Some(MessageId::TOOL_CONTROL_GROUP_EDGES),
                 NumericControl::whole_pixels(-distance, distance),
                 self.refinement.expansion as f32,
-            ),
-            (
-                "smoothing",
-                MessageId::TOOL_CONTROL_SMOOTHING,
-                Some(MessageId::TOOL_CONTROL_GROUP_EDGES),
-                NumericControl::percent(),
-                self.refinement.smoothing,
             ),
         ]
     }
@@ -114,7 +113,6 @@ impl RegionTools {
             "tolerance" => self.tolerance = value,
             "gap_closing" => self.refinement.gap_closing = value as u32,
             "expansion" => self.refinement.expansion = value as i32,
-            "smoothing" => self.refinement.smoothing = value,
             _ => unreachable!(),
         }
         self.cancel();
@@ -241,6 +239,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let Some((fill, source, contiguous)) = self.layer_interaction.tool.region() else {
             return;
         };
+        let contiguous = contiguous && (enclosed || !fill || self.region_tools.scope == FillScope::Connected);
         let extent = self.engine.document().composition().size;
         if !point.x.is_finite()
             || !point.y.is_finite()
@@ -287,7 +286,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             tolerance: self.region_tools.tolerance,
             refinement: layer_render::RegionRefinement {
                 gap_closing: if contiguous { self.region_tools.refinement.gap_closing } else { 0 },
-                smoothing: if !fill && !self.selection_tools.options.antialias { 0. } else { self.region_tools.refinement.smoothing },
+                smooth_edges: if fill { self.region_tools.refinement.smooth_edges } else { self.selection_tools.options.antialias },
                 ..self.region_tools.refinement
             },
             limit: if !enclosed && fill && mask_target.is_none() {

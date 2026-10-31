@@ -162,8 +162,8 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
     pub fn editing(&self) -> Option<Box<layer_ui::EditingState>> { self.state.borrow().editing.clone() }
     pub async fn load_editing(&self) -> Result<()> {
         if let StoreResponse::Editing(json) = self.execute(StoreRequest::Editing).await? {
-            let editing: Option<Box<layer_ui::EditingState>> = json.map(|json| serde_json::from_str(&json)).transpose()?;
-            if let Some(editing) = &editing { editing.validate().map_err(StoreError::workspace)?; }
+            let editing = json.and_then(|json| serde_json::from_str::<Box<layer_ui::EditingState>>(&json).ok())
+                .filter(|editing| editing.validate().is_ok());
             let mut state = self.state.borrow_mut();
             state.saved_editing = editing.clone();
             state.editing = editing;
@@ -470,9 +470,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                 .await
             {
                 Ok(incoming) => return Ok(incoming),
-                // Claims, rather than the catalog's lease snapshot, decide
-                // availability when several windows open at the same time.
-                Err(error) if error.kind == ErrorKind::OwnedElsewhere => continue,
+                Err(error) if matches!(error.kind, ErrorKind::OwnedElsewhere | ErrorKind::InvalidData) => continue,
                 Err(error) => return Err(error),
             }
         }

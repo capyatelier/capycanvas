@@ -94,7 +94,8 @@ fn apple_region_refinement_changes_coverage_and_restores_exact_history() {
                 setting(&app, "tolerance", 0.);
                 for (expansion, smoothing) in [(0, 0.), (2, 0.), (-2, 0.), (0, 1.)] {
                     setting(&app, "expansion", expansion as f32);
-                    setting(&app, "smoothing", smoothing);
+                    let command = if tool == "fill" { layer_ui::CommandId::SmoothRegionEdges } else { layer_ui::CommandId::SelectionAntialias };
+                    if app.borrow().host.session.command(command).selected != (smoothing > 0.) { app.invoke(if tool == "fill" { "smooth_region_edges" } else { "selection_antialias" }); }
                     id += 1;
                     contact(&app, id, device, &[1., 3.]);
                     app.draw_until_idle();
@@ -186,7 +187,7 @@ fn apple_region_gap_closing_and_cancelled_requests_preserve_artwork() {
         for (id, gap) in [(1, 0), (2, 4)] {
             app.invoke("fill");
             setting(&app, "gap_closing", gap as f32);
-            setting(&app, "smoothing", 0.);
+            if app.borrow().host.session.command(layer_ui::CommandId::SmoothRegionEdges).selected { app.invoke("smooth_region_edges"); }
             contact(&app, id, 0, &[1., 3.]);
             app.draw_until_idle();
             let painted = app.pixels();

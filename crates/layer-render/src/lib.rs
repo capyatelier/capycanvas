@@ -633,16 +633,13 @@ pub struct RegionRefinement {
     pub gap_closing: u32,
     /// Signed square-neighborhood expansion of the resulting region.
     pub expansion: i32,
-    /// Corner antialiasing strength; zero preserves exact pixel boundaries.
-    pub smoothing: f32,
+    pub smooth_edges: bool,
 }
 impl RegionRefinement {
     pub const MAX_DISTANCE: u32 = 32;
     pub fn is_valid(self) -> bool {
         self.gap_closing <= Self::MAX_DISTANCE
             && self.expansion.unsigned_abs() <= Self::MAX_DISTANCE
-            && self.smoothing.is_finite()
-            && (0.0..=1.0).contains(&self.smoothing)
     }
 }
 #[derive(Clone, Debug)]

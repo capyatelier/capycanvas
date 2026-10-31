@@ -6,7 +6,7 @@ variants! {
     #[serde(rename_all = "snake_case")]
     pub enum ToolSlotId {
         Drawing, Marquee, Lasso, AutomaticSelection, ManualSelection, Healing,
-        PhotoFill, Fill, LassoFill, Blend, Retouch, Operation, Figure, Ruler, Gradient,
+        PhotoFill, Fill, Blend, Retouch, Operation, Figure, Ruler, Gradient,
     }
 }
 
@@ -43,8 +43,7 @@ impl ToolbarControl {
                 CommandId::Ruler => G::Slot(ToolSlotId::Ruler),
                 CommandId::Gradient => G::Slot(ToolSlotId::Gradient),
                 CommandId::Move | CommandId::EditPoints => G::Slot(ToolSlotId::Operation),
-                CommandId::Fill => G::Slot(ToolSlotId::Fill),
-                CommandId::LassoFill => G::Slot(ToolSlotId::LassoFill),
+                CommandId::Fill | CommandId::LassoFill | CommandId::EncloseFill => G::Slot(ToolSlotId::Fill),
                 _ => G::Brush(command.paint_tool()?),
             },
             _ => return None,
@@ -161,7 +160,6 @@ impl ToolSlotId {
                 }
             }
             Self::Fill => const { &[command(C::Fill), command(C::LassoFill), command(C::EncloseFill)] },
-            Self::LassoFill => const { &[command(C::LassoFill), command(C::EncloseFill)] },
             Self::Blend => const { &[
                 V::BrushGroup { group: ToolGroup::Blend },
                 V::BrushGroup { group: ToolGroup::WetPaint },
@@ -229,7 +227,7 @@ impl ToolSlotId {
             Self::Ruler => CommandId::Ruler.localized_label(localization).to_string(),
             Self::Blend => CommandId::Blend.localized_label(localization).to_string(),
             Self::Retouch => ToolGroup::Retouch.localized_label(localization).to_string(),
-            Self::LassoFill => CommandId::LassoFill.localized_label(localization).to_string(),
+            Self::Fill => localization.text(MessageId::TOOL_FAMILY_FILL).to_string(),
             Self::Gradient => CommandId::Gradient
                 .localized_label(localization)
                 .to_string(),
@@ -507,7 +505,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let group = if self.layer_interaction.tool.selection_tool().is_some() {
             ToolControlGroup::Selection
         } else if matches!(self.layer_interaction.tool, LayerCanvasTool::LassoFill | LayerCanvasTool::EncloseFill { .. }) {
-            ToolControlGroup::Slot(ToolSlotId::LassoFill)
+            ToolControlGroup::Slot(ToolSlotId::Fill)
         } else if self.layer_interaction.tool == LayerCanvasTool::Transform {
             ToolControlGroup::Slot(ToolSlotId::Operation)
         } else {
@@ -693,7 +691,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 return false;
             }
             (
-                vec![vec![Panel::Brushes], vec![Panel::ToolSettings]],
+                ToolbarControl::ToolSlot { slot }.drawer_columns().unwrap(),
                 Some(self.group_tool_set(ToolControlGroup::Slot(slot), Some(origin))),
             )
         } else {

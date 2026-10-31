@@ -311,15 +311,14 @@ impl BrowserDatabase {
                 StoreResponse::Done
             }
             Maintenance { owner, clear_older } => {
-                let items = self
+                let items = retention::readable_items(self
                     .items
                     .values()
                     .map(|r| {
                         let stored = r.stored()?;
                         stored.entity.validate()?;
                         Ok(stored)
-                    })
-                    .collect::<Result<Vec<_>>>()?;
+                    }))?;
                 let changed = retention::retention_plan(
                     &items,
                     owner.as_ref(),

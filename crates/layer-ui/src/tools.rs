@@ -55,15 +55,17 @@ pub enum ToolFamily {
     Paint,
     Blend,
     Retouch,
+    Fill,
 }
 impl ToolFamily {
-    pub const ALL: [Self; 4] = [Self::Ink, Self::Paint, Self::Blend, Self::Retouch];
+    pub const ALL: [Self; 5] = [Self::Ink, Self::Paint, Self::Blend, Self::Retouch, Self::Fill];
     pub fn commands(self) -> &'static [CommandId] {
         match self {
             Self::Ink => &[CommandId::Pen, CommandId::Pencil],
             Self::Paint => &[CommandId::Brush, CommandId::Airbrush],
             Self::Blend => &[CommandId::Blend, CommandId::Liquify],
             Self::Retouch => &[CommandId::Clone, CommandId::Heal, CommandId::SpotHeal],
+            Self::Fill => &[CommandId::Fill, CommandId::LassoFill, CommandId::EncloseFill],
         }
     }
     pub fn shortcut_id(self) -> &'static str {
@@ -72,6 +74,7 @@ impl ToolFamily {
             Self::Paint => "tools.paint",
             Self::Blend => "tools.blend",
             Self::Retouch => "tools.retouch",
+            Self::Fill => "tools.fill",
         }
     }
     pub fn message_id(self) -> MessageId {
@@ -80,6 +83,7 @@ impl ToolFamily {
             Self::Paint => MessageId::TOOL_FAMILY_PAINT,
             Self::Blend => MessageId::TOOL_FAMILY_BLEND,
             Self::Retouch => MessageId::TOOL_FAMILY_RETOUCH,
+            Self::Fill => MessageId::TOOL_FAMILY_FILL,
         }
     }
     pub fn localized_label(self, localizer: &Localizer) -> Arc<str> { localizer.text(self.message_id()) }

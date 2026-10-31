@@ -34,13 +34,11 @@ mod enclose_fill_checks {
         for platform in Platform::ALL {
             for control in [ToolbarControl::Command { command: CommandId::Fill },
                 ToolbarControl::ToolSlot { slot: ToolSlotId::PhotoFill },
-                ToolbarControl::ToolSlot { slot: ToolSlotId::LassoFill }] {
+                ToolbarControl::ToolSlot { slot: ToolSlotId::Fill }] {
                 let (mut s, panel, ids) = group_fixture(platform, &[control]);
                 let tile = DrawerAnchor::Tile { panel, tile: ids[0] };
                 let header = add_group_header(&mut s, control);
-                let commands = if control == (ToolbarControl::ToolSlot { slot: ToolSlotId::LassoFill }) {
-                    &[CommandId::LassoFill, CommandId::EncloseFill][..]
-                } else { &[CommandId::Fill, CommandId::LassoFill, CommandId::EncloseFill][..] };
+                let commands = &[CommandId::Fill, CommandId::LassoFill, CommandId::EncloseFill][..];
                 let check = |s: &UiSession<Recorder>, view: &ToolSetView, anchor: DrawerAnchor| {
                     let siblings: Vec<_> = view.groups.iter().chain(&view.subtools).filter_map(|item|
                         if let UiAction::ChooseToolVariant { anchor: origin, variant: ToolVariant::Command { command } } = item.action {
@@ -127,8 +125,8 @@ mod enclose_fill_checks {
                 invoke(&mut s, command);
                 assert!(s.command(command).selected);
                 assert_eq!(s.state.tool_settings.iter().map(|setting| setting.id).collect::<Vec<_>>(),
-                    ["tolerance", "gap_closing", "expansion", "smoothing", "opacity"]);
-                for (id, value) in [("tolerance", 0.25), ("gap_closing", 3.), ("expansion", -2.), ("smoothing", 0.5)] {
+                    ["tolerance", "gap_closing", "expansion", "opacity"]);
+                for (id, value) in [("tolerance", 0.25), ("gap_closing", 3.), ("expansion", -2.)] {
                     s.dispatch(UiAction::SetToolSetting { id: id.into(), value }).unwrap();
                 }
                 for (source_command, scope) in [
@@ -152,7 +150,7 @@ mod enclose_fill_checks {
                     assert_eq!(request.tolerance, 0.25);
                     assert_eq!(request.refinement.gap_closing, 3);
                     assert_eq!(request.refinement.expansion, -2);
-                    assert_eq!(request.refinement.smoothing, 0.5);
+                    assert!(request.refinement.smooth_edges);
                     let layer_render::RegionSource::Scene { scope: actual, .. } = &request.source else { panic!("scene source"); };
                     assert_eq!(actual, &scope);
                     assert!(s.cancel_layer_gesture().unwrap());
@@ -374,6 +372,47 @@ mod enclose_fill_checks {
                     assert!(s.selection_masks.target().is_none());
                 }
             }
+        }
+    }
+}
+
+mod fill_option_checks {
+    use super::*;
+
+    #[test]
+    fn fill_scope_and_smooth_edges_restore_and_do_not_change_auto_select_or_enclosure_scope() {
+        for platform in Platform::ALL {
+            let mut s = session(platform);
+            invoke(&mut s, CommandId::Fill);
+            invoke(&mut s, CommandId::FillEverywhere);
+            invoke(&mut s, CommandId::SmoothRegionEdges);
+            let saved = s.editing_state();
+            s.restore_editing(serde_json::from_slice(&serde_json::to_vec(&saved).unwrap()).unwrap()).unwrap();
+            assert_eq!(s.region_tools.scope, FillScope::Everywhere);
+            assert!(!s.region_tools.refinement.smooth_edges);
+            for (tool, contiguous, smooth) in [(CommandId::Fill, false, false), (CommandId::AutoSelect, true, true)] {
+                invoke(&mut s, tool);
+                assert!(!s.state.tool_settings.iter().any(|field| field.id == "smoothing"));
+                pen_at(&mut s, 1, PenPhase::Down, [48., 72.]);
+                pen_at(&mut s, 2, PenPhase::Up, [48., 72.]);
+                s.frame(1, 1).unwrap();
+                let request = s.renderer_mut().region_requests.last().unwrap().clone();
+                assert_eq!(request.contiguous, contiguous);
+                assert_eq!(request.refinement.smooth_edges, smooth);
+                s.region_tools.renderer_replaced();
+            }
+            invoke(&mut s, CommandId::AutoSelect);
+            invoke(&mut s, CommandId::SelectionAntialias);
+            assert!(!s.command(CommandId::SelectionAntialias).selected);
+            assert!(!s.state.tool_actions.iter().any(|action| action.command == CommandId::SmoothRegionEdges));
+            invoke(&mut s, CommandId::EncloseFill);
+            invoke(&mut s, CommandId::SelectionEditing);
+            for (phase, point) in [(PenPhase::Down, [20., 20.]), (PenPhase::Move, [180., 20.]), (PenPhase::Move, [180., 180.]), (PenPhase::Up, [20., 180.])] {
+                pen_at(&mut s, 3, phase, point);
+            }
+            s.frame(2, 2).unwrap();
+            let request = s.renderer_mut().region_requests.last().unwrap();
+            assert!(request.contiguous && request.enclosure.is_some());
         }
     }
 }

@@ -680,3 +680,6 @@ command-liquify-adjust = 调整液化
 commands-liquify-no-changes = 请先对此图层应用液化
 
 command-pen-tilt = 笔倾斜…
+command-fill-connected = 相邻区域
+command-fill-everywhere = 所有区域
+command-smooth-region-edges = 平滑边缘

@@ -685,3 +685,6 @@ command-liquify-adjust = Ajustar Liquefazer
 commands-liquify-no-changes = Aplique Liquefazer a esta camada primeiro
 
 command-pen-tilt = Inclinação da caneta…
+command-fill-connected = Contíguo
+command-fill-everywhere = Em toda parte
+command-smooth-region-edges = Suavizar bordas

@@ -684,3 +684,6 @@ command-liquify-adjust = Adjust Liquify
 commands-liquify-no-changes = Apply Liquify to this layer first
 
 command-pen-tilt = Pen tilt…
+command-fill-connected = Connected
+command-fill-everywhere = Everywhere
+command-smooth-region-edges = Smooth edges

@@ -42,9 +42,8 @@ Select by Color shares region classification, tolerance, visible/editing/referen
 sampling, stale-result validation, expansion, and edge smoothing with Auto select.
 `RegionRequest::contiguous` controls whether the GPU keeps only the seed's
 component or all matching pixels. It never downloads image pixels for CPU
-classification. Gap closing applies only to contiguous regions. Existing region
-callers explicitly request contiguous behavior. Disabling anti-aliasing removes
-the smoothing control and produces hard edges before any requested feathering.
+classification. Gap closing applies only to contiguous regions. Disabling
+anti-aliasing produces hard edges before any requested feathering.
 
 Selection combination and feathering run once on the GPU at gesture completion,
 using the existing asynchronous region queue and stale-result checks, in the
@@ -62,11 +61,16 @@ included layouts and preserves working settings; customized history is retained.
 The new icons use the existing SVG bank, and native tool/header/toolbar buttons
 retain the application drag and reorder convention.
 
+Fill offers Connected for the tapped area and Everywhere for every matching
+colour in the source. Fill and Enclose and Fill share Smooth edges; Auto select
+uses its existing Anti-aliasing switch alone. Fill is available in pen-button
+and finger-tap bindings; four-finger tap remains unbound by default.
+
 ## Enclose and Fill
 
-The Fill tool set has **Fill** and **Lasso Fill** categories. Lasso Fill contains
-ordinary **Lasso Fill** and **Enclose and Fill**. Returning to the category restores
-the last lasso tool used. Draw a loose loop around closed transparent regions in
+The Fill group lists **Fill**, **Lasso fill** and **Enclose and Fill** as siblings
+and remembers its last tool. F cycles the three tools. Draw a loose loop around
+closed transparent regions in
 line art, then release
 it to paint those regions in the active paint layer. Lasso Fill continues to
 paint the loop's entire interior. Enclose and Fill paints all eligible regions
@@ -83,7 +87,7 @@ exclude it by choosing the line-art reference. This version targets transparency
 not white or arbitrary colors, and does not write to masks or selections.
 
 Tolerance sets the maximum eligible alpha. Gap closing seals small breaks before
-region discovery. Expansion and Smoothing refine the resulting edges. Components
+region discovery. Expansion and the Smooth edges switch refine the resulting edges. Components
 that reach the canvas boundary or extend outside the loop are excluded. Expansion
 stays inside the loop, and the active selection clips the final paint without
 creating new closed regions. Source pixels are never changed by discovery.

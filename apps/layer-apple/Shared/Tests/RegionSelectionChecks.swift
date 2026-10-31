@@ -100,7 +100,9 @@ extension XCTestCase {
             }
             setting("tolerance", 0); setting("gap_closing", 0)
             for (expansion, smoothing) in [(0, 0), (2, 0), (-2, 0), (0, 100)] {
-                setting("expansion", expansion); setting("smoothing", smoothing)
+                setting("expansion", expansion)
+                let toggle = app.checkBoxes["tool-action-" + (tool == "Fill" ? "smooth_region_edges" : "selection_antialias")]
+                if (toggle.value as? String == "1") != (smoothing > 0) { workspaceActivate(toggle) }
                 let painted = try paint(tool)
                 var softened = 0
                 for i in 0..<(64 * 64) {
@@ -125,7 +127,9 @@ extension XCTestCase {
             }
         }
         let broken = try outline(gap: true)
-        selectTool("Fill"); setting("expansion", 0); setting("smoothing", 0)
+        selectTool("Fill"); setting("expansion", 0)
+        let smoothEdges = app.checkBoxes["tool-action-smooth_region_edges"]
+        if smoothEdges.value as? String == "1" { workspaceActivate(smoothEdges) }
         for distance in [0, 4] {
             setting("gap_closing", distance)
             let painted = try paint("Fill")
@@ -200,7 +204,7 @@ extension XCTestCase {
                 if tool == "Fill" { editorChoice(source, in: app) } else {
                     editorToolActionChoice("selection_" + ["Visible artwork": "visible", "Editing layer": "editing", "Reference layers": "reference"][source]!, in: app)
                 }
-                for setting in ["tolerance", "smoothing"] {
+                for setting in ["tolerance"] {
                     XCTAssertTrue(app.buttons["number-value-tool-" + setting].exists)
                 }
                 for setting in ["gap_closing", "expansion"] {
@@ -242,9 +246,6 @@ extension XCTestCase {
                 waitForExpectations(timeout: 5)
             }
             #if os(iOS)
-            // Exercise the integer fields and the lower, scrollable smoothing
-            // control through UIKit. Switching tools verifies owner publication,
-            // rather than merely observing the field's unfinished local draft.
             for (id, values) in [("gap_closing", ["4", "0"]), ("expansion", ["2", "-2", "0"])] {
                 for value in values {
                     let entry = app.textFields["number-entry-tool-" + id]
@@ -255,16 +256,11 @@ extension XCTestCase {
                     waitForExpectations(timeout: 5)
                 }
             }
-            for percent in [25, 100] {
-                let value = app.buttons["number-value-tool-smoothing"]
-                revealEditorControl(value, in: app.scrollViews.containing(.button, identifier: value.identifier).firstMatch)
-                workspaceActivate(value)
-                let entry = app.textFields["number-entry-tool-smoothing"]
-                XCTAssertTrue(entry.waitForExistence(timeout: 5)); entry.typeText("\(percent)\n")
-                editorTool("Paint Brush", in: app); editorTool(tool, in: app)
-                expectation(for: NSPredicate(format: "value == %@", "\(percent).0 %"), evaluatedWith: value)
-                waitForExpectations(timeout: 5)
-            }
+            let edgeCommand = tool == "Fill" ? "smooth_region_edges" : "selection_antialias"
+            let toggle = app.switches["tool-action-" + edgeCommand]
+            revealEditorControl(toggle, in: app.scrollViews.containing(.switch, identifier: toggle.identifier).firstMatch)
+            workspaceActivate(toggle); workspaceActivate(toggle)
+            XCTAssertTrue(toggle.exists)
             #endif
             attachEditor(in: app, name: "region-\(tool)-controls")
         }

@@ -114,15 +114,15 @@ export async function checkToolVariations({call,evaluate,settle}) {
         await click(`${selector} > button:first-child`);
         assert.ok(await evaluate('layerApp.state().customization.drawer!=null'),`${device}: active click opens drawer`);
         const drawer=await evaluate('layerApp.state().customization.drawer');
-        assert.deepEqual(drawer.anchor,anchor);assert.deepEqual(drawer.columns,[['brushes'],['tool_settings']]);
-        assert.deepEqual(await evaluate("[...document.querySelectorAll('.content-drawer .brushes-control .tool-groups .tool-choice-name')].map(n=>n.textContent)"),categories);
-        await evaluate("window.retainedSlotDrawer=document.querySelector('.content-drawer .brushes-control')");
+        assert.deepEqual(drawer.anchor,anchor);assert.deepEqual(drawer.columns,[[slot==='fill'?'tools':'brushes'],['tool_settings']]);
+        assert.deepEqual(await evaluate("[...document.querySelectorAll('.content-drawer :is(.brushes-control,.tools-control) .tool-groups .tool-choice-name')].map(n=>n.textContent)"),categories);
+        await evaluate("window.retainedSlotDrawer=document.querySelector('.content-drawer :is(.brushes-control,.tools-control)')");
         for(let choice=0;choice<3;choice++) {
           await settleDrawer();
           const sibling=await evaluate('layerApp.state().customization.drawer.tool_set.groups.find(r=>!r.selected&&r.enabled)');
-          await click(`.content-drawer .brushes-control .tool-groups [data-tool-choice="${sibling.label}"]`);
+          await click(`.content-drawer :is(.brushes-control,.tools-control) .tool-groups [data-tool-choice="${sibling.label}"]`);
           assert.deepEqual(await evaluate('layerApp.state().customization.drawer.anchor'),anchor,'drawer sibling keeps its origin');
-          assert.equal(await evaluate("document.querySelector('.content-drawer .brushes-control')===retainedSlotDrawer"),true,'drawer siblings retain native controls');
+          assert.equal(await evaluate("document.querySelector('.content-drawer :is(.brushes-control,.tools-control)')===retainedSlotDrawer"),true,'drawer siblings retain native controls');
           assert.equal(await evaluate(`layerApp.app.panel_view('toolbar').tiles.find(t=>t.id===${tile.id}).icon`),sibling.icon,`${device}: full drawer choice updates tile`);
         }
         await click(`${selector} > button:first-child`);assert.equal(await evaluate('layerApp.state().customization.drawer==null'),true,`${device}: active click closes drawer`);
@@ -156,8 +156,8 @@ export async function checkToolVariations({call,evaluate,settle}) {
         assert.deepEqual(leaves.slice(-3).map(row=>row.label),['Fill','Lasso fill','Enclose and Fill']);
         await openChoices(fillAnchor,fillSelector);await choose('Enclose and Fill');
         assert.deepEqual(await evaluate('layerApp.state().tool_set.groups.map(item=>item.label)'),
-          leaves.map(row=>row.label),'Photo Fill retains broad categories');
-        assert.deepEqual(await evaluate('layerApp.state().tool_set.subtools.map(item=>item.label)'),[],'Photo Fill keeps leaf tools directly in its category list');
+          leaves.map(row=>row.label),'Photo Fill lists the same three siblings');
+        assert.deepEqual(await evaluate('layerApp.state().tool_set.subtools.map(item=>item.label)'),[],'Enclose and Fill has no nested tool category');
       }
       await send({type:'restore_workspace',workspace:fixture});
     }
@@ -193,7 +193,7 @@ export async function checkToolVariations({call,evaluate,settle}) {
         assert.equal(await evaluate(`${view}.icon`),slot==='blend'?'blend':alternate.icon,'docked sibling uses its shared group icon');
         await send({type:'customize',action:{type:'close_expanded'}});await click(groupBody(anchor,selector));await settleDrawer();
         assert.deepEqual(await evaluate('layerApp.state().customization.drawer.anchor'),anchor,'docked sibling retains its slot origin');
-        const drawerLabels=await evaluate("[...document.querySelectorAll('.content-drawer .brushes-control .tool-groups .tool-choice-name')].map(n=>n.textContent)");
+        const drawerLabels=await evaluate("[...document.querySelectorAll('.content-drawer :is(.brushes-control,.tools-control) .tool-groups .tool-choice-name')].map(n=>n.textContent)");
         assert.deepEqual(drawerLabels,categories,'full selection drawer keeps the scoped categories');
         selection[slot]={menu:rows.map(row=>row.label),dock:dockLabels,drawer:drawerLabels};
         await shot(`${slot}-${theme}`);await send({type:'customize',action:{type:'close_expanded'}});
@@ -239,15 +239,20 @@ export async function checkToolVariations({call,evaluate,settle}) {
       await resize(1400);
     }
     for(const theme of ['light','dark']) {
-      fixture.layout.header.size='medium';entry.item.control={kind:'tool_slot',slot:'figure'};await send({type:'restore_workspace',workspace:fixture});await send({type:'set_theme',theme});await send({type:'invoke',command:'hand'});await send({type:'invoke',command:'quick_mask'});
+      fixture.layout.header.size='medium';entry.item.control={kind:'tool_slot',slot:'figure'};await send({type:'restore_workspace',workspace:fixture});await send({type:'set_theme',theme});
       const anchor={kind:'header',id:entry.id},selector=`[data-header-item="${entry.id}"]`,view=groupView(anchor),zone=fixture.layout.header.zones.findIndex(items=>items.some(item=>item.id===entry.id)),overflow=`#header-overflow-${zone}`,row=`[data-header-overflow-item="${entry.id}"]`;
-      await wait(`!${view}.enabled`);assert.equal(await evaluate(`document.querySelector('${selector} .header-tool').disabled`),true);
-      for(device of ['mouse','touch','pen']){await clickPoint(await markerPoint(anchor,selector));assert.equal(await evaluate(`${view}.selected`),false,'disabled marker cannot activate its tool');assert.equal(await menuOpen(),false);await openChoices(anchor,selector);await closeMenu();}
-      await resize(200);await wait(`document.querySelector('${selector}').hidden`);await click(`${overflow} > summary`);assert.equal(await evaluate(`document.querySelector('${row}').disabled`),true);
-      for(device of ['mouse','touch','pen']){await clickPoint(await markerPoint(anchor,row));assert.equal(await evaluate(`${view}.selected`),false,'disabled overflow marker cannot activate its tool');assert.equal(await menuOpen(),false);await openChoices(anchor,row);await closeMenu();}
-      await resize(1400);await send({type:'invoke',command:'return_to_artwork'});
+      for(const narrow of [false,true]) {
+        await resize(narrow?200:1400);await wait(`${narrow?'':'!'}document.querySelector('${selector}').hidden`);
+        for(device of ['mouse','touch','pen']) {
+          await send({type:'invoke',command:'hand'});await send({type:'invoke',command:'quick_mask'});await wait(`layerApp.state().layer_tools.quick_mask&&${view}.enabled`);
+          if(narrow)await click(`${overflow} > summary`);
+          const target=narrow?row:selector;assert.equal(await evaluate(`document.querySelector('${narrow?row:selector+' .header-tool'}').disabled`),false);
+          await clickPoint(await markerPoint(anchor,target));await wait(`${view}.selected&&!layerApp.state().layer_tools.quick_mask`);assert.equal(await menuOpen(),false);
+        }
+      }
+      await resize(1400);
     }
     await send({type:'restore_workspace',workspace:saved});
-    console.log('PASS: Photo 16/Paint 18 tools, existing Paint/Sketch command groups, medium icons, disjoint selection menus/Tool Set/drawers, mouse/touch/pen hold/reorder, inset decorative toolbar/header/overflow markers, Small/Medium/Large painted-corner selection/drawers, disabled group rightclick/holds and keyboard menu focus/navigation/activation/Escape in both themes');
+    console.log('PASS: Photo 16/Paint 18 tools, existing Paint/Sketch command groups, medium icons, disjoint selection menus/Tool Set/drawers, mouse/touch/pen hold/reorder, inset decorative toolbar/header/overflow markers, Small/Medium/Large painted-corner selection/drawers, Quick Mask exits through tool groups and keyboard menu focus/navigation/activation/Escape in both themes');
   } finally {device='mouse';await closeMenu();await resize(1400);await click(`.workspace-switcher button[data-workspace-id="${original}"]`);}
 }

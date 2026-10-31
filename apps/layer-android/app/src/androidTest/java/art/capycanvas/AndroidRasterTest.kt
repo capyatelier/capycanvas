@@ -802,32 +802,32 @@ class AndroidRasterTest {
             send(obj("type" to "layer", "action" to obj("op" to "reference", "id" to owner)))
             invoke("add_layer"); send(obj("type" to "layer", "action" to obj("op" to "cancel_rename")))
             ui(obj("type" to "set_theme", "theme" to theme))
+            for (panel in listOf("brushes", "tool_settings")) ui(obj("type" to "customize", "action" to obj("type" to "set_panel_visible", "panel" to panel, "visible" to true)))
             ui(obj("type" to "invoke", "command" to "fill"))
             val toolGroup = host.snapshot!!.getJSONObject("layout").array("groups").objects().first { "brushes" in it.array("panels").values() }.getInt("id")
             ui(obj("type" to "select_panel_tab", "group" to toolGroup, "panel" to "brushes"))
             val fill = label("fill"); val lasso = label("lasso_fill"); val enclose = label("enclose_fill")
-            tool("tool-group-$enclose").assertDoesNotExist()
-            tool("tool-group-$lasso").performScrollTo().assertIsDisplayed().performClick(); host.drain()
-            chooseTool("subtool-$lasso", "lasso_fill")
-            chooseTool("subtool-$enclose", "enclose_fill")
+            chooseTool("tool-group-$lasso", "lasso_fill")
+            chooseTool("tool-group-$enclose", "enclose_fill")
             chooseTool("tool-group-$fill", "fill")
-            chooseTool("tool-group-$lasso", "enclose_fill")
+            chooseTool("tool-group-$enclose", "enclose_fill")
             val tools = published().getJSONObject("tool_set")
-            assertEquals(listOf(fill, lasso), tools.array("groups").objects().map { it.getString("label") })
-            assertEquals(listOf(lasso, enclose), tools.array("subtools").objects().map { it.getString("label") })
-            assertEquals(enclose, tools.array("subtools").objects().single { it.getBoolean("selected") }.getString("label"))
+            assertEquals(listOf(fill, lasso, enclose), tools.array("groups").objects().map { it.getString("label") })
+            assertEquals(enclose, tools.array("groups").objects().single { it.getBoolean("selected") }.getString("label"))
             val group = host.snapshot!!.getJSONObject("layout").array("groups").objects().first { "tool_settings" in it.array("panels").values() }.getInt("id")
             ui(obj("type" to "select_panel_tab", "group" to group, "panel" to "tool_settings"))
             for (command in listOf("selection_visible", "selection_editing", "selection_reference")) {
-                settings("tool-action-$command").performScrollTo().assertIsDisplayed().performClick(); host.drain()
+                settings("tool-action-group-selection-source").performScrollTo().assertIsDisplayed().performClick(); host.drain()
+                compose.onNodeWithTag("tool-action-$command").assertIsDisplayed().performClick(); host.drain()
                 compose.waitUntil(10_000) { selected(command) }
-                settings("tool-action-$command").assertIsOn()
                 assertTrue(selected("enclose_fill"))
             }
-            for (id in listOf("tolerance", "gap_closing", "expansion", "smoothing")) {
+            for (id in listOf("tolerance", "gap_closing", "expansion")) {
                 settings("tool-setting-$id").performScrollTo().assertIsDisplayed()
                 ui(obj("type" to "set_tool_setting", "id" to id, "value" to 0))
             }
+            if (selected("smooth_region_edges")) { settings("tool-action-smooth_region_edges").performScrollTo().assertIsOn().performClick(); host.drain() }
+            assertFalse(selected("smooth_region_edges"))
             ui(obj("type" to "customize", "action" to obj("type" to "close_expanded")))
             compose.waitUntil(10_000) { host.snapshot!!.getJSONObject("state").getJSONObject("customization").isNull("expanded") }
             SystemClock.sleep(300)

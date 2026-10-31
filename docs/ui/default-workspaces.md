@@ -41,7 +41,7 @@ into the restored editor before its controls appear.
   Rust owns all menu copy, sections, availability and shortcut hints.
 - **Tool keys** follow [Clip Studio Paint's families](https://help.clip-studio.com/en-us/manual_en/780_shortcuts/Tool_Shortcuts.htm):
   P Pen/Pencil, B Brush/Airbrush, E Eraser, J Blend/Liquify, S
-  Clone Stamp/Healing Brush/Spot Healing Brush, M selection, W Auto select, F Fill, G Gradient, O Move, U Figure, Shift+U Ruler,
+  Clone Stamp/Healing Brush/Spot Healing Brush, M selection, W Auto select, F Fill/Lasso fill/Enclose and Fill, G Gradient, O Move, U Figure, Shift+U Ruler,
   H Hand and I Eyedropper. Repeating a family key cycles its tools in toolbar
   order. Space pans temporarily, Tab toggles Zen, and Primary+0 fits the canvas.
 - **Tool Set and Tool** show only the active tool's groups and settings. Group
@@ -53,6 +53,10 @@ into the restored editor before its controls appear.
   drag support and context menus, not disabled commands or blank tiles.
 - **Approval.** A new design is implemented and validated on GTK and approved by
   the user before other hosts port it.
+
+Sketch places Fill between Eraser and Layers in the title bar. The group restores
+its last tool and opens Fill tools and Tool settings on a second tap. F cycles
+Fill, Lasso fill and Enclose and Fill.
 
 ## Arrangements
 
@@ -110,8 +114,8 @@ Auto select, Paint Selection; Drawing, Eraser, Clone, Healing, Blend, Liquify,
 Gradient/Fill; Hand, Zoom and Eyedropper, followed by the color selector. Marquee holds
 Rectangle and Ellipse, Lasso holds Lasso and Polygon, and Drawing holds Brush,
 Pen, Pencil and Airbrush. Healing starts with Spot Heal and includes
-Heal. Gradient/Fill includes all existing gradient variations, Fill and Lasso
-Fill. Auto select includes Tonal range. Figure and Ruler remain available in
+Heal. Gradient/Fill includes all existing gradient variations, Fill, Lasso fill
+and Enclose and Fill. Auto select includes Tonal range. Figure and Ruler remain available in
 Add Tools, and Quick Mask stays in Select.
 
 These arrangements use shared tool groups described in

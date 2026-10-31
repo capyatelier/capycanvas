@@ -400,6 +400,7 @@ impl HeaderLayout {
                     tool(CommandId::DrawingBrush),
                     tool(CommandId::Sculpt),
                     tool(CommandId::Eraser),
+                    Tool { control: ToolbarControl::ToolSlot { slot: crate::ToolSlotId::Fill } },
                     Tool {
                         control: ToolbarControl::Panel {
                             panel: Panel::Layers,

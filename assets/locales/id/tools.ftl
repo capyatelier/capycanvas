@@ -144,7 +144,6 @@ tool-control-selection-tools-feather-radius = Radius perhalusan tepi
 
 tool-control-selection-width = Lebar
 
-tool-control-smoothing = Penghalusan tepi
 
 tool-control-tolerance = Toleransi
 
@@ -382,3 +381,4 @@ brush-preset-hue-blender = Pembaur Rona
 brush-preset-liquify-edge = Tepi
 brush-preset-liquify-reconstruct = Pulihkan
 tool-control-liquify-amount = Jumlah
+tool-family-fill = Alat isi

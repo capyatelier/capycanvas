@@ -118,7 +118,7 @@ fn apple_header_keeps_capy_separate_from_adjacent_icon_bars() {
         let item = view["items"].as_array().unwrap().iter().find(|item| item["id"] == capy).unwrap();
         assert_eq!(view["zen_button"], item["bounds"]);
         assert_eq!(groups.len(), 2);
-        assert_eq!(groups.last().unwrap(), &["tool"; 5]);
+        assert_eq!(groups.last().unwrap(), &["tool"; 6]);
         let menu = if platform == 0 { vec!["menu"] } else { vec![] };
         assert_eq!(groups[0], [menu, vec!["tool"; 3]].concat());
     }

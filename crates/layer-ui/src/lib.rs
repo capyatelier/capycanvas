@@ -142,7 +142,7 @@ mod glass;
 pub use glass::{BlurStyle, GlassColor, GlassPalette, Transparency};
 mod workspace;
 mod workspace_manager_ui;
-pub use session::{ImageLayerDestination, ImagePlacementContext, LayerAction, LayerCanvasTool, LayerDropHint, LayerDropPosition, LayerDropSurface, LayerFooterButton, LayerFooterSlot, LayersView, RegionSource, layer_footer_overflow};
+pub use session::{FillScope, ImageLayerDestination, ImagePlacementContext, LayerAction, LayerCanvasTool, LayerDropHint, LayerDropPosition, LayerDropSurface, LayerFooterButton, LayerFooterSlot, LayersView, RegionSource, layer_footer_overflow};
 pub use workspace_manager_ui::{ManagedWorkspace, WorkspaceChoice, WorkspaceCommand};
 mod stats;
 pub use session::{HistogramAction, HistogramView};
@@ -649,6 +649,9 @@ command_ids! {
     EditLayerContent,
     LassoFill,
     EncloseFill,
+    FillConnected,
+    FillEverywhere,
+    SmoothRegionEdges,
     CanvasSize,
     CropCanvasToSelection,
     GrowSelection,
@@ -735,7 +738,7 @@ impl CommandId {
     pub fn is_toggle(self) -> bool {
         matches!(
             self,
-            Self::CenterZoomClicks | Self::QuickMask | Self::SelectionOutline | Self::MaskOverlay | Self::MaskOverlayProtected | Self::SelectionBrushPressure | Self::SelectionNew | Self::SelectionAdd | Self::SelectionSubtract | Self::SelectionIntersect | Self::SelectionAntialias | Self::SelectionConstrainAngles
+            Self::FillConnected | Self::FillEverywhere | Self::SmoothRegionEdges | Self::CenterZoomClicks | Self::QuickMask | Self::SelectionOutline | Self::MaskOverlay | Self::MaskOverlayProtected | Self::SelectionBrushPressure | Self::SelectionNew | Self::SelectionAdd | Self::SelectionSubtract | Self::SelectionIntersect | Self::SelectionAntialias | Self::SelectionConstrainAngles
                 | Self::SelectionFixedRatio | Self::SelectionFixedSize | Self::SelectionFromCenter
                 | Self::SelectionVisible | Self::SelectionEditing | Self::SelectionReference
                 | Self::CropRatioFree | Self::CropRatioOriginal | Self::CropRatioSquare | Self::CropRatioFourFive
@@ -945,6 +948,8 @@ impl CommandId {
             Self::ApplyLayerMask | Self::EditLayerMask => "mask",
             Self::EditLayerContent => "brush",
             Self::LassoFill | Self::EncloseFill => "lasso-fill",
+            Self::FillConnected | Self::FillEverywhere => "fill",
+            Self::SmoothRegionEdges => "edge-smooth",
             Self::CanvasSize => "canvas-size",
             Self::CropCanvasToSelection | Self::Crop => "crop",
             Self::GrowSelection => "selection-grow",
@@ -1247,6 +1252,9 @@ impl CommandId {
             Self::EditLayerContent => MessageId::COMMAND_EDIT_LAYER_CONTENT,
             Self::LassoFill => MessageId::COMMAND_LASSO_FILL,
             Self::EncloseFill => MessageId::COMMAND_ENCLOSE_FILL,
+            Self::FillConnected => MessageId::COMMAND_FILL_CONNECTED,
+            Self::FillEverywhere => MessageId::COMMAND_FILL_EVERYWHERE,
+            Self::SmoothRegionEdges => MessageId::COMMAND_SMOOTH_REGION_EDGES,
             Self::CanvasSize => MessageId::COMMAND_CANVAS_SIZE,
             Self::CropCanvasToSelection => MessageId::COMMAND_CROP_CANVAS_TO_SELECTION,
             Self::GrowSelection => MessageId::COMMAND_GROW_SELECTION,

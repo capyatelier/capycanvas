@@ -8,10 +8,9 @@ impl SqliteStore {
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         self.ownership.reconcile(&tx, now)?;
-        let items = strings(&tx, "SELECT id FROM items")?
+        let items = retention::readable_items(strings(&tx, "SELECT id FROM items")?
             .iter()
-            .map(|id| load(&tx, id))
-            .collect::<Result<Vec<_>>>()?;
+            .map(|id| load(&tx, id)))?;
         let changed = retention::retention_plan(
             &items,
             owner,

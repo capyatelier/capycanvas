@@ -680,3 +680,6 @@ command-liquify-adjust = ปรับการบิดรูป
 commands-liquify-no-changes = ใช้การบิดรูปกับเลเยอร์นี้ก่อน
 
 command-pen-tilt = การเอียงปากกา…
+command-fill-connected = พื้นที่ติดกัน
+command-fill-everywhere = ทุกพื้นที่
+command-smooth-region-edges = ทำขอบให้เรียบ

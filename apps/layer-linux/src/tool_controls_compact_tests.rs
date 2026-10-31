@@ -89,7 +89,6 @@ fn assert_spacing(panel: &gtk::Widget, context: &str) {
         }
         "fill" | "enclose-fill" | "auto-select" => {
             assert_gap(panel, "tool-setting-gap_closing", "tool-setting-expansion", 4., false);
-            assert_gap(panel, "tool-setting-expansion", "tool-setting-smoothing", 4., false);
         }
         "tonal-presets" | "tonal-custom" => {
             let tones = named::<gtk::Widget>(panel, "tool-choice-bar-tonal-tones").parent().unwrap();

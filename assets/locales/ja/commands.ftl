@@ -680,3 +680,6 @@ command-liquify-adjust = ゆがみを調整
 commands-liquify-no-changes = 先にこのレイヤーにゆがみを適用してください
 
 command-pen-tilt = ペンの傾き…
+command-fill-connected = 隣接領域
+command-fill-everywhere = すべての領域
+command-smooth-region-edges = 縁を滑らかに

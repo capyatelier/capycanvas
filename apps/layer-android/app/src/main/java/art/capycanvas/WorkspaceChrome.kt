@@ -354,7 +354,7 @@ internal fun DockInteraction.drawerContainerShape(bounds: JSONObject, radius: Fl
                                         else PanelControls(host, host.snapshot?.getJSONObject("state") ?: snapshot.getJSONObject("state"), panel,
                                             if (panelId in listOf("layers", "adjustments", "filter_types")) Modifier.height(480.dp).then(if(panelId=="layers") Modifier.padding(vertical=panelMetrics().inset) else Modifier) else Modifier.fillMaxWidth().then(if(model.optBoolean("compact"))Modifier.padding(12.dp) else Modifier), scrollable = false,
                                             splitFilters = columns.any { it.values().contains("filter_types") },
-                                            toolSet = model.objectOrNull("tool_set").takeIf { panelId == "brushes" })
+                                            toolSet = model.objectOrNull("tool_set"))
                                     }
                                 }
                             }

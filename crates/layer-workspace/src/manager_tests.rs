@@ -218,7 +218,7 @@ fn startup_write_failure_does_not_switch_elsewhere_or_create_a_workspace() {
 }
 
 #[test]
-fn an_unreadable_item_fails_startup_until_storage_is_replaced() {
+fn an_unreadable_item_uses_an_available_builtin_without_replacing_storage() {
     pollster::block_on(async {
         let f = Fixture::new();
         f.manager.close().await.unwrap();
@@ -230,15 +230,12 @@ fn an_unreadable_item_fails_startup_until_storage_is_replaced() {
         )
         .unwrap();
         let m = WorkspaceManager::new(StoreWorker::shared(&f.directory).unwrap(), Platform::Gtk);
-        assert_eq!(
-            m.initialize(2_000).await.unwrap_err().kind,
-            ErrorKind::InvalidData
-        );
-        m.replace_storage().await.unwrap();
-        let incoming = m.initialize(3_000).await.unwrap();
+        let incoming = m.initialize(2_000).await.unwrap();
         assert_eq!(incoming.entity.id, DEFAULT_WORKSPACES[1].0);
         assert_eq!(m.items().len(), DEFAULT_WORKSPACES.len());
-        assert!(m.items().iter().all(|i| i.error.is_none()));
+        assert!(m.load(unreadable).await.is_err());
+        assert!(!m.in_memory());
+        assert!(m.error().is_none());
         m.activate(incoming);
         m.close().await.unwrap();
     });

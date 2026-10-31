@@ -50,7 +50,7 @@ extension XCTestCase {
         editorChoice("Enclose and Fill", group: true, in: app)
         let tile = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "toolbar-tile-", "Enclose and Fill")).firstMatch
         XCTAssertTrue(tile.waitForExistence(timeout: 10), "The Fill tile follows Enclose and Fill")
-        for id in ["tolerance", "smoothing"] {
+        for id in ["tolerance"] {
             XCTAssertTrue(app.buttons["number-value-tool-" + id].waitForExistence(timeout: 10), "Enclose and Fill shares Fill's \(id)")
         }
         for id in ["gap_closing", "expansion"] {

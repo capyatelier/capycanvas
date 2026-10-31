@@ -876,8 +876,8 @@ function buildPanels() {
 }
 function contentPanel(id, splitPicker=false, readToolSet=null) {
   const panel=element("div",`panel ${id}-panel`);
-  if(id==="brushes"&&readToolSet) {
-    const control=editor.control("brushes",readToolSet);panel.append(control);panel.refreshPanel=control.refreshEditor;
+  if(readToolSet&&["brushes","tools"].includes(id)) {
+    const control=editor.control(id,readToolSet);panel.append(control);panel.refreshPanel=control.refreshEditor;
   } else if(id==="proof") {
     panel.disposePanel=documents.mountProof(panel);panel.refreshPanel=()=>{};
   } else if(id==="palettes") {

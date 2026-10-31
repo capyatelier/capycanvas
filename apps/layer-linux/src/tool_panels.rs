@@ -75,7 +75,7 @@ impl ToolSet {
                         && a.preview == b.preview
                 })
         };
-        self.groups.set_visible(self.panel != layer_ui::Panel::Tools && !view.groups.is_empty());
+        self.groups.set_visible(!view.groups.is_empty());
         self.divider.set_visible(self.groups.is_visible() && self.list.is_visible() && !view.subtools.is_empty());
         let previous = self.view.borrow();
         if !same(&previous.groups, &view.groups) {

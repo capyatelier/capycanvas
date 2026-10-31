@@ -47,6 +47,11 @@ fn a_pen_button_holds_any_tool_or_brush_and_returns() {
     assert_eq!(s.state.brush.preset, 3);
     press(&mut s, PenButton::Primary, false);
     assert!(painting_with(&s, preset));
+    bind(&mut s, "pen.button.primary", "command.Fill");
+    press(&mut s, PenButton::Primary, true);
+    assert!(s.command(CommandId::Fill).selected);
+    press(&mut s, PenButton::Primary, false);
+    assert!(painting_with(&s, preset));
     s.dispatch(UiAction::Invoke { command: CommandId::KeyboardShortcuts }).unwrap();
     let triggers = s.preferences().unwrap().shortcut_page.triggers;
     let third = triggers.iter().find(|t| t.id == "pen.button.tertiary").unwrap();

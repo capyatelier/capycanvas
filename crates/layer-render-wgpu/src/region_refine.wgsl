@@ -151,5 +151,5 @@ fn refined_coverage(p: vec2<i32>) -> f32 {
         }
     }
     samples = select(min(samples, 3u), max(samples, 1u), center);
-    return mix(select(0., 1., center), f32(samples)*.25, params.options.w);
+    return f32(samples)*.25;
 }

@@ -136,7 +136,7 @@ fn expected_region(alpha: &[f32], extent: [u32; 2], points: Option<&[[u32; 2]]>,
     (0..w * h).map(|i| {
         if !inside(i % w, i / w) { return 0; }
         let center = selected[i as usize];
-        if refinement.smoothing == 0. { return if center { 255 } else { 0 }; }
+        if !refinement.smooth_edges { return if center { 255 } else { 0 }; }
         let (x, y) = ((i % w) as i32, (i / w) as i32);
         let at = |dx: i32, dy: i32| selected[((y + dy).clamp(0, h as i32 - 1) as u32 * w
             + (x + dx).clamp(0, w as i32 - 1) as u32) as usize] as u32;
@@ -148,8 +148,7 @@ fn expected_region(alpha: &[f32], extent: [u32; 2], points: Option<&[[u32; 2]]>,
             }
         }
         samples = if center { samples.max(1) } else { samples.min(3) };
-        let coverage = (if center { 1. } else { 0. }) * (1. - refinement.smoothing)
-            + samples as f32 * 0.25 * refinement.smoothing;
+        let coverage = samples as f32 * 0.25;
         ((coverage * 4.).round() * 255. / 4.).round() as u8
     }).collect()
 }
@@ -261,9 +260,9 @@ fn enclose_fill_preserves_polygon_containment_gap_closing_expansion_and_smoothin
         vec![[20, 18], [72, 18], [72, 79], [20, 79]]] {
         for refinement in [RegionRefinement::default(),
             RegionRefinement { gap_closing: 1, ..Default::default() },
-            RegionRefinement { gap_closing: 2, expansion: 2, smoothing: 0. },
-            RegionRefinement { gap_closing: 3, expansion: -2, smoothing: 1. },
-            RegionRefinement { smoothing: 1., ..Default::default() }] {
+            RegionRefinement { gap_closing: 2, expansion: 2, smooth_edges: false },
+            RegionRefinement { gap_closing: 3, expansion: -2, smooth_edges: true },
+            RegionRefinement { smooth_edges: true, ..Default::default() }] {
             let expected = enclosed(&alpha, extent, &points, 0., refinement);
             let result = receive_request(&mut r, request(RegionSource::Composite, polygon(&points), refinement, 0.));
             check(&result, &expected, extent);
@@ -293,8 +292,8 @@ fn regions_beyond_one_storage_binding_label_bounded_windows_and_match_a_whole_ca
     }).collect();
     let document = uniform_document(extent, &alpha);
     frame(&mut r, &document, extent);
-    let refinements = [RegionRefinement::default(), RegionRefinement { gap_closing: 2, expansion: 2, smoothing: 1. },
-        RegionRefinement { gap_closing: 1, expansion: -1, smoothing: 0. }];
+    let refinements = [RegionRefinement::default(), RegionRefinement { gap_closing: 2, expansion: 2, smooth_edges: true },
+        RegionRefinement { gap_closing: 1, expansion: -1, smooth_edges: false }];
     for refinement in refinements {
         for seed in [[3, 890], [240, 300], [514, 514], [512, 511], [230, 600], [1180, 513], [1299, 0]] {
             let mut query = request(RegionSource::Composite, rectangle([0, 0, 1, 1]), refinement, 0.);
@@ -353,7 +352,7 @@ fn enclose_fill_workstation_completion_timings() {
         submit_ready(&mut r, FramePacket { reset_layers: true, view: view(), ..packet(document.scene(), extent) }).unwrap();
         let baseline = r.telemetry().resident_bytes;
         for (enclosed, refinement) in [false, true].into_iter().flat_map(|enclosed| [RegionRefinement::default(),
-            RegionRefinement { gap_closing: 2, expansion: 2, smoothing: 1. }].map(|refinement| (enclosed, refinement))) {
+            RegionRefinement { gap_closing: 2, expansion: 2, smooth_edges: true }].map(|refinement| (enclosed, refinement))) {
             let mut samples = Vec::new();
             for run in 0..22 {
                 let started = std::time::Instant::now();

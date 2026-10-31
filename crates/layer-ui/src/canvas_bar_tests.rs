@@ -1576,7 +1576,7 @@ fn new_mode_commands_follow_the_command_checklist() {
     ] {
         let row = rows.iter().find(|(d, _)| d.id == command.shortcut_id()).unwrap();
         assert_eq!(row.1.id(), section, "{command:?}");
-        assert!(s.state.settings.command_keys(command).is_empty(), "{command:?} has no default keys");
+        assert!(s.state.settings.keys(&command.shortcut_id()).is_empty(), "{command:?} has no direct default keys");
         assert!(!crate::customization::canonical_tool_choice(ToolbarControl::Command { command }).description.is_empty());
         let entry = s.command_catalog().into_iter().find(|d| d.id == command_catalog::identity(&UiAction::Invoke { command })).unwrap();
         assert!(!entry.description.is_empty(), "{command:?}");

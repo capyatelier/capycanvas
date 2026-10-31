@@ -604,7 +604,7 @@ pub(crate) fn defaults(id: &str) -> Vec<KeyChord> {
         "command.Figure" => key("u", false, false),
         "command.Ruler" => key("u", false, true),
         "command.AutoSelect" => key("w", false, false),
-        "command.Fill" => key("f", false, false),
+        "tools.fill" => key("f", false, false),
         "command.FitCanvas" => key("0", true, false),
         "command.ActualPixels" => {
             return vec![KeyChord { key: "0".into(), command: true, shift: false, alt: true }, key("1", true, false)];
@@ -693,7 +693,7 @@ fn command_section(command: CommandId) -> ShortcutSection {
         | C::TransformFlipHorizontal | C::TransformFlipVertical | C::TransformRotateLeft | C::TransformRotateRight
         | C::TransformFree | C::TransformUniform | C::TransformDistort | C::TransformPerspective | C::TransformNearest
         | C::TransformBilinear | C::TransformBicubic | C::TransformLanczos | C::CropFitContent | C::MoveLeaveCopy => ShortcutSection::Transform,
-        C::ColorMixOklab | C::ColorMixLinear | C::ColorMixClassic
+        C::FillConnected | C::FillEverywhere | C::SmoothRegionEdges | C::ColorMixOklab | C::ColorMixLinear | C::ColorMixClassic
         | C::EraseTouchedPart | C::EraseWholePaths | C::EraseToIntersection | C::ScaleOutlineWidths => ShortcutSection::Painting,
         command if CommandId::TOOLS.contains(&command) => ShortcutSection::Tools,
         C::CloneSourceArm | C::CloneAligned | C::CloneFlipHorizontal | C::CloneFlipVertical | C::CloneResetOffset => {

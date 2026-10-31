@@ -397,8 +397,10 @@ class AndroidToolBubblesTest {
             event(MotionEvent.ACTION_MOVE, ringPoint(id, size, fraction)); host.drain()
             val text = view(id).getString("readout")
             var readout: SemanticsNode? = null
-            instrumentation.runOnMainSync { readout = findNode(hasLabel(text))?.second }
-            assertNotNull("Current readout is native text", readout)
+            waitFor("Current readout is native text") {
+                instrumentation.runOnMainSync { readout = findNode(hasLabel(text))?.second }
+                readout != null
+            }
             assertTrue("Readout width remains bounded", readout!!.boundsInRoot.width < 200 * density)
             assertBubbleLabel(id, "readout")
         }

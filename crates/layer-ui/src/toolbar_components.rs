@@ -384,6 +384,7 @@ impl UiState {
             ToolActionGroup::TransformWarpGrid,
             ToolActionGroup::SelectionMode,
             ToolActionGroup::SelectionSource,
+            ToolActionGroup::FillScope,
             ToolActionGroup::ColorMixing,
         ] {
             let items = self
@@ -613,7 +614,6 @@ pub fn tool_setting_icon(id: &str) -> &'static str {
         "transform_x" => "position-x",
         "transform_y" => "position-y",
         "selection_feather" => "feather",
-        "smoothing" => "edge-smooth",
         "gap_closing" => "close-gap",
         "expansion" => "expand",
         "strength" => "strength",

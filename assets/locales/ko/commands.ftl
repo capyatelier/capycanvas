@@ -680,3 +680,6 @@ command-liquify-adjust = 왜곡 조정
 commands-liquify-no-changes = 먼저 이 레이어에 왜곡을 적용하세요
 
 command-pen-tilt = 펜 기울기…
+command-fill-connected = 연결된 영역
+command-fill-everywhere = 모든 영역
+command-smooth-region-edges = 가장자리 매끄럽게

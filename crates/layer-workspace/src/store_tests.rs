@@ -781,16 +781,12 @@ fn newer_schemas_and_corrupt_items_are_preserved() {
     );
     assert!(f.store.load(&bad.entity.id).is_err());
     assert_eq!(f.store.load(&good.entity.id).unwrap(), good);
-    assert!(matches!(
-        f.store.handle(StoreRequest::Maintenance {
-            owner: None,
-            clear_older: false
-        }),
-        Err(StoreError {
-            kind: ErrorKind::InvalidData,
-            ..
-        })
-    ));
+    f.store.handle(StoreRequest::Maintenance {
+        owner: None,
+        clear_older: false
+    }).unwrap();
+    assert_eq!(f.store.load(&good.entity.id).unwrap(), good);
+    assert!(f.store.load(&bad.entity.id).is_err());
     f.store
         .connection
         .pragma_update(None, "user_version", SCHEMA_VERSION + 1)

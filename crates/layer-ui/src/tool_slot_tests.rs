@@ -473,7 +473,7 @@ fn tool_group_existing_nonpaint_commands_keep_layout_identity() {
         (CommandId::Figure, ToolSlotId::Figure), (CommandId::Ruler, ToolSlotId::Ruler),
         (CommandId::Gradient, ToolSlotId::Gradient), (CommandId::Move, ToolSlotId::Operation),
         (CommandId::Fill, ToolSlotId::Fill),
-        (CommandId::LassoFill, ToolSlotId::LassoFill),
+        (CommandId::LassoFill, ToolSlotId::Fill),
     ] {
         let control = ToolbarControl::Command { command };
         assert!(control.has_variants());
@@ -562,8 +562,8 @@ fn shipped_tool_slot_presets_keep_compact_counts_and_separate_pen_and_pencil() {
         let sketch = WorkspacePreset::Painter.layout(platform);
         assert!(!sketch.panels.iter().flat_map(|panel| panel.tiles()).any(|tile|
             matches!(tile.control, ToolbarControl::ToolSlot { .. })));
-        assert!(!sketch.header.entries().any(|entry|
-            matches!(entry.item, HeaderItem::Tool { control: ToolbarControl::ToolSlot { .. } })));
+        assert_eq!(sketch.header.entries().filter_map(|entry|
+            if let HeaderItem::Tool { control: ToolbarControl::ToolSlot { slot } } = entry.item { Some(slot) } else { None }).collect::<Vec<_>>(), [ToolSlotId::Fill]);
     }
 }
 
@@ -616,7 +616,7 @@ fn shipped_paint_order_keeps_remembered_groups_in_their_slots() {
 fn slot_menus_publish_only_member_choices_and_activate_their_leaf_tools() {
     let slots = [ToolSlotId::Drawing, ToolSlotId::Marquee, ToolSlotId::Lasso,
         ToolSlotId::AutomaticSelection, ToolSlotId::ManualSelection, ToolSlotId::Healing,
-        ToolSlotId::PhotoFill, ToolSlotId::Fill, ToolSlotId::LassoFill, ToolSlotId::Blend, ToolSlotId::Retouch, ToolSlotId::Operation,
+        ToolSlotId::PhotoFill, ToolSlotId::Fill, ToolSlotId::Blend, ToolSlotId::Retouch, ToolSlotId::Operation,
         ToolSlotId::Figure, ToolSlotId::Ruler, ToolSlotId::Gradient];
     for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Windows] {
         let (mut s, panel, ids) = slot_fixture(platform, &slots);
@@ -706,7 +706,7 @@ fn grouped_slots_publish_the_same_siblings_in_menus_panels_and_drawers() {
                 menu.iter().map(|item| item.enabled).collect::<Vec<_>>(), "{slot:?}");
             activate_slot(&mut s, anchor);
             let drawer = s.state().customization.drawer.as_ref().unwrap();
-            assert_eq!(drawer.columns, [vec![Panel::Brushes], vec![Panel::ToolSettings]]);
+            assert_eq!(drawer.columns, [vec![if slot == ToolSlotId::Fill { Panel::Tools } else { Panel::Brushes }], vec![Panel::ToolSettings]]);
             let choices = drawer.tool_set.as_ref().unwrap();
             let drawer_siblings: Vec<_> = choices.groups.iter().chain(&choices.subtools)
                 .filter(|item| matches!(item.action, UiAction::ChooseToolVariant { anchor: origin, .. } if origin == anchor)).collect();
@@ -1133,5 +1133,65 @@ fn preset_icons_follow_catalog_rows_remembered_tiles_and_canvas_cursors() {
             assert_eq!(s.canvas_cursor().unwrap().segments[0].marker,
                 layer_render::tool_cursor_marker(icon).unwrap());
         }
+    }
+}
+
+#[test]
+fn fill_family_cycles_siblings_and_keeps_the_group_choice_after_temporary_use() {
+    for platform in Platform::ALL {
+        let (mut s, panel, ids) = slot_fixture(platform, &[ToolSlotId::Fill]);
+        let anchor = DrawerAnchor::Tile { panel, tile: ids[0] };
+        for command in ToolFamily::Fill.commands().iter().cycle().take(6) {
+            key(&mut s, "f", true, false, false);
+            key(&mut s, "f", false, false, false);
+            assert!(s.command(*command).selected);
+            assert_eq!(selected_slot_variant(&s, anchor).command(), *command);
+        }
+        let remembered = selected_slot_variant(&s, anchor);
+        invoke(&mut s, CommandId::Hand);
+        activate_slot(&mut s, anchor);
+        assert_eq!(selected_slot_variant(&s, anchor), remembered);
+        assert!(s.command(remembered.command()).selected);
+        assert!(crate::shortcuts::hold_id("command.Fill").is_some());
+        assert_eq!(s.state().settings.gesture_binding("touch.tap.4"), "");
+    }
+}
+
+#[test]
+fn sketch_fill_header_remembers_its_tool_opens_tools_and_takes_a_bubble() {
+    for platform in Platform::ALL {
+        let mut s = session(platform);
+        s.set_viewport([1200., 900.], [1200, 900]).unwrap();
+        s.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(WorkspaceState {
+            layout: WorkspacePreset::Painter.layout(platform), ..WorkspaceState::default()
+        }) }).unwrap();
+        let control = ToolbarControl::ToolSlot { slot: ToolSlotId::Fill };
+        let id = s.state().workspace.layout.header.entries().find(|e| e.item == HeaderItem::Tool { control }).unwrap().id;
+        s.dispatch(UiAction::MeasureHeader { height: 60., items: vec![HeaderItemBounds {
+            id, bounds: Bounds { x: 800., y: 0., width: 40., height: 60. },
+        }] }).unwrap();
+        let anchor = DrawerAnchor::Header { id };
+        for command in [CommandId::LassoFill, CommandId::EncloseFill] {
+            invoke(&mut s, command);
+            invoke(&mut s, CommandId::Hand);
+            let view = s.header_view();
+            let item = view.items.iter().find(|item| item.id == id).unwrap();
+            assert_eq!(item.resolved_control, Some(ToolbarControl::Command { command }));
+            assert_eq!(item.icon, command.icon().unwrap());
+            assert!(item.tears_bubble && !item.selected);
+            activate_slot(&mut s, anchor);
+            assert!(s.command(command).selected);
+            activate_slot(&mut s, anchor);
+            assert_eq!(s.state().customization.drawer.as_ref().unwrap().columns, [vec![Panel::Tools], vec![Panel::ToolSettings]]);
+            activate_slot(&mut s, anchor);
+        }
+        for phase in [ContactPhase::Down, ContactPhase::Move, ContactPhase::Up] {
+            s.dispatch(UiAction::Bubble { action: BubbleAction::Drag {
+                grab: BubbleGrab::Header { id }, phase, position: [640., 520.], viewport: [1200., 900.],
+            } }).unwrap();
+        }
+        assert_eq!(s.bubbles().len(), 1);
+        assert_eq!(s.state().workspace.layout.bubbles.bubbles[0].source, BubbleSource::Control { control });
+        assert!(s.command(CommandId::EncloseFill).selected);
     }
 }

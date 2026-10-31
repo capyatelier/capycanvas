@@ -124,6 +124,8 @@ impl ToolActionRowView {
 tool_action_groups! {
     SelectionMode: "selection-mode", TOOL_ACTION_GROUP_SELECTION_MODE, true,
         [SelectionNew, SelectionAdd, SelectionSubtract, SelectionIntersect];
+    FillScope: "fill-scope", COMMAND_FILL, false,
+        [FillConnected, FillEverywhere];
     SelectionSource: "selection-source", TOOL_ACTION_GROUP_SELECTION_SOURCE, false,
         [SelectionVisible, SelectionEditing, SelectionReference];
     TransformMode: "transform-mode", TOOL_ACTION_GROUP_TRANSFORM_MODE, true,

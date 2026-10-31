@@ -114,6 +114,7 @@ mod selection_properties;
 pub use selection_masks::{SelectionAction, SelectionDisplayOptions, MaskEditingView, SelectionMenu};
 #[path = "region_tools.rs"]
 mod region_tools;
+pub use region_tools::FillScope;
 #[path = "rulers.rs"]
 pub(crate) mod rulers;
 #[path = "canvas_bar.rs"]
@@ -2689,6 +2690,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                         l.kind() != LayerKind::Selection
                     })
             }
+            CommandId::FillConnected | CommandId::FillEverywhere => idle && matches!(self.layer_interaction.tool, LayerCanvasTool::Region { fill: true, .. }),
+            CommandId::SmoothRegionEdges => idle && self.layer_interaction.tool.region().is_some_and(|(fill, _, _)| fill),
             CommandId::SelectionVisible => idle && (self.layer_interaction.tool.selection_tool().is_some() || self.layer_interaction.tool.region().is_some()),
             CommandId::SelectionEditing | CommandId::SelectionReference => {
                 idle && (self.layer_interaction.tool.selection_tool().is_some() || self.layer_interaction.tool.region().is_some() || self.retouching())
@@ -2811,6 +2814,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             || matches!((id, selection_mode),
                 (CommandId::SelectionNew, SelectionMode::New) | (CommandId::SelectionAdd, SelectionMode::Add)
                 | (CommandId::SelectionSubtract, SelectionMode::Subtract) | (CommandId::SelectionIntersect, SelectionMode::Intersect))
+            || (id == CommandId::FillConnected && self.region_tools.scope == FillScope::Connected)
+            || (id == CommandId::FillEverywhere && self.region_tools.scope == FillScope::Everywhere)
+            || (id == CommandId::SmoothRegionEdges && self.region_tools.refinement.smooth_edges)
             || (id == CommandId::SelectionAntialias && self.selection_tools.options.antialias)
             || (id == CommandId::SelectionConstrainAngles && self.selection_tools.options.constrain_angles)
             || (id == CommandId::SelectionFixedRatio && self.selection_tools.options.constraint == SelectionConstraint::Ratio)
@@ -5415,6 +5421,16 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.layer_action(LayerAction::Tool { tool })?;
                 Ok((BRUSH | COMMANDS, false))
             }
+            CommandId::FillConnected | CommandId::FillEverywhere | CommandId::SmoothRegionEdges => {
+                if command == CommandId::SmoothRegionEdges {
+                    self.region_tools.refinement.smooth_edges = !self.region_tools.refinement.smooth_edges;
+                } else {
+                    self.region_tools.scope = if command == CommandId::FillConnected { FillScope::Connected } else { FillScope::Everywhere };
+                }
+                self.region_tools.cancel();
+                self.refresh_tools();
+                Ok((BRUSH | COMMANDS, false))
+            }
             CommandId::AutoSelect | CommandId::Fill => {
                 let fill = command == CommandId::Fill;
                 self.layer_action(LayerAction::Tool {
@@ -5925,6 +5941,12 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.state.tool_actions = [CommandId::SelectionVisible, CommandId::SelectionEditing, CommandId::SelectionReference]
                 .into_iter().map(|command| ToolSettingAction { command, checkable: command.is_toggle() }).collect();
         }
+        if self.layer_interaction.tool.region().is_some_and(|(fill, _, _)| fill) {
+            self.state.tool_actions.push(ToolSettingAction { command: CommandId::SmoothRegionEdges, checkable: true });
+            if matches!(self.layer_interaction.tool, LayerCanvasTool::Region { fill: true, .. }) {
+                self.state.tool_actions.extend([CommandId::FillConnected, CommandId::FillEverywhere].map(|command| ToolSettingAction { command, checkable: true }));
+            }
+        }
         if let Some(tool) = self.layer_interaction.tool.selection_tool() {
             let commands: &[CommandId] = if tool==SelectionTool::Tonal { &[]
             } else if tool.geometric() {
@@ -5980,8 +6002,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             else if kind.geometric() { self.selection_tools.options.controls(&self.state.localization) } else { Vec::new() }
         } else if let Some((fill, _, contiguous)) = self.layer_interaction.tool.region() {
             let mut controls = self.region_tools.controls(&self.state.localization);
-            if !contiguous { controls.retain(|c| c.id != "gap_closing"); }
-            if !fill && !self.selection_tools.options.antialias { controls.retain(|c| c.id != "smoothing"); }
+            if !contiguous || fill && matches!(self.layer_interaction.tool, LayerCanvasTool::Region { .. }) && self.region_tools.scope == FillScope::Everywhere { controls.retain(|c| c.id != "gap_closing"); }
             if fill {
                 controls.extend(
                     tool_settings::controls(self.state.brush.preset, self.engine.configured_brush(), &self.state.localization)
@@ -8673,9 +8694,9 @@ mod tests {
         invoke(&mut s, CommandId::AutoSelect);
         assert_eq!(s.state.tool_set.subtools.len(), 8);
         assert_eq!(s.state.tool_settings[0].id, "tolerance");
-        assert_eq!(s.state.tool_settings.len(), 5);
-        assert_eq!(s.region_tools.refinement.smoothing, 1.);
-        for (id, value) in [("gap_closing", 3.), ("expansion", -2.), ("smoothing", 0.75)] {
+        assert_eq!(s.state.tool_settings.len(), 4);
+        assert!(s.region_tools.refinement.smooth_edges);
+        for (id, value) in [("gap_closing", 3.), ("expansion", -2.)] {
             s.dispatch(UiAction::SetToolSetting {
                 id: id.into(),
                 value,

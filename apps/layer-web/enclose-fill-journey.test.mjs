@@ -54,14 +54,10 @@ export async function checkEncloseFill({call,evaluate,settle}) {
       await send({type:'layer',action:{op:'new',group:false,clipped:false}});
       await invoke('fill');
       const toolset='.dock-group .brushes-control';
-      assert.deepEqual(await evaluate('layerApp.state().tool_set.groups.map(item=>item.label)'),['Fill','Lasso fill']);
-      await contact(`${toolset} .tool-groups [data-tool-choice="Lasso fill"]`);
-      assert.deepEqual(await evaluate('layerApp.state().tool_set.subtools.map(item=>item.label)'),['Lasso fill','Enclose and Fill']);
-      await contact(`${toolset} .tool-subtools [data-tool-choice="Enclose and Fill"]`);
+      assert.deepEqual(await evaluate('layerApp.state().tool_set.groups.map(item=>item.label)'),['Fill','Lasso fill','Enclose and Fill']);
+      for(const label of ['Lasso fill','Enclose and Fill','Fill','Enclose and Fill'])
+        await contact(`${toolset} .tool-groups [data-tool-choice="${label}"]`);
       assert.ok(await selected('enclose_fill'));
-      await contact(`${toolset} .tool-groups [data-tool-choice="Fill"]`);assert.ok(await selected('fill'));
-      await contact(`${toolset} .tool-groups [data-tool-choice="Lasso fill"]`);
-      assert.ok(await selected('enclose_fill'),'Lasso Fill category remembers the Enclose subtool');
       for(const source of ['selection_visible','selection_editing','selection_reference']){
         await chooseToolActionGroup({call,evaluate,settle},'selection-source',source);
         assert.ok(await selected(source));assert.ok(await selected('enclose_fill'),'source preserves Enclose variant');
@@ -69,11 +65,13 @@ export async function checkEncloseFill({call,evaluate,settle}) {
       await evaluate(`document.querySelector('.dock-group [data-tool-action-group="selection-source"]').scrollIntoView({block:'nearest'})`);await settle();
       await writeFile(`${directory}/controls-${theme}.png`,Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));
       const controls=await evaluate('layerApp.state().tool_settings.map(c=>c.id)');
-      for(const id of ['tolerance','gap_closing','expansion','smoothing']){
+      for(const id of ['tolerance','gap_closing','expansion']){
         assert.ok(controls.includes(id),`${id} is shared with Fill`);
         assert.ok(await evaluate(`!!document.querySelector('[data-tool-setting="${id}"]')`),`${id} has a native Web control`);
       }
-      for(const [id,value] of [['tolerance',.15],['gap_closing',0],['expansion',0],['smoothing',0]])await send({type:'set_tool_setting',id,value});
+      for(const [id,value] of [['tolerance',.15],['gap_closing',0],['expansion',0]])await send({type:'set_tool_setting',id,value});
+      if(await selected('smooth_region_edges'))await contact('[data-tool-action="smooth_region_edges"]');
+      assert.equal(await selected('smooth_region_edges'),false);
       await send({type:'set_color',rgba:[.85,.1,.05,1]});await invoke('fit_canvas');await idle();
       const empty=rasterIdentity(await save());
       const revision=await evaluate('String(layerApp.state().layers.find(l=>l.editing).paint_revision)');
@@ -92,6 +90,20 @@ export async function checkEncloseFill({call,evaluate,settle}) {
       await invoke('undo');await idle();await path(true);
       assert.deepEqual(rasterIdentity(await save()),empty,'Escape cancels the enclosure');
       await invoke('redo');await idle();assert.deepEqual(rasterIdentity(await save()),filled,'cancel preserves redo');
+      await invoke('undo');await idle();
+      await contact(`${toolset} .tool-groups [data-tool-choice="Fill"]`);
+      await contact(`${toolset} [data-tool-choice="Reference layers"]`);
+      for(const [mode,other] of [['fill_connected',false],['fill_everywhere',true]]) {
+        await chooseToolActionGroup({call,evaluate,settle},'fill-scope',mode);
+        await pointer('mousePressed',await screen([85,110]));await pointer('mouseReleased',await screen([85,110]));await settle();await idle();
+        const result=await output(),rgba=([x,y])=>result.pixels.slice((y*384+x)*4,(y*384+x)*4+4);
+        for(const point of [[85,110],...(other?[[195,110],[290,110],[25,110]]:[])])assert.ok(rgba(point)[0]>180&&rgba(point)[1]<80,`${mode}: ${point} fills`);
+        if(!other)assert.deepEqual(rgba([195,110]),[0,0,0,0],'Connected leaves the other component empty');
+        const after=rasterIdentity(await save());
+        await invoke('undo');await idle();assert.deepEqual(rasterIdentity(await save()),empty,`${mode}: one undo restores the target`);
+        await invoke('redo');await idle();assert.deepEqual(rasterIdentity(await save()),after,`${mode}: exact redo`);
+        await invoke('undo');await idle();
+      }
       assert.equal(await evaluate('layerApp.state().host_error??null'),null);
       console.log(`PASS ${theme}: Enclose and Fill reference holes, untouched ink/exterior/reference, exact single undo/redo and Escape`);
     }

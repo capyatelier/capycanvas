@@ -23,12 +23,13 @@ function Key([uint16]$Code){[CapyRowPointer]::Key([uint32]$review.Id,$Code)}
 function Chord([uint16[]]$Modifiers,[uint16]$Code){[CapyRowPointer]::Chord([uint32]$review.Id,$Modifiers,$Code)}
 function Command([string]$Id){
     $label=((Model).state.commands|Where-Object id -eq $Id).label
-    [CapyRowPointer]::SetForegroundWindow($review.MainWindowHandle)|Out-Null
+    [CapyRowPointer]::SetForegroundWindow($drawingWindow)|Out-Null
     Chord @(0x11) 0x4B
     Wait-Until {$search=Find 'command-search';$search -and !$search.Current.IsOffscreen} 'Command search did not open'
     (Find 'command-search').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($label)
     Wait-Until {(Find 'command-result-0').Current.Name -eq $label} "Command search did not find $Id"
     Key 0x0D
+    Wait-Until {!(Find 'command-search')} 'Command search did not close'
 }
 function Screen([double]$X,[double]$Y){
     $camera=(Model).state.camera;$bounds=(Control 'drawing-canvas').Current.BoundingRectangle
@@ -69,11 +70,12 @@ try {
     $null=$review.Handle
     Write-Output "Owned enclose fill review $($review.Id): $run"
     Wait-Until {$review.Refresh();$review.MainWindowHandle -ne [IntPtr]::Zero -and (Model).brush_ready -and (Model).windows_workspace.ready -and !(Model).windows_workspace.busy} 'Enclose fill review did not start' 90
-    $root=[System.Windows.Automation.AutomationElement]::FromHandle($review.MainWindowHandle)
+    $native=@{window=$null}
+    Wait-Until {$native.window=Owned-DrawingWindow $review;$null -ne $native.window} 'The owned drawing window did not appear'
+    $root=$native.window.Root;$drawingWindow=$native.window.Handle
+    Maximize-DrawingWindow
     Use-PaintWorkspace
-    $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)
-    Start-Sleep -Milliseconds 600
-    $null=[CapyRowPointer]::SetForegroundWindow($review.MainWindowHandle)
+    $null=[CapyRowPointer]::SetForegroundWindow($drawingWindow)
     [CapyRowPointer]::Initialize([uint32]$review.Id)
 
     Open-Project $reference
@@ -82,18 +84,28 @@ try {
     Wait-Until {(Model).state.layer_tools.references_selected} 'The reference ink did not become a reference'
     Invoke-Id 'layer-new'
     Wait-Until {@((Model).state.layers).Count -ge 2 -and !@((Model).state.layers|Where-Object editing)[0].reference} 'A new paint layer did not open above the reference'
+    Command 'fill'
+    foreach($scope in 'fill_everywhere','fill_connected'){
+        $null=Reveal-PanelControl 'tool_settings' 'tool-action-group-fill-scope'
+        (Control 'tool-action-group-fill-scope' -Type ([System.Windows.Automation.ControlType]::ComboBox)).GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
+        (Control ('tool-action-'+$scope) -Type ([System.Windows.Automation.ControlType]::ListItem)).GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
+        Wait-Until {((Model).state.commands|Where-Object id -eq $scope).selected} "Fill did not select $scope"
+    }
     Command 'enclose_fill'
     Wait-Until {((Model).state.commands|Where-Object id -eq 'enclose_fill').selected} 'Enclose and Fill did not become the tool'
     $settings=@((Model).state.tool_settings|ForEach-Object id)
-    foreach($id in 'tolerance','gap_closing','expansion','smoothing'){
+    foreach($id in 'tolerance','gap_closing','expansion'){
         if($settings -notcontains $id){throw "Enclose and Fill does not share $id with Fill"}
-        $null=Control ('tool-setting-'+$id)
+        $null=Reveal-PanelControl 'tool_settings' ('tool-setting-'+$id)
     }
-    foreach($id in 'gap_closing','expansion','smoothing'){
+    foreach($id in 'gap_closing','expansion'){
         $entry=Control ('tool-setting-'+$id);$entry.SetFocus()
         $entry.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('0');Key 0x0D
         Wait-Until {((Model).state.tool_settings|Where-Object id -eq $id).value -eq 0} "Enclose and Fill did not accept $id 0"
     }
+    $null=Reveal-PanelControl 'tool_settings' 'tool-action-smooth_region_edges'
+    Invoke 'tool-action-smooth_region_edges'
+    Wait-Until {!((Model).state.commands|Where-Object id -eq 'smooth_region_edges').selected} 'Smooth edges did not turn off'
     Invoke-Id 'color-edit'
     Wait-Until {Find 'edit-color-apply'} 'Edit Color did not open'
     Invoke 'edit-color-hex';$hex=Control 'edit-color-hex-entry';$hex.SetFocus()
@@ -116,6 +128,27 @@ try {
     if((Revision) -ne $empty){throw 'Escape did not cancel the enclosure'}
     Park;Holes $false
     Chord @(0x11) 0x59;Wait-Until {(Revision) -ne $empty} 'Cancelling an enclosure lost Redo';Settled;Park;Holes $true
+    Use-Workspace 'builtin:workspace:painter' 'Sketch'
+    Command 'enclose_fill';Command 'hand'
+    $fill=@((Model).header.model.zones|ForEach-Object {$_}|Where-Object {$_.item.control.slot -eq 'fill'})[0]
+    if(@((Model).header.items|Where-Object id -eq $fill.id)[0].resolved_control.command -ne 'enclose_fill'){throw 'Sketch Fill lost its remembered tool'}
+    $bounds=(Control ('header-item-'+$fill.id) -Arranged).Current.BoundingRectangle
+    $x=[int]($bounds.X+$bounds.Width/2);$y=[int]($bounds.Y+$bounds.Height/2)
+    foreach($drawer in $false,$true){
+        [CapyRowPointer]::Down('mouse',$x,$y);[CapyRowPointer]::Up()
+        if($drawer){Wait-Until {(@((Model).state.customization.drawer.columns|ForEach-Object {$_}) -join ',') -eq 'tools,tool_settings'} 'Sketch Fill did not open Tools and Tool settings'}
+        else{Wait-Until {((Model).state.commands|Where-Object id -eq 'enclose_fill').selected} 'Sketch Fill did not restore Enclose and Fill'}
+    }
+    foreach($index in 0..2){$row=Control ('tool-group-'+$index) -Within (Control 'tool-drawer') -Arranged;if($row.Current.Name -ne @('Fill','Lasso fill','Enclose and Fill')[$index]){throw 'Sketch Fill drawer lost its siblings'}}
+    Capture "sketch-fill-$Theme" -WithModel
+    Key 0x1B;Wait-Until {$null -eq (Model).state.customization.drawer} 'Sketch Fill drawer did not close'
+    $canvas=(Control 'drawing-canvas' -Arranged).Current.BoundingRectangle
+    [CapyRowPointer]::Down('mouse',$x,$y);[CapyRowPointer]::Move([int]($canvas.X+$canvas.Width/2),[int]($canvas.Y+$canvas.Height/2));[CapyRowPointer]::Up()
+    Wait-Until {@((Model).state.workspace.layout.bubbles.bubbles).Count -eq 1} 'Sketch Fill did not take a bubble'
+    $bubble=@((Model).state.workspace.layout.bubbles.bubbles)[0]
+    if($bubble.source.control.slot -ne 'fill'){throw 'Sketch Fill took a different bubble source'}
+    $null=Control ('tool-bubble-'+$bubble.id) -Arranged
+    Capture "sketch-fill-bubble-$Theme" -WithModel
     if((Model).state.host_error){throw "Enclose and Fill reported $((Model).state.host_error)"}
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close
     if((Get-Item -LiteralPath $stderr).Length){throw 'Native stderr requires inspection'}

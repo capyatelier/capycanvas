@@ -107,7 +107,7 @@ struct ToolSetView : std::enable_shared_from_this<ToolSetView> {
         if(group){groups.InvalidateMeasure();}
     }
     void refresh(){
-        auto view=panel==L"brushes"&&projection?projection():J{};
+        auto view=projection?projection():J{};
         if(!view.Size())view=panel==L"brushes"?object(data->state,L"tool_set"):object(object(data->state,L"tool_panels"),panel.c_str());
         bool selection=false;for(auto value:array(view,L"subtools"))selection|=str(object(value.GetObject(),L"action"),L"command")==L"tonal_select";
         bool themeChanged=paintedTheme!=data->theme();paintedTheme=data->theme();
@@ -127,7 +127,7 @@ struct ToolSetView : std::enable_shared_from_this<ToolSetView> {
                 AutomationProperties::SetItemStatus(buttons[i],active?data->caption(L"search",L"selected"):hstring());
             }
         }
-        groups.Visibility(panel!=L"tools"&&!groupButtons.empty()?Visibility::Visible:Visibility::Collapsed);
+        groups.Visibility(!groupButtons.empty()?Visibility::Visible:Visibility::Collapsed);
         bool both=groups.Visibility()==Visibility::Visible&&list.Visibility()==Visibility::Visible&&!groupButtons.empty()&&!subtoolButtons.empty();
         divider.Visibility(both?Visibility::Visible:Visibility::Collapsed);
     }

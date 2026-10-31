@@ -1894,6 +1894,55 @@ fn start<S: WorkspaceStore + 'static>(
     }
     (controller, host)
 }
+
+#[test]
+fn obsolete_or_incomplete_editing_states_start_with_defaults_without_a_notice() {
+    for obsolete in [true, false] {
+        let mut editing = layer_ui::EditingState::default();
+        if obsolete {
+            editing.version = 1;
+            editing.region_values.insert("smoothing".into(), 0.5);
+            assert_eq!(editing.validate(), Err("Unsupported editing-state version".into()));
+        }
+        let mut editing = serde_json::to_value(editing).unwrap();
+        for field in if obsolete { &["fill_scope", "region_smooth_edges"][..] } else { &["preset"][..] } {
+            editing.as_object_mut().unwrap().remove(*field);
+        }
+        let backend = Rc::new(Backend::default());
+        let mut stored: serde_json::Value = serde_json::from_str(&backend.database.borrow().encoded().unwrap()).unwrap();
+        stored["editing"] = serde_json::Value::String(editing.to_string());
+        *backend.database.borrow_mut() = BrowserDatabase::decode(&stored.to_string()).unwrap();
+        let (controller, mut host) = start(Store(backend), Platform::Web);
+        assert_started(&controller, &mut host, "invalid editing state");
+        assert_eq!(notice(&host), None);
+        assert!(controller.manager.editing().is_none());
+        assert_eq!(host.session.editing_state().version, 2);
+        assert_eq!(host.session.editing_state().fill_scope, layer_ui::FillScope::Connected);
+        assert!(host.session.editing_state().region_smooth_edges);
+    }
+}
+
+#[test]
+fn unknown_saved_slots_use_a_builtin_layout_without_aliasing_or_resetting_storage() {
+    for slot in ["lasso_fill", "unknown_slot"] {
+        let backend = Rc::new(Backend::default());
+        let layout = layer_ui::WorkspacePreset::Illustrator.layout(Platform::Web);
+        let capture = layer_ui::WorkspaceCapture::from_template(&layout).unwrap();
+        let entity = Entity::workspace("Saved Paint", capture, layout, 1000);
+        let id = entity.id.clone();
+        let batch = CommitBatch::prepare(Owner::fresh(), vec![Mutation::Create { entity, claim: false, name_policy: NamePolicy::Unique }]).unwrap();
+        pollster::block_on(Store(backend.clone()).execute(StoreRequest::Commit { batch })).unwrap();
+        let stored = backend.database.borrow().encoded().unwrap().replace("\"slot\":\"fill\"", &format!("\"slot\":\"{slot}\""));
+        *backend.database.borrow_mut() = BrowserDatabase::decode(&stored).unwrap();
+        let (controller, mut host) = start(Store(backend), Platform::Web);
+        assert_started(&controller, &mut host, slot);
+        assert_eq!(notice(&host), None);
+        assert_eq!(host.session.capture_workspace().unwrap().history.layout(), &layer_ui::WorkspacePreset::Illustrator.layout(Platform::Web));
+        assert!(pollster::block_on(controller.manager.load(&id)).is_err());
+        assert_eq!(controller.manager.items().len(), DEFAULT_WORKSPACES.len() + 1);
+        assert!(!controller.manager.in_memory());
+    }
+}
 #[test]
 fn startup_notices_relabel_in_place_and_do_not_resurrect_dismissed_or_replaced_notices() {
     for (reset_heals, replace) in [(false, false), (false, true), (true, false), (true, true)] {

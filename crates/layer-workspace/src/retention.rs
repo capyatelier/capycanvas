@@ -1,5 +1,12 @@
 use crate::*;
 
+pub(crate) fn readable_items(items: impl Iterator<Item = Result<StoredEntity, StoreError>>) -> Result<Vec<StoredEntity>, StoreError> {
+    items.filter_map(|item| match item {
+        Err(error) if error.kind == ErrorKind::InvalidData => None,
+        item => Some(item),
+    }).collect()
+}
+
 /// Shared retention policy. An owner must settle its pending writes before
 /// allowing maintenance; other live owners are deferred, never overwritten.
 pub(crate) fn retention_plan(

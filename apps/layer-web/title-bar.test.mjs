@@ -25,7 +25,7 @@ export async function checkTitleBar({call,evaluate,settle,reload}) {
     pressed=!['up','cancel'].includes(type);
   };
   const click=async selector=>{await evaluate(`document.querySelector(${JSON.stringify(selector)}).scrollIntoView({block:'nearest',inline:'nearest'})`);await pointer('down',center(await rect(selector)));await pointer('up');await settle();};
-  const key=async(key,code=key,modifiers=0)=>{for(const type of ['keyDown','keyUp'])await call('Input.dispatchKeyEvent',{type,key,code,modifiers,windowsVirtualKeyCode:({Backspace:8,Delete:46,ArrowLeft:37,ArrowRight:39,Escape:27,F10:121,s:83})[key]||0});await settle();};
+  const key=async(key,code=key,modifiers=0)=>{for(const type of ['keyDown','keyUp'])await call('Input.dispatchKeyEvent',{type,key,code,modifiers,windowsVirtualKeyCode:({Backspace:8,Delete:46,ArrowLeft:37,ArrowRight:39,Escape:27,F10:121,s:83,f:70})[key]||0});await settle();};
   const model=()=>evaluate('layerApp.state().workspace.layout.header');
   const send=async action=>{await evaluate(`layerApp.dispatch(${JSON.stringify(action)})`);await settle();};
   const selectWorkspace=async label=>{
@@ -58,6 +58,39 @@ export async function checkTitleBar({call,evaluate,settle,reload}) {
     const originalTheme=await evaluate('document.body.dataset.theme');
     for(const theme of ['dark','light']) {
       await send({type:'set_theme',theme});
+      const fill=original.zones[2].find(e=>e.item.control?.slot==='fill');
+      assert.ok(fill,'Sketch includes Fill');
+      const controls=original.zones[2].map(e=>e.item.control);
+      const at=controls.findIndex(c=>c?.slot==='fill');
+      assert.equal(controls[at-1].command,'eraser');assert.equal(controls[at+1].panel,'layers');
+      for(const width of [360,640,1440]) {
+        await call('Emulation.setDeviceMetricsOverride',{width,height:1000,deviceScaleFactor:1,mobile:false});await settle();
+        await send({type:'invoke',command:'enclose_fill'});await send({type:'invoke',command:'hand'});
+        assert.equal(await evaluate(`layerApp.app.header_view().items.find(i=>i.id===${fill.id}).resolved_control.command`),'enclose_fill');
+        const activate=async()=>{
+          if(await evaluate(`document.querySelector('#header-item-${fill.id}').checkVisibility()`))await click(`#header-item-${fill.id} .header-tool`);
+          else {await click('#header-overflow-2 > summary');await click(`[data-header-overflow-item="${fill.id}"]`);}
+        };
+        await activate();assert.ok(await evaluate('layerApp.state().commands.find(c=>c.id==="enclose_fill").selected'));
+        await activate();assert.deepEqual(await evaluate('layerApp.state().customization.drawer.columns'),[['tools'],['tool_settings']]);
+        await wait(`(()=>{const root=document.querySelector('.content-drawer[data-drawer="tool"]');if(!root)return false;const r=root.getBoundingClientRect(),columns=[...root.querySelectorAll(':scope > .drawer-column')];return columns.length===2&&columns.every(c=>{const b=c.getBoundingClientRect();return b.width>100&&b.left>=r.left-.5&&b.right<=r.right+.5})})()`);
+        assert.deepEqual(await evaluate("[...document.querySelectorAll('.content-drawer .tools-control .tool-groups .tool-choice-name')].map(n=>n.textContent)"),['Fill','Lasso fill','Enclose and Fill']);
+        assert.ok(await evaluate(`!!document.querySelector('.content-drawer [data-tool-setting="tolerance"]')`));
+        await shot(`sketch-fill-${width}-${theme}`);await key('Escape');
+        for(const command of ['fill','lasso_fill','enclose_fill']) {
+          await key('f','KeyF');assert.ok(await evaluate(`layerApp.state().commands.find(c=>c.id===${JSON.stringify(command)}).selected`));
+        }
+      }
+      const saved=await evaluate('layerApp.state().workspace');
+      for(device of ['mouse','touch','pen']) {
+        await drop(`#header-item-${fill.id} .header-tool`,{x:700,y:500});
+        await wait('layerApp.state().workspace.layout.bubbles.bubbles.length===1');
+        assert.equal(await evaluate('layerApp.state().workspace.layout.bubbles.bubbles[0].source.control.slot'),'fill');
+        assert.ok(await evaluate('layerApp.state().commands.find(c=>c.id==="enclose_fill").selected'));
+        await send({type:'restore_workspace',workspace:saved});
+      }
+      device='mouse';
+      await send({type:'invoke',command:'drawing_brush'});
       await click(`${menu} > summary`);
       assert.deepEqual(await evaluate(`(()=>{const row=document.querySelector('${menu} .popover > button:last-child');return[row.menuItem.action,row.previousElementSibling.tagName]})()`),
         [{type:'invoke',command:'settings'},'HR'],'Preferences is the separated final compact-menu item');

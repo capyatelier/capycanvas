@@ -243,7 +243,7 @@ function Check-PenOrder {
     $hint=@((Model).state.commands|Where-Object id -eq 'pen')[0]
     if(!$hint.shortcut){throw 'The shared Pen command has no shortcut hint'}
     $tooltip=[System.Windows.Automation.AndCondition]::new(
-        [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::ToolTip),
+        [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,'capy-tooltip'),
         [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ProcessIdProperty,$review.Id))
     function PenTooltip {
         foreach($window in Owned-ProcessWindows $review){

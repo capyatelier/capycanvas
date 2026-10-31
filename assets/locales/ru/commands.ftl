@@ -687,3 +687,6 @@ command-liquify-adjust = Настроить пластику
 commands-liquify-no-changes = Сначала примените пластику к этому слою
 
 command-pen-tilt = Наклон пера…
+command-fill-connected = Смежные области
+command-fill-everywhere = Везде
+command-smooth-region-edges = Сглаживать края

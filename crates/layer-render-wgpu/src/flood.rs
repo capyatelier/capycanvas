@@ -194,7 +194,7 @@ impl Flood {
         for ((index, window), entry) in windows.iter().zip(data.chunks_mut(stride as usize)) {
             let params = [
                 w, h, seed[0], seed[1],
-                tolerance.to_bits(), (refinement.gap_closing as f32).to_bits(), (refinement.expansion as f32).to_bits(), refinement.smoothing.to_bits(),
+                tolerance.to_bits(), (refinement.gap_closing as f32).to_bits(), (refinement.expansion as f32).to_bits(), f32::from(refinement.smooth_edges).to_bits(),
                 1, u32::from(!contiguous), u32::from(enclosed), 0,
                 window[0], window[1], window[2], window[3],
                 *index, labels.grid[0], labels.grid[1], labels.side,
