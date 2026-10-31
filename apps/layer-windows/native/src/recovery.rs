@@ -659,7 +659,7 @@ impl Service {
         self.drain()
     }
     pub fn restoring(&self) -> bool {
-        self.restoring
+        self.error.is_none() && (self.restoring || !self.restore_queue.is_empty())
     }
     pub fn close_ready(&self) -> bool {
         self.closed && !self.busy
@@ -671,7 +671,7 @@ impl Service {
     )]
     pub fn status(&self, localization: &layer_ui::Localizer, selected: u64) -> serde_json::Value {
         let drawing=self.asking.front().and_then(|key|self.manifest.drawings.iter().find(|drawing|drawing.key==*key)).map(|drawing|drawing.id);
-        serde_json::json!({"busy":self.busy,"restoring":self.restoring,"closing":self.closing,"ready":self.close_ready(),
+        serde_json::json!({"busy":self.busy,"restoring":self.restoring(),"closing":self.closing,"ready":self.close_ready(),
             "camera":self.stamps.get(&selected).map(|stamp|&stamp.state.camera),
             "error":self.error.as_ref().map(|error|layer_ui::document_recovery_unavailable(localization,error)),"drawing":drawing,"retained":self.retained.len(),"windows":self.windows})
     }
@@ -718,6 +718,62 @@ mod tests {
     use super::*;
     use crate::test_support::TempDir;
     use layer_ui::{Platform, UiAction};
+    #[test]
+    fn queued_restore_blocks_document_changes_before_parking() {
+        for succeeds in [true, false] {
+            let mut host=NativeHost::new(Platform::Windows).unwrap();
+            #[cfg(target_os="windows")]
+            {
+                let project=layer_ui::new_drawing(32,24,host.session.localization()).unwrap();
+                *host.session=UiSession::from_project(Renderer(Some(crate::test_support::d3d12_renderer().into())),project,None,[32,24],Platform::Windows).unwrap();
+            }
+            assert!(!host.session.can_park_document());
+            assert!(host.session.can_switch_document());
+            let window=DocumentWindow::<Box<UiSession<Renderer>>>::default();
+            let mut recovery=Service::open(||{}).unwrap();
+            let (completed,receive)=mpsc::channel();
+            recovery.receive=receive;
+            let manifest=SessionManifest::default().reconcile(vec![SessionDrawing{id:7,key:"saved-drawing".into()}],7,false).unwrap();
+            completed.send((Finished::Opened(Ok((manifest,0))),vec![])).unwrap();
+            assert!(recovery.poll(&mut host,&window,false).unwrap());
+            assert!(recovery.ready);
+            assert!(!recovery.busy);
+            assert!(recovery.startup_stamp.is_none());
+            assert_eq!(recovery.restore_queue,VecDeque::from([7]));
+            assert_eq!(recovery.status(host.session.localization(),1)["restoring"],true);
+            assert!(recovery.restoring());
+            let mut documents=crate::documents::DocumentService::open(||{}).unwrap();
+            assert_eq!(documents.tabs_view(&host)["available"],true);
+            documents.recovery=Some(recovery);
+            assert_eq!(documents.tabs_view(&host)["available"],false);
+            let action=serde_json::from_value(serde_json::json!({"operation":"tabs","action":{"op":"adjacent","forward":true}})).unwrap();
+            assert_eq!(documents.dispatch(&mut host,action).unwrap_err(),layer_ui::DocumentTransportRefusal::ChangeInProgress.message(host.session.localization()).to_string());
+            #[cfg(target_os="windows")]
+            {
+                let path=TempDir::new();
+                documents.dispatch(&mut host,crate::documents::DocumentAction::OpenPaths{paths:vec![path.path.join("queued.capy").to_str().unwrap().into()]}).unwrap();
+                assert!(documents.status().is_none());
+                assert!(!host.session.state().requests.iter().any(|request|matches!(request.kind,layer_ui::HostRequestKind::Document{..})));
+            }
+            let recovery=documents.recovery.as_mut().unwrap();
+            if succeeds {
+                recovery.complete_restore(Ok(())).unwrap();
+            } else {
+                completed.send((Finished::Restored{result:Err("Restore failed".into()),manifest:None},vec![])).unwrap();
+                recovery.poll(&mut host,&window,false).unwrap();
+                assert!(recovery.failed());
+            }
+            assert!(!recovery.restoring());
+            assert_eq!(recovery.status(host.session.localization(),1)["restoring"],false);
+            #[cfg(target_os="windows")]
+            {
+                let path=TempDir::new();
+                documents.dispatch(&mut host,crate::documents::DocumentAction::OpenPaths{paths:vec![path.path.join("after.capy").to_str().unwrap().into()]}).unwrap();
+                assert_eq!(documents.status().unwrap()["type"],"opening_busy");
+            }
+            documents.stop_worker().unwrap();
+        }
+    }
     #[test]
     fn failed_deferred_send_still_joins_the_recovery_worker() {
         let (failed, observed) = mpsc::channel();

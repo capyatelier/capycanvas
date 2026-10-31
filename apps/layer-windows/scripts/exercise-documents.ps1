@@ -1539,7 +1539,8 @@ $stderr=Join-Path $run 'reopened.stderr.log'
 $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError $stderr
 $null=$review.Handle
 Bind-ReviewWindow 'No restarted review window'
-Wait-Until {$m=Model;$m.brush_ready -and @($m.state.tabs|Where-Object active)[0].id -eq $reopenedDrawing -and !$m.windows_recovery.busy -and !$m.windows_recovery.restoring} 'Session did not reopen' 120
+Wait-Until {(Model).brush_ready -and !(Model).windows_recovery.busy -and !(Model).windows_recovery.restoring} 'Session did not reopen' 120
+if(@((Model).state.tabs|Where-Object active)[0].id -ne $reopenedDrawing){throw 'Session reopened a different drawing'}
 if((Model).state.settings.dark_base -ne '#223344' -or !(Model).state.document_file.modified){throw 'Window close lost the focused Preferences draft or unsaved drawing'}
 Request-Close;Wait-Closed 'Restarted session close did not finish'
 if((Get-Item -LiteralPath $stderr).Length){throw 'Restarted native review reported stderr'}

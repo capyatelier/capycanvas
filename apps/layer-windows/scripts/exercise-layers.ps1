@@ -357,7 +357,8 @@ try {
     $native=@{window=$null}
     Wait-Until {$native.window=Owned-DrawingWindow $review;$null -ne $native.window} 'Restarted review did not start' 45
     $root=$native.window.Root;$drawingWindow=$native.window.Handle
-    Wait-Until {$m=Model;$m.brush_ready -and @($m.state.tabs|Where-Object active)[0].id -eq $reopenedDrawing -and !$m.windows_recovery.busy -and !$m.windows_recovery.restoring} 'Layer session did not reopen' 120
+    Wait-Until {(Model).brush_ready -and !(Model).windows_recovery.busy -and !(Model).windows_recovery.restoring} 'Layer session did not reopen' 120
+    if(@((Model).state.tabs|Where-Object active)[0].id -ne $reopenedDrawing){throw 'Layer session reopened a different drawing'}
     if(!(Model).state.document_file.modified -or [Math]::Abs((Model).state.layer_tools.editing_layer.opacity-.55) -gt .000001){throw 'Window close lost the focused layer draft'}
     Capture 'reopened-draft' -WithModel
     Invoke 'Undo' -Name

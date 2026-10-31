@@ -66,7 +66,7 @@ impl DocumentService {
     pub(crate) fn window_close_ready(&self, host: &NativeHost) -> bool {
         (self.close_window || self.window.documents.order().len()==1) && host.session.state().document_file.close_ready
     }
-    #[cfg_attr(not(target_os = "windows"), expect(dead_code, reason = "Used by the Windows host"))]
+    #[cfg_attr(all(not(target_os = "windows"), not(test)), expect(dead_code, reason = "Used by the Windows host"))]
     pub(crate) fn tabs_view(&self, host: &NativeHost) -> Value {
         let mut view = self.window.view(host, 0.);
         view["available"] = (self.idle()
