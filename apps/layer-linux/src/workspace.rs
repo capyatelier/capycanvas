@@ -3914,9 +3914,15 @@ impl Workspace {
         if let Some((widget, cursor)) = &drag.cursor {
             widget.set_cursor(cursor.as_ref());
         }
+        if let Some(device) = &drag.device {
+            self.resolve_device_cursor(device, gtk::graphene::Point::new(drag.point[0], drag.point[1]));
+        }
+    }
+
+    pub(super) fn resolve_device_cursor(&self, device: &gdk::Device, point: gtk::graphene::Point) {
         let mut picked = self.surface.pick(
-            drag.point[0] as f64,
-            drag.point[1] as f64,
+            point.x() as f64,
+            point.y() as f64,
             gtk::PickFlags::DEFAULT,
         );
         let mut cursor = None;
@@ -3928,7 +3934,6 @@ impl Workspace {
             picked = widget.parent();
         }
         if let Some(surface) = self.window.surface()
-            && let Some(device) = &drag.device
             && let Some(cursor) = cursor.or_else(|| gdk::Cursor::from_name("default", None))
         {
             surface.set_device_cursor(device, &cursor);

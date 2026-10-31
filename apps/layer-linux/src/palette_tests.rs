@@ -193,7 +193,22 @@ fn check_palette_reorder(devices: &[&str]) {
                 let animations = settings.is_gtk_enable_animations();
                 if *device == "mouse" && !cancel { settings.set_gtk_enable_animations(false); }
                 let painted = (*device == "mouse" && !cancel).then(|| hover_frames(&d.w, &grid, release));
+                let settle_ms = d.input.settle_ms;
+                if outside && *device == "mouse" { d.input.settle_ms = 0; }
                 d.input.perform(serde_json::json!([contact(device, "up", release)]));
+                d.input.settle_ms = settle_ms;
+                if outside && *device == "mouse" {
+                    assert!(!tile.has_css_class("palette-drag-source"));
+                    assert!(!grid.is_reordering());
+                    assert!(d.w.surface.drag_overlay_position().is_none());
+                    let native = d.w.window.surface().unwrap();
+                    let pointer = native.display().default_seat().unwrap().pointer().unwrap();
+                    assert_eq!(
+                        native.device_cursor(&pointer).and_then(|cursor| cursor.name()).as_deref(),
+                        Some("none"),
+                        "{surface}: palette release over canvas restores the canvas cursor"
+                    );
+                }
                 if let Some(frames) = painted { assert_hover_frames(&d.w, frames.finish(), idle, [0.5, 0.025]); }
                 settings.set_gtk_enable_animations(animations);
                 if *device == "pen" {

@@ -435,13 +435,10 @@ impl PalettePanel {
         drag.source.set_cursor(drag.cursor.as_ref());
         if let Some(device) = &drag.device
             && device.source() != gdk::InputSource::Touchscreen
-            && let Some(w) = self.workspace.borrow().upgrade()
-            && let Some(surface) = w.window.surface()
-            && let Some(cursor) = drag
-                .cursor
-                .or_else(|| gdk::Cursor::from_name("default", None))
+            && let Some(workspace) = self.workspace.borrow().upgrade()
+            && let Some(point) = self.root.compute_point(&workspace.surface, &drag.point)
         {
-            surface.set_device_cursor(device, &cursor);
+            workspace.resolve_device_cursor(device, point);
         }
         // The grouped native gestures finish their own sequence. Resetting
         // controllers here would mutate GTK's contact table during its end or
