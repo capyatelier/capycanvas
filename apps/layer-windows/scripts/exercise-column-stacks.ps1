@@ -1,4 +1,4 @@
-param([Parameter(Mandatory)][string]$Executable,[ValidateSet('mouse','pen','touch')][string]$Device='mouse',[ValidateSet('full','scroll-dark')][string]$Journey='full')
+param([Parameter(Mandatory)][string]$Executable,[ValidateSet('mouse','pen','touch')][string]$Device='mouse',[ValidateSet('full','scroll-dark','scroll-light')][string]$Journey='full')
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 . (Join-Path $PSScriptRoot 'ComposedFrames.ps1')
@@ -243,8 +243,10 @@ function Start-Review([string]$Phase){
 try {
     Enter-CapyEnvironment
     $env:CAPY_STORAGE_DIR=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1'
+    $theme=if($Journey -eq 'scroll-light'){'light'}else{'dark'}
+    [IO.File]::WriteAllText((Settings-File),(@{language=@{Explicit='en'};theme=$theme}|ConvertTo-Json -Compress))
     Start-Review 'initial'
-    if($Journey -eq 'scroll-dark'){Check-Open 12;Check-ScrollRollback;& (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close;return}
+    if($Journey -like 'scroll-*'){Check-Open 12;Check-ScrollRollback;& (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close;return}
     Check-Open 12;Capture 'default-paint';Check-ColumnInteractions;Check-DockTargets
     Tap 'column-icon-layers';Wait-Until {!(Column 12).open} 'Clicking the selected member did not close it'
     foreach($group in (Column 12).groups){foreach($icon in $group.icons){if((Control ('column-icon-'+$icon.panel)).Current.ItemStatus -eq 'Selected'){throw 'Closed strip retained a selected tile'}}}

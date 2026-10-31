@@ -3177,12 +3177,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                 return Ok(UiChange::default());
             }
             UiAction::MeasureColumnScroll { column, offset } => {
-                if !offset.is_finite()
-                    || offset < 0.
-                    || !self.state.workspace.layout.is_collapsed(column)
-                {
-                    return Err("Invalid column scroll".into());
-                }
+                if !offset.is_finite() {return Err("Invalid column scroll".into());}
+                let resolved = self.layout(self.workspace_viewport());
+                let column_geometry = resolved.collapsed.iter().find(|candidate| candidate.id == column)
+                    .ok_or("Invalid column scroll")?;
+                let offset = offset.clamp(0., column_geometry.scroll_max);
                 let scroll = &mut self.state.workspace.layout.column_scroll;
                 if scroll
                     .iter()

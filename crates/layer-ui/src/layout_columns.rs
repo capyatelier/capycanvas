@@ -37,6 +37,8 @@ pub struct CollapsedColumnPlacement {
     pub empty: Bounds,
     /// Clip/scroll the groups in this area, leaving the grip fixed.
     pub content: Bounds,
+    pub scroll_offset: f32,
+    pub scroll_max: f32,
     pub groups: Vec<CollapsedGroup>,
     pub open: Option<OpenColumn>,
 }
@@ -202,7 +204,9 @@ impl CollapsedColumnPlacement {
             .groups
             .last()
             .map_or(self.content.y, |g| g.bounds.y + g.bounds.height);
-        let offset = offset.clamp(0., (bottom - self.content.y - self.content.height).max(0.));
+        let next = offset.clamp(0., self.scroll_max);
+        let offset = next - self.scroll_offset;
+        self.scroll_offset = next;
         for g in &mut self.groups {
             g.bounds.y -= offset;
             g.divider.y -= offset;
@@ -1280,6 +1284,8 @@ pub(super) fn resolve_column(node: &DockNode, bounds: Bounds) -> CollapsedColumn
         corner_radii: [SURFACE_RADIUS; 4],
         content,
         empty,
+        scroll_offset: 0.,
+        scroll_max: (groups.last().map_or(content.y, |group| group.bounds.y + group.bounds.height) - content.y - content.height).max(0.),
         groups,
     }
 }

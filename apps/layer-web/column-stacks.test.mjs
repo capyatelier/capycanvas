@@ -31,6 +31,28 @@ export async function checkColumnStacks({call,evaluate,settle}) {
   const reset=()=>send({type:'restore_workspace',workspace:fixture});
   try {
     await call('Page.bringToFront');
+    const viewport=await evaluate('({width:innerWidth,height:innerHeight,deviceScaleFactor:devicePixelRatio,mobile:false})'),scrolls=[];
+    try {
+      await call('Emulation.setDeviceMetricsOverride',{...viewport,height:360});
+      for(const theme of ['light','dark']) {
+        const workspace=structuredClone(saved),panels=['brushes','sizes','navigator','color','palettes','layers','properties','adjustments','toolbar','tool_settings','stats'];
+        Object.assign(workspace.layout,{bands:[{id:40,edge:'left',extent:42,root:tabs(41,panels)}],floating:[],collapsed:[{root:41,expanded_width:320}],column_stacks:[],column_scroll:[],fit_tab_groups:[],fit_height_groups:[],next_id:Math.max(42,workspace.layout.next_id)});workspace.zen_mode=false;
+        await send({type:'set_theme',theme});await send({type:'restore_workspace',workspace});
+        const column=(await resolved()).collapsed.find(c=>c.id===41),last=column.groups[0].icons.at(-1);
+        assert.ok(last.bounds.y+last.bounds.height>column.content.y+column.content.height+10,'The collapsed strip overflows its viewport');
+        const read=async()=>({y:(await rect(tile('stats'))).y});
+        const initial=await read(),point=center(column.content);
+        const wheel=async deltaY=>{await call('Input.dispatchMouseEvent',{type:'mouseWheel',...point,deltaX:0,deltaY,buttons:0});await settle();};
+        await wheel(10000);const bottom=await read();
+        await wheel(-10);const reversed=await read();
+        scrolls.push({theme,initial,bottom,reversed,moved:reversed.y-bottom.y});
+      }
+    } finally {await call('Emulation.setDeviceMetricsOverride',viewport);}
+    const scrollDir=process.env.LAYER_TEST_ARTIFACTS||'artifacts/column-stacks/web';await mkdir(scrollDir,{recursive:true});
+    await writeFile(`${scrollDir}/collapsed-scroll.json`,JSON.stringify(scrolls,null,2));
+    assert.deepEqual(scrolls.map(({theme,moved})=>({theme,moved})),['light','dark'].map(theme=>({theme,moved:10})),
+      'Reversing an overscrolled collapsed strip moves its icons immediately');
+    assert.ok(scrolls.every(({initial,bottom})=>bottom.y<initial.y-10),'The large wheel movement reaches the clipped end of the strip');
     for(const theme of ['light','dark']) for(device of ['mouse','pen','touch']) for(const right of [false,true]) {
       const workspace=structuredClone(saved),minimum=right?226:242;
       Object.assign(workspace.layout,{bands:[{id:40,edge:right?'right':'left',extent:320,root:tabs(41,right?['layers']:['brushes','tool_settings'])}],floating:[],collapsed:[],column_stacks:[],column_scroll:[],fit_tab_groups:[],fit_height_groups:[],next_id:Math.max(42,workspace.layout.next_id)});

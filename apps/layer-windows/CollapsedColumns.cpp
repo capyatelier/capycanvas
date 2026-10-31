@@ -76,17 +76,16 @@ struct Column:std::enable_shared_from_this<Column>{
         auto facing=str(source,L"direction"),joined=str(object(source,L"anchor"),L"origin");
         shape(float(num(bounds,L"width")),float(num(bounds,L"height")));
         place(grip,local(object(geometry,L"grip"),bounds));place(scroll,local(content,bounds));
-        auto groups=array(geometry,L"groups");
-        double offset=groups.Size()?std::max(0.,num(content,L"y")-num(object(groups.GetObjectAt(0),L"bounds"),L"y")):0;
+        double offset=num(geometry,L"scroll_offset");
         hstring origin;
         for(auto value:array(object(data->state,L"customization"),L"column_drawers")){
             auto anchor=object(value.GetObject(),L"anchor");
             if(num(anchor,L"column") == id)origin=str(anchor,L"origin");
         }
         std::set<uint32_t> currentDividers;
-        std::set<std::wstring> current;double bottom=num(content,L"height");
+        std::set<std::wstring> current;
         for(auto value:array(geometry,L"groups")){
-            auto group=value.GetObject();auto groupBounds=object(group,L"bounds");
+            auto group=value.GetObject();
             auto separator=object(group,L"divider");
             if(num(separator,L"height")>0){
                 auto key=uint32_t(num(group,L"group"));currentDividers.insert(key);
@@ -97,7 +96,6 @@ struct Column:std::enable_shared_from_this<Column>{
                 at.SetNamedValue(L"x",N(num(at,L"x")+(num(at,L"width")-DividerLength)/2));at.SetNamedValue(L"width",N(DividerLength));
                 place(line->second,at);
             }
-            bottom=std::max(bottom,num(groupBounds,L"y")+num(groupBounds,L"height")-num(content,L"y")+offset);
             for(auto iconValue:array(group,L"icons")){
                 auto tile=iconValue.GetObject();auto panelId=str(tile,L"panel");std::wstring key=panelId.c_str();current.insert(key);
                 auto panel=find(array(data->model,L"panels"),L"id",panelId);
@@ -135,7 +133,7 @@ struct Column:std::enable_shared_from_this<Column>{
         for(auto it=dividers.begin();it!=dividers.end();)if(!currentDividers.contains(it->first)){
             uint32_t index=0;if(!gestures->DeferRemoval(it->second,shared_from_this())&&icons.Children().IndexOf(it->second,index))icons.Children().RemoveAt(index);it=dividers.erase(it);
         }else ++it;
-        icons.Width(num(content,L"width"));icons.Height(bottom);
+        icons.Width(num(content,L"width"));icons.Height(num(content,L"height")+num(geometry,L"scroll_max"));
         if(!pendingScroll){reported=offset;if(std::abs(scroll.VerticalOffset()-offset)>.25)scrollVertical(scroll,offset);}
         applying=false;
     }

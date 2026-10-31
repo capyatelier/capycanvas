@@ -370,9 +370,23 @@ fn member_trailing_edges_append_groups_without_taking_grips() {
 }
 
 #[test]
+fn collapsed_column_scroll_reverses_immediately_after_overshoot() {
+    let mut s = three_member_target();
+    let viewport = [STACK_VIEW[0], 220.];
+    s.set_viewport(viewport, viewport.map(|value| value as u32)).unwrap();
+    s.dispatch(UiAction::MeasureColumnScroll { column: 4, offset: 10000. }).unwrap();
+    let before = s.layout(viewport).collapsed.into_iter().find(|column| column.id == 4).unwrap();
+    let offset = s.state.workspace.layout.column_scroll.iter().find(|(id, _)| *id == 4).unwrap().1;
+    s.dispatch(UiAction::MeasureColumnScroll { column: 4, offset: offset - 10. }).unwrap();
+    let after = s.layout(viewport).collapsed.into_iter().find(|column| column.id == 4).unwrap();
+    assert_eq!(after.groups[0].bounds.y - before.groups[0].bounds.y, 10.);
+}
+
+#[test]
 fn trailing_group_targets_follow_scrolling_and_stay_out_of_grips() {
     let mut s = three_member_target();
     let viewport = [STACK_VIEW[0], 220.];
+    s.set_viewport(viewport, viewport.map(|value| value as u32)).unwrap();
     let initial = s.layout(viewport);
     let c = initial.collapsed.iter().find(|c| c.id == 4).unwrap();
     let x = c.bounds.x + TILE_SIZE * 0.5;

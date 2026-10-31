@@ -98,14 +98,10 @@ internal fun DockInteraction.drawerContainerShape(bounds: JSONObject, radius: Fl
             val current by rememberUpdatedState(column)
             val scroll = rememberScrollableState { delta ->
                 val c = current
-                val old = host.snapshot?.getJSONObject("state")?.getJSONObject("workspace")?.getJSONObject("layout")
-                    ?.array("column_scroll")?.values()?.map { it as JSONArray }?.find { it.getInt(0) == id }?.getDouble(1)?.toFloat() ?: 0f
-                val bottom = c.array("groups").objects().maxOfOrNull { it.getJSONObject("bounds").let { b -> b.number("y") + b.number("height") } } ?: 0f
-                val currentContent = c.getJSONObject("content")
-                val max = (old + bottom - currentContent.number("y") - currentContent.number("height")).coerceAtLeast(0f)
-                val next = (old - delta / dock.density).coerceIn(0f, max)
-                if (next != old) host.dispatch(obj("type" to "measure_column_scroll", "column" to id, "offset" to next))
-                (old - next) * dock.density
+                val old = c.number("scroll_offset")
+                val next = old - delta / dock.density
+                host.dispatch(obj("type" to "measure_column_scroll", "column" to id, "offset" to next))
+                (old - next.coerceIn(0f, c.number("scroll_max"))) * dock.density
             }
             CompositionLocalProvider(LocalWorkspaceZ provides 160, LocalPalette provides LocalPalette.current.onGlass) {
                 Box(Modifier.placed(bounds, dock.density).zIndex(160f).testTag("collapsed-column-$id")

@@ -247,20 +247,11 @@ impl Columns {
                 // A fresh GtkAdjustment initially has an empty range. Seed it
                 // before restoring the offset, otherwise GTK clamps it to zero
                 // while this new projection is waiting for its first allocation.
-                let offset = layout
-                    .column_scroll
-                    .iter()
-                    .find(|(id, _)| *id == c.id)
-                    .map_or(0., |(_, v)| *v);
+                let offset = c.scroll_offset;
                 scroll.vadjustment().configure(
                     f64::from(offset),
                     0.,
-                    f64::from(
-                        (content
-                            .measure(gtk::Orientation::Vertical, TILE_SIZE as i32)
-                            .1 as f32)
-                            .max(c.content.height),
-                    ),
+                    f64::from(c.content.height + c.scroll_max),
                     16.,
                     f64::from(TILE_SIZE),
                     f64::from(c.content.height),
@@ -320,11 +311,7 @@ impl Columns {
                     None,
                 );
             }
-            let offset = layout
-                .column_scroll
-                .iter()
-                .find(|(id, _)| *id == c.id)
-                .map_or(0., |(_, offset)| *offset);
+            let offset = c.scroll_offset;
             strip.updating_scroll.set(true);
             strip.scroll.set_value(f64::from(offset));
             strip.updating_scroll.set(false);

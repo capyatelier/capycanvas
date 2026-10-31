@@ -2,6 +2,42 @@
 use super::*;
 
 #[test]
+#[ignore = "isolated workspace-motion.sh gtk --native-test=native_column_scroll_reverses_after_overshoot"]
+fn native_column_scroll_reverses_after_overshoot() {
+    let app = native_test_app("art.capycanvas.ColumnScrollReversal");
+    let w = fixture_workspace(&app);
+    w.window.maximize(); w.window.present(); pump(1600); wait_workspaces(&w);
+    let viewport = [w.surface.width() as f32,w.surface.height() as f32];
+    let input = RemoteInput::new(); input.ready();
+    for theme in [Theme::Light,Theme::Dark] {
+        w.dispatch(UiAction::SetTheme {theme:Some(theme)});
+        let (mut fixture,mut panels) = native_bridge_fixture(viewport,84.5);
+        for index in 0..30 {
+            let panel = fixture.layout.add_toolbar(None,&format!("Scroll {index}"),&[ToolbarControl::Command {command:CommandId::Brush}]).unwrap();
+            fixture.layout.add_panel_to_group(panel,5).unwrap();
+            panels.push(panel);
+        }
+        w.dispatch(UiAction::RestoreWorkspace {workspace:Box::new(fixture)}); pump(300);
+        let geometry = ui_session(&w).layout(viewport).collapsed[0].clone();
+        assert!(geometry.scroll_max>10.,"column fixture overflows: {geometry:?}");
+        let column = geometry.id;
+        w.dispatch(UiAction::MeasureColumnScroll {column,offset:10000.}); pump(150);
+        let offset = state(&w).workspace.layout.column_scroll.into_iter().find(|(id,_)|*id==column).unwrap().1;
+        let panel = *panels.last().unwrap();
+        let icon = w.columns.button(column,panel).unwrap();
+        let before = icon.compute_bounds(&w.surface).unwrap().y();
+        w.dispatch(UiAction::MeasureColumnScroll {column,offset:offset-10.}); pump(150);
+        let after = w.columns.button(column,panel).unwrap().compute_bounds(&w.surface).unwrap().y();
+        assert!((after-before-10.).abs()<=1.,"{theme:?}: reversing an overshoot moves the native icon10px: {before}->{after},stored={offset}");
+        let scroll = find_named(w.surface.upcast_ref(),&format!("column-scroll-{column}")).unwrap().downcast::<gtk::ScrolledWindow>().unwrap();
+        let resolved = ui_session(&w).layout(viewport).collapsed.into_iter().find(|candidate|candidate.id==column).unwrap();
+        assert!((scroll.vadjustment().value() as f32-resolved.scroll_offset).abs()<=1.);
+        assert!((scroll.vadjustment().upper() as f32-scroll.vadjustment().page_size() as f32-resolved.scroll_max).abs()<=1.);
+    }
+    input.finish(); w.window.destroy(); pump(100);
+}
+
+#[test]
 #[ignore = "isolated workspace-motion.sh gtk --native-test=native_column_panel_bridge_input --tablet"]
 fn native_column_panel_bridge_input() {
     column_panel_bridges(&["mouse", "touch", "pen"], false);

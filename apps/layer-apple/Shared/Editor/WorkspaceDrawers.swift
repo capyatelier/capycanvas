@@ -39,7 +39,7 @@ private struct WorkspaceCollapsedColumnContent: View {
     init(store: EditorStore, column: JSON, panels: [[JSON]]) {
         self.store = store; self.column = column; self.panels = panels
         let position = EditorScrollPosition()
-        position.offset = store.state["workspace"]["layout"]["column_scroll"].array.first { $0[0].uint == column["id"].uint }?[1].number ?? 0
+        position.offset = column["scroll_offset"].number
         _scrollPosition = StateObject(wrappedValue: position)
     }
     private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
@@ -51,15 +51,14 @@ private struct WorkspaceCollapsedColumnContent: View {
         }
     }
     private var offset: CGFloat {
-        store.state["workspace"]["layout"]["column_scroll"].array.first { $0[0].uint == column["id"].uint }?[1].number ?? 0
+        column["scroll_offset"].number
     }
     var body: some View {
         let base = column["bounds"], clip = column["content"]
         ZStack(alignment: .topLeading) {
             EditorPositionedScrollView(position: scrollPosition, offsetChanged: { next in
-                if abs(next - offset) > 0.5 { store.dispatch(["type": "measure_column_scroll", "column": column["id"].raw, "offset": next]) }
+                if next != offset { store.dispatch(["type": "measure_column_scroll", "column": column["id"].raw, "offset": next]) }
             }) {
-                let bottom = column["groups"].array.map { $0["bounds"].rect.maxY }.max() ?? clip.rect.minY
                 ZStack(alignment: .topLeading) {
                     ForEach(column["groups"].array.indices, id: \.self) { index in
                         let group = column["groups"][index], panels = self.panels[index]
@@ -99,9 +98,9 @@ private struct WorkspaceCollapsedColumnContent: View {
                                 .accessibilityIdentifier("column-icon-" + panel["id"].string)
                         }
                     }
-                }.frame(width: clip.rect.width, height: max(clip.rect.height, bottom - clip.rect.minY + offset), alignment: .topLeading)
+                }.frame(width: clip.rect.width, height: clip.rect.height + column["scroll_max"].number, alignment: .topLeading)
             }.onChange(of: offset) { _, next in
-                if abs(scrollPosition.offset - next) > 0.5 { scrollPosition.scrollTo(y: next) }
+                if scrollPosition.offset != next { scrollPosition.scrollTo(y: next) }
             }.environment(\.workspaceClip, clip.rect)
                 .scrollIndicators(.hidden)
                 .modifier(PanelBridgeMeasurement(key: "column-content:\(column["id"].uint)"))

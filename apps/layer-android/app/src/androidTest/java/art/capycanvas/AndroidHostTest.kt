@@ -933,6 +933,46 @@ class AndroidHostTest {
         })
     }
 
+    @Test fun collapsedColumnScrollClampsStoredOffsetAndImmediatelyReverses() {
+        val original = android.view.WindowManager.LayoutParams().apply { copyFrom(compose.activity.window.attributes) }
+        val density = compose.activity.resources.displayMetrics.density
+        val fixture = JSONObject(defaultWorkspace)
+        val layout = fixture.getJSONObject("layout")
+        val panels = layout.array("panels").objects().map { it.getString("id") }
+        layout.put("bands", JSONArray(listOf(obj("id" to 40, "edge" to "left", "extent" to 252,
+            "root" to tabs(41, *panels.toTypedArray())))))
+        for (key in listOf("floating", "collapsed", "column_scroll", "fit_tab_groups", "fit_height_groups", "column_stacks")) layout.put(key, JSONArray())
+        layout.put("next_id", maxOf(42, layout.getInt("next_id")))
+        fun column() = host.snapshot!!.getJSONObject("layout").array("collapsed").objects().single { it.getInt("id") == 41 }
+        fun offset() = column().number("scroll_offset")
+        try {
+            compose.activityRule.scenario.onActivity { it.window.setLayout(original.width, (300f * density).toInt()) }
+            compose.waitUntil(10_000) { bounds("workspace").height / density <= 320f }
+            for (theme in listOf("light", "dark")) {
+                action(obj("type" to "set_theme", "theme" to theme))
+                action(obj("type" to "restore_workspace", "workspace" to fixture))
+                customize(obj("type" to "set_column_collapsed", "group" to 41, "collapsed" to true))
+                val maximum = column().number("scroll_max")
+                assertTrue("$theme short collapsed column really overflows", maximum > 60f)
+                action(obj("type" to "measure_column_scroll", "column" to 41, "offset" to 10000))
+                assertEquals("$theme resolved scroll offset is canonical", maximum, offset(), .001f)
+                val icon = "column-icon-${panels[panels.lastIndex - 1]}"
+                val before = bounds(icon).top
+                action(obj("type" to "measure_column_scroll", "column" to 41, "offset" to offset() - 10f))
+                assertEquals("$theme reversal resolves immediately", maximum - 10f, offset(), .001f)
+                assertEquals("$theme first reverse step moves the native icon", 10f * density, bounds(icon).top - before, 1f)
+                val content = column().getJSONObject("content").rect()
+                val nativeColumn = compose.onNodeWithTag("collapsed-column-41")
+                val start = content.center * density + bounds("workspace").topLeft - nativeColumn.fetchSemanticsNode().boundsInRoot.topLeft
+                val old = offset()
+                nativeColumn.performTouchInput { swipe(start, start + androidx.compose.ui.geometry.Offset(0f, 40f * density), 200) }
+                compose.waitUntil(10_000) { offset() < old }
+                val current = column()
+                assertTrue("$theme native finger scrolling remains clamped", offset() in 0f..current.number("scroll_max"))
+            }
+        } finally { compose.activityRule.scenario.onActivity { it.window.attributes = original } }
+    }
+
     @Test fun columnDrawersUseNativeMouseAndTouchDrag() {
         val fixture = JSONObject(defaultWorkspace)
         fixture.getJSONObject("layout").apply {

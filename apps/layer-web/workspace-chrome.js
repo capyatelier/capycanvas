@@ -141,7 +141,7 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
         root.dataset.key=key;root.replaceChildren();
         customization.target(root,{kind:"column",column:column.id});
         const content=element("div","collapsed-content");root.append(content);
-        content.onwheel=e=>{e.preventDefault();const old=state().workspace.layout.column_scroll.find(([id])=>id===column.id)?.[1]||0;dispatch({type:"measure_column_scroll",column:column.id,offset:Math.max(0,old+e.deltaY)});};
+        content.onwheel=e=>{e.preventDefault();const old=resolved.collapsed.find(c=>c.id===column.id)?.scroll_offset||0;dispatch({type:"measure_column_scroll",column:column.id,offset:old+e.deltaY});};
         for(const [index,group] of column.groups.entries()) {
           if(index>0) {
             const divider=element('div','tile-divider column-divider');divider.dataset.group=group.group;
