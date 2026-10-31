@@ -245,7 +245,7 @@ impl CommandBar {
             move |_, key, keycode, modifiers| {
                 let preedit = w.command_bar.composition_keys.release(keycode);
                 if preedit || w.command_bar.composing.get() { return; }
-                w.interact(crate::input::key_input(key, false, modifiers, true, None));
+                w.interact(crate::input::key_input(key, keycode, false, modifiers, true, None));
             }
         ));
         self.popup.add_controller(keys);

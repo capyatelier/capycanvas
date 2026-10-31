@@ -1233,8 +1233,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             reply.handled = true;
             return Ok(reply);
         }
-        if let UiInput::Key { key, pressed, repeat, .. } = &mut input {
-            let key = key.to_ascii_lowercase();
+        if let UiInput::Key { key, latin, pressed, repeat, .. } = &mut input {
+            let key = shortcut_key(key, latin.as_deref()).to_ascii_lowercase();
             if *pressed {
                 *repeat |= !self.interaction.keys.insert(key);
             } else {
@@ -1432,6 +1432,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             UiInput::Key {
                 key,
+                latin,
                 pressed,
                 repeat,
                 modifiers,
@@ -1483,7 +1484,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     reply.handled = true;
                     return Ok(reply);
                 }
-                let key = key.to_ascii_lowercase();
+                let key = shortcut_key(&key, latin.as_deref()).to_ascii_lowercase();
                 let name = KeyChord::new(&key, Modifiers::default()).key;
                 let hold_allowed = !editing
                     && divider.is_none()
@@ -7703,6 +7704,7 @@ mod tests {
         assert_eq!(s.engine.document(), &before);
         let reply = s
             .input(UiInput::Key {
+                latin: None,
                 key: "b".into(),
                 pressed: true,
                 repeat: false,
@@ -9079,6 +9081,7 @@ mod tests {
                 let plain = s.current_figure().unwrap();
                 let change = s
                     .input(UiInput::Key {
+                        latin: None,
                         key: "Shift_L".into(),
                         pressed: true,
                         repeat: false,
@@ -9097,6 +9100,7 @@ mod tests {
                 s.append_layer_overlay(&mut guide);
                 assert!(!guide.is_empty());
                 s.input(UiInput::Key {
+                    latin: None,
                     key: "Shift_L".into(),
                     pressed: false,
                     repeat: false,
@@ -11775,6 +11779,7 @@ mod tests {
             assert!(!s.state.workspace.zen_mode, "{platform:?}/show={show}");
             for repeat in [false, true, false] {
                 let reply = s.input(UiInput::Key {
+                    latin: None,
                     key: "Escape".into(), pressed: true, repeat,
                     modifiers: Modifiers::default(), editing: false, divider: None,
                 }).unwrap();
@@ -11865,7 +11870,7 @@ mod tests {
             }
             for repeat in [false, true] {
                 let hidden = chrome(&mut s, ChromeEvent::Refresh, ChromeFacts::default()).chrome_hidden;
-                let reply = s.input(UiInput::Key { key: "Escape".into(), pressed: true, repeat,
+                let reply = s.input(UiInput::Key { latin: None, key: "Escape".into(), pressed: true, repeat,
                     modifiers: Modifiers::default(), editing: false, divider: None }).unwrap();
                 assert!(s.state.workspace.zen_mode, "held Escape: {platform:?}/owner={owner}/repeat={repeat}");
                 assert_eq!(reply.chrome_hidden, hidden);
@@ -15482,6 +15487,7 @@ mod tests {
                     }
                     "escape" => {
                         app.input(UiInput::Key {
+                            latin: None,
                             key: "escape".into(),
                             pressed: true,
                             repeat: false,
@@ -16576,6 +16582,7 @@ mod tests {
         open(&mut app);
         let reply = app
             .input(UiInput::Key {
+                latin: None,
                 key: "escape".into(),
                 pressed: true,
                 repeat: false,
@@ -17071,6 +17078,7 @@ mod tests {
         };
         let press = |s: &mut UiSession<Recorder>, key: &str| {
             s.input(UiInput::Key {
+                latin: None,
                 key: key.into(),
                 pressed: true,
                 repeat: false,
@@ -17485,6 +17493,7 @@ mod tests {
                 key(&mut s, name, false, command, editing);
             }
             s.input(UiInput::Key {
+                latin: None,
                 key: "x".into(),
                 pressed: true,
                 repeat: false,

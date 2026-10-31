@@ -841,7 +841,7 @@ pub enum PreferenceAction {
         id: Option<String>,
     },
     SearchShortcutKey {
-        chord: KeyChord,
+        chord: crate::ShortcutKeyInput,
     },
     ShortcutContext {
         category: Option<crate::ToolCategory>,
@@ -2060,8 +2060,9 @@ impl PreferencesState {
                 self.shortcut_page.category = id;
             }
             PreferenceAction::SearchShortcutKey { chord } => {
+                let crate::ShortcutKeyInput { chord, latin } = chord;
                 let modifiers = crate::Modifiers { command: chord.command, shift: chord.shift, alt: chord.alt };
-                let chord = KeyChord::new(&chord.key, modifiers);
+                let chord = KeyChord::new(crate::shortcut_key(&chord.key, latin.as_deref()), modifiers);
                 self.shortcut_query = chord.localized_label(platform, localizer);
                 self.shortcut_page.key = Some(chord);
             }
@@ -2850,7 +2851,7 @@ mod localization_tests {
         state.set_localization(&settings, Platform::Gtk, &japanese);
         assert_eq!(state.error.as_ref().unwrap(), &japanese.text(MessageId::SETTINGS_NATIVE_PREDICTION_UNAVAILABLE).to_string());
         let key = KeyChord::new("enter", Default::default());
-        state.edit(&mut settings, PreferenceAction::SearchShortcutKey { chord: key.clone() }, Platform::Gtk, &english);
+        state.edit(&mut settings, PreferenceAction::SearchShortcutKey { chord: key.clone().into() }, Platform::Gtk, &english);
         state.shortcut_page.context = Some(ToolCategory::Drawing);
         state.shortcut_page.show = crate::ShortcutShow::Customized;
         state.set_localization(&settings, Platform::Gtk, &japanese);

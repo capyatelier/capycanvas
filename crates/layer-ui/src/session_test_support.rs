@@ -308,15 +308,25 @@ pub(crate) fn session(platform: Platform) -> UiSession<Recorder> {
     session.dispatch(UiAction::SelectBrush { id: DefaultBrushPreset::GPen as u32 }).unwrap();
     session
 }
-pub(crate) fn key(
+#[derive(Clone, Copy)]
+pub(crate) struct TestKey<'a>(pub(crate) &'a str, pub(crate) Option<&'a str>);
+impl<'a> From<&'a str> for TestKey<'a> {
+    fn from(key: &'a str) -> Self { Self(key, None) }
+}
+impl<'a> From<(&'a str, &'a str)> for TestKey<'a> {
+    fn from((key, latin): (&'a str, &'a str)) -> Self { Self(key, Some(latin)) }
+}
+pub(crate) fn key<'a>(
     s: &mut UiSession<Recorder>,
-    name: &str,
+    name: impl Into<TestKey<'a>>,
     pressed: bool,
     command: bool,
     editing: bool,
 ) -> InputReply {
+    let TestKey(name, latin) = name.into();
     s.input(UiInput::Key {
         key: name.into(),
+        latin: latin.map(str::to_owned),
         pressed,
         repeat: false,
         modifiers: Modifiers {
@@ -430,7 +440,8 @@ pub(crate) fn preference(s: &mut UiSession<Recorder>, action: PreferenceAction) 
 pub(crate) fn edit_preference(s: &mut UiSession<Recorder>, id: PreferenceId, value: PreferenceValue) {
     preference(s, PreferenceAction::Edit { id, value });
 }
-pub(crate) fn record_shortcut(s: &mut UiSession<Recorder>, id: &str, name: &str, command: bool) {
+pub(crate) fn record_shortcut<'a>(s: &mut UiSession<Recorder>, id: &str, name: impl Into<TestKey<'a>>, command: bool) {
+    let name = name.into();
     preference(s, PreferenceAction::BeginShortcut { id: id.into() });
     assert!(key(s, name, true, command, true).handled);
     key(s, name, false, command, true);

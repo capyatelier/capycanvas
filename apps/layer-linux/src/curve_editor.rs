@@ -169,18 +169,18 @@ impl CurveEditor {
         }));
         area.add_controller(click.clone()); click.group_with(&drag);
         let keys = gtk::EventControllerKey::new();
-        let dispatch_key = Rc::new(glib::clone!(#[weak] w, #[strong] view, #[strong] target, #[upgrade_or] false, move |native, pressed, modifiers| {
-            let layer_ui::UiInput::Key { key: key_event, repeat, modifiers, .. } = crate::input::key_input(native, pressed, modifiers, false, None) else { return false; };
+        let dispatch_key = Rc::new(glib::clone!(#[weak] w, #[strong] view, #[strong] target, #[upgrade_or] false, move |native, keycode, pressed, modifiers| {
+            let layer_ui::UiInput::Key { key: key_event, repeat, modifiers, .. } = crate::input::key_input(native, keycode, pressed, modifiers, false, None) else { return false; };
             if !matches!(key_event.as_str(), "ArrowLeft" | "ArrowRight" | "ArrowUp" | "ArrowDown" | "Delete" | "Backspace" | "Escape")
                 || pressed && key_event != "Escape" && (modifiers.command || modifiers.alt) { return false; }
             let epoch = view.borrow().controls.epoch;
             w.dispatch(UiAction::CurveEditor { target: target.clone(), action: CurveEditorAction::Key { epoch, key_event, pressed, repeat, modifiers } });
             true
         }));
-        keys.connect_key_pressed(glib::clone!(#[strong] dispatch_key, move |_, key, _, modifiers| {
-            if dispatch_key(key, true, modifiers) { glib::Propagation::Stop } else { glib::Propagation::Proceed }
+        keys.connect_key_pressed(glib::clone!(#[strong] dispatch_key, move |_, key, keycode, modifiers| {
+            if dispatch_key(key, keycode, true, modifiers) { glib::Propagation::Stop } else { glib::Propagation::Proceed }
         }));
-        keys.connect_key_released(move |_, key, _, modifiers| { dispatch_key(key, false, modifiers); });
+        keys.connect_key_released(move |_, key, keycode, modifiers| { dispatch_key(key, keycode, false, modifiers); });
         area.add_controller(keys);
         let focus = gtk::EventControllerFocus::new();
         focus.connect_leave(glib::clone!(#[weak] w, #[strong] view, #[strong] target, #[strong] capture, move |_| {

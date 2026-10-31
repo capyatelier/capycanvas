@@ -122,6 +122,7 @@ filter. A single ASCII character matches keys; other characters search action na
 sheet: the action's keys, Add Shortcut with inline recording, and reset. Actions
 that share a name, such as the Eraser tool and the Eraser brush, describe which
 is which.
+Shortcuts use the Latin key on the same physical key for non-ASCII characters when available; ASCII characters keep their own keys.
 
 ## Zoom and canvas navigation
 

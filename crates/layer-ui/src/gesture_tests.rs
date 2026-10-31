@@ -706,6 +706,7 @@ fn remote_and_gamepad_keys_share_canonical_names() {
     let size = s.state.brush.diameter;
     let press = |s: &mut UiSession<Recorder>, name: &str, repeat: bool| {
         s.input(UiInput::Key {
+            latin: None,
             key: name.into(),
             pressed: true,
             repeat,

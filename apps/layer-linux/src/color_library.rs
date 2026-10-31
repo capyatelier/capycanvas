@@ -324,7 +324,7 @@ impl PalettePanel {
             panel,
             #[upgrade_or]
             glib::Propagation::Proceed,
-            move |_, key, _, _| {
+            move |_, key, keycode, _| {
                 if key != gdk::Key::Escape {
                     return glib::Propagation::Proceed;
                 }
@@ -349,6 +349,7 @@ impl PalettePanel {
                     if let Some(w) = panel.workspace.borrow().upgrade() {
                         w.interact(crate::input::key_input(
                             key,
+                            keycode,
                             true,
                             gdk::ModifierType::empty(),
                             false,

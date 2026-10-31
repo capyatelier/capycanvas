@@ -1538,7 +1538,7 @@ mod clipboard_checks {
                 crate::keymaps::select(&mut settings, preset.id).unwrap();
                 s.dispatch(UiAction::RestoreSettings { settings: Box::new(settings) }).unwrap();
                 let before = s.engine.document().clone();
-                let input = |pressed, editing| UiInput::Key { key: name.into(), pressed, repeat: false,
+                let input = |pressed, editing| UiInput::Key { latin: None, key: name.into(), pressed, repeat: false,
                     modifiers: Modifiers { command, shift, alt: false }, editing, divider: None };
                 assert!(!s.input(input(true, true)).unwrap().handled, "{}: text owns {name}", preset.id);
                 s.input(input(false, true)).unwrap();

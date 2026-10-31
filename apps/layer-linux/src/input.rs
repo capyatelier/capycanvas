@@ -637,11 +637,15 @@ fn pan_event(workspace: &Rc<Workspace>, button: u32, phase: ContactPhase, positi
 
 pub fn key_input(
     key: gdk::Key,
+    keycode: u32,
     pressed: bool,
     modifiers: gdk::ModifierType,
     editing: bool,
     divider: Option<u32>,
 ) -> UiInput {
+    let latin = gdk::Display::default().and_then(|display| display.map_keycode(keycode))
+        .and_then(|entries| latin_key(key, &entries).to_unicode())
+        .filter(char::is_ascii_graphic).map(|c| c.to_string());
     let key = match key {
         gdk::Key::Tab | gdk::Key::ISO_Left_Tab => "Tab".into(),
         gdk::Key::Escape => "Escape".into(),
@@ -662,6 +666,7 @@ pub fn key_input(
             .unwrap_or_default(),
     };
     UiInput::Key {
+        latin: latin.filter(|latin| *latin != key),
         key,
         pressed,
         repeat: false,
@@ -674,24 +679,6 @@ pub fn key_input(
             alt: modifiers.contains(gdk::ModifierType::ALT_MASK),
         },
     }
-}
-
-pub(crate) fn editing_focus(window: &adw::ApplicationWindow) -> bool {
-    gtk::prelude::GtkWindowExt::focus(window).is_some_and(|w| {
-        w.is::<gtk::Text>() || w.is::<gtk::Entry>() || w.is::<gtk::TextView>() || w.is::<gtk::Range>() || w.is::<gtk::DropDown>()
-    })
-}
-
-/// The key a Latin layout places on the same physical key, so shortcuts work in every layout.
-/// Unchorded typing keeps its own character.
-pub(crate) fn shortcut_key(key: gdk::Key, keycode: u32, modifiers: gdk::ModifierType, typing: bool) -> gdk::Key {
-    use gdk::ModifierType as M;
-    if key.to_unicode().is_none_or(|c| c.is_ascii())
-        || typing && !modifiers.intersects(M::CONTROL_MASK | M::ALT_MASK | M::SUPER_MASK | M::META_MASK)
-    {
-        return key;
-    }
-    gdk::Display::default().and_then(|display| display.map_keycode(keycode)).map_or(key, |entries| latin_key(key, &entries))
 }
 
 fn latin_key(key: gdk::Key, entries: &[(gdk::KeymapKey, gdk::Key)]) -> gdk::Key {
@@ -765,10 +752,11 @@ pub fn pad_buttons(workspace: &Rc<Workspace>) -> gtk::EventControllerLegacy {
             let Some(pad) = event.downcast_ref::<gdk::PadEvent>() else {
                 return glib::Propagation::Proceed;
             };
-            let UiInput::Key { modifiers, .. } = key_input(gdk::Key::VoidSymbol, pressed, event.modifier_state(), false, None) else {
+            let UiInput::Key { modifiers, .. } = key_input(gdk::Key::VoidSymbol, 0, pressed, event.modifier_state(), false, None) else {
                 return glib::Propagation::Proceed;
             };
             workspace.interact(UiInput::Key {
+                latin: None,
                 key: format!("pad_button_{}", pad.button() + 1),
                 pressed,
                 repeat: false,
@@ -1140,8 +1128,6 @@ mod tests {
         assert_eq!(latin_key(gdk::Key::Cyrillic_ya, &english_first), gdk::Key::z);
         let greek_only = [(gdk::KeymapKey::new(38, 0, 0), gdk::Key::Greek_alpha)];
         assert_eq!(latin_key(gdk::Key::Greek_alpha, &greek_only), gdk::Key::Greek_alpha);
-        assert_eq!(shortcut_key(gdk::Key::Cyrillic_ya, 52, gdk::ModifierType::empty(), true), gdk::Key::Cyrillic_ya);
-        assert_eq!(shortcut_key(gdk::Key::bracketleft, 34, gdk::ModifierType::CONTROL_MASK, false), gdk::Key::bracketleft);
     }
 
     #[test]

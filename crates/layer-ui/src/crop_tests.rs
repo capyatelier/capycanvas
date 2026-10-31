@@ -389,6 +389,7 @@ fn shift_snaps_straighten_lines_to_fifteen_degrees_and_the_angle_is_typed_too() 
     invoke(&mut s, CommandId::Crop);
     invoke(&mut s, CommandId::CropStraighten);
     s.input(UiInput::Key {
+        latin: None,
         key: "Shift_L".into(),
         pressed: true,
         repeat: false,

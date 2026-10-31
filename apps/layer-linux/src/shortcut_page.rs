@@ -349,13 +349,13 @@ fn subtitle(row: &ShortcutRow) -> String {
     [row.detail.as_str(), &row.scope_caption].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" · ")
 }
 
-fn is_text_editing(key: gtk::gdk::Key, modifiers: gtk::gdk::ModifierType) -> bool {
-    use gtk::gdk::{Key, ModifierType as M};
+fn is_text_editing(key: &str, modifiers: gtk::gdk::ModifierType) -> bool {
+    use gtk::gdk::ModifierType as M;
     let only_control = modifiers & (M::CONTROL_MASK | M::ALT_MASK | M::SUPER_MASK | M::SHIFT_MASK) == M::CONTROL_MASK;
     only_control
         && matches!(
-            key.to_lower(),
-            Key::a | Key::c | Key::v | Key::x | Key::BackSpace | Key::Delete | Key::Left | Key::Right | Key::Home | Key::End
+            key.to_ascii_lowercase().as_str(),
+            "a" | "c" | "v" | "x" | "backspace" | "delete" | "arrowleft" | "arrowright" | "home" | "end"
         )
 }
 
@@ -711,22 +711,24 @@ impl ShortcutPage {
             glib::Propagation::Proceed,
             move |_, key, keycode, modifiers| {
                 use gtk::gdk::ModifierType as M;
-                let key = crate::input::shortcut_key(key, keycode, modifiers, true);
                 let named = key.name().is_some_and(|n| {
                     (n.starts_with('F') && n[1..].parse::<u8>().is_ok()) || n.starts_with("XF86") || n.starts_with("Audio")
                 });
                 let chorded = modifiers.intersects(M::CONTROL_MASK | M::ALT_MASK | M::SUPER_MASK | M::META_MASK);
-                if (!chorded && !named) || is_text_editing(key, modifiers) {
+                if !chorded && !named {
                     return glib::Propagation::Proceed;
                 }
-                let UiInput::Key { key: name, modifiers, .. } = crate::input::key_input(key, true, modifiers, false, None) else {
+                let UiInput::Key { key: name, latin, modifiers: chord_modifiers, .. } = crate::input::key_input(key, keycode, true, modifiers, false, None) else {
                     return glib::Propagation::Proceed;
                 };
-                let chord = KeyChord::new(&name, modifiers);
+                if is_text_editing(layer_ui::shortcut_key(&name, latin.as_deref()), modifiers) {
+                    return glib::Propagation::Proceed;
+                }
+                let chord = KeyChord::new(&name, chord_modifiers);
                 if KeyChord::modifier(&chord.key) {
                     return glib::Propagation::Proceed;
                 }
-                send(&w, PreferenceAction::SearchShortcutKey { chord });
+                send(&w, PreferenceAction::SearchShortcutKey { chord: layer_ui::ShortcutKeyInput { chord, latin } });
                 glib::Propagation::Stop
             }
         ));
@@ -835,8 +837,7 @@ impl ShortcutPage {
                     if !w.preferences.shortcut_page.recording() {
                         return glib::Propagation::Proceed;
                     }
-                    let key = crate::input::shortcut_key(key, keycode, modifiers, false);
-                    w.interact(crate::input::key_input(key, true, modifiers, false, None));
+                    w.interact(crate::input::key_input(key, keycode, true, modifiers, false, None));
                     glib::Propagation::Stop
                 }
             ));
@@ -844,8 +845,7 @@ impl ShortcutPage {
                 #[weak]
                 w,
                 move |_, key, keycode, modifiers| {
-                    let key = crate::input::shortcut_key(key, keycode, modifiers, false);
-                    w.interact(crate::input::key_input(key, false, modifiers, false, None));
+                    w.interact(crate::input::key_input(key, keycode, false, modifiers, false, None));
                 }
             ));
             form.sheet.dialog.add_controller(keys);

@@ -480,7 +480,7 @@ fn move_tool_nudges_duplicates_and_copies_paths() {
     let at = surface_at(&s, origin);
     press(&mut s, 100, &[at, at]);
     let nudge = |s: &mut UiSession<Recorder>, shift: bool| for pressed in [true, false] {
-        s.input(UiInput::Key { key: "arrowright".into(), pressed, repeat: false, modifiers: Modifiers { shift, ..Modifiers::default() }, editing: false, divider: None }).unwrap();
+        s.input(UiInput::Key { latin: None, key: "arrowright".into(), pressed, repeat: false, modifiers: Modifiers { shift, ..Modifiers::default() }, editing: false, divider: None }).unwrap();
     };
     nudge(&mut s, false);
     nudge(&mut s, true);
@@ -664,8 +664,8 @@ fn path_drafts_reserve_backspace_without_swallowing_forward_delete() {
             }
             let keys: &[&str] = if remove { &["delete", "backspace", "enter"] } else { &["delete", "enter"] };
             for name in keys {
-                key(&mut s, name, true, false, false);
-                key(&mut s, name, false, false, false);
+                key(&mut s, *name, true, false, false);
+                key(&mut s, *name, false, false, false);
             }
             let object = s.engine.document().scene().vector_layer(layer).unwrap();
             let (_, path) = object.paths().next().unwrap();

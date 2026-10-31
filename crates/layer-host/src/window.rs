@@ -1363,7 +1363,7 @@ mod tests {
         for input in [
             UiInput::Chrome {event:layer_ui::ChromeEvent::Refresh,facts:Default::default(),viewport:[64.,48.]},
             UiInput::Blur,
-            UiInput::Key {key:"Space".into(),pressed:false,repeat:false,modifiers:Default::default(),editing:false,divider:None},
+            UiInput::Key { latin: None,key:"Space".into(),pressed:false,repeat:false,modifiers:Default::default(),editing:false,divider:None},
             UiInput::Axes {pan:[8.,4.],zoom:2.},
         ] {
             let reply = host.input(input).unwrap();

@@ -306,6 +306,8 @@ pub enum UiInput {
     },
     Key {
         key: String,
+        #[serde(default)]
+        latin: Option<String>,
         pressed: bool,
         #[serde(default)]
         repeat: bool,

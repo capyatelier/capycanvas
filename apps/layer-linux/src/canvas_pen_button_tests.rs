@@ -388,7 +388,7 @@ fn native_remote_keys() {
         action: PreferenceAction::BeginShortcut { id: CommandId::Undo.shortcut_id() },
     });
     for pressed in [true, false] {
-        d.w.interact(crate::input::key_input(gdk::Key::AudioPlay, pressed, gdk::ModifierType::empty(), false, None));
+        d.w.interact(crate::input::key_input(gdk::Key::AudioPlay, 0, pressed, gdk::ModifierType::empty(), false, None));
     }
     d.w.dispatch(UiAction::Preferences { action: PreferenceAction::ConfirmShortcut { replace: true } });
     d.w.dispatch(UiAction::CloseSettings);

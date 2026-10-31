@@ -1,6 +1,8 @@
-fn held_key(s: &mut UiSession<Recorder>, name: &str, pressed: bool, modifiers: Modifiers) -> InputReply {
+fn held_key<'a>(s: &mut UiSession<Recorder>, name: impl Into<TestKey<'a>>, pressed: bool, modifiers: Modifiers) -> InputReply {
+    let TestKey(name, latin) = name.into();
     s.input(UiInput::Key {
         key: name.into(),
+        latin: latin.map(str::to_owned),
         pressed,
         repeat: false,
         modifiers,
@@ -16,6 +18,20 @@ fn alt() -> Modifiers {
 
 fn sampling(s: &UiSession<Recorder>) -> bool {
     s.layer_interaction.tool.picks_color()
+}
+
+#[test]
+fn layout_shortcuts_release_the_latin_hold_key() {
+    let mut s = session(Platform::Gtk);
+    let preset = s.state.brush.preset;
+    let mut holds = s.state.settings.hold_keys(Platform::Gtk);
+    holds.iter_mut().find(|hold| hold.key.key == "alt").unwrap().key = KeyChord::new("b", Modifiers::default());
+    s.state.settings.hold_keys = Some(holds);
+    assert!(held_key(&mut s, ("и", "b"), true, Modifiers::default()).handled);
+    assert!(sampling(&s));
+    held_key(&mut s, ("и", "b"), false, Modifiers::default());
+    assert!(painting_with(&s, preset));
+    assert!(s.interaction.holds.is_empty() && s.interaction.pressed.is_empty() && s.interaction.keys.is_empty());
 }
 
 fn painting_with(s: &UiSession<Recorder>, preset: u32) -> bool {
@@ -202,6 +218,7 @@ fn relative_steps_follow_the_tool_setting_bounds() {
     let mut s = session(Platform::Gtk);
     let step = |s: &mut UiSession<Recorder>, key: &str, repeat: bool| {
         s.input(UiInput::Key {
+            latin: None,
             key: key.into(),
             pressed: true,
             repeat,

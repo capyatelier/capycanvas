@@ -527,7 +527,7 @@ mod selection_tools_checks {
                 ("Shift", true, true, CommandId::SelectionIntersect),
             ] {
                 for blur in [false, true] {
-                    let pressed = s.input(UiInput::Key { key: name.into(), pressed: true, repeat: false,
+                    let pressed = s.input(UiInput::Key { latin: None, key: name.into(), pressed: true, repeat: false,
                         modifiers: Modifiers { shift, alt, ..Default::default() }, editing: false, divider: None }).unwrap();
                     assert!(s.command(expected).selected, "{platform:?}/{name}/{alt}");
                     let selected: Vec<_> = s.state.commands.iter().filter(|command| command.selected && matches!(command.id,
@@ -536,6 +536,7 @@ mod selection_tools_checks {
                     assert_eq!(selected, [expected], "{platform:?}/{name}/{alt}: key down publishes selection mode");
                     assert_ne!(pressed.change.regions & regions::COMMANDS, 0);
                     let released = s.input(if blur { UiInput::Blur } else { UiInput::Key {
+                        latin: None,
                         key: name.into(), pressed: false, repeat: false, modifiers: Modifiers::default(), editing: false, divider: None,
                     } }).unwrap();
                     assert!(s.command(CommandId::SelectionNew).selected);
@@ -558,7 +559,7 @@ mod selection_tools_checks {
             invoke(&mut s, CommandId::KeyboardShortcuts);
             preference(&mut s, PreferenceAction::AddModifierKey);
             let document = s.engine.document().clone();
-            let reply = s.input(UiInput::Key { key: "Shift".into(), pressed: true, repeat: false,
+            let reply = s.input(UiInput::Key { latin: None, key: "Shift".into(), pressed: true, repeat: false,
                 modifiers: Modifiers { shift: true, ..Default::default() }, editing: false, divider: None }).unwrap();
             assert!(reply.handled);
             assert!(s.preferences().unwrap().capture.unwrap().chord.is_some());

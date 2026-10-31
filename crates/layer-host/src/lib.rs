@@ -2453,7 +2453,7 @@ mod tests {
             }
             host.dispatch(UiAction::Invoke { command: CommandId::Zoom }).unwrap();
             assert_eq!(host.take_value().unwrap()["navigation_cursor"], "zoom");
-            let alt_key = |pressed| UiInput::Key { key: "Alt_L".into(), pressed, repeat: false,
+            let alt_key = |pressed| UiInput::Key { latin: None, key: "Alt_L".into(), pressed, repeat: false,
                 modifiers: Modifiers { alt: !pressed, ..Modifiers::default() }, editing: false, divider: None };
             for (input, cursor) in [(alt_key(true), "zoom_out"), (alt_key(false), "zoom"),
                 (alt_key(true), "zoom_out"), (UiInput::Blur, "zoom")]
@@ -2478,7 +2478,7 @@ mod tests {
                 let mut host = NativeHost::new(platform).unwrap();
                 host.resize(1200, 900, 1.).unwrap();
                 host.take_value().unwrap();
-                let reply = host.input(UiInput::Key { key: " ".into(), pressed: true, repeat: false,
+                let reply = host.input(UiInput::Key { latin: None, key: " ".into(), pressed: true, repeat: false,
                     modifiers: Modifiers::default(), editing: false, divider: None }).unwrap();
                 assert_eq!(reply.navigation_cursor, Some(layer_ui::NavigationMode::Pan));
                 assert_eq!(host.take_value().unwrap()["navigation_cursor"], "pan");
@@ -2521,7 +2521,7 @@ mod tests {
         assert!(app.take_value().is_none());
         app.chrome_hidden = true;
         assert_eq!(app.take_value().unwrap()["chrome_hidden"], true);
-        app.input(UiInput::Key { key: " ".into(), pressed: true, repeat: false,
+        app.input(UiInput::Key { latin: None, key: " ".into(), pressed: true, repeat: false,
             modifiers: layer_ui::Modifiers::default(), editing: false, divider: None }).unwrap();
         app.keep_zen_button = true;
         let snapshot = app.take_value().unwrap();

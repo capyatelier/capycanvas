@@ -18,6 +18,7 @@ mod move_pixels_checks {
     }
     fn alt(s: &mut UiSession<Recorder>, pressed: bool) {
         s.input(UiInput::Key {
+            latin: None,
             key: "Alt".into(),
             pressed,
             repeat: false,

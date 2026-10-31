@@ -54,6 +54,19 @@ pub struct KeyChord {
     #[serde(default)]
     pub alt: bool,
 }
+pub fn shortcut_key<'a>(key: &'a str, latin: Option<&'a str>) -> &'a str {
+    if key.is_ascii() { key } else { latin.unwrap_or(key) }
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShortcutKeyInput {
+    #[serde(flatten)]
+    pub chord: KeyChord,
+    #[serde(default)]
+    pub latin: Option<String>,
+}
+impl From<KeyChord> for ShortcutKeyInput {
+    fn from(chord: KeyChord) -> Self { Self { chord, latin: None } }
+}
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct NativeKeyBinding {
     #[serde(flatten)]

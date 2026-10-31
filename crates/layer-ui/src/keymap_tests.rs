@@ -7,6 +7,70 @@ fn bound(settings: &Settings, chord: &KeyChord) -> Option<String> {
 }
 
 #[test]
+fn layout_shortcuts_undo_redo_and_retire_repeated_tool_keys() {
+    for platform in Platform::ALL {
+        let mut s = session(platform);
+        invoke(&mut s, CommandId::AddLayer);
+        let first = s.engine.checkpoint();
+        invoke(&mut s, CommandId::AddLayer);
+        let second = s.engine.checkpoint();
+        assert!(key(&mut s, ("я", "z"), true, true, false).handled);
+        assert_eq!(s.engine.checkpoint(), first);
+        key(&mut s, ("я", "z"), false, true, false);
+        let shifted = Modifiers { command: true, shift: true, ..Default::default() };
+        assert!(held_key(&mut s, ("Я", "Z"), true, shifted).handled);
+        assert_eq!(s.engine.checkpoint(), second);
+        held_key(&mut s, ("я", "z"), false, Modifiers::default());
+        invoke(&mut s, CommandId::Eraser);
+        assert!(key(&mut s, ("и", "b"), true, false, false).handled);
+        assert!(s.command(CommandId::Brush).selected);
+        key(&mut s, "b", true, false, false);
+        assert!(s.command(CommandId::Brush).selected);
+        key(&mut s, ("и", "b"), false, false, false);
+        assert!(s.interaction.keys.is_empty() && s.interaction.pressed.is_empty());
+        key(&mut s, ("и", "b"), true, false, false);
+        assert!(s.command(ToolFamily::Paint.commands()[1]).selected);
+        key(&mut s, ("и", "b"), false, false, false);
+    }
+}
+
+#[test]
+fn layout_shortcuts_record_and_search_canonical_chords() {
+    for (name, latin, expected) in [("я", "z", "z"), ("é", "z", "z"), ("a", "q", "a")] {
+        let mut s = session(Platform::Gtk);
+        invoke(&mut s, CommandId::KeyboardShortcuts);
+        record_shortcut(&mut s, &CommandId::ZenMode.shortcut_id(), (name, latin), true);
+        assert_eq!(s.preferences().unwrap().capture.unwrap().chord.unwrap(), chord(expected, true, false, false));
+        preference(&mut s, PreferenceAction::ConfirmShortcut { replace: true });
+        assert!(s.state.settings.keys(&CommandId::ZenMode.shortcut_id()).contains(&chord(expected, true, false, false)));
+        let saved = serde_json::to_value(&s.state.settings).unwrap();
+        assert!(saved["shortcuts"][CommandId::ZenMode.shortcut_id()][0].get("latin").is_none());
+        preference(&mut s, serde_json::from_value(serde_json::json!({
+            "type": "search_shortcut_key", "chord": { "key": name, "latin": latin, "command": true }
+        })).unwrap());
+        let view = s.preferences().unwrap();
+        assert_eq!(view.shortcut_page.key.as_deref(), Some(chord(expected, true, false, false).label(Platform::Gtk).as_str()));
+        assert!(view.shortcuts.iter().find(|r| r.id == CommandId::ZenMode.shortcut_id()).unwrap().visible);
+    }
+}
+
+#[test]
+fn layout_shortcuts_preserve_settings_text_and_native_editing() {
+    let mut s = session(Platform::Gtk);
+    invoke(&mut s, CommandId::Settings);
+    assert!(key(&mut s, ("я", "z"), true, false, false).handled);
+    key(&mut s, ("я", "z"), false, false, false);
+    assert_eq!(s.preferences().unwrap().query, "я");
+    assert!(!key(&mut s, ("и", "b"), true, false, true).handled);
+    key(&mut s, ("и", "b"), false, false, true);
+    assert_eq!(s.preferences().unwrap().query, "я");
+    s.dispatch(UiAction::CloseSettings).unwrap();
+    invoke(&mut s, CommandId::Eraser);
+    assert!(!key(&mut s, "и", true, false, false).handled);
+    assert!(s.command(CommandId::Eraser).selected);
+}
+
+#[test]
 fn every_keymap_preset_is_valid_and_conflict_free() {
     for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Windows, Platform::Mac] {
         let ids: Vec<_> = crate::shortcuts::definitions(platform).into_iter().map(|(d, _)| d.id).collect();
@@ -255,13 +319,13 @@ fn shortcut_page_categories_filters_and_key_search() {
     let empty = s.preferences().unwrap().shortcut_page.empty.unwrap();
     assert_eq!(empty.title, "No Results Found");
 
-    preference(&mut s, PreferenceAction::SearchShortcutKey { chord: chord("z", true, false, false) });
+    preference(&mut s, PreferenceAction::SearchShortcutKey { chord: chord("z", true, false, false).into() });
     let view = s.preferences().unwrap();
     assert_eq!(view.shortcut_query, "Ctrl+Z");
     assert_eq!(view.shortcut_page.key.as_deref(), Some("Ctrl+Z"));
     let visible: Vec<_> = view.shortcuts.iter().filter(|r| r.visible).map(|r| r.id.as_str()).collect();
     assert_eq!(visible, ["command.Undo"], "a pressed key finds exactly what it runs");
-    preference(&mut s, PreferenceAction::SearchShortcutKey { chord: chord("f7", false, false, false) });
+    preference(&mut s, PreferenceAction::SearchShortcutKey { chord: chord("f7", false, false, false).into() });
     let empty = s.preferences().unwrap().shortcut_page.empty.unwrap();
     assert_eq!(empty.description, "F7 isn't assigned to anything.");
     preference(&mut s, PreferenceAction::SearchShortcuts { query: String::new() });
@@ -425,7 +489,7 @@ fn drawings_shortcut_obeys_default_custom_clear_and_editor_ownership() {
         let mut s = session(platform);
         let checkpoint = s.engine.checkpoint();
         assert_eq!(s.command(CommandId::Drawings).shortcut, default.label(platform));
-        assert!(!s.input(UiInput::Key { key: "a".into(), pressed: true, repeat: false,
+        assert!(!s.input(UiInput::Key { latin: None, key: "a".into(), pressed: true, repeat: false,
             modifiers, editing: true, divider: None }).unwrap().handled);
         held_key(&mut s, "a", false, modifiers);
         assert!(s.state.requests.is_empty());

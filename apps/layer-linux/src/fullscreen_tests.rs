@@ -89,6 +89,7 @@ fn native_fullscreen_header_clock_and_battery() {
     let reply = ui_session_mut(&w)
         .input(crate::input::key_input(
             gdk::Key::F11,
+            0,
             true,
             gdk::ModifierType::empty(),
             false,

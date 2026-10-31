@@ -281,7 +281,7 @@ fn held_arrow_nudges_coalesce_into_one_step_and_escape_cancels() {
     s.select_objects(layer, [front].into()).unwrap();
     let checkpoint = s.engine.checkpoint();
     for (shift, repeat) in [(false, false), (false, true), (true, true)] {
-        s.input(UiInput::Key { key: "ArrowRight".into(), pressed: true, repeat, modifiers: Modifiers { shift, ..Default::default() }, editing: false, divider: None }).unwrap();
+        s.input(UiInput::Key { latin: None, key: "ArrowRight".into(), pressed: true, repeat, modifiers: Modifiers { shift, ..Default::default() }, editing: false, divider: None }).unwrap();
     }
     assert_eq!(affine(&s, front), translate(172., 100.));
     assert_eq!(s.engine.checkpoint(), checkpoint);

@@ -5603,6 +5603,7 @@ fn native_zen_behaviors() {
         } else {
             for pressed in [true, false] {
                 w.interact(UiInput::Key {
+                    latin: None,
                     key: "Tab".into(), pressed, repeat: false, modifiers: Modifiers::default(), editing: false, divider: None,
                 });
             }
@@ -12235,6 +12236,7 @@ fn native_workspace_controls_docking_and_ink() {
     let before = state(&w).camera;
     w.interact(crate::input::key_input(
         gdk::Key::space,
+        0,
         true,
         gdk::ModifierType::empty(),
         false,
@@ -12244,6 +12246,7 @@ fn native_workspace_controls_docking_and_ink() {
     stylus.emit_by_name::<()>("motion", &[&640.0f64, &470.0f64]);
     w.interact(crate::input::key_input(
         gdk::Key::space,
+        0,
         false,
         gdk::ModifierType::empty(),
         false,
@@ -14456,7 +14459,7 @@ fn native_live_language_switching() {
         assert_eq!(ui_session(&w).preferences().unwrap().shortcut_query, "literal 日本語 🖌");
         w.dispatch(UiAction::Preferences { action: PreferenceAction::BeginShortcut { id: CommandId::Redo.shortcut_id() } });
         for pressed in [true, false] {
-            w.interact(UiInput::Key { key: "z".into(), pressed, repeat: false, modifiers: Modifiers { command: true, ..Default::default() }, editing: false, divider: None });
+            w.interact(UiInput::Key { latin: None, key: "z".into(), pressed, repeat: false, modifiers: Modifiers { command: true, ..Default::default() }, editing: false, divider: None });
         }
         pump(100);
         let recording = named::<adw::ActionRow>(w.window.upcast_ref(), "shortcut-recording");

@@ -2,7 +2,7 @@ mod navigation_controls {
     use super::*;
 
     fn key(s: &mut UiSession<Recorder>, key: &str, pressed: bool, modifiers: Modifiers) -> InputReply {
-        s.input(UiInput::Key { key: key.into(), pressed, repeat: false, modifiers,
+        s.input(UiInput::Key { latin: None, key: key.into(), pressed, repeat: false, modifiers,
             editing: false, divider: None }).unwrap()
     }
 

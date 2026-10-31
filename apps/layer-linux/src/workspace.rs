@@ -1513,8 +1513,7 @@ impl Workspace {
                 keyboard_focus.key_pressed(controller);
                 this.update_zen();
                 if this.preferences.recording() {
-                    let key = crate::input::shortcut_key(key, keycode, modifiers, false);
-                    this.interact(crate::input::key_input(key, true, modifiers, false, None));
+                    this.interact(crate::input::key_input(key, keycode, true, modifiers, false, None));
                     return glib::Propagation::Stop;
                 }
                 // Native sheets own their keys. The main Preferences dialog
@@ -1537,14 +1536,15 @@ impl Workspace {
                         w.is::<gtk::Button>() || w.is::<gtk::Switch>() || w.is::<gtk::CheckButton>()
                             || w.is::<gtk::ListView>() || w.parent().is_some_and(|parent| parent.is::<gtk::ListView>())
                     })
-                    && crate::input::control_takes_key(&crate::input::key_input(key, true, modifiers, false, None), keyboard_focus.focused())
+                    && crate::input::control_takes_key(&crate::input::key_input(key, keycode, true, modifiers, false, None), keyboard_focus.focused())
                 {
                     return glib::Propagation::Proceed;
                 }
-                let editing = crate::input::editing_focus(&this.window);
-                let key = crate::input::shortcut_key(key, keycode, modifiers, editing || this.window.visible_dialog().is_some());
+                let editing = gtk::prelude::GtkWindowExt::focus(&this.window).is_some_and(|w| {
+                    w.is::<gtk::Text>() || w.is::<gtk::Entry>() || w.is::<gtk::TextView>() || w.is::<gtk::Range>() || w.is::<gtk::DropDown>()
+                });
                 if this
-                    .interact(crate::input::key_input(key, true, modifiers, editing, None))
+                    .interact(crate::input::key_input(key, keycode, true, modifiers, editing, None))
                     .handled
                 {
                     glib::Propagation::Stop
@@ -1562,13 +1562,10 @@ impl Workspace {
                 {
                     return;
                 }
-                let typing = !this.preferences.recording()
-                    && (crate::input::editing_focus(&this.window) || this.window.visible_dialog().is_some());
-                let key = crate::input::shortcut_key(key, keycode, modifiers, typing);
                 // Release the shortcut that opened the editor, even though its
                 // key presses now belong to native controls. Otherwise reopening
                 // with the same shortcut is mistaken for an already-held key.
-                this.interact(crate::input::key_input(key, false, modifiers, false, None));
+                this.interact(crate::input::key_input(key, keycode, false, modifiers, false, None));
             }
         ));
         self.window.add_controller(keys);
@@ -3737,10 +3734,11 @@ impl Workspace {
             self,
             #[upgrade_or]
             glib::Propagation::Proceed,
-            move |_, key, _, modifiers| {
+            move |_, key, keycode, modifiers| {
                 if this
                     .interact(crate::input::key_input(
                         key,
+                        keycode,
                         true,
                         modifiers,
                         false,
