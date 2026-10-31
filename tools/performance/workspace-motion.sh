@@ -21,7 +21,7 @@ case "$motion_platform" in
     web) bash apps/layer-web/build.sh ;;
     *) echo 'Usage: workspace-motion.sh [gtk|web] [test flag]' >&2; exit 2 ;;
 esac
-motion_run_dir=$(mktemp -d /tmp/capy-workspace-motion.XXXXXX)
+motion_run_dir=$(mktemp -d "${TMPDIR:-/tmp}/capy-workspace-motion.XXXXXX")
 export XDG_RUNTIME_DIR="$motion_run_dir/runtime"
 mkdir -m 700 "$XDG_RUNTIME_DIR"
 motion_schema_source=/usr/share/glib-2.0/schemas
