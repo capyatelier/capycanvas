@@ -471,12 +471,6 @@ mod allocation {
                     crate::squircle::device_scale(&*self.obj()) as f32,
                 );
             }
-            let composed = composed.to_node();
-            let snapshot = target;
-            match &owner {
-                Some(owner) => owner.present_chrome(snapshot, composed, chrome_changed),
-                None => if let Some(node) = composed { snapshot.append_node(&node); },
-            }
             if let Some(owner) = &owner {
                 let now = self
                     .obj()
@@ -495,6 +489,11 @@ mod allocation {
                 snapshot.append_node(node);
                 snapshot.restore();
                 snapshot.pop();
+            }
+            let composed = composed.to_node();
+            match &owner {
+                Some(owner) => owner.present_chrome(target, composed, chrome_changed),
+                None => if let Some(node) = composed { target.append_node(&node); },
             }
         }
     }

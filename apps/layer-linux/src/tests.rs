@@ -164,23 +164,27 @@ fn sample_after_paint<T: 'static>(widget: &impl IsA<gtk::Widget>, sample: impl F
     let clock = widget.frame_clock().unwrap();
     let samples = Rc::new(RefCell::new(Vec::new()));
     let handler = clock.connect_after_paint(glib::clone!(#[strong] samples, move |clock| {
-        let parent = widget.parent().unwrap();
+        let image = gtk::WidgetPaintable::new(Some(&widget)).current_image();
+        let bounds = gtk::graphene::Rect::new(0., 0., image.intrinsic_width() as f32, image.intrinsic_height() as f32);
         let snapshot = gtk::Snapshot::new();
-        parent.snapshot_child(&widget, &snapshot);
+        image.snapshot(&snapshot, bounds.width() as f64, bounds.height() as f64);
         if let Some(node) = snapshot.to_node() {
             samples.borrow_mut().push(PaintedSample {
-                time: clock.frame_time(), node, bounds: widget.compute_bounds(&parent).unwrap(), state: sample(),
+                time: clock.frame_time(), node, bounds, state: sample(),
             });
         }
     }));
     PaintSamples { clock, handler, samples }
 }
 
+fn idle_paint(widget: &impl IsA<gtk::Widget>) -> PaintedSample<()> {
+    let frames = sample_after_paint(widget, || ());
+    widget.queue_draw(); pump(30);
+    frames.finish().pop().unwrap()
+}
+
 fn idle_hover_pixel(w: &Workspace, container: &impl IsA<gtk::Widget>, child: &impl IsA<gtk::Widget>, at: [f32; 2]) -> [u8; 4] {
-    let frames = sample_after_paint(container, || ());
-    container.queue_draw();
-    pump(30);
-    let frame = frames.finish().pop().unwrap();
+    let frame = idle_paint(container);
     let bounds = child.compute_bounds(container).unwrap();
     frame.pixel(&w.window, [bounds.x() + bounds.width() * at[0], bounds.y() + bounds.height() * at[1]])
 }

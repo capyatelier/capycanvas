@@ -3721,6 +3721,7 @@ fn native_header_canvas_visual() {
 #[ignore = "isolated native-input.js --native-test=native_header_slide_remove_input"]
 fn native_header_slide_remove_input() {
     let mut d = Driver::new("art.capycanvas.HeaderSlideRemove");
+    set_transparency(&d.w, "LAYER_MOTION_TRANSPARENCY");
     let original = state(&d.w).workspace.layout.header;
     for touch in [false, true] {
         let device = if touch { "touch" } else { "mouse" };
@@ -3733,6 +3734,25 @@ fn native_header_slide_remove_input() {
             let start = [rect.x() + rect.width() - 8., rect.y() + rect.height() / 2.];
             let offset = [start[0] - rect.x(), start[1] - rect.y()];
             let initial = d.w.header.geometry_for_test();
+            if tool {
+                let icon = descendant::<gtk::Image>(&find_css(&widget, "header-tool").unwrap()).unwrap();
+                let reference = idle_paint(&icon);
+                let frames = sample_after_paint(&d.w.surface, glib::clone!(#[weak(rename_to = w)] d.w,
+                    #[upgrade_or_default] move || w.header.drag_for_test().is_some()));
+                d.input.perform(serde_json::json!([
+                    contact(device, "down", start),
+                    contact(device, "move", [start[0] + 50., start[1] + 4.])
+                ]));
+                let center = [d.w.surface.width() as f32 / 2., start[1]];
+                d.input.perform(serde_json::json!([
+                    contact(device, "move", center), contact(device, "up", center)
+                ]));
+                assert_eq!(state(&d.w).workspace.layout.header.location(id).unwrap().0, HeaderZone::Center);
+                assert_header_drag_frames(&d.w, &reference, frames.finish());
+                d.click_name("header-edit-cancel");
+                assert_eq!(state(&d.w).workspace.layout.header, original);
+                d.edit();
+            }
             let move_to = |d: &mut Driver, point: [f32; 2]| {
                 d.input
                     .perform(serde_json::json!([contact(device, "move", point)]))
@@ -3812,6 +3832,39 @@ fn native_header_slide_remove_input() {
         }
     }
     d.finish();
+}
+
+fn assert_header_drag_frames(w: &Workspace, icon: &PaintedSample<()>, frames: Vec<PaintedSample<bool>>) {
+    let render = |node: &gtk::gsk::RenderNode, bounds: &gtk::graphene::Rect| {
+        let texture = w.window.renderer().unwrap().render_texture(node, Some(bounds));
+        let mut pixels = vec![0; texture.width() as usize * texture.height() as usize * 4];
+        texture.download(&mut pixels, texture.width() as usize * 4);
+        (pixels, texture.width() as usize, texture.height() as usize)
+    };
+    let (pixels, width, height) = render(&icon.node, &icon.bounds);
+    let foreground = pixels.chunks_exact(4).position(|p| p[3] == 255).expect("opaque icon pixels");
+    let color = &pixels[foreground * 4..foreground * 4 + 3];
+    let pattern = pixels.chunks_exact(4).enumerate().filter(|(_, p)| p[3] == 0 || p[3] == 255)
+        .map(|(i, p)| (i % width, i / width, p[3] == 255)).collect::<Vec<_>>();
+    assert!(frames.iter().any(|frame| frame.state), "pickup paints a drag frame");
+    assert!(frames.last().is_some_and(|frame| !frame.state), "drop paints a restored header frame");
+    let mut invalid = Vec::new();
+    for frame in frames {
+        let bounds = gtk::graphene::Rect::new(frame.bounds.x(), frame.bounds.y(), w.surface.width() as f32,
+            state(w).workspace.layout.header.size.height());
+        let (pixels, stride, rows) = render(&frame.node, &bounds);
+        let mut copies = Vec::new();
+        for y in 0..=rows - height {
+            for x in 0..=stride - width {
+                if pattern.iter().all(|(dx, dy, opaque)| {
+                    let offset = ((y + dy) * stride + x + dx) * 4;
+                    pixels[offset..offset + 3].iter().zip(color).all(|(a, b)| a.abs_diff(*b) <= 1) == *opaque
+                }) { copies.push([x, y]); }
+            }
+        }
+        if copies.len() != 1 { invalid.push((frame.time, frame.state, copies)); }
+    }
+    assert!(invalid.is_empty(), "painted standalone tool must appear once per frame (time, dragging, copies): {invalid:?}");
 }
 
 #[test]

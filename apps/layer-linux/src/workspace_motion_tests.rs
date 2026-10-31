@@ -4,7 +4,7 @@ use super::*;
 #[test]
 #[ignore = "isolated 120 Hz Mutter and native-input.js --workspace-motion"]
 fn native_workspace_motion_input() {
-    workspace_motion_input(&["group", "tab", "tear-off", "navigator", "color-overlap"]);
+    workspace_motion_input(&["group", "tab", "header", "tear-off", "navigator", "color-overlap"]);
 }
 
 #[test]
@@ -33,15 +33,14 @@ fn workspace_motion_input(scenarios: &[&str]) {
         for &scenario in scenarios {
             if scenario == "tab" {
                 until(|| {
-                    let ready = w.gpu.borrow().as_ref().is_some_and(|gpu| {
+                    w.gpu.borrow().as_ref().is_some_and(|gpu| {
                         let clipped = gpu.session.engine().backend().screen_clipped;
                         clipped.is_some() && gpu.session.state().screen.clipped == clipped
-                    });
-                    if !ready { w.wake(); }
-                    ready
+                    })
                 }, "initial screen clipping report published");
             }
             let mut fixture = original.clone();
+            if scenario == "header" { fixture.layout.header = layer_ui::HeaderLayout::painter_for_platform(layer_ui::Platform::Gtk); }
             let viewport = [w.surface.width() as f32, w.surface.height() as f32];
             if scenario == "color-overlap" {
                 fixture.layout.set_panel_visible(Panel::Color, true).unwrap();
@@ -72,6 +71,7 @@ fn workspace_motion_input(scenarios: &[&str]) {
                 workspace: Box::new(fixture),
             });
             pump(250);
+            if scenario == "header" { w.dispatch(layer_ui::HeaderAction::Edit { editing: true }.action()); }
             let group = state(&w)
                 .workspace
                 .layout
@@ -102,7 +102,10 @@ fn workspace_motion_input(scenarios: &[&str]) {
                 .unwrap()
                 .root
                 .clone();
-            let target = if matches!(scenario, "group" | "navigator" | "color-overlap") {
+            let target = if scenario == "header" {
+                let id = state(&w).workspace.layout.header.entries().find(|entry| matches!(entry.item, HeaderItem::Tool { .. })).unwrap().id;
+                find_named(w.surface.upcast_ref(), &format!("header-item-{id}")).unwrap()
+            } else if matches!(scenario, "group" | "navigator" | "color-overlap") {
                 find_css(view.upcast_ref(), "panel-grip").unwrap()
             } else {
                 w.groups
@@ -122,6 +125,8 @@ fn workspace_motion_input(scenarios: &[&str]) {
             let start = [b.x() + b.width() / 2., b.y() + b.height() / 2.];
             let origin = if scenario == "tear-off" {
                 [650., 400.]
+            } else if scenario == "header" {
+                [viewport[0] / 2., start[1]]
             } else if scenario == "tab" {
                 start
             } else {
@@ -169,22 +174,34 @@ fn workspace_motion_input(scenarios: &[&str]) {
             let colors = state(&w).colors;
             w.publication.inputs.borrow_mut().clear();
             w.publication.frames.borrow_mut().clear();
+            let motion_samples = Rc::new(Cell::new(0usize));
+            let motion = gtk::EventControllerLegacy::new();
+            motion.set_propagation_phase(gtk::PropagationPhase::Capture);
+            motion.connect_event(glib::clone!(#[strong] motion_samples, move |_, event| {
+                if matches!(event.event_type(), gdk::EventType::MotionNotify | gdk::EventType::TouchUpdate) {
+                    motion_samples.set(motion_samples.get() + 1);
+                }
+                glib::Propagation::Proceed
+            }));
+            w.surface.add_controller(motion.clone());
             let clock = w.surface.frame_clock().unwrap();
             let timings = Rc::new(RefCell::new(Vec::new()));
-            let tab_motion=scenario=="tab";
+            let sliding_motion=matches!(scenario,"tab"|"header");
+            let header_motion=scenario=="header";
             let scale=crate::squircle::device_scale(&w.window) as f32;
-            let pose=||w.workspace_drag.borrow().as_ref().and_then(|d|d.tab.as_ref()).map(|tab|
-                [tab.bounds.x,tab.bounds.y,tab.bounds.width,tab.bounds.height].map(|v|(v*scale).round() as i32));
-            let last_pose=Rc::new(Cell::new(if tab_motion {pose()} else {None}));
+            let pose=Rc::new(glib::clone!(#[weak] w, #[upgrade_or_default] move || if header_motion {
+                w.header.drag_for_test().map(|drag| drag.held)
+            } else { w.workspace_drag.borrow().as_ref().and_then(|d|d.tab.as_ref()).map(|tab|tab.bounds) }
+                .map(|bounds|[bounds.x,bounds.y,bounds.width,bounds.height].map(|v|(v*scale).round() as i32))));
+            let last_pose=Rc::new(Cell::new(if sliding_motion {pose()} else {None}));
             let poses=Rc::new(RefCell::new(Vec::new()));
             let (paint_timer, before_paint) = PaintTimer::connect(&clock);
             let paint_cpu = Rc::new(RefCell::new(Vec::new()));
             let after = clock.connect_after_paint(glib::clone!(
-                #[strong]timings,#[strong]last_pose,#[strong]poses,#[strong]paint_timer,#[strong]paint_cpu,#[weak]w,
+                #[strong]timings,#[strong]last_pose,#[strong]poses,#[strong]pose,#[strong]paint_timer,#[strong]paint_cpu,
                 move |clock| {
-                    let pose=tab_motion.then(||w.workspace_drag.borrow().as_ref().and_then(|d|d.tab.as_ref()).map(|tab|
-                        [tab.bounds.x,tab.bounds.y,tab.bounds.width,tab.bounds.height].map(|v|(v*scale).round() as i32))).flatten();
-                    if tab_motion && (pose.is_none() || last_pose.replace(pose)==pose) {return;}
+                    let pose=sliding_motion.then(||pose()).flatten();
+                    if sliding_motion && (pose.is_none() || last_pose.replace(pose)==pose) {return;}
                     if let Some(t) = clock.current_timings() {
                         timings.borrow_mut().push(t);
                         if let Some(pose)=pose {poses.borrow_mut().push(pose);}
@@ -192,7 +209,7 @@ fn workspace_motion_input(scenarios: &[&str]) {
                     }
                 }
             ));
-            let events: Vec<_> = (0..if scenario == "tab" { 1250 } else { 550 })
+            let events: Vec<_> = (0..if sliding_motion { 1250 } else { 550 })
                 .map(|i| {
                     let t = i as f32 * 0.004;
                     let triangle = |t: f32| {
@@ -209,13 +226,13 @@ fn workspace_motion_input(scenarios: &[&str]) {
                         "move",
                         [
                             origin[0]
-                                + if scenario == "tab" {
+                                + if sliding_motion {
                                     triangle(t * 8.) * 40.
                                 } else {
                                     triangle(t * 4.) * 100.
                                 },
                             origin[1]
-                                + if scenario == "tab" {
+                                + if sliding_motion {
                                     0.
                                 } else {
                                     triangle(t * 3.) * 65.
@@ -232,6 +249,7 @@ fn workspace_motion_input(scenarios: &[&str]) {
             }
             input.perform(serde_json::to_value(events).unwrap());
             pump(50);
+            w.surface.remove_controller(&motion);
             clock.disconnect(after);
             clock.disconnect(before_paint);
             let canvas = {
@@ -319,18 +337,19 @@ fn workspace_motion_input(scenarios: &[&str]) {
             };
             let mut placement_cpu: Vec<_> = frames.iter().map(|f| f.1).collect();
             placement_cpu.sort_by(f64::total_cmp);
-            let report = serde_json::json!({"touch":touch,"scenario":scenario,"pickup_command_to_present_ms":pickup_command_to_present_ms,"native_input_samples":cpu.len(),"native_input_gate_passed":cpu.len()>200,"native_input_minimum_exclusive":200,"model_refreshes":0,"dispatch_ms":{"p50":cpu.get(cpu.len()/2),"p95":cpu.get(cpu.len()*95/100)},"placement_ms":{"p50":placement_cpu.get(placement_cpu.len()/2),"p95":placement_cpu.get(placement_cpu.len()*95/100)},"placement_hz":hz(&frames.iter().map(|f|f.0).collect::<Vec<_>>()),"presentation_hz":hz(&presented),"presented_frames":presented.len(),"presentation_gap_p99_ms":presentation_gap_p99_ms,"refresh_intervals_us":timings.borrow().iter().map(|t|t.refresh_interval()).collect::<std::collections::BTreeSet<_>>(),"canvas":canvas});
+            let input_samples = if header_motion { motion_samples.get() } else { cpu.len() };
+            let report = serde_json::json!({"touch":touch,"scenario":scenario,"pickup_command_to_present_ms":pickup_command_to_present_ms,"native_input_samples":cpu.len(),"native_motion_samples":motion_samples.get(),"native_input_gate_passed":input_samples>200,"native_input_minimum_exclusive":200,"model_refreshes":0,"dispatch_ms":{"p50":cpu.get(cpu.len()/2),"p95":cpu.get(cpu.len()*95/100)},"placement_ms":{"p50":placement_cpu.get(placement_cpu.len()/2),"p95":placement_cpu.get(placement_cpu.len()*95/100)},"placement_hz":(!frames.is_empty()).then(||hz(&frames.iter().map(|f|f.0).collect::<Vec<_>>())),"presentation_hz":hz(&presented),"presented_frames":presented.len(),"presentation_gap_p99_ms":presentation_gap_p99_ms,"refresh_intervals_us":timings.borrow().iter().map(|t|t.refresh_interval()).collect::<std::collections::BTreeSet<_>>(),"canvas":canvas});
             let mut report=report;let mut paints=paint_cpu.borrow().clone();paints.sort_by(f64::total_cmp);
             report["paint_thread_cpu_p95_ms"]=serde_json::json!(paints.get(paints.len()*95/100));
-            if tab_motion {
+            if sliding_motion {
                 let poses=poses.borrow();let range:[[_;2];4]=std::array::from_fn(|axis|[poses.iter().map(|p|p[axis]).min(),poses.iter().map(|p|p[axis]).max()]);
-                assert!(poses.len()>20&&range[0][1].unwrap()-range[0][0].unwrap()>10,"observe changing requested device-rounded tab geometry");
+                assert!(poses.len()>20&&range[0][1].unwrap()-range[0][0].unwrap()>10,"observe changing requested device-rounded drag geometry");
                 report["changed_requested_device_poses"]=serde_json::json!(poses.len());report["requested_device_pose_range"]=serde_json::json!(range);
             }
             eprintln!("{report}");
             reports.push(report);
-            assert!(!placement_cpu.is_empty(), "publish native placement");
-            assert!(cpu.len() > 200, "receive high-rate native input: {} samples", cpu.len());
+            if scenario != "header" { assert!(!placement_cpu.is_empty(), "publish native placement"); }
+            assert!(input_samples > 200, "receive high-rate native input: {} samples", input_samples);
             if let Ok(minimum) = std::env::var("LAYER_MOTION_MIN_HZ") {
                 assert!(
                     hz(&presented) >= minimum.parse::<f64>().unwrap(),
@@ -353,6 +372,7 @@ fn workspace_motion_input(scenarios: &[&str]) {
             }
             input.perform(serde_json::json!([event("up", origin)]));
             pump(250);
+            if scenario == "header" { w.dispatch(layer_ui::HeaderAction::Edit { editing: false }.action()); }
             let after = saved();
             assert_ne!(after, before, "drop changes layout");
             w.dispatch(UiAction::Invoke {
