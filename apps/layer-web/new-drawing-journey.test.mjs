@@ -1,4 +1,5 @@
 import {dropdownChoice,clickDropdownChoice,captureDropdowns} from './dropdown-fixture.mjs';
+import {checkSearchField} from './control-style-fixture.mjs';
 import assert from 'node:assert/strict';
 import {mkdir,writeFile} from 'node:fs/promises';
 import {createDrawing} from './new-drawing-fixture.mjs';
@@ -121,6 +122,7 @@ export async function checkNewDrawing({call,evaluate,settle}) {
     assert.equal(browser.kind,'presets');
     assert.deepEqual(await evaluate(`[...document.querySelectorAll('#new-drawing-tabs button')].map(n=>[n.textContent,n.getAttribute('aria-selected')==='true'])`),browser.tabs.map(t=>[t.label,t.selected]));
     await call('Input.insertText',{text:'chalk'});await settle();
+    await checkSearchField({call,evaluate,settle},'#new-drawing-search','new-drawing-search');
     browser=await drawer();
     assert.equal(browser.query,'chalk','Search filters the presets');
     assert.equal(await evaluate(`[...document.querySelectorAll('#new-drawing-tabs button')].every(n=>n.disabled)`),true,'Tabs wait while searching');

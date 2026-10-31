@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import {glassCss} from './control-style-fixture.mjs';
+import {glassCss,checkSearchField} from './control-style-fixture.mjs';
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import {createDrawing} from './new-drawing-fixture.mjs';
 
@@ -66,6 +66,18 @@ export async function checkPreferences({ call, evaluate, settle, errors }) {
     }
   };
   await call("Emulation.setDeviceMetricsOverride", { width: 1200, height: 900, deviceScaleFactor: 1, mobile: false });
+  await call('Input.setIgnoreInputEvents',{ignore:false});
+  await action({type:'open_settings',page:'appearance'});
+  await evaluate(`Promise.all(document.querySelector('#settings').getAnimations({subtree:true}).map(animation=>animation.finished))`);
+  await preference({type:'toggle_search',open:true});await preference({type:'search',query:'Pressure'});
+  await checkSearchField({call,evaluate,settle},'#settings-search','settings-search');
+  await action({type:'close_settings'});await action({type:'open_settings',page:'shortcuts'});
+  await evaluate(`{const node=document.querySelector('#shortcuts-search');node.value='z';node.dispatchEvent(new Event('input',{bubbles:true}));}`);await settle();
+  await checkSearchField({call,evaluate,settle},'#shortcuts-search','shortcuts-search');
+  await preference({type:'page',page:'input'});await click('[data-trigger="touch.tap.4"]');
+  await evaluate(`{const node=document.querySelector('#action-picker-search');node.value='undo';node.dispatchEvent(new Event('input',{bubbles:true}));}`);await settle();
+  await checkSearchField({call,evaluate,settle},'#action-picker-search','action-picker-search');
+  await escape();await action({type:'close_settings'});await call('Input.setIgnoreInputEvents',{ignore:false});
   await action({ type: "restore_workspace", workspace: await evaluate(`(() => {
     const workspace = structuredClone(layerApp.state().workspace), tabs = (id, panels) => ({ kind: "tabs", id, panels, active: panels[0], tab_style: "icon" });
     Object.assign(workspace.layout, { bands: [{ id: 40, edge: "left", extent: 252, root: tabs(41, ["brushes"]) }, { id: 42, edge: "left", extent: 252, root: tabs(43, ["sizes"]) },

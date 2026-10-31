@@ -1,3 +1,4 @@
+import {checkSearchField} from './control-style-fixture.mjs';
 import {checkTabHoverContours} from './tab-hover.test.mjs';
 import {createDrawing} from './new-drawing-fixture.mjs';
 import assert from "node:assert/strict";
@@ -31,8 +32,11 @@ export async function checkToolPicker({ call, evaluate, settle }) {
     assert.equal(await evaluate("document.querySelector('#toolbar-name').parentElement.hidden"), true);
     assert.equal((await model()).can_confirm, false);
     const selected = [];
-    for (const query of ['opacity', 'color']) {
+    for (const query of ['strength', 'color']) {
       await input('#tool-search', query);
+      if(theme==='dark'&&query==='strength')await checkSearchField({call,evaluate,settle},'#tool-search','tool-search');
+      assert.equal((await model()).query,query,'Native clear restores the shared tool search query');
+      assert.ok((await model()).choices.length,JSON.stringify(await model()));
       selected.push((await model()).choices[0].control);
       await click('.tool-choice:first-child');
     }
@@ -48,7 +52,7 @@ export async function checkToolPicker({ call, evaluate, settle }) {
     await call('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27}); await settle();
     assert.equal(await model(), null); assert.deepEqual(await workspace(), original);
     await open();
-    for (const query of ['opacity','color']) { await input('#tool-search',query); await click('.tool-choice:first-child'); }
+    for (const query of ['strength','color']) { await input('#tool-search',query); await click('.tool-choice:first-child'); }
     await click('#confirm-tools');
     assert.equal(await model(), null);
     assert.deepEqual((await tiles()).slice(0,2).map(t=>t.control), selected);
@@ -57,7 +61,7 @@ export async function checkToolPicker({ call, evaluate, settle }) {
     await input('#toolbar-name','Layers');
     assert.equal((await model()).can_confirm, false, 'Existing panel names remain reserved');
     await input('#toolbar-name',`Picker regression ${theme}`);
-    await input('#tool-search','opacity'); await click('.tool-choice:first-child');
+    await input('#tool-search','strength'); await click('.tool-choice:first-child');
     await click('#confirm-tools');
     assert.equal(await model(), null);
     assert.equal((await workspace()).layout.panels.find(p=>p.content.name===`Picker regression ${theme}`).content.tiles.length, 1);

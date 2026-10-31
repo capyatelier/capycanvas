@@ -193,7 +193,7 @@ export function createHeader({app, state, paintPair, workspace, element, button,
     for(const s of view.sizes) {
       const b=button(()=>labels.sizes.find(value=>value.id===s.id).label,()=>send({type:'set_size',size:s.id})); b.dataset.headerSize=s.id; choices.append(b);
     }
-    const label=element('label'), footer=element('input'); footer.type='checkbox'; footer.id='header-canvas-info';
+    const label=element('label'), footer=element('input','panel-check'); footer.type='checkbox'; footer.id='header-canvas-info';
     footer.addEventListener('change',()=>send({type:'canvas_info',visible:footer.checked})); label.append(footer,element('span','',()=>copy.show_footer));
     const cancel=button(()=>common.cancel,()=>send({type:'cancel'})); cancel.id='header-edit-cancel';
     const done=button(()=>common.done,()=>send({type:'edit',editing:false}),'suggested-action'); done.id='header-edit-done';

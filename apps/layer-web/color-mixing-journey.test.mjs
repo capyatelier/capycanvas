@@ -48,7 +48,7 @@ export async function checkColorMixing({call, evaluate, settle}) {
     assert.equal(await evaluate(`!!document.querySelector('${option}')`), false, 'G-Pen does not mix paint');
     await send({type: 'select_brush', id: 24});
     await wait(`!!document.querySelector(${JSON.stringify(option)})`);
-    assert.deepEqual(await evaluate(`[...document.querySelector('${option}').options].map(o=>o.value)`), choices);
+    assert.deepEqual(await evaluate(`document.querySelector('${option}').menuModel().sections.flat().map(o=>o.command)`), choices);
     assert.equal((await command('color_mix_oklab')).selected, true, 'mixing brushes default to Oklab');
     for (const [device, id] of [['mouse', 'color_mix_classic'], ['touch', 'color_mix_linear'], ['pen', 'color_mix_oklab']]) {
       await contact(option, device);
@@ -58,7 +58,7 @@ export async function checkColorMixing({call, evaluate, settle}) {
         assert.equal((await command(other)).selected, other === id, `${device}: ${id}`);
         assert.equal(await evaluate(`document.querySelector('${option}').value===${JSON.stringify(other)}`), other===id);
       }
-      assert.match(await evaluate(`document.querySelector('${option}').selectedOptions[0].textContent`), /mixing$/);
+      assert.match(await evaluate(`document.querySelector('${option} .dropdown-label').textContent`), /mixing$/);
     }
     for (const name of ['light', 'dark']) {
       await send({type: 'set_theme', theme: name});

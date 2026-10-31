@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import {mkdir, writeFile} from 'node:fs/promises';
 import {checkPaintableSelections} from './selection-masks.test.mjs';
 import {chooseToolActionGroup} from './panel-controls-journey.test.mjs';
+import {captureDropdowns} from './dropdown-fixture.mjs';
 
 // Run on the dedicated test origin: canvas contacts exercise the real GPU queue.
 export async function checkSelectionTools({call, evaluate, settle}) {
@@ -47,6 +48,8 @@ export async function checkSelectionTools({call, evaluate, settle}) {
     await invoke('rectangle_select'); await contact(header('select'));
     if(!await evaluate('!!layerApp.state().customization.drawer'))await contact(header('select'));
     assert.deepEqual(await evaluate('layerApp.state().customization.drawer.columns'),[['tools'],['tool_settings']]);
+    const directory=process.env.LAYER_TEST_ARTIFACTS??'artifacts/selection-web';await mkdir(directory,{recursive:true});
+    for(const theme of ['light','dark']){await send({type:'set_theme',theme});await captureDropdowns({call,evaluate,settle},'.content-drawer .tool-settings-control',directory,`selection-menu-${theme}`);}
     await contact('.content-drawer .selection-menu-button');
     const menuRows = await evaluate(`Array.from(document.querySelectorAll('.panel-context-menu:popover-open [role="menuitem"]'), b=>({label:b.querySelector('.menu-label').textContent,disabled:b.disabled,arrow:!!b.querySelector('.submenu-arrow')}))`);
     for(const label of ['Load Selection','Replace Selection Layer from Current Selection']) {
@@ -82,7 +85,7 @@ export async function checkSelectionTools({call, evaluate, settle}) {
     await contact(mode('selection_fixed_size'));
     await invoke('color_select');
     for(const id of ['tolerance','expansion','smoothing']) assert.ok(await evaluate(`!!document.querySelector('[data-tool-setting=${id}]')`));
-    assert.deepEqual(await evaluate(`[...document.querySelector('[data-tool-action-group="selection-source"]').options].map(o=>o.value)`),['selection_visible','selection_editing','selection_reference']);
+    assert.deepEqual(await evaluate(`document.querySelector('[data-tool-action-group="selection-source"]').menuModel().sections.flat().map(o=>o.command)`),['selection_visible','selection_editing','selection_reference']);
     await chooseToolActionGroup({call,evaluate,settle},'selection-source','selection_visible');
     await mkdir('artifacts/selection-web',{recursive:true});
     for(const theme of ['light','dark']) {

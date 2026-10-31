@@ -1,4 +1,5 @@
 import {chooseDropdown,captureDropdowns} from './dropdown-fixture.mjs';
+import {checkCheckboxes} from './control-style-fixture.mjs';
 import assert from 'node:assert/strict';
 import {mkdir,writeFile} from 'node:fs/promises';
 
@@ -95,6 +96,7 @@ export async function checkCanvasSize({call,evaluate,settle,device=false}) {
       await send({type:'set_theme',theme:current});await invoke('canvas_size');
       await wait('!!layerApp.state().layer_tools.canvas_size');
       await captureDropdowns({call,evaluate,settle},dialog,directory,`canvas-size-${current}`);
+      await checkCheckboxes(evaluate,dialog);
       const currentUnit=(await view()).unit,nextUnit=(await view()).units.find(choice=>choice.unit!==currentUnit).unit;
       await evaluate(`(${chooseDropdown.toString()})('${dialog} .dropdown',${JSON.stringify(nextUnit)})`);await settle();
       assert.equal((await view()).unit,nextUnit,'The modal unit menu forwards its selected value');
@@ -102,6 +104,7 @@ export async function checkCanvasSize({call,evaluate,settle,device=false}) {
       await send({type:'canvas_size',action:{op:'cancel'}});
       await invoke('image_size');await wait('!!layerApp.state().layer_tools.image_size');
       await captureDropdowns({call,evaluate,settle},'#image-size-dialog',directory,`image-size-${current}`);
+      await checkCheckboxes(evaluate,'#image-size-dialog');
       const image=await evaluate('layerApp.state().layer_tools.image_size'),next=image.resamples.find(choice=>choice.resample!==image.resample).resample;
       await evaluate(`(${chooseDropdown.toString()})('#image-size-dialog .size-dialog-row:last-of-type .dropdown',${JSON.stringify(next)})`);await settle();
       assert.equal(await evaluate('layerApp.state().layer_tools.image_size.resample'),next,'The modal resample menu forwards its selected value');

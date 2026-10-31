@@ -3,7 +3,7 @@ import {histogramJourney} from './histogram-journey.mjs';
 import {createDrawing} from './new-drawing-fixture.mjs';
 import assert from 'node:assert/strict';
 import {mkdir} from 'node:fs/promises';
-import {checkTextEntry} from './control-style-fixture.mjs';
+import {checkTextEntry,checkSearchField,captureCheckboxes} from './control-style-fixture.mjs';
 import {paintBaseImage,authoredIdentity,readPackage,packageObject,packageComposition,packageOccurrences,packageResources,packageResourceIdentity,resourceIdentity,sourceIdentity,rasterIdentity,sourceContent,sourceSamples,packageObjects,imageIdentity,imageContent} from './package-fixture.test.mjs';
 const rasterResources=m=>packageResources(m,'capy.raster-tile/1').map(resource=>resourceIdentity(m,{ref:resource.id}));
 const compositionColor=m=>({space:'srgb',depth:'u8',...packageComposition(m).data.color});
@@ -257,7 +257,7 @@ export async function checkExportPresets({call,evaluate,settle}) {
   const invoke=async()=>{await wait('!layerApp.documents.busy()&&layerApp.state().commands.find(c=>c.id==="export_document")?.enabled');await evaluate(`layerApp.dispatch({type:'invoke',command:'export_document'})`);await wait(`!!document.querySelector('.dropdown[aria-label="Destination"]')`);};
   const preset=index=>evaluate(`(async()=>JSON.parse(JSON.stringify(await layerApp.app.export_presets({type:'get',index:${index}}),(_,v)=>typeof v==='bigint'?Number(v):v)))()`);
   const name='Tablet delivery '+Date.now();
-  await invoke();await captureDialogChoices({call,evaluate,settle},'export');await checkTextEntry(evaluate,'input[aria-label="Preset name"]');
+  await invoke();await captureDialogChoices({call,evaluate,settle},'export');await evaluate(dropdownChoice('dialog[open] [aria-label="Pixel size"]','Fit'));await captureCheckboxes({call,evaluate,settle},process.env.LAYER_TEST_ARTIFACTS??'artifacts/document-color/web','export-fit');await evaluate(dropdownChoice('dialog[open] [aria-label="Pixel size"]','Original'));await checkTextEntry(evaluate,'input[aria-label="Preset name"]');
   await evaluate(`(()=>{const d=document.querySelector('dialog[open]');const select=(label,value)=>{const node=d.querySelector('.dropdown[aria-label="'+label+'"]');(${chooseDropdown})(node,value);};
     select('Format','Png');select('Output profile','1');select('Bit depth','U16');select('Pixel size','Fit');select('Resolution metadata','Ppi');
     for(const[label,value]of[['Maximum width (px)','321'],['Maximum height (px)','123'],['Pixels per inch','287']]){const entry=d.querySelector('input.number-entry[aria-label="'+label+'"]');entry.closest('.number-control').querySelector('.number-value').click();entry.value=value;entry.dispatchEvent(new Event('input',{bubbles:true}));}d.querySelector('input[aria-label="Preset name"]').value=${JSON.stringify(name)};})()`);
@@ -284,7 +284,7 @@ export async function checkExportPresets({call,evaluate,settle}) {
   } finally {await evaluate('window.showSaveFilePicker=presetSavePicker;delete window.presetSavePicker');}
 }
 
-export async function checkProfileLibrary({evaluate}) {
+export async function checkProfileLibrary({call,evaluate,settle}) {
   const {wait,invoke,click,idle}=helpers(evaluate);
   await evaluate(`(async()=>{const bytes=await(await fetch('/pkg/prophoto16.png')).arrayBuffer();window.showOpenFilePicker=async()=>[{name:'profile-library.png',async getFile(){return new File([bytes],'profile-library.png')}}]})()`);
   await invoke('open_document');await idle();
@@ -314,6 +314,7 @@ export async function checkProfileLibrary({evaluate}) {
   await checkTextEntry(evaluate,'#profile-library-search');
   await evaluate(`(()=>{const search=document.querySelector('#profile-library-search');search.value=libraryId.slice(0,12);search.dispatchEvent(new Event('input',{bubbles:true}));})()`);
   await wait(`document.querySelectorAll('.profile-library .profile-entry').length===1`);
+  await checkSearchField({call,evaluate,settle},'#profile-library-search','profile-library-search');
 
   await evaluate(`[...document.querySelectorAll('.profile-library .profile-entry')].find(e=>e.textContent.includes(libraryId.slice(0,12))).querySelector('button').click()`);
   // close() clears `open` before the queued close event resolves the picker.

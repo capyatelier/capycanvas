@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {dropdownChoice} from './dropdown-fixture.mjs';
 import {mkdir,writeFile} from 'node:fs/promises';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
@@ -455,15 +456,16 @@ export async function checkZoomReadout({call,evaluate,settle,device=false}) {
       window.showSaveFilePicker=async options=>{zoomPicks++;return{name:options.suggestedName,async createWritable(){let bytes;return{async write(value){bytes=new Uint8Array(value instanceof Blob?await value.arrayBuffer():value)},async close(){${files}.set(options.suggestedName,bytes)},async abort(){}}}}};`);
     const exportAs=async(format,{expectError=null,destination=null}={})=>{
       await invoke('export_document');
-      await wait(`!!document.querySelector('dialog[open] select[aria-label="Format"]')`);
+      await wait(`!!document.querySelector('dialog[open] .dropdown[aria-label="Format"]')`);
       if(destination!==null) {
-        await evaluate(`(()=>{const s=document.querySelector('dialog[open] select[aria-label="Destination"]');s.value=${JSON.stringify(String(destination))};s.dispatchEvent(new Event('change'));})()`);
-        await wait(`document.querySelector('dialog[open] select[aria-label="Pixel size"]').value==='Fit'&&!document.querySelector('dialog[open] select[aria-label="Format"]').disabled`);
+        await evaluate(dropdownChoice('dialog[open] .dropdown[aria-label="Destination"]',String(destination)));
+        await wait(`document.querySelector('dialog[open] .dropdown[aria-label="Pixel size"]').value==='Fit'&&!document.querySelector('dialog[open] .dropdown[aria-label="Format"]').disabled`);
       }
-      await evaluate(`(()=>{const s=document.querySelector('dialog[open] select[aria-label="Format"]');s.value=${JSON.stringify(format)};s.dispatchEvent(new Event('change'));})()`);
-      const depth=await evaluate(`(()=>{const s=document.querySelector('dialog[open] select[aria-label="Bit depth"]');s.value='U8';s.dispatchEvent(new Event('change'));return [...s.options].filter(o=>!o.disabled).map(o=>o.value)})()`);
+      await evaluate(dropdownChoice('dialog[open] .dropdown[aria-label="Format"]',format));
+      await evaluate(dropdownChoice('dialog[open] .dropdown[aria-label="Bit depth"]','U8'));
+      const depth=await evaluate(`document.querySelector('dialog[open] .dropdown[aria-label="Bit depth"]').menuModel().sections.flat().filter(o=>o.enabled!==false).map(o=>o.command)`);
       if(format==='Webp')assert.deepEqual(depth,['U8'],'WebP is 8-bit only');
-      await evaluate(`(()=>{const s=document.querySelector('dialog[open] select[aria-label="Dither"]');s.value='None';s.dispatchEvent(new Event('change'));})()`);
+      await evaluate(dropdownChoice('dialog[open] .dropdown[aria-label="Dither"]','None'));
       const picks=await evaluate('zoomPicks');
       await evaluate(`[...document.querySelectorAll('dialog[open] button')].find(n=>n.textContent==='Choose File…').click()`);
       if(expectError) {

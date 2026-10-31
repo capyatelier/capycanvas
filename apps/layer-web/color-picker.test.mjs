@@ -1,3 +1,4 @@
+import {dropdownChoice} from './dropdown-fixture.mjs';
 import assert from 'node:assert/strict';
 import {mkdir,writeFile} from 'node:fs/promises';
 
@@ -34,9 +35,9 @@ export async function checkColorPicker({call,evaluate,settle}) {
   await wait('layerApp.state().customization.drawer?.compact');
   assert.deepEqual((await state()).customization.drawer.columns,[['tool_settings']]);
   assert.equal((await state()).customization.drawer.dismissal,'explicit');
-  const sizes=await evaluate(`[...document.querySelector('[data-picker-setting="sample_size"]').options].map(o=>Number(o.value))`);
+  const sizes=await evaluate(`document.querySelector('[data-picker-setting="sample_size"]').menuModel().sections.flat().map(o=>Number(o.command))`);
   assert.deepEqual(sizes,[1,5,15,51,101]);
-  await evaluate(`(()=>{const n=document.querySelector('[data-picker-setting="sample_size"]');n.value='101';n.dispatchEvent(new Event('change',{bubbles:true}));})()`);await settle();
+  await evaluate(dropdownChoice('[data-picker-setting="sample_size"]','101'));await settle();
   assert.equal((await state()).color_picker.sample_width,101);
   await shot('sketch-settings');
   await invoke('eyedropper');await send({type:'set_color_sample_size',width:1});

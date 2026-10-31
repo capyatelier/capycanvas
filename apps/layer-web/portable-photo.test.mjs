@@ -1,3 +1,4 @@
+import {chooseDropdown} from './dropdown-fixture.mjs';
 import {histogramJourney} from './histogram-journey.mjs';
 import assert from 'node:assert/strict';
 import {mkdir,readFile,writeFile} from 'node:fs/promises';
@@ -11,7 +12,7 @@ export async function checkPortablePhoto({call,evaluate,settle}) {
   const wait=condition=>evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function poll(){try{if(${condition})resolve(true);else if(performance.now()-start>60000)reject(Error(${JSON.stringify(condition)}+': '+document.body.innerText.slice(-1600)));else setTimeout(poll,30)}catch(e){reject(e)}}poll()})`);
   const invoke=async command=>{await wait(`layerApp.state().commands.find(c=>c.id===${JSON.stringify(command)})?.enabled`);await evaluate(`layerApp.dispatch({type:'invoke',command:${JSON.stringify(command)}})`);};
   const click=label=>evaluate(`(()=>{const b=[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent===${JSON.stringify(label)});if(!b||b.disabled)throw Error('Missing enabled '+${JSON.stringify(label)});b.click()})()`);
-  const set=(label,value)=>evaluate(`(()=>{const d=document.querySelector('dialog[open]'),selector='[aria-label="'+${JSON.stringify(label)}+'"]',n=d.querySelector('select'+selector+',input:not([type="range"])'+selector);if(!n||n.disabled)throw Error('Missing enabled '+${JSON.stringify(label)});n.value=${JSON.stringify(value)};n.dispatchEvent(new Event('input',{bubbles:true}));n.dispatchEvent(new Event('change',{bubbles:true}))})()`);
+  const set=(label,value)=>evaluate(`(()=>{const d=document.querySelector('dialog[open]'),selector='[aria-label="'+${JSON.stringify(label)}+'"]',n=d.querySelector('.dropdown'+selector+',input:not([type="range"])'+selector);if(!n||n.disabled)throw Error('Missing enabled '+${JSON.stringify(label)});if(n.matches('.dropdown'))(${chooseDropdown})(n,${JSON.stringify(value)});else{n.value=${JSON.stringify(value)};n.dispatchEvent(new Event('input',{bubbles:true}));n.dispatchEvent(new Event('change',{bubbles:true}));}})()`);
   const idle=()=>wait('!layerApp.state().document_file.busy&&layerApp.app.brush_ready()');
   const open=async name=>{
     const epoch=await evaluate('Number(layerApp.state().document_file.epoch)');
@@ -58,7 +59,7 @@ export async function checkPortablePhoto({call,evaluate,settle}) {
       const before=await state(),master=await histogram();
       assert.ok(master.channels.some(c=>c.above>0),'Edited HDR samples exceed SDR white');
       await begin(range);
-      assert.ok(await evaluate(`Array.from(document.querySelector('[aria-label="Dynamic range"]').options).filter(o=>['jpeg','avif'].includes(o.value)).every(o=>!o.disabled)`));
+      assert.ok(await evaluate(`document.querySelector('dialog[open] .dropdown[aria-label="Dynamic range"]').menuModel().sections.flat().filter(o=>['jpeg','avif'].includes(o.command)).every(o=>o.enabled!==false)`));
       if(range==='jpeg') {
         await click('Preview Output');
         await wait(`!!document.querySelector('dialog[open] .error-message').textContent`);
@@ -110,10 +111,10 @@ export async function checkPortablePhoto({call,evaluate,settle}) {
     // A saved cross-platform gain-map preset remains editable and selectable.
     await begin('avif');
     await set('Preset name','Portable HDR');await click('Save Preset');
-    await wait(`Array.from(document.querySelector('[aria-label="Destination"]').options).some(o=>o.textContent==='Portable HDR')`);
+    await wait(`document.querySelector('dialog[open] .dropdown[aria-label="Destination"]').menuModel().sections.flat().some(o=>o.label==='Portable HDR')`);
     await close();await begin('jpeg');
-    const index=await evaluate(`Array.from(document.querySelector('[aria-label="Destination"]').options).find(o=>o.textContent==='Portable HDR').value`);
-    await set('Destination',index);await wait(`document.querySelector('[aria-label="Dynamic range"]').value==='avif'&&!document.querySelector('[aria-label="Destination"]').disabled`);
+    const index=await evaluate(`document.querySelector('dialog[open] .dropdown[aria-label="Destination"]').menuModel().sections.flat().find(o=>o.label==='Portable HDR').command`);
+    await set('Destination',index);await wait(`document.querySelector('dialog[open] .dropdown[aria-label="Dynamic range"]').value==='avif'&&!document.querySelector('dialog[open] .dropdown[aria-label="Destination"]').disabled`);
     await close();
 
     // Cancel a live file worker, check that its temporary OPFS job disappears,

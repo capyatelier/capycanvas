@@ -1,4 +1,5 @@
 import {dropdownChoice,captureDropdowns} from './dropdown-fixture.mjs';
+import {checkCheckboxes} from './control-style-fixture.mjs';
 import assert from 'node:assert/strict';
 import {mkdir,writeFile} from 'node:fs/promises';
 import {png} from './clone-journey.test.mjs';
@@ -238,7 +239,15 @@ export async function checkPanelControls({call,evaluate,settle}) {
       for(const effect of ['levels','curves','hue_saturation','gradient_fill']){
         await send({type:'effect',action:{op:'insert',effect}});await wait('layerApp.state().layer_properties.controls.length>0');
         await capture(`properties-${effect}-${current}-${width}`,'.effect-properties');
-        if(effect==='hue_saturation')await editor(`properties-${effect}-${current}-${width}`,'.effect-properties [data-property-key="hue"]');
+        if(effect==='hue_saturation') {
+          await checkCheckboxes(evaluate,'.effect-properties');
+          await click('.effect-properties [data-property-key="colorize"] input');
+          assert.equal(await evaluate('layerApp.state().layer_properties.controls.find(c=>c.key==="colorize").value.value'),true);
+          await checkCheckboxes(evaluate,'.effect-properties');
+          await capture(`properties-${effect}-checked-${current}-${width}`,'.effect-properties');
+          await invoke('undo');
+          await editor(`properties-${effect}-${current}-${width}`,'.effect-properties [data-property-key="hue"]');
+        }
         await invoke('undo');
       }
       for(const panel of ['histogram','waveform']){

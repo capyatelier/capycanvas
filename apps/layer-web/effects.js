@@ -216,7 +216,7 @@ export function createEffectPanels({app,wake,catalog,state,panels,element,button
             else curve.update(c);
           },refreshHistogram:()=>curve.refreshHistogram(),dispose:()=>curve.dispose()};
         }
-        else if(c.kind.kind==="toggle"){const n=element("input");n.type="checkbox";n.onchange=()=>change(n.checked);field={node:row(()=>state().layer_properties.controls.find(v=>v.key===c.key)?.label??"",n),update:c=>n.checked=c.value.value,disable:x=>n.disabled=x};}
+        else if(c.kind.kind==="toggle"){const n=element("input","panel-check");n.type="checkbox";n.onchange=()=>change(n.checked);field={node:row(()=>state().layer_properties.controls.find(v=>v.key===c.key)?.label??"",n),update:c=>n.checked=c.value.value,disable:x=>n.disabled=x};}
         else if(c.kind.kind==="choice"&&c.paper){const thumbnail=paperThumbnail({app,element,icon,size:28}),name=element("span","property-texture-name"),n=button("",()=>chooseTexture({app,layer:state().layer_properties.layer,state,dispatch,element,button,icon,message}),"property-texture");
           n.id="property-texture";n.append(thumbnail.node,name);
           field={node:row(()=>state().layer_properties.controls.find(v=>v.key===c.key)?.label??"",n),update:c=>{const tile=c.paper.tiles[c.value.value];thumbnail.show(tile?.id??null);name.textContent=tile?.label??"";n.title=n.ariaLabel=c.label;n.setAttribute("aria-description",tile?.label??"");},disable:x=>n.disabled=x};}

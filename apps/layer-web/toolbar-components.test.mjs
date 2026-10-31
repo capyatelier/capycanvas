@@ -166,6 +166,8 @@ export async function checkToolbarComponents({ call, evaluate, settle }) {
   await assertActionIconsCentred('horizontal Rectangle select', 4);
   const segments = await rect('[data-toolbar-choice=selection-mode]'), dropdown = await rect('[data-toolbar-choice=variant] > button');
   assert.deepEqual([segments.y, segments.height], [dropdown.y, dropdown.height], 'segments match the dropdown height');
+  const normalCanvas=await rect('#canvas');
+  await call('Input.dispatchMouseEvent',{type:'mouseMoved',x:normalCanvas.x+normalCanvas.width/2,y:normalCanvas.y+normalCanvas.height/2,button:'none',buttons:0});await settle();
   for (const theme of ['light', 'dark']) {
     await send({ type: 'set_theme', theme });
     const faces = await evaluate(`(() => {

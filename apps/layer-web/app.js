@@ -1959,7 +1959,7 @@ try {
   // Issue the first storage request before constructing panel controls. Replies
   // run in later tasks, after this synchronous UI construction is complete.
   workspaceManager = createWorkspaceManager({ app, store: workspaceStore, applyChange, element, button, icon, dropdown, message });
-  selectionUi = createSelectionUi({app,state:()=>state,element,button,icon,numberField,dispatch,workspace,layout:()=>layout,bar:()=>canvasBar?.bounds()??null});
+  selectionUi = createSelectionUi({app,state:()=>state,element,button,dropdown,numberField,dispatch,workspace,layout:()=>layout,bar:()=>canvasBar?.bounds()??null});
   const separate=action=>dispatch({type:'frequency_separation',action});
   frequencySeparationUi = createPreviewPanel({app,name:'frequency-separation',view:()=>state.layer_tools.frequency_separation,kind:v=>v.label,
     value:radius=>separate({op:'radius',radius}),apply:()=>separate({op:'apply'}),cancel:()=>separate({op:'cancel'}),

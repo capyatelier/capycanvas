@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import {checkTextEntry} from './control-style-fixture.mjs';
+import {checkTextEntry,checkSearchField} from './control-style-fixture.mjs';
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 
 export async function checkPalettes({ call, evaluate, settle, reload }) {
@@ -190,6 +190,7 @@ export async function checkPalettes({ call, evaluate, settle, reload }) {
   assert.ok(await visible(`${P} .palette-no-results`), "no matching palettes");
   await evaluate(`(()=>{const s=document.querySelector('${P} .palette-search');s.value='';s.dispatchEvent(new Event('input'));})()`);
   await type("ink");
+  await checkSearchField({call,evaluate,settle},`${P} .palette-search`,'palette-search');
   assert.deepEqual(await evaluate(`[...document.querySelectorAll('${P} .palette-choice')].filter(n=>!n.hidden).map(n=>n.dataset.name)`), ["Ink"]);
   await tap(`${P} .palette-choice[data-name="Ink"]`);
   assert.equal((await active()).name, "Ink", "choosing a palette selects it");
@@ -459,6 +460,7 @@ export async function checkPalettes({ call, evaluate, settle, reload }) {
   assert.equal(await evaluate("!!document.querySelector('.dock-group.floating-panel .palettes-panel')"), false, "undo returns the float to its group");
 
   await switchTo("Paint");
+  await call('Emulation.setDeviceMetricsOverride',{width:800,height:1000,deviceScaleFactor:1,mobile:false});await settle();
   const tabGroup = Number(await groupOf("color"));
   const names = () => evaluate(`[...document.querySelectorAll('.dock-group[data-group="${tabGroup}"] .tab-list .dock-tab')].map(n=>({panel:n.dataset.panel,name:!n.lastElementChild.hidden&&!n.classList.contains('icon-only-tab')}))`);
   for (const panel of ["layers", "properties", "adjustments", "stats"]) {
@@ -468,6 +470,7 @@ export async function checkPalettes({ call, evaluate, settle, reload }) {
   const fit = await names();
   assert.ok(fit.length >= 3);
   const shown = fit.map(t => t.name);
+  assert.deepEqual(shown,await evaluate(`layerApp.app.layout(innerWidth,innerHeight).groups.find(g=>g.id===${tabGroup}).tab_presentations.map(tab=>tab.show_name)`),'Tab labels follow the shared fit');
   assert.ok(shown.includes(false), "four tabs do not all fit at the fitted width");
   assert.deepEqual(shown, [...shown].sort((a, b) => b - a), "names are restored from the left");
   await selectTab(tabGroup, fit.at(-1).panel); await pause(100); await settle();

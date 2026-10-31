@@ -1,7 +1,7 @@
 import {chooseDropdown,captureDropdowns} from './dropdown-fixture.mjs';
 import assert from "node:assert/strict";
 import {mkdir, writeFile} from "node:fs/promises";
-import {checkTextEntry} from './control-style-fixture.mjs';
+import {checkTextEntry,checkSearchField} from './control-style-fixture.mjs';
 
 export async function checkWorkspaceManager({call, evaluate, settle, reload, touch = false}) {
   const wait = async (predicate, timeout = 15000) => {
@@ -64,6 +64,7 @@ export async function checkWorkspaceManager({call, evaluate, settle, reload, tou
     await click('.workspace-manager-tabs [data-page=toolbar_library]');await wait('JSON.parse(layerApp.app.workspace_view()).page==="toolbar_library"');
     let item=(await view()).rows.find(row=>row.title===name);assert.ok(item);
     await text('#workspace-manager-search',name);await wait(`JSON.parse(layerApp.app.workspace_view()).rows.length===1`);
+    await checkSearchField({call,evaluate,settle},'#workspace-manager-search','workspace-manager-search');
     await click(`.workspace-choice[data-id=${JSON.stringify(item.id)}]`);await wait('!!document.querySelector(".workspace-details [data-action=rename]")');
     await click('.workspace-details [data-action=rename]');
     await checkTextEntry(evaluate,'#workspace-item-name,#workspace-item-description',{capture:theme=>shot(`toolbar-details-${theme}`)});

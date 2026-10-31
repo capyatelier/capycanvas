@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import {mkdir,writeFile} from "node:fs/promises";
 import {createDrawing} from "./new-drawing-fixture.mjs";
 import {readyCanvas,readyCanvasPixels,waitForPixels} from "./canvas-pixels-fixture.mjs";
-import {checkTextEntry} from './control-style-fixture.mjs';
+import {checkTextEntry,checkSearchField} from './control-style-fixture.mjs';
 export async function checkEditor({call,evaluate,settle,canvasPixels:capturePixels}) {
   const masks=await evaluate(`(()=>{const input=document.createElement('input');input.type='checkbox';input.checked=true;input.className='panel-check';document.body.append(input);const visible=getComputedStyle(input,'::after').maskImage;editorMeasurementRoot.append(input);const measured=getComputedStyle(input,'::after').maskImage;input.remove();return {visible,measured};})()`);
   assert.notEqual(masks.visible,'none');
@@ -54,6 +54,7 @@ export async function checkEditor({call,evaluate,settle,canvasPixels:capturePixe
     await evaluate(`layerApp.dispatch({type:"set_theme",theme:${JSON.stringify(theme)}})`);
     await click(".filter-picker-header button:not(.dropdown)");
     await call("Input.insertText",{text:"glass"});await settle();
+    await checkSearchField({call,evaluate,settle},'.filter-picker-header input[type="search"]','filters-search');
     const search=await evaluate(`(()=>{
       const input=document.querySelector('.filter-picker-header input[type=search]'),header=input.parentElement,select=header.querySelector('.dropdown');
       const style=getComputedStyle(input),control=getComputedStyle(select),rect=input.getBoundingClientRect();
@@ -165,7 +166,7 @@ export async function checkEditor({call,evaluate,settle,canvasPixels:capturePixe
   assert.equal(await evaluate('layerApp.state().document_file.modified'),false);
   assert.ok(await evaluate('[...editorFiles.entries()].some(([name,bytes])=>name.endsWith(".capy")&&bytes.length>100)'));
   await invoke("export_document");
-  await wait(`!!document.querySelector('dialog[open] select[aria-label="Format"]')`);
+  await wait(`!!document.querySelector('dialog[open] .dropdown[aria-label="Format"]')`);
   await evaluate(`[...document.querySelectorAll('dialog[open] button')].find(n=>n.textContent==='Choose File…').click()`);
   await wait('[...editorFiles.keys()].some(name=>name.endsWith(".png")) && !layerApp.state().document_file.busy && !layerApp.documents.busy()',120000);
   assert.deepEqual(await evaluate('[...editorFiles.entries()].find(([name])=>name.endsWith(".png"))?.[1].slice(0,8)&&Array.from([...editorFiles.entries()].find(([name])=>name.endsWith(".png"))[1].slice(0,8))'),[137,80,78,71,13,10,26,10]);

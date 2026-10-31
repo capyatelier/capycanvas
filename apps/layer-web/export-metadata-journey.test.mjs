@@ -1,3 +1,4 @@
+import {captureCheckboxes} from './control-style-fixture.mjs';
 import {chooseDropdown} from './dropdown-fixture.mjs';
 import assert from 'node:assert/strict';
 import {mkdir,writeFile} from 'node:fs/promises';
@@ -137,6 +138,7 @@ export async function checkExportMetadata({call,evaluate,settle}) {
       assert.equal(await evaluate(`document.querySelector('dialog[open] [aria-label="Metadata"]').value`),'All');
       assert.ok(await shown('Metadata')&&await shown('Remove location'));
       assert.equal(await evaluate(`document.querySelector('dialog[open] [aria-label="Remove location"]').checked`),true,'location is removed by default');
+      await captureCheckboxes({call,evaluate,settle},directory,`metadata-checkboxes-${format}`);
       await set('Metadata','CopyrightContact');
       assert.equal(await shown('Remove location'),false,'Copyright & Contact never keeps a location');
       await set('Metadata','All');

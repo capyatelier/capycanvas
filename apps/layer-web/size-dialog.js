@@ -14,7 +14,7 @@ export function openSizeDialog({element,button,host,name,body,copy,apply,cancel}
 }
 
 export function sizeCheck({element,key,act}) {
-  const input=element('input');input.type='checkbox';
+  const input=element('input','panel-check');input.type='checkbox';
   input.addEventListener('change',()=>{const next=input.checked;act({op:key,[key]:next});});
   const text=element('span'),row=element('label','size-dialog-check');row.append(input,text);
   return {row,input,text};

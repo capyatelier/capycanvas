@@ -19,7 +19,7 @@ export async function chooseExport({app,dialog,element,button,dropdown,numberFie
     form.append(element("p","",()=>copy.help));
     const destination=select(()=>copy.destination,library.names.map((name,i)=>[i,()=>library.names[i]]),value=>preference({type:"get",index:Number(value)}));
     const range=select(()=>copy.range,["F16","F32"].includes(app.document_color().depth)?[["sdr",()=>copy.sdr_rendition],["jpeg",()=>copy.jpeg_gainmap],["avif",()=>copy.avif_gainmap],["hdr",()=>copy.format_pq],["exr",()=>copy.format_exr]]:[["sdr","SDR"]],()=>updateDraft({type:"format",value:rangeFormat()}));
-    const clip=field(()=>copy.clip_hdr,element("input"));clip.type="checkbox";
+    const clip=field(()=>copy.clip_hdr,element("input","panel-check"));clip.type="checkbox";
     const format=select(()=>copy.format,SDR_FORMATS.map(id=>[id,()=>({Png:copy.format_png,Tiff:copy.format_tiff,Jpeg:copy.format_jpeg,Webp:copy.format_webp})[id]]),value=>updateDraft({type:"format",value}));
     const profileChoices=()=>model.profiles.map((p,value)=>({value,label:()=>model.profile_captions?.[value]?app.export_profile_caption_copy(model.profile_captions[value]):app.profile_name_copy(p.name)}));
     const profile=select(()=>copy.profile,[],value=>updateDraft({type:"profile",value:model.profiles[Number(value)]}));
@@ -30,11 +30,11 @@ export async function chooseExport({app,dialog,element,button,dropdown,numberFie
     const quality=number(()=>copy.quality,90,model.numeric.quality);
     const size=select(()=>copy.pixel_size,[["Original",()=>copy.original_size],["Fit",()=>copy.fit_bounds]],()=>visible());
     const width=number(()=>copy.maximum_width,2048,model.numeric.dimension),height=number(()=>copy.maximum_height,2048,model.numeric.dimension);
-    const enlarge=field(()=>copy.enlarge,element("input"));enlarge.type="checkbox";
+    const enlarge=field(()=>copy.enlarge,element("input","panel-check"));enlarge.type="checkbox";
     const resolution=select(()=>copy.resolution,[["Master",()=>copy.keep_resolution],["Ppi",()=>copy.ppi],["Omit",()=>copy.omit]],()=>visible()),ppi=number(()=>copy.ppi,300,model.numeric.ppi);
     let metadataView=app.export_draft(recipe,{type:"refresh"}).metadata;
     const metadata=select(()=>metadataView.label,metadataView.choices.map(c=>[c.value,()=>metadataView.choices.find(choice=>choice.value===c.value).label]),()=>updateDraft({type:"metadata",value:readMetadata()}));
-    const removeLocation=field(()=>metadataView.remove_location,element("input"));removeLocation.type="checkbox";
+    const removeLocation=field(()=>metadataView.remove_location,element("input","panel-check"));removeLocation.type="checkbox";
     const metadataNote=element("p","export-metadata-note");form.append(metadataNote);
     const readMetadata=()=>({keep:metadata.value,remove_location:removeLocation.checked});
     const rangeFormat=()=>range.value==="exr"?"Exr":range.value==="sdr"?format.value:({hdr:"PngHdr",jpeg:"JpegHdr",avif:"AvifHdr"}[range.value]+(clip.checked?"Mapped":""));

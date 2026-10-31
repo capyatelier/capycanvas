@@ -1,3 +1,4 @@
+import {captureCheckboxes} from './control-style-fixture.mjs';
 import {chooseDropdown} from './dropdown-fixture.mjs';
 import {histogramJourney} from './histogram-journey.mjs';
 import {packageManifest,packageObjects,readPackage,packageResourceIdentity} from './package-fixture.test.mjs';
@@ -44,6 +45,9 @@ export async function checkHdr({call,evaluate,settle}) {
     await open('hdr-pq.png');
     assert.equal(await evaluate('layerApp.app.document_color().depth'),'F16');
     await wait('layerApp.app.tone_status().ready||layerApp.app.tone_status().error');assert.equal(await evaluate('layerApp.app.tone_status().error??null'),null);
+    await invoke('export_document');await wait(`!!document.querySelector('dialog[open] [aria-label="Dynamic range"]')`);
+    await set('Dynamic range','hdr');await captureCheckboxes({call,evaluate,settle},directory,'clip-hdr-checkbox');
+    await click('Cancel');await wait('!layerApp.state().document_file.busy');
     await checkGpuTone({call,evaluate,settle});
     let original=await hist();assert.ok(original.channels.some(c=>c.above>0));
     const hdrDisplay=await evaluate('layerApp.app.tone_status().display_hdr');

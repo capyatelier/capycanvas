@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {glassCss} from './control-style-fixture.mjs';
+import {glassCss,checkSearchField} from './control-style-fixture.mjs';
 import {mkdir, writeFile} from 'node:fs/promises';
 
 export async function checkCommandBar({call, evaluate, settle}) {
@@ -40,6 +40,7 @@ export async function checkCommandBar({call, evaluate, settle}) {
     await open();
     assert.equal(await evaluate('document.activeElement.id'),'command-search');
     await call('Input.insertText',{text:'pencil'});
+    if(i===0)await checkSearchField({call,evaluate,settle},'#command-search','command-search');
     await key('Enter','Enter',13);
     assert.equal(await evaluate('layerApp.state().brush.tool'),'pencil');
     assert.equal(await evaluate('document.querySelector("#command-bar").open'),false);
