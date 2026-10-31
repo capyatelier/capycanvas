@@ -137,6 +137,7 @@ struct SettingsView : std::enable_shared_from_this<SettingsView> {
     StackPanel root,body,modeSection;
     Bindings fields;
     hstring key;
+    std::shared_ptr<hstring> fieldContext;
     std::shared_ptr<RangeControl> range;
     explicit SettingsView(std::shared_ptr<WorkspaceData> data):data(std::move(data)){root.Spacing(this->data->panelMetric(L"control_spacing"));}
     static bool picking(J const& state){
@@ -204,7 +205,7 @@ struct SettingsView : std::enable_shared_from_this<SettingsView> {
     double actionLabelWidth()const{
         std::vector<hstring> titles;for(auto value:array(data->state,L"tool_actions")){auto item=value.GetObject();if(auto group=str(item,L"group");!group.empty()&&!flag(item,L"segmented"))titles.push_back(actionGroupLabel(group));}return captionWidth(titles);
     }
-    void actionChoice(hstring const& group,hstring const& context){
+    void actionChoice(hstring const& group,std::shared_ptr<hstring> const& context){
         Grid row;row.ColumnSpacing(data->panelMetric(L"control_spacing"));
         ColumnDefinition caption;caption.Width({actionLabelWidth(),GridUnitType::Pixel});row.ColumnDefinitions().Append(caption);
         ColumnDefinition field;field.Width({1,GridUnitType::Star});row.ColumnDefinitions().Append(field);
@@ -214,7 +215,7 @@ struct SettingsView : std::enable_shared_from_this<SettingsView> {
         AutomationProperties::SetAutomationId(choices,L"tool-action-group-"+group);
         std::vector<hstring> commands;for(auto value:array(data->state,L"tool_actions"))if(auto item=value.GetObject();str(item,L"group")==group){auto id=str(item,L"command");commands.push_back(id);comboOption(choices,str(find(array(data->state,L"commands"),L"id",id),L"label"),L"tool-action-"+id);}
         auto weak=weak_from_this();auto syncing=std::make_shared<bool>(false);
-        choices.SelectionChanged([weak,choices,commands,syncing,context](auto&&,auto&&){if(auto self=weak.lock();self&&!*syncing&&!self->data->updating&&settingsContext(self->data->state)==context&&choices.SelectedIndex()>=0&&uint32_t(choices.SelectedIndex())<commands.size())self->data->dispatch(O({{L"type",S(L"invoke")},{L"command",S(commands.at(choices.SelectedIndex()))}}));});
+        choices.SelectionChanged([weak,choices,commands,syncing,context](auto&&,auto&&){if(auto self=weak.lock();self&&!*syncing&&!self->data->updating&&settingsContext(self->data->state)==*context&&choices.SelectedIndex()>=0&&uint32_t(choices.SelectedIndex())<commands.size())self->data->dispatch(O({{L"type",S(L"invoke")},{L"command",S(commands.at(choices.SelectedIndex()))}}));});
         fields.emplace_back([weak,choices,commands,syncing,title,caption,group]{if(auto self=weak.lock()){
             auto name=self->actionGroupLabel(group);title.Text(name);AutomationProperties::SetName(choices,name);caption.Width({self->actionLabelWidth(),GridUnitType::Pixel});
             bool enabled=false;*syncing=true;for(uint32_t i=0;i<commands.size();++i){auto command=find(array(self->data->state,L"commands"),L"id",commands[i]);comboOptionText(choices,i,str(command,L"label"));choices.Items().GetAt(i).as<ComboBoxItem>().IsEnabled(flag(command,L"enabled"));enabled=enabled||flag(command,L"enabled");if(flag(command,L"selected"))selectIndex(choices,int(i));}*syncing=false;choices.IsEnabled(enabled);
@@ -268,14 +269,16 @@ struct SettingsView : std::enable_shared_from_this<SettingsView> {
     }
     void refresh(){
         if(picking(data->state))return refreshPicker();
-        auto context=settingsContext(data->state);A schema;hstring previousGroup;
+        auto target=settingsContext(data->state);A schema;hstring previousGroup;
         for(auto value:array(data->state,L"tool_settings")){
             auto item=value.GetObject();auto group=str(item,L"group_id");
-            schema.Append(O({{L"id",S(str(item,L"id"))},{L"group_boundary",B(previousGroup!=group)},{L"numeric",object(item,L"numeric")}}));previousGroup=group;
+            schema.Append(O({{L"id",S(str(item,L"id"))},{L"group_boundary",B(previousGroup!=group)},{L"numeric",object(item,L"numeric")},{L"preview",B(flag(item,L"preview"))}}));previousGroup=group;
         }
         auto actions=array(data->state,L"tool_actions");auto extra=array(data->state,L"tool_extra");
-        auto next=O({{L"context",S(context)},{L"fields",schema},{L"actions",actions},{L"extra",extraSchema(extra)}}).Stringify();
+        bool gradient=false;for(auto value:extra)gradient=gradient||object(value.GetObject(),L"Gradient").Size()!=0;
+        auto next=O({{L"context",S(gradient?target:hstring{})},{L"fields",schema},{L"actions",actions},{L"extra",extraSchema(extra)}}).Stringify();
         if(next!=key){
+            auto context=fieldContext=std::make_shared<hstring>(target);
             key=next;fields.clear();if(range){range->Dispose();range=nullptr;}root.Children().Clear();hstring group;
             auto weak=weak_from_this();
             bool compact=false;for(auto value:extra)compact=compact||str(object(value.GetObject(),L"Choice"),L"id")==L"tonal-tones";
@@ -298,7 +301,7 @@ struct SettingsView : std::enable_shared_from_this<SettingsView> {
                     body.Children().Append(CapyEffects::GradientEditor(data,{[weak]{if(auto self=weak.lock())return toolGradient(self->data->state);return J{};},
                         [weak,context](J action,hstring phase){
                             auto self=weak.lock();bool continuing=!phase.empty()&&phase!=L"down";
-                            if(self&&(continuing||settingsContext(self->data->state)==context))
+                            if(self&&(continuing||settingsContext(self->data->state)==*context))
                                 self->data->dispatch(O({{L"type",S(L"effect")},{L"action",CapyEffects::effectGesture(action,phase)}}));
                         },[]{return true;},L"tool-gradient"},fields));
                     continue;
@@ -322,7 +325,7 @@ struct SettingsView : std::enable_shared_from_this<SettingsView> {
                 for(uint32_t i=0;i<items.Size();i++){
                     auto item=items.GetObjectAt(i);auto action=object(item,L"action");
                     auto pick=segment(str(item,L"icon"),str(item,L"label"),str(item,L"label"),L"tool-choice-"+specId+L"-"+to_hstring(i),true,i,
-                        [weak,action,context]{if(auto self=weak.lock();self&&settingsContext(self->data->state)==context)self->data->dispatch(action);});
+                        [weak,action,context]{if(auto self=weak.lock();self&&settingsContext(self->data->state)==*context)self->data->dispatch(action);});
                     if(labeled){
                         auto glyph=icon(str(item,L"icon"),data->theme(),data->panelMetric(L"icon_size"));AutomationProperties::SetAutomationId(glyph,L"icon-"+str(item,L"icon"));pick.Content(glyph);
                         pick.Width(data->panelMetric(L"control_height"));pick.Height(data->panelMetric(L"control_height"));
@@ -347,7 +350,7 @@ struct SettingsView : std::enable_shared_from_this<SettingsView> {
                 if(compact&&id==L"tonal_lower"){
                     auto upper=find(settings,L"id",L"tonal_upper");
                     range=RangeControl::Create(data,item,upper,data->caption(L"tool_controls",L"range_hint"),L"tool-setting",true,
-                        [weak,context](int index,double value,hstring const& phase){if(auto self=weak.lock();self&&settingsContext(self->data->state)==context)
+                        [weak,context](int index,double value,hstring const& phase){if(auto self=weak.lock();self&&settingsContext(self->data->state)==*context)
                             self->data->dispatch(O({{L"type",S(L"tool_setting_contact")},{L"id",S(index?L"tonal_upper":L"tonal_lower")},{L"value",N(value)},{L"phase",S(phase)}}));});
                     body.Children().Append(range->root);
                     fields.emplace_back([weak]{if(auto self=weak.lock();self&&self->range){
@@ -371,7 +374,7 @@ struct SettingsView : std::enable_shared_from_this<SettingsView> {
                     if(anchor!=beside.end()){
                         auto specId=str(anchor->second,L"id");
                         auto grid=choiceGrid(data,anchor->second,L"tool-choice-"+specId,[weak,context](J action){
-                            if(auto self=weak.lock();self&&settingsContext(self->data->state)==context)self->data->dispatch(action);});
+                            if(auto self=weak.lock();self&&settingsContext(self->data->state)==*context)self->data->dispatch(action);});
                         Grid row;row.ColumnSpacing(data->panelMetric(L"compound_spacing"));
                         for(auto width:{GridUnitType::Auto,GridUnitType::Star}){ColumnDefinition column;column.Width({1,width});row.ColumnDefinitions().Append(column);}
                         grid.grid.VerticalAlignment(VerticalAlignment::Center);row.Children().Append(grid.grid);
@@ -380,15 +383,15 @@ struct SettingsView : std::enable_shared_from_this<SettingsView> {
                             if(auto spec=object(option.GetObject(),L"Choice");str(spec,L"id")==specId)grid.update(self->data,spec);});
                     }
                 }
-                NumberPresentation presentation;presentation.identity=[context]{return context;};
-                if(flag(item,L"preview"))presentation.phase=[weak,id,context](hstring const& phase,double value){if(auto self=weak.lock();self&&settingsContext(self->data->state)==context)
+                NumberPresentation presentation;presentation.identity=[weak]{if(auto self=weak.lock())return settingsContext(self->data->state);return hstring{};};
+                if(flag(item,L"preview"))presentation.phase=[weak,id,context](hstring const& phase,double value){if(auto self=weak.lock();self&&settingsContext(self->data->state)==*context)
                     self->data->dispatch(O({{L"type",S(L"tool_setting_contact")},{L"id",S(id)},{L"phase",S(phase)},{L"value",N(value)}}));};
-                presentation.reset=[weak,id,context]{if(auto self=weak.lock();self&&settingsContext(self->data->state)==context)
+                presentation.reset=[weak,id,context]{if(auto self=weak.lock();self&&settingsContext(self->data->state)==*context)
                     self->data->dispatch(O({{L"type",S(L"reset_tool_setting")},{L"id",S(id)}}));};
                 presentation.title=[weak,id]{if(auto self=weak.lock())return str(find(array(self->data->state,L"tool_settings"),L"id",id),L"label");return hstring();};
                 auto control=number(data,str(item,L"label"),object(item,L"numeric"),
                     [weak,id]{if(auto self=weak.lock())return num(find(array(self->data->state,L"tool_settings"),L"id",id),L"value");return 0.;},
-                    [weak,id,context](double value){if(auto self=weak.lock();self&&settingsContext(self->data->state)==context)
+                    [weak,id,context](double value){if(auto self=weak.lock();self&&settingsContext(self->data->state)==*context)
                         self->data->dispatch(O({{L"type",S(L"set_tool_setting")},{L"id",S(id)},{L"value",N(value)}}));},fields,nullptr,bool(numbers),L"tool-setting-"+id,compact,presentation);
                 AutomationProperties::SetAutomationId(control,L"number-root-tool-setting-"+id);
                 if(numbers){
@@ -409,7 +412,7 @@ struct SettingsView : std::enable_shared_from_this<SettingsView> {
             std::map<std::wstring,Grid> actionRows;std::map<std::wstring,size_t> actionIndices;std::vector<hstring> groups;
             for(auto value:actions){
                 auto item=value.GetObject();auto id=str(item,L"command"),group=str(item,L"group"),rowId=str(item,L"row");auto command=find(array(data->state,L"commands"),L"id",id);
-                auto invoke=[weak,id,context]{if(auto self=weak.lock();self&&settingsContext(self->data->state)==context)self->data->dispatch(O({{L"type",S(L"invoke")},{L"command",S(id)}}));};
+                auto invoke=[weak,id,context]{if(auto self=weak.lock();self&&settingsContext(self->data->state)==*context)self->data->dispatch(O({{L"type",S(L"invoke")},{L"command",S(id)}}));};
                 if(flag(item,L"segmented")){
                     auto modes=modeRows.at(group.c_str());auto index=modeIndices[group.c_str()]++;
                     auto pick=segment(str(command,L"icon"),str(command,L"label"),str(command,L"tooltip"),L"tool-action-"+id,compact,index,invoke);
@@ -435,6 +438,10 @@ struct SettingsView : std::enable_shared_from_this<SettingsView> {
                 }
             }
 
+        }else if(fieldContext&&*fieldContext!=target){
+            if(range&&range->capture)range->capture->Cancel();
+            for(auto const& bind:fields)bind();
+            *fieldContext=target;
         }
         for(auto const& bind:fields)bind();
     }

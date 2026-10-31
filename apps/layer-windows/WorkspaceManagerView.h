@@ -9,7 +9,7 @@
 class WorkspaceManagerView {
 public:
     using Json=winrt::Windows::Data::Json::JsonObject;
-    using Dispatch=std::function<void(std::string)>;
+    using Dispatch=std::function<void(std::string,std::function<void()>)>;
     WorkspaceManagerView(Dispatch send,Json catalog,NativeLocalization localization,winrt::Microsoft::UI::Xaml::XamlRoot root,std::function<void()> changed,PreviewTransport query);
     ~WorkspaceManagerView();
     void Apply(Json const& snapshot,bool blocked);

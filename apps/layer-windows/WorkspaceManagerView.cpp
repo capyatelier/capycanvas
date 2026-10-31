@@ -13,6 +13,7 @@
 using namespace CapyUi;
 struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
     Dispatch send;
+    std::function<void()> switcherReady;
     PreviewTransport query;
     uint64_t validationSerial=0;
     hstring validationName,validationError;
@@ -75,10 +76,10 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
         submittedName=true;
         dispatch(O({{L"type",S(L"submit")},{L"name",S(found->second.entry.Text())}}));return true;
     }
-    void dispatch(J const& input) {
+    void dispatch(J const& input,std::function<void()> ready={}) {
         auto type=str(input,L"type");
         if(type!=L"submit"&&type!=L"cancel"&&type!=L"dismiss"&&type!=L"edit_switcher"&&type!=L"refresh_switcher")if(!finishName())return;
-        send(to_string(O({{L"operation",S(L"input")},{L"input",input}}).Stringify()));
+        send(to_string(O({{L"operation",S(L"input")},{L"input",input}}).Stringify()),std::move(ready));
     }
     static J form(hstring const& type,V value=nullptr) {
         auto action=O({{L"type",S(type)}});if(value)action.Insert(L"value",value);
@@ -86,9 +87,12 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
     }
     hstring page()const{auto value=str(model,L"page");return value.empty()&&prompt()?hstring(L"prompt"):value;}
     bool open()const{return !str(model,L"page").empty()||prompt();}
-    void editSwitcher(J const& edit) {
-        if(!showing||prompt()&&!inlineRename()||page()!=L"workspaces"||flag(model,L"busy")||flag(model,L"switcher_busy"))return;
-        dispatch(O({{L"type",S(L"edit_switcher")},{L"edit",edit}}));
+    void completeSwitcher(){if(switcherReady&&!flag(model,L"switcher_busy")){auto ready=std::exchange(switcherReady,{});ready();}}
+    void editSwitcher(J const& edit,std::function<void()> ready={}) {
+        if(!showing||prompt()&&!inlineRename()||page()!=L"workspaces"||flag(model,L"busy")||flag(model,L"switcher_busy")){if(ready)ready();return;}
+        std::function<void()> applied;
+        if(ready)applied=[weak=weak_from_this(),ready=std::move(ready)]()mutable{if(auto self=weak.lock()){self->switcherReady=std::move(ready);self->completeSwitcher();}};
+        dispatch(O({{L"type",S(L"edit_switcher")},{L"edit",edit}}),std::move(applied));
     }
     void moveWorkspace(hstring const& id,bool down) {
         auto saved=array(model,L"order");
@@ -100,7 +104,7 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
         }
     }
     void fail() {
-        send(to_string(O({{L"operation",S(L"failure")},{L"error",S(recovery(L"workspace_manager_failed"))}}).Stringify()));
+        send(to_string(O({{L"operation",S(L"failure")},{L"error",S(recovery(L"workspace_manager_failed"))}}).Stringify()),{});
     }
     static void sync(TextBox const& text,hstring value,std::optional<hstring>& draft) {
         if(draft&&*draft==value)draft.reset();
@@ -200,8 +204,8 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
         clipRounded(listSurface,{12,12,12,12});
         rowDrag=std::make_unique<WorkspaceRowDrag>(list,listSurface,
             [weak=weak_from_this()]{auto self=weak.lock();return self&&self->canReorder();},
-            [weak=weak_from_this()](hstring id,std::optional<hstring> before){if(auto self=weak.lock())
-                self->editSwitcher(O({{L"type",S(L"move")},{L"id",S(id)},{L"before",before?S(*before):JsonValue::CreateNullValue()}}));},
+            [weak=weak_from_this()](hstring id,std::optional<hstring> before,std::function<void()> ready){if(auto self=weak.lock())
+                self->editSwitcher(O({{L"type",S(L"move")},{L"id",S(id)},{L"before",before?S(*before):JsonValue::CreateNullValue()}}),std::move(ready));},
             [weak=weak_from_this()]{if(auto self=weak.lock()){++self->selectionSerial;self->restoreSelection();}});
         listing.Children().Append(search);listing.Children().Append(listSurface);listing.Children().Append(rowActions);
         promptBody.Children().Append(promptMessage);promptBody.Children().Append(name);promptBody.Children().Append(description);promptBody.Children().Append(choices);
@@ -400,10 +404,11 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
         restoreSelection();
         std::vector<hstring> savedOrder;for(auto id:saved)savedOrder.push_back(id.GetString());
         rowDrag->Refresh(savedOrder);
+        completeSwitcher();
     }
     void update() {
         if(!dialog||!model.Size())return;
-        if(!canReorder())rowDrag->Cancel();
+        if(!canReorder()&&!rowDrag->Pending())rowDrag->Cancel();
         updating=true;struct Reset{bool& flag;~Reset(){flag=false;}}reset{updating};
         auto details=object(model,L"prompt");bool inlineName=inlineRename(),naming=details.Size()!=0&&!inlineName,busy=flag(model,L"busy");
         auto page=this->page();bool toolbars=page==L"this_workspace"||page==L"toolbar_library";

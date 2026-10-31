@@ -1,6 +1,7 @@
 param([Parameter(Mandatory)][string]$Executable,
-    [ValidateSet('dark-mouse','dark-touch','dark-pen','light-mouse','light-touch','light-pen','edge-dark-mouse','edge-dark-touch','edge-dark-pen','edge-light-mouse','edge-light-touch','edge-light-pen','row-pair-dark','row-pair-light','inertia-dark','inertia-light','native-controls-dark','native-controls-light','blenders-dark','blenders-light','sliders-dark','sliders-light','blender-controls-dark','blender-controls-light','hdr-f16-dark','hdr-f16-light','slider-preference-dark','slider-preference-light')][string]$Variant='dark-mouse',[switch]$RapidOnly,[switch]$ZenOnly,[switch]$SlidersOnly,[switch]$BlendersOnly,[switch]$EraserOnly,[switch]$EraserLightOnly,[switch]$HistoryOnly,[switch]$HistoryLightOnly,[switch]$NativeControlsOnly,[switch]$ScrollEpochOnly,[switch]$NumericOnly,[switch]$CurveOnly,[switch]$MenuOnly,[switch]$ObserverOnly,[switch]$VisualOnly,[switch]$BeadTransitionsOnly,[switch]$HdrOnly,[switch]$HdrRetirementOnly,[switch]$HdrPreviewOnly,[switch]$HdrContactsOnly,[switch]$ColorUndoOnly,[ValidateSet('F16','F32')][string]$HdrDepth='F16')
+    [ValidateSet('dark-mouse','dark-touch','dark-pen','light-mouse','light-touch','light-pen','edge-dark-mouse','edge-dark-touch','edge-dark-pen','edge-light-mouse','edge-light-touch','edge-light-pen','row-pair-dark','row-pair-light','inertia-dark','inertia-light','native-controls-dark','native-controls-light','blenders-dark','blenders-light','sliders-dark','sliders-light','blender-controls-dark','blender-controls-light','hdr-f16-dark','hdr-f16-light','slider-preference-dark','slider-preference-light','retire-dark-mouse')][string]$Variant='dark-mouse',[switch]$RapidOnly,[switch]$ZenOnly,[switch]$SlidersOnly,[switch]$BlendersOnly,[switch]$EraserOnly,[switch]$EraserLightOnly,[switch]$HistoryOnly,[switch]$HistoryLightOnly,[switch]$NativeControlsOnly,[switch]$ScrollEpochOnly,[switch]$NumericOnly,[switch]$CurveOnly,[switch]$MenuOnly,[switch]$ObserverOnly,[switch]$VisualOnly,[switch]$BeadTransitionsOnly,[switch]$HdrOnly,[switch]$HdrRetirementOnly,[switch]$HdrPreviewOnly,[switch]$HdrContactsOnly,[switch]$ColorUndoOnly,[ValidateSet('F16','F32')][string]$HdrDepth='F16')
 $ErrorActionPreference='Stop'
+$retireOnly=$Variant -eq 'retire-dark-mouse';if($retireOnly){$Variant='dark-mouse'}
 $edgeOnly=$Variant.StartsWith('edge-');if($edgeOnly){$Variant=$Variant.Substring(5)}
 $rowPairOnly=$Variant.StartsWith('row-pair-');if($rowPairOnly){$NativeControlsOnly=$true;$Variant=$Variant.Substring(9)+'-touch'}
 $inertiaOnly=$Variant.StartsWith('inertia-');if($inertiaOnly){$NativeControlsOnly=$true;$Variant=$Variant.Substring(8)+'-touch'}
@@ -30,6 +31,7 @@ if($HdrOnly -and !$PSBoundParameters.ContainsKey('Variant')){
 }
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 . (Join-Path $PSScriptRoot 'BubbleVisualChecks.ps1')
+. (Join-Path $PSScriptRoot 'ComposedFrames.ps1')
 if(!('CapyRowPointer' -as [type])){Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')}
 if(!('CapyCanvasTouch' -as [type])){Add-Type -Path (Join-Path $PSScriptRoot 'CanvasTouchDriver.cs')}
 if(!('CapyBubbleFixtureNative' -as [type])){Add-Type -Path (Join-Path $PSScriptRoot 'BubbleFixtureNative.cs')}
@@ -325,6 +327,49 @@ function Take([string]$Kind,[string]$Value,[double]$X,[double]$Y){
     Wait-Until {$p=Center $id;$key="$($p.x),$($p.y)";if($key -eq $settle.last){$settle.same++}else{$settle.last=$key;$settle.same=0};$settle.same -ge 5} 'Released bubble did not settle'
     return [long]$id
 }
+function Capture-InspectorRetirement([long]$Id){
+    $card=Card $Id
+    Invoke "bubble-properties-$Id" -Within $card
+    Wait-Until {(View $Id).card.properties} 'Retirement fixture did not open the native inspector'
+    $card=Card $Id;$properties=Control 'layer-properties' -Within $card -Arranged
+    $bounds=Card-Bounds $Id $card
+    $area=[Drawing.Rectangle]::FromLTRB([int][Math]::Floor($bounds.X),[int][Math]::Floor($bounds.Y),[int][Math]::Ceiling($bounds.Right),[int][Math]::Ceiling($bounds.Bottom))
+    $center=Center $Id;$diameter=[int](((View $Id).diameter+16)*$scale)
+    $face=[Drawing.Rectangle]::new([int]($center.x-$area.Left-$diameter/2),[int]($center.y-$area.Top-$diameter/2),$diameter,$diameter)
+    $outside=Screen ($width*.9) ($height*.8)
+    if($area.Contains($outside.x,$outside.y)){throw 'Retirement fixture outside contact overlaps its inspector'}
+    $folder=Join-Path $run 'inspector-retirement';[IO.Directory]::CreateDirectory($folder)|Out-Null
+    Capture 'inspector-retirement-before' -WithModel -Composed
+    $peers=[Collections.Generic.List[object]]::new()
+    $sample=Sample-Frames $area {
+        param($i)
+        if($i -eq 3){[CapyRowPointer]::Down('mouse',$outside.x,$outside.y);[CapyRowPointer]::Up()}
+        try{
+            $current=$properties.Current;$peerBounds=$current.BoundingRectangle;$offscreen=$current.IsOffscreen
+            $peers.Add(@{connected=(!$offscreen -and !$peerBounds.IsEmpty -and $peerBounds.Width -gt 0 -and $peerBounds.Height -gt 0);offscreen=$offscreen;bounds=@($peerBounds.X,$peerBounds.Y,$peerBounds.Width,$peerBounds.Height);error=$null})
+        }catch [System.Windows.Automation.ElementNotAvailableException]{
+            $peers.Add(@{connected=$false;offscreen=$null;bounds=$null;error=$_.Exception.GetType().FullName})
+        }
+    }
+    try{
+        Wait-Until {$null -eq (View $Id).card} 'Retirement fixture did not dismiss the inspector'
+        $null=[TabFrames]::DwmFlush();$final=[TabFrames]::Grab($area.Left,$area.Top,$area.Width,$area.Height)
+        try{
+            $final.Save((Join-Path $folder 'final.png'));$scores=@()
+            for($i=0;$i -lt $sample.frames.Count;$i++){
+                $sample.frames[$i].Save((Join-Path $folder ('frame-{0:D3}.png' -f $i)))
+                $remaining=[TabFrames]::Remaining($sample.frames[$i],$final,$face)
+                $scores+=@{frame=$i;peer=$peers[$i];outside_face_pixels=$remaining[0];face_pixels=$remaining[1]}
+            }
+            $bad=@($scores|Where-Object {$_.frame -ge 3 -and $_.outside_face_pixels -gt $scores[2].outside_face_pixels*.2 -and !$_.peer.connected}|ForEach-Object {$_.frame})
+            @{bubble=$Id;area=$area;face=$face;action_frame=3;retirement_ms=150;frequency=[Diagnostics.Stopwatch]::Frequency;times=$sample.times;scores=$scores;invalid=$bad}|ConvertTo-Json -Depth 8|Set-Content (Join-Path $folder 'frames.json')
+            if(!$peers[2].connected -or $scores[2].outside_face_pixels -le 0){throw 'Retirement source did not contain a visible inspector and composed backing'}
+            if($bad.Count){throw "Retiring inspector detached or became invisible while its backing remained in frames $($bad -join ','); captures: $folder"}
+        }finally{$final.Dispose()}
+    }finally{foreach($image in $sample.frames){$image.Dispose()}}
+    Capture 'inspector-retirement-after' -WithModel -Composed
+}
+
 function Slider-Layout{(Model).state.workspace.layout.bubbles|ConvertTo-Json -Depth 70 -Compress}
 function Slider-Menu([long]$Id,[bool]$Expected){
     $point=Center $Id;[CapyRowPointer]::RightClick($point.x,$point.y)
@@ -1323,7 +1368,7 @@ try{
         Wait-Until {(Model).windows_workspace.id -eq 'builtin:workspace:painter' -and (Model).windows_workspace.ready -and !(Model).windows_workspace.busy} 'Fixture Sketch workspace did not open'
     }
     if($HdrOnly -or $ColorUndoOnly){New-BubbleHdrDrawing $HdrDepth}
-    if(!$EraserOnly){Ensure-Sources}
+    if(!$EraserOnly -and !$retireOnly){Ensure-Sources}
     if($HdrOnly -or $ColorUndoOnly){Show-BubbleHdrColor}
     & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'View'
     Invoke 'fit_canvas'
@@ -1338,6 +1383,15 @@ try{
     $w=(Control 'drawing-canvas' -Arranged).Current.BoundingRectangle;$width=(Model).layout.viewport[0];$height=(Model).layout.viewport[1]
     $revision=Revision
     $initial=Model;$camera=$initial.state.camera;$document=@($initial.state.tabs|Where-Object active)[0]
+    if($retireOnly){
+        $layers=Take 'panel' 'layers' ($width*.38) ($height*.56)
+        Wait-Until {$null -ne (View $layers).card} 'Retirement Layers bubble did not open'
+        Capture-InspectorRetirement $layers
+        & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Close -DiscardUnsaved|Out-Null
+        if((Get-Item -LiteralPath $stderr).Length){throw 'Retirement bubble native stderr requires inspection'}
+        @{variant='retire-dark-mouse';scope='Composed backing and retained native inspector visibility during retirement';checks=@($checks);run=$run}|ConvertTo-Json -Depth 8|Set-Content (Join-Path $run 'results.json')
+        return
+    }
     if($ZenOnly){
         $zenBubble=Take 'command' 'drawing_brush' (($camera.translation[0]+$document.width*.35*$camera.zoom)/$scale) (($camera.translation[1]+$document.height*.35*$camera.zoom)/$scale)
         $source=(View $zenBubble).source|ConvertTo-Json -Depth 12 -Compress;$at=Center $zenBubble

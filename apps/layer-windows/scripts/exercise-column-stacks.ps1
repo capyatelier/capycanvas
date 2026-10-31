@@ -1,6 +1,7 @@
-param([Parameter(Mandatory)][string]$Executable,[ValidateSet('mouse','pen','touch')][string]$Device='mouse')
+param([Parameter(Mandatory)][string]$Executable,[ValidateSet('mouse','pen','touch')][string]$Device='mouse',[ValidateSet('full','scroll-dark')][string]$Journey='full')
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
+. (Join-Path $PSScriptRoot 'ComposedFrames.ps1')
 Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
 $repo=(Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
 $Executable=(Resolve-Path -LiteralPath $Executable).Path
@@ -41,6 +42,39 @@ function Same-Bounds($Actual,$Expected){
     if(!$Actual -or !$Expected){return $false}
     foreach($field in 'x','y','width','height'){if([Math]::Abs($Actual.$field-$Expected.$field) -gt .6){return $false}}
     $true
+}
+function Check-ScrollRollback {
+    Context 'panel-tab-brushes';Invoke 'Collapse column' -Name
+    Wait-Until {$null -ne (Column 4)} 'Scroll setup did not collapse the left column'
+    Drag 'column-grip-4' (At 'column-grip-12') -Stack
+    Wait-Until {@((Model).state.workspace.layout.column_stacks|Where-Object {$_.members.Count -eq 2}).Count -eq 1} 'Scroll setup did not form a real column stack'
+    if(!(Column 12).open){Tap 'column-icon-layers'}
+    $root.GetCurrentPattern([System.Windows.Automation.TransformPattern]::Pattern).Resize(1000,480)
+    Wait-Until {(Model).layout.viewport[1] -lt 500} 'Owned small window did not publish its viewport'
+    $column=Column 12;$b=$column.bounds;$point=[CapyRowPointer+Point]::new()
+    [CapyRowPointer]::ClientToScreen($window,[ref]$point)|Out-Null
+    $scale=[CapyRowPointer]::GetDpiForWindow($window)/96.
+    $area=[Drawing.Rectangle]::new([int]($point.x+$b.x*$scale),[int]($point.y+$b.y*$scale),[int]($b.width*$scale),[int]($b.height*$scale))
+    $content=$column.content;$at=Screen $content
+    $initial=@((Presentation).elements|Where-Object id -eq 'column-icon-layers')[0].bounds.y
+    [CapyRowPointer]::Wheel($at.x,$at.y,-360)
+    Wait-Until {@((Presentation).elements|Where-Object id -eq 'column-icon-layers')[0].bounds.y -lt $initial-4} 'Genuine overflowing column did not accept a positive native wheel offset'
+    Capture 'positive-column-offset' -WithModel -Composed
+    $metrics=[Collections.Generic.List[object]]::new()
+    $sample=Sample-Frames $area {
+        param($i)
+        if($i -eq 3){[CapyRowPointer]::Wheel($at.x,$at.y,-360);Invoke 'panel-tab-adjustments'}
+        if($i -eq 30){[CapyRowPointer]::Wheel($at.x,$at.y,120);Invoke 'panel-tab-layers'}
+        $presentation=Presentation
+        $metrics.Add(@{frame=$i;native_icon_y=@($presentation.elements|Where-Object id -eq 'column-icon-layers')[0].bounds.y;full_updates=$presentation.full_updates})
+    }
+    try{
+        for($i=0;$i -lt $sample.frames.Count;$i++){$sample.frames[$i].Save((Join-Path $run ('scroll-frame-{0:D3}.png' -f $i)))}
+        @{area=$area;action_frames=@(3,30);initial_icon_y=$initial;frequency=[Diagnostics.Stopwatch]::Frequency;times=$sample.times;frames=$metrics}|ConvertTo-Json -Depth 30|Set-Content (Join-Path $run 'scroll-offsets.json')
+        if(!@($metrics|Where-Object {$_.frame -ge 4 -and $_.frame -lt 30 -and $_.full_updates -gt $metrics[2].full_updates}).Count){throw 'Column scroll did not overlap a full native update'}
+        $rollback=@($metrics|Where-Object {$_.frame -ge 4 -and $_.frame -lt 30 -and $_.native_icon_y -gt $metrics[2].native_icon_y+1})
+        if($rollback.Count){throw ('Native column scrolled backward during downward wheel/full update in frames '+($rollback.frame -join ','))}
+    }finally{foreach($image in $sample.frames){$image.Dispose()}}
 }
 function Check-ColumnInteractions {
     foreach($operation in @('menu','double-click','resize')){
@@ -210,6 +244,7 @@ try {
     Enter-CapyEnvironment
     $env:CAPY_STORAGE_DIR=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1'
     Start-Review 'initial'
+    if($Journey -eq 'scroll-dark'){Check-Open 12;Check-ScrollRollback;& (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close;return}
     Check-Open 12;Capture 'default-paint';Check-ColumnInteractions;Check-DockTargets
     Tap 'column-icon-layers';Wait-Until {!(Column 12).open} 'Clicking the selected member did not close it'
     foreach($group in (Column 12).groups){foreach($icon in $group.icons){if((Control ('column-icon-'+$icon.panel)).Current.ItemStatus -eq 'Selected'){throw 'Closed strip retained a selected tile'}}}

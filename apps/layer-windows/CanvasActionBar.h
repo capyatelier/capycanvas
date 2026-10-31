@@ -9,6 +9,7 @@ namespace CapyUi {
 struct CanvasActionBar:std::enable_shared_from_this<CanvasActionBar>{
     static constexpr double Offscreen=-100000;
     struct Field {FrameworkElement slot{nullptr},element{nullptr};};
+    struct Prepared {StackPanel row;TextBlock caption{nullptr};Button more{nullptr};std::vector<Field> fields;J view,sizes;hstring schema,theme;};
     std::shared_ptr<WorkspaceData> data;
     std::function<void()> changed;
     Canvas host{nullptr};
@@ -22,6 +23,7 @@ struct CanvasActionBar:std::enable_shared_from_this<CanvasActionBar>{
     OwnedPopup menuOwner;
     WorkspaceShadow shadow;
     std::vector<Field> fields;
+    std::shared_ptr<Prepared> pending;
     Microsoft::UI::Dispatching::DispatcherQueueTimer reappear{nullptr};
     J view,bounds,sizes;
     hstring schema,theme,placement;
@@ -34,10 +36,6 @@ struct CanvasActionBar:std::enable_shared_from_this<CanvasActionBar>{
         host=root;auto weak=weak_from_this();
         auto style=toolbarUi(data->localization.get(),O({{L"type",S(L"style")},{L"style",S(L"small")}})).GetObject();
         tile=array(style,L"size").GetNumberAt(1);gap=num(style,L"gap",gap);glyph=num(style,L"icon",glyph);
-        row.Orientation(Orientation::Horizontal);row.Spacing(gap);
-        caption=label(data,L"");caption.VerticalAlignment(VerticalAlignment::Center);caption.Margin({12,0,8,0});caption.Opacity(.8);
-        more=button(data,L"",[weak]{if(auto self=weak.lock())self->openMenu();});tiled(more);
-        AutomationProperties::SetAutomationId(more,L"canvas-bar-more");copyName(data,more,data->copyCommon(L"more"),true);
         surface.IsHitTestVisible(false);content.Children().Append(surface);content.Children().Append(row);
         frame.Child(content);frame.Background(clear());
         AutomationProperties::SetAutomationId(frame,L"canvas-action-bar");copyName(data,frame,data->copyCaption(L"color",L"canvas_actions"));
@@ -176,10 +174,11 @@ struct CanvasActionBar:std::enable_shared_from_this<CanvasActionBar>{
         explain(element.as<Grid>(),button,enabled,str(state,L"tooltip"),str(state,L"disabled_reason"));
         if(auto toggle=button.try_as<Primitives::ToggleButton>())toggle.IsChecked(flag(state,L"selected"));
     }
-    void restore(){
+    void restore(std::vector<Field> const& target,J const& model){
         uint32_t index=0;
-        for(auto list:{L"items",L"completion"})for(auto item:array(view,list))if(index<fields.size())update(fields[index++].element,item.GetObject());
+        for(auto list:{L"items",L"completion"})for(auto item:array(model,list))if(index<target.size())update(target[index++].element,item.GetObject());
     }
+    void restore(){restore(fields,view);}
     hstring signature(J const& next)const{
         std::wstring key=std::wstring(object(next,L"context").Stringify())+L"|"+std::wstring(str(next,L"label"));
         for(auto list:{L"items",L"completion"})for(auto value:array(next,list)){
@@ -193,59 +192,73 @@ struct CanvasActionBar:std::enable_shared_from_this<CanvasActionBar>{
         }
         return hstring(key);
     }
-    void rebuild(){
-        menuOwner.Cancel();
-        row.Children().Clear();row.Children().Append(caption);fields.clear();sizes=J{};placement=L"";
-        caption.Text(str(view,L"label"));caption.Visibility(str(view,L"label").empty()?Visibility::Collapsed:Visibility::Visible);
+    std::shared_ptr<Prepared> prepare(J const& model,hstring const& key){
+        auto next=std::make_shared<Prepared>();next->row.XamlRoot(host.XamlRoot());next->view=model;next->schema=key;next->theme=data->theme();
+        next->row.Orientation(Orientation::Horizontal);next->row.Spacing(gap);
+        next->caption=label(data,str(model,L"label"));next->caption.VerticalAlignment(VerticalAlignment::Center);next->caption.Margin({12,0,8,0});next->caption.Opacity(.8);
+        next->caption.Visibility(str(model,L"label").empty()?Visibility::Collapsed:Visibility::Visible);next->row.Children().Append(next->caption);
+        next->more=button(data,L"",[weak=weak_from_this()]{if(auto self=weak.lock())self->openMenu();});tiled(next->more);
+        AutomationProperties::SetAutomationId(next->more,L"canvas-bar-more");copyName(data,next->more,data->copyCommon(L"more"),true);
         auto append=[&](wchar_t const* list){
-            for(auto value:array(view,list)){
+            for(auto value:array(model,list)){
                 auto item=value.GetObject();auto made=field(item);
                 Field entry{flag(item,L"separated")?divided(made):made,made};
-                row.Children().Append(entry.slot);fields.push_back(entry);
+                next->row.Children().Append(entry.slot);next->fields.push_back(entry);
             }
         };
-        append(L"items");row.Children().Append(more);append(L"completion");
-        surface.Fill(data->glass(L"panel"));
-        more.Content(face(L"more",data->theme(),false));
+        append(L"items");next->row.Children().Append(next->more);append(L"completion");
+        next->more.Content(face(L"more",data->theme(),false));return next;
     }
     void Apply(J const& state){
         auto value=state.GetNamedValue(L"canvas_bar",JsonValue::CreateNullValue());
         if(value.ValueType()!=JsonValueType::Object){
-            if(view.Size()){view=J{};schema=L"";placement=L"";++request;bounds=J{};menuOwner.Cancel();present(false);}
+            if(view.Size()||pending){view=J{};pending.reset();schema=L"";placement=L"";++request;bounds=J{};menuOwner.Cancel();present(false);}
             return;
         }
         auto next=value.GetObject();auto key=signature(next);
-        view=next;
-        if(key!=schema||theme!=data->theme()){schema=key;theme=data->theme();rebuild();}
-        restore();
-        auto located=next.Stringify()+L"|"+object(data->model,L"layout").Stringify();
+        if(key==schema&&theme==data->theme()){pending.reset();view=next;restore();}
+        else{
+            if(!pending||pending->schema!=key||pending->theme!=data->theme())pending=prepare(next,key);
+            else if(pending->view.Stringify()!=next.Stringify())pending->sizes=J{};
+            pending->view=next;restore(pending->fields,next);
+        }
+        auto located=next.Stringify()+L"|"+object(data->model,L"layout").Stringify()+L"|"+data->theme();
         if(located!=placement){placement=located;place();}
     }
-    J measure(){
+    J measure(std::shared_ptr<Prepared> const& prepared={}){
+        auto const& measuredFields=prepared?prepared->fields:fields;auto measuredView=prepared?prepared->view:view;
+        auto measuredCaption=prepared?prepared->caption:caption;auto measuredMore=prepared?prepared->more:more;
         std::vector<double> widths;
         double height=0;
         auto extent=[&](FrameworkElement const& element){element.Measure({INFINITY,INFINITY});height=std::max(height,double(element.DesiredSize().Height));return double(element.DesiredSize().Width);};
-        for(auto const& item:fields){item.slot.Visibility(Visibility::Visible);widths.push_back(extent(item.slot));}
-        auto count=array(view,L"items").Size();
+        for(auto const& item:measuredFields){item.slot.Visibility(Visibility::Visible);widths.push_back(extent(item.slot));}
+        auto count=array(measuredView,L"items").Size();
         A itemWidths,completionWidths;
         for(size_t i=0;i<widths.size();++i)(i<count?itemWidths:completionWidths).Append(N(widths[i]));
-        return O({{L"label",N(caption.Visibility()==Visibility::Visible?extent(caption):0)},
-            {L"items",itemWidths},{L"completion",completionWidths},{L"more",N(extent(more))},
+        return O({{L"label",N(measuredCaption.Visibility()==Visibility::Visible?extent(measuredCaption):0)},
+            {L"items",itemWidths},{L"completion",completionWidths},{L"more",N(extent(measuredMore))},
             {L"height",N(std::max(height,tile))},{L"gap",N(gap)},{L"padding",N(0)}});
     }
+    void install(std::shared_ptr<Prepared> const& prepared,J const& result){
+        if(prepared){
+            menuOwner.Cancel();view=prepared->view;sizes=prepared->sizes;schema=prepared->schema;theme=prepared->theme;
+            row=prepared->row;caption=prepared->caption;more=prepared->more;fields=prepared->fields;pending.reset();
+            content.Children().SetAt(1,row);surface.Fill(data->glass(L"panel"));restore();
+        }
+        bounds=object(result,L"bounds");shown=size_t(num(result,L"items"));
+        for(size_t i=0;i<fields.size()&&i<array(view,L"items").Size();++i)fields[i].slot.Visibility(i<shown?Visibility::Visible:Visibility::Collapsed);
+        present(bounds.Size()!=0);
+    }
     void place(){
-        if(!view.Size()){present(false);return;}
-        if(!sizes.Size())sizes=measure();
-        auto measured=J::Parse(sizes.Stringify());measured.Insert(L"context",context());
+        auto prepared=pending;auto model=prepared?prepared->view:view;
+        if(!model.Size()){present(false);return;}
+        auto& dimensions=prepared?prepared->sizes:sizes;if(!dimensions.Size())dimensions=measure(prepared);
+        auto measured=J::Parse(dimensions.Stringify());measured.Insert(L"context",object(model,L"context"));
         auto query=O({{L"type",S(L"canvas_bar_layout")},{L"measure",measured}});
         auto serial=++request;auto weak=weak_from_this();
-        QueryWorkspace(data->query,query,[weak,serial](J reply){
+        QueryWorkspace(data->query,query,[weak,serial,prepared](J reply){
             auto self=weak.lock();if(!self||serial!=self->request)return;
-            auto result=object(reply,L"result");
-            self->bounds=object(result,L"bounds");self->shown=size_t(num(result,L"items"));
-            for(size_t i=0;i<self->fields.size()&&i<array(self->view,L"items").Size();++i)
-                self->fields[i].slot.Visibility(i<self->shown?Visibility::Visible:Visibility::Collapsed);
-            self->present(self->bounds.Size()!=0);
+            self->install(prepared,object(reply,L"result"));
         });
     }
     void present(bool placed){

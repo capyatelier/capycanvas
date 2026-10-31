@@ -52,10 +52,7 @@ void iconAt(Canvas const& root,std::shared_ptr<WorkspaceData> const& data,hstrin
 void previewAt(Canvas const& root,std::shared_ptr<WorkspaceData> const& data,int id,Point center,Size size,double opacity=1){Image image;image.Source(BrushPreview(id,data->theme()));image.Stretch(Stretch::Fill);image.Opacity(opacity);image.IsHitTestVisible(false);place(image,center,size);root.Children().Append(image);}
 void retire(Part& part){
     if(part.retired||!part.inspector)return;part.retired=true;
-    auto visual=ElementCompositionPreview::GetElementVisual(part.inspector->root);auto compositor=visual.Compositor();
-    auto surface=compositor.CreateVisualSurface();surface.SourceVisual(visual);surface.SourceSize({part.size.Width,part.size.Height});
-    auto snapshot=compositor.CreateSpriteVisual();snapshot.Size({part.size.Width,part.size.Height});snapshot.Brush(compositor.CreateSurfaceBrush(surface));
-    part.art.Children().Clear();ElementCompositionPreview::SetElementChildVisual(part.art,snapshot);
+    part.art.IsHitTestVisible(false);
 }
 void shadow(Record const& record,Part& part){
     if(part.key==L"face"&&str(record.view,L"kind")==L"layers"){part.shadow.Children().Clear();return;}
@@ -192,7 +189,7 @@ void WorkspaceBubbles::Impl::update(std::shared_ptr<Record> const& r,J const& pa
         live.insert(key);auto& p=r->parts[key];if(!p){p=std::make_shared<Part>(key,(key==L"face"||key==L"badge")&&!r->parts.contains(L"card")?1:0);
             p->root.RenderTransform(p->transform);p->shadow.IsHitTestVisible(false);p->selection.IsHitTestVisible(false);p->hover.IsHitTestVisible(false);p->decorations.IsHitTestVisible(false);p->art.IsHitTestVisible(key==L"card"||key==L"pill");p->root.Children().Append(p->shadow);p->root.Children().Append(p->ink);p->root.Children().Append(p->decorations);p->ink.Children().Append(p->background);p->ink.Children().Append(p->selection);p->ink.Children().Append(p->hover);p->ink.Children().Append(p->art);r->root.Children().Append(p->root);
         }
-        if(p->retired){ElementCompositionPreview::SetElementChildVisual(p->art,nullptr);p->art.Children().Append(p->cardHost);p->retired=false;p->contentDirty=true;p->appearance.snap(0);}
+        if(p->retired){p->art.IsHitTestVisible(true);p->retired=false;p->contentDirty=true;p->appearance.snap(0);}
         if(key==L"halo"&&p->appearance.target==0)p->appearance.snap(0);
         p->contentDirty=p->contentDirty||p->data.Stringify()!=value.Stringify();p->order=++order;p->data=value;p->radius=radius;p->squircle=squircle;p->glass=glass;p->fromScale=from;
         bool tween=tweenBeads&&prefix(key,L"bead:");

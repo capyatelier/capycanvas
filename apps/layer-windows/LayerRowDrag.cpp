@@ -293,9 +293,14 @@ struct LayerRowDrag::Impl:std::enable_shared_from_this<Impl>{
         auto owner=view.lock();auto destination=hit;auto document=epoch;auto sourceId=id;
         if(trace)lastRelease=O({{L"source",N(id)},{L"commit",B(commit)},{L"generation",N(double(generation))},
             {L"target",normalizedTarget>=0?N(normalizedTarget):JsonValue::CreateNullValue()},{L"surface",S(hit&&hit->thumbnail?L"thumbnail":L"row")},{L"position",S(placement)}});
-        clear(true);
-        if(commit&&owner)owner->data->dispatchDocument(layerAction(O({{L"op",S(L"drop")},{L"id",N(sourceId)},
-            {L"target",N(destination->id)},{L"fraction",N((destination->zone+.5)/4)},{L"surface",S(destination->thumbnail?L"thumbnail":L"row")}})),document);
+        if(commit&&owner){
+            timer.Stop();release();if(pointer)owner->data->pointerCancels.Forget(pointer.PointerId(),this);pointer=nullptr;busy=true;
+            auto action=layerAction(O({{L"op",S(L"drop")},{L"id",N(sourceId)},
+                {L"target",N(destination->id)},{L"fraction",N((destination->zone+.5)/4)},{L"surface",S(destination->thumbnail?L"thumbnail":L"row")}}));
+            preview->Commit([data=owner->data,action,document](std::function<void()> ready){data->dispatchDocument(action,document,std::move(ready));},
+                [weak=weak_from_this()]{if(auto self=weak.lock())self->clear(true);});
+            publish();
+        }else clear(true);
     }
     void query(){
         if(!dragging||busy||!hit||hit==answered){complete();return;}

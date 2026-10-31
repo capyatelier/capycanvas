@@ -3,6 +3,7 @@
 #include "WorkspaceGeometry.h"
 #include "WorkspaceQuery.h"
 #include "NativeMenus.h"
+#include "NativePresentation.h"
 #include <chrono>
 
 using namespace CapyUi;
@@ -24,6 +25,7 @@ struct HeaderInput::Impl:std::enable_shared_from_this<Impl>{
     std::optional<uint32_t> pointer;
     Input::Pointer contact{nullptr};
     PointerGesture recognizer;
+    NativePresentation presentation;
     NativeInput::PointerDeviceType device=NativeInput::PointerDeviceType::Mouse;
     Microsoft::UI::Dispatching::DispatcherQueueTimer timer{nullptr};
     MenuFlyout menu{nullptr};
@@ -32,7 +34,7 @@ struct HeaderInput::Impl:std::enable_shared_from_this<Impl>{
     HWND owner=nullptr;
     uint32_t selected=0;
     uint64_t generation=0;
-    bool editing=false,dragging=false,starting=false,started=false,busy=false,ending=false,cancelled=false;
+    bool editing=false,dragging=false,starting=false,started=false,busy=false,ending=false,cancelled=false,committing=false;
     bool dirty=false,held=false,recognizing=false,releasing=false,workspaceMenu=false,keepMenu=false,normalContact=false,released=false;
     bool trace=GetEnvironmentVariableW(L"CAPY_TRACE_UI",nullptr,0)!=0;
     ~Impl(){if(timer)timer.Stop();if(menu)menu.Hide();}
@@ -60,20 +62,21 @@ struct HeaderInput::Impl:std::enable_shared_from_this<Impl>{
         pointer.reset();contact=nullptr;pressedPath.clear();stopRecognition();
     }
     void clear(){
-        release();++generation;starting=started=busy=ending=cancelled=dragging=dirty=held=normalContact=released=false;
+        presentation.Cancel();release();++generation;starting=started=busy=ending=cancelled=dragging=dirty=held=normalContact=released=committing=false;
         dragCursor(root,false,false);
         source=J{};beginRequest=J{};preview=J{};timer.Stop();chrome(position,false);notify();
     }
     bool cancel(hstring reason=L"cancel"){
         if(!active()&&!menuOwner.Active())return false;
         if(trace)lastCancel=O({{L"reason",S(reason)},{L"source",source},{L"captured",B(captured(root))},{L"dragging",B(dragging)}});
+        if(committing){hideMenu();clear();return true;}
         cancelled=true;hideMenu();release();preview=J{};
         if(busy||started){ending=true;cancelled=true;pump();notify();}
         else clear();
         return true;
     }
     void deferCancel(){
-        if(!active()&&!menuOwner.Active())return;
+        if(committing||(!active()&&!menuOwner.Active()))return;
         // Capture changes are forbidden while XAML is arranging/unloading.
         // Reject a release immediately, then retire capture on the dispatcher.
         cancelled=true;auto serial=generation;
@@ -143,8 +146,11 @@ struct HeaderInput::Impl:std::enable_shared_from_this<Impl>{
                 }else if(finish){
                     bool commit=!self->cancelled&&self->editable()&&self->focused()&&self->current();
                     auto action=result.ValueType()==JsonValueType::Object?result.GetObject():J{};
-                    self->clear();
-                    if(commit&&action.Size())self->data->dispatch(action);
+                    if(commit&&action.Size()){
+                        self->committing=true;self->timer.Stop();
+                        self->data->dispatch(action,[weak,serial]{if(auto self=weak.lock();self&&self->generation==serial)
+                            self->presentation.AfterLayout([weak,serial]{if(auto self=weak.lock();self&&self->generation==serial)self->clear();});});
+                    }else self->clear();
                     return;
                 }else if(!self->ending){
                     self->preview=result.ValueType()==JsonValueType::Object?result.GetObject():J{};
@@ -332,7 +338,7 @@ void HeaderInput::Context(uint32_t id,FrameworkElement const& invoking){
 }
 void HeaderInput::Configure(J const& model,bool editing,J const& request){
     auto identity=model.Stringify()+request.Stringify();
-    if((impl->identity!=identity||impl->editing!=editing)&&str(impl->source,L"kind")!=L"capy"
+    if(!impl->committing&&(impl->identity!=identity||impl->editing!=editing)&&str(impl->source,L"kind")!=L"capy"
         &&(impl->editing!=editing||!impl->workspaceMenu||impl->active()))impl->cancel(L"configuration_changed");
     impl->model=model;impl->configuration=request;impl->identity=identity;impl->editing=editing;
     impl->refreshWorkspaceMenu();

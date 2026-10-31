@@ -1,10 +1,12 @@
-﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('touch','pen','mouse')][string]$Device='touch',[switch]$Overflow,[ValidateSet('dark','light')][string]$Theme='dark',[switch]$ReorderOnly,[switch]$ContextHoldOnly,[switch]$SwipeCleanupOnly,[ValidateSet('drag','cancel','escape')][string]$ContextEnding)
+﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('touch','pen','mouse')][string]$Device='touch',[switch]$Overflow,[ValidateSet('dark','light')][string]$Theme='dark',[switch]$ReorderOnly,[switch]$HandoffOnly,[switch]$ContextHoldOnly,[switch]$SwipeCleanupOnly,[ValidateSet('drag','cancel','escape')][string]$ContextEnding)
 $ErrorActionPreference='Stop'
-if(@($ReorderOnly,$ContextHoldOnly,$SwipeCleanupOnly).Where({$_}).Count -gt 1){throw 'Choose one focused switcher scope'}
+if($HandoffOnly){$Device='mouse';$Theme='dark'}
+if(@($ReorderOnly,$HandoffOnly,$ContextHoldOnly,$SwipeCleanupOnly).Where({$_}).Count -gt 1){throw 'Choose one focused switcher scope'}
 if(($ReorderOnly -or $ContextHoldOnly -or $SwipeCleanupOnly) -and $Overflow){throw 'Overflow is a separate switcher scope'}
 if(($ContextHoldOnly -or $SwipeCleanupOnly) -and $Device -eq 'mouse'){throw 'Focused custom row contacts require touch or pen'}
 if($ContextEnding -and !$ContextHoldOnly){throw 'ContextEnding requires ContextHoldOnly'}
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
+. (Join-Path $PSScriptRoot 'ComposedFrames.ps1')
 $CapyPopups=$true
 Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
 if($Device -eq 'mouse'){Add-Type -Path (Join-Path $PSScriptRoot 'PrivateWorkspaceLease.cs')}
@@ -895,7 +897,10 @@ function No-Drop([switch]$Outside){
 function Drag([switch]$Grip,[switch]$Hold,[switch]$Cancel){
     $source=Source-Id;$saved=@((Storage).order);$revision=(Storage).switcher_revision
     $target=Point $saved[0] -Top
-    Press $source -Grip:$Grip
+    if($HandoffOnly){
+        $origin=Point $source -Grip;$sourceBounds=(Control ('workspace-manager-row-'+$source) -Arranged).Current.BoundingRectangle;$target.x=$origin.x
+        [CapyRowPointer]::Down($Device,$origin.x,$origin.y)
+    }else{Press $source -Grip:$Grip}
     if($Hold){
         Wait-Until {(Gesture).phase -eq 'held'} "$Device hold was not recognized" 4
         if(!(Find 'workspace-manager-move-up')){throw 'Hold did not open a native context menu'}
@@ -927,9 +932,26 @@ function Drag([switch]$Grip,[switch]$Hold,[switch]$Cancel){
         $cancellation|ConvertTo-Json|Set-Content (Join-Path $run 'cancellation.json')
         Preview-Intact;Order-Intact $saved $revision
     }else{
-        [CapyRowPointer]::Up()
+        $sample=$null
+        if($HandoffOnly){
+            $bounds=(Control 'workspace-manager-items' -Arranged).Current.BoundingRectangle
+            $area=[Drawing.Rectangle]::new([int]$bounds.Left,[int]$bounds.Top,[int]$bounds.Width,[int]$bounds.Height)
+            $ghost=[Drawing.Rectangle]::FromLTRB([int][Math]::Floor($sourceBounds.Left+$target.x-$origin.x-$area.Left),[int][Math]::Floor($sourceBounds.Top+$target.y-$origin.y-$area.Top),[int][Math]::Ceiling($sourceBounds.Right+$target.x-$origin.x-$area.Left),[int][Math]::Ceiling($sourceBounds.Bottom+$target.y-$origin.y-$area.Top))
+            $excluded=[Drawing.Rectangle]::Intersect($ghost,[Drawing.Rectangle]::new(0,0,$area.Width,$area.Height))
+            $sample=Sample-Frames $area {param($i)if($i -eq 3){[CapyRowPointer]::Up()}}
+        }else{[CapyRowPointer]::Up()}
         Wait-Until {(Storage).switcher_revision -gt $revision} 'Drop was not persisted'
         Settled;Preview-Intact
+        if($sample){
+            $folder=Join-Path $run 'row-release';[IO.Directory]::CreateDirectory($folder)|Out-Null
+            $null=[TabFrames]::DwmFlush();$final=[TabFrames]::Grab($area.Left,$area.Top,$area.Width,$area.Height)
+            try{
+                $final.Save((Join-Path $folder 'final.png'));$envelope=[TabFrames+Envelope]::new($sample.frames[2],$final);$scores=@()
+                for($i=0;$i -lt $sample.frames.Count;$i++){$sample.frames[$i].Save((Join-Path $folder ('frame-{0:D3}.png' -f $i)));$scores+=@{frame=$i;invalid_pixels=$envelope.Difference($sample.frames[$i],$excluded)}}
+                $script:handoffScores=$scores
+                @{area=$area;source_bounds=$sourceBounds;origin=$origin;target=$target;excluded_ghost=$excluded;frequency=[Diagnostics.Stopwatch]::Frequency;action_frame=3;times=$sample.times;scores=$scores;source=$source;before=$saved;after=(Storage).order;gesture=Gesture}|ConvertTo-Json -Depth 30|Set-Content (Join-Path $folder 'frames.json')
+            }finally{$final.Dispose();foreach($frame in $sample.frames){$frame.Dispose()}}
+        }
         if((Storage).switcher_revision -ne $revision+1 -or (Storage).order[0] -ne $source){throw 'Drop did not commit one reorder'}
     }
     if(Find 'workspace-manager-move-up'){throw 'Finished drag opened the grip click menu'}
@@ -951,6 +973,14 @@ try {
     if(!(Find ('workspace-manager-current-'+$active))){throw 'Current workspace checkmark is missing'}
     $wrong=Find ('workspace-manager-current-'+$preview)
     if($wrong -and !$wrong.Current.IsOffscreen){throw 'Dialog preview moved the current workspace checkmark'}
+    if($HandoffOnly){
+        $script:gestureCase='row-handoff';$script:case=$script:gestureCase
+        Drag -Grip
+        Choose 'Cancel';Closed;Close
+        $bad=@($script:handoffScores|Where-Object {$_.frame -ge 3 -and $_.invalid_pixels -gt 8})
+        if($bad.Count){throw "Workspace release exposed an intermediate native row outside its ghost in frames $($bad.frame -join ',')"}
+        return
+    }
     if($ReorderOnly){
         $script:gestureCase='reorder-grip';$script:case=$script:gestureCase
         Drag -Grip

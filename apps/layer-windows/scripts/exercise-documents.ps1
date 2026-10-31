@@ -1,4 +1,4 @@
-﻿param([Parameter(Mandatory)][string]$Executable,[string]$DebuggerPath,[switch]$RecoverGpu,[switch]$FailGpu,[ValidateSet('full','new-drawing','new-drawing-problem','paper-color','gpu-recovery','gpu-unavailable','color-workflows','color-workflows-light','native-writeback','native-writeback-light')][string]$Journey='full')
+﻿param([Parameter(Mandatory)][string]$Executable,[string]$DebuggerPath,[switch]$RecoverGpu,[switch]$FailGpu,[ValidateSet('full','new-drawing','new-drawing-problem','paper-color','gpu-recovery','gpu-unavailable','color-workflows','color-workflows-light','native-writeback','native-writeback-light','retention')][string]$Journey='full')
 $gpuRecovery=$Journey -eq 'gpu-recovery'
 $gpuUnavailable=$Journey -eq 'gpu-unavailable'
 $focusedGpu=$gpuRecovery -or $gpuUnavailable
@@ -9,6 +9,7 @@ if($Journey -notin @('full','gpu-recovery','gpu-unavailable') -and ($RecoverGpu 
 $ErrorActionPreference='Stop'
 $focusedColor=$Journey.StartsWith('color-workflows')
 $nativeWriteback=$Journey.StartsWith('native-writeback')
+$retention=$Journey -eq 'retention'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
 Add-Type -Path (Join-Path $PSScriptRoot 'PackageFixture.cs') -ReferencedAssemblies @(
@@ -75,7 +76,7 @@ $env:CAPY_SMOKE_TEST='1'
 $env:CAPY_TEST_DISPLAY='1'
 $env:CAPY_TEST_PRIMARY='1'
 $stderr=Join-Path $run 'stderr.log'
-if($focusedColor -or $nativeWriteback -or $focusedGpu){[IO.File]::WriteAllText((Settings-File),(@{language=@{Explicit='en'};theme=$(if($Journey.EndsWith('-light')){'light'}else{'dark'})}|ConvertTo-Json -Depth 4))}
+if($focusedColor -or $nativeWriteback -or $focusedGpu -or $retention){[IO.File]::WriteAllText((Settings-File),(@{language=@{Explicit='en'};theme=$(if($Journey.EndsWith('-light')){'light'}else{'dark'})}|ConvertTo-Json -Depth 4))}
 $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError $stderr
 $null=$review.Handle
 [IO.File]::WriteAllText((Join-Path $repo 'artifacts/windows/document-ui-review.pid'),[string]$review.Id)
@@ -914,7 +915,7 @@ if($focusedGpu -or $nativeWriteback){
 }
 if($Journey -eq 'paper-color'){Test-PaperColorReopen}
 elseif($Journey -eq 'new-drawing-problem'){Test-NewDrawingProblem 'dark'}
-elseif($focusedColor -or $focusedGpu){New-FocusedDrawing}elseif(!$nativeWriteback){New-Journey 'dark' -Full}
+elseif($focusedColor -or $focusedGpu -or $retention){New-FocusedDrawing}elseif(!$nativeWriteback){New-Journey 'dark' -Full}
 if($Journey -in @('new-drawing','new-drawing-problem','paper-color')){
     Request-Close;Wait-Closed 'New drawing review close did not finish'
     if((Get-Item -LiteralPath $stderr).Length){throw 'New drawing native review reported stderr'}
@@ -1176,6 +1177,113 @@ if($nativeWriteback){
     try{Native-Writeback}finally{[CapyDocumentControls]::SetThreadDpiAwarenessContext($context)|Out-Null}
     return
 }
+function Retention-ScrollProvider($Control){
+    $dialog=Owned 'document-workflow';$walker=[System.Windows.Automation.TreeWalker]::ControlViewWalker;$scroll=$null
+    for($item=$walker.GetParent($Control);$item -and $item -ne $dialog;$item=$walker.GetParent($item)){
+        $pattern=$null;if($item.TryGetCurrentPattern([System.Windows.Automation.ScrollPattern]::Pattern,[ref]$pattern) -and $pattern.Current.VerticallyScrollable){$scroll=$pattern}
+    }
+    $scroll
+}
+function Retention-Focus {
+    $focused=[System.Windows.Automation.AutomationElement]::FocusedElement
+    if($focused){$focused.GetRuntimeId() -join ':'}
+}
+function Retention-State([string]$FieldId) {
+    $dialog=Owned 'document-workflow';$name=$dialog.FindFirst([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,$FieldId))
+    if(!$name){$workflow=(Model).windows_document;return @{request=$workflow.id;serial=$workflow.serial;kind=$workflow.kind;stage=$workflow.stage;dialog=($dialog.GetRuntimeId() -join ':');field=$null;value=$null;focus=$false;focused=(Retention-Focus);scroll=$null}}
+    $provider=Retention-ScrollProvider $name;$scroll=if($provider){$provider.Current.VerticalScrollPercent}else{$null}
+    $value=$null;$pattern=$null
+    if($name.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern,[ref]$pattern)){$value=$pattern.Current.Value}
+    else{$selected=$name.GetCurrentPattern([System.Windows.Automation.SelectionPattern]::Pattern).Current.GetSelection();if($selected.Count){$value=$selected[0].Current.AutomationId}}
+    $workflow=(Model).windows_document
+    @{request=$workflow.id;serial=$workflow.serial;kind=$workflow.kind;stage=$workflow.stage;preset_index=$workflow.details.presets.index;recipe_format=$workflow.details.recipe.format;dialog=($dialog.GetRuntimeId() -join ':');field=($name.GetRuntimeId() -join ':');value=$value;focus=$name.Current.HasKeyboardFocus;focused=(Retention-Focus);scroll=$scroll}
+}
+function Retention-Frames([string]$Name,[scriptblock]$Operation,[string]$FieldId='export-preset-name',[string]$PixelId='export-preset-name',[scriptblock]$Acknowledged,$FocusTarget){
+    $field=Owned $FieldId;$field.SetFocus()
+    Wait-Until {$field.Current.HasKeyboardFocus} 'Export preset draft did not receive focus'
+    $before=Retention-State $FieldId;$allowedFocus=if($FocusTarget){$FocusTarget.GetRuntimeId() -join ':'}else{$null};$bounds=(Owned $PixelId).Current.BoundingRectangle
+    $area=[Drawing.Rectangle]::FromLTRB([int][Math]::Floor($bounds.Left),[int][Math]::Floor($bounds.Top),[int][Math]::Ceiling([Math]::Min($bounds.Right,$bounds.Left+90)),[int][Math]::Ceiling($bounds.Bottom))
+    $folder=Join-Path $run ('retention-'+$Name);[IO.Directory]::CreateDirectory($folder)|Out-Null
+    $sample=Sample-Frames $area {param($i)if($i -eq 3){& $Operation}}
+    try{
+        for($i=0;$i -lt $sample.frames.Count;$i++){$sample.frames[$i].Save((Join-Path $folder ('frame-{0:D3}.png' -f $i)))}
+        Wait-Until {$workflow=(Model).windows_document;$workflow.id -eq $before.request -and $workflow.serial -gt $before.serial -and (Find-Id 'document-workflow') -and (!$Acknowledged -or (& $Acknowledged $workflow))} 'Document action did not acknowledge its same-stage request'
+        $after=Retention-State $FieldId;$envelope=[TabFrames+Envelope]::new($sample.frames[2],$sample.frames[2]);$bad=@();$scores=@()
+        for($i=0;$i -lt $sample.frames.Count;$i++){
+            $changed=$envelope.Difference($sample.frames[$i]);$scores+=@{frame=$i;changed_pixels=$changed}
+            if($i -ge 3 -and $changed -gt 8){$bad+=@($i)}
+        }
+        $failures=@();if($bad.Count){$failures+='unchanged draft pixels disappeared or moved'}
+        foreach($key in @('request','kind','stage','dialog','field','value','scroll')){if($before[$key] -ne $after[$key]){$failures+="retained $key changed"}}
+        if($after.focused -ne $before.field -and (!$allowedFocus -or $after.focused -ne $allowedFocus)){$failures+='focus left the retained field and invoked control'}
+        $result=@{action=$Name;before=$before;after=$after;allowed_focus=$allowedFocus;area=@($area.Left,$area.Top,$area.Width,$area.Height);action_frame=3;frequency=[Diagnostics.Stopwatch]::Frequency;times=$sample.times;scores=$scores;invalid=$bad;failures=$failures}
+        $result|ConvertTo-Json -Depth 10|Set-Content (Join-Path $folder 'frames.json');$result
+    }finally{foreach($image in $sample.frames){$image.Dispose()}}
+}
+function Retention-Profiles {
+    $details=(Model).windows_document.details
+    if($details.PSObject.Properties['profile_library']){@($details.profile_library)}else{@($details.profiles)}
+}
+function Test-ProfileRetention {
+    $icc=Join-Path $run 'retention-profile.icc';Write-ProfileFixture $icc
+    File-Command 'document_properties'
+    Wait-Until {(Model).windows_document.kind -eq 'properties'} 'Profile retention Properties did not open'
+    (Control 'PrimaryButton' -Within (Control 'document-workflow') -Arranged).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+    Wait-Until {(Find-Id 'proof-profile')} 'Profile retention proof setup did not open'
+    Invoke-Control (Model).windows_document.details.feature_copy.profile.add_profile_dialog
+    Picker 'Open';Choose-Path $icc
+    Wait-Until {(Find-Id 'proof-profile') -and @((Model).windows_document.details.profiles).Count -eq 1} 'Private retention ICC import did not finish'
+    Invoke-Control (Model).windows_document.details.feature_copy.profile.manage
+    Wait-Until {(Find-Id 'document-profile-library')} 'Profile retention library did not open'
+    $results=@()
+    foreach($index in 1..2){
+        $before=@(Retention-Profiles)[0].visible
+        if($before -ne ($index -eq 1)){throw 'Profile retention did not begin with the expected visibility'}
+        $button=Owned 'profile-visibility'
+        $results+=Retention-Frames ("visibility-$index") {$button.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()} 'document-profile-library' 'profile-library-help' -FocusTarget $button
+        if(@(Retention-Profiles)[0].visible -ne ($index -eq 2)){$results[-1].failures+='profile visibility did not reach its requested value'}
+    }
+    Invoke-Control 'Done';Wait-Until {(Find-Id 'proof-profile')} 'Profile retention library did not return to proof setup'
+    Invoke-Control 'Cancel';Wait-Until {!(Model).windows_document} 'Profile retention proof setup did not close'
+    $results
+}
+function Retention-Draft {
+    if(!(Find 'export-preset-name' -Within $root -Visible)){Scroll-Position (Control 'export-format' -Arranged) 100}
+    Type-Text 'export-preset-name' 'Retention draft preserved text'
+}
+function Test-ExportRetention {
+    File-Command 'export_document' -OptionsOnly
+    $script:scope=$root
+    Retention-Draft
+    $copy=(Model).windows_document.details.feature_copy.export
+    $save=Named-Control $copy.save_preset
+    $results=@(Retention-Frames 'save' {$save.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()} -FocusTarget $save -Acknowledged {param($view)$view.details.presets.index -ge 4 -and $view.details.presets.names -contains 'Retention draft preserved text'})
+    if(Find 'export-preset-name' -Within $root -Visible){Scroll-Position (Control 'export-preset-name' -Arranged) 0}
+    Combo-Select (Control 'export-format' -Arranged) {$_.Current.Name -like 'JPEG*'}
+    Wait-Until {(Combo-Value (Control 'export-format' -Arranged)) -like 'JPEG*'} 'Retention recipe did not choose JPEG'
+    Retention-Draft
+    $update=Named-Control 'Update'
+    $results+=Retention-Frames 'update' {$update.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()} -FocusTarget $update -Acknowledged {param($view)$view.details.presets.index -ge 4 -and $view.details.recipe.format -eq 'Jpeg'}
+    if(Find 'export-preset-name' -Within $root -Visible){Scroll-Position (Control 'export-preset-name' -Arranged) 0}
+    $preset=Named-Control $copy.preset ([System.Windows.Automation.ControlType]::ComboBox)
+    $builtin=(Model).windows_document.details.presets.names[0]
+    $choice=Combo-Item $preset {$_.Current.Name -eq $builtin}
+    Scroll-Position $preset 100
+    Retention-Draft
+    $results+=Retention-Frames 'get' {$choice.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()} -Acknowledged {param($view)$view.details.presets.index -eq 0 -and $view.details.recipe.format -eq 'Png'}
+    Retention-Draft
+    $reset=Named-Control 'Reset'
+    $results+=Retention-Frames 'reset' {$reset.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()} -FocusTarget $reset -Acknowledged {param($view)$view.details.presets.index -eq 0 -and $view.details.presets.changed -and $view.details.recipe.format -eq 'Png'}
+    Invoke-Control 'Cancel';Wait-Until {!(Model).windows_document} 'Export retention options did not close'
+    $results+=Test-ProfileRetention
+    @{journey=$Journey;cases=$results;evidence=$run}|ConvertTo-Json -Depth 12|Set-Content (Join-Path $run 'retention.json')
+    Request-Close;Wait-Closed 'Export retention drawing did not close'
+    $failed=@($results|Where-Object {$_.failures.Count})
+    if($failed.Count){throw "Export same-stage retention failed: $(($failed|ForEach-Object {$_.action+': '+($_.failures -join ', ')}) -join '; '); captures: $run"}
+    if((Get-Item -LiteralPath $stderr).Length){throw 'Export retention review reported stderr'}
+    @{journey=$Journey;cases=$results.Count;evidence=$run}|ConvertTo-Json
+}
+if($retention){Test-ExportRetention;return}
 if(!$FailGpu -and !$focusedGpu){Color-Workflows}
 if($focusedColor){
     $moveTile=@((Model).panels|Where-Object id -eq 'toolbar')[0].tiles|Where-Object {$_.resolved_control.command -eq 'move'}|Select-Object -First 1

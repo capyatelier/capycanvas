@@ -588,7 +588,10 @@ bool CanvasWindow::StartPrepared(CapyLaunch  prepared) {
         window,[weak=weak_from_this()]{if(auto self=weak.lock())self->ApplyDialogs();});
     root.Children().Append(workspaceStorage->Root());
     workspaceManager=std::make_unique<WorkspaceManagerView>(
-        [weak=weak_from_this()](std::string json){if(auto self=weak.lock())self->Send(std::move(json),CanvasCommandKind::Workspace);},
+        [weak=weak_from_this()](std::string json,std::function<void()> ready){if(auto self=weak.lock()){
+            std::function<void(int32_t)> applied;if(ready)applied=[ready=std::move(ready)](int32_t){ready();};
+            self->Send(std::move(json),CanvasCommandKind::Workspace,std::move(applied));
+        }},
         catalogView,localization,root.XamlRoot(),[weak=weak_from_this()]{if(auto self=weak.lock())self->ApplyDialogs();},
         [weak=weak_from_this()](CanvasQueryKind kind,std::string json,PreviewReply reply){if(auto self=weak.lock())return self->RequestPreviews(kind,std::move(json),std::move(reply));return false;});
     if(auto snapshot=capy_snapshot(host,nullptr)){

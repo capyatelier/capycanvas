@@ -19,6 +19,8 @@ struct Fixture : std::enable_shared_from_this<Fixture> {
         std::string json;
         PreviewReply reply;
         bool query=false;
+        std::function<void()> ready;
+        bool publication=false;
     };
     struct Held {
         PreviewReply reply;
@@ -48,15 +50,12 @@ struct Fixture : std::enable_shared_from_this<Fixture> {
         std::ofstream output(directory/L"failure.txt");output<<message;
     }
     bool isStopping(){std::lock_guard lock(mutex);return stopping;}
-    void snapshot(CapyHost host){
-        CapySnapshotInfo info{};
-        NativeString value(capy_snapshot(host,&info),capy_string_free);
-        if(!value||!info.full)return;
+    void writeSnapshot(std::string const& bytes){
         auto path=directory/(L"ui-state-"+std::to_wstring(GetCurrentProcessId())+L"-1.json");
         auto temporary=path;temporary+=L".tmp";
         {
             std::ofstream output(temporary,std::ios::binary);
-            output<<"{\"process_id\":"<<GetCurrentProcessId()<<",\"window_id\":1,\"model\":"<<value.bytes<<"}";
+            output<<"{\"process_id\":"<<GetCurrentProcessId()<<",\"window_id\":1,\"model\":"<<bytes<<"}";
             if(!output)throw std::runtime_error("Could not write layer fixture snapshot");
         }
         auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(2);
@@ -67,8 +66,17 @@ struct Fixture : std::enable_shared_from_this<Fixture> {
                 throw std::runtime_error("Could not publish layer fixture snapshot: Win32 "+std::to_string(error));
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
-        dispatcher.TryEnqueue([weak=weak_from_this(),bytes=std::move(value.bytes)]{
-            if(auto self=weak.lock();self&&!self->isStopping())self->present(bytes);
+    }
+    void publish(std::string bytes){
+        std::lock_guard lock(mutex);
+        if(!stopping){work.push_back(Work{std::move(bytes),{},false,{},true});wake.notify_one();}
+    }
+    void snapshot(CapyHost host,std::function<void()> ready={}){
+        CapySnapshotInfo info{};
+        NativeString value(capy_snapshot(host,&info),capy_string_free);
+        if(!value||!info.full){if(ready)dispatcher.TryEnqueue(std::move(ready));return;}
+        dispatcher.TryEnqueue([weak=weak_from_this(),bytes=std::move(value.bytes),ready=std::move(ready)]()mutable{
+            if(auto self=weak.lock();self&&!self->isStopping()){self->present(bytes);self->publish(std::move(bytes));if(ready)ready();}
         });
     }
     void present(std::string const& bytes){
@@ -111,9 +119,9 @@ struct Fixture : std::enable_shared_from_this<Fixture> {
         if(stopping)return false;
         work.push_back(Work{std::move(json),std::move(reply),true});wake.notify_one();return true;
     }
-    void action(std::string json){
+    void action(std::string json,std::function<void()> ready={}){
         std::lock_guard lock(mutex);
-        if(!stopping){work.push_back(Work{std::move(json),{},false});wake.notify_one();}
+        if(!stopping){work.push_back(Work{std::move(json),{},false,std::move(ready)});wake.notify_one();}
     }
     void stop(){std::lock_guard lock(mutex);stopping=true;wake.notify_one();}
     void run(){
@@ -169,9 +177,10 @@ struct Fixture : std::enable_shared_from_this<Fixture> {
                     }
                     next=std::move(work.front());work.pop_front();
                 }
+                if(next.publication){writeSnapshot(next.json);continue;}
                 if(!next.query){
                     if(capy_action(host,next.json.c_str())!=0)throw std::runtime_error(NativeString(capy_error()).get());
-                    snapshot(host);
+                    snapshot(host,std::move(next.ready));
                     continue;
                 }
                 PreviewPacket packet(capy_workspace_query(host,next.json.c_str()),capy_preview_free);
@@ -208,6 +217,7 @@ struct Fixture : std::enable_shared_from_this<Fixture> {
             if(auto self=weak.lock())return self->query(kind,std::move(json),std::move(reply));return false;
         };
         data->send=[weak=weak_from_this()](std::string json){if(auto self=weak.lock())self->action(std::move(json));};
+        data->commit=[weak=weak_from_this()](std::string json,bool,std::function<void()> ready){if(auto self=weak.lock())self->action(std::move(json),std::move(ready));};
         RowDefinition controls;controls.Height({1,GridUnitType::Auto});root.RowDefinitions().Append(controls);
         RowDefinition rows;rows.Height({1,GridUnitType::Star});root.RowDefinitions().Append(rows);
         StackPanel buttons;buttons.Orientation(Orientation::Horizontal);

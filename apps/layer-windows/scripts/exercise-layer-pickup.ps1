@@ -1,5 +1,6 @@
-﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('touch','pen','mouse')][string]$Device='touch',[ValidateSet('drawers')][string]$ColumnMode='drawers',[ValidateSet('dark','light')][string]$Theme='dark',[switch]$SwipeOnly,[switch]$PenSwipeOnly,[switch]$HoldOnly,[switch]$KeyboardContextOnly,[switch]$PresentationsOnly,[switch]$ClippedEdgesOnly,[switch]$PendingDropOnly,[string]$DropFixture,[string]$DropRun)
+﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('touch','pen','mouse')][string]$Device='touch',[ValidateSet('drawers')][string]$ColumnMode='drawers',[ValidateSet('dark','light')][string]$Theme='dark',[switch]$SwipeOnly,[switch]$PenSwipeOnly,[switch]$HoldOnly,[switch]$KeyboardContextOnly,[switch]$PresentationsOnly,[switch]$ClippedEdgesOnly,[switch]$PendingDropOnly,[switch]$HandoffOnly,[string]$DropFixture,[string]$DropRun)
 $ErrorActionPreference='Stop'
+if($HandoffOnly){$Device='mouse';$Theme='dark'}
 if($PenSwipeOnly){$SwipeOnly=$true;$Device='pen'}
 if($SwipeOnly -and !$PenSwipeOnly -and !$PSBoundParameters.ContainsKey('Device')){
     foreach($device in @('touch','pen','mouse')){
@@ -9,11 +10,12 @@ if($SwipeOnly -and !$PenSwipeOnly -and !$PSBoundParameters.ContainsKey('Device')
     }
     return
 }
-if(!$PSBoundParameters.ContainsKey('Theme')){
+if(!$HandoffOnly -and !$PSBoundParameters.ContainsKey('Theme')){
     foreach($theme in @('dark','light')){& $PSCommandPath -Executable $Executable -Device $Device -ColumnMode $ColumnMode -Theme $theme -SwipeOnly:$SwipeOnly -HoldOnly:$HoldOnly -KeyboardContextOnly:$KeyboardContextOnly -PresentationsOnly:$PresentationsOnly -ClippedEdgesOnly:$ClippedEdgesOnly -PendingDropOnly:$PendingDropOnly -DropFixture $DropFixture -DropRun $DropRun}
     return
 }
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
+. (Join-Path $PSScriptRoot 'ComposedFrames.ps1')
 $CapyFind='prefer-visible';$CapyPopups=$true
 if(!('CapyRowPointer' -as [type])){Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')}
 $repo=(Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
@@ -309,7 +311,11 @@ function Drag-Row([string]$Id,[double]$Layer,[double]$Target,[switch]$Grip,[swit
             [CapyRowPointer]::Up()
             Invoke 'layer-drop-release'
         }
-        else{[CapyRowPointer]::Up()}
+        elseif($HandoffOnly){
+            $bounds=(Control 'layer-list' -Arranged).Current.BoundingRectangle
+            $area=[Drawing.Rectangle]::new([int]$bounds.Left,[int]$bounds.Top,[int]$bounds.Width,[int]$bounds.Height)
+            $sample=Sample-Frames $area {param($i)if($i -eq 3){[CapyRowPointer]::Up()}}
+        }else{[CapyRowPointer]::Up()}
     }
     $finished=@{state=$null}
     Wait-Until {$finished.state=Gesture;$finished.state.phase -eq 'idle'} 'Layer contact did not finish'
@@ -323,6 +329,17 @@ function Drag-Row([string]$Id,[double]$Layer,[double]$Target,[switch]$Grip,[swit
         if($finished.state.menu_open){throw 'Cancelled row move retained its menu'}
     }else{
         Wait-Until {(Rows) -ne $before} 'Completed layer move did not change order'
+        if($HandoffOnly){
+            $folder=Join-Path $run 'row-release';[IO.Directory]::CreateDirectory($folder)|Out-Null
+            $null=[TabFrames]::DwmFlush();$final=[TabFrames]::Grab($area.Left,$area.Top,$area.Width,$area.Height)
+            try{
+                $final.Save((Join-Path $folder 'final.png'));$envelope=[TabFrames+Envelope]::new($sample.frames[2],$final);$scores=@()
+                for($i=0;$i -lt $sample.frames.Count;$i++){$sample.frames[$i].Save((Join-Path $folder ('frame-{0:D3}.png' -f $i)));$scores+=@{frame=$i;invalid_pixels=$envelope.Difference($sample.frames[$i])}}
+                $script:handoffScores=$scores
+                @{area=$area;frequency=[Diagnostics.Stopwatch]::Frequency;action_frame=3;times=$sample.times;scores=$scores;contact=$script:contact;before=$before;after=Rows;gesture=Gesture}|ConvertTo-Json -Depth 40|Set-Content (Join-Path $folder 'frames.json')
+            }finally{$final.Dispose();foreach($frame in $sample.frames){$frame.Dispose()}}
+        }
+
         $after=Rows
         $current=(Model).state.layer_tools.editing_layer
         if($current.id -ne $editing.id -or $current.mask_selected -ne $editing.mask_selected -or
@@ -515,6 +532,14 @@ try {
     $count=(Model).state.layers.Count;Invoke 'layer-new'
     Wait-Until {(Model).state.layers.Count -eq $count+1} 'New layer did not appear'
     $created=(Model).state.layer_tools.editing_layer.id
+    if($HandoffOnly){
+        $script:case='row-handoff';Drag-Row "layer-$created-drag" $created $paint -Grip
+        [CapyRowPointer]::Dispose()
+        & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Close -DiscardUnsaved
+        $bad=@($script:handoffScores|Where-Object {$_.frame -ge 3 -and $_.invalid_pixels -gt 8})
+        if($bad.Count){throw "Layer release exposed an intermediate row in frames $($bad.frame -join ',')"}
+        return
+    }
     if($ClippedEdgesOnly){
         Check-ClippedEdges
         [CapyRowPointer]::Dispose()

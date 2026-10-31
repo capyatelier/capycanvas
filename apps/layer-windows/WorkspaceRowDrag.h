@@ -10,7 +10,7 @@
 class WorkspaceRowDrag {
 public:
     using Id=winrt::hstring;
-    using Move=std::function<void(Id,std::optional<Id>)>;
+    using Move=std::function<void(Id,std::optional<Id>,std::function<void()>)>;
     WorkspaceRowDrag(winrt::Microsoft::UI::Xaml::Controls::ListView list,
         winrt::Microsoft::UI::Xaml::Controls::Grid surface,
         std::function<bool()> available,Move move,std::function<void()> ended);
@@ -24,6 +24,7 @@ public:
     void Refresh(std::vector<Id> const& order);
     bool FenceSelection()const;
     bool SuppressClick()const;
+    bool Pending()const;
     bool Cancel();
     bool Escape();
 private:

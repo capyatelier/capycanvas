@@ -25,6 +25,7 @@ struct Column:std::enable_shared_from_this<Column>{
     bool gpu=false;
     double reported=0;
     bool applying=false;
+    uint32_t pendingScroll=0;
     std::array<float,4> corners{SurfaceRadius,SurfaceRadius,SurfaceRadius,SurfaceRadius},sourceRadii{SurfaceRadius,SurfaceRadius,SurfaceRadius,SurfaceRadius};
     std::array<float,6> surfaceShape{};
     void shape(float width,float height){
@@ -46,7 +47,10 @@ struct Column:std::enable_shared_from_this<Column>{
         scroll.ViewChanged([weak](auto&&,auto&&){if(auto self=weak.lock()){
             auto offset=self->scroll.VerticalOffset();
             if(!self->applying&&std::abs(offset-self->reported)>.25){
-                self->reported=offset;self->data->dispatch(O({{L"type",S(L"measure_column_scroll")},{L"column",N(self->id)},{L"offset",N(offset)}}));
+                self->reported=offset;++self->pendingScroll;
+                self->data->dispatch(O({{L"type",S(L"measure_column_scroll")},{L"column",N(self->id)},{L"offset",N(offset)}}),[weak]{
+                    if(auto self=weak.lock())--self->pendingScroll;
+                });
             }
         }});
         frame.Children().Append(scroll);
@@ -72,10 +76,8 @@ struct Column:std::enable_shared_from_this<Column>{
         auto facing=str(source,L"direction"),joined=str(object(source,L"anchor"),L"origin");
         shape(float(num(bounds,L"width")),float(num(bounds,L"height")));
         place(grip,local(object(geometry,L"grip"),bounds));place(scroll,local(content,bounds));
-        double offset=0;
-        for(auto entry:array(object(object(data->state,L"workspace"),L"layout"),L"column_scroll")){
-            auto pair=entry.GetArray();if(pair.Size()==2&&pair.GetNumberAt(0)==id)offset=pair.GetNumberAt(1);
-        }
+        auto groups=array(geometry,L"groups");
+        double offset=groups.Size()?std::max(0.,num(content,L"y")-num(object(groups.GetObjectAt(0),L"bounds"),L"y")):0;
         hstring origin;
         for(auto value:array(object(data->state,L"customization"),L"column_drawers")){
             auto anchor=object(value.GetObject(),L"anchor");
@@ -134,8 +136,7 @@ struct Column:std::enable_shared_from_this<Column>{
             uint32_t index=0;if(!gestures->DeferRemoval(it->second,shared_from_this())&&icons.Children().IndexOf(it->second,index))icons.Children().RemoveAt(index);it=dividers.erase(it);
         }else ++it;
         icons.Width(num(content,L"width"));icons.Height(bottom);
-        reported=offset;
-        if(std::abs(scroll.VerticalOffset()-offset)>.25)scrollVertical(scroll,offset);
+        if(!pendingScroll){reported=offset;if(std::abs(scroll.VerticalOffset()-offset)>.25)scrollVertical(scroll,offset);}
         applying=false;
     }
     void visible(bool shown){fade->apply(background,true,!shown,[weak=weak_from_this()]{if(auto self=weak.lock();self&&self->changed)self->changed();});}

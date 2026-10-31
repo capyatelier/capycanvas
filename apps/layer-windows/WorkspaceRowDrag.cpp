@@ -47,7 +47,7 @@ struct WorkspaceRowDrag::Impl:std::enable_shared_from_this<Impl>{
     NativeInput::PointerDeviceType device=NativeInput::PointerDeviceType::Mouse;
     HWND owner=nullptr;
     std::optional<hstring> before;
-    bool held=false,dragging=false,grip=false,child=false,releasing=false;
+    bool held=false,dragging=false,grip=false,child=false,releasing=false,finishing=false;
     bool ignoreClick=false,suppressContext=false,valid=false,recognizing=false;
     bool trace=GetEnvironmentVariableW(L"CAPY_TRACE_UI",nullptr,0)!=0;
     uint64_t generation=0;
@@ -55,7 +55,7 @@ struct WorkspaceRowDrag::Impl:std::enable_shared_from_this<Impl>{
     std::chrono::steady_clock::time_point tickAt;
     void evidence(){
         if(!trace)return;
-        hstring phase=dragging?L"dragging":held?L"held":pointer?L"pressed":L"idle";
+        hstring phase=finishing?L"finishing":dragging?L"dragging":held?L"held":pointer?L"pressed":L"idle";
         auto value=O({{L"phase",S(phase)},{L"source",source?S(source->id):JsonValue::CreateNullValue()},
             {L"device",S(device==NativeInput::PointerDeviceType::Mouse?L"mouse":device==NativeInput::PointerDeviceType::Pen?L"pen":L"touch")},
             {L"grip",B(grip)},{L"panning",B(panning)},{L"can_drop",B(valid)},{L"before",before?S(*before):JsonValue::CreateNullValue()}});
@@ -75,16 +75,17 @@ struct WorkspaceRowDrag::Impl:std::enable_shared_from_this<Impl>{
             if(auto menu=source->menu.get())menu.Hide();
         }
     }
-    void clear(bool hideMenu){
-        preview->Clear();
-        if(hideMenu)hideMenus();
-        ++generation;source.reset();pointer=nullptr;
-        held=false;dragging=false;valid=false;before.reset();
+    void release(){
         timer.Stop();hint.Visibility(Visibility::Collapsed);
         if(recognizing){recognizing=false;recognizer.CompleteGesture();}
         releasing=true;surface.ReleasePointerCaptures();releasing=false;
         for(auto const& [weak,mode]:scrollModes)if(auto content=weak.get())content.ManipulationMode(mode);
-        scrollModes.clear();path.clear();
+        scrollModes.clear();path.clear();pointer=nullptr;
+    }
+    void clear(bool hideMenu){
+        preview->Clear();
+        if(hideMenu)hideMenus();
+        ++generation;source.reset();held=dragging=valid=finishing=false;before.reset();release();
         ended();deferClick();evidence();
     }
     bool cancel(hstring reason=L"cancel"){
@@ -139,6 +140,7 @@ struct WorkspaceRowDrag::Impl:std::enable_shared_from_this<Impl>{
         menuAt(*source,at,true,grip);evidence();
     }
     void down(PointerRoutedEventArgs const& e){
+        if(finishing){e.Handled(true);return;}
         if(pointer){if(pointer.PointerId()!=e.Pointer().PointerId())cancel();return;}
         ignoreClick=false;suppressContext=false;++generation;
         if(!available())return;
@@ -232,11 +234,13 @@ struct WorkspaceRowDrag::Impl:std::enable_shared_from_this<Impl>{
         }
         bool handled=held||dragging||grip;
         ignoreClick=ignoreClick||handled;
-        // A held release keeps its menu; dragging/cancellation closes it.
-        clear(dragging);
+        if(commit){
+            finishing=true;hideMenus();release();evidence();
+            preview->Commit([move=move,id,destination](std::function<void()> ready){move(id,destination,std::move(ready));},
+                [weak=weak_from_this()]{if(auto self=weak.lock())self->clear(true);});
+        }else clear(dragging);
         if(handled)e.Handled(true);
         if(open)menuAt(menuRow,menuPoint,false,true);
-        if(commit)move(id,destination);
     }
     void tick(){
         if(!pointer)return;
@@ -285,12 +289,13 @@ struct WorkspaceRowDrag::Impl:std::enable_shared_from_this<Impl>{
                 auto epoch=self->generation;
                 self->surface.DispatcherQueue().TryEnqueue([weak,id,epoch]{
                     // Retained rows can be removed/reinserted in one reconciliation.
-                    if(auto owner=weak.lock();owner&&owner->generation==epoch&&owner->source&&owner->source->id==id&&!owner->current())owner->cancel();
+                    if(auto owner=weak.lock();owner&&owner->generation==epoch&&owner->source&&owner->source->id==id&&!owner->finishing&&!owner->current())owner->cancel();
                 });
             }
         });
     }
     void init(){
+        list.ItemContainerTransitions(nullptr);
         hint.Height(2);hint.Background(paletteResource(L"AccentFillColorDefaultBrush"));hint.IsHitTestVisible(false);
         hint.HorizontalAlignment(HorizontalAlignment::Left);hint.VerticalAlignment(VerticalAlignment::Top);
         hint.Visibility(Visibility::Collapsed);AutomationProperties::SetAutomationId(hint,L"workspace-manager-drop");
@@ -336,7 +341,7 @@ struct WorkspaceRowDrag::Impl:std::enable_shared_from_this<Impl>{
         ShortcutKeys(surface,[weak=weak_from_this()](auto&&,KeyRoutedEventArgs const& e){
             if(auto self=weak.lock()){
                 if(e.Key()==Windows::System::VirtualKey::Escape&&self->cancel(L"escape"))e.Handled(true);
-                else if(!self->pointer)self->ignoreClick=false;
+                else if(!self->pointer&&!self->finishing)self->ignoreClick=false;
             }
         });
     }
@@ -353,6 +358,7 @@ void WorkspaceRowDrag::Refresh(std::vector<Id> const& order){
 }
 bool WorkspaceRowDrag::FenceSelection()const{return bool(impl->pointer)||impl->ignoreClick;}
 bool WorkspaceRowDrag::SuppressClick()const{return impl->ignoreClick;}
+bool WorkspaceRowDrag::Pending()const{return impl->finishing;}
 bool WorkspaceRowDrag::Cancel(){return impl->cancel();}
 bool WorkspaceRowDrag::Escape(){
     if(impl->cancel(L"escape"))return true;

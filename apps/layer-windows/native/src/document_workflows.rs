@@ -325,8 +325,8 @@ impl Task {
         json!({"color": DocumentColorCopy::new(localization), "export": ExportCopy::new(localization),
             "profile": ProfileCopy::new(localization), "proof": ProofCopy::new(localization)})
     }
-    fn profile_views(&self) -> Value {
-        json!(self.profiles.iter().map(|entry| {
+    fn profile_views(&self, include_hidden: bool) -> Value {
+        json!(self.profiles.iter().filter(|entry| include_hidden || !self.hidden.contains(&entry.id)).map(|entry| {
             let visible = !self.hidden.contains(&entry.id);
             let mut view = entry.localized_view(&self.localization);
             view["visible"] = json!(visible);
@@ -336,17 +336,20 @@ impl Task {
         }).collect::<Vec<_>>())
     }
     fn describe(&mut self) -> Result<(), String> {
-        if matches!(self.payload, Payload::Profiles) {
+        if matches!(self.payload, Payload::Profiles | Payload::Proof(_)) {
             (self.profiles, self.hidden) = crate::color_storage::library(self.control.cancellation_flag())?;
-        } else if matches!(self.payload, Payload::Proof(_) | Payload::Export { .. } | Payload::Import(_) | Payload::Source(_)) {
+        } else if matches!(self.payload, Payload::Export { .. } | Payload::Import(_) | Payload::Source(_)) {
             self.profiles = crate::color_storage::list(self.control.cancellation_flag())?;
         }
-        let profiles = self.profile_views();
+        let profiles = self.profile_views(!matches!(self.payload,Payload::Proof(_)));
+        let library = matches!(self.payload,Payload::Proof(_)).then(||self.profile_views(true));
         self.details = match &mut self.payload {
             Payload::Profiles => {
                 json!({"profiles":profiles.clone()})
             }
-            Payload::Proof(task) => task.details(profiles.clone())?,
+            Payload::Proof(task) => {
+                let mut details=task.details(profiles.clone())?;details["profile_library"]=library.unwrap();details
+            },
             Payload::Export { task, .. } => {
                 if self.preset_view.is_null() {
                     let view = crate::color_storage::presets(
@@ -871,7 +874,8 @@ impl Task {
             },
             _ => {},
         }
-        if self.details.get("profiles").is_some() { self.details["profiles"] = self.profile_views(); }
+        if self.details.get("profiles").is_some() { self.details["profiles"] = self.profile_views(!matches!(self.payload,Payload::Proof(_))); }
+        if self.details.get("profile_library").is_some() { self.details["profile_library"] = self.profile_views(true); }
         self.details["feature_copy"] = self.feature_copy.clone();
         Ok(())
     }
@@ -916,6 +920,23 @@ mod tests {
     fn ready(task: &mut Task, action: Action) {
         task.work(action);
         assert!(task.error.is_none(), "{}: {:?}", task.kind, task.error);
+    }
+    #[test]
+    fn proof_profile_library_retains_hidden_entries_without_menu_choices() {
+        let mut host=NativeHost::new(Platform::Windows).unwrap();
+        let mut task=begin(&mut host,CommandId::SoftProofSetup);
+        let entry=layer_ui::profile_library::ProfileEntry {
+            id:"hidden-profile".into(),bytes:0,name:"Hidden profile".into(),channels:None,profile:None,
+            issue:Some(layer_ui::ColorFeatureError::ProfileMissing),
+        };
+        task.hidden.push(entry.id.clone());task.profiles.push(entry.clone());
+        let Payload::Proof(proof)=&mut task.payload else {unreachable!()};
+        task.details=proof.details(json!([])).unwrap();task.details["profile_library"]=json!([]);
+        task.set_localization(layer_ui::Localizer::shared(layer_ui::UiLanguage::Japanese)).unwrap();
+        assert_eq!(task.details["profiles"],json!([]));
+        assert_eq!(task.details["profile_library"][0]["id"],json!(entry.id));
+        assert_eq!(task.details["profile_library"][0]["visible"],json!(false));
+        assert!(task.profile_inventory().unwrap().is_empty());
     }
     #[test]
     fn proof_worker_refusal_survives_owner_noop_and_language_refresh() {

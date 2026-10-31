@@ -61,7 +61,7 @@ function Control-Fixture([string]$Fixture,[string[]]$Arguments=@()){
     switch($Fixture){'button-feedback'{'Feedback'} 'sdk-feedback'{'Feedback'} 'scroll-indicators'{'Feedback'} 'navigator-allocation'{'Feedback'} 'popup'{'Popup'} default{$null}}
 }
 function Get-FixtureCompanionArguments([string]$Fixture,[string[]]$Arguments,[scriptblock]$BuildControl){
-    if($Fixture -eq 'layer-pickup' -and '-PendingDropOnly' -notin $Arguments -and '-ClippedEdgesOnly' -notin $Arguments){'-DropFixture';& $BuildControl 'LayerDrop'}
+    if($Fixture -eq 'layer-pickup' -and '-PendingDropOnly' -notin $Arguments -and '-ClippedEdgesOnly' -notin $Arguments -and '-HandoffOnly' -notin $Arguments){'-DropFixture';& $BuildControl 'LayerDrop'}
 }
 $selected = if ($Name) { $Name -split ',' } else { @() }
 $planned = @(Select-Fixtures $runs.Keys $selected)

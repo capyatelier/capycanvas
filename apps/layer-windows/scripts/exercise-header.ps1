@@ -1,4 +1,4 @@
-﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('mouse','pen','touch')][string]$Device='mouse',[ValidateSet('paint','sketch','photo')][string]$Workspace='paint',[switch]$Catalog,[ValidateSet('dark','light')][string]$Theme='dark',[ValidateSet('full','catalog-only','catalog-only-light','background','options','options-light','options-pen','options-touch','menus','menus-light','zen','zen-workspace','parity','parity-light','palette','palette-light')][string]$Journey='full',[switch]$FullscreenOnly,[switch]$FullscreenBaseline)
+﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('mouse','pen','touch')][string]$Device='mouse',[ValidateSet('paint','sketch','photo')][string]$Workspace='paint',[switch]$Catalog,[ValidateSet('dark','light')][string]$Theme='dark',[ValidateSet('full','catalog-only','catalog-only-light','background','options','options-light','options-pen','options-touch','menus','menus-light','zen','zen-workspace','parity','parity-light','palette','palette-light','atomic')][string]$Journey='full',[switch]$FullscreenOnly,[switch]$FullscreenBaseline)
 $ErrorActionPreference='Stop'
 if($FullscreenBaseline){$FullscreenOnly=$true}
 $catalogJourney=$Journey -in @('catalog-only','catalog-only-light')
@@ -770,13 +770,55 @@ function Header-GlyphInk($Image,$Bounds){
     }}
     $ink
 }
-function Check-HeaderPalette {
-    Maximize-DrawingWindow
-    while(@((Model).windows_tabs.tabs).Count -lt 2){
+function New-HeaderDrawings([int]$Count=2){
+    while(@((Model).windows_tabs.tabs).Count -lt $Count){
         & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'File'
         Invoke 'new_document';New-DrawingPixels 64 64;Invoke 'new-drawing-create'
-        Wait-Until {!(Model).state.new_drawing -and (Model).brush_ready} 'Palette fixture drawing did not open' 60
+        Wait-Until {!(Model).state.new_drawing -and (Model).brush_ready} 'Header fixture drawing did not open' 60
     }
+}
+function Check-HeaderAtomic {
+    Maximize-DrawingWindow;New-HeaderDrawings 3;Check-Geometry
+    $failures=@()
+    Edit-Header
+    $source=At 'header-select-1';$zone=(Presentation).geometry.zones[2]
+    $target=Screen @{x=$zone.x+$zone.width*.5;y=$zone.y+$zone.height*.5}
+    $before=HeaderJson
+    [CapyRowPointer]::Down('mouse',$source.x,$source.y);[CapyRowPointer]::Move($target.x,$target.y)
+    Wait-Until {(Gesture).phase -eq 'dragging' -and (Gesture).preview.target} 'Header handoff source did not reach a valid target'
+    Wait-Until {
+        $preview=(Gesture).preview;$actual=@((Presentation).actual_items|Where-Object id -eq 1)[0]
+        if(!$actual -or !$preview.held){return $false}
+        foreach($axis in @('x','y','width','height')){if([Math]::Abs($actual.bounds.$axis-$preview.held.$axis) -gt 1){return $false}}
+        $true
+    } 'Native header did not present the held source before release sampling'
+    $held=@{header=Header;presentation=Presentation;gesture=Gesture}
+    $bounds=(Control 'title-bar' -Arranged).Current.BoundingRectangle
+    $scale=[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.
+    $area=[Drawing.Rectangle]::new([int]$bounds.Left,[int]$bounds.Top,[int]$bounds.Width,[int][Math]::Ceiling($held.presentation.height*$scale))
+    $canvas=At 'drawing-canvas';$below=Screen @{x=0;y=$held.presentation.total_height}
+    if($canvas.y -le $below.y){throw 'Owned canvas hover point overlaps the header'}
+    $folder=Join-Path $run 'header-release';[IO.Directory]::CreateDirectory($folder)|Out-Null
+    $sample=Sample-Frames $area {param($i)if($i -eq 3){[CapyRowPointer]::Up();[CapyRowPointer]::Hover($canvas.x,$canvas.y)}}
+    try{
+        Wait-Until {(Gesture).phase -eq 'idle' -and (HeaderJson) -ne $before} 'Header release did not commit its preview'
+        Check-Geometry;$null=[TabFrames]::DwmFlush();$final=[TabFrames]::Grab($area.Left,$area.Top,$area.Width,$area.Height)
+        try{
+            $final.Save((Join-Path $folder 'final.png'));$envelope=[TabFrames+Envelope]::new($sample.frames[2],$final);$bad=@();$scores=@()
+            for($i=0;$i -lt $sample.frames.Count;$i++){
+                $sample.frames[$i].Save((Join-Path $folder ('frame-{0:D3}.png' -f $i)));$count=$envelope.Difference($sample.frames[$i]);$scores+=@{frame=$i;invalid_pixels=$count};if($i -ge 3 -and $count -gt 8){$bad+=@($i)}
+            }
+            @{area=$area;frequency=[Diagnostics.Stopwatch]::Frequency;action_frame=3;times=$sample.times;before=$held;after=@{header=Header;presentation=Presentation;gesture=Gesture};invalid=$bad;scores=$scores}|ConvertTo-Json -Depth 50|Set-Content (Join-Path $folder 'frames.json')
+            if($bad.Count){$failures+=@("Header release exposed an intermediate layout in frames $($bad -join ',')")}
+        }finally{$final.Dispose()}
+    }finally{foreach($frame in $sample.frames){$frame.Dispose()}}
+    Invoke 'header-edit-done';Wait-Until {!(Model).header.editing} 'Header atomic fixture did not leave customization'
+    if($failures.Count){throw ($failures -join "`n")}
+    @{header_release_frames='passed';theme=$Theme;device='mouse';run=$run}|ConvertTo-Json
+}
+function Check-HeaderPalette {
+    Maximize-DrawingWindow
+    New-HeaderDrawings
     Check-Geometry
     (Control 'drawing-canvas').SetFocus()
     [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),[uint16]0xBC)
@@ -991,6 +1033,11 @@ try {
     $env:CAPY_STORAGE_DIR=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1'
     [IO.File]::WriteAllText((Settings-File),(@{theme=$Theme}|ConvertTo-Json))
     Start-Review 'initial';Capture 'normal'
+    if($Journey -eq 'atomic'){
+        Check-HeaderAtomic
+        & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Close -DiscardUnsaved
+        return
+    }
     if($Journey -in @('palette','palette-light')){
         Check-HeaderPalette
         & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Close -DiscardUnsaved

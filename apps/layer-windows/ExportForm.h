@@ -25,6 +25,20 @@ struct ExportFormView : std::enable_shared_from_this<ExportFormView> {
     bool updating=false,photoMetadata=false;
     J copy;V validationReason=JsonValue::CreateNullValue();
     hstring text(wchar_t const* key) const {return str(copy,key);}
+    void presentProfiles(J const& details){
+        auto form=object(details,L"form"),original=object(recipe,L"profile");profiles=A::Parse(array(form,L"profiles").Stringify());
+        formProfiles=profiles.Size();recipeProfile=-1;bool contains=false;for(auto item:profiles)contains|=item.Stringify()==original.Stringify();
+        if(!contains){recipeProfile=int(profiles.Size());profiles.Append(original);}
+        for(auto item:array(details,L"profiles")){auto entry=item.GetObject();if(entry.HasKey(L"issue"))continue;A empty;profiles.Append(O({{L"name",S(str(entry,L"name"))},{L"channels",S(str(entry,L"channels"))},{L"profile",O({{L"Icc",empty}})},{L"library",S(str(entry,L"id"))}}));}
+        auto names=array(form,L"profile_names");int selected=-1;
+        for(uint32_t i=0;i<profiles.Size();++i){
+            auto title=i<formProfiles?names.GetStringAt(i):int(i)==recipeProfile?str(form,L"recipe_profile_name"):str(profiles.GetObjectAt(i),L"name");
+            if(i<profile.Items().Size())comboOptionText(profile,i,title);else comboOption(profile,title);
+            if(profiles.GetObjectAt(i).Stringify()==original.Stringify())selected=int(i);
+        }
+        while(profile.Items().Size()>profiles.Size())profile.Items().RemoveAtEnd();
+        profile.SelectedIndex(selected);profileId=selected<0?hstring{}:str(profiles.GetObjectAt(uint32_t(selected)),L"library");
+    }
     void choices(ComboBox const& box,A const& values,hstring const& selected){box.Items().Clear();for(uint32_t i=0;i<values.Size();++i){auto choice=values.GetObjectAt(i);comboOption(box,str(choice,L"label"));if(str(choice,L"value")==selected)box.SelectedIndex(i);}}
     void normalize(J action){
         draft=exportDraft(localization.get(),O({{L"recipe",recipe},{L"action",action},{L"color",color}}));
@@ -98,20 +112,31 @@ struct ExportFormView : std::enable_shared_from_this<ExportFormView> {
         presentMetadata();
         if(!validation.Text().empty()&&validationReason.ValueType()!=JsonValueType::Null)validation.Text(str(projected,L"error"));
     }
-    void init(J const& details){
-        color=object(details,L"color");extent=array(details,L"extent");root.Spacing(12);recipe=J::Parse(object(details,L"recipe").Stringify());auto form=object(details,L"form");copy=object(form,L"copy");profiles=A::Parse(array(form,L"profiles").Stringify());
-        auto original=object(recipe,L"profile");formProfiles=profiles.Size();bool contains=false;for(auto item:profiles)contains|=item.Stringify()==original.Stringify();if(!contains){recipeProfile=int(profiles.Size());profiles.Append(original);}
-        for(auto item:array(details,L"profiles")){auto entry=item.GetObject();if(entry.HasKey(L"issue"))continue;A empty;profiles.Append(O({{L"name",S(str(entry,L"name"))},{L"channels",S(str(entry,L"channels"))},{L"profile",O({{L"Icc",empty}})},{L"library",S(str(entry,L"id"))}}));}
+    void presentRecipe(J const& initial){
+        auto select=[&](ComboBox const& box,A const& choices,V const& selected){
+            box.SelectedIndex(-1);
+            for(uint32_t i=0;i<choices.Size();++i){auto choice=choices.GetObjectAt(i);auto title=str(choice,L"label");
+                if(i<box.Items().Size())comboOptionText(box,i,title);else comboOption(box,title);
+                if(choice.GetNamedValue(L"value").Stringify()==selected.Stringify())box.SelectedIndex(i);
+            }
+            while(box.Items().Size()>choices.Size())box.Items().RemoveAtEnd();
+        };
+        select(intent,array(object(initial,L"choices"),L"intents"),object(object(recipe,L"encoding"),L"conversion").GetNamedValue(L"intent",JsonValue::CreateNullValue()));
+        select(resolution,array(object(initial,L"choices"),L"resolutions"),recipe.GetNamedValue(L"resolution"));
+        auto fit=object(object(recipe,L"size"),L"Fit");auto bounds=fit.Size()?array(fit,L"bounds"):extent;
+        numbers={num(recipe,L"jpeg_quality"),bounds.GetNumberAt(0),bounds.GetNumberAt(1),num(initial,L"ppi")};resize.IsChecked(fit.Size()!=0);enlarge.IsOn(flag(fit,L"enlarge"));
+    }
+    void apply(J const& details){
+        updating=true;color=object(details,L"color");extent=array(details,L"extent");recipe=J::Parse(object(details,L"recipe").Stringify());presentProfiles(details);
         auto initial=exportDraft(localization.get(),O({{L"recipe",recipe},{L"color",color},{L"action",O({{L"type",S(L"refresh")}})}}));recipe=object(initial,L"recipe");
-        auto names=array(form,L"profile_names");for(uint32_t i=0;i<profiles.Size();++i)comboOption(profile,i<formProfiles?names.GetStringAt(i):int(i)==recipeProfile?str(form,L"recipe_profile_name"):str(profiles.GetObjectAt(i),L"name"));
-        for(uint32_t i=0;i<profiles.Size();++i)if(profiles.GetObjectAt(i).Stringify()==original.Stringify())selectIndex(profile,int32_t(i));
-        auto intentValue=object(object(recipe,L"encoding"),L"conversion").GetNamedValue(L"intent",JsonValue::CreateNullValue());
-        auto intents=array(object(initial,L"choices"),L"intents");for(uint32_t i=0;i<intents.Size();++i){auto choice=intents.GetObjectAt(i);comboOption(intent,str(choice,L"label"));if(choice.GetNamedValue(L"value").Stringify()==intentValue.Stringify())selectIndex(intent,int32_t(i));}
-        auto density=recipe.GetNamedValue(L"resolution");auto resolutions=array(object(initial,L"choices"),L"resolutions");
-        for(uint32_t i=0;i<resolutions.Size();++i){auto choice=resolutions.GetObjectAt(i);comboOption(resolution,str(choice,L"label"));if(choice.GetNamedValue(L"value").Stringify()==density.Stringify())selectIndex(resolution,int32_t(i));}
-        auto fit=object(object(recipe,L"size"),L"Fit");auto bounds=fit.Size()?array(fit,L"bounds"):array(details,L"extent");
-        numbers={num(recipe,L"jpeg_quality"),bounds.GetNumberAt(0),bounds.GetNumberAt(1),num(initial,L"ppi")};
-        resize=compactCheck(data,nullptr);enlarge=compactSwitch();removeLocation=compactSwitch();resize.IsChecked(fit.Size()!=0);enlarge.IsOn(flag(fit,L"enlarge"));
+        presentRecipe(initial);normalize(O({{L"type",S(L"refresh")}}));
+        for(auto const& admissions:numericAdmissions)for(auto const& admit:admissions)admit(true);
+        for(auto const& bindings:numericBinds)for(auto const& bind:bindings)bind();
+    }
+    void init(J const& details){
+        color=object(details,L"color");extent=array(details,L"extent");root.Spacing(12);recipe=J::Parse(object(details,L"recipe").Stringify());auto form=object(details,L"form");copy=object(form,L"copy");presentProfiles(details);
+        auto initial=exportDraft(localization.get(),O({{L"recipe",recipe},{L"color",color},{L"action",O({{L"type",S(L"refresh")}})}}));recipe=object(initial,L"recipe");
+        resize=compactCheck(data,nullptr);enlarge=compactSwitch();removeLocation=compactSwitch();presentRecipe(initial);
         auto add=[&](StackPanel const& group,FrameworkElement const& content){if(group.Children().Size()){Border line;line.Height(1);line.Background(data->line(L"settings",L"card_shade"));group.Children().Append(line);}group.Children().Append(content);};
         auto row=[&](wchar_t const* key,FrameworkElement const& control){Grid row;row.MinHeight(54);row.Padding({14,8,14,8});row.ColumnSpacing(12);ColumnDefinition words;words.Width({1,GridUnitType::Star});row.ColumnDefinitions().Append(words);ColumnDefinition value;value.Width({1,GridUnitType::Auto});row.ColumnDefinitions().Append(value);auto caption=label(data,text(key));caption.VerticalAlignment(VerticalAlignment::Center);caption.TextWrapping(TextWrapping::Wrap);row.Children().Append(caption);captions.emplace(key,caption);Grid::SetColumn(control,1);control.VerticalAlignment(VerticalAlignment::Center);AutomationProperties::SetName(control,text(key));row.Children().Append(control);return row;};
         auto group=[&]{auto section=preferenceGroup(data,L"");root.Children().Append(section.section);return section;};

@@ -10,6 +10,7 @@
 #include "PointerModality.h"
 #include "NativeHandles.h"
 #include "ChromeFrames.h"
+#include "NativePresentation.h"
 #include <winrt/Microsoft.UI.Xaml.Automation.h>
 #include <winrt/Microsoft.UI.Xaml.Media.Imaging.h>
 #include <winrt/Windows.UI.Text.h>
@@ -409,8 +410,8 @@ struct WorkspaceData : std::enable_shared_from_this<WorkspaceData> {
         auto json=to_string(action.Stringify());
         if(ready)commit(std::move(json),false,std::move(ready));else send(std::move(json));
     }
-    void dispatchDocument(J const& action,hstring const& epoch) const {
-        dispatch(O({{L"windows_epoch",S(epoch)},{L"action",action}}));
+    void dispatchDocument(J const& action,hstring const& epoch,std::function<void()> ready={}) const {
+        dispatch(O({{L"windows_epoch",S(epoch)},{L"action",action}}),std::move(ready));
     }
     hstring language()const{return str(object(catalog,L"bootstrap"),L"active_tag");}
     hstring theme()const{return str(state,L"theme",L"dark");}
@@ -635,11 +636,19 @@ inline Brush paletteResource(wchar_t const* name){
     return resources.HasKey(key)?resources.Lookup(key).try_as<Brush>():clear();
 }
 struct RowDragPresentation:std::enable_shared_from_this<RowDragPresentation>{
+    NativePresentation presentation;
     Panel parent{nullptr};Canvas overlay{nullptr};Border face{nullptr};Image image{nullptr};weak_ref<FrameworkElement> sourceRow;double sourceOpacity=1;bool dimmed=false;Windows::Foundation::Point grab{};TranslateTransform translation{nullptr};uint64_t generation=0;
-    void Clear(){++generation;if(auto row=sourceRow.get();row&&dimmed)row.Opacity(sourceOpacity);dimmed=false;sourceRow={};if(parent&&overlay){uint32_t at;if(parent.Children().IndexOf(overlay,at))parent.Children().RemoveAt(at);}parent=nullptr;overlay=nullptr;face=nullptr;image=nullptr;}
+    void Clear(){presentation.Cancel();++generation;if(auto row=sourceRow.get();row&&dimmed)row.Opacity(sourceOpacity);dimmed=false;sourceRow={};if(parent&&overlay){uint32_t at;if(parent.Children().IndexOf(overlay,at))parent.Children().RemoveAt(at);}parent=nullptr;overlay=nullptr;face=nullptr;image=nullptr;}
+    void Commit(std::function<void(std::function<void()>)> submit,std::function<void()> finish){
+        auto serial=generation;submit([weak=weak_from_this(),serial,finish=std::move(finish)]{
+            if(auto self=weak.lock();self&&self->generation==serial)self->presentation.AfterLayout([weak,serial,finish]{
+                if(auto self=weak.lock();self&&self->generation==serial)finish();
+            });
+        });
+    }
     winrt::fire_and_forget Capture(FrameworkElement row,uint64_t version,std::optional<double> opacity){
         auto self=shared_from_this();Imaging::RenderTargetBitmap bitmap;
-        try{co_await bitmap.RenderAsync(row);if(generation==version&&image){image.Source(bitmap);if(opacity){row.Opacity(*opacity);dimmed=true;}}}catch(hresult_error const&){if(generation==version)Clear();}
+        try{co_await bitmap.RenderAsync(row);if(generation==version&&image){image.Source(bitmap);face.Visibility(Visibility::Visible);if(opacity){row.Opacity(*opacity);dimmed=true;}}}catch(hresult_error const&){if(generation==version)Clear();}
     }
     void Move(UIElement const& source,Windows::Foundation::Point point){
         if(!parent||!face)return;auto at=source.TransformToVisual(parent).TransformPoint(point);translation.X(at.X-grab.X);translation.Y(at.Y-grab.Y);
@@ -648,7 +657,7 @@ struct RowDragPresentation:std::enable_shared_from_this<RowDragPresentation>{
         Clear();for(DependencyObject node=row;node;node=VisualTreeHelper::GetParent(node))if(auto panel=node.try_as<Panel>())parent=panel;
         if(!parent)return;sourceRow=make_weak(row);sourceOpacity=row.Opacity();
         overlay=Canvas();overlay.IsHitTestVisible(false);Canvas::SetZIndex(overlay,9000);if(auto grid=parent.try_as<Grid>()){Grid::SetRowSpan(overlay,std::max(1,int(grid.RowDefinitions().Size())));Grid::SetColumnSpan(overlay,std::max(1,int(grid.ColumnDefinitions().Size())));}parent.Children().Append(overlay);
-        face=Border();translation=TranslateTransform();face.RenderTransform(translation);face.Width(row.ActualWidth());face.Height(row.ActualHeight());face.Opacity(.7);face.Background(paletteResource(L"ComboBoxDropDownBackground"));
+        face=Border();face.Visibility(Visibility::Collapsed);translation=TranslateTransform();face.RenderTransform(translation);face.Width(row.ActualWidth());face.Height(row.ActualHeight());face.Opacity(.7);face.Background(paletteResource(L"ComboBoxDropDownBackground"));
         image=Image();image.Stretch(Stretch::Fill);face.Child(image);CornerRadius corners{};if(auto border=row.try_as<Border>())corners=border.CornerRadius();else if(auto control=row.try_as<Control>())corners=control.CornerRadius();clipRounded(face,corners);overlay.Children().Append(face);
         grab=source.TransformToVisual(row).TransformPoint(origin);Move(source,position);Capture(row,generation,opacity);
     }
