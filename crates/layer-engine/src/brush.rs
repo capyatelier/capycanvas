@@ -89,7 +89,7 @@ pub struct DabGenerator {
     fan_deepest: f32,
     fan_pressed: f32,
     pending_contacts: Arc<Vec<Dab>>,
-    dry_completion: completion::Path,
+    dry_completion: Option<completion::Path>,
     tap_peak: Option<DynamicPoint>,
     distance_until_next: f32,
     filtered_speed: f32,
@@ -122,7 +122,7 @@ impl Default for DabGenerator {
             fan_deepest: 0.,
             fan_pressed: 0.,
             pending_contacts: EMPTY_CONTACTS.clone(),
-            dry_completion: Default::default(),
+            dry_completion: Some(Default::default()),
             tap_peak: None,
             distance_until_next: 0.0,
             filtered_speed: 0.0,
@@ -187,10 +187,10 @@ impl DabGenerator {
 
     pub(crate) fn preview(&self) -> Self {
         let mut preview = self.clone();
+        preview.dry_completion = None;
         if preview.tap_peak.take().is_some() {
             preview.last_contact = self.pending_contacts.first().copied();
             preview.pending_contacts = EMPTY_CONTACTS.clone();
-            preview.dry_completion = Default::default();
         }
         preview
     }
@@ -428,6 +428,14 @@ impl DabGenerator {
         {
             let evaluated = self.evaluate(current, brush);
             self.emit_contacts(evaluated, brush, output, damage);
+        } else if brush.contact.is_some_and(|c| c.dry.is_some())
+            && brush.rendering.accumulation == layer_core::BrushAccumulation::Flow
+            && let Some(completion) = &mut self.dry_completion
+        {
+            for dab in completion.advance(current.position()) {
+                if self.tap_peak.is_some() { Arc::make_mut(&mut self.pending_contacts).push(dab); }
+                else { include_dab(damage, dab); output.push(dab); }
+            }
         }
     }
 
@@ -483,15 +491,17 @@ impl DabGenerator {
         }
         if let Some(peak) = self.tap_peak.take() {
             Arc::make_mut(&mut self.pending_contacts).clear();
-            self.dry_completion = Default::default();
+            self.dry_completion = Some(Default::default());
             self.last_contact = None;
             let evaluated = self.evaluate(peak, brush);
             self.emit_contacts(evaluated, brush, output, &mut damage);
             return damage;
         }
         damage = damage.union(self.flush_contact(brush, output));
-        if brush.contact.is_some_and(|c| c.dry.is_some()) && brush.rendering.accumulation == layer_core::BrushAccumulation::Flow {
-            for dab in self.dry_completion.finish() { include_dab(&mut damage, dab); output.push(dab); }
+        if brush.contact.is_some_and(|c| c.dry.is_some()) && brush.rendering.accumulation == layer_core::BrushAccumulation::Flow
+            && let Some(completion) = &mut self.dry_completion
+        {
+            for dab in completion.finish() { include_dab(&mut damage, dab); output.push(dab); }
         }
         damage
     }
@@ -873,7 +883,7 @@ impl DabGenerator {
             self.last_contact = Some(dab);
             if opening || dab.motion != [0.;2] {
                 let completion = if brush.rendering.accumulation == layer_core::BrushAccumulation::Flow {
-                    self.dry_completion.append(dab)
+                    self.dry_completion.as_mut().map_or_else(Vec::new, |path| path.append(dab))
                 } else { Vec::new() };
                 for added in completion {
                     if self.tap_peak.is_some() { Arc::make_mut(&mut self.pending_contacts).push(added); }

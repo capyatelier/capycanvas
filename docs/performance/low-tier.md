@@ -1808,6 +1808,27 @@ Raw records, screenshots, environment data, source hashes and the measured APK
 are in `artifacts/tilt-conversion/android/performance/`. These measurements
 qualify only the listed motions on the low-tier reference device.
 
+### Dry corner timing, 2026-10-31
+
+TCL TAB 11 Gen 2, Mali-G52, 4248 × 2832 photo at Fit 0.336864,
+Size 1024, pressure 1, tilt 45°, SharedDemandRefresh, Stats closed,
+thermal status 0.
+Matched base `0592f8942`, control → input-rate corner completion with preview
+completions omitted, ABBA with six six-second contacts per arm; both curve
+controls include the parked taper-anchor correction, other controls are unchanged.
+Rates are medians, gaps are worst contact p99, CPU is median contact mean;
+[evidence](../../artifacts/dry-corner-timing/checkpoint3-report.local.md).
+
+| Work | Brush | Completed updates/s | Fresh updates/s | Fresh gap p99 (ms) | Owner CPU mean (ms) |
+| --- | --- | --- | --- | --- | --- |
+| Continuous curve, matched preview | Pencil | 40.71 → 40.99 | 40.71 → 40.99 | 60.39 → 55.18 | 12.84 → 12.52 |
+| Continuous curve, matched preview | Charcoal | 58.32 → 58.33 | 58.32 → 58.33 | 40.88 → 43.49 | 10.85 → 10.81 |
+| Compact zigzag | Pencil | 47.89 → 47.61 | 47.89 → 47.61 | 58.28 → 43.72 | 13.16 → 13.16 |
+| Compact zigzag | Charcoal | 61.54 → 61.94 | 61.54 → 61.94 | 44.49 → 34.17 | 11.61 → 11.44 |
+| Frequent lifts | Pencil | 23.76 → 24.47 | 18.20 → 18.49 | 178.69 → 141.88 | 15.54 → 15.45 |
+
+Matched curves have no separated rate loss or fresh-gap rise; every listed control already misses 60 updates/s or the 33.3 ms gap limit.
+
 ### Dry-media endpoint and turn completion, 2026-10-24
 
 Matched control `6a7d3b1042d0821ee5823ddd7c96acba8188abf7` against localized

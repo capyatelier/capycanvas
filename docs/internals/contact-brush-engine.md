@@ -109,8 +109,9 @@ The generator coalesces pending positions within 5% of the minor radius, at leas
 0.25 document pixels. It resolves corners of that correction path with
 Douglas–Peucker subdivision at 2.5% of its anchor's minor radius, at least 0.01
 document pixels. Pending history is bounded to 256 vertices. Ordinary retained
-segments remain intact. Turns wait for their outgoing window; pen-up resolves
-pending turns and the terminal cap. No moving-head cap is deposited.
+segments remain intact. Modeled input advances the outgoing window; full-weight
+turns resolve after a quarter radius, and other turns wait for a full radius.
+Pen-up resolves pending turns and the terminal cap. No moving-head cap is deposited.
 
 Completion uses the same relief, loading, and optical transfer as segments.
 Its contact window leaves weakly engaged grains softer than fully engaged paper.
